@@ -72,7 +72,7 @@ jobs:
         uses: actions/download-artifact@v4
 
       - name: Generate release notes
-        uses: orhun/git-cliff-action@v2
+        uses: orhun/git-cliff-action@v4
         id: cliff
         with:
           config: cliff.toml
