@@ -36,7 +36,9 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 
 - Conventional Commits — scopes: engine / renderer / audio / network / content / flight / ai / mission / build / ci / docs
 - DCO sign-off required: `git commit -s`
+<!-- REUSE-IgnoreStart -->
 - SPDX header required on all new .cpp/.h files: `// SPDX-License-Identifier: GPL-3.0-or-later`
+<!-- REUSE-IgnoreEnd -->
 - All code must compile on Windows (MSVC 2022), Linux (GCC/Clang), macOS (Apple Clang)
 - `CMAKE_COMPILE_WARNING_AS_ERROR=ON` in debug builds — fix all warnings
 

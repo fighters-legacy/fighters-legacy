@@ -14,7 +14,9 @@ Closes #
 - [ ] Tests added or updated for changed code
 - [ ] `CHANGELOG.md` updated under `[Unreleased]`
 - [ ] `Signed-off-by` present on all commits (`git commit -s`)
+<!-- REUSE-IgnoreStart -->
 - [ ] SPDX header on any new source files (`// SPDX-License-Identifier: GPL-3.0-or-later`)
+<!-- REUSE-IgnoreEnd -->
 - [ ] Documentation updated if behaviour changed
 - [ ] No FA game assets or copyrighted content committed
 - [ ] Breaking changes documented with `BREAKING CHANGE:` footer in commit message
