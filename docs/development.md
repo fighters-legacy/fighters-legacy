@@ -176,3 +176,15 @@ To draft the changelog before tagging:
 ```
 
 Requires `git-cliff`: `cargo install git-cliff` or `dnf install git-cliff` or `brew install git-cliff`.
+
+---
+
+## Roadmap status
+
+To report phase completion against target dates:
+
+```bash
+./scripts/roadmap-status.sh
+```
+
+Queries the [GitHub Project](https://github.com/users/jomkz/projects/2) via `gh` and prints a per-phase progress table showing % done, % of time elapsed, and an on-track/at-risk/behind/overdue signal. Requires `gh` (authenticated) and GNU `date`.
