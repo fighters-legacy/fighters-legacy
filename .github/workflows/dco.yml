@@ -7,12 +7,28 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Dependabot is a trusted bot; its commits cannot carry Signed-off-by
+    if: github.actor != 'dependabot[bot]'
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Check DCO sign-off
-        uses: github/dco@v1
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          MISSING=""
+          while IFS= read -r sha; do
+            if ! git show --no-patch --format="%B" "$sha" | grep -q "^Signed-off-by:"; then
+              MISSING="$MISSING\n  $sha $(git show --no-patch --format="%s" "$sha")"
+            fi
+          done < <(git log --format="%H" "$BASE".."$HEAD")
+          if [ -n "$MISSING" ]; then
+            echo "The following commits are missing a Signed-off-by line:"
+            printf "%b\n" "$MISSING"
+            echo ""
+            echo "Fix with: git rebase --signoff $BASE"
+            exit 1
+          fi
+          echo "All commits have a Signed-off-by line."
