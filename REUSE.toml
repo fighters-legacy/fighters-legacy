@@ -6,7 +6,7 @@ SPDX-FileCopyrightText = "2026 John McKenzie"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
 [[annotations]]
-path = [".gitignore", ".gitattributes", ".editorconfig", ".clang-format"]
+path = [".gitignore", ".gitattributes", ".editorconfig", ".clang-format", ".github/CODEOWNERS"]
 SPDX-FileCopyrightText = "2026 John McKenzie"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
