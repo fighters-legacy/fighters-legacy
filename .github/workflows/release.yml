@@ -86,6 +86,7 @@ jobs:
           files: "**/*.zip"
 
       - name: Attest build provenance
+        if: hashFiles('**/*.zip') != ''
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: "**/*.zip"
