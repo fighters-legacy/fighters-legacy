@@ -44,7 +44,7 @@ jobs:
 
       - name: REUSE compliance check
         if: matrix.os == 'ubuntu-latest'
-        uses: fsfe/reuse-action@v4
+        uses: fsfe/reuse-action@v6
 
       - name: Check clang-format
         if: matrix.os == 'ubuntu-latest'
