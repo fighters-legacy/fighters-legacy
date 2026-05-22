@@ -38,7 +38,7 @@ jobs:
           lcov --capture --directory . --output-file coverage.info \
                --ignore-errors empty
           lcov --remove coverage.info '/usr/*' '*/tests/*' '*/vendor/*' \
-               --output-file coverage.info --ignore-errors empty
+               --output-file coverage.info --ignore-errors empty,unused
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v4
