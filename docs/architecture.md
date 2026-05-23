@@ -31,6 +31,38 @@ Thin abstraction over OS and hardware APIs. Each backend is isolated:
 
 The HAL exposes platform-independent interfaces to the engine core. Nothing above the HAL layer links directly against Vulkan, SDL3, OpenAL, or ENet headers.
 
+#### Platform HAL Interfaces
+
+All interfaces live under `platform/` and are exposed via the `platform-hal` CMake INTERFACE library. Engine core and backends link against `platform-hal` rather than including headers by path.
+
+| Interface | Header | Purpose |
+|---|---|---|
+| `IWindowEventHandler` | `platform/IWindowEventHandler.h` | Callback target for window events (resize, close); implemented by the engine game loop |
+| `IWindow` | `platform/IWindow.h` | Create/destroy OS window, pump events, query dimensions, expose native handle for surface creation |
+| `IRenderer` | `platform/IRenderer.h` | Render frame lifecycle: init, beginFrame, endFrame, shutdown |
+| `IAudio` | `platform/IAudio.h` | Buffer upload, source play/stop/position/velocity, listener transform |
+| `ITextInputHandler` | `platform/IInput.h` | Callback target for OS text input and IME composition events; implemented by any UI component that accepts free-form text |
+| `IInput` | `platform/IInput.h` | Keyboard, mouse, and gamepad state (SDL3 GameController API); drives text input mode via `ITextInputHandler` |
+| `INetworkEventHandler` | `platform/INetwork.h` | Callback target for network events (connect, disconnect, receive); implemented by the multiplayer subsystem |
+| `INetwork` | `platform/INetwork.h` | UDP transport: bind/connect, send/recv, peer state, frame pump |
+| `IFilesystem` | `platform/IFilesystem.h` | Synchronous file I/O and directory scan over two path domains (Assets, UserData) |
+| `ILogger` | `platform/ILogger.h` | Structured logging routed to the platform-native output |
+
+**Event handler pattern:** `IWindowEventHandler`, `INetworkEventHandler`, and `ITextInputHandler` are separate interfaces registered with their respective `IWindow` / `INetwork` / `IInput` instances. The engine implements the handler; the platform backend calls it during `pollEvents()` / `service()` / text input events. This keeps platform-to-engine callbacks decoupled without requiring the backend to know anything about the game loop.
+
+**Wiring — `Platform` struct:** `platform/Platform.h` defines a plain aggregate struct holding `std::unique_ptr` to each interface. The platform entry point (e.g. `platform/sdl3/`) constructs a `Platform`, populates it with concrete backend instances, and passes it to the engine on startup. The engine holds `Platform` by value and owns all interface lifetimes. Backends can be mixed freely — a test build might use a null renderer stub alongside a real filesystem backend.
+
+**Design rules for all HAL interfaces:**
+- No platform-specific headers (`SDL3`, `vulkan.h`, `al.h`, `enet.h`) may appear in any interface file.
+- `IWindow::nativeHandle()` returns `void*` — the only platform type that crosses the boundary, and it does so as an opaque pointer used only by the Vulkan backend internally.
+- All interface methods are pure virtual. No implementation code lives in these headers.
+- Interfaces that can fail during init expose `getLastError() const → const char*` for human-readable diagnostics.
+- **Thread safety:** `ILogger::log` is the only HAL method guaranteed thread-safe. All other methods on all other interfaces must be called from the main thread.
+
+**`IRenderer` scope (Phase 1):** `IRenderer` is lifecycle-only — init, frame begin/end, shutdown. Scene submission (mesh handles, transforms, materials) and a render graph abstraction are added in the Vulkan backend workstream (Phase 2).
+
+**`IFilesystem` is synchronous:** `readFile` blocks until the OS delivers the data. It is correct for startup asset loading, mod discovery, and config reads. It must not be called on the main thread for per-frame terrain streaming. Async file I/O is a separate Phase 2 design item.
+
 ### Engine Core (`engine/`)
 
 Game logic and simulation, independent of any specific content:
