@@ -15,6 +15,11 @@ public:
     // Uses window->nativeHandle() to create VkSurfaceKHR; must be called after IWindow::init.
     virtual bool init(IWindow* window) = 0;
 
+    // Must be called when the window framebuffer changes size so the renderer can
+    // tear down and rebuild the swapchain. The engine game loop calls this from
+    // its IWindowEventHandler::onResize implementation.
+    virtual void onResize(int width, int height) = 0;
+
     // Acquires the next swapchain image and begins command buffer recording.
     virtual void beginFrame() = 0;
 
@@ -24,4 +29,8 @@ public:
 
     // Destroys all GPU resources in correct dependency order.
     virtual void shutdown() = 0;
+
+    // Returns a human-readable description of the last error, or nullptr if none.
+    // Valid until the next call on this interface.
+    virtual const char* getLastError() const = 0;
 };

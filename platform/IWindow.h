@@ -23,4 +23,8 @@ public:
     // as an opaque pointer so the Vulkan backend can create VkSurfaceKHR without
     // any platform header appearing in this file.
     virtual void* nativeHandle() const = 0;
+
+    // Returns a human-readable description of the last error, or nullptr if none.
+    // Valid until the next call on this interface.
+    virtual const char* getLastError() const = 0;
 };

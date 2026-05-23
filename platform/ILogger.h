@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <cstdint>
+
 enum class LogLevel : uint8_t {
     Debug,
     Info,
@@ -22,4 +24,8 @@ public:
 
     // Suppresses messages below minLevel (e.g. set Info in release builds).
     virtual void setMinLevel(LogLevel minLevel) = 0;
+
+    // Flushes any buffered output to the underlying sink. Call from a crash handler
+    // to ensure the last log lines survive before the process exits.
+    virtual void flush() = 0;
 };

@@ -57,6 +57,21 @@ enum class GamepadAxis : uint8_t {
     Count
 };
 
+// Register with IInput::startTextInput to receive text events from the OS IME
+// pipeline. This is separate from isKeyDown — use it for any UI that accepts
+// free-form text (player name, chat, mission editor fields).
+class ITextInputHandler {
+public:
+    virtual ~ITextInputHandler() = default;
+
+    // Called with each committed UTF-8 string (may be more than one character).
+    virtual void onTextInput(const char* text) = 0;
+
+    // Called during IME composition with the in-progress string and cursor position.
+    // composition may be empty when composition is cancelled.
+    virtual void onTextEdit(const char* composition, int cursorPos) = 0;
+};
+
 class IInput {
 public:
     virtual ~IInput() = default;
@@ -83,6 +98,13 @@ public:
     virtual int getMouseScroll() const = 0;
 
     virtual bool isMouseButtonDown(MouseButton button) const = 0;
+
+    // --- Text input ---
+
+    // Activates OS text input mode (shows on-screen keyboard on mobile, enables IME
+    // on desktop). Events are delivered to handler until stopTextInput is called.
+    virtual void startTextInput(ITextInputHandler* handler) = 0;
+    virtual void stopTextInput() = 0;
 
     // --- Gamepad ---
 

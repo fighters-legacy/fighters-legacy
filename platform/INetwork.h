@@ -57,4 +57,8 @@ public:
 
     virtual int getPeerCount() const = 0;
     virtual PeerState getPeerState(uint32_t peerId) const = 0;
+
+    // Returns a human-readable description of the last error, or nullptr if none.
+    // Valid until the next call on this interface.
+    virtual const char* getLastError() const = 0;
 };

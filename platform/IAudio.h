@@ -29,6 +29,8 @@ public:
 
     virtual void play(AudioSourceId source, AudioBufferId buffer) = 0;
     virtual void stop(AudioSourceId source) = 0;
+    virtual void pause(AudioSourceId source) = 0;
+    virtual void resume(AudioSourceId source) = 0;
     virtual bool isPlaying(AudioSourceId source) const = 0;
 
     virtual void setLooping(AudioSourceId source, bool loop) = 0;
@@ -41,6 +43,13 @@ public:
 
     // Used by OpenAL for Doppler shift; aircraft velocity changes perceived pitch.
     virtual void setVelocity(AudioSourceId source, float vx, float vy, float vz) = 0;
+
+    // Distance attenuation model. referenceDistance: gain = 1.0 at this distance.
+    // maxDistance: gain floor (clamped beyond this). rolloffFactor: attenuation rate
+    // (1.0 = linear, 0.0 = no rolloff). All three must be set per source.
+    virtual void setReferenceDistance(AudioSourceId source, float dist) = 0;
+    virtual void setMaxDistance(AudioSourceId source, float dist) = 0;
+    virtual void setRolloffFactor(AudioSourceId source, float factor) = 0;
 
     // Sets the listener (camera/player) position and orientation.
     // pos, forward, up are each three-element float arrays [x, y, z].

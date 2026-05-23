@@ -28,6 +28,11 @@ class IFilesystem {
 public:
     virtual ~IFilesystem() = default;
 
+    struct Entry {
+        std::string name;
+        bool isDirectory;
+    };
+
     // Returns an opaque file handle (>= 0) on success, or -1 on failure.
     // write=true creates the file if it does not exist and truncates if it does.
     virtual int openFile(PathDomain domain, const char* path, bool write) = 0;
@@ -48,8 +53,13 @@ public:
     // directory exists on return, whether or not it was just created.
     virtual bool createDirectory(PathDomain domain, const char* path) = 0;
 
-    // Returns the paths of all entries (files and subdirectories) directly
-    // inside the given directory. Used by ModLoader to discover manifest.toml files.
-    virtual std::vector<std::string> scanDirectory(PathDomain domain,
-                                                   const char* path) const = 0;
+    // Atomically renames (moves) a file within the same domain. Use this for safe
+    // save-file writes: write to a temp path, then rename to the final path.
+    virtual bool renameFile(PathDomain domain, const char* from, const char* to) = 0;
+
+    // Returns all entries directly inside the given directory. Each Entry reports
+    // whether it is a file or a subdirectory, which ModLoader uses to distinguish
+    // mod folders from loose files.
+    virtual std::vector<Entry> scanDirectory(PathDomain domain,
+                                             const char* path) const = 0;
 };
