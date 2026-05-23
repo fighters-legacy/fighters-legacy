@@ -87,9 +87,11 @@
     { "name": "asan",         "configurePreset": "asan"         }
   ],
   "testPresets": [
-    { "name": "debug",    "configurePreset": "debug",    "output": { "outputOnFailure": true } },
-    { "name": "release",  "configurePreset": "release",  "output": { "outputOnFailure": true } },
-    { "name": "coverage", "configurePreset": "coverage", "output": { "outputOnFailure": true } },
-    { "name": "asan",     "configurePreset": "asan",     "output": { "outputOnFailure": true } }
+    { "name": "debug",        "configurePreset": "debug",        "output": { "outputOnFailure": true } },
+    { "name": "release",      "configurePreset": "release",      "output": { "outputOnFailure": true } },
+    { "name": "debug-msvc",   "configurePreset": "debug-msvc",   "output": { "outputOnFailure": true } },
+    { "name": "release-msvc", "configurePreset": "release-msvc", "output": { "outputOnFailure": true } },
+    { "name": "coverage",     "configurePreset": "coverage",     "output": { "outputOnFailure": true } },
+    { "name": "asan",         "configurePreset": "asan",         "output": { "outputOnFailure": true } }
   ]
 }

@@ -11,4 +11,11 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# Engine source trees added here as Phase 1 Workstream A progresses
+include(cmake/dependencies.cmake)
+
+enable_testing()
+
+add_subdirectory(engine)
+add_subdirectory(platform)
+add_subdirectory(tools)
+add_subdirectory(tests)

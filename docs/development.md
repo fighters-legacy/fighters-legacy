@@ -34,6 +34,16 @@ brew install cmake ninja
 
 Install the [Vulkan SDK for macOS](https://vulkan.lunarg.com/) from LunarG (includes MoltenVK).
 
+### Optional tools
+
+**REUSE** — checks SPDX license compliance. CI enforces this automatically via `fsfe/reuse-action`; install locally for fast feedback before pushing:
+
+```bash
+pip install reuse
+```
+
+Run with `reuse lint` from the repo root.
+
 ---
 
 ## Building
