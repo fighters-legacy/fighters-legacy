@@ -1,4 +1,10 @@
-# SDL3 windowing and input backend
-# Implements: IWindow, IInput
-# Requires: SDL3 (find_package(SDL3 REQUIRED) or FetchContent_MakeAvailable(SDL3))
-# Sources added here as Workstream B progresses
+# SDL3 windowing and input backend — implements IWindow
+if(NOT SDL3_FOUND)
+    FetchContent_MakeAvailable(SDL3)
+endif()
+
+add_library(platform-sdl3 STATIC SDL3Window.cpp)
+target_link_libraries(platform-sdl3
+    PUBLIC  platform-hal
+    PRIVATE SDL3::SDL3
+)

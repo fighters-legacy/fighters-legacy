@@ -7,35 +7,41 @@
 ```bash
 sudo dnf install cmake ninja-build gcc g++ clang clang-tools-extra \
   vulkan-devel SDL3-devel openal-soft-devel lcov \
-  libasan libubsan
+  libasan libubsan shaderc-utils
 ```
 
 `libasan` and `libubsan` are required for the `asan` build preset (`-fsanitize=address,undefined`). They are separate packages from `gcc` on Fedora.
+
+`shaderc-utils` provides `glslc`, the GLSL-to-SPIR-V compiler used to build the Vulkan renderer shaders at CMake configure time.
 
 ### Linux — Ubuntu/Debian
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y cmake ninja-build gcc g++ clang clang-format \
-  libvulkan-dev libsdl3-dev libopenal-dev lcov
+  libvulkan-dev libsdl3-dev libopenal-dev lcov glslang-tools
 ```
+
+`glslang-tools` provides `glslc` for Vulkan shader compilation.
 
 > **Note:** SDL3 and OpenAL Soft may need building from source on older distros if the packaged versions are below the required minimum. Check `cmake/dependencies.cmake` (added in Phase 1) for version requirements.
 
 ### Windows (MSVC 2022)
 
 1. Install [Visual Studio 2022](https://visualstudio.microsoft.com/) with the **Desktop development with C++** workload
-2. Install the [Vulkan SDK](https://vulkan.lunarg.com/) (1.3 or later)
+2. Install the [Vulkan SDK](https://vulkan.lunarg.com/) (1.3 or later) — includes `glslc` and MoltenVK support headers
 3. Optional: install Ninja via `winget install Ninja-build.Ninja` (faster incremental builds)
 
 ### macOS (Apple Silicon, 13+)
 
 ```bash
 xcode-select --install
-brew install cmake ninja
+brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang
 ```
 
-Install the [Vulkan SDK for macOS](https://vulkan.lunarg.com/) from LunarG (includes MoltenVK).
+`molten-vk` provides the Vulkan-over-Metal ICD; `vulkan-loader` provides `libvulkan.dylib`; `glslang` provides `glslc`. Alternatively, install the [LunarG Vulkan SDK for macOS](https://vulkan.lunarg.com/) which bundles all of the above plus validation layers.
+
+> **Note:** CI uses the Homebrew path. For local dev, either approach works; the LunarG SDK also provides validation layers which are useful during development.
 
 ### Optional tools
 
