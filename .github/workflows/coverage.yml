@@ -36,9 +36,9 @@ jobs:
       - name: Generate lcov report
         run: |
           lcov --capture --directory . --output-file coverage.info \
-               --ignore-errors empty
-          lcov --remove coverage.info '/usr/*' '*/tests/*' '*/vendor/*' \
-               --output-file coverage.info --ignore-errors empty,unused
+               --ignore-errors empty,source
+          lcov --remove coverage.info '/usr/*' '*/tests/*' '*/vendor/*' '*/_deps/*' \
+               --output-file coverage.info --ignore-errors empty,unused,source
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v6
