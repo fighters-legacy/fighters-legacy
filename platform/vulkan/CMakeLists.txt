@@ -6,7 +6,9 @@ if(NOT Vulkan_FOUND)
 endif()
 
 if(NOT SDL3_FOUND)
+    set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
     FetchContent_MakeAvailable(SDL3)
+    unset(CMAKE_COMPILE_WARNING_AS_ERROR)
 endif()
 
 # Compile shaders at build time
