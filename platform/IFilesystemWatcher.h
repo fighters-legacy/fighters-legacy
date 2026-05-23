@@ -2,6 +2,7 @@
 #pragma once
 
 #include "IFilesystem.h"
+#include <cstdint>
 #include <string>
 #include <vector>
 
