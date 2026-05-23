@@ -38,7 +38,7 @@ class VkRenderer : public IRenderer {
     bool createSyncObjects();
 
     void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex);
-    void recreateSwapchain();
+    bool recreateSwapchain();
     void cleanupSwapchain();
     void destroyFramebuffersAndViews();
 

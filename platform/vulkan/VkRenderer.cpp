@@ -114,6 +114,33 @@ void VkRenderer::onResize(int /*width*/, int /*height*/) {
 void VkRenderer::beginFrame() {
     m_frameAcquired = false;
 
+    // Poll window size every frame. On some Wayland + SDL3 configurations,
+    // SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED is not fired during a live drag — SDL
+    // defers it until after the client commits a buffer at the new size, creating a
+    // chicken-and-egg: we wait for the event to recreate; SDL waits for a commit to
+    // fire the event. Comparing the SDL-cached pixel size (updated by SDL when it
+    // processes Wayland configure events, before any commit) with the current
+    // swapchain extent detects the change without relying on the event.
+    if (m_swapchain != VK_NULL_HANDLE) {
+        int w = 0, h = 0;
+        if (SDL_GetWindowSizeInPixels(m_sdlWindow, &w, &h) && w > 0 && h > 0 &&
+            (static_cast<uint32_t>(w) != m_swapchainExtent.width ||
+             static_cast<uint32_t>(h) != m_swapchainExtent.height)) {
+            m_framebufferResized = true;
+        }
+    }
+
+    if (m_framebufferResized) {
+        // recreateSwapchain returns false when the window is zero-sized (minimised or
+        // a Wayland configure(0,0) "choose your size" event). Re-set the flag so the
+        // main loop retries next iteration after pollEvents drains pending events.
+        if (!recreateSwapchain()) {
+            m_framebufferResized = true;
+            return;
+        }
+        m_framebufferResized = false;
+    }
+
     // 100 ms timeout keeps the event loop responsive; VK_TIMEOUT → early return
     // so pollEvents() runs again before we re-enter the fence wait.
     if (vkWaitForFences(m_device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, 100'000'000ULL) == VK_TIMEOUT)
@@ -122,7 +149,10 @@ void VkRenderer::beginFrame() {
     VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, std::numeric_limits<uint64_t>::max(),
                                             m_imageAvailable[m_currentFrame], VK_NULL_HANDLE, &m_currentImageIndex);
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        recreateSwapchain();
+        // Don't call recreateSwapchain() here — that would stack a second
+        // vkDeviceWaitIdle in this iteration. Set the flag and let the main loop run
+        // pollEvents before the next recreate attempt.
+        m_framebufferResized = true;
         return;
     }
     if (result == VK_SUBOPTIMAL_KHR) {
@@ -166,9 +196,8 @@ void VkRenderer::endFrame() {
     pi.pImageIndices = &m_currentImageIndex;
     const VkResult result = vkQueuePresentKHR(m_presentQueue, &pi);
 
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || m_framebufferResized) {
-        m_framebufferResized = false;
-        recreateSwapchain();
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        m_framebufferResized = true;
     }
 
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -917,36 +946,37 @@ void VkRenderer::cleanupSwapchain() {
     }
 }
 
-void VkRenderer::recreateSwapchain() {
-    // Wait until window has non-zero pixel size (handles minimization)
+bool VkRenderer::recreateSwapchain() {
+    // Check window size without blocking. Returns false when the window is zero-sized
+    // (minimised, or a Wayland configure(0,0) "you choose the size" event). The caller
+    // re-sets m_framebufferResized and returns to the main loop so pollEvents() can
+    // drain pending Wayland events before the next attempt — avoiding the compositor
+    // deadlock where we block waiting for events that won't come until we commit.
     int w = 0, h = 0;
-    while (w == 0 || h == 0) {
-        if (!SDL_GetWindowSizeInPixels(m_sdlWindow, &w, &h))
-            SDL_GetWindowSize(m_sdlWindow, &w, &h);
-        if (w == 0 || h == 0)
-            SDL_WaitEventTimeout(nullptr, 100);
-    }
+    if (!SDL_GetWindowSizeInPixels(m_sdlWindow, &w, &h))
+        SDL_GetWindowSize(m_sdlWindow, &w, &h);
+    if (w == 0 || h == 0)
+        return false;
 
+    // vkDeviceWaitIdle drains both GPU command queues and the presentation engine,
+    // ensuring no pending vkQueuePresentKHR is still waiting on renderFinished semaphores
+    // before we destroy them. Per-fence waits alone are insufficient — they only cover
+    // GPU command completion, not the presentation engine's semaphore usage.
     vkDeviceWaitIdle(m_device);
+
     destroyFramebuffersAndViews();
 
     // Keep old handle alive so createSwapchain can pass it as ci.oldSwapchain.
-    // Do NOT null m_swapchain before calling createSwapchain — the function reads
-    // m_swapchain as oldSwapchain and then overwrites it with the new handle.
     VkSwapchainKHR old = m_swapchain;
     if (!createSwapchain(w, h)) {
-        // Creation failed (e.g. VK_ERROR_OUT_OF_DATE_KHR on Wayland during first
-        // present). Leave old swapchain intact and let the next frame retry.
         m_swapchain = old;
-        return;
+        return false;
     }
-
-    // New swapchain is live in m_swapchain; now safe to destroy the old one.
     if (old != VK_NULL_HANDLE)
         vkDestroySwapchainKHR(m_device, old, nullptr);
 
-    // Recreate per-image renderFinished semaphores only if the image count changed.
-    // vkDeviceWaitIdle above ensures no semaphore is in use before we destroy any.
+    // Recreate renderFinished semaphores when image count changes (e.g. MAILBOX→FIFO
+    // or surface capability change). vkDeviceWaitIdle above guarantees they are idle.
     if (m_renderFinished.size() != m_swapchainImages.size()) {
         for (auto sem : m_renderFinished)
             if (sem != VK_NULL_HANDLE)
@@ -957,10 +987,11 @@ void VkRenderer::recreateSwapchain() {
         m_renderFinished.resize(m_swapchainImages.size());
         for (auto& sem : m_renderFinished)
             if (vkCreateSemaphore(m_device, &sci, nullptr, &sem) != VK_SUCCESS)
-                return;
+                return false;
     }
 
     if (!createImageViews() || !createFramebuffers())
-        return;
+        return false;
     m_imagesInFlight.assign(m_swapchainImages.size(), VK_NULL_HANDLE);
+    return true;
 }
