@@ -7,6 +7,8 @@ coverage:
     patch:
       default:
         target: 70%
+ignore:
+  - "platform/**"
 comment:
   layout: "reach,diff,flags,files"
   behavior: default
