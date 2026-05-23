@@ -294,7 +294,7 @@ bool VkRenderer::createInstance() {
 
     VkApplicationInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    ai.pApplicationName = "hello_triangle";
+    ai.pApplicationName = SDL_GetWindowTitle(m_sdlWindow);
     ai.applicationVersion = VK_MAKE_VERSION(0, 0, 1);
     ai.pEngineName = "fighters-legacy";
     ai.engineVersion = VK_MAKE_VERSION(0, 0, 1);
