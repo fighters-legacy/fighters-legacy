@@ -3,8 +3,15 @@
 #include "Platform.h"
 #include "SDL3Window.h"
 #include "VkRenderer.h"
+#include <atomic>
+#include <csignal>
 #include <cstdio>
 #include <memory>
+
+static std::atomic<bool> g_quit{false};
+static void onSignal(int) {
+    g_quit = true;
+}
 
 class App : public IWindowEventHandler {
   public:
@@ -29,7 +36,7 @@ class App : public IWindowEventHandler {
             return 1;
         }
 
-        while (m_running && !m_platform.window->shouldClose()) {
+        while (m_running && !m_platform.window->shouldClose() && !g_quit) {
             m_platform.window->pollEvents();
             m_platform.renderer->beginFrame();
             m_platform.renderer->endFrame();
@@ -46,6 +53,8 @@ class App : public IWindowEventHandler {
 };
 
 int main() {
+    std::signal(SIGINT, onSignal);
+    std::signal(SIGTERM, onSignal);
     Platform p;
     p.window = std::make_unique<SDL3Window>();
     p.renderer = std::make_unique<VkRenderer>();

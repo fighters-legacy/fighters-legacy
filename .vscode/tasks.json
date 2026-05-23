@@ -6,7 +6,10 @@
       "type": "shell",
       "command": "cmake --preset debug",
       "group": "build",
-      "presentation": { "reveal": "silent", "panel": "shared" },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      },
       "problemMatcher": []
     },
     {
@@ -14,16 +17,25 @@
       "type": "shell",
       "command": "cmake --preset release",
       "group": "build",
-      "presentation": { "reveal": "silent", "panel": "shared" },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      },
       "problemMatcher": []
     },
     {
       "label": "Build (Debug)",
       "type": "shell",
       "command": "cmake --build --preset debug",
-      "group": { "kind": "build", "isDefault": true },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
       "dependsOn": "Configure (Debug)",
-      "presentation": { "reveal": "always", "panel": "shared" },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
       "problemMatcher": "$gcc"
     },
     {
@@ -32,16 +44,37 @@
       "command": "cmake --build --preset release",
       "group": "build",
       "dependsOn": "Configure (Release)",
-      "presentation": { "reveal": "always", "panel": "shared" },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
       "problemMatcher": "$gcc"
     },
     {
       "label": "Test (Debug)",
       "type": "shell",
       "command": "ctest --preset debug --output-on-failure",
-      "group": { "kind": "test", "isDefault": true },
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
       "dependsOn": "Build (Debug)",
-      "presentation": { "reveal": "always", "panel": "shared" },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run hello_triangle",
+      "type": "shell",
+      "command": "${workspaceFolder}/build/debug/tools/hello_triangle",
+      "dependsOn": "Build (Debug)",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true
+      },
       "problemMatcher": []
     }
   ]

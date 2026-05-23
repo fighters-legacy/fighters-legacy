@@ -114,7 +114,10 @@ void VkRenderer::onResize(int /*width*/, int /*height*/) {
 void VkRenderer::beginFrame() {
     m_frameAcquired = false;
 
-    vkWaitForFences(m_device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, std::numeric_limits<uint64_t>::max());
+    // 100 ms timeout keeps the event loop responsive; VK_TIMEOUT → early return
+    // so pollEvents() runs again before we re-enter the fence wait.
+    if (vkWaitForFences(m_device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, 100'000'000ULL) == VK_TIMEOUT)
+        return;
 
     VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, std::numeric_limits<uint64_t>::max(),
                                             m_imageAvailable[m_currentFrame], VK_NULL_HANDLE, &m_currentImageIndex);
@@ -129,8 +132,7 @@ void VkRenderer::beginFrame() {
     vkResetFences(m_device, 1, &m_inFlightFences[m_currentFrame]);
 
     if (m_imagesInFlight[m_currentImageIndex] != VK_NULL_HANDLE)
-        vkWaitForFences(m_device, 1, &m_imagesInFlight[m_currentImageIndex], VK_TRUE,
-                        std::numeric_limits<uint64_t>::max());
+        vkWaitForFences(m_device, 1, &m_imagesInFlight[m_currentImageIndex], VK_TRUE, 100'000'000ULL);
     m_imagesInFlight[m_currentImageIndex] = m_inFlightFences[m_currentFrame];
 
     vkResetCommandBuffer(m_commandBuffers[m_currentFrame], 0);
@@ -822,8 +824,10 @@ bool VkRenderer::allocateCommandBuffers() {
 // ---------------------------------------------------------------------------
 
 bool VkRenderer::createSyncObjects() {
-    VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    VkSemaphoreCreateInfo sci{};
+    sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    VkFenceCreateInfo fci{};
+    fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
@@ -907,26 +911,32 @@ void VkRenderer::cleanupSwapchain() {
 void VkRenderer::recreateSwapchain() {
     // Wait until window has non-zero pixel size (handles minimization)
     int w = 0, h = 0;
-    SDL_GetWindowSizeInPixels(m_sdlWindow, &w, &h);
     while (w == 0 || h == 0) {
-        SDL_WaitEventTimeout(nullptr, 100);
-        SDL_GetWindowSizeInPixels(m_sdlWindow, &w, &h);
+        if (!SDL_GetWindowSizeInPixels(m_sdlWindow, &w, &h))
+            SDL_GetWindowSize(m_sdlWindow, &w, &h);
+        if (w == 0 || h == 0)
+            SDL_WaitEventTimeout(nullptr, 100);
     }
 
     vkDeviceWaitIdle(m_device);
-
-    // Destroy framebuffers + image views; keep the old swapchain alive for oldSwapchain
     destroyFramebuffersAndViews();
+
+    // Keep old handle alive so createSwapchain can pass it as ci.oldSwapchain.
+    // Do NOT null m_swapchain before calling createSwapchain — the function reads
+    // m_swapchain as oldSwapchain and then overwrites it with the new handle.
     VkSwapchainKHR old = m_swapchain;
-    m_swapchain = VK_NULL_HANDLE;
+    if (!createSwapchain(w, h)) {
+        // Creation failed (e.g. VK_ERROR_OUT_OF_DATE_KHR on Wayland during first
+        // present). Leave old swapchain intact and let the next frame retry.
+        m_swapchain = old;
+        return;
+    }
 
-    createSwapchain(w, h);
-
-    // Destroy old swapchain only after new one is created
+    // New swapchain is live in m_swapchain; now safe to destroy the old one.
     if (old != VK_NULL_HANDLE)
         vkDestroySwapchainKHR(m_device, old, nullptr);
 
-    createImageViews();
-    createFramebuffers();
+    if (!createImageViews() || !createFramebuffers())
+        return;
     m_imagesInFlight.assign(m_swapchainImages.size(), VK_NULL_HANDLE);
 }

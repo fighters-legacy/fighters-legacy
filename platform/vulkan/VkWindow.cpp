@@ -27,6 +27,7 @@ std::vector<const char*> vk_getRequiredInstanceExtensions(SDL_Window* /*window*/
 
 VkSurfaceKHR vk_createSurface(VkInstance instance, SDL_Window* window) {
     VkSurfaceKHR surface = VK_NULL_HANDLE;
-    SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface);
+    if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface))
+        return VK_NULL_HANDLE;
     return surface;
 }

@@ -9,7 +9,7 @@
 #include <SDL3/SDL.h>
 
 bool SDL3Window::init(const char* title, int width, int height) {
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
         m_lastError = SDL_GetError();
         return false;
     }
@@ -22,7 +22,10 @@ bool SDL3Window::init(const char* title, int width, int height) {
         return false;
     }
 
-    SDL_GetWindowSizeInPixels(m_window, &m_width, &m_height);
+    if (!SDL_GetWindowSizeInPixels(m_window, &m_width, &m_height)) {
+        m_width = width;
+        m_height = height;
+    }
     return true;
 }
 
