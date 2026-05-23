@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake clang
+          sudo apt-get install -y ninja-build cmake clang libx11-dev libxext-dev
 
       - name: Configure
         run: cmake --preset asan
