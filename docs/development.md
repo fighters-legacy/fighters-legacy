@@ -137,10 +137,11 @@ File → Open → CMake → select `CMakeLists.txt`. Visual Studio reads `CMakeP
 ```
 fighters-legacy/
 ├── engine/             # Engine core: content system, asset manager, IContentPack
-├── platform/           # HAL backends
-│   ├── vulkan/         # Vulkan renderer
-│   ├── openal/         # OpenAL Soft audio
-│   └── net/            # ENet networking
+├── platform/           # HAL interfaces (*.h) and backends
+│   ├── sdl3/           # SDL3 windowing and input backend
+│   ├── vulkan/         # Vulkan renderer backend
+│   ├── openal/         # OpenAL Soft audio backend
+│   └── net/            # ENet networking backend
 ├── tools/              # Developer tools (added Phase 1)
 ├── tests/              # Test suite (Catch2 via FetchContent)
 ├── docs/               # Documentation
