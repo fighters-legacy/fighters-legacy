@@ -28,6 +28,10 @@ else()
         GIT_SHALLOW    TRUE
         SYSTEM
     )
+    # SDL's internal build sets -Werror. On Apple Silicon with newer Clang,
+    # SDL's libm source (k_rem_pio2.c) produces sign-compare warnings that
+    # become errors. Disable SDL's own Werror so FetchContent builds cleanly.
+    set(SDL_WERROR OFF CACHE BOOL "" FORCE)
 endif()
 
 # ---------------------------------------------------------------------------

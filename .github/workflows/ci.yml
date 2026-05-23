@@ -36,7 +36,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake gcc g++ clang clang-format \
-            libvulkan-dev glslang-tools
+            libvulkan-dev glslang-tools \
+            libx11-dev libxext-dev
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
