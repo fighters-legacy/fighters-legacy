@@ -108,6 +108,13 @@ public:
     virtual void startTextInput(ITextInputHandler* handler) = 0;
     virtual void stopTextInput() = 0;
 
+    // --- Frame boundary ---
+
+    // Must be called once per frame by the game loop, after all input has been
+    // read for that frame. Resets isKeyJustPressed for all keys, clears mouse
+    // delta (dx, dy), and zeroes the scroll accumulator.
+    virtual void flush() = 0;
+
     // --- Gamepad ---
 
     virtual int getGamepadCount() const = 0;
