@@ -76,3 +76,21 @@ else()
     )
     FetchContent_MakeAvailable(Catch2)
 endif()
+
+# ---------------------------------------------------------------------------
+# tomlplusplus — header-only TOML parser; system preferred, FetchContent fallback
+# Used by engine/content/ModLoader to parse mod manifests.
+# ---------------------------------------------------------------------------
+find_package(tomlplusplus 3.4 QUIET)
+if(tomlplusplus_FOUND)
+    message(STATUS "tomlplusplus: system (${tomlplusplus_VERSION})")
+else()
+    message(STATUS "tomlplusplus: FetchContent")
+    FetchContent_Declare(tomlplusplus
+        GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+        GIT_TAG        v3.4.0
+        GIT_SHALLOW    TRUE
+        SYSTEM
+    )
+    FetchContent_MakeAvailable(tomlplusplus)
+endif()

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Run clang-format on staged C/C++ files and re-stage the result.
+# Install: cp scripts/hooks/pre-commit .git/hooks/ && chmod +x .git/hooks/pre-commit
+set -euo pipefail
+
+files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(cpp|h|hpp|c)$' || true)
+[ -z "$files" ] && exit 0
+
+clang-format -i $files
+git add $files

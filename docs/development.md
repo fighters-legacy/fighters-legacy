@@ -6,8 +6,11 @@
 
 ```bash
 sudo dnf install cmake ninja-build gcc g++ clang clang-tools-extra \
-  vulkan-devel SDL3-devel openal-soft-devel lcov
+  vulkan-devel SDL3-devel openal-soft-devel lcov \
+  libasan libubsan
 ```
+
+`libasan` and `libubsan` are required for the `asan` build preset (`-fsanitize=address,undefined`). They are separate packages from `gcc` on Fedora.
 
 ### Linux — Ubuntu/Debian
 
@@ -116,6 +119,22 @@ chmod +x .git/hooks/commit-msg
 
 The hook appends `Signed-off-by: Your Name <your@email>` if the line is not already present, so you never accidentally trigger a DCO failure.
 
+### clang-format (pre-commit)
+
+CI enforces clang-format on every changed C/C++ file. Install the pre-commit hook to auto-format staged files before each commit so the check never fails in CI:
+
+```bash
+cp scripts/hooks/pre-commit .git/hooks/
+chmod +x .git/hooks/pre-commit
+```
+
+To install both hooks at once:
+
+```bash
+cp scripts/hooks/commit-msg scripts/hooks/pre-commit .git/hooks/
+chmod +x .git/hooks/commit-msg .git/hooks/pre-commit
+```
+
 ---
 
 ## IDE setup
@@ -165,6 +184,7 @@ Structure is populated as Phase 1 Workstream A engine code lands. The stubs abov
 | OpenAL Soft | 1.23+ | FetchContent or system |
 | ENet | 2.x | FetchContent |
 | Catch2 | 3.x | FetchContent |
+| tomlplusplus | 3.4+ | FetchContent or system |
 
 FetchContent fallback is used when the system package is absent or below the required version. The CMake configuration prints the source (system vs fetched) for each dependency.
 
