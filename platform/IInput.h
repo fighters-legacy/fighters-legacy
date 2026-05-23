@@ -8,61 +8,118 @@ enum class Key : uint32_t {
     Unknown = 0,
 
     // Letters
-    A, B, C, D, E, F, G, H, I, J, K, L, M,
-    N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
 
     // Digits (top row)
-    Num0, Num1, Num2, Num3, Num4,
-    Num5, Num6, Num7, Num8, Num9,
+    Num0,
+    Num1,
+    Num2,
+    Num3,
+    Num4,
+    Num5,
+    Num6,
+    Num7,
+    Num8,
+    Num9,
 
     // Navigation
-    Space, Enter, Tab, Backspace, Delete, Escape,
-    ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
-    Home, End, PageUp, PageDown, Insert,
+    Space,
+    Enter,
+    Tab,
+    Backspace,
+    Delete,
+    Escape,
+    ArrowUp,
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Insert,
 
     // Function keys
-    F1, F2, F3, F4, F5, F6,
-    F7, F8, F9, F10, F11, F12,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
 
     // Modifiers
-    LeftShift, RightShift,
-    LeftCtrl, RightCtrl,
-    LeftAlt, RightAlt,
+    LeftShift,
+    RightShift,
+    LeftCtrl,
+    RightCtrl,
+    LeftAlt,
+    RightAlt,
 
     Count
 };
 
-enum class MouseButton : uint8_t {
-    Left = 0,
-    Middle,
-    Right,
-    Count
-};
+enum class MouseButton : uint8_t { Left = 0, Middle, Right, Count };
 
 enum class GamepadButton : uint8_t {
-    A = 0, B, X, Y,
-    LeftShoulder, RightShoulder,
-    LeftTrigger, RightTrigger,    // digital (pressed / not pressed)
-    LeftStick, RightStick,
-    DpadUp, DpadDown, DpadLeft, DpadRight,
-    Start, Back,
+    A = 0,
+    B,
+    X,
+    Y,
+    LeftShoulder,
+    RightShoulder,
+    LeftTrigger,
+    RightTrigger, // digital (pressed / not pressed)
+    LeftStick,
+    RightStick,
+    DpadUp,
+    DpadDown,
+    DpadLeft,
+    DpadRight,
+    Start,
+    Back,
     Count
 };
 
 // Analog axes; getGamepadAxis returns values in [-1.0, 1.0].
-enum class GamepadAxis : uint8_t {
-    LeftX = 0, LeftY,
-    RightX, RightY,
-    TriggerLeft, TriggerRight,
-    Count
-};
+enum class GamepadAxis : uint8_t { LeftX = 0, LeftY, RightX, RightY, TriggerLeft, TriggerRight, Count };
 
 // Register with IInput::startTextInput to receive text events from the OS IME
 // pipeline. This is separate from isKeyDown — use it for any UI that accepts
 // free-form text (player name, chat, mission editor fields).
 // Threading: callbacks are invoked from the main thread inside IWindow::pollEvents().
 class ITextInputHandler {
-public:
+  public:
     virtual ~ITextInputHandler() = default;
 
     // Called with each committed UTF-8 string (may be more than one character).
@@ -75,7 +132,7 @@ public:
 
 // Threading: all methods must be called from the main thread.
 class IInput {
-public:
+  public:
     virtual ~IInput() = default;
 
     // --- Keyboard ---

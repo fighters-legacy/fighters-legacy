@@ -10,7 +10,7 @@ using AudioSourceId = uint32_t;
 // Threading: all methods must be called from the main thread. The OpenAL driver
 // manages its own internal mixing thread; callers do not need to synchronise.
 class IAudio {
-public:
+  public:
     virtual ~IAudio() = default;
 
     virtual bool init() = 0;
@@ -23,8 +23,7 @@ public:
     // --- Buffer management ---
 
     // Uploads raw PCM data and returns an opaque buffer handle, or 0 on failure.
-    virtual AudioBufferId uploadBuffer(const void* data, std::size_t size,
-                                       int sampleRate, int channels) = 0;
+    virtual AudioBufferId uploadBuffer(const void* data, std::size_t size, int sampleRate, int channels) = 0;
     virtual void freeBuffer(AudioBufferId id) = 0;
 
     // --- Source management ---
@@ -59,7 +58,5 @@ public:
 
     // Sets the listener (camera/player) position and orientation.
     // pos, forward, up are each three-element float arrays [x, y, z].
-    virtual void setListenerTransform(const float pos[3],
-                                      const float forward[3],
-                                      const float up[3]) = 0;
+    virtual void setListenerTransform(const float pos[3], const float forward[3], const float up[3]) = 0;
 };

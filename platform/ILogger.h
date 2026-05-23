@@ -3,12 +3,7 @@
 
 #include <cstdint>
 
-enum class LogLevel : uint8_t {
-    Debug,
-    Info,
-    Warn,
-    Error
-};
+enum class LogLevel : uint8_t { Debug, Info, Warn, Error };
 
 // Platform-specific logging backend (OutputDebugString on Windows, os_log on
 // macOS, stderr/journald on Linux). Engine code should call this through a thin
@@ -17,12 +12,11 @@ enum class LogLevel : uint8_t {
 // Threading: log() must be thread-safe; it may be called simultaneously from the
 // main thread, audio thread, and network thread. All other methods are main-thread only.
 class ILogger {
-public:
+  public:
     virtual ~ILogger() = default;
 
     // file and message are const char* to avoid string allocation on any call path.
-    virtual void log(LogLevel level, const char* file, int line,
-                     const char* message) = 0;
+    virtual void log(LogLevel level, const char* file, int line, const char* message) = 0;
 
     // Suppresses messages below minLevel (e.g. set Info in release builds).
     virtual void setMinLevel(LogLevel minLevel) = 0;

@@ -8,7 +8,7 @@
 // The backend calls these methods from INetwork::service() as events arrive.
 // Threading: callbacks are invoked from whichever thread calls INetwork::service().
 class INetworkEventHandler {
-public:
+  public:
     virtual ~INetworkEventHandler() = default;
 
     virtual void onConnect(uint32_t peerId) = 0;
@@ -16,17 +16,12 @@ public:
     virtual void onReceive(uint32_t peerId, const void* data, std::size_t size) = 0;
 };
 
-enum class PeerState : uint8_t {
-    Connecting,
-    Connected,
-    Disconnecting,
-    Disconnected
-};
+enum class PeerState : uint8_t { Connecting, Connected, Disconnecting, Disconnected };
 
 // Threading: all methods must be called from the same thread (typically the main
 // thread). service() is called once per frame from the game loop.
 class INetwork {
-public:
+  public:
     virtual ~INetwork() = default;
 
     virtual bool init() = 0;
@@ -47,8 +42,7 @@ public:
     // --- Data transfer ---
 
     // peerId is ignored on a pure client; set reliable=true for sequenced delivery.
-    virtual bool send(uint32_t peerId, const void* data, std::size_t size,
-                      bool reliable) = 0;
+    virtual bool send(uint32_t peerId, const void* data, std::size_t size, bool reliable) = 0;
 
     // --- Frame pump ---
 

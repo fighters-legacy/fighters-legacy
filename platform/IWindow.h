@@ -5,7 +5,7 @@
 
 // Threading: all methods must be called from the main thread.
 class IWindow {
-public:
+  public:
     virtual ~IWindow() = default;
 
     virtual bool init(const char* title, int width, int height) = 0;

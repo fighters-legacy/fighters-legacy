@@ -3,7 +3,7 @@
 
 // Threading: callbacks are invoked from the main thread inside IWindow::pollEvents().
 class IWindowEventHandler {
-public:
+  public:
     virtual ~IWindowEventHandler() = default;
 
     virtual void onResize(int width, int height) = 0;

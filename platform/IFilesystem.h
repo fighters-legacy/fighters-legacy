@@ -9,16 +9,12 @@
 // user-data root (per-user app data). Required for Linux Flatpak and macOS
 // sandbox compliance where these directories are separate OS-managed paths.
 enum class PathDomain : uint8_t {
-    Assets,   // read-only; content packs, mods, missions
-    UserData  // writable; saves, user config, logs
+    Assets,  // read-only; content packs, mods, missions
+    UserData // writable; saves, user config, logs
 };
 
 // Seek origin for IFilesystem::seek, mirroring SEEK_SET / SEEK_CUR / SEEK_END.
-enum class SeekOrigin : uint8_t {
-    Begin,
-    Current,
-    End
-};
+enum class SeekOrigin : uint8_t { Begin, Current, End };
 
 // Threading: all methods must be called from the main thread.
 // IMPORTANT: This is a synchronous, blocking interface. readFile will not return
@@ -26,7 +22,7 @@ enum class SeekOrigin : uint8_t {
 // discovery, and config reads. Do NOT call it on the main thread for per-frame
 // terrain streaming; a separate async I/O design is planned for Phase 2.
 class IFilesystem {
-public:
+  public:
     virtual ~IFilesystem() = default;
 
     struct Entry {
@@ -61,6 +57,5 @@ public:
     // Returns all entries directly inside the given directory. Each Entry reports
     // whether it is a file or a subdirectory, which ModLoader uses to distinguish
     // mod folders from loose files.
-    virtual std::vector<Entry> scanDirectory(PathDomain domain,
-                                             const char* path) const = 0;
+    virtual std::vector<Entry> scanDirectory(PathDomain domain, const char* path) const = 0;
 };

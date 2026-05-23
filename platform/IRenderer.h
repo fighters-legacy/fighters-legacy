@@ -10,7 +10,7 @@ class IWindow;
 // materials, render graph) is added in the Vulkan backend workstream.
 // Threading: all methods must be called from the main thread.
 class IRenderer {
-public:
+  public:
     virtual ~IRenderer() = default;
 
     // Uses window->nativeHandle() to create VkSurfaceKHR; must be called after IWindow::init.
