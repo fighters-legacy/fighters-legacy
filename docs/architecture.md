@@ -57,6 +57,7 @@ All interfaces live under `platform/` and are exposed via the `platform-hal` CMa
 - `IWindow::nativeHandle()` returns `void*` — the only platform type that crosses the boundary, and it does so as an opaque pointer used only by the Vulkan backend internally.
 - All interface methods are pure virtual. No implementation code lives in these headers.
 - Interfaces that can fail during init expose `getLastError() const → const char*` for human-readable diagnostics.
+- **Thread safety:** `ILogger::log` is the only HAL method guaranteed thread-safe. All other methods on all other interfaces must be called from the main thread.
 
 **`IRenderer` scope (Phase 1):** `IRenderer` is lifecycle-only — init, frame begin/end, shutdown. Scene submission (mesh handles, transforms, materials) and a render graph abstraction are added in the Vulkan backend workstream (Phase 2).
 
