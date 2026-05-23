@@ -6,8 +6,11 @@
 
 ```bash
 sudo dnf install cmake ninja-build gcc g++ clang clang-tools-extra \
-  vulkan-devel SDL3-devel openal-soft-devel lcov
+  vulkan-devel SDL3-devel openal-soft-devel lcov \
+  libasan libubsan
 ```
+
+`libasan` and `libubsan` are required for the `asan` build preset (`-fsanitize=address,undefined`). They are separate packages from `gcc` on Fedora.
 
 ### Linux — Ubuntu/Debian
 
@@ -165,6 +168,7 @@ Structure is populated as Phase 1 Workstream A engine code lands. The stubs abov
 | OpenAL Soft | 1.23+ | FetchContent or system |
 | ENet | 2.x | FetchContent |
 | Catch2 | 3.x | FetchContent |
+| tomlplusplus | 3.4+ | FetchContent or system |
 
 FetchContent fallback is used when the system package is absent or below the required version. The CMake configuration prints the source (system vs fetched) for each dependency.
 
