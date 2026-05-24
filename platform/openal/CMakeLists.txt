@@ -7,10 +7,16 @@ if(NOT (OPENAL_FOUND OR OpenAL_FOUND) OR APPLE)
     # Force static library: avoids .dll/.so deployment for tests and tools on all
     # platforms, especially Windows where the DLL would otherwise need to be
     # alongside every test/tool binary.
-    set(_saved_bsl ${BUILD_SHARED_LIBS})
-    set(BUILD_SHARED_LIBS OFF)
+    set(_saved_bsl "${BUILD_SHARED_LIBS}")
+    # Must use CACHE FORCE: option() in openal-soft's CMakeLists ignores a plain
+    # set() and would create a cache entry with its default (ON = shared DLL).
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(openal-soft)
-    set(BUILD_SHARED_LIBS ${_saved_bsl})
+    # Restore: remove the forced cache entry so it doesn't affect other targets.
+    unset(BUILD_SHARED_LIBS CACHE)
+    if(_saved_bsl)
+        set(BUILD_SHARED_LIBS "${_saved_bsl}")
+    endif()
     unset(CMAKE_COMPILE_WARNING_AS_ERROR)
 endif()
 

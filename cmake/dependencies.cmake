@@ -33,8 +33,13 @@ endif()
 # ---------------------------------------------------------------------------
 # OpenAL Soft — system preferred, FetchContent fallback
 # Declared here; platform/openal calls FetchContent_MakeAvailable(openal-soft)
+# Skip find_package on Apple: the deprecated system OpenAL.framework passes the
+# 1.23 version check but provides <OpenAL/al.h> as <OpenAL/al.h> (framework
+# layout), not <AL/al.h>. Always fetch OpenAL Soft on Apple.
 # ---------------------------------------------------------------------------
-find_package(OpenAL 1.23 QUIET)
+if(NOT APPLE)
+    find_package(OpenAL 1.23 QUIET)
+endif()
 if(OPENAL_FOUND OR OpenAL_FOUND)
     message(STATUS "OpenAL Soft: system")
 else()
