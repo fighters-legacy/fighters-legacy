@@ -74,6 +74,7 @@ logs/
 # User config (not committed)
 config/user.toml
 config/bindings.toml
+server.toml
 
 # Packaging
 *.zip

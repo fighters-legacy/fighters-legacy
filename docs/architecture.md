@@ -94,7 +94,7 @@ These decisions are finalized and not subject to revision without an RFC.
 | Rendering | Vulkan + MoltenVK | One API everywhere; MoltenVK → Metal on Apple Silicon |
 | Windowing / input | SDL3 | Wayland + modern controller support; long-term path |
 | Audio | OpenAL Soft | Positional 3D audio; native music in OGG; no MIDI dependency in engine core |
-| Network transport | ENet (reliable UDP) | Reliable + unreliable channels; congestion control; cross-platform |
+| Network transport | ENet 1.3.x (reliable UDP) | Reliable + unreliable channels; congestion control; cross-platform. **IPv4 only** — ENet 1.3.x does not support IPv6; dual-stack requires the `enet6` fork (SirLynix/enet6), which is not a Phase 1 concern. |
 | Build system | CMake 3.25+ | Cross-platform from day one |
 | Engine repo | `fighters-legacy` (this repo) | Separate from fighters-toolkit |
 | ft-gui future | Port to SDL3 + Vulkan | After engine HAL is stable (Phase 4) |

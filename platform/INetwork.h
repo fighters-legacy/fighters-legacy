@@ -36,6 +36,10 @@ class INetwork {
 
     // --- Client side ---
 
+    // Initiates an outbound connection to host:port. Returns true if the
+    // connection attempt was queued successfully; the handshake completes
+    // asynchronously. onConnect() fires via service() once the peer responds.
+    // Returns false if the host could not be created or the peer slot is full.
     virtual bool connect(const char* host, uint16_t port) = 0;
     virtual void disconnect() = 0;
 
@@ -43,6 +47,9 @@ class INetwork {
 
     // peerId is ignored on a pure client; set reliable=true for sequenced delivery.
     virtual bool send(uint32_t peerId, const void* data, std::size_t size, bool reliable) = 0;
+
+    // Sends data to all currently connected peers.
+    virtual void broadcast(const void* data, std::size_t size, bool reliable) = 0;
 
     // --- Frame pump ---
 
@@ -54,6 +61,10 @@ class INetwork {
 
     virtual int getPeerCount() const = 0;
     virtual PeerState getPeerState(uint32_t peerId) const = 0;
+
+    // Returns "ip:port" string for the given peer, or nullptr if not connected.
+    // Valid until the next call on this interface.
+    virtual const char* getPeerAddress(uint32_t peerId) const = 0;
 
     // Returns a human-readable description of the last error, or nullptr if none.
     // Valid until the next call on this interface.

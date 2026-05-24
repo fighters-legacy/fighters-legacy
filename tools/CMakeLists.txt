@@ -22,20 +22,24 @@ if(TARGET platform-sdl3)
     )
 endif()
 
-if(TARGET platform-openal)
-    add_executable(audio_test audio_test/main.cpp)
-    # OpenAL::OpenAL is PRIVATE in platform-openal, so its include dirs don't
-    # propagate. audio_test includes OALAudio.h which pulls in <AL/al.h> and
-    # <AL/alc.h> — same pattern as hello_triangle adding Vulkan::Vulkan explicitly.
-    target_link_libraries(audio_test PRIVATE platform-openal platform-hal OpenAL::OpenAL)
-    target_include_directories(audio_test PRIVATE
-        "${CMAKE_SOURCE_DIR}/platform/openal"
+if(TARGET platform-enet)
+    add_executable(fl-server fl-server/main.cpp)
+    target_link_libraries(fl-server PRIVATE platform-enet platform-hal tomlplusplus::tomlplusplus)
+    target_include_directories(fl-server PRIVATE
+        "${CMAKE_SOURCE_DIR}/platform/net"
+        "${enet_SOURCE_DIR}/include"
     )
-    if(WIN32)
-        add_custom_command(TARGET audio_test POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                $<TARGET_FILE:OpenAL::OpenAL>
-                $<TARGET_FILE_DIR:audio_test>
-        )
+
+    add_executable(fl-client fl-client/main.cpp)
+    target_link_libraries(fl-client PRIVATE platform-enet platform-hal)
+    target_include_directories(fl-client PRIVATE
+        "${CMAKE_SOURCE_DIR}/platform/net"
+        "${enet_SOURCE_DIR}/include"
+    )
+
+    # MSVC deprecates std::getenv — suppress for these tools only
+    if(MSVC)
+        target_compile_definitions(fl-server PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_compile_definitions(fl-client PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
 endif()

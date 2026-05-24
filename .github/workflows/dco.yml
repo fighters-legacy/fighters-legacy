@@ -20,6 +20,9 @@ jobs:
           HEAD="${{ github.event.pull_request.head.sha }}"
           MISSING=""
           while IFS= read -r sha; do
+            # Skip merge commits — auto-generated, not developer contributions
+            parents=$(git show --no-patch --format="%P" "$sha" | wc -w)
+            if [ "$parents" -gt 1 ]; then continue; fi
             if ! git show --no-patch --format="%B" "$sha" | grep -q "^Signed-off-by:"; then
               MISSING="$MISSING\n  $sha $(git show --no-patch --format="%s" "$sha")"
             fi
