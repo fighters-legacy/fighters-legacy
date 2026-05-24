@@ -18,6 +18,8 @@ sudo dnf install cmake ninja-build gcc g++ clang clang-tools-extra \
 
 For Bluetooth gamepad support (Xbox controllers), see [docs/linux-gamepad.md](linux-gamepad.md).
 
+> **Note (OpenAL):** Some Fedora installs ship `/etc/openal/alsoft.conf` with `drivers = null`, which silently discards all audio. If `audio_test` reports success but you hear nothing, override it: `printf '[general]\ndrivers = pipewire\n' > ~/.config/alsoft.conf`
+
 ### Linux — Ubuntu/Debian
 
 ```bash
@@ -192,7 +194,7 @@ Structure is populated as Phase 1 Workstream A engine code lands. The stubs abov
 | Vulkan SDK | 1.3+ | LunarG |
 | MoltenVK | bundled with Vulkan SDK | LunarG (macOS) |
 | SDL3 | latest | FetchContent or system |
-| OpenAL Soft | 1.23+ | FetchContent or system |
+| OpenAL Soft | 1.24+ | FetchContent or system |
 | ENet | 2.x | FetchContent |
 | Catch2 | 3.x | FetchContent |
 | tomlplusplus | 3.4+ | FetchContent or system |
