@@ -21,3 +21,14 @@ if(TARGET platform-sdl3)
         "${CMAKE_SOURCE_DIR}/platform/sdl3"
     )
 endif()
+
+if(TARGET platform-openal)
+    add_executable(audio_test audio_test/main.cpp)
+    # OpenAL::OpenAL is PRIVATE in platform-openal, so its include dirs don't
+    # propagate. audio_test includes OALAudio.h which pulls in <AL/al.h> and
+    # <AL/alc.h> — same pattern as hello_triangle adding Vulkan::Vulkan explicitly.
+    target_link_libraries(audio_test PRIVATE platform-openal platform-hal OpenAL::OpenAL)
+    target_include_directories(audio_test PRIVATE
+        "${CMAKE_SOURCE_DIR}/platform/openal"
+    )
+endif()

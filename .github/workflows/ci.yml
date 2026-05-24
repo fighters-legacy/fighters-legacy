@@ -37,7 +37,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake gcc g++ clang clang-format \
             libvulkan-dev glslang-tools \
-            libx11-dev libxext-dev
+            libx11-dev libxext-dev \
+            libopenal-dev
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -67,6 +68,12 @@ jobs:
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Configure OpenAL Soft null backend
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          mkdir -p "$HOME/.config"
+          printf '[general]\ndrivers = null\n' > "$HOME/.config/alsoft.conf"
 
       - name: Test
         run: ctest --preset ${{ matrix.preset }} --output-on-failure

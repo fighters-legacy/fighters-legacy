@@ -56,7 +56,17 @@ class IAudio {
     virtual void setMaxDistance(AudioSourceId source, float dist) = 0;
     virtual void setRolloffFactor(AudioSourceId source, float factor) = 0;
 
+    // When relative=true the source position is interpreted relative to the listener rather than in
+    // world space, making the source non-positional. Use for music, cockpit sounds, UI tones, and
+    // radio comms. Combine with setRolloffFactor(src, 0) and setPosition(src, 0,0,0) for fully
+    // head-locked audio. Defaults to false (world-space) on createSource().
+    virtual void setSourceRelative(AudioSourceId source, bool relative) = 0;
+
     // Sets the listener (camera/player) position and orientation.
     // pos, forward, up are each three-element float arrays [x, y, z].
     virtual void setListenerTransform(const float pos[3], const float forward[3], const float up[3]) = 0;
+
+    // Sets the listener (camera/player) velocity for Doppler calculation.
+    // vel is a three-element float array [vx, vy, vz] in world units/sec.
+    virtual void setListenerVelocity(const float vel[3]) = 0;
 };

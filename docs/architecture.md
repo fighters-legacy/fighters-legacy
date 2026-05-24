@@ -40,7 +40,7 @@ All interfaces live under `platform/` and are exposed via the `platform-hal` CMa
 | `IWindowEventHandler` | `platform/IWindowEventHandler.h` | Callback target for window events (resize, close); implemented by the engine game loop |
 | `IWindow` | `platform/IWindow.h` | Create/destroy OS window, pump events, query dimensions, expose native handle for surface creation |
 | `IRenderer` | `platform/IRenderer.h` | Render frame lifecycle: init, beginFrame, endFrame, shutdown |
-| `IAudio` | `platform/IAudio.h` | Buffer upload, source play/stop/position/velocity, listener transform |
+| `IAudio` | `platform/IAudio.h` | Buffer upload, source play/stop/position/velocity, listener transform/velocity, source-relative (non-positional) mode |
 | `ITextInputHandler` | `platform/IInput.h` | Callback target for OS text input and IME composition events; implemented by any UI component that accepts free-form text |
 | `IInput` | `platform/IInput.h` | Keyboard, mouse, and gamepad state (SDL3 GameController API); drives text input mode via `ITextInputHandler` |
 | `INetworkEventHandler` | `platform/INetwork.h` | Callback target for network events (connect, disconnect, receive); implemented by the multiplayer subsystem |

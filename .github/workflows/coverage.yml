@@ -22,13 +22,19 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake lcov libx11-dev libxext-dev
+          sudo apt-get install -y ninja-build cmake lcov libx11-dev libxext-dev \
+            libopenal-dev
 
       - name: Configure
         run: cmake --preset coverage
 
       - name: Build
         run: cmake --build --preset coverage
+
+      - name: Configure OpenAL Soft null backend
+        run: |
+          mkdir -p "$HOME/.config"
+          printf '[general]\ndrivers = null\n' > "$HOME/.config/alsoft.conf"
 
       - name: Test
         run: ctest --preset coverage --output-on-failure
