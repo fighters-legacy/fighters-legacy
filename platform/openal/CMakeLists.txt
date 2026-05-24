@@ -4,6 +4,9 @@
 # to ensure we get OpenAL Soft with the correct include layout.
 if(NOT (OPENAL_FOUND OR OpenAL_FOUND) OR APPLE)
     set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
+    # openal-soft-1.23.1 uses cmake_minimum_required(VERSION 3.13); safety net
+    # for CMake 4.x which rejects cmake_minimum_required VERSION < 3.5 as error.
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
     # Force static library: avoids .dll/.so deployment for tests and tools on all
     # platforms, especially Windows where the DLL would otherwise need to be
     # alongside every test/tool binary.
@@ -12,8 +15,9 @@ if(NOT (OPENAL_FOUND OR OpenAL_FOUND) OR APPLE)
     # set() and would create a cache entry with its default (ON = shared DLL).
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(openal-soft)
-    # Restore: remove the forced cache entry so it doesn't affect other targets.
+    # Restore: remove the forced cache entries so they don't affect other targets.
     unset(BUILD_SHARED_LIBS CACHE)
+    unset(CMAKE_POLICY_VERSION_MINIMUM CACHE)
     if(_saved_bsl)
         set(BUILD_SHARED_LIBS "${_saved_bsl}")
     endif()

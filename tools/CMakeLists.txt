@@ -31,4 +31,11 @@ if(TARGET platform-openal)
     target_include_directories(audio_test PRIVATE
         "${CMAKE_SOURCE_DIR}/platform/openal"
     )
+    if(WIN32)
+        add_custom_command(TARGET audio_test POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:OpenAL::OpenAL>
+                $<TARGET_FILE_DIR:audio_test>
+        )
+    endif()
 endif()

@@ -21,4 +21,14 @@ target_link_libraries(test_audio PRIVATE Catch2::Catch2WithMain platform-openal 
 target_include_directories(test_audio PRIVATE
     "${CMAKE_SOURCE_DIR}/platform/openal"
 )
+# On Windows, OpenAL Soft builds as OpenAL32.dll. copy_if_different it next to
+# the test binary so catch_discover_tests (which runs the exe at build time) and
+# ctest can both find it without requiring PATH manipulation.
+if(WIN32)
+    add_custom_command(TARGET test_audio POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:OpenAL::OpenAL>
+            $<TARGET_FILE_DIR:test_audio>
+    )
+endif()
 catch_discover_tests(test_audio)
