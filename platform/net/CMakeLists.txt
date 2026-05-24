@@ -13,5 +13,9 @@ target_link_libraries(platform-enet
     PUBLIC  platform-hal
     PRIVATE enet
 )
+# ENet's CMakeLists.txt only links ws2_32/winmm for MinGW, not MSVC.
+if(WIN32)
+    target_link_libraries(platform-enet PRIVATE ws2_32 winmm)
+endif()
 # ENet 1.3.17 target may not propagate its include path; be explicit.
 target_include_directories(platform-enet PRIVATE "${enet_SOURCE_DIR}/include")

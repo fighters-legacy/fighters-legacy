@@ -36,4 +36,10 @@ if(TARGET platform-enet)
         "${CMAKE_SOURCE_DIR}/platform/net"
         "${enet_SOURCE_DIR}/include"
     )
+
+    # MSVC deprecates std::getenv — suppress for these tools only
+    if(MSVC)
+        target_compile_definitions(fl-server PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_compile_definitions(fl-client PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
 endif()
