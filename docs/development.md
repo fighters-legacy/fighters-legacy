@@ -240,6 +240,72 @@ This tags `main` and pushes the tag. The `release.yml` workflow fires immediatel
 
 ---
 
+## fl-server
+
+`fl-server` is the headless dedicated server binary. It implements the ENet
+UDP transport backend and runs without a window, renderer, audio, or input.
+
+### Prerequisites
+
+No system install needed — ENet is fetched automatically via FetchContent.
+All other prerequisites are the same as the base debug build (CMake 3.25+,
+a C++20-capable compiler, and the standard project deps from the sections above).
+
+### Build
+
+```bash
+cmake --preset debug
+cmake --build --preset debug --target fl-server
+# Binary: build/debug/tools/fl-server
+```
+
+### Run
+
+```bash
+# Defaults: port 4778, 16 peers
+./build/debug/tools/fl-server
+
+# Override port and peer count via positional args
+./build/debug/tools/fl-server 4778 4
+
+# Flags
+./build/debug/tools/fl-server --help
+./build/debug/tools/fl-server --version
+```
+
+### Configuration
+
+`fl-server` resolves settings in three tiers (later tiers override earlier ones):
+
+1. `server.toml` in the working directory (or path in `FL_CONFIG`). Written
+   with commented defaults on first run if absent. Absent or unreadable config
+   is not fatal — the server logs a warning and uses defaults.
+2. CLI positional args: `fl-server [port] [maxPeers]`
+3. Environment variables (highest precedence — recommended for containers):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FL_PORT` | `4778` | UDP bind port |
+| `FL_MAX_PEERS` | `16` | Maximum simultaneous connected peers |
+| `FL_CONFIG` | `./server.toml` | Path to config file |
+
+### Kubernetes / containers
+
+- Pass all config via environment variables; no volume mount required.
+- Optionally mount a pre-baked `server.toml` via ConfigMap — the first-run
+  write is skipped when the file already exists.
+- All output goes to stdout; compatible with Fluentd, Loki, and similar
+  log aggregators.
+- Responds to `SIGTERM` (sent by Kubernetes on pod termination) with a 100 ms
+  graceful peer disconnect before exit — well within the default
+  `terminationGracePeriodSeconds` of 30 s.
+
+### Stop
+
+`Ctrl-C` or `SIGTERM` triggers a graceful disconnect and exits 0.
+
+---
+
 ## Roadmap status
 
 To report phase completion against target dates:

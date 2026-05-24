@@ -21,3 +21,12 @@ if(TARGET platform-sdl3)
         "${CMAKE_SOURCE_DIR}/platform/sdl3"
     )
 endif()
+
+if(TARGET platform-enet)
+    add_executable(fl-server fl-server/main.cpp)
+    target_link_libraries(fl-server PRIVATE platform-enet platform-hal tomlplusplus::tomlplusplus)
+    target_include_directories(fl-server PRIVATE
+        "${CMAKE_SOURCE_DIR}/platform/net"
+        "${enet_SOURCE_DIR}/include"
+    )
+endif()

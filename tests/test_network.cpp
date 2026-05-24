@@ -1,0 +1,407 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "ENetNetwork.h"
+#include <catch2/catch_test_macros.hpp>
+#include <cstring>
+#include <string>
+#include <vector>
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+struct Event {
+    enum class Type { Connect, Disconnect, Receive };
+    Type type;
+    uint32_t peerId{0};
+    std::vector<uint8_t> data; // populated for Receive events
+};
+
+struct EventSink : INetworkEventHandler {
+    std::vector<Event> events;
+
+    void onConnect(uint32_t peerId) override {
+        events.push_back({Event::Type::Connect, peerId, {}});
+    }
+    void onDisconnect(uint32_t peerId) override {
+        events.push_back({Event::Type::Disconnect, peerId, {}});
+    }
+    void onReceive(uint32_t peerId, const void* data, std::size_t size) override {
+        Event e;
+        e.type = Event::Type::Receive;
+        e.peerId = peerId;
+        e.data.assign(static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size);
+        events.push_back(std::move(e));
+    }
+
+    int countType(Event::Type t) const {
+        int n = 0;
+        for (const auto& ev : events)
+            if (ev.type == t)
+                ++n;
+        return n;
+    }
+};
+
+static void pump(INetwork& server, INetwork& client, int iters, int msPerIter = 10) {
+    for (int i = 0; i < iters; ++i) {
+        server.service(msPerIter);
+        client.service(msPerIter);
+    }
+}
+
+static void pumpN(INetwork& server, std::initializer_list<INetwork*> clients, int iters, int msPerIter = 10) {
+    for (int i = 0; i < iters; ++i) {
+        server.service(msPerIter);
+        for (INetwork* c : clients)
+            c->service(msPerIter);
+    }
+}
+
+// Each integration test uses a unique port in [19001, 19010] to prevent
+// cross-test interference within the sequential Catch2 binary run.
+
+// ---------------------------------------------------------------------------
+// Init / shutdown
+// ---------------------------------------------------------------------------
+
+TEST_CASE("init and shutdown", "[network]") {
+    ENetNetwork net;
+    REQUIRE(net.init());
+    CHECK(net.getLastError() == nullptr);
+    net.shutdown();
+}
+
+TEST_CASE("double init is safe", "[network]") {
+    ENetNetwork net;
+    REQUIRE(net.init());
+    REQUIRE(net.init()); // idempotent
+    net.shutdown();
+}
+
+TEST_CASE("double shutdown is safe", "[network]") {
+    ENetNetwork net;
+    REQUIRE(net.init());
+    net.shutdown();
+    net.shutdown(); // must not crash
+}
+
+// ---------------------------------------------------------------------------
+// Pre-connection guards
+// ---------------------------------------------------------------------------
+
+TEST_CASE("getPeerState out-of-range", "[network]") {
+    ENetNetwork net;
+    REQUIRE(net.init());
+    CHECK(net.getPeerState(999) == PeerState::Disconnected);
+    net.shutdown();
+}
+
+TEST_CASE("getPeerAddress before connect", "[network]") {
+    ENetNetwork net;
+    REQUIRE(net.init());
+    CHECK(net.getPeerAddress(0) == nullptr);
+    net.shutdown();
+}
+
+TEST_CASE("send before bind returns false", "[network]") {
+    ENetNetwork net;
+    REQUIRE(net.init());
+    const uint8_t buf[] = {1, 2, 3};
+    CHECK_FALSE(net.send(0, buf, sizeof(buf), true));
+    CHECK(net.getLastError() != nullptr);
+    net.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Loopback connect
+// ---------------------------------------------------------------------------
+
+TEST_CASE("loopback connect", "[network][integration]") {
+    ENetNetwork server, client;
+    EventSink srvSink, cliSink;
+    REQUIRE(server.init());
+    REQUIRE(client.init());
+    server.setEventHandler(&srvSink);
+    client.setEventHandler(&cliSink);
+
+    REQUIRE(server.bind(19001, 4));
+    REQUIRE(client.connect("127.0.0.1", 19001));
+
+    pump(server, client, 20);
+
+    REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
+    REQUIRE(cliSink.countType(Event::Type::Connect) == 1);
+    CHECK(server.getPeerState(0) == PeerState::Connected);
+    CHECK(server.getPeerCount() == 1);
+
+    server.shutdown();
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// getPeerAddress
+// ---------------------------------------------------------------------------
+
+TEST_CASE("getPeerAddress returns ip:port", "[network][integration]") {
+    ENetNetwork server, client;
+    EventSink srvSink, cliSink;
+    REQUIRE(server.init());
+    REQUIRE(client.init());
+    server.setEventHandler(&srvSink);
+    client.setEventHandler(&cliSink);
+
+    REQUIRE(server.bind(19002, 4));
+    REQUIRE(client.connect("127.0.0.1", 19002));
+
+    pump(server, client, 20);
+
+    REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
+    const char* addr = server.getPeerAddress(0);
+    REQUIRE(addr != nullptr);
+    CHECK(std::string(addr).find("127.0.0.1") != std::string::npos);
+
+    server.shutdown();
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Data transfer
+// ---------------------------------------------------------------------------
+
+TEST_CASE("reliable send client to server", "[network][integration]") {
+    ENetNetwork server, client;
+    EventSink srvSink, cliSink;
+    REQUIRE(server.init());
+    REQUIRE(client.init());
+    server.setEventHandler(&srvSink);
+    client.setEventHandler(&cliSink);
+
+    REQUIRE(server.bind(19003, 4));
+    REQUIRE(client.connect("127.0.0.1", 19003));
+    pump(server, client, 20);
+
+    const uint8_t payload[] = {0xDE, 0xAD, 0xBE, 0xEF};
+    REQUIRE(client.send(0, payload, sizeof(payload), true));
+    pump(server, client, 20);
+
+    REQUIRE(srvSink.countType(Event::Type::Receive) == 1);
+    const auto& ev = srvSink.events.back();
+    REQUIRE(ev.data.size() == sizeof(payload));
+    CHECK(std::memcmp(ev.data.data(), payload, sizeof(payload)) == 0);
+
+    server.shutdown();
+    client.shutdown();
+}
+
+TEST_CASE("unreliable send server to client", "[network][integration]") {
+    ENetNetwork server, client;
+    EventSink srvSink, cliSink;
+    REQUIRE(server.init());
+    REQUIRE(client.init());
+    server.setEventHandler(&srvSink);
+    client.setEventHandler(&cliSink);
+
+    REQUIRE(server.bind(19004, 4));
+    REQUIRE(client.connect("127.0.0.1", 19004));
+    pump(server, client, 20);
+
+    REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
+
+    const uint8_t payload[] = {1, 2, 3, 4, 5};
+    REQUIRE(server.send(0, payload, sizeof(payload), false));
+    pump(server, client, 20);
+
+    REQUIRE(cliSink.countType(Event::Type::Receive) == 1);
+    const auto& ev = cliSink.events.back();
+    REQUIRE(ev.data.size() == sizeof(payload));
+    CHECK(std::memcmp(ev.data.data(), payload, sizeof(payload)) == 0);
+
+    server.shutdown();
+    client.shutdown();
+}
+
+TEST_CASE("large packet fragmentation", "[network][integration]") {
+    ENetNetwork server, client;
+    EventSink srvSink, cliSink;
+    REQUIRE(server.init());
+    REQUIRE(client.init());
+    server.setEventHandler(&srvSink);
+    client.setEventHandler(&cliSink);
+
+    REQUIRE(server.bind(19005, 4));
+    REQUIRE(client.connect("127.0.0.1", 19005));
+    pump(server, client, 20);
+
+    // 10 KB — well above the MTU (~1400 bytes); ENet must fragment and reassemble.
+    constexpr std::size_t kSize = 10 * 1024;
+    std::vector<uint8_t> big(kSize);
+    for (std::size_t i = 0; i < kSize; ++i)
+        big[i] = static_cast<uint8_t>(i % 256);
+
+    REQUIRE(client.send(0, big.data(), kSize, true));
+    pump(server, client, 50);
+
+    REQUIRE(srvSink.countType(Event::Type::Receive) == 1);
+    const auto& ev = srvSink.events.back();
+    REQUIRE(ev.data.size() == kSize);
+    CHECK(std::memcmp(ev.data.data(), big.data(), kSize) == 0);
+
+    server.shutdown();
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Multiple clients
+// ---------------------------------------------------------------------------
+
+TEST_CASE("multiple clients connect", "[network][integration]") {
+    ENetNetwork server, c1, c2;
+    EventSink srvSink, s1, s2;
+    REQUIRE(server.init());
+    REQUIRE(c1.init());
+    REQUIRE(c2.init());
+    server.setEventHandler(&srvSink);
+    c1.setEventHandler(&s1);
+    c2.setEventHandler(&s2);
+
+    REQUIRE(server.bind(19006, 4));
+    REQUIRE(c1.connect("127.0.0.1", 19006));
+    REQUIRE(c2.connect("127.0.0.1", 19006));
+
+    pumpN(server, {&c1, &c2}, 30);
+
+    REQUIRE(srvSink.countType(Event::Type::Connect) == 2);
+    CHECK(server.getPeerCount() == 2);
+
+    // Peer IDs are distinct
+    uint32_t id1 = srvSink.events[0].peerId;
+    uint32_t id2 = srvSink.events[1].peerId;
+    CHECK(id1 != id2);
+
+    // Server can send to each independently
+    const uint8_t msg1[] = {0xAA};
+    const uint8_t msg2[] = {0xBB};
+    REQUIRE(server.send(id1, msg1, 1, true));
+    REQUIRE(server.send(id2, msg2, 1, true));
+
+    pumpN(server, {&c1, &c2}, 20);
+    CHECK(s1.countType(Event::Type::Receive) == 1);
+    CHECK(s2.countType(Event::Type::Receive) == 1);
+    CHECK(s1.events.back().data[0] == 0xAA);
+    CHECK(s2.events.back().data[0] == 0xBB);
+
+    server.shutdown();
+    c1.shutdown();
+    c2.shutdown();
+}
+
+TEST_CASE("server broadcast reaches all clients", "[network][integration]") {
+    ENetNetwork server, c1, c2;
+    EventSink srvSink, s1, s2;
+    REQUIRE(server.init());
+    REQUIRE(c1.init());
+    REQUIRE(c2.init());
+    server.setEventHandler(&srvSink);
+    c1.setEventHandler(&s1);
+    c2.setEventHandler(&s2);
+
+    REQUIRE(server.bind(19007, 4));
+    REQUIRE(c1.connect("127.0.0.1", 19007));
+    REQUIRE(c2.connect("127.0.0.1", 19007));
+
+    pumpN(server, {&c1, &c2}, 30);
+    REQUIRE(srvSink.countType(Event::Type::Connect) == 2);
+
+    const uint8_t msg[] = {0xFF};
+    server.broadcast(msg, 1, true);
+    pumpN(server, {&c1, &c2}, 20);
+
+    CHECK(s1.countType(Event::Type::Receive) == 1);
+    CHECK(s2.countType(Event::Type::Receive) == 1);
+
+    server.shutdown();
+    c1.shutdown();
+    c2.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Disconnect
+// ---------------------------------------------------------------------------
+
+TEST_CASE("disconnect fires callback", "[network][integration]") {
+    ENetNetwork server, client;
+    EventSink srvSink, cliSink;
+    REQUIRE(server.init());
+    REQUIRE(client.init());
+    server.setEventHandler(&srvSink);
+    client.setEventHandler(&cliSink);
+
+    REQUIRE(server.bind(19008, 4));
+    REQUIRE(client.connect("127.0.0.1", 19008));
+    pump(server, client, 20);
+    REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
+
+    client.disconnect();
+    pump(server, client, 20);
+
+    CHECK(srvSink.countType(Event::Type::Disconnect) == 1);
+
+    server.shutdown();
+    client.shutdown();
+}
+
+TEST_CASE("send to disconnected peer returns false", "[network][integration]") {
+    ENetNetwork server, client;
+    EventSink srvSink, cliSink;
+    REQUIRE(server.init());
+    REQUIRE(client.init());
+    server.setEventHandler(&srvSink);
+    client.setEventHandler(&cliSink);
+
+    REQUIRE(server.bind(19009, 4));
+    REQUIRE(client.connect("127.0.0.1", 19009));
+    pump(server, client, 20);
+    REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
+
+    client.disconnect();
+    pump(server, client, 20);
+
+    const uint8_t buf[] = {1};
+    bool ok = server.send(0, buf, 1, true);
+    CHECK_FALSE(ok);
+    CHECK(server.getLastError() != nullptr);
+
+    server.shutdown();
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Server full
+// ---------------------------------------------------------------------------
+
+TEST_CASE("server full rejects new connection", "[network][integration]") {
+    ENetNetwork server, c1, c2;
+    EventSink srvSink, s1, s2;
+    REQUIRE(server.init());
+    REQUIRE(c1.init());
+    REQUIRE(c2.init());
+    server.setEventHandler(&srvSink);
+    c1.setEventHandler(&s1);
+    c2.setEventHandler(&s2);
+
+    REQUIRE(server.bind(19010, 1)); // only 1 peer slot
+    REQUIRE(c1.connect("127.0.0.1", 19010));
+    pumpN(server, {&c1, &c2}, 20);
+    REQUIRE(s1.countType(Event::Type::Connect) == 1);
+
+    REQUIRE(c2.connect("127.0.0.1", 19010));
+    // Pump 100 × 10 ms = 1 s — enough to see if the server accepted a second peer.
+    pumpN(server, {&c1, &c2}, 100);
+
+    CHECK(srvSink.countType(Event::Type::Connect) == 1);
+    CHECK(server.getPeerCount() == 1);
+
+    server.shutdown();
+    c1.shutdown();
+    c2.shutdown();
+}
