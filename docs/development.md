@@ -16,6 +16,8 @@ sudo dnf install cmake ninja-build gcc g++ clang clang-tools-extra \
 
 `vulkan-validation-layers` provides `VK_LAYER_KHRONOS_validation`, enabled automatically in debug builds via `FL_VK_VALIDATION`. Without it the renderer still works but validation errors go unreported.
 
+For Bluetooth gamepad support (Xbox controllers), see [docs/linux-gamepad.md](linux-gamepad.md).
+
 ### Linux — Ubuntu/Debian
 
 ```bash
