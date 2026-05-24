@@ -29,4 +29,11 @@ if(TARGET platform-enet)
         "${CMAKE_SOURCE_DIR}/platform/net"
         "${enet_SOURCE_DIR}/include"
     )
+
+    add_executable(fl-client fl-client/main.cpp)
+    target_link_libraries(fl-client PRIVATE platform-enet platform-hal)
+    target_include_directories(fl-client PRIVATE
+        "${CMAKE_SOURCE_DIR}/platform/net"
+        "${enet_SOURCE_DIR}/include"
+    )
 endif()
