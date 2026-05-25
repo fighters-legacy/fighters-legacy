@@ -72,6 +72,7 @@ Game logic and simulation, independent of any specific content:
 - **Flight model** — aerodynamics simulation
 - **AI runtime** — Lua-scripted AI behaviours
 - **Mission loader** — scenario and campaign structure
+- **Localization** — keyed string lookup with BCP 47 fallback chain, `{placeholder}` interpolation, plural forms, and RTL metadata; see `engine/i18n/`
 
 ### Content System (`engine/content/`)
 
@@ -80,6 +81,8 @@ Bridges the engine core to external content:
 - **`IContentPack`** — the single interface all content packs must implement. Exposes asset loading, mission data, and configuration. The engine calls only this interface; it never knows what implements it.
 - **`AssetManager`** — caches and serves assets requested by the engine core via active content packs.
 - **`ModLoader`** — discovers and loads `IContentPack` implementors at runtime (shared libraries).
+
+Mods can ship translations by placing TOML files under `locale/<lang>/` inside their mod directory. The `Localization` system merges these with the engine's base `locale/` files; higher-priority mods win on key conflicts. See [docs/modding/localization.md](modding/localization.md).
 
 ### Content Packs (external)
 
