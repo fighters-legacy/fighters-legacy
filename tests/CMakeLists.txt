@@ -19,6 +19,10 @@ add_executable(test_localization test_localization.cpp)
 target_link_libraries(test_localization PRIVATE Catch2::Catch2WithMain engine-i18n)
 catch_discover_tests(test_localization)
 
+add_executable(test_firstrun test_firstrun.cpp)
+target_link_libraries(test_firstrun PRIVATE Catch2::Catch2WithMain engine-firstrun)
+catch_discover_tests(test_firstrun)
+
 # Integration: verify locale files are in sync with source key references
 if(TARGET locale-extract)
     add_test(NAME locale_lint
