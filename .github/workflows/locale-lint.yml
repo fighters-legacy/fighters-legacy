@@ -1,0 +1,38 @@
+name: Locale Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake gcc g++ \
+            libx11-dev libxext-dev
+
+      - name: Configure
+        run: cmake --preset debug
+
+      - name: Build locale-extract
+        run: cmake --build --preset debug --target locale-extract
+
+      - name: Locale lint
+        run: |
+          ./build/debug/tools/locale-extract \
+            --src engine \
+            --locale locale \
+            --dry-run

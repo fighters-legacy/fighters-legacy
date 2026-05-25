@@ -25,3 +25,15 @@ target_link_libraries(engine-input
     PUBLIC  platform-hal
     PRIVATE tomlplusplus::tomlplusplus
 )
+
+add_library(engine-i18n STATIC
+    i18n/StringTable.cpp
+    i18n/Localization.cpp
+)
+
+target_include_directories(engine-i18n PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(engine-i18n
+    PUBLIC  platform-hal
+    PRIVATE tomlplusplus::tomlplusplus
+)

@@ -43,3 +43,24 @@ if(TARGET platform-enet)
         target_compile_definitions(fl-client PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
 endif()
+
+add_executable(locale-extract locale-extract/main.cpp)
+target_link_libraries(locale-extract PRIVATE tomlplusplus::tomlplusplus)
+# No platform-hal dependency — uses std::filesystem + std::regex directly.
+
+# Optional: compile-time key constants header (demand-driven, not built by default)
+set(LOCALE_KEYS_HEADER "${CMAKE_BINARY_DIR}/generated/i18n/LocaleKeys.h")
+add_custom_command(
+    OUTPUT "${LOCALE_KEYS_HEADER}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/generated/i18n"
+    COMMAND $<TARGET_FILE:locale-extract>
+            --src "${CMAKE_SOURCE_DIR}"
+            --locale "${CMAKE_SOURCE_DIR}/locale"
+            --gen-keys "${LOCALE_KEYS_HEADER}"
+    DEPENDS locale-extract
+    COMMENT "Generating i18n key constants"
+    VERBATIM
+)
+add_custom_target(locale-keys DEPENDS "${LOCALE_KEYS_HEADER}")
+# Usage: add_dependencies(my-target locale-keys)
+#        target_include_directories(my-target PRIVATE "${CMAKE_BINARY_DIR}/generated")

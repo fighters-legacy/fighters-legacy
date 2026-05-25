@@ -15,6 +15,21 @@ add_executable(test_input test_input.cpp)
 target_link_libraries(test_input PRIVATE Catch2::Catch2WithMain engine-input)
 catch_discover_tests(test_input)
 
+add_executable(test_localization test_localization.cpp)
+target_link_libraries(test_localization PRIVATE Catch2::Catch2WithMain engine-i18n)
+catch_discover_tests(test_localization)
+
+# Integration: verify locale files are in sync with source key references
+if(TARGET locale-extract)
+    add_test(NAME locale_lint
+        COMMAND $<TARGET_FILE:locale-extract>
+                --src "${CMAKE_SOURCE_DIR}/engine"
+                --locale "${CMAKE_SOURCE_DIR}/locale"
+                --dry-run
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    )
+endif()
+
 if(TARGET platform-enet)
     add_executable(test_network test_network.cpp)
     target_link_libraries(test_network PRIVATE Catch2::Catch2WithMain platform-enet)

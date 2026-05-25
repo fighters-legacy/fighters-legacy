@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Engine-internal strings. Add keys as subsystems surface user-visible text.
+
+[content]
+pack_init_failed      = "Content pack '{name}' failed to initialise."
+pack_version_mismatch = "Content pack '{name}' requires engine API {required}; running {actual}."
+pack_missing_dep      = "Content pack '{name}' requires '{dep}' which is not loaded."

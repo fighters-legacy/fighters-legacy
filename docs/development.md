@@ -353,6 +353,71 @@ Expected client output: `connecting` → `connected` → pings → `disconnectin
 
 ---
 
+## locale-extract
+
+`locale-extract` is a developer tool that keeps source key references and
+`locale/en/*.toml` files in sync. It is also the CI gate for locale drift.
+
+### Build
+
+```bash
+cmake --preset debug
+cmake --build --preset debug --target locale-extract
+# Binary: build/debug/tools/locale-extract
+```
+
+### Usage
+
+```bash
+locale-extract [--src <dir>] [--locale <dir>] [--gen-keys <output>] [--dry-run]
+```
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--src <dir>` | `engine/` | Directory tree to scan for `.get()`/`.format()`/`.getPlural()` calls |
+| `--locale <dir>` | `locale` | Root locale directory containing `en/` |
+| `--dry-run` | off | Report new/orphaned keys without modifying any files |
+| `--gen-keys <output>` | — | Write `generated/i18n/LocaleKeys.h` with `constexpr` key constants |
+
+### Lint mode (default)
+
+Scans `--src` for key references, compares them against `locale/en/*.toml`,
+and prints a `+`/`-` diff of new and orphaned keys. Exits 1 if any drift is
+found; exits 0 if all keys are in sync.
+
+```bash
+# Check for drift without modifying files
+./build/debug/tools/locale-extract --src engine --locale locale --dry-run
+
+# Inject missing keys into locale/en/*.toml (preserves comments)
+./build/debug/tools/locale-extract --src engine --locale locale
+```
+
+New keys are injected with `= ""` so translators can fill them in. Existing
+content — including `# translator context comments` — is never rewritten.
+
+This lint also runs as the `locale_lint` CTest and as the
+`.github/workflows/locale-lint.yml` CI job on every push and PR.
+
+### Key constants (optional)
+
+```bash
+# Generate LocaleKeys.h (compiler catches key typos)
+cmake --build --preset debug --target locale-keys
+# Header at: build/debug/generated/i18n/LocaleKeys.h
+```
+
+```cpp
+// Usage in engine code:
+#include "generated/i18n/LocaleKeys.h"
+loc.get(keys::engine::content::pack_init_failed);
+```
+
+See [docs/modding/localization.md](modding/localization.md) for the full
+translator workflow and mod locale directory layout.
+
+---
+
 ## Roadmap status
 
 To report phase completion against target dates:
