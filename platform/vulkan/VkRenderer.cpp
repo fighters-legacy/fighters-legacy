@@ -74,6 +74,13 @@ bool VkRenderer::init(IWindow* window) {
     if (!pickPhysicalDevice()) {
         return false;
     }
+    {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(m_physicalDevice, &props);
+        uint32_t drv = props.driverVersion;
+        m_gpuInfo = std::string(props.deviceName) + " (Vulkan driver " + std::to_string(VK_VERSION_MAJOR(drv)) + "." +
+                    std::to_string(VK_VERSION_MINOR(drv)) + "." + std::to_string(VK_VERSION_PATCH(drv)) + ")";
+    }
     if (!createLogicalDevice()) {
         return false;
     }
@@ -264,6 +271,10 @@ void VkRenderer::shutdown() {
 
 const char* VkRenderer::getLastError() const {
     return m_lastError.empty() ? nullptr : m_lastError.c_str();
+}
+
+const char* VkRenderer::gpuInfo() const {
+    return m_gpuInfo.c_str();
 }
 
 // ---------------------------------------------------------------------------

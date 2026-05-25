@@ -23,6 +23,19 @@ add_executable(test_firstrun test_firstrun.cpp)
 target_link_libraries(test_firstrun PRIVATE Catch2::Catch2WithMain engine-firstrun)
 catch_discover_tests(test_firstrun)
 
+add_executable(test_file_logger test_file_logger.cpp)
+target_link_libraries(test_file_logger PRIVATE Catch2::Catch2WithMain platform-file-logger)
+catch_discover_tests(test_file_logger)
+
+add_executable(test_crash_reporter test_crash_reporter.cpp)
+target_link_libraries(test_crash_reporter PRIVATE Catch2::Catch2WithMain engine-crash platform-file-logger)
+target_include_directories(test_crash_reporter PRIVATE ${CMAKE_BINARY_DIR}/engine)
+catch_discover_tests(test_crash_reporter)
+
+add_executable(test_userconfig test_userconfig.cpp)
+target_link_libraries(test_userconfig PRIVATE Catch2::Catch2WithMain engine-config)
+catch_discover_tests(test_userconfig)
+
 # Integration: verify locale files are in sync with source key references
 if(TARGET locale-extract)
     add_test(NAME locale_lint

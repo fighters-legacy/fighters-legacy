@@ -88,6 +88,8 @@ std::optional<ModLoader::Manifest> ModLoader::parseManifest(const char* path) {
 }
 
 std::vector<std::unique_ptr<IContentPack>> ModLoader::load() {
+    m_loadErrors.clear();
+
     // Scan mods directory; handle absent directory gracefully
     auto entries = m_fs.scanDirectory(PathDomain::Assets, kModsDir);
     if (entries.empty()) {
@@ -115,11 +117,15 @@ std::vector<std::unique_ptr<IContentPack>> ModLoader::load() {
         }
 
         auto manifest = parseManifest(manifestPath.c_str());
-        if (!manifest)
+        if (!manifest) {
+            m_loadErrors.push_back({modDir, "", "failed to parse manifest"});
             continue;
+        }
 
-        if (!validateEngineApi(manifest->engineApi, manifest->id))
+        if (!validateEngineApi(manifest->engineApi, manifest->id)) {
+            m_loadErrors.push_back({modDir, manifest->id, "incompatible engine-api: " + manifest->engineApi});
             continue;
+        }
 
         loadedIds.insert(manifest->id);
         candidates.push_back({std::move(*manifest), std::move(modDir)});

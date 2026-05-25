@@ -6,8 +6,37 @@
 
 #include <toml++/toml.hpp>
 
+#include <cstring>
 #include <sstream>
 #include <string>
+
+LogLevel parseLogLevel(const char* s) {
+    if (!s)
+        return LogLevel::Info;
+    if (std::strcmp(s, "debug") == 0)
+        return LogLevel::Debug;
+    if (std::strcmp(s, "info") == 0)
+        return LogLevel::Info;
+    if (std::strcmp(s, "warn") == 0)
+        return LogLevel::Warn;
+    if (std::strcmp(s, "error") == 0)
+        return LogLevel::Error;
+    return LogLevel::Info;
+}
+
+static const char* logLevelString(LogLevel l) {
+    switch (l) {
+    case LogLevel::Debug:
+        return "debug";
+    case LogLevel::Info:
+        return "info";
+    case LogLevel::Warn:
+        return "warn";
+    case LogLevel::Error:
+        return "error";
+    }
+    return "info";
+}
 
 UserConfig::UserConfig(IFilesystem& fs, ILogger& logger) : m_fs(fs), m_logger(logger) {}
 
@@ -31,6 +60,16 @@ bool UserConfig::load() {
     }
 
     m_firstRunCompleted = tbl["first_run"]["completed"].value_or(false);
+
+    if (auto lvl = tbl["engine"]["log_level"].value<std::string>()) {
+        LogLevel parsed = parseLogLevel(lvl->c_str());
+        if (parsed == LogLevel::Info && *lvl != "info") {
+            m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
+                         ("user config: unknown log_level '" + *lvl + "', defaulting to info").c_str());
+        }
+        m_logLevel = parsed;
+    }
+
     return true;
 }
 
@@ -42,8 +81,13 @@ bool UserConfig::save() {
 
     toml::table firstRun;
     firstRun.insert_or_assign("completed", m_firstRunCompleted);
+
+    toml::table engine;
+    engine.insert_or_assign("log_level", logLevelString(m_logLevel));
+
     toml::table root;
     root.insert_or_assign("first_run", std::move(firstRun));
+    root.insert_or_assign("engine", std::move(engine));
 
     std::ostringstream oss;
     oss << root;
@@ -71,4 +115,12 @@ bool UserConfig::isFirstRunCompleted() const {
 
 void UserConfig::setFirstRunCompleted(bool value) {
     m_firstRunCompleted = value;
+}
+
+LogLevel UserConfig::logLevel() const {
+    return m_logLevel;
+}
+
+void UserConfig::setLogLevel(LogLevel level) {
+    m_logLevel = level;
 }

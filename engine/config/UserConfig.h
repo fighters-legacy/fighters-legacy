@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "ILogger.h"
+
 class IFilesystem;
-class ILogger;
+
+// Free function — also used by the fighters-legacy CLI parser.
+LogLevel parseLogLevel(const char* s);
 
 class UserConfig {
   public:
@@ -18,6 +22,10 @@ class UserConfig {
     bool isFirstRunCompleted() const;
     void setFirstRunCompleted(bool value);
 
+    // Reads [engine].log_level; default Info. Unknown strings fall back to Info.
+    LogLevel logLevel() const;
+    void setLogLevel(LogLevel level);
+
   private:
     static constexpr const char* kPath = "config/user.toml";
     static constexpr const char* kTmpPath = "config/user.toml.tmp";
@@ -25,4 +33,5 @@ class UserConfig {
     IFilesystem& m_fs;
     ILogger& m_logger;
     bool m_firstRunCompleted = false;
+    LogLevel m_logLevel{LogLevel::Info};
 };

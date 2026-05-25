@@ -10,6 +10,7 @@ Cross-platform: Windows 10/11, Linux, macOS. Phase 1 (engine foundation) is acti
 ```
 engine/     — core: content system, asset manager, IContentPack interface
 platform/   — HAL: Vulkan, SDL3, OpenAL Soft, ENet backends
+game/       — fighters-legacy game binary
 tools/      — developer utilities
 tests/      — Catch2 unit tests
 ```
@@ -34,7 +35,7 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 
 ## Conventions
 
-- Conventional Commits — scopes: engine / renderer / audio / network / content / flight / ai / mission / build / ci / docs
+- Conventional Commits — scopes: engine / renderer / audio / network / content / flight / ai / mission / game / build / ci / docs
 - DCO sign-off required: `git commit -s`
 <!-- REUSE-IgnoreStart -->
 - SPDX header required on all new .cpp/.h files: `// SPDX-License-Identifier: GPL-3.0-or-later`
