@@ -7,6 +7,7 @@ These are the non-negotiable design values that resolve every ambiguous feature 
 - **Arcade-to-sim balance**: Closer to Ace Combat / Project Wingman than DCS World. Physics
   are simplified but feel consequential. Stalls, G-effects, and energy management matter;
   startup checklists, instrument-only navigation, and systems management do not.
+  See [prior-art.md](prior-art.md) for the competitive landscape that motivates this choice.
 - **Depth through variety, not complexity**: Replayability comes from varied missions,
   wingman decisions, loadout tradeoffs, and campaign outcomes — not from the number of
   cockpit buttons or procedures.
