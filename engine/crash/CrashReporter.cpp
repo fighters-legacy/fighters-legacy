@@ -363,10 +363,14 @@ void CrashReporter::signalHandler(int sig) {
 }
 
 void CrashReporter::installHandlers() {
-    // Do not override sanitizer signal handlers
-#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer)) ||                   \
-    defined(__SANITIZE_THREAD__)
+    // Do not override sanitizer signal handlers.
+    // __has_feature is Clang-only; guard with nested #if so GCC never sees the call.
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
     return;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+    return;
+#endif
 #endif
 
 #if defined(_WIN32)
