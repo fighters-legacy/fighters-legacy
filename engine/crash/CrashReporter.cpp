@@ -465,7 +465,11 @@ bool CrashReporter::checkPreviousCrash(const std::string& userDataDir, IWindow* 
         f = std::fopen(sentinel.string().c_str(), "r");
 #endif
         if (f) {
+#if defined(_WIN32)
+            fscanf_s(f, "%d", &pid);
+#else
             std::fscanf(f, "%d", &pid);
+#endif
             std::fclose(f);
         }
     }
