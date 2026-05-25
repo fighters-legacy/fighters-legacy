@@ -453,7 +453,7 @@ TEST_CASE("Localization: load('fr') sees en key and fr override") {
     CHECK(std::string(loc.get("ui.menu.extra")) == "Extra"); // fallback from en
 }
 
-TEST_CASE("Localization: load('fr-CA') uses chain en→fr→fr-CA") {
+TEST_CASE("Localization: load('fr-CA') uses chain en->fr->fr-CA") {
     MockFilesystem fs;
     MockLogger logger;
     fs.addDir("locale");
