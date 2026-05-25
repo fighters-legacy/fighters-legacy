@@ -156,8 +156,9 @@ void FileLogger::log(LogLevel level, const char* file, int line, const char* mes
     }
     entry.line = line;
     if (message) {
-        std::strncpy(entry.message, message, sizeof(entry.message) - 1);
-        entry.message[sizeof(entry.message) - 1] = '\0';
+        std::size_t msgLen = std::min(std::strlen(message), sizeof(entry.message) - 1);
+        std::memcpy(entry.message, message, msgLen);
+        entry.message[msgLen] = '\0';
     } else {
         entry.message[0] = '\0';
     }

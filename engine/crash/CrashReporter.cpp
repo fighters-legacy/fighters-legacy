@@ -439,8 +439,9 @@ void CrashReporter::setMods(const CrashInfo::ModEntry* mods, int count) {
 void CrashReporter::setGpuInfo(const char* gpu) {
     if (!gpu)
         return;
-    std::strncpy(m_info.gpuInfo, gpu, sizeof(m_info.gpuInfo) - 1);
-    m_info.gpuInfo[sizeof(m_info.gpuInfo) - 1] = '\0';
+    std::size_t gpuLen = std::min(std::strlen(gpu), sizeof(m_info.gpuInfo) - 1);
+    std::memcpy(m_info.gpuInfo, gpu, gpuLen);
+    m_info.gpuInfo[gpuLen] = '\0';
 }
 
 // ---------------------------------------------------------------------------
