@@ -2,6 +2,7 @@
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
+#include <share.h> // _SH_DENYNO for _fsopen
 #endif
 
 #include "FileLogger.h"
@@ -106,8 +107,7 @@ bool FileLogger::open(const std::string& logDir, int maxRetained) {
 
     m_logPath = makeFilename(logDir);
 #if defined(_WIN32)
-    m_file = nullptr;
-    fopen_s(&m_file, m_logPath.c_str(), "w");
+    m_file = _fsopen(m_logPath.c_str(), "w", _SH_DENYNO);
 #else
     m_file = std::fopen(m_logPath.c_str(), "w");
 #endif
