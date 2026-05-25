@@ -34,4 +34,8 @@ class IRenderer {
     // Returns a human-readable description of the last error, or nullptr if none.
     // Valid until the next call on this interface.
     virtual const char* getLastError() const = 0;
+
+    // Returns a human-readable GPU + driver string, e.g.
+    // "NVIDIA GeForce RTX 3080 (Vulkan driver 456.38.0)". Empty string before init().
+    virtual const char* gpuInfo() const = 0;
 };

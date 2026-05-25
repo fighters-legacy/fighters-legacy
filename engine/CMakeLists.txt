@@ -59,3 +59,5 @@ target_link_libraries(engine-firstrun
     PUBLIC  engine-config
             platform-hal
 )
+
+add_subdirectory(crash)

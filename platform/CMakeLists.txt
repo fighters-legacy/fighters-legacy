@@ -4,6 +4,11 @@
 add_library(platform-hal INTERFACE)
 target_include_directories(platform-hal INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# platform-file-logger: production ILogger implementation backed by a file.
+add_library(platform-file-logger STATIC FileLogger.cpp)
+target_include_directories(platform-file-logger PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(platform-file-logger PUBLIC platform-hal)
+
 # HAL backends: SDL3 windowing/input, Vulkan renderer, OpenAL Soft audio, ENet networking
 add_subdirectory(sdl3)
 add_subdirectory(vulkan)

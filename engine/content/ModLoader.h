@@ -21,13 +21,24 @@ class ModLoader {
         std::vector<std::string> depends;
     };
 
+    struct LoadError {
+        std::string path;   // mod directory that failed
+        std::string modId;  // empty if manifest was unparseable
+        std::string reason; // human-readable
+    };
+
     ModLoader(IFilesystem& fs, ILogger& logger);
 
     // Scans PathDomain::Assets/"mods", parses manifests, returns content packs
     // sorted by priority descending (index 0 = highest). Packs that fail to parse
     // or have an incompatible engine-api major version are skipped. Missing
     // dependencies log a Warn but do not prevent loading.
+    // Call getLoadErrors() after load() to retrieve any failures.
     std::vector<std::unique_ptr<IContentPack>> load();
+
+    const std::vector<LoadError>& getLoadErrors() const {
+        return m_loadErrors;
+    }
 
   private:
     static constexpr const char* kModsDir = "mods";
@@ -38,4 +49,5 @@ class ModLoader {
 
     IFilesystem& m_fs;
     ILogger& m_logger;
+    std::vector<LoadError> m_loadErrors;
 };

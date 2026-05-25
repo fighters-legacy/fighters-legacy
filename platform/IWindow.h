@@ -28,4 +28,20 @@ class IWindow {
     // Returns a human-readable description of the last error, or nullptr if none.
     // Valid until the next call on this interface.
     virtual const char* getLastError() const = 0;
+
+    enum class MessageBoxType { Info, Warning, Error };
+
+    struct MessageBoxButton {
+        int id;
+        const char* text;
+    };
+
+    // Shows an OS-native modal dialog. Returns the id of the clicked button, or -1
+    // on error/dismiss. Safe to call before init() — SDL_ShowMessageBox does not
+    // require SDL_Init(VIDEO).
+    virtual int showMessageBox(MessageBoxType type, const char* title, const char* message,
+                               const MessageBoxButton* buttons, int numButtons) = 0;
+
+    // Opens a URL or file:// URI in the OS default handler.
+    virtual void openURL(const char* url) = 0;
 };

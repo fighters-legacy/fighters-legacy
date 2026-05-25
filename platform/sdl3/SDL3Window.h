@@ -17,6 +17,9 @@ class SDL3Window : public IWindow {
     bool shouldClose() const override;
     void* nativeHandle() const override;
     const char* getLastError() const override;
+    int showMessageBox(MessageBoxType type, const char* title, const char* message, const MessageBoxButton* buttons,
+                       int numButtons) override;
+    void openURL(const char* url) override;
 
     // Wire up the input backend to receive SDL events during pollEvents().
     void setInputSink(ISDL3EventSink* sink) {

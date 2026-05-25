@@ -23,7 +23,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake lcov libx11-dev libxext-dev \
-            libopenal-dev
+            libopenal-dev libvulkan-dev glslang-tools
 
       - name: Configure
         run: cmake --preset coverage
@@ -43,7 +43,7 @@ jobs:
         run: |
           lcov --capture --directory . --output-file coverage.info \
                --ignore-errors empty,source,gcov
-          lcov --remove coverage.info '/usr/*' '*/tests/*' '*/vendor/*' '*/_deps/*' \
+          lcov --remove coverage.info '/usr/*' '*/tests/*' '*/vendor/*' '*/_deps/*' '*/game/*' \
                --output-file coverage.info --ignore-errors empty,unused,source,gcov
 
       - name: Upload to Codecov

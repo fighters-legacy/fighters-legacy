@@ -69,6 +69,15 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
+      - name: Smoke test fighters-legacy --version (Linux / macOS)
+        if: matrix.os != 'windows-latest'
+        run: ./build/debug/game/fighters-legacy/fighters-legacy --version
+
+      - name: Smoke test fighters-legacy --version (Windows)
+        if: matrix.os == 'windows-latest'
+        run: .\build\debug-msvc\game\fighters-legacy\fighters-legacy.exe --version
+        shell: pwsh
+
       - name: Configure OpenAL Soft null backend
         if: matrix.os == 'ubuntu-latest'
         run: |

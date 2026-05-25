@@ -7,6 +7,7 @@
 #include "SDL3Window.h"
 #include "IWindowEventHandler.h"
 #include <SDL3/SDL.h>
+#include <vector>
 
 bool SDL3Window::init(const char* title, int width, int height) {
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
@@ -88,4 +89,28 @@ void* SDL3Window::nativeHandle() const {
 const char* SDL3Window::getLastError() const {
     m_lastError = SDL_GetError();
     return m_lastError.c_str();
+}
+
+int SDL3Window::showMessageBox(MessageBoxType type, const char* title, const char* message,
+                               const MessageBoxButton* buttons, int numButtons) {
+    std::vector<SDL_MessageBoxButtonData> sdlBtns(static_cast<std::size_t>(numButtons));
+    for (int i = 0; i < numButtons; ++i) {
+        sdlBtns[static_cast<std::size_t>(i)] = {0, buttons[i].id, buttons[i].text};
+    }
+    if (numButtons > 0)
+        sdlBtns[0].flags |= SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT;
+    if (numButtons > 1)
+        sdlBtns[static_cast<std::size_t>(numButtons - 1)].flags |= SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT;
+
+    Uint32 flags = (type == MessageBoxType::Error)     ? SDL_MESSAGEBOX_ERROR
+                   : (type == MessageBoxType::Warning) ? SDL_MESSAGEBOX_WARNING
+                                                       : SDL_MESSAGEBOX_INFORMATION;
+    SDL_MessageBoxData data{flags, nullptr, title, message, numButtons, sdlBtns.data(), nullptr};
+    int clicked = -1;
+    SDL_ShowMessageBox(&data, &clicked);
+    return clicked;
+}
+
+void SDL3Window::openURL(const char* url) {
+    SDL_OpenURL(url);
 }

@@ -20,6 +20,7 @@ class VkRenderer : public IRenderer {
     void endFrame() override;
     void shutdown() override;
     const char* getLastError() const override;
+    const char* gpuInfo() const override;
 
   private:
     bool createInstance();
@@ -90,4 +91,5 @@ class VkRenderer : public IRenderer {
 
     SDL_Window* m_sdlWindow{nullptr};
     mutable std::string m_lastError;
+    std::string m_gpuInfo;
 };

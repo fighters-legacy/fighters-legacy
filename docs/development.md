@@ -176,13 +176,15 @@ fighters-legacy/
 │   ├── vulkan/         # Vulkan renderer backend
 │   ├── openal/         # OpenAL Soft audio backend
 │   └── net/            # ENet networking backend
-├── tools/              # Developer tools (added Phase 1)
+├── game/               # Game binaries
+│   └── fighters-legacy/  # fighters-legacy game client (Phase 1 stub)
+├── tools/              # Developer utilities (fl-server, fl-client, hello_triangle, …)
 ├── tests/              # Test suite (Catch2 via FetchContent)
 ├── docs/               # Documentation
 └── scripts/            # Developer scripts and git hooks
 ```
 
-Structure is populated as Phase 1 Workstream A engine code lands. The stubs above reflect the planned layout.
+The `game/` directory holds game binary entry points. Developer tools and headless infrastructure binaries live in `tools/`.
 
 ---
 
@@ -415,6 +417,46 @@ loc.get(keys::engine::content::pack_init_failed);
 
 See [docs/modding/localization.md](modding/localization.md) for the full
 translator workflow and mod locale directory layout.
+
+---
+
+## fighters-legacy
+
+`fighters-legacy` is the game client binary. In Phase 1 it is a stub that exercises the crash
+reporting, logging, and mod loading systems without a playable game loop. The full game loop,
+HUD, and menus land in Phase 2.
+
+### Build
+
+```bash
+cmake --preset debug
+cmake --build --preset debug --target fighters-legacy
+# Binary: build/debug/game/fighters-legacy/fighters-legacy
+```
+
+### Run
+
+```bash
+# Default startup (Info log level)
+./build/debug/game/fighters-legacy/fighters-legacy
+
+# Override log level for this session only (does not persist to user.toml)
+./build/debug/game/fighters-legacy/fighters-legacy --log-level debug
+
+# Print version and exit
+./build/debug/game/fighters-legacy/fighters-legacy --version
+```
+
+### User data directory
+
+| Platform | Path |
+|----------|------|
+| Linux    | `~/.local/share/jomkz/fighters-legacy/` |
+| macOS    | `~/Library/Application Support/jomkz/fighters-legacy/` |
+| Windows  | `%APPDATA%\jomkz\fighters-legacy\` |
+
+Session logs are written to `<userdata>/logs/engine_<date>.log` (10 retained).
+Crash dumps are written to `<userdata>/logs/crash_<timestamp>.log` (5 retained).
 
 ---
 
