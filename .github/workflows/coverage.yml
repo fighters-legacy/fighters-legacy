@@ -42,7 +42,7 @@ jobs:
       - name: Generate lcov report
         run: |
           lcov --capture --directory . --output-file coverage.info \
-               --ignore-errors empty,source,gcov
+               --ignore-errors empty,source,gcov,negative
           lcov --remove coverage.info '/usr/*' '*/tests/*' '*/vendor/*' '*/_deps/*' '*/game/*' \
                --output-file coverage.info --ignore-errors empty,unused,source,gcov
 
