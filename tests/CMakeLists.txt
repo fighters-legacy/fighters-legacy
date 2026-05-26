@@ -21,6 +21,7 @@ catch_discover_tests(test_localization)
 
 add_executable(test_firstrun test_firstrun.cpp)
 target_link_libraries(test_firstrun PRIVATE Catch2::Catch2WithMain engine-firstrun)
+target_include_directories(test_firstrun PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_firstrun)
 
 add_executable(test_file_logger test_file_logger.cpp)
@@ -34,7 +35,13 @@ catch_discover_tests(test_crash_reporter)
 
 add_executable(test_userconfig test_userconfig.cpp)
 target_link_libraries(test_userconfig PRIVATE Catch2::Catch2WithMain engine-config)
+target_include_directories(test_userconfig PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_userconfig)
+
+add_executable(test_settings test_settings.cpp)
+target_link_libraries(test_settings PRIVATE Catch2::Catch2WithMain engine-config)
+target_include_directories(test_settings PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_settings)
 
 # Integration: verify locale files are in sync with source key references
 if(TARGET locale-extract)

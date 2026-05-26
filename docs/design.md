@@ -47,3 +47,19 @@ Design choices that explicitly avoid constraints common in older games of this g
 | Weapon hardpoints | Configurable per aircraft TOML |
 | Audio sample rates | OGG at any rate; arbitrary sample rate |
 | Render resolution | Any resolution; windowed or fullscreen |
+
+---
+
+## Settings Philosophy
+
+These principles govern what appears in the settings UI and how settings are stored.
+
+**Approachable over exhaustive.** Only settings a non-technical player can act on meaningfully without reading a manual belong in the primary settings screen. Settings that require understanding of rendering techniques or hardware internals are deferred to an "Advanced" section in a future phase.
+
+**Quality preset is the single high-level knob.** Shadow quality, particle density, and anti-aliasing mode are controlled by the quality preset in Phase 1. Exposing them individually is redundant with the preset and adds jargon (FXAA, MSAA 2×) that is opaque to most players. These return as configurable sub-settings in a future "Advanced graphics" section once the Vulkan render graph lands in Phase 2.
+
+**Draw distance is an exception.** It is gameplay-critical in a flight sim — seeing a radar contact or a bandit at distance affects situational awareness directly. It is exposed as a primary setting regardless of the quality preset.
+
+**Anti-aliasing is on/off.** The engine selects the best available method; no user-facing method names (FXAA, MSAA 2×/4×) appear in Phase 1.
+
+**Audio sliders store integers.** Volumes are stored as integers 0–100 in `config/user.toml`, matching the "0–100%" range in the UI spec, and converted to float 0.0–1.0 at runtime for `IAudio::setGain()`. This avoids float serialization precision issues and keeps the file human-readable and hand-editable.
