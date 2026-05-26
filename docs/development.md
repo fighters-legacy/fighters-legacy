@@ -18,7 +18,7 @@ sudo dnf install cmake ninja-build gcc g++ clang clang-tools-extra \
 
 For Bluetooth gamepad support (Xbox controllers), see [docs/linux-gamepad.md](linux-gamepad.md).
 
-> **Note (OpenAL):** Some Fedora installs ship `/etc/openal/alsoft.conf` with `drivers = null`, which silently discards all audio. If `audio_test` reports success but you hear nothing, override it: `printf '[general]\ndrivers = pipewire\n' > ~/.config/alsoft.conf`
+> **Note (OpenAL):** Some Fedora installs ship `/etc/openal/alsoft.conf` with `drivers = null`, which silently discards all audio. If `audio_check` reports success but you hear nothing, override it: `printf '[general]\ndrivers = pipewire\n' > ~/.config/alsoft.conf`
 
 ### Linux — Ubuntu/Debian
 
@@ -59,6 +59,14 @@ pip install reuse
 ```
 
 Run with `reuse lint` from the repo root.
+
+**gcovr** — required to run coverage gates locally (the `coverage` preset instruments the build; gcovr reads the `.gcda` files and enforces thresholds). CI installs it automatically; install locally to run gates before pushing:
+
+```bash
+pip install gcovr
+```
+
+See [Testing → Code coverage](#code-coverage) for the full local workflow.
 
 Copyright is declared centrally in `REUSE.toml` rather than in each file. All `.h` and `.cpp` files are covered by a glob annotation there — new source files do not need an in-file `SPDX-FileCopyrightText` line. The `// SPDX-License-Identifier: GPL-3.0-or-later` line in each source file is still required (see `CLAUDE.md`).
 
