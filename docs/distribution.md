@@ -39,10 +39,10 @@ simultaneously.
 
 ## What the Free Base Pack Changes
 
-Once the free base pack (Phase 6) is available, Fighters Legacy becomes playable with
+Once fl-base-pack (Phase 2) is available, Fighters Legacy becomes playable with
 zero financial barrier. Revenue model shifts to:
 
-- **FA Content Bridge** as a paid optional plugin (if redistributed as compiled binary)
+- **Content plugins** (e.g. fa-content, future community packs) as optional paid plugins if redistributed as compiled binaries
 - **Community packs** priced independently by their creators
 - Donations via itch.io / GitHub Sponsors for the engine itself
 

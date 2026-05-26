@@ -1,6 +1,6 @@
 # Native Open Asset Format Specifications
 
-These are the engine's canonical formats. All non-FA content uses these. The FA bridge translates FA formats into these at runtime.
+These are the engine's canonical formats. All content packs are expected to provide assets in these formats.
 
 For authoring tools and workflow guides, see the other files in this directory.
 
@@ -32,7 +32,7 @@ For authoring tools and workflow guides, see the other files in this directory.
 
 - Sound effects: OGG at 44.1 kHz stereo or mono
 - Music: OGG (pre-rendered from MIDI/FluidSynth during content pack build)
-- FA's raw PCM (`.11K`/`.5K`/`.8K`) converted to OGG by the FA bridge on first access
+- Content packs that use legacy audio formats handle their own conversion before providing OGG to the engine
 - Streaming sources (long music tracks) use OpenAL streaming buffers
 
 ---
