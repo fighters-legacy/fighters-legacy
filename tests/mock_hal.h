@@ -1,13 +1,119 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "IAudio.h"
 #include "IFilesystem.h"
+#include "IInput.h"
 #include "ILogger.h"
 
 #include <cstring>
 #include <map>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
+
+struct MockAudio : public IAudio {
+    int uploadCount = 0;
+    int createCount = 0;
+    int playCount = 0;
+    int stopCount = 0;
+    AudioBufferId nextBufferId = 1;
+    AudioSourceId nextSourceId = 1;
+
+    bool init() override {
+        return true;
+    }
+    void shutdown() override {}
+    const char* getLastError() const override {
+        return nullptr;
+    }
+
+    AudioBufferId uploadBuffer(const void*, std::size_t, int, int) override {
+        ++uploadCount;
+        return nextBufferId++;
+    }
+    void freeBuffer(AudioBufferId) override {}
+
+    AudioSourceId createSource() override {
+        ++createCount;
+        return nextSourceId++;
+    }
+    void destroySource(AudioSourceId) override {}
+
+    void play(AudioSourceId, AudioBufferId) override {
+        ++playCount;
+    }
+    void stop(AudioSourceId) override {
+        ++stopCount;
+    }
+    void pause(AudioSourceId) override {}
+    void resume(AudioSourceId) override {}
+    bool isPlaying(AudioSourceId) const override {
+        return false;
+    }
+
+    void setLooping(AudioSourceId, bool) override {}
+    void setPitch(AudioSourceId, float) override {}
+    void setGain(AudioSourceId, float) override {}
+    void setPosition(AudioSourceId, float, float, float) override {}
+    void setVelocity(AudioSourceId, float, float, float) override {}
+    void setSourceRelative(AudioSourceId, bool) override {}
+    void setReferenceDistance(AudioSourceId, float) override {}
+    void setMaxDistance(AudioSourceId, float) override {}
+    void setRolloffFactor(AudioSourceId, float) override {}
+    void setListenerTransform(const float[3], const float[3], const float[3]) override {}
+    void setListenerVelocity(const float[3]) override {}
+};
+
+struct MockInput : public IInput {
+    std::set<Key> justPressed;
+    std::set<Key> held;
+    int gamepadCount = 0;
+    std::map<std::pair<int, GamepadAxis>, float> axisValues;
+    std::set<std::pair<int, GamepadButton>> gpJustPressed;
+
+    bool isKeyDown(Key k) const override {
+        return held.count(k) > 0;
+    }
+    bool isKeyJustPressed(Key k) const override {
+        return justPressed.count(k) > 0;
+    }
+
+    void getMousePosition(int& x, int& y) const override {
+        x = y = 0;
+    }
+    void getMouseDelta(int& dx, int& dy) const override {
+        dx = dy = 0;
+    }
+    void setMouseCapture(bool) override {}
+    int getMouseScroll() const override {
+        return 0;
+    }
+    bool isMouseButtonDown(MouseButton) const override {
+        return false;
+    }
+
+    void startTextInput(ITextInputHandler*) override {}
+    void stopTextInput() override {}
+    void flush() override {}
+
+    int getGamepadCount() const override {
+        return gamepadCount;
+    }
+    bool isGamepadButtonDown(int, GamepadButton) const override {
+        return false;
+    }
+    bool isGamepadButtonJustPressed(int id, GamepadButton b) const override {
+        return gpJustPressed.count({id, b}) > 0;
+    }
+    float getGamepadAxis(int id, GamepadAxis ax) const override {
+        auto it = axisValues.find({id, ax});
+        return it != axisValues.end() ? it->second : 0.0f;
+    }
+    void rumble(int, float, float, uint32_t) override {}
+    void rumbleTriggers(int, float, float, uint32_t) override {}
+};
 
 struct MockLogger : public ILogger {
     struct Entry {

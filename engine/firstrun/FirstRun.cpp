@@ -6,7 +6,16 @@
 
 FirstRun::FirstRun(UserConfig& config, ILogger& logger) : m_config(config), m_logger(logger) {}
 
-FirstRunOutcome FirstRun::check() const {
+FirstRunOutcome FirstRun::check(bool hasContentPacks) const {
+    if (!hasContentPacks) {
+        if (m_config.isFirstRunCompleted())
+            m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
+                         "no content packs found; config shows first-run complete — launching sandbox inspector");
+        else
+            m_logger.log(LogLevel::Info, __FILE__, __LINE__,
+                         "no content packs found on first run — launching sandbox inspector");
+        return FirstRunOutcome::LaunchSandboxInspector;
+    }
     return m_config.isFirstRunCompleted() ? FirstRunOutcome::Skip : FirstRunOutcome::ShowWelcome;
 }
 

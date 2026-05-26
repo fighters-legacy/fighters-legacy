@@ -5,6 +5,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         engine-config
         engine-firstrun
         engine-content
+        engine-sandbox
         platform-file-logger
         platform-sdl3
         platform-vulkan
