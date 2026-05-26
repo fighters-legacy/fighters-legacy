@@ -50,7 +50,7 @@ declare -A PHASE_NAME=(
   ["Phase 1"]="Engine Foundation"
   ["Phase 2"]="Modern Particles Engine"
   ["Phase 3"]="Classic/Parity Mode"
-  ["Phase 4"]="ft-gui + Mission Editor"
+  ["Phase 4"]="In-Game Mission Editor"
   ["Phase 5"]="Linux/Mac Release"
   ["Phase 6"]="Native Formats + Free Pack"
 )

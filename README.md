@@ -34,7 +34,7 @@ Development is tracked through [GitHub milestones](https://github.com/jomkz/figh
 | [1 — Engine Foundation](https://github.com/jomkz/fighters-legacy/milestone/1) | HAL, Vulkan, SDL3, OpenAL, ENet, content system, CI/CD |
 | [2 — Modern-Particles Engine](https://github.com/jomkz/fighters-legacy/milestone/2) | Game loop, flight model, AI, networking, renderer |
 | [3 — Classic/Parity Mode](https://github.com/jomkz/fighters-legacy/milestone/3) | SH bytecode interpreter, software rasterizer |
-| [4 — ft-gui + Mission Editor](https://github.com/jomkz/fighters-legacy/milestone/4) | Cross-platform ft-gui, in-game mission editor |
+| [4 — In-Game Mission Editor](https://github.com/jomkz/fighters-legacy/milestone/4) | In-game mission editor |
 | [5 — Linux/macOS Release](https://github.com/jomkz/fighters-legacy/milestone/5) | MoltenVK, Flathub, official binaries |
 | [6 — Native Formats + Free Pack](https://github.com/jomkz/fighters-legacy/milestone/6) | Open asset toolchain, mod browser, community base pack |
 

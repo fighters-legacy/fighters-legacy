@@ -100,7 +100,6 @@ These decisions are finalized and not subject to revision without an RFC.
 | Network transport | ENet 1.3.x (reliable UDP) | Reliable + unreliable channels; congestion control; cross-platform. **IPv4 only** — ENet 1.3.x does not support IPv6; dual-stack requires the `enet6` fork (SirLynix/enet6), which is not a Phase 1 concern. |
 | Build system | CMake 3.25+ | Cross-platform from day one |
 | Engine repo | `fighters-legacy` (this repo) | Separate from fighters-toolkit |
-| ft-gui future | Port to SDL3 + Vulkan | After engine HAL is stable (Phase 4) |
 | Content system | Plugin / content-pack architecture | Each content source = one plugin; mods = other plugins; engine core has zero content dependency |
 | Native 3D models | glTF 2.0 | Royalty-free; Blender export; industry standard |
 | Native textures | PNG (source) + KTX2/DDS (GPU) | Mipmaps, BC compression; toolchain converts PNG → KTX2 at pack time |
@@ -174,7 +173,7 @@ mods/
     example-content/          ← compiled content pack (ships as shared library)
         manifest.toml
         example-content.dll/.so
-    free-base-pack/           ← community open-content (Phase 6+)
+    fl-base-pack/             ← bundled default content (Phase 2+, jomkz/fl-base-pack)
         manifest.toml
         aircraft/
         missions/
@@ -187,6 +186,18 @@ mods/
 ```
 
 **TOML vs YAML:** TOML is used for definition and configuration data (flight models, weapon specs, unit data, mod manifests, HUD layouts, playlists). These files have fixed schemas, typed values, and benefit from TOML's parse-time type enforcement and clean Git diffs. YAML is used for mission and campaign files, which are document-like: arbitrary nesting depth, large object lists, and YAML anchors/aliases let shared definitions be referenced multiple times without repetition. The rule of thumb is: does this look like a settings file (TOML) or a scenario/narrative document (YAML)?
+
+## Repository Naming Convention
+
+All first-party repositories and binaries in the fighters-legacy ecosystem use the `fl-` prefix. Content pack plugins for specific external games use a `<game>-content` pattern. Core repositories keep their full names.
+
+| Pattern | Examples |
+|---|---|
+| `fl-<name>` | `fl-server` (dedicated server), `fl-lobby` (matchmaking service), `fl-base-pack` (bundled default content) |
+| `<game>-content` | `fa-content` (Jane's Fighters Anthology content plugin) |
+| Full name | `fighters-legacy` (engine + game), `fighters-codex` (reference repo) |
+
+---
 
 ## Key Design Constraints
 
