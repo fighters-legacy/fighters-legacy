@@ -5,6 +5,7 @@
 | [development.md](development.md) | Build prerequisites (Fedora/Ubuntu/Windows/macOS), CMake presets, IDE setup, project structure |
 | [architecture.md](architecture.md) | Layered model, locked architectural decisions, content pack architecture |
 | [design.md](design.md) | Gameplay design pillars, lifted FA constraints |
+| [prior-art.md](prior-art.md) | Competitive landscape and prior art — open-source and commercial simulators, and where fighters-legacy fits |
 | [roadmap.md](roadmap.md) | Phase schedule, critical path, per-phase acceptance criteria |
 | [distribution.md](distribution.md) | Distribution channels, monetization strategy |
 | [modding/formats.md](modding/formats.md) | Native asset format specifications (glTF, TOML, YAML, Lua) |
