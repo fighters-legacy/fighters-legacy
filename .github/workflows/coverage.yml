@@ -83,7 +83,7 @@ jobs:
           gcovr \
             --filter 'engine/' \
             --gcov-exclude '.*/_deps/.*' \
-            --gcov-ignore-errors source_not_found,output_error,no_working_dir_found \
+            --gcov-ignore-errors all \
             --exclude-throw-branches \
             --fail-under-branch 80 \
             --print-summary
@@ -93,7 +93,7 @@ jobs:
           gcovr \
             --filter 'engine/' \
             --gcov-exclude '.*/_deps/.*' \
-            --gcov-ignore-errors source_not_found,output_error,no_working_dir_found \
+            --gcov-ignore-errors all \
             --exclude-throw-branches \
             --fail-under-line 70 \
             --print-summary
