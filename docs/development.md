@@ -250,6 +250,8 @@ The `game/` directory holds game binary entry points. Developer tools and headle
 
 FetchContent fallback is used when the system package is absent or below the required version. The CMake configuration prints the source (system vs fetched) for each dependency.
 
+For links to upstream documentation for each dependency, see [`docs/references.md`](references.md).
+
 ---
 
 ## CI vs local platform

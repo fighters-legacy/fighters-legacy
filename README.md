@@ -23,6 +23,7 @@ any community contribution.
 | [docs/roadmap.md](docs/roadmap.md) | Schedule, critical path, acceptance criteria |
 | [docs/distribution.md](docs/distribution.md) | Distribution channels, monetization strategy |
 | [docs/development.md](docs/development.md) | Build prerequisites per platform |
+| [docs/references.md](docs/references.md) | Technology reference index: upstream docs for every engine dependency and tool |
 | [GOVERNANCE.md](GOVERNANCE.md) | Decision-making and RFC process |
 
 ## Roadmap

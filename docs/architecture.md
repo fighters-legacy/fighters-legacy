@@ -31,6 +31,8 @@ Thin abstraction over OS and hardware APIs. Each backend is isolated:
 
 The HAL exposes platform-independent interfaces to the engine core. Nothing above the HAL layer links directly against Vulkan, SDL3, OpenAL, or ENet headers.
 
+For upstream documentation on each backend, see [`docs/references.md`](references.md).
+
 #### Platform HAL Interfaces
 
 All interfaces live under `platform/` and are exposed via the `platform-hal` CMake INTERFACE library. Engine core and backends link against `platform-hal` rather than including headers by path.

@@ -125,4 +125,4 @@ and platform-specific HAL shims are excluded from the threshold.
 7. Sign off and commit: `git commit -s -m "feat(scope): description"`
 8. Open a pull request against `main` and fill in the PR template
 
-For full build workflow, IDE setup, and the release process, see [docs/development.md](docs/development.md).
+For full build workflow, IDE setup, and the release process, see [docs/development.md](docs/development.md). For upstream documentation on every technology used in the engine, see [docs/references.md](docs/references.md).
