@@ -735,7 +735,7 @@ TEST_CASE("ModLoader validateEngineApi: engine-api version without dot is compar
     CHECK(std::string(packs[0]->id()) == "nodot");
 }
 
-TEST_CASE("ModLoader two mods with met dependency — no warning") {
+TEST_CASE("ModLoader two mods with met dependency - no warning") {
     MockFilesystem fs;
     MockLogger logger;
     fs.addDir("mods");
