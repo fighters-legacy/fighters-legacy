@@ -63,7 +63,8 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
-          path: "**/*.zip"
+          path: "dist/*.zip"
+          if-no-files-found: ignore
           retention-days: 1
 
   release:
@@ -72,6 +73,7 @@ jobs:
     permissions:
       contents: write
       id-token: write
+      attestations: write
 
     steps:
       - uses: actions/checkout@v6
@@ -104,10 +106,10 @@ jobs:
         id: release
         with:
           body: ${{ steps.notes.outputs.body }}
-          files: "**/*.zip"
+          files: "dist/*.zip"
 
       - name: Attest build provenance
         if: hashFiles('**/*.zip') != ''
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: "**/*.zip"
+          subject-path: "dist/*.zip"
