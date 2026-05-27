@@ -69,7 +69,7 @@ All interfaces live under `platform/` and are exposed via the `platform-hal` CMa
 
 Game logic and simulation, independent of any specific content:
 
-- **Game loop** — fixed-timestep update, variable-rate render
+- **Game loop** (`engine/loop/`) — `TimeController` (fixed-timestep accumulator, time compression), `GameLoop` (sim thread, frame gating, render alpha). `ISimUpdate` is the callback interface for game systems advancing each tick.
 - **Entity system** — component-based scene graph
 - **Flight model** — aerodynamics simulation
 - **AI runtime** — Lua-scripted AI behaviours

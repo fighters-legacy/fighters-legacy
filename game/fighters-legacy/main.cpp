@@ -9,6 +9,8 @@
 #include "crash/CrashInfo.h"
 #include "crash/CrashReporter.h"
 #include "firstrun/FirstRun.h"
+#include "loop/GameLoop.h"
+#include "loop/ISimUpdate.h"
 #include "openal/OALAudio.h"
 #include "sandbox/SandboxInspector.h"
 #include "sdl3/SDL3Filesystem.h"
@@ -159,23 +161,34 @@ int main(int argc, char** argv) {
     FirstRun firstRun(userConfig, *rawLogger);
     auto outcome = firstRun.check(hasPacks);
 
-    // Step 17: Sandbox inspector (when no content packs are present).
+    // Step 17a: Null sim callback for Phase 2.1 (no game objects yet).
+    struct NullSim : ISimUpdate {
+        void onTick(double, uint64_t) override {}
+    } nullSim;
+
+    // Step 17b: Sandbox inspector (when no content packs are present).
     std::optional<SandboxInspector> inspector;
     if (outcome == FirstRunOutcome::LaunchSandboxInspector)
         inspector.emplace(*p.audio, *p.input, *rawLogger);
 
-    // Step 18: Game loop.
+    // Step 17c: Game loop — sim thread starts here.
+    GameLoop gameLoop(nullSim, *rawLogger);
+    gameLoop.start();
+
+    // Step 18: Shell loop — main thread owns all HAL.
     bool running = true;
     while (running && !p.window->shouldClose()) {
         p.window->pollEvents();
         p.renderer->beginFrame();
         if (inspector && !inspector->update())
             running = false;
+        [[maybe_unused]] float alpha = gameLoop.shellTick();
         p.renderer->endFrame();
         p.input->flush();
     }
 
     // Step 19: Clean shutdown.
+    gameLoop.stop(); // join sim thread before any HAL teardown
     inspector.reset();
     p.audio->shutdown();
     p.renderer->shutdown();

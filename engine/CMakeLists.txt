@@ -71,3 +71,10 @@ target_link_libraries(engine-sandbox
 )
 
 add_subdirectory(crash)
+
+add_library(engine-loop STATIC
+    loop/GameLoop.cpp
+    loop/TimeController.cpp
+)
+target_include_directories(engine-loop PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-loop PUBLIC platform-hal)

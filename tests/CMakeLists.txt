@@ -7,6 +7,11 @@ include(Catch)
 #   target_link_libraries(test_foo PRIVATE Catch2::Catch2WithMain engine-content)
 #   catch_discover_tests(test_foo)
 
+add_executable(test_loop test_loop.cpp)
+target_link_libraries(test_loop PRIVATE Catch2::Catch2WithMain engine-loop)
+target_include_directories(test_loop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_loop)
+
 add_executable(test_sandbox test_sandbox.cpp)
 target_link_libraries(test_sandbox PRIVATE Catch2::Catch2WithMain engine-sandbox)
 target_include_directories(test_sandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
