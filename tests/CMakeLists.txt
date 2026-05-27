@@ -71,6 +71,11 @@ if(TARGET platform-enet)
         "${CMAKE_SOURCE_DIR}/platform/net"
     )
     catch_discover_tests(test_network)
+
+    add_executable(test_server_config test_server_config.cpp)
+    target_link_libraries(test_server_config PRIVATE Catch2::Catch2WithMain fl-server-config)
+    target_include_directories(test_server_config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    catch_discover_tests(test_server_config)
 endif()
 
 add_executable(test_audio test_audio.cpp)

@@ -328,30 +328,34 @@ cmake --build --preset debug --target fl-server
 
 ### Configuration
 
-`fl-server` resolves settings in three tiers (later tiers override earlier ones):
+`fl-server` resolves settings in three tiers: `server.toml` (lowest priority) →
+CLI positional args → environment variables (highest priority). The config file is
+written with commented defaults on first run if absent; an absent or unreadable file
+is not fatal.
 
-1. `server.toml` in the working directory (or path in `FL_CONFIG`). Written
-   with commented defaults on first run if absent. Absent or unreadable config
-   is not fatal — the server logs a warning and uses defaults.
-2. CLI positional args: `fl-server [port] [maxPeers]`
-3. Environment variables (highest precedence — recommended for containers):
+For the full configuration reference — all TOML sections, keys, types, defaults, valid
+values, CLI flags, and env var mappings — see
+[docs/fl-server-config.md](fl-server-config.md).
+
+Quick reference for container deployments:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `FL_PORT` | `4778` | UDP bind port |
-| `FL_MAX_PEERS` | `16` | Maximum simultaneous connected peers |
 | `FL_CONFIG` | `./server.toml` | Path to config file |
+| `FL_PORT` | `4778` | UDP bind port |
+| `FL_BIND_ADDRESS` | `0.0.0.0` | Bind address (use `127.0.0.1` for localhost-only) |
+| `FL_MAX_PEERS` | `16` | Maximum simultaneous connected peers |
+| `FL_NAME` | `"Unnamed Server"` | Server name shown in the lobby |
+| `FL_PERSISTENT` | `"false"` | Set `"true"` to enable persistent world mode (Phase 2) |
+| `FL_LOBBY_REGISTER` | `"false"` | Set `"true"` to advertise to fl-lobby (Phase 2) |
+| `FL_AI_DIFFICULTY_FLOOR` | `"recruit"` | Minimum AI difficulty (Phase 2) |
+
+Additional Phase 2 env vars (`FL_LOBBY_URL`, `FL_LOBBY_VISIBILITY`) are documented in
+the full reference.
 
 ### Kubernetes / containers
 
-- Pass all config via environment variables; no volume mount required.
-- Optionally mount a pre-baked `server.toml` via ConfigMap — the first-run
-  write is skipped when the file already exists.
-- All output goes to stdout; compatible with Fluentd, Loki, and similar
-  log aggregators.
-- Responds to `SIGTERM` (sent by Kubernetes on pod termination) with a 100 ms
-  graceful peer disconnect before exit — well within the default
-  `terminationGracePeriodSeconds` of 30 s.
+See [docs/fl-server-config.md — Kubernetes / container deployment](fl-server-config.md#kubernetes--container-deployment).
 
 ### Stop
 

@@ -112,6 +112,7 @@ These decisions are finalized and not subject to revision without an RFC.
 | Native terrain | Streaming heightmap chunks + JSON | No tile-count cap; supports large theaters |
 | Native AI scripts | Lua 5.4 | Embeddable, sandbox-able, moddable |
 | Multiplayer topology | `fl-server` dedicated binary + `fl-lobby` REST service | Server-authoritative; no P2P player-count cap; self-hostable |
+| Single-player topology | `fl-server` running locally (`bind_address=127.0.0.1`, `max_peers=1`) | One simulation path; no bifurcated codebase; single-player is multiplayer with one peer |
 | Entity system | Dynamic pool, no hard caps | No fixed object count limit |
 | License | GPL v3 | Engine modifications must stay open source; protects community investment |
 | Hosting | GitHub, public repository | Unlimited Actions CI on public repos; GitHub Free sufficient |

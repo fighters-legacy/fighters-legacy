@@ -80,6 +80,15 @@ jobs:
           .\build\debug-msvc\game\fighters-legacy\Debug\fighters-legacy.exe --version
         shell: pwsh
 
+      - name: Smoke test fl-server --version (Linux / macOS)
+        if: matrix.os != 'windows-latest'
+        run: ./build/debug/tools/fl-server --version
+
+      - name: Smoke test fl-server --version (Windows)
+        if: matrix.os == 'windows-latest'
+        run: .\build\debug-msvc\tools\Debug\fl-server.exe --version
+        shell: pwsh
+
       - name: Configure OpenAL Soft null backend
         if: matrix.os == 'ubuntu-latest'
         run: |
