@@ -167,6 +167,29 @@ TEST_CASE("FirstRun::complete logs Warn when save fails, flag still set in memor
     REQUIRE(logger.hasMessage(LogLevel::Warn, "persist"));
 }
 
+TEST_CASE("FirstRun::check returns LaunchSandboxInspector when no packs on first run", "[firstrun]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    FirstRun fr(config, logger);
+
+    REQUIRE(fr.check(false) == FirstRunOutcome::LaunchSandboxInspector);
+    REQUIRE(logger.hasMessage(LogLevel::Info, "no content packs found on first run"));
+}
+
+TEST_CASE("FirstRun::check returns LaunchSandboxInspector when no packs and first-run already completed",
+          "[firstrun]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[first_run]\ncompleted = true\n");
+    UserConfig config(fs, logger);
+    config.load();
+    FirstRun fr(config, logger);
+
+    REQUIRE(fr.check(false) == FirstRunOutcome::LaunchSandboxInspector);
+    REQUIRE(logger.hasMessage(LogLevel::Warn, "no content packs found"));
+}
+
 TEST_CASE("FirstRun round-trip: no file -> ShowWelcome -> complete -> saved as true", "[firstrun]") {
     MockFilesystem fs;
     MockLogger logger;

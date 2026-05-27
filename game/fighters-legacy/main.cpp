@@ -1,10 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "FileLogger.h"
+#include "IWindowEventHandler.h"
 #include "Platform.h"
 #include "Version.h"
 #include "config/UserConfig.h"
+#include "content/AssetManager.h"
+#include "content/ModLoader.h"
 #include "crash/CrashInfo.h"
 #include "crash/CrashReporter.h"
+#include "firstrun/FirstRun.h"
+#include "openal/OALAudio.h"
+#include "sandbox/SandboxInspector.h"
+#include "sdl3/SDL3Filesystem.h"
+#include "sdl3/SDL3Input.h"
 #include "sdl3/SDL3Window.h"
 #include "vulkan/VkRenderer.h"
 
@@ -13,6 +21,7 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <optional>
 
 namespace fs = std::filesystem;
 
@@ -30,7 +39,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Step 1: Resolve UserData directory
+    // Step 1: Resolve UserData directory.
     SDL_Init(0);
     char* prefRaw = SDL_GetPrefPath("jomkz", "fighters-legacy");
     fs::path userDataDir = prefRaw ? fs::path(prefRaw) : fs::path(".");
@@ -39,36 +48,52 @@ int main(int argc, char** argv) {
 
     Platform p;
 
-    // Step 2: FileLogger — open at default level
+    // Step 2: FileLogger — open at default level.
     auto fileLogger = std::make_unique<FileLogger>();
     if (!fileLogger->open((userDataDir / "logs").string(), 10)) {
         std::fprintf(stderr, "fighters-legacy: cannot open log file in %s, falling back to stderr\n",
                      (userDataDir / "logs").string().c_str());
-        // log() calls will silently no-op; startup continues
     }
     FileLogger* rawLogger = fileLogger.get();
     p.logger = std::move(fileLogger);
 
-    // Steps 3–4: UserConfig and ModLoader cannot be wired in Phase 1 — both require
-    // a concrete IFilesystem which does not exist yet.
-    // TODO(Phase 2): instantiate UserConfig and apply persisted log_level when
-    // SDL3Filesystem ships.
+    // Step 3: SDL3Filesystem — assets root is the directory containing the binary.
+    const char* baseRaw = SDL_GetBasePath();
+    fs::path assetsRoot = baseRaw ? fs::path(baseRaw) : fs::path(".");
+    p.filesystem = std::make_unique<SDL3Filesystem>(assetsRoot, userDataDir);
 
-    // Step 4: Apply --log-level CLI override (session-only; does not persist)
+    // Step 4: UserConfig — load persisted settings (missing file is non-fatal).
+    UserConfig userConfig(*p.filesystem, *rawLogger);
+    userConfig.load();
+
+    // Step 5: Apply --log-level CLI override (session-only; does not persist).
     for (int i = 1; i < argc - 1; ++i) {
         if (std::strcmp(argv[i], "--log-level") == 0)
             rawLogger->setMinLevel(parseLogLevel(argv[i + 1]));
     }
 
-    // Step 5: Window (no SDL video init yet; showMessageBox safe before init per SDL3 docs)
+    // Step 6: Audio backend.
+    auto oalAudio = std::make_unique<OALAudio>();
+    if (!oalAudio->init()) {
+        rawLogger->log(LogLevel::Error, __FILE__, __LINE__, oalAudio->getLastError());
+        return 1;
+    }
+    p.audio = std::move(oalAudio);
+
+    // Step 7: Input backend — keep raw pointer before move for setInputSink() below.
+    auto sdl3Input = std::make_unique<SDL3Input>();
+    SDL3Input* rawInput = sdl3Input.get();
+    p.input = std::move(sdl3Input);
+
+    // Step 8: Window (SDL_ShowMessageBox safe before video init per SDL3 docs).
     auto window = std::make_unique<SDL3Window>();
     p.window = std::move(window);
 
-    // Step 6: Post-crash dialog
+    // Step 9: Post-crash dialog.
     CrashReporter::checkPreviousCrash(userDataDir.string(), p.window.get(), rawLogger,
                                       "https://github.com/jomkz/fighters-legacy/issues/new");
 
-    // Step 7: CrashReporter — sentinel + signal handlers
+    // Step 10: CrashReporter — sentinel + signal handlers.
     CrashInfo crashInfo;
     crashInfo.engineVersion = FL_VERSION_STRING;
     crashInfo.populateOS();
@@ -77,14 +102,17 @@ int main(int argc, char** argv) {
         {userDataDir.string(), "https://github.com/jomkz/fighters-legacy/issues/new", rawLogger, p.window.get()},
         crashInfo);
 
-    // Step 8: Platform init — window
+    // Step 11: Platform init — wire input sink before window init so gamepad/key
+    // events are routed during the very first pollEvents() call.
+    static_cast<SDL3Window*>(p.window.get())->setInputSink(rawInput);
+
     if (!p.window->init("Fighters Legacy", 1280, 720)) {
         rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "window init failed");
         crashReporter.shutdown();
         return 1;
     }
 
-    // Renderer
+    // Step 12: Renderer.
     auto renderer = std::make_unique<VkRenderer>();
     p.renderer = std::move(renderer);
     if (!p.renderer->init(p.window.get())) {
@@ -93,25 +121,63 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Audio and input are not wired in the Phase 1 stub (no game loop).
-    // TODO(Phase 2): instantiate OALAudio and SDL3Input here.
+    // Step 13: Resize handler — forwards window resize events to the renderer.
+    struct ResizeHandler : IWindowEventHandler {
+        IRenderer* r = nullptr;
+        void onResize(int w, int h) override {
+            r->onResize(w, h);
+        }
+        void onClose() override {}
+    } resizeHandler;
+    resizeHandler.r = p.renderer.get();
+    p.window->setEventHandler(&resizeHandler);
 
-    // Step 9: GPU info → crash reporter
+    // Step 14: GPU info → crash reporter.
     crashReporter.setGpuInfo(p.renderer->gpuInfo());
 
-    // Step 10: First-run check
-    // TODO(Phase 2): wire FirstRun when UserConfig is wired to SDL3Filesystem.
+    // Step 15: Mod loading.
+    ModLoader modLoader(*p.filesystem, *rawLogger);
+    auto packs = modLoader.load();
+    const bool hasPacks = !packs.empty();
 
-    // Step 11: Mod loading
-    // TODO(Phase 2): instantiate ModLoader(SDL3Filesystem, *rawLogger) when SDL3Filesystem ships.
-    // Mods are scanned from PathDomain::Assets/"mods" (install-time directory, not UserData).
-    crashReporter.setMods(nullptr, 0);
+    // Build crash reporter mod list before packs are moved into AssetManager.
+    CrashInfo::ModEntry modEntries[CrashInfo::kMaxMods];
+    int modCount = 0;
+    for (const auto& pack : packs) {
+        if (modCount >= CrashInfo::kMaxMods)
+            break;
+        auto& e = modEntries[modCount++];
+        std::snprintf(e.id, sizeof(e.id), "%s", pack->id());
+        std::snprintf(e.version, sizeof(e.version), "%s", pack->version());
+    }
+    crashReporter.setMods(modEntries, modCount);
 
-    // Step 12: Game loop placeholder
-    rawLogger->log(LogLevel::Info, __FILE__, __LINE__,
-                   "fighters-legacy " FL_VERSION_STRING " (" FL_GIT_HASH ") — Phase 1 stub, no game loop");
+    AssetManager assets(std::move(packs), *rawLogger);
+    assets.initialize(p.window.get());
 
-    // Step 13: Clean shutdown
+    // Step 16: First-run routing.
+    FirstRun firstRun(userConfig, *rawLogger);
+    auto outcome = firstRun.check(hasPacks);
+
+    // Step 17: Sandbox inspector (when no content packs are present).
+    std::optional<SandboxInspector> inspector;
+    if (outcome == FirstRunOutcome::LaunchSandboxInspector)
+        inspector.emplace(*p.audio, *p.input, *rawLogger);
+
+    // Step 18: Game loop.
+    bool running = true;
+    while (running && !p.window->shouldClose()) {
+        p.window->pollEvents();
+        p.renderer->beginFrame();
+        if (inspector && !inspector->update())
+            running = false;
+        p.renderer->endFrame();
+        p.input->flush();
+    }
+
+    // Step 19: Clean shutdown.
+    inspector.reset();
+    p.audio->shutdown();
     p.renderer->shutdown();
     p.window->shutdown();
     crashReporter.shutdown();

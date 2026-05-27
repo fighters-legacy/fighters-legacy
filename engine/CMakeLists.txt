@@ -60,4 +60,14 @@ target_link_libraries(engine-firstrun
             platform-hal
 )
 
+add_library(engine-sandbox STATIC
+    sandbox/SandboxInspector.cpp
+)
+
+target_include_directories(engine-sandbox PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(engine-sandbox
+    PUBLIC platform-hal
+)
+
 add_subdirectory(crash)
