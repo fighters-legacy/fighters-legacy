@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.2.0] - 2026-05-27
+
+### Added
+
+- Add CMake skeleton with subdirs and dependency management (#68)
+- **platform**: Define HAL interface headers (closes #14) (#76)
+- **content**: Implement content pack and mod system (#78)
+- **renderer**: Implement Vulkan + MoltenVK renderer backend (#79)
+- **input**: Add SDL3 input backend, engine binding/axis layer, and input_test tool (#84)
+- **audio**: Implement OpenAL Soft backend (closes #18) (#85)
+- **network**: Implement ENet backend, fl-server binary, and network tests (#93)
+- **engine**: Add i18n infrastructure (closes #20) (#95)
+- **engine**: Add first-run detection and user config persistence (closes #22) (#99)
+- **engine,game**: Add crash reporting, FileLogger, and fighters-legacy stub (#101)
+- **engine**: Add graphics and audio mix settings to user config (#105)
+- **engine,platform,game**: Boot without content pack; sandbox inspector on first run (#113)
+
+### Changed
+
+- Add prior-art simulator landscape and FDM RFC reference (#104)
+- Remove fa-content from roadmap; pivot to fl-base-pack (#111)
+- Add technology reference index and fix reuse lint (#112)
+- **roadmap**: Update phase 1 acceptance criteria (#114)
 ## [0.0.1] - 2026-05-22
 
 ### Changed
