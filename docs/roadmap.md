@@ -51,7 +51,7 @@ Total estimated duration: **~48–56 weeks** of focused work.
 - Vulkan validation layers: zero errors on triangle hello-world.
 - MoltenVK smoke test passes on Apple Silicon.
 - Engine boots cleanly with zero content packs installed; sandbox inspector reachable.
-- First-run screen offers fl-base-pack download; download and install completes successfully.
+- First-run logic layer present (#22, merged); rendered welcome screen deferred to Phase 4 (#98); content download deferred to Phase 6 (#108).
 
 ### Phase 2 — Modern-Particles Engine
 
