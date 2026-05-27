@@ -156,4 +156,8 @@ void SDL3AsyncFilesystem::workerLoop() {
             push({id, AsyncReadStatus::Success, std::move(data), {}});
         }
     }
+
+    // Free SDL's per-thread error buffer allocated lazily by SDL_IOFromFile.
+    // Without this, LSAN reports the TLS allocation as a leak when the thread exits.
+    SDL_CleanupTLS();
 }
