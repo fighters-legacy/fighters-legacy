@@ -33,12 +33,22 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake gcc g++ clang
+          sudo apt-get install -y ninja-build cmake gcc g++ clang \
+            libvulkan-dev glslang-tools \
+            libx11-dev libxext-dev \
+            libopenal-dev
+
+      - name: Install Vulkan SDK (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: '1.3.290.0'
+          cache: true
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
         run: |
-          brew install cmake ninja
+          brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
