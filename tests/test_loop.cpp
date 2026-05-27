@@ -95,7 +95,7 @@ TEST_CASE("TimeController: Normal rate accumulator grows at 1x wall rate", "[tc]
     REQUIRE(tc.accumulator() == Catch::Approx(0.5 / 60.0).margin(2e-9));
 }
 
-TEST_CASE("TimeController: Paused rate — accumulator stays 0, advance returns 0", "[tc]") {
+TEST_CASE("TimeController: Paused rate - accumulator stays 0, advance returns 0", "[tc]") {
     TimeController tc;
     tc.setRate(TimeRate::Paused);
     tc.advance(tp(0));
@@ -103,7 +103,7 @@ TEST_CASE("TimeController: Paused rate — accumulator stays 0, advance returns 
     REQUIRE(tc.accumulator() == 0.0);
 }
 
-TEST_CASE("TimeController: Half rate — 1 fixedStep wall time gives 0 ticks", "[tc]") {
+TEST_CASE("TimeController: Half rate - 1 fixedStep wall time gives 0 ticks", "[tc]") {
     TimeController tc;
     tc.setRate(TimeRate::Half);
     tc.advance(tp(0));
@@ -111,21 +111,21 @@ TEST_CASE("TimeController: Half rate — 1 fixedStep wall time gives 0 ticks", "
     REQUIRE(tc.accumulator() == Catch::Approx(0.5 / 60.0).margin(2e-9));
 }
 
-TEST_CASE("TimeController: Double rate — 1 fixedStep wall time gives 2 ticks", "[tc]") {
+TEST_CASE("TimeController: Double rate - 1 fixedStep wall time gives 2 ticks", "[tc]") {
     TimeController tc;
     tc.setRate(TimeRate::Double);
     tc.advance(tp(0));
     REQUIRE(tc.advance(tp(kNs60)) == 2);
 }
 
-TEST_CASE("TimeController: Quad rate — 1 fixedStep wall time gives 4 ticks", "[tc]") {
+TEST_CASE("TimeController: Quad rate - 1 fixedStep wall time gives 4 ticks", "[tc]") {
     TimeController tc;
     tc.setRate(TimeRate::Quad);
     tc.advance(tp(0));
     REQUIRE(tc.advance(tp(kNs60)) == 4);
 }
 
-TEST_CASE("TimeController: Octa rate — 1 fixedStep wall time gives 8 ticks", "[tc]") {
+TEST_CASE("TimeController: Octa rate - 1 fixedStep wall time gives 8 ticks", "[tc]") {
     TimeController tc;
     tc.setRate(TimeRate::Octa);
     tc.advance(tp(0));
