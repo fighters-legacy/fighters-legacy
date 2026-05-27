@@ -12,7 +12,8 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         platform-openal
         platform-hal
         Vulkan::Vulkan
-        SDL3::SDL3)
+        SDL3::SDL3
+        OpenAL::OpenAL)
     # Concrete backend headers (VkRenderer.h, SDL3Window.h) pull in Vulkan/SDL3 system
     # headers that are not on the default search path on all platforms — mirror what
     # hello_triangle does.
