@@ -32,6 +32,9 @@ class SDL3Input : public IInput, public ISDL3EventSink {
     float getGamepadAxis(int gamepadId, GamepadAxis axis) const override;
     void rumble(int gamepadId, float lowFreq, float highFreq, uint32_t durationMs) override;
     void rumbleTriggers(int gamepadId, float leftRumble, float rightRumble, uint32_t durationMs) override;
+    bool supportsRumble(int gamepadId) const override;
+    bool supportsTriggerRumble(int gamepadId) const override;
+    void stopRumble(int gamepadId) override;
 
     // --- ISDL3EventSink ---
     void onSDLEvent(const SDL_Event& ev) override;

@@ -125,6 +125,8 @@ class App : public IWindowEventHandler {
                 m_input.rumble(0, 0.5f, 0.5f, 300);
             if (m_input.isGamepadButtonJustPressed(0, GamepadButton::B))
                 m_input.rumbleTriggers(0, 0.8f, 0.8f, 300);
+            if (m_input.isGamepadButtonJustPressed(0, GamepadButton::X))
+                m_input.stopRumble(0);
         }
 
         // Check exit
@@ -134,7 +136,7 @@ class App : public IWindowEventHandler {
         // Clear terminal and print state
         std::printf("\033[2J\033[H");
         std::printf("=== Fighters Legacy — Input Test ===\n");
-        std::printf("Esc=quit  A=body rumble  B=trigger rumble\n\n");
+        std::printf("Esc=quit  A=body rumble  B=trigger rumble  X=stop rumble\n\n");
 
         int gpCount = m_input.getGamepadCount();
         if (gpCount == 0) {
@@ -144,7 +146,8 @@ class App : public IWindowEventHandler {
             // SDL_GetGamepadName requires the SDL_Gamepad* handle; we can query it
             // via the SDL API directly using the instance IDs. For the tool we just
             // print the index.
-            std::printf("--- Gamepad %d ---\n", gp);
+            std::printf("--- Gamepad %d  rumble:%s  trigger-rumble:%s ---\n", gp,
+                        m_input.supportsRumble(gp) ? "yes" : "no", m_input.supportsTriggerRumble(gp) ? "yes" : "no");
 
             // Buttons
             std::printf("Buttons: ");

@@ -117,6 +117,13 @@ struct MockInput : public IInput {
     }
     void rumble(int, float, float, uint32_t) override {}
     void rumbleTriggers(int, float, float, uint32_t) override {}
+    bool supportsRumble(int) const override {
+        return false;
+    }
+    bool supportsTriggerRumble(int) const override {
+        return false;
+    }
+    void stopRumble(int) override {}
 };
 
 struct MockLogger : public ILogger {

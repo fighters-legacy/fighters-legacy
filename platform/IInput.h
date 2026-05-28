@@ -179,7 +179,21 @@ class IInput {
     virtual bool isGamepadButtonJustPressed(int gamepadId, GamepadButton button) const = 0;
     virtual float getGamepadAxis(int gamepadId, GamepadAxis axis) const = 0;
 
-    // Values 0.0–1.0; backend scales to hardware range. No-op if controller lacks rumble.
+    // Values 0.0–1.0; backend scales to hardware range. Always a no-op if
+    // hardware is unsupported — check supportsRumble / supportsTriggerRumble
+    // first if behaviour should be gated on capability.
     virtual void rumble(int gamepadId, float lowFreq, float highFreq, uint32_t durationMs) = 0;
     virtual void rumbleTriggers(int gamepadId, float leftRumble, float rightRumble, uint32_t durationMs) = 0;
+
+    // Returns true if the controller at gamepadId has main-motor rumble hardware.
+    // Always false for out-of-range ids.
+    virtual bool supportsRumble(int gamepadId) const = 0;
+
+    // Returns true if the controller at gamepadId has trigger-motor rumble hardware.
+    // Always false for out-of-range ids.
+    virtual bool supportsTriggerRumble(int gamepadId) const = 0;
+
+    // Stops all in-progress rumble (main motors + triggers) immediately.
+    // No-op for out-of-range ids.
+    virtual void stopRumble(int gamepadId) = 0;
 };

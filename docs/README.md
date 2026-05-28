@@ -9,6 +9,7 @@
 | [references.md](references.md) | Technology reference index: upstream docs and learning resources for every engine dependency and tool |
 | [roadmap.md](roadmap.md) | Phase schedule, critical path, per-phase acceptance criteria |
 | [distribution.md](distribution.md) | Distribution channels, monetization strategy |
+| [haptics.md](haptics.md) | Haptic feedback design reference: rumble event catalogue and guidance for game-system implementors |
 | [modding/formats.md](modding/formats.md) | Native asset format specifications (glTF, TOML, YAML, Lua) |
 
 ## Contributing and Governance

@@ -490,3 +490,27 @@ void SDL3Input::rumbleTriggers(int gamepadId, float leftRumble, float rightRumbl
     auto r = static_cast<uint16_t>(rightRumble * 65535.0f);
     SDL_RumbleGamepadTriggers(gp->handle, l, r, durationMs);
 }
+
+bool SDL3Input::supportsRumble(int gamepadId) const {
+    const GamepadState* gp = gamepadAt(gamepadId);
+    if (!gp)
+        return false;
+    SDL_PropertiesID props = SDL_GetGamepadProperties(gp->handle);
+    return SDL_GetBooleanProperty(props, SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN, false);
+}
+
+bool SDL3Input::supportsTriggerRumble(int gamepadId) const {
+    const GamepadState* gp = gamepadAt(gamepadId);
+    if (!gp)
+        return false;
+    SDL_PropertiesID props = SDL_GetGamepadProperties(gp->handle);
+    return SDL_GetBooleanProperty(props, SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN, false);
+}
+
+void SDL3Input::stopRumble(int gamepadId) {
+    GamepadState* gp = gamepadAt(gamepadId);
+    if (!gp)
+        return;
+    SDL_RumbleGamepad(gp->handle, 0, 0, 0);
+    SDL_RumbleGamepadTriggers(gp->handle, 0, 0, 0);
+}

@@ -152,6 +152,21 @@ if(WIN32)
 endif()
 catch_discover_tests(test_joystick DISCOVERY_MODE PRE_TEST)
 
+add_executable(test_input_hal test_input_hal.cpp)
+target_link_libraries(test_input_hal PRIVATE Catch2::Catch2WithMain platform-sdl3)
+target_include_directories(test_input_hal PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    "${CMAKE_SOURCE_DIR}/platform/sdl3"
+)
+if(WIN32)
+    add_custom_command(TARGET test_input_hal POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:SDL3::SDL3>
+            $<TARGET_FILE_DIR:test_input_hal>
+    )
+endif()
+catch_discover_tests(test_input_hal DISCOVERY_MODE PRE_TEST)
+
 add_executable(test_async_filesystem_sdl3 test_async_filesystem_sdl3.cpp)
 target_link_libraries(test_async_filesystem_sdl3 PRIVATE Catch2::Catch2WithMain platform-sdl3)
 target_include_directories(test_async_filesystem_sdl3 PRIVATE
