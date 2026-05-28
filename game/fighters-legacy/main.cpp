@@ -13,6 +13,7 @@
 #include "loop/ISimUpdate.h"
 #include "openal/OALAudio.h"
 #include "sandbox/SandboxInspector.h"
+#include "sdl3/SDL3Cursor.h"
 #include "sdl3/SDL3Display.h"
 #include "sdl3/SDL3Filesystem.h"
 #include "sdl3/SDL3Input.h"
@@ -115,8 +116,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Step 11.5: Display — usable now that SDL_INIT_VIDEO is up.
+    // Step 11.5: Display and cursor — usable now that SDL_INIT_VIDEO is up.
     p.display = std::make_unique<SDL3Display>();
+    p.cursor = std::make_unique<SDL3Cursor>();
 
     // Step 12: Renderer.
     auto renderer = std::make_unique<VkRenderer>();
@@ -194,6 +196,7 @@ int main(int argc, char** argv) {
     // Step 19: Clean shutdown.
     gameLoop.stop(); // join sim thread before any HAL teardown
     inspector.reset();
+    p.cursor.reset(); // destroy cursor while SDL video is still alive (before SDL_Quit)
     p.audio->shutdown();
     p.renderer->shutdown();
     p.window->shutdown();

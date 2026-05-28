@@ -3,6 +3,7 @@
 
 #include "IAsyncFilesystem.h"
 #include "IAudio.h"
+#include "ICursor.h"
 #include "IDisplay.h"
 #include "IFilesystem.h"
 #include "IInput.h"
@@ -313,6 +314,21 @@ struct MockAsyncFilesystem : public IAsyncFilesystem {
     }
     const char* getLastError() const override {
         return lastErrorBuf.empty() ? nullptr : lastErrorBuf.c_str();
+    }
+};
+
+struct MockCursor : public ICursor {
+    CursorShape lastShape{CursorShape::Arrow};
+    bool customCursorSet{false};
+
+    void setCursor(CursorShape shape) override {
+        lastShape = shape;
+    }
+    void setCustomCursor(const void*, int, int, int, int) override {
+        customCursorSet = true;
+    }
+    const char* getLastError() const override {
+        return nullptr;
     }
 };
 
