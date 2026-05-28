@@ -7,6 +7,7 @@
 #include "SDL3Window.h"
 #include "IWindowEventHandler.h"
 #include <SDL3/SDL.h>
+#include <cmath>
 #include <vector>
 
 bool SDL3Window::init(const char* title, int width, int height) {
@@ -113,4 +114,74 @@ int SDL3Window::showMessageBox(MessageBoxType type, const char* title, const cha
 
 void SDL3Window::openURL(const char* url) {
     SDL_OpenURL(url);
+}
+
+void SDL3Window::setTitle(const char* title) {
+    if (m_window)
+        SDL_SetWindowTitle(m_window, title);
+}
+
+bool SDL3Window::setFullscreen(bool fullscreen) {
+    if (!m_window)
+        return false;
+    if (!SDL_SetWindowFullscreen(m_window, fullscreen)) {
+        m_lastError = SDL_GetError();
+        return false;
+    }
+    return true;
+}
+
+bool SDL3Window::setDisplayMode(const IDisplay::DisplayMode& mode) {
+    if (!m_window)
+        return false;
+    m_pendingMode = mode;
+
+    SDL_DisplayID displayId = SDL_GetDisplayForWindow(m_window);
+    if (!displayId) {
+        m_lastError = SDL_GetError();
+        return false;
+    }
+
+    int count = 0;
+    auto modes = SDL_GetFullscreenDisplayModes(displayId, &count);
+    if (!modes) {
+        m_lastError = SDL_GetError();
+        return false;
+    }
+
+    constexpr float kRefreshEpsilon = 0.5f;
+    for (int i = 0; i < count; ++i) {
+        if (modes[i]->w == mode.width && modes[i]->h == mode.height &&
+            std::abs(modes[i]->refresh_rate - mode.refreshRate) < kRefreshEpsilon) {
+            if (!SDL_SetWindowFullscreenMode(m_window, modes[i])) {
+                m_lastError = SDL_GetError();
+                return false;
+            }
+            return true;
+        }
+    }
+
+    m_lastError = "no matching display mode found";
+    return false;
+}
+
+int SDL3Window::getCurrentMonitorId() const {
+    if (!m_window)
+        return -1;
+    SDL_DisplayID id = SDL_GetDisplayForWindow(m_window);
+    if (!id)
+        return -1;
+    int count = 0;
+    SDL_DisplayID* displays = SDL_GetDisplays(&count);
+    if (!displays)
+        return -1;
+    int result = -1;
+    for (int i = 0; i < count; ++i) {
+        if (displays[i] == id) {
+            result = i;
+            break;
+        }
+    }
+    SDL_free(displays);
+    return result;
 }

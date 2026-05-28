@@ -20,6 +20,10 @@ class SDL3Window : public IWindow {
     int showMessageBox(MessageBoxType type, const char* title, const char* message, const MessageBoxButton* buttons,
                        int numButtons) override;
     void openURL(const char* url) override;
+    void setTitle(const char* title) override;
+    bool setFullscreen(bool fullscreen) override;
+    bool setDisplayMode(const IDisplay::DisplayMode& mode) override;
+    int getCurrentMonitorId() const override;
 
     // Wire up the input backend to receive SDL events during pollEvents().
     void setInputSink(ISDL3EventSink* sink) {
@@ -33,5 +37,6 @@ class SDL3Window : public IWindow {
     int m_width{0};
     int m_height{0};
     bool m_shouldClose{false};
+    IDisplay::DisplayMode m_pendingMode{};
     mutable std::string m_lastError;
 };

@@ -59,6 +59,16 @@ struct MockWindow : IWindow {
     void openURL(const char* url) override {
         lastUrl = url ? url : "";
     }
+    void setTitle(const char*) override {}
+    bool setFullscreen(bool) override {
+        return false;
+    }
+    bool setDisplayMode(const IDisplay::DisplayMode&) override {
+        return false;
+    }
+    int getCurrentMonitorId() const override {
+        return -1;
+    }
 };
 
 // ---------------------------------------------------------------------------

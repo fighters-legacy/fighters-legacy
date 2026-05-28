@@ -3,6 +3,7 @@
 
 #include "IAsyncFilesystem.h"
 #include "IAudio.h"
+#include "IDisplay.h"
 #include "IFilesystem.h"
 #include "IInput.h"
 #include "ILogger.h"
@@ -312,5 +313,27 @@ struct MockAsyncFilesystem : public IAsyncFilesystem {
     }
     const char* getLastError() const override {
         return lastErrorBuf.empty() ? nullptr : lastErrorBuf.c_str();
+    }
+};
+
+struct MockDisplay : public IDisplay {
+    int monitorCount = 1;
+    std::vector<DisplayMode> modes;
+    float mockRefreshRate = 60.0f;
+
+    int getMonitorCount() const override {
+        return monitorCount;
+    }
+    const char* getMonitorName(int id) const override {
+        return (id >= 0 && id < monitorCount) ? "Mock Monitor" : nullptr;
+    }
+    std::vector<DisplayMode> listModes(int) const override {
+        return modes;
+    }
+    float getRefreshRate(int id) const override {
+        return (id >= 0 && id < monitorCount) ? mockRefreshRate : 0.0f;
+    }
+    const char* getLastError() const override {
+        return nullptr;
     }
 };
