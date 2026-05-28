@@ -10,6 +10,7 @@
 #include "IFilesystem.h"
 #include "IFilesystemWatcher.h"
 #include "IInput.h"
+#include "IJoystick.h"
 #include "ILogger.h"
 #include "INetwork.h"
 #include "IRenderer.h"
@@ -36,6 +37,8 @@
 //   4. renderer          — depends on window
 //   5. audio             — independent of window/renderer
 //   6. input             — shares SDL3 event loop with window (same backend object)
+//   6.5 joystick         — null in headless/test mode; wire setJoystickSink() before window->init();
+//                          flush() each frame alongside input->flush()
 //   7. network           — independent; init last as it may open a port immediately
 //
 // C++ destroys members in reverse declaration order, so logger is declared
@@ -51,5 +54,6 @@ struct Platform {
     std::unique_ptr<IRenderer> renderer;
     std::unique_ptr<IAudio> audio;
     std::unique_ptr<IInput> input;
+    std::unique_ptr<IJoystick> joystick; // null in headless/test mode; flush() each frame
     std::unique_ptr<INetwork> network;
 };

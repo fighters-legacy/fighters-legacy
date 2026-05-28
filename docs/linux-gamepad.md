@@ -80,4 +80,30 @@ All buttons, axes, and rumble should respond correctly.
 
 - This setup has been tested with the **Microsoft Xbox Elite Series 2** over Bluetooth on Fedora fc44.
 - Wired USB connections typically work without xpadneo.
-- SDL3 is configured in the engine to deliver gamepad events regardless of window focus (`SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS`), so the game does not need to be the focused window for controller input to work.
+- SDL3 is configured in the engine to deliver joystick and gamepad events regardless of window focus (`SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS`), so the game does not need to be the focused window for controller input to work.
+
+---
+
+## HOTAS and joystick devices
+
+HOTAS throttle quadrants, rudder pedals, and flight sticks appear as evdev nodes
+(`/dev/input/eventX`) on Linux. Adding your user to the `input` group (see above) covers
+most devices. If your HOTAS is not responding, create a udev rule for its vendor name:
+
+```bash
+sudo tee /etc/udev/rules.d/61-hotas.rules > /dev/null <<'EOF'
+KERNEL=="event*", SUBSYSTEM=="input", ATTRS{name}=="*Thrustmaster*", MODE="0664", GROUP="input"
+KERNEL=="event*", SUBSYSTEM=="input", ATTRS{name}=="*CH Products*",   MODE="0664", GROUP="input"
+KERNEL=="event*", SUBSYSTEM=="input", ATTRS{name}=="*Logitech*",      MODE="0664", GROUP="input"
+KERNEL=="event*", SUBSYSTEM=="input", ATTRS{name}=="*VIRPIL*",        MODE="0664", GROUP="input"
+KERNEL=="event*", SUBSYSTEM=="input", ATTRS{name}=="*VKB*",           MODE="0664", GROUP="input"
+EOF
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+To find the exact name for your device, run `udevadm info /dev/input/eventX` (where `X`
+is the event number shown in `evtest`) and match on `ATTRS{name}`. Add a new line for
+your brand using the same pattern.
+
+Reconnect the device after applying the rules (or run `sudo udevadm trigger`).
