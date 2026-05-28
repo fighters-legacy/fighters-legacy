@@ -14,6 +14,7 @@ class SDL3Input : public IInput, public ISDL3EventSink {
     // --- IInput ---
     bool isKeyDown(Key key) const override;
     bool isKeyJustPressed(Key key) const override;
+    const char* getKeyName(Key key) const override;
 
     void getMousePosition(int& x, int& y) const override;
     void getMouseDelta(int& dx, int& dy) const override;

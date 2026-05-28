@@ -143,6 +143,10 @@ class IInput {
     // True only on the first frame the key is pressed (one-frame pulse).
     virtual bool isKeyJustPressed(Key key) const = 0;
 
+    // Short, locale-appropriate display name for the key (e.g. "W", "Left Shift", "F1").
+    // Returns "Unknown" for Key::Unknown. Pointer is valid for the lifetime of the IInput instance.
+    virtual const char* getKeyName(Key key) const = 0;
+
     // --- Mouse ---
 
     virtual void getMousePosition(int& x, int& y) const = 0;

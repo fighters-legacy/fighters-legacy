@@ -4,10 +4,22 @@
 #include "mock_hal.h"
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
+#include <string>
 
 // ---------------------------------------------------------------------------
 // MockInput -- pure interface contract tests (no SDL3 required)
 // ---------------------------------------------------------------------------
+
+TEST_CASE("MockInput getKeyName returns Unknown for Key::Unknown", "[input_hal]") {
+    MockInput input;
+    CHECK(std::string(input.getKeyName(Key::Unknown)) == "Unknown");
+}
+
+TEST_CASE("MockInput getKeyName returns Unknown for any key", "[input_hal]") {
+    MockInput input;
+    CHECK(std::string(input.getKeyName(Key::A)) == "Unknown");
+    CHECK(std::string(input.getKeyName(Key::Space)) == "Unknown");
+}
 
 TEST_CASE("MockInput supportsRumble returns false by default", "[input_hal]") {
     MockInput input;
@@ -107,5 +119,35 @@ TEST_CASE("SDL3Input stopRumble does not crash when no gamepad connected (headle
     CHECK(input.getGamepadCount() == 0);
     input.stopRumble(0);
     SUCCEED();
+    window.shutdown();
+}
+
+TEST_CASE("SDL3Input getKeyName returns Unknown for Key::Unknown (headless)", "[input_hal][sdl3]") {
+    useHeadlessDriver();
+    SDL3Window window;
+    if (!window.init("input-hal-test", 64, 64))
+        SKIP("SDL3 headless init failed");
+    SDL3Input input;
+    window.setInputSink(&input);
+    CHECK(std::string(input.getKeyName(Key::Unknown)) == "Unknown");
+    window.shutdown();
+}
+
+TEST_CASE("SDL3Input getKeyName returns non-empty string for known keys (headless)", "[input_hal][sdl3]") {
+    useHeadlessDriver();
+    SDL3Window window;
+    if (!window.init("input-hal-test", 64, 64))
+        SKIP("SDL3 headless init failed");
+    SDL3Input input;
+    window.setInputSink(&input);
+    // Layout-independent keys: SDL names are stable across all platforms and layouts
+    CHECK(std::string(input.getKeyName(Key::Space)) == "Space");
+    CHECK(std::string(input.getKeyName(Key::Escape)) == "Escape");
+    CHECK(std::string(input.getKeyName(Key::F1)) == "F1");
+    CHECK(std::string(input.getKeyName(Key::LeftShift)) == "Left Shift");
+    // Key::Enter: macOS returns "Return", other platforms "Return" or "Enter" -- just check non-empty
+    const char* enterName = input.getKeyName(Key::Enter);
+    REQUIRE(enterName != nullptr);
+    CHECK(enterName[0] != '\0');
     window.shutdown();
 }
