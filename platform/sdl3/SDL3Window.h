@@ -30,10 +30,16 @@ class SDL3Window : public IWindow {
         m_inputSink = sink;
     }
 
+    // Wire up the joystick backend to receive SDL events during pollEvents().
+    void setJoystickSink(ISDL3EventSink* sink) {
+        m_joystickSink = sink;
+    }
+
   private:
     SDL_Window* m_window{nullptr};
     IWindowEventHandler* m_handler{nullptr};
     ISDL3EventSink* m_inputSink{nullptr};
+    ISDL3EventSink* m_joystickSink{nullptr};
     int m_width{0};
     int m_height{0};
     bool m_shouldClose{false};

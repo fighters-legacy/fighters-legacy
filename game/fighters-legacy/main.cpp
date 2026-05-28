@@ -17,6 +17,7 @@
 #include "sdl3/SDL3Display.h"
 #include "sdl3/SDL3Filesystem.h"
 #include "sdl3/SDL3Input.h"
+#include "sdl3/SDL3Joystick.h"
 #include "sdl3/SDL3Window.h"
 #include "vulkan/VkRenderer.h"
 
@@ -84,10 +85,15 @@ int main(int argc, char** argv) {
     }
     p.audio = std::move(oalAudio);
 
-    // Step 7: Input backend — keep raw pointer before move for setInputSink() below.
+    // Step 7: Input and joystick backends — keep raw pointers before move for sink
+    // wiring below.
     auto sdl3Input = std::make_unique<SDL3Input>();
     SDL3Input* rawInput = sdl3Input.get();
     p.input = std::move(sdl3Input);
+
+    auto sdl3Joystick = std::make_unique<SDL3Joystick>();
+    SDL3Joystick* rawJoystick = sdl3Joystick.get();
+    p.joystick = std::move(sdl3Joystick);
 
     // Step 8: Window (SDL_ShowMessageBox safe before video init per SDL3 docs).
     auto window = std::make_unique<SDL3Window>();
@@ -106,9 +112,11 @@ int main(int argc, char** argv) {
         {userDataDir.string(), "https://github.com/jomkz/fighters-legacy/issues/new", rawLogger, p.window.get()},
         crashInfo);
 
-    // Step 11: Platform init — wire input sink before window init so gamepad/key
+    // Step 11: Platform init — wire input and joystick sinks before window init so
     // events are routed during the very first pollEvents() call.
-    static_cast<SDL3Window*>(p.window.get())->setInputSink(rawInput);
+    auto* sdlWindow = static_cast<SDL3Window*>(p.window.get());
+    sdlWindow->setInputSink(rawInput);
+    sdlWindow->setJoystickSink(rawJoystick);
 
     if (!p.window->init("Fighters Legacy", 1280, 720)) {
         rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "window init failed");
@@ -191,6 +199,7 @@ int main(int argc, char** argv) {
         [[maybe_unused]] float alpha = gameLoop.shellTick();
         p.renderer->endFrame();
         p.input->flush();
+        p.joystick->flush();
     }
 
     // Step 19: Clean shutdown.

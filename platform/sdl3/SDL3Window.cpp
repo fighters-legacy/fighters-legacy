@@ -11,6 +11,7 @@
 #include <vector>
 
 bool SDL3Window::init(const char* title, int width, int height) {
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         m_lastError = SDL_GetError();
         return false;
@@ -44,6 +45,8 @@ void SDL3Window::pollEvents() {
     while (SDL_PollEvent(&ev)) {
         if (m_inputSink)
             m_inputSink->onSDLEvent(ev);
+        if (m_joystickSink)
+            m_joystickSink->onSDLEvent(ev);
         switch (ev.type) {
         case SDL_EVENT_QUIT:
             m_shouldClose = true;

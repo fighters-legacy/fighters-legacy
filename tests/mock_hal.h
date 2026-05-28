@@ -7,6 +7,7 @@
 #include "IDisplay.h"
 #include "IFilesystem.h"
 #include "IInput.h"
+#include "IJoystick.h"
 #include "ILogger.h"
 
 #include <cstring>
@@ -349,6 +350,46 @@ struct MockDisplay : public IDisplay {
     float getRefreshRate(int id) const override {
         return (id >= 0 && id < monitorCount) ? mockRefreshRate : 0.0f;
     }
+    const char* getLastError() const override {
+        return nullptr;
+    }
+};
+
+struct MockJoystick : public IJoystick {
+    int count = 0;
+
+    int getJoystickCount() const override {
+        return count;
+    }
+    const char* getJoystickName(int) const override {
+        return "MockJoystick";
+    }
+    const char* getJoystickGuid(int) const override {
+        return "00000000000000000000000000000000";
+    }
+    int getAxisCount(int) const override {
+        return 0;
+    }
+    float getAxisValue(int, int) const override {
+        return 0.0f;
+    }
+    int getHatCount(int) const override {
+        return 0;
+    }
+    HatPosition getHatPosition(int, int) const override {
+        return HatPosition::Centered;
+    }
+    int getButtonCount(int) const override {
+        return 0;
+    }
+    bool isButtonDown(int, int) const override {
+        return false;
+    }
+    bool isButtonJustPressed(int, int) const override {
+        return false;
+    }
+    void setEventHandler(IJoystickEventHandler*) override {}
+    void flush() override {}
     const char* getLastError() const override {
         return nullptr;
     }
