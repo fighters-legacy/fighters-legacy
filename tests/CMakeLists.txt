@@ -107,6 +107,21 @@ if(WIN32)
 endif()
 catch_discover_tests(test_sdl3 DISCOVERY_MODE PRE_TEST)
 
+add_executable(test_cursor test_cursor.cpp)
+target_link_libraries(test_cursor PRIVATE Catch2::Catch2WithMain platform-sdl3)
+target_include_directories(test_cursor PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    "${CMAKE_SOURCE_DIR}/platform/sdl3"
+)
+if(WIN32)
+    add_custom_command(TARGET test_cursor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:SDL3::SDL3>
+            $<TARGET_FILE_DIR:test_cursor>
+    )
+endif()
+catch_discover_tests(test_cursor DISCOVERY_MODE PRE_TEST)
+
 add_executable(test_display test_display.cpp)
 target_link_libraries(test_display PRIVATE Catch2::Catch2WithMain platform-sdl3)
 target_include_directories(test_display PRIVATE
