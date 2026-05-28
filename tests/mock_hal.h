@@ -83,6 +83,9 @@ struct MockInput : public IInput {
     bool isKeyJustPressed(Key k) const override {
         return justPressed.count(k) > 0;
     }
+    const char* getKeyName(Key) const override {
+        return "Unknown";
+    }
 
     void getMousePosition(int& x, int& y) const override {
         x = y = 0;
