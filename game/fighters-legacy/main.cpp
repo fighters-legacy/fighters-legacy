@@ -13,6 +13,7 @@
 #include "loop/ISimUpdate.h"
 #include "openal/OALAudio.h"
 #include "sandbox/SandboxInspector.h"
+#include "sdl3/SDL3Display.h"
 #include "sdl3/SDL3Filesystem.h"
 #include "sdl3/SDL3Input.h"
 #include "sdl3/SDL3Window.h"
@@ -113,6 +114,9 @@ int main(int argc, char** argv) {
         crashReporter.shutdown();
         return 1;
     }
+
+    // Step 11.5: Display — usable now that SDL_INIT_VIDEO is up.
+    p.display = std::make_unique<SDL3Display>();
 
     // Step 12: Renderer.
     auto renderer = std::make_unique<VkRenderer>();

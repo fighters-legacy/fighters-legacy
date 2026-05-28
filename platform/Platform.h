@@ -5,6 +5,7 @@
 
 #include "IAsyncFilesystem.h"
 #include "IAudio.h"
+#include "IDisplay.h"
 #include "IFilesystem.h"
 #include "IFilesystemWatcher.h"
 #include "IInput.h"
@@ -28,6 +29,7 @@
 //   2.6 asyncFilesystem  — optional; null in headless and test mode; init after filesystem;
 //                          call service() once per frame from the game loop
 //   3. window            — required by renderer (nativeHandle for VkSurfaceKHR)
+//   3.5 display          — optional; construct after window->init() (requires SDL_INIT_VIDEO)
 //   4. renderer          — depends on window
 //   5. audio             — independent of window/renderer
 //   6. input             — shares SDL3 event loop with window (same backend object)
@@ -41,6 +43,7 @@ struct Platform {
     std::unique_ptr<IFilesystemWatcher> filesystemWatcher; // null in campaign / headless mode
     std::unique_ptr<IAsyncFilesystem> asyncFilesystem;     // null in headless / test mode; service() each frame
     std::unique_ptr<IWindow> window;
+    std::unique_ptr<IDisplay> display; // null until assigned; usable after window->init()
     std::unique_ptr<IRenderer> renderer;
     std::unique_ptr<IAudio> audio;
     std::unique_ptr<IInput> input;

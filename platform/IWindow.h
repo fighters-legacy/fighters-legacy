@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "IDisplay.h"
 #include "IWindowEventHandler.h"
 
 // Threading: all methods must be called from the main thread.
@@ -44,4 +45,19 @@ class IWindow {
 
     // Opens a URL or file:// URI in the OS default handler.
     virtual void openURL(const char* url) = 0;
+
+    // Updates the window title bar.
+    virtual void setTitle(const char* title) = 0;
+
+    // Enters or exits fullscreen mode using the mode last set by setDisplayMode
+    // (or the desktop mode if setDisplayMode was never called). Returns true on success.
+    virtual bool setFullscreen(bool fullscreen) = 0;
+
+    // Sets the display mode to apply when in fullscreen. No visible effect while
+    // windowed. The mode must come from IDisplay::listModes(). Returns true on success.
+    virtual bool setDisplayMode(const IDisplay::DisplayMode& mode) = 0;
+
+    // Returns the 0-based monitor index (matching IDisplay::getMonitorCount() range)
+    // that currently contains most of this window. Returns -1 on error or before init().
+    virtual int getCurrentMonitorId() const = 0;
 };

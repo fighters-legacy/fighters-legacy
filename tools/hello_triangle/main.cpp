@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "IWindowEventHandler.h"
 #include "Platform.h"
+#include "SDL3Display.h"
 #include "SDL3Window.h"
 #include "VkRenderer.h"
 #include <atomic>
@@ -57,6 +58,7 @@ int main() {
     std::signal(SIGTERM, onSignal);
     Platform p;
     p.window = std::make_unique<SDL3Window>();
+    p.display = std::make_unique<SDL3Display>();
     p.renderer = std::make_unique<VkRenderer>();
     return App(p).run();
 }
