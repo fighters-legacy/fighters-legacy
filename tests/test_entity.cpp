@@ -234,7 +234,7 @@ TEST_CASE("EntityPool: slot reuse increments generation", "[entity_pool]") {
     CHECK_FALSE(pool.valid(first));
 }
 
-TEST_CASE("EntityPool: soft cap enforced — alloc returns null when full", "[entity_pool]") {
+TEST_CASE("EntityPool: soft cap enforced, alloc returns null when full", "[entity_pool]") {
     fl::EntityPool pool;
     pool.setSoftCap(3);
     auto a = pool.alloc();
