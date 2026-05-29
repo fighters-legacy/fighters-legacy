@@ -26,16 +26,24 @@ FA support lives in jomkz/fa-content. No FA-specific code belongs in this repo.
 
 ### Renderer architecture (Phase 2)
 
-`VkRenderer` (platform/vulkan/) uses Vulkan 1.3 dynamic rendering (`VK_KHR_dynamic_rendering`) — no `VkRenderPass` or `VkFramebuffer` objects. Two passes per frame:
+`VkRenderer` (platform/vulkan/) uses Vulkan 1.3 dynamic rendering (`VK_KHR_dynamic_rendering`) — no `VkRenderPass` or `VkFramebuffer` objects. Four passes per frame:
 
-1. **Forward** — geometry into HDR offscreen (`VK_FORMAT_R16G16B16A16_SFLOAT`) with reverse-Z depth (`VK_FORMAT_D32_SFLOAT`, far plane = 0.0, depth clear = 0.0, compare = GREATER).
-2. **Tonemap** — Khronos PBR Neutral, fullscreen HDR → swapchain (`B8G8R8A8_SRGB`).
+1. **Shadow** — `kNumCascades=4` PSSM cascades rendered into a `kShadowRes=2048` 2D depth array (`VK_FORMAT_D32_SFLOAT`, **forward-Z**, depth clear = 1.0). Cascade matrices computed via tight bounding-sphere fit; PCF comparison sampler (`VK_COMPARE_OP_LESS_OR_EQUAL`). `ShadowUBO` bound at set 0, binding 2; `sampler2DArrayShadow` at set 0, binding 3.
+2. **Forward** — Cook-Torrance PBR (GGX NDF, Smith geometry, Schlick Fresnel) with normal maps + ORM textures (set 1: base color / normal / ORM at bindings 0–2). Geometry into HDR offscreen (`VK_FORMAT_R16G16B16A16_SFLOAT`) with **reverse-Z** depth (`VK_FORMAT_D32_SFLOAT`, far = 0.0, depth clear = 0.0, compare = GREATER).
+3. **Sky** — gradient + sun disc via fullscreen triangle (`tonemap.vert`) with `GREATER_OR_EQUAL` depth test, depth write off; renders only where depth == 0.0 (reverse-Z far, no geometry drawn). `SkyPushConstants` (96 bytes, fragment only): `invViewProj + sunDirection + sunColor`.
+4. **Tonemap** — Khronos PBR Neutral, fullscreen HDR → swapchain (`B8G8R8A8_SRGB`).
+
+**Note:** shadow passes use forward-Z (near=0, far=1); scene depth uses reverse-Z. These are independent depth spaces.
 
 World convention: right-handed, Y-up, meters (matches glTF). Vulkan clip-space Y-flip handled in the projection matrix. Camera-relative rendering rebases transforms to the camera origin before GPU upload (float32-safe at arbitrary theater scale).
+
+**Texture upload:** KTX2 Basis Universal → BC7 (desktop, if `VK_FORMAT_BC7_UNORM_BLOCK` supported) → ASTC 4×4 (Apple Silicon, if BC7 absent) → RGBA32 fallback. All mip levels uploaded via `createGpuImageCompressed` using `ktxTexture_GetImageOffset` per mip. sRGB/UNORM views chosen per texture semantic (base color = sRGB, normal/ORM = UNORM). Normal maps use tangent-space flat normal default `{128,128,255}`; ORM defaults to all-ones linear white.
 
 Runtime shader discovery: `VkRenderer::resolveShaderDir()` tries `SDL_GetBasePath()` + `"shaders/"` first, then macOS `.app` bundle path, then the build-tree `FL_SHADER_DIR` fallback. Release packages must stage `*.spv` into `dist/shaders/` (see `release.yml`).
 
 **Renderer instantiation:** game and tool code must use `createVulkanRenderer()` from `platform/vulkan/VkRendererFactory.h` — never include `VkRenderer.h` directly. `VkRenderer.h` pulls in `VkResources.h` → `vk_mem_alloc.h`, which is only on the private include path of `platform-vulkan`.
+
+**GLM extension headers:** `VkRenderer.cpp` requires `<glm/gtc/matrix_transform.hpp>` (for `glm::lookAt`) and `<glm/ext/matrix_clip_space.hpp>` (for `glm::orthoZO`). These are not in `<glm/glm.hpp>` core.
 
 ## Build
 

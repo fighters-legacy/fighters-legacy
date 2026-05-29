@@ -52,6 +52,8 @@ struct GpuTexture {
 
 struct GpuMaterial {
     TextureHandle baseColorTexture{};
+    TextureHandle normalTexture{};
+    TextureHandle ormTexture{};
     glm::vec4 baseColorFactor{1.0f};
     float metallicFactor{0.0f};
     float roughnessFactor{1.0f};
@@ -87,9 +89,15 @@ class VkResourceManager {
     const GpuTexture* getTexture(TextureHandle h) const;
     const GpuMaterial* getMaterial(MaterialHandle h) const;
 
-    // Default 1×1 white SRGB texture — bound when a material has no base color.
+    // Default textures bound when a material omits a texture slot.
     TextureHandle defaultWhiteTexture() const {
         return m_defaultWhite;
+    }
+    TextureHandle defaultFlatNormalTexture() const {
+        return m_defaultFlatNormal;
+    }
+    TextureHandle defaultWhiteLinearTexture() const {
+        return m_defaultWhiteLinear;
     }
 
     // Format support queried at init; used to select Basis transcode target.
@@ -109,6 +117,12 @@ class VkResourceManager {
                         GpuTexture& tex);
     bool createDefaultSampler(VkSampler& out);
     bool createDefaultWhiteTexture();
+    bool createDefaultFlatNormalTexture();
+    bool createDefaultWhiteLinearTexture();
+    // Upload a pre-transcoded block-compressed KTX2 texture with all mip levels.
+    // ktxHandle is a ktxTexture2* cast to void* to avoid exposing ktx.h in this header.
+    bool createGpuImageCompressed(const uint8_t* data, VkDeviceSize dataSize, uint32_t width, uint32_t height,
+                                  uint32_t numMips, VkFormat format, void* ktxHandle, GpuTexture& tex);
 
     // One-shot command buffer for transfers.
     VkCommandBuffer beginOneShot();
@@ -143,6 +157,8 @@ class VkResourceManager {
     uint64_t m_frame{0};
 
     TextureHandle m_defaultWhite{};
+    TextureHandle m_defaultFlatNormal{};  // 1×1 UNORM {128,128,255,255} flat normal
+    TextureHandle m_defaultWhiteLinear{}; // 1×1 UNORM {255,255,255,255} for ORM
     bool m_supportsBC7{false};
     bool m_supportsASTC4x4{false};
 

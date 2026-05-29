@@ -99,9 +99,9 @@ bool VkResourceManager::init(VkDevice device, VkPhysicalDevice physDevice, VkIns
     }
 
     // Descriptor pool for per-material descriptor sets.
-    // Pre-allocate space for kMaxMaterials = 256 combined image samplers.
+    // 3 combined image samplers per material (base color, normal, ORM).
     constexpr uint32_t kMaxMaterials = 256;
-    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxMaterials};
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxMaterials * 3};
     VkDescriptorPoolCreateInfo poolCI{};
     poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolCI.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -114,6 +114,10 @@ bool VkResourceManager::init(VkDevice device, VkPhysicalDevice physDevice, VkIns
     }
 
     if (!createDefaultWhiteTexture())
+        return false;
+    if (!createDefaultFlatNormalTexture())
+        return false;
+    if (!createDefaultWhiteLinearTexture())
         return false;
 
     return true;
@@ -372,10 +376,117 @@ bool VkResourceManager::createDefaultWhiteTexture() {
     if (!createGpuImage(white, 1, 1, 1, VK_FORMAT_R8G8B8A8_SRGB, tex))
         return false;
     tex.alive = true;
-
     m_textures.push_back(tex);
     m_defaultWhite = TextureHandle{static_cast<uint32_t>(m_textures.size())};
     return true;
+}
+
+bool VkResourceManager::createDefaultFlatNormalTexture() {
+    // Tangent-space flat normal: (0,0,+1) encoded as RGB={128,128,255}.
+    const uint8_t flatNormal[4] = {128, 128, 255, 255};
+    GpuTexture tex{};
+    if (!createGpuImage(flatNormal, 1, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, tex))
+        return false;
+    tex.alive = true;
+    m_textures.push_back(tex);
+    m_defaultFlatNormal = TextureHandle{static_cast<uint32_t>(m_textures.size())};
+    return true;
+}
+
+bool VkResourceManager::createDefaultWhiteLinearTexture() {
+    // All-ones ORM: occlusion=1, roughness factor passes through, metallic=0 via factor.
+    const uint8_t white[4] = {255, 255, 255, 255};
+    GpuTexture tex{};
+    if (!createGpuImage(white, 1, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, tex))
+        return false;
+    tex.alive = true;
+    m_textures.push_back(tex);
+    m_defaultWhiteLinear = TextureHandle{static_cast<uint32_t>(m_textures.size())};
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// createGpuImageCompressed — upload BC7/ASTC KTX2 data with all mip levels
+// ---------------------------------------------------------------------------
+bool VkResourceManager::createGpuImageCompressed(const uint8_t* data, VkDeviceSize dataSize, uint32_t width,
+                                                 uint32_t height, uint32_t numMips, VkFormat format, void* ktxHandle,
+                                                 GpuTexture& tex) {
+    VkBuffer staging = VK_NULL_HANDLE;
+    VmaAllocation stagingAlloc{};
+    if (!createBuffer(dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, staging, stagingAlloc))
+        return false;
+
+    void* mapped = nullptr;
+    vmaMapMemory(m_allocator, stagingAlloc, &mapped);
+    std::memcpy(mapped, data, static_cast<std::size_t>(dataSize));
+    vmaUnmapMemory(m_allocator, stagingAlloc);
+
+    VkImageCreateInfo imageCI{};
+    imageCI.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageCI.imageType = VK_IMAGE_TYPE_2D;
+    imageCI.extent = {width, height, 1};
+    imageCI.mipLevels = numMips;
+    imageCI.arrayLayers = 1;
+    imageCI.format = format;
+    imageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageCI.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageCI.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageCI.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    if (vmaCreateImage(m_allocator, &imageCI, &aci, &tex.image, &tex.alloc, nullptr) != VK_SUCCESS) {
+        vmaDestroyBuffer(m_allocator, staging, stagingAlloc);
+        return false;
+    }
+
+    VkCommandBuffer cmd = beginOneShot();
+
+    imageBarrierSimple(cmd, tex.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                       VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_IMAGE_ASPECT_COLOR_BIT, numMips);
+
+    // One copy region per mip level; offsets come from the KTX2 container.
+    std::vector<VkBufferImageCopy> regions(numMips);
+    auto* ktx = reinterpret_cast<ktxTexture*>(ktxHandle);
+    for (uint32_t mip = 0; mip < numMips; ++mip) {
+        ktx_size_t offset = 0;
+        ktxTexture_GetImageOffset(ktx, mip, 0, 0, &offset);
+
+        const uint32_t mipW = std::max(width >> mip, 1u);
+        const uint32_t mipH = std::max(height >> mip, 1u);
+
+        VkBufferImageCopy& r = regions[mip];
+        r = {};
+        r.bufferOffset = static_cast<VkDeviceSize>(offset);
+        r.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        r.imageSubresource.mipLevel = mip;
+        r.imageSubresource.layerCount = 1;
+        r.imageExtent = {mipW, mipH, 1};
+    }
+    vkCmdCopyBufferToImage(cmd, staging, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           static_cast<uint32_t>(regions.size()), regions.data());
+
+    imageBarrierSimple(cmd, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                       VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_COLOR_BIT, numMips);
+
+    endOneShot(cmd);
+    vmaDestroyBuffer(m_allocator, staging, stagingAlloc);
+
+    VkImageViewCreateInfo viewCI{};
+    viewCI.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewCI.image = tex.image;
+    viewCI.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewCI.format = format;
+    viewCI.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewCI.subresourceRange.levelCount = numMips;
+    viewCI.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(m_device, &viewCI, nullptr, &tex.view) != VK_SUCCESS)
+        return false;
+
+    return createDefaultSampler(tex.sampler);
 }
 
 // ---------------------------------------------------------------------------
@@ -565,9 +676,21 @@ TextureHandle VkResourceManager::createTexture(const TextureUploadDesc& desc) {
         }
 
         if (ktxTexture2_NeedsTranscoding(ktx)) {
-            // PR 2: transcode to RGBA32 (uncompressed); compressed BC7/ASTC
-            // upload with per-mip regions is added in PR 3.
-            if (ktxTexture2_TranscodeBasis(ktx, KTX_TTF_RGBA32, 0) != KTX_SUCCESS) {
+            // Select the best GPU-native format for this device:
+            //   BC7  — desktop (Windows / Linux), broad GPU coverage
+            //   ASTC — Apple Silicon (M-series has no BC support)
+            //   RGBA32 — universal fallback for older / software renderers
+            ktx_transcode_fmt_e transcodeTarget;
+            if (m_supportsBC7)
+                transcodeTarget = KTX_TTF_BC7_RGBA;
+            else if (m_supportsASTC4x4)
+                transcodeTarget = KTX_TTF_ASTC_4x4_RGBA;
+            else
+                transcodeTarget = KTX_TTF_RGBA32;
+
+            if (ktxTexture2_TranscodeBasis(ktx, transcodeTarget, 0) != KTX_SUCCESS) {
+                std::fprintf(stderr, "[VkResources] KTX2 transcode failed (%.*s)\n", static_cast<int>(desc.name.size()),
+                             desc.name.data());
                 ktxTexture_Destroy(reinterpret_cast<ktxTexture*>(ktx));
                 return m_defaultWhite;
             }
@@ -575,10 +698,28 @@ TextureHandle VkResourceManager::createTexture(const TextureUploadDesc& desc) {
 
         const uint32_t w = ktx->baseWidth;
         const uint32_t h = ktx->baseHeight;
+        const uint32_t numMips = ktx->numLevels;
         const uint8_t* data = ktxTexture_GetData(reinterpret_cast<ktxTexture*>(ktx));
-        const VkFormat fmt = desc.srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+        const VkDeviceSize size = ktxTexture_GetDataSize(reinterpret_cast<ktxTexture*>(ktx));
 
-        ok = createGpuImage(data, w, h, 1, fmt, tex);
+        VkFormat fmt;
+        bool compressed;
+        if (m_supportsBC7) {
+            fmt = desc.srgb ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK;
+            compressed = true;
+        } else if (m_supportsASTC4x4) {
+            fmt = desc.srgb ? VK_FORMAT_ASTC_4x4_SRGB_BLOCK : VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
+            compressed = true;
+        } else {
+            fmt = desc.srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+            compressed = false;
+        }
+
+        if (compressed)
+            ok = createGpuImageCompressed(data, size, w, h, numMips, fmt, ktx, tex);
+        else
+            ok = createGpuImage(data, w, h, 1, fmt, tex);
+
         ktxTexture_Destroy(reinterpret_cast<ktxTexture*>(ktx));
 
     } else {
@@ -619,6 +760,8 @@ TextureHandle VkResourceManager::createTexture(const TextureUploadDesc& desc) {
 MaterialHandle VkResourceManager::createMaterial(const MaterialDesc& desc) {
     GpuMaterial mat{};
     mat.baseColorTexture = desc.baseColorTexture;
+    mat.normalTexture = desc.normalTexture;
+    mat.ormTexture = desc.ormTexture;
     mat.baseColorFactor = desc.baseColorFactor;
     mat.metallicFactor = desc.metallicFactor;
     mat.roughnessFactor = desc.roughnessFactor;
@@ -633,25 +776,39 @@ MaterialHandle VkResourceManager::createMaterial(const MaterialDesc& desc) {
         return {};
     }
 
-    // Resolve base color texture; fall back to default white.
-    TextureHandle texH = desc.baseColorTexture.valid() ? desc.baseColorTexture : m_defaultWhite;
-    const GpuTexture* gpuTex = getTexture(texH);
-    if (!gpuTex)
-        gpuTex = getTexture(m_defaultWhite);
+    auto resolveOrDefault = [&](TextureHandle h, TextureHandle def) -> const GpuTexture* {
+        const GpuTexture* t = getTexture(h.valid() ? h : def);
+        return t ? t : getTexture(def);
+    };
 
-    VkDescriptorImageInfo imgInfo{};
-    imgInfo.sampler = gpuTex->sampler;
-    imgInfo.imageView = gpuTex->view;
-    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    const GpuTexture* baseColorGpu = resolveOrDefault(desc.baseColorTexture, m_defaultWhite);
+    const GpuTexture* normalGpu = resolveOrDefault(desc.normalTexture, m_defaultFlatNormal);
+    const GpuTexture* ormGpu = resolveOrDefault(desc.ormTexture, m_defaultWhiteLinear);
 
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = mat.descriptorSet;
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.pImageInfo = &imgInfo;
-    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+    auto makeImageInfo = [](const GpuTexture* t) {
+        VkDescriptorImageInfo info{};
+        info.sampler = t->sampler;
+        info.imageView = t->view;
+        info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        return info;
+    };
+
+    const VkDescriptorImageInfo imgInfos[3] = {
+        makeImageInfo(baseColorGpu),
+        makeImageInfo(normalGpu),
+        makeImageInfo(ormGpu),
+    };
+
+    VkWriteDescriptorSet writes[3]{};
+    for (uint32_t i = 0; i < 3; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = mat.descriptorSet;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &imgInfos[i];
+    }
+    vkUpdateDescriptorSets(m_device, 3, writes, 0, nullptr);
 
     mat.alive = true;
 
@@ -692,8 +849,8 @@ void VkResourceManager::destroyMesh(MeshHandle h) {
 void VkResourceManager::destroyTexture(TextureHandle h) {
     if (!h.valid() || h.id > m_textures.size())
         return;
-    if (h.id == m_defaultWhite.id)
-        return; // never destroy the default white texture
+    if (h.id == m_defaultWhite.id || h.id == m_defaultFlatNormal.id || h.id == m_defaultWhiteLinear.id)
+        return; // never destroy default textures
     GpuTexture& tex = m_textures[h.id - 1];
     if (!tex.alive)
         return;

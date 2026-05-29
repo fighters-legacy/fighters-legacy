@@ -12,6 +12,8 @@
 struct SDL_Window;
 
 static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+static constexpr uint32_t kNumCascades = 4;
+static constexpr uint32_t kShadowRes = 2048;
 
 // Depth format: D32_SFLOAT, reverse-Z (near→1.0, far→0.0; clear = 0.0; compare = GREATER).
 static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
@@ -41,6 +43,29 @@ struct ForwardPushConstants {
     float _pad[2]{}; // 8 bytes — total = 96
 };
 static_assert(sizeof(ForwardPushConstants) <= 128);
+
+// GPU shadow UBO — cascade view-proj matrices + cascade split distances.
+// std140: mat4[4] = 256 bytes, vec4 = 16 bytes → total 272 bytes.
+struct ShadowUBO {
+    glm::mat4 lightViewProj[kNumCascades]; // 256 bytes
+    glm::vec4 splitDepths;                 // x/y/z = VS end of cascades 0/1/2, w = shadow far
+};
+
+// Push constants for the depth-only shadow pass.
+struct ShadowPushConstants {
+    glm::mat4 model{1.0f};  // 64 bytes
+    uint32_t cascadeIdx{0}; // 4 bytes
+    float _pad[3]{};        // 12 bytes — total 80
+};
+static_assert(sizeof(ShadowPushConstants) <= 128);
+
+// Push constants for the sky pass (fragment stage only).
+struct SkyPushConstants {
+    glm::mat4 invViewProj{1.0f}; // 64 bytes
+    glm::vec4 sunDirection{};    // 16 bytes
+    glm::vec4 sunColor{};        // 16 bytes — total 96
+};
+static_assert(sizeof(SkyPushConstants) <= 128);
 
 class VkRenderer : public IRenderer {
   public:
@@ -94,16 +119,26 @@ class VkRenderer : public IRenderer {
 
     // ── Per-frame UBO descriptors ──────────────────────────────────────────
     bool createPerFrameDescriptorLayout();
+    bool createShadowDescriptorLayout();
     bool createMaterialDescriptorLayout();
     bool createPerFrameDescriptors();
 
-    // Write camera + light data into the current frame's UBO buffers.
+    // Write camera + light + shadow UBO data for the current frame.
     void writeFrameUBOs(const FrameScene& scene);
+
+    // Compute cascade split distances and light view-proj matrices.
+    void computeCascades(const FrameScene& scene, ShadowUBO& out);
+
+    // ── Shadow resources ───────────────────────────────────────────────────
+    bool createShadowResources();
+    void destroyShadowResources();
 
     // ── Pipelines ──────────────────────────────────────────────────────────
     bool createPipelineCache();
     bool createForwardPipeline();
     bool createTonemapPipeline();
+    bool createShadowPipeline();
+    bool createSkyPipeline();
 
     // ── Commands + sync ────────────────────────────────────────────────────
     bool createCommandPool();
@@ -152,10 +187,21 @@ class VkRenderer : public IRenderer {
     VkDescriptorPool m_tonemapPool{VK_NULL_HANDLE};
     VkDescriptorSet m_tonemapSet{VK_NULL_HANDLE};
 
-    // ── Per-frame descriptor set layout (set 0: camera + light UBOs) ─────
+    // ── Shadow map (2D array: kNumCascades layers × kShadowRes²) ─────────
+    VkImage m_shadowImage{VK_NULL_HANDLE};
+    VkDeviceMemory m_shadowMemory{VK_NULL_HANDLE};
+    VkImageView m_shadowArrayView{VK_NULL_HANDLE};              // for sampling in forward pass
+    std::array<VkImageView, kNumCascades> m_shadowLayerViews{}; // per-cascade for rendering
+    VkSampler m_shadowSampler{VK_NULL_HANDLE};                  // PCF comparison sampler
+
+    // ── Shadow pipeline descriptor set ────────────────────────────────────
+    VkDescriptorSetLayout m_shadowSetLayout{VK_NULL_HANDLE};
+    VkDescriptorPool m_shadowPool{VK_NULL_HANDLE};
+
+    // ── Per-frame descriptor set layout (set 0: camera + light + shadow UBOs + shadow map) ─
     VkDescriptorSetLayout m_perFrameSetLayout{VK_NULL_HANDLE};
 
-    // ── Per-material descriptor set layout (set 1: base color sampler) ───
+    // ── Per-material descriptor set layout (set 1: base color + normal + ORM) ──
     VkDescriptorSetLayout m_matSetLayout{VK_NULL_HANDLE};
 
     // ── Per-frame UBO buffers + descriptor sets ───────────────────────────
@@ -170,7 +216,12 @@ class VkRenderer : public IRenderer {
         VkDeviceMemory lightMemory{VK_NULL_HANDLE};
         void* lightMapped{nullptr};
 
-        VkDescriptorSet descriptorSet{VK_NULL_HANDLE};
+        VkBuffer shadowBuffer{VK_NULL_HANDLE}; // ShadowUBO — shared by both pipelines
+        VkDeviceMemory shadowMemory{VK_NULL_HANDLE};
+        void* shadowMapped{nullptr};
+
+        VkDescriptorSet descriptorSet{VK_NULL_HANDLE};       // forward pass set 0
+        VkDescriptorSet shadowDescriptorSet{VK_NULL_HANDLE}; // shadow pipeline set 0
     };
     std::array<PerFrameData, MAX_FRAMES_IN_FLIGHT> m_perFrame{};
     VkDescriptorPool m_perFramePool{VK_NULL_HANDLE};
@@ -181,6 +232,10 @@ class VkRenderer : public IRenderer {
     VkPipeline m_forwardPipeline{VK_NULL_HANDLE};
     VkPipelineLayout m_tonemapLayout{VK_NULL_HANDLE};
     VkPipeline m_tonemapPipeline{VK_NULL_HANDLE};
+    VkPipelineLayout m_shadowLayout{VK_NULL_HANDLE};
+    VkPipeline m_shadowPipeline{VK_NULL_HANDLE};
+    VkPipelineLayout m_skyLayout{VK_NULL_HANDLE};
+    VkPipeline m_skyPipeline{VK_NULL_HANDLE};
 
     // ── Commands ──────────────────────────────────────────────────────────
     VkCommandPool m_commandPool{VK_NULL_HANDLE};

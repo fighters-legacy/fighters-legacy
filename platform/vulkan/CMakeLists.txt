@@ -32,6 +32,8 @@ file(MAKE_DIRECTORY "${SHADER_OUT_DIR}")
 set(GLSL_SHADERS
     mesh.vert
     mesh.frag
+    shadow.vert
+    sky.frag
     tonemap.vert
     tonemap.frag
 )

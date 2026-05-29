@@ -258,3 +258,57 @@ TEST_CASE("TextureUploadDesc defaults to srgb=true") {
     CHECK(d.srgb == true);
     CHECK(d.bytes.empty());
 }
+
+// ---------------------------------------------------------------------------
+// EnvironmentState defaults and setScene integration
+// ---------------------------------------------------------------------------
+
+TEST_CASE("EnvironmentState defaults") {
+    EnvironmentState env{};
+    CHECK(env.sunDirection.y == -1.0f);
+    CHECK(env.fogDensity == 0.0f);
+    CHECK(env.timeOfDay == 12.0f);
+}
+
+TEST_CASE("setScene stores EnvironmentState in lastScene") {
+    MockRenderer r;
+
+    FrameScene scene{};
+    scene.environment.sunDirection = glm::vec3(0.5f, -0.8f, 0.2f);
+    scene.environment.sunColor = glm::vec3(1.0f, 0.9f, 0.7f);
+    scene.environment.ambientColor = glm::vec3(0.05f, 0.06f, 0.08f);
+    scene.environment.timeOfDay = 8.5f;
+
+    r.beginFrame();
+    r.setScene(scene);
+    r.endFrame();
+
+    CHECK(r.lastScene.environment.sunDirection == glm::vec3(0.5f, -0.8f, 0.2f));
+    CHECK(r.lastScene.environment.sunColor == glm::vec3(1.0f, 0.9f, 0.7f));
+    CHECK(r.lastScene.environment.timeOfDay == 8.5f);
+}
+
+TEST_CASE("RenderItem kRenderFlagShadowOnly is set independently of kRenderFlagDamaged") {
+    RenderItem item{};
+    item.flags = kRenderFlagShadowOnly;
+    CHECK((item.flags & kRenderFlagShadowOnly) != 0);
+    CHECK((item.flags & kRenderFlagDamaged) == 0);
+}
+
+TEST_CASE("setScene with multiple RenderItems preserves all flags") {
+    MockRenderer r;
+    std::array<RenderItem, 2> items{};
+    items[0].flags = kRenderFlagDamaged;
+    items[1].flags = kRenderFlagShadowOnly;
+
+    FrameScene scene{};
+    scene.renderItems = items;
+
+    r.beginFrame();
+    r.setScene(scene);
+    r.endFrame();
+
+    REQUIRE(r.lastScene.renderItems.size() == 2);
+    CHECK(r.lastScene.renderItems[0].flags == kRenderFlagDamaged);
+    CHECK(r.lastScene.renderItems[1].flags == kRenderFlagShadowOnly);
+}
