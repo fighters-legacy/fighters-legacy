@@ -91,6 +91,15 @@ if(tinygltf_FOUND)
     message(STATUS "tinygltf: system (${tinygltf_VERSION})")
 else()
     message(STATUS "tinygltf: FetchContent")
+    # Force header-only mode: prevents tinygltf from compiling tiny_gltf.cc as
+    # a library target, which would inherit the project's -Werror flags and fail
+    # on -Wmissing-field-initializers in stb_image_write.h.
+    set(TINYGLTF_HEADER_ONLY          ON  CACHE BOOL "" FORCE)
+    set(TINYGLTF_BUILD_LOADER_EXAMPLE OFF CACHE BOOL "" FORCE)
+    set(TINYGLTF_BUILD_GL_EXAMPLES    OFF CACHE BOOL "" FORCE)
+    set(TINYGLTF_BUILD_VALIDATOR      OFF CACHE BOOL "" FORCE)
+    set(TINYGLTF_BUILD_BUILDER        OFF CACHE BOOL "" FORCE)
+    set(TINYGLTF_INSTALL              OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(tinygltf
         GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
         GIT_TAG        v2.9.3
@@ -118,6 +127,9 @@ else()
         GIT_TAG        0.8.0
         GIT_SHALLOW    TRUE
         SYSTEM
+        # yaml-cpp 0.8.0 uses cmake_minimum_required(VERSION 2.8.12) which CMake 4.x
+        # no longer accepts. Patch the minimum version before configuration.
+        PATCH_COMMAND  ${CMAKE_COMMAND} -P "${CMAKE_SOURCE_DIR}/cmake/patch_yaml_cpp.cmake"
     )
     FetchContent_MakeAvailable(yaml-cpp)
 endif()

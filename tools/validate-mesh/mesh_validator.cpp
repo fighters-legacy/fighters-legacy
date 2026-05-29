@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// tinygltf implementation defines — must appear in exactly one .cpp file
+// tinygltf implementation defines — must appear in exactly one .cpp file.
+// TINYGLTF_NO_STB_IMAGE_WRITE: we only load/validate models, never write images.
+// Skipping stb_image_write.h eliminates -Wmissing-field-initializers in that header.
 #define TINYGLTF_IMPLEMENTATION
+#define TINYGLTF_NO_STB_IMAGE_WRITE
 #define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <tiny_gltf.h>
 
 #include "mesh_validator.h"
