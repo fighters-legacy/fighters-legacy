@@ -60,6 +60,16 @@ target_link_libraries(engine-firstrun
             platform-hal
 )
 
+add_library(engine-render STATIC
+    render/SimRenderBridge.cpp
+)
+
+target_include_directories(engine-render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(engine-render
+    PUBLIC platform-hal
+)
+
 add_library(engine-entity STATIC
     entity/EntityPool.cpp
     entity/EntityTypeRegistry.cpp
@@ -73,6 +83,7 @@ target_link_libraries(engine-entity
     PUBLIC  engine-loop
             platform-hal
     PRIVATE tomlplusplus::tomlplusplus
+            engine-render
 )
 
 add_library(engine-sandbox STATIC

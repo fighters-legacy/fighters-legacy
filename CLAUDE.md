@@ -10,6 +10,7 @@ Cross-platform: Windows 10/11, Linux, macOS. Phase 2 (Modern-Particles Engine) i
 ```
 engine/         — core: content system, asset manager, IContentPack interface
 engine/entity/  — entity/object system: pool, type registry, damage model, EntityManager
+engine/render/  — sim→render bridge: RenderSnapshot, SimRenderBridge (lock-free triple-buffer)
 platform/       — HAL: Vulkan, SDL3, OpenAL Soft, ENet backends
 platform/RenderTypes.h — GPU-agnostic scene types shared across the HAL boundary
 game/           — fighters-legacy game binary
@@ -43,7 +44,15 @@ Runtime shader discovery: `VkRenderer::resolveShaderDir()` tries `SDL_GetBasePat
 
 **Renderer instantiation:** game and tool code must use `createVulkanRenderer()` from `platform/vulkan/VkRendererFactory.h` — never include `VkRenderer.h` directly. `VkRenderer.h` pulls in `VkResources.h` → `vk_mem_alloc.h`, which is only on the private include path of `platform-vulkan`.
 
-**GLM extension headers:** `VkRenderer.cpp` requires `<glm/gtc/matrix_transform.hpp>` (for `glm::lookAt`) and `<glm/ext/matrix_clip_space.hpp>` (for `glm::orthoZO`). These are not in `<glm/glm.hpp>` core.
+**GLM extension headers:** `VkRenderer.cpp` requires `<glm/gtc/matrix_transform.hpp>` (for `glm::lookAt`) and `<glm/ext/matrix_clip_space.hpp>` (for `glm::orthoZO`). `engine/render/RenderSnapshot.h` and `engine/entity/EntityManager.cpp` require `<glm/gtc/quaternion.hpp>` (for `glm::quat`). These are not in `<glm/glm.hpp>` core — always include them explicitly.
+
+### Sim→render bridge (Phase 2, PR 4)
+
+`engine/render/SimRenderBridge` is a **lock-free triple-buffer** that ships a per-tick entity snapshot from the sim thread to the render thread. Three `RenderSnapshot` slots rotate: one owned by the sim, one in the atomic spare, one held by the render thread. `publish()` moves the completed snapshot into the spare (release fence); `tryAdvance()` atomically swaps the render slot with the spare when a newer tick is available (acq_rel fence). All three slot indices are always a distinct permutation of {0,1,2}.
+
+- `EntityRenderEntry`: entityIdx, entityGen, typeIndex, position (glm::vec3), orientation (glm::quat, w-first constructor), velocity (glm::vec3 for sub-tick extrapolation), damageLevel (uint8_t), playerOwned.
+- `EntityManager::setRenderBridge(SimRenderBridge*)` — call before `GameLoop::start()`; `onTick` publishes after `reapDeadEntities()` so dead slots are excluded.
+- `engine-render` CMake library is **unconditional** (no Vulkan dep) — builds in CI without a GPU. `engine-entity` privately links `engine-render`; any binary/test that links `engine-entity` gets `engine-render` resolved automatically.
 
 ## Build
 
@@ -78,5 +87,7 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 - `GOVERNANCE.md` — decision-making and RFC process
 - `CMakePresets.json` — all build presets (debug / release / coverage / asan / msvc variants)
 - `platform/RenderTypes.h` — GPU-agnostic POD types: `MeshHandle`, `TextureHandle`, `MaterialHandle`, `CameraView`, `RenderItem`, `FrameScene`, `EnvironmentState`, `ParticleEmitterState`
+- `engine/render/RenderSnapshot.h` — `EntityRenderEntry` + `RenderSnapshot`; POD only, no engine-entity headers (uses raw uint32_t/uint8_t to avoid circular deps)
+- `engine/render/SimRenderBridge.h` — lock-free triple-buffer bridge; `publish()` sim-thread-only, `tryAdvance()`/`current()`/`hasSnapshot()` render-thread-only
 - `cmake/dependencies.cmake` — all FetchContent declarations; GLM is unconditional, Vulkan-specific deps are gated on `Vulkan_FOUND`
 - `platform/vulkan/VkRendererFactory.h` — thin factory header; only include needed by game/tools to instantiate the renderer

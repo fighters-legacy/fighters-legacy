@@ -13,6 +13,7 @@
 #include "firstrun/FirstRun.h"
 #include "loop/GameLoop.h"
 #include "openal/OALAudio.h"
+#include "render/SimRenderBridge.h"
 #include "sandbox/SandboxInspector.h"
 #include "sdl3/SDL3Cursor.h"
 #include "sdl3/SDL3Display.h"
@@ -180,12 +181,17 @@ int main(int argc, char** argv) {
     fl::EntityTypeRegistry entityRegistry;
     fl::EntityManager entityManager(*rawLogger, entityRegistry);
 
-    // Step 17b: Sandbox inspector (when no content packs are present).
+    // Step 17b: Render bridge — wired before the sim thread starts so EntityManager::onTick
+    // can publish snapshots from the very first tick.
+    fl::SimRenderBridge renderBridge;
+    entityManager.setRenderBridge(&renderBridge);
+
+    // Step 17c: Sandbox inspector (when no content packs are present).
     std::optional<SandboxInspector> inspector;
     if (outcome == FirstRunOutcome::LaunchSandboxInspector)
         inspector.emplace(*p.audio, *p.input, *rawLogger, 440.0f, &entityManager);
 
-    // Step 17c: Game loop — sim thread starts here.
+    // Step 17d: Game loop — sim thread starts here.
     GameLoop gameLoop(entityManager, *rawLogger);
     gameLoop.start();
 
@@ -197,6 +203,7 @@ int main(int argc, char** argv) {
         if (inspector && !inspector->update())
             running = false;
         [[maybe_unused]] float alpha = gameLoop.shellTick();
+        renderBridge.tryAdvance(); // advance to latest entity snapshot; used by SceneRenderer (PR 5)
         p.renderer->endFrame();
         p.input->flush();
         p.joystick->flush();

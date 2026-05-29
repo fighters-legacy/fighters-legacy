@@ -2,6 +2,10 @@
 #include "entity/EntityManager.h"
 
 #include "ILogger.h"
+#include "render/RenderSnapshot.h"
+#include "render/SimRenderBridge.h"
+
+#include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -16,10 +20,33 @@ EntityManager::EntityManager(ILogger& logger, EntityTypeRegistry& registry) : m_
 
 // ── ISimUpdate ────────────────────────────────────────────────────────────────
 
-void EntityManager::onTick(double /*simDt*/, uint64_t /*tickIndex*/) {
+void EntityManager::onTick(double /*simDt*/, uint64_t tickIndex) {
     // Phase 2.2: housekeeping only. Per-entity physics / AI advance added in later workstreams.
     reapDeadEntities();
     m_liveCount.store(m_pool.liveCount(), std::memory_order_release);
+
+    if (m_renderBridge) {
+        RenderSnapshot snap;
+        snap.tickIndex = tickIndex;
+        snap.entries.reserve(m_pool.liveCount());
+        m_pool.forEach([&snap](const EntityState& e) {
+            EntityRenderEntry entry;
+            entry.entityIdx = e.id.index;
+            entry.entityGen = e.id.generation;
+            entry.typeIndex = e.typeIndex;
+            entry.position = {e.transform.pos[0], e.transform.pos[1], e.transform.pos[2]};
+            entry.orientation = glm::quat(e.transform.quat[3], // w
+                                          e.transform.quat[0], // x
+                                          e.transform.quat[1], // y
+                                          e.transform.quat[2]  // z
+            );
+            entry.velocity = {e.transform.vel[0], e.transform.vel[1], e.transform.vel[2]};
+            entry.damageLevel = static_cast<uint8_t>(e.damageLevel);
+            entry.playerOwned = e.playerOwned;
+            snap.entries.push_back(entry);
+        });
+        m_renderBridge->publish(std::move(snap));
+    }
 }
 
 // ── entity lifecycle ──────────────────────────────────────────────────────────
@@ -122,6 +149,10 @@ void EntityManager::removeEventHandler(IEntityEventHandler* handler) {
 
 void EntityManager::setSoftCap(uint32_t cap) noexcept {
     m_pool.setSoftCap(cap);
+}
+
+void EntityManager::setRenderBridge(SimRenderBridge* bridge) noexcept {
+    m_renderBridge = bridge;
 }
 
 uint32_t EntityManager::liveCount() const noexcept {
