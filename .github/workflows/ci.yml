@@ -89,6 +89,25 @@ jobs:
         run: .\build\debug-msvc\tools\Debug\fl-server.exe --version
         shell: pwsh
 
+      - name: Smoke test asset pipeline tools (Linux / macOS)
+        if: matrix.os != 'windows-latest'
+        run: |
+          ./build/debug/tools/validate-flight-model --version
+          ./build/debug/tools/validate-mission --version
+          ./build/debug/tools/validate-mesh --version
+          ./build/debug/tools/tex-compress --version
+          ./build/debug/tools/validate-licenses --version
+
+      - name: Smoke test asset pipeline tools (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          .\build\debug-msvc\tools\Debug\validate-flight-model.exe --version
+          .\build\debug-msvc\tools\Debug\validate-mission.exe --version
+          .\build\debug-msvc\tools\Debug\validate-mesh.exe --version
+          .\build\debug-msvc\tools\Debug\tex-compress.exe --version
+          .\build\debug-msvc\tools\Debug\validate-licenses.exe --version
+        shell: pwsh
+
       - name: Configure OpenAL Soft null backend
         if: matrix.os == 'ubuntu-latest'
         run: |

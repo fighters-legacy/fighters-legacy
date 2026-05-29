@@ -83,6 +83,66 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# tinygltf — header-only glTF 2.0 loader; system preferred, FetchContent fallback
+# Used only by tools/validate-mesh.
+# ---------------------------------------------------------------------------
+find_package(tinygltf QUIET)
+if(tinygltf_FOUND)
+    message(STATUS "tinygltf: system (${tinygltf_VERSION})")
+else()
+    message(STATUS "tinygltf: FetchContent")
+    # Force header-only mode: prevents tinygltf from compiling tiny_gltf.cc as
+    # a library target, which would inherit the project's -Werror flags and fail
+    # on -Wmissing-field-initializers in stb_image_write.h.
+    set(TINYGLTF_HEADER_ONLY          ON  CACHE BOOL "" FORCE)
+    set(TINYGLTF_BUILD_LOADER_EXAMPLE OFF CACHE BOOL "" FORCE)
+    set(TINYGLTF_BUILD_GL_EXAMPLES    OFF CACHE BOOL "" FORCE)
+    set(TINYGLTF_BUILD_VALIDATOR      OFF CACHE BOOL "" FORCE)
+    set(TINYGLTF_BUILD_BUILDER        OFF CACHE BOOL "" FORCE)
+    set(TINYGLTF_INSTALL              OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(tinygltf
+        GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
+        GIT_TAG        v2.9.3
+        GIT_SHALLOW    TRUE
+        SYSTEM
+    )
+    FetchContent_MakeAvailable(tinygltf)
+endif()
+
+# ---------------------------------------------------------------------------
+# yaml-cpp — YAML parser; system preferred, FetchContent fallback
+# Used only by tools/validate-mission.
+# ---------------------------------------------------------------------------
+find_package(yaml-cpp 0.8 QUIET)
+if(yaml-cpp_FOUND)
+    message(STATUS "yaml-cpp: system (${yaml-cpp_VERSION})")
+else()
+    message(STATUS "yaml-cpp: FetchContent")
+    set(YAML_CPP_BUILD_TESTS       OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_TOOLS       OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_CONTRIB     OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    # yaml-cpp 0.8.0 declares cmake_minimum_required(VERSION 2.8.12); CMake 4.x
+    # rejects minimum versions below 3.5. CMAKE_POLICY_VERSION_MINIMUM is the
+    # CMake 4.x mechanism for this (advertised in the cmake_minimum_required error
+    # message itself). Set it as a cache variable so it is visible when CMake
+    # configures the FetchContent subdirectory.
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
+        set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE INTERNAL "")
+    endif()
+    FetchContent_Declare(yaml-cpp
+        GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+        GIT_TAG        0.8.0
+        GIT_SHALLOW    TRUE
+        SYSTEM
+    )
+    FetchContent_MakeAvailable(yaml-cpp)
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
+        unset(CMAKE_POLICY_VERSION_MINIMUM CACHE)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # tomlplusplus — header-only TOML parser; system preferred, FetchContent fallback
 # Used by engine/content/ModLoader to parse mod manifests.
 # ---------------------------------------------------------------------------

@@ -79,3 +79,55 @@ add_custom_command(
 add_custom_target(locale-keys DEPENDS "${LOCALE_KEYS_HEADER}")
 # Usage: add_dependencies(my-target locale-keys)
 #        target_include_directories(my-target PRIVATE "${CMAKE_BINARY_DIR}/generated")
+
+# ---------------------------------------------------------------------------
+# Asset pipeline tools — no platform-hal dependency; always built
+# ---------------------------------------------------------------------------
+
+add_library(validate-flight-model-lib STATIC
+    validate-flight-model/flight_model_validator.cpp)
+target_link_libraries(validate-flight-model-lib PUBLIC tomlplusplus::tomlplusplus)
+target_include_directories(validate-flight-model-lib PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/validate-flight-model")
+
+add_executable(validate-flight-model validate-flight-model/main.cpp)
+target_link_libraries(validate-flight-model PRIVATE validate-flight-model-lib)
+
+add_library(validate-mission-lib STATIC validate-mission/mission_validator.cpp)
+target_link_libraries(validate-mission-lib PUBLIC yaml-cpp::yaml-cpp)
+target_include_directories(validate-mission-lib PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/validate-mission")
+
+add_executable(validate-mission validate-mission/main.cpp)
+target_link_libraries(validate-mission PRIVATE validate-mission-lib)
+
+add_library(validate-licenses-lib STATIC validate-licenses/license_validator.cpp)
+target_link_libraries(validate-licenses-lib PUBLIC tomlplusplus::tomlplusplus)
+target_include_directories(validate-licenses-lib PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/validate-licenses")
+
+add_executable(validate-licenses validate-licenses/main.cpp)
+target_link_libraries(validate-licenses PRIVATE validate-licenses-lib)
+
+add_library(validate-mesh-lib STATIC validate-mesh/mesh_validator.cpp)
+target_include_directories(validate-mesh-lib SYSTEM PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/validate-mesh"
+    "${tinygltf_SOURCE_DIR}")
+if(TARGET tinygltf)
+    target_link_libraries(validate-mesh-lib PUBLIC tinygltf)
+endif()
+
+add_executable(validate-mesh validate-mesh/main.cpp)
+target_link_libraries(validate-mesh PRIVATE validate-mesh-lib)
+
+add_library(tex-compress-lib STATIC tex-compress/tex_compress.cpp)
+target_include_directories(tex-compress-lib PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/tex-compress")
+
+add_executable(tex-compress tex-compress/main.cpp)
+target_link_libraries(tex-compress PRIVATE tex-compress-lib)
+
+if(MSVC)
+    target_compile_definitions(tex-compress     PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_definitions(tex-compress-lib PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()

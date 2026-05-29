@@ -12,7 +12,7 @@ engine/         — core: content system, asset manager, IContentPack interface
 engine/entity/  — entity/object system: pool, type registry, damage model, EntityManager
 platform/       — HAL: Vulkan, SDL3, OpenAL Soft, ENet backends
 game/           — fighters-legacy game binary
-tools/          — developer utilities
+tools/          — developer utilities; asset pipeline (validate-flight-model, validate-mission, validate-licenses, validate-mesh, tex-compress)
 tests/          — Catch2 unit tests
 ```
 
@@ -36,7 +36,7 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 
 ## Conventions
 
-- Conventional Commits — scopes: engine / renderer / audio / network / content / flight / difficulty / entity / ai / mission / game / build / ci / docs
+- Conventional Commits — scopes: engine / renderer / audio / network / content / flight / difficulty / entity / ai / mission / game / tools / build / ci / docs
 - DCO sign-off required: `git commit -s`
 <!-- REUSE-IgnoreStart -->
 - SPDX header required on all new .cpp/.h files: `// SPDX-License-Identifier: GPL-3.0-or-later`
