@@ -17,7 +17,7 @@ static const char* kMinimalGltf = R"json({
     "type": "VEC3", "max": [1,1,1], "min": [0,0,0]
   }],
   "bufferViews": [{"buffer": 0, "byteLength": 36}],
-  "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]
+  "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]
 })json";
 
 TEST_CASE("minimal valid glTF 2.0 passes", "[validate-mesh]") {
@@ -95,7 +95,7 @@ TEST_CASE("damage-state _b node without base node fails", "[validate-mesh]") {
         "meshes": [{"name": "fuselage_b", "primitives": [{"attributes": {"POSITION": 0}}]}],
         "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "max": [1,1,1], "min": [0,0,0]}],
         "bufferViews": [{"buffer": 0, "byteLength": 36}],
-        "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]
+        "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]
     })");
     CHECK_FALSE(r.ok);
     bool found = false;
@@ -119,7 +119,7 @@ TEST_CASE("damage-state _b node with base node passes", "[validate-mesh]") {
         "meshes": [{"name": "fuselage", "primitives": [{"attributes": {"POSITION": 0}}]}],
         "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "max": [1,1,1], "min": [0,0,0]}],
         "bufferViews": [{"buffer": 0, "byteLength": 36}],
-        "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]
+        "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]
     })");
     CHECK(r.ok);
     CHECK(r.errors.empty());
@@ -136,7 +136,7 @@ TEST_CASE("material with unknown extension fails", "[validate-mesh]") {
         "extensionsUsed": ["MY_custom_extension"],
         "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "max": [1,1,1], "min": [0,0,0]}],
         "bufferViews": [{"buffer": 0, "byteLength": 36}],
-        "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]
+        "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]
     })");
     CHECK_FALSE(r.ok);
     bool found = false;
@@ -159,7 +159,7 @@ TEST_CASE("material with known extension produces warning not error", "[validate
         "extensionsUsed": ["KHR_texture_transform"],
         "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "max": [1,1,1], "min": [0,0,0]}],
         "bufferViews": [{"buffer": 0, "byteLength": 36}],
-        "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]
+        "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]
     })");
     CHECK(r.ok);
     CHECK(r.errors.empty());
