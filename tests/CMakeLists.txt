@@ -7,6 +7,26 @@ include(Catch)
 #   target_link_libraries(test_foo PRIVATE Catch2::Catch2WithMain engine-content)
 #   catch_discover_tests(test_foo)
 
+add_executable(test_atmosphere test_atmosphere.cpp)
+target_link_libraries(test_atmosphere PRIVATE Catch2::Catch2WithMain engine-flight)
+catch_discover_tests(test_atmosphere)
+
+add_executable(test_table2d test_table2d.cpp)
+target_link_libraries(test_table2d PRIVATE Catch2::Catch2WithMain engine-flight)
+catch_discover_tests(test_table2d)
+
+add_executable(test_flight_model_parser test_flight_model_parser.cpp)
+target_link_libraries(test_flight_model_parser PRIVATE Catch2::Catch2WithMain engine-flight)
+catch_discover_tests(test_flight_model_parser)
+
+add_executable(test_aero_forces test_aero_forces.cpp)
+target_link_libraries(test_aero_forces PRIVATE Catch2::Catch2WithMain engine-flight)
+catch_discover_tests(test_aero_forces)
+
+add_executable(test_flight_integrator test_flight_integrator.cpp)
+target_link_libraries(test_flight_integrator PRIVATE Catch2::Catch2WithMain engine-flight)
+catch_discover_tests(test_flight_integrator)
+
 add_executable(test_loop test_loop.cpp)
 target_link_libraries(test_loop PRIVATE Catch2::Catch2WithMain engine-loop)
 target_include_directories(test_loop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

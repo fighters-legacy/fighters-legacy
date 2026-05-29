@@ -75,42 +75,139 @@ State transitions are driven by engine events. Lua scripts can force a state cha
 
 ## Flight Model — TOML
 
+All units are SI. See [`docs/modding/flight-model.md`](flight-model.md) for the complete
+authoring guide, including sign conventions, data sources, tuning tips, and worked examples
+for the F/A-18C Hornet and Tu-95MS Bear.
+
 ```toml
 [aircraft]
-name          = "F-22 Raptor"
-type          = "fighter"
-mesh          = "f22"
-cockpit       = "f22_hud"
+name         = "F-22 Raptor"
+type         = "fighter"       # see flight-model.md for valid values
+engine_type  = "turbofan"      # "turbojet" | "turbofan" | "turboprop" | "piston"
+has_fbw      = true            # fly-by-wire enforces G/AoA limits even with assists off
+cruise_alt_m = 15240           # ~50 000 ft — AI autopilot reference
+mesh         = "f22"
+cockpit      = "f22_hud"
 
-[performance]
-mil_thrust_lb       = 25000
-ab_thrust_lb        = 35000
-mil_fuel_flow_lb_hr = 8000
-ab_fuel_flow_lb_hr  = 24000
-fuel_capacity_lb    = 18000
-one_g_stall_kts     = 120
-max_speed_kts       = 1000
+[flight_model]
+mass_kg      = 19700.0         # operating empty + typical payload
+wing_area_m2 = 78.0
+wingspan_m   = 13.6
+mac_m        = 4.9             # mean aerodynamic chord
+fuel_kg      = 8200.0          # max internal fuel
+ixx_kg_m2    = 22000.0         # roll moment of inertia
+iyy_kg_m2    = 160000.0        # pitch moment of inertia
+izz_kg_m2    = 175000.0        # yaw moment of inertia
 
-[aerodynamics]
-g_drag_base         = 0.018
-g_drag_scale        = 1.4
-bank_rate           = 0.71
-has_thrust_vector   = true
-min_nozzle_angle    = -20
-max_nozzle_angle    = 20
-nozzle_slew_rate    = 5
+[aero.cl_table]
+# rows = alpha breakpoints (deg), cols = Mach breakpoints
+alpha  = [-5, 0, 5, 10, 15, 18, 20, 25]
+mach   = [0.3, 0.6, 0.9, 1.2, 1.8]
+values = [
+    -0.20,-0.22,-0.24,-0.18,-0.12,
+     0.05, 0.06, 0.07, 0.05, 0.03,
+     0.42, 0.47, 0.54, 0.42, 0.29,
+     0.78, 0.87, 1.00, 0.78, 0.54,
+     1.08, 1.21, 1.39, 1.08, 0.75,
+     1.20, 1.34, 1.55, 1.20, 0.83,
+     1.12, 1.25, 1.44, 1.12, 0.78,
+     0.87, 0.97, 1.12, 0.87, 0.60,
+]
+
+[aero.drag_polar]
+cd0           = 0.014          # clean configuration
+k             = 0.10           # induced drag factor
+speedbrake_cd = 0.06           # when speedbrake deployed
+gear_cd       = 0.03           # when landing gear extended
+
+[aero.cd_wave]
+# Transonic wave drag — omit for subsonic-only aircraft
+mach   = [0.75, 0.85, 0.90, 0.95, 1.00, 1.05, 1.10, 1.20, 1.50]
+values = [0.000, 0.007, 0.020, 0.034, 0.030, 0.022, 0.014, 0.006, 0.002]
+
+[aero.moments]
+# Pitch (reference length: mac_m)
+cm_alpha = -0.72
+cm_q     = -12.5
+cm_de    = -1.15
+# Roll (reference length: wingspan_m)
+cl_beta  = -0.085
+cl_p     = -0.42
+cl_da    =  0.075
+# Yaw (reference length: wingspan_m)
+cn_beta  =  0.11
+cn_r     = -0.14
+cn_dr    = -0.055
+
+[aero.limits]
+alpha_stall_deg  =  20.0
+max_g_structural =   9.0
+min_g_structural =  -3.0
+max_mach         =   2.25
+
+[aero.controls]
+max_elevator_deg = 30.0
+max_aileron_deg  = 20.0
+max_rudder_deg   = 30.0
+
+[aero.tvc]                     # optional — omit for non-TVC aircraft
+min_angle_deg   = -20
+max_angle_deg   =  20
+slew_rate_deg_s =   5
+
+[engine]
+fuel_flow_idle_kg_s = 0.18
+fuel_flow_mil_kg_s  = 1.60
+fuel_flow_ab_kg_s   = 4.80
+spool_time_s        = 4.0
+
+[engine.mil_thrust]
+mach   = [0.0, 0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.0, 2.25]
+alt_km = [0, 3, 6, 9, 12, 15]
+values = [
+    156.0, 134.0, 112.0,  89.0,  65.0,  40.0,
+    164.0, 141.0, 118.0,  94.0,  68.0,  42.0,
+    172.0, 148.0, 124.0,  99.0,  72.0,  44.0,
+    178.0, 153.0, 128.0, 102.0,  74.0,  46.0,
+    172.0, 148.0, 124.0,  99.0,  72.0,  44.0,
+    161.0, 138.0, 116.0,  93.0,  67.0,  42.0,
+    147.0, 126.0, 106.0,  85.0,  61.0,  38.0,
+    138.0, 118.0,  99.0,  79.0,  57.0,  36.0,
+    126.0, 108.0,  91.0,  73.0,  53.0,  33.0,
+]
+
+[engine.ab_thrust]             # optional — omit for non-afterburning aircraft
+mach   = [0.0, 0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.0, 2.25]
+alt_km = [0, 3, 6, 9, 12, 15]
+values = [
+    312.0, 268.0, 224.0, 179.0, 130.0,  80.0,
+    328.0, 282.0, 236.0, 188.0, 137.0,  84.0,
+    344.0, 296.0, 248.0, 198.0, 144.0,  89.0,
+    356.0, 306.0, 256.0, 205.0, 148.0,  92.0,
+    344.0, 296.0, 248.0, 198.0, 144.0,  89.0,
+    322.0, 277.0, 232.0, 185.0, 135.0,  83.0,
+    294.0, 253.0, 212.0, 169.0, 123.0,  76.0,
+    276.0, 237.0, 198.0, 159.0, 115.0,  71.0,
+    252.0, 217.0, 181.0, 145.0, 105.0,  65.0,
+]
+
+# [carrier] block — omit for land-based aircraft (F-22 is land-based)
+# [refueling] block — omit if aircraft cannot receive fuel (F-22 has boom receptacle)
+[refueling]
+type          = "boom"
+max_rate_kg_s = 3.0
 
 [[hardpoints]]
 slot    = 0
 type    = "missile"
-allowed = ["aim120c", "aim7m", "aim9x"]
+allowed = ["aim120c", "aim9x"]
 default = "aim120c"
 
 [[hardpoints]]
 slot    = 4
 type    = "bomb"
-allowed = ["gbu12", "mk82", "agm65"]
-default = "mk82"
+allowed = ["gbu32", "mk82"]
+default = "gbu32"
 ```
 
 ---

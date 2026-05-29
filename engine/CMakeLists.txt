@@ -78,3 +78,15 @@ add_library(engine-loop STATIC
 )
 target_include_directories(engine-loop PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-loop PUBLIC platform-hal)
+
+add_library(engine-flight STATIC
+    flight/Atmosphere.cpp
+    flight/FlightModelParser.cpp
+    flight/AeroForces.cpp
+    flight/FlightIntegrator.cpp
+)
+target_include_directories(engine-flight PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-flight
+    PUBLIC  engine-content
+    PRIVATE tomlplusplus::tomlplusplus
+)
