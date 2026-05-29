@@ -10,7 +10,7 @@ Cross-platform: Windows 10/11, Linux, macOS. Phase 2 (Modern-Particles Engine) i
 ```
 engine/         — core: content system, asset manager, IContentPack interface
 engine/entity/  — entity/object system: pool, type registry, damage model, EntityManager
-engine/render/  — sim→render bridge: RenderSnapshot, SimRenderBridge (lock-free triple-buffer)
+engine/render/  — sim→render bridge + scene submission: RenderSnapshot, SimRenderBridge, SceneRenderer, CameraController
 platform/       — HAL: Vulkan, SDL3, OpenAL Soft, ENet backends
 platform/RenderTypes.h — GPU-agnostic scene types shared across the HAL boundary
 game/           — fighters-legacy game binary
@@ -52,7 +52,25 @@ Runtime shader discovery: `VkRenderer::resolveShaderDir()` tries `SDL_GetBasePat
 
 - `EntityRenderEntry`: entityIdx, entityGen, typeIndex, position (glm::vec3), orientation (glm::quat, w-first constructor), velocity (glm::vec3 for sub-tick extrapolation), damageLevel (uint8_t), playerOwned.
 - `EntityManager::setRenderBridge(SimRenderBridge*)` — call before `GameLoop::start()`; `onTick` publishes after `reapDeadEntities()` so dead slots are excluded.
-- `engine-render` CMake library is **unconditional** (no Vulkan dep) — builds in CI without a GPU. `engine-entity` privately links `engine-render`; any binary/test that links `engine-entity` gets `engine-render` resolved automatically.
+- `engine-render` CMake library is **unconditional** (no Vulkan dep) — builds in CI without a GPU. `engine-entity` privately links `engine-render`; `engine-render` privately links `engine-content`. Any binary/test that links `engine-entity` gets both resolved automatically.
+
+### Scene renderer (Phase 2, PR 5)
+
+`engine/render/SceneRenderer` converts the per-tick entity snapshot into a `FrameScene` and calls `IRenderer::setScene` each frame. All work is main-thread.
+
+- **MeshNameResolver**: `std::function<bool(uint32_t typeIndex, std::string& mesh, std::string& dmg)>` — injected at construction to avoid a circular CMake dep between `engine-render` and `engine-entity`. In `main.cpp` the lambda captures `EntityTypeRegistry&`.
+- **Mesh/material cache**: `getOrUploadMesh` / `getOrUploadMaterial` call `IRenderer::createMesh` / `createMaterial` once per unique mesh name; subsequent frames use the cached handle.
+- **Camera-relative rendering**: entity world position is rebased to `camera.worldOrigin` before the transform matrix is built — float32-safe at arbitrary theater scale.
+- **Velocity extrapolation**: `rendered_pos = entry.position + entry.velocity * (alpha * kTickDt)` where `alpha = GameLoop::shellTick()` and `kTickDt = 1/60 s`.
+- **Damage variant**: if `entry.damageLevel > 0` and `EntityDef::classicDamageMesh` is non-empty, the damage mesh is loaded instead; `kRenderFlagDamaged` is set on the `RenderItem`.
+- **Sort**: opaque items sorted front-to-back by squared camera-relative distance to minimise overdraw.
+- `SceneRenderer::renderFrame(alpha, camera, env)` calls `tryAdvance()` internally; callers must NOT also call `renderBridge.tryAdvance()`.
+
+`engine/render/CameraController` produces a `CameraView` each frame.
+
+- **Free mode** (default): spherical orbit around a configurable pivot. `setFreeOrbit(pivot, yaw°, pitch°, distance_m)`.
+- **Chase mode**: camera offset `kChaseBack=30 m` behind and `kChaseUp=5 m` above the target entity in entity-local space. `setTarget(worldPos, worldOri)` must be called each frame.
+- **Projection**: infinite reverse-Z perspective hand-built from `f = 1/tan(fovY/2)`: `proj[0][0]=f/aspect`, `proj[1][1]=-f` (Vulkan Y-flip), `proj[2][3]=-1`, `proj[3][2]=near`. `VkRenderer` reads `proj[3][2]` as the near-plane value for shadow cascade split.
 
 ## Build
 
@@ -89,5 +107,7 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 - `platform/RenderTypes.h` — GPU-agnostic POD types: `MeshHandle`, `TextureHandle`, `MaterialHandle`, `CameraView`, `RenderItem`, `FrameScene`, `EnvironmentState`, `ParticleEmitterState`
 - `engine/render/RenderSnapshot.h` — `EntityRenderEntry` + `RenderSnapshot`; POD only, no engine-entity headers (uses raw uint32_t/uint8_t to avoid circular deps)
 - `engine/render/SimRenderBridge.h` — lock-free triple-buffer bridge; `publish()` sim-thread-only, `tryAdvance()`/`current()`/`hasSnapshot()` render-thread-only
+- `engine/render/SceneRenderer.h` — snapshot→FrameScene bridge; `renderFrame(alpha, camera, env)` between beginFrame/endFrame; handles mesh upload/cache, camera-relative transforms, damage variant, front-to-back sort
+- `engine/render/CameraController.h` — Free-orbit + Chase cameras; `view(aspectRatio)` → `CameraView`; infinite reverse-Z projection with Vulkan Y-flip
 - `cmake/dependencies.cmake` — all FetchContent declarations; GLM is unconditional, Vulkan-specific deps are gated on `Vulkan_FOUND`
 - `platform/vulkan/VkRendererFactory.h` — thin factory header; only include needed by game/tools to instantiate the renderer

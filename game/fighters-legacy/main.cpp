@@ -8,11 +8,14 @@
 #include "content/ModLoader.h"
 #include "crash/CrashInfo.h"
 #include "crash/CrashReporter.h"
+#include "entity/EntityDef.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
 #include "firstrun/FirstRun.h"
 #include "loop/GameLoop.h"
 #include "openal/OALAudio.h"
+#include "render/CameraController.h"
+#include "render/SceneRenderer.h"
 #include "render/SimRenderBridge.h"
 #include "sandbox/SandboxInspector.h"
 #include "sdl3/SDL3Cursor.h"
@@ -186,6 +189,21 @@ int main(int argc, char** argv) {
     fl::SimRenderBridge renderBridge;
     entityManager.setRenderBridge(&renderBridge);
 
+    // Step 17b.1: Scene renderer — converts entity snapshots to FrameScene each frame.
+    // MeshNameResolver breaks the circular dep between engine-render and engine-entity:
+    // the lambda captures entityRegistry (main-thread-only, read-only after start()).
+    fl::CameraController cameraController;
+    fl::SceneRenderer sceneRenderer{renderBridge,
+                                    [&entityRegistry](uint32_t idx, std::string& mesh, std::string& dmg) -> bool {
+                                        const fl::EntityDef* def = entityRegistry.byIndex(idx);
+                                        if (!def)
+                                            return false;
+                                        mesh = def->mesh;
+                                        dmg = def->classicDamageMesh;
+                                        return true;
+                                    },
+                                    assets, *p.renderer};
+
     // Step 17c: Sandbox inspector (when no content packs are present).
     std::optional<SandboxInspector> inspector;
     if (outcome == FirstRunOutcome::LaunchSandboxInspector)
@@ -202,8 +220,10 @@ int main(int argc, char** argv) {
         p.renderer->beginFrame();
         if (inspector && !inspector->update())
             running = false;
-        [[maybe_unused]] float alpha = gameLoop.shellTick();
-        renderBridge.tryAdvance(); // advance to latest entity snapshot; used by SceneRenderer (PR 5)
+        float alpha = gameLoop.shellTick();
+        float aspect =
+            static_cast<float>(p.window->width()) / static_cast<float>(p.window->height() > 0 ? p.window->height() : 1);
+        sceneRenderer.renderFrame(alpha, cameraController.view(aspect), EnvironmentState{});
         p.renderer->endFrame();
         p.input->flush();
         p.joystick->flush();
