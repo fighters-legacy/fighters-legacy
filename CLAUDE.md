@@ -12,7 +12,7 @@ engine/         — core: content system, asset manager, IContentPack interface
 engine/entity/  — entity/object system: pool, type registry, damage model, EntityManager
 platform/       — HAL: Vulkan, SDL3, OpenAL Soft, ENet backends
 game/           — fighters-legacy game binary
-tools/          — developer utilities
+tools/          — developer utilities; asset pipeline (validate-flight-model, validate-mission, validate-licenses, validate-mesh, tex-compress)
 tests/          — Catch2 unit tests
 ```
 

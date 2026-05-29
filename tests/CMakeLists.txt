@@ -197,6 +197,31 @@ if(WIN32)
 endif()
 catch_discover_tests(test_input_hal DISCOVERY_MODE PRE_TEST)
 
+add_executable(test_validate_flight_model test_validate_flight_model.cpp)
+target_link_libraries(test_validate_flight_model
+    PRIVATE Catch2::Catch2WithMain validate-flight-model-lib)
+catch_discover_tests(test_validate_flight_model)
+
+add_executable(test_validate_mission test_validate_mission.cpp)
+target_link_libraries(test_validate_mission
+    PRIVATE Catch2::Catch2WithMain validate-mission-lib)
+catch_discover_tests(test_validate_mission)
+
+add_executable(test_validate_licenses test_validate_licenses.cpp)
+target_link_libraries(test_validate_licenses
+    PRIVATE Catch2::Catch2WithMain validate-licenses-lib)
+catch_discover_tests(test_validate_licenses)
+
+add_executable(test_validate_mesh test_validate_mesh.cpp)
+target_link_libraries(test_validate_mesh
+    PRIVATE Catch2::Catch2WithMain validate-mesh-lib)
+catch_discover_tests(test_validate_mesh)
+
+add_executable(test_tex_compress test_tex_compress.cpp)
+target_link_libraries(test_tex_compress
+    PRIVATE Catch2::Catch2WithMain tex-compress-lib)
+catch_discover_tests(test_tex_compress)
+
 add_executable(test_async_filesystem_sdl3 test_async_filesystem_sdl3.cpp)
 target_link_libraries(test_async_filesystem_sdl3 PRIVATE Catch2::Catch2WithMain platform-sdl3)
 target_include_directories(test_async_filesystem_sdl3 PRIVATE

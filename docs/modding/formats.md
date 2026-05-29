@@ -15,7 +15,7 @@ For authoring tools and workflow guides, see the other files in this directory.
 - Shadow mesh: separate `F22_shadow.glb`
 - Cockpit interior: optional separate `F22_cockpit.glb`; includes camera anchor point and
   instrument panel geometry. Instruments are non-interactive geometry (no DCS-style clickable cockpit).
-- Toolchain: Blender → glTF 2.0 export (see `docs/modding/3d-models.md`)
+- Toolchain: Blender → glTF 2.0 export (see [`docs/modding/3d-models.md`](3d-models.md))
 
 ---
 
@@ -25,6 +25,9 @@ For authoring tools and workflow guides, see the other files in this directory.
 - GPU-ready: KTX2 with BC1/BC3/BC7 compression + mipmaps generated at pack time
 - Naming: `aircraft_f22.png`, `terrain_grass.png` (lowercase, snake_case)
 - Palette-mapped textures from FA are converted to full RGBA at import time
+
+> For the texture pipeline guide including format selection matrix and `tex-compress` usage,
+> see [`docs/modding/textures.md`](textures.md).
 
 ---
 
@@ -310,6 +313,9 @@ script = "ai/units/sam_battery.lua"
 ---
 
 ## Mission Files — YAML
+
+> For the complete mission authoring guide including all field descriptions, validation rules,
+> trigger reference, and worked examples, see [`docs/modding/missions.md`](missions.md).
 
 ```yaml
 name: "Storm Warning"
