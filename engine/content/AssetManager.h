@@ -35,6 +35,7 @@ class AssetManager {
     std::shared_ptr<MissionData> loadMission(const char* name);
     std::shared_ptr<TerrainData> loadTerrain(const char* name);
     std::shared_ptr<AIScript> loadAIScript(const char* name);
+    std::shared_ptr<EntityDefData> loadEntityDef(const char* name);
 
     // Hot-reload support (sandbox/editor mode only). Pass the watcher from Platform.
     // Registers each pack's rootDirectory() with the watcher (recursive).

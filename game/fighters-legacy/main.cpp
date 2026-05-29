@@ -8,9 +8,10 @@
 #include "content/ModLoader.h"
 #include "crash/CrashInfo.h"
 #include "crash/CrashReporter.h"
+#include "entity/EntityManager.h"
+#include "entity/EntityTypeRegistry.h"
 #include "firstrun/FirstRun.h"
 #include "loop/GameLoop.h"
-#include "loop/ISimUpdate.h"
 #include "openal/OALAudio.h"
 #include "sandbox/SandboxInspector.h"
 #include "sdl3/SDL3Cursor.h"
@@ -175,18 +176,17 @@ int main(int argc, char** argv) {
     FirstRun firstRun(userConfig, *rawLogger);
     auto outcome = firstRun.check(hasPacks);
 
-    // Step 17a: Null sim callback for Phase 2.1 (no game objects yet).
-    struct NullSim : ISimUpdate {
-        void onTick(double, uint64_t) override {}
-    } nullSim;
+    // Step 17a: Entity system — type registry and manager replace the Phase 2.1 NullSim stub.
+    fl::EntityTypeRegistry entityRegistry;
+    fl::EntityManager entityManager(*rawLogger, entityRegistry);
 
     // Step 17b: Sandbox inspector (when no content packs are present).
     std::optional<SandboxInspector> inspector;
     if (outcome == FirstRunOutcome::LaunchSandboxInspector)
-        inspector.emplace(*p.audio, *p.input, *rawLogger);
+        inspector.emplace(*p.audio, *p.input, *rawLogger, 440.0f, &entityManager);
 
     // Step 17c: Game loop — sim thread starts here.
-    GameLoop gameLoop(nullSim, *rawLogger);
+    GameLoop gameLoop(entityManager, *rawLogger);
     gameLoop.start();
 
     // Step 18: Shell loop — main thread owns all HAL.

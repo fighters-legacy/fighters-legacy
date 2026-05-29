@@ -5,11 +5,16 @@
 
 class IInput;
 class ILogger;
+namespace fl {
+class EntityManager;
+}
 
 class SandboxInspector {
   public:
     // freq: test tone frequency in Hz (defaults to 440 Hz / A4).
-    SandboxInspector(IAudio& audio, IInput& input, ILogger& logger, float freq = 440.0f);
+    // entityManager: optional; when non-null, live entity count is logged each frame cycle.
+    SandboxInspector(IAudio& audio, IInput& input, ILogger& logger, float freq = 440.0f,
+                     fl::EntityManager* entityManager = nullptr);
     ~SandboxInspector();
 
     // Returns false when the user requests exit (Escape key).
@@ -21,6 +26,7 @@ class SandboxInspector {
     IInput& m_input;
     ILogger& m_logger;
 
+    fl::EntityManager* m_entityManager{nullptr};
     AudioBufferId m_toneBuffer{0};
     AudioSourceId m_toneSource{0};
     bool m_tonePlaying{false};

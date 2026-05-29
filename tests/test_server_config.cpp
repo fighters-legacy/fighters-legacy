@@ -254,6 +254,26 @@ autosave_interval_s = 600
     CHECK(log.entries.empty());
 }
 
+TEST_CASE("parseServerConfig: entity_soft_cap is parsed from [world]", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nentity_soft_cap = 800\n", &log);
+    CHECK(cfg.entitySoftCap == 800);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: absent entity_soft_cap defaults to 0", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("", &log);
+    CHECK(cfg.entitySoftCap == 0);
+}
+
+TEST_CASE("parseServerConfig: negative entity_soft_cap warns and uses 0", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nentity_soft_cap = -1\n", &log);
+    CHECK(cfg.entitySoftCap == 0);
+    CHECK(log.hasMessage(LogLevel::Warn, "entity_soft_cap"));
+}
+
 // ---------------------------------------------------------------------------
 // [ai]
 // ---------------------------------------------------------------------------

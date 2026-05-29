@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "sandbox/SandboxInspector.h"
 
+#include "entity/EntityManager.h"
+
 #include "IAudio.h"
 #include "IInput.h"
 #include "ILogger.h"
@@ -92,8 +94,9 @@ static constexpr const char* keyName(Key k) {
     }
 }
 
-SandboxInspector::SandboxInspector(IAudio& audio, IInput& input, ILogger& logger, float freq)
-    : m_audio(audio), m_input(input), m_logger(logger) {
+SandboxInspector::SandboxInspector(IAudio& audio, IInput& input, ILogger& logger, float freq,
+                                   fl::EntityManager* entityManager)
+    : m_audio(audio), m_input(input), m_logger(logger), m_entityManager(entityManager) {
     constexpr int kSampleRate = 44100;
     std::vector<int16_t> pcm(kSampleRate);
     for (int i = 0; i < kSampleRate; ++i)
@@ -120,10 +123,16 @@ SandboxInspector::~SandboxInspector() {
 bool SandboxInspector::update() {
     ++m_frameCount;
 
-    // Entity inspector stub — logged once on the first frame.
-    if (m_frameCount == 1)
-        m_logger.log(LogLevel::Info, __FILE__, __LINE__,
-                     "entity inspector: spawn/despawn not yet available (Phase 2 renderer)");
+    // Entity inspector — log live count once on the first frame.
+    if (m_frameCount == 1) {
+        if (m_entityManager) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "entity inspector: %u live entities", m_entityManager->liveCount());
+            m_logger.log(LogLevel::Info, __FILE__, __LINE__, buf);
+        } else {
+            m_logger.log(LogLevel::Info, __FILE__, __LINE__, "entity inspector: no entity manager wired");
+        }
+    }
 
     // Frame stats every 300 frames.
     if (m_frameCount % 300 == 0) {

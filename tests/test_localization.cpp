@@ -190,6 +190,9 @@ struct LocaleMockPack : public IContentPack {
     std::optional<AIScript> loadAIScript(const char*) override {
         return {};
     }
+    std::optional<EntityDefData> loadEntityDef(const char*) override {
+        return {};
+    }
     std::vector<std::string> listAssets(AssetType) const override {
         return {};
     }

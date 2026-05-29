@@ -14,7 +14,7 @@ struct AssetPathInfo {
     const char* extFallback;
 };
 
-static constexpr std::array<AssetPathInfo, 7> kAssetPaths = {{
+static constexpr std::array<AssetPathInfo, static_cast<size_t>(AssetType::Count)> kAssetPaths = {{
     {"aircraft", ".glb", ".gltf"}, // Mesh
     {"textures", ".ktx2", ".png"}, // Texture
     {"audio", ".ogg", ""},         // Audio
@@ -22,7 +22,10 @@ static constexpr std::array<AssetPathInfo, 7> kAssetPaths = {{
     {"missions", ".yaml", ""},     // Mission
     {"terrain", ".json", ""},      // Terrain
     {"ai", ".lua", ""},            // AIScript
+    {"entities", ".toml", ""},     // EntityDef
 }};
+static_assert(kAssetPaths.size() == static_cast<size_t>(AssetType::Count),
+              "kAssetPaths out of sync with AssetType enum");
 
 FolderContentPack::FolderContentPack(IFilesystem& fs, ILogger& logger, std::string modDir, Manifest manifest)
     : m_fs(fs), m_logger(logger), m_modDir(std::move(modDir)), m_manifest(std::move(manifest)) {}
@@ -92,6 +95,9 @@ std::optional<TerrainData> FolderContentPack::loadTerrain(const char* name) {
 }
 std::optional<AIScript> FolderContentPack::loadAIScript(const char* name) {
     return loadBytes<AIScript>(name, AssetType::AIScript);
+}
+std::optional<EntityDefData> FolderContentPack::loadEntityDef(const char* name) {
+    return loadBytes<EntityDefData>(name, AssetType::EntityDef);
 }
 
 std::vector<std::string> FolderContentPack::listAssets(AssetType type) const {

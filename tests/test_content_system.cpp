@@ -204,6 +204,9 @@ struct MockContentPack : public IContentPack {
     std::optional<AIScript> loadAIScript(const char* n) override {
         return loadByType<AIScript>(n, AssetType::AIScript);
     }
+    std::optional<EntityDefData> loadEntityDef(const char* n) override {
+        return loadByType<EntityDefData>(n, AssetType::EntityDef);
+    }
     std::vector<std::string> listAssets(AssetType) const override {
         return {};
     }
@@ -366,6 +369,9 @@ static std::vector<std::unique_ptr<IContentPack>> makePacks(MockContentPack* pac
         }
         std::optional<AIScript> loadAIScript(const char* n) override {
             return p->loadAIScript(n);
+        }
+        std::optional<EntityDefData> loadEntityDef(const char* n) override {
+            return p->loadEntityDef(n);
         }
         std::vector<std::string> listAssets(AssetType t) const override {
             return p->listAssets(t);

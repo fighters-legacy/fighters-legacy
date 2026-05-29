@@ -42,6 +42,7 @@ class IContentPack {
     virtual std::optional<MissionData> loadMission(const char* name) = 0;
     virtual std::optional<TerrainData> loadTerrain(const char* name) = 0;
     virtual std::optional<AIScript> loadAIScript(const char* name) = 0;
+    virtual std::optional<EntityDefData> loadEntityDef(const char* name) = 0;
 
     virtual std::vector<std::string> listAssets(AssetType type) const = 0;
 

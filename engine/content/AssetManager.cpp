@@ -93,6 +93,9 @@ std::shared_ptr<TerrainData> AssetManager::loadTerrain(const char* name) {
 std::shared_ptr<AIScript> AssetManager::loadAIScript(const char* name) {
     return loadAsset<AIScript>(AssetType::AIScript, name, &IContentPack::loadAIScript);
 }
+std::shared_ptr<EntityDefData> AssetManager::loadEntityDef(const char* name) {
+    return loadAsset<EntityDefData>(AssetType::EntityDef, name, &IContentPack::loadEntityDef);
+}
 
 void AssetManager::enableHotReload(IFilesystemWatcher& watcher) {
     m_watcher = &watcher;

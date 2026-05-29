@@ -105,6 +105,13 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             cfg.worldSavePath = std::move(*v);
         if (auto v = tbl["world"]["autosave_interval_s"].value<int64_t>())
             cfg.worldAutosaveIntervalS = static_cast<int>(*v);
+        if (auto v = tbl["world"]["entity_soft_cap"].value<int64_t>()) {
+            if (*v < 0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "world.entity_soft_cap must be >= 0; using 0 (unlimited)");
+            } else {
+                cfg.entitySoftCap = static_cast<int>(*v);
+            }
+        }
 
         // [ai]
         if (auto v = tbl["ai"]["difficulty_floor"].value<std::string>()) {

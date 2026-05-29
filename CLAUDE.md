@@ -3,16 +3,17 @@
 ## Project Overview
 
 GPL v3 general-purpose combat flight sim engine, inspired by Jane's Fighters Anthology (1998).
-Cross-platform: Windows 10/11, Linux, macOS. Phase 1 (engine foundation) is active.
+Cross-platform: Windows 10/11, Linux, macOS. Phase 2 (Modern-Particles Engine) is active.
 
 ## Architecture
 
 ```
-engine/     — core: content system, asset manager, IContentPack interface
-platform/   — HAL: Vulkan, SDL3, OpenAL Soft, ENet backends
-game/       — fighters-legacy game binary
-tools/      — developer utilities
-tests/      — Catch2 unit tests
+engine/         — core: content system, asset manager, IContentPack interface
+engine/entity/  — entity/object system: pool, type registry, damage model, EntityManager
+platform/       — HAL: Vulkan, SDL3, OpenAL Soft, ENet backends
+game/           — fighters-legacy game binary
+tools/          — developer utilities
+tests/          — Catch2 unit tests
 ```
 
 The engine is fully content-agnostic. It knows nothing about FA or any specific game.
@@ -35,7 +36,7 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 
 ## Conventions
 
-- Conventional Commits — scopes: engine / renderer / audio / network / content / flight / ai / mission / game / build / ci / docs
+- Conventional Commits — scopes: engine / renderer / audio / network / content / flight / difficulty / entity / ai / mission / game / build / ci / docs
 - DCO sign-off required: `git commit -s`
 <!-- REUSE-IgnoreStart -->
 - SPDX header required on all new .cpp/.h files: `// SPDX-License-Identifier: GPL-3.0-or-later`

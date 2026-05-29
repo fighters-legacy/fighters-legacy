@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-enum class AssetType : uint8_t { Mesh, Texture, Audio, FlightModel, Mission, Terrain, AIScript };
+enum class AssetType : uint8_t { Mesh, Texture, Audio, FlightModel, Mission, Terrain, AIScript, EntityDef, Count };
 
 // Raw-byte asset base. Format-specific fields are added by the renderer/audio
 // workstreams once those subsystems exist. All IContentPack load methods return subtypes.
@@ -22,3 +22,4 @@ struct FlightModel : AssetBase {};
 struct MissionData : AssetBase {};
 struct TerrainData : AssetBase {};
 struct AIScript : AssetBase {};
+struct EntityDefData : AssetBase {};

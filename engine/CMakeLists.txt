@@ -60,6 +60,21 @@ target_link_libraries(engine-firstrun
             platform-hal
 )
 
+add_library(engine-entity STATIC
+    entity/EntityPool.cpp
+    entity/EntityTypeRegistry.cpp
+    entity/EntityDefParser.cpp
+    entity/EntityManager.cpp
+)
+
+target_include_directories(engine-entity PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(engine-entity
+    PUBLIC  engine-loop
+            platform-hal
+    PRIVATE tomlplusplus::tomlplusplus
+)
+
 add_library(engine-sandbox STATIC
     sandbox/SandboxInspector.cpp
 )
@@ -67,7 +82,8 @@ add_library(engine-sandbox STATIC
 target_include_directories(engine-sandbox PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(engine-sandbox
-    PUBLIC platform-hal
+    PUBLIC  platform-hal
+            engine-entity
 )
 
 add_subdirectory(crash)

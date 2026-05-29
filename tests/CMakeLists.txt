@@ -7,6 +7,11 @@ include(Catch)
 #   target_link_libraries(test_foo PRIVATE Catch2::Catch2WithMain engine-content)
 #   catch_discover_tests(test_foo)
 
+add_executable(test_entity test_entity.cpp)
+target_link_libraries(test_entity PRIVATE Catch2::Catch2WithMain engine-entity)
+target_include_directories(test_entity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_entity)
+
 add_executable(test_atmosphere test_atmosphere.cpp)
 target_link_libraries(test_atmosphere PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_atmosphere)
