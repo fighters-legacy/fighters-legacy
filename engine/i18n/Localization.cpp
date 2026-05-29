@@ -4,7 +4,6 @@
 #include "IFilesystem.h"
 #include "IFilesystemWatcher.h"
 #include "ILogger.h"
-#include "content/IContentPack.h"
 
 #include <toml++/toml.hpp>
 
@@ -82,9 +81,9 @@ bool Localization::readMetaRTL(const char* tag, bool& outRTL) const {
     return false;
 }
 
-bool Localization::load(const char* lang, const std::vector<const IContentPack*>& mods) {
+bool Localization::load(const char* lang, std::span<const std::string> rootDirs) {
     m_lang = lang;
-    m_lastMods = mods;
+    m_lastRootDirs = std::vector<std::string>(rootDirs.begin(), rootDirs.end());
     m_active = StringTable{};
     m_watchedDirs.clear();
     m_rtl = false;
@@ -94,12 +93,9 @@ bool Localization::load(const char* lang, const std::vector<const IContentPack*>
     for (auto& tag : chain) {
         std::string localeDir = "locale/" + tag;
         loadLocaleDir(localeDir, m_active, &m_watchedDirs);
-        // Iterate mods backwards so insert_or_assign gives highest-priority mod the win
-        for (int i = static_cast<int>(mods.size()) - 1; i >= 0; --i) {
-            const char* root = mods[i]->rootDirectory();
-            if (!root)
-                continue;
-            std::string modLocaleDir = std::string(root) + "/locale/" + tag;
+        // Iterate roots backwards so insert_or_assign gives highest-priority root the win
+        for (int i = static_cast<int>(rootDirs.size()) - 1; i >= 0; --i) {
+            std::string modLocaleDir = rootDirs[i] + "/locale/" + tag;
             loadLocaleDir(modLocaleDir, m_active, &m_watchedDirs);
         }
     }
@@ -119,7 +115,7 @@ bool Localization::load(const char* lang, const std::vector<const IContentPack*>
 bool Localization::reload() {
     if (m_lang.empty())
         return false;
-    return load(m_lang.c_str(), m_lastMods);
+    return load(m_lang.c_str(), m_lastRootDirs);
 }
 
 void Localization::watch(IFilesystemWatcher* watcher) {
@@ -210,18 +206,13 @@ void Localization::loadLocaleDir(const std::string& localeDir, StringTable& tabl
     loadLocaleDirImpl(m_fs, m_logger, localeDir, table, watchedDirs);
 }
 
-void Localization::loadOneLocale(const char* tag, const std::vector<const IContentPack*>& mods,
-                                 StringTable& out) const {
+void Localization::loadOneLocale(const char* tag, std::span<const std::string> rootDirs, StringTable& out) const {
     loadLocaleDirImpl(m_fs, m_logger, std::string("locale/") + tag, out, nullptr);
-    for (int i = static_cast<int>(mods.size()) - 1; i >= 0; --i) {
-        const char* root = mods[i]->rootDirectory();
-        if (!root)
-            continue;
-        loadLocaleDirImpl(m_fs, m_logger, std::string(root) + "/locale/" + tag, out, nullptr);
-    }
+    for (int i = static_cast<int>(rootDirs.size()) - 1; i >= 0; --i)
+        loadLocaleDirImpl(m_fs, m_logger, rootDirs[i] + "/locale/" + tag, out, nullptr);
 }
 
-std::vector<Localization::LocaleInfo> Localization::listLocales(const std::vector<const IContentPack*>& mods) const {
+std::vector<Localization::LocaleInfo> Localization::listLocales(std::span<const std::string> rootDirs) const {
     std::set<std::string> tags;
 
     auto entries = m_fs.scanDirectory(PathDomain::Assets, "locale");
@@ -229,11 +220,8 @@ std::vector<Localization::LocaleInfo> Localization::listLocales(const std::vecto
         if (entry.isDirectory)
             tags.insert(entry.name);
     }
-    for (auto* mod : mods) {
-        const char* root = mod->rootDirectory();
-        if (!root)
-            continue;
-        std::string modLocale = std::string(root) + "/locale";
+    for (const auto& root : rootDirs) {
+        std::string modLocale = root + "/locale";
         auto modEntries = m_fs.scanDirectory(PathDomain::Assets, modLocale.c_str());
         for (auto& entry : modEntries) {
             if (entry.isDirectory)
@@ -271,16 +259,15 @@ std::vector<Localization::LocaleInfo> Localization::listLocales(const std::vecto
     return result; // already sorted because std::set is ordered
 }
 
-std::vector<std::string> Localization::listMissingKeys(const char* lang,
-                                                       const std::vector<const IContentPack*>& mods) const {
+std::vector<std::string> Localization::listMissingKeys(const char* lang, std::span<const std::string> rootDirs) const {
     if (std::string(lang) == "en")
         return {};
 
     StringTable enTable;
-    loadOneLocale("en", mods, enTable);
+    loadOneLocale("en", rootDirs, enTable);
 
     StringTable langTable;
-    loadOneLocale(lang, mods, langTable);
+    loadOneLocale(lang, rootDirs, langTable);
 
     std::vector<std::string> missing;
     enTable.forEach([&](const char* key, const char*) {
@@ -291,18 +278,18 @@ std::vector<std::string> Localization::listMissingKeys(const char* lang,
     return missing;
 }
 
-float Localization::getCoverage(const char* lang, const std::vector<const IContentPack*>& mods) const {
+float Localization::getCoverage(const char* lang, std::span<const std::string> rootDirs) const {
     if (std::string(lang) == "en")
         return 1.0f;
 
     StringTable enTable;
-    loadOneLocale("en", mods, enTable);
+    loadOneLocale("en", rootDirs, enTable);
 
     if (enTable.empty())
         return 1.0f;
 
     StringTable langTable;
-    loadOneLocale(lang, mods, langTable);
+    loadOneLocale(lang, rootDirs, langTable);
 
     int total = 0;
     int present = 0;

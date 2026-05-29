@@ -36,7 +36,7 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 
 ## Conventions
 
-- Conventional Commits — scopes: engine / renderer / audio / network / content / flight / difficulty / entity / ai / mission / game / build / ci / docs
+- Conventional Commits — scopes: engine / renderer / audio / network / content / i18n / flight / difficulty / entity / ai / mission / game / tools / build / ci / docs
 - DCO sign-off required: `git commit -s`
 <!-- REUSE-IgnoreStart -->
 - SPDX header required on all new .cpp/.h files: `// SPDX-License-Identifier: GPL-3.0-or-later`

@@ -5,8 +5,6 @@
 #include "IFilesystem.h"
 #include "IFilesystemWatcher.h"
 #include "ILogger.h"
-#include "content/AssetTypes.h"
-#include "content/IContentPack.h"
 #include "i18n/Localization.h"
 #include "i18n/StringTable.h"
 
@@ -138,66 +136,6 @@ struct MockWatcher : public IFilesystemWatcher {
     void unwatch(PathDomain, const char*) override {}
     std::vector<Event> pollEvents() override {
         return std::exchange(pendingEvents, {});
-    }
-};
-
-struct LocaleMockPack : public IContentPack {
-    std::string root;
-    int prio = 0;
-
-    const char* name() const override {
-        return "mock";
-    }
-    const char* version() const override {
-        return "1.0";
-    }
-    const char* id() const override {
-        return "mock-id";
-    }
-    int priority() const override {
-        return prio;
-    }
-    const char* rootDirectory() const override {
-        return root.empty() ? nullptr : root.c_str();
-    }
-    IContentPack::Status init() override {
-        return IContentPack::Status::Ready;
-    }
-    bool configure(IWindow*) override {
-        return true;
-    }
-    bool hasAsset(const char*, AssetType) const override {
-        return false;
-    }
-    std::optional<MeshData> loadMesh(const char*) override {
-        return {};
-    }
-    std::optional<TextureData> loadTexture(const char*) override {
-        return {};
-    }
-    std::optional<AudioBuffer> loadAudio(const char*) override {
-        return {};
-    }
-    std::optional<FlightModel> loadFlightModel(const char*) override {
-        return {};
-    }
-    std::optional<MissionData> loadMission(const char*) override {
-        return {};
-    }
-    std::optional<TerrainData> loadTerrain(const char*) override {
-        return {};
-    }
-    std::optional<AIScript> loadAIScript(const char*) override {
-        return {};
-    }
-    std::optional<EntityDefData> loadEntityDef(const char*) override {
-        return {};
-    }
-    std::vector<std::string> listAssets(AssetType) const override {
-        return {};
-    }
-    std::optional<std::string> loadConfig(const char*) const override {
-        return std::nullopt;
     }
 };
 
@@ -427,17 +365,13 @@ TEST_CASE("Localization: load called twice switches language with no stale state
     REQUIRE(std::string(loc.get("ui.s.k")) == "french");
 }
 
-TEST_CASE("Localization: load handles mod with rootDirectory==nullptr without crash") {
+TEST_CASE("Localization: load with empty rootDirs is safe") {
     MockFilesystem fs;
     MockLogger logger;
     addEnLocale(fs, "[s]\nk = \"v\"\n");
 
-    LocaleMockPack noRootPack;
-    // root is empty → rootDirectory() returns nullptr
-    const std::vector<const IContentPack*> mods = {&noRootPack};
-
     Localization loc(fs, logger);
-    REQUIRE_NOTHROW(loc.load("en", mods));
+    REQUIRE_NOTHROW(loc.load("en", std::vector<std::string>{}));
 }
 
 // ---------------------------------------------------------------------------
@@ -536,19 +470,13 @@ TEST_CASE("Localization: higher-priority mod wins over lower-priority mod and ba
     MockLogger logger;
     addEnLocale(fs, "[s]\nk = \"base\"\n");
 
-    LocaleMockPack lowPack, highPack;
-    lowPack.root = "mods/low";
-    lowPack.prio = 5;
-    highPack.root = "mods/high";
-    highPack.prio = 100;
-
     fs.addLocaleFile("mods/low/locale/en/strings.toml", "[s]\nk = \"low\"\n");
     fs.addLocaleFile("mods/high/locale/en/strings.toml", "[s]\nk = \"high\"\n");
 
-    // mods sorted highest-first, as ModLoader would produce
-    const std::vector<const IContentPack*> mods = {&highPack, &lowPack};
+    // rootDirs sorted highest-first, as ModLoader would produce
+    const std::vector<std::string> rootDirs = {"mods/high", "mods/low"};
     Localization loc(fs, logger);
-    REQUIRE(loc.load("en", mods));
+    REQUIRE(loc.load("en", rootDirs));
     REQUIRE(std::string(loc.get("strings.s.k")) == "high");
 }
 
@@ -557,13 +485,10 @@ TEST_CASE("Localization: mod with no locale directory is silently skipped") {
     MockLogger logger;
     addEnLocale(fs, "[s]\nk = \"base\"\n");
 
-    LocaleMockPack pack;
-    pack.root = "mods/nolocale";
-    // No locale dir added for this mod — scanDirectory returns empty → silently skipped
-
-    const std::vector<const IContentPack*> mods = {&pack};
+    // No locale dir added for "mods/nolocale" — scanDirectory returns empty → silently skipped
+    const std::vector<std::string> rootDirs = {"mods/nolocale"};
     Localization loc(fs, logger);
-    REQUIRE(loc.load("en", mods));
+    REQUIRE(loc.load("en", rootDirs));
     REQUIRE(std::string(loc.get("strings.s.k")) == "base");
 }
 
@@ -574,18 +499,15 @@ TEST_CASE("Localization: mod locale is loaded for all chain tiers") {
     fs.addDirEntry("locale", "en", true);
     fs.addLocaleFile("locale/en/ui.toml", "[s]\na = \"en_a\"\n");
 
-    LocaleMockPack pack;
-    pack.root = "mods/testmod";
-    pack.prio = 50;
     // Mod provides en and fr translations
     fs.addLocaleFile("mods/testmod/locale/en/ui.toml", "[s]\nb = \"mod_en_b\"\n");
     fs.addLocaleFile("mods/testmod/locale/fr/ui.toml", "[s]\nb = \"mod_fr_b\"\n");
     fs.addDirEntry("locale", "fr", true);
     fs.addLocaleFile("locale/fr/ui.toml", "[s]\na = \"fr_a\"\n");
 
-    const std::vector<const IContentPack*> mods = {&pack};
+    const std::vector<std::string> rootDirs = {"mods/testmod"};
     Localization loc(fs, logger);
-    REQUIRE(loc.load("fr", mods));
+    REQUIRE(loc.load("fr", rootDirs));
     CHECK(std::string(loc.get("ui.s.a")) == "fr_a");     // fr base overrides en base
     CHECK(std::string(loc.get("ui.s.b")) == "mod_fr_b"); // mod fr overrides mod en
 }
@@ -1044,14 +966,11 @@ TEST_CASE("Localization: listLocales includes locales contributed by mods") {
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
 
-    LocaleMockPack pack;
-    pack.root = "mods/testmod";
-    pack.prio = 50;
     fs.addDir("mods/testmod/locale");
     fs.addDirEntry("mods/testmod/locale", "ja", true);
 
     Localization loc(fs, logger);
-    auto locales = loc.listLocales({&pack});
+    auto locales = loc.listLocales(std::vector<std::string>{"mods/testmod"});
     bool hasEn = false, hasJa = false;
     for (auto& l : locales) {
         if (l.tag == "en")
@@ -1063,16 +982,15 @@ TEST_CASE("Localization: listLocales includes locales contributed by mods") {
     CHECK(hasJa);
 }
 
-TEST_CASE("Localization: listLocales skips mod with null rootDirectory") {
+TEST_CASE("Localization: listLocales with empty rootDirs is safe") {
     MockFilesystem fs;
     MockLogger logger;
     fs.addDir("locale");
     fs.addDirEntry("locale", "en", true);
 
-    LocaleMockPack nullRoot; // root is empty → rootDirectory() returns nullptr
     Localization loc(fs, logger);
-    REQUIRE_NOTHROW(loc.listLocales({&nullRoot}));
-    auto locales = loc.listLocales({&nullRoot});
+    REQUIRE_NOTHROW(loc.listLocales(std::vector<std::string>{}));
+    auto locales = loc.listLocales(std::vector<std::string>{});
     REQUIRE(locales.size() == 1);
 }
 
@@ -1138,7 +1056,7 @@ TEST_CASE("Localization: listMissingKeys returns empty when all keys are present
     REQUIRE(missing.empty());
 }
 
-TEST_CASE("Localization: listMissingKeys with null-rootDirectory mod does not crash") {
+TEST_CASE("Localization: listMissingKeys with empty rootDirs is safe") {
     MockFilesystem fs;
     MockLogger logger;
     fs.addDir("locale");
@@ -1147,7 +1065,6 @@ TEST_CASE("Localization: listMissingKeys with null-rootDirectory mod does not cr
     fs.addDirEntry("locale", "fr", true);
     fs.addLocaleFile("locale/fr/ui.toml", "[s]\na = \"A_fr\"\n");
 
-    LocaleMockPack noRoot; // root is empty → rootDirectory() returns nullptr
     Localization loc(fs, logger);
-    REQUIRE_NOTHROW(loc.listMissingKeys("fr", {&noRoot}));
+    REQUIRE_NOTHROW(loc.listMissingKeys("fr", std::vector<std::string>{}));
 }
