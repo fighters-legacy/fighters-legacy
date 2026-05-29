@@ -11,35 +11,50 @@ if(NOT SDL3_FOUND)
     unset(CMAKE_COMPILE_WARNING_AS_ERROR)
 endif()
 
-# Compile shaders at build time
-# glslangValidator is provided by: glslang-tools (Ubuntu), glslang (Homebrew), LunarG SDK (Windows)
+# ---------------------------------------------------------------------------
+# Shader compilation
+# glslangValidator is provided by: glslang-tools (Ubuntu), glslang (Homebrew),
+# LunarG SDK (Windows)
+# ---------------------------------------------------------------------------
 find_program(GLSLANG_VALIDATOR glslangValidator
     HINTS "$ENV{VULKAN_SDK}/bin" "${Vulkan_INCLUDE_DIR}/../bin")
 if(NOT GLSLANG_VALIDATOR)
-    message(FATAL_ERROR "glslangValidator not found — install glslang-tools (Ubuntu), glslang (macOS), or the Vulkan SDK (Windows)")
+    message(FATAL_ERROR
+        "glslangValidator not found — install glslang-tools (Ubuntu), "
+        "glslang (macOS), or the Vulkan SDK (Windows)")
 endif()
 
 set(SHADER_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
-set(SHADER_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+set(SHADER_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+file(MAKE_DIRECTORY "${SHADER_OUT_DIR}")
 
-add_custom_command(
-    OUTPUT  "${SHADER_OUT_DIR}/triangle.vert.spv"
-    COMMAND ${GLSLANG_VALIDATOR} -V "${SHADER_SRC_DIR}/triangle.vert" -o "${SHADER_OUT_DIR}/triangle.vert.spv"
-    DEPENDS "${SHADER_SRC_DIR}/triangle.vert"
+# List every GLSL source; add new shaders here.
+set(GLSL_SHADERS
+    mesh.vert
+    mesh.frag
+    tonemap.vert
+    tonemap.frag
 )
 
-add_custom_command(
-    OUTPUT  "${SHADER_OUT_DIR}/triangle.frag.spv"
-    COMMAND ${GLSLANG_VALIDATOR} -V "${SHADER_SRC_DIR}/triangle.frag" -o "${SHADER_OUT_DIR}/triangle.frag.spv"
-    DEPENDS "${SHADER_SRC_DIR}/triangle.frag"
-)
+set(SPIRV_FILES "")
+foreach(SHADER IN LISTS GLSL_SHADERS)
+    set(SRC "${SHADER_SRC_DIR}/${SHADER}")
+    set(SPV "${SHADER_OUT_DIR}/${SHADER}.spv")
+    add_custom_command(
+        OUTPUT  "${SPV}"
+        COMMAND ${GLSLANG_VALIDATOR} -V "${SRC}" -o "${SPV}"
+        DEPENDS "${SRC}"
+        COMMENT "Compiling shader ${SHADER}"
+        VERBATIM
+    )
+    list(APPEND SPIRV_FILES "${SPV}")
+endforeach()
 
-add_custom_target(vulkan-shaders ALL
-    DEPENDS
-        "${SHADER_OUT_DIR}/triangle.vert.spv"
-        "${SHADER_OUT_DIR}/triangle.frag.spv"
-)
+add_custom_target(vulkan-shaders ALL DEPENDS ${SPIRV_FILES})
 
+# ---------------------------------------------------------------------------
+# Renderer library
+# ---------------------------------------------------------------------------
 add_library(platform-vulkan STATIC VkRenderer.cpp VkWindow.cpp)
 add_dependencies(platform-vulkan vulkan-shaders)
 
@@ -50,5 +65,15 @@ target_link_libraries(platform-vulkan
 
 target_compile_definitions(platform-vulkan PRIVATE
     $<$<CONFIG:Debug>:FL_VK_VALIDATION>
+    # Build-tree shader dir — runtime path discovery uses SDL_GetBasePath() first
     FL_SHADER_DIR="${SHADER_OUT_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# Install: stage compiled SPIR-V next to the binary so the runtime path
+# resolver finds them at share/fighters-legacy/shaders/ (Linux/Windows) or
+# Contents/Resources/shaders/ (macOS .app, set up by the packaging step).
+# ---------------------------------------------------------------------------
+install(FILES ${SPIRV_FILES}
+    DESTINATION share/fighters-legacy/shaders
 )

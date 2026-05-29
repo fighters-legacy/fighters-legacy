@@ -11,6 +11,7 @@ Cross-platform: Windows 10/11, Linux, macOS. Phase 2 (Modern-Particles Engine) i
 engine/         — core: content system, asset manager, IContentPack interface
 engine/entity/  — entity/object system: pool, type registry, damage model, EntityManager
 platform/       — HAL: Vulkan, SDL3, OpenAL Soft, ENet backends
+platform/RenderTypes.h — GPU-agnostic scene types shared across the HAL boundary
 game/           — fighters-legacy game binary
 tools/          — developer utilities; asset pipeline (validate-flight-model, validate-mission, validate-licenses, validate-mesh, tex-compress)
 tests/          — Catch2 unit tests
@@ -18,6 +19,21 @@ tests/          — Catch2 unit tests
 
 The engine is fully content-agnostic. It knows nothing about FA or any specific game.
 FA support lives in jomkz/fa-content. No FA-specific code belongs in this repo.
+
+### Math library
+
+**GLM** is the shared vector/matrix/quaternion library, linked as an INTERFACE dependency on `platform-hal`. Anything that links `platform-hal` (engine, game, tests) gets GLM automatically. Use `glm::vec3`, `glm::mat4`, `glm::quat`, etc.
+
+### Renderer architecture (Phase 2)
+
+`VkRenderer` (platform/vulkan/) uses Vulkan 1.3 dynamic rendering (`VK_KHR_dynamic_rendering`) — no `VkRenderPass` or `VkFramebuffer` objects. Two passes per frame:
+
+1. **Forward** — geometry into HDR offscreen (`VK_FORMAT_R16G16B16A16_SFLOAT`) with reverse-Z depth (`VK_FORMAT_D32_SFLOAT`, far plane = 0.0, depth clear = 0.0, compare = GREATER).
+2. **Tonemap** — Khronos PBR Neutral, fullscreen HDR → swapchain (`B8G8R8A8_SRGB`).
+
+World convention: right-handed, Y-up, meters (matches glTF). Vulkan clip-space Y-flip handled in the projection matrix. Camera-relative rendering rebases transforms to the camera origin before GPU upload (float32-safe at arbitrary theater scale).
+
+Runtime shader discovery: `VkRenderer::resolveShaderDir()` tries `SDL_GetBasePath()` + `"shaders/"` first, then macOS `.app` bundle path, then the build-tree `FL_SHADER_DIR` fallback. Release packages must stage `*.spv` into `dist/shaders/` (see `release.yml`).
 
 ## Build
 
@@ -51,3 +67,5 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 - `docs/development.md` — build prerequisites per platform
 - `GOVERNANCE.md` — decision-making and RFC process
 - `CMakePresets.json` — all build presets (debug / release / coverage / asan / msvc variants)
+- `platform/RenderTypes.h` — GPU-agnostic POD types: `MeshHandle`, `TextureHandle`, `MaterialHandle`, `CameraView`, `RenderItem`, `FrameScene`, `EnvironmentState`, `ParticleEmitterState`
+- `cmake/dependencies.cmake` — all FetchContent declarations; GLM is unconditional, Vulkan-specific deps are gated on `Vulkan_FOUND`

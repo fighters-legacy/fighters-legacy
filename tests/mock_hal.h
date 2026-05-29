@@ -9,6 +9,7 @@
 #include "IInput.h"
 #include "IJoystick.h"
 #include "ILogger.h"
+#include "IRenderer.h"
 
 #include <cstring>
 #include <map>
@@ -402,5 +403,42 @@ struct MockJoystick : public IJoystick {
     void flush() override {}
     const char* getLastError() const override {
         return nullptr;
+    }
+};
+
+struct MockRenderer : public IRenderer {
+    int initCount{0};
+    int shutdownCount{0};
+    int beginFrameCount{0};
+    int endFrameCount{0};
+    int resizeCount{0};
+    int lastResizeW{0};
+    int lastResizeH{0};
+    bool initResult{true};
+    std::string lastErrorBuf;
+
+    bool init(IWindow*) override {
+        ++initCount;
+        return initResult;
+    }
+    void onResize(int w, int h) override {
+        ++resizeCount;
+        lastResizeW = w;
+        lastResizeH = h;
+    }
+    void beginFrame() override {
+        ++beginFrameCount;
+    }
+    void endFrame() override {
+        ++endFrameCount;
+    }
+    void shutdown() override {
+        ++shutdownCount;
+    }
+    const char* getLastError() const override {
+        return lastErrorBuf.empty() ? nullptr : lastErrorBuf.c_str();
+    }
+    const char* gpuInfo() const override {
+        return "MockGPU 1.0";
     }
 };

@@ -143,6 +143,23 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# GLM — header-only math library; unconditional (shared by platform-hal and renderer)
+# ---------------------------------------------------------------------------
+find_package(glm QUIET)
+if(glm_FOUND)
+    message(STATUS "glm: system (${glm_VERSION})")
+else()
+    message(STATUS "glm: FetchContent")
+    FetchContent_Declare(glm
+        GIT_REPOSITORY https://github.com/g-truc/glm.git
+        GIT_TAG        1.0.1
+        GIT_SHALLOW    TRUE
+        SYSTEM
+    )
+    FetchContent_MakeAvailable(glm)
+endif()
+
+# ---------------------------------------------------------------------------
 # tomlplusplus — header-only TOML parser; system preferred, FetchContent fallback
 # Used by engine/content/ModLoader to parse mod manifests.
 # ---------------------------------------------------------------------------

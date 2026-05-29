@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#pragma once
+
+#include <cstdint>
+#include <glm/glm.hpp>
+#include <span>
+
+// ---------------------------------------------------------------------------
+// Opaque typed GPU-resource handles.  id == 0 is null/invalid.
+// ---------------------------------------------------------------------------
+
+struct MeshHandle {
+    uint32_t id{0};
+    [[nodiscard]] bool valid() const noexcept {
+        return id != 0;
+    }
+};
+struct TextureHandle {
+    uint32_t id{0};
+    [[nodiscard]] bool valid() const noexcept {
+        return id != 0;
+    }
+};
+struct MaterialHandle {
+    uint32_t id{0};
+    [[nodiscard]] bool valid() const noexcept {
+        return id != 0;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Camera
+//
+// worldOrigin is the camera position in world space. The view matrix is built
+// camera-relative (world rebased to worldOrigin), so large world coordinates
+// remain float32-safe at arbitrary theater scale.
+// ---------------------------------------------------------------------------
+struct CameraView {
+    glm::mat4 view{1.0f};
+    glm::mat4 proj{1.0f};
+    glm::vec3 worldOrigin{};
+};
+
+// ---------------------------------------------------------------------------
+// Per-node rigid pose for named glTF animations.
+// No joint skinning — nodes are transformed independently.
+// ---------------------------------------------------------------------------
+struct NodePose {
+    uint32_t nodeIndex{0};
+    glm::mat4 localTransform{1.0f};
+};
+
+// ---------------------------------------------------------------------------
+// Render flags
+// ---------------------------------------------------------------------------
+static constexpr uint32_t kRenderFlagDamaged = 1u << 0;    // use _b damage-variant nodes
+static constexpr uint32_t kRenderFlagShadowOnly = 1u << 1; // depth pass only
+
+// ---------------------------------------------------------------------------
+// A single draw call submitted to the renderer each frame.
+// transform is in world space; the bridge rebases it to camera-relative before upload.
+// ---------------------------------------------------------------------------
+struct RenderItem {
+    MeshHandle mesh{};
+    MaterialHandle material{};
+    glm::mat4 transform{1.0f};
+    uint32_t lod{0};
+    uint32_t flags{0};
+    std::span<const NodePose> animPoses{};
+};
+
+// ---------------------------------------------------------------------------
+// Lighting and atmospheric parameters for one frame.
+// Weather and time-of-day extensions land in issue #39.
+// ---------------------------------------------------------------------------
+struct EnvironmentState {
+    glm::vec3 sunDirection{0.0f, -1.0f, 0.0f}; // world-space, points toward sun
+    glm::vec3 sunColor{1.0f, 0.95f, 0.8f};
+    glm::vec3 ambientColor{0.1f, 0.12f, 0.15f};
+    float fogDensity{0.0f};
+    float fogStartDist{5000.0f};
+    float timeOfDay{12.0f}; // hours [0, 24)
+};
+
+// ---------------------------------------------------------------------------
+// Particle emitter state for one frame.
+// effectName points to a static/constant string (asset name); nullptr = inactive.
+// ---------------------------------------------------------------------------
+struct ParticleEmitterState {
+    glm::vec3 position{};
+    const char* effectName{nullptr};
+    float intensity{1.0f};
+};
+
+// ---------------------------------------------------------------------------
+// Full scene description submitted between IRenderer::beginFrame and endFrame.
+// Spans are non-owning views; the caller must keep the backing arrays alive
+// until after endFrame() returns.
+// ---------------------------------------------------------------------------
+struct FrameScene {
+    CameraView camera{};
+    std::span<const RenderItem> renderItems{};
+    EnvironmentState environment{};
+    std::span<const ParticleEmitterState> particleEmitters{};
+};

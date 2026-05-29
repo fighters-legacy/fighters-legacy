@@ -59,17 +59,18 @@ jobs:
       - name: Package (Linux / macOS)
         if: matrix.os != 'windows-latest'
         run: |
-          mkdir -p dist
+          mkdir -p dist/shaders
           cp build/${{ matrix.preset }}/game/fighters-legacy/fighters-legacy dist/ 2>/dev/null || true
           for tool in validate-flight-model validate-mission validate-mesh tex-compress validate-licenses; do
             cp build/${{ matrix.preset }}/tools/$tool dist/ 2>/dev/null || true
           done
+          cp build/${{ matrix.preset }}/platform/vulkan/shaders/*.spv dist/shaders/ 2>/dev/null || true
           cd dist && zip -r ../${{ matrix.artifact }}.zip .
 
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
+          New-Item -ItemType Directory -Force dist\shaders | Out-Null
           $tools = @("validate-flight-model","validate-mission","validate-mesh","tex-compress","validate-licenses")
           foreach ($t in $tools) {
             $src = "build\${{ matrix.preset }}\tools\Release\$t.exe"
@@ -77,6 +78,8 @@ jobs:
           }
           $game = "build\${{ matrix.preset }}\game\fighters-legacy\Release\fighters-legacy.exe"
           if (Test-Path $game) { Copy-Item $game dist\ }
+          $spvDir = "build\${{ matrix.preset }}\platform\vulkan\shaders"
+          if (Test-Path $spvDir) { Copy-Item "$spvDir\*.spv" dist\shaders\ }
           Compress-Archive -Path dist\* -DestinationPath ${{ matrix.artifact }}.zip -Force
         shell: pwsh
 
