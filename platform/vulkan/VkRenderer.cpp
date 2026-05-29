@@ -18,7 +18,15 @@
 #include <vector>
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Factory
+// ---------------------------------------------------------------------------
+#include "VkRendererFactory.h"
+std::unique_ptr<IRenderer> createVulkanRenderer() {
+    return std::make_unique<VkRenderer>();
+}
+
+// ---------------------------------------------------------------------------
+// Static helpers
 // ---------------------------------------------------------------------------
 
 static std::vector<uint32_t> loadSpirv(const std::string& path) {
@@ -42,7 +50,6 @@ static VkShaderModule createShaderModule(VkDevice device, const std::vector<uint
     return mod;
 }
 
-// Insert a simple image layout transition barrier.
 static void imageBarrier(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
                          VkAccessFlags srcAccess, VkAccessFlags dstAccess, VkPipelineStageFlags srcStage,
                          VkPipelineStageFlags dstStage, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT) {
@@ -84,12 +91,6 @@ static void fillDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& ci)
 
 // ---------------------------------------------------------------------------
 // Shader / resource path discovery
-//
-// Priority:
-//   1. SDL_GetBasePath() + "shaders/"         (exe-relative, installed layout)
-//   2. SDL_GetBasePath() + "../Resources/shaders/"  (macOS .app bundle)
-//   3. SDL_GetBasePath() + "../share/fighters-legacy/shaders/"  (Linux system)
-//   4. FL_SHADER_DIR + "/"                    (build-tree fallback)
 // ---------------------------------------------------------------------------
 std::string VkRenderer::resolveShaderDir() {
     // SDL3: SDL_GetBasePath() returns a const char* owned by SDL (no free needed).
@@ -111,9 +112,48 @@ std::string VkRenderer::resolveShaderDir() {
 }
 
 // ---------------------------------------------------------------------------
-// IRenderer interface
+// Host-visible buffer helper (for small per-frame UBOs)
 // ---------------------------------------------------------------------------
+static bool createHostBuffer(VkDevice device, VkPhysicalDevice physDevice, VkDeviceSize size, VkBufferUsageFlags usage,
+                             VkBuffer& buf, VkDeviceMemory& mem, void*& mapped) {
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = size;
+    bci.usage = usage;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(device, &bci, nullptr, &buf) != VK_SUCCESS)
+        return false;
 
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(device, buf, &req);
+
+    VkPhysicalDeviceMemoryProperties memProps{};
+    vkGetPhysicalDeviceMemoryProperties(physDevice, &memProps);
+
+    const VkMemoryPropertyFlags flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    uint32_t memTypeIdx = 0;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
+        if ((req.memoryTypeBits & (1u << i)) && (memProps.memoryTypes[i].propertyFlags & flags) == flags) {
+            memTypeIdx = i;
+            break;
+        }
+    }
+
+    VkMemoryAllocateInfo allocCI{};
+    allocCI.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocCI.allocationSize = req.size;
+    allocCI.memoryTypeIndex = memTypeIdx;
+    if (vkAllocateMemory(device, &allocCI, nullptr, &mem) != VK_SUCCESS)
+        return false;
+
+    vkBindBufferMemory(device, buf, mem, 0);
+    vkMapMemory(device, mem, 0, size, 0, &mapped);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// IRenderer — init
+// ---------------------------------------------------------------------------
 bool VkRenderer::init(IWindow* window) {
     m_sdlWindow = static_cast<SDL_Window*>(window->nativeHandle());
     m_shaderDir = resolveShaderDir();
@@ -139,7 +179,6 @@ bool VkRenderer::init(IWindow* window) {
         return false;
     if (!createPipelineCache())
         return false;
-
     if (!createSwapchain(window->width(), window->height()))
         return false;
     if (!createImageViews())
@@ -150,15 +189,23 @@ bool VkRenderer::init(IWindow* window) {
         return false;
     if (!createHdrSampler())
         return false;
+    if (!createPerFrameDescriptorLayout())
+        return false;
+    if (!createMaterialDescriptorLayout())
+        return false;
+    if (!createCommandPool())
+        return false;
+    if (!m_resources.init(m_device, m_physicalDevice, m_instance, m_commandPool, m_graphicsQueue, m_matSetLayout))
+        return false;
     if (!createTonemapDescriptors())
         return false;
     if (!createForwardPipeline())
         return false;
     if (!createTonemapPipeline())
         return false;
-    if (!createCommandPool())
-        return false;
     if (!allocateCommandBuffers())
+        return false;
+    if (!createPerFrameDescriptors())
         return false;
     if (!createSyncObjects())
         return false;
@@ -169,20 +216,23 @@ void VkRenderer::onResize(int /*width*/, int /*height*/) {
     m_framebufferResized = true;
 }
 
+// ---------------------------------------------------------------------------
+// beginFrame — acquire image, reset + begin command buffer recording
+// ---------------------------------------------------------------------------
 void VkRenderer::beginFrame() {
     m_frameAcquired = false;
+    m_pendingScene = {};
 
-    // Poll window size every frame. On some Wayland + SDL3 configurations,
-    // SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED is not fired during a live drag.
+    // Advance resource manager deferred deletion.
+    m_resources.tick(m_totalFrames);
+
     if (m_swapchain != VK_NULL_HANDLE) {
         int w = 0, h = 0;
         if (SDL_GetWindowSizeInPixels(m_sdlWindow, &w, &h) && w > 0 && h > 0 &&
             (static_cast<uint32_t>(w) != m_swapchainExtent.width ||
-             static_cast<uint32_t>(h) != m_swapchainExtent.height)) {
+             static_cast<uint32_t>(h) != m_swapchainExtent.height))
             m_framebufferResized = true;
-        }
     }
-
     if (m_framebufferResized) {
         if (!recreateSwapchain()) {
             m_framebufferResized = true;
@@ -191,7 +241,6 @@ void VkRenderer::beginFrame() {
         m_framebufferResized = false;
     }
 
-    // 100 ms timeout keeps the event loop responsive.
     if (vkWaitForFences(m_device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, 100'000'000ULL) == VK_TIMEOUT)
         return;
 
@@ -211,14 +260,43 @@ void VkRenderer::beginFrame() {
     m_imagesInFlight[m_currentImageIndex] = m_inFlightFences[m_currentFrame];
 
     vkResetCommandBuffer(m_commandBuffers[m_currentFrame], 0);
-    recordCommandBuffer(m_commandBuffers[m_currentFrame], m_currentImageIndex);
-
     m_frameAcquired = true;
 }
 
+// ---------------------------------------------------------------------------
+// setScene — store scene and upload per-frame UBO data
+// ---------------------------------------------------------------------------
+void VkRenderer::setScene(const FrameScene& scene) {
+    if (!m_frameAcquired)
+        return;
+    m_pendingScene = scene;
+    writeFrameUBOs(scene);
+}
+
+void VkRenderer::writeFrameUBOs(const FrameScene& scene) {
+    auto& pf = m_perFrame[m_currentFrame];
+
+    CameraUBO cam{};
+    cam.view = scene.camera.view;
+    cam.proj = scene.camera.proj;
+    cam.worldOrigin = glm::vec4(scene.camera.worldOrigin, 0.0f);
+    std::memcpy(pf.cameraMapped, &cam, sizeof(cam));
+
+    LightUBO light{};
+    light.sunDirection = glm::vec4(scene.environment.sunDirection, 0.0f);
+    light.sunColor = glm::vec4(scene.environment.sunColor, 1.0f);
+    light.ambientColor = glm::vec4(scene.environment.ambientColor, 0.0f);
+    std::memcpy(pf.lightMapped, &light, sizeof(light));
+}
+
+// ---------------------------------------------------------------------------
+// endFrame — record commands, submit, present
+// ---------------------------------------------------------------------------
 void VkRenderer::endFrame() {
     if (!m_frameAcquired)
         return;
+
+    recordCommandBuffer(m_commandBuffers[m_currentFrame], m_currentImageIndex);
 
     const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo si{};
@@ -245,11 +323,68 @@ void VkRenderer::endFrame() {
         m_framebufferResized = true;
 
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    ++m_totalFrames;
 }
 
+// ---------------------------------------------------------------------------
+// Resource method delegation
+// ---------------------------------------------------------------------------
+MeshHandle VkRenderer::createMesh(const MeshUploadDesc& d) {
+    return m_resources.createMesh(d);
+}
+TextureHandle VkRenderer::createTexture(const TextureUploadDesc& d) {
+    return m_resources.createTexture(d);
+}
+MaterialHandle VkRenderer::createMaterial(const MaterialDesc& d) {
+    return m_resources.createMaterial(d);
+}
+void VkRenderer::destroyMesh(MeshHandle h) {
+    m_resources.destroyMesh(h);
+}
+void VkRenderer::destroyTexture(TextureHandle h) {
+    m_resources.destroyTexture(h);
+}
+void VkRenderer::destroyMaterial(MaterialHandle h) {
+    m_resources.destroyMaterial(h);
+}
+
+// ---------------------------------------------------------------------------
+// shutdown
+// ---------------------------------------------------------------------------
 void VkRenderer::shutdown() {
     if (m_device != VK_NULL_HANDLE)
         vkDeviceWaitIdle(m_device);
+
+    m_resources.shutdown();
+
+    // Per-frame UBO buffers
+    for (auto& pf : m_perFrame) {
+        if (pf.cameraMapped && pf.cameraMemory != VK_NULL_HANDLE)
+            vkUnmapMemory(m_device, pf.cameraMemory);
+        if (pf.cameraBuffer != VK_NULL_HANDLE)
+            vkDestroyBuffer(m_device, pf.cameraBuffer, nullptr);
+        if (pf.cameraMemory != VK_NULL_HANDLE)
+            vkFreeMemory(m_device, pf.cameraMemory, nullptr);
+
+        if (pf.lightMapped && pf.lightMemory != VK_NULL_HANDLE)
+            vkUnmapMemory(m_device, pf.lightMemory);
+        if (pf.lightBuffer != VK_NULL_HANDLE)
+            vkDestroyBuffer(m_device, pf.lightBuffer, nullptr);
+        if (pf.lightMemory != VK_NULL_HANDLE)
+            vkFreeMemory(m_device, pf.lightMemory, nullptr);
+    }
+    if (m_perFramePool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(m_device, m_perFramePool, nullptr);
+        m_perFramePool = VK_NULL_HANDLE;
+    }
+    if (m_perFrameSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_device, m_perFrameSetLayout, nullptr);
+        m_perFrameSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_matSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_device, m_matSetLayout, nullptr);
+        m_matSetLayout = VK_NULL_HANDLE;
+    }
 
     destroyAttachments();
 
@@ -330,7 +465,6 @@ void VkRenderer::shutdown() {
 const char* VkRenderer::getLastError() const {
     return m_lastError.empty() ? nullptr : m_lastError.c_str();
 }
-
 const char* VkRenderer::gpuInfo() const {
     return m_gpuInfo.c_str();
 }
@@ -338,7 +472,6 @@ const char* VkRenderer::gpuInfo() const {
 // ---------------------------------------------------------------------------
 // createInstance
 // ---------------------------------------------------------------------------
-
 bool VkRenderer::createInstance() {
     std::vector<const char*> layers;
 #if defined(FL_VK_VALIDATION)
@@ -381,7 +514,6 @@ bool VkRenderer::createInstance() {
 #if defined(__APPLE__)
     ci.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
 #endif
-
 #if defined(FL_VK_VALIDATION)
     VkDebugUtilsMessengerCreateInfoEXT debugCi{};
     fillDebugMessengerCreateInfo(debugCi);
@@ -398,7 +530,6 @@ bool VkRenderer::createInstance() {
 // ---------------------------------------------------------------------------
 // setupDebugMessenger
 // ---------------------------------------------------------------------------
-
 bool VkRenderer::setupDebugMessenger() {
 #if defined(FL_VK_VALIDATION)
     VkDebugUtilsMessengerCreateInfoEXT ci{};
@@ -414,7 +545,6 @@ bool VkRenderer::setupDebugMessenger() {
 // ---------------------------------------------------------------------------
 // createSurface
 // ---------------------------------------------------------------------------
-
 bool VkRenderer::createSurface() {
     m_surface = vk_createSurface(m_instance, m_sdlWindow);
     if (m_surface == VK_NULL_HANDLE) {
@@ -427,7 +557,6 @@ bool VkRenderer::createSurface() {
 // ---------------------------------------------------------------------------
 // pickPhysicalDevice
 // ---------------------------------------------------------------------------
-
 static bool checkDeviceExtension(VkPhysicalDevice dev, const char* name) {
     uint32_t count = 0;
     vkEnumerateDeviceExtensionProperties(dev, nullptr, &count, nullptr);
@@ -456,7 +585,6 @@ bool VkRenderer::pickPhysicalDevice() {
         if (!checkDeviceExtension(dev, "VK_KHR_portability_subset"))
             return false;
 #endif
-        // Require Vulkan 1.3 dynamic rendering support.
         VkPhysicalDeviceVulkan13Features vk13{};
         vk13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
         VkPhysicalDeviceFeatures2 feats{};
@@ -527,9 +655,8 @@ bool VkRenderer::pickPhysicalDevice() {
 }
 
 // ---------------------------------------------------------------------------
-// createLogicalDevice — enables dynamic rendering (Vulkan 1.3 core)
+// createLogicalDevice
 // ---------------------------------------------------------------------------
-
 bool VkRenderer::createLogicalDevice() {
     const float priority = 1.0f;
     std::vector<VkDeviceQueueCreateInfo> queueCIs;
@@ -551,13 +678,11 @@ bool VkRenderer::createLogicalDevice() {
     exts.push_back("VK_KHR_portability_subset");
 #endif
 
-    // Enable Vulkan 1.3 features required by this renderer.
     VkPhysicalDeviceVulkan13Features vk13{};
     vk13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     vk13.dynamicRendering = VK_TRUE;
     vk13.synchronization2 = VK_TRUE;
 
-    // Chain through VkPhysicalDeviceFeatures2; pEnabledFeatures must be null.
     VkPhysicalDeviceFeatures2 features2{};
     features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     features2.pNext = &vk13;
@@ -569,13 +694,11 @@ bool VkRenderer::createLogicalDevice() {
     ci.pQueueCreateInfos = queueCIs.data();
     ci.enabledExtensionCount = static_cast<uint32_t>(exts.size());
     ci.ppEnabledExtensionNames = exts.data();
-    // pEnabledFeatures must be null when using VkPhysicalDeviceFeatures2 in pNext.
 
     if (vkCreateDevice(m_physicalDevice, &ci, nullptr, &m_device) != VK_SUCCESS) {
         m_lastError = "vkCreateDevice failed";
         return false;
     }
-
     vkGetDeviceQueue(m_device, m_graphicsFamily, 0, &m_graphicsQueue);
     vkGetDeviceQueue(m_device, m_presentFamily, 0, &m_presentQueue);
     return true;
@@ -584,7 +707,6 @@ bool VkRenderer::createLogicalDevice() {
 // ---------------------------------------------------------------------------
 // createSwapchain
 // ---------------------------------------------------------------------------
-
 bool VkRenderer::createSwapchain(int width, int height) {
     VkSurfaceCapabilitiesKHR caps{};
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_physicalDevice, m_surface, &caps);
@@ -595,20 +717,17 @@ bool VkRenderer::createSwapchain(int width, int height) {
     vkGetPhysicalDeviceSurfaceFormatsKHR(m_physicalDevice, m_surface, &formatCount, formats.data());
 
     VkSurfaceFormatKHR chosen = formats[0];
-    for (const auto& f : formats) {
+    for (const auto& f : formats)
         if (f.format == VK_FORMAT_B8G8R8A8_SRGB && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
             chosen = f;
             break;
         }
-    }
-    if (chosen.format == formats[0].format) {
-        for (const auto& f : formats) {
+    if (chosen.format == formats[0].format)
+        for (const auto& f : formats)
             if (f.format == VK_FORMAT_B8G8R8A8_UNORM && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
                 chosen = f;
                 break;
             }
-        }
-    }
     m_swapchainFormat = chosen.format;
 
     uint32_t modeCount = 0;
@@ -676,7 +795,6 @@ bool VkRenderer::createSwapchain(int width, int height) {
 // ---------------------------------------------------------------------------
 // createImageViews
 // ---------------------------------------------------------------------------
-
 bool VkRenderer::createImageViews() {
     m_swapchainImageViews.resize(m_swapchainImages.size());
     for (std::size_t i = 0; i < m_swapchainImages.size(); ++i) {
@@ -701,16 +819,15 @@ bool VkRenderer::createImageViews() {
 }
 
 // ---------------------------------------------------------------------------
-// Attachments (depth + HDR)
+// Attachments
 // ---------------------------------------------------------------------------
-
 uint32_t VkRenderer::findMemoryType(VkPhysicalDevice physDevice, uint32_t filter, VkMemoryPropertyFlags props) {
     VkPhysicalDeviceMemoryProperties memProps{};
     vkGetPhysicalDeviceMemoryProperties(physDevice, &memProps);
     for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i)
         if ((filter & (1u << i)) && (memProps.memoryTypes[i].propertyFlags & props) == props)
             return i;
-    return 0; // unreachable on any compliant GPU
+    return 0;
 }
 
 bool VkRenderer::createAttachmentImage(uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage,
@@ -790,36 +907,27 @@ bool VkRenderer::createHdrSampler() {
 }
 
 void VkRenderer::destroyAttachments() {
-    if (m_depthView != VK_NULL_HANDLE) {
-        vkDestroyImageView(m_device, m_depthView, nullptr);
-        m_depthView = VK_NULL_HANDLE;
-    }
-    if (m_depthImage != VK_NULL_HANDLE) {
-        vkDestroyImage(m_device, m_depthImage, nullptr);
-        m_depthImage = VK_NULL_HANDLE;
-    }
-    if (m_depthMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(m_device, m_depthMemory, nullptr);
-        m_depthMemory = VK_NULL_HANDLE;
-    }
-    if (m_hdrView != VK_NULL_HANDLE) {
-        vkDestroyImageView(m_device, m_hdrView, nullptr);
-        m_hdrView = VK_NULL_HANDLE;
-    }
-    if (m_hdrImage != VK_NULL_HANDLE) {
-        vkDestroyImage(m_device, m_hdrImage, nullptr);
-        m_hdrImage = VK_NULL_HANDLE;
-    }
-    if (m_hdrMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(m_device, m_hdrMemory, nullptr);
-        m_hdrMemory = VK_NULL_HANDLE;
-    }
+    auto destroy = [this](VkImageView& v, VkImage& i, VkDeviceMemory& m) {
+        if (v != VK_NULL_HANDLE) {
+            vkDestroyImageView(m_device, v, nullptr);
+            v = VK_NULL_HANDLE;
+        }
+        if (i != VK_NULL_HANDLE) {
+            vkDestroyImage(m_device, i, nullptr);
+            i = VK_NULL_HANDLE;
+        }
+        if (m != VK_NULL_HANDLE) {
+            vkFreeMemory(m_device, m, nullptr);
+            m = VK_NULL_HANDLE;
+        }
+    };
+    destroy(m_depthView, m_depthImage, m_depthMemory);
+    destroy(m_hdrView, m_hdrImage, m_hdrMemory);
 }
 
 // ---------------------------------------------------------------------------
 // Tonemap descriptor
 // ---------------------------------------------------------------------------
-
 bool VkRenderer::createTonemapDescriptors() {
     VkDescriptorSetLayoutBinding binding{};
     binding.binding = 0;
@@ -856,7 +964,6 @@ bool VkRenderer::createTonemapDescriptors() {
         m_lastError = "vkAllocateDescriptorSets (tonemap) failed";
         return false;
     }
-
     updateHdrDescriptor();
     return true;
 }
@@ -878,9 +985,99 @@ void VkRenderer::updateHdrDescriptor() {
 }
 
 // ---------------------------------------------------------------------------
+// Per-frame descriptor layout (set 0: camera + light UBOs)
+// ---------------------------------------------------------------------------
+bool VkRenderer::createPerFrameDescriptorLayout() {
+    const std::array<VkDescriptorSetLayoutBinding, 2> bindings{{
+        {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+    }};
+    VkDescriptorSetLayoutCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    ci.bindingCount = static_cast<uint32_t>(bindings.size());
+    ci.pBindings = bindings.data();
+    if (vkCreateDescriptorSetLayout(m_device, &ci, nullptr, &m_perFrameSetLayout) != VK_SUCCESS) {
+        m_lastError = "vkCreateDescriptorSetLayout (per-frame) failed";
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Per-material descriptor layout (set 1: base color combined image sampler)
+// ---------------------------------------------------------------------------
+bool VkRenderer::createMaterialDescriptorLayout() {
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    ci.bindingCount = 1;
+    ci.pBindings = &binding;
+    if (vkCreateDescriptorSetLayout(m_device, &ci, nullptr, &m_matSetLayout) != VK_SUCCESS) {
+        m_lastError = "vkCreateDescriptorSetLayout (material) failed";
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Per-frame UBO buffers + descriptor sets
+// ---------------------------------------------------------------------------
+bool VkRenderer::createPerFrameDescriptors() {
+    // Pool: 2 frames × 2 UBO bindings = 4 uniform buffers.
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_FRAMES_IN_FLIGHT * 2};
+    VkDescriptorPoolCreateInfo poolCI{};
+    poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolCI.maxSets = MAX_FRAMES_IN_FLIGHT;
+    poolCI.poolSizeCount = 1;
+    poolCI.pPoolSizes = &poolSize;
+    if (vkCreateDescriptorPool(m_device, &poolCI, nullptr, &m_perFramePool) != VK_SUCCESS) {
+        m_lastError = "vkCreateDescriptorPool (per-frame) failed";
+        return false;
+    }
+
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        auto& pf = m_perFrame[i];
+
+        if (!createHostBuffer(m_device, m_physicalDevice, sizeof(CameraUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                              pf.cameraBuffer, pf.cameraMemory, pf.cameraMapped) ||
+            !createHostBuffer(m_device, m_physicalDevice, sizeof(LightUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                              pf.lightBuffer, pf.lightMemory, pf.lightMapped)) {
+            m_lastError = "per-frame UBO buffer creation failed";
+            return false;
+        }
+
+        VkDescriptorSetAllocateInfo allocCI{};
+        allocCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocCI.descriptorPool = m_perFramePool;
+        allocCI.descriptorSetCount = 1;
+        allocCI.pSetLayouts = &m_perFrameSetLayout;
+        if (vkAllocateDescriptorSets(m_device, &allocCI, &pf.descriptorSet) != VK_SUCCESS) {
+            m_lastError = "vkAllocateDescriptorSets (per-frame) failed";
+            return false;
+        }
+
+        VkDescriptorBufferInfo camInfo{pf.cameraBuffer, 0, sizeof(CameraUBO)};
+        VkDescriptorBufferInfo lgtInfo{pf.lightBuffer, 0, sizeof(LightUBO)};
+
+        const std::array<VkWriteDescriptorSet, 2> writes{{
+            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, pf.descriptorSet, 0, 0, 1,
+             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &camInfo, nullptr},
+            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, pf.descriptorSet, 1, 0, 1,
+             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &lgtInfo, nullptr},
+        }};
+        vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Pipeline cache
 // ---------------------------------------------------------------------------
-
 bool VkRenderer::createPipelineCache() {
     VkPipelineCacheCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
@@ -894,7 +1091,6 @@ bool VkRenderer::createPipelineCache() {
 // ---------------------------------------------------------------------------
 // createForwardPipeline — renders geometry into the HDR target
 // ---------------------------------------------------------------------------
-
 bool VkRenderer::createForwardPipeline() {
     auto vertCode = loadSpirv(m_shaderDir + "mesh.vert.spv");
     auto fragCode = loadSpirv(m_shaderDir + "mesh.frag.spv");
@@ -906,18 +1102,32 @@ bool VkRenderer::createForwardPipeline() {
     VkShaderModule vertMod = createShaderModule(m_device, vertCode);
     VkShaderModule fragMod = createShaderModule(m_device, fragCode);
 
-    std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
-    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[0].module = vertMod;
-    stages[0].pName = "main";
-    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = fragMod;
-    stages[1].pName = "main";
+    const std::array<VkPipelineShaderStageCreateInfo, 2> stages{{
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertMod, "main",
+         nullptr},
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fragMod, "main",
+         nullptr},
+    }};
+
+    // Vertex input: single interleaved binding matching struct Vertex (48 bytes).
+    VkVertexInputBindingDescription binding{};
+    binding.binding = 0;
+    binding.stride = sizeof(Vertex);
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    const std::array<VkVertexInputAttributeDescription, 4> attrs{{
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
+        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)},
+        {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, tangent)},
+        {3, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)},
+    }};
 
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &binding;
+    vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrs.size());
+    vertexInput.pVertexAttributeDescriptions = attrs.data();
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -945,12 +1155,10 @@ bool VkRenderer::createForwardPipeline() {
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    // Depth state: reverse-Z (GREATER compare); test disabled for the placeholder
-    // triangle since it has no depth output. Enabled in PR 2 with real geometry.
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
     depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depthStencil.depthTestEnable = VK_FALSE;
-    depthStencil.depthWriteEnable = VK_FALSE;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_GREATER; // reverse-Z
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
@@ -960,12 +1168,24 @@ bool VkRenderer::createForwardPipeline() {
 
     VkPipelineColorBlendStateCreateInfo colorBlend{};
     colorBlend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlend.logicOpEnable = VK_FALSE;
     colorBlend.attachmentCount = 1;
     colorBlend.pAttachments = &colorBlendAttachment;
 
+    // Push constant range: ForwardPushConstants (96 bytes).
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.offset = 0;
+    pushRange.size = sizeof(ForwardPushConstants);
+
+    // Descriptor set layouts: set 0 = per-frame, set 1 = per-material.
+    const std::array<VkDescriptorSetLayout, 2> setLayouts{m_perFrameSetLayout, m_matSetLayout};
+
     VkPipelineLayoutCreateInfo layoutCI{};
     layoutCI.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutCI.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
+    layoutCI.pSetLayouts = setLayouts.data();
+    layoutCI.pushConstantRangeCount = 1;
+    layoutCI.pPushConstantRanges = &pushRange;
     if (vkCreatePipelineLayout(m_device, &layoutCI, nullptr, &m_forwardLayout) != VK_SUCCESS) {
         m_lastError = "vkCreatePipelineLayout (forward) failed";
         vkDestroyShaderModule(m_device, vertMod, nullptr);
@@ -973,7 +1193,6 @@ bool VkRenderer::createForwardPipeline() {
         return false;
     }
 
-    // Dynamic rendering: declare attachment formats instead of a VkRenderPass.
     VkFormat hdrFmt = kHdrFormat;
     VkPipelineRenderingCreateInfo renderingCI{};
     renderingCI.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
@@ -995,7 +1214,7 @@ bool VkRenderer::createForwardPipeline() {
     pipelineCI.pColorBlendState = &colorBlend;
     pipelineCI.pDynamicState = &dynamicState;
     pipelineCI.layout = m_forwardLayout;
-    pipelineCI.renderPass = VK_NULL_HANDLE; // dynamic rendering
+    pipelineCI.renderPass = VK_NULL_HANDLE;
 
     const VkResult result =
         vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &pipelineCI, nullptr, &m_forwardPipeline);
@@ -1010,9 +1229,8 @@ bool VkRenderer::createForwardPipeline() {
 }
 
 // ---------------------------------------------------------------------------
-// createTonemapPipeline — fullscreen HDR→LDR conversion into swapchain
+// createTonemapPipeline — fullscreen HDR→LDR into swapchain
 // ---------------------------------------------------------------------------
-
 bool VkRenderer::createTonemapPipeline() {
     auto vertCode = loadSpirv(m_shaderDir + "tonemap.vert.spv");
     auto fragCode = loadSpirv(m_shaderDir + "tonemap.frag.spv");
@@ -1024,15 +1242,12 @@ bool VkRenderer::createTonemapPipeline() {
     VkShaderModule vertMod = createShaderModule(m_device, vertCode);
     VkShaderModule fragMod = createShaderModule(m_device, fragCode);
 
-    std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
-    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[0].module = vertMod;
-    stages[0].pName = "main";
-    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = fragMod;
-    stages[1].pName = "main";
+    const std::array<VkPipelineShaderStageCreateInfo, 2> stages{{
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertMod, "main",
+         nullptr},
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fragMod, "main",
+         nullptr},
+    }};
 
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -1055,7 +1270,7 @@ bool VkRenderer::createTonemapPipeline() {
     VkPipelineRasterizationStateCreateInfo rasterizer{};
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizer.cullMode = VK_CULL_MODE_NONE; // fullscreen triangle, no back-face cull
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
     rasterizer.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -1068,7 +1283,6 @@ bool VkRenderer::createTonemapPipeline() {
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.colorWriteMask =
         VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    colorBlendAttachment.blendEnable = VK_FALSE;
 
     VkPipelineColorBlendStateCreateInfo colorBlend{};
     colorBlend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
@@ -1122,7 +1336,6 @@ bool VkRenderer::createTonemapPipeline() {
 // ---------------------------------------------------------------------------
 // createCommandPool / allocateCommandBuffers
 // ---------------------------------------------------------------------------
-
 bool VkRenderer::createCommandPool() {
     VkCommandPoolCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -1151,7 +1364,6 @@ bool VkRenderer::allocateCommandBuffers() {
 // ---------------------------------------------------------------------------
 // createSyncObjects
 // ---------------------------------------------------------------------------
-
 bool VkRenderer::createSyncObjects() {
     VkSemaphoreCreateInfo sci{};
     sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -1168,12 +1380,11 @@ bool VkRenderer::createSyncObjects() {
     }
 
     m_renderFinished.resize(m_swapchainImages.size());
-    for (auto& sem : m_renderFinished) {
+    for (auto& sem : m_renderFinished)
         if (vkCreateSemaphore(m_device, &sci, nullptr, &sem) != VK_SUCCESS) {
             m_lastError = "sync object creation failed";
             return false;
         }
-    }
 
     m_imagesInFlight.assign(m_swapchainImages.size(), VK_NULL_HANDLE);
     return true;
@@ -1181,31 +1392,26 @@ bool VkRenderer::createSyncObjects() {
 
 // ---------------------------------------------------------------------------
 // recordCommandBuffer
-//
-// Passes:
-//   1. Forward  — placeholder triangle into HDR RGBA16F + D32 depth
-//   2. Tonemap  — fullscreen HDR→LDR into swapchain image
 // ---------------------------------------------------------------------------
-
 void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bi);
 
-    // ── Transition HDR image: UNDEFINED → COLOR_ATTACHMENT_OPTIMAL ──────────
+    // ── HDR → COLOR_ATTACHMENT_OPTIMAL ───────────────────────────────────
     imageBarrier(cmd, m_hdrImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
 
-    // ── Transition depth image: UNDEFINED → DEPTH_STENCIL_ATTACHMENT_OPTIMAL ─
+    // ── depth → DEPTH_STENCIL_ATTACHMENT_OPTIMAL ─────────────────────────
     imageBarrier(cmd, m_depthImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0,
                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                  VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
                  VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
                  VK_IMAGE_ASPECT_DEPTH_BIT);
 
-    // ── Forward pass ─────────────────────────────────────────────────────────
+    // ── Forward pass ──────────────────────────────────────────────────────
     {
         VkRenderingAttachmentInfo colorAtt{};
         colorAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -1213,7 +1419,7 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         colorAtt.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         colorAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        colorAtt.clearValue.color = {{0.05f, 0.10f, 0.18f, 1.0f}}; // deep blue horizon
+        colorAtt.clearValue.color = {{0.05f, 0.10f, 0.18f, 1.0f}};
 
         VkRenderingAttachmentInfo depthAtt{};
         depthAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -1221,7 +1427,7 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         depthAtt.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         depthAtt.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        depthAtt.clearValue.depthStencil = {0.0f, 0}; // reverse-Z: far plane = 0
+        depthAtt.clearValue.depthStencil = {0.0f, 0}; // reverse-Z: far = 0
 
         VkRenderingInfo renderInfo{};
         renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -1232,7 +1438,6 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         renderInfo.pDepthAttachment = &depthAtt;
 
         vkCmdBeginRendering(cmd, &renderInfo);
-
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardPipeline);
 
         VkViewport viewport{
@@ -1242,22 +1447,54 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         VkRect2D scissor{{0, 0}, m_swapchainExtent};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        vkCmdDraw(cmd, 3, 1, 0, 0); // placeholder triangle; replaced in PR 2
+        // Bind per-frame descriptor set (set 0: camera + light UBOs).
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 0, 1,
+                                &m_perFrame[m_currentFrame].descriptorSet, 0, nullptr);
+
+        // Draw each submitted RenderItem.
+        for (const auto& item : m_pendingScene.renderItems) {
+            const GpuMesh* mesh = m_resources.getMesh(item.mesh);
+            if (!mesh)
+                continue;
+
+            // Resolve material; fall back to a default if invalid.
+            const GpuMaterial* mat = m_resources.getMaterial(item.material);
+
+            // Bind per-material descriptor set (set 1: base color texture).
+            if (mat && mat->descriptorSet != VK_NULL_HANDLE) {
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 1, 1,
+                                        &mat->descriptorSet, 0, nullptr);
+            }
+
+            // Push per-object constants.
+            ForwardPushConstants pc{};
+            pc.model = item.transform;
+            pc.baseColorFactor = mat ? mat->baseColorFactor : glm::vec4(1.0f);
+            pc.metallicFactor = mat ? mat->metallicFactor : 0.0f;
+            pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
+            vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                               sizeof(pc), &pc);
+
+            const VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertexBuffer, &offset);
+            vkCmdBindIndexBuffer(cmd, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, mesh->indexCount, 1, 0, 0, 0);
+        }
 
         vkCmdEndRendering(cmd);
     }
 
-    // ── Transition HDR: COLOR_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL ─
+    // ── HDR → SHADER_READ_ONLY ───────────────────────────────────────────
     imageBarrier(cmd, m_hdrImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 
-    // ── Transition swapchain image: UNDEFINED → COLOR_ATTACHMENT_OPTIMAL ────
+    // ── swapchain → COLOR_ATTACHMENT_OPTIMAL ──────────────────────────────
     imageBarrier(cmd, m_swapchainImages[imageIndex], VK_IMAGE_LAYOUT_UNDEFINED,
                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
 
-    // ── Tonemap pass: HDR sampler → swapchain ────────────────────────────────
+    // ── Tonemap pass ──────────────────────────────────────────────────────
     {
         VkRenderingAttachmentInfo colorAtt{};
         colorAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -1274,7 +1511,6 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         renderInfo.pColorAttachments = &colorAtt;
 
         vkCmdBeginRendering(cmd, &renderInfo);
-
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tonemapPipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tonemapLayout, 0, 1, &m_tonemapSet, 0, nullptr);
 
@@ -1286,11 +1522,10 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
         vkCmdDraw(cmd, 3, 1, 0, 0); // fullscreen triangle
-
         vkCmdEndRendering(cmd);
     }
 
-    // ── Transition swapchain: COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR ────
+    // ── swapchain → PRESENT_SRC_KHR ───────────────────────────────────────
     imageBarrier(cmd, m_swapchainImages[imageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                  VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0,
                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
@@ -1301,7 +1536,6 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 // ---------------------------------------------------------------------------
 // recreateSwapchain / cleanupSwapchain
 // ---------------------------------------------------------------------------
-
 void VkRenderer::destroyImageViews() {
     for (auto iv : m_swapchainImageViews)
         if (iv != VK_NULL_HANDLE)
@@ -1318,18 +1552,12 @@ void VkRenderer::cleanupSwapchain() {
 }
 
 bool VkRenderer::recreateSwapchain() {
-    // Returns false when the window is zero-sized (minimised or a Wayland
-    // configure(0,0) event). Caller re-sets m_framebufferResized and returns
-    // to the main loop so pollEvents() can drain pending events before the
-    // next attempt — avoiding the compositor deadlock.
     int w = 0, h = 0;
     if (!SDL_GetWindowSizeInPixels(m_sdlWindow, &w, &h))
         SDL_GetWindowSize(m_sdlWindow, &w, &h);
     if (w == 0 || h == 0)
         return false;
 
-    // vkDeviceWaitIdle drains both GPU queues and the presentation engine,
-    // ensuring no pending present is still waiting on renderFinished semaphores.
     vkDeviceWaitIdle(m_device);
 
     destroyImageViews();
@@ -1343,7 +1571,6 @@ bool VkRenderer::recreateSwapchain() {
     if (old != VK_NULL_HANDLE)
         vkDestroySwapchainKHR(m_device, old, nullptr);
 
-    // Recreate renderFinished semaphores when image count changes.
     if (m_renderFinished.size() != m_swapchainImages.size()) {
         for (auto sem : m_renderFinished)
             if (sem != VK_NULL_HANDLE)
@@ -1363,7 +1590,7 @@ bool VkRenderer::recreateSwapchain() {
         return false;
     if (!createHdrImage())
         return false;
-    updateHdrDescriptor(); // point descriptor to the new HDR image view
+    updateHdrDescriptor();
 
     m_imagesInFlight.assign(m_swapchainImages.size(), VK_NULL_HANDLE);
     return true;

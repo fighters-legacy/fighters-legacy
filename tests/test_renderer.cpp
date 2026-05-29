@@ -3,6 +3,7 @@
 
 #include "RenderTypes.h"
 #include "mock_hal.h"
+#include <array>
 
 // ---------------------------------------------------------------------------
 // RenderTypes — handle validity
@@ -144,4 +145,116 @@ TEST_CASE("MockRenderer is usable through IRenderer pointer") {
     CHECK(mock.beginFrameCount == 1);
     CHECK(mock.endFrameCount == 1);
     CHECK(mock.shutdownCount == 1);
+}
+
+// ---------------------------------------------------------------------------
+// MockRenderer — resource creation
+// ---------------------------------------------------------------------------
+
+TEST_CASE("MockRenderer createMesh returns valid distinct handles") {
+    MockRenderer r;
+    auto h1 = r.createMesh(MeshUploadDesc{});
+    auto h2 = r.createMesh(MeshUploadDesc{});
+    CHECK(h1.valid());
+    CHECK(h2.valid());
+    CHECK(h1.id != h2.id);
+    CHECK(r.createMeshCount == 2);
+}
+
+TEST_CASE("MockRenderer createTexture returns valid distinct handles") {
+    MockRenderer r;
+    auto h1 = r.createTexture(TextureUploadDesc{});
+    auto h2 = r.createTexture(TextureUploadDesc{});
+    CHECK(h1.valid());
+    CHECK(h2.valid());
+    CHECK(h1.id != h2.id);
+    CHECK(r.createTextureCount == 2);
+}
+
+TEST_CASE("MockRenderer createMaterial returns valid distinct handles") {
+    MockRenderer r;
+    auto h1 = r.createMaterial(MaterialDesc{});
+    auto h2 = r.createMaterial(MaterialDesc{});
+    CHECK(h1.valid());
+    CHECK(h2.valid());
+    CHECK(h1.id != h2.id);
+    CHECK(r.createMaterialCount == 2);
+}
+
+TEST_CASE("MockRenderer destroy methods increment counters") {
+    MockRenderer r;
+    auto mh = r.createMesh(MeshUploadDesc{});
+    auto th = r.createTexture(TextureUploadDesc{});
+    auto mth = r.createMaterial(MaterialDesc{});
+
+    r.destroyMesh(mh);
+    r.destroyTexture(th);
+    r.destroyMaterial(mth);
+
+    CHECK(r.destroyMeshCount == 1);
+    CHECK(r.destroyTextureCount == 1);
+    CHECK(r.destroyMaterialCount == 1);
+}
+
+TEST_CASE("MockRenderer setScene stores last scene and increments counter") {
+    MockRenderer r;
+    auto mh = r.createMesh(MeshUploadDesc{});
+
+    std::array<RenderItem, 2> items{};
+    items[0].mesh = mh;
+    items[1].mesh = MeshHandle{99};
+
+    FrameScene scene{};
+    scene.renderItems = items;
+
+    r.beginFrame();
+    r.setScene(scene);
+    r.endFrame();
+
+    CHECK(r.setSceneCount == 1);
+    REQUIRE(r.lastScene.renderItems.size() == 2);
+    CHECK(r.lastScene.renderItems[0].mesh.id == mh.id);
+}
+
+TEST_CASE("MockRenderer resource counters start at zero") {
+    MockRenderer r;
+    CHECK(r.createMeshCount == 0);
+    CHECK(r.createTextureCount == 0);
+    CHECK(r.createMaterialCount == 0);
+    CHECK(r.destroyMeshCount == 0);
+    CHECK(r.destroyTextureCount == 0);
+    CHECK(r.destroyMaterialCount == 0);
+    CHECK(r.setSceneCount == 0);
+}
+
+// ---------------------------------------------------------------------------
+// MaterialDesc defaults
+// ---------------------------------------------------------------------------
+
+TEST_CASE("MaterialDesc defaults are identity PBR values") {
+    MaterialDesc m{};
+    CHECK_FALSE(m.baseColorTexture.valid());
+    CHECK_FALSE(m.normalTexture.valid());
+    CHECK_FALSE(m.ormTexture.valid());
+    CHECK(m.baseColorFactor == glm::vec4(1.0f));
+    CHECK(m.metallicFactor == 0.0f);
+    CHECK(m.roughnessFactor == 1.0f);
+    CHECK_FALSE(m.doubleSided);
+    CHECK_FALSE(m.alphaBlend);
+}
+
+// ---------------------------------------------------------------------------
+// Upload descriptor defaults
+// ---------------------------------------------------------------------------
+
+TEST_CASE("MeshUploadDesc defaults to empty") {
+    MeshUploadDesc d{};
+    CHECK(d.name.empty());
+    CHECK(d.bytes.empty());
+}
+
+TEST_CASE("TextureUploadDesc defaults to srgb=true") {
+    TextureUploadDesc d{};
+    CHECK(d.srgb == true);
+    CHECK(d.bytes.empty());
 }

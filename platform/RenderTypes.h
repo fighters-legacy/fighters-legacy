@@ -4,6 +4,29 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <span>
+#include <string_view>
+
+// ---------------------------------------------------------------------------
+// Resource upload descriptors.
+//
+// These are byte-blob views into data produced by IContentPack (engine/content/
+// AssetTypes.h). Using span+string_view here keeps platform/ free of engine
+// header dependencies while preserving zero-copy semantics.
+// ---------------------------------------------------------------------------
+
+// Raw glTF 2.0 (.glb) or .gltf+.bin mesh bytes.
+// The renderer parses the first primitive of the first mesh node.
+struct MeshUploadDesc {
+    std::string_view name;          // asset name for debug labels / dedup
+    std::span<const uint8_t> bytes; // .glb file contents
+};
+
+// Raw texture bytes: KTX2 (Basis Universal) preferred; PNG accepted as fallback.
+struct TextureUploadDesc {
+    std::string_view name;
+    std::span<const uint8_t> bytes;
+    bool srgb{true}; // true=color (sRGB view), false=linear (normal/ORM)
+};
 
 // ---------------------------------------------------------------------------
 // Opaque typed GPU-resource handles.  id == 0 is null/invalid.
@@ -26,6 +49,22 @@ struct MaterialHandle {
     [[nodiscard]] bool valid() const noexcept {
         return id != 0;
     }
+};
+
+// ---------------------------------------------------------------------------
+// PBR metallic-roughness material description.
+// Texture handles must be created before createMaterial is called;
+// an invalid handle means use the default (white texture / flat factor).
+// ---------------------------------------------------------------------------
+struct MaterialDesc {
+    TextureHandle baseColorTexture{};
+    TextureHandle normalTexture{};
+    TextureHandle ormTexture{}; // R=occlusion G=roughness B=metallic
+    glm::vec4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
+    float metallicFactor{0.0f};
+    float roughnessFactor{1.0f};
+    bool doubleSided{false};
+    bool alphaBlend{false};
 };
 
 // ---------------------------------------------------------------------------

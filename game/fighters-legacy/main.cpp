@@ -20,7 +20,7 @@
 #include "sdl3/SDL3Input.h"
 #include "sdl3/SDL3Joystick.h"
 #include "sdl3/SDL3Window.h"
-#include "vulkan/VkRenderer.h"
+#include "vulkan/VkRendererFactory.h"
 
 #include <SDL3/SDL.h>
 #include <cstdio>
@@ -130,7 +130,7 @@ int main(int argc, char** argv) {
     p.cursor = std::make_unique<SDL3Cursor>();
 
     // Step 12: Renderer.
-    auto renderer = std::make_unique<VkRenderer>();
+    auto renderer = createVulkanRenderer();
     p.renderer = std::move(renderer);
     if (!p.renderer->init(p.window.get())) {
         rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "renderer init failed");

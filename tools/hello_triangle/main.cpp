@@ -3,7 +3,7 @@
 #include "Platform.h"
 #include "SDL3Display.h"
 #include "SDL3Window.h"
-#include "VkRenderer.h"
+#include "VkRendererFactory.h"
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -59,6 +59,6 @@ int main() {
     Platform p;
     p.window = std::make_unique<SDL3Window>();
     p.display = std::make_unique<SDL3Display>();
-    p.renderer = std::make_unique<VkRenderer>();
+    p.renderer = createVulkanRenderer();
     return App(p).run();
 }

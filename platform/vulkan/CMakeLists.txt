@@ -55,24 +55,46 @@ add_custom_target(vulkan-shaders ALL DEPENDS ${SPIRV_FILES})
 # ---------------------------------------------------------------------------
 # Renderer library
 # ---------------------------------------------------------------------------
-add_library(platform-vulkan STATIC VkRenderer.cpp VkWindow.cpp)
+add_library(platform-vulkan STATIC
+    VkRenderer.cpp
+    VkResources.cpp
+    VkWindow.cpp
+)
 add_dependencies(platform-vulkan vulkan-shaders)
+
+# VulkanMemoryAllocator — header-only, populated in cmake/dependencies.cmake.
+if(NOT TARGET VulkanMemoryAllocator)
+    message(FATAL_ERROR "VulkanMemoryAllocator target not found — check cmake/dependencies.cmake")
+endif()
+
+# KTX-Software — read-only static library for KTX2 / Basis Universal transcode.
+# The target may be ktx_read (static) or ktx (full).  Prefer ktx_read.
+if(TARGET ktx_read)
+    set(_ktx_target ktx_read)
+elseif(TARGET ktx)
+    set(_ktx_target ktx)
+else()
+    message(FATAL_ERROR "KTX-Software target not found — check cmake/dependencies.cmake")
+endif()
 
 target_link_libraries(platform-vulkan
     PUBLIC  platform-hal
     PRIVATE Vulkan::Vulkan SDL3::SDL3
+            VulkanMemoryAllocator
+            ${_ktx_target}
+            tinygltf
 )
 
 target_compile_definitions(platform-vulkan PRIVATE
     $<$<CONFIG:Debug>:FL_VK_VALIDATION>
-    # Build-tree shader dir — runtime path discovery uses SDL_GetBasePath() first
+    # Build-tree shader dir — runtime path discovery uses SDL_GetBasePath() first.
     FL_SHADER_DIR="${SHADER_OUT_DIR}"
 )
 
 # ---------------------------------------------------------------------------
 # Install: stage compiled SPIR-V next to the binary so the runtime path
 # resolver finds them at share/fighters-legacy/shaders/ (Linux/Windows) or
-# Contents/Resources/shaders/ (macOS .app, set up by the packaging step).
+# Contents/Resources/shaders/ (macOS .app).
 # ---------------------------------------------------------------------------
 install(FILES ${SPIRV_FILES}
     DESTINATION share/fighters-legacy/shaders

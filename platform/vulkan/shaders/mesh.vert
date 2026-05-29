@@ -1,22 +1,40 @@
 #version 450
 
-// Placeholder forward-pass vertex shader.
-// Hardcoded triangle until PR 2 introduces vertex/index buffers.
-vec2 positions[3] = vec2[](
-    vec2( 0.0, -0.5),
-    vec2( 0.5,  0.5),
-    vec2(-0.5,  0.5)
-);
+// Vertex attributes — interleaved layout matching struct Vertex (VkResources.h)
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec4 inTangent;  // w = handedness (+1 or -1)
+layout(location = 3) in vec2 inUV;
 
-vec3 colors[3] = vec3[](
-    vec3(1.0, 0.0, 0.0),
-    vec3(0.0, 1.0, 0.0),
-    vec3(0.0, 0.0, 1.0)
-);
+// Set 0, binding 0: per-frame camera data.
+layout(set = 0, binding = 0) uniform CameraUBO {
+    mat4 view;
+    mat4 proj;
+    vec4 worldOrigin; // xyz = camera world position, w unused
+} camera;
 
-layout(location = 0) out vec3 fragColor;
+// Push constants: per-object model matrix + material factors.
+layout(push_constant) uniform PushConstants {
+    mat4  model;
+    vec4  baseColorFactor;
+    float metallicFactor;
+    float roughnessFactor;
+} push;
+
+layout(location = 0) out vec3 fragWorldNormal;
+layout(location = 1) out vec2 fragUV;
+layout(location = 2) out vec4 fragBaseColorFactor;
 
 void main() {
-    gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0);
-    fragColor   = colors[gl_VertexIndex];
+    // Camera-relative rendering: rebase world position to camera origin so
+    // float32 precision is safe at arbitrary theater scale.
+    vec4 worldPos = push.model * vec4(inPosition, 1.0);
+    worldPos.xyz -= camera.worldOrigin.xyz;
+
+    gl_Position = camera.proj * camera.view * worldPos;
+
+    mat3 normalMat = transpose(inverse(mat3(push.model)));
+    fragWorldNormal     = normalize(normalMat * inNormal);
+    fragUV              = inUV;
+    fragBaseColorFactor = push.baseColorFactor;
 }
