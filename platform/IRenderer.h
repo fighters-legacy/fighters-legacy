@@ -73,4 +73,15 @@ class IRenderer {
     // frame (vsync requires swapchain recreation and is applied on the next
     // resize or explicit recreate).
     virtual void applySettings(const RendererSettings& settings) = 0;
+
+    // ── Per-frame stats ─────────────────────────────────────────────────────
+    // Returns statistics from the most recently completed frame.
+    // Safe to call at any time; values are zero until at least one frame completes.
+    virtual FrameStats getFrameStats() const = 0;
+
+    // ── Debug overlay ───────────────────────────────────────────────────────
+    // Renders text lines as a white monospace overlay in the top-left corner.
+    // Must be called between beginFrame and endFrame. Empty span = no overlay.
+    // The span and all string_view data must remain alive until endFrame returns.
+    virtual void setOverlayLines(std::span<const std::string_view> lines) = 0;
 };

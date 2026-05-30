@@ -21,6 +21,15 @@ void SimRenderBridge::publish(RenderSnapshot snap) {
     m_publishCount.fetch_add(1, std::memory_order_release);
 }
 
+void SimRenderBridge::publishExternal(RenderSnapshot snap) {
+    // Identical implementation to publish(); the caller guarantees no concurrent
+    // sim thread is running (network-client mode with no local GameLoop).
+    m_snaps[m_simSlot] = std::move(snap);
+    int old = m_spare.exchange(m_simSlot, std::memory_order_release);
+    m_simSlot = old;
+    m_publishCount.fetch_add(1, std::memory_order_release);
+}
+
 bool SimRenderBridge::tryAdvance() noexcept {
     uint64_t count = m_publishCount.load(std::memory_order_acquire);
     if (count == m_consumeCount)

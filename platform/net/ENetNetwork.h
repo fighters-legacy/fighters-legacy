@@ -20,7 +20,7 @@ class ENetNetwork : public INetwork {
     bool init() override;
     void shutdown() override;
     void setEventHandler(INetworkEventHandler* handler) override;
-    bool bind(uint16_t port, int maxClients) override;
+    bool bind(const char* address, uint16_t port, int maxClients) override;
     bool connect(const char* host, uint16_t port) override;
     void disconnect() override;
     bool send(uint32_t peerId, const void* data, std::size_t size, bool reliable) override;

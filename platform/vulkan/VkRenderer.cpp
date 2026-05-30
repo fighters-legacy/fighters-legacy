@@ -6,6 +6,7 @@
 
 #include "VkRenderer.h"
 #include "IWindow.h"
+#include "OverlayFont.h"
 #include "VkWindow.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -288,6 +289,15 @@ bool VkRenderer::init(IWindow* window) {
         uint32_t drv = props.driverVersion;
         m_gpuInfo = std::string(props.deviceName) + " (Vulkan driver " + std::to_string(VK_VERSION_MAJOR(drv)) + "." +
                     std::to_string(VK_VERSION_MINOR(drv)) + "." + std::to_string(VK_VERSION_PATCH(drv)) + ")";
+        m_timestampPeriod = props.limits.timestampPeriod;
+
+        // Check timestamp support on the graphics queue family.
+        uint32_t qcount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(m_physicalDevice, &qcount, nullptr);
+        std::vector<VkQueueFamilyProperties> qprops(qcount);
+        vkGetPhysicalDeviceQueueFamilyProperties(m_physicalDevice, &qcount, qprops.data());
+        if (m_graphicsFamily < qcount && qprops[m_graphicsFamily].timestampValidBits > 0)
+            m_timestampSupported = true;
     }
 
     if (!createLogicalDevice())
@@ -348,6 +358,23 @@ bool VkRenderer::init(IWindow* window) {
         return false;
     if (!createSyncObjects())
         return false;
+
+    // Create timestamp query pool if supported (2 slots per in-flight frame).
+    if (m_timestampSupported) {
+        VkQueryPoolCreateInfo qpci{};
+        qpci.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        qpci.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        qpci.queryCount = 2 * MAX_FRAMES_IN_FLIGHT;
+        if (vkCreateQueryPool(m_device, &qpci, nullptr, &m_timestampPool) != VK_SUCCESS) {
+            // Non-fatal: GPU timing will show 0 ms.
+            m_timestampPool = VK_NULL_HANDLE;
+            m_timestampSupported = false;
+        }
+    }
+
+    // Lazy overlay pipeline — created on first setOverlayLines() call with non-empty span.
+    // No failure here; overlay is cosmetic and non-critical.
+
     return true;
 }
 
@@ -364,9 +391,49 @@ void VkRenderer::beginFrame() {
 
     // Track wall-clock frame dt for particle simulation (capped at 50 ms).
     const uint64_t nowNs = SDL_GetTicksNS();
-    if (m_lastFrameNs > 0)
+    if (m_lastFrameNs > 0) {
         m_frameDt = std::min(float(nowNs - m_lastFrameNs) * 1e-9f, 0.05f);
+        m_frameStats.frameDtMs = m_frameDt * 1000.0f;
+    }
     m_lastFrameNs = nowNs;
+
+    // Read back GPU timestamps from the completed frame (currentFrame is the slot
+    // that just finished presenting — its fence was signaled before this call).
+    if (m_timestampSupported && m_timestampPool != VK_NULL_HANDLE) {
+        uint64_t ts[2] = {0, 0};
+        if (vkGetQueryPoolResults(m_device, m_timestampPool, m_currentFrame * 2, 2, sizeof(ts), ts, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+            if (ts[1] >= ts[0])
+                m_frameStats.gpuDtMs = static_cast<float>((ts[1] - ts[0]) * m_timestampPeriod) * 1e-6f;
+        }
+    }
+
+    // Query device-local heap usage + budget via VK_EXT_memory_budget (pNext chain).
+    // heapBudget/heapUsage are zero on devices that don't expose the extension;
+    // fall back to reporting heap capacity only in that case.
+    {
+        VkPhysicalDeviceMemoryBudgetPropertiesEXT budgetExt{};
+        budgetExt.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+        VkPhysicalDeviceMemoryProperties2 props2{};
+        props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+        props2.pNext = &budgetExt;
+        vkGetPhysicalDeviceMemoryProperties2(m_physicalDevice, &props2);
+
+        auto& heaps = props2.memoryProperties;
+        uint64_t usedBytes = 0, budgetBytes = 0;
+        for (uint32_t i = 0; i < heaps.memoryHeapCount; ++i) {
+            if (heaps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                usedBytes = std::max(usedBytes, budgetExt.heapUsage[i]);
+                const uint64_t b = budgetExt.heapBudget[i] > 0 ? budgetExt.heapBudget[i] : heaps.memoryHeaps[i].size;
+                budgetBytes = std::max(budgetBytes, b);
+            }
+        }
+        m_frameStats.gpuMemUsedBytes = usedBytes;
+        m_frameStats.gpuMemBudgetBytes = budgetBytes;
+    }
+
+    m_frameStats.drawCalls = m_drawCallCount;
+    m_drawCallCount = 0;
 
     // Advance resource manager deferred deletion.
     m_resources.tick(m_totalFrames);
@@ -581,8 +648,14 @@ void VkRenderer::shutdown() {
     if (m_device != VK_NULL_HANDLE)
         vkDeviceWaitIdle(m_device);
 
+    destroyOverlayResources();
     destroyParticleResources();
     m_resources.shutdown();
+
+    if (m_timestampPool != VK_NULL_HANDLE) {
+        vkDestroyQueryPool(m_device, m_timestampPool, nullptr);
+        m_timestampPool = VK_NULL_HANDLE;
+    }
 
     // Per-frame UBO buffers
     for (auto& pf : m_perFrame) {
@@ -3009,6 +3082,14 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bi);
 
+    // Timestamp: reset slots for this frame and write the "begin" timestamp.
+    if (m_timestampSupported && m_timestampPool != VK_NULL_HANDLE) {
+        vkCmdResetQueryPool(cmd, m_timestampPool, m_currentFrame * 2, 2);
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_timestampPool, m_currentFrame * 2);
+    }
+
+    m_drawCallCount = 0;
+
     // ── Particle compute (simulate + spawn new particles) ─────────────────
     recordParticleCompute(cmd, m_frameDt);
 
@@ -3333,10 +3414,25 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         vkCmdEndRendering(cmd);
     }
 
+    // Accumulate draw-call count: entity passes + sky + 2 particle passes + tonemap + bloom (3).
+    m_drawCallCount = static_cast<uint32_t>(m_pendingScene.renderItems.size()) + 7u;
+
+    // ── Overlay pass (debug text — after tonemap, before PRESENT transition) ─
+    if (!m_overlayLines.empty()) {
+        if (!m_overlayReady)
+            createOverlayPipeline();
+        if (m_overlayReady)
+            recordOverlayPass(cmd);
+    }
+
     // ── swapchain → PRESENT_SRC_KHR ───────────────────────────────────────
     imageBarrier(cmd, m_swapchainImages[imageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                  VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0,
                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+
+    // Timestamp: write "end" timestamp.
+    if (m_timestampSupported && m_timestampPool != VK_NULL_HANDLE)
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_timestampPool, m_currentFrame * 2 + 1);
 
     vkEndCommandBuffer(cmd);
 }
@@ -3405,4 +3501,509 @@ bool VkRenderer::recreateSwapchain() {
 
     m_imagesInFlight.assign(m_swapchainImages.size(), VK_NULL_HANDLE);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// getFrameStats / setOverlayLines
+// ---------------------------------------------------------------------------
+
+FrameStats VkRenderer::getFrameStats() const {
+    return m_frameStats;
+}
+
+void VkRenderer::setOverlayLines(std::span<const std::string_view> lines) {
+    m_overlayLines.assign(lines.begin(), lines.end());
+}
+
+// ---------------------------------------------------------------------------
+// Overlay pipeline — created lazily on first non-empty setOverlayLines call
+// ---------------------------------------------------------------------------
+
+// Vertex layout: pos(2×f32) uv(2×f32) color(4×f32) = 32 bytes
+struct OverlayVertex {
+    float pos[2];
+    float uv[2];
+    float color[4];
+};
+static constexpr uint32_t kOverlayVertexSize = sizeof(OverlayVertex); // 32
+
+bool VkRenderer::createOverlayPipeline() {
+    // ── Font texture (R8_UNORM 128×256 expanded from 1bpp kOverlayFontBitmap) ─
+    // Created directly via raw Vulkan — VkResources::createTexture() expects KTX2/PNG,
+    // not raw pixel data, so bypassing it avoids silent fallback to the white default.
+    {
+        constexpr uint32_t kFontW = 128;
+        constexpr uint32_t kFontH = 256;
+        std::vector<uint8_t> atlas(kFontW * kFontH, 0u);
+        for (int c = 0; c < 256; ++c) {
+            const int col = c % 16;
+            const int row = c / 16;
+            for (int y = 0; y < 16; ++y) {
+                const uint8_t bits = kOverlayFontBitmap[c * 16 + y];
+                for (int x = 0; x < 8; ++x) {
+                    const int px = col * 8 + x;
+                    const int py = row * 16 + y;
+                    atlas[static_cast<size_t>(py) * kFontW + static_cast<size_t>(px)] =
+                        (bits & (0x80u >> x)) ? 0xFFu : 0x00u;
+                }
+            }
+        }
+
+        // Staging buffer (host-visible, one-shot upload).
+        VkBuffer stagingBuf{VK_NULL_HANDLE};
+        VkDeviceMemory stagingMem{VK_NULL_HANDLE};
+        {
+            VkBufferCreateInfo bci{};
+            bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bci.size = atlas.size();
+            bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            vkCreateBuffer(m_device, &bci, nullptr, &stagingBuf);
+            VkMemoryRequirements mr{};
+            vkGetBufferMemoryRequirements(m_device, stagingBuf, &mr);
+            VkMemoryAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            ai.allocationSize = mr.size;
+            ai.memoryTypeIndex =
+                findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            vkAllocateMemory(m_device, &ai, nullptr, &stagingMem);
+            vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+            void* mapped = nullptr;
+            vkMapMemory(m_device, stagingMem, 0, atlas.size(), 0, &mapped);
+            std::memcpy(mapped, atlas.data(), atlas.size());
+            vkUnmapMemory(m_device, stagingMem);
+        }
+
+        // Device-local image.
+        {
+            VkImageCreateInfo ici{};
+            ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ici.imageType = VK_IMAGE_TYPE_2D;
+            ici.format = VK_FORMAT_R8_UNORM;
+            ici.extent = {kFontW, kFontH, 1};
+            ici.mipLevels = 1;
+            ici.arrayLayers = 1;
+            ici.samples = VK_SAMPLE_COUNT_1_BIT;
+            ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+            ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            if (vkCreateImage(m_device, &ici, nullptr, &m_fontImage) != VK_SUCCESS) {
+                m_lastError = "overlay: vkCreateImage (font) failed";
+                vkDestroyBuffer(m_device, stagingBuf, nullptr);
+                vkFreeMemory(m_device, stagingMem, nullptr);
+                return false;
+            }
+            VkMemoryRequirements mr{};
+            vkGetImageMemoryRequirements(m_device, m_fontImage, &mr);
+            VkMemoryAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            ai.allocationSize = mr.size;
+            ai.memoryTypeIndex =
+                findMemoryType(m_physicalDevice, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            vkAllocateMemory(m_device, &ai, nullptr, &m_fontImageMemory);
+            vkBindImageMemory(m_device, m_fontImage, m_fontImageMemory, 0);
+        }
+
+        // One-time command buffer: transition → copy → transition.
+        {
+            VkCommandBufferAllocateInfo cbai{};
+            cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            cbai.commandPool = m_commandPool;
+            cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            cbai.commandBufferCount = 1;
+            VkCommandBuffer cmd{VK_NULL_HANDLE};
+            vkAllocateCommandBuffers(m_device, &cbai, &cmd);
+            VkCommandBufferBeginInfo cbbi{};
+            cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            vkBeginCommandBuffer(cmd, &cbbi);
+
+            imageBarrier(cmd, m_fontImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                         VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {kFontW, kFontH, 1};
+            vkCmdCopyBufferToImage(cmd, stagingBuf, m_fontImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+            imageBarrier(cmd, m_fontImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                         VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+
+            vkEndCommandBuffer(cmd);
+            VkSubmitInfo si{};
+            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            si.commandBufferCount = 1;
+            si.pCommandBuffers = &cmd;
+            vkQueueSubmit(m_graphicsQueue, 1, &si, VK_NULL_HANDLE);
+            vkQueueWaitIdle(m_graphicsQueue);
+            vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+        }
+
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        vkFreeMemory(m_device, stagingMem, nullptr);
+
+        // Image view.
+        VkImageViewCreateInfo vci{};
+        vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vci.image = m_fontImage;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = VK_FORMAT_R8_UNORM;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(m_device, &vci, nullptr, &m_fontImageView) != VK_SUCCESS) {
+            m_lastError = "overlay: vkCreateImageView (font) failed";
+            return false;
+        }
+    }
+
+    // ── Font sampler (nearest, no mip) ────────────────────────────────────
+    {
+        VkSamplerCreateInfo sci{};
+        sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sci.magFilter = VK_FILTER_NEAREST;
+        sci.minFilter = VK_FILTER_NEAREST;
+        sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        if (vkCreateSampler(m_device, &sci, nullptr, &m_overlayFontSampler) != VK_SUCCESS) {
+            m_lastError = "overlay: vkCreateSampler failed";
+            return false;
+        }
+    }
+
+    // ── Descriptor set layout: binding 0 = combined image sampler ─────────
+    {
+        VkDescriptorSetLayoutBinding binding{};
+        binding.binding = 0;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        binding.descriptorCount = 1;
+        binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutCreateInfo dsLayoutCI{};
+        dsLayoutCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dsLayoutCI.bindingCount = 1;
+        dsLayoutCI.pBindings = &binding;
+        if (vkCreateDescriptorSetLayout(m_device, &dsLayoutCI, nullptr, &m_overlayDsLayout) != VK_SUCCESS) {
+            m_lastError = "overlay: vkCreateDescriptorSetLayout failed";
+            return false;
+        }
+
+        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+        VkDescriptorPoolCreateInfo dpCI{};
+        dpCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpCI.maxSets = 1;
+        dpCI.poolSizeCount = 1;
+        dpCI.pPoolSizes = &poolSize;
+        if (vkCreateDescriptorPool(m_device, &dpCI, nullptr, &m_overlayDsPool) != VK_SUCCESS) {
+            m_lastError = "overlay: vkCreateDescriptorPool failed";
+            return false;
+        }
+
+        VkDescriptorSetAllocateInfo dsAlloc{};
+        dsAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsAlloc.descriptorPool = m_overlayDsPool;
+        dsAlloc.descriptorSetCount = 1;
+        dsAlloc.pSetLayouts = &m_overlayDsLayout;
+        if (vkAllocateDescriptorSets(m_device, &dsAlloc, &m_overlayDs) != VK_SUCCESS) {
+            m_lastError = "overlay: vkAllocateDescriptorSets failed";
+            return false;
+        }
+
+        VkDescriptorImageInfo imgInfo{};
+        imgInfo.sampler = m_overlayFontSampler;
+        imgInfo.imageView = m_fontImageView;
+        imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet wr{};
+        wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr.dstSet = m_overlayDs;
+        wr.dstBinding = 0;
+        wr.descriptorCount = 1;
+        wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        wr.pImageInfo = &imgInfo;
+        vkUpdateDescriptorSets(m_device, 1, &wr, 0, nullptr);
+    }
+
+    // ── Vertex buffer (host-visible, max kMaxOverlayChars × 6 verts) ──────
+    {
+        const VkDeviceSize vbSize = kMaxOverlayChars * 6u * kOverlayVertexSize;
+        VkBufferCreateInfo vbCI{};
+        vbCI.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        vbCI.size = vbSize;
+        vbCI.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        vbCI.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateBuffer(m_device, &vbCI, nullptr, &m_overlayVB) != VK_SUCCESS) {
+            m_lastError = "overlay: vkCreateBuffer failed";
+            return false;
+        }
+        VkMemoryRequirements vbMR{};
+        vkGetBufferMemoryRequirements(m_device, m_overlayVB, &vbMR);
+        VkMemoryAllocateInfo vbAI{};
+        vbAI.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        vbAI.allocationSize = vbMR.size;
+        vbAI.memoryTypeIndex =
+            findMemoryType(m_physicalDevice, vbMR.memoryTypeBits,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (vkAllocateMemory(m_device, &vbAI, nullptr, &m_overlayVBMemory) != VK_SUCCESS) {
+            m_lastError = "overlay: vkAllocateMemory failed";
+            return false;
+        }
+        vkBindBufferMemory(m_device, m_overlayVB, m_overlayVBMemory, 0);
+        vkMapMemory(m_device, m_overlayVBMemory, 0, vbSize, 0, &m_overlayVBMapped);
+    }
+
+    // ── Pipeline layout ────────────────────────────────────────────────────
+    {
+        VkPushConstantRange pcRange{};
+        pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pcRange.offset = 0;
+        pcRange.size = 8; // vec2 screenSize
+        VkPipelineLayoutCreateInfo plCI{};
+        plCI.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plCI.setLayoutCount = 1;
+        plCI.pSetLayouts = &m_overlayDsLayout;
+        plCI.pushConstantRangeCount = 1;
+        plCI.pPushConstantRanges = &pcRange;
+        if (vkCreatePipelineLayout(m_device, &plCI, nullptr, &m_overlayPipelineLayout) != VK_SUCCESS) {
+            m_lastError = "overlay: vkCreatePipelineLayout failed";
+            return false;
+        }
+    }
+
+    // ── Shaders ────────────────────────────────────────────────────────────
+    auto vertCode = loadSpirv(m_shaderDir + "overlay.vert.spv");
+    auto fragCode = loadSpirv(m_shaderDir + "overlay.frag.spv");
+    if (vertCode.empty() || fragCode.empty()) {
+        m_lastError = "overlay: failed to load shader SPIR-V from: " + m_shaderDir;
+        return false;
+    }
+    VkShaderModule vertMod = createShaderModule(m_device, vertCode);
+    VkShaderModule fragMod = createShaderModule(m_device, fragCode);
+
+    // ── Pipeline ───────────────────────────────────────────────────────────
+    {
+        VkVertexInputBindingDescription vbd{};
+        vbd.binding = 0;
+        vbd.stride = kOverlayVertexSize;
+        vbd.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+        VkVertexInputAttributeDescription vattrs[3]{};
+        vattrs[0] = {0, 0, VK_FORMAT_R32G32_SFLOAT, 0};        // pos
+        vattrs[1] = {1, 0, VK_FORMAT_R32G32_SFLOAT, 8};        // uv
+        vattrs[2] = {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 16}; // color
+
+        VkPipelineVertexInputStateCreateInfo vis{};
+        vis.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vis.vertexBindingDescriptionCount = 1;
+        vis.pVertexBindingDescriptions = &vbd;
+        vis.vertexAttributeDescriptionCount = 3;
+        vis.pVertexAttributeDescriptions = vattrs;
+
+        VkPipelineInputAssemblyStateCreateInfo ias{};
+        ias.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        ias.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        VkPipelineViewportStateCreateInfo vss{};
+        vss.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        vss.viewportCount = 1;
+        vss.scissorCount = 1;
+
+        VkPipelineRasterizationStateCreateInfo rast{};
+        rast.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rast.polygonMode = VK_POLYGON_MODE_FILL;
+        rast.cullMode = VK_CULL_MODE_NONE;
+        rast.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rast.lineWidth = 1.0f;
+
+        VkPipelineMultisampleStateCreateInfo msaa{};
+        msaa.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        msaa.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineDepthStencilStateCreateInfo depthSt{};
+        depthSt.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+
+        VkPipelineColorBlendAttachmentState cba{};
+        cba.blendEnable = VK_TRUE;
+        cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        cba.colorBlendOp = VK_BLEND_OP_ADD;
+        cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        cba.alphaBlendOp = VK_BLEND_OP_ADD;
+        cba.colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+        VkPipelineColorBlendStateCreateInfo cbs{};
+        cbs.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        cbs.attachmentCount = 1;
+        cbs.pAttachments = &cba;
+
+        const VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dynSt{};
+        dynSt.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynSt.dynamicStateCount = 2;
+        dynSt.pDynamicStates = dynStates;
+
+        const VkFormat swapFmt = m_swapchainFormat;
+        VkPipelineRenderingCreateInfo prc{};
+        prc.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+        prc.colorAttachmentCount = 1;
+        prc.pColorAttachmentFormats = &swapFmt;
+
+        VkPipelineShaderStageCreateInfo stages[2]{};
+        stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = vertMod;
+        stages[0].pName = "main";
+        stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = fragMod;
+        stages[1].pName = "main";
+
+        VkGraphicsPipelineCreateInfo pipeCI{};
+        pipeCI.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipeCI.pNext = &prc;
+        pipeCI.stageCount = 2;
+        pipeCI.pStages = stages;
+        pipeCI.pVertexInputState = &vis;
+        pipeCI.pInputAssemblyState = &ias;
+        pipeCI.pViewportState = &vss;
+        pipeCI.pRasterizationState = &rast;
+        pipeCI.pMultisampleState = &msaa;
+        pipeCI.pDepthStencilState = &depthSt;
+        pipeCI.pColorBlendState = &cbs;
+        pipeCI.pDynamicState = &dynSt;
+        pipeCI.layout = m_overlayPipelineLayout;
+
+        const VkResult r =
+            vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &pipeCI, nullptr, &m_overlayPipeline);
+        vkDestroyShaderModule(m_device, vertMod, nullptr);
+        vkDestroyShaderModule(m_device, fragMod, nullptr);
+
+        if (r != VK_SUCCESS) {
+            m_lastError = "overlay: vkCreateGraphicsPipelines failed";
+            return false;
+        }
+    }
+
+    m_overlayReady = true;
+    return true;
+}
+
+void VkRenderer::recordOverlayPass(VkCommandBuffer cmd) {
+    constexpr float kCharW = 8.0f;
+    constexpr float kCharH = 16.0f;
+    constexpr float kAtlasW = 128.0f;
+    constexpr float kAtlasH = 256.0f;
+    constexpr float kMarginX = 8.0f;
+    constexpr float kMarginY = 8.0f;
+    constexpr float kLineGap = 2.0f;
+
+    auto* verts = static_cast<OverlayVertex*>(m_overlayVBMapped);
+    uint32_t vertCount = 0;
+    float cy = kMarginY;
+
+    for (const std::string_view& line : m_overlayLines) {
+        float cx = kMarginX;
+        for (unsigned char c : line) {
+            if (vertCount + 6 > kMaxOverlayChars * 6u)
+                break;
+
+            const float u0 = static_cast<float>(c % 16u) * kCharW / kAtlasW;
+            const float u1 = u0 + kCharW / kAtlasW;
+            const float v0 = static_cast<float>(c / 16u) * kCharH / kAtlasH;
+            const float v1 = v0 + kCharH / kAtlasH;
+            const float x0 = cx, x1 = cx + kCharW;
+            const float y0 = cy, y1 = cy + kCharH;
+            constexpr float kW = 1.0f;
+
+            verts[vertCount++] = {{x0, y0}, {u0, v0}, {kW, kW, kW, kW}};
+            verts[vertCount++] = {{x1, y0}, {u1, v0}, {kW, kW, kW, kW}};
+            verts[vertCount++] = {{x1, y1}, {u1, v1}, {kW, kW, kW, kW}};
+            verts[vertCount++] = {{x0, y0}, {u0, v0}, {kW, kW, kW, kW}};
+            verts[vertCount++] = {{x1, y1}, {u1, v1}, {kW, kW, kW, kW}};
+            verts[vertCount++] = {{x0, y1}, {u0, v1}, {kW, kW, kW, kW}};
+            cx += kCharW;
+        }
+        cy += kCharH + kLineGap;
+    }
+
+    if (vertCount == 0)
+        return;
+
+    VkRenderingAttachmentInfo colorAtt{};
+    colorAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    colorAtt.imageView = m_swapchainImageViews[m_currentImageIndex];
+    colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAtt.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    colorAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+    VkRenderingInfo ri{};
+    ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    ri.renderArea = {{0, 0}, m_swapchainExtent};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1;
+    ri.pColorAttachments = &colorAtt;
+
+    vkCmdBeginRendering(cmd, &ri);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_overlayPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_overlayPipelineLayout, 0, 1, &m_overlayDs, 0,
+                            nullptr);
+
+    VkViewport vp{0.0f, 0.0f, static_cast<float>(m_swapchainExtent.width), static_cast<float>(m_swapchainExtent.height),
+                  0.0f, 1.0f};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    VkRect2D scissor{{0, 0}, m_swapchainExtent};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    const float screenSize[2] = {static_cast<float>(m_swapchainExtent.width),
+                                 static_cast<float>(m_swapchainExtent.height)};
+    vkCmdPushConstants(cmd, m_overlayPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(screenSize), screenSize);
+
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &m_overlayVB, &offset);
+    vkCmdDraw(cmd, vertCount, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+}
+
+void VkRenderer::destroyOverlayResources() {
+    if (m_device == VK_NULL_HANDLE)
+        return;
+    if (m_overlayVBMapped && m_overlayVBMemory != VK_NULL_HANDLE)
+        vkUnmapMemory(m_device, m_overlayVBMemory);
+    if (m_overlayVB != VK_NULL_HANDLE)
+        vkDestroyBuffer(m_device, m_overlayVB, nullptr);
+    if (m_overlayVBMemory != VK_NULL_HANDLE)
+        vkFreeMemory(m_device, m_overlayVBMemory, nullptr);
+    if (m_overlayPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(m_device, m_overlayPipeline, nullptr);
+    if (m_overlayPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(m_device, m_overlayPipelineLayout, nullptr);
+    if (m_overlayDsPool != VK_NULL_HANDLE)
+        vkDestroyDescriptorPool(m_device, m_overlayDsPool, nullptr);
+    if (m_overlayDsLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(m_device, m_overlayDsLayout, nullptr);
+    if (m_overlayFontSampler != VK_NULL_HANDLE)
+        vkDestroySampler(m_device, m_overlayFontSampler, nullptr);
+    if (m_fontImageView != VK_NULL_HANDLE)
+        vkDestroyImageView(m_device, m_fontImageView, nullptr);
+    if (m_fontImage != VK_NULL_HANDLE)
+        vkDestroyImage(m_device, m_fontImage, nullptr);
+    if (m_fontImageMemory != VK_NULL_HANDLE)
+        vkFreeMemory(m_device, m_fontImageMemory, nullptr);
+
+    m_overlayVBMapped = nullptr;
+    m_overlayVB = VK_NULL_HANDLE;
+    m_overlayVBMemory = VK_NULL_HANDLE;
+    m_overlayPipeline = VK_NULL_HANDLE;
+    m_overlayPipelineLayout = VK_NULL_HANDLE;
+    m_overlayDsPool = VK_NULL_HANDLE;
+    m_overlayDsLayout = VK_NULL_HANDLE;
+    m_overlayFontSampler = VK_NULL_HANDLE;
+    m_fontImageView = VK_NULL_HANDLE;
+    m_fontImage = VK_NULL_HANDLE;
+    m_fontImageMemory = VK_NULL_HANDLE;
+    m_overlayReady = false;
 }

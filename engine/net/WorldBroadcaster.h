@@ -1,0 +1,49 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#pragma once
+
+#include "INetwork.h"
+#include "loop/ISimUpdate.h"
+
+class ILogger;
+
+namespace fl {
+class EntityManager;
+class EntityTypeRegistry;
+} // namespace fl
+
+namespace fl {
+
+// Wraps EntityManager to provide a server-side ISimUpdate that:
+//   1. Advances the entity simulation each tick (calls EntityManager::onTick).
+//   2. Serializes live entity state into a MsgWorldSnapshot packet.
+//   3. Broadcasts the packet to all connected clients via INetwork.
+//   4. Calls INetwork::service(0) to flush the outbound ENet queue.
+//
+// Also implements INetworkEventHandler to send a MsgConnectAck on each new
+// connection and to log disconnects.
+//
+// Threading: all ISimUpdate and INetworkEventHandler methods are called from
+// the GameLoop sim thread. INetwork::setEventHandler(&broadcaster) must be
+// called before GameLoop::start().
+class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
+  public:
+    WorldBroadcaster(EntityManager& entityManager, EntityTypeRegistry& registry, INetwork& net, ILogger& logger);
+
+    // ISimUpdate
+    void onTick(double simDt, uint64_t tickIndex) override;
+
+    // INetworkEventHandler
+    void onConnect(uint32_t peerId) override;
+    void onDisconnect(uint32_t peerId) override;
+    void onReceive(uint32_t peerId, const void* data, std::size_t size) override;
+
+  private:
+    void sendConnectAck(uint32_t peerId);
+
+    EntityManager& m_entityManager;
+    EntityTypeRegistry& m_registry;
+    INetwork& m_net;
+    ILogger& m_logger;
+};
+
+} // namespace fl

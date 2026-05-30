@@ -41,31 +41,15 @@ add_executable(validate-playlist validate-playlist/main.cpp)
 target_link_libraries(validate-playlist PRIVATE validate-playlist-lib)
 
 if(TARGET platform-enet)
-    # Config parsing logic in its own library so tests/test_server_config can link it.
-    add_library(fl-server-config STATIC fl-server/server_config.cpp)
-    target_link_libraries(fl-server-config PUBLIC platform-hal tomlplusplus::tomlplusplus)
-    target_include_directories(fl-server-config PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/fl-server"
-    )
-
-    add_executable(fl-server fl-server/main.cpp)
-    target_link_libraries(fl-server PRIVATE fl-server-config platform-enet)
-    target_include_directories(fl-server PRIVATE
+    add_executable(net_check net_check/main.cpp)
+    target_link_libraries(net_check PRIVATE platform-enet platform-hal)
+    target_include_directories(net_check PRIVATE
         "${CMAKE_SOURCE_DIR}/platform/net"
         "${enet_SOURCE_DIR}/include"
     )
 
-    add_executable(fl-client fl-client/main.cpp)
-    target_link_libraries(fl-client PRIVATE platform-enet platform-hal)
-    target_include_directories(fl-client PRIVATE
-        "${CMAKE_SOURCE_DIR}/platform/net"
-        "${enet_SOURCE_DIR}/include"
-    )
-
-    # MSVC deprecates std::getenv — suppress for these tools only
     if(MSVC)
-        target_compile_definitions(fl-server PRIVATE _CRT_SECURE_NO_WARNINGS)
-        target_compile_definitions(fl-client PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_compile_definitions(net_check PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
 endif()
 

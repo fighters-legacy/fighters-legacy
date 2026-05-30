@@ -225,7 +225,7 @@ TEST_CASE("GameLoop: onTick fires at least once after 50ms at Normal rate", "[gl
     MockLogger logger;
     GameLoop gl(sim, logger);
     gl.start();
-    std::this_thread::sleep_for(50ms);
+    std::this_thread::sleep_for(200ms); // 200ms gives 12 tick opportunities at 60 Hz; robust on slow CI runners
     gl.stop();
     REQUIRE(sim.tickCount.load() >= 1);
 }

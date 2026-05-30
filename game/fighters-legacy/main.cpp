@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#endif
+#include "ENetNetwork.h"
 #include "FileLogger.h"
 #include "IWindowEventHandler.h"
 #include "Platform.h"
@@ -17,9 +22,13 @@
 #include "firstrun/FirstRun.h"
 #include "loop/GameLoop.h"
 #include "loop/GameState.h"
+#include "net/GameProtocol.h"
+#include "net/WorldBroadcaster.h"
 #include "openal/OALAudio.h"
+#include "perf/PerformanceOverlay.h"
 #include "render/CameraController.h"
 #include "render/ParticleSystem.h"
+#include "render/RenderSnapshot.h"
 #include "render/SceneRenderer.h"
 #include "render/SimRenderBridge.h"
 #include "sandbox/SandboxInspector.h"
@@ -41,6 +50,86 @@
 #include <optional>
 
 namespace fs = std::filesystem;
+
+// ---------------------------------------------------------------------------
+// ClientNetEventHandler — parses WorldSnapshot packets from the embedded server
+// and posts them to the render bridge so SceneRenderer can display them.
+// ---------------------------------------------------------------------------
+struct ClientNetEventHandler : INetworkEventHandler {
+    fl::SimRenderBridge& bridge;
+    fl::EntityTypeRegistry& registry;
+    ILogger& logger;
+
+    ClientNetEventHandler(fl::SimRenderBridge& b, fl::EntityTypeRegistry& r, ILogger& l)
+        : bridge(b), registry(r), logger(l) {}
+
+    void onConnect(uint32_t /*peerId*/) override {
+        logger.log(LogLevel::Info, __FILE__, __LINE__, "connected to embedded server");
+    }
+    void onDisconnect(uint32_t /*peerId*/) override {
+        logger.log(LogLevel::Info, __FILE__, __LINE__, "disconnected from embedded server");
+    }
+    void onReceive(uint32_t /*peerId*/, const void* data, std::size_t size) override {
+        if (size < 1)
+            return;
+        const uint8_t msgId = *static_cast<const uint8_t*>(data);
+
+        if (msgId == static_cast<uint8_t>(fl::MsgId::ConnectAck)) {
+            if (size < sizeof(fl::MsgConnectAck))
+                return;
+            fl::MsgConnectAck ack;
+            std::memcpy(&ack, data, sizeof(ack));
+            const uint8_t* typeData = static_cast<const uint8_t*>(data) + sizeof(ack);
+            for (uint16_t i = 0; i < ack.typeCount; ++i) {
+                if ((typeData - static_cast<const uint8_t*>(data)) + sizeof(fl::MsgEntityTypeDef) > size)
+                    break;
+                fl::MsgEntityTypeDef td;
+                std::memcpy(&td, typeData, sizeof(td));
+                typeData += sizeof(td);
+                if (registry.findById(td.id))
+                    continue; // already registered in single-player
+                fl::EntityDef def;
+                def.id = td.id;
+                def.mesh = td.mesh;
+                def.classicDamageMesh = td.dmgMesh;
+                def.maxHp = 100.0f;
+                registry.registerType(std::move(def));
+            }
+        } else if (msgId == static_cast<uint8_t>(fl::MsgId::WorldSnapshot)) {
+            if (size < sizeof(fl::MsgWorldSnapshotHeader))
+                return;
+            fl::MsgWorldSnapshotHeader hdr;
+            std::memcpy(&hdr, data, sizeof(hdr));
+            const std::size_t expected =
+                sizeof(fl::MsgWorldSnapshotHeader) + hdr.entityCount * sizeof(fl::MsgEntityEntry);
+            if (size < expected)
+                return;
+
+            fl::RenderSnapshot snap;
+            snap.tickIndex = hdr.tickIndex;
+            snap.entries.reserve(hdr.entityCount);
+
+            const uint8_t* entryData = static_cast<const uint8_t*>(data) + sizeof(hdr);
+            for (uint16_t i = 0; i < hdr.entityCount; ++i) {
+                fl::MsgEntityEntry e;
+                std::memcpy(&e, entryData + i * sizeof(e), sizeof(e));
+
+                fl::EntityRenderEntry re;
+                re.entityIdx = e.entityIdx;
+                re.entityGen = e.entityGen;
+                re.typeIndex = e.typeIndex;
+                re.position = {e.pos[0], e.pos[1], e.pos[2]};
+                re.velocity = {e.vel[0], e.vel[1], e.vel[2]};
+                // Wire format: x,y,z,w — glm::quat constructor: (w,x,y,z)
+                re.orientation = glm::quat(e.ori[3], e.ori[0], e.ori[1], e.ori[2]);
+                re.damageLevel = e.damageLevel;
+                re.playerOwned = (e.flags & 1u) != 0;
+                snap.entries.push_back(re);
+            }
+            bridge.publishExternal(std::move(snap));
+        }
+    }
+};
 
 int main(int argc, char** argv) {
     // Step 0: Early flag handling — before any platform init so they work
@@ -226,10 +315,9 @@ int main(int argc, char** argv) {
     fl::EntityTypeRegistry entityRegistry;
     fl::EntityManager entityManager(*rawLogger, entityRegistry);
 
-    // Step 17b: Render bridge — wired before the sim thread starts so EntityManager::onTick
-    // can publish snapshots from the very first tick.
+    // Step 17b: Render bridge — populated from network snapshots in client mode.
+    // NOT wired to entityManager.setRenderBridge: WorldBroadcaster owns serialization.
     fl::SimRenderBridge renderBridge;
-    entityManager.setRenderBridge(&renderBridge);
 
     // Step 17b.1: Particle system — preset registry + per-frame emitter accumulation.
     fl::ParticleSystem particleSystem;
@@ -334,9 +422,38 @@ int main(int argc, char** argv) {
     if (outcome == FirstRunOutcome::LaunchSandboxInspector)
         inspector.emplace(*p.audio, *p.input, *rawLogger, 440.0f, &entityManager);
 
-    // Step 17d: Game loop — sim thread starts here.
-    GameLoop gameLoop(entityManager, *rawLogger);
-    gameLoop.start();
+    // Step 17d: Embedded server — binds ENet on 127.0.0.1:4778, runs GameLoop + EntityManager.
+    // WorldBroadcaster serializes entity state and broadcasts WorldSnapshot each tick.
+    // ENet server host is owned exclusively by the server sim thread (thread-safe by ENet
+    // per-host ownership contract).
+    auto serverNet = std::make_unique<ENetNetwork>();
+    if (!serverNet->init()) {
+        rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "server ENet init failed");
+        crashReporter.shutdown();
+        return 1;
+    }
+    fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *serverNet, *rawLogger);
+    serverNet->setEventHandler(&broadcaster);
+    if (!serverNet->bind("127.0.0.1", 4778, /*maxClients=*/1)) {
+        rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "server ENet bind failed on 127.0.0.1:4778");
+        crashReporter.shutdown();
+        return 1;
+    }
+
+    GameLoop serverLoop(broadcaster, *rawLogger);
+    serverLoop.start();
+
+    // Step 17e: Client — connects to embedded server on 127.0.0.1:4778.
+    // Receives WorldSnapshot packets and feeds them into the render bridge.
+    auto clientNet = std::make_unique<ENetNetwork>();
+    if (!clientNet->init()) {
+        rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "client ENet init failed");
+        crashReporter.shutdown();
+        return 1;
+    }
+    ClientNetEventHandler clientHandler(renderBridge, entityRegistry, *rawLogger);
+    clientNet->setEventHandler(&clientHandler);
+    clientNet->connect("127.0.0.1", 4778);
 
     // Step 18: Shell loop — main thread owns all HAL.
     // Angled sun (better PBR shading than the default straight-down direction).
@@ -371,6 +488,10 @@ int main(int argc, char** argv) {
     float sbLastMouseX = 0.0f;
     float sbLastMouseY = 0.0f;
     bool sbFirstFrame = true;
+
+    // Performance overlay — initialise mode from persisted user config.
+    PerformanceOverlay perfOverlay;
+    perfOverlay.setMode(userConfig.debug().overlayMode);
 
     bool running = true;
     while (running && !p.window->shouldClose()) {
@@ -441,7 +562,12 @@ int main(int argc, char** argv) {
         if (inspector && !inspector->update())
             running = false;
 
-        float alpha = gameLoop.shellTick();
+        // Pump ENet inbound (non-blocking). ClientNetEventHandler::onReceive fires here
+        // for WorldSnapshot packets → publishExternal → renderBridge updated.
+        clientNet->service(0);
+
+        // Alpha from server loop's tick timing (same atomic read pattern as before).
+        float alpha = serverLoop.shellTick();
         float aspect =
             static_cast<float>(p.window->width()) / static_cast<float>(p.window->height() > 0 ? p.window->height() : 1);
         CameraView cam = cameraController.view(aspect);
@@ -465,13 +591,35 @@ int main(int argc, char** argv) {
         musicManager.update(1.0f / 60.0f, aud.masterVolume, aud.musicVolume);
 
         sceneRenderer.renderFrame(alpha, cam, env, sandboxEmitters);
+
+        // Performance overlay — update stats and push lines to renderer.
+        {
+            const bool* keys = SDL_GetKeyboardState(nullptr);
+            static bool f3PrevDown = false;
+            if (keys[SDL_SCANCODE_F3] && !f3PrevDown) {
+                perfOverlay.cycleMode();
+                DebugSettings ds = userConfig.debug();
+                ds.overlayMode = perfOverlay.mode();
+                userConfig.setDebug(ds);
+                userConfig.save();
+            }
+            f3PrevDown = keys[SDL_SCANCODE_F3];
+
+            perfOverlay.update(p.renderer->getFrameStats(), entityManager.liveCount(), 1000.0f / 60.0f);
+            p.renderer->setOverlayLines(perfOverlay.lines());
+        }
+
         p.renderer->endFrame();
         p.input->flush();
         p.joystick->flush();
     }
 
     // Step 19: Clean shutdown.
-    gameLoop.stop(); // join sim thread before any HAL teardown
+    serverLoop.stop(); // join sim thread before any ENet teardown
+    serverNet->disconnect();
+    serverNet->shutdown();
+    clientNet->disconnect();
+    clientNet->shutdown();
     inspector.reset();
     musicManager.shutdown(); // must come before audio shutdown
     p.cursor.reset();        // destroy cursor while SDL video is still alive (before SDL_Quit)

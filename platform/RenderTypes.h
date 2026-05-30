@@ -26,6 +26,16 @@ struct RendererSettings {
     float drawDistanceKm{50.0f}; // entity cull distance in km (used by SceneRenderer)
 };
 
+// Per-frame GPU and CPU timing statistics. Populated by IRenderer::getFrameStats()
+// after endFrame() returns. Used by PerformanceOverlay and CI regression detection.
+struct FrameStats {
+    float frameDtMs{0.0f};         // wall-clock frame duration (beginFrame to beginFrame)
+    float gpuDtMs{0.0f};           // GPU command buffer time from timestamp queries; 0 if unsupported
+    uint32_t drawCalls{0};         // opaque + transparent + overlay draw calls this frame
+    uint64_t gpuMemUsedBytes{0};   // device-local heap bytes in use (VMA budget query)
+    uint64_t gpuMemBudgetBytes{0}; // device-local heap budget (VMA budget query)
+};
+
 // ---------------------------------------------------------------------------
 // Resource upload descriptors.
 //

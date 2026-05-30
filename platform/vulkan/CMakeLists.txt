@@ -41,6 +41,8 @@ set(GLSL_SHADERS
     particle_sim.comp
     particle.vert
     particle.frag
+    overlay.vert
+    overlay.frag
 )
 
 set(SPIRV_FILES "")

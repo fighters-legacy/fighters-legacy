@@ -28,6 +28,11 @@ class SimRenderBridge {
     // Sim thread: move snapshot into the write slot then atomically make it available.
     void publish(RenderSnapshot snap);
 
+    // Main-thread only: post a snapshot received from the network when there is no
+    // concurrent sim thread (network-client mode). Semantically identical to publish();
+    // the threading contract is the caller's responsibility.
+    void publishExternal(RenderSnapshot snap);
+
     // Render thread: swap the render slot with the latest published snapshot if one
     // is available since the last call. Returns true when a newer snapshot was swapped in.
     bool tryAdvance() noexcept;

@@ -141,6 +141,12 @@ class VkRenderer : public IRenderer {
     // ── Settings ───────────────────────────────────────────────────────────
     void applySettings(const RendererSettings& settings) override;
 
+    // ── Per-frame stats ────────────────────────────────────────────────────
+    FrameStats getFrameStats() const override;
+
+    // ── Debug overlay ──────────────────────────────────────────────────────
+    void setOverlayLines(std::span<const std::string_view> lines) override;
+
   private:
     // ── Core Vulkan objects ────────────────────────────────────────────────
     bool createInstance();
@@ -199,6 +205,11 @@ class VkRenderer : public IRenderer {
     bool createSyncObjects();
 
     void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex);
+
+    // ── Overlay pipeline ──────────────────────────────────────────────────
+    bool createOverlayPipeline();
+    void recordOverlayPass(VkCommandBuffer cmd);
+    void destroyOverlayResources();
 
     // ── Particle system ────────────────────────────────────────────────────
     bool createParticleResources();
@@ -394,4 +405,34 @@ class VkRenderer : public IRenderer {
     std::string m_shaderDir;
     mutable std::string m_lastError;
     std::string m_gpuInfo;
+
+    // ── Per-frame stats ───────────────────────────────────────────────────
+    FrameStats m_frameStats{};
+    uint32_t m_drawCallCount{0}; // incremented by each vkCmdDraw/vkCmdDrawIndexed
+
+    // ── Timestamp query pool (optional — skipped when timestampValidBits == 0) ─
+    VkQueryPool m_timestampPool{VK_NULL_HANDLE};
+    float m_timestampPeriod{1.0f}; // nanoseconds per timestamp tick
+    bool m_timestampSupported{false};
+
+    // ── Debug overlay ─────────────────────────────────────────────────────
+    std::vector<std::string_view> m_overlayLines; // set by setOverlayLines(), valid until endFrame
+    bool m_overlayReady{false};                   // true once createOverlayPipeline() succeeds
+
+    VkDescriptorSetLayout m_overlayDsLayout{VK_NULL_HANDLE};
+    VkDescriptorPool m_overlayDsPool{VK_NULL_HANDLE};
+    VkDescriptorSet m_overlayDs{VK_NULL_HANDLE};
+    VkPipelineLayout m_overlayPipelineLayout{VK_NULL_HANDLE};
+    VkPipeline m_overlayPipeline{VK_NULL_HANDLE};
+    VkSampler m_overlayFontSampler{VK_NULL_HANDLE};
+    // Font image managed directly (R8_UNORM raw pixels — not KTX2/PNG, so bypass resource manager).
+    VkImage m_fontImage{VK_NULL_HANDLE};
+    VkDeviceMemory m_fontImageMemory{VK_NULL_HANDLE};
+    VkImageView m_fontImageView{VK_NULL_HANDLE};
+
+    // Host-visible vertex buffer for overlay quads (rebuilt each frame when active).
+    static constexpr uint32_t kMaxOverlayChars = 1024;
+    VkBuffer m_overlayVB{VK_NULL_HANDLE};
+    VkDeviceMemory m_overlayVBMemory{VK_NULL_HANDLE};
+    void* m_overlayVBMapped{nullptr};
 };

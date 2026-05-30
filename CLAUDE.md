@@ -10,11 +10,15 @@ Cross-platform: Windows 10/11, Linux, macOS. Phase 2 (Modern-Particles Engine) i
 ```
 engine/         — core: content system, asset manager, IContentPack interface
 engine/entity/  — entity/object system: pool, type registry, damage model, EntityManager
+engine/net/     — authoritative server sim: WorldBroadcaster, GameProtocol wire types
+engine/perf/    — performance overlay: PerformanceOverlay
 engine/render/  — sim→render bridge + scene submission: RenderSnapshot, SimRenderBridge, SceneRenderer, CameraController, ParticleSystem
 platform/       — HAL: Vulkan, SDL3, OpenAL Soft, ENet backends
 platform/RenderTypes.h — GPU-agnostic scene types shared across the HAL boundary
-game/           — fighters-legacy game binary
-tools/          — developer utilities; asset pipeline (validate-flight-model, validate-mission, validate-licenses, validate-mesh, tex-compress); blender_gen.py (headless Blender 4.x aircraft mesh generator)
+server/         — dedicated server binary
+server/fl-server/ — fl-server: authoritative headless game server (owns GameLoop + EntityManager)
+game/           — fighters-legacy game binary (ENet client connecting to embedded fl-server in single-player)
+tools/          — developer utilities; asset pipeline (validate-flight-model, validate-mission, validate-licenses, validate-mesh, tex-compress); net_check (ENet smoke-test); blender_gen.py
 tests/          — Catch2 unit tests
 ```
 
@@ -51,12 +55,23 @@ Runtime shader discovery: `VkRenderer::resolveShaderDir()` tries `SDL_GetBasePat
 
 **GLM extension headers:** `VkRenderer.cpp` requires `<glm/gtc/matrix_transform.hpp>` (for `glm::lookAt`) and `<glm/ext/matrix_clip_space.hpp>` (for `glm::orthoZO`). `engine/render/RenderSnapshot.h` and `engine/entity/EntityManager.cpp` require `<glm/gtc/quaternion.hpp>` (for `glm::quat`). These are not in `<glm/glm.hpp>` core — always include them explicitly.
 
+### Server-client architecture (Phase 2, feat/sandbox-server-client)
+
+Single-player runs an **embedded server** inside the game binary: one `ENetNetwork` bound on `127.0.0.1:4778` + `GameLoop` + `EntityManager` + `WorldBroadcaster` run on a dedicated sim thread. The game's main thread connects as an ENet client, receives `MsgWorldSnapshot` packets, and feeds them into `SimRenderBridge::publishExternal()` for rendering. `fl-server` uses the identical server stack for dedicated multi-player.
+
+- **`engine/net/GameProtocol.h`**: packed wire types (`#pragma pack(1)`). Always parse with `std::memcpy` — never cast raw packet pointers; `uint64_t tickIndex` is at wire offset 4 (misaligned). Wire quaternion order: `x, y, z, w` matching `EntityTransform::quat`.
+- **`engine/net/WorldBroadcaster`**: `ISimUpdate` + `INetworkEventHandler`. Wraps `EntityManager::onTick`, serialises all live entities into `MsgWorldSnapshot`, broadcasts unreliably each tick. Sends `MsgConnectAck` + `MsgEntityTypeDef[]` on connect (reliable).
+- **`ClientNetEventHandler`** (in `game/fighters-legacy/main.cpp`): parses `ConnectAck` and `WorldSnapshot`; calls `bridge.publishExternal()`.
+- **ENet threading rule**: server `ENetHost*` is owned exclusively by the sim thread (via `WorldBroadcaster::onTick → net->service(0)`); client `ENetHost*` by the main thread. Never cross-thread.
+- **Single-player alpha**: `serverLoop.shellTick()` (not `gameLoop.shellTick()`) drives render interpolation — the embedded `GameLoop` IS the sim.
+
 ### Sim→render bridge (Phase 2, PR 4)
 
 `engine/render/SimRenderBridge` is a **lock-free triple-buffer** that ships a per-tick entity snapshot from the sim thread to the render thread. Three `RenderSnapshot` slots rotate: one owned by the sim, one in the atomic spare, one held by the render thread. `publish()` moves the completed snapshot into the spare (release fence); `tryAdvance()` atomically swaps the render slot with the spare when a newer tick is available (acq_rel fence). All three slot indices are always a distinct permutation of {0,1,2}.
 
 - `EntityRenderEntry`: entityIdx, entityGen, typeIndex, position (glm::vec3), orientation (glm::quat, w-first constructor), velocity (glm::vec3 for sub-tick extrapolation), damageLevel (uint8_t), playerOwned.
-- `EntityManager::setRenderBridge(SimRenderBridge*)` — call before `GameLoop::start()`; `onTick` publishes after `reapDeadEntities()` so dead slots are excluded.
+- **`publishExternal(RenderSnapshot)`** — main-thread-only variant for network-client mode (no concurrent sim thread). Used by `ClientNetEventHandler` after parsing a `WorldSnapshot` packet.
+- In server-client mode, do NOT call `EntityManager::setRenderBridge()` — `WorldBroadcaster` owns serialisation; the render bridge is populated from network packets instead.
 - `engine-render` CMake library is **unconditional** (no Vulkan dep) — builds in CI without a GPU. `engine-entity` privately links `engine-render`; `engine-render` privately links `engine-content`. Any binary/test that links `engine-entity` gets both resolved automatically.
 
 ### Scene renderer (Phase 2, PR 5)
@@ -124,9 +139,14 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 - `docs/development.md` — build prerequisites per platform
 - `GOVERNANCE.md` — decision-making and RFC process
 - `CMakePresets.json` — all build presets (debug / release / coverage / asan / msvc variants)
-- `platform/RenderTypes.h` — GPU-agnostic POD types: `MeshHandle`, `TextureHandle`, `MaterialHandle`, `CameraView`, `RenderItem`, `FrameScene`, `EnvironmentState`, `ParticleEmitterState`; also `RendererVsyncMode` + `RendererSettings` (vsync, FXAA, bloom, drawDistanceKm)
+- `platform/RenderTypes.h` — GPU-agnostic POD types: `MeshHandle`, `TextureHandle`, `MaterialHandle`, `CameraView`, `RenderItem`, `FrameScene`, `EnvironmentState`, `ParticleEmitterState`, `FrameStats`; also `RendererVsyncMode` + `RendererSettings`
+- `platform/IRenderer.h` — `getFrameStats() const` + `setOverlayLines(span<string_view>)` added; any mock must implement both
+- `engine/net/GameProtocol.h` — packed wire types for the game protocol; always parse with `memcpy`
+- `engine/net/WorldBroadcaster.h` — `ISimUpdate` + `INetworkEventHandler`; wraps EntityManager, broadcasts world state each tick
+- `engine/perf/PerformanceOverlay.h` — F3 overlay (Off/Compact/Full); `update(FrameStats, entityCount, simTickMs)` + `lines()` → span for `IRenderer::setOverlayLines`; `OverlayMode` lives in `engine/config/DebugSettings.h`
+- `engine/config/DebugSettings.h` — `OverlayMode` enum + `DebugSettings` struct; persisted as `[debug].overlay_mode` in user.toml
 - `engine/render/RenderSnapshot.h` — `EntityRenderEntry` + `RenderSnapshot`; POD only, no engine-entity headers (uses raw uint32_t/uint8_t to avoid circular deps)
-- `engine/render/SimRenderBridge.h` — lock-free triple-buffer bridge; `publish()` sim-thread-only, `tryAdvance()`/`current()`/`hasSnapshot()` render-thread-only
+- `engine/render/SimRenderBridge.h` — lock-free triple-buffer bridge; `publish()` sim-thread-only, `tryAdvance()`/`current()`/`hasSnapshot()` render-thread-only; `publishExternal()` main-thread-only for network-client mode
 - `engine/render/SceneRenderer.h` — snapshot→FrameScene bridge; `renderFrame(alpha, camera, env, extraEmitters={})` between beginFrame/endFrame; handles mesh upload/cache, camera-relative transforms, damage variant, front-to-back sort, draw-distance cull; `setParticleSystem(ps, effectResolver)` wires damage-effect emission; `setDrawDistance(km)` sets entity cull distance; `setBuiltinFloor(bool)` enables the 4 km floor plane
 - `engine/render/BuiltinGeometry.h` — `builtinTetrahedronGlb()` + `builtinFloorPlaneGlb()`: embedded .glb byte arrays for the sandbox demo layer; generated by `tools/gen_builtin_glb.py`
 - `engine/render/CameraController.h` — Free-orbit + Chase cameras; `view(aspectRatio)` → `CameraView`; infinite reverse-Z projection with Vulkan Y-flip

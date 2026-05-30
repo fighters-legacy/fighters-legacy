@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#endif
 //
 // fl-server — headless dedicated server for fighters-legacy
 //
@@ -15,6 +19,7 @@
 #include "server_config.h"
 #include <ILogger.h>
 #include <Platform.h>
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -24,7 +29,14 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include <entity/EntityDef.h>
+#include <entity/EntityManager.h>
+#include <entity/EntityTypeRegistry.h>
+#include <loop/GameLoop.h>
+#include <net/WorldBroadcaster.h>
 
 // ---------------------------------------------------------------------------
 // Version
@@ -340,7 +352,7 @@ int main(int argc, char** argv) {
     handler.network = net;
     net->setEventHandler(&handler);
 
-    if (!net->bind(cfg.port, cfg.maxPeers)) {
+    if (!net->bind(cfg.bindAddress.c_str(), cfg.port, cfg.maxPeers)) {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "bind failed: %s", net->getLastError() ? net->getLastError() : "unknown");
         log->log(LogLevel::Error, __FILE__, __LINE__, buf);
@@ -355,16 +367,50 @@ int main(int argc, char** argv) {
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
 
+    // ---- Entity system + sandbox entities ----
+    fl::EntityTypeRegistry entityRegistry;
+    fl::EntityManager entityManager(*log, entityRegistry);
+
+    // Builtin debug entity (empty mesh → SceneRenderer tetrahedron fallback on clients).
+    fl::EntityDef debugDef;
+    debugDef.id = "builtin:debug-entity";
+    debugDef.name = "Debug Entity";
+    debugDef.category = fl::ObjectCategory::AirVehicle;
+    debugDef.maxHp = 100.0f;
+    entityRegistry.registerType(std::move(debugDef));
+
+    // Spawn 5 entities in V-formation at 500 m altitude. Must be done before
+    // gameLoop.start() so the sim thread doesn't exist yet (data-race-free).
+    const float kAlt = 500.0f;
+    using Slot = std::pair<float, float>;
+    const Slot kSlots[] = {{0.0f, 0.0f}, {-30.0f, -25.0f}, {30.0f, -25.0f}, {-60.0f, -50.0f}, {60.0f, -50.0f}};
+    for (auto [x, z] : kSlots) {
+        fl::EntityTransform t{};
+        t.pos[0] = x;
+        t.pos[1] = kAlt;
+        t.pos[2] = z;
+        entityManager.spawn("builtin:debug-entity", t);
+    }
+
+    // ---- WorldBroadcaster wires the sim loop to ENet ----
+    fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *net, *log);
+    net->setEventHandler(&broadcaster);
+
+    GameLoop gameLoop(broadcaster, *log);
+
     // ---- Signal handling ----
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal); // no-op on Windows; fine for Linux/macOS containers
 
-    // ---- Main loop ----
-    // Phase 1: 10 ms service tick (~100 Hz). When the engine game loop workstream
-    // lands, fl-server will run a fixed-timestep update and switch to service(0).
-    while (!g_quit) {
-        net->service(10);
-    }
+    // ---- Start sim loop then wait for signal ----
+    gameLoop.start();
+
+    // Main thread sleeps until SIGINT/SIGTERM. All ENet I/O is driven from the
+    // sim thread via WorldBroadcaster::onTick() → net->service(0).
+    while (!g_quit)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    gameLoop.stop();
 
     // ---- Graceful shutdown ----
     log->log(LogLevel::Info, __FILE__, __LINE__, "shutting down");

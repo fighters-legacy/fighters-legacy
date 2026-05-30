@@ -45,13 +45,16 @@ void ENetNetwork::setEventHandler(INetworkEventHandler* handler) {
 // Server / client setup
 // -------------------------------------------------------------------------
 
-bool ENetNetwork::bind(uint16_t port, int maxClients) {
+bool ENetNetwork::bind(const char* address, uint16_t port, int maxClients) {
     if (m_host) {
         m_lastError = "already bound or connected";
         return false;
     }
     ENetAddress addr;
-    addr.host = ENET_HOST_ANY;
+    if (!address || std::strcmp(address, "0.0.0.0") == 0 || address[0] == '\0')
+        addr.host = ENET_HOST_ANY;
+    else
+        enet_address_set_host_ip(&addr, address);
     addr.port = port;
     m_host = enet_host_create(&addr, static_cast<size_t>(maxClients), kChannelCount, 0, 0);
     if (!m_host) {

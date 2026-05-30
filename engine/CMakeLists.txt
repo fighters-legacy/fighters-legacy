@@ -157,3 +157,20 @@ target_link_libraries(engine-flight
     PUBLIC  engine-content
     PRIVATE tomlplusplus::tomlplusplus
 )
+
+# Authoritative server-sim serializer and network broadcaster.
+add_library(engine-net STATIC
+    net/WorldBroadcaster.cpp
+)
+target_include_directories(engine-net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-net
+    PUBLIC  engine-entity
+            platform-hal
+)
+
+# Per-frame stats collection and debug overlay line builder.
+add_library(engine-perf STATIC
+    perf/PerformanceOverlay.cpp
+)
+target_include_directories(engine-perf PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-perf PUBLIC platform-hal)

@@ -491,4 +491,8 @@ struct MockRenderer : public IRenderer {
         lastScene = scene;
     }
     void applySettings(const RendererSettings&) override {}
+    FrameStats getFrameStats() const override {
+        return {};
+    }
+    void setOverlayLines(std::span<const std::string_view>) override {}
 };

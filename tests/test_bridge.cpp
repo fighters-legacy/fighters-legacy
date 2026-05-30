@@ -223,3 +223,25 @@ TEST_CASE("SimRenderBridge concurrent publish and advance does not deadlock") {
     bridge.tryAdvance();
     CHECK(bridge.current().tickIndex <= static_cast<uint64_t>(kTicks));
 }
+
+TEST_CASE("SimRenderBridge publishExternal delivers snapshot on same thread", "[bridge]") {
+    SimRenderBridge bridge;
+    CHECK(!bridge.hasSnapshot());
+
+    RenderSnapshot snap;
+    snap.tickIndex = 77u;
+    EntityRenderEntry e;
+    e.entityIdx = 42u;
+    snap.entries.push_back(e);
+
+    // publishExternal + tryAdvance from the same thread (network-client mode: no sim thread).
+    bridge.publishExternal(std::move(snap));
+    CHECK(bridge.hasSnapshot());
+    REQUIRE(bridge.tryAdvance());
+    CHECK(bridge.current().tickIndex == 77u);
+    REQUIRE(bridge.current().entries.size() == 1u);
+    CHECK(bridge.current().entries[0].entityIdx == 42u);
+
+    // A second tryAdvance with no new publish returns false.
+    CHECK(!bridge.tryAdvance());
+}
