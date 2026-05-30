@@ -264,3 +264,15 @@ if(WIN32)
     )
 endif()
 catch_discover_tests(test_async_filesystem_sdl3 DISCOVERY_MODE PRE_TEST)
+
+add_executable(test_game_protocol test_game_protocol.cpp)
+target_link_libraries(test_game_protocol PRIVATE Catch2::Catch2WithMain engine-net)
+catch_discover_tests(test_game_protocol)
+
+add_executable(test_performance_overlay test_performance_overlay.cpp)
+target_link_libraries(test_performance_overlay PRIVATE Catch2::Catch2WithMain engine-perf)
+catch_discover_tests(test_performance_overlay)
+
+add_executable(test_world_broadcaster test_world_broadcaster.cpp)
+target_link_libraries(test_world_broadcaster PRIVATE Catch2::Catch2WithMain engine-net)
+catch_discover_tests(test_world_broadcaster)

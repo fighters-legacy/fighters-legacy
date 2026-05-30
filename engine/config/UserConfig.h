@@ -4,6 +4,7 @@
 #include "ILogger.h"
 #include "config/AccessibilitySettings.h"
 #include "config/AudioSettings.h"
+#include "config/DebugSettings.h"
 #include "config/DifficultySettings.h"
 #include "config/GraphicsSettings.h"
 
@@ -42,6 +43,9 @@ class UserConfig {
     AccessibilitySettings accessibility() const;
     void setAccessibility(const AccessibilitySettings& as);
 
+    DebugSettings debug() const;
+    void setDebug(const DebugSettings& ds);
+
   private:
     static constexpr const char* kPath = "config/user.toml";
     static constexpr const char* kTmpPath = "config/user.toml.tmp";
@@ -54,4 +58,5 @@ class UserConfig {
     AudioSettings m_audio{};
     DifficultySettings m_difficulty{};
     AccessibilitySettings m_accessibility{};
+    DebugSettings m_debug{};
 };

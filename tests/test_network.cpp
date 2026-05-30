@@ -124,7 +124,7 @@ TEST_CASE("loopback connect", "[network][integration]") {
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind(19001, 4));
+    REQUIRE(server.bind(nullptr, 19001, 4));
     REQUIRE(client.connect("127.0.0.1", 19001));
 
     pump(server, client, 20);
@@ -150,7 +150,7 @@ TEST_CASE("getPeerAddress returns ip:port", "[network][integration]") {
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind(19002, 4));
+    REQUIRE(server.bind(nullptr, 19002, 4));
     REQUIRE(client.connect("127.0.0.1", 19002));
 
     pump(server, client, 20);
@@ -176,7 +176,7 @@ TEST_CASE("reliable send client to server", "[network][integration]") {
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind(19003, 4));
+    REQUIRE(server.bind(nullptr, 19003, 4));
     REQUIRE(client.connect("127.0.0.1", 19003));
     pump(server, client, 20);
 
@@ -201,7 +201,7 @@ TEST_CASE("unreliable send server to client", "[network][integration]") {
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind(19004, 4));
+    REQUIRE(server.bind(nullptr, 19004, 4));
     REQUIRE(client.connect("127.0.0.1", 19004));
     pump(server, client, 20);
 
@@ -228,7 +228,7 @@ TEST_CASE("large packet fragmentation", "[network][integration]") {
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind(19005, 4));
+    REQUIRE(server.bind(nullptr, 19005, 4));
     REQUIRE(client.connect("127.0.0.1", 19005));
     pump(server, client, 20);
 
@@ -264,7 +264,7 @@ TEST_CASE("multiple clients connect", "[network][integration]") {
     c1.setEventHandler(&s1);
     c2.setEventHandler(&s2);
 
-    REQUIRE(server.bind(19006, 4));
+    REQUIRE(server.bind(nullptr, 19006, 4));
     REQUIRE(c1.connect("127.0.0.1", 19006));
     REQUIRE(c2.connect("127.0.0.1", 19006));
 
@@ -305,7 +305,7 @@ TEST_CASE("server broadcast reaches all clients", "[network][integration]") {
     c1.setEventHandler(&s1);
     c2.setEventHandler(&s2);
 
-    REQUIRE(server.bind(19007, 4));
+    REQUIRE(server.bind(nullptr, 19007, 4));
     REQUIRE(c1.connect("127.0.0.1", 19007));
     REQUIRE(c2.connect("127.0.0.1", 19007));
 
@@ -336,7 +336,7 @@ TEST_CASE("disconnect fires callback", "[network][integration]") {
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind(19008, 4));
+    REQUIRE(server.bind(nullptr, 19008, 4));
     REQUIRE(client.connect("127.0.0.1", 19008));
     pump(server, client, 20);
     REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
@@ -358,7 +358,7 @@ TEST_CASE("send to disconnected peer returns false", "[network][integration]") {
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind(19009, 4));
+    REQUIRE(server.bind(nullptr, 19009, 4));
     REQUIRE(client.connect("127.0.0.1", 19009));
     pump(server, client, 20);
     REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
@@ -389,7 +389,7 @@ TEST_CASE("server full rejects new connection", "[network][integration]") {
     c1.setEventHandler(&s1);
     c2.setEventHandler(&s2);
 
-    REQUIRE(server.bind(19010, 1)); // only 1 peer slot
+    REQUIRE(server.bind(nullptr, 19010, 1)); // only 1 peer slot
     REQUIRE(c1.connect("127.0.0.1", 19010));
     pumpN(server, {&c1, &c2}, 20);
     REQUIRE(s1.countType(Event::Type::Connect) == 1);

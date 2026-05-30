@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// fl-client — headless test client for fighters-legacy
+// net_check — ENet transport smoke-test for fighters-legacy
 //
-// Usage: fl-client [host] [port] [--count N] [--interval MS]
+// Usage: net_check [host] [port] [--count N] [--interval MS]
 //
-// Connects to fl-server, sends periodic "fl-client ping N" packets, then
+// Connects to fl-server, sends periodic "net_check ping N" packets, then
 // disconnects cleanly. Intended for manual smoke-testing of the ENet backend
 // alongside fl-server; not a production binary.
 #include "ENetNetwork.h"
@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
     int positional = 0;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
-            std::printf("Usage: fl-client [host] [port] [--count N] [--interval MS]\n"
+            std::printf("Usage: net_check [host] [port] [--count N] [--interval MS]\n"
                         "\n"
                         "Options:\n"
                         "  --help           Print this message and exit\n"
@@ -111,7 +111,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {
-            std::printf("fl-client %s (ENet %d.%d.%d)\n", kVersion, ENET_VERSION_MAJOR, ENET_VERSION_MINOR,
+            std::printf("net_check %s (ENet %d.%d.%d)\n", kVersion, ENET_VERSION_MAJOR, ENET_VERSION_MINOR,
                         ENET_VERSION_PATCH);
             return 0;
         }
@@ -217,7 +217,7 @@ int main(int argc, char** argv) {
         if (msSincePing >= interval) {
             ++pingsSent;
             char payload[64];
-            std::snprintf(payload, sizeof(payload), "fl-client ping %d", pingsSent);
+            std::snprintf(payload, sizeof(payload), "net_check ping %d", pingsSent);
 
             {
                 char buf[80];

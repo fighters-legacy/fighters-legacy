@@ -70,7 +70,7 @@ jobs:
       - name: Check clang-format
         if: matrix.os == 'ubuntu-latest'
         run: |
-          git diff --name-only origin/${{ github.base_ref || 'main' }}...HEAD \
+          git diff --name-only --diff-filter=d origin/${{ github.base_ref || 'main' }}...HEAD \
             | grep -E '\.(cpp|h|hpp|c)$' \
             | xargs -r clang-format-22 --dry-run --Werror
 
@@ -99,11 +99,11 @@ jobs:
 
       - name: Smoke test fl-server --version (Linux / macOS)
         if: matrix.os != 'windows-latest'
-        run: ./build/debug/tools/fl-server --version
+        run: ./build/debug/server/fl-server/fl-server --version
 
       - name: Smoke test fl-server --version (Windows)
         if: matrix.os == 'windows-latest'
-        run: .\build\debug-msvc\tools\Debug\fl-server.exe --version
+        run: .\build\debug-msvc\server\fl-server\Debug\fl-server.exe --version
         shell: pwsh
 
       - name: Smoke test asset pipeline tools (Linux / macOS)

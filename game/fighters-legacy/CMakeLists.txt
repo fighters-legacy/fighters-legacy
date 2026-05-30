@@ -9,22 +9,29 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         engine-sandbox
         engine-loop
         engine-entity
+        engine-net
+        engine-perf
         platform-file-logger
         platform-sdl3
         platform-vulkan
         platform-openal
+        platform-enet
         platform-hal
         Vulkan::Vulkan
         SDL3::SDL3
         OpenAL::OpenAL)
-    # Concrete backend headers (VkRenderer.h, SDL3Window.h) pull in Vulkan/SDL3 system
-    # headers that are not on the default search path on all platforms — mirror what
-    # hello_triangle does.
     target_include_directories(fighters-legacy PRIVATE
         ${CMAKE_BINARY_DIR}/engine
         "${CMAKE_SOURCE_DIR}/platform/vulkan"
-        "${CMAKE_SOURCE_DIR}/platform/sdl3")
-    # TODO(Phase 2): add platform-net when game loop wires ENetNetwork
+        "${CMAKE_SOURCE_DIR}/platform/sdl3"
+        "${CMAKE_SOURCE_DIR}/platform/net"
+        "${enet_SOURCE_DIR}/include")
+    if(WIN32)
+        target_link_libraries(fighters-legacy PRIVATE ws2_32 winmm)
+    endif()
+    if(MSVC)
+        target_compile_definitions(fighters-legacy PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
     # On Windows, OpenAL32.dll and SDL3.dll are not in the default search path
     # used by the smoke test — copy both next to the binary so the loader finds them.
     if(WIN32)

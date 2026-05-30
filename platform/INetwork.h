@@ -31,8 +31,10 @@ class INetwork {
 
     // --- Server side ---
 
-    // Creates a host listening on the given port with up to maxClients peers.
-    virtual bool bind(uint16_t port, int maxClients) = 0;
+    // Creates a host listening on the given address:port with up to maxClients peers.
+    // address: dotted-decimal IPv4 string, or nullptr / "0.0.0.0" for ENET_HOST_ANY.
+    // Use "127.0.0.1" for single-player / localhost-only servers.
+    virtual bool bind(const char* address, uint16_t port, int maxClients) = 0;
 
     // --- Client side ---
 

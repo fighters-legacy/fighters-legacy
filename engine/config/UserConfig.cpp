@@ -581,6 +581,21 @@ bool UserConfig::load() {
     if (auto v = tbl["accessibility"]["subtitle_duration_scale"].value<double>())
         m_accessibility.subtitleDurationScale = static_cast<float>(std::clamp(*v, 0.5, 3.0));
 
+    // [debug]
+    if (auto v = tbl["debug"]["overlay_mode"].value<int64_t>()) {
+        switch (*v) {
+        case 1:
+            m_debug.overlayMode = OverlayMode::Compact;
+            break;
+        case 2:
+            m_debug.overlayMode = OverlayMode::Full;
+            break;
+        default:
+            m_debug.overlayMode = OverlayMode::Off;
+            break;
+        }
+    }
+
     return true;
 }
 
@@ -641,6 +656,9 @@ bool UserConfig::save() {
     accessibility.insert_or_assign("subtitle_duration_scale",
                                    static_cast<double>(m_accessibility.subtitleDurationScale));
 
+    toml::table debug;
+    debug.insert_or_assign("overlay_mode", static_cast<int64_t>(m_debug.overlayMode));
+
     // Insertion order determines TOML section order
     toml::table root;
     root.insert_or_assign("first_run", std::move(firstRun));
@@ -649,6 +667,7 @@ bool UserConfig::save() {
     root.insert_or_assign("audio", std::move(audio));
     root.insert_or_assign("difficulty", std::move(difficulty));
     root.insert_or_assign("accessibility", std::move(accessibility));
+    root.insert_or_assign("debug", std::move(debug));
 
     std::ostringstream oss;
     oss << root;
@@ -710,4 +729,11 @@ AccessibilitySettings UserConfig::accessibility() const {
 }
 void UserConfig::setAccessibility(const AccessibilitySettings& as) {
     m_accessibility = as;
+}
+
+DebugSettings UserConfig::debug() const {
+    return m_debug;
+}
+void UserConfig::setDebug(const DebugSettings& ds) {
+    m_debug = ds;
 }

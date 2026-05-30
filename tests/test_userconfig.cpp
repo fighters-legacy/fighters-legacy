@@ -97,3 +97,44 @@ TEST_CASE("UserConfig: unknown log_level string in TOML falls back to Info and e
     CHECK(config.logLevel() == LogLevel::Info);
     CHECK(logger.hasMessage(LogLevel::Warn, "verbose"));
 }
+
+TEST_CASE("UserConfig: [debug] overlay_mode Full round-trip", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[debug]\noverlay_mode = 2\n");
+    UserConfig config(fs, logger);
+    config.load();
+    CHECK(config.debug().overlayMode == OverlayMode::Full);
+}
+
+TEST_CASE("UserConfig: [debug] default Off when section absent", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    config.load(); // no file — defaults
+    CHECK(config.debug().overlayMode == OverlayMode::Off);
+}
+
+TEST_CASE("UserConfig: [debug] out-of-range overlay_mode falls back to Off", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[debug]\noverlay_mode = 99\n");
+    UserConfig config(fs, logger);
+    config.load();
+    CHECK(config.debug().overlayMode == OverlayMode::Off);
+}
+
+TEST_CASE("UserConfig: [debug] Compact round-trip via save+load", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    DebugSettings ds;
+    ds.overlayMode = OverlayMode::Compact;
+    config.setDebug(ds);
+    config.save();
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    CHECK(config2.debug().overlayMode == OverlayMode::Compact);
+}

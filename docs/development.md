@@ -225,13 +225,15 @@ fighters-legacy/
 │   └── net/            # ENet networking backend
 ├── game/               # Game binaries
 │   └── fighters-legacy/  # fighters-legacy game client (Phase 1 stub)
-├── tools/              # Developer utilities (fl-server, fl-client, hello_triangle, …)
+├── server/             # Dedicated server binary
+│   └── fl-server/      # fl-server — authoritative headless game server
+├── tools/              # Developer utilities (net_check, hello_triangle, …)
 ├── tests/              # Test suite (Catch2 via FetchContent)
 ├── docs/               # Documentation
 └── scripts/            # Developer scripts and git hooks
 ```
 
-The `game/` directory holds game binary entry points. Developer tools and headless infrastructure binaries live in `tools/`.
+The `game/` directory holds game binary entry points. The `server/` directory holds the authoritative dedicated server. Developer utilities live in `tools/`.
 
 ---
 
@@ -300,8 +302,10 @@ This tags `main` and pushes the tag. The `release.yml` workflow fires immediatel
 
 ## fl-server
 
-`fl-server` is the headless dedicated server binary. It implements the ENet
-UDP transport backend and runs without a window, renderer, audio, or input.
+`fl-server` is the headless dedicated server binary (`server/fl-server/`). It
+owns the authoritative sim loop (EntityManager + GameLoop), serialises world
+state via the binary game protocol, and runs without a window, renderer, audio,
+or input.
 
 ### Prerequisites
 
@@ -314,21 +318,21 @@ a C++20-capable compiler, and the standard project deps from the sections above)
 ```bash
 cmake --preset debug
 cmake --build --preset debug --target fl-server
-# Binary: build/debug/tools/fl-server
+# Binary: build/debug/server/fl-server/fl-server
 ```
 
 ### Run
 
 ```bash
 # Defaults: port 4778, 16 peers
-./build/debug/tools/fl-server
+./build/debug/server/fl-server/fl-server
 
 # Override port and peer count via positional args
-./build/debug/tools/fl-server 4778 4
+./build/debug/server/fl-server/fl-server 4778 4
 
 # Flags
-./build/debug/tools/fl-server --help
-./build/debug/tools/fl-server --version
+./build/debug/server/fl-server/fl-server --help
+./build/debug/server/fl-server/fl-server --version
 ```
 
 ### Configuration
@@ -368,24 +372,24 @@ See [docs/fl-server-config.md — Kubernetes / container deployment](fl-server-c
 
 ---
 
-## fl-client
+## net_check
 
-`fl-client` is a headless developer test tool for smoke-testing the full
-client/server lifecycle locally. It connects to a running `fl-server`, sends
-periodic ping packets, then disconnects cleanly.
+`net_check` is a headless developer utility (`tools/net_check/`) for
+smoke-testing the ENet transport layer. It connects to a running `fl-server`,
+sends periodic ping packets, then disconnects cleanly. It is not a game client.
 
 ### Build
 
 ```bash
 cmake --preset debug
-cmake --build --preset debug --target fl-client
-# Binary: build/debug/tools/fl-client
+cmake --build --preset debug --target net_check
+# Binary: build/debug/tools/net_check
 ```
 
 ### Usage
 
 ```bash
-fl-client [host] [port] [--count N] [--interval MS]
+net_check [host] [port] [--count N] [--interval MS]
 ```
 
 | Argument | Default | Purpose |
@@ -402,10 +406,10 @@ positional args are omitted.
 
 ```bash
 # Terminal 1 — start server
-./build/debug/tools/fl-server 4778 4
+./build/debug/server/fl-server/fl-server 4778 4
 
 # Terminal 2 — send 5 pings at 500 ms intervals, then exit
-./build/debug/tools/fl-client 127.0.0.1 4778 --count 5 --interval 500
+./build/debug/tools/net_check 127.0.0.1 4778 --count 5 --interval 500
 ```
 
 Expected server output: `peer 0 connected` → `peer 0 disconnected`.
