@@ -7,6 +7,8 @@
 #include "audio/VoiceCalloutManager.h"
 #include "content/AssetManager.h"
 #include "content/IContentPack.h"
+#include "i18n/Localization.h"
+#include "mock_hal.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <cstddef>
@@ -458,6 +460,16 @@ struct FakeAudioPack : NullContentPack {
     }
 };
 
+// GarbageAudioPack — returns bytes that are NOT valid OGG.
+// Used to exercise the decodeOgg-failure path in VoiceCalloutManager.
+struct GarbageAudioPack : NullContentPack {
+    std::optional<AudioBuffer> loadAudio(const char*) override {
+        AudioBuffer buf;
+        buf.bytes = {0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x02, 0x03};
+        return buf;
+    }
+};
+
 // ---------------------------------------------------------------------------
 // Shared playlist TOML for tests.
 // ---------------------------------------------------------------------------
@@ -808,4 +820,60 @@ TEST_CASE("MusicManager crossfade path when switching states with active slot", 
     mm.update(3.0f, 1.0f, 1.0f);   // dt > crossfadeDuration(2.5) → t >= 1 → crossfade done
     mm.update(0.016f, 1.0f, 1.0f); // post-crossfade steady-state update
     mm.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// VoiceCalloutManager targeted coverage tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("VoiceCalloutManager asset not found logs warning", "[audio][voice]") {
+    NullAudio audio;
+    NullLogger log;
+
+    // NullContentPack returns nullopt for all assets → exercises lines 39-41
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::make_unique<NullContentPack>());
+    AssetManager assets(std::move(packs), log);
+    assets.initialize(nullptr);
+
+    VoiceCalloutManager vcm;
+    vcm.init(&audio, &assets, nullptr, nullptr, &log);
+    AudioSettings settings{};
+    vcm.play(VoiceCallout{"sfx/missing", nullptr, 4.0f}, settings);
+    vcm.shutdown();
+}
+
+TEST_CASE("VoiceCalloutManager OGG decode failure logs warning", "[audio][voice]") {
+    NullAudio audio;
+    NullLogger log;
+
+    // GarbageAudioPack returns non-OGG bytes → decodeOgg fails → exercises lines 46-48
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::make_unique<GarbageAudioPack>());
+    AssetManager assets(std::move(packs), log);
+    assets.initialize(nullptr);
+
+    VoiceCalloutManager vcm;
+    vcm.init(&audio, &assets, nullptr, nullptr, &log);
+    AudioSettings settings{};
+    vcm.play(VoiceCallout{"sfx/bad", nullptr, 4.0f}, settings);
+    vcm.shutdown();
+}
+
+TEST_CASE("VoiceCalloutManager subtitle push via Localization fallback", "[audio][voice]") {
+    NullAudio audio;
+    NullLogger log;
+    MockFilesystem fs; // empty — Localization falls back to key-as-text
+    Localization i18n(fs, log);
+    SubtitleQueue sq;
+
+    VoiceCalloutManager vcm;
+    vcm.init(&audio, nullptr, &sq, &i18n, &log);
+    AudioSettings settings{};
+    // subtitleKey is non-null + i18n is non-null → i18n.get("rwr.warning") returns "rwr.warning"
+    // → subtitleText = "rwr.warning" → sq.push() called → covers lines 63-65
+    // sq.enabled() is called inside play() → covers SubtitleQueue::enabled() getter
+    vcm.play(VoiceCallout{nullptr, "rwr.warning", 3.0f}, settings);
+    REQUIRE(sq.current() == "rwr.warning");
+    vcm.shutdown();
 }

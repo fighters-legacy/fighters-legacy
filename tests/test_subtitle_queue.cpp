@@ -21,10 +21,14 @@ TEST_CASE("SubtitleQueue update expires entries", "[audio][subtitle]") {
 
 TEST_CASE("SubtitleQueue disabled push is no-op", "[audio][subtitle]") {
     SubtitleQueue q;
+    REQUIRE(q.enabled()); // starts enabled
     q.setEnabled(false);
+    REQUIRE(!q.enabled());
     q.push("Should not appear", 5.0f);
     REQUIRE(q.current().empty());
     REQUIRE(q.records().empty());
+    q.setEnabled(true);
+    REQUIRE(q.enabled());
 }
 
 TEST_CASE("SubtitleQueue oldest evicted at kMaxActive cap", "[audio][subtitle]") {
