@@ -80,15 +80,21 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
+      - name: Add Windows DLL directories to PATH
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          "$PWD\build\debug-msvc\_deps\sdl3-build\Debug" | Out-File -FilePath $env:GITHUB_PATH -Append
+          "$PWD\build\debug-msvc\_deps\openal-soft-build\Debug" | Out-File -FilePath $env:GITHUB_PATH -Append
+          "$PWD\build\debug-msvc\Debug" | Out-File -FilePath $env:GITHUB_PATH -Append
+
       - name: Smoke test fighters-legacy --version (Linux / macOS)
         if: matrix.os != 'windows-latest'
         run: ./build/debug/game/fighters-legacy/fighters-legacy --version
 
       - name: Smoke test fighters-legacy --version (Windows)
         if: matrix.os == 'windows-latest'
-        run: |
-          $env:PATH += ";$PWD\build\debug-msvc\_deps\sdl3-build\Debug"
-          .\build\debug-msvc\game\fighters-legacy\Debug\fighters-legacy.exe --version
+        run: .\build\debug-msvc\game\fighters-legacy\Debug\fighters-legacy.exe --version
         shell: pwsh
 
       - name: Smoke test fl-server --version (Linux / macOS)
