@@ -3529,7 +3529,8 @@ static constexpr uint32_t kOverlayVertexSize = sizeof(OverlayVertex); // 32
 
 bool VkRenderer::createOverlayPipeline() {
     // ── Font texture (R8_UNORM 128×256 expanded from 1bpp kOverlayFontBitmap) ─
-    // kOverlayFontBitmap is included at the top of this translation unit.
+    // Created directly via raw Vulkan — VkResources::createTexture() expects KTX2/PNG,
+    // not raw pixel data, so bypassing it avoids silent fallback to the white default.
     {
         constexpr uint32_t kFontW = 128;
         constexpr uint32_t kFontH = 256;
@@ -3548,13 +3549,112 @@ bool VkRenderer::createOverlayPipeline() {
             }
         }
 
-        TextureUploadDesc td{};
-        td.name = "overlay_font";
-        td.bytes = std::span<const uint8_t>(atlas.data(), atlas.size());
-        td.srgb = false;
-        m_fontTexture = m_resources.createTexture(td);
-        if (!m_fontTexture.valid()) {
-            m_lastError = "overlay: failed to upload font texture";
+        // Staging buffer (host-visible, one-shot upload).
+        VkBuffer stagingBuf{VK_NULL_HANDLE};
+        VkDeviceMemory stagingMem{VK_NULL_HANDLE};
+        {
+            VkBufferCreateInfo bci{};
+            bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bci.size = atlas.size();
+            bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            vkCreateBuffer(m_device, &bci, nullptr, &stagingBuf);
+            VkMemoryRequirements mr{};
+            vkGetBufferMemoryRequirements(m_device, stagingBuf, &mr);
+            VkMemoryAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            ai.allocationSize = mr.size;
+            ai.memoryTypeIndex =
+                findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            vkAllocateMemory(m_device, &ai, nullptr, &stagingMem);
+            vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+            void* mapped = nullptr;
+            vkMapMemory(m_device, stagingMem, 0, atlas.size(), 0, &mapped);
+            std::memcpy(mapped, atlas.data(), atlas.size());
+            vkUnmapMemory(m_device, stagingMem);
+        }
+
+        // Device-local image.
+        {
+            VkImageCreateInfo ici{};
+            ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ici.imageType = VK_IMAGE_TYPE_2D;
+            ici.format = VK_FORMAT_R8_UNORM;
+            ici.extent = {kFontW, kFontH, 1};
+            ici.mipLevels = 1;
+            ici.arrayLayers = 1;
+            ici.samples = VK_SAMPLE_COUNT_1_BIT;
+            ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+            ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            if (vkCreateImage(m_device, &ici, nullptr, &m_fontImage) != VK_SUCCESS) {
+                m_lastError = "overlay: vkCreateImage (font) failed";
+                vkDestroyBuffer(m_device, stagingBuf, nullptr);
+                vkFreeMemory(m_device, stagingMem, nullptr);
+                return false;
+            }
+            VkMemoryRequirements mr{};
+            vkGetImageMemoryRequirements(m_device, m_fontImage, &mr);
+            VkMemoryAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            ai.allocationSize = mr.size;
+            ai.memoryTypeIndex =
+                findMemoryType(m_physicalDevice, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            vkAllocateMemory(m_device, &ai, nullptr, &m_fontImageMemory);
+            vkBindImageMemory(m_device, m_fontImage, m_fontImageMemory, 0);
+        }
+
+        // One-time command buffer: transition → copy → transition.
+        {
+            VkCommandBufferAllocateInfo cbai{};
+            cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            cbai.commandPool = m_commandPool;
+            cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            cbai.commandBufferCount = 1;
+            VkCommandBuffer cmd{VK_NULL_HANDLE};
+            vkAllocateCommandBuffers(m_device, &cbai, &cmd);
+            VkCommandBufferBeginInfo cbbi{};
+            cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            vkBeginCommandBuffer(cmd, &cbbi);
+
+            imageBarrier(cmd, m_fontImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                         VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {kFontW, kFontH, 1};
+            vkCmdCopyBufferToImage(cmd, stagingBuf, m_fontImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+            imageBarrier(cmd, m_fontImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                         VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+
+            vkEndCommandBuffer(cmd);
+            VkSubmitInfo si{};
+            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            si.commandBufferCount = 1;
+            si.pCommandBuffers = &cmd;
+            vkQueueSubmit(m_graphicsQueue, 1, &si, VK_NULL_HANDLE);
+            vkQueueWaitIdle(m_graphicsQueue);
+            vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+        }
+
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        vkFreeMemory(m_device, stagingMem, nullptr);
+
+        // Image view.
+        VkImageViewCreateInfo vci{};
+        vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vci.image = m_fontImage;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = VK_FORMAT_R8_UNORM;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(m_device, &vci, nullptr, &m_fontImageView) != VK_SUCCESS) {
+            m_lastError = "overlay: vkCreateImageView (font) failed";
             return false;
         }
     }
@@ -3612,11 +3712,9 @@ bool VkRenderer::createOverlayPipeline() {
             return false;
         }
 
-        const GpuTexture* fontTex = m_resources.getTexture(m_fontTexture);
-        VkImageView fontView = fontTex ? fontTex->view : VK_NULL_HANDLE;
         VkDescriptorImageInfo imgInfo{};
         imgInfo.sampler = m_overlayFontSampler;
-        imgInfo.imageView = fontView;
+        imgInfo.imageView = m_fontImageView;
         imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         VkWriteDescriptorSet wr{};
         wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -3889,8 +3987,12 @@ void VkRenderer::destroyOverlayResources() {
         vkDestroyDescriptorSetLayout(m_device, m_overlayDsLayout, nullptr);
     if (m_overlayFontSampler != VK_NULL_HANDLE)
         vkDestroySampler(m_device, m_overlayFontSampler, nullptr);
-    if (m_fontTexture.valid())
-        m_resources.destroyTexture(m_fontTexture);
+    if (m_fontImageView != VK_NULL_HANDLE)
+        vkDestroyImageView(m_device, m_fontImageView, nullptr);
+    if (m_fontImage != VK_NULL_HANDLE)
+        vkDestroyImage(m_device, m_fontImage, nullptr);
+    if (m_fontImageMemory != VK_NULL_HANDLE)
+        vkFreeMemory(m_device, m_fontImageMemory, nullptr);
 
     m_overlayVBMapped = nullptr;
     m_overlayVB = VK_NULL_HANDLE;
@@ -3900,6 +4002,8 @@ void VkRenderer::destroyOverlayResources() {
     m_overlayDsPool = VK_NULL_HANDLE;
     m_overlayDsLayout = VK_NULL_HANDLE;
     m_overlayFontSampler = VK_NULL_HANDLE;
-    m_fontTexture = {};
+    m_fontImageView = VK_NULL_HANDLE;
+    m_fontImage = VK_NULL_HANDLE;
+    m_fontImageMemory = VK_NULL_HANDLE;
     m_overlayReady = false;
 }

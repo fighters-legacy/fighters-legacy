@@ -425,7 +425,10 @@ class VkRenderer : public IRenderer {
     VkPipelineLayout m_overlayPipelineLayout{VK_NULL_HANDLE};
     VkPipeline m_overlayPipeline{VK_NULL_HANDLE};
     VkSampler m_overlayFontSampler{VK_NULL_HANDLE};
-    TextureHandle m_fontTexture{};
+    // Font image managed directly (R8_UNORM raw pixels — not KTX2/PNG, so bypass resource manager).
+    VkImage m_fontImage{VK_NULL_HANDLE};
+    VkDeviceMemory m_fontImageMemory{VK_NULL_HANDLE};
+    VkImageView m_fontImageView{VK_NULL_HANDLE};
 
     // Host-visible vertex buffer for overlay quads (rebuilt each frame when active).
     static constexpr uint32_t kMaxOverlayChars = 1024;
