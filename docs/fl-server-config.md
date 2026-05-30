@@ -188,7 +188,7 @@ content files — not here.
 ## [lobby] — Lobby registration
 
 > **Phase 2:** Lobby registration is not yet active. These keys are parsed and stored;
-> no requests are sent to `fl-lobby`. Tracked in issue #36.
+> no requests are sent to `fl-lobby`. Tracked in issue #143.
 
 ### `register`
 
