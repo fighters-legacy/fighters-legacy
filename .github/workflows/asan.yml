@@ -25,6 +25,13 @@ jobs:
           sudo apt-get install -y ninja-build cmake clang libx11-dev libxext-dev \
             libopenal-dev
 
+      - name: Cache CMake FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/asan/_deps
+          key: cmake-deps-ubuntu-latest-asan-${{ hashFiles('cmake/dependencies.cmake') }}
+          restore-keys: cmake-deps-ubuntu-latest-asan-
+
       - name: Configure
         run: cmake --preset asan
         env:

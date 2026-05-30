@@ -50,6 +50,13 @@ jobs:
         run: |
           brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang
 
+      - name: Cache CMake FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/${{ matrix.preset }}/_deps
+          key: cmake-deps-${{ matrix.os }}-${{ matrix.preset }}-${{ hashFiles('cmake/dependencies.cmake') }}
+          restore-keys: cmake-deps-${{ matrix.os }}-${{ matrix.preset }}-
+
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
 

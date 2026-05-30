@@ -35,6 +35,13 @@ jobs:
           sudo apt-get install -y ninja-build cmake libx11-dev libxext-dev \
             libopenal-dev libvulkan-dev glslang-tools
 
+      - name: Cache CMake FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/debug/_deps
+          key: cmake-deps-ubuntu-latest-debug-${{ hashFiles('cmake/dependencies.cmake') }}
+          restore-keys: cmake-deps-ubuntu-latest-debug-
+
       - name: Configure
         run: cmake --preset debug
 
