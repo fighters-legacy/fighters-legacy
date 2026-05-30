@@ -7,6 +7,26 @@ include(Catch)
 #   target_link_libraries(test_foo PRIVATE Catch2::Catch2WithMain engine-content)
 #   catch_discover_tests(test_foo)
 
+add_executable(test_renderer test_renderer.cpp)
+target_link_libraries(test_renderer PRIVATE Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_renderer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_renderer)
+
+add_executable(test_bridge test_bridge.cpp)
+target_link_libraries(test_bridge PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_bridge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_bridge)
+
+add_executable(test_scene_renderer test_scene_renderer.cpp)
+target_link_libraries(test_scene_renderer PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_scene_renderer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_scene_renderer)
+
+add_executable(test_particle_system test_particle_system.cpp)
+target_link_libraries(test_particle_system PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_particle_system PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_particle_system)
+
 add_executable(test_entity test_entity.cpp)
 target_link_libraries(test_entity PRIVATE Catch2::Catch2WithMain engine-entity)
 target_include_directories(test_entity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

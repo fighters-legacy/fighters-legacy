@@ -34,8 +34,12 @@ jobs:
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-22.list
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake gcc g++ clang clang-format \
+          sudo apt-get install -y ninja-build cmake gcc g++ clang clang-format-22 \
             libvulkan-dev glslang-tools \
             libx11-dev libxext-dev \
             libopenal-dev
@@ -52,6 +56,13 @@ jobs:
           version: '1.3.290.0'
           cache: true
 
+      - name: Cache CMake FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/${{ matrix.preset }}/_deps
+          key: cmake-deps-${{ matrix.os }}-${{ matrix.preset }}-${{ hashFiles('cmake/dependencies.cmake') }}
+          restore-keys: cmake-deps-${{ matrix.os }}-${{ matrix.preset }}-
+
       - name: REUSE compliance check
         if: matrix.os == 'ubuntu-latest'
         uses: fsfe/reuse-action@v4
@@ -61,7 +72,7 @@ jobs:
         run: |
           git diff --name-only origin/${{ github.base_ref || 'main' }}...HEAD \
             | grep -E '\.(cpp|h|hpp|c)$' \
-            | xargs -r clang-format --dry-run --Werror
+            | xargs -r clang-format-22 --dry-run --Werror
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
@@ -69,15 +80,21 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
+      - name: Add Windows DLL directories to PATH
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          "$PWD\build\debug-msvc\_deps\sdl3-build\Debug" | Out-File -FilePath $env:GITHUB_PATH -Append
+          "$PWD\build\debug-msvc\_deps\openal-soft-build\Debug" | Out-File -FilePath $env:GITHUB_PATH -Append
+          "$PWD\build\debug-msvc\Debug" | Out-File -FilePath $env:GITHUB_PATH -Append
+
       - name: Smoke test fighters-legacy --version (Linux / macOS)
         if: matrix.os != 'windows-latest'
         run: ./build/debug/game/fighters-legacy/fighters-legacy --version
 
       - name: Smoke test fighters-legacy --version (Windows)
         if: matrix.os == 'windows-latest'
-        run: |
-          $env:PATH += ";$PWD\build\debug-msvc\_deps\sdl3-build\Debug"
-          .\build\debug-msvc\game\fighters-legacy\Debug\fighters-legacy.exe --version
+        run: .\build\debug-msvc\game\fighters-legacy\Debug\fighters-legacy.exe --version
         shell: pwsh
 
       - name: Smoke test fl-server --version (Linux / macOS)

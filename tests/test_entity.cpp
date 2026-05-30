@@ -13,6 +13,7 @@
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
 #include "entity/ObjectCategory.h"
+#include "render/SimRenderBridge.h"
 
 #include <cstdint>
 #include <limits>
@@ -698,4 +699,119 @@ TEST_CASE("EntityManager: reapDeadEntities does nothing when list is empty", "[m
     // Tick with no entities — must not crash
     REQUIRE_NOTHROW(mgr.onTick(1.0 / 60.0, 0));
     CHECK(mgr.liveCount() == 0);
+}
+
+// ---------------------------------------------------------------------------
+// EntityManager — render bridge integration
+// ---------------------------------------------------------------------------
+
+TEST_CASE("EntityManager: setRenderBridge enables snapshot publish on tick", "[manager]") {
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeAirVehicleDef("mgr:snap_a"));
+    fl::EntityManager mgr(logger, registry);
+
+    fl::SimRenderBridge bridge;
+    mgr.setRenderBridge(&bridge);
+
+    fl::EntityTransform t{};
+    t.pos[0] = 10.f;
+    t.pos[1] = 20.f;
+    t.pos[2] = 30.f;
+    t.vel[0] = 5.f;
+    auto id = mgr.spawn("mgr:snap_a", t);
+    REQUIRE(id.valid());
+
+    mgr.onTick(1.0 / 60.0, 42);
+
+    REQUIRE(bridge.tryAdvance());
+    const auto& snap = bridge.current();
+    CHECK(snap.tickIndex == 42);
+    REQUIRE(snap.entries.size() == 1);
+    CHECK(snap.entries[0].entityIdx == id.index);
+    CHECK(snap.entries[0].entityGen == id.generation);
+    CHECK(snap.entries[0].position.x == 10.f);
+    CHECK(snap.entries[0].position.y == 20.f);
+    CHECK(snap.entries[0].position.z == 30.f);
+    CHECK(snap.entries[0].velocity.x == 5.f);
+}
+
+TEST_CASE("EntityManager: snapshot contains damageLevel and playerOwned", "[manager]") {
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDefWithDamage("mgr:snap_b"));
+    fl::EntityManager mgr(logger, registry);
+
+    fl::SimRenderBridge bridge;
+    mgr.setRenderBridge(&bridge);
+
+    fl::EntityTransform t{};
+    auto id = mgr.spawn("mgr:snap_b", t);
+    fl::EntityState* s = mgr.get(id);
+    REQUIRE(s != nullptr);
+    s->playerOwned = true;
+
+    // Apply damage to move to Heavy level (cross 40%)
+    mgr.applyDamage(id, 61.f); // 100 - 61 = 39 < 40%
+
+    mgr.onTick(1.0 / 60.0, 1);
+
+    REQUIRE(bridge.tryAdvance());
+    REQUIRE(bridge.current().entries.size() == 1);
+    const auto& e = bridge.current().entries[0];
+    CHECK(e.damageLevel == static_cast<uint8_t>(fl::DamageLevel::Heavy));
+    CHECK(e.playerOwned == true);
+}
+
+TEST_CASE("EntityManager: snapshot is empty when no entities are live", "[manager]") {
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager mgr(logger, registry);
+
+    fl::SimRenderBridge bridge;
+    mgr.setRenderBridge(&bridge);
+
+    mgr.onTick(1.0 / 60.0, 1);
+
+    REQUIRE(bridge.tryAdvance());
+    CHECK(bridge.current().entries.empty());
+}
+
+TEST_CASE("EntityManager: dead entities are absent from snapshot", "[manager]") {
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeAirVehicleDef("mgr:snap_c"));
+    fl::EntityManager mgr(logger, registry);
+
+    fl::SimRenderBridge bridge;
+    mgr.setRenderBridge(&bridge);
+
+    fl::EntityTransform t{};
+    auto a = mgr.spawn("mgr:snap_c", t);
+    auto b = mgr.spawn("mgr:snap_c", t);
+    mgr.kill(a); // reaped in next tick
+
+    mgr.onTick(1.0 / 60.0, 1);
+
+    REQUIRE(bridge.tryAdvance());
+    // Only b survives
+    REQUIRE(bridge.current().entries.size() == 1);
+    CHECK(bridge.current().entries[0].entityIdx == b.index);
+}
+
+TEST_CASE("EntityManager: setRenderBridge nullptr suppresses publish", "[manager]") {
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeAirVehicleDef("mgr:snap_d"));
+    fl::EntityManager mgr(logger, registry);
+
+    fl::SimRenderBridge bridge;
+    mgr.setRenderBridge(&bridge);
+    mgr.setRenderBridge(nullptr); // detach
+
+    fl::EntityTransform t{};
+    mgr.spawn("mgr:snap_d", t);
+    mgr.onTick(1.0 / 60.0, 1);
+
+    CHECK_FALSE(bridge.hasSnapshot());
 }

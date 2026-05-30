@@ -69,7 +69,7 @@ All interfaces live under `platform/` and are exposed via the `platform-hal` CMa
 - **`IAsyncFilesystem` threading note:** The background worker thread is an internal implementation detail of the SDL3 backend. All `IAsyncFilesystem` methods — including `service()`, `readFileAsync()`, and `cancelRead()` — must be called from the main thread. Completion data passed to `onReadComplete()` is valid only for the duration of the callback; callers must copy any bytes they need before returning.
 - **`IJoystick::flush()` note:** Must be called once per frame alongside `IInput::flush()`, after all input has been read for that frame. Devices recognised as standard gamepads are owned exclusively by `IInput` (SDL_Gamepad); `IJoystick` (SDL_Joystick) handles only raw HOTAS devices that are not standard gamepads.
 
-**`IRenderer` scope (Phase 1):** `IRenderer` is lifecycle-only — init, frame begin/end, shutdown. Scene submission (mesh handles, transforms, materials) and a render graph abstraction are added in the Vulkan backend workstream (Phase 2).
+**`IRenderer` scope (Phase 2 complete):** `IRenderer` provides retained GPU resource management (`createMesh`, `createTexture`, `createMaterial`, `destroy*`), per-frame scene submission (`setScene(FrameScene)`), and renderer settings (`applySettings(RendererSettings)`). The Vulkan backend (`VkRenderer`) implements a seven-pass frame: shadow, particle compute, opaque forward (PBR + CSM), sky, transparent, bloom, tonemap+FXAA. `RendererSettings` (defined in `RenderTypes.h`) carries vsync mode, FXAA, bloom, and draw-distance hints — populated from `GraphicsSettings` in `main.cpp` so that `platform/` headers remain free of `engine/` dependencies.
 
 **`IFilesystem` is synchronous:** `readFile` blocks until the OS delivers the data. It is correct for startup asset loading, mod discovery, and config reads. It must not be called on the main thread for per-frame terrain streaming. See `IAsyncFilesystem` for async terrain streaming reads.
 
@@ -105,6 +105,11 @@ These decisions are finalized and not subject to revision without an RFC.
 | Concern | Choice | Rationale |
 |---|---|---|
 | Rendering | Vulkan + MoltenVK | One API everywhere; MoltenVK → Metal on Apple Silicon |
+| GPU math | GLM (MIT) | INTERFACE dep on `platform-hal`; available everywhere without Vulkan |
+| GPU memory | VulkanMemoryAllocator (MIT) | VMA v3.3.0; device-local staging for meshes/textures |
+| Texture runtime | KTX-Software / Basis Universal | Apache-2.0; transcode at load → BC7 desktop, ASTC Apple Silicon |
+| World coordinate convention | Right-handed Y-up meters (glTF-native) | No axis conversion needed; Vulkan Y-flip handled in projection matrix |
+| Depth convention | Reverse-Z (near=1 far→0, compare=GREATER, D32_SFLOAT) | Better floating-point precision distribution across scene depth |
 | Windowing / input | SDL3 | Wayland + modern controller support; long-term path |
 | Audio | OpenAL Soft | Positional 3D audio; native music in OGG; no MIDI dependency in engine core |
 | Network transport | ENet 1.3.x (reliable UDP) | Reliable + unreliable channels; congestion control; cross-platform. **IPv4 only** — ENet 1.3.x does not support IPv6; dual-stack requires the `enet6` fork (SirLynix/enet6), which is not a Phase 1 concern. |

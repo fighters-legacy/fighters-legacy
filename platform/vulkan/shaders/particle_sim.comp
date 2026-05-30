@@ -1,0 +1,47 @@
+#version 450
+
+// GPU compute: integrates active particle positions, velocities, and ages.
+// Dead particles (age <= 0) are skipped. New particles are pre-written to the
+// pool by the CPU via vkCmdCopyBuffer before this dispatch is issued.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct Particle {
+    vec3  pos;       float age;       // age <= 0 = inactive slot
+    vec3  vel;       float maxAge;
+    vec4  colorStart;
+    vec4  colorEnd;
+    float sizeStart; float sizeEnd;
+    float additive;  float _pad;
+};
+
+layout(set = 0, binding = 0) buffer ParticlePool {
+    Particle particles[];
+};
+
+layout(push_constant) uniform SimPush {
+    float dt;
+    uint  count;
+    float gravity;   // downward acceleration in m/s^2 (typically -2.0 for slow drift)
+    float _pad;
+};
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= count)
+        return;
+
+    Particle p = particles[idx];
+    if (p.age <= 0.0)
+        return;
+
+    p.age -= dt;
+    if (p.age <= 0.0) {
+        particles[idx].age = 0.0;
+        return;
+    }
+
+    p.vel.y += gravity * dt;
+    p.pos += p.vel * dt;
+    particles[idx] = p;
+}

@@ -9,6 +9,7 @@
 #include "IInput.h"
 #include "IJoystick.h"
 #include "ILogger.h"
+#include "IRenderer.h"
 
 #include <cstring>
 #include <map>
@@ -403,4 +404,81 @@ struct MockJoystick : public IJoystick {
     const char* getLastError() const override {
         return nullptr;
     }
+};
+
+struct MockRenderer : public IRenderer {
+    int initCount{0};
+    int shutdownCount{0};
+    int beginFrameCount{0};
+    int endFrameCount{0};
+    int resizeCount{0};
+    int lastResizeW{0};
+    int lastResizeH{0};
+    bool initResult{true};
+    std::string lastErrorBuf;
+
+    // Resource tracking
+    uint32_t nextMeshId{1};
+    uint32_t nextTextureId{1};
+    uint32_t nextMaterialId{1};
+    int createMeshCount{0};
+    int createTextureCount{0};
+    int createMaterialCount{0};
+    int destroyMeshCount{0};
+    int destroyTextureCount{0};
+    int destroyMaterialCount{0};
+    int setSceneCount{0};
+    FrameScene lastScene{};
+
+    bool init(IWindow*) override {
+        ++initCount;
+        return initResult;
+    }
+    void onResize(int w, int h) override {
+        ++resizeCount;
+        lastResizeW = w;
+        lastResizeH = h;
+    }
+    void beginFrame() override {
+        ++beginFrameCount;
+    }
+    void endFrame() override {
+        ++endFrameCount;
+    }
+    void shutdown() override {
+        ++shutdownCount;
+    }
+    const char* getLastError() const override {
+        return lastErrorBuf.empty() ? nullptr : lastErrorBuf.c_str();
+    }
+    const char* gpuInfo() const override {
+        return "MockGPU 1.0";
+    }
+
+    MeshHandle createMesh(const MeshUploadDesc&) override {
+        ++createMeshCount;
+        return MeshHandle{nextMeshId++};
+    }
+    TextureHandle createTexture(const TextureUploadDesc&) override {
+        ++createTextureCount;
+        return TextureHandle{nextTextureId++};
+    }
+    MaterialHandle createMaterial(const MaterialDesc&) override {
+        ++createMaterialCount;
+        return MaterialHandle{nextMaterialId++};
+    }
+    void destroyMesh(MeshHandle) override {
+        ++destroyMeshCount;
+    }
+    void destroyTexture(TextureHandle) override {
+        ++destroyTextureCount;
+    }
+    void destroyMaterial(MaterialHandle) override {
+        ++destroyMaterialCount;
+    }
+    void setScene(const FrameScene& scene) override {
+        ++setSceneCount;
+        lastScene = scene;
+    }
+    void applySettings(const RendererSettings&) override {}
 };

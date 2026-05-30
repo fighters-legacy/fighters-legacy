@@ -13,6 +13,10 @@
 class ILogger;
 
 namespace fl {
+class SimRenderBridge;
+} // namespace fl
+
+namespace fl {
 
 // Central entity subsystem. Owns the object pool and dispatches per-tick housekeeping.
 //
@@ -70,6 +74,11 @@ class EntityManager : public ISimUpdate {
     // Propagates to EntityPool. 0 = unlimited.
     void setSoftCap(uint32_t cap) noexcept;
 
+    // Attach a render bridge. Must be called before GameLoop::start().
+    // When set, onTick() publishes an EntityRenderEntry snapshot after each tick.
+    // Pass nullptr to detach (renders silently skip publishing).
+    void setRenderBridge(SimRenderBridge* bridge) noexcept;
+
     // ── thread-safe snapshot ──────────────────────────────────────────────────
 
     // Safe to call from the main thread. Updated at end of each onTick().
@@ -86,6 +95,7 @@ class EntityManager : public ISimUpdate {
     std::vector<IEntityEventHandler*> m_handlers;
     std::atomic<uint32_t> m_liveCount{0};
     std::vector<EntityId> m_pendingKill;
+    SimRenderBridge* m_renderBridge{nullptr}; // optional; set before GameLoop::start()
 };
 
 } // namespace fl

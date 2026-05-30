@@ -140,6 +140,100 @@ else()
     if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
         unset(CMAKE_POLICY_VERSION_MINIMUM CACHE)
     endif()
+    # yaml-cpp 0.8.0 uses uint16_t in emitterutils.cpp without including <cstdint>.
+    # Force-include it so GCC 14+ doesn't reject the missing declaration as an error.
+    if(TARGET yaml-cpp)
+        target_compile_options(yaml-cpp PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-include cstdint>
+            $<$<CXX_COMPILER_ID:MSVC>:/FI cstdint>
+        )
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# VulkanMemoryAllocator — header-only; gated on Vulkan_FOUND (Vulkan backend only)
+# ---------------------------------------------------------------------------
+if(Vulkan_FOUND)
+    find_package(VulkanMemoryAllocator QUIET)
+    if(VulkanMemoryAllocator_FOUND)
+        message(STATUS "VulkanMemoryAllocator: system")
+    else()
+        message(STATUS "VulkanMemoryAllocator: FetchContent")
+        FetchContent_Declare(VulkanMemoryAllocator
+            GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+            GIT_TAG        v3.3.0
+            GIT_SHALLOW    TRUE
+            SYSTEM
+        )
+        FetchContent_MakeAvailable(VulkanMemoryAllocator)
+    endif()
+
+    # ---------------------------------------------------------------------------
+    # KTX-Software — KTX2 + Basis Universal transcode; gated on Vulkan_FOUND
+    # Read-only static library (ktx_read); write/encode features disabled.
+    # ---------------------------------------------------------------------------
+    find_package(ktx QUIET)
+    if(ktx_FOUND)
+        message(STATUS "KTX-Software: system")
+    else()
+        message(STATUS "KTX-Software: FetchContent")
+        set(KTX_FEATURE_TESTS        OFF CACHE BOOL "" FORCE)
+        set(KTX_FEATURE_TOOLS        OFF CACHE BOOL "" FORCE)
+        set(KTX_FEATURE_GL_UPLOAD    OFF CACHE BOOL "" FORCE)
+        set(KTX_FEATURE_VK_UPLOAD    OFF CACHE BOOL "" FORCE)
+        set(KTX_FEATURE_LOADTEST_APPS OFF CACHE BOOL "" FORCE)
+        set(KTX_FEATURE_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
+        set(KTX_FEATURE_TOOLS_CTS    OFF CACHE BOOL "" FORCE)
+        set(BASISU_SUPPORT_OPENCL    OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(ktx
+            GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
+            GIT_TAG        v4.4.2
+            GIT_SHALLOW    TRUE
+            SYSTEM
+        )
+        # KTX-Software has many pedantic issues in its internals (anonymous structs,
+        # etc.).  Disable warning-as-error for the entire KTX subdirectory so all
+        # object library targets build cleanly; then also add -w to the final
+        # library targets to silence warning noise in the build output.
+        set(_fl_save_werror "${CMAKE_COMPILE_WARNING_AS_ERROR}")
+        set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
+        FetchContent_MakeAvailable(ktx)
+        set(CMAKE_COMPILE_WARNING_AS_ERROR "${_fl_save_werror}")
+        # Suppress warnings from the compiled ktx_read target (it inherits -Werror
+        # from the outer project otherwise).
+        foreach(_ktx_target IN ITEMS ktx_read ktx)
+            if(TARGET ${_ktx_target})
+                get_target_property(_type ${_ktx_target} TYPE)
+                if(_type MATCHES "LIBRARY")
+                    target_compile_options(${_ktx_target} PRIVATE
+                        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-w>
+                        $<$<CXX_COMPILER_ID:MSVC>:/W0>
+                    )
+                endif()
+            endif()
+        endforeach()
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# GLM — header-only math library; unconditional (shared by platform-hal and renderer)
+# ---------------------------------------------------------------------------
+find_package(glm QUIET)
+if(glm_FOUND)
+    message(STATUS "glm: system (${glm_VERSION})")
+else()
+    message(STATUS "glm: FetchContent")
+    # GLM 1.0.1 defaults GLM_BUILD_LIBRARY ON, which builds glm.dll on Windows.
+    # The DLL has no exports so no glm.lib is generated, breaking all link steps.
+    # Force header-only mode — we only use GLM as headers.
+    set(GLM_BUILD_LIBRARY OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(glm
+        GIT_REPOSITORY https://github.com/g-truc/glm.git
+        GIT_TAG        1.0.1
+        GIT_SHALLOW    TRUE
+        SYSTEM
+    )
+    FetchContent_MakeAvailable(glm)
 endif()
 
 # ---------------------------------------------------------------------------

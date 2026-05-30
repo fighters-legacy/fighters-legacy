@@ -1,7 +1,7 @@
 version = 1
 
 [[annotations]]
-path = ["**.h", "**.cpp", "**.vert", "**.frag", "**.glsl"]
+path = ["**.h", "**.cpp", "**.vert", "**.frag", "**.comp", "**.glsl"]
 SPDX-FileCopyrightText = "2026 John McKenzie"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
