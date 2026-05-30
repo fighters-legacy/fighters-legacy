@@ -104,7 +104,7 @@ These decisions are finalized and not subject to revision without an RFC.
 
 | Concern | Choice | Rationale |
 |---|---|---|
-| Rendering | Vulkan + MoltenVK | One API everywhere; MoltenVK → Metal on Apple Silicon |
+| Rendering | Vulkan + MoltenVK (primary); OpenGL 4.1 Core (Phase 3, Linux + Windows only) | MoltenVK → Metal on Apple Silicon. macOS uses Vulkan/MoltenVK exclusively — OpenGL is deprecated on macOS 14+ and is not a supported renderer path on Apple platforms. |
 | GPU math | GLM (MIT) | INTERFACE dep on `platform-hal`; available everywhere without Vulkan |
 | GPU memory | VulkanMemoryAllocator (MIT) | VMA v3.3.0; device-local staging for meshes/textures |
 | Texture runtime | KTX-Software / Basis Universal | Apache-2.0; transcode at load → BC7 desktop, ASTC Apple Silicon |

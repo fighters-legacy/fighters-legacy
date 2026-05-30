@@ -9,7 +9,8 @@ Each phase has a milestone with individual issues for every workstream task.
 |---|---|---|
 | 1 — Engine Foundation | 1–8 | None (start immediately) |
 | 2 — Modern-Particles Engine | 10–36 | HAL stable; fl-base-pack bootstrap started |
-| 4 — In-Game Mission Editor | 26–38 | Phase 2 Vulkan HAL stable |
+| 3 — OpenGL Compatibility Renderer | 37–50 | Phase 2 engine stable |
+| 4 — In-Game Mission Editor | 26–38 | Phase 2 Vulkan HAL stable (can begin in parallel from week 26; Phase 2 acceptance gates full ramp-up) |
 | 5 — Linux/macOS Release | ongoing → ~44 | All CI green; MoltenVK verified |
 | 6 — Native Formats & Modding | 36–50 | modding docs complete |
 
@@ -40,6 +41,10 @@ Total estimated duration: **~48–56 weeks** of focused work.
 4. **Radar & EW (2.13) → AI weapons selection (2.4) → multiplayer balance (2.7)**
    AI must know missile guidance types to select correct weapons and respond to jamming.
    EW parameters affect game balance in multiplayer; lock before server-side enforcement.
+
+5. **HUD (#2.16) + Main menu (#2.17) → Phase 2 early-access milestone**
+   Players must be able to launch, play a mission, and exit without a command line.
+   These are required for the itch.io early-access release and gate Phase 2 acceptance.
 
 ---
 
