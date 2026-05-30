@@ -383,7 +383,7 @@ int main(int argc, char** argv) {
     // gameLoop.start() so the sim thread doesn't exist yet (data-race-free).
     const float kAlt = 500.0f;
     using Slot = std::pair<float, float>;
-    const Slot kSlots[] = {{0, 0}, {-30, -25}, {30, -25}, {-60, -50}, {60, -50}};
+    const Slot kSlots[] = {{0.0f, 0.0f}, {-30.0f, -25.0f}, {30.0f, -25.0f}, {-60.0f, -50.0f}, {60.0f, -50.0f}};
     for (auto [x, z] : kSlots) {
         fl::EntityTransform t{};
         t.pos[0] = x;

@@ -72,8 +72,8 @@ TEST_CASE("GameProtocol: MsgConnectAck round-trip with two type defs", "[game_pr
     ack.typeCount = 2;
 
     fl::MsgEntityTypeDef defs[2]{};
-    std::strncpy(defs[0].id, "builtin:debug-entity", sizeof(defs[0].id) - 1);
-    std::strncpy(defs[1].id, "builtin:other", sizeof(defs[1].id) - 1);
+    std::snprintf(defs[0].id, sizeof(defs[0].id), "%s", "builtin:debug-entity");
+    std::snprintf(defs[1].id, sizeof(defs[1].id), "%s", "builtin:other");
 
     const std::size_t totalSize = sizeof(ack) + 2 * sizeof(fl::MsgEntityTypeDef);
     std::vector<uint8_t> buf(totalSize);
