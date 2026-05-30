@@ -17,6 +17,13 @@ class OALAudio : public IAudio {
     AudioBufferId uploadBuffer(const void* data, std::size_t size, int sampleRate, int channels) override;
     void freeBuffer(AudioBufferId id) override;
 
+    AudioBufferId allocStreamBuffer() override;
+    void queueBuffer(AudioSourceId source, AudioBufferId buffer, const void* data, std::size_t size, int sampleRate,
+                     int channels) override;
+    int processedBufferCount(AudioSourceId source) override;
+    void unqueueProcessed(AudioSourceId source, AudioBufferId* out, int maxCount) override;
+    void detachBuffers(AudioSourceId source) override;
+
     AudioSourceId createSource() override;
     void destroySource(AudioSourceId source) override;
 
@@ -48,6 +55,7 @@ class OALAudio : public IAudio {
     uint32_t m_nextBufferId{1};
     uint32_t m_nextSourceId{1};
     std::unordered_map<AudioBufferId, ALuint> m_buffers;
+    std::unordered_map<ALuint, AudioBufferId> m_alToId; // reverse map for unqueueProcessed
     std::unordered_map<AudioSourceId, ALuint> m_sources;
 
     mutable std::string m_lastError;

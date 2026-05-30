@@ -237,6 +237,22 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# stb — single-file C libraries; used for stb_vorbis OGG decode in engine-audio.
+# stb has no CMakeLists.txt; use FetchContent_Populate to download source only.
+# stb_vorbis.c is compiled directly as a source file in the engine-audio target.
+# ---------------------------------------------------------------------------
+FetchContent_Declare(stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG        31c1ad37456438565541f4919958214b6e762fb4
+    GIT_SHALLOW    FALSE
+    SYSTEM
+)
+FetchContent_GetProperties(stb)
+if(NOT stb_POPULATED)
+    FetchContent_Populate(stb)
+endif()
+
+# ---------------------------------------------------------------------------
 # tomlplusplus — header-only TOML parser; system preferred, FetchContent fallback
 # Used by engine/content/ModLoader to parse mod manifests.
 # ---------------------------------------------------------------------------

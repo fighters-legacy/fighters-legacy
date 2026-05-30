@@ -2,6 +2,7 @@
 #pragma once
 
 #include "ILogger.h"
+#include "config/AccessibilitySettings.h"
 #include "config/AudioSettings.h"
 #include "config/DifficultySettings.h"
 #include "config/GraphicsSettings.h"
@@ -38,6 +39,9 @@ class UserConfig {
     DifficultySettings difficulty() const;
     void setDifficulty(const DifficultySettings& ds);
 
+    AccessibilitySettings accessibility() const;
+    void setAccessibility(const AccessibilitySettings& as);
+
   private:
     static constexpr const char* kPath = "config/user.toml";
     static constexpr const char* kTmpPath = "config/user.toml.tmp";
@@ -49,4 +53,5 @@ class UserConfig {
     GraphicsSettings m_graphics{};
     AudioSettings m_audio{};
     DifficultySettings m_difficulty{};
+    AccessibilitySettings m_accessibility{};
 };

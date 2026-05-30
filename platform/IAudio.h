@@ -26,6 +26,26 @@ class IAudio {
     virtual AudioBufferId uploadBuffer(const void* data, std::size_t size, int sampleRate, int channels) = 0;
     virtual void freeBuffer(AudioBufferId id) = 0;
 
+    // --- Streaming buffers (music tracks) ---
+
+    // Allocates an unformatted buffer slot for use with streaming. Returns 0 on failure.
+    virtual AudioBufferId allocStreamBuffer() = 0;
+
+    // Fills buffer with interleaved int16_t PCM and queues it for sequential playback on source.
+    // size = bytes. The buffer must have been created by allocStreamBuffer().
+    virtual void queueBuffer(AudioSourceId source, AudioBufferId buffer, const void* data, std::size_t size,
+                             int sampleRate, int channels) = 0;
+
+    // Number of fully played-through buffers on source that are ready to unqueue and refill.
+    virtual int processedBufferCount(AudioSourceId source) = 0;
+
+    // Unqueues up to maxCount processed buffers into out[]. Returns the count actually unqueued.
+    virtual void unqueueProcessed(AudioSourceId source, AudioBufferId* out, int maxCount) = 0;
+
+    // Stops the source and detaches all queued streaming buffers (AL_BUFFER = AL_NONE).
+    // Must be called before re-using a streaming source with new buffers.
+    virtual void detachBuffers(AudioSourceId source) = 0;
+
     // --- Source management ---
 
     // Creates a 3D point emitter and returns an opaque source handle, or 0 on failure.

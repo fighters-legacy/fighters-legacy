@@ -11,6 +11,7 @@
 
 class AssetManager;
 class IRenderer;
+class SubtitleQueue;
 namespace fl {
 class ParticleSystem;
 class SimRenderBridge;
@@ -47,6 +48,11 @@ class SceneRenderer {
     // name is forwarded to ParticleSystem::emit(). Pass nullptr/empty to disable.
     void setParticleSystem(ParticleSystem* ps, EffectResolver effectResolver) noexcept;
 
+    // Optional: wire a SubtitleQueue so renderFrame() populates FrameScene::subtitles.
+    // Pass nullptr to disable. Rendering is deferred to Phase 4 IGui;
+    // VkRenderer currently ignores the subtitles field.
+    void setSubtitleQueue(SubtitleQueue* queue) noexcept;
+
     // Advance to the latest sim snapshot and submit a FrameScene to the renderer.
     // Must be called between IRenderer::beginFrame() and endFrame().
     // alpha — render-interpolation factor from GameLoop::shellTick(), in [0, 1].
@@ -76,6 +82,8 @@ class SceneRenderer {
 
     ParticleSystem* m_particleSystem{nullptr};
     EffectResolver m_effectResolver;
+    SubtitleQueue* m_subtitleQueue{nullptr};
+    std::vector<SubtitleEntry> m_subtitleEntries; // backing storage for FrameScene::subtitles span
 
     // Per-typeIndex resolved names, cached so the resolver is called at most once per type.
     std::unordered_map<uint32_t, std::pair<std::string, std::string>> m_typeNameCache;

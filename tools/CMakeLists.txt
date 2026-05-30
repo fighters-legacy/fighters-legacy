@@ -25,11 +25,20 @@ endif()
 
 if(TARGET platform-openal)
     add_executable(audio_check audio_check/main.cpp)
-    target_link_libraries(audio_check PRIVATE platform-openal OpenAL::OpenAL)
+    target_link_libraries(audio_check PRIVATE platform-openal engine-audio OpenAL::OpenAL)
     target_include_directories(audio_check PRIVATE
         "${CMAKE_SOURCE_DIR}/platform/openal"
     )
 endif()
+
+add_library(validate-playlist-lib STATIC
+    validate-playlist/playlist_validator.cpp)
+target_link_libraries(validate-playlist-lib PUBLIC tomlplusplus::tomlplusplus)
+target_include_directories(validate-playlist-lib PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/validate-playlist")
+
+add_executable(validate-playlist validate-playlist/main.cpp)
+target_link_libraries(validate-playlist PRIVATE validate-playlist-lib)
 
 if(TARGET platform-enet)
     # Config parsing logic in its own library so tests/test_server_config can link it.

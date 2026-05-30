@@ -3,6 +3,9 @@
 #include "IWindowEventHandler.h"
 #include "Platform.h"
 #include "Version.h"
+#include "audio/MusicManager.h"
+#include "audio/PlaylistLoader.h"
+#include "audio/SubtitleQueue.h"
 #include "config/UserConfig.h"
 #include "content/AssetManager.h"
 #include "content/ModLoader.h"
@@ -13,6 +16,7 @@
 #include "entity/EntityTypeRegistry.h"
 #include "firstrun/FirstRun.h"
 #include "loop/GameLoop.h"
+#include "loop/GameState.h"
 #include "openal/OALAudio.h"
 #include "render/CameraController.h"
 #include "render/ParticleSystem.h"
@@ -279,6 +283,19 @@ int main(int argc, char** argv) {
                                         return pen ? pen->visualEffect : std::string{};
                                     });
 
+    // Step 17c.0: Audio subsystem — subtitle queue, music manager, initial game state.
+    SubtitleQueue subtitleQueue;
+    subtitleQueue.setEnabled(userConfig.accessibility().subtitlesEnabled);
+    sceneRenderer.setSubtitleQueue(&subtitleQueue);
+
+    MusicManager musicManager;
+    if (musicManager.init(p.audio.get(), &assets, rawLogger)) {
+        auto playlistText = assets.loadConfig("playlist.toml");
+        PlaylistData playlist = parsePlaylist(playlistText.value_or(""), *rawLogger);
+        musicManager.loadPlaylist(playlist);
+        musicManager.setState(GameState::Menu);
+    }
+
     // Step 17c: Sandbox mode — register builtin entity type, configure scene, spawn formation.
     // All entity registration and spawning happen before gameLoop.start() so no sim thread
     // exists yet; calling spawn() on the main thread is data-race-free in this window.
@@ -427,7 +444,27 @@ int main(int argc, char** argv) {
         float alpha = gameLoop.shellTick();
         float aspect =
             static_cast<float>(p.window->width()) / static_cast<float>(p.window->height() > 0 ? p.window->height() : 1);
-        sceneRenderer.renderFrame(alpha, cameraController.view(aspect), env, sandboxEmitters);
+        CameraView cam = cameraController.view(aspect);
+
+        // Update audio listener from camera pose each frame.
+        // Column-major glm::mat4: view[col][row]. Column 2 = -forward (RH); column 1 = up.
+        {
+            glm::vec3 fwd = -glm::vec3(cam.view[2][0], cam.view[2][1], cam.view[2][2]);
+            glm::vec3 up = glm::vec3(cam.view[1][0], cam.view[1][1], cam.view[1][2]);
+            const float pos[3] = {cam.worldOrigin.x, cam.worldOrigin.y, cam.worldOrigin.z};
+            const float fwdA[3] = {fwd.x, fwd.y, fwd.z};
+            const float upA[3] = {up.x, up.y, up.z};
+            const float zero[3] = {};
+            p.audio->setListenerTransform(pos, fwdA, upA);
+            p.audio->setListenerVelocity(zero);
+        }
+
+        // Per-frame audio updates.
+        const AudioSettings& aud = userConfig.audio();
+        subtitleQueue.update(1.0f / 60.0f); // fixed timestep approximation; good enough for display
+        musicManager.update(1.0f / 60.0f, aud.masterVolume, aud.musicVolume);
+
+        sceneRenderer.renderFrame(alpha, cam, env, sandboxEmitters);
         p.renderer->endFrame();
         p.input->flush();
         p.joystick->flush();
@@ -436,7 +473,8 @@ int main(int argc, char** argv) {
     // Step 19: Clean shutdown.
     gameLoop.stop(); // join sim thread before any HAL teardown
     inspector.reset();
-    p.cursor.reset(); // destroy cursor while SDL video is still alive (before SDL_Quit)
+    musicManager.shutdown(); // must come before audio shutdown
+    p.cursor.reset();        // destroy cursor while SDL video is still alive (before SDL_Quit)
     p.audio->shutdown();
     p.renderer->shutdown();
     p.window->shutdown();

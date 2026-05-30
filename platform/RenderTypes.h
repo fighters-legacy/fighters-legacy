@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <span>
+#include <string>
 #include <string_view>
 
 // ---------------------------------------------------------------------------
@@ -160,6 +161,16 @@ struct ParticleEmitterState {
 };
 
 // ---------------------------------------------------------------------------
+// Subtitle overlay — data model only; rendering deferred to Phase 4 IGui.
+// SceneRenderer populates this each frame from SubtitleQueue; VkRenderer
+// stores the field but ignores it until the IGui subtitle renderer is wired.
+// ---------------------------------------------------------------------------
+struct SubtitleEntry {
+    std::string text;
+    float alpha{1.0f}; // reserved for future fade envelope; currently always 1.0
+};
+
+// ---------------------------------------------------------------------------
 // Full scene description submitted between IRenderer::beginFrame and endFrame.
 // Spans are non-owning views; the caller must keep the backing arrays alive
 // until after endFrame() returns.
@@ -169,4 +180,5 @@ struct FrameScene {
     std::span<const RenderItem> renderItems{};
     EnvironmentState environment{};
     std::span<const ParticleEmitterState> particleEmitters{};
+    std::span<const SubtitleEntry> subtitles{}; // VkRenderer ignores until Phase 4 IGui
 };

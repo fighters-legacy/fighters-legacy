@@ -60,6 +60,30 @@ target_link_libraries(engine-firstrun
             platform-hal
 )
 
+add_library(engine-audio STATIC
+    audio/OggDecoder.cpp
+    audio/ogg_impl.c
+    audio/SubtitleQueue.cpp
+    audio/PlaylistLoader.cpp
+    audio/MusicManager.cpp
+    audio/VoiceCalloutManager.cpp
+)
+target_include_directories(engine-audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(engine-audio PRIVATE "${stb_SOURCE_DIR}")
+# Suppress all warnings in ogg_impl.c — stb_vorbis.c (included inside) has
+# many C99 diagnostics that would fail with CMAKE_COMPILE_WARNING_AS_ERROR=ON.
+set_source_files_properties(audio/ogg_impl.c PROPERTIES
+    COMPILE_OPTIONS  "$<IF:$<CXX_COMPILER_ID:MSVC>,/W0,-w>"
+    COMPILE_DEFINITIONS "STB_VORBIS_NO_STDIO"
+)
+target_link_libraries(engine-audio
+    PUBLIC  platform-hal
+            engine-content
+    PRIVATE engine-i18n
+            engine-config
+            tomlplusplus::tomlplusplus
+)
+
 add_library(engine-render STATIC
     render/SimRenderBridge.cpp
     render/CameraController.cpp
@@ -73,6 +97,7 @@ target_include_directories(engine-render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-render
     PUBLIC  platform-hal
     PRIVATE engine-content
+            engine-audio
 )
 
 add_library(engine-entity STATIC

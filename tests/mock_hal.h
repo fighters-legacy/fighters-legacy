@@ -40,6 +40,16 @@ struct MockAudio : public IAudio {
     }
     void freeBuffer(AudioBufferId) override {}
 
+    AudioBufferId allocStreamBuffer() override {
+        return nextBufferId++;
+    }
+    void queueBuffer(AudioSourceId, AudioBufferId, const void*, std::size_t, int, int) override {}
+    int processedBufferCount(AudioSourceId) override {
+        return 0;
+    }
+    void unqueueProcessed(AudioSourceId, AudioBufferId*, int) override {}
+    void detachBuffers(AudioSourceId) override {}
+
     AudioSourceId createSource() override {
         ++createCount;
         return nextSourceId++;

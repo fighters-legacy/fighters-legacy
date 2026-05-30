@@ -576,6 +576,11 @@ bool UserConfig::load() {
     if (auto v = tbl["difficulty"]["sam_radar_shutdown"].value<std::string>())
         m_difficulty.ai.samRadarShutdown = parseSamRadarShutdown(v->c_str(), m_logger);
 
+    // [accessibility]
+    m_accessibility.subtitlesEnabled = tbl["accessibility"]["subtitles"].value_or(true);
+    if (auto v = tbl["accessibility"]["subtitle_duration_scale"].value<double>())
+        m_accessibility.subtitleDurationScale = static_cast<float>(std::clamp(*v, 0.5, 3.0));
+
     return true;
 }
 
@@ -631,13 +636,19 @@ bool UserConfig::save() {
     difficulty.insert_or_assign("sam_engagement_range", static_cast<double>(m_difficulty.ai.samEngagementRange));
     difficulty.insert_or_assign("sam_radar_shutdown", samRadarShutdownString(m_difficulty.ai.samRadarShutdown));
 
-    // Insertion order determines TOML section order: first_run, engine, graphics, audio, difficulty
+    toml::table accessibility;
+    accessibility.insert_or_assign("subtitles", m_accessibility.subtitlesEnabled);
+    accessibility.insert_or_assign("subtitle_duration_scale",
+                                   static_cast<double>(m_accessibility.subtitleDurationScale));
+
+    // Insertion order determines TOML section order
     toml::table root;
     root.insert_or_assign("first_run", std::move(firstRun));
     root.insert_or_assign("engine", std::move(engine));
     root.insert_or_assign("graphics", std::move(graphics));
     root.insert_or_assign("audio", std::move(audio));
     root.insert_or_assign("difficulty", std::move(difficulty));
+    root.insert_or_assign("accessibility", std::move(accessibility));
 
     std::ostringstream oss;
     oss << root;
@@ -692,4 +703,11 @@ DifficultySettings UserConfig::difficulty() const {
 }
 void UserConfig::setDifficulty(const DifficultySettings& ds) {
     m_difficulty = ds;
+}
+
+AccessibilitySettings UserConfig::accessibility() const {
+    return m_accessibility;
+}
+void UserConfig::setAccessibility(const AccessibilitySettings& as) {
+    m_accessibility = as;
 }

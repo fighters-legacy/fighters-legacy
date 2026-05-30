@@ -140,6 +140,14 @@ if(WIN32)
 endif()
 catch_discover_tests(test_audio DISCOVERY_MODE PRE_TEST)
 
+add_executable(test_subtitle_queue test_subtitle_queue.cpp)
+target_link_libraries(test_subtitle_queue PRIVATE Catch2::Catch2WithMain engine-audio)
+catch_discover_tests(test_subtitle_queue)
+
+add_executable(test_music_manager test_music_manager.cpp)
+target_link_libraries(test_music_manager PRIVATE Catch2::Catch2WithMain engine-audio engine-config)
+catch_discover_tests(test_music_manager)
+
 add_executable(test_async_filesystem test_async_filesystem.cpp)
 target_link_libraries(test_async_filesystem PRIVATE Catch2::Catch2WithMain platform-hal)
 target_include_directories(test_async_filesystem PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

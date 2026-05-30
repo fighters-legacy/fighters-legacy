@@ -44,35 +44,43 @@ For authoring tools and workflow guides, see the other files in this directory.
 
 Controls which music track plays in each named game state.
 
+**File location:** `data/playlist.toml` inside the content pack directory.  
+Loaded by the engine via `IContentPack::loadConfig("playlist.toml")`.  
+Use `validate-playlist --playlist data/playlist.toml [--pack <pack-dir>]` to check it.
+
+**Track names** are asset names passed to `AssetManager::loadAudio()` — no `audio/` prefix and no `.ogg` extension. `FolderContentPack` resolves `"music/patrol_01"` to `<pack>/audio/music/patrol_01.ogg`.
+
+**State IDs** must match the `GameState` enum values: `Menu`, `FlightPatrol`, `FlightCombat`, `MissionSuccess`, `Debrief`.
+
 ```toml
-# audio/playlist.toml
+# data/playlist.toml
 [crossfade]
 duration_s = 3.0
 
 [[states]]
-id      = "menu"
-tracks  = ["audio/music/menu_theme.ogg"]
+id      = "Menu"
+tracks  = ["music/menu_theme"]
 loop    = true
 
 [[states]]
-id      = "flight_patrol"
-tracks  = ["audio/music/patrol_01.ogg", "audio/music/patrol_02.ogg"]
+id      = "FlightPatrol"
+tracks  = ["music/patrol_01", "music/patrol_02"]
 loop    = true
 shuffle = true
 
 [[states]]
-id      = "flight_combat"
-tracks  = ["audio/music/combat_01.ogg", "audio/music/combat_02.ogg"]
+id      = "FlightCombat"
+tracks  = ["music/combat_01", "music/combat_02"]
 loop    = true
 shuffle = false
 
 [[states]]
-id      = "mission_success"
-tracks  = ["audio/music/victory.ogg"]
+id      = "MissionSuccess"
+tracks  = ["music/victory"]
 loop    = false
 ```
 
-State transitions are driven by engine events. Lua scripts can force a state change with `world.set_music_state("flight_combat")`.
+State transitions are driven by engine events. Lua scripts can force a state change with `world.set_music_state("FlightCombat")` (deferred to Phase 4 scripting workstream).
 
 ---
 

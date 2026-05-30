@@ -5,6 +5,7 @@
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
 
+#include "audio/SubtitleQueue.h"
 #include "content/AssetManager.h"
 
 #include "IRenderer.h"
@@ -72,6 +73,10 @@ void SceneRenderer::setParticleSystem(ParticleSystem* ps, EffectResolver effectR
     m_effectResolver = std::move(effectResolver);
 }
 
+void SceneRenderer::setSubtitleQueue(SubtitleQueue* queue) noexcept {
+    m_subtitleQueue = queue;
+}
+
 void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const EnvironmentState& env,
                                 std::span<const ParticleEmitterState> extraEmitters) {
     ensureBuiltins();
@@ -81,11 +86,19 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
     if (m_particleSystem)
         m_particleSystem->reset();
 
+    // Build subtitle span from queue (data only; VkRenderer ignores until Phase 4 IGui).
+    m_subtitleEntries.clear();
+    if (m_subtitleQueue) {
+        for (const auto& r : m_subtitleQueue->records())
+            m_subtitleEntries.push_back({r.text, 1.0f});
+    }
+
     if (!m_bridge.hasSnapshot()) {
         FrameScene scene{};
         scene.camera = camera;
         scene.environment = env;
         scene.particleEmitters = extraEmitters;
+        scene.subtitles = m_subtitleEntries;
         m_renderer.setScene(scene);
         return;
     }
@@ -193,6 +206,7 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
     scene.renderItems = m_items;
     scene.environment = env;
     scene.particleEmitters = emitters;
+    scene.subtitles = m_subtitleEntries;
     m_renderer.setScene(scene);
 }
 

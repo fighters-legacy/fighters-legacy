@@ -7,7 +7,6 @@
 #include "OALAudio.h"
 #include <AL/al.h>
 #include <AL/alc.h>
-#include <cstdint>
 
 static const char* alErrorStr(ALenum e) {
     switch (e) {
@@ -112,6 +111,7 @@ void OALAudio::shutdown() {
     for (auto& [id, al] : m_buffers)
         alDeleteBuffers(1, &al);
     m_buffers.clear();
+    m_alToId.clear();
 
     alcMakeContextCurrent(nullptr);
     if (m_context) {
@@ -146,6 +146,7 @@ void OALAudio::freeBuffer(AudioBufferId id) {
     auto it = m_buffers.find(id);
     if (it == m_buffers.end())
         return;
+    m_alToId.erase(it->second);
     alDeleteBuffers(1, &it->second);
     m_buffers.erase(it);
     checkAlError("alDeleteBuffers");
@@ -299,4 +300,67 @@ void OALAudio::setListenerTransform(const float pos[3], const float forward[3], 
 void OALAudio::setListenerVelocity(const float vel[3]) {
     alListener3f(AL_VELOCITY, vel[0], vel[1], vel[2]);
     checkAlError("setListenerVelocity");
+}
+
+AudioBufferId OALAudio::allocStreamBuffer() {
+    ALuint alBuf = 0;
+    alGenBuffers(1, &alBuf);
+    if (!checkAlError("allocStreamBuffer"))
+        return 0;
+    AudioBufferId id = m_nextBufferId++;
+    m_buffers[id] = alBuf;
+    m_alToId[alBuf] = id;
+    return id;
+}
+
+void OALAudio::queueBuffer(AudioSourceId source, AudioBufferId buffer, const void* data, std::size_t size,
+                           int sampleRate, int channels) {
+    auto sit = m_sources.find(source);
+    auto bit = m_buffers.find(buffer);
+    if (sit == m_sources.end() || bit == m_buffers.end())
+        return;
+    ALenum fmt = (channels == 1) ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16;
+    alBufferData(bit->second, fmt, data, static_cast<ALsizei>(size), static_cast<ALsizei>(sampleRate));
+    if (!checkAlError("queueBuffer:alBufferData"))
+        return;
+    alSourceQueueBuffers(sit->second, 1, &bit->second);
+    checkAlError("queueBuffer:alSourceQueueBuffers");
+}
+
+int OALAudio::processedBufferCount(AudioSourceId source) {
+    auto it = m_sources.find(source);
+    if (it == m_sources.end())
+        return 0;
+    ALint count = 0;
+    alGetSourcei(it->second, AL_BUFFERS_PROCESSED, &count);
+    return static_cast<int>(count);
+}
+
+void OALAudio::detachBuffers(AudioSourceId source) {
+    auto it = m_sources.find(source);
+    if (it == m_sources.end())
+        return;
+    alSourceStop(it->second);
+    alSourcei(it->second, AL_BUFFER, AL_NONE);
+    checkAlError("detachBuffers");
+}
+
+void OALAudio::unqueueProcessed(AudioSourceId source, AudioBufferId* out, int maxCount) {
+    auto sit = m_sources.find(source);
+    if (sit == m_sources.end() || maxCount <= 0)
+        return;
+    ALint processed = 0;
+    alGetSourcei(sit->second, AL_BUFFERS_PROCESSED, &processed);
+    int count = (processed < maxCount) ? processed : maxCount;
+    if (count <= 0)
+        return;
+    // Use a fixed-size scratch array; callers pass small maxCount (kNumStreamBuffers <= 8).
+    ALuint alBufs[8];
+    alSourceUnqueueBuffers(sit->second, count, alBufs);
+    if (!checkAlError("unqueueProcessed"))
+        return;
+    for (int i = 0; i < count; ++i) {
+        auto it = m_alToId.find(alBufs[i]);
+        out[i] = (it != m_alToId.end()) ? it->second : 0;
+    }
 }
