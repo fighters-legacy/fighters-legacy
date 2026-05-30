@@ -105,9 +105,9 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId) {
             break;
         MsgEntityTypeDef typeDef{};
         typeDef.typeIndex = i;
-        std::strncpy(typeDef.id, def->id.c_str(), sizeof(typeDef.id) - 1);
-        std::strncpy(typeDef.mesh, def->mesh.c_str(), sizeof(typeDef.mesh) - 1);
-        std::strncpy(typeDef.dmgMesh, def->classicDamageMesh.c_str(), sizeof(typeDef.dmgMesh) - 1);
+        std::snprintf(typeDef.id, sizeof(typeDef.id), "%s", def->id.c_str());
+        std::snprintf(typeDef.mesh, sizeof(typeDef.mesh), "%s", def->mesh.c_str());
+        std::snprintf(typeDef.dmgMesh, sizeof(typeDef.dmgMesh), "%s", def->classicDamageMesh.c_str());
 
         buf.resize(buf.size() + sizeof(MsgEntityTypeDef));
         std::memcpy(buf.data() + buf.size() - sizeof(MsgEntityTypeDef), &typeDef, sizeof(typeDef));
