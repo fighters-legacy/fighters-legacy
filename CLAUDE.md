@@ -21,6 +21,8 @@ tests/          — Catch2 unit tests
 The engine is fully content-agnostic. It knows nothing about FA or any specific game.
 FA support lives in jomkz/fa-content. No FA-specific code belongs in this repo.
 
+`ft-gui` is an old name for `fighters-codex` (a separate project). It has no role here. Phase 4 UI work follows the `IGui` HAL pattern (pure-virtual interface + swappable backends, same as `IRenderer`); no ft-gui references belong in this repo.
+
 ### Math library
 
 **GLM** is the shared vector/matrix/quaternion library, linked as an INTERFACE dependency on `platform-hal`. Anything that links `platform-hal` (engine, game, tests) gets GLM automatically. Use `glm::vec3`, `glm::mat4`, `glm::quat`, etc.
