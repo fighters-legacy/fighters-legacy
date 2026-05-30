@@ -247,6 +247,11 @@ The `game/` directory holds game binary entry points. Developer tools and headle
 | ENet | 2.x | FetchContent |
 | Catch2 | 3.x | FetchContent |
 | tomlplusplus | 3.4+ | FetchContent or system |
+| GLM | 1.0+ | FetchContent or system |
+| VulkanMemoryAllocator | 3.3+ | FetchContent (Vulkan builds only) |
+| KTX-Software | 4.4+ | FetchContent (Vulkan builds only) |
+| tinygltf | 2.9+ | FetchContent or system |
+| yaml-cpp | 0.8+ | FetchContent or system |
 
 FetchContent fallback is used when the system package is absent or below the required version. The CMake configuration prints the source (system vs fetched) for each dependency.
 

@@ -17,6 +17,10 @@ Runtime libraries the engine is built on.
 |---|---|---|
 | Vulkan 1.3 | GPU rendering API (`platform/vulkan/`) | [Khronos spec](https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html) · [vulkan-tutorial.com](https://vulkan-tutorial.com) |
 | MoltenVK | Vulkan-over-Metal ICD for macOS | [KhronosGroup/MoltenVK](https://github.com/KhronosGroup/MoltenVK) · [LunarG SDK](https://vulkan.lunarg.com/) |
+| GLM | Vector/matrix/quaternion math shared across engine, renderer, and tests | [GLM manual](https://glm.g-truc.net/0.9.9/api/index.html) · [g-truc/glm](https://github.com/g-truc/glm) |
+| VulkanMemoryAllocator | GPU memory allocation for all Vulkan buffers and images (`platform/vulkan/`) | [GPUOpen VMA docs](https://gpuopen-librariesandsdks.github.io/VulkanMemoryAllocator/html/) |
+| KTX-Software / Basis Universal | KTX2 texture loading and Basis→BC7/ASTC transcoding at runtime (`platform/vulkan/`) | [KhronosGroup/KTX-Software](https://github.com/KhronosGroup/KTX-Software) · [Basis Universal](https://github.com/BinomialLLC/basis_universal) |
+| tinygltf | glTF 2.0 mesh parsing in the Vulkan renderer and validate-mesh tool | [syoyo/tinygltf](https://github.com/syoyo/tinygltf) · [glTF spec](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html) |
 | SDL3 | Windowing, input, Vulkan surface creation (`platform/sdl3/`) | [SDL3 wiki](https://wiki.libsdl.org/SDL3/FrontPage) |
 | OpenAL Soft | 3D positional audio (`platform/openal/`) | [openal-soft.org](https://openal-soft.org) |
 | ENet | Reliable UDP networking (`platform/net/`) | [enet.bespin.org](http://enet.bespin.org) |
@@ -31,6 +35,7 @@ Runtime libraries the engine is built on.
 | glslang / `glslangValidator` | GLSL-to-SPIR-V compiler; invoked at configure time to build Vulkan shaders | [KhronosGroup/glslang](https://github.com/KhronosGroup/glslang) |
 | Catch2 v3 | Unit test framework (`tests/`) | [Catch2 tutorial](https://github.com/catchorg/Catch2/blob/devel/docs/tutorial.md) |
 | toml++ | TOML config parsing (`server.toml`, `user.toml`, mod manifests) | [marzer.github.io/tomlplusplus](https://marzer.github.io/tomlplusplus/) |
+| yaml-cpp | YAML parsing in the `validate-mission` asset pipeline tool | [jbeder/yaml-cpp](https://github.com/jbeder/yaml-cpp) |
 | clang-format | Code formatting; CI enforces on every PR | [ClangFormat docs](https://clang.llvm.org/docs/ClangFormat.html) |
 | REUSE / SPDX | License compliance tooling; CI enforces via `fsfe/reuse-action` | [reuse.software](https://reuse.software) |
 | git-cliff | Changelog generation for releases | [git-cliff.org](https://git-cliff.org) |
