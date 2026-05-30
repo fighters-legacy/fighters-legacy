@@ -188,7 +188,7 @@ TEST_CASE("WorldBroadcaster: onDisconnect does not crash and sends nothing", "[w
     CHECK(net.broadcasts.empty());
 }
 
-TEST_CASE("WorldBroadcaster: onReceive is a no-op — no crash, no sends", "[world_broadcaster]") {
+TEST_CASE("WorldBroadcaster: onReceive is a no-op: no crash, no sends", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;

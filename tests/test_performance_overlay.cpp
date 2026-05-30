@@ -62,7 +62,7 @@ TEST_CASE("PerformanceOverlay: Full mode bar graph line has exactly 128 chars", 
     CHECK(lines.back().size() == 128u);
 }
 
-TEST_CASE("PerformanceOverlay: zero-history guard — no crash on all-zero stats", "[perf_overlay]") {
+TEST_CASE("PerformanceOverlay: zero-history guard: no crash on all-zero stats", "[perf_overlay]") {
     PerformanceOverlay ov;
     ov.setMode(OverlayMode::Full);
 
