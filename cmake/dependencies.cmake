@@ -223,6 +223,10 @@ if(glm_FOUND)
     message(STATUS "glm: system (${glm_VERSION})")
 else()
     message(STATUS "glm: FetchContent")
+    # GLM 1.0.1 defaults GLM_BUILD_LIBRARY ON, which builds glm.dll on Windows.
+    # The DLL has no exports so no glm.lib is generated, breaking all link steps.
+    # Force header-only mode — we only use GLM as headers.
+    set(GLM_BUILD_LIBRARY OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(glm
         GIT_REPOSITORY https://github.com/g-truc/glm.git
         GIT_TAG        1.0.1
