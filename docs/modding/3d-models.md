@@ -177,3 +177,79 @@ Exit codes: 0 = valid, 1 = validation failure, 2 = bad arguments.
 
 Schema source: this document. For a complete list of content pack asset formats see
 [`docs/modding/formats.md`](formats.md).
+
+---
+
+## Procedural placeholder generation
+
+`tools/blender_gen.py` generates a parametric fighter aircraft `.glb` set using
+Blender's headless Python API. It is intended for development placeholders and
+modding examples, not as a substitute for hand-authored art.
+
+**Requirements:** Blender 4.0 or later.
+
+### Invocation
+
+```bash
+# Linux
+blender --background --python tools/blender_gen.py -- \
+    --id fa18c --output-dir assets/aircraft/fa18c/
+
+# macOS
+/Applications/Blender.app/Contents/MacOS/blender --background \
+    --python tools/blender_gen.py -- \
+    --id fa18c --output-dir assets/aircraft/fa18c/
+
+# Windows (PowerShell)
+& "C:\Program Files\Blender Foundation\Blender 4.x\blender.exe" --background `
+    --python tools\blender_gen.py -- `
+    --id fa18c --output-dir assets\aircraft\fa18c\
+```
+
+### Options
+
+| Option | Default | Description |
+|---|---|---|
+| `--id <name>` | — | Asset ID (required). Must match `^[a-z][a-z0-9_]*$`. |
+| `--output-dir <path>` | — | Directory to write output files (required). |
+| `--wing-style delta\|swept\|straight` | `swept` | Wing planform: swept (generic 3rd-gen), delta (Mirage/F-16 style), straight (subsonic). |
+| `--length <m>` | `15.0` | Fuselage length in metres. |
+| `--lod` | off | Also export `_lod0`, `_lod1`, `_lod2` variants at reduced resolution. |
+| `--bake-textures` | off | Bake a diffuse PNG and generate a solid-colour ORM PNG via Cycles CPU. |
+| `--tex-size <px>` | `1024` | Bake resolution (power-of-two). |
+| `--seed <n>` | `42` | RNG seed for the damage-state hull breach pattern. |
+
+### Output files
+
+For `--id fa18c --output-dir assets/aircraft/fa18c/ --bake-textures --lod`:
+
+```
+assets/aircraft/fa18c/
+    fa18c.glb           clean mesh + fa18c_b damage node; .ktx2 URIs pre-wired
+    fa18c_dmg.glb       SceneRenderer damageMeshName target
+    fa18c_lod0.glb      ~50 % vertex reduction
+    fa18c_lod1.glb      ~25 %
+    fa18c_lod2.glb      ~10 %
+    fa18c_diffuse.png   baked diffuse → tex-compress --type diffuse
+    fa18c_orm.png       ORM (R=AO, G=roughness, B=metallic) → tex-compress --type orm
+    fa18c_dmg_diffuse.png
+    fa18c_dmg_orm.png
+```
+
+All `.glb` files pass `validate-mesh` immediately. The `.ktx2` URIs are pre-wired
+in the material JSON so that the engine loads them once `tex-compress` has been
+run — no manual glTF editing required.
+
+Normal maps are not generated because the engine's built-in flat tangent-space
+default (`{128, 128, 255}`) is sufficient for placeholder meshes.
+
+### Texture pipeline after generation
+
+```bash
+tex-compress --type diffuse assets/aircraft/fa18c/fa18c_diffuse.png
+tex-compress --type orm     assets/aircraft/fa18c/fa18c_orm.png
+tex-compress --type diffuse assets/aircraft/fa18c/fa18c_dmg_diffuse.png
+tex-compress --type orm     assets/aircraft/fa18c/fa18c_dmg_orm.png
+```
+
+See [`docs/modding/textures.md`](textures.md) for the full texture pipeline.

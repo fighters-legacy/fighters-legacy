@@ -14,7 +14,7 @@ engine/render/  — sim→render bridge + scene submission: RenderSnapshot, SimR
 platform/       — HAL: Vulkan, SDL3, OpenAL Soft, ENet backends
 platform/RenderTypes.h — GPU-agnostic scene types shared across the HAL boundary
 game/           — fighters-legacy game binary
-tools/          — developer utilities; asset pipeline (validate-flight-model, validate-mission, validate-licenses, validate-mesh, tex-compress)
+tools/          — developer utilities; asset pipeline (validate-flight-model, validate-mission, validate-licenses, validate-mesh, tex-compress); blender_gen.py (headless Blender 4.x aircraft mesh generator)
 tests/          — Catch2 unit tests
 ```
 
@@ -131,3 +131,4 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 - `engine/render/ParticleSystem.h` — `ParticlePreset` + `ParticleSystem`; preset registry, per-frame emit/reset/emitters() accumulator; `DamagePenalty::visualEffect` maps to preset name
 - `cmake/dependencies.cmake` — all FetchContent declarations; GLM is unconditional, Vulkan-specific deps are gated on `Vulkan_FOUND`
 - `platform/vulkan/VkRendererFactory.h` — thin factory header; only include needed by game/tools to instantiate the renderer
+- `tools/blender_gen.py` — headless Blender 4.x parametric aircraft mesh generator; `blender --background --python tools/blender_gen.py -- --id <id> --output-dir <dir> [--wing-style delta|swept|straight] [--lod] [--bake-textures]`; outputs `<id>.glb` (clean + `_b` node), `<id>_dmg.glb`, optional LODs + PNGs; `.ktx2` URIs pre-wired in GLB JSON for tex-compress
