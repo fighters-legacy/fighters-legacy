@@ -160,8 +160,9 @@ if(Vulkan_FOUND)
     else()
         message(STATUS "VulkanMemoryAllocator: FetchContent")
         FetchContent_Declare(VulkanMemoryAllocator
-            URL      https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/archive/refs/tags/v3.3.0.tar.gz
-            URL_HASH SHA256=c4f6bbe6b5a45c2eb610ca9d231158e313086d5b1a40c9922cb42b597419b14e
+            GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+            GIT_TAG        v3.3.0
+            GIT_SHALLOW    TRUE
             SYSTEM
         )
         FetchContent_MakeAvailable(VulkanMemoryAllocator)
@@ -185,8 +186,9 @@ if(Vulkan_FOUND)
         set(KTX_FEATURE_TOOLS_CTS    OFF CACHE BOOL "" FORCE)
         set(BASISU_SUPPORT_OPENCL    OFF CACHE BOOL "" FORCE)
         FetchContent_Declare(ktx
-            URL      https://github.com/KhronosGroup/KTX-Software/archive/refs/tags/v4.4.2.tar.gz
-            URL_HASH SHA256=9412cb45045a503005acd47d98f9e8b47154634a50b4df21e17a1dfa8971d323
+            GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
+            GIT_TAG        v4.4.2
+            GIT_SHALLOW    TRUE
             SYSTEM
         )
         # KTX-Software has many pedantic issues in its internals (anonymous structs,
