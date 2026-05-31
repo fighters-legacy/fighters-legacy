@@ -50,6 +50,12 @@ class IContentPack {
     // Used for data-driven config files (e.g. difficulty.toml) that mods can override.
     virtual std::optional<std::string> loadConfig(const char* name) const = 0;
 
+    // Returns the path (relative to PathDomain::Assets) of a terrain chunk PNG,
+    // or nullopt if this pack does not provide it. Synchronous; called before
+    // queuing an async read via IAsyncFilesystem.
+    virtual std::optional<std::string> resolveTerrainChunk(const char* terrainId, uint32_t chunkX, uint32_t chunkY,
+                                                           uint32_t lod) const = 0;
+
     // Exported symbol name for compiled content pack shared libraries.
     // A plugin must export a function with this name and signature:
     //   extern "C" IContentPack* fighters_legacy_create_pack();

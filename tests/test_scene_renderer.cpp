@@ -90,6 +90,9 @@ struct MockContentPack : public IContentPack {
     std::optional<std::string> loadConfig(const char*) const override {
         return std::nullopt;
     }
+    std::optional<std::string> resolveTerrainChunk(const char*, uint32_t, uint32_t, uint32_t) const override {
+        return std::nullopt;
+    }
 };
 
 // ---------------------------------------------------------------------------

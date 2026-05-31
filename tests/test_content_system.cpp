@@ -220,6 +220,18 @@ struct MockContentPack : public IContentPack {
             return std::nullopt;
         return it->second;
     }
+
+    std::map<std::string, std::string> chunkPaths; // key: "terrainId:x:y:lod"
+
+    std::optional<std::string> resolveTerrainChunk(const char* terrainId, uint32_t chunkX, uint32_t chunkY,
+                                                   uint32_t lod) const override {
+        std::string key = std::string(terrainId) + ":" + std::to_string(chunkX) + ":" + std::to_string(chunkY) + ":" +
+                          std::to_string(lod);
+        auto it = chunkPaths.find(key);
+        if (it == chunkPaths.end())
+            return std::nullopt;
+        return it->second;
+    }
 };
 
 // Helper: build a valid manifest TOML string
@@ -388,6 +400,10 @@ static std::vector<std::unique_ptr<IContentPack>> makePacks(MockContentPack* pac
         }
         std::optional<std::string> loadConfig(const char* n) const override {
             return p->loadConfig(n);
+        }
+        std::optional<std::string> resolveTerrainChunk(const char* terrainId, uint32_t chunkX, uint32_t chunkY,
+                                                       uint32_t lod) const override {
+            return p->resolveTerrainChunk(terrainId, chunkX, chunkY, lod);
         }
     };
     std::vector<std::unique_ptr<IContentPack>> v;
@@ -1446,6 +1462,99 @@ TEST_CASE("AssetManager::loadConfig returns higher-priority pack's config", "[co
     auto result = am.loadConfig("difficulty.toml");
     REQUIRE(result.has_value());
     CHECK(*result == "high-priority-content");
+}
+
+// ---------------------------------------------------------------------------
+// FolderContentPack::resolveTerrainChunk
+// ---------------------------------------------------------------------------
+
+TEST_CASE("FolderContentPack::resolveTerrainChunk returns path when file present", "[content]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("mods/test-mod/terrain/world/lod0/chunk_0001_0002.png", "");
+
+    FolderContentPack pack(fs, logger, "mods/test-mod", makeTestManifest());
+    auto result = pack.resolveTerrainChunk("world", 1, 2, 0);
+
+    REQUIRE(result.has_value());
+    CHECK(*result == "mods/test-mod/terrain/world/lod0/chunk_0001_0002.png");
+}
+
+TEST_CASE("FolderContentPack::resolveTerrainChunk returns nullopt when file absent", "[content]") {
+    MockFilesystem fs;
+    MockLogger logger;
+
+    FolderContentPack pack(fs, logger, "mods/test-mod", makeTestManifest());
+    auto result = pack.resolveTerrainChunk("world", 1, 2, 0);
+
+    CHECK_FALSE(result.has_value());
+}
+
+// ---------------------------------------------------------------------------
+// AssetManager::resolveTerrainChunk
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AssetManager::resolveTerrainChunk returns path from first pack that provides it", "[content]") {
+    MockContentPack pack;
+    MockLogger logger;
+    pack.chunkPaths["world:3:7:1"] = "mods/test-mod/terrain/world/lod1/chunk_0003_0007.png";
+
+    AssetManager am(makePacks(&pack), logger);
+    am.initialize(nullptr);
+
+    auto result = am.resolveTerrainChunk("world", 3, 7, 1);
+    REQUIRE(result.has_value());
+    CHECK(*result == "mods/test-mod/terrain/world/lod1/chunk_0003_0007.png");
+}
+
+TEST_CASE("AssetManager::resolveTerrainChunk returns nullopt when no pack provides it", "[content]") {
+    MockContentPack pack;
+    MockLogger logger;
+
+    AssetManager am(makePacks(&pack), logger);
+    am.initialize(nullptr);
+
+    CHECK_FALSE(am.resolveTerrainChunk("world", 0, 0, 0).has_value());
+}
+
+TEST_CASE("AssetManager::resolveTerrainChunk higher-priority pack overrides lower", "[content]") {
+    MockContentPack highPack, lowPack;
+    MockLogger logger;
+    highPack.packPriority = 20;
+    highPack.chunkPaths["world:0:0:0"] = "theater-pack/terrain/world/lod0/chunk_0000_0000.png";
+    lowPack.packPriority = 10;
+    lowPack.chunkPaths["world:0:0:0"] = "fl-base-pack/terrain/world/lod0/chunk_0000_0000.png";
+
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::make_unique<MockContentPack>(highPack));
+    packs.push_back(std::make_unique<MockContentPack>(lowPack));
+
+    AssetManager am(std::move(packs), logger);
+    am.initialize(nullptr);
+
+    auto result = am.resolveTerrainChunk("world", 0, 0, 0);
+    REQUIRE(result.has_value());
+    CHECK(*result == "theater-pack/terrain/world/lod0/chunk_0000_0000.png");
+}
+
+TEST_CASE("AssetManager::resolveTerrainChunk falls through to lower-priority pack when higher does not provide it",
+          "[content]") {
+    MockContentPack highPack, lowPack;
+    MockLogger logger;
+    highPack.packPriority = 20;
+    lowPack.packPriority = 10;
+    lowPack.chunkPaths["world:5:3:2"] = "fl-base-pack/terrain/world/lod2/chunk_0005_0003.png";
+
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::make_unique<MockContentPack>(highPack));
+    packs.push_back(std::make_unique<MockContentPack>(lowPack));
+
+    AssetManager am(std::move(packs), logger);
+    am.initialize(nullptr);
+
+    auto result = am.resolveTerrainChunk("world", 5, 3, 2);
+    REQUIRE(result.has_value());
+    CHECK(*result == "fl-base-pack/terrain/world/lod2/chunk_0005_0003.png");
 }
 
 // ---------------------------------------------------------------------------

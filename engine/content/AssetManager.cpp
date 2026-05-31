@@ -105,6 +105,15 @@ std::optional<std::string> AssetManager::loadConfig(const char* name) {
     return std::nullopt;
 }
 
+std::optional<std::string> AssetManager::resolveTerrainChunk(const char* terrainId, uint32_t chunkX, uint32_t chunkY,
+                                                             uint32_t lod) {
+    for (auto& pack : m_packs) {
+        if (auto result = pack->resolveTerrainChunk(terrainId, chunkX, chunkY, lod))
+            return result;
+    }
+    return std::nullopt;
+}
+
 void AssetManager::enableHotReload(IFilesystemWatcher& watcher) {
     m_watcher = &watcher;
     for (auto& pack : m_packs) {

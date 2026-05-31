@@ -41,6 +41,11 @@ class AssetManager {
     // that returns non-nullopt for loadConfig(name). Not cached.
     std::optional<std::string> loadConfig(const char* name);
 
+    // Walks the priority stack; returns the resolved path from the first pack
+    // that provides the given chunk, or nullopt if none do.
+    std::optional<std::string> resolveTerrainChunk(const char* terrainId, uint32_t chunkX, uint32_t chunkY,
+                                                   uint32_t lod);
+
     // Hot-reload support (sandbox/editor mode only). Pass the watcher from Platform.
     // Registers each pack's rootDirectory() with the watcher (recursive).
     // processHotReload() must be called once per frame from the game loop.

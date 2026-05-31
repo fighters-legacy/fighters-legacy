@@ -56,6 +56,9 @@ class FolderContentPack final : public IContentPack {
 
     std::optional<std::string> loadConfig(const char* name) const override;
 
+    std::optional<std::string> resolveTerrainChunk(const char* terrainId, uint32_t chunkX, uint32_t chunkY,
+                                                   uint32_t lod) const override;
+
   private:
     // Returns the asset file path for the given name and type, trying the primary
     // extension first. Returns an empty string if neither extension exists.

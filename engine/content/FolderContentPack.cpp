@@ -114,6 +114,19 @@ std::optional<std::string> FolderContentPack::loadConfig(const char* name) const
     return content;
 }
 
+std::optional<std::string> FolderContentPack::resolveTerrainChunk(const char* terrainId, uint32_t chunkX,
+                                                                  uint32_t chunkY, uint32_t lod) const {
+    auto pad4 = [](uint32_t v) -> std::string {
+        std::string s = std::to_string(v);
+        return s.size() < 4 ? std::string(4 - s.size(), '0') + s : s;
+    };
+    std::string path = m_modDir + "/terrain/" + terrainId + "/lod" + std::to_string(lod) + "/chunk_" + pad4(chunkX) +
+                       "_" + pad4(chunkY) + ".png";
+    if (!m_fs.fileExists(PathDomain::Assets, path.c_str()))
+        return std::nullopt;
+    return path;
+}
+
 std::vector<std::string> FolderContentPack::listAssets(AssetType type) const {
     const auto& info = kAssetPaths[static_cast<uint8_t>(type)];
     std::string dir = m_modDir + "/" + info.subdir;
