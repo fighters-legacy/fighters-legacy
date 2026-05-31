@@ -10,7 +10,7 @@ struct ServerConfig {
     std::string name = "Unnamed Server";
     uint16_t port = 4778;
     std::string bindAddress = "0.0.0.0";
-    int maxPeers = 16;
+    int maxPeers = 32;
     std::vector<std::string> gameModes = {"campaign", "mission", "sandbox"};
     std::string motd;
     std::string password;

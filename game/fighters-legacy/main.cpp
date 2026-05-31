@@ -63,6 +63,9 @@ struct ClientNetEventHandler : INetworkEventHandler {
     fl::EntityTypeRegistry& registry;
     ILogger& logger;
 
+    uint32_t assignedEntityIdx{0};
+    uint32_t assignedEntityGen{0};
+
     ClientNetEventHandler(fl::SimRenderBridge& b, fl::EntityTypeRegistry& r, ILogger& l)
         : bridge(b), registry(r), logger(l) {}
 
@@ -82,6 +85,8 @@ struct ClientNetEventHandler : INetworkEventHandler {
                 return;
             fl::MsgConnectAck ack;
             std::memcpy(&ack, data, sizeof(ack));
+            assignedEntityIdx = ack.assignedEntityIdx;
+            assignedEntityGen = ack.assignedEntityGen;
             const uint8_t* typeData = static_cast<const uint8_t*>(data) + sizeof(ack);
             for (uint16_t i = 0; i < ack.typeCount; ++i) {
                 if ((typeData - static_cast<const uint8_t*>(data)) + sizeof(fl::MsgEntityTypeDef) > size)
@@ -584,6 +589,24 @@ int main(int argc, char** argv) {
         // Pump ENet inbound (non-blocking). ClientNetEventHandler::onReceive fires here
         // for WorldSnapshot packets → publishExternal → renderBridge updated.
         clientNet->service(0);
+
+        // Send client flight inputs to the embedded server each frame.
+        // Arrow keys: Up/Down = elevator, Left/Right = aileron, Z/X = rudder.
+        // Left Shift = full throttle; Space = weapon trigger.
+        {
+            static uint32_t inputSeq = 0;
+            const bool* keys = SDL_GetKeyboardState(nullptr);
+            fl::MsgClientInput inp;
+            inp.seqNum = inputSeq++;
+            inp.tickIndex = renderBridge.hasSnapshot() ? renderBridge.current().tickIndex : 0;
+            inp.throttle = keys[SDL_SCANCODE_LSHIFT] ? 1.f : 0.f;
+            inp.elevator = (keys[SDL_SCANCODE_UP] ? -1.f : 0.f) + (keys[SDL_SCANCODE_DOWN] ? 1.f : 0.f);
+            inp.aileron = (keys[SDL_SCANCODE_RIGHT] ? 1.f : 0.f) + (keys[SDL_SCANCODE_LEFT] ? -1.f : 0.f);
+            inp.rudder = (keys[SDL_SCANCODE_X] ? 1.f : 0.f) + (keys[SDL_SCANCODE_Z] ? -1.f : 0.f);
+            inp.buttons = keys[SDL_SCANCODE_SPACE] ? 1u : 0u; // bit 0 = weapon trigger
+            // peerId is ignored by ENetNetwork on a client; sends to the single connected peer (server).
+            clientNet->send(0, &inp, sizeof(inp), /*reliable=*/true);
+        }
 
         // Alpha from server loop's tick timing (same atomic read pattern as before).
         float alpha = serverLoop.shellTick();

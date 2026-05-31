@@ -12,6 +12,7 @@ static constexpr uint8_t kNetChUnreliable = 1;
 enum class MsgId : uint8_t {
     ConnectAck = 0x01,    // server→client, reliable: sent once on connect
     WorldSnapshot = 0x02, // server→client, unreliable: broadcast every sim tick
+    ClientInput = 0x03,   // client→server, reliable: sent each frame
 };
 
 // All structs use #pragma pack(1) so the wire layout is identical on all platforms
@@ -26,7 +27,10 @@ struct MsgConnectAck {
     uint8_t msgId{static_cast<uint8_t>(MsgId::ConnectAck)};
     uint8_t tickRateHz{60};
     uint16_t typeCount{0};
-}; // 4 bytes
+    uint32_t assignedEntityIdx{0}; // entity slot assigned to this peer
+    uint32_t assignedEntityGen{0}; // entity generation (0 = none assigned)
+}; // 12 bytes
+static_assert(sizeof(MsgConnectAck) == 12u, "MsgConnectAck wire size changed");
 
 // Entity type definition appended after MsgConnectAck.
 struct MsgEntityTypeDef {
@@ -58,6 +62,21 @@ struct MsgEntityEntry {
     uint8_t _pad[2]{};
 }; // 68 bytes
 static_assert(sizeof(MsgEntityEntry) == 68u, "MsgEntityEntry wire size changed");
+
+// Reliable, client→server, sent each render frame.
+struct MsgClientInput {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::ClientInput)};
+    uint8_t buttons{0}; // bit 0 = weaponTrigger, bit 1 = afterburner
+    uint8_t _pad[2]{};
+    uint32_t seqNum{0};    // client-incremented wrapping sequence counter
+    uint64_t tickIndex{0}; // client's last-received server tick (reserved for lag compensation — see #142)
+    float throttle{0.f};   // [0.0, 1.0]
+    float elevator{0.f};   // [-1.0, +1.0] nose-up positive
+    float aileron{0.f};    // [-1.0, +1.0] right-roll positive
+    float rudder{0.f};     // [-1.0, +1.0] right-yaw positive
+    float viewAxis[3]{};   // normalized look direction (world space)
+}; // 1+1+2+4+8+4+4+4+4+12 = 44 bytes
+static_assert(sizeof(MsgClientInput) == 44u, "MsgClientInput wire size changed");
 
 #pragma pack(pop)
 

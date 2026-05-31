@@ -5,10 +5,11 @@
 #include <cstring>
 
 TEST_CASE("GameProtocol: packed struct sizes match wire format", "[game_protocol]") {
-    CHECK(sizeof(fl::MsgConnectAck) == 4u);
+    CHECK(sizeof(fl::MsgConnectAck) == 12u);     // extended: +assignedEntityIdx/Gen
     CHECK(sizeof(fl::MsgEntityTypeDef) == 196u); // 4 + 64 + 64 + 64
     CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 12u);
     CHECK(sizeof(fl::MsgEntityEntry) == 68u);
+    CHECK(sizeof(fl::MsgClientInput) == 44u);
 }
 
 TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
@@ -91,6 +92,8 @@ TEST_CASE("GameProtocol: MsgConnectAck round-trip with two type defs", "[game_pr
     ack.msgId = static_cast<uint8_t>(fl::MsgId::ConnectAck);
     ack.tickRateHz = 60;
     ack.typeCount = 2;
+    ack.assignedEntityIdx = 7u;
+    ack.assignedEntityGen = 3u;
 
     fl::MsgEntityTypeDef defs[2]{};
     std::snprintf(defs[0].id, sizeof(defs[0].id), "%s", "builtin:debug-entity");
@@ -105,10 +108,45 @@ TEST_CASE("GameProtocol: MsgConnectAck round-trip with two type defs", "[game_pr
     std::memcpy(&parsedAck, buf.data(), sizeof(parsedAck));
     CHECK(parsedAck.tickRateHz == 60);
     CHECK(parsedAck.typeCount == 2);
+    CHECK(parsedAck.assignedEntityIdx == 7u);
+    CHECK(parsedAck.assignedEntityGen == 3u);
 
     fl::MsgEntityTypeDef td0, td1;
     std::memcpy(&td0, buf.data() + sizeof(ack), sizeof(td0));
     std::memcpy(&td1, buf.data() + sizeof(ack) + sizeof(td0), sizeof(td1));
     CHECK(std::string_view(td0.id) == "builtin:debug-entity");
     CHECK(std::string_view(td1.id) == "builtin:other");
+}
+
+TEST_CASE("GameProtocol: MsgClientInput round-trip", "[game_protocol]") {
+    fl::MsgClientInput src{};
+    src.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    src.buttons = 0x03u; // weaponTrigger + afterburner
+    src.seqNum = 12345u;
+    src.tickIndex = 9999u;
+    src.throttle = 0.75f;
+    src.elevator = -0.5f;
+    src.aileron = 0.25f;
+    src.rudder = -0.1f;
+    src.viewAxis[0] = 1.f;
+    src.viewAxis[1] = 0.f;
+    src.viewAxis[2] = 0.f;
+
+    std::vector<uint8_t> buf(sizeof(src));
+    std::memcpy(buf.data(), &src, sizeof(src));
+
+    fl::MsgClientInput parsed{};
+    std::memcpy(&parsed, buf.data(), sizeof(parsed));
+
+    CHECK(parsed.msgId == static_cast<uint8_t>(fl::MsgId::ClientInput));
+    CHECK(parsed.buttons == 0x03u);
+    CHECK(parsed.seqNum == 12345u);
+    CHECK(parsed.tickIndex == 9999u);
+    CHECK(parsed.throttle == 0.75f);
+    CHECK(parsed.elevator == -0.5f);
+    CHECK(parsed.aileron == 0.25f);
+    CHECK(parsed.rudder == -0.1f);
+    CHECK(parsed.viewAxis[0] == 1.f);
+    CHECK(parsed.viewAxis[1] == 0.f);
+    CHECK(parsed.viewAxis[2] == 0.f);
 }

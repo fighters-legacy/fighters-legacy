@@ -59,9 +59,9 @@ Runtime shader discovery: `VkRenderer::resolveShaderDir()` tries `SDL_GetBasePat
 
 Single-player runs an **embedded server** inside the game binary: one `ENetNetwork` bound on `127.0.0.1:4778` + `GameLoop` + `EntityManager` + `WorldBroadcaster` run on a dedicated sim thread. The game's main thread connects as an ENet client, receives `MsgWorldSnapshot` packets, and feeds them into `SimRenderBridge::publishExternal()` for rendering. `fl-server` uses the identical server stack for dedicated multi-player.
 
-- **`engine/net/GameProtocol.h`**: packed wire types (`#pragma pack(1)`). Always parse with `std::memcpy` — never cast raw packet pointers; `uint64_t tickIndex` is at wire offset 4 (misaligned). Wire quaternion order: `x, y, z, w` matching `EntityTransform::quat`.
-- **`engine/net/WorldBroadcaster`**: `ISimUpdate` + `INetworkEventHandler`. Wraps `EntityManager::onTick`, serialises all live entities into `MsgWorldSnapshot`, broadcasts unreliably each tick. Sends `MsgConnectAck` + `MsgEntityTypeDef[]` on connect (reliable).
-- **`ClientNetEventHandler`** (in `game/fighters-legacy/main.cpp`): parses `ConnectAck` and `WorldSnapshot`; calls `bridge.publishExternal()`.
+- **`engine/net/GameProtocol.h`**: packed wire types (`#pragma pack(1)`). Always parse with `std::memcpy` — never cast raw packet pointers. Five message types: `MsgConnectAck` (12 bytes, includes `assignedEntityIdx/Gen`), `MsgEntityTypeDef` (196 bytes), `MsgWorldSnapshotHeader` (12 bytes), `MsgEntityEntry` (68 bytes, double pos), `MsgClientInput` (44 bytes, `MsgId::ClientInput = 0x03`). Wire quaternion order: `x, y, z, w` matching `EntityTransform::quat`. See `docs/network-protocol.md` for field tables.
+- **`engine/net/WorldBroadcaster`**: `ISimUpdate` + `INetworkEventHandler`. `onConnect` spawns `"builtin:debug-entity"` for the peer (stores in `m_peerEntities`); `onDisconnect` kills it. `onReceive` validates and stores `MsgClientInput` → `PeerInputState` (`m_peerInputs`). `onTick` applies simple kinematics (Rodrigues quat rotation, `kMaxSpeedMps=340 m/s`, `kMaxRateRadS=1 rad/s`) from stored inputs before calling `EntityManager::onTick`, then serialises all live entities into `MsgWorldSnapshot` and broadcasts unreliably. Sends `MsgConnectAck` (with assigned entity slot) + `MsgEntityTypeDef[]` on connect (reliable). `PeerInputState` is a local struct — engine-net must NOT depend on engine-flight.
+- **`ClientNetEventHandler`** (in `game/fighters-legacy/main.cpp`): parses `ConnectAck` (stores `assignedEntityIdx/Gen`), `WorldSnapshot` (calls `bridge.publishExternal()`). Sends `MsgClientInput` to the embedded server each frame (arrow keys + shift + space).
 - **ENet threading rule**: server `ENetHost*` is owned exclusively by the sim thread (via `WorldBroadcaster::onTick → net->service(0)`); client `ENetHost*` by the main thread. Never cross-thread.
 - **Single-player alpha**: `serverLoop.shellTick()` (not `gameLoop.shellTick()`) drives render interpolation — the embedded `GameLoop` IS the sim.
 
@@ -127,7 +127,7 @@ The engine uses a single continuous **world terrain** rather than per-theater he
 
 **DEM source:** Copernicus GLO-30 (ESA, 30 m global, free). `tools/gen_terrain_chunks.py` (#176) converts GeoTIFF → chunk PNGs at all 3 LOD levels. fl-base-pack `scripts/build_terrain.sh` downloads tiles from AWS Open Data (`s3://copernicus-dem-30m/`) and invokes the tool.
 
-**Wire protocol note:** `MsgEntityEntry::pos[3]` is `double` (struct is 68 bytes, up from 56). Always parse with `std::memcpy`. #142 (authoritative game protocol) depends on #170 landing first.
+**Wire protocol:** fully documented in `docs/network-protocol.md`. `MsgEntityEntry::pos[3]` is `double` (68 bytes); `MsgConnectAck` is 12 bytes (includes `assignedEntityIdx/Gen`); `MsgClientInput` is 44 bytes (client→server, reliable). Always parse with `std::memcpy`. #142 (authoritative game protocol) and #170 (double-precision positions) are both merged.
 
 ## Build
 
@@ -166,7 +166,7 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 - `CMakePresets.json` — all build presets (debug / release / coverage / asan / msvc variants)
 - `platform/RenderTypes.h` — GPU-agnostic POD types: `MeshHandle`, `TextureHandle`, `MaterialHandle`, `CameraView`, `RenderItem`, `FrameScene`, `EnvironmentState`, `ParticleEmitterState`, `FrameStats`; also `RendererVsyncMode` + `RendererSettings`
 - `platform/IRenderer.h` — `getFrameStats() const` + `setOverlayLines(span<string_view>)` added; any mock must implement both
-- `engine/net/WorldBroadcaster.h` — `ISimUpdate` + `INetworkEventHandler`; wraps EntityManager, broadcasts world state each tick
+- `engine/net/WorldBroadcaster.h` — `ISimUpdate` + `INetworkEventHandler`; spawns/kills peer entities on connect/disconnect; decodes `MsgClientInput` → `PeerInputState`; applies simple kinematics each tick before `EntityManager::onTick`; `m_peerEntities` + `m_peerInputs` maps (keyed by peerId)
 - `engine/perf/PerformanceOverlay.h` — F3 overlay (Off/Compact/Full); `update(FrameStats, entityCount, simTickMs)` + `lines()` → span for `IRenderer::setOverlayLines`; `OverlayMode` lives in `engine/config/DebugSettings.h`
 - `engine/config/DebugSettings.h` — `OverlayMode` enum + `DebugSettings` struct; persisted as `[debug].overlay_mode` in user.toml
 - `engine/render/RenderSnapshot.h` — `EntityRenderEntry` + `RenderSnapshot`; POD only, no engine-entity headers (uses raw uint32_t/uint8_t to avoid circular deps)
@@ -179,7 +179,8 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 - `engine/render/TerrainMeshBuilder.h` — `buildTerrainMeshGlb(heights, hmSize, meshGrid, chunkSizeM) → vector<uint8_t>`: runtime binary glTF 2.0 generator from a uint16 heightmap; POSITION + NORMAL (VEC3 float32), UNSIGNED_SHORT indices, non-interleaved bufferViews; vertices in chunk-local space (Y = elevation − 32768 m). Mesh grids per LOD: 128×128, 64×64, 32×32 quads. Returns empty on invalid input.
 - `engine/render/TerrainStreamer.h` — async chunk lifecycle manager; `update(dvec3)`, `getRenderItems(dvec3)`, `heightAt(double,double)→double`, `surfaceAt(double,double)→uint8_t`, `chunkCount()→size_t`; implements `IAsyncFilesystemHandler`; #173
 - `tools/terrain-chunk-io` — C++ CLI tool linking `engine-render`; `decode --input file.png --output file.u16` and `gen-procedural --cx N --cy N --output file.u16`; smoke-tested in CI via `--version`.
-- `engine/net/GameProtocol.h` — `MsgEntityEntry::pos[3]` is `double` (68 bytes total); always parse with `memcpy`; issue #170
+- `engine/net/GameProtocol.h` — five packed wire types; `MsgConnectAck` 12 bytes (+assignedEntityIdx/Gen), `MsgEntityEntry` 68 bytes (double pos), `MsgClientInput` 44 bytes; `MsgId::ClientInput = 0x03`; always parse with `memcpy`; see `docs/network-protocol.md`
+- `docs/network-protocol.md` — Phase 2 wire protocol specification: channel assignments, all struct field tables, connection flow diagram
 - `engine/render/CameraController.h` — Free-orbit + Chase cameras; `view(aspectRatio)` → `CameraView`; infinite reverse-Z projection with Vulkan Y-flip
 - `engine/render/ParticleSystem.h` — `ParticlePreset` + `ParticleSystem`; preset registry, per-frame emit/reset/emitters() accumulator; `DamagePenalty::visualEffect` maps to preset name
 - `cmake/dependencies.cmake` — all FetchContent declarations; GLM is unconditional, Vulkan-specific deps are gated on `Vulkan_FOUND`
