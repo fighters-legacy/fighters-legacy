@@ -166,12 +166,12 @@ void TerrainStreamer::loadChunkProcedural(const ChunkKey& key) {
     auto full = fl::generateProceduralChunk(key.cx, key.cy, m_manifest, fl::kBuiltinProceduralParams);
 
     // Subsample full 513×513 down to target hmSize
-    const int step = (kFullSize - 1) / (hmSize - 1); // 1, 2, or 4
+    const std::size_t step = static_cast<std::size_t>((kFullSize - 1) / (hmSize - 1)); // 1, 2, or 4
     std::vector<uint16_t> heights(static_cast<std::size_t>(hmSize) * hmSize);
     for (int r = 0; r < hmSize; ++r) {
         for (int c = 0; c < hmSize; ++c) {
-            heights[static_cast<std::size_t>(r) * hmSize + c] =
-                full[static_cast<std::size_t>(r * step) * kFullSize + c * step];
+            heights[static_cast<std::size_t>(r) * static_cast<std::size_t>(hmSize) + static_cast<std::size_t>(c)] =
+                full[static_cast<std::size_t>(r) * step * kFullSize + static_cast<std::size_t>(c) * step];
         }
     }
     finalizeChunk(key, std::move(heights), hmSize);
