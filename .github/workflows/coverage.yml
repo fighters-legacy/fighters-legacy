@@ -91,6 +91,7 @@ jobs:
             --filter 'engine/' \
             --gcov-exclude '.*/_deps/.*' \
             --gcov-ignore-errors all \
+            --gcov-ignore-parse-errors suspicious_hits.warn_once_per_file \
             --exclude-throw-branches \
             --fail-under-branch 80 \
             --print-summary
@@ -101,6 +102,7 @@ jobs:
             --filter 'engine/' \
             --gcov-exclude '.*/_deps/.*' \
             --gcov-ignore-errors all \
+            --gcov-ignore-parse-errors suspicious_hits.warn_once_per_file \
             --exclude-throw-branches \
             --fail-under-line 70 \
             --print-summary
