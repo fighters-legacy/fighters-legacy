@@ -12,7 +12,7 @@ target_link_libraries(fl-server PRIVATE
     fl-server-config platform-enet engine-net engine-entity engine-loop)
 target_include_directories(fl-server PRIVATE
     "${CMAKE_SOURCE_DIR}/platform/net"
-    "${enet_SOURCE_DIR}/include")
+    "${enet6_SOURCE_DIR}/include")
 
 if(MSVC)
     target_compile_definitions(fl-server PRIVATE _CRT_SECURE_NO_WARNINGS)

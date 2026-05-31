@@ -152,6 +152,10 @@ static Key fromSDLScancode(SDL_Scancode sc) {
         return Key::LeftAlt;
     case SDL_SCANCODE_RALT:
         return Key::RightAlt;
+    case SDL_SCANCODE_MINUS:
+        return Key::Minus;
+    case SDL_SCANCODE_EQUALS:
+        return Key::Equals;
     default:
         return Key::Unknown;
     }
@@ -297,6 +301,10 @@ static SDL_Scancode toSDLScancode(Key k) {
         return SDL_SCANCODE_LALT;
     case Key::RightAlt:
         return SDL_SCANCODE_RALT;
+    case Key::Minus:
+        return SDL_SCANCODE_MINUS;
+    case Key::Equals:
+        return SDL_SCANCODE_EQUALS;
     default:
         return SDL_SCANCODE_UNKNOWN;
     }

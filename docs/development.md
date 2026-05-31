@@ -254,7 +254,7 @@ The `game/` directory holds game binary entry points. The `server/` directory ho
 | MoltenVK | bundled with Vulkan SDK | LunarG (macOS) |
 | SDL3 | latest | FetchContent or system |
 | OpenAL Soft | 1.24+ | FetchContent or system |
-| ENet | 1.3.x (lsalzman/enet, v1.3.17) | FetchContent |
+| enet6 | v6.1.3 (SirLynix/enet6) | FetchContent |
 | Catch2 | 3.x | FetchContent |
 | tomlplusplus | 3.4+ | FetchContent or system |
 | GLM | 1.0+ | FetchContent or system |
@@ -317,7 +317,7 @@ or input.
 
 ### Prerequisites
 
-No system install needed — ENet is fetched automatically via FetchContent.
+No system install needed — enet6 is fetched automatically via FetchContent.
 All other prerequisites are the same as the base debug build (CMake 3.25+,
 a C++20-capable compiler, and the standard project deps from the sections above).
 
@@ -383,7 +383,7 @@ See [docs/fl-server-config.md — Kubernetes / container deployment](fl-server-c
 ## net_check
 
 `net_check` is a headless developer utility (`tools/net_check/`) for
-smoke-testing the ENet transport layer. It connects to a running `fl-server`,
+smoke-testing the enet6 transport layer. It connects to a running `fl-server`,
 sends periodic ping packets, then disconnects cleanly. It is not a game client.
 
 ### Build

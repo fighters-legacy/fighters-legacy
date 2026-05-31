@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "IInput.h"
 #include "IWindowEventHandler.h"
 #include "Platform.h"
-#include "SDL3Display.h"
-#include "SDL3Window.h"
+#include "SDL3Factory.h"
 #include "VkRendererFactory.h"
 #include "render/BuiltinGeometry.h"
 
-#include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -88,15 +87,6 @@ class App : public IWindowEventHandler {
         int fpsFrameCount = 0;
 
         while (m_running && !m_platform.window->shouldClose() && !g_quit) {
-            // Extract wheel events before pollEvents() drains the SDL queue.
-            SDL_PumpEvents();
-            {
-                SDL_Event ev;
-                while (SDL_PeepEvents(&ev, 1, SDL_GETEVENT, SDL_EVENT_MOUSE_WHEEL, SDL_EVENT_MOUSE_WHEEL) > 0) {
-                    m_radius -= ev.wheel.y * 1.5f;
-                    m_radius = std::clamp(m_radius, 3.0f, 80.0f);
-                }
-            }
             m_platform.window->pollEvents();
             m_platform.renderer->beginFrame();
 
@@ -116,35 +106,40 @@ class App : public IWindowEventHandler {
                 fpsFrameCount = 0;
             }
 
-            // Mouse orbit — left button held while dragging adjusts yaw/pitch.
+            IInput& in = *m_platform.input;
+
+            // Scroll wheel zoom.
             {
-                float mx = 0, my = 0;
-                SDL_MouseButtonFlags mb = SDL_GetMouseState(&mx, &my);
-                if (!m_firstFrame && (mb & SDL_BUTTON_LMASK)) {
-                    m_yaw -= (mx - m_lastMouseX) * 0.35f;   // drag right → rotate right
-                    m_pitch += (my - m_lastMouseY) * 0.25f; // drag down → tilt down
-                    m_pitch = std::clamp(m_pitch, -89.0f, 89.0f);
+                int scroll = in.getMouseScroll();
+                if (scroll != 0) {
+                    m_radius -= scroll * 1.5f;
+                    m_radius = std::clamp(m_radius, 3.0f, 80.0f);
                 }
-                m_lastMouseX = mx;
-                m_lastMouseY = my;
-                m_firstFrame = false;
+            }
+
+            // Mouse orbit — left button held while dragging adjusts yaw/pitch.
+            if (in.isMouseButtonDown(MouseButton::Left)) {
+                int dx, dy;
+                in.getMouseDelta(dx, dy);
+                m_yaw -= dx * 0.35f;
+                m_pitch += dy * 0.25f;
+                m_pitch = std::clamp(m_pitch, -89.0f, 89.0f);
             }
 
             // Keyboard zoom and reset.
-            {
-                const bool* keys = SDL_GetKeyboardState(nullptr);
-                if (keys[SDL_SCANCODE_EQUALS] || keys[SDL_SCANCODE_KP_PLUS])
-                    m_radius = std::max(3.0f, m_radius - 0.15f);
-                if (keys[SDL_SCANCODE_MINUS] || keys[SDL_SCANCODE_KP_MINUS])
-                    m_radius = std::min(80.0f, m_radius + 0.15f);
-                if (keys[SDL_SCANCODE_R]) {
-                    m_yaw = 0.0f;
-                    m_pitch = -10.0f;
-                    m_radius = 18.0f;
-                }
-                if (keys[SDL_SCANCODE_ESCAPE])
-                    m_running = false;
+            if (in.isKeyDown(Key::Equals))
+                m_radius = std::max(3.0f, m_radius - 0.15f);
+            if (in.isKeyDown(Key::Minus))
+                m_radius = std::min(80.0f, m_radius + 0.15f);
+            if (in.isKeyJustPressed(Key::R)) {
+                m_yaw = 0.0f;
+                m_pitch = -10.0f;
+                m_radius = 18.0f;
             }
+            if (in.isKeyJustPressed(Key::Escape))
+                m_running = false;
+
+            in.flush();
 
             // Spherical orbit: yaw rotates around Y, pitch raises/lowers the camera.
             const float yawRad = glm::radians(m_yaw);
@@ -221,9 +216,6 @@ class App : public IWindowEventHandler {
     float m_yaw{0.0f};
     float m_pitch{-10.0f};
     float m_radius{18.0f};
-    float m_lastMouseX{0.0f};
-    float m_lastMouseY{0.0f};
-    bool m_firstFrame{true};
     bool m_running{true};
 };
 
@@ -231,8 +223,10 @@ int main() {
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
     Platform p;
-    p.window = std::make_unique<SDL3Window>();
-    p.display = std::make_unique<SDL3Display>();
+    auto wi = createSDL3WindowInput();
+    p.window = std::move(wi.window);
+    p.input = std::move(wi.input);
+    p.display = createSDL3Display();
     p.renderer = createVulkanRenderer();
     return App(p).run();
 }

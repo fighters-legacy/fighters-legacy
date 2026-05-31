@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ENetNetwork.h"
 #include <cstring>
-#include <enet/enet.h>
+#include <enet6/enet.h>
 
 // -------------------------------------------------------------------------
 // Lifecycle
@@ -50,13 +50,21 @@ bool ENetNetwork::bind(const char* address, uint16_t port, int maxClients) {
         m_lastError = "already bound or connected";
         return false;
     }
-    ENetAddress addr;
-    if (!address || std::strcmp(address, "0.0.0.0") == 0 || address[0] == '\0')
-        addr.host = ENET_HOST_ANY;
-    else
-        enet_address_set_host_ip(&addr, address);
+    ENetAddress addr{};
     addr.port = port;
-    m_host = enet_host_create(&addr, static_cast<size_t>(maxClients), kChannelCount, 0, 0);
+    if (!address || address[0] == '\0' || std::strcmp(address, "0.0.0.0") == 0) {
+        addr.type = ENET_ADDRESS_TYPE_IPV4;
+        // v4 union zeroed = INADDR_ANY
+    } else if (std::strcmp(address, "::") == 0) {
+        addr.type = ENET_ADDRESS_TYPE_IPV6;
+        // v6 union zeroed = IN6ADDR_ANY; dual-stack on Linux, IPv6-only on Windows
+    } else {
+        if (enet_address_set_host_ip(&addr, address) != 0) {
+            m_lastError = "enet_address_set_host_ip() failed — invalid bind address";
+            return false;
+        }
+    }
+    m_host = enet_host_create(addr.type, &addr, static_cast<size_t>(maxClients), kChannelCount, 0, 0);
     if (!m_host) {
         m_lastError = "enet_host_create() failed";
         return false;
@@ -74,8 +82,15 @@ bool ENetNetwork::connect(const char* host, uint16_t port) {
         m_lastError = "already bound or connected";
         return false;
     }
-    // Client host: no local address, 1 outbound peer slot.
-    m_host = enet_host_create(nullptr, 1, kChannelCount, 0, 0);
+    // Resolve remote address first so we know the address type (IPv4 vs IPv6).
+    ENetAddress addr{};
+    if (enet_address_set_host(&addr, ENET_ADDRESS_TYPE_ANY, host) != 0) {
+        m_lastError = "enet_address_set_host() failed — could not resolve host";
+        return false;
+    }
+    addr.port = port;
+    // Client host: no local address, 1 outbound peer slot, type matches remote.
+    m_host = enet_host_create(addr.type, nullptr, 1, kChannelCount, 0, 0);
     if (!m_host) {
         m_lastError = "enet_host_create() failed";
         return false;
@@ -83,9 +98,6 @@ bool ENetNetwork::connect(const char* host, uint16_t port) {
     m_host->checksum = enet_crc32;
     enet_host_compress_with_range_coder(m_host);
 
-    ENetAddress addr;
-    enet_address_set_host(&addr, host);
-    addr.port = port;
     ENetPeer* peer = enet_host_connect(m_host, &addr, kChannelCount, 0);
     if (!peer) {
         enet_host_destroy(m_host);
@@ -180,6 +192,7 @@ void ENetNetwork::service(int timeoutMs) {
                 m_handler->onConnect(id);
             break;
         case ENET_EVENT_TYPE_DISCONNECT:
+        case ENET_EVENT_TYPE_DISCONNECT_TIMEOUT:
             if (m_handler)
                 m_handler->onDisconnect(id);
             break;
@@ -239,9 +252,12 @@ const char* ENetNetwork::getPeerAddress(uint32_t peerId) const {
     ENetPeer* peer = &m_host->peers[peerId];
     if (peer->state == ENET_PEER_STATE_DISCONNECTED)
         return nullptr;
-    char ip[64];
+    char ip[ENET_ADDRESS_MAX_LENGTH + 1];
     enet_address_get_host_ip(&peer->address, ip, sizeof(ip));
-    m_peerAddressBuf = std::string(ip) + ":" + std::to_string(peer->address.port);
+    if (peer->address.type == ENET_ADDRESS_TYPE_IPV6)
+        m_peerAddressBuf = std::string("[") + ip + "]:" + std::to_string(peer->address.port);
+    else
+        m_peerAddressBuf = std::string(ip) + ":" + std::to_string(peer->address.port);
     return m_peerAddressBuf.c_str();
 }
 

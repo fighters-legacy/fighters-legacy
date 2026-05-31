@@ -20,7 +20,7 @@ if(NOT (OPENAL_FOUND OR OpenAL_FOUND) OR APPLE)
     unset(CMAKE_COMPILE_WARNING_AS_ERROR)
 endif()
 
-add_library(platform-openal STATIC OALAudio.cpp)
+add_library(platform-openal STATIC OALAudio.cpp OALAudioFactory.cpp)
 target_link_libraries(platform-openal
     PUBLIC  platform-hal
     PRIVATE OpenAL::OpenAL

@@ -15,7 +15,7 @@
 //
 // See docs/fl-server-config.md for the full operator configuration reference.
 // fl-lobby integration is tracked in issue #36.
-#include "ENetNetwork.h"
+#include "ENetNetworkFactory.h"
 #include "server_config.h"
 #include <ILogger.h>
 #include <Platform.h>
@@ -24,7 +24,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <enet/enet.h>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -112,9 +111,10 @@ static const char* kDefaultToml =
     "port = 4778\n"
     "\n"
     "# Network interface to bind on.\n"
-    "# \"0.0.0.0\"   = all interfaces (internet-accessible server)\n"
-    "# \"127.0.0.1\" = localhost-only (single-player mode; game client sets this)\n"
-    "# Phase 2: enforcement requires INetwork::bind() to be extended.\n"
+    "# \"::\"         = dual-stack all interfaces (IPv4+IPv6; recommended for internet servers)\n"
+    "# \"0.0.0.0\"   = IPv4 all interfaces\n"
+    "# \"127.0.0.1\" = localhost-only IPv4 (single-player; game client uses this)\n"
+    "# \"::1\"        = localhost-only IPv6\n"
     "bind_address = \"0.0.0.0\"\n"
     "\n"
     "# Maximum number of simultaneous connected peers (1-128).\n"
@@ -232,7 +232,7 @@ int main(int argc, char** argv) {
                         "Environment:\n"
                         "  FL_CONFIG              Path to server.toml (default: ./server.toml)\n"
                         "  FL_PORT                Bind port (default: 4778)\n"
-                        "  FL_BIND_ADDRESS        Bind address (default: 0.0.0.0; use 127.0.0.1 for localhost-only)\n"
+                        "  FL_BIND_ADDRESS        Bind address (default: 0.0.0.0; use :: for IPv4+IPv6 dual-stack)\n"
                         "  FL_MAX_PEERS           Max simultaneous peers (default: 16)\n"
                         "  FL_NAME                Server name (default: \"Unnamed Server\")\n"
                         "  FL_PERSISTENT          \"true\" to enable persistent world, Phase 2 (default: \"false\")\n"
@@ -246,8 +246,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {
-            std::printf("fl-server %s (ENet %d.%d.%d)\n", kVersion, ENET_VERSION_MAJOR, ENET_VERSION_MINOR,
-                        ENET_VERSION_PATCH);
+            std::printf("fl-server %s (%s)\n", kVersion, enetLibraryVersion());
             return 0;
         }
         if (std::strcmp(argv[i], "--persistent") == 0)
@@ -257,15 +256,14 @@ int main(int argc, char** argv) {
     // ---- Set up platform ----
     Platform p;
     p.logger = std::make_unique<StdoutLogger>();
-    p.network = std::make_unique<ENetNetwork>();
+    p.network = createENetNetwork();
 
     ILogger* log = p.logger.get();
     INetwork* net = p.network.get();
 
     {
         char buf[128];
-        std::snprintf(buf, sizeof(buf), "fl-server %s (ENet %d.%d.%d) starting", kVersion, ENET_VERSION_MAJOR,
-                      ENET_VERSION_MINOR, ENET_VERSION_PATCH);
+        std::snprintf(buf, sizeof(buf), "fl-server %s (%s) starting", kVersion, enetLibraryVersion());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
 

@@ -4,7 +4,8 @@
 #define NOMINMAX
 #endif
 
-#include "OALAudio.h"
+#include "IAudio.h"
+#include "OALAudioFactory.h"
 #include "audio/OggDecoder.h"
 
 #include <atomic>
@@ -33,7 +34,7 @@ static std::vector<int16_t> makeSine(float hz, float durationSec, int rate) {
     return buf;
 }
 
-static bool playAndWait(OALAudio& audio, AudioSourceId src, AudioBufferId buf, const char* label) {
+static bool playAndWait(IAudio& audio, AudioSourceId src, AudioBufferId buf, const char* label) {
     audio.play(src, buf);
     std::printf("audio_check: %s — press Ctrl-C to skip\n", label);
     while (audio.isPlaying(src) && !g_quit)
@@ -128,7 +129,8 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
 
-    OALAudio audio;
+    auto audioPtr = createOALAudio();
+    IAudio& audio = *audioPtr;
     if (!audio.init()) {
         std::fprintf(stderr, "audio_check: init failed: %s\n", audio.getLastError());
         return 1;
