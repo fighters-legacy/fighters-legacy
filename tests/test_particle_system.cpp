@@ -213,7 +213,7 @@ static fl::RenderSnapshot makeSnap(uint64_t tick) {
     return s;
 }
 
-static fl::EntityRenderEntry makeEntry(uint32_t typeIndex, glm::vec3 pos, uint8_t damage = 0) {
+static fl::EntityRenderEntry makeEntry(uint32_t typeIndex, glm::dvec3 pos, uint8_t damage = 0) {
     fl::EntityRenderEntry e;
     e.typeIndex = typeIndex;
     e.position = pos;
@@ -235,7 +235,7 @@ TEST_CASE("SceneRenderer: no particle system -- particleEmitters empty in scene"
 
     // Publish a snapshot with one damaged entity.
     auto snap = makeSnap(1);
-    snap.entries.push_back(makeEntry(0, {0.0f, 0.0f, 0.0f}, 2)); // damageLevel=2
+    snap.entries.push_back(makeEntry(0, {}, 2)); // damageLevel=2
     bridge.publish(std::move(snap));
 
     sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
@@ -268,7 +268,7 @@ TEST_CASE("SceneRenderer: with particle system -- damaged entity emits effect") 
     });
 
     auto snap = makeSnap(1);
-    snap.entries.push_back(makeEntry(0, {10.0f, 0.0f, 0.0f}, 2));
+    snap.entries.push_back(makeEntry(0, {10.0, 0.0, 0.0}, 2));
     bridge.publish(std::move(snap));
 
     sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
@@ -296,7 +296,7 @@ TEST_CASE("SceneRenderer: intact entity does not emit particle effect") {
     sr.setParticleSystem(&ps, [](uint32_t, uint8_t) -> std::string { return "explosion"; });
 
     auto snap = makeSnap(1);
-    snap.entries.push_back(makeEntry(0, {}, 0)); // damageLevel=0 = Intact
+    snap.entries.push_back(makeEntry(0, glm::dvec3{}, 0)); // damageLevel=0 = Intact
     bridge.publish(std::move(snap));
 
     sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});

@@ -50,13 +50,14 @@ struct MsgEntityEntry {
     uint32_t entityIdx{0};
     uint32_t entityGen{0};
     uint32_t typeIndex{0};
-    float pos[3]{}; // world position (m), XYZ
-    float vel[3]{}; // world velocity (m/s) for dead-reckoning
-    float ori[4]{}; // orientation quaternion: x, y, z, w (matches EntityTransform::quat)
+    double pos[3]{}; // world position (m), XYZ — double for planet-scale precision
+    float vel[3]{};  // world velocity (m/s) for dead-reckoning
+    float ori[4]{};  // orientation quaternion: x, y, z, w (matches EntityTransform::quat)
     uint8_t damageLevel{0};
     uint8_t flags{0}; // bit 0 = playerOwned
     uint8_t _pad[2]{};
-}; // 56 bytes
+}; // 68 bytes
+static_assert(sizeof(MsgEntityEntry) == 68u, "MsgEntityEntry wire size changed");
 
 #pragma pack(pop)
 

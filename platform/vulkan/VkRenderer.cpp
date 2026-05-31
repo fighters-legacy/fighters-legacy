@@ -491,7 +491,7 @@ void VkRenderer::writeFrameUBOs(const FrameScene& scene) {
     CameraUBO cam{};
     cam.view = scene.camera.view;
     cam.proj = scene.camera.proj;
-    cam.worldOrigin = glm::vec4(scene.camera.worldOrigin, 0.0f);
+    cam.worldOrigin = glm::vec4(glm::vec3(scene.camera.worldOrigin), 0.0f);
     std::memcpy(pf.cameraMapped, &cam, sizeof(cam));
 
     LightUBO light{};
@@ -553,7 +553,7 @@ void VkRenderer::computeCascades(const FrameScene& scene, ShadowUBO& out) {
                 for (float y : {-1.0f, 1.0f}) {
                     glm::vec4 ndc(x, y, z, 1.0f);
                     glm::vec4 world = invVP * ndc;
-                    corners[idx++] = glm::vec3(world / world.w) + scene.camera.worldOrigin;
+                    corners[idx++] = glm::vec3(world / world.w) + glm::vec3(scene.camera.worldOrigin);
                 }
             }
         }

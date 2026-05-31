@@ -85,8 +85,8 @@ TEST_CASE("WorldBroadcaster: onTick broadcasts WorldSnapshot for N entities", "[
     // Spawn 3 entities before GameLoop starts (no sim thread yet).
     for (int i = 0; i < 3; ++i) {
         fl::EntityTransform t{};
-        t.pos[0] = static_cast<float>(i * 10);
-        t.pos[1] = 500.0f;
+        t.pos[0] = static_cast<double>(i * 10);
+        t.pos[1] = 500.0;
         em.spawn("builtin:debug-entity", t);
     }
 
@@ -109,7 +109,7 @@ TEST_CASE("WorldBroadcaster: onTick broadcasts WorldSnapshot for N entities", "[
     REQUIRE(pkt.size() >= sizeof(hdr) + sizeof(fl::MsgEntityEntry));
     fl::MsgEntityEntry e0;
     std::memcpy(&e0, pkt.data() + sizeof(hdr), sizeof(e0));
-    CHECK(e0.pos[1] == 500.0f);
+    CHECK(e0.pos[1] == 500.0);
 }
 
 TEST_CASE("WorldBroadcaster: onTick with zero entities broadcasts empty header", "[world_broadcaster]") {

@@ -401,7 +401,7 @@ int main(int argc, char** argv) {
         sceneRenderer.setBuiltinFloor(true);
 
         // Orbit the camera south of the formation (yaw=0 = south of pivot), looking north.
-        cameraController.setFreeOrbit({0.0f, 500.0f, 0.0f}, 0.0f, -10.0f, 200.0f);
+        cameraController.setFreeOrbit({0.0, 500.0, 0.0}, 0.0f, -10.0f, 200.0f);
 
         // Spawn 5 entities in a V-formation at 500 m altitude. Slots 0-2 are opaque
         // (red/green/blue), slots 3-4 are glass (yellow/purple) — exercises the transparent pass.
@@ -481,7 +481,7 @@ int main(int argc, char** argv) {
 
     // Sandbox free-look camera state — pivot is the formation centre at 500 m altitude.
     // Matches the initial setFreeOrbit call above (yaw=0, pitch=-10, dist=200).
-    glm::vec3 sbPivot{0.0f, 500.0f, 0.0f}; // mutable — WASD/QE pan it
+    glm::dvec3 sbPivot{0.0, 500.0, 0.0}; // mutable — WASD/QE pan it
     float sbYaw = 0.0f;
     float sbPitch = -10.0f;
     float sbRadius = 200.0f;
@@ -535,13 +535,13 @@ int main(int argc, char** argv) {
                 const glm::vec3 fwd{-std::sin(yawRad), 0.0f, -std::cos(yawRad)};
                 const glm::vec3 rgt{std::cos(yawRad), 0.0f, -std::sin(yawRad)};
                 if (keys[SDL_SCANCODE_W])
-                    sbPivot += fwd * speed;
+                    sbPivot += glm::dvec3(fwd * speed);
                 if (keys[SDL_SCANCODE_S])
-                    sbPivot -= fwd * speed;
+                    sbPivot -= glm::dvec3(fwd * speed);
                 if (keys[SDL_SCANCODE_D])
-                    sbPivot += rgt * speed;
+                    sbPivot += glm::dvec3(rgt * speed);
                 if (keys[SDL_SCANCODE_A])
-                    sbPivot -= rgt * speed;
+                    sbPivot -= glm::dvec3(rgt * speed);
                 if (keys[SDL_SCANCODE_E])
                     sbPivot.y += speed;
                 if (keys[SDL_SCANCODE_Q])
@@ -550,7 +550,7 @@ int main(int argc, char** argv) {
 
             // Reset to initial formation view.
             if (keys[SDL_SCANCODE_R]) {
-                sbPivot = {0.0f, 500.0f, 0.0f};
+                sbPivot = {0.0, 500.0, 0.0};
                 sbYaw = 0.0f;
                 sbPitch = -10.0f;
                 sbRadius = 200.0f;
@@ -577,7 +577,8 @@ int main(int argc, char** argv) {
         {
             glm::vec3 fwd = -glm::vec3(cam.view[2][0], cam.view[2][1], cam.view[2][2]);
             glm::vec3 up = glm::vec3(cam.view[1][0], cam.view[1][1], cam.view[1][2]);
-            const float pos[3] = {cam.worldOrigin.x, cam.worldOrigin.y, cam.worldOrigin.z};
+            const float pos[3] = {static_cast<float>(cam.worldOrigin.x), static_cast<float>(cam.worldOrigin.y),
+                                  static_cast<float>(cam.worldOrigin.z)};
             const float fwdA[3] = {fwd.x, fwd.y, fwd.z};
             const float upA[3] = {up.x, up.y, up.z};
             const float zero[3] = {};
