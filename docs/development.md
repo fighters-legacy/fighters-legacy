@@ -74,6 +74,8 @@ pip install gcovr
 
 See [Testing → Code coverage](#code-coverage) for the full local workflow.
 
+**gh (GitHub CLI)** — used by `scripts/roadmap-status.sh` and `scripts/prune_merged_branches.py`. Both scripts degrade gracefully without it, but `prune_merged_branches.py` will miss squash-merged and rebase-merged branches if `gh` is not authenticated. Install from [cli.github.com](https://cli.github.com) and authenticate with `gh auth login`.
+
 Copyright is declared centrally in `REUSE.toml` rather than in each file. All `.h` and `.cpp` files are covered by a glob annotation there — new source files do not need an in-file `SPDX-FileCopyrightText` line. The `// SPDX-License-Identifier: GPL-3.0-or-later` line in each source file is still required (see `CLAUDE.md`).
 
 ---
@@ -233,13 +235,13 @@ fighters-legacy/
 │   └── fighters-legacy/  # fighters-legacy game client (Phase 1 stub)
 ├── server/             # Dedicated server binary
 │   └── fl-server/      # fl-server — authoritative headless game server
-├── tools/              # Developer utilities (net_check, hello_triangle, …)
+├── tools/              # Asset pipeline and dev utilities — compiled by CMake (net_check, tex-compress, blender_gen.py, …)
 ├── tests/              # Test suite (Catch2 via FetchContent)
 ├── docs/               # Documentation
-└── scripts/            # Developer scripts and git hooks
+└── scripts/            # Repo-admin shell scripts and git hooks (release, tagging, branch maintenance)
 ```
 
-The `game/` directory holds game binary entry points. The `server/` directory holds the authoritative dedicated server. Developer utilities live in `tools/`.
+The `game/` directory holds game binary entry points. The `server/` directory holds the authoritative dedicated server. `tools/` contains asset-pipeline programs and dev utilities that are part of the CMake build; `scripts/` contains maintainer shell scripts (releases, hooks, branch cleanup) that are not part of the build.
 
 ---
 
