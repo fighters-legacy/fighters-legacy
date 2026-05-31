@@ -168,7 +168,7 @@ class App : public IWindowEventHandler {
             proj[2][3] = -1.0f;
             proj[3][2] = near;
 
-            const CameraView cam{glm::lookAt(eye, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}), proj, eye};
+            const CameraView cam{glm::lookAt(eye, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}), proj, glm::dvec3(eye)};
 
             // 4 face RenderItems + 3 axis arrow heads — must stay alive until endFrame() returns.
             std::array<RenderItem, 7> items{};

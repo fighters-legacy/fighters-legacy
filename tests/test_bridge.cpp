@@ -62,7 +62,7 @@ TEST_CASE("SimRenderBridge publish then tryAdvance delivers snapshot") {
     e.entityIdx = 3;
     e.entityGen = 1;
     e.typeIndex = 0;
-    e.position = {1.0f, 2.0f, 3.0f};
+    e.position = {1.0, 2.0, 3.0};
     e.damageLevel = 0;
     snap.entries.push_back(e);
 
@@ -73,7 +73,7 @@ TEST_CASE("SimRenderBridge publish then tryAdvance delivers snapshot") {
     CHECK(bridge.current().tickIndex == 7);
     REQUIRE(bridge.current().entries.size() == 1);
     CHECK(bridge.current().entries[0].entityIdx == 3);
-    CHECK(bridge.current().entries[0].position.x == 1.0f);
+    CHECK(bridge.current().entries[0].position.x == 1.0);
 }
 
 TEST_CASE("SimRenderBridge tryAdvance returns false when no new snapshot since last advance") {
@@ -138,7 +138,7 @@ TEST_CASE("SimRenderBridge preserves all EntityRenderEntry fields") {
     e.entityIdx = 99;
     e.entityGen = 3;
     e.typeIndex = 7;
-    e.position = {10.0f, 20.0f, 30.0f};
+    e.position = {10.0, 20.0, 30.0};
     e.orientation = glm::quat(0.707f, 0.0f, 0.707f, 0.0f);
     e.velocity = {5.0f, 0.0f, -3.0f};
     e.damageLevel = 2;
@@ -153,9 +153,9 @@ TEST_CASE("SimRenderBridge preserves all EntityRenderEntry fields") {
     CHECK(got.entityIdx == 99);
     CHECK(got.entityGen == 3);
     CHECK(got.typeIndex == 7);
-    CHECK(got.position.x == 10.0f);
-    CHECK(got.position.y == 20.0f);
-    CHECK(got.position.z == 30.0f);
+    CHECK(got.position.x == 10.0);
+    CHECK(got.position.y == 20.0);
+    CHECK(got.position.z == 30.0);
     CHECK(got.velocity.z == -3.0f);
     CHECK(got.damageLevel == 2);
     CHECK(got.playerOwned == true);
@@ -174,7 +174,7 @@ TEST_CASE("SimRenderBridge snapshot with multiple entries preserves all") {
         EntityRenderEntry e;
         e.entityIdx = i;
         e.entityGen = 1;
-        e.position = {static_cast<float>(i), 0.0f, 0.0f};
+        e.position = {static_cast<double>(i), 0.0, 0.0};
         snap.entries.push_back(e);
     }
 
@@ -183,7 +183,7 @@ TEST_CASE("SimRenderBridge snapshot with multiple entries preserves all") {
     REQUIRE(bridge.current().entries.size() == 8);
     for (uint32_t i = 0; i < 8; ++i) {
         CHECK(bridge.current().entries[i].entityIdx == i);
-        CHECK(bridge.current().entries[i].position.x == static_cast<float>(i));
+        CHECK(bridge.current().entries[i].position.x == static_cast<double>(i));
     }
 }
 
@@ -202,7 +202,7 @@ TEST_CASE("SimRenderBridge concurrent publish and advance does not deadlock") {
             snap.tickIndex = static_cast<uint64_t>(i + 1);
             EntityRenderEntry e;
             e.entityIdx = static_cast<uint32_t>(i);
-            e.position = {static_cast<float>(i), 0.0f, 0.0f};
+            e.position = {static_cast<double>(i), 0.0, 0.0};
             snap.entries.push_back(e);
             bridge.publish(std::move(snap));
         }
@@ -244,4 +244,22 @@ TEST_CASE("SimRenderBridge publishExternal delivers snapshot on same thread", "[
 
     // A second tryAdvance with no new publish returns false.
     CHECK(!bridge.tryAdvance());
+}
+
+TEST_CASE("SimRenderBridge preserves double precision at planet-scale coordinates", "[bridge]") {
+    // At 2,000 km from origin float32 precision degrades to ~0.24 m; dvec3 must survive exact.
+    constexpr double kLarge = 2'000'000.0;
+
+    SimRenderBridge bridge;
+    RenderSnapshot snap;
+    snap.tickIndex = 1;
+    EntityRenderEntry e;
+    e.position = {kLarge, 0.0, kLarge};
+    snap.entries.push_back(e);
+
+    bridge.publish(std::move(snap));
+    REQUIRE(bridge.tryAdvance());
+
+    CHECK(bridge.current().entries[0].position.x == kLarge);
+    CHECK(bridge.current().entries[0].position.z == kLarge);
 }

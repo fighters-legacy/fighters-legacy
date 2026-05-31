@@ -29,10 +29,10 @@ class CameraController {
     // yaw     — horizontal rotation, degrees (0 = camera south of pivot).
     // pitch   — elevation angle, degrees (positive = camera above horizon).
     // distance — camera distance from pivot (m).
-    void setFreeOrbit(glm::vec3 pivot, float yaw, float pitch, float distance) noexcept;
+    void setFreeOrbit(glm::dvec3 pivot, float yaw, float pitch, float distance) noexcept;
 
     // Chase target (effective in Chase mode). Call each frame with the latest entity state.
-    void setTarget(glm::vec3 worldPosition, glm::quat worldOrientation) noexcept;
+    void setTarget(glm::dvec3 worldPosition, glm::quat worldOrientation) noexcept;
 
     // Build the CameraView for the current frame.
     // aspectRatio — viewport width / height.
@@ -44,13 +44,13 @@ class CameraController {
     CameraMode m_mode{CameraMode::Free};
 
     // Free-orbit state
-    glm::vec3 m_pivot{0.0f, 0.0f, 0.0f};
+    glm::dvec3 m_pivot{};
     float m_yaw{0.0f};
     float m_pitch{20.0f};
     float m_distance{50.0f};
 
     // Chase state
-    glm::vec3 m_targetPos{0.0f, 0.0f, 0.0f};
+    glm::dvec3 m_targetPos{};
     glm::quat m_targetOri{glm::quat(1.0f, 0.0f, 0.0f, 0.0f)};
 
     // Chase camera offsets in entity-local space (m).

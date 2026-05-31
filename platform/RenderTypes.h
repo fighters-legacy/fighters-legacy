@@ -107,7 +107,7 @@ struct MaterialDesc {
 struct CameraView {
     glm::mat4 view{1.0f};
     glm::mat4 proj{1.0f};
-    glm::vec3 worldOrigin{};
+    glm::dvec3 worldOrigin{};
 };
 
 // ---------------------------------------------------------------------------

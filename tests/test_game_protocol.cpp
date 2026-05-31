@@ -8,7 +8,7 @@ TEST_CASE("GameProtocol: packed struct sizes match wire format", "[game_protocol
     CHECK(sizeof(fl::MsgConnectAck) == 4u);
     CHECK(sizeof(fl::MsgEntityTypeDef) == 196u); // 4 + 64 + 64 + 64
     CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 12u);
-    CHECK(sizeof(fl::MsgEntityEntry) == 56u);
+    CHECK(sizeof(fl::MsgEntityEntry) == 68u);
 }
 
 TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
@@ -26,9 +26,9 @@ TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
         entries[i].entityIdx = 100u + i;
         entries[i].entityGen = 1u;
         entries[i].typeIndex = 0u;
-        entries[i].pos[0] = static_cast<float>(i) * 10.0f;
-        entries[i].pos[1] = 500.0f;
-        entries[i].pos[2] = 0.0f;
+        entries[i].pos[0] = static_cast<double>(i) * 10.0;
+        entries[i].pos[1] = 500.0;
+        entries[i].pos[2] = 0.0;
         entries[i].vel[0] = entries[i].vel[1] = entries[i].vel[2] = 0.0f;
         entries[i].ori[0] = 0.0f;
         entries[i].ori[1] = 0.0f;
@@ -59,10 +59,31 @@ TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
         fl::MsgEntityEntry e;
         std::memcpy(&e, entryPtr + i * sizeof(e), sizeof(e));
         CHECK(e.entityIdx == 100u + i);
-        CHECK(e.pos[1] == 500.0f);
+        CHECK(e.pos[1] == 500.0);
         CHECK(e.ori[3] == 1.0f);
         CHECK(e.flags == (i == 0 ? 1u : 0u));
     }
+}
+
+TEST_CASE("GameProtocol: MsgEntityEntry double-precision round-trip at planet-scale coordinates", "[game_protocol]") {
+    // At 2,000 km from origin float32 precision is ~0.24 m; double must survive exact round-trip.
+    constexpr double kLargeX = 2'000'000.0;
+    constexpr double kLargeZ = 2'000'000.0;
+
+    fl::MsgEntityEntry src{};
+    src.pos[0] = kLargeX;
+    src.pos[1] = 500.0;
+    src.pos[2] = kLargeZ;
+
+    std::vector<uint8_t> buf(sizeof(src));
+    std::memcpy(buf.data(), &src, sizeof(src));
+
+    fl::MsgEntityEntry parsed{};
+    std::memcpy(&parsed, buf.data(), sizeof(parsed));
+
+    CHECK(parsed.pos[0] == kLargeX);
+    CHECK(parsed.pos[1] == 500.0);
+    CHECK(parsed.pos[2] == kLargeZ);
 }
 
 TEST_CASE("GameProtocol: MsgConnectAck round-trip with two type defs", "[game_protocol]") {

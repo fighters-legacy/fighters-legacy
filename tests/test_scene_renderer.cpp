@@ -118,7 +118,7 @@ static RenderSnapshot makeSnap(uint64_t tick = 1) {
     return snap;
 }
 
-static EntityRenderEntry makeEntry(uint32_t typeIndex = 0, glm::vec3 pos = {}) {
+static EntityRenderEntry makeEntry(uint32_t typeIndex = 0, glm::dvec3 pos = {}) {
     EntityRenderEntry e;
     e.typeIndex = typeIndex;
     e.position = pos;
@@ -139,8 +139,8 @@ TEST_CASE("CameraController Free mode worldOrigin is nonzero at default distance
     CameraController cam;
     CameraView cv = cam.view(16.0f / 9.0f);
     // Default distance=50m, pitch=20 deg: camera should not be at origin.
-    float len = std::sqrt(cv.worldOrigin.x * cv.worldOrigin.x + cv.worldOrigin.y * cv.worldOrigin.y +
-                          cv.worldOrigin.z * cv.worldOrigin.z);
+    double len = std::sqrt(cv.worldOrigin.x * cv.worldOrigin.x + cv.worldOrigin.y * cv.worldOrigin.y +
+                           cv.worldOrigin.z * cv.worldOrigin.z);
     CHECK(len > 1.0f);
 }
 
@@ -170,9 +170,9 @@ TEST_CASE("CameraController setFreeOrbit repositions camera") {
     cam.setFreeOrbit({0, 0, 0}, 0.0f, 0.0f, 10.0f);
     CameraView cv = cam.view(1.0f);
     // yaw=0, pitch=0, dist=10 => cam at (0, 0, 10).
-    CHECK(cv.worldOrigin.x == Catch::Approx(0.0f).margin(1e-4f));
-    CHECK(cv.worldOrigin.y == Catch::Approx(0.0f).margin(1e-4f));
-    CHECK(cv.worldOrigin.z == Catch::Approx(10.0f).margin(1e-3f));
+    CHECK(cv.worldOrigin.x == Catch::Approx(0.0).margin(1e-4));
+    CHECK(cv.worldOrigin.y == Catch::Approx(0.0).margin(1e-4));
+    CHECK(cv.worldOrigin.z == Catch::Approx(10.0).margin(1e-3));
 }
 
 TEST_CASE("CameraController setMode changes mode") {
@@ -186,14 +186,14 @@ TEST_CASE("CameraController setMode changes mode") {
 TEST_CASE("CameraController Chase mode worldOrigin differs from target position") {
     CameraController cam;
     cam.setMode(CameraMode::Chase);
-    glm::vec3 targetPos{100.0f, 50.0f, 200.0f};
+    glm::dvec3 targetPos{100.0, 50.0, 200.0};
     cam.setTarget(targetPos, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
     CameraView cv = cam.view(16.0f / 9.0f);
     // Camera should not be at the target position.
-    float dx = cv.worldOrigin.x - targetPos.x;
-    float dy = cv.worldOrigin.y - targetPos.y;
-    float dz = cv.worldOrigin.z - targetPos.z;
-    float dist2 = dx * dx + dy * dy + dz * dz;
+    double dx = cv.worldOrigin.x - targetPos.x;
+    double dy = cv.worldOrigin.y - targetPos.y;
+    double dz = cv.worldOrigin.z - targetPos.z;
+    double dist2 = dx * dx + dy * dy + dz * dz;
     CHECK(dist2 > 1.0f);
 }
 
@@ -241,7 +241,7 @@ TEST_CASE("SceneRenderer submits one RenderItem when entity has loadable mesh") 
     SceneRenderer sr{bridge, oneType(), assets, renderer};
 
     RenderSnapshot snap = makeSnap();
-    snap.entries.push_back(makeEntry(0, {10.0f, 0.0f, 0.0f}));
+    snap.entries.push_back(makeEntry(0, {10.0, 0.0, 0.0}));
     bridge.publish(std::move(snap));
 
     sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
@@ -426,7 +426,7 @@ TEST_CASE("SceneRenderer passes camera and environment through to FrameScene") {
     SceneRenderer sr{bridge, noTypes(), assets, renderer};
 
     CameraView cam;
-    cam.worldOrigin = {10.0f, 20.0f, 30.0f};
+    cam.worldOrigin = {10.0, 20.0, 30.0};
 
     EnvironmentState env;
     env.sunDirection = {0.0f, -0.8f, 0.6f};
@@ -434,7 +434,7 @@ TEST_CASE("SceneRenderer passes camera and environment through to FrameScene") {
 
     sr.renderFrame(0.0f, cam, env);
 
-    CHECK(renderer.lastScene.camera.worldOrigin == glm::vec3(10.0f, 20.0f, 30.0f));
+    CHECK(renderer.lastScene.camera.worldOrigin == glm::dvec3(10.0, 20.0, 30.0));
     CHECK(renderer.lastScene.environment.sunDirection == glm::vec3(0.0f, -0.8f, 0.6f));
     CHECK(renderer.lastScene.environment.timeOfDay == Catch::Approx(7.5f));
 }
@@ -457,7 +457,7 @@ TEST_CASE("SceneRenderer applies velocity extrapolation to transform position") 
     SimRenderBridge bridge;
     SceneRenderer sr{bridge, oneType(), assets, renderer};
 
-    EntityRenderEntry e = makeEntry(0, {0.0f, 0.0f, 0.0f});
+    EntityRenderEntry e = makeEntry(0, {});
     e.velocity = {60.0f, 0.0f, 0.0f}; // 60 m/s along X
 
     RenderSnapshot snap = makeSnap();
@@ -496,7 +496,7 @@ TEST_CASE("SceneRenderer culls entity beyond draw distance") {
 
     // Entity 11 km away (beyond the 10 km limit)
     RenderSnapshot snap = makeSnap();
-    snap.entries.push_back(makeEntry(0, {11000.0f, 0.0f, 0.0f}));
+    snap.entries.push_back(makeEntry(0, {11000.0, 0.0, 0.0}));
     bridge.publish(std::move(snap));
 
     sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
@@ -523,7 +523,7 @@ TEST_CASE("SceneRenderer keeps entity within draw distance") {
     sr.setDrawDistance(10.0f);
 
     RenderSnapshot snap = makeSnap();
-    snap.entries.push_back(makeEntry(0, {9000.0f, 0.0f, 0.0f}));
+    snap.entries.push_back(makeEntry(0, {9000.0, 0.0, 0.0}));
     bridge.publish(std::move(snap));
 
     sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
@@ -585,9 +585,9 @@ TEST_CASE("SceneRenderer assigns distinct palette materials by entityIdx") {
     SimRenderBridge bridge;
     SceneRenderer sr{bridge, noTypes(), assets, renderer};
 
-    EntityRenderEntry e0 = makeEntry(0, {0.0f, 0.0f, 0.0f});
+    EntityRenderEntry e0 = makeEntry(0, {0.0, 0.0, 0.0});
     e0.entityIdx = 0;
-    EntityRenderEntry e1 = makeEntry(0, {1.0f, 0.0f, 0.0f});
+    EntityRenderEntry e1 = makeEntry(0, {1.0, 0.0, 0.0});
     e1.entityIdx = 1;
 
     RenderSnapshot snap = makeSnap();
@@ -604,4 +604,71 @@ TEST_CASE("SceneRenderer assigns distinct palette materials by entityIdx") {
     CHECK(items[1].material.valid());
     // entityIdx 0 and 1 map to different palette slots.
     CHECK(items[0].material.id != items[1].material.id);
+}
+
+// ---------------------------------------------------------------------------
+// SceneRenderer — planet-scale precision and floor coverage
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SceneRenderer camera-relative rendering is float32-safe at 2000 km from origin", "[scene_renderer]") {
+    // Entity and camera are both at 2,000 km from world origin. The camera-relative
+    // offset must be exact (near zero), not corrupted by float32 precision loss.
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, noTypes(), assets, renderer};
+
+    constexpr double kLarge = 2'000'000.0; // 2,000 km
+
+    RenderSnapshot snap = makeSnap();
+    snap.entries.push_back(makeEntry(0, {kLarge, 100.0, kLarge}));
+    bridge.publish(std::move(snap));
+
+    CameraView cam;
+    cam.worldOrigin = {kLarge, 0.0, kLarge};
+
+    sr.renderFrame(0.0f, cam, EnvironmentState{});
+
+    REQUIRE(renderer.setSceneCount == 1);
+    REQUIRE(renderer.lastScene.renderItems.size() == 1);
+    // transform[3] is the translation column (glm column-major).
+    // Camera-relative offset: entity at (kLarge, 100, kLarge) minus camera at (kLarge, 0, kLarge) = (0, 100, 0).
+    const glm::vec4& t = renderer.lastScene.renderItems[0].transform[3];
+    CHECK(t.x == Catch::Approx(0.0f).margin(1e-3f));
+    CHECK(t.y == Catch::Approx(100.0f).margin(1e-3f));
+    CHECK(t.z == Catch::Approx(0.0f).margin(1e-3f));
+}
+
+TEST_CASE("SceneRenderer builtin floor camera-relative offset uses dvec3 worldOrigin", "[scene_renderer]") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, noTypes(), assets, renderer};
+    sr.setBuiltinFloor(true);
+
+    // Publish an empty snapshot so renderFrame doesn't early-out before appending the floor.
+    RenderSnapshot snap;
+    snap.tickIndex = 1;
+    bridge.publish(std::move(snap));
+
+    CameraView cam;
+    cam.worldOrigin = {50.0, 0.0, 75.0};
+
+    sr.renderFrame(0.0f, cam, EnvironmentState{});
+
+    REQUIRE(renderer.setSceneCount == 1);
+    // Floor is the last item; transform translates by -worldOrigin cast to vec3.
+    const auto& items = renderer.lastScene.renderItems;
+    REQUIRE(!items.empty());
+    const glm::vec4& ft = items.back().transform[3];
+    CHECK(ft.x == Catch::Approx(-50.0f).margin(1e-4f));
+    CHECK(ft.z == Catch::Approx(-75.0f).margin(1e-4f));
 }

@@ -10,7 +10,7 @@
 namespace fl {
 
 struct EntityTransform {
-    float pos[3]{};            // world position (m)
+    double pos[3]{};           // world position (m) — double for planet-scale precision
     float vel[3]{};            // world velocity (m/s)
     float quat[4]{0, 0, 0, 1}; // orientation quaternion [x,y,z,w]
 };

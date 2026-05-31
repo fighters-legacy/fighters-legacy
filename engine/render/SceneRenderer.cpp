@@ -143,10 +143,10 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
         }
 
         // Velocity extrapolation: advance position by alpha × tick period.
-        glm::vec3 worldPos = entry.position + entry.velocity * (alpha * kTickDt);
+        glm::dvec3 worldPos = entry.position + glm::dvec3(entry.velocity * (alpha * kTickDt));
 
-        // Camera-relative position (float32-safe at arbitrary theater scale).
-        glm::vec3 relPos = worldPos - camera.worldOrigin;
+        // Camera-relative position: subtract two dvec3 values, then narrow to vec3 (float32-safe).
+        glm::vec3 relPos = glm::vec3(worldPos - camera.worldOrigin);
 
         // Distance cull — skip entities beyond the configured draw distance.
         float distSq = relPos.x * relPos.x + relPos.y * relPos.y + relPos.z * relPos.z;
@@ -172,7 +172,7 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
                 continue;
             std::string effect = m_effectResolver(entry.typeIndex, entry.damageLevel);
             if (!effect.empty())
-                m_particleSystem->emit(effect.c_str(), entry.position);
+                m_particleSystem->emit(effect.c_str(), glm::vec3(entry.position));
         }
     }
 
@@ -192,7 +192,7 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
         RenderItem floor{};
         floor.mesh = m_builtinFloorMesh;
         floor.material = m_builtinFloorMat;
-        floor.transform = glm::translate(glm::mat4(1.0f), -camera.worldOrigin);
+        floor.transform = glm::translate(glm::mat4(1.0f), -glm::vec3(camera.worldOrigin));
         m_items.push_back(floor);
     }
 

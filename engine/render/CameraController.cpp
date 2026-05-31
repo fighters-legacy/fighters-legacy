@@ -18,21 +18,21 @@ CameraMode CameraController::mode() const noexcept {
     return m_mode;
 }
 
-void CameraController::setFreeOrbit(glm::vec3 pivot, float yaw, float pitch, float distance) noexcept {
+void CameraController::setFreeOrbit(glm::dvec3 pivot, float yaw, float pitch, float distance) noexcept {
     m_pivot = pivot;
     m_yaw = yaw;
     m_pitch = pitch;
     m_distance = distance;
 }
 
-void CameraController::setTarget(glm::vec3 worldPosition, glm::quat worldOrientation) noexcept {
+void CameraController::setTarget(glm::dvec3 worldPosition, glm::quat worldOrientation) noexcept {
     m_targetPos = worldPosition;
     m_targetOri = worldOrientation;
 }
 
 CameraView CameraController::view(float aspectRatio, float fovY, float near) const {
-    glm::vec3 camWorldPos;
-    glm::vec3 lookTarget;
+    glm::dvec3 camWorldPos;
+    glm::dvec3 lookTarget;
 
     if (m_mode == CameraMode::Chase) {
         // Position camera behind and above the target entity.
@@ -40,15 +40,15 @@ CameraView CameraController::view(float aspectRatio, float fovY, float near) con
         glm::vec3 localBack{0.0f, 0.0f, kChaseBack};
         glm::vec3 worldBack = m_targetOri * localBack;
         glm::vec3 worldUp{0.0f, kChaseUp, 0.0f};
-        camWorldPos = m_targetPos + worldBack + worldUp;
+        camWorldPos = m_targetPos + glm::dvec3(worldBack) + glm::dvec3(worldUp);
         lookTarget = m_targetPos;
     } else {
         // Spherical orbit around pivot.
         float yawRad = glm::radians(m_yaw);
         float pitchRad = glm::radians(m_pitch);
         float cosP = std::cos(pitchRad);
-        camWorldPos = m_pivot + glm::vec3(std::sin(yawRad) * cosP * m_distance, std::sin(pitchRad) * m_distance,
-                                          std::cos(yawRad) * cosP * m_distance);
+        camWorldPos = m_pivot + glm::dvec3(std::sin(yawRad) * cosP * m_distance, std::sin(pitchRad) * m_distance,
+                                           std::cos(yawRad) * cosP * m_distance);
         lookTarget = m_pivot;
     }
 
@@ -56,7 +56,8 @@ CameraView CameraController::view(float aspectRatio, float fovY, float near) con
     cv.worldOrigin = camWorldPos;
 
     // Camera-relative view: camera sits at origin in camera-relative world space.
-    cv.view = glm::lookAt(glm::vec3(0.0f), lookTarget - camWorldPos, glm::vec3(0.0f, 1.0f, 0.0f));
+    // lookTarget - camWorldPos is always a small offset (≤ kChaseBack or orbit radius) — safe to narrow.
+    cv.view = glm::lookAt(glm::vec3(0.0f), glm::vec3(lookTarget - camWorldPos), glm::vec3(0.0f, 1.0f, 0.0f));
 
     // Infinite reverse-Z perspective with Vulkan clip-space Y-flip.
     // near plane → depth 1.0; far (∞) → depth 0.0.
