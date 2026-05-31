@@ -78,7 +78,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: |
           New-Item -ItemType Directory -Force dist\shaders | Out-Null
-          $tools = @("validate-flight-model","validate-mission","validate-mesh","tex-compress","validate-licenses")
+          $tools = @("validate-flight-model","validate-mission","validate-mesh","tex-compress","validate-licenses","validate-playlist")
           foreach ($t in $tools) {
             $src = "build\${{ matrix.preset }}\tools\Release\$t.exe"
             if (Test-Path $src) { Copy-Item $src dist\ }
