@@ -92,6 +92,8 @@ add_library(engine-render STATIC
     render/BuiltinGeometry.cpp
     render/TerrainChunkIO.cpp
     render/ProceduralTerrainChunk.cpp
+    render/TerrainMeshBuilder.cpp
+    render/TerrainStreamer.cpp
 )
 
 target_include_directories(engine-render PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR})

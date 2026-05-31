@@ -4,6 +4,7 @@
 #include "render/ParticleSystem.h"
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
+#include "render/TerrainStreamer.h"
 
 #include "audio/SubtitleQueue.h"
 #include "content/AssetManager.h"
@@ -30,6 +31,10 @@ void SceneRenderer::setDrawDistance(float distanceKm) noexcept {
 
 void SceneRenderer::setBuiltinFloor(bool show) noexcept {
     m_showBuiltinFloor = show;
+}
+
+void SceneRenderer::setTerrainStreamer(TerrainStreamer* ts) noexcept {
+    m_terrainStreamer = ts;
 }
 
 void SceneRenderer::ensureBuiltins() {
@@ -185,6 +190,12 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
         float db = tb.x * tb.x + tb.y * tb.y + tb.z * tb.z;
         return da < db;
     });
+
+    // Terrain chunks — appended after entity sort, before the fallback floor plane.
+    if (m_terrainStreamer) {
+        auto terrainItems = m_terrainStreamer->getRenderItems(camera.worldOrigin);
+        m_items.insert(m_items.end(), terrainItems.begin(), terrainItems.end());
+    }
 
     // Builtin floor plane — appended after sort so it sits at the back of the opaque list.
     // Camera-relative rebase: floor is at world origin, so relPos = -camera.worldOrigin.

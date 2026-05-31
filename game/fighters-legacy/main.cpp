@@ -26,12 +26,15 @@
 #include "net/WorldBroadcaster.h"
 #include "openal/OALAudio.h"
 #include "perf/PerformanceOverlay.h"
+#include "render/BuiltinGeometry.h"
 #include "render/CameraController.h"
 #include "render/ParticleSystem.h"
 #include "render/RenderSnapshot.h"
 #include "render/SceneRenderer.h"
 #include "render/SimRenderBridge.h"
+#include "render/TerrainStreamer.h"
 #include "sandbox/SandboxInspector.h"
+#include "sdl3/SDL3AsyncFilesystem.h"
 #include "sdl3/SDL3Cursor.h"
 #include "sdl3/SDL3Display.h"
 #include "sdl3/SDL3Filesystem.h"
@@ -243,6 +246,15 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Step 12.5: Async filesystem for terrain chunk streaming.
+    auto asyncFs = std::make_unique<SDL3AsyncFilesystem>(assetsRoot, userDataDir);
+    if (!asyncFs->init()) {
+        rawLogger->log(LogLevel::Error, __FILE__, __LINE__, asyncFs->getLastError());
+        crashReporter.shutdown();
+        return 1;
+    }
+    p.asyncFilesystem = std::move(asyncFs);
+
     // Step 13: Resize handler — forwards window resize events to the renderer.
     struct ResizeHandler : IWindowEventHandler {
         IRenderer* r = nullptr;
@@ -352,6 +364,11 @@ int main(int argc, char** argv) {
     // Apply draw distance from settings (must come after SceneRenderer construction).
     sceneRenderer.setDrawDistance(rendererSettings.drawDistanceKm);
 
+    // Step 17b.3: Terrain streamer — async chunk lifecycle, LOD rings, height queries.
+    fl::TerrainStreamer terrainStreamer(fl::builtinWorldTerrainManifest(), assets, *p.asyncFilesystem,
+                                        p.renderer.get());
+    sceneRenderer.setTerrainStreamer(&terrainStreamer);
+
     // Wire the particle system so damaged entities emit effects each frame.
     // EffectResolver uses the snapshot typeIndex + damageLevel without touching sim-thread state.
     sceneRenderer.setParticleSystem(&particleSystem,
@@ -401,9 +418,6 @@ int main(int argc, char** argv) {
         debugDef.category = fl::ObjectCategory::AirVehicle;
         debugDef.maxHp = 100.0f;
         entityRegistry.registerType(std::move(debugDef));
-
-        // Enable the builtin floor plane (4 km × 4 km flat quad at Y=0).
-        sceneRenderer.setBuiltinFloor(true);
 
         // Orbit the camera south of the formation (yaw=0 = south of pivot), looking north.
         cameraController.setFreeOrbit({0.0, 500.0, 0.0}, 0.0f, -10.0f, 200.0f);
@@ -576,6 +590,10 @@ int main(int argc, char** argv) {
         float aspect =
             static_cast<float>(p.window->width()) / static_cast<float>(p.window->height() > 0 ? p.window->height() : 1);
         CameraView cam = cameraController.view(aspect);
+
+        // Service async I/O and advance terrain chunk lifecycle for this camera position.
+        p.asyncFilesystem->service();
+        terrainStreamer.update(cam.worldOrigin);
 
         // Update audio listener from camera pose each frame.
         // Column-major glm::mat4: view[col][row]. Column 2 = -forward (RH); column 1 = up.
