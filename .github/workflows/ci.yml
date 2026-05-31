@@ -42,7 +42,8 @@ jobs:
           sudo apt-get install -y ninja-build cmake gcc g++ clang clang-format-22 \
             libvulkan-dev glslang-tools \
             libx11-dev libxext-dev \
-            libopenal-dev
+            libopenal-dev \
+            python3-gdal python3-numpy python3-pytest
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -135,3 +136,53 @@ jobs:
 
       - name: Test
         run: ctest --preset ${{ matrix.preset }} --output-on-failure
+
+      - name: Unit test gen_terrain_chunks.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_gen_terrain_chunks.py -v
+
+      - name: Smoke test gen_terrain_chunks.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          python3 tools/gen_terrain_chunks.py --help
+
+          python3 - <<'EOF'
+          from osgeo import gdal, osr
+          import numpy as np
+          ds = gdal.GetDriverByName("GTiff").Create(
+              "/tmp/test_dem.tif", 256, 256, 1, gdal.GDT_Int16)
+          srs = osr.SpatialReference()
+          srs.ImportFromEPSG(4326)
+          ds.SetProjection(srs.ExportToWkt())
+          ds.SetGeoTransform([30.0, 30.0 / 111111.0, 0, 42.0, 0, -30.0 / 111111.0])
+          ds.GetRasterBand(1).WriteArray(
+              np.random.randint(0, 500, (256, 256), dtype=np.int16))
+          ds.FlushCache()
+          EOF
+
+          python3 tools/gen_terrain_chunks.py \
+            --input /tmp/test_dem.tif \
+            --terrain-id world \
+            --chunk-size-m 15360 \
+            --grid-width 1 --grid-height 1 \
+            --srs EPSG:32637 \
+            --workers 1 \
+            --output-dir /tmp/terrain-out \
+            --write-manifest
+
+          python3 - <<'EOF'
+          from osgeo import gdal
+          import json, sys
+          for lod, (w, h) in enumerate([(513, 513), (257, 257), (129, 129)]):
+              ds = gdal.Open(f"/tmp/terrain-out/terrain/world/lod{lod}/chunk_0000_0000.png")
+              assert ds is not None, f"lod{lod} chunk missing"
+              assert ds.RasterXSize == w and ds.RasterYSize == h, \
+                  f"lod{lod}: expected {w}x{h}, got {ds.RasterXSize}x{ds.RasterYSize}"
+              assert ds.GetRasterBand(1).DataType == 2, \
+                  f"lod{lod}: expected GDT_UInt16 (2), got {ds.GetRasterBand(1).DataType}"
+          m = json.load(open("/tmp/terrain-out/terrain/world.json"))
+          assert m["chunk_size_m"] == 15360
+          assert m["grid_width"] == 1 and m["grid_height"] == 1
+          assert m["lod_levels"] == 3
+          print("OK: all chunk sizes, dtypes, and manifest fields correct")
+          EOF

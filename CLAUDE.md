@@ -18,8 +18,8 @@ platform/RenderTypes.h — GPU-agnostic scene types shared across the HAL bounda
 server/         — dedicated server binary
 server/fl-server/ — fl-server: authoritative headless game server (owns GameLoop + EntityManager)
 game/           — fighters-legacy game binary (ENet client connecting to embedded fl-server in single-player)
-tools/          — developer utilities; asset pipeline (validate-flight-model, validate-mission, validate-licenses, validate-mesh, tex-compress); net_check (ENet smoke-test); blender_gen.py
-tests/          — Catch2 unit tests
+tools/          — developer utilities; asset pipeline (validate-flight-model, validate-mission, validate-licenses, validate-mesh, tex-compress); net_check (ENet smoke-test); blender_gen.py; gen_terrain_chunks.py
+tests/          — Catch2 unit tests (C++); pytest unit tests for Python tools (test_gen_terrain_chunks.py)
 ```
 
 The engine is fully content-agnostic. It knows nothing about FA or any specific game.
@@ -151,7 +151,9 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 <!-- REUSE-IgnoreStart -->
 - SPDX header required on all new .cpp/.h files: `// SPDX-License-Identifier: GPL-3.0-or-later`
 - Shader files (`.vert`, `.frag`, `.comp`, `.glsl`) are covered by REUSE.toml — no inline SPDX needed, but **add any new shader extension to REUSE.toml** or the REUSE CI step will fail.
+- Python scripts (`.py`) are NOT covered by REUSE.toml — every new `.py` file needs inline `# SPDX-FileCopyrightText:` + `# SPDX-License-Identifier:` headers or REUSE CI fails.
 <!-- REUSE-IgnoreEnd -->
+- Python tool conventions: guard GDAL/heavy imports with `try/except ImportError` so `--help` and pytest unit tests work without the system package installed; unit-test pure-Python logic (no I/O, no GDAL) in `tests/test_<tool>.py` using pytest; add the system package + `python3-pytest` to the Ubuntu CI install step and add both a `pytest` unit-test step and a GDAL synthetic-fixture smoke test step (Ubuntu only).
 - All code must compile on Windows (MSVC 2022), Linux (GCC/Clang), macOS (Apple Clang)
 - `CMAKE_COMPILE_WARNING_AS_ERROR=ON` in debug builds — fix all warnings
 
@@ -178,3 +180,4 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 - `cmake/dependencies.cmake` — all FetchContent declarations; GLM is unconditional, Vulkan-specific deps are gated on `Vulkan_FOUND`
 - `platform/vulkan/VkRendererFactory.h` — thin factory header; only include needed by game/tools to instantiate the renderer
 - `tools/blender_gen.py` — headless Blender 4.x parametric aircraft mesh generator; `blender --background --python tools/blender_gen.py -- --id <id> --output-dir <dir> [--wing-style delta|swept|straight] [--lod] [--bake-textures]`; outputs `<id>.glb` (clean + `_b` node), `<id>_dmg.glb`, optional LODs + PNGs; `.ktx2` URIs pre-wired in GLB JSON for tex-compress
+- `tools/gen_terrain_chunks.py` — GDAL-based terrain chunk pipeline (#176); converts any GeoTIFF/VRT to 16-bit grayscale PNG chunks at `terrain/<id>/lod<n>/chunk_<xxxx>_<yyyy>.png`; auto-detects UTM CRS from centroid (or `--srs EPSG:NNNNN`); 3 LOD levels via strided subsampling; parallel via `ProcessPoolExecutor` (`--workers N`); `--write-manifest` outputs `terrain/<id>.json`; `--skip-existing` for resumable planet-scale runs. Install: `apt install python3-gdal`. Tests: `tests/test_gen_terrain_chunks.py`.
