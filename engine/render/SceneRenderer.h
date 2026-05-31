@@ -15,6 +15,7 @@ class SubtitleQueue;
 namespace fl {
 class ParticleSystem;
 class SimRenderBridge;
+class TerrainStreamer;
 } // namespace fl
 
 namespace fl {
@@ -68,6 +69,10 @@ class SceneRenderer {
     // as the last opaque RenderItem.  Uses the builtin olive-gray floor material.
     void setBuiltinFloor(bool show) noexcept;
 
+    // Optional: wire a TerrainStreamer to append terrain chunk RenderItems to every
+    // frame. Pass nullptr to disable (default). Streamer must outlive SceneRenderer.
+    void setTerrainStreamer(TerrainStreamer* ts) noexcept;
+
   private:
     MeshHandle getOrUploadMesh(const std::string& name);
     MaterialHandle getOrUploadMaterial(const std::string& meshName);
@@ -107,6 +112,7 @@ class SceneRenderer {
     MeshHandle m_builtinFloorMesh{};
     MaterialHandle m_builtinFloorMat{};
     bool m_showBuiltinFloor{false};
+    TerrainStreamer* m_terrainStreamer{nullptr};
 };
 
 } // namespace fl

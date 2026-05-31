@@ -281,3 +281,8 @@ add_executable(test_terrain_chunk_io test_terrain_chunk_io.cpp)
 target_link_libraries(test_terrain_chunk_io PRIVATE Catch2::Catch2WithMain engine-render)
 target_include_directories(test_terrain_chunk_io PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_terrain_chunk_io)
+
+add_executable(test_terrain_streamer test_terrain_streamer.cpp)
+target_link_libraries(test_terrain_streamer PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_terrain_streamer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_terrain_streamer)
