@@ -2,7 +2,7 @@
 if(TARGET platform-sdl3 AND TARGET platform-vulkan)
     add_executable(hello_triangle hello_triangle/main.cpp)
     target_link_libraries(hello_triangle
-        PRIVATE platform-sdl3 platform-vulkan platform-hal engine-render SDL3::SDL3 Vulkan::Vulkan
+        PRIVATE platform-sdl3 platform-vulkan platform-hal engine-render Vulkan::Vulkan
     )
     # engine-render: adds the engine/ include root (for render/BuiltinGeometry.h) and
     # transitively links platform-hal + GLM.  engine-content is a PRIVATE dep of
@@ -17,7 +17,7 @@ endif()
 
 if(TARGET platform-sdl3)
     add_executable(input_check input_check/main.cpp)
-    target_link_libraries(input_check PRIVATE platform-sdl3 platform-hal SDL3::SDL3)
+    target_link_libraries(input_check PRIVATE platform-sdl3 platform-hal)
     target_include_directories(input_check PRIVATE
         "${CMAKE_SOURCE_DIR}/platform/sdl3"
     )
@@ -25,7 +25,7 @@ endif()
 
 if(TARGET platform-openal)
     add_executable(audio_check audio_check/main.cpp)
-    target_link_libraries(audio_check PRIVATE platform-openal engine-audio OpenAL::OpenAL)
+    target_link_libraries(audio_check PRIVATE platform-openal engine-audio)
     target_include_directories(audio_check PRIVATE
         "${CMAKE_SOURCE_DIR}/platform/openal"
     )
@@ -45,7 +45,6 @@ if(TARGET platform-enet)
     target_link_libraries(net_check PRIVATE platform-enet platform-hal)
     target_include_directories(net_check PRIVATE
         "${CMAKE_SOURCE_DIR}/platform/net"
-        "${enet_SOURCE_DIR}/include"
     )
 
     if(MSVC)

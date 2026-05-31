@@ -395,7 +395,7 @@ TEST_CASE("server full rejects new connection", "[network][integration]") {
     REQUIRE(s1.countType(Event::Type::Connect) == 1);
 
     REQUIRE(c2.connect("127.0.0.1", 19010));
-    // Pump 100 × 10 ms = 1 s — enough to see if the server accepted a second peer.
+    // Pump 100 x 10 ms = 1 s -- enough to see if the server accepted a second peer.
     pumpN(server, {&c1, &c2}, 100);
 
     CHECK(srvSink.countType(Event::Type::Connect) == 1);
@@ -404,4 +404,128 @@ TEST_CASE("server full rejects new connection", "[network][integration]") {
     server.shutdown();
     c1.shutdown();
     c2.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// IPv6 dual-stack (enet6)
+// Ports 19021-19024 are reserved for these tests.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("IPv6 loopback round-trip", "[network][integration]") {
+    ENetNetwork server, client;
+    EventSink srvSink, cliSink;
+    REQUIRE(server.init());
+    REQUIRE(client.init());
+    server.setEventHandler(&srvSink);
+    client.setEventHandler(&cliSink);
+
+    REQUIRE(server.bind("::", 19021, 4));
+    REQUIRE(client.connect("::1", 19021));
+
+    pump(server, client, 20);
+
+    REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
+    REQUIRE(cliSink.countType(Event::Type::Connect) == 1);
+
+    const uint8_t payload[] = {0x69, 0x70, 0x76, 0x36};
+    REQUIRE(client.send(0, payload, sizeof(payload), true));
+    pump(server, client, 20);
+
+    REQUIRE(srvSink.countType(Event::Type::Receive) == 1);
+    const auto& ev = srvSink.events.back();
+    REQUIRE(ev.data.size() == sizeof(payload));
+    CHECK(std::memcmp(ev.data.data(), payload, sizeof(payload)) == 0);
+
+    server.shutdown();
+    client.shutdown();
+}
+
+TEST_CASE("getPeerAddress bracket notation for IPv6 peer", "[network][integration]") {
+    ENetNetwork server, client;
+    EventSink srvSink, cliSink;
+    REQUIRE(server.init());
+    REQUIRE(client.init());
+    server.setEventHandler(&srvSink);
+    client.setEventHandler(&cliSink);
+
+    REQUIRE(server.bind("::", 19022, 4));
+    REQUIRE(client.connect("::1", 19022));
+
+    pump(server, client, 20);
+
+    REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
+
+    const char* addr = server.getPeerAddress(0);
+    REQUIRE(addr != nullptr);
+    const std::string addrStr(addr);
+    // IPv6 peers must use bracket notation: [::1]:port
+    CHECK(addrStr.front() == '[');
+    CHECK(addrStr.find("]:") != std::string::npos);
+
+    server.shutdown();
+    client.shutdown();
+}
+
+TEST_CASE("dual-stack: IPv4 client connects to :: server", "[network][integration]") {
+    // Acceptance criterion from #180: fl-server bound on :: must accept IPv4 clients.
+    // On Windows, IPV6_V6ONLY may default to 1 (IPv6-only); skip if enet6 does not
+    // set IPV6_V6ONLY=0 automatically.
+    ENetNetwork server, client;
+    EventSink srvSink, cliSink;
+    REQUIRE(server.init());
+    REQUIRE(client.init());
+    server.setEventHandler(&srvSink);
+    client.setEventHandler(&cliSink);
+
+    REQUIRE(server.bind("::", 19023, 4));
+    REQUIRE(client.connect("127.0.0.1", 19023));
+
+    pump(server, client, 50);
+
+    // On platforms where dual-stack works the server sees an IPv4-mapped peer.
+    if (srvSink.countType(Event::Type::Connect) == 0) {
+        // Dual-stack not available on this platform/configuration -- skip gracefully.
+        server.shutdown();
+        client.shutdown();
+        SKIP("dual-stack IPv4-mapped not available on this platform");
+    }
+
+    REQUIRE(cliSink.countType(Event::Type::Connect) == 1);
+
+    const uint8_t payload[] = {0xD5};
+    REQUIRE(client.send(0, payload, 1, true));
+    pump(server, client, 20);
+
+    REQUIRE(srvSink.countType(Event::Type::Receive) == 1);
+    CHECK(srvSink.events.back().data[0] == 0xD5);
+
+    server.shutdown();
+    client.shutdown();
+}
+
+TEST_CASE("getPeerAddress plain format preserved for IPv4 peer", "[network][integration]") {
+    // Regression: enet6 upgrade must not add brackets to IPv4 peer addresses.
+    ENetNetwork server, client;
+    EventSink srvSink, cliSink;
+    REQUIRE(server.init());
+    REQUIRE(client.init());
+    server.setEventHandler(&srvSink);
+    client.setEventHandler(&cliSink);
+
+    REQUIRE(server.bind(nullptr, 19024, 4));
+    REQUIRE(client.connect("127.0.0.1", 19024));
+
+    pump(server, client, 20);
+
+    REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
+
+    const char* addr = server.getPeerAddress(0);
+    REQUIRE(addr != nullptr);
+    const std::string addrStr(addr);
+    // IPv4 address must be plain dotted-decimal: no leading bracket.
+    CHECK(addrStr.front() != '[');
+    CHECK(addrStr.find("127.0.0.1") != std::string::npos);
+
+    server.shutdown();
+    client.shutdown();
 }

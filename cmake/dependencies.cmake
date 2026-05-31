@@ -55,12 +55,13 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# ENet — FetchContent (no reliable cross-platform system package for 2.x)
-# Declared here; platform/net calls FetchContent_MakeAvailable(enet)
+# enet6 — FetchContent (no reliable cross-platform system package)
+# IPv4+IPv6 dual-stack fork of ENet; MIT licensed. Declared here;
+# platform/net calls FetchContent_MakeAvailable(enet6).
 # ---------------------------------------------------------------------------
-FetchContent_Declare(enet
-    GIT_REPOSITORY https://github.com/lsalzman/enet.git
-    GIT_TAG        v1.3.17
+FetchContent_Declare(enet6
+    GIT_REPOSITORY https://github.com/SirLynix/enet6.git
+    GIT_TAG        v6.1.3
     GIT_SHALLOW    TRUE
     SYSTEM
 )

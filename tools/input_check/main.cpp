@@ -4,15 +4,16 @@
 #define NOMINMAX
 #endif
 
+#include "IInput.h"
+#include "IWindow.h"
 #include "IWindowEventHandler.h"
-#include "Platform.h"
-#include "SDL3Input.h"
-#include "SDL3Window.h"
-#include <SDL3/SDL.h>
+#include "SDL3Factory.h"
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <memory>
+#include <thread>
 
 static std::atomic<bool> g_quit{false};
 static void onSignal(int) {
@@ -90,7 +91,7 @@ static const char* axisLabel(GamepadAxis a) {
 
 class App : public IWindowEventHandler {
   public:
-    explicit App(SDL3Window& window, SDL3Input& input) : m_window(window), m_input(input) {}
+    explicit App(IWindow& window, IInput& input) : m_window(window), m_input(input) {}
 
     void onResize(int, int) override {}
     void onClose() override {
@@ -98,19 +99,17 @@ class App : public IWindowEventHandler {
     }
 
     int run() {
-        SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
         if (!m_window.init("Fighters Legacy — Input Test", 640, 120)) {
             std::fprintf(stderr, "window init failed: %s\n", m_window.getLastError());
             return 1;
         }
         m_window.setEventHandler(this);
-        m_window.setInputSink(&m_input);
 
         while (m_running && !m_window.shouldClose() && !g_quit) {
             m_window.pollEvents();
             render();
             m_input.flush();
-            SDL_Delay(16); // ~60 Hz
+            std::this_thread::sleep_for(std::chrono::milliseconds(16)); // ~60 Hz
         }
 
         m_window.shutdown();
@@ -119,7 +118,6 @@ class App : public IWindowEventHandler {
 
   private:
     void render() {
-        // Check for rumble triggers before clearing screen
         if (m_input.getGamepadCount() > 0) {
             if (m_input.isGamepadButtonJustPressed(0, GamepadButton::A))
                 m_input.rumble(0, 0.5f, 0.5f, 300);
@@ -129,11 +127,9 @@ class App : public IWindowEventHandler {
                 m_input.stopRumble(0);
         }
 
-        // Check exit
         if (m_input.isKeyJustPressed(Key::Escape))
             m_running = false;
 
-        // Clear terminal and print state
         std::printf("\033[2J\033[H");
         std::printf("=== Fighters Legacy — Input Test ===\n");
         std::printf("Esc=quit  A=body rumble  B=trigger rumble  X=stop rumble\n\n");
@@ -143,13 +139,9 @@ class App : public IWindowEventHandler {
             std::printf("No gamepads connected.\n");
         }
         for (int gp = 0; gp < gpCount; ++gp) {
-            // SDL_GetGamepadName requires the SDL_Gamepad* handle; we can query it
-            // via the SDL API directly using the instance IDs. For the tool we just
-            // print the index.
             std::printf("--- Gamepad %d  rumble:%s  trigger-rumble:%s ---\n", gp,
                         m_input.supportsRumble(gp) ? "yes" : "no", m_input.supportsTriggerRumble(gp) ? "yes" : "no");
 
-            // Buttons
             std::printf("Buttons: ");
             for (int b = 0; b < static_cast<int>(GamepadButton::Count); ++b) {
                 bool pressed = m_input.isGamepadButtonDown(gp, static_cast<GamepadButton>(b));
@@ -157,7 +149,6 @@ class App : public IWindowEventHandler {
             }
             std::printf("\n");
 
-            // Axes
             for (int a = 0; a < static_cast<int>(GamepadAxis::Count); ++a) {
                 float v = m_input.getGamepadAxis(gp, static_cast<GamepadAxis>(a));
                 std::printf("%s ", axisLabel(static_cast<GamepadAxis>(a)));
@@ -166,7 +157,6 @@ class App : public IWindowEventHandler {
             }
         }
 
-        // Mouse
         int mx, my, dx, dy;
         m_input.getMousePosition(mx, my);
         m_input.getMouseDelta(dx, dy);
@@ -178,8 +168,8 @@ class App : public IWindowEventHandler {
         std::fflush(stdout);
     }
 
-    SDL3Window& m_window;
-    SDL3Input& m_input;
+    IWindow& m_window;
+    IInput& m_input;
     bool m_running{true};
 };
 
@@ -187,7 +177,7 @@ int main() {
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
 
-    SDL3Window window;
-    SDL3Input input;
-    return App(window, input).run();
+    auto wi = createSDL3WindowInput();
+    App app(*wi.window, *wi.input);
+    return app.run();
 }

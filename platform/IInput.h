@@ -78,6 +78,10 @@ enum class Key : uint32_t {
     F11,
     F12,
 
+    // Punctuation / symbol keys
+    Minus,  // - / _
+    Equals, // = / +
+
     // Modifiers
     LeftShift,
     RightShift,

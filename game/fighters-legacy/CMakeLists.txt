@@ -25,7 +25,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         "${CMAKE_SOURCE_DIR}/platform/vulkan"
         "${CMAKE_SOURCE_DIR}/platform/sdl3"
         "${CMAKE_SOURCE_DIR}/platform/net"
-        "${enet_SOURCE_DIR}/include")
+        "${enet6_SOURCE_DIR}/include")
     if(WIN32)
         target_link_libraries(fighters-legacy PRIVATE ws2_32 winmm)
     endif()

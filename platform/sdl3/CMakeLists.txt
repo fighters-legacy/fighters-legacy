@@ -11,7 +11,7 @@ endif()
 
 find_package(Threads REQUIRED)
 
-add_library(platform-sdl3 STATIC SDL3Window.cpp SDL3Input.cpp SDL3Joystick.cpp SDL3Filesystem.cpp SDL3AsyncFilesystem.cpp SDL3Display.cpp SDL3Cursor.cpp)
+add_library(platform-sdl3 STATIC SDL3Window.cpp SDL3Input.cpp SDL3Joystick.cpp SDL3Filesystem.cpp SDL3AsyncFilesystem.cpp SDL3Display.cpp SDL3Cursor.cpp SDL3Factory.cpp)
 target_link_libraries(platform-sdl3
     PUBLIC  platform-hal
     PRIVATE SDL3::SDL3 Threads::Threads

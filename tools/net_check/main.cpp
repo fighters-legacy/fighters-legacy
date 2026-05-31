@@ -7,7 +7,7 @@
 // Connects to fl-server, sends periodic "net_check ping N" packets, then
 // disconnects cleanly. Intended for manual smoke-testing of the ENet backend
 // alongside fl-server; not a production binary.
-#include "ENetNetwork.h"
+#include "ENetNetworkFactory.h"
 #include <ILogger.h>
 #include <Platform.h>
 #include <chrono>
@@ -15,7 +15,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <enet/enet.h>
 #include <memory>
 #include <string>
 
@@ -111,8 +110,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {
-            std::printf("net_check %s (ENet %d.%d.%d)\n", kVersion, ENET_VERSION_MAJOR, ENET_VERSION_MINOR,
-                        ENET_VERSION_PATCH);
+            std::printf("net_check %s (%s)\n", kVersion, enetLibraryVersion());
             return 0;
         }
         if ((std::strcmp(argv[i], "--count") == 0 || std::strcmp(argv[i], "-n") == 0) && i + 1 < argc) {
@@ -146,7 +144,7 @@ int main(int argc, char** argv) {
     // ---- Set up platform ----
     Platform p;
     p.logger = std::make_unique<StdoutLogger>();
-    p.network = std::make_unique<ENetNetwork>();
+    p.network = createENetNetwork();
 
     ILogger* log = p.logger.get();
     INetwork* net = p.network.get();
