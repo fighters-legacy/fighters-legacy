@@ -276,3 +276,8 @@ catch_discover_tests(test_performance_overlay)
 add_executable(test_world_broadcaster test_world_broadcaster.cpp)
 target_link_libraries(test_world_broadcaster PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_world_broadcaster)
+
+add_executable(test_terrain_chunk_io test_terrain_chunk_io.cpp)
+target_link_libraries(test_terrain_chunk_io PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_terrain_chunk_io PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_terrain_chunk_io)

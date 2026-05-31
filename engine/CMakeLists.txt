@@ -90,9 +90,19 @@ add_library(engine-render STATIC
     render/SceneRenderer.cpp
     render/ParticleSystem.cpp
     render/BuiltinGeometry.cpp
+    render/TerrainChunkIO.cpp
+    render/ProceduralTerrainChunk.cpp
 )
 
-target_include_directories(engine-render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(engine-render PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(engine-render PRIVATE "${stb_SOURCE_DIR}")
+
+# TerrainChunkIO.cpp defines STB_IMAGE_STATIC which makes all stb symbols TU-local;
+# the unused-function warnings on the stb_image.h internal helpers would fail
+# -Werror — suppress them with -w, matching the pattern used for ogg_impl.c.
+set_source_files_properties(render/TerrainChunkIO.cpp PROPERTIES
+    COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/W0,-w>"
+)
 
 target_link_libraries(engine-render
     PUBLIC  platform-hal

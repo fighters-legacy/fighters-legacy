@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "render/TerrainManifest.h"
+
 #include <cstdint>
 #include <span>
 
@@ -22,5 +24,11 @@ std::span<const uint8_t> builtinFloorPlaneGlb() noexcept;
 // Individual faces of the tetrahedron — one triangle each, for per-face coloring.
 // face 0: red   face 1: green   face 2: blue   face 3: yellow
 std::span<const uint8_t> builtinTetrahedronFaceGlb(int face) noexcept; // face in [0,3]
+
+// TerrainManifest for the builtin procedural world.
+// The terrain grid is centered on engine origin (0, 0): originX = originZ = -7680 m
+// (= -0.5 * chunkSizeM), placing the centre of chunk [0,0] at engine (0, 0).
+// gridWidth = gridHeight = -1 (unbounded — procedural generation covers any chunk).
+TerrainManifest builtinWorldTerrainManifest() noexcept;
 
 } // namespace fl

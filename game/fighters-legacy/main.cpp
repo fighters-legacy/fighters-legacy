@@ -131,6 +131,11 @@ struct ClientNetEventHandler : INetworkEventHandler {
     }
 };
 
+// Engine world origin = spawn point. Terrain grid is centred here (originX/Z = -7680).
+// Y is a conservative pre-load altitude; TerrainStreamer::heightAt(0,0) replaces it
+// once the first LOD-0 chunk is available (#173).
+[[maybe_unused]] static constexpr glm::dvec3 kBuiltinSpawnPos{0.0, 570.0, 0.0};
+
 int main(int argc, char** argv) {
     // Step 0: Early flag handling — before any platform init so they work
     // even when SDL/Vulkan are absent.

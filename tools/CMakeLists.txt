@@ -124,3 +124,8 @@ if(MSVC)
     target_compile_definitions(tex-compress     PRIVATE _CRT_SECURE_NO_WARNINGS)
     target_compile_definitions(tex-compress-lib PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
+
+# terrain-chunk-io: encode/decode terrain chunks and generate procedural chunks.
+# Unconditional — no Vulkan or SDL3 dependency required.
+add_executable(terrain-chunk-io terrain-chunk-io/main.cpp)
+target_link_libraries(terrain-chunk-io PRIVATE engine-render)
