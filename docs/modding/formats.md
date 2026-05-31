@@ -394,17 +394,20 @@ story:
 ## Terrain — Streaming Heightmap Chunks + JSON
 
 - Grid of fixed-size PNG chunks; any grid dimension (no 32×32 cap)
-- Each chunk: 513×513 pixels, 16-bit grayscale
-- Chunks loaded/unloaded at runtime based on player position
+- Each chunk: 513×513 pixels, 16-bit grayscale; 15,360 m per chunk (512 intervals × 30 m, matching Copernicus GLO-30 resolution)
+- Three LOD levels: LOD 0 = 513×513, LOD 1 = 257×257, LOD 2 = 129×129
+- Chunk path convention: `terrain/<id>/lod<n>/chunk_<x>_<y>.png` (4-digit zero-padded coordinates, e.g. `chunk_0002_0007.png`)
+- Chunks loaded/unloaded at runtime based on player position; theater content packs override individual chunks at higher mod priority
 
 ```json
 {
   "name": "Ukraine",
-  "chunk_size_ft": 6076,
+  "chunk_size_m": 15360,
+  "lod_levels": 3,
   "grid_width": 64,
   "grid_height": 64,
   "elevation_scale": 10,
-  "chunks_dir": "terrain/ukraine/",
+  "chunks_dir": "terrain/world/",
   "surface_classes_dir": "terrain/ukraine_surface/",
   "textures": {
     "0": "terrain_grass.ktx2",
