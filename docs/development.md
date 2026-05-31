@@ -38,6 +38,12 @@ sudo apt-get install -y cmake ninja-build gcc g++ clang clang-format \
 1. Install [Visual Studio 2022](https://visualstudio.microsoft.com/) with the **Desktop development with C++** workload
 2. Install the [Vulkan SDK](https://vulkan.lunarg.com/) (1.3 or later) — includes `glslangValidator`, `VK_LAYER_KHRONOS_validation`, and MoltenVK support headers
 3. Optional: install Ninja via `winget install Ninja-build.Ninja` (faster incremental builds)
+4. **clang-format-22**: CI pins clang-format-22 (LLVM 22). Install via:
+   ```powershell
+   winget install LLVM.LLVM
+   ```
+   or download the installer from [releases.llvm.org](https://releases.llvm.org/). Add the LLVM `bin/` directory to `PATH`.
+5. **Pre-commit hook**: `scripts/hooks/pre-commit` is a bash script. On Windows it must be run via **Git Bash** or **WSL** — it will not work in PowerShell or cmd. The DCO commit-msg hook has the same requirement.
 
 ### macOS (Apple Silicon, 13+)
 
@@ -246,7 +252,7 @@ The `game/` directory holds game binary entry points. The `server/` directory ho
 | MoltenVK | bundled with Vulkan SDK | LunarG (macOS) |
 | SDL3 | latest | FetchContent or system |
 | OpenAL Soft | 1.24+ | FetchContent or system |
-| ENet | 2.x | FetchContent |
+| ENet | 1.3.x (lsalzman/enet, v1.3.17) | FetchContent |
 | Catch2 | 3.x | FetchContent |
 | tomlplusplus | 3.4+ | FetchContent or system |
 | GLM | 1.0+ | FetchContent or system |

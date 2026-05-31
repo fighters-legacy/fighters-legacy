@@ -32,8 +32,9 @@ class INetwork {
     // --- Server side ---
 
     // Creates a host listening on the given address:port with up to maxClients peers.
-    // address: dotted-decimal IPv4 string, or nullptr / "0.0.0.0" for ENET_HOST_ANY.
-    // Use "127.0.0.1" for single-player / localhost-only servers.
+    // address: IPv4 dotted-decimal ("0.0.0.0" for any), IPv6 literal ("::1"),
+    //          "::" for dual-stack any, or nullptr for platform default.
+    // Use "127.0.0.1" / "::1" for single-player / localhost-only servers.
     virtual bool bind(const char* address, uint16_t port, int maxClients) = 0;
 
     // --- Client side ---
