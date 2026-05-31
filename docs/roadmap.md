@@ -60,6 +60,25 @@ Total estimated duration: **~48–56 weeks** of focused work.
 
 ### Phase 2 — Modern-Particles Engine
 
+Phase 2 acceptance is the **standalone playable sandbox** — no content pack required.
+
+- Game binary boots cleanly with zero content packs installed.
+- Player reaches free-flight in the sandbox in under 30 seconds; no crash; no error modal.
+- Builtin aircraft is flyable (pitch/roll/yaw respond, climbs/descends, throttle works).
+- Builtin terrain renders via `TerrainStreamer` fallback; `heightAt()` returns valid elevations.
+- HUD renders in minimal mode (altitude, airspeed, heading, throttle %).
+- Main menu shows "Sandbox (no pack)" entry when no content pack is detected.
+- World positions are double-precision throughout; no float precision errors at large scale.
+- GPU particles render for explosion / smoke / fire.
+- Authoritative fl-server + ENet client networking operational on all three platforms.
+- Wire protocol documented (`docs/network-protocol.md`).
+- enet6 backend active; fl-server binds on `::` dual-stack.
+- CI green on all three platforms (debug, debug-msvc, macOS).
+
+### Phase 2b — Content & Gameplay Systems
+
+Phase 2b acceptance requires a content pack (fl-base-pack) and is gated on Phase 2 completion.
+
 - A fl-base-pack mission loads and runs to completion via `ModLoader`.
 - Flight model stall speed + fuel burn match design spec for each fl-base-pack aircraft type.
 - Radar lock, missile fire, and countermeasure sequence works per fl-base-pack weapon definitions.
@@ -70,8 +89,8 @@ Total estimated duration: **~48–56 weeks** of focused work.
 - Sandbox mode: configurable start, no win condition, session saves and resumes.
 - Game Master: entity spawn/despawn and weather change take effect in running session.
 - Replay: mission records and plays back from cockpit and free-camera views.
-- GPU particles render for explosion / smoke / fire.
 - Multiplayer: two clients on fl-server complete a cooperative strike mission.
+- Lua scripting API documented (`docs/modding/ai.md`).
 - CI green on all three platforms.
 
 ### Phase 4 — In-Game Mission Editor
