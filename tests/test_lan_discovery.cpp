@@ -254,7 +254,7 @@ TEST_CASE("DiscoveryListener deduplicates repeated beacons from same server", "[
     pkt.gamePort = 19200;
     pkt.playerCount = 2;
     pkt.maxPlayers = 8;
-    std::strncpy(pkt.name, "dup-server", sizeof(pkt.name) - 1);
+    std::snprintf(pkt.name, sizeof(pkt.name), "%s", "dup-server");
 
     uint8_t buf[sizeof(fl::MsgLanBeacon)];
     std::memcpy(buf, &pkt, sizeof(pkt));
