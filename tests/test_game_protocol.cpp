@@ -5,6 +5,7 @@
 #include <cstring>
 
 TEST_CASE("GameProtocol: packed struct sizes match wire format", "[game_protocol]") {
+    CHECK(sizeof(fl::MsgHello) == 4u);
     CHECK(sizeof(fl::MsgConnectAck) == 12u);     // extended: +assignedEntityIdx/Gen
     CHECK(sizeof(fl::MsgEntityTypeDef) == 196u); // 4 + 64 + 64 + 64
     CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 12u);
@@ -18,7 +19,7 @@ TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
 
     fl::MsgWorldSnapshotHeader hdr;
     hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
-    hdr._pad = 0;
+    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
     hdr.entityCount = kCount;
     hdr.tickIndex = 42u;
 
@@ -52,6 +53,7 @@ TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
     std::memcpy(&parsedHdr, buf.data(), sizeof(parsedHdr));
 
     CHECK(parsedHdr.msgId == static_cast<uint8_t>(fl::MsgId::WorldSnapshot));
+    CHECK(parsedHdr.protocolVersion == static_cast<uint8_t>(fl::kProtocolVersion));
     CHECK(parsedHdr.entityCount == kCount);
     CHECK(parsedHdr.tickIndex == 42u);
 
@@ -140,6 +142,7 @@ TEST_CASE("GameProtocol: MsgClientInput round-trip", "[game_protocol]") {
 
     CHECK(parsed.msgId == static_cast<uint8_t>(fl::MsgId::ClientInput));
     CHECK(parsed.buttons == 0x03u);
+    CHECK(parsed.protocolVersion == fl::kProtocolVersion);
     CHECK(parsed.seqNum == 12345u);
     CHECK(parsed.tickIndex == 9999u);
     CHECK(parsed.throttle == 0.75f);
@@ -149,4 +152,17 @@ TEST_CASE("GameProtocol: MsgClientInput round-trip", "[game_protocol]") {
     CHECK(parsed.viewAxis[0] == 1.f);
     CHECK(parsed.viewAxis[1] == 0.f);
     CHECK(parsed.viewAxis[2] == 0.f);
+}
+
+TEST_CASE("GameProtocol: MsgHello round-trip", "[game_protocol]") {
+    fl::MsgHello src{};
+
+    std::vector<uint8_t> buf(sizeof(src));
+    std::memcpy(buf.data(), &src, sizeof(src));
+
+    fl::MsgHello parsed{};
+    std::memcpy(&parsed, buf.data(), sizeof(parsed));
+
+    CHECK(parsed.msgId == static_cast<uint8_t>(fl::MsgId::Hello));
+    CHECK(parsed.protocolVersion == fl::kProtocolVersion);
 }

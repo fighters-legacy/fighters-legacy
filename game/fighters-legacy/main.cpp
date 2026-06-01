@@ -62,12 +62,13 @@ struct ClientNetEventHandler : INetworkEventHandler {
     fl::SimRenderBridge& bridge;
     fl::EntityTypeRegistry& registry;
     ILogger& logger;
+    INetwork& net;
 
     uint32_t assignedEntityIdx{0};
     uint32_t assignedEntityGen{0};
 
-    ClientNetEventHandler(fl::SimRenderBridge& b, fl::EntityTypeRegistry& r, ILogger& l)
-        : bridge(b), registry(r), logger(l) {}
+    ClientNetEventHandler(fl::SimRenderBridge& b, fl::EntityTypeRegistry& r, ILogger& l, INetwork& n)
+        : bridge(b), registry(r), logger(l), net(n) {}
 
     void onConnect(uint32_t /*peerId*/) override {
         logger.log(LogLevel::Info, __FILE__, __LINE__, "connected to embedded server");
@@ -79,6 +80,18 @@ struct ClientNetEventHandler : INetworkEventHandler {
         if (size < 1)
             return;
         const uint8_t msgId = *static_cast<const uint8_t*>(data);
+
+        if (msgId == static_cast<uint8_t>(fl::MsgId::Hello)) {
+            if (size < sizeof(fl::MsgHello))
+                return;
+            fl::MsgHello hello;
+            std::memcpy(&hello, data, sizeof(hello));
+            if (hello.protocolVersion != fl::kProtocolVersion) {
+                logger.log(LogLevel::Error, __FILE__, __LINE__, "server protocol version mismatch — disconnecting");
+                net.disconnect();
+            }
+            return;
+        }
 
         if (msgId == static_cast<uint8_t>(fl::MsgId::ConnectAck)) {
             if (size < sizeof(fl::MsgConnectAck))
@@ -475,7 +488,7 @@ int main(int argc, char** argv) {
         crashReporter.shutdown();
         return 1;
     }
-    ClientNetEventHandler clientHandler(renderBridge, entityRegistry, *rawLogger);
+    ClientNetEventHandler clientHandler(renderBridge, entityRegistry, *rawLogger, *clientNet);
     clientNet->setEventHandler(&clientHandler);
     clientNet->connect("127.0.0.1", 4778);
 
