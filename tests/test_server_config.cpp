@@ -16,7 +16,7 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.name == "Unnamed Server");
     CHECK(cfg.port == 4778);
     CHECK(cfg.bindAddress == "0.0.0.0");
-    CHECK(cfg.maxPeers == 16);
+    CHECK(cfg.maxPeers == 32);
     CHECK(cfg.gameModes == (std::vector<std::string>{"campaign", "mission", "sandbox"}));
     CHECK(cfg.motd.empty());
     CHECK(cfg.password.empty());
@@ -104,14 +104,14 @@ TEST_CASE("parseServerConfig: port boundary 65535 is accepted", "[server_config]
 TEST_CASE("parseServerConfig: max_peers 0 warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nmax_peers = 0\n", &log);
-    CHECK(cfg.maxPeers == 16);
+    CHECK(cfg.maxPeers == 32);
     CHECK(log.hasMessage(LogLevel::Warn, "server.max_peers out of range"));
 }
 
 TEST_CASE("parseServerConfig: max_peers 129 warns and keeps default", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nmax_peers = 129\n", &log);
-    CHECK(cfg.maxPeers == 16);
+    CHECK(cfg.maxPeers == 32);
     CHECK(log.hasMessage(LogLevel::Warn, "server.max_peers out of range"));
 }
 
@@ -304,7 +304,7 @@ TEST_CASE("parseServerConfig: partial config keeps unspecified keys at defaults"
     auto cfg = parseServerConfig("[server]\nport = 9000\n", &log);
     CHECK(cfg.port == 9000);
     CHECK(cfg.name == "Unnamed Server");
-    CHECK(cfg.maxPeers == 16);
+    CHECK(cfg.maxPeers == 32);
     CHECK(cfg.rotationOrder == "sequential");
     CHECK(cfg.aiDifficultyFloor == "recruit");
     CHECK(log.entries.empty());

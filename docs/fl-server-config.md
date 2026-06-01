@@ -31,7 +31,7 @@ Copy this file as a starting point and uncomment or modify what you need.
 name         = "Unnamed Server"
 port         = 4778
 bind_address = "0.0.0.0"
-max_peers    = 16
+max_peers    = 32
 game_modes   = ["campaign", "mission", "sandbox"]
 motd         = ""
 password     = ""
@@ -100,7 +100,7 @@ Network interface to bind on.
 
 | Type | Default | Valid range |
 |---|---|---|
-| integer | `16` | 1–128 |
+| integer | `32` | 1–128 |
 
 Maximum number of simultaneous connected peers. Values outside `[1, 128]` are rejected
 with a warning and the default is used instead.
@@ -297,7 +297,7 @@ Minimum AI difficulty enforced server-side, regardless of individual client pref
 | `FL_CONFIG` | `./server.toml` | Config file path |
 | `FL_PORT` | `4778` | `server.port` |
 | `FL_BIND_ADDRESS` | `"0.0.0.0"` | `server.bind_address` |
-| `FL_MAX_PEERS` | `16` | `server.max_peers` |
+| `FL_MAX_PEERS` | `32` | `server.max_peers` |
 | `FL_NAME` | `"Unnamed Server"` | `server.name` |
 | `FL_PERSISTENT` | `"false"` | `--persistent` flag |
 | `FL_LOBBY_REGISTER` | `"false"` | `lobby.register` |

@@ -8,9 +8,51 @@
 #include "entity/EntityTypeRegistry.h"
 #include "net/GameProtocol.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <vector>
+
+// ---------------------------------------------------------------------------
+// Quaternion helpers — pure float array math, no GLM dependency.
+// Convention: q = [x, y, z, w] matching EntityTransform::quat.
+// ---------------------------------------------------------------------------
+
+// Rotate vector v by quaternion q using the Rodrigues formula.
+static void quatRotate(const float q[4], const float v[3], float out[3]) {
+    float tx = q[1] * v[2] - q[2] * v[1];
+    float ty = q[2] * v[0] - q[0] * v[2];
+    float tz = q[0] * v[1] - q[1] * v[0];
+    out[0] = v[0] + 2.f * q[3] * tx + 2.f * (q[1] * tz - q[2] * ty);
+    out[1] = v[1] + 2.f * q[3] * ty + 2.f * (q[2] * tx - q[0] * tz);
+    out[2] = v[2] + 2.f * q[3] * tz + 2.f * (q[0] * ty - q[1] * tx);
+}
+
+// Hamilton product: out = a * b.
+static void quatMul(const float a[4], const float b[4], float out[4]) {
+    out[0] = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1];
+    out[1] = a[3] * b[1] + a[1] * b[3] + a[2] * b[0] - a[0] * b[2];
+    out[2] = a[3] * b[2] + a[2] * b[3] + a[0] * b[1] - a[1] * b[0];
+    out[3] = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2];
+}
+
+static void quatNormalize(float q[4]) {
+    float mag = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    if (mag > 1e-6f) {
+        q[0] /= mag;
+        q[1] /= mag;
+        q[2] /= mag;
+        q[3] /= mag;
+    } // else: degenerate quaternion — unreachable in practice; left as safety guard // GCOV_EXCL_LINE
+}
+
+// ---------------------------------------------------------------------------
+// Kinematics constants
+// ---------------------------------------------------------------------------
+
+static constexpr float kMaxSpeedMps = 340.f; // Mach 1 cap for sandbox
+static constexpr float kMaxRateRadS = 1.f;   // max angular rate (rad/s)
 
 namespace fl {
 
@@ -19,6 +61,18 @@ WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegis
     : m_entityManager(entityManager), m_registry(registry), m_net(net), m_logger(logger) {}
 
 void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
+    // Apply stored client inputs to owned entities before the housekeeping tick
+    // so the render snapshot captures updated positions.
+    for (auto& [peerId, inp] : m_peerInputs) {
+        auto eit = m_peerEntities.find(peerId);
+        if (eit == m_peerEntities.end())
+            continue;
+        EntityState* state = m_entityManager.get(eit->second);
+        if (!state || state->dead)
+            continue;
+        applyPeerInput(*state, inp, simDt);
+    }
+
     m_entityManager.onTick(simDt, tickIndex);
 
     // Build world snapshot packet.
@@ -73,20 +127,96 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     char msg[64];
     std::snprintf(msg, sizeof(msg), "peer %u connected", peerId);
     m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
-    sendConnectAck(peerId);
+
+    EntityTransform t{};
+    t.pos[1] = 500.0; // spawn at 500 m altitude
+    EntityId id = m_entityManager.spawn("builtin:debug-entity", t, peerId);
+    if (id.valid()) {
+        m_peerEntities[peerId] = id;
+        m_peerInputs[peerId] = {};
+    }
+    sendConnectAck(peerId, id);
 }
 
 void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     char msg[64];
     std::snprintf(msg, sizeof(msg), "peer %u disconnected", peerId);
     m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
+
+    auto it = m_peerEntities.find(peerId);
+    if (it != m_peerEntities.end()) {
+        m_entityManager.kill(it->second);
+        m_peerEntities.erase(it);
+    }
+    m_peerInputs.erase(peerId);
 }
 
-void WorldBroadcaster::onReceive(uint32_t /*peerId*/, const void* /*data*/, std::size_t /*size*/) {
-    // Phase 2 sandbox: no client→server messages expected; silently discard.
+void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t size) {
+    if (size < 1)
+        return;
+    uint8_t msgId;
+    std::memcpy(&msgId, data, 1);
+
+    if (msgId == static_cast<uint8_t>(MsgId::ClientInput)) {
+        if (size < sizeof(MsgClientInput))
+            return; // truncated; silently discard
+
+        MsgClientInput msg;
+        std::memcpy(&msg, data, sizeof(msg));
+
+        PeerInputState inp;
+        inp.throttle = std::clamp(msg.throttle, 0.f, 1.f);
+        inp.elevator = std::clamp(msg.elevator, -1.f, 1.f);
+        inp.aileron = std::clamp(msg.aileron, -1.f, 1.f);
+        inp.rudder = std::clamp(msg.rudder, -1.f, 1.f);
+        inp.buttons = msg.buttons;
+
+        float vmag = std::sqrt(msg.viewAxis[0] * msg.viewAxis[0] + msg.viewAxis[1] * msg.viewAxis[1] +
+                               msg.viewAxis[2] * msg.viewAxis[2]);
+        if (vmag > 1e-6f) {
+            inp.viewAxis[0] = msg.viewAxis[0] / vmag;
+            inp.viewAxis[1] = msg.viewAxis[1] / vmag;
+            inp.viewAxis[2] = msg.viewAxis[2] / vmag;
+        }
+        // else: degenerate viewAxis — keep default {1,0,0} fallback set in PeerInputState
+
+        m_peerInputs[peerId] = inp;
+    }
+    // Unknown msgIds: silently discard (no log spam; future protocol versions may add new IDs)
 }
 
-void WorldBroadcaster::sendConnectAck(uint32_t peerId) {
+void WorldBroadcaster::applyPeerInput(EntityState& state, const PeerInputState& inp, double simDt) {
+    // Compute forward direction: entity body +X axis rotated into world space.
+    float fwd[3];
+    const float bodyFwd[3] = {1.f, 0.f, 0.f};
+    quatRotate(state.transform.quat, bodyFwd, fwd);
+
+    float speed = inp.throttle * kMaxSpeedMps;
+    state.transform.vel[0] = fwd[0] * speed;
+    state.transform.vel[1] = fwd[1] * speed;
+    state.transform.vel[2] = fwd[2] * speed;
+
+    state.transform.pos[0] += static_cast<double>(state.transform.vel[0]) * simDt;
+    state.transform.pos[1] += static_cast<double>(state.transform.vel[1]) * simDt;
+    state.transform.pos[2] += static_cast<double>(state.transform.vel[2]) * simDt;
+
+    // Build incremental rotation quaternion from angular rates (small-angle approximation).
+    float halfDt = static_cast<float>(simDt) * 0.5f;
+    float dq[4] = {
+        inp.elevator * kMaxRateRadS * halfDt, // pitch (X axis)
+        inp.rudder * kMaxRateRadS * halfDt,   // yaw   (Y axis)
+        inp.aileron * kMaxRateRadS * halfDt,  // roll  (Z axis)
+        1.f,
+    };
+    quatNormalize(dq);
+
+    float nq[4];
+    quatMul(state.transform.quat, dq, nq);
+    quatNormalize(nq);
+    std::memcpy(state.transform.quat, nq, sizeof(nq));
+}
+
+void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned) {
     const uint32_t typeCount = m_registry.typeCount();
 
     std::vector<uint8_t> buf;
@@ -96,6 +226,8 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId) {
     ack.msgId = static_cast<uint8_t>(MsgId::ConnectAck);
     ack.tickRateHz = 60;
     ack.typeCount = static_cast<uint16_t>(typeCount);
+    ack.assignedEntityIdx = assigned.index;
+    ack.assignedEntityGen = assigned.generation;
     buf.resize(sizeof(MsgConnectAck));
     std::memcpy(buf.data(), &ack, sizeof(ack));
 

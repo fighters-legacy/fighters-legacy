@@ -233,7 +233,7 @@ int main(int argc, char** argv) {
                         "  FL_CONFIG              Path to server.toml (default: ./server.toml)\n"
                         "  FL_PORT                Bind port (default: 4778)\n"
                         "  FL_BIND_ADDRESS        Bind address (default: 0.0.0.0; use :: for IPv4+IPv6 dual-stack)\n"
-                        "  FL_MAX_PEERS           Max simultaneous peers (default: 16)\n"
+                        "  FL_MAX_PEERS           Max simultaneous peers (default: 32)\n"
                         "  FL_NAME                Server name (default: \"Unnamed Server\")\n"
                         "  FL_PERSISTENT          \"true\" to enable persistent world, Phase 2 (default: \"false\")\n"
                         "  FL_LOBBY_REGISTER      \"true\" to advertise to fl-lobby, Phase 2 (default: \"false\")\n"

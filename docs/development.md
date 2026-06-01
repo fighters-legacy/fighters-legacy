@@ -361,7 +361,7 @@ Quick reference for container deployments:
 | `FL_CONFIG` | `./server.toml` | Path to config file |
 | `FL_PORT` | `4778` | UDP bind port |
 | `FL_BIND_ADDRESS` | `0.0.0.0` | Bind address (use `127.0.0.1` for localhost-only) |
-| `FL_MAX_PEERS` | `16` | Maximum simultaneous connected peers |
+| `FL_MAX_PEERS` | `32` | Maximum simultaneous connected peers |
 | `FL_NAME` | `"Unnamed Server"` | Server name shown in the lobby |
 | `FL_PERSISTENT` | `"false"` | Set `"true"` to enable persistent world mode (Phase 2) |
 | `FL_LOBBY_REGISTER` | `"false"` | Set `"true"` to advertise to fl-lobby (Phase 2) |
