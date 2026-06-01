@@ -126,6 +126,13 @@ if(TARGET platform-enet)
     target_link_libraries(test_server_config PRIVATE Catch2::Catch2WithMain fl-server-config)
     target_include_directories(test_server_config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     catch_discover_tests(test_server_config)
+
+    add_executable(test_lan_discovery test_lan_discovery.cpp)
+    target_link_libraries(test_lan_discovery PRIVATE Catch2::Catch2WithMain engine-net)
+    target_include_directories(test_lan_discovery PRIVATE
+        "${CMAKE_SOURCE_DIR}/engine"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    catch_discover_tests(test_lan_discovery)
 endif()
 
 add_executable(test_audio test_audio.cpp)

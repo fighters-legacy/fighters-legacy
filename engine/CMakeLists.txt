@@ -173,6 +173,8 @@ target_link_libraries(engine-flight
 # Authoritative server-sim serializer and network broadcaster.
 add_library(engine-net STATIC
     net/WorldBroadcaster.cpp
+    net/DiscoveryBeacon.cpp
+    net/DiscoveryListener.cpp
 )
 target_include_directories(engine-net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-net
@@ -180,6 +182,9 @@ target_link_libraries(engine-net
             platform-hal
     PRIVATE engine-flight
 )
+if(WIN32)
+    target_link_libraries(engine-net PRIVATE ws2_32)
+endif()
 
 # Per-frame stats collection and debug overlay line builder.
 add_library(engine-perf STATIC

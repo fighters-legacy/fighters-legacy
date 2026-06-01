@@ -5,6 +5,7 @@
 #include "entity/EntityId.h"
 #include "loop/ISimUpdate.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
@@ -58,6 +59,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     void onDisconnect(uint32_t peerId) override;
     void onReceive(uint32_t peerId, const void* data, std::size_t size) override;
 
+    // Safe to call from any thread (main thread reads this for the LAN discovery beacon).
+    int getPeerCount() const noexcept {
+        return m_activePeerCount.load(std::memory_order_relaxed);
+    }
+
   private:
     void sendConnectAck(uint32_t peerId, EntityId assigned);
     void stepFlightSim(FlightIntegrator& fi, EntityState& state, const PeerInputState& inp, double simDt);
@@ -70,6 +76,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::unordered_map<uint32_t, EntityId> m_peerEntities;
     std::unordered_map<uint32_t, PeerInputState> m_peerInputs;
     std::unordered_map<uint32_t, std::unique_ptr<FlightIntegrator>> m_peerFlightSims;
+
+    std::atomic<int> m_activePeerCount{0};
 };
 
 } // namespace fl
