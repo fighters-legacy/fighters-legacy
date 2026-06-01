@@ -32,6 +32,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `ConnectAck` | `0x01` | server→client | reliable | 12 + N×196 bytes | Handshake on connect; assigns entity slot and delivers type registry |
 | `WorldSnapshot` | `0x02` | server→client | unreliable | 12 + N×68 bytes | Per-tick entity state broadcast |
 | `ClientInput` | `0x03` | client→server | reliable | 44 bytes | Per-frame flight inputs |
+| `LanBeacon` | `0x10` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast |
 
 ## Struct Definitions
 
@@ -119,6 +120,43 @@ Sent by the client each render frame on the reliable channel (channel 0).
 
 The server clamps all control surface inputs to their valid ranges and normalises
 `viewAxis` to unit length. Packets smaller than 44 bytes are silently discarded.
+
+### MsgLanBeacon — 74 bytes
+
+Broadcast by `fl-server` on `255.255.255.255:<port>` (IPv4) and `[ff02::1]:<port>` (IPv6
+link-local multicast) every `discovery.interval_ms` milliseconds (default: 2000 ms) using a
+**raw UDP socket separate from ENet**. Clients on the same LAN receive this packet without
+establishing a connection. See issue #91 for the server-side implementation; client-side server
+browser is issue #143.
+
+This packet is **not** sent over ENet and must not be injected into an ENet connection.
+`MsgId::LanBeacon = 0x10` is outside the ENet message range (`0x00`–`0x03`).
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x10` |
+| 1 | 1 | `_pad` | `uint8_t` | Reserved, always 0 |
+| 2 | 2 | `protocolVersion` | `uint16_t` | Server's `kProtocolVersion`; clients may filter on this |
+| 4 | 2 | `gamePort` | `uint16_t` | ENet game port to connect to |
+| 6 | 1 | `playerCount` | `uint8_t` | Current connected player count |
+| 7 | 1 | `maxPlayers` | `uint8_t` | Maximum allowed peers |
+| 8 | 1 | `gameModeFlags` | `uint8_t` | Bit 0 = campaign (`kGameModeCampaign`), bit 1 = mission (`kGameModeMission`), bit 2 = sandbox (`kGameModeSandbox`) |
+| 9 | 1 | `_pad2` | `uint8_t` | Reserved, always 0 |
+| 10 | 64 | `name[64]` | `char[64]` | Null-terminated server name (UTF-8) |
+
+**IPv6 multicast:** The sender broadcasts to `ff02::1` (all-nodes link-local); receivers join
+via `IPV6_JOIN_GROUP`. No join is required by the sender. `IPV6_MULTICAST_HOPS` is set to 1
+(link-local scope only — does not traverse routers).
+
+**Address preference:** When the same server is found via both IPv4 and IPv6 beacons,
+`DiscoveryListener` uses the IPv4 address for the `ServerInfo::address` field. IPv6 link-local
+addresses carry a scope ID that is interface-specific and may not survive an `INetwork::connect`
+call.
+
+**Deduplication:** `DiscoveryListener` merges beacons with the same `(gamePort, name)` into one
+`ServerInfo` entry regardless of source address family.
+
+---
 
 ## Connection Flow
 

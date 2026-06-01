@@ -589,3 +589,34 @@ TEST_CASE("WorldBroadcaster: onTick broadcasts WorldSnapshot with correct protoc
     std::memcpy(&hdr, net.broadcasts[0].data(), sizeof(hdr));
     CHECK(hdr.protocolVersion == static_cast<uint8_t>(fl::kProtocolVersion));
 }
+
+// ---------------------------------------------------------------------------
+// getPeerCount
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: getPeerCount is zero before any connections", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    CHECK(broadcaster.getPeerCount() == 0);
+}
+
+TEST_CASE("WorldBroadcaster: getPeerCount tracks connect and disconnect", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    CHECK(broadcaster.getPeerCount() == 0);
+
+    broadcaster.onConnect(42);
+    CHECK(broadcaster.getPeerCount() == 1);
+
+    broadcaster.onDisconnect(42);
+    CHECK(broadcaster.getPeerCount() == 0);
+}

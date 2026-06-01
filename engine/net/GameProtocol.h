@@ -19,6 +19,7 @@ enum class MsgId : uint8_t {
     ConnectAck = 0x01,    // server→client, reliable: sent once on connect
     WorldSnapshot = 0x02, // server→client, unreliable: broadcast every sim tick
     ClientInput = 0x03,   // client→server, reliable: sent each frame
+    LanBeacon = 0x10,     // raw UDP broadcast — not sent over ENet; server→LAN presence packet
 };
 
 // All structs use #pragma pack(1) so the wire layout is identical on all platforms
@@ -119,6 +120,35 @@ static_assert(offsetof(MsgClientInput, tickIndex) == 8u, "MsgClientInput::tickIn
 static_assert(offsetof(MsgClientInput, throttle) == 16u, "MsgClientInput::throttle offset changed");
 static_assert(offsetof(MsgClientInput, viewAxis) == 32u, "MsgClientInput::viewAxis offset changed");
 
+// Raw UDP presence broadcast sent by fl-server on 255.255.255.255:<port> (IPv4 broadcast) and
+// [ff02::1]:<port> (IPv6 link-local multicast) every discoveryIntervalMs milliseconds.
+// Not sent over ENet — must not be injected into an ENet connection.
+// Clients receive this to populate a server list (issue #143).
+struct MsgLanBeacon {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::LanBeacon)}; // offset 0
+    uint8_t _pad{0};                                       // offset 1
+    uint16_t protocolVersion{kProtocolVersion};            // offset 2
+    uint16_t gamePort{4778};                               // offset 4
+    uint8_t playerCount{0};                                // offset 6
+    uint8_t maxPlayers{0};                                 // offset 7
+    uint8_t gameModeFlags{0};                              // offset 8 — see kGameMode* constants
+    uint8_t _pad2{0};                                      // offset 9
+    char name[64]{};                                       // offset 10 — null-terminated server name
+}; // 74 bytes
+static_assert(sizeof(MsgLanBeacon) == 74u, "MsgLanBeacon wire size changed");
+static_assert(offsetof(MsgLanBeacon, protocolVersion) == 2u, "MsgLanBeacon::protocolVersion offset changed");
+static_assert(offsetof(MsgLanBeacon, gamePort) == 4u, "MsgLanBeacon::gamePort offset changed");
+static_assert(offsetof(MsgLanBeacon, playerCount) == 6u, "MsgLanBeacon::playerCount offset changed");
+static_assert(offsetof(MsgLanBeacon, maxPlayers) == 7u, "MsgLanBeacon::maxPlayers offset changed");
+static_assert(offsetof(MsgLanBeacon, gameModeFlags) == 8u, "MsgLanBeacon::gameModeFlags offset changed");
+static_assert(offsetof(MsgLanBeacon, name) == 10u, "MsgLanBeacon::name offset changed");
+
 #pragma pack(pop)
+
+// Bitmask constants for MsgLanBeacon::gameModeFlags.
+// Not an enum class so they compose cleanly with | and & on the uint8_t wire field.
+static constexpr uint8_t kGameModeCampaign = 0x01u;
+static constexpr uint8_t kGameModeMission = 0x02u;
+static constexpr uint8_t kGameModeSandbox = 0x04u;
 
 } // namespace fl

@@ -290,6 +290,35 @@ Minimum AI difficulty enforced server-side, regardless of individual client pref
 
 ---
 
+## [discovery] — LAN server discovery
+
+Configures the UDP broadcast beacon that lets players on the same LAN find this server
+automatically. The beacon is a raw UDP packet sent on `255.255.255.255:<port>` (IPv4 broadcast)
+and `[ff02::1]:<port>` (IPv6 link-local multicast) every `interval_ms` milliseconds. It is
+independent of ENet and requires no router configuration.
+
+Client-side parsing and the server browser UI are tracked in issue #143.
+
+### `enabled`
+
+| Type | Default |
+|---|---|
+| bool | `true` |
+
+Set to `false` to suppress LAN broadcasting entirely. Recommended for internet-only servers or
+servers where LAN presence is undesirable (e.g. tournament setups, cloud deployments).
+
+### `interval_ms`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `2000` | 100–60000 |
+
+How often to broadcast the beacon, in milliseconds. Out-of-range values are ignored and the
+default is kept (a warning is logged).
+
+---
+
 ## Environment variables
 
 | Variable | Default | Maps to |

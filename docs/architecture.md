@@ -112,7 +112,7 @@ These decisions are finalized and not subject to revision without an RFC.
 | Depth convention | Reverse-Z (near=1 far→0, compare=GREATER, D32_SFLOAT) | Better floating-point precision distribution across scene depth |
 | Windowing / input | SDL3 | Wayland + modern controller support; long-term path |
 | Audio | OpenAL Soft | Positional 3D audio; native music in OGG; no MIDI dependency in engine core |
-| Network transport | ENet 1.3.x → enet6 (SirLynix/enet6) | Reliable + unreliable channels; congestion control; cross-platform. IPv4+IPv6 dual-stack via enet6 migration (#180). Current build uses lsalzman/enet v1.3.17; enet6 swap tracked in #180. |
+| Network transport | SirLynix/enet6 v6.1.3 | Reliable + unreliable channels; congestion control; cross-platform. IPv4+IPv6 dual-stack. Migrated from lsalzman/enet 1.3.17 in #180. |
 | Build system | CMake 3.25+ | Cross-platform from day one |
 | Engine repo | `fighters-legacy` (this repo) | Separate from fighters-toolkit |
 | Content system | Plugin / content-pack architecture | Each content source = one plugin; mods = other plugins; engine core has zero content dependency |
@@ -126,6 +126,7 @@ These decisions are finalized and not subject to revision without an RFC.
 | Native AI scripts | Lua 5.4 | Embeddable, sandbox-able, moddable |
 | Multiplayer topology | `fl-server` dedicated binary + `fl-lobby` REST service | Server-authoritative; no P2P player-count cap; self-hostable |
 | Single-player topology | `fl-server` running locally (`bind_address=127.0.0.1`, `max_peers=1`) | One simulation path; no bifurcated codebase; single-player is multiplayer with one peer |
+| LAN server discovery | Raw UDP broadcast + IPv6 link-local multicast (#91) | `DiscoveryBeacon` (fl-server) + `DiscoveryListener` (game client) in `engine/net/`; separate socket outside ENet; client server browser in issue #143 |
 | Entity system | Dynamic pool, no hard caps | No fixed object count limit |
 | License | GPL v3 | Engine modifications must stay open source; protects community investment |
 | Hosting | GitHub, public repository | Unlimited Actions CI on public repos; GitHub Free sufficient |

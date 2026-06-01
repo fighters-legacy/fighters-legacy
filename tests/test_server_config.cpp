@@ -31,6 +31,8 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.worldSavePath == "world.sav");
     CHECK(cfg.worldAutosaveIntervalS == 300);
     CHECK(cfg.aiDifficultyFloor == "recruit");
+    CHECK(cfg.discoveryEnabled == true);
+    CHECK(cfg.discoveryIntervalMs == 2000);
     CHECK(log.entries.empty());
 }
 
@@ -315,4 +317,45 @@ TEST_CASE("parseServerConfig: unknown TOML keys are silently ignored", "[server_
     auto cfg = parseServerConfig("[server]\nport = 5000\nunknown_key = \"whatever\"\n", &log);
     CHECK(cfg.port == 5000);
     CHECK(log.entries.empty());
+}
+
+// ---------------------------------------------------------------------------
+// [discovery] section
+// ---------------------------------------------------------------------------
+
+TEST_CASE("parseServerConfig: reads [discovery] fields", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[discovery]\nenabled = false\ninterval_ms = 5000\n", &log);
+    CHECK_FALSE(cfg.discoveryEnabled);
+    CHECK(cfg.discoveryIntervalMs == 5000);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: discovery interval_ms below 100 warns and keeps default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[discovery]\ninterval_ms = 50\n", &log);
+    CHECK(cfg.discoveryIntervalMs == 2000);
+    CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+}
+
+TEST_CASE("parseServerConfig: discovery interval_ms above 60000 warns and keeps default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[discovery]\ninterval_ms = 70000\n", &log);
+    CHECK(cfg.discoveryIntervalMs == 2000);
+    CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+}
+
+TEST_CASE("parseServerConfig: discovery interval_ms boundaries are accepted", "[server_config]") {
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[discovery]\ninterval_ms = 100\n", &log);
+        CHECK(cfg.discoveryIntervalMs == 100);
+        CHECK(log.entries.empty());
+    }
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[discovery]\ninterval_ms = 60000\n", &log);
+        CHECK(cfg.discoveryIntervalMs == 60000);
+        CHECK(log.entries.empty());
+    }
 }

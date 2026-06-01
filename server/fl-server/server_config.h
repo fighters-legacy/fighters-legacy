@@ -36,6 +36,10 @@ struct ServerConfig {
 
     // [ai]  — Phase 2: parsed and stored; enforcement lands with AI runtime
     std::string aiDifficultyFloor = "recruit";
+
+    // [discovery]
+    bool discoveryEnabled = true;
+    int discoveryIntervalMs = 2000;
 };
 
 // Parse server configuration from a TOML string.

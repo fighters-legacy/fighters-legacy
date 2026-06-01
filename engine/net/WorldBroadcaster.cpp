@@ -135,6 +135,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         m_peerFlightSims.emplace(peerId, std::move(fi));
     }
     sendConnectAck(peerId, id);
+    m_activePeerCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void WorldBroadcaster::onDisconnect(uint32_t peerId) {
@@ -149,6 +150,7 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     }
     m_peerInputs.erase(peerId);
     m_peerFlightSims.erase(peerId);
+    m_activePeerCount.fetch_sub(1, std::memory_order_relaxed);
 }
 
 void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t size) {

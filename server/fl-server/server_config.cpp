@@ -125,6 +125,18 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             }
         }
 
+        // [discovery]
+        if (auto v = tbl["discovery"]["enabled"].value<bool>())
+            cfg.discoveryEnabled = *v;
+        if (auto v = tbl["discovery"]["interval_ms"].value<int64_t>()) {
+            if (*v < 100 || *v > 60000) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "discovery.interval_ms out of range [100,60000]; using default");
+            } else {
+                cfg.discoveryIntervalMs = static_cast<int>(*v);
+            }
+        }
+
     } catch (const toml::parse_error& e) {
         char buf[256];
         std::snprintf(buf, sizeof(buf), "failed to parse config: %s -- using defaults", e.what());

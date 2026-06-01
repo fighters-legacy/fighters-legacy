@@ -16,6 +16,7 @@
 // See docs/fl-server-config.md for the full operator configuration reference.
 // fl-lobby integration is tracked in issue #36.
 #include "ENetNetworkFactory.h"
+#include "net/DiscoveryBeacon.h"
 #include "server_config.h"
 #include <ILogger.h>
 #include <Platform.h>
@@ -26,6 +27,7 @@
 #include <cstring>
 #include <fstream>
 #include <memory>
+#include <net/GameProtocol.h>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -186,7 +188,19 @@ static const char* kDefaultToml =
     "#\n"
     "# Minimum AI difficulty enforced server-side regardless of client preference.\n"
     "# Valid values: \"recruit\", \"cadet\", \"veteran\", \"ace\"\n"
-    "difficulty_floor = \"recruit\"\n";
+    "difficulty_floor = \"recruit\"\n"
+    "\n"
+    "[discovery]\n"
+    "# LAN server discovery beacon (raw UDP, independent of ENet).\n"
+    "# Broadcasts server info on 255.255.255.255:<port> (IPv4) and [ff02::1]:<port> (IPv6)\n"
+    "# so clients on the same LAN can find this server without knowing its IP address.\n"
+    "# Client-side server browser: issue #143.\n"
+    "#\n"
+    "# Set to false to suppress LAN broadcasting (e.g. internet-only or localhost-only servers).\n"
+    "enabled = true\n"
+    "\n"
+    "# How often to broadcast the beacon, in milliseconds. Valid range: [100, 60000].\n"
+    "interval_ms = 2000\n";
 
 // ---------------------------------------------------------------------------
 // Config file helpers
@@ -365,6 +379,34 @@ int main(int argc, char** argv) {
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
 
+    // ---- LAN discovery beacon ----
+    uint8_t discoveryGameModeFlags = 0;
+    for (const auto& m : cfg.gameModes) {
+        if (m == "campaign")
+            discoveryGameModeFlags |= fl::kGameModeCampaign;
+        else if (m == "mission")
+            discoveryGameModeFlags |= fl::kGameModeMission;
+        else if (m == "sandbox")
+            discoveryGameModeFlags |= fl::kGameModeSandbox;
+    }
+    std::unique_ptr<DiscoveryBeacon> beacon;
+    if (cfg.discoveryEnabled) {
+        DiscoveryBeacon::Config dcfg;
+        dcfg.name = cfg.name;
+        dcfg.port = cfg.port;
+        dcfg.maxPlayers = static_cast<uint8_t>(cfg.maxPeers > 255 ? 255 : cfg.maxPeers);
+        dcfg.gameModeFlags = discoveryGameModeFlags;
+        dcfg.intervalMs = cfg.discoveryIntervalMs;
+        dcfg.broadcastAddr = "255.255.255.255";
+        beacon = std::make_unique<DiscoveryBeacon>(dcfg, *log);
+        if (!beacon->isOpen()) {
+            log->log(LogLevel::Warn, __FILE__, __LINE__, "LAN discovery beacon: no sockets opened; discovery disabled");
+            beacon.reset();
+        } else {
+            log->log(LogLevel::Info, __FILE__, __LINE__, "LAN discovery beacon started");
+        }
+    }
+
     // ---- Entity system + sandbox entities ----
     fl::EntityTypeRegistry entityRegistry;
     fl::EntityManager entityManager(*log, entityRegistry);
@@ -405,8 +447,12 @@ int main(int argc, char** argv) {
 
     // Main thread sleeps until SIGINT/SIGTERM. All ENet I/O is driven from the
     // sim thread via WorldBroadcaster::onTick() → net->service(0).
-    while (!g_quit)
+    // The discovery beacon is polled here; it fires at most once per intervalMs.
+    while (!g_quit) {
+        if (beacon)
+            beacon->tick(broadcaster.getPeerCount());
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
 
     gameLoop.stop();
 

@@ -22,6 +22,7 @@
 #include "firstrun/FirstRun.h"
 #include "loop/GameLoop.h"
 #include "loop/GameState.h"
+#include "net/DiscoveryListener.h"
 #include "net/GameProtocol.h"
 #include "net/WorldBroadcaster.h"
 #include "openal/OALAudio.h"
@@ -492,6 +493,12 @@ int main(int argc, char** argv) {
     clientNet->setEventHandler(&clientHandler);
     clientNet->connect("127.0.0.1", 4778);
 
+    // Step 17f: LAN server discovery listener — receives beacons from fl-server instances.
+    // Populates a server list consumed by the server browser (issue #143). No UI yet.
+    DiscoveryListener discoveryListener(4778, *rawLogger);
+    if (!discoveryListener.isOpen())
+        rawLogger->log(LogLevel::Warn, __FILE__, __LINE__, "LAN discovery listener: no sockets opened");
+
     // Step 18: Shell loop — main thread owns all HAL.
     // Angled sun (better PBR shading than the default straight-down direction).
     EnvironmentState env{};
@@ -602,6 +609,9 @@ int main(int argc, char** argv) {
         // Pump ENet inbound (non-blocking). ClientNetEventHandler::onReceive fires here
         // for WorldSnapshot packets → publishExternal → renderBridge updated.
         clientNet->service(0);
+
+        // Poll LAN discovery (non-blocking). Updates server list for issue #143 server browser.
+        discoveryListener.poll();
 
         // Send client flight inputs to the embedded server each frame.
         // Arrow keys: Up/Down = elevator, Left/Right = aileron, Z/X = rudder.
