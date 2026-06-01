@@ -14,7 +14,9 @@ namespace fs = std::filesystem;
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
+// REUSE-IgnoreStart — string constant holds the SPDX tag prefix, not a license declaration
 static constexpr const char* kSpdxIdPrefix = "SPDX-License-Identifier:";
+// REUSE-IgnoreEnd
 static constexpr const char* kSpdxCopyright = "SPDX-FileCopyrightText:";
 static constexpr const char* kLicenseExt = ".license";
 static constexpr const char* kReuseToml = "REUSE.toml";
@@ -44,7 +46,9 @@ static std::string readFile(const fs::path& p) {
     return ss.str();
 }
 
+// REUSE-IgnoreStart — comment below quotes the SPDX tag as documentation, not a declaration
 // Returns the value after "SPDX-License-Identifier: " on the first matching line, or "".
+// REUSE-IgnoreEnd
 static std::string extractSpdxId(const std::string& content) {
     std::istringstream ss(content);
     std::string line;
@@ -121,11 +125,13 @@ static void validateReuseToml(const fs::path& reuseTomlPath, const std::vector<s
         auto idNode = (*entry)["SPDX-License-Identifier"];
         auto id = idNode.value<std::string>();
         if (!id) {
+            // REUSE-IgnoreStart — error message strings quote the SPDX tag, not declarations
             r.errors.push_back("REUSE.toml: project-wide annotation missing SPDX-License-Identifier");
             r.ok = false;
         } else if (!isAllowed(*id, allowed)) {
             r.errors.push_back("REUSE.toml: project-wide SPDX-License-Identifier \"" + *id +
                                "\" is not in the allowed list");
+            // REUSE-IgnoreEnd
             r.ok = false;
         }
     }
