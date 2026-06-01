@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace fl {
@@ -31,6 +32,10 @@ struct MsgConnectAck {
     uint32_t assignedEntityGen{0}; // entity generation (0 = none assigned)
 }; // 12 bytes
 static_assert(sizeof(MsgConnectAck) == 12u, "MsgConnectAck wire size changed");
+static_assert(offsetof(MsgConnectAck, tickRateHz) == 1u, "MsgConnectAck::tickRateHz offset changed");
+static_assert(offsetof(MsgConnectAck, typeCount) == 2u, "MsgConnectAck::typeCount offset changed");
+static_assert(offsetof(MsgConnectAck, assignedEntityIdx) == 4u, "MsgConnectAck::assignedEntityIdx offset changed");
+static_assert(offsetof(MsgConnectAck, assignedEntityGen) == 8u, "MsgConnectAck::assignedEntityGen offset changed");
 
 // Entity type definition appended after MsgConnectAck.
 struct MsgEntityTypeDef {
@@ -39,6 +44,10 @@ struct MsgEntityTypeDef {
     char mesh[64]{};    // null-terminated mesh asset name; empty = builtin tetrahedron
     char dmgMesh[64]{}; // null-terminated damage mesh; empty = none
 }; // 196 bytes
+static_assert(sizeof(MsgEntityTypeDef) == 196u, "MsgEntityTypeDef wire size changed");
+static_assert(offsetof(MsgEntityTypeDef, id) == 4u, "MsgEntityTypeDef::id offset changed");
+static_assert(offsetof(MsgEntityTypeDef, mesh) == 68u, "MsgEntityTypeDef::mesh offset changed");
+static_assert(offsetof(MsgEntityTypeDef, dmgMesh) == 132u, "MsgEntityTypeDef::dmgMesh offset changed");
 
 // Unreliable, broadcast every sim tick.
 // Followed by entityCount × MsgEntityEntry in the same packet.
@@ -48,6 +57,11 @@ struct MsgWorldSnapshotHeader {
     uint16_t entityCount{0};
     uint64_t tickIndex{0};
 }; // 12 bytes
+static_assert(sizeof(MsgWorldSnapshotHeader) == 12u, "MsgWorldSnapshotHeader wire size changed");
+static_assert(offsetof(MsgWorldSnapshotHeader, entityCount) == 2u,
+              "MsgWorldSnapshotHeader::entityCount offset changed");
+static_assert(offsetof(MsgWorldSnapshotHeader, tickIndex) == 4u,
+              "MsgWorldSnapshotHeader::tickIndex offset changed"); // misaligned: always use memcpy
 
 // Per-entity snapshot entry appended after MsgWorldSnapshotHeader.
 struct MsgEntityEntry {
@@ -62,6 +76,14 @@ struct MsgEntityEntry {
     uint8_t _pad[2]{};
 }; // 68 bytes
 static_assert(sizeof(MsgEntityEntry) == 68u, "MsgEntityEntry wire size changed");
+static_assert(offsetof(MsgEntityEntry, typeIndex) == 8u, "MsgEntityEntry::typeIndex offset changed");
+static_assert(
+    offsetof(MsgEntityEntry, pos) == 12u,
+    "MsgEntityEntry::pos offset changed"); // misaligned double[3]: always use memcpy; ARM64 SIGBUS on direct deref
+static_assert(offsetof(MsgEntityEntry, vel) == 36u, "MsgEntityEntry::vel offset changed");
+static_assert(offsetof(MsgEntityEntry, ori) == 48u, "MsgEntityEntry::ori offset changed");
+static_assert(offsetof(MsgEntityEntry, damageLevel) == 64u, "MsgEntityEntry::damageLevel offset changed");
+static_assert(offsetof(MsgEntityEntry, flags) == 65u, "MsgEntityEntry::flags offset changed");
 
 // Reliable, client→server, sent each render frame.
 struct MsgClientInput {
@@ -77,6 +99,10 @@ struct MsgClientInput {
     float viewAxis[3]{};   // normalized look direction (world space)
 }; // 1+1+2+4+8+4+4+4+4+12 = 44 bytes
 static_assert(sizeof(MsgClientInput) == 44u, "MsgClientInput wire size changed");
+static_assert(offsetof(MsgClientInput, seqNum) == 4u, "MsgClientInput::seqNum offset changed");
+static_assert(offsetof(MsgClientInput, tickIndex) == 8u, "MsgClientInput::tickIndex offset changed");
+static_assert(offsetof(MsgClientInput, throttle) == 16u, "MsgClientInput::throttle offset changed");
+static_assert(offsetof(MsgClientInput, viewAxis) == 32u, "MsgClientInput::viewAxis offset changed");
 
 #pragma pack(pop)
 

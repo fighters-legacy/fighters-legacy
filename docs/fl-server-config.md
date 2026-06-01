@@ -314,6 +314,14 @@ Boolean env vars (`FL_PERSISTENT`, `FL_LOBBY_REGISTER`) accept `"true"` or `"1"`
 
 ---
 
+## See also
+
+- [docs/network-protocol.md](network-protocol.md) — wire format specification for all
+  `fl-server` ↔ client messages; includes bandwidth tables and interest-management
+  guidance for deployments with more than ~20 simultaneous players per zone.
+
+---
+
 ## Kubernetes / container deployment
 
 - Pass all single-value config via environment variables; no volume mount required for
