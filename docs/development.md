@@ -211,6 +211,20 @@ chmod +x .git/hooks/commit-msg .git/hooks/pre-commit
 
 Open the repo root. VS Code auto-detects `CMakePresets.json` and populates the configure dropdown via the CMake Tools extension. Recommended extensions and workspace settings are committed in `.vscode/extensions.json` and `.vscode/settings.json` — VS Code prompts to install them on first open.
 
+Pre-defined tasks are committed in `.vscode/tasks.json` and available via **Terminal → Run Task**:
+
+| Task | Purpose |
+|---|---|
+| Build (Debug) / Build (Release) | Configure + build the selected preset |
+| Test (Debug) | `ctest --preset debug --output-on-failure` |
+| CI: clang-format check | Dry-run clang-format-22 on files changed vs `origin/main` |
+| CI: REUSE lint | Check SPDX headers on all source files |
+| CI: Smoke tests | Run `--version` on every built binary |
+| CI: pytest (gen_terrain_chunks) | Python unit tests for the terrain chunk pipeline |
+| CI: Locale lint | `locale-extract --dry-run` to catch untranslated strings |
+| CI: Build (ASAN) / CI: Test (ASAN) | Build and test with AddressSanitizer + UBSan (requires `clang`) |
+| **CI: All (Linux)** | Run every check above in sequence — use before opening a PR |
+
 ### CLion
 
 CLion reads `CMakePresets.json` natively since 2022.3. File → Open → select the repo root. CLion loads all configure/build/test presets automatically.
