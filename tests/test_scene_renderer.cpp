@@ -180,24 +180,68 @@ TEST_CASE("CameraController setFreeOrbit repositions camera") {
 
 TEST_CASE("CameraController setMode changes mode") {
     CameraController cam;
+    cam.setMode(CameraMode::Cockpit);
+    CHECK(cam.mode() == CameraMode::Cockpit);
     cam.setMode(CameraMode::Chase);
     CHECK(cam.mode() == CameraMode::Chase);
     cam.setMode(CameraMode::Free);
     CHECK(cam.mode() == CameraMode::Free);
 }
 
-TEST_CASE("CameraController Chase mode worldOrigin differs from target position") {
+TEST_CASE("CameraController Chase mode orbit positions camera away from pivot") {
     CameraController cam;
     cam.setMode(CameraMode::Chase);
-    glm::dvec3 targetPos{100.0, 50.0, 200.0};
-    cam.setTarget(targetPos, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    glm::dvec3 entityPos{100.0, 50.0, 200.0};
+    cam.setFreeOrbit(entityPos, 0.f, 0.f, 25.f);
     CameraView cv = cam.view(16.0f / 9.0f);
-    // Camera should not be at the target position.
-    double dx = cv.worldOrigin.x - targetPos.x;
-    double dy = cv.worldOrigin.y - targetPos.y;
-    double dz = cv.worldOrigin.z - targetPos.z;
-    double dist2 = dx * dx + dy * dy + dz * dz;
-    CHECK(dist2 > 1.0f);
+    double dx = cv.worldOrigin.x - entityPos.x;
+    double dy = cv.worldOrigin.y - entityPos.y;
+    double dz = cv.worldOrigin.z - entityPos.z;
+    double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+    CHECK(dist == Catch::Approx(25.0).margin(0.1));
+}
+
+TEST_CASE("CameraController Cockpit mode worldOrigin matches target position") {
+    CameraController cam;
+    cam.setMode(CameraMode::Cockpit);
+    cam.setTarget(glm::dvec3{100.0, 200.0, 300.0}, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    CameraView cv = cam.view(16.0f / 9.0f);
+    CHECK(cv.worldOrigin.x == Catch::Approx(100.0).margin(1e-4));
+    CHECK(cv.worldOrigin.y == Catch::Approx(200.0).margin(1e-4));
+    CHECK(cv.worldOrigin.z == Catch::Approx(300.0).margin(1e-4));
+}
+
+TEST_CASE("CameraController Cockpit mode look offset affects view direction") {
+    CameraController cam;
+    cam.setMode(CameraMode::Cockpit);
+    cam.setTarget(glm::dvec3(0), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    CameraView cvForward = cam.view(1.0f);
+    cam.setCockpitLook(90.f, 0.f); // look right 90 degrees
+    CameraView cvRight = cam.view(1.0f);
+    // Camera Z-axis in world (view column 2) should differ after the look offset
+    CHECK(cvForward.view[2][2] != Catch::Approx(cvRight.view[2][2]).margin(0.1f));
+}
+
+TEST_CASE("CameraController Cockpit default look direction encodes entity forward") {
+    CameraController cam;
+    cam.setMode(CameraMode::Cockpit);
+    cam.setTarget(glm::dvec3(0), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    CameraView cv = cam.view(1.0f);
+    CHECK(cv.proj[2][3] == Catch::Approx(-1.0f));              // RH perspective preserved
+    CHECK(cv.view[2][2] == Catch::Approx(1.0f).margin(1e-4f)); // camera looks along world -Z
+}
+
+TEST_CASE("CameraController Cockpit gimbal lock guard prevents NaN") {
+    CameraController cam;
+    cam.setMode(CameraMode::Cockpit);
+    // Entity pointing straight up (90-degree pitch, forward = world +Y)
+    glm::quat straight_up = glm::angleAxis(glm::radians(-90.f), glm::vec3{1.0f, 0.0f, 0.0f});
+    cam.setTarget(glm::dvec3(0), straight_up);
+    cam.setCockpitLook(0.f, 0.f);
+    CameraView cv = cam.view(1.0f);
+    CHECK(!std::isnan(cv.view[0][0]));
+    CHECK(!std::isnan(cv.view[1][1]));
+    CHECK(!std::isnan(cv.view[2][2]));
 }
 
 // ---------------------------------------------------------------------------

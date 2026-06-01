@@ -29,6 +29,7 @@
 #include "perf/PerformanceOverlay.h"
 #include "render/BuiltinGeometry.h"
 #include "render/CameraController.h"
+#include "render/FlightHud.h"
 #include "render/ParticleSystem.h"
 #include "render/RenderSnapshot.h"
 #include "render/SceneRenderer.h"
@@ -146,6 +147,8 @@ struct ClientNetEventHandler : INetworkEventHandler {
                 re.orientation = glm::quat(e.ori[3], e.ori[0], e.ori[1], e.ori[2]);
                 re.damageLevel = e.damageLevel;
                 re.playerOwned = (e.flags & 1u) != 0;
+                re.throttle = e.throttle;
+                re.fuelPct = e.fuelPct;
                 snap.entries.push_back(re);
             }
             bridge.publishExternal(std::move(snap));
@@ -529,9 +532,17 @@ int main(int argc, char** argv) {
     float sbYaw = 0.0f;
     float sbPitch = -10.0f;
     float sbRadius = 200.0f;
-    float sbLastMouseX = 0.0f;
-    float sbLastMouseY = 0.0f;
-    bool sbFirstFrame = true;
+    // Unified mouse tracking shared across all camera modes.
+    float camLastMx{0.f}, camLastMy{0.f};
+    bool camFirstFrame{true};
+
+    // Chase orbit state (initialized when switching to Chase via F2).
+    float chaseYaw{180.f}, chasePitch{20.f}, chaseRadius{25.f};
+
+    // Cockpit look offset (accumulated from RMB drag; initialized on F1 switch).
+    float cockpitYaw{0.f}, cockpitPitch{0.f};
+
+    fl::FlightHud flightHud;
 
     // Performance overlay — initialise mode from persisted user config.
     PerformanceOverlay perfOverlay;
@@ -539,45 +550,86 @@ int main(int argc, char** argv) {
 
     bool running = true;
     while (running && !p.window->shouldClose()) {
-        // Sandbox: pull wheel events out of the SDL queue before pollEvents drains it.
-        if (inspector) {
+        // Pull scroll events before pollEvents drains them — affects Free and Chase camera zoom.
+        {
             SDL_PumpEvents();
             SDL_Event ev;
-            while (SDL_PeepEvents(&ev, 1, SDL_GETEVENT, SDL_EVENT_MOUSE_WHEEL, SDL_EVENT_MOUSE_WHEEL) > 0)
-                sbRadius = std::clamp(sbRadius - ev.wheel.y * 10.0f, 20.0f, 5000.0f);
+            while (SDL_PeepEvents(&ev, 1, SDL_GETEVENT, SDL_EVENT_MOUSE_WHEEL, SDL_EVENT_MOUSE_WHEEL) > 0) {
+                const float s = ev.wheel.y;
+                if (cameraController.mode() == fl::CameraMode::Free)
+                    sbRadius = std::clamp(sbRadius - s * 10.0f, 20.0f, 5000.0f);
+                else if (cameraController.mode() == fl::CameraMode::Chase)
+                    chaseRadius = std::clamp(chaseRadius - s * 2.0f, 5.0f, 200.0f);
+            }
         }
 
         p.window->pollEvents();
         p.renderer->beginFrame();
 
-        // Sandbox free-look: mouse orbit + keyboard zoom/reset.
-        if (inspector) {
+        // Player entity lookup — uses the snapshot from the previous clientNet->service() call.
+        // Stored as a raw pointer; valid until sceneRenderer.renderFrame() calls tryAdvance().
+        const fl::EntityRenderEntry* playerEntry = nullptr;
+        if (renderBridge.hasSnapshot()) {
+            for (const auto& e : renderBridge.current().entries)
+                if (e.entityIdx == clientHandler.assignedEntityIdx && e.entityGen == clientHandler.assignedEntityGen) {
+                    playerEntry = &e;
+                    break;
+                }
+        }
+
+        // F1=Cockpit, F2=Chase, F4=Free — direct mode activation.
+        {
+            const bool* keys = SDL_GetKeyboardState(nullptr);
+            static bool f1Prev{}, f2Prev{}, f4Prev{};
+            if (keys[SDL_SCANCODE_F1] && !f1Prev) {
+                cameraController.setMode(fl::CameraMode::Cockpit);
+                cockpitYaw = 0.f;
+                cockpitPitch = 0.f;
+                camFirstFrame = true;
+            }
+            if (keys[SDL_SCANCODE_F2] && !f2Prev) {
+                cameraController.setMode(fl::CameraMode::Chase);
+                if (playerEntry) {
+                    float ey = std::atan2(2.f * (playerEntry->orientation.w * playerEntry->orientation.y +
+                                                 playerEntry->orientation.x * playerEntry->orientation.z),
+                                          1.f - 2.f * (playerEntry->orientation.y * playerEntry->orientation.y +
+                                                       playerEntry->orientation.z * playerEntry->orientation.z));
+                    chaseYaw = glm::degrees(ey) + 180.f;
+                }
+                chasePitch = 20.f;
+                chaseRadius = 25.f;
+                camFirstFrame = true;
+            }
+            if (keys[SDL_SCANCODE_F4] && !f4Prev) {
+                cameraController.setMode(fl::CameraMode::Free);
+                camFirstFrame = true;
+            }
+            f1Prev = keys[SDL_SCANCODE_F1];
+            f2Prev = keys[SDL_SCANCODE_F2];
+            f4Prev = keys[SDL_SCANCODE_F4];
+        }
+
+        // Per-mode camera update.
+        {
             float mx = 0, my = 0;
             SDL_MouseButtonFlags mb = SDL_GetMouseState(&mx, &my);
-            if (!sbFirstFrame && (mb & SDL_BUTTON_LMASK)) {
-                sbYaw -= (mx - sbLastMouseX) * 0.35f;
-                sbPitch += (my - sbLastMouseY) * 0.25f;
-                sbPitch = std::clamp(sbPitch, -89.0f, 89.0f);
-            }
-            sbLastMouseX = mx;
-            sbLastMouseY = my;
-            sbFirstFrame = false;
-
             const bool* keys = SDL_GetKeyboardState(nullptr);
 
-            // Zoom.
-            if (keys[SDL_SCANCODE_EQUALS] || keys[SDL_SCANCODE_KP_PLUS])
-                sbRadius = std::max(20.0f, sbRadius - 5.0f);
-            if (keys[SDL_SCANCODE_MINUS] || keys[SDL_SCANCODE_KP_MINUS])
-                sbRadius = std::min(5000.0f, sbRadius + 5.0f);
-
-            // WASD — pan pivot in camera-relative horizontal plane.
-            // Q/E — altitude (world Y).
-            {
+            switch (cameraController.mode()) {
+            case fl::CameraMode::Free: {
+                if (!camFirstFrame && (mb & SDL_BUTTON_LMASK)) {
+                    sbYaw -= (mx - camLastMx) * 0.35f;
+                    sbPitch += (my - camLastMy) * 0.25f;
+                    sbPitch = std::clamp(sbPitch, -89.0f, 89.0f);
+                }
+                if (keys[SDL_SCANCODE_EQUALS] || keys[SDL_SCANCODE_KP_PLUS])
+                    sbRadius = std::max(20.0f, sbRadius - 5.0f);
+                if (keys[SDL_SCANCODE_MINUS] || keys[SDL_SCANCODE_KP_MINUS])
+                    sbRadius = std::min(5000.0f, sbRadius + 5.0f);
                 const float speed = std::max(1.0f, sbRadius * 0.01f);
-                const float yawRad = glm::radians(sbYaw);
-                const glm::vec3 fwd{-std::sin(yawRad), 0.0f, -std::cos(yawRad)};
-                const glm::vec3 rgt{std::cos(yawRad), 0.0f, -std::sin(yawRad)};
+                const float yr = glm::radians(sbYaw);
+                const glm::vec3 fwd{-std::sin(yr), 0.0f, -std::cos(yr)};
+                const glm::vec3 rgt{std::cos(yr), 0.0f, -std::sin(yr)};
                 if (keys[SDL_SCANCODE_W])
                     sbPivot += glm::dvec3(fwd * speed);
                 if (keys[SDL_SCANCODE_S])
@@ -590,17 +642,40 @@ int main(int argc, char** argv) {
                     sbPivot.y += speed;
                 if (keys[SDL_SCANCODE_Q])
                     sbPivot.y -= speed;
+                if (keys[SDL_SCANCODE_R]) {
+                    sbPivot = {0.0, 500.0, 0.0};
+                    sbYaw = 0.f;
+                    sbPitch = -10.f;
+                    sbRadius = 200.f;
+                }
+                cameraController.setFreeOrbit(sbPivot, sbYaw, sbPitch, sbRadius);
+                break;
             }
-
-            // Reset to initial formation view.
-            if (keys[SDL_SCANCODE_R]) {
-                sbPivot = {0.0, 500.0, 0.0};
-                sbYaw = 0.0f;
-                sbPitch = -10.0f;
-                sbRadius = 200.0f;
+            case fl::CameraMode::Chase:
+                if (playerEntry) {
+                    if (!camFirstFrame && (mb & SDL_BUTTON_LMASK)) {
+                        chaseYaw -= (mx - camLastMx) * 0.35f;
+                        chasePitch += (my - camLastMy) * 0.25f;
+                        chasePitch = std::clamp(chasePitch, -89.0f, 89.0f);
+                    }
+                    cameraController.setFreeOrbit(playerEntry->position, chaseYaw, chasePitch, chaseRadius);
+                }
+                break;
+            case fl::CameraMode::Cockpit:
+                if (playerEntry) {
+                    cameraController.setTarget(playerEntry->position, playerEntry->orientation);
+                    if (!camFirstFrame && (mb & SDL_BUTTON_RMASK)) {
+                        cockpitYaw -= (mx - camLastMx) * 0.35f;
+                        cockpitPitch += (my - camLastMy) * 0.25f;
+                        cockpitPitch = std::clamp(cockpitPitch, -80.0f, 80.0f);
+                    }
+                    cameraController.setCockpitLook(cockpitYaw, cockpitPitch);
+                }
+                break;
             }
-
-            cameraController.setFreeOrbit(sbPivot, sbYaw, sbPitch, sbRadius);
+            camLastMx = mx;
+            camLastMy = my;
+            camFirstFrame = false;
         }
 
         if (inspector && !inspector->update())
@@ -662,7 +737,11 @@ int main(int argc, char** argv) {
 
         sceneRenderer.renderFrame(alpha, cam, env, sandboxEmitters);
 
-        // Performance overlay — update stats and push lines to renderer.
+        // HUD: active only in Cockpit mode. playerEntry may be nullptr (no snapshot yet or
+        // tryAdvance() updated the bridge, but the pointer remains valid this frame — see comment above).
+        flightHud.update(cameraController.mode() == fl::CameraMode::Cockpit ? playerEntry : nullptr);
+
+        // Performance overlay (F3) and 2D HUD submit.
         {
             const bool* keys = SDL_GetKeyboardState(nullptr);
             static bool f3PrevDown = false;
@@ -677,6 +756,7 @@ int main(int argc, char** argv) {
 
             perfOverlay.update(p.renderer->getFrameStats(), entityManager.liveCount(), 1000.0f / 60.0f);
             p.renderer->setOverlayLines(perfOverlay.lines());
+            p.renderer->submitHudElements(flightHud.elements());
         }
 
         p.renderer->endFrame();

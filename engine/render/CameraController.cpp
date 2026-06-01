@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render/CameraController.h"
 
+#include <glm/ext/matrix_clip_space.hpp>
 #include <glm/gtc/matrix_transform.hpp> // glm::lookAt
-#include <glm/gtc/quaternion.hpp>       // glm::quat operator*
+#include <glm/gtc/quaternion.hpp>       // glm::quat operator*, glm::angleAxis
 
 #include <cmath>
 
@@ -30,34 +31,45 @@ void CameraController::setTarget(glm::dvec3 worldPosition, glm::quat worldOrient
     m_targetOri = worldOrientation;
 }
 
-CameraView CameraController::view(float aspectRatio, float fovY, float near) const {
-    glm::dvec3 camWorldPos;
-    glm::dvec3 lookTarget;
+void CameraController::setCockpitLook(float yawDeg, float pitchDeg) noexcept {
+    m_cockpitYaw = yawDeg;
+    m_cockpitPitch = pitchDeg;
+}
 
-    if (m_mode == CameraMode::Chase) {
-        // Position camera behind and above the target entity.
-        // kChaseBack is in entity +Z local space (away from nose in standard body frame).
-        glm::vec3 localBack{0.0f, 0.0f, kChaseBack};
-        glm::vec3 worldBack = m_targetOri * localBack;
-        glm::vec3 worldUp{0.0f, kChaseUp, 0.0f};
-        camWorldPos = m_targetPos + glm::dvec3(worldBack) + glm::dvec3(worldUp);
-        lookTarget = m_targetPos;
-    } else {
+CameraView CameraController::view(float aspectRatio, float fovY, float near) const {
+    CameraView cv;
+
+    switch (m_mode) {
+    case CameraMode::Cockpit: {
+        // Camera sits at entity position, looking along entity forward + cockpit offsets.
+        // lookRot is applied in entity space: yaw around entity Y, pitch around entity X.
+        glm::quat lookRot = glm::angleAxis(glm::radians(m_cockpitYaw), glm::vec3{0.f, 1.f, 0.f}) *
+                            glm::angleAxis(glm::radians(m_cockpitPitch), glm::vec3{1.f, 0.f, 0.f});
+        glm::vec3 viewDir = m_targetOri * lookRot * glm::vec3{0.f, 0.f, -1.f};
+        cv.worldOrigin = m_targetPos;
+        glm::vec3 up{0.f, 1.f, 0.f};
+        if (std::abs(glm::dot(viewDir, up)) > 0.999f)
+            up = glm::vec3{1.f, 0.f, 0.f}; // fallback to avoid NaN near vertical
+        cv.view = glm::lookAt(glm::vec3(0.f), viewDir, up);
+        break;
+    }
+    case CameraMode::Chase:
+    case CameraMode::Free:
+    default: {
         // Spherical orbit around pivot.
+        // Chase: caller sets pivot = entity position each frame.
+        // Free: caller sets pivot = freely movable world reference point.
         float yawRad = glm::radians(m_yaw);
         float pitchRad = glm::radians(m_pitch);
         float cosP = std::cos(pitchRad);
-        camWorldPos = m_pivot + glm::dvec3(std::sin(yawRad) * cosP * m_distance, std::sin(pitchRad) * m_distance,
-                                           std::cos(yawRad) * cosP * m_distance);
-        lookTarget = m_pivot;
+        glm::dvec3 camWorldPos =
+            m_pivot + glm::dvec3(std::sin(yawRad) * cosP * m_distance, std::sin(pitchRad) * m_distance,
+                                 std::cos(yawRad) * cosP * m_distance);
+        cv.worldOrigin = camWorldPos;
+        cv.view = glm::lookAt(glm::vec3(0.f), glm::vec3(m_pivot - camWorldPos), glm::vec3(0.f, 1.f, 0.f));
+        break;
     }
-
-    CameraView cv;
-    cv.worldOrigin = camWorldPos;
-
-    // Camera-relative view: camera sits at origin in camera-relative world space.
-    // lookTarget - camWorldPos is always a small offset (≤ kChaseBack or orbit radius) — safe to narrow.
-    cv.view = glm::lookAt(glm::vec3(0.0f), glm::vec3(lookTarget - camWorldPos), glm::vec3(0.0f, 1.0f, 0.0f));
+    }
 
     // Infinite reverse-Z perspective with Vulkan clip-space Y-flip.
     // near plane → depth 1.0; far (∞) → depth 0.0.

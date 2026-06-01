@@ -22,6 +22,11 @@ target_link_libraries(test_scene_renderer PRIVATE Catch2::Catch2WithMain engine-
 target_include_directories(test_scene_renderer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_scene_renderer)
 
+add_executable(test_flight_hud test_flight_hud.cpp)
+target_link_libraries(test_flight_hud PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_flight_hud PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_flight_hud)
+
 add_executable(test_particle_system test_particle_system.cpp)
 target_link_libraries(test_particle_system PRIVATE Catch2::Catch2WithMain engine-render)
 target_include_directories(test_particle_system PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

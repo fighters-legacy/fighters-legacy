@@ -19,6 +19,8 @@ struct EntityRenderEntry {
     glm::vec3 velocity{};                                      // world velocity (m/s) — used for sub-tick extrapolation
     uint8_t damageLevel{0};                                    // cast from DamageLevel; 0 = Intact
     bool playerOwned{false};
+    uint8_t throttle{0}; // [0–100]; from wire MsgEntityEntry::throttle
+    uint8_t fuelPct{0};  // [0–100]; from wire MsgEntityEntry::fuelPct
 };
 
 // Full entity-world snapshot published by the sim thread once per tick.

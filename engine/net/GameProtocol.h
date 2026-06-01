@@ -88,8 +88,9 @@ struct MsgEntityEntry {
     float vel[3]{};  // world velocity (m/s) for dead-reckoning
     float ori[4]{};  // orientation quaternion: x, y, z, w (matches EntityTransform::quat)
     uint8_t damageLevel{0};
-    uint8_t flags{0}; // bit 0 = playerOwned
-    uint8_t _pad[2]{};
+    uint8_t flags{0};    // bit 0 = playerOwned
+    uint8_t throttle{0}; // [0–100] throttle_actual * 100; 0 for non-player entities
+    uint8_t fuelPct{0};  // [0–100] fuel_kg / max_fuel * 100; 0 for non-player entities
 }; // 68 bytes
 static_assert(sizeof(MsgEntityEntry) == 68u, "MsgEntityEntry wire size changed");
 static_assert(offsetof(MsgEntityEntry, typeIndex) == 8u, "MsgEntityEntry::typeIndex offset changed");
@@ -100,6 +101,8 @@ static_assert(offsetof(MsgEntityEntry, vel) == 36u, "MsgEntityEntry::vel offset 
 static_assert(offsetof(MsgEntityEntry, ori) == 48u, "MsgEntityEntry::ori offset changed");
 static_assert(offsetof(MsgEntityEntry, damageLevel) == 64u, "MsgEntityEntry::damageLevel offset changed");
 static_assert(offsetof(MsgEntityEntry, flags) == 65u, "MsgEntityEntry::flags offset changed");
+static_assert(offsetof(MsgEntityEntry, throttle) == 66u, "MsgEntityEntry::throttle offset changed");
+static_assert(offsetof(MsgEntityEntry, fuelPct) == 67u, "MsgEntityEntry::fuelPct offset changed");
 
 // Reliable, client→server, sent each render frame.
 struct MsgClientInput {

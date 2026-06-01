@@ -99,7 +99,8 @@ Per-entity state appended N times after `MsgWorldSnapshotHeader`.
 | 48 | 16 | `ori[4]` | `float[4]` | Orientation quaternion **`[x, y, z, w]`** wire order; GLM constructor is `(w, x, y, z)` |
 | 64 | 1 | `damageLevel` | `uint8_t` | 0=Intact, 1=Minor, 2=Severe, 3=Critical |
 | 65 | 1 | `flags` | `uint8_t` | Bit 0 = playerOwned |
-| 66 | 2 | `_pad[2]` | `uint8_t[2]` | Reserved, always 0 |
+| 66 | 1 | `throttle` | `uint8_t` | Actual throttle [0, 100] = 0%–100% (`FlightState::throttle_actual × 100`); 0 for non-player entities |
+| 67 | 1 | `fuelPct` | `uint8_t` | Fuel remaining [0, 100] = 0%–100% of max fuel; 0 for non-player entities |
 
 ### MsgClientInput — 44 bytes
 

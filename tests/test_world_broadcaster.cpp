@@ -620,3 +620,42 @@ TEST_CASE("WorldBroadcaster: getPeerCount tracks connect and disconnect", "[worl
     broadcaster.onDisconnect(42);
     CHECK(broadcaster.getPeerCount() == 0);
 }
+
+TEST_CASE("WorldBroadcaster: onTick populates throttle in WorldSnapshot from FlightState", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    // Send a client input with full throttle.
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.throttle = 1.f;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    net.broadcasts.clear();
+    // Multiple ticks allow the spool-up lag to partially settle.
+    for (int i = 0; i < 10; ++i)
+        broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(i + 1));
+
+    REQUIRE(!net.broadcasts.empty());
+    const auto& pkt = net.broadcasts.back();
+    REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry));
+
+    fl::MsgWorldSnapshotHeader hdr;
+    std::memcpy(&hdr, pkt.data(), sizeof(hdr));
+    REQUIRE(hdr.entityCount >= 1u);
+
+    fl::MsgEntityEntry e;
+    std::memcpy(&e, pkt.data() + sizeof(hdr), sizeof(e));
+
+    // throttle_actual spools up over time; after 10 ticks at 1.f input it should be > 0.
+    CHECK(e.throttle > 0u);
+    // The encoded value is throttle_actual * 100, clamped to [0, 100].
+    CHECK(e.throttle <= 100u);
+}
