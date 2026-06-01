@@ -149,8 +149,7 @@ void DiscoveryBeacon::send(int playerCount) {
     pkt.playerCount = static_cast<uint8_t>(std::clamp(playerCount, 0, 255));
     pkt.maxPlayers = m_cfg.maxPlayers;
     pkt.gameModeFlags = m_cfg.gameModeFlags;
-    std::memset(pkt.name, 0, sizeof(pkt.name));
-    std::strncpy(pkt.name, m_cfg.name.c_str(), sizeof(pkt.name) - 1);
+    std::snprintf(pkt.name, sizeof(pkt.name), "%s", m_cfg.name.c_str());
 
     uint8_t buf[sizeof(fl::MsgLanBeacon)];
     std::memcpy(buf, &pkt, sizeof(pkt));
