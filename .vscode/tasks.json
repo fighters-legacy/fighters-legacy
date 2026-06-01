@@ -1,6 +1,7 @@
 {
   "version": "2.0.0",
   "tasks": [
+    // ── Build ──────────────────────────────────────────────────────────────
     {
       "label": "Configure (Debug)",
       "type": "shell",
@@ -50,6 +51,8 @@
       },
       "problemMatcher": "$gcc"
     },
+
+    // ── Test ───────────────────────────────────────────────────────────────
     {
       "label": "Test (Debug)",
       "type": "shell",
@@ -65,15 +68,120 @@
       },
       "problemMatcher": []
     },
+
+    // ── CI checks (mirrors ubuntu-latest CI steps) ─────────────────────────
+    //
+    // "CI: All (Linux)" runs every check below in sequence.
+    // Individual tasks can also be run standalone from the command palette.
     {
-      "label": "Run hello_triangle",
+      "label": "CI: clang-format check",
       "type": "shell",
-      "command": "${workspaceFolder}/build/debug/tools/hello_triangle",
+      "command": "git diff --name-only --diff-filter=d origin/main...HEAD | grep -E '\\.(cpp|h|hpp|c)$' | xargs -r clang-format-22 --dry-run --Werror",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CI: REUSE lint",
+      "type": "shell",
+      "command": "reuse lint",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CI: Smoke tests",
+      "type": "shell",
+      "command": "./build/debug/game/fighters-legacy/fighters-legacy --version && ./build/debug/server/fl-server/fl-server --version && ./build/debug/tools/validate-flight-model --version && ./build/debug/tools/validate-mission --version && ./build/debug/tools/validate-mesh --version && ./build/debug/tools/tex-compress --version && ./build/debug/tools/validate-licenses --version && ./build/debug/tools/validate-playlist --version && ./build/debug/tools/terrain-chunk-io --version",
       "dependsOn": "Build (Debug)",
       "presentation": {
         "reveal": "always",
-        "panel": "dedicated",
-        "focus": true
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CI: pytest (gen_terrain_chunks)",
+      "type": "shell",
+      "command": "python3 -m pytest tests/test_gen_terrain_chunks.py -v",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CI: Locale lint",
+      "type": "shell",
+      "command": "cmake --build --preset debug --target locale-extract && ./build/debug/tools/locale-extract --src engine --locale locale --dry-run",
+      "dependsOn": "Build (Debug)",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CI: Configure (ASAN)",
+      "type": "shell",
+      "command": "cmake --preset asan",
+      "env": {
+        "CC": "clang",
+        "CXX": "clang++"
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CI: Build (ASAN)",
+      "type": "shell",
+      "command": "cmake --build --preset asan",
+      "group": "build",
+      "dependsOn": "CI: Configure (ASAN)",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "CI: Test (ASAN)",
+      "type": "shell",
+      "command": "mkdir -p \"$HOME/.config\" && printf '[general]\\ndrivers = null\\n' > \"$HOME/.config/alsoft.conf\" && ctest --preset asan --output-on-failure",
+      "env": {
+        "ASAN_OPTIONS": "halt_on_error=1:detect_leaks=1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      },
+      "group": "test",
+      "dependsOn": "CI: Build (ASAN)",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CI: All (Linux)",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "CI: clang-format check",
+        "CI: REUSE lint",
+        "Test (Debug)",
+        "CI: Smoke tests",
+        "CI: pytest (gen_terrain_chunks)",
+        "CI: Locale lint",
+        "CI: Test (ASAN)"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
       },
       "problemMatcher": []
     }

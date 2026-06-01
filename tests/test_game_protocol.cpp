@@ -38,7 +38,8 @@ TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
         entries[i].ori[3] = 1.0f; // w=1 = identity
         entries[i].damageLevel = 0;
         entries[i].flags = (i == 0) ? 1u : 0u;
-        entries[i]._pad[0] = entries[i]._pad[1] = 0;
+        entries[i].throttle = 0;
+        entries[i].fuelPct = 0;
     }
 
     // Pack into a byte buffer (simulating network send).

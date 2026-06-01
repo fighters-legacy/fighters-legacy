@@ -3515,6 +3515,10 @@ void VkRenderer::setOverlayLines(std::span<const std::string_view> lines) {
     m_overlayLines.assign(lines.begin(), lines.end());
 }
 
+void VkRenderer::submitHudElements(std::span<const HudElement> elements) {
+    m_hudElements = elements;
+}
+
 // ---------------------------------------------------------------------------
 // Overlay pipeline — created lazily on first non-empty setOverlayLines call
 // ---------------------------------------------------------------------------
@@ -3548,6 +3552,11 @@ bool VkRenderer::createOverlayPipeline() {
                 }
             }
         }
+        // Reserve glyph 0xFF (col=15, row=15) as a solid-white block for line/rect HUD fills.
+        // Sampling any UV within this glyph returns 1.0 → outColor = vertex_color.
+        for (int y = 0; y < 16; ++y)
+            for (int x = 0; x < 8; ++x)
+                atlas[static_cast<size_t>(15 * 16 + y) * kFontW + static_cast<size_t>(15 * 8 + x)] = 0xFFu;
 
         // Staging buffer (host-visible, one-shot upload).
         VkBuffer stagingBuf{VK_NULL_HANDLE};
@@ -3726,9 +3735,9 @@ bool VkRenderer::createOverlayPipeline() {
         vkUpdateDescriptorSets(m_device, 1, &wr, 0, nullptr);
     }
 
-    // ── Vertex buffer (host-visible, max kMaxOverlayChars × 6 verts) ──────
+    // ── Vertex buffer (host-visible, overlay text + 2D HUD elements) ──────
     {
-        const VkDeviceSize vbSize = kMaxOverlayChars * 6u * kOverlayVertexSize;
+        const VkDeviceSize vbSize = (kMaxOverlayChars + kMaxHudVerts) * 6u * kOverlayVertexSize;
         VkBufferCreateInfo vbCI{};
         vbCI.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         vbCI.size = vbSize;
@@ -3929,6 +3938,82 @@ void VkRenderer::recordOverlayPass(VkCommandBuffer cmd) {
         }
         cy += kCharH + kLineGap;
     }
+
+    // ── 2D HUD elements ────────────────────────────────────────────────────
+    // UV center of glyph 0xFF (solid-white block reserved in atlas).
+    constexpr float kWhiteU = (15.f * kCharW + kCharW * 0.5f) / kAtlasW; // 0.96875
+    constexpr float kWhiteV = (15.f * kCharH + kCharH * 0.5f) / kAtlasH; // 0.96875
+
+    const float vpW = static_cast<float>(m_swapchainExtent.width);
+    const float vpH = static_cast<float>(m_swapchainExtent.height);
+    const uint32_t kTotalBudget = (kMaxOverlayChars + kMaxHudVerts) * 6u;
+
+    for (const HudElement& el : m_hudElements) {
+        switch (el.type) {
+        case HudElement::Type::Text: {
+            float cx = el.x * vpW;
+            float baseY = el.y * vpH;
+            float cw = kCharW * el.scale;
+            float ch = kCharH * el.scale;
+            for (unsigned char c : el.text) {
+                if (vertCount + 6 > kTotalBudget)
+                    break;
+                const float u0 = static_cast<float>(c % 16u) * kCharW / kAtlasW;
+                const float u1 = u0 + kCharW / kAtlasW;
+                const float v0 = static_cast<float>(c / 16u) * kCharH / kAtlasH;
+                const float v1 = v0 + kCharH / kAtlasH;
+                const float x0 = cx, x1 = cx + cw;
+                const float y0 = baseY, y1 = baseY + ch;
+                verts[vertCount++] = {{x0, y0}, {u0, v0}, {el.r, el.g, el.b, el.a}};
+                verts[vertCount++] = {{x1, y0}, {u1, v0}, {el.r, el.g, el.b, el.a}};
+                verts[vertCount++] = {{x1, y1}, {u1, v1}, {el.r, el.g, el.b, el.a}};
+                verts[vertCount++] = {{x0, y0}, {u0, v0}, {el.r, el.g, el.b, el.a}};
+                verts[vertCount++] = {{x1, y1}, {u1, v1}, {el.r, el.g, el.b, el.a}};
+                verts[vertCount++] = {{x0, y1}, {u0, v1}, {el.r, el.g, el.b, el.a}};
+                cx += cw;
+            }
+            break;
+        }
+        case HudElement::Type::Rect: {
+            if (vertCount + 6 > kTotalBudget)
+                break;
+            const float x0 = el.x * vpW, y0 = el.y * vpH;
+            const float x1 = el.x2 * vpW, y1 = el.y2 * vpH;
+            verts[vertCount++] = {{x0, y0}, {kWhiteU, kWhiteV}, {el.r, el.g, el.b, el.a}};
+            verts[vertCount++] = {{x1, y0}, {kWhiteU, kWhiteV}, {el.r, el.g, el.b, el.a}};
+            verts[vertCount++] = {{x1, y1}, {kWhiteU, kWhiteV}, {el.r, el.g, el.b, el.a}};
+            verts[vertCount++] = {{x0, y0}, {kWhiteU, kWhiteV}, {el.r, el.g, el.b, el.a}};
+            verts[vertCount++] = {{x1, y1}, {kWhiteU, kWhiteV}, {el.r, el.g, el.b, el.a}};
+            verts[vertCount++] = {{x0, y1}, {kWhiteU, kWhiteV}, {el.r, el.g, el.b, el.a}};
+            break;
+        }
+        case HudElement::Type::Line: {
+            if (vertCount + 6 > kTotalBudget)
+                break;
+            const float sx = el.x * vpW, sy = el.y * vpH;
+            const float ex = el.x2 * vpW, ey = el.y2 * vpH;
+            const float dx = ex - sx, dy = ey - sy;
+            const float len = std::sqrt(dx * dx + dy * dy);
+            if (len < 1e-4f)
+                break; // degenerate line — skip to avoid NaN
+            const float nx = -dy / len * el.strokeWidth * 0.5f;
+            const float ny = dx / len * el.strokeWidth * 0.5f;
+            // Four corners of the thick line quad
+            float ax = sx + nx, ay = sy + ny;
+            float bx = sx - nx, by = sy - ny;
+            float cx2 = ex + nx, cy2 = ey + ny;
+            float dx2 = ex - nx, dy2 = ey - ny;
+            verts[vertCount++] = {{ax, ay}, {kWhiteU, kWhiteV}, {el.r, el.g, el.b, el.a}};
+            verts[vertCount++] = {{cx2, cy2}, {kWhiteU, kWhiteV}, {el.r, el.g, el.b, el.a}};
+            verts[vertCount++] = {{dx2, dy2}, {kWhiteU, kWhiteV}, {el.r, el.g, el.b, el.a}};
+            verts[vertCount++] = {{ax, ay}, {kWhiteU, kWhiteV}, {el.r, el.g, el.b, el.a}};
+            verts[vertCount++] = {{dx2, dy2}, {kWhiteU, kWhiteV}, {el.r, el.g, el.b, el.a}};
+            verts[vertCount++] = {{bx, by}, {kWhiteU, kWhiteV}, {el.r, el.g, el.b, el.a}};
+            break;
+        }
+        }
+    }
+    m_hudElements = {}; // clear after consuming
 
     if (vertCount == 0)
         return;

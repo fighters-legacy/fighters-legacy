@@ -61,6 +61,23 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     std::vector<uint8_t> buf;
     buf.reserve(sizeof(MsgWorldSnapshotHeader) + 64 * sizeof(MsgEntityEntry));
 
+    // Build entityIdx -> throttle/fuelPct map from peer flight integrators
+    // so the forEach lambda can fill telemetry fields without a map lookup per entity.
+    struct TelemetryEntry {
+        uint8_t throttle;
+        uint8_t fuelPct;
+    };
+    std::unordered_map<uint32_t, TelemetryEntry> entityTelemetry;
+    for (auto& [pid, fi] : m_peerFlightSims) {
+        auto eit = m_peerEntities.find(pid);
+        if (eit != m_peerEntities.end()) {
+            const auto& s = fi->state();
+            entityTelemetry[eit->second.index] = {
+                static_cast<uint8_t>(s.throttle_actual * 100.f),
+                static_cast<uint8_t>(std::clamp(s.fuel_kg / 4000.f * 100.f, 0.f, 100.f))};
+        }
+    }
+
     // Write header placeholder; fill entityCount after iteration.
     MsgWorldSnapshotHeader hdr;
     hdr.msgId = static_cast<uint8_t>(MsgId::WorldSnapshot);
@@ -89,8 +106,9 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         entry.ori[3] = state.transform.quat[3]; // w
         entry.damageLevel = static_cast<uint8_t>(state.damageLevel);
         entry.flags = state.playerOwned ? 1u : 0u;
-        entry._pad[0] = 0;
-        entry._pad[1] = 0;
+        auto tit = entityTelemetry.find(state.id.index);
+        entry.throttle = (tit != entityTelemetry.end()) ? tit->second.throttle : 0u;
+        entry.fuelPct = (tit != entityTelemetry.end()) ? tit->second.fuelPct : 0u;
 
         buf.resize(buf.size() + sizeof(MsgEntityEntry));
         std::memcpy(buf.data() + buf.size() - sizeof(MsgEntityEntry), &entry, sizeof(entry));

@@ -10,6 +10,8 @@
 
 namespace fs = std::filesystem;
 
+// REUSE-IgnoreStart — test fixtures intentionally contain fake SPDX expressions
+
 // ── RAII temp directory ───────────────────────────────────────────────────────
 
 struct TempDir {
@@ -227,3 +229,5 @@ TEST_CASE("multiple violations are all reported", "[validate-licenses]") {
     CHECK_FALSE(r.ok);
     CHECK(r.errors.size() >= 3);
 }
+
+// REUSE-IgnoreEnd

@@ -181,6 +181,25 @@ struct SubtitleEntry {
 };
 
 // ---------------------------------------------------------------------------
+// Screen-space 2D HUD element for IRenderer::submitHudElements().
+// Positions are normalized (0–1), top-left origin.
+// string_view data must remain alive until after IRenderer::endFrame().
+// ---------------------------------------------------------------------------
+struct HudElement {
+    enum class Type : uint8_t { Text, Line, Rect };
+
+    Type type{Type::Text};
+    float x{0.f};           // top-left / line-start X (0–1)
+    float y{0.f};           // top-left / line-start Y (0–1)
+    float x2{0.f};          // line-end X / rect right / unused for Text
+    float y2{0.f};          // line-end Y / rect bottom / unused for Text
+    float strokeWidth{1.f}; // Line: thickness in screen pixels
+    float r{1.f}, g{1.f}, b{1.f}, a{1.f};
+    float scale{1.f};      // Text: glyph scale multiplier (1.0 = base 8×16 px)
+    std::string_view text; // Type::Text only; empty for Line/Rect
+};
+
+// ---------------------------------------------------------------------------
 // Full scene description submitted between IRenderer::beginFrame and endFrame.
 // Spans are non-owning views; the caller must keep the backing arrays alive
 // until after endFrame() returns.

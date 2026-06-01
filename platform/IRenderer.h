@@ -84,4 +84,11 @@ class IRenderer {
     // Must be called between beginFrame and endFrame. Empty span = no overlay.
     // The span and all string_view data must remain alive until endFrame returns.
     virtual void setOverlayLines(std::span<const std::string_view> lines) = 0;
+
+    // ── 2D HUD ──────────────────────────────────────────────────────────────
+    // Renders 2D HUD elements (text, lines, rects) over the final swapchain
+    // image using the same font atlas as the debug overlay.
+    // Must be called between beginFrame and endFrame. Empty span = no HUD.
+    // All string_view data in elements must remain alive until endFrame returns.
+    virtual void submitHudElements(std::span<const HudElement> elements) = 0;
 };

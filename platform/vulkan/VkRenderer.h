@@ -144,8 +144,9 @@ class VkRenderer : public IRenderer {
     // ── Per-frame stats ────────────────────────────────────────────────────
     FrameStats getFrameStats() const override;
 
-    // ── Debug overlay ──────────────────────────────────────────────────────
+    // ── Debug overlay + 2D HUD ────────────────────────────────────────────
     void setOverlayLines(std::span<const std::string_view> lines) override;
+    void submitHudElements(std::span<const HudElement> elements) override;
 
   private:
     // ── Core Vulkan objects ────────────────────────────────────────────────
@@ -415,8 +416,9 @@ class VkRenderer : public IRenderer {
     float m_timestampPeriod{1.0f}; // nanoseconds per timestamp tick
     bool m_timestampSupported{false};
 
-    // ── Debug overlay ─────────────────────────────────────────────────────
+    // ── Debug overlay + 2D HUD ────────────────────────────────────────────
     std::vector<std::string_view> m_overlayLines; // set by setOverlayLines(), valid until endFrame
+    std::span<const HudElement> m_hudElements;    // set by submitHudElements(), cleared after pass
     bool m_overlayReady{false};                   // true once createOverlayPipeline() succeeds
 
     VkDescriptorSetLayout m_overlayDsLayout{VK_NULL_HANDLE};
@@ -430,8 +432,9 @@ class VkRenderer : public IRenderer {
     VkDeviceMemory m_fontImageMemory{VK_NULL_HANDLE};
     VkImageView m_fontImageView{VK_NULL_HANDLE};
 
-    // Host-visible vertex buffer for overlay quads (rebuilt each frame when active).
-    static constexpr uint32_t kMaxOverlayChars = 1024;
+    // Host-visible vertex buffer shared by overlay text and 2D HUD elements (rebuilt each frame).
+    static constexpr uint32_t kMaxOverlayChars = 1024; // debug text characters
+    static constexpr uint32_t kMaxHudVerts = 4096;     // 2D HUD line/rect/text vertices
     VkBuffer m_overlayVB{VK_NULL_HANDLE};
     VkDeviceMemory m_overlayVBMemory{VK_NULL_HANDLE};
     void* m_overlayVBMapped{nullptr};
