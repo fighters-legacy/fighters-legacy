@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include "flight/BuiltinFlightModel.h"
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelParser.h"
 
@@ -95,7 +96,7 @@ TEST_CASE("Integrator: single step changes state", "[integrator]") {
     FlightIntegrator integ(makeData());
     FlightState s{};
     s.vel_body[0] = 100.f; // 100 m/s forward
-    s.pos_world[2] = 1000.f;
+    s.pos_world[1] = 1000.f;
     s.mass_kg = 14000.f;
     s.fuel_kg = 4000.f;
     integ.reset(s);
@@ -115,7 +116,7 @@ TEST_CASE("Integrator: fuel burns at MIL rate when throttle=1", "[integrator]") 
     FlightIntegrator integ(data);
     FlightState s{};
     s.vel_body[0] = 50.f;
-    s.pos_world[2] = 1000.f;
+    s.pos_world[1] = 1000.f;
     s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
     s.fuel_kg = data->geometry.fuel_kg;
     s.throttle_actual = 1.f;
@@ -143,7 +144,7 @@ TEST_CASE("Integrator: spool lag converges to commanded throttle", "[integrator]
     FlightIntegrator integ(data);
     FlightState s{};
     s.vel_body[0] = 50.f;
-    s.pos_world[2] = 1000.f;
+    s.pos_world[1] = 1000.f;
     s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
     s.fuel_kg = data->geometry.fuel_kg;
     integ.reset(s);
@@ -167,7 +168,7 @@ TEST_CASE("Integrator: fuel does not go negative", "[integrator]") {
     FlightIntegrator integ(data);
     FlightState s{};
     s.vel_body[0] = 100.f;
-    s.pos_world[2] = 1000.f;
+    s.pos_world[1] = 1000.f;
     s.mass_kg = data->geometry.mass_kg + 1.f;
     s.fuel_kg = 1.f; // nearly empty
     s.throttle_actual = 1.f;
@@ -189,7 +190,7 @@ TEST_CASE("Integrator: no NaN propagation at zero airspeed", "[integrator]") {
     auto data = makeData();
     FlightIntegrator integ(data);
     FlightState s{}; // all zero velocity
-    s.pos_world[2] = 0.f;
+    s.pos_world[1] = 0.f;
     s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
     s.fuel_kg = data->geometry.fuel_kg;
     integ.reset(s);
@@ -201,14 +202,14 @@ TEST_CASE("Integrator: no NaN propagation at zero airspeed", "[integrator]") {
     const auto& st = integ.state();
     CHECK(std::isfinite(st.vel_body[0]));
     CHECK(std::isfinite(st.omega[0]));
-    CHECK(std::isfinite(st.pos_world[2]));
+    CHECK(std::isfinite(st.pos_world[1]));
 }
 
 TEST_CASE("Integrator: payload increases effective drag", "[integrator]") {
     auto data = makeData();
     FlightState init{};
     init.vel_body[0] = 200.f;
-    init.pos_world[2] = 3000.f;
+    init.pos_world[1] = 3000.f;
     init.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
     init.fuel_kg = data->geometry.fuel_kg;
     init.throttle_actual = 0.8f;
@@ -241,7 +242,7 @@ gyro_factor   = 0.02
     auto data = makeData(prop_toml);
     FlightState s{};
     s.vel_body[0] = 100.f;
-    s.pos_world[2] = 1000.f;
+    s.pos_world[1] = 1000.f;
     s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
     s.fuel_kg = data->geometry.fuel_kg;
     s.throttle_actual = 1.f;
@@ -267,7 +268,7 @@ gyro_factor   = 0.0
     auto data = makeData(prop_toml);
     FlightState s{};
     s.vel_body[0] = 100.f;
-    s.pos_world[2] = 1000.f;
+    s.pos_world[1] = 1000.f;
     s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
     s.fuel_kg = data->geometry.fuel_kg;
     s.throttle_actual = 1.f;
@@ -289,7 +290,7 @@ TEST_CASE("Integrator: wing sweep absent causes no crash", "[integrator]") {
     auto data = makeData();
     FlightState s{};
     s.vel_body[0] = 200.f;
-    s.pos_world[2] = 5000.f;
+    s.pos_world[1] = 5000.f;
     s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
     s.fuel_kg = data->geometry.fuel_kg;
     s.throttle_actual = 0.7f;
@@ -312,7 +313,7 @@ TEST_CASE("Integrator: control surface mapping scales correctly", "[integrator]"
     auto data = makeData();
     FlightState s{};
     s.vel_body[0] = 200.f;
-    s.pos_world[2] = 5000.f;
+    s.pos_world[1] = 5000.f;
     s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
     s.fuel_kg = data->geometry.fuel_kg;
     FlightIntegrator integ(data);
@@ -324,15 +325,15 @@ TEST_CASE("Integrator: control surface mapping scales correctly", "[integrator]"
     PayloadEffect px{};
     integ.step(1.f / 60.f, ctrl, px);
 
-    // Full nose-up elevator → pitch rate (omega[1]) should go positive (nose up)
-    CHECK(integ.state().omega[1] > 0.f);
+    // Full nose-up elevator → pitch rate (omega[2] = around Z=right) should go positive (nose up)
+    CHECK(integ.state().omega[2] > 0.f);
 }
 
 TEST_CASE("Integrator: speedbrake and gear drag decelerate aircraft", "[integrator]") {
     auto data = makeData();
     FlightState s{};
     s.vel_body[0] = 200.f;
-    s.pos_world[2] = 5000.f;
+    s.pos_world[1] = 5000.f;
     s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
     s.fuel_kg = data->geometry.fuel_kg;
     s.throttle_actual = 0.f;
@@ -350,4 +351,114 @@ TEST_CASE("Integrator: speedbrake and gear drag decelerate aircraft", "[integrat
     ib.step(1.f / 60.f, ctrl_brake, px);
 
     CHECK(ib.state().vel_body[0] < ic.state().vel_body[0]);
+}
+
+// ---------------------------------------------------------------------------
+// Y-up coordinate alignment regression tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Integrator: gravity decreases altitude (Y-up world)", "[integrator]") {
+    // Verifies that gravity acts in the correct direction after the Y-up alignment.
+    // A stationary craft at 500 m with zero throttle must fall, not rise.
+    auto data = makeData();
+    FlightIntegrator integ(data);
+    FlightState s{};
+    s.pos_world[1] = 500.f; // altitude = Y in Y-up world
+    s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+    s.fuel_kg = data->geometry.fuel_kg;
+    integ.reset(s);
+
+    ControlInput ctrl{};
+    PayloadEffect px{};
+    for (int i = 0; i < 60; ++i)
+        integ.step(1.f / 60.f, ctrl, px);
+
+    CHECK(integ.state().pos_world[1] < 500.f);
+}
+
+// ---------------------------------------------------------------------------
+// BuiltinFlightModel tests
+// ---------------------------------------------------------------------------
+
+static FlightState makeBuiltinState() {
+    const auto& d = *BuiltinFlightModel::get();
+    FlightState s{};
+    s.pos_world[1] = 500.f;
+    s.vel_body[0] = 40.f;
+    s.fuel_kg = d.geometry.fuel_kg;
+    s.mass_kg = d.geometry.mass_kg + s.fuel_kg;
+    s.throttle_actual = 0.4f;
+    return s;
+}
+
+TEST_CASE("BuiltinFlightModel: 1 second integration is NaN/Inf/negative-fuel free", "[builtin_flight]") {
+    FlightIntegrator fi(BuiltinFlightModel::get());
+    fi.reset(makeBuiltinState());
+    ControlInput ctrl{};
+    PayloadEffect px{};
+    for (int i = 0; i < 60; ++i)
+        fi.step(1.f / 60.f, ctrl, px);
+
+    const auto& st = fi.state();
+    CHECK(std::isfinite(st.pos_world[0]));
+    CHECK(std::isfinite(st.pos_world[1]));
+    CHECK(std::isfinite(st.pos_world[2]));
+    CHECK(std::isfinite(st.vel_body[0]));
+    CHECK(std::isfinite(st.omega[0]));
+    CHECK(st.fuel_kg >= 0.f);
+}
+
+TEST_CASE("BuiltinFlightModel: pitch input produces non-zero pitch rate", "[builtin_flight]") {
+    FlightIntegrator fi(BuiltinFlightModel::get());
+    fi.reset(makeBuiltinState());
+    ControlInput ctrl{};
+    ctrl.elevator = 1.f;
+    PayloadEffect px{};
+    for (int i = 0; i < 60; ++i)
+        fi.step(1.f / 60.f, ctrl, px);
+
+    // In Y-up body frame, pitch = rotation around Z (right) = omega[2].
+    CHECK(fi.state().omega[2] != 0.f);
+}
+
+TEST_CASE("BuiltinFlightModel: roll input produces non-zero roll rate", "[builtin_flight]") {
+    FlightIntegrator fi(BuiltinFlightModel::get());
+    fi.reset(makeBuiltinState());
+    ControlInput ctrl{};
+    ctrl.aileron = 1.f;
+    PayloadEffect px{};
+    for (int i = 0; i < 60; ++i)
+        fi.step(1.f / 60.f, ctrl, px);
+
+    CHECK(fi.state().omega[0] != 0.f);
+}
+
+TEST_CASE("BuiltinFlightModel: yaw input produces non-zero yaw rate", "[builtin_flight]") {
+    FlightIntegrator fi(BuiltinFlightModel::get());
+    fi.reset(makeBuiltinState());
+    ControlInput ctrl{};
+    ctrl.rudder = 1.f;
+    PayloadEffect px{};
+    for (int i = 0; i < 60; ++i)
+        fi.step(1.f / 60.f, ctrl, px);
+
+    // In Y-up body frame, yaw = rotation around Y (up) = omega[1].
+    CHECK(fi.state().omega[1] != 0.f);
+}
+
+TEST_CASE("BuiltinFlightModel: throttle produces forward acceleration from rest", "[builtin_flight]") {
+    FlightIntegrator fi(BuiltinFlightModel::get());
+    FlightState s{};
+    s.pos_world[1] = 500.f;
+    s.fuel_kg = BuiltinFlightModel::get()->geometry.fuel_kg;
+    s.mass_kg = BuiltinFlightModel::get()->geometry.mass_kg + s.fuel_kg;
+    fi.reset(s);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    PayloadEffect px{};
+    for (int i = 0; i < 60; ++i)
+        fi.step(1.f / 60.f, ctrl, px);
+
+    CHECK(fi.state().vel_body[0] > 0.f);
 }

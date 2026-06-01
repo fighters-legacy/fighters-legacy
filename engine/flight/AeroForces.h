@@ -27,7 +27,7 @@ struct PayloadEffect {
     float extra_cd0{0.f};
 };
 
-// Forces in body frame [x=forward, y=right, z=down] (N).
+// Forces in body frame [x=forward, y=up, z=right] (N).
 std::array<float, 3> computeForces(float alpha_rad, float beta_rad, float mach, float speed_m_s, float altitude_m,
                                    float current_sweep_deg, bool ab_engaged, float throttle_actual,
                                    const ControlInput& ctrl, const PayloadEffect& payload, const FlightModelData& data,
