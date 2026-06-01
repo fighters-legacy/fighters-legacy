@@ -103,9 +103,10 @@ TEST_CASE("Lift is zero at zero alpha and Mach 0.6", "[aero]") {
     // alpha=0, beta=0, Mach=0.6 (speed = 0.6 * 340.3 ≈ 204 m/s)
     float spd = 0.6f * atmos.speed_of_sound_m_s;
     auto f = computeForces(0.f, 0.f, 0.6f, spd, 0.f, 55.f, false, 0.f, ctrl, payload, data, atmos);
-    // At alpha=0 CL≈0.06; lift is small but positive; we check forces[2] (−lift*cos(alpha)) < 0
-    // Mainly verifying no crash and lift is non-NaN
+    // At alpha=0 CL≈0.06; lift is small but positive (forces[1] = lift*cos(alpha) > 0).
+    // Mainly verifying no crash and values are finite.
     CHECK(std::isfinite(f[0]));
+    CHECK(std::isfinite(f[1]));
     CHECK(std::isfinite(f[2]));
 }
 
@@ -168,6 +169,7 @@ TEST_CASE("Zero speed produces zero aerodynamic forces without NaN", "[aero]") {
     CHECK(std::isfinite(f[2]));
     // Dynamic pressure is zero, so aero forces are zero (thrust also 0 at throttle=0)
     CHECK_THAT(f[0], WithinAbs(0.f, 1e-3f));
+    CHECK_THAT(f[1], WithinAbs(0.f, 1e-3f));
     CHECK_THAT(f[2], WithinAbs(0.f, 1e-3f));
 }
 
@@ -194,4 +196,20 @@ TEST_CASE("Payload drag and mass accumulate correctly", "[aero]") {
     auto fp = computeForces(0.f, 0.f, 0.6f, spd, 0.f, 55.f, false, 0.8f, ctrl, with_payload, data, atmos);
     // Higher drag from payload → less forward force
     CHECK(fp[0] < f0[0]);
+}
+
+TEST_CASE("AeroForces: lift is in the Y-up direction at positive alpha", "[aero]") {
+    // Regression test for the Y-up body-frame alignment.
+    // With body frame [x=fwd, y=up, z=right], aerodynamic lift must be positive in
+    // forces[1] (the upward axis), not negative in forces[2] (the old Z-down convention).
+    auto data = makeData();
+    auto atmos = computeAtmosphere(0.f);
+    ControlInput ctrl{};
+    PayloadEffect payload{};
+    float spd = 0.4f * atmos.speed_of_sound_m_s; // subsonic, well-behaved alpha
+
+    auto f = computeForces(10.f * 3.14159f / 180.f, 0.f, 0.4f, spd, 0.f, 55.f, false, 0.f, ctrl, payload, data, atmos);
+
+    CHECK(f[1] > 0.f);  // upward aerodynamic force is positive Y
+    CHECK(f[2] == 0.f); // no lateral force
 }

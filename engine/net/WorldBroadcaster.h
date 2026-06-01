@@ -6,12 +6,14 @@
 #include "loop/ISimUpdate.h"
 
 #include <cstdint>
+#include <memory>
 #include <unordered_map>
 
 class ILogger;
 
 namespace fl {
 class EntityManager;
+class FlightIntegrator; // full definition in WorldBroadcaster.cpp
 struct EntityState;
 class EntityTypeRegistry;
 } // namespace fl
@@ -29,15 +31,15 @@ struct PeerInputState {
 };
 
 // Wraps EntityManager to provide a server-side ISimUpdate that:
-//   1. Applies per-peer client inputs to owned entities (simple kinematics).
+//   1. Advances each peer's FlightIntegrator from stored client inputs.
 //   2. Advances the entity simulation each tick (calls EntityManager::onTick).
 //   3. Serializes live entity state into a MsgWorldSnapshot packet.
 //   4. Broadcasts the packet to all connected clients via INetwork.
 //   5. Calls INetwork::service(0) to flush the outbound ENet queue.
 //
 // Also implements INetworkEventHandler to:
-//   - Spawn a player entity and send MsgConnectAck on each new connection.
-//   - Kill the player entity and clean up on disconnect.
+//   - Spawn a player entity, create its FlightIntegrator, and send MsgConnectAck on connect.
+//   - Kill the player entity and tear down its FlightIntegrator on disconnect.
 //   - Decode and validate MsgClientInput packets.
 //
 // Threading: all ISimUpdate and INetworkEventHandler methods are called from
@@ -46,6 +48,7 @@ struct PeerInputState {
 class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
   public:
     WorldBroadcaster(EntityManager& entityManager, EntityTypeRegistry& registry, INetwork& net, ILogger& logger);
+    ~WorldBroadcaster(); // defined in .cpp — FlightIntegrator must be complete at destruction
 
     // ISimUpdate
     void onTick(double simDt, uint64_t tickIndex) override;
@@ -57,7 +60,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
   private:
     void sendConnectAck(uint32_t peerId, EntityId assigned);
-    void applyPeerInput(EntityState& state, const PeerInputState& inp, double simDt);
+    void stepFlightSim(FlightIntegrator& fi, EntityState& state, const PeerInputState& inp, double simDt);
 
     EntityManager& m_entityManager;
     EntityTypeRegistry& m_registry;
@@ -66,6 +69,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     std::unordered_map<uint32_t, EntityId> m_peerEntities;
     std::unordered_map<uint32_t, PeerInputState> m_peerInputs;
+    std::unordered_map<uint32_t, std::unique_ptr<FlightIntegrator>> m_peerFlightSims;
 };
 
 } // namespace fl

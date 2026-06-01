@@ -137,7 +137,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     if (m_data->wing_sweep) {
         const float* vel = m_state.vel_body;
         float spd = std::sqrt(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]);
-        AtmosphereState atmos = computeAtmosphere(m_state.pos_world[2]);
+        AtmosphereState atmos = computeAtmosphere(m_state.pos_world[1]);
         float mach = (atmos.speed_of_sound_m_s > 0.f) ? spd / atmos.speed_of_sound_m_s : 0.f;
         float sched_sweep = m_data->wing_sweep->schedule.lookup(mach);
         advanceSweep(dt, sched_sweep);
@@ -146,8 +146,8 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     // 3. TVC
     advanceTvc(dt, ctrl.tvc_angle_deg);
 
-    // 4. Compute atmosphere at current altitude (world z = altitude in our convention)
-    float altitude_m = m_state.pos_world[2];
+    // 4. Compute atmosphere at current altitude (world y = altitude, Y-up convention)
+    float altitude_m = m_state.pos_world[1];
     AtmosphereState atmos = computeAtmosphere(altitude_m);
 
     // 5. Airspeed and aerodynamic angles
@@ -155,8 +155,11 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     float spd = std::sqrt(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]);
     float mach = (atmos.speed_of_sound_m_s > 0.f) ? spd / atmos.speed_of_sound_m_s : 0.f;
 
-    float alpha_rad = (spd > 0.f) ? std::atan2(-vel[2], vel[0]) : 0.f;
-    float beta_rad = (spd > 0.f) ? std::asin(std::clamp(vel[1] / spd, -1.f, 1.f)) : 0.f;
+    // Body frame: x=forward, y=up, z=right.
+    // Pitched up → velocity dips below body nose → negative body-y component → positive alpha.
+    // Sideslip right → positive body-z component → positive beta.
+    float alpha_rad = (spd > 0.f) ? std::atan2(-vel[1], vel[0]) : 0.f;
+    float beta_rad = (spd > 0.f) ? std::asin(std::clamp(vel[2] / spd, -1.f, 1.f)) : 0.f;
 
     // 6. Effective mass including payload
     float eff_mass = m_state.mass_kg + payload.extra_mass_kg;
@@ -167,11 +170,9 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     auto forces = computeForces(alpha_rad, beta_rad, mach, spd, altitude_m, m_state.current_sweep_deg,
                                 m_state.ab_engaged, m_state.throttle_actual, ctrl, payload, *m_data, atmos);
 
-    // 8. Gravity in body frame (world z is up, gravity is +z_world = -z_body)
-    // In our convention pos_world[2] = altitude (up), so gravity acts -z_world = down.
-    // Body z points down in level flight, so gravity contributes +z_body when level.
-    // Transform world gravity vector [0, 0, -g] by inverse quaternion to body frame.
-    const float grav_world[3] = {0.f, 0.f, -kG}; // world: x=forward, y=right, z=up
+    // 8. Gravity in body frame. World convention: x=forward, y=up, z=right.
+    // Gravity acts downward = -world_y. Transform to body frame via conjugate quaternion.
+    const float grav_world[3] = {0.f, -kG, 0.f}; // world: x=forward, y=up, z=right
     // Conjugate quaternion for world→body rotation
     float q_conj[4] = {-m_state.quat[0], -m_state.quat[1], -m_state.quat[2], m_state.quat[3]};
     auto grav_body = quatRotate(q_conj, grav_world);
@@ -189,17 +190,20 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     else
         thrust_n = m_state.throttle_actual * mil_kn * 1000.f;
 
-    // 10. Moments in body frame
-    auto moments = computeMoments(alpha_rad, beta_rad, m_state.omega[0], m_state.omega[1], m_state.omega[2], spd,
+    // 10. Moments in body frame.
+    // omega[0]=roll(X), omega[1]=yaw(Y=up), omega[2]=pitch(Z=right).
+    // computeMoments expects (p=roll, q=pitch, r=yaw).
+    auto moments = computeMoments(alpha_rad, beta_rad, m_state.omega[0], m_state.omega[2], m_state.omega[1], spd,
                                   thrust_n, m_state.tvc_angle_deg * kDegToRad, ctrl, *m_data, atmos);
 
-    // 11. Semi-implicit Euler: angular velocity
+    // 11. Semi-implicit Euler: angular velocity.
+    // moments = {roll, pitch, yaw}; omega = {roll(X), yaw(Y), pitch(Z)}.
     float Ixx = m_data->geometry.ixx_kg_m2;
     float Iyy = m_data->geometry.iyy_kg_m2;
     float Izz = m_data->geometry.izz_kg_m2;
-    m_state.omega[0] += (moments[0] / Ixx) * dt; // roll
-    m_state.omega[1] += (moments[1] / Iyy) * dt; // pitch
-    m_state.omega[2] += (moments[2] / Izz) * dt; // yaw
+    m_state.omega[0] += (moments[0] / Ixx) * dt; // roll  (omega[0] = around X=fwd)
+    m_state.omega[2] += (moments[1] / Iyy) * dt; // pitch (omega[2] = around Z=right)
+    m_state.omega[1] += (moments[2] / Izz) * dt; // yaw   (omega[1] = around Y=up)
 
     // 12. Semi-implicit Euler: translational velocity
     m_state.vel_body[0] += (forces[0] / eff_mass) * dt;

@@ -83,18 +83,18 @@ std::array<float, 3> computeForces(float alpha_rad, float beta_rad, float mach, 
     }
 
     // ── Body-frame assembly ───────────────────────────────────────────────────
-    // Lift is normal to velocity; drag is anti-velocity.
-    // In body frame with small beta assumption:
+    // Body frame: x=forward, y=up, z=right. Gravity added by integrator.
+    // Lift is normal to velocity (acts upward = +y). Drag opposes velocity.
     //   x (forward): thrust − drag*cos(alpha) + lift*sin(alpha)
-    //   y (right):   0 (neglecting side force from beta; handled via moments)
-    //   z (down):    −lift*cos(alpha) − drag*sin(alpha) + weight component (gravity added by integrator)
+    //   y (up):      lift*cos(alpha) + drag*sin(alpha)   (net upward aero force)
+    //   z (right):   0 (side force from beta handled via moments only)
     float cos_a = std::cos(alpha_rad);
     float sin_a = std::sin(alpha_rad);
 
     std::array<float, 3> forces{};
     forces[0] = thrust_n - drag * cos_a + lift * sin_a; // x: forward
-    forces[1] = 0.f;                                    // y: right (side force omitted)
-    forces[2] = -(lift * cos_a + drag * sin_a);         // z: down (lift acts upward = negative z)
+    forces[1] = lift * cos_a + drag * sin_a;            // y: up
+    forces[2] = 0.f;                                    // z: right (side force omitted)
 
     return forces;
 }

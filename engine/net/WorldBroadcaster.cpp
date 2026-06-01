@@ -6,9 +6,12 @@
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
+#include "flight/BuiltinFlightModel.h"
+#include "flight/FlightIntegrator.h"
 #include "net/GameProtocol.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -29,48 +32,26 @@ static void quatRotate(const float q[4], const float v[3], float out[3]) {
     out[2] = v[2] + 2.f * q[3] * tz + 2.f * (q[0] * ty - q[1] * tx);
 }
 
-// Hamilton product: out = a * b.
-static void quatMul(const float a[4], const float b[4], float out[4]) {
-    out[0] = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1];
-    out[1] = a[3] * b[1] + a[1] * b[3] + a[2] * b[0] - a[0] * b[2];
-    out[2] = a[3] * b[2] + a[2] * b[3] + a[0] * b[1] - a[1] * b[0];
-    out[3] = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2];
-}
-
-static void quatNormalize(float q[4]) {
-    float mag = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-    if (mag > 1e-6f) {
-        q[0] /= mag;
-        q[1] /= mag;
-        q[2] /= mag;
-        q[3] /= mag;
-    } // else: degenerate quaternion — unreachable in practice; left as safety guard // GCOV_EXCL_LINE
-}
-
-// ---------------------------------------------------------------------------
-// Kinematics constants
-// ---------------------------------------------------------------------------
-
-static constexpr float kMaxSpeedMps = 340.f; // Mach 1 cap for sandbox
-static constexpr float kMaxRateRadS = 1.f;   // max angular rate (rad/s)
-
 namespace fl {
 
 WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegistry& registry, INetwork& net,
                                    ILogger& logger)
     : m_entityManager(entityManager), m_registry(registry), m_net(net), m_logger(logger) {}
 
+WorldBroadcaster::~WorldBroadcaster() = default;
+
 void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
-    // Apply stored client inputs to owned entities before the housekeeping tick
-    // so the render snapshot captures updated positions.
+    // Step each peer's FlightIntegrator from stored inputs, then copy state to the entity.
     for (auto& [peerId, inp] : m_peerInputs) {
         auto eit = m_peerEntities.find(peerId);
         if (eit == m_peerEntities.end())
             continue;
+        auto fit = m_peerFlightSims.find(peerId);
+        assert(fit != m_peerFlightSims.end()); // invariant: added together in onConnect
         EntityState* state = m_entityManager.get(eit->second);
         if (!state || state->dead)
             continue;
-        applyPeerInput(*state, inp, simDt);
+        stepFlightSim(*fit->second, *state, inp, simDt);
     }
 
     m_entityManager.onTick(simDt, tickIndex);
@@ -134,6 +115,21 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     if (id.valid()) {
         m_peerEntities[peerId] = id;
         m_peerInputs[peerId] = {};
+
+        // Initialise FlightIntegrator at spawn position with some forward airspeed
+        // so the craft generates lift immediately.
+        FlightState fs{};
+        fs.pos_world[0] = static_cast<float>(t.pos[0]);
+        fs.pos_world[1] = static_cast<float>(t.pos[1]); // Y = altitude (both Y-up)
+        fs.pos_world[2] = static_cast<float>(t.pos[2]);
+        fs.vel_body[0] = 40.f; // 40 m/s forward → lift from first tick
+        fs.fuel_kg = BuiltinFlightModel::get()->geometry.fuel_kg;
+        fs.mass_kg = BuiltinFlightModel::get()->geometry.mass_kg + fs.fuel_kg;
+        fs.throttle_actual = 0.4f; // pre-spooled to avoid initial stall
+
+        auto fi = std::make_unique<FlightIntegrator>(BuiltinFlightModel::get());
+        fi->reset(fs);
+        m_peerFlightSims.emplace(peerId, std::move(fi));
     }
     sendConnectAck(peerId, id);
 }
@@ -149,6 +145,7 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
         m_peerEntities.erase(it);
     }
     m_peerInputs.erase(peerId);
+    m_peerFlightSims.erase(peerId);
 }
 
 void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t size) {
@@ -185,35 +182,32 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
     // Unknown msgIds: silently discard (no log spam; future protocol versions may add new IDs)
 }
 
-void WorldBroadcaster::applyPeerInput(EntityState& state, const PeerInputState& inp, double simDt) {
-    // Compute forward direction: entity body +X axis rotated into world space.
-    float fwd[3];
-    const float bodyFwd[3] = {1.f, 0.f, 0.f};
-    quatRotate(state.transform.quat, bodyFwd, fwd);
+void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, const PeerInputState& inp,
+                                     double simDt) {
+    ControlInput ctrl{};
+    ctrl.throttle = inp.throttle;
+    ctrl.elevator = inp.elevator;
+    ctrl.aileron = inp.aileron;
+    ctrl.rudder = inp.rudder;
 
-    float speed = inp.throttle * kMaxSpeedMps;
-    state.transform.vel[0] = fwd[0] * speed;
-    state.transform.vel[1] = fwd[1] * speed;
-    state.transform.vel[2] = fwd[2] * speed;
+    fi.step(static_cast<float>(simDt), ctrl, {});
 
-    state.transform.pos[0] += static_cast<double>(state.transform.vel[0]) * simDt;
-    state.transform.pos[1] += static_cast<double>(state.transform.vel[1]) * simDt;
-    state.transform.pos[2] += static_cast<double>(state.transform.vel[2]) * simDt;
+    const FlightState& fs = fi.state();
 
-    // Build incremental rotation quaternion from angular rates (small-angle approximation).
-    float halfDt = static_cast<float>(simDt) * 0.5f;
-    float dq[4] = {
-        inp.elevator * kMaxRateRadS * halfDt, // pitch (X axis)
-        inp.rudder * kMaxRateRadS * halfDt,   // yaw   (Y axis)
-        inp.aileron * kMaxRateRadS * halfDt,  // roll  (Z axis)
-        1.f,
-    };
-    quatNormalize(dq);
+    // World velocity: rotate body velocity into world frame.
+    float wv[3];
+    quatRotate(fs.quat, fs.vel_body, wv);
 
-    float nq[4];
-    quatMul(state.transform.quat, dq, nq);
-    quatNormalize(nq);
-    std::memcpy(state.transform.quat, nq, sizeof(nq));
+    // Coordinate conventions are identical (both Y-up) — copy directly.
+    state.transform.pos[0] = static_cast<double>(fs.pos_world[0]);
+    state.transform.pos[1] = static_cast<double>(fs.pos_world[1]);
+    state.transform.pos[2] = static_cast<double>(fs.pos_world[2]);
+
+    state.transform.vel[0] = wv[0];
+    state.transform.vel[1] = wv[1];
+    state.transform.vel[2] = wv[2];
+
+    std::memcpy(state.transform.quat, fs.quat, 4 * sizeof(float));
 }
 
 void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned) {

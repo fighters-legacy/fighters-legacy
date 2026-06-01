@@ -178,6 +178,7 @@ target_include_directories(engine-net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-net
     PUBLIC  engine-entity
             platform-hal
+    PRIVATE engine-flight
 )
 
 # Per-frame stats collection and debug overlay line builder.
