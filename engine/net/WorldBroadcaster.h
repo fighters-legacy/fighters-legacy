@@ -12,7 +12,7 @@ class ILogger;
 
 namespace fl {
 class EntityManager;
-class EntityState;
+struct EntityState;
 class EntityTypeRegistry;
 } // namespace fl
 
