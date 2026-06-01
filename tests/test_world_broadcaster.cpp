@@ -71,12 +71,21 @@ static fl::EntityDef makeDebugDef(const char* id = "builtin:debug-entity") {
     return def;
 }
 
-// Parse the MsgConnectAck from the first send packet and return it.
+// Validate that the first send is a well-formed MsgHello with the current protocol version.
+static fl::MsgHello parseSendHello(const MockNetwork& net) {
+    REQUIRE(net.sends.size() >= 1u);
+    REQUIRE(net.sends[0].size() == sizeof(fl::MsgHello));
+    fl::MsgHello hello{};
+    std::memcpy(&hello, net.sends[0].data(), sizeof(hello));
+    return hello;
+}
+
+// Parse the MsgConnectAck from the second send packet (sends[1], after MsgHello).
 static fl::MsgConnectAck parseSendAck(const MockNetwork& net) {
-    REQUIRE(!net.sends.empty());
-    REQUIRE(net.sends[0].size() >= sizeof(fl::MsgConnectAck));
+    REQUIRE(net.sends.size() >= 2u);
+    REQUIRE(net.sends[1].size() >= sizeof(fl::MsgConnectAck));
     fl::MsgConnectAck ack{};
-    std::memcpy(&ack, net.sends[0].data(), sizeof(ack));
+    std::memcpy(&ack, net.sends[1].data(), sizeof(ack));
     return ack;
 }
 
@@ -153,11 +162,8 @@ TEST_CASE("WorldBroadcaster: onConnect sends ConnectAck with registered types an
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.onConnect(0u);
 
-    REQUIRE(net.sends.size() == 1u);
+    REQUIRE(net.sends.size() == 2u);
     CHECK(net.sendReliable);
-
-    const auto& pkt = net.sends[0];
-    REQUIRE(pkt.size() >= sizeof(fl::MsgConnectAck));
 
     fl::MsgConnectAck ack = parseSendAck(net);
     CHECK(ack.msgId == static_cast<uint8_t>(fl::MsgId::ConnectAck));
@@ -180,7 +186,7 @@ TEST_CASE("WorldBroadcaster: onConnect with empty registry sends typeCount=0 and
 
     broadcaster.onConnect(0u);
 
-    REQUIRE(net.sends.size() == 1u);
+    REQUIRE(net.sends.size() == 2u);
     fl::MsgConnectAck ack = parseSendAck(net);
     CHECK(ack.typeCount == 0u);
     CHECK(ack.assignedEntityIdx == 0u); // spawn failed — type not registered
@@ -224,7 +230,7 @@ TEST_CASE("WorldBroadcaster: onDisconnect after connect removes peer entity", "[
     // Entity is marked dead and reaped on the next onTick.
     broadcaster.onTick(1.0 / 60.0, 1u);
     CHECK(em.liveCount() == 0u);
-    CHECK(net.sends.size() == 1u); // only the ConnectAck, no sends on disconnect
+    CHECK(net.sends.size() == 2u); // MsgHello + ConnectAck on connect; nothing sent on disconnect
 }
 
 TEST_CASE("WorldBroadcaster: onDisconnect does not crash and sends nothing", "[world_broadcaster]") {
@@ -485,9 +491,10 @@ TEST_CASE("WorldBroadcaster: two peers each control independent entities", "[wor
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     // Snapshot has both entities; find peer 0's and peer 1's entries by assigned idx.
+    // onConnect sends MsgHello (even index) then ConnectAck (odd index) for each peer.
     fl::MsgConnectAck ack0, ack1;
-    std::memcpy(&ack0, net.sends[0].data(), sizeof(ack0));
-    std::memcpy(&ack1, net.sends[1].data(), sizeof(ack1));
+    std::memcpy(&ack0, net.sends[1].data(), sizeof(ack0)); // peer 0: sends[0]=Hello, sends[1]=Ack
+    std::memcpy(&ack1, net.sends[3].data(), sizeof(ack1)); // peer 1: sends[2]=Hello, sends[3]=Ack
 
     REQUIRE(!net.broadcasts.empty());
     const auto& pkt = net.broadcasts[0];
@@ -513,4 +520,72 @@ TEST_CASE("WorldBroadcaster: two peers each control independent entities", "[wor
     CHECK(ePeer0.vel[0] > ePeer1.vel[0]);
     CHECK(std::isfinite(ePeer1.vel[0]));
     CHECK(std::isfinite(ePeer1.vel[1]));
+}
+
+TEST_CASE("WorldBroadcaster: onConnect sends MsgHello as first reliable packet", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    REQUIRE(net.sends.size() == 2u);
+
+    fl::MsgHello hello = parseSendHello(net);
+    CHECK(hello.msgId == static_cast<uint8_t>(fl::MsgId::Hello));
+    CHECK(hello.protocolVersion == fl::kProtocolVersion);
+
+    fl::MsgConnectAck ack = parseSendAck(net);
+    CHECK(ack.msgId == static_cast<uint8_t>(fl::MsgId::ConnectAck));
+}
+
+TEST_CASE("WorldBroadcaster: onReceive discards MsgClientInput with mismatched protocolVersion",
+          "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    // Send a full-throttle input with the wrong protocol version.
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.throttle = 1.f;
+    inp.protocolVersion = 0xFFFFu; // deliberate mismatch
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    net.broadcasts.clear();
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    REQUIRE(!net.broadcasts.empty());
+    const auto& pkt = net.broadcasts[0];
+    fl::MsgWorldSnapshotHeader hdr;
+    std::memcpy(&hdr, pkt.data(), sizeof(hdr));
+    REQUIRE(hdr.entityCount >= 1u);
+    fl::MsgEntityEntry e;
+    std::memcpy(&e, pkt.data() + sizeof(hdr), sizeof(e));
+    // Mismatched version discarded: default throttle=0 input used instead of throttle=1.
+    // Full throttle from 40 m/s produces ~40.6 m/s in one tick; this must stay < 40.1 m/s.
+    CHECK(e.vel[0] < 40.1f);
+}
+
+TEST_CASE("WorldBroadcaster: onTick broadcasts WorldSnapshot with correct protocolVersion", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    REQUIRE(net.broadcasts.size() == 1u);
+    fl::MsgWorldSnapshotHeader hdr;
+    std::memcpy(&hdr, net.broadcasts[0].data(), sizeof(hdr));
+    CHECK(hdr.protocolVersion == static_cast<uint8_t>(fl::kProtocolVersion));
 }

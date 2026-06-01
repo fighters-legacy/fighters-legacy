@@ -10,7 +10,12 @@ namespace fl {
 static constexpr uint8_t kNetChReliable = 0;
 static constexpr uint8_t kNetChUnreliable = 1;
 
+// Incremented whenever the wire format changes in a backward-incompatible way.
+// Clients that receive a MsgHello with a different protocolVersion must disconnect.
+static constexpr uint16_t kProtocolVersion = 1;
+
 enum class MsgId : uint8_t {
+    Hello = 0x00,         // server→client, reliable: first message sent on every new connection
     ConnectAck = 0x01,    // server→client, reliable: sent once on connect
     WorldSnapshot = 0x02, // server→client, unreliable: broadcast every sim tick
     ClientInput = 0x03,   // client→server, reliable: sent each frame
@@ -22,7 +27,17 @@ enum class MsgId : uint8_t {
 
 #pragma pack(push, 1)
 
-// Reliable, sent once on connect.
+// Reliable, server→client, first message sent on every new connection.
+// Client must check protocolVersion == kProtocolVersion and disconnect immediately on mismatch.
+struct MsgHello {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::Hello)};
+    uint8_t _pad{0};
+    uint16_t protocolVersion{kProtocolVersion};
+}; // 4 bytes
+static_assert(sizeof(MsgHello) == 4u, "MsgHello wire size changed");
+static_assert(offsetof(MsgHello, protocolVersion) == 2u, "MsgHello::protocolVersion offset changed");
+
+// Reliable, sent once on connect (after MsgHello).
 // Followed by typeCount × MsgEntityTypeDef in the same packet.
 struct MsgConnectAck {
     uint8_t msgId{static_cast<uint8_t>(MsgId::ConnectAck)};
@@ -53,7 +68,7 @@ static_assert(offsetof(MsgEntityTypeDef, dmgMesh) == 132u, "MsgEntityTypeDef::dm
 // Followed by entityCount × MsgEntityEntry in the same packet.
 struct MsgWorldSnapshotHeader {
     uint8_t msgId{static_cast<uint8_t>(MsgId::WorldSnapshot)};
-    uint8_t _pad{0};
+    uint8_t protocolVersion{static_cast<uint8_t>(kProtocolVersion)};
     uint16_t entityCount{0};
     uint64_t tickIndex{0};
 }; // 12 bytes
@@ -89,7 +104,7 @@ static_assert(offsetof(MsgEntityEntry, flags) == 65u, "MsgEntityEntry::flags off
 struct MsgClientInput {
     uint8_t msgId{static_cast<uint8_t>(MsgId::ClientInput)};
     uint8_t buttons{0}; // bit 0 = weaponTrigger, bit 1 = afterburner
-    uint8_t _pad[2]{};
+    uint16_t protocolVersion{kProtocolVersion};
     uint32_t seqNum{0};    // client-incremented wrapping sequence counter
     uint64_t tickIndex{0}; // client's last-received server tick (reserved for lag compensation — see #142)
     float throttle{0.f};   // [0.0, 1.0]

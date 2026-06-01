@@ -28,11 +28,25 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 
 | MsgId | Value | Direction | Channel | Size | Purpose |
 |-------|-------|-----------|---------|------|---------|
+| `Hello` | `0x00` | server→client | reliable | 4 bytes | Protocol version handshake; first message on every new connection |
 | `ConnectAck` | `0x01` | server→client | reliable | 12 + N×196 bytes | Handshake on connect; assigns entity slot and delivers type registry |
 | `WorldSnapshot` | `0x02` | server→client | unreliable | 12 + N×68 bytes | Per-tick entity state broadcast |
 | `ClientInput` | `0x03` | client→server | reliable | 44 bytes | Per-frame flight inputs |
 
 ## Struct Definitions
+
+### MsgHello — 4 bytes
+
+Sent by the server on every new connection (reliable channel 0) **before** `MsgConnectAck`. The
+client must compare `protocolVersion` against its own compiled `kProtocolVersion` and call
+`disconnect()` immediately on mismatch. If `protocolVersion` matches, the client ignores this
+message and waits for `MsgConnectAck`.
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x00` |
+| 1 | 1 | `_pad` | `uint8_t` | Reserved, always 0 |
+| 2 | 2 | `protocolVersion` | `uint16_t` | Server's `kProtocolVersion`; client disconnects if this != its own `kProtocolVersion` |
 
 ### MsgConnectAck — 12 bytes
 
@@ -66,7 +80,7 @@ Broadcast unreliably every sim tick (channel 1), immediately followed by
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
 | 0 | 1 | `msgId` | `uint8_t` | `0x02` |
-| 1 | 1 | `_pad` | `uint8_t` | Reserved; candidate for protocol version field per #92 — write 0 until defined |
+| 1 | 1 | `protocolVersion` | `uint8_t` | Server's `kProtocolVersion`; defense-in-depth echo — per-packet version stamp |
 | 2 | 2 | `entityCount` | `uint16_t` | Number of `MsgEntityEntry` records that follow |
 | 4 | 8 | `tickIndex` | `uint64_t` | Monotonically increasing server tick counter; at wire offset 4 (4-byte aligned, not 8-byte aligned) — **always use `memcpy`**; ARM64 (Linux arm64, Apple Silicon macOS) will SIGBUS on a direct pointer dereference; x86-64 handles it in hardware but UBSAN catches it |
 
@@ -94,7 +108,7 @@ Sent by the client each render frame on the reliable channel (channel 0).
 |--------|------|-------|------|-------|
 | 0 | 1 | `msgId` | `uint8_t` | `0x03` |
 | 1 | 1 | `buttons` | `uint8_t` | Bit 0 = weaponTrigger, bit 1 = afterburner |
-| 2 | 2 | `_pad[2]` | `uint8_t[2]` | Reserved; candidate for protocol version field per #92 — write 0 until defined |
+| 2 | 2 | `protocolVersion` | `uint16_t` | Client's `kProtocolVersion`; server discards packet and logs a warning on mismatch |
 | 4 | 4 | `seqNum` | `uint32_t` | Client-incremented wrapping sequence counter |
 | 8 | 8 | `tickIndex` | `uint64_t` | Client's last-received server `tickIndex` (reserved for lag compensation — #142) |
 | 16 | 4 | `throttle` | `float` | `[0.0, 1.0]` |
@@ -113,6 +127,8 @@ Client                              Server (fl-server sim thread)
   |                                     |
   |--- ENet connect ------------------>|
   |                                     | onConnect(peerId):
+  |<-- MsgHello (reliable) ------------|   protocolVersion = kProtocolVersion
+  | [disconnect if version mismatch]    |
   |                                     |   spawn "builtin:debug-entity" → EntityId
   |<-- MsgConnectAck (reliable) --------|   assignedEntityIdx/Gen in ack
   |    + N × MsgEntityTypeDef           |
@@ -132,17 +148,26 @@ Client                              Server (fl-server sim thread)
 
 ## Version Negotiation
 
-Not yet implemented — tracked in #92. Phase 2 `fl-server` accepts all connecting peers
-regardless of the client version.
+Implemented in #92. The protocol uses a two-level version check:
 
-`MsgConnectAck` has no protocol version field. `tickRateHz` at offset 1 carries the server
-tick rate (always 60); it is not a version identifier. The `_pad` bytes in
-`MsgWorldSnapshotHeader` (offset 1) and `MsgClientInput` (offsets 2–3) are reserved for a
-future version field per #92.
+**Initial handshake (`MsgHello`):** The server sends `MsgHello` as the very first reliable
+packet on every new connection, before `MsgConnectAck`. The client compares
+`MsgHello::protocolVersion` against its compiled `kProtocolVersion` constant. On mismatch the
+client logs an error and calls `disconnect()` immediately, before processing any further packets.
+On match the client continues normally and waits for `MsgConnectAck`.
 
-External tools (replay readers per #41, spectator clients, LAN discovery tools) should
-treat this spec as **protocol version 0** and be prepared to handle version negotiation once
-#92 ships.
+**Per-packet echo:** Every `MsgWorldSnapshotHeader` carries `protocolVersion` at offset 1 (server
+→ client); every `MsgClientInput` carries `protocolVersion` at offsets 2–3 (client → server). The
+server discards `MsgClientInput` packets whose `protocolVersion` does not match `kProtocolVersion`
+and logs a warning. These fields serve as a defense-in-depth sanity check — the primary
+negotiation happens via `MsgHello`.
+
+**`kProtocolVersion`** is defined as `constexpr uint16_t kProtocolVersion = 1` in
+`engine/net/GameProtocol.h`. It must be incremented whenever the wire format changes in a
+backward-incompatible way.
+
+External tools (replay readers per #41, spectator clients, LAN discovery tools) built against
+this spec are **protocol version 1** and must implement `MsgHello` handling to interoperate.
 
 ## Bandwidth and Scalability
 

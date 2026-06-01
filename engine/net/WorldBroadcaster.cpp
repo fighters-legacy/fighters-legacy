@@ -64,7 +64,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // Write header placeholder; fill entityCount after iteration.
     MsgWorldSnapshotHeader hdr;
     hdr.msgId = static_cast<uint8_t>(MsgId::WorldSnapshot);
-    hdr._pad = 0;
+    hdr.protocolVersion = static_cast<uint8_t>(kProtocolVersion);
     hdr.entityCount = 0;
     hdr.tickIndex = tickIndex;
 
@@ -108,6 +108,9 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     char msg[64];
     std::snprintf(msg, sizeof(msg), "peer %u connected", peerId);
     m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
+
+    MsgHello hello;
+    m_net.send(peerId, &hello, sizeof(hello), /*reliable=*/true);
 
     EntityTransform t{};
     t.pos[1] = 500.0; // spawn at 500 m altitude
@@ -160,6 +163,14 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
 
         MsgClientInput msg;
         std::memcpy(&msg, data, sizeof(msg));
+
+        if (msg.protocolVersion != kProtocolVersion) {
+            char vmsg[96];
+            std::snprintf(vmsg, sizeof(vmsg), "peer %u: ClientInput version mismatch (got %u, want %u) — discarding",
+                          peerId, static_cast<unsigned>(msg.protocolVersion), static_cast<unsigned>(kProtocolVersion));
+            m_logger.log(LogLevel::Warn, __FILE__, __LINE__, vmsg);
+            return;
+        }
 
         PeerInputState inp;
         inp.throttle = std::clamp(msg.throttle, 0.f, 1.f);
