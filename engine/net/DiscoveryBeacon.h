@@ -6,6 +6,7 @@
 #define NOMINMAX
 #include <winsock2.h>
 #include <ws2ipdef.h>
+#include <ws2tcpip.h> // inet_pton / inet_ntop on Windows
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
