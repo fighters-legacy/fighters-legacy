@@ -278,7 +278,7 @@ endif()
 catch_discover_tests(test_async_filesystem_sdl3 DISCOVERY_MODE PRE_TEST)
 
 add_executable(test_game_protocol test_game_protocol.cpp)
-target_link_libraries(test_game_protocol PRIVATE Catch2::Catch2WithMain engine-net)
+target_link_libraries(test_game_protocol PRIVATE Catch2::Catch2WithMain engine-net engine-weather)
 catch_discover_tests(test_game_protocol)
 
 add_executable(test_performance_overlay test_performance_overlay.cpp)
@@ -290,13 +290,17 @@ target_link_libraries(test_utf8_decode PRIVATE Catch2::Catch2WithMain platform-h
 catch_discover_tests(test_utf8_decode)
 
 add_executable(test_debug_console test_debug_console.cpp)
-target_link_libraries(test_debug_console PRIVATE Catch2::Catch2WithMain engine-debug engine-entity)
+target_link_libraries(test_debug_console PRIVATE Catch2::Catch2WithMain engine-debug engine-entity engine-weather)
 target_include_directories(test_debug_console PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_debug_console)
 
 add_executable(test_world_broadcaster test_world_broadcaster.cpp)
-target_link_libraries(test_world_broadcaster PRIVATE Catch2::Catch2WithMain engine-net)
+target_link_libraries(test_world_broadcaster PRIVATE Catch2::Catch2WithMain engine-net engine-weather)
 catch_discover_tests(test_world_broadcaster)
+
+add_executable(test_weather test_weather.cpp)
+target_link_libraries(test_weather PRIVATE Catch2::Catch2WithMain engine-weather)
+catch_discover_tests(test_weather)
 
 add_executable(test_terrain_chunk_io test_terrain_chunk_io.cpp)
 target_link_libraries(test_terrain_chunk_io PRIVATE Catch2::Catch2WithMain engine-render)

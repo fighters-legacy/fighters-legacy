@@ -19,6 +19,7 @@ enum class MsgId : uint8_t {
     ConnectAck = 0x01,    // server→client, reliable: sent once on connect
     WorldSnapshot = 0x02, // server→client, unreliable: broadcast every sim tick
     ClientInput = 0x03,   // client→server, reliable: sent each frame
+    WeatherState = 0x04,  // server→client, unreliable: broadcast every 10 ticks (~6 Hz); additive ID
     LanBeacon = 0x10,     // raw UDP broadcast — not sent over ENet; server→LAN presence packet
 };
 
@@ -122,6 +123,26 @@ static_assert(offsetof(MsgClientInput, seqNum) == 4u, "MsgClientInput::seqNum of
 static_assert(offsetof(MsgClientInput, tickIndex) == 8u, "MsgClientInput::tickIndex offset changed");
 static_assert(offsetof(MsgClientInput, throttle) == 16u, "MsgClientInput::throttle offset changed");
 static_assert(offsetof(MsgClientInput, viewAxis) == 32u, "MsgClientInput::viewAxis offset changed");
+
+// Unreliable, server→client, broadcast every 10 sim ticks (~6 Hz at 60 Hz).
+// Old clients that don't recognise msgId 0x04 silently discard — no kProtocolVersion bump.
+// timeOfDayTenths: encode timeOfDay as uint16 (hours * 10) to avoid float at offset 2 (ARM64).
+struct MsgWeatherState {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::WeatherState)};
+    uint8_t preset{0};           // WeatherPreset cast to uint8_t
+    uint16_t timeOfDayTenths{0}; // hours * 10; decode: / 10.f; range [0, 239]
+    float fogDensity{0.f};
+    float fogStartDist{5000.f};
+    float windX{0.f}; // world-frame wind x (m/s), includes gust component
+    float windZ{0.f}; // world-frame wind z (m/s), includes gust component
+}; // 1+1+2+4+4+4+4 = 20 bytes
+static_assert(sizeof(MsgWeatherState) == 20u, "MsgWeatherState wire size changed");
+static_assert(offsetof(MsgWeatherState, preset) == 1u, "MsgWeatherState::preset offset changed");
+static_assert(offsetof(MsgWeatherState, timeOfDayTenths) == 2u, "MsgWeatherState::timeOfDayTenths offset changed");
+static_assert(offsetof(MsgWeatherState, fogDensity) == 4u, "MsgWeatherState::fogDensity offset changed");
+static_assert(offsetof(MsgWeatherState, fogStartDist) == 8u, "MsgWeatherState::fogStartDist offset changed");
+static_assert(offsetof(MsgWeatherState, windX) == 12u, "MsgWeatherState::windX offset changed");
+static_assert(offsetof(MsgWeatherState, windZ) == 16u, "MsgWeatherState::windZ offset changed");
 
 // Raw UDP presence broadcast sent by fl-server on 255.255.255.255:<port> (IPv4 broadcast) and
 // [ff02::1]:<port> (IPv6 link-local multicast) every discoveryIntervalMs milliseconds.

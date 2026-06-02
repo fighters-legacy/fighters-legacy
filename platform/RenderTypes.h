@@ -140,7 +140,6 @@ struct RenderItem {
 
 // ---------------------------------------------------------------------------
 // Lighting and atmospheric parameters for one frame.
-// Weather and time-of-day extensions land in issue #39.
 // ---------------------------------------------------------------------------
 struct EnvironmentState {
     glm::vec3 sunDirection{0.0f, -1.0f, 0.0f}; // world-space, points toward sun
@@ -148,7 +147,8 @@ struct EnvironmentState {
     glm::vec3 ambientColor{0.1f, 0.12f, 0.15f};
     float fogDensity{0.0f};
     float fogStartDist{5000.0f};
-    float timeOfDay{12.0f}; // hours [0, 24)
+    float timeOfDay{12.0f};    // hours [0, 24)
+    float cloudCoverage{0.0f}; // [0=clear .. 1=full storm cover]; driven by WeatherController
 };
 
 // ---------------------------------------------------------------------------

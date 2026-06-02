@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "net/GameProtocol.h"
+#include "weather/WeatherTypes.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
@@ -166,4 +167,35 @@ TEST_CASE("GameProtocol: MsgHello round-trip", "[game_protocol]") {
 
     CHECK(parsed.msgId == static_cast<uint8_t>(fl::MsgId::Hello));
     CHECK(parsed.protocolVersion == fl::kProtocolVersion);
+}
+
+TEST_CASE("GameProtocol: MsgWeatherState round-trip preserves all fields", "[game_protocol][weather]") {
+    fl::MsgWeatherState src{};
+    src.preset = static_cast<uint8_t>(fl::WeatherPreset::Rain);
+    src.timeOfDayTenths = 145u; // 14.5 hours
+    src.fogDensity = 0.0003f;
+    src.fogStartDist = 8000.f;
+    src.windX = 5.5f;
+    src.windZ = -2.1f;
+
+    std::vector<uint8_t> buf(sizeof(src));
+    std::memcpy(buf.data(), &src, sizeof(src));
+
+    fl::MsgWeatherState parsed{};
+    std::memcpy(&parsed, buf.data(), sizeof(parsed));
+
+    CHECK(parsed.msgId == static_cast<uint8_t>(fl::MsgId::WeatherState));
+    CHECK(parsed.preset == static_cast<uint8_t>(fl::WeatherPreset::Rain));
+    CHECK(parsed.timeOfDayTenths == 145u);
+    CHECK(parsed.fogDensity == 0.0003f);
+    CHECK(parsed.fogStartDist == 8000.f);
+    CHECK(parsed.windX == 5.5f);
+    CHECK(parsed.windZ == -2.1f);
+}
+
+TEST_CASE("GameProtocol: MsgWeatherState timeOfDayTenths decodes to 14.5 hours", "[game_protocol][weather]") {
+    fl::MsgWeatherState ws{};
+    ws.timeOfDayTenths = 145u;
+    float tod = static_cast<float>(ws.timeOfDayTenths) / 10.f;
+    CHECK(tod == 14.5f);
 }

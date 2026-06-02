@@ -137,3 +137,25 @@ TEST_CASE("FlightHud no damage element when intact") {
             redFound = true;
     CHECK_FALSE(redFound);
 }
+
+TEST_CASE("FlightHud time display shows 09:00 for mid-morning", "[flight_hud][weather]") {
+    fl::FlightHud hud;
+    auto e = makeEntry();
+    hud.update(&e, 9.0f);
+    bool found = false;
+    for (const auto& el : hud.elements())
+        if (el.type == HudElement::Type::Text && el.text.find("09:00") != std::string_view::npos)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("FlightHud time display shows 23:30 for late night", "[flight_hud][weather]") {
+    fl::FlightHud hud;
+    auto e = makeEntry();
+    hud.update(&e, 23.5f);
+    bool found = false;
+    for (const auto& el : hud.elements())
+        if (el.type == HudElement::Type::Text && el.text.find("23:30") != std::string_view::npos)
+            found = true;
+    CHECK(found);
+}

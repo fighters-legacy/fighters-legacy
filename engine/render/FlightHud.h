@@ -22,7 +22,8 @@ class FlightHud {
   public:
     // Build HUD elements for this frame.
     // Pass nullptr to produce no elements (e.g. when camera mode != Cockpit).
-    void update(const EntityRenderEntry* playerEntry);
+    // timeOfDay: hours [0, 24) displayed as HH:MM in the top-right corner.
+    void update(const EntityRenderEntry* playerEntry, float timeOfDay = 12.0f);
 
     // Returns positioned, colored 2D elements for IRenderer::submitHudElements().
     // The span is valid until the next call to update().

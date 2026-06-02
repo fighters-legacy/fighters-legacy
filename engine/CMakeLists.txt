@@ -171,6 +171,13 @@ target_link_libraries(engine-flight
     PRIVATE tomlplusplus::tomlplusplus
 )
 
+# Server-authoritative weather state machine, time-of-day, and wind/gust model.
+add_library(engine-weather STATIC
+    weather/WeatherController.cpp
+)
+target_include_directories(engine-weather PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-weather PUBLIC platform-hal)
+
 # Authoritative server-sim serializer and network broadcaster.
 add_library(engine-net STATIC
     net/WorldBroadcaster.cpp
@@ -182,6 +189,7 @@ target_link_libraries(engine-net
     PUBLIC  engine-entity
             platform-hal
     PRIVATE engine-flight
+            engine-weather
 )
 if(WIN32)
     target_link_libraries(engine-net PRIVATE ws2_32)
@@ -205,4 +213,5 @@ target_link_libraries(engine-debug
     PUBLIC  platform-hal
             engine-entity
     PRIVATE engine-render   # DebugCommands reads SimRenderBridge for the entities command
+            engine-weather  # DebugCommands calls WeatherController::setPreset
 )

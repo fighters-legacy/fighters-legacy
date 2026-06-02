@@ -10,6 +10,7 @@
 #include "loop/GameLoop.h"
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
+#include "weather/WeatherController.h"
 
 #include <charconv>
 #include <cstdio>
@@ -246,12 +247,31 @@ void registerBuiltinCommands(DebugCommandRegistry& registry, DebugCommandContext
                              });
 
     // ------------------------------------------------------------------
-    // set_weather <state>  (stub)
+    // set_weather <preset>
     // ------------------------------------------------------------------
-    registry.registerCommand("set_weather", "set_weather <clear|overcast|rain|storm>  -- (stub, Phase 2b)",
-                             [](std::span<std::string_view>) -> std::string {
-                                 return "set_weather: weather system not yet implemented (Phase 2b)";
-                             });
+    registry.registerCommand(
+        "set_weather", "set_weather <clear|partly_cloudy|overcast|rain|storm>  -- set weather preset",
+        [ctx](std::span<std::string_view> args) -> std::string {
+            if (args.empty())
+                return "usage: set_weather <clear|partly_cloudy|overcast|rain|storm>";
+            if (!ctx.weatherController || !ctx.gameLoop)
+                return "set_weather: not available in this context";
+            fl::WeatherPreset p;
+            if (args[0] == "clear")
+                p = fl::WeatherPreset::Clear;
+            else if (args[0] == "partly_cloudy")
+                p = fl::WeatherPreset::PartlyCloudy;
+            else if (args[0] == "overcast")
+                p = fl::WeatherPreset::Overcast;
+            else if (args[0] == "rain")
+                p = fl::WeatherPreset::Rain;
+            else if (args[0] == "storm")
+                p = fl::WeatherPreset::Storm;
+            else
+                return "set_weather: unknown preset '" + std::string(args[0]) + "'";
+            ctx.gameLoop->enqueueSimCallback([wc = ctx.weatherController, p] { wc->setPreset(p); });
+            return "weather preset queued: " + std::string(args[0]);
+        });
 
     // ------------------------------------------------------------------
     // set_difficulty <level>  (stub)

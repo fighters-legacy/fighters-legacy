@@ -38,6 +38,7 @@
 #include <entity/EntityTypeRegistry.h>
 #include <loop/GameLoop.h>
 #include <net/WorldBroadcaster.h>
+#include <weather/WeatherController.h>
 
 // ---------------------------------------------------------------------------
 // Version
@@ -433,7 +434,10 @@ int main(int argc, char** argv) {
     }
 
     // ---- WorldBroadcaster wires the sim loop to ENet ----
-    fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *net, *log);
+    fl::WeatherControllerParams wparams;
+    wparams.timeScaleRatio = static_cast<float>(cfg.timeScale);
+    fl::WeatherController weatherController(wparams);
+    fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *net, *log, &weatherController);
     net->setEventHandler(&broadcaster);
 
     GameLoop gameLoop(broadcaster, *log);

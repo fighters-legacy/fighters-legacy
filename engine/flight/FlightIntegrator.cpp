@@ -129,7 +129,8 @@ void FlightIntegrator::integrateRotation(float dt) {
     m_state.euler[2] = euler[2];
 }
 
-void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEffect& payload) {
+void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEffect& payload,
+                            const WindInfluence& wind) {
     // 1. Spool and optional gear/control surfaces
     advanceSpool(dt, ctrl.throttle);
 
@@ -180,6 +181,22 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     forces[0] += eff_mass * grav_body[0];
     forces[1] += eff_mass * grav_body[1];
     forces[2] += eff_mass * grav_body[2];
+
+    // 8b. Wind and turbulence perturbations.
+    // Turbulence: stochastic body-frame impulse (F = m*a, treating as acceleration).
+    forces[0] += eff_mass * wind.turbulence_body[0];
+    forces[1] += eff_mass * wind.turbulence_body[1];
+    forces[2] += eff_mass * wind.turbulence_body[2];
+    // Steady wind + gusts: rotate world-frame wind into body frame, add drag contribution.
+    // Simplified linear model — full airspeed correction is a follow-on (see issue tracker).
+    if (wind.wind_world[0] != 0.f || wind.wind_world[2] != 0.f) {
+        auto wind_body = quatRotate(q_conj, wind.wind_world);
+        float S = m_data->geometry.wing_area_m2;
+        float CD = 0.03f; // approximate parasitic drag coefficient
+        forces[0] += 0.5f * atmos.density_kg_m3 * S * CD * std::abs(wind_body[0]) * (wind_body[0] > 0.f ? 1.f : -1.f);
+        forces[1] += 0.5f * atmos.density_kg_m3 * S * CD * std::abs(wind_body[1]) * (wind_body[1] > 0.f ? 1.f : -1.f);
+        forces[2] += 0.5f * atmos.density_kg_m3 * S * CD * std::abs(wind_body[2]) * (wind_body[2] > 0.f ? 1.f : -1.f);
+    }
 
     // 9. Thrust magnitude for TVC moment and prop effects
     float alt_km = altitude_m / 1000.f;

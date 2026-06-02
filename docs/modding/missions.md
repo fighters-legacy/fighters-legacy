@@ -38,10 +38,24 @@ triggers:
 | `time.hour` | int | 0–23 | Local mission start hour |
 | `time.minute` | int | 0–59 | Local mission start minute |
 | `wind.heading` | int | 0–359 | Wind-from heading in degrees (0 = north, 90 = east) |
-| `wind.speed` | float | ≥ 0 | Wind speed in knots |
+| `wind.speed` | float | ≥ 0 | Steady-state wind speed in **m/s**. Gusts are added by the engine on top of this value. |
 | `sides` | sequence | ≥ 1 element | Coalition IDs active in this mission; must match entries in `factions/*.toml` |
 | `objects` | sequence | ≥ 1 element | Unit and aircraft placements — see Objects section |
 | `triggers` | sequence | — | Win/loss/event conditions — see Triggers section |
+
+## Optional top-level fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `weather.preset` | string | `clear` | Initial weather: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm`. Gust amplitude and turbulence intensity scale with the preset. |
+| `time_scale` | float | server default (10) | Game seconds per real second for this mission. Overrides `[world] time_scale` in `server.toml`. Use `1.0` for real-time cinematic missions. |
+
+Example:
+```yaml
+weather:
+  preset: partly_cloudy
+time_scale: 10.0   # omit to use server default
+```
 
 ---
 
@@ -139,7 +153,9 @@ name: "Storm Warning"
 map: ukraine
 layer: ukraine_clear
 time: { hour: 14, minute: 0 }
-wind: { heading: 270, speed: 12 }
+wind: { heading: 270, speed: 12 }  # 12 m/s westerly; gusts added by engine
+weather:
+  preset: rain
 sides: [nato, russia]
 
 objects:

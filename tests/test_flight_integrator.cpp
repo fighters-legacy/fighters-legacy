@@ -462,3 +462,77 @@ TEST_CASE("BuiltinFlightModel: throttle produces forward acceleration from rest"
 
     CHECK(fi.state().vel_body[0] > 0.f);
 }
+
+TEST_CASE("FlightIntegrator: default WindInfluence gives same result as no-wind step", "[flight_integrator][weather]") {
+    auto make_fi = [] {
+        fl::FlightIntegrator fi(fl::BuiltinFlightModel::get());
+        fl::FlightState s{};
+        s.pos_world[1] = 500.f;
+        s.vel_body[0] = 40.f;
+        s.fuel_kg = fl::BuiltinFlightModel::get()->geometry.fuel_kg;
+        s.mass_kg = fl::BuiltinFlightModel::get()->geometry.mass_kg + s.fuel_kg;
+        fi.reset(s);
+        return fi;
+    };
+    fl::ControlInput ctrl{};
+    ctrl.throttle = 0.5f;
+    fl::PayloadEffect px{};
+
+    auto fi1 = make_fi();
+    auto fi2 = make_fi();
+    fi1.step(1.f / 60.f, ctrl, px);
+    fi2.step(1.f / 60.f, ctrl, px, {});
+    CHECK(fi1.state().vel_body[0] == fi2.state().vel_body[0]);
+    CHECK(fi1.state().vel_body[1] == fi2.state().vel_body[1]);
+}
+
+TEST_CASE("FlightIntegrator: nonzero turbulence perturbs velocity", "[flight_integrator][weather]") {
+    auto make_fi = [] {
+        fl::FlightIntegrator fi(fl::BuiltinFlightModel::get());
+        fl::FlightState s{};
+        s.pos_world[1] = 500.f;
+        s.vel_body[0] = 40.f;
+        s.fuel_kg = fl::BuiltinFlightModel::get()->geometry.fuel_kg;
+        s.mass_kg = fl::BuiltinFlightModel::get()->geometry.mass_kg + s.fuel_kg;
+        fi.reset(s);
+        return fi;
+    };
+    fl::ControlInput ctrl{};
+    ctrl.throttle = 0.5f;
+    fl::PayloadEffect px{};
+
+    auto fi1 = make_fi();
+    auto fi2 = make_fi();
+    fi1.step(1.f / 60.f, ctrl, px);
+    fl::WindInfluence wind{};
+    wind.turbulence_body[0] = 10.f;
+    fi2.step(1.f / 60.f, ctrl, px, wind);
+    CHECK(fi1.state().vel_body[0] != fi2.state().vel_body[0]);
+}
+
+TEST_CASE("FlightIntegrator: nonzero world wind affects forces", "[flight_integrator][weather]") {
+    // Use the parsed test model (mass=10000 kg) rather than BuiltinFlightModel (fuel=10M kg)
+    // so the wind drag force produces a float-distinguishable velocity difference.
+    auto make_fi = [] {
+        FlightIntegrator fi(makeData());
+        FlightState s{};
+        s.pos_world[1] = 500.f;
+        s.vel_body[0] = 40.f;
+        s.fuel_kg = 0.f;
+        s.mass_kg = 10000.f;
+        fi.reset(s);
+        return fi;
+    };
+    fl::ControlInput ctrl{};
+    ctrl.throttle = 0.5f;
+    fl::PayloadEffect px{};
+
+    auto fi1 = make_fi();
+    auto fi2 = make_fi();
+    fi1.step(1.f / 60.f, ctrl, px);
+    fl::WindInfluence wind{};
+    wind.wind_world[0] = 100.f; // strong crosswind to produce visible drag force
+    fi2.step(1.f / 60.f, ctrl, px, wind);
+    // Force contribution differs → velocity differs
+    CHECK(fi1.state().vel_body[0] != fi2.state().vel_body[0]);
+}

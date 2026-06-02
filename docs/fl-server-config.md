@@ -52,6 +52,7 @@ stack = []
 [world]
 save_path          = "world.sav"
 autosave_interval_s = 300
+time_scale         = 10.0   # game seconds per real second; 10 = full day/night ≈ 2.4 real hours
 
 [ai]
 difficulty_floor = "recruit"
@@ -265,6 +266,25 @@ Path to the persistent world save file, relative to the working directory or abs
 | integer | `300` (5 minutes) |
 
 Autosave interval in seconds. `0` disables autosaving.
+
+### `time_scale`
+
+| Type | Default |
+|---|---|
+| float | `10.0` |
+
+Game seconds per real second. Controls the speed of the in-game day/night cycle.
+
+| Value | Real-min → game-min | Full day/night cycle |
+|---|---|---|
+| `1` | 1:1 (real-time) | 24 real hours |
+| `6` | 1:6 | 4 real hours |
+| **`10` (default)** | **1:10** | **~2.4 real hours** |
+| `20` | 1:20 | 72 real minutes |
+
+At the default of 10×, a 30-minute mission passes ~5 game hours — enough to experience meaningful
+lighting changes (e.g. afternoon → golden hour). Per-mission overrides are available via the
+`time_scale` field in mission YAML files.
 
 ---
 

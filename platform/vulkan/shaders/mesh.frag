@@ -14,6 +14,7 @@ layout(set = 0, binding = 1) uniform LightUBO {
     vec4 sunDirection; // xyz = world-space direction toward sun
     vec4 sunColor;     // xyz = color, w = intensity
     vec4 ambientColor; // xyz = ambient, w unused
+    vec4 fogParams;    // x = density, y = startDist(m), z = timeOfDay(h), w = unused
 } light;
 
 layout(set = 0, binding = 2) uniform ShadowUBO {
@@ -153,5 +154,15 @@ void main() {
     vec3 direct  = (diffuse + specular) * NdotL * sunRadiance * shadowFactor;
     vec3 ambient = albedo * occlusion * light.ambientColor.xyz;
 
-    outColor = vec4(ambient + direct, baseColor.a);
+    vec3 litColor = ambient + direct;
+
+    // Exponential fog in camera-relative view space.
+    // fogParams.x = density coefficient; fogParams.y = start distance (metres).
+    // When density is 0 (clear weather) the exp returns 1.0 and fogAmount = 0.
+    float viewDist  = length(fragWorldPos);
+    float fogAmount = 1.0 - clamp(
+        exp(-light.fogParams.x * max(0.0, viewDist - light.fogParams.y)),
+        0.0, 1.0);
+    vec3 fogColor = light.ambientColor.xyz * 2.5;
+    outColor = vec4(mix(litColor, fogColor, fogAmount), baseColor.a);
 }

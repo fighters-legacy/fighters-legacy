@@ -46,6 +46,7 @@
 #include "sdl3/SDL3Joystick.h"
 #include "sdl3/SDL3Window.h"
 #include "vulkan/VkRendererFactory.h"
+#include "weather/WeatherController.h"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -68,12 +69,14 @@ struct ClientNetEventHandler : INetworkEventHandler {
     fl::EntityTypeRegistry& registry;
     ILogger& logger;
     INetwork& net;
+    EnvironmentState& env; // updated when MsgWeatherState is received
 
     uint32_t assignedEntityIdx{0};
     uint32_t assignedEntityGen{0};
 
-    ClientNetEventHandler(fl::SimRenderBridge& b, fl::EntityTypeRegistry& r, ILogger& l, INetwork& n)
-        : bridge(b), registry(r), logger(l), net(n) {}
+    ClientNetEventHandler(fl::SimRenderBridge& b, fl::EntityTypeRegistry& r, ILogger& l, INetwork& n,
+                          EnvironmentState& e)
+        : bridge(b), registry(r), logger(l), net(n), env(e) {}
 
     void onConnect(uint32_t /*peerId*/) override {
         logger.log(LogLevel::Info, __FILE__, __LINE__, "connected to embedded server");
@@ -155,7 +158,18 @@ struct ClientNetEventHandler : INetworkEventHandler {
                 snap.entries.push_back(re);
             }
             bridge.publishExternal(std::move(snap));
+        } else if (msgId == static_cast<uint8_t>(fl::MsgId::WeatherState)) {
+            if (size < sizeof(fl::MsgWeatherState))
+                return;
+            fl::MsgWeatherState ws;
+            std::memcpy(&ws, data, sizeof(ws));
+            float tod = static_cast<float>(ws.timeOfDayTenths) / 10.f;
+            env.fogDensity = ws.fogDensity;
+            env.fogStartDist = ws.fogStartDist;
+            env.timeOfDay = tod;
+            fl::WeatherController::applyPresetToEnv(static_cast<fl::WeatherPreset>(ws.preset), tod, env);
         }
+        // Unknown msgIds: silently discard
     }
 };
 
@@ -476,7 +490,8 @@ int main(int argc, char** argv) {
         crashReporter.shutdown();
         return 1;
     }
-    fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *serverNet, *rawLogger);
+    fl::WeatherController weatherController; // default: PartlyCloudy at 09:00
+    fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *serverNet, *rawLogger, &weatherController);
     serverNet->setEventHandler(&broadcaster);
     if (!serverNet->bind("127.0.0.1", 4778, /*maxClients=*/1)) {
         rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "server ENet bind failed on 127.0.0.1:4778");
@@ -495,7 +510,13 @@ int main(int argc, char** argv) {
         crashReporter.shutdown();
         return 1;
     }
-    ClientNetEventHandler clientHandler(renderBridge, entityRegistry, *rawLogger, *clientNet);
+    // Step 18: Shell loop — main thread owns all HAL.
+    // EnvironmentState is persistent; updated each time MsgWeatherState arrives from the
+    // embedded server. Initialised from the server's WeatherController so the first frame
+    // is correct before the first packet arrives.
+    EnvironmentState env = weatherController.computeEnvironment();
+
+    ClientNetEventHandler clientHandler(renderBridge, entityRegistry, *rawLogger, *clientNet, env);
     clientNet->setEventHandler(&clientHandler);
     clientNet->connect("127.0.0.1", 4778);
 
@@ -504,11 +525,6 @@ int main(int argc, char** argv) {
     DiscoveryListener discoveryListener(4778, *rawLogger);
     if (!discoveryListener.isOpen())
         rawLogger->log(LogLevel::Warn, __FILE__, __LINE__, "LAN discovery listener: no sockets opened");
-
-    // Step 18: Shell loop — main thread owns all HAL.
-    // Angled sun (better PBR shading than the default straight-down direction).
-    EnvironmentState env{};
-    env.sunDirection = glm::normalize(glm::vec3{0.6f, 1.0f, 0.4f}); // sun above horizon
 
     // Sandbox demo: static fire emitter at world origin exercises the GPU particle pass
     // from frame 1 without requiring any entity damage state.  effectName points to a
@@ -554,9 +570,9 @@ int main(int argc, char** argv) {
     // Debug console — always available; backtick toggles it.
     DebugCommandRegistry dbgRegistry;
     DebugConsole dbgConsole(*rawLogger, dbgRegistry);
-    registerBuiltinCommands(dbgRegistry,
-                            {&entityManager, &entityRegistry, &renderBridge, &clientHandler.assignedEntityIdx,
-                             &clientHandler.assignedEntityGen, &dbgConsole.showPosRef(), &serverLoop});
+    registerBuiltinCommands(dbgRegistry, {&entityManager, &entityRegistry, &renderBridge,
+                                          &clientHandler.assignedEntityIdx, &clientHandler.assignedEntityGen,
+                                          &dbgConsole.showPosRef(), &serverLoop, &weatherController});
 
     bool running = true;
     while (running && !p.window->shouldClose()) {
@@ -762,7 +778,7 @@ int main(int argc, char** argv) {
 
         // HUD: active only in Cockpit mode. playerEntry may be nullptr (no snapshot yet or
         // tryAdvance() updated the bridge, but the pointer remains valid this frame — see comment above).
-        flightHud.update(cameraController.mode() == fl::CameraMode::Cockpit ? playerEntry : nullptr);
+        flightHud.update(cameraController.mode() == fl::CameraMode::Cockpit ? playerEntry : nullptr, env.timeOfDay);
 
         // Debug console tick and HUD build.
         {

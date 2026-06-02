@@ -10,18 +10,20 @@ namespace fl {
 class EntityManager;
 class EntityTypeRegistry;
 class SimRenderBridge;
+class WeatherController;
 } // namespace fl
 
 // Context passed to registerBuiltinCommands(). All pointers except gameLoop
 // may be nullptr; commands that need a missing pointer will return an error string.
 struct DebugCommandContext {
-    fl::EntityManager* entityManager{nullptr};     // sim-thread: spawn/kill/tp lambdas
-    fl::EntityTypeRegistry* typeRegistry{nullptr}; // types / entities commands
-    fl::SimRenderBridge* renderBridge{nullptr};    // entities command (main-thread read)
-    uint32_t* playerEntityIdx{nullptr};            // tp command: player EntityId::index
-    uint32_t* playerEntityGen{nullptr};            // tp command: player EntityId::generation
-    bool* showPos{nullptr};                        // toggle_pos command
-    GameLoop* gameLoop{nullptr};                   // enqueueSimCallback for mutating cmds
+    fl::EntityManager* entityManager{nullptr};         // sim-thread: spawn/kill/tp lambdas
+    fl::EntityTypeRegistry* typeRegistry{nullptr};     // types / entities commands
+    fl::SimRenderBridge* renderBridge{nullptr};        // entities command (main-thread read)
+    uint32_t* playerEntityIdx{nullptr};                // tp command: player EntityId::index
+    uint32_t* playerEntityGen{nullptr};                // tp command: player EntityId::generation
+    bool* showPos{nullptr};                            // toggle_pos command
+    GameLoop* gameLoop{nullptr};                       // enqueueSimCallback for mutating cmds
+    fl::WeatherController* weatherController{nullptr}; // set_weather command
 };
 
 // Register all built-in debug commands (help, types, entities, spawn, kill,

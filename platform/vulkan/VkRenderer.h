@@ -37,6 +37,7 @@ struct LightUBO {
     glm::vec4 sunDirection{0.0f, -1.0f, 0.0f, 0.0f}; // xyz = dir toward sun
     glm::vec4 sunColor{1.0f, 0.95f, 0.8f, 1.0f};     // xyz = color, w = intensity
     glm::vec4 ambientColor{0.1f, 0.12f, 0.15f, 0.0f};
+    glm::vec4 fogParams{0.0f, 5000.0f, 12.0f, 0.0f}; // x=density, y=startDist(m), z=timeOfDay(h), w=unused
 };
 
 // Push constant block for the forward pass — must be ≤ 128 bytes.
@@ -65,12 +66,16 @@ struct ShadowPushConstants {
 static_assert(sizeof(ShadowPushConstants) <= 128);
 
 // Push constants for the sky pass (fragment stage only).
+// Exactly 128 bytes — the Vulkan-guaranteed minimum. No headroom for further additions;
+// migrate to a sky UBO if more parameters are needed in a future PR.
 struct SkyPushConstants {
-    glm::mat4 invViewProj{1.0f}; // 64 bytes
-    glm::vec4 sunDirection{};    // 16 bytes
-    glm::vec4 sunColor{};        // 16 bytes — total 96
-};
-static_assert(sizeof(SkyPushConstants) <= 128);
+    glm::mat4 invViewProj{1.0f};                    // 64 bytes
+    glm::vec4 sunDirection{};                       // 16 bytes
+    glm::vec4 sunColor{};                           // 16 bytes
+    glm::vec4 skyParams{0.40f, 0.55f, 0.75f, 0.0f}; // xyz=horizonColor, w=cloudCoverage[0,1]
+    glm::vec4 fogParams{0.0f, 5.0f, 12.0f, 0.0f};   // x=density, y=startDist(km), z=timeOfDay(h), w=unused
+}; // 128 bytes exactly
+static_assert(sizeof(SkyPushConstants) == 128);
 
 // Push constants for the tonemap + FXAA + bloom composite pass.
 struct TonemapPush {

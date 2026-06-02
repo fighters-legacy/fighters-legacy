@@ -17,6 +17,7 @@ class EntityManager;
 class FlightIntegrator; // full definition in WorldBroadcaster.cpp
 struct EntityState;
 class EntityTypeRegistry;
+class WeatherController;
 } // namespace fl
 
 namespace fl {
@@ -48,7 +49,9 @@ struct PeerInputState {
 // called before GameLoop::start().
 class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
   public:
-    WorldBroadcaster(EntityManager& entityManager, EntityTypeRegistry& registry, INetwork& net, ILogger& logger);
+    // weather may be nullptr; when non-null it is ticked and broadcast each sim tick.
+    WorldBroadcaster(EntityManager& entityManager, EntityTypeRegistry& registry, INetwork& net, ILogger& logger,
+                     WeatherController* weather = nullptr);
     ~WorldBroadcaster(); // defined in .cpp — FlightIntegrator must be complete at destruction
 
     // ISimUpdate
@@ -72,12 +75,15 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     EntityTypeRegistry& m_registry;
     INetwork& m_net;
     ILogger& m_logger;
+    WeatherController* m_weather{nullptr};
 
     std::unordered_map<uint32_t, EntityId> m_peerEntities;
     std::unordered_map<uint32_t, PeerInputState> m_peerInputs;
     std::unordered_map<uint32_t, std::unique_ptr<FlightIntegrator>> m_peerFlightSims;
 
     std::atomic<int> m_activePeerCount{0};
+    uint64_t m_weatherBroadcastTick{0}; // throttle weather broadcasts to ~6 Hz
+    uint32_t m_turbRng{0xCAFEBABEu};    // per-broadcaster RNG for turbulence perturbation
 };
 
 } // namespace fl

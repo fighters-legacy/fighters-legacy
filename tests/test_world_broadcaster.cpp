@@ -6,6 +6,7 @@
 #include "entity/EntityTypeRegistry.h"
 #include "net/GameProtocol.h"
 #include "net/WorldBroadcaster.h"
+#include "weather/WeatherController.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
@@ -658,4 +659,51 @@ TEST_CASE("WorldBroadcaster: onTick populates throttle in WorldSnapshot from Fli
     CHECK(e.throttle > 0u);
     // The encoded value is throttle_actual * 100, clamped to [0, 100].
     CHECK(e.throttle <= 100u);
+}
+
+// ---------------------------------------------------------------------------
+// Weather integration tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: with WeatherController broadcasts MsgWeatherState 0x04", "[world_broadcaster][weather]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WeatherController weather;
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, &weather);
+
+    // Run 10 ticks — MsgWeatherState broadcasts every 10 ticks
+    for (int i = 0; i < 10; ++i)
+        broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(i + 1));
+
+    // At least one broadcast should be MsgWeatherState (msgId == 0x04)
+    bool foundWeather = false;
+    for (const auto& pkt : net.broadcasts) {
+        if (!pkt.empty() && pkt[0] == 0x04u) {
+            foundWeather = true;
+            // Verify minimum size
+            CHECK(pkt.size() >= sizeof(fl::MsgWeatherState));
+        }
+    }
+    CHECK(foundWeather);
+}
+
+TEST_CASE("WorldBroadcaster: without WeatherController does not broadcast 0x04", "[world_broadcaster][weather]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, nullptr);
+
+    for (int i = 0; i < 10; ++i)
+        broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(i + 1));
+
+    for (const auto& pkt : net.broadcasts)
+        if (!pkt.empty())
+            CHECK(pkt[0] != 0x04u);
 }

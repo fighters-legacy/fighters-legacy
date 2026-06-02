@@ -230,3 +230,50 @@ TEST_CASE("non-standard trigger on passes without error", "[mission-validator]")
     CHECK(r.ok);
     CHECK(r.errors.empty());
 }
+
+// ---------------------------------------------------------------------------
+// Weather and time_scale field validation (issue #39)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("weather.preset clear passes", "[mission-validator][weather]") {
+    auto r = validateMission(replace_first(kValidMission, "wind: { heading: 270, speed: 12 }",
+                                           "wind: { heading: 270, speed: 12 }\nweather:\n  preset: clear"));
+    CHECK(r.ok);
+}
+
+TEST_CASE("weather.preset partly_cloudy passes", "[mission-validator][weather]") {
+    auto r = validateMission(replace_first(kValidMission, "wind: { heading: 270, speed: 12 }",
+                                           "wind: { heading: 270, speed: 12 }\nweather:\n  preset: partly_cloudy"));
+    CHECK(r.ok);
+}
+
+TEST_CASE("weather.preset storm passes", "[mission-validator][weather]") {
+    auto r = validateMission(replace_first(kValidMission, "wind: { heading: 270, speed: 12 }",
+                                           "wind: { heading: 270, speed: 12 }\nweather:\n  preset: storm"));
+    CHECK(r.ok);
+}
+
+TEST_CASE("weather.preset invalid value fails", "[mission-validator][weather]") {
+    auto r = validateMission(replace_first(kValidMission, "wind: { heading: 270, speed: 12 }",
+                                           "wind: { heading: 270, speed: 12 }\nweather:\n  preset: hurricane"));
+    CHECK_FALSE(r.ok);
+    REQUIRE(!r.errors.empty());
+    CHECK(r.errors[0].find("hurricane") != std::string::npos);
+}
+
+TEST_CASE("missing weather block passes (field is optional)", "[mission-validator][weather]") {
+    auto r = validateMission(kValidMission);
+    CHECK(r.ok);
+}
+
+TEST_CASE("time_scale positive value passes", "[mission-validator][weather]") {
+    auto r = validateMission(replace_first(kValidMission, "wind: { heading: 270, speed: 12 }",
+                                           "wind: { heading: 270, speed: 12 }\ntime_scale: 20.0"));
+    CHECK(r.ok);
+}
+
+TEST_CASE("time_scale zero or negative fails", "[mission-validator][weather]") {
+    auto r = validateMission(replace_first(kValidMission, "wind: { heading: 270, speed: 12 }",
+                                           "wind: { heading: 270, speed: 12 }\ntime_scale: 0.0"));
+    CHECK_FALSE(r.ok);
+}

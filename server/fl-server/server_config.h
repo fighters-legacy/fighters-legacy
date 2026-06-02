@@ -32,7 +32,8 @@ struct ServerConfig {
     bool persistent = false;
     std::string worldSavePath = "world.sav";
     int worldAutosaveIntervalS = 300;
-    int entitySoftCap = 0; // 0 = unlimited; server-enforced object count limit
+    int entitySoftCap = 0;   // 0 = unlimited; server-enforced object count limit
+    double timeScale = 10.0; // game seconds per real second; 10 = full day/night ~2.4 real hrs
 
     // [ai]  — Phase 2: parsed and stored; enforcement lands with AI runtime
     std::string aiDifficultyFloor = "recruit";

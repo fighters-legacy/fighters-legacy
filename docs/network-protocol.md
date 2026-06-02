@@ -32,6 +32,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `ConnectAck` | `0x01` | server→client | reliable | 12 + N×196 bytes | Handshake on connect; assigns entity slot and delivers type registry |
 | `WorldSnapshot` | `0x02` | server→client | unreliable | 12 + N×68 bytes | Per-tick entity state broadcast |
 | `ClientInput` | `0x03` | client→server | reliable | 44 bytes | Per-frame flight inputs |
+| `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
 | `LanBeacon` | `0x10` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast |
 
 ## Struct Definitions
@@ -121,6 +122,28 @@ Sent by the client each render frame on the reliable channel (channel 0).
 
 The server clamps all control surface inputs to their valid ranges and normalises
 `viewAxis` to unit length. Packets smaller than 44 bytes are silently discarded.
+
+### MsgWeatherState — 20 bytes
+
+Unreliable, server→client. Broadcast every 10 sim ticks (~6 Hz at 60 Hz sim) after the `MsgWorldSnapshot`.
+`MsgId::WeatherState = 0x04` is an additive message ID — clients that do not recognize it silently
+discard without error. `kProtocolVersion` is **not** bumped.
+
+`timeOfDayTenths` encodes the time of day as `hours × 10` in a `uint16_t` to avoid placing a `float`
+at offset 2 (ARM64 alignment constraint). Decode: `timeOfDay = timeOfDayTenths / 10.f`.
+
+| Offset | Size | Field | Type | Notes |
+|---|---|---|---|---|
+| 0 | 1 | `msgId` | `uint8_t` | `0x04` |
+| 1 | 1 | `preset` | `uint8_t` | `WeatherPreset` enum: 0=Clear, 1=PartlyCloudy, 2=Overcast, 3=Rain, 4=Storm |
+| 2 | 2 | `timeOfDayTenths` | `uint16_t` | hours × 10; range [0, 239]; decode: / 10.f |
+| 4 | 4 | `fogDensity` | `float` | exponential fog coefficient (0 = no fog) |
+| 8 | 4 | `fogStartDist` | `float` | fog start distance (metres) |
+| 12 | 4 | `windX` | `float` | world-frame wind x component (m/s), includes gust |
+| 16 | 4 | `windZ` | `float` | world-frame wind z component (m/s), includes gust |
+
+Wind convention: `windX` and `windZ` are the **blowing-toward** direction. A westerly wind (FROM 270°) has `windX > 0`.
+`windY` is always zero (horizontal wind only).
 
 ### MsgLanBeacon — 74 bytes
 

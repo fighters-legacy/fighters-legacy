@@ -9,6 +9,7 @@
 #include "loop/GameLoop.h"
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
+#include "weather/WeatherController.h"
 
 #include "mock_hal.h"
 #include <catch2/catch_test_macros.hpp>
@@ -874,4 +875,31 @@ TEST_CASE("DebugCommands tp with invalid coordinates returns error", "[dbg][comm
     registerBuiltinCommands(cmds, makeFullCtx(tyReg, em, gl, nullptr, &idx, &gen));
 
     REQUIRE(cmds.dispatch("tp bad 500 0").find("invalid") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// set_weather with real WeatherController (issue #39)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("set_weather command with real WeatherController dispatches correctly", "[dbg][commands][weather]") {
+    NullLogger log;
+    fl::EntityTypeRegistry tyReg;
+    fl::EntityManager em(log, tyReg);
+    NullSim sim;
+    GameLoop gl(sim, log);
+    fl::WeatherController wc;
+
+    DebugCommandContext ctx = makeFullCtx(tyReg, em, gl);
+    ctx.weatherController = &wc;
+
+    DebugCommandRegistry reg;
+    registerBuiltinCommands(reg, ctx);
+
+    CHECK(reg.dispatch("set_weather storm").find("queued") != std::string::npos);
+    CHECK(reg.dispatch("set_weather clear").find("queued") != std::string::npos);
+    CHECK(reg.dispatch("set_weather partly_cloudy").find("queued") != std::string::npos);
+    CHECK(reg.dispatch("set_weather overcast").find("queued") != std::string::npos);
+    CHECK(reg.dispatch("set_weather rain").find("queued") != std::string::npos);
+    CHECK(reg.dispatch("set_weather hurricane").find("unknown") != std::string::npos);
+    CHECK(reg.dispatch("set_weather").find("usage") != std::string::npos);
 }

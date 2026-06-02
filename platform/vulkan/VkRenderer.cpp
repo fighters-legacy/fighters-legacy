@@ -499,6 +499,8 @@ void VkRenderer::writeFrameUBOs(const FrameScene& scene) {
     light.sunDirection = glm::vec4(scene.environment.sunDirection, 0.0f);
     light.sunColor = glm::vec4(scene.environment.sunColor, 1.0f);
     light.ambientColor = glm::vec4(scene.environment.ambientColor, 0.0f);
+    light.fogParams =
+        glm::vec4(scene.environment.fogDensity, scene.environment.fogStartDist, scene.environment.timeOfDay, 0.0f);
     std::memcpy(pf.lightMapped, &light, sizeof(light));
 
     ShadowUBO shadowUBO{};
@@ -3273,6 +3275,20 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         skyPC.invViewProj = glm::inverse(m_pendingScene.camera.proj * m_pendingScene.camera.view);
         skyPC.sunDirection = glm::vec4(m_pendingScene.environment.sunDirection, 0.0f);
         skyPC.sunColor = glm::vec4(m_pendingScene.environment.sunColor, 1.0f);
+        {
+            // Derive horizon color and cloud coverage from environment state.
+            const auto& env = m_pendingScene.environment;
+            float cloudCov = env.cloudCoverage;
+            float warmth = glm::clamp((env.sunColor.r - env.sunColor.b) * 2.0f, 0.0f, 1.0f);
+            glm::vec3 horizonDay{0.40f, 0.55f, 0.75f};
+            glm::vec3 horizonDusk{0.85f, 0.55f, 0.25f};
+            glm::vec3 horizonStorm{0.25f, 0.28f, 0.32f};
+            glm::vec3 horizon = glm::mix(glm::mix(horizonDay, horizonDusk, warmth), horizonStorm, cloudCov);
+            skyPC.skyParams = glm::vec4(horizon, cloudCov);
+            skyPC.fogParams = glm::vec4(env.fogDensity,
+                                        env.fogStartDist / 1000.0f, // metres → km for sky shader
+                                        env.timeOfDay, 0.0f);
+        }
         vkCmdPushConstants(cmd, m_skyLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SkyPushConstants), &skyPC);
 
         vkCmdDraw(cmd, 3, 1, 0, 0); // fullscreen triangle

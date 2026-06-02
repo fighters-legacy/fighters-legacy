@@ -13,7 +13,7 @@ static constexpr float kHudR = 0.0f;
 static constexpr float kHudG = 1.0f;
 static constexpr float kHudB = 0.0f;
 
-void FlightHud::update(const EntityRenderEntry* e) {
+void FlightHud::update(const EntityRenderEntry* e, float timeOfDay) {
     m_elementCount = 0;
     m_stringCount = 0;
     if (!e)
@@ -81,6 +81,11 @@ void FlightHud::update(const EntityRenderEntry* e) {
     // Damage warning in red (center screen)
     if (e->damageLevel > 0)
         pushText(0.40f, 0.48f, 1.f, 0.2f, 0.2f, "%s", "*** DAMAGE ***");
+
+    // Time of day clock (top-right) — HH:MM, purely ASCII
+    int hr = static_cast<int>(timeOfDay) % 24;
+    int min = static_cast<int>((timeOfDay - static_cast<float>(static_cast<int>(timeOfDay))) * 60.f) % 60;
+    pushText(0.80f, 0.38f, kHudR, kHudG, kHudB, "%02d:%02d", hr, min);
 }
 
 std::span<const HudElement> FlightHud::elements() const {

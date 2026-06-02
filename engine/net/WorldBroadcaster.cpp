@@ -9,6 +9,7 @@
 #include "flight/BuiltinFlightModel.h"
 #include "flight/FlightIntegrator.h"
 #include "net/GameProtocol.h"
+#include "weather/WeatherController.h"
 
 #include <algorithm>
 #include <cassert>
@@ -35,8 +36,8 @@ static void quatRotate(const float q[4], const float v[3], float out[3]) {
 namespace fl {
 
 WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegistry& registry, INetwork& net,
-                                   ILogger& logger)
-    : m_entityManager(entityManager), m_registry(registry), m_net(net), m_logger(logger) {}
+                                   ILogger& logger, WeatherController* weather)
+    : m_entityManager(entityManager), m_registry(registry), m_net(net), m_logger(logger), m_weather(weather) {}
 
 WorldBroadcaster::~WorldBroadcaster() = default;
 
@@ -119,6 +120,26 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     std::memcpy(buf.data() + hdrOffset, &hdr, sizeof(hdr));
 
     m_net.broadcast(buf.data(), buf.size(), /*reliable=*/false);
+
+    // Tick weather and broadcast MsgWeatherState every 10 ticks (~6 Hz at 60 Hz sim).
+    if (m_weather) {
+        m_weather->advance(simDt);
+        ++m_weatherBroadcastTick;
+        if (m_weatherBroadcastTick % 10 == 0) {
+            const EnvironmentState env = m_weather->computeEnvironment();
+            MsgWeatherState ws;
+            ws.msgId = static_cast<uint8_t>(MsgId::WeatherState);
+            ws.preset = static_cast<uint8_t>(m_weather->preset());
+            auto tod = m_weather->timeOfDay();
+            ws.timeOfDayTenths = static_cast<uint16_t>(tod * 10.f);
+            ws.fogDensity = env.fogDensity;
+            ws.fogStartDist = env.fogStartDist;
+            ws.windX = m_weather->windX();
+            ws.windZ = m_weather->windZ();
+            m_net.broadcast(&ws, sizeof(ws), /*reliable=*/false);
+        }
+    }
+
     m_net.service(0);
 }
 
@@ -221,7 +242,18 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
     ctrl.aileron = inp.aileron;
     ctrl.rudder = inp.rudder;
 
-    fi.step(static_cast<float>(simDt), ctrl, {});
+    WindInfluence wind{};
+    if (m_weather) {
+        wind.wind_world[0] = m_weather->windX();
+        wind.wind_world[2] = m_weather->windZ();
+        float turb = m_weather->turbulenceAmplitude();
+        m_turbRng = m_turbRng * 1664525u + 1013904223u;
+        float r = static_cast<float>((m_turbRng >> 16) & 0xFFu) / 128.f - 1.f;
+        wind.turbulence_body[0] = turb * r;
+        wind.turbulence_body[1] = turb * 0.3f * r;
+        wind.turbulence_body[2] = turb * 0.5f * r;
+    }
+    fi.step(static_cast<float>(simDt), ctrl, {}, wind);
 
     const FlightState& fs = fi.state();
 

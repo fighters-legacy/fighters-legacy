@@ -10,6 +10,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         engine-loop
         engine-entity
         engine-net
+        engine-weather
         engine-perf
         engine-debug
         platform-file-logger

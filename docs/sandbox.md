@@ -87,12 +87,24 @@ suppressed while it is open.
 | `kill <idx>` | Remove entity from simulation (queued to sim thread) |
 | `tp <x> <y> <z>` | Teleport player entity to world position |
 | `toggle_pos` | Toggle world-position readout in top-right corner (all camera modes) |
-| `set_weather <state>` | *(stub — Phase 2b)* |
+| `set_weather <preset>` | Set weather instantly: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm`. Queued to sim thread; takes effect on next tick. |
 | `set_difficulty <level>` | *(stub — Phase 2b)* |
 | `reload_content` | *(stub — see issue #152)* |
 
-`spawn` and `kill` are queued to the sim thread and take effect on the next tick.
+`spawn`, `kill`, and `set_weather` are queued to the sim thread and take effect on the next tick.
 Entity indices shown by `entities` come from the most-recent render snapshot.
+
+**Weather presets:**
+
+| Preset | Cloud cover | Fog | Turbulence | Time of day |
+|---|---|---|---|---|
+| `clear` | 0% | None | None | Driven by time clock |
+| `partly_cloudy` (default) | 35% | None | Light | Driven by time clock |
+| `overcast` | 75% | Light | Moderate | Driven by time clock |
+| `rain` | 85% | Heavy | Moderate | Driven by time clock |
+| `storm` | 95% | Maximum | Strong | Driven by time clock |
+
+The in-game clock advances at **10× real time** by default (1 real minute = 10 game minutes; full day/night cycle ≈ 2.4 real hours). Time is shown as `HH:MM` in the HUD top-right (cockpit mode only). The time scale is configurable via `[world] time_scale` in `server.toml`.
 
 ### Position widget
 

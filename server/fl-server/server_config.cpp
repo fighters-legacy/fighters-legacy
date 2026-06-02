@@ -112,6 +112,13 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.entitySoftCap = static_cast<int>(*v);
             }
         }
+        if (auto v = tbl["world"]["time_scale"].value<double>()) {
+            if (*v <= 0.0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "world.time_scale must be > 0; using default 10.0");
+            } else {
+                cfg.timeScale = *v;
+            }
+        }
 
         // [ai]
         if (auto v = tbl["ai"]["difficulty_floor"].value<std::string>()) {

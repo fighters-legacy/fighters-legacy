@@ -20,6 +20,8 @@ static constexpr int kPosComponents = 3;
 static constexpr int kSidesMinCount = 1;
 static constexpr int kObjectsMinCount = 1;
 
+static const char* kValidWeatherPresets[] = {"clear", "partly_cloudy", "overcast", "rain", "storm"};
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 static bool hasKey(const YAML::Node& node, const char* key) {
@@ -111,6 +113,34 @@ MissionValidationResult validateMission(std::string_view yamlContent) {
                 r.errors.push_back("wind.speed must be >= 0");
                 r.ok = false;
             }
+        }
+    }
+
+    // ── weather (optional) ────────────────────────────────────────────────────
+    if (hasKey(doc, "weather")) {
+        auto weather = doc["weather"];
+        if (hasKey(weather, "preset")) {
+            std::string p = weather["preset"].as<std::string>("");
+            bool valid = false;
+            for (const char* kp : kValidWeatherPresets)
+                if (p == kp) {
+                    valid = true;
+                    break;
+                }
+            if (!valid) {
+                r.errors.push_back("weather.preset must be clear|partly_cloudy|overcast|rain|storm (got \"" + p +
+                                   "\")");
+                r.ok = false;
+            }
+        }
+    }
+
+    // ── time_scale (optional) ─────────────────────────────────────────────────
+    if (hasKey(doc, "time_scale")) {
+        double ts = doc["time_scale"].as<double>(-1.0);
+        if (ts <= 0.0) {
+            r.errors.push_back("time_scale must be > 0 (got " + std::to_string(ts) + ")");
+            r.ok = false;
         }
     }
 

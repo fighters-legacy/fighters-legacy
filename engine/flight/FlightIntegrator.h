@@ -23,6 +23,12 @@ struct FlightState {
     float tvc_angle_deg{0.f}; // current TVC nozzle angle
 };
 
+// Wind and turbulence injected each tick by WorldBroadcaster from WeatherController state.
+struct WindInfluence {
+    float wind_world[3]{};      // steady wind + gust, world frame (m/s); Y component is 0
+    float turbulence_body[3]{}; // per-tick stochastic buffeting, body frame (m/s)
+};
+
 class FlightIntegrator {
   public:
     explicit FlightIntegrator(std::shared_ptr<const FlightModelData> data);
@@ -33,7 +39,8 @@ class FlightIntegrator {
     // Advance the simulation by dt seconds.
     // ctrl: pilot or AI inputs for this tick.
     // payload: weapon mass and drag contribution for this tick.
-    void step(float dt, const ControlInput& ctrl, const PayloadEffect& payload);
+    // wind: optional weather perturbation; zero-initialised default = no wind effect.
+    void step(float dt, const ControlInput& ctrl, const PayloadEffect& payload, const WindInfluence& wind = {});
 
     [[nodiscard]] const FlightState& state() const {
         return m_state;
