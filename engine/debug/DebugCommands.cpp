@@ -13,6 +13,8 @@
 
 #include <charconv>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <sstream>
 #include <string>
 
@@ -21,12 +23,16 @@
 // ---------------------------------------------------------------------------
 
 static bool parseDouble(std::string_view sv, double& out) {
-    // std::from_chars for double requires <charconv> with floating-point support
-    // (C++17, available on MSVC 2022, GCC 11+, Clang 12+). Fall back to sscanf
-    // on older platforms as a safety net.
-    double v{};
-    auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), v);
-    if (ec == std::errc{} && ptr == sv.data() + sv.size()) {
+    // strtod requires a null-terminated string; copy into a fixed buffer.
+    // std::from_chars for double is not supported on Apple Clang.
+    if (sv.empty() || sv.size() >= 64)
+        return false;
+    char buf[64];
+    std::memcpy(buf, sv.data(), sv.size());
+    buf[sv.size()] = '\0';
+    char* end = nullptr;
+    double v = std::strtod(buf, &end);
+    if (end == buf + sv.size() && end != buf) {
         out = v;
         return true;
     }
