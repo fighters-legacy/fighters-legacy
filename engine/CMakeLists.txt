@@ -193,3 +193,16 @@ add_library(engine-perf STATIC
 )
 target_include_directories(engine-perf PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-perf PUBLIC platform-hal)
+
+# In-game debug console: command registry, drop-down HUD overlay, builtin commands.
+add_library(engine-debug STATIC
+    debug/DebugCommandRegistry.cpp
+    debug/DebugConsole.cpp
+    debug/DebugCommands.cpp
+)
+target_include_directories(engine-debug PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-debug
+    PUBLIC  platform-hal
+            engine-entity
+    PRIVATE engine-render   # DebugCommands reads SimRenderBridge for the entities command
+)

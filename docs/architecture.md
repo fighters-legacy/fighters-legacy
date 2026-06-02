@@ -77,7 +77,7 @@ All interfaces live under `platform/` and are exposed via the `platform-hal` CMa
 
 Game logic and simulation, independent of any specific content:
 
-- **Game loop** (`engine/loop/`) — `TimeController` (fixed-timestep accumulator, time compression), `GameLoop` (sim thread, frame gating, render alpha). `ISimUpdate` is the callback interface for game systems advancing each tick.
+- **Game loop** (`engine/loop/`) — `TimeController` (fixed-timestep accumulator, time compression), `GameLoop` (sim thread, frame gating, render alpha). `ISimUpdate` is the callback interface for game systems advancing each tick. `GameLoop::enqueueSimCallback()` allows any thread to queue a one-shot lambda that runs at the top of the next sim tick — used by the debug console to dispatch entity mutations safely.
 - **Entity system** — component-based scene graph
 - **Flight model** — aerodynamics simulation
 - **AI runtime** — Lua-scripted AI behaviours

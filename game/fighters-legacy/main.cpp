@@ -16,6 +16,8 @@
 #include "content/ModLoader.h"
 #include "crash/CrashInfo.h"
 #include "crash/CrashReporter.h"
+#include "debug/DebugCommands.h"
+#include "debug/DebugConsole.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
@@ -53,6 +55,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -548,6 +551,13 @@ int main(int argc, char** argv) {
     PerformanceOverlay perfOverlay;
     perfOverlay.setMode(userConfig.debug().overlayMode);
 
+    // Debug console — always available; backtick toggles it.
+    DebugCommandRegistry dbgRegistry;
+    DebugConsole dbgConsole(*rawLogger, dbgRegistry);
+    registerBuiltinCommands(dbgRegistry,
+                            {&entityManager, &entityRegistry, &renderBridge, &clientHandler.assignedEntityIdx,
+                             &clientHandler.assignedEntityGen, &dbgConsole.showPosRef(), &serverLoop});
+
     bool running = true;
     while (running && !p.window->shouldClose()) {
         // Pull scroll events before pollEvents drains them — affects Free and Chase camera zoom.
@@ -578,9 +588,19 @@ int main(int argc, char** argv) {
         }
 
         // F1=Cockpit, F2=Chase, F4=Free — direct mode activation.
+        // Backtick toggles the debug console.
         {
             const bool* keys = SDL_GetKeyboardState(nullptr);
             static bool f1Prev{}, f2Prev{}, f4Prev{};
+            static bool gravePrev{};
+            bool graveNow = keys[SDL_SCANCODE_GRAVE] != 0;
+            if (graveNow && !gravePrev) {
+                if (dbgConsole.isOpen())
+                    dbgConsole.close(*p.input);
+                else
+                    dbgConsole.open(*p.input);
+            }
+            gravePrev = graveNow;
             if (keys[SDL_SCANCODE_F1] && !f1Prev) {
                 cameraController.setMode(fl::CameraMode::Cockpit);
                 cockpitYaw = 0.f;
@@ -691,17 +711,20 @@ int main(int argc, char** argv) {
         // Send client flight inputs to the embedded server each frame.
         // Arrow keys: Up/Down = elevator, Left/Right = aileron, Z/X = rudder.
         // Left Shift = full throttle; Space = weapon trigger.
+        // Inputs are zeroed when the debug console is open.
         {
             static uint32_t inputSeq = 0;
             const bool* keys = SDL_GetKeyboardState(nullptr);
             fl::MsgClientInput inp;
             inp.seqNum = inputSeq++;
             inp.tickIndex = renderBridge.hasSnapshot() ? renderBridge.current().tickIndex : 0;
-            inp.throttle = keys[SDL_SCANCODE_LSHIFT] ? 1.f : 0.f;
-            inp.elevator = (keys[SDL_SCANCODE_UP] ? -1.f : 0.f) + (keys[SDL_SCANCODE_DOWN] ? 1.f : 0.f);
-            inp.aileron = (keys[SDL_SCANCODE_RIGHT] ? 1.f : 0.f) + (keys[SDL_SCANCODE_LEFT] ? -1.f : 0.f);
-            inp.rudder = (keys[SDL_SCANCODE_X] ? 1.f : 0.f) + (keys[SDL_SCANCODE_Z] ? -1.f : 0.f);
-            inp.buttons = keys[SDL_SCANCODE_SPACE] ? 1u : 0u; // bit 0 = weapon trigger
+            if (!dbgConsole.isOpen()) {
+                inp.throttle = keys[SDL_SCANCODE_LSHIFT] ? 1.f : 0.f;
+                inp.elevator = (keys[SDL_SCANCODE_UP] ? -1.f : 0.f) + (keys[SDL_SCANCODE_DOWN] ? 1.f : 0.f);
+                inp.aileron = (keys[SDL_SCANCODE_RIGHT] ? 1.f : 0.f) + (keys[SDL_SCANCODE_LEFT] ? -1.f : 0.f);
+                inp.rudder = (keys[SDL_SCANCODE_X] ? 1.f : 0.f) + (keys[SDL_SCANCODE_Z] ? -1.f : 0.f);
+                inp.buttons = keys[SDL_SCANCODE_SPACE] ? 1u : 0u; // bit 0 = weapon trigger
+            }
             // peerId is ignored by ENetNetwork on a client; sends to the single connected peer (server).
             clientNet->send(0, &inp, sizeof(inp), /*reliable=*/true);
         }
@@ -741,6 +764,21 @@ int main(int argc, char** argv) {
         // tryAdvance() updated the bridge, but the pointer remains valid this frame — see comment above).
         flightHud.update(cameraController.mode() == fl::CameraMode::Cockpit ? playerEntry : nullptr);
 
+        // Debug console tick and HUD build.
+        {
+            if (dbgConsole.isOpen()) {
+                if (dbgConsole.tick(*p.input))
+                    dbgConsole.close(*p.input);
+            }
+            glm::dvec3 playerPos{};
+            const glm::dvec3* playerPosPtr = nullptr;
+            if (playerEntry) {
+                playerPos = playerEntry->position;
+                playerPosPtr = &playerPos;
+            }
+            dbgConsole.buildHud(playerPosPtr);
+        }
+
         // Performance overlay (F3) and 2D HUD submit.
         {
             const bool* keys = SDL_GetKeyboardState(nullptr);
@@ -756,7 +794,13 @@ int main(int argc, char** argv) {
 
             perfOverlay.update(p.renderer->getFrameStats(), entityManager.liveCount(), 1000.0f / 60.0f);
             p.renderer->setOverlayLines(perfOverlay.lines());
-            p.renderer->submitHudElements(flightHud.elements());
+
+            // Merge flight HUD + debug console elements into a single span.
+            auto flightElems = flightHud.elements();
+            auto dbgElems = dbgConsole.elements();
+            std::vector<HudElement> allHud(flightElems.begin(), flightElems.end());
+            allHud.insert(allHud.end(), dbgElems.begin(), dbgElems.end());
+            p.renderer->submitHudElements(allHud);
         }
 
         p.renderer->endFrame();

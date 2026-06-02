@@ -6,8 +6,10 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 class ILogger;
 class ISimUpdate;
@@ -59,6 +61,11 @@ class GameLoop {
     [[nodiscard]] float shellTick() noexcept;
 
     // -----------------------------------------------------------------------
+    // Enqueue a callback to run on the sim thread at the top of the next tick,
+    // before ISimUpdate::onTick(). Thread-safe; may be called from any thread.
+    void enqueueSimCallback(std::function<void()> fn);
+
+    // -----------------------------------------------------------------------
     // Time compression — main thread only.
     // -----------------------------------------------------------------------
 
@@ -82,6 +89,9 @@ class GameLoop {
     mutable std::mutex m_rateMutex;
     TimeRate m_pendingRate{TimeRate::Normal};
     bool m_rateDirty{false};
+
+    std::mutex m_callbackMutex;
+    std::vector<std::function<void()>> m_pendingCallbacks;
 
     std::thread m_simThread;
 };

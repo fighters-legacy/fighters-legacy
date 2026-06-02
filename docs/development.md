@@ -217,6 +217,7 @@ Pre-defined tasks are committed in `.vscode/tasks.json` and available via **Term
 |---|---|
 | Build (Debug) / Build (Release) | Configure + build the selected preset |
 | Test (Debug) | `ctest --preset debug --output-on-failure` |
+| Coverage (engine/ branch summary) | Build coverage preset, run all tests, print `engine/` branch % vs 80% gate |
 | CI: clang-format check | Dry-run clang-format-22 on files changed vs `origin/main` |
 | CI: REUSE lint | Check SPDX headers on all source files |
 | CI: Smoke tests | Run `--version` on every built binary |
@@ -553,3 +554,10 @@ To report phase completion against target dates:
 ```
 
 Queries the [GitHub Project](https://github.com/users/jomkz/projects/2) via `gh` and prints a per-phase progress table showing % done, % of time elapsed, and an on-track/at-risk/behind/overdue signal. Requires `gh` (authenticated) and GNU `date`.
+
+---
+
+## Sandbox reference
+
+Key bindings, camera modes, flight controls, and debug console commands are documented in
+[docs/sandbox.md](sandbox.md).

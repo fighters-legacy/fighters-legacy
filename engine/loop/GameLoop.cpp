@@ -80,6 +80,11 @@ uint64_t GameLoop::totalTicks() const noexcept {
     return m_totalTicksSnap.load(std::memory_order_relaxed);
 }
 
+void GameLoop::enqueueSimCallback(std::function<void()> fn) {
+    std::lock_guard<std::mutex> lk(m_callbackMutex);
+    m_pendingCallbacks.push_back(std::move(fn));
+}
+
 void GameLoop::simThreadFunc() {
     TimeController tc{1.0 / m_tickRate};
 
@@ -105,6 +110,17 @@ void GameLoop::simThreadFunc() {
         }
 
         ticks = std::min(ticks, kMaxTicksPerIteration);
+
+        // Drain one-shot callbacks queued by external threads (e.g. debug console).
+        {
+            std::vector<std::function<void()>> callbacks;
+            {
+                std::lock_guard<std::mutex> lk(m_callbackMutex);
+                callbacks.swap(m_pendingCallbacks);
+            }
+            for (auto& fn : callbacks)
+                fn();
+        }
 
         for (int i = 0; i < ticks; ++i) {
             auto tickNow = Clock::now();

@@ -69,6 +69,18 @@
       "problemMatcher": []
     },
 
+    {
+      "label": "Coverage (engine/ branch summary)",
+      "type": "shell",
+      "command": "cmake --preset coverage && cmake --build --preset coverage && cd build/coverage && ctest --output-on-failure && gcovr --filter '../../engine/' --gcov-ignore-errors all --gcov-ignore-parse-errors suspicious_hits.warn_once_per_file --exclude-throw-branches --fail-under-branch 80 --print-summary",
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+
     // ── CI checks (mirrors ubuntu-latest CI steps) ─────────────────────────
     //
     // "CI: All (Linux)" runs every check below in sequence.

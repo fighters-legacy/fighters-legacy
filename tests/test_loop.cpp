@@ -299,6 +299,42 @@ TEST_CASE("GameLoop: destructor stops sim thread without explicit stop", "[gl]")
     REQUIRE(logger.hasMessage(LogLevel::Info, "game loop stopped"));
 }
 
+TEST_CASE("GameLoop: enqueueSimCallback executes on next tick", "[gl]") {
+    MockSim sim;
+    MockLogger logger;
+    GameLoop gl(sim, logger);
+    gl.start();
+
+    std::atomic<bool> fired{false};
+    gl.enqueueSimCallback([&fired] { fired.store(true, std::memory_order_release); });
+
+    // Wait up to 500 ms (30 tick opportunities at 60 Hz) — robust against macOS CI scheduler jitter.
+    auto deadline = std::chrono::steady_clock::now() + 500ms;
+    while (!fired.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(5ms);
+
+    gl.stop();
+    REQUIRE(fired.load());
+}
+
+TEST_CASE("GameLoop: enqueueSimCallback multiple callbacks all run", "[gl]") {
+    MockSim sim;
+    MockLogger logger;
+    GameLoop gl(sim, logger);
+    gl.start();
+
+    std::atomic<int> counter{0};
+    for (int i = 0; i < 3; ++i)
+        gl.enqueueSimCallback([&counter] { counter.fetch_add(1, std::memory_order_relaxed); });
+
+    auto deadline = std::chrono::steady_clock::now() + 500ms;
+    while (counter.load(std::memory_order_relaxed) < 3 && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(5ms);
+
+    gl.stop();
+    REQUIRE(counter.load() == 3);
+}
+
 TEST_CASE("GameLoop: fires approximately 60 ticks per second at Normal rate", "[gl]") {
     MockSim sim;
     MockLogger logger;

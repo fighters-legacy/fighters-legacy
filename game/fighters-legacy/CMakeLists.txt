@@ -11,6 +11,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         engine-entity
         engine-net
         engine-perf
+        engine-debug
         platform-file-logger
         platform-sdl3
         platform-vulkan
