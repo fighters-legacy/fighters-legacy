@@ -68,7 +68,13 @@ add_library(platform-vulkan STATIC
     VkRenderer.cpp
     VkResources.cpp
     VkWindow.cpp
+    UnifontBitmap.cpp
 )
+# UnifontBitmap.cpp contains a 1 MB aggregate initializer; MSVC's default COFF
+# object format cap (65 536 sections) is exceeded without /bigobj.
+if(MSVC)
+    set_source_files_properties(UnifontBitmap.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
+endif()
 add_dependencies(platform-vulkan vulkan-shaders)
 
 # VulkanMemoryAllocator — header-only, populated in cmake/dependencies.cmake.

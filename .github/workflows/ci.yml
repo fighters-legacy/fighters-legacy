@@ -143,6 +143,14 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_gen_terrain_chunks.py -v
 
+      - name: Unit test gen_unifont_header.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_gen_unifont_header.py -v
+
+      - name: Smoke test gen_unifont_header.py --help (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 tools/gen_unifont_header.py --help
+
       - name: Smoke test terrain-chunk-io gen-procedural (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: |

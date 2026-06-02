@@ -222,6 +222,7 @@ Pre-defined tasks are committed in `.vscode/tasks.json` and available via **Term
 | CI: REUSE lint | Check SPDX headers on all source files |
 | CI: Smoke tests | Run `--version` on every built binary |
 | CI: pytest (gen_terrain_chunks) | Python unit tests for the terrain chunk pipeline |
+| CI: pytest (gen_unifont_header) | Python unit tests for the Unifont header generator |
 | CI: Locale lint | `locale-extract --dry-run` to catch untranslated strings |
 | CI: Build (ASAN) / CI: Test (ASAN) | Build and test with AddressSanitizer + UBSan (requires `clang`) |
 | **CI: All (Linux)** | Run every check above in sequence — use before opening a PR |
@@ -485,6 +486,16 @@ content — including `# translator context comments` — is never rewritten.
 
 This lint also runs as the `locale_lint` CTest and as the
 `.github/workflows/locale-lint.yml` CI job on every push and PR.
+
+### Regenerating the embedded HUD font
+
+`platform/vulkan/UnifontBitmap.{h,cpp}` are generated from GNU Unifont and committed. Re-run only when upgrading the Unifont version:
+
+```bash
+python3 tools/gen_unifont_header.py --output-dir platform/vulkan
+# Downloads unifont-16.0.02.hex.gz from unifoundry.com, writes UnifontBitmap.{h,cpp}.
+# Commit both generated files. Re-run tools/gen_unifont_header.py --help for options.
+```
 
 ### Key constants (optional)
 

@@ -79,9 +79,9 @@ void PerformanceOverlay::buildLines(const FrameStats& stats, uint32_t entityCoun
     }
 
     // Bar graph: 128-sample rolling frame-time history.
-    // Each character represents one sample, scaled to the max observed value.
-    // Uses CP437 block characters: space (0x20), light (0xB0), medium (0xB1),
-    // dark (0xB2), full (0xDB).
+    // Each position represents one sample, scaled to the max observed value.
+    // U+0020 SPACE, U+2591 LIGHT SHADE, U+2592 MEDIUM SHADE,
+    // U+2593 DARK SHADE, U+2588 FULL BLOCK (UTF-8 encoded).
     {
         float maxVal = 0.0f;
         for (int i = 0; i < kHistoryLen; ++i)
@@ -89,16 +89,23 @@ void PerformanceOverlay::buildLines(const FrameStats& stats, uint32_t entityCoun
         if (maxVal <= 0.0f)
             maxVal = 1.0f; // guard against divide-by-zero on first frame
 
-        static constexpr char kBlocks[] = {'\x20', '\xB0', '\xB1', '\xB2', '\xDB'};
+        static constexpr const char* kBlocks[] = {
+            " ",            // U+0020 SPACE
+            "\xe2\x96\x91", // U+2591 LIGHT SHADE  ░
+            "\xe2\x96\x92", // U+2592 MEDIUM SHADE ▒
+            "\xe2\x96\x93", // U+2593 DARK SHADE   ▓
+            "\xe2\x96\x88", // U+2588 FULL BLOCK   █
+        };
         static constexpr int kNumBlocks = 5;
 
-        m_line[line].resize(kHistoryLen);
+        m_line[line].clear();
+        m_line[line].reserve(kHistoryLen * 3);
         for (int i = 0; i < kHistoryLen; ++i) {
             int histIdx = (m_histHead + i) % kHistoryLen;
             float norm = m_history[histIdx] / maxVal;
             int idx = static_cast<int>(norm * (kNumBlocks - 1) + 0.5f);
             idx = std::clamp(idx, 0, kNumBlocks - 1);
-            m_line[line][i] = kBlocks[idx];
+            m_line[line] += kBlocks[idx];
         }
         m_lineViews[line] = m_line[line];
         ++line;

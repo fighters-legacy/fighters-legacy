@@ -285,6 +285,10 @@ add_executable(test_performance_overlay test_performance_overlay.cpp)
 target_link_libraries(test_performance_overlay PRIVATE Catch2::Catch2WithMain engine-perf)
 catch_discover_tests(test_performance_overlay)
 
+add_executable(test_utf8_decode test_utf8_decode.cpp)
+target_link_libraries(test_utf8_decode PRIVATE Catch2::Catch2WithMain platform-hal)
+catch_discover_tests(test_utf8_decode)
+
 add_executable(test_debug_console test_debug_console.cpp)
 target_link_libraries(test_debug_console PRIVATE Catch2::Catch2WithMain engine-debug engine-entity)
 target_include_directories(test_debug_console PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -54,6 +54,10 @@ Active in all camera modes. Inputs are suppressed while the debug console is ope
 | Z / X | Rudder left / right |
 | Space | Weapon trigger (bit 0) |
 
+## Performance overlay (F3)
+
+Cycles Off → Compact → Full. **Full mode** includes a 128-position rolling frame-time bar graph using Unicode shade characters (░ ▒ ▓ █ — U+2591/92/93/88). The renderer uses GNU Unifont 8×16 (full Unicode BMP), so these render correctly on all platforms without the CP437 fallback workaround previously used.
+
 ---
 
 ## Debug console

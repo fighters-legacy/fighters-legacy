@@ -8,7 +8,7 @@
 #include <cstdio>
 #include <cstring>
 
-// HUD color constants (ASCII-safe; CP437 font)
+// HUD color constants
 static constexpr float kGreenR = 0.0f, kGreenG = 1.0f, kGreenB = 0.0f;
 static constexpr float kDimR = 0.7f, kDimG = 0.7f, kDimB = 0.7f;
 static constexpr float kBrightR = 1.0f, kBrightG = 1.0f, kBrightB = 1.0f;
@@ -81,7 +81,7 @@ bool DebugConsole::tick(IInput& input) {
 void DebugConsole::onTextInput(const char* text) {
     if (!m_open || !text)
         return;
-    // Append only printable ASCII to keep output predictable with CP437 font
+    // Command input is ASCII identifiers; non-ASCII bytes from IME/paste are dropped.
     for (const char* p = text; *p; ++p) {
         unsigned char c = static_cast<unsigned char>(*p);
         if (c >= 0x20 && c <= 0x7E)

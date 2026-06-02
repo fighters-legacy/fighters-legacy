@@ -6,7 +6,8 @@
 
 #include "VkRenderer.h"
 #include "IWindow.h"
-#include "OverlayFont.h"
+#include "UnifontBitmap.h"
+#include "Utf8Decode.h"
 #include "VkWindow.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -3532,18 +3533,19 @@ struct OverlayVertex {
 static constexpr uint32_t kOverlayVertexSize = sizeof(OverlayVertex); // 32
 
 bool VkRenderer::createOverlayPipeline() {
-    // ── Font texture (R8_UNORM 128×256 expanded from 1bpp kOverlayFontBitmap) ─
+    // ── Font texture (R8_UNORM 4096×2048 expanded from 1bpp kUnifontBitmap) ──
     // Created directly via raw Vulkan — VkResources::createTexture() expects KTX2/PNG,
     // not raw pixel data, so bypassing it avoids silent fallback to the white default.
+    // Atlas layout: 512 glyph columns × 128 glyph rows (each glyph 8×16 px).
     {
-        constexpr uint32_t kFontW = 128;
-        constexpr uint32_t kFontH = 256;
+        constexpr uint32_t kFontW = 4096; // 512 cols × 8 px
+        constexpr uint32_t kFontH = 2048; // 128 rows × 16 px
         std::vector<uint8_t> atlas(kFontW * kFontH, 0u);
-        for (int c = 0; c < 256; ++c) {
-            const int col = c % 16;
-            const int row = c / 16;
+        for (int cp = 0; cp < 65536; ++cp) {
+            const int col = cp % 512;
+            const int row = cp / 512;
             for (int y = 0; y < 16; ++y) {
-                const uint8_t bits = kOverlayFontBitmap[c * 16 + y];
+                const uint8_t bits = kUnifontBitmap[cp * 16 + y];
                 for (int x = 0; x < 8; ++x) {
                     const int px = col * 8 + x;
                     const int py = row * 16 + y;
@@ -3552,11 +3554,11 @@ bool VkRenderer::createOverlayPipeline() {
                 }
             }
         }
-        // Reserve glyph 0xFF (col=15, row=15) as a solid-white block for line/rect HUD fills.
-        // Sampling any UV within this glyph returns 1.0 → outColor = vertex_color.
+        // Reserve codepoint U+FFFF (col=511, row=127) as a solid-white block for
+        // line/rect HUD fills. Sampling any UV within this glyph returns 1.0.
         for (int y = 0; y < 16; ++y)
             for (int x = 0; x < 8; ++x)
-                atlas[static_cast<size_t>(15 * 16 + y) * kFontW + static_cast<size_t>(15 * 8 + x)] = 0xFFu;
+                atlas[static_cast<size_t>(127 * 16 + y) * kFontW + static_cast<size_t>(511 * 8 + x)] = 0xFFu;
 
         // Staging buffer (host-visible, one-shot upload).
         VkBuffer stagingBuf{VK_NULL_HANDLE};
@@ -3904,8 +3906,8 @@ bool VkRenderer::createOverlayPipeline() {
 void VkRenderer::recordOverlayPass(VkCommandBuffer cmd) {
     constexpr float kCharW = 8.0f;
     constexpr float kCharH = 16.0f;
-    constexpr float kAtlasW = 128.0f;
-    constexpr float kAtlasH = 256.0f;
+    constexpr float kAtlasW = 4096.0f; // 512 cols × 8 px
+    constexpr float kAtlasH = 2048.0f; // 128 rows × 16 px
     constexpr float kMarginX = 8.0f;
     constexpr float kMarginY = 8.0f;
     constexpr float kLineGap = 2.0f;
@@ -3916,13 +3918,18 @@ void VkRenderer::recordOverlayPass(VkCommandBuffer cmd) {
 
     for (const std::string_view& line : m_overlayLines) {
         float cx = kMarginX;
-        for (unsigned char c : line) {
+        const char* p = line.data();
+        const char* pEnd = p + line.size();
+        while (p < pEnd) {
             if (vertCount + 6 > kMaxOverlayChars * 6u)
                 break;
 
-            const float u0 = static_cast<float>(c % 16u) * kCharW / kAtlasW;
+            const uint32_t cp = fl::nextUtf8Codepoint(p, pEnd);
+            const uint32_t glyphCol = cp % 512u;
+            const uint32_t glyphRow = cp / 512u;
+            const float u0 = static_cast<float>(glyphCol) * kCharW / kAtlasW;
             const float u1 = u0 + kCharW / kAtlasW;
-            const float v0 = static_cast<float>(c / 16u) * kCharH / kAtlasH;
+            const float v0 = static_cast<float>(glyphRow) * kCharH / kAtlasH;
             const float v1 = v0 + kCharH / kAtlasH;
             const float x0 = cx, x1 = cx + kCharW;
             const float y0 = cy, y1 = cy + kCharH;
@@ -3940,9 +3947,9 @@ void VkRenderer::recordOverlayPass(VkCommandBuffer cmd) {
     }
 
     // ── 2D HUD elements ────────────────────────────────────────────────────
-    // UV center of glyph 0xFF (solid-white block reserved in atlas).
-    constexpr float kWhiteU = (15.f * kCharW + kCharW * 0.5f) / kAtlasW; // 0.96875
-    constexpr float kWhiteV = (15.f * kCharH + kCharH * 0.5f) / kAtlasH; // 0.96875
+    // UV center of U+FFFF (col=511, row=127) — solid-white block reserved in atlas.
+    constexpr float kWhiteU = (511.f * kCharW + kCharW * 0.5f) / kAtlasW;
+    constexpr float kWhiteV = (127.f * kCharH + kCharH * 0.5f) / kAtlasH;
 
     const float vpW = static_cast<float>(m_swapchainExtent.width);
     const float vpH = static_cast<float>(m_swapchainExtent.height);
@@ -3955,22 +3962,29 @@ void VkRenderer::recordOverlayPass(VkCommandBuffer cmd) {
             float baseY = el.y * vpH;
             float cw = kCharW * el.scale;
             float ch = kCharH * el.scale;
-            for (unsigned char c : el.text) {
-                if (vertCount + 6 > kTotalBudget)
-                    break;
-                const float u0 = static_cast<float>(c % 16u) * kCharW / kAtlasW;
-                const float u1 = u0 + kCharW / kAtlasW;
-                const float v0 = static_cast<float>(c / 16u) * kCharH / kAtlasH;
-                const float v1 = v0 + kCharH / kAtlasH;
-                const float x0 = cx, x1 = cx + cw;
-                const float y0 = baseY, y1 = baseY + ch;
-                verts[vertCount++] = {{x0, y0}, {u0, v0}, {el.r, el.g, el.b, el.a}};
-                verts[vertCount++] = {{x1, y0}, {u1, v0}, {el.r, el.g, el.b, el.a}};
-                verts[vertCount++] = {{x1, y1}, {u1, v1}, {el.r, el.g, el.b, el.a}};
-                verts[vertCount++] = {{x0, y0}, {u0, v0}, {el.r, el.g, el.b, el.a}};
-                verts[vertCount++] = {{x1, y1}, {u1, v1}, {el.r, el.g, el.b, el.a}};
-                verts[vertCount++] = {{x0, y1}, {u0, v1}, {el.r, el.g, el.b, el.a}};
-                cx += cw;
+            {
+                const char* tp = el.text.data();
+                const char* tEnd = tp + el.text.size();
+                while (tp < tEnd) {
+                    if (vertCount + 6 > kTotalBudget)
+                        break;
+                    const uint32_t cp = fl::nextUtf8Codepoint(tp, tEnd);
+                    const uint32_t glyphCol = cp % 512u;
+                    const uint32_t glyphRow = cp / 512u;
+                    const float u0 = static_cast<float>(glyphCol) * kCharW / kAtlasW;
+                    const float u1 = u0 + kCharW / kAtlasW;
+                    const float v0 = static_cast<float>(glyphRow) * kCharH / kAtlasH;
+                    const float v1 = v0 + kCharH / kAtlasH;
+                    const float x0 = cx, x1 = cx + cw;
+                    const float y0 = baseY, y1 = baseY + ch;
+                    verts[vertCount++] = {{x0, y0}, {u0, v0}, {el.r, el.g, el.b, el.a}};
+                    verts[vertCount++] = {{x1, y0}, {u1, v0}, {el.r, el.g, el.b, el.a}};
+                    verts[vertCount++] = {{x1, y1}, {u1, v1}, {el.r, el.g, el.b, el.a}};
+                    verts[vertCount++] = {{x0, y0}, {u0, v0}, {el.r, el.g, el.b, el.a}};
+                    verts[vertCount++] = {{x1, y1}, {u1, v1}, {el.r, el.g, el.b, el.a}};
+                    verts[vertCount++] = {{x0, y1}, {u0, v1}, {el.r, el.g, el.b, el.a}};
+                    cx += cw;
+                }
             }
             break;
         }
