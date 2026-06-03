@@ -458,9 +458,8 @@ int main(int argc, char** argv) {
         debugDef.maxHp = 100.0f;
         entityRegistry.registerType(std::move(debugDef));
 
-        // Initial free-camera position: 200 m above world origin, looking slightly down.
-        // Ground clamping in the game loop will push it above terrain on the first frame.
-        cameraController.setFreeOrbit({0.0, 500.0, 0.0}, 0.0f, -10.0f, 200.0f);
+        // Initial free-camera position matches entity spawn altitude (2000 m).
+        cameraController.setFreeOrbit({0.0, 2000.0, 0.0}, 0.0f, -10.0f, 200.0f);
     }
 
     std::optional<SandboxInspector> inspector;
@@ -517,7 +516,7 @@ int main(int argc, char** argv) {
 
     // Sandbox free-look camera state — pivot is the formation centre at 500 m altitude.
     // Matches the initial setFreeOrbit call above (yaw=0, pitch=-10, dist=200).
-    glm::dvec3 sbPivot{0.0, 500.0, 0.0}; // mutable — WASD/QE pan it
+    glm::dvec3 sbPivot{0.0, 2000.0, 0.0}; // mutable — WASD/QE pan it; starts at entity spawn altitude
     float sbYaw = 0.0f;
     float sbPitch = -10.0f;
     float sbRadius = 200.0f;
@@ -660,7 +659,7 @@ int main(int argc, char** argv) {
                     if (keys[SDL_SCANCODE_Q])
                         sbPivot.y -= speed;
                     if (keys[SDL_SCANCODE_R]) {
-                        sbPivot = {0.0, 500.0, 0.0};
+                        sbPivot = {0.0, 2000.0, 0.0};
                         sbYaw = 0.f;
                         sbPitch = -10.f;
                         sbRadius = 200.f;

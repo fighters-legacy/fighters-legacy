@@ -48,9 +48,11 @@ float fbm(vec2 p) {
 
 void main() {
     // Reconstruct world-space view direction from screen UV.
+    // z=0 in reverse-Z NDC = far plane; the result world4.w = 0 (homogeneous direction).
+    // Use xyz directly — dividing by w=0 produces NaN on the GPU.
     vec2 ndc    = texCoord * 2.0 - 1.0;
     vec4 world4 = push.invViewProj * vec4(ndc, 0.0, 1.0);
-    vec3 viewDir = normalize(world4.xyz / world4.w);
+    vec3 viewDir = normalize(world4.xyz);
 
     float upDot       = dot(viewDir, vec3(0.0, 1.0, 0.0));
     float cloudCoverage = push.skyParams.w;
@@ -58,7 +60,9 @@ void main() {
     // Dynamic sky colors — zenith darkens under cloud cover.
     vec3 zenith  = mix(vec3(0.05, 0.10, 0.35), vec3(0.12, 0.14, 0.18), cloudCoverage);
     vec3 horizon = push.skyParams.xyz;
-    vec3 ground  = vec3(0.30, 0.28, 0.25) * (1.0 - cloudCoverage * 0.3);
+    // Below-horizon: atmospheric haze darkens the horizon colour rather than
+    // showing a separate earthy brown. Avoids the tan band when flying low.
+    vec3 ground  = horizon * 0.55;
 
     vec3 sky;
     if (upDot >= 0.0) {
