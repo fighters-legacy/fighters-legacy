@@ -12,9 +12,11 @@
 #include <weather/WeatherController.h>
 #include <weather/WeatherTypes.h>
 
+#include <cerrno>
 #include <charconv>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -228,25 +230,29 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
         });
 
     // set_time <hours>
-    registry.registerCommand(
-        "set_time", "set_time <0-24>  -- set in-game time of day (hours, float)",
-        [ctx](std::span<std::string_view> args) -> std::string {
-            if (args.empty())
-                return "usage: set_time <0-24>";
-            // Validate argument before context check so parse/range errors are always reported.
-            float hours = 0.f;
-            auto [ptr, ec] = std::from_chars(args[0].data(), args[0].data() + args[0].size(), hours);
-            if (ec != std::errc{})
-                return "set_time: invalid value";
-            if (hours < 0.f || hours > 24.f)
-                return "set_time: value must be in [0, 24]";
-            if (!ctx.weatherController || !ctx.gameLoop)
-                return "set_time: not available";
-            ctx.gameLoop->enqueueSimCallback([ctx, hours]() { ctx.weatherController->setTimeOfDay(hours); });
-            char buf[64];
-            std::snprintf(buf, sizeof(buf), "set_time: %.2f", hours);
-            return buf;
-        });
+    registry.registerCommand("set_time", "set_time <0-24>  -- set in-game time of day (hours, float)",
+                             [ctx](std::span<std::string_view> args) -> std::string {
+                                 if (args.empty())
+                                     return "usage: set_time <0-24>";
+                                 // Validate argument before context check so parse/range errors are always reported.
+                                 // Use strtof rather than from_chars<float>: the float overload is deleted on
+                                 // Apple Clang before macOS 13.3 (Xcode 14.3).
+                                 std::string timeStr(args[0]);
+                                 char* timeEnd = nullptr;
+                                 errno = 0;
+                                 float hours = std::strtof(timeStr.c_str(), &timeEnd);
+                                 if (timeEnd == timeStr.c_str() || *timeEnd != '\0' || errno == ERANGE)
+                                     return "set_time: invalid value";
+                                 if (hours < 0.f || hours > 24.f)
+                                     return "set_time: value must be in [0, 24]";
+                                 if (!ctx.weatherController || !ctx.gameLoop)
+                                     return "set_time: not available";
+                                 ctx.gameLoop->enqueueSimCallback(
+                                     [ctx, hours]() { ctx.weatherController->setTimeOfDay(hours); });
+                                 char buf[64];
+                                 std::snprintf(buf, sizeof(buf), "set_time: %.2f", hours);
+                                 return buf;
+                             });
 
     // spawn <type> <x> <y> <z>
     registry.registerCommand(
@@ -259,9 +265,11 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
             std::string typeId(args[0]);
             double x = 0, y = 0, z = 0;
             auto parseD = [](std::string_view s, double& out) {
-                float f = 0;
-                auto [p, e] = std::from_chars(s.data(), s.data() + s.size(), f);
-                if (e != std::errc{})
+                std::string tmp(s);
+                char* end = nullptr;
+                errno = 0;
+                float f = std::strtof(tmp.c_str(), &end);
+                if (end == tmp.c_str() || *end != '\0' || errno == ERANGE)
                     return false;
                 out = static_cast<double>(f);
                 return true;
