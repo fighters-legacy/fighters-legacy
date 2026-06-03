@@ -445,9 +445,9 @@ int main(int argc, char** argv) {
         musicManager.setState(GameState::Menu);
     }
 
-    // Step 17c: Sandbox mode — register builtin entity type, configure scene, spawn formation.
-    // All entity registration and spawning happen before gameLoop.start() so no sim thread
-    // exists yet; calling spawn() on the main thread is data-race-free in this window.
+    // Step 17c: Sandbox mode — register builtin entity type and configure initial camera.
+    // No entities are pre-spawned; the world starts empty and the player entity appears
+    // when the ENet client connects to the embedded server (WorldBroadcaster::onConnect).
     if (outcome == FirstRunOutcome::LaunchSandboxInspector) {
         // Builtin debug type: mesh is intentionally empty so SceneRenderer falls back to the
         // tetrahedron palette, cycling 6 colors by entityIdx (3 opaque, 3 glass/transparent).
@@ -458,22 +458,9 @@ int main(int argc, char** argv) {
         debugDef.maxHp = 100.0f;
         entityRegistry.registerType(std::move(debugDef));
 
-        // Orbit the camera south of the formation (yaw=0 = south of pivot), looking north.
+        // Initial free-camera position: 200 m above world origin, looking slightly down.
+        // Ground clamping in the game loop will push it above terrain on the first frame.
         cameraController.setFreeOrbit({0.0, 500.0, 0.0}, 0.0f, -10.0f, 200.0f);
-
-        // Spawn 5 entities in a V-formation at 500 m altitude. Slots 0-2 are opaque
-        // (red/green/blue), slots 3-4 are glass (yellow/purple) — exercises the transparent pass.
-        const float kAlt = 500.0f;
-        struct {
-            float x, z;
-        } kSlots[] = {{0, 0}, {-30, -25}, {30, -25}, {-60, -50}, {60, -50}};
-        for (const auto& s : kSlots) {
-            fl::EntityTransform t{};
-            t.pos[0] = s.x;
-            t.pos[1] = kAlt;
-            t.pos[2] = s.z;
-            entityManager.spawn("builtin:debug-entity", t);
-        }
     }
 
     std::optional<SandboxInspector> inspector;
@@ -526,24 +513,7 @@ int main(int argc, char** argv) {
     if (!discoveryListener.isOpen())
         rawLogger->log(LogLevel::Warn, __FILE__, __LINE__, "LAN discovery listener: no sockets opened");
 
-    // Sandbox demo: static fire emitter at world origin exercises the GPU particle pass
-    // from frame 1 without requiring any entity damage state.  effectName points to a
-    // string literal so the pointer is stable for the lifetime of the loop.
-    static const ParticleEmitterState kDemoFire{
-        {0.0f, 10.0f, 0.0f}, // position
-        "fire",              // effectName
-        1.5f,                // intensity
-        80.0f,               // spawnRate
-        2.0f,                // particleLifetime
-        8.0f,                // initialSpeed
-        {1.0f, 0.6f, 0.1f},  // colorStart
-        {0.2f, 0.1f, 0.05f}, // colorEnd
-        0.5f,                // sizeStart
-        2.5f,                // sizeEnd
-        true,                // additive (fire/explosion)
-    };
-    const std::span<const ParticleEmitterState> sandboxEmitters =
-        inspector ? std::span<const ParticleEmitterState>{&kDemoFire, 1} : std::span<const ParticleEmitterState>{};
+    const std::span<const ParticleEmitterState> sandboxEmitters{};
 
     // Sandbox free-look camera state — pivot is the formation centre at 500 m altitude.
     // Matches the initial setFreeOrbit call above (yaw=0, pitch=-10, dist=200).
@@ -551,6 +521,7 @@ int main(int argc, char** argv) {
     float sbYaw = 0.0f;
     float sbPitch = -10.0f;
     float sbRadius = 200.0f;
+    float sbThrottle = 0.f; // persistent throttle [0,1]; PageUp/PageDown increment; LShift overrides to 1
     // Unified mouse tracking shared across all camera modes.
     float camLastMx{0.f}, camLastMy{0.f};
     bool camFirstFrame{true};
@@ -577,7 +548,8 @@ int main(int argc, char** argv) {
     bool running = true;
     while (running && !p.window->shouldClose()) {
         // Pull scroll events before pollEvents drains them — affects Free and Chase camera zoom.
-        {
+        // Suppressed while debug console is open so scroll doesn't accidentally adjust zoom.
+        if (!dbgConsole.isOpen()) {
             SDL_PumpEvents();
             SDL_Event ev;
             while (SDL_PeepEvents(&ev, 1, SDL_GETEVENT, SDL_EVENT_MOUSE_WHEEL, SDL_EVENT_MOUSE_WHEEL) > 0) {
@@ -604,7 +576,7 @@ int main(int argc, char** argv) {
         }
 
         // F1=Cockpit, F2=Chase, F4=Free — direct mode activation.
-        // Backtick toggles the debug console.
+        // Backtick toggles the debug console. Camera mode switches suppressed while console is open.
         {
             const bool* keys = SDL_GetKeyboardState(nullptr);
             static bool f1Prev{}, f2Prev{}, f4Prev{};
@@ -617,39 +589,47 @@ int main(int argc, char** argv) {
                     dbgConsole.open(*p.input);
             }
             gravePrev = graveNow;
-            if (keys[SDL_SCANCODE_F1] && !f1Prev) {
-                cameraController.setMode(fl::CameraMode::Cockpit);
-                cockpitYaw = 0.f;
-                cockpitPitch = 0.f;
-                camFirstFrame = true;
-            }
-            if (keys[SDL_SCANCODE_F2] && !f2Prev) {
-                cameraController.setMode(fl::CameraMode::Chase);
-                if (playerEntry) {
-                    float ey = std::atan2(2.f * (playerEntry->orientation.w * playerEntry->orientation.y +
-                                                 playerEntry->orientation.x * playerEntry->orientation.z),
-                                          1.f - 2.f * (playerEntry->orientation.y * playerEntry->orientation.y +
-                                                       playerEntry->orientation.z * playerEntry->orientation.z));
-                    chaseYaw = glm::degrees(ey) + 180.f;
+            if (!dbgConsole.isOpen()) {
+                if (keys[SDL_SCANCODE_F1] && !f1Prev) {
+                    cameraController.setMode(fl::CameraMode::Cockpit);
+                    cockpitYaw = 0.f;
+                    cockpitPitch = 0.f;
+                    camFirstFrame = true;
                 }
-                chasePitch = 20.f;
-                chaseRadius = 25.f;
-                camFirstFrame = true;
-            }
-            if (keys[SDL_SCANCODE_F4] && !f4Prev) {
-                cameraController.setMode(fl::CameraMode::Free);
-                camFirstFrame = true;
+                if (keys[SDL_SCANCODE_F2] && !f2Prev) {
+                    cameraController.setMode(fl::CameraMode::Chase);
+                    if (playerEntry) {
+                        float ey = std::atan2(2.f * (playerEntry->orientation.w * playerEntry->orientation.y +
+                                                     playerEntry->orientation.x * playerEntry->orientation.z),
+                                              1.f - 2.f * (playerEntry->orientation.y * playerEntry->orientation.y +
+                                                           playerEntry->orientation.z * playerEntry->orientation.z));
+                        chaseYaw = glm::degrees(ey) + 180.f;
+                    }
+                    chasePitch = 20.f;
+                    chaseRadius = 25.f;
+                    camFirstFrame = true;
+                }
+                if (keys[SDL_SCANCODE_F4] && !f4Prev) {
+                    cameraController.setMode(fl::CameraMode::Free);
+                    // Snap pivot to player entity so the aircraft is immediately in view.
+                    if (playerEntry) {
+                        sbPivot = playerEntry->position;
+                        sbPitch = -10.0f;
+                    }
+                    camFirstFrame = true;
+                }
             }
             f1Prev = keys[SDL_SCANCODE_F1];
             f2Prev = keys[SDL_SCANCODE_F2];
             f4Prev = keys[SDL_SCANCODE_F4];
         }
 
-        // Per-mode camera update.
+        // Per-mode camera update. WASD/QE pan is suppressed while the debug console is open.
         {
             float mx = 0, my = 0;
             SDL_MouseButtonFlags mb = SDL_GetMouseState(&mx, &my);
             const bool* keys = SDL_GetKeyboardState(nullptr);
+            const bool consoleOpen = dbgConsole.isOpen();
 
             switch (cameraController.mode()) {
             case fl::CameraMode::Free: {
@@ -658,31 +638,40 @@ int main(int argc, char** argv) {
                     sbPitch += (my - camLastMy) * 0.25f;
                     sbPitch = std::clamp(sbPitch, -89.0f, 89.0f);
                 }
-                if (keys[SDL_SCANCODE_EQUALS] || keys[SDL_SCANCODE_KP_PLUS])
-                    sbRadius = std::max(20.0f, sbRadius - 5.0f);
-                if (keys[SDL_SCANCODE_MINUS] || keys[SDL_SCANCODE_KP_MINUS])
-                    sbRadius = std::min(5000.0f, sbRadius + 5.0f);
-                const float speed = std::max(1.0f, sbRadius * 0.01f);
-                const float yr = glm::radians(sbYaw);
-                const glm::vec3 fwd{-std::sin(yr), 0.0f, -std::cos(yr)};
-                const glm::vec3 rgt{std::cos(yr), 0.0f, -std::sin(yr)};
-                if (keys[SDL_SCANCODE_W])
-                    sbPivot += glm::dvec3(fwd * speed);
-                if (keys[SDL_SCANCODE_S])
-                    sbPivot -= glm::dvec3(fwd * speed);
-                if (keys[SDL_SCANCODE_D])
-                    sbPivot += glm::dvec3(rgt * speed);
-                if (keys[SDL_SCANCODE_A])
-                    sbPivot -= glm::dvec3(rgt * speed);
-                if (keys[SDL_SCANCODE_E])
-                    sbPivot.y += speed;
-                if (keys[SDL_SCANCODE_Q])
-                    sbPivot.y -= speed;
-                if (keys[SDL_SCANCODE_R]) {
-                    sbPivot = {0.0, 500.0, 0.0};
-                    sbYaw = 0.f;
-                    sbPitch = -10.f;
-                    sbRadius = 200.f;
+                if (!consoleOpen) {
+                    if (keys[SDL_SCANCODE_EQUALS] || keys[SDL_SCANCODE_KP_PLUS])
+                        sbRadius = std::max(20.0f, sbRadius - 5.0f);
+                    if (keys[SDL_SCANCODE_MINUS] || keys[SDL_SCANCODE_KP_MINUS])
+                        sbRadius = std::min(5000.0f, sbRadius + 5.0f);
+                    const float speed = std::max(1.0f, sbRadius * 0.01f);
+                    const float yr = glm::radians(sbYaw);
+                    const glm::vec3 fwd{-std::sin(yr), 0.0f, -std::cos(yr)};
+                    const glm::vec3 rgt{std::cos(yr), 0.0f, -std::sin(yr)};
+                    if (keys[SDL_SCANCODE_W])
+                        sbPivot += glm::dvec3(fwd * speed);
+                    if (keys[SDL_SCANCODE_S])
+                        sbPivot -= glm::dvec3(fwd * speed);
+                    if (keys[SDL_SCANCODE_D])
+                        sbPivot += glm::dvec3(rgt * speed);
+                    if (keys[SDL_SCANCODE_A])
+                        sbPivot -= glm::dvec3(rgt * speed);
+                    if (keys[SDL_SCANCODE_E])
+                        sbPivot.y += speed;
+                    if (keys[SDL_SCANCODE_Q])
+                        sbPivot.y -= speed;
+                    if (keys[SDL_SCANCODE_R]) {
+                        sbPivot = {0.0, 500.0, 0.0};
+                        sbYaw = 0.f;
+                        sbPitch = -10.f;
+                        sbRadius = 200.f;
+                    }
+                }
+                // Clamp free-cam pivot to terrain surface + 2 m eye clearance.
+                // heightAt returns 0.0 for unloaded chunks — safe fallback above sea level.
+                {
+                    const double groundElev = terrainStreamer.heightAt(sbPivot.x, sbPivot.z);
+                    if (sbPivot.y < groundElev + 2.0)
+                        sbPivot.y = groundElev + 2.0;
                 }
                 cameraController.setFreeOrbit(sbPivot, sbYaw, sbPitch, sbRadius);
                 break;
@@ -714,7 +703,14 @@ int main(int argc, char** argv) {
             camFirstFrame = false;
         }
 
-        if (inspector && !inspector->update())
+        // Debug console tick runs before inspector so Escape closes the console first.
+        // consoleWasOpen guards the inspector's Escape-to-quit path for the same frame.
+        bool consoleWasOpen = dbgConsole.isOpen();
+        if (consoleWasOpen) {
+            if (dbgConsole.tick(*p.input))
+                dbgConsole.close(*p.input);
+        }
+        if (inspector && !inspector->update() && !consoleWasOpen)
             running = false;
 
         // Pump ENet inbound (non-blocking). ClientNetEventHandler::onReceive fires here
@@ -726,20 +722,28 @@ int main(int argc, char** argv) {
 
         // Send client flight inputs to the embedded server each frame.
         // Arrow keys: Up/Down = elevator, Left/Right = aileron, Z/X = rudder.
-        // Left Shift = full throttle; Space = weapon trigger.
-        // Inputs are zeroed when the debug console is open.
+        // Page Up/Down = throttle increase/decrease (~1 s full range at 60 Hz).
+        // Left Shift = max throttle hold override; Space = weapon trigger.
+        // Flight controls are zeroed when the debug console is open; throttle is held.
         {
             static uint32_t inputSeq = 0;
             const bool* keys = SDL_GetKeyboardState(nullptr);
             fl::MsgClientInput inp;
             inp.seqNum = inputSeq++;
             inp.tickIndex = renderBridge.hasSnapshot() ? renderBridge.current().tickIndex : 0;
+            constexpr float kThrottleStep = 1.0f / 60.0f;
             if (!dbgConsole.isOpen()) {
-                inp.throttle = keys[SDL_SCANCODE_LSHIFT] ? 1.f : 0.f;
+                if (keys[SDL_SCANCODE_PAGEUP])
+                    sbThrottle = std::clamp(sbThrottle + kThrottleStep, 0.f, 1.f);
+                if (keys[SDL_SCANCODE_PAGEDOWN])
+                    sbThrottle = std::clamp(sbThrottle - kThrottleStep, 0.f, 1.f);
+                inp.throttle = keys[SDL_SCANCODE_LSHIFT] ? 1.f : sbThrottle;
                 inp.elevator = (keys[SDL_SCANCODE_UP] ? -1.f : 0.f) + (keys[SDL_SCANCODE_DOWN] ? 1.f : 0.f);
                 inp.aileron = (keys[SDL_SCANCODE_RIGHT] ? 1.f : 0.f) + (keys[SDL_SCANCODE_LEFT] ? -1.f : 0.f);
                 inp.rudder = (keys[SDL_SCANCODE_X] ? 1.f : 0.f) + (keys[SDL_SCANCODE_Z] ? -1.f : 0.f);
                 inp.buttons = keys[SDL_SCANCODE_SPACE] ? 1u : 0u; // bit 0 = weapon trigger
+            } else {
+                inp.throttle = sbThrottle; // hold current throttle — don't cut engines on console open
             }
             // peerId is ignored by ENetNetwork on a client; sends to the single connected peer (server).
             clientNet->send(0, &inp, sizeof(inp), /*reliable=*/true);
@@ -780,12 +784,8 @@ int main(int argc, char** argv) {
         // tryAdvance() updated the bridge, but the pointer remains valid this frame — see comment above).
         flightHud.update(cameraController.mode() == fl::CameraMode::Cockpit ? playerEntry : nullptr, env.timeOfDay);
 
-        // Debug console tick and HUD build.
+        // Debug console HUD build (tick already ran before inspector above).
         {
-            if (dbgConsole.isOpen()) {
-                if (dbgConsole.tick(*p.input))
-                    dbgConsole.close(*p.input);
-            }
             glm::dvec3 playerPos{};
             const glm::dvec3* playerPosPtr = nullptr;
             if (playerEntry) {
@@ -799,7 +799,7 @@ int main(int argc, char** argv) {
         {
             const bool* keys = SDL_GetKeyboardState(nullptr);
             static bool f3PrevDown = false;
-            if (keys[SDL_SCANCODE_F3] && !f3PrevDown) {
+            if (!dbgConsole.isOpen() && keys[SDL_SCANCODE_F3] && !f3PrevDown) {
                 perfOverlay.cycleMode();
                 DebugSettings ds = userConfig.debug();
                 ds.overlayMode = perfOverlay.mode();

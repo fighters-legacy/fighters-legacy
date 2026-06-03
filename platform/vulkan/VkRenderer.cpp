@@ -3279,7 +3279,10 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             // Derive horizon color and cloud coverage from environment state.
             const auto& env = m_pendingScene.environment;
             float cloudCov = env.cloudCoverage;
-            float warmth = glm::clamp((env.sunColor.r - env.sunColor.b) * 2.0f, 0.0f, 1.0f);
+            // Warmth driven by sun elevation, not sun color: warm near horizon (dawn/dusk),
+            // cool blue at high elevation (midday). avoids tan sky at moderate elevation.
+            float elevation = env.sunDirection.y; // [-1,1]; 1=noon, 0=horizon, <0=night
+            float warmth = 1.0f - glm::clamp(elevation / 0.3f, 0.0f, 1.0f);
             glm::vec3 horizonDay{0.40f, 0.55f, 0.75f};
             glm::vec3 horizonDusk{0.85f, 0.55f, 0.25f};
             glm::vec3 horizonStorm{0.25f, 0.28f, 0.32f};

@@ -189,6 +189,28 @@ TEST_CASE("WorldBroadcaster: onConnect sends ConnectAck with registered types an
     CHECK(em.liveCount() == 1u);
 }
 
+TEST_CASE("WorldBroadcaster: peer entity spawns at 2000 m altitude", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:5000";
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    REQUIRE(!net.broadcasts.empty());
+    const auto& pkt = net.broadcasts.back();
+    REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry));
+    fl::MsgEntityEntry e;
+    std::memcpy(&e, pkt.data() + sizeof(fl::MsgWorldSnapshotHeader), sizeof(e));
+    // spawn at 2000 m; flight integrator may shift slightly in first tick
+    CHECK(e.pos[1] >= 1990.0);
+    CHECK(e.pos[1] <= 2020.0);
+}
+
 TEST_CASE("WorldBroadcaster: onConnect with empty registry sends typeCount=0 and assigns no entity",
           "[world_broadcaster]") {
     MockLogger logger;

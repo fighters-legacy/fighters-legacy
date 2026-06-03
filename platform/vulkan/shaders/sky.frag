@@ -93,10 +93,11 @@ void main() {
         0.0, 1.0);
     sky = mix(sky, horizon * 0.8, fogFactor * 0.5);
 
-    // Sun disc — attenuated through cloud cover.
+    // Sun disc + soft corona — attenuated through cloud cover.
     float sunDot  = dot(viewDir, normalize(push.sunDirection.xyz));
-    float sunDisc = smoothstep(0.9995, 0.9999, sunDot) * (1.0 - cloudCoverage * 0.95);
-    sky += push.sunColor.xyz * push.sunColor.w * sunDisc;
+    float sunDisc = smoothstep(0.9990, 1.0, sunDot) * (1.0 - cloudCoverage * 0.98);
+    float sunGlow = pow(max(0.0, sunDot), 8.0) * 0.06 * (1.0 - cloudCoverage * 0.8);
+    sky += push.sunColor.xyz * push.sunColor.w * (sunDisc + sunGlow);
 
     outColor = vec4(sky, 1.0);
 }

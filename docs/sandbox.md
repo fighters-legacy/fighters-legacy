@@ -16,6 +16,8 @@ Developer controls for the Fighters Legacy sandbox (zero-content-pack free-fligh
 
 ### Free camera (F4)
 
+When switching to Free camera while a player entity exists, the pivot snaps to the entity's position so it is immediately in view.
+
 | Key / Input | Action |
 |---|---|
 | LMB drag | Orbit around pivot point |
@@ -24,8 +26,8 @@ Developer controls for the Fighters Legacy sandbox (zero-content-pack free-fligh
 | `-` / NumPad `-` | Zoom out |
 | W / S | Pan forward / backward |
 | A / D | Pan left / right |
-| Q / E | Pan down / up |
-| R | Reset camera to default position (500 m altitude) |
+| Q / E | Pan down / up (clamped to terrain surface + 2 m) |
+| R | Reset camera pivot to world origin (clamped above terrain) |
 
 ### Chase camera (F2)
 
@@ -44,11 +46,13 @@ Developer controls for the Fighters Legacy sandbox (zero-content-pack free-fligh
 
 ## Flight controls
 
-Active in all camera modes. Inputs are suppressed while the debug console is open.
+Active in all camera modes. All game inputs (flight controls and camera) are suppressed while the debug console is open; throttle is held at its last value.
 
 | Key | Action |
 |---|---|
-| Left Shift | Throttle full |
+| Page Up | Throttle increase (~1 s to 100% at 60 Hz) |
+| Page Down | Throttle decrease |
+| Left Shift | Max throttle hold (override while held) |
 | Arrow Up / Down | Elevator (pitch) |
 | Arrow Left / Right | Aileron (roll) |
 | Z / X | Rudder left / right |
@@ -64,8 +68,7 @@ Cycles Off → Compact → Full. **Full mode** includes a 128-position rolling f
 
 **Toggle:** `` ` `` (backtick / grave). **Close:** Escape.
 
-The console is a half-screen drop-down overlay rendered over the HUD. All flight inputs are
-suppressed while it is open.
+The console is a half-screen drop-down overlay rendered over the HUD. All game inputs (flight controls and camera) are suppressed while it is open; throttle is held at its last value so opening the console does not cut the engines.
 
 ### Editing
 
@@ -104,7 +107,7 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 | `rain` | 85% | Heavy | Moderate | Driven by time clock |
 | `storm` | 95% | Maximum | Strong | Driven by time clock |
 
-The in-game clock advances at **10× real time** by default (1 real minute = 10 game minutes; full day/night cycle ≈ 2.4 real hours). Time is shown as `HH:MM` in the HUD top-right (cockpit mode only). The time scale is configurable via `[world] time_scale` in `server.toml`.
+The in-game clock advances at **10× real time** by default (1 real minute = 10 game minutes; full day/night cycle ≈ 2.4 real hours). Time is shown as `HH:MM` in the HUD top-right (Cockpit mode only). The time scale is configurable via `[world] time_scale` in `server.toml`.
 
 ### Position widget
 

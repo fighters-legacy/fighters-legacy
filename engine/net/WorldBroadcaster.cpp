@@ -233,7 +233,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     m_net.send(peerId, &hello, sizeof(hello), /*reliable=*/true);
 
     EntityTransform t{};
-    t.pos[1] = 500.0; // spawn at 500 m altitude
+    t.pos[1] = 2000.0; // spawn at 2000 m MSL — clears ~550 m procedural terrain base by ~1450 m
     EntityId id = m_entityManager.spawn("builtin:debug-entity", t, peerId);
     if (id.valid()) {
         m_peerEntities[peerId] = id;
