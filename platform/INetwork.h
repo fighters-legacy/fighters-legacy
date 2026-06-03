@@ -69,6 +69,9 @@ class INetwork {
     // Valid until the next call on this interface.
     virtual const char* getPeerAddress(uint32_t peerId) const = 0;
 
+    // Initiates a graceful disconnect of a single peer. No-op if peerId is not connected.
+    virtual void disconnectPeer(uint32_t peerId) = 0;
+
     // Returns a human-readable description of the last error, or nullptr if none.
     // Valid until the next call on this interface.
     virtual const char* getLastError() const = 0;

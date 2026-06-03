@@ -261,6 +261,14 @@ const char* ENetNetwork::getPeerAddress(uint32_t peerId) const {
     return m_peerAddressBuf.c_str();
 }
 
+void ENetNetwork::disconnectPeer(uint32_t peerId) {
+    if (!m_host || peerId >= m_host->peerCount)
+        return;
+    ENetPeer* peer = &m_host->peers[peerId];
+    if (peer->state != ENET_PEER_STATE_DISCONNECTED)
+        enet_peer_disconnect(peer, 0);
+}
+
 const char* ENetNetwork::getLastError() const {
     return m_lastError.empty() ? nullptr : m_lastError.c_str();
 }

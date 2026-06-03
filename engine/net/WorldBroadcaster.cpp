@@ -16,7 +16,48 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <string_view>
 #include <vector>
+
+// ---------------------------------------------------------------------------
+// IP address helpers
+// ---------------------------------------------------------------------------
+
+// Normalize a raw IP string: strip surrounding brackets and the ::ffff: IPv4-mapped prefix.
+//   "[::1]"           -> "::1"
+//   "::ffff:1.2.3.4"  -> "1.2.3.4"
+//   "1.2.3.4"         -> "1.2.3.4"  (no change)
+static std::string normalizeIp(std::string_view raw) {
+    std::string_view v = raw;
+    if (!v.empty() && v.front() == '[') {
+        v.remove_prefix(1);
+        auto end = v.find(']');
+        if (end != std::string_view::npos)
+            v = v.substr(0, end);
+    }
+    std::string ip(v);
+    if (ip.size() > 7 && ip.compare(0, 7, "::ffff:") == 0)
+        ip.erase(0, 7);
+    return ip;
+}
+
+// Extract the normalized IP from an "ip:port" or "[ip]:port" string returned by getPeerAddress().
+static std::string extractIp(const char* addrPort) {
+    if (!addrPort)
+        return {};
+    std::string_view av(addrPort);
+    std::string_view ipv;
+    if (!av.empty() && av.front() == '[') {
+        av.remove_prefix(1);
+        auto end = av.find(']');
+        ipv = (end != std::string_view::npos) ? av.substr(0, end) : av;
+    } else {
+        auto colon = av.rfind(':');
+        ipv = (colon != std::string_view::npos) ? av.substr(0, colon) : av;
+    }
+    return normalizeIp(ipv);
+}
 
 // ---------------------------------------------------------------------------
 // Quaternion helpers — pure float array math, no GLM dependency.
@@ -40,6 +81,36 @@ WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegis
     : m_entityManager(entityManager), m_registry(registry), m_net(net), m_logger(logger), m_weather(weather) {}
 
 WorldBroadcaster::~WorldBroadcaster() = default;
+
+// ---------------------------------------------------------------------------
+// Peer management (sim-thread only)
+// ---------------------------------------------------------------------------
+
+void WorldBroadcaster::kickPeer(uint32_t peerId) {
+    m_net.disconnectPeer(peerId);
+}
+
+void WorldBroadcaster::banAddress(std::string ip) {
+    ip = normalizeIp(ip);
+    m_bannedAddresses.insert(ip);
+    for (const auto& [peerId, eid] : m_peerEntities) {
+        if (extractIp(m_net.getPeerAddress(peerId)) == ip)
+            m_net.disconnectPeer(peerId);
+    }
+}
+
+void WorldBroadcaster::unbanAddress(const std::string& ip) {
+    m_bannedAddresses.erase(normalizeIp(ip));
+}
+
+void WorldBroadcaster::forEachPeer(
+    std::function<void(uint32_t peerId, const std::string& addr, EntityId eid)> fn) const {
+    for (const auto& [peerId, eid] : m_peerEntities) {
+        const char* raw = m_net.getPeerAddress(peerId);
+        std::string addr = raw ? raw : "";
+        fn(peerId, addr, eid);
+    }
+}
 
 void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // Step each peer's FlightIntegrator from stored inputs, then copy state to the entity.
@@ -144,6 +215,16 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
 }
 
 void WorldBroadcaster::onConnect(uint32_t peerId) {
+    // Ban check — reject banned IPs before any state is created.
+    std::string ip = extractIp(m_net.getPeerAddress(peerId));
+    if (!ip.empty() && m_bannedAddresses.count(ip)) {
+        char msg[128];
+        std::snprintf(msg, sizeof(msg), "peer %u from %s is banned — disconnecting", peerId, ip.c_str());
+        m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
+        m_net.disconnectPeer(peerId);
+        return;
+    }
+
     char msg[64];
     std::snprintf(msg, sizeof(msg), "peer %u connected", peerId);
     m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);

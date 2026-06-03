@@ -50,6 +50,12 @@ class DiscoveryBeacon {
     // Returns true if at least one socket (IPv4 or IPv6) opened successfully.
     bool isOpen() const noexcept;
 
+    // Update the server name broadcast in future beacons (e.g. after reload_config).
+    // Main-thread only; takes effect on the next tick().
+    void setName(std::string name) {
+        m_cfg.name = std::move(name);
+    }
+
   private:
     void send(int playerCount);
     bool openSock4();

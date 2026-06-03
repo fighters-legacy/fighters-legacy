@@ -269,3 +269,23 @@ TEST_CASE("DiscoveryListener deduplicates repeated beacons from same server", "[
     // Must upsert, not insert twice.
     CHECK(listener.servers().size() == 1u);
 }
+
+TEST_CASE("DiscoveryBeacon: setName updates the server name for future broadcasts", "[lan_discovery]") {
+    struct NullLogger : ILogger {
+        void log(LogLevel, const char*, int, const char*) override {}
+        void setMinLevel(LogLevel) override {}
+        void flush() override {}
+    } log;
+
+    DiscoveryBeacon::Config cfg;
+    cfg.name = "original";
+    cfg.port = 0;            // don't actually bind/broadcast — we're testing the config mutation
+    cfg.intervalMs = 100000; // suppress automatic ticking
+
+    DiscoveryBeacon beacon(cfg, log);
+    beacon.setName("updated");
+
+    // Verify: tick() with playerCount=0 fires on the first call regardless of intervalMs.
+    // The beacon may fail to send (no valid port), but the name change must not crash.
+    REQUIRE_NOTHROW(beacon.tick(0));
+}

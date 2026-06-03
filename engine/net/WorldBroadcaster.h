@@ -7,8 +7,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 class ILogger;
 
@@ -67,6 +70,24 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
         return m_activePeerCount.load(std::memory_order_relaxed);
     }
 
+    // Peer management — all must be called from the sim thread (via GameLoop::enqueueSimCallback).
+
+    // Gracefully disconnect one peer by ID.
+    void kickPeer(uint32_t peerId);
+
+    // Add a normalized IP to the in-memory ban set and kick any currently connected peers
+    // with that IP. ip may be plain IPv4 ("1.2.3.4"), bare IPv6 ("::1"), bracketed IPv6
+    // ("[::1]"), or IPv4-mapped IPv6 ("::ffff:1.2.3.4" or "[::ffff:1.2.3.4]").
+    void banAddress(std::string ip);
+
+    // Remove an IP from the ban set (same normalization rules as banAddress).
+    void unbanAddress(const std::string& ip);
+
+    // Iterate all connected peers. fn receives (peerId, full "ip:port" address string, EntityId).
+    // The address string is copied per entry — safe despite INetwork::getPeerAddress() returning
+    // a pointer backed by a single overwrite buffer.
+    void forEachPeer(std::function<void(uint32_t peerId, const std::string& addr, EntityId eid)> fn) const;
+
   private:
     void sendConnectAck(uint32_t peerId, EntityId assigned);
     void stepFlightSim(FlightIntegrator& fi, EntityState& state, const PeerInputState& inp, double simDt);
@@ -84,6 +105,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::atomic<int> m_activePeerCount{0};
     uint64_t m_weatherBroadcastTick{0}; // throttle weather broadcasts to ~6 Hz
     uint32_t m_turbRng{0xCAFEBABEu};    // per-broadcaster RNG for turbulence perturbation
+
+    std::unordered_set<std::string> m_bannedAddresses; // in-memory ban list; sim-thread only
 };
 
 } // namespace fl

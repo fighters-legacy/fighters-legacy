@@ -339,6 +339,59 @@ default is kept (a warning is logged).
 
 ---
 
+## Runtime administration (stdin console)
+
+`fl-server` accepts admin commands on standard input. No extra port or network
+exposure is required — access is limited to anyone with shell access to the
+process.
+
+### How to attach
+
+| Environment | Command |
+|---|---|
+| Local terminal | Type commands directly when running `fl-server` in the foreground |
+| Docker | `docker exec -i <container> fl-server` (note: `-i` for stdin) |
+| Kubernetes | `kubectl exec -it <pod> -- /bin/sh`, then interact with the process |
+
+> **Windows note:** The stdin console is unavailable when `fl-server` runs without
+> an attached console (e.g. as a Windows Service). Use Docker or SSH in those environments.
+
+### Command reference
+
+| Command | Args | Description |
+|---|---|---|
+| `help` | `[command]` | List all commands, or show usage for a specific one |
+| `status` | — | Show uptime, peer count, entity count, tick rate |
+| `peers` | — | List connected peers (peer ID, address, entity index/generation) |
+| `kick` | `<peerId\|IP>` | Disconnect a peer by numeric ID, or all peers from an IP address |
+| `ban` | `<peerId\|IP>` | Add IP to the in-memory ban list and kick matching peers |
+| `unban` | `<IP>` | Remove an IP from the in-memory ban list |
+| `set_weather` | `<preset>` | Change weather: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm` |
+| `set_time` | `<0–24>` | Set in-game time of day (float, hours) |
+| `spawn` | `<type> <x> <y> <z>` | Spawn a registered entity type at the given world position |
+| `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
+| `reload_config` | — | Re-read `server.toml` and apply: `name` (reflected in next LAN beacon broadcast), `motd` |
+| `quit` | — | Gracefully shut down fl-server |
+
+### Hot-reload behaviour (`reload_config`)
+
+`reload_config` re-reads the config file and applies a subset of fields immediately:
+
+| Field | Takes effect |
+|---|---|
+| `server.name` | Next LAN beacon broadcast |
+| `server.motd` | Stored in memory; delivery to clients pending (issue tracker) |
+
+Fields that **require a restart** to take effect: `port`, `bind_address`, `max_peers`,
+`game_modes`, `password`, `discovery.*`, `mods.stack`, `rotation.*`, `world.*`, `ai.*`.
+
+### In-memory ban list
+
+Bans set via `ban` are stored in memory only and are **not persisted** across restarts.
+For a persistent banlist file with hot-reload, see issue #88.
+
+---
+
 ## Environment variables
 
 | Variable | Default | Maps to |

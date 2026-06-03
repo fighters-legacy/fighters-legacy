@@ -11,6 +11,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstring>
+#include <map>
+#include <string>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -27,6 +29,9 @@ struct MockNetwork : INetwork {
     std::vector<std::vector<uint8_t>> broadcasts;
     std::vector<std::vector<uint8_t>> sends;
     bool sendReliable{false};
+    std::map<uint32_t, std::string> peerAddresses; // configure per-test
+    std::vector<uint32_t> disconnectedPeers;       // tracks disconnectPeer calls
+    mutable std::string addrBuf;                   // backing store for getPeerAddress
 
     bool init() override {
         return true;
@@ -40,6 +45,9 @@ struct MockNetwork : INetwork {
         return true;
     }
     void disconnect() override {}
+    void disconnectPeer(uint32_t peerId) override {
+        disconnectedPeers.push_back(peerId);
+    }
     bool send(uint32_t, const void* data, std::size_t size, bool reliable) override {
         sends.push_back({static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size});
         sendReliable = reliable;
@@ -55,8 +63,12 @@ struct MockNetwork : INetwork {
     PeerState getPeerState(uint32_t) const override {
         return PeerState::Disconnected;
     }
-    const char* getPeerAddress(uint32_t) const override {
-        return nullptr;
+    const char* getPeerAddress(uint32_t peerId) const override {
+        auto it = peerAddresses.find(peerId);
+        if (it == peerAddresses.end())
+            return nullptr;
+        addrBuf = it->second;
+        return addrBuf.c_str();
     }
     const char* getLastError() const override {
         return nullptr;
@@ -706,4 +718,173 @@ TEST_CASE("WorldBroadcaster: without WeatherController does not broadcast 0x04",
     for (const auto& pkt : net.broadcasts)
         if (!pkt.empty())
             CHECK(pkt[0] != 0x04u);
+}
+
+// ---------------------------------------------------------------------------
+// Peer management: kick / ban / unban / forEachPeer
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: kickPeer calls disconnectPeer on network", "[world_broadcaster][admin]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    net.peerAddresses[0] = "1.2.3.4:5000";
+    broadcaster.onConnect(0u);
+    net.disconnectedPeers.clear();
+
+    broadcaster.kickPeer(0u);
+
+    REQUIRE(net.disconnectedPeers.size() == 1u);
+    CHECK(net.disconnectedPeers[0] == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: banAddress kicks connected peer with matching IPv4", "[world_broadcaster][admin]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    net.peerAddresses[0] = "1.2.3.4:5000";
+    broadcaster.onConnect(0u);
+    net.disconnectedPeers.clear();
+
+    broadcaster.banAddress("1.2.3.4");
+
+    REQUIRE(net.disconnectedPeers.size() == 1u);
+    CHECK(net.disconnectedPeers[0] == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: banAddress with no connected peers does not crash", "[world_broadcaster][admin]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    REQUIRE_NOTHROW(broadcaster.banAddress("10.0.0.1"));
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: banAddress does not kick peer on different IP", "[world_broadcaster][admin]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    net.peerAddresses[0] = "5.5.5.5:5000";
+    broadcaster.onConnect(0u);
+    net.disconnectedPeers.clear();
+
+    broadcaster.banAddress("1.2.3.4"); // different IP — peer 0 must not be kicked
+
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: banned IPv4 peer is rejected on onConnect", "[world_broadcaster][admin]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    broadcaster.banAddress("1.2.3.4");
+    net.peerAddresses[0] = "1.2.3.4:5000";
+    broadcaster.onConnect(0u);
+
+    // Peer was rejected: disconnectPeer called, no MsgHello/Ack sent.
+    REQUIRE(net.disconnectedPeers.size() == 1u);
+    CHECK(net.disconnectedPeers[0] == 0u);
+    CHECK(net.sends.empty()); // no handshake messages
+}
+
+TEST_CASE("WorldBroadcaster: IPv4-mapped IPv6 peer is rejected when IPv4 is banned", "[world_broadcaster][admin]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    broadcaster.banAddress("1.2.3.4");
+    net.peerAddresses[0] = "[::ffff:1.2.3.4]:5000"; // dual-stack mapped form
+    broadcaster.onConnect(0u);
+
+    REQUIRE(net.disconnectedPeers.size() == 1u);
+    CHECK(net.sends.empty());
+}
+
+TEST_CASE("WorldBroadcaster: peer on non-banned IP is allowed on onConnect", "[world_broadcaster][admin]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    broadcaster.banAddress("9.9.9.9");
+    net.peerAddresses[0] = "1.2.3.4:5000"; // different IP — must be allowed
+    broadcaster.onConnect(0u);
+
+    CHECK(net.disconnectedPeers.empty());
+    CHECK(net.sends.size() >= 2u); // MsgHello + ConnectAck
+}
+
+TEST_CASE("WorldBroadcaster: unbanAddress allows reconnect after ban", "[world_broadcaster][admin]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    broadcaster.banAddress("1.2.3.4");
+    broadcaster.unbanAddress("1.2.3.4");
+
+    net.peerAddresses[0] = "1.2.3.4:5000";
+    broadcaster.onConnect(0u);
+
+    CHECK(net.disconnectedPeers.empty());
+    CHECK(net.sends.size() >= 2u);
+}
+
+TEST_CASE("WorldBroadcaster: forEachPeer calls fn for each connected peer", "[world_broadcaster][admin]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    net.peerAddresses[0] = "1.2.3.4:5000";
+    net.peerAddresses[1] = "5.6.7.8:6000";
+    broadcaster.onConnect(0u);
+    broadcaster.onConnect(1u);
+
+    int callCount = 0;
+    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId eid) {
+        CHECK(eid.valid());
+        ++callCount;
+    });
+    CHECK(callCount == 2);
+}
+
+TEST_CASE("WorldBroadcaster: forEachPeer with no connected peers does not call fn", "[world_broadcaster][admin]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    int callCount = 0;
+    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId) { ++callCount; });
+    CHECK(callCount == 0);
 }

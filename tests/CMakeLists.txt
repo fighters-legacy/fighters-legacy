@@ -138,6 +138,16 @@ if(TARGET platform-enet)
         "${CMAKE_SOURCE_DIR}/engine"
         "${CMAKE_CURRENT_SOURCE_DIR}")
     catch_discover_tests(test_lan_discovery)
+
+    add_executable(test_admin_console test_admin_console.cpp
+        "${CMAKE_SOURCE_DIR}/server/fl-server/AdminConsole.cpp")
+    target_link_libraries(test_admin_console PRIVATE
+        Catch2::Catch2WithMain
+        fl-server-config engine-debug engine-net engine-entity engine-weather engine-loop)
+    target_include_directories(test_admin_console PRIVATE
+        "${CMAKE_SOURCE_DIR}/server/fl-server"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    catch_discover_tests(test_admin_console)
 endif()
 
 add_executable(test_audio test_audio.cpp)

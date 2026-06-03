@@ -29,6 +29,7 @@ class ENetNetwork : public INetwork {
     int getPeerCount() const override;
     PeerState getPeerState(uint32_t peerId) const override;
     const char* getPeerAddress(uint32_t peerId) const override;
+    void disconnectPeer(uint32_t peerId) override;
     const char* getLastError() const override;
 
   private:

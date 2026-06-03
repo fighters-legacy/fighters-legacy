@@ -15,6 +15,7 @@
 //
 // See docs/fl-server-config.md for the full operator configuration reference.
 // fl-lobby integration is tracked in issue #36.
+#include "AdminConsole.h"
 #include "ENetNetworkFactory.h"
 #include "net/DiscoveryBeacon.h"
 #include "server_config.h"
@@ -25,9 +26,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <debug/DebugCommandRegistry.h>
 #include <fstream>
+#include <iostream>
 #include <memory>
+#include <mutex>
 #include <net/GameProtocol.h>
+#include <queue>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -244,6 +249,8 @@ int main(int argc, char** argv) {
                         "  --version       Print version and exit\n"
                         "  --persistent    Enable persistent world mode (Phase 2 -- not yet active)\n"
                         "\n"
+                        "Admin console commands are available on stdin (type 'help' for a command list).\n"
+                        "\n"
                         "Environment:\n"
                         "  FL_CONFIG              Path to server.toml (default: ./server.toml)\n"
                         "  FL_PORT                Bind port (default: 4778)\n"
@@ -449,10 +456,48 @@ int main(int argc, char** argv) {
     // ---- Start sim loop then wait for signal ----
     gameLoop.start();
 
+    // ---- Admin console (stdin command loop) ----
+    // A detached thread reads stdin line-by-line and pushes each line into a queue.
+    // The main loop drains the queue every 50 ms and dispatches commands synchronously
+    // (or enqueues sim callbacks for mutating operations).
+    std::mutex stdinMutex;
+    std::queue<std::string> stdinLines;
+    std::thread([&stdinMutex, &stdinLines]() {
+        std::string line;
+        while (std::getline(std::cin, line)) {
+            std::lock_guard<std::mutex> lk(stdinMutex);
+            stdinLines.push(std::move(line));
+        }
+    }).detach();
+
+    DebugCommandRegistry adminRegistry;
+    ServerCommandContext adminCtx;
+    adminCtx.broadcaster = &broadcaster;
+    adminCtx.entityManager = &entityManager;
+    adminCtx.typeRegistry = &entityRegistry;
+    adminCtx.weatherController = &weatherController;
+    adminCtx.beacon = beacon.get();
+    adminCtx.gameLoop = &gameLoop;
+    adminCtx.logger = log;
+    adminCtx.configPath = &configPath;
+    adminCtx.startTime = std::chrono::steady_clock::now();
+    adminCtx.quitFlag = &g_quit;
+    registerServerCommands(adminRegistry, adminCtx);
+
     // Main thread sleeps until SIGINT/SIGTERM. All ENet I/O is driven from the
     // sim thread via WorldBroadcaster::onTick() → net->service(0).
     // The discovery beacon is polled here; it fires at most once per intervalMs.
     while (!g_quit) {
+        {
+            std::lock_guard<std::mutex> lk(stdinMutex);
+            while (!stdinLines.empty()) {
+                std::string line = std::move(stdinLines.front());
+                stdinLines.pop();
+                std::string result = adminRegistry.dispatch(line);
+                if (!result.empty())
+                    std::printf("[admin] %s\n", result.c_str());
+            }
+        }
         if (beacon)
             beacon->tick(broadcaster.getPeerCount());
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
