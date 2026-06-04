@@ -9,6 +9,7 @@
 #include "flight/BuiltinFlightModel.h"
 #include "flight/FlightIntegrator.h"
 #include "net/GameProtocol.h"
+#include "net/NetworkUtils.h"
 #include "weather/WeatherController.h"
 
 #include <algorithm>
@@ -24,24 +25,6 @@
 // IP address helpers
 // ---------------------------------------------------------------------------
 
-// Normalize a raw IP string: strip surrounding brackets and the ::ffff: IPv4-mapped prefix.
-//   "[::1]"           -> "::1"
-//   "::ffff:1.2.3.4"  -> "1.2.3.4"
-//   "1.2.3.4"         -> "1.2.3.4"  (no change)
-static std::string normalizeIp(std::string_view raw) {
-    std::string_view v = raw;
-    if (!v.empty() && v.front() == '[') {
-        v.remove_prefix(1);
-        auto end = v.find(']');
-        if (end != std::string_view::npos)
-            v = v.substr(0, end);
-    }
-    std::string ip(v);
-    if (ip.size() > 7 && ip.compare(0, 7, "::ffff:") == 0)
-        ip.erase(0, 7);
-    return ip;
-}
-
 // Extract the normalized IP from an "ip:port" or "[ip]:port" string returned by getPeerAddress().
 static std::string extractIp(const char* addrPort) {
     if (!addrPort)
@@ -56,7 +39,7 @@ static std::string extractIp(const char* addrPort) {
         auto colon = av.rfind(':');
         ipv = (colon != std::string_view::npos) ? av.substr(0, colon) : av;
     }
-    return normalizeIp(ipv);
+    return fl::normalizeIp(ipv);
 }
 
 // ---------------------------------------------------------------------------
@@ -91,7 +74,7 @@ void WorldBroadcaster::kickPeer(uint32_t peerId) {
 }
 
 void WorldBroadcaster::banAddress(std::string ip) {
-    ip = normalizeIp(ip);
+    ip = fl::normalizeIp(ip);
     m_bannedAddresses.insert(ip);
     for (const auto& [peerId, eid] : m_peerEntities) {
         if (extractIp(m_net.getPeerAddress(peerId)) == ip)
@@ -100,7 +83,7 @@ void WorldBroadcaster::banAddress(std::string ip) {
 }
 
 void WorldBroadcaster::unbanAddress(const std::string& ip) {
-    m_bannedAddresses.erase(normalizeIp(ip));
+    m_bannedAddresses.erase(fl::normalizeIp(ip));
 }
 
 void WorldBroadcaster::setBannedAddresses(std::unordered_set<std::string> addrs) {

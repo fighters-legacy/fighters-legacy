@@ -1,5 +1,11 @@
 if(TARGET platform-sdl3 AND TARGET platform-vulkan)
-    add_executable(fighters-legacy main.cpp)
+    add_executable(fighters-legacy
+        main.cpp
+        ClientNetEventHandler.cpp
+        CameraInput.cpp
+        GameHud.cpp
+        LocalServer.cpp
+    )
     target_link_libraries(fighters-legacy PRIVATE
         engine-crash
         engine-config
@@ -14,6 +20,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         engine-perf
         engine-debug
         platform-file-logger
+        platform-subprocess
         platform-sdl3
         platform-vulkan
         platform-openal
@@ -27,7 +34,13 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         "${CMAKE_SOURCE_DIR}/platform/vulkan"
         "${CMAKE_SOURCE_DIR}/platform/sdl3"
         "${CMAKE_SOURCE_DIR}/platform/net"
-        "${enet6_SOURCE_DIR}/include")
+        "${enet6_SOURCE_DIR}/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Dev-build server path: embed the build-tree fl-server path at compile time.
+    # In release packages fl-server is co-located with fighters-legacy and
+    # SDL_GetBasePath() is used instead (see LocalServer.cpp).
+    target_compile_definitions(fighters-legacy PRIVATE
+        FL_SERVER_DEV_PATH="$<TARGET_FILE_DIR:fl-server>/fl-server")
     if(WIN32)
         target_link_libraries(fighters-legacy PRIVATE ws2_32 winmm)
     endif()

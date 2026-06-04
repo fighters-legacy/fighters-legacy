@@ -13,12 +13,23 @@ Settings are resolved in three tiers. Later tiers override earlier ones.
 | Tier | Source | Example |
 |---|---|---|
 | 1 (lowest) | `server.toml` (path from `FL_CONFIG`, default `./server.toml`) | `[server] port = 9000` |
-| 2 | CLI positional args | `fl-server 9000 32` |
+| 2 | CLI positional args and named flags | `fl-server 9000 32 --bind 127.0.0.1` |
 | 3 (highest) | Environment variables | `FL_PORT=9000` |
 
 All six TOML sections are tier-1 only (env vars and CLI do not cover arrays or
 multi-key sections). See [Environment variables](#environment-variables) for the full
 `FL_*` list.
+
+### CLI flags
+
+| Flag | Argument | Description |
+|---|---|---|
+| `--help`, `-h` | — | Print usage and exit |
+| `--version`, `-v` | — | Print version and exit |
+| `--persistent` | — | Enable persistent world mode (Phase 2 — not yet active) |
+| `--bind <addr>` | IP or hostname | Override `server.bind_address` from the command line; takes precedence over `server.toml` and `FL_BIND_ADDRESS`. Used by the game client when spawning fl-server for single-player mode (`--bind 127.0.0.1`). |
+
+CLI positional arguments (Tier 2): `fl-server [port] [maxPeers]`
 
 ---
 
@@ -461,6 +472,7 @@ process.
 | `set_time` | `<0–24>` | Set in-game time of day (float, hours) |
 | `spawn` | `<type> <x> <y> <z>` | Spawn a registered entity type at the given world position |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
+| `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's debug console to teleport the player entity |
 | `reload_config` | — | Re-read `server.toml` and apply: `name` (reflected in next LAN beacon broadcast), `motd` |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |

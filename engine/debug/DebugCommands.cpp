@@ -3,14 +3,9 @@
 
 #include "debug/DebugCommandRegistry.h"
 #include "entity/EntityDef.h"
-#include "entity/EntityId.h"
-#include "entity/EntityManager.h"
-#include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
-#include "loop/GameLoop.h"
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
-#include "weather/WeatherController.h"
 
 #include <charconv>
 #include <cstdio>
@@ -136,7 +131,7 @@ void registerBuiltinCommands(DebugCommandRegistry& registry, DebugCommandContext
                              [ctx](std::span<std::string_view> args) -> std::string {
                                  if (args.size() < 4)
                                      return "usage: spawn <type> <x> <y> <z>";
-                                 if (!ctx.entityManager || !ctx.typeRegistry || !ctx.gameLoop)
+                                 if (!ctx.serverCommand)
                                      return "spawn: not available in this context";
 
                                  std::string typeArg(args[0]);
@@ -144,25 +139,23 @@ void registerBuiltinCommands(DebugCommandRegistry& registry, DebugCommandContext
                                  if (!parseDouble(args[1], x) || !parseDouble(args[2], y) || !parseDouble(args[3], z))
                                      return "spawn: invalid coordinates";
 
-                                 // Validate type exists on the main thread before queuing
-                                 bool found = false;
-                                 if (isAllDigits(typeArg)) {
-                                     uint32_t idx{};
-                                     if (parseUint(typeArg, idx) && ctx.typeRegistry->byIndex(idx))
+                                 // Best-effort type validation before forwarding.
+                                 if (ctx.typeRegistry) {
+                                     bool found = false;
+                                     if (isAllDigits(typeArg)) {
+                                         uint32_t idx{};
+                                         if (parseUint(typeArg, idx) && ctx.typeRegistry->byIndex(idx))
+                                             found = true;
+                                     }
+                                     if (!found && ctx.typeRegistry->findById(typeArg.c_str()))
                                          found = true;
+                                     if (!found)
+                                         return "spawn: unknown type '" + typeArg + "'";
                                  }
-                                 if (!found && ctx.typeRegistry->findById(typeArg.c_str()))
-                                     found = true;
-                                 if (!found)
-                                     return "spawn: unknown type '" + typeArg + "'";
 
-                                 ctx.gameLoop->enqueueSimCallback([em = ctx.entityManager, typeArg, x, y, z] {
-                                     fl::EntityTransform t{};
-                                     t.pos[0] = x;
-                                     t.pos[1] = y;
-                                     t.pos[2] = z;
-                                     em->spawn(typeArg.c_str(), t);
-                                 });
+                                 char cmd[256];
+                                 std::snprintf(cmd, sizeof(cmd), "spawn %s %g %g %g", typeArg.c_str(), x, y, z);
+                                 ctx.serverCommand(cmd);
                                  return "spawn queued: " + typeArg;
                              });
 
@@ -173,28 +166,16 @@ void registerBuiltinCommands(DebugCommandRegistry& registry, DebugCommandContext
                              [ctx](std::span<std::string_view> args) -> std::string {
                                  if (args.size() < 1)
                                      return "usage: kill <idx>";
-                                 if (!ctx.entityManager || !ctx.renderBridge || !ctx.gameLoop)
+                                 if (!ctx.serverCommand)
                                      return "kill: not available in this context";
 
                                  uint32_t idx{};
                                  if (!parseUint(args[0], idx))
                                      return "kill: invalid entity index";
 
-                                 // Look up generation from the render bridge snapshot
-                                 if (!ctx.renderBridge->hasSnapshot())
-                                     return "kill: no snapshot";
-                                 uint32_t gen = 0;
-                                 for (const auto& e : ctx.renderBridge->current().entries) {
-                                     if (e.entityIdx == idx) {
-                                         gen = e.entityGen;
-                                         break;
-                                     }
-                                 }
-                                 if (gen == 0)
-                                     return "kill: entity not found: " + std::string(args[0]);
-
-                                 fl::EntityId id{idx, gen};
-                                 ctx.gameLoop->enqueueSimCallback([em = ctx.entityManager, id] { em->kill(id); });
+                                 char cmd[64];
+                                 std::snprintf(cmd, sizeof(cmd), "kill %u", idx);
+                                 ctx.serverCommand(cmd);
 
                                  char buf[64];
                                  std::snprintf(buf, sizeof(buf), "kill queued: #%u", idx);
@@ -208,26 +189,19 @@ void registerBuiltinCommands(DebugCommandRegistry& registry, DebugCommandContext
                              [ctx](std::span<std::string_view> args) -> std::string {
                                  if (args.size() < 3)
                                      return "usage: tp <x> <y> <z>";
-                                 if (!ctx.entityManager || !ctx.gameLoop)
+                                 if (!ctx.serverCommand)
                                      return "tp: not available in this context";
                                  if (!ctx.playerEntityIdx || !ctx.playerEntityGen)
                                      return "tp: player entity unknown";
-                                 if (*ctx.playerEntityIdx == 0 && *ctx.playerEntityGen == 0)
-                                     return "tp: no player entity";
 
                                  double x{}, y{}, z{};
                                  if (!parseDouble(args[0], x) || !parseDouble(args[1], y) || !parseDouble(args[2], z))
                                      return "tp: invalid coordinates";
 
-                                 fl::EntityId id{*ctx.playerEntityIdx, *ctx.playerEntityGen};
-                                 ctx.gameLoop->enqueueSimCallback([em = ctx.entityManager, id, x, y, z] {
-                                     fl::EntityState* s = em->get(id);
-                                     if (s) {
-                                         s->transform.pos[0] = x;
-                                         s->transform.pos[1] = y;
-                                         s->transform.pos[2] = z;
-                                     }
-                                 });
+                                 // Forward with entity index so the server knows which entity to move.
+                                 char cmd[256];
+                                 std::snprintf(cmd, sizeof(cmd), "tp %u %g %g %g", *ctx.playerEntityIdx, x, y, z);
+                                 ctx.serverCommand(cmd);
 
                                  char buf[128];
                                  std::snprintf(buf, sizeof(buf), "tp queued: X:%+.1f Y:%+.1f Z:%+.1f",
@@ -254,23 +228,16 @@ void registerBuiltinCommands(DebugCommandRegistry& registry, DebugCommandContext
         [ctx](std::span<std::string_view> args) -> std::string {
             if (args.empty())
                 return "usage: set_weather <clear|partly_cloudy|overcast|rain|storm>";
-            if (!ctx.weatherController || !ctx.gameLoop)
+            if (!ctx.serverCommand)
                 return "set_weather: not available in this context";
-            fl::WeatherPreset p;
-            if (args[0] == "clear")
-                p = fl::WeatherPreset::Clear;
-            else if (args[0] == "partly_cloudy")
-                p = fl::WeatherPreset::PartlyCloudy;
-            else if (args[0] == "overcast")
-                p = fl::WeatherPreset::Overcast;
-            else if (args[0] == "rain")
-                p = fl::WeatherPreset::Rain;
-            else if (args[0] == "storm")
-                p = fl::WeatherPreset::Storm;
-            else
-                return "set_weather: unknown preset '" + std::string(args[0]) + "'";
-            ctx.gameLoop->enqueueSimCallback([wc = ctx.weatherController, p] { wc->setPreset(p); });
-            return "weather preset queued: " + std::string(args[0]);
+            const std::string_view preset = args[0];
+            if (preset != "clear" && preset != "partly_cloudy" && preset != "overcast" && preset != "rain" &&
+                preset != "storm")
+                return "set_weather: unknown preset '" + std::string(preset) + "'";
+            char cmd[64];
+            std::snprintf(cmd, sizeof(cmd), "set_weather %.*s", static_cast<int>(preset.size()), preset.data());
+            ctx.serverCommand(cmd);
+            return "weather preset queued: " + std::string(preset);
         });
 
     // ------------------------------------------------------------------
