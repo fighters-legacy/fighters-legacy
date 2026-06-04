@@ -220,7 +220,7 @@ Pre-defined tasks are committed in `.vscode/tasks.json` and available via **Term
 | Coverage (engine/ branch summary) | Build coverage preset, run all tests, print `engine/` branch % vs 80% gate |
 | CI: clang-format check | Dry-run clang-format-22 on files changed vs `origin/main` |
 | CI: REUSE lint | Check SPDX headers on all source files |
-| CI: Smoke tests | Run `--version` on every built binary |
+| CI: Smoke tests | Run `--version` on every built binary + net_check ENet loopback |
 | CI: pytest (gen_terrain_chunks) | Python unit tests for the terrain chunk pipeline |
 | CI: pytest (gen_unifont_header) | Python unit tests for the Unifont header generator |
 | CI: Locale lint | `locale-extract --dry-run` to catch untranslated strings |

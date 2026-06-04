@@ -1,0 +1,59 @@
+name: 'Install Linux dependencies'
+description: 'Install apt packages for fighters-legacy Linux CI builds'
+
+inputs:
+  vulkan:
+    description: 'Install Vulkan dev packages (libvulkan-dev glslang-tools)'
+    default: 'false'
+  gcc:
+    description: 'Install GCC and G++'
+    default: 'false'
+  clang:
+    description: 'Install Clang compiler'
+    default: 'false'
+  clang_format:
+    description: 'Install clang-format-22 (adds LLVM 22 apt repo)'
+    default: 'false'
+  python_tools:
+    description: 'Install python3-gdal python3-numpy python3-pytest'
+    default: 'false'
+  lcov:
+    description: 'Install lcov for coverage'
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Add LLVM 22 apt repository
+      if: inputs.clang_format == 'true'
+      shell: bash
+      run: |
+        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+          | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+        echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
+          | sudo tee /etc/apt/sources.list.d/llvm-22.list
+
+    - name: Install apt packages
+      shell: bash
+      run: |
+        pkgs="ninja-build cmake libx11-dev libxext-dev libopenal-dev"
+        if [ "${{ inputs.vulkan }}" = "true" ]; then
+          pkgs="$pkgs libvulkan-dev glslang-tools"
+        fi
+        if [ "${{ inputs.gcc }}" = "true" ]; then
+          pkgs="$pkgs gcc g++"
+        fi
+        if [ "${{ inputs.clang }}" = "true" ]; then
+          pkgs="$pkgs clang"
+        fi
+        if [ "${{ inputs.clang_format }}" = "true" ]; then
+          pkgs="$pkgs clang-format-22"
+        fi
+        if [ "${{ inputs.python_tools }}" = "true" ]; then
+          pkgs="$pkgs python3-gdal python3-numpy python3-pytest"
+        fi
+        if [ "${{ inputs.lcov }}" = "true" ]; then
+          pkgs="$pkgs lcov"
+        fi
+        sudo apt-get update
+        sudo apt-get install -y $pkgs
