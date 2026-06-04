@@ -14,7 +14,8 @@ struct SilentLogger : ILogger {
 
 // Platform-portable "echo hello" command.
 #if defined(_WIN32)
-static const char* kEchoBin = "cmd.exe";
+// Pass the stem only — Subprocess::spawn appends ".exe" on Windows.
+static const char* kEchoBin = "cmd";
 static const std::vector<std::string> kEchoArgs{"/c", "echo hello"};
 #else
 static const char* kEchoBin = "sh";

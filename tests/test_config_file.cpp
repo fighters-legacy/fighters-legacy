@@ -30,11 +30,13 @@ TEST_CASE("ensureAndReadConfig creates file with default content when absent", "
     REQUIRE(result == "default content");
     REQUIRE(fs::exists(tmp));
 
-    // Verify the file was actually written.
-    std::ifstream f(tmp);
-    std::string onDisk((std::istreambuf_iterator<char>(f)), {});
-    REQUIRE(onDisk == "default content");
-
+    // Verify the file was actually written. Close before remove — on Windows open
+    // file handles prevent deletion.
+    {
+        std::ifstream f(tmp);
+        std::string onDisk((std::istreambuf_iterator<char>(f)), {});
+        REQUIRE(onDisk == "default content");
+    }
     fs::remove(tmp);
 }
 
@@ -78,9 +80,12 @@ TEST_CASE("writeConfigFile writes content atomically and reads it back", "[confi
     REQUIRE(ok);
     REQUIRE(fs::exists(tmp));
 
-    std::ifstream f(tmp);
-    std::string onDisk((std::istreambuf_iterator<char>(f)), {});
-    REQUIRE(onDisk == "written content");
+    // Close before remove — on Windows open file handles prevent deletion.
+    {
+        std::ifstream f(tmp);
+        std::string onDisk((std::istreambuf_iterator<char>(f)), {});
+        REQUIRE(onDisk == "written content");
+    }
 
     // Tmp file should not remain after rename.
     fs::path tmpFile = tmp;
