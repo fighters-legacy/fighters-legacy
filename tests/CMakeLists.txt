@@ -321,3 +321,15 @@ add_executable(test_terrain_streamer test_terrain_streamer.cpp)
 target_link_libraries(test_terrain_streamer PRIVATE Catch2::Catch2WithMain engine-render)
 target_include_directories(test_terrain_streamer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_terrain_streamer)
+
+add_executable(test_config_file test_config_file.cpp)
+target_link_libraries(test_config_file PRIVATE Catch2::Catch2WithMain engine-config)
+catch_discover_tests(test_config_file)
+
+add_executable(test_network_utils test_network_utils.cpp)
+target_link_libraries(test_network_utils PRIVATE Catch2::Catch2WithMain engine-net)
+catch_discover_tests(test_network_utils)
+
+add_executable(test_subprocess test_subprocess.cpp)
+target_link_libraries(test_subprocess PRIVATE Catch2::Catch2WithMain platform-subprocess)
+catch_discover_tests(test_subprocess)

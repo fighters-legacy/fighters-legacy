@@ -2,28 +2,29 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <string_view>
 
 class DebugCommandRegistry;
-class GameLoop;
 
 namespace fl {
-class EntityManager;
 class EntityTypeRegistry;
 class SimRenderBridge;
-class WeatherController;
 } // namespace fl
 
-// Context passed to registerBuiltinCommands(). All pointers except gameLoop
-// may be nullptr; commands that need a missing pointer will return an error string.
+// Context passed to registerBuiltinCommands(). All fields may be nullptr/null;
+// commands that need a missing field return an error string.
 struct DebugCommandContext {
-    fl::EntityManager* entityManager{nullptr};         // sim-thread: spawn/kill/tp lambdas
-    fl::EntityTypeRegistry* typeRegistry{nullptr};     // types / entities commands
-    fl::SimRenderBridge* renderBridge{nullptr};        // entities command (main-thread read)
-    uint32_t* playerEntityIdx{nullptr};                // tp command: player EntityId::index
-    uint32_t* playerEntityGen{nullptr};                // tp command: player EntityId::generation
-    bool* showPos{nullptr};                            // toggle_pos command
-    GameLoop* gameLoop{nullptr};                       // enqueueSimCallback for mutating cmds
-    fl::WeatherController* weatherController{nullptr}; // set_weather command
+    fl::SimRenderBridge* renderBridge{nullptr};    // entities command
+    fl::EntityTypeRegistry* typeRegistry{nullptr}; // types + entities commands
+    uint32_t* playerEntityIdx{nullptr};            // tp command: player EntityId::index
+    uint32_t* playerEntityGen{nullptr};            // tp command: player EntityId::generation
+    bool* showPos{nullptr};                        // toggle_pos command
+
+    // Server-side commands (spawn, kill, tp, set_weather) are serialised to admin console
+    // text and delivered here. nullptr = no local server (multi-player pure-client);
+    // those commands return "not available".
+    std::function<void(std::string_view)> serverCommand;
 };
 
 // Register all built-in debug commands (help, types, entities, spawn, kill,

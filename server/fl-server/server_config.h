@@ -58,6 +58,9 @@ struct ServerConfig {
     uint32_t outgoingBandwidthBps = 0; // ENet host outgoing cap, bytes/s; 0 = unlimited
 };
 
+// Returns the embedded default server.toml content written on first run.
+std::string_view defaultServerConfigToml();
+
 // Parse server configuration from a TOML string.
 // On parse error, logs a Warn and returns a default-constructed ServerConfig.
 ServerConfig parseServerConfig(std::string_view content, ILogger* log);

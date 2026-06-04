@@ -4,12 +4,9 @@
 #include "debug/DebugCommands.h"
 #include "debug/DebugConsole.h"
 #include "entity/EntityDef.h"
-#include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
-#include "loop/GameLoop.h"
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
-#include "weather/WeatherController.h"
 
 #include "mock_hal.h"
 #include <catch2/catch_test_macros.hpp>
@@ -625,6 +622,82 @@ TEST_CASE("DebugCommands stub commands return messages", "[dbg][commands]") {
 }
 
 // ---------------------------------------------------------------------------
+// DebugCommands — serverCommand forwarding (new behaviour after #227)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("DebugCommands spawn forwards command to serverCommand", "[dbg][commands]") {
+    fl::EntityTypeRegistry reg;
+    fl::EntityDef def;
+    def.id = "test:unit";
+    def.name = "Unit";
+    def.category = fl::ObjectCategory::AirVehicle;
+    def.maxHp = 100.f;
+    reg.registerType(std::move(def));
+
+    DebugCommandRegistry cmds;
+    DebugCommandContext ctx{};
+    ctx.typeRegistry = &reg;
+    std::string captured;
+    ctx.serverCommand = [&](std::string_view s) { captured = std::string(s); };
+    registerBuiltinCommands(cmds, ctx);
+
+    auto out1 = cmds.dispatch("spawn test:unit 0 500 0");
+    REQUIRE(out1.find("queued") != std::string::npos);
+    REQUIRE(captured.find("spawn") != std::string::npos);
+    REQUIRE(captured.find("test:unit") != std::string::npos);
+}
+
+TEST_CASE("DebugCommands kill forwards command to serverCommand", "[dbg][commands]") {
+    DebugCommandRegistry cmds;
+    DebugCommandContext ctx{};
+    std::string captured;
+    ctx.serverCommand = [&](std::string_view s) { captured = std::string(s); };
+    registerBuiltinCommands(cmds, ctx);
+
+    auto out2 = cmds.dispatch("kill 42");
+    REQUIRE(out2.find("queued") != std::string::npos);
+    REQUIRE(captured.find("kill") != std::string::npos);
+    REQUIRE(captured.find("42") != std::string::npos);
+}
+
+TEST_CASE("DebugCommands tp forwards command with player idx to serverCommand", "[dbg][commands]") {
+    uint32_t idx = 3, gen = 1;
+    DebugCommandRegistry cmds;
+    DebugCommandContext ctx{};
+    ctx.playerEntityIdx = &idx;
+    ctx.playerEntityGen = &gen;
+    std::string captured;
+    ctx.serverCommand = [&](std::string_view s) { captured = std::string(s); };
+    registerBuiltinCommands(cmds, ctx);
+
+    auto out3 = cmds.dispatch("tp 10 500 20");
+    REQUIRE(out3.find("queued") != std::string::npos);
+    REQUIRE(captured.find("tp") != std::string::npos);
+    REQUIRE(captured.find("3") != std::string::npos); // player entity idx
+}
+
+TEST_CASE("DebugCommands set_weather forwards command to serverCommand", "[dbg][commands]") {
+    DebugCommandRegistry cmds;
+    DebugCommandContext ctx{};
+    std::string captured;
+    ctx.serverCommand = [&](std::string_view s) { captured = std::string(s); };
+    registerBuiltinCommands(cmds, ctx);
+
+    auto out4 = cmds.dispatch("set_weather storm");
+    REQUIRE(out4.find("queued") != std::string::npos);
+    REQUIRE(captured.find("set_weather") != std::string::npos);
+    REQUIRE(captured.find("storm") != std::string::npos);
+}
+
+TEST_CASE("DebugCommands spawn with null serverCommand returns not available", "[dbg][commands]") {
+    // serverCommand = nullptr (default)
+    DebugCommandRegistry cmds;
+    DebugCommandContext ctx{};
+    registerBuiltinCommands(cmds, ctx);
+    REQUIRE(cmds.dispatch("spawn builtin:debug-entity 0 500 0").find("not available") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
 // DebugConsole — additional branch coverage
 // ---------------------------------------------------------------------------
 
@@ -709,218 +782,179 @@ TEST_CASE("DebugCommands help command lists all builtins", "[dbg][commands]") {
 }
 
 // ============================================================================
-// DebugCommands — full-context parsing branches (non-started GameLoop)
+// DebugCommands — full-context parsing branches
 //
-// GameLoop is constructed but not started; enqueueSimCallback() just queues
-// lambdas that are never drained, which is fine for testing the parsing paths.
+// Server-side commands (spawn/kill/tp/set_weather) now forward to a serverCommand
+// callback rather than calling EntityManager/GameLoop directly.
 // ============================================================================
 
-// Minimal ISimUpdate stub for constructing GameLoop in tests
-struct NullSim : public ISimUpdate {
-    void onTick(double, uint64_t) override {}
-};
-
-static DebugCommandContext makeFullCtx(fl::EntityTypeRegistry& tyReg, fl::EntityManager& em, GameLoop& gl,
-                                       bool* showPos = nullptr, uint32_t* playerIdx = nullptr,
-                                       uint32_t* playerGen = nullptr) {
+// Helper: context with serverCommand capture + optional fields.
+static DebugCommandContext makeCtxWithCapture(fl::EntityTypeRegistry& tyReg, std::string& captured,
+                                              bool* showPos = nullptr, uint32_t* playerIdx = nullptr,
+                                              uint32_t* playerGen = nullptr) {
     DebugCommandContext ctx{};
-    ctx.entityManager = &em;
     ctx.typeRegistry = &tyReg;
-    ctx.gameLoop = &gl;
     ctx.showPos = showPos;
     ctx.playerEntityIdx = playerIdx;
     ctx.playerEntityGen = playerGen;
+    ctx.serverCommand = [&captured](std::string_view cmd) { captured = std::string(cmd); };
     return ctx;
 }
 
 TEST_CASE("DebugCommands spawn with invalid coordinates returns error", "[dbg][commands]") {
-    NullLogger log;
     fl::EntityTypeRegistry tyReg;
     fl::EntityDef def;
     def.id = "test:unit";
     def.name = "Unit";
+    def.category = fl::ObjectCategory::AirVehicle;
+    def.maxHp = 100.f;
     tyReg.registerType(std::move(def));
-    fl::EntityManager em(log, tyReg);
-    NullSim sim;
-    GameLoop gl(sim, log);
 
+    std::string captured;
     DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeFullCtx(tyReg, em, gl));
+    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     std::string out = cmds.dispatch("spawn test:unit abc 0 0");
     REQUIRE(out.find("invalid coordinates") != std::string::npos);
+    REQUIRE(captured.empty()); // serverCommand not called on parse error
 }
 
 TEST_CASE("DebugCommands spawn with unknown type name returns error", "[dbg][commands]") {
-    NullLogger log;
     fl::EntityTypeRegistry tyReg; // empty
-    fl::EntityManager em(log, tyReg);
-    NullSim sim;
-    GameLoop gl(sim, log);
 
+    std::string captured;
     DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeFullCtx(tyReg, em, gl));
+    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     REQUIRE(cmds.dispatch("spawn unknown:thing 0 0 0").find("unknown type") != std::string::npos);
+    REQUIRE(captured.empty());
 }
 
-TEST_CASE("DebugCommands spawn with numeric index that is out of range returns error", "[dbg][commands]") {
-    NullLogger log;
-    fl::EntityTypeRegistry tyReg; // empty — index 0 not valid
-    fl::EntityManager em(log, tyReg);
-    NullSim sim;
-    GameLoop gl(sim, log);
+TEST_CASE("DebugCommands spawn with numeric index out of range returns error", "[dbg][commands]") {
+    fl::EntityTypeRegistry tyReg; // empty — index 99 not valid
 
+    std::string captured;
     DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeFullCtx(tyReg, em, gl));
+    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     // isAllDigits("99") = true path; byIndex(99) returns nullptr
     REQUIRE(cmds.dispatch("spawn 99 0 0 0").find("unknown type") != std::string::npos);
+    REQUIRE(captured.empty());
 }
 
-TEST_CASE("DebugCommands spawn valid type enqueues and returns message", "[dbg][commands]") {
-    NullLogger log;
+TEST_CASE("DebugCommands spawn valid type forwards to serverCommand", "[dbg][commands]") {
     fl::EntityTypeRegistry tyReg;
     fl::EntityDef def;
     def.id = "test:ship";
     def.name = "Ship";
+    def.category = fl::ObjectCategory::AirVehicle;
+    def.maxHp = 100.f;
     tyReg.registerType(std::move(def));
-    fl::EntityManager em(log, tyReg);
-    NullSim sim;
-    GameLoop gl(sim, log);
 
+    std::string captured;
     DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeFullCtx(tyReg, em, gl));
+    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     std::string out = cmds.dispatch("spawn test:ship 0 500 0");
     REQUIRE(out.find("queued") != std::string::npos);
+    REQUIRE(captured.find("spawn") != std::string::npos);
+    REQUIRE(captured.find("test:ship") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands spawn valid numeric index enqueues and returns message", "[dbg][commands]") {
-    NullLogger log;
+TEST_CASE("DebugCommands spawn valid numeric index forwards to serverCommand", "[dbg][commands]") {
     fl::EntityTypeRegistry tyReg;
     fl::EntityDef def;
     def.id = "test:jet";
     def.name = "Jet";
+    def.category = fl::ObjectCategory::AirVehicle;
+    def.maxHp = 100.f;
     tyReg.registerType(std::move(def));
-    fl::EntityManager em(log, tyReg);
-    NullSim sim;
-    GameLoop gl(sim, log);
 
+    std::string captured;
     DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeFullCtx(tyReg, em, gl));
+    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     // "0" is a valid index — tests isAllDigits true + byIndex success path
     std::string out = cmds.dispatch("spawn 0 0 500 0");
     REQUIRE(out.find("queued") != std::string::npos);
+    REQUIRE(!captured.empty());
 }
 
 TEST_CASE("DebugCommands kill with invalid index returns error", "[dbg][commands]") {
-    NullLogger log;
     fl::EntityTypeRegistry tyReg;
-    fl::EntityManager em(log, tyReg);
-    fl::SimRenderBridge bridge;
-    fl::RenderSnapshot snap;
-    snap.tickIndex = 1;
-    bridge.publish(std::move(snap));
-    bridge.tryAdvance();
-    NullSim sim;
-    GameLoop gl(sim, log);
-
+    std::string captured;
     DebugCommandRegistry cmds;
-    auto ctx = makeFullCtx(tyReg, em, gl);
-    ctx.renderBridge = &bridge;
-    registerBuiltinCommands(cmds, ctx);
+    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     // Non-numeric idx — parseUint fails
     REQUIRE(cmds.dispatch("kill abc").find("invalid entity index") != std::string::npos);
+    REQUIRE(captured.empty());
 }
 
-TEST_CASE("DebugCommands kill entity not in snapshot returns not found", "[dbg][commands]") {
-    NullLogger log;
+TEST_CASE("DebugCommands kill valid index forwards to serverCommand", "[dbg][commands]") {
     fl::EntityTypeRegistry tyReg;
-    fl::EntityManager em(log, tyReg);
-    fl::SimRenderBridge bridge;
-    fl::RenderSnapshot snap;
-    snap.tickIndex = 1; // no entries
-    bridge.publish(std::move(snap));
-    bridge.tryAdvance();
-    NullSim sim;
-    GameLoop gl(sim, log);
-
+    std::string captured;
     DebugCommandRegistry cmds;
-    auto ctx = makeFullCtx(tyReg, em, gl);
-    ctx.renderBridge = &bridge;
-    registerBuiltinCommands(cmds, ctx);
+    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
-    REQUIRE(cmds.dispatch("kill 42").find("not found") != std::string::npos);
+    std::string out = cmds.dispatch("kill 42");
+    REQUIRE(out.find("queued") != std::string::npos);
+    REQUIRE(captured.find("kill") != std::string::npos);
+    REQUIRE(captured.find("42") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands tp with no player entity returns error", "[dbg][commands]") {
-    NullLogger log;
+TEST_CASE("DebugCommands tp with null playerEntityIdx returns error", "[dbg][commands]") {
     fl::EntityTypeRegistry tyReg;
-    fl::EntityManager em(log, tyReg);
-    NullSim sim;
-    GameLoop gl(sim, log);
-    uint32_t idx = 0, gen = 0;
-
+    std::string captured;
+    // playerIdx = nullptr → "player entity unknown"
     DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeFullCtx(tyReg, em, gl, nullptr, &idx, &gen));
+    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
-    REQUIRE(cmds.dispatch("tp 0 500 0").find("no player entity") != std::string::npos);
+    REQUIRE(cmds.dispatch("tp 0 500 0").find("player entity unknown") != std::string::npos);
+    REQUIRE(captured.empty());
 }
 
-TEST_CASE("DebugCommands tp with valid player enqueues and returns message", "[dbg][commands]") {
-    NullLogger log;
+TEST_CASE("DebugCommands tp with valid player forwards to serverCommand", "[dbg][commands]") {
     fl::EntityTypeRegistry tyReg;
-    fl::EntityManager em(log, tyReg);
-    NullSim sim;
-    GameLoop gl(sim, log);
-    uint32_t idx = 1, gen = 1; // non-zero = valid
-
+    uint32_t idx = 1, gen = 1;
+    std::string captured;
     DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeFullCtx(tyReg, em, gl, nullptr, &idx, &gen));
+    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured, nullptr, &idx, &gen));
 
-    REQUIRE(cmds.dispatch("tp 100 500 200").find("queued") != std::string::npos);
+    std::string out = cmds.dispatch("tp 100 500 200");
+    REQUIRE(out.find("queued") != std::string::npos);
+    REQUIRE(captured.find("tp") != std::string::npos);
 }
 
 TEST_CASE("DebugCommands tp with invalid coordinates returns error", "[dbg][commands]") {
-    NullLogger log;
     fl::EntityTypeRegistry tyReg;
-    fl::EntityManager em(log, tyReg);
-    NullSim sim;
-    GameLoop gl(sim, log);
     uint32_t idx = 1, gen = 1;
-
+    std::string captured;
     DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeFullCtx(tyReg, em, gl, nullptr, &idx, &gen));
+    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured, nullptr, &idx, &gen));
 
     REQUIRE(cmds.dispatch("tp bad 500 0").find("invalid") != std::string::npos);
+    REQUIRE(captured.empty());
 }
 
 // ---------------------------------------------------------------------------
-// set_weather with real WeatherController (issue #39)
+// set_weather forwarding (serverCommand-based, replaces WeatherController test)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("set_weather command with real WeatherController dispatches correctly", "[dbg][commands][weather]") {
-    NullLogger log;
+TEST_CASE("set_weather command forwards valid presets to serverCommand", "[dbg][commands]") {
     fl::EntityTypeRegistry tyReg;
-    fl::EntityManager em(log, tyReg);
-    NullSim sim;
-    GameLoop gl(sim, log);
-    fl::WeatherController wc;
-
-    DebugCommandContext ctx = makeFullCtx(tyReg, em, gl);
-    ctx.weatherController = &wc;
-
+    std::string captured;
     DebugCommandRegistry reg;
-    registerBuiltinCommands(reg, ctx);
+    registerBuiltinCommands(reg, makeCtxWithCapture(tyReg, captured));
 
     CHECK(reg.dispatch("set_weather storm").find("queued") != std::string::npos);
+    CHECK(captured.find("set_weather") != std::string::npos);
+    CHECK(captured.find("storm") != std::string::npos);
+
+    captured.clear();
     CHECK(reg.dispatch("set_weather clear").find("queued") != std::string::npos);
-    CHECK(reg.dispatch("set_weather partly_cloudy").find("queued") != std::string::npos);
-    CHECK(reg.dispatch("set_weather overcast").find("queued") != std::string::npos);
-    CHECK(reg.dispatch("set_weather rain").find("queued") != std::string::npos);
+    CHECK(captured.find("clear") != std::string::npos);
+
     CHECK(reg.dispatch("set_weather hurricane").find("unknown") != std::string::npos);
     CHECK(reg.dispatch("set_weather").find("usage") != std::string::npos);
 }

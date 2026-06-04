@@ -18,84 +18,36 @@
 #include "AdminConsole.h"
 #include "ENetNetwork.h"
 #include "ENetNetworkFactory.h"
+#include "IpListFile.h"
+#include "StdoutLogger.h"
 #include "net/DiscoveryBeacon.h"
 #include "server_config.h"
+
 #include <ILogger.h>
 #include <Platform.h>
+#include <config/ConfigFile.h>
+#include <debug/DebugCommandRegistry.h>
+#include <entity/EntityDef.h>
+#include <entity/EntityManager.h>
+#include <entity/EntityTypeRegistry.h>
+#include <loop/GameLoop.h>
+#include <net/GameProtocol.h>
+#include <net/WorldBroadcaster.h>
+#include <weather/WeatherController.h>
+
 #include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <debug/DebugCommandRegistry.h>
-#include <fstream>
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <net/GameProtocol.h>
 #include <queue>
-#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_set>
 #include <vector>
-
-#include <entity/EntityDef.h>
-#include <entity/EntityManager.h>
-#include <entity/EntityTypeRegistry.h>
-#include <loop/GameLoop.h>
-#include <net/WorldBroadcaster.h>
-#include <weather/WeatherController.h>
-
-// ---------------------------------------------------------------------------
-// Version
-// ---------------------------------------------------------------------------
-
-static constexpr const char* kVersion = "0.0.1";
-
-// ---------------------------------------------------------------------------
-// Minimal stdout logger
-// ---------------------------------------------------------------------------
-
-struct StdoutLogger : ILogger {
-    void log(LogLevel level, const char* /*file*/, int /*line*/, const char* message) override {
-        const char* tag = level == LogLevel::Debug  ? "DEBUG"
-                          : level == LogLevel::Info ? "INFO "
-                          : level == LogLevel::Warn ? "WARN "
-                                                    : "ERROR";
-        std::printf("[%s] %s\n", tag, message);
-        std::fflush(stdout);
-    }
-    void setMinLevel(LogLevel) override {}
-    void flush() override {
-        std::fflush(stdout);
-    }
-};
-
-// ---------------------------------------------------------------------------
-// Event handler
-// ---------------------------------------------------------------------------
-
-struct ServerEventHandler : INetworkEventHandler {
-    ILogger* logger;
-    INetwork* network;
-
-    void onConnect(uint32_t peerId) override {
-        const char* addr = network->getPeerAddress(peerId);
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "peer %u connected from %s", peerId, addr ? addr : "unknown");
-        logger->log(LogLevel::Info, __FILE__, __LINE__, buf);
-    }
-    void onDisconnect(uint32_t peerId) override {
-        const char* addr = network->getPeerAddress(peerId);
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "peer %u disconnected (%s)", peerId, addr ? addr : "unknown");
-        logger->log(LogLevel::Info, __FILE__, __LINE__, buf);
-    }
-    void onReceive(uint32_t /*peerId*/, const void* /*data*/, std::size_t /*size*/) override {
-        // Phase 1: no game protocol yet — packets are discarded.
-    }
-};
 
 // ---------------------------------------------------------------------------
 // Signal handling
@@ -108,292 +60,17 @@ static void onSignal(int) {
 }
 
 // ---------------------------------------------------------------------------
-// Default config template (written on first run)
+// 3-tier config override: CLI positional args + environment variables
 // ---------------------------------------------------------------------------
 
-static const char* kDefaultToml =
-    "[server]\n"
-    "# Human-readable server name shown in the lobby browser.\n"
-    "name = \"Unnamed Server\"\n"
-    "\n"
-    "# UDP port fl-server binds on. Port 4778 is the fighters-legacy default.\n"
-    "# See IANA registration note in docs/architecture.md.\n"
-    "port = 4778\n"
-    "\n"
-    "# Network interface to bind on.\n"
-    "# \"::\"         = dual-stack all interfaces (IPv4+IPv6; recommended for internet servers)\n"
-    "# \"0.0.0.0\"   = IPv4 all interfaces\n"
-    "# \"127.0.0.1\" = localhost-only IPv4 (single-player; game client uses this)\n"
-    "# \"::1\"        = localhost-only IPv6\n"
-    "bind_address = \"0.0.0.0\"\n"
-    "\n"
-    "# Maximum number of simultaneous connected peers (1-128).\n"
-    "max_peers = 16\n"
-    "\n"
-    "# Scenario types this server will host.\n"
-    "# Valid values: \"campaign\", \"mission\", \"sandbox\"\n"
-    "# Whether a session is cooperative or adversarial depends on which faction\n"
-    "# players join, not on a separate mode flag.\n"
-    "game_modes = [\"campaign\", \"mission\", \"sandbox\"]\n"
-    "\n"
-    "# Message shown to connecting clients. Empty string = no message.\n"
-    "motd = \"\"\n"
-    "\n"
-    "# Server password. Empty string = no password required.\n"
-    "# Note: store passwords in this file only -- do not use an env var,\n"
-    "# as environment variables appear in process listings.\n"
-    "password = \"\"\n"
-    "\n"
-    "[rotation]\n"
-    "# Phase 2 -- rotation logic lands with the game server runtime.\n"
-    "# Mission/campaign time limits belong in their content files (win/loss conditions).\n"
-    "# This section controls server-level scenario cycling and sandbox session capping.\n"
-    "#\n"
-    "# Cycle order for rotation items: \"sequential\" or \"random\".\n"
-    "order = \"sequential\"\n"
-    "\n"
-    "# Ordered list of mission, campaign, or sandbox theater IDs to cycle through.\n"
-    "# Empty = no automatic rotation.\n"
-    "items = []\n"
-    "\n"
-    "# Sandbox session time limit in minutes. Triggers rotation advancement when elapsed.\n"
-    "# 0 = no limit. Missions and campaigns are unaffected (they end on win/loss).\n"
-    "time_limit_min = 0\n"
-    "\n"
-    "[lobby]\n"
-    "# Phase 2 -- lobby registration is not yet active (see issue #36).\n"
-    "#\n"
-    "# Set to true to advertise this server to the fl-lobby matchmaking service.\n"
-    "register = false\n"
-    "\n"
-    "# fl-lobby REST base URL. Ignored unless register = true.\n"
-    "url = \"https://lobby.fighters-legacy.org\"\n"
-    "\n"
-    "# Server visibility in the lobby browser.\n"
-    "# \"public\"  = visible to all players\n"
-    "# \"private\" = token-gated (Phase 2)\n"
-    "visibility = \"public\"\n"
-    "\n"
-    "[mods]\n"
-    "# Phase 2 -- parsed and logged; ModLoader integration pending.\n"
-    "#\n"
-    "# Ordered list of mod IDs to load. Index 0 = highest priority.\n"
-    "# IDs must match the [mod].id field in each mod's manifest.toml.\n"
-    "stack = []\n"
-    "\n"
-    "[world]\n"
-    "# Settings below apply only when fl-server is launched with --persistent.\n"
-    "# Phase 2 -- persistent-world logic is not yet implemented.\n"
-    "#\n"
-    "# Path to the persistent world save file.\n"
-    "save_path = \"world.sav\"\n"
-    "\n"
-    "# Autosave interval in seconds. 0 = disabled.\n"
-    "autosave_interval_s = 300\n"
-    "\n"
-    "[ai]\n"
-    "# Phase 2 -- parsed and stored; server-side enforcement lands with the AI runtime.\n"
-    "#\n"
-    "# Minimum AI difficulty enforced server-side regardless of client preference.\n"
-    "# Valid values: \"recruit\", \"cadet\", \"veteran\", \"ace\"\n"
-    "difficulty_floor = \"recruit\"\n"
-    "\n"
-    "[discovery]\n"
-    "# LAN server discovery beacon (raw UDP, independent of ENet).\n"
-    "# Broadcasts server info on 255.255.255.255:<port> (IPv4) and [ff02::1]:<port> (IPv6)\n"
-    "# so clients on the same LAN can find this server without knowing its IP address.\n"
-    "# Client-side server browser: issue #143.\n"
-    "#\n"
-    "# Set to false to suppress LAN broadcasting (e.g. internet-only or localhost-only servers).\n"
-    "enabled = true\n"
-    "\n"
-    "# How often to broadcast the beacon, in milliseconds. Valid range: [100, 60000].\n"
-    "interval_ms = 2000\n"
-    "\n"
-    "[security]\n"
-    "# Per-IP connection rate limiting (post-ENet-handshake).\n"
-    "# Peers connecting more than connect_rate_limit_count times within\n"
-    "# connect_rate_limit_window_s seconds are immediately disconnected.\n"
-    "connect_rate_limit_count = 5\n"
-    "connect_rate_limit_window_s = 10\n"
-    "\n"
-    "# Packet flood detection. A peer that sends more than\n"
-    "# (packet_flood_multiplier * 60) MsgClientInput packets per second is disconnected.\n"
-    "# Set to 3 or higher to avoid false positives on 60 Hz clients.\n"
-    "packet_flood_multiplier = 3\n"
-    "\n"
-    "# Path to the persistent ban list file (one normalized IP per line, # = comment).\n"
-    "# Bans added with the 'ban' admin command are written to this file automatically.\n"
-    "# Empty string = in-memory only (not persisted across restarts).\n"
-    "banlist_path = \"\"\n"
-    "\n"
-    "# Path to an allowlist file (one normalized IP per line, # = comment).\n"
-    "# When non-empty, only IPs on this list may connect. Ban list still takes precedence.\n"
-    "# Empty string = allowlist disabled (all IPs permitted).\n"
-    "allowlist_path = \"\"\n"
-    "\n"
-    "# ENet host aggregate bandwidth caps in bytes per second. 0 = unlimited (default).\n"
-    "# incoming_bandwidth_bps caps total inbound traffic from all peers.\n"
-    "# outgoing_bandwidth_bps caps total outbound traffic to all peers.\n"
-    "incoming_bandwidth_bps = 0\n"
-    "outgoing_bandwidth_bps = 0\n";
-
-// ---------------------------------------------------------------------------
-// Config file helpers
-// ---------------------------------------------------------------------------
-
-static void writeDefaultConfig(const std::string& path, ILogger* logger) {
-    std::ofstream f(path);
-    if (!f) {
-        char buf[256];
-        std::snprintf(buf, sizeof(buf), "could not write default config to %s — continuing", path.c_str());
-        logger->log(LogLevel::Warn, __FILE__, __LINE__, buf);
-        return;
-    }
-    f << kDefaultToml;
-    logger->log(LogLevel::Info, __FILE__, __LINE__, "wrote default server.toml");
-}
-
-static std::string readFileContent(const std::string& path) {
-    std::ifstream f(path);
-    if (!f)
-        return {};
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
-}
-
-// ---------------------------------------------------------------------------
-// IP list file helpers (ban list / allowlist)
-// ---------------------------------------------------------------------------
-
-// Mirrors WorldBroadcaster.cpp normalizeIp — kept file-static in each TU.
-static std::string normalizeIp(std::string_view raw) {
-    std::string_view v = raw;
-    if (!v.empty() && v.front() == '[') {
-        v.remove_prefix(1);
-        auto end = v.find(']');
-        if (end != std::string_view::npos)
-            v = v.substr(0, end);
-    }
-    std::string ip(v);
-    if (ip.size() > 7 && ip.compare(0, 7, "::ffff:") == 0)
-        ip.erase(0, 7);
-    return ip;
-}
-
-// Read a one-IP-per-line file; lines beginning with '#' are comments.
-// Strips trailing '\r' so Windows-format files work on Linux/macOS.
-static std::unordered_set<std::string> loadIpListFile(const std::string& path, ILogger* log) {
-    std::unordered_set<std::string> result;
-    std::ifstream f(path);
-    if (!f) {
-        char buf[256];
-        std::snprintf(buf, sizeof(buf), "loadIpListFile: cannot open %s", path.c_str());
-        if (log)
-            log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
-        return result;
-    }
-    std::string line;
-    while (std::getline(f, line)) {
-        if (!line.empty() && line.back() == '\r')
-            line.pop_back();
-        if (line.empty() || line.front() == '#')
-            continue;
-        auto ip = normalizeIp(line);
-        if (!ip.empty())
-            result.insert(std::move(ip));
-    }
-    return result;
-}
-
-// Write the set to path, one IP per line. Binary mode ensures portable '\n'.
-static void saveIpListFile(const std::string& path, const std::unordered_set<std::string>& ips, ILogger* log) {
-    std::ofstream f(path, std::ios::binary);
-    if (!f) {
-        char buf[256];
-        std::snprintf(buf, sizeof(buf), "saveIpListFile: cannot write %s", path.c_str());
-        if (log)
-            log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
-        return;
-    }
-    for (const auto& ip : ips)
-        f << ip << "\n";
-}
-
-// ---------------------------------------------------------------------------
-// main
-// ---------------------------------------------------------------------------
-
-int main(int argc, char** argv) {
-    // Pre-pass: --help / --version / --persistent
-    bool flagPersistent = false;
-    for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
-            std::printf("Usage: fl-server [port] [maxPeers]\n"
-                        "\n"
-                        "Options:\n"
-                        "  --help          Print this message and exit\n"
-                        "  --version       Print version and exit\n"
-                        "  --persistent    Enable persistent world mode (Phase 2 -- not yet active)\n"
-                        "\n"
-                        "Admin console commands are available on stdin (type 'help' for a command list).\n"
-                        "\n"
-                        "Environment:\n"
-                        "  FL_CONFIG              Path to server.toml (default: ./server.toml)\n"
-                        "  FL_PORT                Bind port (default: 4778)\n"
-                        "  FL_BIND_ADDRESS        Bind address (default: 0.0.0.0; use :: for IPv4+IPv6 dual-stack)\n"
-                        "  FL_MAX_PEERS           Max simultaneous peers (default: 32)\n"
-                        "  FL_NAME                Server name (default: \"Unnamed Server\")\n"
-                        "  FL_PERSISTENT          \"true\" to enable persistent world, Phase 2 (default: \"false\")\n"
-                        "  FL_LOBBY_REGISTER      \"true\" to advertise to fl-lobby, Phase 2 (default: \"false\")\n"
-                        "  FL_LOBBY_URL           fl-lobby base URL, Phase 2\n"
-                        "  FL_LOBBY_VISIBILITY    \"public\" or \"private\", Phase 2 (default: \"public\")\n"
-                        "  FL_AI_DIFFICULTY_FLOOR recruit/cadet/veteran/ace, Phase 2 (default: \"recruit\")\n"
-                        "\n"
-                        "Config file is written with defaults on first run if absent.\n"
-                        "See docs/fl-server-config.md for the full operator reference.\n");
-            return 0;
-        }
-        if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {
-            std::printf("fl-server %s (%s)\n", kVersion, enetLibraryVersion());
-            return 0;
-        }
-        if (std::strcmp(argv[i], "--persistent") == 0)
-            flagPersistent = true;
-    }
-
-    // ---- Set up platform ----
-    Platform p;
-    p.logger = std::make_unique<StdoutLogger>();
-    p.network = createENetNetwork();
-
-    ILogger* log = p.logger.get();
-    INetwork* net = p.network.get();
-
-    {
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "fl-server %s (%s) starting", kVersion, enetLibraryVersion());
-        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
-    }
-
-    // ---- Tier 1: server.toml ----
-    const char* configEnv = std::getenv("FL_CONFIG");
-    std::string configPath = configEnv ? configEnv : "server.toml";
-    {
-        std::ifstream probe(configPath);
-        if (!probe)
-            writeDefaultConfig(configPath, log);
-    }
-    ServerConfig cfg = parseServerConfig(readFileContent(configPath), log);
-
-    // ---- Tier 2: CLI positional args ----
+static void applyCliAndEnvOverrides(ServerConfig& cfg, int argc, char** argv, ILogger* log) {
+    // Tier 2: CLI positional args — [port] [maxPeers]
     if (argc >= 2 && argv[1][0] != '-')
         cfg.port = static_cast<uint16_t>(std::atoi(argv[1]));
     if (argc >= 3 && argv[2][0] != '-')
         cfg.maxPeers = std::atoi(argv[2]);
 
-    // ---- Tier 3: environment variables (highest precedence) ----
+    // Tier 3: environment variables (highest precedence)
     if (const char* e = std::getenv("FL_PORT"))
         cfg.port = static_cast<uint16_t>(std::atoi(e));
     if (const char* e = std::getenv("FL_BIND_ADDRESS"))
@@ -409,27 +86,96 @@ int main(int argc, char** argv) {
     if (const char* e = std::getenv("FL_LOBBY_URL"))
         cfg.lobbyUrl = e;
     if (const char* e = std::getenv("FL_LOBBY_VISIBILITY")) {
-        // Validate: accepted values are "public" and "private"
-        if (std::strcmp(e, "public") == 0 || std::strcmp(e, "private") == 0) {
+        if (std::strcmp(e, "public") == 0 || std::strcmp(e, "private") == 0)
             cfg.lobbyVisibility = e;
-        } else {
+        else
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "FL_LOBBY_VISIBILITY must be \"public\" or \"private\"; ignoring");
-        }
     }
     if (const char* e = std::getenv("FL_AI_DIFFICULTY_FLOOR")) {
         if (std::strcmp(e, "recruit") == 0 || std::strcmp(e, "cadet") == 0 || std::strcmp(e, "veteran") == 0 ||
-            std::strcmp(e, "ace") == 0) {
+            std::strcmp(e, "ace") == 0)
             cfg.aiDifficultyFloor = e;
-        } else {
+        else
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "FL_AI_DIFFICULTY_FLOOR must be recruit/cadet/veteran/ace; ignoring");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// main
+// ---------------------------------------------------------------------------
+
+int main(int argc, char** argv) {
+    // Pre-pass: --help / --version / --persistent / --bind
+    bool flagPersistent = false;
+    std::string flagBind; // non-empty if --bind addr was given
+
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
+            std::printf("Usage: fl-server [port] [maxPeers]\n"
+                        "\n"
+                        "Options:\n"
+                        "  --help             Print this message and exit\n"
+                        "  --version          Print version and exit\n"
+                        "  --persistent       Enable persistent world mode (Phase 2 -- not yet active)\n"
+                        "  --bind <addr>      Bind address (overrides server.toml and FL_BIND_ADDRESS)\n"
+                        "\n"
+                        "Admin console commands are available on stdin (type 'help' for a command list).\n"
+                        "\n"
+                        "Environment:\n"
+                        "  FL_CONFIG              Path to server.toml (default: ./server.toml)\n"
+                        "  FL_PORT                Bind port (default: 4778)\n"
+                        "  FL_BIND_ADDRESS        Bind address (default: 0.0.0.0)\n"
+                        "  FL_MAX_PEERS           Max simultaneous peers (default: 32)\n"
+                        "  FL_NAME                Server name (default: \"Unnamed Server\")\n"
+                        "  FL_PERSISTENT          \"true\" to enable persistent world, Phase 2\n"
+                        "  FL_LOBBY_REGISTER      \"true\" to advertise to fl-lobby, Phase 2\n"
+                        "  FL_LOBBY_URL           fl-lobby base URL, Phase 2\n"
+                        "  FL_LOBBY_VISIBILITY    \"public\" or \"private\", Phase 2\n"
+                        "  FL_AI_DIFFICULTY_FLOOR recruit/cadet/veteran/ace, Phase 2\n"
+                        "\n"
+                        "Config file is written with defaults on first run if absent.\n"
+                        "See docs/fl-server-config.md for the full operator reference.\n");
+            return 0;
         }
+        if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {
+            std::printf("fl-server %s (%s)\n", "0.0.1", enetLibraryVersion());
+            return 0;
+        }
+        if (std::strcmp(argv[i], "--persistent") == 0)
+            flagPersistent = true;
+        if (std::strcmp(argv[i], "--bind") == 0 && i + 1 < argc)
+            flagBind = argv[++i];
     }
 
-    // --persistent flag (CLI pre-pass result applied after config merge)
+    // ---- Set up platform ----
+    Platform p;
+    p.logger = std::make_unique<StdoutLogger>();
+    p.network = createENetNetwork();
+
+    ILogger* log = p.logger.get();
+    INetwork* net = p.network.get();
+
+    {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "fl-server %s (%s) starting", "0.0.1", enetLibraryVersion());
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
+
+    // ---- Tier 1: server.toml ----
+    const char* configEnv = std::getenv("FL_CONFIG");
+    std::string configPath = configEnv ? configEnv : "server.toml";
+    ServerConfig cfg = parseServerConfig(fl::ensureAndReadConfig(configPath, defaultServerConfigToml(), *log), log);
+
+    // ---- Tier 2 + 3: CLI positional args and environment variables ----
+    applyCliAndEnvOverrides(cfg, argc, argv, log);
+
+    // --persistent / --bind flags from the pre-pass override any lower tier.
     if (flagPersistent)
         cfg.persistent = true;
+    if (!flagBind.empty())
+        cfg.bindAddress = flagBind;
 
     // ---- Phase 2 stub logs ----
     if (cfg.persistent)
@@ -454,11 +200,6 @@ int main(int argc, char** argv) {
         log->log(LogLevel::Error, __FILE__, __LINE__, "network init failed");
         return 1;
     }
-
-    ServerEventHandler handler;
-    handler.logger = log;
-    handler.network = net;
-    net->setEventHandler(&handler);
 
     if (!net->bind(cfg.bindAddress.c_str(), cfg.port, cfg.maxPeers)) {
         char buf[128];
@@ -515,7 +256,6 @@ int main(int argc, char** argv) {
     fl::EntityTypeRegistry entityRegistry;
     fl::EntityManager entityManager(*log, entityRegistry);
 
-    // Builtin debug entity (empty mesh → SceneRenderer tetrahedron fallback on clients).
     fl::EntityDef debugDef;
     debugDef.id = "builtin:debug-entity";
     debugDef.name = "Debug Entity";
@@ -523,8 +263,7 @@ int main(int argc, char** argv) {
     debugDef.maxHp = 100.0f;
     entityRegistry.registerType(std::move(debugDef));
 
-    // Spawn 5 entities in V-formation at 500 m altitude. Must be done before
-    // gameLoop.start() so the sim thread doesn't exist yet (data-race-free).
+    // Spawn 5 entities in V-formation at 500 m altitude.
     const float kAlt = 500.0f;
     using Slot = std::pair<float, float>;
     const Slot kSlots[] = {{0.0f, 0.0f}, {-30.0f, -25.0f}, {30.0f, -25.0f}, {-60.0f, -50.0f}, {60.0f, -50.0f}};
@@ -562,15 +301,12 @@ int main(int argc, char** argv) {
 
     // ---- Signal handling ----
     std::signal(SIGINT, onSignal);
-    std::signal(SIGTERM, onSignal); // no-op on Windows; fine for Linux/macOS containers
+    std::signal(SIGTERM, onSignal);
 
-    // ---- Start sim loop then wait for signal ----
+    // ---- Start sim loop ----
     gameLoop.start();
 
     // ---- Admin console (stdin command loop) ----
-    // A detached thread reads stdin line-by-line and pushes each line into a queue.
-    // The main loop drains the queue every 50 ms and dispatches commands synchronously
-    // (or enqueues sim callbacks for mutating operations).
     std::mutex stdinMutex;
     std::queue<std::string> stdinLines;
     std::thread([&stdinMutex, &stdinLines]() {
@@ -602,14 +338,9 @@ int main(int argc, char** argv) {
     adminCtx.minShutdownDelayS = static_cast<uint32_t>(cfg.minShutdownDelayS);
     adminCtx.shutdownRequireConfirm = cfg.shutdownRequireConfirm;
 
-    // T=0 shutdown callback: set the quit flag from the sim thread.
     broadcaster.setShutdownCallback([&]() { g_quit = 1; });
-
     registerServerCommands(adminRegistry, adminCtx);
 
-    // Main thread sleeps until SIGINT/SIGTERM. All ENet I/O is driven from the
-    // sim thread via WorldBroadcaster::onTick() → net->service(0).
-    // The discovery beacon is polled here; it fires at most once per intervalMs.
     while (!g_quit) {
         {
             std::lock_guard<std::mutex> lk(stdinMutex);
@@ -628,9 +359,8 @@ int main(int argc, char** argv) {
 
     gameLoop.stop();
 
-    // ---- Graceful shutdown ----
     log->log(LogLevel::Info, __FILE__, __LINE__, "shutting down");
-    net->disconnect(); // drains peers up to 100 ms
+    net->disconnect();
     net->shutdown();
 
     return 0;

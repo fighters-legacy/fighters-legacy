@@ -378,6 +378,46 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                                  return {};
                              });
 
+    // tp <idx> <x> <y> <z>
+    registry.registerCommand("tp", "tp <idx> <x> <y> <z>  -- teleport entity to world position",
+                             [ctx](std::span<std::string_view> args) -> std::string {
+                                 if (args.size() < 4)
+                                     return "usage: tp <idx> <x> <y> <z>";
+                                 if (!ctx.entityManager || !ctx.gameLoop)
+                                     return "tp: not available";
+                                 uint32_t targetIdx = 0;
+                                 auto [ptr, ec] =
+                                     std::from_chars(args[0].data(), args[0].data() + args[0].size(), targetIdx);
+                                 if (ec != std::errc{})
+                                     return "tp: invalid entity index";
+                                 // Parse coordinates with strtod (from_chars for double not on Apple Clang).
+                                 auto parseCoord = [](std::string_view sv, double& out) -> bool {
+                                     if (sv.empty())
+                                         return false;
+                                     std::string s(sv); // null-terminated for strtod
+                                     char* end = nullptr;
+                                     out = std::strtod(s.c_str(), &end);
+                                     return end == s.c_str() + sv.size() && end != s.c_str();
+                                 };
+                                 double x{}, y{}, z{};
+                                 if (!parseCoord(args[1], x) || !parseCoord(args[2], y) || !parseCoord(args[3], z))
+                                     return "tp: invalid coordinates";
+                                 ctx.gameLoop->enqueueSimCallback([ctx, targetIdx, x, y, z]() {
+                                     ctx.entityManager->forEach([&](fl::EntityState& state) {
+                                         if (state.id.index == targetIdx) {
+                                             state.transform.pos[0] = x;
+                                             state.transform.pos[1] = y;
+                                             state.transform.pos[2] = z;
+                                             std::printf("[admin] teleported entity %u/%u to X:%+.1f Y:%+.1f Z:%+.1f\n",
+                                                         state.id.index, state.id.generation, static_cast<float>(x),
+                                                         static_cast<float>(y), static_cast<float>(z));
+                                             std::fflush(stdout);
+                                         }
+                                     });
+                                 });
+                                 return {};
+                             });
+
     // reload_config
     registry.registerCommand("reload_config", "reload_config  -- re-read server.toml and apply: name (beacon), motd",
                              [ctx](std::span<std::string_view>) -> std::string {

@@ -40,6 +40,7 @@ target_link_libraries(engine-i18n
 
 add_library(engine-config STATIC
     config/UserConfig.cpp
+    config/ConfigFile.cpp
 )
 
 target_include_directories(engine-config PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -180,6 +181,7 @@ target_link_libraries(engine-weather PUBLIC platform-hal)
 
 # Authoritative server-sim serializer and network broadcaster.
 add_library(engine-net STATIC
+    net/NetworkUtils.cpp
     net/WorldBroadcaster.cpp
     net/DiscoveryBeacon.cpp
     net/DiscoveryListener.cpp

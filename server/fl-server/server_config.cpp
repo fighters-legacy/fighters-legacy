@@ -4,6 +4,82 @@
 #include <cstring>
 #include <toml++/toml.hpp>
 
+// ---------------------------------------------------------------------------
+// Default configuration template
+// ---------------------------------------------------------------------------
+
+static const char* kDefaultToml =
+    "[server]\n"
+    "# Human-readable server name shown in the lobby browser.\n"
+    "name = \"Unnamed Server\"\n"
+    "\n"
+    "# UDP port fl-server binds on. Port 4778 is the fighters-legacy default.\n"
+    "# See IANA registration note in docs/architecture.md.\n"
+    "port = 4778\n"
+    "\n"
+    "# Network interface to bind on.\n"
+    "# \"::\"         = dual-stack all interfaces (IPv4+IPv6; recommended for internet servers)\n"
+    "# \"0.0.0.0\"   = IPv4 all interfaces\n"
+    "# \"127.0.0.1\" = localhost-only IPv4 (single-player; game client uses this)\n"
+    "# \"::1\"        = localhost-only IPv6\n"
+    "bind_address = \"0.0.0.0\"\n"
+    "\n"
+    "# Maximum number of simultaneous connected peers (1-128).\n"
+    "max_peers = 16\n"
+    "\n"
+    "# Scenario types this server will host.\n"
+    "# Valid values: \"campaign\", \"mission\", \"sandbox\"\n"
+    "game_modes = [\"campaign\", \"mission\", \"sandbox\"]\n"
+    "\n"
+    "# Message shown to connecting clients. Empty string = no message.\n"
+    "motd = \"\"\n"
+    "\n"
+    "# Server password. Empty string = no password required.\n"
+    "password = \"\"\n"
+    "\n"
+    "[rotation]\n"
+    "order = \"sequential\"\n"
+    "items = []\n"
+    "time_limit_min = 0\n"
+    "\n"
+    "[lobby]\n"
+    "register = false\n"
+    "url = \"https://lobby.fighters-legacy.org\"\n"
+    "visibility = \"public\"\n"
+    "\n"
+    "[mods]\n"
+    "stack = []\n"
+    "\n"
+    "[world]\n"
+    "save_path = \"world.sav\"\n"
+    "autosave_interval_s = 300\n"
+    "\n"
+    "[ai]\n"
+    "difficulty_floor = \"recruit\"\n"
+    "\n"
+    "[discovery]\n"
+    "# LAN server discovery beacon.\n"
+    "enabled = true\n"
+    "interval_ms = 2000\n"
+    "\n"
+    "[security]\n"
+    "connect_rate_limit_count = 5\n"
+    "connect_rate_limit_window_s = 10\n"
+    "packet_flood_multiplier = 3\n"
+    "banlist_path = \"\"\n"
+    "allowlist_path = \"\"\n"
+    "incoming_bandwidth_bps = 0\n"
+    "outgoing_bandwidth_bps = 0\n"
+    "\n"
+    "[shutdown]\n"
+    "shutdown_warning_interval_s = 300\n"
+    "min_shutdown_delay_s = 0\n"
+    "shutdown_require_confirm = true\n";
+
+std::string_view defaultServerConfigToml() {
+    return kDefaultToml;
+}
+
 static constexpr const char* kValidGameModes[] = {"campaign", "mission", "sandbox"};
 static constexpr const char* kValidRotationOrder[] = {"sequential", "random"};
 static constexpr const char* kValidVisibility[] = {"public", "private"};
