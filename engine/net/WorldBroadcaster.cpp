@@ -103,6 +103,28 @@ void WorldBroadcaster::unbanAddress(const std::string& ip) {
     m_bannedAddresses.erase(normalizeIp(ip));
 }
 
+void WorldBroadcaster::setBannedAddresses(std::unordered_set<std::string> addrs) {
+    m_bannedAddresses = std::move(addrs);
+}
+
+void WorldBroadcaster::setAllowedAddresses(std::unordered_set<std::string> addrs) {
+    m_allowedAddresses = std::move(addrs);
+}
+
+std::unordered_set<std::string> WorldBroadcaster::getBannedAddresses() const {
+    return m_bannedAddresses;
+}
+
+void WorldBroadcaster::setRateLimitParams(int maxConnects, int windowSeconds, int floodMultiplier) {
+    m_connectRateLimit = maxConnects;
+    m_connectRateWindowS = windowSeconds;
+    m_floodMultiplier = floodMultiplier;
+}
+
+void WorldBroadcaster::setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
+    m_now = std::move(fn);
+}
+
 void WorldBroadcaster::forEachPeer(
     std::function<void(uint32_t peerId, const std::string& addr, EntityId eid)> fn) const {
     for (const auto& [peerId, eid] : m_peerEntities) {
@@ -113,6 +135,20 @@ void WorldBroadcaster::forEachPeer(
 }
 
 void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
+    // Coarse prune of stale rate-limit records every 600 ticks (~10 s at 60 Hz).
+    if (++m_ratePruneTick % 600 == 0) {
+        auto cutoff = m_now() - std::chrono::seconds(m_connectRateWindowS);
+        for (auto it = m_connectRecords.begin(); it != m_connectRecords.end();) {
+            auto& ts = it->second.timestamps;
+            while (!ts.empty() && ts.front() < cutoff)
+                ts.pop_front();
+            if (ts.empty())
+                it = m_connectRecords.erase(it);
+            else
+                ++it;
+        }
+    }
+
     // Step each peer's FlightIntegrator from stored inputs, then copy state to the entity.
     for (auto& [peerId, inp] : m_peerInputs) {
         auto eit = m_peerEntities.find(peerId);
@@ -225,6 +261,32 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         return;
     }
 
+    // Allowlist check — if non-empty, only listed IPs may connect.
+    if (!ip.empty() && !m_allowedAddresses.empty() && !m_allowedAddresses.count(ip)) {
+        char msg[128];
+        std::snprintf(msg, sizeof(msg), "peer %u from %s not on allowlist — disconnecting", peerId, ip.c_str());
+        m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
+        m_net.disconnectPeer(peerId);
+        return;
+    }
+
+    // Connection rate limit — sliding window per IP.
+    if (!ip.empty()) {
+        auto now = m_now();
+        auto& rec = m_connectRecords[ip];
+        auto cutoff = now - std::chrono::seconds(m_connectRateWindowS);
+        while (!rec.timestamps.empty() && rec.timestamps.front() < cutoff)
+            rec.timestamps.pop_front();
+        rec.timestamps.push_back(now);
+        if (static_cast<int>(rec.timestamps.size()) > m_connectRateLimit) {
+            char msg[128];
+            std::snprintf(msg, sizeof(msg), "peer %u from %s rate-limited — disconnecting", peerId, ip.c_str());
+            m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
+            m_net.disconnectPeer(peerId);
+            return;
+        }
+    }
+
     char msg[64];
     std::snprintf(msg, sizeof(msg), "peer %u connected", peerId);
     m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
@@ -270,6 +332,7 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     }
     m_peerInputs.erase(peerId);
     m_peerFlightSims.erase(peerId);
+    m_peerFloodState.erase(peerId);
     m_activePeerCount.fetch_sub(1, std::memory_order_relaxed);
 }
 
@@ -292,6 +355,25 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
                           peerId, static_cast<unsigned>(msg.protocolVersion), static_cast<unsigned>(kProtocolVersion));
             m_logger.log(LogLevel::Warn, __FILE__, __LINE__, vmsg);
             return;
+        }
+
+        // Packet flood detection: disconnect peers that send faster than multiplier * tick rate.
+        {
+            auto& flood = m_peerFloodState[peerId];
+            auto now = m_now();
+            if (now - flood.windowStart >= std::chrono::seconds(1)) {
+                flood.windowStart = now;
+                flood.packetCount = 0;
+            }
+            ++flood.packetCount;
+            if (flood.packetCount > static_cast<uint32_t>(60 * m_floodMultiplier)) {
+                char fmsg[96];
+                std::snprintf(fmsg, sizeof(fmsg), "peer %u flooding — %u packets/s — disconnecting", peerId,
+                              flood.packetCount);
+                m_logger.log(LogLevel::Warn, __FILE__, __LINE__, fmsg);
+                m_net.disconnectPeer(peerId);
+                return;
+            }
         }
 
         PeerInputState inp;

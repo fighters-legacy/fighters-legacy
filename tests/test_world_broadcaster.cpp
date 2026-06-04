@@ -9,10 +9,12 @@
 #include "weather/WeatherController.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <map>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -909,4 +911,479 @@ TEST_CASE("WorldBroadcaster: forEachPeer with no connected peers does not call f
     int callCount = 0;
     broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId) { ++callCount; });
     CHECK(callCount == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Security: rate limiting
+// ---------------------------------------------------------------------------
+
+static std::vector<uint8_t> makeClientInputPacket() {
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.viewAxis[0] = 1.0f;
+    std::vector<uint8_t> buf(sizeof(inp));
+    std::memcpy(buf.data(), &inp, sizeof(inp));
+    return buf;
+}
+
+TEST_CASE("WorldBroadcaster: IP under rate limit is not disconnected", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.setRateLimitParams(5, 10, 3);
+
+    net.peerAddresses[0] = "1.2.3.4:1000";
+    for (int i = 0; i < 4; ++i) {
+        broadcaster.onConnect(0u);
+        broadcaster.onDisconnect(0u);
+        net.disconnectedPeers.clear();
+        net.sends.clear();
+    }
+    // 5th connect (at limit, size == limit, not strictly over): should be allowed
+    broadcaster.onConnect(0u);
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: IP exceeding rate limit is disconnected", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.setRateLimitParams(3, 10, 3);
+
+    net.peerAddresses[0] = "1.2.3.4:1000";
+    // 3 connects fill the window
+    for (int i = 0; i < 3; ++i) {
+        broadcaster.onConnect(0u);
+        broadcaster.onDisconnect(0u);
+        net.disconnectedPeers.clear();
+        net.sends.clear();
+    }
+    // 4th connect (over limit) must be rejected
+    broadcaster.onConnect(0u);
+    REQUIRE(net.disconnectedPeers.size() == 1u);
+    CHECK(net.disconnectedPeers[0] == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: rate limit resets after window expires", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.setRateLimitParams(2, 5, 3);
+
+    net.peerAddresses[0] = "1.2.3.4:1000";
+    // Fill window: 2 connects
+    broadcaster.onConnect(0u);
+    broadcaster.onDisconnect(0u);
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+    broadcaster.onConnect(0u);
+    broadcaster.onDisconnect(0u);
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+
+    // Advance clock past the window
+    t += std::chrono::seconds(6);
+
+    // Should be allowed again
+    broadcaster.onConnect(0u);
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: rate limit tracks different IPs independently", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.setRateLimitParams(2, 10, 3);
+
+    // IP-A fills limit
+    net.peerAddresses[0] = "1.1.1.1:1000";
+    broadcaster.onConnect(0u);
+    broadcaster.onDisconnect(0u);
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+    broadcaster.onConnect(0u);
+    broadcaster.onDisconnect(0u);
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+    broadcaster.onConnect(0u); // 3rd from IP-A: rejected
+    REQUIRE(net.disconnectedPeers.size() == 1u);
+    net.disconnectedPeers.clear();
+
+    // IP-B (different IP) is unaffected
+    net.peerAddresses[1] = "2.2.2.2:2000";
+    broadcaster.onConnect(1u);
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: null getPeerAddress does not crash rate limit", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setRateLimitParams(2, 10, 3);
+
+    // peer 0 has no address entry — getPeerAddress returns nullptr
+    broadcaster.onConnect(0u); // must not crash
+    // peer was not disconnected (unknown IP skips rate-limit and allowlist checks)
+    CHECK(net.disconnectedPeers.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Security: allowlist
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: empty allowlist allows all IPs", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    net.peerAddresses[0] = "9.9.9.9:1000";
+    broadcaster.onConnect(0u);
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: IP on allowlist is permitted", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setAllowedAddresses({"1.2.3.4"});
+
+    net.peerAddresses[0] = "1.2.3.4:1000";
+    broadcaster.onConnect(0u);
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: IP not on allowlist is rejected", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setAllowedAddresses({"9.9.9.9"});
+
+    net.peerAddresses[0] = "1.2.3.4:1000";
+    broadcaster.onConnect(0u);
+    REQUIRE(net.disconnectedPeers.size() == 1u);
+    CHECK(net.disconnectedPeers[0] == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: setting empty allowlist re-enables all IPs", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setAllowedAddresses({"9.9.9.9"});
+    // Clear allowlist
+    broadcaster.setAllowedAddresses({});
+
+    net.peerAddresses[0] = "1.2.3.4:1000";
+    broadcaster.onConnect(0u);
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: banned IP rejected even if on allowlist", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.banAddress("1.2.3.4");
+    broadcaster.setAllowedAddresses({"1.2.3.4"});
+
+    net.peerAddresses[0] = "1.2.3.4:1000";
+    broadcaster.onConnect(0u);
+    REQUIRE(net.disconnectedPeers.size() == 1u);
+}
+
+// ---------------------------------------------------------------------------
+// Security: flood detection
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: peer within flood limit is not disconnected", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setRateLimitParams(100, 10, 2); // threshold = 120 packets/s
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+
+    net.peerAddresses[0] = "1.2.3.4:1000";
+    broadcaster.onConnect(0u);
+
+    auto pkt = makeClientInputPacket();
+    for (int i = 0; i < 120; ++i) // exactly at threshold: not over
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: peer exceeding flood limit is disconnected", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setRateLimitParams(100, 10, 2); // threshold = 120 packets/s
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+
+    net.peerAddresses[0] = "1.2.3.4:1000";
+    broadcaster.onConnect(0u);
+
+    auto pkt = makeClientInputPacket();
+    for (int i = 0; i < 121; ++i) // 121 > 120: over threshold
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(net.disconnectedPeers.size() >= 1u);
+    CHECK(net.disconnectedPeers[0] == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: flood counter resets after 1s window", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setRateLimitParams(100, 10, 2); // threshold = 120
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+
+    net.peerAddresses[0] = "1.2.3.4:1000";
+    broadcaster.onConnect(0u);
+
+    auto pkt = makeClientInputPacket();
+    // Send 120 (at limit)
+    for (int i = 0; i < 120; ++i)
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    CHECK(net.disconnectedPeers.empty());
+
+    // Advance past the 1s window, counter resets
+    t += std::chrono::seconds(2);
+    // Send 120 more — still at limit in the new window
+    for (int i = 0; i < 120; ++i)
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: non-ClientInput packets do not count toward flood", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setRateLimitParams(100, 10, 2); // threshold = 120
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+
+    net.peerAddresses[0] = "1.2.3.4:1000";
+    broadcaster.onConnect(0u);
+
+    // Send 500 packets with an unknown msgId — should not trigger flood
+    uint8_t unknownMsg = 0xFF;
+    for (int i = 0; i < 500; ++i)
+        broadcaster.onReceive(0u, &unknownMsg, 1u);
+
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: onDisconnect clears flood state", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setRateLimitParams(100, 10, 1); // threshold = 60
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+
+    net.peerAddresses[0] = "1.2.3.4:1000";
+    broadcaster.onConnect(0u);
+
+    // Fill flood state to 59 packets (just under threshold)
+    auto pkt = makeClientInputPacket();
+    for (int i = 0; i < 59; ++i)
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    // Disconnect + reconnect — flood state should be cleared
+    broadcaster.onDisconnect(0u);
+    net.sends.clear();
+    broadcaster.onConnect(0u);
+
+    // Should be able to send 60 packets in the new window without triggering flood
+    for (int i = 0; i < 60; ++i)
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    CHECK(net.disconnectedPeers.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Security: ban set management
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: setBannedAddresses replaces existing ban set", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    broadcaster.banAddress("1.1.1.1");
+    // Replace with a different set
+    broadcaster.setBannedAddresses({"2.2.2.2"});
+
+    // Old ban is gone — 1.1.1.1 can connect
+    net.peerAddresses[0] = "1.1.1.1:1000";
+    broadcaster.onConnect(0u);
+    CHECK(net.disconnectedPeers.empty());
+
+    // New ban is active — 2.2.2.2 is rejected
+    net.peerAddresses[1] = "2.2.2.2:2000";
+    broadcaster.onConnect(1u);
+    REQUIRE(net.disconnectedPeers.size() == 1u);
+}
+
+TEST_CASE("WorldBroadcaster: getBannedAddresses returns current set", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    broadcaster.banAddress("1.2.3.4");
+    broadcaster.banAddress("5.6.7.8");
+    auto banned = broadcaster.getBannedAddresses();
+    CHECK(banned.count("1.2.3.4") == 1u);
+    CHECK(banned.count("5.6.7.8") == 1u);
+    CHECK(banned.size() == 2u);
+}
+
+// ---------------------------------------------------------------------------
+// Security: edge cases for branch coverage
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: onConnect null getPeerAddress skips allowlist and rate limit",
+          "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setAllowedAddresses({"9.9.9.9"});
+    broadcaster.setRateLimitParams(1, 10, 3);
+
+    // peer 0 has no address — getPeerAddress returns nullptr
+    // With a non-empty allowlist, a known IP would be rejected.
+    // But empty IP bypasses both allowlist and rate limit — no disconnect.
+    broadcaster.onConnect(0u);
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: rate limit prune preserves entries with unexpired timestamps",
+          "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setRateLimitParams(10, 5, 3);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+
+    net.peerAddresses[0] = "1.2.3.4:1000";
+    // One recent connect
+    broadcaster.onConnect(0u);
+    broadcaster.onDisconnect(0u);
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+
+    // Trigger prune by running 600 ticks (but clock hasn't advanced past window)
+    for (int i = 0; i < 600; ++i)
+        broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(i));
+
+    // Entry was NOT pruned (timestamp still in window) — reconnect should increment counter
+    broadcaster.onConnect(0u); // 2nd connect — should succeed (limit is 10)
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: rate limit prune removes fully expired entries", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setRateLimitParams(1, 5, 3);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+
+    net.peerAddresses[0] = "1.2.3.4:1000";
+    // One connect fills limit (limit=1)
+    broadcaster.onConnect(0u);
+    broadcaster.onDisconnect(0u);
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+
+    // Advance clock past window
+    t += std::chrono::seconds(6);
+
+    // Run 600 ticks to trigger prune (timestamps now all expired)
+    for (int i = 0; i < 600; ++i)
+        broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(i));
+
+    // After prune, IP-A can connect again (counter reset by prune)
+    broadcaster.onConnect(0u);
+    CHECK(net.disconnectedPeers.empty());
 }

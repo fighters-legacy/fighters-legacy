@@ -6,7 +6,9 @@
 #include "loop/ISimUpdate.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <string>
@@ -88,6 +90,21 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // a pointer backed by a single overwrite buffer.
     void forEachPeer(std::function<void(uint32_t peerId, const std::string& addr, EntityId eid)> fn) const;
 
+    // Replace the entire in-memory ban set. Safe to call before gameLoop.start().
+    void setBannedAddresses(std::unordered_set<std::string> addrs);
+
+    // Set the allowlist. Empty set = allowlist disabled (all IPs permitted).
+    void setAllowedAddresses(std::unordered_set<std::string> addrs);
+
+    // Return a copy of the current ban set (called from sim thread to save to file).
+    std::unordered_set<std::string> getBannedAddresses() const;
+
+    // Configure rate limiting; call before gameLoop.start().
+    void setRateLimitParams(int maxConnects, int windowSeconds, int floodMultiplier);
+
+    // Override the clock used for rate limiting (for testing only).
+    void setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn);
+
   private:
     void sendConnectAck(uint32_t peerId, EntityId assigned);
     void stepFlightSim(FlightIntegrator& fi, EntityState& state, const PeerInputState& inp, double simDt);
@@ -107,6 +124,28 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     uint32_t m_turbRng{0xCAFEBABEu};    // per-broadcaster RNG for turbulence perturbation
 
     std::unordered_set<std::string> m_bannedAddresses; // in-memory ban list; sim-thread only
+
+    // Per-IP sliding-window connection rate limiter (sim-thread only).
+    struct ConnectRecord {
+        std::deque<std::chrono::steady_clock::time_point> timestamps;
+    };
+    std::unordered_map<std::string, ConnectRecord> m_connectRecords;
+    int m_connectRateLimit{5};
+    int m_connectRateWindowS{10};
+    uint64_t m_ratePruneTick{0}; // coarse prune cadence counter (every 600 ticks)
+
+    // Per-peer packet flood detector (sim-thread only).
+    struct PeerFloodState {
+        uint32_t packetCount{0};
+        std::chrono::steady_clock::time_point windowStart{};
+    };
+    std::unordered_map<uint32_t, PeerFloodState> m_peerFloodState;
+    int m_floodMultiplier{3};
+
+    std::unordered_set<std::string> m_allowedAddresses; // empty = allowlist disabled
+
+    // Injectable clock for testing; defaults to steady_clock::now.
+    std::function<std::chrono::steady_clock::time_point()> m_now{std::chrono::steady_clock::now};
 };
 
 } // namespace fl

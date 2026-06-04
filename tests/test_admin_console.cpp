@@ -25,6 +25,8 @@ TEST_CASE("AdminConsole: help lists registered commands", "[admin_console]") {
     CHECK(out.find("kick") != std::string::npos);
     CHECK(out.find("ban") != std::string::npos);
     CHECK(out.find("quit") != std::string::npos);
+    CHECK(out.find("reload_banlist") != std::string::npos);
+    CHECK(out.find("reload_allowlist") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole: unknown command returns error", "[admin_console]") {
@@ -135,5 +137,60 @@ TEST_CASE("AdminConsole: quit sets quitFlag to 1", "[admin_console]") {
 TEST_CASE("AdminConsole: quit with null quitFlag returns error", "[admin_console]") {
     auto reg = makeRegistry(); // quitFlag == nullptr
     std::string out = reg.dispatch("quit");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// reload_banlist
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AdminConsole: reload_banlist with null banlistPath returns not available", "[admin_console][security]") {
+    auto reg = makeRegistry(); // banlistPath == nullptr
+    std::string out = reg.dispatch("reload_banlist");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: reload_banlist with empty banlistPath returns not available", "[admin_console][security]") {
+    ServerCommandContext ctx;
+    std::string emptyPath;
+    ctx.banlistPath = &emptyPath; // non-null but empty
+    auto reg = makeRegistry(ctx);
+    std::string out = reg.dispatch("reload_banlist");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// reload_allowlist
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AdminConsole: reload_allowlist with null allowlistPath returns not available", "[admin_console][security]") {
+    auto reg = makeRegistry();
+    std::string out = reg.dispatch("reload_allowlist");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: reload_allowlist with empty allowlistPath returns not available",
+          "[admin_console][security]") {
+    ServerCommandContext ctx;
+    std::string emptyPath;
+    ctx.allowlistPath = &emptyPath;
+    auto reg = makeRegistry(ctx);
+    std::string out = reg.dispatch("reload_allowlist");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// ban / unban — null saveBanlist does not crash
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AdminConsole: ban with null broadcaster returns not available", "[admin_console][security]") {
+    auto reg = makeRegistry(); // broadcaster == nullptr
+    std::string out = reg.dispatch("ban 1.2.3.4");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: unban with null broadcaster returns not available", "[admin_console][security]") {
+    auto reg = makeRegistry();
+    std::string out = reg.dispatch("unban 1.2.3.4");
     CHECK(out.find("not available") != std::string::npos);
 }

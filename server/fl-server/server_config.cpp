@@ -144,6 +144,52 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             }
         }
 
+        // [security]
+        if (auto v = tbl["security"]["connect_rate_limit_count"].value<int64_t>()) {
+            if (*v < 1 || *v > 100) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.connect_rate_limit_count out of range [1,100]; using default");
+            } else {
+                cfg.connectRateLimitCount = static_cast<int>(*v);
+            }
+        }
+        if (auto v = tbl["security"]["connect_rate_limit_window_s"].value<int64_t>()) {
+            if (*v < 1 || *v > 3600) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.connect_rate_limit_window_s out of range [1,3600]; using default");
+            } else {
+                cfg.connectRateLimitWindowS = static_cast<int>(*v);
+            }
+        }
+        if (auto v = tbl["security"]["packet_flood_multiplier"].value<int64_t>()) {
+            if (*v < 1 || *v > 100) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.packet_flood_multiplier out of range [1,100]; using default");
+            } else {
+                cfg.packetFloodMultiplier = static_cast<int>(*v);
+            }
+        }
+        if (auto v = tbl["security"]["banlist_path"].value<std::string>())
+            cfg.banlistPath = std::move(*v);
+        if (auto v = tbl["security"]["allowlist_path"].value<std::string>())
+            cfg.allowlistPath = std::move(*v);
+        if (auto v = tbl["security"]["incoming_bandwidth_bps"].value<int64_t>()) {
+            if (*v < 0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.incoming_bandwidth_bps must be >= 0; using 0 (unlimited)");
+            } else {
+                cfg.incomingBandwidthBps = static_cast<uint32_t>(*v);
+            }
+        }
+        if (auto v = tbl["security"]["outgoing_bandwidth_bps"].value<int64_t>()) {
+            if (*v < 0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.outgoing_bandwidth_bps must be >= 0; using 0 (unlimited)");
+            } else {
+                cfg.outgoingBandwidthBps = static_cast<uint32_t>(*v);
+            }
+        }
+
     } catch (const toml::parse_error& e) {
         char buf[256];
         std::snprintf(buf, sizeof(buf), "failed to parse config: %s -- using defaults", e.what());
