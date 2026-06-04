@@ -100,6 +100,8 @@ static void applyCliAndEnvOverrides(ServerConfig& cfg, int argc, char** argv, IL
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "FL_AI_DIFFICULTY_FLOOR must be recruit/cadet/veteran/ace; ignoring");
     }
+    if (const char* e = std::getenv("FL_OPERATOR_PASSWORD"))
+        cfg.operatorPassword = e;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,34 +111,37 @@ static void applyCliAndEnvOverrides(ServerConfig& cfg, int argc, char** argv, IL
 int main(int argc, char** argv) {
     // Pre-pass: --help / --version / --persistent / --bind
     bool flagPersistent = false;
-    std::string flagBind; // non-empty if --bind addr was given
+    std::string flagBind;       // non-empty if --bind addr was given
+    std::string flagAdminToken; // non-empty if --admin-token was given (internal single-player use)
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
-            std::printf("Usage: fl-server [port] [maxPeers]\n"
-                        "\n"
-                        "Options:\n"
-                        "  --help             Print this message and exit\n"
-                        "  --version          Print version and exit\n"
-                        "  --persistent       Enable persistent world mode (Phase 2 -- not yet active)\n"
-                        "  --bind <addr>      Bind address (overrides server.toml and FL_BIND_ADDRESS)\n"
-                        "\n"
-                        "Admin console commands are available on stdin (type 'help' for a command list).\n"
-                        "\n"
-                        "Environment:\n"
-                        "  FL_CONFIG              Path to server.toml (default: ./server.toml)\n"
-                        "  FL_PORT                Bind port (default: 4778)\n"
-                        "  FL_BIND_ADDRESS        Bind address (default: 0.0.0.0)\n"
-                        "  FL_MAX_PEERS           Max simultaneous peers (default: 32)\n"
-                        "  FL_NAME                Server name (default: \"Unnamed Server\")\n"
-                        "  FL_PERSISTENT          \"true\" to enable persistent world, Phase 2\n"
-                        "  FL_LOBBY_REGISTER      \"true\" to advertise to fl-lobby, Phase 2\n"
-                        "  FL_LOBBY_URL           fl-lobby base URL, Phase 2\n"
-                        "  FL_LOBBY_VISIBILITY    \"public\" or \"private\", Phase 2\n"
-                        "  FL_AI_DIFFICULTY_FLOOR recruit/cadet/veteran/ace, Phase 2\n"
-                        "\n"
-                        "Config file is written with defaults on first run if absent.\n"
-                        "See docs/fl-server-config.md for the full operator reference.\n");
+            std::printf(
+                "Usage: fl-server [port] [maxPeers]\n"
+                "\n"
+                "Options:\n"
+                "  --help             Print this message and exit\n"
+                "  --version          Print version and exit\n"
+                "  --persistent       Enable persistent world mode (Phase 2 -- not yet active)\n"
+                "  --bind <addr>      Bind address (overrides server.toml and FL_BIND_ADDRESS)\n"
+                "\n"
+                "Admin console commands are available on stdin (type 'help' for a command list).\n"
+                "\n"
+                "Environment:\n"
+                "  FL_CONFIG              Path to server.toml (default: ./server.toml)\n"
+                "  FL_PORT                Bind port (default: 4778)\n"
+                "  FL_BIND_ADDRESS        Bind address (default: 0.0.0.0)\n"
+                "  FL_MAX_PEERS           Max simultaneous peers (default: 32)\n"
+                "  FL_NAME                Server name (default: \"Unnamed Server\")\n"
+                "  FL_PERSISTENT          \"true\" to enable persistent world, Phase 2\n"
+                "  FL_LOBBY_REGISTER      \"true\" to advertise to fl-lobby, Phase 2\n"
+                "  FL_LOBBY_URL           fl-lobby base URL, Phase 2\n"
+                "  FL_LOBBY_VISIBILITY    \"public\" or \"private\", Phase 2\n"
+                "  FL_AI_DIFFICULTY_FLOOR recruit/cadet/veteran/ace, Phase 2\n"
+                "  FL_OPERATOR_PASSWORD    Operator password for network admin commands (overrides server.toml)\n"
+                "\n"
+                "Config file is written with defaults on first run if absent.\n"
+                "See docs/fl-server-config.md for the full operator reference.\n");
             return 0;
         }
         if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {
@@ -147,6 +152,8 @@ int main(int argc, char** argv) {
             flagPersistent = true;
         if (std::strcmp(argv[i], "--bind") == 0 && i + 1 < argc)
             flagBind = argv[++i];
+        if (std::strcmp(argv[i], "--admin-token") == 0 && i + 1 < argc)
+            flagAdminToken = argv[++i];
     }
 
     // ---- Set up platform ----
@@ -171,11 +178,15 @@ int main(int argc, char** argv) {
     // ---- Tier 2 + 3: CLI positional args and environment variables ----
     applyCliAndEnvOverrides(cfg, argc, argv, log);
 
-    // --persistent / --bind flags from the pre-pass override any lower tier.
+    // --persistent / --bind / --admin-token flags from the pre-pass override any lower tier.
     if (flagPersistent)
         cfg.persistent = true;
     if (!flagBind.empty())
         cfg.bindAddress = flagBind;
+    // --admin-token takes highest precedence and overrides server.toml + FL_OPERATOR_PASSWORD.
+    // Used internally by LocalServer (single-player) to inject a per-session token.
+    if (!flagAdminToken.empty())
+        cfg.operatorPassword = flagAdminToken;
 
     // ---- Phase 2 stub logs ----
     if (cfg.persistent)
@@ -299,9 +310,44 @@ int main(int argc, char** argv) {
 
     GameLoop gameLoop(broadcaster, *log);
 
+    // ---- Admin command registry (built before gameLoop.start() to avoid races) ----
+    DebugCommandRegistry adminRegistry;
+    ServerCommandContext adminCtx;
+    adminCtx.broadcaster = &broadcaster;
+    adminCtx.entityManager = &entityManager;
+    adminCtx.typeRegistry = &entityRegistry;
+    adminCtx.weatherController = &weatherController;
+    adminCtx.beacon = beacon.get();
+    adminCtx.gameLoop = &gameLoop;
+    adminCtx.logger = log;
+    adminCtx.configPath = &configPath;
+    adminCtx.quitFlag = &g_quit;
+    adminCtx.banlistPath = cfg.banlistPath.empty() ? nullptr : &cfg.banlistPath;
+    adminCtx.allowlistPath = cfg.allowlistPath.empty() ? nullptr : &cfg.allowlistPath;
+    adminCtx.saveBanlist = [&](const std::unordered_set<std::string>& b) { saveIpListFile(cfg.banlistPath, b, log); };
+    adminCtx.loadBanlist = [&]() { return loadIpListFile(cfg.banlistPath, log); };
+    adminCtx.loadAllowlist = [&]() { return loadIpListFile(cfg.allowlistPath, log); };
+    adminCtx.shutdownWarningIntervalS = static_cast<uint32_t>(cfg.shutdownWarningIntervalS);
+    adminCtx.minShutdownDelayS = static_cast<uint32_t>(cfg.minShutdownDelayS);
+    adminCtx.shutdownRequireConfirm = cfg.shutdownRequireConfirm;
+
+    broadcaster.setShutdownCallback([&]() { g_quit = 1; });
+    registerServerCommands(adminRegistry, adminCtx);
+
+    if (!cfg.operatorPassword.empty()) {
+        broadcaster.setOperatorPassword(cfg.operatorPassword);
+        broadcaster.setAdminDispatch([&adminRegistry](std::string_view cmd) { return adminRegistry.dispatch(cmd); });
+        log->log(LogLevel::Info, __FILE__, __LINE__, "network admin commands: enabled");
+    } else {
+        log->log(LogLevel::Info, __FILE__, __LINE__,
+                 "network admin commands: disabled (no operator_password configured)");
+    }
+
     // ---- Signal handling ----
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
+
+    adminCtx.startTime = std::chrono::steady_clock::now();
 
     // ---- Start sim loop ----
     gameLoop.start();
@@ -316,30 +362,6 @@ int main(int argc, char** argv) {
             stdinLines.push(std::move(line));
         }
     }).detach();
-
-    DebugCommandRegistry adminRegistry;
-    ServerCommandContext adminCtx;
-    adminCtx.broadcaster = &broadcaster;
-    adminCtx.entityManager = &entityManager;
-    adminCtx.typeRegistry = &entityRegistry;
-    adminCtx.weatherController = &weatherController;
-    adminCtx.beacon = beacon.get();
-    adminCtx.gameLoop = &gameLoop;
-    adminCtx.logger = log;
-    adminCtx.configPath = &configPath;
-    adminCtx.startTime = std::chrono::steady_clock::now();
-    adminCtx.quitFlag = &g_quit;
-    adminCtx.banlistPath = cfg.banlistPath.empty() ? nullptr : &cfg.banlistPath;
-    adminCtx.allowlistPath = cfg.allowlistPath.empty() ? nullptr : &cfg.allowlistPath;
-    adminCtx.saveBanlist = [&](const std::unordered_set<std::string>& b) { saveIpListFile(cfg.banlistPath, b, log); };
-    adminCtx.loadBanlist = [&]() { return loadIpListFile(cfg.banlistPath, log); };
-    adminCtx.loadAllowlist = [&]() { return loadIpListFile(cfg.allowlistPath, log); };
-    adminCtx.shutdownWarningIntervalS = static_cast<uint32_t>(cfg.shutdownWarningIntervalS);
-    adminCtx.minShutdownDelayS = static_cast<uint32_t>(cfg.minShutdownDelayS);
-    adminCtx.shutdownRequireConfirm = cfg.shutdownRequireConfirm;
-
-    broadcaster.setShutdownCallback([&]() { g_quit = 1; });
-    registerServerCommands(adminRegistry, adminCtx);
 
     while (!g_quit) {
         {

@@ -5,6 +5,7 @@
 #include "debug/DebugCommandRegistry.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string_view>
 
@@ -31,10 +32,6 @@ class LocalServer {
     // Returns false on launch failure or readiness timeout.
     bool start(const char* bindAddr = "127.0.0.1", uint16_t port = 4778);
 
-    // Send a text command to fl-server's admin console via its stdin pipe.
-    // Used by the serverCommand callback wired to DebugCommandContext.
-    void sendAdminCommand(std::string_view cmd);
-
     // Graceful shutdown: send "quit" to admin console, wait 2 s, then kill.
     void stop();
 
@@ -44,12 +41,15 @@ class LocalServer {
     // PartlyCloudy, 09:00 if no snapshot has arrived yet).
     EnvironmentState initialEnvironment() const;
 
-    // Register server-side debug commands (spawn, kill, tp, set_weather) that
-    // forward to fl-server's admin console. renderBridge, playerEntityIdx,
-    // playerEntityGen, and showPos are client-side pointers.
-    void registerDebugCommands(DebugCommandRegistry& registry, fl::SimRenderBridge& renderBridge,
-                               fl::EntityTypeRegistry* typeRegistry, uint32_t* playerEntityIdx,
-                               uint32_t* playerEntityGen, bool* showPos);
+    // Register server-side debug commands (spawn, kill, tp, set_weather).
+    // serverCommand is called with formatted command strings and sends them to fl-server
+    // via MsgAdminCommand over ENet (constructed by makeNetworkAdminSender in main.cpp).
+    void registerDebugCommands(DebugCommandRegistry& registry, std::function<void(std::string_view)> serverCommand,
+                               fl::SimRenderBridge& renderBridge, fl::EntityTypeRegistry* typeRegistry,
+                               uint32_t* playerEntityIdx, uint32_t* playerEntityGen, bool* showPos);
+
+    // Returns the per-session admin token generated at start(). Valid after start() returns true.
+    std::string_view sessionToken() const;
 
   private:
     ILogger& m_log;
