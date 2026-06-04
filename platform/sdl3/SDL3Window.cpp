@@ -29,6 +29,10 @@ bool SDL3Window::init(const char* title, int width, int height) {
         m_width = width;
         m_height = height;
     }
+    if (!SDL_GetWindowSize(m_window, &m_logicalWidth, &m_logicalHeight)) {
+        m_logicalWidth = width;
+        m_logicalHeight = height;
+    }
     return true;
 }
 
@@ -64,6 +68,10 @@ void SDL3Window::pollEvents() {
             if (m_handler)
                 m_handler->onResize(m_width, m_height);
             break;
+        case SDL_EVENT_WINDOW_RESIZED:
+            m_logicalWidth = ev.window.data1;
+            m_logicalHeight = ev.window.data2;
+            break;
         default:
             break;
         }
@@ -80,6 +88,14 @@ int SDL3Window::width() const {
 
 int SDL3Window::height() const {
     return m_height;
+}
+
+int SDL3Window::logicalWidth() const {
+    return m_logicalWidth;
+}
+
+int SDL3Window::logicalHeight() const {
+    return m_logicalHeight;
 }
 
 bool SDL3Window::shouldClose() const {

@@ -17,8 +17,16 @@ class IWindow {
 
     virtual void setEventHandler(IWindowEventHandler* handler) = 0;
 
+    // Physical framebuffer pixels — GPU/swapchain resolution. On non-HiDPI displays equals
+    // logicalWidth()/logicalHeight(); on Retina/HiDPI displays is 2× or more.
     virtual int width() const = 0;
     virtual int height() const = 0;
+
+    // Logical (DPI-independent) window dimensions — matches SDL pointer-event coordinates.
+    // Use these for mouse/cursor mapping and UI layout in screen space.
+    virtual int logicalWidth() const = 0;
+    virtual int logicalHeight() const = 0;
+
     virtual bool shouldClose() const = 0;
 
     // Returns the platform-native window handle (HWND / ANativeWindow / NSWindow)

@@ -14,6 +14,8 @@ class SDL3Window : public IWindow {
     void setEventHandler(IWindowEventHandler* handler) override;
     int width() const override;
     int height() const override;
+    int logicalWidth() const override;
+    int logicalHeight() const override;
     bool shouldClose() const override;
     void* nativeHandle() const override;
     const char* getLastError() const override;
@@ -42,6 +44,8 @@ class SDL3Window : public IWindow {
     ISDL3EventSink* m_joystickSink{nullptr};
     int m_width{0};
     int m_height{0};
+    int m_logicalWidth{0};
+    int m_logicalHeight{0};
     bool m_shouldClose{false};
     IDisplay::DisplayMode m_pendingMode{};
     mutable std::string m_lastError;

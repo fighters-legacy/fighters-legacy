@@ -41,6 +41,12 @@ struct MockWindow : IWindow {
     int height() const override {
         return 720;
     }
+    int logicalWidth() const override {
+        return 1280;
+    }
+    int logicalHeight() const override {
+        return 720;
+    }
     bool shouldClose() const override {
         return false;
     }
