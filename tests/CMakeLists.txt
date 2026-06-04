@@ -176,7 +176,7 @@ target_include_directories(test_async_filesystem PRIVATE ${CMAKE_CURRENT_SOURCE_
 catch_discover_tests(test_async_filesystem)
 
 add_executable(test_sdl3 test_sdl3.cpp)
-target_link_libraries(test_sdl3 PRIVATE Catch2::Catch2WithMain platform-sdl3)
+target_link_libraries(test_sdl3 PRIVATE Catch2::Catch2WithMain platform-sdl3 SDL3::SDL3)
 target_include_directories(test_sdl3 PRIVATE "${CMAKE_SOURCE_DIR}/platform/sdl3")
 if(WIN32)
     add_custom_command(TARGET test_sdl3 POST_BUILD

@@ -273,6 +273,7 @@ void VkRenderer::applySettings(const RendererSettings& settings) {
 // ---------------------------------------------------------------------------
 bool VkRenderer::init(IWindow* window) {
     m_sdlWindow = static_cast<SDL_Window*>(window->nativeHandle());
+    m_iWindow = window;
     m_shaderDir = resolveShaderDir();
 
     if (!createInstance())
@@ -440,8 +441,9 @@ void VkRenderer::beginFrame() {
     m_resources.tick(m_totalFrames);
 
     if (m_swapchain != VK_NULL_HANDLE) {
-        int w = 0, h = 0;
-        if (SDL_GetWindowSizeInPixels(m_sdlWindow, &w, &h) && w > 0 && h > 0 &&
+        const int w = m_iWindow->width();
+        const int h = m_iWindow->height();
+        if (w > 0 && h > 0 &&
             (static_cast<uint32_t>(w) != m_swapchainExtent.width ||
              static_cast<uint32_t>(h) != m_swapchainExtent.height))
             m_framebufferResized = true;
@@ -3476,9 +3478,8 @@ void VkRenderer::cleanupSwapchain() {
 }
 
 bool VkRenderer::recreateSwapchain() {
-    int w = 0, h = 0;
-    if (!SDL_GetWindowSizeInPixels(m_sdlWindow, &w, &h))
-        SDL_GetWindowSize(m_sdlWindow, &w, &h);
+    const int w = m_iWindow->width();
+    const int h = m_iWindow->height();
     if (w == 0 || h == 0)
         return false;
 

@@ -408,6 +408,7 @@ class VkRenderer : public IRenderer {
     VkResourceManager m_resources;
 
     SDL_Window* m_sdlWindow{nullptr};
+    IWindow* m_iWindow{nullptr};
     std::string m_shaderDir;
     mutable std::string m_lastError;
     std::string m_gpuInfo;
