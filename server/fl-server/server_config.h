@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include <ILogger.h>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -41,6 +42,15 @@ struct ServerConfig {
     // [discovery]
     bool discoveryEnabled = true;
     int discoveryIntervalMs = 2000;
+
+    // [security]
+    int connectRateLimitCount = 5;     // max connections per IP within the window
+    int connectRateLimitWindowS = 10;  // sliding window size, seconds
+    int packetFloodMultiplier = 3;     // disconnect if peer sends > N * 60 MsgClientInput/s
+    std::string banlistPath;           // one normalized IP per line; empty = no persistence
+    std::string allowlistPath;         // allowlist file; empty = disabled (all IPs allowed)
+    uint32_t incomingBandwidthBps = 0; // ENet host incoming cap, bytes/s; 0 = unlimited
+    uint32_t outgoingBandwidthBps = 0; // ENet host outgoing cap, bytes/s; 0 = unlimited
 };
 
 // Parse server configuration from a TOML string.

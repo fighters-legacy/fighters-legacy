@@ -16,6 +16,7 @@
 // See docs/fl-server-config.md for the full operator configuration reference.
 // fl-lobby integration is tracked in issue #36.
 #include "AdminConsole.h"
+#include "ENetNetwork.h"
 #include "ENetNetworkFactory.h"
 #include "net/DiscoveryBeacon.h"
 #include "server_config.h"
@@ -36,6 +37,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #include <entity/EntityDef.h>
@@ -206,7 +208,35 @@ static const char* kDefaultToml =
     "enabled = true\n"
     "\n"
     "# How often to broadcast the beacon, in milliseconds. Valid range: [100, 60000].\n"
-    "interval_ms = 2000\n";
+    "interval_ms = 2000\n"
+    "\n"
+    "[security]\n"
+    "# Per-IP connection rate limiting (post-ENet-handshake).\n"
+    "# Peers connecting more than connect_rate_limit_count times within\n"
+    "# connect_rate_limit_window_s seconds are immediately disconnected.\n"
+    "connect_rate_limit_count = 5\n"
+    "connect_rate_limit_window_s = 10\n"
+    "\n"
+    "# Packet flood detection. A peer that sends more than\n"
+    "# (packet_flood_multiplier * 60) MsgClientInput packets per second is disconnected.\n"
+    "# Set to 3 or higher to avoid false positives on 60 Hz clients.\n"
+    "packet_flood_multiplier = 3\n"
+    "\n"
+    "# Path to the persistent ban list file (one normalized IP per line, # = comment).\n"
+    "# Bans added with the 'ban' admin command are written to this file automatically.\n"
+    "# Empty string = in-memory only (not persisted across restarts).\n"
+    "banlist_path = \"\"\n"
+    "\n"
+    "# Path to an allowlist file (one normalized IP per line, # = comment).\n"
+    "# When non-empty, only IPs on this list may connect. Ban list still takes precedence.\n"
+    "# Empty string = allowlist disabled (all IPs permitted).\n"
+    "allowlist_path = \"\"\n"
+    "\n"
+    "# ENet host aggregate bandwidth caps in bytes per second. 0 = unlimited (default).\n"
+    "# incoming_bandwidth_bps caps total inbound traffic from all peers.\n"
+    "# outgoing_bandwidth_bps caps total outbound traffic to all peers.\n"
+    "incoming_bandwidth_bps = 0\n"
+    "outgoing_bandwidth_bps = 0\n";
 
 // ---------------------------------------------------------------------------
 // Config file helpers
@@ -231,6 +261,64 @@ static std::string readFileContent(const std::string& path) {
     std::ostringstream ss;
     ss << f.rdbuf();
     return ss.str();
+}
+
+// ---------------------------------------------------------------------------
+// IP list file helpers (ban list / allowlist)
+// ---------------------------------------------------------------------------
+
+// Mirrors WorldBroadcaster.cpp normalizeIp — kept file-static in each TU.
+static std::string normalizeIp(std::string_view raw) {
+    std::string_view v = raw;
+    if (!v.empty() && v.front() == '[') {
+        v.remove_prefix(1);
+        auto end = v.find(']');
+        if (end != std::string_view::npos)
+            v = v.substr(0, end);
+    }
+    std::string ip(v);
+    if (ip.size() > 7 && ip.compare(0, 7, "::ffff:") == 0)
+        ip.erase(0, 7);
+    return ip;
+}
+
+// Read a one-IP-per-line file; lines beginning with '#' are comments.
+// Strips trailing '\r' so Windows-format files work on Linux/macOS.
+static std::unordered_set<std::string> loadIpListFile(const std::string& path, ILogger* log) {
+    std::unordered_set<std::string> result;
+    std::ifstream f(path);
+    if (!f) {
+        char buf[256];
+        std::snprintf(buf, sizeof(buf), "loadIpListFile: cannot open %s", path.c_str());
+        if (log)
+            log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+        return result;
+    }
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        if (line.empty() || line.front() == '#')
+            continue;
+        auto ip = normalizeIp(line);
+        if (!ip.empty())
+            result.insert(std::move(ip));
+    }
+    return result;
+}
+
+// Write the set to path, one IP per line. Binary mode ensures portable '\n'.
+static void saveIpListFile(const std::string& path, const std::unordered_set<std::string>& ips, ILogger* log) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) {
+        char buf[256];
+        std::snprintf(buf, sizeof(buf), "saveIpListFile: cannot write %s", path.c_str());
+        if (log)
+            log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+        return;
+    }
+    for (const auto& ip : ips)
+        f << ip << "\n";
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +475,14 @@ int main(int argc, char** argv) {
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
 
+    if (cfg.incomingBandwidthBps || cfg.outgoingBandwidthBps) {
+        static_cast<ENetNetwork*>(net)->setBandwidthLimit(cfg.incomingBandwidthBps, cfg.outgoingBandwidthBps);
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "bandwidth cap: in=%u B/s out=%u B/s", cfg.incomingBandwidthBps,
+                      cfg.outgoingBandwidthBps);
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
+
     // ---- LAN discovery beacon ----
     uint8_t discoveryGameModeFlags = 0;
     for (const auto& m : cfg.gameModes) {
@@ -445,6 +541,21 @@ int main(int argc, char** argv) {
     wparams.timeScaleRatio = static_cast<float>(cfg.timeScale);
     fl::WeatherController weatherController(wparams);
     fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *net, *log, &weatherController);
+    broadcaster.setRateLimitParams(cfg.connectRateLimitCount, cfg.connectRateLimitWindowS, cfg.packetFloodMultiplier);
+    if (!cfg.banlistPath.empty()) {
+        auto banned = loadIpListFile(cfg.banlistPath, log);
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "banlist: loaded %zu IPs from %s", banned.size(), cfg.banlistPath.c_str());
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+        broadcaster.setBannedAddresses(std::move(banned));
+    }
+    if (!cfg.allowlistPath.empty()) {
+        auto allowed = loadIpListFile(cfg.allowlistPath, log);
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "allowlist: loaded %zu IPs from %s", allowed.size(), cfg.allowlistPath.c_str());
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+        broadcaster.setAllowedAddresses(std::move(allowed));
+    }
     net->setEventHandler(&broadcaster);
 
     GameLoop gameLoop(broadcaster, *log);
@@ -482,6 +593,11 @@ int main(int argc, char** argv) {
     adminCtx.configPath = &configPath;
     adminCtx.startTime = std::chrono::steady_clock::now();
     adminCtx.quitFlag = &g_quit;
+    adminCtx.banlistPath = cfg.banlistPath.empty() ? nullptr : &cfg.banlistPath;
+    adminCtx.allowlistPath = cfg.allowlistPath.empty() ? nullptr : &cfg.allowlistPath;
+    adminCtx.saveBanlist = [&](const std::unordered_set<std::string>& b) { saveIpListFile(cfg.banlistPath, b, log); };
+    adminCtx.loadBanlist = [&]() { return loadIpListFile(cfg.banlistPath, log); };
+    adminCtx.loadAllowlist = [&]() { return loadIpListFile(cfg.allowlistPath, log); };
     registerServerCommands(adminRegistry, adminCtx);
 
     // Main thread sleeps until SIGINT/SIGTERM. All ENet I/O is driven from the

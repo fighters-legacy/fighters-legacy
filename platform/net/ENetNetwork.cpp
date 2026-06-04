@@ -273,6 +273,11 @@ const char* ENetNetwork::getLastError() const {
     return m_lastError.empty() ? nullptr : m_lastError.c_str();
 }
 
+void ENetNetwork::setBandwidthLimit(uint32_t incomingBps, uint32_t outgoingBps) {
+    if (m_host)
+        enet_host_bandwidth_limit(m_host, incomingBps, outgoingBps);
+}
+
 // -------------------------------------------------------------------------
 // Private helpers
 // -------------------------------------------------------------------------

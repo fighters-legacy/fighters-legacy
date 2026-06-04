@@ -33,6 +33,13 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.aiDifficultyFloor == "recruit");
     CHECK(cfg.discoveryEnabled == true);
     CHECK(cfg.discoveryIntervalMs == 2000);
+    CHECK(cfg.connectRateLimitCount == 5);
+    CHECK(cfg.connectRateLimitWindowS == 10);
+    CHECK(cfg.packetFloodMultiplier == 3);
+    CHECK(cfg.banlistPath.empty());
+    CHECK(cfg.allowlistPath.empty());
+    CHECK(cfg.incomingBandwidthBps == 0u);
+    CHECK(cfg.outgoingBandwidthBps == 0u);
     CHECK(log.entries.empty());
 }
 
@@ -357,5 +364,107 @@ TEST_CASE("parseServerConfig: discovery interval_ms boundaries are accepted", "[
         auto cfg = parseServerConfig("[discovery]\ninterval_ms = 60000\n", &log);
         CHECK(cfg.discoveryIntervalMs == 60000);
         CHECK(log.entries.empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// [security]
+// ---------------------------------------------------------------------------
+
+TEST_CASE("parseServerConfig: reads [security] fields", "[server_config][security]") {
+    MockLogger log;
+    auto cfg = parseServerConfig(R"(
+[security]
+connect_rate_limit_count    = 10
+connect_rate_limit_window_s = 30
+packet_flood_multiplier     = 5
+banlist_path                = "/etc/fl/ban.txt"
+allowlist_path              = "/etc/fl/allow.txt"
+incoming_bandwidth_bps      = 1000000
+outgoing_bandwidth_bps      = 2000000
+)",
+                                 &log);
+    CHECK(cfg.connectRateLimitCount == 10);
+    CHECK(cfg.connectRateLimitWindowS == 30);
+    CHECK(cfg.packetFloodMultiplier == 5);
+    CHECK(cfg.banlistPath == "/etc/fl/ban.txt");
+    CHECK(cfg.allowlistPath == "/etc/fl/allow.txt");
+    CHECK(cfg.incomingBandwidthBps == 1000000u);
+    CHECK(cfg.outgoingBandwidthBps == 2000000u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: security defaults when [security] absent", "[server_config][security]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("", &log);
+    CHECK(cfg.connectRateLimitCount == 5);
+    CHECK(cfg.connectRateLimitWindowS == 10);
+    CHECK(cfg.packetFloodMultiplier == 3);
+    CHECK(cfg.banlistPath.empty());
+    CHECK(cfg.allowlistPath.empty());
+    CHECK(cfg.incomingBandwidthBps == 0u);
+    CHECK(cfg.outgoingBandwidthBps == 0u);
+}
+
+TEST_CASE("parseServerConfig: connect_rate_limit_count out of range warns and uses default",
+          "[server_config][security]") {
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\nconnect_rate_limit_count = 0\n", &log);
+        CHECK(cfg.connectRateLimitCount == 5);
+        CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+    }
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\nconnect_rate_limit_count = 101\n", &log);
+        CHECK(cfg.connectRateLimitCount == 5);
+        CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+    }
+}
+
+TEST_CASE("parseServerConfig: connect_rate_limit_window_s out of range warns and uses default",
+          "[server_config][security]") {
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\nconnect_rate_limit_window_s = 0\n", &log);
+        CHECK(cfg.connectRateLimitWindowS == 10);
+        CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+    }
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\nconnect_rate_limit_window_s = 3601\n", &log);
+        CHECK(cfg.connectRateLimitWindowS == 10);
+        CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+    }
+}
+
+TEST_CASE("parseServerConfig: packet_flood_multiplier out of range warns and uses default",
+          "[server_config][security]") {
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\npacket_flood_multiplier = 0\n", &log);
+        CHECK(cfg.packetFloodMultiplier == 3);
+        CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+    }
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\npacket_flood_multiplier = 101\n", &log);
+        CHECK(cfg.packetFloodMultiplier == 3);
+        CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+    }
+}
+
+TEST_CASE("parseServerConfig: negative bandwidth warns and uses 0", "[server_config][security]") {
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\nincoming_bandwidth_bps = -1\n", &log);
+        CHECK(cfg.incomingBandwidthBps == 0u);
+        CHECK(log.hasMessage(LogLevel::Warn, "must be >= 0"));
+    }
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\noutgoing_bandwidth_bps = -1\n", &log);
+        CHECK(cfg.outgoingBandwidthBps == 0u);
+        CHECK(log.hasMessage(LogLevel::Warn, "must be >= 0"));
     }
 }

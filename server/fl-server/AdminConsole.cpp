@@ -173,6 +173,8 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                                              std::printf("[admin] ban: peer %u not found\n", peerId);
                                          } else {
                                              ctx.broadcaster->banAddress(foundIp);
+                                             if (ctx.saveBanlist)
+                                                 ctx.saveBanlist(ctx.broadcaster->getBannedAddresses());
                                              std::printf("[admin] banned IP %s (peer %u)\n", foundIp.c_str(), peerId);
                                          }
                                          std::fflush(stdout);
@@ -181,6 +183,8 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                                      std::string ip = normalizeIp(arg);
                                      ctx.gameLoop->enqueueSimCallback([ctx, ip]() {
                                          ctx.broadcaster->banAddress(ip);
+                                         if (ctx.saveBanlist)
+                                             ctx.saveBanlist(ctx.broadcaster->getBannedAddresses());
                                          std::printf("[admin] banned IP %s\n", ip.c_str());
                                          std::fflush(stdout);
                                      });
@@ -198,6 +202,8 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                                  std::string ip = normalizeIp(args[0]);
                                  ctx.gameLoop->enqueueSimCallback([ctx, ip]() {
                                      ctx.broadcaster->unbanAddress(ip);
+                                     if (ctx.saveBanlist)
+                                         ctx.saveBanlist(ctx.broadcaster->getBannedAddresses());
                                      std::printf("[admin] unbanned IP %s\n", ip.c_str());
                                      std::fflush(stdout);
                                  });
@@ -335,6 +341,47 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                                      ctx.beacon->setName(newCfg.name);
                                  return "reload_config: name=\"" + newCfg.name + "\"  motd=\"" + newCfg.motd +
                                         "\"  (other fields require restart)";
+                             });
+
+    // reload_banlist
+    registry.registerCommand(
+        "reload_banlist", "reload_banlist  -- reload ban list from security.banlist_path in server.toml",
+        [ctx](std::span<std::string_view>) -> std::string {
+            if (!ctx.banlistPath || ctx.banlistPath->empty())
+                return "reload_banlist: not available (security.banlist_path not configured)";
+            if (!ctx.broadcaster || !ctx.gameLoop || !ctx.loadBanlist)
+                return "reload_banlist: not available";
+            auto banned = ctx.loadBanlist();
+            auto count = banned.size();
+            ctx.gameLoop->enqueueSimCallback([ctx, b = std::move(banned)]() mutable {
+                ctx.broadcaster->setBannedAddresses(std::move(b));
+                std::printf("[admin] reload_banlist: applied\n");
+                std::fflush(stdout);
+            });
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "reload_banlist: loading %zu IPs from %s", count, ctx.banlistPath->c_str());
+            return buf;
+        });
+
+    // reload_allowlist
+    registry.registerCommand("reload_allowlist",
+                             "reload_allowlist  -- reload allowlist from security.allowlist_path in server.toml",
+                             [ctx](std::span<std::string_view>) -> std::string {
+                                 if (!ctx.allowlistPath || ctx.allowlistPath->empty())
+                                     return "reload_allowlist: not available (security.allowlist_path not configured)";
+                                 if (!ctx.broadcaster || !ctx.gameLoop || !ctx.loadAllowlist)
+                                     return "reload_allowlist: not available";
+                                 auto allowed = ctx.loadAllowlist();
+                                 auto count = allowed.size();
+                                 ctx.gameLoop->enqueueSimCallback([ctx, a = std::move(allowed)]() mutable {
+                                     ctx.broadcaster->setAllowedAddresses(std::move(a));
+                                     std::printf("[admin] reload_allowlist: applied\n");
+                                     std::fflush(stdout);
+                                 });
+                                 char buf[128];
+                                 std::snprintf(buf, sizeof(buf), "reload_allowlist: loading %zu IPs from %s", count,
+                                               ctx.allowlistPath->c_str());
+                                 return buf;
                              });
 
     // quit

@@ -339,6 +339,68 @@ default is kept (a warning is logged).
 
 ---
 
+## [security] — Access control and rate limiting
+
+### `connect_rate_limit_count`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `5` | 1–100 |
+
+Maximum number of times a single IP address may complete an ENet connection handshake within
+`connect_rate_limit_window_s` seconds. Peers that exceed this count are immediately disconnected.
+Note: limiting applies post-handshake (see [Access control](#access-control) for details).
+
+### `connect_rate_limit_window_s`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `10` | 1–3600 |
+
+Sliding time window (in seconds) for the per-IP connection rate limiter.
+
+### `packet_flood_multiplier`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `3` | 1–100 |
+
+A connected peer that sends more than `packet_flood_multiplier × 60` `MsgClientInput` packets
+per second is disconnected. At the default of 3, the threshold is 180 packets/s — three times
+the normal 60 Hz client rate. Set to 2 or higher to avoid false positives on 60 Hz clients.
+
+### `banlist_path`
+
+| Type | Default |
+|---|---|
+| string | `""` (disabled) |
+
+Path to the persistent ban list file. One normalized IP address per line; lines beginning
+with `#` are treated as comments. When configured, the `ban` and `unban` admin commands
+automatically overwrite this file. Empty = in-memory only (bans lost on restart).
+
+### `allowlist_path`
+
+| Type | Default |
+|---|---|
+| string | `""` (disabled) |
+
+Path to an allowlist file (same format as `banlist_path`). When non-empty, only IP addresses
+listed in this file may connect. The ban list still takes precedence over the allowlist —
+a banned IP is rejected even if it appears in the allowlist. Empty = all IPs permitted.
+
+### `incoming_bandwidth_bps` / `outgoing_bandwidth_bps`
+
+| Type | Default |
+|---|---|
+| integer | `0` (unlimited) |
+
+Aggregate ENet host bandwidth caps in bytes per second. `0` = unlimited (ENet default).
+`incoming_bandwidth_bps` caps total inbound traffic from all peers combined.
+`outgoing_bandwidth_bps` caps total outbound traffic to all peers combined.
+
+---
+
 ## Runtime administration (stdin console)
 
 `fl-server` accepts admin commands on standard input. No extra port or network
@@ -364,13 +426,15 @@ process.
 | `status` | — | Show uptime, peer count, entity count, tick rate |
 | `peers` | — | List connected peers (peer ID, address, entity index/generation) |
 | `kick` | `<peerId\|IP>` | Disconnect a peer by numeric ID, or all peers from an IP address |
-| `ban` | `<peerId\|IP>` | Add IP to the in-memory ban list and kick matching peers |
-| `unban` | `<IP>` | Remove an IP from the in-memory ban list |
+| `ban` | `<peerId\|IP>` | Add IP to the ban list and kick matching peers; saves to `banlist_path` if configured |
+| `unban` | `<IP>` | Remove an IP from the ban list; saves to `banlist_path` if configured |
 | `set_weather` | `<preset>` | Change weather: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm` |
 | `set_time` | `<0–24>` | Set in-game time of day (float, hours) |
 | `spawn` | `<type> <x> <y> <z>` | Spawn a registered entity type at the given world position |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
 | `reload_config` | — | Re-read `server.toml` and apply: `name` (reflected in next LAN beacon broadcast), `motd` |
+| `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
+| `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
 | `quit` | — | Gracefully shut down fl-server |
 
 ### Hot-reload behaviour (`reload_config`)
@@ -381,14 +445,35 @@ process.
 |---|---|
 | `server.name` | Next LAN beacon broadcast |
 | `server.motd` | Stored in memory; delivery to clients pending (issue tracker) |
+| `security.banlist_path` | On next `reload_banlist` command |
+| `security.allowlist_path` | On next `reload_allowlist` command |
 
 Fields that **require a restart** to take effect: `port`, `bind_address`, `max_peers`,
-`game_modes`, `password`, `discovery.*`, `mods.stack`, `rotation.*`, `world.*`, `ai.*`.
+`game_modes`, `password`, `discovery.*`, `mods.stack`, `rotation.*`, `world.*`, `ai.*`,
+`security.connect_rate_limit_*`, `security.packet_flood_multiplier`, `security.*_bandwidth_bps`.
 
-### In-memory ban list
+### Access control
 
-Bans set via `ban` are stored in memory only and are **not persisted** across restarts.
-For a persistent banlist file with hot-reload, see issue #88.
+**Ban list file format:** one normalized IP address per line (plain IPv4 `1.2.3.4`, bare
+IPv6 `::1`, or IPv4-mapped IPv6 `::ffff:1.2.3.4` — all normalized on load). Lines beginning
+with `#` are comments. File line endings are portable: both `\n` and `\r\n` are accepted.
+
+**Ban vs allowlist precedence:** the ban list check runs first. A banned IP is rejected even
+if it also appears in the allowlist.
+
+**Connection rate limiting** (post-handshake): fl-server tracks how many times each IP
+address completes an ENet connection handshake within a sliding time window. Peers that
+exceed `connect_rate_limit_count` connections within `connect_rate_limit_window_s` seconds
+are disconnected immediately. Note: ENet completes the UDP three-way handshake before
+fl-server sees the connection; pre-handshake UDP amplification mitigation is a deferred item.
+
+**Packet flood detection:** a connected peer that sends more than
+`packet_flood_multiplier × 60` `MsgClientInput` packets per second is disconnected.
+Only `MsgClientInput` (client→server control input) packets count toward this limit.
+
+**ENet bandwidth caps** (`incoming_bandwidth_bps` / `outgoing_bandwidth_bps`): set aggregate
+host-level byte-rate limits enforced by ENet. These cap total traffic across all peers, not
+per-peer. `0` = unlimited.
 
 ---
 

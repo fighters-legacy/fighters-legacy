@@ -3,7 +3,9 @@
 
 #include <chrono>
 #include <csignal>
+#include <functional>
 #include <string>
+#include <unordered_set>
 
 class DebugCommandRegistry;
 class DiscoveryBeacon;
@@ -30,6 +32,15 @@ struct ServerCommandContext {
     std::string* configPath{nullptr}; // path to server.toml, for reload_config
     std::chrono::steady_clock::time_point startTime{};
     volatile sig_atomic_t* quitFlag{nullptr}; // quit command sets this to 1
+
+    // Ban/allowlist file persistence. Null = no file configured.
+    std::string* banlistPath{nullptr};
+    std::string* allowlistPath{nullptr};
+    // Callbacks into main.cpp file I/O; called from sim thread (via enqueueSimCallback).
+    std::function<void(const std::unordered_set<std::string>&)> saveBanlist;
+    // Callbacks called on the main thread to load IP list files.
+    std::function<std::unordered_set<std::string>()> loadBanlist;
+    std::function<std::unordered_set<std::string>()> loadAllowlist;
 };
 
 // Register all fl-server admin commands into registry using the given context.
