@@ -2,12 +2,17 @@
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
+#include <fcntl.h> // _O_RDONLY
+#include <io.h>    // _open_osfhandle, _fdopen
 #include <windows.h>
 #else
 #include <signal.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
+// environ is POSIX but not declared in <unistd.h> on macOS; explicit declaration
+// is required to use it with posix_spawnp.
+extern char** environ;
 #endif
 
 #include "ILogger.h"
