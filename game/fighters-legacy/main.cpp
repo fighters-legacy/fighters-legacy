@@ -62,6 +62,22 @@ namespace fs = std::filesystem;
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Returns a serverCommand function that sends MsgAdminCommand over a client ENet connection.
+// Used by both single-player (session token from LocalServer) and future multiplayer.
+static std::function<void(std::string_view)> makeNetworkAdminSender(INetwork& net, std::string token) {
+    return [&net, tok = std::move(token)](std::string_view cmd) {
+        fl::MsgAdminCommand msg{};
+        msg.msgId = static_cast<uint8_t>(fl::MsgId::AdminCommand);
+        std::size_t plen = std::min(tok.size(), sizeof(msg.token) - 1u);
+        std::memcpy(msg.token, tok.c_str(), plen);
+        msg.token[plen] = '\0';
+        std::size_t clen = std::min(cmd.size(), sizeof(msg.command) - 1u);
+        std::memcpy(msg.command, cmd.data(), clen);
+        msg.command[clen] = '\0';
+        net.send(0, &msg, sizeof(msg), /*reliable=*/true);
+    };
+}
+
 static RendererSettings buildRendererSettings(const GraphicsSettings& g) {
     RendererSettings s{};
     switch (g.vsync) {
@@ -362,8 +378,9 @@ int main(int argc, char** argv) {
     DebugCommandRegistry dbgRegistry;
     DebugConsole dbgConsole(*rawLogger, dbgRegistry);
     clientHandler.console = &dbgConsole;
-    localServer.registerDebugCommands(dbgRegistry, renderBridge, &entityRegistry, &clientHandler.assignedEntityIdx,
-                                      &clientHandler.assignedEntityGen, &dbgConsole.showPosRef());
+    localServer.registerDebugCommands(
+        dbgRegistry, makeNetworkAdminSender(*clientNet, std::string(localServer.sessionToken())), renderBridge,
+        &entityRegistry, &clientHandler.assignedEntityIdx, &clientHandler.assignedEntityGen, &dbgConsole.showPosRef());
 
     // Step 20: Per-frame state.
     CameraInput camInput;

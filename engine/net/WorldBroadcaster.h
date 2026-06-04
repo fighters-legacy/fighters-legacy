@@ -131,6 +131,15 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Register a callback invoked on the sim thread at T=0. Call before gameLoop.start().
     void setShutdownCallback(std::function<void()> fn);
 
+    // Configure the operator password for MsgAdminCommand authentication.
+    // Empty string disables the network admin channel. Call before gameLoop.start().
+    void setOperatorPassword(std::string password);
+
+    // Attach the admin command dispatcher for MsgAdminCommand handling.
+    // Typically: [&adminRegistry](std::string_view cmd){ return adminRegistry.dispatch(cmd); }
+    // Call before gameLoop.start(). Does not take ownership.
+    void setAdminDispatch(std::function<std::string(std::string_view)> fn);
+
   private:
     void sendConnectAck(uint32_t peerId, EntityId assigned);
     void stepFlightSim(FlightIntegrator& fi, EntityState& state, const PeerInputState& inp, double simDt);
@@ -174,6 +183,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     // Injectable clock for testing; defaults to steady_clock::now.
     std::function<std::chrono::steady_clock::time_point()> m_now{std::chrono::steady_clock::now};
+
+    // Network admin channel state (set before gameLoop.start(); read on sim thread only).
+    std::string m_operatorPassword;                               // empty = admin channel disabled
+    std::function<std::string(std::string_view)> m_adminDispatch; // null = admin channel disabled
 
     // Shutdown countdown state (sim-thread only).
     bool m_shuttingDown{false};

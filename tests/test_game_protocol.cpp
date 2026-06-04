@@ -12,6 +12,8 @@ TEST_CASE("GameProtocol: packed struct sizes match wire format", "[game_protocol
     CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 12u);
     CHECK(sizeof(fl::MsgEntityEntry) == 68u);
     CHECK(sizeof(fl::MsgClientInput) == 44u);
+    CHECK(sizeof(fl::MsgAdminCommand) == 128u);
+    CHECK(sizeof(fl::MsgAdminResponse) == 128u);
 }
 
 TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
@@ -198,4 +200,36 @@ TEST_CASE("GameProtocol: MsgWeatherState timeOfDayTenths decodes to 14.5 hours",
     ws.timeOfDayTenths = 145u;
     float tod = static_cast<float>(ws.timeOfDayTenths) / 10.f;
     CHECK(tod == 14.5f);
+}
+
+TEST_CASE("GameProtocol: MsgAdminCommand round-trip", "[game_protocol]") {
+    fl::MsgAdminCommand src{};
+    src.msgId = static_cast<uint8_t>(fl::MsgId::AdminCommand);
+    std::snprintf(src.token, sizeof(src.token), "hunter2");
+    std::snprintf(src.command, sizeof(src.command), "spawn builtin:debug-entity 0 500 0");
+
+    std::vector<uint8_t> buf(sizeof(src));
+    std::memcpy(buf.data(), &src, sizeof(src));
+
+    fl::MsgAdminCommand parsed{};
+    std::memcpy(&parsed, buf.data(), sizeof(parsed));
+
+    CHECK(parsed.msgId == static_cast<uint8_t>(fl::MsgId::AdminCommand));
+    CHECK(std::string(parsed.token) == "hunter2");
+    CHECK(std::string(parsed.command) == "spawn builtin:debug-entity 0 500 0");
+}
+
+TEST_CASE("GameProtocol: MsgAdminResponse round-trip", "[game_protocol]") {
+    fl::MsgAdminResponse src{};
+    src.msgId = static_cast<uint8_t>(fl::MsgId::AdminResponse);
+    std::snprintf(src.text, sizeof(src.text), "spawn queued");
+
+    std::vector<uint8_t> buf(sizeof(src));
+    std::memcpy(buf.data(), &src, sizeof(src));
+
+    fl::MsgAdminResponse parsed{};
+    std::memcpy(&parsed, buf.data(), sizeof(parsed));
+
+    CHECK(parsed.msgId == static_cast<uint8_t>(fl::MsgId::AdminResponse));
+    CHECK(std::string(parsed.text) == "spawn queued");
 }

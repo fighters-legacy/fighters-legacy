@@ -1654,3 +1654,245 @@ TEST_CASE("WorldBroadcaster: notice text uses final-minute wording at T-60s", "[
     REQUIRE(findNotice(net.broadcasts, 0, notice));
     CHECK(std::string(notice.text).find("1 minute") != std::string::npos);
 }
+
+// ---------------------------------------------------------------------------
+// MsgAdminCommand / MsgAdminResponse tests
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Build a MsgAdminCommand packet with the given token and command strings.
+static std::vector<uint8_t> makeAdminCmd(const char* token, const char* command) {
+    fl::MsgAdminCommand msg{};
+    msg.msgId = static_cast<uint8_t>(fl::MsgId::AdminCommand);
+    std::snprintf(msg.token, sizeof(msg.token), "%s", token);
+    std::snprintf(msg.command, sizeof(msg.command), "%s", command);
+    return {reinterpret_cast<const uint8_t*>(&msg), reinterpret_cast<const uint8_t*>(&msg) + sizeof(msg)};
+}
+
+// Return true if the last entry in net.sends is a MsgAdminResponse; populate resp.
+static bool parseLastAdminResponse(const MockNetwork& net, fl::MsgAdminResponse& resp) {
+    if (net.sends.empty())
+        return false;
+    const auto& last = net.sends.back();
+    if (last.size() != sizeof(fl::MsgAdminResponse))
+        return false;
+    std::memcpy(&resp, last.data(), sizeof(resp));
+    return resp.msgId == static_cast<uint8_t>(fl::MsgId::AdminResponse);
+}
+
+} // namespace
+
+TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded when no dispatcher set", "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret"); // dispatcher NOT set
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto pkt = makeAdminCmd("secret", "status");
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(net.sends.empty());
+}
+
+TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded when no password configured",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "pong"; }); // password NOT set
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto pkt = makeAdminCmd("", "status");
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(net.sends.empty());
+}
+
+TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded on wrong token", "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "pong"; });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto pkt = makeAdminCmd("wrongpass", "status");
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(net.sends.empty());
+}
+
+TEST_CASE("WorldBroadcaster: MsgAdminCommand dispatches on correct token and sends MsgAdminResponse",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view cmd) -> std::string {
+        if (cmd == "ping")
+            return "pong";
+        return "";
+    });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto pkt = makeAdminCmd("secret", "ping");
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(net.sends.size() == 1u);
+    fl::MsgAdminResponse resp{};
+    REQUIRE(parseLastAdminResponse(net, resp));
+    CHECK(std::string(resp.text) == "pong");
+    CHECK(net.sendReliable);
+}
+
+TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded if packet too small", "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "pong"; });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    // Send only the msgId byte + 3 padding — well under sizeof(MsgAdminCommand).
+    uint8_t tiny[4] = {static_cast<uint8_t>(fl::MsgId::AdminCommand), 0, 0, 0};
+    broadcaster.onReceive(0u, tiny, sizeof(tiny));
+
+    CHECK(net.sends.empty());
+}
+
+TEST_CASE("WorldBroadcaster: MsgAdminCommand token without null terminator fails auth",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "pong"; });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    // Fill entire token field with 'x' (no null byte) — auth must fail, no crash.
+    fl::MsgAdminCommand msg{};
+    msg.msgId = static_cast<uint8_t>(fl::MsgId::AdminCommand);
+    std::memset(msg.token, 'x', sizeof(msg.token));
+    std::snprintf(msg.command, sizeof(msg.command), "ping");
+    auto pkt = std::vector<uint8_t>(reinterpret_cast<const uint8_t*>(&msg),
+                                    reinterpret_cast<const uint8_t*>(&msg) + sizeof(msg));
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(net.sends.empty());
+}
+
+TEST_CASE("WorldBroadcaster: MsgAdminCommand with empty command string is discarded",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "should not be called"; });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    // Valid token, but command field is all zeros (empty after null-term).
+    fl::MsgAdminCommand msg{};
+    msg.msgId = static_cast<uint8_t>(fl::MsgId::AdminCommand);
+    std::snprintf(msg.token, sizeof(msg.token), "secret");
+    // command left zero-initialized — empty string
+    auto pkt = std::vector<uint8_t>(reinterpret_cast<const uint8_t*>(&msg),
+                                    reinterpret_cast<const uint8_t*>(&msg) + sizeof(msg));
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(net.sends.empty());
+}
+
+TEST_CASE("WorldBroadcaster: MsgAdminCommand empty dispatcher result still sends MsgAdminResponse",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    // Dispatcher returns empty string (e.g. fire-and-forget command).
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return ""; });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto pkt = makeAdminCmd("secret", "spawn");
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    // Server always sends a response; client-side filters empty text before printing.
+    REQUIRE(net.sends.size() == 1u);
+    fl::MsgAdminResponse resp{};
+    REQUIRE(parseLastAdminResponse(net, resp));
+    CHECK(resp.text[0] == '\0');
+}
+
+TEST_CASE("WorldBroadcaster: MsgAdminCommand long result truncated to 125 chars",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return std::string(200, 'x'); });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto pkt = makeAdminCmd("secret", "peers");
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(net.sends.size() == 1u);
+    fl::MsgAdminResponse resp{};
+    REQUIRE(parseLastAdminResponse(net, resp));
+    CHECK(std::strlen(resp.text) == 125u);
+    CHECK(resp.text[125] == '\0');
+}

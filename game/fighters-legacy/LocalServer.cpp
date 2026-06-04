@@ -11,6 +11,7 @@
 
 #include <SDL3/SDL.h>
 #include <cstdio>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,7 @@ struct LocalServer::Impl {
     // LocalServer.cpp to require Subprocess::Impl to be complete (GCC pimpl chain).
     // unique_ptr<Subprocess> only requires Subprocess to be complete here, which it is.
     std::unique_ptr<Subprocess> sub;
+    std::string sessionToken; // 24-char hex token generated at start(); passed to fl-server via --admin-token
 };
 
 // ---------------------------------------------------------------------------
@@ -61,11 +63,23 @@ bool LocalServer::start(const char* bindAddr, uint16_t port) {
 
     std::string stem = findServerStem();
 
+    // Generate a per-session admin token (24 hex chars) and pass it to fl-server via
+    // --admin-token so MsgAdminCommand authentication uses the network path even in
+    // single-player mode. This retires the stdin pipe path for debug commands.
+    {
+        std::mt19937 rng(std::random_device{}());
+        std::uniform_int_distribution<int> dist(0, 15);
+        static constexpr char kHex[] = "0123456789abcdef";
+        m_impl->sessionToken.reserve(24);
+        for (int i = 0; i < 24; ++i)
+            m_impl->sessionToken += kHex[dist(rng)];
+    }
+
     char portStr[8], maxPeersStr[4];
     std::snprintf(portStr, sizeof(portStr), "%u", port);
     std::snprintf(maxPeersStr, sizeof(maxPeersStr), "1");
 
-    std::vector<std::string> args{portStr, maxPeersStr, "--bind", bindAddr};
+    std::vector<std::string> args{portStr, maxPeersStr, "--bind", bindAddr, "--admin-token", m_impl->sessionToken};
 
     // Spawn into a unique_ptr<Subprocess> to avoid Subprocess::Impl completion
     // requirements in LocalServer.cpp (pimpl isolation via pointer indirection).
@@ -100,9 +114,8 @@ bool LocalServer::start(const char* bindAddr, uint16_t port) {
     return false;
 }
 
-void LocalServer::sendAdminCommand(std::string_view cmd) {
-    if (m_impl && m_impl->sub && m_impl->sub->valid())
-        m_impl->sub->writeStdin(cmd);
+std::string_view LocalServer::sessionToken() const {
+    return m_impl ? std::string_view(m_impl->sessionToken) : std::string_view{};
 }
 
 void LocalServer::stop() {
@@ -124,16 +137,16 @@ EnvironmentState LocalServer::initialEnvironment() const {
     return env;
 }
 
-void LocalServer::registerDebugCommands(DebugCommandRegistry& registry, fl::SimRenderBridge& renderBridge,
-                                        fl::EntityTypeRegistry* typeRegistry, uint32_t* playerEntityIdx,
-                                        uint32_t* playerEntityGen, bool* showPos) {
+void LocalServer::registerDebugCommands(DebugCommandRegistry& registry,
+                                        std::function<void(std::string_view)> serverCommand,
+                                        fl::SimRenderBridge& renderBridge, fl::EntityTypeRegistry* typeRegistry,
+                                        uint32_t* playerEntityIdx, uint32_t* playerEntityGen, bool* showPos) {
     DebugCommandContext ctx{};
     ctx.renderBridge = &renderBridge;
     ctx.typeRegistry = typeRegistry;
     ctx.playerEntityIdx = playerEntityIdx;
     ctx.playerEntityGen = playerEntityGen;
     ctx.showPos = showPos;
-    // Server-side commands forward to fl-server's admin console via stdin pipe.
-    ctx.serverCommand = [this](std::string_view cmd) { sendAdminCommand(cmd); };
+    ctx.serverCommand = std::move(serverCommand);
     registerBuiltinCommands(registry, ctx);
 }

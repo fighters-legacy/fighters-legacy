@@ -40,6 +40,7 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.allowlistPath.empty());
     CHECK(cfg.incomingBandwidthBps == 0u);
     CHECK(cfg.outgoingBandwidthBps == 0u);
+    CHECK(cfg.operatorPassword.empty());
     CHECK(log.entries.empty());
 }
 
@@ -467,4 +468,18 @@ TEST_CASE("parseServerConfig: negative bandwidth warns and uses 0", "[server_con
         CHECK(cfg.outgoingBandwidthBps == 0u);
         CHECK(log.hasMessage(LogLevel::Warn, "must be >= 0"));
     }
+}
+
+TEST_CASE("parseServerConfig: reads security.operator_password", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[security]\noperator_password = \"hunter2\"\n", &log);
+    CHECK(cfg.operatorPassword == "hunter2");
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: operator_password empty string is accepted", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[security]\noperator_password = \"\"\n", &log);
+    CHECK(cfg.operatorPassword.empty());
+    CHECK(log.entries.empty());
 }

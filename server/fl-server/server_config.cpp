@@ -71,6 +71,11 @@ static const char* kDefaultToml =
     "incoming_bandwidth_bps = 0\n"
     "outgoing_bandwidth_bps = 0\n"
     "\n"
+    "# Operator password for authenticated admin commands from connected game clients.\n"
+    "# Empty string (default) = network admin commands disabled (stdin pipe only).\n"
+    "# For single-player, fl-server uses a per-session token passed via --admin-token.\n"
+    "operator_password = \"\"\n"
+    "\n"
     "[shutdown]\n"
     "shutdown_warning_interval_s = 300\n"
     "min_shutdown_delay_s = 0\n"
@@ -265,6 +270,8 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.outgoingBandwidthBps = static_cast<uint32_t>(*v);
             }
         }
+        if (auto v = tbl["security"]["operator_password"].value<std::string>())
+            cfg.operatorPassword = std::move(*v);
 
         // [shutdown]
         if (auto v = tbl["shutdown"]["warning_interval_s"].value<int64_t>()) {

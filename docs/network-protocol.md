@@ -34,6 +34,8 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `ClientInput` | `0x03` | client→server | reliable | 44 bytes | Per-frame flight inputs |
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
 | `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
+| `AdminCommand` | `0x06` | client→server | reliable | 128 bytes | Operator-authenticated admin command. Additive ID — old servers silently discard. |
+| `AdminResponse` | `0x07` | server→client | reliable | 128 bytes | Command result text, unicast to the requesting peer. Additive ID — old clients silently discard. |
 | `LanBeacon` | `0x10` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast |
 
 ## Struct Definitions
@@ -168,6 +170,49 @@ null-terminated UTF-8 (maximum 60 bytes including the NUL terminator); always re
 issued; subsequent notices fire every `shutdown.warning_interval_s` seconds (default 300 s); a
 T-60s notice is always injected if the configured interval would skip past it. At T=0 a final
 `secondsRemaining=0` notice is sent before graceful disconnect.
+
+### MsgAdminCommand — 128 bytes
+
+Reliable, client→server. Carries an operator token and a command string. The server performs
+a constant-time comparison of the `token` field against the configured `operator_password`
+(or the per-session `--admin-token` for single-player). On authentication success the command
+is dispatched through the server's admin registry. On failure the packet is silently discarded
+and a Warn is logged.
+
+`MsgId::AdminCommand = 0x06` is an additive message ID — servers that do not recognize it
+silently discard without error. `kProtocolVersion` is **not** bumped.
+
+**Security note:** The token travels over UDP (ENet). Use this channel only on trusted networks
+or behind a VPN. Passwords longer than 29 characters are silently truncated by the client (the
+`token` field is 30 bytes including the NUL terminator).
+
+| Offset | Size | Field | Type | Notes |
+|---|---|---|---|---|
+| 0 | 1 | `msgId` | `uint8_t` | `0x06` |
+| 1 | 1 | `_pad` | `uint8_t` | reserved, always 0 |
+| 2 | 30 | `token` | `char[30]` | null-terminated operator password; 29 usable chars |
+| 32 | 96 | `command` | `char[96]` | null-terminated command text; 95 usable chars |
+
+### MsgAdminResponse — 128 bytes
+
+Reliable, server→client unicast. Carries the text result of a dispatched admin command.
+Always sent back to the requesting peer after a successful `MsgAdminCommand`, even when
+the result string is empty (fire-and-forget commands return empty; clients may skip printing).
+
+`MsgId::AdminResponse = 0x07` is an additive message ID — clients that do not recognize it
+silently discard without error. `kProtocolVersion` is **not** bumped.
+
+The `text` field is null-terminated UTF-8; guaranteed within 125 bytes by the server.
+`text[0] == '\0'` indicates an empty result (command queued asynchronously).
+
+| Offset | Size | Field | Type | Notes |
+|---|---|---|---|---|
+| 0 | 1 | `msgId` | `uint8_t` | `0x07` |
+| 1 | 1 | `_pad` | `uint8_t` | reserved, always 0 |
+| 2 | 126 | `text` | `char[126]` | null-terminated UTF-8 response; 125 usable chars |
+
+**Known limitation:** response text is capped at 125 characters. Commands with long output
+(e.g. `peers` on a full server) will be silently truncated on the wire.
 
 ### MsgLanBeacon — 74 bytes
 

@@ -21,6 +21,8 @@ enum class MsgId : uint8_t {
     ClientInput = 0x03,   // client→server, reliable: sent each frame
     WeatherState = 0x04,  // server→client, unreliable: broadcast every 10 ticks (~6 Hz); additive ID
     ServerNotice = 0x05,  // server→client, reliable: shutdown countdown and operator notices; additive ID
+    AdminCommand = 0x06,  // client→server, reliable: operator-authenticated admin command; additive ID
+    AdminResponse = 0x07, // server→client, reliable: result text from dispatched admin command; additive ID
     LanBeacon = 0x10,     // raw UDP broadcast — not sent over ENet; server→LAN presence packet
 };
 
@@ -158,6 +160,31 @@ struct MsgServerNotice {
 static_assert(sizeof(MsgServerNotice) == 64u, "MsgServerNotice wire size changed");
 static_assert(offsetof(MsgServerNotice, secondsRemaining) == 2u, "MsgServerNotice::secondsRemaining offset changed");
 static_assert(offsetof(MsgServerNotice, text) == 4u, "MsgServerNotice::text offset changed");
+
+// Reliable, client→server. Carries an operator token + command string.
+// Server authenticates via constant-time token comparison before dispatching.
+// Old servers that don't recognise msgId 0x06 silently discard — no kProtocolVersion bump.
+struct MsgAdminCommand {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::AdminCommand)}; // offset 0
+    uint8_t _pad{0};                                          // offset 1
+    char token[30]{};   // offset 2 — null-terminated operator password; 29 usable chars
+    char command[96]{}; // offset 32 — null-terminated command text; 95 usable chars
+}; // 128 bytes
+static_assert(sizeof(MsgAdminCommand) == 128u, "MsgAdminCommand wire size changed");
+static_assert(offsetof(MsgAdminCommand, token) == 2u, "MsgAdminCommand::token offset changed");
+static_assert(offsetof(MsgAdminCommand, command) == 32u, "MsgAdminCommand::command offset changed");
+
+// Reliable, server→client unicast. Carries the result text of a dispatched admin command.
+// Old clients that don't recognise msgId 0x07 silently discard — no kProtocolVersion bump.
+// text is null-terminated UTF-8; guaranteed within 125 bytes by the server.
+// Empty text (text[0] == '\0') means the command was queued asynchronously; clients may ignore.
+struct MsgAdminResponse {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::AdminResponse)}; // offset 0
+    uint8_t _pad{0};                                           // offset 1
+    char text[126]{};                                          // offset 2 — null-terminated response; 125 usable chars
+}; // 128 bytes
+static_assert(sizeof(MsgAdminResponse) == 128u, "MsgAdminResponse wire size changed");
+static_assert(offsetof(MsgAdminResponse, text) == 2u, "MsgAdminResponse::text offset changed");
 
 // Raw UDP presence broadcast sent by fl-server on 255.255.255.255:<port> (IPv4 broadcast) and
 // [ff02::1]:<port> (IPv6 link-local multicast) every discoveryIntervalMs milliseconds.

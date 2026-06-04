@@ -119,6 +119,14 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             console->print(std::string(noticeBuf));
         if (hud)
             hud->setNotice(noticeBuf, sn.secondsRemaining);
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::AdminResponse)) {
+        if (size < sizeof(fl::MsgAdminResponse))
+            return;
+        fl::MsgAdminResponse resp;
+        std::memcpy(&resp, data, sizeof(resp));
+        resp.text[sizeof(resp.text) - 1] = '\0';
+        if (console && resp.text[0] != '\0')
+            console->print(std::string("[admin] ") + resp.text);
     }
     // Unknown msgIds: silently discard
 }

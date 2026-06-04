@@ -108,6 +108,14 @@ void WorldBroadcaster::setClockOverride(std::function<std::chrono::steady_clock:
     m_now = std::move(fn);
 }
 
+void WorldBroadcaster::setOperatorPassword(std::string password) {
+    m_operatorPassword = std::move(password);
+}
+
+void WorldBroadcaster::setAdminDispatch(std::function<std::string(std::string_view)> fn) {
+    m_adminDispatch = std::move(fn);
+}
+
 void WorldBroadcaster::forEachPeer(
     std::function<void(uint32_t peerId, const std::string& addr, EntityId eid)> fn) const {
     for (const auto& [peerId, eid] : m_peerEntities) {
@@ -395,6 +403,60 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         // else: degenerate viewAxis — keep default {1,0,0} fallback set in PeerInputState
 
         m_peerInputs[peerId] = inp;
+    } else if (msgId == static_cast<uint8_t>(MsgId::AdminCommand)) {
+        // Feature gates: both password and dispatcher must be configured.
+        if (m_operatorPassword.empty() || !m_adminDispatch)
+            return;
+        if (size < sizeof(MsgAdminCommand))
+            return;
+
+        MsgAdminCommand msg;
+        std::memcpy(&msg, data, sizeof(msg));
+        msg.token[sizeof(msg.token) - 1] = '\0';
+        msg.command[sizeof(msg.command) - 1] = '\0';
+
+        // Constant-time token comparison: XOR-accumulate the full fixed-size token field
+        // to avoid a length or early-exit timing oracle.
+        {
+            const std::string& pw = m_operatorPassword;
+            uint8_t diff = 0;
+            for (std::size_t i = 0; i < sizeof(msg.token); ++i) {
+                uint8_t a = static_cast<uint8_t>(msg.token[i]);
+                uint8_t b = (i < pw.size()) ? static_cast<uint8_t>(pw[i]) : 0u;
+                diff |= (a ^ b);
+            }
+            for (std::size_t i = sizeof(msg.token); i < pw.size(); ++i)
+                diff |= static_cast<uint8_t>(pw[i]);
+            if (diff != 0) {
+                char lmsg[96];
+                std::snprintf(lmsg, sizeof(lmsg), "peer %u: MsgAdminCommand bad token — discarding", peerId);
+                m_logger.log(LogLevel::Warn, __FILE__, __LINE__, lmsg);
+                return;
+            }
+        }
+
+        std::string_view cmdView(msg.command);
+        if (cmdView.empty())
+            return;
+
+        // Dispatch on the sim thread (same as stdin admin loop).
+        // Mutating commands enqueue via gameLoop.enqueueSimCallback() internally.
+        std::string result = m_adminDispatch(cmdView);
+
+        {
+            char lmsg[256];
+            std::snprintf(lmsg, sizeof(lmsg), "peer %u [net-admin] %.*s -> %.*s", peerId,
+                          static_cast<int>(cmdView.size()), cmdView.data(),
+                          static_cast<int>(std::min(result.size(), std::size_t{80})), result.c_str());
+            m_logger.log(LogLevel::Info, __FILE__, __LINE__, lmsg);
+        }
+
+        MsgAdminResponse resp{};
+        resp.msgId = static_cast<uint8_t>(MsgId::AdminResponse);
+        std::size_t copyLen = std::min(result.size(), sizeof(resp.text) - 1u);
+        std::memcpy(resp.text, result.c_str(), copyLen);
+        resp.text[copyLen] = '\0';
+        m_net.send(peerId, &resp, sizeof(resp), /*reliable=*/true);
     }
     // Unknown msgIds: silently discard (no log spam; future protocol versions may add new IDs)
 }
