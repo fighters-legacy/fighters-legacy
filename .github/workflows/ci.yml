@@ -11,7 +11,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        uses: ./.github/actions/install-linux-deps
+        with:
+          clang_format: 'true'
+
+      - name: REUSE compliance check
+        uses: fsfe/reuse-action@v4
+
+      - name: Check clang-format
+        run: |
+          git diff --name-only --diff-filter=d origin/${{ github.base_ref || 'main' }}...HEAD \
+            | grep -E '\.(cpp|h|hpp|c)$' \
+            | xargs -r clang-format-22 --dry-run --Werror
+
   build:
+    needs: [lint]
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -33,17 +56,11 @@ jobs:
 
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
-        run: |
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
-            | sudo tee /etc/apt/sources.list.d/llvm-22.list
-          sudo apt-get update
-          sudo apt-get install -y ninja-build cmake gcc g++ clang clang-format-22 \
-            libvulkan-dev glslang-tools \
-            libx11-dev libxext-dev \
-            libopenal-dev \
-            python3-gdal python3-numpy python3-pytest
+        uses: ./.github/actions/install-linux-deps
+        with:
+          vulkan: 'true'
+          gcc: 'true'
+          python_tools: 'true'
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -63,17 +80,6 @@ jobs:
           path: build/${{ matrix.preset }}/_deps
           key: cmake-deps-${{ matrix.os }}-${{ matrix.preset }}-${{ hashFiles('cmake/dependencies.cmake') }}
           restore-keys: cmake-deps-${{ matrix.os }}-${{ matrix.preset }}-
-
-      - name: REUSE compliance check
-        if: matrix.os == 'ubuntu-latest'
-        uses: fsfe/reuse-action@v4
-
-      - name: Check clang-format
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          git diff --name-only --diff-filter=d origin/${{ github.base_ref || 'main' }}...HEAD \
-            | grep -E '\.(cpp|h|hpp|c)$' \
-            | xargs -r clang-format-22 --dry-run --Werror
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
@@ -107,7 +113,7 @@ jobs:
         run: .\build\debug-msvc\server\fl-server\Debug\fl-server.exe --version
         shell: pwsh
 
-      - name: Smoke test asset pipeline tools (Linux / macOS)
+      - name: Smoke test tools (Linux / macOS)
         if: matrix.os != 'windows-latest'
         run: |
           ./build/debug/tools/validate-flight-model --version
@@ -117,6 +123,13 @@ jobs:
           ./build/debug/tools/validate-licenses --version
           ./build/debug/tools/validate-playlist --version
           ./build/debug/tools/terrain-chunk-io --version
+          ./build/debug/server/fl-server/fl-server --bind 127.0.0.1 7002 1 &
+          FL_SERVER_PID=$!
+          sleep 1
+          ./build/debug/tools/net_check 127.0.0.1 7002 --count 3 --interval 100
+          status=$?
+          kill "$FL_SERVER_PID" 2>/dev/null || true
+          exit $status
 
       - name: Smoke test asset pipeline tools (Windows)
         if: matrix.os == 'windows-latest'

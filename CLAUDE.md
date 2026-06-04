@@ -163,6 +163,8 @@ ctest --preset debug --output-on-failure
 
 See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch2).
 
+CI structure: a `lint` job (REUSE + clang-format-22) gates the `build` matrix via `needs: [lint]` — a format failure fails fast without burning macOS/Windows minutes. Ubuntu apt dependencies are centralised in `.github/actions/install-linux-deps/` (composite action; boolean inputs: `vulkan`, `gcc`, `clang`, `clang_format`, `python_tools`, `lcov`). `coverage.yml` triggers on push-to-main only (not PRs) — coverage trends are post-merge metrics. New Python tool dependencies go in the composite action (add the apt package name and set the matching input to `'true'` in the ci.yml build job).
+
 ## Conventions
 
 - Conventional Commits — scopes: engine / renderer / audio / network / content / i18n / flight / difficulty / entity / ai / mission / game / tools / build / ci / docs
@@ -226,6 +228,7 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 - `engine/weather/WeatherController.h` — server-authoritative state machine; `advance(simDt)` drives time-of-day (10× default time scale: full day ≈ 2.4 real hours) + gust oscillator (real-time, 40–80 s period); `setPreset()` / `setWind()` / `setTimeOfDay()` for instant override; `computeEnvironment()` → `EnvironmentState`; static `sunDirectionFromTime()` + `applyPresetToEnv()` for client-side reconstruction from `MsgWeatherState`; `WeatherControllerParams::timeScaleRatio` defaults to 10
 - `engine/render/ParticleSystem.h` — `ParticlePreset` + `ParticleSystem`; preset registry, per-frame emit/reset/emitters() accumulator; `DamagePenalty::visualEffect` maps to preset name
 - `cmake/dependencies.cmake` — all FetchContent declarations; GLM is unconditional, Vulkan-specific deps are gated on `Vulkan_FOUND`
+- `.github/actions/install-linux-deps/action.yml` — composite action that installs Ubuntu apt deps for CI; boolean inputs `vulkan`, `gcc`, `clang`, `clang_format`, `python_tools`, `lcov` (all default false); referenced by ci.yml lint + build jobs, asan.yml, coverage.yml
 - `platform/vulkan/VkRendererFactory.h` — thin factory header; only include needed by game/tools to instantiate the renderer
 - `tools/blender_gen.py` — headless Blender 4.x parametric aircraft mesh generator; `blender --background --python tools/blender_gen.py -- --id <id> --output-dir <dir> [--wing-style delta|swept|straight] [--lod] [--bake-textures]`; outputs `<id>.glb` (clean + `_b` node), `<id>_dmg.glb`, optional LODs + PNGs; `.ktx2` URIs pre-wired in GLB JSON for tex-compress
 - `tools/gen_terrain_chunks.py` — GDAL-based terrain chunk pipeline (#176); converts any GeoTIFF/VRT to 16-bit grayscale PNG chunks at `terrain/<id>/lod<n>/chunk_<xxxx>_<yyyy>.png`; auto-detects UTM CRS from centroid (or `--srs EPSG:NNNNN`); 3 LOD levels via strided subsampling; parallel via `ProcessPoolExecutor` (`--workers N`); `--write-manifest` outputs `terrain/<id>.json`; `--skip-existing` for resumable planet-scale runs. Install: `apt install python3-gdal`. Tests: `tests/test_gen_terrain_chunks.py`.

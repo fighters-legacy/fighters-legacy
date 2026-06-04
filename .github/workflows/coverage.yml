@@ -3,8 +3,6 @@ name: Coverage
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -20,11 +18,13 @@ jobs:
           submodules: recursive
 
       - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build cmake lcov libx11-dev libxext-dev \
-            libopenal-dev libvulkan-dev glslang-tools
-          pip install gcovr
+        uses: ./.github/actions/install-linux-deps
+        with:
+          vulkan: 'true'
+          lcov: 'true'
+
+      - name: Install gcovr
+        run: pip install gcovr
 
       - name: Cache CMake FetchContent dependencies
         uses: actions/cache@v4
