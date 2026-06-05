@@ -267,6 +267,51 @@ if(NOT stb_POPULATED)
 endif()
 
 # ---------------------------------------------------------------------------
+# Lua 5.4 — system preferred, FetchContent fallback
+# Used by engine/script/LuaSandbox for sandboxed AI and mission script execution.
+# FindLua provides variables, not targets; create a uniform lua::lua INTERFACE
+# target in both paths so downstream CMakeLists can always link lua::lua.
+# ---------------------------------------------------------------------------
+find_package(Lua 5.4 QUIET)
+if(LUA_FOUND)
+    message(STATUS "Lua: system (${LUA_VERSION_STRING})")
+    add_library(lua_system_iface INTERFACE)
+    target_include_directories(lua_system_iface INTERFACE ${LUA_INCLUDE_DIR})
+    target_link_libraries(lua_system_iface INTERFACE ${LUA_LIBRARIES})
+    add_library(lua::lua ALIAS lua_system_iface)
+else()
+    message(STATUS "Lua: FetchContent (lua/lua v5.4.7)")
+    FetchContent_Declare(lua_src
+        GIT_REPOSITORY https://github.com/lua/lua.git
+        GIT_TAG        v5.4.7
+        GIT_SHALLOW    TRUE
+        SYSTEM
+    )
+    FetchContent_GetProperties(lua_src)
+    if(NOT lua_src_POPULATED)
+        FetchContent_Populate(lua_src)
+    endif()
+    file(GLOB LUA_C_SOURCES "${lua_src_SOURCE_DIR}/*.c")
+    # Exclude the standalone interpreter (lua.c), compiler (luac.c), and the
+    # single-file amalgamation (onelua.c) which #includes every other .c file —
+    # including it alongside the individual sources causes duplicate symbol
+    # definitions that produce LNK4006 warnings and crash MSVC test binaries.
+    list(FILTER LUA_C_SOURCES EXCLUDE REGEX ".*/lua\\.c$")
+    list(FILTER LUA_C_SOURCES EXCLUDE REGEX ".*/luac\\.c$")
+    list(FILTER LUA_C_SOURCES EXCLUDE REGEX ".*/onelua\\.c$")
+    add_library(lua54_static STATIC ${LUA_C_SOURCES})
+    set_target_properties(lua54_static PROPERTIES C_STANDARD 99)
+    # Prevent Lua's own C sources from inheriting CMAKE_COMPILE_WARNING_AS_ERROR=ON.
+    set_target_properties(lua54_static PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+    target_compile_options(lua54_static PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-w>
+        $<$<CXX_COMPILER_ID:MSVC>:/W0>
+    )
+    target_include_directories(lua54_static PUBLIC ${lua_src_SOURCE_DIR})
+    add_library(lua::lua ALIAS lua54_static)
+endif()
+
+# ---------------------------------------------------------------------------
 # tomlplusplus — header-only TOML parser; system preferred, FetchContent fallback
 # Used by engine/content/ModLoader to parse mod manifests.
 # ---------------------------------------------------------------------------

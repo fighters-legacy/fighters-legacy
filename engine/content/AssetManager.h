@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "content/AssetValidator.h"
 #include "content/IContentPack.h"
 #include <memory>
 #include <optional>
@@ -62,5 +63,6 @@ class AssetManager {
     std::unordered_map<std::string, std::shared_ptr<void>> m_cache;
     std::vector<std::unique_ptr<IContentPack>> m_packs;
     ILogger& m_logger;
+    AssetValidator m_validator;
     IFilesystemWatcher* m_watcher = nullptr;
 };

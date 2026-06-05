@@ -22,6 +22,7 @@ jobs:
         with:
           vulkan: 'true'
           lcov: 'true'
+          lua: 'true'
 
       - name: Install gcovr
         run: pip install gcovr

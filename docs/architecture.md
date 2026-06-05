@@ -88,9 +88,10 @@ Game logic and simulation, independent of any specific content:
 
 Bridges the engine core to external content:
 
-- **`IContentPack`** — the single interface all content packs must implement. Exposes asset loading, mission data, and configuration. The engine calls only this interface; it never knows what implements it.
-- **`AssetManager`** — caches and serves assets requested by the engine core via active content packs.
-- **`ModLoader`** — discovers and loads `IContentPack` implementors at runtime (shared libraries).
+- **`IContentPack`** — the single interface all content packs must implement. Exposes asset loading, mission data, configuration, and security metadata (`getTrustLevel`, `isNativePlugin`). The engine calls only this interface; it never knows what implements it.
+- **`AssetManager`** — caches and serves assets via active content packs. Runs `AssetValidator` on every returned asset (magic-byte checks + size limits) before caching; discards and logs any asset that fails.
+- **`ModLoader`** — discovers directory mods and compiled plugins at runtime. Validates `id`/`name` manifest fields against path-traversal, Windows reserved names, and length limits. Parses optional `[mod.trust]` section into `TrustLevel`. Detects native plugin binaries and fires `IContentPackEventHandler` callbacks. Loads plugins with `RTLD_LOCAL | RTLD_NOW` (POSIX) or full-path `LoadLibrary` (Windows) to prevent DLL planting.
+- **`LuaSandbox`** (`engine/script/`) — sandboxed Lua 5.4 execution environment for AI and mission scripts. Deny-lists `io`, `os`, `package`, `debug`, `dofile`, `loadfile`; replaces `require` with a custom loader restricted to the pack's own `ai/` directory. Rejects precompiled bytecode. RAII destructor calls `lua_close()`.
 
 Mods can ship translations by placing TOML files under `locale/<lang>/` inside their mod directory. The `Localization` system merges these with the engine's base `locale/` files; higher-priority mods win on key conflicts. See [docs/modding/localization.md](modding/localization.md).
 
@@ -161,6 +162,8 @@ engine/content/IContentPack.h
     loadTerrain(name)     → TerrainData
     loadAIScript(name)    → AIScript
     listAssets(AssetType) → vector<string>
+    getTrustLevel()       → TrustLevel { Unsigned | Community | Maintainer }
+    isNativePlugin()      → bool
 ```
 
 ### Mod Loader
@@ -183,6 +186,10 @@ version     = "1.0.0"
 engine-api  = "1.0"
 priority    = 100
 depends     = []
+
+[mod.trust]          # optional — absent means Unsigned
+signed-by = "community"   # "community" | "maintainer"; GPG verification is Phase 6
+signature = "..."         # parsed and logged but not cryptographically verified until Phase 6
 ```
 
 ### Content Pack Layout on Disk

@@ -23,6 +23,7 @@ jobs:
         uses: ./.github/actions/install-linux-deps
         with:
           clang: 'true'
+          lua: 'true'
 
       - name: Cache CMake FetchContent dependencies
         uses: actions/cache@v4

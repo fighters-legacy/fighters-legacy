@@ -2,6 +2,7 @@
 #pragma once
 
 #include "content/IContentPack.h"
+#include "content/TrustLevel.h"
 #include <string>
 
 class IFilesystem;
@@ -18,6 +19,8 @@ class FolderContentPack final : public IContentPack {
         std::string version;
         std::string engineApi;
         int priority = 0;
+        TrustLevel trustLevel = TrustLevel::Unsigned;
+        bool nativePlugin = false;
     };
 
     FolderContentPack(IFilesystem& fs, ILogger& logger, std::string modDir, Manifest manifest);
@@ -36,6 +39,12 @@ class FolderContentPack final : public IContentPack {
     }
     const char* rootDirectory() const override {
         return m_modDir.c_str();
+    }
+    TrustLevel getTrustLevel() const override {
+        return m_manifest.trustLevel;
+    }
+    bool isNativePlugin() const override {
+        return m_manifest.nativePlugin;
     }
 
     Status init() override;

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <span>
 
 AssetManager::AssetManager(std::vector<std::unique_ptr<IContentPack>> packs, ILogger& logger)
     : m_packs(std::move(packs)), m_logger(logger) {}
@@ -61,11 +62,22 @@ std::shared_ptr<T> AssetManager::loadAsset(AssetType type, const char* name,
 
     for (auto& pack : m_packs) {
         auto result = (pack.get()->*loader)(lower.c_str());
-        if (result.has_value()) {
-            auto ptr = std::make_shared<T>(std::move(*result));
-            m_cache.emplace(key, ptr);
-            return ptr;
+        if (!result.has_value())
+            continue;
+
+        // Validate magic bytes and size before caching — covers both directory mods
+        // and compiled plugins since validation happens at the manager layer.
+        std::span<const uint8_t> header(result->bytes.data(), std::min(result->bytes.size(), std::size_t{16}));
+        auto vr = m_validator.validate(type, header, result->bytes.size());
+        if (!vr.valid) {
+            m_logger.log(LogLevel::Error, __FILE__, __LINE__,
+                         (std::string("discarding asset '") + lower + "': " + vr.reason).c_str());
+            continue; // try next pack
         }
+
+        auto ptr = std::make_shared<T>(std::move(*result));
+        m_cache.emplace(key, ptr);
+        return ptr;
     }
 
     m_logger.log(LogLevel::Warn, __FILE__, __LINE__, (std::string("asset not found: ") + lower).c_str());
