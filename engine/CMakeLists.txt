@@ -5,6 +5,7 @@ add_library(engine-content STATIC
     content/FolderContentPack.cpp
     content/ModLoader.cpp
     content/AssetManager.cpp
+    content/AssetValidator.cpp
 )
 
 target_include_directories(engine-content PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -12,6 +13,7 @@ target_include_directories(engine-content PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-content
     PUBLIC  platform-hal
     PRIVATE tomlplusplus::tomlplusplus
+            ${CMAKE_DL_LIBS}   # dlopen on Linux; empty on Windows/macOS (auto-linked)
 )
 
 add_library(engine-input STATIC
@@ -216,4 +218,14 @@ target_link_libraries(engine-debug
             engine-entity
     PRIVATE engine-render   # DebugCommands reads SimRenderBridge for the entities command
             engine-weather  # DebugCommands calls WeatherController::setPreset
+)
+
+# Sandboxed Lua 5.4 execution environment for AI and mission scripts.
+add_library(engine-script STATIC
+    script/LuaSandbox.cpp
+)
+target_include_directories(engine-script PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-script
+    PUBLIC  platform-hal
+    PRIVATE lua::lua
 )

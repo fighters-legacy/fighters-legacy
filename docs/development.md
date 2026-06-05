@@ -7,7 +7,7 @@
 ```bash
 sudo dnf install cmake ninja-build gcc g++ clang clang-tools-extra \
   vulkan-devel SDL3-devel openal-soft-devel lcov \
-  libasan libubsan glslang vulkan-validation-layers
+  libasan libubsan glslang vulkan-validation-layers lua-devel
 ```
 
 `libasan` and `libubsan` are required for the `asan` build preset (`-fsanitize=address,undefined`). They are separate packages from `gcc` on Fedora.
@@ -28,7 +28,7 @@ For Bluetooth gamepad support (Xbox controllers), see [docs/linux-gamepad.md](li
 sudo apt-get update
 sudo apt-get install -y cmake ninja-build gcc g++ clang clang-format \
   libvulkan-dev libsdl3-dev libopenal-dev lcov glslang-tools \
-  vulkan-validationlayers
+  vulkan-validationlayers liblua5.4-dev
 ```
 
 `glslang-tools` provides `glslangValidator` for Vulkan shader compilation. `vulkan-validationlayers` provides `VK_LAYER_KHRONOS_validation` for debug builds.
@@ -47,16 +47,20 @@ sudo apt-get install -y cmake ninja-build gcc g++ clang clang-format \
    or download the installer from [releases.llvm.org](https://releases.llvm.org/). Add the LLVM `bin/` directory to `PATH`.
 5. **Pre-commit hook**: `scripts/hooks/pre-commit` is a bash script. On Windows it must be run via **Git Bash** or **WSL** — it will not work in PowerShell or cmd. The DCO commit-msg hook has the same requirement.
 
+> **Note (Lua):** Lua 5.4 is not required on Windows — CMake automatically fetches and compiles it via FetchContent.
+
 ### macOS (Apple Silicon, 13+)
 
 ```bash
 xcode-select --install
-brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang
+brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang lua
 ```
 
 `molten-vk` provides the Vulkan-over-Metal ICD; `vulkan-loader` provides `libvulkan.dylib`; `glslang` provides `glslangValidator`. Validation layers are not available via Homebrew — install the [LunarG Vulkan SDK for macOS](https://vulkan.lunarg.com/) to get `VK_LAYER_KHRONOS_validation`.
 
 > **Note:** CI uses the Homebrew path (no validation layers). For local dev, the LunarG SDK is recommended so validation errors are caught before CI.
+
+> **Note (compiled content pack plugins):** Unsigned `.dylib` compiled plugins require the user to allow them via **System Settings → Privacy & Security** the first time they are loaded. This is a macOS Gatekeeper requirement and cannot be bypassed by the engine.
 
 ### Optional tools
 

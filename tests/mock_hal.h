@@ -178,6 +178,13 @@ struct MockFilesystem : public IFilesystem {
     void addFile(const std::string& path, const std::string& content) {
         files[path] = std::vector<uint8_t>(content.begin(), content.end());
     }
+    void addDir(const std::string& path) {
+        if (dirs.find(path) == dirs.end())
+            dirs[path] = {};
+    }
+    void addDirEntry(const std::string& parentDir, const std::string& name, bool isDirectory) {
+        dirs[parentDir].push_back({name, isDirectory});
+    }
 
     int openFile(PathDomain, const char* path, bool write) override {
         if (write) {

@@ -333,3 +333,23 @@ catch_discover_tests(test_network_utils)
 add_executable(test_subprocess test_subprocess.cpp)
 target_link_libraries(test_subprocess PRIVATE Catch2::Catch2WithMain platform-subprocess)
 catch_discover_tests(test_subprocess)
+
+add_executable(test_manifest_sanitization test_manifest_sanitization.cpp)
+target_link_libraries(test_manifest_sanitization PRIVATE Catch2::Catch2WithMain engine-content)
+target_include_directories(test_manifest_sanitization PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_manifest_sanitization)
+
+add_executable(test_trust_framework test_trust_framework.cpp)
+target_link_libraries(test_trust_framework PRIVATE Catch2::Catch2WithMain engine-content)
+target_include_directories(test_trust_framework PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_trust_framework)
+
+add_executable(test_asset_validator test_asset_validator.cpp)
+target_link_libraries(test_asset_validator PRIVATE Catch2::Catch2WithMain engine-content)
+target_include_directories(test_asset_validator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_asset_validator)
+
+add_executable(test_lua_sandbox test_lua_sandbox.cpp)
+target_link_libraries(test_lua_sandbox PRIVATE Catch2::Catch2WithMain engine-script)
+target_include_directories(test_lua_sandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_lua_sandbox)

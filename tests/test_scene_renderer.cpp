@@ -93,6 +93,12 @@ struct MockContentPack : public IContentPack {
     std::optional<std::string> resolveTerrainChunk(const char*, uint32_t, uint32_t, uint32_t) const override {
         return std::nullopt;
     }
+    TrustLevel getTrustLevel() const override {
+        return TrustLevel::Unsigned;
+    }
+    bool isNativePlugin() const override {
+        return false;
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -276,7 +282,7 @@ TEST_CASE("SceneRenderer with no snapshot submits empty scene once") {
 TEST_CASE("SceneRenderer submits one RenderItem when entity has loadable mesh") {
     MockLogger logger;
     auto pack = std::make_unique<MockContentPack>();
-    pack->meshes["f15c"] = {1, 2, 3, 4};
+    pack->meshes["f15c"] = {'{', 2, 3, 4}; // valid JSON-glTF first byte
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::move(pack));
@@ -359,8 +365,8 @@ TEST_CASE("SceneRenderer falls back to builtin when mesh bytes are empty") {
 TEST_CASE("SceneRenderer uses classicDamageMesh when damageLevel is nonzero") {
     MockLogger logger;
     auto pack = std::make_unique<MockContentPack>();
-    pack->meshes["f15c"] = {1, 2, 3};
-    pack->meshes["f15c_damaged"] = {4, 5, 6};
+    pack->meshes["f15c"] = {'{', 2, 3};         // valid JSON-glTF first byte
+    pack->meshes["f15c_damaged"] = {'{', 5, 6}; // valid JSON-glTF first byte
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::move(pack));
@@ -392,7 +398,7 @@ TEST_CASE("SceneRenderer uses classicDamageMesh when damageLevel is nonzero") {
 TEST_CASE("SceneRenderer uses primary mesh when damageLevel is zero") {
     MockLogger logger;
     auto pack = std::make_unique<MockContentPack>();
-    pack->meshes["f15c"] = {1, 2, 3};
+    pack->meshes["f15c"] = {'{', 2, 3}; // valid JSON-glTF first byte
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::move(pack));
@@ -424,7 +430,7 @@ TEST_CASE("SceneRenderer uses primary mesh when damageLevel is zero") {
 TEST_CASE("SceneRenderer caches mesh handle: createMesh called once for repeated frames") {
     MockLogger logger;
     auto pack = std::make_unique<MockContentPack>();
-    pack->meshes["f15c"] = {1, 2, 3};
+    pack->meshes["f15c"] = {'{', 2, 3}; // valid JSON-glTF first byte
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::move(pack));
@@ -493,7 +499,7 @@ TEST_CASE("SceneRenderer passes camera and environment through to FrameScene") {
 TEST_CASE("SceneRenderer applies velocity extrapolation to transform position") {
     MockLogger logger;
     auto pack = std::make_unique<MockContentPack>();
-    pack->meshes["f15c"] = {1, 2, 3};
+    pack->meshes["f15c"] = {'{', 2, 3}; // valid JSON-glTF first byte
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::move(pack));
@@ -527,7 +533,7 @@ TEST_CASE("SceneRenderer applies velocity extrapolation to transform position") 
 TEST_CASE("SceneRenderer culls entity beyond draw distance") {
     MockLogger logger;
     auto pack = std::make_unique<MockContentPack>();
-    pack->meshes["f15c"] = {1, 2, 3};
+    pack->meshes["f15c"] = {'{', 2, 3}; // valid JSON-glTF first byte
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::move(pack));
@@ -555,7 +561,7 @@ TEST_CASE("SceneRenderer culls entity beyond draw distance") {
 TEST_CASE("SceneRenderer keeps entity within draw distance") {
     MockLogger logger;
     auto pack = std::make_unique<MockContentPack>();
-    pack->meshes["f15c"] = {1, 2, 3};
+    pack->meshes["f15c"] = {'{', 2, 3}; // valid JSON-glTF first byte
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::move(pack));

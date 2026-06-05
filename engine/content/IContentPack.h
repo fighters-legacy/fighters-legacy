@@ -6,6 +6,7 @@
 #pragma once
 
 #include "content/AssetTypes.h"
+#include "content/TrustLevel.h"
 #include <optional>
 #include <string>
 #include <vector>
@@ -55,6 +56,14 @@ class IContentPack {
     // queuing an async read via IAsyncFilesystem.
     virtual std::optional<std::string> resolveTerrainChunk(const char* terrainId, uint32_t chunkX, uint32_t chunkY,
                                                            uint32_t lod) const = 0;
+
+    // Returns the trust tier assigned to this pack based on its manifest signature.
+    // GPG verification is Phase 6 work; in Phase 2 only the enum value is stored.
+    virtual TrustLevel getTrustLevel() const = 0;
+
+    // Returns true if a native compiled plugin (.dll/.so/.dylib) was found alongside
+    // this pack's manifest and loaded to provide it. Always false for directory-only mods.
+    virtual bool isNativePlugin() const = 0;
 
     // Exported symbol name for compiled content pack shared libraries.
     // A plugin must export a function with this name and signature:

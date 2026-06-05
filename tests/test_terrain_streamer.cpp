@@ -221,6 +221,12 @@ struct MockTerrainPack : public IContentPack {
             return std::nullopt;
         return it->second;
     }
+    TrustLevel getTrustLevel() const override {
+        return TrustLevel::Unsigned;
+    }
+    bool isNativePlugin() const override {
+        return false;
+    }
 };
 
 // Build manifest matching builtinWorldTerrainManifest()

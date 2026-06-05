@@ -81,6 +81,12 @@ struct EmptyContentPack : public IContentPack {
     std::optional<std::string> resolveTerrainChunk(const char*, uint32_t, uint32_t, uint32_t) const override {
         return std::nullopt;
     }
+    TrustLevel getTrustLevel() const override {
+        return TrustLevel::Unsigned;
+    }
+    bool isNativePlugin() const override {
+        return false;
+    }
 };
 
 // ---------------------------------------------------------------------------

@@ -4,13 +4,78 @@
 #include "IFilesystem.h"
 #include "ILogger.h"
 #include "content/FolderContentPack.h"
+#include "content/IContentPackEventHandler.h"
 
 #include <toml++/toml.hpp>
 
+#if defined(_WIN32)
+#include <windows.h> // LoadLibraryA, GetProcAddress, FreeLibrary
+#else
+#include <dlfcn.h> // dlopen, dlsym, dlclose
+#endif
+
 #include <algorithm>
+#include <cctype>
+#include <cstring>
 #include <unordered_set>
 
-ModLoader::ModLoader(IFilesystem& fs, ILogger& logger) : m_fs(fs), m_logger(logger) {}
+// ---------------------------------------------------------------------------
+// Manifest sanitization helpers
+// ---------------------------------------------------------------------------
+
+static bool isWindowsReservedName(std::string_view component) {
+    // Strip extension before comparing (e.g. "NUL.toml" → "NUL")
+    auto dot = component.rfind('.');
+    if (dot != std::string_view::npos)
+        component = component.substr(0, dot);
+
+    if (component.empty())
+        return false;
+
+    static const char* kReserved[] = {
+        "CON",  "NUL",  "PRN",  "AUX",  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    };
+    for (const char* r : kReserved) {
+        if (component.size() != std::strlen(r))
+            continue;
+        bool match = true;
+        for (size_t i = 0; i < component.size(); ++i) {
+            if (std::toupper(static_cast<unsigned char>(component[i])) != static_cast<unsigned char>(r[i])) {
+                match = false;
+                break;
+            }
+        }
+        if (match)
+            return true;
+    }
+    return false;
+}
+
+// Returns true if `field` is safe to use as an id or name manifest field.
+// Rejects: length > 128, null bytes, path separators, drive letters, Windows reserved names.
+static bool isValidIdentifier(std::string_view field) {
+    if (field.size() > 128)
+        return false;
+    // Null bytes
+    if (field.find('\0') != std::string_view::npos)
+        return false;
+    // Path separators
+    if (field.find('/') != std::string_view::npos)
+        return false;
+    if (field.find('\\') != std::string_view::npos)
+        return false;
+    // Drive-letter prefix (e.g. "C:")
+    if (field.size() >= 2 && std::isalpha(static_cast<unsigned char>(field[0])) && field[1] == ':')
+        return false;
+    // Windows reserved device names
+    if (isWindowsReservedName(field))
+        return false;
+    return true;
+}
+
+ModLoader::ModLoader(IFilesystem& fs, ILogger& logger, std::string assetsAbsoluteRoot)
+    : m_fs(fs), m_logger(logger), m_assetsAbsoluteRoot(std::move(assetsAbsoluteRoot)) {}
 
 bool ModLoader::validateEngineApi(const std::string& engineApi, const std::string& modId) {
     // Check that the major version component matches kEngineApiMajor.
@@ -76,6 +141,18 @@ std::optional<ModLoader::Manifest> ModLoader::parseManifest(const char* path) {
     manifest.engineApi = std::move(*engineApi);
     manifest.priority = *priority;
 
+    // Sanitize id and name: must be safe path-component identifiers
+    if (!isValidIdentifier(manifest.id)) {
+        m_logger.log(LogLevel::Error, __FILE__, __LINE__,
+                     (std::string("manifest '") + path + "': invalid id field '" + manifest.id + "'").c_str());
+        return std::nullopt;
+    }
+    if (!isValidIdentifier(manifest.name)) {
+        m_logger.log(LogLevel::Error, __FILE__, __LINE__,
+                     (std::string("manifest '") + path + "': invalid name field '" + manifest.name + "'").c_str());
+        return std::nullopt;
+    }
+
     // Optional depends array
     if (auto deps = mod["depends"].as_array()) {
         for (auto& dep : *deps) {
@@ -84,10 +161,88 @@ std::optional<ModLoader::Manifest> ModLoader::parseManifest(const char* path) {
         }
     }
 
+    // Optional [mod.trust] section — parsed but GPG not verified until Phase 6
+    if (auto trust = tbl["mod"]["trust"]) {
+        if (auto sig = trust["signature"].value<std::string>(); sig && !sig->empty()) {
+            m_logger.log(LogLevel::Info, __FILE__, __LINE__,
+                         ("mod '" + manifest.id + "': signature present but not verified in this build").c_str());
+        }
+        if (auto signedBy = trust["signed-by"].value<std::string>()) {
+            if (*signedBy == "community") {
+                manifest.trustLevel = TrustLevel::Community;
+            } else if (*signedBy == "maintainer") {
+                manifest.trustLevel = TrustLevel::Maintainer;
+            } else {
+                m_logger.log(
+                    LogLevel::Warn, __FILE__, __LINE__,
+                    ("mod '" + manifest.id + "': unknown signed-by value '" + *signedBy + "' — defaulting to Unsigned")
+                        .c_str());
+            }
+        }
+    }
+
     return manifest;
 }
 
-std::vector<std::unique_ptr<IContentPack>> ModLoader::load() {
+// ---------------------------------------------------------------------------
+// Native plugin loading helper
+// ---------------------------------------------------------------------------
+
+static IContentPack* loadNativePlugin(const std::string& absolutePath, ILogger& logger) {
+#if defined(_WIN32)
+    HMODULE handle = LoadLibraryA(absolutePath.c_str());
+    if (!handle) {
+        logger.log(LogLevel::Error, __FILE__, __LINE__,
+                   ("failed to load plugin '" + absolutePath + "' via LoadLibrary").c_str());
+        return nullptr;
+    }
+    using FactoryFn = IContentPack* (*)();
+    auto* factory = reinterpret_cast<FactoryFn>(GetProcAddress(handle, IContentPack::kFactorySymbol));
+    if (!factory) {
+        logger.log(LogLevel::Error, __FILE__, __LINE__,
+                   ("plugin '" + absolutePath + "': symbol '" + IContentPack::kFactorySymbol + "' not found").c_str());
+        FreeLibrary(handle);
+        return nullptr;
+    }
+#else
+    void* handle = dlopen(absolutePath.c_str(), RTLD_LOCAL | RTLD_NOW);
+    if (!handle) {
+        const char* err = dlerror();
+        logger.log(
+            LogLevel::Error, __FILE__, __LINE__,
+            (std::string("failed to load plugin '") + absolutePath + "': " + (err ? err : "unknown error")).c_str());
+        return nullptr;
+    }
+    using FactoryFn = IContentPack* (*)();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    auto* factory = reinterpret_cast<FactoryFn>(dlsym(handle, IContentPack::kFactorySymbol));
+    if (!factory) {
+        const char* err = dlerror();
+        logger.log(LogLevel::Error, __FILE__, __LINE__,
+                   (std::string("plugin '") + absolutePath + "': symbol '" + IContentPack::kFactorySymbol +
+                    "' not found: " + (err ? err : "unknown error"))
+                       .c_str());
+        dlclose(handle);
+        return nullptr;
+    }
+#endif
+    // Plugin handle intentionally not stored — plugins are loaded for process lifetime.
+    return factory();
+}
+
+// Returns the platform-specific native plugin filename for a mod id.
+// e.g. id="example" → "libexample.so" on Linux, "example.dll" on Windows.
+static std::string nativePluginFilename(const std::string& id) {
+#if defined(_WIN32)
+    return id + ".dll";
+#elif defined(__APPLE__)
+    return "lib" + id + ".dylib";
+#else
+    return "lib" + id + ".so";
+#endif
+}
+
+std::vector<std::unique_ptr<IContentPack>> ModLoader::load(IContentPackEventHandler* handler) {
     m_loadErrors.clear();
 
     // Scan mods directory; handle absent directory gracefully
@@ -118,7 +273,7 @@ std::vector<std::unique_ptr<IContentPack>> ModLoader::load() {
 
         auto manifest = parseManifest(manifestPath.c_str());
         if (!manifest) {
-            m_loadErrors.push_back({modDir, "", "failed to parse manifest"});
+            m_loadErrors.push_back({modDir, "", "manifest parse or sanitization failed (see log)"});
             continue;
         }
 
@@ -143,17 +298,51 @@ std::vector<std::unique_ptr<IContentPack>> ModLoader::load() {
         }
     }
 
-    // Build FolderContentPack instances
+    // Build packs: detect native plugins, propagate trust, attempt plugin loading
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.reserve(candidates.size());
     for (auto& c : candidates) {
+        // Detect native plugin file alongside the manifest
+        std::string pluginFilename = nativePluginFilename(c.manifest.id);
+        std::string pluginRelPath = c.modDir + "/" + pluginFilename;
+        if (m_fs.fileExists(PathDomain::Assets, pluginRelPath.c_str()))
+            c.manifest.nativePlugin = true;
+
         FolderContentPack::Manifest fm;
         fm.name = c.manifest.name;
         fm.id = c.manifest.id;
         fm.version = c.manifest.version;
         fm.engineApi = c.manifest.engineApi;
         fm.priority = c.manifest.priority;
-        packs.push_back(std::make_unique<FolderContentPack>(m_fs, m_logger, std::move(c.modDir), std::move(fm)));
+        fm.trustLevel = c.manifest.trustLevel;
+        fm.nativePlugin = c.manifest.nativePlugin;
+
+        if (c.manifest.nativePlugin && !m_assetsAbsoluteRoot.empty()) {
+            // Attempt to load the compiled plugin with a full absolute path to
+            // prevent DLL planting. On failure, skip this candidate entirely.
+            std::string absPluginPath = m_assetsAbsoluteRoot + "/" + pluginRelPath;
+            IContentPack* raw = loadNativePlugin(absPluginPath, m_logger);
+            if (!raw) {
+                m_loadErrors.push_back({c.modDir, c.manifest.id, "native plugin failed to load"});
+                continue;
+            }
+            std::unique_ptr<IContentPack> pluginPack(raw);
+            if (handler) {
+                handler->onNativeCodePackLoaded(*pluginPack);
+                if (c.manifest.trustLevel == TrustLevel::Unsigned)
+                    handler->onUntrustedPackLoaded(*pluginPack);
+            }
+            packs.push_back(std::move(pluginPack));
+        } else {
+            auto folderPack = std::make_unique<FolderContentPack>(m_fs, m_logger, std::move(c.modDir), std::move(fm));
+            if (handler) {
+                if (c.manifest.nativePlugin)
+                    handler->onNativeCodePackLoaded(*folderPack);
+                if (c.manifest.trustLevel == TrustLevel::Unsigned)
+                    handler->onUntrustedPackLoaded(*folderPack);
+            }
+            packs.push_back(std::move(folderPack));
+        }
     }
 
     // Sort descending by priority (index 0 = highest priority)

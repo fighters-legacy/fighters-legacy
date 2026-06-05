@@ -232,6 +232,13 @@ struct MockContentPack : public IContentPack {
             return std::nullopt;
         return it->second;
     }
+
+    TrustLevel getTrustLevel() const override {
+        return TrustLevel::Unsigned;
+    }
+    bool isNativePlugin() const override {
+        return false;
+    }
 };
 
 // Helper: build a valid manifest TOML string
@@ -405,6 +412,12 @@ static std::vector<std::unique_ptr<IContentPack>> makePacks(MockContentPack* pac
                                                        uint32_t lod) const override {
             return p->resolveTerrainChunk(terrainId, chunkX, chunkY, lod);
         }
+        TrustLevel getTrustLevel() const override {
+            return p->getTrustLevel();
+        }
+        bool isNativePlugin() const override {
+            return p->isNativePlugin();
+        }
     };
     std::vector<std::unique_ptr<IContentPack>> v;
     v.push_back(std::make_unique<BorrowedPack>(pack));
@@ -420,7 +433,7 @@ TEST_CASE("AssetManager::initialize keeps pack when init() returns Ready") {
     am.initialize(nullptr);
 
     // Pack is active — should find assets
-    pack.assets[{"f22", AssetType::Mesh}] = {0x01};
+    pack.assets[{"f22", AssetType::Mesh}] = {'{'}; // valid JSON-glTF first byte
     auto result = am.loadMesh("f22");
     REQUIRE(result != nullptr);
 }
@@ -434,7 +447,7 @@ TEST_CASE("AssetManager::initialize calls configure() only when NeedsConfigurati
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr); // no window → should drop
 
-    pack.assets[{"f22", AssetType::Mesh}] = {0x01};
+    pack.assets[{"f22", AssetType::Mesh}] = {'{'}; // valid JSON-glTF first byte
     auto result = am.loadMesh("f22");
     REQUIRE(result == nullptr);
     REQUIRE(logger.hasMessage(LogLevel::Warn, "NeedsConfiguration but no window"));
@@ -452,7 +465,7 @@ TEST_CASE("AssetManager::initialize drops pack when configure() returns false") 
     am.initialize(fakeWindow);
 
     REQUIRE(logger.hasMessage(LogLevel::Warn, "configure() returned false"));
-    pack.assets[{"f22", AssetType::Mesh}] = {0x01};
+    pack.assets[{"f22", AssetType::Mesh}] = {'{'}; // valid JSON-glTF first byte
     REQUIRE(am.loadMesh("f22") == nullptr);
 }
 
@@ -476,8 +489,8 @@ TEST_CASE("AssetManager returns asset bytes from highest-priority pack") {
     packB.packId = "pack-b";
     packB.packPriority = 10;
 
-    packA.assets[{"f22", AssetType::Mesh}] = {0xAA};
-    packB.assets[{"f22", AssetType::Mesh}] = {0xBB};
+    packA.assets[{"f22", AssetType::Mesh}] = {'{', 0xAA}; // valid JSON-glTF first byte
+    packB.assets[{"f22", AssetType::Mesh}] = {'{', 0xBB};
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     // Insert in priority order (highest first, as ModLoader would do)
@@ -489,13 +502,13 @@ TEST_CASE("AssetManager returns asset bytes from highest-priority pack") {
 
     auto result = am.loadMesh("f22");
     REQUIRE(result != nullptr);
-    REQUIRE(result->bytes == std::vector<uint8_t>{0xAA});
+    REQUIRE(result->bytes == (std::vector<uint8_t>{'{', 0xAA}));
 }
 
 TEST_CASE("AssetManager returns same shared_ptr on second request (cache hit)") {
     MockContentPack pack;
     MockLogger logger;
-    pack.assets[{"f22", AssetType::Mesh}] = {0x01, 0x02};
+    pack.assets[{"f22", AssetType::Mesh}] = {'{', 0x02}; // valid JSON-glTF first byte
 
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -509,7 +522,7 @@ TEST_CASE("AssetManager returns same shared_ptr on second request (cache hit)") 
 TEST_CASE("AssetManager lookup is case-insensitive") {
     MockContentPack pack;
     MockLogger logger;
-    pack.assets[{"f22", AssetType::Mesh}] = {0x42};
+    pack.assets[{"f22", AssetType::Mesh}] = {'{', 0x42}; // valid JSON-glTF first byte
 
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -530,7 +543,7 @@ TEST_CASE("AssetManager passes normalized lowercase name to IContentPack methods
         }
     } pack;
     MockLogger logger;
-    pack.assets[{"f22", AssetType::Mesh}] = {0x01};
+    pack.assets[{"f22", AssetType::Mesh}] = {'{'}; // valid JSON-glTF first byte
 
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -559,7 +572,7 @@ TEST_CASE("AssetManager::processHotReload clears cache when watcher reports a Mo
     MockContentPack pack;
     MockLogger logger;
     MockFilesystemWatcher watcher;
-    pack.assets[{"f22", AssetType::Mesh}] = {0x01};
+    pack.assets[{"f22", AssetType::Mesh}] = {'{'}; // valid JSON-glTF first byte
 
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -586,12 +599,12 @@ TEST_CASE("AssetManager::processHotReload clears cache when watcher reports a Mo
 TEST_CASE("AssetManager::loadTexture returns data from pack") {
     MockContentPack pack;
     MockLogger logger;
-    pack.assets[{"sky", AssetType::Texture}] = {0x10, 0x20};
+    pack.assets[{"sky", AssetType::Texture}] = {0x89, 0x50, 0x4E, 0x47, 0x10, 0x20}; // PNG magic
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
     auto r = am.loadTexture("sky");
     REQUIRE(r != nullptr);
-    CHECK(r->bytes == std::vector<uint8_t>{0x10, 0x20});
+    CHECK(r->bytes == (std::vector<uint8_t>{0x89, 0x50, 0x4E, 0x47, 0x10, 0x20}));
 }
 
 TEST_CASE("AssetManager::loadTexture returns nullptr when missing") {
@@ -605,7 +618,7 @@ TEST_CASE("AssetManager::loadTexture returns nullptr when missing") {
 TEST_CASE("AssetManager::loadAudio returns data from pack") {
     MockContentPack pack;
     MockLogger logger;
-    pack.assets[{"gun", AssetType::Audio}] = {0x30};
+    pack.assets[{"gun", AssetType::Audio}] = {0x4F, 0x67, 0x67, 0x53}; // OggS magic
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
     REQUIRE(am.loadAudio("gun") != nullptr);
@@ -663,7 +676,7 @@ TEST_CASE("AssetManager::enableHotReload skips pack with null rootDirectory") {
 TEST_CASE("AssetManager::processHotReload with no watcher is a no-op") {
     MockContentPack pack;
     MockLogger logger;
-    pack.assets[{"f22", AssetType::Mesh}] = {0x01};
+    pack.assets[{"f22", AssetType::Mesh}] = {'{'}; // valid JSON-glTF first byte
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
     am.loadMesh("f22");
@@ -674,7 +687,7 @@ TEST_CASE("AssetManager::processHotReload with empty events does not clear cache
     MockContentPack pack;
     MockLogger logger;
     MockFilesystemWatcher watcher;
-    pack.assets[{"f22", AssetType::Mesh}] = {0x01};
+    pack.assets[{"f22", AssetType::Mesh}] = {'{'}; // valid JSON-glTF first byte
 
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
@@ -696,7 +709,7 @@ TEST_CASE("AssetManager::initialize with configure() succeeds when window provid
     AssetManager am(makePacks(&pack), logger);
     am.initialize(fakeWindow);
 
-    pack.assets[{"f22", AssetType::Mesh}] = {0x01};
+    pack.assets[{"f22", AssetType::Mesh}] = {'{'}; // valid JSON-glTF first byte
     REQUIRE(am.loadMesh("f22") != nullptr);
 }
 
@@ -1133,7 +1146,7 @@ TEST_CASE("FolderContentPack::loadAIScript returns nullopt when openFile fails")
 TEST_CASE("AssetManager::loadTexture cache hit returns same shared_ptr") {
     MockContentPack pack;
     MockLogger logger;
-    pack.assets[{"sky", AssetType::Texture}] = {0x10};
+    pack.assets[{"sky", AssetType::Texture}] = {0x89, 0x50, 0x4E, 0x47}; // PNG magic
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
     auto first = am.loadTexture("sky");
@@ -1145,7 +1158,7 @@ TEST_CASE("AssetManager::loadTexture cache hit returns same shared_ptr") {
 TEST_CASE("AssetManager::loadAudio cache hit returns same shared_ptr") {
     MockContentPack pack;
     MockLogger logger;
-    pack.assets[{"gun", AssetType::Audio}] = {0x20};
+    pack.assets[{"gun", AssetType::Audio}] = {0x4F, 0x67, 0x67, 0x53}; // OggS magic
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
     auto first = am.loadAudio("gun");
@@ -1381,7 +1394,7 @@ TEST_CASE("AssetManager::initialize keeps pack when NeedsConfiguration and confi
     am.initialize(fakeWindow);
 
     // Pack was configured and kept — assets should be accessible
-    pack.assets[{"sky", AssetType::Texture}] = {0x11};
+    pack.assets[{"sky", AssetType::Texture}] = {0x89, 0x50, 0x4E, 0x47}; // PNG magic
     REQUIRE(am.loadTexture("sky") != nullptr);
     REQUIRE_FALSE(logger.hasMessage(LogLevel::Warn, "dropping pack"));
 }
