@@ -234,8 +234,10 @@ Server visibility in the lobby browser.
 
 ## [mods] — Mod stack
 
-> **Phase 2:** Mod stack is parsed and logged at startup; `ModLoader` integration lands
-> with the content system.
+`fl-server` loads content packs automatically from the `mods/` subdirectory of its working
+directory on startup. Packs are sorted by their declared `priority` field (higher = higher
+priority). The `stack` key below is reserved for a future explicit-ordering feature and is
+not yet used.
 
 ### `stack`
 
@@ -243,9 +245,10 @@ Server visibility in the lobby browser.
 |---|---|
 | array of strings | `[]` |
 
-Ordered list of mod IDs to load. Index 0 is the highest-priority mod; later entries are
-lower priority. IDs must match the `[mod].id` field in each mod's `manifest.toml`. See
-[docs/architecture.md](architecture.md) for the mod manifest format.
+Reserved for a future explicit mod-ordering feature. When active, index 0 will be the
+highest-priority mod ID; later entries will be lower priority. IDs must match the `[mod].id`
+field in each mod's `manifest.toml`. See [docs/architecture.md](architecture.md) for the mod
+manifest format.
 
 Example:
 
