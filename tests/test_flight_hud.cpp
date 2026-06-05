@@ -159,3 +159,79 @@ TEST_CASE("FlightHud time display shows 23:30 for late night", "[flight_hud][wea
             found = true;
     CHECK(found);
 }
+
+TEST_CASE("FlightHud AGL text shows terrain-relative altitude") {
+    fl::FlightHud hud;
+    auto e = makeEntry();
+    e.position.y = 3500.0;
+    hud.update(&e, 12.0f, 1000.0f);
+    bool found = false;
+    for (const auto& el : hud.elements())
+        if (el.type == HudElement::Type::Text && el.text.find("AGL") != std::string_view::npos &&
+            el.text.find("2500") != std::string_view::npos)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("FlightHud AGL equals MSL when terrain elevation is zero") {
+    fl::FlightHud hud;
+    auto e = makeEntry();
+    e.position.y = 3500.0;
+    hud.update(&e, 12.0f, 0.0f);
+    bool found = false;
+    for (const auto& el : hud.elements())
+        if (el.type == HudElement::Type::Text && el.text.find("AGL") != std::string_view::npos &&
+            el.text.find("3500") != std::string_view::npos)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("FlightHud AGL element uses HUD green color") {
+    fl::FlightHud hud;
+    auto e = makeEntry();
+    e.position.y = 1000.0;
+    hud.update(&e, 12.0f, 200.0f);
+    bool found = false;
+    for (const auto& el : hud.elements()) {
+        if (el.type == HudElement::Type::Text && el.text.find("AGL") != std::string_view::npos) {
+            CHECK(el.r < 0.1f);
+            CHECK(el.g > 0.9f);
+            CHECK(el.b < 0.1f);
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("FlightHud both ALT and AGL rows appear") {
+    fl::FlightHud hud;
+    auto e = makeEntry();
+    e.position.y = 5000.0;
+    hud.update(&e, 12.0f, 1000.0f);
+    bool altFound = false;
+    bool aglFound = false;
+    for (const auto& el : hud.elements()) {
+        if (el.type == HudElement::Type::Text) {
+            if (el.text.find("ALT") != std::string_view::npos)
+                altFound = true;
+            if (el.text.find("AGL") != std::string_view::npos)
+                aglFound = true;
+        }
+    }
+    CHECK(altFound);
+    CHECK(aglFound);
+}
+
+TEST_CASE("FlightHud AGL is negative when below terrain level") {
+    fl::FlightHud hud;
+    auto e = makeEntry();
+    e.position.y = 100.0;
+    hud.update(&e, 12.0f, 500.0f);
+    bool found = false;
+    for (const auto& el : hud.elements())
+        if (el.type == HudElement::Type::Text && el.text.find("AGL") != std::string_view::npos &&
+            el.text.find('-') != std::string_view::npos)
+            found = true;
+    CHECK(found);
+}

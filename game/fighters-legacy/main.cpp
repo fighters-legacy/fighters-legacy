@@ -522,7 +522,10 @@ int main(int argc, char** argv) {
         sceneRenderer.renderFrame(alpha, cam, env, sandboxEmitters);
 
         // HUD: GameHud (flight data + notices) and DebugConsole are independent layers.
-        gameHud.update(cameraController.mode(), playerEntry, env.timeOfDay);
+        const float terrainElev =
+            playerEntry ? static_cast<float>(terrainStreamer.heightAt(playerEntry->position.x, playerEntry->position.z))
+                        : 0.0f;
+        gameHud.update(cameraController.mode(), playerEntry, env.timeOfDay, terrainElev);
         {
             glm::dvec3 playerPos{};
             const glm::dvec3* playerPosPtr = nullptr;

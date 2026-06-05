@@ -23,7 +23,9 @@ class FlightHud {
     // Build HUD elements for this frame.
     // Pass nullptr to produce no elements (e.g. when camera mode != Cockpit).
     // timeOfDay: hours [0, 24) displayed as HH:MM in the top-right corner.
-    void update(const EntityRenderEntry* playerEntry, float timeOfDay = 12.0f);
+    // terrainElevation: ground height in metres at the player XZ position (from
+    // TerrainStreamer::heightAt). Falls back to 0.0 (AGL == MSL) when not loaded.
+    void update(const EntityRenderEntry* playerEntry, float timeOfDay = 12.0f, float terrainElevation = 0.0f);
 
     // Returns positioned, colored 2D elements for IRenderer::submitHudElements().
     // The span is valid until the next call to update().

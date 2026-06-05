@@ -107,7 +107,7 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 | `rain` | 85% | Heavy | Moderate | Driven by time clock |
 | `storm` | 95% | Maximum | Strong | Driven by time clock |
 
-The in-game clock advances at **10× real time** by default (1 real minute = 10 game minutes; full day/night cycle ≈ 2.4 real hours). Time is shown as `HH:MM` in the HUD top-right (Cockpit mode only). The time scale is configurable via `[world] time_scale` in `server.toml`.
+The in-game clock advances at **10× real time** by default (1 real minute = 10 game minutes; full day/night cycle ≈ 2.4 real hours). The Cockpit HUD (F1 mode) shows **IAS / ALT / AGL** on the left column, **THR / FUEL** on the right column, **HDG** at the bottom, and `HH:MM` clock top-right. AGL is computed from the terrain heightmap at the aircraft's XZ position and falls back to the same value as ALT (MSL) when the LOD-0 chunk is not yet loaded. The time scale is configurable via `[world] time_scale` in `server.toml`.
 
 ### Position widget
 

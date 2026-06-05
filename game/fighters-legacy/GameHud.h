@@ -27,7 +27,10 @@ class GameHud {
 
     // Build HUD elements for this frame.
     // player: nullptr suppresses flight data (e.g. not in Cockpit mode).
-    void update(fl::CameraMode mode, const fl::EntityRenderEntry* player, float timeOfDay);
+    // terrainElevation: ground height in metres at the player XZ position
+    // (from TerrainStreamer::heightAt); 0.0 is safe when terrain is not loaded.
+    void update(fl::CameraMode mode, const fl::EntityRenderEntry* player, float timeOfDay,
+                float terrainElevation = 0.0f);
 
     // Returns flight HUD + active server-notice elements only.
     // Does NOT include debug console elements.
