@@ -26,6 +26,8 @@
 #include <ILogger.h>
 #include <Platform.h>
 #include <config/ConfigFile.h>
+#include <content/AssetManager.h>
+#include <content/ModLoader.h>
 #include <debug/DebugCommandRegistry.h>
 #include <entity/EntityDef.h>
 #include <entity/EntityManager.h>
@@ -33,6 +35,10 @@
 #include <loop/GameLoop.h>
 #include <net/GameProtocol.h>
 #include <net/WorldBroadcaster.h>
+#include <render/BuiltinGeometry.h>
+#include <render/TerrainStreamer.h>
+#include <sdl3/SDL3AsyncFilesystem.h>
+#include <sdl3/SDL3Filesystem.h>
 #include <weather/WeatherController.h>
 
 #include <chrono>
@@ -40,6 +46,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -199,7 +206,7 @@ int main(int argc, char** argv) {
     }
     if (!cfg.modStack.empty()) {
         char buf[128];
-        std::snprintf(buf, sizeof(buf), "mod stack: %zu mod(s) configured (Phase 2 -- not loaded yet)",
+        std::snprintf(buf, sizeof(buf), "mod stack: %zu mod ID(s) configured (explicit ordering not yet active)",
                       cfg.modStack.size());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
@@ -263,6 +270,40 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ---- Content system and headless terrain ----
+    namespace fs = std::filesystem;
+    fs::path assetsRoot = fs::current_path();
+    fs::path userDataRoot = fs::current_path();
+
+    p.filesystem = std::make_unique<SDL3Filesystem>(assetsRoot, userDataRoot);
+
+    {
+        auto asyncFs = std::make_unique<SDL3AsyncFilesystem>(assetsRoot, userDataRoot);
+        if (!asyncFs->init()) {
+            log->log(LogLevel::Error, __FILE__, __LINE__, "async filesystem init failed");
+            return 1;
+        }
+        p.asyncFilesystem = std::move(asyncFs);
+    }
+
+    ModLoader modLoader(*p.filesystem, *log);
+    auto packs = modLoader.load();
+    {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "content: %zu mod(s) loaded", packs.size());
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
+
+    AssetManager assets(std::move(packs), *log);
+    assets.initialize(nullptr); // headless — window is null; NeedsConfiguration packs dropped
+
+    fl::TerrainStreamer terrainStreamer(fl::builtinWorldTerrainManifest(), assets, *p.asyncFilesystem, nullptr);
+    log->log(LogLevel::Info, __FILE__, __LINE__, "terrain: headless streamer initialized");
+
+    // Prime the LOD-0 chunk at the origin so heightAt() returns real values for entity spawn.
+    // Procedural chunks are generated synchronously inside update() when no content pack is present.
+    terrainStreamer.update(glm::dvec3(0.0, 0.0, 0.0));
+
     // ---- Entity system + sandbox entities ----
     fl::EntityTypeRegistry entityRegistry;
     fl::EntityManager entityManager(*log, entityRegistry);
@@ -274,14 +315,14 @@ int main(int argc, char** argv) {
     debugDef.maxHp = 100.0f;
     entityRegistry.registerType(std::move(debugDef));
 
-    // Spawn 5 entities in V-formation at 500 m altitude.
-    const float kAlt = 500.0f;
+    // Spawn 5 entities in V-formation at 500 m AGL.
+    constexpr double kSpawnAGL = 500.0;
     using Slot = std::pair<float, float>;
     const Slot kSlots[] = {{0.0f, 0.0f}, {-30.0f, -25.0f}, {30.0f, -25.0f}, {-60.0f, -50.0f}, {60.0f, -50.0f}};
     for (auto [x, z] : kSlots) {
         fl::EntityTransform t{};
         t.pos[0] = x;
-        t.pos[1] = kAlt;
+        t.pos[1] = terrainStreamer.heightAt(x, z) + kSpawnAGL;
         t.pos[2] = z;
         entityManager.spawn("builtin:debug-entity", t);
     }
@@ -376,10 +417,13 @@ int main(int argc, char** argv) {
         }
         if (beacon)
             beacon->tick(broadcaster.getPeerCount());
+        p.asyncFilesystem->service();
+        terrainStreamer.update(glm::dvec3(0.0, 0.0, 0.0));
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
     gameLoop.stop();
+    p.asyncFilesystem->shutdown(); // join worker thread before TerrainStreamer destructs
 
     log->log(LogLevel::Info, __FILE__, __LINE__, "shutting down");
     net->disconnect();

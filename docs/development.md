@@ -365,6 +365,14 @@ cmake --build --preset debug --target fl-server
 ./build/debug/server/fl-server/fl-server --version
 ```
 
+### Content and terrain
+
+`fl-server` scans the `mods/` subdirectory of its working directory for content packs on
+startup. Place a content pack directory (containing a valid `manifest.toml`) there to load
+real terrain data. With no content packs present, the server uses the built-in procedural
+terrain (FBM heightmap, ~550 m base elevation) and all height queries return procedurally
+generated values.
+
 ### Configuration
 
 `fl-server` resolves settings in three tiers: `server.toml` (lowest priority) →
