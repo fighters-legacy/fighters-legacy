@@ -8,7 +8,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <random>
 #include <sstream>
 #include <string>
 
@@ -432,6 +435,32 @@ static SamRadarShutdown parseSamRadarShutdown(const char* s, ILogger& log) {
 }
 
 // ---------------------------------------------------------------------------
+// UUID-v4 generator
+// ---------------------------------------------------------------------------
+
+static std::string generateUuidV4() {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    // uint32_t throughout: the standard only guarantees uniform_int_distribution
+    // for short/int/long/long long and unsigned variants; uint16_t is typically
+    // unsigned short but not guaranteed, so mask down from uint32_t instead.
+    std::uniform_int_distribution<uint32_t> d;
+
+    uint32_t a = d(gen);
+    uint32_t b = d(gen) & 0xFFFFU;
+    uint32_t c = (d(gen) & 0x0FFFU) | 0x4000U;  // version 4
+    uint32_t dv = (d(gen) & 0x3FFFU) | 0x8000U; // variant 1
+    uint32_t e1 = d(gen);
+    uint32_t e2 = d(gen) & 0xFFFFU;
+
+    char buf[37];
+    std::snprintf(buf, sizeof(buf), "%08x-%04x-%04x-%04x-%08x%04x", static_cast<unsigned>(a), static_cast<unsigned>(b),
+                  static_cast<unsigned>(c), static_cast<unsigned>(dv), static_cast<unsigned>(e1),
+                  static_cast<unsigned>(e2));
+    return buf;
+}
+
+// ---------------------------------------------------------------------------
 
 UserConfig::UserConfig(IFilesystem& fs, ILogger& logger) : m_fs(fs), m_logger(logger) {}
 
@@ -596,6 +625,34 @@ bool UserConfig::load() {
         }
     }
 
+    // [pilot]
+    if (auto v = tbl["pilot"]["callsign"].value<std::string>())
+        m_pilot.profile.callsign = std::move(*v);
+    if (auto v = tbl["pilot"]["guid"].value<std::string>())
+        m_pilot.profile.guid = std::move(*v);
+    if (auto v = tbl["pilot"]["kills"].value<int64_t>())
+        m_pilot.profile.kills = static_cast<int>(std::max(int64_t{0}, *v));
+    if (auto v = tbl["pilot"]["losses"].value<int64_t>())
+        m_pilot.profile.losses = static_cast<int>(std::max(int64_t{0}, *v));
+    if (auto v = tbl["pilot"]["flight_time_s"].value<int64_t>())
+        m_pilot.profile.flightTimeS = std::max(int64_t{0}, *v);
+
+    // [pilot.campaign]
+    if (auto v = tbl["pilot"]["campaign"]["active_campaign"].value<std::string>())
+        m_pilot.campaign.activeCampaign = std::move(*v);
+    if (auto v = tbl["pilot"]["campaign"]["current_mission"].value<int64_t>())
+        m_pilot.campaign.currentMission = static_cast<int>(std::max(int64_t{0}, *v));
+    if (auto* arr = tbl["pilot"]["campaign"]["completed"].as_array()) {
+        for (auto& elem : *arr)
+            if (auto s = elem.value<std::string>())
+                m_pilot.campaign.completed.push_back(std::move(*s));
+    }
+    if (auto* standings = tbl["pilot"]["campaign"]["faction_standings"].as_table()) {
+        for (auto& [k, val] : *standings)
+            if (auto n = val.value<int64_t>())
+                m_pilot.campaign.factionStandings[std::string(k)] = static_cast<int>(*n);
+    }
+
     return true;
 }
 
@@ -659,6 +716,29 @@ bool UserConfig::save() {
     toml::table debug;
     debug.insert_or_assign("overlay_mode", static_cast<int64_t>(m_debug.overlayMode));
 
+    if (m_pilot.profile.guid.empty())
+        m_pilot.profile.guid = generateUuidV4();
+
+    toml::table pilotCampaign;
+    pilotCampaign.insert_or_assign("active_campaign", m_pilot.campaign.activeCampaign);
+    pilotCampaign.insert_or_assign("current_mission", static_cast<int64_t>(m_pilot.campaign.currentMission));
+    toml::array completed;
+    for (const auto& id : m_pilot.campaign.completed)
+        completed.push_back(id);
+    pilotCampaign.insert_or_assign("completed", std::move(completed));
+    toml::table factions;
+    for (const auto& [k, v] : m_pilot.campaign.factionStandings)
+        factions.insert_or_assign(k, static_cast<int64_t>(v));
+    pilotCampaign.insert_or_assign("faction_standings", std::move(factions));
+
+    toml::table pilot;
+    pilot.insert_or_assign("callsign", m_pilot.profile.callsign);
+    pilot.insert_or_assign("guid", m_pilot.profile.guid);
+    pilot.insert_or_assign("kills", static_cast<int64_t>(m_pilot.profile.kills));
+    pilot.insert_or_assign("losses", static_cast<int64_t>(m_pilot.profile.losses));
+    pilot.insert_or_assign("flight_time_s", m_pilot.profile.flightTimeS);
+    pilot.insert_or_assign("campaign", std::move(pilotCampaign));
+
     // Insertion order determines TOML section order
     toml::table root;
     root.insert_or_assign("first_run", std::move(firstRun));
@@ -668,6 +748,7 @@ bool UserConfig::save() {
     root.insert_or_assign("difficulty", std::move(difficulty));
     root.insert_or_assign("accessibility", std::move(accessibility));
     root.insert_or_assign("debug", std::move(debug));
+    root.insert_or_assign("pilot", std::move(pilot));
 
     std::ostringstream oss;
     oss << root;
@@ -736,4 +817,11 @@ DebugSettings UserConfig::debug() const {
 }
 void UserConfig::setDebug(const DebugSettings& ds) {
     m_debug = ds;
+}
+
+PilotSettings UserConfig::pilot() const {
+    return m_pilot;
+}
+void UserConfig::setPilot(const PilotSettings& ps) {
+    m_pilot = ps;
 }

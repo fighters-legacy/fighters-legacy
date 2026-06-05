@@ -7,6 +7,7 @@
 #include "config/DebugSettings.h"
 #include "config/DifficultySettings.h"
 #include "config/GraphicsSettings.h"
+#include "config/PilotSettings.h"
 
 class IFilesystem;
 
@@ -46,6 +47,9 @@ class UserConfig {
     DebugSettings debug() const;
     void setDebug(const DebugSettings& ds);
 
+    PilotSettings pilot() const;
+    void setPilot(const PilotSettings& ps);
+
   private:
     static constexpr const char* kPath = "config/user.toml";
     static constexpr const char* kTmpPath = "config/user.toml.tmp";
@@ -59,4 +63,5 @@ class UserConfig {
     DifficultySettings m_difficulty{};
     AccessibilitySettings m_accessibility{};
     DebugSettings m_debug{};
+    PilotSettings m_pilot{};
 };

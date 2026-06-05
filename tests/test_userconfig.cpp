@@ -138,3 +138,239 @@ TEST_CASE("UserConfig: [debug] Compact round-trip via save+load", "[userconfig]"
     config2.load();
     CHECK(config2.debug().overlayMode == OverlayMode::Compact);
 }
+
+// ---------------------------------------------------------------------------
+// [pilot] tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("UserConfig: pilot defaults when section absent", "[userconfig][pilot]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    config.load(); // no file
+    CHECK(config.pilot().profile.callsign == "Pilot");
+    CHECK(config.pilot().profile.guid.empty());
+    CHECK(config.pilot().profile.kills == 0);
+    CHECK(config.pilot().profile.losses == 0);
+    CHECK(config.pilot().profile.flightTimeS == 0);
+    CHECK(config.pilot().campaign.activeCampaign.empty());
+    CHECK(config.pilot().campaign.currentMission == 0);
+    CHECK(config.pilot().campaign.completed.empty());
+    CHECK(config.pilot().campaign.factionStandings.empty());
+}
+
+TEST_CASE("UserConfig: pilot callsign round-trip", "[userconfig][pilot]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    PilotSettings ps = config.pilot();
+    ps.profile.callsign = "Maverick";
+    config.setPilot(ps);
+    config.save();
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    CHECK(config2.pilot().profile.callsign == "Maverick");
+}
+
+TEST_CASE("UserConfig: pilot GUID auto-generated on first save", "[userconfig][pilot]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    config.load(); // no file
+    CHECK(config.pilot().profile.guid.empty());
+    config.save();
+    CHECK(!config.pilot().profile.guid.empty());
+}
+
+TEST_CASE("UserConfig: pilot GUID has correct UUID-v4 format", "[userconfig][pilot]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    config.save();
+    const std::string& guid = config.pilot().profile.guid;
+    REQUIRE(guid.size() == 36);
+    CHECK(guid[8] == '-');
+    CHECK(guid[13] == '-');
+    CHECK(guid[18] == '-');
+    CHECK(guid[23] == '-');
+    CHECK(guid[14] == '4'); // version nibble
+}
+
+TEST_CASE("UserConfig: pilot GUID stable across save+load", "[userconfig][pilot]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    config.save();
+    std::string guid = config.pilot().profile.guid;
+    REQUIRE(!guid.empty());
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    CHECK(config2.pilot().profile.guid == guid);
+}
+
+TEST_CASE("UserConfig: pilot GUID not regenerated when already set", "[userconfig][pilot]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    config.save();
+    std::string guid = config.pilot().profile.guid;
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    config2.save(); // second save should keep existing GUID
+    CHECK(config2.pilot().profile.guid == guid);
+}
+
+TEST_CASE("UserConfig: pilot stats round-trip", "[userconfig][pilot]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    PilotSettings ps = config.pilot();
+    ps.profile.kills = 7;
+    ps.profile.losses = 3;
+    ps.profile.flightTimeS = 3600;
+    config.setPilot(ps);
+    config.save();
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    CHECK(config2.pilot().profile.kills == 7);
+    CHECK(config2.pilot().profile.losses == 3);
+    CHECK(config2.pilot().profile.flightTimeS == 3600);
+}
+
+TEST_CASE("UserConfig: pilot negative fields clamped to 0 on load", "[userconfig][pilot]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[pilot]\n"
+                                   "kills = -1\n"
+                                   "losses = -2\n"
+                                   "flight_time_s = -100\n"
+                                   "[pilot.campaign]\n"
+                                   "current_mission = -1\n");
+    UserConfig config(fs, logger);
+    config.load();
+    CHECK(config.pilot().profile.kills == 0);
+    CHECK(config.pilot().profile.losses == 0);
+    CHECK(config.pilot().profile.flightTimeS == 0);
+    CHECK(config.pilot().campaign.currentMission == 0);
+}
+
+TEST_CASE("UserConfig: pilot campaign active_campaign and current_mission round-trip", "[userconfig][pilot]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    PilotSettings ps = config.pilot();
+    ps.campaign.activeCampaign = "fa:us_campaign";
+    ps.campaign.currentMission = 5;
+    config.setPilot(ps);
+    config.save();
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    CHECK(config2.pilot().campaign.activeCampaign == "fa:us_campaign");
+    CHECK(config2.pilot().campaign.currentMission == 5);
+}
+
+TEST_CASE("UserConfig: pilot completed missions array round-trip", "[userconfig][pilot]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    PilotSettings ps = config.pilot();
+    ps.campaign.completed = {"mission_001", "mission_002"};
+    config.setPilot(ps);
+    config.save();
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    REQUIRE(config2.pilot().campaign.completed.size() == 2);
+    CHECK(config2.pilot().campaign.completed[0] == "mission_001");
+    CHECK(config2.pilot().campaign.completed[1] == "mission_002");
+}
+
+TEST_CASE("UserConfig: pilot completed empty array round-trip", "[userconfig][pilot]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    // completed is empty by default; save produces completed = []
+    config.save();
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    CHECK(config2.pilot().campaign.completed.empty());
+}
+
+TEST_CASE("UserConfig: pilot faction standings map round-trip", "[userconfig][pilot]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    PilotSettings ps = config.pilot();
+    ps.campaign.factionStandings["usa"] = 10;
+    ps.campaign.factionStandings["ussr"] = -5;
+    config.setPilot(ps);
+    config.save();
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    REQUIRE(config2.pilot().campaign.factionStandings.size() == 2);
+    CHECK(config2.pilot().campaign.factionStandings.at("usa") == 10);
+    CHECK(config2.pilot().campaign.factionStandings.at("ussr") == -5);
+}
+
+TEST_CASE("UserConfig: pilot faction standings empty map round-trip", "[userconfig][pilot]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    // factionStandings is empty by default
+    config.save();
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    CHECK(config2.pilot().campaign.factionStandings.empty());
+}
+
+TEST_CASE("UserConfig: pilot full section round-trip", "[userconfig][pilot]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    PilotSettings ps;
+    ps.profile.callsign = "Goose";
+    ps.profile.kills = 12;
+    ps.profile.losses = 1;
+    ps.profile.flightTimeS = 7200;
+    ps.campaign.activeCampaign = "fa:ussr_campaign";
+    ps.campaign.currentMission = 3;
+    ps.campaign.completed = {"m_001", "m_002", "m_003"};
+    ps.campaign.factionStandings["nato"] = 50;
+    ps.campaign.factionStandings["pact"] = -20;
+    config.setPilot(ps);
+    config.save();
+    std::string guid = config.pilot().profile.guid;
+    REQUIRE(!guid.empty());
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    CHECK(config2.pilot().profile.callsign == "Goose");
+    CHECK(config2.pilot().profile.guid == guid);
+    CHECK(config2.pilot().profile.kills == 12);
+    CHECK(config2.pilot().profile.losses == 1);
+    CHECK(config2.pilot().profile.flightTimeS == 7200);
+    CHECK(config2.pilot().campaign.activeCampaign == "fa:ussr_campaign");
+    CHECK(config2.pilot().campaign.currentMission == 3);
+    REQUIRE(config2.pilot().campaign.completed.size() == 3);
+    CHECK(config2.pilot().campaign.completed[0] == "m_001");
+    CHECK(config2.pilot().campaign.factionStandings.at("nato") == 50);
+    CHECK(config2.pilot().campaign.factionStandings.at("pact") == -20);
+}
