@@ -13,7 +13,7 @@ static constexpr float kHudR = 0.0f;
 static constexpr float kHudG = 1.0f;
 static constexpr float kHudB = 0.0f;
 
-void FlightHud::update(const EntityRenderEntry* e, float timeOfDay) {
+void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrainElevation) {
     m_elementCount = 0;
     m_stringCount = 0;
     if (!e)
@@ -61,8 +61,10 @@ void FlightHud::update(const EntityRenderEntry* e, float timeOfDay) {
         1.94384f;
     pushText(0.03f, 0.46f, kHudR, kHudG, kHudB, "IAS %5.0fkts", speedKts);
 
-    // Altitude (left side, below airspeed)
+    // Altitude MSL and AGL (left side, below airspeed)
     pushText(0.03f, 0.50f, kHudR, kHudG, kHudB, "ALT %5.0fm", static_cast<float>(e->position.y));
+    const float agl = static_cast<float>(e->position.y) - terrainElevation;
+    pushText(0.03f, 0.54f, kHudR, kHudG, kHudB, "AGL %5.0fm", agl);
 
     // Heading (bottom-center)
     // Yaw from GLM quaternion (Y-up RH): atan2(2*(w*y + x*z), 1 - 2*(y² + z²))

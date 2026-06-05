@@ -12,10 +12,11 @@ void GameHud::setNotice(std::string_view text, uint16_t secondsRemaining) {
     m_hasNotice = true;
 }
 
-void GameHud::update(fl::CameraMode mode, const fl::EntityRenderEntry* player, float timeOfDay) {
+void GameHud::update(fl::CameraMode mode, const fl::EntityRenderEntry* player, float timeOfDay,
+                     float terrainElevation) {
     // Flight HUD is only meaningful in Cockpit mode.
     const fl::EntityRenderEntry* hudEntry = (mode == fl::CameraMode::Cockpit) ? player : nullptr;
-    m_flightHud.update(hudEntry, timeOfDay);
+    m_flightHud.update(hudEntry, timeOfDay, terrainElevation);
 }
 
 std::span<const HudElement> GameHud::buildElements() {
