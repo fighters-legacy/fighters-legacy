@@ -292,9 +292,13 @@ else()
         FetchContent_Populate(lua_src)
     endif()
     file(GLOB LUA_C_SOURCES "${lua_src_SOURCE_DIR}/*.c")
-    # Exclude standalone interpreter (lua.c) and compiler (luac.c) — library only.
+    # Exclude the standalone interpreter (lua.c), compiler (luac.c), and the
+    # single-file amalgamation (onelua.c) which #includes every other .c file —
+    # including it alongside the individual sources causes duplicate symbol
+    # definitions that produce LNK4006 warnings and crash MSVC test binaries.
     list(FILTER LUA_C_SOURCES EXCLUDE REGEX ".*/lua\\.c$")
     list(FILTER LUA_C_SOURCES EXCLUDE REGEX ".*/luac\\.c$")
+    list(FILTER LUA_C_SOURCES EXCLUDE REGEX ".*/onelua\\.c$")
     add_library(lua54_static STATIC ${LUA_C_SOURCES})
     set_target_properties(lua54_static PROPERTIES C_STANDARD 99)
     # Prevent Lua's own C sources from inheriting CMAKE_COMPILE_WARNING_AS_ERROR=ON.

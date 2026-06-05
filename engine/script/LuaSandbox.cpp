@@ -26,41 +26,62 @@ struct LuaSandbox::Impl {
 // Custom require loader — restricted to packRootDir/ai/<module>.lua
 // ---------------------------------------------------------------------------
 
+// lua_error() performs a longjmp that bypasses C++ stack unwinding. Any C++
+// object with a non-trivial destructor (std::filesystem::path, std::ifstream,
+// std::string, std::ostringstream) that is alive when lua_error() fires will
+// be leaked, causing LSAN failures. To prevent this, all C++ objects are
+// confined to an inner scope that exits *before* any lua_error() call. Status
+// is communicated via a plain enum (trivially destructible).
 static int luaRequireLoader(lua_State* L) {
-    // Upvalue 1: packRootDir string
     const char* root = lua_tostring(L, lua_upvalueindex(1));
     const char* module = luaL_checkstring(L, 1);
 
-    // Reject any module name containing path traversal or separators
+    // Reject path traversal/separators. No C++ objects exist yet — safe to
+    // call lua_error() immediately.
     for (const char* p = module; *p; ++p) {
         if (*p == '/' || *p == '\\' || (*p == '.' && *(p + 1) == '.')) {
-            lua_pushfstring(L, "require: module name '%s' contains disallowed characters", module);
-            return lua_error(L);
+            return luaL_error(L, "require: module name '%s' contains disallowed characters", module);
         }
     }
 
-    std::filesystem::path scriptPath = std::filesystem::path(root) / "ai" / (std::string(module) + ".lua");
+    // Trivially-destructible status: no cleanup needed if lua_error longjmps
+    // past the switch below.
+    enum class Res : uint8_t { Ok, NotFound, Bytecode, LoadErr };
+    Res res = Res::NotFound;
 
-    std::ifstream f(scriptPath);
-    if (!f.is_open()) {
-        lua_pushfstring(L, "require: module '%s' not found in pack ai/ directory", module);
-        return lua_error(L);
+    {
+        // All C++ objects with non-trivial destructors live in this scope.
+        // They are fully destroyed before execution reaches lua_error() below.
+        std::filesystem::path scriptPath = std::filesystem::path(root) / "ai" / (std::string(module) + ".lua");
+        std::ifstream f(scriptPath);
+        if (f.is_open()) {
+            std::ostringstream ss;
+            ss << f.rdbuf();
+            std::string src = ss.str();
+            if (!src.empty() && src[0] == '\x1b') {
+                res = Res::Bytecode;
+            } else {
+                // Push compiled chunk onto the Lua stack while src is valid.
+                // luaL_loadbuffer is a protected call — it cannot longjmp.
+                res = (luaL_loadbuffer(L, src.c_str(), src.size(), scriptPath.string().c_str()) == LUA_OK)
+                          ? Res::Ok
+                          : Res::LoadErr;
+            }
+        }
+    } // scriptPath, f, ss, src all destroyed here
+
+    // All C++ objects are gone. lua_error() longjmps are now safe.
+    switch (res) {
+    case Res::Ok:
+        return 1; // compiled chunk is on the Lua stack
+    case Res::NotFound:
+        return luaL_error(L, "require: module '%s' not found in pack ai/ directory", module);
+    case Res::Bytecode:
+        return luaL_error(L, "require: precompiled Lua bytecode is not permitted");
+    case Res::LoadErr:
+        return lua_error(L); // error string already on stack from luaL_loadbuffer
     }
-
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    std::string src = ss.str();
-
-    // Reject precompiled bytecode in required scripts too
-    if (!src.empty() && src[0] == '\x1b') {
-        lua_pushstring(L, "require: precompiled Lua bytecode is not permitted");
-        return lua_error(L);
-    }
-
-    if (luaL_loadbuffer(L, src.c_str(), src.size(), scriptPath.string().c_str()) != LUA_OK)
-        return lua_error(L); // error message already on stack
-
-    return 1; // return the loaded chunk
+    return 0; // unreachable
 }
 
 static void installCustomRequire(lua_State* L, const std::string& packRootDir) {
