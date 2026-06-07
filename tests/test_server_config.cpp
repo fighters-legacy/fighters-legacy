@@ -41,6 +41,8 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.incomingBandwidthBps == 0u);
     CHECK(cfg.outgoingBandwidthBps == 0u);
     CHECK(cfg.operatorPassword.empty());
+    CHECK(cfg.preHandshakeRateLimitCount == 20);
+    CHECK(cfg.preHandshakeWindowMs == 1000);
     CHECK(log.entries.empty());
 }
 
@@ -405,6 +407,8 @@ TEST_CASE("parseServerConfig: security defaults when [security] absent", "[serve
     CHECK(cfg.allowlistPath.empty());
     CHECK(cfg.incomingBandwidthBps == 0u);
     CHECK(cfg.outgoingBandwidthBps == 0u);
+    CHECK(cfg.preHandshakeRateLimitCount == 20);
+    CHECK(cfg.preHandshakeWindowMs == 1000);
 }
 
 TEST_CASE("parseServerConfig: connect_rate_limit_count out of range warns and uses default",
@@ -482,4 +486,53 @@ TEST_CASE("parseServerConfig: operator_password empty string is accepted", "[ser
     auto cfg = parseServerConfig("[security]\noperator_password = \"\"\n", &log);
     CHECK(cfg.operatorPassword.empty());
     CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: reads pre_handshake_rate_limit fields", "[server_config][security]") {
+    MockLogger log;
+    auto cfg =
+        parseServerConfig("[security]\npre_handshake_rate_limit_count = 50\npre_handshake_window_ms = 500\n", &log);
+    CHECK(cfg.preHandshakeRateLimitCount == 50);
+    CHECK(cfg.preHandshakeWindowMs == 500);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: pre_handshake_rate_limit_count 0 is accepted without warning",
+          "[server_config][security]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[security]\npre_handshake_rate_limit_count = 0\n", &log);
+    CHECK(cfg.preHandshakeRateLimitCount == 0);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: pre_handshake_rate_limit_count out of range warns and uses default",
+          "[server_config][security]") {
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\npre_handshake_rate_limit_count = -1\n", &log);
+        CHECK(cfg.preHandshakeRateLimitCount == 20);
+        CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+    }
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\npre_handshake_rate_limit_count = 10001\n", &log);
+        CHECK(cfg.preHandshakeRateLimitCount == 20);
+        CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+    }
+}
+
+TEST_CASE("parseServerConfig: pre_handshake_window_ms out of range warns and uses default",
+          "[server_config][security]") {
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\npre_handshake_window_ms = 50\n", &log);
+        CHECK(cfg.preHandshakeWindowMs == 1000);
+        CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+    }
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\npre_handshake_window_ms = 90000\n", &log);
+        CHECK(cfg.preHandshakeWindowMs == 1000);
+        CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+    }
 }

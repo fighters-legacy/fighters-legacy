@@ -242,6 +242,8 @@ int main(int argc, char** argv) {
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
 
+    static_cast<ENetNetwork*>(net)->setPreHandshakeRateLimit(cfg.preHandshakeRateLimitCount, cfg.preHandshakeWindowMs);
+
     // ---- LAN discovery beacon ----
     uint8_t discoveryGameModeFlags = 0;
     for (const auto& m : cfg.gameModes) {

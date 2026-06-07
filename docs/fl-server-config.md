@@ -67,6 +67,10 @@ time_scale         = 10.0   # game seconds per real second; 10 = full day/night 
 
 [ai]
 difficulty_floor = "recruit"
+
+[security]
+pre_handshake_rate_limit_count = 20   # max CONNECT attempts per IP per window; 0 = disabled
+pre_handshake_window_ms        = 1000 # sliding window in milliseconds
 ```
 
 ---
@@ -383,6 +387,32 @@ A connected peer that sends more than `packet_flood_multiplier × 60` `MsgClient
 per second is disconnected. At the default of 3, the threshold is 180 packets/s — three times
 the normal 60 Hz client rate. Set to 2 or higher to avoid false positives on 60 Hz clients.
 
+### `pre_handshake_rate_limit_count`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `20` | 0–10000 |
+
+Maximum number of ENet CONNECT packets accepted from a single IP address within
+`pre_handshake_window_ms` milliseconds, checked **before** ENet allocates peer state.
+Packets that exceed this count are silently dropped at the intercept layer — the
+client receives no error; ENet retries are also dropped until the window expires.
+
+Set to `0` to disable pre-handshake rate limiting entirely.
+
+This complements the post-handshake rate limiter (`connect_rate_limit_count`): together
+they defend against both syn-flood resource exhaustion (pre-handshake) and repeated-login
+probing (post-handshake).
+
+### `pre_handshake_window_ms`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `1000` | 100–60000 |
+
+Sliding window size in milliseconds for `pre_handshake_rate_limit_count`. Out-of-range
+values are rejected with a warning and the default is kept.
+
 ### `banlist_path`
 
 | Type | Default |
@@ -519,7 +549,8 @@ process.
 
 Fields that **require a restart** to take effect: `port`, `bind_address`, `max_peers`,
 `game_modes`, `password`, `discovery.*`, `mods.stack`, `rotation.*`, `world.*`, `ai.*`,
-`security.connect_rate_limit_*`, `security.packet_flood_multiplier`, `security.*_bandwidth_bps`.
+`security.connect_rate_limit_*`, `security.packet_flood_multiplier`, `security.*_bandwidth_bps`,
+`security.pre_handshake_rate_limit_count`, `security.pre_handshake_window_ms`.
 
 ### Access control
 
@@ -530,11 +561,16 @@ with `#` are comments. File line endings are portable: both `\n` and `\r\n` are 
 **Ban vs allowlist precedence:** the ban list check runs first. A banned IP is rejected even
 if it also appears in the allowlist.
 
+**Pre-handshake rate limiting**: ENet CONNECT packets from any source IP that exceed
+`pre_handshake_rate_limit_count` attempts within `pre_handshake_window_ms` milliseconds are
+silently dropped before ENet allocates peer state. This closes the gap between the raw UDP
+receive and the post-handshake rate limiter below. Full challenge-cookie anti-amplification
+(withholding VERIFY_CONNECT until the client echoes a server nonce) is a future item.
+
 **Connection rate limiting** (post-handshake): fl-server tracks how many times each IP
 address completes an ENet connection handshake within a sliding time window. Peers that
 exceed `connect_rate_limit_count` connections within `connect_rate_limit_window_s` seconds
-are disconnected immediately. Note: ENet completes the UDP three-way handshake before
-fl-server sees the connection; pre-handshake UDP amplification mitigation is a deferred item.
+are disconnected immediately.
 
 **Packet flood detection:** a connected peer that sends more than
 `packet_flood_multiplier × 60` `MsgClientInput` packets per second is disconnected.

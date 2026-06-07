@@ -57,6 +57,8 @@ struct ServerConfig {
     uint32_t incomingBandwidthBps = 0; // ENet host incoming cap, bytes/s; 0 = unlimited
     uint32_t outgoingBandwidthBps = 0; // ENet host outgoing cap, bytes/s; 0 = unlimited
     std::string operatorPassword; // empty = network admin commands disabled; overridden by --admin-token at runtime
+    int preHandshakeRateLimitCount = 20; // max CONNECT attempts per IP per window; 0 = disabled
+    int preHandshakeWindowMs = 1000;     // sliding window in milliseconds
 };
 
 // Returns the embedded default server.toml content written on first run.

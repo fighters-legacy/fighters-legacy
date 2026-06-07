@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ENetNetwork.h"
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -57,8 +58,11 @@ static void pumpN(INetwork& server, std::initializer_list<INetwork*> clients, in
     }
 }
 
-// Each integration test uses a unique port in [19001, 19010] to prevent
-// cross-test interference within the sequential Catch2 binary run.
+// Each integration test uses a unique port to prevent cross-test interference
+// within the sequential Catch2 binary run. Reserved ranges:
+//   [19001, 19010] -- basic tests
+//   [19021, 19024] -- IPv6 tests
+//   [19030, 19033] -- pre-handshake rate limit tests
 
 // ---------------------------------------------------------------------------
 // Init / shutdown
@@ -528,4 +532,180 @@ TEST_CASE("getPeerAddress plain format preserved for IPv4 peer", "[network][inte
 
     server.shutdown();
     client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Pre-handshake rate limiting
+// Ports 19030-19033 are reserved for these tests.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("pre-handshake rate limit blocks excess connect attempts", "[network][integration]") {
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point fakeNow = Clock::now();
+
+    ENetNetwork server, c1, c2, c3;
+    EventSink srvSink, s1, s2, s3;
+    REQUIRE(server.init());
+    REQUIRE(c1.init());
+    REQUIRE(c2.init());
+    REQUIRE(c3.init());
+    server.setEventHandler(&srvSink);
+    c1.setEventHandler(&s1);
+    c2.setEventHandler(&s2);
+    c3.setEventHandler(&s3);
+
+    REQUIRE(server.bind(nullptr, 19030, 8));
+    server.setPreHandshakeRateLimit(2, 2000);
+    server.setPreHandshakeClockOverride([&] { return fakeNow; });
+
+    // Flush all three SYNs onto the wire before the server processes any of them.
+    REQUIRE(c1.connect("127.0.0.1", 19030));
+    REQUIRE(c2.connect("127.0.0.1", 19030));
+    REQUIRE(c3.connect("127.0.0.1", 19030));
+    c1.service(0);
+    c2.service(0);
+    c3.service(0);
+    // Server receives all three SYNs in one pass: first two allowed, third dropped.
+    server.service(0);
+
+    // Pump to complete handshakes for the two allowed peers.
+    // Clock is fixed so all c3 retries are also dropped.
+    pumpN(server, {&c1, &c2, &c3}, 100);
+
+    CHECK(srvSink.countType(Event::Type::Connect) == 2);
+    CHECK(server.getPeerCount() == 2);
+
+    server.shutdown();
+    c1.shutdown();
+    c2.shutdown();
+    c3.shutdown();
+}
+
+TEST_CASE("pre-handshake rate limit window expiry allows reconnection", "[network][integration]") {
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point fakeNow = Clock::now();
+
+    ENetNetwork server, c1, c2, c3;
+    EventSink srvSink, s1, s2, s3;
+    REQUIRE(server.init());
+    REQUIRE(c1.init());
+    REQUIRE(c2.init());
+    REQUIRE(c3.init());
+    server.setEventHandler(&srvSink);
+    c1.setEventHandler(&s1);
+    c2.setEventHandler(&s2);
+    c3.setEventHandler(&s3);
+
+    REQUIRE(server.bind(nullptr, 19031, 8));
+    server.setPreHandshakeRateLimit(1, 1000);
+    server.setPreHandshakeClockOverride([&] { return fakeNow; });
+
+    // c1 SYN -> count=1 -> allowed; c2 SYN -> count=1 >= limit=1 -> dropped.
+    REQUIRE(c1.connect("127.0.0.1", 19031));
+    REQUIRE(c2.connect("127.0.0.1", 19031));
+    c1.service(0);
+    c2.service(0);
+    server.service(0);
+    pumpN(server, {&c1, &c2}, 60);
+
+    REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
+    CHECK(server.getPeerCount() == 1);
+
+    // Advance the injected clock past the 1000 ms window.
+    fakeNow += std::chrono::milliseconds(1500);
+
+    // Use a fresh client (c3) rather than waiting for c2's ENet retry timer
+    // (ENet's initial retry backoff is ~1000 ms; pumpN completes in microseconds
+    // of real time, so we cannot rely on c2 retrying within the pump window).
+    // c3's SYN is now allowed because c1's timestamp has been pruned.
+    REQUIRE(c3.connect("127.0.0.1", 19031));
+    c3.service(0);
+    server.service(0);
+    pumpN(server, {&c1, &c2, &c3}, 60);
+
+    CHECK(srvSink.countType(Event::Type::Connect) == 2);
+    CHECK(server.getPeerCount() == 2);
+
+    server.shutdown();
+    c1.shutdown();
+    c2.shutdown();
+    c3.shutdown();
+}
+
+TEST_CASE("pre-handshake rate limit 0 disables pre-handshake filter", "[network][integration]") {
+    ENetNetwork server, c1, c2, c3;
+    EventSink srvSink, s1, s2, s3;
+    REQUIRE(server.init());
+    REQUIRE(c1.init());
+    REQUIRE(c2.init());
+    REQUIRE(c3.init());
+    server.setEventHandler(&srvSink);
+    c1.setEventHandler(&s1);
+    c2.setEventHandler(&s2);
+    c3.setEventHandler(&s3);
+
+    REQUIRE(server.bind(nullptr, 19032, 8));
+    server.setPreHandshakeRateLimit(0, 1000); // 0 = disabled
+
+    REQUIRE(c1.connect("127.0.0.1", 19032));
+    REQUIRE(c2.connect("127.0.0.1", 19032));
+    REQUIRE(c3.connect("127.0.0.1", 19032));
+    pumpN(server, {&c1, &c2, &c3}, 100);
+
+    CHECK(srvSink.countType(Event::Type::Connect) == 3);
+    CHECK(server.getPeerCount() == 3);
+
+    server.shutdown();
+    c1.shutdown();
+    c2.shutdown();
+    c3.shutdown();
+}
+
+TEST_CASE("pre-handshake rate limit passes through established peer traffic", "[network][integration]") {
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point fakeNow = Clock::now();
+
+    ENetNetwork server, c1, c2;
+    EventSink srvSink, s1, s2;
+    REQUIRE(server.init());
+    REQUIRE(c1.init());
+    REQUIRE(c2.init());
+    server.setEventHandler(&srvSink);
+    c1.setEventHandler(&s1);
+    c2.setEventHandler(&s2);
+
+    REQUIRE(server.bind(nullptr, 19033, 8));
+    server.setPreHandshakeRateLimit(1, 60000); // limit=1, very long window
+    server.setPreHandshakeClockOverride([&] { return fakeNow; });
+
+    // c1 connects (count=1 = limit reached for 127.0.0.1).
+    REQUIRE(c1.connect("127.0.0.1", 19033));
+    c1.service(0);
+    server.service(0);
+    pumpN(server, {&c1}, 30);
+    REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
+
+    // c1 sends 10 reliable packets. Each passes the intercept (peerID != 0xFFF)
+    // without incrementing the rate-limit count.
+    for (int i = 0; i < 10; ++i) {
+        const uint8_t payload[] = {static_cast<uint8_t>(i)};
+        REQUIRE(c1.send(0, payload, 1, true));
+    }
+    pumpN(server, {&c1}, 20);
+    // All 10 packets must reach the server -- none dropped by the intercept.
+    CHECK(srvSink.countType(Event::Type::Receive) == 10);
+
+    // c2 attempts to connect. SYN has peerID=0xFFF; count=1 (from c1 SYN only,
+    // not inflated by the 10 data packets) >= limit=1 -- dropped.
+    REQUIRE(c2.connect("127.0.0.1", 19033));
+    c2.service(0);
+    server.service(0);
+    pumpN(server, {&c1, &c2}, 50);
+
+    CHECK(srvSink.countType(Event::Type::Connect) == 1);
+    CHECK(server.getPeerCount() == 1);
+
+    server.shutdown();
+    c1.shutdown();
+    c2.shutdown();
 }

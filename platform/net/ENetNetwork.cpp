@@ -1,7 +1,70 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ENetNetwork.h"
+#include <chrono>
 #include <cstring>
 #include <enet6/enet.h>
+
+// -------------------------------------------------------------------------
+// Pre-handshake intercept — anonymous namespace; no ENetNetwork.h exposure
+// -------------------------------------------------------------------------
+
+namespace {
+
+std::unordered_map<ENetHost*, ENetNetwork*> s_interceptRegistry;
+
+int ENET_CALLBACK preHandshakeIntercept(ENetHost* host, ENetEvent* event) {
+    auto it = s_interceptRegistry.find(host);
+    if (it == s_interceptRegistry.end())
+        return 0;
+
+    // Read the 2-byte ENet protocol header word (big-endian peer ID + flags).
+    if (host->receivedDataLength < 2)
+        return 0;
+    uint16_t raw;
+    std::memcpy(&raw, host->receivedData, 2);
+    raw = ENET_NET_TO_HOST_16(raw);
+    // Isolate the 12-bit peer ID (low bits; high 4 bits are flag/session mask).
+    uint16_t peerID = static_cast<uint16_t>(raw & 0x0FFFu);
+    if (peerID != ENET_PROTOCOL_MAXIMUM_PEER_ID)
+        return 0; // established-peer traffic — not a new-connection request
+
+    // Extract source IP. enet6's enet_address_get_host_ip includes the source port
+    // when non-zero (format: "a.b.c.d:port" for IPv4, "[addr]:port" for IPv6).
+    // Strip the port so rate limiting keys by IP only, not by (IP, ephemeral-port).
+    char buf[ENET_ADDRESS_MAX_LENGTH + 1];
+    if (enet_address_get_host_ip(&host->receivedAddress, buf, sizeof(buf)) != 0)
+        return 0;
+    if (host->receivedAddress.type == ENET_ADDRESS_TYPE_IPV4) {
+        // "a.b.c.d:port" — truncate at the last colon.
+        char* colon = std::strrchr(buf, ':');
+        if (colon)
+            *colon = '\0';
+    } else {
+        // "[addr]:port" — truncate at ']', then strip leading '['.
+        char* bracket = std::strrchr(buf, ']');
+        if (bracket)
+            *bracket = '\0';
+        if (buf[0] == '[')
+            std::memmove(buf, buf + 1, std::strlen(buf)); // includes '\0'
+    }
+    std::string ip = buf;
+    // Case-insensitive ::ffff: strip (dual-stack servers on Linux).
+    if (ip.size() > 7) {
+        std::string prefix = ip.substr(0, 7);
+        for (char& c : prefix)
+            c = static_cast<char>(c | 0x20); // tolower ASCII
+        if (prefix == "::ffff:")
+            ip = ip.substr(7);
+    }
+
+    if (!it->second->checkPreHandshakeConnect(ip.c_str())) {
+        event->type = ENET_EVENT_TYPE_NONE;
+        return 1; // drop
+    }
+    return 0;
+}
+
+} // namespace
 
 // -------------------------------------------------------------------------
 // Lifecycle
@@ -26,6 +89,7 @@ bool ENetNetwork::init() {
 void ENetNetwork::shutdown() {
     if (m_host) {
         drainPeers();
+        s_interceptRegistry.erase(m_host); // no-op on client path
         enet_host_destroy(m_host);
         m_host = nullptr;
     }
@@ -73,6 +137,8 @@ bool ENetNetwork::bind(const char* address, uint16_t port, int maxClients) {
     m_host->checksum = enet_crc32;
     // Adaptive range coder reduces bandwidth ~20-40% for game state traffic.
     enet_host_compress_with_range_coder(m_host);
+    s_interceptRegistry[m_host] = this;
+    enet_host_set_intercept_callback(m_host, preHandshakeIntercept);
     m_isServer = true;
     return true;
 }
@@ -114,6 +180,7 @@ void ENetNetwork::disconnect() {
     if (!m_host)
         return;
     drainPeers();
+    s_interceptRegistry.erase(m_host); // no-op on client path
     enet_host_destroy(m_host);
     m_host = nullptr;
     m_isServer = false;
@@ -276,6 +343,29 @@ const char* ENetNetwork::getLastError() const {
 void ENetNetwork::setBandwidthLimit(uint32_t incomingBps, uint32_t outgoingBps) {
     if (m_host)
         enet_host_bandwidth_limit(m_host, incomingBps, outgoingBps);
+}
+
+void ENetNetwork::setPreHandshakeRateLimit(int maxAttempts, int windowMs) {
+    m_preHandshakeRateLimit = maxAttempts;
+    m_preHandshakeWindowMs = windowMs;
+}
+
+void ENetNetwork::setPreHandshakeClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
+    m_preHandshakeNow = std::move(fn);
+}
+
+bool ENetNetwork::checkPreHandshakeConnect(const char* ip) noexcept {
+    if (m_preHandshakeRateLimit == 0)
+        return true;
+    auto now = m_preHandshakeNow();
+    auto windowStart = now - std::chrono::milliseconds(m_preHandshakeWindowMs);
+    PreHandshakeRecord& rec = m_preHandshakeRecords[ip];
+    while (!rec.timestamps.empty() && rec.timestamps.front() < windowStart)
+        rec.timestamps.pop_front();
+    if (static_cast<int>(rec.timestamps.size()) >= m_preHandshakeRateLimit)
+        return false;
+    rec.timestamps.push_back(now);
+    return true;
 }
 
 // -------------------------------------------------------------------------

@@ -76,6 +76,13 @@ static const char* kDefaultToml =
     "# For single-player, fl-server uses a per-session token passed via --admin-token.\n"
     "operator_password = \"\"\n"
     "\n"
+    "# Pre-handshake CONNECT flood mitigation. Drops ENet CONNECT packets from any\n"
+    "# source IP that exceeds pre_handshake_rate_limit_count attempts within the\n"
+    "# pre_handshake_window_ms sliding window, before ENet peer state is allocated.\n"
+    "# Set pre_handshake_rate_limit_count = 0 to disable.\n"
+    "pre_handshake_rate_limit_count = 20\n"
+    "pre_handshake_window_ms = 1000\n"
+    "\n"
     "[shutdown]\n"
     "shutdown_warning_interval_s = 300\n"
     "min_shutdown_delay_s = 0\n"
@@ -272,6 +279,22 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
         if (auto v = tbl["security"]["operator_password"].value<std::string>())
             cfg.operatorPassword = std::move(*v);
+        if (auto v = tbl["security"]["pre_handshake_rate_limit_count"].value<int64_t>()) {
+            if (*v < 0 || *v > 10000) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.pre_handshake_rate_limit_count out of range [0,10000]; using default");
+            } else {
+                cfg.preHandshakeRateLimitCount = static_cast<int>(*v);
+            }
+        }
+        if (auto v = tbl["security"]["pre_handshake_window_ms"].value<int64_t>()) {
+            if (*v < 100 || *v > 60000) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.pre_handshake_window_ms out of range [100,60000]; using default");
+            } else {
+                cfg.preHandshakeWindowMs = static_cast<int>(*v);
+            }
+        }
 
         // [shutdown]
         if (auto v = tbl["shutdown"]["warning_interval_s"].value<int64_t>()) {

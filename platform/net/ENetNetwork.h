@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "INetwork.h"
+#include <chrono>
+#include <deque>
+#include <functional>
 #include <string>
+#include <unordered_map>
 
 struct _ENetHost; // typedef'd as ENetHost in enet/enet.h
 struct _ENetPeer; // typedef'd as ENetPeer in enet/enet.h
@@ -36,6 +40,16 @@ class ENetNetwork : public INetwork {
     // 0 = unlimited (ENet default). Not part of INetwork — server-only, called at startup.
     void setBandwidthLimit(uint32_t incomingBps, uint32_t outgoingBps);
 
+    // Pre-handshake rate limiting — drop CONNECT packets from IPs that exceed
+    // maxAttempts within windowMs milliseconds before ENet peer state is allocated.
+    // maxAttempts = 0 disables the filter. Not part of INetwork — server-only.
+    void setPreHandshakeRateLimit(int maxAttempts, int windowMs);
+    void setPreHandshakeClockOverride(std::function<std::chrono::steady_clock::time_point()> fn);
+
+    // Called from the ENet intercept callback (ENetNetwork.cpp anonymous namespace).
+    // Returns true = allow, false = drop.
+    bool checkPreHandshakeConnect(const char* ip) noexcept;
+
   private:
     void drainPeers(); // graceful disconnect + 100 ms drain; used by disconnect() and shutdown()
 
@@ -49,4 +63,12 @@ class ENetNetwork : public INetwork {
     bool m_initialized{false};
     mutable std::string m_lastError;
     mutable std::string m_peerAddressBuf; // backing store for getPeerAddress()
+
+    struct PreHandshakeRecord {
+        std::deque<std::chrono::steady_clock::time_point> timestamps;
+    };
+    std::unordered_map<std::string, PreHandshakeRecord> m_preHandshakeRecords;
+    int m_preHandshakeRateLimit{20}; // 0 = disabled
+    int m_preHandshakeWindowMs{1000};
+    std::function<std::chrono::steady_clock::time_point()> m_preHandshakeNow{std::chrono::steady_clock::now};
 };
