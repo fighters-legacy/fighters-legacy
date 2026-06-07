@@ -584,11 +584,11 @@ void InputBindings::applyDefaults() {
 
     // Gamepad alt defaults
     m_alt[static_cast<int>(InputAction::PitchAxis)] = {BindingSource::GamepadAxis,
-                                                       static_cast<uint32_t>(GamepadAxis::LeftY), false};
+                                                       static_cast<uint32_t>(GamepadAxis::RightY), false};
     m_alt[static_cast<int>(InputAction::RollAxis)] = {BindingSource::GamepadAxis,
-                                                      static_cast<uint32_t>(GamepadAxis::LeftX), false};
+                                                      static_cast<uint32_t>(GamepadAxis::RightX), false};
     m_alt[static_cast<int>(InputAction::YawAxis)] = {BindingSource::GamepadAxis,
-                                                     static_cast<uint32_t>(GamepadAxis::RightX), false};
+                                                     static_cast<uint32_t>(GamepadAxis::LeftX), false};
     m_alt[static_cast<int>(InputAction::ThrottleAxis)] = {BindingSource::GamepadAxis,
                                                           static_cast<uint32_t>(GamepadAxis::TriggerLeft), false};
     m_alt[static_cast<int>(InputAction::FireWeapon)] = {BindingSource::GamepadButton,

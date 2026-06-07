@@ -487,6 +487,34 @@ int main(int argc, char** argv) {
                 inp.aileron = (keys[SDL_SCANCODE_RIGHT] ? 1.f : 0.f) + (keys[SDL_SCANCODE_LEFT] ? -1.f : 0.f);
                 inp.rudder = (keys[SDL_SCANCODE_X] ? 1.f : 0.f) + (keys[SDL_SCANCODE_Z] ? -1.f : 0.f);
                 inp.buttons = keys[SDL_SCANCODE_SPACE] ? 1u : 0u;
+
+                // Gamepad axis blend — wins when |axis| > deadzone.
+                if (p.input->getGamepadCount() > 0) {
+                    const auto cs = userConfig.controls();
+                    const float dz = cs.gamepadDeadzone;
+                    auto applyAxis = [dz](float raw) -> float {
+                        float mag = std::abs(raw);
+                        if (mag <= dz)
+                            return 0.0f;
+                        return std::copysign((mag - dz) / (1.0f - dz), raw);
+                    };
+                    // Throttle: TriggerLeft [0,1] → absolute set when above deadzone.
+                    float trig = p.input->getGamepadAxis(0, GamepadAxis::TriggerLeft);
+                    if (trig > dz) {
+                        float t = (trig - dz) / (1.0f - dz);
+                        camInput.setThrottle(cs.invertThrottle ? 1.0f - t : t);
+                        inp.throttle = camInput.throttle();
+                    }
+                    float elev = applyAxis(p.input->getGamepadAxis(0, GamepadAxis::RightY));
+                    if (elev != 0.0f)
+                        inp.elevator = cs.invertPitch ? -elev : elev;
+                    float ail = applyAxis(p.input->getGamepadAxis(0, GamepadAxis::RightX));
+                    if (ail != 0.0f)
+                        inp.aileron = cs.invertRoll ? -ail : ail;
+                    float rud = applyAxis(p.input->getGamepadAxis(0, GamepadAxis::LeftX));
+                    if (rud != 0.0f)
+                        inp.rudder = cs.invertRudder ? -rud : rud;
+                }
             } else {
                 inp.throttle = camInput.throttle();
             }

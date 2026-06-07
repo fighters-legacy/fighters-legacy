@@ -610,6 +610,13 @@ bool UserConfig::load() {
     if (auto v = tbl["accessibility"]["subtitle_duration_scale"].value<double>())
         m_accessibility.subtitleDurationScale = static_cast<float>(std::clamp(*v, 0.5, 3.0));
 
+    // [controls]
+    m_controls.gamepadDeadzone = std::clamp(tbl["controls"]["gamepad_deadzone"].value_or(0.05f), 0.0f, 0.99f);
+    m_controls.invertPitch = tbl["controls"]["invert_pitch"].value_or(false);
+    m_controls.invertRoll = tbl["controls"]["invert_roll"].value_or(false);
+    m_controls.invertRudder = tbl["controls"]["invert_rudder"].value_or(false);
+    m_controls.invertThrottle = tbl["controls"]["invert_throttle"].value_or(false);
+
     // [debug]
     if (auto v = tbl["debug"]["overlay_mode"].value<int64_t>()) {
         switch (*v) {
@@ -713,6 +720,13 @@ bool UserConfig::save() {
     accessibility.insert_or_assign("subtitle_duration_scale",
                                    static_cast<double>(m_accessibility.subtitleDurationScale));
 
+    toml::table controls;
+    controls.insert_or_assign("gamepad_deadzone", static_cast<double>(m_controls.gamepadDeadzone));
+    controls.insert_or_assign("invert_pitch", m_controls.invertPitch);
+    controls.insert_or_assign("invert_roll", m_controls.invertRoll);
+    controls.insert_or_assign("invert_rudder", m_controls.invertRudder);
+    controls.insert_or_assign("invert_throttle", m_controls.invertThrottle);
+
     toml::table debug;
     debug.insert_or_assign("overlay_mode", static_cast<int64_t>(m_debug.overlayMode));
 
@@ -747,6 +761,7 @@ bool UserConfig::save() {
     root.insert_or_assign("audio", std::move(audio));
     root.insert_or_assign("difficulty", std::move(difficulty));
     root.insert_or_assign("accessibility", std::move(accessibility));
+    root.insert_or_assign("controls", std::move(controls));
     root.insert_or_assign("debug", std::move(debug));
     root.insert_or_assign("pilot", std::move(pilot));
 
@@ -810,6 +825,13 @@ AccessibilitySettings UserConfig::accessibility() const {
 }
 void UserConfig::setAccessibility(const AccessibilitySettings& as) {
     m_accessibility = as;
+}
+
+ControlsSettings UserConfig::controls() const {
+    return m_controls;
+}
+void UserConfig::setControls(const ControlsSettings& cs) {
+    m_controls = cs;
 }
 
 DebugSettings UserConfig::debug() const {

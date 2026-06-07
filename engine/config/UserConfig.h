@@ -4,6 +4,7 @@
 #include "ILogger.h"
 #include "config/AccessibilitySettings.h"
 #include "config/AudioSettings.h"
+#include "config/ControlsSettings.h"
 #include "config/DebugSettings.h"
 #include "config/DifficultySettings.h"
 #include "config/GraphicsSettings.h"
@@ -44,6 +45,9 @@ class UserConfig {
     AccessibilitySettings accessibility() const;
     void setAccessibility(const AccessibilitySettings& as);
 
+    ControlsSettings controls() const;
+    void setControls(const ControlsSettings& cs);
+
     DebugSettings debug() const;
     void setDebug(const DebugSettings& ds);
 
@@ -62,6 +66,7 @@ class UserConfig {
     AudioSettings m_audio{};
     DifficultySettings m_difficulty{};
     AccessibilitySettings m_accessibility{};
+    ControlsSettings m_controls{};
     DebugSettings m_debug{};
     PilotSettings m_pilot{};
 };
