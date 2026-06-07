@@ -120,10 +120,10 @@ TEST_CASE("InputBindings default constructor applies defaults", "[bindings]") {
     CHECK(pitch.source == BindingSource::Keyboard);
     CHECK(pitch.id == static_cast<uint32_t>(Key::S));
 
-    // Gamepad alt: PitchAxis bound to LeftY
+    // Gamepad alt: PitchAxis bound to RightY
     Binding pitchAxis = b.get(InputAction::PitchAxis, true);
     CHECK(pitchAxis.source == BindingSource::GamepadAxis);
-    CHECK(pitchAxis.id == static_cast<uint32_t>(GamepadAxis::LeftY));
+    CHECK(pitchAxis.id == static_cast<uint32_t>(GamepadAxis::RightY));
 }
 
 // ---------------------------------------------------------------------------
@@ -430,7 +430,7 @@ TEST_CASE("InputBindings roundtrips all uncovered keyboard letter and digit keys
 TEST_CASE("InputBindings conflictsWith detects alt-slot conflict", "[bindings]") {
     InputBindings b;
     b.applyDefaults();
-    // PitchAxis alt is LeftY gamepad axis — try to put same binding in RollAxis alt
+    // PitchAxis alt is RightY gamepad axis — try to put same binding in RollAxis alt
     Binding altPitch = b.get(InputAction::PitchAxis, true);
     auto conflict = b.conflictsWith(InputAction::RollAxis, altPitch);
     REQUIRE(conflict.has_value());

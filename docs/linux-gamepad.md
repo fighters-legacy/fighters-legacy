@@ -86,6 +86,10 @@ All buttons, axes, and rumble should respond correctly.
 
 ## HOTAS and joystick devices
 
+**Note:** this release maps standard gamepads (Xbox / PlayStation, via `IInput::getGamepadAxis`) to
+flight controls. HOTAS throttle quadrants, rudder pedals, and raw flight sticks (`IJoystick` API)
+are recognised by the engine but are not yet wired to flight inputs.
+
 HOTAS throttle quadrants, rudder pedals, and flight sticks appear as evdev nodes
 (`/dev/input/eventX`) on Linux. Adding your user to the `input` group (see above) covers
 most devices. If your HOTAS is not responding, create a udev rule for its vendor name:

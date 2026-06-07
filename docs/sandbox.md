@@ -58,6 +58,30 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | Z / X | Rudder left / right |
 | Space | Weapon trigger (bit 0) |
 
+## Gamepad controls
+
+Standard gamepads (Xbox / PlayStation) are supported in all camera modes. A joystick axis
+overrides the corresponding keyboard control when the axis value exceeds the deadzone
+(default 0.05). Keyboard controls remain active when no gamepad is connected or all axes
+are within the deadzone.
+
+| Axis | Default mapping |
+|---|---|
+| Throttle | Left trigger — absolute position [0, 1] |
+| Elevator (pitch) | Right stick Y |
+| Aileron (roll) | Right stick X |
+| Rudder (yaw) | Left stick X |
+
+Configure in the `[controls]` section of `config/user.toml`:
+
+| Key | Default | Description |
+|---|---|---|
+| `gamepad_deadzone` | `0.05` | Minimum axis magnitude before input is registered |
+| `invert_pitch` | `false` | Flip elevator axis |
+| `invert_roll` | `false` | Flip aileron axis |
+| `invert_rudder` | `false` | Flip rudder axis |
+| `invert_throttle` | `false` | Flip throttle direction |
+
 ## Performance overlay (F3)
 
 Cycles Off → Compact → Full. **Full mode** includes a 128-position rolling frame-time bar graph using Unicode shade characters (░ ▒ ▓ █ — U+2591/92/93/88). The renderer uses GNU Unifont 8×16 (full Unicode BMP), so these render correctly on all platforms without the CP437 fallback workaround previously used.
