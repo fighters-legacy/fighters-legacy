@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **renderer**: Particle emitters with `spawnRate < 60/s` now produce correct output at 60 fps; fractional remainder is carried across frames instead of being truncated to zero each frame (closes #263)
+
+### Changed
+
+- **renderer**: `rain` and `storm_rain` preset spawn rates reduced from 600/s and 1200/s to 100/s and 200/s respectively; the previous values compensated for the truncation bug and also exceeded `kMaxParticles=8192` at 9 emitters
+
 ## [0.2.2] - 2026-05-27
 
 ### Changed

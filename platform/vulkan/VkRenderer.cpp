@@ -2556,10 +2556,18 @@ void VkRenderer::recordParticleCompute(VkCommandBuffer cmd, float dt) {
     auto* spawnBuf = static_cast<GpuParticle*>(m_particleSpawn[m_currentFrame].mapped);
     uint32_t spawnCount = 0;
 
+    const size_t emitterCount = m_pendingScene.particleEmitters.size();
+    if (m_spawnAccum.size() != emitterCount)
+        m_spawnAccum.assign(emitterCount, 0.0f);
+
+    size_t emitterIdx = 0;
     for (const auto& emitter : m_pendingScene.particleEmitters) {
+        float& accum = m_spawnAccum[emitterIdx++];
         if (!emitter.effectName || emitter.intensity <= 0.0f)
             continue;
-        const uint32_t toSpawn = static_cast<uint32_t>(emitter.spawnRate * dt * emitter.intensity);
+        accum += emitter.spawnRate * dt * emitter.intensity;
+        const uint32_t toSpawn = static_cast<uint32_t>(accum);
+        accum -= static_cast<float>(toSpawn);
 
         // Tangent frame for hemisphere centred on emitDirection.
         const glm::vec3 dir = glm::length(emitter.emitDirection) > 0.5f ? glm::normalize(emitter.emitDirection)
