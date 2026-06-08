@@ -236,8 +236,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             ws.timeOfDayTenths = static_cast<uint16_t>(tod * 10.f);
             ws.fogDensity = env.fogDensity;
             ws.fogStartDist = env.fogStartDist;
-            ws.windX = m_weather->windX();
-            ws.windZ = m_weather->windZ();
+            ws.windX = env.windX;
+            ws.windZ = env.windZ;
             m_net.broadcast(&ws, sizeof(ws), /*reliable=*/false);
         }
     }

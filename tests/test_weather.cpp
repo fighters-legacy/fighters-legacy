@@ -110,6 +110,15 @@ TEST_CASE("WeatherController: computeEnvironment Overcast ambient is brighter th
     CHECK(overcastAmb > clearAmb);
 }
 
+TEST_CASE("WeatherController: computeEnvironment populates windX and windZ", "[weather]") {
+    WeatherController wc;
+    wc.setWind(270.f, 10.f); // FROM west, 10 m/s -> blows east (+X)
+    const EnvironmentState env = wc.computeEnvironment();
+    CHECK(env.windX == wc.windX()); // same instant: bit-identical, exact equality correct
+    CHECK(env.windZ == wc.windZ());
+    CHECK(env.windX > 0.f); // sanity: wind blows east
+}
+
 // ---------------------------------------------------------------------------
 // Time clock advancement
 // ---------------------------------------------------------------------------

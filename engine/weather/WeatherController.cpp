@@ -204,6 +204,8 @@ void WeatherController::applyPresetToEnv(WeatherPreset p, float timeOfDay, Envir
 EnvironmentState WeatherController::computeEnvironment() const {
     EnvironmentState env{};
     applyPresetToEnv(m_preset, m_timeOfDay, env);
+    env.windX = windX();
+    env.windZ = windZ();
     return env;
 }
 
