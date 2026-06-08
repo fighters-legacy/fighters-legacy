@@ -616,6 +616,19 @@ bool UserConfig::load() {
     m_controls.invertRoll = tbl["controls"]["invert_roll"].value_or(false);
     m_controls.invertRudder = tbl["controls"]["invert_rudder"].value_or(false);
     m_controls.invertThrottle = tbl["controls"]["invert_throttle"].value_or(false);
+    m_controls.hotasAileronAxis =
+        std::clamp(static_cast<int>(tbl["controls"]["hotas_aileron_axis"].value_or(0LL)), -1, 127);
+    m_controls.hotasElevatorAxis =
+        std::clamp(static_cast<int>(tbl["controls"]["hotas_elevator_axis"].value_or(1LL)), -1, 127);
+    m_controls.hotasThrottleAxis =
+        std::clamp(static_cast<int>(tbl["controls"]["hotas_throttle_axis"].value_or(2LL)), -1, 127);
+    m_controls.hotasRudderAxis =
+        std::clamp(static_cast<int>(tbl["controls"]["hotas_rudder_axis"].value_or(3LL)), -1, 127);
+    m_controls.hotasDeadzone = std::clamp(tbl["controls"]["hotas_deadzone"].value_or(0.05f), 0.0f, 0.99f);
+    m_controls.hotasInvertPitch = tbl["controls"]["hotas_invert_pitch"].value_or(false);
+    m_controls.hotasInvertRoll = tbl["controls"]["hotas_invert_roll"].value_or(false);
+    m_controls.hotasInvertRudder = tbl["controls"]["hotas_invert_rudder"].value_or(false);
+    m_controls.hotasInvertThrottle = tbl["controls"]["hotas_invert_throttle"].value_or(false);
 
     // [debug]
     if (auto v = tbl["debug"]["overlay_mode"].value<int64_t>()) {
@@ -726,6 +739,15 @@ bool UserConfig::save() {
     controls.insert_or_assign("invert_roll", m_controls.invertRoll);
     controls.insert_or_assign("invert_rudder", m_controls.invertRudder);
     controls.insert_or_assign("invert_throttle", m_controls.invertThrottle);
+    controls.insert_or_assign("hotas_aileron_axis", static_cast<int64_t>(m_controls.hotasAileronAxis));
+    controls.insert_or_assign("hotas_elevator_axis", static_cast<int64_t>(m_controls.hotasElevatorAxis));
+    controls.insert_or_assign("hotas_throttle_axis", static_cast<int64_t>(m_controls.hotasThrottleAxis));
+    controls.insert_or_assign("hotas_rudder_axis", static_cast<int64_t>(m_controls.hotasRudderAxis));
+    controls.insert_or_assign("hotas_deadzone", static_cast<double>(m_controls.hotasDeadzone));
+    controls.insert_or_assign("hotas_invert_pitch", m_controls.hotasInvertPitch);
+    controls.insert_or_assign("hotas_invert_roll", m_controls.hotasInvertRoll);
+    controls.insert_or_assign("hotas_invert_rudder", m_controls.hotasInvertRudder);
+    controls.insert_or_assign("hotas_invert_throttle", m_controls.hotasInvertThrottle);
 
     toml::table debug;
     debug.insert_or_assign("overlay_mode", static_cast<int64_t>(m_debug.overlayMode));

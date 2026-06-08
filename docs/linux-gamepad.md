@@ -86,9 +86,8 @@ All buttons, axes, and rumble should respond correctly.
 
 ## HOTAS and joystick devices
 
-**Note:** this release maps standard gamepads (Xbox / PlayStation, via `IInput::getGamepadAxis`) to
-flight controls. HOTAS throttle quadrants, rudder pedals, and raw flight sticks (`IJoystick` API)
-are recognised by the engine but are not yet wired to flight inputs.
+HOTAS throttle quadrants, rudder pedals, and raw flight sticks are supported via the `IJoystick`
+API. Axis assignments and deadzone/invert settings are configurable in `config/user.toml`.
 
 HOTAS throttle quadrants, rudder pedals, and flight sticks appear as evdev nodes
 (`/dev/input/eventX`) on Linux. Adding your user to the `input` group (see above) covers
@@ -111,3 +110,17 @@ is the event number shown in `evtest`) and match on `ATTRS{name}`. Add a new lin
 your brand using the same pattern.
 
 Reconnect the device after applying the rules (or run `sudo udevadm trigger`).
+
+### Axis config keys (`config/user.toml [controls]`)
+
+| Key | Default | Description |
+|---|---|---|
+| `hotas_aileron_axis` | `0` | Axis index → aileron; -1 to disable |
+| `hotas_elevator_axis` | `1` | Axis index → elevator; -1 to disable |
+| `hotas_throttle_axis` | `2` | Axis index → throttle; -1 to disable |
+| `hotas_rudder_axis` | `3` | Axis index → rudder; -1 to disable |
+| `hotas_deadzone` | `0.05` | Center deadzone for stick and pedal axes |
+| `hotas_invert_pitch` | `false` | Flip elevator axis |
+| `hotas_invert_roll` | `false` | Flip aileron axis |
+| `hotas_invert_rudder` | `false` | Flip rudder axis |
+| `hotas_invert_throttle` | `false` | Flip throttle direction |

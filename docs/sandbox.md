@@ -82,6 +82,41 @@ Configure in the `[controls]` section of `config/user.toml`:
 | `invert_rudder` | `false` | Flip rudder axis |
 | `invert_throttle` | `false` | Flip throttle direction |
 
+## HOTAS controls
+
+HOTAS sticks, throttle quadrants, and rudder pedals are supported via the raw joystick API on
+all platforms. Windows and macOS work without additional device setup; Linux users may need udev
+rules for device permissions (see [docs/linux-gamepad.md](linux-gamepad.md)).
+
+Axis assignments default to a standard HOTAS layout and are configurable per device. A HOTAS
+axis overrides the corresponding keyboard or gamepad control when active; inactive HOTAS axes
+leave keyboard/gamepad values untouched.
+
+**Throttle axis mapping:** the throttle axis reports full travel as `[-1, 1]`; this is remapped
+to `[0, 1]` automatically. Keyboard Page Up / Page Down and the gamepad trigger remain active
+when the HOTAS throttle axis is disabled (`hotas_throttle_axis = -1`).
+
+| Default axis index | Mapping |
+|---|---|
+| 0 | Aileron (roll) |
+| 1 | Elevator (pitch) |
+| 2 | Throttle |
+| 3 | Rudder (yaw) |
+
+Configure in the `[controls]` section of `config/user.toml`:
+
+| Key | Default | Description |
+|---|---|---|
+| `hotas_aileron_axis` | `0` | Axis index → aileron; -1 to disable |
+| `hotas_elevator_axis` | `1` | Axis index → elevator; -1 to disable |
+| `hotas_throttle_axis` | `2` | Axis index → throttle; -1 to disable |
+| `hotas_rudder_axis` | `3` | Axis index → rudder; -1 to disable |
+| `hotas_deadzone` | `0.05` | Center deadzone for stick and pedal axes (not applied to throttle) |
+| `hotas_invert_pitch` | `false` | Flip elevator axis |
+| `hotas_invert_roll` | `false` | Flip aileron axis |
+| `hotas_invert_rudder` | `false` | Flip rudder axis |
+| `hotas_invert_throttle` | `false` | Flip throttle direction |
+
 ## Performance overlay (F3)
 
 Cycles Off → Compact → Full. **Full mode** includes a 128-position rolling frame-time bar graph using Unicode shade characters (░ ▒ ▓ █ — U+2591/92/93/88). The renderer uses GNU Unifont 8×16 (full Unicode BMP), so these render correctly on all platforms without the CP437 fallback workaround previously used.

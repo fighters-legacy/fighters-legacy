@@ -489,8 +489,8 @@ int main(int argc, char** argv) {
                 inp.buttons = keys[SDL_SCANCODE_SPACE] ? 1u : 0u;
 
                 // Gamepad axis blend — wins when |axis| > deadzone.
+                const auto cs = userConfig.controls();
                 if (p.input->getGamepadCount() > 0) {
-                    const auto cs = userConfig.controls();
                     const float dz = cs.gamepadDeadzone;
                     auto applyAxis = [dz](float raw) -> float {
                         float mag = std::abs(raw);
@@ -514,6 +514,42 @@ int main(int argc, char** argv) {
                     float rud = applyAxis(p.input->getGamepadAxis(0, GamepadAxis::LeftX));
                     if (rud != 0.0f)
                         inp.rudder = cs.invertRudder ? -rud : rud;
+                }
+
+                // HOTAS / raw joystick blend — throttle always sets absolute position;
+                // stick/pedal axes win when |axis| > hotasDeadzone.
+                if (p.joystick && p.joystick->getJoystickCount() > 0) {
+                    const int axCount = p.joystick->getAxisCount(0);
+                    const float hdz = cs.hotasDeadzone;
+                    auto applyHotas = [hdz](float raw) -> float {
+                        float mag = std::abs(raw);
+                        if (mag <= hdz)
+                            return 0.0f;
+                        return std::copysign((mag - hdz) / (1.0f - hdz), raw);
+                    };
+                    // Throttle: full-range [-1, 1] → [0, 1]; absolute position device.
+                    if (cs.hotasThrottleAxis >= 0 && cs.hotasThrottleAxis < axCount) {
+                        float raw = p.joystick->getAxisValue(0, cs.hotasThrottleAxis);
+                        if (cs.hotasInvertThrottle)
+                            raw = -raw;
+                        camInput.setThrottle(std::clamp((raw + 1.0f) * 0.5f, 0.0f, 1.0f));
+                        inp.throttle = camInput.throttle();
+                    }
+                    if (cs.hotasElevatorAxis >= 0 && cs.hotasElevatorAxis < axCount) {
+                        float elev = applyHotas(p.joystick->getAxisValue(0, cs.hotasElevatorAxis));
+                        if (elev != 0.0f)
+                            inp.elevator = cs.hotasInvertPitch ? -elev : elev;
+                    }
+                    if (cs.hotasAileronAxis >= 0 && cs.hotasAileronAxis < axCount) {
+                        float ail = applyHotas(p.joystick->getAxisValue(0, cs.hotasAileronAxis));
+                        if (ail != 0.0f)
+                            inp.aileron = cs.hotasInvertRoll ? -ail : ail;
+                    }
+                    if (cs.hotasRudderAxis >= 0 && cs.hotasRudderAxis < axCount) {
+                        float rud = applyHotas(p.joystick->getAxisValue(0, cs.hotasRudderAxis));
+                        if (rud != 0.0f)
+                            inp.rudder = cs.hotasInvertRudder ? -rud : rud;
+                    }
                 }
             } else {
                 inp.throttle = camInput.throttle();

@@ -186,6 +186,85 @@ TEST_CASE("UserConfig: [controls] roundtrip save+load", "[userconfig]") {
     CHECK_FALSE(config2.controls().invertThrottle);
 }
 
+TEST_CASE("UserConfig: [controls] HOTAS defaults when section absent", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    config.load();
+    CHECK(config.controls().hotasAileronAxis == 0);
+    CHECK(config.controls().hotasElevatorAxis == 1);
+    CHECK(config.controls().hotasThrottleAxis == 2);
+    CHECK(config.controls().hotasRudderAxis == 3);
+    CHECK(config.controls().hotasDeadzone == Catch::Approx(0.05f));
+    CHECK_FALSE(config.controls().hotasInvertPitch);
+    CHECK_FALSE(config.controls().hotasInvertRoll);
+    CHECK_FALSE(config.controls().hotasInvertRudder);
+    CHECK_FALSE(config.controls().hotasInvertThrottle);
+}
+
+TEST_CASE("UserConfig: [controls] HOTAS deadzone clamped to 0.99", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[controls]\nhotas_deadzone = 5.0\n");
+    UserConfig config(fs, logger);
+    config.load();
+    CHECK(config.controls().hotasDeadzone <= 0.99f);
+}
+
+TEST_CASE("UserConfig: [controls] HOTAS axis index out of range clamped", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[controls]\nhotas_aileron_axis = 200\nhotas_elevator_axis = -99\n");
+    UserConfig config(fs, logger);
+    config.load();
+    CHECK(config.controls().hotasAileronAxis == 127);
+    CHECK(config.controls().hotasElevatorAxis == -1);
+}
+
+TEST_CASE("UserConfig: [controls] HOTAS axis index -1 preserved", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[controls]\nhotas_aileron_axis = -1\nhotas_elevator_axis = -1\n"
+                                   "hotas_throttle_axis = -1\nhotas_rudder_axis = -1\n");
+    UserConfig config(fs, logger);
+    config.load();
+    CHECK(config.controls().hotasAileronAxis == -1);
+    CHECK(config.controls().hotasElevatorAxis == -1);
+    CHECK(config.controls().hotasThrottleAxis == -1);
+    CHECK(config.controls().hotasRudderAxis == -1);
+}
+
+TEST_CASE("UserConfig: [controls] HOTAS roundtrip save+load", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    ControlsSettings cs;
+    cs.hotasAileronAxis = 4;
+    cs.hotasElevatorAxis = 5;
+    cs.hotasThrottleAxis = 6;
+    cs.hotasRudderAxis = 7;
+    cs.hotasDeadzone = 0.12f;
+    cs.hotasInvertPitch = true;
+    cs.hotasInvertRoll = false;
+    cs.hotasInvertRudder = true;
+    cs.hotasInvertThrottle = true;
+    config.setControls(cs);
+    config.save();
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    CHECK(config2.controls().hotasAileronAxis == 4);
+    CHECK(config2.controls().hotasElevatorAxis == 5);
+    CHECK(config2.controls().hotasThrottleAxis == 6);
+    CHECK(config2.controls().hotasRudderAxis == 7);
+    CHECK(config2.controls().hotasDeadzone == Catch::Approx(0.12f));
+    CHECK(config2.controls().hotasInvertPitch);
+    CHECK_FALSE(config2.controls().hotasInvertRoll);
+    CHECK(config2.controls().hotasInvertRudder);
+    CHECK(config2.controls().hotasInvertThrottle);
+}
+
 // ---------------------------------------------------------------------------
 // [pilot] tests
 // ---------------------------------------------------------------------------
