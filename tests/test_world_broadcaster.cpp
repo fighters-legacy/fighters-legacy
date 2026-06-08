@@ -1791,6 +1791,139 @@ TEST_CASE("WorldBroadcaster: notice text uses final-minute wording at T-60s", "[
     CHECK(std::string(notice.text).find("1 minute") != std::string::npos);
 }
 
+TEST_CASE("WorldBroadcaster: initiateShutdown with reason includes reason in countdown notice",
+          "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(300, 5, "Server restarting");
+
+    broadcaster.onTick(1.0 / 60.0, 0u);
+
+    fl::MsgServerNotice notice{};
+    REQUIRE(findNotice(net.broadcasts, 0, notice));
+    std::string text(notice.text);
+    CHECK(text.find("Server restarting") != std::string::npos);
+    CHECK(text.find("minutes") != std::string::npos);
+}
+
+TEST_CASE("WorldBroadcaster: initiateShutdown with reason uses short format for secsLeft at most 60",
+          "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(30, 5, "Server restarting");
+
+    broadcaster.onTick(1.0 / 60.0, 0u);
+
+    fl::MsgServerNotice notice{};
+    REQUIRE(findNotice(net.broadcasts, 0, notice));
+    std::string text(notice.text);
+    CHECK(text.find("Server restarting") != std::string::npos);
+    CHECK(text.find("1 minute") != std::string::npos);
+    CHECK(text.find("save your progress") == std::string::npos);
+}
+
+TEST_CASE("WorldBroadcaster: initiateShutdown with reason includes reason in T=0 notice",
+          "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(0, 5, "Server restarting");
+
+    broadcaster.onTick(1.0 / 60.0, 0u);
+
+    fl::MsgServerNotice notice{};
+    REQUIRE(findNotice(net.broadcasts, 0, notice));
+    CHECK(notice.secondsRemaining == 0u);
+    CHECK(std::string(notice.text).find("Server restarting") != std::string::npos);
+}
+
+TEST_CASE("WorldBroadcaster: long reason is safely truncated to fit MsgServerNotice text",
+          "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    std::string longReason(60, 'X');
+    broadcaster.initiateShutdown(300, 5, longReason);
+
+    broadcaster.onTick(1.0 / 60.0, 0u);
+
+    fl::MsgServerNotice notice{};
+    REQUIRE(findNotice(net.broadcasts, 0, notice));
+    CHECK(std::strlen(notice.text) < sizeof(notice.text));
+}
+
+TEST_CASE("WorldBroadcaster: cancelShutdown clears reason so subsequent shutdown uses default text",
+          "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(30, 5, "reason text");
+    broadcaster.cancelShutdown();
+    broadcaster.initiateShutdown(30, 5);
+
+    broadcaster.onTick(1.0 / 60.0, 0u);
+
+    fl::MsgServerNotice notice{};
+    REQUIRE(findNotice(net.broadcasts, 0, notice));
+    std::string text(notice.text);
+    CHECK(text.find("reason text") == std::string::npos);
+    CHECK(text.find("Server shutting down") != std::string::npos);
+}
+
+TEST_CASE("WorldBroadcaster: extendShutdown preserves reason in subsequent notices", "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(120, 60, "Server restarting");
+
+    // First tick fires first notice.
+    broadcaster.onTick(1.0 / 60.0, 0u);
+    std::size_t firstNoticeIdx = net.broadcasts.size() - 1;
+
+    // Advance 60s to reach next notice interval then extend.
+    t += std::chrono::seconds(60);
+    broadcaster.extendShutdown(60);
+    net.broadcasts.clear();
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    fl::MsgServerNotice notice{};
+    REQUIRE(findNotice(net.broadcasts, 0, notice));
+    CHECK(std::string(notice.text).find("Server restarting") != std::string::npos);
+    (void)firstNoticeIdx;
+}
+
 // ---------------------------------------------------------------------------
 // MsgAdminCommand / MsgAdminResponse tests
 // ---------------------------------------------------------------------------

@@ -247,13 +247,14 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         using namespace std::chrono;
         auto now = m_now();
         if (now >= m_shutdownAt) {
-            broadcastShutdownNotice(0, "Server is shutting down now.");
+            broadcastShutdownNotice(0, makeShutdownMessage(0, m_shutdownReason).c_str());
             m_shuttingDown = false;
             if (m_shutdownCallback)
                 m_shutdownCallback();
         } else if (now >= m_nextNoticeAt) {
             auto secsLeft = static_cast<uint32_t>(duration_cast<seconds>(m_shutdownAt - now).count());
-            broadcastShutdownNotice(static_cast<uint16_t>(secsLeft), makeShutdownMessage(secsLeft).c_str());
+            broadcastShutdownNotice(static_cast<uint16_t>(secsLeft),
+                                    makeShutdownMessage(secsLeft, m_shutdownReason).c_str());
             // Always squeeze in a T-60s notice: if the next interval would skip past it, clamp.
             auto nextInterval = now + seconds(m_warningIntervalS);
             auto oneMinBefore = m_shutdownAt - seconds(60);
@@ -560,16 +561,18 @@ void WorldBroadcaster::setShutdownCallback(std::function<void()> fn) {
     m_shutdownCallback = std::move(fn);
 }
 
-void WorldBroadcaster::initiateShutdown(uint32_t secondsDelay, uint32_t warningIntervalS) {
+void WorldBroadcaster::initiateShutdown(uint32_t secondsDelay, uint32_t warningIntervalS, std::string reason) {
     using namespace std::chrono;
     m_shuttingDown = true;
     m_shutdownAt = m_now() + seconds(secondsDelay);
     m_warningIntervalS = warningIntervalS;
     m_nextNoticeAt = m_now(); // fire on the very next tick
+    m_shutdownReason = std::move(reason);
 }
 
 void WorldBroadcaster::cancelShutdown() {
     m_shuttingDown = false;
+    m_shutdownReason.clear();
 }
 
 bool WorldBroadcaster::extendShutdown(uint32_t additionalSeconds) {
@@ -590,17 +593,31 @@ uint32_t WorldBroadcaster::secondsUntilShutdown() const noexcept {
     return static_cast<uint32_t>(duration_cast<seconds>(m_shutdownAt - now).count());
 }
 
-std::string WorldBroadcaster::makeShutdownMessage(uint32_t secsLeft) {
+std::string WorldBroadcaster::makeShutdownMessage(uint32_t secsLeft, const std::string& reason) {
+    if (reason.empty()) {
+        if (secsLeft == 0)
+            return "Server is shutting down now.";
+        if (secsLeft <= 60)
+            return "Server shutting down in 1 minute -- save your progress.";
+        if (secsLeft < 3600)
+            return "Server shutting down in " + std::to_string(secsLeft / 60) + " minutes.";
+        return "Server shutting down in " + std::to_string(secsLeft / 3600) + " hour(s).";
+    }
+    if (secsLeft == 0)
+        return reason + " -- shutting down now.";
     if (secsLeft <= 60)
-        return "Server shutting down in 1 minute -- save your progress.";
+        return reason + " -- shutting down in 1 minute.";
     if (secsLeft < 3600)
-        return "Server shutting down in " + std::to_string(secsLeft / 60) + " minutes.";
-    return "Server shutting down in " + std::to_string(secsLeft / 3600) + " hour(s).";
+        return reason + " -- shutting down in " + std::to_string(secsLeft / 60) + " minutes.";
+    return reason + " -- shutting down in " + std::to_string(secsLeft / 3600) + " hour(s).";
 }
 
 void WorldBroadcaster::broadcastShutdownNotice(uint16_t secsLeft, const char* text) {
     MsgServerNotice notice;
     notice.secondsRemaining = secsLeft;
+    if (std::strlen(text) >= sizeof(notice.text))
+        m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
+                     "Shutdown notice truncated: reason too long for MsgServerNotice::text.");
     std::snprintf(notice.text, sizeof(notice.text), "%s", text);
     m_net.broadcast(&notice, sizeof(notice), /*reliable=*/true);
 }

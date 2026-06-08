@@ -547,7 +547,7 @@ process.
 | `reload_config` | — | Re-read `server.toml` and apply: `name` (reflected in next LAN beacon broadcast), `motd` |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
-| `shutdown` | `[--in <dur>] [--delay <dur>] [--cancel] [--now] [--force]` | Schedule or cancel a graceful shutdown with countdown notices to connected clients; `--now` exits immediately after notifying clients; `--force` required when `shutdown.require_confirm = true` (default) |
+| `shutdown` | `[--in <dur>] [--interval <dur>] [--delay <dur>] [--cancel] [--now] [--force] [--reason <text>]` | Schedule or cancel a graceful shutdown with countdown notices to connected clients; `--now` exits immediately after notifying clients; `--interval` overrides `shutdown.warning_interval_s` for this run; `--force` required when `shutdown.require_confirm = true` (default); `--reason` prepends custom operator text to each countdown broadcast (long reasons are truncated to fit in `MsgServerNotice::text[60]`; `--reason` stops consuming tokens at the next `--` flag) |
 | `quit` | — | Gracefully shut down fl-server immediately without client notification |
 
 ### Hot-reload behaviour (`reload_config`)

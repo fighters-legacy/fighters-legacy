@@ -114,7 +114,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Schedule a graceful shutdown. Broadcasts a MsgServerNotice at initiateShutdown time and
     // every warningIntervalS seconds thereafter; at T=0 sends a final notice and invokes the
     // shutdown callback. warningIntervalS == 0 skips intermediate notices (fires only at T=0).
-    void initiateShutdown(uint32_t secondsDelay, uint32_t warningIntervalS);
+    // Optional reason is prepended to each broadcast: "{reason} -- shutting down in X minutes."
+    // Long reasons are safely truncated to fit MsgServerNotice::text[60].
+    void initiateShutdown(uint32_t secondsDelay, uint32_t warningIntervalS, std::string reason = "");
 
     // Cancel a pending shutdown (no-op if none active).
     void cancelShutdown();
@@ -147,7 +149,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     void sendConnectAck(uint32_t peerId, EntityId assigned);
     void stepFlightSim(FlightIntegrator& fi, EntityState& state, const PeerInputState& inp, double simDt);
     void broadcastShutdownNotice(uint16_t secsLeft, const char* text);
-    static std::string makeShutdownMessage(uint32_t secsLeft);
+    static std::string makeShutdownMessage(uint32_t secsLeft, const std::string& reason = "");
 
     EntityManager& m_entityManager;
     EntityTypeRegistry& m_registry;
@@ -197,6 +199,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::chrono::steady_clock::time_point m_shutdownAt{};
     std::chrono::steady_clock::time_point m_nextNoticeAt{};
     uint32_t m_warningIntervalS{300};
+    std::string m_shutdownReason;
     std::function<void()> m_shutdownCallback;
 };
 
