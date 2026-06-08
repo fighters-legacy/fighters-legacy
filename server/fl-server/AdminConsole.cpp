@@ -480,7 +480,9 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
     registry.registerCommand(
         "shutdown",
         "shutdown [--in <dur>] [--interval <dur>] [--delay <dur>] [--cancel] [--now] [--force]"
-        "  -- schedule/cancel fl-server graceful shutdown with countdown notices",
+        " [--reason <text>]"
+        "  -- schedule/cancel fl-server graceful shutdown with countdown notices;"
+        " --reason prepends custom text to each broadcast (stops consuming at next -- flag)",
         [ctx](std::span<std::string_view> args) -> std::string {
             if (!ctx.broadcaster || !ctx.gameLoop)
                 return "shutdown: not available";
@@ -490,6 +492,7 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
             std::optional<uint32_t> flagIn;
             std::optional<uint32_t> flagInterval;
             std::optional<uint32_t> flagDelay;
+            std::string flagReason;
 
             for (std::size_t i = 0; i < args.size(); ++i) {
                 if (args[i] == "--cancel") {
@@ -516,6 +519,17 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                     flagDelay = parseDurationSecs(args[++i]);
                     if (!flagDelay)
                         return "shutdown: invalid duration for --delay";
+                } else if (args[i] == "--reason") {
+                    std::string parts;
+                    while (i + 1 < args.size() && !args[i + 1].starts_with("--")) {
+                        ++i;
+                        if (!parts.empty())
+                            parts += ' ';
+                        parts += args[i];
+                    }
+                    if (parts.empty())
+                        return "shutdown: --reason requires a value";
+                    flagReason = std::move(parts);
                 } else {
                     return "shutdown: unknown flag: " + std::string(args[i]);
                 }
@@ -582,14 +596,21 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
             // Schedule shutdown.
             uint32_t delaySecs = flagNow ? 0u : *flagIn;
             uint32_t intervalSecs = flagInterval.value_or(ctx.shutdownWarningIntervalS);
-            ctx.gameLoop->enqueueSimCallback(
-                [ctx, delaySecs, intervalSecs]() { ctx.broadcaster->initiateShutdown(delaySecs, intervalSecs); });
+            ctx.gameLoop->enqueueSimCallback([ctx, delaySecs, intervalSecs, flagReason]() {
+                ctx.broadcaster->initiateShutdown(delaySecs, intervalSecs, flagReason);
+            });
 
+            std::string result;
             if (flagNow)
-                return "shutdown: broadcasting immediate shutdown notice...";
-            char buf[128];
-            std::snprintf(buf, sizeof(buf), "shutdown: scheduled in %u seconds", delaySecs);
-            return buf;
+                result = "shutdown: broadcasting immediate shutdown notice...";
+            else {
+                char buf[128];
+                std::snprintf(buf, sizeof(buf), "shutdown: scheduled in %u seconds", delaySecs);
+                result = buf;
+            }
+            if (!flagReason.empty() && flagReason.size() > 27)
+                result += " (note: reason may be truncated in short-duration notices)";
+            return result;
         });
 
     // quit

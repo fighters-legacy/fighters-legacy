@@ -270,3 +270,39 @@ TEST_CASE("AdminConsole: shutdown unknown flag returns error", "[admin_console][
     std::string out = reg.dispatch("shutdown --bogus");
     CHECK(out.find("unknown flag") != std::string::npos);
 }
+
+TEST_CASE("AdminConsole: shutdown --reason without value returns error", "[admin_console][shutdown]") {
+    ServerCommandContext ctx;
+    static int sentinel;
+    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
+    auto reg = makeRegistry(ctx);
+    std::string out = reg.dispatch("shutdown --in 30m --force --reason");
+    CHECK(out.find("requires a value") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: shutdown --in with multi-word --reason preserves confirmation prompt",
+          "[admin_console][shutdown]") {
+    ServerCommandContext ctx;
+    static int sentinel;
+    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
+    ctx.shutdownRequireConfirm = true;
+    auto reg = makeRegistry(ctx);
+    std::string out = reg.dispatch("shutdown --in 30m --reason scheduled maintenance");
+    CHECK(out.find("--force") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: shutdown --reason stops consuming at next double-dash flag", "[admin_console][shutdown]") {
+    ServerCommandContext ctx;
+    static int sentinel;
+    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
+    ctx.shutdownRequireConfirm = false;
+    ctx.minShutdownDelayS = 100;
+    auto reg = makeRegistry(ctx);
+    // --reason consumes "maintenance" only (stops at --force); --force bypasses the confirm gate;
+    // the 10s delay is below minShutdownDelayS=100 so the min-delay gate fires.
+    std::string out = reg.dispatch("shutdown --in 10s --reason maintenance --force");
+    CHECK(out.find("at least") != std::string::npos);
+}

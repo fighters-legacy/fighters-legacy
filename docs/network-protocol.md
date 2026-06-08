@@ -169,7 +169,10 @@ null-terminated UTF-8 (maximum 60 bytes including the NUL terminator); always re
 **Sending cadence (fl-server):** first notice fires immediately when `shutdown --in <dur>` is
 issued; subsequent notices fire every `shutdown.warning_interval_s` seconds (default 300 s); a
 T-60s notice is always injected if the configured interval would skip past it. At T=0 a final
-`secondsRemaining=0` notice is sent before graceful disconnect.
+`secondsRemaining=0` notice is sent before graceful disconnect. If `--reason <text>` was provided
+to the shutdown command, each `text` value is prefixed with the reason followed by ` -- ` (e.g.
+`"Server restarting for patch 1.2 -- shutting down in 5 minutes."`); the field is always
+null-terminated and safely truncated to 59 chars if the combined string exceeds that limit.
 
 ### MsgAdminCommand — 128 bytes
 
