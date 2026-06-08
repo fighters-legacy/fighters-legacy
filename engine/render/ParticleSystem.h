@@ -18,13 +18,14 @@ namespace fl {
 struct ParticlePreset {
     float spawnRate{50.0f};                 // particles/second
     float particleLifetime{2.0f};           // seconds
-    float initialSpeed{5.0f};               // m/s, randomised over upward hemisphere
+    float initialSpeed{5.0f};               // m/s, randomised within cone of coneHalfAngleDeg around emitDirection
     glm::vec3 colorStart{1.0f, 0.5f, 0.1f}; // orange-yellow (birth)
     glm::vec3 colorEnd{0.3f, 0.3f, 0.3f};   // gray smoke (death)
     float sizeStart{0.5f};                  // world-space metres
     float sizeEnd{2.0f};
     bool additive{true};                       // true=additive (fire/explosion), false=alpha (smoke)
-    glm::vec3 emitDirection{0.0f, 1.0f, 0.0f}; // normalised; hemisphere centred on this axis
+    glm::vec3 emitDirection{0.0f, 1.0f, 0.0f}; // normalised; cone centred on this axis
+    float coneHalfAngleDeg{90.0f};             // emission cone half-angle; 90=hemisphere (default)
 };
 
 // Manages per-frame particle emitter emission.

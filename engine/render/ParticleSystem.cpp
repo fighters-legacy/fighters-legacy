@@ -32,6 +32,7 @@ void ParticleSystem::emit(const char* presetName, glm::vec3 worldPosition, float
     state.sizeEnd = p.sizeEnd;
     state.additive = p.additive;
     state.emitDirection = p.emitDirection;
+    state.coneHalfAngleDeg = p.coneHalfAngleDeg;
     m_emitters.push_back(state);
 }
 

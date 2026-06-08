@@ -162,11 +162,11 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 |---|---|---|---|---|---|
 | `clear` | 0% | None | None | Driven by time clock | None |
 | `partly_cloudy` (default) | 35% | None | Light | Driven by time clock | None |
-| `overcast` | 75% | Light | Moderate | Driven by time clock | Rain |
-| `rain` | 85% | Heavy | Moderate | Driven by time clock | Rain |
-| `storm` | 95% | Maximum | Strong | Driven by time clock | Heavy rain |
+| `overcast` | 75% | Light | Moderate | Driven by time clock | Rain < 2000 m / Snow ≥ 2000 m |
+| `rain` | 85% | Heavy | Moderate | Driven by time clock | Rain < 2000 m / Snow ≥ 2000 m |
+| `storm` | 95% | Maximum | Strong | Driven by time clock | Heavy rain < 2000 m / Heavy snow ≥ 2000 m |
 
-When `cloudCoverage ≥ 0.75` (overcast, rain, storm), rain particles emit from a 3×3 grid 60 m above the camera, tilted by the server wind vector (`rain`: 10% influence; `storm`: 25% influence). With no wind the particles fall straight down.
+When `cloudCoverage ≥ 0.75` (overcast, rain, storm), precipitation particles emit from a 3×3 grid 60 m above the camera. Below 2000 m, rain (`rain`/`storm_rain`) is emitted with a narrow 20° cone and 10%/25% wind influence. Above 2000 m, snow (`snow`/`storm_snow`) is emitted with an 80° cone (wide drifting spread) and 35%/55% wind influence. With no wind the particles fall straight down.
 
 The in-game clock advances at **10× real time** by default (1 real minute = 10 game minutes; full day/night cycle ≈ 2.4 real hours). The Cockpit HUD (F1 mode) shows **IAS / ALT / AGL** on the left column, **THR / FUEL** on the right column, **HDG** at the bottom, and `HH:MM` clock top-right. AGL is computed from the terrain heightmap at the aircraft's XZ position and falls back to the same value as ALT (MSL) when the LOD-0 chunk is not yet loaded. The time scale is configurable via `[world] time_scale` in `server.toml`.
 

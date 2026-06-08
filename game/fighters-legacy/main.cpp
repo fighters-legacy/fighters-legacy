@@ -110,16 +110,38 @@ static RendererSettings buildRendererSettings(const GraphicsSettings& g) {
     return s;
 }
 
+static constexpr float kSnowAltitudeThresholdM = 2000.0f;
+
 static void registerBuiltinParticlePresets(fl::ParticleSystem& ps) {
     ps.registerPreset("explosion", {200.0f, 1.5f, 15.0f, {1.0f, 0.6f, 0.1f}, {0.4f, 0.2f, 0.1f}, 0.3f, 3.0f, true});
     ps.registerPreset("fire", {120.0f, 2.0f, 8.0f, {1.0f, 0.4f, 0.05f}, {0.6f, 0.1f, 0.0f}, 0.2f, 1.5f, true});
     ps.registerPreset("smoke", {60.0f, 4.0f, 3.0f, {0.4f, 0.4f, 0.4f}, {0.15f, 0.15f, 0.15f}, 0.5f, 3.0f, false});
     ps.registerPreset(
         "rain",
-        {100.0f, 1.5f, 40.0f, {0.5f, 0.6f, 0.8f}, {0.3f, 0.4f, 0.6f}, 0.05f, 0.05f, false, {0.0f, -1.0f, 0.0f}});
+        {100.0f, 1.5f, 40.0f, {0.5f, 0.6f, 0.8f}, {0.3f, 0.4f, 0.6f}, 0.05f, 0.05f, false, {0.0f, -1.0f, 0.0f}, 20.0f});
     ps.registerPreset(
         "storm_rain",
-        {200.0f, 1.2f, 50.0f, {0.6f, 0.7f, 0.9f}, {0.3f, 0.4f, 0.6f}, 0.08f, 0.08f, false, {0.0f, -1.0f, 0.0f}});
+        {200.0f, 1.2f, 50.0f, {0.6f, 0.7f, 0.9f}, {0.3f, 0.4f, 0.6f}, 0.08f, 0.08f, false, {0.0f, -1.0f, 0.0f}, 20.0f});
+    ps.registerPreset("snow", {200.0f,
+                               6.0f,
+                               2.0f,
+                               {0.9f, 0.95f, 1.0f},
+                               {0.85f, 0.90f, 1.0f},
+                               0.15f,
+                               0.10f,
+                               false,
+                               {0.0f, -1.0f, 0.0f},
+                               80.0f});
+    ps.registerPreset("storm_snow", {400.0f,
+                                     6.0f,
+                                     4.0f,
+                                     {0.9f, 0.95f, 1.0f},
+                                     {0.85f, 0.90f, 1.0f},
+                                     0.12f,
+                                     0.08f,
+                                     false,
+                                     {0.0f, -1.0f, 0.0f},
+                                     80.0f});
 }
 
 // ---------------------------------------------------------------------------
@@ -591,10 +613,12 @@ int main(int argc, char** argv) {
 
         std::span<const ParticleEmitterState> sandboxEmitters{};
         if (env.cloudCoverage >= 0.75f) {
-            const char* presetName = env.cloudCoverage >= 0.90f ? "storm_rain" : "rain";
+            const bool isStorm = env.cloudCoverage >= 0.90f;
+            const bool isSnow = static_cast<float>(cam.worldOrigin.y) > kSnowAltitudeThresholdM;
+            const char* presetName = isStorm ? (isSnow ? "storm_snow" : "storm_rain") : (isSnow ? "snow" : "rain");
             if (auto preset = particleSystem.getPreset(presetName)) {
                 const glm::vec3 camF = glm::vec3(cam.worldOrigin);
-                const float influence = (env.cloudCoverage >= 0.90f) ? 0.25f : 0.1f;
+                const float influence = isStorm ? (isSnow ? 0.55f : 0.25f) : (isSnow ? 0.35f : 0.10f);
                 const glm::vec3 windDir =
                     glm::normalize(glm::vec3{env.windX * influence, -1.0f, env.windZ * influence});
                 int idx = 0;
@@ -614,6 +638,7 @@ int main(int argc, char** argv) {
                         e.sizeEnd = preset->sizeEnd;
                         e.additive = preset->additive;
                         e.emitDirection = windDir;
+                        e.coneHalfAngleDeg = preset->coneHalfAngleDeg;
                     }
                 }
                 sandboxEmitters = {precipBuf.data(), 9};

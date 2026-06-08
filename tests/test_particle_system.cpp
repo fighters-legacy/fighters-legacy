@@ -187,6 +187,51 @@ TEST_CASE("ParticleSystem: emitDirection preserved across reset and re-emit") {
     CHECK(ps.emitters()[0].emitDirection.y == Catch::Approx(-1.0f));
 }
 
+TEST_CASE("ParticleSystem: coneHalfAngleDeg copied from preset to emitter state") {
+    ParticleSystem ps;
+    ParticlePreset p{};
+    p.coneHalfAngleDeg = 45.0f;
+    ps.registerPreset("fx", p);
+    ps.emit("fx", {});
+    REQUIRE(ps.emitters().size() == 1);
+    CHECK(ps.emitters()[0].coneHalfAngleDeg == Catch::Approx(45.0f));
+}
+
+TEST_CASE("ParticleSystem: default coneHalfAngleDeg is 90") {
+    ParticleSystem ps;
+    ParticlePreset p{};
+    ps.registerPreset("fx", p);
+    ps.emit("fx", {});
+    REQUIRE(ps.emitters().size() == 1);
+    CHECK(ps.emitters()[0].coneHalfAngleDeg == Catch::Approx(90.0f));
+}
+
+TEST_CASE("ParticleSystem: snow preset coneHalfAngleDeg is wider than rain") {
+    ParticleSystem ps;
+    ParticlePreset rain{};
+    rain.coneHalfAngleDeg = 20.0f;
+    rain.emitDirection = {0.0f, -1.0f, 0.0f};
+    ParticlePreset snow{};
+    snow.coneHalfAngleDeg = 80.0f;
+    snow.emitDirection = {0.0f, -1.0f, 0.0f};
+    ps.registerPreset("rain", rain);
+    ps.registerPreset("snow", snow);
+    ps.emit("rain", {});
+    ps.emit("snow", {});
+    REQUIRE(ps.emitters().size() == 2);
+    CHECK(ps.emitters()[0].coneHalfAngleDeg < ps.emitters()[1].coneHalfAngleDeg);
+}
+
+TEST_CASE("ParticleSystem: getPreset returns coneHalfAngleDeg") {
+    ParticleSystem ps;
+    ParticlePreset p{};
+    p.coneHalfAngleDeg = 30.0f;
+    ps.registerPreset("test", p);
+    auto result = ps.getPreset("test");
+    REQUIRE(result.has_value());
+    CHECK(result->coneHalfAngleDeg == Catch::Approx(30.0f));
+}
+
 TEST_CASE("ParticleSystem: getPreset returns nullopt for unknown name") {
     ParticleSystem ps;
     CHECK(!ps.getPreset("no_such"));

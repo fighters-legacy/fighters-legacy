@@ -164,13 +164,14 @@ struct ParticleEmitterState {
     float intensity{1.0f};           // multiplier on spawnRate
     float spawnRate{50.0f};          // particles per second at intensity=1
     float particleLifetime{2.0f};    // seconds
-    float initialSpeed{5.0f};        // m/s, randomised over hemisphere centred on emitDirection
+    float initialSpeed{5.0f};        // m/s, randomised within cone of coneHalfAngleDeg around emitDirection
     glm::vec3 colorStart{1.0f, 0.5f, 0.1f};
     glm::vec3 colorEnd{0.3f, 0.3f, 0.3f};
     float sizeStart{0.5f};                     // world-space metres at birth
     float sizeEnd{2.0f};                       // world-space metres at death
     bool additive{true};                       // true=additive blend (fire/explosion), false=alpha (smoke)
-    glm::vec3 emitDirection{0.0f, 1.0f, 0.0f}; // normalised; hemisphere centred on this axis
+    glm::vec3 emitDirection{0.0f, 1.0f, 0.0f}; // normalised; cone centred on this axis
+    float coneHalfAngleDeg{90.0f};             // emission cone half-angle; copied from preset by emit()
 };
 
 // ---------------------------------------------------------------------------

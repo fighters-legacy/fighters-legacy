@@ -2581,7 +2581,8 @@ void VkRenderer::recordParticleCompute(VkCommandBuffer cmd, float dt) {
             uint32_t seed = m_nextParticleSlot * 2654435761u ^ (s * 2246822519u) ^
                             static_cast<uint32_t>(m_totalFrames * 0x9e3779b97f4a7c15ULL);
             const float theta = lcgFloat(seed) * 6.28318530f;
-            const float phi = lcgFloat(seed) * 1.57079632f; // [0, pi/2] half-angle
+            const float coneRad = emitter.coneHalfAngleDeg * (3.14159265f / 180.0f);
+            const float phi = lcgFloat(seed) * coneRad;
             const float speed = emitter.initialSpeed * (0.5f + lcgFloat(seed));
 
             GpuParticle p{};
