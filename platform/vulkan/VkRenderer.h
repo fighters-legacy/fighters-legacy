@@ -384,6 +384,10 @@ class VkRenderer : public IRenderer {
     // Ring-buffer spawn pointer (CPU-maintained; wraps around kMaxParticles).
     uint32_t m_nextParticleSlot{0};
 
+    // Fractional particle spawn remainder per emitter (indexed by position in particleEmitters).
+    // Reset to zero when the emitter list count changes between frames.
+    std::vector<float> m_spawnAccum;
+
     // ── Bloom attachments (half-res RGBA16F — recreated with swapchain) ───
     VkImage m_bloomImage{VK_NULL_HANDLE};
     VkDeviceMemory m_bloomMemory{VK_NULL_HANDLE};

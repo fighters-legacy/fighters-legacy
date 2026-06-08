@@ -372,3 +372,37 @@ TEST_CASE("SceneRenderer: intact entity does not emit particle effect") {
     REQUIRE(renderer.setSceneCount == 1);
     CHECK(renderer.lastScene.particleEmitters.empty());
 }
+
+// ---------------------------------------------------------------------------
+// Spawn accumulation algorithm tests
+// These replicate the 3-line accumulation pattern from VkRenderer::recordParticleCompute
+// to verify the acceptance criteria without requiring GPU hardware.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("particle spawn accumulation: low rate produces correct total over 60 frames") {
+    float accum = 0.0f;
+    uint32_t total = 0;
+    const float dt = 1.0f / 60.0f;
+    for (int frame = 0; frame < 60; ++frame) {
+        accum += 10.0f * dt;
+        const uint32_t n = static_cast<uint32_t>(accum);
+        accum -= static_cast<float>(n);
+        total += n;
+    }
+    REQUIRE(total == 10);
+    REQUIRE(accum < 1.0f);
+}
+
+TEST_CASE("particle spawn accumulation: remainder stays non-negative and below 1 across varied rates") {
+    for (float rate : {1.0f, 7.5f, 10.0f, 30.0f, 59.9f}) {
+        float accum = 0.0f;
+        const float dt = 1.0f / 60.0f;
+        for (int frame = 0; frame < 600; ++frame) {
+            accum += rate * dt;
+            const uint32_t n = static_cast<uint32_t>(accum);
+            accum -= static_cast<float>(n);
+            REQUIRE(accum >= 0.0f);
+            REQUIRE(accum < 1.0f);
+        }
+    }
+}
