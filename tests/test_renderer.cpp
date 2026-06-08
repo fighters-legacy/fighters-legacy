@@ -268,6 +268,8 @@ TEST_CASE("EnvironmentState defaults") {
     CHECK(env.sunDirection.y == -1.0f);
     CHECK(env.fogDensity == 0.0f);
     CHECK(env.timeOfDay == 12.0f);
+    CHECK(env.windX == 0.0f);
+    CHECK(env.windZ == 0.0f);
 }
 
 TEST_CASE("setScene stores EnvironmentState in lastScene") {

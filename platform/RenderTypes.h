@@ -149,6 +149,8 @@ struct EnvironmentState {
     float fogStartDist{5000.0f};
     float timeOfDay{12.0f};    // hours [0, 24)
     float cloudCoverage{0.0f}; // [0=clear .. 1=full storm cover]; driven by WeatherController
+    float windX{0.0f};         // world-frame wind m/s (from MsgWeatherState)
+    float windZ{0.0f};         // world-frame wind m/s (from MsgWeatherState)
 };
 
 // ---------------------------------------------------------------------------

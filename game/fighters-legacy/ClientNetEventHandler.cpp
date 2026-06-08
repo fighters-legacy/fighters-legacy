@@ -107,6 +107,8 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         env.fogStartDist = ws.fogStartDist;
         env.timeOfDay = tod;
         fl::WeatherController::applyPresetToEnv(static_cast<fl::WeatherPreset>(ws.preset), tod, env);
+        env.windX = ws.windX;
+        env.windZ = ws.windZ;
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::ServerNotice)) {
         if (size < sizeof(fl::MsgServerNotice))
             return;

@@ -594,6 +594,9 @@ int main(int argc, char** argv) {
             const char* presetName = env.cloudCoverage >= 0.90f ? "storm_rain" : "rain";
             if (auto preset = particleSystem.getPreset(presetName)) {
                 const glm::vec3 camF = glm::vec3(cam.worldOrigin);
+                const float influence = (env.cloudCoverage >= 0.90f) ? 0.25f : 0.1f;
+                const glm::vec3 windDir =
+                    glm::normalize(glm::vec3{env.windX * influence, -1.0f, env.windZ * influence});
                 int idx = 0;
                 for (int gx = -1; gx <= 1; ++gx) {
                     for (int gz = -1; gz <= 1; ++gz, ++idx) {
@@ -610,7 +613,7 @@ int main(int argc, char** argv) {
                         e.sizeStart = preset->sizeStart;
                         e.sizeEnd = preset->sizeEnd;
                         e.additive = preset->additive;
-                        e.emitDirection = preset->emitDirection;
+                        e.emitDirection = windDir;
                     }
                 }
                 sandboxEmitters = {precipBuf.data(), 9};
