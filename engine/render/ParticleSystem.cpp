@@ -31,7 +31,17 @@ void ParticleSystem::emit(const char* presetName, glm::vec3 worldPosition, float
     state.sizeStart = p.sizeStart;
     state.sizeEnd = p.sizeEnd;
     state.additive = p.additive;
+    state.emitDirection = p.emitDirection;
     m_emitters.push_back(state);
+}
+
+std::optional<ParticlePreset> ParticleSystem::getPreset(const char* name) const noexcept {
+    if (!name)
+        return std::nullopt;
+    auto it = m_presets.find(name);
+    if (it == m_presets.end())
+        return std::nullopt;
+    return it->second;
 }
 
 std::span<const ParticleEmitterState> ParticleSystem::emitters() const noexcept {

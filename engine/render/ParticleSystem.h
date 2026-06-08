@@ -3,6 +3,7 @@
 
 #include "RenderTypes.h"
 
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -22,7 +23,8 @@ struct ParticlePreset {
     glm::vec3 colorEnd{0.3f, 0.3f, 0.3f};   // gray smoke (death)
     float sizeStart{0.5f};                  // world-space metres
     float sizeEnd{2.0f};
-    bool additive{true}; // true=additive (fire/explosion), false=alpha (smoke)
+    bool additive{true};                       // true=additive (fire/explosion), false=alpha (smoke)
+    glm::vec3 emitDirection{0.0f, 1.0f, 0.0f}; // normalised; hemisphere centred on this axis
 };
 
 // Manages per-frame particle emitter emission.
@@ -46,6 +48,9 @@ class ParticleSystem {
     // Returns all emitters accumulated since the last reset().
     // The span is valid until the next reset() or emit() call.
     [[nodiscard]] std::span<const ParticleEmitterState> emitters() const noexcept;
+
+    // Returns the registered preset for name, or nullopt if not found.
+    [[nodiscard]] std::optional<ParticlePreset> getPreset(const char* name) const noexcept;
 
     // Clear the per-frame emitter list. Call once per frame before any emit() calls.
     void reset() noexcept;

@@ -2560,18 +2560,27 @@ void VkRenderer::recordParticleCompute(VkCommandBuffer cmd, float dt) {
         if (!emitter.effectName || emitter.intensity <= 0.0f)
             continue;
         const uint32_t toSpawn = static_cast<uint32_t>(emitter.spawnRate * dt * emitter.intensity);
+
+        // Tangent frame for hemisphere centred on emitDirection.
+        const glm::vec3 dir = glm::length(emitter.emitDirection) > 0.5f ? glm::normalize(emitter.emitDirection)
+                                                                        : glm::vec3{0.0f, 1.0f, 0.0f};
+        const glm::vec3 ref = std::abs(dir.x) > 0.9f ? glm::vec3{0.0f, 1.0f, 0.0f} : glm::vec3{1.0f, 0.0f, 0.0f};
+        const glm::vec3 tan = glm::normalize(glm::cross(dir, ref));
+        const glm::vec3 bitan = glm::cross(tan, dir);
+
         for (uint32_t s = 0; s < toSpawn && spawnCount < kMaxSpawnPerFrame; ++s, ++spawnCount) {
-            // Simple LCG-based random velocity in the upper hemisphere.
+            // LCG-based random velocity in hemisphere centred on emitDirection.
             uint32_t seed = m_nextParticleSlot * 2654435761u ^ (s * 2246822519u) ^
                             static_cast<uint32_t>(m_totalFrames * 0x9e3779b97f4a7c15ULL);
             const float theta = lcgFloat(seed) * 6.28318530f;
-            const float phi = lcgFloat(seed) * 1.57079632f; // [0, pi/2] upper hemisphere
+            const float phi = lcgFloat(seed) * 1.57079632f; // [0, pi/2] half-angle
             const float speed = emitter.initialSpeed * (0.5f + lcgFloat(seed));
 
             GpuParticle p{};
             p.pos = emitter.position;
             p.age = emitter.particleLifetime;
-            p.vel = glm::vec3(std::cos(theta) * std::sin(phi), std::cos(phi), std::sin(theta) * std::sin(phi)) * speed;
+            const glm::vec3 hemVec{std::cos(theta) * std::sin(phi), std::cos(phi), std::sin(theta) * std::sin(phi)};
+            p.vel = (tan * hemVec.x + dir * hemVec.y + bitan * hemVec.z) * speed;
             p.maxAge = emitter.particleLifetime;
             p.colorStart = glm::vec4(emitter.colorStart, 1.0f);
             p.colorEnd = glm::vec4(emitter.colorEnd, emitter.additive ? 0.0f : 1.0f);

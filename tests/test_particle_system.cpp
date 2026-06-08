@@ -146,6 +146,64 @@ TEST_CASE("ParticleSystem: preset parameters copied to emitter state") {
     CHECK(e.sizeStart == Catch::Approx(0.3f));
     CHECK(e.sizeEnd == Catch::Approx(2.5f));
     CHECK(e.additive == true);
+    CHECK(e.emitDirection.y == Catch::Approx(1.0f)); // default Y-up round-trips
+}
+
+TEST_CASE("ParticleSystem: emitDirection copied from preset") {
+    ParticlePreset preset{};
+    preset.emitDirection = {0.0f, -1.0f, 0.0f};
+
+    ParticleSystem ps;
+    ps.registerPreset("rain", preset);
+    ps.emit("rain", {});
+
+    REQUIRE(ps.emitters().size() == 1);
+    CHECK(ps.emitters()[0].emitDirection.x == Catch::Approx(0.0f));
+    CHECK(ps.emitters()[0].emitDirection.y == Catch::Approx(-1.0f));
+    CHECK(ps.emitters()[0].emitDirection.z == Catch::Approx(0.0f));
+}
+
+TEST_CASE("ParticleSystem: default emitDirection is Y-up") {
+    ParticlePreset preset{};
+    ParticleSystem ps;
+    ps.registerPreset("fx", preset);
+    ps.emit("fx", {});
+
+    REQUIRE(ps.emitters().size() == 1);
+    CHECK(ps.emitters()[0].emitDirection.y == Catch::Approx(1.0f));
+}
+
+TEST_CASE("ParticleSystem: emitDirection preserved across reset and re-emit") {
+    ParticleSystem ps;
+    ParticlePreset p{};
+    p.emitDirection = {0.0f, -1.0f, 0.0f};
+    ps.registerPreset("rain", p);
+
+    ps.emit("rain", {});
+    ps.reset();
+    ps.emit("rain", {});
+
+    REQUIRE(ps.emitters().size() == 1);
+    CHECK(ps.emitters()[0].emitDirection.y == Catch::Approx(-1.0f));
+}
+
+TEST_CASE("ParticleSystem: getPreset returns nullopt for unknown name") {
+    ParticleSystem ps;
+    CHECK(!ps.getPreset("no_such"));
+    CHECK(!ps.getPreset(nullptr));
+}
+
+TEST_CASE("ParticleSystem: getPreset returns registered preset values") {
+    ParticleSystem ps;
+    ParticlePreset p{};
+    p.spawnRate = 123.0f;
+    p.emitDirection = {0.0f, -1.0f, 0.0f};
+    ps.registerPreset("rain", p);
+
+    auto result = ps.getPreset("rain");
+    REQUIRE(result.has_value());
+    CHECK(result->spawnRate == Catch::Approx(123.0f));
+    CHECK(result->emitDirection.y == Catch::Approx(-1.0f));
 }
 
 TEST_CASE("ParticleSystem: smoke preset has additive=false") {
@@ -286,6 +344,7 @@ TEST_CASE("SceneRenderer: with particle system -- damaged entity emits effect") 
     REQUIRE(renderer.setSceneCount == 1);
     REQUIRE(renderer.lastScene.particleEmitters.size() == 1);
     CHECK(renderer.lastScene.particleEmitters[0].spawnRate == Catch::Approx(50.0f));
+    CHECK(renderer.lastScene.particleEmitters[0].emitDirection.y == Catch::Approx(1.0f));
 }
 
 TEST_CASE("SceneRenderer: intact entity does not emit particle effect") {

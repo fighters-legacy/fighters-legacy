@@ -158,13 +158,15 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 
 **Weather presets:**
 
-| Preset | Cloud cover | Fog | Turbulence | Time of day |
-|---|---|---|---|---|
-| `clear` | 0% | None | None | Driven by time clock |
-| `partly_cloudy` (default) | 35% | None | Light | Driven by time clock |
-| `overcast` | 75% | Light | Moderate | Driven by time clock |
-| `rain` | 85% | Heavy | Moderate | Driven by time clock |
-| `storm` | 95% | Maximum | Strong | Driven by time clock |
+| Preset | Cloud cover | Fog | Turbulence | Time of day | Precipitation |
+|---|---|---|---|---|---|
+| `clear` | 0% | None | None | Driven by time clock | None |
+| `partly_cloudy` (default) | 35% | None | Light | Driven by time clock | None |
+| `overcast` | 75% | Light | Moderate | Driven by time clock | Rain |
+| `rain` | 85% | Heavy | Moderate | Driven by time clock | Rain |
+| `storm` | 95% | Maximum | Strong | Driven by time clock | Heavy rain |
+
+When `cloudCoverage ≥ 0.75` (overcast, rain, storm), rain particles emit downward from a 3×3 grid 60 m above the camera.
 
 The in-game clock advances at **10× real time** by default (1 real minute = 10 game minutes; full day/night cycle ≈ 2.4 real hours). The Cockpit HUD (F1 mode) shows **IAS / ALT / AGL** on the left column, **THR / FUEL** on the right column, **HDG** at the bottom, and `HH:MM` clock top-right. AGL is computed from the terrain heightmap at the aircraft's XZ position and falls back to the same value as ALT (MSL) when the LOD-0 chunk is not yet loaded. The time scale is configurable via `[world] time_scale` in `server.toml`.
 

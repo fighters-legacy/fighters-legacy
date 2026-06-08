@@ -114,6 +114,12 @@ static void registerBuiltinParticlePresets(fl::ParticleSystem& ps) {
     ps.registerPreset("explosion", {200.0f, 1.5f, 15.0f, {1.0f, 0.6f, 0.1f}, {0.4f, 0.2f, 0.1f}, 0.3f, 3.0f, true});
     ps.registerPreset("fire", {120.0f, 2.0f, 8.0f, {1.0f, 0.4f, 0.05f}, {0.6f, 0.1f, 0.0f}, 0.2f, 1.5f, true});
     ps.registerPreset("smoke", {60.0f, 4.0f, 3.0f, {0.4f, 0.4f, 0.4f}, {0.15f, 0.15f, 0.15f}, 0.5f, 3.0f, false});
+    ps.registerPreset(
+        "rain",
+        {600.0f, 1.5f, 40.0f, {0.5f, 0.6f, 0.8f}, {0.3f, 0.4f, 0.6f}, 0.05f, 0.05f, false, {0.0f, -1.0f, 0.0f}});
+    ps.registerPreset(
+        "storm_rain",
+        {1200.0f, 1.2f, 50.0f, {0.6f, 0.7f, 0.9f}, {0.3f, 0.4f, 0.6f}, 0.08f, 0.08f, false, {0.0f, -1.0f, 0.0f}});
 }
 
 // ---------------------------------------------------------------------------
@@ -390,7 +396,7 @@ int main(int argc, char** argv) {
     PerformanceOverlay perfOverlay;
     perfOverlay.setMode(userConfig.debug().overlayMode);
 
-    const std::span<const ParticleEmitterState> sandboxEmitters{};
+    std::array<ParticleEmitterState, 9> precipBuf{};
     static uint32_t inputSeq = 0;
 
     bool running = true;
@@ -582,6 +588,34 @@ int main(int argc, char** argv) {
         const AudioSettings& aud = userConfig.audio();
         subtitleQueue.update(1.0f / 60.0f);
         musicManager.update(1.0f / 60.0f, aud.masterVolume, aud.musicVolume);
+
+        std::span<const ParticleEmitterState> sandboxEmitters{};
+        if (env.cloudCoverage >= 0.75f) {
+            const char* presetName = env.cloudCoverage >= 0.90f ? "storm_rain" : "rain";
+            if (auto preset = particleSystem.getPreset(presetName)) {
+                const glm::vec3 camF = glm::vec3(cam.worldOrigin);
+                int idx = 0;
+                for (int gx = -1; gx <= 1; ++gx) {
+                    for (int gz = -1; gz <= 1; ++gz, ++idx) {
+                        ParticleEmitterState& e = precipBuf[idx];
+                        e = ParticleEmitterState{};
+                        e.position = camF + glm::vec3(gx * 40.0f, 60.0f, gz * 40.0f);
+                        e.effectName = presetName;
+                        e.intensity = 1.0f;
+                        e.spawnRate = preset->spawnRate;
+                        e.particleLifetime = preset->particleLifetime;
+                        e.initialSpeed = preset->initialSpeed;
+                        e.colorStart = preset->colorStart;
+                        e.colorEnd = preset->colorEnd;
+                        e.sizeStart = preset->sizeStart;
+                        e.sizeEnd = preset->sizeEnd;
+                        e.additive = preset->additive;
+                        e.emitDirection = preset->emitDirection;
+                    }
+                }
+                sandboxEmitters = {precipBuf.data(), 9};
+            }
+        }
 
         sceneRenderer.renderFrame(alpha, cam, env, sandboxEmitters);
 
