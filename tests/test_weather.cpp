@@ -119,6 +119,62 @@ TEST_CASE("WeatherController: computeEnvironment populates windX and windZ", "[w
     CHECK(env.windX > 0.f); // sanity: wind blows east
 }
 
+TEST_CASE("WeatherController: computeEnvironment fogStartDist decreases with severity", "[weather]") {
+    WeatherController wc;
+    wc.setTimeOfDay(12.f);
+
+    wc.setPreset(WeatherPreset::Clear);
+    const float distClear = wc.computeEnvironment().fogStartDist;
+
+    wc.setPreset(WeatherPreset::Overcast);
+    const float distOvercast = wc.computeEnvironment().fogStartDist;
+
+    wc.setPreset(WeatherPreset::Rain);
+    const float distRain = wc.computeEnvironment().fogStartDist;
+
+    wc.setPreset(WeatherPreset::Storm);
+    const float distStorm = wc.computeEnvironment().fogStartDist;
+
+    CHECK(distClear > distOvercast);
+    CHECK(distOvercast > distRain);
+    CHECK(distRain > distStorm);
+}
+
+TEST_CASE("WeatherController: computeEnvironment sunDirection at noon points upward", "[weather]") {
+    WeatherController wc;
+    wc.setPreset(WeatherPreset::Clear);
+    wc.setTimeOfDay(12.f);
+    const auto env = wc.computeEnvironment();
+    CHECK(env.sunDirection.y > 0.9f);
+}
+
+TEST_CASE("WeatherController: computeEnvironment sunColor at noon is near white", "[weather]") {
+    WeatherController wc;
+    wc.setPreset(WeatherPreset::Clear);
+    wc.setTimeOfDay(12.f);
+    const auto env = wc.computeEnvironment();
+    CHECK(env.sunColor.x > 0.8f); // R
+    CHECK(env.sunColor.y > 0.8f); // G
+    CHECK(env.sunColor.z > 0.8f); // B
+}
+
+TEST_CASE("WeatherController: computeEnvironment env.timeOfDay matches controller", "[weather]") {
+    WeatherController wc;
+    wc.setTimeOfDay(15.5f);
+    const auto env = wc.computeEnvironment();
+    CHECK(env.timeOfDay == wc.timeOfDay()); // bit-identical copy of m_timeOfDay
+}
+
+TEST_CASE("WeatherController: computeEnvironment sunColor at midnight is dim", "[weather]") {
+    WeatherController wc;
+    wc.setPreset(WeatherPreset::Clear);
+    wc.setTimeOfDay(0.f); // midnight: elevation = sin(-pi/2) = -1.0 -> night branch
+    const auto env = wc.computeEnvironment();
+    CHECK(env.sunColor.x < 0.1f);
+    CHECK(env.sunColor.y < 0.1f);
+    CHECK(env.sunColor.z < 0.1f);
+}
+
 // ---------------------------------------------------------------------------
 // Time clock advancement
 // ---------------------------------------------------------------------------
