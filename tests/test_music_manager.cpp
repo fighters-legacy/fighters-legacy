@@ -964,8 +964,12 @@ TEST_CASE("MusicManager shuffle=true re-entry rebuilds the permutation", "[audio
     NullAudio audio;
     NullLogger log;
 
-    auto pack = std::make_unique<TrackingAudioPack>();
-    TrackingAudioPack* tp = pack.get();
+    // NullTrackingContentPack returns nullopt so AssetManager never caches the result.
+    // TrackingAudioPack would cause a cache hit when the re-shuffled order opens the
+    // same first track as the initial entry, dropping the loadAudio call and giving
+    // opened.size() == 2 instead of 3.
+    auto pack = std::make_unique<NullTrackingContentPack>();
+    NullTrackingContentPack* tp = pack.get();
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::move(pack));
     AssetManager assets(std::move(packs), log);
