@@ -14,6 +14,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **build**: SDL3 upgraded from 3.2.10 to 3.4.10
+- **build**: Lua upgraded from 5.4.7 to 5.5.0; content-pack AI scripts must not use `global` as a variable name (reserved keyword in Lua 5.5)
+- **ci**: Removed `liblua5.4-dev` / `brew install lua` from all CI workflows; Lua is now built from source via FetchContent on all platforms (`liblua5.5-dev` not yet in package managers)
 - **renderer**: `rain` and `storm_rain` preset spawn rates reduced from 600/s and 1200/s to 100/s and 200/s respectively; the previous values compensated for the truncation bug and also exceeded `kMaxParticles=8192` at 9 emitters
 
 ## [0.2.2] - 2026-05-27

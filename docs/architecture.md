@@ -91,7 +91,7 @@ Bridges the engine core to external content:
 - **`IContentPack`** — the single interface all content packs must implement. Exposes asset loading, mission data, configuration, and security metadata (`getTrustLevel`, `isNativePlugin`). The engine calls only this interface; it never knows what implements it.
 - **`AssetManager`** — caches and serves assets via active content packs. Runs `AssetValidator` on every returned asset (magic-byte checks + size limits) before caching; discards and logs any asset that fails.
 - **`ModLoader`** — discovers directory mods and compiled plugins at runtime. Validates `id`/`name` manifest fields against path-traversal, Windows reserved names, and length limits. Parses optional `[mod.trust]` section into `TrustLevel`. Detects native plugin binaries and fires `IContentPackEventHandler` callbacks. Loads plugins with `RTLD_LOCAL | RTLD_NOW` (POSIX) or full-path `LoadLibrary` (Windows) to prevent DLL planting.
-- **`LuaSandbox`** (`engine/script/`) — sandboxed Lua 5.4 execution environment for AI and mission scripts. Deny-lists `io`, `os`, `package`, `debug`, `dofile`, `loadfile`; replaces `require` with a custom loader restricted to the pack's own `ai/` directory. Rejects precompiled bytecode. RAII destructor calls `lua_close()`.
+- **`LuaSandbox`** (`engine/script/`) — sandboxed Lua 5.5 execution environment for AI and mission scripts. Deny-lists `io`, `os`, `package`, `debug`, `dofile`, `loadfile`; replaces `require` with a custom loader restricted to the pack's own `ai/` directory. Rejects precompiled bytecode. RAII destructor calls `lua_close()`.
 
 Mods can ship translations by placing TOML files under `locale/<lang>/` inside their mod directory. The `Localization` system merges these with the engine's base `locale/` files; higher-priority mods win on key conflicts. See [docs/modding/localization.md](modding/localization.md).
 
@@ -124,7 +124,7 @@ These decisions are finalized and not subject to revision without an RFC.
 | Native missions | YAML | Human-readable, tool-friendly |
 | Native campaigns | YAML | Arbitrary theater graph; no FA 6-theater limit |
 | Native terrain | Streaming heightmap chunks + JSON | No tile-count cap; supports large theaters |
-| Native AI scripts | Lua 5.4 | Embeddable, sandbox-able, moddable |
+| Native AI scripts | Lua 5.5 | Embeddable, sandbox-able, moddable |
 | Multiplayer topology | `fl-server` dedicated binary + `fl-lobby` REST service | Server-authoritative; no P2P player-count cap; self-hostable |
 | Single-player topology | `fl-server` running locally (`bind_address=127.0.0.1`, `max_peers=1`) | One simulation path; no bifurcated codebase; single-player is multiplayer with one peer |
 | LAN server discovery | Raw UDP broadcast + IPv6 link-local multicast (#91) | `DiscoveryBeacon` (fl-server) + `DiscoveryListener` (game client) in `engine/net/`; separate socket outside ENet; client server browser in issue #143 |

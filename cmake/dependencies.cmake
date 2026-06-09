@@ -17,7 +17,7 @@ endif()
 # SDL3 — system preferred, FetchContent fallback
 # Declared here; platform/vulkan calls FetchContent_MakeAvailable(SDL3) if needed
 # ---------------------------------------------------------------------------
-find_package(SDL3 3.2 QUIET)
+find_package(SDL3 3.4.10 QUIET)
 if(SDL3_FOUND)
     message(STATUS "SDL3: system (${SDL3_VERSION})")
 else()
@@ -28,7 +28,7 @@ else()
     set(SDL_STATIC ON  CACHE BOOL "" FORCE)
     FetchContent_Declare(SDL3
         GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-        GIT_TAG        release-3.2.10
+        GIT_TAG        release-3.4.10
         GIT_SHALLOW    TRUE
         SYSTEM
     )
@@ -53,7 +53,7 @@ else()
     set(ALSOFT_BUILD_IMPORT_LIB OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(openal-soft
         GIT_REPOSITORY https://github.com/kcat/openal-soft.git
-        GIT_TAG        1.24.2
+        GIT_TAG        1.25.2
         GIT_SHALLOW    TRUE
         SYSTEM
     )
@@ -81,7 +81,7 @@ else()
     message(STATUS "Catch2: FetchContent")
     FetchContent_Declare(Catch2
         GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-        GIT_TAG        v3.7.1
+        GIT_TAG        v3.15.0
         GIT_SHALLOW    TRUE
         SYSTEM
     )
@@ -108,7 +108,7 @@ else()
     set(TINYGLTF_INSTALL              OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(tinygltf
         GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
-        GIT_TAG        v2.9.3
+        GIT_TAG        v3.0.0
         GIT_SHALLOW    TRUE
         SYSTEM
     )
@@ -119,7 +119,7 @@ endif()
 # yaml-cpp — YAML parser; system preferred, FetchContent fallback
 # Used only by tools/validate-mission.
 # ---------------------------------------------------------------------------
-find_package(yaml-cpp 0.8 QUIET)
+find_package(yaml-cpp 0.9 QUIET)
 if(yaml-cpp_FOUND)
     message(STATUS "yaml-cpp: system (${yaml-cpp_VERSION})")
 else()
@@ -128,17 +128,15 @@ else()
     set(YAML_CPP_BUILD_TOOLS       OFF CACHE BOOL "" FORCE)
     set(YAML_CPP_BUILD_CONTRIB     OFF CACHE BOOL "" FORCE)
     set(YAML_CPP_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-    # yaml-cpp 0.8.0 declares cmake_minimum_required(VERSION 2.8.12); CMake 4.x
-    # rejects minimum versions below 3.5. CMAKE_POLICY_VERSION_MINIMUM is the
-    # CMake 4.x mechanism for this (advertised in the cmake_minimum_required error
-    # message itself). Set it as a cache variable so it is visible when CMake
-    # configures the FetchContent subdirectory.
+    # yaml-cpp 0.9.0 may still declare a cmake_minimum_required below 3.5; CMake 4.x
+    # rejects these. CMAKE_POLICY_VERSION_MINIMUM is the CMake 4.x mechanism for this.
+    # Keep the workaround until yaml-cpp bumps their minimum to 3.5+.
     if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
         set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE INTERNAL "")
     endif()
     FetchContent_Declare(yaml-cpp
         GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
-        GIT_TAG        0.8.0
+        GIT_TAG        yaml-cpp-0.9.0
         GIT_SHALLOW    TRUE
         SYSTEM
     )
@@ -146,8 +144,8 @@ else()
     if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
         unset(CMAKE_POLICY_VERSION_MINIMUM CACHE)
     endif()
-    # yaml-cpp 0.8.0 uses uint16_t in emitterutils.cpp without including <cstdint>.
-    # Force-include it so GCC 14+ doesn't reject the missing declaration as an error.
+    # yaml-cpp may omit <cstdint> for uint16_t in emitterutils.cpp; force-include it
+    # so GCC 14+ doesn't reject the missing declaration as an error.
     if(TARGET yaml-cpp)
         target_compile_options(yaml-cpp PRIVATE
             $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-include cstdint>
@@ -167,7 +165,7 @@ if(Vulkan_FOUND)
         message(STATUS "VulkanMemoryAllocator: FetchContent")
         FetchContent_Declare(VulkanMemoryAllocator
             GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
-            GIT_TAG        v3.3.0
+            GIT_TAG        v3.4.0
             GIT_SHALLOW    TRUE
             SYSTEM
         )
@@ -243,7 +241,7 @@ else()
     set(GLM_BUILD_LIBRARY OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(glm
         GIT_REPOSITORY https://github.com/g-truc/glm.git
-        GIT_TAG        1.0.1
+        GIT_TAG        1.0.3
         GIT_SHALLOW    TRUE
         SYSTEM
     )
@@ -267,12 +265,12 @@ if(NOT stb_POPULATED)
 endif()
 
 # ---------------------------------------------------------------------------
-# Lua 5.4 — system preferred, FetchContent fallback
+# Lua 5.5 — system preferred, FetchContent fallback
 # Used by engine/script/LuaSandbox for sandboxed AI and mission script execution.
 # FindLua provides variables, not targets; create a uniform lua::lua INTERFACE
 # target in both paths so downstream CMakeLists can always link lua::lua.
 # ---------------------------------------------------------------------------
-find_package(Lua 5.4 QUIET)
+find_package(Lua 5.5.0 QUIET)
 if(LUA_FOUND)
     message(STATUS "Lua: system (${LUA_VERSION_STRING})")
     add_library(lua_system_iface INTERFACE)
@@ -280,10 +278,10 @@ if(LUA_FOUND)
     target_link_libraries(lua_system_iface INTERFACE ${LUA_LIBRARIES})
     add_library(lua::lua ALIAS lua_system_iface)
 else()
-    message(STATUS "Lua: FetchContent (lua/lua v5.4.7)")
+    message(STATUS "Lua: FetchContent (lua/lua v5.5.0)")
     FetchContent_Declare(lua_src
         GIT_REPOSITORY https://github.com/lua/lua.git
-        GIT_TAG        v5.4.7
+        GIT_TAG        v5.5.0
         GIT_SHALLOW    TRUE
         SYSTEM
     )

@@ -41,7 +41,7 @@ Design choices that explicitly avoid constraints common in older games of this g
 | Multiplayer topology | Dedicated `fl-server`; optional `fl-lobby` matchmaking |
 | Multiplayer players | 32+ (server-authoritative) |
 | Campaign structure | Arbitrary YAML graph; branching, nested objectives, any count |
-| AI scripting | Lua 5.4; full scripting API; multiple concurrent behaviors |
+| AI scripting | Lua 5.5; full scripting API; multiple concurrent behaviors |
 | Score / rank tiers | Data-driven; TOML-defined rank tables |
 | Aircraft count | Unlimited; all content pack entries |
 | Weapon hardpoints | Configurable per aircraft TOML |

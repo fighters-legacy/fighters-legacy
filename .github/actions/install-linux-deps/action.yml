@@ -20,9 +20,6 @@ inputs:
   lcov:
     description: 'Install lcov for coverage'
     default: 'false'
-  lua:
-    description: 'Install Lua 5.4 dev package (liblua5.4-dev)'
-    default: 'false'
 
 runs:
   using: composite
@@ -57,9 +54,6 @@ runs:
         fi
         if [ "${{ inputs.lcov }}" = "true" ]; then
           pkgs="$pkgs lcov"
-        fi
-        if [ "${{ inputs.lua }}" = "true" ]; then
-          pkgs="$pkgs liblua5.4-dev"
         fi
         sudo apt-get update
         sudo apt-get install -y $pkgs
