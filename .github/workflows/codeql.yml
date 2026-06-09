@@ -34,7 +34,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake \
             libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev \
-            libxss-dev libxfixes-dev libxrender-dev libxinerama-dev libxxf86vm-dev libxkbcommon-dev \
+            libxss-dev libxfixes-dev libxrender-dev libxinerama-dev libxxf86vm-dev libxkbcommon-dev libxtst-dev \
             libopenal-dev libvulkan-dev glslang-tools
 
       - name: Cache CMake FetchContent dependencies
