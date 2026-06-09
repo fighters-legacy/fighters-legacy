@@ -30,6 +30,7 @@ else()
         GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
         GIT_TAG        release-3.4.10
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
 endif()
@@ -38,11 +39,11 @@ endif()
 # OpenAL Soft — system preferred, FetchContent fallback
 # Declared here; platform/openal calls FetchContent_MakeAvailable(openal-soft)
 # Skip find_package on Apple: the deprecated system OpenAL.framework passes the
-# 1.23 version check but provides <OpenAL/al.h> as <OpenAL/al.h> (framework
+# 1.24.2 version check but provides <OpenAL/al.h> as <OpenAL/al.h> (framework
 # layout), not <AL/al.h>. Always fetch OpenAL Soft on Apple.
 # ---------------------------------------------------------------------------
 if(NOT APPLE)
-    find_package(OpenAL 1.23 QUIET)
+    find_package(OpenAL 1.24.2 QUIET)
 endif()
 if(OPENAL_FOUND OR OpenAL_FOUND)
     message(STATUS "OpenAL Soft: system")
@@ -55,6 +56,7 @@ else()
         GIT_REPOSITORY https://github.com/kcat/openal-soft.git
         GIT_TAG        1.24.2
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
 endif()
@@ -68,13 +70,14 @@ FetchContent_Declare(enet6
     GIT_REPOSITORY https://github.com/SirLynix/enet6.git
     GIT_TAG        v6.1.3
     GIT_SHALLOW    TRUE
+    GIT_PROGRESS   TRUE
     SYSTEM
 )
 
 # ---------------------------------------------------------------------------
 # Catch2 — system preferred, FetchContent fallback; always needed for tests
 # ---------------------------------------------------------------------------
-find_package(Catch2 3 QUIET)
+find_package(Catch2 3.15.0 QUIET)
 if(Catch2_FOUND)
     message(STATUS "Catch2: system (${Catch2_VERSION})")
 else()
@@ -83,6 +86,7 @@ else()
         GIT_REPOSITORY https://github.com/catchorg/Catch2.git
         GIT_TAG        v3.15.0
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
     FetchContent_MakeAvailable(Catch2)
@@ -92,7 +96,7 @@ endif()
 # tinygltf — header-only glTF 2.0 loader; system preferred, FetchContent fallback
 # Used only by tools/validate-mesh.
 # ---------------------------------------------------------------------------
-find_package(tinygltf QUIET)
+find_package(tinygltf 3.0.0 QUIET)
 if(tinygltf_FOUND)
     message(STATUS "tinygltf: system (${tinygltf_VERSION})")
 else()
@@ -110,6 +114,7 @@ else()
         GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
         GIT_TAG        v3.0.0
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
     FetchContent_MakeAvailable(tinygltf)
@@ -119,7 +124,7 @@ endif()
 # yaml-cpp — YAML parser; system preferred, FetchContent fallback
 # Used only by tools/validate-mission.
 # ---------------------------------------------------------------------------
-find_package(yaml-cpp 0.9 QUIET)
+find_package(yaml-cpp 0.9.0 QUIET)
 if(yaml-cpp_FOUND)
     message(STATUS "yaml-cpp: system (${yaml-cpp_VERSION})")
 else()
@@ -138,6 +143,7 @@ else()
         GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
         GIT_TAG        yaml-cpp-0.9.0
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
     FetchContent_MakeAvailable(yaml-cpp)
@@ -159,7 +165,7 @@ endif()
 # VulkanMemoryAllocator — header-only; gated on Vulkan_FOUND (Vulkan backend only)
 # ---------------------------------------------------------------------------
 if(Vulkan_FOUND)
-    find_package(VulkanMemoryAllocator QUIET)
+    find_package(VulkanMemoryAllocator 3.4.0 QUIET)
     if(VulkanMemoryAllocator_FOUND)
         message(STATUS "VulkanMemoryAllocator: system")
     else()
@@ -168,6 +174,7 @@ if(Vulkan_FOUND)
             GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
             GIT_TAG        v3.4.0
             GIT_SHALLOW    TRUE
+            GIT_PROGRESS   TRUE
             SYSTEM
         )
         FetchContent_MakeAvailable(VulkanMemoryAllocator)
@@ -177,7 +184,7 @@ if(Vulkan_FOUND)
     # KTX-Software — KTX2 + Basis Universal transcode; gated on Vulkan_FOUND
     # Read-only static library (ktx_read); write/encode features disabled.
     # ---------------------------------------------------------------------------
-    find_package(ktx QUIET)
+    find_package(ktx 4.4.2 QUIET)
     if(ktx_FOUND)
         message(STATUS "KTX-Software: system")
     else()
@@ -194,6 +201,7 @@ if(Vulkan_FOUND)
             GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
             GIT_TAG        v4.4.2
             GIT_SHALLOW    TRUE
+            GIT_PROGRESS   TRUE
             SYSTEM
         )
         # KTX-Software has many pedantic issues in its internals (anonymous structs,
@@ -231,7 +239,7 @@ endif()
 # ---------------------------------------------------------------------------
 # GLM — header-only math library; unconditional (shared by platform-hal and renderer)
 # ---------------------------------------------------------------------------
-find_package(glm QUIET)
+find_package(glm 1.0.3 QUIET)
 if(glm_FOUND)
     message(STATUS "glm: system (${glm_VERSION})")
 else()
@@ -244,6 +252,7 @@ else()
         GIT_REPOSITORY https://github.com/g-truc/glm.git
         GIT_TAG        1.0.3
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
     FetchContent_MakeAvailable(glm)
@@ -258,6 +267,7 @@ FetchContent_Declare(stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
     GIT_TAG        31c1ad37456438565541f4919958214b6e762fb4
     GIT_SHALLOW    FALSE
+    GIT_PROGRESS   TRUE
     SYSTEM
 )
 FetchContent_GetProperties(stb)
@@ -284,6 +294,7 @@ else()
         GIT_REPOSITORY https://github.com/lua/lua.git
         GIT_TAG        v5.5.0
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
     FetchContent_GetProperties(lua_src)
@@ -314,7 +325,7 @@ endif()
 # tomlplusplus — header-only TOML parser; system preferred, FetchContent fallback
 # Used by engine/content/ModLoader to parse mod manifests.
 # ---------------------------------------------------------------------------
-find_package(tomlplusplus 3.4 QUIET)
+find_package(tomlplusplus 3.4.0 QUIET)
 if(tomlplusplus_FOUND)
     message(STATUS "tomlplusplus: system (${tomlplusplus_VERSION})")
 else()
@@ -323,6 +334,7 @@ else()
         GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
         GIT_TAG        v3.4.0
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
     FetchContent_MakeAvailable(tomlplusplus)

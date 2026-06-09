@@ -77,8 +77,8 @@ jobs:
       - name: Cache CMake FetchContent dependencies
         uses: actions/cache@v5
         with:
-          path: build/${{ matrix.preset }}/_deps
-          key: cmake-deps-${{ matrix.os }}-${{ matrix.preset }}-${{ hashFiles('cmake/dependencies.cmake') }}
+          path: build/_deps
+          key: cmake-deps-${{ matrix.os }}-${{ hashFiles('cmake/dependencies.cmake') }}
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}

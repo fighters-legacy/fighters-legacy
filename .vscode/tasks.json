@@ -5,10 +5,10 @@
     {
       "label": "Configure (Debug)",
       "type": "shell",
-      "command": "cmake --preset debug",
+      "command": "cmake --preset debug -DFETCHCONTENT_QUIET=OFF",
       "group": "build",
       "presentation": {
-        "reveal": "silent",
+        "reveal": "always",
         "panel": "shared"
       },
       "problemMatcher": []
@@ -16,10 +16,10 @@
     {
       "label": "Configure (Release)",
       "type": "shell",
-      "command": "cmake --preset release",
+      "command": "cmake --preset release -DFETCHCONTENT_QUIET=OFF",
       "group": "build",
       "presentation": {
-        "reveal": "silent",
+        "reveal": "always",
         "panel": "shared"
       },
       "problemMatcher": []
@@ -140,13 +140,13 @@
     {
       "label": "CI: Configure (ASAN)",
       "type": "shell",
-      "command": "cmake --preset asan",
+      "command": "cmake --preset asan -DFETCHCONTENT_QUIET=OFF",
       "env": {
         "CC": "clang",
         "CXX": "clang++"
       },
       "presentation": {
-        "reveal": "silent",
+        "reveal": "always",
         "panel": "shared"
       },
       "problemMatcher": []
@@ -185,7 +185,7 @@
       "dependsOn": [
         "CI: clang-format check",
         "CI: REUSE lint",
-        "Test (Debug)",
+        "Build (Debug)",
         "CI: Smoke tests",
         "CI: pytest (gen_terrain_chunks)",
         "CI: Locale lint",
