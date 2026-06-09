@@ -13,6 +13,14 @@ DATA=$(gh api graphql -f query='
 {
   user(login: "jomkz") {
     projectV2(number: 2) {
+      fields(first: 20) {
+        nodes {
+          ... on ProjectV2SingleSelectField {
+            name
+            options { name color }
+          }
+        }
+      }
       items(first: 100) {
         nodes {
           content {
@@ -46,20 +54,43 @@ ITEMS=$(echo "$DATA" | jq -r '
   } | [.state, .phase, .start, .end] | @tsv
 ')
 
-declare -A PHASE_NAME=(
-  ["Phase 1"]="Engine Foundation"
-  ["Phase 2"]="Modern Particles Engine"
-  ["Phase 3"]="Classic/Parity Mode"
-  ["Phase 4"]="In-Game Mission Editor"
-  ["Phase 5"]="Linux/Mac Release"
-  ["Phase 6"]="Native Formats + Free Pack"
-)
+declare -A PHASE_COLOR
+while IFS=$'\t' read -r pname color; do
+  case "$color" in
+    GRAY)   PHASE_COLOR[$pname]=$'\e[37m'       ;;
+    GREEN)  PHASE_COLOR[$pname]=$'\e[32m'       ;;
+    YELLOW) PHASE_COLOR[$pname]=$'\e[33m'       ;;
+    BLUE)   PHASE_COLOR[$pname]=$'\e[34m'       ;;
+    PURPLE) PHASE_COLOR[$pname]=$'\e[35m'       ;;
+    ORANGE) PHASE_COLOR[$pname]=$'\e[38;5;208m' ;;
+    RED)    PHASE_COLOR[$pname]=$'\e[31m'       ;;
+    *)      PHASE_COLOR[$pname]=''              ;;
+  esac
+done < <(echo "$DATA" | jq -r '
+  .data.user.projectV2.fields.nodes[] |
+  select(.name? == "Phase") |
+  .options[] |
+  [.name, .color] | @tsv
+')
+
+RESET=$'\e[0m'
 
 printf "\nFighters Legacy — Roadmap Status (%s)\n" "$TODAY"
 printf '═%.0s' {1..62}
 printf "\n\n"
 
-for phase in "Phase 1" "Phase 2" "Phase 3" "Phase 4" "Phase 5" "Phase 6"; do
+for phase in \
+  "Phase 1 - Engine Foundation" \
+  "Phase 2 - Modern-Particles Engine" \
+  "Phase 2b - Content & Gameplay Systems" \
+  "Phase 3 - OpenGL Compatibility Renderer" \
+  "Phase 4 - In-Game Mission Editor" \
+  "Phase 5 - Linux/macOS Release" \
+  "Phase 6 - Native Formats & Modding"; do
+
+  prefix="${phase%% - *}"
+  desc="${phase#* - }"
+  clr="${PHASE_COLOR[$phase]:-}"
   total=0; done_count=0; start_date=""; end_date=""
 
   while IFS=$'\t' read -r state p start end; do
@@ -111,15 +142,17 @@ for phase in "Phase 1" "Phase 2" "Phase 3" "Phase 4" "Phase 5" "Phase 6"; do
     *)                     icon="✗" ;;
   esac
 
-  printf "%-8s %-30s  ends %s  %s\n" \
-    "$phase" "${PHASE_NAME[$phase]:-$phase}" "$end_date" "$days_str"
-  printf "         %s  %3d%% done  %3d%% elapsed  %s %s\n" \
+  printf "${clr}%-8s %-38s${RESET}  ends %s  %s\n" \
+    "$prefix" "$desc" "$end_date" "$days_str"
+  printf "         ${clr}%s${RESET}  %3d%% done  %3d%% elapsed  %s %s\n" \
     "$bar" "$pct_done" "$pct_elapsed" "$icon" "$status"
   printf "         %d / %d issues closed\n\n" "$done_count" "$total"
 done
 
 backlog=0
 while IFS=$'\t' read -r state p _start _end; do
-  [[ -z "$p" ]] && backlog=$(( backlog + 1 ))
+  [[ -z "$p" ]] && backlog=$(( backlog + 1 )) || true
 done <<< "$ITEMS"
-[[ $backlog -gt 0 ]] && printf "Backlog  %d unscheduled issues\n\n" "$backlog"
+if [[ $backlog -gt 0 ]]; then
+  printf "Backlog  %d unscheduled issues\n\n" "$backlog"
+fi

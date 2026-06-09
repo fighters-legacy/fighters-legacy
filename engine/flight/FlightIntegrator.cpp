@@ -151,16 +151,24 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     float altitude_m = m_state.pos_world[1];
     AtmosphereState atmos = computeAtmosphere(altitude_m);
 
-    // 5. Airspeed and aerodynamic angles
+    // Conjugate quaternion for world→body rotation (used for wind and gravity transforms).
+    float q_conj[4] = {-m_state.quat[0], -m_state.quat[1], -m_state.quat[2], m_state.quat[3]};
+
+    // 5. Relative airspeed: subtract body-frame wind from aircraft velocity.
+    // Aerodynamic forces depend on velocity relative to the air mass, not the ground.
     const float* vel = m_state.vel_body;
-    float spd = std::sqrt(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]);
+    auto wind_body = quatRotate(q_conj, wind.wind_world);
+    float rel0 = vel[0] - wind_body[0];
+    float rel1 = vel[1] - wind_body[1];
+    float rel2 = vel[2] - wind_body[2];
+    float spd = std::sqrt(rel0 * rel0 + rel1 * rel1 + rel2 * rel2);
     float mach = (atmos.speed_of_sound_m_s > 0.f) ? spd / atmos.speed_of_sound_m_s : 0.f;
 
     // Body frame: x=forward, y=up, z=right.
     // Pitched up → velocity dips below body nose → negative body-y component → positive alpha.
     // Sideslip right → positive body-z component → positive beta.
-    float alpha_rad = (spd > 0.f) ? std::atan2(-vel[1], vel[0]) : 0.f;
-    float beta_rad = (spd > 0.f) ? std::asin(std::clamp(vel[2] / spd, -1.f, 1.f)) : 0.f;
+    float alpha_rad = (spd > 0.f) ? std::atan2(-rel1, rel0) : 0.f;
+    float beta_rad = (spd > 0.f) ? std::asin(std::clamp(rel2 / spd, -1.f, 1.f)) : 0.f;
 
     // 6. Effective mass including payload
     float eff_mass = m_state.mass_kg + payload.extra_mass_kg;
@@ -174,29 +182,17 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     // 8. Gravity in body frame. World convention: x=forward, y=up, z=right.
     // Gravity acts downward = -world_y. Transform to body frame via conjugate quaternion.
     const float grav_world[3] = {0.f, -kG, 0.f}; // world: x=forward, y=up, z=right
-    // Conjugate quaternion for world→body rotation
-    float q_conj[4] = {-m_state.quat[0], -m_state.quat[1], -m_state.quat[2], m_state.quat[3]};
     auto grav_body = quatRotate(q_conj, grav_world);
 
     forces[0] += eff_mass * grav_body[0];
     forces[1] += eff_mass * grav_body[1];
     forces[2] += eff_mass * grav_body[2];
 
-    // 8b. Wind and turbulence perturbations.
-    // Turbulence: stochastic body-frame impulse (F = m*a, treating as acceleration).
+    // 8b. Turbulence: stochastic body-frame impulse (F = m*a, treating as acceleration).
+    // Steady wind is already accounted for via relative airspeed in step 5.
     forces[0] += eff_mass * wind.turbulence_body[0];
     forces[1] += eff_mass * wind.turbulence_body[1];
     forces[2] += eff_mass * wind.turbulence_body[2];
-    // Steady wind + gusts: rotate world-frame wind into body frame, add drag contribution.
-    // Simplified linear model — full airspeed correction is a follow-on (see issue tracker).
-    if (wind.wind_world[0] != 0.f || wind.wind_world[2] != 0.f) {
-        auto wind_body = quatRotate(q_conj, wind.wind_world);
-        float S = m_data->geometry.wing_area_m2;
-        float CD = 0.03f; // approximate parasitic drag coefficient
-        forces[0] += 0.5f * atmos.density_kg_m3 * S * CD * std::abs(wind_body[0]) * (wind_body[0] > 0.f ? 1.f : -1.f);
-        forces[1] += 0.5f * atmos.density_kg_m3 * S * CD * std::abs(wind_body[1]) * (wind_body[1] > 0.f ? 1.f : -1.f);
-        forces[2] += 0.5f * atmos.density_kg_m3 * S * CD * std::abs(wind_body[2]) * (wind_body[2] > 0.f ? 1.f : -1.f);
-    }
 
     // 9. Thrust magnitude for TVC moment and prop effects
     float alt_km = altitude_m / 1000.f;
