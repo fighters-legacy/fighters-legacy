@@ -276,16 +276,17 @@ The `game/` directory holds game binary entry points. The `server/` directory ho
 | CMake | 3.25+ | System / installer |
 | Vulkan SDK | 1.3+ | LunarG |
 | MoltenVK | bundled with Vulkan SDK | LunarG (macOS) |
-| SDL3 | latest | FetchContent (static) or system (shared, optional) |
-| OpenAL Soft | 1.24+ | FetchContent (static) or system (shared, optional) |
+| SDL3 | 3.4.10 | FetchContent (static) or system (shared, optional) |
+| OpenAL Soft | 1.24.2 | FetchContent (static) or system (shared, optional) |
 | enet6 | v6.1.3 (SirLynix/enet6) | FetchContent |
-| Catch2 | 3.x | FetchContent |
-| tomlplusplus | 3.4+ | FetchContent or system |
-| GLM | 1.0+ | FetchContent or system |
-| VulkanMemoryAllocator | 3.3+ | FetchContent (Vulkan builds only) |
-| KTX-Software | 4.4+ | FetchContent, always static (Vulkan builds only) |
-| tinygltf | 2.9+ | FetchContent or system |
-| yaml-cpp | 0.8+ | FetchContent or system |
+| Catch2 | 3.15.0 | FetchContent |
+| tomlplusplus | 3.4.0 | FetchContent or system |
+| GLM | 1.0.3 | FetchContent or system |
+| VulkanMemoryAllocator | 3.4.0 | FetchContent (Vulkan builds only) |
+| KTX-Software | 4.4.2 | FetchContent, always static (Vulkan builds only) |
+| tinygltf | 3.0.0 | FetchContent or system |
+| yaml-cpp | 0.9.0 | FetchContent or system |
+| Lua | 5.5.0 | FetchContent or system |
 
 FetchContent fallback is used when the system package is absent or below the required version. The CMake configuration prints the source (system vs fetched) for each dependency.
 
