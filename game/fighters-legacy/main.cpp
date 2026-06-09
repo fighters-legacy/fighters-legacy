@@ -8,6 +8,7 @@
 #include "ENetNetwork.h"
 #include "FileLogger.h"
 #include "GameHud.h"
+#include "HapticController.h"
 #include "IWindowEventHandler.h"
 #include "LocalServer.h"
 #include "Platform.h"
@@ -392,6 +393,7 @@ int main(int argc, char** argv) {
 
     EnvironmentState env = localServer.initialEnvironment();
     GameHud gameHud;
+    HapticController hapticController(*p.input);
     ClientNetEventHandler clientHandler(renderBridge, entityRegistry, *rawLogger, *clientNet, env);
     clientHandler.hud = &gameHud;
     clientNet->setEventHandler(&clientHandler);
@@ -421,6 +423,7 @@ int main(int argc, char** argv) {
     std::array<ParticleEmitterState, 9> precipBuf{};
     static uint32_t inputSeq = 0;
 
+    bool wasFocused = true;
     bool running = true;
     while (running && !p.window->shouldClose()) {
         // Scroll wheel zoom — drain before pollEvents.
@@ -438,6 +441,13 @@ int main(int argc, char** argv) {
         }
 
         p.window->pollEvents();
+        {
+            bool isFocused =
+                (SDL_GetWindowFlags(static_cast<SDL_Window*>(p.window->nativeHandle())) & SDL_WINDOW_INPUT_FOCUS) != 0;
+            if (wasFocused && !isFocused)
+                hapticController.onPause(0);
+            wasFocused = isFocused;
+        }
         p.renderer->beginFrame();
 
         // Player entity lookup from the latest snapshot.
@@ -491,6 +501,8 @@ int main(int argc, char** argv) {
             if (dbgConsole.tick(*p.input))
                 dbgConsole.close(*p.input);
         }
+        if (!consoleWasOpen && dbgConsole.isOpen())
+            hapticController.onPause(0);
         if (inspector && !inspector->update() && !consoleWasOpen)
             running = false;
 
@@ -499,6 +511,7 @@ int main(int argc, char** argv) {
         discoveryListener.poll();
 
         // Flight input → send MsgClientInput to local server.
+        bool weaponFired = false;
         {
             const bool* keys = SDL_GetKeyboardState(nullptr);
             fl::MsgClientInput inp;
@@ -515,6 +528,7 @@ int main(int argc, char** argv) {
                 inp.aileron = (keys[SDL_SCANCODE_RIGHT] ? 1.f : 0.f) + (keys[SDL_SCANCODE_LEFT] ? -1.f : 0.f);
                 inp.rudder = (keys[SDL_SCANCODE_X] ? 1.f : 0.f) + (keys[SDL_SCANCODE_Z] ? -1.f : 0.f);
                 inp.buttons = keys[SDL_SCANCODE_SPACE] ? 1u : 0u;
+                weaponFired = (inp.buttons & 1u) != 0u;
 
                 // Gamepad axis blend — wins when |axis| > deadzone.
                 const auto cs = userConfig.controls();
@@ -653,6 +667,7 @@ int main(int argc, char** argv) {
             playerEntry ? static_cast<float>(terrainStreamer.heightAt(playerEntry->position.x, playerEntry->position.z))
                         : 0.0f;
         gameHud.update(cameraController.mode(), playerEntry, env, terrainElev, isSnow);
+        hapticController.update(playerEntry, weaponFired, terrainElev, 1.0f / 60.0f);
         {
             glm::dvec3 playerPos{};
             const glm::dvec3* playerPosPtr = nullptr;
@@ -697,6 +712,7 @@ int main(int argc, char** argv) {
     }
 
     // Step 21: Clean shutdown.
+    hapticController.onPause(0);
     localServer.stop();
     clientNet->disconnect();
     clientNet->shutdown();

@@ -358,3 +358,12 @@ add_executable(test_lua_sandbox test_lua_sandbox.cpp)
 target_link_libraries(test_lua_sandbox PRIVATE Catch2::Catch2WithMain engine-script)
 target_include_directories(test_lua_sandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_lua_sandbox)
+
+add_executable(test_haptic_controller test_haptic_controller.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
+target_link_libraries(test_haptic_controller PRIVATE
+    Catch2::Catch2WithMain engine-render platform-hal)
+target_include_directories(test_haptic_controller PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_haptic_controller)

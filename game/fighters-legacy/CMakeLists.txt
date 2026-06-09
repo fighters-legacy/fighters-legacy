@@ -4,6 +4,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         ClientNetEventHandler.cpp
         CameraInput.cpp
         GameHud.cpp
+        HapticController.cpp
         LocalServer.cpp
     )
     target_link_libraries(fighters-legacy PRIVATE

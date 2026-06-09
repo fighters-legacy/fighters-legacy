@@ -82,6 +82,30 @@ Configure in the `[controls]` section of `config/user.toml`:
 | `invert_rudder` | `false` | Flip rudder axis |
 | `invert_throttle` | `false` | Flip throttle direction |
 
+## Haptic feedback
+
+Controllers that support rumble receive feedback for the following flight events. Capability is
+checked automatically via `supportsRumble` / `supportsTriggerRumble`; controllers without motors
+silently skip all effects.
+
+| Event | Motors | Duration |
+|---|---|---|
+| Gun burst | Right (high-freq) | 80 ms per trigger pull |
+| Hit taken | Both | 120 ms |
+| Stall buffet | Both (low-intensity) | Continuous while above stall AoA |
+| Afterburner ignition | Both | 300 ms ramp, then low sustain |
+| Engine failure | Both (low-freq) | Continuous while `damageLevel >= 2` |
+| G-LOC onset | Right (high-freq) | Continuous, proportional above 6 G |
+| Transonic buffet | Both | 400 ms, periodic while Mach 0.85–1.05 |
+| GPWS / terrain warning | Both | 2 × 100 ms double-pulse |
+| Landing gear touchdown | Both (low-freq) | 200 ms impact |
+
+Entry points for future game systems (not yet wired): missile launch, missile warning,
+compressor stall, carrier trap, hydraulic failure, and ordnance release
+(`HapticController::notify*` methods in `game/fighters-legacy/HapticController.h`).
+
+See [docs/haptics.md](haptics.md) for full tuning values and platform notes.
+
 ## HOTAS controls
 
 HOTAS sticks, throttle quadrants, and rudder pedals are supported via the raw joystick API on
