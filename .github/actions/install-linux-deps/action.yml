@@ -36,7 +36,7 @@ runs:
     - name: Install apt packages
       shell: bash
       run: |
-        pkgs="ninja-build cmake libx11-dev libxext-dev libxcursor-dev"
+        pkgs="ninja-build cmake libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev libxss-dev libxfixes-dev libxrender-dev libxinerama-dev libxxf86vm-dev libxkbcommon-dev"
         if [ "${{ inputs.vulkan }}" = "true" ]; then
           pkgs="$pkgs libvulkan-dev glslang-tools"
         fi
