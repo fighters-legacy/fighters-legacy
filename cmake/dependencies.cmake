@@ -144,13 +144,14 @@ else()
     if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
         unset(CMAKE_POLICY_VERSION_MINIMUM CACHE)
     endif()
-    # yaml-cpp may omit <cstdint> for uint16_t in emitterutils.cpp; force-include it
-    # so GCC 14+ doesn't reject the missing declaration as an error.
+    # yaml-cpp 0.9.0 adds fptostring.cpp / dragonbox.h with size_t→int narrowing that
+    # MSVC (C4267) and GCC 14+ (missing <cstdint>) reject under -Werror / /WX.
     if(TARGET yaml-cpp)
         target_compile_options(yaml-cpp PRIVATE
-            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-include cstdint>
-            $<$<CXX_COMPILER_ID:MSVC>:/FI cstdint>
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-w -include cstdint>
+            $<$<CXX_COMPILER_ID:MSVC>:/W0 /FI cstdint>
         )
+        set_target_properties(yaml-cpp PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
     endif()
 endif()
 
