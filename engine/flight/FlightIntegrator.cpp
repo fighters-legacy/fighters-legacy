@@ -134,12 +134,18 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     // 1. Spool and optional gear/control surfaces
     advanceSpool(dt, ctrl.throttle);
 
-    // 2. Wing sweep: follow auto-schedule based on current Mach, or manual override
+    // 2. Wing sweep: follow auto-schedule based on current Mach, or manual override.
+    // Use relative airspeed (aircraft velocity minus body-frame wind) for Mach — consistent with step 5.
     if (m_data->wing_sweep) {
+        AtmosphereState atmos2 = computeAtmosphere(m_state.pos_world[1]);
+        float q_conj2[4] = {-m_state.quat[0], -m_state.quat[1], -m_state.quat[2], m_state.quat[3]};
         const float* vel = m_state.vel_body;
-        float spd = std::sqrt(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]);
-        AtmosphereState atmos = computeAtmosphere(m_state.pos_world[1]);
-        float mach = (atmos.speed_of_sound_m_s > 0.f) ? spd / atmos.speed_of_sound_m_s : 0.f;
+        auto wind_body2 = quatRotate(q_conj2, wind.wind_world);
+        float rel0 = vel[0] - wind_body2[0];
+        float rel1 = vel[1] - wind_body2[1];
+        float rel2 = vel[2] - wind_body2[2];
+        float spd = std::sqrt(rel0 * rel0 + rel1 * rel1 + rel2 * rel2);
+        float mach = (atmos2.speed_of_sound_m_s > 0.f) ? spd / atmos2.speed_of_sound_m_s : 0.f;
         float sched_sweep = m_data->wing_sweep->schedule.lookup(mach);
         advanceSweep(dt, sched_sweep);
     }

@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include "flight/Atmosphere.h"
 #include "flight/BuiltinFlightModel.h"
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelParser.h"
@@ -86,6 +87,28 @@ spool_time_s        = 5.0
 mach   = [0.0, 0.3, 0.9]
 alt_km = [0.0, 12.0]
 values = [60.0, 30.0, 63.0, 31.0, 68.0, 34.0]
+)";
+
+static const std::string kWingSweepToml = R"(
+[wing_sweep]
+ref_sweep_deg    = 45.0
+min_deg          = 20.0
+max_deg          = 68.0
+slew_rate_deg_s  = 720.0
+
+[wing_sweep.schedule]
+mach  = [0.0, 0.5, 1.0]
+sweep = [20.0, 45.0, 68.0]
+
+[wing_sweep.spread]
+cl_scale  = 1.1
+k_scale   = 0.9
+cd0_delta = 0.002
+
+[wing_sweep.swept]
+cl_scale  = 0.9
+k_scale   = 1.1
+cd0_delta = 0.005
 )";
 
 static std::shared_ptr<FlightModelData> makeData(const std::string& extra = "") {
@@ -660,4 +683,103 @@ TEST_CASE("Integrator: wind effect depends on aircraft orientation", "[flight_in
 
     // Different body-frame winds after rotation -> different aerodynamic results
     CHECK(fi_identity.state().vel_body[0] != fi_yawed.state().vel_body[0]);
+}
+
+TEST_CASE("Integrator: wing-sweep schedule uses relative-airspeed Mach", "[flight_integrator][weather]") {
+    // A headwind raises the effective airspeed seen by the sweep scheduler, driving a higher
+    // Mach lookup and therefore a different commanded sweep angle than the no-wind case.
+    auto d = makeData(kWingSweepToml);
+
+    auto make_fi = [&] {
+        FlightIntegrator fi(d);
+        FlightState s{};
+        s.vel_body[0] = 100.f;
+        s.pos_world[1] = 1000.f;
+        s.mass_kg = d->geometry.mass_kg + d->geometry.fuel_kg;
+        s.fuel_kg = d->geometry.fuel_kg;
+        fi.reset(s);
+        return fi;
+    };
+
+    ControlInput ctrl{};
+    ctrl.throttle = 0.5f;
+    PayloadEffect px{};
+
+    auto fi_nowind = make_fi();
+    auto fi_headwind = make_fi();
+
+    fl::WindInfluence headwind{};
+    headwind.wind_world[0] = -80.f; // opposes forward (+X) flight, raising relative airspeed
+
+    fi_nowind.step(1.f / 60.f, ctrl, px);
+    fi_headwind.step(1.f / 60.f, ctrl, px, headwind);
+
+    CHECK(fi_headwind.state().current_sweep_deg != fi_nowind.state().current_sweep_deg);
+}
+
+TEST_CASE("Integrator: wing-sweep tracks schedule with zero wind", "[flight_integrator][weather]") {
+    // With zero wind, relative airspeed equals ground speed. Verify the sweep settles at the
+    // value the Mach schedule prescribes for the aircraft's actual speed.
+    auto d = makeData(kWingSweepToml);
+
+    FlightIntegrator fi(d);
+    FlightState s{};
+    s.vel_body[0] = 100.f;
+    s.pos_world[1] = 1000.f;
+    s.mass_kg = d->geometry.mass_kg + d->geometry.fuel_kg;
+    s.fuel_kg = d->geometry.fuel_kg;
+    s.current_sweep_deg = d->wing_sweep->ref_sweep_deg; // start at ref so slew settles in one step
+    fi.reset(s);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 0.5f;
+    PayloadEffect px{};
+    fi.step(1.f / 60.f, ctrl, px);
+
+    float sos = fl::computeAtmosphere(1000.f).speed_of_sound_m_s;
+    float mach = 100.f / sos;
+    float expected_sweep = d->wing_sweep->schedule.lookup(mach);
+    CHECK_THAT(fi.state().current_sweep_deg, WithinAbs(expected_sweep, 0.1f));
+}
+
+TEST_CASE("Integrator: wing-sweep Mach accounts for aircraft orientation", "[flight_integrator][weather]") {
+    // Wind is rotated from world to body frame before computing relative airspeed for the sweep
+    // scheduler. Two aircraft with different orientations see the same world wind differently,
+    // producing distinct sweep commands. Without the rotation, both would produce identical results.
+    auto d = makeData(kWingSweepToml);
+
+    auto make_fi = [&](const FlightState& s) {
+        FlightIntegrator fi(d);
+        fi.reset(s);
+        return fi;
+    };
+
+    FlightState s_identity{};
+    s_identity.vel_body[0] = 100.f;
+    s_identity.pos_world[1] = 1000.f;
+    s_identity.mass_kg = d->geometry.mass_kg + d->geometry.fuel_kg;
+    s_identity.fuel_kg = d->geometry.fuel_kg;
+    s_identity.current_sweep_deg = d->wing_sweep->ref_sweep_deg;
+
+    FlightState s_yaw = s_identity;
+    // 90-degree yaw around world Y: quat = (x=0, y=sin45, z=0, w=cos45)
+    s_yaw.quat[0] = 0.f;
+    s_yaw.quat[1] = 0.70711f;
+    s_yaw.quat[2] = 0.f;
+    s_yaw.quat[3] = 0.70711f;
+
+    auto fi_identity = make_fi(s_identity);
+    auto fi_yawed = make_fi(s_yaw);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 0.5f;
+    PayloadEffect px{};
+
+    fl::WindInfluence wind{};
+    wind.wind_world[0] = 50.f; // identity: tailwind (lowers rel spd); yawed: crosswind (different magnitude)
+
+    fi_identity.step(1.f / 60.f, ctrl, px, wind);
+    fi_yawed.step(1.f / 60.f, ctrl, px, wind);
+
+    CHECK(fi_identity.state().current_sweep_deg != fi_yawed.state().current_sweep_deg);
 }

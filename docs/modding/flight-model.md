@@ -450,7 +450,8 @@ Applied: `CL_eff = CL_table × cl_scale`, etc.
 - `k_scale ≈ AR_ref / AR_spread` for the spread config (spread gives ~40% more effective AR
   than 55° for the F-14).
 - `slew_rate_deg_s` from aircraft specifications (F-14: ~7.5°/s).
-- `[wing_sweep.schedule]` is the Mach-driven auto programme. Pilots and AI can override it
+- `[wing_sweep.schedule]` is the Mach-driven auto programme (Mach is true airspeed —
+  aircraft velocity relative to the air mass, not ground speed). Pilots and AI can override it
   with a manual sweep command.
 
 **Parser validates** that `min_deg ≤ ref_sweep_deg ≤ max_deg`.
