@@ -666,9 +666,8 @@ int main(int argc, char** argv) {
         const float terrainElev =
             playerEntry ? static_cast<float>(terrainStreamer.heightAt(playerEntry->position.x, playerEntry->position.z))
                         : 0.0f;
-        gameHud.update(cameraController.mode(), playerEntry, env.timeOfDay, terrainElev);
-        hapticController.update(playerEntry, weaponFired, terrainElev, 1.0f / 60.0f);
         gameHud.update(cameraController.mode(), playerEntry, env, terrainElev, isSnow);
+        hapticController.update(playerEntry, weaponFired, terrainElev, 1.0f / 60.0f);
         {
             glm::dvec3 playerPos{};
             const glm::dvec3* playerPosPtr = nullptr;
