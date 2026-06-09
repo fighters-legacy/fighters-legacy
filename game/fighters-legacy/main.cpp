@@ -612,10 +612,10 @@ int main(int argc, char** argv) {
         subtitleQueue.update(1.0f / 60.0f);
         musicManager.update(1.0f / 60.0f, aud.masterVolume, aud.musicVolume);
 
+        const bool isSnow = static_cast<float>(cam.worldOrigin.y) > kSnowAltitudeThresholdM;
         std::span<const ParticleEmitterState> sandboxEmitters{};
         if (env.cloudCoverage >= 0.75f) {
             const bool isStorm = env.cloudCoverage >= 0.90f;
-            const bool isSnow = static_cast<float>(cam.worldOrigin.y) > kSnowAltitudeThresholdM;
             const char* presetName = isStorm ? (isSnow ? "storm_snow" : "storm_rain") : (isSnow ? "snow" : "rain");
             if (auto preset = particleSystem.getPreset(presetName)) {
                 const glm::vec3 camF = glm::vec3(cam.worldOrigin);
@@ -652,7 +652,7 @@ int main(int argc, char** argv) {
         const float terrainElev =
             playerEntry ? static_cast<float>(terrainStreamer.heightAt(playerEntry->position.x, playerEntry->position.z))
                         : 0.0f;
-        gameHud.update(cameraController.mode(), playerEntry, env.timeOfDay, terrainElev);
+        gameHud.update(cameraController.mode(), playerEntry, env, terrainElev, isSnow);
         {
             glm::dvec3 playerPos{};
             const glm::dvec3* playerPosPtr = nullptr;
