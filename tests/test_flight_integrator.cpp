@@ -536,3 +536,128 @@ TEST_CASE("FlightIntegrator: nonzero world wind affects forces", "[flight_integr
     // Force contribution differs → velocity differs
     CHECK(fi1.state().vel_body[0] != fi2.state().vel_body[0]);
 }
+
+TEST_CASE("Integrator: headwind increases drag and reduces forward velocity", "[flight_integrator][weather]") {
+    // With the relative-airspeed model, a headwind (wind opposing flight) raises
+    // the effective airspeed seen by computeForces, producing more drag and leaving
+    // the aircraft slower after one step than the no-wind case at the same throttle.
+    auto d = makeData();
+    FlightIntegrator fi_nowind(d);
+    FlightIntegrator fi_headwind(d);
+
+    FlightState s{};
+    s.vel_body[0] = 100.f; // forward at 100 m/s, identity orientation
+    s.pos_world[1] = 1000.f;
+    s.mass_kg = 14000.f;
+    s.fuel_kg = 4000.f;
+    fi_nowind.reset(s);
+    fi_headwind.reset(s);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 0.5f;
+    PayloadEffect px{};
+
+    fl::WindInfluence headwind{};
+    headwind.wind_world[0] = -50.f; // opposes forward (+X) flight, raising relative airspeed to 150 m/s
+
+    fi_nowind.step(1.f / 60.f, ctrl, px);
+    fi_headwind.step(1.f / 60.f, ctrl, px, headwind);
+
+    // Higher relative airspeed -> more drag -> lower ground-speed after the step
+    CHECK(fi_headwind.state().vel_body[0] < fi_nowind.state().vel_body[0]);
+}
+
+TEST_CASE("Integrator: tailwind reduces drag and increases forward velocity", "[flight_integrator][weather]") {
+    auto d = makeData();
+    FlightIntegrator fi_nowind(d);
+    FlightIntegrator fi_tailwind(d);
+
+    FlightState s{};
+    s.vel_body[0] = 100.f;
+    s.pos_world[1] = 1000.f;
+    s.mass_kg = 14000.f;
+    s.fuel_kg = 4000.f;
+    fi_nowind.reset(s);
+    fi_tailwind.reset(s);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 0.5f;
+    PayloadEffect px{};
+
+    fl::WindInfluence tailwind{};
+    tailwind.wind_world[0] = 50.f; // same direction as flight, lowering relative airspeed to 50 m/s
+
+    fi_nowind.step(1.f / 60.f, ctrl, px);
+    fi_tailwind.step(1.f / 60.f, ctrl, px, tailwind);
+
+    // Lower relative airspeed -> less drag -> higher ground-speed after the step
+    CHECK(fi_tailwind.state().vel_body[0] > fi_nowind.state().vel_body[0]);
+}
+
+TEST_CASE("Integrator: crosswind introduces sideslip and changes yaw rate", "[flight_integrator][weather]") {
+    // Z-axis world wind produces non-zero rel2, which drives a non-zero beta_rad into
+    // computeMoments, creating a yaw moment absent in the no-wind case.
+    auto d = makeData();
+    FlightIntegrator fi_nowind(d);
+    FlightIntegrator fi_cross(d);
+
+    FlightState s{};
+    s.vel_body[0] = 100.f;
+    s.pos_world[1] = 1000.f;
+    s.mass_kg = 14000.f;
+    s.fuel_kg = 4000.f;
+    fi_nowind.reset(s);
+    fi_cross.reset(s);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 0.5f;
+    PayloadEffect px{};
+
+    fl::WindInfluence crosswind{};
+    crosswind.wind_world[2] = 50.f; // Z-axis wind -> non-zero rel2 -> beta_rad != 0
+
+    fi_nowind.step(1.f / 60.f, ctrl, px);
+    fi_cross.step(1.f / 60.f, ctrl, px, crosswind);
+
+    // Non-zero beta drives yaw moment -> different yaw rate than no-wind
+    CHECK(fi_cross.state().omega[1] != fi_nowind.state().omega[1]);
+}
+
+TEST_CASE("Integrator: wind effect depends on aircraft orientation", "[flight_integrator][weather]") {
+    // Wind is rotated from world to body frame via q_conj before computing relative airspeed.
+    // Two aircraft with different yaw orientations see the same world wind differently:
+    // one as a tailwind component, the other as a crosswind. If the rotation were skipped,
+    // both would produce identical force changes.
+    auto d = makeData();
+    FlightIntegrator fi_identity(d);
+    FlightIntegrator fi_yawed(d);
+
+    FlightState s{};
+    s.vel_body[0] = 100.f;
+    s.pos_world[1] = 1000.f;
+    s.mass_kg = 14000.f;
+    s.fuel_kg = 4000.f;
+
+    fi_identity.reset(s);
+
+    FlightState s_yaw = s;
+    // 90-degree yaw around world Y: quat = (x=0, y=sin45, z=0, w=cos45)
+    s_yaw.quat[0] = 0.f;
+    s_yaw.quat[1] = 0.70711f;
+    s_yaw.quat[2] = 0.f;
+    s_yaw.quat[3] = 0.70711f;
+    fi_yawed.reset(s_yaw);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 0.5f;
+    PayloadEffect px{};
+
+    fl::WindInfluence wind{};
+    wind.wind_world[0] = 50.f; // same world-frame wind applied to both
+
+    fi_identity.step(1.f / 60.f, ctrl, px, wind);
+    fi_yawed.step(1.f / 60.f, ctrl, px, wind);
+
+    // Different body-frame winds after rotation -> different aerodynamic results
+    CHECK(fi_identity.state().vel_body[0] != fi_yawed.state().vel_body[0]);
+}
