@@ -182,6 +182,7 @@ CI structure: a `lint` job (REUSE + clang-format-22) gates the `build` matrix vi
 ## Key Files
 
 - `README.md` — project overview and documentation index
+- `CHANGELOG.md` — Keep a Changelog format; always add an `[Unreleased]` entry (under `### Added`, `### Fixed`, or `### Changed`) for every PR before staging
 - `docs/architecture.md` — engine architecture overview
 - `docs/development.md` — build prerequisites per platform
 - `docs/sandbox.md` — developer key map (camera/flight controls + gamepad axis table + HOTAS axis table) + debug console command reference

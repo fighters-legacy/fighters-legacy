@@ -602,9 +602,10 @@ int main(int argc, char** argv) {
                                   static_cast<float>(cam.worldOrigin.z)};
             const float fwdA[3] = {fwd.x, fwd.y, fwd.z};
             const float upA[3] = {up.x, up.y, up.z};
-            const float zero[3] = {};
+            const glm::vec3 listenerVel = playerEntry ? playerEntry->velocity : glm::vec3{};
+            const float velA[3] = {listenerVel.x, listenerVel.y, listenerVel.z};
             p.audio->setListenerTransform(pos, fwdA, upA);
-            p.audio->setListenerVelocity(zero);
+            p.audio->setListenerVelocity(velA);
         }
 
         const AudioSettings& aud = userConfig.audio();

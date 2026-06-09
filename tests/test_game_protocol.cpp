@@ -34,7 +34,9 @@ TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
         entries[i].pos[0] = static_cast<double>(i) * 10.0;
         entries[i].pos[1] = 500.0;
         entries[i].pos[2] = 0.0;
-        entries[i].vel[0] = entries[i].vel[1] = entries[i].vel[2] = 0.0f;
+        entries[i].vel[0] = (i == 0) ? 25.5f : 0.0f;
+        entries[i].vel[1] = 0.0f;
+        entries[i].vel[2] = (i == 0) ? -100.f : 0.0f;
         entries[i].ori[0] = 0.0f;
         entries[i].ori[1] = 0.0f;
         entries[i].ori[2] = 0.0f;
@@ -69,6 +71,10 @@ TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
         CHECK(e.pos[1] == 500.0);
         CHECK(e.ori[3] == 1.0f);
         CHECK(e.flags == (i == 0 ? 1u : 0u));
+        if (i == 0) {
+            CHECK(e.vel[0] == 25.5f);
+            CHECK(e.vel[2] == -100.f);
+        }
     }
 }
 

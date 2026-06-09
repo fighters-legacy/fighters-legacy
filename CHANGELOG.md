@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **audio**: Listener velocity is now wired from the player entity to OpenAL; Doppler pitch shift is audible when flying past positional audio sources at high speed (closes #167)
 - **renderer**: Particle emitters with `spawnRate < 60/s` now produce correct output at 60 fps; fractional remainder is carried across frames instead of being truncated to zero each frame (closes #263)
 
 ### Changed
