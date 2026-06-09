@@ -53,7 +53,7 @@ else()
     set(ALSOFT_BUILD_IMPORT_LIB OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(openal-soft
         GIT_REPOSITORY https://github.com/kcat/openal-soft.git
-        GIT_TAG        1.25.2
+        GIT_TAG        1.24.2
         GIT_SHALLOW    TRUE
         SYSTEM
     )
