@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **renderer**: Windshield precipitation HUD overlay; 48 semi-transparent `Line` elements animate on the cockpit windshield during Rain and Storm weather presets — blue-white streaks for rain, short white smears for snow (altitude-dependent, matching the 3D particle system), with wind-speed-driven fall rate and `windX`-driven lateral tilt (closes #211)
 - **audio**: Tracks in `shuffle = true` playlist states are now randomised on state entry using Fisher-Yates; the shuffled order is preserved for the full cycle and re-shuffled on each loop (closes #168)
 
 ### Fixed
