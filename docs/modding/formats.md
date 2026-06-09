@@ -476,6 +476,8 @@ Relationship values: `friendly`, `neutral`, `hostile`. Missions and Lua scripts 
 
 ## HUD Layout — TOML
 
+The engine selects a HUD layout per aircraft using the `cockpit` field from the flight model (see Flight Model TOML above). When a content pack does not provide a layout for a given aircraft, the engine falls back to the builtin `FlightHud` (standard IAS / ALT / HDG / THR / FUEL display).
+
 ```toml
 # config/hud_layout.toml
 [layout]

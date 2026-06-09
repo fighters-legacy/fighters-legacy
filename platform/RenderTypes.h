@@ -185,7 +185,7 @@ struct SubtitleEntry {
 };
 
 // ---------------------------------------------------------------------------
-// Screen-space 2D HUD element for IRenderer::submitHudElements().
+// Screen-space 2D overlay element for IRenderer::submitOverlayElements().
 // Positions are normalized (0–1), top-left origin.
 // string_view data must remain alive until after IRenderer::endFrame().
 // ---------------------------------------------------------------------------

@@ -7,11 +7,11 @@
 #include "ClientNetEventHandler.h"
 #include "ENetNetwork.h"
 #include "FileLogger.h"
-#include "GameHud.h"
 #include "HapticController.h"
 #include "IWindowEventHandler.h"
 #include "LocalServer.h"
 #include "Platform.h"
+#include "ServerNotice.h"
 #include "Version.h"
 #include "audio/MusicManager.h"
 #include "audio/PlaylistLoader.h"
@@ -32,11 +32,14 @@
 #include "perf/PerformanceOverlay.h"
 #include "render/BuiltinGeometry.h"
 #include "render/CameraController.h"
+#include "render/FlightHud.h"
+#include "render/IHud.h"
 #include "render/ParticleSystem.h"
 #include "render/RenderSnapshot.h"
 #include "render/SceneRenderer.h"
 #include "render/SimRenderBridge.h"
 #include "render/TerrainStreamer.h"
+#include "render/WindshieldRain.h"
 #include "sandbox/SandboxInspector.h"
 #include "sdl3/SDL3AsyncFilesystem.h"
 #include "sdl3/SDL3Cursor.h"
@@ -392,10 +395,13 @@ int main(int argc, char** argv) {
     }
 
     EnvironmentState env = localServer.initialEnvironment();
-    GameHud gameHud;
+    fl::FlightHud flightHud;          // builtin HUD; future: per-aircraft from content pack
+    fl::IHud* activeHud = &flightHud; // pointer swapped when content pack provides a HUD
+    fl::WindshieldRain windshieldRain;
+    ServerNotice serverNotice;
     HapticController hapticController(*p.input);
     ClientNetEventHandler clientHandler(renderBridge, entityRegistry, *rawLogger, *clientNet, env);
-    clientHandler.hud = &gameHud;
+    clientHandler.notice = &serverNotice;
     clientNet->setEventHandler(&clientHandler);
     clientNet->connect("127.0.0.1", 4778);
 
@@ -662,11 +668,12 @@ int main(int argc, char** argv) {
 
         sceneRenderer.renderFrame(alpha, cam, env, sandboxEmitters);
 
-        // HUD: GameHud (flight data + notices) and DebugConsole are independent layers.
         const float terrainElev =
             playerEntry ? static_cast<float>(terrainStreamer.heightAt(playerEntry->position.x, playerEntry->position.z))
                         : 0.0f;
-        gameHud.update(cameraController.mode(), playerEntry, env, terrainElev, isSnow);
+        const bool cockpit = (cameraController.mode() == fl::CameraMode::Cockpit);
+        activeHud->update(cockpit ? playerEntry : nullptr, env.timeOfDay, terrainElev);
+        windshieldRain.update(cockpit ? (1.0f / 60.0f) : 0.0f, cockpit ? env : EnvironmentState{}, cockpit && isSnow);
         hapticController.update(playerEntry, weaponFired, terrainElev, 1.0f / 60.0f);
         {
             glm::dvec3 playerPos{};
@@ -697,14 +704,10 @@ int main(int argc, char** argv) {
             p.renderer->setOverlayLines(perfOverlay.lines());
         }
 
-        // Merge HUD layers and submit.
-        {
-            auto hudElems = gameHud.buildElements();
-            auto dbgElems = dbgConsole.elements();
-            std::vector<HudElement> allHud(hudElems.begin(), hudElems.end());
-            allHud.insert(allHud.end(), dbgElems.begin(), dbgElems.end());
-            p.renderer->submitHudElements(allHud);
-        }
+        p.renderer->submitOverlayElements(activeHud->elements());
+        p.renderer->submitOverlayElements(windshieldRain.elements());
+        p.renderer->submitOverlayElements(serverNotice.buildElements());
+        p.renderer->setConsoleElements(dbgConsole.elements());
 
         p.renderer->endFrame();
         p.input->flush();

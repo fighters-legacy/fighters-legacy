@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render/FlightHud.h"
+#include "render/IHud.h"
 #include "render/RenderSnapshot.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -234,4 +235,14 @@ TEST_CASE("FlightHud AGL is negative when below terrain level") {
             el.text.find('-') != std::string_view::npos)
             found = true;
     CHECK(found);
+}
+
+TEST_CASE("FlightHud satisfies IHud via abstract pointer") {
+    fl::FlightHud concrete;
+    fl::IHud* hud = &concrete;
+    hud->update(nullptr);
+    CHECK(hud->elements().empty());
+    auto entry = makeEntry();
+    hud->update(&entry, 12.0f, 0.0f);
+    CHECK_FALSE(hud->elements().empty());
 }

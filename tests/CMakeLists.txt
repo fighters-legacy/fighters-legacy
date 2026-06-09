@@ -367,3 +367,11 @@ target_include_directories(test_haptic_controller PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_haptic_controller)
+
+add_executable(test_server_notice test_server_notice.cpp)
+target_link_libraries(test_server_notice PRIVATE
+    Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_server_notice PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_server_notice)

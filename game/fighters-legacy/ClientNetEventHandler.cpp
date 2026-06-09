@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ClientNetEventHandler.h"
-#include "GameHud.h"
+#include "ServerNotice.h"
 
 #include "ILogger.h"
 #include "INetwork.h"
@@ -119,8 +119,8 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         std::snprintf(noticeBuf, sizeof(noticeBuf), "[server] %s", sn.text);
         if (console)
             console->print(std::string(noticeBuf));
-        if (hud)
-            hud->setNotice(noticeBuf, sn.secondsRemaining);
+        if (notice)
+            notice->setNotice(noticeBuf, sn.secondsRemaining);
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::AdminResponse)) {
         if (size < sizeof(fl::MsgAdminResponse))
             return;

@@ -3,7 +3,6 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         main.cpp
         ClientNetEventHandler.cpp
         CameraInput.cpp
-        GameHud.cpp
         HapticController.cpp
         LocalServer.cpp
     )

@@ -12,11 +12,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **game**: Wire haptic feedback for flight-sim events via `HapticController`; covers gun burst, hit taken, stall buffet, afterburner ignition/sustain, engine failure, G-LOC onset, transonic buffet, GPWS double-pulse, and gear touchdown; stub entry points provided for missile launch, missile warning, compressor stall, carrier trap, hydraulic failure, and ordnance release (#127)
 - **renderer**: Windshield precipitation HUD overlay; 48 semi-transparent `Line` elements animate on the cockpit windshield during Rain and Storm weather presets — blue-white streaks for rain, short white smears for snow (altitude-dependent, matching the 3D particle system), with wind-speed-driven fall rate and `windX`-driven lateral tilt (closes #211)
 - **audio**: Tracks in `shuffle = true` playlist states are now randomised on state entry using Fisher-Yates; the shuffled order is preserved for the full cycle and re-shuffled on each loop (closes #168)
+- **renderer**: `IHud` pure-virtual interface for aircraft head-up display; `FlightHud` is the builtin default; content packs will provide per-aircraft implementations in a future phase
+- **game**: `ServerNotice` class displays server shutdown/status banners in any camera mode; set by `ClientNetEventHandler` on `MsgServerNotice`
 
 ### Fixed
 
 - **audio**: Listener velocity is now wired from the player entity to OpenAL; Doppler pitch shift is audible when flying past positional audio sources at high speed (closes #167)
 - **renderer**: Particle emitters with `spawnRate < 60/s` now produce correct output at 60 fps; fractional remainder is carried across frames instead of being truncated to zero each frame (closes #263)
+- **game**: Debug console, cockpit HUD, windshield overlay, and server notices are now independent overlay layers; dangling span UB (root cause of invisible console, broken F1/F2/F4 switching, and missing tetrahedron) is eliminated
+- **renderer**: `vkGetQueryPoolResults` no longer reads uninitialized timestamp query slots on the first `MAX_FRAMES_IN_FLIGHT` frames; fixes `[VK ERROR] query not reset` on startup
 
 ### Changed
 

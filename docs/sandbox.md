@@ -151,7 +151,7 @@ Cycles Off → Compact → Full. **Full mode** includes a 128-position rolling f
 
 **Toggle:** `` ` `` (backtick / grave). **Close:** Escape.
 
-The console is a half-screen drop-down overlay rendered over the HUD. All game inputs (flight controls and camera) are suppressed while it is open; throttle is held at its last value so opening the console does not cut the engines.
+The console is a half-screen drop-down overlay. It is fully independent of the cockpit HUD and available in any game state. All game inputs (flight controls and camera) are suppressed while it is open; throttle is held at its last value so opening the console does not cut the engines.
 
 ### Editing
 
