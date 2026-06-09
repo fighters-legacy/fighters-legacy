@@ -6,6 +6,7 @@
 #include "loop/GameState.h"
 
 #include <cstdint>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -38,6 +39,11 @@ class MusicManager {
     // Stops all music and frees OpenAL resources.
     void shutdown();
 
+    // Replaces the internal RNG. Inject a seeded std::mt19937 in tests for deterministic shuffles.
+    void setRng(std::mt19937 rng) {
+        m_rng = std::move(rng);
+    }
+
   private:
     struct StreamSlot {
         AudioSourceId source{0};
@@ -58,6 +64,7 @@ class MusicManager {
     void refillSlot(StreamSlot& slot);
     void stopSlot(StreamSlot& slot);
     void applyGains(float masterVolume, float musicVolume);
+    void buildTrackOrder(const PlaylistState& ps);
 
     const PlaylistState* currentPlaylistState() const;
 
@@ -69,6 +76,8 @@ class MusicManager {
     GameState m_state{GameState::Menu};
     std::string m_stateId;
     int m_trackIndex{0};
+    std::vector<std::string> m_trackOrder;
+    std::mt19937 m_rng;
 
     StreamSlot m_primary;
     StreamSlot m_fade;

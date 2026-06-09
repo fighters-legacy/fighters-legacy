@@ -9,10 +9,13 @@
 #include "content/IContentPack.h"
 #include "i18n/Localization.h"
 #include "mock_hal.h"
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <cstddef>
 #include <memory>
+#include <random>
+#include <string>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -479,6 +482,30 @@ struct GarbageAudioPack : NullContentPack {
     }
 };
 
+// TrackingAudioPack — returns kMinimalOgg bytes AND records which asset names were opened.
+// Slot becomes active after openSlot(); EOF handler in update() never fires (NullAudio
+// processedBufferCount returns 0). Use for testing setState() permutation at state entry.
+struct TrackingAudioPack : NullContentPack {
+    std::vector<std::string> opened;
+    std::optional<AudioBuffer> loadAudio(const char* name) override {
+        opened.push_back(name);
+        AudioBuffer buf;
+        buf.bytes.assign(kMinimalOgg, kMinimalOgg + sizeof(kMinimalOgg));
+        return buf;
+    }
+};
+
+// NullTrackingContentPack — records asset names but returns nullopt, so openSlot() always
+// fails and slot.active stays false. The update() EOF handler fires on every call, allowing
+// track-advance and wrap-around logic to be exercised without a real audio backend.
+struct NullTrackingContentPack : NullContentPack {
+    std::vector<std::string> opened;
+    std::optional<AudioBuffer> loadAudio(const char* name) override {
+        opened.push_back(name);
+        return std::nullopt;
+    }
+};
+
 // ---------------------------------------------------------------------------
 // Shared playlist TOML for tests.
 // ---------------------------------------------------------------------------
@@ -496,6 +523,33 @@ id = "FlightPatrol"
 tracks = ["music/patrol_01", "music/patrol_02"]
 loop = true
 shuffle = true
+)";
+
+// Three-state playlist used by the shuffle test cases.
+// FlightPatrol (shuffle=true, 3 tracks): tests 2, 3, 4, 6.
+// FlightCombat (shuffle=false, 3 tracks): test 5.
+// Menu (shuffle=false, 1 track): test 1.
+static constexpr const char* kShufflePlaylist = R"(
+[crossfade]
+duration_s = 1.0
+
+[[states]]
+id = "FlightPatrol"
+tracks = ["music/a", "music/b", "music/c"]
+loop = true
+shuffle = true
+
+[[states]]
+id = "FlightCombat"
+tracks = ["music/x", "music/y", "music/z"]
+loop = true
+shuffle = false
+
+[[states]]
+id = "Menu"
+tracks = ["music/menu"]
+loop = true
+shuffle = false
 )";
 
 // ---------------------------------------------------------------------------
@@ -828,6 +882,175 @@ TEST_CASE("MusicManager crossfade path when switching states with active slot", 
     // Advance time past crossfade duration in a single update to complete it
     mm.update(3.0f, 1.0f, 1.0f);   // dt > crossfadeDuration(2.5) → t >= 1 → crossfade done
     mm.update(0.016f, 1.0f, 1.0f); // post-crossfade steady-state update
+    mm.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// MusicManager shuffle tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("MusicManager shuffle=false always opens first declared track", "[audio][music]") {
+    NullAudio audio;
+    NullLogger log;
+
+    auto pack = std::make_unique<TrackingAudioPack>();
+    TrackingAudioPack* tp = pack.get();
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets(std::move(packs), log);
+    assets.initialize(nullptr);
+
+    MusicManager mm;
+    mm.init(&audio, &assets, &log);
+    PlaylistData pd = parsePlaylist(kShufflePlaylist, log);
+    mm.loadPlaylist(pd);
+
+    mm.setState(GameState::Menu);
+    REQUIRE(!tp->opened.empty());
+    REQUIRE(tp->opened[0] == "music/menu");
+    mm.shutdown();
+}
+
+TEST_CASE("MusicManager shuffle=true opens a valid track on state entry", "[audio][music]") {
+    NullAudio audio;
+    NullLogger log;
+
+    auto pack = std::make_unique<TrackingAudioPack>();
+    TrackingAudioPack* tp = pack.get();
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets(std::move(packs), log);
+    assets.initialize(nullptr);
+
+    MusicManager mm;
+    mm.init(&audio, &assets, &log);
+    PlaylistData pd = parsePlaylist(kShufflePlaylist, log);
+    mm.loadPlaylist(pd);
+
+    mm.setState(GameState::FlightPatrol);
+    REQUIRE(!tp->opened.empty());
+    const std::vector<std::string> valid = {"music/a", "music/b", "music/c"};
+    REQUIRE(std::find(valid.begin(), valid.end(), tp->opened[0]) != valid.end());
+    mm.shutdown();
+}
+
+TEST_CASE("MusicManager shuffle=true produces a deterministic permutation with fixed RNG", "[audio][music]") {
+    NullAudio audio;
+    NullLogger log;
+
+    auto pack = std::make_unique<TrackingAudioPack>();
+    TrackingAudioPack* tp = pack.get();
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets(std::move(packs), log);
+    assets.initialize(nullptr);
+
+    MusicManager mm;
+    mm.init(&audio, &assets, &log);
+    mm.setRng(std::mt19937{42});
+    PlaylistData pd = parsePlaylist(kShufflePlaylist, log);
+    mm.loadPlaylist(pd);
+
+    mm.setState(GameState::FlightPatrol);
+    REQUIRE(!tp->opened.empty());
+
+    std::vector<std::string> expected = {"music/a", "music/b", "music/c"};
+    std::shuffle(expected.begin(), expected.end(), std::mt19937{42});
+    REQUIRE(tp->opened[0] == expected[0]);
+    mm.shutdown();
+}
+
+TEST_CASE("MusicManager shuffle=true re-entry rebuilds the permutation", "[audio][music]") {
+    NullAudio audio;
+    NullLogger log;
+
+    auto pack = std::make_unique<TrackingAudioPack>();
+    TrackingAudioPack* tp = pack.get();
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets(std::move(packs), log);
+    assets.initialize(nullptr);
+
+    MusicManager mm;
+    mm.init(&audio, &assets, &log);
+    PlaylistData pd = parsePlaylist(kShufflePlaylist, log);
+    mm.loadPlaylist(pd);
+
+    mm.setState(GameState::FlightPatrol); // 1st entry
+    mm.setState(GameState::Menu);         // switch away
+    mm.setState(GameState::FlightPatrol); // re-enter: rebuilds permutation
+    REQUIRE(tp->opened.size() == 3);
+    const std::vector<std::string> valid = {"music/a", "music/b", "music/c"};
+    REQUIRE(std::find(valid.begin(), valid.end(), tp->opened[2]) != valid.end());
+    mm.shutdown();
+}
+
+TEST_CASE("MusicManager shuffle=false wrap-around plays all tracks in declaration order", "[audio][music]") {
+    NullAudio audio;
+    NullLogger log;
+
+    auto pack = std::make_unique<NullTrackingContentPack>();
+    NullTrackingContentPack* tp = pack.get();
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets(std::move(packs), log);
+    assets.initialize(nullptr);
+
+    MusicManager mm;
+    mm.init(&audio, &assets, &log);
+    PlaylistData pd = parsePlaylist(kShufflePlaylist, log);
+    mm.loadPlaylist(pd);
+
+    // FlightCombat: shuffle=false, 3 tracks ["music/x","music/y","music/z"].
+    // NullTrackingContentPack causes openSlot to fail → slot.active stays false →
+    // EOF handler fires on every update() call.
+    mm.setState(GameState::FlightCombat); // opens x (index 0)
+    mm.update(0.016f, 1.0f, 1.0f);        // advance to index 1, opens y
+    mm.update(0.016f, 1.0f, 1.0f);        // advance to index 2, opens z
+    mm.update(0.016f, 1.0f, 1.0f);        // next=3>=n=3, wrap to index 0, opens x again
+
+    REQUIRE(tp->opened.size() == 4);
+    REQUIRE(tp->opened[0] == "music/x");
+    REQUIRE(tp->opened[1] == "music/y");
+    REQUIRE(tp->opened[2] == "music/z");
+    REQUIRE(tp->opened[3] == "music/x");
+    mm.shutdown();
+}
+
+TEST_CASE("MusicManager shuffle=true one full cycle contains each track exactly once", "[audio][music]") {
+    NullAudio audio;
+    NullLogger log;
+
+    auto pack = std::make_unique<NullTrackingContentPack>();
+    NullTrackingContentPack* tp = pack.get();
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets(std::move(packs), log);
+    assets.initialize(nullptr);
+
+    MusicManager mm;
+    mm.init(&audio, &assets, &log);
+    mm.setRng(std::mt19937{99});
+    PlaylistData pd = parsePlaylist(kShufflePlaylist, log);
+    mm.loadPlaylist(pd);
+
+    // FlightPatrol: shuffle=true, 3 tracks.
+    mm.setState(GameState::FlightPatrol); // opens permuted[0]
+    mm.update(0.016f, 1.0f, 1.0f);        // opens permuted[1]
+    mm.update(0.016f, 1.0f, 1.0f);        // opens permuted[2]
+    mm.update(0.016f, 1.0f, 1.0f);        // wrap: re-shuffle, opens new permuted[0]
+
+    REQUIRE(tp->opened.size() == 4);
+
+    // First full cycle (indices 0-2) must be a permutation of all three tracks.
+    std::vector<std::string> cycle(tp->opened.begin(), tp->opened.begin() + 3);
+    std::sort(cycle.begin(), cycle.end());
+    const std::vector<std::string> all = {"music/a", "music/b", "music/c"};
+    REQUIRE(cycle == all);
+
+    // Wrap triggered a re-shuffle and opened a 4th track.
+    const std::vector<std::string> valid = {"music/a", "music/b", "music/c"};
+    REQUIRE(std::find(valid.begin(), valid.end(), tp->opened[3]) != valid.end());
     mm.shutdown();
 }
 
