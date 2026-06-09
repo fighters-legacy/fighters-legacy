@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <random>
 
 static const char* gameStateName(GameState s) {
     switch (s) {
@@ -51,6 +52,7 @@ bool MusicManager::init(IAudio* audio, AssetManager* assets, ILogger* logger) {
         audio->setPosition(src, 0.0f, 0.0f, 0.0f);
         audio->setGain(src, 0.0f);
     }
+    m_rng = std::mt19937{std::random_device{}()};
     return true;
 }
 
@@ -157,6 +159,12 @@ const PlaylistState* MusicManager::currentPlaylistState() const {
     return m_playlist.findState(m_stateId);
 }
 
+void MusicManager::buildTrackOrder(const PlaylistState& ps) {
+    m_trackOrder = ps.tracks;
+    if (ps.shuffle)
+        std::shuffle(m_trackOrder.begin(), m_trackOrder.end(), m_rng);
+}
+
 void MusicManager::setState(GameState state) {
     const char* newId = gameStateName(state);
     if (m_stateId == newId && m_primary.active)
@@ -182,9 +190,10 @@ void MusicManager::setState(GameState state) {
 
     m_state = state;
     m_stateId = newId;
+    buildTrackOrder(*ps);
     m_trackIndex = 0;
     m_primary.gain = 0.0f;
-    openSlot(m_primary, ps->tracks[0]);
+    openSlot(m_primary, m_trackOrder[0]);
 }
 
 void MusicManager::update(float dt, float masterVolume, float musicVolume) {
@@ -222,9 +231,16 @@ void MusicManager::update(float dt, float masterVolume, float musicVolume) {
     if (!m_primary.active && !m_stateId.empty()) {
         const PlaylistState* ps = currentPlaylistState();
         if (ps && !ps->tracks.empty() && ps->loop) {
-            int n = static_cast<int>(ps->tracks.size());
-            m_trackIndex = (m_trackIndex + 1) % n;
-            openSlot(m_primary, ps->tracks[m_trackIndex]);
+            int n = static_cast<int>(m_trackOrder.size());
+            int next = m_trackIndex + 1;
+            if (next >= n) {
+                if (ps->shuffle)
+                    std::shuffle(m_trackOrder.begin(), m_trackOrder.end(), m_rng);
+                m_trackIndex = 0;
+            } else {
+                m_trackIndex = next;
+            }
+            openSlot(m_primary, m_trackOrder[m_trackIndex]);
         }
     }
 }

@@ -80,6 +80,15 @@ tracks  = ["music/victory"]
 loop    = false
 ```
 
+**Per-state fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `id` | string | — | Must match a `GameState` name: `Menu`, `FlightPatrol`, `FlightCombat`, `MissionSuccess`, `Debrief` |
+| `tracks` | string array | — | Asset names passed to `AssetManager::loadAudio()`; no `audio/` prefix, no `.ogg` extension |
+| `loop` | bool | `true` | When `true`, restarts from the beginning (or a fresh shuffle) after the last track ends |
+| `shuffle` | bool | `false` | When `true`, randomises track order on state entry using Fisher-Yates; no track plays twice before the full cycle completes; the list is re-shuffled on each loop |
+
 State transitions are driven by engine events. Lua scripts can force a state change with `world.set_music_state("FlightCombat")` (deferred to Phase 4 scripting workstream).
 
 ---
