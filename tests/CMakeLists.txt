@@ -27,6 +27,11 @@ target_link_libraries(test_flight_hud PRIVATE Catch2::Catch2WithMain engine-rend
 target_include_directories(test_flight_hud PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_flight_hud)
 
+add_executable(test_windshield_rain test_windshield_rain.cpp)
+target_link_libraries(test_windshield_rain PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_windshield_rain PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_windshield_rain)
+
 add_executable(test_particle_system test_particle_system.cpp)
 target_link_libraries(test_particle_system PRIVATE Catch2::Catch2WithMain engine-render)
 target_include_directories(test_particle_system PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -3,6 +3,7 @@
 
 #include "RenderTypes.h"
 #include "render/FlightHud.h"
+#include "render/WindshieldRain.h"
 
 #include <cstdint> // uint8_t (CameraMode underlying type), uint16_t
 #include <span>
@@ -29,8 +30,8 @@ class GameHud {
     // player: nullptr suppresses flight data (e.g. not in Cockpit mode).
     // terrainElevation: ground height in metres at the player XZ position
     // (from TerrainStreamer::heightAt); 0.0 is safe when terrain is not loaded.
-    void update(fl::CameraMode mode, const fl::EntityRenderEntry* player, float timeOfDay,
-                float terrainElevation = 0.0f);
+    void update(fl::CameraMode mode, const fl::EntityRenderEntry* player, const EnvironmentState& env,
+                float terrainElevation = 0.0f, bool isSnow = false);
 
     // Returns flight HUD + active server-notice elements only.
     // Does NOT include debug console elements.
@@ -38,6 +39,7 @@ class GameHud {
 
   private:
     fl::FlightHud m_flightHud;
+    fl::WindshieldRain m_windshieldRain;
     std::vector<HudElement> m_elements;
 
     char m_noticeBuf[72]{};

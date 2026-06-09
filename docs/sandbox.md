@@ -192,6 +192,8 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 
 When `cloudCoverage ≥ 0.75` (overcast, rain, storm), precipitation particles emit from a 3×3 grid 60 m above the camera. Below 2000 m, rain (`rain`/`storm_rain`) is emitted with a narrow 20° cone and 10%/25% wind influence. Above 2000 m, snow (`snow`/`storm_snow`) is emitted with an 80° cone (wide drifting spread) and 35%/55% wind influence. With no wind the particles fall straight down.
 
+In **Cockpit mode (F1)**, a screen-space windshield overlay is rendered simultaneously: 48 semi-transparent streaks animate on the glass — blue-white diagonal lines for rain (below 2000 m), short white smears for snow (at or above 2000 m). Streak opacity and length scale with `cloudCoverage`. Lateral lean is proportional to crosswind speed (`windX`).
+
 The in-game clock advances at **10× real time** by default (1 real minute = 10 game minutes; full day/night cycle ≈ 2.4 real hours). The Cockpit HUD (F1 mode) shows **IAS / ALT / AGL** on the left column, **THR / FUEL** on the right column, **HDG** at the bottom, and `HH:MM` clock top-right. AGL is computed from the terrain heightmap at the aircraft's XZ position and falls back to the same value as ALT (MSL) when the LOD-0 chunk is not yet loaded. The time scale is configurable via `[world] time_scale` in `server.toml`.
 
 ### Position widget

@@ -98,6 +98,7 @@ add_library(engine-render STATIC
     render/TerrainMeshBuilder.cpp
     render/TerrainStreamer.cpp
     render/FlightHud.cpp
+    render/WindshieldRain.cpp
 )
 
 target_include_directories(engine-render PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR})

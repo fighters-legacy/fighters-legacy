@@ -12,11 +12,18 @@ void GameHud::setNotice(std::string_view text, uint16_t secondsRemaining) {
     m_hasNotice = true;
 }
 
-void GameHud::update(fl::CameraMode mode, const fl::EntityRenderEntry* player, float timeOfDay,
-                     float terrainElevation) {
+void GameHud::update(fl::CameraMode mode, const fl::EntityRenderEntry* player, const EnvironmentState& env,
+                     float terrainElevation, bool isSnow) {
     // Flight HUD is only meaningful in Cockpit mode.
     const fl::EntityRenderEntry* hudEntry = (mode == fl::CameraMode::Cockpit) ? player : nullptr;
-    m_flightHud.update(hudEntry, timeOfDay, terrainElevation);
+    m_flightHud.update(hudEntry, env.timeOfDay, terrainElevation);
+
+    if (mode == fl::CameraMode::Cockpit) {
+        m_windshieldRain.update(1.0f / 60.0f, env, isSnow);
+    } else {
+        EnvironmentState clearEnv{};
+        m_windshieldRain.update(0.f, clearEnv, false);
+    }
 }
 
 std::span<const HudElement> GameHud::buildElements() {
@@ -24,6 +31,9 @@ std::span<const HudElement> GameHud::buildElements() {
 
     auto flightElems = m_flightHud.elements();
     m_elements.insert(m_elements.end(), flightElems.begin(), flightElems.end());
+
+    auto rainElems = m_windshieldRain.elements();
+    m_elements.insert(m_elements.end(), rainElems.begin(), rainElems.end());
 
     if (m_hasNotice) {
         HudElement el;
