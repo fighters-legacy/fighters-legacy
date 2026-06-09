@@ -23,14 +23,12 @@ jobs:
         uses: ./.github/actions/install-linux-deps
         with:
           clang: 'true'
-          lua: 'true'
 
       - name: Cache CMake FetchContent dependencies
         uses: actions/cache@v5
         with:
           path: build/asan/_deps
           key: cmake-deps-ubuntu-latest-asan-${{ hashFiles('cmake/dependencies.cmake') }}
-          restore-keys: cmake-deps-ubuntu-latest-asan-
 
       - name: Configure
         run: cmake --preset asan

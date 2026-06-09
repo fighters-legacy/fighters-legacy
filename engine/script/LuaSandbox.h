@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-// Restricted Lua 5.4 execution environment for AI and mission scripts.
+// Restricted Lua 5.5 execution environment for AI and mission scripts.
 //
 // Allowed libraries: math, string, table, coroutine.
 // Denied globals:    io, os, package, debug, dofile, loadfile, require

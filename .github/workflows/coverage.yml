@@ -22,7 +22,6 @@ jobs:
         with:
           vulkan: 'true'
           lcov: 'true'
-          lua: 'true'
 
       - name: Install gcovr
         run: pip install gcovr
@@ -32,7 +31,6 @@ jobs:
         with:
           path: build/coverage/_deps
           key: cmake-deps-coverage-ubuntu-latest-${{ hashFiles('cmake/dependencies.cmake') }}
-          restore-keys: cmake-deps-coverage-ubuntu-latest-
 
       - name: Configure
         run: cmake --preset coverage

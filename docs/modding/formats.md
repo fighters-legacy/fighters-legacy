@@ -524,7 +524,7 @@ icon      = "icons/ranks/ace.png"
 
 ---
 
-## AI Scripts — Lua 5.4
+## AI Scripts — Lua 5.5
 
 ```lua
 -- ai/interceptor.lua
@@ -554,3 +554,5 @@ return { init = patrol }
 ```
 
 Each AI entity runs one or more Lua coroutines. The engine resumes them each sim tick. Behaviors can yield, stack, and interrupt cleanly.
+
+> **Lua 5.5 note:** `global` is a reserved keyword in Lua 5.5. Scripts that use `global` as a variable name will fail to load. Rename any such variables before shipping a pack targeting this engine version.

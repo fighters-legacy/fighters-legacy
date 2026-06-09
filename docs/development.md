@@ -28,12 +28,14 @@ For Bluetooth gamepad support (Xbox controllers), see [docs/linux-gamepad.md](li
 sudo apt-get update
 sudo apt-get install -y cmake ninja-build gcc g++ clang clang-format \
   libvulkan-dev libsdl3-dev libopenal-dev lcov glslang-tools \
-  vulkan-validationlayers liblua5.4-dev
+  vulkan-validationlayers
 ```
 
 `glslang-tools` provides `glslangValidator` for Vulkan shader compilation. `vulkan-validationlayers` provides `VK_LAYER_KHRONOS_validation` for debug builds.
 
 > **Note:** `libsdl3-dev` and `libopenal-dev` are optional. CMake automatically fetches and statically compiles both when they are absent — this is what CI and release builds do. Installing them speeds up local dev builds but means your dev binary will dynamically link those libraries, unlike the self-contained CI and release artifacts.
+>
+> **Note (Lua):** `liblua5.5-dev` is not yet available in Ubuntu apt. Lua 5.5 is always built from source via FetchContent on Linux — no extra install needed.
 
 ### Windows (MSVC 2022)
 
@@ -47,13 +49,13 @@ sudo apt-get install -y cmake ninja-build gcc g++ clang clang-format \
    or download the installer from [releases.llvm.org](https://releases.llvm.org/). Add the LLVM `bin/` directory to `PATH`.
 5. **Pre-commit hook**: `scripts/hooks/pre-commit` is a bash script. On Windows it must be run via **Git Bash** or **WSL** — it will not work in PowerShell or cmd. The DCO commit-msg hook has the same requirement.
 
-> **Note (Lua):** Lua 5.4 is not required on Windows — CMake automatically fetches and compiles it via FetchContent.
+> **Note (Lua):** Lua 5.5 is not required on Windows — CMake automatically fetches and compiles it via FetchContent.
 
 ### macOS (Apple Silicon, 13+)
 
 ```bash
 xcode-select --install
-brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang lua
+brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang
 ```
 
 `molten-vk` provides the Vulkan-over-Metal ICD; `vulkan-loader` provides `libvulkan.dylib`; `glslang` provides `glslangValidator`. Validation layers are not available via Homebrew — install the [LunarG Vulkan SDK for macOS](https://vulkan.lunarg.com/) to get `VK_LAYER_KHRONOS_validation`.

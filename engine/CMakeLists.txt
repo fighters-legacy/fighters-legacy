@@ -220,7 +220,7 @@ target_link_libraries(engine-debug
             engine-weather  # DebugCommands calls WeatherController::setPreset
 )
 
-# Sandboxed Lua 5.4 execution environment for AI and mission scripts.
+# Sandboxed Lua 5.5 execution environment for AI and mission scripts.
 add_library(engine-script STATIC
     script/LuaSandbox.cpp
 )

@@ -61,12 +61,11 @@ jobs:
           vulkan: 'true'
           gcc: 'true'
           python_tools: 'true'
-          lua: 'true'
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
         run: |
-          brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang lua
+          brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang
 
       - name: Install Vulkan SDK (Windows)
         if: matrix.os == 'windows-latest'
@@ -80,7 +79,6 @@ jobs:
         with:
           path: build/${{ matrix.preset }}/_deps
           key: cmake-deps-${{ matrix.os }}-${{ matrix.preset }}-${{ hashFiles('cmake/dependencies.cmake') }}
-          restore-keys: cmake-deps-${{ matrix.os }}-${{ matrix.preset }}-
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
