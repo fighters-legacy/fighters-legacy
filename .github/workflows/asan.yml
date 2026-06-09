@@ -29,7 +29,6 @@ jobs:
         with:
           path: build/asan/_deps
           key: cmake-deps-ubuntu-latest-asan-${{ hashFiles('cmake/dependencies.cmake') }}
-          restore-keys: cmake-deps-ubuntu-latest-asan-
 
       - name: Configure
         run: cmake --preset asan

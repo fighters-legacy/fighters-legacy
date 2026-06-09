@@ -79,7 +79,6 @@ jobs:
         with:
           path: build/${{ matrix.preset }}/_deps
           key: cmake-deps-${{ matrix.os }}-${{ matrix.preset }}-${{ hashFiles('cmake/dependencies.cmake') }}
-          restore-keys: cmake-deps-${{ matrix.os }}-${{ matrix.preset }}-
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
