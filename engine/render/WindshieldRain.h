@@ -21,7 +21,7 @@ class WindshieldRain {
     // Advance animation and rebuild elements.
     // cloudCoverage < kRainThreshold clears all elements.
     // isSnow: true when camera altitude exceeds the snow altitude threshold.
-    void update(float dt, const EnvironmentState& env, bool isSnow = false);
+    void update(float dt, const EnvironmentState& env, float rollRad = 0.f, bool isSnow = false);
 
     [[nodiscard]] std::span<const HudElement> elements() const;
 

@@ -16,7 +16,7 @@ WindshieldRain::WindshieldRain() {
     }
 }
 
-void WindshieldRain::update(float dt, const EnvironmentState& env, bool isSnow) {
+void WindshieldRain::update(float dt, const EnvironmentState& env, float rollRad, bool isSnow) {
     m_elementCount = 0;
     if (env.cloudCoverage < kRainThreshold)
         return;
@@ -48,14 +48,22 @@ void WindshieldRain::update(float dt, const EnvironmentState& env, bool isSnow) 
     // windX (crosswind) drives screen-space lateral lean.
     const float windDx = env.windX * windXTiltScale;
 
+    // Rotate the streak direction by the aircraft roll angle so rain tracks world-down
+    // rather than screen-down. Right-hand rotation in screen space (Y positive downward):
+    //   rdx = dx*cos(r) + dy*sin(r),  rdy = -dx*sin(r) + dy*cos(r)
+    const float cr = std::cos(rollRad);
+    const float sr = std::sin(rollRad);
+    const float rdx = windDx * cr + streakLen * sr;
+    const float rdy = -windDx * sr + streakLen * cr;
+
     for (int i = 0; i < kDropCount; ++i) {
         const float y = std::fmod(m_drops[i].phase + m_timeAccum, 1.0f);
         HudElement& el = m_elements[m_elementCount++];
         el.type = HudElement::Type::Line;
         el.x = m_drops[i].x;
         el.y = y;
-        el.x2 = m_drops[i].x + windDx;
-        el.y2 = y + streakLen;
+        el.x2 = m_drops[i].x + rdx;
+        el.y2 = y + rdy;
         el.strokeWidth = strokeWidth;
         if (isSnow) {
             el.r = 1.0f;

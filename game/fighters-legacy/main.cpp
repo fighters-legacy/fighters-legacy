@@ -682,7 +682,14 @@ int main(int argc, char** argv) {
                         : 0.0f;
         const bool cockpit = (cameraController.mode() == fl::CameraMode::Cockpit);
         activeHud->update(cockpit ? playerEntry : nullptr, env.timeOfDay, terrainElev);
-        windshieldRain.update(cockpit ? (1.0f / 60.0f) : 0.0f, cockpit ? env : EnvironmentState{}, cockpit && isSnow);
+        float rainRollRad = 0.f;
+        if (cockpit && playerEntry) {
+            const glm::vec3 bodyUp = playerEntry->orientation * glm::vec3(0.f, 1.f, 0.f);
+            const glm::vec3 bodyRight = playerEntry->orientation * glm::vec3(0.f, 0.f, 1.f);
+            rainRollRad = std::atan2(-bodyRight.y, bodyUp.y);
+        }
+        windshieldRain.update(cockpit ? (1.0f / 60.0f) : 0.0f, cockpit ? env : EnvironmentState{}, rainRollRad,
+                              cockpit && isSnow);
         hapticController.update(playerEntry, weaponFired, terrainElev, 1.0f / 60.0f);
         {
             glm::dvec3 playerPos{};

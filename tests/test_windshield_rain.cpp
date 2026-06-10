@@ -63,8 +63,8 @@ TEST_CASE("WindshieldRain: storm streak longer than rain streak") {
 TEST_CASE("WindshieldRain: positive windX tilts streaks right") {
     fl::WindshieldRain rain, snow;
     const auto env = makeEnv(0.85f, /*windX=*/15.0f);
-    rain.update(1.0f / 60.0f, env, false);
-    snow.update(1.0f / 60.0f, env, true);
+    rain.update(1.0f / 60.0f, env, 0.f, false);
+    snow.update(1.0f / 60.0f, env, 0.f, true);
     for (const auto& el : rain.elements())
         CHECK(el.x2 > el.x);
     for (const auto& el : snow.elements())
@@ -112,8 +112,8 @@ TEST_CASE("WindshieldRain: clears when coverage drops below threshold") {
 TEST_CASE("WindshieldRain: snow streaks shorter than rain streaks") {
     fl::WindshieldRain rain, snow;
     const auto env = makeEnv(0.85f);
-    rain.update(1.0f / 60.0f, env, false);
-    snow.update(1.0f / 60.0f, env, true);
+    rain.update(1.0f / 60.0f, env, 0.f, false);
+    snow.update(1.0f / 60.0f, env, 0.f, true);
     REQUIRE(!rain.elements().empty());
     REQUIRE(!snow.elements().empty());
     const float rainLen = rain.elements()[0].y2 - rain.elements()[0].y;
@@ -123,7 +123,7 @@ TEST_CASE("WindshieldRain: snow streaks shorter than rain streaks") {
 
 TEST_CASE("WindshieldRain: snow elements are white") {
     fl::WindshieldRain wr;
-    wr.update(1.0f / 60.0f, makeEnv(0.85f), true);
+    wr.update(1.0f / 60.0f, makeEnv(0.85f), 0.f, true);
     for (const auto& el : wr.elements()) {
         CHECK(el.r == Catch::Approx(1.0f));
         CHECK(el.g == Catch::Approx(1.0f));
@@ -133,7 +133,7 @@ TEST_CASE("WindshieldRain: snow elements are white") {
 
 TEST_CASE("WindshieldRain: rain elements are blue-tinted") {
     fl::WindshieldRain wr;
-    wr.update(1.0f / 60.0f, makeEnv(0.85f), false);
+    wr.update(1.0f / 60.0f, makeEnv(0.85f), 0.f, false);
     for (const auto& el : wr.elements()) {
         CHECK(el.b > el.r);
         CHECK(el.b > el.g);
@@ -143,8 +143,8 @@ TEST_CASE("WindshieldRain: rain elements are blue-tinted") {
 TEST_CASE("WindshieldRain: rain and snow positions differ") {
     fl::WindshieldRain rain, snow;
     const auto env = makeEnv(0.85f);
-    rain.update(1.0f / 60.0f, env, false);
-    snow.update(1.0f / 60.0f, env, true);
+    rain.update(1.0f / 60.0f, env, 0.f, false);
+    snow.update(1.0f / 60.0f, env, 0.f, true);
     REQUIRE(rain.elements().size() == snow.elements().size());
     bool anyDiffers = false;
     for (std::size_t i = 0; i < rain.elements().size(); ++i) {
@@ -158,7 +158,7 @@ TEST_CASE("WindshieldRain: rain and snow positions differ") {
 
 TEST_CASE("WindshieldRain: snow also tilts with crosswind") {
     fl::WindshieldRain wr;
-    wr.update(1.0f / 60.0f, makeEnv(0.85f, /*windX=*/15.0f), true);
+    wr.update(1.0f / 60.0f, makeEnv(0.85f, /*windX=*/15.0f), 0.f, true);
     for (const auto& el : wr.elements())
         CHECK(el.x2 > el.x);
 }
@@ -176,11 +176,21 @@ TEST_CASE("WindshieldRain: dt zero still produces elements") {
     CHECK(!wr.elements().empty());
 }
 
+TEST_CASE("WindshieldRain: 90 degree right roll rotates streaks to horizontal") {
+    constexpr float kPi = 3.14159265f;
+    fl::WindshieldRain wr;
+    wr.update(1.0f / 60.0f, makeEnv(0.85f, /*windX=*/0.0f), kPi / 2.0f);
+    for (const auto& el : wr.elements()) {
+        CHECK(el.y2 == Catch::Approx(el.y).margin(1e-4f));
+        CHECK(el.x2 > el.x);
+    }
+}
+
 TEST_CASE("WindshieldRain: snow stroke width wider than rain") {
     fl::WindshieldRain rain, snow;
     const auto env = makeEnv(0.85f);
-    rain.update(1.0f / 60.0f, env, false);
-    snow.update(1.0f / 60.0f, env, true);
+    rain.update(1.0f / 60.0f, env, 0.f, false);
+    snow.update(1.0f / 60.0f, env, 0.f, true);
     REQUIRE(!rain.elements().empty());
     REQUIRE(!snow.elements().empty());
     CHECK(snow.elements()[0].strokeWidth > rain.elements()[0].strokeWidth);

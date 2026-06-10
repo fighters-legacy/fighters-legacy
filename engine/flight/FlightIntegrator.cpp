@@ -260,10 +260,15 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     if (m_state.pos_world[1] < groundElev) {
         m_state.pos_world[1] = groundElev;
         if (vel_world[1] < 0.f) {
-            constexpr float kCoR = 0.35f;   // coefficient of restitution
-            constexpr float kSlide = 0.80f; // fraction of horizontal speed retained
+            constexpr float kCoR = 0.35f;         // coefficient of restitution
+            constexpr float kSlideImpact = 0.80f; // hard-landing friction (≥10 m/s vertical)
+            constexpr float kSlideRoll = 0.999f;  // ground-roll friction (near-zero vertical)
             std::array<float, 3> vw = vel_world;
-            vw[1] = (std::abs(vw[1]) < 2.f) ? 0.f : -vw[1] * kCoR;
+            float impactSpd = std::abs(vw[1]);
+            // Scale friction by impact severity so gravity's ~0.16 m/s/frame floor-tickle
+            // does not act as a continuous brake during ground roll.
+            float kSlide = kSlideRoll + (kSlideImpact - kSlideRoll) * std::min(impactSpd / 10.f, 1.f);
+            vw[1] = (impactSpd < 2.f) ? 0.f : -vw[1] * kCoR;
             vw[0] *= kSlide;
             vw[2] *= kSlide;
             // Attenuate angular rates on impact to prevent post-contact spinning.
