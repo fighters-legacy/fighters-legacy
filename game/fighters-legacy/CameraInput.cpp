@@ -38,14 +38,16 @@ void CameraInput::onModeSwitch(fl::CameraMode newMode, const fl::EntityRenderEnt
                 2.f * (player->orientation.w * player->orientation.y + player->orientation.x * player->orientation.z),
                 1.f - 2.f * (player->orientation.y * player->orientation.y +
                              player->orientation.z * player->orientation.z));
-            m_chaseYaw = glm::degrees(ey) + 180.f;
+            // Entity forward convention: body +X. "Behind" = camera in -X direction from entity.
+            // sin(yaw)=-1 → -X camera offset; that requires yaw = ey - 90°.
+            m_chaseYaw = glm::degrees(ey) - 90.f;
         }
         m_chasePitch = 20.f;
         m_chaseRadius = 25.f;
     } else if (newMode == CameraMode::Free) {
         if (player)
             m_sbPivot = player->position;
-        m_sbPitch = -10.0f;
+        m_sbPitch = 30.0f;
     }
 }
 
@@ -90,8 +92,8 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
             if (keys[SDL_SCANCODE_R]) {
                 m_sbPivot = {0.0, 2000.0, 0.0};
                 m_sbYaw = 0.f;
-                m_sbPitch = -10.f;
-                m_sbRadius = 200.f;
+                m_sbPitch = 30.f;
+                m_sbRadius = 30.f;
             }
         }
         // Clamp pivot to terrain surface + 2 m eye clearance.

@@ -24,6 +24,8 @@ namespace fs = std::filesystem;
 
 const char* FileLogger::levelTag(LogLevel l) {
     switch (l) {
+    case LogLevel::Trace:
+        return "[TRACE]";
     case LogLevel::Debug:
         return "[DEBUG]";
     case LogLevel::Info:

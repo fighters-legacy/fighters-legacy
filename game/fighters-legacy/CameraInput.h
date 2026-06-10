@@ -42,11 +42,11 @@ class CameraInput {
     // Free / orbit state
     glm::dvec3 m_sbPivot{0.0, 2000.0, 0.0};
     float m_sbYaw{0.f};
-    float m_sbPitch{-10.f};
-    float m_sbRadius{200.f};
-    float m_sbThrottle{0.f};
+    float m_sbPitch{30.f};
+    float m_sbRadius{30.f};
+    float m_sbThrottle{0.4f}; // matches server's initial throttle_actual
     // Chase state
-    float m_chaseYaw{180.f};
+    float m_chaseYaw{270.f}; // 270° = camera behind +X-forward entity (sin(270°)=-1 → -X offset)
     float m_chasePitch{20.f};
     float m_chaseRadius{25.f};
     // Cockpit look

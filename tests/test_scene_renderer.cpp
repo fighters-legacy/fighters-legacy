@@ -233,8 +233,10 @@ TEST_CASE("CameraController Cockpit default look direction encodes entity forwar
     cam.setMode(CameraMode::Cockpit);
     cam.setTarget(glm::dvec3(0), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
     CameraView cv = cam.view(1.0f);
-    CHECK(cv.proj[2][3] == Catch::Approx(-1.0f));              // RH perspective preserved
-    CHECK(cv.view[2][2] == Catch::Approx(1.0f).margin(1e-4f)); // camera looks along world -Z
+    CHECK(cv.proj[2][3] == Catch::Approx(-1.0f)); // RH perspective preserved
+    // Entity forward convention: body +X. With identity quat, camera looks along world +X.
+    // The view matrix back-vector (-forward) is world -X, stored in view[col=0][row=2].
+    CHECK(cv.view[0][2] == Catch::Approx(-1.0f).margin(1e-4f)); // camera looks along world +X
 }
 
 TEST_CASE("CameraController Cockpit gimbal lock guard prevents NaN") {

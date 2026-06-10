@@ -9,12 +9,14 @@
 #include "audio/SubtitleQueue.h"
 #include "content/AssetManager.h"
 
+#include "ILogger.h"
 #include "IRenderer.h"
 
 #include <glm/gtc/matrix_transform.hpp> // glm::translate
 #include <glm/gtc/quaternion.hpp>       // glm::mat4_cast
 
 #include <algorithm> // std::sort
+#include <cstdio>    // std::snprintf
 
 namespace fl {
 
@@ -37,6 +39,10 @@ void SceneRenderer::setTerrainStreamer(TerrainStreamer* ts) noexcept {
     m_terrainStreamer = ts;
 }
 
+void SceneRenderer::setLogger(ILogger* logger) noexcept {
+    m_logger = logger;
+}
+
 void SceneRenderer::ensureBuiltins() {
     if (m_builtinEntityMesh.valid())
         return;
@@ -44,20 +50,20 @@ void SceneRenderer::ensureBuiltins() {
     m_builtinEntityMesh = m_renderer.createMesh({"builtin:entity", builtinTetrahedronGlb()});
     m_builtinFloorMesh = m_renderer.createMesh({"builtin:floor", builtinFloorPlaneGlb()});
 
-    // 6-color palette: first 3 opaque (forward pass), last 3 semi-transparent (transparent pass).
-    // Cycled by entry.entityIdx % kPaletteSize — gives each entity a distinct look and exercises
-    // both the opaque and transparent render passes simultaneously in the sandbox.
+    // 6-color opaque palette: gives each entity a distinct look in the no-content sandbox.
+    // All entries are opaque so entities are always clearly visible regardless of camera angle
+    // or background. Cycled by entry.entityIdx % kPaletteSize.
     struct PaletteEntry {
         float r, g, b, a;
         bool alphaBlend;
     };
     static constexpr PaletteEntry kPalette[kPaletteSize] = {
-        {1.00f, 0.25f, 0.15f, 1.00f, false}, // red,    opaque
-        {0.20f, 0.75f, 0.30f, 1.00f, false}, // green,  opaque
-        {0.15f, 0.45f, 1.00f, 1.00f, false}, // blue,   opaque
-        {0.90f, 0.80f, 0.10f, 0.50f, true},  // yellow, glass
-        {0.65f, 0.10f, 0.90f, 0.45f, true},  // purple, glass
-        {0.10f, 0.85f, 0.90f, 0.50f, true},  // cyan,   glass
+        {1.00f, 0.25f, 0.15f, 1.00f, false}, // red
+        {0.20f, 0.75f, 0.30f, 1.00f, false}, // green
+        {0.15f, 0.45f, 1.00f, 1.00f, false}, // blue
+        {0.90f, 0.80f, 0.10f, 1.00f, false}, // yellow
+        {0.65f, 0.10f, 0.90f, 1.00f, false}, // purple
+        {0.10f, 0.85f, 0.90f, 1.00f, false}, // cyan
     };
     for (int i = 0; i < kPaletteSize; ++i) {
         MaterialDesc md{};
@@ -211,6 +217,13 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
     std::span<const ParticleEmitterState> emitters = extraEmitters;
     if (m_particleSystem && !m_particleSystem->emitters().empty())
         emitters = m_particleSystem->emitters();
+
+    if (m_logger) {
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "renderFrame: %zu items submitted (snapshot entries: %zu)", m_items.size(),
+                      snap.entries.size());
+        m_logger->log(LogLevel::Trace, __FILE__, __LINE__, buf);
+    }
 
     FrameScene scene{};
     scene.camera = camera;

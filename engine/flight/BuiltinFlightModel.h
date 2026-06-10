@@ -26,7 +26,7 @@ struct BuiltinFlightModel {
             d->geometry.wing_area_m2 = 30.f;
             d->geometry.wingspan_m = 8.f;
             d->geometry.mac_m = 3.75f;
-            d->geometry.fuel_kg = 9'999'999.f; // effectively infinite
+            d->geometry.fuel_kg = 200.f; // 200 kg at 0.001 kg/s ≈ 55 h burn — effectively infinite
             d->geometry.ixx_kg_m2 = 500.f;
             d->geometry.iyy_kg_m2 = 800.f;
             d->geometry.izz_kg_m2 = 1000.f;

@@ -10,6 +10,7 @@
 #include <vector>
 
 class AssetManager;
+class ILogger;
 class IRenderer;
 class SubtitleQueue;
 namespace fl {
@@ -73,6 +74,10 @@ class SceneRenderer {
     // frame. Pass nullptr to disable (default). Streamer must outlive SceneRenderer.
     void setTerrainStreamer(TerrainStreamer* ts) noexcept;
 
+    // Optional: wire a logger to emit Trace-level diagnostics at pipeline boundaries.
+    // Pass nullptr to disable (default). Logger must outlive SceneRenderer.
+    void setLogger(ILogger* logger) noexcept;
+
   private:
     MeshHandle getOrUploadMesh(const std::string& name);
     MaterialHandle getOrUploadMaterial(const std::string& meshName);
@@ -113,6 +118,7 @@ class SceneRenderer {
     MaterialHandle m_builtinFloorMat{};
     bool m_showBuiltinFloor{false};
     TerrainStreamer* m_terrainStreamer{nullptr};
+    ILogger* m_logger{nullptr};
 };
 
 } // namespace fl

@@ -3460,7 +3460,7 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     m_drawCallCount = static_cast<uint32_t>(m_pendingScene.renderItems.size()) + 7u;
 
     // ── Overlay pass (debug text — after tonemap, before PRESENT transition) ─
-    if (!m_overlayLines.empty()) {
+    if (!m_overlayLines.empty() || !m_overlayElements.empty() || !m_consoleElements.empty()) {
         if (!m_overlayReady)
             createOverlayPipeline();
         if (m_overlayReady)

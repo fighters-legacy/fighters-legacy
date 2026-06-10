@@ -224,10 +224,25 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     m_state.omega[2] += (moments[1] / Iyy) * dt; // pitch (omega[2] = around Z=right)
     m_state.omega[1] += (moments[2] / Izz) * dt; // yaw   (omega[1] = around Y=up)
 
+    // Clamp angular rates: prevents float overflow when aerodynamic moments are
+    // extreme (e.g. 90° AoA freefall).  50 rad/s ≈ 2865°/s — well above any
+    // physically reachable rate for the builtin model.
+    constexpr float kMaxOmega = 50.f;
+    m_state.omega[0] = std::clamp(m_state.omega[0], -kMaxOmega, kMaxOmega);
+    m_state.omega[1] = std::clamp(m_state.omega[1], -kMaxOmega, kMaxOmega);
+    m_state.omega[2] = std::clamp(m_state.omega[2], -kMaxOmega, kMaxOmega);
+
     // 12. Semi-implicit Euler: translational velocity
     m_state.vel_body[0] += (forces[0] / eff_mass) * dt;
     m_state.vel_body[1] += (forces[1] / eff_mass) * dt;
     m_state.vel_body[2] += (forces[2] / eff_mass) * dt;
+
+    // Clamp body-frame speed to Mach 3 equivalent: prevents quaternion overflow
+    // when position is NaN and aero forces produce unbounded acceleration.
+    constexpr float kMaxBodySpeed = 1030.f; // m/s ≈ Mach 3 at sea level
+    m_state.vel_body[0] = std::clamp(m_state.vel_body[0], -kMaxBodySpeed, kMaxBodySpeed);
+    m_state.vel_body[1] = std::clamp(m_state.vel_body[1], -kMaxBodySpeed, kMaxBodySpeed);
+    m_state.vel_body[2] = std::clamp(m_state.vel_body[2], -kMaxBodySpeed, kMaxBodySpeed);
 
     // 13. Integrate rotation quaternion
     integrateRotation(dt);

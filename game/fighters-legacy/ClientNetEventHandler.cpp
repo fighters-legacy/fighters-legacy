@@ -95,6 +95,10 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             re.fuelPct = e.fuelPct;
             snap.entries.push_back(re);
         }
+        char traceBuf[80];
+        std::snprintf(traceBuf, sizeof(traceBuf), "WorldSnapshot: hdr.entityCount=%u, built=%zu", hdr.entityCount,
+                      snap.entries.size());
+        logger.log(LogLevel::Trace, __FILE__, __LINE__, traceBuf);
         bridge.publishExternal(std::move(snap));
         tickAlpha.markNewTick();
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::WeatherState)) {
