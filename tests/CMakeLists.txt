@@ -375,3 +375,12 @@ target_include_directories(test_server_notice PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_server_notice)
+
+add_executable(test_client_net_event_handler test_client_net_event_handler.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp")
+target_link_libraries(test_client_net_event_handler PRIVATE
+    Catch2::Catch2WithMain engine-net engine-render engine-entity engine-debug engine-weather platform-hal)
+target_include_directories(test_client_net_event_handler PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_client_net_event_handler)

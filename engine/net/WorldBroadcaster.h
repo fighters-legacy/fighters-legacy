@@ -151,6 +151,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Register a callback invoked on the sim thread at T=0. Call before gameLoop.start().
     void setShutdownCallback(std::function<void()> fn);
 
+    // Set the MOTD unicast to each connecting client after MsgConnectAck.
+    // Empty string disables MOTD. May be called before gameLoop.start() or via
+    // enqueueSimCallback for hot-reload (reload_config).
+    void setMotd(std::string motd);
+
     // Configure the operator password for MsgAdminCommand authentication.
     // Empty string disables the network admin channel. Call before gameLoop.start().
     void setOperatorPassword(std::string password);
@@ -207,6 +212,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     // Injectable clock for testing; defaults to steady_clock::now.
     std::function<std::chrono::steady_clock::time_point()> m_now{std::chrono::steady_clock::now};
+
+    // MOTD state (set before gameLoop.start() or via enqueueSimCallback; read on sim thread only).
+    std::string m_motd; // empty = no MOTD sent
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword;                               // empty = admin channel disabled

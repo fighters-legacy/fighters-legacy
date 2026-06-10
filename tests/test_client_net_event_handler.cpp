@@ -1,0 +1,160 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include <catch2/catch_test_macros.hpp>
+
+#include "ClientNetEventHandler.h"
+#include "ServerNotice.h"
+
+#include "ILogger.h"
+#include "INetwork.h"
+#include "RenderTypes.h"
+#include "entity/EntityTypeRegistry.h"
+#include "net/GameProtocol.h"
+#include "render/SimRenderBridge.h"
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace {
+
+struct MockLogger : ILogger {
+    void log(LogLevel, const char*, int, const char*) override {}
+    void setMinLevel(LogLevel) override {}
+    void flush() override {}
+};
+
+struct MockNetwork : INetwork {
+    bool init() override {
+        return true;
+    }
+    void shutdown() override {}
+    void setEventHandler(INetworkEventHandler*) override {}
+    bool bind(const char*, uint16_t, int) override {
+        return true;
+    }
+    bool connect(const char*, uint16_t) override {
+        return true;
+    }
+    void disconnect() override {}
+    bool send(uint32_t, const void*, std::size_t, bool) override {
+        return true;
+    }
+    void broadcast(const void*, std::size_t, bool) override {}
+    void service(int) override {}
+    int getPeerCount() const override {
+        return 0;
+    }
+    PeerState getPeerState(uint32_t) const override {
+        return PeerState::Disconnected;
+    }
+    const char* getPeerAddress(uint32_t) const override {
+        return "";
+    }
+    void disconnectPeer(uint32_t) override {}
+    const char* getLastError() const override {
+        return nullptr;
+    }
+};
+
+// Build a raw MsgMotd packet: msgId byte + text + NUL terminator.
+static std::vector<uint8_t> makeMotdPacket(std::string_view text) {
+    std::vector<uint8_t> pkt;
+    pkt.push_back(static_cast<uint8_t>(fl::MsgId::Motd));
+    pkt.insert(pkt.end(), text.begin(), text.end());
+    pkt.push_back(0u);
+    return pkt;
+}
+
+} // namespace
+
+TEST_CASE("ClientNetEventHandler: MsgMotd single-line text shown in notice", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ServerNotice notice;
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.notice = &notice;
+
+    auto pkt = makeMotdPacket("Hello");
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    auto elems = notice.buildElements();
+    REQUIRE(!elems.empty());
+    CHECK(std::string(elems[0].text) == "[server] Hello");
+}
+
+TEST_CASE("ClientNetEventHandler: MsgMotd multi-line; notice receives first line only", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ServerNotice notice;
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.notice = &notice;
+
+    auto pkt = makeMotdPacket("Line1\nLine2");
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    auto elems = notice.buildElements();
+    REQUIRE(!elems.empty());
+    CHECK(std::string(elems[0].text) == "[server] Line1");
+}
+
+TEST_CASE("ClientNetEventHandler: MsgMotd CRLF line ending stripped", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ServerNotice notice;
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.notice = &notice;
+
+    auto pkt = makeMotdPacket("Hi\r\nBye");
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    auto elems = notice.buildElements();
+    REQUIRE(!elems.empty());
+    CHECK(std::string(elems[0].text) == "[server] Hi");
+}
+
+TEST_CASE("ClientNetEventHandler: MsgMotd packet too small does not set notice", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ServerNotice notice;
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.notice = &notice;
+
+    // Only 1 byte — no text payload
+    const uint8_t pkt[] = {static_cast<uint8_t>(fl::MsgId::Motd)};
+    handler.onReceive(0u, pkt, sizeof(pkt));
+
+    CHECK(notice.buildElements().empty());
+}
+
+TEST_CASE("ClientNetEventHandler: unknown msgId discarded, no notice", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ServerNotice notice;
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.notice = &notice;
+
+    const uint8_t pkt[] = {0x09, 'x', 0x00};
+    handler.onReceive(0u, pkt, sizeof(pkt));
+
+    CHECK(notice.buildElements().empty());
+}

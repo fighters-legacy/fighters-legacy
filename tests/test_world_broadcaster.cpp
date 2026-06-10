@@ -1939,6 +1939,92 @@ static std::vector<uint8_t> makeAdminCmd(const char* token, const char* command)
     return {reinterpret_cast<const uint8_t*>(&msg), reinterpret_cast<const uint8_t*>(&msg) + sizeof(msg)};
 }
 
+// ---------------------------------------------------------------------------
+// MOTD helpers
+// ---------------------------------------------------------------------------
+
+static std::string parseMotdText(const std::vector<uint8_t>& pkt) {
+    if (pkt.size() < 2 || pkt[0] != static_cast<uint8_t>(fl::MsgId::Motd))
+        return {};
+    // exclude msgId byte (index 0) and trailing NUL (last byte)
+    return std::string(reinterpret_cast<const char*>(pkt.data() + 1), pkt.size() - 2);
+}
+
+TEST_CASE("WorldBroadcaster: no MOTD sent by default", "[world_broadcaster][motd]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    // setMotd NOT called
+
+    broadcaster.onConnect(0u);
+
+    // Hello + ConnectAck; no MOTD packet
+    CHECK(net.sends.size() == 2u);
+    for (const auto& pkt : net.sends)
+        CHECK(pkt[0] != static_cast<uint8_t>(fl::MsgId::Motd));
+}
+
+TEST_CASE("WorldBroadcaster: MOTD sent as third send when non-empty", "[world_broadcaster][motd]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setMotd("Welcome!");
+
+    broadcaster.onConnect(0u);
+
+    REQUIRE(net.sends.size() == 3u);
+    CHECK(net.sends[2][0] == static_cast<uint8_t>(fl::MsgId::Motd));
+    CHECK(parseMotdText(net.sends[2]) == "Welcome!");
+}
+
+TEST_CASE("WorldBroadcaster: oversized MOTD capped at kMaxMotdBytes", "[world_broadcaster][motd]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setMotd(std::string(fl::kMaxMotdBytes + 500, 'A'));
+
+    broadcaster.onConnect(0u);
+
+    REQUIRE(net.sends.size() == 3u);
+    // 1 (msgId) + kMaxMotdBytes (text) + 1 (NUL) = kMaxMotdBytes + 2
+    CHECK(net.sends[2].size() == fl::kMaxMotdBytes + 2u);
+    CHECK(net.sends[2].back() == 0u); // NUL terminator
+}
+
+TEST_CASE("WorldBroadcaster: setMotd with empty string suppresses MOTD send", "[world_broadcaster][motd]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setMotd("hello");
+    broadcaster.setMotd(""); // cleared
+
+    broadcaster.onConnect(0u);
+
+    CHECK(net.sends.size() == 2u);
+    for (const auto& pkt : net.sends)
+        CHECK(pkt[0] != static_cast<uint8_t>(fl::MsgId::Motd));
+}
+
+// ---------------------------------------------------------------------------
+// Admin command helpers (existing)
+// ---------------------------------------------------------------------------
+
 // Return true if the last entry in net.sends is a MsgAdminResponse; populate resp.
 static bool parseLastAdminResponse(const MockNetwork& net, fl::MsgAdminResponse& resp) {
     if (net.sends.empty())

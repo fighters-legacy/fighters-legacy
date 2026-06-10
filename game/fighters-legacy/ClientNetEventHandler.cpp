@@ -14,6 +14,7 @@
 
 #include <cstring>
 #include <glm/gtc/quaternion.hpp>
+#include <sstream>
 
 void ClientNetEventHandler::onConnect(uint32_t /*peerId*/) {
     logger.log(LogLevel::Info, __FILE__, __LINE__, "connected to local fl-server");
@@ -133,6 +134,28 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         resp.text[sizeof(resp.text) - 1] = '\0';
         if (console && resp.text[0] != '\0')
             console->print(std::string("[admin] ") + resp.text);
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::Motd)) {
+        if (size < 2)
+            return;
+        const std::size_t textLen = std::min(size - 1, fl::kMaxMotdBytes);
+        std::string text(static_cast<const char*>(data) + 1, textLen);
+        while (!text.empty() && text.back() == '\0')
+            text.pop_back();
+        std::istringstream stream(text);
+        std::string line;
+        bool first = true;
+        while (std::getline(stream, line)) {
+            if (!line.empty() && line.back() == '\r')
+                line.pop_back();
+            if (line.empty())
+                continue;
+            std::string prefixed = std::string("[server] ") + line;
+            if (console)
+                console->print(prefixed);
+            if (notice && first)
+                notice->setNotice(prefixed, 0);
+            first = false;
+        }
     }
     // Unknown msgIds: silently discard
 }

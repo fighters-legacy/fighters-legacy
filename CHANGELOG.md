@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: `MsgMotd` (0x08, variable-length, up to 65535 chars) delivers `[server].motd` to each connecting client after `MsgConnectAck`; multi-line text split on `\n` prints each line to the debug console prefixed `[server]`; first line also shown in the server notice banner; `reload_config` hot-reloads the MOTD for subsequent connections
 - **engine**: `LogLevel::Trace` added to `ILogger`; `FileLogger`, `StdoutLogger`, and `UserConfig` support the new level; enabled via `log_level = "trace"` in `user.toml`; `SceneRenderer` and `ClientNetEventHandler` emit trace-level pipeline diagnostics
 
 ### Fixed
