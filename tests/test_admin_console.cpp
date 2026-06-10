@@ -1,10 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "AdminConsole.h"
 #include <debug/DebugCommandRegistry.h>
+#include <loop/GameLoop.h>
+#include <loop/ISimUpdate.h>
 
+#include <ILogger.h>
 #include <catch2/catch_test_macros.hpp>
 #include <csignal>
 #include <string>
+
+// Fixtures used by the async-ack tests (need a real GameLoop so enqueueSimCallback is safe).
+// "2" suffix avoids name collisions with any mock in mock_hal.h.
+struct NullLogger2 : public ILogger {
+    void log(LogLevel, const char*, int, const char*) override {}
+    void setMinLevel(LogLevel) override {}
+    void flush() override {}
+};
+struct NoopSim2 : public ISimUpdate {
+    void onTick(double, uint64_t) override {}
+};
 
 // Build a registry with an all-null context (except the fields being exercised).
 static DebugCommandRegistry makeRegistry(ServerCommandContext ctx = {}) {
@@ -305,4 +319,107 @@ TEST_CASE("AdminConsole: shutdown --reason stops consuming at next double-dash f
     // the 10s delay is below minShutdownDelayS=100 so the min-delay gate fires.
     std::string out = reg.dispatch("shutdown --in 10s --reason maintenance --force");
     CHECK(out.find("at least") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// Async command ack strings
+// These tests verify that commands returning sync acknowledgments work correctly.
+// A real GameLoop is required because these handlers call enqueueSimCallback.
+// The sim thread is never started (loop.start() not called), so sentinels passed
+// as broadcaster/entityManager are never dereferenced — they are captured only in
+// lambdas that are queued but never executed.
+//
+// NOTE: the 'peers' command is excluded from this block because getPeerCount() is
+// called during dispatch (not inside the lambda), making a sentinel broadcaster
+// unsafe. Full coverage requires a real WorldBroadcaster fixture.
+// ---------------------------------------------------------------------------
+
+// Shared helper that builds a context with a real GameLoop and safe sentinel pointers.
+namespace {
+struct AsyncAckFixture {
+    NullLogger2 log;
+    NoopSim2 noop;
+    GameLoop loop{noop, log}; // do NOT call loop.start()
+    static int bcast_sentinel;
+    static int em_sentinel;
+    ServerCommandContext ctx;
+
+    AsyncAckFixture() {
+        ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&bcast_sentinel);
+        ctx.entityManager = reinterpret_cast<fl::EntityManager*>(&em_sentinel);
+        ctx.gameLoop = &loop;
+    }
+};
+int AsyncAckFixture::bcast_sentinel = 0;
+int AsyncAckFixture::em_sentinel = 0;
+} // namespace
+
+TEST_CASE("AdminConsole async ack: kick numeric peer returns non-empty ack with id", "[admin_console][async_ack]") {
+    AsyncAckFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("kick 42");
+    CHECK_FALSE(out.empty());
+    CHECK(out.find("42") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole async ack: kick IP returns non-empty ack with address", "[admin_console][async_ack]") {
+    AsyncAckFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("kick 1.2.3.4");
+    CHECK_FALSE(out.empty());
+    CHECK(out.find("1.2.3.4") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole async ack: ban IP returns non-empty ack", "[admin_console][async_ack]") {
+    AsyncAckFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("ban 1.2.3.4");
+    CHECK_FALSE(out.empty());
+}
+
+TEST_CASE("AdminConsole async ack: unban IP returns non-empty ack with address", "[admin_console][async_ack]") {
+    AsyncAckFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("unban 1.2.3.4");
+    CHECK_FALSE(out.empty());
+    CHECK(out.find("1.2.3.4") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole async ack: spawn returns non-empty ack with type", "[admin_console][async_ack]") {
+    AsyncAckFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("spawn builtin:debug-entity 0 100 0");
+    CHECK_FALSE(out.empty());
+    CHECK(out.find("builtin:debug-entity") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole async ack: kill returns non-empty ack with index", "[admin_console][async_ack]") {
+    AsyncAckFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("kill 1");
+    CHECK_FALSE(out.empty());
+    CHECK(out.find("1") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole async ack: tp returns non-empty ack with entity index", "[admin_console][async_ack]") {
+    AsyncAckFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("tp 1 0 100 0");
+    CHECK_FALSE(out.empty());
+    CHECK(out.find("1") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole async ack: shutdown no-args returns status queued string", "[admin_console][async_ack]") {
+    AsyncAckFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("shutdown");
+    CHECK(out == "shutdown: status queued");
+}
+
+TEST_CASE("AdminConsole async ack: shutdown --delay returns extension queued string", "[admin_console][async_ack]") {
+    AsyncAckFixture f;
+    f.ctx.shutdownRequireConfirm = false;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("shutdown --delay 5m");
+    CHECK(out == "shutdown: extension queued");
 }

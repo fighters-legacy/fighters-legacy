@@ -1,0 +1,200 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "RconServer.h"
+#include "mock_hal.h"
+#include "server_config.h"
+
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+
+#include <cstring>
+#include <string>
+#include <vector>
+
+// ---------------------------------------------------------------------------
+// rcon::encodePacket
+// ---------------------------------------------------------------------------
+
+TEST_CASE("encodePacket produces correct wire bytes for empty body", "[rcon][encode]") {
+    // AUTH_RESPONSE with id=5, empty body:
+    // Wire: [size:4LE][id:4LE][type:4LE][NUL][NUL]
+    // size = 10 (8 + 0 + 2)
+    auto pkt = rcon::encodePacket(5, rcon::kTypeAuthResponse, "");
+    REQUIRE(pkt.size() == 14);
+
+    int32_t size = 0, id = 0, type = 0;
+    std::memcpy(&size, pkt.data(), 4);
+    std::memcpy(&id, pkt.data() + 4, 4);
+    std::memcpy(&type, pkt.data() + 8, 4);
+
+    CHECK(size == 10);
+    CHECK(id == 5);
+    CHECK(type == rcon::kTypeAuthResponse);
+    CHECK(pkt[12] == 0); // body NUL
+    CHECK(pkt[13] == 0); // trailing NUL
+}
+
+TEST_CASE("encodePacket produces correct wire bytes with body", "[rcon][encode]") {
+    auto pkt = rcon::encodePacket(1, rcon::kTypeResponseValue, "hello");
+    // size = 10 + 5 = 15; total = 4 + 15 = 19
+    REQUIRE(pkt.size() == 19);
+
+    int32_t size = 0;
+    std::memcpy(&size, pkt.data(), 4);
+    CHECK(size == 15);
+    CHECK(std::memcmp(pkt.data() + 12, "hello", 5) == 0);
+    CHECK(pkt[17] == 0); // body NUL
+    CHECK(pkt[18] == 0); // trailing NUL
+}
+
+TEST_CASE("encodePacket id=-1 for auth failure", "[rcon][encode]") {
+    auto pkt = rcon::encodePacket(-1, rcon::kTypeAuthResponse, "");
+    REQUIRE(pkt.size() == 14);
+    int32_t id = 0;
+    std::memcpy(&id, pkt.data() + 4, 4);
+    CHECK(id == -1);
+}
+
+// ---------------------------------------------------------------------------
+// rcon::decodePacket
+// ---------------------------------------------------------------------------
+
+TEST_CASE("decodePacket round-trip", "[rcon][decode]") {
+    auto encoded = rcon::encodePacket(42, rcon::kTypeExecCommand, "status");
+    rcon::RconPacket out;
+    int consumed = rcon::decodePacket(encoded.data(), static_cast<int>(encoded.size()), out);
+    CHECK(consumed == static_cast<int>(encoded.size()));
+    CHECK(out.id == 42);
+    CHECK(out.type == rcon::kTypeExecCommand);
+    CHECK(out.body == "status");
+}
+
+TEST_CASE("decodePacket returns 0 for partial buffer", "[rcon][decode]") {
+    auto encoded = rcon::encodePacket(1, rcon::kTypeAuth, "pass");
+    rcon::RconPacket out;
+    // Only send 10 bytes of a 18-byte packet.
+    int consumed = rcon::decodePacket(encoded.data(), 10, out);
+    CHECK(consumed == 0);
+}
+
+TEST_CASE("decodePacket returns 0 when fewer than 4 bytes available", "[rcon][decode]") {
+    auto encoded = rcon::encodePacket(1, rcon::kTypeAuth, "x");
+    rcon::RconPacket out;
+    CHECK(rcon::decodePacket(encoded.data(), 3, out) == 0);
+}
+
+TEST_CASE("decodePacket returns -1 for malformed size (too small)", "[rcon][decode]") {
+    // Construct a packet with size=5 (below minimum of 10).
+    std::vector<uint8_t> bad(14, 0);
+    int32_t size = 5;
+    std::memcpy(bad.data(), &size, 4);
+    rcon::RconPacket out;
+    CHECK(rcon::decodePacket(bad.data(), static_cast<int>(bad.size()), out) == -1);
+}
+
+TEST_CASE("decodePacket returns -1 for malformed size (too large)", "[rcon][decode]") {
+    std::vector<uint8_t> bad(14, 0);
+    int32_t size = 10 + rcon::kMaxBodyPerPacket + 1; // one byte over the cap
+    std::memcpy(bad.data(), &size, 4);
+    rcon::RconPacket out;
+    CHECK(rcon::decodePacket(bad.data(), static_cast<int>(bad.size()), out) == -1);
+}
+
+TEST_CASE("decodePacket handles two packets in one buffer", "[rcon][decode]") {
+    auto p1 = rcon::encodePacket(1, rcon::kTypeExecCommand, "help");
+    auto p2 = rcon::encodePacket(2, rcon::kTypeExecCommand, "status");
+    std::vector<uint8_t> combined;
+    combined.insert(combined.end(), p1.begin(), p1.end());
+    combined.insert(combined.end(), p2.begin(), p2.end());
+
+    rcon::RconPacket out1, out2;
+    int c1 = rcon::decodePacket(combined.data(), static_cast<int>(combined.size()), out1);
+    REQUIRE(c1 == static_cast<int>(p1.size()));
+    int c2 = rcon::decodePacket(combined.data() + c1, static_cast<int>(combined.size()) - c1, out2);
+    REQUIRE(c2 == static_cast<int>(p2.size()));
+
+    CHECK(out1.body == "help");
+    CHECK(out2.body == "status");
+}
+
+TEST_CASE("decodePacket with body exactly kMaxBodyPerPacket bytes", "[rcon][decode]") {
+    std::string bigBody(static_cast<std::size_t>(rcon::kMaxBodyPerPacket), 'x');
+    auto encoded = rcon::encodePacket(7, rcon::kTypeResponseValue, bigBody);
+    rcon::RconPacket out;
+    int consumed = rcon::decodePacket(encoded.data(), static_cast<int>(encoded.size()), out);
+    CHECK(consumed == static_cast<int>(encoded.size()));
+    CHECK(out.body == bigBody);
+}
+
+// ---------------------------------------------------------------------------
+// rcon::splitResponse
+// ---------------------------------------------------------------------------
+
+TEST_CASE("splitResponse returns single chunk for short body", "[rcon][split]") {
+    auto chunks = rcon::splitResponse("hello world");
+    REQUIRE(chunks.size() == 1);
+    CHECK(chunks[0] == "hello world");
+}
+
+TEST_CASE("splitResponse returns single chunk for body at exact limit", "[rcon][split]") {
+    std::string body(static_cast<std::size_t>(rcon::kMaxBodyPerPacket), 'a');
+    auto chunks = rcon::splitResponse(body);
+    REQUIRE(chunks.size() == 1);
+    CHECK(chunks[0].size() == static_cast<std::size_t>(rcon::kMaxBodyPerPacket));
+}
+
+TEST_CASE("splitResponse splits body one byte over the limit", "[rcon][split]") {
+    std::string body(static_cast<std::size_t>(rcon::kMaxBodyPerPacket) + 1, 'b');
+    auto chunks = rcon::splitResponse(body);
+    REQUIRE(chunks.size() == 2);
+    CHECK(chunks[0].size() == static_cast<std::size_t>(rcon::kMaxBodyPerPacket));
+    CHECK(chunks[1].size() == 1);
+}
+
+TEST_CASE("splitResponse returns one empty string for empty body", "[rcon][split]") {
+    auto chunks = rcon::splitResponse("");
+    REQUIRE(chunks.size() == 1);
+    CHECK(chunks[0].empty());
+}
+
+// ---------------------------------------------------------------------------
+// parseServerConfig [rcon] section
+// ---------------------------------------------------------------------------
+
+TEST_CASE("parseServerConfig [rcon] defaults when section absent", "[rcon][config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[server]\nname = \"test\"\n", &log);
+    CHECK_FALSE(cfg.rcon.enabled);
+    CHECK(cfg.rcon.port == 27015);
+    CHECK(cfg.rcon.password.empty());
+}
+
+TEST_CASE("parseServerConfig [rcon] reads all fields", "[rcon][config]") {
+    MockLogger log;
+    const char* toml = "[rcon]\nenabled = true\nport = 25575\npassword = \"s3cr3t\"\n";
+    auto cfg = parseServerConfig(toml, &log);
+    CHECK(cfg.rcon.enabled);
+    CHECK(cfg.rcon.port == 25575);
+    CHECK(cfg.rcon.password == "s3cr3t");
+    CHECK_FALSE(log.hasMessage(LogLevel::Warn, "rcon"));
+}
+
+TEST_CASE("parseServerConfig [rcon] warns on out-of-range port", "[rcon][config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[rcon]\nport = 99999\n", &log);
+    CHECK(cfg.rcon.port == 27015); // default unchanged
+    CHECK(log.hasMessage(LogLevel::Warn, "rcon.port"));
+}
+
+TEST_CASE("parseServerConfig [rcon] warns when enabled with empty password", "[rcon][config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[rcon]\nenabled = true\npassword = \"\"\n", &log);
+    CHECK(cfg.rcon.enabled);
+    CHECK(log.hasMessage(LogLevel::Warn, "rcon.password"));
+}
+
+TEST_CASE("parseServerConfig [rcon] no warning when enabled with non-empty password", "[rcon][config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[rcon]\nenabled = true\npassword = \"strongpass\"\n", &log);
+    CHECK(cfg.rcon.enabled);
+    CHECK_FALSE(log.hasMessage(LogLevel::Warn, "rcon.password"));
+}

@@ -153,6 +153,18 @@ if(TARGET platform-enet)
         "${CMAKE_SOURCE_DIR}/server/fl-server"
         "${CMAKE_CURRENT_SOURCE_DIR}")
     catch_discover_tests(test_admin_console)
+
+    add_executable(test_rcon_server test_rcon_server.cpp
+        "${CMAKE_SOURCE_DIR}/server/fl-server/RconServer.cpp")
+    target_link_libraries(test_rcon_server PRIVATE
+        Catch2::Catch2WithMain fl-server-config engine-debug)
+    target_include_directories(test_rcon_server PRIVATE
+        "${CMAKE_SOURCE_DIR}/server/fl-server"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(WIN32)
+        target_link_libraries(test_rcon_server PRIVATE ws2_32)
+    endif()
+    catch_discover_tests(test_rcon_server)
 endif()
 
 add_executable(test_audio test_audio.cpp)

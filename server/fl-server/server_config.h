@@ -60,6 +60,14 @@ struct ServerConfig {
     int preHandshakeRateLimitCount = 20; // max CONNECT attempts per IP per window; 0 = disabled
     int preHandshakeWindowMs = 1000;     // sliding window in milliseconds
     int maxConnectionsPerIp = 0;         // max simultaneous connections per IP; 0 = unlimited
+
+    // [rcon]
+    struct RconConfig {
+        bool enabled = false;
+        uint16_t port = 27015;
+        std::string password; // empty + enabled = warn at startup; unauthenticated connections accepted
+    };
+    RconConfig rcon;
 };
 
 // Returns the embedded default server.toml content written on first run.
