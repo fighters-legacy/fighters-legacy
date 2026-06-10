@@ -16,7 +16,7 @@ Settings are resolved in three tiers. Later tiers override earlier ones.
 | 2 | CLI positional args and named flags | `fl-server 9000 32 --bind 127.0.0.1` |
 | 3 (highest) | Environment variables | `FL_PORT=9000` |
 
-All six TOML sections are tier-1 only (env vars and CLI do not cover arrays or
+All TOML sections are tier-1 only (env vars and CLI do not cover arrays or
 multi-key sections). See [Environment variables](#environment-variables) for the full
 `FL_*` list.
 
@@ -71,6 +71,11 @@ difficulty_floor = "recruit"
 [security]
 pre_handshake_rate_limit_count = 20   # max CONNECT attempts per IP per window; 0 = disabled
 pre_handshake_window_ms        = 1000 # sliding window in milliseconds
+
+[rcon]
+enabled  = false
+port     = 27015
+password = ""
 ```
 
 ---
@@ -523,13 +528,81 @@ All `[shutdown]` fields take effect immediately — no restart required.
 
 ---
 
-## Runtime administration (stdin console)
+## [rcon] — Remote Console (RCON)
+
+Enables a TCP RCON listener using the Source Engine RCON wire protocol. Compatible with
+standard RCON clients such as `mcrcon`, `rcon-cli`, and any tool that speaks the Source
+Engine RCON protocol. The server exposes the same command set as the stdin console.
+
+> **Security:** RCON passwords travel over **plain TCP** (no TLS). Use RCON only on
+> trusted private networks, VPNs, or behind a TLS-terminating reverse proxy. Do not
+> expose the RCON port to the public internet without additional protection.
+
+```toml
+[rcon]
+enabled  = false
+port     = 27015
+password = ""
+```
+
+### `enabled`
+
+| Type | Default |
+|---|---|
+| boolean | `false` |
+
+Set to `true` to start the TCP RCON listener. All other `[rcon]` fields are ignored when
+`enabled = false`. If `enabled = true` and `password` is empty, a warning is logged and
+unauthenticated connections are accepted — do not leave `password` empty in production.
+
+### `port`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `27015` | 1–65535 |
+
+TCP port the RCON listener binds on. The default (`27015`) is the Source Engine RCON
+convention. Out-of-range values are ignored and the default is kept (a warning is logged).
+
+### `password`
+
+| Type | Default |
+|---|---|
+| string | `""` (empty) |
+
+Password required for RCON authentication. Empty string means no password is required
+(a startup warning is logged when `enabled = true` and `password` is empty).
+Passwords are compared in constant time to resist timing attacks.
+
+### Behaviour notes
+
+- A maximum of 4 simultaneous RCON connections are accepted. Additional connections receive
+  an error response and are closed immediately.
+- Command responses longer than 4086 bytes are split across multiple `SERVERDATA_RESPONSE_VALUE`
+  packets per the Source Engine RCON specification, followed by an empty sentinel packet.
+- Async-mutating commands (`kick`, `ban`, `unban`, `tp`, `spawn`, `kill`) return a
+  synchronous acknowledgement string immediately. The actual action executes on the next sim
+  tick (~16 ms later); confirmation also appears on fl-server stdout.
+- `peers` returns a count from the atomic peer counter immediately; the full per-peer detail
+  is printed to stdout on the next sim tick.
+
+### Example: connect with mcrcon
+
+    mcrcon -H <host> -P 27015 -p <password> "status"
+
+All `[rcon]` fields **require a restart** to take effect.
+
+---
+
+## Runtime administration
+
+### Stdin console
 
 `fl-server` accepts admin commands on standard input. No extra port or network
 exposure is required — access is limited to anyone with shell access to the
 process.
 
-### How to attach
+#### How to attach
 
 | Environment | Command |
 |---|---|
@@ -540,7 +613,7 @@ process.
 > **Windows note:** The stdin console is unavailable when `fl-server` runs without
 > an attached console (e.g. as a Windows Service). Use Docker or SSH in those environments.
 
-### Command reference
+#### Command reference
 
 | Command | Args | Description |
 |---|---|---|
@@ -561,7 +634,7 @@ process.
 | `shutdown` | `[--in <dur>] [--interval <dur>] [--delay <dur>] [--cancel] [--now] [--force] [--reason <text>]` | Schedule or cancel a graceful shutdown with countdown notices to connected clients; `--now` exits immediately after notifying clients; `--interval` overrides `shutdown.warning_interval_s` for this run; `--force` required when `shutdown.require_confirm = true` (default); `--reason` prepends custom operator text to each countdown broadcast (long reasons are truncated to fit in `MsgServerNotice::text[60]`; `--reason` stops consuming tokens at the next `--` flag) |
 | `quit` | — | Gracefully shut down fl-server immediately without client notification |
 
-### Hot-reload behaviour (`reload_config`)
+#### Hot-reload behaviour (`reload_config`)
 
 `reload_config` re-reads the config file and applies a subset of fields immediately:
 
@@ -576,9 +649,9 @@ Fields that **require a restart** to take effect: `port`, `bind_address`, `max_p
 `game_modes`, `password`, `discovery.*`, `mods.stack`, `rotation.*`, `world.*`, `ai.*`,
 `security.connect_rate_limit_*`, `security.packet_flood_multiplier`, `security.*_bandwidth_bps`,
 `security.pre_handshake_rate_limit_count`, `security.pre_handshake_window_ms`,
-`security.max_connections_per_ip`.
+`security.max_connections_per_ip`, `rcon.*`.
 
-### Access control
+#### Access control
 
 **Ban list file format:** one normalized IP address per line (plain IPv4 `1.2.3.4`, bare
 IPv6 `::1`, or IPv4-mapped IPv6 `::ffff:1.2.3.4` — all normalized on load). Lines beginning
@@ -605,6 +678,29 @@ Only `MsgClientInput` (client→server control input) packets count toward this 
 **ENet bandwidth caps** (`incoming_bandwidth_bps` / `outgoing_bandwidth_bps`): set aggregate
 host-level byte-rate limits enforced by ENet. These cap total traffic across all peers, not
 per-peer. `0` = unlimited.
+
+### TCP RCON (Source Engine protocol)
+
+When `[rcon] enabled = true` and a `password` is configured, fl-server binds a TCP port and
+accepts connections from any Source Engine RCON client.
+
+- **Same command set** as the stdin console — all commands in the table above are available.
+- **Authentication:** the client sends a `SERVERDATA_AUTH` packet with the password. Wrong
+  password → the server responds with `id = -1` and closes the connection.
+- **Response splitting:** responses longer than 4086 bytes are split across multiple
+  `SERVERDATA_RESPONSE_VALUE` packets (same request id), followed by an empty sentinel packet.
+- **Async commands:** mutation commands (`kick`, `ban`, `unban`, `spawn`, `kill`, `tp`)
+  return a synchronous acknowledgment string immediately. The actual action executes on the
+  next sim tick (~16 ms later); stdout also shows confirmation.
+- **Connection limit:** maximum 4 simultaneous RCON clients.
+
+> **Security:** passwords travel over **plain TCP** — no TLS. Use RCON only on trusted/VPN
+> networks or via a TLS-terminating reverse proxy.
+
+Example using `mcrcon`:
+
+    mcrcon -H <host> -P 27015 -p <password> "status"
+    mcrcon -H <host> -P 27015 -p <password> "kick 42"
 
 ---
 

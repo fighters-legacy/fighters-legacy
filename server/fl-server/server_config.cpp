@@ -90,7 +90,15 @@ static const char* kDefaultToml =
     "[shutdown]\n"
     "shutdown_warning_interval_s = 300\n"
     "min_shutdown_delay_s = 0\n"
-    "shutdown_require_confirm = true\n";
+    "shutdown_require_confirm = true\n"
+    "\n"
+    "[rcon]\n"
+    "# Source Engine RCON (TCP) remote admin channel. Disabled by default.\n"
+    "# Set a strong password before enabling. Password travels over plain TCP;\n"
+    "# use only on trusted/VPN networks or behind a TLS-terminating reverse proxy.\n"
+    "enabled = false\n"
+    "port = 27015\n"
+    "password = \"\"\n";
 
 std::string_view defaultServerConfigToml() {
     return kDefaultToml;
@@ -325,6 +333,22 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
         if (auto v = tbl["shutdown"]["require_confirm"].value<bool>())
             cfg.shutdownRequireConfirm = *v;
+
+        // [rcon]
+        if (auto v = tbl["rcon"]["enabled"].value<bool>())
+            cfg.rcon.enabled = *v;
+        if (auto v = tbl["rcon"]["port"].value<int64_t>()) {
+            if (*v < 1 || *v > 65535)
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "rcon.port out of range [1,65535]; using default");
+            else
+                cfg.rcon.port = static_cast<uint16_t>(*v);
+        }
+        if (auto v = tbl["rcon"]["password"].value<std::string>())
+            cfg.rcon.password = std::move(*v);
+        if (cfg.rcon.enabled && cfg.rcon.password.empty())
+            log->log(LogLevel::Warn, __FILE__, __LINE__,
+                     "rcon.password is empty; RCON will accept unauthenticated connections"
+                     " -- set a password or disable rcon.enabled");
 
     } catch (const toml::parse_error& e) {
         char buf[256];

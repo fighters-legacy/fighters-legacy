@@ -19,6 +19,7 @@
 #include "ENetNetwork.h"
 #include "ENetNetworkFactory.h"
 #include "IpListFile.h"
+#include "RconServer.h"
 #include "StdoutLogger.h"
 #include "net/DiscoveryBeacon.h"
 #include "server_config.h"
@@ -403,6 +404,16 @@ int main(int argc, char** argv) {
     // ---- Start sim loop ----
     gameLoop.start();
 
+    // ---- RCON server (optional TCP remote admin channel) ----
+    std::unique_ptr<RconServer> rconServer;
+    if (cfg.rcon.enabled) {
+        rconServer = std::make_unique<RconServer>(adminRegistry, cfg.rcon, *log);
+        if (!rconServer->start()) {
+            log->log(LogLevel::Warn, __FILE__, __LINE__, "RCON server failed to start; continuing without RCON");
+            rconServer.reset();
+        }
+    }
+
     // ---- Admin console (stdin command loop) ----
     std::mutex stdinMutex;
     std::queue<std::string> stdinLines;
@@ -441,6 +452,8 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
+    if (rconServer)
+        rconServer->stop();
     gameLoop.stop();
     p.asyncFilesystem->shutdown(); // join worker thread before TerrainStreamer destructs
 

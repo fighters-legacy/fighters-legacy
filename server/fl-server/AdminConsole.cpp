@@ -162,7 +162,10 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                     std::printf("[admin] peers: no connected peers\n");
                 std::fflush(stdout);
             });
-            return {};
+            int count = ctx.broadcaster->getPeerCount();
+            char peerBuf[64];
+            std::snprintf(peerBuf, sizeof(peerBuf), "%d peer(s) connected", count);
+            return std::string(peerBuf);
         });
 
     // kick <peerId|IP>
@@ -183,6 +186,9 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                                          std::printf("[admin] kicked peer %u\n", peerId);
                                          std::fflush(stdout);
                                      });
+                                     char kickBuf[64];
+                                     std::snprintf(kickBuf, sizeof(kickBuf), "kick: queued peer %u", peerId);
+                                     return std::string(kickBuf);
                                  } else {
                                      std::string ip = normalizeIp(arg);
                                      ctx.gameLoop->enqueueSimCallback([ctx, ip]() {
@@ -197,8 +203,8 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                                          std::printf("[admin] kicked %d peer(s) from IP %s\n", kicked, ip.c_str());
                                          std::fflush(stdout);
                                      });
+                                     return "kick: queued peers from IP " + ip;
                                  }
-                                 return {};
                              });
 
     // ban <peerId|IP>
@@ -231,6 +237,9 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                                          }
                                          std::fflush(stdout);
                                      });
+                                     char banBuf[64];
+                                     std::snprintf(banBuf, sizeof(banBuf), "ban: queued for peer %u", peerId);
+                                     return std::string(banBuf);
                                  } else {
                                      std::string ip = normalizeIp(arg);
                                      ctx.gameLoop->enqueueSimCallback([ctx, ip]() {
@@ -240,8 +249,8 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                                          std::printf("[admin] banned IP %s\n", ip.c_str());
                                          std::fflush(stdout);
                                      });
+                                     return "ban: banning IP " + ip;
                                  }
-                                 return {};
                              });
 
     // unban <IP>
@@ -259,7 +268,7 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                                      std::printf("[admin] unbanned IP %s\n", ip.c_str());
                                      std::fflush(stdout);
                                  });
-                                 return {};
+                                 return "unban: unbanning IP " + ip;
                              });
 
     // set_weather <preset>
@@ -346,7 +355,10 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                     std::printf("[admin] spawn: type '%s' unknown or cap reached\n", typeId.c_str());
                 std::fflush(stdout);
             });
-            return {};
+            char spawnBuf[128];
+            std::snprintf(spawnBuf, sizeof(spawnBuf), "spawn: queued type %s at %.1f %.1f %.1f", typeId.c_str(),
+                          static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+            return std::string(spawnBuf);
         });
 
     // kill <idx>
@@ -375,48 +387,53 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                                      }
                                      std::fflush(stdout);
                                  });
-                                 return {};
+                                 char killBuf[64];
+                                 std::snprintf(killBuf, sizeof(killBuf), "kill: queued index %u", targetIdx);
+                                 return std::string(killBuf);
                              });
 
     // tp <idx> <x> <y> <z>
-    registry.registerCommand("tp", "tp <idx> <x> <y> <z>  -- teleport entity to world position",
-                             [ctx](std::span<std::string_view> args) -> std::string {
-                                 if (args.size() < 4)
-                                     return "usage: tp <idx> <x> <y> <z>";
-                                 if (!ctx.entityManager || !ctx.gameLoop)
-                                     return "tp: not available";
-                                 uint32_t targetIdx = 0;
-                                 auto [ptr, ec] =
-                                     std::from_chars(args[0].data(), args[0].data() + args[0].size(), targetIdx);
-                                 if (ec != std::errc{})
-                                     return "tp: invalid entity index";
-                                 // Parse coordinates with strtod (from_chars for double not on Apple Clang).
-                                 auto parseCoord = [](std::string_view sv, double& out) -> bool {
-                                     if (sv.empty())
-                                         return false;
-                                     std::string s(sv); // null-terminated for strtod
-                                     char* end = nullptr;
-                                     out = std::strtod(s.c_str(), &end);
-                                     return end == s.c_str() + sv.size() && end != s.c_str();
-                                 };
-                                 double x{}, y{}, z{};
-                                 if (!parseCoord(args[1], x) || !parseCoord(args[2], y) || !parseCoord(args[3], z))
-                                     return "tp: invalid coordinates";
-                                 ctx.gameLoop->enqueueSimCallback([ctx, targetIdx, x, y, z]() {
-                                     ctx.entityManager->forEach([&](fl::EntityState& state) {
-                                         if (state.id.index == targetIdx) {
-                                             state.transform.pos[0] = x;
-                                             state.transform.pos[1] = y;
-                                             state.transform.pos[2] = z;
-                                             std::printf("[admin] teleported entity %u/%u to X:%+.1f Y:%+.1f Z:%+.1f\n",
-                                                         state.id.index, state.id.generation, static_cast<float>(x),
-                                                         static_cast<float>(y), static_cast<float>(z));
-                                             std::fflush(stdout);
-                                         }
-                                     });
-                                 });
-                                 return {};
-                             });
+    registry.registerCommand(
+        "tp", "tp <idx> <x> <y> <z>  -- teleport entity to world position",
+        [ctx](std::span<std::string_view> args) -> std::string {
+            if (args.size() < 4)
+                return "usage: tp <idx> <x> <y> <z>";
+            if (!ctx.entityManager || !ctx.gameLoop)
+                return "tp: not available";
+            uint32_t targetIdx = 0;
+            auto [ptr, ec] = std::from_chars(args[0].data(), args[0].data() + args[0].size(), targetIdx);
+            if (ec != std::errc{})
+                return "tp: invalid entity index";
+            // Parse coordinates with strtod (from_chars for double not on Apple Clang).
+            auto parseCoord = [](std::string_view sv, double& out) -> bool {
+                if (sv.empty())
+                    return false;
+                std::string s(sv); // null-terminated for strtod
+                char* end = nullptr;
+                out = std::strtod(s.c_str(), &end);
+                return end == s.c_str() + sv.size() && end != s.c_str();
+            };
+            double x{}, y{}, z{};
+            if (!parseCoord(args[1], x) || !parseCoord(args[2], y) || !parseCoord(args[3], z))
+                return "tp: invalid coordinates";
+            ctx.gameLoop->enqueueSimCallback([ctx, targetIdx, x, y, z]() {
+                ctx.entityManager->forEach([&](fl::EntityState& state) {
+                    if (state.id.index == targetIdx) {
+                        state.transform.pos[0] = x;
+                        state.transform.pos[1] = y;
+                        state.transform.pos[2] = z;
+                        std::printf("[admin] teleported entity %u/%u to X:%+.1f Y:%+.1f Z:%+.1f\n", state.id.index,
+                                    state.id.generation, static_cast<float>(x), static_cast<float>(y),
+                                    static_cast<float>(z));
+                        std::fflush(stdout);
+                    }
+                });
+            });
+            char tpBuf[64];
+            std::snprintf(tpBuf, sizeof(tpBuf), "tp: queued entity %u to %.1f %.1f %.1f", targetIdx,
+                          static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+            return std::string(tpBuf);
+        });
 
     // reload_config
     registry.registerCommand("reload_config",
@@ -552,7 +569,7 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                     }
                     std::fflush(stdout);
                 });
-                return {};
+                return "shutdown: status queued";
             }
 
             // --cancel
@@ -571,7 +588,7 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                         std::printf("[admin] shutdown delayed by %u seconds\n", extra);
                     std::fflush(stdout);
                 });
-                return {};
+                return "shutdown: extension queued";
             }
 
             // --now or --in: confirmation gate.
