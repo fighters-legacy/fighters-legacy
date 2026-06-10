@@ -152,8 +152,10 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             std::string prefixed = std::string("[server] ") + line;
             if (console)
                 console->print(prefixed);
-            if (notice && first)
-                notice->setNotice(prefixed, 0);
+            if (notice && first) {
+                static constexpr uint32_t kMotdDisplaySeconds = 15;
+                notice->setNotice(prefixed, 0, kMotdDisplaySeconds);
+            }
             first = false;
         }
     }

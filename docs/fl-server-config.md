@@ -161,7 +161,7 @@ Rule 1: no teamkilling.
 ```
 
 Each line is printed separately in the client's debug console prefixed with `[server]`.
-The first line is also shown in the server notice banner.
+The first line is also shown in the server notice banner and auto-dismisses after 15 seconds.
 
 ### `password`
 
