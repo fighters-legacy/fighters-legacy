@@ -337,8 +337,8 @@ int main(int argc, char** argv) {
     broadcaster.setRateLimitParams(cfg.connectRateLimitCount, cfg.connectRateLimitWindowS, cfg.packetFloodMultiplier);
     broadcaster.setMaxConnectionsPerIp(cfg.maxConnectionsPerIp);
     // Seed the ground floor from the already-primed TerrainStreamer at the spawn origin.
-    // Entities will bounce off or stop at this elevation rather than falling indefinitely.
-    // Per-entity terrain height requires issue #252 (TerrainStreamer thread-safety).
+    // Used by FlightIntegrator::step as the physics floor and by onConnect for peer spawn
+    // altitude (peers spawn at groundElevation + 500 m AGL). Updated each frame below.
     broadcaster.setGroundElevation(static_cast<float>(terrainStreamer.heightAt(0.0, 0.0)));
     if (!cfg.banlistPath.empty()) {
         auto banned = loadIpListFile(cfg.banlistPath, log);

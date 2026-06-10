@@ -353,7 +353,8 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     m_net.send(peerId, &hello, sizeof(hello), /*reliable=*/true);
 
     EntityTransform t{};
-    t.pos[1] = 2000.0; // #252: hardcoded until terrain heightAt() is safe on the sim thread
+    constexpr double kSpawnAGL = 500.0;
+    t.pos[1] = static_cast<double>(m_groundElevation.load(std::memory_order_relaxed)) + kSpawnAGL;
     EntityId id = m_entityManager.spawn("builtin:debug-entity", t, peerId);
     if (id.valid()) {
         m_peerEntities[peerId] = id;
