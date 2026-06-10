@@ -54,10 +54,10 @@ class DebugConsole : public ITextInputHandler {
     bool tick(IInput& input);
 
     // Rebuild HudElement list for this frame.
-    // playerPos: current player world position (may be nullptr).
-    // When showPos is true and playerPos is non-null, a top-right readout is
-    // emitted even when the console is closed.
-    void buildHud(const glm::dvec3* playerPos = nullptr);
+    // camPos:    camera world position — always shown at top-right when non-null.
+    // playerPos: player entity world position — shown one line below camPos when
+    //            showPos is true and non-null.
+    void buildHud(const glm::dvec3* camPos = nullptr, const glm::dvec3* playerPos = nullptr);
 
     [[nodiscard]] std::span<const HudElement> elements() const {
         return {m_elems.data(), static_cast<std::size_t>(m_elemCount)};

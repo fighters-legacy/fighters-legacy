@@ -26,10 +26,10 @@ struct BuiltinFlightModel {
             d->geometry.wing_area_m2 = 30.f;
             d->geometry.wingspan_m = 8.f;
             d->geometry.mac_m = 3.75f;
-            d->geometry.fuel_kg = 9'999'999.f; // effectively infinite
-            d->geometry.ixx_kg_m2 = 500.f;
-            d->geometry.iyy_kg_m2 = 800.f;
-            d->geometry.izz_kg_m2 = 1000.f;
+            d->geometry.fuel_kg = 200.f; // 200 kg at 0.001 kg/s ≈ 55 h burn — effectively infinite
+            d->geometry.ixx_kg_m2 = 4000.f;
+            d->geometry.iyy_kg_m2 = 8000.f;
+            d->geometry.izz_kg_m2 = 8000.f;
 
             // CL table: 7 alpha × 2 Mach — speed-independent, no stall.
             // alpha_stall_deg = 90 so no CL cliff; table clamped at edges.
@@ -50,10 +50,13 @@ struct BuiltinFlightModel {
             d->drag_polar.speedbrake_cd = 0.f;
             d->drag_polar.gear_cd = 0.f;
 
-            // Strong self-levelling damping; zero alpha instability; strong authority.
+            // Pitch damping and elevator authority tuned for stable semi-implicit Euler
+            // integration at 60 Hz. cm_q=-8 keeps the pitch-damping stiffness ratio well
+            // below the stability threshold; cm_de=-0.5 gives ~90°/s equilibrium pitch
+            // rate at 150 m/s — agile but not snap-divergent.
             d->moments.cm_alpha = 0.f;
-            d->moments.cm_q = -25.f;
-            d->moments.cm_de = -3.f;
+            d->moments.cm_q = -8.f;
+            d->moments.cm_de = -0.5f;
             d->moments.cl_beta = 0.f;
             d->moments.cl_p = -2.f;
             d->moments.cl_da = 0.5f;

@@ -155,6 +155,29 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         if (!state || state->dead)
             continue;
         stepFlightSim(*fit->second, *state, inp, simDt);
+
+        // NaN/Inf detection — log immediately so the cause is visible before any crash.
+        const FlightState& fs = fit->second->state();
+        const bool badPos =
+            !std::isfinite(fs.pos_world[0]) || !std::isfinite(fs.pos_world[1]) || !std::isfinite(fs.pos_world[2]);
+        const bool badVel =
+            !std::isfinite(fs.vel_body[0]) || !std::isfinite(fs.vel_body[1]) || !std::isfinite(fs.vel_body[2]);
+        if (badPos || badVel) {
+            char msg[256];
+            std::snprintf(msg, sizeof(msg), "[flight peer=%u] NaN/Inf — pos=(%.3g,%.3g,%.3g) vel_body=(%.3g,%.3g,%.3g)",
+                          peerId, fs.pos_world[0], fs.pos_world[1], fs.pos_world[2], fs.vel_body[0], fs.vel_body[1],
+                          fs.vel_body[2]);
+            m_logger.log(LogLevel::Error, __FILE__, __LINE__, msg);
+        }
+        // Periodic state trace: once per second (60 Hz sim) for trajectory diagnostics.
+        if (tickIndex % 60 == 0) {
+            char msg[256];
+            std::snprintf(msg, sizeof(msg),
+                          "[flight peer=%u] tick=%llu pos=(%.1f,%.1f,%.1f) vel_body=(%.1f,%.1f,%.1f) thr=%.0f%%",
+                          peerId, static_cast<unsigned long long>(tickIndex), fs.pos_world[0], fs.pos_world[1],
+                          fs.pos_world[2], fs.vel_body[0], fs.vel_body[1], fs.vel_body[2], fs.throttle_actual * 100.f);
+            m_logger.log(LogLevel::Trace, __FILE__, __LINE__, msg);
+        }
     }
 
     m_entityManager.onTick(simDt, tickIndex);
@@ -326,22 +349,19 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     m_net.send(peerId, &hello, sizeof(hello), /*reliable=*/true);
 
     EntityTransform t{};
-    t.pos[1] = 2000.0; // spawn at 2000 m MSL — clears ~550 m procedural terrain base by ~1450 m
+    t.pos[1] = 2000.0; // #252: hardcoded until terrain heightAt() is safe on the sim thread
     EntityId id = m_entityManager.spawn("builtin:debug-entity", t, peerId);
     if (id.valid()) {
         m_peerEntities[peerId] = id;
         m_peerInputs[peerId] = {};
 
-        // Initialise FlightIntegrator at spawn position with some forward airspeed
-        // so the craft generates lift immediately.
         FlightState fs{};
         fs.pos_world[0] = static_cast<float>(t.pos[0]);
-        fs.pos_world[1] = static_cast<float>(t.pos[1]); // Y = altitude (both Y-up)
+        fs.pos_world[1] = static_cast<float>(t.pos[1]);
         fs.pos_world[2] = static_cast<float>(t.pos[2]);
-        fs.vel_body[0] = 40.f; // 40 m/s forward → lift from first tick
         fs.fuel_kg = BuiltinFlightModel::get()->geometry.fuel_kg;
         fs.mass_kg = BuiltinFlightModel::get()->geometry.mass_kg + fs.fuel_kg;
-        fs.throttle_actual = 0.4f; // pre-spooled to avoid initial stall
+        fs.throttle_actual = 0.4f; // pre-spooled to match client's initial throttle state
 
         auto fi = std::make_unique<FlightIntegrator>(BuiltinFlightModel::get());
         fi->reset(fs);
@@ -501,9 +521,12 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
         wind.turbulence_body[1] = turb * 0.3f * r;
         wind.turbulence_body[2] = turb * 0.5f * r;
     }
-    fi.step(static_cast<float>(simDt), ctrl, {}, wind);
+    fi.step(static_cast<float>(simDt), ctrl, {}, wind, m_groundElevation.load(std::memory_order_relaxed));
 
     const FlightState& fs = fi.state();
+    // Cache entity XZ so the main thread can steer terrain loading and update the floor.
+    m_entityX.store(fs.pos_world[0], std::memory_order_relaxed);
+    m_entityZ.store(fs.pos_world[2], std::memory_order_relaxed);
 
     // World velocity: rotate body velocity into world frame.
     float wv[3];

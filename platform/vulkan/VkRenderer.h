@@ -149,9 +149,10 @@ class VkRenderer : public IRenderer {
     // ── Per-frame stats ────────────────────────────────────────────────────
     FrameStats getFrameStats() const override;
 
-    // ── Debug overlay + 2D HUD ────────────────────────────────────────────
+    // ── Debug overlay + 2D overlays ───────────────────────────────────────
     void setOverlayLines(std::span<const std::string_view> lines) override;
-    void submitHudElements(std::span<const HudElement> elements) override;
+    void submitOverlayElements(std::span<const HudElement> elements) override;
+    void setConsoleElements(std::span<const HudElement> elements) override;
 
   private:
     // ── Core Vulkan objects ────────────────────────────────────────────────
@@ -342,6 +343,7 @@ class VkRenderer : public IRenderer {
 
     // ── Frame state ───────────────────────────────────────────────────────
     uint32_t m_currentFrame{0};
+    uint32_t m_framesRendered{0}; // guards timestamp query reads until queries are first written
     uint32_t m_currentImageIndex{0};
     uint64_t m_totalFrames{0};
     bool m_framebufferResized{false};
@@ -426,10 +428,11 @@ class VkRenderer : public IRenderer {
     float m_timestampPeriod{1.0f}; // nanoseconds per timestamp tick
     bool m_timestampSupported{false};
 
-    // ── Debug overlay + 2D HUD ────────────────────────────────────────────
-    std::vector<std::string_view> m_overlayLines; // set by setOverlayLines(), valid until endFrame
-    std::span<const HudElement> m_hudElements;    // set by submitHudElements(), cleared after pass
-    bool m_overlayReady{false};                   // true once createOverlayPipeline() succeeds
+    // ── Debug overlay + 2D overlays ───────────────────────────────────────
+    std::vector<std::string_view> m_overlayLines;  // set by setOverlayLines(), valid until endFrame
+    std::vector<HudElement> m_overlayElements;     // accumulated by submitOverlayElements(), cleared by endFrame
+    std::span<const HudElement> m_consoleElements; // set by setConsoleElements(), non-owning, cleared by endFrame
+    bool m_overlayReady{false};                    // true once createOverlayPipeline() succeeds
 
     VkDescriptorSetLayout m_overlayDsLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_overlayDsPool{VK_NULL_HANDLE};

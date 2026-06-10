@@ -41,15 +41,18 @@ CameraView CameraController::view(float aspectRatio, float fovY, float near) con
 
     switch (m_mode) {
     case CameraMode::Cockpit: {
-        // Camera sits at entity position, looking along entity forward + cockpit offsets.
-        // lookRot is applied in entity space: yaw around entity Y, pitch around entity X.
+        // Entity forward convention: body +X (matches flight model longitudinal axis and builtin
+        // tetrahedron orientation). Yaw rotates around body Y; pitch rotates around body +Z
+        // so that positive pitch tilts the view toward +Y (upward) when facing +X.
         glm::quat lookRot = glm::angleAxis(glm::radians(m_cockpitYaw), glm::vec3{0.f, 1.f, 0.f}) *
-                            glm::angleAxis(glm::radians(m_cockpitPitch), glm::vec3{1.f, 0.f, 0.f});
-        glm::vec3 viewDir = m_targetOri * lookRot * glm::vec3{0.f, 0.f, -1.f};
+                            glm::angleAxis(glm::radians(m_cockpitPitch), glm::vec3{0.f, 0.f, 1.f});
+        glm::vec3 viewDir = m_targetOri * lookRot * glm::vec3{1.f, 0.f, 0.f};
         cv.worldOrigin = m_targetPos;
-        glm::vec3 up{0.f, 1.f, 0.f};
+        // Use the entity's body +Y (up) in world space so that banking rolls the
+        // horizon. The look offset (yaw/pitch) does not affect the seat's up direction.
+        glm::vec3 up = m_targetOri * glm::vec3{0.f, 1.f, 0.f};
         if (std::abs(glm::dot(viewDir, up)) > 0.999f)
-            up = glm::vec3{1.f, 0.f, 0.f}; // fallback to avoid NaN near vertical
+            up = m_targetOri * glm::vec3{1.f, 0.f, 0.f}; // fallback: entity forward
         cv.view = glm::lookAt(glm::vec3(0.f), viewDir, up);
         break;
     }

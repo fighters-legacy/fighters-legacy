@@ -502,5 +502,6 @@ struct MockRenderer : public IRenderer {
         return {};
     }
     void setOverlayLines(std::span<const std::string_view>) override {}
-    void submitHudElements(std::span<const HudElement>) override {}
+    void submitOverlayElements(std::span<const HudElement>) override {}
+    void setConsoleElements(std::span<const HudElement>) override {}
 };

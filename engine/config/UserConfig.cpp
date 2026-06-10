@@ -18,6 +18,8 @@
 LogLevel parseLogLevel(const char* s) {
     if (!s)
         return LogLevel::Info;
+    if (std::strcmp(s, "trace") == 0)
+        return LogLevel::Trace;
     if (std::strcmp(s, "debug") == 0)
         return LogLevel::Debug;
     if (std::strcmp(s, "info") == 0)
@@ -31,6 +33,8 @@ LogLevel parseLogLevel(const char* s) {
 
 static const char* logLevelString(LogLevel l) {
     switch (l) {
+    case LogLevel::Trace:
+        return "trace";
     case LogLevel::Debug:
         return "debug";
     case LogLevel::Info:

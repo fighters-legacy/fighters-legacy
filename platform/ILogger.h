@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-enum class LogLevel : uint8_t { Debug, Info, Warn, Error };
+enum class LogLevel : uint8_t { Trace, Debug, Info, Warn, Error };
 
 // Platform-specific logging backend (OutputDebugString on Windows, os_log on
 // macOS, stderr/journald on Linux). Engine code should call this through a thin

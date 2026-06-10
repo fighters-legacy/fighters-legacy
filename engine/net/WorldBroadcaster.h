@@ -99,6 +99,21 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Return a copy of the current ban set (called from sim thread to save to file).
     std::unordered_set<std::string> getBannedAddresses() const;
 
+    // Set the terrain floor elevation (m) used for ground collision in each peer's
+    // FlightIntegrator. Thread-safe; may be called from any thread.
+    void setGroundElevation(float elev) noexcept {
+        m_groundElevation.store(elev, std::memory_order_relaxed);
+    }
+
+    // World-XZ position of the most recently stepped peer entity (sim thread writes;
+    // main thread may read to steer terrain loading and update setGroundElevation).
+    float cachedEntityX() const noexcept {
+        return m_entityX.load(std::memory_order_relaxed);
+    }
+    float cachedEntityZ() const noexcept {
+        return m_entityZ.load(std::memory_order_relaxed);
+    }
+
     // Configure rate limiting; call before gameLoop.start().
     void setRateLimitParams(int maxConnects, int windowSeconds, int floodMultiplier);
 
@@ -162,8 +177,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::unordered_map<uint32_t, std::unique_ptr<FlightIntegrator>> m_peerFlightSims;
 
     std::atomic<int> m_activePeerCount{0};
-    uint64_t m_weatherBroadcastTick{0}; // throttle weather broadcasts to ~6 Hz
-    uint32_t m_turbRng{0xCAFEBABEu};    // per-broadcaster RNG for turbulence perturbation
+    uint64_t m_weatherBroadcastTick{0};        // throttle weather broadcasts to ~6 Hz
+    uint32_t m_turbRng{0xCAFEBABEu};           // per-broadcaster RNG for turbulence perturbation
+    std::atomic<float> m_groundElevation{0.f}; // floor elevation passed to each FlightIntegrator::step
+    std::atomic<float> m_entityX{0.f};         // last stepped entity world-X (sim writes; main reads)
+    std::atomic<float> m_entityZ{0.f};         // last stepped entity world-Z
 
     std::unordered_set<std::string> m_bannedAddresses; // in-memory ban list; sim-thread only
 

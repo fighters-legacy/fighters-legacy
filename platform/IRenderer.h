@@ -85,10 +85,15 @@ class IRenderer {
     // The span and all string_view data must remain alive until endFrame returns.
     virtual void setOverlayLines(std::span<const std::string_view> lines) = 0;
 
-    // ── 2D HUD ──────────────────────────────────────────────────────────────
-    // Renders 2D HUD elements (text, lines, rects) over the final swapchain
-    // image using the same font atlas as the debug overlay.
-    // Must be called between beginFrame and endFrame. Empty span = no HUD.
-    // All string_view data in elements must remain alive until endFrame returns.
-    virtual void submitHudElements(std::span<const HudElement> elements) = 0;
+    // ── 2D game overlay ──────────────────────────────────────────────────────
+    // Appends 2D overlay elements (cockpit HUD, rain, notices, etc.) to this
+    // frame's list. May be called multiple times per frame. Copies elements into
+    // renderer-owned storage; caller lifetime is irrelevant. Cleared by endFrame.
+    virtual void submitOverlayElements(std::span<const HudElement> elements) = 0;
+
+    // ── Debug console overlay ─────────────────────────────────────────────────
+    // Sets the debug console overlay for this frame (engine-level command shell).
+    // Non-owning view; the span must remain valid until endFrame returns.
+    // Cleared by endFrame.
+    virtual void setConsoleElements(std::span<const HudElement> elements) = 0;
 };

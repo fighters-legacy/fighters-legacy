@@ -27,7 +27,7 @@ When switching to Free camera while a player entity exists, the pivot snaps to t
 | W / S | Pan forward / backward |
 | A / D | Pan left / right |
 | Q / E | Pan down / up (clamped to terrain surface + 2 m) |
-| R | Reset camera pivot to world origin (clamped above terrain) |
+| R | Reset camera pivot to player entity position (or world origin if no entity) |
 
 ### Chase camera (F2)
 
@@ -151,7 +151,7 @@ Cycles Off → Compact → Full. **Full mode** includes a 128-position rolling f
 
 **Toggle:** `` ` `` (backtick / grave). **Close:** Escape.
 
-The console is a half-screen drop-down overlay rendered over the HUD. All game inputs (flight controls and camera) are suppressed while it is open; throttle is held at its last value so opening the console does not cut the engines.
+The console is a half-screen drop-down overlay. It is fully independent of the cockpit HUD and available in any game state. All game inputs (flight controls and camera) are suppressed while it is open; throttle is held at its last value so opening the console does not cut the engines.
 
 ### Editing
 
@@ -172,7 +172,7 @@ The console is a half-screen drop-down overlay rendered over the HUD. All game i
 | `spawn <type> <x> <y> <z>` | Spawn entity by id or numeric index at world position |
 | `kill <idx>` | Remove entity from simulation (queued to sim thread) |
 | `tp <x> <y> <z>` | Teleport player entity to world position |
-| `toggle_pos` | Toggle world-position readout in top-right corner (all camera modes) |
+| `toggle_pos` | Toggle entity world-position readout below the camera position display |
 | `set_weather <preset>` | Set weather instantly: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm`. Queued to sim thread; takes effect on next tick. |
 | `set_difficulty <level>` | *(stub — Phase 2b)* |
 | `reload_content` | *(stub — see issue #152)* |
@@ -198,6 +198,6 @@ The in-game clock advances at **10× real time** by default (1 real minute = 10 
 
 ### Position widget
 
-`toggle_pos` enables a persistent `X/Y/Z` readout in the top-right corner. It remains
-visible in all camera modes even when the console is closed. Toggle it off with a second
-`toggle_pos`.
+The camera world position (`CAM x y z`) is always displayed in the top-right corner in all
+camera modes. `toggle_pos` adds a second line showing the player entity position (`ENT x y z`)
+below it; toggle it off with a second `toggle_pos`.

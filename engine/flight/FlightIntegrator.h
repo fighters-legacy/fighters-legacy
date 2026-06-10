@@ -37,10 +37,12 @@ class FlightIntegrator {
     void reset(const FlightState& state);
 
     // Advance the simulation by dt seconds.
-    // ctrl: pilot or AI inputs for this tick.
-    // payload: weapon mass and drag contribution for this tick.
-    // wind: optional weather perturbation; zero-initialised default = no wind effect.
-    void step(float dt, const ControlInput& ctrl, const PayloadEffect& payload, const WindInfluence& wind = {});
+    // ctrl:       pilot or AI inputs for this tick.
+    // payload:    weapon mass and drag contribution for this tick.
+    // wind:       optional weather perturbation; zero-initialised default = no wind effect.
+    // groundElev: terrain elevation (m) used for collision response; 0 = sea-level floor.
+    void step(float dt, const ControlInput& ctrl, const PayloadEffect& payload, const WindInfluence& wind = {},
+              float groundElev = 0.f);
 
     [[nodiscard]] const FlightState& state() const {
         return m_state;

@@ -7,11 +7,11 @@
 #include "ClientNetEventHandler.h"
 #include "ENetNetwork.h"
 #include "FileLogger.h"
-#include "GameHud.h"
 #include "HapticController.h"
 #include "IWindowEventHandler.h"
 #include "LocalServer.h"
 #include "Platform.h"
+#include "ServerNotice.h"
 #include "Version.h"
 #include "audio/MusicManager.h"
 #include "audio/PlaylistLoader.h"
@@ -32,11 +32,14 @@
 #include "perf/PerformanceOverlay.h"
 #include "render/BuiltinGeometry.h"
 #include "render/CameraController.h"
+#include "render/FlightHud.h"
+#include "render/IHud.h"
 #include "render/ParticleSystem.h"
 #include "render/RenderSnapshot.h"
 #include "render/SceneRenderer.h"
 #include "render/SimRenderBridge.h"
 #include "render/TerrainStreamer.h"
+#include "render/WindshieldRain.h"
 #include "sandbox/SandboxInspector.h"
 #include "sdl3/SDL3AsyncFilesystem.h"
 #include "sdl3/SDL3Cursor.h"
@@ -49,6 +52,7 @@
 
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -319,6 +323,7 @@ int main(int argc, char** argv) {
                                     },
                                     assets, *p.renderer};
     sceneRenderer.setDrawDistance(rendererSettings.drawDistanceKm);
+    sceneRenderer.setLogger(rawLogger);
 
     fl::TerrainStreamer terrainStreamer(fl::builtinWorldTerrainManifest(), assets, *p.asyncFilesystem,
                                         p.renderer.get());
@@ -368,7 +373,7 @@ int main(int argc, char** argv) {
         debugDef.maxHp = 100.0f;
         entityRegistry.registerType(std::move(debugDef));
 
-        cameraController.setFreeOrbit({0.0, 2000.0, 0.0}, 0.0f, -10.0f, 200.0f);
+        cameraController.setFreeOrbit({0.0, 2000.0, 0.0}, 0.0f, 30.0f, 30.0f);
     }
 
     std::optional<SandboxInspector> inspector;
@@ -392,10 +397,13 @@ int main(int argc, char** argv) {
     }
 
     EnvironmentState env = localServer.initialEnvironment();
-    GameHud gameHud;
+    fl::FlightHud flightHud;          // builtin HUD; future: per-aircraft from content pack
+    fl::IHud* activeHud = &flightHud; // pointer swapped when content pack provides a HUD
+    fl::WindshieldRain windshieldRain;
+    ServerNotice serverNotice;
     HapticController hapticController(*p.input);
     ClientNetEventHandler clientHandler(renderBridge, entityRegistry, *rawLogger, *clientNet, env);
-    clientHandler.hud = &gameHud;
+    clientHandler.notice = &serverNotice;
     clientNet->setEventHandler(&clientHandler);
     clientNet->connect("127.0.0.1", 4778);
 
@@ -422,6 +430,7 @@ int main(int argc, char** argv) {
 
     std::array<ParticleEmitterState, 9> precipBuf{};
     static uint32_t inputSeq = 0;
+    auto lastInputTime = std::chrono::steady_clock::now();
 
     bool wasFocused = true;
     bool running = true;
@@ -510,9 +519,15 @@ int main(int argc, char** argv) {
         clientNet->service(0);
         discoveryListener.poll();
 
-        // Flight input → send MsgClientInput to local server.
+        // Flight input → send MsgClientInput to local server (rate-limited to 60 Hz
+        // to avoid triggering the server's per-peer flood guard).
         bool weaponFired = false;
-        {
+        do {
+            using clock = std::chrono::steady_clock;
+            auto inputNow = clock::now();
+            if (std::chrono::duration<float>(inputNow - lastInputTime).count() < 1.0f / 60.0f)
+                break;
+            lastInputTime = inputNow;
             const bool* keys = SDL_GetKeyboardState(nullptr);
             fl::MsgClientInput inp;
             inp.seqNum = inputSeq++;
@@ -597,7 +612,7 @@ int main(int argc, char** argv) {
                 inp.throttle = camInput.throttle();
             }
             clientNet->send(0, &inp, sizeof(inp), /*reliable=*/true);
-        }
+        } while (false);
 
         // Render.
         float alpha = clientHandler.tickAlpha.get();
@@ -662,11 +677,12 @@ int main(int argc, char** argv) {
 
         sceneRenderer.renderFrame(alpha, cam, env, sandboxEmitters);
 
-        // HUD: GameHud (flight data + notices) and DebugConsole are independent layers.
         const float terrainElev =
             playerEntry ? static_cast<float>(terrainStreamer.heightAt(playerEntry->position.x, playerEntry->position.z))
                         : 0.0f;
-        gameHud.update(cameraController.mode(), playerEntry, env, terrainElev, isSnow);
+        const bool cockpit = (cameraController.mode() == fl::CameraMode::Cockpit);
+        activeHud->update(cockpit ? playerEntry : nullptr, env.timeOfDay, terrainElev);
+        windshieldRain.update(cockpit ? (1.0f / 60.0f) : 0.0f, cockpit ? env : EnvironmentState{}, cockpit && isSnow);
         hapticController.update(playerEntry, weaponFired, terrainElev, 1.0f / 60.0f);
         {
             glm::dvec3 playerPos{};
@@ -675,7 +691,7 @@ int main(int argc, char** argv) {
                 playerPos = playerEntry->position;
                 playerPosPtr = &playerPos;
             }
-            dbgConsole.buildHud(playerPosPtr);
+            dbgConsole.buildHud(&cam.worldOrigin, playerPosPtr);
         }
 
         // F3 performance overlay.
@@ -697,14 +713,10 @@ int main(int argc, char** argv) {
             p.renderer->setOverlayLines(perfOverlay.lines());
         }
 
-        // Merge HUD layers and submit.
-        {
-            auto hudElems = gameHud.buildElements();
-            auto dbgElems = dbgConsole.elements();
-            std::vector<HudElement> allHud(hudElems.begin(), hudElems.end());
-            allHud.insert(allHud.end(), dbgElems.begin(), dbgElems.end());
-            p.renderer->submitHudElements(allHud);
-        }
+        p.renderer->submitOverlayElements(activeHud->elements());
+        p.renderer->submitOverlayElements(windshieldRain.elements());
+        p.renderer->submitOverlayElements(serverNotice.buildElements());
+        p.renderer->setConsoleElements(dbgConsole.elements());
 
         p.renderer->endFrame();
         p.input->flush();
@@ -712,9 +724,12 @@ int main(int argc, char** argv) {
     }
 
     // Step 21: Clean shutdown.
+    // Disconnect ENet first so fl-server processes the peer disconnect event while its
+    // sim thread is still alive; its own drainPeers() then exits immediately instead of
+    // waiting for a DISCONNECT ACK that would never arrive from a dead client.
     hapticController.onPause(0);
-    localServer.stop();
     clientNet->disconnect();
+    localServer.stop();
     clientNet->shutdown();
     inspector.reset();
     musicManager.shutdown();

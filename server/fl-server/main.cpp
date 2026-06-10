@@ -336,6 +336,10 @@ int main(int argc, char** argv) {
     fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *net, *log, &weatherController);
     broadcaster.setRateLimitParams(cfg.connectRateLimitCount, cfg.connectRateLimitWindowS, cfg.packetFloodMultiplier);
     broadcaster.setMaxConnectionsPerIp(cfg.maxConnectionsPerIp);
+    // Seed the ground floor from the already-primed TerrainStreamer at the spawn origin.
+    // Entities will bounce off or stop at this elevation rather than falling indefinitely.
+    // Per-entity terrain height requires issue #252 (TerrainStreamer thread-safety).
+    broadcaster.setGroundElevation(static_cast<float>(terrainStreamer.heightAt(0.0, 0.0)));
     if (!cfg.banlistPath.empty()) {
         auto banned = loadIpListFile(cfg.banlistPath, log);
         char buf[128];
@@ -421,7 +425,16 @@ int main(int argc, char** argv) {
         if (beacon)
             beacon->tick(broadcaster.getPeerCount());
         p.asyncFilesystem->service();
-        terrainStreamer.update(glm::dvec3(0.0, 0.0, 0.0));
+        // Follow the entity so terrain chunks are loaded at its current position.
+        const double entityX = static_cast<double>(broadcaster.cachedEntityX());
+        const double entityZ = static_cast<double>(broadcaster.cachedEntityZ());
+        terrainStreamer.update(glm::dvec3(entityX, 0.0, entityZ));
+        // Update the physics floor to the actual terrain height at the entity's position.
+        // Skipped when the chunk isn't loaded yet (heightAt returns 0) to avoid a
+        // momentary floor-at-sea-level spike while the chunk generates.
+        const float h = static_cast<float>(terrainStreamer.heightAt(entityX, entityZ));
+        if (h > 1.f)
+            broadcaster.setGroundElevation(h);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 

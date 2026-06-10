@@ -218,14 +218,21 @@ bool DebugConsole::pushRect(float x0, float y0, float x1, float y1, float r, flo
 // buildHud
 // ---------------------------------------------------------------------------
 
-void DebugConsole::buildHud(const glm::dvec3* playerPos) {
+void DebugConsole::buildHud(const glm::dvec3* camPos, const glm::dvec3* playerPos) {
     m_elemCount = 0;
     m_strCount = 0;
 
-    // Position widget — visible in any camera mode when enabled
+    // Camera position — always visible when supplied; 2× scale for readability
+    if (camPos) {
+        pushText(kPosX, kPosY, 1.0f, 0.2f, 0.2f, "CAM %+.0f %+.0f %+.0f", static_cast<float>(camPos->x),
+                 static_cast<float>(camPos->y), static_cast<float>(camPos->z));
+        m_elems[m_elemCount - 1].scale = 2.0f;
+    }
+
+    // Entity position — 3× line-step below to clear the 2× cam text
     if (m_showPos && playerPos) {
-        pushText(kPosX, kPosY, 0.0f, 0.7f, 0.0f, "X:%+.1f Y:%+.1f Z:%+.1f", static_cast<float>(playerPos->x),
-                 static_cast<float>(playerPos->y), static_cast<float>(playerPos->z));
+        pushText(kPosX, kPosY + kLineStep * 3.0f, 0.0f, 0.7f, 0.0f, "ENT %+.0f %+.0f %+.0f",
+                 static_cast<float>(playerPos->x), static_cast<float>(playerPos->y), static_cast<float>(playerPos->z));
     }
 
     if (!m_open)

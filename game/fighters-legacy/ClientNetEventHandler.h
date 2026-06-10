@@ -9,8 +9,8 @@
 #include <cstdint>
 
 class DebugConsole;
-class GameHud;
 class ILogger;
+class ServerNotice;
 class INetwork;
 
 namespace fl {
@@ -34,7 +34,7 @@ struct ClientTickAlpha {
 
 // Parses ENet packets from the local fl-server subprocess and feeds them into
 // the render bridge and environment state. Forwards server notices to the debug
-// console and the flight HUD.
+// console and the server notice overlay.
 struct ClientNetEventHandler : INetworkEventHandler {
     fl::SimRenderBridge& bridge;
     fl::EntityTypeRegistry& registry;
@@ -42,7 +42,7 @@ struct ClientNetEventHandler : INetworkEventHandler {
     INetwork& net;
     EnvironmentState& env;          // updated on MsgWeatherState
     DebugConsole* console{nullptr}; // optional: server notices are printed here
-    GameHud* hud{nullptr};          // optional: server notices shown as HUD banner
+    ServerNotice* notice{nullptr};  // optional: server notices shown as screen banner
 
     uint32_t assignedEntityIdx{0};
     uint32_t assignedEntityGen{0};

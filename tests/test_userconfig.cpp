@@ -10,6 +10,7 @@
 // ---------------------------------------------------------------------------
 
 TEST_CASE("parseLogLevel: known strings map correctly", "[userconfig]") {
+    CHECK(parseLogLevel("trace") == LogLevel::Trace);
     CHECK(parseLogLevel("debug") == LogLevel::Debug);
     CHECK(parseLogLevel("info") == LogLevel::Info);
     CHECK(parseLogLevel("warn") == LogLevel::Warn);

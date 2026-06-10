@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -43,6 +44,7 @@ struct LocalServer::Impl {
     // unique_ptr<Subprocess> only requires Subprocess to be complete here, which it is.
     std::unique_ptr<Subprocess> sub;
     std::string sessionToken; // 24-char hex token generated at start(); passed to fl-server via --admin-token
+    std::thread logThread;    // forwards fl-server stdout to stderr after startup
 };
 
 // ---------------------------------------------------------------------------
@@ -54,8 +56,7 @@ LocalServer::LocalServer(ILogger& log) : m_log(log) {}
 // Explicit destructor defined here so the compiler sees Impl as a complete type
 // when unique_ptr<Impl> is destroyed (pimpl pattern requirement).
 LocalServer::~LocalServer() {
-    if (m_impl && m_impl->sub && m_impl->sub->valid())
-        m_impl->sub->stop();
+    stop();
 }
 
 bool LocalServer::start(const char* bindAddr, uint16_t port) {
@@ -102,8 +103,25 @@ bool LocalServer::start(const char* bindAddr, uint16_t port) {
             std::snprintf(buf, sizeof(buf), "[fl-server] %s", line->c_str());
             m_log.log(LogLevel::Info, __FILE__, __LINE__, buf);
         }
-        if (line->find("listening on") != std::string::npos)
+        if (line->find("listening on") != std::string::npos) {
+            // Forward all subsequent fl-server output to stderr so crash messages
+            // are visible in the developer's terminal.
+            Subprocess* subPtr = m_impl->sub.get();
+            m_impl->logThread = std::thread([subPtr]() {
+                while (true) {
+                    auto l = subPtr->readStdoutLine(200);
+                    if (!l) {
+                        if (!subPtr->isRunning()) {
+                            std::fprintf(stderr, "[fl-server] process exited\n");
+                            break;
+                        }
+                        continue;
+                    }
+                    std::fprintf(stderr, "[fl-server] %s\n", l->c_str());
+                }
+            });
             return true;
+        }
         if (line->find("bind failed") != std::string::npos || line->find("network init failed") != std::string::npos) {
             m_log.log(LogLevel::Error, __FILE__, __LINE__, "LocalServer: fl-server failed to bind — see above");
             return false;
@@ -121,6 +139,8 @@ std::string_view LocalServer::sessionToken() const {
 void LocalServer::stop() {
     if (m_impl && m_impl->sub && m_impl->sub->valid())
         m_impl->sub->stop();
+    if (m_impl && m_impl->logThread.joinable())
+        m_impl->logThread.join();
 }
 
 bool LocalServer::isRunning() const {
@@ -129,9 +149,9 @@ bool LocalServer::isRunning() const {
 
 EnvironmentState LocalServer::initialEnvironment() const {
     // Return a sensible default matching fl-server's startup defaults
-    // (PartlyCloudy, 09:00) before MsgWeatherState has arrived.
+    // (PartlyCloudy, 12:00) before MsgWeatherState has arrived.
     EnvironmentState env{};
-    float tod = 9.0f;
+    float tod = 12.0f;
     fl::WeatherController::applyPresetToEnv(fl::WeatherPreset::PartlyCloudy, tod, env);
     env.timeOfDay = tod;
     return env;
