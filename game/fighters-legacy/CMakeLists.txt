@@ -1,8 +1,10 @@
 if(TARGET platform-sdl3 AND TARGET platform-vulkan)
     add_executable(fighters-legacy
         main.cpp
+        Game.cpp
         ClientNetEventHandler.cpp
         CameraInput.cpp
+        FlightInputCollector.cpp
         HapticController.cpp
         LocalServer.cpp
     )

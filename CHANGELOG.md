@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **game**: introduce `Game` class (pimpl) encapsulating the full application lifecycle; `main.cpp` reduced from 590 lines to 20; init sequence split into six named private methods (`initPlatform`, `initWindowAndRenderer`, `initContent`, `initGameSystems`, `initNetwork`, `initDebugConsole`); all state moved from `main()` locals into `GameImpl`; extract `FlightInputCollector`, `PrecipitationController`, and `CameraInput::pollModeKeys`; add named free functions for audio listener, roll angle, perf overlay, and player lookup — pure structural refactor, no behavioral change
+
 ### Added
 
 - **network**: `MsgMotd` (0x08, variable-length, up to 65535 chars) delivers `[server].motd` to each connecting client after `MsgConnectAck`; multi-line text split on `\n` prints each line to the debug console prefixed `[server]`; first line also shown in the server notice banner; `reload_config` hot-reloads the MOTD for subsequent connections

@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 
 class DebugConsole;
+class IInput;
 
 namespace fl {
 class CameraController;
@@ -17,14 +18,16 @@ enum class CameraMode : uint8_t;
 // variables that lived in game/main.cpp.
 class CameraInput {
   public:
+    // Detect F1/F2/F4 camera mode switches and backtick console toggle.
+    // Call once per frame before update().
+    void pollModeKeys(fl::CameraController& ctrl, DebugConsole& console, IInput& input,
+                      const fl::EntityRenderEntry* player);
+
     // Update controller based on current SDL keyboard/mouse state.
     // console is queried to suppress camera movement when the console is open.
     void update(fl::CameraController& ctrl,
                 const fl::EntityRenderEntry* player, // nullptr = no snapshot yet
                 const DebugConsole& console, fl::TerrainStreamer& terrain);
-
-    // Reset per-mode state when the user switches camera modes (F1/F2/F4).
-    void onModeSwitch(fl::CameraMode newMode, const fl::EntityRenderEntry* player);
 
     // Persistent throttle [0,1] shared between camera and flight input.
     float throttle() const {
@@ -39,6 +42,9 @@ class CameraInput {
     }
 
   private:
+    // Reset per-mode state when the user switches camera modes.
+    void onModeSwitch(fl::CameraMode newMode, const fl::EntityRenderEntry* player);
+
     // Free / orbit state
     glm::dvec3 m_sbPivot{0.0, 2000.0, 0.0};
     float m_sbYaw{0.f};
@@ -56,4 +62,9 @@ class CameraInput {
     float m_lastMx{0.f};
     float m_lastMy{0.f};
     bool m_firstFrame{true};
+    // Mode-key edge detection
+    bool m_f1Prev{false};
+    bool m_f2Prev{false};
+    bool m_f4Prev{false};
+    bool m_gravePrev{false};
 };
