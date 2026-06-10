@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "CameraInput.h"
 
+#include "IInput.h"
 #include "debug/DebugConsole.h"
 #include "render/CameraController.h"
 #include "render/RenderSnapshot.h"
@@ -15,6 +16,38 @@
 // Degrees to radians helper
 static float toRad(float deg) {
     return deg * (glm::pi<float>() / 180.f);
+}
+
+void CameraInput::pollModeKeys(fl::CameraController& ctrl, DebugConsole& console, IInput& input,
+                               const fl::EntityRenderEntry* player) {
+    const bool* keys = SDL_GetKeyboardState(nullptr);
+
+    const bool graveNow = keys[SDL_SCANCODE_GRAVE] != 0;
+    if (graveNow && !m_gravePrev) {
+        if (console.isOpen())
+            console.close(input);
+        else
+            console.open(input);
+    }
+    m_gravePrev = graveNow;
+
+    if (!console.isOpen()) {
+        if (keys[SDL_SCANCODE_F1] && !m_f1Prev) {
+            ctrl.setMode(fl::CameraMode::Cockpit);
+            onModeSwitch(fl::CameraMode::Cockpit, player);
+        }
+        if (keys[SDL_SCANCODE_F2] && !m_f2Prev) {
+            ctrl.setMode(fl::CameraMode::Chase);
+            onModeSwitch(fl::CameraMode::Chase, player);
+        }
+        if (keys[SDL_SCANCODE_F4] && !m_f4Prev) {
+            ctrl.setMode(fl::CameraMode::Free);
+            onModeSwitch(fl::CameraMode::Free, player);
+        }
+    }
+    m_f1Prev = keys[SDL_SCANCODE_F1] != 0;
+    m_f2Prev = keys[SDL_SCANCODE_F2] != 0;
+    m_f4Prev = keys[SDL_SCANCODE_F4] != 0;
 }
 
 void CameraInput::adjustThrottle(float delta) {
