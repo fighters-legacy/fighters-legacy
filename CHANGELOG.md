@@ -14,6 +14,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **network**: connecting peers now spawn at terrain height plus 500 m AGL instead of a hardcoded 2000 m; `WorldBroadcaster::onConnect` reads the atomic `m_groundElevation` (seeded from `terrainStreamer.heightAt(0, 0)` at startup) on the sim thread without a data race (#252)
 - **game**: Cockpit camera (F1) now rolls the horizon correctly when the aircraft banks; the `up` vector in `CameraController` was hardcoded to world +Y, so aileron roll had no visual effect — it now tracks the entity's body +Y direction in world space
 - **flight**: Elevator input no longer causes the entity to spin out of control; `iyy_kg_m2` increased from 800 to 8 000, `cm_de` reduced from −3 to −0.5, and `cm_q` reduced from −25 to −8 in `BuiltinFlightModel` — the previous values violated the semi-implicit Euler stability criterion and caused pitch-rate divergence within a single tick at any flight speed
 - **flight**: Entities no longer fall through terrain; `FlightIntegrator::step` accepts a `groundElev` floor and applies a bounce response (CoR 0.35) or stops at low impact speed; `WorldBroadcaster` tracks the entity's world-XZ atomically so the fl-server admin loop can call `terrainStreamer.heightAt` at the entity's actual position and update `setGroundElevation` each 50 ms tick — the terrain streamer also follows the entity so LOD-0 chunks stay loaded at the flight location; AGL no longer goes negative because the physics floor now matches the terrain under the entity
