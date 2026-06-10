@@ -382,6 +382,9 @@ int main(int argc, char** argv) {
     broadcaster.setShutdownCallback([&]() { g_quit = 1; });
     registerServerCommands(adminRegistry, adminCtx);
 
+    if (!cfg.motd.empty())
+        broadcaster.setMotd(cfg.motd);
+
     if (!cfg.operatorPassword.empty()) {
         broadcaster.setOperatorPassword(cfg.operatorPassword);
         broadcaster.setAdminDispatch([&adminRegistry](std::string_view cmd) { return adminRegistry.dispatch(cmd); });

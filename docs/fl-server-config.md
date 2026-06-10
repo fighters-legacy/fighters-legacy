@@ -145,7 +145,18 @@ not on a separate server-level flag.
 |---|---|
 | string | `""` (no message) |
 
-Message shown to connecting clients. Empty string disables the message.
+Message delivered to each client immediately after `MsgConnectAck` via `MsgMotd` (0x08).
+Empty string disables the MOTD. Multi-line MOTDs are supported; use a TOML triple-quoted string:
+
+```toml
+motd = """
+Welcome to the server!
+Rule 1: no teamkilling.
+"""
+```
+
+Each line is printed separately in the client's debug console prefixed with `[server]`.
+The first line is also shown in the server notice banner.
 
 ### `password`
 
@@ -544,7 +555,7 @@ process.
 | `spawn` | `<type> <x> <y> <z>` | Spawn a registered entity type at the given world position |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
 | `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's debug console to teleport the player entity |
-| `reload_config` | — | Re-read `server.toml` and apply: `name` (reflected in next LAN beacon broadcast), `motd` |
+| `reload_config` | — | Re-read `server.toml` and apply: `name` (reflected in next LAN beacon broadcast), `motd` (takes effect for new connections) |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
 | `shutdown` | `[--in <dur>] [--interval <dur>] [--delay <dur>] [--cancel] [--now] [--force] [--reason <text>]` | Schedule or cancel a graceful shutdown with countdown notices to connected clients; `--now` exits immediately after notifying clients; `--interval` overrides `shutdown.warning_interval_s` for this run; `--force` required when `shutdown.require_confirm = true` (default); `--reason` prepends custom operator text to each countdown broadcast (long reasons are truncated to fit in `MsgServerNotice::text[60]`; `--reason` stops consuming tokens at the next `--` flag) |
@@ -557,7 +568,7 @@ process.
 | Field | Takes effect |
 |---|---|
 | `server.name` | Next LAN beacon broadcast |
-| `server.motd` | Stored in memory; delivery to clients pending (issue tracker) |
+| `server.motd` | Takes effect for each subsequent client connection |
 | `security.banlist_path` | On next `reload_banlist` command |
 | `security.allowlist_path` | On next `reload_allowlist` command |
 

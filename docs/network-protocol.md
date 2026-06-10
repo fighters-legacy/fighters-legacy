@@ -36,6 +36,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
 | `AdminCommand` | `0x06` | client→server | reliable | 128 bytes | Operator-authenticated admin command. Additive ID — old servers silently discard. |
 | `AdminResponse` | `0x07` | server→client | reliable | 128 bytes | Command result text, unicast to the requesting peer. Additive ID — old clients silently discard. |
+| `Motd` | `0x08` | server→client | reliable | 2 + len(text) bytes | MOTD delivered once per connection after `MsgConnectAck`; variable-length. Additive ID — old clients silently discard. |
 | `LanBeacon` | `0x10` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast |
 
 ## Struct Definitions
@@ -216,6 +217,28 @@ The `text` field is null-terminated UTF-8; guaranteed within 125 bytes by the se
 
 **Known limitation:** response text is capped at 125 characters. Commands with long output
 (e.g. `peers` on a full server) will be silently truncated on the wire.
+
+### MsgMotd — variable length
+
+Reliable, server→client unicast. Sent once per connection immediately after `MsgConnectAck`,
+only when `[server].motd` is non-empty in `server.toml`. Old clients that do not recognise
+msgId `0x08` silently discard — `kProtocolVersion` is **not** bumped.
+
+The text is null-terminated UTF-8; the server caps the payload at `kMaxMotdBytes = 65535`
+usable characters. Multi-line MOTDs use `\n` or `\r\n` line endings — the client splits on
+newlines, prints each non-empty line to the debug console prefixed `[server]`, and shows the
+first line in the server notice banner.
+
+| Offset | Size | Field | Type | Notes |
+|---|---|---|---|---|
+| 0 | 1 | `msgId` | `uint8_t` | `0x08` |
+| 1 | ≤ 65535 | `text` | `char[]` | null-terminated UTF-8 MOTD; server caps at `kMaxMotdBytes` usable chars |
+
+Packet size = `1 + strlen(text) + 1`. The packet has no fixed trailing padding; ENet
+fragments automatically if the text exceeds the MTU.
+
+`MsgId::Motd = 0x08` is an additive message ID — clients that do not recognize it silently
+discard without error. `kProtocolVersion` is **not** bumped.
 
 ### MsgLanBeacon — 74 bytes
 

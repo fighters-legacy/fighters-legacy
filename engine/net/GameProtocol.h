@@ -14,6 +14,10 @@ static constexpr uint8_t kNetChUnreliable = 1;
 // Clients that receive a MsgHello with a different protocolVersion must disconnect.
 static constexpr uint16_t kProtocolVersion = 1;
 
+// Server-enforced maximum byte length of the MsgMotd text payload (NUL terminator excluded).
+// Client enforces the same cap on receive to guard against oversized packets.
+static constexpr std::size_t kMaxMotdBytes = 65535;
+
 enum class MsgId : uint8_t {
     Hello = 0x00,         // server→client, reliable: first message sent on every new connection
     ConnectAck = 0x01,    // server→client, reliable: sent once on connect
@@ -23,7 +27,8 @@ enum class MsgId : uint8_t {
     ServerNotice = 0x05,  // server→client, reliable: shutdown countdown and operator notices; additive ID
     AdminCommand = 0x06,  // client→server, reliable: operator-authenticated admin command; additive ID
     AdminResponse = 0x07, // server→client, reliable: result text from dispatched admin command; additive ID
-    LanBeacon = 0x10,     // raw UDP broadcast — not sent over ENet; server→LAN presence packet
+    Motd = 0x08, // server→client, reliable: MOTD sent once on connect after ConnectAck; additive ID; variable-length
+    LanBeacon = 0x10, // raw UDP broadcast — not sent over ENet; server→LAN presence packet
 };
 
 // All structs use #pragma pack(1) so the wire layout is identical on all platforms

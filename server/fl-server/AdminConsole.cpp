@@ -419,7 +419,8 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                              });
 
     // reload_config
-    registry.registerCommand("reload_config", "reload_config  -- re-read server.toml and apply: name (beacon), motd",
+    registry.registerCommand("reload_config",
+                             "reload_config  -- re-read server.toml and apply: name (beacon), motd (new connections)",
                              [ctx](std::span<std::string_view>) -> std::string {
                                  if (!ctx.configPath || ctx.configPath->empty())
                                      return "reload_config: not available";
@@ -431,6 +432,11 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                                  ServerConfig newCfg = parseServerConfig(ss.str(), ctx.logger);
                                  if (ctx.beacon)
                                      ctx.beacon->setName(newCfg.name);
+                                 if (ctx.broadcaster && ctx.gameLoop) {
+                                     auto newMotd = newCfg.motd;
+                                     ctx.gameLoop->enqueueSimCallback(
+                                         [ctx, newMotd]() mutable { ctx.broadcaster->setMotd(std::move(newMotd)); });
+                                 }
                                  return "reload_config: name=\"" + newCfg.name + "\"  motd=\"" + newCfg.motd +
                                         "\"  (other fields require restart)";
                              });

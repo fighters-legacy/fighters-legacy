@@ -112,6 +112,10 @@ void WorldBroadcaster::setClockOverride(std::function<std::chrono::steady_clock:
     m_now = std::move(fn);
 }
 
+void WorldBroadcaster::setMotd(std::string motd) {
+    m_motd = std::move(motd);
+}
+
 void WorldBroadcaster::setOperatorPassword(std::string password) {
     m_operatorPassword = std::move(password);
 }
@@ -368,6 +372,14 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         m_peerFlightSims.emplace(peerId, std::move(fi));
     }
     sendConnectAck(peerId, id);
+    if (!m_motd.empty()) {
+        const std::size_t textLen = std::min(m_motd.size(), kMaxMotdBytes);
+        std::vector<uint8_t> pkt(1 + textLen + 1, 0u);
+        pkt[0] = static_cast<uint8_t>(MsgId::Motd);
+        std::memcpy(pkt.data() + 1, m_motd.c_str(), textLen);
+        // pkt[1 + textLen] == 0 (NUL terminator, from vector initialisation)
+        m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/true);
+    }
     m_activePeerCount.fetch_add(1, std::memory_order_relaxed);
 }
 
