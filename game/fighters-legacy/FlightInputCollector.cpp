@@ -67,6 +67,10 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
             const float rud = applyAxis(input.getGamepadAxis(0, GamepadAxis::LeftX));
             if (rud != 0.0f)
                 inp.rudder = cs.invertRudder ? -rud : rud;
+            if (input.isGamepadButtonDown(0, static_cast<GamepadButton>(cs.fireButton))) {
+                inp.buttons |= 1u;
+                m_weaponFired = true;
+            }
         }
 
         // HOTAS / raw joystick blend — throttle always sets absolute position;
