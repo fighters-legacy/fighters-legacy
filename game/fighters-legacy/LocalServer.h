@@ -2,7 +2,7 @@
 #pragma once
 
 #include "RenderTypes.h" // EnvironmentState
-#include "debug/DebugCommandRegistry.h"
+#include "console/CommandRegistry.h"
 
 #include <cstdint>
 #include <functional>
@@ -41,12 +41,12 @@ class LocalServer {
     // PartlyCloudy, 09:00 if no snapshot has arrived yet).
     EnvironmentState initialEnvironment() const;
 
-    // Register server-side debug commands (spawn, kill, tp, set_weather).
+    // Register server-side console commands (spawn, kill, tp, set_weather).
     // serverCommand is called with formatted command strings and sends them to fl-server
     // via MsgAdminCommand over ENet (constructed by makeNetworkAdminSender in main.cpp).
-    void registerDebugCommands(DebugCommandRegistry& registry, std::function<void(std::string_view)> serverCommand,
-                               fl::SimRenderBridge& renderBridge, fl::EntityTypeRegistry* typeRegistry,
-                               uint32_t* playerEntityIdx, uint32_t* playerEntityGen, bool* showPos);
+    void registerConsoleCommands(CommandRegistry& registry, std::function<void(std::string_view)> serverCommand,
+                                 fl::SimRenderBridge& renderBridge, fl::EntityTypeRegistry* typeRegistry,
+                                 uint32_t* playerEntityIdx, uint32_t* playerEntityGen, bool* showPos);
 
     // Returns the per-session admin token generated at start(). Valid after start() returns true.
     std::string_view sessionToken() const;

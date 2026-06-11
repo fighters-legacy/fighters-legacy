@@ -7,6 +7,8 @@
 #include "ILogger.h"
 #include "INetwork.h"
 #include "RenderTypes.h"
+#include "console/CommandRegistry.h"
+#include "console/GameConsole.h"
 #include "entity/EntityTypeRegistry.h"
 #include "net/GameProtocol.h"
 #include "render/SimRenderBridge.h"
@@ -179,4 +181,46 @@ TEST_CASE("ClientNetEventHandler: MsgMotd notice auto-dismisses after 15 seconds
 
     fakeTime += std::chrono::seconds(16);
     CHECK(notice.buildElements().empty());
+}
+
+TEST_CASE("ClientNetEventHandler: MsgMotd single-line text printed to console", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdReg;
+    GameConsole console(logger, cmdReg);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    auto pkt = makeMotdPacket("Hello");
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    auto lines = console.outputLines();
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0] == "[server] Hello");
+}
+
+TEST_CASE("ClientNetEventHandler: MsgMotd multi-line text each line printed to console", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdReg;
+    GameConsole console(logger, cmdReg);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    auto pkt = makeMotdPacket("Line1\nLine2\nLine3");
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    auto lines = console.outputLines();
+    REQUIRE(lines.size() == 3);
+    CHECK(lines[0] == "[server] Line1");
+    CHECK(lines[1] == "[server] Line2");
+    CHECK(lines[2] == "[server] Line3");
 }

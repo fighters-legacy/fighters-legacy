@@ -5,7 +5,7 @@
 #include "IInput.h"
 #include "IJoystick.h"
 #include "config/ControlsSettings.h"
-#include "debug/DebugConsole.h"
+#include "console/GameConsole.h"
 #include "render/SimRenderBridge.h"
 
 #include <SDL3/SDL.h>
@@ -14,7 +14,7 @@
 #include <cmath>
 
 std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRenderBridge& bridge, CameraInput& camInput,
-                                                             const DebugConsole& console, IInput& input,
+                                                             const GameConsole& console, IInput& input,
                                                              IJoystick* joystick, const ControlsSettings& cs) {
     m_weaponFired = false;
 

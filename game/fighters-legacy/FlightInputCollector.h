@@ -8,7 +8,7 @@
 #include <optional>
 
 class CameraInput;
-class DebugConsole;
+class GameConsole;
 class IInput;
 class IJoystick;
 struct ControlsSettings;
@@ -28,7 +28,7 @@ class FlightInputCollector {
     // Returns a populated MsgClientInput if 1/60 s has elapsed since the last
     // packet, otherwise returns nullopt. Never call from the server thread.
     std::optional<fl::MsgClientInput> poll(const fl::SimRenderBridge& bridge, CameraInput& camInput,
-                                           const DebugConsole& console, IInput& input, IJoystick* joystick,
+                                           const GameConsole& console, IInput& input, IJoystick* joystick,
                                            const ControlsSettings& cs);
 
     // True if the most recent poll() that returned a message had the weapon

@@ -4,7 +4,7 @@
 
 #include "ILogger.h"
 #include "INetwork.h"
-#include "debug/DebugConsole.h"
+#include "console/GameConsole.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityTypeRegistry.h"
 #include "net/GameProtocol.h"

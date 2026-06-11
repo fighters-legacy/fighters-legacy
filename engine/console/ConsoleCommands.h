@@ -5,16 +5,16 @@
 #include <functional>
 #include <string_view>
 
-class DebugCommandRegistry;
+class CommandRegistry;
 
 namespace fl {
 class EntityTypeRegistry;
 class SimRenderBridge;
 } // namespace fl
 
-// Context passed to registerBuiltinCommands(). All fields may be nullptr/null;
+// Context passed to registerConsoleCommands(). All fields may be nullptr/null;
 // commands that need a missing field return an error string.
-struct DebugCommandContext {
+struct CommandContext {
     fl::SimRenderBridge* renderBridge{nullptr};    // entities command
     fl::EntityTypeRegistry* typeRegistry{nullptr}; // types + entities commands
     uint32_t* playerEntityIdx{nullptr};            // tp command: player EntityId::index
@@ -29,4 +29,4 @@ struct DebugCommandContext {
 
 // Register all built-in debug commands (help, types, entities, spawn, kill,
 // tp, toggle_pos, set_weather, set_difficulty, reload_content) against registry.
-void registerBuiltinCommands(DebugCommandRegistry& registry, DebugCommandContext ctx);
+void registerConsoleCommands(CommandRegistry& registry, CommandContext ctx);

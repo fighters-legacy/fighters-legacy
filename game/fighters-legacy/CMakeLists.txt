@@ -20,7 +20,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         engine-net
         engine-weather
         engine-perf
-        engine-debug
+        engine-console
         platform-file-logger
         platform-subprocess
         platform-sdl3

@@ -145,10 +145,10 @@ if(TARGET platform-enet)
     catch_discover_tests(test_lan_discovery)
 
     add_executable(test_admin_console test_admin_console.cpp
-        "${CMAKE_SOURCE_DIR}/server/fl-server/AdminConsole.cpp")
+        "${CMAKE_SOURCE_DIR}/server/fl-server/ServerCommands.cpp")
     target_link_libraries(test_admin_console PRIVATE
         Catch2::Catch2WithMain
-        fl-server-config engine-debug engine-net engine-entity engine-weather engine-loop)
+        fl-server-config engine-console engine-net engine-entity engine-weather engine-loop)
     target_include_directories(test_admin_console PRIVATE
         "${CMAKE_SOURCE_DIR}/server/fl-server"
         "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -157,7 +157,7 @@ if(TARGET platform-enet)
     add_executable(test_rcon_server test_rcon_server.cpp
         "${CMAKE_SOURCE_DIR}/server/fl-server/RconServer.cpp")
     target_link_libraries(test_rcon_server PRIVATE
-        Catch2::Catch2WithMain fl-server-config engine-debug)
+        Catch2::Catch2WithMain fl-server-config engine-console)
     target_include_directories(test_rcon_server PRIVATE
         "${CMAKE_SOURCE_DIR}/server/fl-server"
         "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -316,10 +316,15 @@ add_executable(test_utf8_decode test_utf8_decode.cpp)
 target_link_libraries(test_utf8_decode PRIVATE Catch2::Catch2WithMain platform-hal)
 catch_discover_tests(test_utf8_decode)
 
-add_executable(test_debug_console test_debug_console.cpp)
-target_link_libraries(test_debug_console PRIVATE Catch2::Catch2WithMain engine-debug engine-entity engine-weather)
-target_include_directories(test_debug_console PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_debug_console)
+add_executable(test_game_console test_game_console.cpp)
+target_link_libraries(test_game_console PRIVATE Catch2::Catch2WithMain engine-console engine-entity engine-weather)
+target_include_directories(test_game_console PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_game_console)
+
+add_executable(test_command_shell test_command_shell.cpp)
+target_link_libraries(test_command_shell PRIVATE Catch2::Catch2WithMain engine-console)
+target_include_directories(test_command_shell PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_command_shell)
 
 add_executable(test_world_broadcaster test_world_broadcaster.cpp)
 target_link_libraries(test_world_broadcaster PRIVATE Catch2::Catch2WithMain engine-net engine-weather)
@@ -391,7 +396,7 @@ catch_discover_tests(test_server_notice)
 add_executable(test_client_net_event_handler test_client_net_event_handler.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp")
 target_link_libraries(test_client_net_event_handler PRIVATE
-    Catch2::Catch2WithMain engine-net engine-render engine-entity engine-debug engine-weather platform-hal)
+    Catch2::Catch2WithMain engine-net engine-render engine-entity engine-console engine-weather platform-hal)
 target_include_directories(test_client_net_event_handler PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
     "${CMAKE_CURRENT_SOURCE_DIR}")

@@ -2,7 +2,7 @@
 #include "CameraInput.h"
 
 #include "IInput.h"
-#include "debug/DebugConsole.h"
+#include "console/GameConsole.h"
 #include "render/CameraController.h"
 #include "render/RenderSnapshot.h"
 #include "render/TerrainStreamer.h"
@@ -18,7 +18,7 @@ static float toRad(float deg) {
     return deg * (glm::pi<float>() / 180.f);
 }
 
-void CameraInput::pollModeKeys(fl::CameraController& ctrl, DebugConsole& console, IInput& input,
+void CameraInput::pollModeKeys(fl::CameraController& ctrl, GameConsole& console, IInput& input,
                                const fl::EntityRenderEntry* player) {
     const bool* keys = SDL_GetKeyboardState(nullptr);
 
@@ -84,7 +84,7 @@ void CameraInput::onModeSwitch(fl::CameraMode newMode, const fl::EntityRenderEnt
     }
 }
 
-void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry* player, const DebugConsole& console,
+void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry* player, const GameConsole& console,
                          fl::TerrainStreamer& terrain) {
     float mx = 0.f, my = 0.f;
     SDL_MouseButtonFlags mb = SDL_GetMouseState(&mx, &my);

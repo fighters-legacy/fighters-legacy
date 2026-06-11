@@ -160,7 +160,7 @@ Rule 1: no teamkilling.
 """
 ```
 
-Each line is printed separately in the client's debug console prefixed with `[server]`.
+Each line is printed separately in the client's game console prefixed with `[server]`.
 The first line is also shown in the server notice banner and auto-dismisses after 15 seconds.
 
 ### `password`
@@ -627,7 +627,7 @@ process.
 | `set_time` | `<0–24>` | Set in-game time of day (float, hours) |
 | `spawn` | `<type> <x> <y> <z>` | Spawn a registered entity type at the given world position |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
-| `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's debug console to teleport the player entity |
+| `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's game console to teleport the player entity |
 | `reload_config` | — | Re-read `server.toml` and apply: `name` (reflected in next LAN beacon broadcast), `motd` (takes effect for new connections) |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |

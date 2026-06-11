@@ -3,7 +3,7 @@
 
 #include <glm/glm.hpp>
 
-class DebugConsole;
+class GameConsole;
 class IInput;
 
 namespace fl {
@@ -20,14 +20,14 @@ class CameraInput {
   public:
     // Detect F1/F2/F4 camera mode switches and backtick console toggle.
     // Call once per frame before update().
-    void pollModeKeys(fl::CameraController& ctrl, DebugConsole& console, IInput& input,
+    void pollModeKeys(fl::CameraController& ctrl, GameConsole& console, IInput& input,
                       const fl::EntityRenderEntry* player);
 
     // Update controller based on current SDL keyboard/mouse state.
     // console is queried to suppress camera movement when the console is open.
     void update(fl::CameraController& ctrl,
                 const fl::EntityRenderEntry* player, // nullptr = no snapshot yet
-                const DebugConsole& console, fl::TerrainStreamer& terrain);
+                const GameConsole& console, fl::TerrainStreamer& terrain);
 
     // Persistent throttle [0,1] shared between camera and flight input.
     float throttle() const {

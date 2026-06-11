@@ -15,11 +15,11 @@
 //
 // See docs/fl-server-config.md for the full operator configuration reference.
 // fl-lobby integration is tracked in issue #36.
-#include "AdminConsole.h"
 #include "ENetNetwork.h"
 #include "ENetNetworkFactory.h"
 #include "IpListFile.h"
 #include "RconServer.h"
+#include "ServerCommands.h"
 #include "StdoutLogger.h"
 #include "net/DiscoveryBeacon.h"
 #include "server_config.h"
@@ -27,9 +27,10 @@
 #include <ILogger.h>
 #include <Platform.h>
 #include <config/ConfigFile.h>
+#include <console/CommandRegistry.h>
+#include <console/CommandShell.h>
 #include <content/AssetManager.h>
 #include <content/ModLoader.h>
-#include <debug/DebugCommandRegistry.h>
 #include <entity/EntityDef.h>
 #include <entity/EntityManager.h>
 #include <entity/EntityTypeRegistry.h>
@@ -360,7 +361,8 @@ int main(int argc, char** argv) {
     GameLoop gameLoop(broadcaster, *log);
 
     // ---- Admin command registry (built before gameLoop.start() to avoid races) ----
-    DebugCommandRegistry adminRegistry;
+    CommandRegistry adminRegistry;
+    CommandShell adminShell(*log, adminRegistry);
     ServerCommandContext adminCtx;
     adminCtx.broadcaster = &broadcaster;
     adminCtx.entityManager = &entityManager;
@@ -379,6 +381,7 @@ int main(int argc, char** argv) {
     adminCtx.shutdownWarningIntervalS = static_cast<uint32_t>(cfg.shutdownWarningIntervalS);
     adminCtx.minShutdownDelayS = static_cast<uint32_t>(cfg.minShutdownDelayS);
     adminCtx.shutdownRequireConfirm = cfg.shutdownRequireConfirm;
+    adminCtx.shell = &adminShell;
 
     broadcaster.setShutdownCallback([&]() { g_quit = 1; });
     registerServerCommands(adminRegistry, adminCtx);

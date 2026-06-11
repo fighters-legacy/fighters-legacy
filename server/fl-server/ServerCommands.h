@@ -7,7 +7,8 @@
 #include <string>
 #include <unordered_set>
 
-class DebugCommandRegistry;
+class CommandRegistry;
+class CommandShell;
 class DiscoveryBeacon;
 class GameLoop;
 class ILogger;
@@ -46,7 +47,11 @@ struct ServerCommandContext {
     // Callbacks called on the main thread to load IP list files.
     std::function<std::unordered_set<std::string>()> loadBanlist;
     std::function<std::unordered_set<std::string>()> loadAllowlist;
+
+    // Optional output shell; sim-callback confirmations are also routed here
+    // for future RCON drain (see issue #304). nullptr = disabled.
+    CommandShell* shell{nullptr};
 };
 
 // Register all fl-server admin commands into registry using the given context.
-void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext ctx);
+void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx);

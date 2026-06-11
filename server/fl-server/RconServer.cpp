@@ -50,7 +50,7 @@ static void rconSetNonBlocking(RconSocket s) {
 #endif
 
 #include "RconServer.h"
-#include <debug/DebugCommandRegistry.h>
+#include <console/CommandRegistry.h>
 
 #include <algorithm>
 #include <atomic>
@@ -157,14 +157,14 @@ bool queueSend(ClientState& c, std::vector<uint8_t> data) {
 // ---------------------------------------------------------------------------
 
 struct RconServer::Impl {
-    const DebugCommandRegistry& m_registry;
+    const CommandRegistry& m_registry;
     ServerConfig::RconConfig m_cfg;
     ILogger& m_log;
     std::atomic<bool> m_running{false};
     std::thread m_thread;
     RconSocket m_listenSock = kInvalidSocket;
 
-    Impl(const DebugCommandRegistry& reg, const ServerConfig::RconConfig& cfg, ILogger& log)
+    Impl(const CommandRegistry& reg, const ServerConfig::RconConfig& cfg, ILogger& log)
         : m_registry(reg), m_cfg(cfg), m_log(log) {}
 
     void ioLoop();
@@ -378,7 +378,7 @@ void RconServer::Impl::ioLoop() {
 // RconServer public interface
 // ---------------------------------------------------------------------------
 
-RconServer::RconServer(const DebugCommandRegistry& registry, const ServerConfig::RconConfig& cfg, ILogger& log)
+RconServer::RconServer(const CommandRegistry& registry, const ServerConfig::RconConfig& cfg, ILogger& log)
     : m_impl(std::make_unique<Impl>(registry, cfg, log)) {}
 
 RconServer::~RconServer() {

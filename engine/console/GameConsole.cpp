@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "debug/DebugConsole.h"
+#include "console/GameConsole.h"
 
 #include "ILogger.h"
 
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
-#include <cstring>
 
 // HUD color constants
 static constexpr float kGreenR = 0.0f, kGreenG = 1.0f, kGreenB = 0.0f;
@@ -26,20 +25,20 @@ static constexpr float kPosX = 0.62f;
 static constexpr float kPosY = 0.008f;
 static constexpr float kTextX = 0.01f;
 
-DebugConsole::DebugConsole(ILogger& logger, DebugCommandRegistry& registry) : m_logger(logger), m_registry(registry) {}
+GameConsole::GameConsole(ILogger& logger, CommandRegistry& registry) : CommandShell(logger, registry) {}
 
-void DebugConsole::open(IInput& input) {
+void GameConsole::open(IInput& input) {
     m_open = true;
     input.startTextInput(this);
 }
 
-void DebugConsole::close(IInput& input) {
+void GameConsole::close(IInput& input) {
     m_open = false;
     m_historyIdx = -1;
     input.stopTextInput();
 }
 
-bool DebugConsole::tick(IInput& input) {
+bool GameConsole::tick(IInput& input) {
     if (input.isKeyJustPressed(Key::Escape))
         return true;
 
@@ -78,7 +77,7 @@ bool DebugConsole::tick(IInput& input) {
     return false;
 }
 
-void DebugConsole::onTextInput(const char* text) {
+void GameConsole::onTextInput(const char* text) {
     if (!m_open || !text)
         return;
     // Command input is ASCII identifiers; non-ASCII bytes from IME/paste are dropped.
@@ -90,39 +89,15 @@ void DebugConsole::onTextInput(const char* text) {
     m_historyIdx = -1;
 }
 
-void DebugConsole::onTextEdit(const char* /*comp*/, int /*start*/) {
-    // IME composition preview — not shown in current implementation
+void GameConsole::onTextEdit(const char* /*comp*/, int /*start*/) {
+    // IME composition preview -- not shown in current implementation
 }
 
-void DebugConsole::print(std::string line) {
-    pushOutput(std::move(line));
-}
-
-void DebugConsole::execute(std::string_view line) {
+std::string GameConsole::execute(std::string_view line) {
     if (line.empty())
-        return;
+        return {};
 
-    // Echo the command
-    pushOutput("> " + std::string(line));
-
-    // Dispatch and show result
-    std::string result = m_registry.dispatch(line);
-    if (!result.empty()) {
-        // Split result on newlines so each line is a separate ring entry
-        std::string_view rv(result);
-        while (!rv.empty()) {
-            auto nl = rv.find('\n');
-            std::string_view piece = (nl == std::string_view::npos) ? rv : rv.substr(0, nl);
-            if (!piece.empty())
-                pushOutput(std::string(piece));
-            if (nl == std::string_view::npos)
-                break;
-            rv = rv.substr(nl + 1);
-        }
-    }
-
-    // Forward to logger
-    m_logger.log(LogLevel::Debug, __FILE__, __LINE__, ("debug console: " + std::string(line)).c_str());
+    std::string result = CommandShell::execute(line);
 
     // Record history (skip duplicates of the most-recent entry)
     std::string lineStr(line);
@@ -138,9 +113,11 @@ void DebugConsole::execute(std::string_view line) {
             ++m_historyCount;
     }
     m_historyIdx = -1;
+
+    return result;
 }
 
-void DebugConsole::submitLine() {
+void GameConsole::submitLine() {
     std::string line = m_input;
     m_input.clear();
     m_historyIdx = -1;
@@ -148,18 +125,11 @@ void DebugConsole::submitLine() {
         execute(line);
 }
 
-void DebugConsole::pushOutput(std::string line) {
-    m_outputRing[m_outputHead] = std::move(line);
-    m_outputHead = (m_outputHead + 1) % kMaxOutputLines;
-    if (m_outputCount < kMaxOutputLines)
-        ++m_outputCount;
-}
-
 // ---------------------------------------------------------------------------
 // HUD helpers
 // ---------------------------------------------------------------------------
 
-bool DebugConsole::pushText(float x, float y, float r, float g, float b, const char* fmt, ...) {
+bool GameConsole::pushText(float x, float y, float r, float g, float b, const char* fmt, ...) {
     if (m_elemCount >= kMaxHudElems || m_strCount >= kMaxStrings)
         return false;
     char buf[128];
@@ -181,7 +151,7 @@ bool DebugConsole::pushText(float x, float y, float r, float g, float b, const c
     return true;
 }
 
-bool DebugConsole::pushLine(float x0, float y0, float x1, float y1, float r, float g, float b) {
+bool GameConsole::pushLine(float x0, float y0, float x1, float y1, float r, float g, float b) {
     if (m_elemCount >= kMaxHudElems)
         return false;
     HudElement& el = m_elems[m_elemCount++];
@@ -198,7 +168,7 @@ bool DebugConsole::pushLine(float x0, float y0, float x1, float y1, float r, flo
     return true;
 }
 
-bool DebugConsole::pushRect(float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
+bool GameConsole::pushRect(float x0, float y0, float x1, float y1, float r, float g, float b, float a) {
     if (m_elemCount >= kMaxHudElems)
         return false;
     HudElement& el = m_elems[m_elemCount++];
@@ -218,18 +188,18 @@ bool DebugConsole::pushRect(float x0, float y0, float x1, float y1, float r, flo
 // buildHud
 // ---------------------------------------------------------------------------
 
-void DebugConsole::buildHud(const glm::dvec3* camPos, const glm::dvec3* playerPos) {
+void GameConsole::buildHud(const glm::dvec3* camPos, const glm::dvec3* playerPos) {
     m_elemCount = 0;
     m_strCount = 0;
 
-    // Camera position — always visible when supplied; 2× scale for readability
+    // Camera position -- always visible when supplied; 2x scale for readability
     if (camPos) {
         pushText(kPosX, kPosY, 1.0f, 0.2f, 0.2f, "CAM %+.0f %+.0f %+.0f", static_cast<float>(camPos->x),
                  static_cast<float>(camPos->y), static_cast<float>(camPos->z));
         m_elems[m_elemCount - 1].scale = 2.0f;
     }
 
-    // Entity position — 3× line-step below to clear the 2× cam text
+    // Entity position -- 3x line-step below to clear the 2x cam text
     if (m_showPos && playerPos) {
         pushText(kPosX, kPosY + kLineStep * 3.0f, 0.0f, 0.7f, 0.0f, "ENT %+.0f %+.0f %+.0f",
                  static_cast<float>(playerPos->x), static_cast<float>(playerPos->y), static_cast<float>(playerPos->z));
@@ -242,24 +212,27 @@ void DebugConsole::buildHud(const glm::dvec3* camPos, const glm::dvec3* playerPo
     pushRect(0.0f, kPanelTop, 1.0f, kPanelBot, 0.05f, 0.05f, 0.05f, 0.88f);
 
     // Title
-    pushText(kTextX, kTitleY, kGreenR, kGreenG, kGreenB, "%s", "FIGHTERS LEGACY -- DEBUG CONSOLE");
+    pushText(kTextX, kTitleY, kGreenR, kGreenG, kGreenB, "%s", "FIGHTERS LEGACY -- GAME CONSOLE");
 
     // Top separator
     pushLine(0.0f, kSepTop, 1.0f, kSepTop, kGreenR, kGreenG, kGreenB);
 
-    // Output lines — show the last kVisibleLines entries, oldest at top
-    int show = std::min(m_outputCount, kVisibleLines);
-    // Index of oldest visible entry
-    int oldest = ((m_outputHead - show) % kMaxOutputLines + kMaxOutputLines) % kMaxOutputLines;
-    for (int i = 0; i < show; ++i) {
-        int idx = (oldest + i) % kMaxOutputLines;
-        float y = kFirstLineY + static_cast<float>(i) * kLineStep;
-        // Newest two lines are full-bright, older are dimmed
-        bool bright = (i >= show - 2);
-        float cr = bright ? kBrightR : kDimR;
-        float cg = bright ? kBrightG : kDimG;
-        float cb = bright ? kBrightB : kDimB;
-        pushText(kTextX, y, cr, cg, cb, "%s", m_outputRing[idx].c_str());
+    // Output lines -- show the last kVisibleLines entries, oldest at top
+    {
+        std::lock_guard<std::mutex> lk(m_ringMutex);
+        int show = std::min(m_outputCount, kVisibleLines);
+        // Index of oldest visible entry
+        int oldest = ((m_outputHead - show) % kMaxOutputLines + kMaxOutputLines) % kMaxOutputLines;
+        for (int i = 0; i < show; ++i) {
+            int idx = (oldest + i) % kMaxOutputLines;
+            float y = kFirstLineY + static_cast<float>(i) * kLineStep;
+            // Newest two lines are full-bright, older are dimmed
+            bool bright = (i >= show - 2);
+            float cr = bright ? kBrightR : kDimR;
+            float cg = bright ? kBrightG : kDimG;
+            float cb = bright ? kBrightB : kDimB;
+            pushText(kTextX, y, cr, cg, cb, "%s", m_outputRing[idx].c_str());
+        }
     }
 
     // Bottom separator
