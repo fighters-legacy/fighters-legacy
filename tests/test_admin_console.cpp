@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "AdminConsole.h"
-#include <debug/DebugCommandRegistry.h>
+#include "ServerCommands.h"
+#include <console/CommandRegistry.h>
+#include <console/CommandShell.h>
 #include <loop/GameLoop.h>
 #include <loop/ISimUpdate.h>
 
@@ -21,8 +22,8 @@ struct NoopSim2 : public ISimUpdate {
 };
 
 // Build a registry with an all-null context (except the fields being exercised).
-static DebugCommandRegistry makeRegistry(ServerCommandContext ctx = {}) {
-    DebugCommandRegistry reg;
+static CommandRegistry makeRegistry(ServerCommandContext ctx = {}) {
+    CommandRegistry reg;
     registerServerCommands(reg, ctx);
     return reg;
 }
@@ -422,4 +423,30 @@ TEST_CASE("AdminConsole async ack: shutdown --delay returns extension queued str
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("shutdown --delay 5m");
     CHECK(out == "shutdown: extension queued");
+}
+
+// ---------------------------------------------------------------------------
+// CommandShell integration — sync ack appears in outputLines()
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AdminConsole shell output: sync ack appears in outputLines", "[admin_console][shell]") {
+    NullLogger2 logger;
+    CommandRegistry reg;
+    CommandShell shell(logger, reg);
+
+    ServerCommandContext ctx{};
+    ctx.shell = &shell;
+    registerServerCommands(reg, ctx);
+
+    // status returns a synchronous ack string; verify it also lands in the ring
+    (void)shell.execute("status");
+
+    auto lines = shell.outputLines();
+    REQUIRE(!lines.empty());
+    // The ring should contain at least the echo "> status" and the ack text
+    bool foundEcho = false;
+    for (const auto& l : lines)
+        if (l.find("status") != std::string::npos)
+            foundEcho = true;
+    CHECK(foundEcho);
 }

@@ -3,7 +3,7 @@
 
 #include "ILogger.h"
 #include "Subprocess.h"
-#include "debug/DebugCommands.h"
+#include "console/ConsoleCommands.h"
 #include "entity/EntityTypeRegistry.h"
 #include "render/SimRenderBridge.h"
 #include "weather/WeatherController.h"
@@ -157,16 +157,16 @@ EnvironmentState LocalServer::initialEnvironment() const {
     return env;
 }
 
-void LocalServer::registerDebugCommands(DebugCommandRegistry& registry,
-                                        std::function<void(std::string_view)> serverCommand,
-                                        fl::SimRenderBridge& renderBridge, fl::EntityTypeRegistry* typeRegistry,
-                                        uint32_t* playerEntityIdx, uint32_t* playerEntityGen, bool* showPos) {
-    DebugCommandContext ctx{};
+void LocalServer::registerConsoleCommands(CommandRegistry& registry,
+                                          std::function<void(std::string_view)> serverCommand,
+                                          fl::SimRenderBridge& renderBridge, fl::EntityTypeRegistry* typeRegistry,
+                                          uint32_t* playerEntityIdx, uint32_t* playerEntityGen, bool* showPos) {
+    CommandContext ctx{};
     ctx.renderBridge = &renderBridge;
     ctx.typeRegistry = typeRegistry;
     ctx.playerEntityIdx = playerEntityIdx;
     ctx.playerEntityGen = playerEntityGen;
     ctx.showPos = showPos;
     ctx.serverCommand = std::move(serverCommand);
-    registerBuiltinCommands(registry, ctx);
+    ::registerConsoleCommands(registry, ctx);
 }

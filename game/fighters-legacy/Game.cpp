@@ -21,12 +21,12 @@
 #include "audio/PlaylistLoader.h"
 #include "audio/SubtitleQueue.h"
 #include "config/UserConfig.h"
+#include "console/CommandRegistry.h"
+#include "console/GameConsole.h"
 #include "content/AssetManager.h"
 #include "content/ModLoader.h"
 #include "crash/CrashInfo.h"
 #include "crash/CrashReporter.h"
-#include "debug/DebugCommandRegistry.h"
-#include "debug/DebugConsole.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityTypeRegistry.h"
 #include "firstrun/FirstRun.h"
@@ -147,7 +147,7 @@ static float computeRollAngleRad(const fl::EntityRenderEntry* player) {
     return std::atan2(-bodyRight.y, bodyUp.y);
 }
 
-static void updatePerfOverlay(DebugConsole& console, IRenderer& renderer, PerformanceOverlay& overlay,
+static void updatePerfOverlay(GameConsole& console, IRenderer& renderer, PerformanceOverlay& overlay,
                               const fl::SimRenderBridge& bridge, UserConfig& userConfig) {
     const bool* keys = SDL_GetKeyboardState(nullptr);
     static bool f3Prev = false;
@@ -255,8 +255,8 @@ struct GameImpl {
     std::optional<DiscoveryListener> discoveryListener;
 
     // Debug console
-    DebugCommandRegistry dbgRegistry;
-    std::optional<DebugConsole> dbgConsole;
+    CommandRegistry cmdRegistry;
+    std::optional<GameConsole> gameConsole;
 
     // Per-frame state
     CameraInput camInput;
@@ -307,7 +307,7 @@ bool Game::init(int argc, char** argv) {
     initGameSystems();
     if (!initNetwork())
         return false;
-    initDebugConsole();
+    initGameConsole();
     return true;
 }
 
@@ -537,15 +537,15 @@ bool Game::initNetwork() {
 }
 
 // Steps 19–20: debug console, command registry, per-frame state.
-void Game::initDebugConsole() {
+void Game::initGameConsole() {
     auto& d = *m_impl;
 
-    d.dbgConsole.emplace(*d.rawLogger, d.dbgRegistry);
-    d.clientHandler->console = &*d.dbgConsole;
-    d.localServer->registerDebugCommands(
-        d.dbgRegistry, makeNetworkAdminSender(*d.clientNet, std::string(d.localServer->sessionToken())), d.renderBridge,
+    d.gameConsole.emplace(*d.rawLogger, d.cmdRegistry);
+    d.clientHandler->console = &*d.gameConsole;
+    d.localServer->registerConsoleCommands(
+        d.cmdRegistry, makeNetworkAdminSender(*d.clientNet, std::string(d.localServer->sessionToken())), d.renderBridge,
         &d.entityRegistry, &d.clientHandler->assignedEntityIdx, &d.clientHandler->assignedEntityGen,
-        &d.dbgConsole->showPosRef());
+        &d.gameConsole->showPosRef());
 
     if (d.outcome == FirstRunOutcome::LaunchSandboxInspector)
         d.camInput.setInitialPivot({0.0, 2000.0, 0.0});
@@ -574,15 +574,15 @@ void Game::run() {
         const fl::EntityRenderEntry* playerEntry =
             findPlayerEntry(d.renderBridge, d.clientHandler->assignedEntityIdx, d.clientHandler->assignedEntityGen);
 
-        d.camInput.pollModeKeys(d.cameraController, *d.dbgConsole, *d.p.input, playerEntry);
-        d.camInput.update(d.cameraController, playerEntry, *d.dbgConsole, *d.terrainStreamer);
+        d.camInput.pollModeKeys(d.cameraController, *d.gameConsole, *d.p.input, playerEntry);
+        d.camInput.update(d.cameraController, playerEntry, *d.gameConsole, *d.terrainStreamer);
 
-        bool consoleWasOpen = d.dbgConsole->isOpen();
+        bool consoleWasOpen = d.gameConsole->isOpen();
         if (consoleWasOpen) {
-            if (d.dbgConsole->tick(*d.p.input))
-                d.dbgConsole->close(*d.p.input);
+            if (d.gameConsole->tick(*d.p.input))
+                d.gameConsole->close(*d.p.input);
         }
-        if (!consoleWasOpen && d.dbgConsole->isOpen())
+        if (!consoleWasOpen && d.gameConsole->isOpen())
             d.hapticController->onPause(0);
         if (d.inspector && !d.inspector->update() && !consoleWasOpen)
             running = false;
@@ -592,7 +592,7 @@ void Game::run() {
 
         const ControlsSettings cs = d.userConfig->controls();
         if (auto msg =
-                d.flightInput.poll(d.renderBridge, d.camInput, *d.dbgConsole, *d.p.input, d.p.joystick.get(), cs))
+                d.flightInput.poll(d.renderBridge, d.camInput, *d.gameConsole, *d.p.input, d.p.joystick.get(), cs))
             d.clientNet->send(0, &*msg, sizeof(*msg), /*reliable=*/true);
         const bool weaponFired = d.flightInput.wasWeaponFired();
 
@@ -622,14 +622,14 @@ void Game::run() {
         d.windshieldRain.update(cockpit ? (1.0f / 60.0f) : 0.0f, cockpit ? d.env : EnvironmentState{},
                                 cockpit ? computeRollAngleRad(playerEntry) : 0.f, cockpit && isSnow);
         d.hapticController->update(playerEntry, weaponFired, terrainElev, 1.0f / 60.0f);
-        d.dbgConsole->buildHud(&cam.worldOrigin, playerEntry ? &playerEntry->position : nullptr);
+        d.gameConsole->buildHud(&cam.worldOrigin, playerEntry ? &playerEntry->position : nullptr);
 
-        updatePerfOverlay(*d.dbgConsole, *d.p.renderer, d.perfOverlay, d.renderBridge, *d.userConfig);
+        updatePerfOverlay(*d.gameConsole, *d.p.renderer, d.perfOverlay, d.renderBridge, *d.userConfig);
 
         d.p.renderer->submitOverlayElements(d.activeHud->elements());
         d.p.renderer->submitOverlayElements(d.windshieldRain.elements());
         d.p.renderer->submitOverlayElements(d.serverNotice.buildElements());
-        d.p.renderer->setConsoleElements(d.dbgConsole->elements());
+        d.p.renderer->setConsoleElements(d.gameConsole->elements());
 
         d.p.renderer->endFrame();
         d.p.input->flush();

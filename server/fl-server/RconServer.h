@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-class DebugCommandRegistry;
+class CommandRegistry;
 
 // ---------------------------------------------------------------------------
 // Source Engine RCON wire-protocol helpers (pure logic, no sockets).
@@ -47,14 +47,14 @@ std::vector<std::string> splitResponse(std::string_view body);
 } // namespace rcon
 
 // ---------------------------------------------------------------------------
-// RconServer — TCP RCON listener (Source Engine RCON protocol).
-// Runs a background I/O thread; the caller's DebugCommandRegistry is invoked
+// RconServer -- TCP RCON listener (Source Engine RCON protocol).
+// Runs a background I/O thread; the caller's CommandRegistry is invoked
 // directly from that thread (safe: dispatch() is const and all mutating
 // handlers enqueue work through the thread-safe GameLoop::enqueueSimCallback).
 // ---------------------------------------------------------------------------
 class RconServer {
   public:
-    RconServer(const DebugCommandRegistry& registry, const ServerConfig::RconConfig& cfg, ILogger& log);
+    RconServer(const CommandRegistry& registry, const ServerConfig::RconConfig& cfg, ILogger& log);
     ~RconServer();
 
     // Bind the TCP listen socket and launch the background I/O thread.

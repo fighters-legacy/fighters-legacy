@@ -207,18 +207,19 @@ add_library(engine-perf STATIC
 target_include_directories(engine-perf PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-perf PUBLIC platform-hal)
 
-# In-game debug console: command registry, drop-down HUD overlay, builtin commands.
-add_library(engine-debug STATIC
-    debug/DebugCommandRegistry.cpp
-    debug/DebugConsole.cpp
-    debug/DebugCommands.cpp
+# Console subsystem: command registry, builtin commands, base shell, in-game HUD overlay.
+add_library(engine-console STATIC
+    console/CommandRegistry.cpp
+    console/ConsoleCommands.cpp
+    console/CommandShell.cpp
+    console/GameConsole.cpp
 )
-target_include_directories(engine-debug PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(engine-debug
+target_include_directories(engine-console PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-console
     PUBLIC  platform-hal
             engine-entity
-    PRIVATE engine-render   # DebugCommands reads SimRenderBridge for the entities command
-            engine-weather  # DebugCommands calls WeatherController::setPreset
+    PRIVATE engine-render   # ConsoleCommands reads SimRenderBridge for the entities command
+            engine-weather  # ConsoleCommands calls WeatherController::setPreset
 )
 
 # Sandboxed Lua 5.5 execution environment for AI and mission scripts.

@@ -226,7 +226,7 @@ msgId `0x08` silently discard — `kProtocolVersion` is **not** bumped.
 
 The text is null-terminated UTF-8; the server caps the payload at `kMaxMotdBytes = 65535`
 usable characters. Multi-line MOTDs use `\n` or `\r\n` line endings — the client splits on
-newlines, prints each non-empty line to the debug console prefixed `[server]`, and shows the
+newlines, prints each non-empty line to the game console prefixed `[server]`, and shows the
 first line in the server notice banner.
 
 | Offset | Size | Field | Type | Notes |

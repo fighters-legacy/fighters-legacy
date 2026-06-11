@@ -9,13 +9,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **engine**: rename debug console subsystem — `DebugConsole`→`GameConsole`, `DebugCommandRegistry`→`CommandRegistry`, `DebugCommandContext`→`CommandContext`; files moved from `engine/debug/` to `engine/console/`; `AdminConsole.h/.cpp`→`ServerCommands.h/.cpp`; CMake target `engine-debug`→`engine-console` (#292)
 - **renderer**: `ServerNotice` MOTD banners now auto-dismiss after 15 seconds; shutdown countdown notices remain persistent (`visibleSeconds = 0`)
-- **game**: introduce `Game` class (pimpl) encapsulating the full application lifecycle; `main.cpp` reduced from 590 lines to 20; init sequence split into six named private methods (`initPlatform`, `initWindowAndRenderer`, `initContent`, `initGameSystems`, `initNetwork`, `initDebugConsole`); all state moved from `main()` locals into `GameImpl`; extract `FlightInputCollector`, `PrecipitationController`, and `CameraInput::pollModeKeys`; add named free functions for audio listener, roll angle, perf overlay, and player lookup — pure structural refactor, no behavioral change
+- **game**: introduce `Game` class (pimpl) encapsulating the full application lifecycle; `main.cpp` reduced from 590 lines to 20; init sequence split into six named private methods (`initPlatform`, `initWindowAndRenderer`, `initContent`, `initGameSystems`, `initNetwork`, `initGameConsole`); all state moved from `main()` locals into `GameImpl`; extract `FlightInputCollector`, `PrecipitationController`, and `CameraInput::pollModeKeys`; add named free functions for audio listener, roll angle, perf overlay, and player lookup — pure structural refactor, no behavioral change
+
+### Added
+
+- **engine**: `CommandShell` base class with thread-safe output ring; `GameConsole` inherits from it; fl-server admin shell wires sim-callback output through `CommandShell` for future RCON buffering (#292)
+- **engine**: `GameConsole::outputLines()` (via `CommandShell`) returns output ring copy oldest-first for testing (#292)
 
 ### Added
 
 - **server**: Source Engine TCP RCON server (`[rcon]` section in `server.toml`); reuses all existing admin console commands; disabled by default; supports `enabled`, `port`, `password`; async commands (kick, ban, tp, etc.) return a synchronous acknowledgment string for RCON clients; responses exceeding 4086 bytes are split across multiple packets per the Source Engine RCON protocol; closes #232
-- **network**: `MsgMotd` (0x08, variable-length, up to 65535 chars) delivers `[server].motd` to each connecting client after `MsgConnectAck`; multi-line text split on `\n` prints each line to the debug console prefixed `[server]`; first line also shown in the server notice banner; `reload_config` hot-reloads the MOTD for subsequent connections
+- **network**: `MsgMotd` (0x08, variable-length, up to 65535 chars) delivers `[server].motd` to each connecting client after `MsgConnectAck`; multi-line text split on `\n` prints each line to the game console prefixed `[server]`; first line also shown in the server notice banner; `reload_config` hot-reloads the MOTD for subsequent connections
 - **engine**: `LogLevel::Trace` added to `ILogger`; `FileLogger`, `StdoutLogger`, and `UserConfig` support the new level; enabled via `log_level = "trace"` in `user.toml`; `SceneRenderer` and `ClientNetEventHandler` emit trace-level pipeline diagnostics
 
 ### Fixed

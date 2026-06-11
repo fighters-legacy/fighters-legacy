@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ILogger.h"
-#include "debug/DebugCommandRegistry.h"
-#include "debug/DebugCommands.h"
-#include "debug/DebugConsole.h"
+#include "console/CommandRegistry.h"
+#include "console/ConsoleCommands.h"
+#include "console/GameConsole.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityTypeRegistry.h"
 #include "render/RenderSnapshot.h"
@@ -25,24 +25,24 @@ struct NullLogger : public ILogger {
 };
 
 // ============================================================================
-// DebugCommandRegistry
+// CommandRegistry
 // ============================================================================
 
-TEST_CASE("DebugCommandRegistry dispatch", "[dbg][registry]") {
-    DebugCommandRegistry reg;
+TEST_CASE("CommandRegistry dispatch", "[console][registry]") {
+    CommandRegistry reg;
     reg.registerCommand("greet", "greet command", [](std::span<std::string_view>) { return std::string("hello"); });
     REQUIRE(reg.dispatch("greet") == "hello");
 }
 
-TEST_CASE("DebugCommandRegistry unknown command", "[dbg][registry]") {
-    DebugCommandRegistry reg;
+TEST_CASE("CommandRegistry unknown command", "[console][registry]") {
+    CommandRegistry reg;
     std::string result = reg.dispatch("nope");
     REQUIRE(result.find("nope") != std::string::npos);
     REQUIRE(result.find("unknown command") != std::string::npos);
 }
 
-TEST_CASE("DebugCommandRegistry help lists commands", "[dbg][registry]") {
-    DebugCommandRegistry reg;
+TEST_CASE("CommandRegistry help lists commands", "[console][registry]") {
+    CommandRegistry reg;
     reg.registerCommand("alpha", "first cmd", [](std::span<std::string_view>) { return std::string{}; });
     reg.registerCommand("beta", "second cmd", [](std::span<std::string_view>) { return std::string{}; });
     std::string h = reg.helpText();
@@ -50,14 +50,14 @@ TEST_CASE("DebugCommandRegistry help lists commands", "[dbg][registry]") {
     REQUIRE(h.find("beta") != std::string::npos);
 }
 
-TEST_CASE("DebugCommandRegistry empty input", "[dbg][registry]") {
-    DebugCommandRegistry reg;
+TEST_CASE("CommandRegistry empty input", "[console][registry]") {
+    CommandRegistry reg;
     REQUIRE(reg.dispatch("") == "");
     REQUIRE(reg.dispatch("   ") == "");
 }
 
-TEST_CASE("DebugCommandRegistry multi-space tokenization", "[dbg][registry]") {
-    DebugCommandRegistry reg;
+TEST_CASE("CommandRegistry multi-space tokenization", "[console][registry]") {
+    CommandRegistry reg;
     std::vector<std::string_view> captured;
     reg.registerCommand("cmd", "test", [&captured](std::span<std::string_view> args) {
         captured.assign(args.begin(), args.end());
@@ -69,8 +69,8 @@ TEST_CASE("DebugCommandRegistry multi-space tokenization", "[dbg][registry]") {
     REQUIRE(captured[1] == "arg2");
 }
 
-TEST_CASE("DebugCommandRegistry handler receives correct args", "[dbg][registry]") {
-    DebugCommandRegistry reg;
+TEST_CASE("CommandRegistry handler receives correct args", "[console][registry]") {
+    CommandRegistry reg;
     std::string got0, got1;
     reg.registerCommand("add", "add two nums", [&got0, &got1](std::span<std::string_view> args) {
         if (args.size() >= 2) {
@@ -85,13 +85,13 @@ TEST_CASE("DebugCommandRegistry handler receives correct args", "[dbg][registry]
 }
 
 // ============================================================================
-// DebugConsole — tick / open / close (MockInput)
+// GameConsole — tick / open / close (MockInput)
 // ============================================================================
 
-TEST_CASE("DebugConsole open sets open state and close clears it", "[dbg][console]") {
+TEST_CASE("GameConsole open sets open state and close clears it", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
     MockInput input;
 
     REQUIRE(!con.isOpen());
@@ -101,10 +101,10 @@ TEST_CASE("DebugConsole open sets open state and close clears it", "[dbg][consol
     REQUIRE(!con.isOpen());
 }
 
-TEST_CASE("DebugConsole tick Escape returns true", "[dbg][console]") {
+TEST_CASE("GameConsole tick Escape returns true", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
     MockInput input;
     con.open(input);
 
@@ -112,11 +112,11 @@ TEST_CASE("DebugConsole tick Escape returns true", "[dbg][console]") {
     REQUIRE(con.tick(input) == true);
 }
 
-TEST_CASE("DebugConsole tick Enter submits line", "[dbg][console]") {
+TEST_CASE("GameConsole tick Enter submits line", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
+    CommandRegistry reg;
     reg.registerCommand("ping", "test", [](std::span<std::string_view>) { return std::string("pong"); });
-    DebugConsole con(logger, reg);
+    GameConsole con(logger, reg);
     MockInput input;
     con.open(input);
 
@@ -134,10 +134,10 @@ TEST_CASE("DebugConsole tick Enter submits line", "[dbg][console]") {
     REQUIRE(foundPong);
 }
 
-TEST_CASE("DebugConsole tick Backspace deletes character", "[dbg][console]") {
+TEST_CASE("GameConsole tick Backspace deletes character", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
     MockInput input;
     con.open(input);
 
@@ -161,10 +161,10 @@ TEST_CASE("DebugConsole tick Backspace deletes character", "[dbg][console]") {
     REQUIRE(!foundAB);
 }
 
-TEST_CASE("DebugConsole tick ArrowUp recalls history", "[dbg][console]") {
+TEST_CASE("GameConsole tick ArrowUp recalls history", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
     MockInput input;
     con.open(input);
 
@@ -183,10 +183,10 @@ TEST_CASE("DebugConsole tick ArrowUp recalls history", "[dbg][console]") {
     REQUIRE(found);
 }
 
-TEST_CASE("DebugConsole tick ArrowDown clears recalled history", "[dbg][console]") {
+TEST_CASE("GameConsole tick ArrowDown clears recalled history", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
     MockInput input;
     con.open(input);
 
@@ -208,10 +208,10 @@ TEST_CASE("DebugConsole tick ArrowDown clears recalled history", "[dbg][console]
     REQUIRE(foundPromptEmpty);
 }
 
-TEST_CASE("DebugConsole tick with no key press returns false", "[dbg][console]") {
+TEST_CASE("GameConsole tick with no key press returns false", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
     MockInput input;
     con.open(input);
     // No keys pressed — tick should return false and not crash
@@ -219,13 +219,13 @@ TEST_CASE("DebugConsole tick with no key press returns false", "[dbg][console]")
 }
 
 // ============================================================================
-// DebugConsole
+// GameConsole
 // ============================================================================
 
-TEST_CASE("DebugConsole print appends text to output ring", "[dbg][console]") {
+TEST_CASE("GameConsole print appends text to output ring", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
 
     con.print("hello from server");
 
@@ -243,10 +243,10 @@ TEST_CASE("DebugConsole print appends text to output ring", "[dbg][console]") {
     CHECK(found);
 }
 
-TEST_CASE("DebugConsole output ring wrapping", "[dbg][console]") {
+TEST_CASE("GameConsole output ring wrapping", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
 
     // Push more than kMaxOutputLines (64) entries
     for (int i = 0; i < 70; ++i)
@@ -260,10 +260,10 @@ TEST_CASE("DebugConsole output ring wrapping", "[dbg][console]") {
     REQUIRE(con.elements().size() > 0);
 }
 
-TEST_CASE("DebugConsole onTextInput accumulates characters", "[dbg][console]") {
+TEST_CASE("GameConsole onTextInput accumulates characters", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
 
     con.openHeadless(); // must be open before text input is accepted
     con.onTextInput("hel");
@@ -283,11 +283,11 @@ TEST_CASE("DebugConsole onTextInput accumulates characters", "[dbg][console]") {
     REQUIRE(found);
 }
 
-TEST_CASE("DebugConsole execute dispatches and records output", "[dbg][console]") {
+TEST_CASE("GameConsole execute dispatches and records output", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
+    CommandRegistry reg;
     reg.registerCommand("ping", "test", [](std::span<std::string_view>) { return std::string("pong"); });
-    DebugConsole con(logger, reg);
+    GameConsole con(logger, reg);
 
     con.execute("ping");
 
@@ -308,10 +308,10 @@ TEST_CASE("DebugConsole execute dispatches and records output", "[dbg][console]"
     REQUIRE(foundPong);
 }
 
-TEST_CASE("DebugConsole history records submitted commands", "[dbg][console]") {
+TEST_CASE("GameConsole history records submitted commands", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
 
     con.execute("cmd1");
     con.execute("cmd2");
@@ -335,10 +335,10 @@ TEST_CASE("DebugConsole history records submitted commands", "[dbg][console]") {
     REQUIRE(foundCmd2);
 }
 
-TEST_CASE("DebugConsole buildHud open produces elements", "[dbg][console]") {
+TEST_CASE("GameConsole buildHud open produces elements", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
 
     con.openHeadless();
     con.buildHud();
@@ -362,19 +362,19 @@ TEST_CASE("DebugConsole buildHud open produces elements", "[dbg][console]") {
     REQUIRE(hasText);
 }
 
-TEST_CASE("DebugConsole buildHud when closed no pos", "[dbg][console]") {
+TEST_CASE("GameConsole buildHud when closed no pos", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
 
     con.buildHud(); // closed, no pos
     REQUIRE(con.elements().empty());
 }
 
-TEST_CASE("DebugConsole pos widget visible when closed", "[dbg][console]") {
+TEST_CASE("GameConsole pos widget visible when closed", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
 
     con.showPosRef() = true;
     glm::dvec3 pos{100.0, 200.0, 300.0};
@@ -391,10 +391,10 @@ TEST_CASE("DebugConsole pos widget visible when closed", "[dbg][console]") {
     REQUIRE(foundPos);
 }
 
-TEST_CASE("DebugConsole pos widget hidden when null", "[dbg][console]") {
+TEST_CASE("GameConsole pos widget hidden when null", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
 
     con.showPosRef() = true;
     con.buildHud(nullptr); // showPos=true but nullptr → no element
@@ -403,10 +403,10 @@ TEST_CASE("DebugConsole pos widget hidden when null", "[dbg][console]") {
 }
 
 // ============================================================================
-// DebugCommands — builtin commands
+// ConsoleCommands — builtin commands
 // ============================================================================
 
-TEST_CASE("DebugCommands types command lists registered types", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands types command lists registered types", "[console][commands]") {
     fl::EntityTypeRegistry reg;
     fl::EntityDef defA;
     defA.id = "test:alpha";
@@ -417,17 +417,17 @@ TEST_CASE("DebugCommands types command lists registered types", "[dbg][commands]
     reg.registerType(std::move(defA));
     reg.registerType(std::move(defB));
 
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
+    CommandRegistry cmds;
+    CommandContext ctx{};
     ctx.typeRegistry = &reg;
-    registerBuiltinCommands(cmds, ctx);
+    registerConsoleCommands(cmds, ctx);
 
     std::string out = cmds.dispatch("types");
     REQUIRE(out.find("test:alpha") != std::string::npos);
     REQUIRE(out.find("test:beta") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands entities command lists snapshot entries", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands entities command lists snapshot entries", "[console][commands]") {
     fl::EntityTypeRegistry tyReg;
     fl::EntityDef def;
     def.id = "test:ship";
@@ -446,11 +446,11 @@ TEST_CASE("DebugCommands entities command lists snapshot entries", "[dbg][comman
     bridge.publish(std::move(snap));
     bridge.tryAdvance();
 
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
+    CommandRegistry cmds;
+    CommandContext ctx{};
     ctx.typeRegistry = &tyReg;
     ctx.renderBridge = &bridge;
-    registerBuiltinCommands(cmds, ctx);
+    registerConsoleCommands(cmds, ctx);
 
     std::string out = cmds.dispatch("entities");
     REQUIRE(out.find("test:ship") != std::string::npos);
@@ -458,34 +458,34 @@ TEST_CASE("DebugCommands entities command lists snapshot entries", "[dbg][comman
 }
 
 // ---------------------------------------------------------------------------
-// DebugCommands — null context / arg-count / error-path branches
+// ConsoleCommands — null context / arg-count / error-path branches
 // ---------------------------------------------------------------------------
 
-TEST_CASE("DebugCommands types with null registry returns error", "[dbg][commands]") {
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{}; // typeRegistry = nullptr
-    registerBuiltinCommands(cmds, ctx);
+TEST_CASE("ConsoleCommands types with null registry returns error", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{}; // typeRegistry = nullptr
+    registerConsoleCommands(cmds, ctx);
     std::string out = cmds.dispatch("types");
     REQUIRE(out.find("no type registry") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands entities with null bridge returns error", "[dbg][commands]") {
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{}; // renderBridge = nullptr
-    registerBuiltinCommands(cmds, ctx);
+TEST_CASE("ConsoleCommands entities with null bridge returns error", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{}; // renderBridge = nullptr
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(cmds.dispatch("entities").find("no render bridge") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands entities with no snapshot returns message", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands entities with no snapshot returns message", "[console][commands]") {
     fl::SimRenderBridge bridge; // never published — hasSnapshot() == false
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
+    CommandRegistry cmds;
+    CommandContext ctx{};
     ctx.renderBridge = &bridge;
-    registerBuiltinCommands(cmds, ctx);
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(cmds.dispatch("entities").find("no snapshot") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands entities with empty snapshot returns message", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands entities with empty snapshot returns message", "[console][commands]") {
     fl::SimRenderBridge bridge;
     fl::RenderSnapshot snap;
     snap.tickIndex = 1;
@@ -493,139 +493,139 @@ TEST_CASE("DebugCommands entities with empty snapshot returns message", "[dbg][c
     bridge.publish(std::move(snap));
     bridge.tryAdvance();
 
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
+    CommandRegistry cmds;
+    CommandContext ctx{};
     ctx.renderBridge = &bridge;
-    registerBuiltinCommands(cmds, ctx);
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(cmds.dispatch("entities").find("no live entities") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands spawn with missing args returns usage", "[dbg][commands]") {
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
-    registerBuiltinCommands(cmds, ctx);
+TEST_CASE("ConsoleCommands spawn with missing args returns usage", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{};
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(cmds.dispatch("spawn").find("usage") != std::string::npos);
     REQUIRE(cmds.dispatch("spawn type 1 2").find("usage") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands spawn with null context returns error", "[dbg][commands]") {
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{}; // entityManager / gameLoop = nullptr
-    registerBuiltinCommands(cmds, ctx);
+TEST_CASE("ConsoleCommands spawn with null context returns error", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{}; // entityManager / gameLoop = nullptr
+    registerConsoleCommands(cmds, ctx);
     std::string out = cmds.dispatch("spawn builtin:debug-entity 0 500 0");
     REQUIRE(out.find("not available") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands spawn with invalid coords returns error", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands spawn with invalid coords returns error", "[console][commands]") {
     // Need non-null context but invalid coordinates
     fl::EntityTypeRegistry tyReg;
     fl::EntityDef def;
     def.id = "test:unit";
     def.name = "Unit";
     tyReg.registerType(std::move(def));
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
+    CommandRegistry cmds;
+    CommandContext ctx{};
     ctx.typeRegistry = &tyReg;
     // entityManager and gameLoop are null so we get "not available" before coord parse,
     // but passing null entityManager triggers the "not available" guard first.
     // Test invalid coords by checking the parse branch via a valid-looking context:
     // Just verify we get some error string — coord validation comes after context check.
-    registerBuiltinCommands(cmds, ctx);
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(!cmds.dispatch("spawn test:unit x y z").empty());
 }
 
-TEST_CASE("DebugCommands spawn with unknown type returns error", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands spawn with unknown type returns error", "[console][commands]") {
     fl::EntityTypeRegistry tyReg; // empty registry
     fl::SimRenderBridge bridge;
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
+    CommandRegistry cmds;
+    CommandContext ctx{};
     ctx.typeRegistry = &tyReg;
     ctx.renderBridge = &bridge;
     // entityManager / gameLoop null — triggers "not available" before type check;
     // set them to non-null via a workaround: use the fact that "not available" fires
     // first so unknown type check can't be reached without a running GameLoop.
     // Coverage goal: the null-context guard branch fires and is tested.
-    registerBuiltinCommands(cmds, ctx);
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(cmds.dispatch("spawn unknown:type 0 0 0").find("not available") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands kill with missing args returns usage", "[dbg][commands]") {
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
-    registerBuiltinCommands(cmds, ctx);
+TEST_CASE("ConsoleCommands kill with missing args returns usage", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{};
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(cmds.dispatch("kill").find("usage") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands kill with null context returns error", "[dbg][commands]") {
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
-    registerBuiltinCommands(cmds, ctx);
+TEST_CASE("ConsoleCommands kill with null context returns error", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{};
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(cmds.dispatch("kill 5").find("not available") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands kill entity not in snapshot returns error", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands kill entity not in snapshot returns error", "[console][commands]") {
     fl::SimRenderBridge bridge;
     fl::RenderSnapshot snap;
     snap.tickIndex = 1; // empty entries
     bridge.publish(std::move(snap));
     bridge.tryAdvance();
 
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
+    CommandRegistry cmds;
+    CommandContext ctx{};
     ctx.renderBridge = &bridge;
     // entityManager / gameLoop null → "not available" fires before snapshot check
-    registerBuiltinCommands(cmds, ctx);
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(!cmds.dispatch("kill 42").empty());
 }
 
-TEST_CASE("DebugCommands tp with missing args returns usage", "[dbg][commands]") {
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
-    registerBuiltinCommands(cmds, ctx);
+TEST_CASE("ConsoleCommands tp with missing args returns usage", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{};
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(cmds.dispatch("tp").find("usage") != std::string::npos);
     REQUIRE(cmds.dispatch("tp 1 2").find("usage") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands tp with null context returns error", "[dbg][commands]") {
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
-    registerBuiltinCommands(cmds, ctx);
+TEST_CASE("ConsoleCommands tp with null context returns error", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{};
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(cmds.dispatch("tp 0 500 0").find("not available") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands toggle_pos with null showPos returns error", "[dbg][commands]") {
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{}; // showPos = nullptr
-    registerBuiltinCommands(cmds, ctx);
+TEST_CASE("ConsoleCommands toggle_pos with null showPos returns error", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{}; // showPos = nullptr
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(cmds.dispatch("toggle_pos").find("not available") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands toggle_pos toggles flag", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands toggle_pos toggles flag", "[console][commands]") {
     bool flag = false;
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
+    CommandRegistry cmds;
+    CommandContext ctx{};
     ctx.showPos = &flag;
-    registerBuiltinCommands(cmds, ctx);
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(cmds.dispatch("toggle_pos").find("ON") != std::string::npos);
     REQUIRE(flag == true);
     REQUIRE(cmds.dispatch("toggle_pos").find("OFF") != std::string::npos);
     REQUIRE(flag == false);
 }
 
-TEST_CASE("DebugCommands stub commands return messages", "[dbg][commands]") {
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
-    registerBuiltinCommands(cmds, ctx);
+TEST_CASE("ConsoleCommands stub commands return messages", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{};
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(!cmds.dispatch("set_weather clear").empty());
     REQUIRE(!cmds.dispatch("set_difficulty veteran").empty());
     REQUIRE(!cmds.dispatch("reload_content").empty());
 }
 
 // ---------------------------------------------------------------------------
-// DebugCommands — serverCommand forwarding (new behaviour after #227)
+// ConsoleCommands — serverCommand forwarding (new behaviour after #227)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("DebugCommands spawn forwards command to serverCommand", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands spawn forwards command to serverCommand", "[console][commands]") {
     fl::EntityTypeRegistry reg;
     fl::EntityDef def;
     def.id = "test:unit";
@@ -634,12 +634,12 @@ TEST_CASE("DebugCommands spawn forwards command to serverCommand", "[dbg][comman
     def.maxHp = 100.f;
     reg.registerType(std::move(def));
 
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
+    CommandRegistry cmds;
+    CommandContext ctx{};
     ctx.typeRegistry = &reg;
     std::string captured;
     ctx.serverCommand = [&](std::string_view s) { captured = std::string(s); };
-    registerBuiltinCommands(cmds, ctx);
+    registerConsoleCommands(cmds, ctx);
 
     auto out1 = cmds.dispatch("spawn test:unit 0 500 0");
     REQUIRE(out1.find("queued") != std::string::npos);
@@ -647,12 +647,12 @@ TEST_CASE("DebugCommands spawn forwards command to serverCommand", "[dbg][comman
     REQUIRE(captured.find("test:unit") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands kill forwards command to serverCommand", "[dbg][commands]") {
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
+TEST_CASE("ConsoleCommands kill forwards command to serverCommand", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{};
     std::string captured;
     ctx.serverCommand = [&](std::string_view s) { captured = std::string(s); };
-    registerBuiltinCommands(cmds, ctx);
+    registerConsoleCommands(cmds, ctx);
 
     auto out2 = cmds.dispatch("kill 42");
     REQUIRE(out2.find("queued") != std::string::npos);
@@ -660,15 +660,15 @@ TEST_CASE("DebugCommands kill forwards command to serverCommand", "[dbg][command
     REQUIRE(captured.find("42") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands tp forwards command with player idx to serverCommand", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands tp forwards command with player idx to serverCommand", "[console][commands]") {
     uint32_t idx = 3, gen = 1;
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
+    CommandRegistry cmds;
+    CommandContext ctx{};
     ctx.playerEntityIdx = &idx;
     ctx.playerEntityGen = &gen;
     std::string captured;
     ctx.serverCommand = [&](std::string_view s) { captured = std::string(s); };
-    registerBuiltinCommands(cmds, ctx);
+    registerConsoleCommands(cmds, ctx);
 
     auto out3 = cmds.dispatch("tp 10 500 20");
     REQUIRE(out3.find("queued") != std::string::npos);
@@ -676,12 +676,12 @@ TEST_CASE("DebugCommands tp forwards command with player idx to serverCommand", 
     REQUIRE(captured.find("3") != std::string::npos); // player entity idx
 }
 
-TEST_CASE("DebugCommands set_weather forwards command to serverCommand", "[dbg][commands]") {
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
+TEST_CASE("ConsoleCommands set_weather forwards command to serverCommand", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{};
     std::string captured;
     ctx.serverCommand = [&](std::string_view s) { captured = std::string(s); };
-    registerBuiltinCommands(cmds, ctx);
+    registerConsoleCommands(cmds, ctx);
 
     auto out4 = cmds.dispatch("set_weather storm");
     REQUIRE(out4.find("queued") != std::string::npos);
@@ -689,22 +689,22 @@ TEST_CASE("DebugCommands set_weather forwards command to serverCommand", "[dbg][
     REQUIRE(captured.find("storm") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands spawn with null serverCommand returns not available", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands spawn with null serverCommand returns not available", "[console][commands]") {
     // serverCommand = nullptr (default)
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
-    registerBuiltinCommands(cmds, ctx);
+    CommandRegistry cmds;
+    CommandContext ctx{};
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(cmds.dispatch("spawn builtin:debug-entity 0 500 0").find("not available") != std::string::npos);
 }
 
 // ---------------------------------------------------------------------------
-// DebugConsole — additional branch coverage
+// GameConsole — additional branch coverage
 // ---------------------------------------------------------------------------
 
-TEST_CASE("DebugConsole execute skips duplicate history entry", "[dbg][console]") {
+TEST_CASE("GameConsole execute skips duplicate history entry", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
 
     con.execute("cmd");
     con.execute("cmd"); // duplicate — should not add a second history entry
@@ -716,21 +716,21 @@ TEST_CASE("DebugConsole execute skips duplicate history entry", "[dbg][console]"
     REQUIRE(!con.elements().empty());
 }
 
-TEST_CASE("DebugConsole execute empty line is no-op", "[dbg][console]") {
+TEST_CASE("GameConsole execute empty line is no-op", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
-    DebugConsole con(logger, reg);
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
 
     con.execute(""); // should return immediately without adding to ring
     con.buildHud();
     REQUIRE(con.elements().empty()); // closed, no pos → empty
 }
 
-TEST_CASE("DebugConsole buildHud shows partial output ring", "[dbg][console]") {
+TEST_CASE("GameConsole buildHud shows partial output ring", "[console]") {
     NullLogger logger;
-    DebugCommandRegistry reg;
+    CommandRegistry reg;
     reg.registerCommand("noop", "no-op", [](std::span<std::string_view>) { return std::string{}; });
-    DebugConsole con(logger, reg);
+    GameConsole con(logger, reg);
 
     // Push exactly 3 output lines (< kVisibleLines=20)
     con.execute("noop");
@@ -748,26 +748,26 @@ TEST_CASE("DebugConsole buildHud shows partial output ring", "[dbg][console]") {
     REQUIRE(hasRect);
 }
 
-TEST_CASE("DebugCommands help for specific command", "[dbg][commands]") {
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
-    registerBuiltinCommands(cmds, ctx);
+TEST_CASE("ConsoleCommands help for specific command", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{};
+    registerConsoleCommands(cmds, ctx);
     std::string out = cmds.dispatch("help spawn");
     REQUIRE(!out.empty());
     REQUIRE(out.find("spawn") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands help for unknown command returns error", "[dbg][commands]") {
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
-    registerBuiltinCommands(cmds, ctx);
+TEST_CASE("ConsoleCommands help for unknown command returns error", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{};
+    registerConsoleCommands(cmds, ctx);
     REQUIRE(cmds.dispatch("help nonexistent").find("unknown command") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands help command lists all builtins", "[dbg][commands]") {
-    DebugCommandRegistry cmds;
-    DebugCommandContext ctx{};
-    registerBuiltinCommands(cmds, ctx);
+TEST_CASE("ConsoleCommands help command lists all builtins", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{};
+    registerConsoleCommands(cmds, ctx);
 
     std::string out = cmds.dispatch("help");
     REQUIRE(out.find("types") != std::string::npos);
@@ -782,17 +782,16 @@ TEST_CASE("DebugCommands help command lists all builtins", "[dbg][commands]") {
 }
 
 // ============================================================================
-// DebugCommands — full-context parsing branches
+// ConsoleCommands — full-context parsing branches
 //
 // Server-side commands (spawn/kill/tp/set_weather) now forward to a serverCommand
 // callback rather than calling EntityManager/GameLoop directly.
 // ============================================================================
 
 // Helper: context with serverCommand capture + optional fields.
-static DebugCommandContext makeCtxWithCapture(fl::EntityTypeRegistry& tyReg, std::string& captured,
-                                              bool* showPos = nullptr, uint32_t* playerIdx = nullptr,
-                                              uint32_t* playerGen = nullptr) {
-    DebugCommandContext ctx{};
+static CommandContext makeCtxWithCapture(fl::EntityTypeRegistry& tyReg, std::string& captured, bool* showPos = nullptr,
+                                         uint32_t* playerIdx = nullptr, uint32_t* playerGen = nullptr) {
+    CommandContext ctx{};
     ctx.typeRegistry = &tyReg;
     ctx.showPos = showPos;
     ctx.playerEntityIdx = playerIdx;
@@ -801,7 +800,7 @@ static DebugCommandContext makeCtxWithCapture(fl::EntityTypeRegistry& tyReg, std
     return ctx;
 }
 
-TEST_CASE("DebugCommands spawn with invalid coordinates returns error", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands spawn with invalid coordinates returns error", "[console][commands]") {
     fl::EntityTypeRegistry tyReg;
     fl::EntityDef def;
     def.id = "test:unit";
@@ -811,38 +810,38 @@ TEST_CASE("DebugCommands spawn with invalid coordinates returns error", "[dbg][c
     tyReg.registerType(std::move(def));
 
     std::string captured;
-    DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
+    CommandRegistry cmds;
+    registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     std::string out = cmds.dispatch("spawn test:unit abc 0 0");
     REQUIRE(out.find("invalid coordinates") != std::string::npos);
     REQUIRE(captured.empty()); // serverCommand not called on parse error
 }
 
-TEST_CASE("DebugCommands spawn with unknown type name returns error", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands spawn with unknown type name returns error", "[console][commands]") {
     fl::EntityTypeRegistry tyReg; // empty
 
     std::string captured;
-    DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
+    CommandRegistry cmds;
+    registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     REQUIRE(cmds.dispatch("spawn unknown:thing 0 0 0").find("unknown type") != std::string::npos);
     REQUIRE(captured.empty());
 }
 
-TEST_CASE("DebugCommands spawn with numeric index out of range returns error", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands spawn with numeric index out of range returns error", "[console][commands]") {
     fl::EntityTypeRegistry tyReg; // empty — index 99 not valid
 
     std::string captured;
-    DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
+    CommandRegistry cmds;
+    registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     // isAllDigits("99") = true path; byIndex(99) returns nullptr
     REQUIRE(cmds.dispatch("spawn 99 0 0 0").find("unknown type") != std::string::npos);
     REQUIRE(captured.empty());
 }
 
-TEST_CASE("DebugCommands spawn valid type forwards to serverCommand", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands spawn valid type forwards to serverCommand", "[console][commands]") {
     fl::EntityTypeRegistry tyReg;
     fl::EntityDef def;
     def.id = "test:ship";
@@ -852,8 +851,8 @@ TEST_CASE("DebugCommands spawn valid type forwards to serverCommand", "[dbg][com
     tyReg.registerType(std::move(def));
 
     std::string captured;
-    DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
+    CommandRegistry cmds;
+    registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     std::string out = cmds.dispatch("spawn test:ship 0 500 0");
     REQUIRE(out.find("queued") != std::string::npos);
@@ -861,7 +860,7 @@ TEST_CASE("DebugCommands spawn valid type forwards to serverCommand", "[dbg][com
     REQUIRE(captured.find("test:ship") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands spawn valid numeric index forwards to serverCommand", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands spawn valid numeric index forwards to serverCommand", "[console][commands]") {
     fl::EntityTypeRegistry tyReg;
     fl::EntityDef def;
     def.id = "test:jet";
@@ -871,8 +870,8 @@ TEST_CASE("DebugCommands spawn valid numeric index forwards to serverCommand", "
     tyReg.registerType(std::move(def));
 
     std::string captured;
-    DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
+    CommandRegistry cmds;
+    registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     // "0" is a valid index — tests isAllDigits true + byIndex success path
     std::string out = cmds.dispatch("spawn 0 0 500 0");
@@ -880,22 +879,22 @@ TEST_CASE("DebugCommands spawn valid numeric index forwards to serverCommand", "
     REQUIRE(!captured.empty());
 }
 
-TEST_CASE("DebugCommands kill with invalid index returns error", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands kill with invalid index returns error", "[console][commands]") {
     fl::EntityTypeRegistry tyReg;
     std::string captured;
-    DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
+    CommandRegistry cmds;
+    registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     // Non-numeric idx — parseUint fails
     REQUIRE(cmds.dispatch("kill abc").find("invalid entity index") != std::string::npos);
     REQUIRE(captured.empty());
 }
 
-TEST_CASE("DebugCommands kill valid index forwards to serverCommand", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands kill valid index forwards to serverCommand", "[console][commands]") {
     fl::EntityTypeRegistry tyReg;
     std::string captured;
-    DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
+    CommandRegistry cmds;
+    registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     std::string out = cmds.dispatch("kill 42");
     REQUIRE(out.find("queued") != std::string::npos);
@@ -903,35 +902,35 @@ TEST_CASE("DebugCommands kill valid index forwards to serverCommand", "[dbg][com
     REQUIRE(captured.find("42") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands tp with null playerEntityIdx returns error", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands tp with null playerEntityIdx returns error", "[console][commands]") {
     fl::EntityTypeRegistry tyReg;
     std::string captured;
     // playerIdx = nullptr → "player entity unknown"
-    DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured));
+    CommandRegistry cmds;
+    registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured));
 
     REQUIRE(cmds.dispatch("tp 0 500 0").find("player entity unknown") != std::string::npos);
     REQUIRE(captured.empty());
 }
 
-TEST_CASE("DebugCommands tp with valid player forwards to serverCommand", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands tp with valid player forwards to serverCommand", "[console][commands]") {
     fl::EntityTypeRegistry tyReg;
     uint32_t idx = 1, gen = 1;
     std::string captured;
-    DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured, nullptr, &idx, &gen));
+    CommandRegistry cmds;
+    registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured, nullptr, &idx, &gen));
 
     std::string out = cmds.dispatch("tp 100 500 200");
     REQUIRE(out.find("queued") != std::string::npos);
     REQUIRE(captured.find("tp") != std::string::npos);
 }
 
-TEST_CASE("DebugCommands tp with invalid coordinates returns error", "[dbg][commands]") {
+TEST_CASE("ConsoleCommands tp with invalid coordinates returns error", "[console][commands]") {
     fl::EntityTypeRegistry tyReg;
     uint32_t idx = 1, gen = 1;
     std::string captured;
-    DebugCommandRegistry cmds;
-    registerBuiltinCommands(cmds, makeCtxWithCapture(tyReg, captured, nullptr, &idx, &gen));
+    CommandRegistry cmds;
+    registerConsoleCommands(cmds, makeCtxWithCapture(tyReg, captured, nullptr, &idx, &gen));
 
     REQUIRE(cmds.dispatch("tp bad 500 0").find("invalid") != std::string::npos);
     REQUIRE(captured.empty());
@@ -941,11 +940,11 @@ TEST_CASE("DebugCommands tp with invalid coordinates returns error", "[dbg][comm
 // set_weather forwarding (serverCommand-based, replaces WeatherController test)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("set_weather command forwards valid presets to serverCommand", "[dbg][commands]") {
+TEST_CASE("set_weather command forwards valid presets to serverCommand", "[console][commands]") {
     fl::EntityTypeRegistry tyReg;
     std::string captured;
-    DebugCommandRegistry reg;
-    registerBuiltinCommands(reg, makeCtxWithCapture(tyReg, captured));
+    CommandRegistry reg;
+    registerConsoleCommands(reg, makeCtxWithCapture(tyReg, captured));
 
     CHECK(reg.dispatch("set_weather storm").find("queued") != std::string::npos);
     CHECK(captured.find("set_weather") != std::string::npos);
@@ -957,4 +956,44 @@ TEST_CASE("set_weather command forwards valid presets to serverCommand", "[dbg][
 
     CHECK(reg.dispatch("set_weather hurricane").find("unknown") != std::string::npos);
     CHECK(reg.dispatch("set_weather").find("usage") != std::string::npos);
+}
+
+// ============================================================================
+// GameConsole — outputLines() API (#292)
+// ============================================================================
+
+TEST_CASE("GameConsole outputLines empty on construction", "[console]") {
+    NullLogger logger;
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
+    REQUIRE(con.outputLines().empty());
+}
+
+TEST_CASE("GameConsole outputLines reflects print calls", "[console]") {
+    NullLogger logger;
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
+
+    con.print("alpha");
+    con.print("beta");
+
+    auto lines = con.outputLines();
+    REQUIRE(lines.size() == 2);
+    REQUIRE(lines[0] == "alpha");
+    REQUIRE(lines[1] == "beta");
+}
+
+TEST_CASE("GameConsole outputLines capped at 64 entries", "[console]") {
+    NullLogger logger;
+    CommandRegistry reg;
+    GameConsole con(logger, reg);
+
+    for (int i = 1; i <= 65; ++i)
+        con.print("line" + std::to_string(i));
+
+    auto lines = con.outputLines();
+    REQUIRE(lines.size() == 64);
+    // line1 was overwritten; oldest surviving entry is line2
+    REQUIRE(lines.front() == "line2");
+    REQUIRE(lines.back() == "line65");
 }

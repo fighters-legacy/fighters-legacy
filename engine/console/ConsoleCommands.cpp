@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "debug/DebugCommands.h"
+#include "console/ConsoleCommands.h"
 
-#include "debug/DebugCommandRegistry.h"
+#include "console/CommandRegistry.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityTypeRegistry.h"
 #include "render/RenderSnapshot.h"
@@ -55,10 +55,10 @@ static bool isAllDigits(std::string_view sv) {
 }
 
 // ---------------------------------------------------------------------------
-// registerBuiltinCommands
+// registerConsoleCommands
 // ---------------------------------------------------------------------------
 
-void registerBuiltinCommands(DebugCommandRegistry& registry, DebugCommandContext ctx) {
+void registerConsoleCommands(CommandRegistry& registry, CommandContext ctx) {
     // ------------------------------------------------------------------
     // help [command]
     // ------------------------------------------------------------------

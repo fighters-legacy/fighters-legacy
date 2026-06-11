@@ -12,7 +12,7 @@ Developer controls for the Fighters Legacy sandbox (zero-content-pack free-fligh
 | F2 | Chase — orbit behind player entity |
 | F4 | Free (default) — freely movable pivot camera |
 | F3 | Cycle performance overlay (Off → Compact → Full) |
-| `` ` `` | Toggle debug console |
+| `` ` `` | Toggle game console |
 
 ### Free camera (F4)
 
@@ -46,7 +46,7 @@ When switching to Free camera while a player entity exists, the pivot snaps to t
 
 ## Flight controls
 
-Active in all camera modes. All game inputs (flight controls and camera) are suppressed while the debug console is open; throttle is held at its last value.
+Active in all camera modes. All game inputs (flight controls and camera) are suppressed while the game console is open; throttle is held at its last value.
 
 | Key | Action |
 |---|---|
@@ -147,7 +147,7 @@ Cycles Off → Compact → Full. **Full mode** includes a 128-position rolling f
 
 ---
 
-## Debug console
+## Game console
 
 **Toggle:** `` ` `` (backtick / grave). **Close:** Escape.
 

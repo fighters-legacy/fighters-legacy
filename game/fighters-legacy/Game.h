@@ -17,7 +17,7 @@ class Game {
     bool initContent();
     void initGameSystems();
     bool initNetwork();
-    void initDebugConsole();
+    void initGameConsole();
 
     std::unique_ptr<GameImpl> m_impl;
 };

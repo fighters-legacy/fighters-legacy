@@ -11,9 +11,9 @@
 // Returns a string displayed in the console output (empty = no output).
 using CommandHandler = std::function<std::string(std::span<std::string_view> args)>;
 
-// Registry for debug console commands. Commands are registered once at init;
+// Registry for console commands. Commands are registered once at init;
 // the registry is read-only (const dispatch) during the game loop.
-class DebugCommandRegistry {
+class CommandRegistry {
   public:
     void registerCommand(std::string name, std::string helpText, CommandHandler handler);
 

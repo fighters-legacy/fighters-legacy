@@ -91,8 +91,8 @@ class IRenderer {
     // renderer-owned storage; caller lifetime is irrelevant. Cleared by endFrame.
     virtual void submitOverlayElements(std::span<const HudElement> elements) = 0;
 
-    // ── Debug console overlay ─────────────────────────────────────────────────
-    // Sets the debug console overlay for this frame (engine-level command shell).
+    // ── Game console overlay ──────────────────────────────────────────────────
+    // Sets the game console overlay for this frame (engine-level command shell).
     // Non-owning view; the span must remain valid until endFrame returns.
     // Cleared by endFrame.
     virtual void setConsoleElements(std::span<const HudElement> elements) = 0;

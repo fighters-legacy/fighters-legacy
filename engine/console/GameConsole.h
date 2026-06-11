@@ -3,7 +3,7 @@
 
 #include "IInput.h"
 #include "RenderTypes.h"
-#include "debug/DebugCommandRegistry.h"
+#include "console/CommandShell.h"
 
 #include <array>
 #include <glm/glm.hpp>
@@ -11,20 +11,18 @@
 #include <string>
 #include <string_view>
 
-class ILogger;
-
-// Quake-style drop-down debug console.
+// Quake-style drop-down game console.
 //
-// Toggle:  backtick (`) — handled in main.cpp via SDL_SCANCODE_GRAVE.
-// Close:   Escape — detected by tick(); caller should call close().
+// Toggle:  backtick (`) -- handled in main.cpp via SDL_SCANCODE_GRAVE.
+// Close:   Escape -- detected by tick(); caller should call close().
 // Typing:  ITextInputHandler delivers printable chars; special keys via IInput.
 //
 // Rendering: buildHud() populates a pre-allocated HudElement array each frame.
 // The position widget (top-right world coords) is emitted by buildHud() even
 // when the console is closed, if m_showPos is true and a player pos is supplied.
-class DebugConsole : public ITextInputHandler {
+class GameConsole : public CommandShell, public ITextInputHandler {
   public:
-    explicit DebugConsole(ILogger& logger, DebugCommandRegistry& registry);
+    explicit GameConsole(ILogger& logger, CommandRegistry& registry);
 
     // -----------------------------------------------------------------------
     // Lifecycle (main thread)
@@ -54,8 +52,8 @@ class DebugConsole : public ITextInputHandler {
     bool tick(IInput& input);
 
     // Rebuild HudElement list for this frame.
-    // camPos:    camera world position — always shown at top-right when non-null.
-    // playerPos: player entity world position — shown one line below camPos when
+    // camPos:    camera world position -- always shown at top-right when non-null.
+    // playerPos: player entity world position -- shown one line below camPos when
     //            showPos is true and non-null.
     void buildHud(const glm::dvec3* camPos = nullptr, const glm::dvec3* playerPos = nullptr);
 
@@ -74,33 +72,22 @@ class DebugConsole : public ITextInputHandler {
     // -----------------------------------------------------------------------
 
     // Dispatch a line directly (bypasses input buffer; records history + output).
-    void execute(std::string_view line);
+    // Overrides CommandShell::execute() to also record command history.
+    std::string execute(std::string_view line) override;
 
-    // Append a line to the output ring without command dispatch (e.g. server notices).
-    void print(std::string line);
-
-    // Access the showPos flag so DebugCommands can toggle it.
+    // Access the showPos flag so ConsoleCommands can toggle it.
     [[nodiscard]] bool& showPosRef() noexcept {
         return m_showPos;
     }
 
   private:
-    static constexpr int kMaxOutputLines = 64;
     static constexpr int kVisibleLines = 20;
     static constexpr int kHistoryCap = 32;
     static constexpr int kMaxHudElems = 29; // rect + 2 lines + title + 20 output + prompt + pos
     static constexpr int kMaxStrings = 26;  // title + 20 output + prompt + pos + slack
 
-    ILogger& m_logger;
-    DebugCommandRegistry& m_registry;
-
     bool m_open{false};
     std::string m_input;
-
-    // Output ring (circular, newest at head-1)
-    std::array<std::string, kMaxOutputLines> m_outputRing;
-    int m_outputHead{0};
-    int m_outputCount{0};
 
     // Command history
     std::array<std::string, kHistoryCap> m_history;
@@ -116,10 +103,9 @@ class DebugConsole : public ITextInputHandler {
     int m_elemCount{0};
     int m_strCount{0};
 
-    void pushOutput(std::string line);
     void submitLine();
 
-    // HUD helpers — each returns false if the pre-allocated arrays are full
+    // HUD helpers -- each returns false if the pre-allocated arrays are full
     bool pushText(float x, float y, float r, float g, float b, const char* fmt, ...);
     bool pushLine(float x0, float y0, float x1, float y1, float r, float g, float b);
     bool pushRect(float x0, float y0, float x1, float y1, float r, float g, float b, float a);
