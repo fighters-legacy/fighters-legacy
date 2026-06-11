@@ -158,3 +158,25 @@ TEST_CASE("ClientNetEventHandler: unknown msgId discarded, no notice", "[client_
 
     CHECK(notice.buildElements().empty());
 }
+
+TEST_CASE("ClientNetEventHandler: MsgMotd notice auto-dismisses after 15 seconds", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    auto fakeTime = std::chrono::steady_clock::now();
+    ServerNotice notice;
+    notice.setClockOverride([&fakeTime]() { return fakeTime; });
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.notice = &notice;
+
+    auto pkt = makeMotdPacket("Welcome to the server");
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(!notice.buildElements().empty());
+
+    fakeTime += std::chrono::seconds(16);
+    CHECK(notice.buildElements().empty());
+}
