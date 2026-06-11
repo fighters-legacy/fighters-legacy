@@ -35,8 +35,8 @@ Suggested haptic events for flight-sim game systems. Tuning values are starting 
 | **Landing gear touchdown** | 0.9 | 0.3 | — | 200 | Heavy low-freq on impact |
 | **Hit taken** | 0.8 | 0.4 | — | 120 | Asymmetric if direction known: port hit → left motor heavier |
 | **Stall buffet** | 0.3 | 0.1 | — | continuous | Sustain while AoA exceeds stall threshold; stop on recovery |
-| **Afterburner ignition** | 0.4 | 0.2 | — | ramp 300 then sustain | Ramp up on ignition; hold low-intensity while afterburner active |
-| **Engine failure (single)** | 0.5 | 0.0 | — | continuous | Port engine: left motor only; starboard: right motor only — lets player feel which side |
+| **Afterburner ignition** | 0.4 | 0.2 | — | ramp 300 then sustain | Driven by `EntityRenderEntry::abEngaged` (set by `FlightIntegrator` when `ctrl.afterburner` commanded and aircraft has an `ab_thrust` table); replaces former `throttle == 100` proxy |
+| **Engine failure (single)** | 0.5 | 0.0 | — | continuous | Driven by `EntityRenderEntry::engineFailFlags`; `kEngineFailLeft` (bit 1) → left motor only; `kEngineFailRight` (bit 2) → right motor only; both or `kEngineFailGeneric` (bit 0) → symmetric; currently only `kEngineFailGeneric` is populated (from `damageLevel ≥ Heavy`) |
 | **G-LOC onset** | 0.0 | 0.6 | — | continuous | Intensity proportional to G load above 6G; peak just before grey-out |
 | **Compressor stall** | 0.6 | 0.0 | — | 4 × 30 ms irregular | Stutter pattern — uneven spacing distinguishes it from gun fire |
 | **GPWS / terrain warning** | 0.5 | 0.5 | — | 2 × 100 ms | Distinct double-pulse; easily distinguished from the 3-pulse missile warning |

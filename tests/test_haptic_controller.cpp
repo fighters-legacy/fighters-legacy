@@ -53,13 +53,16 @@ struct TrackingInput : MockInput {
 // ---------------------------------------------------------------------------
 // Helper: build a minimal EntityRenderEntry at safe altitude (no GPWS/touchdown).
 // ---------------------------------------------------------------------------
-static fl::EntityRenderEntry makeEntry(uint8_t throttle = 50, uint8_t damage = 0, glm::vec3 vel = {}) {
+static fl::EntityRenderEntry makeEntry(uint8_t throttle = 50, uint8_t damage = 0, glm::vec3 vel = {},
+                                       bool abEngaged = false, uint8_t engineFailFlags = 0) {
     fl::EntityRenderEntry e{};
     e.throttle = throttle;
     e.damageLevel = damage;
     e.velocity = vel;
     e.orientation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     e.position = {0.0, 5000.0, 0.0};
+    e.abEngaged = abEngaged;
+    e.engineFailFlags = engineFailFlags;
     return e;
 }
 
@@ -157,13 +160,13 @@ TEST_CASE("stall buffet stops when AoA drops below threshold") {
 // ===========================================================================
 // Afterburner
 // ===========================================================================
-TEST_CASE("afterburner ignition fires on throttle 100 transition") {
+TEST_CASE("afterburner ignition fires on abEngaged transition") {
     TrackingInput inp;
     HapticController hc(inp);
-    auto e = makeEntry(50, 0);
+    auto e = makeEntry();
     hc.update(&e, false, 0.0f, kDt); // establish m_abActive=false
     inp.clear();
-    e.throttle = 100;
+    e.abEngaged = true;
     hc.update(&e, false, 0.0f, kDt);
     bool found = false;
     for (auto& c : inp.rumbleCalls)
@@ -172,22 +175,22 @@ TEST_CASE("afterburner ignition fires on throttle 100 transition") {
     CHECK(found);
 }
 
-TEST_CASE("afterburner sustain re-fires while throttle stays at 100") {
+TEST_CASE("afterburner sustain re-fires while abEngaged is true") {
     TrackingInput inp;
     HapticController hc(inp);
-    auto e = makeEntry(100, 0);
-    hc.update(&e, false, 0.0f, 0.02f); // ignition on first frame
+    auto e = makeEntry(50, 0, {}, true); // abEngaged=true from the start
+    hc.update(&e, false, 0.0f, 0.02f);   // ignition on first frame
     size_t callsAfterIgnition = inp.rumbleCalls.size();
     hc.update(&e, false, 0.0f, 0.3f); // advance past 0.25s sustain delay
     CHECK(inp.rumbleCalls.size() > callsAfterIgnition);
 }
 
-TEST_CASE("afterburner sustain stops when throttle drops") {
+TEST_CASE("afterburner sustain stops when abEngaged clears") {
     TrackingInput inp;
     HapticController hc(inp);
-    auto e = makeEntry(100, 0);
-    hc.update(&e, false, 0.0f, 0.02f); // ignition
-    e.throttle = 50;
+    auto e = makeEntry(50, 0, {}, true); // abEngaged=true
+    hc.update(&e, false, 0.0f, 0.02f);   // ignition
+    e.abEngaged = false;
     hc.update(&e, false, 0.0f, 0.02f); // AB off
     inp.clear();
     hc.update(&e, false, 0.0f, 0.5f); // no sustain expected
@@ -198,18 +201,69 @@ TEST_CASE("afterburner sustain stops when throttle drops") {
 // ===========================================================================
 // Engine failure
 // ===========================================================================
-TEST_CASE("engine failure re-fires while damage level is 2 or above") {
+TEST_CASE("engine failure re-fires while engineFailFlags is nonzero") {
     TrackingInput inp;
     HapticController hc(inp);
-    auto e = makeEntry(50, 2);
-    hc.update(&e, false, 0.0f, 0.5f); // first frame — hit-taken fires; engine fail fires
+    auto e = makeEntry(50, 0, {}, false, fl::kEngineFailGeneric);
+    hc.update(&e, false, 0.0f, 0.5f); // first frame — engine fail fires
     inp.clear();
-    // From here prevDamageLevel == 2; only engine failure re-fires expected
     hc.update(&e, false, 0.0f, 0.5f);
     hc.update(&e, false, 0.0f, 0.5f);
     CHECK(inp.rumbleCalls.size() >= 2u);
     for (auto& c : inp.rumbleCalls)
         CHECK(c.lo == Catch::Approx(0.5f));
+}
+
+TEST_CASE("engine failure left motor only when kEngineFailLeft is set alone") {
+    TrackingInput inp;
+    HapticController hc(inp);
+    auto e = makeEntry(50, 0, {}, false, fl::kEngineFailLeft);
+    hc.update(&e, false, 0.0f, 0.5f); // timer fires
+    bool found = false;
+    for (auto& c : inp.rumbleCalls)
+        if (c.lo == Catch::Approx(0.5f) && c.hi == Catch::Approx(0.0f) && c.ms == 350u)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("engine failure right motor only when kEngineFailRight is set alone") {
+    TrackingInput inp;
+    HapticController hc(inp);
+    auto e = makeEntry(50, 0, {}, false, fl::kEngineFailRight);
+    hc.update(&e, false, 0.0f, 0.5f);
+    bool found = false;
+    for (auto& c : inp.rumbleCalls)
+        if (c.lo == Catch::Approx(0.0f) && c.hi == Catch::Approx(0.5f) && c.ms == 350u)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("engine failure symmetric when both L and R bits set") {
+    TrackingInput inp;
+    HapticController hc(inp);
+    auto e = makeEntry(50, 0, {}, false, static_cast<uint8_t>(fl::kEngineFailLeft | fl::kEngineFailRight));
+    hc.update(&e, false, 0.0f, 0.5f);
+    bool found = false;
+    for (auto& c : inp.rumbleCalls)
+        if (c.lo == Catch::Approx(0.5f) && c.hi == Catch::Approx(0.5f) && c.ms == 350u)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("compressor stall auto-triggered by kEngineCompStall flag") {
+    TrackingInput inp;
+    HapticController hc(inp);
+    auto e = makeEntry(50, 0, {}, false, fl::kEngineCompStall);
+    // First update: auto-trigger fires notifyCompressorStall() → m_csPhase=0; first gap not expired yet.
+    hc.update(&e, false, 0.0f, kDt);
+    // 4 updates at dt=0.1 fire exactly the 4 pulses, stopping before the flag re-triggers.
+    for (int i = 0; i < 4; ++i)
+        hc.update(&e, false, 0.0f, 0.1f);
+    int pulses = 0;
+    for (auto& c : inp.rumbleCalls)
+        if (c.lo == Catch::Approx(0.6f) && c.hi == Catch::Approx(0.0f))
+            ++pulses;
+    CHECK(pulses == 4);
 }
 
 // ===========================================================================
@@ -537,7 +591,7 @@ TEST_CASE("no rumble calls when controller has no haptic support") {
     inp.triggerSupported = false;
     HapticController hc(inp);
 
-    auto e = makeEntry(100, 2, {306.27f, -4.0f, 0.0f}); // all triggers at once
+    auto e = makeEntry(50, 2, {306.27f, -4.0f, 0.0f}, true, fl::kEngineFailGeneric); // all triggers at once
     e.position = {0.0, 200.0, 0.0};
     hc.update(&e, true, 0.0f, kDt);
     hc.update(&e, true, 0.0f, 0.5f);

@@ -4,6 +4,7 @@
 #include "flight/AeroForces.h"
 #include "flight/FlightModelData.h"
 
+#include <cstdint>
 #include <memory>
 
 namespace fl {
@@ -20,7 +21,8 @@ struct FlightState {
     float throttle_actual{0.f};    // actual throttle after spool lag [0,1]
     float current_sweep_deg{55.f}; // current wing sweep angle (fixed-geometry: equals ref_sweep_deg)
     bool ab_engaged{false};
-    float tvc_angle_deg{0.f}; // current TVC nozzle angle
+    uint8_t engineFailFlags{0}; // fl::kEngineFail* bitmask; 0 until per-engine sim is modelled
+    float tvc_angle_deg{0.f};   // current TVC nozzle angle
 };
 
 // Wind and turbulence injected each tick by WorldBroadcaster from WeatherController state.

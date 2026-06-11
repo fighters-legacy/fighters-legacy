@@ -9,7 +9,6 @@ HapticController::HapticController(IInput& input) : m_input(input) {}
 void HapticController::savePrev(const fl::EntityRenderEntry* player, float agl) {
     if (player) {
         m_prevVelocity = player->velocity;
-        m_prevThrottle = player->throttle;
         m_prevDamageLevel = player->damageLevel;
     }
     m_prevAgl = agl;
@@ -54,7 +53,7 @@ void HapticController::update(const fl::EntityRenderEntry* player, bool weaponFi
 
         // --- Afterburner ignition and sustain ---
         {
-            const bool abNow = (player->throttle == 100);
+            const bool abNow = player->abEngaged;
             if (abNow && !m_abActive && canRumble) {
                 m_input.rumble(0, 0.4f, 0.2f, 300);
                 m_abTimer = 0.25f;
@@ -69,19 +68,26 @@ void HapticController::update(const fl::EntityRenderEntry* player, bool weaponFi
                 m_abTimer = 0.0f;
         }
 
-        // --- Engine failure (damageLevel >= 2 proxy) ---
+        // --- Engine failure ---
         {
-            const bool failing = (player->damageLevel >= 2);
+            const uint8_t ef = player->engineFailFlags;
             m_engineFailTimer -= dt;
-            if (failing && canRumble) {
+            if (ef && canRumble) {
                 if (m_engineFailTimer <= 0.0f) {
-                    m_input.rumble(0, 0.5f, 0.0f, 350);
+                    // Asymmetric motors when specific L/R bits are set; symmetric for generic failure.
+                    const float lo = (ef & fl::kEngineFailRight) && !(ef & fl::kEngineFailLeft) ? 0.0f : 0.5f;
+                    const float hi = (ef & fl::kEngineFailLeft) && !(ef & fl::kEngineFailRight) ? 0.0f : 0.5f;
+                    m_input.rumble(0, lo, hi, 350);
                     m_engineFailTimer = 0.3f;
                 }
             } else {
                 m_engineFailTimer = 0.0f;
             }
         }
+
+        // --- Compressor stall auto-trigger from engineFailFlags ---
+        if ((player->engineFailFlags & fl::kEngineCompStall) && m_csPhase == -1)
+            notifyCompressorStall();
 
         // --- G-LOC onset ---
         {

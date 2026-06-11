@@ -11,7 +11,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (std::strcmp(argv[i], "--help") == 0) {
-            std::printf("Usage: fighters-legacy [--log-level debug|info|warn|error] [--version] [--help]\n");
+            std::printf("Usage: fighters-legacy [--log-level trace|debug|info|warn|error] [--version] [--help]\n");
             return 0;
         }
     }

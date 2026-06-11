@@ -10,7 +10,7 @@ TEST_CASE("GameProtocol: packed struct sizes match wire format", "[game_protocol
     CHECK(sizeof(fl::MsgConnectAck) == 12u);     // extended: +assignedEntityIdx/Gen
     CHECK(sizeof(fl::MsgEntityTypeDef) == 196u); // 4 + 64 + 64 + 64
     CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 12u);
-    CHECK(sizeof(fl::MsgEntityEntry) == 68u);
+    CHECK(sizeof(fl::MsgEntityEntry) == 70u);
     CHECK(sizeof(fl::MsgClientInput) == 44u);
     CHECK(sizeof(fl::MsgAdminCommand) == 128u);
     CHECK(sizeof(fl::MsgAdminResponse) == 128u);

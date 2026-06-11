@@ -97,11 +97,13 @@ struct MsgEntityEntry {
     float vel[3]{};  // world velocity (m/s) for dead-reckoning
     float ori[4]{};  // orientation quaternion: x, y, z, w (matches EntityTransform::quat)
     uint8_t damageLevel{0};
-    uint8_t flags{0};    // bit 0 = playerOwned
-    uint8_t throttle{0}; // [0–100] throttle_actual * 100; 0 for non-player entities
-    uint8_t fuelPct{0};  // [0–100] fuel_kg / max_fuel * 100; 0 for non-player entities
-}; // 68 bytes
-static_assert(sizeof(MsgEntityEntry) == 68u, "MsgEntityEntry wire size changed");
+    uint8_t flags{0};           // bit 0 = playerOwned
+    uint8_t throttle{0};        // [0–100] throttle_actual * 100; 0 for non-player entities
+    uint8_t fuelPct{0};         // [0–100] fuel_kg / max_fuel * 100; 0 for non-player entities
+    uint8_t abEngaged{0};       // 1 when afterburner physically lit (FlightState::ab_engaged); additive field
+    uint8_t engineFailFlags{0}; // fl::kEngineFail* bitmask; additive field
+}; // 70 bytes
+static_assert(sizeof(MsgEntityEntry) == 70u, "MsgEntityEntry wire size changed");
 static_assert(offsetof(MsgEntityEntry, typeIndex) == 8u, "MsgEntityEntry::typeIndex offset changed");
 static_assert(
     offsetof(MsgEntityEntry, pos) == 12u,
@@ -112,6 +114,8 @@ static_assert(offsetof(MsgEntityEntry, damageLevel) == 64u, "MsgEntityEntry::dam
 static_assert(offsetof(MsgEntityEntry, flags) == 65u, "MsgEntityEntry::flags offset changed");
 static_assert(offsetof(MsgEntityEntry, throttle) == 66u, "MsgEntityEntry::throttle offset changed");
 static_assert(offsetof(MsgEntityEntry, fuelPct) == 67u, "MsgEntityEntry::fuelPct offset changed");
+static_assert(offsetof(MsgEntityEntry, abEngaged) == 68u, "MsgEntityEntry::abEngaged offset changed");
+static_assert(offsetof(MsgEntityEntry, engineFailFlags) == 69u, "MsgEntityEntry::engineFailFlags offset changed");
 
 // Reliable, client→server, sent each render frame.
 struct MsgClientInput {
