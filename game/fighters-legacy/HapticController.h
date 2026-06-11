@@ -46,7 +46,6 @@ class HapticController {
 
     bool m_firstFrame{true};
     glm::vec3 m_prevVelocity{};
-    uint8_t m_prevThrottle{0};
     uint8_t m_prevDamageLevel{0};
     float m_prevAgl{0.0f};
 

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ILogger.h"
 #include "INetwork.h"
+#include "entity/DamageDef.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
 #include "net/GameProtocol.h"
 #include "net/WorldBroadcaster.h"
+#include "render/RenderSnapshot.h"
 #include "weather/WeatherController.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -719,6 +721,78 @@ TEST_CASE("WorldBroadcaster: onTick populates throttle in WorldSnapshot from Fli
     CHECK(e.throttle > 0u);
     // The encoded value is throttle_actual * 100, clamped to [0, 100].
     CHECK(e.throttle <= 100u);
+}
+
+TEST_CASE("WorldBroadcaster: abEngaged is 0 in WorldSnapshot when model has no afterburner table",
+          "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.buttons = 0x02u; // afterburner bit set
+    inp.throttle = 1.f;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    net.broadcasts.clear();
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    REQUIRE(!net.broadcasts.empty());
+    const auto& pkt = net.broadcasts.back();
+    REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry));
+
+    fl::MsgWorldSnapshotHeader hdr;
+    std::memcpy(&hdr, pkt.data(), sizeof(hdr));
+    REQUIRE(hdr.entityCount >= 1u);
+
+    fl::MsgEntityEntry e;
+    std::memcpy(&e, pkt.data() + sizeof(hdr), sizeof(e));
+
+    // Builtin model has no ab_thrust table → FlightState::ab_engaged stays false → packed as 0.
+    CHECK(e.abEngaged == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: engineFailFlags has kEngineFailGeneric when entity damage is Heavy",
+          "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    fl::MsgConnectAck ack = parseSendAck(net);
+    fl::EntityId id;
+    id.index = ack.assignedEntityIdx;
+    id.generation = ack.assignedEntityGen;
+    auto* state = em.get(id);
+    REQUIRE(state != nullptr);
+    state->damageLevel = fl::DamageLevel::Heavy; // >= 2 → kEngineFailGeneric OR'd in
+
+    net.broadcasts.clear();
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    REQUIRE(!net.broadcasts.empty());
+    const auto& pkt = net.broadcasts.back();
+    REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry));
+
+    fl::MsgWorldSnapshotHeader hdr;
+    std::memcpy(&hdr, pkt.data(), sizeof(hdr));
+    REQUIRE(hdr.entityCount >= 1u);
+
+    fl::MsgEntityEntry e;
+    std::memcpy(&e, pkt.data() + sizeof(hdr), sizeof(e));
+
+    CHECK((e.engineFailFlags & fl::kEngineFailGeneric) != 0u);
 }
 
 // ---------------------------------------------------------------------------

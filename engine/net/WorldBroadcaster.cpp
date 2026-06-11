@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "net/WorldBroadcaster.h"
+#include "render/RenderSnapshot.h"
 
 #include "ILogger.h"
 #include "INetwork.h"
@@ -196,6 +197,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     struct TelemetryEntry {
         uint8_t throttle;
         uint8_t fuelPct;
+        uint8_t abEngaged;
+        uint8_t engineFailFlags;
     };
     std::unordered_map<uint32_t, TelemetryEntry> entityTelemetry;
     for (auto& [pid, fi] : m_peerFlightSims) {
@@ -204,7 +207,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             const auto& s = fi->state();
             entityTelemetry[eit->second.index] = {
                 static_cast<uint8_t>(s.throttle_actual * 100.f),
-                static_cast<uint8_t>(std::clamp(s.fuel_kg / 4000.f * 100.f, 0.f, 100.f))};
+                static_cast<uint8_t>(std::clamp(s.fuel_kg / 4000.f * 100.f, 0.f, 100.f)),
+                static_cast<uint8_t>(s.ab_engaged ? 1u : 0u), s.engineFailFlags};
         }
     }
 
@@ -239,6 +243,10 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         auto tit = entityTelemetry.find(state.id.index);
         entry.throttle = (tit != entityTelemetry.end()) ? tit->second.throttle : 0u;
         entry.fuelPct = (tit != entityTelemetry.end()) ? tit->second.fuelPct : 0u;
+        entry.abEngaged = (tit != entityTelemetry.end()) ? tit->second.abEngaged : 0u;
+        entry.engineFailFlags = (tit != entityTelemetry.end()) ? tit->second.engineFailFlags : 0u;
+        if (static_cast<uint8_t>(state.damageLevel) >= 2u)
+            entry.engineFailFlags |= fl::kEngineFailGeneric;
 
         buf.resize(buf.size() + sizeof(MsgEntityEntry));
         std::memcpy(buf.data() + buf.size() - sizeof(MsgEntityEntry), &entry, sizeof(entry));
@@ -522,6 +530,7 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
     ctrl.elevator = inp.elevator;
     ctrl.aileron = inp.aileron;
     ctrl.rudder = inp.rudder;
+    ctrl.afterburner = (inp.buttons & 0x02u) != 0; // bit 1 per MsgClientInput::buttons
 
     WindInfluence wind{};
     if (m_weather) {

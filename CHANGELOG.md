@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **engine**: expose `abEngaged` (afterburner lit) and `engineFailFlags` (`kEngineFail*` bitmask) through the full pipeline — `FlightState` → `MsgEntityEntry` (wire offsets 68–69, additive fields) → `EntityRenderEntry` → `HapticController`; replaces the `throttle == 100` afterburner proxy and `damageLevel >= 2` engine-failure proxy with accurate flags; `kEngineFailLeft`/`kEngineFailRight` bits deliver asymmetric left/right motor haptics when set; `kEngineCompStall` auto-triggers the compressor stall sequence; closes #286
+
 ### Changed
 
 - **engine**: rename debug console subsystem — `DebugConsole`→`GameConsole`, `DebugCommandRegistry`→`CommandRegistry`, `DebugCommandContext`→`CommandContext`; files moved from `engine/debug/` to `engine/console/`; `AdminConsole.h/.cpp`→`ServerCommands.h/.cpp`; CMake target `engine-debug`→`engine-console` (#292)

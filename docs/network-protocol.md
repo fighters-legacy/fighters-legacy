@@ -30,7 +30,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 |-------|-------|-----------|---------|------|---------|
 | `Hello` | `0x00` | server→client | reliable | 4 bytes | Protocol version handshake; first message on every new connection |
 | `ConnectAck` | `0x01` | server→client | reliable | 12 + N×196 bytes | Handshake on connect; assigns entity slot and delivers type registry |
-| `WorldSnapshot` | `0x02` | server→client | unreliable | 12 + N×68 bytes | Per-tick entity state broadcast |
+| `WorldSnapshot` | `0x02` | server→client | unreliable | 12 + N×70 bytes | Per-tick entity state broadcast |
 | `ClientInput` | `0x03` | client→server | reliable | 44 bytes | Per-frame flight inputs |
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
 | `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
@@ -90,7 +90,7 @@ Broadcast unreliably every sim tick (channel 1), immediately followed by
 | 2 | 2 | `entityCount` | `uint16_t` | Number of `MsgEntityEntry` records that follow |
 | 4 | 8 | `tickIndex` | `uint64_t` | Monotonically increasing server tick counter; at wire offset 4 (4-byte aligned, not 8-byte aligned) — **always use `memcpy`**; ARM64 (Linux arm64, Apple Silicon macOS) will SIGBUS on a direct pointer dereference; x86-64 handles it in hardware but UBSAN catches it |
 
-### MsgEntityEntry — 68 bytes
+### MsgEntityEntry — 70 bytes
 
 Per-entity state appended N times after `MsgWorldSnapshotHeader`.
 
@@ -106,6 +106,8 @@ Per-entity state appended N times after `MsgWorldSnapshotHeader`.
 | 65 | 1 | `flags` | `uint8_t` | Bit 0 = playerOwned |
 | 66 | 1 | `throttle` | `uint8_t` | Actual throttle [0, 100] = 0%–100% (`FlightState::throttle_actual × 100`); 0 for non-player entities |
 | 67 | 1 | `fuelPct` | `uint8_t` | Fuel remaining [0, 100] = 0%–100% of max fuel; 0 for non-player entities |
+| 68 | 1 | `abEngaged` | `uint8_t` | `1` when afterburner physically lit (`FlightState::ab_engaged`); `0` for aircraft with no afterburner table or when AB not commanded; additive field — old clients discard |
+| 69 | 1 | `engineFailFlags` | `uint8_t` | Engine failure bitmask: bit `0x01` = generic thrust impairment (`damageLevel ≥ Heavy`); bit `0x02` = left-engine failure (Phase 6+); bit `0x04` = right-engine failure (Phase 6+); bit `0x08` = compressor stall (Phase 6+); bit `0x10` = flameout (Phase 6+); additive field — old clients discard |
 
 ### MsgClientInput — 44 bytes
 
@@ -330,7 +332,7 @@ this spec are **protocol version 1** and must implement `MsgHello` handling to i
 
 ### Snapshot packet size
 
-`MsgWorldSnapshot` is fixed-cost per entity: **68 bytes/entity** plus a 12-byte header.
+`MsgWorldSnapshot` is fixed-cost per entity: **70 bytes/entity** plus a 12-byte header.
 
 | Visible entities | Packet size | Per-client outbound (60 Hz) |
 |-----------------|-------------|-----------------------------|

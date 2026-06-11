@@ -94,7 +94,7 @@ silently skip all effects.
 | Hit taken | Both | 120 ms |
 | Stall buffet | Both (low-intensity) | Continuous while above stall AoA |
 | Afterburner ignition | Both | 300 ms ramp, then low sustain |
-| Engine failure | Both (low-freq) | Continuous while `damageLevel >= 2` |
+| Engine failure | Both (low-freq) | Continuous while `engineFailFlags != 0` |
 | G-LOC onset | Right (high-freq) | Continuous, proportional above 6 G |
 | Transonic buffet | Both | 400 ms, periodic while Mach 0.85–1.05 |
 | GPWS / terrain warning | Both | 2 × 100 ms double-pulse |

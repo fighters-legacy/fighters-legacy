@@ -94,6 +94,8 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             re.playerOwned = (e.flags & 1u) != 0;
             re.throttle = e.throttle;
             re.fuelPct = e.fuelPct;
+            re.abEngaged = e.abEngaged != 0;
+            re.engineFailFlags = e.engineFailFlags;
             snap.entries.push_back(re);
         }
         char traceBuf[80];

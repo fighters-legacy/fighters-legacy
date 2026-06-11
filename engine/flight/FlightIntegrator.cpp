@@ -133,6 +133,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
                             float groundElev) {
     // 1. Spool and optional gear/control surfaces
     advanceSpool(dt, ctrl.throttle);
+    m_state.ab_engaged = ctrl.afterburner && m_data->engine.ab_thrust.has_value();
 
     // 2. Wing sweep: follow auto-schedule based on current Mach, or manual override.
     // Use relative airspeed (aircraft velocity minus body-frame wind) for Mach — consistent with step 5.

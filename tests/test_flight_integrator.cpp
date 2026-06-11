@@ -209,6 +209,74 @@ TEST_CASE("Integrator: fuel does not go negative", "[integrator]") {
     CHECK(integ.state().fuel_kg >= 0.f);
 }
 
+TEST_CASE("Integrator: ab_engaged set when afterburner commanded and ab_thrust table present", "[integrator]") {
+    // Minimal 2x2 ab_thrust table (2 mach breakpoints x 2 alt_km breakpoints required by parser)
+    auto data = makeData(R"(
+[engine.ab_thrust]
+mach   = [0.0, 1.0]
+alt_km = [0.0, 12.0]
+values = [100.0, 80.0, 150.0, 120.0]
+)");
+    FlightIntegrator fi(data);
+    FlightState s{};
+    s.vel_body[0] = 50.f;
+    s.pos_world[1] = 1000.f;
+    s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+    s.fuel_kg = data->geometry.fuel_kg;
+    fi.reset(s);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    ctrl.afterburner = true;
+    PayloadEffect px{};
+    fi.step(1.f / 60.f, ctrl, px);
+
+    CHECK(fi.state().ab_engaged == true);
+}
+
+TEST_CASE("Integrator: ab_engaged false when afterburner not commanded", "[integrator]") {
+    auto data = makeData(R"(
+[engine.ab_thrust]
+mach   = [0.0, 1.0]
+alt_km = [0.0, 12.0]
+values = [100.0, 80.0, 150.0, 120.0]
+)");
+    FlightIntegrator fi(data);
+    FlightState s{};
+    s.vel_body[0] = 50.f;
+    s.pos_world[1] = 1000.f;
+    s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+    s.fuel_kg = data->geometry.fuel_kg;
+    fi.reset(s);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    ctrl.afterburner = false;
+    PayloadEffect px{};
+    fi.step(1.f / 60.f, ctrl, px);
+
+    CHECK(fi.state().ab_engaged == false);
+}
+
+TEST_CASE("Integrator: ab_engaged false when afterburner commanded but no ab_thrust table", "[integrator]") {
+    auto data = makeData(); // builtin model: no ab_thrust table
+    FlightIntegrator fi(data);
+    FlightState s{};
+    s.vel_body[0] = 50.f;
+    s.pos_world[1] = 1000.f;
+    s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+    s.fuel_kg = data->geometry.fuel_kg;
+    fi.reset(s);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    ctrl.afterburner = true; // commanded, but no ab_thrust → physically impossible
+    PayloadEffect px{};
+    fi.step(1.f / 60.f, ctrl, px);
+
+    CHECK(fi.state().ab_engaged == false);
+}
+
 TEST_CASE("Integrator: no NaN propagation at zero airspeed", "[integrator]") {
     auto data = makeData();
     FlightIntegrator integ(data);

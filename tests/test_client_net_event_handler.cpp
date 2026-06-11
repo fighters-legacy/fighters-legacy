@@ -224,3 +224,39 @@ TEST_CASE("ClientNetEventHandler: MsgMotd multi-line text each line printed to c
     CHECK(lines[1] == "[server] Line2");
     CHECK(lines[2] == "[server] Line3");
 }
+
+TEST_CASE("ClientNetEventHandler: MsgWorldSnapshot abEngaged and engineFailFlags unpacked correctly",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // Build a raw WorldSnapshot packet with one entity entry carrying new telemetry fields.
+    std::vector<uint8_t> pkt(sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry), 0);
+
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
+    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
+    hdr.entityCount = 1u;
+    hdr.tickIndex = 1u;
+    std::memcpy(pkt.data(), &hdr, sizeof(hdr));
+
+    fl::MsgEntityEntry entry{};
+    entry.entityIdx = 0u;
+    entry.entityGen = 1u;
+    entry.abEngaged = 1u;
+    entry.engineFailFlags = fl::kEngineFailGeneric;
+    std::memcpy(pkt.data() + sizeof(hdr), &entry, sizeof(entry));
+
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    bridge.tryAdvance();
+    const auto& snap = bridge.current();
+    REQUIRE(snap.entries.size() == 1u);
+    CHECK(snap.entries[0].abEngaged == true);
+    CHECK(snap.entries[0].engineFailFlags == fl::kEngineFailGeneric);
+}
