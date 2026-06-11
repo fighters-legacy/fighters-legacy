@@ -410,7 +410,7 @@ int main(int argc, char** argv) {
     // ---- RCON server (optional TCP remote admin channel) ----
     std::unique_ptr<RconServer> rconServer;
     if (cfg.rcon.enabled) {
-        rconServer = std::make_unique<RconServer>(adminRegistry, cfg.rcon, *log);
+        rconServer = std::make_unique<RconServer>(adminRegistry, cfg.rcon, *log, &adminShell);
         if (!rconServer->start()) {
             log->log(LogLevel::Warn, __FILE__, __LINE__, "RCON server failed to start; continuing without RCON");
             rconServer.reset();

@@ -9,6 +9,7 @@
 #include <vector>
 
 class CommandRegistry;
+class CommandShell;
 
 // ---------------------------------------------------------------------------
 // Source Engine RCON wire-protocol helpers (pure logic, no sockets).
@@ -54,7 +55,8 @@ std::vector<std::string> splitResponse(std::string_view body);
 // ---------------------------------------------------------------------------
 class RconServer {
   public:
-    RconServer(const CommandRegistry& registry, const ServerConfig::RconConfig& cfg, ILogger& log);
+    RconServer(const CommandRegistry& registry, const ServerConfig::RconConfig& cfg, ILogger& log,
+               CommandShell* shell = nullptr);
     ~RconServer();
 
     // Bind the TCP listen socket and launch the background I/O thread.

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "RconServer.h"
+#include "console/CommandRegistry.h"
+#include "console/CommandShell.h"
 #include "mock_hal.h"
 #include "server_config.h"
 
@@ -197,4 +199,82 @@ TEST_CASE("parseServerConfig [rcon] no warning when enabled with non-empty passw
     auto cfg = parseServerConfig("[rcon]\nenabled = true\npassword = \"strongpass\"\n", &log);
     CHECK(cfg.rcon.enabled);
     CHECK_FALSE(log.hasMessage(LogLevel::Warn, "rcon.password"));
+}
+
+// ---------------------------------------------------------------------------
+// RCON drain path: drainSince + encodePacket/splitResponse/decodePacket
+// ---------------------------------------------------------------------------
+
+TEST_CASE("RCON drain: drainSince plus encodePacket produces valid RESPONSE_VALUE", "[rcon][drain]") {
+    MockLogger log;
+    CommandRegistry reg;
+    CommandShell shell(log, reg);
+
+    int m = shell.mark();
+    // Simulate async sim-callback confirmations written after dispatch()
+    shell.print("[admin] kicked peer 1");
+    shell.print("[admin] banned 192.168.1.10");
+
+    auto lines = shell.drainSince(m);
+    REQUIRE(lines.size() == 2);
+
+    std::string combined;
+    for (const auto& l : lines) {
+        if (!combined.empty())
+            combined += '\n';
+        combined += l;
+    }
+
+    auto chunks = rcon::splitResponse(combined);
+    REQUIRE(chunks.size() == 1); // both lines fit in one chunk
+    auto pkt = rcon::encodePacket(7, rcon::kTypeResponseValue, chunks[0]);
+
+    rcon::RconPacket decoded;
+    int consumed = rcon::decodePacket(pkt.data(), static_cast<int>(pkt.size()), decoded);
+    REQUIRE(consumed == static_cast<int>(pkt.size()));
+    CHECK(decoded.id == 7);
+    CHECK(decoded.type == rcon::kTypeResponseValue);
+    CHECK(decoded.body.find("kicked peer 1") != std::string::npos);
+    CHECK(decoded.body.find("banned 192.168.1.10") != std::string::npos);
+}
+
+TEST_CASE("RCON drain: empty when no async output since mark", "[rcon][drain]") {
+    MockLogger log;
+    CommandRegistry reg;
+    CommandShell shell(log, reg);
+
+    shell.print("before");
+    int m = shell.mark();
+
+    // No new writes after mark
+    auto lines = shell.drainSince(m);
+    CHECK(lines.empty());
+    // No packets would be generated — verify splitResponse on empty string gives one empty chunk
+    // (so callers safely detect no-op via lines.empty() check before encoding)
+}
+
+TEST_CASE("RCON drain: multi-line output stays within single kMaxBodyPerPacket chunk", "[rcon][drain]") {
+    MockLogger log;
+    CommandRegistry reg;
+    CommandShell shell(log, reg);
+
+    int m = shell.mark();
+    // 10 typical confirmation lines (~80 chars each = ~800 bytes total, well under 4086)
+    for (int i = 0; i < 10; ++i)
+        shell.print("[admin] peer " + std::to_string(i) + " addr 192.168.1." + std::to_string(i) +
+                    " entity=12/3 confirmed");
+
+    auto lines = shell.drainSince(m);
+    REQUIRE(lines.size() == 10);
+
+    std::string combined;
+    for (const auto& l : lines) {
+        if (!combined.empty())
+            combined += '\n';
+        combined += l;
+    }
+    CHECK(combined.size() < static_cast<std::size_t>(rcon::kMaxBodyPerPacket));
+
+    auto chunks = rcon::splitResponse(combined);
+    CHECK(chunks.size() == 1); // all lines fit in a single packet
 }

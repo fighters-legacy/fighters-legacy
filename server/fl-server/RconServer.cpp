@@ -51,9 +51,11 @@ static void rconSetNonBlocking(RconSocket s) {
 
 #include "RconServer.h"
 #include <console/CommandRegistry.h>
+#include <console/CommandShell.h>
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <thread>
@@ -136,11 +138,17 @@ std::vector<std::string> splitResponse(std::string_view body) {
 
 namespace {
 
+static constexpr int kDrainDelayMs = 20; // slightly more than one 60 Hz sim tick (~16.67 ms)
+
 struct ClientState {
     RconSocket fd = kInvalidSocket;
     std::vector<uint8_t> recvBuf;
     std::vector<uint8_t> sendBuf;
     enum class Auth { Unauthenticated, Authenticated } authState = Auth::Unauthenticated;
+    bool hasPendingDrain = false;
+    int drainMark = 0;
+    int32_t drainPacketId = 0;
+    std::chrono::steady_clock::time_point drainDeadline{};
 };
 
 // Append data to client's send buffer. Returns false if the send buffer is
@@ -160,12 +168,13 @@ struct RconServer::Impl {
     const CommandRegistry& m_registry;
     ServerConfig::RconConfig m_cfg;
     ILogger& m_log;
+    CommandShell* m_shell;
     std::atomic<bool> m_running{false};
     std::thread m_thread;
     RconSocket m_listenSock = kInvalidSocket;
 
-    Impl(const CommandRegistry& reg, const ServerConfig::RconConfig& cfg, ILogger& log)
-        : m_registry(reg), m_cfg(cfg), m_log(log) {}
+    Impl(const CommandRegistry& reg, const ServerConfig::RconConfig& cfg, ILogger& log, CommandShell* shell)
+        : m_registry(reg), m_cfg(cfg), m_log(log), m_shell(shell) {}
 
     void ioLoop();
 };
@@ -198,11 +207,46 @@ void RconServer::Impl::ioLoop() {
             fds.push_back(cfd);
         }
 
-        int ready = RCON_POLL(fds.data(), static_cast<unsigned int>(fds.size()), 100 /*ms*/);
+        int pollTimeoutMs = 100;
+        if (m_shell) {
+            auto now = std::chrono::steady_clock::now();
+            for (const auto& c : clients) {
+                if (!c.hasPendingDrain || c.fd == kInvalidSocket)
+                    continue;
+                auto rawMs = std::chrono::duration_cast<std::chrono::milliseconds>(c.drainDeadline - now).count();
+                int clampedMs = rawMs <= 0 ? 0 : static_cast<int>(rawMs);
+                pollTimeoutMs = std::min(pollTimeoutMs, clampedMs);
+            }
+        }
+        int ready = RCON_POLL(fds.data(), static_cast<unsigned int>(fds.size()), pollTimeoutMs);
         if (ready < 0) {
             if (rconWouldBlock())
                 continue;
             break; // fatal poll error
+        }
+        if (m_shell) {
+            auto now = std::chrono::steady_clock::now();
+            for (auto& c : clients) {
+                if (!c.hasPendingDrain || c.fd == kInvalidSocket)
+                    continue;
+                if (now < c.drainDeadline)
+                    continue;
+                c.hasPendingDrain = false;
+                auto lines = m_shell->drainSince(c.drainMark);
+                if (lines.empty())
+                    continue;
+                std::string combined;
+                for (const auto& l : lines) {
+                    if (!combined.empty())
+                        combined += '\n';
+                    combined += l;
+                }
+                auto chunks = rcon::splitResponse(combined);
+                for (const auto& chunk : chunks)
+                    queueSend(c, rcon::encodePacket(c.drainPacketId, rcon::kTypeResponseValue, chunk));
+                if (chunks.size() > 1)
+                    queueSend(c, rcon::encodePacket(c.drainPacketId, rcon::kTypeResponseValue, ""));
+            }
         }
         if (ready == 0)
             continue; // timeout — loop back and check m_running
@@ -335,6 +379,15 @@ void RconServer::Impl::ioLoop() {
                         if (!queueSend(c, rcon::encodePacket(pkt.id, rcon::kTypeResponseValue, "")))
                             closeClient = true;
                     }
+                    // Set up async drain: mark taken AFTER dispatch() to skip sync shell.print()
+                    // calls made during dispatch. The RCON thread will check back in kDrainDelayMs
+                    // and send any newly-written ring entries as additional RESPONSE_VALUE packets.
+                    if (m_shell && !closeClient) {
+                        c.drainMark = m_shell->mark();
+                        c.drainPacketId = pkt.id;
+                        c.hasPendingDrain = true;
+                        c.drainDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kDrainDelayMs);
+                    }
                 }
                 // Unknown types are silently dropped.
                 if (closeClient)
@@ -378,8 +431,9 @@ void RconServer::Impl::ioLoop() {
 // RconServer public interface
 // ---------------------------------------------------------------------------
 
-RconServer::RconServer(const CommandRegistry& registry, const ServerConfig::RconConfig& cfg, ILogger& log)
-    : m_impl(std::make_unique<Impl>(registry, cfg, log)) {}
+RconServer::RconServer(const CommandRegistry& registry, const ServerConfig::RconConfig& cfg, ILogger& log,
+                       CommandShell* shell)
+    : m_impl(std::make_unique<Impl>(registry, cfg, log, shell)) {}
 
 RconServer::~RconServer() {
     stop();

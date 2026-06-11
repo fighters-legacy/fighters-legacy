@@ -28,6 +28,12 @@ class CommandShell {
     // Returns a copy of the ring, oldest first, most-recent last. Thread-safe.
     [[nodiscard]] std::vector<std::string> outputLines() const;
 
+    // High-water-mark drain API for RconServer async-confirmation polling.
+    // mark() returns a snapshot of the write counter; drainSince(mark) returns all
+    // entries written after that mark, oldest-first. Both are thread-safe.
+    [[nodiscard]] int mark() const;
+    [[nodiscard]] std::vector<std::string> drainSince(int mark) const;
+
   protected:
     // Ring fields are protected so GameConsole::buildHud() can read them directly.
     // Any reader must hold m_ringMutex while accessing them.
@@ -35,6 +41,7 @@ class CommandShell {
     std::array<std::string, kMaxOutputLines> m_outputRing;
     int m_outputHead{0};
     int m_outputCount{0};
+    int m_totalWritten{0}; // monotonically incrementing write counter for drainSince()
     mutable std::mutex m_ringMutex;
 
     void pushOutput(std::string line); // must be called while holding m_ringMutex

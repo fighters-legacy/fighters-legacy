@@ -15,6 +15,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: RCON clients now receive async command confirmations (e.g. `[admin] kicked peer N`) as a second `SERVERDATA_RESPONSE_VALUE` packet; `CommandShell` exposes `mark()` + `drainSince()` for high-water-mark polling (#304)
 - **engine**: `CommandShell` base class with thread-safe output ring; `GameConsole` inherits from it; fl-server admin shell wires sim-callback output through `CommandShell` for future RCON buffering (#292)
 - **engine**: `GameConsole::outputLines()` (via `CommandShell`) returns output ring copy oldest-first for testing (#292)
 

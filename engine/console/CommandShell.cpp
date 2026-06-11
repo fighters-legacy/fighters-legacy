@@ -57,4 +57,26 @@ void CommandShell::pushOutput(std::string line) {
     m_outputHead = (m_outputHead + 1) % kMaxOutputLines;
     if (m_outputCount < kMaxOutputLines)
         ++m_outputCount;
+    ++m_totalWritten;
+}
+
+int CommandShell::mark() const {
+    std::lock_guard<std::mutex> lk(m_ringMutex);
+    return m_totalWritten;
+}
+
+std::vector<std::string> CommandShell::drainSince(int mark) const {
+    std::lock_guard<std::mutex> lk(m_ringMutex);
+    int newCount = m_totalWritten - mark;
+    if (newCount <= 0)
+        return {};
+    if (newCount > kMaxOutputLines)
+        newCount = kMaxOutputLines;
+    std::vector<std::string> out;
+    out.reserve(static_cast<std::size_t>(newCount));
+    for (int i = 0; i < newCount; ++i) {
+        int idx = ((m_outputHead - newCount + i) % kMaxOutputLines + kMaxOutputLines) % kMaxOutputLines;
+        out.push_back(m_outputRing[idx]);
+    }
+    return out;
 }

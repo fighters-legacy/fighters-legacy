@@ -450,3 +450,26 @@ TEST_CASE("AdminConsole shell output: sync ack appears in outputLines", "[admin_
             foundEcho = true;
     CHECK(foundEcho);
 }
+
+TEST_CASE("AdminConsole shell drain: drainSince captures post-dispatch shell output", "[admin_console][shell][drain]") {
+    NullLogger2 logger;
+    CommandRegistry reg;
+    CommandShell shell(logger, reg);
+
+    ServerCommandContext ctx{};
+    ctx.shell = &shell;
+    registerServerCommands(reg, ctx);
+
+    // Simulate RCON thread: dispatch then snapshot mark (after dispatch to skip sync writes)
+    (void)reg.dispatch("kick 42");
+    int m = shell.mark();
+
+    // Simulate sim-thread callback writing the async confirmation
+    shell.print("[admin] kicked peer 42");
+
+    // RconServer calls drainSince(mark) to get lines for RESPONSE_VALUE packets
+    auto lines = shell.drainSince(m);
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0].find("kicked") != std::string::npos);
+    CHECK(lines[0].find("42") != std::string::npos);
+}

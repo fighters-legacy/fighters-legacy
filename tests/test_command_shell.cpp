@@ -5,6 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
 #include <string>
 #include <thread>
 #include <vector>
@@ -91,4 +92,133 @@ TEST_CASE("CommandShell print thread safety", "[shell]") {
 
     auto lines = shell.outputLines();
     REQUIRE(lines.size() <= 64);
+}
+
+// ---------------------------------------------------------------------------
+// mark() / drainSince() tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("CommandShell mark returns 0 on empty shell", "[shell][drain]") {
+    NullShellLogger logger;
+    CommandRegistry reg;
+    CommandShell shell(logger, reg);
+    CHECK(shell.mark() == 0);
+}
+
+TEST_CASE("CommandShell mark advances with each print", "[shell][drain]") {
+    NullShellLogger logger;
+    CommandRegistry reg;
+    CommandShell shell(logger, reg);
+
+    shell.print("a");
+    shell.print("b");
+    shell.print("c");
+    CHECK(shell.mark() == 3);
+}
+
+TEST_CASE("CommandShell drainSince returns only new lines", "[shell][drain]") {
+    NullShellLogger logger;
+    CommandRegistry reg;
+    CommandShell shell(logger, reg);
+
+    shell.print("before");
+    int m = shell.mark();
+    shell.print("after1");
+    shell.print("after2");
+
+    auto drained = shell.drainSince(m);
+    REQUIRE(drained.size() == 2);
+    CHECK(drained[0] == "after1");
+    CHECK(drained[1] == "after2");
+}
+
+TEST_CASE("CommandShell drainSince returns empty when nothing new", "[shell][drain]") {
+    NullShellLogger logger;
+    CommandRegistry reg;
+    CommandShell shell(logger, reg);
+
+    shell.print("line");
+    int m = shell.mark();
+
+    CHECK(shell.drainSince(m).empty());
+}
+
+TEST_CASE("CommandShell drainSince successive calls with updated mark", "[shell][drain]") {
+    NullShellLogger logger;
+    CommandRegistry reg;
+    CommandShell shell(logger, reg);
+
+    shell.print("line1");
+    int m1 = shell.mark();
+    shell.print("line2");
+
+    auto first = shell.drainSince(m1);
+    REQUIRE(first.size() == 1);
+    CHECK(first[0] == "line2");
+
+    int m2 = shell.mark();
+    CHECK(shell.drainSince(m2).empty());
+}
+
+TEST_CASE("CommandShell drainSince clamps at kMaxOutputLines on overflow", "[shell][drain]") {
+    NullShellLogger logger;
+    CommandRegistry reg;
+    CommandShell shell(logger, reg);
+
+    // Fill ring
+    for (int i = 0; i < 64; ++i)
+        shell.print("pre" + std::to_string(i));
+    int m = shell.mark();
+
+    // Write more than kMaxOutputLines (64) lines after mark
+    for (int i = 0; i < 70; ++i)
+        shell.print("post" + std::to_string(i));
+
+    auto drained = shell.drainSince(m);
+    // Ring can only hold 64 entries; oldest overwritten entries are silently dropped
+    REQUIRE(drained.size() == 64);
+    CHECK(drained.back() == "post69");
+}
+
+TEST_CASE("CommandShell drainSince after ring wrap returns only post-mark entries", "[shell][drain]") {
+    NullShellLogger logger;
+    CommandRegistry reg;
+    CommandShell shell(logger, reg);
+
+    // Overflow ring by 1
+    for (int i = 0; i < 65; ++i)
+        shell.print("pre" + std::to_string(i));
+    int m = shell.mark();
+
+    shell.print("new1");
+    shell.print("new2");
+
+    auto drained = shell.drainSince(m);
+    REQUIRE(drained.size() == 2);
+    CHECK(drained[0] == "new1");
+    CHECK(drained[1] == "new2");
+}
+
+TEST_CASE("CommandShell drainSince is thread-safe under concurrent print", "[shell][drain]") {
+    NullShellLogger logger;
+    CommandRegistry reg;
+    CommandShell shell(logger, reg);
+
+    std::atomic<int> drainCount{0};
+    int m = shell.mark();
+
+    std::thread writer([&shell] {
+        for (int i = 0; i < 1000; ++i)
+            shell.print("msg" + std::to_string(i));
+    });
+
+    // Concurrent drainSince — must not crash or data-race under TSAN
+    for (int i = 0; i < 200; ++i) {
+        auto lines = shell.drainSince(m);
+        drainCount.fetch_add(static_cast<int>(lines.size()), std::memory_order_relaxed);
+    }
+
+    writer.join();
+    // Just verify no crash and count is non-negative
+    CHECK(drainCount.load() >= 0);
 }

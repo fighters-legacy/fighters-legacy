@@ -582,9 +582,11 @@ Passwords are compared in constant time to resist timing attacks.
   packets per the Source Engine RCON specification, followed by an empty sentinel packet.
 - Async-mutating commands (`kick`, `ban`, `unban`, `tp`, `spawn`, `kill`) return a
   synchronous acknowledgement string immediately. The actual action executes on the next sim
-  tick (~16 ms later); confirmation also appears on fl-server stdout.
+  tick (~16 ms later); confirmation also appears on fl-server stdout and is sent to the RCON
+  client as a second `SERVERDATA_RESPONSE_VALUE` packet (~20 ms after the initial acknowledgement).
 - `peers` returns a count from the atomic peer counter immediately; the full per-peer detail
-  is printed to stdout on the next sim tick.
+  is printed to stdout and sent to the RCON client as additional `SERVERDATA_RESPONSE_VALUE`
+  packets on the next sim tick.
 
 ### Example: connect with mcrcon
 
@@ -689,9 +691,11 @@ accepts connections from any Source Engine RCON client.
   password → the server responds with `id = -1` and closes the connection.
 - **Response splitting:** responses longer than 4086 bytes are split across multiple
   `SERVERDATA_RESPONSE_VALUE` packets (same request id), followed by an empty sentinel packet.
-- **Async commands:** mutation commands (`kick`, `ban`, `unban`, `spawn`, `kill`, `tp`)
-  return a synchronous acknowledgment string immediately. The actual action executes on the
-  next sim tick (~16 ms later); stdout also shows confirmation.
+- **Async commands:** mutation commands (`kick`, `ban`, `unban`, `spawn`, `kill`, `tp`) and the
+  per-peer detail from `peers` return a synchronous acknowledgment string immediately. The actual
+  action executes on the next sim tick (~16 ms later); a second `SERVERDATA_RESPONSE_VALUE` packet
+  delivers the async confirmation to the RCON client (~20 ms after the initial response, in addition
+  to fl-server stdout).
 - **Connection limit:** maximum 4 simultaneous RCON clients.
 
 > **Security:** passwords travel over **plain TCP** — no TLS. Use RCON only on trusted/VPN
