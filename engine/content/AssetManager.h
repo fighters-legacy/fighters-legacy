@@ -47,6 +47,12 @@ class AssetManager {
     std::optional<std::string> resolveTerrainChunk(const char* terrainId, uint32_t chunkX, uint32_t chunkY,
                                                    uint32_t lod);
 
+    // Returns true if at least one active content pack is loaded.
+    bool hasPacks() const;
+
+    // Returns the union of mission asset IDs across all active packs (first-wins dedup).
+    std::vector<std::string> listMissions() const;
+
     // Hot-reload support (sandbox/editor mode only). Pass the watcher from Platform.
     // Registers each pack's rootDirectory() with the watcher (recursive).
     // processHotReload() must be called once per frame from the game loop.

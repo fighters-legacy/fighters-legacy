@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "IScreen.h"
 #include <memory>
 
 struct GameImpl;
@@ -16,8 +17,12 @@ class Game {
     bool initWindowAndRenderer();
     bool initContent();
     void initGameSystems();
-    bool initNetwork();
+    void initScreenManager();
     void initGameConsole();
+
+    void startGame();
+    void stopGame();
+    void handleTransition(Screen next);
 
     std::unique_ptr<GameImpl> m_impl;
 };

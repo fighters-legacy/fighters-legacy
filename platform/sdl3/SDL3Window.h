@@ -23,6 +23,7 @@ class SDL3Window : public IWindow {
                        int numButtons) override;
     void openURL(const char* url) override;
     void setTitle(const char* title) override;
+    bool setSize(int width, int height) override;
     bool setFullscreen(bool fullscreen) override;
     bool setDisplayMode(const IDisplay::DisplayMode& mode) override;
     int getCurrentMonitorId() const override;

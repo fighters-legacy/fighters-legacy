@@ -401,3 +401,76 @@ target_include_directories(test_client_net_event_handler PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_client_net_event_handler)
+
+# ---------------------------------------------------------------------------
+# Screen / ScreenManager tests
+# ---------------------------------------------------------------------------
+
+add_executable(test_main_menu_screen test_main_menu_screen.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MainMenuScreen.cpp")
+target_link_libraries(test_main_menu_screen PRIVATE Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_main_menu_screen PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_main_menu_screen)
+
+add_executable(test_loading_screen test_loading_screen.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/LoadingScreen.cpp")
+target_link_libraries(test_loading_screen PRIVATE Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_loading_screen PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_loading_screen)
+
+add_executable(test_mission_select_screen test_mission_select_screen.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MissionSelectScreen.cpp")
+target_link_libraries(test_mission_select_screen PRIVATE Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_mission_select_screen PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_mission_select_screen)
+
+add_executable(test_mission_brief_screen test_mission_brief_screen.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MissionBriefScreen.cpp")
+target_link_libraries(test_mission_brief_screen PRIVATE Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_mission_brief_screen PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_mission_brief_screen)
+
+add_executable(test_settings_screen test_settings_screen.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/SettingsScreen.cpp")
+target_link_libraries(test_settings_screen PRIVATE
+    Catch2::Catch2WithMain engine-config platform-hal)
+target_include_directories(test_settings_screen PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_settings_screen)
+
+add_executable(test_pause_menu_screen test_pause_menu_screen.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PauseMenuScreen.cpp")
+target_link_libraries(test_pause_menu_screen PRIVATE Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_pause_menu_screen PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_pause_menu_screen)
+
+add_executable(test_debrief_screen test_debrief_screen.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/DebriefScreen.cpp")
+target_link_libraries(test_debrief_screen PRIVATE Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_debrief_screen PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_debrief_screen)
+
+add_executable(test_screen_manager test_screen_manager.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ScreenManager.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MainMenuScreen.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/LoadingScreen.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MissionSelectScreen.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/MissionBriefScreen.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/SettingsScreen.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PauseMenuScreen.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/DebriefScreen.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightScreen.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CameraInput.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
+target_link_libraries(test_screen_manager PRIVATE
+    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console platform-sdl3 platform-hal SDL3::SDL3)
+target_include_directories(test_screen_manager PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_screen_manager)

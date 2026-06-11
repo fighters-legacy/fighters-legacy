@@ -263,3 +263,23 @@ TEST_CASE("SimRenderBridge preserves double precision at planet-scale coordinate
     CHECK(bridge.current().entries[0].position.x == kLarge);
     CHECK(bridge.current().entries[0].position.z == kLarge);
 }
+
+TEST_CASE("SimRenderBridge::reset on fresh bridge leaves hasSnapshot false", "[bridge]") {
+    SimRenderBridge bridge;
+    bridge.reset();
+    CHECK(!bridge.hasSnapshot());
+}
+
+TEST_CASE("SimRenderBridge::reset after publish clears snapshot", "[bridge]") {
+    SimRenderBridge bridge;
+    RenderSnapshot snap;
+    snap.tickIndex = 99;
+    bridge.publish(std::move(snap));
+    REQUIRE(bridge.tryAdvance());
+    CHECK(bridge.hasSnapshot());
+
+    bridge.reset();
+    // After reset tryAdvance should find no new snapshot
+    CHECK(!bridge.tryAdvance());
+    CHECK(!bridge.hasSnapshot());
+}

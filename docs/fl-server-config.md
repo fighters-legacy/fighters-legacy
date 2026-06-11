@@ -633,6 +633,8 @@ process.
 | `reload_config` | — | Re-read `server.toml` and apply: `name` (reflected in next LAN beacon broadcast), `motd` (takes effect for new connections) |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
+| `pause` | — | Pause the simulation — ticks stop advancing; network connections remain active. In single-player the game client sends this automatically when the pause menu is opened. |
+| `resume` | — | Resume the simulation at normal (1×) tick rate. |
 | `shutdown` | `[--in <dur>] [--interval <dur>] [--delay <dur>] [--cancel] [--now] [--force] [--reason <text>]` | Schedule or cancel a graceful shutdown with countdown notices to connected clients; `--now` exits immediately after notifying clients; `--interval` overrides `shutdown.warning_interval_s` for this run; `--force` required when `shutdown.require_confirm = true` (default); `--reason` prepends custom operator text to each countdown broadcast (long reasons are truncated to fit in `MsgServerNotice::text[60]`; `--reason` stops consuming tokens at the next `--` flag) |
 | `quit` | — | Gracefully shut down fl-server immediately without client notification |
 

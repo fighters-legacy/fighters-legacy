@@ -50,4 +50,14 @@ bool SimRenderBridge::hasSnapshot() const noexcept {
     return m_publishCount.load(std::memory_order_relaxed) > 0;
 }
 
+void SimRenderBridge::reset() noexcept {
+    for (auto& s : m_snaps)
+        s = RenderSnapshot{};
+    m_spare.store(2, std::memory_order_relaxed);
+    m_publishCount.store(0, std::memory_order_relaxed);
+    m_simSlot = 0;
+    m_renderSlot = 1;
+    m_consumeCount = 0;
+}
+
 } // namespace fl

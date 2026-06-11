@@ -57,6 +57,10 @@ class IWindow {
     // Updates the window title bar.
     virtual void setTitle(const char* title) = 0;
 
+    // Resizes the window to the given logical dimensions (windowed mode only).
+    // Has no effect in fullscreen. Returns true on success.
+    virtual bool setSize(int width, int height) = 0;
+
     // Enters or exits fullscreen mode using the mode last set by setDisplayMode
     // (or the desktop mode if setDisplayMode was never called). Returns true on success.
     virtual bool setFullscreen(bool fullscreen) = 0;

@@ -43,6 +43,11 @@ class SimRenderBridge {
     // Render thread: true once at least one snapshot has been published.
     [[nodiscard]] bool hasSnapshot() const noexcept;
 
+    // Reset all three slots to empty and clear the publish/consume counters.
+    // Call from the main thread when no sim thread or render loop is running
+    // (e.g. stopGame()) so hasSnapshot() returns false again for the next session.
+    void reset() noexcept;
+
   private:
     RenderSnapshot m_snaps[3];
 

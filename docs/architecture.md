@@ -40,7 +40,7 @@ All interfaces live under `platform/` and are exposed via the `platform-hal` CMa
 | Interface | Header | Purpose |
 |---|---|---|
 | `IWindowEventHandler` | `platform/IWindowEventHandler.h` | Callback target for window events (resize, close); implemented by the engine game loop |
-| `IWindow` | `platform/IWindow.h` | Create/destroy OS window, pump events, query dimensions, expose native handle for surface creation; fullscreen toggle (`setFullscreen`), display mode selection (`setDisplayMode`), title update (`setTitle`), current monitor query (`getCurrentMonitorId`). `width()`/`height()` return physical framebuffer pixels (GPU/swapchain resolution; ≥2× logical size on Retina/HiDPI); `logicalWidth()`/`logicalHeight()` return DPI-independent window size matching SDL pointer-event coordinates |
+| `IWindow` | `platform/IWindow.h` | Create/destroy OS window, pump events, query dimensions, expose native handle for surface creation; fullscreen toggle (`setFullscreen`), window resize (`setSize(w, h)`), display mode selection (`setDisplayMode`), title update (`setTitle`), current monitor query (`getCurrentMonitorId`). `width()`/`height()` return physical framebuffer pixels (GPU/swapchain resolution; ≥2× logical size on Retina/HiDPI); `logicalWidth()`/`logicalHeight()` return DPI-independent window size matching SDL pointer-event coordinates |
 | `IDisplay` | `platform/IDisplay.h` | Monitor enumeration, fullscreen display mode listing, per-monitor refresh rate query (used by renderer for vsync decisions) |
 | `ICursor` | `platform/ICursor.h` | OS cursor shape control: standard shapes (`Arrow`, `Hand`, `Crosshair`, `ResizeNS`, `ResizeEW`, `ResizeAll`, `Text`, `None`) and custom RGBA bitmap cursors |
 | `IRenderer` | `platform/IRenderer.h` | Render frame lifecycle: init, beginFrame, endFrame, shutdown; `setOverlayLines` for debug text overlay; `submitOverlayElements(span<HudElement>)` for 2D game overlay elements (cockpit HUD, rain, notices — accumulated per frame, cleared by endFrame); `setConsoleElements(span<HudElement>)` for the game console overlay (non-owning span, cleared by endFrame) |
@@ -212,6 +212,56 @@ mods/
 ```
 
 **TOML vs YAML:** TOML is used for definition and configuration data (flight models, weapon specs, unit data, mod manifests, HUD layouts, playlists). These files have fixed schemas, typed values, and benefit from TOML's parse-time type enforcement and clean Git diffs. YAML is used for mission and campaign files, which are document-like: arbitrary nesting depth, large object lists, and YAML anchors/aliases let shared definitions be referenced multiple times without repetition. The rule of thumb is: does this look like a settings file (TOML) or a scenario/narrative document (YAML)?
+
+## Game Screen State Machine
+
+The game binary (`fighters-legacy`) uses a `ScreenManager` that owns all menu and in-game screens, drives transitions between them, and fires side effects (mouse capture, server pause) on each transition.
+
+### `Screen` enum
+
+```
+MainMenu → Loading → Flight → Pause → (Flight or MainMenu)
+                 ↘ MissionSelect → MissionBrief → Loading
+MainMenu → Settings → MainMenu (or Pause)
+Flight → Debrief → MainMenu
+```
+
+| Value | Description |
+|---|---|
+| `MainMenu` | Main menu; no local server running |
+| `Loading` | Local server starting + ENet connecting; Quake-style progress messages |
+| `MissionSelect` | Scrollable list of missions from content packs |
+| `MissionBrief` | Mission name, map placeholder, "Fly" / "Back" |
+| `Settings` | Graphics and audio settings; saves on Back |
+| `Flight` | In-flight; mouse captured; flight HUD + windshield rain rendered |
+| `Pause` | Semi-transparent overlay; sim tick paused (server-side) |
+| `Debrief` | Post-flight summary stub |
+| `Quit` | Sentinel returned by screens to request application exit |
+
+### `IScreen` interface
+
+Every screen implements `IScreen`:
+- `update(IInput&, IWindow&) → Screen` — called once per frame; returns the desired next screen (or the same screen to stay put)
+- `buildElements() → span<HudElement>` — returns overlay elements to submit via `IRenderer::submitOverlayElements`
+
+### `ScreenManager`
+
+`ScreenManager` owns all `IScreen` instances as `unique_ptr`s. `LoadingScreen` and `FlightScreen` are re-created per session via `reinitLoading()` / `reinitFlight()` so callbacks capture fresh session objects.
+
+`transition(Screen next)` fires two side effects in addition to updating the current screen:
+- **Mouse capture**: `setMouseCapture(true)` entering Flight; `setMouseCapture(false)` entering any menu
+- **Server pause** (single-player only; null in multiplayer): `serverCmd("pause")` entering Pause; `serverCmd("resume")` leaving Pause
+
+### Session lifecycle
+
+| Phase | Server | ENet client |
+|---|---|---|
+| Main menu | Not running | Not connected |
+| "Fly" selected → Loading | Starts in background thread | Connecting to 127.0.0.1:4778 |
+| Flight / Pause / Debrief | Running | Connected |
+| "Quit to Menu" | Stopped | Disconnected |
+
+`Game::startGame()` launches the server thread and creates session objects. `Game::stopGame()` joins the thread, disconnects ENet, resets `SimRenderBridge`, and clears session state. Between sessions the main menu is shown with no server overhead.
 
 ## World Terrain Architecture
 

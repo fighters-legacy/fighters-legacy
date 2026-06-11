@@ -4,6 +4,7 @@
 #include <console/CommandShell.h>
 #include <loop/GameLoop.h>
 #include <loop/ISimUpdate.h>
+#include <loop/TimeRate.h>
 
 #include <ILogger.h>
 #include <catch2/catch_test_macros.hpp>
@@ -472,4 +473,42 @@ TEST_CASE("AdminConsole shell drain: drainSince captures post-dispatch shell out
     REQUIRE(lines.size() == 1);
     CHECK(lines[0].find("kicked") != std::string::npos);
     CHECK(lines[0].find("42") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// pause / resume commands
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AdminConsole: pause sets GameLoop rate to Paused", "[admin_console][pause]") {
+    AsyncAckFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("pause");
+    CHECK_FALSE(out.empty());
+    CHECK(f.loop.rate() == TimeRate::Paused);
+}
+
+TEST_CASE("AdminConsole: resume sets GameLoop rate to Normal", "[admin_console][pause]") {
+    AsyncAckFixture f;
+    auto reg = makeRegistry(f.ctx);
+    (void)reg.dispatch("pause");
+    CHECK(f.loop.rate() == TimeRate::Paused);
+    std::string out = reg.dispatch("resume");
+    CHECK_FALSE(out.empty());
+    CHECK(f.loop.rate() == TimeRate::Normal);
+}
+
+TEST_CASE("AdminConsole: pause with null gameLoop returns error message", "[admin_console][pause]") {
+    ServerCommandContext ctx{};
+    ctx.gameLoop = nullptr;
+    auto reg = makeRegistry(ctx);
+    std::string out = reg.dispatch("pause");
+    CHECK_FALSE(out.empty()); // should return "not available" or similar, not crash
+}
+
+TEST_CASE("AdminConsole: resume with null gameLoop returns error message", "[admin_console][pause]") {
+    ServerCommandContext ctx{};
+    ctx.gameLoop = nullptr;
+    auto reg = makeRegistry(ctx);
+    std::string out = reg.dispatch("resume");
+    CHECK_FALSE(out.empty());
 }

@@ -126,6 +126,27 @@ std::optional<std::string> AssetManager::resolveTerrainChunk(const char* terrain
     return std::nullopt;
 }
 
+bool AssetManager::hasPacks() const {
+    return !m_packs.empty();
+}
+
+std::vector<std::string> AssetManager::listMissions() const {
+    std::vector<std::string> result;
+    for (auto& pack : m_packs) {
+        for (auto& id : pack->listAssets(AssetType::Mission)) {
+            bool dup = false;
+            for (auto& existing : result)
+                if (existing == id) {
+                    dup = true;
+                    break;
+                }
+            if (!dup)
+                result.push_back(id);
+        }
+    }
+    return result;
+}
+
 void AssetManager::enableHotReload(IFilesystemWatcher& watcher) {
     m_watcher = &watcher;
     for (auto& pack : m_packs) {

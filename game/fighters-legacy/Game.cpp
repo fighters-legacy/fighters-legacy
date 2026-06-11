@@ -7,14 +7,17 @@
 
 #include "CameraInput.h"
 #include "ClientNetEventHandler.h"
+#include "DebriefScreen.h"
 #include "ENetNetwork.h"
 #include "FileLogger.h"
 #include "FlightInputCollector.h"
+#include "FlightScreen.h"
 #include "HapticController.h"
 #include "IWindowEventHandler.h"
 #include "LocalServer.h"
 #include "Platform.h"
 #include "PrecipitationController.h"
+#include "ScreenManager.h"
 #include "ServerNotice.h"
 #include "Version.h"
 #include "audio/MusicManager.h"
@@ -56,12 +59,13 @@
 
 #include <SDL3/SDL.h>
 #include <algorithm>
-#include <cmath>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -139,16 +143,14 @@ static void updateAudioListener(IAudio& audio, const CameraView& cam, const glm:
     audio.setListenerVelocity(velA);
 }
 
-static float computeRollAngleRad(const fl::EntityRenderEntry* player) {
-    if (!player)
-        return 0.f;
-    const glm::vec3 bodyUp = player->orientation * glm::vec3(0.f, 1.f, 0.f);
-    const glm::vec3 bodyRight = player->orientation * glm::vec3(0.f, 0.f, 1.f);
-    return std::atan2(-bodyRight.y, bodyUp.y);
-}
-
 static void updatePerfOverlay(GameConsole& console, IRenderer& renderer, PerformanceOverlay& overlay,
-                              const fl::SimRenderBridge& bridge, UserConfig& userConfig) {
+                              const fl::SimRenderBridge& bridge, UserConfig& userConfig, bool inFlight) {
+    if (!inFlight) {
+        overlay.setMode(OverlayMode::Off);
+        renderer.setOverlayLines({});
+        return;
+    }
+
     const bool* keys = SDL_GetKeyboardState(nullptr);
     static bool f3Prev = false;
     if (!console.isOpen() && keys[SDL_SCANCODE_F3] && !f3Prev) {
@@ -263,6 +265,13 @@ struct GameImpl {
     PerformanceOverlay perfOverlay;
     FlightInputCollector flightInput;
     PrecipitationController precipController;
+
+    // Screen state machine
+    std::unique_ptr<ScreenManager> screenMgr;
+
+    // Session lifecycle (startGame / stopGame)
+    std::thread serverThread;
+    std::atomic<bool> serverReady{false};
 };
 
 // ---------------------------------------------------------------------------
@@ -275,15 +284,9 @@ Game::~Game() {
     if (!m_impl)
         return;
     auto& d = *m_impl;
-    if (d.hapticController)
-        d.hapticController->onPause(0);
-    if (d.clientNet)
-        d.clientNet->disconnect();
-    if (d.localServer)
-        d.localServer->stop();
-    if (d.clientNet)
-        d.clientNet->shutdown();
-    d.inspector.reset();
+    // Tear down any active session (joins server thread, disconnects ENet).
+    if (d.serverThread.joinable() || d.clientNet || d.localServer)
+        stopGame();
     d.musicManager.shutdown();
     d.p.cursor.reset();
     if (d.p.audio)
@@ -305,9 +308,8 @@ bool Game::init(int argc, char** argv) {
     if (!initContent())
         return false;
     initGameSystems();
-    if (!initNetwork())
-        return false;
     initGameConsole();
+    initScreenManager();
     return true;
 }
 
@@ -488,7 +490,35 @@ void Game::initGameSystems() {
         d.musicManager.loadPlaylist(playlist);
         d.musicManager.setState(GameState::Menu);
     }
+}
 
+// Steps 19–20: debug console — console widget only; server commands wired in startGame().
+void Game::initGameConsole() {
+    auto& d = *m_impl;
+    d.gameConsole.emplace(*d.rawLogger, d.cmdRegistry);
+}
+
+// Step 21: screen manager — created after all stable game systems exist.
+void Game::initScreenManager() {
+    auto& d = *m_impl;
+    d.screenMgr = std::make_unique<ScreenManager>(*d.p.input, *d.rawLogger);
+    d.screenMgr->init(*d.userConfig, *d.p.renderer, *d.p.window, *d.p.display, *d.assets);
+}
+
+// ---------------------------------------------------------------------------
+// Session lifecycle — startGame / stopGame
+// ---------------------------------------------------------------------------
+
+void Game::startGame() {
+    auto& d = *m_impl;
+
+    // Reset render bridge and entity registry from any prior session.
+    d.renderBridge.reset();
+    d.entityRegistry.clear();
+    d.env = EnvironmentState{};
+    d.serverReady.store(false, std::memory_order_relaxed);
+
+    // Register the builtin entity type for the no-pack sandbox path.
     if (d.outcome == FirstRunOutcome::LaunchSandboxInspector) {
         fl::EntityDef debugDef;
         debugDef.id = "builtin:debug-entity";
@@ -496,60 +526,129 @@ void Game::initGameSystems() {
         debugDef.category = fl::ObjectCategory::AirVehicle;
         debugDef.maxHp = 100.0f;
         d.entityRegistry.registerType(std::move(debugDef));
-
         d.cameraController.setFreeOrbit({0.0, 2000.0, 0.0}, 0.0f, 30.0f, 30.0f);
-        d.inspector.emplace(*d.p.audio, *d.p.input, *d.rawLogger, 440.0f, nullptr);
     }
-}
 
-// Steps 18–18.5: local server, ENet client, HUD objects, discovery listener.
-bool Game::initNetwork() {
-    auto& d = *m_impl;
-
+    // Start fl-server in a background thread.
     d.localServer.emplace(*d.rawLogger);
-    if (!d.localServer->start()) {
-        d.rawLogger->log(LogLevel::Error, __FILE__, __LINE__,
-                         "failed to start local fl-server — is fl-server built alongside fighters-legacy?");
-        return false;
-    }
+    d.serverThread = std::thread([&d]() {
+        if (d.localServer->start())
+            d.serverReady.store(true, std::memory_order_release);
+    });
 
-    d.clientNet = std::make_unique<ENetNetwork>();
-    if (!d.clientNet->init()) {
-        d.rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "client ENet init failed");
-        return false;
-    }
+    // onConnect is called by LoadingScreen once serverReady fires.
+    auto onConnect = [&d]() {
+        d.activeHud = &d.flightHud;
+        d.hapticController.emplace(*d.p.input);
 
-    d.env = d.localServer->initialEnvironment();
-    d.activeHud = &d.flightHud;
+        d.clientNet = std::make_unique<ENetNetwork>();
+        if (!d.clientNet->init()) {
+            d.rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "client ENet init failed");
+            return;
+        }
 
-    d.hapticController.emplace(*d.p.input);
-    d.clientHandler =
-        std::make_unique<ClientNetEventHandler>(d.renderBridge, d.entityRegistry, *d.rawLogger, *d.clientNet, d.env);
-    d.clientHandler->notice = &d.serverNotice;
-    d.clientNet->setEventHandler(d.clientHandler.get());
-    d.clientNet->connect("127.0.0.1", 4778);
+        d.env = d.localServer->initialEnvironment();
+        d.clientHandler = std::make_unique<ClientNetEventHandler>(d.renderBridge, d.entityRegistry, *d.rawLogger,
+                                                                  *d.clientNet, d.env);
+        d.clientHandler->notice = &d.serverNotice;
+        d.clientHandler->console = &*d.gameConsole;
+        d.clientNet->setEventHandler(d.clientHandler.get());
 
-    d.discoveryListener.emplace(static_cast<uint16_t>(4778), *d.rawLogger);
-    if (!d.discoveryListener->isOpen())
-        d.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__, "LAN discovery listener: no sockets opened");
+        auto adminSender = makeNetworkAdminSender(*d.clientNet, std::string(d.localServer->sessionToken()));
+        d.localServer->registerConsoleCommands(d.cmdRegistry, adminSender, d.renderBridge, &d.entityRegistry,
+                                               &d.clientHandler->assignedEntityIdx, &d.clientHandler->assignedEntityGen,
+                                               &d.gameConsole->showPosRef());
+        d.screenMgr->setServerCmd(std::move(adminSender));
 
-    return true;
+        d.discoveryListener.emplace(static_cast<uint16_t>(4778), *d.rawLogger);
+        if (!d.discoveryListener->isOpen())
+            d.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__, "LAN discovery listener: no sockets opened");
+
+        // Build FlightScreenDeps now that all session objects exist.
+        FlightScreenDeps fsd;
+        fsd.camInput = &d.camInput;
+        fsd.flightInput = &d.flightInput;
+        fsd.cameraController = &d.cameraController;
+        fsd.gameConsole = &*d.gameConsole;
+        fsd.hapticController = &*d.hapticController;
+        fsd.activeHud = &d.activeHud;
+        fsd.windshieldRain = &d.windshieldRain;
+        fsd.renderBridge = &d.renderBridge;
+        fsd.terrainStreamer = d.terrainStreamer.get();
+        fsd.env = &d.env;
+        fsd.clientNet = d.clientNet.get();
+        fsd.joystick = d.p.joystick.get();
+        fsd.userConfig = &*d.userConfig;
+        fsd.inspector = d.inspector ? &*d.inspector : nullptr;
+        fsd.assignedEntityIdx = &d.clientHandler->assignedEntityIdx;
+        fsd.assignedEntityGen = &d.clientHandler->assignedEntityGen;
+        d.screenMgr->reinitFlight(std::move(fsd));
+
+        d.clientNet->connect("127.0.0.1", 4778);
+    };
+
+    d.screenMgr->reinitLoading(d.serverReady, [&d]() { return d.renderBridge.hasSnapshot(); }, std::move(onConnect));
+
+    // Lazy SandboxInspector init (no-pack path).
+    if (d.outcome == FirstRunOutcome::LaunchSandboxInspector)
+        d.inspector.emplace(*d.p.audio, *d.p.input, *d.rawLogger, 440.0f, nullptr);
 }
 
-// Steps 19–20: debug console, command registry, per-frame state.
-void Game::initGameConsole() {
+void Game::stopGame() {
     auto& d = *m_impl;
 
-    d.gameConsole.emplace(*d.rawLogger, d.cmdRegistry);
-    d.clientHandler->console = &*d.gameConsole;
-    d.localServer->registerConsoleCommands(
-        d.cmdRegistry, makeNetworkAdminSender(*d.clientNet, std::string(d.localServer->sessionToken())), d.renderBridge,
-        &d.entityRegistry, &d.clientHandler->assignedEntityIdx, &d.clientHandler->assignedEntityGen,
-        &d.gameConsole->showPosRef());
+    // Join background server thread before touching any session objects.
+    if (d.serverThread.joinable())
+        d.serverThread.join();
 
-    if (d.outcome == FirstRunOutcome::LaunchSandboxInspector)
-        d.camInput.setInitialPivot({0.0, 2000.0, 0.0});
-    d.perfOverlay.setMode(d.userConfig->debug().overlayMode);
+    if (d.hapticController)
+        d.hapticController->onPause(0);
+
+    if (d.clientNet) {
+        d.clientNet->disconnect();
+        for (int i = 0; i < 10; ++i)
+            d.clientNet->service(0);
+        d.clientNet->shutdown();
+        d.clientNet.reset();
+    }
+    if (d.localServer) {
+        d.localServer->stop();
+        d.localServer.reset();
+    }
+
+    d.clientHandler.reset();
+    d.discoveryListener.reset();
+    d.inspector.reset();
+    d.hapticController.reset();
+    d.renderBridge.reset();
+    d.entityRegistry.clear();
+    d.env = EnvironmentState{};
+    d.musicManager.setState(GameState::Menu);
+    d.screenMgr->setServerCmd(nullptr);
+    d.p.input->setMouseCapture(false);
+}
+
+void Game::handleTransition(Screen next) {
+    auto& d = *m_impl;
+    const Screen prev = d.screenMgr->current();
+
+    if (next == Screen::Loading && prev == Screen::MainMenu)
+        startGame();
+
+    if (next == Screen::MainMenu &&
+        (prev == Screen::Flight || prev == Screen::Pause || prev == Screen::Debrief || prev == Screen::Loading))
+        stopGame();
+
+    if (next == Screen::Flight)
+        d.musicManager.setState(GameState::FlightPatrol);
+    else if (next == Screen::MainMenu)
+        d.musicManager.setState(GameState::Menu);
+    else if (next == Screen::Debrief) {
+        d.screenMgr->debrief().setStats(0, 0, true);
+        d.musicManager.setState(GameState::Debrief);
+    }
+
+    d.screenMgr->transition(next);
 }
 
 // ---------------------------------------------------------------------------
@@ -560,76 +659,81 @@ void Game::run() {
     auto& d = *m_impl;
     bool wasFocused = true;
     bool running = true;
+
     while (running && !d.p.window->shouldClose()) {
         d.p.window->pollEvents();
+
+        // Haptic: pause effects on focus loss.
         {
             const bool isFocused = (SDL_GetWindowFlags(static_cast<SDL_Window*>(d.p.window->nativeHandle())) &
                                     SDL_WINDOW_INPUT_FOCUS) != 0;
-            if (wasFocused && !isFocused)
+            if (wasFocused && !isFocused && d.hapticController)
                 d.hapticController->onPause(0);
             wasFocused = isFocused;
         }
+
         d.p.renderer->beginFrame();
 
-        const fl::EntityRenderEntry* playerEntry =
-            findPlayerEntry(d.renderBridge, d.clientHandler->assignedEntityIdx, d.clientHandler->assignedEntityGen);
+        const Screen cur = d.screenMgr->current();
+        const bool inSession =
+            (cur == Screen::Flight || cur == Screen::Pause || cur == Screen::Debrief || cur == Screen::Loading);
 
-        d.camInput.pollModeKeys(d.cameraController, *d.gameConsole, *d.p.input, playerEntry);
-        d.camInput.update(d.cameraController, playerEntry, *d.gameConsole, *d.terrainStreamer);
+        // Network service (session only).
+        if (inSession && d.clientNet)
+            d.clientNet->service(0);
+        if (inSession && d.discoveryListener)
+            d.discoveryListener->poll();
 
-        bool consoleWasOpen = d.gameConsole->isOpen();
-        if (consoleWasOpen) {
-            if (d.gameConsole->tick(*d.p.input))
-                d.gameConsole->close(*d.p.input);
+        // Render pipeline (session with valid snapshot only).
+        CameraView cam{};
+        glm::dvec3 camOrigin{};
+        const fl::EntityRenderEntry* playerEntry = nullptr;
+        if (inSession && d.clientHandler && d.renderBridge.hasSnapshot()) {
+            playerEntry =
+                findPlayerEntry(d.renderBridge, d.clientHandler->assignedEntityIdx, d.clientHandler->assignedEntityGen);
+            const float alpha = d.clientHandler->tickAlpha.get();
+            const float aspect = static_cast<float>(d.p.window->width()) /
+                                 static_cast<float>(d.p.window->height() > 0 ? d.p.window->height() : 1);
+            cam = d.cameraController.view(aspect);
+            camOrigin = cam.worldOrigin;
+
+            d.p.asyncFilesystem->service();
+            d.terrainStreamer->update(camOrigin);
+            updateAudioListener(*d.p.audio, cam, playerEntry ? playerEntry->velocity : glm::vec3{});
+
+            const bool isSnow = static_cast<float>(camOrigin.y) > kSnowAltitudeThresholdM;
+            d.sceneRenderer->renderFrame(alpha, cam, d.env,
+                                         d.precipController.build(d.env, cam, isSnow, d.particleSystem));
         }
-        if (!consoleWasOpen && d.gameConsole->isOpen())
-            d.hapticController->onPause(0);
-        if (d.inspector && !d.inspector->update() && !consoleWasOpen)
+
+        // Audio update (always — so music plays on main menu too).
+        {
+            const AudioSettings& aud = d.userConfig->audio();
+            d.subtitleQueue.update(1.0f / 60.0f);
+            d.musicManager.update(1.0f / 60.0f, aud.masterVolume, aud.musicVolume);
+        }
+
+        // Screen update — hands off input/flight logic to the active screen.
+        const Screen next = d.screenMgr->active().update(*d.p.input, *d.p.window);
+        if (next == Screen::Quit) {
+            if (inSession)
+                stopGame();
             running = false;
+        } else if (next != cur) {
+            handleTransition(next);
+        }
 
-        d.clientNet->service(0);
-        d.discoveryListener->poll();
+        // Console HUD (show position if we have a valid camera).
+        d.gameConsole->buildHud(camOrigin != glm::dvec3{} ? &camOrigin : nullptr,
+                                playerEntry ? &playerEntry->position : nullptr);
 
-        const ControlsSettings cs = d.userConfig->controls();
-        if (auto msg =
-                d.flightInput.poll(d.renderBridge, d.camInput, *d.gameConsole, *d.p.input, d.p.joystick.get(), cs))
-            d.clientNet->send(0, &*msg, sizeof(*msg), /*reliable=*/true);
-        const bool weaponFired = d.flightInput.wasWeaponFired();
-
-        float alpha = d.clientHandler->tickAlpha.get();
-        float aspect = static_cast<float>(d.p.window->width()) /
-                       static_cast<float>(d.p.window->height() > 0 ? d.p.window->height() : 1);
-        CameraView cam = d.cameraController.view(aspect);
-
-        d.p.asyncFilesystem->service();
-        d.terrainStreamer->update(cam.worldOrigin);
-
-        updateAudioListener(*d.p.audio, cam, playerEntry ? playerEntry->velocity : glm::vec3{});
-
-        const AudioSettings& aud = d.userConfig->audio();
-        d.subtitleQueue.update(1.0f / 60.0f);
-        d.musicManager.update(1.0f / 60.0f, aud.masterVolume, aud.musicVolume);
-
-        const bool isSnow = static_cast<float>(cam.worldOrigin.y) > kSnowAltitudeThresholdM;
-        d.sceneRenderer->renderFrame(alpha, cam, d.env, d.precipController.build(d.env, cam, isSnow, d.particleSystem));
-
-        const float terrainElev =
-            playerEntry
-                ? static_cast<float>(d.terrainStreamer->heightAt(playerEntry->position.x, playerEntry->position.z))
-                : 0.0f;
-        const bool cockpit = (d.cameraController.mode() == fl::CameraMode::Cockpit);
-        d.activeHud->update(cockpit ? playerEntry : nullptr, d.env.timeOfDay, terrainElev);
-        d.windshieldRain.update(cockpit ? (1.0f / 60.0f) : 0.0f, cockpit ? d.env : EnvironmentState{},
-                                cockpit ? computeRollAngleRad(playerEntry) : 0.f, cockpit && isSnow);
-        d.hapticController->update(playerEntry, weaponFired, terrainElev, 1.0f / 60.0f);
-        d.gameConsole->buildHud(&cam.worldOrigin, playerEntry ? &playerEntry->position : nullptr);
-
-        updatePerfOverlay(*d.gameConsole, *d.p.renderer, d.perfOverlay, d.renderBridge, *d.userConfig);
-
-        d.p.renderer->submitOverlayElements(d.activeHud->elements());
-        d.p.renderer->submitOverlayElements(d.windshieldRain.elements());
+        // Overlay layers: screen content + server notice + console.
+        d.p.renderer->submitOverlayElements(d.screenMgr->active().buildElements());
         d.p.renderer->submitOverlayElements(d.serverNotice.buildElements());
         d.p.renderer->setConsoleElements(d.gameConsole->elements());
+
+        updatePerfOverlay(*d.gameConsole, *d.p.renderer, d.perfOverlay, d.renderBridge, *d.userConfig,
+                          cur == Screen::Flight);
 
         d.p.renderer->endFrame();
         d.p.input->flush();
