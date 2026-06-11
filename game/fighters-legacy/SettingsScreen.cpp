@@ -140,7 +140,7 @@ Screen SettingsScreen::update(IInput& input, IWindow& window) {
                       input.isGamepadButtonJustPressed(0, GamepadButton::DpadLeft);
     const bool right = input.isKeyJustPressed(Key::ArrowRight) || input.isKeyJustPressed(Key::D) ||
                        input.isGamepadButtonJustPressed(0, GamepadButton::DpadRight);
-    const float scroll = input.getMouseScroll();
+    const float scroll = static_cast<float>(input.getMouseScroll());
 
     switch (m_focusedRow) {
     case 0: // Resolution
