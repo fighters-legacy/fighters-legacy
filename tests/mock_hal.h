@@ -10,6 +10,7 @@
 #include "IJoystick.h"
 #include "ILogger.h"
 #include "IRenderer.h"
+#include "IWindow.h"
 
 #include <cstring>
 #include <map>
@@ -109,8 +110,13 @@ struct MockInput : public IInput {
     int getMouseScroll() const override {
         return 0;
     }
-    bool isMouseButtonDown(MouseButton) const override {
-        return false;
+    std::set<MouseButton> mouseDown;
+    std::set<MouseButton> mouseJustPressed;
+    bool isMouseButtonDown(MouseButton b) const override {
+        return mouseDown.count(b) > 0;
+    }
+    bool isMouseButtonJustPressed(MouseButton b) const override {
+        return mouseJustPressed.count(b) > 0;
     }
 
     void startTextInput(ITextInputHandler*) override {}
@@ -505,4 +511,72 @@ struct MockRenderer : public IRenderer {
     void setOverlayLines(std::span<const std::string_view>) override {}
     void submitOverlayElements(std::span<const HudElement>) override {}
     void setConsoleElements(std::span<const HudElement>) override {}
+};
+
+struct MockWindow : public IWindow {
+    int logW{1280};
+    int logH{720};
+    int physW{1280};
+    int physH{720};
+    bool fullscreen{false};
+    int lastSetW{0};
+    int lastSetH{0};
+    int setSizeCount{0};
+    int setFullscreenCount{0};
+
+    bool init(const char*, int w, int h) override {
+        logW = w;
+        logH = h;
+        physW = w;
+        physH = h;
+        return true;
+    }
+    void shutdown() override {}
+    void pollEvents() override {}
+    void setEventHandler(IWindowEventHandler*) override {}
+    int width() const override {
+        return physW;
+    }
+    int height() const override {
+        return physH;
+    }
+    int logicalWidth() const override {
+        return logW;
+    }
+    int logicalHeight() const override {
+        return logH;
+    }
+    bool shouldClose() const override {
+        return false;
+    }
+    void* nativeHandle() const override {
+        return nullptr;
+    }
+    const char* getLastError() const override {
+        return nullptr;
+    }
+    int showMessageBox(MessageBoxType, const char*, const char*, const MessageBoxButton*, int) override {
+        return 0;
+    }
+    void openURL(const char*) override {}
+    void setTitle(const char*) override {}
+    bool setSize(int w, int h) override {
+        ++setSizeCount;
+        lastSetW = w;
+        lastSetH = h;
+        logW = w;
+        logH = h;
+        return true;
+    }
+    bool setFullscreen(bool fs) override {
+        ++setFullscreenCount;
+        fullscreen = fs;
+        return true;
+    }
+    bool setDisplayMode(const IDisplay::DisplayMode&) override {
+        return true;
+    }
+    int getCurrentMonitorId() const override {
+        return 0;
+    }
 };

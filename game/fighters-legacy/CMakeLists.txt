@@ -7,6 +7,15 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         FlightInputCollector.cpp
         HapticController.cpp
         LocalServer.cpp
+        ScreenManager.cpp
+        MainMenuScreen.cpp
+        LoadingScreen.cpp
+        MissionSelectScreen.cpp
+        MissionBriefScreen.cpp
+        SettingsScreen.cpp
+        FlightScreen.cpp
+        PauseMenuScreen.cpp
+        DebriefScreen.cpp
     )
     target_link_libraries(fighters-legacy PRIVATE
         engine-crash

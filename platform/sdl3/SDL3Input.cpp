@@ -440,8 +440,11 @@ void SDL3Input::onSDLEvent(const SDL_Event& ev) {
             mb = MouseButton::Middle;
         else if (ev.button.button == SDL_BUTTON_RIGHT)
             mb = MouseButton::Right;
-        if (mb != MouseButton::Count)
+        if (mb != MouseButton::Count) {
             m_mouseButtons[static_cast<int>(mb)] = (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN);
+            if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+                m_mouseJustPressed[static_cast<int>(mb)] = true;
+        }
         break;
     }
 
@@ -578,6 +581,12 @@ bool SDL3Input::isMouseButtonDown(MouseButton button) const {
     return m_mouseButtons[static_cast<int>(button)];
 }
 
+bool SDL3Input::isMouseButtonJustPressed(MouseButton button) const {
+    if (button >= MouseButton::Count)
+        return false;
+    return m_mouseJustPressed[static_cast<int>(button)];
+}
+
 // ---------------------------------------------------------------------------
 // IInput — text input
 // ---------------------------------------------------------------------------
@@ -599,6 +608,8 @@ void SDL3Input::stopTextInput() {
 void SDL3Input::flush() {
     for (int i = 0; i < kKeyCount; ++i)
         m_keysJustPressed[i] = false;
+    for (int i = 0; i < kMouseCount; ++i)
+        m_mouseJustPressed[i] = false;
     for (auto& gp : m_gamepads) {
         for (int i = 0; i < kButtonCount; ++i)
             gp.justPressed[i] = false;

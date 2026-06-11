@@ -1626,3 +1626,76 @@ TEST_CASE("DifficultyMultipliers::load(AssetManager) falls back to IFilesystem w
     CHECK(logger.entries.empty());
     CHECK(dm.preset(DifficultyPreset::Cadet).reactionTimeS == 1.5f);
 }
+
+// ---------------------------------------------------------------------------
+// AssetManager::hasPacks and listMissions
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AssetManager::hasPacks returns false with no packs", "[content]") {
+    MockLogger logger;
+    AssetManager am({}, logger);
+    CHECK(!am.hasPacks());
+}
+
+TEST_CASE("AssetManager::hasPacks returns true with one pack", "[content]") {
+    MockLogger logger;
+    MockContentPack pack;
+    AssetManager am(makePacks(&pack), logger);
+    CHECK(am.hasPacks());
+}
+
+TEST_CASE("AssetManager::listMissions returns empty when packs have no missions", "[content]") {
+    MockLogger logger;
+    MockContentPack pack;
+    // default MockContentPack::listAssets returns {}
+    AssetManager am(makePacks(&pack), logger);
+    CHECK(am.listMissions().empty());
+}
+
+TEST_CASE("AssetManager::listMissions returns mission ids from pack", "[content]") {
+    MockLogger logger;
+
+    struct MissionPack : public MockContentPack {
+        std::vector<std::string> listAssets(AssetType t) const override {
+            if (t == AssetType::Mission)
+                return {"m01", "m02", "m03"};
+            return {};
+        }
+    };
+    MissionPack pack;
+
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::make_unique<MissionPack>(pack));
+    AssetManager am(std::move(packs), logger);
+
+    auto missions = am.listMissions();
+    REQUIRE(missions.size() == 3u);
+    CHECK(missions[0] == "m01");
+    CHECK(missions[1] == "m02");
+    CHECK(missions[2] == "m03");
+}
+
+TEST_CASE("AssetManager::listMissions deduplicates across packs", "[content]") {
+    MockLogger logger;
+
+    struct MissionPack : public MockContentPack {
+        std::vector<std::string> missionList;
+        std::vector<std::string> listAssets(AssetType t) const override {
+            if (t == AssetType::Mission)
+                return missionList;
+            return {};
+        }
+    };
+
+    MissionPack packA, packB;
+    packA.missionList = {"m01", "m02"};
+    packB.missionList = {"m02", "m03"}; // m02 duplicated
+
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::make_unique<MissionPack>(packA));
+    packs.push_back(std::make_unique<MissionPack>(packB));
+    AssetManager am(std::move(packs), logger);
+
+    auto missions = am.listMissions();
+    REQUIRE(missions.size() == 3u); // m01, m02, m03 (no dupe)
+}

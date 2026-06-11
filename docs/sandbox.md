@@ -2,6 +2,19 @@
 
 Developer controls for the Fighters Legacy sandbox (zero-content-pack free-flight mode).
 
+The game opens to the main menu. Select **Sandbox (Instant Action)** to start a local server and enter free flight. The loading screen shows progress messages while the server starts; it transitions to flight automatically when connected. Press **Escape** during flight to open the pause menu.
+
+---
+
+## Menu navigation
+
+| Action | Keyboard | Gamepad |
+|---|---|---|
+| Navigate up / down | Up / Down arrows or W / S | Left-stick Y or D-pad Up / Down |
+| Confirm / select | Enter or Space | A button |
+| Back / cancel | Escape | B button |
+| Pause (in-flight) | Escape (when console is closed) | — |
+
 ---
 
 ## Camera modes

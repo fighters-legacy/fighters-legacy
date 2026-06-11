@@ -21,6 +21,7 @@ class SDL3Input : public IInput, public ISDL3EventSink {
     void setMouseCapture(bool capture) override;
     int getMouseScroll() const override;
     bool isMouseButtonDown(MouseButton button) const override;
+    bool isMouseButtonJustPressed(MouseButton button) const override;
 
     void startTextInput(ITextInputHandler* handler) override;
     void stopTextInput() override;
@@ -55,6 +56,7 @@ class SDL3Input : public IInput, public ISDL3EventSink {
     int m_mouseDy{0};
     int m_mouseScroll{0};
     bool m_mouseButtons[kMouseCount]{};
+    bool m_mouseJustPressed[kMouseCount]{};
     bool m_mouseCaptured{false};
 
     struct GamepadState {

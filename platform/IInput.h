@@ -166,6 +166,9 @@ class IInput {
 
     virtual bool isMouseButtonDown(MouseButton button) const = 0;
 
+    // True only on the first frame the button was pressed; cleared by flush().
+    virtual bool isMouseButtonJustPressed(MouseButton button) const = 0;
+
     // --- Text input ---
 
     // Activates OS text input mode (shows on-screen keyboard on mobile, enables IME

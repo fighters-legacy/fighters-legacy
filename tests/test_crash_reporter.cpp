@@ -66,6 +66,9 @@ struct MockWindow : IWindow {
         lastUrl = url ? url : "";
     }
     void setTitle(const char*) override {}
+    bool setSize(int, int) override {
+        return false;
+    }
     bool setFullscreen(bool) override {
         return false;
     }

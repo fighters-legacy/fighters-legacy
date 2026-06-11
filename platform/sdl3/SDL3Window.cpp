@@ -140,6 +140,16 @@ void SDL3Window::setTitle(const char* title) {
         SDL_SetWindowTitle(m_window, title);
 }
 
+bool SDL3Window::setSize(int w, int h) {
+    if (!m_window)
+        return false;
+    if (!SDL_SetWindowSize(m_window, w, h)) {
+        m_lastError = SDL_GetError();
+        return false;
+    }
+    return true;
+}
+
 bool SDL3Window::setFullscreen(bool fullscreen) {
     if (!m_window)
         return false;

@@ -8,6 +8,7 @@
 #include <entity/EntityManager.h>
 #include <entity/EntityState.h>
 #include <loop/GameLoop.h>
+#include <loop/TimeRate.h>
 #include <net/DiscoveryBeacon.h>
 #include <net/WorldBroadcaster.h>
 #include <weather/WeatherController.h>
@@ -689,6 +690,27 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                 result += " (note: reason may be truncated in short-duration notices)";
             return result;
         });
+
+    // pause / resume
+    registry.registerCommand("pause", "pause  -- pause the simulation (ticks stop; connections stay active)",
+                             [ctx](std::span<std::string_view>) -> std::string {
+                                 if (!ctx.gameLoop)
+                                     return "pause: game loop not available";
+                                 ctx.gameLoop->setRate(TimeRate::Paused);
+                                 if (ctx.shell)
+                                     ctx.shell->print("simulation paused");
+                                 return "simulation paused";
+                             });
+
+    registry.registerCommand("resume", "resume  -- resume the simulation at normal rate",
+                             [ctx](std::span<std::string_view>) -> std::string {
+                                 if (!ctx.gameLoop)
+                                     return "resume: game loop not available";
+                                 ctx.gameLoop->setRate(TimeRate::Normal);
+                                 if (ctx.shell)
+                                     ctx.shell->print("simulation resumed");
+                                 return "simulation resumed";
+                             });
 
     // quit
     registry.registerCommand("quit", "quit  -- shut down fl-server gracefully",
