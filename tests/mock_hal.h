@@ -86,6 +86,7 @@ struct MockInput : public IInput {
     std::set<Key> held;
     int gamepadCount = 0;
     std::map<std::pair<int, GamepadAxis>, float> axisValues;
+    std::set<std::pair<int, GamepadButton>> gpDown;
     std::set<std::pair<int, GamepadButton>> gpJustPressed;
 
     bool isKeyDown(Key k) const override {
@@ -119,8 +120,8 @@ struct MockInput : public IInput {
     int getGamepadCount() const override {
         return gamepadCount;
     }
-    bool isGamepadButtonDown(int, GamepadButton) const override {
-        return false;
+    bool isGamepadButtonDown(int id, GamepadButton b) const override {
+        return gpDown.count({id, b}) > 0;
     }
     bool isGamepadButtonJustPressed(int id, GamepadButton b) const override {
         return gpJustPressed.count({id, b}) > 0;

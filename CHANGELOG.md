@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: gamepad primary-fire button is now configurable via `fire_button` in `[controls]` (`config/user.toml`); defaults to Right Shoulder (RB / R1, index 5); triggers the gun-burst haptic effect (#287)
 - **engine**: expose `abEngaged` (afterburner lit) and `engineFailFlags` (`kEngineFail*` bitmask) through the full pipeline — `FlightState` → `MsgEntityEntry` (wire offsets 68–69, additive fields) → `EntityRenderEntry` → `HapticController`; replaces the `throttle == 100` afterburner proxy and `damageLevel >= 2` engine-failure proxy with accurate flags; `kEngineFailLeft`/`kEngineFailRight` bits deliver asymmetric left/right motor haptics when set; `kEngineCompStall` auto-triggers the compressor stall sequence; closes #286
 
 ### Changed

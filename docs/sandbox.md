@@ -72,6 +72,10 @@ are within the deadzone.
 | Aileron (roll) | Right stick X |
 | Rudder (yaw) | Left stick X |
 
+| Index | Button | Default mapping |
+|---|---|---|
+| 5 | Right shoulder (RB / R1) | Primary fire |
+
 Configure in the `[controls]` section of `config/user.toml`:
 
 | Key | Default | Description |
@@ -81,6 +85,7 @@ Configure in the `[controls]` section of `config/user.toml`:
 | `invert_roll` | `false` | Flip aileron axis |
 | `invert_rudder` | `false` | Flip rudder axis |
 | `invert_throttle` | `false` | Flip throttle direction |
+| `fire_button` | `5` | Gamepad button index for primary fire; see Buttons table above |
 
 ## Haptic feedback
 
