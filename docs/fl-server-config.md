@@ -163,7 +163,7 @@ Rule 1: no teamkilling.
 ```
 
 Each line is printed separately in the client's game console prefixed with `[server]`.
-The first line is also shown in the server notice banner and auto-dismisses after 15 seconds.
+The first line is also shown in the server notice banner; the banner fades out over the final 2 seconds before auto-dismissing (display duration is user-configurable via `motd_display_s` in `user.toml`).
 
 ### `password`
 

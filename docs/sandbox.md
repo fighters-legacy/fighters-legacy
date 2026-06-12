@@ -226,4 +226,4 @@ Configure in the `[client]` section of `config/user.toml`:
 
 | Key | Default | Range | Description |
 |---|---|---|---|
-| `motd_display_s` | `15` | 0–3600 | Seconds the server MOTD banner is shown on connect; `0` = persistent (no auto-dismiss) |
+| `motd_display_s` | `15` | 0–3600 | Seconds the server MOTD banner is shown on connect; banner fades out over the final 2 s of the window; `0` = persistent (no fade, no auto-dismiss) |
