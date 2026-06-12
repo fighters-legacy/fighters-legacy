@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **server**: RCON per-IP failed-auth lockout — after `max_auth_failures` consecutive wrong passwords the source IP is locked out for `lockout_seconds`; locked-out connections receive an immediate `AUTH_RESPONSE id=-1` and are closed before processing any packets; both thresholds are configurable in `[rcon]` (defaults: 5 attempts, 60 s lockout); closes #297
 - **game**: main menu, loading screen, settings screen, and game-flow skeleton; game now opens to a main menu; "Sandbox (Instant Action)" starts a local server in the background while a Quake-style loading screen shows progress; in-flight Escape opens a pause menu with Resume / Settings / Quit to Menu / Exit to Desktop; `ScreenManager` drives screen transitions with automatic mouse-capture and server-pause side effects; `SettingsScreen` exposes resolution, display mode, vsync, anti-aliasing, draw distance, and master/music/SFX volumes; closes #149
 - **server**: `pause` and `resume` admin commands suspend and resume the simulation tick rate via `GameLoop::setRate(TimeRate::Paused/Normal)` without dropping network connections
 - **game**: gamepad primary-fire button is now configurable via `fire_button` in `[controls]` (`config/user.toml`); defaults to Right Shoulder (RB / R1, index 5); triggers the gun-burst haptic effect (#287)

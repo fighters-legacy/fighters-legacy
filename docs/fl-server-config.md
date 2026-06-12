@@ -73,9 +73,11 @@ pre_handshake_rate_limit_count = 20   # max CONNECT attempts per IP per window; 
 pre_handshake_window_ms        = 1000 # sliding window in milliseconds
 
 [rcon]
-enabled  = false
-port     = 27015
-password = ""
+enabled           = false
+port              = 27015
+password          = ""
+max_auth_failures = 5    # lock out IP after N consecutive failed auth attempts
+lockout_seconds   = 60   # per-IP lockout duration in seconds
 ```
 
 ---
@@ -540,9 +542,11 @@ Engine RCON protocol. The server exposes the same command set as the stdin conso
 
 ```toml
 [rcon]
-enabled  = false
-port     = 27015
-password = ""
+enabled           = false
+port              = 27015
+password          = ""
+max_auth_failures = 5
+lockout_seconds   = 60
 ```
 
 ### `enabled`
@@ -574,10 +578,33 @@ Password required for RCON authentication. Empty string means no password is req
 (a startup warning is logged when `enabled = true` and `password` is empty).
 Passwords are compared in constant time to resist timing attacks.
 
+### `max_auth_failures`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `5` | 1–1000 |
+
+Number of consecutive failed `SERVERDATA_AUTH` attempts from the same IP before
+that IP is temporarily locked out. Out-of-range values are ignored and the default
+is kept (a warning is logged).
+
+### `lockout_seconds`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `60` | 1–86400 |
+
+How long (in seconds) a locked-out IP is refused new RCON connections. Locked-out
+connections receive an `AUTH_RESPONSE id=-1` immediately on connect and are closed.
+Out-of-range values are ignored and the default is kept (a warning is logged).
+
 ### Behaviour notes
 
 - A maximum of 4 simultaneous RCON connections are accepted. Additional connections receive
   an error response and are closed immediately.
+- Repeated failed auth attempts are rate-limited per source IP: after `max_auth_failures`
+  consecutive failures the IP is locked out for `lockout_seconds`. Locked-out connections
+  receive an immediate `AUTH_RESPONSE id=-1` and are closed before any packets are processed.
 - Command responses longer than 4086 bytes are split across multiple `SERVERDATA_RESPONSE_VALUE`
   packets per the Source Engine RCON specification, followed by an empty sentinel packet.
 - Async-mutating commands (`kick`, `ban`, `unban`, `tp`, `spawn`, `kill`) return a

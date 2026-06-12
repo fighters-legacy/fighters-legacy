@@ -2,10 +2,13 @@
 #pragma once
 #include "server_config.h"
 #include <ILogger.h>
+#include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 class CommandRegistry;
@@ -44,6 +47,36 @@ int decodePacket(const uint8_t* buf, int len, RconPacket& out);
 // Split a response body into chunks of at most kMaxBodyPerPacket bytes.
 // Always returns at least one element (may be empty string for empty input).
 std::vector<std::string> splitResponse(std::string_view body);
+
+// Per-IP failed-auth tracker. Single-threaded (ioLoop only).
+// Extracted from RconServer::Impl so it can be unit-tested without sockets.
+class AuthTracker {
+  public:
+    AuthTracker(int maxFailures, int lockoutSeconds);
+
+    // Record a failed auth attempt. Returns true if the IP is now locked out.
+    bool recordFailure(const std::string& ip);
+
+    // Clear the failure counter on successful auth. Does not clear an active lockout.
+    void recordSuccess(const std::string& ip);
+
+    // Returns true if the IP is locked out and the lockout has not expired.
+    // Lazily clears expired entries.
+    bool isLockedOut(const std::string& ip);
+
+    // Remove all expired lockout entries. Call periodically from ioLoop.
+    void pruneExpired();
+
+    // Inject a deterministic clock for tests (mirrors setClockOverride pattern).
+    void setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn);
+
+  private:
+    int m_maxFailures;
+    std::chrono::seconds m_lockoutDuration;
+    std::unordered_map<std::string, int> m_failCount;
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> m_lockouts;
+    std::function<std::chrono::steady_clock::time_point()> m_now;
+};
 
 } // namespace rcon
 

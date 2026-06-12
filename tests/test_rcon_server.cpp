@@ -8,6 +8,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -159,6 +160,107 @@ TEST_CASE("splitResponse returns one empty string for empty body", "[rcon][split
 }
 
 // ---------------------------------------------------------------------------
+// rcon::AuthTracker — per-IP failed-auth counter and lockout
+// ---------------------------------------------------------------------------
+
+using SteadyTp = std::chrono::steady_clock::time_point;
+
+TEST_CASE("AuthTracker: counter increments, no lockout before threshold", "[rcon][auth_tracker]") {
+    rcon::AuthTracker tracker(5, 60);
+    for (int i = 0; i < 4; ++i) {
+        CHECK_FALSE(tracker.recordFailure("1.2.3.4"));
+        CHECK_FALSE(tracker.isLockedOut("1.2.3.4"));
+    }
+}
+
+TEST_CASE("AuthTracker: lockout triggered on Nth failure", "[rcon][auth_tracker]") {
+    rcon::AuthTracker tracker(5, 60);
+    for (int i = 0; i < 4; ++i)
+        tracker.recordFailure("1.2.3.4");
+    CHECK(tracker.recordFailure("1.2.3.4")); // 5th = lockout
+    CHECK(tracker.isLockedOut("1.2.3.4"));
+}
+
+TEST_CASE("AuthTracker: isLockedOut false after expiry (clock override)", "[rcon][auth_tracker]") {
+    rcon::AuthTracker tracker(5, 60);
+    SteadyTp now{};
+    tracker.setClockOverride([&now] { return now; });
+    for (int i = 0; i < 5; ++i)
+        tracker.recordFailure("1.2.3.4");
+    CHECK(tracker.isLockedOut("1.2.3.4"));
+    now += std::chrono::seconds(61);
+    CHECK_FALSE(tracker.isLockedOut("1.2.3.4"));
+}
+
+TEST_CASE("AuthTracker: recordSuccess clears failure counter", "[rcon][auth_tracker]") {
+    rcon::AuthTracker tracker(5, 60);
+    for (int i = 0; i < 3; ++i)
+        tracker.recordFailure("1.2.3.4");
+    tracker.recordSuccess("1.2.3.4");
+    // Counter reset to 0; 4 more failures stay below threshold
+    for (int i = 0; i < 4; ++i)
+        CHECK_FALSE(tracker.recordFailure("1.2.3.4"));
+    // 5th since reset triggers lockout
+    CHECK(tracker.recordFailure("1.2.3.4"));
+}
+
+TEST_CASE("AuthTracker: recordSuccess does not clear an active lockout", "[rcon][auth_tracker]") {
+    rcon::AuthTracker tracker(5, 60);
+    for (int i = 0; i < 5; ++i)
+        tracker.recordFailure("1.2.3.4");
+    CHECK(tracker.isLockedOut("1.2.3.4"));
+    tracker.recordSuccess("1.2.3.4");
+    CHECK(tracker.isLockedOut("1.2.3.4")); // lockout persists; only expiry clears it
+}
+
+TEST_CASE("AuthTracker: after lockout expiry failure counter restarts from zero", "[rcon][auth_tracker]") {
+    rcon::AuthTracker tracker(5, 60);
+    SteadyTp now{};
+    tracker.setClockOverride([&now] { return now; });
+    for (int i = 0; i < 5; ++i)
+        tracker.recordFailure("1.2.3.4");
+    now += std::chrono::seconds(61);
+    CHECK_FALSE(tracker.isLockedOut("1.2.3.4")); // expired
+    // Fresh counter: 4 failures stay below threshold
+    for (int i = 0; i < 4; ++i)
+        CHECK_FALSE(tracker.recordFailure("1.2.3.4"));
+}
+
+TEST_CASE("AuthTracker: multiple IPs tracked independently", "[rcon][auth_tracker]") {
+    rcon::AuthTracker tracker(5, 60);
+    for (int i = 0; i < 4; ++i) {
+        tracker.recordFailure("10.0.0.1");
+        tracker.recordFailure("10.0.0.2");
+    }
+    CHECK_FALSE(tracker.isLockedOut("10.0.0.1"));
+    CHECK_FALSE(tracker.isLockedOut("10.0.0.2"));
+    CHECK(tracker.recordFailure("10.0.0.1")); // 5th for IP A → lockout
+    CHECK(tracker.isLockedOut("10.0.0.1"));
+    CHECK_FALSE(tracker.isLockedOut("10.0.0.2")); // IP B unaffected
+}
+
+TEST_CASE("AuthTracker: failure counter persists across reconnects", "[rcon][auth_tracker]") {
+    rcon::AuthTracker tracker(5, 60);
+    for (int i = 0; i < 3; ++i)
+        tracker.recordFailure("1.2.3.4");
+    CHECK_FALSE(tracker.isLockedOut("1.2.3.4"));
+    // Simulated reconnect without success: counter continues from 3
+    CHECK_FALSE(tracker.recordFailure("1.2.3.4")); // 4th
+    CHECK(tracker.recordFailure("1.2.3.4"));       // 5th → lockout
+}
+
+TEST_CASE("AuthTracker: pruneExpired removes expired entry", "[rcon][auth_tracker]") {
+    rcon::AuthTracker tracker(5, 60);
+    SteadyTp now{};
+    tracker.setClockOverride([&now] { return now; });
+    for (int i = 0; i < 5; ++i)
+        tracker.recordFailure("1.2.3.4");
+    now += std::chrono::seconds(61);
+    tracker.pruneExpired();
+    CHECK_FALSE(tracker.isLockedOut("1.2.3.4"));
+}
+
+// ---------------------------------------------------------------------------
 // parseServerConfig [rcon] section
 // ---------------------------------------------------------------------------
 
@@ -168,6 +270,8 @@ TEST_CASE("parseServerConfig [rcon] defaults when section absent", "[rcon][confi
     CHECK_FALSE(cfg.rcon.enabled);
     CHECK(cfg.rcon.port == 27015);
     CHECK(cfg.rcon.password.empty());
+    CHECK(cfg.rcon.maxAuthFailures == 5);
+    CHECK(cfg.rcon.lockoutSeconds == 60);
 }
 
 TEST_CASE("parseServerConfig [rcon] reads all fields", "[rcon][config]") {
@@ -199,6 +303,48 @@ TEST_CASE("parseServerConfig [rcon] no warning when enabled with non-empty passw
     auto cfg = parseServerConfig("[rcon]\nenabled = true\npassword = \"strongpass\"\n", &log);
     CHECK(cfg.rcon.enabled);
     CHECK_FALSE(log.hasMessage(LogLevel::Warn, "rcon.password"));
+}
+
+TEST_CASE("parseServerConfig [rcon] reads max_auth_failures", "[rcon][config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[rcon]\nmax_auth_failures = 3\n", &log);
+    CHECK(cfg.rcon.maxAuthFailures == 3);
+    CHECK_FALSE(log.hasMessage(LogLevel::Warn, "rcon.max_auth_failures"));
+}
+
+TEST_CASE("parseServerConfig [rcon] reads lockout_seconds", "[rcon][config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[rcon]\nlockout_seconds = 120\n", &log);
+    CHECK(cfg.rcon.lockoutSeconds == 120);
+    CHECK_FALSE(log.hasMessage(LogLevel::Warn, "rcon.lockout_seconds"));
+}
+
+TEST_CASE("parseServerConfig [rcon] warns on out-of-range max_auth_failures", "[rcon][config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[rcon]\nmax_auth_failures = 9999\n", &log);
+    CHECK(cfg.rcon.maxAuthFailures == 5); // default unchanged
+    CHECK(log.hasMessage(LogLevel::Warn, "rcon.max_auth_failures"));
+}
+
+TEST_CASE("parseServerConfig [rcon] warns on out-of-range lockout_seconds", "[rcon][config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[rcon]\nlockout_seconds = 0\n", &log);
+    CHECK(cfg.rcon.lockoutSeconds == 60); // default unchanged
+    CHECK(log.hasMessage(LogLevel::Warn, "rcon.lockout_seconds"));
+}
+
+TEST_CASE("parseServerConfig [rcon] max_auth_failures at max boundary is valid", "[rcon][config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[rcon]\nmax_auth_failures = 1000\n", &log);
+    CHECK(cfg.rcon.maxAuthFailures == 1000);
+    CHECK_FALSE(log.hasMessage(LogLevel::Warn, "rcon.max_auth_failures"));
+}
+
+TEST_CASE("parseServerConfig [rcon] lockout_seconds at max boundary is valid", "[rcon][config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[rcon]\nlockout_seconds = 86400\n", &log);
+    CHECK(cfg.rcon.lockoutSeconds == 86400);
+    CHECK_FALSE(log.hasMessage(LogLevel::Warn, "rcon.lockout_seconds"));
 }
 
 // ---------------------------------------------------------------------------

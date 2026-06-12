@@ -98,7 +98,9 @@ static const char* kDefaultToml =
     "# use only on trusted/VPN networks or behind a TLS-terminating reverse proxy.\n"
     "enabled = false\n"
     "port = 27015\n"
-    "password = \"\"\n";
+    "password = \"\"\n"
+    "max_auth_failures = 5\n"
+    "lockout_seconds = 60\n";
 
 std::string_view defaultServerConfigToml() {
     return kDefaultToml;
@@ -345,6 +347,20 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
         if (auto v = tbl["rcon"]["password"].value<std::string>())
             cfg.rcon.password = std::move(*v);
+        if (auto v = tbl["rcon"]["max_auth_failures"].value<int64_t>()) {
+            if (*v < 1 || *v > 1000)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "rcon.max_auth_failures out of range [1,1000]; using default");
+            else
+                cfg.rcon.maxAuthFailures = static_cast<int>(*v);
+        }
+        if (auto v = tbl["rcon"]["lockout_seconds"].value<int64_t>()) {
+            if (*v < 1 || *v > 86400)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "rcon.lockout_seconds out of range [1,86400]; using default");
+            else
+                cfg.rcon.lockoutSeconds = static_cast<int>(*v);
+        }
         if (cfg.rcon.enabled && cfg.rcon.password.empty())
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "rcon.password is empty; RCON will accept unauthenticated connections"

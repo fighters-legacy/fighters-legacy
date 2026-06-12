@@ -65,7 +65,9 @@ struct ServerConfig {
     struct RconConfig {
         bool enabled = false;
         uint16_t port = 27015;
-        std::string password; // empty + enabled = warn at startup; unauthenticated connections accepted
+        std::string password;    // empty + enabled = warn at startup; unauthenticated connections accepted
+        int maxAuthFailures = 5; // lock out IP after this many consecutive failures
+        int lockoutSeconds = 60; // per-IP lockout duration in seconds
     };
     RconConfig rcon;
 };

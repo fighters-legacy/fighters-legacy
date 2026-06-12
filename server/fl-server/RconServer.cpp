@@ -133,6 +133,58 @@ std::vector<std::string> splitResponse(std::string_view body) {
 } // namespace rcon
 
 // ---------------------------------------------------------------------------
+// rcon::AuthTracker implementation
+// ---------------------------------------------------------------------------
+
+namespace rcon {
+
+AuthTracker::AuthTracker(int maxFailures, int lockoutSeconds)
+    : m_maxFailures(maxFailures), m_lockoutDuration(lockoutSeconds),
+      m_now([] { return std::chrono::steady_clock::now(); }) {}
+
+bool AuthTracker::recordFailure(const std::string& ip) {
+    auto& count = m_failCount[ip];
+    ++count;
+    if (count >= m_maxFailures) {
+        m_lockouts[ip] = m_now() + m_lockoutDuration;
+        m_failCount.erase(ip);
+        return true;
+    }
+    return false;
+}
+
+void AuthTracker::recordSuccess(const std::string& ip) {
+    m_failCount.erase(ip);
+}
+
+bool AuthTracker::isLockedOut(const std::string& ip) {
+    auto it = m_lockouts.find(ip);
+    if (it == m_lockouts.end())
+        return false;
+    if (m_now() >= it->second) {
+        m_lockouts.erase(it);
+        return false;
+    }
+    return true;
+}
+
+void AuthTracker::pruneExpired() {
+    auto now = m_now();
+    for (auto it = m_lockouts.begin(); it != m_lockouts.end();) {
+        if (now >= it->second)
+            it = m_lockouts.erase(it);
+        else
+            ++it;
+    }
+}
+
+void AuthTracker::setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
+    m_now = std::move(fn);
+}
+
+} // namespace rcon
+
+// ---------------------------------------------------------------------------
 // Per-client state
 // ---------------------------------------------------------------------------
 
@@ -142,6 +194,7 @@ static constexpr int kDrainDelayMs = 20; // slightly more than one 60 Hz sim tic
 
 struct ClientState {
     RconSocket fd = kInvalidSocket;
+    std::string address;
     std::vector<uint8_t> recvBuf;
     std::vector<uint8_t> sendBuf;
     enum class Auth { Unauthenticated, Authenticated } authState = Auth::Unauthenticated;
@@ -172,9 +225,11 @@ struct RconServer::Impl {
     std::atomic<bool> m_running{false};
     std::thread m_thread;
     RconSocket m_listenSock = kInvalidSocket;
+    rcon::AuthTracker m_authTracker;
 
     Impl(const CommandRegistry& reg, const ServerConfig::RconConfig& cfg, ILogger& log, CommandShell* shell)
-        : m_registry(reg), m_cfg(cfg), m_log(log), m_shell(shell) {}
+        : m_registry(reg), m_cfg(cfg), m_log(log), m_shell(shell),
+          m_authTracker(cfg.maxAuthFailures, cfg.lockoutSeconds) {}
 
     void ioLoop();
 };
@@ -248,8 +303,10 @@ void RconServer::Impl::ioLoop() {
                     queueSend(c, rcon::encodePacket(c.drainPacketId, rcon::kTypeResponseValue, ""));
             }
         }
-        if (ready == 0)
+        if (ready == 0) {
+            m_authTracker.pruneExpired();
             continue; // timeout — loop back and check m_running
+        }
 
         // --- listen socket ---
         if (fds[0].revents & POLLIN) {
@@ -257,7 +314,19 @@ void RconServer::Impl::ioLoop() {
             SockLen addrLen = sizeof(addr);
             RconSocket clientFd = accept(m_listenSock, reinterpret_cast<sockaddr*>(&addr), &addrLen);
             if (clientFd != kInvalidSocket) {
-                if (static_cast<int>(clients.size()) >= kMaxClients) {
+                // Extract peer IP. Server binds AF_INET; addr is always sockaddr_in.
+                char ipBuf[INET6_ADDRSTRLEN] = {};
+                const auto* sin = reinterpret_cast<const sockaddr_in*>(&addr);
+                inet_ntop(AF_INET, &sin->sin_addr, ipBuf, sizeof(ipBuf));
+                std::string peerIp(ipBuf);
+
+                if (m_authTracker.isLockedOut(peerIp)) {
+                    // Reject before consuming a slot: AUTH_RESPONSE id=-1 then close.
+                    auto pkt = rcon::encodePacket(-1, rcon::kTypeAuthResponse, "");
+                    send(clientFd, reinterpret_cast<const char*>(pkt.data()), static_cast<int>(pkt.size()), 0);
+                    rconClose(clientFd);
+                    m_log.log(LogLevel::Info, __FILE__, __LINE__, "RCON: rejected locked-out IP");
+                } else if (static_cast<int>(clients.size()) >= kMaxClients) {
                     // Too many connections: send a polite error and close.
                     auto pkt = rcon::encodePacket(0, rcon::kTypeResponseValue, "too many connections\n");
                     send(clientFd, reinterpret_cast<const char*>(pkt.data()), static_cast<int>(pkt.size()), 0);
@@ -272,6 +341,7 @@ void RconServer::Impl::ioLoop() {
 #endif
                     ClientState cs;
                     cs.fd = clientFd;
+                    cs.address = peerIp;
                     clients.push_back(std::move(cs));
                     m_log.log(LogLevel::Info, __FILE__, __LINE__, "RCON: client connected");
                 }
@@ -341,6 +411,7 @@ void RconServer::Impl::ioLoop() {
                     bool ok = m_cfg.password.empty() || (pkt.body == m_cfg.password);
                     if (ok) {
                         c.authState = Auth::Authenticated;
+                        m_authTracker.recordSuccess(c.address);
                         // Send empty RESPONSE_VALUE first (Valve convention), then AUTH_RESPONSE.
                         if (!queueSend(c, rcon::encodePacket(pkt.id, rcon::kTypeResponseValue, ""))) {
                             closeClient = true;
@@ -354,6 +425,10 @@ void RconServer::Impl::ioLoop() {
                         // Wrong password: AUTH_RESPONSE with id=-1 per Source Engine convention.
                         queueSend(c, rcon::encodePacket(pkt.id, rcon::kTypeResponseValue, ""));
                         queueSend(c, rcon::encodePacket(-1, rcon::kTypeAuthResponse, ""));
+                        // Record failure; log if IP is now locked out.
+                        if (m_authTracker.recordFailure(c.address))
+                            m_log.log(LogLevel::Warn, __FILE__, __LINE__,
+                                      "RCON: IP locked out after repeated auth failures");
                         // Close after send; mark for cleanup.
                         // We'll let the POLLOUT drain fire first by setting a flag.
                         closeClient = true;
