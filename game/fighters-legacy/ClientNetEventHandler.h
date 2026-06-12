@@ -40,9 +40,10 @@ struct ClientNetEventHandler : INetworkEventHandler {
     fl::EntityTypeRegistry& registry;
     ILogger& logger;
     INetwork& net;
-    EnvironmentState& env;         // updated on MsgWeatherState
-    GameConsole* console{nullptr}; // optional: server notices are printed here
-    ServerNotice* notice{nullptr}; // optional: server notices shown as screen banner
+    EnvironmentState& env;           // updated on MsgWeatherState
+    GameConsole* console{nullptr};   // optional: server notices are printed here
+    ServerNotice* notice{nullptr};   // optional: server notices shown as screen banner
+    uint32_t motdDisplaySeconds{15}; // user-configurable; 0 = persistent
 
     uint32_t assignedEntityIdx{0};
     uint32_t assignedEntityGen{0};

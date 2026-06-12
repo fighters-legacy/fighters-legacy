@@ -219,3 +219,11 @@ The in-game clock advances at **10× real time** by default (1 real minute = 10 
 The camera world position (`CAM x y z`) is always displayed in the top-right corner in all
 camera modes. `toggle_pos` adds a second line showing the player entity position (`ENT x y z`)
 below it; toggle it off with a second `toggle_pos`.
+
+## Client display settings
+
+Configure in the `[client]` section of `config/user.toml`:
+
+| Key | Default | Range | Description |
+|---|---|---|---|
+| `motd_display_s` | `15` | 0–3600 | Seconds the server MOTD banner is shown on connect; `0` = persistent (no auto-dismiss) |

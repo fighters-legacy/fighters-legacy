@@ -678,6 +678,14 @@ bool UserConfig::load() {
                 m_pilot.campaign.factionStandings[std::string(k)] = static_cast<int>(*n);
     }
 
+    // [client]
+    if (auto v = tbl["client"]["motd_display_s"].value<int64_t>()) {
+        if (*v < 0 || *v > 3600)
+            m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
+                         "user config: motd_display_s out of range [0, 3600]; clamping");
+        m_client.motdDisplayS = static_cast<uint32_t>(std::clamp(*v, int64_t{0}, int64_t{3600}));
+    }
+
     return true;
 }
 
@@ -755,6 +763,9 @@ bool UserConfig::save() {
     controls.insert_or_assign("hotas_invert_throttle", m_controls.hotasInvertThrottle);
     controls.insert_or_assign("fire_button", static_cast<int64_t>(m_controls.fireButton));
 
+    toml::table client;
+    client.insert_or_assign("motd_display_s", static_cast<int64_t>(m_client.motdDisplayS));
+
     toml::table debug;
     debug.insert_or_assign("overlay_mode", static_cast<int64_t>(m_debug.overlayMode));
 
@@ -790,6 +801,7 @@ bool UserConfig::save() {
     root.insert_or_assign("difficulty", std::move(difficulty));
     root.insert_or_assign("accessibility", std::move(accessibility));
     root.insert_or_assign("controls", std::move(controls));
+    root.insert_or_assign("client", std::move(client));
     root.insert_or_assign("debug", std::move(debug));
     root.insert_or_assign("pilot", std::move(pilot));
 
@@ -853,6 +865,13 @@ AccessibilitySettings UserConfig::accessibility() const {
 }
 void UserConfig::setAccessibility(const AccessibilitySettings& as) {
     m_accessibility = as;
+}
+
+ClientSettings UserConfig::client() const {
+    return m_client;
+}
+void UserConfig::setClient(const ClientSettings& cs) {
+    m_client = cs;
 }
 
 ControlsSettings UserConfig::controls() const {
