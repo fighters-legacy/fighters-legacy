@@ -6,6 +6,11 @@
 #include <loop/ISimUpdate.h>
 #include <loop/TimeRate.h>
 
+#include "INetwork.h"
+#include "entity/EntityDef.h"
+#include "entity/EntityManager.h"
+#include "entity/EntityTypeRegistry.h"
+#include "net/WorldBroadcaster.h"
 #include <ILogger.h>
 #include <catch2/catch_test_macros.hpp>
 #include <csignal>
@@ -511,4 +516,101 @@ TEST_CASE("AdminConsole: resume with null gameLoop returns error message", "[adm
     auto reg = makeRegistry(ctx);
     std::string out = reg.dispatch("resume");
     CHECK_FALSE(out.empty());
+}
+
+// ---------------------------------------------------------------------------
+// WorldBroadcaster integration -- peers command ack
+// (getPeerCount() is called synchronously during dispatch; sentinel pointers
+//  from AsyncAckFixture are unsafe here -- a real WorldBroadcaster is required)
+// ---------------------------------------------------------------------------
+
+namespace {
+struct MockNetworkWb : INetwork {
+    bool init() override {
+        return true;
+    }
+    void shutdown() override {}
+    void setEventHandler(INetworkEventHandler*) override {}
+    bool bind(const char*, uint16_t, int) override {
+        return true;
+    }
+    bool connect(const char*, uint16_t) override {
+        return true;
+    }
+    void disconnect() override {}
+    void disconnectPeer(uint32_t) override {}
+    bool send(uint32_t, const void*, std::size_t, bool) override {
+        return true;
+    }
+    void broadcast(const void*, std::size_t, bool) override {}
+    void service(int) override {}
+    int getPeerCount() const override {
+        return 0;
+    }
+    PeerState getPeerState(uint32_t) const override {
+        return PeerState::Disconnected;
+    }
+    const char* getPeerAddress(uint32_t) const override {
+        return nullptr;
+    }
+    const char* getLastError() const override {
+        return nullptr;
+    }
+};
+
+static fl::EntityDef makeWbEntityDef(const char* id = "builtin:debug-entity") {
+    fl::EntityDef def;
+    def.id = id;
+    def.name = "Debug";
+    def.category = fl::ObjectCategory::AirVehicle;
+    def.maxHp = 100.0f;
+    return def;
+}
+
+struct WbFixture {
+    NullLogger2 log;
+    MockNetworkWb net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em{log, registry};
+    fl::WorldBroadcaster broadcaster{em, registry, net, log};
+    NoopSim2 noop;
+    GameLoop loop{noop, log}; // do NOT call loop.start()
+    ServerCommandContext ctx;
+
+    WbFixture() {
+        ctx.broadcaster = &broadcaster;
+        ctx.gameLoop = &loop;
+    }
+};
+} // namespace
+
+TEST_CASE("AdminConsole: peers with null broadcaster returns not available", "[admin_console]") {
+    auto reg = makeRegistry(); // broadcaster == nullptr
+    std::string out = reg.dispatch("peers");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: peers with null gameLoop returns not available", "[admin_console][wb]") {
+    WbFixture f;
+    f.ctx.gameLoop = nullptr;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("peers");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: peers with no connected peers returns 0 peer(s) connected", "[admin_console][wb]") {
+    WbFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("peers");
+    CHECK(out == "0 peer(s) connected");
+}
+
+TEST_CASE("AdminConsole wb: peers with one connected peer returns 1 peer(s) connected", "[admin_console][wb]") {
+    WbFixture f;
+    f.registry.registerType(makeWbEntityDef());
+    f.broadcaster.onConnect(0u);
+
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("peers");
+    CHECK(out == "1 peer(s) connected");
 }
