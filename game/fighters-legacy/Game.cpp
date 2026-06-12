@@ -552,6 +552,7 @@ void Game::startGame() {
                                                                   *d.clientNet, d.env);
         d.clientHandler->notice = &d.serverNotice;
         d.clientHandler->console = &*d.gameConsole;
+        d.clientHandler->motdDisplaySeconds = d.userConfig->client().motdDisplayS;
         d.clientNet->setEventHandler(d.clientHandler.get());
 
         auto adminSender = makeNetworkAdminSender(*d.clientNet, std::string(d.localServer->sessionToken()));

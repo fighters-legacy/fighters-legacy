@@ -260,3 +260,52 @@ TEST_CASE("ClientNetEventHandler: MsgWorldSnapshot abEngaged and engineFailFlags
     CHECK(snap.entries[0].abEngaged == true);
     CHECK(snap.entries[0].engineFailFlags == fl::kEngineFailGeneric);
 }
+
+TEST_CASE("ClientNetEventHandler: MsgMotd honours custom motdDisplaySeconds", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    auto fakeTime = std::chrono::steady_clock::now();
+    ServerNotice notice;
+    notice.setClockOverride([&fakeTime]() { return fakeTime; });
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.notice = &notice;
+    handler.motdDisplaySeconds = 5;
+
+    auto pkt = makeMotdPacket("Custom duration");
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(!notice.buildElements().empty());
+
+    fakeTime += std::chrono::seconds(4);
+    CHECK(!notice.buildElements().empty()); // still within window
+
+    fakeTime += std::chrono::seconds(2);
+    CHECK(notice.buildElements().empty()); // expired at 6 s
+}
+
+TEST_CASE("ClientNetEventHandler: MsgMotd motdDisplaySeconds 0 is persistent", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    auto fakeTime = std::chrono::steady_clock::now();
+    ServerNotice notice;
+    notice.setClockOverride([&fakeTime]() { return fakeTime; });
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.notice = &notice;
+    handler.motdDisplaySeconds = 0;
+
+    auto pkt = makeMotdPacket("Persistent notice");
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(!notice.buildElements().empty());
+
+    fakeTime += std::chrono::seconds(3600);
+    CHECK(!notice.buildElements().empty()); // still shown — no expiry set
+}

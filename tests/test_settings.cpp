@@ -515,3 +515,84 @@ TEST_CASE("Settings: save returns false when rename fails", "[settings]") {
     REQUIRE_FALSE(cfg.save());
     CHECK(logger.hasMessage(LogLevel::Warn, "failed to rename tmp file"));
 }
+
+// ---------------------------------------------------------------------------
+// [client] section — motdDisplayS
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Settings: motdDisplayS missing uses default 15", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[first_run]\ncompleted = true\n");
+    UserConfig cfg(fs, logger);
+    cfg.load();
+    CHECK(cfg.client().motdDisplayS == 15u);
+    CHECK(logger.entries.empty());
+}
+
+TEST_CASE("Settings: motdDisplayS 0 accepted as persistent", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[client]\nmotd_display_s = 0\n");
+    UserConfig cfg(fs, logger);
+    cfg.load();
+    CHECK(cfg.client().motdDisplayS == 0u);
+    CHECK(logger.entries.empty());
+}
+
+TEST_CASE("Settings: motdDisplayS at upper boundary 3600 accepted without Warn", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[client]\nmotd_display_s = 3600\n");
+    UserConfig cfg(fs, logger);
+    cfg.load();
+    CHECK(cfg.client().motdDisplayS == 3600u);
+    CHECK(logger.entries.empty());
+}
+
+TEST_CASE("Settings: motdDisplayS above 3600 clamps and emits Warn", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[client]\nmotd_display_s = 9999\n");
+    UserConfig cfg(fs, logger);
+    cfg.load();
+    CHECK(cfg.client().motdDisplayS == 3600u);
+    CHECK(logger.hasMessage(LogLevel::Warn, "motd_display_s"));
+}
+
+TEST_CASE("Settings: motdDisplayS negative clamps to 0 and emits Warn", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[client]\nmotd_display_s = -1\n");
+    UserConfig cfg(fs, logger);
+    cfg.load();
+    CHECK(cfg.client().motdDisplayS == 0u);
+    CHECK(logger.hasMessage(LogLevel::Warn, "motd_display_s"));
+}
+
+TEST_CASE("Settings: motdDisplayS in-range round-trips", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    ClientSettings cs;
+    cs.motdDisplayS = 30;
+    UserConfig cfg(fs, logger);
+    cfg.setClient(cs);
+    cfg.save();
+    CHECK(reload(fs).client().motdDisplayS == 30u);
+}
+
+TEST_CASE("Settings: [client] section does not corrupt other sections", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    ClientSettings cs;
+    cs.motdDisplayS = 45;
+    GraphicsSettings gs;
+    gs.cockpitFov = 75;
+    UserConfig cfg(fs, logger);
+    cfg.setClient(cs);
+    cfg.setGraphics(gs);
+    cfg.save();
+    auto loaded = reload(fs);
+    CHECK(loaded.client().motdDisplayS == 45u);
+    CHECK(loaded.graphics().cockpitFov == 75);
+}
