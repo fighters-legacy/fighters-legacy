@@ -88,3 +88,59 @@ TEST_CASE("ServerNotice: persistent notice replaces an expired timed notice") {
     n.setNotice("Server shutting down in 5 minutes", 300);
     CHECK(n.buildElements().size() == 1);
 }
+
+TEST_CASE("ServerNotice: alpha is 1.0 before fade window") {
+    auto fakeTime = std::chrono::steady_clock::now();
+    ServerNotice n;
+    n.setClockOverride([&fakeTime]() { return fakeTime; });
+    n.setNotice("Welcome!", 0, 15);
+    fakeTime += std::chrono::seconds(12);
+    auto elems = n.buildElements();
+    REQUIRE(elems.size() == 1);
+    CHECK(elems[0].a == Catch::Approx(1.f));
+}
+
+TEST_CASE("ServerNotice: alpha fades linearly in fade window") {
+    auto fakeTime = std::chrono::steady_clock::now();
+    ServerNotice n;
+    n.setClockOverride([&fakeTime]() { return fakeTime; });
+    n.setNotice("Welcome!", 0, 15);
+    fakeTime += std::chrono::milliseconds(14000);
+    auto elems = n.buildElements();
+    REQUIRE(elems.size() == 1);
+    CHECK(elems[0].a == Catch::Approx(0.5f));
+}
+
+TEST_CASE("ServerNotice: alpha near zero at expiry boundary") {
+    auto fakeTime = std::chrono::steady_clock::now();
+    ServerNotice n;
+    n.setClockOverride([&fakeTime]() { return fakeTime; });
+    n.setNotice("Welcome!", 0, 15);
+    fakeTime += std::chrono::milliseconds(14900);
+    auto elems = n.buildElements();
+    REQUIRE(elems.size() == 1);
+    CHECK(elems[0].a < 0.1f);
+}
+
+TEST_CASE("ServerNotice: persistent notice alpha stays 1.0") {
+    auto fakeTime = std::chrono::steady_clock::now() + std::chrono::hours(24 * 365);
+    ServerNotice n;
+    n.setClockOverride([fakeTime]() { return fakeTime; });
+    n.setNotice("Persistent", 0, 0);
+    auto elems = n.buildElements();
+    REQUIRE(elems.size() == 1);
+    CHECK(elems[0].a == Catch::Approx(1.f));
+}
+
+TEST_CASE("ServerNotice: setNotice during fade resets alpha to 1.0") {
+    auto fakeTime = std::chrono::steady_clock::now();
+    ServerNotice n;
+    n.setClockOverride([&fakeTime]() { return fakeTime; });
+    n.setNotice("First", 0, 15);
+    fakeTime += std::chrono::milliseconds(14000);
+    REQUIRE(n.buildElements().size() == 1);
+    n.setNotice("Second", 0, 15);
+    auto elems = n.buildElements();
+    REQUIRE(elems.size() == 1);
+    CHECK(elems[0].a == Catch::Approx(1.f));
+}
