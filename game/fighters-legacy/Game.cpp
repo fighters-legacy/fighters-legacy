@@ -57,10 +57,14 @@
 #include "sdl3/SDL3Window.h"
 #include "vulkan/VkRendererFactory.h"
 
+#include "ConnectArgs.h"
+#include "console/ConsoleCommands.h"
+
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -244,6 +248,12 @@ struct GameImpl {
     MusicManager musicManager;
     std::optional<SandboxInspector> inspector;
 
+    // Multiplayer connection target (empty = single-player, spawn LocalServer).
+    // Populated from --connect CLI arg in initPlatform().
+    std::string connectHost;
+    uint16_t connectPort{4778};
+    std::string operatorPassword; // merged: CLI arg > FL_OPERATOR_PASSWORD > [client].operator_password
+
     // Network + HUD
     std::optional<LocalServer> localServer;
     std::unique_ptr<ENetNetwork> clientNet;
@@ -341,7 +351,20 @@ bool Game::initPlatform(int argc, char** argv) {
     for (int i = 1; i < argc - 1; ++i) {
         if (std::strcmp(argv[i], "--log-level") == 0)
             d.rawLogger->setMinLevel(parseLogLevel(argv[i + 1]));
+        else if (std::strcmp(argv[i], "--connect") == 0)
+            parseConnectArg(argv[i + 1], d.connectHost, d.connectPort);
+        else if (std::strcmp(argv[i], "--operator-password") == 0)
+            d.operatorPassword = argv[i + 1];
     }
+
+    // Merge operator password: CLI arg > FL_OPERATOR_PASSWORD env var > [client].operator_password.
+    // SDL_getenv is cross-platform (wraps GetEnvironmentVariableA on Windows).
+    if (d.operatorPassword.empty()) {
+        if (const char* ev = SDL_getenv("FL_OPERATOR_PASSWORD"); ev && *ev)
+            d.operatorPassword = ev;
+    }
+    if (d.operatorPassword.empty())
+        d.operatorPassword = d.userConfig->client().operatorPassword;
 
     auto oalAudio = std::make_unique<OALAudio>();
     if (!oalAudio->init()) {
@@ -502,7 +525,7 @@ void Game::initGameConsole() {
 void Game::initScreenManager() {
     auto& d = *m_impl;
     d.screenMgr = std::make_unique<ScreenManager>(*d.p.input, *d.rawLogger);
-    d.screenMgr->init(*d.userConfig, *d.p.renderer, *d.p.window, *d.p.display, *d.assets);
+    d.screenMgr->init(*d.userConfig, *d.p.renderer, *d.p.window, *d.p.display, *d.assets, !d.connectHost.empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -529,15 +552,23 @@ void Game::startGame() {
         d.cameraController.setFreeOrbit({0.0, 2000.0, 0.0}, 0.0f, 30.0f, 30.0f);
     }
 
-    // Start fl-server in a background thread.
-    d.localServer.emplace(*d.rawLogger);
-    d.serverThread = std::thread([&d]() {
-        if (d.localServer->start())
-            d.serverReady.store(true, std::memory_order_release);
-    });
+    const bool isMultiplayer = !d.connectHost.empty();
+
+    if (!isMultiplayer) {
+        // Single-player: spawn fl-server subprocess in a background thread.
+        d.localServer.emplace(*d.rawLogger);
+        d.serverThread = std::thread([&d]() {
+            if (d.localServer->start())
+                d.serverReady.store(true, std::memory_order_release);
+        });
+    } else {
+        // Multiplayer: no local server — signal ready immediately so LoadingScreen
+        // skips the StartingServer phase on its first update().
+        d.serverReady.store(true, std::memory_order_relaxed);
+    }
 
     // onConnect is called by LoadingScreen once serverReady fires.
-    auto onConnect = [&d]() {
+    auto onConnect = [&d, isMultiplayer]() {
         d.activeHud = &d.flightHud;
         d.hapticController.emplace(*d.p.input);
 
@@ -547,7 +578,6 @@ void Game::startGame() {
             return;
         }
 
-        d.env = d.localServer->initialEnvironment();
         d.clientHandler = std::make_unique<ClientNetEventHandler>(d.renderBridge, d.entityRegistry, *d.rawLogger,
                                                                   *d.clientNet, d.env);
         d.clientHandler->notice = &d.serverNotice;
@@ -555,15 +585,35 @@ void Game::startGame() {
         d.clientHandler->motdDisplaySeconds = d.userConfig->client().motdDisplayS;
         d.clientNet->setEventHandler(d.clientHandler.get());
 
-        auto adminSender = makeNetworkAdminSender(*d.clientNet, std::string(d.localServer->sessionToken()));
-        d.localServer->registerConsoleCommands(d.cmdRegistry, adminSender, d.renderBridge, &d.entityRegistry,
-                                               &d.clientHandler->assignedEntityIdx, &d.clientHandler->assignedEntityGen,
-                                               &d.gameConsole->showPosRef());
-        d.screenMgr->setServerCmd(std::move(adminSender));
+        if (!isMultiplayer) {
+            d.env = d.localServer->initialEnvironment();
 
-        d.discoveryListener.emplace(static_cast<uint16_t>(4778), *d.rawLogger);
-        if (!d.discoveryListener->isOpen())
-            d.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__, "LAN discovery listener: no sockets opened");
+            auto adminSender = makeNetworkAdminSender(*d.clientNet, std::string(d.localServer->sessionToken()));
+            d.localServer->registerConsoleCommands(d.cmdRegistry, adminSender, d.renderBridge, &d.entityRegistry,
+                                                   &d.clientHandler->assignedEntityIdx,
+                                                   &d.clientHandler->assignedEntityGen, &d.gameConsole->showPosRef());
+            d.screenMgr->setServerCmd(std::move(adminSender));
+
+            d.discoveryListener.emplace(static_cast<uint16_t>(4778), *d.rawLogger);
+            if (!d.discoveryListener->isOpen())
+                d.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__, "LAN discovery listener: no sockets opened");
+        } else {
+            // Multiplayer: wire admin commands if an operator password is available.
+            CommandContext ctx{};
+            ctx.renderBridge = &d.renderBridge;
+            ctx.typeRegistry = &d.entityRegistry;
+            ctx.playerEntityIdx = &d.clientHandler->assignedEntityIdx;
+            ctx.playerEntityGen = &d.clientHandler->assignedEntityGen;
+            ctx.showPos = &d.gameConsole->showPosRef();
+            if (!d.operatorPassword.empty()) {
+                auto adminSender = makeNetworkAdminSender(*d.clientNet, d.operatorPassword);
+                ctx.serverCommand = adminSender;
+                registerConsoleCommands(d.cmdRegistry, ctx);
+                d.screenMgr->setServerCmd(std::move(adminSender));
+            } else {
+                registerConsoleCommands(d.cmdRegistry, ctx);
+            }
+        }
 
         // Build FlightScreenDeps now that all session objects exist.
         FlightScreenDeps fsd;
@@ -585,10 +635,13 @@ void Game::startGame() {
         fsd.assignedEntityGen = &d.clientHandler->assignedEntityGen;
         d.screenMgr->reinitFlight(std::move(fsd));
 
-        d.clientNet->connect("127.0.0.1", 4778);
+        const char* host = isMultiplayer ? d.connectHost.c_str() : "127.0.0.1";
+        const uint16_t port = isMultiplayer ? d.connectPort : uint16_t{4778};
+        d.clientNet->connect(host, port);
     };
 
-    d.screenMgr->reinitLoading(d.serverReady, [&d]() { return d.renderBridge.hasSnapshot(); }, std::move(onConnect));
+    d.screenMgr->reinitLoading(
+        d.serverReady, [&d]() { return d.renderBridge.hasSnapshot(); }, std::move(onConnect), !isMultiplayer);
 
     // Lazy SandboxInspector init (no-pack path).
     if (d.outcome == FirstRunOutcome::LaunchSandboxInspector)

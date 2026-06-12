@@ -8,11 +8,12 @@
 #include <string>
 #include <vector>
 
-// Main menu: Sandbox (always), Select Mission (packs only), Settings, Exit to Desktop.
+// Main menu: Sandbox / Join Server (always), Select Mission (packs only), Settings, Exit to Desktop.
 class MainMenuScreen : public IScreen {
   public:
     // hasPacks controls whether "Select Mission" is shown.
-    explicit MainMenuScreen(bool hasPacks);
+    // isMultiplayer relabels the first item from "Sandbox (Instant Action)" to "Join Server".
+    explicit MainMenuScreen(bool hasPacks, bool isMultiplayer = false);
 
     Screen update(IInput& input, IWindow& window) override;
     std::span<const HudElement> buildElements() override;

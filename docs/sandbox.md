@@ -227,3 +227,17 @@ Configure in the `[client]` section of `config/user.toml`:
 | Key | Default | Range | Description |
 |---|---|---|---|
 | `motd_display_s` | `15` | 0–3600 | Seconds the server MOTD banner is shown on connect; banner fades out over the final 2 s of the window; `0` = persistent (no fade, no auto-dismiss) |
+| `operator_password` | `""` | any string | Operator password for admin console commands when connecting with `--connect`. CLI `--operator-password` arg and `FL_OPERATOR_PASSWORD` env var take precedence. |
+
+## Multiplayer connection
+
+Pass `--connect` to join a remote `fl-server` instead of spawning a local single-player session.
+
+| Flag | Description |
+|---|---|
+| `--connect <host[:port]>` | Connect to a remote fl-server. Port defaults to `4778` if omitted. IPv6 literals must be bracketed: `--connect [::1]:4778`. |
+| `--operator-password <pw>` | Operator password for admin console commands on the remote server. Enables the in-game console commands (`spawn`, `kill`, `tp`, etc.) over the network. Takes precedence over the env var and user.toml. |
+
+To avoid exposing the password in the process listing, use the `FL_OPERATOR_PASSWORD` environment variable instead of the CLI flag. Merge precedence: `--operator-password` CLI arg > `FL_OPERATOR_PASSWORD` env var > `[client].operator_password` in user.toml.
+
+When `--connect` is given the main menu shows **Join Server** instead of **Sandbox (Instant Action)**, and the loading screen displays "Connecting to remote server…". The connection attempt times out after 10 seconds and returns to the main menu if the server is unreachable.

@@ -474,3 +474,9 @@ target_link_libraries(test_screen_manager PRIVATE
 target_include_directories(test_screen_manager PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_screen_manager)
+
+add_executable(test_connect_args test_connect_args.cpp)
+target_link_libraries(test_connect_args PRIVATE Catch2::Catch2WithMain)
+target_include_directories(test_connect_args PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
+catch_discover_tests(test_connect_args)

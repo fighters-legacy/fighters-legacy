@@ -685,6 +685,8 @@ bool UserConfig::load() {
                          "user config: motd_display_s out of range [0, 3600]; clamping");
         m_client.motdDisplayS = static_cast<uint32_t>(std::clamp(*v, int64_t{0}, int64_t{3600}));
     }
+    if (auto v = tbl["client"]["operator_password"].value<std::string>())
+        m_client.operatorPassword = std::move(*v);
 
     return true;
 }
@@ -765,6 +767,8 @@ bool UserConfig::save() {
 
     toml::table client;
     client.insert_or_assign("motd_display_s", static_cast<int64_t>(m_client.motdDisplayS));
+    if (!m_client.operatorPassword.empty())
+        client.insert_or_assign("operator_password", m_client.operatorPassword);
 
     toml::table debug;
     debug.insert_or_assign("overlay_mode", static_cast<int64_t>(m_debug.overlayMode));

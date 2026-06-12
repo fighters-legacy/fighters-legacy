@@ -7,19 +7,21 @@
 #include <chrono>
 
 LoadingScreen::LoadingScreen(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
-                             std::function<void()> onServerReady)
-    : m_serverReady(serverReady), m_isConnected(std::move(isConnected)), m_onServerReady(std::move(onServerReady)) {
+                             std::function<void()> onServerReady, bool isSinglePlayer)
+    : m_serverReady(serverReady), m_isConnected(std::move(isConnected)), m_onServerReady(std::move(onServerReady)),
+      m_isSinglePlayer(isSinglePlayer) {
     addLine("Loading...");
-    addLine("Starting local server...");
+    addLine(m_isSinglePlayer ? "Starting local server..." : "Connecting to remote server...");
 }
 
 void LoadingScreen::reset() {
     m_phase = Phase::StartingServer;
     m_onServerReadyCalled = false;
+    m_connectDeadline = {};
     m_lineCount = 0;
     m_elementCount = 0;
     addLine("Loading...");
-    addLine("Starting local server...");
+    addLine(m_isSinglePlayer ? "Starting local server..." : "Connecting to remote server...");
 }
 
 void LoadingScreen::addLine(const char* text) {
@@ -35,6 +37,9 @@ Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/) {
                 m_onServerReadyCalled = true;
                 m_onServerReady();
                 addLine("Connecting...");
+                using namespace std::chrono;
+                m_connectDeadline = steady_clock::now() +
+                                    duration_cast<steady_clock::duration>(duration<float>(kConnectTimeoutSeconds));
             }
             m_phase = Phase::Connecting;
         }
@@ -44,6 +49,11 @@ Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/) {
         if (m_isConnected()) {
             addLine("Ready.");
             m_phase = Phase::Ready;
+        } else if (std::chrono::steady_clock::now() > m_connectDeadline &&
+                   m_connectDeadline != std::chrono::steady_clock::time_point{}) {
+            addLine("Connection timed out.");
+            m_failedAt = std::chrono::steady_clock::now();
+            m_phase = Phase::Failed;
         }
         break;
 

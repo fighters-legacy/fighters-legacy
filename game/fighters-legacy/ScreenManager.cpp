@@ -23,8 +23,8 @@ ScreenManager::ScreenManager(IInput& input, ILogger& log) : m_input(input), m_lo
 ScreenManager::~ScreenManager() = default;
 
 void ScreenManager::init(UserConfig& config, IRenderer& renderer, IWindow& window, IDisplay& display,
-                         AssetManager& assets) {
-    m_mainMenu = std::make_unique<MainMenuScreen>(assets.hasPacks());
+                         AssetManager& assets, bool isMultiplayer) {
+    m_mainMenu = std::make_unique<MainMenuScreen>(assets.hasPacks(), isMultiplayer);
     // LoadingScreen and FlightScreen are created lazily per session
     m_missionSelect = std::make_unique<MissionSelectScreen>(assets.listMissions());
     m_missionBrief = std::make_unique<MissionBriefScreen>();
@@ -38,8 +38,9 @@ void ScreenManager::reinitFlight(FlightScreenDeps deps) {
 }
 
 void ScreenManager::reinitLoading(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
-                                  std::function<void()> onConnect) {
-    m_loading = std::make_unique<LoadingScreen>(serverReady, std::move(isConnected), std::move(onConnect));
+                                  std::function<void()> onConnect, bool isSinglePlayer) {
+    m_loading =
+        std::make_unique<LoadingScreen>(serverReady, std::move(isConnected), std::move(onConnect), isSinglePlayer);
 }
 
 IScreen& ScreenManager::active() {

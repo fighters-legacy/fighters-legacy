@@ -79,3 +79,26 @@ TEST_CASE("MainMenuScreen: buildElements not empty") {
     auto elems = s.buildElements();
     CHECK(!elems.empty());
 }
+
+TEST_CASE("MainMenuScreen: multiplayer mode labels first item Join Server") {
+    MainMenuScreen s(/*hasPacks=*/false, /*isMultiplayer=*/true);
+    MockInput inp;
+    MockWindow win;
+    s.update(inp, win);
+    // First item still navigates to Screen::Loading.
+    CHECK(s.selectedIdx() == 0);
+    CHECK(s.confirm() == Screen::Loading);
+    // The label visible in elements must contain "Join Server".
+    auto elems = s.buildElements();
+    bool found = false;
+    for (const auto& el : elems)
+        if (el.type == HudElement::Type::Text && el.text.find("Join Server") != std::string_view::npos)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("MainMenuScreen: multiplayer item count matches no-packs single-player count") {
+    MainMenuScreen sp(/*hasPacks=*/false, /*isMultiplayer=*/false);
+    MainMenuScreen mp(/*hasPacks=*/false, /*isMultiplayer=*/true);
+    CHECK(mp.itemCount() == sp.itemCount());
+}
