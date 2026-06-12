@@ -11,7 +11,16 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (std::strcmp(argv[i], "--help") == 0) {
-            std::printf("Usage: fighters-legacy [--log-level trace|debug|info|warn|error] [--version] [--help]\n");
+            std::printf("Usage: fighters-legacy [options]\n"
+                        "\n"
+                        "  --connect <host[:port]>     Connect to a remote fl-server (default port: 4778).\n"
+                        "                              Omit to start a local single-player session.\n"
+                        "  --operator-password <pw>    Operator password for admin console commands on the\n"
+                        "                              remote server. Also read from FL_OPERATOR_PASSWORD env\n"
+                        "                              var or [client].operator_password in user.toml.\n"
+                        "  --log-level <level>         Log verbosity: trace|debug|info|warn|error\n"
+                        "  --version                   Print version string and exit.\n"
+                        "  --help                      Print this message and exit.\n");
             return 0;
         }
     }

@@ -38,12 +38,15 @@ class ScreenManager {
 
     // Create all screen instances. Must be called once after platform is ready.
     // LoadingScreen and FlightScreen are created lazily via reinitLoading/reinitFlight.
-    void init(UserConfig& config, IRenderer& renderer, IWindow& window, IDisplay& display, AssetManager& assets);
+    // isMultiplayer relabels "Sandbox (Instant Action)" → "Join Server" in the main menu.
+    void init(UserConfig& config, IRenderer& renderer, IWindow& window, IDisplay& display, AssetManager& assets,
+              bool isMultiplayer = false);
 
     // (Re)create the loading screen with fresh callbacks. Called by Game::startGame()
     // each time a new session begins.
+    // isSinglePlayer controls initial status text and whether a server-start phase is shown.
     void reinitLoading(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
-                       std::function<void()> onConnect);
+                       std::function<void()> onConnect, bool isSinglePlayer = true);
 
     // (Re)create the flight screen with fresh session deps. Called by Game::startGame()
     // after session objects (clientNet, hapticController, etc.) are created.

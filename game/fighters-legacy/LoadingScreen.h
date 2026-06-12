@@ -12,14 +12,16 @@
 
 // Async loading screen shown while the local server starts and ENet connects.
 // Constructor takes three callables injected by Game::startGame():
-//   serverReady   — atomic set by the background server thread on success
-//   isConnected   — returns true once renderBridge.hasSnapshot()
-//   onServerReady — called once when serverReady fires; creates clientHandler and
-//                   calls clientNet->connect()
+//   serverReady    — atomic set by the background server thread on success
+//   isConnected    — returns true once renderBridge.hasSnapshot()
+//   onServerReady  — called once when serverReady fires; creates clientHandler and
+//                    calls clientNet->connect()
+//   isSinglePlayer — controls initial status text and whether the StartingServer
+//                    phase is shown; pass false for remote-connect sessions
 class LoadingScreen : public IScreen {
   public:
     LoadingScreen(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
-                  std::function<void()> onServerReady);
+                  std::function<void()> onServerReady, bool isSinglePlayer = true);
 
     Screen update(IInput& input, IWindow& window) override;
     std::span<const HudElement> buildElements() override;
@@ -33,11 +35,14 @@ class LoadingScreen : public IScreen {
     std::atomic<bool>& m_serverReady;
     std::function<bool()> m_isConnected;
     std::function<void()> m_onServerReady;
+    bool m_isSinglePlayer;
 
     Phase m_phase{Phase::StartingServer};
     bool m_onServerReadyCalled{false};
     std::chrono::steady_clock::time_point m_failedAt{};
+    std::chrono::steady_clock::time_point m_connectDeadline{};
     static constexpr float kFailDisplaySeconds = 3.f;
+    static constexpr float kConnectTimeoutSeconds = 10.f;
 
     static constexpr int kMaxLines = 6;
     static constexpr int kMaxElements = kMaxLines + 1; // + background rect

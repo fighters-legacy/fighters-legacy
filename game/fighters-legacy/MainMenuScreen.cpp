@@ -8,8 +8,8 @@ static constexpr float kStartY = 0.38f;
 static constexpr float kSpacing = 0.07f;
 static constexpr float kItemH = 0.05f;
 
-MainMenuScreen::MainMenuScreen(bool hasPacks) {
-    m_items.push_back({"Sandbox (Instant Action)", Screen::Loading});
+MainMenuScreen::MainMenuScreen(bool hasPacks, bool isMultiplayer) {
+    m_items.push_back({isMultiplayer ? "Join Server" : "Sandbox (Instant Action)", Screen::Loading});
     if (hasPacks)
         m_items.push_back({"Select Mission", Screen::MissionSelect});
     m_items.push_back({"Settings", Screen::Settings});

@@ -2,6 +2,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "FlightScreen.h"
+#include "LoadingScreen.h"
+#include "MainMenuScreen.h"
 #include "ScreenManager.h"
 #include "SettingsScreen.h"
 #include "mock_hal.h"
@@ -164,4 +166,36 @@ TEST_CASE("ScreenManager: reinitLoading replaces loading screen") {
     f.mgr.reinitLoading(ready, [] { return false; }, [&] { ++onReadyCount; });
     f.mgr.transition(Screen::Loading);
     CHECK(f.mgr.current() == Screen::Loading);
+}
+
+TEST_CASE("ScreenManager: reinitLoading isSinglePlayer=false shows remote text") {
+    Fixture f;
+    f.initAll();
+    std::atomic<bool> ready{false};
+    f.mgr.reinitLoading(
+        ready, [] { return false; }, [] {},
+        /*isSinglePlayer=*/false);
+    f.mgr.transition(Screen::Loading);
+    MockInput inp;
+    f.mgr.loading().update(inp, f.window);
+    auto elems = f.mgr.loading().buildElements();
+    bool found = false;
+    for (const auto& el : elems)
+        if (el.type == HudElement::Type::Text && el.text.find("remote server") != std::string_view::npos)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("ScreenManager: init isMultiplayer=true propagates Join Server label") {
+    Fixture f;
+    f.mgr.init(f.cfg, f.renderer, f.window, f.display, f.assets,
+               /*isMultiplayer=*/true);
+    auto elems = f.mgr.mainMenu().buildElements();
+    bool found = false;
+    for (const auto& el : elems)
+        if (el.type == HudElement::Type::Text && el.text.find("Join Server") != std::string_view::npos)
+            found = true;
+    CHECK(found);
+    // Confirming index 0 still returns Screen::Loading.
+    CHECK(f.mgr.mainMenu().confirm() == Screen::Loading);
 }

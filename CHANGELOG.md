@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: multiplayer client connection — pass `--connect <host[:port]>` to join a remote `fl-server` without spawning a local one; `--operator-password <pw>` (or `FL_OPERATOR_PASSWORD` env var or `[client].operator_password` in user.toml) enables the admin console channel in multiplayer; main menu shows "Join Server" when connecting remotely; loading screen shows "Connecting to remote server…" and times out after 10 s; closes #240
 - **renderer**: MOTD banner fade-out — alpha linearly decreases from 1.0 to 0.0 over the final 2 seconds of the auto-dismiss window; shutdown countdown notices (persistent, `visibleSeconds = 0`) are unaffected; closes #301
 - **renderer**: MOTD banner display duration is now user-configurable via `motd_display_s` in `[client]` `user.toml` (default 15 s; `0` = persistent, no auto-dismiss); closes #300
 - **server**: RCON per-IP failed-auth lockout — after `max_auth_failures` consecutive wrong passwords the source IP is locked out for `lockout_seconds`; locked-out connections receive an immediate `AUTH_RESPONSE id=-1` and are closed before processing any packets; both thresholds are configurable in `[rcon]` (defaults: 5 attempts, 60 s lockout); closes #297
