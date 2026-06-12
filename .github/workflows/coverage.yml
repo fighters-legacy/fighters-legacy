@@ -107,7 +107,7 @@ jobs:
             --print-summary
 
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: coverage.info
           token: ${{ secrets.CODECOV_TOKEN }}
