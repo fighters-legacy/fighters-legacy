@@ -70,6 +70,7 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | Arrow Left / Right | Aileron (roll) |
 | Z / X | Rudder left / right |
 | Space | Weapon trigger (bit 0) |
+| Tab | Afterburner command (bit 1) |
 
 ## Gamepad controls
 
@@ -88,6 +89,7 @@ are within the deadzone.
 | Index | Button | Default mapping |
 |---|---|---|
 | 5 | Right shoulder (RB / R1) | Primary fire |
+| 4 | Left shoulder (LB / L1) | Afterburner |
 
 Configure in the `[controls]` section of `config/user.toml`:
 
@@ -99,6 +101,7 @@ Configure in the `[controls]` section of `config/user.toml`:
 | `invert_rudder` | `false` | Flip rudder axis |
 | `invert_throttle` | `false` | Flip throttle direction |
 | `fire_button` | `5` | Gamepad button index for primary fire; see Buttons table above |
+| `afterburner_button` | `4` | Gamepad button index for afterburner; see Buttons table above |
 
 ## Haptic feedback
 

@@ -298,6 +298,38 @@ TEST_CASE("UserConfig: [controls] fire_button roundtrip save+load", "[userconfig
     CHECK(config2.controls().fireButton == 0);
 }
 
+TEST_CASE("UserConfig: [controls] afterburner_button default", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    config.load();
+    CHECK(config.controls().afterburnerButton == 4);
+}
+
+TEST_CASE("UserConfig: [controls] afterburner_button out-of-range clamped", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[controls]\nafterburner_button = 200\n");
+    UserConfig config(fs, logger);
+    config.load();
+    CHECK(config.controls().afterburnerButton == 15);
+}
+
+TEST_CASE("UserConfig: [controls] afterburner_button roundtrip save+load", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    ControlsSettings cs;
+    cs.afterburnerButton = 0; // GamepadButton::A
+    config.setControls(cs);
+    config.save();
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    CHECK(config2.controls().afterburnerButton == 0);
+}
+
 // ---------------------------------------------------------------------------
 // [pilot] tests
 // ---------------------------------------------------------------------------

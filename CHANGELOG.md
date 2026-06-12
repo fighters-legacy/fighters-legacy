@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: wire afterburner keyboard (`Tab`) and configurable gamepad left-shoulder button (`[controls].afterburner_button`, default index 4) in `FlightInputCollector`; sets `MsgClientInput::buttons` bit 1 so content-pack aircraft with `ab_thrust` tables can command afterburner; closes #307
 - **network**: `MsgMotd` (0x08) extended with a `displaySeconds uint16_t` field at wire offset 1; fl-server exposes `[server].motd_display_s` in `server.toml` (0 = use client's `[client].motd_display_s`); `kProtocolVersion` bumped 1 → 2; closes #302
 - **game**: multiplayer client connection — pass `--connect <host[:port]>` to join a remote `fl-server` without spawning a local one; `--operator-password <pw>` (or `FL_OPERATOR_PASSWORD` env var or `[client].operator_password` in user.toml) enables the admin console channel in multiplayer; main menu shows "Join Server" when connecting remotely; loading screen shows "Connecting to remote server…" and times out after 10 s; closes #240
 - **renderer**: MOTD banner fade-out — alpha linearly decreases from 1.0 to 0.0 over the final 2 seconds of the auto-dismiss window; shutdown countdown notices (persistent, `visibleSeconds = 0`) are unaffected; closes #301

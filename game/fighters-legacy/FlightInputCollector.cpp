@@ -40,6 +40,8 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
         inp.aileron = (keys[SDL_SCANCODE_RIGHT] ? 1.f : 0.f) + (keys[SDL_SCANCODE_LEFT] ? -1.f : 0.f);
         inp.rudder = (keys[SDL_SCANCODE_X] ? 1.f : 0.f) + (keys[SDL_SCANCODE_Z] ? -1.f : 0.f);
         inp.buttons = keys[SDL_SCANCODE_SPACE] ? 1u : 0u;
+        if (keys[SDL_SCANCODE_TAB])
+            inp.buttons |= 0x02u;
         m_weaponFired = (inp.buttons & 1u) != 0u;
 
         // Gamepad axis blend — wins when |axis| > deadzone.
@@ -71,6 +73,8 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
                 inp.buttons |= 1u;
                 m_weaponFired = true;
             }
+            if (input.isGamepadButtonDown(0, static_cast<GamepadButton>(cs.afterburnerButton)))
+                inp.buttons |= 0x02u;
         }
 
         // HOTAS / raw joystick blend — throttle always sets absolute position;
