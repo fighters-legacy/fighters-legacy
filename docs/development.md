@@ -37,9 +37,9 @@ sudo apt-get install -y cmake ninja-build gcc g++ clang clang-format \
 >
 > **Note (Lua):** `liblua5.5-dev` is not yet available in Ubuntu apt. Lua 5.5 is always built from source via FetchContent on Linux — no extra install needed.
 
-### Windows (MSVC 2022)
+### Windows (MSVC 2026)
 
-1. Install [Visual Studio 2022](https://visualstudio.microsoft.com/) with the **Desktop development with C++** workload
+1. Install [Visual Studio 2026](https://visualstudio.microsoft.com/) with the **Desktop development with C++** workload
 2. Install the [Vulkan SDK](https://vulkan.lunarg.com/) (1.3 or later) — includes `glslangValidator`, `VK_LAYER_KHRONOS_validation`, and MoltenVK support headers
 3. Optional: install Ninja via `winget install Ninja-build.Ninja` (faster incremental builds)
 4. **clang-format-22**: CI pins clang-format-22 (LLVM 22). Install via:
@@ -239,7 +239,7 @@ Pre-defined tasks are committed in `.vscode/tasks.json` and available via **Term
 
 CLion reads `CMakePresets.json` natively since 2022.3. File → Open → select the repo root. CLion loads all configure/build/test presets automatically.
 
-### Visual Studio 2022
+### Visual Studio 2026
 
 File → Open → CMake → select `CMakeLists.txt`. Visual Studio reads `CMakePresets.json` and shows all presets in the configuration dropdown.
 

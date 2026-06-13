@@ -182,7 +182,7 @@ CI structure: a `lint` job (REUSE + clang-format-22) gates the `build` matrix vi
 - Python scripts (`.py`) are NOT covered by REUSE.toml — every new `.py` file needs inline `# SPDX-FileCopyrightText:` + `# SPDX-License-Identifier:` headers or REUSE CI fails.
 <!-- REUSE-IgnoreEnd -->
 - Python tool conventions: guard GDAL/heavy imports with `try/except ImportError` so `--help` and pytest unit tests work without the system package installed; unit-test pure-Python logic (no I/O, no GDAL) in `tests/test_<tool>.py` using pytest; add the system package + `python3-pytest` to the Ubuntu CI install step and add both a `pytest` unit-test step and a GDAL synthetic-fixture smoke test step (Ubuntu only).
-- All code must compile on Windows (MSVC 2022), Linux (GCC/Clang), macOS (Apple Clang)
+- All code must compile on Windows (MSVC 2026), Linux (GCC/Clang), macOS (Apple Clang)
 - `CMAKE_COMPILE_WARNING_AS_ERROR=ON` in debug builds — fix all warnings
 
 ## Key Files

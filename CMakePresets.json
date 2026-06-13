@@ -35,7 +35,7 @@
     {
       "name": "debug-msvc",
       "displayName": "Debug (MSVC)",
-      "generator": "Visual Studio 17 2022",
+      "generator": "Visual Studio 18 2026",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
@@ -50,7 +50,7 @@
     {
       "name": "release-msvc",
       "displayName": "Release (MSVC)",
-      "generator": "Visual Studio 17 2022",
+      "generator": "Visual Studio 18 2026",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
