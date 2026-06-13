@@ -29,6 +29,8 @@ class LoadingScreen : public IScreen {
     // Reset to initial state for a new session.
     void reset();
 
+    void setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn);
+
   private:
     enum class Phase { StartingServer, Connecting, Ready, Failed };
 
@@ -41,8 +43,11 @@ class LoadingScreen : public IScreen {
     bool m_onServerReadyCalled{false};
     std::chrono::steady_clock::time_point m_failedAt{};
     std::chrono::steady_clock::time_point m_connectDeadline{};
+    std::chrono::steady_clock::time_point m_startDeadline{};
     static constexpr float kFailDisplaySeconds = 3.f;
     static constexpr float kConnectTimeoutSeconds = 10.f;
+    static constexpr float kStartTimeoutSeconds = 10.f;
+    std::function<std::chrono::steady_clock::time_point()> m_now{std::chrono::steady_clock::now};
 
     static constexpr int kMaxLines = 6;
     static constexpr int kMaxElements = kMaxLines + 1; // + background rect
