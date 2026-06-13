@@ -359,11 +359,15 @@ int main(int argc, char** argv) {
     }
     net->setEventHandler(&broadcaster);
 
-    GameLoop gameLoop(broadcaster, *log);
-
-    // ---- Admin command registry (built before gameLoop.start() to avoid races) ----
+    // ---- Admin command registry (built before gameLoop to satisfy RAII destruction order) ----
+    // Destruction order (LIFO): gameLoop first (sim thread stops), then rconServer
+    // (RCON I/O thread stops while adminRegistry still alive), then adminShell, then adminRegistry.
     CommandRegistry adminRegistry;
     CommandShell adminShell(*log, adminRegistry);
+    // Declared here so rconServer outlives gameLoop but is destroyed before adminRegistry.
+    std::unique_ptr<RconServer> rconServer;
+
+    GameLoop gameLoop(broadcaster, *log);
     ServerCommandContext adminCtx;
     adminCtx.broadcaster = &broadcaster;
     adminCtx.entityManager = &entityManager;
@@ -383,6 +387,9 @@ int main(int argc, char** argv) {
     adminCtx.minShutdownDelayS = static_cast<uint32_t>(cfg.minShutdownDelayS);
     adminCtx.shutdownRequireConfirm = cfg.shutdownRequireConfirm;
     adminCtx.shell = &adminShell;
+    adminCtx.clearRconLockout = [&rconServer](const std::string& ip) -> bool {
+        return rconServer ? rconServer->clearLockout(ip) : false;
+    };
 
     broadcaster.setShutdownCallback([&]() { g_quit = 1; });
     registerServerCommands(adminRegistry, adminCtx);
@@ -410,7 +417,6 @@ int main(int argc, char** argv) {
     gameLoop.start();
 
     // ---- RCON server (optional TCP remote admin channel) ----
-    std::unique_ptr<RconServer> rconServer;
     if (cfg.rcon.enabled) {
         rconServer = std::make_unique<RconServer>(adminRegistry, cfg.rcon, *log, &adminShell);
         if (!rconServer->start()) {

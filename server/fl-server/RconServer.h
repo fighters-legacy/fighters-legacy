@@ -68,6 +68,10 @@ class RconServer {
     // Safe to call even if start() was never called or returned false.
     void stop();
 
+    // Clear the RCON auth lockout for ip. Thread-safe; may be called from any thread.
+    // Returns true if a lockout was active and was cleared.
+    bool clearLockout(const std::string& ip);
+
   private:
     struct Impl;
     std::unique_ptr<Impl> m_impl;

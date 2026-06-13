@@ -48,6 +48,10 @@ struct ServerCommandContext {
     std::function<std::unordered_set<std::string>()> loadBanlist;
     std::function<std::unordered_set<std::string>()> loadAllowlist;
 
+    // Clears the RCON auth lockout for an IP; null when RCON is not configured.
+    // Returns true if a lockout was active. Called from sim thread via enqueueSimCallback.
+    std::function<bool(const std::string&)> clearRconLockout;
+
     // Optional output shell; sim-callback confirmations are also routed here
     // for future RCON drain (see issue #304). nullptr = disabled.
     CommandShell* shell{nullptr};

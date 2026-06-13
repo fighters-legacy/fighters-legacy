@@ -413,6 +413,22 @@ TEST_CASE("AdminConsole async ack: admin_unlock IP returns non-empty ack", "[adm
     CHECK(out.find("1.2.3.4") != std::string::npos);
 }
 
+TEST_CASE("AdminConsole async ack: admin_unlock with clearRconLockout set returns ack with IP",
+          "[admin_console][async_ack]") {
+    AsyncAckFixture f;
+    f.ctx.clearRconLockout = [](const std::string&) -> bool { return false; };
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("admin_unlock 1.2.3.4");
+    CHECK_FALSE(out.empty());
+    CHECK(out.find("1.2.3.4") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: admin_unlock help text mentions both channels", "[admin_console]") {
+    auto reg = makeRegistry();
+    std::string help = reg.helpFor("admin_unlock");
+    CHECK(help.find("RCON") != std::string::npos);
+}
+
 TEST_CASE("AdminConsole async ack: spawn returns non-empty ack with type", "[admin_console][async_ack]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
