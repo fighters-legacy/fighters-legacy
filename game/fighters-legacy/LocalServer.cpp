@@ -59,7 +59,7 @@ LocalServer::~LocalServer() {
     stop();
 }
 
-bool LocalServer::start(const char* bindAddr, uint16_t port) {
+LocalServer::StartResult LocalServer::start(const char* bindAddr, uint16_t port) {
     m_impl = std::make_unique<Impl>();
 
     std::string stem = findServerStem();
@@ -88,7 +88,7 @@ bool LocalServer::start(const char* bindAddr, uint16_t port) {
         Subprocess::spawn(stem, args, /*captureStdout=*/true, /*captureStdin=*/true, m_log));
     if (!m_impl->sub->valid()) {
         m_log.log(LogLevel::Error, __FILE__, __LINE__, "LocalServer: failed to spawn fl-server subprocess");
-        return false;
+        return StartResult::SpawnFailed;
     }
 
     // Wait for fl-server to log "listening on" (ready) or "bind failed" (error).
@@ -120,16 +120,16 @@ bool LocalServer::start(const char* bindAddr, uint16_t port) {
                     std::fprintf(stderr, "[fl-server] %s\n", l->c_str());
                 }
             });
-            return true;
+            return StartResult::Ok;
         }
         if (line->find("bind failed") != std::string::npos || line->find("network init failed") != std::string::npos) {
             m_log.log(LogLevel::Error, __FILE__, __LINE__, "LocalServer: fl-server failed to bind — see above");
-            return false;
+            return StartResult::BindFailed;
         }
     }
 
     m_log.log(LogLevel::Error, __FILE__, __LINE__, "LocalServer: fl-server did not become ready within 3 s");
-    return false;
+    return StartResult::Timeout;
 }
 
 std::string_view LocalServer::sessionToken() const {

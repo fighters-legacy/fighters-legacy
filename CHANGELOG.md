@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **game**: `LocalServer::start()` now returns a `StartResult` enum (`Ok`, `SpawnFailed`, `BindFailed`, `Timeout`) instead of `bool`; `LoadingScreen` shows a specific failure reason ("Server binary not found.", "Port already in use.", "Server startup timed out.") immediately when the server thread signals failure rather than waiting for the 10-second startup timeout; closes #333
+
 ### Added
 
 - **network**: `admin_auth_status` command shows per-IP admin auth lockout state and pending failure counts; `status` command appends a lockout count line when one or more IPs are currently locked out; closes #331

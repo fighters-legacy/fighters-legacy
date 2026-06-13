@@ -27,10 +27,17 @@ class LocalServer {
     explicit LocalServer(ILogger& log);
     ~LocalServer();
 
+    enum class StartResult {
+        Ok,          // fl-server started and is listening
+        SpawnFailed, // subprocess could not be created (binary not found)
+        BindFailed,  // fl-server logged "bind failed" or "network init failed"
+        Timeout,     // did not log "listening on" within 3 seconds
+    };
+
     // Find fl-server binary and spawn it on bindAddr:port.
     // Blocks until fl-server logs "listening on" (up to 3 s) or fails.
-    // Returns false on launch failure or readiness timeout.
-    bool start(const char* bindAddr = "127.0.0.1", uint16_t port = 4778);
+    // Returns Ok on success; SpawnFailed, BindFailed, or Timeout on failure.
+    StartResult start(const char* bindAddr = "127.0.0.1", uint16_t port = 4778);
 
     // Graceful shutdown: send "quit" to admin console, wait 2 s, then kill.
     void stop();

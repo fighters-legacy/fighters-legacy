@@ -7,9 +7,10 @@
 #include <chrono>
 
 LoadingScreen::LoadingScreen(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
-                             std::function<void()> onServerReady, bool isSinglePlayer)
+                             std::function<void()> onServerReady, bool isSinglePlayer,
+                             std::function<const char*()> getStartFailMsg)
     : m_serverReady(serverReady), m_isConnected(std::move(isConnected)), m_onServerReady(std::move(onServerReady)),
-      m_isSinglePlayer(isSinglePlayer) {
+      m_getStartFailMsg(std::move(getStartFailMsg)), m_isSinglePlayer(isSinglePlayer) {
     addLine("Loading...");
     addLine(m_isSinglePlayer ? "Starting local server..." : "Connecting to remote server...");
 }
@@ -51,10 +52,22 @@ Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/) {
                     m_now() + duration_cast<steady_clock::duration>(duration<float>(kConnectTimeoutSeconds));
             }
             m_phase = Phase::Connecting;
-        } else if (m_now() > m_startDeadline) {
-            addLine("Local server failed to start.");
-            m_failedAt = m_now();
-            m_phase = Phase::Failed;
+        } else {
+            // Check for an immediate failure signal from the server thread.
+            if (m_getStartFailMsg) {
+                if (const char* msg = m_getStartFailMsg()) {
+                    addLine(msg);
+                    m_failedAt = m_now();
+                    m_phase = Phase::Failed;
+                    break;
+                }
+            }
+            // Fallback: generic message if start() never returned (hung process).
+            if (m_now() > m_startDeadline) {
+                addLine("Local server failed to start.");
+                m_failedAt = m_now();
+                m_phase = Phase::Failed;
+            }
         }
         break;
     }

@@ -45,8 +45,11 @@ class ScreenManager {
     // (Re)create the loading screen with fresh callbacks. Called by Game::startGame()
     // each time a new session begins.
     // isSinglePlayer controls initial status text and whether a server-start phase is shown.
+    // getStartFailMsg returns a static failure string when the server thread signals failure,
+    // or nullptr while still starting; pass nullptr (default) for multiplayer sessions.
     void reinitLoading(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
-                       std::function<void()> onConnect, bool isSinglePlayer = true);
+                       std::function<void()> onConnect, bool isSinglePlayer = true,
+                       std::function<const char*()> getStartFailMsg = nullptr);
 
     // (Re)create the flight screen with fresh session deps. Called by Game::startGame()
     // after session objects (clientNet, hapticController, etc.) are created.

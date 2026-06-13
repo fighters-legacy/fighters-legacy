@@ -202,6 +202,102 @@ TEST_CASE("LoadingScreen: reset clears startup deadline so new session gets fres
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // must NOT have timed out
 }
 
+TEST_CASE("LoadingScreen: spawn fail message shown immediately without timeout") {
+    using clk = std::chrono::steady_clock;
+    clk::time_point fakeNow = clk::now();
+
+    std::atomic<bool> ready{false};
+    const char* failMsg = nullptr;
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, [&] { return failMsg; });
+    s.setClockOverride([&] { return fakeNow; });
+
+    s.update(g_inp, g_win); // sets start deadline; failMsg still null
+
+    failMsg = "Server binary not found.";
+    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
+
+    bool found = false;
+    for (const auto& el : s.buildElements())
+        if (el.type == HudElement::Type::Text && el.text.find("not found") != std::string::npos)
+            found = true;
+    CHECK(found);
+
+    fakeNow += std::chrono::seconds(4); // past kFailDisplaySeconds (3 s)
+    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+}
+
+TEST_CASE("LoadingScreen: bind fail message shown immediately without timeout") {
+    using clk = std::chrono::steady_clock;
+    clk::time_point fakeNow = clk::now();
+
+    std::atomic<bool> ready{false};
+    const char* failMsg = nullptr;
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, [&] { return failMsg; });
+    s.setClockOverride([&] { return fakeNow; });
+
+    s.update(g_inp, g_win); // sets start deadline
+
+    failMsg = "Port already in use.";
+    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
+
+    bool found = false;
+    for (const auto& el : s.buildElements())
+        if (el.type == HudElement::Type::Text && el.text.find("already in use") != std::string::npos)
+            found = true;
+    CHECK(found);
+
+    fakeNow += std::chrono::seconds(4);
+    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+}
+
+TEST_CASE("LoadingScreen: server timeout fail message shown immediately without timeout") {
+    using clk = std::chrono::steady_clock;
+    clk::time_point fakeNow = clk::now();
+
+    std::atomic<bool> ready{false};
+    const char* failMsg = nullptr;
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, [&] { return failMsg; });
+    s.setClockOverride([&] { return fakeNow; });
+
+    s.update(g_inp, g_win); // sets start deadline
+
+    failMsg = "Server startup timed out.";
+    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
+
+    bool found = false;
+    for (const auto& el : s.buildElements())
+        if (el.type == HudElement::Type::Text && el.text.find("startup timed out") != std::string::npos)
+            found = true;
+    CHECK(found);
+
+    fakeNow += std::chrono::seconds(4);
+    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+}
+
+TEST_CASE("LoadingScreen: fallback generic message shown on startup deadline with no fail msg") {
+    using clk = std::chrono::steady_clock;
+    clk::time_point fakeNow = clk::now();
+
+    std::atomic<bool> ready{false};
+    // No getStartFailMsg — simulates a hung start() that never returns.
+    LoadingScreen s(ready, [] { return false; }, [] {});
+    s.setClockOverride([&] { return fakeNow; });
+
+    s.update(g_inp, g_win); // sets start deadline at fakeNow + 10 s
+
+    fakeNow += std::chrono::seconds(11);              // past startup deadline
+    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
+
+    bool found = false;
+    for (const auto& el : s.buildElements())
+        if (el.type == HudElement::Type::Text && el.text.find("failed to start") != std::string::npos)
+            found = true;
+    CHECK(found);
+
+    fakeNow += std::chrono::seconds(4);
+    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+}
+
 TEST_CASE("LoadingScreen: reset preserves multiplayer messages") {
     std::atomic<bool> ready{true};
     bool connected = false;
