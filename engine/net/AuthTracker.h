@@ -5,6 +5,7 @@
 #include <functional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace fl {
 
@@ -16,6 +17,13 @@ namespace fl {
 // (Source Engine RCON TCP channel).
 class AuthTracker {
   public:
+    struct FailureEntry {
+        std::string ip;
+        bool lockedOut;
+        int failures;        // 0 when lockedOut == true (counter erased on lockout)
+        long long expiresIn; // seconds remaining; 0 when lockedOut == false
+    };
+
     AuthTracker(int maxFailures, int lockoutSeconds)
         : m_maxFailures(maxFailures), m_lockoutDuration(lockoutSeconds),
           m_now([] { return std::chrono::steady_clock::now(); }) {}
@@ -71,6 +79,35 @@ class AuthTracker {
     // Inject a deterministic clock for unit tests (mirrors setClockOverride pattern).
     void setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
         m_now = std::move(fn);
+    }
+
+    int maxFailures() const noexcept {
+        return m_maxFailures;
+    }
+
+    // Count of non-expired lockouts. Does not prune.
+    int lockedOutCount() const {
+        auto now = m_now();
+        int count = 0;
+        for (const auto& [ip, expiry] : m_lockouts)
+            if (now < expiry)
+                ++count;
+        return count;
+    }
+
+    // Snapshot of all active lockouts + IPs with pending failures.
+    // Expired lockouts are excluded inline (no pruning).
+    std::vector<FailureEntry> failureSummary() const {
+        auto now = m_now();
+        std::vector<FailureEntry> result;
+        for (const auto& [ip, expiry] : m_lockouts)
+            if (now < expiry) {
+                long long secs = std::chrono::duration_cast<std::chrono::seconds>(expiry - now).count();
+                result.push_back({ip, true, 0, secs});
+            }
+        for (const auto& [ip, count] : m_failCount)
+            result.push_back({ip, false, count, 0LL});
+        return result;
     }
 
   private:

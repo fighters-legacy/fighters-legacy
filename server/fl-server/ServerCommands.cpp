@@ -119,6 +119,18 @@ static bool isNumeric(std::string_view arg) {
     return true;
 }
 
+static std::string formatSecs(long long secs) {
+    if (secs <= 0)
+        return "0s";
+    long long m = secs / 60, s = secs % 60;
+    char buf[32];
+    if (m > 0)
+        std::snprintf(buf, sizeof(buf), "%lldm %02llds", m, s);
+    else
+        std::snprintf(buf, sizeof(buf), "%llds", secs);
+    return buf;
+}
+
 // ---------------------------------------------------------------------------
 // registerServerCommands
 // ---------------------------------------------------------------------------
@@ -134,19 +146,28 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                              });
 
     // status
-    registry.registerCommand("status", "status  -- show server state (uptime, peer count, entity count, tick rate)",
-                             [ctx](std::span<std::string_view>) -> std::string {
-                                 if (!ctx.broadcaster || !ctx.entityManager)
-                                     return "status: not available";
-                                 using namespace std::chrono;
-                                 auto uptimeSec = duration_cast<seconds>(steady_clock::now() - ctx.startTime).count();
-                                 int peers = ctx.broadcaster->getPeerCount();
-                                 uint32_t entities = ctx.entityManager->liveCount();
-                                 char buf[256];
-                                 std::snprintf(buf, sizeof(buf), "uptime: %llds  peers: %d  entities: %u  tick: 60 Hz",
-                                               static_cast<long long>(uptimeSec), peers, entities);
-                                 return buf;
-                             });
+    registry.registerCommand(
+        "status", "status  -- show server state (uptime, peer count, entity count, tick rate)",
+        [ctx](std::span<std::string_view>) -> std::string {
+            if (!ctx.broadcaster || !ctx.entityManager)
+                return "status: not available";
+            using namespace std::chrono;
+            auto uptimeSec = duration_cast<seconds>(steady_clock::now() - ctx.startTime).count();
+            int peers = ctx.broadcaster->getPeerCount();
+            uint32_t entities = ctx.entityManager->liveCount();
+            char buf[256];
+            std::snprintf(buf, sizeof(buf), "uptime: %llds  peers: %d  entities: %u  tick: 60 Hz",
+                          static_cast<long long>(uptimeSec), peers, entities);
+            std::string out(buf);
+            auto ls = ctx.broadcaster->getAuthLockoutSummary();
+            if (ls.activeCount > 0) {
+                char lbuf[96];
+                std::snprintf(lbuf, sizeof(lbuf),
+                              "\nadmin auth lockouts: %d active (use admin_auth_status for details)", ls.activeCount);
+                out += lbuf;
+            }
+            return out;
+        });
 
     // peers
     registry.registerCommand("peers", "peers  -- list connected peers (peerId, address, entity index/generation)",
@@ -323,6 +344,38 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                      std::fflush(stdout);
                                  });
                                  return "admin_unlock: queued for " + ip;
+                             });
+
+    // admin_auth_status
+    registry.registerCommand("admin_auth_status",
+                             "admin_auth_status  -- show per-IP admin auth lockout state and pending failure counts",
+                             [ctx](std::span<std::string_view>) -> std::string {
+                                 if (!ctx.broadcaster)
+                                     return "admin_auth_status: not available";
+                                 auto s = ctx.broadcaster->getAuthLockoutSummary();
+                                 if (s.entries.empty()) {
+                                     std::printf("[admin] admin_auth_status: 0 lockouts active\n");
+                                     if (ctx.shell)
+                                         ctx.shell->print("[admin] admin_auth_status: 0 lockouts active");
+                                     std::fflush(stdout);
+                                     return "0 lockouts active";
+                                 }
+                                 for (const auto& e : s.entries) {
+                                     char m[192];
+                                     if (e.lockedOut)
+                                         std::snprintf(m, sizeof(m), "[admin] %-39s locked out -- expires in %s",
+                                                       e.ip.c_str(), formatSecs(e.expiresIn).c_str());
+                                     else
+                                         std::snprintf(m, sizeof(m), "[admin] %-39s %d failure(s) (threshold: %d)",
+                                                       e.ip.c_str(), e.failures, s.threshold);
+                                     std::printf("%s\n", m);
+                                     if (ctx.shell)
+                                         ctx.shell->print(m);
+                                 }
+                                 std::fflush(stdout);
+                                 char ackBuf[64];
+                                 std::snprintf(ackBuf, sizeof(ackBuf), "%d lockout(s) active", s.activeCount);
+                                 return std::string(ackBuf);
                              });
 
     // set_weather <preset>

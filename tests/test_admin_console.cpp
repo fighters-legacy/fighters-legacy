@@ -10,6 +10,7 @@
 #include "entity/EntityDef.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
+#include "net/GameProtocol.h"
 #include "net/WorldBroadcaster.h"
 #include <ILogger.h>
 #include <catch2/catch_test_macros.hpp>
@@ -570,8 +571,9 @@ struct MockNetworkWb : INetwork {
     PeerState getPeerState(uint32_t) const override {
         return PeerState::Disconnected;
     }
+    std::string peerAddr; // set to e.g. "1.2.3.4" to test IP-based paths
     const char* getPeerAddress(uint32_t) const override {
-        return nullptr;
+        return peerAddr.empty() ? nullptr : peerAddr.c_str();
     }
     const char* getLastError() const override {
         return nullptr;
@@ -665,4 +667,113 @@ TEST_CASE("AdminConsole wb: status with one connected peer contains peers: 1", "
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("status");
     CHECK(out.find("peers: 1") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// admin_auth_status command tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AdminConsole: admin_auth_status with null broadcaster returns not available", "[admin_console]") {
+    auto reg = makeRegistry(); // broadcaster == nullptr
+    std::string out = reg.dispatch("admin_auth_status");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: admin_auth_status with no lockouts returns 0 lockouts active", "[admin_console][wb]") {
+    WbFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("admin_auth_status");
+    CHECK(out == "0 lockouts active");
+}
+
+TEST_CASE("AdminConsole wb: status with no lockouts does not show lockout line", "[admin_console][wb]") {
+    WbFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("status");
+    CHECK(out.find("admin auth lockouts") == std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: status and admin_auth_status reflect active lockout", "[admin_console][wb]") {
+    WbFixture f;
+    f.net.peerAddr = "1.2.3.4";
+    f.broadcaster.setAdminAuthParams(1, 300);
+    f.broadcaster.setOperatorPassword("correct");
+    f.broadcaster.setAdminDispatch([](std::string_view) { return std::string{}; });
+    f.registry.registerType(makeWbEntityDef());
+    f.broadcaster.onConnect(0u);
+
+    fl::MsgAdminCommand cmd{};
+    std::snprintf(cmd.token, sizeof(cmd.token), "%s", "wrongpass");
+    std::snprintf(cmd.command, sizeof(cmd.command), "%s", "status");
+    f.broadcaster.onReceive(0u, &cmd, sizeof(cmd));
+
+    NullLogger2 shellLog;
+    CommandRegistry shellReg;
+    CommandShell shell(shellLog, shellReg);
+    f.ctx.shell = &shell;
+    auto reg = makeRegistry(f.ctx);
+
+    std::string statusOut = reg.dispatch("status");
+    CHECK(statusOut.find("admin auth lockouts: 1 active") != std::string::npos);
+    CHECK(statusOut.find("use admin_auth_status") != std::string::npos);
+
+    std::string authOut = reg.dispatch("admin_auth_status");
+    // per-IP detail goes to shell output; dispatch returns the summary ack
+    auto shellLines = shell.outputLines();
+    std::string shellOut;
+    for (const auto& l : shellLines)
+        shellOut += l + "\n";
+    CHECK(shellOut.find("locked out") != std::string::npos);
+    CHECK(authOut == "1 lockout(s) active");
+}
+
+TEST_CASE("AdminConsole wb: admin_auth_status shows pending failure line", "[admin_console][wb]") {
+    WbFixture f;
+    f.net.peerAddr = "1.2.3.4";
+    f.broadcaster.setAdminAuthParams(3, 300);
+    f.broadcaster.setOperatorPassword("correct");
+    f.broadcaster.setAdminDispatch([](std::string_view) { return std::string{}; });
+    f.registry.registerType(makeWbEntityDef());
+    f.broadcaster.onConnect(0u);
+
+    fl::MsgAdminCommand cmd{};
+    std::snprintf(cmd.token, sizeof(cmd.token), "%s", "wrongpass");
+    std::snprintf(cmd.command, sizeof(cmd.command), "%s", "status");
+    f.broadcaster.onReceive(0u, &cmd, sizeof(cmd)); // 1 failure, threshold=3, no lockout
+
+    NullLogger2 shellLog;
+    CommandRegistry shellReg;
+    CommandShell shell(shellLog, shellReg);
+    f.ctx.shell = &shell;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("admin_auth_status");
+    // per-IP detail goes to shell output; dispatch returns the summary ack
+    auto shellLines = shell.outputLines();
+    std::string shellOut;
+    for (const auto& l : shellLines)
+        shellOut += l + "\n";
+    CHECK(shellOut.find("1 failure(s)") != std::string::npos);
+    CHECK(shellOut.find("threshold: 3") != std::string::npos);
+    CHECK(out == "0 lockout(s) active");
+}
+
+TEST_CASE("AdminConsole wb: status shows no lockout line after admin_unlock clears it", "[admin_console][wb]") {
+    WbFixture f;
+    f.net.peerAddr = "1.2.3.4";
+    f.broadcaster.setAdminAuthParams(1, 300);
+    f.broadcaster.setOperatorPassword("correct");
+    f.broadcaster.setAdminDispatch([](std::string_view) { return std::string{}; });
+    f.registry.registerType(makeWbEntityDef());
+    f.broadcaster.onConnect(0u);
+
+    fl::MsgAdminCommand cmd{};
+    std::snprintf(cmd.token, sizeof(cmd.token), "%s", "wrongpass");
+    std::snprintf(cmd.command, sizeof(cmd.command), "%s", "status");
+    f.broadcaster.onReceive(0u, &cmd, sizeof(cmd)); // triggers lockout
+
+    f.broadcaster.unlockAdminAuth("1.2.3.4");
+
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("status");
+    CHECK(out.find("admin auth lockouts") == std::string::npos);
 }

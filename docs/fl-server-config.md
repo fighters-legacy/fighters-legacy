@@ -538,7 +538,7 @@ reset the counter by reconnecting. A successful authentication clears the counte
 
 Per-IP lockout duration in seconds after `admin_auth_max_failures` consecutive wrong passwords.
 During the lockout window, any new connection from the same IP is refused immediately (no
-`MsgHello` sent). The lockout expires automatically, or can be cleared immediately via the `admin_unlock` console command.
+`MsgHello` sent). The lockout expires automatically, can be inspected with `admin_auth_status`, or cleared immediately with `admin_unlock`.
 
 ---
 
@@ -655,6 +655,8 @@ Out-of-range values are ignored and the default is kept (a warning is logged).
 - `peers` returns a count from the atomic peer counter immediately; the full per-peer detail
   is printed to stdout and sent to the RCON client as additional `SERVERDATA_RESPONSE_VALUE`
   packets on the next sim tick.
+- `admin_auth_status` returns the full per-IP lockout and failure detail as a single
+  synchronous response packet (no second packet), unlike `peers`.
 
 ### Example: connect with mcrcon
 
@@ -694,6 +696,7 @@ process.
 | `ban` | `<peerId\|IP>` | Add IP to the ban list and kick matching peers; saves to `banlist_path` if configured |
 | `unban` | `<IP>` | Remove an IP from the ban list; saves to `banlist_path` if configured |
 | `admin_unlock` | `<IP>` | Clear the admin auth lockout for an IP address immediately; prints a warning if the IP was not locked (idempotent) |
+| `admin_auth_status` | — | Show per-IP admin auth lockout state and pending failure counts |
 | `set_weather` | `<preset>` | Change weather: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm` |
 | `set_time` | `<0–24>` | Set in-game time of day (float, hours) |
 | `spawn` | `<type> <x> <y> <z>` | Spawn a registered entity type at the given world position |

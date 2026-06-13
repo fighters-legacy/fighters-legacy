@@ -8,6 +8,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <string>
@@ -284,6 +285,85 @@ TEST_CASE("AuthTracker: clearLockout is a no-op when IP is not locked", "[rcon][
     fl::AuthTracker tracker(5, 60);
     tracker.clearLockout("1.2.3.4");
     CHECK_FALSE(tracker.isLockedOut("1.2.3.4"));
+}
+
+TEST_CASE("AuthTracker: lockedOutCount returns 0 initially", "[rcon][auth_tracker]") {
+    fl::AuthTracker tracker(5, 60);
+    CHECK(tracker.lockedOutCount() == 0);
+}
+
+TEST_CASE("AuthTracker: lockedOutCount reflects lockout and 0 after expiry", "[rcon][auth_tracker]") {
+    fl::AuthTracker tracker(2, 60);
+    SteadyTp now{};
+    tracker.setClockOverride([&] { return now; });
+    tracker.recordFailure("1.2.3.4");
+    tracker.recordFailure("1.2.3.4");
+    CHECK(tracker.lockedOutCount() == 1);
+    now += std::chrono::seconds(61);
+    CHECK(tracker.lockedOutCount() == 0);
+}
+
+TEST_CASE("AuthTracker: failureSummary shows locked-out entry", "[rcon][auth_tracker]") {
+    fl::AuthTracker tracker(2, 300);
+    SteadyTp now{};
+    tracker.setClockOverride([&] { return now; });
+    tracker.recordFailure("1.2.3.4");
+    tracker.recordFailure("1.2.3.4");
+    auto entries = tracker.failureSummary();
+    REQUIRE(entries.size() == 1);
+    CHECK(entries[0].ip == "1.2.3.4");
+    CHECK(entries[0].lockedOut == true);
+    CHECK(entries[0].failures == 0);
+    CHECK(entries[0].expiresIn > 0);
+}
+
+TEST_CASE("AuthTracker: failureSummary shows pending failure entry", "[rcon][auth_tracker]") {
+    fl::AuthTracker tracker(5, 60);
+    tracker.recordFailure("1.2.3.4");
+    tracker.recordFailure("1.2.3.4");
+    auto entries = tracker.failureSummary();
+    REQUIRE(entries.size() == 1);
+    CHECK(entries[0].ip == "1.2.3.4");
+    CHECK(entries[0].lockedOut == false);
+    CHECK(entries[0].failures == 2);
+    CHECK(entries[0].expiresIn == 0);
+}
+
+TEST_CASE("AuthTracker: failureSummary excludes expired lockouts", "[rcon][auth_tracker]") {
+    fl::AuthTracker tracker(2, 60);
+    SteadyTp now{};
+    tracker.setClockOverride([&] { return now; });
+    tracker.recordFailure("1.2.3.4");
+    tracker.recordFailure("1.2.3.4");
+    now += std::chrono::seconds(61);
+    auto entries = tracker.failureSummary();
+    CHECK(entries.empty());
+}
+
+TEST_CASE("AuthTracker: maxFailures returns configured threshold", "[rcon][auth_tracker]") {
+    fl::AuthTracker tracker(7, 60);
+    CHECK(tracker.maxFailures() == 7);
+}
+
+TEST_CASE("AuthTracker: failureSummary returns both locked and pending IPs", "[rcon][auth_tracker]") {
+    fl::AuthTracker tracker(2, 300);
+    SteadyTp now{};
+    tracker.setClockOverride([&] { return now; });
+    // Lock out first IP
+    tracker.recordFailure("1.1.1.1");
+    tracker.recordFailure("1.1.1.1");
+    // One pending failure on second IP (below threshold)
+    tracker.recordFailure("2.2.2.2");
+    auto entries = tracker.failureSummary();
+    REQUIRE(entries.size() == 2);
+    auto it1 = std::find_if(entries.begin(), entries.end(), [](const auto& e) { return e.ip == "1.1.1.1"; });
+    auto it2 = std::find_if(entries.begin(), entries.end(), [](const auto& e) { return e.ip == "2.2.2.2"; });
+    REQUIRE(it1 != entries.end());
+    REQUIRE(it2 != entries.end());
+    CHECK(it1->lockedOut == true);
+    CHECK(it1->failures == 0);
+    CHECK(it2->lockedOut == false);
+    CHECK(it2->failures == 1);
 }
 
 // ---------------------------------------------------------------------------

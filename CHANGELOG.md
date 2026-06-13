@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: `admin_auth_status` command shows per-IP admin auth lockout state and pending failure counts; `status` command appends a lockout count line when one or more IPs are currently locked out; closes #331
 - **network**: per-IP brute-force protection for the `MsgAdminCommand` operator channel — after `admin_auth_max_failures` consecutive wrong passwords (default 5) the peer is kicked and reconnections from that IP are refused for `admin_auth_lockout_s` seconds (default 300); thresholds configurable in `[security]`; `fl::AuthTracker` promoted to `engine/net/AuthTracker.h` and reused by both `WorldBroadcaster` and `RconServer`; closes #315
 - **test**: `test_flight_input_collector` — unit tests for `FlightInputCollector::poll()` covering keyboard (all 11 bindings), gamepad (buttons + axes + deadzone), HOTAS override path, combined keyboard+gamepad OR, console-open suppression, rate-limiter clock injection, and `seqNum`/`tickIndex` correctness; closes #311
 - **game**: wire afterburner keyboard (`Tab`) and configurable gamepad left-shoulder button (`[controls].afterburner_button`, default index 4) in `FlightInputCollector`; sets `MsgClientInput::buttons` bit 1 so content-pack aircraft with `ab_thrust` tables can command afterburner; closes #307

@@ -2,6 +2,12 @@ include(FetchContent)
 
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 
+# CMake 3.30+ deprecates FetchContent_Populate(name) for deps without CMakeLists.txt
+# (stb, lua_src). Set CMP0169=OLD to suppress the warning; we have no alternative path.
+if(POLICY CMP0169)
+    cmake_policy(SET CMP0169 OLD)
+endif()
+
 # ---------------------------------------------------------------------------
 # Vulkan — system only; no FetchContent fallback (requires LunarG SDK)
 # Declared QUIET here; backends that need it call find_package(Vulkan REQUIRED)
@@ -110,6 +116,11 @@ else()
     set(TINYGLTF_BUILD_VALIDATOR      OFF CACHE BOOL "" FORCE)
     set(TINYGLTF_BUILD_BUILDER        OFF CACHE BOOL "" FORCE)
     set(TINYGLTF_INSTALL              OFF CACHE BOOL "" FORCE)
+    # tinygltf uses cmake_minimum_required(VERSION 3.6); CMake 4.x warns on anything
+    # below 3.10. Use CMAKE_POLICY_VERSION_MINIMUM to silence it.
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
+        set(CMAKE_POLICY_VERSION_MINIMUM "3.10" CACHE INTERNAL "")
+    endif()
     FetchContent_Declare(tinygltf
         GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
         GIT_TAG        v3.0.0
@@ -118,6 +129,9 @@ else()
         SYSTEM
     )
     FetchContent_MakeAvailable(tinygltf)
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
+        unset(CMAKE_POLICY_VERSION_MINIMUM CACHE)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------

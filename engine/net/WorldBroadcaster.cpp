@@ -94,6 +94,16 @@ bool WorldBroadcaster::unlockAdminAuth(const std::string& ip) {
     return wasLocked;
 }
 
+AuthLockoutSummary WorldBroadcaster::getAuthLockoutSummary() const {
+    AuthLockoutSummary s;
+    s.threshold = m_adminAuthTracker.maxFailures();
+    s.entries = m_adminAuthTracker.failureSummary();
+    for (const auto& e : s.entries)
+        if (e.lockedOut)
+            ++s.activeCount;
+    return s;
+}
+
 void WorldBroadcaster::setBannedAddresses(std::unordered_set<std::string> addrs) {
     m_bannedAddresses = std::move(addrs);
 }
