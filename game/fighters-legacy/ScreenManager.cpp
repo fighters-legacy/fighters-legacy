@@ -38,9 +38,10 @@ void ScreenManager::reinitFlight(FlightScreenDeps deps) {
 }
 
 void ScreenManager::reinitLoading(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
-                                  std::function<void()> onConnect, bool isSinglePlayer) {
-    m_loading =
-        std::make_unique<LoadingScreen>(serverReady, std::move(isConnected), std::move(onConnect), isSinglePlayer);
+                                  std::function<void()> onConnect, bool isSinglePlayer,
+                                  std::function<const char*()> getStartFailMsg) {
+    m_loading = std::make_unique<LoadingScreen>(serverReady, std::move(isConnected), std::move(onConnect),
+                                                isSinglePlayer, std::move(getStartFailMsg));
 }
 
 IScreen& ScreenManager::active() {

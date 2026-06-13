@@ -11,17 +11,21 @@
 #include <string>
 
 // Async loading screen shown while the local server starts and ENet connects.
-// Constructor takes three callables injected by Game::startGame():
+// Constructor takes callables injected by Game::startGame():
 //   serverReady    — atomic set by the background server thread on success
 //   isConnected    — returns true once renderBridge.hasSnapshot()
 //   onServerReady  — called once when serverReady fires; creates clientHandler and
 //                    calls clientNet->connect()
 //   isSinglePlayer — controls initial status text and whether the StartingServer
 //                    phase is shown; pass false for remote-connect sessions
+//   getStartFailMsg — returns a static failure string as soon as the server thread
+//                     signals failure (SpawnFailed/BindFailed/Timeout), or nullptr
+//                     while still starting; pass nullptr (default) for multiplayer
 class LoadingScreen : public IScreen {
   public:
     LoadingScreen(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
-                  std::function<void()> onServerReady, bool isSinglePlayer = true);
+                  std::function<void()> onServerReady, bool isSinglePlayer = true,
+                  std::function<const char*()> getStartFailMsg = nullptr);
 
     Screen update(IInput& input, IWindow& window) override;
     std::span<const HudElement> buildElements() override;
@@ -37,6 +41,7 @@ class LoadingScreen : public IScreen {
     std::atomic<bool>& m_serverReady;
     std::function<bool()> m_isConnected;
     std::function<void()> m_onServerReady;
+    std::function<const char*()> m_getStartFailMsg;
     bool m_isSinglePlayer;
 
     Phase m_phase{Phase::StartingServer};

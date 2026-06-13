@@ -282,6 +282,7 @@ struct GameImpl {
     // Session lifecycle (startGame / stopGame)
     std::thread serverThread;
     std::atomic<bool> serverReady{false};
+    std::atomic<const char*> serverFailMsg{nullptr};
 };
 
 // ---------------------------------------------------------------------------
@@ -540,6 +541,7 @@ void Game::startGame() {
     d.entityRegistry.clear();
     d.env = EnvironmentState{};
     d.serverReady.store(false, std::memory_order_relaxed);
+    d.serverFailMsg.store(nullptr, std::memory_order_relaxed);
 
     // Register the builtin entity type for the no-pack sandbox path.
     if (d.outcome == FirstRunOutcome::LaunchSandboxInspector) {
@@ -558,8 +560,27 @@ void Game::startGame() {
         // Single-player: spawn fl-server subprocess in a background thread.
         d.localServer.emplace(*d.rawLogger);
         d.serverThread = std::thread([&d]() {
-            if (d.localServer->start())
+            auto result = d.localServer->start();
+            if (result == LocalServer::StartResult::Ok) {
                 d.serverReady.store(true, std::memory_order_release);
+            } else {
+                const char* msg = nullptr;
+                switch (result) {
+                case LocalServer::StartResult::SpawnFailed:
+                    msg = "Server binary not found.";
+                    break;
+                case LocalServer::StartResult::BindFailed:
+                    msg = "Port already in use.";
+                    break;
+                case LocalServer::StartResult::Timeout:
+                    msg = "Server startup timed out.";
+                    break;
+                case LocalServer::StartResult::Ok:
+                    break; // handled above; silences -Wswitch
+                }
+                if (msg)
+                    d.serverFailMsg.store(msg, std::memory_order_release);
+            }
         });
     } else {
         // Multiplayer: no local server — signal ready immediately so LoadingScreen
@@ -641,7 +662,8 @@ void Game::startGame() {
     };
 
     d.screenMgr->reinitLoading(
-        d.serverReady, [&d]() { return d.renderBridge.hasSnapshot(); }, std::move(onConnect), !isMultiplayer);
+        d.serverReady, [&d]() { return d.renderBridge.hasSnapshot(); }, std::move(onConnect), !isMultiplayer,
+        [&d]() -> const char* { return d.serverFailMsg.load(std::memory_order_acquire); });
 
     // Lazy SandboxInspector init (no-pack path).
     if (d.outcome == FirstRunOutcome::LaunchSandboxInspector)
