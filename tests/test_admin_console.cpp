@@ -579,6 +579,7 @@ struct WbFixture {
 
     WbFixture() {
         ctx.broadcaster = &broadcaster;
+        ctx.entityManager = &em;
         ctx.gameLoop = &loop;
     }
 };
@@ -613,4 +614,35 @@ TEST_CASE("AdminConsole wb: peers with one connected peer returns 1 peer(s) conn
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("peers");
     CHECK(out == "1 peer(s) connected");
+}
+
+// ---------------------------------------------------------------------------
+// WorldBroadcaster integration -- status command ack
+// (getPeerCount() and liveCount() are called synchronously during dispatch;
+//  sentinel pointers from AsyncAckFixture are unsafe here)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AdminConsole wb: status with null entityManager returns not available", "[admin_console][wb]") {
+    WbFixture f;
+    f.ctx.entityManager = nullptr; // broadcaster is real; entityManager is null
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("status");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: status with zero peers contains peers: 0", "[admin_console][wb]") {
+    WbFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("status");
+    CHECK(out.find("peers: 0") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: status with one connected peer contains peers: 1", "[admin_console][wb]") {
+    WbFixture f;
+    f.registry.registerType(makeWbEntityDef());
+    f.broadcaster.onConnect(0u);
+
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("status");
+    CHECK(out.find("peers: 1") != std::string::npos);
 }
