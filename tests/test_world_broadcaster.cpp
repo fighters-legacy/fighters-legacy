@@ -2425,7 +2425,7 @@ TEST_CASE("WorldBroadcaster: admin auth no lockout before threshold", "[world_br
     }
 }
 
-TEST_CASE("WorldBroadcaster: admin auth lockout triggered on Nth failure — peer kicked",
+TEST_CASE("WorldBroadcaster: admin auth lockout triggered on Nth failure -- peer kicked",
           "[world_broadcaster][admin_command]") {
     MockLogger log;
     MockNetwork net;
