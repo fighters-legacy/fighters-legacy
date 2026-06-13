@@ -18,10 +18,16 @@ void LoadingScreen::reset() {
     m_phase = Phase::StartingServer;
     m_onServerReadyCalled = false;
     m_connectDeadline = {};
+    m_startDeadline = {};
+    m_failedAt = {};
     m_lineCount = 0;
     m_elementCount = 0;
     addLine("Loading...");
     addLine(m_isSinglePlayer ? "Starting local server..." : "Connecting to remote server...");
+}
+
+void LoadingScreen::setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
+    m_now = std::move(fn);
 }
 
 void LoadingScreen::addLine(const char* text) {
@@ -31,28 +37,35 @@ void LoadingScreen::addLine(const char* text) {
 
 Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/) {
     switch (m_phase) {
-    case Phase::StartingServer:
+    case Phase::StartingServer: {
+        using namespace std::chrono;
+        if (m_startDeadline == steady_clock::time_point{})
+            m_startDeadline = m_now() + duration_cast<steady_clock::duration>(duration<float>(kStartTimeoutSeconds));
+
         if (m_serverReady.load(std::memory_order_relaxed)) {
             if (!m_onServerReadyCalled) {
                 m_onServerReadyCalled = true;
                 m_onServerReady();
                 addLine("Connecting...");
-                using namespace std::chrono;
-                m_connectDeadline = steady_clock::now() +
-                                    duration_cast<steady_clock::duration>(duration<float>(kConnectTimeoutSeconds));
+                m_connectDeadline =
+                    m_now() + duration_cast<steady_clock::duration>(duration<float>(kConnectTimeoutSeconds));
             }
             m_phase = Phase::Connecting;
+        } else if (m_now() > m_startDeadline) {
+            addLine("Local server failed to start.");
+            m_failedAt = m_now();
+            m_phase = Phase::Failed;
         }
         break;
+    }
 
     case Phase::Connecting:
         if (m_isConnected()) {
             addLine("Ready.");
             m_phase = Phase::Ready;
-        } else if (std::chrono::steady_clock::now() > m_connectDeadline &&
-                   m_connectDeadline != std::chrono::steady_clock::time_point{}) {
+        } else if (m_now() > m_connectDeadline && m_connectDeadline != std::chrono::steady_clock::time_point{}) {
             addLine("Connection timed out.");
-            m_failedAt = std::chrono::steady_clock::now();
+            m_failedAt = m_now();
             m_phase = Phase::Failed;
         }
         break;
@@ -62,7 +75,7 @@ Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/) {
 
     case Phase::Failed: {
         using namespace std::chrono;
-        auto elapsed = duration_cast<duration<float>>(steady_clock::now() - m_failedAt).count();
+        auto elapsed = duration_cast<duration<float>>(m_now() - m_failedAt).count();
         if (elapsed >= kFailDisplaySeconds)
             return Screen::MainMenu;
         break;

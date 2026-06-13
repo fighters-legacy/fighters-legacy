@@ -24,6 +24,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **game**: gamepad primary-fire button is now configurable via `fire_button` in `[controls]` (`config/user.toml`); defaults to Right Shoulder (RB / R1, index 5); triggers the gun-burst haptic effect (#287)
 - **engine**: expose `abEngaged` (afterburner lit) and `engineFailFlags` (`kEngineFail*` bitmask) through the full pipeline — `FlightState` → `MsgEntityEntry` (wire offsets 68–69, additive fields) → `EntityRenderEntry` → `HapticController`; replaces the `throttle == 100` afterburner proxy and `damageLevel >= 2` engine-failure proxy with accurate flags; `kEngineFailLeft`/`kEngineFailRight` bits deliver asymmetric left/right motor haptics when set; `kEngineCompStall` auto-triggers the compressor stall sequence; closes #286
 
+### Fixed
+
+- **game**: loading screen no longer hangs indefinitely when the local server fails to start; transitions to `Phase::Failed` after 10 seconds with "Local server failed to start." and returns to the main menu; `setClockOverride` added to `LoadingScreen` so both startup and connect timeouts are fully testable without real-time waits; closes #323
+
 ### Changed
 
 - **game**: `FlightInputCollector::poll()` now reads keyboard state through `IInput::isKeyDown` instead of `SDL_GetKeyboardState`; exposes `setClockOverride` for deterministic test injection; closes #311

@@ -100,48 +100,106 @@ TEST_CASE("LoadingScreen: multiplayer mode shows remote connect message") {
 }
 
 TEST_CASE("LoadingScreen: connect timeout trips Failed phase then returns MainMenu") {
-    // serverReady = true from the start so LoadingScreen enters Connecting immediately.
+    using clk = std::chrono::steady_clock;
+    clk::time_point fakeNow = clk::now();
+
     std::atomic<bool> ready{true};
     LoadingScreen s(ready, [] { return false; }, [] {});
+    s.setClockOverride([&] { return fakeNow; });
 
-    // Trigger the Connecting phase (fires onServerReady, sets deadline).
+    s.update(g_inp, g_win); // StartingServer → Connecting; deadline = fakeNow + 10s
+
+    CHECK(s.update(g_inp, g_win) == Screen::Loading); // within timeout
+
+    fakeNow += std::chrono::seconds(11);              // past connect deadline
+    CHECK(s.update(g_inp, g_win) == Screen::Loading); // → Failed; within kFailDisplaySeconds
+
+    bool foundMsg = false;
+    for (const auto& el : s.buildElements())
+        if (el.type == HudElement::Type::Text && el.text.find("timed out") != std::string::npos)
+            foundMsg = true;
+    CHECK(foundMsg);
+
+    fakeNow += std::chrono::seconds(4); // past kFailDisplaySeconds (3s)
+    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+}
+
+TEST_CASE("LoadingScreen: startup timeout trips Failed phase then returns MainMenu") {
+    using clk = std::chrono::steady_clock;
+    clk::time_point fakeNow = clk::now();
+
+    std::atomic<bool> ready{false}; // server never starts
+    bool onReadyCalled = false;
+    LoadingScreen s(ready, [] { return false; }, [&] { onReadyCalled = true; });
+    s.setClockOverride([&] { return fakeNow; });
+
+    s.update(g_inp, g_win); // StartingServer; deadline = fakeNow + 10s
+
+    CHECK(s.update(g_inp, g_win) == Screen::Loading); // within timeout
+    CHECK(!onReadyCalled);
+
+    fakeNow += std::chrono::seconds(11);              // past startup deadline
+    CHECK(s.update(g_inp, g_win) == Screen::Loading); // → Failed; within kFailDisplaySeconds
+    CHECK(!onReadyCalled);
+
+    bool foundMsg = false;
+    for (const auto& el : s.buildElements())
+        if (el.type == HudElement::Type::Text && el.text.find("failed to start") != std::string::npos)
+            foundMsg = true;
+    CHECK(foundMsg);
+
+    fakeNow += std::chrono::seconds(4); // past kFailDisplaySeconds (3s)
+    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+}
+
+TEST_CASE("LoadingScreen: reset after startup timeout allows successful second session") {
+    using clk = std::chrono::steady_clock;
+    clk::time_point fakeNow = clk::now();
+
+    std::atomic<bool> ready{false};
+    int onReadyCount = 0;
+    bool connected = false;
+    LoadingScreen s(ready, [&] { return connected; }, [&] { ++onReadyCount; });
+    s.setClockOverride([&] { return fakeNow; });
+
+    // First session: startup timeout fires.
+    s.update(g_inp, g_win);
+    fakeNow += std::chrono::seconds(11);
+    s.update(g_inp, g_win); // → Failed
+    CHECK(onReadyCount == 0);
+
+    // Reset for second session.
+    ready.store(false);
+    s.reset();
+
+    // Second session: server starts and connects successfully.
+    s.update(g_inp, g_win); // StartingServer; fresh deadline
+    ready.store(true);
+    s.update(g_inp, g_win); // → Connecting; onServerReady fires
+    CHECK(onReadyCount == 1);
+    connected = true;
+    s.update(g_inp, g_win); // → Ready
+    CHECK(s.update(g_inp, g_win) == Screen::Flight);
+}
+
+TEST_CASE("LoadingScreen: reset clears startup deadline so new session gets fresh timeout") {
+    using clk = std::chrono::steady_clock;
+    clk::time_point fakeNow = clk::now();
+
+    std::atomic<bool> ready{false};
+    LoadingScreen s(ready, [] { return false; }, [] {});
+    s.setClockOverride([&] { return fakeNow; });
+
+    s.update(g_inp, g_win); // sets start deadline at fakeNow
+
+    fakeNow += std::chrono::seconds(5); // halfway through first session
+    s.reset();                          // clears both deadlines
+
+    // After reset the next update sets a fresh deadline from current fakeNow.
     s.update(g_inp, g_win);
 
-    // Still within timeout — stays Loading.
-    CHECK(s.update(g_inp, g_win) == Screen::Loading);
-
-    // Manually reach past the 10-second deadline by calling update() many times
-    // (real clock; use a tight retry loop — deadline fires in real time which is
-    // unsuitable for a unit test, so we exploit the fact that the deadline check
-    // uses steady_clock::now() and simply verify the Failed→MainMenu path by
-    // constructing a screen whose deadline has already passed via reset() trick).
-    //
-    // Strategy: create a fresh screen, record that Phase::Failed returns MainMenu
-    // after kFailDisplaySeconds (3 s). We test the structural transition via a
-    // screen that starts in Failed state by forcing the deadline to the past.
-    // The screen does not expose a clock override, so just verify buildElements
-    // contains timeout text after the timeout path triggers (integration path
-    // tested in the smoke test; here we verify the message is present on failure).
-    std::atomic<bool> rdy2{true};
-    bool timedOut = false;
-    LoadingScreen s2(
-        rdy2, [] { return false; }, [&timedOut] { timedOut = true; } // onServerReady sets deadline
-    );
-    s2.update(g_inp, g_win); // → Connecting; onServerReady called; deadline set
-
-    // Spin until Failed (real clock — deadline = 10 s; not suitable in CI).
-    // Instead, verify that when m_connectDeadline expires, buildElements contains
-    // "timed out" text. We do this by checking the text after reset():
-    // reset() clears deadline; the Connecting phase won't trip until a new
-    // onServerReady call sets a new deadline. This confirms reset() correctness.
-    s2.reset();
-    auto elems2 = s2.buildElements();
-    // After reset, "remote server" text should NOT appear (isSinglePlayer=true default).
-    bool hasLocal = false;
-    for (const auto& el : elems2)
-        if (el.type == HudElement::Type::Text && el.text.find("local server") != std::string_view::npos)
-            hasLocal = true;
-    CHECK(hasLocal);
+    fakeNow += std::chrono::seconds(6);               // only 6s into NEW deadline (< 10s)
+    CHECK(s.update(g_inp, g_win) == Screen::Loading); // must NOT have timed out
 }
 
 TEST_CASE("LoadingScreen: reset preserves multiplayer messages") {

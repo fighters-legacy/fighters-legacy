@@ -2,7 +2,7 @@
 
 Developer controls for the Fighters Legacy sandbox (zero-content-pack free-flight mode).
 
-The game opens to the main menu. Select **Sandbox (Instant Action)** to start a local server and enter free flight. The loading screen shows progress messages while the server starts; it transitions to flight automatically when connected. Press **Escape** during flight to open the pause menu.
+The game opens to the main menu. Select **Sandbox (Instant Action)** to start a local server and enter free flight. The loading screen shows progress messages while the server starts; it transitions to flight automatically when connected. If the server fails to start within 10 seconds, the loading screen displays "Local server failed to start." and returns to the main menu. Press **Escape** during flight to open the pause menu.
 
 ---
 
@@ -243,4 +243,4 @@ Pass `--connect` to join a remote `fl-server` instead of spawning a local single
 
 To avoid exposing the password in the process listing, use the `FL_OPERATOR_PASSWORD` environment variable instead of the CLI flag. Merge precedence: `--operator-password` CLI arg > `FL_OPERATOR_PASSWORD` env var > `[client].operator_password` in user.toml.
 
-When `--connect` is given the main menu shows **Join Server** instead of **Sandbox (Instant Action)**, and the loading screen displays "Connecting to remote server…". The connection attempt times out after 10 seconds and returns to the main menu if the server is unreachable.
+When `--connect` is given the main menu shows **Join Server** instead of **Sandbox (Instant Action)**, and the loading screen displays "Connecting to remote server…". The connection attempt times out after 10 seconds and returns to the main menu if the server is unreachable. If `fl-server` fails to start in single-player (binary missing, port already in use), the loading screen likewise times out after 10 seconds and returns to the main menu with "Local server failed to start."
