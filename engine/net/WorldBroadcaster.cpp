@@ -87,6 +87,13 @@ void WorldBroadcaster::unbanAddress(const std::string& ip) {
     m_bannedAddresses.erase(fl::normalizeIp(ip));
 }
 
+bool WorldBroadcaster::unlockAdminAuth(const std::string& ip) {
+    std::string norm = fl::normalizeIp(ip);
+    bool wasLocked = m_adminAuthTracker.isLockedOut(norm);
+    m_adminAuthTracker.clearLockout(norm);
+    return wasLocked;
+}
+
 void WorldBroadcaster::setBannedAddresses(std::unordered_set<std::string> addrs) {
     m_bannedAddresses = std::move(addrs);
 }

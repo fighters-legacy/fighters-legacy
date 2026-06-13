@@ -116,6 +116,18 @@ TEST_CASE("AdminConsole: unban with null broadcaster returns error", "[admin_con
     CHECK(out.find("not available") != std::string::npos);
 }
 
+TEST_CASE("AdminConsole: admin_unlock with no args returns usage", "[admin_console]") {
+    auto reg = makeRegistry();
+    std::string out = reg.dispatch("admin_unlock");
+    CHECK(out.find("usage") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: admin_unlock with null broadcaster returns not available", "[admin_console]") {
+    auto reg = makeRegistry();
+    std::string out = reg.dispatch("admin_unlock 1.2.3.4");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
 // ---------------------------------------------------------------------------
 // set_time — range validation
 // ---------------------------------------------------------------------------
@@ -388,6 +400,14 @@ TEST_CASE("AdminConsole async ack: unban IP returns non-empty ack with address",
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("unban 1.2.3.4");
+    CHECK_FALSE(out.empty());
+    CHECK(out.find("1.2.3.4") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole async ack: admin_unlock IP returns non-empty ack", "[admin_console][async_ack]") {
+    AsyncAckFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("admin_unlock 1.2.3.4");
     CHECK_FALSE(out.empty());
     CHECK(out.find("1.2.3.4") != std::string::npos);
 }

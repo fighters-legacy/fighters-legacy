@@ -538,7 +538,7 @@ reset the counter by reconnecting. A successful authentication clears the counte
 
 Per-IP lockout duration in seconds after `admin_auth_max_failures` consecutive wrong passwords.
 During the lockout window, any new connection from the same IP is refused immediately (no
-`MsgHello` sent). The lockout expires automatically; no operator action is required.
+`MsgHello` sent). The lockout expires automatically, or can be cleared immediately via the `admin_unlock` console command.
 
 ---
 
@@ -693,6 +693,7 @@ process.
 | `kick` | `<peerId\|IP>` | Disconnect a peer by numeric ID, or all peers from an IP address |
 | `ban` | `<peerId\|IP>` | Add IP to the ban list and kick matching peers; saves to `banlist_path` if configured |
 | `unban` | `<IP>` | Remove an IP from the ban list; saves to `banlist_path` if configured |
+| `admin_unlock` | `<IP>` | Clear the admin auth lockout for an IP address immediately; prints a warning if the IP was not locked (idempotent) |
 | `set_weather` | `<preset>` | Change weather: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm` |
 | `set_time` | `<0–24>` | Set in-game time of day (float, hours) |
 | `spawn` | `<type> <x> <y> <z>` | Spawn a registered entity type at the given world position |
@@ -762,7 +763,7 @@ accepts connections from any Source Engine RCON client.
   password → the server responds with `id = -1` and closes the connection.
 - **Response splitting:** responses longer than 4086 bytes are split across multiple
   `SERVERDATA_RESPONSE_VALUE` packets (same request id), followed by an empty sentinel packet.
-- **Async commands:** mutation commands (`kick`, `ban`, `unban`, `spawn`, `kill`, `tp`) and the
+- **Async commands:** mutation commands (`kick`, `ban`, `unban`, `admin_unlock`, `spawn`, `kill`, `tp`) and the
   per-peer detail from `peers` return a synchronous acknowledgment string immediately. The actual
   action executes on the next sim tick (~16 ms later); a second `SERVERDATA_RESPONSE_VALUE` packet
   delivers the async confirmation to the RCON client (~20 ms after the initial response, in addition

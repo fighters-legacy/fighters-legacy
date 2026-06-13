@@ -61,6 +61,13 @@ class AuthTracker {
         }
     }
 
+    // Clear the active lockout and failure counter for an IP immediately.
+    // No-op if the IP is not currently locked out (idempotent).
+    void clearLockout(const std::string& ip) {
+        m_lockouts.erase(ip);
+        m_failCount.erase(ip);
+    }
+
     // Inject a deterministic clock for unit tests (mirrors setClockOverride pattern).
     void setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
         m_now = std::move(fn);

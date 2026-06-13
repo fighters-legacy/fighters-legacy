@@ -86,6 +86,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Remove an IP from the ban set (same normalization rules as banAddress).
     void unbanAddress(const std::string& ip);
 
+    // Clear the admin auth lockout for an IP immediately. Normalizes the IP.
+    // Call from the sim thread (via GameLoop::enqueueSimCallback).
+    // Returns true if a lockout was active and was cleared; false if the IP was not locked.
+    bool unlockAdminAuth(const std::string& ip);
+
     // Iterate all connected peers. fn receives (peerId, full "ip:port" address string, EntityId).
     // The address string is copied per entry — safe despite INetwork::getPeerAddress() returning
     // a pointer backed by a single overwrite buffer.

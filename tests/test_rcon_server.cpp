@@ -260,6 +260,32 @@ TEST_CASE("AuthTracker: pruneExpired removes expired entry", "[rcon][auth_tracke
     CHECK_FALSE(tracker.isLockedOut("1.2.3.4"));
 }
 
+TEST_CASE("AuthTracker: clearLockout removes active lockout", "[rcon][auth_tracker]") {
+    fl::AuthTracker tracker(5, 60);
+    for (int i = 0; i < 5; ++i)
+        tracker.recordFailure("1.2.3.4");
+    CHECK(tracker.isLockedOut("1.2.3.4"));
+    tracker.clearLockout("1.2.3.4");
+    CHECK_FALSE(tracker.isLockedOut("1.2.3.4"));
+}
+
+TEST_CASE("AuthTracker: clearLockout clears failure counter", "[rcon][auth_tracker]") {
+    fl::AuthTracker tracker(5, 60);
+    for (int i = 0; i < 4; ++i)
+        tracker.recordFailure("1.2.3.4");
+    tracker.clearLockout("1.2.3.4");
+    // Counter reset to 0; 4 more failures must not trigger lockout
+    for (int i = 0; i < 4; ++i)
+        CHECK_FALSE(tracker.recordFailure("1.2.3.4"));
+    CHECK_FALSE(tracker.isLockedOut("1.2.3.4"));
+}
+
+TEST_CASE("AuthTracker: clearLockout is a no-op when IP is not locked", "[rcon][auth_tracker]") {
+    fl::AuthTracker tracker(5, 60);
+    tracker.clearLockout("1.2.3.4");
+    CHECK_FALSE(tracker.isLockedOut("1.2.3.4"));
+}
+
 // ---------------------------------------------------------------------------
 // parseServerConfig [rcon] section
 // ---------------------------------------------------------------------------

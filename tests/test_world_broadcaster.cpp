@@ -2679,3 +2679,55 @@ TEST_CASE("WorldBroadcaster: admin auth pruneExpired fires after 600 onTick call
     std::memcpy(&hello, net.sends.front().data(), sizeof(hello));
     CHECK(hello.msgId == static_cast<uint8_t>(fl::MsgId::Hello));
 }
+
+TEST_CASE("WorldBroadcaster: admin_unlock clears lockout -- onConnect succeeds", "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    net.peerAddresses[1] = "1.2.3.4:5678";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    auto now = std::chrono::steady_clock::now();
+    setupAuthFixture(broadcaster, net, now);
+
+    // Trigger lockout on peer 0
+    for (int i = 0; i < 3; ++i) {
+        auto pkt = makeAdminCmd("wrongpass", "status");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    }
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+
+    // Unlock: should report that the lockout was active
+    CHECK(broadcaster.unlockAdminAuth("1.2.3.4"));
+
+    // Reconnect from same IP must now succeed
+    broadcaster.onConnect(1u);
+    CHECK(net.disconnectedPeers.empty());
+    REQUIRE(!net.sends.empty());
+    fl::MsgHello hello{};
+    std::memcpy(&hello, net.sends.front().data(), sizeof(hello));
+    CHECK(hello.msgId == static_cast<uint8_t>(fl::MsgId::Hello));
+}
+
+TEST_CASE("WorldBroadcaster: admin_unlock is a no-op when IP is not locked", "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    net.peerAddresses[1] = "1.2.3.4:5678";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    auto now = std::chrono::steady_clock::now();
+    setupAuthFixture(broadcaster, net, now);
+
+    // No failures — unlockAdminAuth must report IP was not locked
+    CHECK_FALSE(broadcaster.unlockAdminAuth("1.2.3.4"));
+
+    // Connect peer 1 from same IP: must not be refused
+    broadcaster.onConnect(1u);
+    CHECK(net.disconnectedPeers.empty());
+}

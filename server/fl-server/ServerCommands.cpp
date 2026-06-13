@@ -301,6 +301,30 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                  return "unban: unbanning IP " + ip;
                              });
 
+    // admin_unlock <IP>
+    registry.registerCommand("admin_unlock", "admin_unlock <IP>  -- clear the admin auth lockout for an IP address",
+                             [ctx](std::span<std::string_view> args) -> std::string {
+                                 if (args.empty())
+                                     return "usage: admin_unlock <IP>";
+                                 if (!ctx.broadcaster || !ctx.gameLoop)
+                                     return "admin_unlock: not available";
+                                 std::string ip = normalizeIp(args[0]);
+                                 ctx.gameLoop->enqueueSimCallback([ctx, ip]() {
+                                     bool wasLocked = ctx.broadcaster->unlockAdminAuth(ip);
+                                     char m[128];
+                                     if (wasLocked)
+                                         std::snprintf(m, sizeof(m), "[admin] unlocked %s", ip.c_str());
+                                     else
+                                         std::snprintf(m, sizeof(m), "[admin] admin_unlock: %s was not locked",
+                                                       ip.c_str());
+                                     std::printf("%s\n", m);
+                                     if (ctx.shell)
+                                         ctx.shell->print(m);
+                                     std::fflush(stdout);
+                                 });
+                                 return "admin_unlock: queued for " + ip;
+                             });
+
     // set_weather <preset>
     registry.registerCommand(
         "set_weather", "set_weather <clear|partly_cloudy|overcast|rain|storm>  -- change weather preset",
