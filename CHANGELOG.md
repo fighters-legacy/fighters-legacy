@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **network**: `admin_unlock <IP>` now also clears the RCON channel auth lockout for the same IP in addition to the admin-command channel lockout; closes #335
 - **game**: `LocalServer::start()` now returns a `StartResult` enum (`Ok`, `SpawnFailed`, `BindFailed`, `Timeout`) instead of `bool`; `LoadingScreen` shows a specific failure reason ("Server binary not found.", "Port already in use.", "Server startup timed out.") immediately when the server thread signals failure rather than waiting for the 10-second startup timeout; closes #333
 
 ### Added

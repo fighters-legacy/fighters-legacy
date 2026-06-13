@@ -58,6 +58,7 @@ static void rconSetNonBlocking(RconSocket s) {
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -173,6 +174,7 @@ struct RconServer::Impl {
     std::atomic<bool> m_running{false};
     std::thread m_thread;
     RconSocket m_listenSock = kInvalidSocket;
+    std::mutex m_authTrackerMutex;
     fl::AuthTracker m_authTracker;
 
     Impl(const CommandRegistry& reg, const ServerConfig::RconConfig& cfg, ILogger& log, CommandShell* shell)
@@ -252,7 +254,10 @@ void RconServer::Impl::ioLoop() {
             }
         }
         if (ready == 0) {
-            m_authTracker.pruneExpired();
+            {
+                std::lock_guard<std::mutex> lk(m_authTrackerMutex);
+                m_authTracker.pruneExpired();
+            }
             continue; // timeout — loop back and check m_running
         }
 
@@ -268,7 +273,12 @@ void RconServer::Impl::ioLoop() {
                 inet_ntop(AF_INET, &sin->sin_addr, ipBuf, sizeof(ipBuf));
                 std::string peerIp(ipBuf);
 
-                if (m_authTracker.isLockedOut(peerIp)) {
+                bool lockedOut;
+                {
+                    std::lock_guard<std::mutex> lk(m_authTrackerMutex);
+                    lockedOut = m_authTracker.isLockedOut(peerIp);
+                }
+                if (lockedOut) {
                     // Reject before consuming a slot: AUTH_RESPONSE id=-1 then close.
                     auto pkt = rcon::encodePacket(-1, rcon::kTypeAuthResponse, "");
                     send(clientFd, reinterpret_cast<const char*>(pkt.data()), static_cast<int>(pkt.size()), 0);
@@ -359,7 +369,10 @@ void RconServer::Impl::ioLoop() {
                     bool ok = m_cfg.password.empty() || (pkt.body == m_cfg.password);
                     if (ok) {
                         c.authState = Auth::Authenticated;
-                        m_authTracker.recordSuccess(c.address);
+                        {
+                            std::lock_guard<std::mutex> lk(m_authTrackerMutex);
+                            m_authTracker.recordSuccess(c.address);
+                        }
                         // Send empty RESPONSE_VALUE first (Valve convention), then AUTH_RESPONSE.
                         if (!queueSend(c, rcon::encodePacket(pkt.id, rcon::kTypeResponseValue, ""))) {
                             closeClient = true;
@@ -374,7 +387,12 @@ void RconServer::Impl::ioLoop() {
                         queueSend(c, rcon::encodePacket(pkt.id, rcon::kTypeResponseValue, ""));
                         queueSend(c, rcon::encodePacket(-1, rcon::kTypeAuthResponse, ""));
                         // Record failure; log if IP is now locked out.
-                        if (m_authTracker.recordFailure(c.address))
+                        bool nowLocked;
+                        {
+                            std::lock_guard<std::mutex> lk(m_authTrackerMutex);
+                            nowLocked = m_authTracker.recordFailure(c.address);
+                        }
+                        if (nowLocked)
                             m_log.log(LogLevel::Warn, __FILE__, __LINE__,
                                       "RCON: IP locked out after repeated auth failures");
                         // Close after send; mark for cleanup.
@@ -516,4 +534,13 @@ void RconServer::stop() {
 
     if (m_impl->m_thread.joinable())
         m_impl->m_thread.join();
+}
+
+bool RconServer::clearLockout(const std::string& ip) {
+    if (!m_impl)
+        return false;
+    std::lock_guard<std::mutex> lock(m_impl->m_authTrackerMutex);
+    bool wasLocked = m_impl->m_authTracker.isLockedOut(ip);
+    m_impl->m_authTracker.clearLockout(ip);
+    return wasLocked;
 }

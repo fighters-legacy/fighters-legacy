@@ -538,7 +538,7 @@ reset the counter by reconnecting. A successful authentication clears the counte
 
 Per-IP lockout duration in seconds after `admin_auth_max_failures` consecutive wrong passwords.
 During the lockout window, any new connection from the same IP is refused immediately (no
-`MsgHello` sent). The lockout expires automatically, can be inspected with `admin_auth_status`, or cleared immediately with `admin_unlock`.
+`MsgHello` sent). The lockout expires automatically, can be inspected with `admin_auth_status`, or cleared immediately with `admin_unlock` (which also clears the RCON channel lockout for the same IP when RCON is enabled).
 
 ---
 
@@ -648,6 +648,8 @@ Out-of-range values are ignored and the default is kept (a warning is logged).
   receive an immediate `AUTH_RESPONSE id=-1` and are closed before any packets are processed.
 - Command responses longer than 4086 bytes are split across multiple `SERVERDATA_RESPONSE_VALUE`
   packets per the Source Engine RCON specification, followed by an empty sentinel packet.
+- The RCON lockout TTL expires automatically; use `admin_unlock <IP>` from the admin console
+  or stdin to clear it early without waiting.
 - Async-mutating commands (`kick`, `ban`, `unban`, `tp`, `spawn`, `kill`) return a
   synchronous acknowledgement string immediately. The actual action executes on the next sim
   tick (~16 ms later); confirmation also appears on fl-server stdout and is sent to the RCON
@@ -695,7 +697,7 @@ process.
 | `kick` | `<peerId\|IP>` | Disconnect a peer by numeric ID, or all peers from an IP address |
 | `ban` | `<peerId\|IP>` | Add IP to the ban list and kick matching peers; saves to `banlist_path` if configured |
 | `unban` | `<IP>` | Remove an IP from the ban list; saves to `banlist_path` if configured |
-| `admin_unlock` | `<IP>` | Clear the admin auth lockout for an IP address immediately; prints a warning if the IP was not locked (idempotent) |
+| `admin_unlock` | `<IP>` | Clear the admin auth and RCON auth lockouts for an IP address immediately; prints a warning if neither channel was locked (idempotent) |
 | `admin_auth_status` | — | Show per-IP admin auth lockout state and pending failure counts |
 | `set_weather` | `<preset>` | Change weather: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm` |
 | `set_time` | `<0–24>` | Set in-game time of day (float, hours) |

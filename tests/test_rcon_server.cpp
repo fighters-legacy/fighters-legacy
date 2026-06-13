@@ -287,6 +287,18 @@ TEST_CASE("AuthTracker: clearLockout is a no-op when IP is not locked", "[rcon][
     CHECK_FALSE(tracker.isLockedOut("1.2.3.4"));
 }
 
+TEST_CASE("RconServer: clearLockout returns false for non-locked IP and does not crash", "[rcon]") {
+    MockLogger log;
+    CommandRegistry reg;
+    ServerConfig::RconConfig cfg{};
+    cfg.maxAuthFailures = 5;
+    cfg.lockoutSeconds = 60;
+    RconServer srv(reg, cfg, log);
+    // start() not called — no sockets opened. Impl is constructed; clearLockout
+    // exercises the pimpl forwarding + mutex path without network infrastructure.
+    CHECK_FALSE(srv.clearLockout("1.2.3.4"));
+}
+
 TEST_CASE("AuthTracker: lockedOutCount returns 0 initially", "[rcon][auth_tracker]") {
     fl::AuthTracker tracker(5, 60);
     CHECK(tracker.lockedOutCount() == 0);
