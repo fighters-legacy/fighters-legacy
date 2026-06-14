@@ -8,6 +8,7 @@
 #include "entity/EntityDef.h"
 #include "entity/EntityTypeRegistry.h"
 #include "net/GameProtocol.h"
+#include "net/WireCodec.h"
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
 #include "weather/WeatherController.h"
@@ -36,10 +37,9 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
     const uint8_t msgId = *static_cast<const uint8_t*>(data);
 
     if (msgId == static_cast<uint8_t>(fl::MsgId::Hello)) {
-        if (size < sizeof(fl::MsgHello))
-            return;
         fl::MsgHello hello;
-        std::memcpy(&hello, data, sizeof(hello));
+        if (!fl::readMsg(data, size, hello))
+            return;
         if (hello.protocolVersion != fl::kProtocolVersion) {
             logger.log(LogLevel::Error, __FILE__, __LINE__, "server protocol version mismatch — disconnecting");
             if (connectFailMsg) {
@@ -53,19 +53,17 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
     }
 
     if (msgId == static_cast<uint8_t>(fl::MsgId::ConnectAck)) {
-        if (size < sizeof(fl::MsgConnectAck))
-            return;
         fl::MsgConnectAck ack;
-        std::memcpy(&ack, data, sizeof(ack));
+        if (!fl::readMsg(data, size, ack))
+            return;
         assignedEntityIdx = ack.assignedEntityIdx;
         assignedEntityGen = ack.assignedEntityGen;
-        const uint8_t* typeData = static_cast<const uint8_t*>(data) + sizeof(ack);
+        std::size_t off = sizeof(ack);
         for (uint16_t i = 0; i < ack.typeCount; ++i) {
-            if ((typeData - static_cast<const uint8_t*>(data)) + sizeof(fl::MsgEntityTypeDef) > size)
-                break;
             fl::MsgEntityTypeDef td;
-            std::memcpy(&td, typeData, sizeof(td));
-            typeData += sizeof(td);
+            if (!fl::readRecordAt(data, size, off, td))
+                break;
+            off += sizeof(td);
             if (registry.findById(td.id))
                 continue; // already registered
             fl::EntityDef def;
@@ -76,22 +74,20 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             registry.registerType(std::move(def));
         }
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::WorldSnapshot)) {
-        if (size < sizeof(fl::MsgWorldSnapshotHeader))
-            return;
         fl::MsgWorldSnapshotHeader hdr;
-        std::memcpy(&hdr, data, sizeof(hdr));
-        const std::size_t expected = sizeof(fl::MsgWorldSnapshotHeader) + hdr.entityCount * sizeof(fl::MsgEntityEntry);
-        if (size < expected)
+        if (!fl::readMsg(data, size, hdr))
             return;
 
         fl::RenderSnapshot snap;
         snap.tickIndex = hdr.tickIndex;
         snap.entries.reserve(hdr.entityCount);
 
-        const uint8_t* entryData = static_cast<const uint8_t*>(data) + sizeof(hdr);
+        std::size_t off = sizeof(hdr);
         for (uint16_t i = 0; i < hdr.entityCount; ++i) {
             fl::MsgEntityEntry e;
-            std::memcpy(&e, entryData + i * sizeof(e), sizeof(e));
+            if (!fl::readRecordAt(data, size, off, e))
+                break;
+            off += sizeof(e);
 
             fl::EntityRenderEntry re;
             re.entityIdx = e.entityIdx;
@@ -116,10 +112,9 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         bridge.publishExternal(std::move(snap));
         tickAlpha.markNewTick();
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::WeatherState)) {
-        if (size < sizeof(fl::MsgWeatherState))
-            return;
         fl::MsgWeatherState ws;
-        std::memcpy(&ws, data, sizeof(ws));
+        if (!fl::readMsg(data, size, ws))
+            return;
         float tod = static_cast<float>(ws.timeOfDayTenths) / 10.f;
         env.fogDensity = ws.fogDensity;
         env.fogStartDist = ws.fogStartDist;
@@ -128,10 +123,9 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         env.windX = ws.windX;
         env.windZ = ws.windZ;
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::ServerNotice)) {
-        if (size < sizeof(fl::MsgServerNotice))
-            return;
         fl::MsgServerNotice sn;
-        std::memcpy(&sn, data, sizeof(sn));
+        if (!fl::readMsg(data, size, sn))
+            return;
         sn.text[59] = '\0';
         char noticeBuf[72];
         std::snprintf(noticeBuf, sizeof(noticeBuf), "[server] %s", sn.text);
@@ -140,21 +134,20 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         if (notice)
             notice->setNotice(noticeBuf, sn.secondsRemaining);
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::AdminResponse)) {
-        if (size < sizeof(fl::MsgAdminResponse))
-            return;
         fl::MsgAdminResponse resp;
-        std::memcpy(&resp, data, sizeof(resp));
+        if (!fl::readMsg(data, size, resp))
+            return;
         resp.text[sizeof(resp.text) - 1] = '\0';
         if (console && resp.text[0] != '\0')
             console->print(std::string("[admin] ") + resp.text);
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::Motd)) {
-        if (size < 4)
+        fl::MsgMotdHeader mh;
+        if (!fl::readMsg(data, size, mh))
             return;
-        uint16_t wireSecs = 0;
-        std::memcpy(&wireSecs, static_cast<const uint8_t*>(data) + 1, sizeof(wireSecs));
-        const uint32_t effectiveSecs = wireSecs > 0 ? static_cast<uint32_t>(wireSecs) : motdDisplaySeconds;
-        const std::size_t textLen = std::min(size - 3, fl::kMaxMotdBytes);
-        std::string text(static_cast<const char*>(data) + 3, textLen);
+        const uint32_t effectiveSecs =
+            mh.displaySeconds > 0 ? static_cast<uint32_t>(mh.displaySeconds) : motdDisplaySeconds;
+        const std::size_t textLen = std::min(size - sizeof(mh), fl::kMaxMotdBytes);
+        std::string text(static_cast<const char*>(data) + sizeof(mh), textLen);
         while (!text.empty() && text.back() == '\0')
             text.pop_back();
         std::istringstream stream(text);
@@ -173,10 +166,9 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             first = false;
         }
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::ConnectRefusal)) {
-        if (size < sizeof(fl::MsgConnectRefusal) || !connectFailMsg)
-            return;
         fl::MsgConnectRefusal ref{};
-        std::memcpy(&ref, data, sizeof(ref));
+        if (!fl::readMsg(data, size, ref) || !connectFailMsg)
+            return;
         ref.reason[sizeof(ref.reason) - 1] = '\0';
         std::memcpy(m_connectRefusalReason, ref.reason, sizeof(ref.reason));
         m_connectRefusalReason[sizeof(m_connectRefusalReason) - 1] = '\0';

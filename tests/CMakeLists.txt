@@ -308,6 +308,10 @@ add_executable(test_game_protocol test_game_protocol.cpp)
 target_link_libraries(test_game_protocol PRIVATE Catch2::Catch2WithMain engine-net engine-weather)
 catch_discover_tests(test_game_protocol)
 
+add_executable(test_wire_codec test_wire_codec.cpp)
+target_link_libraries(test_wire_codec PRIVATE Catch2::Catch2WithMain engine-net)
+catch_discover_tests(test_wire_codec)
+
 add_executable(test_performance_overlay test_performance_overlay.cpp)
 target_link_libraries(test_performance_overlay PRIVATE Catch2::Catch2WithMain engine-perf)
 catch_discover_tests(test_performance_overlay)

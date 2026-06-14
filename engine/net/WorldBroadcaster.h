@@ -2,6 +2,7 @@
 #pragma once
 
 #include "AuthTracker.h"
+#include "GameProtocol.h"
 #include "INetwork.h"
 #include "entity/EntityId.h"
 #include "loop/ISimUpdate.h"
@@ -188,7 +189,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
   private:
     void sendConnectAck(uint32_t peerId, EntityId assigned);
-    void sendConnectRefusal(uint32_t peerId, const char* reason);
+    void sendConnectRefusal(uint32_t peerId, ConnectRefusalCode code, const char* reason);
     void stepFlightSim(FlightIntegrator& fi, EntityState& state, const PeerInputState& inp, double simDt);
     void broadcastShutdownNotice(uint16_t secsLeft, const char* text);
     static std::string makeShutdownMessage(uint32_t secsLeft, const std::string& reason = "");

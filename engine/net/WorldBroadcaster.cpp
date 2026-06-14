@@ -11,6 +11,7 @@
 #include "flight/FlightIntegrator.h"
 #include "net/GameProtocol.h"
 #include "net/NetworkUtils.h"
+#include "net/WireCodec.h"
 #include "weather/WeatherController.h"
 
 #include <algorithm>
@@ -248,7 +249,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     hdr.tickIndex = tickIndex;
 
     const std::size_t hdrOffset = buf.size();
-    buf.resize(buf.size() + sizeof(MsgWorldSnapshotHeader));
+    appendMsg(buf, hdr); // placeholder; entityCount patched in after iteration
 
     uint16_t count = 0;
     m_entityManager.forEach([&](const EntityState& state) {
@@ -276,13 +277,12 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         if (static_cast<uint8_t>(state.damageLevel) >= 2u)
             entry.engineFailFlags |= fl::kEngineFailGeneric;
 
-        buf.resize(buf.size() + sizeof(MsgEntityEntry));
-        std::memcpy(buf.data() + buf.size() - sizeof(MsgEntityEntry), &entry, sizeof(entry));
+        appendMsg(buf, entry);
         ++count;
     });
 
     hdr.entityCount = count;
-    std::memcpy(buf.data() + hdrOffset, &hdr, sizeof(hdr));
+    writeMsgAt(buf, hdrOffset, hdr);
 
     m_net.broadcast(buf.data(), buf.size(), /*reliable=*/false);
 
@@ -335,7 +335,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         char msg[128];
         std::snprintf(msg, sizeof(msg), "peer %u from %s is banned — disconnecting", peerId, ip.c_str());
         m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
-        sendConnectRefusal(peerId, "You are banned from this server.");
+        sendConnectRefusal(peerId, ConnectRefusalCode::Banned, "You are banned from this server.");
         m_net.disconnectPeer(peerId);
         return;
     }
@@ -345,7 +345,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         char msg[128];
         std::snprintf(msg, sizeof(msg), "peer %u from %s not on allowlist — disconnecting", peerId, ip.c_str());
         m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
-        sendConnectRefusal(peerId, "Access denied.");
+        sendConnectRefusal(peerId, ConnectRefusalCode::AccessDenied, "Access denied.");
         m_net.disconnectPeer(peerId);
         return;
     }
@@ -362,7 +362,8 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
             char msg[128];
             std::snprintf(msg, sizeof(msg), "peer %u from %s rate-limited — disconnecting", peerId, ip.c_str());
             m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
-            sendConnectRefusal(peerId, "Connection rate limit exceeded. Try again later.");
+            sendConnectRefusal(peerId, ConnectRefusalCode::RateLimited,
+                               "Connection rate limit exceeded. Try again later.");
             m_net.disconnectPeer(peerId);
             return;
         }
@@ -379,7 +380,8 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
             std::snprintf(msg, sizeof(msg), "peer %u from %s exceeds per-IP connection limit (%d) -- disconnecting",
                           peerId, ip.c_str(), m_maxConnectionsPerIp);
             m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
-            sendConnectRefusal(peerId, "Too many connections from your address.");
+            sendConnectRefusal(peerId, ConnectRefusalCode::TooManyConnections,
+                               "Too many connections from your address.");
             m_net.disconnectPeer(peerId);
             return;
         }
@@ -391,7 +393,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         std::snprintf(msg, sizeof(msg), "peer %u from %s: connection refused — admin auth lockout active", peerId,
                       ip.c_str());
         m_logger.log(LogLevel::Warn, __FILE__, __LINE__, msg);
-        sendConnectRefusal(peerId, "Access denied.");
+        sendConnectRefusal(peerId, ConnectRefusalCode::AdminLockout, "Access denied.");
         m_net.disconnectPeer(peerId);
         return;
     }
@@ -426,11 +428,13 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     sendConnectAck(peerId, id);
     if (!m_motd.empty()) {
         const std::size_t textLen = std::min(m_motd.size(), kMaxMotdBytes);
-        std::vector<uint8_t> pkt(3 + textLen + 1, 0u);
-        pkt[0] = static_cast<uint8_t>(MsgId::Motd);
-        std::memcpy(pkt.data() + 1, &m_motdDisplaySeconds, sizeof(m_motdDisplaySeconds));
-        std::memcpy(pkt.data() + 3, m_motd.c_str(), textLen);
-        // pkt[3 + textLen] == 0 (NUL terminator, from vector initialisation)
+        MsgMotdHeader mhdr{};
+        mhdr.displaySeconds = m_motdDisplaySeconds;
+        std::vector<uint8_t> pkt;
+        pkt.reserve(sizeof(MsgMotdHeader) + textLen + 1);
+        appendMsg(pkt, mhdr);
+        pkt.insert(pkt.end(), m_motd.c_str(), m_motd.c_str() + textLen);
+        pkt.push_back(0u); // NUL terminator
         m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/true);
     }
     m_activePeerCount.fetch_add(1, std::memory_order_relaxed);
@@ -634,8 +638,7 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned) {
     ack.typeCount = static_cast<uint16_t>(typeCount);
     ack.assignedEntityIdx = assigned.index;
     ack.assignedEntityGen = assigned.generation;
-    buf.resize(sizeof(MsgConnectAck));
-    std::memcpy(buf.data(), &ack, sizeof(ack));
+    appendMsg(buf, ack);
 
     for (uint32_t i = 0; i < typeCount; ++i) {
         const EntityDef* def = m_registry.byIndex(i);
@@ -647,15 +650,15 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned) {
         std::snprintf(typeDef.mesh, sizeof(typeDef.mesh), "%s", def->mesh.c_str());
         std::snprintf(typeDef.dmgMesh, sizeof(typeDef.dmgMesh), "%s", def->classicDamageMesh.c_str());
 
-        buf.resize(buf.size() + sizeof(MsgEntityTypeDef));
-        std::memcpy(buf.data() + buf.size() - sizeof(MsgEntityTypeDef), &typeDef, sizeof(typeDef));
+        appendMsg(buf, typeDef);
     }
 
     m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/true);
 }
 
-void WorldBroadcaster::sendConnectRefusal(uint32_t peerId, const char* reason) {
+void WorldBroadcaster::sendConnectRefusal(uint32_t peerId, ConnectRefusalCode code, const char* reason) {
     MsgConnectRefusal msg{};
+    msg.code = static_cast<uint8_t>(code);
     std::snprintf(msg.reason, sizeof(msg.reason), "%s", reason);
     m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
 }

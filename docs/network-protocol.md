@@ -30,17 +30,27 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 |-------|-------|-----------|---------|------|---------|
 | `Hello` | `0x00` | server→client | reliable | 4 bytes | Protocol version handshake; first message on every new connection |
 | `ConnectAck` | `0x01` | server→client | reliable | 12 + N×196 bytes | Handshake on connect; assigns entity slot and delivers type registry |
-| `WorldSnapshot` | `0x02` | server→client | unreliable | 12 + N×70 bytes | Per-tick entity state broadcast |
-| `ClientInput` | `0x03` | client→server | reliable | 44 bytes | Per-frame flight inputs |
+| `WorldSnapshot` | `0x02` | server→client | unreliable | 16 + N×72 bytes | Per-tick entity state broadcast |
+| `ClientInput` | `0x03` | client→server | reliable | 48 bytes | Per-frame flight inputs |
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
 | `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
 | `AdminCommand` | `0x06` | client→server | reliable | 128 bytes | Operator-authenticated admin command. Additive ID — old servers silently discard. |
 | `AdminResponse` | `0x07` | server→client | reliable | 128 bytes | Command result text, unicast to the requesting peer. Additive ID — old clients silently discard. |
-| `Motd` | `0x08` | server→client | reliable | 2 + len(text) bytes | MOTD delivered once per connection after `MsgConnectAck`; variable-length. Additive ID — old clients silently discard. |
+| `Motd` | `0x08` | server→client | reliable | 4 + len(text) bytes | MOTD delivered once per connection after `MsgConnectAck`; variable-length. Additive ID — old clients silently discard. |
 | `ConnectRefusal` | `0x09` | server→client | reliable | 64 bytes | Rejection reason sent before `disconnectPeer()` on every `onConnect` rejection (ban, allowlist, rate-limit, per-IP limit, admin auth lockout). Additive ID — old clients silently discard and fall back to the generic "Connection refused by server." message. |
 | `LanBeacon` | `0x10` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast |
 
 ## Struct Definitions
+
+> **Layout & versioning (primary development).** Wire structs are **unpacked** and laid out for
+> natural field alignment — fields ordered large→small with explicit `reserved` padding, and array
+> records padded to a multiple of their alignment so the i-th record stays aligned. Using only
+> fixed-width types makes the layout byte-identical across MSVC/GCC/Clang, and `static_assert`s on
+> `sizeof`/`offsetof`/`alignof` lock it. A naturally-aligned received buffer may therefore be read in
+> place via `fl::viewMsg` (zero-copy); `fl::readMsg` (`memcpy`) is the portable default. The wire
+> format may change freely while `kProtocolVersion` stays at **1** — the client always runs the
+> same-tree server in primary development. The version field only begins to bind at the Phase 6
+> public-release freeze.
 
 ### MsgHello — 4 bytes
 
@@ -52,7 +62,7 @@ message and waits for `MsgConnectAck`.
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
 | 0 | 1 | `msgId` | `uint8_t` | `0x00` |
-| 1 | 1 | `_pad` | `uint8_t` | Reserved, always 0 |
+| 1 | 1 | `reserved` | `uint8_t` | Reserved, always 0 |
 | 2 | 2 | `protocolVersion` | `uint16_t` | Server's `kProtocolVersion`; client disconnects if this != its own `kProtocolVersion` |
 
 ### MsgConnectAck — 12 bytes
@@ -79,40 +89,45 @@ Appended N times after `MsgConnectAck` (one per registered entity type).
 | 68 | 64 | `mesh[64]` | `char[64]` | Null-terminated mesh asset name; empty = builtin tetrahedron |
 | 132 | 64 | `dmgMesh[64]` | `char[64]` | Null-terminated damage mesh; empty = none |
 
-### MsgWorldSnapshotHeader — 12 bytes
+### MsgWorldSnapshotHeader — 16 bytes
 
 Broadcast unreliably every sim tick (channel 1), immediately followed by
-`entityCount` × `MsgEntityEntry` records.
+`entityCount` × `MsgEntityEntry` records. Sized to 16 (a multiple of 8) so each trailing
+`MsgEntityEntry` stays 8-aligned for in-place reads.
 
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
 | 0 | 1 | `msgId` | `uint8_t` | `0x02` |
 | 1 | 1 | `protocolVersion` | `uint8_t` | Server's `kProtocolVersion`; defense-in-depth echo — per-packet version stamp |
 | 2 | 2 | `entityCount` | `uint16_t` | Number of `MsgEntityEntry` records that follow |
-| 4 | 8 | `tickIndex` | `uint64_t` | Monotonically increasing server tick counter; at wire offset 4 (4-byte aligned, not 8-byte aligned) — **always use `memcpy`**; ARM64 (Linux arm64, Apple Silicon macOS) will SIGBUS on a direct pointer dereference; x86-64 handles it in hardware but UBSAN catches it |
+| 4 | 4 | `reserved` | `uint32_t` | Padding so `tickIndex` is 8-aligned; always 0 |
+| 8 | 8 | `tickIndex` | `uint64_t` | Monotonically increasing server tick counter (naturally 8-aligned) |
 
-### MsgEntityEntry — 70 bytes
+### MsgEntityEntry — 72 bytes
 
-Per-entity state appended N times after `MsgWorldSnapshotHeader`.
+Per-entity state appended N times after `MsgWorldSnapshotHeader`. Laid out large→small (`pos` first,
+8-aligned) and padded to 72 (a multiple of 8) so record `i` at `16 + i×72` stays 8-aligned.
 
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
-| 0 | 4 | `entityIdx` | `uint32_t` | Pool slot index |
-| 4 | 4 | `entityGen` | `uint32_t` | Generation counter (stale-handle detection) |
-| 8 | 4 | `typeIndex` | `uint32_t` | Index into entity type registry |
-| 12 | 24 | `pos[3]` | `double[3]` | World position XYZ (metres); double for planet-scale precision; at wire offset 12 (4-byte aligned, not 8-byte aligned) — **always use `memcpy`**; ARM64 (Linux arm64, Apple Silicon macOS) will SIGBUS on a direct pointer dereference; x86-64 handles it in hardware but UBSAN catches it |
-| 36 | 12 | `vel[3]` | `float[3]` | World velocity XYZ (m/s), used for dead-reckoning |
-| 48 | 16 | `ori[4]` | `float[4]` | Orientation quaternion **`[x, y, z, w]`** wire order; GLM constructor is `(w, x, y, z)` |
+| 0 | 24 | `pos[3]` | `double[3]` | World position XYZ (metres); double for planet-scale precision; 8-aligned |
+| 24 | 12 | `vel[3]` | `float[3]` | World velocity XYZ (m/s), used for dead-reckoning |
+| 36 | 16 | `ori[4]` | `float[4]` | Orientation quaternion **`[x, y, z, w]`** wire order; GLM constructor is `(w, x, y, z)` |
+| 52 | 4 | `entityIdx` | `uint32_t` | Pool slot index |
+| 56 | 4 | `entityGen` | `uint32_t` | Generation counter (stale-handle detection) |
+| 60 | 4 | `typeIndex` | `uint32_t` | Index into entity type registry |
 | 64 | 1 | `damageLevel` | `uint8_t` | 0=Intact, 1=Minor, 2=Severe, 3=Critical |
 | 65 | 1 | `flags` | `uint8_t` | Bit 0 = playerOwned |
 | 66 | 1 | `throttle` | `uint8_t` | Actual throttle [0, 100] = 0%–100% (`FlightState::throttle_actual × 100`); 0 for non-player entities |
 | 67 | 1 | `fuelPct` | `uint8_t` | Fuel remaining [0, 100] = 0%–100% of max fuel; 0 for non-player entities |
-| 68 | 1 | `abEngaged` | `uint8_t` | `1` when afterburner physically lit (`FlightState::ab_engaged`); `0` for aircraft with no afterburner table or when AB not commanded; additive field — old clients discard |
-| 69 | 1 | `engineFailFlags` | `uint8_t` | Engine failure bitmask: bit `0x01` = generic thrust impairment (`damageLevel ≥ Heavy`); bit `0x02` = left-engine failure (Phase 6+); bit `0x04` = right-engine failure (Phase 6+); bit `0x08` = compressor stall (Phase 6+); bit `0x10` = flameout (Phase 6+); additive field — old clients discard |
+| 68 | 1 | `abEngaged` | `uint8_t` | `1` when afterburner physically lit (`FlightState::ab_engaged`); `0` otherwise |
+| 69 | 1 | `engineFailFlags` | `uint8_t` | Engine failure bitmask: bit `0x01` = generic thrust impairment (`damageLevel ≥ Heavy`); bit `0x02` = left-engine failure (Phase 6+); bit `0x04` = right-engine failure (Phase 6+); bit `0x08` = compressor stall (Phase 6+); bit `0x10` = flameout (Phase 6+) |
+| 70 | 2 | `reserved[2]` | `uint8_t[2]` | Padding to 72 (multiple of 8); always 0 |
 
-### MsgClientInput — 44 bytes
+### MsgClientInput — 48 bytes
 
-Sent by the client each render frame on the reliable channel (channel 0).
+Sent by the client each render frame on the reliable channel (channel 0). Padded to 48 (a multiple
+of 8) for the 8-aligned `tickIndex`.
 
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
@@ -126,9 +141,10 @@ Sent by the client each render frame on the reliable channel (channel 0).
 | 24 | 4 | `aileron` | `float` | `[-1.0, +1.0]` right-roll positive |
 | 28 | 4 | `rudder` | `float` | `[-1.0, +1.0]` right-yaw positive |
 | 32 | 12 | `viewAxis[3]` | `float[3]` | Normalized camera look direction (world space) |
+| 44 | 4 | `reserved[4]` | `uint8_t[4]` | Padding to 48; always 0 |
 
 The server clamps all control surface inputs to their valid ranges and normalises
-`viewAxis` to unit length. Packets smaller than 44 bytes are silently discarded.
+`viewAxis` to unit length. Packets smaller than 48 bytes are silently discarded.
 
 ### MsgWeatherState — 20 bytes
 
@@ -166,7 +182,7 @@ null-terminated UTF-8 (maximum 60 bytes including the NUL terminator); always re
 | Offset | Size | Field | Type | Notes |
 |---|---|---|---|---|
 | 0 | 1 | `msgId` | `uint8_t` | `0x05` |
-| 1 | 1 | `_pad` | `uint8_t` | reserved, always 0 |
+| 1 | 1 | `reserved` | `uint8_t` | reserved, always 0 |
 | 2 | 2 | `secondsRemaining` | `uint16_t` | seconds until shutdown; 0 = shutting down now |
 | 4 | 60 | `text` | `char[60]` | null-terminated UTF-8 operator message |
 
@@ -203,7 +219,7 @@ or behind a VPN. Passwords longer than 29 characters are silently truncated by t
 | Offset | Size | Field | Type | Notes |
 |---|---|---|---|---|
 | 0 | 1 | `msgId` | `uint8_t` | `0x06` |
-| 1 | 1 | `_pad` | `uint8_t` | reserved, always 0 |
+| 1 | 1 | `reserved` | `uint8_t` | reserved, always 0 |
 | 2 | 30 | `token` | `char[30]` | null-terminated operator password; 29 usable chars |
 | 32 | 96 | `command` | `char[96]` | null-terminated command text; 95 usable chars |
 
@@ -222,7 +238,7 @@ The `text` field is null-terminated UTF-8; guaranteed within 125 bytes by the se
 | Offset | Size | Field | Type | Notes |
 |---|---|---|---|---|
 | 0 | 1 | `msgId` | `uint8_t` | `0x07` |
-| 1 | 1 | `_pad` | `uint8_t` | reserved, always 0 |
+| 1 | 1 | `reserved` | `uint8_t` | reserved, always 0 |
 | 2 | 126 | `text` | `char[126]` | null-terminated UTF-8 response; 125 usable chars |
 
 **Known limitation:** response text is capped at 125 characters. Commands with long output
@@ -231,7 +247,8 @@ The `text` field is null-terminated UTF-8; guaranteed within 125 bytes by the se
 ### MsgMotd — variable length
 
 Reliable, server→client unicast. Sent once per connection immediately after `MsgConnectAck`,
-only when `[server].motd` is non-empty in `server.toml`. Requires `kProtocolVersion = 2`.
+only when `[server].motd` is non-empty in `server.toml`. The 4-byte `MsgMotdHeader` is followed by
+the null-terminated text payload at offset 4.
 
 The text is null-terminated UTF-8; the server caps the payload at `kMaxMotdBytes = 65535`
 usable characters. Multi-line MOTDs use `\n` or `\r\n` line endings — the client splits on
@@ -245,10 +262,11 @@ visible. `displaySeconds = 0` means the client uses its own `[client].motd_displ
 | Offset | Size | Field | Type | Notes |
 |---|---|---|---|---|
 | 0 | 1 | `msgId` | `uint8_t` | `0x08` |
-| 1 | 2 | `displaySeconds` | `uint16_t` | banner duration (s); 0 = use client's `motd_display_s`; little-endian |
-| 3 | ≤ 65535 | `text` | `char[]` | null-terminated UTF-8 MOTD; server caps at `kMaxMotdBytes` usable chars |
+| 1 | 1 | `reserved` | `uint8_t` | Reserved, always 0 |
+| 2 | 2 | `displaySeconds` | `uint16_t` | banner duration (s); 0 = use client's `motd_display_s`; little-endian |
+| 4 | ≤ 65535 | `text` | `char[]` | null-terminated UTF-8 MOTD; server caps at `kMaxMotdBytes` usable chars |
 
-Packet size = `3 + strlen(text) + 1`. The packet has no fixed trailing padding; ENet
+Packet size = `4 + strlen(text) + 1`. The packet has no fixed trailing padding; ENet
 fragments automatically if the text exceeds the MTU.
 
 `MsgId::Motd = 0x08` is an additive message ID — clients that do not recognize it silently
@@ -273,7 +291,7 @@ CAS then fails to overwrite, surfacing the specific reason in the `LoadingScreen
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
 | 0 | 1 | `msgId` | `uint8_t` | `0x09` |
-| 1 | 1 | `_pad` | `uint8_t` | Reserved; may encode a machine-readable reason code in a future additive update |
+| 1 | 1 | `code` | `uint8_t` | `ConnectRefusalCode`: 0=Generic, 1=Banned, 2=AccessDenied, 3=RateLimited, 4=TooManyConnections, 5=AdminLockout — machine-readable reason paired with the text below |
 | 2 | 62 | `reason` | `char[62]` | Null-terminated UTF-8 rejection reason; 61 usable chars |
 
 `MsgId::ConnectRefusal = 0x09` is an additive message ID — old clients that do not recognize
@@ -294,13 +312,13 @@ This packet is **not** sent over ENet and must not be injected into an ENet conn
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
 | 0 | 1 | `msgId` | `uint8_t` | `0x10` |
-| 1 | 1 | `_pad` | `uint8_t` | Reserved, always 0 |
+| 1 | 1 | `reserved` | `uint8_t` | Reserved, always 0 |
 | 2 | 2 | `protocolVersion` | `uint16_t` | Server's `kProtocolVersion`; clients may filter on this |
 | 4 | 2 | `gamePort` | `uint16_t` | ENet game port to connect to |
 | 6 | 1 | `playerCount` | `uint8_t` | Current connected player count |
 | 7 | 1 | `maxPlayers` | `uint8_t` | Maximum allowed peers |
 | 8 | 1 | `gameModeFlags` | `uint8_t` | Bit 0 = campaign (`kGameModeCampaign`), bit 1 = mission (`kGameModeMission`), bit 2 = sandbox (`kGameModeSandbox`) |
-| 9 | 1 | `_pad2` | `uint8_t` | Reserved, always 0 |
+| 9 | 1 | `reserved2` | `uint8_t` | Reserved, always 0 |
 | 10 | 64 | `name[64]` | `char[64]` | Null-terminated server name (UTF-8) |
 
 **IPv6 multicast:** The sender broadcasts to `ff02::1` (all-nodes link-local); receivers join
@@ -366,26 +384,28 @@ server discards `MsgClientInput` packets whose `protocolVersion` does not match 
 and logs a warning. These fields serve as a defense-in-depth sanity check — the primary
 negotiation happens via `MsgHello`.
 
-**`kProtocolVersion`** is defined as `constexpr uint16_t kProtocolVersion = 2` in
-`engine/net/GameProtocol.h`. It must be incremented whenever the wire format changes in a
-backward-incompatible way.
+**`kProtocolVersion`** is defined as `constexpr uint16_t kProtocolVersion = 1` in
+`engine/net/GameProtocol.h`. During primary development it stays at **1** — the game client always
+runs the same-tree `fl-server`, so the wire format may change freely without a bump. The constant
+begins to bind (incremented on any backward-incompatible change) only at the Phase 6 public-release
+freeze.
 
 External tools (replay readers per #41, spectator clients, LAN discovery tools) built against
-this spec are **protocol version 2** and must implement `MsgHello` handling to interoperate.
+this spec are **protocol version 1** and must implement `MsgHello` handling to interoperate.
 
 ## Bandwidth and Scalability
 
 ### Snapshot packet size
 
-`MsgWorldSnapshot` is fixed-cost per entity: **70 bytes/entity** plus a 12-byte header.
+`MsgWorldSnapshot` is fixed-cost per entity: **72 bytes/entity** plus a 16-byte header.
 
 | Visible entities | Packet size | Per-client outbound (60 Hz) |
 |-----------------|-------------|-----------------------------|
-| 8 | 556 bytes | ~33 KB/s |
-| 20 | 1,372 bytes | ~83 KB/s |
-| 32 | 2,188 bytes | ~131 KB/s |
-| 64 | 4,364 bytes | ~262 KB/s |
-| 128 | 8,716 bytes | ~523 KB/s |
+| 8 | 592 bytes | ~36 KB/s |
+| 20 | 1,456 bytes | ~87 KB/s |
+| 32 | 2,320 bytes | ~139 KB/s |
+| 64 | 4,624 bytes | ~277 KB/s |
+| 128 | 9,232 bytes | ~554 KB/s |
 
 ### MTU fragmentation
 
