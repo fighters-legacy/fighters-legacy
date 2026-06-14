@@ -19,6 +19,7 @@
 #include "PrecipitationController.h"
 #include "ScreenManager.h"
 #include "ServerNotice.h"
+#include "SessionStatus.h"
 #include "Version.h"
 #include "audio/MusicManager.h"
 #include "audio/PlaylistLoader.h"
@@ -282,8 +283,9 @@ struct GameImpl {
     // Session lifecycle (startGame / stopGame)
     std::thread serverThread;
     std::atomic<bool> serverReady{false};
-    std::atomic<const char*> serverFailMsg{nullptr};
-    std::atomic<const char*> connectFailMsg{nullptr};
+    // Typed session failure, first-writer-wins (server thread + ClientNetEventHandler write;
+    // LoadingScreen reads). Replaces the prior two atomic<const char*> + static-string signals.
+    std::atomic<SessionFailure> sessionFailure{SessionFailure::None};
 };
 
 // ---------------------------------------------------------------------------
@@ -542,8 +544,7 @@ void Game::startGame() {
     d.entityRegistry.clear();
     d.env = EnvironmentState{};
     d.serverReady.store(false, std::memory_order_relaxed);
-    d.serverFailMsg.store(nullptr, std::memory_order_relaxed);
-    d.connectFailMsg.store(nullptr, std::memory_order_relaxed);
+    d.sessionFailure.store(SessionFailure::None, std::memory_order_relaxed);
 
     // Register the builtin entity type for the no-pack sandbox path.
     if (d.outcome == FirstRunOutcome::LaunchSandboxInspector) {
@@ -566,22 +567,25 @@ void Game::startGame() {
             if (result == LocalServer::StartResult::Ok) {
                 d.serverReady.store(true, std::memory_order_release);
             } else {
-                const char* msg = nullptr;
+                SessionFailure f = SessionFailure::None;
                 switch (result) {
                 case LocalServer::StartResult::SpawnFailed:
-                    msg = "Server binary not found.";
+                    f = SessionFailure::ServerSpawnFailed;
                     break;
                 case LocalServer::StartResult::BindFailed:
-                    msg = "Port already in use.";
+                    f = SessionFailure::ServerBindFailed;
                     break;
                 case LocalServer::StartResult::Timeout:
-                    msg = "Server startup timed out.";
+                    f = SessionFailure::ServerStartTimeout;
                     break;
                 case LocalServer::StartResult::Ok:
                     break; // handled above; silences -Wswitch
                 }
-                if (msg)
-                    d.serverFailMsg.store(msg, std::memory_order_release);
+                if (f != SessionFailure::None) {
+                    SessionFailure expected = SessionFailure::None;
+                    d.sessionFailure.compare_exchange_strong(expected, f, std::memory_order_release,
+                                                             std::memory_order_relaxed);
+                }
             }
         });
     } else {
@@ -606,7 +610,7 @@ void Game::startGame() {
         d.clientHandler->notice = &d.serverNotice;
         d.clientHandler->console = &*d.gameConsole;
         d.clientHandler->motdDisplaySeconds = d.userConfig->client().motdDisplayS;
-        d.clientHandler->connectFailMsg = &d.connectFailMsg;
+        d.clientHandler->sessionFailure = &d.sessionFailure;
         d.clientNet->setEventHandler(d.clientHandler.get());
 
         if (!isMultiplayer) {
@@ -666,8 +670,7 @@ void Game::startGame() {
 
     d.screenMgr->reinitLoading(
         d.serverReady, [&d]() { return d.renderBridge.hasSnapshot(); }, std::move(onConnect), !isMultiplayer,
-        [&d]() -> const char* { return d.serverFailMsg.load(std::memory_order_acquire); },
-        [&d]() -> const char* { return d.connectFailMsg.load(std::memory_order_acquire); });
+        &d.sessionFailure);
 
     // Lazy SandboxInspector init (no-pack path).
     if (d.outcome == FirstRunOutcome::LaunchSandboxInspector)

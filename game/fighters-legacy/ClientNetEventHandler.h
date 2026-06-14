@@ -3,6 +3,7 @@
 
 #include "INetwork.h"
 #include "RenderTypes.h"
+#include "SessionStatus.h"
 
 #include <algorithm>
 #include <atomic>
@@ -51,9 +52,9 @@ struct ClientNetEventHandler : INetworkEventHandler {
 
     ClientTickAlpha tickAlpha;
 
-    // Set by Game::startGame() after construction. When non-null, failure reasons
-    // are stored here so LoadingScreen::Phase::Connecting can surface them immediately.
-    std::atomic<const char*>* connectFailMsg{nullptr};
+    // Set by Game::startGame() after construction. When non-null, a typed failure is stored here
+    // (first-writer-wins) so LoadingScreen::Phase::Connecting can surface it immediately.
+    std::atomic<SessionFailure>* sessionFailure{nullptr};
 
     ClientNetEventHandler(fl::SimRenderBridge& b, fl::EntityTypeRegistry& r, ILogger& l, INetwork& n,
                           EnvironmentState& e)
@@ -64,6 +65,8 @@ struct ClientNetEventHandler : INetworkEventHandler {
     void onReceive(uint32_t peerId, const void* data, std::size_t size) override;
 
   private:
+    // Store f into *sessionFailure if it is still None (first-writer-wins via CAS); no-op if unset.
+    void signalFailure(SessionFailure f);
+
     bool m_connected{false};
-    char m_connectRefusalReason[64]{};
 };

@@ -2,12 +2,24 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "LoadingScreen.h"
+#include "SessionStatus.h"
 #include "mock_hal.h"
 
 #include <atomic>
 
 static MockInput g_inp;
 static MockWindow g_win;
+
+TEST_CASE("SessionFailure: None maps to empty, every failure to a non-empty message") {
+    CHECK(std::string(sessionFailureMessage(SessionFailure::None)).empty());
+    const SessionFailure all[] = {
+        SessionFailure::ServerSpawnFailed, SessionFailure::ServerBindFailed, SessionFailure::ServerStartTimeout,
+        SessionFailure::ServerStartHang,   SessionFailure::VersionMismatch,  SessionFailure::Banned,
+        SessionFailure::AccessDenied,      SessionFailure::RateLimited,      SessionFailure::TooManyConnections,
+        SessionFailure::ConnectionRefused, SessionFailure::ConnectTimeout};
+    for (SessionFailure f : all)
+        CHECK(std::string(sessionFailureMessage(f)).length() > 0);
+}
 
 TEST_CASE("LoadingScreen: stays on Loading while server not ready") {
     std::atomic<bool> ready{false};
@@ -207,13 +219,13 @@ TEST_CASE("LoadingScreen: spawn fail message shown immediately without timeout")
     clk::time_point fakeNow = clk::now();
 
     std::atomic<bool> ready{false};
-    const char* failMsg = nullptr;
-    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, [&] { return failMsg; });
+    std::atomic<SessionFailure> failure{SessionFailure::None};
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, &failure);
     s.setClockOverride([&] { return fakeNow; });
 
-    s.update(g_inp, g_win); // sets start deadline; failMsg still null
+    s.update(g_inp, g_win); // sets start deadline; no failure yet
 
-    failMsg = "Server binary not found.";
+    failure.store(SessionFailure::ServerSpawnFailed);
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
 
     bool found = false;
@@ -231,13 +243,13 @@ TEST_CASE("LoadingScreen: bind fail message shown immediately without timeout") 
     clk::time_point fakeNow = clk::now();
 
     std::atomic<bool> ready{false};
-    const char* failMsg = nullptr;
-    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, [&] { return failMsg; });
+    std::atomic<SessionFailure> failure{SessionFailure::None};
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, &failure);
     s.setClockOverride([&] { return fakeNow; });
 
     s.update(g_inp, g_win); // sets start deadline
 
-    failMsg = "Port already in use.";
+    failure.store(SessionFailure::ServerBindFailed);
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
 
     bool found = false;
@@ -255,13 +267,13 @@ TEST_CASE("LoadingScreen: server timeout fail message shown immediately without 
     clk::time_point fakeNow = clk::now();
 
     std::atomic<bool> ready{false};
-    const char* failMsg = nullptr;
-    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, [&] { return failMsg; });
+    std::atomic<SessionFailure> failure{SessionFailure::None};
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, &failure);
     s.setClockOverride([&] { return fakeNow; });
 
     s.update(g_inp, g_win); // sets start deadline
 
-    failMsg = "Server startup timed out.";
+    failure.store(SessionFailure::ServerStartTimeout);
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
 
     bool found = false;
@@ -303,15 +315,13 @@ TEST_CASE("LoadingScreen: version mismatch shown immediately in Connecting phase
     clk::time_point fakeNow = clk::now();
 
     std::atomic<bool> ready{true}; // multiplayer fast-path: skip StartingServer
-    const char* connectMsg = nullptr;
-    LoadingScreen s(
-        ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false,
-        /*getStartFailMsg=*/nullptr, [&] { return connectMsg; });
+    std::atomic<SessionFailure> failure{SessionFailure::None};
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false, &failure);
     s.setClockOverride([&] { return fakeNow; });
 
     s.update(g_inp, g_win); // StartingServer -> Connecting (serverReady already true)
 
-    connectMsg = "Server version mismatch.";
+    failure.store(SessionFailure::VersionMismatch);
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
 
     bool found = false;
@@ -329,15 +339,13 @@ TEST_CASE("LoadingScreen: connection refused shown immediately in Connecting pha
     clk::time_point fakeNow = clk::now();
 
     std::atomic<bool> ready{true};
-    const char* connectMsg = nullptr;
-    LoadingScreen s(
-        ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false,
-        /*getStartFailMsg=*/nullptr, [&] { return connectMsg; });
+    std::atomic<SessionFailure> failure{SessionFailure::None};
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false, &failure);
     s.setClockOverride([&] { return fakeNow; });
 
     s.update(g_inp, g_win); // -> Connecting
 
-    connectMsg = "Connection refused by server.";
+    failure.store(SessionFailure::ConnectionRefused);
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed
 
     bool found = false;
@@ -356,9 +364,7 @@ TEST_CASE("LoadingScreen: getConnectFailMsg null does not break timeout path") {
 
     std::atomic<bool> ready{true};
     // callback wired but always returns null
-    LoadingScreen s(
-        ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false,
-        /*getStartFailMsg=*/nullptr, [] { return static_cast<const char*>(nullptr); });
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false);
     s.setClockOverride([&] { return fakeNow; });
 
     s.update(g_inp, g_win); // -> Connecting
@@ -379,9 +385,7 @@ TEST_CASE("LoadingScreen: getConnectFailMsg null does not break timeout path") {
 TEST_CASE("LoadingScreen: getConnectFailMsg null does not break success path") {
     std::atomic<bool> ready{true};
     bool connected = false;
-    LoadingScreen s(
-        ready, [&] { return connected; }, [] {}, /*isSinglePlayer=*/false,
-        /*getStartFailMsg=*/nullptr, [] { return static_cast<const char*>(nullptr); });
+    LoadingScreen s(ready, [&] { return connected; }, [] {}, /*isSinglePlayer=*/false);
 
     s.update(g_inp, g_win); // -> Connecting
     connected = true;
@@ -394,17 +398,15 @@ TEST_CASE("LoadingScreen: version mismatch in single-player flow") {
     clk::time_point fakeNow = clk::now();
 
     std::atomic<bool> ready{false};
-    const char* connectMsg = nullptr;
-    LoadingScreen s(
-        ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true,
-        /*getStartFailMsg=*/nullptr, [&] { return connectMsg; });
+    std::atomic<SessionFailure> failure{SessionFailure::None};
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, &failure);
     s.setClockOverride([&] { return fakeNow; });
 
     s.update(g_inp, g_win); // StartingServer; deadline set
     ready.store(true);
     s.update(g_inp, g_win); // -> Connecting; onServerReady fires
 
-    connectMsg = "Server version mismatch.";
+    failure.store(SessionFailure::VersionMismatch);
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed immediately
 
     bool found = false;

@@ -8,13 +8,23 @@
 
 LoadingScreen::LoadingScreen(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
                              std::function<void()> onServerReady, bool isSinglePlayer,
-                             std::function<const char*()> getStartFailMsg,
-                             std::function<const char*()> getConnectFailMsg)
+                             std::atomic<SessionFailure>* sessionFailure)
     : m_serverReady(serverReady), m_isConnected(std::move(isConnected)), m_onServerReady(std::move(onServerReady)),
-      m_getStartFailMsg(std::move(getStartFailMsg)), m_getConnectFailMsg(std::move(getConnectFailMsg)),
-      m_isSinglePlayer(isSinglePlayer) {
+      m_sessionFailure(sessionFailure), m_isSinglePlayer(isSinglePlayer) {
     addLine("Loading...");
     addLine(m_isSinglePlayer ? "Starting local server..." : "Connecting to remote server...");
+}
+
+bool LoadingScreen::checkSessionFailure() {
+    if (!m_sessionFailure)
+        return false;
+    SessionFailure f = m_sessionFailure->load(std::memory_order_acquire);
+    if (f == SessionFailure::None)
+        return false;
+    addLine(sessionFailureMessage(f));
+    m_failedAt = m_now();
+    m_phase = Phase::Failed;
+    return true;
 }
 
 void LoadingScreen::reset() {
@@ -56,17 +66,11 @@ Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/) {
             m_phase = Phase::Connecting;
         } else {
             // Check for an immediate failure signal from the server thread.
-            if (m_getStartFailMsg) {
-                if (const char* msg = m_getStartFailMsg()) {
-                    addLine(msg);
-                    m_failedAt = m_now();
-                    m_phase = Phase::Failed;
-                    break;
-                }
-            }
+            if (checkSessionFailure())
+                break;
             // Fallback: generic message if start() never returned (hung process).
             if (m_now() > m_startDeadline) {
-                addLine("Local server failed to start.");
+                addLine(sessionFailureMessage(SessionFailure::ServerStartHang));
                 m_failedAt = m_now();
                 m_phase = Phase::Failed;
             }
@@ -75,19 +79,13 @@ Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/) {
     }
 
     case Phase::Connecting:
-        if (m_getConnectFailMsg) {
-            if (const char* msg = m_getConnectFailMsg()) {
-                addLine(msg);
-                m_failedAt = m_now();
-                m_phase = Phase::Failed;
-                break;
-            }
-        }
+        if (checkSessionFailure())
+            break;
         if (m_isConnected()) {
             addLine("Ready.");
             m_phase = Phase::Ready;
         } else if (m_now() > m_connectDeadline && m_connectDeadline != std::chrono::steady_clock::time_point{}) {
-            addLine("Connection timed out.");
+            addLine(sessionFailureMessage(SessionFailure::ConnectTimeout));
             m_failedAt = m_now();
             m_phase = Phase::Failed;
         }

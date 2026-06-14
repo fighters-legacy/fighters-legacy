@@ -22,13 +22,19 @@ void ClientNetEventHandler::onConnect(uint32_t /*peerId*/) {
     logger.log(LogLevel::Info, __FILE__, __LINE__, "connected to local fl-server");
 }
 
+void ClientNetEventHandler::signalFailure(SessionFailure f) {
+    if (!sessionFailure)
+        return;
+    SessionFailure expected = SessionFailure::None;
+    sessionFailure->compare_exchange_strong(expected, f, std::memory_order_release, std::memory_order_relaxed);
+}
+
 void ClientNetEventHandler::onDisconnect(uint32_t /*peerId*/) {
     logger.log(LogLevel::Info, __FILE__, __LINE__, "disconnected from local fl-server");
-    if (m_connected && assignedEntityIdx == 0 && connectFailMsg) {
-        const char* expected = nullptr;
-        connectFailMsg->compare_exchange_strong(expected, "Connection refused by server.", std::memory_order_release,
-                                                std::memory_order_relaxed);
-    }
+    // ENet-level rejection before MsgConnectAck — generic fallback (a specific reason set earlier by
+    // the MsgHello/MsgConnectRefusal handlers wins via signalFailure's first-writer-wins CAS).
+    if (m_connected && assignedEntityIdx == 0)
+        signalFailure(SessionFailure::ConnectionRefused);
 }
 
 void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std::size_t size) {
@@ -42,11 +48,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             return;
         if (hello.protocolVersion != fl::kProtocolVersion) {
             logger.log(LogLevel::Error, __FILE__, __LINE__, "server protocol version mismatch — disconnecting");
-            if (connectFailMsg) {
-                const char* expected = nullptr;
-                connectFailMsg->compare_exchange_strong(expected, "Server version mismatch.", std::memory_order_release,
-                                                        std::memory_order_relaxed);
-            }
+            signalFailure(SessionFailure::VersionMismatch);
             net.disconnect();
         }
         return;
@@ -167,14 +169,27 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         }
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::ConnectRefusal)) {
         fl::MsgConnectRefusal ref{};
-        if (!fl::readMsg(data, size, ref) || !connectFailMsg)
+        if (!fl::readMsg(data, size, ref))
             return;
-        ref.reason[sizeof(ref.reason) - 1] = '\0';
-        std::memcpy(m_connectRefusalReason, ref.reason, sizeof(ref.reason));
-        m_connectRefusalReason[sizeof(m_connectRefusalReason) - 1] = '\0';
-        const char* expected = nullptr;
-        connectFailMsg->compare_exchange_strong(expected, m_connectRefusalReason, std::memory_order_release,
-                                                std::memory_order_relaxed);
+        SessionFailure f = SessionFailure::ConnectionRefused;
+        switch (static_cast<fl::ConnectRefusalCode>(ref.code)) {
+        case fl::ConnectRefusalCode::Banned:
+            f = SessionFailure::Banned;
+            break;
+        case fl::ConnectRefusalCode::AccessDenied:
+        case fl::ConnectRefusalCode::AdminLockout:
+            f = SessionFailure::AccessDenied;
+            break;
+        case fl::ConnectRefusalCode::RateLimited:
+            f = SessionFailure::RateLimited;
+            break;
+        case fl::ConnectRefusalCode::TooManyConnections:
+            f = SessionFailure::TooManyConnections;
+            break;
+        case fl::ConnectRefusalCode::Generic:
+            break; // ConnectionRefused
+        }
+        signalFailure(f);
     }
     // Unknown msgIds: silently discard
 }
