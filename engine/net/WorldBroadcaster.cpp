@@ -335,6 +335,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         char msg[128];
         std::snprintf(msg, sizeof(msg), "peer %u from %s is banned — disconnecting", peerId, ip.c_str());
         m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
+        sendConnectRefusal(peerId, "You are banned from this server.");
         m_net.disconnectPeer(peerId);
         return;
     }
@@ -344,6 +345,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         char msg[128];
         std::snprintf(msg, sizeof(msg), "peer %u from %s not on allowlist — disconnecting", peerId, ip.c_str());
         m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
+        sendConnectRefusal(peerId, "Access denied.");
         m_net.disconnectPeer(peerId);
         return;
     }
@@ -360,6 +362,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
             char msg[128];
             std::snprintf(msg, sizeof(msg), "peer %u from %s rate-limited — disconnecting", peerId, ip.c_str());
             m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
+            sendConnectRefusal(peerId, "Connection rate limit exceeded. Try again later.");
             m_net.disconnectPeer(peerId);
             return;
         }
@@ -376,6 +379,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
             std::snprintf(msg, sizeof(msg), "peer %u from %s exceeds per-IP connection limit (%d) -- disconnecting",
                           peerId, ip.c_str(), m_maxConnectionsPerIp);
             m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
+            sendConnectRefusal(peerId, "Too many connections from your address.");
             m_net.disconnectPeer(peerId);
             return;
         }
@@ -387,6 +391,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         std::snprintf(msg, sizeof(msg), "peer %u from %s: connection refused — admin auth lockout active", peerId,
                       ip.c_str());
         m_logger.log(LogLevel::Warn, __FILE__, __LINE__, msg);
+        sendConnectRefusal(peerId, "Access denied.");
         m_net.disconnectPeer(peerId);
         return;
     }
@@ -647,6 +652,12 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned) {
     }
 
     m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/true);
+}
+
+void WorldBroadcaster::sendConnectRefusal(uint32_t peerId, const char* reason) {
+    MsgConnectRefusal msg{};
+    std::snprintf(msg.reason, sizeof(msg.reason), "%s", reason);
+    m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
 }
 
 // ---------------------------------------------------------------------------

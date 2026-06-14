@@ -28,7 +28,9 @@ enum class MsgId : uint8_t {
     AdminCommand = 0x06,  // client→server, reliable: operator-authenticated admin command; additive ID
     AdminResponse = 0x07, // server→client, reliable: result text from dispatched admin command; additive ID
     Motd = 0x08, // server→client, reliable: MOTD sent once on connect after ConnectAck; additive ID; variable-length
-    LanBeacon = 0x10, // raw UDP broadcast — not sent over ENet; server→LAN presence packet
+    ConnectRefusal = 0x09, // server→client, reliable: rejection reason sent before disconnectPeer() on every onConnect
+                           // rejection; additive ID
+    LanBeacon = 0x10,      // raw UDP broadcast — not sent over ENet; server→LAN presence packet
 };
 
 // All structs use #pragma pack(1) so the wire layout is identical on all platforms
@@ -205,6 +207,18 @@ struct MsgMotdHeader {
 }; // 3 bytes; char text[] + NUL follow
 static_assert(sizeof(MsgMotdHeader) == 3u, "MsgMotdHeader wire size changed");
 static_assert(offsetof(MsgMotdHeader, displaySeconds) == 1u, "MsgMotdHeader::displaySeconds offset changed");
+
+// Reliable, server→client unicast. Sent immediately before disconnectPeer() on every onConnect
+// rejection (ban, allowlist, rate-limit, per-IP connection limit, admin auth lockout).
+// Old clients that don't recognise msgId 0x09 silently discard — no kProtocolVersion bump.
+// reason is null-terminated UTF-8; guaranteed within 61 bytes by the server.
+struct MsgConnectRefusal {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::ConnectRefusal)}; // offset 0
+    uint8_t _pad{0};   // offset 1 — reserved; may encode a machine-readable code in future
+    char reason[62]{}; // offset 2 — null-terminated UTF-8; 61 usable chars
+}; // 64 bytes
+static_assert(sizeof(MsgConnectRefusal) == 64u, "MsgConnectRefusal wire size changed");
+static_assert(offsetof(MsgConnectRefusal, reason) == 2u, "MsgConnectRefusal::reason offset changed");
 
 // Raw UDP presence broadcast sent by fl-server on 255.255.255.255:<port> (IPv4 broadcast) and
 // [ff02::1]:<port> (IPv6 link-local multicast) every discoveryIntervalMs milliseconds.

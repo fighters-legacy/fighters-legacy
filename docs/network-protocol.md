@@ -37,6 +37,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `AdminCommand` | `0x06` | client→server | reliable | 128 bytes | Operator-authenticated admin command. Additive ID — old servers silently discard. |
 | `AdminResponse` | `0x07` | server→client | reliable | 128 bytes | Command result text, unicast to the requesting peer. Additive ID — old clients silently discard. |
 | `Motd` | `0x08` | server→client | reliable | 2 + len(text) bytes | MOTD delivered once per connection after `MsgConnectAck`; variable-length. Additive ID — old clients silently discard. |
+| `ConnectRefusal` | `0x09` | server→client | reliable | 64 bytes | Rejection reason sent before `disconnectPeer()` on every `onConnect` rejection (ban, allowlist, rate-limit, per-IP limit, admin auth lockout). Additive ID — old clients silently discard and fall back to the generic "Connection refused by server." message. |
 | `LanBeacon` | `0x10` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast |
 
 ## Struct Definitions
@@ -253,6 +254,32 @@ fragments automatically if the text exceeds the MTU.
 `MsgId::Motd = 0x08` is an additive message ID — clients that do not recognize it silently
 discard without error.
 
+### MsgConnectRefusal — 64 bytes
+
+Reliable, server→client unicast. Sent immediately before `disconnectPeer()` on every
+`onConnect` rejection:
+
+- **Ban**: `"You are banned from this server."`
+- **Allowlist**: `"Access denied."`
+- **Rate-limit**: `"Connection rate limit exceeded. Try again later."`
+- **Per-IP connection limit**: `"Too many connections from your address."`
+- **Admin auth lockout**: `"Access denied."`
+
+ENet's graceful disconnect flushes all pending reliable packets before completing the
+disconnect sequence, so the client receives this packet before the ENet disconnect event fires.
+The client stores the reason via CAS into `connectFailMsg`, which the `onDisconnect` fallback
+CAS then fails to overwrite, surfacing the specific reason in the `LoadingScreen`.
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x09` |
+| 1 | 1 | `_pad` | `uint8_t` | Reserved; may encode a machine-readable reason code in a future additive update |
+| 2 | 62 | `reason` | `char[62]` | Null-terminated UTF-8 rejection reason; 61 usable chars |
+
+`MsgId::ConnectRefusal = 0x09` is an additive message ID — old clients that do not recognize
+it silently discard and fall back to the generic "Connection refused by server." message from
+the existing `onDisconnect` CAS path.
+
 ### MsgLanBeacon — 74 bytes
 
 Broadcast by `fl-server` on `255.255.255.255:<port>` (IPv4) and `[ff02::1]:<port>` (IPv6
@@ -297,6 +324,13 @@ Client                              Server (fl-server sim thread)
   |                                     |
   |--- ENet connect ------------------>|
   |                                     | onConnect(peerId):
+  |                                     |   [if rejected — ban/allowlist/rate/limit/lockout:]
+  |<-- MsgConnectRefusal (reliable) ---|     reason string (e.g. "You are banned from this server.")
+  |<-- ENet disconnect -----------------|
+  | [onReceive CAS sets specific reason;|
+  |  onDisconnect CAS fails; specific   |
+  |  message shown in LoadingScreen]    |
+  |                                     |   [if accepted:]
   |<-- MsgHello (reliable) ------------|   protocolVersion = kProtocolVersion
   | [disconnect if version mismatch]    |
   |                                     |   spawn "builtin:debug-entity" → EntityId

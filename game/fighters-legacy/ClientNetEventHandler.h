@@ -65,4 +65,5 @@ struct ClientNetEventHandler : INetworkEventHandler {
 
   private:
     bool m_connected{false};
+    char m_connectRefusalReason[64]{};
 };

@@ -188,6 +188,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
   private:
     void sendConnectAck(uint32_t peerId, EntityId assigned);
+    void sendConnectRefusal(uint32_t peerId, const char* reason);
     void stepFlightSim(FlightIntegrator& fi, EntityState& state, const PeerInputState& inp, double simDt);
     void broadcastShutdownNotice(uint16_t secsLeft, const char* text);
     static std::string makeShutdownMessage(uint32_t secsLeft, const std::string& reason = "");

@@ -14,6 +14,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: `MsgConnectRefusal` (0x09) — server sends a specific rejection reason string before disconnecting a peer on ban, allowlist, rate-limit, per-IP connection limit, or admin auth lockout; `LoadingScreen` displays the reason immediately instead of the generic "Connection refused by server." fallback; closes #343
 - **game**: `LoadingScreen` surfaces specific connection failure reasons ("Server version mismatch.", "Connection refused by server.") immediately in `Phase::Connecting` instead of always waiting for the 10 s timeout; closes #339
 - **network**: `admin_auth_status` now shows per-IP lockout state for both the MsgAdminCommand operator channel and the RCON TCP channel when RCON is enabled; closes #338
 - **network**: `admin_auth_status` command shows per-IP admin auth lockout state and pending failure counts; `status` command appends a lockout count line when one or more IPs are currently locked out; closes #331

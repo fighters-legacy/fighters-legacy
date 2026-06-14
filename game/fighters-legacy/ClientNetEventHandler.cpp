@@ -172,6 +172,17 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
                 notice->setNotice(prefixed, 0, effectiveSecs);
             first = false;
         }
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::ConnectRefusal)) {
+        if (size < sizeof(fl::MsgConnectRefusal) || !connectFailMsg)
+            return;
+        fl::MsgConnectRefusal ref{};
+        std::memcpy(&ref, data, sizeof(ref));
+        ref.reason[sizeof(ref.reason) - 1] = '\0';
+        std::memcpy(m_connectRefusalReason, ref.reason, sizeof(ref.reason));
+        m_connectRefusalReason[sizeof(m_connectRefusalReason) - 1] = '\0';
+        const char* expected = nullptr;
+        connectFailMsg->compare_exchange_strong(expected, m_connectRefusalReason, std::memory_order_release,
+                                                std::memory_order_relaxed);
     }
     // Unknown msgIds: silently discard
 }

@@ -14,6 +14,8 @@
 #include "render/SimRenderBridge.h"
 
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -166,7 +168,7 @@ TEST_CASE("ClientNetEventHandler: unknown msgId discarded, no notice", "[client_
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
     handler.notice = &notice;
 
-    const uint8_t pkt[] = {0x09, 'x', 0x00};
+    const uint8_t pkt[] = {0x0A, 'x', 0x00};
     handler.onReceive(0u, pkt, sizeof(pkt));
 
     CHECK(notice.buildElements().empty());
@@ -370,6 +372,14 @@ static std::vector<uint8_t> makeMsgHello(uint8_t protocolVersion) {
     return pkt;
 }
 
+static std::vector<uint8_t> makeRefusalPacket(const char* reason) {
+    fl::MsgConnectRefusal msg{};
+    std::snprintf(msg.reason, sizeof(msg.reason), "%s", reason);
+    std::vector<uint8_t> pkt(sizeof(msg));
+    std::memcpy(pkt.data(), &msg, sizeof(msg));
+    return pkt;
+}
+
 } // namespace
 
 TEST_CASE("ClientNetEventHandler: MsgHello version mismatch sets atomic and disconnects",
@@ -499,6 +509,83 @@ TEST_CASE("ClientNetEventHandler: correct protocolVersion does not disconnect or
 
     CHECK(!net.disconnected);
     CHECK(failMsg.load() == nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// MsgConnectRefusal tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ClientNetEventHandler: MsgConnectRefusal sets connectFailMsg with reason from wire",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    std::atomic<const char*> failMsg{nullptr};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.connectFailMsg = &failMsg;
+
+    auto pkt = makeRefusalPacket("You are banned from this server.");
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(failMsg.load() != nullptr);
+    CHECK(std::string(failMsg.load()) == "You are banned from this server.");
+}
+
+TEST_CASE("ClientNetEventHandler: MsgConnectRefusal reason not overwritten by onDisconnect CAS",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    std::atomic<const char*> failMsg{nullptr};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.connectFailMsg = &failMsg;
+
+    handler.onConnect(0u);
+    auto pkt = makeRefusalPacket("Access denied.");
+    handler.onReceive(0u, pkt.data(), pkt.size()); // sets specific reason
+    handler.onDisconnect(0u);                      // CAS should fail — already set
+
+    CHECK(std::string(failMsg.load()) == "Access denied.");
+}
+
+TEST_CASE("ClientNetEventHandler: MsgConnectRefusal packet too small does not set connectFailMsg",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    std::atomic<const char*> failMsg{nullptr};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.connectFailMsg = &failMsg;
+
+    // 3 bytes is far smaller than sizeof(MsgConnectRefusal) = 64
+    const uint8_t pkt[] = {static_cast<uint8_t>(fl::MsgId::ConnectRefusal), 0x00, 0x00};
+    handler.onReceive(0u, pkt, sizeof(pkt));
+
+    CHECK(failMsg.load() == nullptr);
+}
+
+TEST_CASE("ClientNetEventHandler: MsgConnectRefusal with null connectFailMsg does not crash",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    // connectFailMsg deliberately not set (default nullptr)
+
+    auto pkt = makeRefusalPacket("Too many connections from your address.");
+    handler.onReceive(0u, pkt.data(), pkt.size()); // must not crash
 }
 
 TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds 0 falls back to client motdDisplaySeconds",

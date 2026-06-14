@@ -106,6 +106,15 @@ static fl::MsgConnectAck parseSendAck(const MockNetwork& net) {
     return ack;
 }
 
+// Parse a MsgConnectRefusal from the first (and only) send on a rejected connection.
+static fl::MsgConnectRefusal parseSendRefusal(const MockNetwork& net) {
+    REQUIRE(net.sends.size() == 1u);
+    REQUIRE(net.sends[0].size() == sizeof(fl::MsgConnectRefusal));
+    fl::MsgConnectRefusal ref{};
+    std::memcpy(&ref, net.sends[0].data(), sizeof(ref));
+    return ref;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -922,10 +931,12 @@ TEST_CASE("WorldBroadcaster: banned IPv4 peer is rejected on onConnect", "[world
     net.peerAddresses[0] = "1.2.3.4:5000";
     broadcaster.onConnect(0u);
 
-    // Peer was rejected: disconnectPeer called, no MsgHello/Ack sent.
+    // Peer was rejected: MsgConnectRefusal sent, then disconnectPeer called.
     REQUIRE(net.disconnectedPeers.size() == 1u);
     CHECK(net.disconnectedPeers[0] == 0u);
-    CHECK(net.sends.empty()); // no handshake messages
+    auto ref = parseSendRefusal(net);
+    CHECK(ref.msgId == static_cast<uint8_t>(fl::MsgId::ConnectRefusal));
+    CHECK(std::string_view(ref.reason) == "You are banned from this server.");
 }
 
 TEST_CASE("WorldBroadcaster: IPv4-mapped IPv6 peer is rejected when IPv4 is banned", "[world_broadcaster][admin]") {
@@ -941,7 +952,9 @@ TEST_CASE("WorldBroadcaster: IPv4-mapped IPv6 peer is rejected when IPv4 is bann
     broadcaster.onConnect(0u);
 
     REQUIRE(net.disconnectedPeers.size() == 1u);
-    CHECK(net.sends.empty());
+    auto ref = parseSendRefusal(net);
+    CHECK(ref.msgId == static_cast<uint8_t>(fl::MsgId::ConnectRefusal));
+    CHECK(std::string_view(ref.reason) == "You are banned from this server.");
 }
 
 TEST_CASE("WorldBroadcaster: peer on non-banned IP is allowed on onConnect", "[world_broadcaster][admin]") {
@@ -1073,6 +1086,9 @@ TEST_CASE("WorldBroadcaster: IP exceeding rate limit is disconnected", "[world_b
     broadcaster.onConnect(0u);
     REQUIRE(net.disconnectedPeers.size() == 1u);
     CHECK(net.disconnectedPeers[0] == 0u);
+    auto ref = parseSendRefusal(net);
+    CHECK(ref.msgId == static_cast<uint8_t>(fl::MsgId::ConnectRefusal));
+    CHECK(std::string_view(ref.reason) == "Connection rate limit exceeded. Try again later.");
 }
 
 TEST_CASE("WorldBroadcaster: rate limit resets after window expires", "[world_broadcaster][security]") {
@@ -1197,6 +1213,9 @@ TEST_CASE("WorldBroadcaster: IP not on allowlist is rejected", "[world_broadcast
     broadcaster.onConnect(0u);
     REQUIRE(net.disconnectedPeers.size() == 1u);
     CHECK(net.disconnectedPeers[0] == 0u);
+    auto ref = parseSendRefusal(net);
+    CHECK(ref.msgId == static_cast<uint8_t>(fl::MsgId::ConnectRefusal));
+    CHECK(std::string_view(ref.reason) == "Access denied.");
 }
 
 TEST_CASE("WorldBroadcaster: setting empty allowlist re-enables all IPs", "[world_broadcaster][security]") {
@@ -1289,7 +1308,9 @@ TEST_CASE("WorldBroadcaster: per-IP limit rejects connection over limit", "[worl
     broadcaster.onConnect(2u); // count is 2, limit is 2 — rejected
     REQUIRE(net.disconnectedPeers.size() == 1u);
     CHECK(net.disconnectedPeers[0] == 2u);
-    CHECK(net.sends.empty());
+    auto ref = parseSendRefusal(net);
+    CHECK(ref.msgId == static_cast<uint8_t>(fl::MsgId::ConnectRefusal));
+    CHECK(std::string_view(ref.reason) == "Too many connections from your address.");
 }
 
 TEST_CASE("WorldBroadcaster: per-IP limit counts only matching-IP peers", "[world_broadcaster][security]") {
@@ -1363,7 +1384,9 @@ TEST_CASE("WorldBroadcaster: per-IP limit counts IPv4-mapped IPv6 as same addres
     broadcaster.onConnect(1u); // normalizeIp maps ::ffff:1.2.3.4 → 1.2.3.4 → rejected
     REQUIRE(net.disconnectedPeers.size() == 1u);
     CHECK(net.disconnectedPeers[0] == 1u);
-    CHECK(net.sends.empty());
+    auto ref = parseSendRefusal(net);
+    CHECK(ref.msgId == static_cast<uint8_t>(fl::MsgId::ConnectRefusal));
+    CHECK(std::string_view(ref.reason) == "Too many connections from your address.");
 }
 
 // ---------------------------------------------------------------------------
@@ -2475,8 +2498,9 @@ TEST_CASE("WorldBroadcaster: admin auth onConnect refused while locked", "[world
     broadcaster.onConnect(1u);
     REQUIRE(net.disconnectedPeers.size() == 1u);
     CHECK(net.disconnectedPeers[0] == 1u);
-    // No MsgHello should have been sent
-    CHECK(net.sends.empty());
+    auto ref = parseSendRefusal(net);
+    CHECK(ref.msgId == static_cast<uint8_t>(fl::MsgId::ConnectRefusal));
+    CHECK(std::string_view(ref.reason) == "Access denied.");
 }
 
 TEST_CASE("WorldBroadcaster: admin auth lockout expires after TTL", "[world_broadcaster][admin_command]") {
