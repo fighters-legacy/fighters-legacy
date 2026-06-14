@@ -5,6 +5,7 @@
 #include "RenderTypes.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 
@@ -50,6 +51,10 @@ struct ClientNetEventHandler : INetworkEventHandler {
 
     ClientTickAlpha tickAlpha;
 
+    // Set by Game::startGame() after construction. When non-null, failure reasons
+    // are stored here so LoadingScreen::Phase::Connecting can surface them immediately.
+    std::atomic<const char*>* connectFailMsg{nullptr};
+
     ClientNetEventHandler(fl::SimRenderBridge& b, fl::EntityTypeRegistry& r, ILogger& l, INetwork& n,
                           EnvironmentState& e)
         : bridge(b), registry(r), logger(l), net(n), env(e) {}
@@ -57,4 +62,7 @@ struct ClientNetEventHandler : INetworkEventHandler {
     void onConnect(uint32_t peerId) override;
     void onDisconnect(uint32_t peerId) override;
     void onReceive(uint32_t peerId, const void* data, std::size_t size) override;
+
+  private:
+    bool m_connected{false};
 };

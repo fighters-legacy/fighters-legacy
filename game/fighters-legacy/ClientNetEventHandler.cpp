@@ -17,11 +17,17 @@
 #include <sstream>
 
 void ClientNetEventHandler::onConnect(uint32_t /*peerId*/) {
+    m_connected = true;
     logger.log(LogLevel::Info, __FILE__, __LINE__, "connected to local fl-server");
 }
 
 void ClientNetEventHandler::onDisconnect(uint32_t /*peerId*/) {
     logger.log(LogLevel::Info, __FILE__, __LINE__, "disconnected from local fl-server");
+    if (m_connected && assignedEntityIdx == 0 && connectFailMsg) {
+        const char* expected = nullptr;
+        connectFailMsg->compare_exchange_strong(expected, "Connection refused by server.", std::memory_order_release,
+                                                std::memory_order_relaxed);
+    }
 }
 
 void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std::size_t size) {
@@ -36,6 +42,11 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         std::memcpy(&hello, data, sizeof(hello));
         if (hello.protocolVersion != fl::kProtocolVersion) {
             logger.log(LogLevel::Error, __FILE__, __LINE__, "server protocol version mismatch — disconnecting");
+            if (connectFailMsg) {
+                const char* expected = nullptr;
+                connectFailMsg->compare_exchange_strong(expected, "Server version mismatch.", std::memory_order_release,
+                                                        std::memory_order_relaxed);
+            }
             net.disconnect();
         }
         return;

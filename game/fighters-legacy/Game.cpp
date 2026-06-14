@@ -283,6 +283,7 @@ struct GameImpl {
     std::thread serverThread;
     std::atomic<bool> serverReady{false};
     std::atomic<const char*> serverFailMsg{nullptr};
+    std::atomic<const char*> connectFailMsg{nullptr};
 };
 
 // ---------------------------------------------------------------------------
@@ -542,6 +543,7 @@ void Game::startGame() {
     d.env = EnvironmentState{};
     d.serverReady.store(false, std::memory_order_relaxed);
     d.serverFailMsg.store(nullptr, std::memory_order_relaxed);
+    d.connectFailMsg.store(nullptr, std::memory_order_relaxed);
 
     // Register the builtin entity type for the no-pack sandbox path.
     if (d.outcome == FirstRunOutcome::LaunchSandboxInspector) {
@@ -604,6 +606,7 @@ void Game::startGame() {
         d.clientHandler->notice = &d.serverNotice;
         d.clientHandler->console = &*d.gameConsole;
         d.clientHandler->motdDisplaySeconds = d.userConfig->client().motdDisplayS;
+        d.clientHandler->connectFailMsg = &d.connectFailMsg;
         d.clientNet->setEventHandler(d.clientHandler.get());
 
         if (!isMultiplayer) {
@@ -663,7 +666,8 @@ void Game::startGame() {
 
     d.screenMgr->reinitLoading(
         d.serverReady, [&d]() { return d.renderBridge.hasSnapshot(); }, std::move(onConnect), !isMultiplayer,
-        [&d]() -> const char* { return d.serverFailMsg.load(std::memory_order_acquire); });
+        [&d]() -> const char* { return d.serverFailMsg.load(std::memory_order_acquire); },
+        [&d]() -> const char* { return d.connectFailMsg.load(std::memory_order_acquire); });
 
     // Lazy SandboxInspector init (no-pack path).
     if (d.outcome == FirstRunOutcome::LaunchSandboxInspector)

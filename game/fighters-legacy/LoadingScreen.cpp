@@ -8,9 +8,11 @@
 
 LoadingScreen::LoadingScreen(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
                              std::function<void()> onServerReady, bool isSinglePlayer,
-                             std::function<const char*()> getStartFailMsg)
+                             std::function<const char*()> getStartFailMsg,
+                             std::function<const char*()> getConnectFailMsg)
     : m_serverReady(serverReady), m_isConnected(std::move(isConnected)), m_onServerReady(std::move(onServerReady)),
-      m_getStartFailMsg(std::move(getStartFailMsg)), m_isSinglePlayer(isSinglePlayer) {
+      m_getStartFailMsg(std::move(getStartFailMsg)), m_getConnectFailMsg(std::move(getConnectFailMsg)),
+      m_isSinglePlayer(isSinglePlayer) {
     addLine("Loading...");
     addLine(m_isSinglePlayer ? "Starting local server..." : "Connecting to remote server...");
 }
@@ -73,6 +75,14 @@ Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/) {
     }
 
     case Phase::Connecting:
+        if (m_getConnectFailMsg) {
+            if (const char* msg = m_getConnectFailMsg()) {
+                addLine(msg);
+                m_failedAt = m_now();
+                m_phase = Phase::Failed;
+                break;
+            }
+        }
         if (m_isConnected()) {
             addLine("Ready.");
             m_phase = Phase::Ready;

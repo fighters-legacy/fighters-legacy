@@ -18,14 +18,20 @@
 //                    calls clientNet->connect()
 //   isSinglePlayer — controls initial status text and whether the StartingServer
 //                    phase is shown; pass false for remote-connect sessions
-//   getStartFailMsg — returns a static failure string as soon as the server thread
-//                     signals failure (SpawnFailed/BindFailed/Timeout), or nullptr
-//                     while still starting; pass nullptr (default) for multiplayer
+//   getStartFailMsg  — returns a static failure string as soon as the server thread
+//                      signals failure (SpawnFailed/BindFailed/Timeout), or nullptr
+//                      while still starting; pass nullptr (default) for multiplayer
+//   getConnectFailMsg — returns a static failure string (e.g. "Server version mismatch."
+//                       or "Connection refused by server.") when the client detects a
+//                       connection-level failure; polled every tick in Phase::Connecting
+//                       before the timeout fires; pass nullptr (default) for single-player
+//                       (failure is shown via getStartFailMsg) or when not needed
 class LoadingScreen : public IScreen {
   public:
     LoadingScreen(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
                   std::function<void()> onServerReady, bool isSinglePlayer = true,
-                  std::function<const char*()> getStartFailMsg = nullptr);
+                  std::function<const char*()> getStartFailMsg = nullptr,
+                  std::function<const char*()> getConnectFailMsg = nullptr);
 
     Screen update(IInput& input, IWindow& window) override;
     std::span<const HudElement> buildElements() override;
@@ -42,6 +48,7 @@ class LoadingScreen : public IScreen {
     std::function<bool()> m_isConnected;
     std::function<void()> m_onServerReady;
     std::function<const char*()> m_getStartFailMsg;
+    std::function<const char*()> m_getConnectFailMsg;
     bool m_isSinglePlayer;
 
     Phase m_phase{Phase::StartingServer};

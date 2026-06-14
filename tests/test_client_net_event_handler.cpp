@@ -348,6 +348,159 @@ TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds overrides client
     CHECK(notice.buildElements().empty()); // expired at 31 s (past 30 s server window)
 }
 
+// ---------------------------------------------------------------------------
+// Failure signaling tests (connectFailMsg atomic)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct TrackingNet : MockNetwork {
+    bool disconnected{false};
+    void disconnect() override {
+        disconnected = true;
+    }
+};
+
+static std::vector<uint8_t> makeMsgHello(uint8_t protocolVersion) {
+    fl::MsgHello msg{};
+    msg.msgId = static_cast<uint8_t>(fl::MsgId::Hello);
+    msg.protocolVersion = protocolVersion;
+    std::vector<uint8_t> pkt(sizeof(msg));
+    std::memcpy(pkt.data(), &msg, sizeof(msg));
+    return pkt;
+}
+
+} // namespace
+
+TEST_CASE("ClientNetEventHandler: MsgHello version mismatch sets atomic and disconnects",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    TrackingNet net;
+    EnvironmentState env{};
+    std::atomic<const char*> failMsg{nullptr};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.connectFailMsg = &failMsg;
+
+    handler.onConnect(0u);
+    auto pkt = makeMsgHello(static_cast<uint8_t>(fl::kProtocolVersion) ^ 0xFF);
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(net.disconnected);
+    CHECK(std::string(failMsg.load()) == "Server version mismatch.");
+}
+
+TEST_CASE("ClientNetEventHandler: ENet rejection sets connection refused via onDisconnect",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    std::atomic<const char*> failMsg{nullptr};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.connectFailMsg = &failMsg;
+
+    handler.onConnect(0u); // m_connected = true, assignedEntityIdx still 0
+    handler.onDisconnect(0u);
+
+    CHECK(std::string(failMsg.load()) == "Connection refused by server.");
+}
+
+TEST_CASE("ClientNetEventHandler: version mismatch message not overwritten by onDisconnect CAS",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    TrackingNet net;
+    EnvironmentState env{};
+    std::atomic<const char*> failMsg{nullptr};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.connectFailMsg = &failMsg;
+
+    handler.onConnect(0u);
+    auto pkt = makeMsgHello(static_cast<uint8_t>(fl::kProtocolVersion) ^ 0xFF);
+    handler.onReceive(0u, pkt.data(), pkt.size()); // sets "Server version mismatch."
+    handler.onDisconnect(0u);                      // CAS should fail — already set
+
+    CHECK(std::string(failMsg.load()) == "Server version mismatch.");
+}
+
+TEST_CASE("ClientNetEventHandler: onDisconnect does not signal when assignedEntityIdx is nonzero",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    std::atomic<const char*> failMsg{nullptr};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.connectFailMsg = &failMsg;
+    handler.assignedEntityIdx = 1u; // simulates mid-flight disconnect
+
+    handler.onConnect(0u);
+    handler.onDisconnect(0u);
+
+    CHECK(failMsg.load() == nullptr);
+}
+
+TEST_CASE("ClientNetEventHandler: null connectFailMsg does not crash on rejection", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    // connectFailMsg deliberately not set (default nullptr)
+
+    handler.onConnect(0u);
+    handler.onDisconnect(0u); // must not crash
+}
+
+TEST_CASE("ClientNetEventHandler: ENet timeout path does not signal when onConnect never fired",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    std::atomic<const char*> failMsg{nullptr};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.connectFailMsg = &failMsg;
+
+    // No onConnect() call — simulates ENet timeout (server unreachable)
+    handler.onDisconnect(0u);
+
+    CHECK(failMsg.load() == nullptr);
+}
+
+TEST_CASE("ClientNetEventHandler: correct protocolVersion does not disconnect or signal failure",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    TrackingNet net;
+    EnvironmentState env{};
+    std::atomic<const char*> failMsg{nullptr};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.connectFailMsg = &failMsg;
+
+    handler.onConnect(0u);
+    auto pkt = makeMsgHello(static_cast<uint8_t>(fl::kProtocolVersion));
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(!net.disconnected);
+    CHECK(failMsg.load() == nullptr);
+}
+
 TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds 0 falls back to client motdDisplaySeconds",
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
