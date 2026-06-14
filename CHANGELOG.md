@@ -9,11 +9,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **network**: wire-protocol structs re-laid out for natural field alignment — unpacked with explicit `reserved` padding and size-multiple records, locked by `static_assert(sizeof/offsetof/alignof)`, enabling zero-copy reads via the new `fl::viewMsg`. Sizes change: `MsgWorldSnapshotHeader` 12→16, `MsgEntityEntry` 70→72, `MsgClientInput` 44→48, `MsgMotdHeader` 3→4. `kProtocolVersion` reset 2 → 1 — it stays at 1 throughout primary development (client and server always build together) and only begins to bind at the Phase 6 public-release freeze. `MsgConnectRefusal`'s reserved byte is now a machine-readable `code` (`ConnectRefusalCode`) paired with the human-readable reason text
 - **network**: `admin_unlock <IP>` now also clears the RCON channel auth lockout for the same IP in addition to the admin-command channel lockout; closes #335
 - **game**: `LocalServer::start()` now returns a `StartResult` enum (`Ok`, `SpawnFailed`, `BindFailed`, `Timeout`) instead of `bool`; `LoadingScreen` shows a specific failure reason ("Server binary not found.", "Port already in use.", "Server startup timed out.") immediately when the server thread signals failure rather than waiting for the 10-second startup timeout; closes #333
 
 ### Added
 
+- **network**: `engine/net/WireCodec.h` — typed, alignment-safe wire helpers (`readMsg` / `readRecordAt` / `viewMsg` / `appendMsg` / `writeMsgAt`); `WorldBroadcaster` (server) and `ClientNetEventHandler` (client) now parse and produce every packet through it instead of duplicating size-check + `memcpy` boilerplate. `test_wire_codec` covers short-buffer rejection, record bounds, the `viewMsg` aligned/unaligned arms, and append→read round trips
 - **network**: `MsgConnectRefusal` (0x09) — server sends a specific rejection reason string before disconnecting a peer on ban, allowlist, rate-limit, per-IP connection limit, or admin auth lockout; `LoadingScreen` displays the reason immediately instead of the generic "Connection refused by server." fallback; closes #343
 - **game**: `LoadingScreen` surfaces specific connection failure reasons ("Server version mismatch.", "Connection refused by server.") immediately in `Phase::Connecting` instead of always waiting for the 10 s timeout; closes #339
 - **network**: `admin_auth_status` now shows per-IP lockout state for both the MsgAdminCommand operator channel and the RCON TCP channel when RCON is enabled; closes #338

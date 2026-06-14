@@ -5,20 +5,33 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
 
-TEST_CASE("GameProtocol: packed struct sizes match wire format", "[game_protocol]") {
+TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game_protocol]") {
     CHECK(sizeof(fl::MsgHello) == 4u);
     CHECK(sizeof(fl::MsgConnectAck) == 12u);     // extended: +assignedEntityIdx/Gen
     CHECK(sizeof(fl::MsgEntityTypeDef) == 196u); // 4 + 64 + 64 + 64
-    CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 12u);
-    CHECK(sizeof(fl::MsgEntityEntry) == 70u);
-    CHECK(sizeof(fl::MsgClientInput) == 44u);
+    CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 16u);
+    CHECK(sizeof(fl::MsgEntityEntry) == 72u);
+    CHECK(sizeof(fl::MsgClientInput) == 48u);
     CHECK(sizeof(fl::MsgAdminCommand) == 128u);
     CHECK(sizeof(fl::MsgAdminResponse) == 128u);
-    CHECK(sizeof(fl::MsgMotdHeader) == 3u);
+    CHECK(sizeof(fl::MsgMotdHeader) == 4u);
     CHECK(sizeof(fl::MsgConnectRefusal) == 64u);
 }
 
+TEST_CASE("GameProtocol: wire structs are naturally aligned for zero-copy", "[game_protocol]") {
+    // Records carrying a double must be 8-aligned; their sizes multiples of 8 so arrays stay aligned.
+    CHECK(alignof(fl::MsgWorldSnapshotHeader) == 8u);
+    CHECK(alignof(fl::MsgEntityEntry) == 8u);
+    CHECK(sizeof(fl::MsgEntityEntry) % 8u == 0u);
+    CHECK(alignof(fl::MsgClientInput) == 8u);
+}
+
+TEST_CASE("GameProtocol: stays at protocol version 1 in primary development", "[game_protocol]") {
+    CHECK(fl::kProtocolVersion == 1u);
+}
+
 TEST_CASE("GameProtocol: MsgConnectRefusal field offsets", "[game_protocol]") {
+    CHECK(offsetof(fl::MsgConnectRefusal, code) == 1u);
     CHECK(offsetof(fl::MsgConnectRefusal, reason) == 2u);
 }
 
