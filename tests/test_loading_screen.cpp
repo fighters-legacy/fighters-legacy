@@ -298,6 +298,125 @@ TEST_CASE("LoadingScreen: fallback generic message shown on startup deadline wit
     CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
 }
 
+TEST_CASE("LoadingScreen: version mismatch shown immediately in Connecting phase") {
+    using clk = std::chrono::steady_clock;
+    clk::time_point fakeNow = clk::now();
+
+    std::atomic<bool> ready{true}; // multiplayer fast-path: skip StartingServer
+    const char* connectMsg = nullptr;
+    LoadingScreen s(
+        ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false,
+        /*getStartFailMsg=*/nullptr, [&] { return connectMsg; });
+    s.setClockOverride([&] { return fakeNow; });
+
+    s.update(g_inp, g_win); // StartingServer -> Connecting (serverReady already true)
+
+    connectMsg = "Server version mismatch.";
+    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
+
+    bool found = false;
+    for (const auto& el : s.buildElements())
+        if (el.type == HudElement::Type::Text && el.text.find("mismatch") != std::string::npos)
+            found = true;
+    CHECK(found);
+
+    fakeNow += std::chrono::seconds(4); // past kFailDisplaySeconds (3 s)
+    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+}
+
+TEST_CASE("LoadingScreen: connection refused shown immediately in Connecting phase") {
+    using clk = std::chrono::steady_clock;
+    clk::time_point fakeNow = clk::now();
+
+    std::atomic<bool> ready{true};
+    const char* connectMsg = nullptr;
+    LoadingScreen s(
+        ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false,
+        /*getStartFailMsg=*/nullptr, [&] { return connectMsg; });
+    s.setClockOverride([&] { return fakeNow; });
+
+    s.update(g_inp, g_win); // -> Connecting
+
+    connectMsg = "Connection refused by server.";
+    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed
+
+    bool found = false;
+    for (const auto& el : s.buildElements())
+        if (el.type == HudElement::Type::Text && el.text.find("refused") != std::string::npos)
+            found = true;
+    CHECK(found);
+
+    fakeNow += std::chrono::seconds(4);
+    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+}
+
+TEST_CASE("LoadingScreen: getConnectFailMsg null does not break timeout path") {
+    using clk = std::chrono::steady_clock;
+    clk::time_point fakeNow = clk::now();
+
+    std::atomic<bool> ready{true};
+    // callback wired but always returns null
+    LoadingScreen s(
+        ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false,
+        /*getStartFailMsg=*/nullptr, [] { return static_cast<const char*>(nullptr); });
+    s.setClockOverride([&] { return fakeNow; });
+
+    s.update(g_inp, g_win); // -> Connecting
+
+    fakeNow += std::chrono::seconds(11);              // past connect deadline
+    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed via timeout
+
+    bool found = false;
+    for (const auto& el : s.buildElements())
+        if (el.type == HudElement::Type::Text && el.text.find("timed out") != std::string::npos)
+            found = true;
+    CHECK(found);
+
+    fakeNow += std::chrono::seconds(4);
+    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+}
+
+TEST_CASE("LoadingScreen: getConnectFailMsg null does not break success path") {
+    std::atomic<bool> ready{true};
+    bool connected = false;
+    LoadingScreen s(
+        ready, [&] { return connected; }, [] {}, /*isSinglePlayer=*/false,
+        /*getStartFailMsg=*/nullptr, [] { return static_cast<const char*>(nullptr); });
+
+    s.update(g_inp, g_win); // -> Connecting
+    connected = true;
+    s.update(g_inp, g_win); // -> Ready
+    CHECK(s.update(g_inp, g_win) == Screen::Flight);
+}
+
+TEST_CASE("LoadingScreen: version mismatch in single-player flow") {
+    using clk = std::chrono::steady_clock;
+    clk::time_point fakeNow = clk::now();
+
+    std::atomic<bool> ready{false};
+    const char* connectMsg = nullptr;
+    LoadingScreen s(
+        ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true,
+        /*getStartFailMsg=*/nullptr, [&] { return connectMsg; });
+    s.setClockOverride([&] { return fakeNow; });
+
+    s.update(g_inp, g_win); // StartingServer; deadline set
+    ready.store(true);
+    s.update(g_inp, g_win); // -> Connecting; onServerReady fires
+
+    connectMsg = "Server version mismatch.";
+    CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed immediately
+
+    bool found = false;
+    for (const auto& el : s.buildElements())
+        if (el.type == HudElement::Type::Text && el.text.find("mismatch") != std::string::npos)
+            found = true;
+    CHECK(found);
+
+    fakeNow += std::chrono::seconds(4);
+    CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
+}
+
 TEST_CASE("LoadingScreen: reset preserves multiplayer messages") {
     std::atomic<bool> ready{true};
     bool connected = false;

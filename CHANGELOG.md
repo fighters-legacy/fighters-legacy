@@ -14,6 +14,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: `LoadingScreen` surfaces specific connection failure reasons ("Server version mismatch.", "Connection refused by server.") immediately in `Phase::Connecting` instead of always waiting for the 10 s timeout; closes #339
 - **network**: `admin_auth_status` now shows per-IP lockout state for both the MsgAdminCommand operator channel and the RCON TCP channel when RCON is enabled; closes #338
 - **network**: `admin_auth_status` command shows per-IP admin auth lockout state and pending failure counts; `status` command appends a lockout count line when one or more IPs are currently locked out; closes #331
 - **network**: per-IP brute-force protection for the `MsgAdminCommand` operator channel — after `admin_auth_max_failures` consecutive wrong passwords (default 5) the peer is kicked and reconnections from that IP are refused for `admin_auth_lockout_s` seconds (default 300); thresholds configurable in `[security]`; `fl::AuthTracker` promoted to `engine/net/AuthTracker.h` and reused by both `WorldBroadcaster` and `RconServer`; closes #315
