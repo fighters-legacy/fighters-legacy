@@ -72,6 +72,9 @@ class RconServer {
     // Returns true if a lockout was active and was cleared.
     bool clearLockout(const std::string& ip);
 
+    // Read the current RCON auth lockout state. Thread-safe; acquires the internal mutex.
+    fl::AuthLockoutSummary getRconAuthSummary();
+
   private:
     struct Impl;
     std::unique_ptr<Impl> m_impl;

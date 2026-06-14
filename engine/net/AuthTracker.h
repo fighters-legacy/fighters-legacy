@@ -118,4 +118,12 @@ class AuthTracker {
     std::function<std::chrono::steady_clock::time_point()> m_now;
 };
 
+// Snapshot of auth lockout state. Returned by WorldBroadcaster::getAuthLockoutSummary()
+// and RconServer::getRconAuthSummary().
+struct AuthLockoutSummary {
+    int activeCount{0};                             // non-expired lockout count
+    int threshold{0};                               // configured maxFailures value
+    std::vector<AuthTracker::FailureEntry> entries; // active lockouts + IPs with pending failures
+};
+
 } // namespace fl

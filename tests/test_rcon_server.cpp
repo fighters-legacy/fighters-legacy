@@ -299,6 +299,33 @@ TEST_CASE("RconServer: clearLockout returns false for non-locked IP and does not
     CHECK_FALSE(srv.clearLockout("1.2.3.4"));
 }
 
+TEST_CASE("RconServer: getRconAuthSummary returns empty summary on fresh server", "[rcon]") {
+    MockLogger log;
+    CommandRegistry reg;
+    ServerConfig::RconConfig cfg{};
+    cfg.maxAuthFailures = 5;
+    cfg.lockoutSeconds = 60;
+    RconServer srv(reg, cfg, log);
+    // start() not called — exercises pimpl forwarding + mutex path.
+    auto s = srv.getRconAuthSummary();
+    CHECK(s.activeCount == 0);
+    CHECK(s.threshold == 5);
+    CHECK(s.entries.empty());
+}
+
+TEST_CASE("RconServer: getRconAuthSummary threshold matches config", "[rcon]") {
+    MockLogger log;
+    CommandRegistry reg;
+    ServerConfig::RconConfig cfg{};
+    cfg.maxAuthFailures = 3;
+    cfg.lockoutSeconds = 120;
+    RconServer srv(reg, cfg, log);
+    auto s = srv.getRconAuthSummary();
+    CHECK(s.threshold == 3);
+    CHECK(s.activeCount == 0);
+    CHECK(s.entries.empty());
+}
+
 TEST_CASE("AuthTracker: lockedOutCount returns 0 initially", "[rcon][auth_tracker]") {
     fl::AuthTracker tracker(5, 60);
     CHECK(tracker.lockedOutCount() == 0);

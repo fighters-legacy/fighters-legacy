@@ -648,8 +648,9 @@ Out-of-range values are ignored and the default is kept (a warning is logged).
   receive an immediate `AUTH_RESPONSE id=-1` and are closed before any packets are processed.
 - Command responses longer than 4086 bytes are split across multiple `SERVERDATA_RESPONSE_VALUE`
   packets per the Source Engine RCON specification, followed by an empty sentinel packet.
-- The RCON lockout TTL expires automatically; use `admin_unlock <IP>` from the admin console
-  or stdin to clear it early without waiting.
+- The RCON lockout TTL expires automatically; use `admin_auth_status` to view RCON lockout
+  state, or `admin_unlock <IP>` from the admin console or stdin to clear a lockout early without
+  waiting.
 - Async-mutating commands (`kick`, `ban`, `unban`, `tp`, `spawn`, `kill`) return a
   synchronous acknowledgement string immediately. The actual action executes on the next sim
   tick (~16 ms later); confirmation also appears on fl-server stdout and is sent to the RCON
@@ -657,8 +658,11 @@ Out-of-range values are ignored and the default is kept (a warning is logged).
 - `peers` returns a count from the atomic peer counter immediately; the full per-peer detail
   is printed to stdout and sent to the RCON client as additional `SERVERDATA_RESPONSE_VALUE`
   packets on the next sim tick.
-- `admin_auth_status` returns the full per-IP lockout and failure detail as a single
-  synchronous response packet (no second packet), unlike `peers`.
+- `admin_auth_status` returns per-IP lockout and failure detail as a single synchronous
+  response packet (no second packet), unlike `peers`. Output is split into a
+  `MsgAdminCommand channel:` section and, when RCON is enabled, an `RCON channel:` section.
+  The sync ack format is `"admin: N lockout(s) | rcon: M lockout(s)"` when RCON is enabled,
+  or `"N lockout(s) active"` when RCON is disabled.
 
 ### Example: connect with mcrcon
 
@@ -698,7 +702,7 @@ process.
 | `ban` | `<peerId\|IP>` | Add IP to the ban list and kick matching peers; saves to `banlist_path` if configured |
 | `unban` | `<IP>` | Remove an IP from the ban list; saves to `banlist_path` if configured |
 | `admin_unlock` | `<IP>` | Clear the admin auth and RCON auth lockouts for an IP address immediately; prints a warning if neither channel was locked (idempotent) |
-| `admin_auth_status` | — | Show per-IP admin auth lockout state and pending failure counts |
+| `admin_auth_status` | — | Show per-IP lockout state for the MsgAdminCommand operator channel and (when RCON is enabled) the RCON TCP channel; both active lockouts and pending failure counts |
 | `set_weather` | `<preset>` | Change weather: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm` |
 | `set_time` | `<0–24>` | Set in-game time of day (float, hours) |
 | `spawn` | `<type> <x> <y> <z>` | Spawn a registered entity type at the given world position |

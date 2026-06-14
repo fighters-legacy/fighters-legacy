@@ -131,6 +131,26 @@ static std::string formatSecs(long long secs) {
     return buf;
 }
 
+static void printAuthSection(const char* label, const fl::AuthLockoutSummary& s, CommandShell* shell) {
+    char hdr[64];
+    std::snprintf(hdr, sizeof(hdr), "[admin] %s:", label);
+    std::printf("%s\n", hdr);
+    if (shell)
+        shell->print(hdr);
+    for (const auto& e : s.entries) {
+        char m[192];
+        if (e.lockedOut)
+            std::snprintf(m, sizeof(m), "[admin]   %-37s locked out -- expires in %s", e.ip.c_str(),
+                          formatSecs(e.expiresIn).c_str());
+        else
+            std::snprintf(m, sizeof(m), "[admin]   %-37s %d failure(s) (threshold: %d)", e.ip.c_str(), e.failures,
+                          s.threshold);
+        std::printf("%s\n", m);
+        if (shell)
+            shell->print(m);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // registerServerCommands
 // ---------------------------------------------------------------------------
@@ -354,33 +374,29 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
     // admin_auth_status
     registry.registerCommand("admin_auth_status",
-                             "admin_auth_status  -- show per-IP admin auth lockout state and pending failure counts",
+                             "admin_auth_status  -- show per-IP auth lockout state for admin and RCON channels",
                              [ctx](std::span<std::string_view>) -> std::string {
                                  if (!ctx.broadcaster)
                                      return "admin_auth_status: not available";
-                                 auto s = ctx.broadcaster->getAuthLockoutSummary();
-                                 if (s.entries.empty()) {
-                                     std::printf("[admin] admin_auth_status: 0 lockouts active\n");
+                                 auto adminS = ctx.broadcaster->getAuthLockoutSummary();
+                                 bool hasRcon = static_cast<bool>(ctx.getRconAuthSummary);
+                                 auto rconS = hasRcon ? ctx.getRconAuthSummary() : fl::AuthLockoutSummary{};
+
+                                 printAuthSection("MsgAdminCommand channel", adminS, ctx.shell);
+                                 if (hasRcon) {
+                                     std::printf("\n");
                                      if (ctx.shell)
-                                         ctx.shell->print("[admin] admin_auth_status: 0 lockouts active");
-                                     std::fflush(stdout);
-                                     return "0 lockouts active";
-                                 }
-                                 for (const auto& e : s.entries) {
-                                     char m[192];
-                                     if (e.lockedOut)
-                                         std::snprintf(m, sizeof(m), "[admin] %-39s locked out -- expires in %s",
-                                                       e.ip.c_str(), formatSecs(e.expiresIn).c_str());
-                                     else
-                                         std::snprintf(m, sizeof(m), "[admin] %-39s %d failure(s) (threshold: %d)",
-                                                       e.ip.c_str(), e.failures, s.threshold);
-                                     std::printf("%s\n", m);
-                                     if (ctx.shell)
-                                         ctx.shell->print(m);
+                                         ctx.shell->print("");
+                                     printAuthSection("RCON channel", rconS, ctx.shell);
                                  }
                                  std::fflush(stdout);
-                                 char ackBuf[64];
-                                 std::snprintf(ackBuf, sizeof(ackBuf), "%d lockout(s) active", s.activeCount);
+
+                                 char ackBuf[80];
+                                 if (hasRcon)
+                                     std::snprintf(ackBuf, sizeof(ackBuf), "admin: %d lockout(s) | rcon: %d lockout(s)",
+                                                   adminS.activeCount, rconS.activeCount);
+                                 else
+                                     std::snprintf(ackBuf, sizeof(ackBuf), "%d lockout(s) active", adminS.activeCount);
                                  return std::string(ackBuf);
                              });
 

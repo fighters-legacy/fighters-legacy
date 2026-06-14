@@ -15,7 +15,6 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
-#include <vector>
 
 class ILogger;
 
@@ -28,13 +27,6 @@ class WeatherController;
 } // namespace fl
 
 namespace fl {
-
-// Snapshot of admin auth lockout state returned by WorldBroadcaster::getAuthLockoutSummary().
-struct AuthLockoutSummary {
-    int activeCount{0};                             // non-expired lockout count
-    int threshold{0};                               // configured maxFailures value
-    std::vector<AuthTracker::FailureEntry> entries; // active lockouts + IPs with pending failures
-};
 
 // Parsed, validated client input stored per connected peer.
 struct PeerInputState {

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <net/AuthTracker.h>
+
 #include <chrono>
 #include <csignal>
 #include <functional>
@@ -51,6 +53,9 @@ struct ServerCommandContext {
     // Clears the RCON auth lockout for an IP; null when RCON is not configured.
     // Returns true if a lockout was active. Called from sim thread via enqueueSimCallback.
     std::function<bool(const std::string&)> clearRconLockout;
+
+    // Returns RCON channel auth lockout state; null when RCON is not configured.
+    std::function<fl::AuthLockoutSummary()> getRconAuthSummary;
 
     // Optional output shell; sim-callback confirmations are also routed here
     // for future RCON drain (see issue #304). nullptr = disabled.

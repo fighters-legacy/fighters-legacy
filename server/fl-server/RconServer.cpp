@@ -544,3 +544,16 @@ bool RconServer::clearLockout(const std::string& ip) {
     m_impl->m_authTracker.clearLockout(ip);
     return wasLocked;
 }
+
+fl::AuthLockoutSummary RconServer::getRconAuthSummary() {
+    if (!m_impl)
+        return {};
+    std::lock_guard<std::mutex> lock(m_impl->m_authTrackerMutex);
+    fl::AuthLockoutSummary s;
+    s.threshold = m_impl->m_authTracker.maxFailures();
+    s.entries = m_impl->m_authTracker.failureSummary();
+    for (const auto& e : s.entries)
+        if (e.lockedOut)
+            ++s.activeCount;
+    return s;
+}

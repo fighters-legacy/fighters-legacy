@@ -390,6 +390,9 @@ int main(int argc, char** argv) {
     adminCtx.clearRconLockout = [&rconServer](const std::string& ip) -> bool {
         return rconServer ? rconServer->clearLockout(ip) : false;
     };
+    adminCtx.getRconAuthSummary = [&rconServer]() -> fl::AuthLockoutSummary {
+        return rconServer ? rconServer->getRconAuthSummary() : fl::AuthLockoutSummary{};
+    };
 
     broadcaster.setShutdownCallback([&]() { g_quit = 1; });
     registerServerCommands(adminRegistry, adminCtx);

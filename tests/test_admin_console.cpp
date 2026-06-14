@@ -695,11 +695,11 @@ TEST_CASE("AdminConsole: admin_auth_status with null broadcaster returns not ava
     CHECK(out.find("not available") != std::string::npos);
 }
 
-TEST_CASE("AdminConsole wb: admin_auth_status with no lockouts returns 0 lockouts active", "[admin_console][wb]") {
+TEST_CASE("AdminConsole wb: admin_auth_status with no lockouts returns 0 lockout(s) active", "[admin_console][wb]") {
     WbFixture f;
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_auth_status");
-    CHECK(out == "0 lockouts active");
+    CHECK(out == "0 lockout(s) active");
 }
 
 TEST_CASE("AdminConsole wb: status with no lockouts does not show lockout line", "[admin_console][wb]") {
@@ -739,6 +739,7 @@ TEST_CASE("AdminConsole wb: status and admin_auth_status reflect active lockout"
     std::string shellOut;
     for (const auto& l : shellLines)
         shellOut += l + "\n";
+    CHECK(shellOut.find("MsgAdminCommand channel:") != std::string::npos);
     CHECK(shellOut.find("locked out") != std::string::npos);
     CHECK(authOut == "1 lockout(s) active");
 }
@@ -771,6 +772,83 @@ TEST_CASE("AdminConsole wb: admin_auth_status shows pending failure line", "[adm
     CHECK(shellOut.find("1 failure(s)") != std::string::npos);
     CHECK(shellOut.find("threshold: 3") != std::string::npos);
     CHECK(out == "0 lockout(s) active");
+}
+
+TEST_CASE("AdminConsole wb: admin_auth_status no RCON callback shows only admin section", "[admin_console][wb]") {
+    WbFixture f; // ctx.getRconAuthSummary is null by default
+    NullLogger2 shellLog;
+    CommandRegistry shellReg;
+    CommandShell shell(shellLog, shellReg);
+    f.ctx.shell = &shell;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("admin_auth_status");
+    CHECK(out == "0 lockout(s) active");
+    std::string shellOut;
+    for (const auto& l : shell.outputLines())
+        shellOut += l + "\n";
+    CHECK(shellOut.find("MsgAdminCommand channel:") != std::string::npos);
+    CHECK(shellOut.find("RCON channel:") == std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: admin_auth_status with RCON callback shows both sections when zero entries",
+          "[admin_console][wb]") {
+    WbFixture f;
+    f.ctx.getRconAuthSummary = []() { return fl::AuthLockoutSummary{}; };
+    NullLogger2 shellLog;
+    CommandRegistry shellReg;
+    CommandShell shell(shellLog, shellReg);
+    f.ctx.shell = &shell;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("admin_auth_status");
+    CHECK(out == "admin: 0 lockout(s) | rcon: 0 lockout(s)");
+    std::string shellOut;
+    for (const auto& l : shell.outputLines())
+        shellOut += l + "\n";
+    CHECK(shellOut.find("MsgAdminCommand channel:") != std::string::npos);
+    CHECK(shellOut.find("RCON channel:") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: admin_auth_status with RCON callback shows locked-out RCON entry", "[admin_console][wb]") {
+    WbFixture f;
+    fl::AuthLockoutSummary rconS;
+    rconS.activeCount = 1;
+    rconS.threshold = 5;
+    rconS.entries.push_back({"5.6.7.8", true, 0, 120LL});
+    f.ctx.getRconAuthSummary = [rconS]() { return rconS; };
+    NullLogger2 shellLog;
+    CommandRegistry shellReg;
+    CommandShell shell(shellLog, shellReg);
+    f.ctx.shell = &shell;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("admin_auth_status");
+    CHECK(out == "admin: 0 lockout(s) | rcon: 1 lockout(s)");
+    std::string shellOut;
+    for (const auto& l : shell.outputLines())
+        shellOut += l + "\n";
+    CHECK(shellOut.find("RCON channel:") != std::string::npos);
+    CHECK(shellOut.find("locked out") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: admin_auth_status with RCON callback shows pending RCON failures", "[admin_console][wb]") {
+    WbFixture f;
+    fl::AuthLockoutSummary rconS;
+    rconS.activeCount = 0;
+    rconS.threshold = 5;
+    rconS.entries.push_back({"9.10.11.12", false, 3, 0LL});
+    f.ctx.getRconAuthSummary = [rconS]() { return rconS; };
+    NullLogger2 shellLog;
+    CommandRegistry shellReg;
+    CommandShell shell(shellLog, shellReg);
+    f.ctx.shell = &shell;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("admin_auth_status");
+    CHECK(out == "admin: 0 lockout(s) | rcon: 0 lockout(s)");
+    std::string shellOut;
+    for (const auto& l : shell.outputLines())
+        shellOut += l + "\n";
+    CHECK(shellOut.find("RCON channel:") != std::string::npos);
+    CHECK(shellOut.find("3 failure(s)") != std::string::npos);
+    CHECK(shellOut.find("threshold: 5") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole wb: status shows no lockout line after admin_unlock clears it", "[admin_console][wb]") {
