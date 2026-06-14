@@ -8,6 +8,7 @@
 #include "render/TerrainMeshBuilder.h"
 #include "render/TerrainStreamer.h"
 
+#include "mock_content.h"
 #include "mock_hal.h"
 
 #include <algorithm>
@@ -154,7 +155,8 @@ static std::vector<uint8_t> makeFlatPng16(int w, int h, uint16_t fill) {
 // MockTerrainPack — IContentPack with configurable resolveTerrainChunk
 // ===========================================================================
 
-struct MockTerrainPack : public IContentPack {
+// Resolves terrain chunks from an in-memory map; everything else null-object (see mock_content.h).
+struct MockTerrainPack : NullContentPack {
     // key format: "<cx>:<cy>:<lod>"
     std::map<std::string, std::string> chunkPaths;
 
@@ -167,52 +169,6 @@ struct MockTerrainPack : public IContentPack {
     const char* id() const override {
         return "test:terrain";
     }
-    int priority() const override {
-        return 0;
-    }
-    const char* rootDirectory() const override {
-        return nullptr;
-    }
-    Status init() override {
-        return Status::Ready;
-    }
-    bool configure(IWindow*) override {
-        return true;
-    }
-    bool hasAsset(const char*, AssetType) const override {
-        return false;
-    }
-    std::optional<MeshData> loadMesh(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<TextureData> loadTexture(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<AudioBuffer> loadAudio(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<FlightModel> loadFlightModel(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<MissionData> loadMission(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<TerrainData> loadTerrain(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<AIScript> loadAIScript(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<EntityDefData> loadEntityDef(const char*) override {
-        return std::nullopt;
-    }
-    std::vector<std::string> listAssets(AssetType) const override {
-        return {};
-    }
-    std::optional<std::string> loadConfig(const char*) const override {
-        return std::nullopt;
-    }
-
     std::optional<std::string> resolveTerrainChunk(const char*, uint32_t cx, uint32_t cy, uint32_t lod) const override {
         std::string key = std::to_string(static_cast<int32_t>(cx)) + ":" + std::to_string(static_cast<int32_t>(cy)) +
                           ":" + std::to_string(lod);
@@ -220,12 +176,6 @@ struct MockTerrainPack : public IContentPack {
         if (it == chunkPaths.end())
             return std::nullopt;
         return it->second;
-    }
-    TrustLevel getTrustLevel() const override {
-        return TrustLevel::Unsigned;
-    }
-    bool isNativePlugin() const override {
-        return false;
     }
 };
 

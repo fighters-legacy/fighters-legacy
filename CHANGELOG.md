@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **test**: consolidate duplicated HAL test doubles — new shared `NullNetwork`/`TrackingNetwork` (`tests/mock_network.h`) and `NullContentPack` (`tests/mock_content.h`) collapse the 3 duplicate `INetwork` mocks and 6 duplicate `IContentPack` mocks onto null-object bases, so adding a pure virtual to either interface is now a one-header edit instead of touching every test file. `TrackingNetwork` also records `disconnect()`, letting the `ClientNetEventHandler` version-mismatch path assert the disconnect directly
 - **network**: `admin_unlock <IP>` now also clears the RCON channel auth lockout for the same IP in addition to the admin-command channel lockout; closes #335
 - **game**: `LocalServer::start()` now returns a `StartResult` enum (`Ok`, `SpawnFailed`, `BindFailed`, `Timeout`) instead of `bool`; `LoadingScreen` shows a specific failure reason ("Server binary not found.", "Port already in use.", "Server startup timed out.") immediately when the server thread signals failure rather than waiting for the 10-second startup timeout; closes #333
 

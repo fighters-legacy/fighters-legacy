@@ -11,6 +11,7 @@
 #include "content/AssetTypes.h"
 #include "content/IContentPack.h"
 
+#include "mock_content.h"
 #include "mock_hal.h"
 
 #include <optional>
@@ -23,7 +24,8 @@ using namespace fl;
 // Minimal mock content pack (no assets needed for particle tests)
 // ---------------------------------------------------------------------------
 
-struct EmptyContentPack : public IContentPack {
+// Null-object pack with a distinct identity (see mock_content.h).
+struct EmptyContentPack : NullContentPack {
     const char* name() const override {
         return "Empty";
     }
@@ -32,60 +34,6 @@ struct EmptyContentPack : public IContentPack {
     }
     const char* id() const override {
         return "test:empty";
-    }
-    int priority() const override {
-        return 0;
-    }
-    const char* rootDirectory() const override {
-        return nullptr;
-    }
-    Status init() override {
-        return Status::Ready;
-    }
-    bool configure(IWindow*) override {
-        return true;
-    }
-    bool hasAsset(const char*, AssetType) const override {
-        return false;
-    }
-    std::optional<MeshData> loadMesh(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<TextureData> loadTexture(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<AudioBuffer> loadAudio(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<FlightModel> loadFlightModel(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<MissionData> loadMission(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<TerrainData> loadTerrain(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<AIScript> loadAIScript(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<EntityDefData> loadEntityDef(const char*) override {
-        return std::nullopt;
-    }
-    std::vector<std::string> listAssets(AssetType) const override {
-        return {};
-    }
-    std::optional<std::string> loadConfig(const char*) const override {
-        return std::nullopt;
-    }
-    std::optional<std::string> resolveTerrainChunk(const char*, uint32_t, uint32_t, uint32_t) const override {
-        return std::nullopt;
-    }
-    TrustLevel getTrustLevel() const override {
-        return TrustLevel::Unsigned;
-    }
-    bool isNativePlugin() const override {
-        return false;
     }
 };
 
