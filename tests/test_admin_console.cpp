@@ -10,6 +10,7 @@
 #include "entity/EntityDef.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
+#include "mock_network.h"
 #include "net/GameProtocol.h"
 #include "net/WorldBroadcaster.h"
 #include <ILogger.h>
@@ -562,37 +563,11 @@ TEST_CASE("AdminConsole: resume with null gameLoop returns error message", "[adm
 // ---------------------------------------------------------------------------
 
 namespace {
-struct MockNetworkWb : INetwork {
-    bool init() override {
-        return true;
-    }
-    void shutdown() override {}
-    void setEventHandler(INetworkEventHandler*) override {}
-    bool bind(const char*, uint16_t, int) override {
-        return true;
-    }
-    bool connect(const char*, uint16_t) override {
-        return true;
-    }
-    void disconnect() override {}
-    void disconnectPeer(uint32_t) override {}
-    bool send(uint32_t, const void*, std::size_t, bool) override {
-        return true;
-    }
-    void broadcast(const void*, std::size_t, bool) override {}
-    void service(int) override {}
-    int getPeerCount() const override {
-        return 0;
-    }
-    PeerState getPeerState(uint32_t) const override {
-        return PeerState::Disconnected;
-    }
+// Null network with a single configurable peer address for all peers (see mock_network.h).
+struct MockNetworkWb : NullNetwork {
     std::string peerAddr; // set to e.g. "1.2.3.4" to test IP-based paths
     const char* getPeerAddress(uint32_t) const override {
         return peerAddr.empty() ? nullptr : peerAddr.c_str();
-    }
-    const char* getLastError() const override {
-        return nullptr;
     }
 };
 

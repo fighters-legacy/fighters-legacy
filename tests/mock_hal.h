@@ -19,6 +19,11 @@
 #include <utility>
 #include <vector>
 
+// Shared HAL test doubles live here — define new ones here rather than re-declaring per test file.
+// Naming convention: Null* = no-op base, Tracking* = records calls, Fake* = limited real behaviour,
+// Mock* = configurable. Two interfaces are kept in dedicated headers to avoid forcing their deps on
+// every HAL-only test: INetwork doubles in mock_network.h, IContentPack doubles in mock_content.h.
+
 struct MockAudio : public IAudio {
     int uploadCount = 0;
     int createCount = 0;

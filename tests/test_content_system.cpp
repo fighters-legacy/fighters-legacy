@@ -11,6 +11,8 @@
 #include "content/ModLoader.h"
 #include "difficulty/DifficultyMultipliers.h"
 
+#include "mock_content.h"
+
 #include <cstring>
 #include <map>
 #include <string>
@@ -135,7 +137,7 @@ struct MockFilesystemWatcher : public IFilesystemWatcher {
     }
 };
 
-struct MockContentPack : public IContentPack {
+struct MockContentPack : public NullContentPack {
     std::string packName = "mock";
     std::string packId = "mock-id";
     std::string packVersion = "1.0.0";
@@ -208,9 +210,7 @@ struct MockContentPack : public IContentPack {
     std::optional<EntityDefData> loadEntityDef(const char* n) override {
         return loadByType<EntityDefData>(n, AssetType::EntityDef);
     }
-    std::vector<std::string> listAssets(AssetType) const override {
-        return {};
-    }
+    // listAssets, getTrustLevel, isNativePlugin inherited from NullContentPack.
 
     std::map<std::string, std::string> configs;
 
@@ -231,13 +231,6 @@ struct MockContentPack : public IContentPack {
         if (it == chunkPaths.end())
             return std::nullopt;
         return it->second;
-    }
-
-    TrustLevel getTrustLevel() const override {
-        return TrustLevel::Unsigned;
-    }
-    bool isNativePlugin() const override {
-        return false;
     }
 };
 

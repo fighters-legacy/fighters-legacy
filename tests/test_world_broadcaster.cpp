@@ -10,6 +10,8 @@
 #include "render/RenderSnapshot.h"
 #include "weather/WeatherController.h"
 
+#include "mock_network.h"
+
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cmath>
@@ -29,55 +31,8 @@ struct MockLogger : ILogger {
     void flush() override {}
 };
 
-struct MockNetwork : INetwork {
-    std::vector<std::vector<uint8_t>> broadcasts;
-    std::vector<std::vector<uint8_t>> sends;
-    bool sendReliable{false};
-    std::map<uint32_t, std::string> peerAddresses; // configure per-test
-    std::vector<uint32_t> disconnectedPeers;       // tracks disconnectPeer calls
-    mutable std::string addrBuf;                   // backing store for getPeerAddress
-
-    bool init() override {
-        return true;
-    }
-    void shutdown() override {}
-    void setEventHandler(INetworkEventHandler*) override {}
-    bool bind(const char*, uint16_t, int) override {
-        return true;
-    }
-    bool connect(const char*, uint16_t) override {
-        return true;
-    }
-    void disconnect() override {}
-    void disconnectPeer(uint32_t peerId) override {
-        disconnectedPeers.push_back(peerId);
-    }
-    bool send(uint32_t, const void* data, std::size_t size, bool reliable) override {
-        sends.push_back({static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size});
-        sendReliable = reliable;
-        return true;
-    }
-    void broadcast(const void* data, std::size_t size, bool) override {
-        broadcasts.push_back({static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size});
-    }
-    void service(int) override {}
-    int getPeerCount() const override {
-        return 0;
-    }
-    PeerState getPeerState(uint32_t) const override {
-        return PeerState::Disconnected;
-    }
-    const char* getPeerAddress(uint32_t peerId) const override {
-        auto it = peerAddresses.find(peerId);
-        if (it == peerAddresses.end())
-            return nullptr;
-        addrBuf = it->second;
-        return addrBuf.c_str();
-    }
-    const char* getLastError() const override {
-        return nullptr;
-    }
-};
+// Records broadcasts/sends/disconnects + resolves configurable peer addresses (see mock_network.h).
+using MockNetwork = TrackingNetwork;
 
 static fl::EntityDef makeDebugDef(const char* id = "builtin:debug-entity") {
     fl::EntityDef def;

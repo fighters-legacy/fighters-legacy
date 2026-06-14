@@ -8,6 +8,7 @@
 #include "content/AssetManager.h"
 #include "content/IContentPack.h"
 #include "i18n/Localization.h"
+#include "mock_content.h"
 #include "mock_hal.h"
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
@@ -82,78 +83,9 @@ struct NullLogger : ILogger {
     void flush() override {}
 };
 
-// ---------------------------------------------------------------------------
-// NullContentPack — returns nullopt/empty for every asset request.
-// Lets us construct a real AssetManager in tests without needing filesystem access.
-// ---------------------------------------------------------------------------
-struct NullContentPack : IContentPack {
-    const char* name() const override {
-        return "null";
-    }
-    const char* version() const override {
-        return "0";
-    }
-    const char* id() const override {
-        return "null";
-    }
-    int priority() const override {
-        return 0;
-    }
-    const char* rootDirectory() const override {
-        return nullptr;
-    }
-
-    Status init() override {
-        return Status::Ready;
-    }
-    bool configure(IWindow*) override {
-        return true;
-    }
-
-    bool hasAsset(const char*, AssetType) const override {
-        return false;
-    }
-
-    std::optional<MeshData> loadMesh(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<TextureData> loadTexture(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<AudioBuffer> loadAudio(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<FlightModel> loadFlightModel(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<MissionData> loadMission(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<TerrainData> loadTerrain(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<AIScript> loadAIScript(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<EntityDefData> loadEntityDef(const char*) override {
-        return std::nullopt;
-    }
-    std::vector<std::string> listAssets(AssetType) const override {
-        return {};
-    }
-    std::optional<std::string> loadConfig(const char*) const override {
-        return std::nullopt;
-    }
-    std::optional<std::string> resolveTerrainChunk(const char*, uint32_t, uint32_t, uint32_t) const override {
-        return std::nullopt;
-    }
-    TrustLevel getTrustLevel() const override {
-        return TrustLevel::Unsigned;
-    }
-    bool isNativePlugin() const override {
-        return false;
-    }
-};
+// NullContentPack (shared, mock_content.h) — returns nullopt/empty for every asset request.
+// Lets us construct a real AssetManager in tests without filesystem access. The audio fixtures
+// below derive from it and override only loadAudio.
 
 // ---------------------------------------------------------------------------
 // Minimal valid OGG Vorbis file (0.05 s mono silence, 44100 Hz) as a byte array.

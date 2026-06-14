@@ -14,6 +14,8 @@
 #include "net/WireCodec.h"
 #include "render/SimRenderBridge.h"
 
+#include "mock_network.h"
+
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -28,38 +30,8 @@ struct MockLogger : ILogger {
     void flush() override {}
 };
 
-struct MockNetwork : INetwork {
-    bool init() override {
-        return true;
-    }
-    void shutdown() override {}
-    void setEventHandler(INetworkEventHandler*) override {}
-    bool bind(const char*, uint16_t, int) override {
-        return true;
-    }
-    bool connect(const char*, uint16_t) override {
-        return true;
-    }
-    void disconnect() override {}
-    bool send(uint32_t, const void*, std::size_t, bool) override {
-        return true;
-    }
-    void broadcast(const void*, std::size_t, bool) override {}
-    void service(int) override {}
-    int getPeerCount() const override {
-        return 0;
-    }
-    PeerState getPeerState(uint32_t) const override {
-        return PeerState::Disconnected;
-    }
-    const char* getPeerAddress(uint32_t) const override {
-        return "";
-    }
-    void disconnectPeer(uint32_t) override {}
-    const char* getLastError() const override {
-        return nullptr;
-    }
-};
+// Records disconnect()/disconnectPeer() so the version-mismatch and refusal paths are assertable.
+using MockNetwork = TrackingNetwork;
 
 // Build a raw MsgMotd packet: MsgMotdHeader + text + NUL terminator.
 static std::vector<uint8_t> makeMotdPacket(std::string_view text, uint16_t displaySeconds = 0) {
@@ -357,13 +329,6 @@ TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds overrides client
 
 namespace {
 
-struct TrackingNet : MockNetwork {
-    bool disconnected{false};
-    void disconnect() override {
-        disconnected = true;
-    }
-};
-
 static std::vector<uint8_t> makeMsgHello(uint8_t protocolVersion) {
     fl::MsgHello msg{};
     msg.msgId = static_cast<uint8_t>(fl::MsgId::Hello);
@@ -388,7 +353,7 @@ TEST_CASE("ClientNetEventHandler: MsgHello version mismatch sets atomic and disc
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
     MockLogger logger;
-    TrackingNet net;
+    MockNetwork net;
     EnvironmentState env{};
     std::atomic<const char*> failMsg{nullptr};
 
@@ -399,7 +364,7 @@ TEST_CASE("ClientNetEventHandler: MsgHello version mismatch sets atomic and disc
     auto pkt = makeMsgHello(static_cast<uint8_t>(fl::kProtocolVersion) ^ 0xFF);
     handler.onReceive(0u, pkt.data(), pkt.size());
 
-    CHECK(net.disconnected);
+    CHECK(net.disconnectCount == 1);
     CHECK(std::string(failMsg.load()) == "Server version mismatch.");
 }
 
@@ -426,7 +391,7 @@ TEST_CASE("ClientNetEventHandler: version mismatch message not overwritten by on
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
     MockLogger logger;
-    TrackingNet net;
+    MockNetwork net;
     EnvironmentState env{};
     std::atomic<const char*> failMsg{nullptr};
 
@@ -497,7 +462,7 @@ TEST_CASE("ClientNetEventHandler: correct protocolVersion does not disconnect or
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
     MockLogger logger;
-    TrackingNet net;
+    MockNetwork net;
     EnvironmentState env{};
     std::atomic<const char*> failMsg{nullptr};
 
@@ -508,7 +473,7 @@ TEST_CASE("ClientNetEventHandler: correct protocolVersion does not disconnect or
     auto pkt = makeMsgHello(static_cast<uint8_t>(fl::kProtocolVersion));
     handler.onReceive(0u, pkt.data(), pkt.size());
 
-    CHECK(!net.disconnected);
+    CHECK(net.disconnectCount == 0);
     CHECK(failMsg.load() == nullptr);
 }
 

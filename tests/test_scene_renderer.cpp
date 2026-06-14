@@ -11,6 +11,7 @@
 #include "content/AssetTypes.h"
 #include "content/IContentPack.h"
 
+#include "mock_content.h"
 #include "mock_hal.h"
 
 #include <cmath>
@@ -25,7 +26,8 @@ using namespace fl;
 // Minimal mock content pack for asset loading tests
 // ---------------------------------------------------------------------------
 
-struct MockContentPack : public IContentPack {
+// Serves meshes from an in-memory map; everything else null-object (see mock_content.h).
+struct MockContentPack : NullContentPack {
     std::string packId{"test:mock"};
     std::unordered_map<std::string, std::vector<uint8_t>> meshes;
 
@@ -38,19 +40,6 @@ struct MockContentPack : public IContentPack {
     const char* id() const override {
         return packId.c_str();
     }
-    int priority() const override {
-        return 0;
-    }
-    const char* rootDirectory() const override {
-        return nullptr;
-    }
-    Status init() override {
-        return Status::Ready;
-    }
-    bool configure(IWindow*) override {
-        return true;
-    }
-
     bool hasAsset(const char* n, AssetType t) const override {
         return t == AssetType::Mesh && meshes.count(n);
     }
@@ -62,42 +51,6 @@ struct MockContentPack : public IContentPack {
         d.name = n;
         d.bytes = it->second;
         return d;
-    }
-    std::optional<TextureData> loadTexture(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<AudioBuffer> loadAudio(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<FlightModel> loadFlightModel(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<MissionData> loadMission(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<TerrainData> loadTerrain(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<AIScript> loadAIScript(const char*) override {
-        return std::nullopt;
-    }
-    std::optional<EntityDefData> loadEntityDef(const char*) override {
-        return std::nullopt;
-    }
-    std::vector<std::string> listAssets(AssetType) const override {
-        return {};
-    }
-    std::optional<std::string> loadConfig(const char*) const override {
-        return std::nullopt;
-    }
-    std::optional<std::string> resolveTerrainChunk(const char*, uint32_t, uint32_t, uint32_t) const override {
-        return std::nullopt;
-    }
-    TrustLevel getTrustLevel() const override {
-        return TrustLevel::Unsigned;
-    }
-    bool isNativePlugin() const override {
-        return false;
     }
 };
 
