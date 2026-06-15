@@ -19,6 +19,7 @@ struct EntityDef {
     std::optional<DamageDef> damage; // absent = binary death (no progressive damage)
     std::string mesh;                // asset name for primary geometry
     std::string classicDamageMesh;   // JumpToDamage geometry variant; empty if none
+    std::string flightModelId;       // flight-model asset id; empty = builtin UFO model (server-side only)
 };
 
 } // namespace fl

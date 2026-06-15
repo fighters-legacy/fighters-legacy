@@ -7,6 +7,7 @@
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
+#include "entity/IEntityController.h"
 #include "flight/BuiltinFlightModel.h"
 #include "flight/FlightIntegrator.h"
 #include "net/GameProtocol.h"
@@ -22,6 +23,33 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+// ---------------------------------------------------------------------------
+// Control sources
+// ---------------------------------------------------------------------------
+
+namespace {
+// Drives an entity from the latest MsgClientInput stored for its connected peer. Holds a pointer to
+// the peer's stable PeerInputState slot in WorldBroadcaster::m_peerInputs (unordered_map element
+// pointers stay valid across rehash); the slot outlives the controller (torn down first on disconnect).
+class PeerController final : public fl::IEntityController {
+  public:
+    explicit PeerController(const fl::PeerInputState* input) : m_input(input) {}
+
+    fl::ControlInput sample(const fl::EntityState& /*state*/, uint64_t /*tick*/, double /*dt*/) override {
+        fl::ControlInput ctrl{};
+        ctrl.throttle = m_input->throttle;
+        ctrl.elevator = m_input->elevator;
+        ctrl.aileron = m_input->aileron;
+        ctrl.rudder = m_input->rudder;
+        ctrl.afterburner = (m_input->buttons & 0x02u) != 0; // bit 1 per MsgClientInput::buttons
+        return ctrl;
+    }
+
+  private:
+    const fl::PeerInputState* m_input;
+};
+} // namespace
 
 // ---------------------------------------------------------------------------
 // IP address helpers
@@ -170,6 +198,10 @@ void WorldBroadcaster::setMotdDisplaySeconds(uint16_t seconds) noexcept {
     m_motdDisplaySeconds = seconds;
 }
 
+void WorldBroadcaster::setFlightModelResolver(FlightModelResolver fn) {
+    m_flightModelResolver = std::move(fn);
+}
+
 void WorldBroadcaster::setOperatorPassword(std::string password) {
     m_operatorPassword = std::move(password);
 }
@@ -217,28 +249,25 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         m_adminAuthTracker.pruneExpired();
     }
 
-    // Step each peer's FlightIntegrator from stored inputs, then copy state to the entity.
-    for (auto& [peerId, inp] : m_peerInputs) {
-        auto eit = m_peerEntities.find(peerId);
-        if (eit == m_peerEntities.end())
-            continue;
-        auto fit = m_peerFlightSims.find(peerId);
-        assert(fit != m_peerFlightSims.end()); // invariant: added together in onConnect
-        EntityState* state = m_entityManager.get(eit->second);
+    // Step every controlled entity from its control source (peer/AI/script), then copy state back.
+    for (auto& [entityIdx, ce] : m_controlledEntities) {
+        EntityState* state = m_entityManager.get(ce.id);
         if (!state || state->dead)
             continue;
-        stepFlightSim(*fit->second, *state, inp, simDt);
+        const ControlInput ctrl = ce.controller->sample(*state, tickIndex, simDt);
+        stepFlightSim(*ce.sim, *state, ctrl, simDt);
 
         // NaN/Inf detection — log immediately so the cause is visible before any crash.
-        const FlightState& fs = fit->second->state();
+        const FlightState& fs = ce.sim->state();
         const bool badPos =
             !std::isfinite(fs.pos_world[0]) || !std::isfinite(fs.pos_world[1]) || !std::isfinite(fs.pos_world[2]);
         const bool badVel =
             !std::isfinite(fs.vel_body[0]) || !std::isfinite(fs.vel_body[1]) || !std::isfinite(fs.vel_body[2]);
         if (badPos || badVel) {
             char msg[256];
-            std::snprintf(msg, sizeof(msg), "[flight peer=%u] NaN/Inf — pos=(%.3g,%.3g,%.3g) vel_body=(%.3g,%.3g,%.3g)",
-                          peerId, fs.pos_world[0], fs.pos_world[1], fs.pos_world[2], fs.vel_body[0], fs.vel_body[1],
+            std::snprintf(msg, sizeof(msg),
+                          "[flight entity=%u] NaN/Inf — pos=(%.3g,%.3g,%.3g) vel_body=(%.3g,%.3g,%.3g)", entityIdx,
+                          fs.pos_world[0], fs.pos_world[1], fs.pos_world[2], fs.vel_body[0], fs.vel_body[1],
                           fs.vel_body[2]);
             m_logger.log(LogLevel::Error, __FILE__, __LINE__, msg);
         }
@@ -246,8 +275,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         if (tickIndex % 60 == 0) {
             char msg[256];
             std::snprintf(msg, sizeof(msg),
-                          "[flight peer=%u] tick=%llu pos=(%.1f,%.1f,%.1f) vel_body=(%.1f,%.1f,%.1f) thr=%.0f%%",
-                          peerId, static_cast<unsigned long long>(tickIndex), fs.pos_world[0], fs.pos_world[1],
+                          "[flight entity=%u] tick=%llu pos=(%.1f,%.1f,%.1f) vel_body=(%.1f,%.1f,%.1f) thr=%.0f%%",
+                          entityIdx, static_cast<unsigned long long>(tickIndex), fs.pos_world[0], fs.pos_world[1],
                           fs.pos_world[2], fs.vel_body[0], fs.vel_body[1], fs.vel_body[2], fs.throttle_actual * 100.f);
             m_logger.log(LogLevel::Trace, __FILE__, __LINE__, msg);
         }
@@ -269,15 +298,11 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         uint8_t engineFailFlags;
     };
     std::unordered_map<uint32_t, TelemetryEntry> entityTelemetry;
-    for (auto& [pid, fi] : m_peerFlightSims) {
-        auto eit = m_peerEntities.find(pid);
-        if (eit != m_peerEntities.end()) {
-            const auto& s = fi->state();
-            entityTelemetry[eit->second.index] = {
-                static_cast<uint8_t>(s.throttle_actual * 100.f),
-                static_cast<uint8_t>(std::clamp(s.fuel_kg / 4000.f * 100.f, 0.f, 100.f)),
-                static_cast<uint8_t>(s.ab_engaged ? 1u : 0u), s.engineFailFlags};
-        }
+    for (auto& [entityIdx, ce] : m_controlledEntities) {
+        const auto& s = ce.sim->state();
+        entityTelemetry[entityIdx] = {static_cast<uint8_t>(s.throttle_actual * 100.f),
+                                      static_cast<uint8_t>(std::clamp(s.fuel_kg / 4000.f * 100.f, 0.f, 100.f)),
+                                      static_cast<uint8_t>(s.ab_engaged ? 1u : 0u), s.engineFailFlags};
     }
 
     // Write header placeholder; fill entityCount after iteration.
@@ -431,17 +456,14 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         m_peerEntities[peerId] = id;
         m_peerInputs[peerId] = {};
 
-        FlightState fs{};
-        fs.pos_world[0] = static_cast<float>(t.pos[0]);
-        fs.pos_world[1] = static_cast<float>(t.pos[1]);
-        fs.pos_world[2] = static_cast<float>(t.pos[2]);
-        fs.fuel_kg = BuiltinFlightModel::get()->geometry.fuel_kg;
-        fs.mass_kg = BuiltinFlightModel::get()->geometry.mass_kg + fs.fuel_kg;
-        fs.throttle_actual = 0.4f; // pre-spooled to match client's initial throttle state
+        // Resolve the entity type's flight model (server-authoritative; never sent on the wire).
+        // Empty id, no resolver, or an unknown id falls back to the builtin UFO model.
+        std::shared_ptr<const FlightModelData> model = resolveFlightModel(id);
 
-        auto fi = std::make_unique<FlightIntegrator>(BuiltinFlightModel::get());
-        fi->reset(fs);
-        m_peerFlightSims.emplace(peerId, std::move(fi));
+        // PeerController reads the peer's stable input slot (pointer valid across rehash, slot torn
+        // down after the controller on disconnect). Pre-spooled to 0.4 to match the client's initial
+        // throttle state.
+        addControlledEntity(id, std::make_unique<PeerController>(&m_peerInputs[peerId]), std::move(model), 0.4f);
     }
     sendConnectAck(peerId, id);
     if (!m_motd.empty()) {
@@ -465,11 +487,12 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
 
     auto it = m_peerEntities.find(peerId);
     if (it != m_peerEntities.end()) {
+        // Tear down the controller (which points into m_peerInputs) before erasing the input slot.
+        m_controlledEntities.erase(it->second.index);
         m_entityManager.kill(it->second);
         m_peerEntities.erase(it);
     }
     m_peerInputs.erase(peerId);
-    m_peerFlightSims.erase(peerId);
     m_peerFloodState.erase(peerId);
     m_activePeerCount.fetch_sub(1, std::memory_order_relaxed);
 }
@@ -601,15 +624,50 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
     // Unknown msgIds: silently discard (no log spam; future protocol versions may add new IDs)
 }
 
-void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, const PeerInputState& inp,
-                                     double simDt) {
-    ControlInput ctrl{};
-    ctrl.throttle = inp.throttle;
-    ctrl.elevator = inp.elevator;
-    ctrl.aileron = inp.aileron;
-    ctrl.rudder = inp.rudder;
-    ctrl.afterburner = (inp.buttons & 0x02u) != 0; // bit 1 per MsgClientInput::buttons
+std::shared_ptr<const FlightModelData> WorldBroadcaster::resolveFlightModel(EntityId id) {
+    const EntityState* st = m_entityManager.get(id);
+    if (!st)
+        return nullptr;
+    const EntityDef* def = m_registry.byIndex(st->typeIndex);
+    if (!def || def->flightModelId.empty() || !m_flightModelResolver)
+        return nullptr;
+    std::shared_ptr<const FlightModelData> model = m_flightModelResolver(def->flightModelId);
+    if (!model) {
+        char wmsg[160];
+        std::snprintf(wmsg, sizeof(wmsg), "flight model '%s' not found -- using builtin model",
+                      def->flightModelId.c_str());
+        m_logger.log(LogLevel::Warn, __FILE__, __LINE__, wmsg);
+    }
+    return model;
+}
 
+void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityController> controller,
+                                           std::shared_ptr<const FlightModelData> model, float initialThrottle) {
+    const EntityState* st = m_entityManager.get(id);
+    if (!st)
+        return;
+    if (!model)
+        model = BuiltinFlightModel::get();
+
+    FlightState fs{};
+    fs.pos_world[0] = static_cast<float>(st->transform.pos[0]);
+    fs.pos_world[1] = static_cast<float>(st->transform.pos[1]);
+    fs.pos_world[2] = static_cast<float>(st->transform.pos[2]);
+    fs.fuel_kg = model->geometry.fuel_kg;
+    fs.mass_kg = model->geometry.mass_kg + fs.fuel_kg;
+    fs.throttle_actual = initialThrottle;
+
+    auto fi = std::make_unique<FlightIntegrator>(model);
+    fi->reset(fs);
+    m_controlledEntities[id.index] = ControlledEntity{id, std::move(fi), std::move(controller)};
+}
+
+void WorldBroadcaster::registerController(EntityId id, std::unique_ptr<IEntityController> controller,
+                                          std::shared_ptr<const FlightModelData> model) {
+    addControlledEntity(id, std::move(controller), std::move(model), 0.f);
+}
+
+void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, const ControlInput& ctrl, double simDt) {
     WindInfluence wind{};
     if (m_weather) {
         wind.wind_world[0] = m_weather->windX();

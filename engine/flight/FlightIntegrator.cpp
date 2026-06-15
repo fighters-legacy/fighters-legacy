@@ -11,9 +11,6 @@ namespace fl {
 
 namespace {
 
-constexpr float kG = 9.80665f;
-constexpr float kDegToRad = static_cast<float>(std::numbers::pi) / 180.f;
-
 // Quaternion: multiply q = (x,y,z,w)
 std::array<float, 4> quatMul(const float* a, const float* b) {
     return {
@@ -182,14 +179,17 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     if (eff_mass < 1.f)
         eff_mass = 1.f; // safety clamp
 
-    // 7. Forces in body frame
-    auto forces = computeForces(alpha_rad, beta_rad, mach, spd, altitude_m, m_state.current_sweep_deg,
-                                m_state.ab_engaged, m_state.throttle_actual, ctrl, payload, *m_data, atmos);
+    // 7. Aerodynamic + propulsive forces and moments via the swappable force model (default
+    // FixedWingForceModel). Gravity and turbulence are added below by the integrator core.
+    const AeroInputs aero{alpha_rad, beta_rad, mach, spd, altitude_m};
+    const ForceMoment fm = m_forceModel->compute(m_state, ctrl, payload, *m_data, atmos, aero);
+    auto forces = fm.force_body;
 
     // 8. Gravity in body frame. World convention: x=forward, y=up, z=right.
-    // Gravity acts downward = -world_y. Transform to body frame via conjugate quaternion.
-    const float grav_world[3] = {0.f, -kG, 0.f}; // world: x=forward, y=up, z=right
-    auto grav_body = quatRotate(q_conj, grav_world);
+    // Queried from the gravity field (default: uniform -world_y), transformed to body frame via the
+    // conjugate quaternion.
+    const std::array<float, 3> grav_world = m_gravity->accelWorld(m_state.pos_world);
+    auto grav_body = quatRotate(q_conj, grav_world.data());
 
     forces[0] += eff_mass * grav_body[0];
     forces[1] += eff_mass * grav_body[1];
@@ -201,20 +201,8 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     forces[1] += eff_mass * wind.turbulence_body[1];
     forces[2] += eff_mass * wind.turbulence_body[2];
 
-    // 9. Thrust magnitude for TVC moment and prop effects
-    float alt_km = altitude_m / 1000.f;
-    float mil_kn = m_data->engine.mil_thrust.lookup(mach, alt_km);
-    float thrust_n = 0.f;
-    if (m_state.ab_engaged && m_data->engine.ab_thrust)
-        thrust_n = m_data->engine.ab_thrust->lookup(mach, alt_km) * 1000.f;
-    else
-        thrust_n = m_state.throttle_actual * mil_kn * 1000.f;
-
-    // 10. Moments in body frame.
-    // omega[0]=roll(X), omega[1]=yaw(Y=up), omega[2]=pitch(Z=right).
-    // computeMoments expects (p=roll, q=pitch, r=yaw).
-    auto moments = computeMoments(alpha_rad, beta_rad, m_state.omega[0], m_state.omega[2], m_state.omega[1], spd,
-                                  thrust_n, m_state.tvc_angle_deg * kDegToRad, ctrl, *m_data, atmos);
+    // 9-10. Moments come from the force model (thrust magnitude and TVC are handled inside it).
+    const auto& moments = fm.moment_body;
 
     // 11. Semi-implicit Euler: angular velocity.
     // moments = {roll, pitch, yaw}; omega = {roll(X), yaw(Y), pitch(Z)}.

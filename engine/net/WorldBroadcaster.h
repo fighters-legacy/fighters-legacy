@@ -23,6 +23,9 @@ namespace fl {
 class EntityManager;
 class FlightIntegrator; // full definition in WorldBroadcaster.cpp
 struct EntityState;
+struct ControlInput;      // engine/flight/AeroForces.h
+struct FlightModelData;   // engine/flight/FlightModelData.h
+struct IEntityController; // engine/entity/IEntityController.h
 class EntityTypeRegistry;
 class WeatherController;
 } // namespace fl
@@ -37,6 +40,16 @@ struct PeerInputState {
     float rudder{0.f};
     float viewAxis[3]{1.f, 0.f, 0.f};
     uint8_t buttons{0};
+};
+
+// One simulated entity together with its control source. The registry is EntityId-keyed (not peer-
+// keyed) so peers, AI, and scripted entities are all stepped uniformly in onTick. unique_ptr members
+// hold incomplete types here; WorldBroadcaster's destructor is defined in the .cpp where both are
+// complete.
+struct ControlledEntity {
+    EntityId id;
+    std::unique_ptr<FlightIntegrator> sim;
+    std::unique_ptr<IEntityController> controller;
 };
 
 // Pre-start scalar configuration. Bundles the init-time setters so callers configure rate limiting,
@@ -89,6 +102,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     int getPeerCount() const noexcept {
         return m_activePeerCount.load(std::memory_order_relaxed);
     }
+
+    // Register a server-side controller (AI, scripted, ...) for an already-spawned entity. The entity
+    // is then stepped every onTick exactly like a connected peer and serialized into MsgWorldSnapshot
+    // for free — no peer required. The flight integrator is built from `model` (null = builtin UFO
+    // model) and reset to the entity's current transform. Replaces any existing controller for the
+    // entity. Sim-thread only. This is the seam future AI/scripted controllers plug into.
+    void registerController(EntityId id, std::unique_ptr<IEntityController> controller,
+                            std::shared_ptr<const FlightModelData> model = nullptr);
 
     // Peer management — all must be called from the sim thread (via GameLoop::enqueueSimCallback).
 
@@ -188,6 +209,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Call alongside setMotd() before gameLoop.start() or via enqueueSimCallback.
     void setMotdDisplaySeconds(uint16_t seconds) noexcept;
 
+    // Resolves an EntityDef::flightModelId to a parsed flight model for the spawn path. Injected as a
+    // std::function so engine-net stays free of engine-content/engine-flight asset deps (the parse
+    // lives in fl-server, which links both). Returns nullptr when the id is unknown; an empty
+    // flightModelId or an unset resolver falls back to the builtin UFO model. Call before
+    // gameLoop.start().
+    using FlightModelResolver = std::function<std::shared_ptr<const FlightModelData>(const std::string& id)>;
+    void setFlightModelResolver(FlightModelResolver fn);
+
     // Configure the operator password for MsgAdminCommand authentication.
     // Empty string disables the network admin channel. Call before gameLoop.start().
     void setOperatorPassword(std::string password);
@@ -214,7 +243,18 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Log, send a MsgConnectRefusal with the reason text for `code`, and disconnect the peer.
     // Centralizes the five onConnect rejection paths.
     void rejectConnection(uint32_t peerId, const std::string& ip, ConnectRefusalCode code);
-    void stepFlightSim(FlightIntegrator& fi, EntityState& state, const PeerInputState& inp, double simDt);
+    // Build a FlightIntegrator (from model, or builtin when null) reset to the entity's current
+    // transform, and register it with the controller under the entity's index. Shared by onConnect
+    // (PeerController) and registerController (AI/scripted). Sim-thread only.
+    void addControlledEntity(EntityId id, std::unique_ptr<IEntityController> controller,
+                             std::shared_ptr<const FlightModelData> model, float initialThrottle);
+
+    // Resolve an entity type's EntityDef::flightModelId via the injected resolver. Returns null when
+    // the id is empty, no resolver is set, or the id is unknown (logs Warn) — callers fall back to
+    // the builtin model.
+    std::shared_ptr<const FlightModelData> resolveFlightModel(EntityId id);
+
+    void stepFlightSim(FlightIntegrator& fi, EntityState& state, const ControlInput& ctrl, double simDt);
     void broadcastShutdownNotice(uint16_t secsLeft, const char* text);
     static std::string makeShutdownMessage(uint32_t secsLeft, const std::string& reason = "");
 
@@ -226,7 +266,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     std::unordered_map<uint32_t, EntityId> m_peerEntities;
     std::unordered_map<uint32_t, PeerInputState> m_peerInputs;
-    std::unordered_map<uint32_t, std::unique_ptr<FlightIntegrator>> m_peerFlightSims;
+    // EntityId.index -> {sim, controller}. Replaces the old peerId-keyed flight-sim map: any control
+    // source (peer, AI, script) registers here and is stepped uniformly in onTick.
+    std::unordered_map<uint32_t, ControlledEntity> m_controlledEntities;
 
     std::atomic<int> m_activePeerCount{0};
     uint64_t m_weatherBroadcastTick{0};        // throttle weather broadcasts to ~6 Hz
@@ -263,6 +305,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // MOTD state (set before gameLoop.start() or via enqueueSimCallback; read on sim thread only).
     std::string m_motd;               // empty = no MOTD sent
     uint16_t m_motdDisplaySeconds{0}; // 0 = client default
+
+    // Resolves EntityDef::flightModelId -> FlightModelData at spawn (null = always builtin model).
+    FlightModelResolver m_flightModelResolver;
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword;                               // empty = admin channel disabled

@@ -10,7 +10,7 @@ target_include_directories(fl-server-config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
 add_executable(fl-server main.cpp ServerCommands.cpp IpListFile.cpp RconServer.cpp)
 target_link_libraries(fl-server PRIVATE
     fl-server-config platform-enet engine-net engine-entity engine-loop engine-weather engine-console
-    engine-config engine-render engine-content platform-sdl3)
+    engine-config engine-render engine-content engine-flight platform-sdl3)
 target_include_directories(fl-server PRIVATE
     "${CMAKE_SOURCE_DIR}/platform/net"
     "${enet6_SOURCE_DIR}/include")

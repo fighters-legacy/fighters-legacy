@@ -34,6 +34,7 @@
 #include <entity/EntityDef.h>
 #include <entity/EntityManager.h>
 #include <entity/EntityTypeRegistry.h>
+#include <flight/FlightModelParser.h>
 #include <loop/GameLoop.h>
 #include <net/GameProtocol.h>
 #include <net/WorldBroadcaster.h>
@@ -347,6 +348,23 @@ int main(int argc, char** argv) {
     wbConfig.motdDisplaySeconds = cfg.motdDisplayS;
     wbConfig.operatorPassword = cfg.operatorPassword;
     broadcaster.applyConfig(wbConfig);
+    // Resolve EntityDef::flightModelId -> parsed FlightModelData on the spawn path. Loads the raw
+    // TOML asset via AssetManager, parses it with engine-flight's parseFlightModel, and caches the
+    // result by id (sim-thread-only access). Empty/unknown ids fall back to the builtin model in
+    // WorldBroadcaster.
+    auto fmCache = std::make_shared<std::unordered_map<std::string, std::shared_ptr<const fl::FlightModelData>>>();
+    broadcaster.setFlightModelResolver(
+        [&assets, fmCache](const std::string& id) -> std::shared_ptr<const fl::FlightModelData> {
+            if (auto it = fmCache->find(id); it != fmCache->end())
+                return it->second;
+            std::shared_ptr<const fl::FlightModelData> model;
+            if (auto raw = assets.loadFlightModel(id.c_str()); raw && !raw->bytes.empty()) {
+                model = std::make_shared<const fl::FlightModelData>(fl::parseFlightModel(
+                    std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size())));
+            }
+            (*fmCache)[id] = model; // cache misses too, so a bad id isn't re-parsed every connect
+            return model;
+        });
     // Seed the ground floor from the already-primed TerrainStreamer at the spawn origin.
     // Used by FlightIntegrator::step as the physics floor and by onConnect for peer spawn
     // altitude (peers spawn at groundElevation + 500 m AGL). Updated each frame below.

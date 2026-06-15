@@ -62,6 +62,10 @@ add_executable(test_flight_integrator test_flight_integrator.cpp)
 target_link_libraries(test_flight_integrator PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_flight_integrator)
 
+add_executable(test_force_model test_force_model.cpp)
+target_link_libraries(test_force_model PRIVATE Catch2::Catch2WithMain engine-flight)
+catch_discover_tests(test_force_model)
+
 add_executable(test_loop test_loop.cpp)
 target_link_libraries(test_loop PRIVATE Catch2::Catch2WithMain engine-loop)
 target_include_directories(test_loop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

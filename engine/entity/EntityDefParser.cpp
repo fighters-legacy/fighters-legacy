@@ -101,6 +101,7 @@ EntityDef parseEntityDef(std::string_view toml_src) {
 
     def.maxHp = req_float(entity["max_hp"], "entity.max_hp");
     def.mesh = opt_string(entity["mesh"]);
+    def.flightModelId = opt_string(entity["flight_model"]); // optional; empty = builtin UFO model
 
     // Optional progressive damage section
     auto damage_node = tbl["damage"];

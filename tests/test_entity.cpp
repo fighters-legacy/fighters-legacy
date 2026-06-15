@@ -63,11 +63,12 @@ mesh     = "aircraft/test"
 
 static const char* kFullEntityToml = R"(
 [entity]
-id       = "test:tank"
-name     = "Test Tank"
-category = "ground_vehicle"
-max_hp   = 200.0
-mesh     = "ground/tank"
+id           = "test:tank"
+name         = "Test Tank"
+category     = "ground_vehicle"
+max_hp       = 200.0
+mesh         = "ground/tank"
+flight_model = "models/tank_drive"
 
 [damage.light]
 hp_fraction    = 0.75
@@ -371,6 +372,7 @@ TEST_CASE("EntityDefParser: minimal TOML without damage section", "[parser]") {
     CHECK(def.mesh == "aircraft/test");
     CHECK_FALSE(def.damage.has_value());
     CHECK(def.classicDamageMesh.empty());
+    CHECK(def.flightModelId.empty()); // optional field defaults empty -> builtin model
 }
 
 TEST_CASE("EntityDefParser: full TOML with damage and classic sections", "[parser]") {
@@ -384,6 +386,7 @@ TEST_CASE("EntityDefParser: full TOML with damage and classic sections", "[parse
     CHECK(def.damage->critical.avionicsFailure == true);
     CHECK(def.damage->light.visualEffect == "smoke_light");
     CHECK(def.classicDamageMesh == "ground/tank_damaged");
+    CHECK(def.flightModelId == "models/tank_drive");
 }
 
 TEST_CASE("EntityDefParser: all category strings are accepted", "[parser]") {

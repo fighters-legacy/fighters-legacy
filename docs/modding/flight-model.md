@@ -8,6 +8,28 @@ All TOML examples in this guide use SI units. Do not mix imperial and SI within 
 
 ---
 
+## Referencing a flight model from an entity
+
+An entity opts into a flight model by setting `flight_model` in its `[entity]` definition to the
+flight-model asset id (the same lookup name passed to the asset loader):
+
+```toml
+[entity]
+id           = "fl-base:f15c"
+name         = "F-15C Eagle"
+category     = "air_vehicle"
+max_hp       = 100.0
+mesh         = "aircraft/f15"
+flight_model = "aircraft/f15_fm"   # resolves to this flight-model TOML
+```
+
+The server resolves `flight_model` to a parsed model when the entity is spawned; it is
+**server-authoritative and never sent on the wire** (clients only render the state the server
+broadcasts). If `flight_model` is omitted, empty, or the id cannot be resolved, the entity falls
+back to the built-in UFO-like model (the same default used by the zero-content-pack sandbox).
+
+---
+
 ## Physics model overview
 
 The fighters-legacy flight model is a **simplified 6-DOF stability-derivative model**:

@@ -2,7 +2,9 @@
 #pragma once
 
 #include "flight/AeroForces.h"
+#include "flight/FixedWingForceModel.h"
 #include "flight/FlightModelData.h"
+#include "flight/IGravityField.h"
 
 #include <cstdint>
 #include <memory>
@@ -50,9 +52,23 @@ class FlightIntegrator {
         return m_state;
     }
 
+    // Inject an alternative gravity field (default: uniform FlatGravityField). A central/spherical
+    // field plugs in here for planet-scale ballistic trajectories without touching step().
+    void setGravityField(const IGravityField& field) {
+        m_gravity = &field;
+    }
+
+    // Inject an alternative force model (default: FixedWingForceModel). A multirotor/rotor-disc or
+    // ballistic point-mass model plugs in here without touching the integrator's F=ma core.
+    void setForceModel(const IForceModel& model) {
+        m_forceModel = &model;
+    }
+
   private:
     std::shared_ptr<const FlightModelData> m_data;
     FlightState m_state;
+    const IGravityField* m_gravity{&FlatGravityField::instance()};
+    const IForceModel* m_forceModel{&FixedWingForceModel::instance()};
 
     void advanceSpool(float dt, float commanded_throttle);
     void advanceSweep(float dt, float commanded_sweep_deg);

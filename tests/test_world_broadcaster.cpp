@@ -6,6 +6,7 @@
 #include "entity/EntityDef.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
+#include "entity/IEntityController.h"
 #include "net/GameProtocol.h"
 #include "net/WorldBroadcaster.h"
 #include "render/RenderSnapshot.h"
@@ -111,6 +112,108 @@ TEST_CASE("WorldBroadcaster: onTick broadcasts WorldSnapshot for N entities", "[
     fl::MsgEntityEntry e0;
     std::memcpy(&e0, pkt.data() + sizeof(hdr), sizeof(e0));
     CHECK(e0.pos[1] == 500.0);
+}
+
+// Stub controller: drives the entity at a fixed throttle with no peer connection. Records how many
+// times it is sampled so the test can confirm onTick steps non-peer entities.
+struct ConstantController : fl::IEntityController {
+    float throttle{1.0f};
+    int sampleCount{0};
+    fl::ControlInput sample(const fl::EntityState&, uint64_t, double) override {
+        ++sampleCount;
+        fl::ControlInput ctrl{};
+        ctrl.throttle = throttle;
+        return ctrl;
+    }
+};
+
+TEST_CASE("WorldBroadcaster: registerController steps a non-peer entity and serializes it", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::EntityTransform t{};
+    t.pos[1] = 1000.0;
+    fl::EntityId id = em.spawn("builtin:debug-entity", t);
+    REQUIRE(id.valid());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    // No peer ever connects — register an AI/scripted controller directly.
+    auto controller = std::make_unique<ConstantController>();
+    ConstantController* ctrlPtr = controller.get();
+    broadcaster.registerController(id, std::move(controller));
+
+    for (uint64_t tick = 1; tick <= 120; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    // The controller was sampled once per tick — proof the non-peer entity is stepped.
+    CHECK(ctrlPtr->sampleCount == 120);
+
+    // The entity moved under its own controller (full-throttle builtin model accelerates forward).
+    const fl::EntityState* st = em.get(id);
+    REQUIRE(st != nullptr);
+    const bool moved = st->transform.pos[0] != 0.0 || st->transform.pos[2] != 0.0 || st->transform.pos[1] != 1000.0;
+    CHECK(moved);
+
+    // It serializes into the snapshot with live throttle telemetry, no peer required.
+    const auto& pkt = net.broadcasts.back();
+    fl::MsgWorldSnapshotHeader hdr;
+    std::memcpy(&hdr, pkt.data(), sizeof(hdr));
+    REQUIRE(hdr.entityCount == 1u);
+    fl::MsgEntityEntry e0;
+    std::memcpy(&e0, pkt.data() + sizeof(hdr), sizeof(e0));
+    CHECK(e0.throttle > 0u); // throttle spooled up toward the commanded 100%
+}
+
+TEST_CASE("WorldBroadcaster: flight model resolver is consulted for a flightModelId, falls back on miss",
+          "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+
+    fl::EntityDef def = makeDebugDef();
+    def.flightModelId = "models/x";
+    registry.registerType(def);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    std::string requestedId;
+    broadcaster.setFlightModelResolver([&](const std::string& id) -> std::shared_ptr<const fl::FlightModelData> {
+        requestedId = id;
+        return nullptr; // unknown id -> WorldBroadcaster falls back to the builtin model
+    });
+
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CHECK(requestedId == "models/x"); // resolver consulted with the entity's flightModelId
+    CHECK(em.liveCount() == 1u);      // spawn still succeeded via the builtin fallback
+}
+
+TEST_CASE("WorldBroadcaster: flight model resolver is skipped when flightModelId is empty", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef()); // empty flightModelId
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    bool called = false;
+    broadcaster.setFlightModelResolver([&](const std::string&) -> std::shared_ptr<const fl::FlightModelData> {
+        called = true;
+        return nullptr;
+    });
+
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CHECK_FALSE(called); // empty id -> resolver never invoked
+    CHECK(em.liveCount() == 1u);
 }
 
 TEST_CASE("WorldBroadcaster: onTick with zero entities broadcasts empty header", "[world_broadcaster]") {
