@@ -246,6 +246,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
   private:
     void sendConnectAck(uint32_t peerId, EntityId assigned);
     void sendConnectRefusal(uint32_t peerId, ConnectRefusalCode code, const char* reason);
+    // Send a complete admin command result over ENet. Short results (<=kAdminResponseFastPathMax
+    // chars) go as a single MsgAdminResponse; longer results are streamed as MsgAdminResponseChunk
+    // packets terminated by kChunkFlagEnd. reqId is echoed from the triggering MsgAdminCommand.
+    static void sendAdminResponse(INetwork& net, uint32_t peerId, uint16_t reqId, const std::string& result);
     // Log, send a MsgConnectRefusal with the reason text for `code`, and disconnect the peer.
     // Centralizes the five onConnect rejection paths.
     void rejectConnection(uint32_t peerId, const std::string& ip, ConnectRefusalCode code);

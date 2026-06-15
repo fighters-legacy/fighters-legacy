@@ -9,6 +9,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: Admin command channel streams long responses as `MsgAdminResponseChunk` (0x0A) packets, removing the previous 125-character truncation limit for commands like `help` and `peers` (#239)
+- **network**: Added `reqId` field to `MsgAdminCommand` and `MsgAdminResponse`; server echoes it in all response packets for request/response correlation (#361)
 - **renderer**: AA mode selector (Off / FXAA / MSAA 2x–8x stub) in Settings screen, replacing the on/off AA toggle; MSAA modes fall back to FXAA with a warning until GPU implementation lands (#235)
 - **renderer**: Shadow quality setting (Off / Low / Medium / High / Ultra) in Settings screen; runtime shadow atlas resize with configurable cascade count (0–4) (#235)
 - **renderer**: Particle density setting (Low / Medium / High / Ultra) in Settings screen; runtime SSBO resize (512–16384 particle slots) (#235)

@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <string>
 
 class GameConsole;
 class ILogger;
@@ -70,10 +71,23 @@ struct ClientNetEventHandler : INetworkEventHandler {
         return m_planetRadiusKm;
     }
 
+    // Issue a monotonically incrementing request ID for the next MsgAdminCommand.
+    // Each call increments the counter; wraps at uint16_t max (harmless — ENet ordering prevents
+    // interleaving and the client does not enforce reqId matching in chunk reassembly).
+    uint16_t issueReqId() noexcept {
+        return m_nextReqId++;
+    }
+
   private:
     // Store f into *sessionFailure if it is still None (first-writer-wins via CAS); no-op if unset.
     void signalFailure(SessionFailure f);
 
     bool m_connected{false};
     float m_planetRadiusKm{0.f};
+    uint16_t m_nextReqId{1}; // next reqId to stamp on outgoing MsgAdminCommand
+
+    // Chunk reassembly state for MsgAdminResponseChunk (0x0A) streaming responses.
+    std::string m_chunkBuf;
+    bool m_chunkBufActive{false};
+    static constexpr std::size_t kMaxChunkAssemblyBytes = 64u * 1024u; // 64 KB hard cap
 };

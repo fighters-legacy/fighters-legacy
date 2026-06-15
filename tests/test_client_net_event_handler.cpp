@@ -619,3 +619,179 @@ TEST_CASE("ClientNetEventHandler: short MsgConnectAck (12 bytes) does not crash"
     // planetRadiusKm stays at its default 0
     CHECK(handler.planetRadiusKm() == 0.0f);
 }
+
+// ---------------------------------------------------------------------------
+// MsgAdminResponseChunk reassembly tests
+// ---------------------------------------------------------------------------
+
+namespace {
+
+static std::vector<uint8_t> makeChunkPacket(uint16_t reqId, uint16_t seq, uint8_t flags, std::string_view body) {
+    fl::MsgAdminResponseChunk chunk{};
+    chunk.reqId = reqId;
+    chunk.seqNum = seq;
+    chunk.flags = flags;
+    std::size_t n = std::min(body.size(), fl::kAdminChunkPayload);
+    std::memcpy(chunk.body, body.data(), n);
+    chunk.body[n] = '\0';
+    return {reinterpret_cast<const uint8_t*>(&chunk), reinterpret_cast<const uint8_t*>(&chunk) + sizeof(chunk)};
+}
+
+} // namespace
+
+TEST_CASE("ClientNetEventHandler: single chunk with kChunkFlagEnd prints to console",
+          "[client_net_event_handler][admin_chunk]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdRegistry;
+    GameConsole console(logger, cmdRegistry);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    auto pkt = makeChunkPacket(1u, 0u, fl::kChunkFlagEnd, "hello");
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    auto lines = console.outputLines();
+    REQUIRE(lines.size() == 1u);
+    CHECK(lines[0] == "[admin] hello");
+}
+
+TEST_CASE("ClientNetEventHandler: two chunks assembled before printing to console",
+          "[client_net_event_handler][admin_chunk]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdRegistry;
+    GameConsole console(logger, cmdRegistry);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    // First chunk — no end flag, nothing printed yet.
+    auto pkt0 = makeChunkPacket(1u, 0u, 0u, "foo");
+    handler.onReceive(0u, pkt0.data(), pkt0.size());
+    CHECK(console.outputLines().empty());
+
+    // Second chunk — end flag, assembled string printed.
+    auto pkt1 = makeChunkPacket(1u, 1u, fl::kChunkFlagEnd, "bar");
+    handler.onReceive(0u, pkt1.data(), pkt1.size());
+
+    auto lines = console.outputLines();
+    REQUIRE(lines.size() == 1u);
+    CHECK(lines[0] == "[admin] foobar");
+}
+
+TEST_CASE("ClientNetEventHandler: MsgAdminResponse fast-path still prints to console",
+          "[client_net_event_handler][admin_chunk]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdRegistry;
+    GameConsole console(logger, cmdRegistry);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    fl::MsgAdminResponse resp{};
+    resp.reqId = 7u;
+    std::snprintf(resp.text, sizeof(resp.text), "pong");
+    auto pkt = std::vector<uint8_t>(reinterpret_cast<const uint8_t*>(&resp),
+                                    reinterpret_cast<const uint8_t*>(&resp) + sizeof(resp));
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    auto lines = console.outputLines();
+    REQUIRE(lines.size() == 1u);
+    CHECK(lines[0] == "[admin] pong");
+}
+
+TEST_CASE("ClientNetEventHandler: oversized chunk stream dropped gracefully",
+          "[client_net_event_handler][admin_chunk]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdRegistry;
+    GameConsole console(logger, cmdRegistry);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    // Send chunks (without end flag) totalling more than 64 KB.
+    const std::string bigBody(fl::kAdminChunkPayload, 'x');
+    for (uint16_t i = 0; i < 130u; ++i) {
+        auto pkt = makeChunkPacket(1u, i, 0u, bigBody);
+        handler.onReceive(0u, pkt.data(), pkt.size());
+    }
+
+    CHECK(console.outputLines().empty());
+}
+
+TEST_CASE("ClientNetEventHandler: end chunk with empty body does not print",
+          "[client_net_event_handler][admin_chunk]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdRegistry;
+    GameConsole console(logger, cmdRegistry);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    auto pkt = makeChunkPacket(1u, 0u, fl::kChunkFlagEnd, "");
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(console.outputLines().empty());
+}
+
+TEST_CASE("ClientNetEventHandler: null console does not crash on chunk receipt",
+          "[client_net_event_handler][admin_chunk]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    // handler.console left null (default)
+
+    auto pkt = makeChunkPacket(1u, 0u, fl::kChunkFlagEnd, "hello");
+    REQUIRE_NOTHROW(handler.onReceive(0u, pkt.data(), pkt.size()));
+}
+
+TEST_CASE("ClientNetEventHandler: second complete chunk stream prints correctly after first",
+          "[client_net_event_handler][admin_chunk]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdRegistry;
+    GameConsole console(logger, cmdRegistry);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    // First complete stream.
+    auto p0 = makeChunkPacket(1u, 0u, fl::kChunkFlagEnd, "first");
+    handler.onReceive(0u, p0.data(), p0.size());
+
+    // Second complete stream.
+    auto p1 = makeChunkPacket(2u, 0u, fl::kChunkFlagEnd, "second");
+    handler.onReceive(0u, p1.data(), p1.size());
+
+    auto lines = console.outputLines();
+    REQUIRE(lines.size() == 2u);
+    CHECK(lines[0] == "[admin] first");
+    CHECK(lines[1] == "[admin] second");
+}

@@ -523,7 +523,8 @@ Aggregate ENet host bandwidth caps in bytes per second. `0` = unlimited (ENet de
 Password for the network-level authenticated admin command channel (`MsgAdminCommand`,
 `MsgId = 0x06`). When non-empty, connected game clients that know this password can send
 admin commands (e.g. `spawn`, `kill`, `tp`, `set_weather`) over ENet — the same commands
-available on the stdin console — and receive text responses via `MsgAdminResponse`.
+available on the stdin console — and receive text responses via `MsgAdminResponse` (short
+results, ≤ 123 chars) or a sequence of `MsgAdminResponseChunk` (0x0A) packets (long results).
 
 Empty string (default) **disables** the network admin channel entirely; stdin-only access
 is still available.
@@ -534,9 +535,9 @@ token transparently. You do not need to configure `operator_password` for single
 
 **Security:** The token travels over UDP (ENet). Use this channel only on trusted private
 networks or behind a VPN. Passwords longer than 29 characters are silently truncated by the
-client (the wire field is 30 bytes including the NUL terminator). Response text is capped
-at 125 characters per reply; long command output (e.g. `peers` with many players) is
-silently truncated.
+client (the wire field is 30 bytes including the NUL terminator). Long command output
+(e.g. `peers` with many players) is streamed as a sequence of `MsgAdminResponseChunk`
+(0x0A) packets; there is no per-reply character cap.
 
 ### `admin_auth_max_failures`
 

@@ -573,6 +573,7 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         std::memcpy(&msg, data, sizeof(msg));
         msg.token[sizeof(msg.token) - 1] = '\0';
         msg.command[sizeof(msg.command) - 1] = '\0';
+        uint16_t const reqId = msg.reqId;
 
         // Constant-time token comparison: XOR-accumulate the full fixed-size token field
         // to avoid a length or early-exit timing oracle.
@@ -619,14 +620,34 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
             m_logger.log(LogLevel::Info, __FILE__, __LINE__, lmsg);
         }
 
-        MsgAdminResponse resp{};
-        resp.msgId = static_cast<uint8_t>(MsgId::AdminResponse);
-        std::size_t copyLen = std::min(result.size(), sizeof(resp.text) - 1u);
-        std::memcpy(resp.text, result.c_str(), copyLen);
-        resp.text[copyLen] = '\0';
-        m_net.send(peerId, &resp, sizeof(resp), /*reliable=*/true);
+        sendAdminResponse(m_net, peerId, reqId, result);
     }
     // Unknown msgIds: silently discard (no log spam; future protocol versions may add new IDs)
+}
+
+void WorldBroadcaster::sendAdminResponse(INetwork& net, uint32_t peerId, uint16_t reqId, const std::string& result) {
+    if (result.size() <= kAdminResponseFastPathMax) {
+        MsgAdminResponse resp{};
+        resp.reqId = reqId;
+        std::memcpy(resp.text, result.c_str(), result.size());
+        resp.text[result.size()] = '\0';
+        net.send(peerId, &resp, sizeof(resp), /*reliable=*/true);
+        return;
+    }
+    uint16_t seq = 0;
+    std::size_t offset = 0;
+    while (offset < result.size()) {
+        MsgAdminResponseChunk chunk{};
+        chunk.reqId = reqId;
+        chunk.seqNum = seq++;
+        std::size_t n = std::min(result.size() - offset, kAdminChunkPayload);
+        std::memcpy(chunk.body, result.data() + offset, n);
+        chunk.body[n] = '\0';
+        offset += n;
+        if (offset >= result.size())
+            chunk.flags = kChunkFlagEnd;
+        net.send(peerId, &chunk, sizeof(chunk), /*reliable=*/true);
+    }
 }
 
 std::shared_ptr<const FlightModelData> WorldBroadcaster::resolveFlightModel(EntityId id) {

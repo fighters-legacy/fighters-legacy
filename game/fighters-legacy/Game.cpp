@@ -80,9 +80,10 @@ namespace fs = std::filesystem;
 // ---------------------------------------------------------------------------
 
 static std::function<void(std::string_view)> makeNetworkAdminSender(INetwork& net, std::string token) {
-    return [&net, tok = std::move(token)](std::string_view cmd) {
+    return [&net, tok = std::move(token), nextReqId = uint16_t{1}](std::string_view cmd) mutable {
         fl::MsgAdminCommand msg{};
         msg.msgId = static_cast<uint8_t>(fl::MsgId::AdminCommand);
+        msg.reqId = nextReqId++;
         std::size_t plen = std::min(tok.size(), sizeof(msg.token) - 1u);
         std::memcpy(msg.token, tok.c_str(), plen);
         msg.token[plen] = '\0';

@@ -43,17 +43,18 @@ static constexpr uint16_t kProtocolVersion = 1;
 static constexpr std::size_t kMaxMotdBytes = 65535;
 
 enum class MsgId : uint8_t {
-    Hello = 0x00,          // server->client, reliable: first message sent on every new connection
-    ConnectAck = 0x01,     // server->client, reliable: sent once on connect
-    WorldSnapshot = 0x02,  // server->client, unreliable: broadcast every sim tick
-    ClientInput = 0x03,    // client->server, reliable: sent each frame
-    WeatherState = 0x04,   // server->client, unreliable: broadcast every 10 ticks (~6 Hz)
-    ServerNotice = 0x05,   // server->client, reliable: shutdown countdown and operator notices
-    AdminCommand = 0x06,   // client->server, reliable: operator-authenticated admin command
-    AdminResponse = 0x07,  // server->client, reliable: result text from dispatched admin command
-    Motd = 0x08,           // server->client, reliable: MOTD sent once on connect after ConnectAck
-    ConnectRefusal = 0x09, // server->client, reliable: rejection reason sent before disconnectPeer()
-    // 0x0A-0x0E reserved for future ENet message types; 0x0F reserved.
+    Hello = 0x00,              // server->client, reliable: first message sent on every new connection
+    ConnectAck = 0x01,         // server->client, reliable: sent once on connect
+    WorldSnapshot = 0x02,      // server->client, unreliable: broadcast every sim tick
+    ClientInput = 0x03,        // client->server, reliable: sent each frame
+    WeatherState = 0x04,       // server->client, unreliable: broadcast every 10 ticks (~6 Hz)
+    ServerNotice = 0x05,       // server->client, reliable: shutdown countdown and operator notices
+    AdminCommand = 0x06,       // client->server, reliable: operator-authenticated admin command
+    AdminResponse = 0x07,      // server->client, reliable: result text from dispatched admin command
+    Motd = 0x08,               // server->client, reliable: MOTD sent once on connect after ConnectAck
+    ConnectRefusal = 0x09,     // server->client, reliable: rejection reason sent before disconnectPeer()
+    AdminResponseChunk = 0x0A, // server->client, reliable: streaming chunk for long admin command output
+    // 0x0B-0x0E reserved for future ENet message types; 0x0F reserved.
     LanBeacon = 0x10, // raw UDP broadcast - NOT sent over ENet; 0x10+ reserved for non-ENet ids.
 };
 
@@ -212,27 +213,64 @@ static_assert(alignof(MsgServerNotice) == 2u, "MsgServerNotice alignment changed
 static_assert(offsetof(MsgServerNotice, secondsRemaining) == 2u, "MsgServerNotice::secondsRemaining offset changed");
 static_assert(offsetof(MsgServerNotice, text) == 4u, "MsgServerNotice::text offset changed");
 
-// Reliable, client->server. Carries an operator token + command string.
+// Reliable, client->server. Carries a correlation ID, operator token, and command string.
 // Server authenticates via constant-time token comparison before dispatching.
+// reqId is a client-generated correlation ID echoed in every response packet for this command.
 struct MsgAdminCommand {
     uint8_t msgId{static_cast<uint8_t>(MsgId::AdminCommand)};
     uint8_t reserved{0};
+    uint16_t reqId{0};  // client-generated correlation ID; echoed in response
     char token[30]{};   // null-terminated operator password; 29 usable chars
-    char command[96]{}; // null-terminated command text; 95 usable chars
-}; // 128 bytes, align 1
+    char command[94]{}; // null-terminated command text; 93 usable chars
+}; // 128 bytes, align 2
 static_assert(sizeof(MsgAdminCommand) == 128u, "MsgAdminCommand wire size changed");
-static_assert(offsetof(MsgAdminCommand, token) == 2u, "MsgAdminCommand::token offset changed");
-static_assert(offsetof(MsgAdminCommand, command) == 32u, "MsgAdminCommand::command offset changed");
+static_assert(alignof(MsgAdminCommand) == 2u, "MsgAdminCommand alignment changed");
+static_assert(offsetof(MsgAdminCommand, reqId) == 2u, "MsgAdminCommand::reqId offset changed");
+static_assert(offsetof(MsgAdminCommand, token) == 4u, "MsgAdminCommand::token offset changed");
+static_assert(offsetof(MsgAdminCommand, command) == 34u, "MsgAdminCommand::command offset changed");
 
-// Reliable, server->client unicast. Carries the result text of a dispatched admin command.
+// Reliable, server->client unicast. Fast path for results <= kAdminResponseFastPathMax chars.
+// Longer results are streamed as MsgAdminResponseChunk (0x0A) packets instead.
 // Empty text (text[0] == '\0') means the command was queued asynchronously; clients may ignore.
+// reqId echoes the triggering MsgAdminCommand::reqId for request/response correlation.
 struct MsgAdminResponse {
     uint8_t msgId{static_cast<uint8_t>(MsgId::AdminResponse)};
     uint8_t reserved{0};
-    char text[126]{}; // null-terminated response; 125 usable chars
-}; // 128 bytes, align 1
+    uint16_t reqId{0}; // echoed from triggering MsgAdminCommand::reqId
+    char text[124]{};  // null-terminated response; 123 usable chars
+}; // 128 bytes, align 2
 static_assert(sizeof(MsgAdminResponse) == 128u, "MsgAdminResponse wire size changed");
-static_assert(offsetof(MsgAdminResponse, text) == 2u, "MsgAdminResponse::text offset changed");
+static_assert(alignof(MsgAdminResponse) == 2u, "MsgAdminResponse alignment changed");
+static_assert(offsetof(MsgAdminResponse, reqId) == 2u, "MsgAdminResponse::reqId offset changed");
+static_assert(offsetof(MsgAdminResponse, text) == 4u, "MsgAdminResponse::text offset changed");
+
+// Reliable, server->client unicast. Streaming path for results > kAdminResponseFastPathMax chars.
+// Old clients silently discard 0x0A (additive message pattern). ENet reliable channel guarantees
+// in-order delivery, so seqNum is diagnostic only. kChunkFlagEnd (bit 0 of flags) marks the final
+// chunk; the client appends all body strings and prints once the end chunk arrives.
+// reqId echoes the triggering MsgAdminCommand::reqId.
+struct MsgAdminResponseChunk {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::AdminResponseChunk)};
+    uint8_t flags{0};   // bit 0 = kChunkFlagEnd (set on the final chunk of a response)
+    uint16_t reqId{0};  // echoed from triggering MsgAdminCommand::reqId
+    uint16_t seqNum{0}; // 0-based chunk index; diagnostic only (ENet guarantees ordering)
+    char body[506]{};   // null-terminated chunk body; 505 usable chars
+}; // 512 bytes, align 2
+static_assert(sizeof(MsgAdminResponseChunk) == 512u, "MsgAdminResponseChunk wire size changed");
+static_assert(alignof(MsgAdminResponseChunk) == 2u, "MsgAdminResponseChunk alignment changed");
+static_assert(offsetof(MsgAdminResponseChunk, flags) == 1u, "MsgAdminResponseChunk::flags offset changed");
+static_assert(offsetof(MsgAdminResponseChunk, reqId) == 2u, "MsgAdminResponseChunk::reqId offset changed");
+static_assert(offsetof(MsgAdminResponseChunk, seqNum) == 4u, "MsgAdminResponseChunk::seqNum offset changed");
+static_assert(offsetof(MsgAdminResponseChunk, body) == 6u, "MsgAdminResponseChunk::body offset changed");
+
+// Flags for MsgAdminResponseChunk::flags.
+static constexpr uint8_t kChunkFlagEnd = 0x01u; // set on the final chunk of a streamed response
+
+// Thresholds derived from struct field sizes (defined after all structs so sizeof is valid).
+// Results <= kAdminResponseFastPathMax bytes use the MsgAdminResponse fast path (single packet).
+// Each MsgAdminResponseChunk carries at most kAdminChunkPayload usable bytes.
+static constexpr std::size_t kAdminResponseFastPathMax = sizeof(MsgAdminResponse::text) - 1u; // 123
+static constexpr std::size_t kAdminChunkPayload = sizeof(MsgAdminResponseChunk::body) - 1u;   // 505
 
 // Fixed-size header for MsgMotd (0x08). The null-terminated text payload follows at offset 4.
 // Reliable, server->client unicast; sent once after MsgConnectAck when [server].motd non-empty.

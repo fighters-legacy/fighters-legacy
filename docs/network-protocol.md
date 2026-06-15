@@ -35,7 +35,8 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
 | `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
 | `AdminCommand` | `0x06` | client→server | reliable | 128 bytes | Operator-authenticated admin command. Additive ID — old servers silently discard. |
-| `AdminResponse` | `0x07` | server→client | reliable | 128 bytes | Command result text, unicast to the requesting peer. Additive ID — old clients silently discard. |
+| `AdminResponse` | `0x07` | server→client | reliable | 128 bytes | Fast-path command result (≤ 123 chars), unicast to the requesting peer. Additive ID — old clients silently discard. |
+| `AdminResponseChunk` | `0x0A` | server→client | reliable | 512 bytes | Streaming chunk for long admin command output (> 123 chars). Additive ID — old clients silently discard. |
 | `Motd` | `0x08` | server→client | reliable | 4 + len(text) bytes | MOTD delivered once per connection after `MsgConnectAck`; variable-length. Additive ID — old clients silently discard. |
 | `ConnectRefusal` | `0x09` | server→client | reliable | 64 bytes | Rejection reason sent before `disconnectPeer()` on every `onConnect` rejection (ban, allowlist, rate-limit, per-IP limit, admin auth lockout). Additive ID — old clients silently discard and fall back to the generic "Connection refused by server." message. |
 | `LanBeacon` | `0x10` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast |
@@ -221,29 +222,54 @@ or behind a VPN. Passwords longer than 29 characters are silently truncated by t
 |---|---|---|---|---|
 | 0 | 1 | `msgId` | `uint8_t` | `0x06` |
 | 1 | 1 | `reserved` | `uint8_t` | reserved, always 0 |
-| 2 | 30 | `token` | `char[30]` | null-terminated operator password; 29 usable chars |
-| 32 | 96 | `command` | `char[96]` | null-terminated command text; 95 usable chars |
+| 2 | 2 | `reqId` | `uint16_t` | client-generated correlation ID; echoed in every response packet for this command |
+| 4 | 30 | `token` | `char[30]` | null-terminated operator password; 29 usable chars |
+| 34 | 94 | `command` | `char[94]` | null-terminated command text; 93 usable chars |
 
 ### MsgAdminResponse — 128 bytes
 
-Reliable, server→client unicast. Carries the text result of a dispatched admin command.
+Reliable, server→client unicast. Fast path for command results ≤ 123 chars. Results longer
+than 123 chars are streamed as `MsgAdminResponseChunk` (0x0A) packets instead — see below.
 Always sent back to the requesting peer after a successful `MsgAdminCommand`, even when
 the result string is empty (fire-and-forget commands return empty; clients may skip printing).
 
 `MsgId::AdminResponse = 0x07` is an additive message ID — clients that do not recognize it
 silently discard without error. `kProtocolVersion` is **not** bumped.
 
-The `text` field is null-terminated UTF-8; guaranteed within 125 bytes by the server.
-`text[0] == '\0'` indicates an empty result (command queued asynchronously).
+The `text` field is null-terminated UTF-8. Results ≤ 123 chars are delivered in a single
+`MsgAdminResponse`; longer results arrive as a sequence of `MsgAdminResponseChunk` packets
+terminated by `kChunkFlagEnd`. `text[0] == '\0'` indicates an empty result (queued
+asynchronously; clients may skip printing). `reqId` echoes the triggering
+`MsgAdminCommand::reqId` for request/response correlation.
 
 | Offset | Size | Field | Type | Notes |
 |---|---|---|---|---|
 | 0 | 1 | `msgId` | `uint8_t` | `0x07` |
 | 1 | 1 | `reserved` | `uint8_t` | reserved, always 0 |
-| 2 | 126 | `text` | `char[126]` | null-terminated UTF-8 response; 125 usable chars |
+| 2 | 2 | `reqId` | `uint16_t` | echoed from the triggering `MsgAdminCommand::reqId` |
+| 4 | 124 | `text` | `char[124]` | null-terminated UTF-8 response; 123 usable chars |
 
-**Known limitation:** response text is capped at 125 characters. Commands with long output
-(e.g. `peers` on a full server) will be silently truncated on the wire.
+### MsgAdminResponseChunk — 512 bytes
+
+Reliable, server→client unicast. Streaming path for command results longer than 123 chars
+(the `MsgAdminResponse` fast-path limit). The server splits the result into sequential chunks
+and sends them on the reliable channel; ENet guarantees in-order delivery, so `seqNum` is
+diagnostic only.
+
+`MsgId::AdminResponseChunk = 0x0A` is an additive message ID — clients that do not
+recognize it silently discard without error. `kProtocolVersion` is **not** bumped.
+
+**Client reassembly:** append each `body` string in order. When a chunk with `kChunkFlagEnd`
+(bit 0 of `flags`) arrives, print the assembled string as the complete response. Discard
+streams that exceed 64 KB (implementation-defined safety cap).
+
+| Offset | Size | Field | Type | Notes |
+|---|---|---|---|---|
+| 0 | 1 | `msgId` | `uint8_t` | `0x0A` |
+| 1 | 1 | `flags` | `uint8_t` | bit 0 = `kChunkFlagEnd` (set on the final chunk) |
+| 2 | 2 | `reqId` | `uint16_t` | echoed from the triggering `MsgAdminCommand::reqId` |
+| 4 | 2 | `seqNum` | `uint16_t` | 0-based chunk index; diagnostic only |
+| 6 | 506 | `body` | `char[506]` | null-terminated chunk body; 505 usable chars |
 
 ### MsgMotd — variable length
 

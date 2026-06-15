@@ -143,6 +143,25 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         resp.text[sizeof(resp.text) - 1] = '\0';
         if (console && resp.text[0] != '\0')
             console->print(std::string("[admin] ") + resp.text);
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::AdminResponseChunk)) {
+        fl::MsgAdminResponseChunk chunk{};
+        if (!fl::readMsg(data, size, chunk))
+            return;
+        chunk.body[sizeof(chunk.body) - 1] = '\0';
+        std::size_t bodyLen = std::strlen(chunk.body);
+        if (m_chunkBufActive && m_chunkBuf.size() + bodyLen > kMaxChunkAssemblyBytes) {
+            m_chunkBuf.clear();
+            m_chunkBufActive = false;
+            return;
+        }
+        m_chunkBufActive = true;
+        m_chunkBuf.append(chunk.body, bodyLen);
+        if (chunk.flags & fl::kChunkFlagEnd) {
+            if (console && !m_chunkBuf.empty())
+                console->print(std::string("[admin] ") + m_chunkBuf);
+            m_chunkBuf.clear();
+            m_chunkBufActive = false;
+        }
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::Motd)) {
         fl::MsgMotdHeader mh;
         if (!fl::readMsg(data, size, mh))

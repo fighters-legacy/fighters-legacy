@@ -2113,12 +2113,24 @@ TEST_CASE("WorldBroadcaster: extendShutdown preserves reason in subsequent notic
 namespace {
 
 // Build a MsgAdminCommand packet with the given token and command strings.
-static std::vector<uint8_t> makeAdminCmd(const char* token, const char* command) {
+static std::vector<uint8_t> makeAdminCmd(const char* token, const char* command, uint16_t reqId = 0x0042u) {
     fl::MsgAdminCommand msg{};
     msg.msgId = static_cast<uint8_t>(fl::MsgId::AdminCommand);
+    msg.reqId = reqId;
     std::snprintf(msg.token, sizeof(msg.token), "%s", token);
     std::snprintf(msg.command, sizeof(msg.command), "%s", command);
     return {reinterpret_cast<const uint8_t*>(&msg), reinterpret_cast<const uint8_t*>(&msg) + sizeof(msg)};
+}
+
+// Return true if the last entry in net.sends is a MsgAdminResponseChunk; populate chunk.
+static bool parseLastChunk(const MockNetwork& net, fl::MsgAdminResponseChunk& chunk) {
+    if (net.sends.empty())
+        return false;
+    const auto& last = net.sends.back();
+    if (last.size() != sizeof(fl::MsgAdminResponseChunk))
+        return false;
+    std::memcpy(&chunk, last.data(), sizeof(chunk));
+    return chunk.msgId == static_cast<uint8_t>(fl::MsgId::AdminResponseChunk);
 }
 
 // ---------------------------------------------------------------------------
@@ -2473,7 +2485,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand empty dispatcher result still sends
     CHECK(resp.text[0] == '\0');
 }
 
-TEST_CASE("WorldBroadcaster: MsgAdminCommand long result truncated to 125 chars",
+TEST_CASE("WorldBroadcaster: MsgAdminCommand result >123 chars streams as MsgAdminResponseChunk",
           "[world_broadcaster][admin_command]") {
     MockLogger log;
     MockNetwork net;
@@ -2492,10 +2504,171 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand long result truncated to 125 chars"
     broadcaster.onReceive(0u, pkt.data(), pkt.size());
 
     REQUIRE(net.sends.size() == 1u);
+    fl::MsgAdminResponseChunk chunk{};
+    REQUIRE(parseLastChunk(net, chunk));
+    CHECK((chunk.flags & fl::kChunkFlagEnd) != 0u);
+    CHECK(std::strlen(chunk.body) == 200u);
+}
+
+TEST_CASE("WorldBroadcaster: sendAdminResponse fast-path for result <=123 chars",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return std::string(50, 'a'); });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto pkt = makeAdminCmd("secret", "status");
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(net.sends.size() == 1u);
     fl::MsgAdminResponse resp{};
     REQUIRE(parseLastAdminResponse(net, resp));
-    CHECK(std::strlen(resp.text) == 125u);
-    CHECK(resp.text[125] == '\0');
+    CHECK(std::strlen(resp.text) == 50u);
+}
+
+TEST_CASE("WorldBroadcaster: sendAdminResponse fast-path at exactly 123 chars", "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return std::string(123, 'x'); });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto pkt = makeAdminCmd("secret", "help");
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(net.sends.size() == 1u);
+    fl::MsgAdminResponse resp{};
+    REQUIRE(parseLastAdminResponse(net, resp));
+    CHECK(std::strlen(resp.text) == 123u);
+}
+
+TEST_CASE("WorldBroadcaster: sendAdminResponse echoes reqId in MsgAdminResponse",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "ok"; });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto pkt = makeAdminCmd("secret", "ping", 0xBEEFu);
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(net.sends.size() == 1u);
+    fl::MsgAdminResponse resp{};
+    REQUIRE(parseLastAdminResponse(net, resp));
+    CHECK(resp.reqId == 0xBEEFu);
+}
+
+TEST_CASE("WorldBroadcaster: sendAdminResponse 124-char result sends one chunk with kChunkFlagEnd",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return std::string(124, 'y'); });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto pkt = makeAdminCmd("secret", "help");
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(net.sends.size() == 1u);
+    fl::MsgAdminResponseChunk chunk{};
+    REQUIRE(parseLastChunk(net, chunk));
+    CHECK(chunk.seqNum == 0u);
+    CHECK((chunk.flags & fl::kChunkFlagEnd) != 0u);
+    CHECK(std::strlen(chunk.body) == 124u);
+}
+
+TEST_CASE("WorldBroadcaster: sendAdminResponse >505 chars sends two chunks", "[world_broadcaster][admin_command]") {
+    const std::string longResult(506, 'z');
+
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([&](std::string_view) -> std::string { return longResult; });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto pkt = makeAdminCmd("secret", "peers");
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(net.sends.size() == 2u);
+
+    fl::MsgAdminResponseChunk c0{}, c1{};
+    std::memcpy(&c0, net.sends[0].data(), sizeof(c0));
+    std::memcpy(&c1, net.sends[1].data(), sizeof(c1));
+
+    CHECK(c0.msgId == static_cast<uint8_t>(fl::MsgId::AdminResponseChunk));
+    CHECK(c0.seqNum == 0u);
+    CHECK((c0.flags & fl::kChunkFlagEnd) == 0u); // not the final chunk
+    CHECK(c1.seqNum == 1u);
+    CHECK((c1.flags & fl::kChunkFlagEnd) != 0u); // final chunk
+
+    std::string assembled = std::string(c0.body) + std::string(c1.body);
+    CHECK(assembled == longResult);
+}
+
+TEST_CASE("WorldBroadcaster: sendAdminResponse echoes reqId in every MsgAdminResponseChunk",
+          "[world_broadcaster][admin_command]") {
+    const std::string longResult(506, 'q');
+
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([&](std::string_view) -> std::string { return longResult; });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto pkt = makeAdminCmd("secret", "peers", 0x1111u);
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(net.sends.size() == 2u);
+    for (const auto& send : net.sends) {
+        REQUIRE(send.size() == sizeof(fl::MsgAdminResponseChunk));
+        fl::MsgAdminResponseChunk chunk{};
+        std::memcpy(&chunk, send.data(), sizeof(chunk));
+        CHECK(chunk.reqId == 0x1111u);
+    }
 }
 
 // ---------------------------------------------------------------------------

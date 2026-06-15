@@ -14,6 +14,7 @@ TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game
     CHECK(sizeof(fl::MsgClientInput) == 48u);
     CHECK(sizeof(fl::MsgAdminCommand) == 128u);
     CHECK(sizeof(fl::MsgAdminResponse) == 128u);
+    CHECK(sizeof(fl::MsgAdminResponseChunk) == 512u);
     CHECK(sizeof(fl::MsgMotdHeader) == 4u);
     CHECK(sizeof(fl::MsgConnectRefusal) == 64u);
 }
@@ -33,6 +34,24 @@ TEST_CASE("GameProtocol: stays at protocol version 1 in primary development", "[
 TEST_CASE("GameProtocol: MsgConnectRefusal field offsets", "[game_protocol]") {
     CHECK(offsetof(fl::MsgConnectRefusal, code) == 1u);
     CHECK(offsetof(fl::MsgConnectRefusal, reason) == 2u);
+}
+
+TEST_CASE("GameProtocol: MsgAdminCommand field offsets", "[game_protocol]") {
+    CHECK(offsetof(fl::MsgAdminCommand, reqId) == 2u);
+    CHECK(offsetof(fl::MsgAdminCommand, token) == 4u);
+    CHECK(offsetof(fl::MsgAdminCommand, command) == 34u);
+}
+
+TEST_CASE("GameProtocol: MsgAdminResponse field offsets", "[game_protocol]") {
+    CHECK(offsetof(fl::MsgAdminResponse, reqId) == 2u);
+    CHECK(offsetof(fl::MsgAdminResponse, text) == 4u);
+}
+
+TEST_CASE("GameProtocol: MsgAdminResponseChunk field offsets", "[game_protocol]") {
+    CHECK(offsetof(fl::MsgAdminResponseChunk, flags) == 1u);
+    CHECK(offsetof(fl::MsgAdminResponseChunk, reqId) == 2u);
+    CHECK(offsetof(fl::MsgAdminResponseChunk, seqNum) == 4u);
+    CHECK(offsetof(fl::MsgAdminResponseChunk, body) == 6u);
 }
 
 TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
@@ -230,6 +249,7 @@ TEST_CASE("GameProtocol: MsgWeatherState timeOfDayTenths decodes to 14.5 hours",
 TEST_CASE("GameProtocol: MsgAdminCommand round-trip", "[game_protocol]") {
     fl::MsgAdminCommand src{};
     src.msgId = static_cast<uint8_t>(fl::MsgId::AdminCommand);
+    src.reqId = 0x1234u;
     std::snprintf(src.token, sizeof(src.token), "hunter2");
     std::snprintf(src.command, sizeof(src.command), "spawn builtin:debug-entity 0 500 0");
 
@@ -240,6 +260,7 @@ TEST_CASE("GameProtocol: MsgAdminCommand round-trip", "[game_protocol]") {
     std::memcpy(&parsed, buf.data(), sizeof(parsed));
 
     CHECK(parsed.msgId == static_cast<uint8_t>(fl::MsgId::AdminCommand));
+    CHECK(parsed.reqId == 0x1234u);
     CHECK(std::string(parsed.token) == "hunter2");
     CHECK(std::string(parsed.command) == "spawn builtin:debug-entity 0 500 0");
 }
@@ -247,6 +268,7 @@ TEST_CASE("GameProtocol: MsgAdminCommand round-trip", "[game_protocol]") {
 TEST_CASE("GameProtocol: MsgAdminResponse round-trip", "[game_protocol]") {
     fl::MsgAdminResponse src{};
     src.msgId = static_cast<uint8_t>(fl::MsgId::AdminResponse);
+    src.reqId = 0x5678u;
     std::snprintf(src.text, sizeof(src.text), "spawn queued");
 
     std::vector<uint8_t> buf(sizeof(src));
@@ -256,5 +278,26 @@ TEST_CASE("GameProtocol: MsgAdminResponse round-trip", "[game_protocol]") {
     std::memcpy(&parsed, buf.data(), sizeof(parsed));
 
     CHECK(parsed.msgId == static_cast<uint8_t>(fl::MsgId::AdminResponse));
+    CHECK(parsed.reqId == 0x5678u);
     CHECK(std::string(parsed.text) == "spawn queued");
+}
+
+TEST_CASE("GameProtocol: MsgAdminResponseChunk round-trip", "[game_protocol]") {
+    fl::MsgAdminResponseChunk src{};
+    src.reqId = 0xABCDu;
+    src.seqNum = 3u;
+    src.flags = fl::kChunkFlagEnd;
+    std::snprintf(src.body, sizeof(src.body), "chunk body text");
+
+    std::vector<uint8_t> buf(sizeof(src));
+    std::memcpy(buf.data(), &src, sizeof(src));
+
+    fl::MsgAdminResponseChunk parsed{};
+    std::memcpy(&parsed, buf.data(), sizeof(parsed));
+
+    CHECK(parsed.msgId == static_cast<uint8_t>(fl::MsgId::AdminResponseChunk));
+    CHECK(parsed.reqId == 0xABCDu);
+    CHECK(parsed.seqNum == 3u);
+    CHECK(parsed.flags == fl::kChunkFlagEnd);
+    CHECK(std::string(parsed.body) == "chunk body text");
 }
