@@ -271,6 +271,22 @@ The engine uses a single continuous **world terrain** rather than per-theater he
 
 All entity positions, terrain queries, and camera origins use **double-precision (`glm::dvec3`)** world coordinates throughout the engine — `EntityTransform::pos`, `MsgEntityEntry::pos`, `EntityRenderEntry::position`, and `CameraView::worldOrigin` are all `double`/`dvec3`. The coordinate space is right-handed Y-up, in meters, matching glTF. Camera-relative rendering subtracts `worldOrigin` before GPU upload and casts the small relative offset to `vec3` — float32-safe at any scale including planet-scale distances.
 
+### Spherical-Earth world model
+
+The engine supports an optional spherical-Earth physics and terrain mode, enabled per-server via `[world] spherical_earth = true` in `server.toml`.
+
+**Coordinate convention:** the world origin (`{0, 0, 0}`) is lat=0°, lon=0°, alt=0 m (mean sea level). The planet centre sits at `{0, -R, 0}` in world space, where R = `planet_radius_m`. At the origin, spherical gravity is identical to flat gravity — no discontinuity when toggling the mode.
+
+**Gravity (`IGravityField` seam):** the default `FlatGravityField` applies uniform 9.80665 m/s² downward. `CentralGravityField` (`engine/flight/CentralGravityField.h`) implements 1/r² falloff toward the planet centre; `earthInstance()` provides a singleton for Earth. Swap via `FlightIntegrator::setGravityField()`. `WorldBroadcaster::setGravityField(field, planetRadiusKm)` propagates the field to all current and future `FlightIntegrator` instances and records the radius for transmission to clients in `MsgConnectAck.planetRadiusKm`.
+
+**Atmosphere altitude (`IGravityField::geodeticAltitude()`):** `FlightIntegrator` uses `m_gravity->geodeticAltitude(pos)` instead of `pos[1]` for ISA pressure-altitude lookup, so the correct atmosphere density is applied even when the entity is far from the Z-axis (where world-Y diverges from geodetic altitude).
+
+**Geodetic utilities (`engine/flight/Geodetic.h`):** header-only inline functions — `worldToGeodetic(x,y,z)→LatLonAlt`, `geodeticToWorld(lla,x,y,z)`, `geodeticAltitude(x,y,z)` — convert between world XYZ and spherical lat/lon/alt. All angles in radians; `kEarthRadiusM = 6 371 000.0`.
+
+**Terrain curvature (`TerrainStreamer::setSphericalPlanetRadius(double)`):** applies a per-chunk Y offset (`sqrt(R²−D²)−R`) in both `heightAt()` (physics floor) and `getRenderItems()` (rendering), so terrain follows the sphere without modifying the mesh builder. The maximum visual error within a 15.36 km chunk at 120 km range is ~36 m — below LOD fidelity.
+
+**Client wiring:** `ClientNetEventHandler` reads `planetRadiusKm` from `MsgConnectAck` and exposes it via `planetRadiusKm()`. `Game` wires it to `terrainStreamer.setSphericalPlanetRadius()` on `Screen::Flight` entry.
+
 ### Chunk format
 
 | Property | Value |

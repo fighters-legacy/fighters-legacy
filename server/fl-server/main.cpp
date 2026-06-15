@@ -34,6 +34,7 @@
 #include <entity/EntityDef.h>
 #include <entity/EntityManager.h>
 #include <entity/EntityTypeRegistry.h>
+#include <flight/CentralGravityField.h>
 #include <flight/FlightModelParser.h>
 #include <loop/GameLoop.h>
 #include <net/GameProtocol.h>
@@ -348,6 +349,14 @@ int main(int argc, char** argv) {
     wbConfig.motdDisplaySeconds = cfg.motdDisplayS;
     wbConfig.operatorPassword = cfg.operatorPassword;
     broadcaster.applyConfig(wbConfig);
+    // Spherical-Earth gravity: function-scope static so the lifetime outlasts the broadcaster.
+    static fl::CentralGravityField s_sphericalGravity{6'371'000.f};
+    if (cfg.sphericalEarth) {
+        const auto R_m = static_cast<float>(cfg.planetRadiusM);
+        s_sphericalGravity = fl::CentralGravityField(R_m);
+        broadcaster.setGravityField(s_sphericalGravity, R_m / 1000.f);
+        terrainStreamer.setSphericalPlanetRadius(cfg.planetRadiusM);
+    }
     // Resolve EntityDef::flightModelId -> parsed FlightModelData on the spawn path. Loads the raw
     // TOML asset via AssetManager, parses it with engine-flight's parseFlightModel, and caches the
     // result by id (sim-thread-only access). Empty/unknown ids fall back to the builtin model in

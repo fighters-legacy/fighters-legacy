@@ -29,7 +29,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | MsgId | Value | Direction | Channel | Size | Purpose |
 |-------|-------|-----------|---------|------|---------|
 | `Hello` | `0x00` | server→client | reliable | 4 bytes | Protocol version handshake; first message on every new connection |
-| `ConnectAck` | `0x01` | server→client | reliable | 12 + N×196 bytes | Handshake on connect; assigns entity slot and delivers type registry |
+| `ConnectAck` | `0x01` | server→client | reliable | 16 + N×196 bytes | Handshake on connect; assigns entity slot and delivers type registry |
 | `WorldSnapshot` | `0x02` | server→client | unreliable | 16 + N×72 bytes | Per-tick entity state broadcast |
 | `ClientInput` | `0x03` | client→server | reliable | 48 bytes | Per-frame flight inputs |
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
@@ -65,7 +65,7 @@ message and waits for `MsgConnectAck`.
 | 1 | 1 | `reserved` | `uint8_t` | Reserved, always 0 |
 | 2 | 2 | `protocolVersion` | `uint16_t` | Server's `kProtocolVersion`; client disconnects if this != its own `kProtocolVersion` |
 
-### MsgConnectAck — 12 bytes
+### MsgConnectAck — 16 bytes
 
 Sent once per peer on connect (reliable channel 0), immediately followed by
 `typeCount` × `MsgEntityTypeDef` records.
@@ -77,6 +77,7 @@ Sent once per peer on connect (reliable channel 0), immediately followed by
 | 2 | 2 | `typeCount` | `uint16_t` | Number of `MsgEntityTypeDef` records that follow |
 | 4 | 4 | `assignedEntityIdx` | `uint32_t` | Pool slot of the entity assigned to this peer (0 if none) |
 | 8 | 4 | `assignedEntityGen` | `uint32_t` | Entity generation; 0 = no entity assigned |
+| 12 | 4 | `planetRadiusKm` | `float32` | Planet sphere radius in km; 0.0 = flat Earth (default) |
 
 ### MsgEntityTypeDef — 196 bytes
 

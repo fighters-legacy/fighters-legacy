@@ -741,9 +741,13 @@ void Game::handleTransition(Screen next) {
         (prev == Screen::Flight || prev == Screen::Pause || prev == Screen::Debrief || prev == Screen::Loading))
         stopGame();
 
-    if (next == Screen::Flight)
+    if (next == Screen::Flight) {
         d.services.musicManager.setState(GameState::FlightPatrol);
-    else if (next == Screen::MainMenu)
+        if (d.session.clientHandler && d.services.terrainStreamer) {
+            const double radiusM = static_cast<double>(d.session.clientHandler->planetRadiusKm()) * 1000.0;
+            d.services.terrainStreamer->setSphericalPlanetRadius(radiusM);
+        }
+    } else if (next == Screen::MainMenu)
         d.services.musicManager.setState(GameState::Menu);
     else if (next == Screen::Debrief) {
         d.services.screenMgr->debrief().setStats(0, 0, true);

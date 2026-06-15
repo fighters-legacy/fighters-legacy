@@ -60,6 +60,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             return;
         assignedEntityIdx = ack.assignedEntityIdx;
         assignedEntityGen = ack.assignedEntityGen;
+        m_planetRadiusKm = ack.planetRadiusKm;
         std::size_t off = sizeof(ack);
         for (uint16_t i = 0; i < ack.typeCount; ++i) {
             fl::MsgEntityTypeDef td;

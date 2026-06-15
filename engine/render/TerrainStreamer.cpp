@@ -307,8 +307,15 @@ std::vector<RenderItem> TerrainStreamer::getRenderItems(glm::dvec3 worldOrigin) 
                 continue;
 
             // Camera-relative translation: chunk local-origin in world → relative to camera
-            const glm::dvec3 chunkOrigin{m_manifest.originX + static_cast<double>(cx) * m_manifest.chunkSizeM, 0.0,
-                                         m_manifest.originZ + static_cast<double>(cy) * m_manifest.chunkSizeM};
+            const double chunkCornerX = m_manifest.originX + static_cast<double>(cx) * m_manifest.chunkSizeM;
+            const double chunkCornerZ = m_manifest.originZ + static_cast<double>(cy) * m_manifest.chunkSizeM;
+            double yOffset = 0.0;
+            if (m_sphericalRadius > 0.0) {
+                const double R = m_sphericalRadius;
+                const double D2 = chunkCornerX * chunkCornerX + chunkCornerZ * chunkCornerZ;
+                yOffset = std::sqrt(std::max(0.0, R * R - D2)) - R;
+            }
+            const glm::dvec3 chunkOrigin{chunkCornerX, yOffset, chunkCornerZ};
             const glm::vec3 relOrigin = glm::vec3(chunkOrigin - worldOrigin);
 
             RenderItem item;
@@ -358,7 +365,16 @@ double TerrainStreamer::heightAt(double x, double z) const noexcept {
         return static_cast<double>(chunk.heightmap[static_cast<std::size_t>(row) * s + col]) - 32768.0;
     };
 
-    return glm::mix(glm::mix(h(ix, iz), h(ix + 1, iz), fx), glm::mix(h(ix, iz + 1), h(ix + 1, iz + 1), fx), fz);
+    double elevation =
+        glm::mix(glm::mix(h(ix, iz), h(ix + 1, iz), fx), glm::mix(h(ix, iz + 1), h(ix + 1, iz + 1), fx), fz);
+
+    if (m_sphericalRadius > 0.0) {
+        const double R = m_sphericalRadius;
+        const double D2 = x * x + z * z;
+        elevation += std::sqrt(std::max(0.0, R * R - D2)) - R;
+    }
+
+    return elevation;
 }
 
 uint8_t TerrainStreamer::surfaceAt(double /*x*/, double /*z*/) const noexcept {
@@ -367,6 +383,10 @@ uint8_t TerrainStreamer::surfaceAt(double /*x*/, double /*z*/) const noexcept {
 
 std::size_t TerrainStreamer::chunkCount() const noexcept {
     return m_chunks.size();
+}
+
+void TerrainStreamer::setSphericalPlanetRadius(double radius_m) noexcept {
+    m_sphericalRadius = radius_m;
 }
 
 } // namespace fl

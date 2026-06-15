@@ -7,7 +7,7 @@
 
 TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game_protocol]") {
     CHECK(sizeof(fl::MsgHello) == 4u);
-    CHECK(sizeof(fl::MsgConnectAck) == 12u);     // extended: +assignedEntityIdx/Gen
+    CHECK(sizeof(fl::MsgConnectAck) == 16u);     // extended: +assignedEntityIdx/Gen, +planetRadiusKm
     CHECK(sizeof(fl::MsgEntityTypeDef) == 196u); // 4 + 64 + 64 + 64
     CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 16u);
     CHECK(sizeof(fl::MsgEntityEntry) == 72u);

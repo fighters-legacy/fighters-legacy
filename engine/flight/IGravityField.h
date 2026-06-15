@@ -15,6 +15,12 @@ struct IGravityField {
     // Gravitational acceleration (m/s^2) in the world frame [x=forward, y=up, z=right] at a world
     // position. Uniform fields ignore the position.
     virtual std::array<float, 3> accelWorld(const float pos_world[3]) const = 0;
+    // Geodetic (pressure) altitude (m) at a world position.
+    // Default: world-Y (correct for a flat planet with the sea-level plane at Y=0).
+    // Spherical fields override this to return the true MSL altitude far from the origin.
+    virtual float geodeticAltitude(const float pos_world[3]) const {
+        return pos_world[1];
+    }
 };
 
 // Uniform flat-Earth gravity: constant 9.80665 m/s^2 along -world_y. The default for every integrator.

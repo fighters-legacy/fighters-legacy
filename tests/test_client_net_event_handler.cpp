@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "IClock.h"
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "ClientNetEventHandler.h"
@@ -582,4 +583,39 @@ TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds 0 falls back to 
 
     fakeTime.advance(std::chrono::seconds(2));
     CHECK(notice.buildElements().empty()); // expired at 6 s (past 5 s client window)
+}
+
+TEST_CASE("ClientNetEventHandler: MsgConnectAck planetRadiusKm parsed correctly", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    fl::MsgConnectAck ack{};
+    ack.planetRadiusKm = 6371.f;
+    handler.onConnect(0u);
+    handler.onReceive(0u, &ack, sizeof(ack));
+
+    CHECK(handler.planetRadiusKm() == Catch::Approx(6371.f).epsilon(1e-4f));
+}
+
+TEST_CASE("ClientNetEventHandler: short MsgConnectAck (12 bytes) does not crash", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // 12-byte ack (old wire format without planetRadiusKm)
+    uint8_t buf[12]{};
+    buf[0] = static_cast<uint8_t>(fl::MsgId::ConnectAck);
+    handler.onConnect(0u);
+    REQUIRE_NOTHROW(handler.onReceive(0u, buf, sizeof(buf)));
+    // planetRadiusKm stays at its default 0
+    CHECK(handler.planetRadiusKm() == 0.0f);
 }

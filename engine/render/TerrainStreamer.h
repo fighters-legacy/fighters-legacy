@@ -56,6 +56,11 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // Total loaded chunk entries across all LODs. Exposed for tests.
     std::size_t chunkCount() const noexcept;
 
+    // Enable spherical terrain correction. radius_m > 0 applies a per-chunk Y offset so terrain
+    // follows the curvature of a sphere with the given radius. 0 (default) = flat. Call before
+    // the first update().
+    void setSphericalPlanetRadius(double radius_m) noexcept;
+
   private:
     // IAsyncFilesystemHandler
     void onReadComplete(AsyncReadId id, AsyncReadStatus status, const void* data, std::size_t bytesRead,
@@ -106,6 +111,9 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
 
     std::unordered_map<ChunkKey, Chunk, ChunkKeyHash> m_chunks;
     std::unordered_map<AsyncReadId, ChunkKey> m_pendingByReadId;
+
+    // Spherical-planet radius (m). 0 = flat (default).
+    double m_sphericalRadius{0.0};
 
     // Last-known camera center chunk; sentinel = update() never called.
     // getRenderItems() returns empty immediately when m_lastCx is the sentinel.

@@ -12,6 +12,7 @@
 #include "mock_hal.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <map>
@@ -458,4 +459,75 @@ TEST_CASE("TerrainStreamer cancelled read during eviction does not crash") {
 
     // Origin chunk must not be present
     CHECK(ts.heightAt(0.0, 0.0) == 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// Spherical terrain correction
+// ---------------------------------------------------------------------------
+
+TEST_CASE("TerrainStreamer setSphericalPlanetRadius: no correction at origin", "[spherical]") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+    MockAsyncFilesystem asyncFs;
+    asyncFs.init();
+
+    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
+    driveToSteadyState(ts, {0.0, 0.0, 0.0});
+
+    const double flatH = ts.heightAt(0.0, 0.0);
+    ts.setSphericalPlanetRadius(6'371'000.0);
+    const double sphereH = ts.heightAt(0.0, 0.0);
+    // At origin (x=0, z=0) the correction is sqrt(R^2) - R = 0
+    CHECK(sphereH == Catch::Approx(flatH).margin(1e-3));
+}
+
+TEST_CASE("TerrainStreamer setSphericalPlanetRadius: negative correction at lateral position", "[spherical]") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+    MockAsyncFilesystem asyncFs;
+    asyncFs.init();
+
+    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
+    const double D = 100'000.0; // 100 km offset
+    driveToSteadyState(ts, {D, 0.0, 0.0});
+
+    const double flatH = ts.heightAt(D, 0.0);
+    const double R = 6'371'000.0;
+    const double expectedCorrection = std::sqrt(std::max(0.0, R * R - D * D)) - R;
+
+    ts.setSphericalPlanetRadius(R);
+    const double sphereH = ts.heightAt(D, 0.0);
+    CHECK(sphereH == Catch::Approx(flatH + expectedCorrection).margin(1e-3));
+    CHECK(sphereH < flatH); // correction is negative for any D > 0
+}
+
+TEST_CASE("TerrainStreamer setSphericalPlanetRadius: correction magnitude at 100 km", "[spherical]") {
+    // Analytical: correction ~ -D^2 / (2R) for D << R
+    const double D = 100'000.0;
+    const double R = 6'371'000.0;
+    const double correction = std::sqrt(R * R - D * D) - R;
+    const double approxCorrection = -(D * D) / (2.0 * R);
+    // Should agree to within ~1 m (second-order term is tiny)
+    CHECK(correction == Catch::Approx(approxCorrection).margin(1.0));
+}
+
+TEST_CASE("TerrainStreamer setSphericalPlanetRadius zero disables correction", "[spherical]") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+    MockAsyncFilesystem asyncFs;
+    asyncFs.init();
+
+    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
+    driveToSteadyState(ts, {0.0, 0.0, 0.0});
+
+    const double flatH = ts.heightAt(0.0, 0.0);
+    ts.setSphericalPlanetRadius(6'371'000.0);
+    ts.setSphericalPlanetRadius(0.0); // re-disable
+    CHECK(ts.heightAt(0.0, 0.0) == Catch::Approx(flatH).margin(1e-3));
 }

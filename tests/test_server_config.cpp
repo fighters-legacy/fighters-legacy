@@ -323,6 +323,41 @@ TEST_CASE("parseServerConfig: negative entity_soft_cap warns and uses 0", "[serv
     CHECK(log.hasMessage(LogLevel::Warn, "entity_soft_cap"));
 }
 
+TEST_CASE("parseServerConfig: spherical_earth defaults to false", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("", &log);
+    CHECK_FALSE(cfg.sphericalEarth);
+    CHECK(cfg.planetRadiusM == 6'371'000.0);
+}
+
+TEST_CASE("parseServerConfig: spherical_earth = true is accepted", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nspherical_earth = true\n", &log);
+    CHECK(cfg.sphericalEarth);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: planet_radius_m valid value accepted", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nplanet_radius_m = 3000000.0\n", &log);
+    CHECK(cfg.planetRadiusM == 3'000'000.0);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: planet_radius_m too small warns and uses default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nplanet_radius_m = 500.0\n", &log);
+    CHECK(cfg.planetRadiusM == 6'371'000.0);
+    CHECK(log.hasMessage(LogLevel::Warn, "planet_radius_m"));
+}
+
+TEST_CASE("parseServerConfig: planet_radius_m too large warns and uses default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nplanet_radius_m = 2000000000.0\n", &log);
+    CHECK(cfg.planetRadiusM == 6'371'000.0);
+    CHECK(log.hasMessage(LogLevel::Warn, "planet_radius_m"));
+}
+
 // ---------------------------------------------------------------------------
 // [ai]
 // ---------------------------------------------------------------------------

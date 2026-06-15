@@ -7,6 +7,7 @@
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
 #include "entity/IEntityController.h"
+#include "flight/CentralGravityField.h"
 #include "net/GameProtocol.h"
 #include "net/WorldBroadcaster.h"
 #include "render/RenderSnapshot.h"
@@ -14,6 +15,7 @@
 
 #include "mock_network.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cmath>
@@ -2837,4 +2839,34 @@ TEST_CASE("WorldBroadcaster: admin_unlock is a no-op when IP is not locked", "[w
     // Connect peer 1 from same IP: must not be refused
     broadcaster.onConnect(1u);
     CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: MsgConnectAck planetRadiusKm is 0 by default", "[world_broadcaster][gravity]") {
+    MockLogger log;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+
+    broadcaster.onConnect(0u);
+
+    fl::MsgConnectAck ack = parseSendAck(net);
+    CHECK(ack.planetRadiusKm == 0.0f);
+}
+
+TEST_CASE("WorldBroadcaster: setGravityField propagates planetRadiusKm to MsgConnectAck",
+          "[world_broadcaster][gravity]") {
+    MockLogger log;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+
+    broadcaster.setGravityField(fl::CentralGravityField::earthInstance(), 6371.f);
+    broadcaster.onConnect(0u);
+
+    fl::MsgConnectAck ack = parseSendAck(net);
+    CHECK(ack.planetRadiusKm == Catch::Approx(6371.f).epsilon(1e-4f));
 }

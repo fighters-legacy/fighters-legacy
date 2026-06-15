@@ -5,6 +5,7 @@
 #include "GameProtocol.h"
 #include "INetwork.h"
 #include "entity/EntityId.h"
+#include "flight/IGravityField.h"
 #include "loop/ISimUpdate.h"
 
 #include <atomic>
@@ -237,6 +238,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Call before gameLoop.start(). The admin dispatcher (setAdminDispatch) is wired separately.
     void applyConfig(const WorldBroadcasterConfig& cfg);
 
+    // Set the gravity field applied to all FlightIntegrators spawned on this broadcaster (current
+    // and future). Also records the planet radius sent to clients in MsgConnectAck so their terrain
+    // rendering matches server physics. Call before gameLoop.start().
+    void setGravityField(const IGravityField& field, float planetRadiusKm = 0.f) noexcept;
+
   private:
     void sendConnectAck(uint32_t peerId, EntityId assigned);
     void sendConnectRefusal(uint32_t peerId, ConnectRefusalCode code, const char* reason);
@@ -308,6 +314,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     // Resolves EntityDef::flightModelId -> FlightModelData at spawn (null = always builtin model).
     FlightModelResolver m_flightModelResolver;
+
+    // Gravity field (null = each integrator uses its own default FlatGravityField).
+    const IGravityField* m_gravity{nullptr};
+    float m_planetRadiusKm{0.f}; // sent in MsgConnectAck; 0 = flat Earth
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword;                               // empty = admin channel disabled

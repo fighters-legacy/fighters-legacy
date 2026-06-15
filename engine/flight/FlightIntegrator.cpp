@@ -135,7 +135,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     // 2. Wing sweep: follow auto-schedule based on current Mach, or manual override.
     // Use relative airspeed (aircraft velocity minus body-frame wind) for Mach — consistent with step 5.
     if (m_data->wing_sweep) {
-        AtmosphereState atmos2 = computeAtmosphere(m_state.pos_world[1]);
+        AtmosphereState atmos2 = computeAtmosphere(m_gravity->geodeticAltitude(m_state.pos_world));
         float q_conj2[4] = {-m_state.quat[0], -m_state.quat[1], -m_state.quat[2], m_state.quat[3]};
         const float* vel = m_state.vel_body;
         auto wind_body2 = quatRotate(q_conj2, wind.wind_world);
@@ -151,8 +151,8 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     // 3. TVC
     advanceTvc(dt, ctrl.tvc_angle_deg);
 
-    // 4. Compute atmosphere at current altitude (world y = altitude, Y-up convention)
-    float altitude_m = m_state.pos_world[1];
+    // 4. Compute atmosphere at current geodetic altitude (uses gravity field for spherical planets).
+    float altitude_m = m_gravity->geodeticAltitude(m_state.pos_world);
     AtmosphereState atmos = computeAtmosphere(altitude_m);
 
     // Conjugate quaternion for world→body rotation (used for wind and gravity transforms).

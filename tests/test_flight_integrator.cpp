@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "flight/Atmosphere.h"
 #include "flight/BuiltinFlightModel.h"
+#include "flight/CentralGravityField.h"
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelParser.h"
 
@@ -850,4 +852,58 @@ TEST_CASE("Integrator: wing-sweep Mach accounts for aircraft orientation", "[fli
     fi_yawed.step(1.f / 60.f, ctrl, px, wind);
 
     CHECK(fi_identity.state().current_sweep_deg != fi_yawed.state().current_sweep_deg);
+}
+
+TEST_CASE("FlightIntegrator: CentralGravityField at origin matches flat gravity", "[integrator][gravity]") {
+    auto model = fl::BuiltinFlightModel::get();
+
+    fl::FlightIntegrator fi(model);
+    fi.setGravityField(fl::CentralGravityField::earthInstance());
+
+    fl::FlightIntegrator fiFlat(model);
+
+    fl::FlightState s{};
+    s.pos_world[1] = 500.f;
+    s.mass_kg = model->geometry.mass_kg + model->geometry.fuel_kg;
+    s.fuel_kg = model->geometry.fuel_kg;
+    fi.reset(s);
+    fiFlat.reset(s);
+
+    fl::ControlInput ctrl{};
+    fl::PayloadEffect px{};
+    fl::WindInfluence wind{};
+    fi.step(1.f / 60.f, ctrl, px, wind);
+    fiFlat.step(1.f / 60.f, ctrl, px, wind);
+
+    // At the origin the spherical gravity vector is identical to flat gravity
+    CHECK(fi.state().pos_world[1] == Catch::Approx(fiFlat.state().pos_world[1]).epsilon(1e-4f));
+}
+
+TEST_CASE("FlightIntegrator: CentralGravityField at lateral position tilts gravity", "[integrator][gravity]") {
+    auto model = fl::BuiltinFlightModel::get();
+    fl::FlightIntegrator fi(model);
+    fi.setGravityField(fl::CentralGravityField::earthInstance());
+
+    // Place entity 100 km along X — gravity pulls toward planet centre, which has a -X component
+    fl::FlightState s{};
+    s.pos_world[0] = 1e5f;
+    s.pos_world[1] = 500.f;
+    s.pos_world[2] = 0.f;
+    s.quat[3] = 1.f; // identity quaternion (w=1)
+    s.mass_kg = model->geometry.mass_kg + model->geometry.fuel_kg;
+    s.fuel_kg = model->geometry.fuel_kg;
+    fi.reset(s);
+
+    fl::ControlInput ctrl{};
+    fl::PayloadEffect px{};
+    fl::WindInfluence wind{};
+    // Single step only: at zero initial velocity dynamic pressure is zero and all
+    // aerodynamic forces are zero, so only gravity contributes to the velocity change.
+    // Multiple steps cause freefall → 90° AoA → large aero forces that swamp the
+    // small -X gravity component (~0.154 m/s²).
+    fi.step(1.f / 60.f, ctrl, px, wind);
+
+    // Gravity pulls toward the planet centre at {0,-R,0}: at x=1e5 the -X component
+    // is ~-0.154 m/s²; after one tick vel_body[0] ≈ -0.154/60 ≈ -0.00257 m/s.
+    CHECK(fi.state().vel_body[0] < 0.f);
 }

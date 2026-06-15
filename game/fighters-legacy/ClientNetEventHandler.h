@@ -64,9 +64,16 @@ struct ClientNetEventHandler : INetworkEventHandler {
     void onDisconnect(uint32_t peerId) override;
     void onReceive(uint32_t peerId, const void* data, std::size_t size) override;
 
+    // Planet radius received from the server in MsgConnectAck (km). 0.0f = flat Earth.
+    // Valid after MsgConnectAck is parsed; read from the main thread after connection.
+    float planetRadiusKm() const noexcept {
+        return m_planetRadiusKm;
+    }
+
   private:
     // Store f into *sessionFailure if it is still None (first-writer-wins via CAS); no-op if unset.
     void signalFailure(SessionFailure f);
 
     bool m_connected{false};
+    float m_planetRadiusKm{0.f};
 };

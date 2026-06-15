@@ -62,6 +62,14 @@ add_executable(test_flight_integrator test_flight_integrator.cpp)
 target_link_libraries(test_flight_integrator PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_flight_integrator)
 
+add_executable(test_central_gravity test_central_gravity.cpp)
+target_link_libraries(test_central_gravity PRIVATE Catch2::Catch2WithMain engine-flight)
+catch_discover_tests(test_central_gravity)
+
+add_executable(test_geodetic test_geodetic.cpp)
+target_link_libraries(test_geodetic PRIVATE Catch2::Catch2WithMain engine-flight)
+catch_discover_tests(test_geodetic)
+
 add_executable(test_force_model test_force_model.cpp)
 target_link_libraries(test_force_model PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_force_model)

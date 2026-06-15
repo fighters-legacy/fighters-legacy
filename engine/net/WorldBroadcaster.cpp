@@ -215,6 +215,11 @@ void WorldBroadcaster::setAdminAuthParams(int maxFailures, int lockoutSeconds) {
     m_adminAuthTracker.setClock(*m_clock);
 }
 
+void WorldBroadcaster::setGravityField(const IGravityField& field, float planetRadiusKm) noexcept {
+    m_gravity = &field;
+    m_planetRadiusKm = planetRadiusKm;
+}
+
 void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setRateLimitParams(cfg.connectRateLimit, cfg.connectRateWindowS, cfg.floodMultiplier);
     setMaxConnectionsPerIp(cfg.maxConnectionsPerIp);
@@ -658,6 +663,8 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     fs.throttle_actual = initialThrottle;
 
     auto fi = std::make_unique<FlightIntegrator>(model);
+    if (m_gravity)
+        fi->setGravityField(*m_gravity);
     fi->reset(fs);
     m_controlledEntities[id.index] = ControlledEntity{id, std::move(fi), std::move(controller)};
 }
@@ -714,6 +721,7 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned) {
     ack.typeCount = static_cast<uint16_t>(typeCount);
     ack.assignedEntityIdx = assigned.index;
     ack.assignedEntityGen = assigned.generation;
+    ack.planetRadiusKm = m_planetRadiusKm;
     appendMsg(buf, ack);
 
     for (uint32_t i = 0; i < typeCount; ++i) {
