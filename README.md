@@ -8,9 +8,10 @@
 
 A **general-purpose combat flight sim engine** with a first-class mod and plugin
 system, inspired by Jane's Fighters Anthology (1998). Runs natively on Windows 10/11,
-Linux, and macOS. All game content is delivered through the `IContentPack` interface —
-every asset source is a mod or plugin identical in status to
-any community contribution.
+Linux, and macOS. All game content is delivered through content packs —
+every asset source is a mod or plugin.
+
+> NOTE: The project is currently in active development toward an initial public release.
 
 ## Documentation
 
@@ -33,12 +34,14 @@ Development is tracked through [GitHub milestones](https://github.com/jomkz/figh
 
 | Phase | Description |
 |---|---|
-| [1 — Engine Foundation](https://github.com/jomkz/fighters-legacy/milestone/1) | HAL, Vulkan, SDL3, OpenAL, ENet, content system, CI/CD |
-| [2 — Modern-Particles Engine](https://github.com/jomkz/fighters-legacy/milestone/2) | Game loop, flight model, AI, networking, renderer |
-| [3 — OpenGL Compatibility Renderer](https://github.com/jomkz/fighters-legacy/milestone/7) | OpenGL 4.1 Core backend (Linux + Windows); optional headless/software renderer for CI |
-| [4 — In-Game Mission Editor](https://github.com/jomkz/fighters-legacy/milestone/4) | In-game mission editor |
-| [5 — Linux/macOS Release](https://github.com/jomkz/fighters-legacy/milestone/5) | MoltenVK, Flathub, official binaries |
-| [6 — Native Formats + Free Pack](https://github.com/jomkz/fighters-legacy/milestone/6) | Open asset toolchain, mod browser, community base pack |
+| 1 — Engine Foundation ✓ | HAL, Vulkan, SDL3, OpenAL, ENet, content system, CI/CD |
+| 2 — Modern-Particles Engine ✓ | Game loop, flight model, AI, networking, renderer, spherical-Earth world model |
+| [3 — Engine Systems](https://github.com/jomkz/fighters-legacy/milestone/8) | Spatial partitioning, interest management, AI framework, bindings, quality settings, pilot profiles |
+| [4 — Content & Gameplay](https://github.com/jomkz/fighters-legacy/milestone/9) | fl-base-pack content, radar/weapons/EW, AI, missions, campaign, multiplayer, advanced vehicle models |
+| [5 — UI Layer & Tooling](https://github.com/jomkz/fighters-legacy/milestone/4) | IGui HAL + Dear ImGui backend, in-game mission editor, welcome screen |
+| [6 — Platform Release](https://github.com/jomkz/fighters-legacy/milestone/5) | macOS/Linux/Windows packages, Flathub, fl-server container, crash reporting |
+| [7 — OpenGL & Alternative Renderers](https://github.com/jomkz/fighters-legacy/milestone/7) | OpenGL 4.1 Core backend, headless/software renderer for CI, voice chat |
+| [8 — Modding Platform](https://github.com/jomkz/fighters-legacy/milestone/6) | GPG verification, subprocess isolation, in-game mod browser, community content distribution |
 
 See [docs/roadmap.md](docs/roadmap.md) for the schedule, critical path, and
 per-phase acceptance criteria.
