@@ -273,19 +273,19 @@ All entity positions, terrain queries, and camera origins use **double-precision
 
 ### Spherical-Earth world model
 
-The engine supports an optional spherical-Earth physics and terrain mode, enabled per-server via `[world] spherical_earth = true` in `server.toml`.
+Spherical-Earth physics and terrain curvature is the engine's only supported mode. There is no flat-Earth fallback. The planet radius defaults to 6 371 000 m (Earth); non-Earth servers set `[world] planet_radius_m` in `server.toml`.
 
-**Coordinate convention:** the world origin (`{0, 0, 0}`) is lat=0°, lon=0°, alt=0 m (mean sea level). The planet centre sits at `{0, -R, 0}` in world space, where R = `planet_radius_m`. At the origin, spherical gravity is identical to flat gravity — no discontinuity when toggling the mode.
+**Coordinate convention:** the world origin (`{0, 0, 0}`) is lat=0°, lon=0°, alt=0 m (mean sea level). The planet centre sits at `{0, -R, 0}` in world space, where R = `planet_radius_m`.
 
-**Gravity (`IGravityField` seam):** the default `FlatGravityField` applies uniform 9.80665 m/s² downward. `CentralGravityField` (`engine/flight/CentralGravityField.h`) implements 1/r² falloff toward the planet centre; `earthInstance()` provides a singleton for Earth. Swap via `FlightIntegrator::setGravityField()`. `WorldBroadcaster::setGravityField(field, planetRadiusKm)` propagates the field to all current and future `FlightIntegrator` instances and records the radius for transmission to clients in `MsgConnectAck.planetRadiusKm`.
+**Gravity (`IGravityField` seam):** `CentralGravityField` (`engine/flight/CentralGravityField.h`) implements 1/r² falloff toward the planet centre; `earthInstance()` provides an Earth singleton (R = 6 371 000 m). The default for every `FlightIntegrator` and `WorldBroadcaster`. Swap via `FlightIntegrator::setGravityField()` or `WorldBroadcaster::setGravityField(field, planetRadiusKm)` for non-Earth planets. `WorldBroadcaster` records the radius for transmission to clients in `MsgConnectAck.planetRadiusKm`.
 
 **Atmosphere altitude (`IGravityField::geodeticAltitude()`):** `FlightIntegrator` uses `m_gravity->geodeticAltitude(pos)` instead of `pos[1]` for ISA pressure-altitude lookup, so the correct atmosphere density is applied even when the entity is far from the Z-axis (where world-Y diverges from geodetic altitude).
 
 **Geodetic utilities (`engine/flight/Geodetic.h`):** header-only inline functions — `worldToGeodetic(x,y,z)→LatLonAlt`, `geodeticToWorld(lla,x,y,z)`, `geodeticAltitude(x,y,z)` — convert between world XYZ and spherical lat/lon/alt. All angles in radians; `kEarthRadiusM = 6 371 000.0`.
 
-**Terrain curvature (`TerrainStreamer::setSphericalPlanetRadius(double)`):** applies a per-chunk Y offset (`sqrt(R²−D²)−R`) in both `heightAt()` (physics floor) and `getRenderItems()` (rendering), so terrain follows the sphere without modifying the mesh builder. The maximum visual error within a 15.36 km chunk at 120 km range is ~36 m — below LOD fidelity.
+**Terrain curvature (`TerrainStreamer::setPlanetRadius(double)`):** applies a per-chunk Y offset (`sqrt(R²−D²)−R`) in both `heightAt()` (physics floor, thread-safe via `shared_mutex`) and `getRenderItems()` (rendering), so terrain follows the sphere without modifying the mesh builder. The maximum visual error within a 15.36 km chunk at 120 km range is ~36 m — below LOD fidelity. Default radius is 6 371 000 m; call `setPlanetRadius()` only for non-Earth planets.
 
-**Client wiring:** `ClientNetEventHandler` reads `planetRadiusKm` from `MsgConnectAck` and exposes it via `planetRadiusKm()`. `Game` wires it to `terrainStreamer.setSphericalPlanetRadius()` on `Screen::Flight` entry.
+**Client wiring:** `ClientNetEventHandler` reads `planetRadiusKm` from `MsgConnectAck` and exposes it via `planetRadiusKm()`. `Game` wires it to `terrainStreamer.setPlanetRadius()` on `Screen::Flight` entry.
 
 ### Chunk format
 

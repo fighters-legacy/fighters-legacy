@@ -854,29 +854,21 @@ TEST_CASE("Integrator: wing-sweep Mach accounts for aircraft orientation", "[fli
     CHECK(fi_identity.state().current_sweep_deg != fi_yawed.state().current_sweep_deg);
 }
 
-TEST_CASE("FlightIntegrator: CentralGravityField at origin matches flat gravity", "[integrator][gravity]") {
+TEST_CASE("FlightIntegrator: default gravity pulls downward at surface", "[integrator][gravity]") {
     auto model = fl::BuiltinFlightModel::get();
-
-    fl::FlightIntegrator fi(model);
-    fi.setGravityField(fl::CentralGravityField::earthInstance());
-
-    fl::FlightIntegrator fiFlat(model);
+    fl::FlightIntegrator fi(model); // default = CentralGravityField::earthInstance()
 
     fl::FlightState s{};
     s.pos_world[1] = 500.f;
     s.mass_kg = model->geometry.mass_kg + model->geometry.fuel_kg;
     s.fuel_kg = model->geometry.fuel_kg;
     fi.reset(s);
-    fiFlat.reset(s);
 
     fl::ControlInput ctrl{};
     fl::PayloadEffect px{};
-    fl::WindInfluence wind{};
-    fi.step(1.f / 60.f, ctrl, px, wind);
-    fiFlat.step(1.f / 60.f, ctrl, px, wind);
+    fi.step(1.f / 60.f, ctrl, px);
 
-    // At the origin the spherical gravity vector is identical to flat gravity
-    CHECK(fi.state().pos_world[1] == Catch::Approx(fiFlat.state().pos_world[1]).epsilon(1e-4f));
+    CHECK(fi.state().pos_world[1] < 500.f);
 }
 
 TEST_CASE("FlightIntegrator: CentralGravityField at lateral position tilts gravity", "[integrator][gravity]") {

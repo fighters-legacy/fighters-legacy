@@ -3286,7 +3286,7 @@ TEST_CASE("WorldBroadcaster: admin_unlock is a no-op when IP is not locked", "[w
     CHECK(net.disconnectedPeers.empty());
 }
 
-TEST_CASE("WorldBroadcaster: MsgConnectAck planetRadiusKm is 0 by default", "[world_broadcaster][gravity]") {
+TEST_CASE("WorldBroadcaster: MsgConnectAck planetRadiusKm is Earth radius by default", "[world_broadcaster][gravity]") {
     MockLogger log;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
@@ -3297,7 +3297,7 @@ TEST_CASE("WorldBroadcaster: MsgConnectAck planetRadiusKm is 0 by default", "[wo
     broadcaster.onConnect(0u);
 
     fl::MsgConnectAck ack = parseSendAck(net);
-    CHECK(ack.planetRadiusKm == 0.0f);
+    CHECK(ack.planetRadiusKm == Catch::Approx(6371.f).epsilon(1e-4f));
 }
 
 TEST_CASE("WorldBroadcaster: setGravityField propagates planetRadiusKm to MsgConnectAck",

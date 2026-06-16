@@ -57,7 +57,6 @@ static const char* kDefaultToml =
     "[world]\n"
     "save_path = \"world.sav\"\n"
     "autosave_interval_s = 300\n"
-    "# spherical_earth = false   # enable 1/r² gravity and terrain curvature\n"
     "# planet_radius_m = 6371000 # planet sphere radius (m); Earth default\n"
     "\n"
     "[ai]\n"
@@ -253,7 +252,6 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.timeScale = *v;
             }
         }
-        cfg.sphericalEarth = tbl["world"]["spherical_earth"].value_or(false);
         if (auto v = tbl["world"]["planet_radius_m"].value<double>()) {
             if (*v < 1000.0 || *v > 1e9) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,

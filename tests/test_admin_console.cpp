@@ -14,8 +14,10 @@
 #include "net/GameProtocol.h"
 #include "net/WorldBroadcaster.h"
 #include <ILogger.h>
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <csignal>
+#include <cstring>
 #include <string>
 
 // Fixtures used by the async-ack tests (need a real GameLoop so enqueueSimCallback is safe).
@@ -845,4 +847,43 @@ TEST_CASE("AdminConsole wb: status shows no lockout line after admin_unlock clea
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("status");
     CHECK(out.find("admin auth lockouts") == std::string::npos);
+}
+
+TEST_CASE("WorldBroadcaster: default MsgConnectAck carries Earth planet radius", "[admin_console][wb]") {
+    NullLogger2 log;
+    TrackingNetwork net;
+    net.peerAddresses[0u] = "1.2.3.4";
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em{log, registry};
+    fl::WorldBroadcaster broadcaster{em, registry, net, log};
+    registry.registerType(makeWbEntityDef());
+
+    broadcaster.onConnect(0u);
+
+    bool found = false;
+    for (const auto& pkt : net.sends) {
+        if (pkt.size() >= sizeof(fl::MsgConnectAck) && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectAck)) {
+            fl::MsgConnectAck ack{};
+            std::memcpy(&ack, pkt.data(), sizeof(ack));
+            CHECK(ack.planetRadiusKm == Catch::Approx(6371.f).epsilon(0.001f));
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("WorldBroadcaster: setGroundElevationQuery is called per entity during onTick", "[admin_console][wb]") {
+    WbFixture f;
+    f.registry.registerType(makeWbEntityDef());
+
+    int queryCalls = 0;
+    f.broadcaster.setGroundElevationQuery([&](float, float) {
+        ++queryCalls;
+        return 42.f;
+    });
+    f.broadcaster.onConnect(0u);
+    f.broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CHECK(queryCalls > 0);
 }

@@ -370,14 +370,17 @@ int main(int argc, char** argv) {
     wbConfig.motdDisplaySeconds = cfg.motdDisplayS;
     wbConfig.operatorPassword = cfg.operatorPassword;
     broadcaster.applyConfig(wbConfig);
-    // Spherical-Earth gravity: function-scope static so the lifetime outlasts the broadcaster.
-    static fl::CentralGravityField s_sphericalGravity{6'371'000.f};
-    if (cfg.sphericalEarth) {
+    // Planet gravity and terrain curvature. Function-scope static so lifetime outlasts the broadcaster.
+    static fl::CentralGravityField s_gravity{6'371'000.f};
+    {
         const auto R_m = static_cast<float>(cfg.planetRadiusM);
-        s_sphericalGravity = fl::CentralGravityField(R_m);
-        broadcaster.setGravityField(s_sphericalGravity, R_m / 1000.f);
-        terrainStreamer.setSphericalPlanetRadius(cfg.planetRadiusM);
+        s_gravity = fl::CentralGravityField(R_m);
+        broadcaster.setGravityField(s_gravity, R_m / 1000.f);
+        terrainStreamer.setPlanetRadius(cfg.planetRadiusM);
     }
+    // Per-entity terrain height query: sim thread calls heightAt() (thread-safe via shared_mutex).
+    broadcaster.setGroundElevationQuery(
+        [&terrainStreamer](float x, float z) { return static_cast<float>(terrainStreamer.heightAt(x, z)); });
     // Resolve EntityDef::flightModelId -> parsed FlightModelData on the spawn path. Loads the raw
     // TOML asset via AssetManager, parses it with engine-flight's parseFlightModel, and caches the
     // result by id (sim-thread-only access). Empty/unknown ids fall back to the builtin model in
@@ -514,12 +517,6 @@ int main(int argc, char** argv) {
         const double entityX = static_cast<double>(broadcaster.cachedEntityX());
         const double entityZ = static_cast<double>(broadcaster.cachedEntityZ());
         terrainStreamer.update(glm::dvec3(entityX, 0.0, entityZ));
-        // Update the physics floor to the actual terrain height at the entity's position.
-        // Skipped when the chunk isn't loaded yet (heightAt returns 0) to avoid a
-        // momentary floor-at-sea-level spike while the chunk generates.
-        const float h = static_cast<float>(terrainStreamer.heightAt(entityX, entityZ));
-        if (h > 1.f)
-            broadcaster.setGroundElevation(h);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 

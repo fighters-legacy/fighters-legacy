@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 // ===========================================================================
@@ -465,7 +466,7 @@ TEST_CASE("TerrainStreamer cancelled read during eviction does not crash") {
 // Spherical terrain correction
 // ---------------------------------------------------------------------------
 
-TEST_CASE("TerrainStreamer setSphericalPlanetRadius: no correction at origin", "[spherical]") {
+TEST_CASE("TerrainStreamer: curvature correction is zero at origin", "[spherical]") {
     MockLogger logger;
     std::vector<std::unique_ptr<IContentPack>> packs;
     AssetManager assets{std::move(packs), logger};
@@ -476,14 +477,13 @@ TEST_CASE("TerrainStreamer setSphericalPlanetRadius: no correction at origin", "
     fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
     driveToSteadyState(ts, {0.0, 0.0, 0.0});
 
-    const double flatH = ts.heightAt(0.0, 0.0);
-    ts.setSphericalPlanetRadius(6'371'000.0);
-    const double sphereH = ts.heightAt(0.0, 0.0);
-    // At origin (x=0, z=0) the correction is sqrt(R^2) - R = 0
-    CHECK(sphereH == Catch::Approx(flatH).margin(1e-3));
+    const double h = ts.heightAt(0.0, 0.0); // default Earth radius
+    // At origin (x=0, z=0) the correction is sqrt(R^2) - R = 0 regardless of radius
+    ts.setPlanetRadius(3'000'000.0); // Mars-ish radius: correction still 0 at origin
+    CHECK(ts.heightAt(0.0, 0.0) == Catch::Approx(h).margin(1e-3));
 }
 
-TEST_CASE("TerrainStreamer setSphericalPlanetRadius: negative correction at lateral position", "[spherical]") {
+TEST_CASE("TerrainStreamer: curvature correction is negative at lateral position", "[spherical]") {
     MockLogger logger;
     std::vector<std::unique_ptr<IContentPack>> packs;
     AssetManager assets{std::move(packs), logger};
@@ -495,17 +495,19 @@ TEST_CASE("TerrainStreamer setSphericalPlanetRadius: negative correction at late
     const double D = 100'000.0; // 100 km offset
     driveToSteadyState(ts, {D, 0.0, 0.0});
 
+    // Use an astronomically large radius as a "flat" baseline (correction ~ 0)
+    ts.setPlanetRadius(1e15);
     const double flatH = ts.heightAt(D, 0.0);
+
     const double R = 6'371'000.0;
     const double expectedCorrection = std::sqrt(std::max(0.0, R * R - D * D)) - R;
-
-    ts.setSphericalPlanetRadius(R);
+    ts.setPlanetRadius(R);
     const double sphereH = ts.heightAt(D, 0.0);
     CHECK(sphereH == Catch::Approx(flatH + expectedCorrection).margin(1e-3));
     CHECK(sphereH < flatH); // correction is negative for any D > 0
 }
 
-TEST_CASE("TerrainStreamer setSphericalPlanetRadius: correction magnitude at 100 km", "[spherical]") {
+TEST_CASE("TerrainStreamer: curvature correction magnitude at 100 km", "[spherical]") {
     // Analytical: correction ~ -D^2 / (2R) for D << R
     const double D = 100'000.0;
     const double R = 6'371'000.0;
@@ -515,7 +517,28 @@ TEST_CASE("TerrainStreamer setSphericalPlanetRadius: correction magnitude at 100
     CHECK(correction == Catch::Approx(approxCorrection).margin(1.0));
 }
 
-TEST_CASE("TerrainStreamer setSphericalPlanetRadius zero disables correction", "[spherical]") {
+TEST_CASE("TerrainStreamer: curvature applied at default radius without explicit setPlanetRadius", "[spherical]") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+    MockAsyncFilesystem asyncFs;
+    asyncFs.init();
+
+    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
+    const double D = 100'000.0;
+    driveToSteadyState(ts, {D, 0.0, 0.0});
+
+    // Without calling setPlanetRadius the default Earth radius is applied.
+    // Use a very large radius as a flat proxy to verify the default is not flat.
+    const double hDefault = ts.heightAt(D, 0.0);
+    ts.setPlanetRadius(1e15); // effectively flat
+    const double hFlat = ts.heightAt(D, 0.0);
+    // Default spherical correction is negative at D > 0
+    CHECK(hDefault < hFlat);
+}
+
+TEST_CASE("TerrainStreamer: heightAt is callable from a background thread", "[spherical][threading]") {
     MockLogger logger;
     std::vector<std::unique_ptr<IContentPack>> packs;
     AssetManager assets{std::move(packs), logger};
@@ -526,8 +549,9 @@ TEST_CASE("TerrainStreamer setSphericalPlanetRadius zero disables correction", "
     fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
     driveToSteadyState(ts, {0.0, 0.0, 0.0});
 
-    const double flatH = ts.heightAt(0.0, 0.0);
-    ts.setSphericalPlanetRadius(6'371'000.0);
-    ts.setSphericalPlanetRadius(0.0); // re-disable
-    CHECK(ts.heightAt(0.0, 0.0) == Catch::Approx(flatH).margin(1e-3));
+    double result = 0.0;
+    std::thread t([&] { result = ts.heightAt(0.0, 0.0); });
+    t.join();
+    // Result is deterministic (procedural FBM at origin); just verify no crash / data race.
+    CHECK(std::isfinite(result));
 }

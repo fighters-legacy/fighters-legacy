@@ -65,7 +65,6 @@ stack = []
 save_path          = "world.sav"
 autosave_interval_s = 300
 time_scale         = 10.0   # game seconds per real second; 10 = full day/night ≈ 2.4 real hours
-# spherical_earth = false   # enable 1/r² gravity and terrain curvature
 # planet_radius_m = 6371000 # planet sphere radius (m); Earth default
 
 [ai]
@@ -348,25 +347,13 @@ At the default of 10×, a 30-minute mission passes ~5 game hours — enough to e
 lighting changes (e.g. afternoon → golden hour). Per-mission overrides are available via the
 `time_scale` field in mission YAML files.
 
-### `spherical_earth`
-
-| Type | Default |
-|---|---|
-| boolean | `false` |
-
-Enable spherical-Earth physics and terrain rendering. When `true`:
-
-- Gravity uses an inverse-square (1/r²) central field directed toward the planet centre at `{0, -R, 0}` in world space, where R = `planet_radius_m`.
-- `TerrainStreamer` applies per-chunk Y offsets so terrain follows the globe curvature.
-- `MsgConnectAck.planetRadiusKm` is set to `planet_radius_m / 1000`; the client wires this to its terrain streamer.
-
 ### `planet_radius_m`
 
 | Type | Default | Range |
 |---|---|---|
 | float | `6371000.0` (Earth radius in metres) | `[1000, 1e9]` |
 
-Planet sphere radius in metres. Only effective when `spherical_earth = true`. Out-of-range values are rejected with a warning and the default is used.
+Planet sphere radius in metres. The engine always uses spherical-Earth physics and terrain curvature; this field sets the radius for non-Earth planets. `MsgConnectAck.planetRadiusKm` is set to `planet_radius_m / 1000` so clients match server physics. Out-of-range values are rejected with a warning and the default is used.
 
 ---
 
