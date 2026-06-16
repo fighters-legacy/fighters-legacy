@@ -157,10 +157,18 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     AuthLockoutSummary getAuthLockoutSummary() const;
 
     // Set the terrain floor elevation (m) used for ground collision in each peer's
-    // FlightIntegrator. Thread-safe; may be called from any thread.
+    // FlightIntegrator. Thread-safe; may be called from any thread. Serves as a global
+    // fallback when no per-entity query function is set via setGroundElevationQuery().
     void setGroundElevation(float elev) noexcept {
         m_groundElevation.store(elev, std::memory_order_relaxed);
     }
+
+    // Inject a per-entity terrain height query called on the sim thread each tick.
+    // fn(worldX, worldZ) → terrain elevation (m). When set, this overrides the global
+    // m_groundElevation scalar for each entity's FlightIntegrator::step() call.
+    // Requires TerrainStreamer::heightAt() to be thread-safe (shared_mutex). Call before
+    // gameLoop.start().
+    void setGroundElevationQuery(std::function<float(float, float)> fn);
 
     // Set pre-cached peer spawn positions [x, y, z] in world space.
     // y must already include the terrain height + AGL offset, computed on the main thread
@@ -170,7 +178,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     void setSpawnPoints(std::vector<std::array<double, 3>> points) noexcept;
 
     // World-XZ position of the most recently stepped peer entity (sim thread writes;
-    // main thread may read to steer terrain loading and update setGroundElevation).
+    // main thread may read to steer terrain loading).
     float cachedEntityX() const noexcept {
         return m_entityX.load(std::memory_order_relaxed);
     }
@@ -255,8 +263,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     // Set the gravity field applied to all FlightIntegrators spawned on this broadcaster (current
     // and future). Also records the planet radius sent to clients in MsgConnectAck so their terrain
-    // rendering matches server physics. Call before gameLoop.start().
-    void setGravityField(const IGravityField& field, float planetRadiusKm = 0.f) noexcept;
+    // rendering matches server physics. Defaults to CentralGravityField::earthInstance() /
+    // 6371 km; only call this for non-Earth planets. Call before gameLoop.start().
+    void setGravityField(const IGravityField& field, float planetRadiusKm = 6371.f) noexcept;
 
   private:
     void sendConnectAck(uint32_t peerId, EntityId assigned);
@@ -338,9 +347,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Resolves EntityDef::flightModelId -> FlightModelData at spawn (null = always builtin model).
     FlightModelResolver m_flightModelResolver;
 
-    // Gravity field (null = each integrator uses its own default FlatGravityField).
+    // Gravity field applied to all spawned integrators. Initialized to CentralGravityField::earthInstance()
+    // in the constructor; override with setGravityField() for non-Earth servers.
     const IGravityField* m_gravity{nullptr};
-    float m_planetRadiusKm{0.f}; // sent in MsgConnectAck; 0 = flat Earth
+    float m_planetRadiusKm{0.f}; // sent in MsgConnectAck (km); initialized to 6371 in constructor
+
+    // Per-entity terrain height query (sim-thread only). When set, called each tick per entity instead
+    // of the global m_groundElevation scalar.
+    std::function<float(float, float)> m_groundQuery;
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword;                               // empty = admin channel disabled

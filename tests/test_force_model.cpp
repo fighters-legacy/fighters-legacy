@@ -16,21 +16,6 @@ using Catch::Matchers::WithinAbs;
 using namespace fl;
 
 // ---------------------------------------------------------------------------
-// 9d: IGravityField
-// ---------------------------------------------------------------------------
-
-TEST_CASE("FlatGravityField returns 9.80665 down regardless of position", "[force_model]") {
-    const float a[3] = {123.f, -456.f, 789.f};
-    auto g0 = FlatGravityField::instance().accelWorld(a);
-    const float b[3] = {0.f, 0.f, 0.f};
-    auto g1 = FlatGravityField::instance().accelWorld(b);
-    CHECK_THAT(g0[0], WithinAbs(0.0, 1e-6));
-    CHECK_THAT(g0[1], WithinAbs(-9.80665, 1e-5));
-    CHECK_THAT(g0[2], WithinAbs(0.0, 1e-6));
-    CHECK(g1[1] == g0[1]); // position-independent (uniform field)
-}
-
-// ---------------------------------------------------------------------------
 // 9c: IForceModel / FixedWingForceModel
 // ---------------------------------------------------------------------------
 

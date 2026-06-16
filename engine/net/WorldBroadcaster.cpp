@@ -9,6 +9,7 @@
 #include "entity/EntityTypeRegistry.h"
 #include "entity/IEntityController.h"
 #include "flight/BuiltinFlightModel.h"
+#include "flight/CentralGravityField.h"
 #include "flight/FlightIntegrator.h"
 #include "net/GameProtocol.h"
 #include "net/NetworkUtils.h"
@@ -127,7 +128,8 @@ namespace fl {
 
 WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegistry& registry, INetwork& net,
                                    ILogger& logger, WeatherController* weather)
-    : m_entityManager(entityManager), m_registry(registry), m_net(net), m_logger(logger), m_weather(weather) {}
+    : m_entityManager(entityManager), m_registry(registry), m_net(net), m_logger(logger), m_weather(weather),
+      m_gravity(&fl::CentralGravityField::earthInstance()), m_planetRadiusKm(6371.f) {}
 
 WorldBroadcaster::~WorldBroadcaster() = default;
 
@@ -228,6 +230,10 @@ void WorldBroadcaster::setAdminAuthParams(int maxFailures, int lockoutSeconds) {
 void WorldBroadcaster::setGravityField(const IGravityField& field, float planetRadiusKm) noexcept {
     m_gravity = &field;
     m_planetRadiusKm = planetRadiusKm;
+}
+
+void WorldBroadcaster::setGroundElevationQuery(std::function<float(float, float)> fn) {
+    m_groundQuery = std::move(fn);
 }
 
 void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
@@ -716,8 +722,7 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     fs.throttle_actual = initialThrottle;
 
     auto fi = std::make_unique<FlightIntegrator>(model);
-    if (m_gravity)
-        fi->setGravityField(*m_gravity);
+    fi->setGravityField(*m_gravity);
     fi->reset(fs);
     m_controlledEntities[id.index] = ControlledEntity{id, std::move(fi), std::move(controller)};
 }
@@ -739,7 +744,9 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
         wind.turbulence_body[1] = turb * 0.3f * r;
         wind.turbulence_body[2] = turb * 0.5f * r;
     }
-    fi.step(static_cast<float>(simDt), ctrl, {}, wind, m_groundElevation.load(std::memory_order_relaxed));
+    const float groundElev = m_groundQuery ? m_groundQuery(fi.state().pos_world[0], fi.state().pos_world[2])
+                                           : m_groundElevation.load(std::memory_order_relaxed);
+    fi.step(static_cast<float>(simDt), ctrl, {}, wind, groundElev);
 
     const FlightState& fs = fi.state();
     // Cache entity XZ so the main thread can steer terrain loading and update the floor.

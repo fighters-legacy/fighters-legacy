@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -26,7 +27,8 @@ namespace fl {
 // construction and deregisters on destruction. Only one TerrainStreamer may be
 // live per IAsyncFilesystem instance.
 //
-// Threading: all public methods must be called from the main thread.
+// Threading: update(), getRenderItems(), chunkCount(), and surfaceAt() are main-thread only.
+// heightAt() is safe to call from any thread (protected by m_chunkMutex).
 class TerrainStreamer : public IAsyncFilesystemHandler {
   public:
     // renderer may be nullptr for headless operation (heightAt works; getRenderItems
@@ -56,10 +58,9 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // Total loaded chunk entries across all LODs. Exposed for tests.
     std::size_t chunkCount() const noexcept;
 
-    // Enable spherical terrain correction. radius_m > 0 applies a per-chunk Y offset so terrain
-    // follows the curvature of a sphere with the given radius. 0 (default) = flat. Call before
-    // the first update().
-    void setSphericalPlanetRadius(double radius_m) noexcept;
+    // Override the planet radius (m) used for terrain curvature and heightAt() corrections.
+    // Default is 6 371 000 m (Earth). Call before the first update() for non-Earth planets.
+    void setPlanetRadius(double radius_m) noexcept;
 
   private:
     // IAsyncFilesystemHandler
@@ -112,8 +113,11 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     std::unordered_map<ChunkKey, Chunk, ChunkKeyHash> m_chunks;
     std::unordered_map<AsyncReadId, ChunkKey> m_pendingByReadId;
 
-    // Spherical-planet radius (m). 0 = flat (default).
-    double m_sphericalRadius{0.0};
+    // Planet radius (m) for terrain curvature. Default = Earth (6 371 000 m).
+    double m_sphericalRadius{6'371'000.0};
+
+    // Protects m_chunks for concurrent reads (heightAt, sim thread) vs. writes (update, main thread).
+    mutable std::shared_mutex m_chunkMutex;
 
     // Last-known camera center chunk; sentinel = update() never called.
     // getRenderItems() returns empty immediately when m_lastCx is the sentinel.

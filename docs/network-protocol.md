@@ -78,7 +78,7 @@ Sent once per peer on connect (reliable channel 0), immediately followed by
 | 2 | 2 | `typeCount` | `uint16_t` | Number of `MsgEntityTypeDef` records that follow |
 | 4 | 4 | `assignedEntityIdx` | `uint32_t` | Pool slot of the entity assigned to this peer (0 if none) |
 | 8 | 4 | `assignedEntityGen` | `uint32_t` | Entity generation; 0 = no entity assigned |
-| 12 | 4 | `planetRadiusKm` | `float32` | Planet sphere radius in km; 0.0 = flat Earth (default) |
+| 12 | 4 | `planetRadiusKm` | `float32` | Planet sphere radius in km; Earth default = 6371.0 |
 
 ### MsgEntityTypeDef — 196 bytes
 

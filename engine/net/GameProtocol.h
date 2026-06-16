@@ -92,7 +92,7 @@ struct MsgConnectAck {
     uint16_t typeCount{0};
     uint32_t assignedEntityIdx{0}; // entity slot assigned to this peer
     uint32_t assignedEntityGen{0}; // entity generation (0 = none assigned)
-    float planetRadiusKm{0.f};     // planet sphere radius (km); 0 = flat Earth
+    float planetRadiusKm{0.f};     // planet sphere radius (km); Earth default = 6371
 }; // 16 bytes, align 4 (multiple of alignof(MsgEntityTypeDef) so trailing records stay aligned)
 static_assert(sizeof(MsgConnectAck) == 16u, "MsgConnectAck wire size changed");
 static_assert(alignof(MsgConnectAck) == 4u, "MsgConnectAck alignment changed");

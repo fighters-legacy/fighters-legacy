@@ -65,7 +65,7 @@ struct ClientNetEventHandler : INetworkEventHandler {
     void onDisconnect(uint32_t peerId) override;
     void onReceive(uint32_t peerId, const void* data, std::size_t size) override;
 
-    // Planet radius received from the server in MsgConnectAck (km). 0.0f = flat Earth.
+    // Planet radius received from the server in MsgConnectAck (km).
     // Valid after MsgConnectAck is parsed; read from the main thread after connection.
     float planetRadiusKm() const noexcept {
         return m_planetRadiusKm;
@@ -83,7 +83,7 @@ struct ClientNetEventHandler : INetworkEventHandler {
     void signalFailure(SessionFailure f);
 
     bool m_connected{false};
-    float m_planetRadiusKm{0.f};
+    float m_planetRadiusKm{6371.f};
     uint16_t m_nextReqId{1}; // next reqId to stamp on outgoing MsgAdminCommand
 
     // Chunk reassembly state for MsgAdminResponseChunk (0x0A) streaming responses.

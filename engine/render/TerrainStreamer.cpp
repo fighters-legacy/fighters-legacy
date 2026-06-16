@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <mutex>
+#include <shared_mutex>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -221,6 +223,7 @@ void TerrainStreamer::onReadComplete(AsyncReadId id, AsyncReadStatus status, con
 // ---------------------------------------------------------------------------
 
 void TerrainStreamer::finalizeChunk(const ChunkKey& key, std::vector<uint16_t> heights, int hmSize) {
+    std::unique_lock lock(m_chunkMutex);
     Chunk& chunk = m_chunks[key];
     chunk.heightmap = std::move(heights);
     chunk.hmSize = hmSize;
@@ -255,6 +258,7 @@ void TerrainStreamer::finalizeChunk(const ChunkKey& key, std::vector<uint16_t> h
 // ---------------------------------------------------------------------------
 
 void TerrainStreamer::evictChunk(const ChunkKey& key) {
+    std::unique_lock lock(m_chunkMutex);
     auto it = m_chunks.find(key);
     if (it == m_chunks.end())
         return;
@@ -309,12 +313,9 @@ std::vector<RenderItem> TerrainStreamer::getRenderItems(glm::dvec3 worldOrigin) 
             // Camera-relative translation: chunk local-origin in world → relative to camera
             const double chunkCornerX = m_manifest.originX + static_cast<double>(cx) * m_manifest.chunkSizeM;
             const double chunkCornerZ = m_manifest.originZ + static_cast<double>(cy) * m_manifest.chunkSizeM;
-            double yOffset = 0.0;
-            if (m_sphericalRadius > 0.0) {
-                const double R = m_sphericalRadius;
-                const double D2 = chunkCornerX * chunkCornerX + chunkCornerZ * chunkCornerZ;
-                yOffset = std::sqrt(std::max(0.0, R * R - D2)) - R;
-            }
+            const double R = m_sphericalRadius;
+            const double D2 = chunkCornerX * chunkCornerX + chunkCornerZ * chunkCornerZ;
+            const double yOffset = std::sqrt(std::max(0.0, R * R - D2)) - R;
             const glm::dvec3 chunkOrigin{chunkCornerX, yOffset, chunkCornerZ};
             const glm::vec3 relOrigin = glm::vec3(chunkOrigin - worldOrigin);
 
@@ -333,6 +334,8 @@ std::vector<RenderItem> TerrainStreamer::getRenderItems(glm::dvec3 worldOrigin) 
 // ---------------------------------------------------------------------------
 
 double TerrainStreamer::heightAt(double x, double z) const noexcept {
+    std::shared_lock lock(m_chunkMutex);
+
     const int cx = static_cast<int>(std::floor((x - m_manifest.originX) / m_manifest.chunkSizeM));
     const int cy = static_cast<int>(std::floor((z - m_manifest.originZ) / m_manifest.chunkSizeM));
 
@@ -368,11 +371,9 @@ double TerrainStreamer::heightAt(double x, double z) const noexcept {
     double elevation =
         glm::mix(glm::mix(h(ix, iz), h(ix + 1, iz), fx), glm::mix(h(ix, iz + 1), h(ix + 1, iz + 1), fx), fz);
 
-    if (m_sphericalRadius > 0.0) {
-        const double R = m_sphericalRadius;
-        const double D2 = x * x + z * z;
-        elevation += std::sqrt(std::max(0.0, R * R - D2)) - R;
-    }
+    const double R = m_sphericalRadius;
+    const double D2 = x * x + z * z;
+    elevation += std::sqrt(std::max(0.0, R * R - D2)) - R;
 
     return elevation;
 }
@@ -385,7 +386,7 @@ std::size_t TerrainStreamer::chunkCount() const noexcept {
     return m_chunks.size();
 }
 
-void TerrainStreamer::setSphericalPlanetRadius(double radius_m) noexcept {
+void TerrainStreamer::setPlanetRadius(double radius_m) noexcept {
     m_sphericalRadius = radius_m;
 }
 

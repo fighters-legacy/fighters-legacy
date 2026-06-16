@@ -77,7 +77,12 @@ TEST_CASE("CentralGravityField: guard at planet centre returns zero", "[gravity]
 }
 
 TEST_CASE("IGravityField default: geodeticAltitude returns world-Y", "[gravity]") {
-    fl::FlatGravityField flat;
+    struct MinimalField : fl::IGravityField {
+        std::array<float, 3> accelWorld(const float[3]) const override {
+            return {};
+        }
+    };
+    MinimalField f;
     float p[3] = {1e5f, 500.f, 2e4f};
-    CHECK(flat.geodeticAltitude(p) == Approx(500.f).margin(1e-4f));
+    CHECK(f.geodeticAltitude(p) == Approx(500.f).margin(1e-4f));
 }

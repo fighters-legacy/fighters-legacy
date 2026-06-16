@@ -749,7 +749,7 @@ void Game::handleTransition(Screen next) {
         d.services.musicManager.setState(GameState::FlightPatrol);
         if (d.session.clientHandler && d.services.terrainStreamer) {
             const double radiusM = static_cast<double>(d.session.clientHandler->planetRadiusKm()) * 1000.0;
-            d.services.terrainStreamer->setSphericalPlanetRadius(radiusM);
+            d.services.terrainStreamer->setPlanetRadius(radiusM);
         }
     } else if (next == Screen::MainMenu)
         d.services.musicManager.setState(GameState::Menu);

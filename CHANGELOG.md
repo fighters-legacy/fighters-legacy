@@ -20,6 +20,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **engine**: Spherical-Earth physics and terrain curvature is now the engine's only supported mode. The `[world] spherical_earth` config flag and all flat-Earth fallback paths have been removed. `planet_radius_m` (default 6 371 000 m) remains configurable for non-Earth planets. Per-entity terrain height queries replace the global scalar floor, so each entity uses the correct terrain elevation at its XZ position.
 - **network**: `MsgClientInput` delivery moves from reliable channel 0 to unreliable channel 1; eliminates retransmission-induced input lag (#348)
 
 ### Fixed

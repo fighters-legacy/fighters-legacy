@@ -36,7 +36,6 @@ struct ServerConfig {
     int worldAutosaveIntervalS = 300;
     int entitySoftCap = 0;              // 0 = unlimited; server-enforced object count limit
     double timeScale = 10.0;            // game seconds per real second; 10 = full day/night ~2.4 real hrs
-    bool sphericalEarth = false;        // enable 1/r² gravity + terrain curvature
     double planetRadiusM = 6'371'000.0; // sphere radius (m); Earth default
 
     // [ai]  — Phase 2: parsed and stored; enforcement lands with AI runtime

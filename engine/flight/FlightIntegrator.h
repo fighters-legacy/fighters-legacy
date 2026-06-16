@@ -2,6 +2,7 @@
 #pragma once
 
 #include "flight/AeroForces.h"
+#include "flight/CentralGravityField.h"
 #include "flight/FixedWingForceModel.h"
 #include "flight/FlightModelData.h"
 #include "flight/IGravityField.h"
@@ -52,8 +53,8 @@ class FlightIntegrator {
         return m_state;
     }
 
-    // Inject an alternative gravity field (default: uniform FlatGravityField). A central/spherical
-    // field plugs in here for planet-scale ballistic trajectories without touching step().
+    // Inject an alternative gravity field (default: CentralGravityField::earthInstance()).
+    // A custom field plugs in here for exotic planets without touching step().
     void setGravityField(const IGravityField& field) {
         m_gravity = &field;
     }
@@ -67,7 +68,7 @@ class FlightIntegrator {
   private:
     std::shared_ptr<const FlightModelData> m_data;
     FlightState m_state;
-    const IGravityField* m_gravity{&FlatGravityField::instance()};
+    const IGravityField* m_gravity{&CentralGravityField::earthInstance()};
     const IForceModel* m_forceModel{&FixedWingForceModel::instance()};
 
     void advanceSpool(float dt, float commanded_throttle);

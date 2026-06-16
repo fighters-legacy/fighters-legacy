@@ -616,8 +616,8 @@ TEST_CASE("ClientNetEventHandler: short MsgConnectAck (12 bytes) does not crash"
     buf[0] = static_cast<uint8_t>(fl::MsgId::ConnectAck);
     handler.onConnect(0u);
     REQUIRE_NOTHROW(handler.onReceive(0u, buf, sizeof(buf)));
-    // planetRadiusKm stays at its default 0
-    CHECK(handler.planetRadiusKm() == 0.0f);
+    // planetRadiusKm stays at the Earth default when short packet is received
+    CHECK(handler.planetRadiusKm() == Catch::Approx(6371.f).epsilon(1e-4f));
 }
 
 // ---------------------------------------------------------------------------
