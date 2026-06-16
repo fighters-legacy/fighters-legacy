@@ -639,3 +639,61 @@ TEST_CASE("parseServerConfig: max_connections_per_ip out of range warns and uses
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
     }
 }
+
+// ---------------------------------------------------------------------------
+// [spawn]
+// ---------------------------------------------------------------------------
+
+TEST_CASE("parseServerConfig: spawn defaults when section absent", "[server_config][spawn]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("", &log);
+    CHECK(cfg.spawn.aglOffset == 500.0);
+    CHECK(cfg.spawn.points.empty());
+}
+
+TEST_CASE("parseServerConfig: reads spawn.agl_offset", "[server_config][spawn]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[spawn]\nagl_offset = 1000.0\n", &log);
+    CHECK(cfg.spawn.aglOffset == 1000.0);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: spawn.agl_offset below 0 warns and uses default", "[server_config][spawn]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[spawn]\nagl_offset = -1.0\n", &log);
+    CHECK(cfg.spawn.aglOffset == 500.0);
+    CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+}
+
+TEST_CASE("parseServerConfig: spawn.agl_offset above 50000 warns and uses default", "[server_config][spawn]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[spawn]\nagl_offset = 50001.0\n", &log);
+    CHECK(cfg.spawn.aglOffset == 500.0);
+    CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+}
+
+TEST_CASE("parseServerConfig: reads [[spawn.points]] entries", "[server_config][spawn]") {
+    MockLogger log;
+    const char* toml = "[spawn]\nagl_offset = 250.0\n\n"
+                       "[[spawn.points]]\nx = 0.0\nz = 0.0\n\n"
+                       "[[spawn.points]]\nx = 1000.0\nz = -500.0\n";
+    auto cfg = parseServerConfig(toml, &log);
+    REQUIRE(cfg.spawn.points.size() == 2);
+    CHECK(cfg.spawn.points[0].x == 0.0);
+    CHECK(cfg.spawn.points[0].z == 0.0);
+    CHECK(cfg.spawn.points[1].x == 1000.0);
+    CHECK(cfg.spawn.points[1].z == -500.0);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: spawn.points entry missing z is skipped with warning", "[server_config][spawn]") {
+    MockLogger log;
+    const char* toml = "[[spawn.points]]\nx = 100.0\n\n"
+                       "[[spawn.points]]\nx = 200.0\nz = 300.0\n";
+    auto cfg = parseServerConfig(toml, &log);
+    // Only the complete entry is kept.
+    REQUIRE(cfg.spawn.points.size() == 1);
+    CHECK(cfg.spawn.points[0].x == 200.0);
+    CHECK(cfg.spawn.points[0].z == 300.0);
+    CHECK(log.hasMessage(LogLevel::Warn, "missing x or z"));
+}

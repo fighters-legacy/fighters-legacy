@@ -45,6 +45,7 @@
 #include <sdl3/SDL3Filesystem.h>
 #include <weather/WeatherController.h>
 
+#include <array>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -333,6 +334,26 @@ int main(int argc, char** argv) {
         entityManager.spawn("builtin:debug-entity", t);
     }
 
+    // ---- Pre-cache peer spawn-point elevations (main-thread only, before gameLoop.start()) ----
+    // TerrainStreamer::heightAt() is not thread-safe; all queries must complete before the sim
+    // thread starts. Procedural terrain chunks are generated synchronously inside update();
+    // content-pack chunks may not be ready yet (heightAt returns 0 m — accepted as a fallback).
+    std::vector<std::array<double, 3>> cachedSpawns;
+    {
+        const double agl = cfg.spawn.aglOffset;
+        if (cfg.spawn.points.empty()) {
+            // Default: origin. Chunk already primed by terrainStreamer.update above.
+            cachedSpawns.push_back(std::array<double, 3>{0.0, terrainStreamer.heightAt(0.0, 0.0) + agl, 0.0});
+        } else {
+            for (const auto& pt : cfg.spawn.points) {
+                terrainStreamer.update(glm::dvec3(pt.x, 0.0, pt.z));
+                p.asyncFilesystem->service();
+                const double y = terrainStreamer.heightAt(pt.x, pt.z) + agl;
+                cachedSpawns.push_back(std::array<double, 3>{pt.x, y, pt.z});
+            }
+        }
+    }
+
     // ---- WorldBroadcaster wires the sim loop to ENet ----
     fl::WeatherControllerParams wparams;
     wparams.timeScaleRatio = static_cast<float>(cfg.timeScale);
@@ -374,9 +395,11 @@ int main(int argc, char** argv) {
             (*fmCache)[id] = model; // cache misses too, so a bad id isn't re-parsed every connect
             return model;
         });
-    // Seed the ground floor from the already-primed TerrainStreamer at the spawn origin.
-    // Used by FlightIntegrator::step as the physics floor and by onConnect for peer spawn
-    // altitude (peers spawn at groundElevation + 500 m AGL). Updated each frame below.
+    // Wire pre-cached spawn positions. Must be called before gameLoop.start() (never mutated after).
+    broadcaster.setSpawnPoints(std::move(cachedSpawns));
+    // Seed the physics floor from the already-primed TerrainStreamer at origin.
+    // Used by FlightIntegrator::step for ground collision. Updated each frame below.
+    // Peer spawn positions are set separately via setSpawnPoints() above.
     broadcaster.setGroundElevation(static_cast<float>(terrainStreamer.heightAt(0.0, 0.0)));
     if (!cfg.banlistPath.empty()) {
         auto banned = loadIpListFile(cfg.banlistPath, log);
