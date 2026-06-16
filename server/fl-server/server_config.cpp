@@ -113,7 +113,19 @@ static const char* kDefaultToml =
     "port = 27015\n"
     "password = \"\"\n"
     "max_auth_failures = 5\n"
-    "lockout_seconds = 60\n";
+    "lockout_seconds = 60\n"
+    "\n"
+    "[spawn]\n"
+    "# AGL offset (metres) above terrain for all spawn points. Default 500 m.\n"
+    "agl_offset = 500.0\n"
+    "\n"
+    "# Peer spawn locations (round-robin). Terrain height is queried at each point\n"
+    "# on startup and cached; changing spawn points requires a server restart.\n"
+    "# Omit this section to use the default (origin).\n"
+    "#\n"
+    "# [[spawn.points]]\n"
+    "# x = 0.0\n"
+    "# z = 0.0\n";
 
 std::string_view defaultServerConfigToml() {
     return kDefaultToml;
@@ -410,6 +422,27 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "rcon.password is empty; RCON will accept unauthenticated connections"
                      " -- set a password or disable rcon.enabled");
+
+        // [spawn]
+        if (auto v = tbl["spawn"]["agl_offset"].value<double>()) {
+            if (*v >= 0.0 && *v <= 50000.0)
+                cfg.spawn.aglOffset = *v;
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "spawn.agl_offset out of range [0, 50000]; using default 500");
+        }
+        if (auto* arr = tbl["spawn"]["points"].as_array()) {
+            for (auto& elem : *arr) {
+                if (auto* t2 = elem.as_table()) {
+                    auto xv = (*t2)["x"].value<double>();
+                    auto zv = (*t2)["z"].value<double>();
+                    if (xv && zv)
+                        cfg.spawn.points.push_back({*xv, *zv});
+                    else
+                        log->log(LogLevel::Warn, __FILE__, __LINE__, "spawn.points entry missing x or z; skipping");
+                }
+            }
+        }
 
     } catch (const toml::parse_error& e) {
         char buf[256];

@@ -83,6 +83,13 @@ port              = 27015
 password          = ""
 max_auth_failures = 5    # lock out IP after N consecutive failed auth attempts
 lockout_seconds   = 60   # per-IP lockout duration in seconds
+
+[spawn]
+agl_offset = 500.0  # metres AGL above terrain for all spawn points
+
+# [[spawn.points]]
+# x = 0.0
+# z = 0.0
 ```
 
 ---
@@ -694,6 +701,60 @@ Out-of-range values are ignored and the default is kept (a warning is logged).
     mcrcon -H <host> -P 27015 -p <password> "status"
 
 All `[rcon]` fields **require a restart** to take effect.
+
+---
+
+## [spawn] — Peer spawn locations
+
+Controls where connecting peers appear in the world. Terrain elevation at each
+configured point is queried from `TerrainStreamer` on the main thread before
+`gameLoop.start()` and cached; changing spawn points **requires a server restart**.
+
+```toml
+[spawn]
+agl_offset = 500.0  # metres AGL above terrain for all spawn points
+
+# Peer spawn locations assigned round-robin to connecting peers.
+# Omit this section to use the default (origin at x=0, z=0).
+# [[spawn.points]]
+# x = 0.0
+# z = 0.0
+```
+
+### `agl_offset`
+
+| Type | Default | Range |
+|---|---|---|
+| float | `500.0` | `[0, 50000]` |
+
+Metres above ground level (AGL) added to the cached terrain elevation at each
+spawn point. Applies to all points uniformly.
+
+### `[[spawn.points]]`
+
+Array of tables, each with `x` and `z` fields (world-space metres). Peers are
+assigned round-robin in connection order. Omitting this section (or providing
+an empty array) defaults to a single spawn at origin `(0, 0)`.
+
+| Field | Type | Description |
+|---|---|---|
+| `x` | float | World-space X coordinate (metres) |
+| `z` | float | World-space Z coordinate (metres) |
+
+**Example — two spawn points:**
+
+```toml
+[spawn]
+agl_offset = 500.0
+
+[[spawn.points]]
+x = 0.0
+z = 0.0
+
+[[spawn.points]]
+x = 10000.0
+z = -5000.0
+```
 
 ---
 

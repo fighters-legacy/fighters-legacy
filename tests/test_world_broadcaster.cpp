@@ -15,6 +15,8 @@
 
 #include "mock_network.h"
 
+#include <algorithm>
+#include <array>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -307,6 +309,108 @@ TEST_CASE("WorldBroadcaster: peer entity spawns at 500 m AGL when ground elevati
     // 0 m terrain + 500 m AGL = 500 m; allow ±10 m for one flight-integrator tick
     CHECK(e.pos[1] >= 490.0);
     CHECK(e.pos[1] <= 510.0);
+}
+
+TEST_CASE("WorldBroadcaster: peer entity spawns at configured spawn point XYZ", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:5000";
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setSpawnPoints({std::array<double, 3>{1000.0, 750.0, -500.0}});
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    REQUIRE(!net.broadcasts.empty());
+    const auto& pkt = net.broadcasts.back();
+    REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry));
+    fl::MsgEntityEntry e;
+    std::memcpy(&e, pkt.data() + sizeof(fl::MsgWorldSnapshotHeader), sizeof(e));
+    // X and Z are set from the spawn point; Y allows ±10 m for one flight-integrator tick.
+    CHECK(e.pos[0] >= 999.0);
+    CHECK(e.pos[0] <= 1001.0);
+    CHECK(e.pos[1] >= 740.0);
+    CHECK(e.pos[1] <= 760.0);
+    CHECK(e.pos[2] >= -501.0);
+    CHECK(e.pos[2] <= -499.0);
+}
+
+TEST_CASE("WorldBroadcaster: spawn points assigned round-robin to peers", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:5000";
+    net.peerAddresses[1] = "5.6.7.8:6000";
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setSpawnPoints({std::array<double, 3>{0.0, 200.0, 0.0}, std::array<double, 3>{1000.0, 300.0, 500.0}});
+    broadcaster.onConnect(0u); // → point 0 (X=0)
+    broadcaster.onConnect(1u); // → point 1 (X=1000)
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    REQUIRE(!net.broadcasts.empty());
+    const auto& pkt = net.broadcasts.back();
+    REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + 2 * sizeof(fl::MsgEntityEntry));
+
+    fl::MsgEntityEntry e0, e1;
+    std::memcpy(&e0, pkt.data() + sizeof(fl::MsgWorldSnapshotHeader), sizeof(e0));
+    std::memcpy(&e1, pkt.data() + sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry), sizeof(e1));
+
+    // Sort by X so the check is order-independent.
+    if (e0.pos[0] > e1.pos[0])
+        std::swap(e0, e1);
+
+    // e0 → point 0 (X≈0), e1 → point 1 (X≈1000)
+    CHECK(e0.pos[0] >= -1.0);
+    CHECK(e0.pos[0] <= 1.0);
+    CHECK(e1.pos[0] >= 999.0);
+    CHECK(e1.pos[0] <= 1001.0);
+    CHECK(e1.pos[2] >= 499.0);
+    CHECK(e1.pos[2] <= 501.0);
+}
+
+TEST_CASE("WorldBroadcaster: spawn point index wraps round-robin with three peers two points", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:5000";
+    net.peerAddresses[1] = "5.6.7.8:6000";
+    net.peerAddresses[2] = "9.10.11.12:7000";
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setSpawnPoints({std::array<double, 3>{0.0, 200.0, 0.0}, std::array<double, 3>{1000.0, 300.0, 0.0}});
+    broadcaster.onConnect(0u); // → point 0 (X≈0)
+    broadcaster.onConnect(1u); // → point 1 (X≈1000)
+    broadcaster.onConnect(2u); // → point 0 again (wrap)
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    REQUIRE(!net.broadcasts.empty());
+    const auto& pkt = net.broadcasts.back();
+    REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + 3 * sizeof(fl::MsgEntityEntry));
+
+    fl::MsgEntityEntry entries[3];
+    for (int i = 0; i < 3; ++i)
+        std::memcpy(&entries[i], pkt.data() + sizeof(fl::MsgWorldSnapshotHeader) + i * sizeof(fl::MsgEntityEntry),
+                    sizeof(fl::MsgEntityEntry));
+
+    // Count how many entities landed near X=0 vs X=1000 (tolerance ±1 m).
+    int nearPoint0 = 0;
+    int nearPoint1 = 0;
+    for (const auto& e : entries) {
+        if (e.pos[0] >= -1.0 && e.pos[0] <= 1.0)
+            ++nearPoint0;
+        else if (e.pos[0] >= 999.0 && e.pos[0] <= 1001.0)
+            ++nearPoint1;
+    }
+    CHECK(nearPoint0 == 2); // peers 0 and 2 → point 0
+    CHECK(nearPoint1 == 1); // peer 1 → point 1
 }
 
 TEST_CASE("WorldBroadcaster: onConnect with empty registry sends typeCount=0 and assigns no entity",

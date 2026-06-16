@@ -191,6 +191,10 @@ void WorldBroadcaster::setMaxConnectionsPerIp(int max) noexcept {
     m_maxConnectionsPerIp = max;
 }
 
+void WorldBroadcaster::setSpawnPoints(std::vector<std::array<double, 3>> points) noexcept {
+    m_spawnPoints = std::move(points);
+}
+
 void WorldBroadcaster::setClock(const IClock& clock) {
     m_clock = &clock;
     m_adminAuthTracker.setClock(clock);
@@ -464,8 +468,16 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     m_net.send(peerId, &hello, sizeof(hello), /*reliable=*/true);
 
     EntityTransform t{};
-    constexpr double kSpawnAGL = 500.0;
-    t.pos[1] = static_cast<double>(m_groundElevation.load(std::memory_order_relaxed)) + kSpawnAGL;
+    if (!m_spawnPoints.empty()) {
+        // Explicit cast avoids uint32_t/size_t width mismatch warning on MSVC (/W4 → error).
+        const std::size_t idx = static_cast<std::size_t>(m_nextSpawnIdx++) % m_spawnPoints.size();
+        t.pos[0] = m_spawnPoints[idx][0];
+        t.pos[1] = m_spawnPoints[idx][1];
+        t.pos[2] = m_spawnPoints[idx][2];
+    } else {
+        constexpr double kSpawnAGL = 500.0;
+        t.pos[1] = static_cast<double>(m_groundElevation.load(std::memory_order_relaxed)) + kSpawnAGL;
+    }
     EntityId id = m_entityManager.spawn("builtin:debug-entity", t, peerId);
     if (id.valid()) {
         m_peerEntities[peerId] = id;

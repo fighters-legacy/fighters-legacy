@@ -75,6 +75,17 @@ struct ServerConfig {
         int lockoutSeconds = 60; // per-IP lockout duration in seconds
     };
     RconConfig rcon;
+
+    // [spawn]
+    struct SpawnPointDef {
+        double x = 0.0;
+        double z = 0.0;
+    };
+    struct SpawnConfig {
+        double aglOffset = 500.0;          // metres AGL above terrain for all spawn points
+        std::vector<SpawnPointDef> points; // empty = use origin
+    };
+    SpawnConfig spawn;
 };
 
 // Returns the embedded default server.toml content written on first run.

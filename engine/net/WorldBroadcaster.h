@@ -8,6 +8,7 @@
 #include "flight/IGravityField.h"
 #include "loop/ISimUpdate.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -17,6 +18,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 class ILogger;
 
@@ -160,6 +162,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
         m_groundElevation.store(elev, std::memory_order_relaxed);
     }
 
+    // Set pre-cached peer spawn positions [x, y, z] in world space.
+    // y must already include the terrain height + AGL offset, computed on the main thread
+    // before gameLoop.start(). Positions are assigned round-robin to connecting peers.
+    // Empty list = legacy behaviour: spawn at origin with y = m_groundElevation + 500 m.
+    // Call before gameLoop.start(); never mutated after that.
+    void setSpawnPoints(std::vector<std::array<double, 3>> points) noexcept;
+
     // World-XZ position of the most recently stepped peer entity (sim thread writes;
     // main thread may read to steer terrain loading and update setGroundElevation).
     float cachedEntityX() const noexcept {
@@ -292,6 +301,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::atomic<float> m_groundElevation{0.f}; // floor elevation passed to each FlightIntegrator::step
     std::atomic<float> m_entityX{0.f};         // last stepped entity world-X (sim writes; main reads)
     std::atomic<float> m_entityZ{0.f};         // last stepped entity world-Z
+
+    std::vector<std::array<double, 3>> m_spawnPoints; // pre-cached [x,y,z]; sim-thread read-only after start
+    uint32_t m_nextSpawnIdx{0};                       // round-robin counter; sim-thread only
 
     std::unordered_set<std::string> m_bannedAddresses; // in-memory ban list; sim-thread only
 

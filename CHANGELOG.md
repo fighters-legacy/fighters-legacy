@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: Configurable peer spawn points in `server.toml` via `[[spawn.points]]` (each with `x` and `z` fields in world-space metres) and `agl_offset` (default 500 m). Terrain elevation is cached at startup per point from `TerrainStreamer::heightAt()`; peers are assigned round-robin. Omitting the section retains legacy behaviour (origin spawn). Closes #369.
 - **network**: Server-side `seqNum` staleness guard in `WorldBroadcaster::onReceive`: out-of-order and duplicate `MsgClientInput` packets are silently discarded (#348)
 - **network**: Per-peer one-way delay estimation via `MsgClientInput::tickIndex`; displayed in the `peers` admin command output as delay in ticks and approximate milliseconds (#348)
 - **network**: Admin command channel streams long responses as `MsgAdminResponseChunk` (0x0A) packets, removing the previous 125-character truncation limit for commands like `help` and `peers` (#239)
