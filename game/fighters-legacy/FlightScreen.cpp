@@ -66,7 +66,7 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
 
     const ControlsSettings cs = d.userConfig->controls();
     if (auto msg = d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, input, d.joystick, cs))
-        d.clientNet->send(0, &*msg, sizeof(*msg), /*reliable=*/true);
+        d.clientNet->send(0, &*msg, sizeof(*msg), /*reliable=*/false);
     m_weaponFired = d.flightInput->wasWeaponFired();
 
     const float terrainElev =

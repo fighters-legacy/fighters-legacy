@@ -87,6 +87,12 @@ static void quatRotate(const float q[4], const float v[3], float out[3]) {
     out[2] = v[2] + 2.f * q[3] * tz + 2.f * (q[0] * ty - q[1] * tx);
 }
 
+// Returns true if `incoming` is strictly newer than `last` under uint32 wrap-around.
+// Uses the half-window comparison: a difference in [1, 2^31-1] (mod 2^32) is "newer".
+static bool isNewerSeq(uint32_t incoming, uint32_t last) noexcept {
+    return incoming != last && ((incoming - last) & 0x80000000u) == 0u;
+}
+
 // ---------------------------------------------------------------------------
 // Connection-rejection reason table — one place mapping each ConnectRefusalCode
 // to the client-facing reason text and the server-side log phrase/level.
@@ -230,15 +236,19 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
 }
 
 void WorldBroadcaster::forEachPeer(
-    std::function<void(uint32_t peerId, const std::string& addr, EntityId eid)> fn) const {
+    std::function<void(uint32_t peerId, const std::string& addr, EntityId eid, uint32_t delayTicks)> fn) const {
     for (const auto& [peerId, eid] : m_peerEntities) {
         const char* raw = m_net.getPeerAddress(peerId);
         std::string addr = raw ? raw : "";
-        fn(peerId, addr, eid);
+        uint32_t delay = 0;
+        if (auto it = m_peerInputs.find(peerId); it != m_peerInputs.end())
+            delay = it->second.estimatedDelayTicks;
+        fn(peerId, addr, eid, delay);
     }
 }
 
 void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
+    m_currentTick = tickIndex;
     // Coarse prune of stale rate-limit records every 600 ticks (~10 s at 60 Hz).
     if (++m_ratePruneTick % 600 == 0) {
         auto cutoff = m_clock->now() - std::chrono::seconds(m_connectRateWindowS);
@@ -542,23 +552,33 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
             }
         }
 
-        PeerInputState inp;
-        inp.throttle = std::clamp(msg.throttle, 0.f, 1.f);
-        inp.elevator = std::clamp(msg.elevator, -1.f, 1.f);
-        inp.aileron = std::clamp(msg.aileron, -1.f, 1.f);
-        inp.rudder = std::clamp(msg.rudder, -1.f, 1.f);
-        inp.buttons = msg.buttons;
+        PeerInputState& stored = m_peerInputs[peerId];
+
+        // Staleness guard: discard out-of-order and duplicate inputs.
+        if (stored.hasSeq && !isNewerSeq(msg.seqNum, stored.lastSeqNum))
+            return;
+
+        // One-way delay estimate: ticks elapsed since the client last received a snapshot.
+        if (msg.tickIndex <= m_currentTick)
+            stored.estimatedDelayTicks = static_cast<uint32_t>(m_currentTick - msg.tickIndex);
+
+        stored.lastSeqNum = msg.seqNum;
+        stored.hasSeq = true;
+
+        stored.throttle = std::clamp(msg.throttle, 0.f, 1.f);
+        stored.elevator = std::clamp(msg.elevator, -1.f, 1.f);
+        stored.aileron = std::clamp(msg.aileron, -1.f, 1.f);
+        stored.rudder = std::clamp(msg.rudder, -1.f, 1.f);
+        stored.buttons = msg.buttons;
 
         float vmag = std::sqrt(msg.viewAxis[0] * msg.viewAxis[0] + msg.viewAxis[1] * msg.viewAxis[1] +
                                msg.viewAxis[2] * msg.viewAxis[2]);
         if (vmag > 1e-6f) {
-            inp.viewAxis[0] = msg.viewAxis[0] / vmag;
-            inp.viewAxis[1] = msg.viewAxis[1] / vmag;
-            inp.viewAxis[2] = msg.viewAxis[2] / vmag;
+            stored.viewAxis[0] = msg.viewAxis[0] / vmag;
+            stored.viewAxis[1] = msg.viewAxis[1] / vmag;
+            stored.viewAxis[2] = msg.viewAxis[2] / vmag;
         }
-        // else: degenerate viewAxis — keep default {1,0,0} fallback set in PeerInputState
-
-        m_peerInputs[peerId] = inp;
+        // else: degenerate viewAxis — retain previous good value
     } else if (msgId == static_cast<uint8_t>(MsgId::AdminCommand)) {
         // Feature gates: both password and dispatcher must be configured.
         if (m_operatorPassword.empty() || !m_adminDispatch)

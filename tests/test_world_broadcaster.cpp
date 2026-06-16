@@ -866,6 +866,174 @@ TEST_CASE("WorldBroadcaster: engineFailFlags has kEngineFailGeneric when entity 
 }
 
 // ---------------------------------------------------------------------------
+// seqNum staleness guard and delay estimation
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: onReceive discards duplicate seqNum", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    // First packet (seqNum=5, throttle=0) accepted.
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.seqNum = 5u;
+    inp.throttle = 0.f;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    // Duplicate seqNum=5 with throttle=1 must be dropped; stored throttle stays 0.
+    inp.throttle = 1.f;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    net.broadcasts.clear();
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    REQUIRE(!net.broadcasts.empty());
+    fl::MsgWorldSnapshotHeader hdr;
+    std::memcpy(&hdr, net.broadcasts[0].data(), sizeof(hdr));
+    REQUIRE(hdr.entityCount >= 1u);
+    fl::MsgEntityEntry e;
+    std::memcpy(&e, net.broadcasts[0].data() + sizeof(hdr), sizeof(e));
+    // throttle=0 retained (idle thrust only) → vel stays below full-throttle level.
+    CHECK(e.vel[0] < 0.2f);
+}
+
+TEST_CASE("WorldBroadcaster: onReceive discards stale seqNum (out-of-order)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    // First packet: seqNum=5, throttle=1 accepted.
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.seqNum = 5u;
+    inp.throttle = 1.f;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    // Out-of-order: seqNum=3 (stale) with throttle=0 must be dropped.
+    inp.seqNum = 3u;
+    inp.throttle = 0.f;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    net.broadcasts.clear();
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    REQUIRE(!net.broadcasts.empty());
+    fl::MsgWorldSnapshotHeader hdr;
+    std::memcpy(&hdr, net.broadcasts[0].data(), sizeof(hdr));
+    REQUIRE(hdr.entityCount >= 1u);
+    fl::MsgEntityEntry e;
+    std::memcpy(&e, net.broadcasts[0].data() + sizeof(hdr), sizeof(e));
+    // throttle=1 retained → full thrust; vel clearly above idle-throttle level.
+    CHECK(e.vel[0] > 0.2f);
+}
+
+TEST_CASE("WorldBroadcaster: onReceive accepts seqNum wrap-around", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+
+    // Prime with UINT32_MAX; throttle=0 accepted (first packet, hasSeq=false).
+    inp.seqNum = 0xFFFFFFFFu;
+    inp.throttle = 0.f;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    // seqNum=0 wraps around: isNewerSeq(0, UINT32_MAX) must return true.
+    inp.seqNum = 0u;
+    inp.throttle = 1.f;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    // seqNum=UINT32_MAX-1 is now stale (older than 0 under half-window); must be dropped.
+    inp.seqNum = 0xFFFFFFFEu;
+    inp.throttle = 0.f;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    net.broadcasts.clear();
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    REQUIRE(!net.broadcasts.empty());
+    fl::MsgWorldSnapshotHeader hdr;
+    std::memcpy(&hdr, net.broadcasts[0].data(), sizeof(hdr));
+    REQUIRE(hdr.entityCount >= 1u);
+    fl::MsgEntityEntry e;
+    std::memcpy(&e, net.broadcasts[0].data() + sizeof(hdr), sizeof(e));
+    // seqNum=0 throttle=1 retained (UINT32_MAX-1 dropped) → full thrust; vel above idle level.
+    CHECK(e.vel[0] > 0.2f);
+}
+
+TEST_CASE("WorldBroadcaster: onReceive computes estimatedDelayTicks from tickIndex", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    // Advance to tick 10 so m_currentTick = 10.
+    broadcaster.onTick(1.0 / 60.0, 10u);
+    net.broadcasts.clear();
+
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.seqNum = 1u;
+    inp.tickIndex = 5u; // client last saw tick 5; delay = 10 - 5 = 5 ticks
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    uint32_t gotDelay = 0xFFFFFFFFu;
+    broadcaster.forEachPeer(
+        [&](uint32_t, const std::string&, fl::EntityId, uint32_t delayTicks) { gotDelay = delayTicks; });
+    CHECK(gotDelay == 5u);
+}
+
+TEST_CASE("WorldBroadcaster: onReceive future tickIndex does not update estimatedDelayTicks", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    // Advance to tick 3 so m_currentTick = 3.
+    broadcaster.onTick(1.0 / 60.0, 3u);
+    net.broadcasts.clear();
+
+    // Client sends tickIndex=10 (in the future from the server's perspective).
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.seqNum = 1u;
+    inp.tickIndex = 10u; // tickIndex > m_currentTick: guard must prevent underflow
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    uint32_t gotDelay = 0xFFFFFFFFu;
+    broadcaster.forEachPeer(
+        [&](uint32_t, const std::string&, fl::EntityId, uint32_t delayTicks) { gotDelay = delayTicks; });
+    // estimatedDelayTicks stays at its initialized value of 0 (no underflow).
+    CHECK(gotDelay == 0u);
+}
+
+// ---------------------------------------------------------------------------
 // Weather integration tests
 // ---------------------------------------------------------------------------
 
@@ -1066,7 +1234,7 @@ TEST_CASE("WorldBroadcaster: forEachPeer calls fn for each connected peer", "[wo
     broadcaster.onConnect(1u);
 
     int callCount = 0;
-    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId eid) {
+    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId eid, uint32_t) {
         CHECK(eid.valid());
         ++callCount;
     });
@@ -1081,7 +1249,7 @@ TEST_CASE("WorldBroadcaster: forEachPeer with no connected peers does not call f
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
     int callCount = 0;
-    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId) { ++callCount; });
+    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId, uint32_t) { ++callCount; });
     CHECK(callCount == 0);
 }
 

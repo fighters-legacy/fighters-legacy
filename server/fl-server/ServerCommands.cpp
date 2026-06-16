@@ -190,135 +190,139 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         });
 
     // peers
-    registry.registerCommand("peers", "peers  -- list connected peers (peerId, address, entity index/generation)",
-                             [ctx](std::span<std::string_view>) -> std::string {
-                                 if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
-                                     return "peers: not available";
-                                 ctx.sim.gameLoop->enqueueSimCallback([ctx]() {
-                                     int count = 0;
-                                     ctx.sim.broadcaster->forEachPeer(
-                                         [&](uint32_t peerId, const std::string& addr, fl::EntityId eid) {
-                                             char m[256];
-                                             std::snprintf(m, sizeof(m), "[admin] peer %u  %s  entity=%u/%u", peerId,
-                                                           addr.c_str(), eid.index, eid.generation);
-                                             std::printf("%s\n", m);
-                                             if (ctx.rcon.shell)
-                                                 ctx.rcon.shell->print(m);
-                                             ++count;
-                                         });
-                                     if (count == 0) {
-                                         std::printf("[admin] peers: no connected peers\n");
-                                         if (ctx.rcon.shell)
-                                             ctx.rcon.shell->print("[admin] peers: no connected peers");
-                                     }
-                                     std::fflush(stdout);
-                                 });
-                                 int count = ctx.sim.broadcaster->getPeerCount();
-                                 char peerBuf[64];
-                                 std::snprintf(peerBuf, sizeof(peerBuf), "%d peer(s) connected", count);
-                                 return std::string(peerBuf);
-                             });
+    registry.registerCommand(
+        "peers", "peers  -- list connected peers (peerId, address, entity index/generation, one-way delay)",
+        [ctx](std::span<std::string_view>) -> std::string {
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                return "peers: not available";
+            ctx.sim.gameLoop->enqueueSimCallback([ctx]() {
+                int count = 0;
+                ctx.sim.broadcaster->forEachPeer(
+                    [&](uint32_t peerId, const std::string& addr, fl::EntityId eid, uint32_t delayTicks) {
+                        char m[256];
+                        std::snprintf(m, sizeof(m), "[admin] peer %u  %s  entity=%u/%u  delay=%ut (~%ums)", peerId,
+                                      addr.c_str(), eid.index, eid.generation, delayTicks,
+                                      (delayTicks * 1000u + 30u) / 60u);
+                        std::printf("%s\n", m);
+                        if (ctx.rcon.shell)
+                            ctx.rcon.shell->print(m);
+                        ++count;
+                    });
+                if (count == 0) {
+                    std::printf("[admin] peers: no connected peers\n");
+                    if (ctx.rcon.shell)
+                        ctx.rcon.shell->print("[admin] peers: no connected peers");
+                }
+                std::fflush(stdout);
+            });
+            int count = ctx.sim.broadcaster->getPeerCount();
+            char peerBuf[64];
+            std::snprintf(peerBuf, sizeof(peerBuf), "%d peer(s) connected", count);
+            return std::string(peerBuf);
+        });
 
     // kick <peerId|IP>
-    registry.registerCommand(
-        "kick", "kick <peerId|IP>  -- disconnect a peer by ID or all peers from an IP address",
-        [ctx](std::span<std::string_view> args) -> std::string {
-            if (args.empty())
-                return "usage: kick <peerId|IP>";
-            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
-                return "kick: not available";
-            std::string arg(args[0]);
-            if (isNumeric(arg)) {
-                uint32_t peerId = 0;
-                auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
-                if (ec != std::errc{})
-                    return "kick: invalid peer ID";
-                ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId]() {
-                    ctx.sim.broadcaster->kickPeer(peerId);
-                    char m[64];
-                    std::snprintf(m, sizeof(m), "[admin] kicked peer %u", peerId);
-                    std::printf("%s\n", m);
-                    if (ctx.rcon.shell)
-                        ctx.rcon.shell->print(m);
-                    std::fflush(stdout);
-                });
-                char kickBuf[64];
-                std::snprintf(kickBuf, sizeof(kickBuf), "kick: queued peer %u", peerId);
-                return std::string(kickBuf);
-            } else {
-                std::string ip = normalizeIp(arg);
-                ctx.sim.gameLoop->enqueueSimCallback([ctx, ip]() {
-                    int kicked = 0;
-                    ctx.sim.broadcaster->forEachPeer([&](uint32_t peerId, const std::string& addr, fl::EntityId) {
-                        if (extractIp(addr) == ip) {
-                            ctx.sim.broadcaster->kickPeer(peerId);
-                            ++kicked;
-                        }
-                    });
-                    char m[128];
-                    std::snprintf(m, sizeof(m), "[admin] kicked %d peer(s) from IP %s", kicked, ip.c_str());
-                    std::printf("%s\n", m);
-                    if (ctx.rcon.shell)
-                        ctx.rcon.shell->print(m);
-                    std::fflush(stdout);
-                });
-                return "kick: queued peers from IP " + ip;
-            }
-        });
+    registry.registerCommand("kick", "kick <peerId|IP>  -- disconnect a peer by ID or all peers from an IP address",
+                             [ctx](std::span<std::string_view> args) -> std::string {
+                                 if (args.empty())
+                                     return "usage: kick <peerId|IP>";
+                                 if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                                     return "kick: not available";
+                                 std::string arg(args[0]);
+                                 if (isNumeric(arg)) {
+                                     uint32_t peerId = 0;
+                                     auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
+                                     if (ec != std::errc{})
+                                         return "kick: invalid peer ID";
+                                     ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId]() {
+                                         ctx.sim.broadcaster->kickPeer(peerId);
+                                         char m[64];
+                                         std::snprintf(m, sizeof(m), "[admin] kicked peer %u", peerId);
+                                         std::printf("%s\n", m);
+                                         if (ctx.rcon.shell)
+                                             ctx.rcon.shell->print(m);
+                                         std::fflush(stdout);
+                                     });
+                                     char kickBuf[64];
+                                     std::snprintf(kickBuf, sizeof(kickBuf), "kick: queued peer %u", peerId);
+                                     return std::string(kickBuf);
+                                 } else {
+                                     std::string ip = normalizeIp(arg);
+                                     ctx.sim.gameLoop->enqueueSimCallback([ctx, ip]() {
+                                         int kicked = 0;
+                                         ctx.sim.broadcaster->forEachPeer(
+                                             [&](uint32_t peerId, const std::string& addr, fl::EntityId, uint32_t) {
+                                                 if (extractIp(addr) == ip) {
+                                                     ctx.sim.broadcaster->kickPeer(peerId);
+                                                     ++kicked;
+                                                 }
+                                             });
+                                         char m[128];
+                                         std::snprintf(m, sizeof(m), "[admin] kicked %d peer(s) from IP %s", kicked,
+                                                       ip.c_str());
+                                         std::printf("%s\n", m);
+                                         if (ctx.rcon.shell)
+                                             ctx.rcon.shell->print(m);
+                                         std::fflush(stdout);
+                                     });
+                                     return "kick: queued peers from IP " + ip;
+                                 }
+                             });
 
     // ban <peerId|IP>
-    registry.registerCommand(
-        "ban", "ban <peerId|IP>  -- add IP to in-memory ban list and kick matching peers",
-        [ctx](std::span<std::string_view> args) -> std::string {
-            if (args.empty())
-                return "usage: ban <peerId|IP>";
-            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
-                return "ban: not available";
-            std::string arg(args[0]);
-            if (isNumeric(arg)) {
-                uint32_t peerId = 0;
-                auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
-                if (ec != std::errc{})
-                    return "ban: invalid peer ID";
-                ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId]() {
-                    std::string foundIp;
-                    ctx.sim.broadcaster->forEachPeer([&](uint32_t pid, const std::string& addr, fl::EntityId) {
-                        if (pid == peerId)
-                            foundIp = extractIp(addr);
-                    });
-                    char m[128];
-                    if (foundIp.empty()) {
-                        std::snprintf(m, sizeof(m), "[admin] ban: peer %u not found", peerId);
-                    } else {
-                        ctx.sim.broadcaster->banAddress(foundIp);
-                        if (ctx.bans.saveBanlist)
-                            ctx.bans.saveBanlist(ctx.sim.broadcaster->getBannedAddresses());
-                        std::snprintf(m, sizeof(m), "[admin] banned IP %s (peer %u)", foundIp.c_str(), peerId);
-                    }
-                    std::printf("%s\n", m);
-                    if (ctx.rcon.shell)
-                        ctx.rcon.shell->print(m);
-                    std::fflush(stdout);
-                });
-                char banBuf[64];
-                std::snprintf(banBuf, sizeof(banBuf), "ban: queued for peer %u", peerId);
-                return std::string(banBuf);
-            } else {
-                std::string ip = normalizeIp(arg);
-                ctx.sim.gameLoop->enqueueSimCallback([ctx, ip]() {
-                    ctx.sim.broadcaster->banAddress(ip);
-                    if (ctx.bans.saveBanlist)
-                        ctx.bans.saveBanlist(ctx.sim.broadcaster->getBannedAddresses());
-                    char m[128];
-                    std::snprintf(m, sizeof(m), "[admin] banned IP %s", ip.c_str());
-                    std::printf("%s\n", m);
-                    if (ctx.rcon.shell)
-                        ctx.rcon.shell->print(m);
-                    std::fflush(stdout);
-                });
-                return "ban: banning IP " + ip;
-            }
-        });
+    registry.registerCommand("ban", "ban <peerId|IP>  -- add IP to in-memory ban list and kick matching peers",
+                             [ctx](std::span<std::string_view> args) -> std::string {
+                                 if (args.empty())
+                                     return "usage: ban <peerId|IP>";
+                                 if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                                     return "ban: not available";
+                                 std::string arg(args[0]);
+                                 if (isNumeric(arg)) {
+                                     uint32_t peerId = 0;
+                                     auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
+                                     if (ec != std::errc{})
+                                         return "ban: invalid peer ID";
+                                     ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId]() {
+                                         std::string foundIp;
+                                         ctx.sim.broadcaster->forEachPeer(
+                                             [&](uint32_t pid, const std::string& addr, fl::EntityId, uint32_t) {
+                                                 if (pid == peerId)
+                                                     foundIp = extractIp(addr);
+                                             });
+                                         char m[128];
+                                         if (foundIp.empty()) {
+                                             std::snprintf(m, sizeof(m), "[admin] ban: peer %u not found", peerId);
+                                         } else {
+                                             ctx.sim.broadcaster->banAddress(foundIp);
+                                             if (ctx.bans.saveBanlist)
+                                                 ctx.bans.saveBanlist(ctx.sim.broadcaster->getBannedAddresses());
+                                             std::snprintf(m, sizeof(m), "[admin] banned IP %s (peer %u)",
+                                                           foundIp.c_str(), peerId);
+                                         }
+                                         std::printf("%s\n", m);
+                                         if (ctx.rcon.shell)
+                                             ctx.rcon.shell->print(m);
+                                         std::fflush(stdout);
+                                     });
+                                     char banBuf[64];
+                                     std::snprintf(banBuf, sizeof(banBuf), "ban: queued for peer %u", peerId);
+                                     return std::string(banBuf);
+                                 } else {
+                                     std::string ip = normalizeIp(arg);
+                                     ctx.sim.gameLoop->enqueueSimCallback([ctx, ip]() {
+                                         ctx.sim.broadcaster->banAddress(ip);
+                                         if (ctx.bans.saveBanlist)
+                                             ctx.bans.saveBanlist(ctx.sim.broadcaster->getBannedAddresses());
+                                         char m[128];
+                                         std::snprintf(m, sizeof(m), "[admin] banned IP %s", ip.c_str());
+                                         std::printf("%s\n", m);
+                                         if (ctx.rcon.shell)
+                                             ctx.rcon.shell->print(m);
+                                         std::fflush(stdout);
+                                     });
+                                     return "ban: banning IP " + ip;
+                                 }
+                             });
 
     // unban <IP>
     registry.registerCommand("unban", "unban <IP>  -- remove an IP from the in-memory ban list",

@@ -35,12 +35,17 @@ namespace fl {
 
 // Parsed, validated client input stored per connected peer.
 struct PeerInputState {
+    // 4-byte fields first to avoid mid-struct padding.
     float throttle{0.f};
     float elevator{0.f};
     float aileron{0.f};
     float rudder{0.f};
     float viewAxis[3]{1.f, 0.f, 0.f};
+    uint32_t lastSeqNum{0};          // seqNum of last accepted input
+    uint32_t estimatedDelayTicks{0}; // one-way delay in sim ticks (derived from tickIndex)
+    // 1-byte fields last.
     uint8_t buttons{0};
+    bool hasSeq{false}; // false until first input received from this peer
 };
 
 // One simulated entity together with its control source. The registry is EntityId-keyed (not peer-
@@ -130,10 +135,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Returns true if a lockout was active and was cleared; false if the IP was not locked.
     bool unlockAdminAuth(const std::string& ip);
 
-    // Iterate all connected peers. fn receives (peerId, full "ip:port" address string, EntityId).
-    // The address string is copied per entry — safe despite INetwork::getPeerAddress() returning
-    // a pointer backed by a single overwrite buffer.
-    void forEachPeer(std::function<void(uint32_t peerId, const std::string& addr, EntityId eid)> fn) const;
+    // Iterate all connected peers. fn receives (peerId, full "ip:port" address string, EntityId,
+    // one-way delay in sim ticks). The address string is copied per entry — safe despite
+    // INetwork::getPeerAddress() returning a pointer backed by a single overwrite buffer.
+    void forEachPeer(
+        std::function<void(uint32_t peerId, const std::string& addr, EntityId eid, uint32_t delayTicks)> fn) const;
 
     // Replace the entire in-memory ban set. Safe to call before gameLoop.start().
     void setBannedAddresses(std::unordered_set<std::string> addrs);
@@ -298,6 +304,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     int m_connectRateWindowS{10};
     int m_maxConnectionsPerIp{0}; // 0 = unlimited
     uint64_t m_ratePruneTick{0};  // coarse prune cadence counter (every 600 ticks)
+    uint64_t m_currentTick{0};    // set at start of each onTick; used in onReceive for delay estimation
 
     // Per-peer packet flood detector (sim-thread only).
     struct PeerFloodState {

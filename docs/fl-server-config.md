@@ -443,6 +443,8 @@ Sliding time window (in seconds) for the per-IP connection rate limiter.
 A connected peer that sends more than `packet_flood_multiplier × 60` `MsgClientInput` packets
 per second is disconnected. At the default of 3, the threshold is 180 packets/s — three times
 the normal 60 Hz client rate. Set to 2 or higher to avoid false positives on 60 Hz clients.
+`MsgClientInput` is delivered on the unreliable channel (channel 1); flood detection counts
+received packets regardless of channel.
 
 ### `pre_handshake_rate_limit_count`
 
@@ -679,8 +681,8 @@ Out-of-range values are ignored and the default is kept (a warning is logged).
   tick (~16 ms later); confirmation also appears on fl-server stdout and is sent to the RCON
   client as a second `SERVERDATA_RESPONSE_VALUE` packet (~20 ms after the initial acknowledgement).
 - `peers` returns a count from the atomic peer counter immediately; the full per-peer detail
-  is printed to stdout and sent to the RCON client as additional `SERVERDATA_RESPONSE_VALUE`
-  packets on the next sim tick.
+  (including one-way delay in ticks and approximate milliseconds) is printed to stdout and
+  sent to the RCON client as additional `SERVERDATA_RESPONSE_VALUE` packets on the next sim tick.
 - `admin_auth_status` returns per-IP lockout and failure detail as a single synchronous
   response packet (no second packet), unlike `peers`. Output is split into a
   `MsgAdminCommand channel:` section and, when RCON is enabled, an `RCON channel:` section.
@@ -720,7 +722,7 @@ process.
 |---|---|---|
 | `help` | `[command]` | List all commands, or show usage for a specific one |
 | `status` | — | Show uptime, peer count, entity count, tick rate |
-| `peers` | — | List connected peers (peer ID, address, entity index/generation) |
+| `peers` | — | List connected peers (peer ID, address, entity index/generation, one-way delay in ticks/ms) |
 | `kick` | `<peerId\|IP>` | Disconnect a peer by numeric ID, or all peers from an IP address |
 | `ban` | `<peerId\|IP>` | Add IP to the ban list and kick matching peers; saves to `banlist_path` if configured |
 | `unban` | `<IP>` | Remove an IP from the ban list; saves to `banlist_path` if configured |
@@ -778,8 +780,9 @@ exceed `connect_rate_limit_count` connections within `connect_rate_limit_window_
 are disconnected immediately.
 
 **Packet flood detection:** a connected peer that sends more than
-`packet_flood_multiplier × 60` `MsgClientInput` packets per second is disconnected.
-Only `MsgClientInput` (client→server control input) packets count toward this limit.
+`packet_flood_multiplier × 60` `MsgClientInput` (unreliable, channel 1) packets per second
+is disconnected. Only `MsgClientInput` (client→server control input) packets count toward
+this limit; flood counting runs before the application-level seqNum staleness guard.
 
 **ENet bandwidth caps** (`incoming_bandwidth_bps` / `outgoing_bandwidth_bps`): set aggregate
 host-level byte-rate limits enforced by ENet. These cap total traffic across all peers, not

@@ -7,8 +7,8 @@ over ENet UDP. All structs are defined in `engine/net/GameProtocol.h`.
 
 | Channel | Constant | Delivery | Use |
 |---------|----------|----------|-----|
-| 0 | `kNetChReliable` | Ordered, guaranteed | Handshake messages, client input frames |
-| 1 | `kNetChUnreliable` | Best-effort datagram | World-state snapshots |
+| 0 | `kNetChReliable` | Ordered, guaranteed | Handshake messages |
+| 1 | `kNetChUnreliable` | Best-effort datagram | World-state snapshots, client input frames |
 
 ENet enforces ordering within each channel; reliable packets are retransmitted until
 acknowledged. Unreliable packets may be dropped or arrive out of order — clients tolerate
@@ -31,7 +31,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `Hello` | `0x00` | server→client | reliable | 4 bytes | Protocol version handshake; first message on every new connection |
 | `ConnectAck` | `0x01` | server→client | reliable | 16 + N×196 bytes | Handshake on connect; assigns entity slot and delivers type registry |
 | `WorldSnapshot` | `0x02` | server→client | unreliable | 16 + N×72 bytes | Per-tick entity state broadcast |
-| `ClientInput` | `0x03` | client→server | reliable | 48 bytes | Per-frame flight inputs |
+| `ClientInput` | `0x03` | client→server | unreliable | 48 bytes | Per-frame flight inputs |
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
 | `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
 | `AdminCommand` | `0x06` | client→server | reliable | 128 bytes | Operator-authenticated admin command. Additive ID — old servers silently discard. |
@@ -128,16 +128,18 @@ Per-entity state appended N times after `MsgWorldSnapshotHeader`. Laid out large
 
 ### MsgClientInput — 48 bytes
 
-Sent by the client each render frame on the reliable channel (channel 0). Padded to 48 (a multiple
-of 8) for the 8-aligned `tickIndex`.
+Sent by the client each render frame on the **unreliable channel (channel 1)**. Padded to 48 (a
+multiple of 8) for the 8-aligned `tickIndex`. For a continuous 60 Hz control stream, unreliable
+delivery is correct: a dropped packet is superseded by the next frame's input; retransmission would
+delay all subsequent inputs behind the ACK round-trip.
 
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
 | 0 | 1 | `msgId` | `uint8_t` | `0x03` |
 | 1 | 1 | `buttons` | `uint8_t` | Bit 0 = weaponTrigger, bit 1 = afterburner |
 | 2 | 2 | `protocolVersion` | `uint16_t` | Client's `kProtocolVersion`; server discards packet and logs a warning on mismatch |
-| 4 | 4 | `seqNum` | `uint32_t` | Client-incremented wrapping sequence counter |
-| 8 | 8 | `tickIndex` | `uint64_t` | Client's last-received server `tickIndex` (reserved for lag compensation — #142) |
+| 4 | 4 | `seqNum` | `uint32_t` | Monotonically increasing per-client sequence counter; server applies a half-window comparison to discard out-of-order and duplicate packets |
+| 8 | 8 | `tickIndex` | `uint64_t` | Server `tickIndex` from the client's last received `MsgWorldSnapshot`; server computes `estimatedDelayTicks = currentTick − tickIndex` for diagnostics |
 | 16 | 4 | `throttle` | `float` | `[0.0, 1.0]` |
 | 20 | 4 | `elevator` | `float` | `[-1.0, +1.0]` nose-up positive |
 | 24 | 4 | `aileron` | `float` | `[-1.0, +1.0]` right-roll positive |
@@ -145,8 +147,9 @@ of 8) for the 8-aligned `tickIndex`.
 | 32 | 12 | `viewAxis[3]` | `float[3]` | Normalized camera look direction (world space) |
 | 44 | 4 | `reserved[4]` | `uint8_t[4]` | Padding to 48; always 0 |
 
-The server clamps all control surface inputs to their valid ranges and normalises
-`viewAxis` to unit length. Packets smaller than 48 bytes are silently discarded.
+The server clamps all control surface inputs to their valid ranges and normalises `viewAxis` to unit
+length. Packets smaller than 48 bytes are silently discarded. ENet's sequenced unreliable delivery
+provides a first layer of ordering; the application-level `seqNum` guard adds defense-in-depth.
 
 ### MsgWeatherState — 20 bytes
 
@@ -383,7 +386,7 @@ Client                              Server (fl-server sim thread)
   |    + N × MsgEntityTypeDef           |
   |                                     |
   |  [each render frame]                | [each sim tick, 60 Hz]
-  |--- MsgClientInput (reliable) ----->|   onReceive: validate + store PeerInputState
+  |--- MsgClientInput (unreliable) --->|   onReceive: seqNum guard + store PeerInputState
   |                                     |   onTick:
   |                                     |     applyPeerInput → update entity transform
   |                                     |     EntityManager::onTick
@@ -488,6 +491,7 @@ Phase 2 spec:
 - **Snapshot tolerance**: `WorldSnapshot` is unreliable — dropped packets are tolerated via
   dead-reckoning. Clients extrapolate `rendered_pos = pos + vel × alpha × kTickDt` where
   `alpha = GameLoop::shellTick()` ∈ [0, 1] and `kTickDt = 1/60 s`.
-- **Input channel**: `MsgClientInput` uses the reliable channel for Phase 2. Full
-  client-side prediction with reconciliation (which would switch inputs to unreliable +
-  sequence-based) is deferred (#142).
+- **Input channel**: `MsgClientInput` uses the unreliable channel (channel 1). The server
+  applies a half-window `seqNum` staleness guard to discard out-of-order and duplicate
+  packets. Per-peer one-way delay is estimated from `tickIndex` and exposed via the `peers`
+  admin command. Client-side prediction with reconciliation is deferred to a future issue.

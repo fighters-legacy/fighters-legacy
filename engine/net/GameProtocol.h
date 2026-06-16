@@ -46,7 +46,7 @@ enum class MsgId : uint8_t {
     Hello = 0x00,              // server->client, reliable: first message sent on every new connection
     ConnectAck = 0x01,         // server->client, reliable: sent once on connect
     WorldSnapshot = 0x02,      // server->client, unreliable: broadcast every sim tick
-    ClientInput = 0x03,        // client->server, reliable: sent each frame
+    ClientInput = 0x03,        // client->server, unreliable: sent each render frame
     WeatherState = 0x04,       // server->client, unreliable: broadcast every 10 ticks (~6 Hz)
     ServerNotice = 0x05,       // server->client, reliable: shutdown countdown and operator notices
     AdminCommand = 0x06,       // client->server, reliable: operator-authenticated admin command
@@ -160,13 +160,13 @@ static_assert(offsetof(MsgEntityEntry, typeIndex) == 60u, "MsgEntityEntry::typeI
 static_assert(offsetof(MsgEntityEntry, damageLevel) == 64u, "MsgEntityEntry::damageLevel offset changed");
 static_assert(offsetof(MsgEntityEntry, engineFailFlags) == 69u, "MsgEntityEntry::engineFailFlags offset changed");
 
-// Reliable, client->server, sent each render frame. Padded to 48 (multiple of 8 for tickIndex).
+// Unreliable, client->server, sent each render frame. Padded to 48 (multiple of 8 for tickIndex).
 struct MsgClientInput {
     uint8_t msgId{static_cast<uint8_t>(MsgId::ClientInput)};
     uint8_t buttons{0}; // bit 0 = weaponTrigger, bit 1 = afterburner
     uint16_t protocolVersion{kProtocolVersion};
-    uint32_t seqNum{0};    // client-incremented wrapping sequence counter
-    uint64_t tickIndex{0}; // client's last-received server tick (reserved for lag compensation)
+    uint32_t seqNum{0};    // monotonically increasing; server discards packets not newer than last accepted
+    uint64_t tickIndex{0}; // server's tickIndex from last received WorldSnapshot; server uses delta for delay estimate
     float throttle{0.f};   // [0.0, 1.0]
     float elevator{0.f};   // [-1.0, +1.0] nose-up positive
     float aileron{0.f};    // [-1.0, +1.0] right-roll positive
