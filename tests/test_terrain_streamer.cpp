@@ -199,6 +199,39 @@ static void driveToSteadyState(fl::TerrainStreamer& ts, glm::dvec3 pos, std::siz
         ts.update(pos);
 }
 
+// ---------------------------------------------------------------------------
+// GLB binary parsing helpers for per-vertex mesh curvature tests
+// ---------------------------------------------------------------------------
+
+// Extract vertex Y (metres) at index idx from a GLB produced by buildTerrainMeshGlb.
+// POSITION accessor: non-interleaved, stride 12, layout [x, y, z] float32 per vertex.
+static float getVertexY(const std::vector<uint8_t>& glb, int idx) {
+    REQUIRE(glb.size() >= 20u);
+    uint32_t jsonLen = 0;
+    std::memcpy(&jsonLen, glb.data() + 12, 4);
+    const std::size_t binStart = 20u + jsonLen + 8u; // 12 GLB hdr + 8 JSON chunk hdr + data + 8 BIN chunk hdr
+    const std::size_t yOff = binStart + static_cast<std::size_t>(idx) * 12u + 4u;
+    REQUIRE(glb.size() >= yOff + 4u);
+    float y = 0.0f;
+    std::memcpy(&y, glb.data() + yOff, 4);
+    return y;
+}
+
+// Extract normal X component at vertex index idx.
+// NORMAL accessor follows all POSITION data (vertCount * 12 bytes), same stride.
+static float getVertexNX(const std::vector<uint8_t>& glb, int idx, int vertCount) {
+    REQUIRE(glb.size() >= 20u);
+    uint32_t jsonLen = 0;
+    std::memcpy(&jsonLen, glb.data() + 12, 4);
+    const std::size_t binStart = 20u + jsonLen + 8u;
+    const std::size_t nxOff =
+        binStart + static_cast<std::size_t>(vertCount) * 12u + static_cast<std::size_t>(idx) * 12u;
+    REQUIRE(glb.size() >= nxOff + 4u);
+    float nx = 0.0f;
+    std::memcpy(&nx, glb.data() + nxOff, 4);
+    return nx;
+}
+
 } // namespace
 
 // ===========================================================================
@@ -554,4 +587,158 @@ TEST_CASE("TerrainStreamer: heightAt is callable from a background thread", "[sp
     t.join();
     // Result is deterministic (procedural FBM at origin); just verify no crash / data race.
     CHECK(std::isfinite(result));
+}
+
+// ===========================================================================
+// Per-vertex mesh curvature tests
+// ===========================================================================
+
+TEST_CASE("TerrainMeshBuilder: spherical correction at world origin corner is zero") {
+    // At (0, 0) the sphere surface is exactly at Y=0: sqrt(R^2 - 0) - R = 0.
+    // For vertices away from the origin the correction becomes negative.
+    const int meshGrid = 32; // LOD 2
+    const int hmSize = 129;
+    const float chunkSizeM = 15360.0f;
+    const double R = 6'371'000.0;
+
+    std::vector<uint16_t> flat(static_cast<std::size_t>(hmSize) * hmSize, 32768u); // 0 m elevation
+    auto glb = fl::buildTerrainMeshGlb(flat, hmSize, meshGrid, chunkSizeM, 0.0, 0.0, R);
+    REQUIRE(!glb.empty());
+
+    // Corner vertex (index 0): world position (0, 0) → correction = 0
+    const float y0 = getVertexY(glb, 0);
+    CHECK(y0 == Catch::Approx(0.0f).margin(1e-3f));
+
+    // Last vertex on row 0 (index meshGrid): world X = chunkSizeM → correction is negative
+    const float yFar = getVertexY(glb, meshGrid);
+    const double D = static_cast<double>(chunkSizeM);
+    const float expected = static_cast<float>(std::sqrt(R * R - D * D) - R);
+    CHECK(yFar == Catch::Approx(expected).margin(0.1f));
+    CHECK(yFar < 0.0f);
+}
+
+TEST_CASE("TerrainMeshBuilder: per-vertex Y varies monotonically at non-zero world position") {
+    // Build flat terrain at chunkWorldX = 100 km. Every vertex has zero elevation but
+    // different spherical corrections (increasing X = further from origin = more negative).
+    const int meshGrid = 32;
+    const int hmSize = 129;
+    const float chunkSizeM = 15360.0f;
+    const double chunkWorldX = 100'000.0;
+    const double R = 6'371'000.0;
+
+    std::vector<uint16_t> flat(static_cast<std::size_t>(hmSize) * hmSize, 32768u);
+
+    // Flat (no radius): all vertex Y should be 0
+    auto glbFlat = fl::buildTerrainMeshGlb(flat, hmSize, meshGrid, chunkSizeM, chunkWorldX, 0.0, 0.0);
+    REQUIRE(!glbFlat.empty());
+    CHECK(getVertexY(glbFlat, 0) == Catch::Approx(0.0f).margin(1e-4f));
+    CHECK(getVertexY(glbFlat, meshGrid) == Catch::Approx(0.0f).margin(1e-4f));
+
+    // Spherical: vertex at col=0 is at world X=100 km; col=meshGrid is at X=115.36 km
+    auto glbSphere = fl::buildTerrainMeshGlb(flat, hmSize, meshGrid, chunkSizeM, chunkWorldX, 0.0, R);
+    REQUIRE(!glbSphere.empty());
+
+    const float y0 = getVertexY(glbSphere, 0);
+    const float yFar = getVertexY(glbSphere, meshGrid);
+
+    // Both corrections are negative (D > 0 in both cases)
+    CHECK(y0 < 0.0f);
+    CHECK(yFar < 0.0f);
+
+    // Further vertex has a more negative correction (correction = sqrt(R^2-D^2)-R, monotone decreasing)
+    CHECK(yFar < y0);
+
+    // Spot-check vertex at col=0 against analytical value
+    const float expected0 = static_cast<float>(std::sqrt(R * R - chunkWorldX * chunkWorldX) - R);
+    CHECK(y0 == Catch::Approx(expected0).margin(0.1f));
+}
+
+TEST_CASE("TerrainMeshBuilder: normals account for spherical curvature gradient") {
+    // At 100 km from origin the spherical gradient ≈ -vx/R ≈ -0.0157, producing a
+    // non-zero normal X component tilting the surface toward the origin.
+    const int meshGrid = 32;
+    const int hmSize = 129;
+    const float chunkSizeM = 15360.0f;
+    const double chunkWorldX = 100'000.0;
+    const double R = 6'371'000.0;
+    const int vertCount = (meshGrid + 1) * (meshGrid + 1);
+
+    std::vector<uint16_t> flat(static_cast<std::size_t>(hmSize) * hmSize, 32768u);
+
+    // Flat (no spherical): normal X at vertex 0 should be ≈ 0
+    auto glbFlat = fl::buildTerrainMeshGlb(flat, hmSize, meshGrid, chunkSizeM, chunkWorldX, 0.0, 0.0);
+    REQUIRE(!glbFlat.empty());
+    const float nxFlat = getVertexNX(glbFlat, 0, vertCount);
+    CHECK(nxFlat == Catch::Approx(0.0f).margin(1e-4f));
+
+    // Spherical: normal X should be positive (surface tilts toward +X origin direction)
+    auto glbSphere = fl::buildTerrainMeshGlb(flat, hmSize, meshGrid, chunkSizeM, chunkWorldX, 0.0, R);
+    REQUIRE(!glbSphere.empty());
+    const float nxSphere = getVertexNX(glbSphere, 0, vertCount);
+    CHECK(nxSphere > 0.01f);
+}
+
+TEST_CASE("TerrainStreamer: getRenderItems Y transform is zero with spherical radius") {
+    // All spherical curvature is baked into vertex Y; getRenderItems must place each
+    // chunk at Y = 0 in world space regardless of its distance from origin.
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+    MockAsyncFilesystem asyncFs;
+    asyncFs.init();
+    MockRenderer renderer;
+
+    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, &renderer};
+    // Default Earth radius is already set; drive to steady state
+    driveToSteadyState(ts, {0.0, 0.0, 0.0});
+
+    const auto items = ts.getRenderItems({0.0, 0.0, 0.0});
+    REQUIRE(!items.empty());
+    for (const auto& item : items)
+        CHECK(item.transform[3][1] == Catch::Approx(0.0f).margin(0.001f));
+}
+
+TEST_CASE("TerrainStreamer: getRenderItems Y transform is zero with radius set to zero") {
+    // Flat mode (radius=0) must also place chunks at Y = 0 (regression guard).
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+    MockAsyncFilesystem asyncFs;
+    asyncFs.init();
+    MockRenderer renderer;
+
+    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, &renderer};
+    ts.setPlanetRadius(0.0);
+    driveToSteadyState(ts, {0.0, 0.0, 0.0});
+
+    const auto items = ts.getRenderItems({0.0, 0.0, 0.0});
+    REQUIRE(!items.empty());
+    for (const auto& item : items)
+        CHECK(item.transform[3][1] == Catch::Approx(0.0f).margin(0.001f));
+}
+
+TEST_CASE("TerrainStreamer: heightAt returns uncorrected elevation when radius is zero") {
+    // When setPlanetRadius(0) the sqrt(max(0, 0-D^2))-0 = 0 guard fires for any D,
+    // so heightAt returns raw elevation with no spherical adjustment.
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+    MockAsyncFilesystem asyncFs;
+    asyncFs.init();
+
+    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
+    const double D = 100'000.0;
+    driveToSteadyState(ts, {D, 0.0, 0.0});
+
+    ts.setPlanetRadius(1e15); // effectively flat proxy
+    const double hFlat = ts.heightAt(D, 0.0);
+
+    ts.setPlanetRadius(0.0); // explicit zero radius
+    const double hZero = ts.heightAt(D, 0.0);
+
+    // Both should return the same raw elevation (zero correction in both cases)
+    CHECK(hZero == Catch::Approx(hFlat).margin(1e-3));
 }
