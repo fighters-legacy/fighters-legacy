@@ -20,6 +20,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **renderer**: `buildTerrainMeshGlb` now accepts optional `chunkWorldX`, `chunkWorldZ`, `planetRadius` parameters; when `planetRadius > 0` each vertex gets the correct per-vertex spherical Y correction (`sqrt(R²−vx²−vz²)−R`) baked in, replacing the previous single per-chunk corner offset applied in `TerrainStreamer::getRenderItems()`. Surface normals account for the curvature gradient too. Closes #370.
 - **engine**: Spherical-Earth physics and terrain curvature is now the engine's only supported mode. The `[world] spherical_earth` config flag and all flat-Earth fallback paths have been removed. `planet_radius_m` (default 6 371 000 m) remains configurable for non-Earth planets. Per-entity terrain height queries replace the global scalar floor, so each entity uses the correct terrain elevation at its XZ position.
 - **network**: `MsgClientInput` delivery moves from reliable channel 0 to unreliable channel 1; eliminates retransmission-induced input lag (#348)
 

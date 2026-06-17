@@ -244,7 +244,10 @@ void TerrainStreamer::finalizeChunk(const ChunkKey& key, std::vector<uint16_t> h
 
     const int lod = static_cast<int>(key.lod);
     const int meshGrid = meshGridForLod(lod);
-    auto glb = fl::buildTerrainMeshGlb(chunk.heightmap, hmSize, meshGrid, m_manifest.chunkSizeM);
+    const double chunkWorldX = m_manifest.originX + static_cast<double>(key.cx) * m_manifest.chunkSizeM;
+    const double chunkWorldZ = m_manifest.originZ + static_cast<double>(key.cy) * m_manifest.chunkSizeM;
+    auto glb = fl::buildTerrainMeshGlb(chunk.heightmap, hmSize, meshGrid, m_manifest.chunkSizeM, chunkWorldX,
+                                       chunkWorldZ, m_sphericalRadius);
     if (glb.empty())
         return;
 
@@ -310,13 +313,11 @@ std::vector<RenderItem> TerrainStreamer::getRenderItems(glm::dvec3 worldOrigin) 
             if (!best || !best->mesh.valid())
                 continue;
 
-            // Camera-relative translation: chunk local-origin in world → relative to camera
+            // Camera-relative translation: chunk local-origin in world → relative to camera.
+            // All spherical curvature is baked into vertex Y by buildTerrainMeshGlb(), so Y=0 here.
             const double chunkCornerX = m_manifest.originX + static_cast<double>(cx) * m_manifest.chunkSizeM;
             const double chunkCornerZ = m_manifest.originZ + static_cast<double>(cy) * m_manifest.chunkSizeM;
-            const double R = m_sphericalRadius;
-            const double D2 = chunkCornerX * chunkCornerX + chunkCornerZ * chunkCornerZ;
-            const double yOffset = std::sqrt(std::max(0.0, R * R - D2)) - R;
-            const glm::dvec3 chunkOrigin{chunkCornerX, yOffset, chunkCornerZ};
+            const glm::dvec3 chunkOrigin{chunkCornerX, 0.0, chunkCornerZ};
             const glm::vec3 relOrigin = glm::vec3(chunkOrigin - worldOrigin);
 
             RenderItem item;

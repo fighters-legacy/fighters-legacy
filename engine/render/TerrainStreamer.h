@@ -58,8 +58,9 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // Total loaded chunk entries across all LODs. Exposed for tests.
     std::size_t chunkCount() const noexcept;
 
-    // Override the planet radius (m) used for terrain curvature and heightAt() corrections.
-    // Default is 6 371 000 m (Earth). Call before the first update() for non-Earth planets.
+    // Override the planet radius (m) used for terrain curvature.
+    // Default is 6 371 000 m (Earth). Must be called before the first update(); changing it
+    // after chunks have been loaded leaves stale meshes with the old curvature baked in.
     void setPlanetRadius(double radius_m) noexcept;
 
   private:

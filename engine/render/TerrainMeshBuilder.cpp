@@ -23,7 +23,8 @@ void writeLE32(uint8_t* p, uint32_t v) {
 } // namespace
 
 std::vector<uint8_t> buildTerrainMeshGlb(const std::vector<uint16_t>& heights, int heightmapSize, int meshGrid,
-                                         float chunkSizeM) noexcept {
+                                         float chunkSizeM, double chunkWorldX, double chunkWorldZ,
+                                         double planetRadius) noexcept {
     // Validate input
     if (heights.empty() || heightmapSize < 2 || meshGrid <= 0)
         return {};
@@ -40,11 +41,27 @@ std::vector<uint8_t> buildTerrainMeshGlb(const std::vector<uint16_t>& heights, i
 
     const float cellM = chunkSizeM / static_cast<float>(meshGrid);
 
+    // World-space distance per heightmap pixel (for spherical correction lookup)
+    const double hPixelToWorld = static_cast<double>(chunkSizeM) / static_cast<double>(heightmapSize - 1);
+    const double R2 = planetRadius * planetRadius;
+
     // height lookup (clamped)
     auto hAt = [&](int col, int row) -> float {
         col = std::clamp(col, 0, heightmapSize - 1);
         row = std::clamp(row, 0, heightmapSize - 1);
         return static_cast<float>(heights[static_cast<std::size_t>(row) * heightmapSize + col]) - 32768.0f;
+    };
+
+    // Height + spherical correction at heightmap pixel (hcIn, hrIn).
+    // hcIn/hrIn are intentionally unclamped for world-position lookup; hAt() clamps internally.
+    auto hAtSphere = [&](int hcIn, int hrIn) -> float {
+        const float base = hAt(hcIn, hrIn);
+        if (planetRadius <= 0.0)
+            return base;
+        const double vx = chunkWorldX + hcIn * hPixelToWorld;
+        const double vz = chunkWorldZ + hrIn * hPixelToWorld;
+        const double D2 = vx * vx + vz * vz;
+        return base + static_cast<float>(std::sqrt(std::max(0.0, R2 - D2)) - planetRadius);
     };
 
     // Build vertex arrays
@@ -58,7 +75,7 @@ std::vector<uint8_t> buildTerrainMeshGlb(const std::vector<uint16_t>& heights, i
         for (int col = 0; col < gridPts; ++col) {
             const int hc = col * stride;
             const int hr = row * stride;
-            const float y = hAt(hc, hr);
+            const float y = hAtSphere(hc, hr);
 
             const std::size_t vi = static_cast<std::size_t>(row * gridPts + col);
             positions[vi * 3 + 0] = static_cast<float>(col) * cellM;
@@ -70,11 +87,11 @@ std::vector<uint8_t> buildTerrainMeshGlb(const std::vector<uint16_t>& heights, i
             if (y > yMax)
                 yMax = y;
 
-            // Central-difference normal
-            const float hl = hAt(hc - stride, hr);
-            const float hr_ = hAt(hc + stride, hr);
-            const float hu = hAt(hc, hr - stride);
-            const float hd = hAt(hc, hr + stride);
+            // Central-difference normal (uses spherical-corrected Y to account for curvature gradient)
+            const float hl = hAtSphere(hc - stride, hr);
+            const float hr_ = hAtSphere(hc + stride, hr);
+            const float hu = hAtSphere(hc, hr - stride);
+            const float hd = hAtSphere(hc, hr + stride);
             const float dx = hr_ - hl;
             const float dz = hd - hu;
             // sampleSpacing = cellM * 2 (distance between samples for central diff)
