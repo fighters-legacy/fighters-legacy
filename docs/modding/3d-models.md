@@ -15,6 +15,50 @@ Mesh files live in `aircraft/<id>/` inside the content pack directory.
 
 ---
 
+## Coordinate system and winding
+
+The engine uses a **right-handed, Y-up, metric** coordinate system — the glTF 2.0 standard —
+with one engine-specific convention: **+X is forward** (the aircraft nose, matching the flight
+model's longitudinal axis).
+
+| Axis | Direction |
+|---|---|
+| **+X** | Forward (nose) |
+| **+Y** | Up |
+| **+Z** | Starboard (right); −Z = port (left) |
+
+Blender's glTF exporter writes Y-up by default (its *+Y Up* option), so no manual up-axis
+rotation is needed. For forward: the exporter maps Blender **+X → glTF +X**, so model your
+aircraft with the **nose pointing along Blender +X** and it lands on the engine's +X-forward
+axis. (The exporter has no "forward axis" dropdown — orientation is whatever you build in
+Blender.) Verify against the reference mesh below.
+
+**Winding and normals.** Triangles must be wound **counter-clockwise when viewed from outside**
+(the glTF 2.0 convention), so face normals point **outward**. Blender produces this by default.
+This matters because the engine's opaque pipeline is **single-sided** — back faces are culled. A
+mesh with inverted winding renders *inside-out*: from outside it shows only its far interior
+faces (or vanishes), and the model's own body becomes visible from the cockpit camera, which sits
+at the entity origin and relies on back-face culling to stay hidden.
+
+**Verify in Blender.** Enable **Viewport Overlays → Face Orientation**. Correctly wound (outward)
+faces render **blue**; inverted faces render **red**. A finished exterior should be entirely blue.
+If you see red, recalculate normals in Edit Mode: **Mesh → Normals → Recalculate Outside**
+(`Shift+N`).
+
+### Reference mesh
+
+The engine's built-in placeholder (a tetrahedron — +X forward, outward normals) is the canonical
+reference for this convention. Export it and import into Blender (File → Import → glTF 2.0) to
+compare orientation and winding against your own model:
+
+```bash
+python3 tools/gen_builtin_glb.py --export-dir /tmp/builtin
+# writes /tmp/builtin/builtin_entity.glb  (+X-forward tetrahedron, all-blue from outside)
+#        /tmp/builtin/builtin_floor.glb   (Y-up ground quad)
+```
+
+---
+
 ## Toolchain
 
 Blender is the recommended authoring tool.
@@ -118,6 +162,9 @@ by the renderer when present.
 - All materials must use **PBR metallic-roughness** (`pbrMetallicRoughness` in the glTF JSON)
 - No embedded image data — all textures must be external URI references pointing to `.ktx2` files
 - Material names must follow the same lowercase-underscore convention as node names
+- Opaque materials are rendered **single-sided** (back faces culled), so winding/normals must be
+  correct — see [Coordinate system and winding](#coordinate-system-and-winding). Use a
+  `KHR_materials` alpha-blend material only for genuinely double-sided surfaces (canopy glass).
 
 Known glTF extensions (`KHR_materials_unlit`, `KHR_materials_emissive_strength`, etc.) produce
 a validation **warning** — the renderer may or may not support them. Unknown extensions produce

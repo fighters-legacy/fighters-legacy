@@ -41,27 +41,25 @@ CameraView CameraController::view(float aspectRatio, float fovY, float near) con
 
     switch (m_mode) {
     case CameraMode::Cockpit: {
-        // Entity forward convention: body +X (matches flight model longitudinal axis and builtin
-        // tetrahedron orientation). Yaw rotates around body Y; pitch rotates around body +Z
-        // so that positive pitch tilts the view toward +Y (upward) when facing +X.
+        // Camera at entity world position, looking along body forward (+X) with
+        // optional look offset. The entity mesh is invisible from inside (back-face
+        // culled), which is correct: no aircraft body appears in the cockpit view.
         glm::quat lookRot = glm::angleAxis(glm::radians(m_cockpitYaw), glm::vec3{0.f, 1.f, 0.f}) *
                             glm::angleAxis(glm::radians(m_cockpitPitch), glm::vec3{0.f, 0.f, 1.f});
         glm::vec3 viewDir = m_targetOri * lookRot * glm::vec3{1.f, 0.f, 0.f};
         cv.worldOrigin = m_targetPos;
-        // Use the entity's body +Y (up) in world space so that banking rolls the
-        // horizon. The look offset (yaw/pitch) does not affect the seat's up direction.
         glm::vec3 up = m_targetOri * glm::vec3{0.f, 1.f, 0.f};
         if (std::abs(glm::dot(viewDir, up)) > 0.999f)
-            up = m_targetOri * glm::vec3{1.f, 0.f, 0.f}; // fallback: entity forward
+            up = m_targetOri * glm::vec3{1.f, 0.f, 0.f};
         cv.view = glm::lookAt(glm::vec3(0.f), viewDir, up);
         break;
     }
     case CameraMode::Chase:
     case CameraMode::Free:
     default: {
-        // Spherical orbit around pivot.
-        // Chase: caller sets pivot = entity position each frame.
-        // Free: caller sets pivot = freely movable world reference point.
+        // Spherical orbit around pivot. Camera always looks at pivot.
+        // Chase: caller passes entity position as pivot each frame (pivot follows entity).
+        // Free:  caller passes a freely movable world point as pivot (WASD/QE move it).
         float yawRad = glm::radians(m_yaw);
         float pitchRad = glm::radians(m_pitch);
         float cosP = std::cos(pitchRad);
@@ -75,12 +73,10 @@ CameraView CameraController::view(float aspectRatio, float fovY, float near) con
     }
 
     // Infinite reverse-Z perspective with Vulkan clip-space Y-flip.
-    // near plane → depth 1.0; far (∞) → depth 0.0.
-    // proj[3][2] = near (used by VkRenderer shadow cascade split).
     float f = 1.0f / std::tan(fovY * 0.5f);
     cv.proj = glm::mat4(0.0f);
     cv.proj[0][0] = f / aspectRatio;
-    cv.proj[1][1] = -f; // Y-flip for Vulkan
+    cv.proj[1][1] = -f;
     cv.proj[2][3] = -1.0f;
     cv.proj[3][2] = near;
 

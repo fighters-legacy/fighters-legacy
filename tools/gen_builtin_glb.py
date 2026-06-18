@@ -3,16 +3,27 @@
 """
 Generate minimal glTF 2.0 binary (.glb) byte arrays for BuiltinGeometry.cpp.
 
-Outputs a C++ snippet with two static const uint8_t[] definitions:
-  kTetrahedronGlb — regular tetrahedron, ~10 m span, +X forward, per-face normals
-  kFloorPlaneGlb  — flat 4 km × 4 km quad at Y=0, normal (0,1,0)
+Default: prints a C++ snippet with static const uint8_t[] definitions:
+  kTetrahedronGlb — regular tetrahedron, ~40 m span, +X forward, per-face normals
+  kFloorPlaneGlb  — flat 4 km x 4 km quad at Y=0, normal (0,1,0)
+  kTetrahedronFace{0..3}Glb — individual faces (validate-mesh _b-node convention)
 
-Run: python3 tools/gen_builtin_glb.py
+Run (regenerate C arrays):  python3 tools/gen_builtin_glb.py
+Run (export .glb files):    python3 tools/gen_builtin_glb.py --export-dir /tmp/builtin
+  Writes builtin_entity.glb + builtin_floor.glb for inspection in Blender
+  (File > Import > glTF 2.0). Use these to confirm the engine's winding /
+  normal convention matches Blender's glTF export (CCW front faces, +Y up).
+
+NOTE: this is a Python file -- do NOT run clang-format on it (it will mangle the
+comments and SPDX headers). After regenerating BuiltinGeometry.cpp, clang-format
+only that .cpp output, never this script.
 """
 
+import argparse
 import json
 import struct
 import math
+import os
 
 
 def pack_vec3(x, y, z):
@@ -59,15 +70,15 @@ def make_glb_full(bin_data: bytes, gltf_json: dict) -> bytes:
 
 def build_tetrahedron() -> bytes:
     """
-    Regular tetrahedron, ~10 m span, pointing in +X direction.
+    Regular tetrahedron, ~40 m span, pointing in +X direction.
     4 faces × 3 vertices = 12 vertices, each with POSITION (vec3) + NORMAL (vec3).
     Vertex stride = 24 bytes. Total binary = 12 * 24 = 288 bytes.
     Per-face normals (flat shading): each triangle has its own 3 identical normals.
     """
     # Tetrahedron vertices in a coordinate system where the centroid is at origin,
     # one vertex points along +X (forward), and the base triangle faces -X.
-    # Regular tetrahedron with circumradius R = 5.0 m (diameter ~10 m).
-    R = 5.0  # circumradius in metres
+    # Regular tetrahedron with circumradius R = 20.0 m (diameter ~40 m).
+    R = 20.0  # circumradius in metres
 
     # Vertex positions of a regular tetrahedron inscribed in a sphere of radius R.
     # Oriented so v0 is the "nose" pointing along +X.
@@ -91,14 +102,17 @@ def build_tetrahedron() -> bytes:
         length = math.sqrt(nx*nx + ny*ny + nz*nz)
         return (nx/length, ny/length, nz/length)
 
-    # 4 faces with CCW winding when viewed from outside (glTF convention).
-    # Swapping the last two vertices of the naive ordering corrects the cross-product
-    # direction to point outward from the centroid at the origin.
+    # 4 faces wound CCW when viewed from OUTSIDE (glTF convention), so the cross-product
+    # (right-hand rule) normal points outward from the centroid at the origin. Outward normals
+    # are required so the engine's opaque pipeline (frontFace=CW after the Vulkan Y-flip, cull
+    # BACK) renders the outside and culls the inside: solid from chase/free, invisible from the
+    # cockpit (camera sits at the centroid). The previous (v0,v2,v1)... ordering produced inward
+    # normals, rendering the mesh inside-out (visible from every camera angle).
     faces = [
-        (v0, v2, v1),
-        (v0, v3, v2),
-        (v0, v1, v3),
-        (v1, v2, v3),  # base, outward normal = -X direction
+        (v0, v1, v2),
+        (v0, v2, v3),
+        (v0, v3, v1),
+        (v1, v3, v2),  # base, outward normal = -X direction
     ]
 
     pos_bin = b''
@@ -179,9 +193,11 @@ def build_floor_plane() -> bytes:
     ]
     normal = (0.0, 1.0, 0.0)
 
-    # 2 triangles (CCW from above):  v0,v2,v1 and v0,v3,v2
-    # Indices as uint16
-    indices = [0, 2, 1, 0, 3, 2]
+    # 2 triangles wound CCW when viewed from above (+Y), so the right-hand-rule normal
+    # points up (+Y) -- matching the stored NORMAL and the engine's outward-front convention
+    # (frontFace=CW after the Vulkan Y-flip + cull BACK renders the top, culls the underside).
+    # Indices as uint16.
+    indices = [0, 1, 2, 0, 2, 3]
 
     # Build binary: positions then normals then indices
     pos_bin = b''
@@ -311,18 +327,35 @@ def bytes_to_cpp_array(name: str, data: bytes) -> str:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Generate builtin glTF geometry.")
+    parser.add_argument(
+        "--export-dir",
+        metavar="DIR",
+        help="Write builtin_entity.glb and builtin_floor.glb to DIR (for Blender import / "
+             "winding inspection) instead of printing the C++ arrays.")
+    args = parser.parse_args()
+
     tet = build_tetrahedron()
     floor = build_floor_plane()
 
-    # Compute the 4 CCW-wound faces (same geometry as build_tetrahedron).
-    R = 5.0
+    if args.export_dir:
+        os.makedirs(args.export_dir, exist_ok=True)
+        for name, data in (("builtin_entity.glb", tet), ("builtin_floor.glb", floor)):
+            path = os.path.join(args.export_dir, name)
+            with open(path, "wb") as f:
+                f.write(data)
+            print(f"wrote {path} ({len(data)} bytes)")
+        return
+
+    # Compute the 4 faces (same geometry/winding as build_tetrahedron).
+    R = 20.0
     base_r = R * math.sqrt(8.0 / 9.0)
     base_x = -R / 3.0
     v0 = (R, 0.0, 0.0)
     v1 = (base_x, base_r * math.cos(0),              base_r * math.sin(0))
     v2 = (base_x, base_r * math.cos(2*math.pi/3),    base_r * math.sin(2*math.pi/3))
     v3 = (base_x, base_r * math.cos(4*math.pi/3),    base_r * math.sin(4*math.pi/3))
-    faces = [(v0, v2, v1), (v0, v3, v2), (v0, v1, v3), (v1, v2, v3)]
+    faces = [(v0, v1, v2), (v0, v2, v3), (v0, v3, v1), (v1, v3, v2)]
 
     print(f'// kTetrahedronGlb: {len(tet)} bytes')
     print(bytes_to_cpp_array('kTetrahedronGlb', tet))

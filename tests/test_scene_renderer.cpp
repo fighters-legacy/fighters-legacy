@@ -2,6 +2,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "render/BuiltinGeometry.h"
 #include "render/CameraController.h"
 #include "render/RenderSnapshot.h"
 #include "render/SceneRenderer.h"
@@ -15,6 +16,7 @@
 #include "mock_hal.h"
 
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -92,13 +94,14 @@ static EntityRenderEntry makeEntry(uint32_t typeIndex = 0, glm::dvec3 pos = {}) 
 // CameraController — Free mode
 // ---------------------------------------------------------------------------
 
-TEST_CASE("CameraController defaults to Free mode") {
+TEST_CASE("CameraController defaults to Cockpit mode") {
     CameraController cam;
-    CHECK(cam.mode() == CameraMode::Free);
+    CHECK(cam.mode() == CameraMode::Cockpit);
 }
 
 TEST_CASE("CameraController Free mode worldOrigin is nonzero at default distance") {
     CameraController cam;
+    cam.setMode(CameraMode::Free);
     CameraView cv = cam.view(16.0f / 9.0f);
     // Default distance=50m, pitch=20 deg: camera should not be at origin.
     double len = std::sqrt(cv.worldOrigin.x * cv.worldOrigin.x + cv.worldOrigin.y * cv.worldOrigin.y +
@@ -129,6 +132,7 @@ TEST_CASE("CameraController Free mode proj[2][3] is -1 for RH perspective") {
 
 TEST_CASE("CameraController setFreeOrbit repositions camera") {
     CameraController cam;
+    cam.setMode(CameraMode::Free);
     cam.setFreeOrbit({0, 0, 0}, 0.0f, 0.0f, 10.0f);
     CameraView cv = cam.view(1.0f);
     // yaw=0, pitch=0, dist=10 => cam at (0, 0, 10).
@@ -679,4 +683,89 @@ TEST_CASE("SceneRenderer builtin floor camera-relative offset uses dvec3 worldOr
     const glm::vec4& ft = items.back().transform[3];
     CHECK(ft.x == Catch::Approx(-50.0f).margin(1e-4f));
     CHECK(ft.z == Catch::Approx(-75.0f).margin(1e-4f));
+}
+
+// ---------------------------------------------------------------------------
+// Builtin tetrahedron winding / normals
+// ---------------------------------------------------------------------------
+
+// The builtin entity tetrahedron must have outward-facing normals (CCW winding when
+// viewed from outside). With inward normals the opaque pipeline (frontFace=CW after the
+// Vulkan Y-flip, cull BACK) renders the mesh inside-out: visible from every camera angle
+// and, critically, NOT culled in cockpit view where the camera sits at the centroid.
+// Regression guard for the inverted-winding bug.
+TEST_CASE("Builtin tetrahedron has outward-facing normals") {
+    const std::span<const uint8_t> glb = builtinTetrahedronGlb();
+    REQUIRE(glb.size() > 20u);
+
+    auto readU32 = [&](std::size_t off) {
+        uint32_t v = 0;
+        std::memcpy(&v, glb.data() + off, 4);
+        return v;
+    };
+    // GLB: 12-byte header, then JSON chunk (4-byte len + 4-byte type "JSON" + data),
+    // then BIN chunk (4-byte len + 4-byte type "BIN\0" + data).
+    const uint32_t jsonLen = readU32(12);
+    const std::size_t binStart = 12u + 8u + jsonLen + 8u;
+    REQUIRE(glb.size() >= binStart + 12u * 12u * 2u);
+
+    // Non-interleaved layout: 12 POSITION vec3 (144 B) then 12 NORMAL vec3 (144 B).
+    auto readVec3 = [&](std::size_t off) {
+        float x, y, z;
+        std::memcpy(&x, glb.data() + off + 0, 4);
+        std::memcpy(&y, glb.data() + off + 4, 4);
+        std::memcpy(&z, glb.data() + off + 8, 4);
+        return glm::vec3{x, y, z};
+    };
+
+    constexpr int kVerts = 12;
+    const std::size_t normBase = binStart + static_cast<std::size_t>(kVerts) * 12u;
+    for (int i = 0; i < kVerts; ++i) {
+        const glm::vec3 pos = readVec3(binStart + static_cast<std::size_t>(i) * 12u);
+        const glm::vec3 nrm = readVec3(normBase + static_cast<std::size_t>(i) * 12u);
+        // Centroid is at the origin, so a vertex position doubles as its outward direction.
+        // An outward normal points the same way as the vertex: dot(normal, position) > 0.
+        CHECK(glm::dot(nrm, pos) > 0.0f);
+    }
+}
+
+// The builtin floor's triangles must be wound CCW from above so the geometric (winding)
+// normal points up (+Y), matching its stored NORMAL and the outward-front convention.
+// Inverted winding would cull the floor when viewed from above. Regression guard.
+TEST_CASE("Builtin floor plane is wound front-face up") {
+    const std::span<const uint8_t> glb = builtinFloorPlaneGlb();
+    REQUIRE(glb.size() > 20u);
+
+    auto readU32 = [&](std::size_t off) {
+        uint32_t v = 0;
+        std::memcpy(&v, glb.data() + off, 4);
+        return v;
+    };
+    auto readVec3 = [&](std::size_t off) {
+        float x, y, z;
+        std::memcpy(&x, glb.data() + off + 0, 4);
+        std::memcpy(&y, glb.data() + off + 4, 4);
+        std::memcpy(&z, glb.data() + off + 8, 4);
+        return glm::vec3{x, y, z};
+    };
+
+    // BIN layout (build_floor_plane): 4 POSITION vec3 (48 B), 4 NORMAL vec3 (48 B),
+    // then 6 uint16 indices.
+    const uint32_t jsonLen = readU32(12);
+    const std::size_t binStart = 12u + 8u + jsonLen + 8u;
+    constexpr int kVerts = 4;
+    const std::size_t idxBase = binStart + static_cast<std::size_t>(kVerts) * 12u * 2u;
+    REQUIRE(glb.size() >= idxBase + 6u * sizeof(uint16_t));
+
+    auto idx = [&](int i) {
+        uint16_t v = 0;
+        std::memcpy(&v, glb.data() + idxBase + static_cast<std::size_t>(i) * sizeof(uint16_t), sizeof(uint16_t));
+        return static_cast<std::size_t>(v);
+    };
+    const glm::vec3 a = readVec3(binStart + idx(0) * 12u);
+    const glm::vec3 b = readVec3(binStart + idx(1) * 12u);
+    const glm::vec3 c = readVec3(binStart + idx(2) * 12u);
+    // Right-hand-rule normal of the first triangle must point up (+Y).
+    const glm::vec3 n = glm::cross(b - a, c - a);
+    CHECK(n.y > 0.0f);
 }

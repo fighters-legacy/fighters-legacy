@@ -275,6 +275,28 @@ TEST_CASE("TerrainStreamer null renderer returns empty render items but height w
     CHECK(ts.heightAt(0.0, 0.0) > 0.0);
 }
 
+TEST_CASE("TerrainStreamer heightReadyAt tracks LOD0 chunk readiness") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockAsyncFilesystem asyncFs;
+    asyncFs.init();
+
+    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
+
+    // Before any update(): the origin LOD0 chunk is not loaded, so heightReadyAt is false
+    // and heightAt returns the 0.0 not-loaded sentinel.
+    CHECK_FALSE(ts.heightReadyAt(0.0, 0.0));
+    CHECK(ts.heightAt(0.0, 0.0) == 0.0);
+
+    // After streaming completes: heightReadyAt reports ready and heightAt returns a real value.
+    driveToSteadyState(ts, {0.0, 0.0, 0.0});
+    CHECK(ts.heightReadyAt(0.0, 0.0));
+    CHECK(ts.heightAt(0.0, 0.0) > 0.0);
+}
+
 TEST_CASE("TerrainStreamer chunkCount is 83 at steady state") {
     MockLogger logger;
     std::vector<std::unique_ptr<IContentPack>> packs;

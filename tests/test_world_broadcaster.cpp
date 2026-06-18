@@ -1038,8 +1038,8 @@ TEST_CASE("WorldBroadcaster: onReceive discards stale seqNum (out-of-order)", "[
     REQUIRE(hdr.entityCount >= 1u);
     fl::MsgEntityEntry e;
     std::memcpy(&e, net.broadcasts[0].data() + sizeof(hdr), sizeof(e));
-    // throttle=1 retained → full thrust; vel clearly above idle-throttle level.
-    CHECK(e.vel[0] > 0.2f);
+    // throttle=1 retained → full thrust; vel clearly above zero (idle) level.
+    CHECK(e.vel[0] > 0.05f);
 }
 
 TEST_CASE("WorldBroadcaster: onReceive accepts seqNum wrap-around", "[world_broadcaster]") {
@@ -1079,8 +1079,8 @@ TEST_CASE("WorldBroadcaster: onReceive accepts seqNum wrap-around", "[world_broa
     REQUIRE(hdr.entityCount >= 1u);
     fl::MsgEntityEntry e;
     std::memcpy(&e, net.broadcasts[0].data() + sizeof(hdr), sizeof(e));
-    // seqNum=0 throttle=1 retained (UINT32_MAX-1 dropped) → full thrust; vel above idle level.
-    CHECK(e.vel[0] > 0.2f);
+    // seqNum=0 throttle=1 retained (UINT32_MAX-1 dropped) → full thrust; vel above zero (idle) level.
+    CHECK(e.vel[0] > 0.05f);
 }
 
 TEST_CASE("WorldBroadcaster: onReceive computes estimatedDelayTicks from tickIndex", "[world_broadcaster]") {

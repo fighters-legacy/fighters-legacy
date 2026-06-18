@@ -9,6 +9,8 @@ For authoring tools and workflow guides, see the other files in this directory.
 ## 3D Models — glTF 2.0
 
 - Aircraft, vehicles, weapons, buildings, terrain features
+- Coordinate convention: right-handed, **+Y up, +X forward**, metres; triangles wound CCW from
+  outside (outward normals) — opaque materials are single-sided. See [`docs/modding/3d-models.md`](3d-models.md#coordinate-system-and-winding)
 - Damage states: separate glTF meshes or morph targets (`_b` suffix = battle-damaged)
 - LOD variants: glTF `LOD` extension or separate files (`F22_lod0.glb`, `F22_lod1.glb`)
 - Animations: glTF `animations` array (gear extend/retract, prop rotation, bay doors)

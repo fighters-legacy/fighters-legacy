@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **tools,docs**: `gen_builtin_glb.py --export-dir <dir>` writes the built-in placeholder meshes (`builtin_entity.glb`, `builtin_floor.glb`) as real glTF files for inspection in Blender. New "Coordinate system and winding" section in `docs/modding/3d-models.md` documents the engine's mesh convention (+Y up, +X forward, CCW-from-outside / outward normals, single-sided opaque materials) and how to verify it with Blender's Face Orientation overlay.
 - **network**: Configurable peer spawn points in `server.toml` via `[[spawn.points]]` (each with `x` and `z` fields in world-space metres) and `agl_offset` (default 500 m). Terrain elevation is cached at startup per point from `TerrainStreamer::heightAt()`; peers are assigned round-robin. Omitting the section retains legacy behaviour (origin spawn). Closes #369.
 - **network**: Server-side `seqNum` staleness guard in `WorldBroadcaster::onReceive`: out-of-order and duplicate `MsgClientInput` packets are silently discarded (#348)
 - **network**: Per-peer one-way delay estimation via `MsgClientInput::tickIndex`; displayed in the `peers` admin command output as delay in ticks and approximate milliseconds (#348)
@@ -27,6 +28,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **renderer**: Fixed inverted winding on the builtin placeholder tetrahedron — its faces were wound so the generated normals pointed inward, which made the engine's opaque pipeline (frontFace=CW after the Vulkan Y-flip, cull BACK) render it inside-out. The aircraft was visible from every camera angle (including cockpit, where the camera sits at the entity centroid and back-face culling is supposed to hide the ownship) and was unlit/incorrect from outside. Faces are now wound CCW-from-outside (outward normals); a `test_scene_renderer` case guards against regression.
+- **game**: Fixed the ~2 s all-blue-sky flash and downward camera "snap" (origin → terrain height) seen right after loading into flight. The dedicated server now pumps terrain streaming until each spawn-point's LOD0 chunk is `Ready` before computing spawn elevations (`TerrainStreamer::heightReadyAt()`), so entities spawn at the correct terrain height immediately instead of at y≈0 and being lifted by the per-tick ground-collision floor once terrain finishes streaming. The camera, which correctly follows the player entity, no longer starts underground.
+- **game**: The free-look camera (F4) is no longer clamped to 2 m above the terrain surface; the orbit pivot can now be moved all the way down to and through ground level.
 - **game**: Draw distance km values at startup (Low=20, Medium=50, High=100, Ultra=200) now match the values applied when the user saves from Settings screen
 
 ## [0.2.3] - 2026-06-15

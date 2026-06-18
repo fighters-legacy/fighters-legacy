@@ -477,6 +477,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     m_net.send(peerId, &hello, sizeof(hello), /*reliable=*/true);
 
     EntityTransform t{};
+    t.quat[3] = 1.0f; // identity quaternion (w component; XYZW layout)
     if (!m_spawnPoints.empty()) {
         // Explicit cast avoids uint32_t/size_t width mismatch warning on MSVC (/W4 → error).
         const std::size_t idx = static_cast<std::size_t>(m_nextSpawnIdx++) % m_spawnPoints.size();
@@ -485,6 +486,8 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         t.pos[2] = m_spawnPoints[idx][2];
     } else {
         constexpr double kSpawnAGL = 500.0;
+        t.pos[0] = 0.0;
+        t.pos[2] = 60.0; // 60 m ahead of origin so peer doesn't overlap sandbox entity 0
         t.pos[1] = static_cast<double>(m_groundElevation.load(std::memory_order_relaxed)) + kSpawnAGL;
     }
     EntityId id = m_entityManager.spawn("builtin:debug-entity", t, peerId);
@@ -497,9 +500,8 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         std::shared_ptr<const FlightModelData> model = resolveFlightModel(id);
 
         // PeerController reads the peer's stable input slot (pointer valid across rehash, slot torn
-        // down after the controller on disconnect). Pre-spooled to 0.4 to match the client's initial
-        // throttle state.
-        addControlledEntity(id, std::make_unique<PeerController>(&m_peerInputs[peerId]), std::move(model), 0.4f);
+        // down after the controller on disconnect). Start at throttle 0 so the entity is stationary.
+        addControlledEntity(id, std::make_unique<PeerController>(&m_peerInputs[peerId]), std::move(model), 0.0f);
     }
     sendConnectAck(peerId, id);
     if (!m_motd.empty()) {

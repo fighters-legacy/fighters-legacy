@@ -561,9 +561,18 @@ void Game::startGame() {
     // Reset render bridge and entity registry from any prior session.
     d.services.renderBridge.reset();
     d.services.entityRegistry.clear();
+    d.services.camInput.startSession();
     d.services.env = EnvironmentState{};
     d.session.serverReady.store(false, std::memory_order_relaxed);
     d.session.sessionFailure.store(SessionFailure::None, std::memory_order_relaxed);
+
+    // Reset camera to a safe above-terrain default so that if any 3D rendering
+    // happens before the camera is primed from the first entity snapshot (e.g. due
+    // to stale state from a previous session), the view starts above the terrain
+    // rather than underground.  The camera prime at the Loading->Flight transition
+    // will immediately overwrite this with the actual entity position.
+    d.services.cameraController.setTarget(glm::dvec3{0.0, 2000.0, 0.0}, glm::quat{1.0f, 0.0f, 0.0f, 0.0f});
+    d.services.cameraController.setFreeOrbit(glm::dvec3{0.0, 2000.0, 0.0}, 0.0f, 20.0f, 200.0f);
 
     // Register the builtin entity type for the no-pack sandbox path.
     if (d.services.outcome == FirstRunOutcome::LaunchSandboxInspector) {
@@ -691,9 +700,29 @@ void Game::startGame() {
         d.session.clientNet->connect(host, port);
     };
 
+    // isConnected requires a snapshot, a processed ConnectAck (assignedEntityGen != 0),
+    // at least one terrain chunk, AND the assigned entity present in the current
+    // snapshot. ConnectAck (reliable ch0) and WorldSnapshot (unreliable ch1) arrive
+    // on independent ENet channels: a snapshot can precede the ConnectAck, so the
+    // first snapshot we see may not yet include the peer's entity. Waiting for the
+    // entity to appear in the bridge guarantees findEntry() returns non-null on the
+    // very first FlightScreen frame, so the camera is never stuck at the stale
+    // default pivot (Y=2000 m) from startGame().
     d.services.screenMgr->reinitLoading(
-        d.session.serverReady, [&d]() { return d.services.renderBridge.hasSnapshot(); }, std::move(onConnect),
-        !isMultiplayer, &d.session.sessionFailure);
+        d.session.serverReady,
+        [&d]() -> bool {
+            if (!d.services.renderBridge.hasSnapshot() || !d.session.clientHandler)
+                return false;
+            const uint32_t gen = d.session.clientHandler->assignedEntityGen;
+            if (gen == 0 || d.services.terrainStreamer->chunkCount() == 0)
+                return false;
+            const uint32_t idx = d.session.clientHandler->assignedEntityIdx;
+            for (const auto& e : d.services.renderBridge.current().entries)
+                if (e.entityIdx == idx && e.entityGen == gen)
+                    return true;
+            return false;
+        },
+        std::move(onConnect), !isMultiplayer, &d.session.sessionFailure);
 
     // Lazy SandboxInspector init (no-pack path).
     if (d.services.outcome == FirstRunOutcome::LaunchSandboxInspector)
@@ -794,28 +823,34 @@ void Game::run() {
         if (inSession && d.session.discoveryListener)
             d.session.discoveryListener->poll();
 
-        // Render pipeline (session with valid snapshot only).
+        // If a snapshot is available, advance the bridge and prime CameraInput's render
+        // alpha BEFORE the screen update so that CameraInput::update() (called from
+        // FlightScreen::update below) extrapolates the camera target by the same
+        // velocity × alpha × kTickDt that SceneRenderer uses for entity positions.
         CameraView cam{};
         glm::dvec3 camOrigin{};
         const fl::EntityRenderEntry* playerEntry = nullptr;
+        float alpha = 0.f;
+        float aspect = 1.f;
         if (inSession && d.session.clientHandler && d.services.renderBridge.hasSnapshot()) {
+            d.services.renderBridge.tryAdvance(); // consume latest snapshot before screen update
             playerEntry = findPlayerEntry(d.services.renderBridge, d.session.clientHandler->assignedEntityIdx,
                                           d.session.clientHandler->assignedEntityGen);
-            const float alpha = d.session.clientHandler->tickAlpha.get();
-            const float aspect =
-                static_cast<float>(d.services.p.window->width()) /
-                static_cast<float>(d.services.p.window->height() > 0 ? d.services.p.window->height() : 1);
-            cam = d.services.cameraController.view(aspect);
-            camOrigin = cam.worldOrigin;
+            alpha = d.session.clientHandler->tickAlpha.get();
+            aspect = static_cast<float>(d.services.p.window->width()) /
+                     static_cast<float>(d.services.p.window->height() > 0 ? d.services.p.window->height() : 1);
+            d.services.camInput.setRenderAlpha(alpha);
+        }
 
+        // Service terrain and async I/O every session frame, before the screen update,
+        // so chunkCount() reflects the current state when isConnected() is evaluated
+        // inside LoadingScreen. For procedural terrain this makes chunks available in
+        // the same frame they are requested. For content-pack PNG chunks, reads progress
+        // before the transition check runs.
+        if (inSession) {
             d.services.p.asyncFilesystem->service();
-            d.services.terrainStreamer->update(camOrigin);
-            updateAudioListener(*d.services.p.audio, cam, playerEntry ? playerEntry->velocity : glm::vec3{});
-
-            const bool isSnow = static_cast<float>(camOrigin.y) > kSnowAltitudeThresholdM;
-            d.services.sceneRenderer->renderFrame(
-                alpha, cam, d.services.env,
-                d.services.precipController.build(d.services.env, cam, isSnow, d.services.particleSystem));
+            const glm::dvec3 terrainPos = playerEntry ? playerEntry->position : glm::dvec3{};
+            d.services.terrainStreamer->update(terrainPos);
         }
 
         // Audio update (always — so music plays on main menu too).
@@ -825,7 +860,9 @@ void Game::run() {
             d.services.musicManager.update(1.0f / 60.0f, aud.masterVolume, aud.musicVolume);
         }
 
-        // Screen update — hands off input/flight logic to the active screen.
+        // Screen update — runs BEFORE camera computation so FlightScreen::update() →
+        // CameraInput::update() sets the camera target from the current snapshot with
+        // velocity extrapolation applied, making it coincident with the rendered entity.
         const Screen next = d.services.screenMgr->active().update(*d.services.p.input, *d.services.p.window);
         if (next == Screen::Quit) {
             if (inSession)
@@ -833,6 +870,33 @@ void Game::run() {
             running = false;
         } else if (next != cur) {
             handleTransition(next);
+            // Prime the camera immediately when entering FlightScreen so the transition
+            // frame renders from the correct position (inside cockpit or behind entity)
+            // rather than from the stale position left over from the previous session.
+            if (next == Screen::Flight && playerEntry) {
+                d.services.cameraController.setTarget(playerEntry->position, playerEntry->orientation);
+                d.services.cameraController.setFreeOrbit(playerEntry->position, 270.0f, 10.0f, 80.0f);
+            }
+        }
+
+        // Null playerEntry if stopGame() reset the bridge mid-frame.
+        if (!d.services.renderBridge.hasSnapshot())
+            playerEntry = nullptr;
+
+        // Render pipeline — camera is now set from the current snapshot by the screen
+        // update above; renderFrame's internal tryAdvance() is a no-op this frame.
+        // Skip 3D rendering during LoadingScreen: the loading overlay covers the viewport
+        // and the camera has no valid entity target yet, so rendering would show stale
+        // state (underground camera -> blue sky) bleeding through the overlay.
+        if (inSession && cur != Screen::Loading && d.session.clientHandler && d.services.renderBridge.hasSnapshot()) {
+            cam = d.services.cameraController.view(aspect);
+            camOrigin = cam.worldOrigin;
+            updateAudioListener(*d.services.p.audio, cam, playerEntry ? playerEntry->velocity : glm::vec3{});
+
+            const bool isSnow = static_cast<float>(camOrigin.y) > kSnowAltitudeThresholdM;
+            d.services.sceneRenderer->renderFrame(
+                alpha, cam, d.services.env,
+                d.services.precipController.build(d.services.env, cam, isSnow, d.services.particleSystem));
         }
 
         // Console HUD (show position if we have a valid camera).

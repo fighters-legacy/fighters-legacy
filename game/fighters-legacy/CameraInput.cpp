@@ -5,7 +5,6 @@
 #include "console/GameConsole.h"
 #include "render/CameraController.h"
 #include "render/RenderSnapshot.h"
-#include "render/TerrainStreamer.h"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -50,6 +49,10 @@ void CameraInput::pollModeKeys(fl::CameraController& ctrl, GameConsole& console,
     m_f4Prev = keys[SDL_SCANCODE_F4] != 0;
 }
 
+void CameraInput::startSession() noexcept {
+    m_needsPivotSnap = true;
+}
+
 void CameraInput::adjustThrottle(float delta) {
     m_sbThrottle = std::clamp(m_sbThrottle + delta, 0.f, 1.f);
 }
@@ -65,27 +68,21 @@ void CameraInput::onModeSwitch(fl::CameraMode newMode, const fl::EntityRenderEnt
         m_cockpitYaw = 0.f;
         m_cockpitPitch = 0.f;
     } else if (newMode == CameraMode::Chase) {
-        if (player) {
-            // Initialise chase yaw to behind the player
-            float ey = std::atan2(
-                2.f * (player->orientation.w * player->orientation.y + player->orientation.x * player->orientation.z),
-                1.f - 2.f * (player->orientation.y * player->orientation.y +
-                             player->orientation.z * player->orientation.z));
-            // Entity forward convention: body +X. "Behind" = camera in -X direction from entity.
-            // sin(yaw)=-1 → -X camera offset; that requires yaw = ey - 90°.
-            m_chaseYaw = glm::degrees(ey) - 90.f;
-        }
-        m_chasePitch = 20.f;
-        m_chaseRadius = 25.f;
+        m_chaseYaw = 270.f;  // start behind entity facing +X
+        m_chasePitch = 10.f; // low angle — directly behind, not above
+        m_chaseRadius = 80.f;
     } else if (newMode == CameraMode::Free) {
-        if (player)
+        if (player) {
             m_sbPivot = player->position;
+            m_needsPivotSnap = false;
+        } else {
+            m_needsPivotSnap = true;
+        }
         m_sbPitch = 30.0f;
     }
 }
 
-void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry* player, const GameConsole& console,
-                         fl::TerrainStreamer& terrain) {
+void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry* player, const GameConsole& console) {
     float mx = 0.f, my = 0.f;
     SDL_MouseButtonFlags mb = SDL_GetMouseState(&mx, &my);
     const bool* keys = SDL_GetKeyboardState(nullptr);
@@ -96,6 +93,12 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
 
     switch (mode) {
     case CameraMode::Free: {
+        // Snap pivot to player on the first free-mode update that has a valid player.
+        // Handles the common case where the game starts in Free mode (no mode switch fires).
+        if (m_needsPivotSnap && player) {
+            m_sbPivot = player->position;
+            m_needsPivotSnap = false;
+        }
         if (!m_firstFrame && (mb & SDL_BUTTON_LMASK)) {
             m_sbYaw -= (mx - m_lastMx) * 0.35f;
             m_sbPitch += (my - m_lastMy) * 0.25f;
@@ -129,28 +132,30 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
                 m_sbRadius = 30.f;
             }
         }
-        // Clamp pivot to terrain surface + 2 m eye clearance.
-        {
-            const double groundElev = terrain.heightAt(m_sbPivot.x, m_sbPivot.z);
-            if (m_sbPivot.y < groundElev + 2.0)
-                m_sbPivot.y = groundElev + 2.0;
-        }
         ctrl.setFreeOrbit(m_sbPivot, m_sbYaw, m_sbPitch, m_sbRadius);
         break;
     }
     case CameraMode::Chase:
         if (player) {
+            // Same orbit controls as Free mode — LMB drag to orbit, scroll to zoom.
+            // The only difference: pivot is locked to the entity position each frame
+            // so the camera always points at the entity regardless of yaw/pitch.
             if (!m_firstFrame && (mb & SDL_BUTTON_LMASK)) {
                 m_chaseYaw -= (mx - m_lastMx) * 0.35f;
                 m_chasePitch += (my - m_lastMy) * 0.25f;
                 m_chasePitch = std::clamp(m_chasePitch, -89.0f, 89.0f);
             }
-            ctrl.setFreeOrbit(player->position, m_chaseYaw, m_chasePitch, m_chaseRadius);
+            static constexpr float kTickDt = 1.0f / 60.0f;
+            const glm::dvec3 pivot = player->position + glm::dvec3(player->velocity * (m_renderAlpha * kTickDt));
+            ctrl.setFreeOrbit(pivot, m_chaseYaw, m_chasePitch, m_chaseRadius);
         }
         break;
     case CameraMode::Cockpit:
         if (player) {
-            ctrl.setTarget(player->position, player->orientation);
+            // Extrapolate camera origin to match SceneRenderer's entity position.
+            static constexpr float kTickDt = 1.0f / 60.0f;
+            glm::dvec3 pos = player->position + glm::dvec3(player->velocity * (m_renderAlpha * kTickDt));
+            ctrl.setTarget(pos, player->orientation);
             if (!m_firstFrame && (mb & SDL_BUTTON_RMASK)) {
                 m_cockpitYaw -= (mx - m_lastMx) * 0.35f;
                 m_cockpitPitch += (my - m_lastMy) * 0.25f;

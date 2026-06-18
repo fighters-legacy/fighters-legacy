@@ -52,6 +52,13 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // Returns 0.0 if no LOD0 chunk is loaded at that position.
     double heightAt(double x, double z) const noexcept;
 
+    // True if the LOD0 chunk covering (x, z) is loaded and Ready, i.e. heightAt(x, z)
+    // returns a real elevation rather than the 0.0 not-loaded sentinel. Used at server
+    // startup to pump update()/service() until spawn-point terrain is ready, so entities
+    // spawn at the correct elevation instead of y~0 (which the floor query later corrects,
+    // producing a visible camera "snap up" on the client). Thread-safe.
+    [[nodiscard]] bool heightReadyAt(double x, double z) const noexcept;
+
     // Nearest-neighbour surface class. Phase 2 stub: always returns 0.
     uint8_t surfaceAt(double x, double z) const noexcept;
 

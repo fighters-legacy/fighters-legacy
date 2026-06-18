@@ -633,7 +633,7 @@ TEST_CASE("parseServerConfig: max_connections_per_ip out of range warns and uses
 TEST_CASE("parseServerConfig: spawn defaults when section absent", "[server_config][spawn]") {
     MockLogger log;
     auto cfg = parseServerConfig("", &log);
-    CHECK(cfg.spawn.aglOffset == 500.0);
+    CHECK(cfg.spawn.aglOffset == 2.0);
     CHECK(cfg.spawn.points.empty());
 }
 
@@ -647,14 +647,14 @@ TEST_CASE("parseServerConfig: reads spawn.agl_offset", "[server_config][spawn]")
 TEST_CASE("parseServerConfig: spawn.agl_offset below 0 warns and uses default", "[server_config][spawn]") {
     MockLogger log;
     auto cfg = parseServerConfig("[spawn]\nagl_offset = -1.0\n", &log);
-    CHECK(cfg.spawn.aglOffset == 500.0);
+    CHECK(cfg.spawn.aglOffset == 2.0);
     CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
 }
 
 TEST_CASE("parseServerConfig: spawn.agl_offset above 50000 warns and uses default", "[server_config][spawn]") {
     MockLogger log;
     auto cfg = parseServerConfig("[spawn]\nagl_offset = 50001.0\n", &log);
-    CHECK(cfg.spawn.aglOffset == 500.0);
+    CHECK(cfg.spawn.aglOffset == 2.0);
     CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
 }
 

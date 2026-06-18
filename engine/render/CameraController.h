@@ -11,26 +11,22 @@ namespace fl {
 
 enum class CameraMode : uint8_t {
     Cockpit, // F1: camera at entity; RMB held to look around
-    Chase,   // F2: orbit around entity; mouse drag to rotate; scroll to zoom
-    Free,    // F4: fully free camera; WASD/QE move anywhere, mouse drag orbits
+    Chase,   // F2: orbit around entity; LMB drag to rotate; scroll to zoom
+    Free,    // F4: fully free camera; WASD/QE move anywhere, LMB drag orbits
 };
 
 // Produces a CameraView each frame for use with IRenderer::setScene.
 //
-// Cockpit mode — camera sits at the target entity's position.
-//   Call setTarget() + setCockpitLook() each frame.
+// Cockpit mode — camera sits at the entity's world position, looking along its
+//   body forward axis. Call setTarget() + setCockpitLook() each frame.
 //   RMB drag accumulates look offsets via setCockpitLook().
 //
-// Chase mode — spherical orbit around the target entity.
-//   Call setFreeOrbit(entityPos, yaw, pitch, radius) each frame.
-//   Mouse drag / scroll update the orbit parameters before calling setFreeOrbit.
+// Chase mode — spherical orbit around the entity. Same math as Free mode;
+//   the only difference is that CameraInput locks the pivot to the entity
+//   position each frame. Call setFreeOrbit(entityPos, yaw, pitch, radius).
 //
 // Free mode — spherical orbit around a freely movable world pivot.
-//   Call setFreeOrbit(pivot, yaw, pitch, radius) each frame.
-//   WASD/QE pan the pivot; mouse drag orbits; scroll zooms.
-//
-// Chase and Free share the same orbit code in view(); the distinction is only
-// in how the caller chooses the pivot (entity position vs. free world point).
+//   WASD/QE pan the pivot; LMB drag orbits; scroll zooms.
 //
 // All state is main-thread-only. No input processing is done here.
 class CameraController {
@@ -40,7 +36,9 @@ class CameraController {
     void setMode(CameraMode mode) noexcept;
     [[nodiscard]] CameraMode mode() const noexcept;
 
-    // Free-orbit parameters (used by both Free and Chase modes).
+    // Orbit parameters — used by both Chase and Free modes.
+    // Chase: caller passes entity position as pivot each frame.
+    // Free:  caller passes freely movable world reference point as pivot.
     // pivot    — world-space look target (m).
     // yaw      — horizontal rotation, degrees (0 = camera south of pivot).
     // pitch    — elevation angle, degrees (positive = camera above horizon).
@@ -62,9 +60,9 @@ class CameraController {
     [[nodiscard]] CameraView view(float aspectRatio, float fovY = 1.0472f, float near = 0.1f) const;
 
   private:
-    CameraMode m_mode{CameraMode::Free};
+    CameraMode m_mode{CameraMode::Cockpit};
 
-    // Free/Chase orbit state
+    // Shared orbit state (Chase and Free)
     glm::dvec3 m_pivot{};
     float m_yaw{0.0f};
     float m_pitch{20.0f};

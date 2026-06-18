@@ -81,7 +81,7 @@ struct ServerConfig {
         double z = 0.0;
     };
     struct SpawnConfig {
-        double aglOffset = 500.0;          // metres AGL above terrain for all spawn points
+        double aglOffset = 2.0;            // metres AGL above terrain for all spawn points
         std::vector<SpawnPointDef> points; // empty = use origin
     };
     SpawnConfig spawn;

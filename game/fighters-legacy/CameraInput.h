@@ -8,7 +8,6 @@ class IInput;
 
 namespace fl {
 class CameraController;
-class TerrainStreamer;
 struct EntityRenderEntry;
 enum class CameraMode : uint8_t;
 } // namespace fl
@@ -27,7 +26,7 @@ class CameraInput {
     // console is queried to suppress camera movement when the console is open.
     void update(fl::CameraController& ctrl,
                 const fl::EntityRenderEntry* player, // nullptr = no snapshot yet
-                const GameConsole& console, fl::TerrainStreamer& terrain);
+                const GameConsole& console);
 
     // Persistent throttle [0,1] shared between camera and flight input.
     float throttle() const {
@@ -41,6 +40,18 @@ class CameraInput {
         m_sbPivot = pivot;
     }
 
+    // Set the render-interpolation alpha for this frame. Call before update() so
+    // Cockpit/Chase modes extrapolate the camera target by the same amount that
+    // SceneRenderer extrapolates entity positions (velocity × alpha × kTickDt).
+    void setRenderAlpha(float alpha) noexcept {
+        m_renderAlpha = alpha;
+    }
+
+    // Reset per-session pivot state so the free camera snaps to the player entity on the
+    // first frame of a new session instead of staying at the previous session's position.
+    // Call at the start of each session (before the first update() in Flight mode).
+    void startSession() noexcept;
+
   private:
     // Reset per-mode state when the user switches camera modes.
     void onModeSwitch(fl::CameraMode newMode, const fl::EntityRenderEntry* player);
@@ -50,11 +61,11 @@ class CameraInput {
     float m_sbYaw{0.f};
     float m_sbPitch{30.f};
     float m_sbRadius{30.f};
-    float m_sbThrottle{0.4f}; // matches server's initial throttle_actual
-    // Chase state
-    float m_chaseYaw{270.f}; // 270° = camera behind +X-forward entity (sin(270°)=-1 → -X offset)
-    float m_chasePitch{20.f};
-    float m_chaseRadius{25.f};
+    float m_sbThrottle{0.0f}; // matches server's initial throttle_actual
+    // Chase orbit state — same controls as Free mode; pivot is locked to entity each frame
+    float m_chaseYaw{270.f};  // 270° = camera in -X direction from entity (behind when entity faces +X)
+    float m_chasePitch{10.f}; // low angle keeps camera directly behind, not above
+    float m_chaseRadius{80.f};
     // Cockpit look
     float m_cockpitYaw{0.f};
     float m_cockpitPitch{0.f};
@@ -62,6 +73,12 @@ class CameraInput {
     float m_lastMx{0.f};
     float m_lastMy{0.f};
     bool m_firstFrame{true};
+    // Render alpha — set by Game.cpp via setRenderAlpha() before update() each frame.
+    float m_renderAlpha{0.f};
+    // True until the free-camera pivot has been snapped to the player entity for this
+    // session. Set to true by startSession(); cleared on first free-mode update with a
+    // valid player, and by onModeSwitch(Free) when a player is immediately available.
+    bool m_needsPivotSnap{true};
     // Mode-key edge detection
     bool m_f1Prev{false};
     bool m_f2Prev{false};
