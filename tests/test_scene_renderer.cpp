@@ -587,6 +587,59 @@ TEST_CASE("SceneRenderer falls back to builtin palette when resolver returns fal
     CHECK(renderer.lastScene.renderItems[0].material.valid());
 }
 
+TEST_CASE("SceneRenderer marks the hidden entity shadow-only (cockpit ownship)") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, noTypes(), assets, renderer};
+
+    EntityRenderEntry self = makeEntry(0);
+    self.entityIdx = 0;
+    self.entityGen = 1;
+    EntityRenderEntry other = makeEntry(0, {100.0, 0.0, 0.0});
+    other.entityIdx = 1;
+    other.entityGen = 1;
+
+    auto publishBoth = [&]() {
+        RenderSnapshot snap = makeSnap();
+        snap.entries.push_back(self);
+        snap.entries.push_back(other);
+        bridge.publish(std::move(snap));
+    };
+    auto shadowOnlyCount = [&]() {
+        int n = 0;
+        for (const auto& it : renderer.lastScene.renderItems)
+            if (it.flags & kRenderFlagShadowOnly)
+                ++n;
+        return n;
+    };
+
+    // Hide the player's own entity (idx 0, gen 1): it is still submitted (so it casts a shadow)
+    // but flagged shadow-only; the other entity renders normally.
+    publishBoth();
+    sr.setHiddenEntity(0, 1);
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    REQUIRE(renderer.lastScene.renderItems.size() == 2);
+    CHECK(shadowOnlyCount() == 1);
+
+    // gen == 0 disables the filter: both entities render normally.
+    publishBoth();
+    sr.setHiddenEntity(0, 0);
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    REQUIRE(renderer.lastScene.renderItems.size() == 2);
+    CHECK(shadowOnlyCount() == 0);
+
+    // A non-matching generation does not hide the entity (stale-id guard).
+    publishBoth();
+    sr.setHiddenEntity(0, 99);
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    CHECK(shadowOnlyCount() == 0);
+}
+
 TEST_CASE("SceneRenderer assigns distinct palette materials by entityIdx") {
     MockLogger logger;
     std::vector<std::unique_ptr<IContentPack>> packs;

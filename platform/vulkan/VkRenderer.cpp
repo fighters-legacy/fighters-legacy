@@ -3347,6 +3347,8 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
         // Draw each submitted RenderItem.
         for (const auto& item : m_pendingScene.renderItems) {
+            if (item.flags & kRenderFlagShadowOnly)
+                continue; // rendered into the shadow map only, not the color pass
             const GpuMesh* mesh = m_resources.getMesh(item.mesh);
             if (!mesh)
                 continue;
@@ -3445,10 +3447,12 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
     // ── Transparent pass — alpha-blended items sorted back-to-front ───────
     {
-        // Collect transparent render items (material.alphaBlend == true).
+        // Collect transparent render items (material.alphaBlend == true), excluding shadow-only.
         std::vector<uint32_t> transIndices;
         const auto& items = m_pendingScene.renderItems;
         for (uint32_t i = 0; i < static_cast<uint32_t>(items.size()); ++i) {
+            if (items[i].flags & kRenderFlagShadowOnly)
+                continue;
             const GpuMaterial* mat = m_resources.getMaterial(items[i].material);
             if (mat && mat->alphaBlend)
                 transIndices.push_back(i);

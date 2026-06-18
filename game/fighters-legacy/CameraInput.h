@@ -62,9 +62,11 @@ class CameraInput {
     float m_sbPitch{30.f};
     float m_sbRadius{30.f};
     float m_sbThrottle{0.0f}; // matches server's initial throttle_actual
-    // Chase orbit state — same controls as Free mode; pivot is locked to entity each frame
-    float m_chaseYaw{270.f};  // 270° = camera in -X direction from entity (behind when entity faces +X)
-    float m_chasePitch{10.f}; // low angle keeps camera directly behind, not above
+    // Chase orbit state — pivot locked to the entity, and yaw locked to the entity heading so
+    // the camera trails the tail as the aircraft turns. m_chaseYawOffset is the mouse-drag
+    // offset relative to "directly behind" (0 = behind the tail); pitch stays world-relative.
+    float m_chaseYawOffset{0.f};
+    float m_chasePitch{3.f}; // nearly level — behind the aircraft, not looking down on it
     float m_chaseRadius{80.f};
     // Cockpit look
     float m_cockpitYaw{0.f};

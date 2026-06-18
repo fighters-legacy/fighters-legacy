@@ -68,8 +68,8 @@ void CameraInput::onModeSwitch(fl::CameraMode newMode, const fl::EntityRenderEnt
         m_cockpitYaw = 0.f;
         m_cockpitPitch = 0.f;
     } else if (newMode == CameraMode::Chase) {
-        m_chaseYaw = 270.f;  // start behind entity facing +X
-        m_chasePitch = 10.f; // low angle — directly behind, not above
+        m_chaseYawOffset = 0.f; // directly behind the tail
+        m_chasePitch = 3.f;     // nearly level — behind the aircraft, not looking down on it
         m_chaseRadius = 80.f;
     } else if (newMode == CameraMode::Free) {
         if (player) {
@@ -137,17 +137,21 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
     }
     case CameraMode::Chase:
         if (player) {
-            // Same orbit controls as Free mode — LMB drag to orbit, scroll to zoom.
-            // The only difference: pivot is locked to the entity position each frame
-            // so the camera always points at the entity regardless of yaw/pitch.
+            // Pivot locked to the entity; yaw locked to the entity heading so the camera trails
+            // the tail as the aircraft turns. LMB drag adds a relative offset; scroll zooms.
             if (!m_firstFrame && (mb & SDL_BUTTON_LMASK)) {
-                m_chaseYaw -= (mx - m_lastMx) * 0.35f;
+                m_chaseYawOffset -= (mx - m_lastMx) * 0.35f;
                 m_chasePitch += (my - m_lastMy) * 0.25f;
                 m_chasePitch = std::clamp(m_chasePitch, -89.0f, 89.0f);
             }
             static constexpr float kTickDt = 1.0f / 60.0f;
             const glm::dvec3 pivot = player->position + glm::dvec3(player->velocity * (m_renderAlpha * kTickDt));
-            ctrl.setFreeOrbit(pivot, m_chaseYaw, m_chasePitch, m_chaseRadius);
+            // Place the orbit camera on the tail side so it trails behind the nose (body +X) and
+            // looks forward along the aircraft's heading. yaw = atan2(fwd.x, fwd.z). The offset
+            // rotates around relative to "directly behind".
+            const glm::vec3 fwd = player->orientation * glm::vec3(1.f, 0.f, 0.f);
+            const float behindYaw = glm::degrees(std::atan2(fwd.x, fwd.z));
+            ctrl.setFreeOrbit(pivot, behindYaw + m_chaseYawOffset, m_chasePitch, m_chaseRadius);
         }
         break;
     case CameraMode::Cockpit:

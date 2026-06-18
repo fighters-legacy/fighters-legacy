@@ -43,6 +43,11 @@ void SceneRenderer::setLogger(ILogger* logger) noexcept {
     m_logger = logger;
 }
 
+void SceneRenderer::setHiddenEntity(uint32_t entityIdx, uint32_t entityGen) noexcept {
+    m_hiddenEntityIdx = entityIdx;
+    m_hiddenEntityGen = entityGen;
+}
+
 void SceneRenderer::ensureBuiltins() {
     if (m_builtinEntityMesh.valid())
         return;
@@ -118,6 +123,12 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
     m_items.reserve(snap.entries.size());
 
     for (const auto& entry : snap.entries) {
+        // The hidden entity (player's own aircraft in cockpit view) is rendered shadow-only:
+        // the camera sits at its origin so the mesh would fill the view, but it should still
+        // cast a shadow on the ground. gen == 0 disables the filter.
+        const bool shadowOnly =
+            m_hiddenEntityGen != 0 && entry.entityIdx == m_hiddenEntityIdx && entry.entityGen == m_hiddenEntityGen;
+
         // Resolve typeIndex → mesh names (cached after first call per type).
         auto nameIt = m_typeNameCache.find(entry.typeIndex);
         if (nameIt == m_typeNameCache.end()) {
@@ -173,6 +184,8 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
         item.transform = model;
         item.lod = 0;
         item.flags = (entry.damageLevel > 0) ? kRenderFlagDamaged : 0u;
+        if (shadowOnly)
+            item.flags |= kRenderFlagShadowOnly;
         m_items.push_back(item);
     }
 

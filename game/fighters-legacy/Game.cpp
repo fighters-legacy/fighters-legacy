@@ -893,6 +893,16 @@ void Game::run() {
             camOrigin = cam.worldOrigin;
             updateAudioListener(*d.services.p.audio, cam, playerEntry ? playerEntry->velocity : glm::vec3{});
 
+            // In cockpit view the camera sits at the player entity, so render that entity
+            // shadow-only — you should not see your own aircraft from inside it, but its shadow
+            // on the ground should remain. External views (Chase/Free) show it normally.
+            const bool cockpit = d.services.cameraController.mode() == fl::CameraMode::Cockpit;
+            if (cockpit && playerEntry)
+                d.services.sceneRenderer->setHiddenEntity(d.session.clientHandler->assignedEntityIdx,
+                                                          d.session.clientHandler->assignedEntityGen);
+            else
+                d.services.sceneRenderer->setHiddenEntity(0, 0);
+
             const bool isSnow = static_cast<float>(camOrigin.y) > kSnowAltitudeThresholdM;
             d.services.sceneRenderer->renderFrame(
                 alpha, cam, d.services.env,

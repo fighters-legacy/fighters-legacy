@@ -74,6 +74,13 @@ class SceneRenderer {
     // frame. Pass nullptr to disable (default). Streamer must outlive SceneRenderer.
     void setTerrainStreamer(TerrainStreamer* ts) noexcept;
 
+    // Render one entity shadow-only (kRenderFlagShadowOnly): it still casts a shadow but is not
+    // drawn in the color pass. Used for the player's own aircraft in cockpit view, where the
+    // camera sits at the entity origin and the mesh would otherwise fill the view, yet its
+    // shadow on the ground should remain visible. Matches on both idx and gen; pass gen == 0 to
+    // disable. Set each frame before renderFrame(). Does not affect particle/damage effects.
+    void setHiddenEntity(uint32_t entityIdx, uint32_t entityGen) noexcept;
+
     // Optional: wire a logger to emit Trace-level diagnostics at pipeline boundaries.
     // Pass nullptr to disable (default). Logger must outlive SceneRenderer.
     void setLogger(ILogger* logger) noexcept;
@@ -119,6 +126,10 @@ class SceneRenderer {
     bool m_showBuiltinFloor{false};
     TerrainStreamer* m_terrainStreamer{nullptr};
     ILogger* m_logger{nullptr};
+
+    // Entity to omit from rendering (player's own aircraft in cockpit view). gen == 0 = disabled.
+    uint32_t m_hiddenEntityIdx{0};
+    uint32_t m_hiddenEntityGen{0};
 };
 
 } // namespace fl
