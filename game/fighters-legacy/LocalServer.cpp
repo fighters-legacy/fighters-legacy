@@ -92,9 +92,11 @@ LocalServer::StartResult LocalServer::start(const char* bindAddr, uint16_t port)
     }
 
     // Wait for fl-server to log "listening on" (ready) or "bind failed" (error).
-    // Timeout: 3 seconds.
+    // Per-line timeout: 10 s. fl-server may go quiet for up to 5 s during primeSpawnHeight
+    // (terrain chunk generation when no content packs are installed); the 10 s budget covers
+    // that plus normal startup overhead.
     while (m_impl->sub->isRunning()) {
-        auto line = m_impl->sub->readStdoutLine(3000);
+        auto line = m_impl->sub->readStdoutLine(10000);
         if (!line)
             break; // timeout
         // Echo to the game log so developers can see server startup messages.
@@ -128,7 +130,7 @@ LocalServer::StartResult LocalServer::start(const char* bindAddr, uint16_t port)
         }
     }
 
-    m_log.log(LogLevel::Error, __FILE__, __LINE__, "LocalServer: fl-server did not become ready within 3 s");
+    m_log.log(LogLevel::Error, __FILE__, __LINE__, "LocalServer: fl-server did not become ready within 10 s");
     return StartResult::Timeout;
 }
 

@@ -232,12 +232,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    {
-        char buf[192];
-        std::snprintf(buf, sizeof(buf), "listening on %s:%u (max %d peers) name=\"%s\"", cfg.bindAddress.c_str(),
-                      cfg.port, cfg.maxPeers, cfg.name.c_str());
-        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
-    }
+    // "listening on" is printed after startup is complete (after primeSpawnHeight and all
+    // pre-loop setup), so LocalServer::start() and CI smoke tests that wait for this line
+    // only proceed once ENet is actually being serviced by the game loop.
+    // Stored here for use after pre-loop setup completes (see below).
+    char listeningMsg[192];
+    std::snprintf(listeningMsg, sizeof(listeningMsg), "listening on %s:%u (max %d peers) name=\"%s\"",
+                  cfg.bindAddress.c_str(), cfg.port, cfg.maxPeers, cfg.name.c_str());
 
     if (cfg.incomingBandwidthBps || cfg.outgoingBandwidthBps) {
         static_cast<ENetNetwork*>(net)->setBandwidthLimit(cfg.incomingBandwidthBps, cfg.outgoingBandwidthBps);
@@ -494,6 +495,10 @@ int main(int argc, char** argv) {
     adminCtx.env.startTime = std::chrono::steady_clock::now();
 
     // ---- Start sim loop ----
+    // Emit the "listening on" line now that pre-loop setup (including primeSpawnHeight) is done.
+    // LocalServer::start() waits for this line; emitting it here ensures ENet is serviced before
+    // the client attempts its first connection.
+    log->log(LogLevel::Info, __FILE__, __LINE__, listeningMsg);
     gameLoop.start();
 
     // ---- RCON server (optional TCP remote admin channel) ----

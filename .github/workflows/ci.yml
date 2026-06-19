@@ -121,7 +121,9 @@ jobs:
           ./build/debug/tools/terrain-chunk-io --version
           ./build/debug/server/fl-server/fl-server 7002 1 &
           FL_SERVER_PID=$!
-          sleep 1
+          # Wait up to 10 s for the server to finish startup (primeSpawnHeight can block up to
+          # 5 s on first run with no cached terrain chunks, e.g. in CI without content packs).
+          sleep 10
           ./build/debug/tools/net_check 127.0.0.1 7002 --count 3 --interval 100
           status=$?
           kill "$FL_SERVER_PID" 2>/dev/null || true
