@@ -3,6 +3,8 @@
 #include <sstream>
 #include <toml++/toml.hpp>
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Action name table
 // ---------------------------------------------------------------------------
@@ -592,7 +594,7 @@ void InputBindings::applyDefaults() {
     m_alt[static_cast<int>(InputAction::ThrottleAxis)] = {BindingSource::GamepadAxis,
                                                           static_cast<uint32_t>(GamepadAxis::TriggerLeft), false};
     m_alt[static_cast<int>(InputAction::FireWeapon)] = {BindingSource::GamepadButton,
-                                                        static_cast<uint32_t>(GamepadButton::RightTrigger), false};
+                                                        static_cast<uint32_t>(GamepadButton::RightShoulder), false};
     m_alt[static_cast<int>(InputAction::FireMissile)] = {BindingSource::GamepadButton,
                                                          static_cast<uint32_t>(GamepadButton::LeftTrigger), false};
     m_alt[static_cast<int>(InputAction::NextWeapon)] = {BindingSource::GamepadButton,
@@ -604,7 +606,7 @@ void InputBindings::applyDefaults() {
     m_alt[static_cast<int>(InputAction::Airbrake)] = {BindingSource::GamepadButton,
                                                       static_cast<uint32_t>(GamepadButton::B), false};
     m_alt[static_cast<int>(InputAction::Afterburner)] = {BindingSource::GamepadButton,
-                                                         static_cast<uint32_t>(GamepadButton::A), false};
+                                                         static_cast<uint32_t>(GamepadButton::LeftShoulder), false};
     m_alt[static_cast<int>(InputAction::Pause)] = {BindingSource::GamepadButton,
                                                    static_cast<uint32_t>(GamepadButton::Start), false};
     m_alt[static_cast<int>(InputAction::Menu)] = {BindingSource::GamepadButton,
@@ -706,3 +708,5 @@ bool InputBindings::deserialize(const std::string& toml) {
     m_alt = tmpAlt;
     return true;
 }
+
+} // namespace fl

@@ -6,6 +6,8 @@
 #include <optional>
 #include <string>
 
+namespace fl {
+
 // Manages the full table of input bindings (primary + alternate per action).
 //
 // Serialization: serialize() returns a TOML string; deserialize() parses one.
@@ -45,3 +47,5 @@ class InputBindings {
     static std::string serializeBinding(const Binding& b);
     static bool parseBinding(const std::string& source, const std::string& id, bool axisNegative, Binding& out);
 };
+
+} // namespace fl

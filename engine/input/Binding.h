@@ -3,6 +3,8 @@
 #include "IInput.h"
 #include <cstdint>
 
+namespace fl {
+
 enum class BindingSource : uint8_t {
     None,
     Keyboard,
@@ -20,3 +22,5 @@ struct Binding {
         return source == BindingSource::None;
     }
 };
+
+} // namespace fl

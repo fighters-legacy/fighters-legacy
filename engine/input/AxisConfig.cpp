@@ -5,6 +5,8 @@
 #include <sstream>
 #include <toml++/toml.hpp>
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // AxisConfig::apply
 // ---------------------------------------------------------------------------
@@ -98,3 +100,5 @@ bool AxisConfigTable::deserialize(const std::string& toml) {
     m_configs = tmpConfigs;
     return true;
 }
+
+} // namespace fl

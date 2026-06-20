@@ -10,24 +10,23 @@ namespace fs = std::filesystem;
 
 namespace fl {
 
-std::string ensureAndReadConfig(const std::string& path, std::string_view defaultContent, ILogger& log) {
-    fs::path p(path);
-    if (!fs::exists(p)) {
+std::string ensureAndReadConfig(const std::filesystem::path& path, std::string_view defaultContent, ILogger& log) {
+    if (!fs::exists(path)) {
         // Write defaults then fall through to read.
-        std::ofstream f(p, std::ios::binary);
+        std::ofstream f(path, std::ios::binary);
         if (!f) {
             char buf[512];
-            std::snprintf(buf, sizeof(buf), "ensureAndReadConfig: cannot write default to %s", path.c_str());
+            std::snprintf(buf, sizeof(buf), "ensureAndReadConfig: cannot write default to %s", path.string().c_str());
             log.log(LogLevel::Warn, __FILE__, __LINE__, buf);
             return {};
         }
         f.write(defaultContent.data(), static_cast<std::streamsize>(defaultContent.size()));
     }
 
-    std::ifstream f(p);
+    std::ifstream f(path);
     if (!f) {
         char buf[512];
-        std::snprintf(buf, sizeof(buf), "ensureAndReadConfig: cannot read %s", path.c_str());
+        std::snprintf(buf, sizeof(buf), "ensureAndReadConfig: cannot read %s", path.string().c_str());
         log.log(LogLevel::Warn, __FILE__, __LINE__, buf);
         return {};
     }
@@ -36,9 +35,8 @@ std::string ensureAndReadConfig(const std::string& path, std::string_view defaul
     return ss.str();
 }
 
-bool writeConfigFile(const std::string& path, std::string_view content, ILogger& log) {
-    fs::path p(path);
-    fs::path tmp = p;
+bool writeConfigFile(const std::filesystem::path& path, std::string_view content, ILogger& log) {
+    std::filesystem::path tmp = path;
     tmp += ".tmp";
 
     {
@@ -53,10 +51,10 @@ bool writeConfigFile(const std::string& path, std::string_view content, ILogger&
     }
 
     std::error_code ec;
-    fs::rename(tmp, p, ec);
+    fs::rename(tmp, path, ec);
     if (ec) {
         char buf[512];
-        std::snprintf(buf, sizeof(buf), "writeConfigFile: rename failed for %s: %s", path.c_str(),
+        std::snprintf(buf, sizeof(buf), "writeConfigFile: rename failed for %s: %s", path.string().c_str(),
                       ec.message().c_str());
         log.log(LogLevel::Warn, __FILE__, __LINE__, buf);
         fs::remove(tmp, ec);

@@ -4,13 +4,9 @@
 #include <cstdint>
 
 // Persisted under the [controls] section of user.toml.
+// Gamepad axis mapping and per-axis deadzone/curve/invert/scale are configured in
+// config/bindings.toml (fl::InputBindings + fl::AxisConfigTable in engine/input/).
 struct ControlsSettings {
-    float gamepadDeadzone{0.05f}; // clamped to [0, 0.99] on load to prevent div-by-zero
-    bool invertPitch{false};
-    bool invertRoll{false};
-    bool invertRudder{false};
-    bool invertThrottle{false};
-
     // Gamepad primary-fire button. Mapped to GamepadButton enum values (IInput.h).
     // Valid range [0, 15]; clamped on load. Default 5 = RightShoulder.
     uint8_t fireButton{5};

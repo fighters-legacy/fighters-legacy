@@ -8,6 +8,8 @@
 #include "config/ControlsSettings.h"
 #include "console/CommandRegistry.h"
 #include "console/GameConsole.h"
+#include "input/AxisConfig.h"
+#include "input/InputBindings.h"
 #include "mock_hal.h"
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
@@ -533,18 +535,20 @@ TEST_CASE("FlightInputCollector gamepad TriggerLeft at deadzone does not overrid
     GameConsole console(log, reg);
     MockInput inp;
     inp.gamepadCount = 1;
-    ControlsSettings cs;
-    inp.axisValues[{0, GamepadAxis::TriggerLeft}] = cs.gamepadDeadzone;
+    fl::AxisConfigTable axes;
+    const float dz = axes.get(GamepadAxis::TriggerLeft).deadzone; // 0.1f default
+    inp.axisValues[{0, GamepadAxis::TriggerLeft}] = dz;
     CameraInput cam;
     cam.setThrottle(0.3f);
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
     fl::ManualClock t;
     fic.setClock(t);
+    fic.setAxisConfig(axes);
 
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
+    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
-    // Trigger at deadzone → not above dz → keyboard throttle (camInput) holds.
+    // Trigger at deadzone → apply() returns 0.0f → keyboard throttle (camInput) holds.
     CHECK(r->throttle == Catch::Approx(0.3f));
 }
 
@@ -626,28 +630,28 @@ TEST_CASE("FlightInputCollector gamepad axis below deadzone leaves keyboard valu
     CHECK(r->elevator == Catch::Approx(-1.f));
 }
 
-TEST_CASE("FlightInputCollector gamepad invertPitch flips elevator sign", "[flight_input]") {
+TEST_CASE("FlightInputCollector gamepad RightY invert flips elevator sign", "[flight_input]") {
     MockLogger log;
     CommandRegistry reg;
     GameConsole console(log, reg);
     MockInput inp;
     inp.gamepadCount = 1;
     inp.axisValues[{0, GamepadAxis::RightY}] = 0.5f;
-    ControlsSettings cs;
-    cs.invertPitch = true;
     CameraInput cam;
     fl::SimRenderBridge bridge;
 
     FlightInputCollector fic_normal;
     fl::ManualClock t;
     fic_normal.setClock(t);
-    ControlsSettings cs_normal;
-    auto r_normal = fic_normal.poll(bridge, cam, console, inp, nullptr, cs_normal);
+    auto r_normal = fic_normal.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r_normal.has_value());
 
+    fl::AxisConfigTable axisInv;
+    axisInv.get(GamepadAxis::RightY).invert = true;
     FlightInputCollector fic_inv;
     fic_inv.setClock(t);
-    auto r_inv = fic_inv.poll(bridge, cam, console, inp, nullptr, cs);
+    fic_inv.setAxisConfig(axisInv);
+    auto r_inv = fic_inv.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r_inv.has_value());
 
     CHECK(r_normal->elevator * r_inv->elevator < 0.f);
@@ -862,4 +866,93 @@ TEST_CASE("FlightInputCollector nullptr joystick skips HOTAS path", "[flight_inp
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
     CHECK(r->elevator == Catch::Approx(-1.f));
+}
+
+// ---------------------------------------------------------------------------
+// setBindings / setAxisConfig
+// ---------------------------------------------------------------------------
+
+TEST_CASE("FlightInputCollector setBindings remaps PitchAxis to LeftY", "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    inp.gamepadCount = 1;
+    // Only LeftY populated; RightY = 0.
+    inp.axisValues[{0, GamepadAxis::LeftY}] = 0.5f;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+
+    fl::InputBindings b;
+    b.set(fl::InputAction::PitchAxis,
+          {fl::BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::LeftY), false},
+          /*alt=*/true);
+    fic.setBindings(b);
+
+    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r.has_value());
+    CHECK(r->elevator != Catch::Approx(0.f)); // LeftY drove elevator
+
+    // With only RightY set (LeftY=0), elevator must be zero.
+    inp.axisValues[{0, GamepadAxis::LeftY}] = 0.f;
+    inp.axisValues[{0, GamepadAxis::RightY}] = 0.5f;
+    FlightInputCollector fic2;
+    fic2.setClock(t);
+    fic2.setBindings(b);
+    auto r2 = fic2.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r2.has_value());
+    CHECK(r2->elevator == Catch::Approx(0.f));
+}
+
+TEST_CASE("FlightInputCollector setBindings PitchAxis None leaves keyboard elevator", "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    inp.gamepadCount = 1;
+    inp.held.insert(Key::ArrowUp);
+    inp.axisValues[{0, GamepadAxis::RightY}] = 0.5f;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+
+    fl::InputBindings b;
+    b.clear(fl::InputAction::PitchAxis, /*alt=*/true); // source = None
+    fic.setBindings(b);
+
+    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r.has_value());
+    CHECK(r->elevator == Catch::Approx(-1.f)); // keyboard value preserved
+}
+
+TEST_CASE("FlightInputCollector setAxisConfig scale multiplies axis output", "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    inp.gamepadCount = 1;
+    inp.axisValues[{0, GamepadAxis::RightY}] = 0.5f;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    fl::ManualClock t;
+
+    FlightInputCollector fic_default;
+    fic_default.setClock(t);
+    auto r_default = fic_default.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r_default.has_value());
+
+    fl::AxisConfigTable axes;
+    axes.get(GamepadAxis::RightY).scale = 2.0f;
+    FlightInputCollector fic_scaled;
+    fic_scaled.setClock(t);
+    fic_scaled.setAxisConfig(axes);
+    auto r_scaled = fic_scaled.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r_scaled.has_value());
+
+    CHECK(r_scaled->elevator == Catch::Approx(r_default->elevator * 2.0f));
 }

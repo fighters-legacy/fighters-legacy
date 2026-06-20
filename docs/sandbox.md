@@ -75,9 +75,10 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 ## Gamepad controls
 
 Standard gamepads (Xbox / PlayStation) are supported in all camera modes. A joystick axis
-overrides the corresponding keyboard control when the axis value exceeds the deadzone
-(default 0.05). Keyboard controls remain active when no gamepad is connected or all axes
-are within the deadzone.
+overrides the corresponding keyboard control when the axis value exceeds the deadzone.
+Keyboard controls remain active when no gamepad is connected or all axes are within the
+deadzone. Deadzone, response curve, inversion, and axis mapping are configured in
+`config/bindings.toml` — see the **bindings.toml** section below.
 
 | Axis | Default mapping |
 |---|---|
@@ -91,17 +92,47 @@ are within the deadzone.
 | 5 | Right shoulder (RB / R1) | Primary fire |
 | 4 | Left shoulder (LB / L1) | Afterburner |
 
-Configure in the `[controls]` section of `config/user.toml`:
+Configure fire and afterburner buttons in the `[controls]` section of `config/user.toml` (axis deadzone/invert/mapping moved to `bindings.toml`):
 
 | Key | Default | Description |
 |---|---|---|
-| `gamepad_deadzone` | `0.05` | Minimum axis magnitude before input is registered |
-| `invert_pitch` | `false` | Flip elevator axis |
-| `invert_roll` | `false` | Flip aileron axis |
-| `invert_rudder` | `false` | Flip rudder axis |
-| `invert_throttle` | `false` | Flip throttle direction |
 | `fire_button` | `5` | Gamepad button index for primary fire; see Buttons table above |
 | `afterburner_button` | `4` | Gamepad button index for afterburner; see Buttons table above |
+
+## `config/bindings.toml`
+
+Generated at `<user data>/config/bindings.toml` on first run. Contains three sections:
+
+### `[axis_config]`
+
+Per-axis deadzone, response curve, inversion, and scale for all 6 gamepad axes. Defaults:
+
+| Axis | deadzone | curve | invert | scale |
+|---|---|---|---|---|
+| `LeftX` (rudder) | `0.1` | `"Linear"` | `false` | `1.0` |
+| `LeftY` | `0.1` | `"Linear"` | `false` | `1.0` |
+| `RightX` (aileron) | `0.1` | `"Linear"` | `false` | `1.0` |
+| `RightY` (elevator) | `0.1` | `"Linear"` | `false` | `1.0` |
+| `TriggerLeft` (throttle) | `0.1` | `"Linear"` | `false` | `1.0` |
+| `TriggerRight` | `0.1` | `"Linear"` | `false` | `1.0` |
+
+- **deadzone**: axis magnitude below this maps to 0.0 (clamped to [0, 1]).
+- **curve**: `"Linear"` passes through; `"Cubic"` applies a cubic ease-in (reduces sensitivity near centre).
+- **invert**: `true` flips the axis sign. Note: `invert` is not meaningful for `TriggerLeft` (a unipolar [0, 1] axis); use the HOTAS `hotas_invert_throttle` path instead.
+- **scale**: output multiplier applied after curve (default `1.0`).
+
+### `[alt]`
+
+Controls which physical axis or button handles each flight action on the gamepad. To remap elevator to the left stick Y axis:
+```toml
+[alt]
+PitchAxis = { source = "GamepadAxis", id = "LeftY", negative = false }
+```
+A restart is required to apply changes.
+
+### `[primary]`
+
+Keyboard and mouse key table. Parsed and stored, but not yet acted on by the input collector (Phase 4 key-remapping).
 
 ## Haptic feedback
 

@@ -4,6 +4,8 @@
 #include <array>
 #include <string>
 
+namespace fl {
+
 enum class AxisCurve : uint8_t {
     Linear,
     Cubic,
@@ -38,3 +40,5 @@ class AxisConfigTable {
   private:
     std::array<AxisConfig, kAxisCount> m_configs{};
 };
+
+} // namespace fl

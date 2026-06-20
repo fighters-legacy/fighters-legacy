@@ -2,6 +2,8 @@
 #pragma once
 #include <cstdint>
 
+namespace fl {
+
 enum class InputAction : uint32_t {
     // Continuous axes
     PitchAxis,
@@ -41,3 +43,5 @@ enum class InputAction : uint32_t {
 
     Count
 };
+
+} // namespace fl

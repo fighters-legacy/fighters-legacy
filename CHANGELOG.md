@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Changed
+
+- **game**: Gamepad axis mapping and per-axis deadzone/curve/invert/scale now loaded from
+  `config/bindings.toml` (`[alt]` + `[axis_config]`), replacing the global `gamepad_deadzone`
+  and `invert_*` fields in `user.toml [controls]`; `InputBindings` table stored in game
+  services for Phase 4 key-remapping; gamepad button defaults corrected to `RightShoulder`
+  (fire) / `LeftShoulder` (afterburner) to match existing `ControlsSettings` defaults (#257)
+- **engine**: All `engine-input` types (`InputBindings`, `AxisConfigTable`, `AxisConfig`,
+  `Binding`, `BindingSource`, `InputAction`) moved into `namespace fl` (#257)
+- **engine**: `fl::ensureAndReadConfig` / `fl::writeConfigFile` now take `const
+  std::filesystem::path&` instead of `const std::string&` to avoid Windows locale-encoding
+  issues with UTF-8 paths from SDL (#257)
+
 ## [0.2.4] - 2026-06-20
 
 ### Added

@@ -25,7 +25,7 @@ TEST_CASE("ensureAndReadConfig creates file with default content when absent", "
     fs::path tmp = fs::temp_directory_path() / "fl_test_ensure_absent.toml";
     fs::remove(tmp);
 
-    std::string result = fl::ensureAndReadConfig(tmp.string(), "default content", log);
+    std::string result = fl::ensureAndReadConfig(tmp, "default content", log);
 
     REQUIRE(result == "default content");
     REQUIRE(fs::exists(tmp));
@@ -48,7 +48,7 @@ TEST_CASE("ensureAndReadConfig reads existing file without overwriting", "[confi
         f << "existing content";
     }
 
-    std::string result = fl::ensureAndReadConfig(tmp.string(), "default content", log);
+    std::string result = fl::ensureAndReadConfig(tmp, "default content", log);
 
     REQUIRE(result == "existing content");
 
@@ -61,7 +61,7 @@ TEST_CASE("ensureAndReadConfig returns empty string when directory does not exis
     fs::path tmp = nonExistentDir / "file.toml";
     fs::remove_all(nonExistentDir);
 
-    std::string result = fl::ensureAndReadConfig(tmp.string(), "default", log);
+    std::string result = fl::ensureAndReadConfig(tmp, "default", log);
 
     REQUIRE(result.empty());
 }
@@ -75,7 +75,7 @@ TEST_CASE("writeConfigFile writes content atomically and reads it back", "[confi
     fs::path tmp = fs::temp_directory_path() / "fl_test_write_config.toml";
     fs::remove(tmp);
 
-    bool ok = fl::writeConfigFile(tmp.string(), "written content", log);
+    bool ok = fl::writeConfigFile(tmp, "written content", log);
 
     REQUIRE(ok);
     REQUIRE(fs::exists(tmp));
@@ -101,7 +101,7 @@ TEST_CASE("writeConfigFile returns false when directory does not exist", "[confi
     fs::path tmp = nonExistentDir / "file.toml";
     fs::remove_all(nonExistentDir);
 
-    bool ok = fl::writeConfigFile(tmp.string(), "content", log);
+    bool ok = fl::writeConfigFile(tmp, "content", log);
 
     REQUIRE_FALSE(ok);
 }

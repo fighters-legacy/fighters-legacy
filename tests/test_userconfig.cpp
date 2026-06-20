@@ -145,48 +145,6 @@ TEST_CASE("UserConfig: [debug] Compact round-trip via save+load", "[userconfig]"
 // [controls] tests
 // ---------------------------------------------------------------------------
 
-TEST_CASE("UserConfig: [controls] defaults when section absent", "[userconfig]") {
-    MockFilesystem fs;
-    MockLogger logger;
-    UserConfig config(fs, logger);
-    config.load(); // no file — defaults
-    CHECK(config.controls().gamepadDeadzone == Catch::Approx(0.05f));
-    CHECK_FALSE(config.controls().invertPitch);
-    CHECK_FALSE(config.controls().invertRoll);
-    CHECK_FALSE(config.controls().invertRudder);
-    CHECK_FALSE(config.controls().invertThrottle);
-}
-
-TEST_CASE("UserConfig: [controls] deadzone out-of-range clamped to 0.99", "[userconfig]") {
-    MockFilesystem fs;
-    MockLogger logger;
-    fs.addFile("config/user.toml", "[controls]\ngamepad_deadzone = 2.0\n");
-    UserConfig config(fs, logger);
-    config.load();
-    CHECK(config.controls().gamepadDeadzone <= 0.99f);
-}
-
-TEST_CASE("UserConfig: [controls] roundtrip save+load", "[userconfig]") {
-    MockFilesystem fs;
-    MockLogger logger;
-    UserConfig config(fs, logger);
-    ControlsSettings cs;
-    cs.gamepadDeadzone = 0.1f;
-    cs.invertPitch = true;
-    cs.invertRudder = true;
-    config.setControls(cs);
-    config.save();
-
-    MockLogger logger2;
-    UserConfig config2(fs, logger2);
-    config2.load();
-    CHECK(config2.controls().gamepadDeadzone == Catch::Approx(0.1f));
-    CHECK(config2.controls().invertPitch);
-    CHECK_FALSE(config2.controls().invertRoll);
-    CHECK(config2.controls().invertRudder);
-    CHECK_FALSE(config2.controls().invertThrottle);
-}
-
 TEST_CASE("UserConfig: [controls] HOTAS defaults when section absent", "[userconfig]") {
     MockFilesystem fs;
     MockLogger logger;

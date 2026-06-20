@@ -41,31 +41,38 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
             inp.buttons |= 0x02u;
         m_weaponFired = (inp.buttons & 1u) != 0u;
 
-        // Gamepad axis blend — wins when |axis| > deadzone.
+        // Gamepad axis blend — axis mapping from m_bindings alt slots, processing from m_axisConfig.
+        // Only GamepadAxis-type alt bindings are used here; GamepadButton actions are handled separately.
         if (input.getGamepadCount() > 0) {
-            const float dz = cs.gamepadDeadzone;
-            auto applyAxis = [dz](float raw) -> float {
-                const float mag = std::abs(raw);
-                if (mag <= dz)
+            // Look up which GamepadAxis is bound to 'action' (alt slot), apply per-axis config.
+            // Returns 0.0f when the binding is absent or not a GamepadAxis.
+            auto readAxis = [&](fl::InputAction action) -> float {
+                const fl::Binding b = m_bindings.get(action, /*alt=*/true);
+                if (b.source != fl::BindingSource::GamepadAxis)
                     return 0.0f;
-                return std::copysign((mag - dz) / (1.0f - dz), raw);
+                const auto ax = static_cast<GamepadAxis>(b.id);
+                return m_axisConfig.get(ax).apply(input.getGamepadAxis(0, ax));
             };
-            // TriggerLeft [0,1] → absolute throttle when above deadzone.
-            const float trig = input.getGamepadAxis(0, GamepadAxis::TriggerLeft);
-            if (trig > dz) {
-                const float t = (trig - dz) / (1.0f - dz);
-                camInput.setThrottle(cs.invertThrottle ? 1.0f - t : t);
+
+            // ThrottleAxis: TriggerLeft returns [0,1] unipolar. apply() handles deadzone + scale.
+            // Note: AxisConfig::invert for a unipolar trigger negates to [-1,0]; std::clamp brings
+            // it back to 0 (throttle off). Inverted throttle is better configured via the HOTAS path.
+            const float thr = readAxis(fl::InputAction::ThrottleAxis);
+            if (thr != 0.0f) {
+                camInput.setThrottle(std::clamp(thr, 0.0f, 1.0f));
                 inp.throttle = camInput.throttle();
             }
-            const float elev = applyAxis(input.getGamepadAxis(0, GamepadAxis::RightY));
+            const float elev = readAxis(fl::InputAction::PitchAxis);
             if (elev != 0.0f)
-                inp.elevator = cs.invertPitch ? -elev : elev;
-            const float ail = applyAxis(input.getGamepadAxis(0, GamepadAxis::RightX));
+                inp.elevator = elev;
+            const float ail = readAxis(fl::InputAction::RollAxis);
             if (ail != 0.0f)
-                inp.aileron = cs.invertRoll ? -ail : ail;
-            const float rud = applyAxis(input.getGamepadAxis(0, GamepadAxis::LeftX));
+                inp.aileron = ail;
+            const float rud = readAxis(fl::InputAction::YawAxis);
             if (rud != 0.0f)
-                inp.rudder = cs.invertRudder ? -rud : rud;
+                inp.rudder = rud;
+
+            // Gamepad button actions: still read from ControlsSettings; migrate to InputBindings in #312.
             if (input.isGamepadButtonDown(0, static_cast<GamepadButton>(cs.fireButton))) {
                 inp.buttons |= 1u;
                 m_weaponFired = true;
@@ -118,4 +125,12 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
 
 void FlightInputCollector::setClock(const fl::IClock& clock) {
     m_clock = &clock;
+}
+
+void FlightInputCollector::setBindings(fl::InputBindings bindings) {
+    m_bindings = std::move(bindings);
+}
+
+void FlightInputCollector::setAxisConfig(fl::AxisConfigTable cfg) {
+    m_axisConfig = std::move(cfg);
 }

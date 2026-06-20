@@ -23,6 +23,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         engine-difficulty
         engine-firstrun
         engine-content
+        engine-input
         engine-sandbox
         engine-loop
         engine-entity

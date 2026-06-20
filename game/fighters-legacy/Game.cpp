@@ -24,6 +24,7 @@
 #include "audio/MusicManager.h"
 #include "audio/PlaylistLoader.h"
 #include "audio/SubtitleQueue.h"
+#include "config/ConfigFile.h"
 #include "config/UserConfig.h"
 #include "console/CommandRegistry.h"
 #include "console/GameConsole.h"
@@ -34,6 +35,8 @@
 #include "entity/EntityDef.h"
 #include "entity/EntityTypeRegistry.h"
 #include "firstrun/FirstRun.h"
+#include "input/AxisConfig.h"
+#include "input/InputBindings.h"
 #include "net/DiscoveryListener.h"
 #include "net/GameProtocol.h"
 #include "openal/OALAudio.h"
@@ -250,6 +253,8 @@ struct GameServices {
 
     // Config + renderer settings
     std::optional<UserConfig> userConfig;
+    fl::InputBindings inputBindings;     // loaded from config/bindings.toml; stored for Phase 4
+    fl::AxisConfigTable axisConfigTable; // loaded from config/bindings.toml [axis_config]
     RendererSettings rendererSettings;
     ResizeHandler resizeHandler;
 
@@ -380,6 +385,20 @@ bool Game::initPlatform(int argc, char** argv) {
 
     d.services.userConfig.emplace(*d.services.p.filesystem, *d.services.rawLogger);
     d.services.userConfig->load();
+
+    // Load config/bindings.toml — writes defaults on first run.
+    // InputBindings provides [primary]/[alt]; AxisConfigTable provides [axis_config].
+    // Both deserializers accept the full file content (non-overlapping TOML sections).
+    // Pass fs::path directly to avoid Windows locale-encoding issues from std::string conversion.
+    {
+        const fs::path bindingsPath = d.services.userDataDir / "config" / "bindings.toml";
+        const std::string defaults = fl::InputBindings{}.serialize() + "\n" + fl::AxisConfigTable{}.serialize();
+        const std::string content = fl::ensureAndReadConfig(bindingsPath, defaults, *d.services.rawLogger);
+        d.services.inputBindings.deserialize(content);
+        d.services.axisConfigTable.deserialize(content);
+        d.services.flightInput.setBindings(d.services.inputBindings);
+        d.services.flightInput.setAxisConfig(d.services.axisConfigTable);
+    }
 
     for (int i = 1; i < argc - 1; ++i) {
         if (std::strcmp(argv[i], "--log-level") == 0)

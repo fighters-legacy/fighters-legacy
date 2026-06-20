@@ -724,11 +724,6 @@ bool UserConfig::load() {
         m_accessibility.subtitleDurationScale = static_cast<float>(std::clamp(*v, 0.5, 3.0));
 
     // [controls]
-    m_controls.gamepadDeadzone = std::clamp(tbl["controls"]["gamepad_deadzone"].value_or(0.05f), 0.0f, 0.99f);
-    m_controls.invertPitch = tbl["controls"]["invert_pitch"].value_or(false);
-    m_controls.invertRoll = tbl["controls"]["invert_roll"].value_or(false);
-    m_controls.invertRudder = tbl["controls"]["invert_rudder"].value_or(false);
-    m_controls.invertThrottle = tbl["controls"]["invert_throttle"].value_or(false);
     m_controls.hotasAileronAxis =
         std::clamp(static_cast<int>(tbl["controls"]["hotas_aileron_axis"].value_or(0LL)), -1, 127);
     m_controls.hotasElevatorAxis =
@@ -862,11 +857,6 @@ bool UserConfig::save() {
                                    static_cast<double>(m_accessibility.subtitleDurationScale));
 
     toml::table controls;
-    controls.insert_or_assign("gamepad_deadzone", static_cast<double>(m_controls.gamepadDeadzone));
-    controls.insert_or_assign("invert_pitch", m_controls.invertPitch);
-    controls.insert_or_assign("invert_roll", m_controls.invertRoll);
-    controls.insert_or_assign("invert_rudder", m_controls.invertRudder);
-    controls.insert_or_assign("invert_throttle", m_controls.invertThrottle);
     controls.insert_or_assign("hotas_aileron_axis", static_cast<int64_t>(m_controls.hotasAileronAxis));
     controls.insert_or_assign("hotas_elevator_axis", static_cast<int64_t>(m_controls.hotasElevatorAxis));
     controls.insert_or_assign("hotas_throttle_axis", static_cast<int64_t>(m_controls.hotasThrottleAxis));
