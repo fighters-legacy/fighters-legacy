@@ -25,12 +25,16 @@ fi
 
 git pull origin main
 
+SEMVER="${VERSION#v}"
+
 RELEASE_BRANCH="release/$VERSION"
 git checkout -b "$RELEASE_BRANCH"
 
 git cliff --tag "$VERSION" -o CHANGELOG.md
 
-git add CHANGELOG.md
+sed -i "s/^project(fighters-legacy VERSION [0-9]*\.[0-9]*\.[0-9]*/project(fighters-legacy VERSION $SEMVER/" CMakeLists.txt
+
+git add CHANGELOG.md CMakeLists.txt
 git commit -s -m "chore(release): prepare $VERSION"
 
 git push -u origin "$RELEASE_BRANCH"
