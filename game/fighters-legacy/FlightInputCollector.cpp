@@ -41,11 +41,7 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
             inp.buttons |= 0x02u;
         m_weaponFired = (inp.buttons & 1u) != 0u;
 
-        // Gamepad axis blend — axis mapping from m_bindings alt slots, processing from m_axisConfig.
-        // Only GamepadAxis-type alt bindings are used here; GamepadButton actions are handled separately.
         if (input.getGamepadCount() > 0) {
-            // Look up which GamepadAxis is bound to 'action' (alt slot), apply per-axis config.
-            // Returns 0.0f when the binding is absent or not a GamepadAxis.
             auto readAxis = [&](fl::InputAction action) -> float {
                 const fl::Binding b = m_bindings.get(action, /*alt=*/true);
                 if (b.source != fl::BindingSource::GamepadAxis)
@@ -72,12 +68,22 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
             if (rud != 0.0f)
                 inp.rudder = rud;
 
-            // Gamepad button actions: still read from ControlsSettings; migrate to InputBindings in #312.
-            if (input.isGamepadButtonDown(0, static_cast<GamepadButton>(cs.fireButton))) {
+            auto readButton = [&](fl::InputAction action) -> bool {
+                const fl::Binding b = m_bindings.get(action, /*alt=*/true);
+                if (b.source == fl::BindingSource::GamepadButton)
+                    return input.isGamepadButtonDown(0, static_cast<GamepadButton>(b.id));
+                if (b.source == fl::BindingSource::GamepadAxis) {
+                    const float v = input.getGamepadAxis(0, static_cast<GamepadAxis>(b.id));
+                    return b.axisNegative ? (v < -0.5f) : (v > 0.5f);
+                }
+                return false;
+            };
+
+            if (readButton(fl::InputAction::FireWeapon)) {
                 inp.buttons |= 1u;
                 m_weaponFired = true;
             }
-            if (input.isGamepadButtonDown(0, static_cast<GamepadButton>(cs.afterburnerButton)))
+            if (readButton(fl::InputAction::Afterburner))
                 inp.buttons |= 0x02u;
         }
 

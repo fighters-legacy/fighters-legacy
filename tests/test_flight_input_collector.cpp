@@ -436,7 +436,7 @@ TEST_CASE("FlightInputCollector console open suppresses gamepad input", "[flight
     MockInput inp;
     inp.gamepadCount = 1;
     ControlsSettings cs;
-    inp.gpDown.insert({0, static_cast<GamepadButton>(cs.fireButton)});
+    inp.gpDown.insert({0, GamepadButton::RightShoulder});
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
@@ -477,7 +477,7 @@ TEST_CASE("FlightInputCollector gamepad fireButton sets bit 0 and wasWeaponFired
     MockInput inp;
     inp.gamepadCount = 1;
     ControlsSettings cs;
-    inp.gpDown.insert({0, static_cast<GamepadButton>(cs.fireButton)});
+    inp.gpDown.insert({0, GamepadButton::RightShoulder});
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
@@ -497,7 +497,7 @@ TEST_CASE("FlightInputCollector gamepad afterburnerButton sets bit 1", "[flight_
     MockInput inp;
     inp.gamepadCount = 1;
     ControlsSettings cs;
-    inp.gpDown.insert({0, static_cast<GamepadButton>(cs.afterburnerButton)});
+    inp.gpDown.insert({0, GamepadButton::LeftShoulder});
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
@@ -669,7 +669,7 @@ TEST_CASE("FlightInputCollector keyboard Space and gamepad afterburner set both 
     inp.gamepadCount = 1;
     inp.held.insert(Key::Space);
     ControlsSettings cs;
-    inp.gpDown.insert({0, static_cast<GamepadButton>(cs.afterburnerButton)});
+    inp.gpDown.insert({0, GamepadButton::LeftShoulder});
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
@@ -689,7 +689,7 @@ TEST_CASE("FlightInputCollector keyboard Tab and gamepad fireButton set both bit
     inp.gamepadCount = 1;
     inp.held.insert(Key::Tab);
     ControlsSettings cs;
-    inp.gpDown.insert({0, static_cast<GamepadButton>(cs.fireButton)});
+    inp.gpDown.insert({0, GamepadButton::RightShoulder});
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
@@ -955,4 +955,94 @@ TEST_CASE("FlightInputCollector setAxisConfig scale multiplies axis output", "[f
     REQUIRE(r_scaled.has_value());
 
     CHECK(r_scaled->elevator == Catch::Approx(r_default->elevator * 2.0f));
+}
+
+TEST_CASE("FlightInputCollector readButton GamepadAxis positive threshold sets fire bit and wasWeaponFired",
+          "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    inp.gamepadCount = 1;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+
+    fl::InputBindings b;
+    b.set(fl::InputAction::FireWeapon,
+          {fl::BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::TriggerRight), false},
+          /*alt=*/true);
+    fic.setBindings(b);
+
+    inp.axisValues[{0, GamepadAxis::TriggerRight}] = 0.6f;
+    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r.has_value());
+    CHECK((r->buttons & 1u) != 0u);
+    CHECK(fic.wasWeaponFired());
+
+    inp.axisValues[{0, GamepadAxis::TriggerRight}] = 0.4f;
+    FlightInputCollector fic2;
+    fic2.setClock(t);
+    fic2.setBindings(b);
+    auto r2 = fic2.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r2.has_value());
+    CHECK((r2->buttons & 1u) == 0u);
+    CHECK_FALSE(fic2.wasWeaponFired());
+}
+
+TEST_CASE("FlightInputCollector readButton GamepadAxis negative threshold sets afterburner bit", "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    inp.gamepadCount = 1;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+
+    fl::InputBindings b;
+    b.set(fl::InputAction::Afterburner,
+          {fl::BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::LeftY), true},
+          /*alt=*/true);
+    fic.setBindings(b);
+
+    inp.axisValues[{0, GamepadAxis::LeftY}] = -0.6f;
+    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r.has_value());
+    CHECK((r->buttons & 2u) != 0u);
+
+    inp.axisValues[{0, GamepadAxis::LeftY}] = -0.4f;
+    FlightInputCollector fic2;
+    fic2.setClock(t);
+    fic2.setBindings(b);
+    auto r2 = fic2.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r2.has_value());
+    CHECK((r2->buttons & 2u) == 0u);
+}
+
+TEST_CASE("FlightInputCollector readButton None alt binding does not set fire bit", "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    inp.gamepadCount = 1;
+    inp.gpDown.insert({0, GamepadButton::RightShoulder});
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+
+    fl::InputBindings b;
+    b.clear(fl::InputAction::FireWeapon, /*alt=*/true);
+    fic.setBindings(b);
+
+    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r.has_value());
+    CHECK((r->buttons & 1u) == 0u);
+    CHECK_FALSE(fic.wasWeaponFired());
 }

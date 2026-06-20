@@ -9,6 +9,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **game**: `FlightInputCollector` reads `FireWeapon` and `Afterburner` gamepad bindings from
+  `bindings.toml` `[alt]` section (`GamepadButton` or `GamepadAxis` threshold ±0.5 f);
+  `fire_button`/`afterburner_button` removed from `[controls]` in `user.toml` (#312)
 - **game**: Gamepad axis mapping and per-axis deadzone/curve/invert/scale now loaded from
   `config/bindings.toml` (`[alt]` + `[axis_config]`), replacing the global `gamepad_deadzone`
   and `invert_*` fields in `user.toml [controls]`; `InputBindings` table stored in game

@@ -1,20 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-#include <cstdint>
-
 // Persisted under the [controls] section of user.toml.
-// Gamepad axis mapping and per-axis deadzone/curve/invert/scale are configured in
-// config/bindings.toml (fl::InputBindings + fl::AxisConfigTable in engine/input/).
+// Gamepad axis mapping, per-axis deadzone/curve/invert/scale, and button bindings are
+// configured in config/bindings.toml (fl::InputBindings + fl::AxisConfigTable in engine/input/).
 struct ControlsSettings {
-    // Gamepad primary-fire button. Mapped to GamepadButton enum values (IInput.h).
-    // Valid range [0, 15]; clamped on load. Default 5 = RightShoulder.
-    uint8_t fireButton{5};
-
-    // Gamepad afterburner button. Mapped to GamepadButton enum values (IInput.h).
-    // Valid range [0, 15]; clamped on load. Default 4 = LeftShoulder.
-    uint8_t afterburnerButton{4};
-
     // HOTAS / raw joystick axis assignments. Index into IJoystick::getAxisValue(0, n).
     // -1 disables the mapping; clamped to [-1, 127] on load.
     int hotasAileronAxis{0};
