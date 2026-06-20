@@ -737,9 +737,6 @@ bool UserConfig::load() {
     m_controls.hotasInvertRoll = tbl["controls"]["hotas_invert_roll"].value_or(false);
     m_controls.hotasInvertRudder = tbl["controls"]["hotas_invert_rudder"].value_or(false);
     m_controls.hotasInvertThrottle = tbl["controls"]["hotas_invert_throttle"].value_or(false);
-    m_controls.fireButton = static_cast<uint8_t>(std::clamp(tbl["controls"]["fire_button"].value_or(5LL), 0LL, 15LL));
-    m_controls.afterburnerButton =
-        static_cast<uint8_t>(std::clamp(tbl["controls"]["afterburner_button"].value_or(4LL), 0LL, 15LL));
 
     // [debug]
     if (auto v = tbl["debug"]["overlay_mode"].value<int64_t>()) {
@@ -866,8 +863,6 @@ bool UserConfig::save() {
     controls.insert_or_assign("hotas_invert_roll", m_controls.hotasInvertRoll);
     controls.insert_or_assign("hotas_invert_rudder", m_controls.hotasInvertRudder);
     controls.insert_or_assign("hotas_invert_throttle", m_controls.hotasInvertThrottle);
-    controls.insert_or_assign("fire_button", static_cast<int64_t>(m_controls.fireButton));
-    controls.insert_or_assign("afterburner_button", static_cast<int64_t>(m_controls.afterburnerButton));
 
     toml::table client;
     client.insert_or_assign("motd_display_s", static_cast<int64_t>(m_client.motdDisplayS));

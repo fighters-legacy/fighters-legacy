@@ -87,17 +87,7 @@ deadzone. Deadzone, response curve, inversion, and axis mapping are configured i
 | Aileron (roll) | Right stick X |
 | Rudder (yaw) | Left stick X |
 
-| Index | Button | Default mapping |
-|---|---|---|
-| 5 | Right shoulder (RB / R1) | Primary fire |
-| 4 | Left shoulder (LB / L1) | Afterburner |
-
-Configure fire and afterburner buttons in the `[controls]` section of `config/user.toml` (axis deadzone/invert/mapping moved to `bindings.toml`):
-
-| Key | Default | Description |
-|---|---|---|
-| `fire_button` | `5` | Gamepad button index for primary fire; see Buttons table above |
-| `afterburner_button` | `4` | Gamepad button index for afterburner; see Buttons table above |
+Button bindings for `FireWeapon` and `Afterburner` are configured in the `[alt]` section of `config/bindings.toml` (see the **bindings.toml** section below).
 
 ## `config/bindings.toml`
 
