@@ -968,3 +968,67 @@ TEST_CASE("Integrator: double-precision position accumulates at large world offs
     CHECK(fi.state().pos_world[0] != x0);
     CHECK(std::isfinite(fi.state().pos_world[0]));
 }
+
+// ---------------------------------------------------------------------------
+// vel_body double-precision tests (#387)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("FlightState::vel_body stores double precision", "[integrator]") {
+    // 1000.123456789012345 is representable in double but not in float.
+    // float rounds it to ~1000.1235 (7 significant digits); double stores it exactly.
+    fl::FlightState s{};
+    const double kPrecise = 1000.123456789012345;
+    s.vel_body[0] = kPrecise;
+    CHECK(s.vel_body[0] == kPrecise);
+    CHECK(s.vel_body[0] != static_cast<float>(kPrecise));
+}
+
+TEST_CASE("FlightIntegrator: vel_body drives pos_world via double-precision rotation", "[integrator]") {
+    // Smoke test for the quatRotateD path: with identity quaternion (body X == world X),
+    // forward vel_body[0] must accumulate into pos_world[0] over 1 s.
+    // Double-precision storage is proven by the previous test; this confirms the
+    // integration chain (quatRotateD → pos_world) executes and produces a sensible result.
+    // Note: computeAtmosphere clamps to 20 km, so use a low speed (10 m/s) where
+    // aero drag is negligible (< 0.001 m/s² deceleration on the test aircraft).
+    auto data = makeData();
+    fl::FlightIntegrator integ(data);
+    fl::FlightState s{};
+    s.pos_world[0] = 0.0;
+    s.pos_world[1] = 5000.0;
+    s.vel_body[0] = 10.0; // m/s — drag at this speed is < 0.001 m/s²
+    s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+    s.fuel_kg = data->geometry.fuel_kg;
+    s.throttle_actual = 0.f;
+    integ.reset(s);
+
+    fl::ControlInput ctrl{};
+    fl::PayloadEffect px{};
+    for (int i = 0; i < 60; ++i)
+        integ.step(1.f / 60.f, ctrl, px);
+
+    // After 1 s at ~10 m/s, pos_world[0] ≈ 10 m; ±0.5 m covers all force effects.
+    CHECK_THAT(integ.state().pos_world[0], WithinAbs(10.0, 0.5));
+    CHECK(std::isfinite(integ.state().vel_body[0]));
+    CHECK(std::isfinite(integ.state().pos_world[0]));
+}
+
+TEST_CASE("FlightIntegrator: vel_body clamped at double-precision kMaxBodySpeed", "[integrator]") {
+    // Verifies that constexpr double kMaxBodySpeed = 1030.0 clamps vel_body correctly.
+    // No existing test exercises vel_body above the clamp threshold.
+    auto data = makeData();
+    fl::FlightIntegrator integ(data);
+    fl::FlightState s{};
+    s.vel_body[0] = 5000.0; // far above kMaxBodySpeed (1030 m/s)
+    s.pos_world[1] = 5000.0;
+    s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+    s.fuel_kg = data->geometry.fuel_kg;
+    integ.reset(s);
+
+    fl::ControlInput ctrl{};
+    fl::PayloadEffect px{};
+    integ.step(1.f / 60.f, ctrl, px);
+
+    // After one step the clamp reduces vel_body[0] to ≤ kMaxBodySpeed.
+    CHECK(integ.state().vel_body[0] <= 1030.0);
+    CHECK(std::isfinite(integ.state().vel_body[0]));
+}

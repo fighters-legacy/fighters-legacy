@@ -15,7 +15,7 @@ namespace fl {
 // Aircraft state vector — flat/POD for network serialisation.
 struct FlightState {
     double pos_world[3]{};         // world-frame position (m) — double for planet-scale precision
-    float vel_body[3]{};           // body-frame velocity (m/s)
+    double vel_body[3]{};          // body-frame velocity (m/s) — double for ICBM-range precision
     float euler[3]{};              // roll, pitch, yaw (rad) — derived from quaternion
     float omega[3]{};              // body-frame angular rates: p, q, r (rad/s)
     float quat[4]{0, 0, 0, 1};     // body↔world quaternion [x,y,z,w]

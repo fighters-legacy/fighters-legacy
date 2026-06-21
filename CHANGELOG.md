@@ -7,6 +7,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **flight**: `FlightState::vel_body[3]` upgraded from `float[3]` to `double[3]` for
+  ICBM-range trajectory precision; adds `quatRotateD` for double-precision world-frame
+  position integration; unblocks ballistic force model (#354) and missile guidance (#355)
+  (#387)
+
 ### Added
 
 - **network**: Connection heartbeat / keepalive (issue #362): clients now send `MsgHeartbeat`

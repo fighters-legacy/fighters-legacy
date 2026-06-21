@@ -799,8 +799,10 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
     m_entityZ.store(fs.pos_world[2], std::memory_order_relaxed);
 
     // World velocity: rotate body velocity into world frame.
+    // vel_body is double; cast to float here — wire protocol and render bridge stay float.
+    float vel_body_f[3] = {float(fs.vel_body[0]), float(fs.vel_body[1]), float(fs.vel_body[2])};
     float wv[3];
-    quatRotate(fs.quat, fs.vel_body, wv);
+    quatRotate(fs.quat, vel_body_f, wv);
 
     // Coordinate conventions are identical (both Y-up) — copy directly.
     state.transform.pos[0] = fs.pos_world[0];
