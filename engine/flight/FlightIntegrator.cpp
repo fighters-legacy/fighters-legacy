@@ -43,6 +43,18 @@ std::array<float, 3> quatRotate(const float* q, const float* v) {
     return {vx + qw * tx + qy * tz - qz * ty, vy + qw * ty + qz * tx - qx * tz, vz + qw * tz + qx * ty - qy * tx};
 }
 
+// Double-precision rotation: float quaternion q rotates double vector v.
+// Used for the vel_body → pos_world position update so double velocity precision is
+// not truncated to float before accumulation into the double pos_world fields.
+std::array<double, 3> quatRotateD(const float* q, const double* v) {
+    double qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+    double vx = v[0], vy = v[1], vz = v[2];
+    double tx = 2.0 * (qy * vz - qz * vy);
+    double ty = 2.0 * (qz * vx - qx * vz);
+    double tz = 2.0 * (qx * vy - qy * vx);
+    return {vx + qw * tx + qy * tz - qz * ty, vy + qw * ty + qz * tx - qx * tz, vz + qw * tz + qx * ty - qy * tx};
+}
+
 // Euler angles (roll=x, pitch=y, yaw=z) from quaternion (ZYX convention).
 std::array<float, 3> quatToEuler(const float* q) {
     float sinr_cosp = 2.f * (q[3] * q[0] + q[1] * q[2]);
@@ -145,7 +157,8 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     if (m_data->wing_sweep) {
         AtmosphereState atmos2 = computeAtmosphere(static_cast<float>(m_gravity->geodeticAltitude(m_state.pos_world)));
         float q_conj2[4] = {-m_state.quat[0], -m_state.quat[1], -m_state.quat[2], m_state.quat[3]};
-        const float* vel = m_state.vel_body;
+        float vel_f_sweep[3] = {float(m_state.vel_body[0]), float(m_state.vel_body[1]), float(m_state.vel_body[2])};
+        const float* vel = vel_f_sweep;
         std::array<float, 3> wind_body2{};
         if (!inGroundContact)
             wind_body2 = quatRotate(q_conj2, wind.wind_world);
@@ -170,7 +183,8 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
 
     // 5. Relative airspeed: subtract body-frame wind from aircraft velocity.
     // Aerodynamic forces depend on velocity relative to the air mass, not the ground.
-    const float* vel = m_state.vel_body;
+    float vel_f[3] = {float(m_state.vel_body[0]), float(m_state.vel_body[1]), float(m_state.vel_body[2])};
+    const float* vel = vel_f;
     std::array<float, 3> wind_body{};
     if (!inGroundContact)
         wind_body = quatRotate(q_conj, wind.wind_world);
@@ -243,7 +257,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
 
     // Clamp body-frame speed to Mach 3 equivalent: prevents quaternion overflow
     // when position is NaN and aero forces produce unbounded acceleration.
-    constexpr float kMaxBodySpeed = 1030.f; // m/s ≈ Mach 3 at sea level
+    constexpr double kMaxBodySpeed = 1030.0; // m/s ≈ Mach 3 at sea level
     m_state.vel_body[0] = std::clamp(m_state.vel_body[0], -kMaxBodySpeed, kMaxBodySpeed);
     m_state.vel_body[1] = std::clamp(m_state.vel_body[1], -kMaxBodySpeed, kMaxBodySpeed);
     m_state.vel_body[2] = std::clamp(m_state.vel_body[2], -kMaxBodySpeed, kMaxBodySpeed);
@@ -251,11 +265,13 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     // 13. Integrate rotation quaternion
     integrateRotation(dt);
 
-    // 14. Update world position: rotate body velocity to world frame
-    auto vel_world = quatRotate(m_state.quat, m_state.vel_body);
-    m_state.pos_world[0] += vel_world[0] * dt;
-    m_state.pos_world[1] += vel_world[1] * dt;
-    m_state.pos_world[2] += vel_world[2] * dt;
+    // 14. Update world position: rotate body velocity to world frame.
+    // quatRotateD preserves double precision throughout — float vel would truncate before
+    // accumulation into pos_world and degrade ICBM-range trajectory accuracy.
+    auto vel_world = quatRotateD(m_state.quat, m_state.vel_body);
+    m_state.pos_world[0] += vel_world[0] * double(dt);
+    m_state.pos_world[1] += vel_world[1] * double(dt);
+    m_state.pos_world[2] += vel_world[2] * double(dt);
 
     // 14b. Ground collision response.
     // If the entity crossed below groundElev this tick, snap it back up and apply an
@@ -267,7 +283,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
             constexpr float kCoR = 0.35f;         // coefficient of restitution
             constexpr float kSlideImpact = 0.80f; // hard-landing friction (≥10 m/s vertical)
             constexpr float kSlideRoll = 0.999f;  // ground-roll friction (near-zero vertical)
-            std::array<float, 3> vw = vel_world;
+            std::array<float, 3> vw = {float(vel_world[0]), float(vel_world[1]), float(vel_world[2])};
             float impactSpd = std::abs(vw[1]);
             // Scale friction by impact severity so gravity's ~0.16 m/s/frame floor-tickle
             // does not act as a continuous brake during ground roll.
@@ -296,7 +312,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
         constexpr float kParkingSpeedM_s = 1.0f;  // hold below ~1 m/s of horizontal motion
         constexpr float kParkingThrottle = 0.05f; // and only near idle
         const float horizSpd =
-            std::sqrt(m_state.vel_body[0] * m_state.vel_body[0] + m_state.vel_body[2] * m_state.vel_body[2]);
+            float(std::sqrt(m_state.vel_body[0] * m_state.vel_body[0] + m_state.vel_body[2] * m_state.vel_body[2]));
         if (horizSpd < kParkingSpeedM_s && ctrl.throttle < kParkingThrottle) {
             m_state.vel_body[0] = 0.f; // forward
             m_state.vel_body[2] = 0.f; // right (vertical vel_body[1] left to the impact clamp)

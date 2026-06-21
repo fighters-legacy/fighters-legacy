@@ -269,7 +269,7 @@ The engine uses a single continuous **world terrain** rather than per-theater he
 
 ### World coordinate system
 
-All entity positions, terrain queries, and camera origins use **double-precision (`glm::dvec3`)** world coordinates throughout the engine — `EntityTransform::pos`, `MsgEntityEntry::pos`, `EntityRenderEntry::position`, and `CameraView::worldOrigin` are all `double`/`dvec3`. The coordinate space is right-handed Y-up, in meters, matching glTF. Camera-relative rendering subtracts `worldOrigin` before GPU upload and casts the small relative offset to `vec3` — float32-safe at any scale including planet-scale distances.
+All entity positions, terrain queries, and camera origins use **double-precision (`glm::dvec3`)** world coordinates throughout the engine — `EntityTransform::pos`, `MsgEntityEntry::pos`, `EntityRenderEntry::position`, and `CameraView::worldOrigin` are all `double`/`dvec3`. The coordinate space is right-handed Y-up, in meters, matching glTF. Camera-relative rendering subtracts `worldOrigin` before GPU upload and casts the small relative offset to `vec3` — float32-safe at any scale including planet-scale distances. The flight integrator's body-frame velocity (`FlightState::vel_body[3]`) is also `double`, enabling ICBM-range trajectory precision without accumulation error; `MsgEntityEntry::vel float[3]` and `EntityRenderEntry::velocity glm::vec3` remain `float` — dead-reckoning over a single frame (~16 ms) requires no more than float precision.
 
 ### Spherical-Earth world model
 
