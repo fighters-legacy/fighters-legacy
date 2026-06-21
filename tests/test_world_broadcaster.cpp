@@ -124,7 +124,7 @@ TEST_CASE("WorldBroadcaster: onTick broadcasts WorldSnapshot for N entities", "[
 struct ConstantController : fl::IEntityController {
     float throttle{1.0f};
     int sampleCount{0};
-    fl::ControlInput sample(const fl::EntityState&, uint64_t, double) override {
+    fl::ControlInput sample(const fl::EntityState&, uint64_t, double, const fl::SpatialIndex*) override {
         ++sampleCount;
         fl::ControlInput ctrl{};
         ctrl.throttle = throttle;
@@ -3574,4 +3574,60 @@ TEST_CASE("WorldBroadcaster: MsgClientInput resets idle timer", "[world_broadcas
     for (uint64_t t = 56; t <= 114; ++t)
         broadcaster.onTick(1.0 / 60.0, t);
     CHECK(net.disconnectedPeers.empty());
+}
+
+// ---------------------------------------------------------------------------
+// SpatialIndex integration
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: spatialIndex is populated with live entity count after onTick", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::EntityTransform t{};
+    em.spawn("builtin:debug-entity", t);
+    em.spawn("builtin:debug-entity", t);
+    em.spawn("builtin:debug-entity", t);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CHECK(broadcaster.spatialIndex().entityCount() == 3u);
+}
+
+// Spy controller: captures the SpatialIndex pointer received via sample().
+struct SpyController : fl::IEntityController {
+    const fl::SpatialIndex* lastSi{nullptr};
+    fl::ControlInput sample(const fl::EntityState&, uint64_t, double, const fl::SpatialIndex* si) override {
+        lastSi = si;
+        return {};
+    }
+};
+
+TEST_CASE("WorldBroadcaster: sample receives non-null SpatialIndex pointer from onTick", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::EntityTransform t{};
+    t.pos[1] = 500.0;
+    fl::EntityId id = em.spawn("builtin:debug-entity", t);
+    REQUIRE(id.valid());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto spy = std::make_unique<SpyController>();
+    SpyController* spyPtr = spy.get();
+    broadcaster.registerController(id, std::move(spy));
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    // si must be non-null and the index must already hold the entity (rebuilt before sample())
+    REQUIRE(spyPtr->lastSi != nullptr);
+    CHECK(spyPtr->lastSi->entityCount() == 1u);
 }

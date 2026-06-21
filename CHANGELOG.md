@@ -16,6 +16,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **engine**: `engine-spatial` library — `fl::SpatialIndex`, a 2D uniform spatial hash (XZ
+  bucketing, double-precision, configurable cell size, default 10 km) for entity neighbor and
+  range queries at planet scale; `clear()` + `insert()` for per-tick rebuild; template
+  `queryRadius(center, radius, fn)` visits all candidate entities in O(cells × local density);
+  foundational for snapshot interest management (#346), drone-swarm AI (#353), and AoE warhead
+  blast radius (#356) (#360)
+- **engine**: `WorldBroadcaster` rebuilds `SpatialIndex` once per sim tick (at tick start) and
+  exposes `spatialIndex() const noexcept` for interest management and AoE consumers (#360)
+- **engine**: `IEntityController::sample()` gains optional 4th parameter
+  `const SpatialIndex* si = nullptr`; all existing controllers ignore it; `WorldBroadcaster`
+  passes `&m_spatialIndex` each tick so future AI controllers can query neighbors without an
+  additional pass (#360)
 - **network**: Connection heartbeat / keepalive (issue #362): clients now send `MsgHeartbeat`
   (0x0B, 16 bytes, 1 Hz) when flying; the server replies with `MsgPeerDelay` (0x0C, 4 bytes)
   carrying `estimatedDelayTicks` so the client can display an approximate RTT.

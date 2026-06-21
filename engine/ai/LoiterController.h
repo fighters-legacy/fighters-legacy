@@ -17,7 +17,8 @@ class LoiterController : public fl::IEntityController {
     explicit LoiterController(glm::dvec3 center, float radiusM = 3000.f, float altitudeM = 600.f,
                               float throttle = 0.65f, LoiterDir dir = LoiterDir::Clockwise);
 
-    fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/) override;
+    fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
+                            const fl::SpatialIndex* /*si*/ = nullptr) override;
 
   private:
     glm::dvec3 m_center;

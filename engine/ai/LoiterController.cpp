@@ -11,7 +11,8 @@ namespace fl::ai {
 LoiterController::LoiterController(glm::dvec3 center, float radiusM, float altitudeM, float throttle, LoiterDir dir)
     : m_center(center), m_radiusM(radiusM), m_altitudeM(altitudeM), m_throttle(throttle), m_dir(dir) {}
 
-fl::ControlInput LoiterController::sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/) {
+fl::ControlInput LoiterController::sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
+                                          const fl::SpatialIndex* /*si*/) {
     fl::ControlInput ctrl{};
     ctrl.throttle = m_throttle;
 

@@ -11,7 +11,8 @@ BreakTurnController::BreakTurnController(const fl::EntityManager& entityManager,
     : m_entityManager(entityManager), m_threatId(threatId), m_rollPhaseDuration(rollPhaseDurationS),
       m_maxElevator(maxElevator) {}
 
-fl::ControlInput BreakTurnController::sample(const fl::EntityState& state, uint64_t /*tick*/, double dt) {
+fl::ControlInput BreakTurnController::sample(const fl::EntityState& state, uint64_t /*tick*/, double dt,
+                                             const fl::SpatialIndex* /*si*/) {
     fl::ControlInput ctrl{};
 
     const fl::EntityState* threat = m_entityManager.get(m_threatId);

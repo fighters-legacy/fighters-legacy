@@ -17,7 +17,8 @@ class WaypointController : public fl::IEntityController {
     explicit WaypointController(std::vector<glm::dvec3> waypoints, float captureRadiusM = 500.f, float throttle = 0.7f,
                                 bool loop = false);
 
-    fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/) override;
+    fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
+                            const fl::SpatialIndex* /*si*/ = nullptr) override;
 
     int currentWaypointIndex() const noexcept {
         return m_currentIdx;

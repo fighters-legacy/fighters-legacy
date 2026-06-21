@@ -17,7 +17,8 @@ class BreakTurnController : public fl::IEntityController {
                         float maxElevator = 1.f);
 
     // dt is used to accumulate the roll-phase timer.
-    fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double dt) override;
+    fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double dt,
+                            const fl::SpatialIndex* /*si*/ = nullptr) override;
 
   private:
     enum class Phase { Roll, Pull };
