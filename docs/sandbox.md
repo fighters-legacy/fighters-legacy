@@ -211,7 +211,7 @@ The console is a half-screen drop-down overlay. It is fully independent of the c
 | `help [command]` | List all commands, or show usage for one |
 | `types` | List all registered entity types with their indices |
 | `entities` | List all live entities (idx/gen, type, world position) |
-| `spawn <type> <x> <y> <z>` | Spawn entity by id or numeric index at world position |
+| `spawn <type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn entity with optional AI controller (see AI behaviors below) |
 | `kill <idx>` | Remove entity from simulation (queued to sim thread) |
 | `tp <x> <y> <z>` | Teleport player entity to world position |
 | `toggle_pos` | Toggle entity world-position readout below the camera position display |
@@ -221,6 +221,16 @@ The console is a half-screen drop-down overlay. It is fully independent of the c
 
 `spawn`, `kill`, and `set_weather` are queued to the sim thread and take effect on the next tick.
 Entity indices shown by `entities` come from the most-recent render snapshot.
+
+**AI behaviors** (optional `--ai` flag on `spawn`):
+
+| Behavior | Args | Description |
+|---|---|---|
+| `loiter` | `[cx cy cz] [radius_m] [alt_m] [throttle] [cw\|ccw]` | Orbit a fixed center point; `cw` = clockwise (default), `ccw` = counterclockwise |
+| `waypoint` | `x1 y1 z1 [x2 y2 z2 ...] [--loop]` | Fly a sequence of 3D waypoints; `--loop` restarts from the first when complete |
+| `pursuit` | `<entityIdx>` | Pursue an entity by pool index; returns neutral when target is dead or invalid |
+| `evade` | `<entityIdx>` | Flee a threat entity by inverting the pursuit heading error |
+| `break` | `<entityIdx> [rollDuration]` | Defensive ACM: roll toward threat then pull maximum-G (rollDuration in seconds, default 0.5) |
 
 **Weather presets:**
 

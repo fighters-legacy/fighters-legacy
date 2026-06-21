@@ -160,7 +160,8 @@ if(TARGET platform-enet)
         "${CMAKE_SOURCE_DIR}/server/fl-server/ServerCommands.cpp")
     target_link_libraries(test_admin_console PRIVATE
         Catch2::Catch2WithMain
-        fl-server-config engine-console engine-net engine-entity engine-weather engine-loop)
+        fl-server-config engine-console engine-net engine-entity engine-weather engine-loop
+        engine-ai)
     target_include_directories(test_admin_console PRIVATE
         "${CMAKE_SOURCE_DIR}/server/fl-server"
         "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -178,6 +179,10 @@ if(TARGET platform-enet)
     endif()
     catch_discover_tests(test_rcon_server)
 endif()
+
+add_executable(test_ai_controllers test_ai_controllers.cpp)
+target_link_libraries(test_ai_controllers PRIVATE engine-ai engine-entity Catch2::Catch2WithMain)
+catch_discover_tests(test_ai_controllers)
 
 add_executable(test_audio test_audio.cpp)
 target_link_libraries(test_audio PRIVATE Catch2::Catch2WithMain platform-openal OpenAL::OpenAL)

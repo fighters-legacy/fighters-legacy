@@ -9,6 +9,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **ai**: `engine-ai` library: `LoiterController` (configurable-direction orbit),
+  `WaypointController` (sequential 3D waypoints), `PursuitController` (pure-pursuit intercept),
+  `EvadeController` (horizontal escape from a threat), `BreakTurnController` (two-phase
+  defensive ACM: roll toward threat then maximum-G pull); `Guidance.h` header-only math
+  utilities; `AiControllerFactory` for string-based controller creation from admin commands (#352)
+- **server**: `spawn` admin command extended with `--ai <behavior> [args...]` to attach an AI
+  controller at spawn time; supported behaviors: `loiter`, `waypoint`, `pursuit`, `evade`,
+  `break` (#352)
 - **network**: Extensible TLV extension block support for wire messages (`WireCodec.h`):
   `appendExt`, `appendExtRaw`, `findExt`, `readExtValue`; `ExtTag` registry in
   `GameProtocol.h`; old receivers skip unknown extensions transparently (#347)

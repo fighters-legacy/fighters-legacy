@@ -80,7 +80,7 @@ Game logic and simulation, independent of any specific content:
 - **Game loop** (`engine/loop/`) — `TimeController` (fixed-timestep accumulator, time compression), `GameLoop` (sim thread, frame gating, render alpha). `ISimUpdate` is the callback interface for game systems advancing each tick. `GameLoop::enqueueSimCallback()` allows any thread to queue a one-shot lambda that runs at the top of the next sim tick — used by the game console to dispatch entity mutations safely.
 - **Entity system** — component-based scene graph
 - **Flight model** — aerodynamics simulation
-- **AI runtime** — Lua-scripted AI behaviours
+- **AI runtime** — C++ autopilot controllers (`engine/ai/`) and Lua-scripted AI behaviours
 - **Mission loader** — scenario and campaign structure
 - **Localization** — keyed string lookup with BCP 47 fallback chain, `{placeholder}` interpolation, plural forms, and RTL metadata; see `engine/i18n/`
 
@@ -276,6 +276,20 @@ All entity positions, terrain queries, and camera origins use **double-precision
 Spherical-Earth physics and terrain curvature is the engine's only supported mode. There is no flat-Earth fallback. The planet radius defaults to 6 371 000 m (Earth); non-Earth servers set `[world] planet_radius_m` in `server.toml`.
 
 **Coordinate convention:** the world origin (`{0, 0, 0}`) is lat=0°, lon=0°, alt=0 m (mean sea level). The planet centre sits at `{0, -R, 0}` in world space, where R = `planet_radius_m`.
+
+**Control-source seam (`IEntityController`):** `IEntityController::sample(EntityState, tick, dt) → ControlInput` decouples the flight integrator from any assumption about who (or what) is flying. `WorldBroadcaster` maintains an `EntityId`-keyed registry of `ControlledEntity{sim, controller}` structs and steps every one uniformly each tick: `controller->sample()` produces inputs, `FlightIntegrator::step()` advances physics, and the result serialises into `MsgWorldSnapshot` automatically. Three concrete driver types all implement the same interface: `PeerController` (wraps the latest `MsgClientInput` from a connected player), C++ autopilot controllers in `engine-ai`, and future Lua-scripted controllers (issue #359). Register a server-side controller via `WorldBroadcaster::registerController(id, controller, model)` after spawning an entity.
+
+**`engine/ai/` — server-side autopilot controllers (`engine-ai` library):** Five concrete `IEntityController` implementations ship with the engine:
+
+| Controller | Behaviour |
+|---|---|
+| `LoiterController` | Orbits a fixed center point at configurable radius, altitude, and direction (`LoiterDir::Clockwise` / `CounterClockwise`). |
+| `WaypointController` | Flies a sequence of 3D waypoints in order; advances on 3D capture radius; optional loop. |
+| `PursuitController` | Pure-pursuit intercept: steers toward a target entity's current position each tick. |
+| `EvadeController` | Horizontal escape: inverts the pursuit heading error to bank away from a threat entity. |
+| `BreakTurnController` | Two-phase defensive ACM: Roll phase (bank toward the threat bearing for a configurable duration) followed by Pull phase (maximum-G elevator with afterburner, open-ended). |
+
+`Guidance.h` (header-only) provides the shared math: `bodyForward`, `horizontalHeadingError`, `pitchErrorFromAlt`, `bankToTurnAileron`, `coordinatedRudder`, `elevatorFromPitchError`. `AiControllerFactory.h` (header-only) exposes `createController(behavior, args, entityManager*)` for string-based instantiation from admin commands. The `spawn` server admin command supports `--ai loiter|waypoint|pursuit|evade|break [args...]`.
 
 **Gravity (`IGravityField` seam):** `CentralGravityField` (`engine/flight/CentralGravityField.h`) implements 1/r² falloff toward the planet centre; `earthInstance()` provides an Earth singleton (R = 6 371 000 m). The default for every `FlightIntegrator` and `WorldBroadcaster`. Swap via `FlightIntegrator::setGravityField()` or `WorldBroadcaster::setGravityField(field, planetRadiusKm)` for non-Earth planets. `WorldBroadcaster` records the radius for transmission to clients in `MsgConnectAck.planetRadiusKm`.
 

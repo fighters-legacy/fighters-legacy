@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ServerCommands.h"
 
+#include "ai/AiControllerFactory.h"
 #include "server_config.h"
 #include <ILogger.h>
 #include <console/CommandRegistry.h>
@@ -454,12 +455,12 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                  return buf;
                              });
 
-    // spawn <type> <x> <y> <z>
+    // spawn <type> <x> <y> <z> [--ai <behavior> [behavior-args...]]
     registry.registerCommand(
-        "spawn", "spawn <type> <x> <y> <z>  -- spawn a registered entity type at world position",
+        "spawn", "spawn <type> <x> <y> <z> [--ai <behavior> [args...]]  -- spawn entity with optional AI controller",
         [ctx](std::span<std::string_view> args) -> std::string {
             if (args.size() < 4)
-                return "usage: spawn <type> <x> <y> <z>";
+                return "usage: spawn <type> <x> <y> <z> [--ai <behavior> [args...]]";
             if (!ctx.sim.entityManager || !ctx.sim.gameLoop)
                 return "spawn: not available";
             std::string typeId(args[0]);
@@ -476,26 +477,79 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             };
             if (!parseD(args[1], x) || !parseD(args[2], y) || !parseD(args[3], z))
                 return "spawn: invalid coordinates";
-            ctx.sim.gameLoop->enqueueSimCallback([ctx, typeId, x, y, z]() {
+
+            // Parse optional --ai <behavior> [behavior-args...]
+            std::string behavior;
+            std::vector<std::string> behaviorArgStrings;
+            for (std::size_t i = 4; i < args.size(); ++i) {
+                if (args[i] == "--ai") {
+                    if (i + 1 >= args.size())
+                        return "spawn: --ai requires a behavior name";
+                    behavior = std::string(args[++i]);
+                    while (i + 1 < args.size())
+                        behaviorArgStrings.emplace_back(args[++i]);
+                    break;
+                }
+            }
+
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, typeId, x, y, z, behavior, behaviorArgStrings]() {
                 fl::EntityTransform t{};
                 t.pos[0] = x;
                 t.pos[1] = y;
                 t.pos[2] = z;
                 fl::EntityId id = ctx.sim.entityManager->spawn(typeId.c_str(), t);
-                char m[128];
-                if (id.valid())
+                char m[160];
+                if (id.valid()) {
                     std::snprintf(m, sizeof(m), "[admin] spawned %s entity=%u/%u", typeId.c_str(), id.index,
                                   id.generation);
-                else
+                    std::printf("%s\n", m);
+                    if (ctx.rcon.shell)
+                        ctx.rcon.shell->print(m);
+
+                    if (!behavior.empty() && ctx.sim.broadcaster) {
+                        // Rebuild string_views from the captured strings (safe — strings owned by capture).
+                        std::vector<std::string_view> argViews;
+                        argViews.reserve(behaviorArgStrings.size());
+                        for (const auto& s : behaviorArgStrings)
+                            argViews.push_back(s);
+
+                        auto ctrl = fl::ai::createController(behavior, std::span<std::string_view>(argViews),
+                                                             ctx.sim.entityManager);
+                        if (ctrl) {
+                            ctx.sim.broadcaster->registerController(id, std::move(ctrl));
+                            char am[128];
+                            std::snprintf(am, sizeof(am), "[admin] attached AI '%s' to entity=%u", behavior.c_str(),
+                                          id.index);
+                            std::printf("%s\n", am);
+                            if (ctx.rcon.shell)
+                                ctx.rcon.shell->print(am);
+                        } else {
+                            char wm[128];
+                            std::snprintf(wm, sizeof(wm), "[admin] spawn: unknown AI behavior '%s' or bad args",
+                                          behavior.c_str());
+                            std::printf("%s\n", wm);
+                            if (ctx.rcon.shell)
+                                ctx.rcon.shell->print(wm);
+                        }
+                    }
+                } else {
                     std::snprintf(m, sizeof(m), "[admin] spawn: type '%s' unknown or cap reached", typeId.c_str());
-                std::printf("%s\n", m);
-                if (ctx.rcon.shell)
-                    ctx.rcon.shell->print(m);
+                    std::printf("%s\n", m);
+                    if (ctx.rcon.shell)
+                        ctx.rcon.shell->print(m);
+                }
                 std::fflush(stdout);
             });
-            char spawnBuf[128];
-            std::snprintf(spawnBuf, sizeof(spawnBuf), "spawn: queued type %s at %.1f %.1f %.1f", typeId.c_str(),
-                          static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+
+            char spawnBuf[160];
+            if (behavior.empty()) {
+                std::snprintf(spawnBuf, sizeof(spawnBuf), "spawn: queued type %s at %.1f %.1f %.1f", typeId.c_str(),
+                              static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+            } else {
+                std::snprintf(spawnBuf, sizeof(spawnBuf), "spawn: queued type %s at %.1f %.1f %.1f --ai %s",
+                              typeId.c_str(), static_cast<float>(x), static_cast<float>(y), static_cast<float>(z),
+                              behavior.c_str());
+            }
             return std::string(spawnBuf);
         });
 
