@@ -855,3 +855,206 @@ TEST_CASE("ClientNetEventHandler: WorldSnapshot without extension leaves peer co
     // Peer count must remain at 0 — no extension was present.
     CHECK(handler.serverPeerCount() == 0u);
 }
+
+// ---------------------------------------------------------------------------
+// Heartbeat / RTT (MsgPeerDelay) tests
+// ---------------------------------------------------------------------------
+
+// Helper: build a minimal WorldSnapshot packet with a given tickIndex.
+static std::vector<uint8_t> makeSnapshotPacket(uint64_t tickIndex) {
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
+    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
+    hdr.entityCount = 0;
+    hdr.tickIndex = tickIndex;
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, hdr);
+    return pkt;
+}
+
+// Helper: build a MsgPeerDelay packet.
+static std::vector<uint8_t> makePeerDelayPacket(uint16_t delayTicks) {
+    fl::MsgPeerDelay pd;
+    pd.delayTicks = delayTicks;
+    std::vector<uint8_t> pkt(sizeof(pd));
+    std::memcpy(pkt.data(), &pd, sizeof(pd));
+    return pkt;
+}
+
+TEST_CASE("ClientNetEventHandler: hasRtt false before first MsgPeerDelay", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    CHECK(!handler.hasRtt());
+    CHECK(handler.lastRttMs() == 0u);
+}
+
+TEST_CASE("ClientNetEventHandler: MsgPeerDelay sets lastRttMs", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // 60 ticks * 1000 / 60 = 1000 ms
+    auto pkt = makePeerDelayPacket(60u);
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(handler.hasRtt());
+    CHECK(handler.lastRttMs() == 1000u);
+}
+
+TEST_CASE("ClientNetEventHandler: MsgPeerDelay delayTicks zero does not set hasRtt", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    auto pkt = makePeerDelayPacket(0u);
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(!handler.hasRtt());
+}
+
+TEST_CASE("ClientNetEventHandler: multiple MsgPeerDelay packets update to latest value", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    auto p30 = makePeerDelayPacket(30u);
+    handler.onReceive(0u, p30.data(), p30.size()); // 30*1000/60 = 500 ms
+
+    auto p60 = makePeerDelayPacket(60u);
+    handler.onReceive(0u, p60.data(), p60.size()); // 60*1000/60 = 1000 ms
+
+    CHECK(handler.lastRttMs() == 1000u);
+}
+
+TEST_CASE("ClientNetEventHandler: truncated MsgPeerDelay discarded", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    uint8_t tiny[1] = {static_cast<uint8_t>(fl::MsgId::PeerDelay)};
+    handler.onReceive(0u, tiny, sizeof(tiny));
+
+    CHECK(!handler.hasRtt());
+}
+
+TEST_CASE("ClientNetEventHandler: sendHeartbeatIfNeeded suppressed before first snapshot",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    fl::ManualClock clock;
+    handler.setClock(clock);
+    // Advance 2 seconds — but m_lastSnapshotTick is still 0
+    clock.advance(std::chrono::seconds(2));
+
+    handler.sendHeartbeatIfNeeded();
+
+    CHECK(net.sends.empty()); // no heartbeat until a snapshot arrives
+}
+
+TEST_CASE("ClientNetEventHandler: sendHeartbeatIfNeeded sends on first call after snapshot",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    fl::ManualClock clock;
+    handler.setClock(clock);
+
+    // Receive a snapshot (sets m_lastSnapshotTick = 42)
+    auto snap = makeSnapshotPacket(42u);
+    handler.onReceive(0u, snap.data(), snap.size());
+
+    // Advance past 1 second — first heartbeat should fire
+    clock.advance(std::chrono::seconds(2));
+    handler.sendHeartbeatIfNeeded();
+
+    REQUIRE(net.sends.size() == 1u);
+    REQUIRE(net.sends[0].size() == sizeof(fl::MsgHeartbeat));
+    fl::MsgHeartbeat hb;
+    std::memcpy(&hb, net.sends[0].data(), sizeof(hb));
+    CHECK(hb.msgId == static_cast<uint8_t>(fl::MsgId::Heartbeat));
+    CHECK(hb.tickIndex == 42u);
+    CHECK(!net.sendReliable);
+}
+
+TEST_CASE("ClientNetEventHandler: sendHeartbeatIfNeeded throttles to 1 Hz", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    fl::ManualClock clock;
+    handler.setClock(clock);
+
+    auto snap = makeSnapshotPacket(1u);
+    handler.onReceive(0u, snap.data(), snap.size());
+
+    // First call fires immediately (epoch delta >> 1s)
+    clock.advance(std::chrono::seconds(2));
+    handler.sendHeartbeatIfNeeded();
+    CHECK(net.sends.size() == 1u);
+
+    // Second call within <1s: throttled
+    clock.advance(std::chrono::milliseconds(500));
+    handler.sendHeartbeatIfNeeded();
+    CHECK(net.sends.size() == 1u);
+
+    // Third call after 1s total: fires
+    clock.advance(std::chrono::milliseconds(600));
+    handler.sendHeartbeatIfNeeded();
+    CHECK(net.sends.size() == 2u);
+}
+
+TEST_CASE("ClientNetEventHandler: sendHeartbeatIfNeeded uses last received snapshot tickIndex",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    fl::ManualClock clock;
+    handler.setClock(clock);
+
+    // Two snapshots: tick 5 then tick 42
+    auto snap5 = makeSnapshotPacket(5u);
+    handler.onReceive(0u, snap5.data(), snap5.size());
+    auto snap42 = makeSnapshotPacket(42u);
+    handler.onReceive(0u, snap42.data(), snap42.size());
+
+    clock.advance(std::chrono::seconds(2));
+    handler.sendHeartbeatIfNeeded();
+
+    REQUIRE(net.sends.size() == 1u);
+    fl::MsgHeartbeat hb;
+    std::memcpy(&hb, net.sends[0].data(), sizeof(hb));
+    CHECK(hb.tickIndex == 42u); // most recent snapshot tick
+}

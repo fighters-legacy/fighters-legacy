@@ -292,6 +292,7 @@ struct GameServices {
     // Per-frame state
     CameraInput camInput;
     PerformanceOverlay perfOverlay;
+    bool showPing{false}; // toggled by the show_ping console command
     FlightInputCollector flightInput;
     PrecipitationController precipController;
 
@@ -678,7 +679,7 @@ void Game::startGame() {
             d.session.localServer->registerConsoleCommands(
                 d.services.cmdRegistry, adminSender, d.services.renderBridge, &d.services.entityRegistry,
                 &d.session.clientHandler->assignedEntityIdx, &d.session.clientHandler->assignedEntityGen,
-                &d.services.gameConsole->showPosRef());
+                &d.services.gameConsole->showPosRef(), &d.services.showPing);
             d.services.screenMgr->setServerCmd(std::move(adminSender));
 
             d.session.discoveryListener.emplace(static_cast<uint16_t>(4778), *d.services.rawLogger);
@@ -693,6 +694,7 @@ void Game::startGame() {
             ctx.playerEntityIdx = &d.session.clientHandler->assignedEntityIdx;
             ctx.playerEntityGen = &d.session.clientHandler->assignedEntityGen;
             ctx.showPos = &d.services.gameConsole->showPosRef();
+            ctx.showPing = &d.services.showPing;
             if (!d.services.operatorPassword.empty()) {
                 auto adminSender = makeNetworkAdminSender(*d.session.clientNet, d.services.operatorPassword);
                 ctx.serverCommand = adminSender;
@@ -716,6 +718,7 @@ void Game::startGame() {
         fsd.terrainStreamer = d.services.terrainStreamer.get();
         fsd.env = &d.services.env;
         fsd.clientNet = d.session.clientNet.get();
+        fsd.clientNetHandler = d.session.clientHandler.get();
         fsd.joystick = d.services.p.joystick.get();
         fsd.userConfig = &*d.services.userConfig;
         fsd.inspector = d.session.inspector ? &*d.session.inspector : nullptr;
@@ -939,6 +942,10 @@ void Game::run() {
         d.services.p.renderer->submitOverlayElements(d.services.serverNotice.buildElements());
         d.services.p.renderer->setConsoleElements(d.services.gameConsole->elements());
 
+        {
+            auto* h = d.session.clientHandler.get();
+            d.services.perfOverlay.setPing(d.services.showPing, h && h->hasRtt(), h ? h->lastRttMs() : 0u);
+        }
         updatePerfOverlay(*d.services.gameConsole, *d.services.p.renderer, d.services.perfOverlay,
                           d.services.renderBridge, *d.services.userConfig, cur == Screen::Flight,
                           d.services.cameraController.mode(), cam, playerEntry, d.services.terrainStreamer.get());

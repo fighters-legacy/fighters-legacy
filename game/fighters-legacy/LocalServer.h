@@ -53,7 +53,7 @@ class LocalServer {
     // via MsgAdminCommand over ENet (constructed by makeNetworkAdminSender in main.cpp).
     void registerConsoleCommands(CommandRegistry& registry, std::function<void(std::string_view)> serverCommand,
                                  fl::SimRenderBridge& renderBridge, fl::EntityTypeRegistry* typeRegistry,
-                                 uint32_t* playerEntityIdx, uint32_t* playerEntityGen, bool* showPos);
+                                 uint32_t* playerEntityIdx, uint32_t* playerEntityGen, bool* showPos, bool* showPing);
 
     // Returns the per-session admin token generated at start(). Valid after start() returns true.
     std::string_view sessionToken() const;

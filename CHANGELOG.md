@@ -9,6 +9,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: Connection heartbeat / keepalive (issue #362): clients now send `MsgHeartbeat`
+  (0x0B, 16 bytes, 1 Hz) when flying; the server replies with `MsgPeerDelay` (0x0C, 4 bytes)
+  carrying `estimatedDelayTicks` so the client can display an approximate RTT.
+- **network**: `show_ping` console command toggles a "Ping: N ms" overlay line; displayed
+  regardless of F3 performance-overlay mode.
+- **network**: `[security] idle_timeout_s` fl-server config (default 0 = disabled): disconnect
+  peers that send no `MsgClientInput` or `MsgHeartbeat` for N seconds.
+
 - **ai**: `engine-ai` library: `LoiterController` (configurable-direction orbit),
   `WaypointController` (sequential 3D waypoints), `PursuitController` (pure-pursuit intercept),
   `EvadeController` (horizontal escape from a threat), `BreakTurnController` (two-phase

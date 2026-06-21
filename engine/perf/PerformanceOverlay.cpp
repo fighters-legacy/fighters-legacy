@@ -68,7 +68,21 @@ void PerformanceOverlay::setSceneInfo(const char* modeStr, const CameraView& cam
     m_lineCount = line;
 }
 
+void PerformanceOverlay::setPing(bool show, bool hasRtt, uint32_t pingMs) noexcept {
+    m_showPing = show;
+    if (show) {
+        m_pingLineStr = hasRtt ? ("Ping: " + std::to_string(pingMs) + " ms") : "Ping: -- ms";
+        m_pingLineView = m_pingLineStr;
+    }
+}
+
 std::span<const std::string_view> PerformanceOverlay::lines() const noexcept {
+    if (m_showPing && m_lineCount < kMaxLines) {
+        m_lineViews[m_lineCount] = m_pingLineView;
+        if (m_mode == OverlayMode::Off)
+            return {m_lineViews, 1u}; // ping-only when F3 is off
+        return {m_lineViews, static_cast<std::size_t>(m_lineCount + 1)};
+    }
     if (m_mode == OverlayMode::Off)
         return {};
     return {m_lineViews, static_cast<std::size_t>(m_lineCount)};

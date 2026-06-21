@@ -99,6 +99,10 @@ static const char* kDefaultToml =
     "admin_auth_max_failures = 5\n"
     "admin_auth_lockout_s = 300\n"
     "\n"
+    "# Disconnect peers that send no MsgClientInput or MsgHeartbeat for this many seconds.\n"
+    "# 0 = disabled (default). Recommended: 60-300 for public servers. Range: [0,86400].\n"
+    "idle_timeout_s = 0\n"
+    "\n"
     "[shutdown]\n"
     "shutdown_warning_interval_s = 300\n"
     "min_shutdown_delay_s = 0\n"
@@ -370,6 +374,14 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                          "security.admin_auth_lockout_s out of range [1,86400]; using default");
             } else {
                 cfg.adminAuthLockoutSeconds = static_cast<int>(*v);
+            }
+        }
+        if (auto v = tbl["security"]["idle_timeout_s"].value<int64_t>()) {
+            if (*v < 0 || *v > 86400) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.idle_timeout_s out of range [0,86400]; using 0 (disabled)");
+            } else {
+                cfg.idleTimeoutS = static_cast<int>(*v);
             }
         }
 

@@ -45,6 +45,7 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.preHandshakeRateLimitCount == 20);
     CHECK(cfg.preHandshakeWindowMs == 1000);
     CHECK(cfg.maxConnectionsPerIp == 0);
+    CHECK(cfg.idleTimeoutS == 0);
     CHECK(log.entries.empty());
 }
 
@@ -682,4 +683,32 @@ TEST_CASE("parseServerConfig: spawn.points entry missing z is skipped with warni
     CHECK(cfg.spawn.points[0].x == 200.0);
     CHECK(cfg.spawn.points[0].z == 300.0);
     CHECK(log.hasMessage(LogLevel::Warn, "missing x or z"));
+}
+
+TEST_CASE("parseServerConfig: reads security.idle_timeout_s", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[security]\nidle_timeout_s = 60\n", &log);
+    CHECK(cfg.idleTimeoutS == 60);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: idle_timeout_s 0 is accepted (disabled)", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[security]\nidle_timeout_s = 0\n", &log);
+    CHECK(cfg.idleTimeoutS == 0);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: idle_timeout_s negative warns and keeps 0", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[security]\nidle_timeout_s = -1\n", &log);
+    CHECK(cfg.idleTimeoutS == 0);
+    CHECK(log.hasMessage(LogLevel::Warn, "idle_timeout_s out of range"));
+}
+
+TEST_CASE("parseServerConfig: idle_timeout_s 86401 warns and keeps 0", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[security]\nidle_timeout_s = 86401\n", &log);
+    CHECK(cfg.idleTimeoutS == 0);
+    CHECK(log.hasMessage(LogLevel::Warn, "idle_timeout_s out of range"));
 }

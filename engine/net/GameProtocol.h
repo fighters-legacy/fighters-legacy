@@ -57,7 +57,10 @@ enum class MsgId : uint8_t {
     Motd = 0x08,               // server->client, reliable: MOTD sent once on connect after ConnectAck
     ConnectRefusal = 0x09,     // server->client, reliable: rejection reason sent before disconnectPeer()
     AdminResponseChunk = 0x0A, // server->client, reliable: streaming chunk for long admin command output
-    // 0x0B-0x0E reserved for future ENet message types; 0x0F reserved.
+    Heartbeat = 0x0B,          // client->server, unreliable: liveness signal when idle; carries tickIndex to
+                               // refresh estimatedDelayTicks without a full MsgClientInput
+    PeerDelay = 0x0C,          // server->client, unreliable: server's estimatedDelayTicks reply to MsgHeartbeat
+    // 0x0D-0x0E reserved for future ENet message types; 0x0F reserved.
     LanBeacon = 0x10, // raw UDP broadcast - NOT sent over ENet; 0x10+ reserved for non-ENet ids.
 };
 
@@ -298,6 +301,32 @@ struct MsgConnectRefusal {
 static_assert(sizeof(MsgConnectRefusal) == 64u, "MsgConnectRefusal wire size changed");
 static_assert(offsetof(MsgConnectRefusal, code) == 1u, "MsgConnectRefusal::code offset changed");
 static_assert(offsetof(MsgConnectRefusal, reason) == 2u, "MsgConnectRefusal::reason offset changed");
+
+// Unreliable, client->server. Liveness heartbeat for idle clients (e.g., future spectator mode)
+// that are not sending MsgClientInput. tickIndex carries the last received WorldSnapshot tick so the
+// server can update estimatedDelayTicks. Only send after receiving at least one WorldSnapshot
+// (tickIndex == 0 would produce a bogus server-side delay estimate).
+struct MsgHeartbeat {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::Heartbeat)};
+    uint8_t reserved[7]{}; // pad so tickIndex is 8-aligned
+    uint64_t tickIndex{0}; // last received WorldSnapshot tickIndex (same semantic as MsgClientInput)
+}; // 16 bytes, align 8
+static_assert(sizeof(MsgHeartbeat) == 16u, "MsgHeartbeat wire size changed");
+static_assert(alignof(MsgHeartbeat) == 8u, "MsgHeartbeat alignment changed");
+static_assert(offsetof(MsgHeartbeat, tickIndex) == 8u, "MsgHeartbeat::tickIndex offset changed");
+
+// Unreliable, server->client unicast. Reply to MsgHeartbeat; delivers the server's current
+// estimatedDelayTicks for this peer so the client can display "Ping: N ms".
+// Arrives ~1 Hz (matching the heartbeat rate). Convert to ms: delayTicks * 1000 / 60.
+// delayTicks == 0 means the server has not accepted any tickIndex yet; clients must ignore it.
+struct MsgPeerDelay {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::PeerDelay)};
+    uint8_t reserved{0};
+    uint16_t delayTicks{0}; // estimatedDelayTicks capped at 65535 (~18 min at 60 Hz)
+}; // 4 bytes, align 2
+static_assert(sizeof(MsgPeerDelay) == 4u, "MsgPeerDelay wire size changed");
+static_assert(alignof(MsgPeerDelay) == 2u, "MsgPeerDelay alignment changed");
+static_assert(offsetof(MsgPeerDelay, delayTicks) == 2u, "MsgPeerDelay::delayTicks offset changed");
 
 // Raw UDP presence broadcast sent by fl-server on 255.255.255.255:<port> (IPv4 broadcast) and
 // [ff02::1]:<port> (IPv6 link-local multicast) every discoveryIntervalMs milliseconds.

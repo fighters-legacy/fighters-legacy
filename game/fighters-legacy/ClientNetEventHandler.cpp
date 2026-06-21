@@ -119,6 +119,8 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             }
         }
 
+        m_lastSnapshotTick = hdr.tickIndex;
+
         char traceBuf[80];
         std::snprintf(traceBuf, sizeof(traceBuf), "WorldSnapshot: hdr.entityCount=%u, built=%zu", hdr.entityCount,
                       snap.entries.size());
@@ -221,6 +223,29 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             break; // ConnectionRefused
         }
         signalFailure(f);
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::PeerDelay)) {
+        fl::MsgPeerDelay pd;
+        if (!fl::readMsg(data, size, pd))
+            return;
+        if (pd.delayTicks > 0) {
+            m_lastRttMs = static_cast<uint32_t>(pd.delayTicks) * 1000u / 60u;
+            m_rttValid = true;
+        }
     }
     // Unknown msgIds: silently discard
+}
+
+void ClientNetEventHandler::sendHeartbeatIfNeeded() {
+    if (m_lastSnapshotTick == 0)
+        return; // guard: tickIndex=0 would yield a bogus server-side delay estimate
+
+    using namespace std::chrono;
+    const auto now = m_clock->now();
+    if (now - m_lastHeartbeatSentAt < seconds(1))
+        return;
+    m_lastHeartbeatSentAt = now;
+
+    fl::MsgHeartbeat hb;
+    hb.tickIndex = m_lastSnapshotTick;
+    net.send(0, &hb, sizeof(hb), /*reliable=*/false);
 }

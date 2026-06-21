@@ -75,6 +75,7 @@ pre_handshake_rate_limit_count = 20   # max CONNECT attempts per IP per window; 
 pre_handshake_window_ms        = 1000 # sliding window in milliseconds
 admin_auth_max_failures        = 5    # wrong operator passwords before per-IP lockout [1,100]
 admin_auth_lockout_s           = 300  # per-IP lockout duration in seconds [1,86400]
+idle_timeout_s                 = 0    # disconnect inactive peers after N seconds; 0 = disabled [0,86400]
 
 [rcon]
 enabled           = false
@@ -558,6 +559,19 @@ reset the counter by reconnecting. A successful authentication clears the counte
 Per-IP lockout duration in seconds after `admin_auth_max_failures` consecutive wrong passwords.
 During the lockout window, any new connection from the same IP is refused immediately (no
 `MsgHello` sent). The lockout expires automatically, can be inspected with `admin_auth_status`, or cleared immediately with `admin_unlock` (which also clears the RCON channel lockout for the same IP when RCON is enabled).
+
+### `idle_timeout_s`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `0` (disabled) | 0–86400 |
+
+Disconnect any peer that sends neither `MsgClientInput` nor `MsgHeartbeat` for this many seconds.
+`0` (default) disables the check. Recommended value for public servers: `60`–`300`.
+
+Idle clients include spectators, players in menus, and connections that have stalled without ENet
+detecting a timeout. This provides an application-level cleanup mechanism independent of ENet's own
+peer timeout. The game client sends `MsgHeartbeat` automatically at 1 Hz while in the flight screen.
 
 ---
 

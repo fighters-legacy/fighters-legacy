@@ -2,6 +2,7 @@
 #include "FlightScreen.h"
 
 #include "CameraInput.h"
+#include "ClientNetEventHandler.h"
 #include "FlightInputCollector.h"
 #include "HapticController.h"
 #include "IInput.h"
@@ -67,6 +68,8 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     const ControlsSettings cs = d.userConfig->controls();
     if (auto msg = d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, input, d.joystick, cs))
         d.clientNet->send(0, &*msg, sizeof(*msg), /*reliable=*/false);
+    if (d.clientNetHandler)
+        d.clientNetHandler->sendHeartbeatIfNeeded();
     m_weaponFired = d.flightInput->wasWeaponFired();
 
     const float terrainElev =

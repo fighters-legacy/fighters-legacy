@@ -162,13 +162,15 @@ EnvironmentState LocalServer::initialEnvironment() const {
 void LocalServer::registerConsoleCommands(CommandRegistry& registry,
                                           std::function<void(std::string_view)> serverCommand,
                                           fl::SimRenderBridge& renderBridge, fl::EntityTypeRegistry* typeRegistry,
-                                          uint32_t* playerEntityIdx, uint32_t* playerEntityGen, bool* showPos) {
+                                          uint32_t* playerEntityIdx, uint32_t* playerEntityGen, bool* showPos,
+                                          bool* showPing) {
     CommandContext ctx{};
     ctx.renderBridge = &renderBridge;
     ctx.typeRegistry = typeRegistry;
     ctx.playerEntityIdx = playerEntityIdx;
     ctx.playerEntityGen = playerEntityGen;
     ctx.showPos = showPos;
+    ctx.showPing = showPing;
     ctx.serverCommand = std::move(serverCommand);
     ::registerConsoleCommands(registry, ctx);
 }

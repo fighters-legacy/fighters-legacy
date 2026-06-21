@@ -41,6 +41,8 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `AdminResponseChunk` | `0x0A` | server→client | reliable | 512 bytes | Streaming chunk for long admin command output (> 123 chars). Additive ID — old clients silently discard. |
 | `Motd` | `0x08` | server→client | reliable | 4 + len(text) bytes | MOTD delivered once per connection after `MsgConnectAck`; variable-length. Additive ID — old clients silently discard. |
 | `ConnectRefusal` | `0x09` | server→client | reliable | 64 bytes | Rejection reason sent before `disconnectPeer()` on every `onConnect` rejection (ban, allowlist, rate-limit, per-IP limit, admin auth lockout). Additive ID — old clients silently discard and fall back to the generic "Connection refused by server." message. |
+| `Heartbeat` | `0x0B` | client→server | unreliable | 16 bytes | Liveness signal sent at ~1 Hz when flying; carries the client's last received `tickIndex` so the server can refresh `estimatedDelayTicks`. Only sent after at least one `MsgWorldSnapshot` has been received. Additive ID — old servers silently discard. |
+| `PeerDelay` | `0x0C` | server→client | unreliable | 4 bytes | Reply to `MsgHeartbeat`; delivers `estimatedDelayTicks` for this peer. Client converts to ms: `delayTicks × 1000 / 60`. `delayTicks == 0` means no valid estimate yet (client ignores). Additive ID — old clients silently discard. |
 | `LanBeacon` | `0x10` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast |
 
 ## Struct Definitions
@@ -329,6 +331,34 @@ CAS then fails to overwrite, surfacing the specific reason in the `LoadingScreen
 `MsgId::ConnectRefusal = 0x09` is an additive message ID — old clients that do not recognize
 it silently discard and fall back to the generic "Connection refused by server." message from
 the existing `onDisconnect` CAS path.
+
+### MsgHeartbeat — 16 bytes
+
+Unreliable, **client→server**, channel 1. Sent by the client at ~1 Hz while in the flight screen
+(only after the first `MsgWorldSnapshot` has been received). Carries the client's last received
+`tickIndex` so the server can refresh `estimatedDelayTicks` for idle peers. The server replies with
+`MsgPeerDelay`.
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x0B` |
+| 1 | 7 | `reserved[7]` | `uint8_t[7]` | padding to 8-align `tickIndex` |
+| 8 | 8 | `tickIndex` | `uint64_t` | last received `MsgWorldSnapshot::tickIndex`; same semantic as `MsgClientInput::tickIndex` |
+
+`MsgId::Heartbeat = 0x0B` is an additive message ID — old servers silently discard.
+
+### MsgPeerDelay — 4 bytes
+
+Unreliable, **server→client unicast**, channel 1. Reply to `MsgHeartbeat`; delivers the server's
+`estimatedDelayTicks` for this peer so the client can display "Ping: N ms".
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x0C` |
+| 1 | 1 | `reserved` | `uint8_t` | |
+| 2 | 2 | `delayTicks` | `uint16_t` | `estimatedDelayTicks` capped at 65535 (≈18 min at 60 Hz). `0` = estimate not yet valid; client ignores. Convert to ms: `delayTicks × 1000 / 60`. |
+
+`MsgId::PeerDelay = 0x0C` is an additive message ID — old clients silently discard.
 
 ### MsgLanBeacon — 74 bytes
 
