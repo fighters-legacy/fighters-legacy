@@ -10,7 +10,8 @@ EvadeController::EvadeController(const fl::EntityManager& entityManager, fl::Ent
                                  bool useAfterburner)
     : m_entityManager(entityManager), m_threatId(threatId), m_throttle(throttle), m_useAfterburner(useAfterburner) {}
 
-fl::ControlInput EvadeController::sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/) {
+fl::ControlInput EvadeController::sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
+                                         const fl::SpatialIndex* /*si*/) {
     fl::ControlInput ctrl{};
 
     const fl::EntityState* threat = m_entityManager.get(m_threatId);

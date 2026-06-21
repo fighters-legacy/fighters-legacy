@@ -15,7 +15,8 @@ class PursuitController : public fl::IEntityController {
     PursuitController(const fl::EntityManager& entityManager, fl::EntityId targetId, float throttle = 0.85f,
                       bool useAfterburner = false);
 
-    fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/) override;
+    fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
+                            const fl::SpatialIndex* /*si*/ = nullptr) override;
 
     void setTarget(fl::EntityId id) noexcept {
         m_targetId = id;

@@ -185,6 +185,12 @@ add_library(engine-weather STATIC
 target_include_directories(engine-weather PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-weather PUBLIC platform-hal)
 
+add_library(engine-spatial STATIC
+    spatial/SpatialIndex.cpp
+)
+target_include_directories(engine-spatial PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# No external deps — pure ISO C++20 stdlib.
+
 # Authoritative server-sim serializer and network broadcaster.
 add_library(engine-net STATIC
     net/NetworkUtils.cpp
@@ -195,6 +201,7 @@ add_library(engine-net STATIC
 target_include_directories(engine-net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-net
     PUBLIC  engine-entity
+            engine-spatial
             platform-hal
     PRIVATE engine-flight
             engine-weather

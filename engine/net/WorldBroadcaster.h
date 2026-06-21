@@ -7,6 +7,7 @@
 #include "entity/EntityId.h"
 #include "flight/IGravityField.h"
 #include "loop/ISimUpdate.h"
+#include "spatial/SpatialIndex.h"
 
 #include <array>
 #include <atomic>
@@ -220,6 +221,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
         return m_shuttingDown;
     }
 
+    // Sim-thread only. Returns the spatial index rebuilt at the start of the most recent
+    // onTick(). Consumers: interest management (#346), AoE warhead commands (#356); AI
+    // controllers receive it via the si parameter of IEntityController::sample().
+    [[nodiscard]] const SpatialIndex& spatialIndex() const noexcept {
+        return m_spatialIndex;
+    }
+
     // Seconds until the scheduled shutdown; 0 if none active (sim-thread-only read).
     uint32_t secondsUntilShutdown() const noexcept;
 
@@ -369,6 +377,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::string m_operatorPassword;                               // empty = admin channel disabled
     std::function<std::string(std::string_view)> m_adminDispatch; // null = admin channel disabled
     AuthTracker m_adminAuthTracker{5, 300}; // per-IP failed-auth lockout (defaults: 5 attempts, 5 min)
+
+    SpatialIndex m_spatialIndex; // rebuilt at the start of each onTick; default 10 km cell size
 
     // Shutdown countdown state (sim-thread only).
     bool m_shuttingDown{false};

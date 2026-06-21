@@ -40,7 +40,8 @@ class PeerController final : public fl::IEntityController {
   public:
     explicit PeerController(const fl::PeerInputState* input) : m_input(input) {}
 
-    fl::ControlInput sample(const fl::EntityState& /*state*/, uint64_t /*tick*/, double /*dt*/) override {
+    fl::ControlInput sample(const fl::EntityState& /*state*/, uint64_t /*tick*/, double /*dt*/,
+                            const fl::SpatialIndex* /*si*/ = nullptr) override {
         fl::ControlInput ctrl{};
         ctrl.throttle = m_input->throttle;
         ctrl.elevator = m_input->elevator;
@@ -297,12 +298,17 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         }
     }
 
+    // Rebuild spatial index from entity positions at tick start (previous-tick state).
+    // Dead entities were reaped in the previous tick's m_entityManager.onTick(); forEach skips them.
+    m_spatialIndex.clear();
+    m_entityManager.forEach([this](const EntityState& s) { m_spatialIndex.insert(s.id.index, s.transform.pos); });
+
     // Step every controlled entity from its control source (peer/AI/script), then copy state back.
     for (auto& [entityIdx, ce] : m_controlledEntities) {
         EntityState* state = m_entityManager.get(ce.id);
         if (!state || state->dead)
             continue;
-        const ControlInput ctrl = ce.controller->sample(*state, tickIndex, simDt);
+        const ControlInput ctrl = ce.controller->sample(*state, tickIndex, simDt, &m_spatialIndex);
         stepFlightSim(*ce.sim, *state, ctrl, simDt);
 
         // NaN/Inf detection — log immediately so the cause is visible before any crash.
