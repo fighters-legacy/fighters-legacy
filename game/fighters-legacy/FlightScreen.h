@@ -10,6 +10,7 @@
 #include <cstdint>
 
 class CameraInput;
+struct ClientNetEventHandler;
 class FlightInputCollector;
 class GameConsole;
 class HapticController;
@@ -42,6 +43,7 @@ struct FlightScreenDeps {
     fl::TerrainStreamer* terrainStreamer{nullptr};
     EnvironmentState* env{nullptr};
     INetwork* clientNet{nullptr};
+    ClientNetEventHandler* clientNetHandler{nullptr}; // for sendHeartbeatIfNeeded; may be null
     IJoystick* joystick{nullptr};
     UserConfig* userConfig{nullptr};
     SandboxInspector* inspector{nullptr}; // null = no inspector

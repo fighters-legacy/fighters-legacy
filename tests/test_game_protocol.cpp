@@ -369,3 +369,40 @@ TEST_CASE("WireCodec ext: old-receiver compatibility readMsg succeeds on extende
     CHECK(rh.tickIndex == 42u);
     CHECK(rh.entityCount == 1u);
 }
+
+TEST_CASE("GameProtocol: MsgHeartbeat and MsgPeerDelay sizes and alignment", "[game_protocol]") {
+    CHECK(sizeof(fl::MsgHeartbeat) == 16u);
+    CHECK(sizeof(fl::MsgPeerDelay) == 4u);
+    CHECK(alignof(fl::MsgHeartbeat) == 8u);
+    CHECK(alignof(fl::MsgPeerDelay) == 2u);
+}
+
+TEST_CASE("GameProtocol: MsgHeartbeat field offsets", "[game_protocol]") {
+    CHECK(offsetof(fl::MsgHeartbeat, tickIndex) == 8u);
+}
+
+TEST_CASE("GameProtocol: MsgPeerDelay field offsets", "[game_protocol]") {
+    CHECK(offsetof(fl::MsgPeerDelay, delayTicks) == 2u);
+}
+
+TEST_CASE("GameProtocol: MsgHeartbeat round-trip", "[game_protocol]") {
+    fl::MsgHeartbeat src;
+    src.tickIndex = 0xDEADBEEF12345678ULL;
+    std::vector<uint8_t> buf(sizeof(src));
+    std::memcpy(buf.data(), &src, sizeof(src));
+    fl::MsgHeartbeat dst;
+    CHECK(fl::readMsg(buf.data(), buf.size(), dst));
+    CHECK(dst.msgId == static_cast<uint8_t>(fl::MsgId::Heartbeat));
+    CHECK(dst.tickIndex == 0xDEADBEEF12345678ULL);
+}
+
+TEST_CASE("GameProtocol: MsgPeerDelay round-trip", "[game_protocol]") {
+    fl::MsgPeerDelay src;
+    src.delayTicks = 42u;
+    std::vector<uint8_t> buf(sizeof(src));
+    std::memcpy(buf.data(), &src, sizeof(src));
+    fl::MsgPeerDelay dst;
+    CHECK(fl::readMsg(buf.data(), buf.size(), dst));
+    CHECK(dst.msgId == static_cast<uint8_t>(fl::MsgId::PeerDelay));
+    CHECK(dst.delayTicks == 42u);
+}

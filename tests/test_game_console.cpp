@@ -612,6 +612,25 @@ TEST_CASE("ConsoleCommands toggle_pos toggles flag", "[console][commands]") {
     REQUIRE(flag == false);
 }
 
+TEST_CASE("ConsoleCommands show_ping with null showPing returns error", "[console][commands]") {
+    CommandRegistry cmds;
+    CommandContext ctx{}; // showPing = nullptr
+    registerConsoleCommands(cmds, ctx);
+    REQUIRE(cmds.dispatch("show_ping").find("not available") != std::string::npos);
+}
+
+TEST_CASE("ConsoleCommands show_ping toggles flag", "[console][commands]") {
+    bool flag = false;
+    CommandRegistry cmds;
+    CommandContext ctx{};
+    ctx.showPing = &flag;
+    registerConsoleCommands(cmds, ctx);
+    REQUIRE(cmds.dispatch("show_ping").find("on") != std::string::npos);
+    REQUIRE(flag == true);
+    REQUIRE(cmds.dispatch("show_ping").find("off") != std::string::npos);
+    REQUIRE(flag == false);
+}
+
 TEST_CASE("ConsoleCommands stub commands return messages", "[console][commands]") {
     CommandRegistry cmds;
     CommandContext ctx{};

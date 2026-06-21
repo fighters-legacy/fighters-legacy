@@ -37,7 +37,9 @@ namespace fl {
 
 // Parsed, validated client input stored per connected peer.
 struct PeerInputState {
-    // 4-byte fields first to avoid mid-struct padding.
+    // 8-byte field first to avoid padding.
+    uint64_t lastActivityTick{0}; // tick of last MsgClientInput or MsgHeartbeat; set in onConnect
+    // 4-byte fields next.
     float throttle{0.f};
     float elevator{0.f};
     float aileron{0.f};
@@ -74,6 +76,7 @@ struct WorldBroadcasterConfig {
     std::string motd;                 // empty = no MOTD
     uint16_t motdDisplaySeconds{0};   // 0 = client default
     std::string operatorPassword;     // empty = network admin channel disabled
+    int idleTimeoutS{0};              // 0 = disabled; seconds of peer inactivity before disconnect
 };
 
 // Wraps EntityManager to provide a server-side ISimUpdate that:
@@ -261,6 +264,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Call before gameLoop.start(). The admin dispatcher (setAdminDispatch) is wired separately.
     void applyConfig(const WorldBroadcasterConfig& cfg);
 
+    // Disconnect peers that send no MsgClientInput and no MsgHeartbeat for this many seconds.
+    // 0 = disabled (default). Converted to ticks at 60 Hz. Call before gameLoop.start() or
+    // via enqueueSimCallback.
+    void setIdleTimeout(int timeoutSeconds) noexcept;
+
     // Set the gravity field applied to all FlightIntegrators spawned on this broadcaster (current
     // and future). Also records the planet radius sent to clients in MsgConnectAck so their terrain
     // rendering matches server physics. Defaults to CentralGravityField::earthInstance() /
@@ -306,6 +314,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     std::atomic<int> m_activePeerCount{0};
     uint64_t m_weatherBroadcastTick{0};        // throttle weather broadcasts to ~6 Hz
+    uint64_t m_idleTimeoutTicks{0};            // 0 = disabled; pre-computed from idleTimeoutS × 60
     uint32_t m_turbRng{0xCAFEBABEu};           // per-broadcaster RNG for turbulence perturbation
     std::atomic<float> m_groundElevation{0.f}; // floor elevation passed to each FlightIntegrator::step
     std::atomic<double> m_entityX{0.0};        // last stepped entity world-X (sim writes; main reads)

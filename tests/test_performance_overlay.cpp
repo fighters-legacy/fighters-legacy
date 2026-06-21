@@ -202,3 +202,68 @@ TEST_CASE("PerformanceOverlay: setMode persists across update calls", "[perf_ove
     ov.update(stats, 0, 16.7f);
     CHECK(ov.mode() == OverlayMode::Full);
 }
+
+TEST_CASE("PerformanceOverlay: setPing false yields no ping line", "[perf_overlay]") {
+    PerformanceOverlay ov;
+    ov.setMode(OverlayMode::Off);
+    ov.setPing(false, true, 42u);
+    ov.update(FrameStats{}, 0, 16.7f);
+    CHECK(ov.lines().empty());
+
+    ov.setMode(OverlayMode::Compact);
+    ov.update(FrameStats{}, 0, 16.7f);
+    for (auto sv : ov.lines())
+        CHECK(std::string(sv).find("Ping") == std::string::npos);
+}
+
+TEST_CASE("PerformanceOverlay: setPing true shows line in Off mode", "[perf_overlay]") {
+    PerformanceOverlay ov;
+    ov.setMode(OverlayMode::Off);
+    ov.setPing(true, true, 42u);
+    ov.update(FrameStats{}, 0, 16.7f);
+
+    auto lines = ov.lines();
+    REQUIRE(lines.size() == 1u);
+    CHECK(std::string(lines[0]) == "Ping: 42 ms");
+}
+
+TEST_CASE("PerformanceOverlay: setPing no rtt shows placeholder", "[perf_overlay]") {
+    PerformanceOverlay ov;
+    ov.setMode(OverlayMode::Off);
+    ov.setPing(true, false, 0u);
+    ov.update(FrameStats{}, 0, 16.7f);
+
+    auto lines = ov.lines();
+    REQUIRE(lines.size() == 1u);
+    CHECK(std::string(lines[0]) == "Ping: -- ms");
+}
+
+TEST_CASE("PerformanceOverlay: setPing appended after Compact perf lines", "[perf_overlay]") {
+    PerformanceOverlay ov;
+    ov.setMode(OverlayMode::Compact);
+    ov.setPing(true, true, 10u);
+    ov.update(FrameStats{}, 0, 16.7f);
+
+    auto lines = ov.lines();
+    REQUIRE(!lines.empty());
+    CHECK(std::string(lines.back()) == "Ping: 10 ms");
+}
+
+TEST_CASE("PerformanceOverlay: lines() is idempotent when ping is active", "[perf_overlay]") {
+    PerformanceOverlay ov;
+    ov.setMode(OverlayMode::Off);
+    ov.setPing(true, true, 99u);
+    ov.update(FrameStats{}, 0, 16.7f);
+
+    auto l1 = ov.lines();
+    auto l2 = ov.lines();
+    REQUIRE(l1.size() == l2.size());
+    for (std::size_t i = 0; i < l1.size(); ++i)
+        CHECK(l1[i] == l2[i]);
+}
+
+TEST_CASE("PerformanceOverlay: Off mode with no ping returns empty", "[perf_overlay]") {
+    PerformanceOverlay ov;
+    ov.update(FrameStats{}, 0, 16.7f);
+    CHECK(ov.lines().empty());
+}

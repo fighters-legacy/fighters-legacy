@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "IClock.h"
 #include "INetwork.h"
 #include "RenderTypes.h"
 #include "SessionStatus.h"
@@ -84,6 +85,23 @@ struct ClientNetEventHandler : INetworkEventHandler {
         return m_nextReqId++;
     }
 
+    // Inject a deterministic clock for testing (default: SystemClock).
+    void setClock(const fl::IClock& clock) noexcept {
+        m_clock = &clock;
+    }
+
+    // Send a MsgHeartbeat if at least 1 second has elapsed and at least one WorldSnapshot has
+    // been received (guards against sending tickIndex=0 which yields a bogus server delay estimate).
+    // Call once per frame from FlightScreen::update().
+    void sendHeartbeatIfNeeded();
+
+    uint32_t lastRttMs() const noexcept {
+        return m_lastRttMs;
+    }
+    bool hasRtt() const noexcept {
+        return m_rttValid;
+    }
+
   private:
     // Store f into *sessionFailure if it is still None (first-writer-wins via CAS); no-op if unset.
     void signalFailure(SessionFailure f);
@@ -97,4 +115,11 @@ struct ClientNetEventHandler : INetworkEventHandler {
     std::string m_chunkBuf;
     bool m_chunkBufActive{false};
     static constexpr std::size_t kMaxChunkAssemblyBytes = 64u * 1024u; // 64 KB hard cap
+
+    // Heartbeat / RTT state.
+    const fl::IClock* m_clock{&fl::SystemClock::instance()};
+    uint64_t m_lastSnapshotTick{0}; // last received WorldSnapshot tickIndex
+    uint32_t m_lastRttMs{0};        // ms from last MsgPeerDelay; 0 = not yet received
+    bool m_rttValid{false};         // true once first MsgPeerDelay with delayTicks > 0 arrives
+    std::chrono::steady_clock::time_point m_lastHeartbeatSentAt{}; // throttle to 1 Hz
 };

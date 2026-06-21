@@ -215,6 +215,7 @@ The console is a half-screen drop-down overlay. It is fully independent of the c
 | `kill <idx>` | Remove entity from simulation (queued to sim thread) |
 | `tp <x> <y> <z>` | Teleport player entity to world position |
 | `toggle_pos` | Toggle entity world-position readout below the camera position display |
+| `show_ping` | Toggle "Ping: N ms" RTT overlay (visible even when F3 performance overlay is off) |
 | `set_weather <preset>` | Set weather instantly: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm`. Queued to sim thread; takes effect on next tick. |
 | `set_difficulty <level>` | *(stub — Phase 2b)* |
 | `reload_content` | *(stub — see issue #152)* |

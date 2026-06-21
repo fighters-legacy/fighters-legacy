@@ -221,6 +221,17 @@ void registerConsoleCommands(CommandRegistry& registry, CommandContext ctx) {
                              });
 
     // ------------------------------------------------------------------
+    // show_ping
+    // ------------------------------------------------------------------
+    registry.registerCommand("show_ping", "toggle ping (RTT) overlay",
+                             [ctx](std::span<std::string_view>) -> std::string {
+                                 if (!ctx.showPing)
+                                     return "show_ping: not available";
+                                 *ctx.showPing = !*ctx.showPing;
+                                 return *ctx.showPing ? "ping overlay on" : "ping overlay off";
+                             });
+
+    // ------------------------------------------------------------------
     // set_weather <preset>
     // ------------------------------------------------------------------
     registry.registerCommand(

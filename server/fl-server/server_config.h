@@ -64,6 +64,7 @@ struct ServerConfig {
     int maxConnectionsPerIp = 0;         // max simultaneous connections per IP; 0 = unlimited
     int adminAuthMaxFailures = 5;        // consecutive wrong-password attempts before per-IP lockout [1,100]
     int adminAuthLockoutSeconds = 300;   // per-IP lockout duration in seconds [1,86400]
+    int idleTimeoutS = 0;                // disconnect peers with no activity for N seconds; 0 = disabled [0,86400]
 
     // [rcon]
     struct RconConfig {

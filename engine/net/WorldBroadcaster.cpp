@@ -246,6 +246,11 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setMotd(cfg.motd);
     setMotdDisplaySeconds(cfg.motdDisplaySeconds);
     setOperatorPassword(cfg.operatorPassword);
+    setIdleTimeout(cfg.idleTimeoutS);
+}
+
+void WorldBroadcaster::setIdleTimeout(int timeoutSeconds) noexcept {
+    m_idleTimeoutTicks = timeoutSeconds > 0 ? static_cast<uint64_t>(timeoutSeconds) * 60u : 0u;
 }
 
 void WorldBroadcaster::forEachPeer(
@@ -275,6 +280,21 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 ++it;
         }
         m_adminAuthTracker.pruneExpired();
+    }
+
+    // Idle timeout: disconnect peers that have sent no activity for m_idleTimeoutTicks ticks.
+    if (m_idleTimeoutTicks > 0) {
+        std::vector<uint32_t> toKick;
+        for (const auto& [peerId, ps] : m_peerInputs) {
+            if (tickIndex > ps.lastActivityTick && tickIndex - ps.lastActivityTick >= m_idleTimeoutTicks)
+                toKick.push_back(peerId);
+        }
+        for (uint32_t pid : toKick) {
+            char msg[80];
+            std::snprintf(msg, sizeof(msg), "peer %u idle timeout — disconnecting", pid);
+            m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
+            m_net.disconnectPeer(pid);
+        }
     }
 
     // Step every controlled entity from its control source (peer/AI/script), then copy state back.
@@ -499,6 +519,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     if (id.valid()) {
         m_peerEntities[peerId] = id;
         m_peerInputs[peerId] = {};
+        m_peerInputs[peerId].lastActivityTick = m_currentTick;
 
         // Resolve the entity type's flight model (server-authoritative; never sent on the wire).
         // Empty id, no resolver, or an unknown id falls back to the builtin UFO model.
@@ -592,6 +613,7 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
 
         stored.lastSeqNum = msg.seqNum;
         stored.hasSeq = true;
+        stored.lastActivityTick = m_currentTick;
 
         stored.throttle = std::clamp(msg.throttle, 0.f, 1.f);
         stored.elevator = std::clamp(msg.elevator, -1.f, 1.f);
@@ -669,6 +691,19 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         }
 
         sendAdminResponse(m_net, peerId, reqId, result);
+    } else if (msgId == static_cast<uint8_t>(MsgId::Heartbeat)) {
+        MsgHeartbeat hb;
+        if (!readMsg(data, size, hb))
+            return;
+        auto& ps = m_peerInputs[peerId];
+        ps.lastActivityTick = m_currentTick;
+        if (hb.tickIndex <= m_currentTick)
+            ps.estimatedDelayTicks = static_cast<uint32_t>(m_currentTick - hb.tickIndex);
+
+        // Reply with the current delay estimate so the client can display "Ping: N ms".
+        MsgPeerDelay pd;
+        pd.delayTicks = static_cast<uint16_t>(std::min(ps.estimatedDelayTicks, 65535u));
+        m_net.send(peerId, &pd, sizeof(pd), /*reliable=*/false);
     }
     // Unknown msgIds: silently discard (no log spam; future protocol versions may add new IDs)
 }

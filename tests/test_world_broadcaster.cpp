@@ -3350,3 +3350,228 @@ TEST_CASE("WorldBroadcaster: spawn position preserves sub-mm precision at large 
     // offset must be preserved.  Lateral gravity (~4e-7 m/tick) is negligible.
     CHECK(e.pos[0] > 1e5 + 5e-4);
 }
+
+// ---------------------------------------------------------------------------
+// Heartbeat / MsgPeerDelay tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: MsgHeartbeat triggers MsgPeerDelay reply", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 70u); // m_currentTick = 70
+
+    const std::size_t sendsBefore = net.sends.size();
+
+    fl::MsgHeartbeat hb;
+    hb.tickIndex = 10u; // delay = 70 - 10 = 60 ticks
+    broadcaster.onReceive(0u, &hb, sizeof(hb));
+
+    REQUIRE(net.sends.size() == sendsBefore + 1u);
+    const auto& reply = net.sends.back();
+    REQUIRE(reply.size() == sizeof(fl::MsgPeerDelay));
+    fl::MsgPeerDelay pd;
+    std::memcpy(&pd, reply.data(), sizeof(pd));
+    CHECK(pd.msgId == static_cast<uint8_t>(fl::MsgId::PeerDelay));
+    CHECK(pd.delayTicks == 60u);
+    CHECK(!net.sendReliable); // must be unreliable
+}
+
+TEST_CASE("WorldBroadcaster: MsgHeartbeat with future tickIndex does not update delay", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 50u); // m_currentTick = 50
+
+    fl::MsgHeartbeat hb;
+    hb.tickIndex = 60u; // future tick: 60 > 50 — server must ignore
+    broadcaster.onReceive(0u, &hb, sizeof(hb));
+
+    // A MsgPeerDelay is still sent but delayTicks should be 0 (estimate not updated)
+    REQUIRE(!net.sends.empty());
+    fl::MsgPeerDelay pd;
+    std::memcpy(&pd, net.sends.back().data(), sizeof(pd));
+    CHECK(pd.delayTicks == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: MsgHeartbeat caps delayTicks at uint16 max", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    broadcaster.onConnect(0u);
+    // Drive to a high tick so estimatedDelayTicks will exceed 65535
+    broadcaster.onTick(1.0 / 60.0, 70000u);
+
+    fl::MsgHeartbeat hb;
+    hb.tickIndex = 0u; // delay = 70000 - 0 = 70000 > 65535
+    broadcaster.onReceive(0u, &hb, sizeof(hb));
+
+    REQUIRE(!net.sends.empty());
+    fl::MsgPeerDelay pd;
+    std::memcpy(&pd, net.sends.back().data(), sizeof(pd));
+    CHECK(pd.delayTicks == 65535u);
+}
+
+TEST_CASE("WorldBroadcaster: truncated MsgHeartbeat is discarded", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    broadcaster.onConnect(0u);
+    const std::size_t sendsBefore = net.sends.size();
+
+    uint8_t tiny[4] = {static_cast<uint8_t>(fl::MsgId::Heartbeat), 0, 0, 0};
+    broadcaster.onReceive(0u, tiny, sizeof(tiny));
+
+    CHECK(net.sends.size() == sendsBefore); // no reply sent
+}
+
+TEST_CASE("WorldBroadcaster: two peers each receive their own MsgPeerDelay", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    broadcaster.onConnect(0u);
+    broadcaster.onConnect(1u);
+    broadcaster.onTick(1.0 / 60.0, 100u); // m_currentTick = 100
+
+    // Peer 0: tickIndex=40 → delay = 60; peer 1: tickIndex=70 → delay = 30
+    const std::size_t sendsBefore = net.sends.size();
+
+    fl::MsgHeartbeat hb0;
+    hb0.tickIndex = 40u;
+    broadcaster.onReceive(0u, &hb0, sizeof(hb0));
+
+    fl::MsgHeartbeat hb1;
+    hb1.tickIndex = 70u;
+    broadcaster.onReceive(1u, &hb1, sizeof(hb1));
+
+    REQUIRE(net.sends.size() == sendsBefore + 2u);
+
+    fl::MsgPeerDelay pd0, pd1;
+    std::memcpy(&pd0, net.sends[sendsBefore].data(), sizeof(pd0));
+    std::memcpy(&pd1, net.sends[sendsBefore + 1].data(), sizeof(pd1));
+    CHECK(pd0.delayTicks == 60u);
+    CHECK(pd1.delayTicks == 30u);
+}
+
+// ---------------------------------------------------------------------------
+// Idle timeout tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: idle timeout 0 never kicks", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setIdleTimeout(0); // disabled
+
+    broadcaster.onConnect(0u);
+    for (uint64_t t = 1; t <= 600; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: idle timeout disconnects peer after inactivity", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setIdleTimeout(1); // 1 second = 60 ticks
+
+    broadcaster.onConnect(0u); // lastActivityTick = m_currentTick = 0
+
+    // Run 59 ticks (delay 59 < 60): no kick
+    for (uint64_t t = 1; t <= 59; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+    CHECK(net.disconnectedPeers.empty());
+
+    // Tick 60: delay = 60 >= 60 → kick
+    broadcaster.onTick(1.0 / 60.0, 60u);
+    CHECK(!net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: MsgHeartbeat resets idle timer", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setIdleTimeout(1); // 60 ticks
+
+    broadcaster.onConnect(0u); // lastActivityTick = 0
+
+    // Tick 55: still within window (55 < 60)
+    for (uint64_t t = 1; t <= 55; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+    REQUIRE(net.disconnectedPeers.empty());
+
+    // Send a heartbeat at tick 55: resets lastActivityTick to 55
+    fl::MsgHeartbeat hb;
+    hb.tickIndex = 30u; // doesn't matter for the idle reset test
+    broadcaster.onReceive(0u, &hb, sizeof(hb));
+
+    // Ticks 56..114: delay from 55 is at most 114-55=59 < 60 → no kick
+    for (uint64_t t = 56; t <= 114; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+    CHECK(net.disconnectedPeers.empty());
+
+    // Tick 115: 115-55=60 >= 60 → kick
+    broadcaster.onTick(1.0 / 60.0, 115u);
+    CHECK(!net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: MsgClientInput resets idle timer", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setIdleTimeout(1); // 60 ticks
+
+    broadcaster.onConnect(0u);
+
+    // Tick 55: no kick yet
+    for (uint64_t t = 1; t <= 55; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+    REQUIRE(net.disconnectedPeers.empty());
+
+    // Send a MsgClientInput at tick 55: resets lastActivityTick to 55
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.seqNum = 1u;
+    inp.tickIndex = 40u;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    // Ticks 56..114: no kick (max delay = 114-55 = 59 < 60)
+    for (uint64_t t = 56; t <= 114; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+    CHECK(net.disconnectedPeers.empty());
+}
