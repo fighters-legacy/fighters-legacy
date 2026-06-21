@@ -10,7 +10,7 @@
 #include <cstdint>
 
 class CameraInput;
-class ClientNetEventHandler;
+struct ClientNetEventHandler;
 class FlightInputCollector;
 class GameConsole;
 class HapticController;
