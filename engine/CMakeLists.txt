@@ -176,6 +176,8 @@ target_link_libraries(engine-flight
     PRIVATE tomlplusplus::tomlplusplus
 )
 
+add_subdirectory(ai)
+
 # Server-authoritative weather state machine, time-of-day, and wind/gust model.
 add_library(engine-weather STATIC
     weather/WeatherController.cpp
