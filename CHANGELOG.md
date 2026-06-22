@@ -9,6 +9,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **docs**: completed the `jomkz` → `fighters-legacy` GitHub org migration for in-repo
+  references — rewrote repository URLs (README badges, roadmap milestones, `SUPPORT.md`,
+  issue-template config, the release scripts, and the compiled issue-report URLs in
+  `game/fighters-legacy/Game.cpp`) to `fighters-legacy/fighters-legacy`; moved the user-data
+  vendor namespace from `jomkz` to `mkzsystems` (`SDL_GetPrefPath` plus the
+  `docs/development.md` path table); removed the repo-local `SECURITY.md`,
+  `CODE_OF_CONDUCT.md`, and `TRADEMARK.md` in favour of the org-wide `fighters-legacy/.github`
+  defaults, repointing inbound links to their canonical `.github` URLs; and pointed
+  `CODEOWNERS` at the `@fighters-legacy/maintainers` team. Content-pack repositories
+  (`fa-content`, `fl-base-pack`) keep their `jomkz` URLs until those repos are transferred.
+
 - **docs**: clarified the distribution & monetization strategy in `docs/distribution.md`
   — adopts a softened, Ardour-style "sell convenience, not the game" model (GPL §6 makes
   binaries non-gateable; first-party builds are paid and framed as supporting

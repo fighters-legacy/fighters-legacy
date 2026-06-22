@@ -564,9 +564,9 @@ cmake --build --preset debug --target fighters-legacy
 
 | Platform | Path |
 |----------|------|
-| Linux    | `~/.local/share/jomkz/fighters-legacy/` |
-| macOS    | `~/Library/Application Support/jomkz/fighters-legacy/` |
-| Windows  | `%APPDATA%\jomkz\fighters-legacy\` |
+| Linux    | `~/.local/share/mkzsystems/fighters-legacy/` |
+| macOS    | `~/Library/Application Support/mkzsystems/fighters-legacy/` |
+| Windows  | `%APPDATA%\mkzsystems\fighters-legacy\` |
 
 Session logs are written to `<userdata>/logs/engine_<date>.log` (10 retained).
 Crash dumps are written to `<userdata>/logs/crash_<timestamp>.log` (5 retained).

@@ -367,7 +367,7 @@ bool Game::initPlatform(int argc, char** argv) {
     auto& d = *m_impl;
 
     SDL_Init(0);
-    char* prefRaw = SDL_GetPrefPath("jomkz", "fighters-legacy");
+    char* prefRaw = SDL_GetPrefPath("mkzsystems", "fighters-legacy");
     d.services.userDataDir = prefRaw ? fs::path(prefRaw) : fs::path(".");
     if (prefRaw)
         SDL_free(prefRaw);
@@ -439,13 +439,13 @@ bool Game::initWindowAndRenderer() {
     d.services.p.window = std::make_unique<SDL3Window>();
 
     CrashReporter::checkPreviousCrash(d.services.userDataDir.string(), d.services.p.window.get(), d.services.rawLogger,
-                                      "https://github.com/jomkz/fighters-legacy/issues/new");
+                                      "https://github.com/fighters-legacy/fighters-legacy/issues/new");
 
     d.services.crashInfo.engineVersion = FL_VERSION_STRING;
     d.services.crashInfo.populateOS();
     d.services.crashReporter.init({d.services.userDataDir.string(),
-                                   "https://github.com/jomkz/fighters-legacy/issues/new", d.services.rawLogger,
-                                   d.services.p.window.get()},
+                                   "https://github.com/fighters-legacy/fighters-legacy/issues/new",
+                                   d.services.rawLogger, d.services.p.window.get()},
                                   d.services.crashInfo);
     d.services.crashReporterReady = true;
 

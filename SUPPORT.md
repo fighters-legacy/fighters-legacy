@@ -2,7 +2,7 @@
 
 ## GitHub Discussions (preferred)
 
-For questions, ideas, and general conversation use **[GitHub Discussions](https://github.com/jomkz/fighters-legacy/discussions)**.
+For questions, ideas, and general conversation use **[GitHub Discussions](https://github.com/fighters-legacy/fighters-legacy/discussions)**.
 
 | Category | Use for |
 |---|---|

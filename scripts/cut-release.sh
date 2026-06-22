@@ -41,5 +41,5 @@ git push -u origin "$RELEASE_BRANCH"
 
 echo ""
 echo "Branch '$RELEASE_BRANCH' pushed."
-echo "Open a PR: https://github.com/jomkz/fighters-legacy/compare/$RELEASE_BRANCH"
+echo "Open a PR: https://github.com/fighters-legacy/fighters-legacy/compare/$RELEASE_BRANCH"
 echo "After merging, run: ./scripts/tag-release.sh $VERSION"

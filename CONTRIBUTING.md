@@ -1,7 +1,7 @@
 # Contributing
 
 Welcome! fighters-legacy is a large community project and contributions are warmly encouraged.
-Please read the [Code of Conduct](CODE_OF_CONDUCT.md) and [Governance](GOVERNANCE.md) before contributing.
+Please read the [Code of Conduct](https://github.com/fighters-legacy/.github/blob/main/CODE_OF_CONDUCT.md) and [Governance](GOVERNANCE.md) before contributing.
 
 ## Commit Messages
 
