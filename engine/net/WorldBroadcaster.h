@@ -68,16 +68,18 @@ struct ControlledEntity {
 // instead of remembering six separate "call before gameLoop.start()" setters. The hot-reload setters
 // (setMotd, setBannedAddresses, setAllowedAddresses, ...) remain available for runtime changes.
 struct WorldBroadcasterConfig {
-    int connectRateLimit{5};          // max connects per window per IP
-    int connectRateWindowS{10};       // sliding-window length (seconds)
-    int floodMultiplier{3};           // MsgClientInput flood threshold multiplier
-    int maxConnectionsPerIp{0};       // simultaneous connections per IP; 0 = unlimited
-    int adminAuthMaxFailures{5};      // wrong operator passwords before per-IP lockout
-    int adminAuthLockoutSeconds{300}; // lockout duration (seconds)
-    std::string motd;                 // empty = no MOTD
-    uint16_t motdDisplaySeconds{0};   // 0 = client default
-    std::string operatorPassword;     // empty = network admin channel disabled
-    int idleTimeoutS{0};              // 0 = disabled; seconds of peer inactivity before disconnect
+    int connectRateLimit{5};             // max connects per window per IP
+    int connectRateWindowS{10};          // sliding-window length (seconds)
+    int floodMultiplier{3};              // MsgClientInput flood threshold multiplier
+    int maxConnectionsPerIp{0};          // simultaneous connections per IP; 0 = unlimited
+    int adminAuthMaxFailures{5};         // wrong operator passwords before per-IP lockout
+    int adminAuthLockoutSeconds{300};    // lockout duration (seconds)
+    std::string motd;                    // empty = no MOTD
+    uint16_t motdDisplaySeconds{0};      // 0 = client default
+    std::string operatorPassword;        // empty = network admin channel disabled
+    int idleTimeoutS{0};                 // 0 = disabled; seconds of peer inactivity before disconnect
+    float drawDistanceKm{200.f};         // per-peer interest radius; 0 = degenerate (empty snapshots)
+    uint32_t baselineIntervalTicks{120}; // force full MsgEntityEntry records every N ticks for loss recovery
 };
 
 // Wraps EntityManager to provide a server-side ISimUpdate that:
@@ -277,6 +279,18 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // via enqueueSimCallback.
     void setIdleTimeout(int timeoutSeconds) noexcept;
 
+    // Set the per-peer draw distance for snapshot interest management. Only entities within this
+    // radius of a peer's own entity position are included in that peer's MsgWorldSnapshot.
+    // 0 km = degenerate (queryRadius finds nothing; peers see empty snapshots). Default = 200 km.
+    // Call before gameLoop.start() or via enqueueSimCallback for hot-reload (reload_config).
+    void setDrawDistance(float km) noexcept;
+
+    // Set the interval between full-snapshot baseline ticks (in sim ticks). On baseline ticks the
+    // per-peer known-gen set is cleared, forcing full MsgEntityEntry records for all visible
+    // entities — provides UDP packet-loss recovery. Default = 120 (2 s at 60 Hz). Range [1, +∞).
+    // Call before gameLoop.start() or via enqueueSimCallback.
+    void setBaselineInterval(uint32_t ticks) noexcept;
+
     // Set the gravity field applied to all FlightIntegrators spawned on this broadcaster (current
     // and future). Also records the planet radius sent to clients in MsgConnectAck so their terrain
     // rendering matches server physics. Defaults to CentralGravityField::earthInstance() /
@@ -379,6 +393,15 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     AuthTracker m_adminAuthTracker{5, 300}; // per-IP failed-auth lockout (defaults: 5 attempts, 5 min)
 
     SpatialIndex m_spatialIndex; // rebuilt at the start of each onTick; default 10 km cell size
+
+    // Interest management + delta compression state (sim-thread only).
+    double m_drawDistanceM{200'000.0};      // precomputed from drawDistanceKm × 1000; 200 km default
+    uint64_t m_baselineIntervalTicks{120u}; // ticks between full-snapshot baselines for loss recovery
+
+    // Per-peer entity known-gen set: peerId → (entityIdx → last-sent generation, truncated uint16).
+    // Cleared at each baseline tick (forces full re-sync for all visible entities).
+    // Erased in full on peer disconnect.
+    std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint16_t>> m_peerKnownGens;
 
     // Shutdown countdown state (sim-thread only).
     bool m_shuttingDown{false};

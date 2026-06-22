@@ -12,6 +12,7 @@ TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game
     CHECK(sizeof(fl::MsgEntityTypeDef) == 196u); // 4 + 64 + 64 + 64
     CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 16u);
     CHECK(sizeof(fl::MsgEntityEntry) == 72u);
+    CHECK(sizeof(fl::MsgEntityUpdate) == 52u); // compact delta record: no typeIndex, float positions
     CHECK(sizeof(fl::MsgClientInput) == 48u);
     CHECK(sizeof(fl::MsgAdminCommand) == 128u);
     CHECK(sizeof(fl::MsgAdminResponse) == 128u);
@@ -26,6 +27,9 @@ TEST_CASE("GameProtocol: wire structs are naturally aligned for zero-copy", "[ga
     CHECK(alignof(fl::MsgEntityEntry) == 8u);
     CHECK(sizeof(fl::MsgEntityEntry) % 8u == 0u);
     CHECK(alignof(fl::MsgClientInput) == 8u);
+    // MsgEntityUpdate is float-aligned; 52 is a multiple of 4
+    CHECK(alignof(fl::MsgEntityUpdate) == 4u);
+    CHECK(sizeof(fl::MsgEntityUpdate) % 4u == 0u);
 }
 
 TEST_CASE("GameProtocol: stays at protocol version 1 in primary development", "[game_protocol]") {
@@ -62,7 +66,7 @@ TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
     fl::MsgWorldSnapshotHeader hdr;
     hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
     hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-    hdr.entityCount = kCount;
+    hdr.fullEntityCount = kCount;
     hdr.tickIndex = 42u;
 
     fl::MsgEntityEntry entries[kCount];
@@ -99,11 +103,11 @@ TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
 
     CHECK(parsedHdr.msgId == static_cast<uint8_t>(fl::MsgId::WorldSnapshot));
     CHECK(parsedHdr.protocolVersion == static_cast<uint8_t>(fl::kProtocolVersion));
-    CHECK(parsedHdr.entityCount == kCount);
+    CHECK(parsedHdr.fullEntityCount == kCount);
     CHECK(parsedHdr.tickIndex == 42u);
 
     const uint8_t* entryPtr = buf.data() + sizeof(parsedHdr);
-    for (uint16_t i = 0; i < parsedHdr.entityCount; ++i) {
+    for (uint16_t i = 0; i < parsedHdr.fullEntityCount; ++i) {
         fl::MsgEntityEntry e;
         std::memcpy(&e, entryPtr + i * sizeof(e), sizeof(e));
         CHECK(e.entityIdx == 100u + i);
@@ -318,7 +322,7 @@ TEST_CASE("WireCodec ext: full WorldSnapshot packet with SnapshotPeerCount exten
         e.entityIdx = 10u + i;
         fl::appendMsg(buf, e);
     }
-    hdr.entityCount = kCount;
+    hdr.fullEntityCount = kCount;
     fl::writeMsgAt(buf, hdrOffset, hdr);
 
     // Append TLV extension.
@@ -329,11 +333,11 @@ TEST_CASE("WireCodec ext: full WorldSnapshot packet with SnapshotPeerCount exten
     fl::MsgWorldSnapshotHeader rh{};
     REQUIRE(fl::readMsg(buf.data(), buf.size(), rh));
     CHECK(rh.tickIndex == 99u);
-    CHECK(rh.entityCount == kCount);
+    CHECK(rh.fullEntityCount == kCount);
 
     // Parse extension block.
     const std::size_t extOffset =
-        sizeof(fl::MsgWorldSnapshotHeader) + static_cast<std::size_t>(rh.entityCount) * sizeof(fl::MsgEntityEntry);
+        sizeof(fl::MsgWorldSnapshotHeader) + static_cast<std::size_t>(rh.fullEntityCount) * sizeof(fl::MsgEntityEntry);
     REQUIRE(buf.size() > extOffset);
 
     uint16_t pc{};
@@ -356,7 +360,7 @@ TEST_CASE("WireCodec ext: old-receiver compatibility readMsg succeeds on extende
     e.entityIdx = 5u;
     fl::appendMsg(buf, e);
 
-    hdr.entityCount = 1;
+    hdr.fullEntityCount = 1;
     fl::writeMsgAt(buf, hdrOffset, hdr);
 
     const uint16_t kPeers = 3u;
@@ -367,7 +371,7 @@ TEST_CASE("WireCodec ext: old-receiver compatibility readMsg succeeds on extende
     CHECK(fl::readMsg(buf.data(), buf.size(), rh));
     CHECK(rh.msgId == static_cast<uint8_t>(fl::MsgId::WorldSnapshot));
     CHECK(rh.tickIndex == 42u);
-    CHECK(rh.entityCount == 1u);
+    CHECK(rh.fullEntityCount == 1u);
 }
 
 TEST_CASE("GameProtocol: MsgHeartbeat and MsgPeerDelay sizes and alignment", "[game_protocol]") {
@@ -405,4 +409,62 @@ TEST_CASE("GameProtocol: MsgPeerDelay round-trip", "[game_protocol]") {
     CHECK(fl::readMsg(buf.data(), buf.size(), dst));
     CHECK(dst.msgId == static_cast<uint8_t>(fl::MsgId::PeerDelay));
     CHECK(dst.delayTicks == 42u);
+}
+
+TEST_CASE("GameProtocol: MsgEntityUpdate roundtrip via appendMsg/readRecordAt", "[game_protocol]") {
+    fl::MsgEntityUpdate src{};
+    src.entityIdx = 7u;
+    src.entityGen = 3u;
+    src.damageLevel = 1u;
+    src.engineFailFlags = 0x02u;
+    src.pos[0] = 1234.5f;
+    src.pos[1] = 500.0f;
+    src.pos[2] = -999.0f;
+    src.vel[0] = 10.f;
+    src.vel[1] = 0.5f;
+    src.vel[2] = -2.f;
+    src.ori[0] = 0.f;
+    src.ori[1] = 0.f;
+    src.ori[2] = 0.f;
+    src.ori[3] = 1.f;
+    src.throttle = 75u;
+    src.fuelPct = 50u;
+    src.abEngaged = 1u;
+    src.flags = 1u; // playerOwned
+
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, src);
+    REQUIRE(buf.size() == sizeof(fl::MsgEntityUpdate));
+
+    fl::MsgEntityUpdate dst{};
+    REQUIRE(fl::readRecordAt(buf.data(), buf.size(), 0u, dst));
+    CHECK(dst.entityIdx == 7u);
+    CHECK(dst.entityGen == 3u);
+    CHECK(dst.damageLevel == 1u);
+    CHECK(dst.engineFailFlags == 0x02u);
+    CHECK(dst.pos[0] == 1234.5f);
+    CHECK(dst.pos[1] == 500.0f);
+    CHECK(dst.pos[2] == -999.0f);
+    CHECK(dst.vel[0] == 10.f);
+    CHECK(dst.throttle == 75u);
+    CHECK(dst.fuelPct == 50u);
+    CHECK(dst.abEngaged == 1u);
+    CHECK(dst.flags == 1u);
+}
+
+TEST_CASE("GameProtocol: MsgWorldSnapshotHeader fullEntityCount and updateCount roundtrip", "[game_protocol]") {
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.fullEntityCount = 5u;
+    hdr.updateCount = 3u;
+    hdr.tickIndex = 42u;
+
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, hdr);
+    REQUIRE(buf.size() == sizeof(fl::MsgWorldSnapshotHeader));
+
+    fl::MsgWorldSnapshotHeader parsed{};
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), parsed));
+    CHECK(parsed.fullEntityCount == 5u);
+    CHECK(parsed.updateCount == 3u);
+    CHECK(parsed.tickIndex == 42u);
 }

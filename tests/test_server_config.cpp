@@ -46,6 +46,8 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.preHandshakeWindowMs == 1000);
     CHECK(cfg.maxConnectionsPerIp == 0);
     CHECK(cfg.idleTimeoutS == 0);
+    CHECK(cfg.drawDistanceKm == 200.0);
+    CHECK(cfg.baselineIntervalTicks == 120u);
     CHECK(log.entries.empty());
 }
 
@@ -343,6 +345,48 @@ TEST_CASE("parseServerConfig: planet_radius_m too large warns and uses default",
     auto cfg = parseServerConfig("[world]\nplanet_radius_m = 2000000000.0\n", &log);
     CHECK(cfg.planetRadiusM == 6'371'000.0);
     CHECK(log.hasMessage(LogLevel::Warn, "planet_radius_m"));
+}
+
+TEST_CASE("parseServerConfig: reads world.draw_distance_km", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\ndraw_distance_km = 150.5\n", &log);
+    CHECK(cfg.drawDistanceKm == 150.5);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: draw_distance_km below minimum warns and uses default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\ndraw_distance_km = 0.5\n", &log);
+    CHECK(cfg.drawDistanceKm == 200.0);
+    CHECK(log.hasMessage(LogLevel::Warn, "draw_distance_km"));
+}
+
+TEST_CASE("parseServerConfig: draw_distance_km above maximum warns and uses default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\ndraw_distance_km = 100001.0\n", &log);
+    CHECK(cfg.drawDistanceKm == 200.0);
+    CHECK(log.hasMessage(LogLevel::Warn, "draw_distance_km"));
+}
+
+TEST_CASE("parseServerConfig: reads world.baseline_interval_ticks", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nbaseline_interval_ticks = 60\n", &log);
+    CHECK(cfg.baselineIntervalTicks == 60u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: baseline_interval_ticks 0 warns and uses default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nbaseline_interval_ticks = 0\n", &log);
+    CHECK(cfg.baselineIntervalTicks == 120u);
+    CHECK(log.hasMessage(LogLevel::Warn, "baseline_interval_ticks"));
+}
+
+TEST_CASE("parseServerConfig: baseline_interval_ticks 3601 warns and uses default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nbaseline_interval_ticks = 3601\n", &log);
+    CHECK(cfg.baselineIntervalTicks == 120u);
+    CHECK(log.hasMessage(LogLevel::Warn, "baseline_interval_ticks"));
 }
 
 // ---------------------------------------------------------------------------

@@ -83,10 +83,12 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
 
         fl::RenderSnapshot snap;
         snap.tickIndex = hdr.tickIndex;
-        snap.entries.reserve(hdr.entityCount);
+        snap.entries.reserve(static_cast<std::size_t>(hdr.fullEntityCount) + hdr.updateCount);
 
         std::size_t off = sizeof(hdr);
-        for (uint16_t i = 0; i < hdr.entityCount; ++i) {
+
+        // Full entries: new entities or baseline tick — cache typeIndex for future update records.
+        for (uint16_t i = 0; i < hdr.fullEntityCount; ++i) {
             fl::MsgEntityEntry e;
             if (!fl::readRecordAt(data, size, off, e))
                 break;
@@ -107,10 +109,43 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             re.abEngaged = e.abEngaged != 0;
             re.engineFailFlags = e.engineFailFlags;
             snap.entries.push_back(re);
+            m_knownEntities[e.entityIdx] = {static_cast<uint16_t>(e.entityGen), e.typeIndex};
         }
-        // Parse TLV extension block appended after entity records.
-        const std::size_t extOffset =
-            sizeof(fl::MsgWorldSnapshotHeader) + static_cast<std::size_t>(hdr.entityCount) * sizeof(fl::MsgEntityEntry);
+
+        // Compact update entries: entities the server knows we already have full data for.
+        for (uint16_t i = 0; i < hdr.updateCount; ++i) {
+            fl::MsgEntityUpdate u;
+            if (!fl::readRecordAt(data, size, off, u))
+                break;
+            off += sizeof(u);
+
+            auto kit = m_knownEntities.find(u.entityIdx);
+            if (kit == m_knownEntities.end() || kit->second.gen != u.entityGen) {
+                // Unknown or stale gen — full entry was dropped and baseline hasn't fired yet.
+                // Skip silently; entity reappears on the next baseline tick.
+                continue;
+            }
+
+            fl::EntityRenderEntry re;
+            re.entityIdx = u.entityIdx;
+            re.entityGen = u.entityGen;
+            re.typeIndex = kit->second.typeIndex; // from cached full entry
+            re.position = {static_cast<double>(u.pos[0]), static_cast<double>(u.pos[1]), static_cast<double>(u.pos[2])};
+            re.velocity = {u.vel[0], u.vel[1], u.vel[2]};
+            re.orientation = glm::quat(u.ori[3], u.ori[0], u.ori[1], u.ori[2]);
+            re.damageLevel = u.damageLevel;
+            re.playerOwned = (u.flags & 1u) != 0;
+            re.throttle = u.throttle;
+            re.fuelPct = u.fuelPct;
+            re.abEngaged = u.abEngaged != 0;
+            re.engineFailFlags = u.engineFailFlags;
+            snap.entries.push_back(re);
+        }
+
+        // TLV extension block follows all entity records.
+        const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) +
+                                      static_cast<std::size_t>(hdr.fullEntityCount) * sizeof(fl::MsgEntityEntry) +
+                                      static_cast<std::size_t>(hdr.updateCount) * sizeof(fl::MsgEntityUpdate);
         if (size > extOffset) {
             uint16_t pc{};
             if (fl::readExtValue(static_cast<const uint8_t*>(data) + extOffset, size - extOffset,
@@ -121,9 +156,9 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
 
         m_lastSnapshotTick = hdr.tickIndex;
 
-        char traceBuf[80];
-        std::snprintf(traceBuf, sizeof(traceBuf), "WorldSnapshot: hdr.entityCount=%u, built=%zu", hdr.entityCount,
-                      snap.entries.size());
+        char traceBuf[96];
+        std::snprintf(traceBuf, sizeof(traceBuf), "WorldSnapshot: full=%u update=%u built=%zu", hdr.fullEntityCount,
+                      hdr.updateCount, snap.entries.size());
         logger.log(LogLevel::Trace, __FILE__, __LINE__, traceBuf);
         bridge.publishExternal(std::move(snap));
         tickAlpha.markNewTick();

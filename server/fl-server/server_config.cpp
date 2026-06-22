@@ -57,7 +57,9 @@ static const char* kDefaultToml =
     "[world]\n"
     "save_path = \"world.sav\"\n"
     "autosave_interval_s = 300\n"
-    "# planet_radius_m = 6371000 # planet sphere radius (m); Earth default\n"
+    "# planet_radius_m = 6371000        # planet sphere radius (m); Earth default\n"
+    "# draw_distance_km = 200.0         # per-peer interest management radius (km); [1, 100000]\n"
+    "# baseline_interval_ticks = 120    # full-snapshot baseline interval for delta recovery; [1, 3600]\n"
     "\n"
     "[ai]\n"
     "difficulty_floor = \"recruit\"\n"
@@ -262,6 +264,22 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                          "world.planet_radius_m out of range [1000, 1e9]; using default 6371000.0");
             } else {
                 cfg.planetRadiusM = *v;
+            }
+        }
+        if (auto v = tbl["world"]["draw_distance_km"].value<double>()) {
+            if (*v < 1.0 || *v > 100'000.0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.draw_distance_km out of range [1, 100000]; using default 200.0");
+            } else {
+                cfg.drawDistanceKm = *v;
+            }
+        }
+        if (auto v = tbl["world"]["baseline_interval_ticks"].value<int64_t>()) {
+            if (*v < int64_t{1} || *v > int64_t{3600}) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.baseline_interval_ticks out of range [1, 3600]; using default 120");
+            } else {
+                cfg.baselineIntervalTicks = static_cast<uint32_t>(*v);
             }
         }
 

@@ -34,9 +34,11 @@ struct ServerConfig {
     bool persistent = false;
     std::string worldSavePath = "world.sav";
     int worldAutosaveIntervalS = 300;
-    int entitySoftCap = 0;              // 0 = unlimited; server-enforced object count limit
-    double timeScale = 10.0;            // game seconds per real second; 10 = full day/night ~2.4 real hrs
-    double planetRadiusM = 6'371'000.0; // sphere radius (m); Earth default
+    int entitySoftCap = 0;                // 0 = unlimited; server-enforced object count limit
+    double timeScale = 10.0;              // game seconds per real second; 10 = full day/night ~2.4 real hrs
+    double planetRadiusM = 6'371'000.0;   // sphere radius (m); Earth default
+    double drawDistanceKm = 200.0;        // per-peer interest radius (km); [1, 100000]
+    uint32_t baselineIntervalTicks = 120; // full-snapshot baseline interval (sim ticks); [1, 3600]
 
     // [ai]  — Phase 2: parsed and stored; enforcement lands with AI runtime
     std::string aiDifficultyFloor = "recruit";

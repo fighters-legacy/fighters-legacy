@@ -385,6 +385,8 @@ int main(int argc, char** argv) {
     wbConfig.motdDisplaySeconds = cfg.motdDisplayS;
     wbConfig.operatorPassword = cfg.operatorPassword;
     wbConfig.idleTimeoutS = cfg.idleTimeoutS;
+    wbConfig.drawDistanceKm = static_cast<float>(cfg.drawDistanceKm);
+    wbConfig.baselineIntervalTicks = cfg.baselineIntervalTicks;
     broadcaster.applyConfig(wbConfig);
     // Planet gravity and terrain curvature. Function-scope static so lifetime outlasts the broadcaster.
     static fl::CentralGravityField s_gravity{6'371'000.f};

@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 
 class GameConsole;
 class ILogger;
@@ -122,4 +123,13 @@ struct ClientNetEventHandler : INetworkEventHandler {
     uint32_t m_lastRttMs{0};        // ms from last MsgPeerDelay; 0 = not yet received
     bool m_rttValid{false};         // true once first MsgPeerDelay with delayTicks > 0 arrives
     std::chrono::steady_clock::time_point m_lastHeartbeatSentAt{}; // throttle to 1 Hz
+
+    // Delta-compression entity cache: entityIdx → {gen (uint16 truncated), typeIndex}.
+    // Populated from full MsgEntityEntry records; used to decode compact MsgEntityUpdate records.
+    // Cleared implicitly when ClientNetEventHandler is re-created per session (reinitFlight).
+    struct KnownEntityInfo {
+        uint16_t gen;
+        uint32_t typeIndex;
+    };
+    std::unordered_map<uint32_t, KnownEntityInfo> m_knownEntities;
 };

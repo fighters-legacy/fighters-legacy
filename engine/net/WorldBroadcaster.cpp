@@ -248,10 +248,20 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setMotdDisplaySeconds(cfg.motdDisplaySeconds);
     setOperatorPassword(cfg.operatorPassword);
     setIdleTimeout(cfg.idleTimeoutS);
+    setDrawDistance(cfg.drawDistanceKm);
+    setBaselineInterval(cfg.baselineIntervalTicks);
 }
 
 void WorldBroadcaster::setIdleTimeout(int timeoutSeconds) noexcept {
     m_idleTimeoutTicks = timeoutSeconds > 0 ? static_cast<uint64_t>(timeoutSeconds) * 60u : 0u;
+}
+
+void WorldBroadcaster::setDrawDistance(float km) noexcept {
+    m_drawDistanceM = static_cast<double>(km) * 1000.0;
+}
+
+void WorldBroadcaster::setBaselineInterval(uint32_t ticks) noexcept {
+    m_baselineIntervalTicks = ticks > 0u ? static_cast<uint64_t>(ticks) : 1u;
 }
 
 void WorldBroadcaster::forEachPeer(
@@ -338,13 +348,9 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
 
     m_entityManager.onTick(simDt, tickIndex);
 
-    // Build world snapshot packet.
-    // Header + one entry per live entity.
-    std::vector<uint8_t> buf;
-    buf.reserve(sizeof(MsgWorldSnapshotHeader) + 64 * sizeof(MsgEntityEntry));
-
-    // Build entityIdx -> throttle/fuelPct map from peer flight integrators
-    // so the forEach lambda can fill telemetry fields without a map lookup per entity.
+    // Build per-peer world snapshots with interest management and delta compression.
+    //
+    // Step 1: build telemetry from flight integrators (same as before).
     struct TelemetryEntry {
         uint8_t throttle;
         uint8_t fuelPct;
@@ -359,55 +365,132 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                                       static_cast<uint8_t>(s.ab_engaged ? 1u : 0u), s.engineFailFlags};
     }
 
-    // Write header placeholder; fill entityCount after iteration.
-    MsgWorldSnapshotHeader hdr;
-    hdr.msgId = static_cast<uint8_t>(MsgId::WorldSnapshot);
-    hdr.protocolVersion = static_cast<uint8_t>(kProtocolVersion);
-    hdr.entityCount = 0;
-    hdr.tickIndex = tickIndex;
-
-    const std::size_t hdrOffset = buf.size();
-    appendMsg(buf, hdr); // placeholder; entityCount patched in after iteration
-
-    uint16_t count = 0;
+    // Step 2: build entity snapshot map — one pass shared across all per-peer loops.
+    struct EntitySnap {
+        const EntityState* state;
+        uint8_t throttle;
+        uint8_t fuelPct;
+        uint8_t abEngaged;
+        uint8_t engineFailFlags;
+    };
+    std::unordered_map<uint32_t, EntitySnap> snapMap;
+    snapMap.reserve(m_spatialIndex.entityCount());
     m_entityManager.forEach([&](const EntityState& state) {
-        MsgEntityEntry entry;
-        entry.entityIdx = state.id.index;
-        entry.entityGen = state.id.generation;
-        entry.typeIndex = state.typeIndex;
-        entry.pos[0] = state.transform.pos[0];
-        entry.pos[1] = state.transform.pos[1];
-        entry.pos[2] = state.transform.pos[2];
-        entry.vel[0] = state.transform.vel[0];
-        entry.vel[1] = state.transform.vel[1];
-        entry.vel[2] = state.transform.vel[2];
-        entry.ori[0] = state.transform.quat[0]; // x
-        entry.ori[1] = state.transform.quat[1]; // y
-        entry.ori[2] = state.transform.quat[2]; // z
-        entry.ori[3] = state.transform.quat[3]; // w
-        entry.damageLevel = static_cast<uint8_t>(state.damageLevel);
-        entry.flags = state.playerOwned ? 1u : 0u;
         auto tit = entityTelemetry.find(state.id.index);
-        entry.throttle = (tit != entityTelemetry.end()) ? tit->second.throttle : 0u;
-        entry.fuelPct = (tit != entityTelemetry.end()) ? tit->second.fuelPct : 0u;
-        entry.abEngaged = (tit != entityTelemetry.end()) ? tit->second.abEngaged : 0u;
-        entry.engineFailFlags = (tit != entityTelemetry.end()) ? tit->second.engineFailFlags : 0u;
+        uint8_t efFlags = (tit != entityTelemetry.end()) ? tit->second.engineFailFlags : 0u;
         if (static_cast<uint8_t>(state.damageLevel) >= 2u)
-            entry.engineFailFlags |= fl::kEngineFailGeneric;
-
-        appendMsg(buf, entry);
-        ++count;
+            efFlags |= fl::kEngineFailGeneric;
+        snapMap[state.id.index] = {&state, (tit != entityTelemetry.end()) ? tit->second.throttle : uint8_t{0},
+                                   (tit != entityTelemetry.end()) ? tit->second.fuelPct : uint8_t{0},
+                                   (tit != entityTelemetry.end()) ? tit->second.abEngaged : uint8_t{0}, efFlags};
     });
 
-    hdr.entityCount = count;
-    writeMsgAt(buf, hdrOffset, hdr);
-
-    // TLV extension block appended after entity records.
-    const auto peerCount =
+    const auto activePeers =
         static_cast<uint16_t>(std::max(0, std::min(m_activePeerCount.load(std::memory_order_relaxed), 65535)));
-    appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerCount), peerCount);
 
-    m_net.broadcast(buf.data(), buf.size(), /*reliable=*/false);
+    // Step 3: per-peer snapshot — interest filter (queryRadius) + delta compression (known-gen set).
+    for (auto& [peerId, peerEid] : m_peerEntities) {
+        const EntityState* peerState = m_entityManager.get(peerEid);
+
+        // Baseline tick: clear known-gen map → forces full entries for all visible entities,
+        // providing UDP packet-loss recovery within baselineIntervalTicks ticks.
+        const bool isBaseline = (tickIndex % m_baselineIntervalTicks == 0);
+        auto& knownGens = m_peerKnownGens[peerId];
+        if (isBaseline)
+            knownGens.clear();
+
+        std::vector<uint8_t> buf;
+        buf.reserve(sizeof(MsgWorldSnapshotHeader) + 24 * sizeof(MsgEntityEntry) + 24 * sizeof(MsgEntityUpdate));
+
+        MsgWorldSnapshotHeader hdr;
+        hdr.msgId = static_cast<uint8_t>(MsgId::WorldSnapshot);
+        hdr.protocolVersion = static_cast<uint8_t>(kProtocolVersion);
+        hdr.fullEntityCount = 0;
+        hdr.updateCount = 0;
+        hdr.tickIndex = tickIndex;
+        const std::size_t hdrOffset = buf.size();
+        appendMsg(buf, hdr); // placeholder; counts patched below
+
+        // Collect visible entity indices from the spatial index; categorise into full vs update.
+        // Two-pass ensures all full entries precede all update entries in the wire buffer.
+        std::vector<uint32_t> fullIndices, updateIndices;
+        if (peerState && !peerState->dead && m_drawDistanceM > 0.0) {
+            m_spatialIndex.queryRadius(
+                peerState->transform.pos, m_drawDistanceM, [&](uint32_t entityIdx, const double* /*pos*/) {
+                    if (snapMap.find(entityIdx) == snapMap.end())
+                        return; // died this tick after the index was built
+                    const uint16_t gen = static_cast<uint16_t>(snapMap.at(entityIdx).state->id.generation);
+                    auto kit = knownGens.find(entityIdx);
+                    if (kit == knownGens.end() || kit->second != gen)
+                        fullIndices.push_back(entityIdx);
+                    else
+                        updateIndices.push_back(entityIdx);
+                });
+        }
+        // peerState null/dead → both lists empty → header-only empty snapshot sent below.
+
+        // Append full MsgEntityEntry records (new entities or baseline tick).
+        for (uint32_t idx : fullIndices) {
+            const EntitySnap& snap = snapMap.at(idx);
+            const EntityState& state = *snap.state;
+            MsgEntityEntry entry;
+            entry.entityIdx = state.id.index;
+            entry.entityGen = state.id.generation;
+            entry.typeIndex = state.typeIndex;
+            entry.pos[0] = state.transform.pos[0];
+            entry.pos[1] = state.transform.pos[1];
+            entry.pos[2] = state.transform.pos[2];
+            entry.vel[0] = state.transform.vel[0];
+            entry.vel[1] = state.transform.vel[1];
+            entry.vel[2] = state.transform.vel[2];
+            entry.ori[0] = state.transform.quat[0]; // x
+            entry.ori[1] = state.transform.quat[1]; // y
+            entry.ori[2] = state.transform.quat[2]; // z
+            entry.ori[3] = state.transform.quat[3]; // w
+            entry.damageLevel = static_cast<uint8_t>(state.damageLevel);
+            entry.flags = state.playerOwned ? 1u : 0u;
+            entry.throttle = snap.throttle;
+            entry.fuelPct = snap.fuelPct;
+            entry.abEngaged = snap.abEngaged;
+            entry.engineFailFlags = snap.engineFailFlags;
+            appendMsg(buf, entry);
+            knownGens[idx] = static_cast<uint16_t>(state.id.generation);
+            ++hdr.fullEntityCount;
+        }
+
+        // Append compact MsgEntityUpdate records (entities already known to this peer).
+        for (uint32_t idx : updateIndices) {
+            const EntitySnap& snap = snapMap.at(idx);
+            const EntityState& state = *snap.state;
+            MsgEntityUpdate upd;
+            upd.entityIdx = state.id.index;
+            upd.entityGen = static_cast<uint16_t>(state.id.generation);
+            upd.damageLevel = static_cast<uint8_t>(state.damageLevel);
+            upd.engineFailFlags = snap.engineFailFlags;
+            upd.pos[0] = static_cast<float>(state.transform.pos[0]);
+            upd.pos[1] = static_cast<float>(state.transform.pos[1]);
+            upd.pos[2] = static_cast<float>(state.transform.pos[2]);
+            upd.vel[0] = state.transform.vel[0];
+            upd.vel[1] = state.transform.vel[1];
+            upd.vel[2] = state.transform.vel[2];
+            upd.ori[0] = state.transform.quat[0]; // x
+            upd.ori[1] = state.transform.quat[1]; // y
+            upd.ori[2] = state.transform.quat[2]; // z
+            upd.ori[3] = state.transform.quat[3]; // w
+            upd.throttle = snap.throttle;
+            upd.fuelPct = snap.fuelPct;
+            upd.abEngaged = snap.abEngaged;
+            upd.flags = state.playerOwned ? 1u : 0u;
+            appendMsg(buf, upd);
+            ++hdr.updateCount;
+        }
+
+        writeMsgAt(buf, hdrOffset, hdr);
+
+        // TLV extension block — same active peer count for all peers.
+        appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerCount), activePeers);
+        m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/false);
+    }
 
     // Tick weather and broadcast MsgWeatherState every 10 ticks (~6 Hz at 60 Hz sim).
     if (m_weather) {
@@ -564,6 +647,7 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     }
     m_peerInputs.erase(peerId);
     m_peerFloodState.erase(peerId);
+    m_peerKnownGens.erase(peerId);
     m_activePeerCount.fetch_sub(1, std::memory_order_relaxed);
 }
 

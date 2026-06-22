@@ -32,7 +32,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 |-------|-------|-----------|---------|------|---------|
 | `Hello` | `0x00` | server→client | reliable | 4 bytes | Protocol version handshake; first message on every new connection |
 | `ConnectAck` | `0x01` | server→client | reliable | 16 + N×196 bytes | Handshake on connect; assigns entity slot and delivers type registry |
-| `WorldSnapshot` | `0x02` | server→client | unreliable | 16 + N×72 bytes | Per-tick entity state broadcast |
+| `WorldSnapshot` | `0x02` | server→client | unreliable | 16 + F×72 + U×52 bytes | Per-tick entity state, unicast per peer; F = full entries (new or baseline), U = compact updates (known entities) |
 | `ClientInput` | `0x03` | client→server | unreliable | 48 bytes | Per-frame flight inputs |
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
 | `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
@@ -97,16 +97,19 @@ Appended N times after `MsgConnectAck` (one per registered entity type).
 
 ### MsgWorldSnapshotHeader — 16 bytes
 
-Broadcast unreliably every sim tick (channel 1), immediately followed by
-`entityCount` × `MsgEntityEntry` records. Sized to 16 (a multiple of 8) so each trailing
-`MsgEntityEntry` stays 8-aligned for in-place reads.
+Sent unreliably per-peer every sim tick (channel 1). Followed by `fullEntityCount` ×
+`MsgEntityEntry` records (new entities or baseline-tick resync), then `updateCount` ×
+`MsgEntityUpdate` records (compact state for entities the peer already knows), then the TLV
+extension block. Sized to 16 (a multiple of 8) so each trailing `MsgEntityEntry` stays
+8-aligned for in-place reads.
 
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
 | 0 | 1 | `msgId` | `uint8_t` | `0x02` |
 | 1 | 1 | `protocolVersion` | `uint8_t` | Server's `kProtocolVersion`; defense-in-depth echo — per-packet version stamp |
-| 2 | 2 | `entityCount` | `uint16_t` | Number of `MsgEntityEntry` records that follow |
-| 4 | 4 | `reserved` | `uint32_t` | Padding so `tickIndex` is 8-aligned; always 0 |
+| 2 | 2 | `fullEntityCount` | `uint16_t` | Number of `MsgEntityEntry` records that follow (new or baseline-tick entities) |
+| 4 | 2 | `updateCount` | `uint16_t` | Number of `MsgEntityUpdate` records following the full entries (compact deltas for known entities) |
+| 6 | 2 | `_reserved` | `uint16_t` | Padding so `tickIndex` is 8-aligned; always 0 |
 | 8 | 8 | `tickIndex` | `uint64_t` | Monotonically increasing server tick counter (naturally 8-aligned) |
 
 ### MsgEntityEntry — 72 bytes
@@ -129,6 +132,31 @@ Per-entity state appended N times after `MsgWorldSnapshotHeader`. Laid out large
 | 68 | 1 | `abEngaged` | `uint8_t` | `1` when afterburner physically lit (`FlightState::ab_engaged`); `0` otherwise |
 | 69 | 1 | `engineFailFlags` | `uint8_t` | Engine failure bitmask: bit `0x01` = generic thrust impairment (`damageLevel ≥ Heavy`); bit `0x02` = left-engine failure (Phase 6+); bit `0x04` = right-engine failure (Phase 6+); bit `0x08` = compressor stall (Phase 6+); bit `0x10` = flameout (Phase 6+) |
 | 70 | 2 | `reserved[2]` | `uint8_t[2]` | Padding to 72 (multiple of 8); always 0 |
+
+### MsgEntityUpdate — 52 bytes
+
+Compact per-tick state for entities already known to the receiving peer. Appended in the update
+section of `MsgWorldSnapshot` (after `fullEntityCount × MsgEntityEntry`). Uses `float` positions
+(absolute world coordinates; precision ~1.6 cm at 200 km from origin — sufficient for rendering).
+Omits static fields (`typeIndex`, `reserved` padding) that the client caches from the last full
+`MsgEntityEntry` for this entity. `alignof(MsgEntityUpdate) == 4`; 52 is a multiple of 4.
+
+`entityGen` is `uint16_t` (truncated from `EntityId::generation` `uint32_t`). Practical pool-slot
+reuse rate makes overflow impossible within a session.
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 4 | `entityIdx` | `uint32_t` | Pool slot index (same as `MsgEntityEntry`) |
+| 4 | 2 | `entityGen` | `uint16_t` | Generation counter (truncated); mismatch vs. client cache → entity treated as new |
+| 6 | 1 | `damageLevel` | `uint8_t` | 0=Intact … 3=Critical |
+| 7 | 1 | `engineFailFlags` | `uint8_t` | `fl::kEngineFail*` bitmask (same encoding as `MsgEntityEntry`) |
+| 8 | 12 | `pos[3]` | `float[3]` | Absolute world position XYZ (metres), `float32` |
+| 20 | 12 | `vel[3]` | `float[3]` | World velocity XYZ (m/s) for dead-reckoning |
+| 32 | 16 | `ori[4]` | `float[4]` | Orientation quaternion **`[x, y, z, w]`** (same wire order as `MsgEntityEntry`) |
+| 48 | 1 | `throttle` | `uint8_t` | Actual throttle [0, 100] |
+| 49 | 1 | `fuelPct` | `uint8_t` | Fuel remaining [0, 100] |
+| 50 | 1 | `abEngaged` | `uint8_t` | `1` when afterburner physically lit |
+| 51 | 1 | `flags` | `uint8_t` | Bit 0 = playerOwned |
 
 ### MsgClientInput — 48 bytes
 
@@ -411,9 +439,11 @@ any message packet. Each extension entry:
 The extension block begins at:
 - **Single-struct messages**: offset `sizeof(FixedStruct)`
 - **Array messages** (header + N records): offset `sizeof(Header) + N × sizeof(Record)`
+- **`MsgWorldSnapshot`** (two record types): offset
+  `sizeof(MsgWorldSnapshotHeader) + fullEntityCount × sizeof(MsgEntityEntry) + updateCount × sizeof(MsgEntityUpdate)`
 
 **Backward compatibility**: old receivers that call `readMsg<T>()` or iterate records up to
-`entityCount` naturally stop at the right byte count and ignore trailing extension bytes — no code
+`fullEntityCount` naturally stop at the right byte count and ignore trailing extension bytes — no code
 change is required for old receivers to remain correct. New receivers call `fl::readExtValue()` for
 known tags and skip unknown tags via their `len` field.
 
@@ -461,8 +491,9 @@ Client                              Server (fl-server sim thread)
   |                                     |   onTick:
   |                                     |     applyPeerInput → update entity transform
   |                                     |     EntityManager::onTick
-  |<-- MsgWorldSnapshot (unreliable) ---|     serialize all entities → broadcast
-  |    + N × MsgEntityEntry             |
+  |<-- MsgWorldSnapshot (unreliable, unicast) |  interest filter + delta compress → per-peer
+  |    fullEntityCount × MsgEntityEntry       |  (new or baseline-tick entities)
+  |    updateCount × MsgEntityUpdate          |  (compact updates for known entities)
   |                                     |
   |--- ENet disconnect --------------->|
   |                                     | onDisconnect(peerId):
@@ -521,32 +552,33 @@ losses, but high fragment counts multiply the effective loss rate:
 **The single-fragment safe threshold is approximately 20 visible entities per client**
 (12 + 20×68 = 1,372 bytes < typical 1,400-byte MTU).
 
-### Clustered / 128-player deployments
+### Interest management and delta compression (#346)
 
-The current `WorldBroadcaster` sends all live entities to all connected peers (broadcast
-all). For 128 simultaneous players this produces:
+As of #346, `WorldBroadcaster::onTick()` sends a **per-peer unicast** `MsgWorldSnapshot`
+containing only entities within `draw_distance_km` of the peer's own entity position (via
+`SpatialIndex::queryRadius()`). `MsgWeatherState` and `MsgServerNotice` remain global
+broadcasts.
 
-- ~8.7 KB snapshots per client per tick
-- ~65 MB/s total server outbound at 60 Hz
-- 6+ ENet fragments per snapshot, significantly raising effective packet loss
+**Delta compression**: entities already known to a peer appear as compact `MsgEntityUpdate`
+records (52 bytes, float positions) rather than full `MsgEntityEntry` records (72 bytes).
+A full re-sync (all `MsgEntityEntry`) fires every `baseline_interval_ticks` ticks (default
+120 = 2 s at 60 Hz) for UDP packet-loss recovery.
 
-**Required mitigation: server-side interest management.** Each zone server must maintain
-a per-peer visible entity list (culled by position and draw distance) and only serialize
-entities on that list into each client's snapshot. With 128 players spread across a large
-theater and a 100 km draw distance, the typical per-client visible count is 10–20 entities
-— well within the single-fragment threshold.
+Typical bandwidth with 20 peers, 10 visible entities each, default baseline:
+- Baseline tick: 16 + 10×72 + TLV ≈ 742 bytes/peer (~45 KB/s per peer)
+- Update ticks: 16 + 10×52 + TLV ≈ 542 bytes/peer (~32 KB/s per peer)
+- Both are single-fragment (< 1,400-byte MTU threshold). ✓
 
-Interest management is not yet implemented. It is required before any public multiplayer
-test with more than ~20 simultaneous players in the same zone.
+Configure via `[world] draw_distance_km` and `[world] baseline_interval_ticks` in
+`server.toml`; hot-reloadable via `reload_config`.
 
 ### Known overhead in this format
 
-The following are documented as future optimization candidates; they do not block the
-Phase 2 spec:
+The following are documented as future optimization candidates:
 
-- **Full state every tick**: no delta compression — each snapshot is a complete entity
-  state. Replay readers and spectator clients can rely on every snapshot being
-  self-contained.
+- **Double-precision positions in full entries**: `pos[3]` is 24 bytes (double) in
+  `MsgEntityEntry` vs. 12 bytes (float) in `MsgEntityUpdate`. Required for planet-scale
+  precision in full entries; compact updates use float32 (~1.6 cm at 200 km).
 - **Double-precision positions**: `pos[3]` is 24 bytes vs. 12 bytes for float. Required
   for planet-scale precision; float32 degrades to ~24 cm accuracy at 2,000 km from origin.
 - **`typeIndex` as uint32_t**: 4 bytes; a uint16_t would support 65,535 entity types and

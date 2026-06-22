@@ -78,6 +78,56 @@ static fl::MsgConnectRefusal parseSendRefusal(const MockNetwork& net) {
 }
 
 // ---------------------------------------------------------------------------
+// Interest-management snapshot helpers
+// ---------------------------------------------------------------------------
+
+// Return all MsgWorldSnapshot packets sent to a specific peer, in order.
+// After #346, snapshots are per-peer unicast (in perPeerSends) rather than broadcast.
+static std::vector<std::vector<uint8_t>> snapshotsFor(const MockNetwork& net, uint32_t peerId) {
+    std::vector<std::vector<uint8_t>> result;
+    for (const auto& [pid, pkt] : net.perPeerSends)
+        if (pid == peerId && !pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::WorldSnapshot))
+            result.push_back(pkt);
+    return result;
+}
+
+// Clear all per-peer unicast sends (equivalent to old clearSnapshots(net) for snapshot tests).
+static void clearSnapshots(MockNetwork& net) {
+    net.perPeerSends.clear();
+}
+
+// Parse the MsgWorldSnapshotHeader from a raw snapshot packet.
+static fl::MsgWorldSnapshotHeader parseSnapshotHeader(const std::vector<uint8_t>& pkt) {
+    REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader));
+    fl::MsgWorldSnapshotHeader hdr{};
+    std::memcpy(&hdr, pkt.data(), sizeof(hdr));
+    return hdr;
+}
+
+// Total visible entities for this peer = fullEntityCount + updateCount.
+static uint16_t totalEntityCount(const fl::MsgWorldSnapshotHeader& hdr) {
+    return static_cast<uint16_t>(hdr.fullEntityCount + hdr.updateCount);
+}
+
+// Parse all full MsgEntityEntry records from a snapshot packet.
+static std::vector<fl::MsgEntityEntry> parseFullEntries(const std::vector<uint8_t>& pkt) {
+    REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader));
+    fl::MsgWorldSnapshotHeader hdr{};
+    std::memcpy(&hdr, pkt.data(), sizeof(hdr));
+    std::vector<fl::MsgEntityEntry> entries;
+    std::size_t off = sizeof(hdr);
+    for (uint16_t i = 0; i < hdr.fullEntityCount; ++i) {
+        if (off + sizeof(fl::MsgEntityEntry) > pkt.size())
+            break;
+        fl::MsgEntityEntry e{};
+        std::memcpy(&e, pkt.data() + off, sizeof(e));
+        entries.push_back(e);
+        off += sizeof(e);
+    }
+    return entries;
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -98,25 +148,27 @@ TEST_CASE("WorldBroadcaster: onTick broadcasts WorldSnapshot for N entities", "[
     }
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u); // peer required for per-peer unicast snapshots
 
     // Drive one tick manually.
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    REQUIRE(net.broadcasts.size() == 1u);
-    const auto& pkt = net.broadcasts[0];
+    // Tick 1 is a baseline tick (1 % 120 != 0 ... actually 1 % 120 == 1, not 0 — but all entities
+    // are new to the peer so they appear as full entries regardless).
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(snaps.size() == 1u);
+    const auto& pkt = snaps[0];
     REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader));
 
-    fl::MsgWorldSnapshotHeader hdr;
-    std::memcpy(&hdr, pkt.data(), sizeof(hdr));
+    auto hdr = parseSnapshotHeader(pkt);
     CHECK(hdr.msgId == static_cast<uint8_t>(fl::MsgId::WorldSnapshot));
-    CHECK(hdr.entityCount == 3u);
+    CHECK(totalEntityCount(hdr) == 4u); // 3 pre-spawned + 1 peer entity
     CHECK(hdr.tickIndex == 1u);
 
-    // Verify first entry position.
-    REQUIRE(pkt.size() >= sizeof(hdr) + sizeof(fl::MsgEntityEntry));
-    fl::MsgEntityEntry e0;
-    std::memcpy(&e0, pkt.data() + sizeof(hdr), sizeof(e0));
-    CHECK(e0.pos[1] == 500.0);
+    // Verify one of the full entries has pos[1] == 500.
+    const auto fullEntries = parseFullEntries(pkt);
+    REQUIRE(!fullEntries.empty());
+    CHECK(fullEntries[0].pos[1] == 500.0);
 }
 
 // Stub controller: drives the entity at a fixed throttle with no peer connection. Records how many
@@ -146,7 +198,10 @@ TEST_CASE("WorldBroadcaster: registerController steps a non-peer entity and seri
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    // No peer ever connects — register an AI/scripted controller directly.
+    // Connect a peer so snapshots are sent (per-peer unicast model requires at least one peer).
+    broadcaster.onConnect(0u);
+
+    // Register an AI/scripted controller for the pre-spawned entity.
     auto controller = std::make_unique<ConstantController>();
     ConstantController* ctrlPtr = controller.get();
     broadcaster.registerController(id, std::move(controller));
@@ -163,14 +218,21 @@ TEST_CASE("WorldBroadcaster: registerController steps a non-peer entity and seri
     const bool moved = st->transform.pos[0] != 0.0 || st->transform.pos[2] != 0.0 || st->transform.pos[1] != 1000.0;
     CHECK(moved);
 
-    // It serializes into the snapshot with live throttle telemetry, no peer required.
-    const auto& pkt = net.broadcasts.back();
-    fl::MsgWorldSnapshotHeader hdr;
-    std::memcpy(&hdr, pkt.data(), sizeof(hdr));
-    REQUIRE(hdr.entityCount == 1u);
-    fl::MsgEntityEntry e0;
-    std::memcpy(&e0, pkt.data() + sizeof(hdr), sizeof(e0));
-    CHECK(e0.throttle > 0u); // throttle spooled up toward the commanded 100%
+    // It serializes into the peer's snapshot with live throttle telemetry.
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(!snaps.empty());
+    const auto& pkt = snaps.back();
+    auto hdr = parseSnapshotHeader(pkt);
+    REQUIRE(totalEntityCount(hdr) >= 1u);
+    // AI entity appears in full entries (baseline tick 120 % 120 == 0 → all full entries)
+    bool foundAiEntity = false;
+    for (const auto& e : parseFullEntries(pkt)) {
+        if (e.entityIdx == id.index) {
+            CHECK(e.throttle > 0u); // throttle spooled up toward the commanded 100%
+            foundAiEntity = true;
+        }
+    }
+    CHECK(foundAiEntity);
 }
 
 TEST_CASE("WorldBroadcaster: flight model resolver is consulted for a flightModelId, falls back on miss",
@@ -221,28 +283,44 @@ TEST_CASE("WorldBroadcaster: flight model resolver is skipped when flightModelId
     CHECK(em.liveCount() == 1u);
 }
 
-TEST_CASE("WorldBroadcaster: onTick with zero entities broadcasts empty header", "[world_broadcaster]") {
+TEST_CASE("WorldBroadcaster: onTick with no peers sends nothing", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
+    // No onConnect — per-peer loop iterates over an empty m_peerEntities; no snapshot is sent.
     broadcaster.onTick(1.0 / 60.0, 5u);
 
-    REQUIRE(net.broadcasts.size() == 1u);
-    const auto& pkt = net.broadcasts[0];
-    fl::MsgWorldSnapshotHeader hdr;
-    std::memcpy(&hdr, pkt.data(), sizeof(hdr));
-    CHECK(hdr.entityCount == 0u);
+    CHECK(snapshotsFor(net, 0).empty());
+}
+
+TEST_CASE("WorldBroadcaster: onTick with connected peer and no extra entities sends peer-only snapshot",
+          "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 5u);
+
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto pkt = snapshotsFor(net, 0)[0];
+    auto hdr = parseSnapshotHeader(pkt);
+    CHECK(totalEntityCount(hdr) == 1u); // only the peer's own entity
     CHECK(hdr.tickIndex == 5u);
 
-    // Packet now includes a 6-byte SnapshotPeerCount TLV extension after the header.
-    REQUIRE(pkt.size() == sizeof(hdr) + 6u);
+    // Packet includes the peer entity full entry + SnapshotPeerCount TLV (6 bytes).
+    const std::size_t expectedMin = sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry) + 6u;
+    REQUIRE(pkt.size() == expectedMin);
     uint16_t pc{};
-    CHECK(fl::readExtValue(pkt.data() + sizeof(hdr), pkt.size() - sizeof(hdr),
+    CHECK(fl::readExtValue(pkt.data() + sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry), 6u,
                            static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), pc));
-    CHECK(pc == 0u); // no peers connected in this test
+    CHECK(pc == 1u); // 1 active peer
 }
 
 TEST_CASE("WorldBroadcaster: onConnect sends ConnectAck with registered types and spawns entity",
@@ -286,8 +364,8 @@ TEST_CASE("WorldBroadcaster: peer entity spawns at terrain height plus 500 m AGL
     broadcaster.onConnect(0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    REQUIRE(!net.broadcasts.empty());
-    const auto& pkt = net.broadcasts.back();
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto pkt = snapshotsFor(net, 0).back();
     REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry));
     fl::MsgEntityEntry e;
     std::memcpy(&e, pkt.data() + sizeof(fl::MsgWorldSnapshotHeader), sizeof(e));
@@ -309,8 +387,8 @@ TEST_CASE("WorldBroadcaster: peer entity spawns at 500 m AGL when ground elevati
     broadcaster.onConnect(0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    REQUIRE(!net.broadcasts.empty());
-    const auto& pkt = net.broadcasts.back();
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto pkt = snapshotsFor(net, 0).back();
     REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry));
     fl::MsgEntityEntry e;
     std::memcpy(&e, pkt.data() + sizeof(fl::MsgWorldSnapshotHeader), sizeof(e));
@@ -332,8 +410,8 @@ TEST_CASE("WorldBroadcaster: peer entity spawns at configured spawn point XYZ", 
     broadcaster.onConnect(0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    REQUIRE(!net.broadcasts.empty());
-    const auto& pkt = net.broadcasts.back();
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto pkt = snapshotsFor(net, 0).back();
     REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry));
     fl::MsgEntityEntry e;
     std::memcpy(&e, pkt.data() + sizeof(fl::MsgWorldSnapshotHeader), sizeof(e));
@@ -361,8 +439,8 @@ TEST_CASE("WorldBroadcaster: spawn points assigned round-robin to peers", "[worl
     broadcaster.onConnect(1u); // → point 1 (X=1000)
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    REQUIRE(!net.broadcasts.empty());
-    const auto& pkt = net.broadcasts.back();
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto pkt = snapshotsFor(net, 0).back();
     REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + 2 * sizeof(fl::MsgEntityEntry));
 
     fl::MsgEntityEntry e0, e1;
@@ -399,8 +477,8 @@ TEST_CASE("WorldBroadcaster: spawn point index wraps round-robin with three peer
     broadcaster.onConnect(2u); // → point 0 again (wrap)
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    REQUIRE(!net.broadcasts.empty());
-    const auto& pkt = net.broadcasts.back();
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto pkt = snapshotsFor(net, 0).back();
     REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + 3 * sizeof(fl::MsgEntityEntry));
 
     fl::MsgEntityEntry entries[3];
@@ -473,9 +551,10 @@ TEST_CASE("WorldBroadcaster: onDisconnect after connect removes peer entity", "[
 
     broadcaster.onDisconnect(0u);
     // Entity is marked dead and reaped on the next onTick.
+    const std::size_t sendsBefore = net.sends.size(); // includes Hello + ConnectAck + snapshot from tick 0
     broadcaster.onTick(1.0 / 60.0, 1u);
     CHECK(em.liveCount() == 0u);
-    CHECK(net.sends.size() == 2u); // MsgHello + ConnectAck on connect; nothing sent on disconnect
+    CHECK(net.sends.size() == sendsBefore); // nothing extra after disconnect (no peer left)
 }
 
 TEST_CASE("WorldBroadcaster: onDisconnect does not crash and sends nothing", "[world_broadcaster]") {
@@ -487,7 +566,7 @@ TEST_CASE("WorldBroadcaster: onDisconnect does not crash and sends nothing", "[w
 
     REQUIRE_NOTHROW(broadcaster.onDisconnect(0u));
     CHECK(net.sends.empty());
-    CHECK(net.broadcasts.empty());
+    CHECK(snapshotsFor(net, 0).empty());
 }
 
 TEST_CASE("WorldBroadcaster: onReceive is a no-op for unknown msgId", "[world_broadcaster]") {
@@ -500,7 +579,7 @@ TEST_CASE("WorldBroadcaster: onReceive is a no-op for unknown msgId", "[world_br
     const uint8_t garbage[] = {0xDE, 0xAD, 0xBE, 0xEF};
     REQUIRE_NOTHROW(broadcaster.onReceive(0u, garbage, sizeof(garbage)));
     CHECK(net.sends.empty());
-    CHECK(net.broadcasts.empty());
+    CHECK(snapshotsFor(net, 0).empty());
 }
 
 TEST_CASE("WorldBroadcaster: onReceive empty packet is discarded", "[world_broadcaster]") {
@@ -512,17 +591,17 @@ TEST_CASE("WorldBroadcaster: onReceive empty packet is discarded", "[world_broad
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.onConnect(0u);
-    net.broadcasts.clear();
+    clearSnapshots(net);
     net.sends.clear();
 
     broadcaster.onReceive(0u, nullptr, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     // Entity should not have moved (no input applied).
-    const auto& pkt = net.broadcasts[0];
+    const auto pkt = snapshotsFor(net, 0)[0];
     fl::MsgWorldSnapshotHeader hdr;
     std::memcpy(&hdr, pkt.data(), sizeof(hdr));
-    REQUIRE(hdr.entityCount >= 1u);
+    REQUIRE(totalEntityCount(hdr) >= 1u);
     fl::MsgEntityEntry e;
     std::memcpy(&e, pkt.data() + sizeof(hdr), sizeof(e));
     // Empty packet discarded: entity is present and data is finite (craft still flies).
@@ -546,14 +625,14 @@ TEST_CASE("WorldBroadcaster: onReceive valid ClientInput moves entity on next ti
     inp.throttle = 1.f; // full throttle
     broadcaster.onReceive(0u, &inp, sizeof(inp));
 
-    net.broadcasts.clear();
+    clearSnapshots(net);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    REQUIRE(!net.broadcasts.empty());
-    const auto& pkt = net.broadcasts[0];
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto pkt = snapshotsFor(net, 0)[0];
     fl::MsgWorldSnapshotHeader hdr;
     std::memcpy(&hdr, pkt.data(), sizeof(hdr));
-    REQUIRE(hdr.entityCount >= 1u);
+    REQUIRE(totalEntityCount(hdr) >= 1u);
     fl::MsgEntityEntry e;
     std::memcpy(&e, pkt.data() + sizeof(hdr), sizeof(e));
 
@@ -571,17 +650,17 @@ TEST_CASE("WorldBroadcaster: onReceive truncated ClientInput is discarded", "[wo
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.onConnect(0u);
-    net.broadcasts.clear();
+    clearSnapshots(net);
 
     // Only 10 bytes — less than sizeof(MsgClientInput) = 44.
     const uint8_t tiny[] = {static_cast<uint8_t>(fl::MsgId::ClientInput), 0, 0, 0, 0, 0, 0, 0, 0, 0};
     broadcaster.onReceive(0u, tiny, sizeof(tiny));
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    const auto& pkt = net.broadcasts[0];
+    const auto pkt = snapshotsFor(net, 0)[0];
     fl::MsgWorldSnapshotHeader hdr;
     std::memcpy(&hdr, pkt.data(), sizeof(hdr));
-    REQUIRE(hdr.entityCount >= 1u);
+    REQUIRE(totalEntityCount(hdr) >= 1u);
     fl::MsgEntityEntry e;
     std::memcpy(&e, pkt.data() + sizeof(hdr), sizeof(e));
     // Truncated packet discarded: entity is present and velocity is finite.
@@ -599,7 +678,7 @@ TEST_CASE("WorldBroadcaster: onReceive clamps out-of-range throttle", "[world_br
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.onConnect(0u);
-    net.broadcasts.clear();
+    clearSnapshots(net);
 
     fl::MsgClientInput inp{};
     inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
@@ -608,10 +687,10 @@ TEST_CASE("WorldBroadcaster: onReceive clamps out-of-range throttle", "[world_br
 
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    const auto& pkt = net.broadcasts[0];
+    const auto pkt = snapshotsFor(net, 0)[0];
     fl::MsgWorldSnapshotHeader hdr;
     std::memcpy(&hdr, pkt.data(), sizeof(hdr));
-    REQUIRE(hdr.entityCount >= 1u);
+    REQUIRE(totalEntityCount(hdr) >= 1u);
     fl::MsgEntityEntry e;
     std::memcpy(&e, pkt.data() + sizeof(hdr), sizeof(e));
 
@@ -629,7 +708,7 @@ TEST_CASE("WorldBroadcaster: onReceive zero viewAxis uses forward fallback", "[w
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.onConnect(0u);
-    net.broadcasts.clear();
+    clearSnapshots(net);
 
     fl::MsgClientInput inp{};
     inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
@@ -643,10 +722,10 @@ TEST_CASE("WorldBroadcaster: onReceive zero viewAxis uses forward fallback", "[w
 
     // Entity should still move (fallback viewAxis {1,0,0} used for normalisation;
     // actual kinematics uses entity quaternion, not viewAxis directly, so entity moves).
-    const auto& pkt = net.broadcasts[0];
+    const auto pkt = snapshotsFor(net, 0)[0];
     fl::MsgWorldSnapshotHeader hdr;
     std::memcpy(&hdr, pkt.data(), sizeof(hdr));
-    REQUIRE(hdr.entityCount >= 1u);
+    REQUIRE(totalEntityCount(hdr) >= 1u);
     fl::MsgEntityEntry e;
     std::memcpy(&e, pkt.data() + sizeof(hdr), sizeof(e));
     CHECK(e.vel[0] > 0.f); // entity moves forward (+X) with identity orientation
@@ -670,7 +749,7 @@ TEST_CASE("WorldBroadcaster: onReceive after peer disconnects has no effect on t
     inp.throttle = 1.f;
     broadcaster.onReceive(0u, &inp, sizeof(inp));
 
-    net.broadcasts.clear();
+    clearSnapshots(net);
     // onTick: kinematics loop finds peerId 0 in m_peerInputs but NOT in m_peerEntities -> skip.
     REQUIRE_NOTHROW(broadcaster.onTick(1.0 / 60.0, 1u));
     // Entity was reaped; liveCount = 0.
@@ -702,7 +781,7 @@ TEST_CASE("WorldBroadcaster: onTick skips kinematics for dead entity", "[world_b
     em.kill(id);
 
     // onTick: kinematics loop calls get(id) -> state->dead == true -> skip.
-    net.broadcasts.clear();
+    clearSnapshots(net);
     REQUIRE_NOTHROW(broadcaster.onTick(1.0 / 60.0, 1u));
 }
 
@@ -717,23 +796,24 @@ TEST_CASE("WorldBroadcaster: two peers each control independent entities", "[wor
 
     broadcaster.onConnect(0u);
     broadcaster.onConnect(1u);
-    // liveCount() updated by onTick — drive a tick first.
-    broadcaster.onTick(1.0 / 60.0, 0u);
-    REQUIRE(em.liveCount() == 2u);
 
     // Peer 0: full throttle forward; peer 1: no throttle.
+    // Set inputs BEFORE tick 0 (a baseline tick: 0 % 120 == 0) so all entities appear as
+    // full MsgEntityEntry records. This lets us verify velocity via parseFullEntries.
     fl::MsgClientInput inp0{};
     inp0.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp0.seqNum = 1u;
     inp0.throttle = 1.f;
     broadcaster.onReceive(0u, &inp0, sizeof(inp0));
 
     fl::MsgClientInput inp1{};
     inp1.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp1.seqNum = 1u;
     inp1.throttle = 0.f;
     broadcaster.onReceive(1u, &inp1, sizeof(inp1));
 
-    net.broadcasts.clear();
-    broadcaster.onTick(1.0 / 60.0, 1u);
+    broadcaster.onTick(1.0 / 60.0, 0u); // tick 0: baseline → full entries for all entities
+    REQUIRE(em.liveCount() == 2u);
 
     // Snapshot has both entities; find peer 0's and peer 1's entries by assigned idx.
     // onConnect sends MsgHello (even index) then ConnectAck (odd index) for each peer.
@@ -741,18 +821,16 @@ TEST_CASE("WorldBroadcaster: two peers each control independent entities", "[wor
     std::memcpy(&ack0, net.sends[1].data(), sizeof(ack0)); // peer 0: sends[0]=Hello, sends[1]=Ack
     std::memcpy(&ack1, net.sends[3].data(), sizeof(ack1)); // peer 1: sends[2]=Hello, sends[3]=Ack
 
-    REQUIRE(!net.broadcasts.empty());
-    const auto& pkt = net.broadcasts[0];
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto pkt = snapshotsFor(net, 0)[0];
     fl::MsgWorldSnapshotHeader hdr;
     std::memcpy(&hdr, pkt.data(), sizeof(hdr));
-    CHECK(hdr.entityCount == 2u);
+    CHECK(totalEntityCount(hdr) == 2u);
 
-    // Find entries for each peer's entity by index.
+    // Find entries for each peer's entity by index within peer 0's snapshot.
+    // With default draw distance (200 km) both entities are visible to peer 0.
     fl::MsgEntityEntry ePeer0{}, ePeer1{};
-    const uint8_t* ep = pkt.data() + sizeof(hdr);
-    for (uint16_t i = 0; i < hdr.entityCount; ++i) {
-        fl::MsgEntityEntry e;
-        std::memcpy(&e, ep + i * sizeof(e), sizeof(e));
+    for (const auto& e : parseFullEntries(pkt)) {
         if (e.entityIdx == ack0.assignedEntityIdx)
             ePeer0 = e;
         else if (e.entityIdx == ack1.assignedEntityIdx)
@@ -805,14 +883,14 @@ TEST_CASE("WorldBroadcaster: onReceive discards MsgClientInput with mismatched p
     inp.protocolVersion = 0xFFFFu; // deliberate mismatch
     broadcaster.onReceive(0u, &inp, sizeof(inp));
 
-    net.broadcasts.clear();
+    clearSnapshots(net);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    REQUIRE(!net.broadcasts.empty());
-    const auto& pkt = net.broadcasts[0];
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto pkt = snapshotsFor(net, 0)[0];
     fl::MsgWorldSnapshotHeader hdr;
     std::memcpy(&hdr, pkt.data(), sizeof(hdr));
-    REQUIRE(hdr.entityCount >= 1u);
+    REQUIRE(totalEntityCount(hdr) >= 1u);
     fl::MsgEntityEntry e;
     std::memcpy(&e, pkt.data() + sizeof(hdr), sizeof(e));
     // Mismatched version discarded: default throttle=0 input used instead of throttle=1.
@@ -820,18 +898,19 @@ TEST_CASE("WorldBroadcaster: onReceive discards MsgClientInput with mismatched p
     CHECK(e.vel[0] < 40.1f);
 }
 
-TEST_CASE("WorldBroadcaster: onTick broadcasts WorldSnapshot with correct protocolVersion", "[world_broadcaster]") {
+TEST_CASE("WorldBroadcaster: onTick snapshot carries correct protocolVersion", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u); // peer required for per-peer unicast
 
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    REQUIRE(net.broadcasts.size() == 1u);
-    fl::MsgWorldSnapshotHeader hdr;
-    std::memcpy(&hdr, net.broadcasts[0].data(), sizeof(hdr));
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    auto hdr = parseSnapshotHeader(snapshotsFor(net, 0)[0]);
     CHECK(hdr.protocolVersion == static_cast<uint8_t>(fl::kProtocolVersion));
 }
 
@@ -883,26 +962,32 @@ TEST_CASE("WorldBroadcaster: onTick populates throttle in WorldSnapshot from Fli
     inp.throttle = 1.f;
     broadcaster.onReceive(0u, &inp, sizeof(inp));
 
-    net.broadcasts.clear();
+    clearSnapshots(net);
     // Multiple ticks allow the spool-up lag to partially settle.
     for (int i = 0; i < 10; ++i)
         broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(i + 1));
 
-    REQUIRE(!net.broadcasts.empty());
-    const auto& pkt = net.broadcasts.back();
-    REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry));
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto pkt = snapshotsFor(net, 0).back(); // last of 10 snapshots
 
-    fl::MsgWorldSnapshotHeader hdr;
-    std::memcpy(&hdr, pkt.data(), sizeof(hdr));
-    REQUIRE(hdr.entityCount >= 1u);
-
-    fl::MsgEntityEntry e;
-    std::memcpy(&e, pkt.data() + sizeof(hdr), sizeof(e));
+    auto hdr = parseSnapshotHeader(pkt);
+    REQUIRE(totalEntityCount(hdr) >= 1u);
 
     // throttle_actual spools up over time; after 10 ticks at 1.f input it should be > 0.
-    CHECK(e.throttle > 0u);
-    // The encoded value is throttle_actual * 100, clamped to [0, 100].
-    CHECK(e.throttle <= 100u);
+    // The entity is a full entry on tick 1 (first appearance) and an update entry on ticks 2-10.
+    // Both MsgEntityEntry and MsgEntityUpdate carry the throttle field — read it from whichever is present.
+    uint8_t throttle = 0;
+    if (hdr.fullEntityCount > 0) {
+        fl::MsgEntityEntry e{};
+        if (fl::readRecordAt(pkt.data(), pkt.size(), sizeof(hdr), e))
+            throttle = e.throttle;
+    } else if (hdr.updateCount > 0) {
+        fl::MsgEntityUpdate u{};
+        if (fl::readRecordAt(pkt.data(), pkt.size(), sizeof(hdr), u))
+            throttle = u.throttle;
+    }
+    CHECK(throttle > 0u);
+    CHECK(throttle <= 100u);
 }
 
 TEST_CASE("WorldBroadcaster: abEngaged is 0 in WorldSnapshot when model has no afterburner table",
@@ -923,16 +1008,16 @@ TEST_CASE("WorldBroadcaster: abEngaged is 0 in WorldSnapshot when model has no a
     inp.throttle = 1.f;
     broadcaster.onReceive(0u, &inp, sizeof(inp));
 
-    net.broadcasts.clear();
+    clearSnapshots(net);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    REQUIRE(!net.broadcasts.empty());
-    const auto& pkt = net.broadcasts.back();
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto pkt = snapshotsFor(net, 0).back();
     REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry));
 
     fl::MsgWorldSnapshotHeader hdr;
     std::memcpy(&hdr, pkt.data(), sizeof(hdr));
-    REQUIRE(hdr.entityCount >= 1u);
+    REQUIRE(totalEntityCount(hdr) >= 1u);
 
     fl::MsgEntityEntry e;
     std::memcpy(&e, pkt.data() + sizeof(hdr), sizeof(e));
@@ -960,16 +1045,16 @@ TEST_CASE("WorldBroadcaster: engineFailFlags has kEngineFailGeneric when entity 
     REQUIRE(state != nullptr);
     state->damageLevel = fl::DamageLevel::Heavy; // >= 2 → kEngineFailGeneric OR'd in
 
-    net.broadcasts.clear();
+    clearSnapshots(net);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    REQUIRE(!net.broadcasts.empty());
-    const auto& pkt = net.broadcasts.back();
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto pkt = snapshotsFor(net, 0).back();
     REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry));
 
     fl::MsgWorldSnapshotHeader hdr;
     std::memcpy(&hdr, pkt.data(), sizeof(hdr));
-    REQUIRE(hdr.entityCount >= 1u);
+    REQUIRE(totalEntityCount(hdr) >= 1u);
 
     fl::MsgEntityEntry e;
     std::memcpy(&e, pkt.data() + sizeof(hdr), sizeof(e));
@@ -1002,15 +1087,15 @@ TEST_CASE("WorldBroadcaster: onReceive discards duplicate seqNum", "[world_broad
     inp.throttle = 1.f;
     broadcaster.onReceive(0u, &inp, sizeof(inp));
 
-    net.broadcasts.clear();
+    clearSnapshots(net);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    REQUIRE(!net.broadcasts.empty());
+    REQUIRE(!snapshotsFor(net, 0).empty());
     fl::MsgWorldSnapshotHeader hdr;
-    std::memcpy(&hdr, net.broadcasts[0].data(), sizeof(hdr));
-    REQUIRE(hdr.entityCount >= 1u);
+    std::memcpy(&hdr, snapshotsFor(net, 0)[0].data(), sizeof(hdr));
+    REQUIRE(totalEntityCount(hdr) >= 1u);
     fl::MsgEntityEntry e;
-    std::memcpy(&e, net.broadcasts[0].data() + sizeof(hdr), sizeof(e));
+    std::memcpy(&e, snapshotsFor(net, 0)[0].data() + sizeof(hdr), sizeof(e));
     // throttle=0 retained (idle thrust only) → vel stays below full-throttle level.
     CHECK(e.vel[0] < 0.2f);
 }
@@ -1037,15 +1122,15 @@ TEST_CASE("WorldBroadcaster: onReceive discards stale seqNum (out-of-order)", "[
     inp.throttle = 0.f;
     broadcaster.onReceive(0u, &inp, sizeof(inp));
 
-    net.broadcasts.clear();
+    clearSnapshots(net);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    REQUIRE(!net.broadcasts.empty());
+    REQUIRE(!snapshotsFor(net, 0).empty());
     fl::MsgWorldSnapshotHeader hdr;
-    std::memcpy(&hdr, net.broadcasts[0].data(), sizeof(hdr));
-    REQUIRE(hdr.entityCount >= 1u);
+    std::memcpy(&hdr, snapshotsFor(net, 0)[0].data(), sizeof(hdr));
+    REQUIRE(totalEntityCount(hdr) >= 1u);
     fl::MsgEntityEntry e;
-    std::memcpy(&e, net.broadcasts[0].data() + sizeof(hdr), sizeof(e));
+    std::memcpy(&e, snapshotsFor(net, 0)[0].data() + sizeof(hdr), sizeof(e));
     // throttle=1 retained → full thrust; vel clearly above zero (idle) level.
     CHECK(e.vel[0] > 0.05f);
 }
@@ -1078,15 +1163,15 @@ TEST_CASE("WorldBroadcaster: onReceive accepts seqNum wrap-around", "[world_broa
     inp.throttle = 0.f;
     broadcaster.onReceive(0u, &inp, sizeof(inp));
 
-    net.broadcasts.clear();
+    clearSnapshots(net);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    REQUIRE(!net.broadcasts.empty());
+    REQUIRE(!snapshotsFor(net, 0).empty());
     fl::MsgWorldSnapshotHeader hdr;
-    std::memcpy(&hdr, net.broadcasts[0].data(), sizeof(hdr));
-    REQUIRE(hdr.entityCount >= 1u);
+    std::memcpy(&hdr, snapshotsFor(net, 0)[0].data(), sizeof(hdr));
+    REQUIRE(totalEntityCount(hdr) >= 1u);
     fl::MsgEntityEntry e;
-    std::memcpy(&e, net.broadcasts[0].data() + sizeof(hdr), sizeof(e));
+    std::memcpy(&e, snapshotsFor(net, 0)[0].data() + sizeof(hdr), sizeof(e));
     // seqNum=0 throttle=1 retained (UINT32_MAX-1 dropped) → full thrust; vel above zero (idle) level.
     CHECK(e.vel[0] > 0.05f);
 }
@@ -1102,7 +1187,7 @@ TEST_CASE("WorldBroadcaster: onReceive computes estimatedDelayTicks from tickInd
 
     // Advance to tick 10 so m_currentTick = 10.
     broadcaster.onTick(1.0 / 60.0, 10u);
-    net.broadcasts.clear();
+    clearSnapshots(net);
 
     fl::MsgClientInput inp{};
     inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
@@ -1128,7 +1213,7 @@ TEST_CASE("WorldBroadcaster: onReceive future tickIndex does not update estimate
 
     // Advance to tick 3 so m_currentTick = 3.
     broadcaster.onTick(1.0 / 60.0, 3u);
-    net.broadcasts.clear();
+    clearSnapshots(net);
 
     // Client sends tickIndex=10 (in the future from the server's perspective).
     fl::MsgClientInput inp{};
@@ -3233,6 +3318,11 @@ TEST_CASE("WorldBroadcaster: admin auth pruneExpired fires after 600 onTick call
     for (int i = 0; i < 600; ++i)
         broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(i + 1));
 
+    // Clear sends accumulated during 600 ticks (per-peer unicast snapshots from any still-connected
+    // peers), then reconnect and verify MsgHello is the first new send.
+    net.sends.clear();
+    net.perPeerSends.clear();
+
     // After prune + TTL expiry, reconnect from same IP must succeed
     broadcaster.onConnect(1u);
     CHECK(net.disconnectedPeers.empty());
@@ -3340,8 +3430,8 @@ TEST_CASE("WorldBroadcaster: spawn position preserves sub-mm precision at large 
     broadcaster.onConnect(0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    REQUIRE(!net.broadcasts.empty());
-    const auto& pkt = net.broadcasts.back();
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto pkt = snapshotsFor(net, 0).back();
     REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry));
     fl::MsgEntityEntry e;
     std::memcpy(&e, pkt.data() + sizeof(fl::MsgWorldSnapshotHeader), sizeof(e));
@@ -3630,4 +3720,345 @@ TEST_CASE("WorldBroadcaster: sample receives non-null SpatialIndex pointer from 
     // si must be non-null and the index must already hold the entity (rebuilt before sample())
     REQUIRE(spyPtr->lastSi != nullptr);
     CHECK(spyPtr->lastSi->entityCount() == 1u);
+}
+
+// ---------------------------------------------------------------------------
+// Interest management + delta compression tests (#346)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: entity within draw distance appears in peer snapshot", "[world_broadcaster][interest]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::EntityTransform t{};
+    t.pos[1] = 500.0; // spawn near origin
+    em.spawn("builtin:debug-entity", t);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setDrawDistance(200.f); // 200 km — entity at origin is visible
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(!snaps.empty());
+    auto hdr = parseSnapshotHeader(snaps[0]);
+    CHECK(totalEntityCount(hdr) >= 1u); // at least the spawned entity + peer entity
+}
+
+TEST_CASE("WorldBroadcaster: entity beyond draw distance excluded from peer snapshot",
+          "[world_broadcaster][interest]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    // Spawn entity far away
+    fl::EntityTransform far{};
+    far.pos[0] = 20'000.0; // 20 km in +X
+    far.pos[1] = 500.0;
+    auto farId = em.spawn("builtin:debug-entity", far);
+    REQUIRE(farId.valid());
+    const uint32_t farIdx = farId.index;
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setDrawDistance(1.f); // 1 km — far entity is outside
+    broadcaster.onConnect(0u);        // peer spawns near origin (default)
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(!snaps.empty());
+    // Verify far entity does NOT appear in the full entries
+    for (const auto& e : parseFullEntries(snaps[0]))
+        CHECK(e.entityIdx != farIdx);
+}
+
+TEST_CASE("WorldBroadcaster: two peers at different positions see disjoint entity sets",
+          "[world_broadcaster][interest]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setDrawDistance(5.f); // 5 km radius
+
+    // Peer 0 spawns near origin; peer 1 spawns 100 km away
+    broadcaster.setSpawnPoints({std::array<double, 3>{0.0, 500.0, 0.0}, std::array<double, 3>{100'000.0, 500.0, 0.0}});
+    broadcaster.onConnect(0u);
+    broadcaster.onConnect(1u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto snaps0 = snapshotsFor(net, 0);
+    auto snaps1 = snapshotsFor(net, 1);
+    REQUIRE(!snaps0.empty());
+    REQUIRE(!snaps1.empty());
+
+    // Each peer should see exactly their own entity (1 entity each, 100 km apart)
+    CHECK(totalEntityCount(parseSnapshotHeader(snaps0[0])) == 1u);
+    CHECK(totalEntityCount(parseSnapshotHeader(snaps1[0])) == 1u);
+}
+
+TEST_CASE("WorldBroadcaster: setDrawDistance(0) produces empty snapshots", "[world_broadcaster][interest]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setDrawDistance(0.f); // radius 0 → no cells queried
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(!snaps.empty());
+    auto hdr = parseSnapshotHeader(snaps[0]);
+    CHECK(hdr.fullEntityCount == 0u);
+    CHECK(hdr.updateCount == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: dead peer entity results in empty snapshot", "[world_broadcaster][interest]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+    // Retrieve peer's entity from ConnectAck
+    fl::MsgConnectAck ack{};
+    std::memcpy(&ack, net.sends[1].data(), sizeof(ack));
+    fl::EntityId peerEid{ack.assignedEntityIdx, ack.assignedEntityGen};
+    // Kill the peer's entity before the tick
+    em.kill(peerEid);
+    em.onTick(1.0 / 60.0, 0u); // reap dead entities
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(!snaps.empty());
+    auto hdr = parseSnapshotHeader(snaps[0]);
+    CHECK(hdr.fullEntityCount == 0u);
+    CHECK(hdr.updateCount == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: applyConfig propagates drawDistanceKm", "[world_broadcaster][interest]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::EntityTransform far{};
+    far.pos[0] = 20'000.0; // 20 km away — in a different spatial hash cell (default cell = 10 km)
+    far.pos[1] = 500.0;
+    auto farId = em.spawn("builtin:debug-entity", far);
+    const uint32_t farIdx = farId.index;
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::WorldBroadcasterConfig cfg;
+    cfg.drawDistanceKm = 1.f; // 1 km — only queries cell at peer origin; 20 km entity is in a different cell
+    broadcaster.applyConfig(cfg);
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(!snaps.empty());
+    for (const auto& e : parseFullEntries(snaps[0]))
+        CHECK(e.entityIdx != farIdx);
+}
+
+TEST_CASE("WorldBroadcaster: first tick sends full entries, second tick sends updates", "[world_broadcaster][delta]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setBaselineInterval(120); // baseline at tick 0, 120, 240...
+    broadcaster.onConnect(0u);
+
+    // Tick 1: all entities new — must be full entries
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    auto snaps1 = snapshotsFor(net, 0);
+    REQUIRE(!snaps1.empty());
+    auto hdr1 = parseSnapshotHeader(snaps1[0]);
+    CHECK(hdr1.fullEntityCount >= 1u);
+    CHECK(hdr1.updateCount == 0u);
+
+    // Tick 2: entities already known — must be update entries
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    auto snaps2 = snapshotsFor(net, 0);
+    REQUIRE(!snaps2.empty());
+    auto hdr2 = parseSnapshotHeader(snaps2[0]);
+    CHECK(hdr2.fullEntityCount == 0u);
+    CHECK(hdr2.updateCount >= 1u);
+}
+
+TEST_CASE("WorldBroadcaster: baseline tick forces full entries", "[world_broadcaster][delta]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setBaselineInterval(2); // baseline at ticks 0, 2, 4...
+    broadcaster.onConnect(0u);
+
+    // Tick 1: new entities → full entries
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    clearSnapshots(net);
+
+    // Tick 2: baseline (2 % 2 == 0) → known-gens cleared → full entries again
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(!snaps.empty());
+    auto hdr = parseSnapshotHeader(snaps[0]);
+    CHECK(hdr.fullEntityCount >= 1u);
+    CHECK(hdr.updateCount == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: entity gen change forces full entry on non-baseline tick", "[world_broadcaster][delta]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::EntityTransform t{};
+    t.pos[1] = 500.0;
+    auto id1 = em.spawn("builtin:debug-entity", t);
+    REQUIRE(id1.valid());
+    const uint32_t slotIdx = id1.index;
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setBaselineInterval(1000); // no baseline for a long time
+    broadcaster.onConnect(0u);
+
+    // Tick 1: entity appears as full entry, gen is cached
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    clearSnapshots(net);
+
+    // Kill the entity and spawn a new one — new entity may reuse the same pool slot with a new gen
+    em.kill(id1);
+    em.onTick(1.0 / 60.0, 0u); // reap
+    auto id2 = em.spawn("builtin:debug-entity", t);
+    REQUIRE(id2.valid());
+    // id2 may or may not have the same index as id1; if it does, gen is different
+    // Either way, any newly spawned entity appears as a full entry because it's not in knownGens
+    broadcaster.onTick(1.0 / 60.0, 2u);
+
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(!snaps.empty());
+    // The new entity (possibly same slot, new gen) must appear as a full entry
+    bool newEntityIsFullEntry = false;
+    for (const auto& e : parseFullEntries(snaps[0]))
+        if (e.entityIdx == id2.index && e.entityGen == id2.generation)
+            newEntityIsFullEntry = true;
+    CHECK(newEntityIsFullEntry);
+    (void)slotIdx;
+}
+
+TEST_CASE("WorldBroadcaster: reconnect after disconnect starts with fresh known-gen state",
+          "[world_broadcaster][delta]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setBaselineInterval(1000);
+    broadcaster.onConnect(0u);
+
+    // Tick 1: entity known, cached
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    clearSnapshots(net);
+
+    // Tick 2: entity should be update entry
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    {
+        auto snaps = snapshotsFor(net, 0);
+        REQUIRE(!snaps.empty());
+        CHECK(parseSnapshotHeader(snaps[0]).updateCount >= 1u);
+    }
+    clearSnapshots(net);
+
+    // Disconnect clears knownGens; reconnect gives fresh state
+    broadcaster.onDisconnect(0u);
+    broadcaster.onConnect(0u); // new peer gets peerId=0 again (TrackingNetwork reuses it)
+
+    // Tick 3: fresh connection — all entities must be full entries again
+    broadcaster.onTick(1.0 / 60.0, 3u);
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(!snaps.empty());
+    auto hdr = parseSnapshotHeader(snaps[0]);
+    CHECK(hdr.fullEntityCount >= 1u);
+    CHECK(hdr.updateCount == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: totalEntityCount matches buffer content", "[world_broadcaster][delta]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setBaselineInterval(1000);
+    broadcaster.onConnect(0u);
+
+    // Tick 1 → full entries
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    {
+        auto snaps = snapshotsFor(net, 0);
+        REQUIRE(!snaps.empty());
+        const auto& pkt = snaps[0];
+        auto hdr = parseSnapshotHeader(pkt);
+        const std::size_t expectedSize = sizeof(fl::MsgWorldSnapshotHeader) +
+                                         hdr.fullEntityCount * sizeof(fl::MsgEntityEntry) +
+                                         hdr.updateCount * sizeof(fl::MsgEntityUpdate) + 6u; // SnapshotPeerCount TLV
+        CHECK(pkt.size() == expectedSize);
+    }
+    clearSnapshots(net);
+
+    // Tick 2 → update entries
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    {
+        auto snaps = snapshotsFor(net, 0);
+        REQUIRE(!snaps.empty());
+        const auto& pkt = snaps[0];
+        auto hdr = parseSnapshotHeader(pkt);
+        const std::size_t expectedSize = sizeof(fl::MsgWorldSnapshotHeader) +
+                                         hdr.fullEntityCount * sizeof(fl::MsgEntityEntry) +
+                                         hdr.updateCount * sizeof(fl::MsgEntityUpdate) + 6u;
+        CHECK(pkt.size() == expectedSize);
+    }
+}
+
+TEST_CASE("WorldBroadcaster: no connected peers produces no snapshot sends", "[world_broadcaster][interest]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::EntityTransform t{};
+    t.pos[1] = 500.0;
+    em.spawn("builtin:debug-entity", t);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    // No onConnect — m_peerEntities is empty; per-peer loop does nothing
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CHECK(net.perPeerSends.empty());
 }

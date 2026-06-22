@@ -636,31 +636,39 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         });
 
     // reload_config
-    registry.registerCommand(
-        "reload_config",
-        "reload_config  -- re-read server.toml and apply: name (beacon), motd, motd_display_s (new connections)",
-        [ctx](std::span<std::string_view>) -> std::string {
-            if (!ctx.env.configPath || ctx.env.configPath->empty())
-                return "reload_config: not available";
-            std::ifstream f(*ctx.env.configPath);
-            if (!f)
-                return "reload_config: cannot open " + *ctx.env.configPath;
-            std::ostringstream ss;
-            ss << f.rdbuf();
-            ServerConfig newCfg = parseServerConfig(ss.str(), ctx.env.logger);
-            if (ctx.env.beacon)
-                ctx.env.beacon->setName(newCfg.name);
-            if (ctx.sim.broadcaster && ctx.sim.gameLoop) {
-                auto newMotd = newCfg.motd;
-                auto newMotdDisplayS = newCfg.motdDisplayS;
-                ctx.sim.gameLoop->enqueueSimCallback([ctx, newMotd, newMotdDisplayS]() mutable {
-                    ctx.sim.broadcaster->setMotd(std::move(newMotd));
-                    ctx.sim.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
-                });
-            }
-            return "reload_config: name=\"" + newCfg.name + "\"  motd=\"" + newCfg.motd +
-                   "\"  motd_display_s=" + std::to_string(newCfg.motdDisplayS) + "  (other fields require restart)";
-        });
+    registry.registerCommand("reload_config",
+                             "reload_config  -- re-read server.toml and apply: name (beacon), motd, motd_display_s,"
+                             " draw_distance_km, baseline_interval_ticks (other fields require restart)",
+                             [ctx](std::span<std::string_view>) -> std::string {
+                                 if (!ctx.env.configPath || ctx.env.configPath->empty())
+                                     return "reload_config: not available";
+                                 std::ifstream f(*ctx.env.configPath);
+                                 if (!f)
+                                     return "reload_config: cannot open " + *ctx.env.configPath;
+                                 std::ostringstream ss;
+                                 ss << f.rdbuf();
+                                 ServerConfig newCfg = parseServerConfig(ss.str(), ctx.env.logger);
+                                 if (ctx.env.beacon)
+                                     ctx.env.beacon->setName(newCfg.name);
+                                 if (ctx.sim.broadcaster && ctx.sim.gameLoop) {
+                                     auto newMotd = newCfg.motd;
+                                     auto newMotdDisplayS = newCfg.motdDisplayS;
+                                     auto newDraw = static_cast<float>(newCfg.drawDistanceKm);
+                                     auto newBaseline = newCfg.baselineIntervalTicks;
+                                     ctx.sim.gameLoop->enqueueSimCallback(
+                                         [ctx, newMotd, newMotdDisplayS, newDraw, newBaseline]() mutable {
+                                             ctx.sim.broadcaster->setMotd(std::move(newMotd));
+                                             ctx.sim.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
+                                             ctx.sim.broadcaster->setDrawDistance(newDraw);
+                                             ctx.sim.broadcaster->setBaselineInterval(newBaseline);
+                                         });
+                                 }
+                                 return "reload_config: name=\"" + newCfg.name + "\"  motd=\"" + newCfg.motd +
+                                        "\"  motd_display_s=" + std::to_string(newCfg.motdDisplayS) +
+                                        "  draw_distance_km=" + std::to_string(newCfg.drawDistanceKm) +
+                                        "  baseline_interval_ticks=" + std::to_string(newCfg.baselineIntervalTicks) +
+                                        "  (other fields require restart)";
+                             });
 
     // reload_banlist
     registry.registerCommand("reload_banlist",

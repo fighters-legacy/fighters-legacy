@@ -53,6 +53,9 @@ struct NullNetwork : INetwork {
 struct TrackingNetwork : NullNetwork {
     std::vector<std::vector<uint8_t>> broadcasts;
     std::vector<std::vector<uint8_t>> sends;
+    // All unicast sends recorded with their destination peerId; used by interest-management
+    // tests to assert on per-peer snapshot content without touching the existing sends list.
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> perPeerSends;
     bool sendReliable{false};
     std::map<uint32_t, std::string> peerAddresses; // configure per-test
     std::vector<uint32_t> disconnectedPeers;       // tracks disconnectPeer calls
@@ -62,8 +65,10 @@ struct TrackingNetwork : NullNetwork {
     void disconnect() override {
         ++disconnectCount;
     }
-    bool send(uint32_t, const void* data, std::size_t size, bool reliable) override {
-        sends.push_back({static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size});
+    bool send(uint32_t peerId, const void* data, std::size_t size, bool reliable) override {
+        std::vector<uint8_t> pkt{static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size};
+        sends.push_back(pkt);
+        perPeerSends.emplace_back(peerId, std::move(pkt));
         sendReliable = reliable;
         return true;
     }

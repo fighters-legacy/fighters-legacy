@@ -16,6 +16,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: Snapshot interest management + delta compression for 20+ player scale (#346):
+  `WorldBroadcaster::onTick()` now sends a per-peer unicast `MsgWorldSnapshot` via
+  `INetwork::send()` containing only entities within `draw_distance_km` of the peer's own
+  entity (via `SpatialIndex::queryRadius()`). Entities already known to a peer appear as
+  compact `MsgEntityUpdate` records (52 bytes, float positions) instead of full
+  `MsgEntityEntry` records (72 bytes); a full baseline re-sync fires every
+  `baseline_interval_ticks` ticks (default 120 = 2 s) for UDP packet-loss recovery.
+  `MsgWeatherState` and `MsgServerNotice` remain global broadcasts. Configurable via
+  `[world] draw_distance_km` (default 200 km) and `[world] baseline_interval_ticks` (default
+  120) in `server.toml`; both hot-reloadable via `reload_config`. New wire struct
+  `MsgEntityUpdate` (52 bytes, naturally aligned); `MsgWorldSnapshotHeader::entityCount`
+  renamed to `fullEntityCount`; new `updateCount` field at @4 (repurposed from `reserved`
+  uint32 — same 16-byte header size, same wire positions).
 - **engine**: `engine-spatial` library — `fl::SpatialIndex`, a 2D uniform spatial hash (XZ
   bucketing, double-precision, configurable cell size, default 10 km) for entity neighbor and
   range queries at planet scale; `clear()` + `insert()` for per-tick rebuild; template

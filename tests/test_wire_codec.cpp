@@ -167,17 +167,17 @@ TEST_CASE("WireCodec: appendMsg + writeMsgAt build a snapshot the reader round-t
         e.pos[0] = static_cast<double>(i) * 10.0;
         fl::appendMsg(buf, e);
     }
-    hdr.entityCount = kCount;
+    hdr.fullEntityCount = kCount;
     fl::writeMsgAt(buf, hdrOffset, hdr);
 
     // Read back exactly like ClientNetEventHandler.
     fl::MsgWorldSnapshotHeader rh{};
     REQUIRE(fl::readMsg(buf.data(), buf.size(), rh));
-    CHECK(rh.entityCount == kCount);
+    CHECK(rh.fullEntityCount == kCount);
     CHECK(rh.tickIndex == 7u);
 
     std::size_t off = sizeof(rh);
-    for (uint16_t i = 0; i < rh.entityCount; ++i) {
+    for (uint16_t i = 0; i < rh.fullEntityCount; ++i) {
         fl::MsgEntityEntry e{};
         REQUIRE(fl::readRecordAt(buf.data(), buf.size(), off, e));
         off += sizeof(e);

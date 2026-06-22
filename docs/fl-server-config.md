@@ -64,8 +64,10 @@ stack = []
 [world]
 save_path          = "world.sav"
 autosave_interval_s = 300
-time_scale         = 10.0   # game seconds per real second; 10 = full day/night ≈ 2.4 real hours
-# planet_radius_m = 6371000 # planet sphere radius (m); Earth default
+time_scale         = 10.0        # game seconds per real second; 10 = full day/night ≈ 2.4 real hours
+# planet_radius_m         = 6371000  # planet sphere radius (m); Earth default
+# draw_distance_km        = 200.0    # per-peer interest management radius (km); [1, 100000]
+# baseline_interval_ticks = 120      # full-snapshot baseline interval for delta recovery; [1, 3600]
 
 [ai]
 difficulty_floor = "recruit"
@@ -355,6 +357,22 @@ lighting changes (e.g. afternoon → golden hour). Per-mission overrides are ava
 | float | `6371000.0` (Earth radius in metres) | `[1000, 1e9]` |
 
 Planet sphere radius in metres. The engine always uses spherical-Earth physics and terrain curvature; this field sets the radius for non-Earth planets. `MsgConnectAck.planetRadiusKm` is set to `planet_radius_m / 1000` so clients match server physics. Out-of-range values are rejected with a warning and the default is used.
+
+### `draw_distance_km`
+
+| Type | Default | Range |
+|---|---|---|
+| float | `200.0` | `[1, 100000]` |
+
+Per-peer interest management radius in kilometres. Only entities within this XZ-plane radius of a peer's own entity are included in that peer's `MsgWorldSnapshot`. The default of 200 km covers any current Phase 2 theater. Out-of-range values are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
+
+### `baseline_interval_ticks`
+
+| Type | Default | Range |
+|---|---|---|
+| integer | `120` | `[1, 3600]` |
+
+Interval in sim ticks between full-snapshot baselines. On baseline ticks all visible entities receive a full `MsgEntityEntry` regardless of known-entity state, providing UDP packet-loss recovery. At 60 Hz: `120` = 2 s recovery window. Smaller values reduce recovery time but increase bandwidth. Out-of-range values are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
 
 ---
 
@@ -795,7 +813,7 @@ process.
 | `spawn` | `<type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn a registered entity type at the given world position; optionally attach an AI controller. Behaviors: `loiter [cx cy cz [radius_m [alt_m [throttle [cw\|ccw]]]]]`, `waypoint x y z [x y z ...] [--loop]`, `pursuit <entityIdx>`, `evade <entityIdx>`, `break <entityIdx> [rollDuration]` |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
 | `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's game console to teleport the player entity |
-| `reload_config` | — | Re-read `server.toml` and apply: `name` (reflected in next LAN beacon broadcast), `motd` and `motd_display_s` (take effect for new connections) |
+| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `baseline_interval_ticks` (takes effect immediately for connected peers) |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
 | `pause` | — | Pause the simulation — ticks stop advancing; network connections remain active. In single-player the game client sends this automatically when the pause menu is opened. |
