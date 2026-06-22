@@ -284,6 +284,19 @@ asynchronously; clients may skip printing). `reqId` echoes the triggering
 | 2 | 2 | `reqId` | `uint16_t` | echoed from the triggering `MsgAdminCommand::reqId` |
 | 4 | 124 | `text` | `char[124]` | null-terminated UTF-8 response; 123 usable chars |
 
+**Deferred confirmation:** commands that enqueue a sim-thread mutation (e.g. `spawn`, `kill`,
+`tp`, `ban`, `kick`, `peers`) deliver their result in two stages:
+
+1. **Synchronous ack** — `MsgAdminResponse` or `MsgAdminResponseChunk` sent immediately;
+   may be empty (`text[0] == '\0'`) or a brief status such as `"spawn: queued …"`.
+2. **Deferred confirmation** — one additional `MsgAdminResponseChunk` (or `MsgAdminResponse`)
+   carrying the actual mutation result (e.g. `"[admin] spawned builtin:debug-entity entity=1/1"`)
+   arrives with the **same `reqId`** approximately one sim tick (~16 ms) later.
+
+Clients that display admin output should append every response packet that matches a pending
+`reqId`, not just the first. Deferred output is absent when the mutation produces no shell
+output (e.g. `set_weather`).
+
 ### MsgAdminResponseChunk — 512 bytes
 
 Reliable, server→client unicast. Streaming path for command results longer than 123 chars

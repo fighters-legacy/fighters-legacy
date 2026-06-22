@@ -2487,6 +2487,35 @@ static std::vector<uint8_t> makeAdminCmd(const char* token, const char* command,
     return {reinterpret_cast<const uint8_t*>(&msg), reinterpret_cast<const uint8_t*>(&msg) + sizeof(msg)};
 }
 
+// Minimal mock for CommandShell mark/drainSince injection. Pre-load `lines` before
+// advancing the tick; drainSince returns whatever is in `lines` regardless of the mark.
+struct ShellDrainMock {
+    std::vector<std::string> lines;
+    int mark() const {
+        return 0;
+    }
+    std::vector<std::string> drainSince(int /*mark*/) const {
+        return lines;
+    }
+};
+
+// Collect all MsgAdminResponse and MsgAdminResponseChunk packets from net.sends that
+// arrive at or after index `afterIdx`, filtered by msgId. Used to isolate deferred drain
+// output from the synchronous ack and WorldSnapshot sends that onTick also emits.
+static std::vector<std::vector<uint8_t>> drainSends(const MockNetwork& net, std::size_t afterIdx) {
+    std::vector<std::vector<uint8_t>> result;
+    for (std::size_t i = afterIdx; i < net.sends.size(); ++i) {
+        const auto& pkt = net.sends[i];
+        if (pkt.empty())
+            continue;
+        uint8_t id = pkt[0];
+        if (id == static_cast<uint8_t>(fl::MsgId::AdminResponse) ||
+            id == static_cast<uint8_t>(fl::MsgId::AdminResponseChunk))
+            result.push_back(pkt);
+    }
+    return result;
+}
+
 // Return true if the last entry in net.sends is a MsgAdminResponseChunk; populate chunk.
 static bool parseLastChunk(const MockNetwork& net, fl::MsgAdminResponseChunk& chunk) {
     if (net.sends.empty())
@@ -3382,6 +3411,374 @@ TEST_CASE("WorldBroadcaster: admin_unlock is a no-op when IP is not locked", "[w
     // Connect peer 1 from same IP: must not be refused
     broadcaster.onConnect(1u);
     CHECK(net.disconnectedPeers.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Admin shell drain tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: admin shell drain sends no follow-on when shell not configured",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+    // setAdminShell NOT called
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto cmd = makeAdminCmd("secret", "spawn");
+    broadcaster.onReceive(0u, cmd.data(), cmd.size());
+    std::size_t sendsAfterRecv = net.sends.size(); // 1 sync ack
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CHECK(drainSends(net, sendsAfterRecv).empty());
+}
+
+TEST_CASE("WorldBroadcaster: admin shell drain does not fire before the next tick",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+
+    ShellDrainMock shell;
+    broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    // Command received; drain scheduled for tick 1 (m_currentTick == 0 → fireAfterTick == 1).
+    auto cmd = makeAdminCmd("secret", "spawn");
+    broadcaster.onReceive(0u, cmd.data(), cmd.size());
+    std::size_t sendsAfterRecv = net.sends.size(); // 1 sync ack only
+
+    // Shell output would appear here between recv and tick — but no tick has fired the drain yet.
+    shell.lines.push_back("[admin] spawned entity=1/1");
+
+    // No additional admin sends before the next tick.
+    CHECK(drainSends(net, sendsAfterRecv).empty());
+}
+
+TEST_CASE("WorldBroadcaster: admin shell drain fires on the next tick and forwards shell lines",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+
+    ShellDrainMock shell;
+    broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto cmd = makeAdminCmd("secret", "spawn", 0x0001u);
+    broadcaster.onReceive(0u, cmd.data(), cmd.size());
+    std::size_t sendsAfterRecv = net.sends.size();
+
+    // Simulate callback output becoming available.
+    shell.lines.push_back("[admin] spawned builtin:debug-entity entity=1/1");
+
+    // Advance one tick — drain fires.
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto drain = drainSends(net, sendsAfterRecv);
+    REQUIRE(drain.size() == 1u);
+    fl::MsgAdminResponse resp{};
+    REQUIRE(drain[0].size() == sizeof(fl::MsgAdminResponse));
+    std::memcpy(&resp, drain[0].data(), sizeof(resp));
+    CHECK(std::string(resp.text) == "[admin] spawned builtin:debug-entity entity=1/1");
+}
+
+TEST_CASE("WorldBroadcaster: admin shell drain sends nothing when drain returns empty vector",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+
+    ShellDrainMock shell; // lines stays empty
+    broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto cmd = makeAdminCmd("secret", "set_weather");
+    broadcaster.onReceive(0u, cmd.data(), cmd.size());
+    std::size_t sendsAfterRecv = net.sends.size();
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CHECK(drainSends(net, sendsAfterRecv).empty());
+}
+
+TEST_CASE("WorldBroadcaster: admin shell drain skips disconnected peer", "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+
+    ShellDrainMock shell;
+    broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto cmd = makeAdminCmd("secret", "spawn");
+    broadcaster.onReceive(0u, cmd.data(), cmd.size());
+    std::size_t sendsAfterRecv = net.sends.size();
+
+    shell.lines.push_back("[admin] spawned entity=1/1");
+
+    // Peer disconnects before the drain tick.
+    broadcaster.onDisconnect(0u);
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CHECK(drainSends(net, sendsAfterRecv).empty());
+}
+
+TEST_CASE("WorldBroadcaster: admin shell drain echoes correct reqId in follow-on response",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+
+    ShellDrainMock shell;
+    broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto cmd = makeAdminCmd("secret", "spawn", 0xABCDu);
+    broadcaster.onReceive(0u, cmd.data(), cmd.size());
+    std::size_t sendsAfterRecv = net.sends.size();
+
+    shell.lines.push_back("[admin] spawned entity=1/1");
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto drain = drainSends(net, sendsAfterRecv);
+    REQUIRE(drain.size() == 1u);
+    fl::MsgAdminResponse resp{};
+    REQUIRE(drain[0].size() == sizeof(fl::MsgAdminResponse));
+    std::memcpy(&resp, drain[0].data(), sizeof(resp));
+    CHECK(resp.reqId == 0xABCDu);
+}
+
+TEST_CASE("WorldBroadcaster: two admin commands queue independent drains with separate reqIds",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+
+    ShellDrainMock shell;
+    broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto cmd1 = makeAdminCmd("secret", "spawn", 0x0001u);
+    auto cmd2 = makeAdminCmd("secret", "kill", 0x0002u);
+    broadcaster.onReceive(0u, cmd1.data(), cmd1.size());
+    broadcaster.onReceive(0u, cmd2.data(), cmd2.size());
+    std::size_t sendsAfterRecv = net.sends.size(); // 2 sync acks
+
+    // Both drains return the same lines (mark/drainSince mock ignores the mark value).
+    shell.lines.push_back("[admin] result line");
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    // Two deferred responses, one per pending drain.
+    auto drain = drainSends(net, sendsAfterRecv);
+    REQUIRE(drain.size() == 2u);
+
+    // Extract reqIds from both responses.
+    fl::MsgAdminResponse r0{}, r1{};
+    REQUIRE(drain[0].size() == sizeof(fl::MsgAdminResponse));
+    REQUIRE(drain[1].size() == sizeof(fl::MsgAdminResponse));
+    std::memcpy(&r0, drain[0].data(), sizeof(r0));
+    std::memcpy(&r1, drain[1].data(), sizeof(r1));
+
+    std::vector<uint16_t> reqIds{r0.reqId, r1.reqId};
+    std::sort(reqIds.begin(), reqIds.end());
+    CHECK(reqIds[0] == 0x0001u);
+    CHECK(reqIds[1] == 0x0002u);
+}
+
+TEST_CASE("WorldBroadcaster: admin shell drain fires exactly once", "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+
+    ShellDrainMock shell;
+    broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto cmd = makeAdminCmd("secret", "spawn");
+    broadcaster.onReceive(0u, cmd.data(), cmd.size());
+    std::size_t sendsAfterRecv = net.sends.size();
+
+    shell.lines.push_back("[admin] spawned entity=1/1");
+
+    // Tick 1: drain fires.
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    std::size_t sendsAfterTick1 = net.sends.size();
+
+    // Tick 2: drain must NOT fire again (entry was erased).
+    broadcaster.onTick(1.0 / 60.0, 2u);
+
+    CHECK(drainSends(net, sendsAfterTick1).empty());
+    // And tick 1 did deliver exactly one drain response.
+    CHECK(drainSends(net, sendsAfterRecv).size() == 1u);
+}
+
+TEST_CASE("WorldBroadcaster: admin shell drain with long output streams as MsgAdminResponseChunk",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+
+    ShellDrainMock shell;
+    broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto cmd = makeAdminCmd("secret", "peers");
+    broadcaster.onReceive(0u, cmd.data(), cmd.size());
+    std::size_t sendsAfterRecv = net.sends.size();
+
+    // Line longer than kAdminResponseFastPathMax (123) → must route via chunk stream.
+    shell.lines.push_back(std::string(200, 'x'));
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto drain = drainSends(net, sendsAfterRecv);
+    REQUIRE(drain.size() == 1u);
+    fl::MsgAdminResponseChunk chunk{};
+    REQUIRE(drain[0].size() == sizeof(fl::MsgAdminResponseChunk));
+    std::memcpy(&chunk, drain[0].data(), sizeof(chunk));
+    CHECK(chunk.msgId == static_cast<uint8_t>(fl::MsgId::AdminResponseChunk));
+    CHECK((chunk.flags & fl::kChunkFlagEnd) != 0u);
+    CHECK(std::strlen(chunk.body) == 200u);
+}
+
+TEST_CASE("WorldBroadcaster: admin shell drain joins multiple lines with newline",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+
+    ShellDrainMock shell;
+    broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto cmd = makeAdminCmd("secret", "peers");
+    broadcaster.onReceive(0u, cmd.data(), cmd.size());
+    std::size_t sendsAfterRecv = net.sends.size();
+
+    shell.lines = {"line1", "line2", "line3"};
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto drain = drainSends(net, sendsAfterRecv);
+    REQUIRE(drain.size() == 1u);
+    fl::MsgAdminResponse resp{};
+    REQUIRE(drain[0].size() == sizeof(fl::MsgAdminResponse));
+    std::memcpy(&resp, drain[0].data(), sizeof(resp));
+    CHECK(std::string(resp.text) == "line1\nline2\nline3");
+}
+
+TEST_CASE("WorldBroadcaster: admin shell drain sends nothing when all drain lines are empty",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setOperatorPassword("secret");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
+
+    ShellDrainMock shell;
+    broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
+
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+
+    auto cmd = makeAdminCmd("secret", "spawn");
+    broadcaster.onReceive(0u, cmd.data(), cmd.size());
+    std::size_t sendsAfterRecv = net.sends.size();
+
+    // All-empty strings: join produces "\n", pop_back gives "", guard suppresses send.
+    shell.lines = {"", ""};
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CHECK(drainSends(net, sendsAfterRecv).empty());
 }
 
 TEST_CASE("WorldBroadcaster: MsgConnectAck planetRadiusKm is Earth radius by default", "[world_broadcaster][gravity]") {

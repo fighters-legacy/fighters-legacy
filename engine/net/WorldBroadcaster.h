@@ -263,6 +263,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Call before gameLoop.start(). Does not take ownership.
     void setAdminDispatch(std::function<std::string(std::string_view)> fn);
 
+    // Wire CommandShell mark/drainSince callbacks so that output written inside
+    // enqueueSimCallback lambdas is forwarded to the requesting peer as follow-on
+    // MsgAdminResponseChunk packets on the next sim tick. Null functions (the default)
+    // disable deferred output forwarding. Call before gameLoop.start().
+    // Pattern mirrors setAdminDispatch to avoid coupling engine-net to engine-console.
+    void setAdminShell(std::function<int()> markFn, std::function<std::vector<std::string>(int)> drainFn);
+
     // Configure per-IP failed-auth lockout for the operator network admin channel.
     // After maxFailures consecutive wrong passwords from the same IP the peer is kicked
     // and reconnections from that IP are refused for lockoutSeconds seconds.
@@ -391,6 +398,18 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::string m_operatorPassword;                               // empty = admin channel disabled
     std::function<std::string(std::string_view)> m_adminDispatch; // null = admin channel disabled
     AuthTracker m_adminAuthTracker{5, 300}; // per-IP failed-auth lockout (defaults: 5 attempts, 5 min)
+
+    // Deferred admin shell drain: one entry per in-flight MsgAdminCommand; fires one tick after
+    // dispatch so enqueueSimCallback lambdas have run and shell output is available.
+    struct PendingAdminDrain {
+        uint32_t peerId;
+        uint16_t reqId;
+        int shellMark;
+        uint64_t fireAfterTick;
+    };
+    std::vector<PendingAdminDrain> m_pendingAdminDrains;
+    std::function<int()> m_adminShellMark;                          // null = drain disabled
+    std::function<std::vector<std::string>(int)> m_adminShellDrain; // null = drain disabled
 
     SpatialIndex m_spatialIndex; // rebuilt at the start of each onTick; default 10 km cell size
 
