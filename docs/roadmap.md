@@ -1,6 +1,6 @@
 # Roadmap
 
-Development is tracked through [GitHub milestones](https://github.com/jomkz/fighters-legacy/milestones).
+Development is tracked through [GitHub milestones](https://github.com/fighters-legacy/fighters-legacy/milestones).
 Each phase has a milestone with individual issues for every workstream task.
 
 ## Schedule

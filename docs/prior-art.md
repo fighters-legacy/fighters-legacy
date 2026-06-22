@@ -145,5 +145,5 @@ quality — which is a valuable and currently unoccupied position in the open-so
 ## Flight Model Prior Art
 
 The FDM design decision — a simplified 6-DOF stability-derivative model — is documented in
-[issue #103](https://github.com/jomkz/fighters-legacy/issues/103). See
+[issue #103](https://github.com/fighters-legacy/fighters-legacy/issues/103). See
 [`docs/design.md`](design.md) for the fidelity target that drives it.

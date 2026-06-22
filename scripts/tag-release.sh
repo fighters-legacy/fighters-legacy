@@ -22,4 +22,4 @@ git push origin "$VERSION"
 
 echo ""
 echo "Tag $VERSION pushed. Release workflow:"
-echo "  https://github.com/jomkz/fighters-legacy/actions/workflows/release.yml"
+echo "  https://github.com/fighters-legacy/fighters-legacy/actions/workflows/release.yml"

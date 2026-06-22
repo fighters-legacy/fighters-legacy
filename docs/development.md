@@ -564,9 +564,9 @@ cmake --build --preset debug --target fighters-legacy
 
 | Platform | Path |
 |----------|------|
-| Linux    | `~/.local/share/jomkz/fighters-legacy/` |
-| macOS    | `~/Library/Application Support/jomkz/fighters-legacy/` |
-| Windows  | `%APPDATA%\jomkz\fighters-legacy\` |
+| Linux    | `~/.local/share/mkzsystems/fighters-legacy/` |
+| macOS    | `~/Library/Application Support/mkzsystems/fighters-legacy/` |
+| Windows  | `%APPDATA%\mkzsystems\fighters-legacy\` |
 
 Session logs are written to `<userdata>/logs/engine_<date>.log` (10 retained).
 Crash dumps are written to `<userdata>/logs/crash_<timestamp>.log` (5 retained).
@@ -581,7 +581,7 @@ To report phase completion against target dates:
 ./scripts/roadmap-status.sh
 ```
 
-Queries the [GitHub Project](https://github.com/users/jomkz/projects/2) via `gh` and prints a per-phase progress table showing % done, % of time elapsed, and an on-track/at-risk/behind/overdue signal. Requires `gh` (authenticated) and GNU `date`.
+Queries the repository's [GitHub milestones](https://github.com/fighters-legacy/fighters-legacy/milestones) via `gh` and prints a per-phase progress table showing % done (closed/total issues), % of time elapsed, and an on-track/at-risk/behind/overdue signal. Milestones carry only a due date, so each phase's elapsed window is derived sequentially (a phase starts when the previous one is due). Requires `gh` (authenticated), `jq`, and GNU `date`.
 
 ---
 

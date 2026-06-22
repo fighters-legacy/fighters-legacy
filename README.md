@@ -1,9 +1,9 @@
 # Fighters Legacy
 
-[![CI](https://github.com/jomkz/fighters-legacy/actions/workflows/ci.yml/badge.svg)](https://github.com/jomkz/fighters-legacy/actions/workflows/ci.yml)
-[![Coverage](https://codecov.io/gh/jomkz/fighters-legacy/branch/main/graph/badge.svg)](https://codecov.io/gh/jomkz/fighters-legacy)
-[![CodeQL](https://github.com/jomkz/fighters-legacy/actions/workflows/codeql.yml/badge.svg)](https://github.com/jomkz/fighters-legacy/actions/workflows/codeql.yml)
-[![REUSE status](https://api.reuse.software/badge/github.com/jomkz/fighters-legacy)](https://api.reuse.software/info/github.com/jomkz/fighters-legacy)
+[![CI](https://github.com/fighters-legacy/fighters-legacy/actions/workflows/ci.yml/badge.svg)](https://github.com/fighters-legacy/fighters-legacy/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/fighters-legacy/fighters-legacy/branch/main/graph/badge.svg)](https://codecov.io/gh/fighters-legacy/fighters-legacy)
+[![CodeQL](https://github.com/fighters-legacy/fighters-legacy/actions/workflows/codeql.yml/badge.svg)](https://github.com/fighters-legacy/fighters-legacy/actions/workflows/codeql.yml)
+[![REUSE status](https://api.reuse.software/badge/github.com/fighters-legacy/fighters-legacy)](https://api.reuse.software/info/github.com/fighters-legacy/fighters-legacy)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 A **general-purpose combat flight sim engine** with a first-class mod and plugin
@@ -30,18 +30,18 @@ every asset source is a mod or plugin.
 
 ## Roadmap
 
-Development is tracked through [GitHub milestones](https://github.com/jomkz/fighters-legacy/milestones).
+Development is tracked through [GitHub milestones](https://github.com/fighters-legacy/fighters-legacy/milestones).
 
 | Phase | Description |
 |---|---|
 | 1 — Engine Foundation ✓ | HAL, Vulkan, SDL3, OpenAL, ENet, content system, CI/CD |
 | 2 — Modern-Particles Engine ✓ | Game loop, flight model, AI, networking, renderer, spherical-Earth world model |
-| [3 — Engine Systems](https://github.com/jomkz/fighters-legacy/milestone/8) | Spatial partitioning, interest management, AI framework, bindings, quality settings, pilot profiles |
-| [4 — Content & Gameplay](https://github.com/jomkz/fighters-legacy/milestone/9) | fl-base-pack content, radar/weapons/EW, AI, missions, campaign, multiplayer, advanced vehicle models |
-| [5 — UI Layer & Tooling](https://github.com/jomkz/fighters-legacy/milestone/4) | IGui HAL + Dear ImGui backend, in-game mission editor, welcome screen |
-| [6 — Platform Release](https://github.com/jomkz/fighters-legacy/milestone/5) | macOS/Linux/Windows packages, Flathub, fl-server container, crash reporting |
-| [7 — OpenGL & Alternative Renderers](https://github.com/jomkz/fighters-legacy/milestone/7) | OpenGL 4.1 Core backend, headless/software renderer for CI, voice chat |
-| [8 — Modding Platform](https://github.com/jomkz/fighters-legacy/milestone/6) | GPG verification, subprocess isolation, in-game mod browser, community content distribution |
+| [3 — Engine Systems](https://github.com/fighters-legacy/fighters-legacy/milestone/8) | Spatial partitioning, interest management, AI framework, bindings, quality settings, pilot profiles |
+| [4 — Content & Gameplay](https://github.com/fighters-legacy/fighters-legacy/milestone/9) | fl-base-pack content, radar/weapons/EW, AI, missions, campaign, multiplayer, advanced vehicle models |
+| [5 — UI Layer & Tooling](https://github.com/fighters-legacy/fighters-legacy/milestone/4) | IGui HAL + Dear ImGui backend, in-game mission editor, welcome screen |
+| [6 — Platform Release](https://github.com/fighters-legacy/fighters-legacy/milestone/5) | macOS/Linux/Windows packages, Flathub, fl-server container, crash reporting |
+| [7 — OpenGL & Alternative Renderers](https://github.com/fighters-legacy/fighters-legacy/milestone/7) | OpenGL 4.1 Core backend, headless/software renderer for CI, voice chat |
+| [8 — Modding Platform](https://github.com/fighters-legacy/fighters-legacy/milestone/6) | GPG verification, subprocess isolation, in-game mod browser, community content distribution |
 
 See [docs/roadmap.md](docs/roadmap.md) for the schedule, critical path, and
 per-phase acceptance criteria.
@@ -66,5 +66,5 @@ mod authors — see [LICENSES/](LICENSES/) for the full text.
 Copyright © 2026 MKZ Systems LLC.
 
 **Fighters Legacy™** is a trademark of MKZ Systems LLC. The GPL covers the code, not the
-name or logo — see [TRADEMARK.md](TRADEMARK.md) for what community redistributions may and
+name or logo — see [TRADEMARK.md](https://github.com/fighters-legacy/.github/blob/main/TRADEMARK.md) for what community redistributions may and
 may not call themselves.

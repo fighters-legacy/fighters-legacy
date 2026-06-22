@@ -199,7 +199,7 @@ mods/
     example-content/          ← compiled content pack (ships as shared library)
         manifest.toml
         example-content.dll/.so
-    fl-base-pack/             ← bundled default content (Phase 2+, jomkz/fl-base-pack)
+    fl-base-pack/             ← bundled default content (Phase 2+, fighters-legacy/fl-base-pack)
         manifest.toml
         aircraft/
         missions/

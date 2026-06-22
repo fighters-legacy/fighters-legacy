@@ -58,7 +58,7 @@ Required for:
 
 ## Code of Conduct Enforcement
 
-Enforcement is handled by the Project Lead. Appeals may be sent to **fighters-legacy@mkz.io**. The enforcement ladder follows the [Code of Conduct](CODE_OF_CONDUCT.md):
+Enforcement is handled by the Project Lead. Appeals may be sent to **fighters-legacy@mkz.io**. The enforcement ladder follows the [Code of Conduct](https://github.com/fighters-legacy/.github/blob/main/CODE_OF_CONDUCT.md):
 
 1. Correction
 2. Warning

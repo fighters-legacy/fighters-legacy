@@ -28,7 +28,7 @@ tests/          — Catch2 unit tests (C++); pytest unit tests for Python tools 
 ```
 
 The engine is fully content-agnostic. It knows nothing about FA or any specific game.
-FA support lives in jomkz/fa-content. No FA-specific code belongs in this repo.
+FA support lives in fighters-legacy/fa-content. No FA-specific code belongs in this repo.
 
 `ft-gui` is an old name for `fighters-codex` (a separate project). It has no role here. Phase 4 UI work follows the `IGui` HAL pattern (pure-virtual interface + swappable backends, same as `IRenderer`); no ft-gui references belong in this repo.
 
