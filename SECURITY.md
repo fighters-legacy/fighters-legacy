@@ -12,7 +12,7 @@ Once 1.0.0 is released this table will list supported minor branches.
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Email **fighters-legacy@mkz.io** with:
+Email **security@fighterslegacy.org** with:
 
 - A description of the vulnerability
 - Steps to reproduce

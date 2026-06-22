@@ -24,6 +24,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **docs**: wired concrete project contact addresses into the policy files ahead of the
+  move to the `fighters-legacy` GitHub org — `security@fighterslegacy.org` in `SECURITY.md`
+  and `trademark@fighterslegacy.org` in `TRADEMARK.md`.
+
 - **docs**: `TRADEMARK.md` — a permissive trademark policy for the **Fighters Legacy™**
   mark (faithful community rebuilds may keep the name; modified builds must rebrand), an
   `AUTHORS` file recording author credit (John McKenzie) separately from the copyright

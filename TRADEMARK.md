@@ -41,8 +41,13 @@ reliably identifies official, unmodified builds.
 - A faithful rebuild: **keep the name.** A fork or a build with changed gameplay,
   bundled different content, or altered branding: **pick your own name** (you may still
   state, factually, that it is "based on Fighters Legacy").
-- When in doubt, or to request permission for a use not covered above, contact
-  MKZ Systems LLC.
+- When in doubt, or to request permission for a use not covered above, contact us
+  (see below).
+
+## Contact
+
+Trademark questions and permission requests: **trademark@fighterslegacy.org**
+(MKZ Systems LLC).
 
 The **®** symbol will be used only after federal registration; until then the mark is
 asserted as **™**. This policy may be updated as the project and its trademarks mature.
