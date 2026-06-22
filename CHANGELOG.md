@@ -16,6 +16,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: ENet admin channel (`MsgAdminCommand`) now delivers deferred `CommandShell`
+  output written inside `enqueueSimCallback` lambdas as follow-on `MsgAdminResponseChunk`
+  packets on the next sim tick, matching the async drain behaviour already present in the RCON
+  channel. Commands like `spawn`, `kill`, `tp`, `ban`, and `peers` previously sent only a
+  brief queued-ack over ENet; the actual confirmation (e.g. `"[admin] spawned … entity=N/N"`)
+  now arrives as a second response packet sharing the same `reqId`. Wired via
+  `WorldBroadcaster::setAdminShell()` (std::function injection, no new CMake dependencies).
+  (#377)
+
 - **network**: Snapshot interest management + delta compression for 20+ player scale (#346):
   `WorldBroadcaster::onTick()` now sends a per-peer unicast `MsgWorldSnapshot` via
   `INetwork::send()` containing only entities within `draw_distance_km` of the peer's own

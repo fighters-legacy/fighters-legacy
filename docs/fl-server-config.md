@@ -540,6 +540,10 @@ Password for the network-level authenticated admin command channel (`MsgAdminCom
 admin commands (e.g. `spawn`, `kill`, `tp`, `set_weather`) over ENet — the same commands
 available on the stdin console — and receive text responses via `MsgAdminResponse` (short
 results, ≤ 123 chars) or a sequence of `MsgAdminResponseChunk` (0x0A) packets (long results).
+Commands that enqueue a sim-thread mutation (e.g. `spawn`, `kill`, `tp`, `ban`) send a brief
+queued-ack immediately, followed by a deferred confirmation packet — carrying the actual result
+(e.g. entity index, new position) — within approximately one sim tick (~16 ms). The deferred
+packet shares the same `reqId` as the original command.
 
 Empty string (default) **disables** the network admin channel entirely; stdin-only access
 is still available.

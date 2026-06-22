@@ -485,6 +485,8 @@ int main(int argc, char** argv) {
     // adminRegistry (built just above) so it is wired here.
     if (!cfg.operatorPassword.empty()) {
         broadcaster.setAdminDispatch([&adminRegistry](std::string_view cmd) { return adminRegistry.dispatch(cmd); });
+        broadcaster.setAdminShell([&adminShell]() { return adminShell.mark(); },
+                                  [&adminShell](int m) { return adminShell.drainSince(m); });
         log->log(LogLevel::Info, __FILE__, __LINE__, "network admin commands: enabled");
     } else {
         log->log(LogLevel::Info, __FILE__, __LINE__,

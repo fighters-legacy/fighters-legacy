@@ -226,6 +226,12 @@ void WorldBroadcaster::setAdminDispatch(std::function<std::string(std::string_vi
     m_adminDispatch = std::move(fn);
 }
 
+void WorldBroadcaster::setAdminShell(std::function<int()> markFn,
+                                     std::function<std::vector<std::string>(int)> drainFn) {
+    m_adminShellMark = std::move(markFn);
+    m_adminShellDrain = std::move(drainFn);
+}
+
 void WorldBroadcaster::setAdminAuthParams(int maxFailures, int lockoutSeconds) {
     m_adminAuthTracker = AuthTracker(maxFailures, lockoutSeconds);
     m_adminAuthTracker.setClock(*m_clock);
@@ -305,6 +311,36 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             std::snprintf(msg, sizeof(msg), "peer %u idle timeout — disconnecting", pid);
             m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
             m_net.disconnectPeer(pid);
+        }
+    }
+
+    // Fire deferred admin drains: deliver CommandShell output written by enqueueSimCallback
+    // lambdas as follow-on MsgAdminResponseChunk packets. Callbacks enqueued during tick N run
+    // before onTick(N+1), so fireAfterTick = N+1 guarantees the output is ready.
+    if (!m_pendingAdminDrains.empty() && m_adminShellDrain) {
+        auto it = m_pendingAdminDrains.begin();
+        while (it != m_pendingAdminDrains.end()) {
+            if (tickIndex < it->fireAfterTick) {
+                ++it;
+                continue;
+            }
+            if (m_peerEntities.count(it->peerId)) {
+                auto lines = m_adminShellDrain(it->shellMark);
+                if (!lines.empty()) {
+                    std::string payload;
+                    for (const auto& ln : lines) {
+                        if (!ln.empty()) {
+                            payload += ln;
+                            payload += '\n';
+                        }
+                    }
+                    if (!payload.empty())
+                        payload.pop_back(); // trim trailing newline
+                    if (!payload.empty())
+                        sendAdminResponse(m_net, it->peerId, it->reqId, payload);
+                }
+            }
+            it = m_pendingAdminDrains.erase(it);
         }
     }
 
@@ -649,6 +685,10 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     m_peerFloodState.erase(peerId);
     m_peerKnownGens.erase(peerId);
     m_activePeerCount.fetch_sub(1, std::memory_order_relaxed);
+
+    m_pendingAdminDrains.erase(std::remove_if(m_pendingAdminDrains.begin(), m_pendingAdminDrains.end(),
+                                              [peerId](const PendingAdminDrain& d) { return d.peerId == peerId; }),
+                               m_pendingAdminDrains.end());
 }
 
 void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t size) {
@@ -781,6 +821,12 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         }
 
         sendAdminResponse(m_net, peerId, reqId, result);
+
+        // Queue a one-tick-deferred drain: enqueueSimCallback lambdas write to the shell
+        // before onTick(m_currentTick+1) runs, so drainSince fires in the next tick.
+        // Mark is taken after dispatch to skip any sync shell.print() calls made during dispatch.
+        if (m_adminShellMark && m_adminShellDrain)
+            m_pendingAdminDrains.push_back({peerId, reqId, m_adminShellMark(), m_currentTick + 1u});
     } else if (msgId == static_cast<uint8_t>(MsgId::Heartbeat)) {
         MsgHeartbeat hb;
         if (!readMsg(data, size, hb))
