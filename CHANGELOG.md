@@ -9,6 +9,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **tools**: `scripts/roadmap-status.sh` now reports progress from the repository's GitHub
+  issue milestones (closed/total issue counts + due date per `Phase N` milestone) instead of
+  the GitHub Project's "Phase" single-select field, which was removed. Pulls milestones via a
+  single REST call; derives each phase's elapsed window sequentially from milestone due dates
+  (milestones have no start date) to keep the on-track/at-risk/behind/overdue signal.
+
 - **docs**: completed the `jomkz` → `fighters-legacy` GitHub org migration for in-repo
   references — rewrote repository URLs (README badges, roadmap milestones, `SUPPORT.md`,
   issue-template config, the release scripts, and the compiled issue-report URLs in
