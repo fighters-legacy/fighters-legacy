@@ -62,3 +62,9 @@ terms.
 `IContentPack.h` carries a **GPL linking exception** permitting content pack authors to
 link against the interface without their pack being subject to GPL v3. This covers most
 mod authors — see [LICENSES/](LICENSES/) for the full text.
+
+Copyright © 2026 MKZ Systems LLC.
+
+**Fighters Legacy™** is a trademark of MKZ Systems LLC. The GPL covers the code, not the
+name or logo — see [TRADEMARK.md](TRADEMARK.md) for what community redistributions may and
+may not call themselves.

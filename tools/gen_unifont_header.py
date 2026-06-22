@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 John McKenzie
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Generate platform/vulkan/UnifontBitmap.{h,cpp} from GNU Unifont .hex data.
 

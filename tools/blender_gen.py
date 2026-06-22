@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 John McKenzie
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
 Blender 4.x headless fighter aircraft mesh generator.
