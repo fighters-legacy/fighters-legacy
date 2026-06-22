@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 John McKenzie
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Unit tests for tools/gen_terrain_chunks.py — pure-Python logic, no GDAL required."""
 

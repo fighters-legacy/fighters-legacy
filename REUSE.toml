@@ -2,32 +2,37 @@ version = 1
 
 [[annotations]]
 path = ["**.h", "**.c", "**.cpp", "**.vert", "**.frag", "**.comp", "**.glsl"]
-SPDX-FileCopyrightText = "2026 John McKenzie"
+SPDX-FileCopyrightText = "2026 MKZ Systems LLC"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
 [[annotations]]
 path = ["**.md", "**.toml", "**.yml", "**.yaml", "**.json", "**.ini", "**.txt", "**.cmake"]
-SPDX-FileCopyrightText = "2026 John McKenzie"
+SPDX-FileCopyrightText = "2026 MKZ Systems LLC"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
 [[annotations]]
 path = "cmake/**.h.in"
-SPDX-FileCopyrightText = "2026 John McKenzie"
+SPDX-FileCopyrightText = "2026 MKZ Systems LLC"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
 [[annotations]]
 path = [".gitignore", ".gitattributes", ".editorconfig", ".clang-format", ".clangd", ".github/CODEOWNERS"]
-SPDX-FileCopyrightText = "2026 John McKenzie"
+SPDX-FileCopyrightText = "2026 MKZ Systems LLC"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
 [[annotations]]
 path = [".vscode/**"]
-SPDX-FileCopyrightText = "2026 John McKenzie"
+SPDX-FileCopyrightText = "2026 MKZ Systems LLC"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
 [[annotations]]
 path = ["scripts/**"]
-SPDX-FileCopyrightText = "2026 John McKenzie"
+SPDX-FileCopyrightText = "2026 MKZ Systems LLC"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+[[annotations]]
+path = "AUTHORS"
+SPDX-FileCopyrightText = "2026 MKZ Systems LLC"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
 [[annotations]]

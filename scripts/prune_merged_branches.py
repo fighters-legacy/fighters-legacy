@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: 2026 John McKenzie <anthropic@mkz.io>
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
 Prune local and remote branches that have already been merged into main.

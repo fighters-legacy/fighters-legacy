@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 John McKenzie
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
 Generate minimal glTF 2.0 binary (.glb) byte arrays for BuiltinGeometry.cpp.

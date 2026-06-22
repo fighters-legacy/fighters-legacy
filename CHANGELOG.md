@@ -9,12 +9,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **docs**: clarified the distribution & monetization strategy in `docs/distribution.md`
+  — adopts a softened, Ardour-style "sell convenience, not the game" model (GPL §6 makes
+  binaries non-gateable; first-party builds are paid and framed as supporting
+  development, Flathub and community repackages stay free), and documents trademark +
+  proprietary content as the real revenue levers. Reassigned codebase copyright holder
+  from "John McKenzie" to **MKZ Systems LLC** across `REUSE.toml` and inline tool/script
+  SPDX headers.
+
 - **flight**: `FlightState::vel_body[3]` upgraded from `float[3]` to `double[3]` for
   ICBM-range trajectory precision; adds `quatRotateD` for double-precision world-frame
   position integration; unblocks ballistic force model (#354) and missile guidance (#355)
   (#387)
 
 ### Added
+
+- **docs**: `TRADEMARK.md` — a permissive trademark policy for the **Fighters Legacy™**
+  mark (faithful community rebuilds may keep the name; modified builds must rebrand), an
+  `AUTHORS` file recording author credit (John McKenzie) separately from the copyright
+  holder (MKZ Systems LLC), and an explicit copyright + trademark notice in the README
+  License section.
 
 - **network**: ENet admin channel (`MsgAdminCommand`) now delivers deferred `CommandShell`
   output written inside `enqueueSimCallback` lambdas as follow-on `MsgAdminResponseChunk`
