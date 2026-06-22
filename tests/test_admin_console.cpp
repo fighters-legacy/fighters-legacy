@@ -19,6 +19,7 @@
 #include <csignal>
 #include <cstring>
 #include <string>
+#include <weather/WeatherController.h>
 
 // Fixtures used by the async-ack tests (need a real GameLoop so enqueueSimCallback is safe).
 // "2" suffix avoids name collisions with any mock in mock_hal.h.
@@ -886,4 +887,24 @@ TEST_CASE("WorldBroadcaster: setGroundElevationQuery is called per entity during
     f.broadcaster.onTick(1.0 / 60.0, 1u);
 
     CHECK(queryCalls > 0);
+}
+
+TEST_CASE("AdminConsole: set_weather snow enqueues preset change", "[admin_console]") {
+    AsyncAckFixture f;
+    fl::WeatherController wc;
+    f.ctx.sim.weatherController = &wc;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("set_weather snow");
+    CHECK(out.find("snow") != std::string::npos);
+    CHECK(out.find("not available") == std::string::npos);
+}
+
+TEST_CASE("AdminConsole: set_weather blizzard enqueues preset change", "[admin_console]") {
+    AsyncAckFixture f;
+    fl::WeatherController wc;
+    f.ctx.sim.weatherController = &wc;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("set_weather blizzard");
+    CHECK(out.find("blizzard") != std::string::npos);
+    CHECK(out.find("not available") == std::string::npos);
 }

@@ -164,6 +164,8 @@ struct EnvironmentState {
     float cloudCoverage{0.0f}; // [0=clear .. 1=full storm cover]; driven by WeatherController
     float windX{0.0f};         // world-frame wind m/s (from MsgWeatherState)
     float windZ{0.0f};         // world-frame wind m/s (from MsgWeatherState)
+    bool isSnowPrecipitation{
+        false}; // true when server preset is Snow or Blizzard; set by WeatherController::applyPresetToEnv
 };
 
 // ---------------------------------------------------------------------------

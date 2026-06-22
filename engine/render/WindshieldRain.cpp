@@ -16,7 +16,8 @@ WindshieldRain::WindshieldRain() {
     }
 }
 
-void WindshieldRain::update(float dt, const EnvironmentState& env, float rollRad, bool isSnow) {
+void WindshieldRain::update(float dt, const EnvironmentState& env, float rollRad) {
+    const bool isSnow = env.isSnowPrecipitation;
     m_elementCount = 0;
     if (env.cloudCoverage < kRainThreshold)
         return;

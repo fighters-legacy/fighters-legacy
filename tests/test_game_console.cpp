@@ -973,6 +973,14 @@ TEST_CASE("set_weather command forwards valid presets to serverCommand", "[conso
     CHECK(reg.dispatch("set_weather clear").find("queued") != std::string::npos);
     CHECK(captured.find("clear") != std::string::npos);
 
+    captured.clear();
+    CHECK(reg.dispatch("set_weather snow").find("queued") != std::string::npos);
+    CHECK(captured.find("snow") != std::string::npos);
+
+    captured.clear();
+    CHECK(reg.dispatch("set_weather blizzard").find("queued") != std::string::npos);
+    CHECK(captured.find("blizzard") != std::string::npos);
+
     CHECK(reg.dispatch("set_weather hurricane").find("unknown") != std::string::npos);
     CHECK(reg.dispatch("set_weather").find("usage") != std::string::npos);
 }

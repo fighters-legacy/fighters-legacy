@@ -244,6 +244,28 @@ TEST_CASE("GameProtocol: MsgWeatherState round-trip preserves all fields", "[gam
     CHECK(parsed.windZ == -2.1f);
 }
 
+TEST_CASE("GameProtocol: MsgWeatherState round-trip preserves Snow preset value", "[game_protocol][weather]") {
+    fl::MsgWeatherState src{};
+    src.preset = static_cast<uint8_t>(fl::WeatherPreset::Snow);
+    std::vector<uint8_t> buf(sizeof(src));
+    std::memcpy(buf.data(), &src, sizeof(src));
+    fl::MsgWeatherState parsed{};
+    std::memcpy(&parsed, buf.data(), sizeof(parsed));
+    CHECK(parsed.preset == static_cast<uint8_t>(fl::WeatherPreset::Snow));
+    CHECK(parsed.preset == 5u);
+}
+
+TEST_CASE("GameProtocol: MsgWeatherState round-trip preserves Blizzard preset value", "[game_protocol][weather]") {
+    fl::MsgWeatherState src{};
+    src.preset = static_cast<uint8_t>(fl::WeatherPreset::Blizzard);
+    std::vector<uint8_t> buf(sizeof(src));
+    std::memcpy(buf.data(), &src, sizeof(src));
+    fl::MsgWeatherState parsed{};
+    std::memcpy(&parsed, buf.data(), sizeof(parsed));
+    CHECK(parsed.preset == static_cast<uint8_t>(fl::WeatherPreset::Blizzard));
+    CHECK(parsed.preset == 6u);
+}
+
 TEST_CASE("GameProtocol: MsgWeatherState timeOfDayTenths decodes to 14.5 hours", "[game_protocol][weather]") {
     fl::MsgWeatherState ws{};
     ws.timeOfDayTenths = 145u;

@@ -407,10 +407,10 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
     // set_weather <preset>
     registry.registerCommand(
-        "set_weather", "set_weather <clear|partly_cloudy|overcast|rain|storm>  -- change weather preset",
+        "set_weather", "set_weather <clear|partly_cloudy|overcast|rain|storm|snow|blizzard>  -- change weather preset",
         [ctx](std::span<std::string_view> args) -> std::string {
             if (args.empty())
-                return "usage: set_weather <clear|partly_cloudy|overcast|rain|storm>";
+                return "usage: set_weather <clear|partly_cloudy|overcast|rain|storm|snow|blizzard>";
             if (!ctx.sim.weatherController || !ctx.sim.gameLoop)
                 return "set_weather: not available";
             fl::WeatherPreset preset;
@@ -424,8 +424,12 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                 preset = fl::WeatherPreset::Rain;
             else if (args[0] == "storm")
                 preset = fl::WeatherPreset::Storm;
+            else if (args[0] == "snow")
+                preset = fl::WeatherPreset::Snow;
+            else if (args[0] == "blizzard")
+                preset = fl::WeatherPreset::Blizzard;
             else
-                return "set_weather: unknown preset (clear|partly_cloudy|overcast|rain|storm)";
+                return "set_weather: unknown preset (clear|partly_cloudy|overcast|rain|storm|snow|blizzard)";
             ctx.sim.gameLoop->enqueueSimCallback([ctx, preset]() { ctx.sim.weatherController->setPreset(preset); });
             return std::string("set_weather: ") + std::string(args[0]);
         });

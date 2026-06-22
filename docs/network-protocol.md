@@ -195,7 +195,7 @@ at offset 2 (ARM64 alignment constraint). Decode: `timeOfDay = timeOfDayTenths /
 | Offset | Size | Field | Type | Notes |
 |---|---|---|---|---|
 | 0 | 1 | `msgId` | `uint8_t` | `0x04` |
-| 1 | 1 | `preset` | `uint8_t` | `WeatherPreset` enum: 0=Clear, 1=PartlyCloudy, 2=Overcast, 3=Rain, 4=Storm |
+| 1 | 1 | `preset` | `uint8_t` | `WeatherPreset` enum: 0=Clear, 1=PartlyCloudy, 2=Overcast, 3=Rain, 4=Storm, 5=Snow, 6=Blizzard |
 | 2 | 2 | `timeOfDayTenths` | `uint16_t` | hours × 10; range [0, 239]; decode: / 10.f |
 | 4 | 4 | `fogDensity` | `float` | exponential fog coefficient (0 = no fog) |
 | 8 | 4 | `fogStartDist` | `float` | fog start distance (metres) |

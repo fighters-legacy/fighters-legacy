@@ -21,7 +21,7 @@ struct PresetDefaults {
     float cloudCoverage;    // [0, 1]
 };
 
-static constexpr PresetDefaults kPresetDefaults[5] = {
+static constexpr PresetDefaults kPresetDefaults[7] = {
     // Clear
     {0.5f, 0.0f, 2.f, 0.f, 50000.f, 0.00f},
     // PartlyCloudy
@@ -32,6 +32,10 @@ static constexpr PresetDefaults kPresetDefaults[5] = {
     {7.0f, 2.5f, 12.f, 0.0003f, 10000.f, 0.85f},
     // Storm
     {12.0f, 6.0f, 18.f, 0.0008f, 3000.f, 0.95f},
+    // Snow
+    {5.0f, 1.5f, 8.f, 0.0002f, 20000.f, 0.85f},
+    // Blizzard
+    {10.0f, 4.0f, 14.f, 0.0006f, 5000.f, 0.95f},
 };
 
 inline const PresetDefaults& defaults(WeatherPreset p) {
@@ -105,9 +109,12 @@ void WeatherController::advance(double simDt) {
     // Autonomous-transition dwell timer — real time
     m_dwellRemaining -= dt;
     if (m_dwellRemaining <= 0.f) {
-        // Cycle through presets: Clear→PartlyCloudy→Overcast→Rain→Storm→Clear
-        uint8_t next = (static_cast<uint8_t>(m_preset) + 1u) % 5u;
-        setPreset(static_cast<WeatherPreset>(next));
+        // Cycle through presets: Clear→PartlyCloudy→Overcast→Rain→Storm→Clear.
+        // Snow and Blizzard are operator-set only — do not auto-transition away from them.
+        if (m_preset <= WeatherPreset::Storm) {
+            uint8_t next = (static_cast<uint8_t>(m_preset) + 1u) % 5u;
+            setPreset(static_cast<WeatherPreset>(next));
+        }
         // Reset dwell to a random duration in [min, max]
         uint32_t r = lcg();
         float range = m_params.transitionMaxSeconds - m_params.transitionMinSeconds;
@@ -195,6 +202,7 @@ void WeatherController::applyPresetToEnv(WeatherPreset p, float timeOfDay, Envir
     }
     env.ambientColor = ambient;
     env.timeOfDay = timeOfDay;
+    env.isSnowPrecipitation = (p == WeatherPreset::Snow || p == WeatherPreset::Blizzard);
 }
 
 // ---------------------------------------------------------------------------
