@@ -9,6 +9,8 @@
 #include <string>
 #include <string_view>
 
+namespace fl {
+
 // Collects per-frame statistics and builds text lines for the debug overlay.
 // The overlay is toggled via F3: Off → Compact → Full → Off.
 //
@@ -65,3 +67,5 @@ class PerformanceOverlay {
     std::string m_pingLineStr;       // pre-built string; avoids per-call allocation
     std::string_view m_pingLineView; // string_view into m_pingLineStr
 };
+
+} // namespace fl

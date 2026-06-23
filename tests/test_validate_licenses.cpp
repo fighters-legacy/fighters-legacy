@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+using namespace fl;
+
 namespace fs = std::filesystem;
 
 // REUSE-IgnoreStart — test fixtures intentionally contain fake SPDX expressions

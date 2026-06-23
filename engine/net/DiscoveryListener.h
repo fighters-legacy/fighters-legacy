@@ -20,6 +20,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 class ILogger;
 
 // Listens on a raw UDP socket for MsgLanBeacon packets from fl-server instances on the LAN.
@@ -75,3 +77,5 @@ class DiscoveryListener {
     ILogger* m_log{nullptr};
     std::vector<ServerInfo> m_servers;
 };
+
+} // namespace fl

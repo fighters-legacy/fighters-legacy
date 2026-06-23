@@ -4,6 +4,8 @@
 #include "IInput.h"
 #include "IWindow.h"
 
+namespace fl {
+
 void DebriefScreen::setStats(int kills, int losses, bool missionSuccess) {
     m_kills = kills;
     m_losses = losses;
@@ -101,3 +103,5 @@ std::span<const HudElement> DebriefScreen::buildElements() {
 
     return {m_elements.data(), static_cast<std::size_t>(m_elementCount)};
 }
+
+} // namespace fl

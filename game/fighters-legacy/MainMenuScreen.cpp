@@ -4,6 +4,8 @@
 #include "IInput.h"
 #include "IWindow.h"
 
+namespace fl {
+
 static constexpr float kStartY = 0.38f;
 static constexpr float kSpacing = 0.07f;
 static constexpr float kItemH = 0.05f;
@@ -134,3 +136,5 @@ std::span<const HudElement> MainMenuScreen::buildElements() {
 
     return {m_elements.data(), static_cast<std::size_t>(m_elementCount)};
 }
+
+} // namespace fl

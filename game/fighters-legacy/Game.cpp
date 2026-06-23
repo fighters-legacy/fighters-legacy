@@ -78,6 +78,8 @@
 
 namespace fs = std::filesystem;
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // File-scope helpers
 // ---------------------------------------------------------------------------
@@ -952,3 +954,5 @@ void Game::run() {
         d.services.p.joystick->flush();
     }
 }
+
+} // namespace fl

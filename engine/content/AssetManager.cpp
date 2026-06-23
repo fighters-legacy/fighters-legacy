@@ -9,6 +9,8 @@
 #include <cctype>
 #include <span>
 
+namespace fl {
+
 AssetManager::AssetManager(std::vector<std::unique_ptr<IContentPack>> packs, ILogger& logger)
     : m_packs(std::move(packs)), m_logger(logger) {}
 
@@ -182,3 +184,5 @@ void AssetManager::processHotReload() {
     m_logger.log(LogLevel::Debug, __FILE__, __LINE__, "hot-reload: filesystem change detected, clearing asset cache");
     m_cache.clear();
 }
+
+} // namespace fl

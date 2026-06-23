@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+namespace fl {
+
 enum class CursorShape : uint8_t {
     Arrow,
     Hand,
@@ -31,3 +33,5 @@ class ICursor {
     // Returns a human-readable description of the last error, or nullptr if none.
     virtual const char* getLastError() const = 0;
 };
+
+} // namespace fl

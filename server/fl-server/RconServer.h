@@ -9,14 +9,16 @@
 #include <string_view>
 #include <vector>
 
+namespace fl {
 class CommandRegistry;
 class CommandShell;
+} // namespace fl
 
 // ---------------------------------------------------------------------------
 // Source Engine RCON wire-protocol helpers (pure logic, no sockets).
 // All functions are fully unit-testable without opening any file descriptors.
 // ---------------------------------------------------------------------------
-namespace rcon {
+namespace fl::rcon {
 
 // Maximum body bytes per response packet before splitting is required.
 // Source Engine RCON clients expect packets ≤ 4096 bytes total;
@@ -46,7 +48,7 @@ int decodePacket(const uint8_t* buf, int len, RconPacket& out);
 // Always returns at least one element (may be empty string for empty input).
 std::vector<std::string> splitResponse(std::string_view body);
 
-} // namespace rcon
+} // namespace fl::rcon
 
 // ---------------------------------------------------------------------------
 // RconServer -- TCP RCON listener (Source Engine RCON protocol).
@@ -54,6 +56,8 @@ std::vector<std::string> splitResponse(std::string_view body);
 // directly from that thread (safe: dispatch() is const and all mutating
 // handlers enqueue work through the thread-safe GameLoop::enqueueSimCallback).
 // ---------------------------------------------------------------------------
+namespace fl {
+
 class RconServer {
   public:
     RconServer(const CommandRegistry& registry, const ServerConfig::RconConfig& cfg, ILogger& log,
@@ -79,3 +83,5 @@ class RconServer {
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };
+
+} // namespace fl

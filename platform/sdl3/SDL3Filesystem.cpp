@@ -8,6 +8,8 @@
 
 namespace fs = std::filesystem;
 
+namespace fl {
+
 SDL3Filesystem::SDL3Filesystem(fs::path assetsRoot, fs::path userDataRoot)
     : m_assetsRoot(std::move(assetsRoot)), m_userDataRoot(std::move(userDataRoot)) {}
 
@@ -120,3 +122,5 @@ std::vector<IFilesystem::Entry> SDL3Filesystem::scanDirectory(PathDomain domain,
         return {};
     }
 }
+
+} // namespace fl

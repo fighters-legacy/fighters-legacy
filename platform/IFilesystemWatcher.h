@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 // Polling-based filesystem change notifications for hot-reload in sandbox/editor
 // mode. Not available in campaign mode. Threading: all methods main-thread only.
 class IFilesystemWatcher {
@@ -28,3 +30,5 @@ class IFilesystemWatcher {
     // Returns and clears all pending events since the last call. Non-blocking.
     virtual std::vector<Event> pollEvents() = 0;
 };
+
+} // namespace fl

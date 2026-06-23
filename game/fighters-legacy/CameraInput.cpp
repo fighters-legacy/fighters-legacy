@@ -14,6 +14,8 @@
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+namespace fl {
+
 namespace {
 constexpr float kTickDt = 1.0f / 60.0f;
 constexpr double kFlyGroundMarginM = 0.0; // free-fly camera descends to ground level, not below
@@ -218,3 +220,5 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
     m_lastMy = my;
     m_firstFrame = false;
 }
+
+} // namespace fl

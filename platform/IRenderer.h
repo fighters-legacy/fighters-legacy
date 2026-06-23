@@ -3,6 +3,8 @@
 
 #include "RenderTypes.h"
 
+namespace fl {
+
 // Forward declaration: IRenderer only holds an IWindow* pointer, so the full
 // type definition is not needed here.
 class IWindow;
@@ -97,3 +99,5 @@ class IRenderer {
     // Cleared by endFrame.
     virtual void setConsoleElements(std::span<const HudElement> elements) = 0;
 };
+
+} // namespace fl

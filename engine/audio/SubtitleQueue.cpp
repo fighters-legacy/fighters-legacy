@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "audio/SubtitleQueue.h"
 
+namespace fl {
+
 void SubtitleQueue::push(std::string text, float durationSec) {
     if (!m_enabled || text.empty() || durationSec <= 0.0f)
         return;
@@ -19,3 +21,5 @@ void SubtitleQueue::update(float dt) {
 std::string_view SubtitleQueue::current() const {
     return m_records.empty() ? std::string_view{} : std::string_view{m_records.front().text};
 }
+
+} // namespace fl

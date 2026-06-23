@@ -11,6 +11,8 @@
 #include <cmath>
 #include <string>
 
+namespace fl {
+
 static float drawDistKm(DrawDistance d) {
     switch (d) {
     case DrawDistance::Low:
@@ -365,3 +367,5 @@ std::span<const HudElement> SettingsScreen::buildElements() {
 
     return {m_elements.data(), static_cast<std::size_t>(m_elementCount)};
 }
+
+} // namespace fl

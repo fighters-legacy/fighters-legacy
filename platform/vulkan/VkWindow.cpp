@@ -8,6 +8,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
+namespace fl {
+
 std::vector<const char*> vk_getRequiredInstanceExtensions(SDL_Window* /*window*/) {
     Uint32 count = 0;
     const char* const* sdlExts = SDL_Vulkan_GetInstanceExtensions(&count);
@@ -31,3 +33,5 @@ VkSurfaceKHR vk_createSurface(VkInstance instance, SDL_Window* window) {
         return VK_NULL_HANDLE;
     return surface;
 }
+
+} // namespace fl

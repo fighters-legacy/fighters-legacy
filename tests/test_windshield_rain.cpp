@@ -4,6 +4,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+using namespace fl;
+
 static EnvironmentState makeEnv(float cloudCoverage, float windX = 0.0f, float windZ = 0.0f, bool isSnow = false) {
     EnvironmentState env{};
     env.cloudCoverage = cloudCoverage;

@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+namespace fl {
+
 // 8-direction hat position plus centered.
 enum class HatPosition : uint8_t {
     Centered = 0,
@@ -84,3 +86,5 @@ class IJoystick {
 
     virtual const char* getLastError() const = 0;
 };
+
+} // namespace fl

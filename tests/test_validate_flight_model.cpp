@@ -5,6 +5,8 @@
 
 #include <string>
 
+using namespace fl;
+
 // Generic fighter quick-start template from docs/modding/flight-model.md
 static const char* kValidFighter = R"toml(
 [aircraft]

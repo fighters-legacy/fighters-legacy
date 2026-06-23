@@ -6,6 +6,8 @@
 
 struct SDL_Cursor; // forward declaration — SDL3/SDL.h only in .cpp
 
+namespace fl {
+
 class SDL3Cursor : public ICursor {
   public:
     ~SDL3Cursor() override;
@@ -21,3 +23,5 @@ class SDL3Cursor : public ICursor {
     bool m_hidden{false};
     mutable std::string m_lastError;
 };
+
+} // namespace fl

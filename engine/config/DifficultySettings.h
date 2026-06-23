@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+namespace fl {
+
 // Custom = player has overridden at least one field from the last applied named preset.
 enum class DifficultyPreset : uint8_t { Cadet, Pilot, Ace, Custom };
 
@@ -51,3 +53,5 @@ struct DifficultySettings {
     GameplayToggles toggles = {};
     AiScaling ai = {};
 };
+
+} // namespace fl

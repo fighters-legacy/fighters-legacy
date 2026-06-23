@@ -26,6 +26,8 @@
 #include <string>
 #include <vector>
 
+using namespace fl;
+
 namespace {
 
 struct MockLogger : ILogger {

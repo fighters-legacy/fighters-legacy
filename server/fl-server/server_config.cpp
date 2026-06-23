@@ -5,6 +5,8 @@
 #include <cstring>
 #include <toml++/toml.hpp>
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Default configuration template
 // ---------------------------------------------------------------------------
@@ -480,3 +482,5 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
     }
     return cfg;
 }
+
+} // namespace fl

@@ -5,6 +5,8 @@
 
 #include <span>
 
+namespace fl {
+
 class IInput;
 class IWindow;
 
@@ -33,3 +35,5 @@ class IScreen {
     virtual Screen update(IInput& input, IWindow& window) = 0;
     virtual std::span<const HudElement> buildElements() = 0;
 };
+
+} // namespace fl

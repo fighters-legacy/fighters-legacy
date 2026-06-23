@@ -11,6 +11,8 @@
 #include "config/GraphicsSettings.h"
 #include "config/PilotSettings.h"
 
+namespace fl {
+
 class IFilesystem;
 
 // Free function — also used by the fighters-legacy CLI parser.
@@ -75,3 +77,5 @@ class UserConfig {
     DebugSettings m_debug{};
     PilotSettings m_pilot{};
 };
+
+} // namespace fl

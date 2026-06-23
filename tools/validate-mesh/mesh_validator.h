@@ -5,6 +5,8 @@
 #include <string_view>
 #include <vector>
 
+namespace fl {
+
 struct MeshValidationResult {
     bool ok{true};
     std::vector<std::string> errors;
@@ -20,3 +22,5 @@ MeshValidationResult validateMesh(const std::string& filePath);
 
 // Validates glTF 2.0 JSON from an in-memory string — used by unit tests.
 MeshValidationResult validateMeshFromJson(std::string_view jsonContent);
+
+} // namespace fl

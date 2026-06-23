@@ -16,6 +16,8 @@
 #include "IRenderer.h"
 #include "IWindow.h"
 
+namespace fl {
+
 // Aggregate of all HAL interface instances. Constructed by the platform entry
 // point (e.g. platform/sdl3/), populated with concrete backend implementations,
 // and passed to the engine on startup. The engine holds a Platform by value;
@@ -57,3 +59,5 @@ struct Platform {
     std::unique_ptr<IJoystick> joystick; // null in headless/test mode; flush() each frame
     std::unique_ptr<INetwork> network;
 };
+
+} // namespace fl

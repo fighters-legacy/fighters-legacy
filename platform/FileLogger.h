@@ -6,6 +6,8 @@
 #include <mutex>
 #include <string>
 
+namespace fl {
+
 class FileLogger : public ILogger {
   public:
     ~FileLogger() override {
@@ -55,3 +57,5 @@ class FileLogger : public ILogger {
     static std::string makeFilename(const std::string& logDir);
     static const char* levelTag(LogLevel l);
 };
+
+} // namespace fl

@@ -11,6 +11,8 @@
 #include <thread>
 #include <vector>
 
+namespace fl {
+
 class ILogger;
 class ISimUpdate;
 
@@ -95,3 +97,5 @@ class GameLoop {
 
     std::thread m_simThread;
 };
+
+} // namespace fl

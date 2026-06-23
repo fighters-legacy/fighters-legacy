@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstring>
 
+using namespace fl;
+
 int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--version") == 0) {

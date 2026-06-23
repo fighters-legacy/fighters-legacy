@@ -4,6 +4,8 @@
 #include <cstring>
 #include <enet6/enet.h>
 
+namespace fl {
+
 // -------------------------------------------------------------------------
 // Pre-handshake intercept — anonymous namespace; no ENetNetwork.h exposure
 // -------------------------------------------------------------------------
@@ -385,3 +387,5 @@ void ENetNetwork::drainPeers() {
             enet_packet_destroy(ev.packet);
     }
 }
+
+} // namespace fl

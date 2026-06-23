@@ -28,6 +28,8 @@
 static_assert(std::atomic<double>::is_always_lock_free,
               "WorldBroadcaster requires lock-free double atomics for entity XZ cache");
 
+using namespace fl;
+
 // ---------------------------------------------------------------------------
 // Control sources
 // ---------------------------------------------------------------------------

@@ -5,6 +5,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace fl {
+
 struct PilotProfile {
     std::string callsign = "Pilot";
     std::string guid; // UUID-v4, auto-generated on first save
@@ -24,3 +26,5 @@ struct PilotSettings {
     PilotProfile profile;
     PilotCampaignState campaign;
 };
+
+} // namespace fl

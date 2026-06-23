@@ -3,6 +3,8 @@
 
 #include <vector>
 
+namespace fl {
+
 // Threading: all methods must be called from the main thread.
 // IDisplay is usable only after IWindow::init() has been called
 // (which initializes SDL_INIT_VIDEO). No init()/shutdown() lifecycle.
@@ -36,3 +38,5 @@ class IDisplay {
     // Valid until the next call on this interface.
     virtual const char* getLastError() const = 0;
 };
+
+} // namespace fl

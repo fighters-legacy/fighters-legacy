@@ -5,6 +5,8 @@
 #include "content/TrustLevel.h"
 #include <string>
 
+namespace fl {
+
 class IFilesystem;
 class ILogger;
 
@@ -82,3 +84,5 @@ class FolderContentPack final : public IContentPack {
     std::string m_modDir;
     Manifest m_manifest;
 };
+
+} // namespace fl

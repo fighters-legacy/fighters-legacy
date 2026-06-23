@@ -7,6 +7,8 @@
 #include <array>
 #include <span>
 
+namespace fl {
+
 // Builds the 3×3 grid of precipitation particle emitters each frame based on
 // the current weather state and camera position.
 //
@@ -60,3 +62,5 @@ class PrecipitationController {
 
     std::array<ParticleEmitterState, 9> m_buf{};
 };
+
+} // namespace fl

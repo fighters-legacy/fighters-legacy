@@ -7,6 +7,8 @@
 
 namespace fs = std::filesystem;
 
+namespace fl {
+
 std::string buildToktxCommand(const std::string& inputPng, const std::string& outputKtx2,
                               const TexCompressOptions& opts) {
     std::string cmd;
@@ -55,3 +57,5 @@ TexCompressResult compressTexture(const std::string& inputPng, const std::string
     }
     return result;
 }
+
+} // namespace fl

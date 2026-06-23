@@ -4,6 +4,8 @@
 #include "PauseMenuScreen.h"
 #include "mock_hal.h"
 
+using namespace fl;
+
 static MockWindow g_win;
 
 TEST_CASE("PauseMenuScreen: has exactly 4 items") {

@@ -4,6 +4,8 @@
 #include <atomic>
 #include <string>
 
+namespace fl {
+
 class FileLogger;
 class IWindow;
 
@@ -62,3 +64,5 @@ class CrashReporter {
     CrashInfo m_info;
     bool m_initialized{false};
 };
+
+} // namespace fl

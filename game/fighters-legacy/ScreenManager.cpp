@@ -18,6 +18,8 @@
 #include "config/UserConfig.h"
 #include "content/AssetManager.h"
 
+namespace fl {
+
 ScreenManager::ScreenManager(IInput& input, ILogger& log) : m_input(input), m_log(log) {}
 
 ScreenManager::~ScreenManager() = default;
@@ -130,3 +132,5 @@ PauseMenuScreen& ScreenManager::pauseMenu() {
 DebriefScreen& ScreenManager::debrief() {
     return *m_debrief;
 }
+
+} // namespace fl

@@ -6,6 +6,8 @@
 
 #include <chrono>
 
+namespace fl {
+
 LoadingScreen::LoadingScreen(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
                              std::function<void()> onServerReady, bool isSinglePlayer,
                              std::atomic<SessionFailure>* sessionFailure)
@@ -141,3 +143,5 @@ std::span<const HudElement> LoadingScreen::buildElements() {
 
     return {m_elements.data(), static_cast<std::size_t>(m_elementCount)};
 }
+
+} // namespace fl

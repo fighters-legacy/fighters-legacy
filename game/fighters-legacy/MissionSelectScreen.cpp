@@ -4,6 +4,8 @@
 #include "IInput.h"
 #include "IWindow.h"
 
+namespace fl {
+
 MissionSelectScreen::MissionSelectScreen(std::vector<std::string> missions) : m_missions(std::move(missions)) {}
 
 Screen MissionSelectScreen::update(IInput& input, IWindow& window) {
@@ -147,3 +149,5 @@ std::span<const HudElement> MissionSelectScreen::buildElements() {
 
     return {m_elements.data(), static_cast<std::size_t>(m_elementCount)};
 }
+
+} // namespace fl

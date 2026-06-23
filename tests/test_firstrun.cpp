@@ -5,6 +5,8 @@
 #include "firstrun/FirstRun.h"
 #include "mock_hal.h"
 
+using namespace fl;
+
 // ---------------------------------------------------------------------------
 // Helper: extract written file content as string
 // ---------------------------------------------------------------------------

@@ -28,6 +28,8 @@ using SockLen = int;
 using SockLen = socklen_t;
 #endif
 
+using namespace fl;
+
 // ---------------------------------------------------------------------------
 // RAII socket guard — ensures sockets are closed even on test failure (ASAN).
 // ---------------------------------------------------------------------------

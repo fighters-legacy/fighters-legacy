@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+namespace fl {
+
 class IContentPack;
 
 // Callback interface for content-pack security events. Implement in the game
@@ -18,3 +20,5 @@ class IContentPackEventHandler {
     // require the user to acknowledge native code execution.
     virtual void onNativeCodePackLoaded(const IContentPack& pack) = 0;
 };
+
+} // namespace fl

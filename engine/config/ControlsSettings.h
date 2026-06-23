@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+namespace fl {
+
 // Persisted under the [controls] section of user.toml.
 // Gamepad axis mapping, per-axis deadzone/curve/invert/scale, and button bindings are
 // configured in config/bindings.toml (fl::InputBindings + fl::AxisConfigTable in engine/input/).
@@ -17,3 +19,5 @@ struct ControlsSettings {
     bool hotasInvertRudder{false};
     bool hotasInvertThrottle{false};
 };
+
+} // namespace fl

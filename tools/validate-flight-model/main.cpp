@@ -7,6 +7,8 @@
 #include <sstream>
 #include <string>
 
+using namespace fl;
+
 static constexpr const char* kVersion = "0.0.1";
 
 static void printHelp() {

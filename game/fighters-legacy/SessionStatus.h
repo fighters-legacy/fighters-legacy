@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+namespace fl {
+
 // Typed cross-thread session-failure status. Replaces the prior `std::atomic<const char*>` +
 // static-string-literal signaling between the server-start thread, the ENet client handler, and the
 // LoadingScreen. A single `std::atomic<SessionFailure>` is lock-free and trivially copyable (no
@@ -57,3 +59,5 @@ inline const char* sessionFailureMessage(SessionFailure f) {
     }
     return "";
 }
+
+} // namespace fl

@@ -7,6 +7,8 @@
 #include <fstream>
 #include <string>
 
+using namespace fl;
+
 namespace fs = std::filesystem;
 
 // Minimal no-op logger for tests that don't care about log output.

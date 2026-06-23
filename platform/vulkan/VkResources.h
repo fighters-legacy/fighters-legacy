@@ -18,6 +18,8 @@ struct MeshUploadDesc;
 struct TextureUploadDesc;
 struct MaterialDesc;
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // GPU vertex layout — interleaved, matches mesh.vert attribute locations.
 // ---------------------------------------------------------------------------
@@ -174,3 +176,5 @@ class VkResourceManager {
     std::vector<DeferredBuffer> m_deferredBuffers;
     std::vector<DeferredImage> m_deferredImages;
 };
+
+} // namespace fl

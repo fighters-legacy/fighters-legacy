@@ -6,6 +6,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
 
+using namespace fl;
+
 // ---------------------------------------------------------------------------
 // MockDisplay -- pure interface contract tests (no SDL3 required)
 // ---------------------------------------------------------------------------

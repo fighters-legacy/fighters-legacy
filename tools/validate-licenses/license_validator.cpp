@@ -12,6 +12,8 @@
 
 namespace fs = std::filesystem;
 
+namespace fl {
+
 // ── constants ─────────────────────────────────────────────────────────────────
 
 // REUSE-IgnoreStart — string constant holds the SPDX tag prefix, not a license declaration
@@ -230,3 +232,5 @@ LicenseValidationResult validateLicenses(const std::string& rootDir, const std::
 
     return r;
 }
+
+} // namespace fl

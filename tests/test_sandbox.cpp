@@ -4,6 +4,8 @@
 #include "mock_hal.h"
 #include "sandbox/SandboxInspector.h"
 
+using namespace fl;
+
 TEST_CASE("SandboxInspector constructor uploads one buffer and creates one source", "[sandbox]") {
     MockAudio audio;
     MockInput input;

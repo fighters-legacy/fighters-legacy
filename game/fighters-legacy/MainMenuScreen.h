@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 // Main menu: Sandbox / Join Server (always), Select Mission (packs only), Settings, Exit to Desktop.
 class MainMenuScreen : public IScreen {
   public:
@@ -44,3 +46,5 @@ class MainMenuScreen : public IScreen {
     std::array<std::string, kMaxElements> m_strings{}; // backing storage for text string_views
     int m_elementCount{0};
 };
+
+} // namespace fl

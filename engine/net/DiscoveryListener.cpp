@@ -25,6 +25,8 @@ using SockLen = int;
 using SockLen = socklen_t;
 #endif
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -314,3 +316,5 @@ void DiscoveryListener::drainSock(int sock, bool isIPv6) {
         (void)isIPv6; // used implicitly through src address family
     }
 }
+
+} // namespace fl

@@ -8,6 +8,8 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Mapping helpers (SDL → engine enums)
 // ---------------------------------------------------------------------------
@@ -689,3 +691,5 @@ void SDL3Input::stopRumble(int gamepadId) {
     SDL_RumbleGamepad(gp->handle, 0, 0, 0);
     SDL_RumbleGamepadTriggers(gp->handle, 0, 0, 0);
 }
+
+} // namespace fl

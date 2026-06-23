@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+namespace fl {
+
 // Callback interface implemented by the game layer and invoked from the sim thread each tick.
 // IMPORTANT: onTick() runs on the sim thread. Do NOT call any HAL methods here.
 // The only HAL method safe to call from the sim thread is ILogger::log().
@@ -15,3 +17,5 @@ class ISimUpdate {
     // tickIndex: monotonically increasing tick counter.
     virtual void onTick(double simDt, uint64_t tickIndex) = 0;
 };
+
+} // namespace fl

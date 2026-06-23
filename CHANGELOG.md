@@ -33,6 +33,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **engine**: Migrated all native codebase types into `namespace fl`; `fl::` is now the single
+  project namespace throughout `platform/`, `engine/`, `game/`, `server/`, and `tools/`. Closes
+  #392. The only documented exception is `engine/audio/ogg_impl.h` (C-linkage stb_vorbis
+  wrapper — cannot use C++ namespaces).
+
 - **tools**: `scripts/roadmap-status.sh` now reports progress from the repository's GitHub
   issue milestones (closed/total issue counts + due date per `Phase N` milestone) instead of
   the GitHub Project's "Phase" single-select field, which was removed. Pulls milestones via a

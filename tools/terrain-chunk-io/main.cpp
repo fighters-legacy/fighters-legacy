@@ -21,6 +21,8 @@
 #include <string>
 #include <vector>
 
+using namespace fl;
+
 static constexpr const char* kVersion = "0.1.0";
 
 static void printHelp() {

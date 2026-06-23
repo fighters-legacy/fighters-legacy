@@ -4,6 +4,8 @@
 #include "IInput.h"
 #include "IWindow.h"
 
+namespace fl {
+
 // Items: 0=Resume 1=Settings 2=Quit to Menu 3=Exit to Desktop
 static constexpr std::pair<const char*, Screen> kItems[4] = {
     {"Resume", Screen::Flight},
@@ -105,3 +107,5 @@ std::span<const HudElement> PauseMenuScreen::buildElements() {
 
     return {m_elements.data(), static_cast<std::size_t>(m_elementCount)};
 }
+
+} // namespace fl

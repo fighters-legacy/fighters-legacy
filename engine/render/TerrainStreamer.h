@@ -15,8 +15,10 @@
 
 #include <glm/glm.hpp>
 
+namespace fl {
 class AssetManager;
 class IRenderer;
+} // namespace fl
 
 namespace fl {
 

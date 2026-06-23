@@ -7,6 +7,8 @@
 #include <fstream>
 #include <string>
 
+namespace fl {
+
 std::unordered_set<std::string> loadIpListFile(const std::string& path, ILogger* log) {
     std::unordered_set<std::string> result;
     std::ifstream f(path);
@@ -45,3 +47,5 @@ void saveIpListFile(const std::string& path, const std::unordered_set<std::strin
     for (const auto& ip : ips)
         f << ip << "\n";
 }
+
+} // namespace fl

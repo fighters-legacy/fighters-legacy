@@ -23,6 +23,8 @@
 #include <unistd.h>
 #endif
 
+namespace fl {
+
 DiscoveryBeacon::DiscoveryBeacon(const Config& cfg, ILogger& log) : m_cfg(cfg), m_log(&log) {
 #if defined(_WIN32)
     WSADATA wsa{};
@@ -185,3 +187,5 @@ void DiscoveryBeacon::send(int playerCount) {
             m_log->log(LogLevel::Info, __FILE__, __LINE__, "DiscoveryBeacon: IPv6 sendto failed (no IPv6 link?)");
     }
 }
+
+} // namespace fl

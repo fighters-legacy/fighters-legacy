@@ -4,9 +4,9 @@
 #include <string>
 #include <string_view>
 
-class ILogger;
-
 namespace fl {
+
+class ILogger;
 
 // Read path. If the file does not exist, write defaultContent to it first.
 // Returns file content on success, or empty string on read error (logged Warn).

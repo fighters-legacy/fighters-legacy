@@ -21,6 +21,8 @@
 #include <string>
 #include <weather/WeatherController.h>
 
+using namespace fl;
+
 // Fixtures used by the async-ack tests (need a real GameLoop so enqueueSimCallback is safe).
 // "2" suffix avoids name collisions with any mock in mock_hal.h.
 struct NullLogger2 : public ILogger {

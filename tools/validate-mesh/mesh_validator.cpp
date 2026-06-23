@@ -22,6 +22,8 @@
 
 namespace fs = std::filesystem;
 
+namespace fl {
+
 // ── constants ─────────────────────────────────────────────────────────────────
 
 static constexpr std::uintmax_t kWarnFileSizeBytes = 50ULL * 1024ULL * 1024ULL;
@@ -408,3 +410,5 @@ MeshValidationResult validateMesh(const std::string& filePath) {
 
     return r;
 }
+
+} // namespace fl

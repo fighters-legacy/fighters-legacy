@@ -7,6 +7,8 @@
 #include "SDL3Cursor.h"
 #include <SDL3/SDL.h>
 
+namespace fl {
+
 static SDL_SystemCursor toSDLCursor(CursorShape shape) {
     switch (shape) {
     case CursorShape::Arrow:
@@ -100,3 +102,5 @@ const char* SDL3Cursor::getLastError() const {
     m_lastError = SDL_GetError();
     return m_lastError.c_str();
 }
+
+} // namespace fl

@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 // Null-object content pack: every query empty / nullopt / false, init Ready.
 struct NullContentPack : IContentPack {
     const char* name() const override {
@@ -79,3 +81,5 @@ struct NullContentPack : IContentPack {
         return false;
     }
 };
+
+} // namespace fl

@@ -4,6 +4,8 @@
 #include "MissionSelectScreen.h"
 #include "mock_hal.h"
 
+using namespace fl;
+
 static MockInput g_inp;
 static MockWindow g_win;
 

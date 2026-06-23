@@ -35,7 +35,7 @@ For upstream documentation on each backend, see [`docs/references.md`](reference
 
 #### Platform HAL Interfaces
 
-All interfaces live under `platform/` and are exposed via the `platform-hal` CMake INTERFACE library. Engine core and backends link against `platform-hal` rather than including headers by path.
+All interfaces live under `platform/` and are exposed via the `platform-hal` CMake INTERFACE library. Engine core and backends link against `platform-hal` rather than including headers by path. All platform HAL types (`IRenderer`, `ILogger`, `IInput`, `Key`, `HudElement`, etc.) are in `namespace fl`.
 
 | Interface | Header | Purpose |
 |---|---|---|

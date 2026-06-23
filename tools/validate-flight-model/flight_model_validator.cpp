@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 // ── bounds constants ──────────────────────────────────────────────────────────
 
 static constexpr int kClTableAlphaMin = 4;
@@ -677,3 +679,5 @@ FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
 
     return r;
 }
+
+} // namespace fl

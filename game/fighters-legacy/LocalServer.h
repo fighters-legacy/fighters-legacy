@@ -9,12 +9,11 @@
 #include <memory>
 #include <string_view>
 
-class ILogger;
-
 namespace fl {
+
+class ILogger;
 class EntityTypeRegistry;
 class SimRenderBridge;
-} // namespace fl
 
 // Launches fl-server as a subprocess bound to localhost for single-player mode.
 // The game client connects to it as a normal ENet client — no server
@@ -52,7 +51,7 @@ class LocalServer {
     // serverCommand is called with formatted command strings and sends them to fl-server
     // via MsgAdminCommand over ENet (constructed by makeNetworkAdminSender in main.cpp).
     void registerConsoleCommands(CommandRegistry& registry, std::function<void(std::string_view)> serverCommand,
-                                 fl::SimRenderBridge& renderBridge, fl::EntityTypeRegistry* typeRegistry,
+                                 SimRenderBridge& renderBridge, EntityTypeRegistry* typeRegistry,
                                  uint32_t* playerEntityIdx, uint32_t* playerEntityGen, bool* showPos, bool* showPing);
 
     // Returns the per-session admin token generated at start(). Valid after start() returns true.
@@ -63,3 +62,5 @@ class LocalServer {
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };
+
+} // namespace fl

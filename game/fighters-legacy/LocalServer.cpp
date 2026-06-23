@@ -16,6 +16,8 @@
 #include <thread>
 #include <vector>
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Binary discovery
 // ---------------------------------------------------------------------------
@@ -172,5 +174,7 @@ void LocalServer::registerConsoleCommands(CommandRegistry& registry,
     ctx.showPos = showPos;
     ctx.showPing = showPing;
     ctx.serverCommand = std::move(serverCommand);
-    ::registerConsoleCommands(registry, ctx);
+    fl::registerConsoleCommands(registry, ctx);
 }
+
+} // namespace fl

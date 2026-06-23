@@ -8,6 +8,8 @@
 
 #include <unordered_map>
 
+namespace fl {
+
 static std::string readFileToString(IFilesystem& fs, ILogger& logger, const char* path) {
     int handle = fs.openFile(PathDomain::Assets, path, false);
     if (handle < 0) {
@@ -66,3 +68,5 @@ const char* StringTable::get(const char* key) const {
     auto it = m_entries.find(key);
     return it != m_entries.end() ? it->second.c_str() : nullptr;
 }
+
+} // namespace fl

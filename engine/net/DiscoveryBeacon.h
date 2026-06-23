@@ -17,6 +17,8 @@
 #include <cstdint>
 #include <string>
 
+namespace fl {
+
 class ILogger;
 
 // Broadcasts a MsgLanBeacon UDP packet on both IPv4 (255.255.255.255) and IPv6 link-local
@@ -75,3 +77,5 @@ class DiscoveryBeacon {
     std::chrono::steady_clock::time_point m_lastSend{};
     bool m_firstTick{true};
 };
+
+} // namespace fl

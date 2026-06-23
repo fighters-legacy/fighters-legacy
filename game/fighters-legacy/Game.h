@@ -3,6 +3,8 @@
 #include "IScreen.h"
 #include <memory>
 
+namespace fl {
+
 struct GameImpl;
 
 class Game {
@@ -26,3 +28,5 @@ class Game {
 
     std::unique_ptr<GameImpl> m_impl;
 };
+
+} // namespace fl

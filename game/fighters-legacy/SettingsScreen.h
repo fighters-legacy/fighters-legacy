@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 class IDisplay;
 class IRenderer;
 class IWindow;
@@ -61,3 +63,5 @@ class SettingsScreen : public IScreen {
 
     void buildRow(int row, float y, const std::string& label, const std::string& value);
 };
+
+} // namespace fl

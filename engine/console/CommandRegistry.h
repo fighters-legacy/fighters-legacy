@@ -7,6 +7,8 @@
 #include <string_view>
 #include <vector>
 
+namespace fl {
+
 // Command handler: receives tokenized args (not including the command name itself).
 // Returns a string displayed in the console output (empty = no output).
 using CommandHandler = std::function<std::string(std::span<std::string_view> args)>;
@@ -39,3 +41,5 @@ class CommandRegistry {
 
     static std::vector<std::string_view> tokenize(std::string_view line);
 };
+
+} // namespace fl

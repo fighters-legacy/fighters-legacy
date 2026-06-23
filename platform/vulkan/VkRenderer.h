@@ -12,6 +12,8 @@
 
 struct SDL_Window;
 
+namespace fl {
+
 static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 static constexpr uint32_t kNumCascades = 4;
 static constexpr uint32_t kShadowRes = 2048;
@@ -468,3 +470,5 @@ class VkRenderer : public IRenderer {
     VkDeviceMemory m_overlayVBMemory{VK_NULL_HANDLE};
     void* m_overlayVBMapped{nullptr};
 };
+
+} // namespace fl

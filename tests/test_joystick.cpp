@@ -5,6 +5,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
 
+using namespace fl;
+
 // ---------------------------------------------------------------------------
 // MockJoystick -- pure interface contract tests (no SDL3 required)
 // ---------------------------------------------------------------------------

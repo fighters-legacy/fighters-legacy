@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+namespace fl {
+
 // Persisted under the [debug] section of user.toml.
 enum class OverlayMode : uint8_t {
     Off = 0,
@@ -13,3 +15,5 @@ enum class OverlayMode : uint8_t {
 struct DebugSettings {
     OverlayMode overlayMode{OverlayMode::Off};
 };
+
+} // namespace fl

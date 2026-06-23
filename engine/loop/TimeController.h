@@ -6,6 +6,8 @@
 #include <chrono>
 #include <cstdint>
 
+namespace fl {
+
 // Pure fixed-timestep timing math. No threads, no HAL.
 // All methods may be called from any thread provided the caller handles external locking.
 // GameLoop uses TimeController exclusively on the sim thread after start(), so no locking
@@ -65,3 +67,5 @@ class TimeController {
     uint64_t m_totalTicks{0};
     bool m_firstAdvance{true};
 };
+
+} // namespace fl

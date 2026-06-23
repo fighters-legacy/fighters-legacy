@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <string>
 
+namespace fl {
+
 // Parse a "--connect" argument of the form "host[:port]" or "[ipv6]:port".
 // Splits on the last ':' only if the suffix is a valid 1–65535 port number.
 // Otherwise the whole arg is treated as the hostname and port stays at its
@@ -48,3 +50,5 @@ inline bool parseConnectArg(const char* arg, std::string& host, uint16_t& port) 
     host = std::move(s);
     return true;
 }
+
+} // namespace fl

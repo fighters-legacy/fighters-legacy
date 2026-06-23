@@ -9,6 +9,8 @@
 
 struct SDL_IOStream;
 
+namespace fl {
+
 class SDL3Filesystem : public IFilesystem {
   public:
     SDL3Filesystem(std::filesystem::path assetsRoot, std::filesystem::path userDataRoot);
@@ -37,3 +39,5 @@ class SDL3Filesystem : public IFilesystem {
     int m_nextHandle = 1;
     std::unordered_map<int, SDL_IOStream*> m_handles;
 };
+
+} // namespace fl

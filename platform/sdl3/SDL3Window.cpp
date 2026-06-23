@@ -10,6 +10,8 @@
 #include <cmath>
 #include <vector>
 
+namespace fl {
+
 bool SDL3Window::init(const char* title, int width, int height) {
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
@@ -214,3 +216,5 @@ int SDL3Window::getCurrentMonitorId() const {
     SDL_free(displays);
     return result;
 }
+
+} // namespace fl

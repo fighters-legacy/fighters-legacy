@@ -7,6 +7,8 @@
 #include <string>
 #include <string_view>
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Renderer settings — platform-agnostic subset of GraphicsSettings used by
 // IRenderer::applySettings().  Populated from engine/config/GraphicsSettings.h
@@ -230,3 +232,5 @@ struct FrameScene {
     std::span<const ParticleEmitterState> particleEmitters{};
     std::span<const SubtitleEntry> subtitles{}; // VkRenderer ignores until Phase 4 IGui
 };
+
+} // namespace fl

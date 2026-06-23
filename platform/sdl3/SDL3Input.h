@@ -9,6 +9,8 @@
 struct SDL_Gamepad;
 typedef uint32_t SDL_JoystickID;
 
+namespace fl {
+
 class SDL3Input : public IInput, public ISDL3EventSink {
   public:
     // --- IInput ---
@@ -76,3 +78,5 @@ class SDL3Input : public IInput, public ISDL3EventSink {
     GamepadState* gamepadAt(int gamepadId);
     const GamepadState* gamepadAt(int gamepadId) const;
 };
+
+} // namespace fl

@@ -5,6 +5,8 @@
 
 #include <string>
 
+using namespace fl;
+
 // Minimal valid glTF 2.0 JSON with one mesh node
 static const char* kMinimalGltf = R"json({
   "asset": {"version": "2.0"},

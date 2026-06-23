@@ -12,6 +12,8 @@
 static_assert(std::atomic<int64_t>::is_always_lock_free, "int64_t atomic must be lock-free on this platform");
 static_assert(std::atomic<uint64_t>::is_always_lock_free, "uint64_t atomic must be lock-free on this platform");
 
+namespace fl {
+
 // Maximum ticks drained per sim-thread iteration. Caps the "spiral of death":
 // if the sim falls behind (e.g. a CPU spike), we discard excess accumulated time
 // so the game slows down gracefully rather than freezing while trying to catch up.
@@ -134,3 +136,5 @@ void GameLoop::simThreadFunc() {
         }
     }
 }
+
+} // namespace fl

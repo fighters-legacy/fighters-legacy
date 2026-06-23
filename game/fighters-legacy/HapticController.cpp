@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cmath>
 
+namespace fl {
+
 HapticController::HapticController(IInput& input) : m_input(input) {}
 
 void HapticController::savePrev(const fl::EntityRenderEntry* player, float agl) {
@@ -247,3 +249,5 @@ void HapticController::notifyHydraulicFailure(bool active, bool anyInput) {
     m_hydraulicFailing = active;
     m_hydraulicInput = anyInput;
 }
+
+} // namespace fl

@@ -10,6 +10,8 @@
 #include <thread>
 #include <vector>
 
+using namespace fl;
+
 namespace fs = std::filesystem;
 
 TEST_CASE("FileLogger: open creates log directory if absent", "[file_logger]") {

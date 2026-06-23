@@ -2,6 +2,8 @@
 #include "audio/SubtitleQueue.h"
 #include <catch2/catch_test_macros.hpp>
 
+using namespace fl;
+
 TEST_CASE("SubtitleQueue push and current", "[audio][subtitle]") {
     SubtitleQueue q;
     REQUIRE(q.current().empty());

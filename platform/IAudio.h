@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace fl {
+
 using AudioBufferId = uint32_t;
 using AudioSourceId = uint32_t;
 
@@ -90,3 +92,5 @@ class IAudio {
     // vel is a three-element float array [vx, vy, vz] in world units/sec.
     virtual void setListenerVelocity(const float vel[3]) = 0;
 };
+
+} // namespace fl

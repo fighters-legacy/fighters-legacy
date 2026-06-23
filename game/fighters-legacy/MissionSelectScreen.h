@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 // Mission selection list populated from AssetManager::listMissions().
 class MissionSelectScreen : public IScreen {
   public:
@@ -33,3 +35,5 @@ class MissionSelectScreen : public IScreen {
     std::array<std::string, kVisible + 4> m_strings{};
     int m_elementCount{0};
 };
+
+} // namespace fl

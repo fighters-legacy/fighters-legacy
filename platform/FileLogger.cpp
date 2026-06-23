@@ -18,6 +18,8 @@
 
 namespace fs = std::filesystem;
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -214,3 +216,5 @@ int FileLogger::copyLastLines(RingEntry* out, int maxLines) const {
     }
     return want;
 }
+
+} // namespace fl

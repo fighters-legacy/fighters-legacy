@@ -17,6 +17,8 @@
 #include <glm/gtc/quaternion.hpp>
 #include <sstream>
 
+namespace fl {
+
 void ClientNetEventHandler::onConnect(uint32_t /*peerId*/) {
     m_connected = true;
     logger.log(LogLevel::Info, __FILE__, __LINE__, "connected to local fl-server");
@@ -284,3 +286,5 @@ void ClientNetEventHandler::sendHeartbeatIfNeeded() {
     hb.tickIndex = m_lastSnapshotTick;
     net.send(0, &hb, sizeof(hb), /*reliable=*/false);
 }
+
+} // namespace fl

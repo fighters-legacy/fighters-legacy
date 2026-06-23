@@ -5,6 +5,8 @@
 
 #include <string_view>
 
+namespace fl {
+
 class AssetManager;
 class IFilesystem;
 class ILogger;
@@ -65,3 +67,5 @@ class DifficultyMultipliers {
     PresetValues m_pilot;
     PresetValues m_ace;
 };
+
+} // namespace fl

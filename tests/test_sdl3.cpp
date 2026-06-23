@@ -5,6 +5,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
 
+using namespace fl;
+
 static void useHeadlessDriver() {
 #ifdef _WIN32
     _putenv_s("SDL_VIDEO_DRIVER", "dummy");

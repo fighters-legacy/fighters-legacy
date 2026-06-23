@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+namespace fl {
+
 enum class LogLevel : uint8_t { Trace, Debug, Info, Warn, Error };
 
 // Platform-specific logging backend (OutputDebugString on Windows, os_log on
@@ -25,3 +27,5 @@ class ILogger {
     // to ensure the last log lines survive before the process exits.
     virtual void flush() = 0;
 };
+
+} // namespace fl

@@ -4,6 +4,8 @@
 #include "SDL3Input.h"
 #include "SDL3Window.h"
 
+namespace fl {
+
 SDL3WindowInput createSDL3WindowInput() {
     auto input = std::make_unique<SDL3Input>();
     auto window = std::make_unique<SDL3Window>();
@@ -14,3 +16,5 @@ SDL3WindowInput createSDL3WindowInput() {
 std::unique_ptr<IDisplay> createSDL3Display() {
     return std::make_unique<SDL3Display>();
 }
+
+} // namespace fl

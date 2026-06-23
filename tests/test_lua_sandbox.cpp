@@ -7,6 +7,8 @@
 #include <string>
 #include <string_view>
 
+using namespace fl;
+
 // All tests use an empty packRootDir — the custom require loader will reject
 // all requires (in-pack file not found), which exercises the error path.
 // Tests that need in-pack require create a temporary directory with a Lua file.

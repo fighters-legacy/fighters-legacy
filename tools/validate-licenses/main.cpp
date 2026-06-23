@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+using namespace fl;
+
 static constexpr const char* kVersion = "0.0.1";
 
 static void printHelp() {

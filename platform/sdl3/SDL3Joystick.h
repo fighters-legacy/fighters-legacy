@@ -9,6 +9,8 @@
 struct SDL_Joystick;
 typedef uint32_t SDL_JoystickID;
 
+namespace fl {
+
 class SDL3Joystick : public IJoystick, public ISDL3EventSink {
   public:
     // --- IJoystick ---
@@ -49,3 +51,5 @@ class SDL3Joystick : public IJoystick, public ISDL3EventSink {
     JoystickState* joystickAt(int joystickId);
     const JoystickState* joystickAt(int joystickId) const;
 };
+
+} // namespace fl

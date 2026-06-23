@@ -8,6 +8,8 @@
 #include "i18n/Localization.h"
 #include "i18n/StringTable.h"
 
+using namespace fl;
+
 #include <algorithm>
 #include <cstring>
 #include <map>

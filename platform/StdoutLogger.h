@@ -3,6 +3,8 @@
 #include "ILogger.h"
 #include <cstdio>
 
+namespace fl {
+
 // Minimal ILogger implementation that writes to stdout.
 // For use in headless binaries (fl-server) that have no file-based logger.
 class StdoutLogger : public ILogger {
@@ -28,3 +30,5 @@ class StdoutLogger : public ILogger {
         std::fflush(stdout);
     }
 };
+
+} // namespace fl

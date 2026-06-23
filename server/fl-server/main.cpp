@@ -61,6 +61,8 @@
 #include <unordered_set>
 #include <vector>
 
+using namespace fl;
+
 // ---------------------------------------------------------------------------
 // Signal handling
 // ---------------------------------------------------------------------------
@@ -75,7 +77,7 @@ static void onSignal(int) {
 // 3-tier config override: CLI positional args + environment variables
 // ---------------------------------------------------------------------------
 
-static void applyCliAndEnvOverrides(ServerConfig& cfg, int argc, char** argv, ILogger* log) {
+static void applyCliAndEnvOverrides(fl::ServerConfig& cfg, int argc, char** argv, ILogger* log) {
     // Tier 2: CLI positional args — [port] [maxPeers]
     if (argc >= 2 && argv[1][0] != '-')
         cfg.port = static_cast<uint16_t>(std::atoi(argv[1]));
@@ -185,7 +187,8 @@ int main(int argc, char** argv) {
     // ---- Tier 1: server.toml ----
     const char* configEnv = std::getenv("FL_CONFIG");
     std::string configPath = configEnv ? configEnv : "server.toml";
-    ServerConfig cfg = parseServerConfig(fl::ensureAndReadConfig(configPath, defaultServerConfigToml(), *log), log);
+    fl::ServerConfig cfg =
+        fl::parseServerConfig(fl::ensureAndReadConfig(configPath, fl::defaultServerConfigToml(), *log), log);
 
     // ---- Tier 2 + 3: CLI positional args and environment variables ----
     applyCliAndEnvOverrides(cfg, argc, argv, log);
@@ -426,14 +429,14 @@ int main(int argc, char** argv) {
     primeSpawnHeight(0.0, 0.0); // no-op if already Ready (default-spawn path primed it above)
     broadcaster.setGroundElevation(static_cast<float>(terrainStreamer.heightAt(0.0, 0.0)));
     if (!cfg.banlistPath.empty()) {
-        auto banned = loadIpListFile(cfg.banlistPath, log);
+        auto banned = fl::loadIpListFile(cfg.banlistPath, log);
         char buf[128];
         std::snprintf(buf, sizeof(buf), "banlist: loaded %zu IPs from %s", banned.size(), cfg.banlistPath.c_str());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
         broadcaster.setBannedAddresses(std::move(banned));
     }
     if (!cfg.allowlistPath.empty()) {
-        auto allowed = loadIpListFile(cfg.allowlistPath, log);
+        auto allowed = fl::loadIpListFile(cfg.allowlistPath, log);
         char buf[128];
         std::snprintf(buf, sizeof(buf), "allowlist: loaded %zu IPs from %s", allowed.size(), cfg.allowlistPath.c_str());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
@@ -447,7 +450,7 @@ int main(int argc, char** argv) {
     CommandRegistry adminRegistry;
     CommandShell adminShell(*log, adminRegistry);
     // Declared here so rconServer outlives gameLoop but is destroyed before adminRegistry.
-    std::unique_ptr<RconServer> rconServer;
+    std::unique_ptr<fl::RconServer> rconServer;
 
     // Build a read-only AI script cache before gameLoop.start() so it is safe to read
     // from any thread (including the sim thread for ENet admin commands).
@@ -462,7 +465,7 @@ int main(int argc, char** argv) {
     }
 
     GameLoop gameLoop(broadcaster, *log);
-    ServerCommandContext adminCtx;
+    fl::ServerCommandContext adminCtx;
     adminCtx.sim.broadcaster = &broadcaster;
     adminCtx.sim.entityManager = &entityManager;
     adminCtx.sim.typeRegistry = &entityRegistry;
@@ -479,10 +482,10 @@ int main(int argc, char** argv) {
     adminCtx.bans.banlistPath = cfg.banlistPath.empty() ? nullptr : &cfg.banlistPath;
     adminCtx.bans.allowlistPath = cfg.allowlistPath.empty() ? nullptr : &cfg.allowlistPath;
     adminCtx.bans.saveBanlist = [&](const std::unordered_set<std::string>& b) {
-        saveIpListFile(cfg.banlistPath, b, log);
+        fl::saveIpListFile(cfg.banlistPath, b, log);
     };
-    adminCtx.bans.loadBanlist = [&]() { return loadIpListFile(cfg.banlistPath, log); };
-    adminCtx.bans.loadAllowlist = [&]() { return loadIpListFile(cfg.allowlistPath, log); };
+    adminCtx.bans.loadBanlist = [&]() { return fl::loadIpListFile(cfg.banlistPath, log); };
+    adminCtx.bans.loadAllowlist = [&]() { return fl::loadIpListFile(cfg.allowlistPath, log); };
     adminCtx.shutdown.warningIntervalS = static_cast<uint32_t>(cfg.shutdownWarningIntervalS);
     adminCtx.shutdown.minDelayS = static_cast<uint32_t>(cfg.minShutdownDelayS);
     adminCtx.shutdown.requireConfirm = cfg.shutdownRequireConfirm;
@@ -495,7 +498,7 @@ int main(int argc, char** argv) {
     };
 
     broadcaster.setShutdownCallback([&]() { g_quit = 1; });
-    registerServerCommands(adminRegistry, adminCtx);
+    fl::registerServerCommands(adminRegistry, adminCtx);
 
     // MOTD and operator password were applied via applyConfig() above; the admin dispatcher needs
     // adminRegistry (built just above) so it is wired here.
@@ -524,7 +527,7 @@ int main(int argc, char** argv) {
 
     // ---- RCON server (optional TCP remote admin channel) ----
     if (cfg.rcon.enabled) {
-        rconServer = std::make_unique<RconServer>(adminRegistry, cfg.rcon, *log, &adminShell);
+        rconServer = std::make_unique<fl::RconServer>(adminRegistry, cfg.rcon, *log, &adminShell);
         if (!rconServer->start()) {
             log->log(LogLevel::Warn, __FILE__, __LINE__, "RCON server failed to start; continuing without RCON");
             rconServer.reset();

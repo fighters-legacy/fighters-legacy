@@ -7,6 +7,8 @@
 #include "IWindow.h"
 #include <memory>
 
+namespace fl {
+
 // Returns a wired window + input pair. The input backend is already registered
 // as an event sink with the window; calling window->pollEvents() dispatches
 // keyboard, mouse, and scroll events into the input state.
@@ -21,3 +23,5 @@ struct SDL3WindowInput {
 SDL3WindowInput createSDL3WindowInput();
 
 std::unique_ptr<IDisplay> createSDL3Display();
+
+} // namespace fl

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+namespace fl {
+
 class ILogger;
 class UserConfig;
 
@@ -23,3 +25,5 @@ class FirstRun {
     UserConfig& m_config;
     ILogger& m_logger;
 };
+
+} // namespace fl

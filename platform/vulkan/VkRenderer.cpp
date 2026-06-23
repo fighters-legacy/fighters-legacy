@@ -26,6 +26,9 @@
 // Factory
 // ---------------------------------------------------------------------------
 #include "VkRendererFactory.h"
+
+namespace fl {
+
 std::unique_ptr<IRenderer> createVulkanRenderer() {
     return std::make_unique<VkRenderer>();
 }
@@ -4290,3 +4293,5 @@ void VkRenderer::destroyOverlayResources() {
     m_fontImageMemory = VK_NULL_HANDLE;
     m_overlayReady = false;
 }
+
+} // namespace fl

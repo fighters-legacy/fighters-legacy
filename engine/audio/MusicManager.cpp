@@ -9,6 +9,8 @@
 #include <cstring>
 #include <random>
 
+namespace fl {
+
 static const char* gameStateName(GameState s) {
     switch (s) {
     case GameState::Menu:
@@ -263,3 +265,5 @@ void MusicManager::shutdown() {
     }
     m_audio = nullptr;
 }
+
+} // namespace fl
