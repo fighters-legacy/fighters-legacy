@@ -11,6 +11,8 @@
 #include <string>
 #include <string_view>
 
+namespace fl {
+
 // Quake-style drop-down game console.
 //
 // Toggle:  backtick (`) -- handled in main.cpp via SDL_SCANCODE_GRAVE.
@@ -109,3 +111,5 @@ class GameConsole : public CommandShell, public ITextInputHandler {
     bool pushLine(float x0, float y0, float x1, float y1, float r, float g, float b);
     bool pushRect(float x0, float y0, float x1, float y1, float r, float g, float b, float a);
 };
+
+} // namespace fl

@@ -5,6 +5,8 @@
 #include <string_view>
 #include <vector>
 
+namespace fl {
+
 // Self-contained raw PCM output from a synthesiser.
 // Intentionally mirrors engine/audio/OggDecoder.h::DecodedPcm but lives in platform/
 // so that IAudioSynthesizer stays free of engine/ header dependencies.
@@ -35,3 +37,5 @@ class IAudioSynthesizer {
     // Returns false if synthesis is unavailable; caller falls back to the pre-recorded OGG asset.
     virtual bool synthesise(std::string_view text, SynthesisedAudio& out) = 0;
 };
+
+} // namespace fl

@@ -8,6 +8,8 @@
 #include "config/GraphicsSettings.h"
 #include "config/UserConfig.h"
 
+using namespace fl;
+
 // Minimal fixture: UserConfig backed by in-memory filesystem.
 struct Fixture {
     MockFilesystem fs;

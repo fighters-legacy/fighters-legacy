@@ -5,6 +5,8 @@
 
 #include <cstddef>
 
+namespace fl {
+
 SDL3AsyncFilesystem::SDL3AsyncFilesystem(std::filesystem::path assetsRoot, std::filesystem::path userDataRoot)
     : m_assetsRoot(std::move(assetsRoot)), m_userDataRoot(std::move(userDataRoot)) {}
 
@@ -161,3 +163,5 @@ void SDL3AsyncFilesystem::workerLoop() {
     // Without this, LSAN reports the TLS allocation as a leak when the thread exits.
     SDL_CleanupTLS();
 }
+
+} // namespace fl

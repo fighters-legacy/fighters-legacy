@@ -6,6 +6,8 @@
 #include <span>
 #include <string>
 
+namespace fl {
+
 // Size limits (bytes) enforced by AssetValidator::validate(). All fields have
 // sensible defaults; pass a custom ValidationLimits to AssetManager to override.
 struct ValidationLimits {
@@ -39,3 +41,5 @@ class AssetValidator {
   private:
     ValidationLimits m_limits;
 };
+
+} // namespace fl

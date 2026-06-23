@@ -12,6 +12,7 @@
 #include <chrono>
 #include <thread>
 
+using namespace fl;
 using namespace std::chrono_literals;
 
 // ---------------------------------------------------------------------------

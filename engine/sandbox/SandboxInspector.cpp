@@ -13,6 +13,8 @@
 #include <numbers>
 #include <vector>
 
+namespace fl {
+
 // Fixed set of keys reported by the input monitor (covers the hardware validation use case).
 static constexpr Key kMonitoredKeys[] = {
     Key::A,     Key::B,      Key::C,       Key::D,         Key::E,         Key::F,          Key::G, Key::H, Key::I,
@@ -208,3 +210,5 @@ bool SandboxInspector::update() {
 
     return true;
 }
+
+} // namespace fl

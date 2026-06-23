@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace fl {
+
 // Opaque handle for a pending async read. 0 = invalid, matching the AudioBufferId convention.
 using AsyncReadId = uint32_t;
 
@@ -73,3 +75,5 @@ class IAsyncFilesystem {
     // or nullptr if none. Valid until the next call on this interface.
     virtual const char* getLastError() const = 0;
 };
+
+} // namespace fl

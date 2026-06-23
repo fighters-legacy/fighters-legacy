@@ -9,6 +9,8 @@
 #include <memory>
 #include <string_view>
 
+namespace fl {
+
 class AssetManager;
 class IDisplay;
 class IInput;
@@ -97,3 +99,5 @@ class ScreenManager {
     std::unique_ptr<PauseMenuScreen> m_pauseMenu;
     std::unique_ptr<DebriefScreen> m_debrief;
 };
+
+} // namespace fl

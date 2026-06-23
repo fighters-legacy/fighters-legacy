@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 class IContentPackEventHandler;
 class IFilesystem;
 class ILogger;
@@ -61,3 +63,5 @@ class ModLoader {
     std::string m_assetsAbsoluteRoot;
     std::vector<LoadError> m_loadErrors;
 };
+
+} // namespace fl

@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 class AssetManager;
 class ILogger;
 
@@ -85,3 +87,5 @@ class MusicManager {
     float m_crossfadeElapsed{0.0f};
     bool m_crossfading{false};
 };
+
+} // namespace fl

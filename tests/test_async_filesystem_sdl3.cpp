@@ -4,6 +4,8 @@
 #include "SDL3AsyncFilesystem.h"
 #include "test_helpers.h"
 
+using namespace fl;
+
 #include <chrono>
 #include <cstdint>
 #include <fstream>

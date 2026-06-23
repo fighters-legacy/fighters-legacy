@@ -5,6 +5,8 @@
 
 #include <string>
 
+using namespace fl;
+
 TEST_CASE("BC7 with mipmaps produces correct toktx command", "[tex-compress]") {
     TexCompressOptions opts;
     opts.format = TexFormat::BC7;

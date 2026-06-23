@@ -5,6 +5,8 @@
 #include <string_view>
 #include <vector>
 
+namespace fl {
+
 struct MissionValidationResult {
     bool ok{true};
     std::vector<std::string> errors;
@@ -14,3 +16,5 @@ struct MissionValidationResult {
 // Validates a YAML mission file against the schema in docs/modding/missions.md.
 // All errors are accumulated before returning — never fail-fast.
 MissionValidationResult validateMission(std::string_view yamlContent);
+
+} // namespace fl

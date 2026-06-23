@@ -6,6 +6,8 @@
 #include <chrono>
 #include <thread>
 
+using namespace fl;
+
 struct SilentLogger : ILogger {
     void log(LogLevel, const char*, int, const char*) override {}
     void setMinLevel(LogLevel) override {}

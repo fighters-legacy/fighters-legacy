@@ -15,6 +15,8 @@
 #include <string>
 #include <string_view>
 
+using namespace fl;
+
 // MockInput subclass that tracks setMouseCapture calls.
 struct TrackingInput : public MockInput {
     int captureCount{0};

@@ -22,6 +22,8 @@
 #include <cmath>
 #include <glm/glm.hpp>
 
+namespace fl {
+
 static const fl::EntityRenderEntry* findEntry(const fl::SimRenderBridge& bridge, uint32_t idx, uint32_t gen) {
     if (!bridge.hasSnapshot())
         return nullptr;
@@ -105,3 +107,5 @@ std::span<const HudElement> FlightScreen::buildElements() {
     }
     return {m_elements.data(), static_cast<std::size_t>(m_elementCount)};
 }
+
+} // namespace fl

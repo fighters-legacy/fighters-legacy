@@ -4,6 +4,8 @@
 #include "IInput.h"
 #include "IWindow.h"
 
+namespace fl {
+
 void MissionBriefScreen::setMission(std::string_view missionId, std::string_view missionName) {
     m_id = missionId;
     m_name = missionName.empty() ? std::string(missionId) : std::string(missionName);
@@ -163,3 +165,5 @@ std::span<const HudElement> MissionBriefScreen::buildElements() {
 
     return {m_elements.data(), static_cast<std::size_t>(m_elementCount)};
 }
+
+} // namespace fl

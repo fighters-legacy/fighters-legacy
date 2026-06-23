@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <vector>
 
+using namespace fl;
+
 static std::vector<int16_t> silentMono(int samples = 100) {
     return std::vector<int16_t>(samples, 0);
 }

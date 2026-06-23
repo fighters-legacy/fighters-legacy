@@ -7,6 +7,8 @@
 #include <span>
 #include <vector>
 
+using namespace fl;
+
 // Build a header span from a byte initialiser list
 static std::span<const uint8_t> hdr(const std::vector<uint8_t>& v) {
     return {v.data(), std::min(v.size(), std::size_t{16})};

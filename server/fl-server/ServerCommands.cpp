@@ -28,6 +28,8 @@
 #include <string>
 #include <string_view>
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Local IP helpers (mirrors WorldBroadcaster.cpp — kept file-static)
 // ---------------------------------------------------------------------------
@@ -939,3 +941,5 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                  return "shutting down...";
                              });
 }
+
+} // namespace fl

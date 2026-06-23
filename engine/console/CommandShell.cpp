@@ -6,6 +6,8 @@
 
 #include <string_view>
 
+namespace fl {
+
 CommandShell::CommandShell(ILogger& logger, CommandRegistry& registry) : m_logger(logger), m_registry(registry) {}
 
 void CommandShell::print(std::string line) {
@@ -80,3 +82,5 @@ std::vector<std::string> CommandShell::drainSince(int mark) const {
     }
     return out;
 }
+
+} // namespace fl

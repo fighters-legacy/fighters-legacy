@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace fl {
+
 // Implement this interface and register it with INetwork::setEventHandler.
 // The backend calls these methods from INetwork::service() as events arrive.
 // Threading: callbacks are invoked from whichever thread calls INetwork::service().
@@ -76,3 +78,5 @@ class INetwork {
     // Valid until the next call on this interface.
     virtual const char* getLastError() const = 0;
 };
+
+} // namespace fl

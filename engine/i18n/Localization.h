@@ -9,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+namespace fl {
+
 class IFilesystem;
 class IFilesystemWatcher;
 class ILogger;
@@ -89,3 +91,5 @@ class Localization {
     std::vector<std::string> m_lastRootDirs;
     std::vector<std::string> m_watchedDirs;
 };
+
+} // namespace fl

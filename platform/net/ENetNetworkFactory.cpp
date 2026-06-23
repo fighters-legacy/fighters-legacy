@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <enet6/enet.h>
 
+namespace fl {
+
 std::unique_ptr<INetwork> createENetNetwork() {
     return std::make_unique<ENetNetwork>();
 }
@@ -17,3 +19,5 @@ const char* enetLibraryVersion() {
     }
     return kBuf;
 }
+
+} // namespace fl

@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 // Distinguishes the read-only asset root (install directory) from the writable
 // user-data root (per-user app data). Required for Linux Flatpak and macOS
 // sandbox compliance where these directories are separate OS-managed paths.
@@ -60,3 +62,5 @@ class IFilesystem {
     // mod folders from loose files.
     virtual std::vector<Entry> scanDirectory(PathDomain domain, const char* path) const = 0;
 };
+
+} // namespace fl

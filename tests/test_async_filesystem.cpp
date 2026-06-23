@@ -6,6 +6,8 @@
 
 #include <cstdint>
 #include <string>
+
+using namespace fl;
 #include <vector>
 
 // Captures onReadComplete results for assertion.

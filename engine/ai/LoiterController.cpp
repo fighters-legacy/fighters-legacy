@@ -39,12 +39,13 @@ fl::ControlInput LoiterController::sample(const fl::EntityState& state, uint64_t
         tanZ = nx;
     }
 
-    // Lookahead point 1000 m along the tangent from current position.
+    // Lookahead point along the tangent from current position.
+    // Scale with the orbit radius so larger circles get a proportionally farther target.
     // Y component is irrelevant to horizontalHeadingError (uses only X,Z).
     double lookahead[3] = {
-        state.transform.pos[0] + 1000.0 * static_cast<double>(tanX),
+        state.transform.pos[0] + static_cast<double>(m_radiusM) * static_cast<double>(tanX),
         m_center.y,
-        state.transform.pos[2] + 1000.0 * static_cast<double>(tanZ),
+        state.transform.pos[2] + static_cast<double>(m_radiusM) * static_cast<double>(tanZ),
     };
 
     float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, lookahead);

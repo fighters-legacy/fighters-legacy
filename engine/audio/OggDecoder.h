@@ -5,6 +5,8 @@
 #include <span>
 #include <vector>
 
+namespace fl {
+
 // Decoded PCM output from an OGG Vorbis file (full decode, for short SFX clips).
 struct DecodedPcm {
     std::vector<int16_t> samples; // interleaved int16_t; numSamples * channels elements
@@ -47,3 +49,5 @@ void seekOggStart(OggStream* stream);
 
 // Closes and frees the stream handle.
 void closeOggStream(OggStream* stream);
+
+} // namespace fl

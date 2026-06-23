@@ -22,6 +22,7 @@
 #include <vector>
 
 using Catch::Matchers::WithinAbs;
+using namespace fl;
 
 // ---------------------------------------------------------------------------
 // Mock logger

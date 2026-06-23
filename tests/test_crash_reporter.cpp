@@ -19,9 +19,13 @@
 
 namespace fs = std::filesystem;
 
+using namespace fl;
+
 // ---------------------------------------------------------------------------
 // MockWindow
 // ---------------------------------------------------------------------------
+
+namespace fl {
 
 struct MockWindow : IWindow {
     int buttonToReturn{2}; // default: Dismiss
@@ -79,6 +83,8 @@ struct MockWindow : IWindow {
         return -1;
     }
 };
+
+} // namespace fl
 
 // ---------------------------------------------------------------------------
 // Helper: write a sentinel file with a given PID

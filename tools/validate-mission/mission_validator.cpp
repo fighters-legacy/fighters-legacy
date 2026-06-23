@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 // ── bounds constants ──────────────────────────────────────────────────────────
 
 static constexpr int kTimeHourMin = 0;
@@ -263,3 +265,5 @@ MissionValidationResult validateMission(std::string_view yamlContent) {
 
     return r;
 }
+
+} // namespace fl

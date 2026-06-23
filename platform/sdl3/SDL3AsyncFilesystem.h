@@ -13,6 +13,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace fl {
+
 class SDL3AsyncFilesystem : public IAsyncFilesystem {
   public:
     explicit SDL3AsyncFilesystem(std::filesystem::path assetsRoot, std::filesystem::path userDataRoot);
@@ -66,3 +68,5 @@ class SDL3AsyncFilesystem : public IAsyncFilesystem {
     std::mutex m_completedMtx;
     std::vector<CompletedRequest> m_completedQueue; // swap-drain in service()
 };
+
+} // namespace fl

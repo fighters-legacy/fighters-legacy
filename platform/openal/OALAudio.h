@@ -6,6 +6,8 @@
 #include <string>
 #include <unordered_map>
 
+namespace fl {
+
 // Concrete backend header — not a HAL interface file.
 class OALAudio : public IAudio {
   public:
@@ -63,3 +65,5 @@ class OALAudio : public IAudio {
     bool checkAlError(const char* ctx);
     bool checkAlcError(const char* ctx);
 };
+
+} // namespace fl

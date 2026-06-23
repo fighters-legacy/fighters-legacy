@@ -6,6 +6,8 @@
 
 struct SDL_Window;
 
+namespace fl {
+
 class SDL3Window : public IWindow {
   public:
     bool init(const char* title, int width, int height) override;
@@ -51,3 +53,5 @@ class SDL3Window : public IWindow {
     IDisplay::DisplayMode m_pendingMode{};
     mutable std::string m_lastError;
 };
+
+} // namespace fl

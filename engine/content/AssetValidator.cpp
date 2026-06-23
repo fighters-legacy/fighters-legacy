@@ -3,6 +3,8 @@
 
 #include <cstring>
 
+namespace fl {
+
 AssetValidator::AssetValidator(ValidationLimits limits) : m_limits(limits) {}
 
 // Magic byte sequences for supported formats.
@@ -81,3 +83,5 @@ ValidationResult AssetValidator::validate(AssetType type, std::span<const uint8_
 
     return {true, {}};
 }
+
+} // namespace fl

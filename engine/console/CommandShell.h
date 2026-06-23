@@ -7,6 +7,8 @@
 #include <string_view>
 #include <vector>
 
+namespace fl {
+
 class ILogger;
 class CommandRegistry;
 
@@ -48,3 +50,5 @@ class CommandShell {
     ILogger& m_logger;
     CommandRegistry& m_registry;
 };
+
+} // namespace fl

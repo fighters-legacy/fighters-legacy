@@ -14,6 +14,8 @@
 #include <sstream>
 #include <string>
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Parsing helpers
 // ---------------------------------------------------------------------------
@@ -267,3 +269,5 @@ void registerConsoleCommands(CommandRegistry& registry, CommandContext ctx) {
                                  return "reload_content: asset hot-reload not yet implemented (see issue #152)";
                              });
 }
+
+} // namespace fl

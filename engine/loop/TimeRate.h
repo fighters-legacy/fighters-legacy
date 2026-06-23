@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+namespace fl {
+
 // Time compression factor applied to wall-clock delta before it enters the accumulator.
 // At Normal (1×), sim time advances at the same rate as wall time.
 // At Octa (8×), 1 real second advances 8 seconds of sim time (more ticks per second).
@@ -31,3 +33,5 @@ constexpr double timeRateMultiplier(TimeRate r) noexcept {
     }
     return 1.0; // unreachable; silences MSVC C4715
 }
+
+} // namespace fl

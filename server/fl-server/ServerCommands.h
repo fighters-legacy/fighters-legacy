@@ -11,28 +11,28 @@
 #include <unordered_set>
 #include <utility>
 
+namespace fl {
+
 class CommandRegistry;
 class CommandShell;
 class DiscoveryBeacon;
 class GameLoop;
 class ILogger;
 
-namespace fl {
 class EntityManager;
 class EntityTypeRegistry;
 class WeatherController;
 class WorldBroadcaster;
-} // namespace fl
 
 // Context injected into server admin commands, grouped by concern. All pointers may be nullptr;
 // commands check for their required pointers and return an error string if unavailable.
 struct ServerCommandContext {
     // Live simulation objects. Mutations run on the sim thread via sim.gameLoop->enqueueSimCallback.
     struct SimRefs {
-        fl::WorldBroadcaster* broadcaster{nullptr};
-        fl::EntityManager* entityManager{nullptr};
-        fl::EntityTypeRegistry* typeRegistry{nullptr};
-        fl::WeatherController* weatherController{nullptr};
+        WorldBroadcaster* broadcaster{nullptr};
+        EntityManager* entityManager{nullptr};
+        EntityTypeRegistry* typeRegistry{nullptr};
+        WeatherController* weatherController{nullptr};
         GameLoop* gameLoop{nullptr}; // for enqueueSimCallback
     } sim;
 
@@ -73,7 +73,7 @@ struct ServerCommandContext {
         // called from the sim thread via enqueueSimCallback.
         std::function<bool(const std::string&)> clearRconLockout;
         // Returns RCON channel auth lockout state.
-        std::function<fl::AuthLockoutSummary()> getRconAuthSummary;
+        std::function<AuthLockoutSummary()> getRconAuthSummary;
         // Optional output shell; sim-callback confirmations are also routed here for
         // RCON drain (issue #304). nullptr = disabled.
         CommandShell* shell{nullptr};
@@ -82,3 +82,5 @@ struct ServerCommandContext {
 
 // Register all fl-server admin commands into registry using the given context.
 void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx);
+
+} // namespace fl

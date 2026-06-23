@@ -8,6 +8,8 @@
 #include "HapticController.h"
 #include "mock_hal.h"
 
+using namespace fl;
+
 // ---------------------------------------------------------------------------
 // Tracking mock — records every haptic call for inspection.
 // ---------------------------------------------------------------------------

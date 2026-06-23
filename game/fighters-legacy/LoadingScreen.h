@@ -12,6 +12,8 @@
 #include <functional>
 #include <string>
 
+namespace fl {
+
 // Async loading screen shown while the local server starts and ENet connects.
 // Constructor takes callables injected by Game::startGame():
 //   serverReady    — atomic set by the background server thread on success
@@ -68,3 +70,5 @@ class LoadingScreen : public IScreen {
     // If *m_sessionFailure is set, append its message, enter Phase::Failed, return true.
     bool checkSessionFailure();
 };
+
+} // namespace fl

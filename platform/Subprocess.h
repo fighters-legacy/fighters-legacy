@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 class ILogger;
 
 // Cross-platform child process manager with stdin/stdout pipe support.
@@ -41,3 +43,5 @@ class Subprocess {
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };
+
+} // namespace fl

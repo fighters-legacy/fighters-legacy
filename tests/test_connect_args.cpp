@@ -3,6 +3,8 @@
 
 #include "ConnectArgs.h"
 
+using namespace fl;
+
 static constexpr uint16_t kDefault = 4778;
 
 // Helper: reset to defaults before each call.

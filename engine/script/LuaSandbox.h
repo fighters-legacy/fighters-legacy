@@ -9,6 +9,8 @@
 // must include <lua.h> (with extern "C" guard) in their own .cpp files.
 struct lua_State;
 
+namespace fl {
+
 // Restricted Lua 5.5 execution environment for AI and mission scripts.
 //
 // Allowed libraries: math, string, table, coroutine.
@@ -47,3 +49,5 @@ class LuaSandbox {
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };
+
+} // namespace fl

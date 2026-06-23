@@ -8,6 +8,8 @@
 #include <string>
 #include <unordered_map>
 
+namespace fl {
+
 class AssetManager;
 class ILogger;
 class Localization;
@@ -53,3 +55,5 @@ class VoiceCalloutManager {
     // Decoded PCM buffers keyed by asset name (lazy upload, permanent cache).
     std::unordered_map<std::string, AudioBufferId> m_bufferCache;
 };
+
+} // namespace fl

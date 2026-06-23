@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 struct LicenseValidationResult {
     bool ok{true};
     std::vector<std::string> errors;
@@ -22,3 +24,5 @@ struct LicenseValidationResult {
 // licensesDir: path to the LICENSES/ directory (pass empty string to skip cross-reference check)
 LicenseValidationResult validateLicenses(const std::string& rootDir, const std::vector<std::string>& allowedSpdxIds,
                                          const std::string& licensesDir);
+
+} // namespace fl

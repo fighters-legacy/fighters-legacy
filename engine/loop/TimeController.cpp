@@ -3,6 +3,8 @@
 
 #include <algorithm>
 
+namespace fl {
+
 TimeController::TimeController(double fixedStep) noexcept : m_fixedStep(fixedStep) {}
 
 int TimeController::advance(TimePoint wallNow) noexcept {
@@ -74,3 +76,5 @@ uint64_t TimeController::totalTicks() const noexcept {
 TimeController::TimePoint TimeController::lastTickWallTime() const noexcept {
     return m_lastTickWallTime;
 }
+
+} // namespace fl

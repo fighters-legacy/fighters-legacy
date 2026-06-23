@@ -5,6 +5,8 @@
 
 #include <toml++/toml.hpp>
 
+namespace fl {
+
 const PlaylistState* PlaylistData::findState(std::string_view id) const {
     for (const auto& s : states) {
         if (s.id == id)
@@ -63,3 +65,5 @@ PlaylistData parsePlaylist(std::string_view tomlText, ILogger& logger) {
 
     return result;
 }
+
+} // namespace fl

@@ -24,6 +24,8 @@
 // Mock* = configurable. Two interfaces are kept in dedicated headers to avoid forcing their deps on
 // every HAL-only test: INetwork doubles in mock_network.h, IContentPack doubles in mock_content.h.
 
+namespace fl {
+
 struct MockAudio : public IAudio {
     int uploadCount = 0;
     int createCount = 0;
@@ -591,3 +593,5 @@ struct MockWindow : public IWindow {
         return 0;
     }
 };
+
+} // namespace fl

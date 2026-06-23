@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 struct PlaylistValidationResult {
     std::vector<std::string> errors;
     std::vector<std::string> warnings;
@@ -19,3 +21,5 @@ struct PlaylistValidationResult {
 // If packDir is non-empty, also checks that each referenced OGG track exists on disk at
 // <packDir>/audio/<track-name>.ogg.
 PlaylistValidationResult validatePlaylist(const std::string& tomlPath, const std::string& packDir = "");
+
+} // namespace fl

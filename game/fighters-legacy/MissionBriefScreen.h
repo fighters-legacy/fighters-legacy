@@ -7,6 +7,8 @@
 #include <array>
 #include <string>
 
+namespace fl {
+
 // Mission briefing: shows name, map placeholder, objectives stub.
 // "Fly" → Loading, "Back" → MissionSelect.
 class MissionBriefScreen : public IScreen {
@@ -28,3 +30,5 @@ class MissionBriefScreen : public IScreen {
     std::array<std::string, 8> m_strings{};
     int m_elementCount{0};
 };
+
+} // namespace fl

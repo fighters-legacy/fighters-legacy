@@ -38,6 +38,8 @@
 #include <limits>
 #include <vector>
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -902,3 +904,5 @@ const GpuMaterial* VkResourceManager::getMaterial(MaterialHandle h) const {
     const GpuMaterial& m = m_materials[h.id - 1];
     return m.alive ? &m : nullptr;
 }
+
+} // namespace fl

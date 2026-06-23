@@ -7,6 +7,8 @@
 #include <array>
 #include <string>
 
+namespace fl {
+
 // Pause overlay: Resume / Settings / Quit to Menu / Exit to Desktop.
 // Escape = Resume. Semi-transparent rect overlays the paused scene.
 class PauseMenuScreen : public IScreen {
@@ -33,3 +35,5 @@ class PauseMenuScreen : public IScreen {
     std::array<std::string, kMaxElements> m_strings{};
     int m_elementCount{0};
 };
+
+} // namespace fl

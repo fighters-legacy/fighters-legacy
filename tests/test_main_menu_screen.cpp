@@ -4,6 +4,8 @@
 #include "MainMenuScreen.h"
 #include "mock_hal.h"
 
+using namespace fl;
+
 TEST_CASE("MainMenuScreen: no packs - no Select Mission item") {
     MainMenuScreen s(/*hasPacks=*/false);
     CHECK(s.itemCount() == 3); // Sandbox, Settings, Exit to Desktop

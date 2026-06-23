@@ -9,6 +9,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 using namespace Catch::Matchers;
+using namespace fl;
 
 // Build a minimal valid EntityRenderEntry for testing.
 static fl::EntityRenderEntry makeEntry() {

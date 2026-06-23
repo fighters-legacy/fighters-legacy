@@ -5,6 +5,8 @@
 #include <string_view>
 #include <vector>
 
+namespace fl {
+
 struct FlightModelValidationResult {
     bool ok{true};
     std::vector<std::string> errors;
@@ -14,3 +16,5 @@ struct FlightModelValidationResult {
 // Validates a TOML flight model file against the schema in docs/modding/flight-model.md.
 // All errors are accumulated before returning — never fail-fast.
 FlightModelValidationResult validateFlightModel(std::string_view tomlContent);
+
+} // namespace fl

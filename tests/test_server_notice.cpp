@@ -5,6 +5,8 @@
 
 #include "ServerNotice.h"
 
+using namespace fl;
+
 TEST_CASE("ServerNotice: inactive produces no elements") {
     ServerNotice n;
     CHECK(n.buildElements().empty());

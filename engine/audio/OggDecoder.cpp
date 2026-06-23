@@ -2,6 +2,8 @@
 #include "audio/OggDecoder.h"
 #include "audio/ogg_impl.h"
 
+namespace fl {
+
 DecodedPcm decodeOgg(std::span<const uint8_t> bytes) {
     if (bytes.empty())
         return {};
@@ -42,3 +44,5 @@ void seekOggStart(OggStream* stream) {
 void closeOggStream(OggStream* stream) {
     ogg_stream_close(reinterpret_cast<OggStreamImpl*>(stream));
 }
+
+} // namespace fl

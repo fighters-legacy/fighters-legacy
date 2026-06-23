@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 enum class AssetType : uint8_t { Mesh, Texture, Audio, FlightModel, Mission, Terrain, AIScript, EntityDef, Count };
 
 // Raw-byte asset base. Format-specific fields are added by the renderer/audio
@@ -23,3 +25,5 @@ struct MissionData : AssetBase {};
 struct TerrainData : AssetBase {};
 struct AIScript : AssetBase {};
 struct EntityDefData : AssetBase {};
+
+} // namespace fl

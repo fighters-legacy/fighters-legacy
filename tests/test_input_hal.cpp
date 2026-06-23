@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <string>
 
+using namespace fl;
+
 // ---------------------------------------------------------------------------
 // MockInput -- pure interface contract tests (no SDL3 required)
 // ---------------------------------------------------------------------------

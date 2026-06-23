@@ -19,6 +19,8 @@
 #include <utility>
 #include <vector>
 
+using namespace fl;
+
 // ---------------------------------------------------------------------------
 // Mock types (inline — no separate header until a second test file needs them)
 // ---------------------------------------------------------------------------

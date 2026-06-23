@@ -28,6 +28,8 @@ extern char** environ;
 #include <string>
 #include <thread>
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Platform-specific Impl
 // ---------------------------------------------------------------------------
@@ -363,3 +365,5 @@ Subprocess Subprocess::spawn(const std::string& binaryPath, const std::vector<st
 
     return sub;
 }
+
+} // namespace fl

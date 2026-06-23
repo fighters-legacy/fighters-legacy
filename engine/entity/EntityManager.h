@@ -10,9 +10,8 @@
 #include <cstdint>
 #include <vector>
 
-class ILogger;
-
 namespace fl {
+class ILogger;
 class SimRenderBridge;
 } // namespace fl
 

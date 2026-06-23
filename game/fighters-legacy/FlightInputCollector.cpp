@@ -12,6 +12,8 @@
 #include <chrono>
 #include <cmath>
 
+namespace fl {
+
 std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRenderBridge& bridge, CameraInput& camInput,
                                                              const GameConsole& console, IInput& input,
                                                              IJoystick* joystick, const ControlsSettings& cs) {
@@ -140,3 +142,5 @@ void FlightInputCollector::setBindings(fl::InputBindings bindings) {
 void FlightInputCollector::setAxisConfig(fl::AxisConfigTable cfg) {
     m_axisConfig = std::move(cfg);
 }
+
+} // namespace fl

@@ -13,15 +13,15 @@
 #include <string>
 #include <unordered_map>
 
+namespace fl {
+
 class GameConsole;
 class ILogger;
 class ServerNotice;
 class INetwork;
 
-namespace fl {
 class EntityTypeRegistry;
 class SimRenderBridge;
-} // namespace fl
 
 // Wall-clock render interpolation alpha, reset on each received WorldSnapshot.
 // Replaces the in-process GameLoop::shellTick() that was removed with the
@@ -41,8 +41,8 @@ struct ClientTickAlpha {
 // the render bridge and environment state. Forwards server notices to the game
 // console and the server notice overlay.
 struct ClientNetEventHandler : INetworkEventHandler {
-    fl::SimRenderBridge& bridge;
-    fl::EntityTypeRegistry& registry;
+    SimRenderBridge& bridge;
+    EntityTypeRegistry& registry;
     ILogger& logger;
     INetwork& net;
     EnvironmentState& env;           // updated on MsgWeatherState
@@ -59,8 +59,7 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // (first-writer-wins) so LoadingScreen::Phase::Connecting can surface it immediately.
     std::atomic<SessionFailure>* sessionFailure{nullptr};
 
-    ClientNetEventHandler(fl::SimRenderBridge& b, fl::EntityTypeRegistry& r, ILogger& l, INetwork& n,
-                          EnvironmentState& e)
+    ClientNetEventHandler(SimRenderBridge& b, EntityTypeRegistry& r, ILogger& l, INetwork& n, EnvironmentState& e)
         : bridge(b), registry(r), logger(l), net(n), env(e) {}
 
     void onConnect(uint32_t peerId) override;
@@ -133,3 +132,5 @@ struct ClientNetEventHandler : INetworkEventHandler {
     };
     std::unordered_map<uint32_t, KnownEntityInfo> m_knownEntities;
 };
+
+} // namespace fl

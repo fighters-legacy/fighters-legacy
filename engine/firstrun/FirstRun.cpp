@@ -4,6 +4,8 @@
 #include "ILogger.h"
 #include "config/UserConfig.h"
 
+namespace fl {
+
 FirstRun::FirstRun(UserConfig& config, ILogger& logger) : m_config(config), m_logger(logger) {}
 
 FirstRunOutcome FirstRun::check(bool hasContentPacks) const {
@@ -30,3 +32,5 @@ void FirstRun::complete(WelcomePath path) {
         m_logger.log(LogLevel::Info, __FILE__, __LINE__,
                      "first-run: player chose ModDeveloper — would open sandbox mode");
 }
+
+} // namespace fl

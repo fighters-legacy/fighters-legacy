@@ -7,6 +7,8 @@
 #include <string>
 #include <unordered_set>
 
+using namespace fl;
+
 static size_t countCodepoints(std::string_view s) {
     size_t n = 0;
     for (size_t i = 0; i < s.size();) {

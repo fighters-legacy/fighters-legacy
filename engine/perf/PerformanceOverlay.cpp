@@ -7,6 +7,8 @@
 #include <cstring>
 #include <glm/trigonometric.hpp>
 
+namespace fl {
+
 void PerformanceOverlay::cycleMode() {
     switch (m_mode) {
     case OverlayMode::Off:
@@ -168,3 +170,5 @@ void PerformanceOverlay::buildLines(const FrameStats& stats, uint32_t entityCoun
 
     m_lineCount = line;
 }
+
+} // namespace fl

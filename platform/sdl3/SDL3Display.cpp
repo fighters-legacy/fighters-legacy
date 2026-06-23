@@ -3,6 +3,8 @@
 #include <SDL3/SDL.h>
 #include <memory>
 
+namespace fl {
+
 uint32_t SDL3Display::displayIdForMonitor(int monitorId) const {
     int count = 0;
     auto displays = std::unique_ptr<SDL_DisplayID[], decltype(&SDL_free)>(SDL_GetDisplays(&count), SDL_free);
@@ -67,3 +69,5 @@ const char* SDL3Display::getLastError() const {
     m_lastError = SDL_GetError();
     return m_lastError.c_str();
 }
+
+} // namespace fl

@@ -15,6 +15,8 @@
 
 // Every method a benign default: connections "succeed", queries return empty/disconnected,
 // sends/broadcasts are dropped. Derive to add behaviour or recording.
+namespace fl {
+
 struct NullNetwork : INetwork {
     bool init() override {
         return true;
@@ -86,3 +88,5 @@ struct TrackingNetwork : NullNetwork {
         return addrBuf.c_str();
     }
 };
+
+} // namespace fl

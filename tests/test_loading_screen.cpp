@@ -8,6 +8,8 @@
 
 #include <atomic>
 
+using namespace fl;
+
 static MockInput g_inp;
 static MockWindow g_win;
 

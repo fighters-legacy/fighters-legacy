@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 enum class TexFormat { BC1, BC3, BC7 };
 
 struct TexCompressOptions {
@@ -28,3 +30,5 @@ std::string defaultOutputPath(const std::string& inputPng);
 // Converts inputPng to outputKtx2. Returns result.
 TexCompressResult compressTexture(const std::string& inputPng, const std::string& outputKtx2,
                                   const TexCompressOptions& opts);
+
+} // namespace fl

@@ -66,7 +66,7 @@ static void rconSetNonBlocking(RconSocket s) {
 // rcon free-function implementations
 // ---------------------------------------------------------------------------
 
-namespace rcon {
+namespace fl::rcon {
 
 std::vector<uint8_t> encodePacket(int32_t id, int32_t type, std::string_view body) {
     // Packet layout: [size:4LE][id:4LE][type:4LE][body][NUL][NUL]
@@ -131,7 +131,9 @@ std::vector<std::string> splitResponse(std::string_view body) {
     return chunks;
 }
 
-} // namespace rcon
+} // namespace fl::rcon
+
+namespace fl {
 
 // ---------------------------------------------------------------------------
 // Per-client state
@@ -557,3 +559,5 @@ fl::AuthLockoutSummary RconServer::getRconAuthSummary() {
             ++s.activeCount;
     return s;
 }
+
+} // namespace fl

@@ -5,6 +5,8 @@
 #include <string>
 #include <string_view>
 
+namespace fl {
+
 struct SubtitleRecord {
     std::string text;
     float durationSec;
@@ -40,3 +42,5 @@ class SubtitleQueue {
     bool m_enabled{true};
     std::deque<SubtitleRecord> m_records;
 };
+
+} // namespace fl

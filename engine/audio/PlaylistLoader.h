@@ -5,6 +5,8 @@
 #include <string_view>
 #include <vector>
 
+namespace fl {
+
 class ILogger;
 
 struct PlaylistState {
@@ -24,3 +26,5 @@ struct PlaylistData {
 // Parses the TOML text returned by AssetManager::loadConfig("playlist.toml").
 // Called as: PlaylistLoader::parse(assets.loadConfig("playlist.toml").value_or(""), logger)
 PlaylistData parsePlaylist(std::string_view tomlText, ILogger& logger);
+
+} // namespace fl

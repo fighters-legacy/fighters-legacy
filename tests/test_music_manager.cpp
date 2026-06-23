@@ -19,6 +19,8 @@
 #include <string>
 #include <vector>
 
+using namespace fl;
+
 // ---------------------------------------------------------------------------
 // NullAudio — no-op IAudio for unit tests (no OpenAL device required).
 // All streaming + detach methods must be implemented or the test will not compile.

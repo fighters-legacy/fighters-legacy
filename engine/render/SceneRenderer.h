@@ -9,13 +9,13 @@
 #include <unordered_map>
 #include <vector>
 
+namespace fl {
 class AssetManager;
 class ILogger;
 class IRenderer;
-class SubtitleQueue;
-namespace fl {
 class ParticleSystem;
 class SimRenderBridge;
+class SubtitleQueue;
 class TerrainStreamer;
 } // namespace fl
 

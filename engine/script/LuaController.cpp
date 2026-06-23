@@ -15,6 +15,8 @@ extern "C" {
 #include <cstdint>
 #include <cstdio>
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Impl
 // ---------------------------------------------------------------------------
@@ -384,3 +386,5 @@ fl::ControlInput LuaController::sample(const fl::EntityState& state, uint64_t ti
     m_impl->currentSi = nullptr;
     return ctrl;
 }
+
+} // namespace fl

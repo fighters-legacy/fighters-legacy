@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+namespace fl {
+
 enum class VsyncMode : uint8_t { Off, On, Adaptive };
 enum class FrameRateCap : uint8_t { Off, Cap30, Cap60, Cap120, Cap144, Cap240 };
 enum class QualityLevel : uint8_t { Low, Medium, High, Ultra };
@@ -31,3 +33,5 @@ struct GraphicsSettings {
     UiScale uiScale = UiScale::Scale100;
     int cockpitFov = 90; // degrees, clamped [60, 120]
 };
+
+} // namespace fl

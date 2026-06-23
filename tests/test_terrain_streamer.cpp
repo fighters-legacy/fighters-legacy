@@ -22,6 +22,8 @@
 #include <thread>
 #include <vector>
 
+using namespace fl;
+
 // ===========================================================================
 // Minimal 16-bit grayscale PNG encoder (no external deps)
 //

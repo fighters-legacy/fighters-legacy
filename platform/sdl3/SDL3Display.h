@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <string>
 
+namespace fl {
+
 class SDL3Display : public IDisplay {
   public:
     int getMonitorCount() const override;
@@ -22,3 +24,5 @@ class SDL3Display : public IDisplay {
     mutable std::string m_lastError;
     mutable std::string m_nameBuffer; // backing storage for getMonitorName return value
 };
+
+} // namespace fl

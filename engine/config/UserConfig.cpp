@@ -15,6 +15,8 @@
 #include <sstream>
 #include <string>
 
+namespace fl {
+
 LogLevel parseLogLevel(const char* s) {
     if (!s)
         return LogLevel::Info;
@@ -997,3 +999,5 @@ PilotSettings UserConfig::pilot() const {
 void UserConfig::setPilot(const PilotSettings& ps) {
     m_pilot = ps;
 }
+
+} // namespace fl

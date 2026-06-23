@@ -5,6 +5,8 @@
 
 #include <string>
 
+using namespace fl;
+
 static const char* kValidMission = R"yaml(
 name: "Storm Warning"
 map: ukraine

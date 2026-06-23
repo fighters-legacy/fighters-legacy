@@ -20,6 +20,8 @@
 #include <thread>
 #include <vector>
 
+using namespace fl;
+
 static std::atomic<bool> g_quit{false};
 static void onSignal(int) {
     g_quit = true;

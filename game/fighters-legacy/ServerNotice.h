@@ -11,6 +11,8 @@
 #include <span>
 #include <string_view>
 
+namespace fl {
+
 // Server shutdown / status notice banner.
 // Shown in any camera mode. Set by ClientNetEventHandler on MsgServerNotice.
 // visibleSeconds > 0: fades the banner out over the final kFadeSecs then hides it.
@@ -72,3 +74,5 @@ class ServerNotice {
     bool m_active{false};
     HudElement m_elem{};
 };
+
+} // namespace fl

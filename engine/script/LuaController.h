@@ -8,9 +8,9 @@
 #include <string_view>
 
 namespace fl {
+
 class EntityManager;
 class SpatialIndex;
-} // namespace fl
 
 // IEntityController backed by a sandboxed Lua 5.5 script.
 //
@@ -34,17 +34,15 @@ class SpatialIndex;
 //       (valid only inside compute_control; returns {} when SpatialIndex unavailable)
 //   get_entity(idx)                   → state table or nil
 //       (requires entityManager; returns nil when unavailable or entity dead)
-class LuaController : public fl::IEntityController {
+class LuaController : public IEntityController {
   public:
     // scriptSource: Lua source text (never bytecode — rejected by LuaSandbox)
     // packRootDir: passed to LuaSandbox to restrict require() to ai/<module>.lua
     // entityManager: optional; enables get_entity() Lua binding (sim-thread-only)
-    LuaController(std::string_view scriptSource, std::string packRootDir,
-                  const fl::EntityManager* entityManager = nullptr);
+    LuaController(std::string_view scriptSource, std::string packRootDir, const EntityManager* entityManager = nullptr);
     ~LuaController();
 
-    fl::ControlInput sample(const fl::EntityState& state, uint64_t tick, double dt,
-                            const fl::SpatialIndex* si = nullptr) override;
+    ControlInput sample(const EntityState& state, uint64_t tick, double dt, const SpatialIndex* si = nullptr) override;
 
     // False if LuaSandbox::create() or loadScript() failed at construction.
     [[nodiscard]] bool isValid() const;
@@ -57,3 +55,5 @@ class LuaController : public fl::IEntityController {
   private:
     std::unique_ptr<Impl> m_impl;
 };
+
+} // namespace fl

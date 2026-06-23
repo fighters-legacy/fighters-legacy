@@ -7,6 +7,8 @@
 #include <cstdarg>
 #include <cstdio>
 
+namespace fl {
+
 // HUD color constants
 static constexpr float kGreenR = 0.0f, kGreenG = 1.0f, kGreenB = 0.0f;
 static constexpr float kDimR = 0.7f, kDimG = 0.7f, kDimB = 0.7f;
@@ -236,3 +238,5 @@ void GameConsole::buildHud(const glm::dvec3* playerPos) {
     // Input prompt with underscore cursor
     pushText(kTextX, kPromptY, kGreenR, kGreenG, kGreenB, "> %s_", m_input.c_str());
 }
+
+} // namespace fl

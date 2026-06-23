@@ -9,6 +9,8 @@
 #include <array>
 #include <cstdint>
 
+namespace fl {
+
 class CameraInput;
 struct ClientNetEventHandler;
 class FlightInputCollector;
@@ -20,13 +22,11 @@ class UserConfig;
 
 class SandboxInspector;
 
-namespace fl {
 class CameraController;
 class IHud;
 class SimRenderBridge;
 class TerrainStreamer;
 class WindshieldRain;
-} // namespace fl
 
 struct EnvironmentState;
 
@@ -34,13 +34,13 @@ struct EnvironmentState;
 struct FlightScreenDeps {
     CameraInput* camInput{nullptr};
     FlightInputCollector* flightInput{nullptr};
-    fl::CameraController* cameraController{nullptr};
+    CameraController* cameraController{nullptr};
     GameConsole* gameConsole{nullptr};
     HapticController* hapticController{nullptr};
-    fl::IHud** activeHud{nullptr}; // pointer to the swappable active HUD ptr
-    fl::WindshieldRain* windshieldRain{nullptr};
-    fl::SimRenderBridge* renderBridge{nullptr};
-    fl::TerrainStreamer* terrainStreamer{nullptr};
+    IHud** activeHud{nullptr}; // pointer to the swappable active HUD ptr
+    WindshieldRain* windshieldRain{nullptr};
+    SimRenderBridge* renderBridge{nullptr};
+    TerrainStreamer* terrainStreamer{nullptr};
     EnvironmentState* env{nullptr};
     INetwork* clientNet{nullptr};
     ClientNetEventHandler* clientNetHandler{nullptr}; // for sendHeartbeatIfNeeded; may be null
@@ -63,7 +63,7 @@ class FlightScreen : public IScreen {
 
   private:
     FlightScreenDeps m_deps;
-    const fl::EntityRenderEntry* m_playerEntry{nullptr};
+    const EntityRenderEntry* m_playerEntry{nullptr};
     bool m_weaponFired{false};
 
     // HUD (max 16) + rain (max 48) + slack
@@ -71,3 +71,5 @@ class FlightScreen : public IScreen {
     std::array<HudElement, kMaxElements> m_elements{};
     int m_elementCount{0};
 };
+
+} // namespace fl

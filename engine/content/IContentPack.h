@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+namespace fl {
+
 class IWindow; // configure() passes the window for packs that display a config UI
 
 class IContentPack {
@@ -70,3 +72,5 @@ class IContentPack {
     //   extern "C" IContentPack* fighters_legacy_create_pack();
     static constexpr const char* kFactorySymbol = "fighters_legacy_create_pack";
 };
+
+} // namespace fl

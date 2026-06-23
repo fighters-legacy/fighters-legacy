@@ -5,4 +5,8 @@
 #include "IAudio.h"
 #include <memory>
 
+namespace fl {
+
 std::unique_ptr<IAudio> createOALAudio();
+
+} // namespace fl

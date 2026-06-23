@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace fl {
+
 class IFilesystemWatcher;
 class ILogger;
 class IWindow;
@@ -80,3 +82,5 @@ class AssetManager {
     AssetValidator m_validator;
     IFilesystemWatcher* m_watcher = nullptr;
 };
+
+} // namespace fl

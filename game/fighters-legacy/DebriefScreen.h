@@ -7,6 +7,8 @@
 #include <array>
 #include <string>
 
+namespace fl {
+
 // Post-flight debrief stub. Shows mission outcome and kill/loss tallies.
 // Phase 2: stats are always zero (sandbox has no kill tracking).
 class DebriefScreen : public IScreen {
@@ -28,3 +30,5 @@ class DebriefScreen : public IScreen {
     std::array<std::string, kMaxElements> m_strings{};
     int m_elementCount{0};
 };
+
+} // namespace fl

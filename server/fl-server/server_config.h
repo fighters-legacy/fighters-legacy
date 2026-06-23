@@ -6,6 +6,8 @@
 #include <string_view>
 #include <vector>
 
+namespace fl {
+
 struct ServerConfig {
     // [server]
     std::string name = "Unnamed Server";
@@ -96,3 +98,5 @@ std::string_view defaultServerConfigToml();
 // Parse server configuration from a TOML string.
 // On parse error, logs a Warn and returns a default-constructed ServerConfig.
 ServerConfig parseServerConfig(std::string_view content, ILogger* log);
+
+} // namespace fl

@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+namespace fl {
+
 // Engine-owned key codes. No SDL scancode values may appear here.
 enum class Key : uint32_t {
     Unknown = 0,
@@ -208,3 +210,5 @@ class IInput {
     // No-op for out-of-range ids.
     virtual void stopRumble(int gamepadId) = 0;
 };
+
+} // namespace fl

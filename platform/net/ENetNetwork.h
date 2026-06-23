@@ -11,6 +11,8 @@
 struct _ENetHost; // typedef'd as ENetHost in enet/enet.h
 struct _ENetPeer; // typedef'd as ENetPeer in enet/enet.h
 
+namespace fl {
+
 class ENetNetwork : public INetwork {
   public:
     ENetNetwork() = default;
@@ -73,3 +75,5 @@ class ENetNetwork : public INetwork {
     int m_preHandshakeWindowMs{1000};
     const fl::IClock* m_preHandshakeClock{&fl::SystemClock::instance()};
 };
+
+} // namespace fl

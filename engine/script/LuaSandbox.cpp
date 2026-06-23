@@ -12,6 +12,8 @@ extern "C" {
 #include <fstream>
 #include <sstream>
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Pimpl — owns the raw Lua state
 // ---------------------------------------------------------------------------
@@ -175,3 +177,5 @@ const std::string& LuaSandbox::lastError() const {
 lua_State* LuaSandbox::luaState() const {
     return m_impl->L;
 }
+
+} // namespace fl

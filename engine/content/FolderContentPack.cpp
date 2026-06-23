@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <array>
 
+namespace fl {
+
 // Asset type → subdirectory, primary extension, fallback extension (empty = no fallback)
 struct AssetPathInfo {
     const char* subdir;
@@ -151,3 +153,5 @@ std::vector<std::string> FolderContentPack::listAssets(AssetType type) const {
     }
     return names;
 }
+
+} // namespace fl

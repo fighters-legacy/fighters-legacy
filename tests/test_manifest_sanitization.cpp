@@ -4,6 +4,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+using namespace fl;
+
 // Helpers for building a mod filesystem fixture
 static void addModDir(MockFilesystem& fs, const std::string& modId, const std::string& manifestContent) {
     fs.addDir("mods");

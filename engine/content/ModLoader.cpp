@@ -19,6 +19,8 @@
 #include <cstring>
 #include <unordered_set>
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Manifest sanitization helpers
 // ---------------------------------------------------------------------------
@@ -350,3 +352,5 @@ std::vector<std::unique_ptr<IContentPack>> ModLoader::load(IContentPackEventHand
 
     return packs;
 }
+
+} // namespace fl

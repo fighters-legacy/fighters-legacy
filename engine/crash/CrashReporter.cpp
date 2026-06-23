@@ -34,6 +34,8 @@
 
 namespace fs = std::filesystem;
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // CrashInfo::populateOS
 // ---------------------------------------------------------------------------
@@ -522,3 +524,5 @@ bool CrashReporter::checkPreviousCrash(const std::string& userDataDir, IWindow* 
 
     return true;
 }
+
+} // namespace fl

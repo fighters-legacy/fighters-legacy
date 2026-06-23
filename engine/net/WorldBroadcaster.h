@@ -21,9 +21,8 @@
 #include <unordered_set>
 #include <vector>
 
-class ILogger;
-
 namespace fl {
+class ILogger;
 class EntityManager;
 class FlightIntegrator; // full definition in WorldBroadcaster.cpp
 struct EntityState;

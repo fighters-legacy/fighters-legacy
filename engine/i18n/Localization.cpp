@@ -12,6 +12,8 @@
 #include <set>
 #include <string>
 
+namespace fl {
+
 // TU-static helper: scans |localeDir| for .toml files (excluding meta.toml), loads each
 // into a temporary StringTable, and merges with file-stem prefix into |table|.
 // If |watchedDirs| is non-null and the directory exists, the dir is appended.
@@ -308,3 +310,5 @@ bool Localization::isRTL() const {
 const char* Localization::language() const {
     return m_lang.c_str();
 }
+
+} // namespace fl

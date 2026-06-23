@@ -4,6 +4,8 @@
 #include "IDisplay.h"
 #include "IWindowEventHandler.h"
 
+namespace fl {
+
 // Threading: all methods must be called from the main thread.
 class IWindow {
   public:
@@ -73,3 +75,5 @@ class IWindow {
     // that currently contains most of this window. Returns -1 on error or before init().
     virtual int getCurrentMonitorId() const = 0;
 };
+
+} // namespace fl

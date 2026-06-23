@@ -11,6 +11,8 @@
 
 #include <toml++/toml.hpp>
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Hardcoded defaults (values from the issue spec table)
 // ---------------------------------------------------------------------------
@@ -347,3 +349,5 @@ void DifficultyMultipliers::applyPreset(DifficultyPreset p, DifficultySettings& 
     ds.toggles.invulnerability = savedInvuln;
     ds.toggles.unlimitedWeapons = savedUnlimited;
 }
+
+} // namespace fl

@@ -10,6 +10,8 @@
 #include <thread>
 #include <vector>
 
+using namespace fl;
+
 struct NullShellLogger : public ILogger {
     void log(LogLevel, const char*, int, const char*) override {}
     void setMinLevel(LogLevel) override {}

@@ -5,6 +5,8 @@
 #include <cstring>
 #include <sstream>
 
+namespace fl {
+
 void CommandRegistry::registerCommand(std::string name, std::string helpText, CommandHandler handler) {
     m_entries.push_back({std::move(name), std::move(helpText), std::move(handler)});
 }
@@ -65,3 +67,5 @@ std::vector<std::string_view> CommandRegistry::tokenize(std::string_view line) {
     }
     return tokens;
 }
+
+} // namespace fl

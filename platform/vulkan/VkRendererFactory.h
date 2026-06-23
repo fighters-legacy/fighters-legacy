@@ -6,4 +6,8 @@
 #include "IRenderer.h"
 #include <memory>
 
+namespace fl {
+
 std::unique_ptr<IRenderer> createVulkanRenderer();
+
+} // namespace fl

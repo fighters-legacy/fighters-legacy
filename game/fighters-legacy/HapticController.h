@@ -8,6 +8,8 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+namespace fl {
+
 class HapticController {
   public:
     explicit HapticController(IInput& input);
@@ -69,3 +71,5 @@ class HapticController {
 
     void savePrev(const fl::EntityRenderEntry* player, float agl);
 };
+
+} // namespace fl

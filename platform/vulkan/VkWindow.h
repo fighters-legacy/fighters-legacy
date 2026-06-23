@@ -6,5 +6,9 @@
 
 struct SDL_Window;
 
+namespace fl {
+
 std::vector<const char*> vk_getRequiredInstanceExtensions(SDL_Window* window);
 VkSurfaceKHR vk_createSurface(VkInstance instance, SDL_Window* window);
+
+} // namespace fl

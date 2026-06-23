@@ -4,15 +4,15 @@
 #include <chrono>
 #include <glm/glm.hpp>
 
+namespace fl {
+
 class GameConsole;
 class IInput;
 
-namespace fl {
 class CameraController;
 class TerrainStreamer;
 struct EntityRenderEntry;
 enum class CameraMode : uint8_t;
-} // namespace fl
 
 // Translates SDL keyboard/mouse input into a camera pose each frame.
 //
@@ -27,15 +27,14 @@ class CameraInput {
   public:
     // Detect F1/F2/F4 camera mode switches and backtick console toggle.
     // Call once per frame before update().
-    void pollModeKeys(fl::CameraController& ctrl, GameConsole& console, IInput& input,
-                      const fl::EntityRenderEntry* player);
+    void pollModeKeys(CameraController& ctrl, GameConsole& console, IInput& input, const EntityRenderEntry* player);
 
     // Compute and apply the camera pose for the current mode from SDL keyboard/mouse state.
     // console is queried to suppress camera movement when the console is open.
     // terrain is used to keep the free-fly camera above the ground.
-    void update(fl::CameraController& ctrl,
-                const fl::EntityRenderEntry* player, // nullptr = no snapshot yet
-                const GameConsole& console, fl::TerrainStreamer& terrain);
+    void update(CameraController& ctrl,
+                const EntityRenderEntry* player, // nullptr = no snapshot yet
+                const GameConsole& console, TerrainStreamer& terrain);
 
     // Persistent throttle [0,1] shared between camera and flight input.
     float throttle() const {
@@ -56,10 +55,10 @@ class CameraInput {
 
   private:
     // Reset per-mode state when the user switches camera modes.
-    void onModeSwitch(fl::CameraMode newMode, const fl::EntityRenderEntry* player);
+    void onModeSwitch(CameraMode newMode, const EntityRenderEntry* player);
 
     // Place the free-fly eye behind and above the player, looking at it (used on entering Free).
-    void initFlyFromPlayer(const fl::EntityRenderEntry& player);
+    void initFlyFromPlayer(const EntityRenderEntry& player);
 
     // Free-fly camera state (the base camera).
     glm::dvec3 m_flyEye{0.0, 2000.0, 0.0};
@@ -97,3 +96,5 @@ class CameraInput {
     bool m_f4Prev{false};
     bool m_gravePrev{false};
 };
+
+} // namespace fl

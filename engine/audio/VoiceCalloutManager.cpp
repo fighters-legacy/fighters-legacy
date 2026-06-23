@@ -7,6 +7,8 @@
 #include "content/AssetManager.h"
 #include "i18n/Localization.h"
 
+namespace fl {
+
 bool VoiceCalloutManager::init(IAudio* audio, AssetManager* assets, SubtitleQueue* subtitles, Localization* i18n,
                                ILogger* logger, IAudioSynthesizer* synth) {
     m_audio = audio;
@@ -111,3 +113,5 @@ void VoiceCalloutManager::shutdown() {
     m_bufferCache.clear();
     m_audio = nullptr;
 }
+
+} // namespace fl

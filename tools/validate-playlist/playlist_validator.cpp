@@ -10,6 +10,8 @@
 
 namespace fs = std::filesystem;
 
+namespace fl {
+
 PlaylistValidationResult validatePlaylist(const std::string& tomlPath, const std::string& packDir) {
     PlaylistValidationResult result;
 
@@ -95,3 +97,5 @@ PlaylistValidationResult validatePlaylist(const std::string& tomlPath, const std
 
     return result;
 }
+
+} // namespace fl

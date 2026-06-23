@@ -8,6 +8,8 @@
 #include <AL/al.h>
 #include <AL/alc.h>
 
+namespace fl {
+
 static const char* alErrorStr(ALenum e) {
     switch (e) {
     case AL_NO_ERROR:
@@ -364,3 +366,5 @@ void OALAudio::unqueueProcessed(AudioSourceId source, AudioBufferId* out, int ma
         out[i] = (it != m_alToId.end()) ? it->second : 0;
     }
 }
+
+} // namespace fl

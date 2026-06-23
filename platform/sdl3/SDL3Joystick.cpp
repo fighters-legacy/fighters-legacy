@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cstdio>
 
+namespace fl {
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -268,3 +270,5 @@ void SDL3Joystick::flush() {
 const char* SDL3Joystick::getLastError() const {
     return m_lastError.empty() ? nullptr : m_lastError.c_str();
 }
+
+} // namespace fl

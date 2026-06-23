@@ -3,6 +3,8 @@
 #include <string>
 #include <unordered_set>
 
+namespace fl {
+
 class ILogger;
 
 // Read a one-IP-per-line file (lines beginning with '#' are comments).
@@ -13,3 +15,5 @@ std::unordered_set<std::string> loadIpListFile(const std::string& path, ILogger*
 // Write the set to path (one IP per line, binary mode for portable '\n').
 // Logs Warn on failure.
 void saveIpListFile(const std::string& path, const std::unordered_set<std::string>& ips, ILogger* log);
+
+} // namespace fl
