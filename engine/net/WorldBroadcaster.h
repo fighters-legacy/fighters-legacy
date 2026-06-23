@@ -399,13 +399,15 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::function<std::string(std::string_view)> m_adminDispatch; // null = admin channel disabled
     AuthTracker m_adminAuthTracker{5, 300}; // per-IP failed-auth lockout (defaults: 5 attempts, 5 min)
 
-    // Deferred admin shell drain: one entry per in-flight MsgAdminCommand; fires one tick after
-    // dispatch so enqueueSimCallback lambdas have run and shell output is available.
+    // Deferred admin shell drain: one entry per in-flight MsgAdminCommand; fires after a 20 ms
+    // wall-clock deadline (matching the RCON drain) so enqueueSimCallback lambdas have run and
+    // shell output is available. Wall-clock is immune to GameLoop tick-batch catch-up.
+    static constexpr int kENetAdminDrainDelayMs = 20;
     struct PendingAdminDrain {
         uint32_t peerId;
         uint16_t reqId;
         int shellMark;
-        uint64_t fireAfterTick;
+        std::chrono::steady_clock::time_point drainDeadline;
     };
     std::vector<PendingAdminDrain> m_pendingAdminDrains;
     std::function<int()> m_adminShellMark;                          // null = drain disabled

@@ -315,12 +315,13 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     }
 
     // Fire deferred admin drains: deliver CommandShell output written by enqueueSimCallback
-    // lambdas as follow-on MsgAdminResponseChunk packets. Callbacks enqueued during tick N run
-    // before onTick(N+1), so fireAfterTick = N+1 guarantees the output is ready.
+    // lambdas as follow-on MsgAdminResponseChunk packets. Uses a wall-clock deadline (20 ms,
+    // matching the RCON drain) rather than a tick index, so drain timing is immune to
+    // GameLoop tick-batch catch-up (up to kMaxTicksPerIteration ticks per iteration).
     if (!m_pendingAdminDrains.empty() && m_adminShellDrain) {
         auto it = m_pendingAdminDrains.begin();
         while (it != m_pendingAdminDrains.end()) {
-            if (tickIndex < it->fireAfterTick) {
+            if (m_clock->now() < it->drainDeadline) {
                 ++it;
                 continue;
             }
@@ -822,11 +823,12 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
 
         sendAdminResponse(m_net, peerId, reqId, result);
 
-        // Queue a one-tick-deferred drain: enqueueSimCallback lambdas write to the shell
-        // before onTick(m_currentTick+1) runs, so drainSince fires in the next tick.
-        // Mark is taken after dispatch to skip any sync shell.print() calls made during dispatch.
+        // Queue a wall-clock-deferred drain: mark taken after dispatch (skips any sync
+        // shell.print() calls made during dispatch); fires after kENetAdminDrainDelayMs ms,
+        // giving enqueueSimCallback lambdas time to run regardless of tick-batch catch-up.
         if (m_adminShellMark && m_adminShellDrain)
-            m_pendingAdminDrains.push_back({peerId, reqId, m_adminShellMark(), m_currentTick + 1u});
+            m_pendingAdminDrains.push_back({peerId, reqId, m_adminShellMark(),
+                                            m_clock->now() + std::chrono::milliseconds(kENetAdminDrainDelayMs)});
     } else if (msgId == static_cast<uint8_t>(MsgId::Heartbeat)) {
         MsgHeartbeat hb;
         if (!readMsg(data, size, hb))

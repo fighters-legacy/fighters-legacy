@@ -149,6 +149,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   std::filesystem::path&` instead of `const std::string&` to avoid Windows locale-encoding
   issues with UTF-8 paths from SDL (#257)
 
+### Fixed
+
+- **network**: `admin_auth_status` now delivers per-IP lockout and failure detail to both RCON
+  and ENet admin clients as the synchronous response body; previously, only fl-server stdout
+  received the detail because `printAuthSection` wrote to the shell ring before the drain mark
+  was taken (#405).
+- **network**: ENet admin drain now uses a 20 ms wall-clock deadline (matching the RCON drain)
+  instead of `fireAfterTick = currentTick + 1`, preventing silent drain loss when `GameLoop`
+  catch-up batches multiple ticks per iteration before draining `enqueueSimCallback` callbacks
+  (#406).
+
 ## [0.2.4] - 2026-06-20
 
 ### Added

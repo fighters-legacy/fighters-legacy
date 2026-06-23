@@ -134,24 +134,21 @@ static std::string formatSecs(long long secs) {
     return buf;
 }
 
-static void printAuthSection(const char* label, const fl::AuthLockoutSummary& s, CommandShell* shell) {
-    char hdr[64];
-    std::snprintf(hdr, sizeof(hdr), "[admin] %s:", label);
-    std::printf("%s\n", hdr);
-    if (shell)
-        shell->print(hdr);
+static std::string formatAuthSection(const char* label, const fl::AuthLockoutSummary& s) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "[admin] %s:", label);
+    std::string out(buf);
     for (const auto& e : s.entries) {
-        char m[192];
+        out += '\n';
         if (e.lockedOut)
-            std::snprintf(m, sizeof(m), "[admin]   %-37s locked out -- expires in %s", e.ip.c_str(),
+            std::snprintf(buf, sizeof(buf), "[admin]   %-37s locked out -- expires in %s", e.ip.c_str(),
                           formatSecs(e.expiresIn).c_str());
         else
-            std::snprintf(m, sizeof(m), "[admin]   %-37s %d failure(s) (threshold: %d)", e.ip.c_str(), e.failures,
+            std::snprintf(buf, sizeof(buf), "[admin]   %-37s %d failure(s) (threshold: %d)", e.ip.c_str(), e.failures,
                           s.threshold);
-        std::printf("%s\n", m);
-        if (shell)
-            shell->print(m);
+        out += buf;
     }
+    return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -389,22 +386,14 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                  bool hasRcon = static_cast<bool>(ctx.rcon.getRconAuthSummary);
                                  auto rconS = hasRcon ? ctx.rcon.getRconAuthSummary() : fl::AuthLockoutSummary{};
 
-                                 printAuthSection("MsgAdminCommand channel", adminS, ctx.rcon.shell);
+                                 std::string detail = formatAuthSection("MsgAdminCommand channel", adminS);
                                  if (hasRcon) {
-                                     std::printf("\n");
-                                     if (ctx.rcon.shell)
-                                         ctx.rcon.shell->print("");
-                                     printAuthSection("RCON channel", rconS, ctx.rcon.shell);
+                                     detail += "\n\n";
+                                     detail += formatAuthSection("RCON channel", rconS);
                                  }
+                                 std::printf("%s\n", detail.c_str());
                                  std::fflush(stdout);
-
-                                 char ackBuf[80];
-                                 if (hasRcon)
-                                     std::snprintf(ackBuf, sizeof(ackBuf), "admin: %d lockout(s) | rcon: %d lockout(s)",
-                                                   adminS.activeCount, rconS.activeCount);
-                                 else
-                                     std::snprintf(ackBuf, sizeof(ackBuf), "%d lockout(s) active", adminS.activeCount);
-                                 return std::string(ackBuf);
+                                 return detail;
                              });
 
     // set_weather <preset>
