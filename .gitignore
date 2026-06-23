@@ -95,3 +95,6 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+
+# Loopback latency analysis — auto-generated measurement results
+tools/latency_analysis/results/

@@ -9,6 +9,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network,tools**: `tools/latency_analysis/` — per-platform ENet loopback latency
+  benchmark scripts (`measure_linux.sh`, `measure_macos.sh`, `measure_windows.ps1`) and
+  result comparator (`compare.py`); `getPeerRtt()` added to `INetwork`/`ENetNetwork`;
+  `net_check --bench` mode for 60 Hz RTT sample collection; decision record and re-run
+  runbook in `docs/loopback-latency-analysis.md` (#179).
+
 - **network,game**: `ExtTag::SnapshotPeerLatency` (0x0101) TLV appended to each peer's
   `MsgWorldSnapshot`; client stores and displays it as a compact `"42 ms"` indicator in `FlightHud`
   (cockpit mode only). Configurable via `[hud].show_latency` in `user.toml` (default `true`);

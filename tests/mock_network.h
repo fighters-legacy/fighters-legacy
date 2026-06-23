@@ -48,6 +48,9 @@ struct NullNetwork : INetwork {
     const char* getLastError() const override {
         return nullptr;
     }
+    uint32_t getPeerRtt(uint32_t) const override {
+        return 0u;
+    }
 };
 
 // Records emitted packets, disconnect calls, and the reliability flag; resolves per-peer addresses

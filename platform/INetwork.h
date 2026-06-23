@@ -77,6 +77,11 @@ class INetwork {
     // Returns a human-readable description of the last error, or nullptr if none.
     // Valid until the next call on this interface.
     virtual const char* getLastError() const = 0;
+
+    // Returns ENet's rolling round-trip time estimate for the given peer in milliseconds.
+    // Returns 0 if peerId is out of range, the peer is not connected, or the backend
+    // does not track RTT (e.g. mock implementations).
+    virtual uint32_t getPeerRtt(uint32_t peerId) const = 0;
 };
 
 } // namespace fl

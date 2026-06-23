@@ -585,6 +585,21 @@ Queries the repository's [GitHub milestones](https://github.com/fighters-legacy/
 
 ---
 
+## Loopback latency analysis
+
+Tools for re-running the ENet loopback latency analysis across platforms
+([docs/loopback-latency-analysis.md](loopback-latency-analysis.md)). Not required
+to build or run the game.
+
+```
+Fedora/RHEL:   sudo dnf install sockperf
+Ubuntu/Debian: sudo apt install sockperf
+macOS:         brew install iperf3
+Windows:       (no extra tools required)
+```
+
+---
+
 ## Sandbox reference
 
 Key bindings, camera modes, flight controls, and debug console commands are documented in
