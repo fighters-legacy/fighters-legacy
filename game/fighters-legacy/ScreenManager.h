@@ -14,7 +14,6 @@ namespace fl {
 class AssetManager;
 class IDisplay;
 class IInput;
-class ILogger;
 class IRenderer;
 class IWindow;
 class UserConfig;
@@ -36,7 +35,7 @@ struct FlightScreenDeps;
 // Music state and session lifecycle remain in Game.cpp's handleTransition().
 class ScreenManager {
   public:
-    ScreenManager(IInput& input, ILogger& log);
+    explicit ScreenManager(IInput& input);
     ~ScreenManager();
 
     // Create all screen instances. Must be called once after platform is ready.
@@ -87,7 +86,6 @@ class ScreenManager {
   private:
     Screen m_current{Screen::MainMenu};
     IInput& m_input;
-    ILogger& m_log;
     std::function<void(std::string_view)> m_serverCmd;
 
     std::unique_ptr<MainMenuScreen> m_mainMenu;

@@ -580,7 +580,7 @@ void Game::initGameConsole() {
 // Step 21: screen manager — created after all stable game systems exist.
 void Game::initScreenManager() {
     auto& d = *m_impl;
-    d.services.screenMgr = std::make_unique<ScreenManager>(*d.services.p.input, *d.services.rawLogger);
+    d.services.screenMgr = std::make_unique<ScreenManager>(*d.services.p.input);
     d.services.screenMgr->init(*d.services.userConfig, *d.services.p.renderer, *d.services.p.window,
                                *d.services.p.display, *d.services.assets, !d.services.connectHost.empty());
 }

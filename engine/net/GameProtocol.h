@@ -401,7 +401,9 @@ static constexpr uint8_t kGameModeSandbox = 0x04u;
 //   0x0400–0x04FF  MsgWeatherState extensions (reserved for future use)
 //   Values outside defined ranges are reserved and must not be sent.
 enum class ExtTag : uint16_t {
-    SnapshotPeerCount = 0x0100, // uint16_t: active connected peer count at snapshot time
+    SnapshotPeerCount = 0x0100,   // uint16_t: active connected peer count at snapshot time
+    SnapshotPeerLatency = 0x0101, // uint16_t: receiving peer's one-way latency in ms (estimatedDelayTicks*1000/60);
+                                  // absent when delay is 0
 };
 
 } // namespace fl

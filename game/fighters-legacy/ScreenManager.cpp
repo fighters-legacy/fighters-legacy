@@ -12,7 +12,6 @@
 #include "SettingsScreen.h"
 
 #include "IDisplay.h"
-#include "ILogger.h"
 #include "IRenderer.h"
 #include "IWindow.h"
 #include "config/UserConfig.h"
@@ -20,7 +19,7 @@
 
 namespace fl {
 
-ScreenManager::ScreenManager(IInput& input, ILogger& log) : m_input(input), m_log(log) {}
+ScreenManager::ScreenManager(IInput& input) : m_input(input) {}
 
 ScreenManager::~ScreenManager() = default;
 

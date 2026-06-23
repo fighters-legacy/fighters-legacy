@@ -13,7 +13,8 @@ static constexpr float kHudR = 0.0f;
 static constexpr float kHudG = 1.0f;
 static constexpr float kHudB = 0.0f;
 
-void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrainElevation) {
+void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrainElevation, uint32_t latencyMs,
+                       bool showLatency) {
     m_elementCount = 0;
     m_stringCount = 0;
     if (!e)
@@ -88,6 +89,10 @@ void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrai
     int hr = static_cast<int>(timeOfDay) % 24;
     int min = static_cast<int>((timeOfDay - static_cast<float>(static_cast<int>(timeOfDay))) * 60.f) % 60;
     pushText(0.80f, 0.38f, kHudR, kHudG, kHudB, "%02d:%02d", hr, min);
+
+    // Per-peer latency indicator (right column, below fuel) — e.g. "42 ms"
+    if (showLatency && latencyMs > 0)
+        pushText(0.80f, 0.54f, kHudR, kHudG, kHudB, "%u ms", latencyMs);
 }
 
 std::span<const HudElement> FlightHud::elements() const {

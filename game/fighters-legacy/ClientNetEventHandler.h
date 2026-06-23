@@ -102,6 +102,15 @@ struct ClientNetEventHandler : INetworkEventHandler {
         return m_rttValid;
     }
 
+    // Per-peer latency from the last received MsgWorldSnapshot SnapshotPeerLatency TLV extension.
+    // Returns 0 until the first extended snapshot with a non-zero delay arrives.
+    uint32_t snapshotLatencyMs() const noexcept {
+        return m_snapshotLatencyMs;
+    }
+    bool hasSnapshotLatency() const noexcept {
+        return m_hasSnapshotLatency;
+    }
+
   private:
     // Store f into *sessionFailure if it is still None (first-writer-wins via CAS); no-op if unset.
     void signalFailure(SessionFailure f);
@@ -122,6 +131,10 @@ struct ClientNetEventHandler : INetworkEventHandler {
     uint32_t m_lastRttMs{0};        // ms from last MsgPeerDelay; 0 = not yet received
     bool m_rttValid{false};         // true once first MsgPeerDelay with delayTicks > 0 arrives
     std::chrono::steady_clock::time_point m_lastHeartbeatSentAt{}; // throttle to 1 Hz
+
+    // Per-peer snapshot latency (SnapshotPeerLatency TLV, ExtTag::SnapshotPeerLatency = 0x0101).
+    uint16_t m_snapshotLatencyMs{0};  // ms from last snapshot TLV; 0 = not yet received
+    bool m_hasSnapshotLatency{false}; // true once first non-zero SnapshotPeerLatency TLV arrives
 
     // Delta-compression entity cache: entityIdx → {gen (uint16 truncated), typeIndex}.
     // Populated from full MsgEntityEntry records; used to decode compact MsgEntityUpdate records.

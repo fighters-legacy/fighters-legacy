@@ -78,7 +78,12 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
             : 0.f;
     const bool cockpit = (d.cameraController->mode() == fl::CameraMode::Cockpit);
 
-    (*d.activeHud)->update(cockpit ? m_playerEntry : nullptr, d.env->timeOfDay, terrainElev);
+    static constexpr uint32_t kMinLatencyDisplayMs = 5u;
+    const uint32_t latencyMs = d.clientNetHandler ? d.clientNetHandler->snapshotLatencyMs() : 0u;
+    const bool showLat = d.userConfig->hud().showLatency && d.clientNetHandler &&
+                         d.clientNetHandler->hasSnapshotLatency() && latencyMs >= kMinLatencyDisplayMs;
+
+    (*d.activeHud)->update(cockpit ? m_playerEntry : nullptr, d.env->timeOfDay, terrainElev, latencyMs, showLat);
     d.windshieldRain->update(cockpit ? (1.f / 60.f) : 0.f, cockpit ? *d.env : EnvironmentState{},
                              cockpit ? rollAngleRad(m_playerEntry) : 0.f);
     if (d.hapticController)

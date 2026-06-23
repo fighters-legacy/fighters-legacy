@@ -316,7 +316,8 @@ TEST_CASE("WorldBroadcaster: onTick with connected peer and no extra entities se
     CHECK(totalEntityCount(hdr) == 1u); // only the peer's own entity
     CHECK(hdr.tickIndex == 5u);
 
-    // Packet includes the peer entity full entry + SnapshotPeerCount TLV (6 bytes).
+    // Packet includes the peer entity full entry + SnapshotPeerCount TLV only (6 bytes).
+    // SnapshotPeerLatency TLV is absent because estimatedDelayTicks == 0 for this peer (no heartbeat sent).
     const std::size_t expectedMin = sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry) + 6u;
     REQUIRE(pkt.size() == expectedMin);
     uint16_t pc{};
@@ -4553,9 +4554,10 @@ TEST_CASE("WorldBroadcaster: totalEntityCount matches buffer content", "[world_b
         REQUIRE(!snaps.empty());
         const auto& pkt = snaps[0];
         auto hdr = parseSnapshotHeader(pkt);
-        const std::size_t expectedSize = sizeof(fl::MsgWorldSnapshotHeader) +
-                                         hdr.fullEntityCount * sizeof(fl::MsgEntityEntry) +
-                                         hdr.updateCount * sizeof(fl::MsgEntityUpdate) + 6u; // SnapshotPeerCount TLV
+        const std::size_t expectedSize =
+            sizeof(fl::MsgWorldSnapshotHeader) + hdr.fullEntityCount * sizeof(fl::MsgEntityEntry) +
+            hdr.updateCount * sizeof(fl::MsgEntityUpdate) +
+            6u; // SnapshotPeerCount TLV only (estimatedDelayTicks == 0; SnapshotPeerLatency absent)
         CHECK(pkt.size() == expectedSize);
     }
     clearSnapshots(net);
@@ -4590,4 +4592,91 @@ TEST_CASE("WorldBroadcaster: no connected peers produces no snapshot sends", "[w
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     CHECK(net.perPeerSends.empty());
+}
+
+// ---------------------------------------------------------------------------
+// SnapshotPeerLatency TLV tests (#382)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: SnapshotPeerLatency TLV present when estimatedDelayTicks > 0",
+          "[world_broadcaster][latency]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    // Tick 2: advance m_currentTick to 2, peer has no delay yet.
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    clearSnapshots(net);
+
+    // Send MsgHeartbeat with tickIndex=0 → estimatedDelayTicks = 2 - 0 = 2.
+    fl::MsgHeartbeat hb{};
+    hb.msgId = static_cast<uint8_t>(fl::MsgId::Heartbeat);
+    hb.tickIndex = 0u;
+    broadcaster.onReceive(0u, &hb, sizeof(hb));
+
+    // Tick 3: snapshot must include SnapshotPeerLatency = 2 * 1000 / 60 = 33 ms.
+    broadcaster.onTick(1.0 / 60.0, 3u);
+    auto snaps = snapshotsFor(net, 0u);
+    REQUIRE(!snaps.empty());
+    const auto& pkt = snaps[0];
+
+    const auto hdr = parseSnapshotHeader(pkt);
+    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) +
+                                  static_cast<std::size_t>(hdr.fullEntityCount) * sizeof(fl::MsgEntityEntry) +
+                                  static_cast<std::size_t>(hdr.updateCount) * sizeof(fl::MsgEntityUpdate);
+    REQUIRE(pkt.size() > extOffset);
+    const auto* ext = pkt.data() + extOffset;
+    const auto extSz = pkt.size() - extOffset;
+
+    uint16_t pc{};
+    CHECK(fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), pc));
+    CHECK(pc == 1u);
+
+    uint16_t lat{};
+    CHECK(fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), lat));
+    CHECK(lat == static_cast<uint16_t>(2u * 1000u / 60u)); // 33 ms
+}
+
+TEST_CASE("WorldBroadcaster: SnapshotPeerLatency TLV absent when estimatedDelayTicks == 0",
+          "[world_broadcaster][latency]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    // No heartbeat sent — estimatedDelayTicks stays 0.
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    auto snaps = snapshotsFor(net, 0u);
+    REQUIRE(!snaps.empty());
+    const auto& pkt = snaps[0];
+
+    const auto hdr = parseSnapshotHeader(pkt);
+    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) +
+                                  static_cast<std::size_t>(hdr.fullEntityCount) * sizeof(fl::MsgEntityEntry) +
+                                  static_cast<std::size_t>(hdr.updateCount) * sizeof(fl::MsgEntityUpdate);
+    REQUIRE(pkt.size() > extOffset);
+    const auto* ext = pkt.data() + extOffset;
+    const auto extSz = pkt.size() - extOffset;
+
+    // SnapshotPeerCount must be present.
+    uint16_t pc{};
+    CHECK(fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), pc));
+
+    // SnapshotPeerLatency must NOT be present.
+    uint16_t lat{};
+    CHECK_FALSE(fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), lat));
+
+    // Packet size: header + 1 full entry + 6 bytes (SnapshotPeerCount TLV only).
+    const std::size_t expected =
+        sizeof(fl::MsgWorldSnapshotHeader) + hdr.fullEntityCount * sizeof(fl::MsgEntityEntry) + 6u;
+    CHECK(pkt.size() == expected);
 }

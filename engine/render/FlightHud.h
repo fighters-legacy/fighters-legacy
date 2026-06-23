@@ -26,7 +26,8 @@ class FlightHud : public IHud {
     // timeOfDay: hours [0, 24) displayed as HH:MM in the top-right corner.
     // terrainElevation: ground height in metres at the player XZ position (from
     // TerrainStreamer::heightAt). Falls back to 0.0 (AGL == MSL) when not loaded.
-    void update(const EntityRenderEntry* playerEntry, float timeOfDay = 12.0f, float terrainElevation = 0.0f) override;
+    void update(const EntityRenderEntry* playerEntry, float timeOfDay = 12.0f, float terrainElevation = 0.0f,
+                uint32_t latencyMs = 0, bool showLatency = false) override;
 
     // Returns elements for IRenderer::submitOverlayElements(). Valid until next update().
     [[nodiscard]] std::span<const HudElement> elements() const override;

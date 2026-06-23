@@ -461,3 +461,30 @@ TEST_CASE("UserConfig: pilot full section round-trip", "[userconfig][pilot]") {
     CHECK(config2.pilot().campaign.factionStandings.at("nato") == 50);
     CHECK(config2.pilot().campaign.factionStandings.at("pact") == -20);
 }
+
+// ---------------------------------------------------------------------------
+// [hud] section tests (#382)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("UserConfig: [hud] show_latency defaults to true when section absent", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    config.load(); // no file — defaults
+    CHECK(config.hud().showLatency == true);
+}
+
+TEST_CASE("UserConfig: [hud] show_latency false round-trip save+load", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    fl::HudSettings hs;
+    hs.showLatency = false;
+    config.setHud(hs);
+    config.save();
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    CHECK(config2.hud().showLatency == false);
+}

@@ -468,6 +468,7 @@ Helpers: `fl::findExt`, `fl::readExtValue<T>`, `fl::appendExt<T>`, `fl::appendEx
 | Tag | Value | Type | Message | Description |
 |-----|-------|------|---------|-------------|
 | `SnapshotPeerCount` | `0x0100` | `uint16_t` | `MsgWorldSnapshot` | Active connected peer count at the time the snapshot was built. Emitted by `WorldBroadcaster` every tick; stored by `ClientNetEventHandler::serverPeerCount()`. |
+| `SnapshotPeerLatency` | `0x0101` | `uint16_t` | `MsgWorldSnapshot` | Receiving peer's estimated one-way latency in ms (`estimatedDelayTicks × 1000 / 60`), capped at 65535. Absent when `estimatedDelayTicks == 0` (e.g. single-player localhost). Stored by `ClientNetEventHandler::snapshotLatencyMs()`; displayed in `FlightHud` as a compact `"42 ms"` indicator. |
 
 **Reserved ranges:**
 - `0x0000`: reserved

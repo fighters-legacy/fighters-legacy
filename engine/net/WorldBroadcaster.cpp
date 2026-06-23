@@ -526,8 +526,17 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
 
         writeMsgAt(buf, hdrOffset, hdr);
 
-        // TLV extension block — same active peer count for all peers.
+        // TLV extension block.
         appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerCount), activePeers);
+        // Per-peer latency (ms). Omitted when estimatedDelayTicks == 0 (e.g. single-player localhost)
+        // so the client's m_hasSnapshotLatency stays false and the HUD indicator remains hidden.
+        if (auto it = m_peerInputs.find(peerId); it != m_peerInputs.end()) {
+            if (it->second.estimatedDelayTicks > 0) {
+                const auto latMs = static_cast<uint16_t>(
+                    std::min(static_cast<uint64_t>(it->second.estimatedDelayTicks) * 1000u / 60u, uint64_t{65535u}));
+                appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerLatency), latMs);
+            }
+        }
         m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/false);
     }
 

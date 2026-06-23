@@ -37,7 +37,7 @@ struct Fixture {
     MockFilesystem fs;
     UserConfig cfg{fs, log};
     AssetManager assets{/*packs=*/{}, log};
-    ScreenManager mgr{input, log};
+    ScreenManager mgr{input};
 
     void initAll() {
         mgr.init(cfg, renderer, window, display, assets);

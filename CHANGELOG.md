@@ -9,6 +9,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network,game**: `ExtTag::SnapshotPeerLatency` (0x0101) TLV appended to each peer's
+  `MsgWorldSnapshot`; client stores and displays it as a compact `"42 ms"` indicator in `FlightHud`
+  (cockpit mode only). Configurable via `[hud].show_latency` in `user.toml` (default `true`);
+  hidden automatically when `estimatedDelayTicks == 0` (single-player localhost) (#382).
+
 - **engine**: `LuaController` — `IEntityController` backed by a sandboxed Lua 5.5 script;
   exposes entity state, `guidance.*` math, `nearby_entities()`, and `get_entity()` to scripts;
   per-entity Lua state persists between ticks for stateful behaviors (#359).
