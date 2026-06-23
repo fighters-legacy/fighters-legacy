@@ -125,6 +125,7 @@ jobs:
           # 5 s on first run with no cached terrain chunks, e.g. in CI without content packs).
           sleep 10
           ./build/debug/tools/net_check 127.0.0.1 7002 --count 3 --interval 100
+          ./build/debug/tools/net_check 127.0.0.1 7002 --bench 30 --bench-rate 60
           status=$?
           kill "$FL_SERVER_PID" 2>/dev/null || true
           exit $status
@@ -164,6 +165,10 @@ jobs:
       - name: Unit test gen_unifont_header.py (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_gen_unifont_header.py -v
+
+      - name: Unit test latency_analysis/compare.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_latency_compare.py -v
 
       - name: Smoke test gen_unifont_header.py --help (Ubuntu)
         if: matrix.os == 'ubuntu-latest'

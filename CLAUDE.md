@@ -23,8 +23,8 @@ platform/RenderTypes.h — GPU-agnostic scene types shared across the HAL bounda
 server/         — dedicated server binary
 server/fl-server/ — fl-server: authoritative headless game server (owns GameLoop + EntityManager)
 game/           — fighters-legacy game binary (ENet client connecting to embedded fl-server in single-player)
-tools/          — developer utilities; asset pipeline (validate-flight-model, validate-mission, validate-licenses, validate-mesh, tex-compress); net_check (ENet smoke-test); blender_gen.py; gen_terrain_chunks.py; check_deps.py
-tests/          — Catch2 unit tests (C++); pytest unit tests for Python tools (test_gen_terrain_chunks.py)
+tools/          — developer utilities; asset pipeline (validate-flight-model, validate-mission, validate-licenses, validate-mesh, tex-compress); net_check (ENet smoke-test + `--bench N --bench-rate HZ` latency bench mode); latency_analysis/ (per-platform loopback RTT measurement scripts + compare.py comparator); blender_gen.py; gen_terrain_chunks.py; check_deps.py
+tests/          — Catch2 unit tests (C++); pytest unit tests for Python tools (test_gen_terrain_chunks.py, test_latency_compare.py)
 ```
 
 The engine is fully content-agnostic. It knows nothing about FA or any specific game.
@@ -197,6 +197,7 @@ CI structure: a `lint` job (REUSE + clang-format-22) gates the `build` matrix vi
 - `CHANGELOG.md` — Keep a Changelog format; always add an `[Unreleased]` entry (under `### Added`, `### Fixed`, or `### Changed`) for every PR before staging
 - `docs/architecture.md` — engine architecture overview
 - `docs/development.md` — build prerequisites per platform
+- `docs/loopback-latency-analysis.md` — ENet loopback latency decision record (Accept + Compensate) + re-run runbook for `tools/latency_analysis/` scripts; fill in baseline results table after running `compare.py` (#179)
 - `docs/sandbox.md` — developer key map (camera/flight controls + gamepad axis table + HOTAS axis table) + debug console command reference
 - `docs/linux-gamepad.md` — Linux xpadneo / udev setup for Xbox controllers; HOTAS udev rules; HOTAS throttle quadrants, rudder pedals, and flight sticks wired to flight controls via `IJoystick::getAxisValue()`; axis assignments and deadzone/invert config in `[controls]` user.toml; udev rules for Linux device permissions
 - `docs/modding/formats.md` — content pack asset format reference for mod authors; covers Music Playlist TOML (`data/playlist.toml`, all per-state fields including `shuffle`), Flight Model TOML, and other pack-level data files; update when changing any data format visible to content creators

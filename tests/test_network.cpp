@@ -110,6 +110,20 @@ TEST_CASE("getPeerAddress before connect", "[network]") {
     net.shutdown();
 }
 
+TEST_CASE("getPeerRtt returns zero for out-of-range peer", "[network]") {
+    ENetNetwork net;
+    REQUIRE(net.init());
+    CHECK(net.getPeerRtt(999) == 0u);
+    net.shutdown();
+}
+
+TEST_CASE("getPeerRtt returns zero before connection", "[network]") {
+    ENetNetwork net;
+    REQUIRE(net.init());
+    CHECK(net.getPeerRtt(0) == 0u);
+    net.shutdown();
+}
+
 TEST_CASE("send before bind returns false", "[network]") {
     ENetNetwork net;
     REQUIRE(net.init());

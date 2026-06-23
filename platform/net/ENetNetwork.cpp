@@ -342,6 +342,15 @@ const char* ENetNetwork::getLastError() const {
     return m_lastError.empty() ? nullptr : m_lastError.c_str();
 }
 
+uint32_t ENetNetwork::getPeerRtt(uint32_t peerId) const {
+    if (!m_host || peerId >= m_host->peerCount)
+        return 0u;
+    const ENetPeer* peer = &m_host->peers[peerId];
+    if (peer->state != ENET_PEER_STATE_CONNECTED)
+        return 0u;
+    return static_cast<uint32_t>(peer->roundTripTime);
+}
+
 void ENetNetwork::setBandwidthLimit(uint32_t incomingBps, uint32_t outgoingBps) {
     if (m_host)
         enet_host_bandwidth_limit(m_host, incomingBps, outgoingBps);

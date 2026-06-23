@@ -31,6 +31,11 @@ SPDX-FileCopyrightText = "2026 MKZ Systems LLC"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
 [[annotations]]
+path = ["tools/**/*.sh", "tools/**/*.ps1"]
+SPDX-FileCopyrightText = "2026 MKZ Systems LLC"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+[[annotations]]
 path = "AUTHORS"
 SPDX-FileCopyrightText = "2026 MKZ Systems LLC"
 SPDX-License-Identifier = "GPL-3.0-or-later"

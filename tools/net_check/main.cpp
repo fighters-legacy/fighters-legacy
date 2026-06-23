@@ -1,22 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// net_check — ENet transport smoke-test for fighters-legacy
+// net_check — ENet transport smoke-test and latency bench for fighters-legacy
 //
 // Usage: net_check [host] [port] [--count N] [--interval MS]
+//        net_check [host] [port] --bench N [--bench-rate HZ]
 //
-// Connects to fl-server, sends periodic "net_check ping N" packets, then
-// disconnects cleanly. Intended for manual smoke-testing of the ENet backend
-// alongside fl-server; not a production binary.
+// Smoke-test mode: connects to fl-server, sends periodic "net_check ping N" packets,
+// then disconnects cleanly.
+//
+// Bench mode (--bench N): connects, collects N round-trip-time samples from ENet's
+// internal RTT tracker at the given rate (default 60 Hz), then prints statistics and
+// disconnects. Intended for the loopback latency analysis (see tools/latency_analysis/).
 #include "ENetNetworkFactory.h"
 #include <ILogger.h>
 #include <Platform.h>
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
-#include <string>
+#include <numeric>
+#include <vector>
 
 using namespace fl;
 
@@ -24,7 +31,7 @@ using namespace fl;
 // Version
 // ---------------------------------------------------------------------------
 
-static constexpr const char* kVersion = "0.0.1";
+static constexpr const char* kVersion = "0.1.0";
 
 // ---------------------------------------------------------------------------
 // Minimal stdout logger (identical to fl-server)
@@ -81,8 +88,47 @@ static void onSignal(int) {
 
 static constexpr const char* kDefaultHost = "127.0.0.1";
 static constexpr uint16_t kDefaultPort = 4778;
-static constexpr int kDefaultInterval = 1000;  // ms between pings
+static constexpr int kDefaultInterval = 1000;  // ms between pings (smoke-test mode)
 static constexpr int kConnectTimeoutMs = 5000; // 5 s connect timeout
+static constexpr int kDefaultBenchRate = 60;   // Hz
+
+// ---------------------------------------------------------------------------
+// Statistics helpers
+// ---------------------------------------------------------------------------
+
+struct Stats {
+    double min{0};
+    double mean{0};
+    double max{0};
+    double p95{0};
+    double p99{0};
+    double stddev{0};
+};
+
+static Stats computeStats(std::vector<double>& v) {
+    if (v.empty())
+        return {};
+    std::sort(v.begin(), v.end());
+    Stats s;
+    s.min = v.front();
+    s.max = v.back();
+    s.mean = std::accumulate(v.begin(), v.end(), 0.0) / static_cast<double>(v.size());
+    auto idx95 = static_cast<std::size_t>(0.95 * static_cast<double>(v.size() - 1));
+    auto idx99 = static_cast<std::size_t>(0.99 * static_cast<double>(v.size() - 1));
+    s.p95 = v[idx95];
+    s.p99 = v[idx99];
+    double var = 0.0;
+    for (double x : v)
+        var += (x - s.mean) * (x - s.mean);
+    s.stddev = std::sqrt(var / static_cast<double>(v.size()));
+    return s;
+}
+
+static void printStats(const char* label, const Stats& s, int samples, const char* unit) {
+    std::printf("%-10s  samples=%-4d  min=%.2f%s  mean=%.2f%s  max=%.2f%s"
+                "  p95=%.2f%s  p99=%.2f%s  stddev=%.2f%s\n",
+                label, samples, s.min, unit, s.mean, unit, s.max, unit, s.p95, unit, s.p99, unit, s.stddev, unit);
+}
 
 // ---------------------------------------------------------------------------
 // main
@@ -91,20 +137,32 @@ static constexpr int kConnectTimeoutMs = 5000; // 5 s connect timeout
 int main(int argc, char** argv) {
     const char* host = kDefaultHost;
     uint16_t port = kDefaultPort;
-    int count = 0; // 0 = unlimited
+    int count = 0; // 0 = unlimited (smoke-test mode)
     int interval = kDefaultInterval;
+    int benchCount = 0; // 0 = smoke-test mode
+    int benchRate = kDefaultBenchRate;
 
     // Parse args — two positional args first, then named flags
     int positional = 0;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             std::printf("Usage: net_check [host] [port] [--count N] [--interval MS]\n"
+                        "       net_check [host] [port] --bench N [--bench-rate HZ]\n"
+                        "\n"
+                        "Smoke-test mode (default):\n"
+                        "  Connects and sends N periodic pings; --count 0 = unlimited.\n"
+                        "\n"
+                        "Bench mode (--bench N):\n"
+                        "  Collects N ENet RTT samples at the given rate, then prints statistics.\n"
+                        "  Requires fl-server to be running on the target host:port.\n"
                         "\n"
                         "Options:\n"
-                        "  --help           Print this message and exit\n"
-                        "  --version        Print version and exit\n"
-                        "  --count N / -n N Send N packets then disconnect (default: unlimited)\n"
-                        "  --interval MS    Milliseconds between pings (default: 1000)\n"
+                        "  --help              Print this message and exit\n"
+                        "  --version           Print version and exit\n"
+                        "  --count N / -n N    Smoke-test: send N packets then disconnect\n"
+                        "  --interval MS       Smoke-test: ms between pings (default: 1000)\n"
+                        "  --bench N           Bench mode: collect N RTT samples\n"
+                        "  --bench-rate HZ     Bench mode: sample rate in Hz (default: 60)\n"
                         "\n"
                         "Environment:\n"
                         "  FL_HOST    Server host (default: 127.0.0.1)\n"
@@ -123,6 +181,14 @@ int main(int argc, char** argv) {
             interval = std::atoi(argv[++i]);
             continue;
         }
+        if (std::strcmp(argv[i], "--bench") == 0 && i + 1 < argc) {
+            benchCount = std::atoi(argv[++i]);
+            continue;
+        }
+        if (std::strcmp(argv[i], "--bench-rate") == 0 && i + 1 < argc) {
+            benchRate = std::atoi(argv[++i]);
+            continue;
+        }
         // Positional
         if (positional == 0) {
             host = argv[i];
@@ -132,6 +198,9 @@ int main(int argc, char** argv) {
             ++positional;
         }
     }
+
+    if (benchRate <= 0)
+        benchRate = kDefaultBenchRate;
 
     // Env vars override positional defaults but not explicit positional args
     if (positional < 1) {
@@ -204,8 +273,47 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
 
-    // ---- Main loop ----
     using Clock = std::chrono::steady_clock;
+
+    // ---- Bench mode ----
+    if (benchCount > 0) {
+        const int serviceMs = 1000 / benchRate;
+        std::vector<double> rttSamples;
+        std::vector<double> dtSamples;
+        rttSamples.reserve(static_cast<std::size_t>(benchCount));
+        dtSamples.reserve(static_cast<std::size_t>(benchCount));
+
+        {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "bench: collecting %d samples at %d Hz", benchCount, benchRate);
+            log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+        }
+
+        for (int i = 0; i < benchCount && !g_quit && !handler.disconnected; ++i) {
+            auto t0 = Clock::now();
+            net->service(serviceMs);
+            auto t1 = Clock::now();
+            rttSamples.push_back(static_cast<double>(net->getPeerRtt(0)));
+            dtSamples.push_back(
+                static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count()) / 1000.0);
+        }
+
+        // ---- Print statistics ----
+        int n = static_cast<int>(rttSamples.size());
+        Stats rttStats = computeStats(rttSamples);
+        Stats dtStats = computeStats(dtSamples);
+        std::printf("\n--- bench results ---\n");
+        printStats("ENet RTT", rttStats, n, "ms");
+        printStats("Round dt", dtStats, n, "ms");
+        std::printf("---\n");
+
+        log->log(LogLevel::Info, __FILE__, __LINE__, "disconnecting");
+        net->disconnect();
+        net->shutdown();
+        return 0;
+    }
+
+    // ---- Smoke-test mode ----
     auto lastPing = Clock::now() - std::chrono::milliseconds(interval); // send first ping immediately
     int pingsSent = 0;
 
