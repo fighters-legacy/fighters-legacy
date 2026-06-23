@@ -149,10 +149,17 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
                                       static_cast<std::size_t>(hdr.fullEntityCount) * sizeof(fl::MsgEntityEntry) +
                                       static_cast<std::size_t>(hdr.updateCount) * sizeof(fl::MsgEntityUpdate);
         if (size > extOffset) {
+            const auto* ext = static_cast<const uint8_t*>(data) + extOffset;
+            const auto extSz = size - extOffset;
+
             uint16_t pc{};
-            if (fl::readExtValue(static_cast<const uint8_t*>(data) + extOffset, size - extOffset,
-                                 static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), pc)) {
+            if (fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), pc))
                 m_serverPeerCount.store(pc, std::memory_order_relaxed);
+
+            uint16_t lat{};
+            if (fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), lat)) {
+                m_snapshotLatencyMs = lat;
+                m_hasSnapshotLatency = true;
             }
         }
 

@@ -1276,3 +1276,89 @@ TEST_CASE("ClientNetEventHandler: SnapshotPeerCount TLV at correct offset after 
     // TLV should be parsed correctly
     CHECK(handler.serverPeerCount() == 7u);
 }
+
+// ---------------------------------------------------------------------------
+// SnapshotPeerLatency TLV parsing tests (#382)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ClientNetEventHandler: WorldSnapshot with SnapshotPeerLatency TLV stores latency",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    CHECK(!handler.hasSnapshotLatency());
+    CHECK(handler.snapshotLatencyMs() == 0u);
+
+    std::vector<uint8_t> pkt;
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
+    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
+    hdr.fullEntityCount = 0u;
+    hdr.tickIndex = 1u;
+    fl::appendMsg(pkt, hdr);
+    fl::appendExt(pkt, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), uint16_t{120u});
+
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(handler.hasSnapshotLatency());
+    CHECK(handler.snapshotLatencyMs() == 120u);
+}
+
+TEST_CASE("ClientNetEventHandler: WorldSnapshot without SnapshotPeerLatency leaves state at zero",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    std::vector<uint8_t> pkt;
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
+    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
+    hdr.fullEntityCount = 0u;
+    hdr.tickIndex = 1u;
+    fl::appendMsg(pkt, hdr);
+
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(!handler.hasSnapshotLatency());
+    CHECK(handler.snapshotLatencyMs() == 0u);
+}
+
+TEST_CASE("ClientNetEventHandler: SnapshotPeerLatency TLV parsed correctly alongside SnapshotPeerCount",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    std::vector<uint8_t> pkt;
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
+    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
+    hdr.fullEntityCount = 1u;
+    hdr.tickIndex = 5u;
+    fl::appendMsg(pkt, hdr);
+
+    fl::MsgEntityEntry e{};
+    e.entityIdx = 3u;
+    e.entityGen = 1u;
+    fl::appendMsg(pkt, e);
+
+    fl::appendExt(pkt, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), uint16_t{4u});
+    fl::appendExt(pkt, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), uint16_t{83u});
+
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(handler.serverPeerCount() == 4u);
+    CHECK(handler.hasSnapshotLatency());
+    CHECK(handler.snapshotLatencyMs() == 83u);
+}

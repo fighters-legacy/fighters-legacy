@@ -19,8 +19,11 @@ class IHud {
 
     // Build HUD elements for this frame.
     // Pass nullptr when not in Cockpit mode to suppress all output.
-    virtual void update(const EntityRenderEntry* playerEntry, float timeOfDay = 12.0f,
-                        float terrainElevation = 0.0f) = 0;
+    // latencyMs: receiving peer's one-way latency in ms (from SnapshotPeerLatency TLV); 0 = not yet received.
+    // showLatency: true when the latency indicator should be rendered (gated by config + threshold +
+    // hasSnapshotLatency).
+    virtual void update(const EntityRenderEntry* playerEntry, float timeOfDay = 12.0f, float terrainElevation = 0.0f,
+                        uint32_t latencyMs = 0, bool showLatency = false) = 0;
 
     // Returns overlay elements. Valid until the next call to update().
     [[nodiscard]] virtual std::span<const HudElement> elements() const = 0;

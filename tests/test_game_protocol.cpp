@@ -368,6 +368,68 @@ TEST_CASE("WireCodec ext: full WorldSnapshot packet with SnapshotPeerCount exten
     CHECK(pc == kPeers);
 }
 
+TEST_CASE("WireCodec ext: SnapshotPeerLatency round-trip", "[game_protocol]") {
+    // Build a minimal snapshot and append a SnapshotPeerLatency TLV; verify readExtValue recovers it.
+    std::vector<uint8_t> buf;
+    const std::size_t hdrOffset = buf.size();
+
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.tickIndex = 7u;
+    fl::appendMsg(buf, hdr);
+
+    fl::MsgEntityEntry e{};
+    e.entityIdx = 1u;
+    fl::appendMsg(buf, e);
+
+    hdr.fullEntityCount = 1;
+    fl::writeMsgAt(buf, hdrOffset, hdr);
+
+    const uint16_t kLatMs = 120u;
+    fl::appendExt(buf, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), kLatMs);
+
+    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry);
+    REQUIRE(buf.size() > extOffset);
+
+    uint16_t lat{};
+    CHECK(fl::readExtValue(buf.data() + extOffset, buf.size() - extOffset,
+                           static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), lat));
+    CHECK(lat == kLatMs);
+}
+
+TEST_CASE("WireCodec ext: SnapshotPeerCount and SnapshotPeerLatency coexist in same buffer", "[game_protocol]") {
+    // Append both tags; verify each is independently readable by the scanner.
+    std::vector<uint8_t> buf;
+    const std::size_t hdrOffset = buf.size();
+
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.tickIndex = 1u;
+    fl::appendMsg(buf, hdr);
+
+    fl::MsgEntityEntry e{};
+    e.entityIdx = 2u;
+    fl::appendMsg(buf, e);
+
+    hdr.fullEntityCount = 1;
+    fl::writeMsgAt(buf, hdrOffset, hdr);
+
+    const uint16_t kPeers = 5u;
+    const uint16_t kLatMs = 83u;
+    fl::appendExt(buf, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), kPeers);
+    fl::appendExt(buf, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), kLatMs);
+
+    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry);
+    const auto* ext = buf.data() + extOffset;
+    const auto extSz = buf.size() - extOffset;
+
+    uint16_t pc{};
+    CHECK(fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), pc));
+    CHECK(pc == kPeers);
+
+    uint16_t lat{};
+    CHECK(fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), lat));
+    CHECK(lat == kLatMs);
+}
+
 TEST_CASE("WireCodec ext: old-receiver compatibility readMsg succeeds on extended packet", "[game_protocol]") {
     // Build the same extended snapshot and verify that old-receiver code (readMsg only) still
     // works correctly — it reads the header fields and ignores the extension bytes.

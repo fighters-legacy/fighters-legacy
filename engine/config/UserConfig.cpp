@@ -793,6 +793,9 @@ bool UserConfig::load() {
     if (auto v = tbl["client"]["operator_password"].value<std::string>())
         m_client.operatorPassword = std::move(*v);
 
+    // [hud]
+    m_hud.showLatency = tbl["hud"]["show_latency"].value_or(true);
+
     return true;
 }
 
@@ -871,6 +874,9 @@ bool UserConfig::save() {
     if (!m_client.operatorPassword.empty())
         client.insert_or_assign("operator_password", m_client.operatorPassword);
 
+    toml::table hud;
+    hud.insert_or_assign("show_latency", m_hud.showLatency);
+
     toml::table debug;
     debug.insert_or_assign("overlay_mode", static_cast<int64_t>(m_debug.overlayMode));
 
@@ -907,6 +913,7 @@ bool UserConfig::save() {
     root.insert_or_assign("accessibility", std::move(accessibility));
     root.insert_or_assign("controls", std::move(controls));
     root.insert_or_assign("client", std::move(client));
+    root.insert_or_assign("hud", std::move(hud));
     root.insert_or_assign("debug", std::move(debug));
     root.insert_or_assign("pilot", std::move(pilot));
 
@@ -977,6 +984,13 @@ ClientSettings UserConfig::client() const {
 }
 void UserConfig::setClient(const ClientSettings& cs) {
     m_client = cs;
+}
+
+HudSettings UserConfig::hud() const {
+    return m_hud;
+}
+void UserConfig::setHud(const HudSettings& hs) {
+    m_hud = hs;
 }
 
 ControlsSettings UserConfig::controls() const {

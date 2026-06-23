@@ -9,6 +9,7 @@
 #include "config/DebugSettings.h"
 #include "config/DifficultySettings.h"
 #include "config/GraphicsSettings.h"
+#include "config/HudSettings.h"
 #include "config/PilotSettings.h"
 
 namespace fl {
@@ -51,6 +52,9 @@ class UserConfig {
     ClientSettings client() const;
     void setClient(const ClientSettings& cs);
 
+    HudSettings hud() const;
+    void setHud(const HudSettings& hs);
+
     ControlsSettings controls() const;
     void setControls(const ControlsSettings& cs);
 
@@ -73,6 +77,7 @@ class UserConfig {
     DifficultySettings m_difficulty{};
     AccessibilitySettings m_accessibility{};
     ClientSettings m_client{};
+    HudSettings m_hud{};
     ControlsSettings m_controls{};
     DebugSettings m_debug{};
     PilotSettings m_pilot{};

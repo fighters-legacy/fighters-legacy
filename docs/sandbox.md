@@ -267,6 +267,14 @@ Configure in the `[client]` section of `config/user.toml`:
 | `motd_display_s` | `15` | 0–3600 | Client fallback for MOTD banner display duration (seconds); overridden per-connection when the server specifies a non-zero `[server].motd_display_s`; banner fades out over the final 2 s of the window; `0` = persistent (no fade, no auto-dismiss) |
 | `operator_password` | `""` | any string | Operator password for admin console commands when connecting with `--connect`. CLI `--operator-password` arg and `FL_OPERATOR_PASSWORD` env var take precedence. |
 
+## HUD settings
+
+Configure in the `[hud]` section of `config/user.toml`:
+
+| Key | Default | Range | Description |
+|---|---|---|---|
+| `show_latency` | `true` | bool | Show per-peer latency indicator (`42 ms`) in the cockpit HUD. Hidden automatically when latency is zero (single-player localhost). |
+
 ## Multiplayer connection
 
 Pass `--connect` to join a remote `fl-server` instead of spawning a local single-player session.

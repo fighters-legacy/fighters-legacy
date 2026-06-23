@@ -247,3 +247,41 @@ TEST_CASE("FlightHud satisfies IHud via abstract pointer") {
     hud->update(&entry, 12.0f, 0.0f);
     CHECK_FALSE(hud->elements().empty());
 }
+
+// ---------------------------------------------------------------------------
+// Latency indicator tests (#382)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("FlightHud latency element shown when showLatency=true and latencyMs nonzero", "[flight_hud][latency]") {
+    fl::FlightHud hud;
+    auto e = makeEntry();
+    hud.update(&e, 12.0f, 0.0f, 120u, true);
+    bool found = false;
+    for (const auto& el : hud.elements())
+        if (el.type == HudElement::Type::Text && el.text.find("120") != std::string_view::npos &&
+            el.text.find("ms") != std::string_view::npos)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("FlightHud latency element not shown when showLatency=false", "[flight_hud][latency]") {
+    fl::FlightHud hud;
+    auto e = makeEntry();
+    hud.update(&e, 12.0f, 0.0f, 120u, false);
+    bool found = false;
+    for (const auto& el : hud.elements())
+        if (el.type == HudElement::Type::Text && el.text.find("ms") != std::string_view::npos)
+            found = true;
+    CHECK_FALSE(found);
+}
+
+TEST_CASE("FlightHud latency element not shown when latencyMs is zero", "[flight_hud][latency]") {
+    fl::FlightHud hud;
+    auto e = makeEntry();
+    hud.update(&e, 12.0f, 0.0f, 0u, true);
+    bool found = false;
+    for (const auto& el : hud.elements())
+        if (el.type == HudElement::Type::Text && el.text.find("ms") != std::string_view::npos)
+            found = true;
+    CHECK_FALSE(found);
+}
