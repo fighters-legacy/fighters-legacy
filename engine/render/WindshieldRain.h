@@ -11,8 +11,8 @@ namespace fl {
 // Produces animated semi-transparent Line elements simulating rain streaks
 // or snow smears on the windshield glass.
 //
-// Active only when cloudCoverage >= kRainThreshold; callers must pass
-// isSnow=true (altitude above kSnowAltitudeThresholdM) to switch visual mode.
+// Active only when cloudCoverage >= kRainThreshold. Reads env.isSnowPrecipitation
+// to select rain vs snow visual mode (set by WeatherController::applyPresetToEnv).
 // Caller is responsible for only appending elements() when in Cockpit mode.
 class WindshieldRain {
   public:
@@ -20,8 +20,8 @@ class WindshieldRain {
 
     // Advance animation and rebuild elements.
     // cloudCoverage < kRainThreshold clears all elements.
-    // isSnow: true when camera altitude exceeds the snow altitude threshold.
-    void update(float dt, const EnvironmentState& env, float rollRad = 0.f, bool isSnow = false);
+    // Reads env.isSnowPrecipitation to select rain vs snow visual mode.
+    void update(float dt, const EnvironmentState& env, float rollRad = 0.f);
 
     [[nodiscard]] std::span<const HudElement> elements() const;
 

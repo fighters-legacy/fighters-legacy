@@ -253,6 +253,18 @@ TEST_CASE("weather.preset storm passes", "[mission-validator][weather]") {
     CHECK(r.ok);
 }
 
+TEST_CASE("weather.preset snow passes", "[mission-validator][weather]") {
+    auto r = validateMission(replace_first(kValidMission, "wind: { heading: 270, speed: 12 }",
+                                           "wind: { heading: 270, speed: 12 }\nweather:\n  preset: snow"));
+    CHECK(r.ok);
+}
+
+TEST_CASE("weather.preset blizzard passes", "[mission-validator][weather]") {
+    auto r = validateMission(replace_first(kValidMission, "wind: { heading: 270, speed: 12 }",
+                                           "wind: { heading: 270, speed: 12 }\nweather:\n  preset: blizzard"));
+    CHECK(r.ok);
+}
+
 TEST_CASE("weather.preset invalid value fails", "[mission-validator][weather]") {
     auto r = validateMission(replace_first(kValidMission, "wind: { heading: 270, speed: 12 }",
                                            "wind: { heading: 270, speed: 12 }\nweather:\n  preset: hurricane"));

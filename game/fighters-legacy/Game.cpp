@@ -132,8 +132,6 @@ static RendererSettings buildRendererSettings(const GraphicsSettings& g) {
     return s;
 }
 
-static constexpr float kSnowAltitudeThresholdM = 2000.0f;
-
 static const fl::EntityRenderEntry* findPlayerEntry(const fl::SimRenderBridge& bridge, uint32_t idx, uint32_t gen) {
     if (!bridge.hasSnapshot())
         return nullptr;
@@ -927,10 +925,9 @@ void Game::run() {
             else
                 d.services.sceneRenderer->setHiddenEntity(0, 0);
 
-            const bool isSnow = static_cast<float>(camOrigin.y) > kSnowAltitudeThresholdM;
             d.services.sceneRenderer->renderFrame(
                 alpha, cam, d.services.env,
-                d.services.precipController.build(d.services.env, cam, isSnow, d.services.particleSystem));
+                d.services.precipController.build(d.services.env, cam, d.services.particleSystem));
         }
 
         // Console HUD: entity position widget (toggle_pos). Camera/entity debug now lives in

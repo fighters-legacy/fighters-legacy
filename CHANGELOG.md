@@ -7,6 +7,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **engine,game**: Add `WeatherPreset::Snow` (5) and `WeatherPreset::Blizzard` (6); snow is now
+  server-authoritative and altitude-independent (#269). Replaces the client-side altitude proxy
+  from #265 with explicit precipitation type propagated via `MsgWeatherState.preset`. Adds
+  `set_weather snow` and `set_weather blizzard` to the fl-server admin console and the in-game
+  `set_weather` command. Snow/Blizzard are excluded from the autonomous weather cycle and
+  persist until an operator changes the preset.
+
 ### Changed
 
 - **tools**: `scripts/roadmap-status.sh` now reports progress from the repository's GitHub

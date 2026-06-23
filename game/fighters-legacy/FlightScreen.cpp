@@ -22,8 +22,6 @@
 #include <cmath>
 #include <glm/glm.hpp>
 
-static constexpr float kSnowAltitude = 2000.0f;
-
 static const fl::EntityRenderEntry* findEntry(const fl::SimRenderBridge& bridge, uint32_t idx, uint32_t gen) {
     if (!bridge.hasSnapshot())
         return nullptr;
@@ -77,11 +75,10 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
             ? static_cast<float>(d.terrainStreamer->heightAt(m_playerEntry->position.x, m_playerEntry->position.z))
             : 0.f;
     const bool cockpit = (d.cameraController->mode() == fl::CameraMode::Cockpit);
-    const bool isSnow = m_playerEntry && static_cast<float>(m_playerEntry->position.y) > kSnowAltitude;
 
     (*d.activeHud)->update(cockpit ? m_playerEntry : nullptr, d.env->timeOfDay, terrainElev);
     d.windshieldRain->update(cockpit ? (1.f / 60.f) : 0.f, cockpit ? *d.env : EnvironmentState{},
-                             cockpit ? rollAngleRad(m_playerEntry) : 0.f, cockpit && isSnow);
+                             cockpit ? rollAngleRad(m_playerEntry) : 0.f);
     if (d.hapticController)
         d.hapticController->update(m_playerEntry, m_weaponFired, terrainElev, 1.f / 60.f);
 

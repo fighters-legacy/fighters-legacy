@@ -15,11 +15,12 @@
 class PrecipitationController {
   public:
     [[nodiscard]] std::span<const ParticleEmitterState> build(const EnvironmentState& env, const CameraView& cam,
-                                                              bool isSnow, fl::ParticleSystem& ps) {
+                                                              fl::ParticleSystem& ps) {
         if (env.cloudCoverage < kCloudThreshold)
             return {};
 
         const bool isStorm = env.cloudCoverage >= kStormThreshold;
+        const bool isSnow = env.isSnowPrecipitation;
         const char* presetName = isStorm ? (isSnow ? "storm_snow" : "storm_rain") : (isSnow ? "snow" : "rain");
 
         const auto preset = ps.getPreset(presetName);

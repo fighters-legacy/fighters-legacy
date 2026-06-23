@@ -410,6 +410,14 @@ target_include_directories(test_haptic_controller PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_haptic_controller)
 
+add_executable(test_precipitation_controller test_precipitation_controller.cpp)
+target_link_libraries(test_precipitation_controller PRIVATE
+    Catch2::Catch2WithMain engine-render)
+target_include_directories(test_precipitation_controller PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_precipitation_controller)
+
 add_executable(test_flight_input_collector test_flight_input_collector.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CameraInput.cpp")

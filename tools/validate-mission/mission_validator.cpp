@@ -20,7 +20,7 @@ static constexpr int kPosComponents = 3;
 static constexpr int kSidesMinCount = 1;
 static constexpr int kObjectsMinCount = 1;
 
-static const char* kValidWeatherPresets[] = {"clear", "partly_cloudy", "overcast", "rain", "storm"};
+static const char* kValidWeatherPresets[] = {"clear", "partly_cloudy", "overcast", "rain", "storm", "snow", "blizzard"};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -128,8 +128,8 @@ MissionValidationResult validateMission(std::string_view yamlContent) {
                     break;
                 }
             if (!valid) {
-                r.errors.push_back("weather.preset must be clear|partly_cloudy|overcast|rain|storm (got \"" + p +
-                                   "\")");
+                r.errors.push_back(
+                    "weather.preset must be clear|partly_cloudy|overcast|rain|storm|snow|blizzard (got \"" + p + "\")");
                 r.ok = false;
             }
         }

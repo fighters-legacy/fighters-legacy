@@ -235,15 +235,15 @@ void registerConsoleCommands(CommandRegistry& registry, CommandContext ctx) {
     // set_weather <preset>
     // ------------------------------------------------------------------
     registry.registerCommand(
-        "set_weather", "set_weather <clear|partly_cloudy|overcast|rain|storm>  -- set weather preset",
+        "set_weather", "set_weather <clear|partly_cloudy|overcast|rain|storm|snow|blizzard>  -- set weather preset",
         [ctx](std::span<std::string_view> args) -> std::string {
             if (args.empty())
-                return "usage: set_weather <clear|partly_cloudy|overcast|rain|storm>";
+                return "usage: set_weather <clear|partly_cloudy|overcast|rain|storm|snow|blizzard>";
             if (!ctx.serverCommand)
                 return "set_weather: not available in this context";
             const std::string_view preset = args[0];
             if (preset != "clear" && preset != "partly_cloudy" && preset != "overcast" && preset != "rain" &&
-                preset != "storm")
+                preset != "storm" && preset != "snow" && preset != "blizzard")
                 return "set_weather: unknown preset '" + std::string(preset) + "'";
             char cmd[64];
             std::snprintf(cmd, sizeof(cmd), "set_weather %.*s", static_cast<int>(preset.size()), preset.data());

@@ -51,7 +51,8 @@ TEST_CASE("WeatherController: sun near horizontal at dawn and dusk", "[weather]"
 // computeEnvironment — all 5 presets
 // ---------------------------------------------------------------------------
 
-TEST_CASE("WeatherController: computeEnvironment all presets have distinct cloudCoverage", "[weather]") {
+TEST_CASE("WeatherController: computeEnvironment base presets have strictly increasing cloudCoverage", "[weather]") {
+    // The 5 autonomous-cycle presets are strictly increasing in cloud coverage.
     const WeatherPreset presets[] = {WeatherPreset::Clear, WeatherPreset::PartlyCloudy, WeatherPreset::Overcast,
                                      WeatherPreset::Rain, WeatherPreset::Storm};
     float prev = -1.f;
@@ -62,6 +63,18 @@ TEST_CASE("WeatherController: computeEnvironment all presets have distinct cloud
         CHECK(cov > prev);
         prev = cov;
     }
+}
+
+TEST_CASE("WeatherController: Snow cloudCoverage matches Rain and Blizzard matches Storm", "[weather]") {
+    // Snow/Blizzard are tuned to the same coverage tiers as Rain/Storm so they trigger
+    // the same precipitation and storm thresholds in PrecipitationController.
+    auto covOf = [](WeatherPreset p) {
+        WeatherController wc;
+        wc.setPreset(p);
+        return wc.computeEnvironment().cloudCoverage;
+    };
+    CHECK(covOf(WeatherPreset::Snow) == covOf(WeatherPreset::Rain));
+    CHECK(covOf(WeatherPreset::Blizzard) == covOf(WeatherPreset::Storm));
 }
 
 TEST_CASE("WeatherController: computeEnvironment Clear has fogDensity == 0", "[weather]") {
@@ -339,4 +352,75 @@ TEST_CASE("WeatherController: setPreset changes preset immediately", "[weather]"
     CHECK(wc.preset() == WeatherPreset::Storm);
     wc.setPreset(WeatherPreset::Clear);
     CHECK(wc.preset() == WeatherPreset::Clear);
+}
+
+// ---------------------------------------------------------------------------
+// Snow and Blizzard presets
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WeatherController: Snow and Blizzard set isSnowPrecipitation true", "[weather]") {
+    WeatherController wc;
+    wc.setPreset(WeatherPreset::Snow);
+    CHECK(wc.computeEnvironment().isSnowPrecipitation == true);
+    wc.setPreset(WeatherPreset::Blizzard);
+    CHECK(wc.computeEnvironment().isSnowPrecipitation == true);
+}
+
+TEST_CASE("WeatherController: non-snow presets leave isSnowPrecipitation false", "[weather]") {
+    WeatherController wc;
+    const WeatherPreset nonSnow[] = {WeatherPreset::Clear, WeatherPreset::PartlyCloudy, WeatherPreset::Overcast,
+                                     WeatherPreset::Rain, WeatherPreset::Storm};
+    for (auto p : nonSnow) {
+        wc.setPreset(p);
+        CHECK(wc.computeEnvironment().isSnowPrecipitation == false);
+    }
+}
+
+TEST_CASE("WeatherController: Snow cloudCoverage above precipitation threshold", "[weather]") {
+    // PrecipitationController::kCloudThreshold = 0.75 — Snow must be at or above it.
+    WeatherController wc;
+    wc.setPreset(WeatherPreset::Snow);
+    CHECK(wc.computeEnvironment().cloudCoverage >= 0.75f);
+}
+
+TEST_CASE("WeatherController: Blizzard cloudCoverage above storm precipitation threshold", "[weather]") {
+    // PrecipitationController::kStormThreshold = 0.90 — Blizzard must be at or above it.
+    WeatherController wc;
+    wc.setPreset(WeatherPreset::Blizzard);
+    CHECK(wc.computeEnvironment().cloudCoverage >= 0.90f);
+}
+
+TEST_CASE("WeatherController: auto-transition does not fire from Snow preset", "[weather]") {
+    WeatherControllerParams p;
+    p.transitionMinSeconds = 0.05f;
+    p.transitionMaxSeconds = 0.10f;
+    WeatherController wc(p);
+    wc.setPreset(WeatherPreset::Snow);
+    for (int i = 0; i < 20; ++i)
+        wc.advance(0.01);
+    CHECK(wc.preset() == WeatherPreset::Snow);
+}
+
+TEST_CASE("WeatherController: auto-transition does not fire from Blizzard preset", "[weather]") {
+    WeatherControllerParams p;
+    p.transitionMinSeconds = 0.05f;
+    p.transitionMaxSeconds = 0.10f;
+    WeatherController wc(p);
+    wc.setPreset(WeatherPreset::Blizzard);
+    for (int i = 0; i < 20; ++i)
+        wc.advance(0.01);
+    CHECK(wc.preset() == WeatherPreset::Blizzard);
+}
+
+TEST_CASE("WeatherController: auto-transition from Storm wraps to Clear not Snow", "[weather]") {
+    WeatherControllerParams p;
+    p.transitionMinSeconds = 0.05f;
+    p.transitionMaxSeconds = 0.10f;
+    WeatherController wc(p);
+    wc.setPreset(WeatherPreset::Storm);
+    for (int i = 0; i < 20; ++i)
+        wc.advance(0.01);
+    // After Storm auto-transitions it wraps to Clear (ordinal 0), not Snow (ordinal 5)
+    CHECK(wc.preset() != WeatherPreset::Snow);
+    CHECK(wc.preset() != WeatherPreset::Blizzard);
 }

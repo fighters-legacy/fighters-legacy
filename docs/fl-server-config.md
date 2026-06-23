@@ -812,7 +812,7 @@ process.
 | `unban` | `<IP>` | Remove an IP from the ban list; saves to `banlist_path` if configured |
 | `admin_unlock` | `<IP>` | Clear the admin auth and RCON auth lockouts for an IP address immediately; prints a warning if neither channel was locked (idempotent) |
 | `admin_auth_status` | — | Show per-IP lockout state for the MsgAdminCommand operator channel and (when RCON is enabled) the RCON TCP channel; both active lockouts and pending failure counts |
-| `set_weather` | `<preset>` | Change weather: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm` |
+| `set_weather` | `<preset>` | Change weather: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm`, `snow`, `blizzard` |
 | `set_time` | `<0–24>` | Set in-game time of day (float, hours) |
 | `spawn` | `<type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn a registered entity type at the given world position; optionally attach an AI controller. Behaviors: `loiter [cx cy cz [radius_m [alt_m [throttle [cw\|ccw]]]]]`, `waypoint x y z [x y z ...] [--loop]`, `pursuit <entityIdx>`, `evade <entityIdx>`, `break <entityIdx> [rollDuration]` |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
