@@ -1201,7 +1201,7 @@ TEST_CASE("WorldBroadcaster: onReceive computes estimatedDelayTicks from tickInd
 
     uint32_t gotDelay = 0xFFFFFFFFu;
     broadcaster.forEachPeer(
-        [&](uint32_t, const std::string&, fl::EntityId, uint32_t delayTicks) { gotDelay = delayTicks; });
+        [&](uint32_t, const std::string&, fl::EntityId, uint32_t delayTicks, uint32_t) { gotDelay = delayTicks; });
     CHECK(gotDelay == 5u);
 }
 
@@ -1228,7 +1228,7 @@ TEST_CASE("WorldBroadcaster: onReceive future tickIndex does not update estimate
 
     uint32_t gotDelay = 0xFFFFFFFFu;
     broadcaster.forEachPeer(
-        [&](uint32_t, const std::string&, fl::EntityId, uint32_t delayTicks) { gotDelay = delayTicks; });
+        [&](uint32_t, const std::string&, fl::EntityId, uint32_t delayTicks, uint32_t) { gotDelay = delayTicks; });
     // estimatedDelayTicks stays at its initialized value of 0 (no underflow).
     CHECK(gotDelay == 0u);
 }
@@ -1434,7 +1434,7 @@ TEST_CASE("WorldBroadcaster: forEachPeer calls fn for each connected peer", "[wo
     broadcaster.onConnect(1u);
 
     int callCount = 0;
-    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId eid, uint32_t) {
+    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId eid, uint32_t, uint32_t) {
         CHECK(eid.valid());
         ++callCount;
     });
@@ -1449,7 +1449,7 @@ TEST_CASE("WorldBroadcaster: forEachPeer with no connected peers does not call f
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
     int callCount = 0;
-    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId, uint32_t) { ++callCount; });
+    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId, uint32_t, uint32_t) { ++callCount; });
     CHECK(callCount == 0);
 }
 
@@ -4679,4 +4679,388 @@ TEST_CASE("WorldBroadcaster: SnapshotPeerLatency TLV absent when estimatedDelayT
     const std::size_t expected =
         sizeof(fl::MsgWorldSnapshotHeader) + hdr.fullEntityCount * sizeof(fl::MsgEntityEntry) + 6u;
     CHECK(pkt.size() == expected);
+}
+
+// ---------------------------------------------------------------------------
+// JitterBuffer unit tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("JitterBuffer: pop on empty buffer returns false", "[jitter_buffer]") {
+    fl::JitterBuffer buf;
+    fl::BufferedInput out{};
+    out.throttle = 0.5f;
+    CHECK_FALSE(buf.pop(out));
+    CHECK(out.throttle == 0.5f); // unchanged
+    CHECK(buf.empty());
+    CHECK(buf.size() == 0u);
+}
+
+TEST_CASE("JitterBuffer: push then pop returns same values", "[jitter_buffer]") {
+    fl::JitterBuffer buf{4};
+    fl::BufferedInput in{};
+    in.throttle = 0.8f;
+    in.elevator = -0.3f;
+    in.aileron = 0.1f;
+    in.rudder = -0.05f;
+    in.buttons = 0x03u;
+    buf.push(in);
+    CHECK(buf.size() == 1u);
+
+    fl::BufferedInput out{};
+    REQUIRE(buf.pop(out));
+    CHECK(out.throttle == 0.8f);
+    CHECK(out.elevator == -0.3f);
+    CHECK(out.aileron == 0.1f);
+    CHECK(out.rudder == -0.05f);
+    CHECK(out.buttons == 0x03u);
+    CHECK(buf.empty());
+}
+
+TEST_CASE("JitterBuffer: FIFO ordering", "[jitter_buffer]") {
+    fl::JitterBuffer buf{8};
+    for (uint32_t i = 0; i < 3; ++i) {
+        fl::BufferedInput in{};
+        in.throttle = static_cast<float>(i + 1) * 0.1f;
+        buf.push(in);
+    }
+    CHECK(buf.size() == 3u);
+
+    for (uint32_t i = 0; i < 3; ++i) {
+        fl::BufferedInput out{};
+        REQUIRE(buf.pop(out));
+        CHECK(out.throttle == Catch::Approx(static_cast<float>(i + 1) * 0.1f));
+    }
+    CHECK(buf.empty());
+}
+
+TEST_CASE("JitterBuffer: overflow drops oldest", "[jitter_buffer]") {
+    fl::JitterBuffer buf{2};
+    fl::BufferedInput a{}, b{}, c{};
+    a.throttle = 0.1f;
+    b.throttle = 0.2f;
+    c.throttle = 0.3f;
+    buf.push(a);
+    buf.push(b);
+    buf.push(c); // overflow: a is dropped
+    CHECK(buf.size() == 2u);
+
+    fl::BufferedInput out{};
+    REQUIRE(buf.pop(out));
+    CHECK(out.throttle == Catch::Approx(0.2f)); // b first
+    REQUIRE(buf.pop(out));
+    CHECK(out.throttle == Catch::Approx(0.3f)); // c second
+    CHECK(buf.empty());
+}
+
+TEST_CASE("JitterBuffer: size tracks correctly with interleaved push and pop", "[jitter_buffer]") {
+    fl::JitterBuffer buf{4};
+    fl::BufferedInput dummy{};
+    buf.push(dummy);
+    buf.push(dummy);
+    CHECK(buf.size() == 2u);
+    buf.pop(dummy);
+    CHECK(buf.size() == 1u);
+    buf.push(dummy);
+    buf.push(dummy);
+    CHECK(buf.size() == 3u);
+    buf.pop(dummy);
+    buf.pop(dummy);
+    buf.pop(dummy);
+    CHECK(buf.empty());
+}
+
+TEST_CASE("JitterBuffer: setMaxDepth truncates when smaller than current size", "[jitter_buffer]") {
+    fl::JitterBuffer buf{4};
+    fl::BufferedInput in{};
+    for (uint32_t i = 0; i < 4; ++i) {
+        in.throttle = static_cast<float>(i + 1) * 0.1f;
+        buf.push(in);
+    }
+    CHECK(buf.size() == 4u);
+    buf.setMaxDepth(2);
+    CHECK(buf.size() == 2u);
+    CHECK(buf.maxDepth() == 2u);
+
+    // Oldest two (0.1, 0.2) were dropped; remaining are 0.3, 0.4 in order.
+    fl::BufferedInput out{};
+    REQUIRE(buf.pop(out));
+    CHECK(out.throttle == Catch::Approx(0.3f));
+    REQUIRE(buf.pop(out));
+    CHECK(out.throttle == Catch::Approx(0.4f));
+}
+
+TEST_CASE("JitterBuffer: setMaxDepth to 0 is clamped to 1", "[jitter_buffer]") {
+    fl::JitterBuffer buf{4};
+    buf.setMaxDepth(0u);
+    CHECK(buf.maxDepth() == 1u);
+}
+
+TEST_CASE("JitterBuffer: ring index wraps correctly at kHardMaxDepth", "[jitter_buffer]") {
+    fl::JitterBuffer buf{fl::JitterBuffer::kHardMaxDepth};
+    // Push kHardMaxDepth + 3 items; oldest 3 are dropped by overflow.
+    for (uint32_t i = 0; i < fl::JitterBuffer::kHardMaxDepth + 3u; ++i) {
+        fl::BufferedInput in{};
+        in.throttle = static_cast<float>(i) * 0.01f;
+        buf.push(in);
+    }
+    CHECK(buf.size() == fl::JitterBuffer::kHardMaxDepth);
+
+    // Pop all; throttle values should be sequential starting from index 3.
+    for (uint32_t i = 0; i < fl::JitterBuffer::kHardMaxDepth; ++i) {
+        fl::BufferedInput out{};
+        REQUIRE(buf.pop(out));
+        CHECK(out.throttle == Catch::Approx(static_cast<float>(i + 3u) * 0.01f));
+    }
+    CHECK(buf.empty());
+}
+
+// ---------------------------------------------------------------------------
+// WorldBroadcaster jitter buffer integration tests
+// ---------------------------------------------------------------------------
+
+static fl::MsgClientInput makeJitterInput(uint32_t seqNum, float throttle, uint64_t tickIndex = 0u) {
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.seqNum = seqNum;
+    inp.tickIndex = tickIndex;
+    inp.throttle = throttle;
+    inp.viewAxis[0] = 1.f;
+    return inp;
+}
+
+TEST_CASE("WorldBroadcaster: received input is buffered and not applied until tick",
+          "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    auto inp = makeJitterInput(1u, 0.9f);
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    // Buffer should hold 1 item before any tick drains it.
+    uint32_t gotDepth = 0u;
+    broadcaster.forEachPeer(
+        [&](uint32_t, const std::string&, fl::EntityId, uint32_t, uint32_t queueDepth) { gotDepth = queueDepth; });
+    CHECK(gotDepth == 1u);
+}
+
+TEST_CASE("WorldBroadcaster: jitter buffer drains one per tick", "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(8u);
+    broadcaster.onConnect(0u);
+
+    // Advance to tick 10 so the first input gets estimatedDelayTicks=10 → buffer depth=min(10,8)=8.
+    broadcaster.onTick(1.0 / 60.0, 10u);
+
+    // Push 3 inputs with distinct seqNums (tickIndex=0 so delay=10).
+    for (uint32_t i = 0; i < 3u; ++i) {
+        auto inp = makeJitterInput(i + 1u, static_cast<float>(i + 1u) * 0.2f);
+        broadcaster.onReceive(0u, &inp, sizeof(inp));
+    }
+
+    for (uint32_t expected = 3u; expected > 0u; --expected) {
+        uint32_t gotDepth = 0xFFu;
+        broadcaster.forEachPeer(
+            [&](uint32_t, const std::string&, fl::EntityId, uint32_t, uint32_t q) { gotDepth = q; });
+        CHECK(gotDepth == expected);
+        broadcaster.onTick(1.0 / 60.0, expected);
+    }
+    // After 3 ticks the buffer is empty.
+    uint32_t finalDepth = 0xFFu;
+    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId, uint32_t, uint32_t q) { finalDepth = q; });
+    CHECK(finalDepth == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: empty buffer tick uses stale repeat without crash", "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    auto inp = makeJitterInput(1u, 0.5f);
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    // Tick 1: drains the one buffered input.
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    // Tick 2: buffer is empty — stale repeat; entity must remain live (no crash).
+    broadcaster.onTick(1.0 / 60.0, 2u);
+
+    fl::EntityId eid;
+    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId e, uint32_t, uint32_t) { eid = e; });
+    CHECK(eid.valid());
+}
+
+TEST_CASE("WorldBroadcaster: forEachPeer reports queueDepth", "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(8u);
+    broadcaster.onConnect(0u);
+
+    // Advance to tick 10 so the first input seeds buffer depth=min(10,8)=8.
+    broadcaster.onTick(1.0 / 60.0, 10u);
+
+    auto i1 = makeJitterInput(1u, 0.3f);
+    auto i2 = makeJitterInput(2u, 0.6f);
+    broadcaster.onReceive(0u, &i1, sizeof(i1));
+    broadcaster.onReceive(0u, &i2, sizeof(i2));
+
+    uint32_t gotDepth = 0u;
+    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId, uint32_t, uint32_t q) { gotDepth = q; });
+    CHECK(gotDepth == 2u);
+}
+
+TEST_CASE("WorldBroadcaster: jitter buffer depth seeded from estimatedDelayTicks",
+          "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(8u); // global max = 8
+    broadcaster.onConnect(0u);
+
+    // Advance to tick 10 so delay = 10 - 5 = 5 ticks.
+    broadcaster.onTick(1.0 / 60.0, 10u);
+    clearSnapshots(net);
+
+    // First input seeds buffer depth = min(5, 8) = 5.
+    auto inp = makeJitterInput(1u, 0.5f, 5u);
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    // Push 5 more inputs to fill the buffer; the 6th should overflow (depth=5).
+    for (uint32_t i = 2u; i <= 6u; ++i) {
+        auto extra = makeJitterInput(i, 0.1f * static_cast<float>(i));
+        broadcaster.onReceive(0u, &extra, sizeof(extra));
+    }
+    // Buffer should hold exactly 5 (depth cap).
+    uint32_t gotDepth = 0u;
+    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId, uint32_t, uint32_t q) { gotDepth = q; });
+    CHECK(gotDepth == 5u);
+}
+
+TEST_CASE("WorldBroadcaster: jitter buffer depth capped at jitterMaxDepth", "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(2u); // hard cap = 2
+    broadcaster.onConnect(0u);
+
+    // Advance to tick 20 so delay = 20 - 0 = 20, which would give depth 20 uncapped.
+    broadcaster.onTick(1.0 / 60.0, 20u);
+    clearSnapshots(net);
+
+    // First input: delay=20 but cap=2, so depth = min(20,2) = 2.
+    auto inp = makeJitterInput(1u, 0.5f, 0u);
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    // Push 2 more; buffer should saturate at 2 and overflow.
+    auto i2 = makeJitterInput(2u, 0.6f);
+    auto i3 = makeJitterInput(3u, 0.7f);
+    broadcaster.onReceive(0u, &i2, sizeof(i2));
+    broadcaster.onReceive(0u, &i3, sizeof(i3)); // overflow
+
+    uint32_t gotDepth = 0u;
+    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId, uint32_t, uint32_t q) { gotDepth = q; });
+    CHECK(gotDepth == 2u);
+}
+
+TEST_CASE("WorldBroadcaster: jitter buffers are independent per peer", "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(8u);
+    net.peerAddresses[0] = "1.1.1.1:1000";
+    net.peerAddresses[1] = "2.2.2.2:2000";
+    broadcaster.onConnect(0u);
+    broadcaster.onConnect(1u);
+
+    // Advance to tick 10 so first input from each peer gets depth=min(10,8)=8.
+    broadcaster.onTick(1.0 / 60.0, 10u);
+
+    // Send 2 inputs to peer 0, 1 input to peer 1 (tickIndex=0 → delay=10).
+    auto a1 = makeJitterInput(1u, 0.1f);
+    auto a2 = makeJitterInput(2u, 0.2f);
+    auto b1 = makeJitterInput(1u, 0.5f);
+    broadcaster.onReceive(0u, &a1, sizeof(a1));
+    broadcaster.onReceive(0u, &a2, sizeof(a2));
+    broadcaster.onReceive(1u, &b1, sizeof(b1));
+
+    std::map<uint32_t, uint32_t> depths;
+    broadcaster.forEachPeer(
+        [&](uint32_t peerId, const std::string&, fl::EntityId, uint32_t, uint32_t q) { depths[peerId] = q; });
+    CHECK(depths[0u] == 2u);
+    CHECK(depths[1u] == 1u);
+}
+
+TEST_CASE("WorldBroadcaster: setJitterBufferDepth affects initial depth for new peers",
+          "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(6u);
+    net.peerAddresses[0] = "1.1.1.1:1000";
+    net.peerAddresses[1] = "2.2.2.2:2000";
+
+    // Advance to tick 10 so delay estimates are non-zero.
+    broadcaster.onTick(1.0 / 60.0, 10u);
+    clearSnapshots(net);
+
+    // Peer 0 connects, sends input with tickIndex=0 (delay=10, cap=6 -> depth=6).
+    broadcaster.onConnect(0u);
+    auto inp0 = makeJitterInput(1u, 0.5f, 0u);
+    broadcaster.onReceive(0u, &inp0, sizeof(inp0));
+
+    // Change the global max.
+    broadcaster.setJitterBufferDepth(3u);
+
+    // Peer 1 connects after the change, sends input with tickIndex=0 (delay=10, cap=3 -> depth=3).
+    broadcaster.onConnect(1u);
+    auto inp1 = makeJitterInput(1u, 0.5f, 0u);
+    broadcaster.onReceive(1u, &inp1, sizeof(inp1));
+
+    // Fill both buffers to their respective caps.
+    for (uint32_t i = 2u; i <= 7u; ++i) {
+        auto extra = makeJitterInput(i, 0.1f);
+        broadcaster.onReceive(0u, &extra, sizeof(extra));
+    }
+    for (uint32_t i = 2u; i <= 4u; ++i) {
+        auto extra = makeJitterInput(i, 0.1f);
+        broadcaster.onReceive(1u, &extra, sizeof(extra));
+    }
+
+    std::map<uint32_t, uint32_t> depths;
+    broadcaster.forEachPeer(
+        [&](uint32_t peerId, const std::string&, fl::EntityId, uint32_t, uint32_t q) { depths[peerId] = q; });
+    // Peer 0 was seeded with depth=6 before the change.
+    CHECK(depths[0u] == 6u);
+    // Peer 1 was seeded with depth=3 after the change.
+    CHECK(depths[1u] == 3u);
 }

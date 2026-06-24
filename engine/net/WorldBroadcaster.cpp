@@ -258,6 +258,7 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setIdleTimeout(cfg.idleTimeoutS);
     setDrawDistance(cfg.drawDistanceKm);
     setBaselineInterval(cfg.baselineIntervalTicks);
+    setJitterBufferDepth(cfg.jitterBufferMaxDepth);
 }
 
 void WorldBroadcaster::setIdleTimeout(int timeoutSeconds) noexcept {
@@ -272,15 +273,22 @@ void WorldBroadcaster::setBaselineInterval(uint32_t ticks) noexcept {
     m_baselineIntervalTicks = ticks > 0u ? static_cast<uint64_t>(ticks) : 1u;
 }
 
-void WorldBroadcaster::forEachPeer(
-    std::function<void(uint32_t peerId, const std::string& addr, EntityId eid, uint32_t delayTicks)> fn) const {
+void WorldBroadcaster::setJitterBufferDepth(uint32_t maxDepth) noexcept {
+    m_jitterMaxDepth.store(maxDepth == 0u ? 1u : maxDepth, std::memory_order_relaxed);
+}
+
+void WorldBroadcaster::forEachPeer(std::function<void(uint32_t peerId, const std::string& addr, EntityId eid,
+                                                      uint32_t delayTicks, uint32_t queueDepth)>
+                                       fn) const {
     for (const auto& [peerId, eid] : m_peerEntities) {
         const char* raw = m_net.getPeerAddress(peerId);
         std::string addr = raw ? raw : "";
-        uint32_t delay = 0;
-        if (auto it = m_peerInputs.find(peerId); it != m_peerInputs.end())
+        uint32_t delay = 0, queueDepth = 0;
+        if (auto it = m_peerInputs.find(peerId); it != m_peerInputs.end()) {
             delay = it->second.estimatedDelayTicks;
-        fn(peerId, addr, eid, delay);
+            queueDepth = it->second.jitterBuffer.size();
+        }
+        fn(peerId, addr, eid, delay, queueDepth);
     }
 }
 
@@ -351,6 +359,20 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // Dead entities were reaped in the previous tick's m_entityManager.onTick(); forEach skips them.
     m_spatialIndex.clear();
     m_entityManager.forEach([this](const EntityState& s) { m_spatialIndex.insert(s.id.index, s.transform.pos); });
+
+    // Drain one buffered input per peer before stepping. When the buffer is empty the existing
+    // control fields are retained (stale repeat) — the entity continues on its last known inputs
+    // rather than coasting to zero. viewAxis is not buffered (camera only, not flight control).
+    for (auto& [peerId, ps] : m_peerInputs) {
+        BufferedInput bi;
+        if (ps.jitterBuffer.pop(bi)) {
+            ps.throttle = bi.throttle;
+            ps.elevator = bi.elevator;
+            ps.aileron = bi.aileron;
+            ps.rudder = bi.rudder;
+            ps.buttons = bi.buttons;
+        }
+    }
 
     // Step every controlled entity from its control source (peer/AI/script), then copy state back.
     for (auto& [entityIdx, ce] : m_controlledEntities) {
@@ -753,16 +775,29 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         if (msg.tickIndex <= m_currentTick)
             stored.estimatedDelayTicks = static_cast<uint32_t>(m_currentTick - msg.tickIndex);
 
+        // On first input, seed the jitter buffer depth from the measured one-way delay,
+        // capped at the configured global maximum.
+        if (!stored.hasSeq) {
+            const uint32_t maxD = m_jitterMaxDepth.load(std::memory_order_relaxed);
+            const uint32_t depth = (stored.estimatedDelayTicks > 0u) ? std::min(stored.estimatedDelayTicks, maxD) : 1u;
+            stored.jitterBuffer.setMaxDepth(depth);
+        }
+
         stored.lastSeqNum = msg.seqNum;
         stored.hasSeq = true;
         stored.lastActivityTick = m_currentTick;
 
-        stored.throttle = std::clamp(msg.throttle, 0.f, 1.f);
-        stored.elevator = std::clamp(msg.elevator, -1.f, 1.f);
-        stored.aileron = std::clamp(msg.aileron, -1.f, 1.f);
-        stored.rudder = std::clamp(msg.rudder, -1.f, 1.f);
-        stored.buttons = msg.buttons;
+        // Clamp and enqueue into the jitter buffer. Control fields (throttle etc.) are
+        // written to stored in onTick when the buffer is drained — not here.
+        BufferedInput bi;
+        bi.throttle = std::clamp(msg.throttle, 0.f, 1.f);
+        bi.elevator = std::clamp(msg.elevator, -1.f, 1.f);
+        bi.aileron = std::clamp(msg.aileron, -1.f, 1.f);
+        bi.rudder = std::clamp(msg.rudder, -1.f, 1.f);
+        bi.buttons = msg.buttons;
+        stored.jitterBuffer.push(bi);
 
+        // viewAxis is updated immediately — it is camera state, not a flight sim input.
         float vmag = std::sqrt(msg.viewAxis[0] * msg.viewAxis[0] + msg.viewAxis[1] * msg.viewAxis[1] +
                                msg.viewAxis[2] * msg.viewAxis[2]);
         if (vmag > 1e-6f) {

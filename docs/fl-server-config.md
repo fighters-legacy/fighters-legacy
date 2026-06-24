@@ -68,6 +68,7 @@ time_scale         = 10.0        # game seconds per real second; 10 = full day/n
 # planet_radius_m         = 6371000  # planet sphere radius (m); Earth default
 # draw_distance_km        = 200.0    # per-peer interest management radius (km); [1, 100000]
 # baseline_interval_ticks = 120      # full-snapshot baseline interval for delta recovery; [1, 3600]
+# jitter_buffer_depth     = 4        # per-peer input queue depth (ticks); initial depth seeded from one-way delay; [1, 32]
 
 [ai]
 difficulty_floor = "recruit"
@@ -373,6 +374,21 @@ Per-peer interest management radius in kilometres. Only entities within this XZ-
 | integer | `120` | `[1, 3600]` |
 
 Interval in sim ticks between full-snapshot baselines. On baseline ticks all visible entities receive a full `MsgEntityEntry` regardless of known-entity state, providing UDP packet-loss recovery. At 60 Hz: `120` = 2 s recovery window. Smaller values reduce recovery time but increase bandwidth. Out-of-range values are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
+
+### `jitter_buffer_depth`
+
+| Type | Default | Range |
+|---|---|---|
+| integer | `4` | `[1, 32]` |
+
+Per-peer input ring buffer depth in sim ticks. Each connecting peer's buffer is initialized to
+`min(estimatedDelayTicks, jitter_buffer_depth)` on their first `MsgClientInput`. The server drains
+exactly one input per sim tick before stepping the flight integrator; when the buffer runs empty the
+last drained input is stale-repeated, preventing control surfaces from zeroing under transient packet
+loss. Larger values add input latency but tolerate more jitter; smaller values minimize added latency
+but leave less headroom. Changing this value only affects **new** connections — existing peer buffers
+retain their initialized depth. Out-of-range values are rejected with a Warn and the default is used.
+**Hot-reloadable** via `reload_config`.
 
 ---
 
@@ -806,7 +822,7 @@ process.
 |---|---|---|
 | `help` | `[command]` | List all commands, or show usage for a specific one |
 | `status` | — | Show uptime, peer count, entity count, tick rate |
-| `peers` | — | List connected peers (peer ID, address, entity index/generation, one-way delay in ticks/ms) |
+| `peers` | — | List connected peers (peer ID, address, entity index/generation, one-way delay in ticks/ms, input queue depth `q=N`) |
 | `kick` | `<peerId\|IP>` | Disconnect a peer by numeric ID, or all peers from an IP address |
 | `ban` | `<peerId\|IP>` | Add IP to the ban list and kick matching peers; saves to `banlist_path` if configured |
 | `unban` | `<IP>` | Remove an IP from the ban list; saves to `banlist_path` if configured |
@@ -817,7 +833,7 @@ process.
 | `spawn` | `<type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn a registered entity type at the given world position; optionally attach an AI controller. C++ behaviors: `loiter [cx cy cz [radius_m [alt_m [throttle [cw\|ccw]]]]]`, `waypoint x y z [x y z ...] [--loop]`, `pursuit <entityIdx>`, `evade <entityIdx>`, `break <entityIdx> [rollDuration]`. Lua behavior: `lua <script_name>` (loads `ai/<script_name>.lua` from content packs; see `docs/modding/ai.md`). If the entity type's TOML sets `ai_script`, that script is attached automatically when `--ai` is omitted. |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
 | `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's game console to teleport the player entity |
-| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `baseline_interval_ticks` (takes effect immediately for connected peers) |
+| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `baseline_interval_ticks`, `jitter_buffer_depth` (takes effect immediately for new connections; existing peer buffers retain their initialized depth) |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
 | `pause` | — | Pause the simulation — ticks stop advancing; network connections remain active. In single-player the game client sends this automatically when the pause menu is opened. |
