@@ -242,6 +242,9 @@ TEST_CASE("ClientNetEventHandler: MsgWorldSnapshot abEngaged and engineFailFlags
     entry.entityGen = 1u;
     entry.abEngaged = 1u;
     entry.engineFailFlags = fl::kEngineFailGeneric;
+    entry.omega[0] = 0.1f;
+    entry.omega[1] = 0.2f;
+    entry.omega[2] = 0.3f;
     std::memcpy(pkt.data() + sizeof(hdr), &entry, sizeof(entry));
 
     handler.onReceive(0u, pkt.data(), pkt.size());
@@ -251,6 +254,9 @@ TEST_CASE("ClientNetEventHandler: MsgWorldSnapshot abEngaged and engineFailFlags
     REQUIRE(snap.entries.size() == 1u);
     CHECK(snap.entries[0].abEngaged == true);
     CHECK(snap.entries[0].engineFailFlags == fl::kEngineFailGeneric);
+    CHECK(snap.entries[0].omega.x == 0.1f);
+    CHECK(snap.entries[0].omega.y == 0.2f);
+    CHECK(snap.entries[0].omega.z == 0.3f);
 }
 
 TEST_CASE("ClientNetEventHandler: MsgMotd honours custom motdDisplaySeconds", "[client_net_event_handler]") {
@@ -1361,4 +1367,121 @@ TEST_CASE("ClientNetEventHandler: SnapshotPeerLatency TLV parsed correctly along
     CHECK(handler.serverPeerCount() == 4u);
     CHECK(handler.hasSnapshotLatency());
     CHECK(handler.snapshotLatencyMs() == 83u);
+}
+
+TEST_CASE("ClientNetEventHandler: MsgEntityUpdate omega parsed into EntityRenderEntry", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // First, send a full MsgEntityEntry so the entity is in m_knownEntities.
+    std::vector<uint8_t> pkt;
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
+    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
+    hdr.fullEntityCount = 1u;
+    hdr.tickIndex = 1u;
+    fl::appendMsg(pkt, hdr);
+    fl::MsgEntityEntry fullEntry{};
+    fullEntry.entityIdx = 10u;
+    fullEntry.entityGen = 1u;
+    fullEntry.typeIndex = 0u;
+    fl::appendMsg(pkt, fullEntry);
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    // Now send a compact MsgEntityUpdate for the same entity with omega set.
+    std::vector<uint8_t> pkt2;
+    fl::MsgWorldSnapshotHeader hdr2{};
+    hdr2.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
+    hdr2.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
+    hdr2.updateCount = 1u;
+    hdr2.tickIndex = 2u;
+    fl::appendMsg(pkt2, hdr2);
+    fl::MsgEntityUpdate upd{};
+    upd.entityIdx = 10u;
+    upd.entityGen = 1u;
+    upd.omega[0] = 1.1f;
+    upd.omega[1] = 2.2f;
+    upd.omega[2] = 3.3f;
+    fl::appendMsg(pkt2, upd);
+    handler.onReceive(0u, pkt2.data(), pkt2.size());
+
+    bridge.tryAdvance();
+    const auto& snap = bridge.current();
+    const auto* entry = [&]() -> const fl::EntityRenderEntry* {
+        for (const auto& e : snap.entries) {
+            if (e.entityIdx == 10u) {
+                return &e;
+            }
+        }
+        return nullptr;
+    }();
+    REQUIRE(entry != nullptr);
+    CHECK(entry->omega.x == Catch::Approx(1.1f));
+    CHECK(entry->omega.y == Catch::Approx(2.2f));
+    CHECK(entry->omega.z == Catch::Approx(3.3f));
+}
+
+TEST_CASE("ClientNetEventHandler: SnapshotPeerDelayTicks TLV updates m_estimatedDelayTicks",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    std::vector<uint8_t> pkt;
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
+    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
+    hdr.tickIndex = 10u;
+    fl::appendMsg(pkt, hdr);
+    fl::appendExt(pkt, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), uint16_t{1u});
+    fl::appendExt(pkt, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), uint16_t{83u});
+    fl::appendExt(pkt, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerDelayTicks), uint16_t{5u});
+
+    uint32_t capturedDelayTicks{0};
+    handler.snapshotCallback = [&](fl::RenderSnapshot&, uint64_t, uint32_t delayTicks) {
+        capturedDelayTicks = delayTicks;
+    };
+
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(capturedDelayTicks == 5u);
+}
+
+TEST_CASE("ClientNetEventHandler: snapshotCallback called before publishExternal", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    int callbackOrder{0};
+    int callbackFired{0};
+    handler.snapshotCallback = [&](fl::RenderSnapshot&, uint64_t, uint32_t) {
+        // At callback time, bridge should NOT yet have the snapshot (publishExternal not called).
+        callbackFired = ++callbackOrder;
+        CHECK(!bridge.hasSnapshot());
+    };
+
+    std::vector<uint8_t> pkt;
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
+    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
+    hdr.tickIndex = 1u;
+    fl::appendMsg(pkt, hdr);
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(callbackFired == 1);
+    bridge.tryAdvance();
+    CHECK(bridge.hasSnapshot()); // published after callback
 }

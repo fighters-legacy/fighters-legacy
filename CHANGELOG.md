@@ -9,6 +9,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: client-side prediction for the player's own entity: local `FlightIntegrator`
+  applies inputs immediately before the server round-trip; each `MsgWorldSnapshot` triggers
+  reconciliation — the integrator is reset to the server's authoritative state and the last
+  `estimatedDelayTicks` inputs are replayed forward. Divergence above `snap_threshold_m`
+  (default 5 m) hard-snaps; smaller divergence blends at `blend_rate` per reconciliation.
+  Configurable via `[prediction]` in `user.toml` (`enabled`, `snap_threshold_m`,
+  `blend_rate`). Other entities remain server-authoritative with velocity extrapolation
+  unchanged (#381).
+
+- **network**: `MsgEntityEntry` and `MsgEntityUpdate` now carry `omega float[3]`
+  (body-frame angular rates p, q, r in rad/s) for accurate prediction reconciliation.
+  Struct sizes: `MsgEntityEntry` 72 → 88 bytes, `MsgEntityUpdate` 52 → 64 bytes (#381).
+
+- **network**: `ExtTag::SnapshotPeerDelayTicks` (0x0102) — raw `estimatedDelayTicks`
+  as a `uint16_t` TLV in each per-peer `MsgWorldSnapshot`, companion to the existing
+  `SnapshotPeerLatency` (ms). Avoids ms-rounding loss for the prediction replay depth
+  (#381).
+
 - **network**: server-side per-peer jitter buffer for `MsgClientInput` delivery; initial depth
   seeded from `estimatedDelayTicks` (clamped to `[world].jitter_buffer_depth`); drains one input
   per sim tick; stale-repeats the last drained input when the buffer is empty to prevent coasting

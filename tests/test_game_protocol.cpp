@@ -3,6 +3,7 @@
 #include "net/WireCodec.h"
 #include "weather/WeatherTypes.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
 
@@ -11,8 +12,8 @@ TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game
     CHECK(sizeof(fl::MsgConnectAck) == 16u);     // extended: +assignedEntityIdx/Gen, +planetRadiusKm
     CHECK(sizeof(fl::MsgEntityTypeDef) == 196u); // 4 + 64 + 64 + 64
     CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 16u);
-    CHECK(sizeof(fl::MsgEntityEntry) == 72u);
-    CHECK(sizeof(fl::MsgEntityUpdate) == 52u); // compact delta record: no typeIndex, float positions
+    CHECK(sizeof(fl::MsgEntityEntry) == 88u);
+    CHECK(sizeof(fl::MsgEntityUpdate) == 64u); // compact delta record: no typeIndex, float positions
     CHECK(sizeof(fl::MsgClientInput) == 48u);
     CHECK(sizeof(fl::MsgAdminCommand) == 128u);
     CHECK(sizeof(fl::MsgAdminResponse) == 128u);
@@ -88,6 +89,9 @@ TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
         entries[i].flags = (i == 0) ? 1u : 0u;
         entries[i].throttle = 0;
         entries[i].fuelPct = 0;
+        entries[i].omega[0] = 0.1f * static_cast<float>(i + 1);
+        entries[i].omega[1] = 0.2f * static_cast<float>(i + 1);
+        entries[i].omega[2] = 0.3f * static_cast<float>(i + 1);
     }
 
     // Pack into a byte buffer (simulating network send).
@@ -114,6 +118,9 @@ TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
         CHECK(e.pos[1] == 500.0);
         CHECK(e.ori[3] == 1.0f);
         CHECK(e.flags == (i == 0 ? 1u : 0u));
+        CHECK(e.omega[0] == Catch::Approx(0.1f * static_cast<float>(i + 1)));
+        CHECK(e.omega[1] == Catch::Approx(0.2f * static_cast<float>(i + 1)));
+        CHECK(e.omega[2] == Catch::Approx(0.3f * static_cast<float>(i + 1)));
         if (i == 0) {
             CHECK(e.vel[0] == 25.5f);
             CHECK(e.vel[2] == -100.f);
@@ -140,6 +147,43 @@ TEST_CASE("GameProtocol: MsgEntityEntry double-precision round-trip at planet-sc
     CHECK(parsed.pos[0] == kLargeX);
     CHECK(parsed.pos[1] == 500.0);
     CHECK(parsed.pos[2] == kLargeZ);
+}
+
+TEST_CASE("GameProtocol: MsgEntityUpdate omega field round-trip", "[game_protocol]") {
+    fl::MsgEntityUpdate src{};
+    src.entityIdx = 5u;
+    src.entityGen = 2u;
+    src.pos[0] = 1.f;
+    src.pos[1] = 2.f;
+    src.pos[2] = 3.f;
+    src.omega[0] = 0.4f;
+    src.omega[1] = -0.5f;
+    src.omega[2] = 0.6f;
+
+    std::vector<uint8_t> buf(sizeof(src));
+    std::memcpy(buf.data(), &src, sizeof(src));
+
+    fl::MsgEntityUpdate parsed{};
+    std::memcpy(&parsed, buf.data(), sizeof(parsed));
+
+    CHECK(parsed.entityIdx == 5u);
+    CHECK(parsed.omega[0] == Catch::Approx(0.4f));
+    CHECK(parsed.omega[1] == Catch::Approx(-0.5f));
+    CHECK(parsed.omega[2] == Catch::Approx(0.6f));
+}
+
+TEST_CASE("GameProtocol: ExtTag SnapshotPeerDelayTicks TLV encode and decode", "[game_protocol]") {
+    std::vector<uint8_t> buf;
+    const uint16_t kDelay = 7u;
+    fl::appendExt(buf, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerDelayTicks), kDelay);
+
+    uint16_t out{};
+    REQUIRE(fl::readExtValue(buf.data(), buf.size(), static_cast<uint16_t>(fl::ExtTag::SnapshotPeerDelayTicks), out));
+    CHECK(out == kDelay);
+
+    // Unknown tag must be skipped gracefully (no match, returns false).
+    uint16_t notFound{};
+    CHECK(!fl::readExtValue(buf.data(), buf.size(), uint16_t{0x9999}, notFound));
 }
 
 TEST_CASE("GameProtocol: MsgConnectAck round-trip with two type defs", "[game_protocol]") {

@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 
@@ -18,6 +19,7 @@ namespace fl {
 class GameConsole;
 class ILogger;
 class ServerNotice;
+struct RenderSnapshot;
 class INetwork;
 
 class EntityTypeRegistry;
@@ -111,6 +113,11 @@ struct ClientNetEventHandler : INetworkEventHandler {
         return m_hasSnapshotLatency;
     }
 
+    // Optional: called after snapshot assembly, before publishExternal().
+    // Args: (RenderSnapshot& snap, uint64_t tickIndex, uint32_t estimatedDelayTicks)
+    // Wire ClientPrediction::reconcile() here from FlightScreen.
+    std::function<void(RenderSnapshot&, uint64_t, uint32_t)> snapshotCallback;
+
   private:
     // Store f into *sessionFailure if it is still None (first-writer-wins via CAS); no-op if unset.
     void signalFailure(SessionFailure f);
@@ -135,6 +142,9 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // Per-peer snapshot latency (SnapshotPeerLatency TLV, ExtTag::SnapshotPeerLatency = 0x0101).
     uint16_t m_snapshotLatencyMs{0};  // ms from last snapshot TLV; 0 = not yet received
     bool m_hasSnapshotLatency{false}; // true once first non-zero SnapshotPeerLatency TLV arrives
+    // Raw tick count from SnapshotPeerDelayTicks TLV (0x0102); passed to snapshotCallback for
+    // client-side prediction replay depth. 0 until first non-zero TLV arrives.
+    uint32_t m_estimatedDelayTicks{0};
 
     // Delta-compression entity cache: entityIdx → {gen (uint16 truncated), typeIndex}.
     // Populated from full MsgEntityEntry records; used to decode compact MsgEntityUpdate records.

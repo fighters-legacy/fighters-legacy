@@ -32,6 +32,7 @@ struct EntityRenderEntry {
     uint8_t fuelPct{0};         // [0–100]; from wire MsgEntityEntry::fuelPct
     bool abEngaged{false};      // true when afterburner physically lit (FlightState::ab_engaged)
     uint8_t engineFailFlags{0}; // fl::kEngineFail* bitmask
+    glm::vec3 omega{};          // body-frame angular rates p,q,r (rad/s); from wire; used by client-side prediction
 };
 
 // Full entity-world snapshot published by the sim thread once per tick.

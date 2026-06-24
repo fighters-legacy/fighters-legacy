@@ -89,6 +89,15 @@ immediately without waiting for server confirmation:
 | Afterburner engage | Fired on `EntityRenderEntry::abEngaged` (one tick late) | Fire on `Afterburner` input binding press in `FlightInputCollector` |
 | Gear command | Not yet wired | Fire on gear key press in `FlightInputCollector` |
 
+### Compensate — client-side prediction for flight inputs (#381)
+
+The "Compensate" leg for flight inputs is implemented by `ClientPrediction`
+(`game/fighters-legacy/`): a local `FlightIntegrator` steps each sent `MsgClientInput`
+immediately, and reconciles against each received `MsgWorldSnapshot` using
+`estimatedDelayTicks` (carried losslessly via `ExtTag::SnapshotPeerDelayTicks`) as the
+replay-window depth. This eliminates the full server round-trip delay from the player's
+perspective for all continuous flight controls.
+
 ### Fast-path rejected
 
 Introducing an `ISimDirectBridge` to bypass ENet in single-player was evaluated and

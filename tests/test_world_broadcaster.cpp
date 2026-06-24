@@ -4681,6 +4681,96 @@ TEST_CASE("WorldBroadcaster: SnapshotPeerLatency TLV absent when estimatedDelayT
     CHECK(pkt.size() == expected);
 }
 
+TEST_CASE("WorldBroadcaster: snapshot entity record carries omega field without corruption",
+          "[world_broadcaster][omega]") {
+    // This test verifies the code path: FlightState.omega → TelemetryEntry.omega →
+    // EntitySnap.omega → MsgEntityEntry/MsgEntityUpdate.omega.
+    // The round-trip VALUE check (serialise → memcpy → verify exact values) is covered by
+    // test_game_protocol.cpp.  Here we just confirm the field is present in the packet,
+    // is finite (not NaN/inf), and that the packet has the correct size for the new struct.
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    // One tick is enough to verify the code path. omega starts at {0,0,0} and we just
+    // check the field is accessible and finite in the serialized packet.
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.seqNum = 1u;
+    inp.tickIndex = 0u;
+    inp.throttle = 1.0f;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto snaps = snapshotsFor(net, 0u);
+    REQUIRE(!snaps.empty());
+    const auto& pkt = snaps[0];
+
+    const auto hdr = parseSnapshotHeader(pkt);
+    REQUIRE(hdr.fullEntityCount >= 1u); // first tick always sends a full entry
+
+    // Verify the packet carries the full 88-byte MsgEntityEntry (not the old 72-byte form).
+    const std::size_t expectedSize = sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry) +
+                                     6u; // SnapshotPeerCount TLV (no latency at tick 1)
+    CHECK(pkt.size() == expectedSize);
+
+    fl::MsgEntityEntry entry{};
+    std::memcpy(&entry, pkt.data() + sizeof(fl::MsgWorldSnapshotHeader), sizeof(entry));
+
+    // omega field is accessible; values must be finite (not NaN/inf from a bad cast).
+    CHECK(std::isfinite(entry.omega[0]));
+    CHECK(std::isfinite(entry.omega[1]));
+    CHECK(std::isfinite(entry.omega[2]));
+}
+
+TEST_CASE("WorldBroadcaster: snapshot includes SnapshotPeerDelayTicks TLV when delay > 0",
+          "[world_broadcaster][latency]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    clearSnapshots(net);
+
+    // Send MsgHeartbeat with tickIndex=0 → estimatedDelayTicks = 2 - 0 = 2.
+    fl::MsgHeartbeat hb{};
+    hb.msgId = static_cast<uint8_t>(fl::MsgId::Heartbeat);
+    hb.tickIndex = 0u;
+    broadcaster.onReceive(0u, &hb, sizeof(hb));
+
+    broadcaster.onTick(1.0 / 60.0, 3u);
+    auto snaps = snapshotsFor(net, 0u);
+    REQUIRE(!snaps.empty());
+    const auto& pkt = snaps[0];
+
+    const auto hdr = parseSnapshotHeader(pkt);
+    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) +
+                                  static_cast<std::size_t>(hdr.fullEntityCount) * sizeof(fl::MsgEntityEntry) +
+                                  static_cast<std::size_t>(hdr.updateCount) * sizeof(fl::MsgEntityUpdate);
+    REQUIRE(pkt.size() > extOffset);
+    const auto* ext = pkt.data() + extOffset;
+    const auto extSz = pkt.size() - extOffset;
+
+    // Both SnapshotPeerLatency and SnapshotPeerDelayTicks must be present and consistent.
+    uint16_t lat{};
+    REQUIRE(fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), lat));
+    CHECK(lat == static_cast<uint16_t>(2u * 1000u / 60u)); // 33 ms
+
+    uint16_t delayTicks{};
+    REQUIRE(fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerDelayTicks), delayTicks));
+    CHECK(delayTicks == 2u);
+}
+
 // ---------------------------------------------------------------------------
 // JitterBuffer unit tests
 // ---------------------------------------------------------------------------

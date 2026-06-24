@@ -143,8 +143,8 @@ static_assert(offsetof(MsgWorldSnapshotHeader, updateCount) == 4u,
 static_assert(offsetof(MsgWorldSnapshotHeader, tickIndex) == 8u, "MsgWorldSnapshotHeader::tickIndex offset changed");
 
 // Per-entity snapshot record appended after MsgWorldSnapshotHeader. Laid out large->small: the
-// double pos[3] is first (8-aligned), and the struct is padded to 72 (multiple of 8) so record i at
-// header(16) + i*72 stays 8-aligned.
+// double pos[3] is first (8-aligned), and the struct is padded to 88 (multiple of 8) so record i at
+// header(16) + i*88 stays 8-aligned.
 struct MsgEntityEntry {
     double pos[3]{}; // world position (m), XYZ - double for planet-scale precision
     float vel[3]{};  // world velocity (m/s) for dead-reckoning
@@ -158,9 +158,11 @@ struct MsgEntityEntry {
     uint8_t fuelPct{0};         // [0-100] fuel_kg / max_fuel * 100; 0 for non-player entities
     uint8_t abEngaged{0};       // 1 when afterburner physically lit (FlightState::ab_engaged)
     uint8_t engineFailFlags{0}; // fl::kEngineFail* bitmask
-    uint8_t reserved[2]{};      // pad to 72 (multiple of 8)
-}; // 72 bytes, align 8
-static_assert(sizeof(MsgEntityEntry) == 72u, "MsgEntityEntry wire size changed");
+    uint8_t reserved[2]{};      // @70-71 pad (was sole pad; kept for layout stability)
+    float omega[3]{};           // @72 body-frame angular rates p,q,r (rad/s); used by client-side prediction
+    uint8_t reserved2[4]{};     // @84 pad to 88 (multiple of 8 for record-alignment)
+}; // 88 bytes, align 8
+static_assert(sizeof(MsgEntityEntry) == 88u, "MsgEntityEntry wire size changed");
 static_assert(alignof(MsgEntityEntry) == 8u, "MsgEntityEntry alignment changed");
 static_assert(sizeof(MsgEntityEntry) % alignof(MsgEntityEntry) == 0u, "MsgEntityEntry not record-aligned");
 static_assert(offsetof(MsgEntityEntry, pos) == 0u, "MsgEntityEntry::pos offset changed");
@@ -170,6 +172,7 @@ static_assert(offsetof(MsgEntityEntry, entityIdx) == 52u, "MsgEntityEntry::entit
 static_assert(offsetof(MsgEntityEntry, typeIndex) == 60u, "MsgEntityEntry::typeIndex offset changed");
 static_assert(offsetof(MsgEntityEntry, damageLevel) == 64u, "MsgEntityEntry::damageLevel offset changed");
 static_assert(offsetof(MsgEntityEntry, engineFailFlags) == 69u, "MsgEntityEntry::engineFailFlags offset changed");
+static_assert(offsetof(MsgEntityEntry, omega) == 72u, "MsgEntityEntry::omega offset changed");
 
 // Compact per-tick state for entities already known to the receiving peer. Sent in the update
 // section of MsgWorldSnapshot (after fullEntityCount x MsgEntityEntry). Uses float positions
@@ -190,8 +193,9 @@ struct MsgEntityUpdate {
     uint8_t fuelPct{0};         // @49 — [0-100]
     uint8_t abEngaged{0};       // @50 — 1 when afterburner lit
     uint8_t flags{0};           // @51 — bit 0 = playerOwned (same as MsgEntityEntry::flags)
-}; // 52 bytes, align 4
-static_assert(sizeof(MsgEntityUpdate) == 52u, "MsgEntityUpdate wire size changed");
+    float omega[3]{};           // @52 — body-frame angular rates p,q,r (rad/s); used by client-side prediction
+}; // 64 bytes, align 4
+static_assert(sizeof(MsgEntityUpdate) == 64u, "MsgEntityUpdate wire size changed");
 static_assert(alignof(MsgEntityUpdate) == 4u, "MsgEntityUpdate alignment changed");
 static_assert(sizeof(MsgEntityUpdate) % alignof(MsgEntityUpdate) == 0u, "MsgEntityUpdate not record-aligned");
 static_assert(offsetof(MsgEntityUpdate, entityIdx) == 0u, "MsgEntityUpdate::entityIdx offset changed");
@@ -200,6 +204,7 @@ static_assert(offsetof(MsgEntityUpdate, pos) == 8u, "MsgEntityUpdate::pos offset
 static_assert(offsetof(MsgEntityUpdate, vel) == 20u, "MsgEntityUpdate::vel offset changed");
 static_assert(offsetof(MsgEntityUpdate, ori) == 32u, "MsgEntityUpdate::ori offset changed");
 static_assert(offsetof(MsgEntityUpdate, throttle) == 48u, "MsgEntityUpdate::throttle offset changed");
+static_assert(offsetof(MsgEntityUpdate, omega) == 52u, "MsgEntityUpdate::omega offset changed");
 
 // Unreliable, client->server, sent each render frame. Padded to 48 (multiple of 8 for tickIndex).
 struct MsgClientInput {
@@ -404,6 +409,9 @@ enum class ExtTag : uint16_t {
     SnapshotPeerCount = 0x0100,   // uint16_t: active connected peer count at snapshot time
     SnapshotPeerLatency = 0x0101, // uint16_t: receiving peer's one-way latency in ms (estimatedDelayTicks*1000/60);
                                   // absent when delay is 0
+    SnapshotPeerDelayTicks =
+        0x0102, // uint16_t: raw estimatedDelayTicks for client-side prediction replay depth;
+                // avoids ms rounding loss; absent when delay is 0; emitted alongside SnapshotPeerLatency
 };
 
 } // namespace fl
