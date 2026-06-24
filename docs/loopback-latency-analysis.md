@@ -35,8 +35,41 @@ The sim-tick boundary dominates. ENet loopback is effectively free.
 
 ## Decision record
 
-**Decision date:** *(fill in after running the analysis)*
+**Decision date:** 2026-06-24
 **Approach: Accept + Compensate**
+
+### Measured data
+
+Three runs on each platform using `net_check --bench 600 --bench-rate 60`.
+
+| Platform      | OS loopback RTT        | ENet RTT mean | ENet RTT p99 | Sim-tick delay |
+|---------------|------------------------|--------------|--------------|----------------|
+| Fedora Linux  | 0.007 ms (UDP/sockperf) | 12 ms       | 17 ms        | 1t (16.7 ms)   |
+| macOS         | 1.1 ms (ICMP)          | 15 ms        | 21 ms        | 1t (16.7 ms)   |
+| Windows 10/11 | < 1 ms (ICMP)          | 15 ms        | 20 ms        | 1t (16.7 ms)   |
+
+**What the bench measured — and what it did not:**
+
+`net_check --bench` reads `ENetPeer::roundTripTime`, which tracks how long ENet's
+internal PING/ACK exchange takes. The server's `enet_host_service()` is called at the
+sim rate (60 Hz), so every PING waits up to 16.7 ms for the server's next service
+call. The measured RTT (8–21 ms) is therefore the **sim-tick boundary delay**, not
+raw ENet socket overhead.
+
+The raw socket overhead is confirmed by the OS-level baselines: Linux UDP loopback is
+~7 µs (sockperf), macOS ICMP ~1 ms, Windows ICMP < 1 ms. All are completely invisible
+against the ~16 ms tick-boundary cost.
+
+The 500 ms values that appear as `RTT max` in the raw `compare.py` output are
+`ENET_PEER_DEFAULT_ROUND_TRIP_TIME` — ENet's startup placeholder before the first real
+PING/ACK completes. They appear only in the first 1–2 samples of each run and are
+already excluded by the p99 column. They are not a real latency observation.
+
+**Conclusion:** ENet loopback adds no perceptible latency beyond the sim-tick
+boundary. The tick boundary itself (0–16.7 ms, p99 ~17–21 ms across platforms) is
+within the accepted human-perception threshold for a flight sim. The platform spread
+(Linux p99 17 ms vs macOS/Windows p99 20–21 ms) reflects OS timer granularity: Linux
+HZ=1000 gives 1 ms sleep precision; macOS and Windows default to 10–15 ms.
 
 ### Accept — one-tick lag for reactive events
 
@@ -70,16 +103,17 @@ rejected:
 
 ## Baseline results
 
-*(Fill in after running `compare.py` on results from all three platforms.)*
+Measured 2026-06-24. Three runs per platform; values below represent the median run.
+Full run-by-run data: `tools/latency_analysis/results/`.
 
-| Platform         | OS UDP RTT | ENet RTT (mean) | ENet RTT (p99) | Sim-tick delay |
-|------------------|-----------|-----------------|----------------|----------------|
-| Fedora Linux     | —         | —               | —              | 1t (16.7 ms)   |
-| macOS            | —         | —               | —              | 1t (16.7 ms)   |
-| Windows 10/11    | —         | —               | —              | 1t (16.7 ms)   |
+| Platform      | OS loopback RTT         | ENet RTT (mean) | ENet RTT (p99) | Sim-tick delay |
+|---------------|-------------------------|-----------------|----------------|----------------|
+| Fedora Linux  | 0.007 ms (UDP, sockperf) | 12 ms          | 17 ms          | 1t (16.7 ms)   |
+| macOS         | 1.1 ms (ICMP)           | 15 ms           | 21 ms          | 1t (16.7 ms)   |
+| Windows 10/11 | < 1 ms (ICMP)           | 15 ms           | 20 ms          | 1t (16.7 ms)   |
 
-The sim-tick delay is confirmed at 1 tick on all platforms via `estimatedDelayTicks`
-(measured informally in #348 before this formal analysis ran).
+Note: "ENet RTT" here is the sim-tick-paced PING/ACK round-trip, not raw socket
+latency. See the Decision record section for the full interpretation.
 
 ---
 
@@ -136,9 +170,9 @@ record if the results change materially.
 
 | ENet RTT p99 | Interpretation |
 |---|---|
-| < 2 ms | Normal; ENet overhead is imperceptible relative to the tick boundary |
-| 2–5 ms | Investigate OS scheduling (see kernel-level inspection steps in the scripts) |
-| > 5 ms | Likely scheduling anomaly; check `SCHED_OTHER` CFS jitter or Windows timer resolution |
+| 15–22 ms | **Normal** — tick-boundary wait dominates; ENet socket overhead is invisible |
+| 22–33 ms | Investigate OS scheduling; may indicate sim thread running at reduced priority or unexpected context switching |
+| > 33 ms | Anomalous — check `SCHED_OTHER` CFS jitter on Linux, Windows timer resolution, or macOS efficiency-core scheduling |
 
 The round-dt metric (wall-clock duration of each `service()` call) indicates OS timer
 granularity. On Linux with HZ=1000, expect ~1 ms jitter. On macOS (100 Hz clock),
