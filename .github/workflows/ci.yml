@@ -80,6 +80,12 @@ jobs:
           path: build/_deps
           key: cmake-deps-${{ matrix.os }}-${{ hashFiles('cmake/dependencies.cmake') }}
 
+      - name: Set up MSVC developer environment (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
 
