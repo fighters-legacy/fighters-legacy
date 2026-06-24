@@ -92,7 +92,7 @@ jobs:
 
       - name: Smoke test fighters-legacy --version (Windows)
         if: matrix.os == 'windows-latest'
-        run: .\build\debug-msvc\game\fighters-legacy\Debug\fighters-legacy.exe --version
+        run: .\build\debug-msvc\game\fighters-legacy\fighters-legacy.exe --version
         shell: pwsh
 
       - name: Smoke test fl-server --version (Linux / macOS)
@@ -101,7 +101,7 @@ jobs:
 
       - name: Smoke test fl-server --version (Windows)
         if: matrix.os == 'windows-latest'
-        run: .\build\debug-msvc\server\fl-server\Debug\fl-server.exe --version
+        run: .\build\debug-msvc\server\fl-server\fl-server.exe --version
         shell: pwsh
 
       - name: Smoke test tools (Linux / macOS)
@@ -133,13 +133,13 @@ jobs:
       - name: Smoke test asset pipeline tools (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          .\build\debug-msvc\tools\Debug\validate-flight-model.exe --version
-          .\build\debug-msvc\tools\Debug\validate-mission.exe --version
-          .\build\debug-msvc\tools\Debug\validate-mesh.exe --version
-          .\build\debug-msvc\tools\Debug\tex-compress.exe --version
-          .\build\debug-msvc\tools\Debug\validate-licenses.exe --version
-          .\build\debug-msvc\tools\Debug\validate-playlist.exe --version
-          .\build\debug-msvc\tools\Debug\terrain-chunk-io.exe --version
+          .\build\debug-msvc\tools\validate-flight-model.exe --version
+          .\build\debug-msvc\tools\validate-mission.exe --version
+          .\build\debug-msvc\tools\validate-mesh.exe --version
+          .\build\debug-msvc\tools\tex-compress.exe --version
+          .\build\debug-msvc\tools\validate-licenses.exe --version
+          .\build\debug-msvc\tools\validate-playlist.exe --version
+          .\build\debug-msvc\tools\terrain-chunk-io.exe --version
         shell: pwsh
 
       - name: Verify static linking (Linux)

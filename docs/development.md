@@ -41,13 +41,21 @@ sudo apt-get install -y cmake ninja-build gcc g++ clang clang-format \
 
 1. Install [Visual Studio 2026](https://visualstudio.microsoft.com/) with the **Desktop development with C++** workload
 2. Install the [Vulkan SDK](https://vulkan.lunarg.com/) (1.3 or later) — includes `glslangValidator`, `VK_LAYER_KHRONOS_validation`, and MoltenVK support headers
-3. Optional: install Ninja via `winget install Ninja-build.Ninja` (faster incremental builds)
+3. **Ninja** — required by the `debug-msvc` and `release-msvc` presets. Two options:
+   - Install system-wide (works from any PowerShell terminal): `winget install Ninja-build.Ninja`
+   - Use the copy bundled with VS: open **Developer PowerShell for VS 2026** or **x64 Native Tools Command Prompt for VS 2026** — both put Ninja on `PATH` automatically. VS Code with the CMake Tools extension also finds the VS-bundled Ninja without any extra steps.
 4. **clang-format-22**: CI pins clang-format-22 (LLVM 22). Install via:
    ```powershell
    winget install LLVM.LLVM
    ```
    or download the installer from [releases.llvm.org](https://releases.llvm.org/). Add the LLVM `bin/` directory to `PATH`.
 5. **Pre-commit hook**: `scripts/hooks/pre-commit` is a bash script. On Windows it must be run via **Git Bash** or **WSL** — it will not work in PowerShell or cmd. The DCO commit-msg hook has the same requirement.
+
+> **Build performance tip:** Windows Defender scans every `.obj` and `.lib` as it is written, which adds significant time to cold builds. Exclude the build output directory to avoid this:
+> ```powershell
+> Add-MpPreference -ExclusionPath "$PWD\build"
+> ```
+> Run once from the repo root in an elevated PowerShell. The exclusion persists across reboots.
 
 > **Note (Lua):** Lua 5.5 is not required on Windows — CMake automatically fetches and compiles it via FetchContent.
 
