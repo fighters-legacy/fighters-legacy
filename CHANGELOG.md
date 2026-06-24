@@ -9,6 +9,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: server-side per-peer jitter buffer for `MsgClientInput` delivery; initial depth
+  seeded from `estimatedDelayTicks` (clamped to `[world].jitter_buffer_depth`); drains one input
+  per sim tick; stale-repeats the last drained input when the buffer is empty to prevent coasting
+  under packet loss; configurable via `[world].jitter_buffer_depth` (default 4, hot-reloadable via
+  `reload_config`). `peers` admin command now shows per-peer input queue depth (`q=N`) (#380).
+
 - **network,tools**: `tools/latency_analysis/` — per-platform ENet loopback latency
   benchmark scripts (`measure_linux.sh`, `measure_macos.sh`, `measure_windows.ps1`) and
   result comparator (`compare.py`); `getPeerRtt()` added to `INetwork`/`ENetNetwork`;

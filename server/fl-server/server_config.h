@@ -41,6 +41,7 @@ struct ServerConfig {
     double planetRadiusM = 6'371'000.0;   // sphere radius (m); Earth default
     double drawDistanceKm = 200.0;        // per-peer interest radius (km); [1, 100000]
     uint32_t baselineIntervalTicks = 120; // full-snapshot baseline interval (sim ticks); [1, 3600]
+    uint32_t jitterBufferDepth = 4;       // per-peer input queue depth (ticks); [1, 32]
 
     // [ai]  — Phase 2: parsed and stored; enforcement lands with AI runtime
     std::string aiDifficultyFloor = "recruit";

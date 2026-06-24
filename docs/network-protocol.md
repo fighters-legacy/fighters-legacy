@@ -183,6 +183,13 @@ The server clamps all control surface inputs to their valid ranges and normalise
 length. Packets smaller than 48 bytes are silently discarded. ENet's sequenced unreliable delivery
 provides a first layer of ordering; the application-level `seqNum` guard adds defense-in-depth.
 
+After passing validation the server enqueues each accepted input into a per-peer ring buffer
+(`JitterBuffer`, depth ≤ `[world].jitter_buffer_depth`, default 4 ticks). The buffer is drained
+exactly once per sim tick before the flight integrator is stepped; when the buffer runs empty the
+last drained input is repeated (stale repeat) rather than zeroing controls, preventing coasting
+under transient packet loss. The initial buffer depth per peer is `min(estimatedDelayTicks, maxDepth)`
+seeded at first input; existing buffers are not resized mid-session.
+
 ### MsgWeatherState — 20 bytes
 
 Unreliable, server→client. Broadcast every 10 sim ticks (~6 Hz at 60 Hz sim) after the `MsgWorldSnapshot`.

@@ -4,6 +4,7 @@
 #include "AuthTracker.h"
 #include "GameProtocol.h"
 #include "INetwork.h"
+#include "JitterBuffer.h"
 #include "entity/EntityId.h"
 #include "flight/IGravityField.h"
 #include "loop/ISimUpdate.h"
@@ -40,16 +41,18 @@ struct PeerInputState {
     // 8-byte field first to avoid padding.
     uint64_t lastActivityTick{0}; // tick of last MsgClientInput or MsgHeartbeat; set in onConnect
     // 4-byte fields next.
-    float throttle{0.f};
-    float elevator{0.f};
-    float aileron{0.f};
-    float rudder{0.f};
+    float throttle{0.f}; // last drained value from jitterBuffer (effective input this tick)
+    float elevator{0.f}; // last drained value
+    float aileron{0.f};  // last drained value
+    float rudder{0.f};   // last drained value
     float viewAxis[3]{1.f, 0.f, 0.f};
     uint32_t lastSeqNum{0};          // seqNum of last accepted input
     uint32_t estimatedDelayTicks{0}; // one-way delay in sim ticks (derived from tickIndex)
     // 1-byte fields last.
-    uint8_t buttons{0};
+    uint8_t buttons{0}; // last drained value
     bool hasSeq{false}; // false until first input received from this peer
+    // Jitter buffer: initialized to depth 1; sized from estimatedDelayTicks on first input.
+    JitterBuffer jitterBuffer{1};
 };
 
 // One simulated entity together with its control source. The registry is EntityId-keyed (not peer-
@@ -79,6 +82,7 @@ struct WorldBroadcasterConfig {
     int idleTimeoutS{0};                 // 0 = disabled; seconds of peer inactivity before disconnect
     float drawDistanceKm{200.f};         // per-peer interest radius; 0 = degenerate (empty snapshots)
     uint32_t baselineIntervalTicks{120}; // force full MsgEntityEntry records every N ticks for loss recovery
+    uint32_t jitterBufferMaxDepth{4};    // per-peer input queue depth; [1, JitterBuffer::kHardMaxDepth]
 };
 
 // Wraps EntityManager to provide a server-side ISimUpdate that:
@@ -143,10 +147,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     bool unlockAdminAuth(const std::string& ip);
 
     // Iterate all connected peers. fn receives (peerId, full "ip:port" address string, EntityId,
-    // one-way delay in sim ticks). The address string is copied per entry — safe despite
-    // INetwork::getPeerAddress() returning a pointer backed by a single overwrite buffer.
-    void forEachPeer(
-        std::function<void(uint32_t peerId, const std::string& addr, EntityId eid, uint32_t delayTicks)> fn) const;
+    // one-way delay in sim ticks, current jitter buffer queue depth). The address string is copied
+    // per entry — safe despite INetwork::getPeerAddress() returning a single overwrite buffer.
+    void forEachPeer(std::function<void(uint32_t peerId, const std::string& addr, EntityId eid, uint32_t delayTicks,
+                                        uint32_t queueDepth)>
+                         fn) const;
 
     // Replace the entire in-memory ban set. Safe to call before gameLoop.start().
     void setBannedAddresses(std::unordered_set<std::string> addrs);
@@ -297,6 +302,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Call before gameLoop.start() or via enqueueSimCallback.
     void setBaselineInterval(uint32_t ticks) noexcept;
 
+    // Set the global maximum jitter buffer depth (ticks) used when initializing new peer buffers.
+    // The actual per-peer initial depth is min(estimatedDelayTicks, maxDepth), floored at 1.
+    // Existing peer buffers are not resized (adaptive resizing is a follow-on).
+    // Thread-safe; may be called before gameLoop.start() or via enqueueSimCallback.
+    void setJitterBufferDepth(uint32_t maxDepth) noexcept;
+
     // Set the gravity field applied to all FlightIntegrators spawned on this broadcaster (current
     // and future). Also records the planet radius sent to clients in MsgConnectAck so their terrain
     // rendering matches server physics. Defaults to CentralGravityField::earthInstance() /
@@ -415,8 +426,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     SpatialIndex m_spatialIndex; // rebuilt at the start of each onTick; default 10 km cell size
 
     // Interest management + delta compression state (sim-thread only).
-    double m_drawDistanceM{200'000.0};      // precomputed from drawDistanceKm × 1000; 200 km default
-    uint64_t m_baselineIntervalTicks{120u}; // ticks between full-snapshot baselines for loss recovery
+    double m_drawDistanceM{200'000.0};         // precomputed from drawDistanceKm × 1000; 200 km default
+    uint64_t m_baselineIntervalTicks{120u};    // ticks between full-snapshot baselines for loss recovery
+    std::atomic<uint32_t> m_jitterMaxDepth{4}; // global cap for per-peer jitter buffer initialization
 
     // Per-peer entity known-gen set: peerId → (entityIdx → last-sent generation, truncated uint16).
     // Cleared at each baseline tick (forces full re-sync for all visible entities).

@@ -50,6 +50,7 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.idleTimeoutS == 0);
     CHECK(cfg.drawDistanceKm == 200.0);
     CHECK(cfg.baselineIntervalTicks == 120u);
+    CHECK(cfg.jitterBufferDepth == 4u);
     CHECK(log.entries.empty());
 }
 
@@ -298,13 +299,15 @@ TEST_CASE("parseServerConfig: reads [world] fields", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig(R"(
 [world]
-save_path           = "/data/world.sav"
-autosave_interval_s = 600
+save_path              = "/data/world.sav"
+autosave_interval_s    = 600
+jitter_buffer_depth    = 8
 )",
                                  &log);
 
     CHECK(cfg.worldSavePath == "/data/world.sav");
     CHECK(cfg.worldAutosaveIntervalS == 600);
+    CHECK(cfg.jitterBufferDepth == 8u);
     CHECK(log.entries.empty());
 }
 
@@ -389,6 +392,41 @@ TEST_CASE("parseServerConfig: baseline_interval_ticks 3601 warns and uses defaul
     auto cfg = parseServerConfig("[world]\nbaseline_interval_ticks = 3601\n", &log);
     CHECK(cfg.baselineIntervalTicks == 120u);
     CHECK(log.hasMessage(LogLevel::Warn, "baseline_interval_ticks"));
+}
+
+TEST_CASE("parseServerConfig: reads world.jitter_buffer_depth", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_depth = 16\n", &log);
+    CHECK(cfg.jitterBufferDepth == 16u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: jitter_buffer_depth 0 warns and uses default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_depth = 0\n", &log);
+    CHECK(cfg.jitterBufferDepth == 4u);
+    CHECK(log.hasMessage(LogLevel::Warn, "jitter_buffer_depth"));
+}
+
+TEST_CASE("parseServerConfig: jitter_buffer_depth 33 warns and uses default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_depth = 33\n", &log);
+    CHECK(cfg.jitterBufferDepth == 4u);
+    CHECK(log.hasMessage(LogLevel::Warn, "jitter_buffer_depth"));
+}
+
+TEST_CASE("parseServerConfig: jitter_buffer_depth boundary 1 is accepted", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_depth = 1\n", &log);
+    CHECK(cfg.jitterBufferDepth == 1u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: jitter_buffer_depth boundary 32 is accepted", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_depth = 32\n", &log);
+    CHECK(cfg.jitterBufferDepth == 32u);
+    CHECK(log.entries.empty());
 }
 
 // ---------------------------------------------------------------------------
