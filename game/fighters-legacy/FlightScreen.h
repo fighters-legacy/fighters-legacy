@@ -23,6 +23,7 @@ class UserConfig;
 class SandboxInspector;
 
 class CameraController;
+class ClientPrediction;
 class IHud;
 class SimRenderBridge;
 class TerrainStreamer;
@@ -46,7 +47,8 @@ struct FlightScreenDeps {
     ClientNetEventHandler* clientNetHandler{nullptr}; // for sendHeartbeatIfNeeded; may be null
     IJoystick* joystick{nullptr};
     UserConfig* userConfig{nullptr};
-    SandboxInspector* inspector{nullptr}; // null = no inspector
+    SandboxInspector* inspector{nullptr};  // null = no inspector
+    ClientPrediction* prediction{nullptr}; // null = no prediction
     uint32_t* assignedEntityIdx{nullptr};
     uint32_t* assignedEntityGen{nullptr};
 };
@@ -57,6 +59,7 @@ struct FlightScreenDeps {
 class FlightScreen : public IScreen {
   public:
     explicit FlightScreen(FlightScreenDeps deps);
+    ~FlightScreen() override;
 
     Screen update(IInput& input, IWindow& window) override;
     std::span<const HudElement> buildElements() override;

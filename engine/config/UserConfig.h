@@ -11,6 +11,7 @@
 #include "config/GraphicsSettings.h"
 #include "config/HudSettings.h"
 #include "config/PilotSettings.h"
+#include "config/PredictionSettings.h"
 
 namespace fl {
 
@@ -64,6 +65,9 @@ class UserConfig {
     PilotSettings pilot() const;
     void setPilot(const PilotSettings& ps);
 
+    PredictionSettings prediction() const;
+    void setPrediction(const PredictionSettings& ps);
+
   private:
     static constexpr const char* kPath = "config/user.toml";
     static constexpr const char* kTmpPath = "config/user.toml.tmp";
@@ -81,6 +85,7 @@ class UserConfig {
     ControlsSettings m_controls{};
     DebugSettings m_debug{};
     PilotSettings m_pilot{};
+    PredictionSettings m_prediction{};
 };
 
 } // namespace fl

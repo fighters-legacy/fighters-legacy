@@ -3,6 +3,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         main.cpp
         Game.cpp
         ClientNetEventHandler.cpp
+        ClientPrediction.cpp
         CameraInput.cpp
         FlightInputCollector.cpp
         HapticController.cpp
@@ -20,6 +21,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
     target_link_libraries(fighters-legacy PRIVATE
         engine-crash
         engine-config
+        engine-flight
         engine-difficulty
         engine-firstrun
         engine-content

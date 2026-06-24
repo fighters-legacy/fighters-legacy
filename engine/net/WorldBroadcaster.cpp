@@ -417,13 +417,16 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         uint8_t fuelPct;
         uint8_t abEngaged;
         uint8_t engineFailFlags;
+        float omega[3]; // body-frame angular rates p,q,r (rad/s)
     };
     std::unordered_map<uint32_t, TelemetryEntry> entityTelemetry;
     for (auto& [entityIdx, ce] : m_controlledEntities) {
         const auto& s = ce.sim->state();
         entityTelemetry[entityIdx] = {static_cast<uint8_t>(s.throttle_actual * 100.f),
                                       static_cast<uint8_t>(std::clamp(s.fuel_kg / 4000.f * 100.f, 0.f, 100.f)),
-                                      static_cast<uint8_t>(s.ab_engaged ? 1u : 0u), s.engineFailFlags};
+                                      static_cast<uint8_t>(s.ab_engaged ? 1u : 0u),
+                                      s.engineFailFlags,
+                                      {s.omega[0], s.omega[1], s.omega[2]}};
     }
 
     // Step 2: build entity snapshot map — one pass shared across all per-peer loops.
@@ -433,6 +436,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         uint8_t fuelPct;
         uint8_t abEngaged;
         uint8_t engineFailFlags;
+        float omega[3]; // body-frame angular rates p,q,r (rad/s)
     };
     std::unordered_map<uint32_t, EntitySnap> snapMap;
     snapMap.reserve(m_spatialIndex.entityCount());
@@ -441,9 +445,14 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         uint8_t efFlags = (tit != entityTelemetry.end()) ? tit->second.engineFailFlags : 0u;
         if (static_cast<uint8_t>(state.damageLevel) >= 2u)
             efFlags |= fl::kEngineFailGeneric;
-        snapMap[state.id.index] = {&state, (tit != entityTelemetry.end()) ? tit->second.throttle : uint8_t{0},
-                                   (tit != entityTelemetry.end()) ? tit->second.fuelPct : uint8_t{0},
-                                   (tit != entityTelemetry.end()) ? tit->second.abEngaged : uint8_t{0}, efFlags};
+        const float* omegaPtr = (tit != entityTelemetry.end()) ? tit->second.omega : nullptr;
+        snapMap[state.id.index] = {
+            &state,
+            (tit != entityTelemetry.end()) ? tit->second.throttle : uint8_t{0},
+            (tit != entityTelemetry.end()) ? tit->second.fuelPct : uint8_t{0},
+            (tit != entityTelemetry.end()) ? tit->second.abEngaged : uint8_t{0},
+            efFlags,
+            {omegaPtr ? omegaPtr[0] : 0.f, omegaPtr ? omegaPtr[1] : 0.f, omegaPtr ? omegaPtr[2] : 0.f}};
     });
 
     const auto activePeers =
@@ -514,6 +523,9 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             entry.fuelPct = snap.fuelPct;
             entry.abEngaged = snap.abEngaged;
             entry.engineFailFlags = snap.engineFailFlags;
+            entry.omega[0] = snap.omega[0];
+            entry.omega[1] = snap.omega[1];
+            entry.omega[2] = snap.omega[2];
             appendMsg(buf, entry);
             knownGens[idx] = static_cast<uint16_t>(state.id.generation);
             ++hdr.fullEntityCount;
@@ -542,6 +554,9 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             upd.fuelPct = snap.fuelPct;
             upd.abEngaged = snap.abEngaged;
             upd.flags = state.playerOwned ? 1u : 0u;
+            upd.omega[0] = snap.omega[0];
+            upd.omega[1] = snap.omega[1];
+            upd.omega[2] = snap.omega[2];
             appendMsg(buf, upd);
             ++hdr.updateCount;
         }
@@ -550,13 +565,16 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
 
         // TLV extension block.
         appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerCount), activePeers);
-        // Per-peer latency (ms). Omitted when estimatedDelayTicks == 0 (e.g. single-player localhost)
+        // Per-peer latency TLVs. Omitted when estimatedDelayTicks == 0 (e.g. single-player localhost)
         // so the client's m_hasSnapshotLatency stays false and the HUD indicator remains hidden.
         if (auto it = m_peerInputs.find(peerId); it != m_peerInputs.end()) {
             if (it->second.estimatedDelayTicks > 0) {
                 const auto latMs = static_cast<uint16_t>(
                     std::min(static_cast<uint64_t>(it->second.estimatedDelayTicks) * 1000u / 60u, uint64_t{65535u}));
                 appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerLatency), latMs);
+                const auto delayTicks =
+                    static_cast<uint16_t>(std::min(it->second.estimatedDelayTicks, uint32_t{65535u}));
+                appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerDelayTicks), delayTicks);
             }
         }
         m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/false);

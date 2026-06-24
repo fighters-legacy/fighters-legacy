@@ -796,6 +796,13 @@ bool UserConfig::load() {
     // [hud]
     m_hud.showLatency = tbl["hud"]["show_latency"].value_or(true);
 
+    // [prediction]
+    m_prediction.enabled = tbl["prediction"]["enabled"].value_or(true);
+    if (auto v = tbl["prediction"]["snap_threshold_m"].value<double>())
+        m_prediction.snapThresholdM = std::clamp(static_cast<float>(*v), 0.f, 10000.f);
+    if (auto v = tbl["prediction"]["blend_rate"].value<double>())
+        m_prediction.blendRate = std::clamp(static_cast<float>(*v), 0.f, 1.f);
+
     return true;
 }
 
@@ -877,6 +884,11 @@ bool UserConfig::save() {
     toml::table hud;
     hud.insert_or_assign("show_latency", m_hud.showLatency);
 
+    toml::table prediction;
+    prediction.insert_or_assign("enabled", m_prediction.enabled);
+    prediction.insert_or_assign("snap_threshold_m", static_cast<double>(m_prediction.snapThresholdM));
+    prediction.insert_or_assign("blend_rate", static_cast<double>(m_prediction.blendRate));
+
     toml::table debug;
     debug.insert_or_assign("overlay_mode", static_cast<int64_t>(m_debug.overlayMode));
 
@@ -914,6 +926,7 @@ bool UserConfig::save() {
     root.insert_or_assign("controls", std::move(controls));
     root.insert_or_assign("client", std::move(client));
     root.insert_or_assign("hud", std::move(hud));
+    root.insert_or_assign("prediction", std::move(prediction));
     root.insert_or_assign("debug", std::move(debug));
     root.insert_or_assign("pilot", std::move(pilot));
 
@@ -1012,6 +1025,13 @@ PilotSettings UserConfig::pilot() const {
 }
 void UserConfig::setPilot(const PilotSettings& ps) {
     m_pilot = ps;
+}
+
+PredictionSettings UserConfig::prediction() const {
+    return m_prediction;
+}
+void UserConfig::setPrediction(const PredictionSettings& ps) {
+    m_prediction = ps;
 }
 
 } // namespace fl

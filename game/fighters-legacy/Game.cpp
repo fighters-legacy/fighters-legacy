@@ -61,8 +61,12 @@
 #include "sdl3/SDL3Window.h"
 #include "vulkan/VkRendererFactory.h"
 
+#include "ClientPrediction.h"
 #include "ConnectArgs.h"
 #include "console/ConsoleCommands.h"
+#include "entity/EntityDefParser.h"
+#include "flight/BuiltinFlightModel.h"
+#include "flight/FlightModelParser.h"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -298,6 +302,9 @@ struct GameServices {
 
     // Screen state machine
     std::unique_ptr<ScreenManager> screenMgr;
+
+    // Client-side prediction — persists across sessions; reset() on stopGame().
+    ClientPrediction prediction;
 };
 
 // Per-session objects — created in startGame(), torn down in stopGame(). Hold pointers/refs into
@@ -722,8 +729,40 @@ void Game::startGame() {
         fsd.joystick = d.services.p.joystick.get();
         fsd.userConfig = &*d.services.userConfig;
         fsd.inspector = d.session.inspector ? &*d.session.inspector : nullptr;
+        fsd.prediction = &d.services.prediction;
         fsd.assignedEntityIdx = &d.session.clientHandler->assignedEntityIdx;
         fsd.assignedEntityGen = &d.session.clientHandler->assignedEntityGen;
+
+        // Build the flight-model resolver: typeIndex → entity def (from content packs) →
+        // flightModelId → FlightModelData. Falls back to BuiltinFlightModel at any miss.
+        auto flightModelResolver = [&d](uint32_t typeIndex) -> std::shared_ptr<const fl::FlightModelData> {
+            const fl::EntityDef* def = d.services.entityRegistry.byIndex(typeIndex);
+            if (def && !def->id.empty()) {
+                if (auto raw = d.services.assets->loadEntityDef(def->id.c_str())) {
+                    try {
+                        const std::string_view src(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size());
+                        const fl::EntityDef fullDef = fl::parseEntityDef(src);
+                        if (!fullDef.flightModelId.empty()) {
+                            if (auto fm = d.services.assets->loadFlightModel(fullDef.flightModelId.c_str())) {
+                                const std::string_view fmSrc(reinterpret_cast<const char*>(fm->bytes.data()),
+                                                             fm->bytes.size());
+                                return std::make_shared<fl::FlightModelData>(fl::parseFlightModel(fmSrc));
+                            }
+                        }
+                    } catch (...) {
+                    }
+                }
+            }
+            return fl::BuiltinFlightModel::get();
+        };
+        auto heightQuery = [&d](double x, double z) -> float {
+            return d.services.terrainStreamer ? static_cast<float>(d.services.terrainStreamer->heightAt(x, z)) : 0.f;
+        };
+        d.services.prediction.init(d.services.userConfig->prediction(), std::move(flightModelResolver),
+                                   std::move(heightQuery), d.session.clientHandler->assignedEntityIdx,
+                                   d.session.clientHandler->assignedEntityGen,
+                                   d.session.clientHandler->planetRadiusKm());
+
         d.services.screenMgr->reinitFlight(std::move(fsd));
 
         const char* host = isMultiplayer ? d.services.connectHost.c_str() : "127.0.0.1";
@@ -786,6 +825,7 @@ void Game::stopGame() {
     d.session.discoveryListener.reset();
     d.session.inspector.reset();
     d.session.hapticController.reset();
+    d.services.prediction.reset();
     d.services.renderBridge.reset();
     d.services.entityRegistry.clear();
     d.services.env = EnvironmentState{};

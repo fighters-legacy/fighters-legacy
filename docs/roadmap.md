@@ -88,6 +88,7 @@ Phase 3 acceptance is a **complete engine layer** — all features testable with
 - Per-vertex spherical terrain mesh correction: no visible seams or skirts at altitude.
 - libFuzzer harnesses in CI; zero crashes on seed corpus.
 - Connection heartbeat/keepalive: ENet peer timeout behaves correctly under packet loss.
+- Client-side prediction active for the player entity; inputs feel responsive on 100 ms RTT connections without visible snapping artifacts.
 - `bindings.toml` loaded; per-axis HOTAS/gamepad mapping applied at startup.
 - WeatherPreset::Snow and WeatherPreset::Blizzard functional (weather state machine + visual presets).
 - NVG cockpit overlay toggles on/off in cockpit mode.

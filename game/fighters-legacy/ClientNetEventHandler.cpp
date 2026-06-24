@@ -110,6 +110,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             re.fuelPct = e.fuelPct;
             re.abEngaged = e.abEngaged != 0;
             re.engineFailFlags = e.engineFailFlags;
+            re.omega = {e.omega[0], e.omega[1], e.omega[2]};
             snap.entries.push_back(re);
             m_knownEntities[e.entityIdx] = {static_cast<uint16_t>(e.entityGen), e.typeIndex};
         }
@@ -141,6 +142,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             re.fuelPct = u.fuelPct;
             re.abEngaged = u.abEngaged != 0;
             re.engineFailFlags = u.engineFailFlags;
+            re.omega = {u.omega[0], u.omega[1], u.omega[2]};
             snap.entries.push_back(re);
         }
 
@@ -161,6 +163,10 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
                 m_snapshotLatencyMs = lat;
                 m_hasSnapshotLatency = true;
             }
+
+            uint16_t delayTicks{};
+            if (fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerDelayTicks), delayTicks))
+                m_estimatedDelayTicks = delayTicks;
         }
 
         m_lastSnapshotTick = hdr.tickIndex;
@@ -169,6 +175,8 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         std::snprintf(traceBuf, sizeof(traceBuf), "WorldSnapshot: full=%u update=%u built=%zu", hdr.fullEntityCount,
                       hdr.updateCount, snap.entries.size());
         logger.log(LogLevel::Trace, __FILE__, __LINE__, traceBuf);
+        if (snapshotCallback)
+            snapshotCallback(snap, snap.tickIndex, m_estimatedDelayTicks);
         bridge.publishExternal(std::move(snap));
         tickAlpha.markNewTick();
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::WeatherState)) {

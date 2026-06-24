@@ -263,6 +263,32 @@ Every screen implements `IScreen`:
 
 `Game::startGame()` launches the server thread and creates session objects. `Game::stopGame()` joins the thread, disconnects ENet, resets `SimRenderBridge`, and clears session state. Between sessions the main menu is shown with no server overhead.
 
+### Client-Side Prediction
+
+`ClientPrediction` (`game/fighters-legacy/`) reduces perceived input lag by running a local
+`FlightIntegrator` that mirrors the server's physics for the player's own entity only:
+
+- **History ring**: a 128-slot plain-C-array ring of `{seqNum, BufferedInput}` entries. On
+  each `MsgClientInput` sent, the input is pushed into the ring and the local integrator is
+  stepped one tick (steady wind from `EnvironmentState`; turbulence is excluded — it is
+  stochastic server-side and cannot be replicated without a future seed-broadcast).
+
+- **Reconciliation**: `ClientNetEventHandler::snapshotCallback` fires after each snapshot is
+  assembled, before `publishExternal()`. The integrator is reset to the server's authoritative
+  `FlightState` (reconstructed from the player's `EntityRenderEntry`, including the new `omega`
+  body-frame angular-rate field), and the last `estimatedDelayTicks` history inputs are
+  replayed forward. The replay depth is carried losslessly in the `SnapshotPeerDelayTicks` TLV
+  (0x0102). The player's entry is then overwritten with the predicted state in-place; all other
+  entities remain server-authoritative with velocity extrapolation unchanged.
+
+- **Correction**: divergence > `snap_threshold_m` (default 5 m) → hard snap; smaller
+  divergence → position blend at `blend_rate` per reconciliation. Both values are in
+  `[prediction]` user.toml.
+
+- **Non-Earth gravity**: if `MsgConnectAck::planetRadiusKm` differs from 6371 km by more
+  than 1 km, a custom `CentralGravityField` is constructed and injected into the local
+  integrator so prediction physics matches the server.
+
 ## World Terrain Architecture
 
 The engine uses a single continuous **world terrain** rather than per-theater heightmap grids. Players can fly anywhere in the world in a single session; theater boundaries are mission conditions (triggering failure when crossed), not engine limits.

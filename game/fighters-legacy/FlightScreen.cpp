@@ -3,6 +3,7 @@
 
 #include "CameraInput.h"
 #include "ClientNetEventHandler.h"
+#include "ClientPrediction.h"
 #include "FlightInputCollector.h"
 #include "HapticController.h"
 #include "IInput.h"
@@ -41,7 +42,20 @@ static float rollAngleRad(const fl::EntityRenderEntry* p) {
     return std::atan2(-right.y, up.y);
 }
 
-FlightScreen::FlightScreen(FlightScreenDeps deps) : m_deps(std::move(deps)) {}
+FlightScreen::FlightScreen(FlightScreenDeps deps) : m_deps(std::move(deps)) {
+    auto& d = m_deps;
+    if (d.clientNetHandler && d.prediction && d.env) {
+        d.clientNetHandler->snapshotCallback =
+            [pred = d.prediction, env = d.env](RenderSnapshot& snap, uint64_t tickIndex, uint32_t delayTicks) {
+                pred->reconcile(snap, tickIndex, delayTicks, *env);
+            };
+    }
+}
+
+FlightScreen::~FlightScreen() {
+    if (m_deps.clientNetHandler)
+        m_deps.clientNetHandler->snapshotCallback = nullptr;
+}
 
 Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     auto& d = m_deps;
@@ -66,8 +80,11 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
         return Screen::MainMenu;
 
     const ControlsSettings cs = d.userConfig->controls();
-    if (auto msg = d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, input, d.joystick, cs))
+    if (auto msg = d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, input, d.joystick, cs)) {
+        if (d.prediction && d.env)
+            d.prediction->onInput(*msg, *d.env);
         d.clientNet->send(0, &*msg, sizeof(*msg), /*reliable=*/false);
+    }
     if (d.clientNetHandler)
         d.clientNetHandler->sendHeartbeatIfNeeded();
     m_weaponFired = d.flightInput->wasWeaponFired();

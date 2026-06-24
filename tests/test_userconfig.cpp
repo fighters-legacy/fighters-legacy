@@ -488,3 +488,32 @@ TEST_CASE("UserConfig: [hud] show_latency false round-trip save+load", "[usercon
     config2.load();
     CHECK(config2.hud().showLatency == false);
 }
+
+TEST_CASE("UserConfig: [prediction] defaults when section absent", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    config.load(); // no file — defaults
+    CHECK(config.prediction().enabled == true);
+    CHECK(config.prediction().snapThresholdM == 5.0f);
+    CHECK(config.prediction().blendRate == 0.1f);
+}
+
+TEST_CASE("UserConfig: [prediction] round-trip save+load", "[userconfig]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+    fl::PredictionSettings ps;
+    ps.enabled = false;
+    ps.snapThresholdM = 10.f;
+    ps.blendRate = 0.2f;
+    config.setPrediction(ps);
+    config.save();
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    CHECK(config2.prediction().enabled == false);
+    CHECK(config2.prediction().snapThresholdM == 10.f);
+    CHECK(config2.prediction().blendRate == 0.2f);
+}

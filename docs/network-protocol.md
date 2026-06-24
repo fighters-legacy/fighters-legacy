@@ -32,7 +32,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 |-------|-------|-----------|---------|------|---------|
 | `Hello` | `0x00` | server→client | reliable | 4 bytes | Protocol version handshake; first message on every new connection |
 | `ConnectAck` | `0x01` | server→client | reliable | 16 + N×196 bytes | Handshake on connect; assigns entity slot and delivers type registry |
-| `WorldSnapshot` | `0x02` | server→client | unreliable | 16 + F×72 + U×52 bytes | Per-tick entity state, unicast per peer; F = full entries (new or baseline), U = compact updates (known entities) |
+| `WorldSnapshot` | `0x02` | server→client | unreliable | 16 + F×88 + U×64 bytes | Per-tick entity state, unicast per peer; F = full entries (new or baseline), U = compact updates (known entities) |
 | `ClientInput` | `0x03` | client→server | unreliable | 48 bytes | Per-frame flight inputs |
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
 | `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
@@ -112,10 +112,10 @@ extension block. Sized to 16 (a multiple of 8) so each trailing `MsgEntityEntry`
 | 6 | 2 | `_reserved` | `uint16_t` | Padding so `tickIndex` is 8-aligned; always 0 |
 | 8 | 8 | `tickIndex` | `uint64_t` | Monotonically increasing server tick counter (naturally 8-aligned) |
 
-### MsgEntityEntry — 72 bytes
+### MsgEntityEntry — 88 bytes
 
 Per-entity state appended N times after `MsgWorldSnapshotHeader`. Laid out large→small (`pos` first,
-8-aligned) and padded to 72 (a multiple of 8) so record `i` at `16 + i×72` stays 8-aligned.
+8-aligned) and padded to 88 (a multiple of 8) so record `i` at `16 + i×88` stays 8-aligned.
 
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
@@ -131,15 +131,17 @@ Per-entity state appended N times after `MsgWorldSnapshotHeader`. Laid out large
 | 67 | 1 | `fuelPct` | `uint8_t` | Fuel remaining [0, 100] = 0%–100% of max fuel; 0 for non-player entities |
 | 68 | 1 | `abEngaged` | `uint8_t` | `1` when afterburner physically lit (`FlightState::ab_engaged`); `0` otherwise |
 | 69 | 1 | `engineFailFlags` | `uint8_t` | Engine failure bitmask: bit `0x01` = generic thrust impairment (`damageLevel ≥ Heavy`); bit `0x02` = left-engine failure (Phase 6+); bit `0x04` = right-engine failure (Phase 6+); bit `0x08` = compressor stall (Phase 6+); bit `0x10` = flameout (Phase 6+) |
-| 70 | 2 | `reserved[2]` | `uint8_t[2]` | Padding to 72 (multiple of 8); always 0 |
+| 70 | 2 | `reserved[2]` | `uint8_t[2]` | Padding (layout stability); always 0 |
+| 72 | 12 | `omega[3]` | `float[3]` | Body-frame angular rates p, q, r (rad/s); used by client-side prediction to seed the local `FlightIntegrator` at reconciliation time |
+| 84 | 4 | `reserved2[4]` | `uint8_t[4]` | Pad to 88 (multiple of 8 for record-alignment); always 0 |
 
-### MsgEntityUpdate — 52 bytes
+### MsgEntityUpdate — 64 bytes
 
 Compact per-tick state for entities already known to the receiving peer. Appended in the update
 section of `MsgWorldSnapshot` (after `fullEntityCount × MsgEntityEntry`). Uses `float` positions
 (absolute world coordinates; precision ~1.6 cm at 200 km from origin — sufficient for rendering).
-Omits static fields (`typeIndex`, `reserved` padding) that the client caches from the last full
-`MsgEntityEntry` for this entity. `alignof(MsgEntityUpdate) == 4`; 52 is a multiple of 4.
+Omits static fields (`typeIndex`, padding) that the client caches from the last full
+`MsgEntityEntry` for this entity. `alignof(MsgEntityUpdate) == 4`; 64 is a multiple of 4.
 
 `entityGen` is `uint16_t` (truncated from `EntityId::generation` `uint32_t`). Practical pool-slot
 reuse rate makes overflow impossible within a session.
@@ -157,6 +159,7 @@ reuse rate makes overflow impossible within a session.
 | 49 | 1 | `fuelPct` | `uint8_t` | Fuel remaining [0, 100] |
 | 50 | 1 | `abEngaged` | `uint8_t` | `1` when afterburner physically lit |
 | 51 | 1 | `flags` | `uint8_t` | Bit 0 = playerOwned |
+| 52 | 12 | `omega[3]` | `float[3]` | Body-frame angular rates p, q, r (rad/s); used by client-side prediction |
 
 ### MsgClientInput — 48 bytes
 
@@ -476,6 +479,7 @@ Helpers: `fl::findExt`, `fl::readExtValue<T>`, `fl::appendExt<T>`, `fl::appendEx
 |-----|-------|------|---------|-------------|
 | `SnapshotPeerCount` | `0x0100` | `uint16_t` | `MsgWorldSnapshot` | Active connected peer count at the time the snapshot was built. Emitted by `WorldBroadcaster` every tick; stored by `ClientNetEventHandler::serverPeerCount()`. |
 | `SnapshotPeerLatency` | `0x0101` | `uint16_t` | `MsgWorldSnapshot` | Receiving peer's estimated one-way latency in ms (`estimatedDelayTicks × 1000 / 60`), capped at 65535. Absent when `estimatedDelayTicks == 0` (e.g. single-player localhost). Stored by `ClientNetEventHandler::snapshotLatencyMs()`; displayed in `FlightHud` as a compact `"42 ms"` indicator. |
+| `SnapshotPeerDelayTicks` | `0x0102` | `uint16_t` | `MsgWorldSnapshot` | Raw `estimatedDelayTicks` (tick count, not ms). Companion to `SnapshotPeerLatency`; avoids the ms-rounding loss inherent in `ticks → ms → ticks` conversion. Used by `ClientPrediction` as the replay-depth signal for client-side prediction. Absent when `estimatedDelayTicks == 0`. |
 
 **Reserved ranges:**
 - `0x0000`: reserved
@@ -550,7 +554,7 @@ this spec are **protocol version 1** and must implement `MsgHello` handling to i
 
 ### Snapshot packet size
 
-`MsgWorldSnapshot` is fixed-cost per entity: **72 bytes/entity** plus a 16-byte header.
+`MsgWorldSnapshot` is fixed-cost per entity: **88 bytes/entity** (full entry) or **64 bytes** (compact update) plus a 16-byte header.
 
 | Visible entities | Packet size | Per-client outbound (60 Hz) |
 |-----------------|-------------|-----------------------------|
@@ -581,7 +585,7 @@ containing only entities within `draw_distance_km` of the peer's own entity posi
 broadcasts.
 
 **Delta compression**: entities already known to a peer appear as compact `MsgEntityUpdate`
-records (52 bytes, float positions) rather than full `MsgEntityEntry` records (72 bytes).
+records (64 bytes, float positions) rather than full `MsgEntityEntry` records (88 bytes).
 A full re-sync (all `MsgEntityEntry`) fires every `baseline_interval_ticks` ticks (default
 120 = 2 s at 60 Hz) for UDP packet-loss recovery.
 
@@ -618,4 +622,35 @@ The following are documented as future optimization candidates:
 - **Input channel**: `MsgClientInput` uses the unreliable channel (channel 1). The server
   applies a half-window `seqNum` staleness guard to discard out-of-order and duplicate
   packets. Per-peer one-way delay is estimated from `tickIndex` and exposed via the `peers`
-  admin command. Client-side prediction with reconciliation is deferred to a future issue.
+  admin command.
+
+## Client-Side Prediction
+
+Client-side prediction (`ClientPrediction`, `game/fighters-legacy/`) reduces perceived input
+latency by running a local `FlightIntegrator` that mirrors the server's physics:
+
+1. **On each sent `MsgClientInput`**: the input is pushed into a 128-slot history ring and
+   the local integrator is stepped one tick (steady wind from `MsgWeatherState` only —
+   turbulence is stochastic server-side and excluded to prevent compound divergence).
+
+2. **On each received `MsgWorldSnapshot`**: the snapshot callback (`ClientNetEventHandler::
+   snapshotCallback`) is invoked before `publishExternal()`. The integrator is reset to the
+   server's authoritative `FlightState` (reconstructed from the player's `EntityRenderEntry`
+   including the new `omega` field), then the last `estimatedDelayTicks` history inputs are
+   replayed forward. The `SnapshotPeerDelayTicks` TLV (0x0102) carries the raw tick count as
+   the replay depth signal; `SnapshotPeerLatency` (0x0101, ms) continues to serve the HUD
+   indicator.
+
+3. **The player's `EntityRenderEntry` is mutated in-place** with the predicted position,
+   velocity, orientation, and angular rates before the snapshot is published to
+   `SimRenderBridge`. All other entities remain server-authoritative.
+
+4. **Reconciliation**: if the new predicted position diverges from the previous prediction by
+   more than `snap_threshold_m` (default 5 m), the correction is applied immediately (hard
+   snap). Otherwise it is blended at `blend_rate` per reconciliation for visual smoothness.
+   Both parameters are configurable via `[prediction]` in `user.toml`.
+
+**Known limitation**: server-side turbulence is not replicated client-side (requires a
+future seed-broadcast mechanism). The resulting small positional divergence is corrected each
+reconciliation. Server-side lag compensation / hit-detection rewind is a separate follow-on
+that builds on this infrastructure.
