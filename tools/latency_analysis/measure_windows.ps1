@@ -18,7 +18,7 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir  = $PSScriptRoot
 $RepoRoot   = (Resolve-Path (Join-Path $ScriptDir "..\..")).Path
-if (-not $BuildDir) { $BuildDir = Join-Path $RepoRoot "build\debug" }
+if (-not $BuildDir) { $BuildDir = Join-Path $RepoRoot "build\debug-msvc" }
 $ResultsDir = Join-Path $ScriptDir "results"
 $Timestamp  = (Get-Date -Format "yyyyMMddTHHmmssZ")
 $Report     = Join-Path $ResultsDir "windows_$Timestamp.json"
