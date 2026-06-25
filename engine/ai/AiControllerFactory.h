@@ -5,6 +5,7 @@
 #include "ai/EvadeController.h"
 #include "ai/LoiterController.h"
 #include "ai/PursuitController.h"
+#include "ai/StateMachineController.h" // exposes Condition helpers + StateMachineController
 #include "ai/WaypointController.h"
 #include "entity/EntityManager.h"
 
@@ -29,6 +30,10 @@ namespace fl::ai {
 //   pursuit   <entityIdx>
 //   evade     <entityIdx>
 //   break     <entityIdx> [rollDurationS]
+//
+// For composed multi-state behaviors (patrol-attack-retreat, escort, etc.)
+// build a StateMachineController directly in C++, or use LuaController for
+// script-driven behavior — neither is expressible as flat string args.
 inline std::unique_ptr<fl::IEntityController> createController(std::string_view behavior,
                                                                std::span<std::string_view> args,
                                                                const fl::EntityManager* entityManager = nullptr) {

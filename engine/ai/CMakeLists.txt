@@ -5,6 +5,7 @@ add_library(engine-ai STATIC
     PursuitController.cpp
     EvadeController.cpp
     BreakTurnController.cpp
+    StateMachineController.cpp
 )
 
 # Expose engine/ as the public include root so consumers can use

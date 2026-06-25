@@ -9,6 +9,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **ai**: `StateMachineController` in `engine-ai` sequences `IEntityController` child
+  controllers with named states, priority-ordered `Condition`-gated transitions, and
+  per-transition `minDwellSeconds` hysteresis. Each state's child is constructed fresh on
+  entry (resetting mutable state such as `BreakTurnController`'s phase timer). Built-in
+  condition helpers: `ThreatWithinRange`, `ThreatBeyondRange`, `HpBelow`,
+  `AnyEntityWithinRange`, `Always`, `And`, `Or`, `Not`. Enables patrol-attack-retreat and
+  other multi-phase AI behaviors without custom `IEntityController` subclasses per
+  scenario. `AiControllerFactory` now includes `StateMachineController.h` so all condition
+  helpers are available to factory callers (closes #397).
+
 - **network**: client-side prediction for the player's own entity: local `FlightIntegrator`
   applies inputs immediately before the server round-trip; each `MsgWorldSnapshot` triggers
   reconciliation — the integrator is reset to the server's authoritative state and the last

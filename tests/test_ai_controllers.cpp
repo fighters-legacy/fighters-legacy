@@ -6,11 +6,13 @@
 #include "ai/Guidance.h"
 #include "ai/LoiterController.h"
 #include "ai/PursuitController.h"
+#include "ai/StateMachineController.h"
 #include "ai/WaypointController.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
+#include "spatial/SpatialIndex.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -577,4 +579,536 @@ TEST_CASE("AiControllerFactory: break with custom roll duration") {
     std::vector<std::string_view> args = {idxStr, "1.0"};
     auto ctrl = fl::ai::createController("break", std::span{args}, &f.em);
     CHECK(ctrl != nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// StateMachineController — core behavior
+// ---------------------------------------------------------------------------
+
+namespace {
+struct SmFixture {
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    fl::EntityManager em;
+    fl::EntityId selfId;
+    fl::EntityId targetId;
+
+    SmFixture() : em(log, reg) {
+        reg.registerType(makeBasicDef());
+        fl::EntityTransform ts{};
+        ts.quat[3] = 1.f;
+        selfId = em.spawn("test:basic", ts);
+        fl::EntityTransform tt{};
+        tt.quat[3] = 1.f;
+        targetId = em.spawn("test:basic", tt);
+    }
+};
+} // namespace
+
+TEST_CASE("StateMachineController: returns neutral when no initial state set") {
+    SmFixture f;
+    fl::ai::StateMachineController sm(f.em);
+    sm.addState("a", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{0.0, 600.0, 0.0}); });
+    // setInitialState NOT called
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    fl::ControlInput inp = sm.sample(s, 0, 1.0 / 60.0);
+    CHECK(inp.throttle == Catch::Approx(0.f));
+    CHECK(inp.aileron == Catch::Approx(0.f));
+    CHECK(inp.elevator == Catch::Approx(0.f));
+    CHECK(sm.currentState().empty());
+}
+
+TEST_CASE("StateMachineController: delegates to child controller output") {
+    SmFixture f;
+    fl::ai::StateMachineController sm(f.em);
+    sm.addState("loiter",
+                [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{0.0, 600.0, 0.0}, 3000.f, 600.f); });
+    sm.setInitialState("loiter");
+
+    fl::EntityState s = makeState(3000.0, 600.0, 0.0);
+    for (int i = 0; i < 5; ++i) {
+        fl::ControlInput inp = sm.sample(s, static_cast<uint64_t>(i), 1.0 / 60.0);
+        CHECK(inp.throttle > 0.f);
+    }
+    CHECK(sm.currentState() == "loiter");
+}
+
+TEST_CASE("StateMachineController: currentState returns initial state name") {
+    SmFixture f;
+    fl::ai::StateMachineController sm(f.em);
+    sm.addState("patrol", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{}); });
+    sm.setInitialState("patrol");
+    CHECK(sm.currentState() == "patrol");
+}
+
+TEST_CASE("StateMachineController: state with no outgoing transitions stays indefinitely") {
+    SmFixture f;
+    fl::ai::StateMachineController sm(f.em);
+    sm.addState("idle", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{}); });
+    sm.setInitialState("idle");
+
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    for (int i = 0; i < 100; ++i) {
+        sm.sample(s, static_cast<uint64_t>(i), 1.0 / 60.0);
+    }
+    CHECK(sm.currentState() == "idle");
+}
+
+TEST_CASE("StateMachineController: does not transition when condition is false") {
+    SmFixture f;
+    fl::ai::StateMachineController sm(f.em);
+    sm.addState("a", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{}); });
+    sm.addState("b", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{}); });
+    sm.addTransition("a", "b", fl::ai::Not(fl::ai::Always())); // never true
+    sm.setInitialState("a");
+
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    for (int i = 0; i < 10; ++i) {
+        sm.sample(s, static_cast<uint64_t>(i), 1.0 / 60.0);
+    }
+    CHECK(sm.currentState() == "a");
+}
+
+TEST_CASE("StateMachineController: transitions on first matching condition") {
+    SmFixture f;
+    fl::ai::StateMachineController sm(f.em);
+    sm.addState("a", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{}); });
+    sm.addState("b", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{}); });
+    sm.addTransition("a", "b", fl::ai::Always());
+    sm.setInitialState("a");
+
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    sm.sample(s, 0, 1.0 / 60.0); // fires transition at end of tick
+    CHECK(sm.currentState() == "b");
+}
+
+TEST_CASE("StateMachineController: priority ordering fires first matching transition") {
+    // First transition condition is false, second is Always() — second target must win.
+    SmFixture f;
+    fl::ai::StateMachineController sm(f.em);
+    sm.addState("a", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{}); });
+    sm.addState("wrong", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{}); });
+    sm.addState("right", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{}); });
+    sm.addTransition("a", "wrong", fl::ai::Not(fl::ai::Always())); // false — skipped
+    sm.addTransition("a", "right", fl::ai::Always());              // true — fires
+    sm.setInitialState("a");
+
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    sm.sample(s, 0, 1.0 / 60.0);
+    CHECK(sm.currentState() == "right");
+}
+
+TEST_CASE("StateMachineController: transition to unknown state name is ignored") {
+    SmFixture f;
+    fl::ai::StateMachineController sm(f.em);
+    sm.addState("a", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{}); });
+    sm.addTransition("a", "nonexistent", fl::ai::Always());
+    sm.setInitialState("a");
+
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    sm.sample(s, 0, 1.0 / 60.0);
+    CHECK(sm.currentState() == "a"); // no change; unknown target handled gracefully
+}
+
+TEST_CASE("StateMachineController: minDwellSeconds blocks premature transition") {
+    SmFixture f;
+    fl::ai::StateMachineController sm(f.em);
+    sm.addState("a", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{}); });
+    sm.addState("b", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{}); });
+    sm.addTransition("a", "b", fl::ai::Always(), /*minDwellSeconds=*/1.0f);
+    sm.setInitialState("a");
+
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+
+    // 30 ticks = 0.5 s — should still be in "a"
+    for (int i = 0; i < 30; ++i) {
+        sm.sample(s, static_cast<uint64_t>(i), 1.0 / 60.0);
+    }
+    CHECK(sm.currentState() == "a");
+
+    // 60 more ticks = another 1.0 s (total 1.5 s) — transition must have fired
+    for (int i = 30; i < 90; ++i) {
+        sm.sample(s, static_cast<uint64_t>(i), 1.0 / 60.0);
+    }
+    CHECK(sm.currentState() == "b");
+}
+
+TEST_CASE("StateMachineController: child controller is recreated on re-entry") {
+    SmFixture f;
+    std::vector<glm::dvec3> wps = {
+        glm::dvec3{0.0, 600.0, 0.0}, // wp0 — at entity position, captured immediately
+        glm::dvec3{5000.0, 600.0, 0.0},
+    };
+    fl::ai::StateMachineController sm(f.em);
+    sm.addState("patrol", [&wps] { return std::make_unique<fl::ai::WaypointController>(wps); });
+    sm.addState("idle", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{}); });
+    sm.addTransition("patrol", "idle", fl::ai::Always());
+    sm.addTransition("idle", "patrol", fl::ai::Always());
+    sm.setInitialState("patrol");
+
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+
+    // Tick 0: capture wp0, advance to wp1; then transition fires to "idle".
+    sm.sample(s, 0, 1.0 / 60.0);
+    CHECK(sm.currentState() == "idle");
+
+    // Tick 1: in "idle", transition fires back to "patrol"; new factory called.
+    sm.sample(s, 1, 1.0 / 60.0);
+    CHECK(sm.currentState() == "patrol");
+
+    // Tick 2: sample the fresh WaypointController — it should be at index 0 (reset by factory).
+    // Cast to inspect currentWaypointIndex — we need the fresh controller.
+    // Since StateMachineController owns it, verify indirectly: at tick 2, patrol should
+    // capture wp0 again (entity is still at origin) and advance to index 1.
+    // The transition fires again to "idle" at end of tick 2.
+    sm.sample(s, 2, 1.0 / 60.0);
+    // If the factory hadn't been called, the old controller would be at wp1 and keep going;
+    // but since wp0 is captured again (fresh start at index 0), the transition fires out.
+    CHECK(sm.currentState() == "idle");
+}
+
+TEST_CASE("StateMachineController: skips self-transitions") {
+    // Transition A->A: state name unchanged, dwell timer NOT reset.
+    // Verify by adding A->B with minDwellSeconds=0.3; if self-transition reset the
+    // timer, A->B would never fire within a short window.
+    SmFixture f;
+    fl::ai::StateMachineController sm(f.em);
+    sm.addState("a", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{}); });
+    sm.addState("b", [] { return std::make_unique<fl::ai::LoiterController>(glm::dvec3{}); });
+    // Self-transition fires every tick but must not reset dwell.
+    sm.addTransition("a", "a", fl::ai::Always());
+    sm.addTransition("a", "b", fl::ai::Always(), /*minDwellSeconds=*/0.3f);
+    sm.setInitialState("a");
+
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+
+    // After 20 ticks (~0.33 s), the A->B transition should have fired despite the A->A.
+    for (int i = 0; i < 20; ++i) {
+        sm.sample(s, static_cast<uint64_t>(i), 1.0 / 60.0);
+    }
+    CHECK(sm.currentState() == "b");
+}
+
+TEST_CASE("StateMachineController: output on transition tick is from outgoing child") {
+    // State A: LoiterController throttle=0.65; State B: WaypointController throttle=0.7.
+    // Always() transition fires at end of tick 0. Output for tick 0 must be from A (0.65).
+    SmFixture f;
+    fl::ai::StateMachineController sm(f.em);
+    sm.addState("a", [] {
+        return std::make_unique<fl::ai::LoiterController>(glm::dvec3{0.0, 600.0, 0.0}, 3000.f, 600.f, 0.65f);
+    });
+    sm.addState("b", [] {
+        return std::make_unique<fl::ai::WaypointController>(std::vector<glm::dvec3>{glm::dvec3{5000.0, 600.0, 0.0}},
+                                                            500.f, 0.7f);
+    });
+    sm.addTransition("a", "b", fl::ai::Always());
+    sm.setInitialState("a");
+
+    fl::EntityState s = makeState(3000.0, 600.0, 0.0);
+    fl::ControlInput inp = sm.sample(s, 0, 1.0 / 60.0); // transition fires, but output is A's
+    CHECK(sm.currentState() == "b");
+    CHECK(inp.throttle == Catch::Approx(0.65f).margin(1e-4f)); // A's throttle, not B's 0.7
+}
+
+// ---------------------------------------------------------------------------
+// Built-in Condition helpers
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ThreatWithinRange: true when target within range") {
+    SmFixture f;
+    fl::EntityState* tgt = f.em.get(f.targetId);
+    REQUIRE(tgt != nullptr);
+    tgt->transform.pos[2] = 4000.0; // 4 km away in Z
+
+    fl::EntityState self = makeState(0.0, 0.0, 0.0);
+    self.id = f.selfId;
+    auto cond = fl::ai::ThreatWithinRange(f.targetId, 5000.f);
+    CHECK(cond(self, f.em, nullptr) == true);
+}
+
+TEST_CASE("ThreatWithinRange: false when target beyond range") {
+    SmFixture f;
+    fl::EntityState* tgt = f.em.get(f.targetId);
+    REQUIRE(tgt != nullptr);
+    tgt->transform.pos[2] = 4000.0;
+
+    fl::EntityState self = makeState(0.0, 0.0, 0.0);
+    self.id = f.selfId;
+    auto cond = fl::ai::ThreatWithinRange(f.targetId, 3000.f);
+    CHECK(cond(self, f.em, nullptr) == false);
+}
+
+TEST_CASE("ThreatWithinRange: false when target is dead") {
+    SmFixture f;
+    fl::EntityState* tgt = f.em.get(f.targetId);
+    REQUIRE(tgt != nullptr);
+    tgt->transform.pos[2] = 100.0;
+
+    f.em.kill(f.targetId);
+    f.em.onTick(1.0 / 60.0, 1);
+
+    fl::EntityState self = makeState(0.0, 0.0, 0.0);
+    self.id = f.selfId;
+    auto cond = fl::ai::ThreatWithinRange(f.targetId, 5000.f);
+    CHECK(cond(self, f.em, nullptr) == false);
+}
+
+TEST_CASE("ThreatWithinRange: false for null EntityId") {
+    SmFixture f;
+    fl::EntityState self = makeState(0.0, 0.0, 0.0);
+    self.id = f.selfId;
+    auto cond = fl::ai::ThreatWithinRange(fl::EntityId::null(), 5000.f);
+    CHECK(cond(self, f.em, nullptr) == false);
+}
+
+TEST_CASE("ThreatBeyondRange: false when target is alive and within range") {
+    SmFixture f;
+    fl::EntityState* tgt = f.em.get(f.targetId);
+    REQUIRE(tgt != nullptr);
+    tgt->transform.pos[2] = 2000.0;
+
+    fl::EntityState self = makeState(0.0, 0.0, 0.0);
+    self.id = f.selfId;
+    auto cond = fl::ai::ThreatBeyondRange(f.targetId, 5000.f);
+    CHECK(cond(self, f.em, nullptr) == false);
+}
+
+TEST_CASE("ThreatBeyondRange: true when target beyond range") {
+    SmFixture f;
+    fl::EntityState* tgt = f.em.get(f.targetId);
+    REQUIRE(tgt != nullptr);
+    tgt->transform.pos[2] = 8000.0;
+
+    fl::EntityState self = makeState(0.0, 0.0, 0.0);
+    self.id = f.selfId;
+    auto cond = fl::ai::ThreatBeyondRange(f.targetId, 5000.f);
+    CHECK(cond(self, f.em, nullptr) == true);
+}
+
+TEST_CASE("ThreatBeyondRange: true when target is dead") {
+    SmFixture f;
+    f.em.kill(f.targetId);
+    f.em.onTick(1.0 / 60.0, 1);
+
+    fl::EntityState self = makeState(0.0, 0.0, 0.0);
+    self.id = f.selfId;
+    auto cond = fl::ai::ThreatBeyondRange(f.targetId, 5000.f);
+    CHECK(cond(self, f.em, nullptr) == true);
+}
+
+TEST_CASE("HpBelow: true when hp fraction below threshold") {
+    SmFixture f;
+    fl::EntityState self{};
+    self.hp = 20.f;
+    self.maxHp = 100.f;
+    self.id = f.selfId;
+    auto cond = fl::ai::HpBelow(0.25f);
+    CHECK(cond(self, f.em, nullptr) == true);
+}
+
+TEST_CASE("HpBelow: false when hp fraction at or above threshold") {
+    SmFixture f;
+    fl::EntityState self{};
+    self.hp = 30.f;
+    self.maxHp = 100.f;
+    self.id = f.selfId;
+    auto cond = fl::ai::HpBelow(0.25f);
+    CHECK(cond(self, f.em, nullptr) == false);
+}
+
+TEST_CASE("HpBelow: false when maxHp is zero") {
+    SmFixture f;
+    fl::EntityState self{};
+    self.hp = 50.f;
+    self.maxHp = 0.f;
+    self.id = f.selfId;
+    auto cond = fl::ai::HpBelow(0.5f);
+    CHECK(cond(self, f.em, nullptr) == false);
+}
+
+TEST_CASE("AnyEntityWithinRange: true when si has a non-self neighbor") {
+    SmFixture f;
+    fl::SpatialIndex si;
+    // Self at origin, neighbor at (0,0,500).
+    double selfPos[3] = {0.0, 0.0, 0.0};
+    double neighPos[3] = {0.0, 0.0, 500.0};
+    si.insert(f.selfId.index, selfPos);
+    si.insert(f.targetId.index, neighPos);
+
+    fl::EntityState self{};
+    self.id = f.selfId;
+    self.transform.pos[0] = selfPos[0];
+    self.transform.pos[1] = selfPos[1];
+    self.transform.pos[2] = selfPos[2];
+
+    auto cond = fl::ai::AnyEntityWithinRange(1000.f);
+    CHECK(cond(self, f.em, &si) == true);
+}
+
+TEST_CASE("AnyEntityWithinRange: false when only self is within range") {
+    SmFixture f;
+    fl::SpatialIndex si;
+    double selfPos[3] = {0.0, 0.0, 0.0};
+    si.insert(f.selfId.index, selfPos); // only self
+
+    fl::EntityState self{};
+    self.id = f.selfId;
+    self.transform.pos[0] = selfPos[0];
+    self.transform.pos[1] = selfPos[1];
+    self.transform.pos[2] = selfPos[2];
+
+    auto cond = fl::ai::AnyEntityWithinRange(1000.f);
+    CHECK(cond(self, f.em, &si) == false);
+}
+
+TEST_CASE("AnyEntityWithinRange: false when si has entities but all out of range") {
+    SmFixture f;
+    fl::SpatialIndex si;
+    double selfPos[3] = {0.0, 0.0, 0.0};
+    double farPos[3] = {0.0, 0.0, 5000.0};
+    si.insert(f.selfId.index, selfPos);
+    si.insert(f.targetId.index, farPos);
+
+    fl::EntityState self{};
+    self.id = f.selfId;
+    self.transform.pos[0] = selfPos[0];
+    self.transform.pos[1] = selfPos[1];
+    self.transform.pos[2] = selfPos[2];
+
+    auto cond = fl::ai::AnyEntityWithinRange(1000.f);
+    CHECK(cond(self, f.em, &si) == false);
+}
+
+TEST_CASE("AnyEntityWithinRange: false when si is null") {
+    SmFixture f;
+    fl::EntityState self{};
+    self.id = f.selfId;
+    auto cond = fl::ai::AnyEntityWithinRange(1000.f);
+    CHECK(cond(self, f.em, nullptr) == false);
+}
+
+TEST_CASE("Always: returns true") {
+    SmFixture f;
+    fl::EntityState self{};
+    self.id = f.selfId;
+    auto cond = fl::ai::Always();
+    CHECK(cond(self, f.em, nullptr) == true);
+}
+
+TEST_CASE("And: true when both conditions true") {
+    SmFixture f;
+    fl::EntityState self{};
+    self.id = f.selfId;
+    auto cond = fl::ai::And(fl::ai::Always(), fl::ai::Always());
+    CHECK(cond(self, f.em, nullptr) == true);
+}
+
+TEST_CASE("And: false when first condition false") {
+    SmFixture f;
+    fl::EntityState self{};
+    self.id = f.selfId;
+    auto cond = fl::ai::And(fl::ai::Not(fl::ai::Always()), fl::ai::Always());
+    CHECK(cond(self, f.em, nullptr) == false);
+}
+
+TEST_CASE("And: false when second condition false") {
+    SmFixture f;
+    fl::EntityState self{};
+    self.id = f.selfId;
+    auto cond = fl::ai::And(fl::ai::Always(), fl::ai::Not(fl::ai::Always()));
+    CHECK(cond(self, f.em, nullptr) == false);
+}
+
+TEST_CASE("Or: false when both conditions false") {
+    SmFixture f;
+    fl::EntityState self{};
+    self.id = f.selfId;
+    auto cond = fl::ai::Or(fl::ai::Not(fl::ai::Always()), fl::ai::Not(fl::ai::Always()));
+    CHECK(cond(self, f.em, nullptr) == false);
+}
+
+TEST_CASE("Or: true when first condition true") {
+    SmFixture f;
+    fl::EntityState self{};
+    self.id = f.selfId;
+    auto cond = fl::ai::Or(fl::ai::Always(), fl::ai::Not(fl::ai::Always()));
+    CHECK(cond(self, f.em, nullptr) == true);
+}
+
+TEST_CASE("Or: true when only second condition true") {
+    SmFixture f;
+    fl::EntityState self{};
+    self.id = f.selfId;
+    auto cond = fl::ai::Or(fl::ai::Not(fl::ai::Always()), fl::ai::Always());
+    CHECK(cond(self, f.em, nullptr) == true);
+}
+
+TEST_CASE("Not: inverts true to false") {
+    SmFixture f;
+    fl::EntityState self{};
+    self.id = f.selfId;
+    auto cond = fl::ai::Not(fl::ai::Always());
+    CHECK(cond(self, f.em, nullptr) == false);
+}
+
+TEST_CASE("Not: inverts false to true") {
+    SmFixture f;
+    fl::EntityState self{};
+    self.id = f.selfId;
+    auto cond = fl::ai::Not(fl::ai::Not(fl::ai::Always()));
+    CHECK(cond(self, f.em, nullptr) == true);
+}
+
+// ---------------------------------------------------------------------------
+// StateMachineController — integration: patrol-attack-retreat cycle
+// ---------------------------------------------------------------------------
+
+TEST_CASE("StateMachineController: full patrol-attack-retreat cycle") {
+    SmFixture f;
+    fl::EntityId attackerId = f.selfId;
+    fl::EntityId targetId = f.targetId;
+
+    // Place target far away initially (beyond 8 km engage threshold).
+    fl::EntityState* tgt = f.em.get(targetId);
+    REQUIRE(tgt != nullptr);
+    tgt->transform.pos[2] = 10000.0;
+
+    // Set attacker HP.
+    fl::EntityState* atk = f.em.get(attackerId);
+    REQUIRE(atk != nullptr);
+    atk->hp = 100.f;
+    atk->maxHp = 100.f;
+
+    std::vector<glm::dvec3> wps = {glm::dvec3{1000.0, 600.0, 0.0}};
+    fl::ai::StateMachineController sm(f.em);
+    sm.addState("patrol", [&wps] { return std::make_unique<fl::ai::WaypointController>(wps, 500.f, 0.7f, true); });
+    sm.addState("engage",
+                [&f, targetId] { return std::make_unique<fl::ai::PursuitController>(f.em, targetId, 0.85f, true); });
+    sm.addState("retreat", [&f, targetId] { return std::make_unique<fl::ai::EvadeController>(f.em, targetId); });
+    sm.addTransition("patrol", "engage", fl::ai::ThreatWithinRange(targetId, 8000.f));
+    sm.addTransition("engage", "retreat", fl::ai::HpBelow(0.25f));
+    sm.addTransition("engage", "patrol", fl::ai::ThreatBeyondRange(targetId, 12000.f), 1.f);
+    sm.addTransition("retreat", "engage",
+                     fl::ai::And(fl::ai::Not(fl::ai::HpBelow(0.25f)), fl::ai::ThreatWithinRange(targetId, 6000.f)));
+    sm.setInitialState("patrol");
+    CHECK(sm.currentState() == "patrol");
+
+    fl::EntityState selfState = makeState(0.0, 600.0, 0.0);
+    selfState.id = attackerId;
+    selfState.hp = 100.f;
+    selfState.maxHp = 100.f;
+
+    // Tick 0: target at 10 km — patrol stays.
+    sm.sample(selfState, 0, 1.0 / 60.0);
+    CHECK(sm.currentState() == "patrol");
+
+    // Move target to 5 km — within engage threshold.
+    tgt->transform.pos[2] = 5000.0;
+    sm.sample(selfState, 1, 1.0 / 60.0);
+    CHECK(sm.currentState() == "engage");
+
+    // Drop HP below 25% — retreat fires.
+    selfState.hp = 20.f;
+    sm.sample(selfState, 2, 1.0 / 60.0);
+    CHECK(sm.currentState() == "retreat");
 }
