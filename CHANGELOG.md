@@ -9,6 +9,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: RCON drain-deadline unit tests via extracted `checkAndFireDrains` helper;
+  `DrainClientInfo` base struct in `server/fl-server/RconDrainHelper.h` allows tests to exercise
+  the drain firing path without real TCP sockets (#434)
+
 - **ai**: five advanced ACM controllers in `engine-ai`: `LeadPursuitController`
   (proportional navigation — steers toward a predicted intercept point rather than the
   target's current position; `navGain` controls lead scaling: 0.0=pure pursuit,
