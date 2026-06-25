@@ -3,8 +3,13 @@
 
 #include "ai/BreakTurnController.h"
 #include "ai/EvadeController.h"
+#include "ai/HighYoYoController.h"
+#include "ai/ImmelmannController.h"
+#include "ai/LeadPursuitController.h"
 #include "ai/LoiterController.h"
+#include "ai/LowYoYoController.h"
 #include "ai/PursuitController.h"
+#include "ai/SplitSController.h"
 #include "ai/StateMachineController.h" // exposes Condition helpers + StateMachineController
 #include "ai/WaypointController.h"
 #include "entity/EntityManager.h"
@@ -21,15 +26,20 @@
 namespace fl::ai {
 
 // Creates an AI controller from a behavior name and its arguments.
-// entityManager is required for "pursuit", "evade", and "break" behaviors.
-// Returns nullptr on unknown behavior, parse error, or missing entity.
+// entityManager is required for "pursuit", "evade", "break", "lead", "high_yo_yo", and
+// "low_yo_yo" behaviors. Returns nullptr on unknown behavior, parse error, or missing entity.
 //
 // Behaviors and their args:
-//   loiter   [cx cy cz [radius_m [alt_m [throttle [cw|ccw]]]]]
-//   waypoint  x1 y1 z1 [x2 y2 z2 ...] [--loop]
-//   pursuit   <entityIdx>
-//   evade     <entityIdx>
-//   break     <entityIdx> [rollDurationS]
+//   loiter      [cx cy cz [radius_m [alt_m [throttle [cw|ccw]]]]]
+//   waypoint    x1 y1 z1 [x2 y2 z2 ...] [--loop]
+//   pursuit     <entityIdx>
+//   evade       <entityIdx>
+//   break       <entityIdx> [rollDurationS]
+//   lead        <entityIdx> [navGain]
+//   immelmann   [pullDurationS] [rollDurationS]
+//   split_s     [rollDurationS] [pullDurationS]
+//   high_yo_yo  <entityIdx> [climbDurationS] [reacquireDurationS]
+//   low_yo_yo   <entityIdx> [diveDurationS] [pullDurationS]
 //
 // For composed multi-state behaviors (patrol-attack-retreat, escort, etc.)
 // build a StateMachineController directly in C++, or use LuaController for
@@ -197,6 +207,127 @@ inline std::unique_ptr<fl::IEntityController> createController(std::string_view 
             rollDur = static_cast<float>(d2);
         }
         return std::make_unique<BreakTurnController>(*entityManager, id, rollDur);
+    }
+
+    // -----------------------------------------------------------------------
+    // lead  <entityIdx> [navGain]
+    // -----------------------------------------------------------------------
+    if (behavior == "lead") {
+        if (args.empty() || !entityManager)
+            return nullptr;
+        uint32_t idx{};
+        if (!parseUint32(args[0], idx))
+            return nullptr;
+        fl::EntityId id = findEntityById(idx);
+        if (!id.valid())
+            return nullptr;
+
+        float navGain = 1.0f;
+        if (args.size() >= 2) {
+            double d2 = 0.0;
+            if (!parseDouble(args[1], d2))
+                return nullptr;
+            navGain = static_cast<float>(d2);
+        }
+        return std::make_unique<LeadPursuitController>(*entityManager, id, navGain);
+    }
+
+    // -----------------------------------------------------------------------
+    // immelmann  [pullDurationS] [rollDurationS]
+    // -----------------------------------------------------------------------
+    if (behavior == "immelmann") {
+        float pullDur = 4.0f;
+        float rollDur = 1.5f;
+        double d = 0.0;
+        if (args.size() >= 1) {
+            if (!parseDouble(args[0], d))
+                return nullptr;
+            pullDur = static_cast<float>(d);
+        }
+        if (args.size() >= 2) {
+            if (!parseDouble(args[1], d))
+                return nullptr;
+            rollDur = static_cast<float>(d);
+        }
+        return std::make_unique<ImmelmannController>(pullDur, rollDur);
+    }
+
+    // -----------------------------------------------------------------------
+    // split_s  [rollDurationS] [pullDurationS]
+    // -----------------------------------------------------------------------
+    if (behavior == "split_s") {
+        float rollDur = 1.5f;
+        float pullDur = 4.0f;
+        double d = 0.0;
+        if (args.size() >= 1) {
+            if (!parseDouble(args[0], d))
+                return nullptr;
+            rollDur = static_cast<float>(d);
+        }
+        if (args.size() >= 2) {
+            if (!parseDouble(args[1], d))
+                return nullptr;
+            pullDur = static_cast<float>(d);
+        }
+        return std::make_unique<SplitSController>(rollDur, pullDur);
+    }
+
+    // -----------------------------------------------------------------------
+    // high_yo_yo  <entityIdx> [climbDurationS] [reacquireDurationS]
+    // -----------------------------------------------------------------------
+    if (behavior == "high_yo_yo") {
+        if (args.empty() || !entityManager)
+            return nullptr;
+        uint32_t idx{};
+        if (!parseUint32(args[0], idx))
+            return nullptr;
+        fl::EntityId id = findEntityById(idx);
+        if (!id.valid())
+            return nullptr;
+
+        float climbDur = 2.5f;
+        float reacquireDur = 3.0f;
+        double d = 0.0;
+        if (args.size() >= 2) {
+            if (!parseDouble(args[1], d))
+                return nullptr;
+            climbDur = static_cast<float>(d);
+        }
+        if (args.size() >= 3) {
+            if (!parseDouble(args[2], d))
+                return nullptr;
+            reacquireDur = static_cast<float>(d);
+        }
+        return std::make_unique<HighYoYoController>(*entityManager, id, climbDur, reacquireDur);
+    }
+
+    // -----------------------------------------------------------------------
+    // low_yo_yo  <entityIdx> [diveDurationS] [pullDurationS]
+    // -----------------------------------------------------------------------
+    if (behavior == "low_yo_yo") {
+        if (args.empty() || !entityManager)
+            return nullptr;
+        uint32_t idx{};
+        if (!parseUint32(args[0], idx))
+            return nullptr;
+        fl::EntityId id = findEntityById(idx);
+        if (!id.valid())
+            return nullptr;
+
+        float diveDur = 1.5f;
+        float pullDur = 2.5f;
+        double d = 0.0;
+        if (args.size() >= 2) {
+            if (!parseDouble(args[1], d))
+                return nullptr;
+            diveDur = static_cast<float>(d);
+        }
+        if (args.size() >= 3) {
+            if (!parseDouble(args[2], d))
+                return nullptr;
+            pullDur = static_cast<float>(d);
+        }
+        return std::make_unique<LowYoYoController>(*entityManager, id, diveDur, pullDur);
     }
 
     return nullptr;

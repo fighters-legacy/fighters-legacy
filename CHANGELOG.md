@@ -9,6 +9,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **ai**: five advanced ACM controllers in `engine-ai`: `LeadPursuitController`
+  (proportional navigation — steers toward a predicted intercept point rather than the
+  target's current position; `navGain` controls lead scaling: 0.0=pure pursuit,
+  1.0=first-order TTC lead), `ImmelmannController` (half-loop + roll to reverse heading
+  with altitude gain), `SplitSController` (roll inverted + pull-through for altitude-trading
+  reversal; deploys `ControlInput::speedbrake` on roll-in to limit entry airspeed),
+  `HighYoYoController` (climb-away energy-management overshoot correction; banks away from
+  target in Climb phase, back toward target in Reacquire phase), `LowYoYoController`
+  (dive-and-cut-corner to close on a turning target; unloads in Dive phase then pulls up in
+  Pull phase). All five registered in `AiControllerFactory` (`lead`, `immelmann`, `split_s`,
+  `high_yo_yo`, `low_yo_yo`) and composable via `StateMachineController` (closes #396).
+
 - **ai**: `StateMachineController` in `engine-ai` sequences `IEntityController` child
   controllers with named states, priority-ordered `Condition`-gated transitions, and
   per-transition `minDwellSeconds` hysteresis. Each state's child is constructed fresh on
