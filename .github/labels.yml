@@ -1,47 +1,67 @@
 # Component labels
 - name: "component: engine"
-  color: "0075ca"
+  color: "0D52A0"
   description: "Core engine / HAL / SDL3 windowing"
 
 - name: "component: renderer"
-  color: "0075ca"
+  color: "3D9BD6"
   description: "Vulkan renderer backend"
 
 - name: "component: audio"
-  color: "0075ca"
+  color: "DA5697"
   description: "OpenAL Soft audio system"
 
 - name: "component: network"
-  color: "0075ca"
+  color: "1D76DB"
   description: "ENet networking layer"
 
+- name: "component: server"
+  color: "478F6E"
+  description: "fl-server binary"
+
 - name: "component: content"
-  color: "0075ca"
+  color: "238636"
   description: "IContentPack / ModLoader / AssetManager"
 
 - name: "component: flight"
-  color: "0075ca"
+  color: "0E7FC0"
   description: "Flight model"
 
 - name: "component: ai"
-  color: "0075ca"
+  color: "8957E5"
   description: "Lua AI runtime"
 
+- name: "component: script"
+  color: "5A4FCF"
+  description: "Lua AI sandbox (LuaSandbox / LuaController)"
+
+- name: "component: entity"
+  color: "546E7A"
+  description: "Entity pool / damage model / EntityManager"
+
+- name: "component: terrain"
+  color: "A05C34"
+  description: "TerrainStreamer / chunk pipeline"
+
 - name: "component: mission"
-  color: "0075ca"
+  color: "D29922"
   description: "Mission / campaign loader"
 
+- name: "component: tools"
+  color: "C84B31"
+  description: "Developer utilities (validate-*, blender_gen, gen_terrain_chunks)"
+
 - name: "component: build"
-  color: "0075ca"
+  color: "6B737C"
   description: "CMake build system"
 
 - name: "component: ci"
-  color: "0075ca"
+  color: "8B949E"
   description: "GitHub Actions / CI/CD"
 
 - name: "component: docs"
-  color: "0075ca"
-  description: "Documentation"
+  color: "BDC1C6"
+  description: "Touches docs/ or modding guide files"
 
 # Type labels
 - name: "bug"
@@ -69,6 +89,10 @@
   color: "cfd3d7"
   description: "This issue or pull request already exists"
 
+- name: "invalid"
+  color: "e4e669"
+  description: "This doesn't seem right"
+
 - name: "wontfix"
   color: "ffffff"
   description: "This will not be worked on"
@@ -88,6 +112,18 @@
 - name: "release"
   color: "0e8a16"
   description: "Release preparation or tracking"
+
+- name: "backlog"
+  color: "cfd3d7"
+  description: "No milestone; deferred items"
+
+- name: "dependencies"
+  color: "0366d6"
+  description: "Pull requests that update a dependency file"
+
+- name: "github_actions"
+  color: "8B949E"
+  description: "Pull requests that update GitHub Actions code"
 
 # RFC status labels
 - name: "status: under-discussion"
