@@ -1112,3 +1112,661 @@ TEST_CASE("StateMachineController: full patrol-attack-retreat cycle") {
     sm.sample(selfState, 2, 1.0 / 60.0);
     CHECK(sm.currentState() == "retreat");
 }
+
+// ---------------------------------------------------------------------------
+// LeadPursuitController
+// ---------------------------------------------------------------------------
+
+namespace {
+struct PursuitFixture {
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    fl::EntityManager em;
+    fl::EntityId attackerId;
+    fl::EntityId targetId;
+
+    PursuitFixture() : em(log, reg) {
+        reg.registerType(makeBasicDef());
+        fl::EntityTransform ta{};
+        ta.quat[3] = 1.f; // identity: forward = +X
+        attackerId = em.spawn("test:basic", ta);
+        fl::EntityTransform tt{};
+        tt.pos[2] = 2000.0; // 2 km to the right (+Z)
+        tt.quat[3] = 1.f;
+        targetId = em.spawn("test:basic", tt);
+    }
+};
+} // namespace
+
+TEST_CASE("LeadPursuitController: navGain=0 gives same aileron sign as PursuitController") {
+    // With navGain=0 the lead point equals target.pos — identical to pure pursuit.
+    PursuitFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LeadPursuitController lead(f.em, f.targetId, /*navGain=*/0.f);
+    fl::ai::PursuitController pure(f.em, f.targetId);
+
+    fl::ControlInput leadInp = lead.sample(*as, 0, 1.0 / 60.0);
+    fl::ControlInput pureInp = pure.sample(*as, 0, 1.0 / 60.0);
+
+    // Both should bank right (target is at +Z).
+    CHECK(leadInp.aileron > 0.f);
+    CHECK(pureInp.aileron > 0.f);
+}
+
+TEST_CASE("LeadPursuitController: navGain=1 shifts aim ahead of a moving target") {
+    // Target moves in +Z — with navGain=1 the lead point is further in +Z than target.pos,
+    // so aileron command should be at least as large as pure pursuit for the same geometry.
+    PursuitFixture f;
+    fl::EntityState* tgt = f.em.get(f.targetId);
+    REQUIRE(tgt != nullptr);
+    tgt->transform.vel[2] = 100.f; // target moving right at 100 m/s
+
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LeadPursuitController lead(f.em, f.targetId, /*navGain=*/1.f);
+    fl::ai::PursuitController pure(f.em, f.targetId);
+
+    fl::ControlInput leadInp = lead.sample(*as, 0, 1.0 / 60.0);
+    fl::ControlInput pureInp = pure.sample(*as, 0, 1.0 / 60.0);
+
+    // Lead aims further right than pure pursuit.
+    CHECK(leadInp.aileron >= pureInp.aileron);
+    CHECK(leadInp.aileron > 0.f);
+}
+
+TEST_CASE("LeadPursuitController: co-located self and target does not crash") {
+    // dist == 0: no lead computation; aims at target.pos (identical to own.pos); no NaN.
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    reg.registerType(makeBasicDef());
+    fl::EntityManager em(log, reg);
+
+    fl::EntityTransform t{};
+    t.quat[3] = 1.f;
+    fl::EntityId attackerId = em.spawn("test:basic", t);
+    fl::EntityId targetId = em.spawn("test:basic", t); // same position
+
+    fl::ai::LeadPursuitController ctrl(em, targetId, 1.f);
+    const fl::EntityState* as = em.get(attackerId);
+    REQUIRE(as != nullptr);
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    // Controls may be anything non-NaN; just verify no crash and throttle is set.
+    CHECK(ctrl.sample(*as, 1, 1.0 / 60.0).throttle > 0.f);
+    (void)inp; // suppress unused warning
+}
+
+TEST_CASE("LeadPursuitController: zero relative velocity clamps TTC floor") {
+    // Self and target stationary (vel = 0): closingSpeed <= 0 → clamped to 10 m/s; no divide by zero.
+    PursuitFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LeadPursuitController ctrl(f.em, f.targetId, 1.f);
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(inp.throttle > 0.f);
+    CHECK(inp.aileron > 0.f); // still steers toward target
+}
+
+TEST_CASE("LeadPursuitController: returns neutral when target is dead") {
+    PursuitFixture f;
+    f.em.kill(f.targetId);
+    f.em.onTick(1.0 / 60.0, 1);
+
+    fl::ai::LeadPursuitController ctrl(f.em, f.targetId);
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+    fl::ControlInput inp = ctrl.sample(*as, 1, 1.0 / 60.0);
+
+    CHECK(inp.throttle == Catch::Approx(0.f));
+    CHECK(inp.aileron == Catch::Approx(0.f));
+}
+
+TEST_CASE("LeadPursuitController: returns neutral for invalid EntityId") {
+    PursuitFixture f;
+    fl::ai::LeadPursuitController ctrl(f.em, fl::EntityId::null());
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(inp.throttle == Catch::Approx(0.f));
+    CHECK(inp.aileron == Catch::Approx(0.f));
+}
+
+TEST_CASE("LeadPursuitController: setTarget flips aileron for opposite-side target") {
+    PursuitFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    // Spawn a second target on the left (-Z).
+    fl::EntityTransform tl{};
+    tl.pos[2] = -2000.0;
+    tl.quat[3] = 1.f;
+    fl::EntityId leftId = f.em.spawn("test:basic", tl);
+
+    fl::ai::LeadPursuitController ctrl(f.em, f.targetId); // right target → positive aileron
+    fl::ControlInput right = ctrl.sample(*as, 0, 1.0 / 60.0);
+    CHECK(right.aileron > 0.f);
+
+    ctrl.setTarget(leftId); // swap to left target → negative aileron
+    fl::ControlInput left = ctrl.sample(*as, 1, 1.0 / 60.0);
+    CHECK(left.aileron < 0.f);
+}
+
+TEST_CASE("LeadPursuitController: throttle and afterburner propagate from constructor") {
+    PursuitFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LeadPursuitController ctrl(f.em, f.targetId, 1.f, /*throttle=*/0.7f, /*useAfterburner=*/true);
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(inp.throttle == Catch::Approx(0.7f).margin(1e-5f));
+    CHECK(inp.afterburner == true);
+}
+
+// ---------------------------------------------------------------------------
+// ImmelmannController
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ImmelmannController: Pull phase has full elevator and afterburner") {
+    fl::ai::ImmelmannController ctrl;
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    fl::ControlInput inp = ctrl.sample(s, 0, 1.0 / 60.0); // well within Pull duration
+
+    CHECK(inp.elevator == Catch::Approx(1.f).margin(1e-5f));
+    CHECK(inp.throttle == Catch::Approx(1.f).margin(1e-5f));
+    CHECK(inp.afterburner == true);
+    CHECK(inp.aileron == Catch::Approx(0.f).margin(1e-5f));
+}
+
+TEST_CASE("ImmelmannController: partial dt stays in Pull phase") {
+    fl::ai::ImmelmannController ctrl(4.0f, 1.5f);
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    fl::ControlInput inp = ctrl.sample(s, 0, 2.0); // half of 4 s pull duration
+
+    CHECK(inp.elevator == Catch::Approx(1.f).margin(1e-5f));
+    CHECK(inp.aileron == Catch::Approx(0.f).margin(1e-5f));
+}
+
+TEST_CASE("ImmelmannController: transitions to Roll after Pull duration") {
+    fl::ai::ImmelmannController ctrl(4.0f, 1.5f);
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    fl::ControlInput inp = ctrl.sample(s, 0, 4.0); // exactly Pull duration → Roll
+
+    CHECK(inp.aileron > 0.f);
+    CHECK(inp.elevator == Catch::Approx(0.f).margin(1e-5f));
+    CHECK(inp.afterburner == true);
+}
+
+TEST_CASE("ImmelmannController: transitions to Done after Roll duration") {
+    fl::ai::ImmelmannController ctrl(4.0f, 1.5f);
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    ctrl.sample(s, 0, 4.0);                        // → Roll
+    fl::ControlInput inp = ctrl.sample(s, 1, 1.5); // → Done
+
+    CHECK(inp.elevator == Catch::Approx(0.f).margin(1e-5f));
+    CHECK(inp.aileron == Catch::Approx(0.f).margin(1e-5f));
+    CHECK(inp.throttle == Catch::Approx(0.f).margin(1e-5f));
+    CHECK(inp.afterburner == false);
+}
+
+TEST_CASE("ImmelmannController: Done phase returns neutral on repeated calls") {
+    fl::ai::ImmelmannController ctrl(4.0f, 1.5f);
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    ctrl.sample(s, 0, 4.0); // → Roll
+    ctrl.sample(s, 1, 1.5); // → Done
+
+    for (uint64_t i = 2; i < 5; ++i) {
+        fl::ControlInput inp = ctrl.sample(s, i, 1.0 / 60.0);
+        CHECK(inp.elevator == Catch::Approx(0.f).margin(1e-5f));
+        CHECK(inp.aileron == Catch::Approx(0.f).margin(1e-5f));
+        CHECK(inp.throttle == Catch::Approx(0.f).margin(1e-5f));
+    }
+}
+
+TEST_CASE("ImmelmannController: default-constructed timing produces expected phase sequence") {
+    fl::ai::ImmelmannController ctrl; // pullDuration=4.0, rollDuration=1.5
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+
+    // Pull phase: elevator up.
+    fl::ControlInput pull = ctrl.sample(s, 0, 0.1);
+    CHECK(pull.elevator > 0.f);
+
+    // Fast-forward to Roll.
+    ctrl.sample(s, 1, 4.0);
+    fl::ControlInput roll = ctrl.sample(s, 2, 0.1);
+    CHECK(roll.aileron > 0.f);
+    CHECK(roll.elevator == Catch::Approx(0.f).margin(1e-5f));
+}
+
+// ---------------------------------------------------------------------------
+// SplitSController
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SplitSController: Roll phase has aileron, speedbrake, and idle throttle") {
+    fl::ai::SplitSController ctrl;
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    fl::ControlInput inp = ctrl.sample(s, 0, 1.0 / 60.0);
+
+    CHECK(inp.aileron > 0.f);
+    CHECK(inp.speedbrake > 0.f); // explicit: speedbrake field is set
+    CHECK(inp.throttle == Catch::Approx(0.f).margin(1e-5f));
+    CHECK(inp.elevator == Catch::Approx(0.f).margin(1e-5f));
+}
+
+TEST_CASE("SplitSController: Roll phase elevator is neutral") {
+    fl::ai::SplitSController ctrl;
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    fl::ControlInput inp = ctrl.sample(s, 0, 0.5); // still in Roll (default 1.5 s)
+
+    CHECK(inp.elevator == Catch::Approx(0.f).margin(1e-5f));
+}
+
+TEST_CASE("SplitSController: transitions to Pull after Roll duration") {
+    fl::ai::SplitSController ctrl(1.5f, 4.0f);
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    fl::ControlInput inp = ctrl.sample(s, 0, 1.5); // → Pull
+
+    CHECK(inp.elevator == Catch::Approx(1.f).margin(1e-5f));
+    CHECK(inp.throttle == Catch::Approx(1.f).margin(1e-5f));
+    CHECK(inp.speedbrake == Catch::Approx(0.f).margin(1e-5f));
+}
+
+TEST_CASE("SplitSController: transitions to Done after Pull duration") {
+    fl::ai::SplitSController ctrl(1.5f, 4.0f);
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    ctrl.sample(s, 0, 1.5);                        // → Pull
+    fl::ControlInput inp = ctrl.sample(s, 1, 4.0); // → Done
+
+    CHECK(inp.elevator == Catch::Approx(0.f).margin(1e-5f));
+    CHECK(inp.aileron == Catch::Approx(0.f).margin(1e-5f));
+    CHECK(inp.throttle == Catch::Approx(0.f).margin(1e-5f));
+    CHECK(inp.speedbrake == Catch::Approx(0.f).margin(1e-5f));
+}
+
+TEST_CASE("SplitSController: Done phase returns neutral on repeated calls") {
+    fl::ai::SplitSController ctrl(1.5f, 4.0f);
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    ctrl.sample(s, 0, 1.5); // → Pull
+    ctrl.sample(s, 1, 4.0); // → Done
+
+    for (uint64_t i = 2; i < 5; ++i) {
+        fl::ControlInput inp = ctrl.sample(s, i, 1.0 / 60.0);
+        CHECK(inp.elevator == Catch::Approx(0.f).margin(1e-5f));
+        CHECK(inp.aileron == Catch::Approx(0.f).margin(1e-5f));
+        CHECK(inp.speedbrake == Catch::Approx(0.f).margin(1e-5f));
+    }
+}
+
+TEST_CASE("SplitSController: partial dt stays in Roll phase") {
+    fl::ai::SplitSController ctrl(1.5f, 4.0f);
+    fl::EntityState s = makeState(0.0, 600.0, 0.0);
+    fl::ControlInput inp = ctrl.sample(s, 0, 0.75); // half of 1.5 s
+
+    CHECK(inp.aileron > 0.f);                                // still rolling
+    CHECK(inp.elevator == Catch::Approx(0.f).margin(1e-5f)); // not pulling yet
+}
+
+// ---------------------------------------------------------------------------
+// HighYoYoController
+// ---------------------------------------------------------------------------
+
+namespace {
+struct YoYoFixture {
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    fl::EntityManager em;
+    fl::EntityId attackerId;
+    fl::EntityId targetId;
+
+    YoYoFixture() : em(log, reg) {
+        reg.registerType(makeBasicDef());
+        fl::EntityTransform ta{};
+        ta.quat[3] = 1.f; // forward = +X
+        attackerId = em.spawn("test:basic", ta);
+        fl::EntityTransform tt{};
+        tt.pos[2] = 2000.0; // 2 km to the right (+Z)
+        tt.quat[3] = 1.f;
+        targetId = em.spawn("test:basic", tt);
+    }
+};
+} // namespace
+
+TEST_CASE("HighYoYoController: Climb phase banks AWAY from target") {
+    // Target is to the right (+Z) → PursuitController banks right (aileron > 0).
+    // HighYoYo Climb must bank away → aileron < 0.
+    YoYoFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::HighYoYoController ctrl(f.em, f.targetId, 10.f, 3.0f); // long climb so we stay in it
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    fl::ai::PursuitController pure(f.em, f.targetId);
+    fl::ControlInput pureInp = pure.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(pureInp.aileron > 0.f); // pure pursuit banks right
+    CHECK(inp.aileron < 0.f);     // HighYoYo Climb banks left (away)
+}
+
+TEST_CASE("HighYoYoController: Climb phase elevator is positive") {
+    YoYoFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::HighYoYoController ctrl(f.em, f.targetId, 10.f, 3.0f);
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(inp.elevator > 0.f); // pulling up
+}
+
+TEST_CASE("HighYoYoController: Climb phase throttle is less than 1") {
+    YoYoFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::HighYoYoController ctrl(f.em, f.targetId, 10.f, 3.0f);
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(inp.throttle < 1.f); // reduced power to bleed speed
+    CHECK(inp.throttle > 0.f);
+}
+
+TEST_CASE("HighYoYoController: Reacquire phase banks TOWARD target") {
+    YoYoFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::HighYoYoController ctrl(f.em, f.targetId, 0.0f, 10.f); // zero climb → enter Reacquire immediately
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(inp.aileron > 0.f); // target is right → bank right (toward)
+}
+
+TEST_CASE("HighYoYoController: phase transition at correct accumulated dt") {
+    YoYoFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::HighYoYoController ctrl(f.em, f.targetId, 2.5f, 3.0f);
+
+    // Well within Climb: aileron < 0 (away from right-side target).
+    fl::ControlInput climb = ctrl.sample(*as, 0, 0.5);
+    CHECK(climb.aileron < 0.f);
+
+    // Cross Climb threshold: enter Reacquire; aileron > 0 (toward).
+    fl::ControlInput reacq = ctrl.sample(*as, 1, 2.5);
+    CHECK(reacq.aileron > 0.f);
+}
+
+TEST_CASE("HighYoYoController: returns neutral when target dead in Climb phase") {
+    YoYoFixture f;
+    f.em.kill(f.targetId);
+    f.em.onTick(1.0 / 60.0, 1);
+
+    fl::ai::HighYoYoController ctrl(f.em, f.targetId, 10.f, 3.0f);
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+    fl::ControlInput inp = ctrl.sample(*as, 1, 1.0 / 60.0);
+
+    CHECK(inp.throttle == Catch::Approx(0.f));
+    CHECK(inp.aileron == Catch::Approx(0.f));
+    CHECK(inp.elevator == Catch::Approx(0.f));
+}
+
+TEST_CASE("HighYoYoController: returns neutral when target dead in Reacquire phase") {
+    YoYoFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::HighYoYoController ctrl(f.em, f.targetId, 0.0f, 10.f); // skip to Reacquire immediately
+    ctrl.sample(*as, 0, 1.0 / 60.0);                               // enter Reacquire
+
+    f.em.kill(f.targetId);
+    f.em.onTick(1.0 / 60.0, 1);
+
+    fl::ControlInput inp = ctrl.sample(*as, 1, 1.0 / 60.0);
+    CHECK(inp.throttle == Catch::Approx(0.f));
+    CHECK(inp.aileron == Catch::Approx(0.f));
+}
+
+// ---------------------------------------------------------------------------
+// LowYoYoController
+// ---------------------------------------------------------------------------
+
+TEST_CASE("LowYoYoController: Dive phase has negative elevator (unloading)") {
+    YoYoFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LowYoYoController ctrl(f.em, f.targetId, 10.f, 2.5f); // long dive
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(inp.elevator < 0.f); // unloading to descend
+}
+
+TEST_CASE("LowYoYoController: Dive phase steers toward target") {
+    YoYoFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LowYoYoController ctrl(f.em, f.targetId, 10.f, 2.5f);
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(inp.aileron > 0.f); // target is to the right → bank right
+}
+
+TEST_CASE("LowYoYoController: Dive phase has full throttle and afterburner") {
+    YoYoFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LowYoYoController ctrl(f.em, f.targetId, 10.f, 2.5f);
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(inp.throttle == Catch::Approx(1.f).margin(1e-5f));
+    CHECK(inp.afterburner == true);
+}
+
+TEST_CASE("LowYoYoController: Pull phase has positive elevator") {
+    YoYoFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LowYoYoController ctrl(f.em, f.targetId, 0.0f, 10.f); // zero dive → enter Pull immediately
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(inp.elevator > 0.f); // pulling up
+}
+
+TEST_CASE("LowYoYoController: Pull phase continues to steer toward target") {
+    YoYoFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LowYoYoController ctrl(f.em, f.targetId, 0.0f, 10.f); // start in Pull
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(inp.aileron > 0.f); // target still to the right
+}
+
+TEST_CASE("LowYoYoController: phase transition at correct accumulated dt") {
+    YoYoFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LowYoYoController ctrl(f.em, f.targetId, 1.5f, 2.5f);
+
+    // Dive phase: elevator < 0.
+    fl::ControlInput dive = ctrl.sample(*as, 0, 0.5);
+    CHECK(dive.elevator < 0.f);
+
+    // Cross Dive threshold: enter Pull; elevator > 0.
+    fl::ControlInput pull = ctrl.sample(*as, 1, 1.5);
+    CHECK(pull.elevator > 0.f);
+}
+
+TEST_CASE("LowYoYoController: returns neutral when target dead in Dive phase") {
+    YoYoFixture f;
+    f.em.kill(f.targetId);
+    f.em.onTick(1.0 / 60.0, 1);
+
+    fl::ai::LowYoYoController ctrl(f.em, f.targetId, 10.f, 2.5f);
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+    fl::ControlInput inp = ctrl.sample(*as, 1, 1.0 / 60.0);
+
+    CHECK(inp.throttle == Catch::Approx(0.f));
+    CHECK(inp.aileron == Catch::Approx(0.f));
+    CHECK(inp.elevator == Catch::Approx(0.f));
+}
+
+// ---------------------------------------------------------------------------
+// AiControllerFactory — new behaviors
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AiControllerFactory: lead from string args") {
+    FactoryFixture f;
+    std::string idxStr = std::to_string(f.entityId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("lead", std::span{args}, &f.em);
+    CHECK(ctrl != nullptr);
+}
+
+TEST_CASE("AiControllerFactory: lead with navGain arg") {
+    FactoryFixture f;
+    std::string idxStr = std::to_string(f.entityId.index);
+    std::vector<std::string_view> args = {idxStr, "2.0"};
+    auto ctrl = fl::ai::createController("lead", std::span{args}, &f.em);
+    CHECK(ctrl != nullptr);
+}
+
+TEST_CASE("AiControllerFactory: lead with missing entityIdx returns nullptr") {
+    FactoryFixture f;
+    std::vector<std::string_view> args;
+    auto ctrl = fl::ai::createController("lead", std::span{args}, &f.em);
+    CHECK(ctrl == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: lead without entityManager returns nullptr") {
+    std::vector<std::string_view> args = {"0"};
+    auto ctrl = fl::ai::createController("lead", std::span{args}, nullptr);
+    CHECK(ctrl == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: lead with nonexistent entity returns nullptr") {
+    FactoryFixture f;
+    std::vector<std::string_view> args = {"9999"};
+    auto ctrl = fl::ai::createController("lead", std::span{args}, &f.em);
+    CHECK(ctrl == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: immelmann with no args uses defaults") {
+    std::vector<std::string_view> args;
+    auto ctrl = fl::ai::createController("immelmann", std::span{args});
+    CHECK(ctrl != nullptr);
+}
+
+TEST_CASE("AiControllerFactory: immelmann without entityManager still works") {
+    std::vector<std::string_view> args;
+    auto ctrl = fl::ai::createController("immelmann", std::span{args}, nullptr);
+    CHECK(ctrl != nullptr);
+}
+
+TEST_CASE("AiControllerFactory: immelmann with invalid float arg returns nullptr") {
+    std::vector<std::string_view> args = {"bad_float"};
+    auto ctrl = fl::ai::createController("immelmann", std::span{args});
+    CHECK(ctrl == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: split_s with no args uses defaults") {
+    std::vector<std::string_view> args;
+    auto ctrl = fl::ai::createController("split_s", std::span{args});
+    CHECK(ctrl != nullptr);
+}
+
+TEST_CASE("AiControllerFactory: split_s with invalid float arg returns nullptr") {
+    std::vector<std::string_view> args = {"bad_float"};
+    auto ctrl = fl::ai::createController("split_s", std::span{args});
+    CHECK(ctrl == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: high_yo_yo from string args") {
+    FactoryFixture f;
+    std::string idxStr = std::to_string(f.entityId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("high_yo_yo", std::span{args}, &f.em);
+    CHECK(ctrl != nullptr);
+}
+
+TEST_CASE("AiControllerFactory: high_yo_yo with missing entityIdx returns nullptr") {
+    FactoryFixture f;
+    std::vector<std::string_view> args;
+    auto ctrl = fl::ai::createController("high_yo_yo", std::span{args}, &f.em);
+    CHECK(ctrl == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: high_yo_yo without entityManager returns nullptr") {
+    std::vector<std::string_view> args = {"0"};
+    auto ctrl = fl::ai::createController("high_yo_yo", std::span{args}, nullptr);
+    CHECK(ctrl == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: low_yo_yo from string args") {
+    FactoryFixture f;
+    std::string idxStr = std::to_string(f.entityId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("low_yo_yo", std::span{args}, &f.em);
+    CHECK(ctrl != nullptr);
+}
+
+TEST_CASE("AiControllerFactory: low_yo_yo with missing entityIdx returns nullptr") {
+    FactoryFixture f;
+    std::vector<std::string_view> args;
+    auto ctrl = fl::ai::createController("low_yo_yo", std::span{args}, &f.em);
+    CHECK(ctrl == nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Integration: LeadPursuitController + ImmelmannController via StateMachineController
+// ---------------------------------------------------------------------------
+
+TEST_CASE("StateMachineController: lead-pursuit to Immelmann on dwell timeout") {
+    SmFixture f;
+
+    // Place target to the right so LeadPursuit produces a non-zero aileron.
+    fl::EntityState* tgt = f.em.get(f.targetId);
+    REQUIRE(tgt != nullptr);
+    tgt->transform.pos[2] = 3000.0;
+
+    fl::ai::StateMachineController sm(f.em);
+    fl::EntityId targetId = f.targetId;
+    sm.addState("engage", [&f, targetId] { return std::make_unique<fl::ai::LeadPursuitController>(f.em, targetId); });
+    sm.addState("immelmann", [] { return std::make_unique<fl::ai::ImmelmannController>(4.0f, 1.5f); });
+    // Transition after 0.5 s dwell in engage.
+    sm.addTransition("engage", "immelmann", fl::ai::Always(), /*minDwellSeconds=*/0.5f);
+    sm.setInitialState("engage");
+
+    fl::EntityState selfState = makeState(0.0, 600.0, 0.0);
+    selfState.id = f.selfId;
+
+    // Tick 0: still in engage (dwell not yet met); output should be from LeadPursuit.
+    fl::ControlInput engageOut = sm.sample(selfState, 0, 1.0 / 60.0);
+    CHECK(sm.currentState() == "engage");
+    CHECK(engageOut.throttle > 0.f); // LeadPursuit applies throttle
+
+    // Tick after 0.5 s total: transition to Immelmann.
+    for (int i = 1; i <= 30; ++i) {
+        sm.sample(selfState, static_cast<uint64_t>(i), 1.0 / 60.0);
+    }
+    CHECK(sm.currentState() == "immelmann");
+
+    // Next output must be ImmelmannController's Pull phase: elevator=1.
+    fl::ControlInput immelOut = sm.sample(selfState, 31, 1.0 / 60.0);
+    CHECK(immelOut.elevator == Catch::Approx(1.f).margin(1e-5f));
+}

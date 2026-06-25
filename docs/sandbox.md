@@ -232,6 +232,11 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 | `pursuit` | `<entityIdx>` | Pursue an entity by pool index; returns neutral when target is dead or invalid |
 | `evade` | `<entityIdx>` | Flee a threat entity by inverting the pursuit heading error |
 | `break` | `<entityIdx> [rollDuration]` | Defensive ACM: roll toward threat then pull maximum-G (rollDuration in seconds, default 0.5) |
+| `lead` | `<entityIdx> [navGain]` | Proportional navigation pursuit; aims at predicted intercept point ahead of target (navGain: 0.0=pure pursuit, 1.0=first-order lead [default]) |
+| `immelmann` | `[pullDur] [rollDur]` | Half-loop + roll to reverse heading; pull up to inverted then roll upright (defaults: 4.0 s, 1.5 s) |
+| `split_s` | `[rollDur] [pullDur]` | Roll inverted + pull through to reverse heading; opposite energy trade to Immelmann (defaults: 1.5 s, 4.0 s) |
+| `high_yo_yo` | `<entityIdx> [climbDur] [reacquireDur]` | Overshoot correction: bank away from target, pull up to bleed speed, then reacquire (defaults: 2.5 s, 3.0 s) |
+| `low_yo_yo` | `<entityIdx> [diveDur] [pullDur]` | Dive-and-cut-corner to close on a turning target (defaults: 1.5 s, 2.5 s) |
 | `lua` | `<script_name>` | Load a Lua AI script from the content pack's `ai/` directory (e.g. `patrol`, `interceptor`). See `docs/modding/ai.md`. |
 
 **Weather presets:**

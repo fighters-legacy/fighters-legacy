@@ -6,6 +6,11 @@ add_library(engine-ai STATIC
     EvadeController.cpp
     BreakTurnController.cpp
     StateMachineController.cpp
+    LeadPursuitController.cpp
+    ImmelmannController.cpp
+    SplitSController.cpp
+    HighYoYoController.cpp
+    LowYoYoController.cpp
 )
 
 # Expose engine/ as the public include root so consumers can use
