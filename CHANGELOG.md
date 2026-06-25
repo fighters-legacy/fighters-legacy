@@ -49,6 +49,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `SnapshotPeerLatency` (ms). Avoids ms-rounding loss for the prediction replay depth
   (#381).
 
+- **server**: injectable `IClock` seam for `RconServer` — `setClock(const IClock&)` controls
+  drain-deadline timing and auth-lockout expiry for deterministic unit tests; propagates to the
+  internal `AuthTracker`; defaults to `SystemClock::instance()` with no behavior change
+  (closes #416).
+
 - **network**: server-side per-peer jitter buffer for `MsgClientInput` delivery; initial depth
   seeded from `estimatedDelayTicks` (clamped to `[world].jitter_buffer_depth`); drains one input
   per sim tick; stale-repeats the last drained input when the buffer is empty to prevent coasting

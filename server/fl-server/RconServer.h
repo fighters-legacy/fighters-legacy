@@ -79,6 +79,11 @@ class RconServer {
     // Read the current RCON auth lockout state. Thread-safe; acquires the internal mutex.
     fl::AuthLockoutSummary getRconAuthSummary();
 
+    // Override the clock used for drain-deadline timing and auth-lockout expiry.
+    // Must be called before start(). The clock must outlive this server.
+    // Propagates to the internal AuthTracker.
+    void setClock(const IClock& clock);
+
   private:
     struct Impl;
     std::unique_ptr<Impl> m_impl;

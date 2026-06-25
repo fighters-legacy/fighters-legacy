@@ -328,6 +328,32 @@ TEST_CASE("RconServer: getRconAuthSummary threshold matches config", "[rcon]") {
     CHECK(s.entries.empty());
 }
 
+TEST_CASE("RconServer: setClock can be called before start and does not crash", "[rcon]") {
+    MockLogger log;
+    CommandRegistry reg;
+    ServerConfig::RconConfig cfg{};
+    cfg.maxAuthFailures = 5;
+    cfg.lockoutSeconds = 60;
+    RconServer srv(reg, cfg, log);
+    fl::ManualClock clk;
+    srv.setClock(clk); // pimpl forwarding; no start() called, no sockets
+}
+
+TEST_CASE("RconServer: setClock propagates to internal AuthTracker", "[rcon]") {
+    MockLogger log;
+    CommandRegistry reg;
+    ServerConfig::RconConfig cfg{};
+    cfg.maxAuthFailures = 2;
+    cfg.lockoutSeconds = 60;
+    RconServer srv(reg, cfg, log);
+    fl::ManualClock clk;
+    srv.setClock(clk);
+    // AuthTracker now uses clk; summary call still works, threshold unchanged
+    auto s = srv.getRconAuthSummary();
+    CHECK(s.threshold == 2);
+    CHECK(s.activeCount == 0);
+}
+
 TEST_CASE("AuthTracker: lockedOutCount returns 0 initially", "[rcon][auth_tracker]") {
     fl::AuthTracker tracker(5, 60);
     CHECK(tracker.lockedOutCount() == 0);

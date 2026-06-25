@@ -179,11 +179,17 @@ struct RconServer::Impl {
     std::mutex m_authTrackerMutex;
     fl::AuthTracker m_authTracker;
 
+    const IClock* m_clock{&SystemClock::instance()};
+
     Impl(const CommandRegistry& reg, const ServerConfig::RconConfig& cfg, ILogger& log, CommandShell* shell)
         : m_registry(reg), m_cfg(cfg), m_log(log), m_shell(shell),
           m_authTracker(cfg.maxAuthFailures, cfg.lockoutSeconds) {}
 
     void ioLoop();
+    void setClock(const IClock& clock) {
+        m_clock = &clock;
+        m_authTracker.setClock(clock);
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -216,7 +222,7 @@ void RconServer::Impl::ioLoop() {
 
         int pollTimeoutMs = 100;
         if (m_shell) {
-            auto now = std::chrono::steady_clock::now();
+            auto now = m_clock->now();
             for (const auto& c : clients) {
                 if (!c.hasPendingDrain || c.fd == kInvalidSocket)
                     continue;
@@ -232,7 +238,7 @@ void RconServer::Impl::ioLoop() {
             break; // fatal poll error
         }
         if (m_shell) {
-            auto now = std::chrono::steady_clock::now();
+            auto now = m_clock->now();
             for (auto& c : clients) {
                 if (!c.hasPendingDrain || c.fd == kInvalidSocket)
                     continue;
@@ -429,7 +435,7 @@ void RconServer::Impl::ioLoop() {
                         c.drainMark = m_shell->mark();
                         c.drainPacketId = pkt.id;
                         c.hasPendingDrain = true;
-                        c.drainDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kDrainDelayMs);
+                        c.drainDeadline = m_clock->now() + std::chrono::milliseconds(kDrainDelayMs);
                     }
                 }
                 // Unknown types are silently dropped.
@@ -558,6 +564,10 @@ fl::AuthLockoutSummary RconServer::getRconAuthSummary() {
         if (e.lockedOut)
             ++s.activeCount;
     return s;
+}
+
+void RconServer::setClock(const IClock& clock) {
+    m_impl->setClock(clock);
 }
 
 } // namespace fl
