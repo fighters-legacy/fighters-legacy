@@ -1,31 +1,109 @@
 "component: engine":
   - changed-files:
-    - any-glob-to-any-file: ["engine/**", "include/engine/**"]
+    - any-glob-to-any-file:
+      - "engine/config/**"
+      - "engine/console/**"
+      - "engine/crash/**"
+      - "engine/difficulty/**"
+      - "engine/firstrun/**"
+      - "engine/i18n/**"
+      - "engine/input/**"
+      - "engine/loop/**"
+      - "engine/math/**"
+      - "engine/perf/**"
+      - "engine/sandbox/**"
+      - "engine/spatial/**"
+      - "engine/weather/**"
+      - "platform/sdl3/**"
+      - "platform/*.h"
+      - "platform/*.cpp"
 
 "component: renderer":
   - changed-files:
-    - any-glob-to-any-file: ["platform/vulkan/**"]
+    - any-glob-to-any-file:
+      - "platform/vulkan/**"
+      - "engine/render/**"
 
 "component: audio":
   - changed-files:
-    - any-glob-to-any-file: ["platform/openal/**"]
+    - any-glob-to-any-file:
+      - "platform/openal/**"
+      - "engine/audio/**"
 
 "component: network":
   - changed-files:
-    - any-glob-to-any-file: ["platform/net/**"]
+    - any-glob-to-any-file:
+      - "engine/net/**"
+      - "platform/net/**"
+
+"component: server":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "server/**"
 
 "component: content":
   - changed-files:
-    - any-glob-to-any-file: ["engine/content/**"]
+    - any-glob-to-any-file:
+      - "engine/content/**"
+
+"component: ai":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "engine/ai/**"
+
+"component: script":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "engine/script/**"
+
+"component: entity":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "engine/entity/**"
+
+"component: flight":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "engine/flight/**"
+
+"component: terrain":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "engine/render/Terrain*"
+      - "engine/render/ProceduralTerrain*"
+      - "engine/render/TerrainManifest.h"
+      - "engine/render/TerrainChunkIO*"
+      - "tools/terrain-chunk-io/**"
+      - "tools/gen_terrain_chunks.py"
+
+"component: mission":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "engine/mission/**"
+
+"component: tools":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "tools/**"
 
 "component: build":
   - changed-files:
-    - any-glob-to-any-file: ["CMakeLists.txt", "CMakePresets.json", "cmake/**"]
+    - any-glob-to-any-file:
+      - "CMakeLists.txt"
+      - "CMakePresets.json"
+      - "cmake/**"
+      - "**/CMakeLists.txt"
 
 "component: ci":
   - changed-files:
-    - any-glob-to-any-file: [".github/workflows/**", ".github/dependabot.yml"]
+    - any-glob-to-any-file:
+      - ".github/workflows/**"
+      - ".github/actions/**"
+      - ".github/dependabot.yml"
 
 "component: docs":
   - changed-files:
-    - any-glob-to-any-file: ["docs/**", "*.md"]
+    - any-glob-to-any-file:
+      - "docs/**"
+      - "README.md"
+      - "GOVERNANCE.md"
