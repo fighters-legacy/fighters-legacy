@@ -27,6 +27,27 @@ Runtime libraries the engine is built on.
 
 ---
 
+## Rendering Techniques
+
+Algorithms the Vulkan renderer implements (see [`docs/rendering.md`](rendering.md) for the pass-by-pass
+graph). "Role" notes whether a technique is in the renderer today or planned under a tracking issue.
+
+| Technique | Role in this project | Reference |
+|---|---|---|
+| Cook-Torrance PBR (GGX NDF, Smith geometry, Schlick Fresnel) | Opaque material shading (`mesh.frag`) | [Karis, *Real Shading in UE4* (SIGGRAPH 2013)](https://blog.selfshadow.com/publications/s2013-shading-course/karis/s2013_pbs_epic_notes_v2.pdf) |
+| PSSM cascaded shadow maps | Sun shadows (`shadow.vert`, `mesh.frag`) | [Zhang et al., *Parallel-Split Shadow Maps* (GPU Gems 3)](https://developer.nvidia.com/gpugems/gpugems3/part-ii-light-and-shadows/chapter-10-parallel-split-shadow-maps-programmable-gpus) |
+| Octahedral normal encoding | World-space normal G-buffer packing (`mesh.frag`) | [Cigolle et al., *A Survey of Efficient Representations for Unit Vectors* (JCGT 2014)](https://jcgt.org/published/0003/02/01/) |
+| GTAO / horizon-based ambient occlusion | Ambient occlusion (`gtao.comp`) | [Jiménez et al., *Practical Realtime Strategies for Accurate Indirect Occlusion* (SIGGRAPH 2016)](https://www.activision.com/cdn/research/Practical_Real_Time_Strategies_for_Accurate_Indirect_Occlusion_NEW%20VERSION_COLOR.pdf) · [Intel XeGTAO](https://github.com/GameTechDev/XeGTAO) (planned: half-res + temporal, #448) |
+| Analytic atmospheric scattering + aerial perspective | Atmospheric sky + distance scattering (`sky.frag`, `mesh.frag`) | [Hillaire, *A Scalable and Production Ready Sky and Atmosphere* (EGSR 2020)](https://sebh.github.io/publications/egsr2020.pdf) · [Bruneton & Neyret, *Precomputed Atmospheric Scattering*](https://hal.inria.fr/inria-00288758/document) (planned: precomputed LUTs, #445) |
+| Khronos PBR Neutral tonemapper | HDR → LDR tonemap (`tonemap.frag`) | [KhronosGroup/ToneMapping](https://github.com/KhronosGroup/ToneMapping) |
+| FXAA | Post-process anti-aliasing (`tonemap.frag`) | [Lottes, *FXAA* (NVIDIA whitepaper)](https://developer.download.nvidia.com/assets/gamedev/files/sdk/11/FXAA_WhitePaper.pdf) |
+| Bloom (bright-pass + separable Gaussian) | HDR glow (`bloom_*.frag`) | [Jimenez, *Next Generation Post Processing in Call of Duty: Advanced Warfare* (SIGGRAPH 2014)](https://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare) |
+| TAA + CAS | Temporal AA + sharpening (planned, #443) | [Karis, *High-Quality Temporal Supersampling* (SIGGRAPH 2014)](https://advances.realtimerendering.com/s2014/) · [AMD FidelityFX CAS](https://gpuopen.com/fidelityfx-cas/) |
+| Temporal upscaling | Render-scale upscaling (planned, #450) | [AMD FSR 2](https://gpuopen.com/fidelityfx-superresolution-2/) · [Intel XeSS](https://github.com/intel/xess) |
+| Image-based lighting (split-sum) | Sky-driven ambient (planned, #452) | [Karis, *Real Shading in UE4* — split-sum approximation](https://blog.selfshadow.com/publications/s2013-shading-course/karis/s2013_pbs_epic_notes_v2.pdf) |
+
+---
+
 ## Build & Tooling
 
 | Tool | Role in this project | Documentation |
