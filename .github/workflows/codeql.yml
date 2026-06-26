@@ -35,7 +35,7 @@ jobs:
           vulkan: 'true'
 
       - name: Cache CMake FetchContent dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: build/debug/_deps
           key: cmake-deps-ubuntu-latest-debug-${{ hashFiles('cmake/dependencies.cmake') }}
