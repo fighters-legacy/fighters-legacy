@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(fighters-legacy VERSION 0.2.5 LANGUAGES C CXX)
+project(fighters-legacy VERSION 0.2.6 LANGUAGES C CXX)
 
 execute_process(
     COMMAND git rev-parse --short HEAD
