@@ -341,19 +341,20 @@ void VkRenderer::recreateParticleResources() {
     m_maxSpawnPerFrame = maxS;
     m_nextParticleSlot = 0;
     m_spawnAccum.clear();
-    createParticleResources();
+    // destroyParticleResources() also tears down the compute + render pipelines (and their
+    // set layouts), so they must be rebuilt here — createParticleResources() only restores the
+    // buffers/layouts/pools/descriptor sets. Mirrors the init() order (resources → pipelines);
+    // without this the particle pipelines stay VK_NULL_HANDLE and the next vkCmdBindPipeline
+    // segfaults after a particle-density change.
+    if (!createParticleResources() || !createParticleComputePipeline() || !createParticleRenderPipelines()) {
+        std::fprintf(stderr, "[VK ERROR] particle resource recreation failed: %s\n", m_lastError.c_str());
+    }
 }
 
 // ---------------------------------------------------------------------------
 // applySettings — update settings; trigger resource recreation as needed
 // ---------------------------------------------------------------------------
 void VkRenderer::applySettings(const RendererSettings& settings) {
-    if (settings.aaMode != m_settings.aaMode) {
-        if (settings.aaMode == RendererAAMode::MSAA2x || settings.aaMode == RendererAAMode::MSAA4x ||
-            settings.aaMode == RendererAAMode::MSAA8x) {
-            std::fprintf(stderr, "[VK WARN] MSAA not yet implemented; falling back to FXAA\n");
-        }
-    }
     if (settings.shadowQuality != m_settings.shadowQuality)
         m_shadowDirty = true;
     if (settings.particleDensity != m_settings.particleDensity)
@@ -409,6 +410,10 @@ bool VkRenderer::init(IWindow* window) {
         return false;
     if (!createHdrImage())
         return false;
+    if (!createNormalImage())
+        return false;
+    if (!createAoImage())
+        return false;
     if (!createBloomImages())
         return false;
     if (!createHdrSampler())
@@ -420,6 +425,8 @@ bool VkRenderer::init(IWindow* window) {
     if (!createShadowDescriptorLayout())
         return false;
     if (!createMaterialDescriptorLayout())
+        return false;
+    if (!createSkyDescriptorLayout())
         return false;
     if (!createCommandPool())
         return false;
@@ -445,6 +452,8 @@ bool VkRenderer::init(IWindow* window) {
         return false;
     if (!createPerFrameDescriptors())
         return false;
+    if (!createSkyDescriptors())
+        return false;
     // createParticleResources writes the camera UBO handle into the particle render
     // descriptor sets — must come after createPerFrameDescriptors allocates those buffers.
     if (!createParticleResources())
@@ -452,6 +461,8 @@ bool VkRenderer::init(IWindow* window) {
     if (!createParticleComputePipeline())
         return false;
     if (!createParticleRenderPipelines())
+        return false;
+    if (!createGtaoResources())
         return false;
     if (!createSyncObjects())
         return false;
@@ -606,13 +617,40 @@ void VkRenderer::writeFrameUBOs(const FrameScene& scene) {
     light.sunDirection = glm::vec4(scene.environment.sunDirection, 0.0f);
     light.sunColor = glm::vec4(scene.environment.sunColor, 1.0f);
     light.ambientColor = glm::vec4(scene.environment.ambientColor, 0.0f);
+    // fogParams.w selects the distance model in mesh.frag: 0 = exponential fog (procedural sky),
+    // 1 = analytic aerial perspective (atmospheric sky quality).
+    const float apMode = (m_settings.skyQuality == RendererSkyQuality::LUT) ? 1.0f : 0.0f;
     light.fogParams =
-        glm::vec4(scene.environment.fogDensity, scene.environment.fogStartDist, scene.environment.timeOfDay, 0.0f);
+        glm::vec4(scene.environment.fogDensity, scene.environment.fogStartDist, scene.environment.timeOfDay, apMode);
     std::memcpy(pf.lightMapped, &light, sizeof(light));
 
     ShadowUBO shadowUBO{};
     computeCascades(scene, shadowUBO);
     std::memcpy(pf.shadowMapped, &shadowUBO, sizeof(shadowUBO));
+
+    // Sky UBO (sky pass set 0, binding 0). Horizon colour + cloud coverage derived from the
+    // environment; qualityMode selects the procedural vs. atmospheric sky model in sky.frag.
+    SkyUBO sky{};
+    sky.invViewProj = glm::inverse(scene.camera.proj * scene.camera.view);
+    sky.sunDirection = glm::vec4(scene.environment.sunDirection, 0.0f);
+    sky.sunColor = glm::vec4(scene.environment.sunColor, 1.0f);
+    {
+        const auto& env = scene.environment;
+        const float cloudCov = env.cloudCoverage;
+        // Warmth driven by sun elevation (warm near horizon, cool blue at midday).
+        const float elevation = env.sunDirection.y; // [-1,1]
+        const float warmth = 1.0f - glm::clamp(elevation / 0.3f, 0.0f, 1.0f);
+        const glm::vec3 horizonDay{0.40f, 0.55f, 0.75f};
+        const glm::vec3 horizonDusk{0.85f, 0.55f, 0.25f};
+        const glm::vec3 horizonStorm{0.25f, 0.28f, 0.32f};
+        const glm::vec3 horizon = glm::mix(glm::mix(horizonDay, horizonDusk, warmth), horizonStorm, cloudCov);
+        sky.skyParams = glm::vec4(horizon, cloudCov);
+        // fogParams.w = camera altitude in km (clamped) for the atmospheric model.
+        const float camAltKm = glm::clamp(static_cast<float>(scene.camera.worldOrigin.y) / 1000.0f, 0.0f, 100.0f);
+        sky.fogParams = glm::vec4(env.fogDensity, env.fogStartDist / 1000.0f, env.timeOfDay, camAltKm);
+    }
+    sky.qualityMode = (m_settings.skyQuality == RendererSkyQuality::LUT) ? 1u : 0u;
+    std::memcpy(pf.skyMapped, &sky, sizeof(sky));
 }
 
 // ---------------------------------------------------------------------------
@@ -801,6 +839,13 @@ void VkRenderer::shutdown() {
             vkDestroyBuffer(m_device, pf.shadowBuffer, nullptr);
         if (pf.shadowMemory != VK_NULL_HANDLE)
             vkFreeMemory(m_device, pf.shadowMemory, nullptr);
+
+        if (pf.skyMapped && pf.skyMemory != VK_NULL_HANDLE)
+            vkUnmapMemory(m_device, pf.skyMemory);
+        if (pf.skyBuffer != VK_NULL_HANDLE)
+            vkDestroyBuffer(m_device, pf.skyBuffer, nullptr);
+        if (pf.skyMemory != VK_NULL_HANDLE)
+            vkFreeMemory(m_device, pf.skyMemory, nullptr);
     }
     if (m_perFramePool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(m_device, m_perFramePool, nullptr);
@@ -810,6 +855,8 @@ void VkRenderer::shutdown() {
         vkDestroyDescriptorPool(m_device, m_shadowPool, nullptr);
         m_shadowPool = VK_NULL_HANDLE;
     }
+    destroySkyResources();
+    destroyGtaoResources();
     if (m_perFrameSetLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(m_device, m_perFrameSetLayout, nullptr);
         m_perFrameSetLayout = VK_NULL_HANDLE;
@@ -1352,15 +1399,24 @@ bool VkRenderer::createAttachmentImage(uint32_t width, uint32_t height, VkFormat
 }
 
 bool VkRenderer::createDepthImage() {
+    // SAMPLED bit added so GTAO can read depth for view-space position reconstruction.
     return createAttachmentImage(m_swapchainExtent.width, m_swapchainExtent.height, kDepthFormat,
-                                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT, m_depthImage,
-                                 m_depthMemory, m_depthView);
+                                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                 VK_IMAGE_ASPECT_DEPTH_BIT, m_depthImage, m_depthMemory, m_depthView);
 }
 
 bool VkRenderer::createHdrImage() {
     return createAttachmentImage(m_swapchainExtent.width, m_swapchainExtent.height, kHdrFormat,
                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                  VK_IMAGE_ASPECT_COLOR_BIT, m_hdrImage, m_hdrMemory, m_hdrView);
+}
+
+// G-buffer world-space normal target (octahedral, RGBA16F). Written as the forward-opaque pass's
+// second colour attachment; sampled by GTAO. STORAGE not required (read via sampler).
+bool VkRenderer::createNormalImage() {
+    return createAttachmentImage(m_swapchainExtent.width, m_swapchainExtent.height, kHdrFormat,
+                                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                 VK_IMAGE_ASPECT_COLOR_BIT, m_normalImage, m_normalMemory, m_normalView);
 }
 
 bool VkRenderer::createHdrSampler() {
@@ -1395,6 +1451,8 @@ void VkRenderer::destroyAttachments() {
     };
     destroy(m_depthView, m_depthImage, m_depthMemory);
     destroy(m_hdrView, m_hdrImage, m_hdrMemory);
+    destroy(m_normalView, m_normalImage, m_normalMemory);
+    destroy(m_aoView, m_aoImage, m_aoMemory);
     destroy(m_bloomView, m_bloomImage, m_bloomMemory);
     destroy(m_bloomAuxView, m_bloomAuxImage, m_bloomAuxMemory);
 }
@@ -1403,10 +1461,11 @@ void VkRenderer::destroyAttachments() {
 // Tonemap descriptor
 // ---------------------------------------------------------------------------
 bool VkRenderer::createTonemapDescriptors() {
-    // Binding 0: HDR buffer; binding 1: bloom buffer (for composite in tonemap shader).
-    const std::array<VkDescriptorSetLayoutBinding, 2> bindings{{
+    // Binding 0: HDR; binding 1: bloom; binding 2: GTAO buffer (composite in the tonemap shader).
+    const std::array<VkDescriptorSetLayoutBinding, 3> bindings{{
         {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     }};
 
     VkDescriptorSetLayoutCreateInfo layoutCI{};
@@ -1418,7 +1477,7 @@ bool VkRenderer::createTonemapDescriptors() {
         return false;
     }
 
-    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3};
     VkDescriptorPoolCreateInfo poolCI{};
     poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolCI.maxSets = 1;
@@ -1451,15 +1510,19 @@ void VkRenderer::updateHdrDescriptor() {
         return info;
     };
 
-    // Binding 0: HDR; binding 1: bloom (points to bloom image when available, else HDR as dummy).
+    // Binding 0: HDR; binding 1: bloom (points to bloom image when available, else HDR as dummy);
+    // binding 2: GTAO buffer (falls back to HDR as a dummy before the AO image exists).
     const VkDescriptorImageInfo hdrInfo = makeInfo(m_hdrView);
     const VkDescriptorImageInfo bloomInfo = makeInfo(m_bloomView != VK_NULL_HANDLE ? m_bloomView : m_hdrView);
+    const VkDescriptorImageInfo aoInfo = makeInfo(m_aoView != VK_NULL_HANDLE ? m_aoView : m_hdrView);
 
-    const std::array<VkWriteDescriptorSet, 2> writes{{
+    const std::array<VkWriteDescriptorSet, 3> writes{{
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_tonemapSet, 0, 0, 1,
          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &hdrInfo, nullptr, nullptr},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_tonemapSet, 1, 0, 1,
          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bloomInfo, nullptr, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_tonemapSet, 2, 0, 1,
+         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &aoInfo, nullptr, nullptr},
     }};
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
@@ -1535,6 +1598,288 @@ bool VkRenderer::createMaterialDescriptorLayout() {
         return false;
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Sky descriptor layout (set 0: SkyUBO at binding 0, fragment stage) + pool
+// ---------------------------------------------------------------------------
+bool VkRenderer::createSkyDescriptorLayout() {
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutCI{};
+    layoutCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutCI.bindingCount = 1;
+    layoutCI.pBindings = &binding;
+    if (vkCreateDescriptorSetLayout(m_device, &layoutCI, nullptr, &m_skySetLayout) != VK_SUCCESS) {
+        m_lastError = "vkCreateDescriptorSetLayout (sky) failed";
+        return false;
+    }
+
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_FRAMES_IN_FLIGHT};
+    VkDescriptorPoolCreateInfo poolCI{};
+    poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolCI.maxSets = MAX_FRAMES_IN_FLIGHT;
+    poolCI.poolSizeCount = 1;
+    poolCI.pPoolSizes = &poolSize;
+    if (vkCreateDescriptorPool(m_device, &poolCI, nullptr, &m_skyPool) != VK_SUCCESS) {
+        m_lastError = "vkCreateDescriptorPool (sky) failed";
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Per-frame SkyUBO buffers + descriptor sets
+// ---------------------------------------------------------------------------
+bool VkRenderer::createSkyDescriptors() {
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        auto& pf = m_perFrame[i];
+        if (!createHostBuffer(m_device, m_physicalDevice, sizeof(SkyUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                              pf.skyBuffer, pf.skyMemory, pf.skyMapped)) {
+            m_lastError = "sky UBO buffer creation failed";
+            return false;
+        }
+
+        VkDescriptorSetAllocateInfo allocCI{};
+        allocCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocCI.descriptorPool = m_skyPool;
+        allocCI.descriptorSetCount = 1;
+        allocCI.pSetLayouts = &m_skySetLayout;
+        if (vkAllocateDescriptorSets(m_device, &allocCI, &pf.skyDescriptorSet) != VK_SUCCESS) {
+            m_lastError = "vkAllocateDescriptorSets (sky) failed";
+            return false;
+        }
+
+        VkDescriptorBufferInfo skyInfo{pf.skyBuffer, 0, sizeof(SkyUBO)};
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = pf.skyDescriptorSet;
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        write.pBufferInfo = &skyInfo;
+        vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Sky descriptor pool + set layout teardown (per-frame sky UBO buffers freed in the
+// per-frame buffer loop in shutdown()).
+// ---------------------------------------------------------------------------
+void VkRenderer::destroySkyResources() {
+    if (m_skyPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(m_device, m_skyPool, nullptr);
+        m_skyPool = VK_NULL_HANDLE;
+    }
+    if (m_skySetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_device, m_skySetLayout, nullptr);
+        m_skySetLayout = VK_NULL_HANDLE;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GTAO — full-resolution horizon-based ambient occlusion (compute)
+// ---------------------------------------------------------------------------
+bool VkRenderer::createAoImage() {
+    // RGBA16F (guaranteed storage-capable everywhere) — AO value held in .r.
+    return createAttachmentImage(m_swapchainExtent.width, m_swapchainExtent.height, kHdrFormat,
+                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
+                                 m_aoImage, m_aoMemory, m_aoView);
+}
+
+bool VkRenderer::createGtaoResources() {
+    // Nearest-clamp sampler for depth/normal/AO reads.
+    VkSamplerCreateInfo sci{};
+    sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sci.magFilter = VK_FILTER_NEAREST;
+    sci.minFilter = VK_FILTER_NEAREST;
+    sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(m_device, &sci, nullptr, &m_gtaoSampler) != VK_SUCCESS) {
+        m_lastError = "vkCreateSampler (gtao) failed";
+        return false;
+    }
+
+    const std::array<VkDescriptorSetLayoutBinding, 3> bindings{{
+        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // depth
+        {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // normal
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},          // AO out
+    }};
+    VkDescriptorSetLayoutCreateInfo lci{};
+    lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    lci.bindingCount = static_cast<uint32_t>(bindings.size());
+    lci.pBindings = bindings.data();
+    if (vkCreateDescriptorSetLayout(m_device, &lci, nullptr, &m_gtaoSetLayout) != VK_SUCCESS) {
+        m_lastError = "vkCreateDescriptorSetLayout (gtao) failed";
+        return false;
+    }
+
+    const std::array<VkDescriptorPoolSize, 2> poolSizes{{
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
+    }};
+    VkDescriptorPoolCreateInfo pci{};
+    pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pci.maxSets = 1;
+    pci.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    pci.pPoolSizes = poolSizes.data();
+    if (vkCreateDescriptorPool(m_device, &pci, nullptr, &m_gtaoPool) != VK_SUCCESS) {
+        m_lastError = "vkCreateDescriptorPool (gtao) failed";
+        return false;
+    }
+
+    VkDescriptorSetAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = m_gtaoPool;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &m_gtaoSetLayout;
+    if (vkAllocateDescriptorSets(m_device, &ai, &m_gtaoSet) != VK_SUCCESS) {
+        m_lastError = "vkAllocateDescriptorSets (gtao) failed";
+        return false;
+    }
+
+    VkPushConstantRange pcRange{};
+    pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pcRange.offset = 0;
+    pcRange.size = sizeof(GtaoPush);
+
+    VkPipelineLayoutCreateInfo plci{};
+    plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    plci.setLayoutCount = 1;
+    plci.pSetLayouts = &m_gtaoSetLayout;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges = &pcRange;
+    if (vkCreatePipelineLayout(m_device, &plci, nullptr, &m_gtaoPipeLayout) != VK_SUCCESS) {
+        m_lastError = "vkCreatePipelineLayout (gtao) failed";
+        return false;
+    }
+
+    auto spv = loadSpirv(m_shaderDir + "gtao.comp.spv");
+    if (spv.empty()) {
+        m_lastError = "failed to load gtao.comp.spv";
+        return false;
+    }
+    VkShaderModule mod = createShaderModule(m_device, spv);
+    VkComputePipelineCreateInfo cpci{};
+    cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    cpci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    cpci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    cpci.stage.module = mod;
+    cpci.stage.pName = "main";
+    cpci.layout = m_gtaoPipeLayout;
+    VkResult res = vkCreateComputePipelines(m_device, m_pipelineCache, 1, &cpci, nullptr, &m_gtaoPipeline);
+    vkDestroyShaderModule(m_device, mod, nullptr);
+    if (res != VK_SUCCESS) {
+        m_lastError = "vkCreateComputePipelines (gtao) failed";
+        return false;
+    }
+
+    updateGtaoDescriptors();
+    return true;
+}
+
+void VkRenderer::updateGtaoDescriptors() {
+    if (m_gtaoSet == VK_NULL_HANDLE)
+        return;
+    VkDescriptorImageInfo depthInfo{m_gtaoSampler, m_depthView, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo normInfo{m_gtaoSampler, m_normalView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo aoInfo{VK_NULL_HANDLE, m_aoView, VK_IMAGE_LAYOUT_GENERAL};
+    const std::array<VkWriteDescriptorSet, 3> writes{{
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_gtaoSet, 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+         &depthInfo, nullptr, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_gtaoSet, 1, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+         &normInfo, nullptr, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_gtaoSet, 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &aoInfo,
+         nullptr, nullptr},
+    }};
+    vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+}
+
+void VkRenderer::destroyGtaoResources() {
+    if (m_gtaoPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(m_device, m_gtaoPipeline, nullptr);
+        m_gtaoPipeline = VK_NULL_HANDLE;
+    }
+    if (m_gtaoPipeLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(m_device, m_gtaoPipeLayout, nullptr);
+        m_gtaoPipeLayout = VK_NULL_HANDLE;
+    }
+    if (m_gtaoPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(m_device, m_gtaoPool, nullptr);
+        m_gtaoPool = VK_NULL_HANDLE;
+    }
+    if (m_gtaoSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_device, m_gtaoSetLayout, nullptr);
+        m_gtaoSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_gtaoSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(m_device, m_gtaoSampler, nullptr);
+        m_gtaoSampler = VK_NULL_HANDLE;
+    }
+}
+
+// Runs after the forward-opaque pass, before sky: reads depth + normal, writes m_aoImage.
+// When AO is disabled the image is cleared to white so the tonemap sampler always has valid data.
+void VkRenderer::recordGtao(VkCommandBuffer cmd) {
+    const bool enabled = (m_settings.aoMode != RendererAOMode::Off);
+
+    if (!enabled) {
+        // Clear AO to 1.0 (no occlusion) and leave it readable by the tonemap pass.
+        imageBarrier(cmd, m_aoImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkClearColorValue white{{1.0f, 1.0f, 1.0f, 1.0f}};
+        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(cmd, m_aoImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &white, 1, &range);
+        imageBarrier(cmd, m_aoImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        return;
+    }
+
+    // Transition inputs for compute read + AO image for storage write.
+    imageBarrier(cmd, m_normalImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    imageBarrier(cmd, m_depthImage, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                 VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                 VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+    imageBarrier(cmd, m_aoImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_gtaoPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_gtaoPipeLayout, 0, 1, &m_gtaoSet, 0, nullptr);
+
+    GtaoPush push{};
+    push.invViewProj = glm::inverse(m_pendingScene.camera.proj * m_pendingScene.camera.view);
+    const float strength = (m_settings.aoMode == RendererAOMode::High) ? 1.6f : 1.0f;
+    push.params = glm::vec4(8.0f /*radius m*/, strength, static_cast<float>(m_gtaoFrame & 63u), 1.5f /*pow*/);
+    push.texel = glm::vec4(1.0f / float(m_swapchainExtent.width), 1.0f / float(m_swapchainExtent.height),
+                           float(m_swapchainExtent.width), float(m_swapchainExtent.height));
+    vkCmdPushConstants(cmd, m_gtaoPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+
+    const uint32_t gx = (m_swapchainExtent.width + 7u) / 8u;
+    const uint32_t gy = (m_swapchainExtent.height + 7u) / 8u;
+    vkCmdDispatch(cmd, gx, gy, 1);
+    ++m_gtaoFrame;
+
+    // AO → shader-read for tonemap; depth back to attachment layout for sky/transparent depth test.
+    imageBarrier(cmd, m_aoImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    imageBarrier(cmd, m_depthImage, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL,
+                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
+                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                 VK_IMAGE_ASPECT_DEPTH_BIT);
 }
 
 // ---------------------------------------------------------------------------
@@ -1712,15 +2057,17 @@ bool VkRenderer::createForwardPipeline() {
     depthStencil.depthWriteEnable = VK_TRUE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_GREATER; // reverse-Z
 
+    // Two opaque colour attachments: [0] HDR, [1] G-buffer normal. Both no-blend.
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.colorWriteMask =
         VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     colorBlendAttachment.blendEnable = VK_FALSE;
+    const std::array<VkPipelineColorBlendAttachmentState, 2> blendAtts{colorBlendAttachment, colorBlendAttachment};
 
     VkPipelineColorBlendStateCreateInfo colorBlend{};
     colorBlend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlend.attachmentCount = 1;
-    colorBlend.pAttachments = &colorBlendAttachment;
+    colorBlend.attachmentCount = static_cast<uint32_t>(blendAtts.size());
+    colorBlend.pAttachments = blendAtts.data();
 
     // Push constant range: ForwardPushConstants (96 bytes).
     VkPushConstantRange pushRange{};
@@ -1744,11 +2091,11 @@ bool VkRenderer::createForwardPipeline() {
         return false;
     }
 
-    VkFormat hdrFmt = kHdrFormat;
+    const std::array<VkFormat, 2> colorFmts{kHdrFormat, kHdrFormat}; // [0] HDR, [1] normal G-buffer
     VkPipelineRenderingCreateInfo renderingCI{};
     renderingCI.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    renderingCI.colorAttachmentCount = 1;
-    renderingCI.pColorAttachmentFormats = &hdrFmt;
+    renderingCI.colorAttachmentCount = static_cast<uint32_t>(colorFmts.size());
+    renderingCI.pColorAttachmentFormats = colorFmts.data();
     renderingCI.depthAttachmentFormat = kDepthFormat;
 
     VkGraphicsPipelineCreateInfo pipelineCI{};
@@ -2190,16 +2537,11 @@ bool VkRenderer::createSkyPipeline() {
     blendState.attachmentCount = 1;
     blendState.pAttachments = &colorBlend;
 
-    VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    pushRange.offset = 0;
-    pushRange.size = sizeof(SkyPushConstants);
-
     VkPipelineLayoutCreateInfo layoutCI{};
     layoutCI.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutCI.setLayoutCount = 0;
-    layoutCI.pushConstantRangeCount = 1;
-    layoutCI.pPushConstantRanges = &pushRange;
+    layoutCI.setLayoutCount = 1;
+    layoutCI.pSetLayouts = &m_skySetLayout;
+    layoutCI.pushConstantRangeCount = 0;
     if (vkCreatePipelineLayout(m_device, &layoutCI, nullptr, &m_skyLayout) != VK_SUCCESS) {
         m_lastError = "vkCreatePipelineLayout (sky) failed";
         vkDestroyShaderModule(m_device, vertMod, nullptr);
@@ -3307,6 +3649,11 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
 
+    // ── G-buffer normal → COLOR_ATTACHMENT_OPTIMAL ───────────────────────
+    imageBarrier(cmd, m_normalImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
     // ── depth → DEPTH_STENCIL_ATTACHMENT_OPTIMAL ─────────────────────────
     imageBarrier(cmd, m_depthImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0,
                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
@@ -3316,13 +3663,20 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
     // ── Forward pass ──────────────────────────────────────────────────────
     {
-        VkRenderingAttachmentInfo colorAtt{};
-        colorAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        colorAtt.imageView = m_hdrView;
-        colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        colorAtt.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        colorAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        colorAtt.clearValue.color = {{0.05f, 0.10f, 0.18f, 1.0f}};
+        VkRenderingAttachmentInfo colorAtts[2]{};
+        colorAtts[0].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        colorAtts[0].imageView = m_hdrView;
+        colorAtts[0].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colorAtts[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAtts[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAtts[0].clearValue.color = {{0.05f, 0.10f, 0.18f, 1.0f}};
+        // Normal G-buffer: clear to octahedral encoding of +Y (sky/up) = (0.5, 1.0).
+        colorAtts[1].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        colorAtts[1].imageView = m_normalView;
+        colorAtts[1].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colorAtts[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAtts[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAtts[1].clearValue.color = {{0.5f, 1.0f, 0.0f, 0.0f}};
 
         VkRenderingAttachmentInfo depthAtt{};
         depthAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -3336,8 +3690,8 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
         renderInfo.renderArea = {{0, 0}, m_swapchainExtent};
         renderInfo.layerCount = 1;
-        renderInfo.colorAttachmentCount = 1;
-        renderInfo.pColorAttachments = &colorAtt;
+        renderInfo.colorAttachmentCount = 2;
+        renderInfo.pColorAttachments = colorAtts;
         renderInfo.pDepthAttachment = &depthAtt;
 
         vkCmdBeginRendering(cmd, &renderInfo);
@@ -3392,6 +3746,9 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         vkCmdEndRendering(cmd);
     }
 
+    // ── GTAO — reads depth + normal G-buffer, writes m_aoImage (consumed by tonemap) ──
+    recordGtao(cmd);
+
     // ── Sky pass — fills pixels where depth == 0 (reverse-Z far, nothing drawn) ──
     {
         VkRenderingAttachmentInfo colorAtt{};
@@ -3426,28 +3783,9 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         VkRect2D scissor{{0, 0}, m_swapchainExtent};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        SkyPushConstants skyPC{};
-        skyPC.invViewProj = glm::inverse(m_pendingScene.camera.proj * m_pendingScene.camera.view);
-        skyPC.sunDirection = glm::vec4(m_pendingScene.environment.sunDirection, 0.0f);
-        skyPC.sunColor = glm::vec4(m_pendingScene.environment.sunColor, 1.0f);
-        {
-            // Derive horizon color and cloud coverage from environment state.
-            const auto& env = m_pendingScene.environment;
-            float cloudCov = env.cloudCoverage;
-            // Warmth driven by sun elevation, not sun color: warm near horizon (dawn/dusk),
-            // cool blue at high elevation (midday). avoids tan sky at moderate elevation.
-            float elevation = env.sunDirection.y; // [-1,1]; 1=noon, 0=horizon, <0=night
-            float warmth = 1.0f - glm::clamp(elevation / 0.3f, 0.0f, 1.0f);
-            glm::vec3 horizonDay{0.40f, 0.55f, 0.75f};
-            glm::vec3 horizonDusk{0.85f, 0.55f, 0.25f};
-            glm::vec3 horizonStorm{0.25f, 0.28f, 0.32f};
-            glm::vec3 horizon = glm::mix(glm::mix(horizonDay, horizonDusk, warmth), horizonStorm, cloudCov);
-            skyPC.skyParams = glm::vec4(horizon, cloudCov);
-            skyPC.fogParams = glm::vec4(env.fogDensity,
-                                        env.fogStartDist / 1000.0f, // metres → km for sky shader
-                                        env.timeOfDay, 0.0f);
-        }
-        vkCmdPushConstants(cmd, m_skyLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SkyPushConstants), &skyPC);
+        // Sky parameters live in the per-frame SkyUBO (written in writeFrameUBOs); bind set 0.
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyLayout, 0, 1,
+                                &m_perFrame[m_currentFrame].skyDescriptorSet, 0, nullptr);
 
         vkCmdDraw(cmd, 3, 1, 0, 0); // fullscreen triangle
 
@@ -3586,8 +3924,13 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         TonemapPush pc{};
         pc.texelSizeX = 1.0f / static_cast<float>(m_swapchainExtent.width);
         pc.texelSizeY = 1.0f / static_cast<float>(m_swapchainExtent.height);
-        pc.enableFxaa = (m_settings.aaMode == RendererAAMode::FXAA) ? 1u : 0u;
-        pc.bloomStrength = m_settings.bloom ? 0.04f : 0.0f;
+        // FXAA runs for the FXAA mode and, on an interim basis, for TAA — the temporal resolve
+        // (jitter + history reprojection) is a follow-on; until then TAA selects FXAA-quality AA
+        // rather than leaving the default mode with no anti-aliasing.
+        pc.enableFxaa =
+            (m_settings.aaMode == RendererAAMode::FXAA || m_settings.aaMode == RendererAAMode::TAA) ? 1u : 0u;
+        pc.bloomStrength = m_settings.bloom ? 0.10f : 0.0f;
+        pc.aoStrength = (m_settings.aoMode != RendererAOMode::Off) ? 0.85f : 0.0f;
         vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 
         vkCmdDraw(cmd, 3, 1, 0, 0); // fullscreen triangle
@@ -3673,10 +4016,15 @@ bool VkRenderer::recreateSwapchain() {
         return false;
     if (!createHdrImage())
         return false;
+    if (!createNormalImage())
+        return false;
+    if (!createAoImage())
+        return false;
     if (!createBloomImages())
         return false;
     updateHdrDescriptor();
     updateBloomDescriptors();
+    updateGtaoDescriptors();
 
     m_imagesInFlight.assign(m_swapchainImages.size(), VK_NULL_HANDLE);
     return true;

@@ -210,8 +210,9 @@ TEST_CASE("SceneRenderer submits one RenderItem when entity has loadable mesh") 
     REQUIRE(renderer.setSceneCount == 1);
     REQUIRE(renderer.lastScene.renderItems.size() == 1);
     CHECK(renderer.lastScene.renderItems[0].mesh.valid());
-    // ensureBuiltins() uploads 2 meshes (entity + floor) + 7 materials (6 palette + 1 floor);
-    // the content mesh adds 1 more createMesh and 1 more createMaterial.
+    // ensureBuiltins() uploads 2 meshes (entity + floor) + 8 materials (6 palette + 1 floor +
+    // 1 shaded-grey fallback); the content mesh adds 1 more createMesh but reuses the shared
+    // fallback material (no new createMaterial).
     CHECK(renderer.createMeshCount == 3);
     CHECK(renderer.createMaterialCount == 8);
 }
@@ -364,10 +365,48 @@ TEST_CASE("SceneRenderer caches mesh handle: createMesh called once for repeated
         sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
     }
 
-    // ensureBuiltins on frame 1: 2 meshes + 7 materials. Content "f15c": +1 each. Frame 2: cached.
+    // ensureBuiltins on frame 1: 2 meshes + 8 materials (6 palette + floor + fallback). Content
+    // "f15c": +1 mesh, reuses the shared fallback material. Frame 2: fully cached.
     CHECK(renderer.createMeshCount == 3);
     CHECK(renderer.createMaterialCount == 8);
     CHECK(renderer.setSceneCount == 2);
+}
+
+TEST_CASE("SceneRenderer shares one fallback material across distinct loadable meshes") {
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = {'{', 2, 3};
+    pack->meshes["mig29"] = {'{', 4, 5};
+
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    // Resolver maps typeIndex 0 -> f15c, 1 -> mig29.
+    SceneRenderer sr{bridge,
+                     [](uint32_t typeIndex, std::string& mesh, std::string& dmg) {
+                         dmg.clear();
+                         mesh = (typeIndex == 0) ? "f15c" : "mig29";
+                         return true;
+                     },
+                     assets, renderer};
+
+    RenderSnapshot snap = makeSnap();
+    snap.entries.push_back(makeEntry(0, {10.0, 0.0, 0.0})); // typeIndex 0 -> f15c
+    snap.entries.push_back(makeEntry(1, {20.0, 0.0, 0.0})); // typeIndex 1 -> mig29
+    bridge.publish(std::move(snap));
+
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    // Two distinct content meshes uploaded, but no per-mesh material: still just the 8 builtins
+    // (6 palette + floor + fallback). Both meshes share m_fallbackEntityMat.
+    CHECK(renderer.createMeshCount == 4); // 2 builtin + 2 content
+    CHECK(renderer.createMaterialCount == 8);
+    REQUIRE(renderer.lastScene.renderItems.size() == 2);
+    CHECK(renderer.lastScene.renderItems[0].material.id == renderer.lastScene.renderItems[1].material.id);
 }
 
 // ---------------------------------------------------------------------------

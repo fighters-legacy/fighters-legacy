@@ -5,12 +5,13 @@
 // clip space, which lands at depth 0.0 (reverse-Z far plane), so this pass
 // only colours pixels where no geometry was drawn.
 
-layout(push_constant) uniform SkyPC {
+layout(set = 0, binding = 0) uniform SkyUBO {
     mat4 invViewProj;   // inverse of (proj * view), for ray reconstruction
     vec4 sunDirection;  // xyz = world-space direction toward sun
     vec4 sunColor;      // xyz = color, w = intensity
     vec4 skyParams;     // xyz = horizonColor, w = cloudCoverage [0=clear .. 1=full storm]
-    vec4 fogParams;     // x = density, y = startDist(km), z = timeOfDay(h), w = unused
+    vec4 fogParams;     // x = density, y = startDist(km), z = timeOfDay(h), w = cameraAltKm
+    uint qualityMode;   // 0 = procedural, 1 = atmospheric (richer Rayleigh/Mie)
 } push;
 
 layout(location = 0) in vec2 texCoord; // from tonemap.vert: NDC xy remapped to [0,1]
@@ -66,9 +67,29 @@ void main() {
 
     vec3 sky;
     if (upDot >= 0.0) {
-        sky = mix(horizon, zenith, clamp(upDot, 0.0, 1.0));
+        // pow(upDot, 0.6) gives a steeper horizon-to-zenith falloff than linear — a closer
+        // approximation of Rayleigh-scattered sky brightness, brightening the lower sky band.
+        sky = mix(horizon, zenith, pow(clamp(upDot, 0.0, 1.0), 0.6));
     } else {
         sky = mix(ground, horizon, clamp(1.0 + upDot * 4.0, 0.0, 1.0));
+    }
+
+    // Atmospheric quality (qualityMode == 1): add analytic Rayleigh + Mie in-scatter on top of the
+    // gradient for richer colour separation — strong blue Rayleigh away from the sun, warm Mie
+    // forward-scatter halo toward it, scaled by the sun being above the horizon. (A precomputed
+    // transmittance/multi-scatter LUT can later replace this analytic term via this same UBO set.)
+    if (push.qualityMode == 1u && upDot > -0.05) {
+        float sunCos    = clamp(dot(viewDir, normalize(push.sunDirection.xyz)), -1.0, 1.0);
+        float sunUp     = clamp(push.sunDirection.y, 0.0, 1.0);
+        // Rayleigh phase ~ (1 + cos^2); Mie via Henyey-Greenstein (g = 0.76).
+        float rayleighPh = 0.75 * (1.0 + sunCos * sunCos);
+        float g = 0.76;
+        float miePh = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * sunCos, 1.5);
+        vec3 rayleighCol = vec3(0.18, 0.34, 0.72);
+        vec3 mieCol      = push.sunColor.xyz;
+        float clear      = 1.0 - cloudCoverage;
+        vec3 inscatter   = (rayleighCol * rayleighPh * 0.12 + mieCol * miePh * 0.025) * sunUp * clear;
+        sky += inscatter;
     }
 
     // Procedural cloud layer — only above the horizon.
@@ -91,17 +112,22 @@ void main() {
         sky = mix(sky, cloudColor, cloud);
     }
 
-    // Horizon fog haze — blend sky toward horizon color at low elevations.
-    float fogFactor = 1.0 - clamp(
+    // Baseline aerosol haze: present even in clear weather (fogParams.x == 0), concentrated near
+    // the horizon (squared falloff). Weather-driven exponential fog stacks on top.
+    float horizonBand = 1.0 - clamp(abs(upDot) * 5.0, 0.0, 1.0);
+    float baseHaze    = horizonBand * horizonBand * 0.14;
+    float fogFactor   = 1.0 - clamp(
         exp(-push.fogParams.x * max(0.0, (1.0 - abs(upDot)) * push.fogParams.y * 1000.0)),
         0.0, 1.0);
-    sky = mix(sky, horizon * 0.8, fogFactor * 0.5);
+    sky = mix(sky, horizon, clamp(baseHaze + fogFactor * 0.45, 0.0, 1.0));
 
-    // Sun disc + soft corona — attenuated through cloud cover.
-    float sunDot  = dot(viewDir, normalize(push.sunDirection.xyz));
-    float sunDisc = smoothstep(0.9990, 1.0, sunDot) * (1.0 - cloudCoverage * 0.98);
-    float sunGlow = pow(max(0.0, sunDot), 8.0) * 0.06 * (1.0 - cloudCoverage * 0.8);
-    sky += push.sunColor.xyz * push.sunColor.w * (sunDisc + sunGlow);
+    // Sun disc + two-tier corona — attenuated through cloud cover.
+    // smoothstep(0.9997, 1.0) ≈ 1.4° half-angle — a sharp disc rather than a wide blob.
+    float sunDot   = dot(viewDir, normalize(push.sunDirection.xyz));
+    float sunDisc  = smoothstep(0.9997, 1.0, sunDot) * (1.0 - cloudCoverage * 0.98);
+    float sunGlow1 = pow(max(0.0, sunDot), 16.0) * 0.20 * (1.0 - cloudCoverage * 0.90); // tight corona
+    float sunGlow2 = pow(max(0.0, sunDot), 3.0) * 0.015 * (1.0 - cloudCoverage * 0.70); // wide scatter
+    sky += push.sunColor.xyz * push.sunColor.w * (sunDisc + sunGlow1 + sunGlow2);
 
     outColor = vec4(sky, 1.0);
 }

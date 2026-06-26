@@ -73,27 +73,38 @@ struct ShadowPushConstants {
 };
 static_assert(sizeof(ShadowPushConstants) <= 128);
 
-// Push constants for the sky pass (fragment stage only).
-// Exactly 128 bytes — the Vulkan-guaranteed minimum. No headroom for further additions;
-// migrate to a sky UBO if more parameters are needed in a future PR.
-struct SkyPushConstants {
+// Sky UBO (set 0, binding 0 of the sky descriptor set) — replaces the former 128-byte
+// SkyPushConstants so the sky pass can carry quality selection + LUT samplers (bindings 1/2).
+struct SkyUBO {
     glm::mat4 invViewProj{1.0f};                    // 64 bytes
-    glm::vec4 sunDirection{};                       // 16 bytes
-    glm::vec4 sunColor{};                           // 16 bytes
-    glm::vec4 skyParams{0.40f, 0.55f, 0.75f, 0.0f}; // xyz=horizonColor, w=cloudCoverage[0,1]
-    glm::vec4 fogParams{0.0f, 5.0f, 12.0f, 0.0f};   // x=density, y=startDist(km), z=timeOfDay(h), w=unused
-}; // 128 bytes exactly
-static_assert(sizeof(SkyPushConstants) == 128);
+    glm::vec4 sunDirection{};                       // 16 bytes  xyz = dir toward sun
+    glm::vec4 sunColor{};                           // 16 bytes  xyz = color, w = intensity
+    glm::vec4 skyParams{0.40f, 0.55f, 0.75f, 0.0f}; // 16 bytes  xyz=horizonColor, w=cloudCoverage[0,1]
+    glm::vec4 fogParams{0.0f, 5.0f, 12.0f, 0.0f};   // 16 bytes  x=density, y=startDist(km), z=timeOfDay(h), w=camAltKm
+    uint32_t qualityMode{0};                        // 0 = procedural, 1 = LUT
+    float _pad[3]{};                                // pad to 16-byte alignment → 144 bytes
+};
+static_assert(sizeof(SkyUBO) == 144u);
 
-// Push constants for the tonemap + FXAA + bloom composite pass.
+// Push constants for the tonemap + FXAA + bloom + AO composite pass.
 struct TonemapPush {
     float texelSizeX{0.0f};    // 1 / width  — used by FXAA for neighbour sampling
     float texelSizeY{0.0f};    // 1 / height
     uint32_t enableFxaa{0};    // 1 = apply FXAA on tonemapped output
     float bloomStrength{0.0f}; // bloom blend multiplier (0 = disabled)
+    float aoStrength{0.0f};    // GTAO darkening strength (0 = AO disabled)
+    float _pad[3]{};           // 16-byte alignment → 32 bytes
 };
-static_assert(sizeof(TonemapPush) == 16);
+static_assert(sizeof(TonemapPush) == 32);
 static_assert(sizeof(TonemapPush) <= 128);
+
+// Push constants for the GTAO compute pass (full-resolution, horizon-based, world space).
+struct GtaoPush {
+    glm::mat4 invViewProj{1.0f}; // 64 — clip → world-space reconstruction
+    glm::vec4 params{0.0f};      // x=radius(m), y=strength, z=frameIndex, w=intensityPow
+    glm::vec4 texel{0.0f};       // x=1/width, y=1/height, z=width, w=height
+};
+static_assert(sizeof(GtaoPush) <= 128);
 
 // Push constants for the bloom blur passes (shared by H and V).
 struct BloomPush {
@@ -180,8 +191,16 @@ class VkRenderer : public IRenderer {
     // ── Attachments (depth + HDR) ──────────────────────────────────────────
     bool createDepthImage();
     bool createHdrImage();
+    bool createNormalImage();
     bool createHdrSampler();
     void destroyAttachments();
+
+    // ── GTAO ───────────────────────────────────────────────────────────────
+    bool createAoImage();         // full-res AO storage image (recreated with swapchain)
+    bool createGtaoResources();   // sampler, descriptor layout/pool/set, compute pipeline
+    void updateGtaoDescriptors(); // (re)bind depth/normal/AO views after a swapchain resize
+    void destroyGtaoResources();  // permanent GTAO objects (pipeline/layout/pool/sampler)
+    void recordGtao(VkCommandBuffer cmd);
 
     bool createAttachmentImage(uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage,
                                VkImageAspectFlags aspect, VkImage& image, VkDeviceMemory& memory, VkImageView& view);
@@ -215,6 +234,11 @@ class VkRenderer : public IRenderer {
     bool createTonemapPipeline();
     bool createShadowPipeline();
     bool createSkyPipeline();
+
+    // ── Sky descriptor (set 0: SkyUBO) ─────────────────────────────────────
+    bool createSkyDescriptorLayout();
+    bool createSkyDescriptors(); // per-frame SkyUBO buffers + descriptor sets
+    void destroySkyResources();
 
     // ── Commands + sync ────────────────────────────────────────────────────
     bool createCommandPool();
@@ -282,6 +306,27 @@ class VkRenderer : public IRenderer {
     VkImageView m_hdrView{VK_NULL_HANDLE};
     VkSampler m_hdrSampler{VK_NULL_HANDLE};
 
+    // ── G-buffer world-space normal attachment (octahedral-encoded, RGBA16F) ──
+    // Second colour attachment of the forward-opaque pass; consumed by GTAO (and future
+    // screen-space effects). Sampled via m_hdrSampler. Recreated with the swapchain.
+    VkImage m_normalImage{VK_NULL_HANDLE};
+    VkDeviceMemory m_normalMemory{VK_NULL_HANDLE};
+    VkImageView m_normalView{VK_NULL_HANDLE};
+
+    // ── GTAO (full-resolution horizon-based AO, RGBA16F; AO in .r) ──────────
+    // Single compute pass after the forward-opaque pass; sampled by the tonemap pass. Half-res +
+    // bilateral upsample and motion-vector temporal accumulation are a perf follow-on.
+    VkImage m_aoImage{VK_NULL_HANDLE};
+    VkDeviceMemory m_aoMemory{VK_NULL_HANDLE};
+    VkImageView m_aoView{VK_NULL_HANDLE};
+    VkSampler m_gtaoSampler{VK_NULL_HANDLE}; // nearest clamp for depth/normal/AO reads
+    VkDescriptorSetLayout m_gtaoSetLayout{VK_NULL_HANDLE};
+    VkPipelineLayout m_gtaoPipeLayout{VK_NULL_HANDLE};
+    VkPipeline m_gtaoPipeline{VK_NULL_HANDLE};
+    VkDescriptorPool m_gtaoPool{VK_NULL_HANDLE};
+    VkDescriptorSet m_gtaoSet{VK_NULL_HANDLE};
+    uint32_t m_gtaoFrame{0}; // rotates per-pixel noise
+
     // ── Tonemap descriptor ────────────────────────────────────────────────
     VkDescriptorSetLayout m_tonemapSetLayout{VK_NULL_HANDLE};
     VkDescriptorPool m_tonemapPool{VK_NULL_HANDLE};
@@ -320,8 +365,13 @@ class VkRenderer : public IRenderer {
         VkDeviceMemory shadowMemory{VK_NULL_HANDLE};
         void* shadowMapped{nullptr};
 
+        VkBuffer skyBuffer{VK_NULL_HANDLE}; // SkyUBO (sky pass set 0, binding 0)
+        VkDeviceMemory skyMemory{VK_NULL_HANDLE};
+        void* skyMapped{nullptr};
+
         VkDescriptorSet descriptorSet{VK_NULL_HANDLE};       // forward pass set 0
         VkDescriptorSet shadowDescriptorSet{VK_NULL_HANDLE}; // shadow pipeline set 0
+        VkDescriptorSet skyDescriptorSet{VK_NULL_HANDLE};    // sky pass set 0 (UBO + 2 LUTs)
     };
     std::array<PerFrameData, MAX_FRAMES_IN_FLIGHT> m_perFrame{};
     VkDescriptorPool m_perFramePool{VK_NULL_HANDLE};
@@ -348,6 +398,14 @@ class VkRenderer : public IRenderer {
     VkPipeline m_shadowPipeline{VK_NULL_HANDLE};
     VkPipelineLayout m_skyLayout{VK_NULL_HANDLE};
     VkPipeline m_skyPipeline{VK_NULL_HANDLE};
+
+    // ── Sky descriptor set (set 0, binding 0 = SkyUBO) ─────────────────────
+    // Carries the sky parameters (including the procedural/atmospheric quality selector) that
+    // formerly lived in push constants. The atmospheric (LUT) model is evaluated analytically in
+    // sky.frag for now; precomputed transmittance/multi-scatter LUT textures bind here in a
+    // follow-on (the descriptor set + UBO plumbing is already in place for it).
+    VkDescriptorSetLayout m_skySetLayout{VK_NULL_HANDLE};
+    VkDescriptorPool m_skyPool{VK_NULL_HANDLE};
 
     // ── Commands ──────────────────────────────────────────────────────────
     VkCommandPool m_commandPool{VK_NULL_HANDLE};

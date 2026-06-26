@@ -20,10 +20,11 @@ layout(push_constant) uniform BloomPush {
 void main() {
     vec3 hdr = texture(hdrBuffer, texCoord).rgb;
 
-    // Soft-knee threshold: bloom kicks in above 0.8 nits (HDR linear).
+    // Soft-knee threshold: bloom kicks in above 0.70 nits (HDR linear). Lowered from 0.80 to
+    // capture terrain/entity specular highlights; softer knee avoids a hard bloom boundary halo.
     float brightness = max(hdr.r, max(hdr.g, hdr.b));
-    const float threshold = 0.8;
-    const float knee = 0.1;
+    const float threshold = 0.70;
+    const float knee = 0.15;
     float weight = smoothstep(threshold - knee, threshold + knee, brightness);
 
     outColor = vec4(hdr * weight, 1.0);

@@ -43,6 +43,7 @@ set(GLSL_SHADERS
     particle.frag
     overlay.vert
     overlay.frag
+    gtao.comp
 )
 
 set(SPIRV_FILES "")

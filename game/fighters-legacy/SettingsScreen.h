@@ -48,10 +48,10 @@ class SettingsScreen : public IScreen {
     int m_modeIdx{0};                         // current selection in m_modes
     bool m_fullscreen{false};
 
-    // 0=Resolution, 1=Display, 2=Vsync, 3=AAMode, 4=ShadowQuality, 5=ParticleDensity,
-    // 6=DrawDist, 7=MasterVol, 8=MusicVol, 9=SfxVol, 10=Back
+    // 0=Resolution, 1=Display, 2=Vsync, 3=AAMode, 4=ShadowQuality, 5=AmbientOcclusion,
+    // 6=SkyQuality, 7=ParticleDensity, 8=DrawDist, 9=MasterVol, 10=MusicVol, 11=SfxVol, 12=Back
     int m_focusedRow{0};
-    static constexpr int kRowCount = 11;
+    static constexpr int kRowCount = 13;
 
     void applyAndSave();
     void buildModes();

@@ -9,6 +9,55 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **renderer**: aerial perspective — at Atmospheric sky quality, distant terrain and aircraft are
+  extinguished and replaced by analytic Rayleigh + Mie in-scatter (distance-based blue-shift/haze,
+  the signature flight-sim vista look) instead of plain exponential fog; procedural sky quality
+  keeps the exponential fog model (part of #437)
+- **renderer**: terrain biome blending — the terrain surface now blends grass/dirt/rock/snow by
+  altitude and slope with world-space procedural detail noise (seamless across chunk boundaries) and
+  a finite-differenced detail-normal that fades with distance, replacing the flat elevation tint
+  (part of #437)
+- **renderer**: GTAO (ground-truth-style ambient occlusion) — full-resolution horizon-based
+  compute pass reading the depth buffer + a new world-space normal G-buffer attachment, applied in
+  the tonemap pass; gated by the Ambient Occlusion setting (Off/Low/High). Half-resolution +
+  bilateral-upsample and motion-vector temporal accumulation are a perf follow-on (part of #437)
+- **renderer**: forward-opaque pass now writes a world-space normal G-buffer (octahedral-encoded
+  RGBA16F second colour attachment) for GTAO and future screen-space effects (part of #437)
+- **renderer**: independent first-class graphics settings for ambient occlusion
+  (`AmbientOcclusion` Off/Low/High) and sky scattering model (`SkyQuality`
+  Procedural/Atmospheric), with persistence (`[graphics].ao_mode`/`sky_quality`) and Settings
+  screen rows; mirrored renderer-side enums `RendererAOMode`/`RendererSkyQuality` (part of #437)
+
+### Changed
+
+- **renderer**: default entity fallback material is now shaded neutral grey (base colour 0.60,
+  metallic 0.1, roughness 0.6) shared across meshes lacking explicit material data; in release
+  builds the builtin placeholder entity uses it instead of per-face debug colours (debug builds
+  keep the per-face orientation tint) (part of #437)
+- **renderer**: sky procedural improvements — tighter sun disc (≈1.4° half-angle), two-tier
+  solar corona, baseline clear-weather horizon haze, and a Rayleigh-like `pow(0.6)` sky
+  gradient (part of #437)
+- **renderer**: sky pass migrated from a 128-byte push-constant block to a per-frame `SkyUBO`
+  descriptor set (set 0, binding 0), removing the push-constant size ceiling; the new
+  `Atmospheric` sky-quality tier adds analytic Rayleigh + Henyey-Greenstein Mie in-scatter for
+  richer sky colour separation (precomputed transmittance/multi-scatter LUTs bind to this same
+  set in a follow-on) (part of #437)
+- **renderer**: bloom strength raised 0.04 → 0.10; bloom threshold lowered 0.80 → 0.70 (knee
+  0.10 → 0.15) for visible HDR depth and specular highlights (part of #437)
+
+### Fixed
+
+- **renderer**: changing particle density at runtime (e.g. selecting Ultra) crashed with
+  `vkCmdBindPipeline: pipeline is VK_NULL_HANDLE` / segfault — `recreateParticleResources()`
+  destroyed the particle compute + render pipelines but never rebuilt them (only the buffers and
+  descriptor sets were restored). It now recreates the pipelines, mirroring `init()` order (#437)
+
+### Removed
+
+- **renderer**: MSAA anti-aliasing modes (2x/4x/8x) — superseded by TAA, which also handles
+  shading aliasing and is the on-ramp to temporal upscaling; AA modes are now Off/FXAA/TAA.
+  Existing `msaa*` settings migrate to TAA on load. Supersedes #375 (part of #437)
+
 - **network**: RCON drain-deadline unit tests via extracted `checkAndFireDrains` helper;
   `DrainClientInfo` base struct in `server/fl-server/RconDrainHelper.h` allows tests to exercise
   the drain firing path without real TCP sockets (#434)

@@ -120,6 +120,9 @@ static RendererSettings buildRendererSettings(const GraphicsSettings& g) {
     s.aaMode = static_cast<RendererAAMode>(g.aaMode);
     s.shadowQuality = static_cast<RendererShadowQuality>(g.shadowQuality);
     s.particleDensity = static_cast<RendererParticleDensity>(g.particleDensity);
+    s.aoMode = static_cast<RendererAOMode>(g.ambientOcclusion);
+    s.skyQuality = static_cast<RendererSkyQuality>(g.skyQuality);
+    s.autoExposure = true; // baseline HDR feature, always on
     s.bloom = (g.qualityPreset >= QualityLevel::Medium);
     switch (g.drawDistance) {
     case DrawDistance::Low:

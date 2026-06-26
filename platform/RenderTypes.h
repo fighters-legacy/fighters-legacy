@@ -22,7 +22,8 @@ enum class RendererVsyncMode : uint8_t {
 };
 
 // AA mode — ordinals must stay in sync with AntiAliasingMode in engine/config/GraphicsSettings.h.
-enum class RendererAAMode : uint8_t { Off, FXAA, MSAA2x, MSAA4x, MSAA8x };
+// MSAA was removed in favour of TAA (covers shading aliasing + is the temporal-upscaling on-ramp).
+enum class RendererAAMode : uint8_t { Off, FXAA, TAA };
 
 // Shadow quality — ordinals must stay in sync with ShadowQuality in engine/config/GraphicsSettings.h.
 enum class RendererShadowQuality : uint8_t { Off, Low, Medium, High, Ultra };
@@ -30,13 +31,24 @@ enum class RendererShadowQuality : uint8_t { Off, Low, Medium, High, Ultra };
 // Particle density — ordinals must stay in sync with ParticleDensity in engine/config/GraphicsSettings.h.
 enum class RendererParticleDensity : uint8_t { Low, Medium, High, Ultra };
 
+// Ambient-occlusion quality (GTAO) — ordinals must stay in sync with AmbientOcclusion in
+// engine/config/GraphicsSettings.h.
+enum class RendererAOMode : uint8_t { Off, Low, High };
+
+// Sky scattering model — ordinals must stay in sync with SkyQuality in
+// engine/config/GraphicsSettings.h.  Procedural = per-pixel analytic; LUT = precomputed Hillaire LUTs.
+enum class RendererSkyQuality : uint8_t { Procedural, LUT };
+
 struct RendererSettings {
     RendererVsyncMode vsync{RendererVsyncMode::On};
-    RendererAAMode aaMode{RendererAAMode::FXAA};
+    RendererAAMode aaMode{RendererAAMode::TAA};
     bool bloom{true};            // bloom on/off
     float drawDistanceKm{50.0f}; // entity cull distance in km (used by SceneRenderer)
     RendererShadowQuality shadowQuality{RendererShadowQuality::High};
     RendererParticleDensity particleDensity{RendererParticleDensity::High};
+    RendererAOMode aoMode{RendererAOMode::High};            // GTAO quality
+    RendererSkyQuality skyQuality{RendererSkyQuality::LUT}; // sky scattering model
+    bool autoExposure{true};                                // HDR eye adaptation (always-on baseline)
 };
 
 // Per-frame GPU and CPU timing statistics. Populated by IRenderer::getFrameStats()

@@ -51,19 +51,43 @@ vec3 faceColor(vec3 n) {
     return vec3(0.90, 0.80, 0.10);                 // left (-Z)
 }
 
-// Elevation/slope terrain albedo: greener lowlands, earthy mid, rocky highs, with steep
-// faces blended toward bare rock. Gives the otherwise-flat-shaded terrain visible relief.
-vec3 terrainAlbedo(float elevationM, vec3 geoNormal) {
-    float e = clamp((elevationM - 500.0) / 200.0, 0.0, 1.0); // ~500 m..700 m across the relief
-    const vec3 lowCol  = vec3(0.28, 0.42, 0.18); // grassy lowland
-    const vec3 midCol  = vec3(0.46, 0.39, 0.24); // earthy brown
-    const vec3 highCol = vec3(0.60, 0.60, 0.62); // rocky/snowy high ground
-    vec3 col = (e < 0.5) ? mix(lowCol, midCol, e * 2.0)
-                         : mix(midCol, highCol, (e - 0.5) * 2.0);
-    // Slope: N.y near 1 = flat, lower = steep. Steep faces show bare rock.
-    float slope = clamp(geoNormal.y, 0.0, 1.0);
-    float rock  = 1.0 - smoothstep(0.55, 0.88, slope);
-    return mix(col, vec3(0.34, 0.32, 0.30), rock);
+// Procedural value noise (world-space XZ) for terrain micro-detail — same hash family as the
+// sky cloud noise, kept self-contained here.
+float hashT(vec2 p) {
+    p = fract(p * vec2(127.1, 311.7));
+    p += dot(p, p + 19.19);
+    return fract(p.x * p.y);
+}
+float noiseT(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hashT(i), hashT(i + vec2(1, 0)), f.x), mix(hashT(i + vec2(0, 1)), hashT(i + vec2(1, 1)), f.x), f.y);
+}
+
+// 4-biome weights from elevation + slope flatness (grass, dirt, rock, snow), normalised.
+vec4 biomeWeights(float elevationM, float slopeFlat) {
+    float grass = smoothstep(450.0, 300.0, elevationM) * smoothstep(0.65, 0.85, slopeFlat);
+    float snow  = smoothstep(700.0, 820.0, elevationM);
+    float rock  = (1.0 - smoothstep(0.55, 0.80, slopeFlat)) + smoothstep(520.0, 660.0, elevationM) * (1.0 - snow);
+    float dirt  = max(0.0, 1.0 - grass - rock - snow);
+    vec4 w = vec4(grass, dirt, rock, snow);
+    return w / (dot(w, vec4(1.0)) + 1e-4);
+}
+
+// Biome-blended terrain albedo with world-space detail-noise variation. worldXZ is absolute world
+// metres so detail tiles seamlessly across chunk boundaries.
+vec3 terrainAlbedo(float elevationM, vec3 geoNormal, vec2 worldXZ) {
+    const vec3 grassCol = vec3(0.23, 0.42, 0.15);
+    const vec3 dirtCol  = vec3(0.46, 0.37, 0.22);
+    const vec3 rockCol  = vec3(0.42, 0.40, 0.38);
+    const vec3 snowCol  = vec3(0.90, 0.92, 0.95);
+    vec4 w = biomeWeights(elevationM, clamp(geoNormal.y, 0.0, 1.0));
+    vec3 col = grassCol * w.x + dirtCol * w.y + rockCol * w.z + snowCol * w.w;
+    // Detail: blend coarse (30 m) and fine (6 m) noise to break up flat shading.
+    float d = noiseT(worldXZ / 30.0) * 0.7 + noiseT(worldXZ / 6.0) * 0.3;
+    col *= 0.8 + 0.4 * d;
+    return col;
 }
 
 // ── Vertex inputs ────────────────────────────────────────────────────────────
@@ -75,6 +99,16 @@ layout(location = 3) in float fragTangentHandedness;
 layout(location = 4) in vec2  fragUV;
 
 layout(location = 0) out vec4 outColor;
+// G-buffer world-space normal (octahedral-encoded into RG). Written only when the forward-opaque
+// pass binds a second colour attachment; ignored by single-attachment passes (transparent/sky).
+layout(location = 1) out vec4 outNormal;
+
+// Octahedral normal encoding (Cigolle et al.) → [0,1]² for an RG16F target.
+vec2 octEncode(vec3 n) {
+    n /= (abs(n.x) + abs(n.y) + abs(n.z));
+    vec2 e = (n.z < 0.0) ? (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0) : n.xy;
+    return e * 0.5 + 0.5;
+}
 
 // ── PBR helpers ──────────────────────────────────────────────────────────────
 
@@ -141,11 +175,13 @@ void main() {
     // Debug face colour (builtin placeholder) takes priority; otherwise terrain elevation/slope
     // shading. fragWorldPos is camera-relative, so add the camera world Y to recover absolute
     // elevation. Both use the geometric (flat) normal.
+    bool isTerrain = (push.shadingMode > 0.5 && push.shadingMode < 1.5);
+    vec2 terrainXZ = fragWorldPos.xz + camera.worldOrigin.xz; // absolute world XZ (seamless tiling)
     if (push.shadingMode > 1.5) {
         baseColor.rgb = faceColor(normalize(fragWorldNormal));
-    } else if (push.shadingMode > 0.5) {
+    } else if (isTerrain) {
         float elevationM = fragWorldPos.y + camera.worldOrigin.y;
-        baseColor.rgb = terrainAlbedo(elevationM, normalize(fragWorldNormal));
+        baseColor.rgb = terrainAlbedo(elevationM, normalize(fragWorldNormal), terrainXZ);
     }
 
     // ORM: R=occlusion, G=roughness, B=metallic
@@ -163,6 +199,20 @@ void main() {
 
     vec3 normalSample = texture(normalTex, fragUV).rgb * 2.0 - 1.0;
     N = normalize(TBN * normalSample);
+
+    // Terrain micro-surface: perturb the normal with finite-differenced detail noise (world XZ),
+    // and roughen slightly with the same field, fading out with distance to avoid shimmer.
+    if (isTerrain) {
+        float detailFade = 1.0 - smoothstep(150.0, 900.0, length(fragWorldPos));
+        if (detailFade > 0.001) {
+            const float eps = 0.5; // metres
+            float h0 = noiseT(terrainXZ / 6.0);
+            float hx = noiseT((terrainXZ + vec2(eps, 0.0)) / 6.0) - h0;
+            float hz = noiseT((terrainXZ + vec2(0.0, eps)) / 6.0) - h0;
+            N = normalize(N + vec3(hx, 0.0, hz) * 2.2 * detailFade);
+            roughness = clamp(roughness + (h0 - 0.5) * 0.15 * detailFade, 0.5, 1.0);
+        }
+    }
 
     // View and half vectors (camera-relative: camera is at origin)
     vec3 V = normalize(-fragWorldPos);
@@ -199,13 +249,36 @@ void main() {
 
     vec3 litColor = ambient + direct;
 
-    // Exponential fog in camera-relative view space.
-    // fogParams.x = density coefficient; fogParams.y = start distance (metres).
-    // When density is 0 (clear weather) the exp returns 1.0 and fogAmount = 0.
-    float viewDist  = length(fragWorldPos);
-    float fogAmount = 1.0 - clamp(
-        exp(-light.fogParams.x * max(0.0, viewDist - light.fogParams.y)),
-        0.0, 1.0);
-    vec3 fogColor = light.ambientColor.xyz * 2.5;
-    outColor = vec4(mix(litColor, fogColor, fogAmount), baseColor.a);
+    // Distance attenuation. fogParams.w selects the model:
+    //   0 → exponential weather fog (procedural sky quality)
+    //   1 → analytic aerial perspective (atmospheric sky quality): distant geometry is extinguished
+    //       and replaced by Rayleigh (blue) + Mie (sun-tinted) in-scatter, the signature flight-sim
+    //       vista look. Reuses the same scattering form as the atmospheric sky shader.
+    float viewDist = length(fragWorldPos);
+    vec3 outRgb;
+    if (light.fogParams.w >= 0.5) {
+        vec3 viewDir = (viewDist > 1e-4) ? (fragWorldPos / viewDist) : vec3(0.0, 0.0, 1.0);
+        float sunCos = clamp(dot(viewDir, normalize(light.sunDirection.xyz)), -1.0, 1.0);
+        float sunUp = clamp(light.sunDirection.y, 0.0, 1.0);
+        // Extinction grows with distance (scale height ~40 km of equivalent optical depth).
+        float t = 1.0 - exp(-viewDist * 2.2e-5);
+        float rayleighPh = 0.75 * (1.0 + sunCos * sunCos);
+        float g = 0.76;
+        float miePh = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * sunCos, 1.5);
+        vec3 rayleighCol = vec3(0.18, 0.34, 0.72);
+        vec3 inscatter = (rayleighCol * rayleighPh + light.sunColor.xyz * miePh * 0.08) * (0.6 + 0.4 * sunUp);
+        outRgb = mix(litColor, inscatter, t);
+        // Add the weather fog density on top so storms still occlude even in atmospheric mode.
+        float fogAmount = 1.0 - clamp(exp(-light.fogParams.x * max(0.0, viewDist - light.fogParams.y)), 0.0, 1.0);
+        outRgb = mix(outRgb, light.ambientColor.xyz * 2.5, fogAmount);
+    } else {
+        // Exponential fog. When density is 0 (clear weather) the exp returns 1.0 and fogAmount = 0.
+        float fogAmount = 1.0 - clamp(exp(-light.fogParams.x * max(0.0, viewDist - light.fogParams.y)), 0.0, 1.0);
+        outRgb = mix(litColor, light.ambientColor.xyz * 2.5, fogAmount);
+    }
+    outColor = vec4(outRgb, baseColor.a);
+
+    // G-buffer normal (world space, normal-mapped). Consumed by GTAO; dropped by passes that bind
+    // only the HDR attachment.
+    outNormal = vec4(octEncode(N), 0.0, 1.0);
 }

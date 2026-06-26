@@ -46,9 +46,11 @@ TEST_CASE("Settings: missing [graphics]/[audio] sections load defaults with no W
     CHECK(g.frameRateCap == FrameRateCap::Off);
     CHECK(g.qualityPreset == QualityLevel::High);
     CHECK(g.drawDistance == DrawDistance::High);
-    CHECK(g.aaMode == AntiAliasingMode::FXAA);
+    CHECK(g.aaMode == AntiAliasingMode::TAA);
     CHECK(g.shadowQuality == ShadowQuality::High);
     CHECK(g.particleDensity == ParticleDensity::High);
+    CHECK(g.ambientOcclusion == AmbientOcclusion::High);
+    CHECK(g.skyQuality == SkyQuality::LUT);
     CHECK(g.uiScale == UiScale::Scale100);
     CHECK(g.cockpitFov == 90);
 
@@ -264,31 +266,78 @@ TEST_CASE("Settings: aaMode FXAA round-trip", "[settings]") {
     CHECK(reload(fs).graphics().aaMode == AntiAliasingMode::FXAA);
 }
 
-TEST_CASE("Settings: aaMode MSAA2x round-trip", "[settings]") {
+TEST_CASE("Settings: aaMode TAA round-trip", "[settings]") {
     MockFilesystem fs;
     MockLogger logger;
     GraphicsSettings gs;
-    gs.aaMode = AntiAliasingMode::MSAA2x;
+    gs.aaMode = AntiAliasingMode::TAA;
     makeAndSave(fs, logger, gs, {});
-    CHECK(reload(fs).graphics().aaMode == AntiAliasingMode::MSAA2x);
+    CHECK(reload(fs).graphics().aaMode == AntiAliasingMode::TAA);
 }
 
-TEST_CASE("Settings: aaMode MSAA4x round-trip", "[settings]") {
+TEST_CASE("Settings: legacy msaa aa_mode migrates to TAA", "[settings]") {
     MockFilesystem fs;
     MockLogger logger;
-    GraphicsSettings gs;
-    gs.aaMode = AntiAliasingMode::MSAA4x;
-    makeAndSave(fs, logger, gs, {});
-    CHECK(reload(fs).graphics().aaMode == AntiAliasingMode::MSAA4x);
+    fs.addFile("config/user.toml", "[graphics]\naa_mode = \"msaa4x\"\n");
+    UserConfig cfg(fs, logger);
+    cfg.load();
+    CHECK(cfg.graphics().aaMode == AntiAliasingMode::TAA);
 }
 
-TEST_CASE("Settings: aaMode MSAA8x round-trip", "[settings]") {
+TEST_CASE("Settings: ambientOcclusion Off round-trip", "[settings]") {
     MockFilesystem fs;
     MockLogger logger;
     GraphicsSettings gs;
-    gs.aaMode = AntiAliasingMode::MSAA8x;
+    gs.ambientOcclusion = AmbientOcclusion::Off;
     makeAndSave(fs, logger, gs, {});
-    CHECK(reload(fs).graphics().aaMode == AntiAliasingMode::MSAA8x);
+    CHECK(reload(fs).graphics().ambientOcclusion == AmbientOcclusion::Off);
+}
+
+TEST_CASE("Settings: ambientOcclusion Low round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.ambientOcclusion = AmbientOcclusion::Low;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().ambientOcclusion == AmbientOcclusion::Low);
+}
+
+TEST_CASE("Settings: unknown ao_mode falls back to High and emits Warn", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[graphics]\nao_mode = \"insane\"\n");
+    UserConfig cfg(fs, logger);
+    cfg.load();
+    CHECK(cfg.graphics().ambientOcclusion == AmbientOcclusion::High);
+    CHECK_FALSE(logger.entries.empty());
+}
+
+TEST_CASE("Settings: skyQuality Procedural round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.skyQuality = SkyQuality::Procedural;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().skyQuality == SkyQuality::Procedural);
+}
+
+TEST_CASE("Settings: skyQuality LUT round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.skyQuality = SkyQuality::LUT;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().skyQuality == SkyQuality::LUT);
+}
+
+TEST_CASE("Settings: unknown sky_quality falls back to LUT and emits Warn", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[graphics]\nsky_quality = \"raytraced\"\n");
+    UserConfig cfg(fs, logger);
+    cfg.load();
+    CHECK(cfg.graphics().skyQuality == SkyQuality::LUT);
+    CHECK_FALSE(logger.entries.empty());
 }
 
 TEST_CASE("Settings: anti_aliasing bool migration true -> FXAA", "[settings]") {

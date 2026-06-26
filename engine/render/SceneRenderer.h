@@ -123,6 +123,9 @@ class SceneRenderer {
     MaterialHandle m_builtinPalette[kPaletteSize]{};
     MeshHandle m_builtinFloorMesh{};
     MaterialHandle m_builtinFloorMat{};
+    // Shaded grey PBR fallback for meshes without an explicit material (and, in release builds,
+    // the builtin placeholder entity). metallic 0.1, roughness 0.6.
+    MaterialHandle m_fallbackEntityMat{};
     bool m_showBuiltinFloor{false};
     TerrainStreamer* m_terrainStreamer{nullptr};
     ILogger* m_logger{nullptr};

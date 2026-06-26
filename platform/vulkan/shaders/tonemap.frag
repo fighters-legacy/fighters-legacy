@@ -10,12 +10,14 @@ layout(location = 0) out vec4 outColor;
 
 layout(set = 0, binding = 0) uniform sampler2D hdrBuffer;
 layout(set = 0, binding = 1) uniform sampler2D bloomBuffer;
+layout(set = 0, binding = 2) uniform sampler2D aoBuffer; // GTAO (AO in .r)
 
 layout(push_constant) uniform TonemapPush {
     float texelSizeX;   // 1 / framebuffer width
     float texelSizeY;   // 1 / framebuffer height
     uint  enableFxaa;   // 1 = apply FXAA
     float bloomStrength; // 0 = no bloom
+    float aoStrength;    // 0 = AO disabled
 } push;
 
 // ---------------------------------------------------------------------------
@@ -46,6 +48,11 @@ vec3 khronosPbrNeutral(vec3 color) {
 // ---------------------------------------------------------------------------
 vec3 sampleAndTonemap(vec2 uv) {
     vec3 hdr = texture(hdrBuffer, uv).rgb;
+    // Apply ambient occlusion before bloom (forward-renderer approximation: scales total radiance).
+    if (push.aoStrength > 0.0) {
+        float ao = texture(aoBuffer, uv).r;
+        hdr *= mix(1.0, ao, push.aoStrength);
+    }
     if (push.bloomStrength > 0.0)
         hdr += texture(bloomBuffer, uv).rgb * push.bloomStrength;
     return khronosPbrNeutral(hdr);

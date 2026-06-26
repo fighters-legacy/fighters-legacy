@@ -147,32 +147,75 @@ static const char* aaModeString(AntiAliasingMode m) {
         return "off";
     case AntiAliasingMode::FXAA:
         return "fxaa";
-    case AntiAliasingMode::MSAA2x:
-        return "msaa2x";
-    case AntiAliasingMode::MSAA4x:
-        return "msaa4x";
-    case AntiAliasingMode::MSAA8x:
-        return "msaa8x";
+    case AntiAliasingMode::TAA:
+        return "taa";
     }
-    return "fxaa";
+    return "taa";
 }
 
 static AntiAliasingMode parseAaMode(const char* s, ILogger& log) {
     if (!s)
-        return AntiAliasingMode::FXAA;
+        return AntiAliasingMode::TAA;
     if (std::strcmp(s, "off") == 0)
         return AntiAliasingMode::Off;
     if (std::strcmp(s, "fxaa") == 0)
         return AntiAliasingMode::FXAA;
-    if (std::strcmp(s, "msaa2x") == 0)
-        return AntiAliasingMode::MSAA2x;
-    if (std::strcmp(s, "msaa4x") == 0)
-        return AntiAliasingMode::MSAA4x;
-    if (std::strcmp(s, "msaa8x") == 0)
-        return AntiAliasingMode::MSAA8x;
+    if (std::strcmp(s, "taa") == 0)
+        return AntiAliasingMode::TAA;
+    // Legacy upgrade: MSAA was removed in favour of TAA — migrate silently.
+    if (std::strcmp(s, "msaa2x") == 0 || std::strcmp(s, "msaa4x") == 0 || std::strcmp(s, "msaa8x") == 0)
+        return AntiAliasingMode::TAA;
     log.log(LogLevel::Warn, __FILE__, __LINE__,
-            (std::string("user config: unknown aa_mode '") + s + "', defaulting to fxaa").c_str());
-    return AntiAliasingMode::FXAA;
+            (std::string("user config: unknown aa_mode '") + s + "', defaulting to taa").c_str());
+    return AntiAliasingMode::TAA;
+}
+
+static const char* aoModeString(AmbientOcclusion m) {
+    switch (m) {
+    case AmbientOcclusion::Off:
+        return "off";
+    case AmbientOcclusion::Low:
+        return "low";
+    case AmbientOcclusion::High:
+        return "high";
+    }
+    return "high";
+}
+
+static AmbientOcclusion parseAoMode(const char* s, ILogger& log) {
+    if (!s)
+        return AmbientOcclusion::High;
+    if (std::strcmp(s, "off") == 0)
+        return AmbientOcclusion::Off;
+    if (std::strcmp(s, "low") == 0)
+        return AmbientOcclusion::Low;
+    if (std::strcmp(s, "high") == 0)
+        return AmbientOcclusion::High;
+    log.log(LogLevel::Warn, __FILE__, __LINE__,
+            (std::string("user config: unknown ao_mode '") + s + "', defaulting to high").c_str());
+    return AmbientOcclusion::High;
+}
+
+static const char* skyQualityString(SkyQuality q) {
+    switch (q) {
+    case SkyQuality::Procedural:
+        return "procedural";
+    case SkyQuality::LUT:
+        return "lut";
+    }
+    return "lut";
+}
+
+static SkyQuality parseSkyQuality(const char* s, ILogger& log) {
+    if (!s)
+        return SkyQuality::LUT;
+    if (std::strcmp(s, "procedural") == 0)
+        return SkyQuality::Procedural;
+    if (std::strcmp(s, "lut") == 0)
+        return SkyQuality::LUT;
+    log.log(LogLevel::Warn, __FILE__, __LINE__,
+            (std::string("user config: unknown sky_quality '") + s + "', defaulting to lut").c_str());
+    return SkyQuality::LUT;
 }
 
 static const char* shadowQualityString(ShadowQuality q) {
@@ -654,6 +697,12 @@ bool UserConfig::load() {
     if (auto v = tbl["graphics"]["particle_density"].value<std::string>())
         m_graphics.particleDensity = parseParticleDensity(v->c_str(), m_logger);
 
+    if (auto v = tbl["graphics"]["ao_mode"].value<std::string>())
+        m_graphics.ambientOcclusion = parseAoMode(v->c_str(), m_logger);
+
+    if (auto v = tbl["graphics"]["sky_quality"].value<std::string>())
+        m_graphics.skyQuality = parseSkyQuality(v->c_str(), m_logger);
+
     if (auto v = tbl["graphics"]["ui_scale"].value<int64_t>()) {
         UiScale parsed = parseUiScale(static_cast<int>(*v));
         if (uiScaleInt(parsed) != static_cast<int>(*v))
@@ -828,6 +877,8 @@ bool UserConfig::save() {
     graphics.insert_or_assign("aa_mode", aaModeString(m_graphics.aaMode));
     graphics.insert_or_assign("shadow_quality", shadowQualityString(m_graphics.shadowQuality));
     graphics.insert_or_assign("particle_density", particleDensityString(m_graphics.particleDensity));
+    graphics.insert_or_assign("ao_mode", aoModeString(m_graphics.ambientOcclusion));
+    graphics.insert_or_assign("sky_quality", skyQualityString(m_graphics.skyQuality));
     graphics.insert_or_assign("ui_scale", static_cast<int64_t>(uiScaleInt(m_graphics.uiScale)));
     graphics.insert_or_assign("cockpit_fov", static_cast<int64_t>(m_graphics.cockpitFov));
 

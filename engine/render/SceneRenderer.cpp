@@ -82,6 +82,14 @@ void SceneRenderer::ensureBuiltins() {
     fmd.baseColorFactor = {0.35f, 0.45f, 0.30f, 1.0f}; // olive-gray
     fmd.roughnessFactor = 0.95f;
     m_builtinFloorMat = m_renderer.createMaterial(fmd);
+
+    // Shaded grey fallback: used for resolved meshes lacking explicit material data, and (in
+    // release builds) for the builtin placeholder entity in place of the per-face debug colour.
+    MaterialDesc emd{};
+    emd.baseColorFactor = {0.60f, 0.60f, 0.62f, 1.0f}; // neutral grey
+    emd.metallicFactor = 0.10f;
+    emd.roughnessFactor = 0.60f;
+    m_fallbackEntityMat = m_renderer.createMaterial(emd);
 }
 
 void SceneRenderer::setParticleSystem(ParticleSystem* ps, EffectResolver effectResolver) noexcept {
@@ -161,7 +169,13 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
             if (!m_builtinEntityMesh.valid())
                 continue; // builtins not yet uploaded — skip
             mesh = m_builtinEntityMesh;
+#ifdef NDEBUG
+            // Release: shaded grey so placeholder entities read as real geometry.
+            mat = m_fallbackEntityMat;
+#else
+            // Debug: per-entity palette colour + per-face debug tint (orientation aid).
             mat = m_builtinPalette[entry.entityIdx % static_cast<uint32_t>(kPaletteSize)];
+#endif
         }
 
         // Velocity extrapolation: advance position by alpha × tick period.
@@ -186,8 +200,10 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
         item.flags = (entry.damageLevel > 0) ? kRenderFlagDamaged : 0u;
         if (shadowOnly)
             item.flags |= kRenderFlagShadowOnly;
+#ifndef NDEBUG
         if (useBuiltin)
             item.flags |= kRenderFlagDebugFaceColor; // distinct per-face colours on the placeholder
+#endif
         m_items.push_back(item);
     }
 
@@ -271,11 +287,11 @@ MaterialHandle SceneRenderer::getOrUploadMaterial(const std::string& meshName) {
     if (it != m_materialCache.end())
         return it->second;
 
-    // Default opaque PBR material — no textures, white base color.
-    MaterialDesc desc{};
-    MaterialHandle h = m_renderer.createMaterial(desc);
-    m_materialCache[meshName] = h;
-    return h;
+    // Share the pre-created shaded-grey fallback across every mesh name that lacks explicit
+    // material data (ensureBuiltins() always runs before this method). Avoids creating one
+    // identical material per mesh name.
+    m_materialCache[meshName] = m_fallbackEntityMat;
+    return m_fallbackEntityMat;
 }
 
 } // namespace fl
