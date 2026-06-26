@@ -53,7 +53,13 @@ jobs:
         uses: actions/cache@v5
         with:
           path: build/_deps
-          key: cmake-deps-${{ matrix.os }}-${{ hashFiles('cmake/dependencies.cmake') }}
+          key: cmake-deps-v2-${{ matrix.os }}-${{ hashFiles('cmake/dependencies.cmake') }}
+
+      - name: Set up MSVC developer environment (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
@@ -78,10 +84,10 @@ jobs:
           New-Item -ItemType Directory -Force dist\shaders | Out-Null
           $tools = @("validate-flight-model","validate-mission","validate-mesh","tex-compress","validate-licenses","validate-playlist")
           foreach ($t in $tools) {
-            $src = "build\${{ matrix.preset }}\tools\Release\$t.exe"
+            $src = "build\${{ matrix.preset }}\tools\$t.exe"
             if (Test-Path $src) { Copy-Item $src dist\ }
           }
-          $game = "build\${{ matrix.preset }}\game\fighters-legacy\Release\fighters-legacy.exe"
+          $game = "build\${{ matrix.preset }}\game\fighters-legacy\fighters-legacy.exe"
           if (Test-Path $game) { Copy-Item $game dist\ }
           $spvDir = "build\${{ matrix.preset }}\platform\vulkan\shaders"
           if (Test-Path $spvDir) { Copy-Item "$spvDir\*.spv" dist\shaders\ }
