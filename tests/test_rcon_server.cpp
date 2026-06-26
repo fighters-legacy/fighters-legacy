@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "IClock.h"
+#include "RconDrainHelper.h"
 #include "RconServer.h"
 #include "console/CommandRegistry.h"
 #include "console/CommandShell.h"
@@ -596,4 +597,273 @@ TEST_CASE("RCON drain: multi-line output stays within single kMaxBodyPerPacket c
 
     auto chunks = rcon::splitResponse(combined);
     CHECK(chunks.size() == 1); // all lines fit in a single packet
+}
+
+// ---------------------------------------------------------------------------
+// checkAndFireDrains — drain deadline unit tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("RCON drain deadline: does not fire when now < drainDeadline", "[rcon][drain][deadline]") {
+    MockLogger log;
+    CommandRegistry reg;
+    CommandShell shell(log, reg);
+    ManualClock clk;
+
+    rcon::DrainClientInfo c;
+    c.connected = true;
+    c.hasPendingDrain = true;
+    c.drainMark = shell.mark();
+    c.drainPacketId = 1;
+    c.drainDeadline = clk.now() + std::chrono::milliseconds(100);
+
+    shell.print("async output");
+
+    std::vector<rcon::DrainClientInfo*> clients{&c};
+    rcon::checkAndFireDrains(clients, clk.now(), &shell); // now < deadline
+
+    CHECK(c.hasPendingDrain);
+    CHECK(c.sendBuf.empty());
+}
+
+TEST_CASE("RCON drain deadline: fires when now >= drainDeadline, single line", "[rcon][drain][deadline]") {
+    MockLogger log;
+    CommandRegistry reg;
+    CommandShell shell(log, reg);
+    ManualClock clk;
+
+    rcon::DrainClientInfo c;
+    c.connected = true;
+    c.hasPendingDrain = true;
+    c.drainMark = shell.mark();
+    c.drainPacketId = 7;
+    c.drainDeadline = clk.now(); // deadline == now -> fires
+
+    shell.print("kick confirmed");
+
+    std::vector<rcon::DrainClientInfo*> clients{&c};
+    rcon::checkAndFireDrains(clients, clk.now(), &shell);
+
+    CHECK_FALSE(c.hasPendingDrain);
+    REQUIRE_FALSE(c.sendBuf.empty());
+
+    rcon::RconPacket pkt;
+    int consumed = rcon::decodePacket(c.sendBuf.data(), static_cast<int>(c.sendBuf.size()), pkt);
+    REQUIRE(consumed > 0);
+    CHECK(pkt.id == 7);
+    CHECK(pkt.type == rcon::kTypeResponseValue);
+    CHECK(pkt.body.find("kick confirmed") != std::string::npos);
+}
+
+TEST_CASE("RCON drain deadline: fires exactly once, not retriggered on second call", "[rcon][drain][deadline]") {
+    MockLogger log;
+    CommandRegistry reg;
+    CommandShell shell(log, reg);
+    ManualClock clk;
+
+    rcon::DrainClientInfo c;
+    c.connected = true;
+    c.hasPendingDrain = true;
+    c.drainMark = shell.mark();
+    c.drainPacketId = 1;
+    c.drainDeadline = clk.now();
+
+    shell.print("first output");
+
+    std::vector<rcon::DrainClientInfo*> clients{&c};
+    rcon::checkAndFireDrains(clients, clk.now(), &shell); // fires
+
+    CHECK_FALSE(c.hasPendingDrain);
+    std::size_t bufAfterFirst = c.sendBuf.size();
+
+    shell.print("second output");
+
+    rcon::checkAndFireDrains(clients, clk.now(), &shell); // hasPendingDrain is false — no fire
+
+    CHECK(c.sendBuf.size() == bufAfterFirst);
+}
+
+TEST_CASE("RCON drain deadline: fires but queues no packets when shell has no output since mark",
+          "[rcon][drain][deadline]") {
+    MockLogger log;
+    CommandRegistry reg;
+    CommandShell shell(log, reg);
+    ManualClock clk;
+
+    shell.print("before mark"); // written before mark — not visible to drainSince
+
+    rcon::DrainClientInfo c;
+    c.connected = true;
+    c.hasPendingDrain = true;
+    c.drainMark = shell.mark(); // mark taken now
+    c.drainPacketId = 3;
+    c.drainDeadline = clk.now();
+
+    // No shell.print() after mark
+
+    std::vector<rcon::DrainClientInfo*> clients{&c};
+    rcon::checkAndFireDrains(clients, clk.now(), &shell);
+
+    CHECK_FALSE(c.hasPendingDrain); // cleared even with no output
+    CHECK(c.sendBuf.empty());
+}
+
+TEST_CASE("RCON drain deadline: null shell is a no-op", "[rcon][drain][deadline]") {
+    rcon::DrainClientInfo c;
+    c.connected = true;
+    c.hasPendingDrain = true;
+    c.drainDeadline = std::chrono::steady_clock::time_point{}; // epoch = well in the past
+
+    std::vector<rcon::DrainClientInfo*> clients{&c};
+    rcon::checkAndFireDrains(clients, std::chrono::steady_clock::now(), nullptr);
+
+    CHECK(c.hasPendingDrain); // unchanged
+    CHECK(c.sendBuf.empty());
+}
+
+TEST_CASE("RCON drain deadline: disconnected client is skipped even when deadline passed", "[rcon][drain][deadline]") {
+    MockLogger log;
+    CommandRegistry reg;
+    CommandShell shell(log, reg);
+    ManualClock clk;
+
+    rcon::DrainClientInfo c;
+    c.connected = false; // disconnected
+    c.hasPendingDrain = true;
+    c.drainMark = shell.mark();
+    c.drainDeadline = clk.now();
+
+    shell.print("output");
+
+    std::vector<rcon::DrainClientInfo*> clients{&c};
+    rcon::checkAndFireDrains(clients, clk.now(), &shell);
+
+    CHECK(c.hasPendingDrain); // not cleared
+    CHECK(c.sendBuf.empty());
+}
+
+TEST_CASE("RCON drain deadline: multiple clients, only deadline-expired ones fire", "[rcon][drain][deadline]") {
+    MockLogger log;
+    CommandRegistry reg;
+    CommandShell shell(log, reg);
+    ManualClock clk;
+
+    // Client A: deadline in the future — should NOT fire
+    rcon::DrainClientInfo a;
+    a.connected = true;
+    a.hasPendingDrain = true;
+    a.drainMark = shell.mark();
+    a.drainPacketId = 10;
+    a.drainDeadline = clk.now() + std::chrono::milliseconds(200);
+
+    shell.print("for A");
+
+    // Client B: deadline already passed — should fire
+    rcon::DrainClientInfo b;
+    b.connected = true;
+    b.hasPendingDrain = true;
+    b.drainMark = shell.mark();
+    b.drainPacketId = 20;
+    b.drainDeadline = clk.now();
+
+    shell.print("for B");
+
+    std::vector<rcon::DrainClientInfo*> clients{&a, &b};
+    rcon::checkAndFireDrains(clients, clk.now(), &shell);
+
+    CHECK(a.hasPendingDrain); // A's deadline not yet reached
+    CHECK(a.sendBuf.empty());
+    CHECK_FALSE(b.hasPendingDrain); // B fired
+    REQUIRE_FALSE(b.sendBuf.empty());
+    rcon::RconPacket pkt;
+    rcon::decodePacket(b.sendBuf.data(), static_cast<int>(b.sendBuf.size()), pkt);
+    CHECK(pkt.id == 20);
+    CHECK(pkt.body.find("for B") != std::string::npos);
+}
+
+TEST_CASE("RCON drain deadline: multiple lines joined with newline in packet body", "[rcon][drain][deadline]") {
+    MockLogger log;
+    CommandRegistry reg;
+    CommandShell shell(log, reg);
+    ManualClock clk;
+
+    rcon::DrainClientInfo c;
+    c.connected = true;
+    c.hasPendingDrain = true;
+    c.drainMark = shell.mark();
+    c.drainPacketId = 5;
+    c.drainDeadline = clk.now();
+
+    shell.print("line one");
+    shell.print("line two");
+    shell.print("line three");
+
+    std::vector<rcon::DrainClientInfo*> clients{&c};
+    rcon::checkAndFireDrains(clients, clk.now(), &shell);
+
+    CHECK_FALSE(c.hasPendingDrain);
+    REQUIRE_FALSE(c.sendBuf.empty());
+
+    rcon::RconPacket pkt;
+    int consumed = rcon::decodePacket(c.sendBuf.data(), static_cast<int>(c.sendBuf.size()), pkt);
+    REQUIRE(consumed > 0);
+    CHECK(pkt.body.find("line one") != std::string::npos);
+    CHECK(pkt.body.find("line two") != std::string::npos);
+    CHECK(pkt.body.find("line three") != std::string::npos);
+    // Lines are joined by '\n'
+    CHECK(pkt.body.find("line one\nline two") != std::string::npos);
+}
+
+TEST_CASE("RCON drain deadline: large output splits into multiple chunks with trailing empty sentinel",
+          "[rcon][drain][deadline]") {
+    MockLogger log;
+    CommandRegistry reg;
+    CommandShell shell(log, reg);
+    ManualClock clk;
+
+    rcon::DrainClientInfo c;
+    c.connected = true;
+    c.hasPendingDrain = true;
+    c.drainMark = shell.mark();
+    c.drainPacketId = 9;
+    c.drainDeadline = clk.now();
+
+    // Write a single line larger than kMaxBodyPerPacket (4086 bytes) to force splitting.
+    // 5000 'x' chars → splitResponse produces chunk1(4086) + chunk2(914).
+    shell.print(std::string(5000, 'x'));
+
+    std::vector<rcon::DrainClientInfo*> clients{&c};
+    rcon::checkAndFireDrains(clients, clk.now(), &shell);
+
+    CHECK_FALSE(c.hasPendingDrain);
+    REQUIRE_FALSE(c.sendBuf.empty());
+
+    // Decode three packets: chunk1, chunk2, empty sentinel.
+    int offset = 0;
+    int total = static_cast<int>(c.sendBuf.size());
+
+    rcon::RconPacket p1;
+    int c1 = rcon::decodePacket(c.sendBuf.data() + offset, total - offset, p1);
+    REQUIRE(c1 > 0);
+    CHECK(p1.id == 9);
+    CHECK(p1.type == rcon::kTypeResponseValue);
+    CHECK(p1.body.size() == static_cast<std::size_t>(rcon::kMaxBodyPerPacket));
+    offset += c1;
+
+    rcon::RconPacket p2;
+    int c2 = rcon::decodePacket(c.sendBuf.data() + offset, total - offset, p2);
+    REQUIRE(c2 > 0);
+    CHECK(p2.id == 9);
+    CHECK(p2.type == rcon::kTypeResponseValue);
+    CHECK(p2.body.size() == 5000 - static_cast<std::size_t>(rcon::kMaxBodyPerPacket));
+    offset += c2;
+
+    rcon::RconPacket sentinel;
+    int cs = rcon::decodePacket(c.sendBuf.data() + offset, total - offset, sentinel);
+    REQUIRE(cs > 0);
+    CHECK(sentinel.id == 9);
+    CHECK(sentinel.type == rcon::kTypeResponseValue);
+    CHECK(sentinel.body.empty()); // trailing empty sentinel
+    offset += cs;
+
+    CHECK(offset == total); // no extra bytes
 }

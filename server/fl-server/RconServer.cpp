@@ -49,6 +49,7 @@ static void rconSetNonBlocking(RconSocket s) {
 }
 #endif
 
+#include "RconDrainHelper.h"
 #include "RconServer.h"
 #include <console/CommandRegistry.h>
 #include <console/CommandShell.h>
@@ -131,6 +132,37 @@ std::vector<std::string> splitResponse(std::string_view body) {
     return chunks;
 }
 
+void checkAndFireDrains(std::vector<DrainClientInfo*>& clients, std::chrono::steady_clock::time_point now,
+                        fl::CommandShell* shell) {
+    if (!shell)
+        return;
+    for (auto* c : clients) {
+        if (!c->hasPendingDrain || !c->connected)
+            continue;
+        if (now < c->drainDeadline)
+            continue;
+        c->hasPendingDrain = false;
+        auto lines = shell->drainSince(c->drainMark);
+        if (lines.empty())
+            continue;
+        std::string combined;
+        for (const auto& l : lines) {
+            if (!combined.empty())
+                combined += '\n';
+            combined += l;
+        }
+        auto chunks = splitResponse(combined);
+        for (const auto& chunk : chunks) {
+            auto pkt = encodePacket(c->drainPacketId, kTypeResponseValue, chunk);
+            c->sendBuf.insert(c->sendBuf.end(), pkt.begin(), pkt.end());
+        }
+        if (chunks.size() > 1) {
+            auto pkt = encodePacket(c->drainPacketId, kTypeResponseValue, "");
+            c->sendBuf.insert(c->sendBuf.end(), pkt.begin(), pkt.end());
+        }
+    }
+}
+
 } // namespace fl::rcon
 
 namespace fl {
@@ -143,16 +175,11 @@ namespace {
 
 static constexpr int kDrainDelayMs = 20; // slightly more than one 60 Hz sim tick (~16.67 ms)
 
-struct ClientState {
+struct ClientState : public fl::rcon::DrainClientInfo {
     RconSocket fd = kInvalidSocket;
     std::string address;
     std::vector<uint8_t> recvBuf;
-    std::vector<uint8_t> sendBuf;
     enum class Auth { Unauthenticated, Authenticated } authState = Auth::Unauthenticated;
-    bool hasPendingDrain = false;
-    int drainMark = 0;
-    int32_t drainPacketId = 0;
-    std::chrono::steady_clock::time_point drainDeadline{};
 };
 
 // Append data to client's send buffer. Returns false if the send buffer is
@@ -224,7 +251,7 @@ void RconServer::Impl::ioLoop() {
         if (m_shell) {
             auto now = m_clock->now();
             for (const auto& c : clients) {
-                if (!c.hasPendingDrain || c.fd == kInvalidSocket)
+                if (!c.hasPendingDrain || !c.connected)
                     continue;
                 auto rawMs = std::chrono::duration_cast<std::chrono::milliseconds>(c.drainDeadline - now).count();
                 int clampedMs = rawMs <= 0 ? 0 : static_cast<int>(rawMs);
@@ -238,28 +265,11 @@ void RconServer::Impl::ioLoop() {
             break; // fatal poll error
         }
         if (m_shell) {
-            auto now = m_clock->now();
-            for (auto& c : clients) {
-                if (!c.hasPendingDrain || c.fd == kInvalidSocket)
-                    continue;
-                if (now < c.drainDeadline)
-                    continue;
-                c.hasPendingDrain = false;
-                auto lines = m_shell->drainSince(c.drainMark);
-                if (lines.empty())
-                    continue;
-                std::string combined;
-                for (const auto& l : lines) {
-                    if (!combined.empty())
-                        combined += '\n';
-                    combined += l;
-                }
-                auto chunks = rcon::splitResponse(combined);
-                for (const auto& chunk : chunks)
-                    queueSend(c, rcon::encodePacket(c.drainPacketId, rcon::kTypeResponseValue, chunk));
-                if (chunks.size() > 1)
-                    queueSend(c, rcon::encodePacket(c.drainPacketId, rcon::kTypeResponseValue, ""));
-            }
+            std::vector<fl::rcon::DrainClientInfo*> drainPtrs;
+            drainPtrs.reserve(clients.size());
+            for (auto& c : clients)
+                drainPtrs.push_back(&c);
+            fl::rcon::checkAndFireDrains(drainPtrs, m_clock->now(), m_shell);
         }
         if (ready == 0) {
             {
@@ -307,6 +317,7 @@ void RconServer::Impl::ioLoop() {
 #endif
                     ClientState cs;
                     cs.fd = clientFd;
+                    cs.connected = true;
                     cs.address = peerIp;
                     clients.push_back(std::move(cs));
                     m_log.log(LogLevel::Info, __FILE__, __LINE__, "RCON: client connected");
@@ -334,6 +345,7 @@ void RconServer::Impl::ioLoop() {
                 else if (sent < 0 && !rconWouldBlock()) {
                     rconClose(c.fd);
                     c.fd = kInvalidSocket;
+                    c.connected = false;
                     needClean = true;
                     continue;
                 }
@@ -351,6 +363,7 @@ void RconServer::Impl::ioLoop() {
                     continue;
                 rconClose(c.fd);
                 c.fd = kInvalidSocket;
+                c.connected = false;
                 needClean = true;
                 m_log.log(LogLevel::Info, __FILE__, __LINE__, "RCON: client disconnected");
                 continue;
@@ -459,6 +472,7 @@ void RconServer::Impl::ioLoop() {
                 }
                 rconClose(c.fd);
                 c.fd = kInvalidSocket;
+                c.connected = false;
                 needClean = true;
                 m_log.log(LogLevel::Info, __FILE__, __LINE__, "RCON: client disconnected");
             }
