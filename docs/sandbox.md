@@ -239,6 +239,8 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 | `high_yo_yo` | `<entityIdx> [climbDur] [reacquireDur]` | Overshoot correction: bank away from target, pull up to bleed speed, then reacquire (defaults: 2.5 s, 3.0 s) |
 | `low_yo_yo` | `<entityIdx> [diveDur] [pullDur]` | Dive-and-cut-corner to close on a turning target (defaults: 1.5 s, 2.5 s) |
 | `lua` | `<script_name>` | Load a Lua AI script from the content pack's `ai/` directory (e.g. `patrol`, `interceptor`). See `docs/modding/ai.md`. |
+| `patrol_attack` | `<entityIdx> [engageRangeM] [retreatHp]` | Three-state machine: loiter patrol → lead-pursuit engage when target within range → evade retreat when HP below threshold (defaults: engageRangeM=8000 m, retreatHp=0.25) |
+| `escort` | `<entityIdx> [standoffM]` | Two-state orbit protection: clockwise loiter at standoffM radius around the escorted entity's spawn position → Immelmann reversal when any entity enters the inner defense zone (standoffM×0.5). Best used for fixed or slow-moving assets. (default: standoffM=2000 m) |
 
 **Weather presets:**
 

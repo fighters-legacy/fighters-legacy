@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **ai**: `patrol_attack` and `escort` StateMachineController templates in AiControllerFactory (#430)
 - **ai**: LagPursuitController for guns employment on turning targets; completes the pursuit triangle alongside pure pursuit and `LeadPursuitController` (#432)
 
 ### Fixed
