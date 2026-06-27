@@ -281,7 +281,9 @@ the result string is empty (fire-and-forget commands return empty; clients may s
 `MsgId::AdminResponse = 0x07` is an additive message ID — clients that do not recognize it
 silently discard without error. `kProtocolVersion` is **not** bumped.
 
-The `text` field is null-terminated UTF-8. Results ≤ 123 chars are delivered in a single
+The `text` field is null-terminated UTF-8. Response bodies may contain embedded `\n`
+characters; clients should split on `\n`, strip trailing `\r` for CRLF compatibility, and
+display each non-empty line separately. Results ≤ 123 chars are delivered in a single
 `MsgAdminResponse`; longer results arrive as a sequence of `MsgAdminResponseChunk` packets
 terminated by `kChunkFlagEnd`. `text[0] == '\0'` indicates an empty result (queued
 asynchronously; clients may skip printing). `reqId` echoes the triggering
@@ -318,8 +320,9 @@ diagnostic only.
 recognize it silently discard without error. `kProtocolVersion` is **not** bumped.
 
 **Client reassembly:** append each `body` string in order. When a chunk with `kChunkFlagEnd`
-(bit 0 of `flags`) arrives, print the assembled string as the complete response. Discard
-streams that exceed 64 KB (implementation-defined safety cap).
+(bit 0 of `flags`) arrives, the response body is complete. Split it on `\n` (strip trailing
+`\r` for CRLF compatibility) and display each non-empty line separately in the client UI.
+Discard streams that exceed 64 KB (implementation-defined safety cap).
 
 | Offset | Size | Field | Type | Notes |
 |---|---|---|---|---|

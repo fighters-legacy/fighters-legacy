@@ -19,6 +19,18 @@
 
 namespace fl {
 
+static void printAdminLines(GameConsole* console, const std::string& text) {
+    std::istringstream stream(text);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        if (line.empty())
+            continue;
+        console->print(std::string("[admin] ") + line);
+    }
+}
+
 void ClientNetEventHandler::onConnect(uint32_t /*peerId*/) {
     m_connected = true;
     logger.log(LogLevel::Info, __FILE__, __LINE__, "connected to local fl-server");
@@ -207,7 +219,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             return;
         resp.text[sizeof(resp.text) - 1] = '\0';
         if (console && resp.text[0] != '\0')
-            console->print(std::string("[admin] ") + resp.text);
+            printAdminLines(console, resp.text);
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::AdminResponseChunk)) {
         fl::MsgAdminResponseChunk chunk{};
         if (!fl::readMsg(data, size, chunk))
@@ -223,7 +235,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         m_chunkBuf.append(chunk.body, bodyLen);
         if (chunk.flags & fl::kChunkFlagEnd) {
             if (console && !m_chunkBuf.empty())
-                console->print(std::string("[admin] ") + m_chunkBuf);
+                printAdminLines(console, m_chunkBuf);
             m_chunkBuf.clear();
             m_chunkBufActive = false;
         }
