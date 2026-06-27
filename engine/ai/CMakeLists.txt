@@ -7,6 +7,7 @@ add_library(engine-ai STATIC
     BreakTurnController.cpp
     StateMachineController.cpp
     LeadPursuitController.cpp
+    LagPursuitController.cpp
     ImmelmannController.cpp
     SplitSController.cpp
     HighYoYoController.cpp

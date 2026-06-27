@@ -305,7 +305,7 @@ Spherical-Earth physics and terrain curvature is the engine's only supported mod
 
 **Control-source seam (`IEntityController`):** `IEntityController::sample(EntityState, tick, dt, SpatialIndex* si = nullptr) → ControlInput` decouples the flight integrator from any assumption about who (or what) is flying. `WorldBroadcaster` maintains an `EntityId`-keyed registry of `ControlledEntity{sim, controller}` structs and steps every one uniformly each tick: `controller->sample()` produces inputs, `FlightIntegrator::step()` advances physics, and the result serialises into `MsgWorldSnapshot` automatically. Three concrete driver types all implement the same interface: `PeerController` (drains one input per tick from the peer's `JitterBuffer` — `engine/net/JitterBuffer.h` — and stale-repeats the last drained input when the buffer is empty, preventing coasting under packet loss; buffer depth is seeded from `estimatedDelayTicks` on first input, capped by `[world].jitter_buffer_depth`), C++ autopilot controllers in `engine-ai`, and `LuaController` in `engine-script` (a sandboxed Lua 5.5 script that exposes entity state, `guidance.*` math, and spatial queries). Register a server-side controller via `WorldBroadcaster::registerController(id, controller, model)` after spawning an entity.
 
-**`engine/ai/` — server-side autopilot controllers (`engine-ai` library):** Five concrete `IEntityController` implementations ship with the engine:
+**`engine/ai/` — server-side autopilot controllers (`engine-ai` library):** Twelve concrete `IEntityController` implementations ship with the engine:
 
 | Controller | Behaviour |
 |---|---|
@@ -314,8 +314,15 @@ Spherical-Earth physics and terrain curvature is the engine's only supported mod
 | `PursuitController` | Pure-pursuit intercept: steers toward a target entity's current position each tick. |
 | `EvadeController` | Horizontal escape: inverts the pursuit heading error to bank away from a threat entity. |
 | `BreakTurnController` | Two-phase defensive ACM: Roll phase (bank toward the threat bearing for a configurable duration) followed by Pull phase (maximum-G elevator with afterburner, open-ended). |
+| `LeadPursuitController` | Proportional navigation intercept: aims at a predicted intercept point (`target.pos + target.vel × TTC × navGain`); `navGain=0` degenerates to pure pursuit. |
+| `LagPursuitController` | Lag pursuit intercept: aims behind the target (`target.pos − target.vel × TTC × lagFraction`); keeps the attacker inside the target's turn circle without overshooting; `lagFraction=0` = pure pursuit. |
+| `ImmelmannController` | Half-loop + roll to reverse heading: Pull phase (full elevator + afterburner), Roll phase, Done. |
+| `SplitSController` | Roll inverted + pull through to reverse heading: Roll phase (speedbrake to limit entry airspeed), Pull phase, Done. |
+| `HighYoYoController` | Overshoot correction: banks away from target and climbs to bleed speed, then reacquires. Three phases: Climb, Reacquire, Done. |
+| `LowYoYoController` | Dive-and-cut-corner to close range on a turning target. Three phases: Dive, Pull, Done. |
+| `StateMachineController` | Composition framework: sequences child controllers with priority-ordered `Condition`-gated transitions and `minDwellSeconds` hysteresis. Built-in conditions: `ThreatWithinRange`, `ThreatBeyondRange`, `HpBelow`, `AnyEntityWithinRange`, `Always`, plus `And`/`Or`/`Not` combinators. |
 
-`Guidance.h` (header-only) provides the shared math: `bodyForward`, `horizontalHeadingError`, `pitchErrorFromAlt`, `bankToTurnAileron`, `coordinatedRudder`, `elevatorFromPitchError`. `AiControllerFactory.h` (header-only) exposes `createController(behavior, args, entityManager*)` for string-based instantiation from admin commands. The `spawn` server admin command supports `--ai loiter|waypoint|pursuit|evade|break [args...]` (C++ controllers) and `--ai lua <script_name>` (Lua controller loaded from a content pack's `ai/` directory).
+`Guidance.h` (header-only) provides the shared math: `bodyForward`, `horizontalHeadingError`, `pitchErrorFromAlt`, `bankToTurnAileron`, `coordinatedRudder`, `elevatorFromPitchError`. `AiControllerFactory.h` (header-only) exposes `createController(behavior, args, entityManager*)` for string-based instantiation from admin commands. See `docs/sandbox.md` (AI behaviors table) for the full `--ai` argument reference; `--ai lua <script_name>` loads a Lua controller from a content pack's `ai/` directory.
 
 **Lua AI (`engine-script` library):** `LuaController` wraps `LuaSandbox` and implements `IEntityController`. The script defines `function compute_control(state, tick, dt) → table`; the engine calls it every tick and maps the returned table fields to `ControlInput`. Pre-registered globals: `guidance.*` (six wrappers over `Guidance.h` math), `nearby_entities(cx, cz, radius_m)` (SpatialIndex range query), `get_entity(idx)` (full entity state lookup). Script state persists between ticks via module-level variables. See `docs/modding/ai.md` for the full API reference.
 
