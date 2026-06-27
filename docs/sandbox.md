@@ -233,6 +233,7 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 | `evade` | `<entityIdx>` | Flee a threat entity by inverting the pursuit heading error |
 | `break` | `<entityIdx> [rollDuration]` | Defensive ACM: roll toward threat then pull maximum-G (rollDuration in seconds, default 0.5) |
 | `lead` | `<entityIdx> [navGain]` | Proportional navigation pursuit; aims at predicted intercept point ahead of target (navGain: 0.0=pure pursuit, 1.0=first-order lead [default]) |
+| `lag` | `<entityIdx> [lagFraction]` | Lag pursuit; aims behind the target at `target.pos − target.vel × TTC × lagFraction`; keeps the attacker inside the target's turn circle without overshooting (lagFraction: 0.0=pure pursuit, 1.0=one TTC-step behind [default]) |
 | `immelmann` | `[pullDur] [rollDur]` | Half-loop + roll to reverse heading; pull up to inverted then roll upright (defaults: 4.0 s, 1.5 s) |
 | `split_s` | `[rollDur] [pullDur]` | Roll inverted + pull through to reverse heading; opposite energy trade to Immelmann (defaults: 1.5 s, 4.0 s) |
 | `high_yo_yo` | `<entityIdx> [climbDur] [reacquireDur]` | Overshoot correction: bank away from target, pull up to bleed speed, then reacquire (defaults: 2.5 s, 3.0 s) |

@@ -1270,6 +1270,207 @@ TEST_CASE("LeadPursuitController: throttle and afterburner propagate from constr
 }
 
 // ---------------------------------------------------------------------------
+// LagPursuitController
+// ---------------------------------------------------------------------------
+
+TEST_CASE("LagPursuitController: lagFraction=0 gives same aileron sign as PursuitController") {
+    // With lagFraction=0 the lag point equals target.pos — identical to pure pursuit.
+    PursuitFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LagPursuitController lag(f.em, f.targetId, /*lagFraction=*/0.f);
+    fl::ai::PursuitController pure(f.em, f.targetId);
+
+    fl::ControlInput lagInp = lag.sample(*as, 0, 1.0 / 60.0);
+    fl::ControlInput pureInp = pure.sample(*as, 0, 1.0 / 60.0);
+
+    // Both should bank right (target is at +Z).
+    CHECK(lagInp.aileron > 0.f);
+    CHECK(pureInp.aileron > 0.f);
+}
+
+TEST_CASE("LagPursuitController: lagFraction=1 shifts aim behind a moving target") {
+    // Target at +Z 2000m moving right (+Z) at 100 m/s; attacker stationary.
+    // closing speed < 0 → floored to 10 → TTC capped to 30 s
+    // lag point z = 2000 - 100 * 30 * 1 = -1000 (behind attacker → aileron < 0)
+    // pure pursuit aims at +Z 2000m → aileron > 0
+    PursuitFixture f;
+    fl::EntityState* tgt = f.em.get(f.targetId);
+    REQUIRE(tgt != nullptr);
+    tgt->transform.vel[2] = 100.f;
+
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LagPursuitController lag(f.em, f.targetId, /*lagFraction=*/1.f);
+    fl::ai::PursuitController pure(f.em, f.targetId);
+
+    fl::ControlInput lagInp = lag.sample(*as, 0, 1.0 / 60.0);
+    fl::ControlInput pureInp = pure.sample(*as, 0, 1.0 / 60.0);
+
+    // Lag aims further behind than pure pursuit.
+    CHECK(lagInp.aileron < pureInp.aileron);
+}
+
+TEST_CASE("LagPursuitController: lagFraction=0.5 gives intermediate aim between pure and full lag") {
+    // Target at (1000, 0, 500) moving +Z at 10 m/s; attacker at origin facing +X.
+    // closing speed < 0 → floored to 10 → TTC = 30 s.
+    // lag points (all X-shifted only in Z): lag05=(1000,0,350), lag1=(1000,0,200), pure=(1000,0,500).
+    // All heading errors are in the linear range of bankToTurnAileron (< 90°), giving strict ordering.
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    reg.registerType(makeBasicDef());
+    fl::EntityManager em(log, reg);
+
+    fl::EntityTransform ta{};
+    ta.quat[3] = 1.f; // identity: forward = +X
+    fl::EntityId attackerId = em.spawn("test:basic", ta);
+    fl::EntityTransform tt{};
+    tt.pos[0] = 1000.0;
+    tt.pos[2] = 500.0;
+    tt.vel[2] = 10.f;
+    tt.quat[3] = 1.f;
+    fl::EntityId targetId = em.spawn("test:basic", tt);
+
+    const fl::EntityState* as = em.get(attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LagPursuitController lag05(em, targetId, /*lagFraction=*/0.5f);
+    fl::ai::LagPursuitController lag1(em, targetId, /*lagFraction=*/1.f);
+    fl::ai::PursuitController pure(em, targetId);
+
+    fl::ControlInput inp05 = lag05.sample(*as, 0, 1.0 / 60.0);
+    fl::ControlInput inp1 = lag1.sample(*as, 0, 1.0 / 60.0);
+    fl::ControlInput inpPure = pure.sample(*as, 0, 1.0 / 60.0);
+
+    // lag1 aims further behind → smaller (or more negative) aileron than lag05 and pure.
+    CHECK(inp1.aileron < inp05.aileron);
+    CHECK(inp05.aileron < inpPure.aileron);
+}
+
+TEST_CASE("LagPursuitController: lagFraction=2 shifts aim further behind than lagFraction=1") {
+    // Same geometry: target at (1000, 0, 500), vel[2]=10 m/s, TTC=30 s.
+    // lag1 z = 500 - 10*30*1 = 200; lag2 z = 500 - 10*30*2 = -100.
+    // lag2 aims further behind → smaller aileron than lag1.
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    reg.registerType(makeBasicDef());
+    fl::EntityManager em(log, reg);
+
+    fl::EntityTransform ta{};
+    ta.quat[3] = 1.f;
+    fl::EntityId attackerId = em.spawn("test:basic", ta);
+    fl::EntityTransform tt{};
+    tt.pos[0] = 1000.0;
+    tt.pos[2] = 500.0;
+    tt.vel[2] = 10.f;
+    tt.quat[3] = 1.f;
+    fl::EntityId targetId = em.spawn("test:basic", tt);
+
+    const fl::EntityState* as = em.get(attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LagPursuitController lag1(em, targetId, /*lagFraction=*/1.f);
+    fl::ai::LagPursuitController lag2(em, targetId, /*lagFraction=*/2.f);
+
+    fl::ControlInput inp1 = lag1.sample(*as, 0, 1.0 / 60.0);
+    fl::ControlInput inp2 = lag2.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(inp2.aileron < inp1.aileron);
+}
+
+TEST_CASE("LagPursuitController: zero relative velocity clamps TTC floor") {
+    // Both stationary; vel=0 → lag point = target.pos → same as pure pursuit, no NaN.
+    PursuitFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LagPursuitController ctrl(f.em, f.targetId, /*lagFraction=*/1.f);
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(inp.throttle > 0.f);
+    CHECK(inp.aileron > 0.f); // target at +Z; vel=0 so lag point = target.pos, still to the right
+}
+
+TEST_CASE("LagPursuitController: co-located self and target does not crash") {
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    reg.registerType(makeBasicDef());
+    fl::EntityManager em(log, reg);
+
+    fl::EntityTransform t{};
+    t.quat[3] = 1.f;
+    fl::EntityId attackerId = em.spawn("test:basic", t);
+    fl::EntityId targetId = em.spawn("test:basic", t); // same position
+
+    fl::ai::LagPursuitController ctrl(em, targetId, 1.f);
+    const fl::EntityState* as = em.get(attackerId);
+    REQUIRE(as != nullptr);
+
+    // No crash; throttle is applied.
+    CHECK(ctrl.sample(*as, 0, 1.0 / 60.0).throttle > 0.f);
+    CHECK(ctrl.sample(*as, 1, 1.0 / 60.0).throttle > 0.f);
+}
+
+TEST_CASE("LagPursuitController: returns neutral when target is dead") {
+    PursuitFixture f;
+    f.em.kill(f.targetId);
+    f.em.onTick(1.0 / 60.0, 1);
+
+    fl::ai::LagPursuitController ctrl(f.em, f.targetId);
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+    fl::ControlInput inp = ctrl.sample(*as, 1, 1.0 / 60.0);
+
+    CHECK(inp.throttle == Catch::Approx(0.f));
+    CHECK(inp.aileron == Catch::Approx(0.f));
+}
+
+TEST_CASE("LagPursuitController: returns neutral for invalid EntityId") {
+    PursuitFixture f;
+    fl::ai::LagPursuitController ctrl(f.em, fl::EntityId::null());
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(inp.throttle == Catch::Approx(0.f));
+    CHECK(inp.aileron == Catch::Approx(0.f));
+}
+
+TEST_CASE("LagPursuitController: setTarget flips aileron for opposite-side target") {
+    PursuitFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    // Spawn a second target on the left (-Z).
+    fl::EntityTransform tl{};
+    tl.pos[2] = -2000.0;
+    tl.quat[3] = 1.f;
+    fl::EntityId leftId = f.em.spawn("test:basic", tl);
+
+    fl::ai::LagPursuitController ctrl(f.em, f.targetId); // right target → positive aileron
+    fl::ControlInput right = ctrl.sample(*as, 0, 1.0 / 60.0);
+    CHECK(right.aileron > 0.f);
+
+    ctrl.setTarget(leftId); // swap to left target → negative aileron
+    fl::ControlInput left = ctrl.sample(*as, 1, 1.0 / 60.0);
+    CHECK(left.aileron < 0.f);
+}
+
+TEST_CASE("LagPursuitController: throttle and afterburner propagate from constructor") {
+    PursuitFixture f;
+    const fl::EntityState* as = f.em.get(f.attackerId);
+    REQUIRE(as != nullptr);
+
+    fl::ai::LagPursuitController ctrl(f.em, f.targetId, 1.f, /*throttle=*/0.7f, /*useAfterburner=*/true);
+    fl::ControlInput inp = ctrl.sample(*as, 0, 1.0 / 60.0);
+
+    CHECK(inp.throttle == Catch::Approx(0.7f).margin(1e-5f));
+    CHECK(inp.afterburner == true);
+}
+
+// ---------------------------------------------------------------------------
 // ImmelmannController
 // ---------------------------------------------------------------------------
 
@@ -1666,6 +1867,58 @@ TEST_CASE("AiControllerFactory: lead with nonexistent entity returns nullptr") {
     CHECK(ctrl == nullptr);
 }
 
+TEST_CASE("AiControllerFactory: lead with invalid navGain arg returns nullptr") {
+    FactoryFixture f;
+    std::string idxStr = std::to_string(f.entityId.index);
+    std::vector<std::string_view> args = {idxStr, "not_a_float"};
+    auto ctrl = fl::ai::createController("lead", std::span{args}, &f.em);
+    CHECK(ctrl == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: lag from string args") {
+    FactoryFixture f;
+    std::string idxStr = std::to_string(f.entityId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("lag", std::span{args}, &f.em);
+    CHECK(ctrl != nullptr);
+}
+
+TEST_CASE("AiControllerFactory: lag with lagFraction arg") {
+    FactoryFixture f;
+    std::string idxStr = std::to_string(f.entityId.index);
+    std::vector<std::string_view> args = {idxStr, "0.5"};
+    auto ctrl = fl::ai::createController("lag", std::span{args}, &f.em);
+    CHECK(ctrl != nullptr);
+}
+
+TEST_CASE("AiControllerFactory: lag with missing entityIdx returns nullptr") {
+    FactoryFixture f;
+    std::vector<std::string_view> args;
+    auto ctrl = fl::ai::createController("lag", std::span{args}, &f.em);
+    CHECK(ctrl == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: lag without entityManager returns nullptr") {
+    std::vector<std::string_view> args = {"0"};
+    auto ctrl = fl::ai::createController("lag", std::span{args}, nullptr);
+    CHECK(ctrl == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: lag with nonexistent entity returns nullptr") {
+    FactoryFixture f;
+    std::vector<std::string_view> args = {"9999"};
+    auto ctrl = fl::ai::createController("lag", std::span{args}, &f.em);
+    CHECK(ctrl == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: lag with invalid lagFraction arg returns nullptr") {
+    FactoryFixture f;
+    std::string idxStr = std::to_string(f.entityId.index);
+    std::vector<std::string_view> args = {idxStr, "bad_float"};
+    auto ctrl = fl::ai::createController("lag", std::span{args}, &f.em);
+    CHECK(ctrl == nullptr);
+}
+
 TEST_CASE("AiControllerFactory: immelmann with no args uses defaults") {
     std::vector<std::string_view> args;
     auto ctrl = fl::ai::createController("immelmann", std::span{args});
@@ -1769,4 +2022,42 @@ TEST_CASE("StateMachineController: lead-pursuit to Immelmann on dwell timeout") 
     // Next output must be ImmelmannController's Pull phase: elevator=1.
     fl::ControlInput immelOut = sm.sample(selfState, 31, 1.0 / 60.0);
     CHECK(immelOut.elevator == Catch::Approx(1.f).margin(1e-5f));
+}
+
+// ---------------------------------------------------------------------------
+// Integration: LeadPursuitController → LagPursuitController via StateMachineController
+// This is the canonical use case from issue #432: transition from lead to lag
+// when inside the target's turn circle (within 3000 m).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("StateMachineController: lead-to-lag transition on ThreatWithinRange") {
+    SmFixture f;
+
+    // Place target 2000 m to the right (+Z) — within the 3000 m transition threshold.
+    fl::EntityState* tgt = f.em.get(f.targetId);
+    REQUIRE(tgt != nullptr);
+    tgt->transform.pos[2] = 2000.0;
+
+    fl::ai::StateMachineController sm(f.em);
+    fl::EntityId targetId = f.targetId;
+    sm.addState("lead", [&f, targetId] { return std::make_unique<fl::ai::LeadPursuitController>(f.em, targetId); });
+    sm.addState("lag", [&f, targetId] { return std::make_unique<fl::ai::LagPursuitController>(f.em, targetId); });
+    // Transition immediately (no dwell) when within 3000 m.
+    sm.addTransition("lead", "lag", fl::ai::ThreatWithinRange(targetId, 3000.f));
+    sm.setInitialState("lead");
+
+    fl::EntityState selfState = makeState(0.0, 0.0, 0.0);
+    selfState.id = f.selfId;
+
+    // Tick 0: sample-first — output comes from LeadPursuitController (throttle 0.9f default),
+    // then transition fires because dist=2000 < 3000.
+    fl::ControlInput firstOut = sm.sample(selfState, 0, 1.0 / 60.0);
+    CHECK(sm.currentState() == "lag");
+    CHECK(firstOut.throttle == Catch::Approx(0.9f).margin(1e-5f)); // LeadPursuit default
+
+    // Tick 1: LagPursuitController is now active (throttle 0.85f default).
+    fl::ControlInput lagOut = sm.sample(selfState, 1, 1.0 / 60.0);
+    CHECK(sm.currentState() == "lag");
+    CHECK(lagOut.throttle == Catch::Approx(0.85f).margin(1e-5f)); // LagPursuit default
+    CHECK(lagOut.aileron > 0.f); // target at +Z; vel=0 so lag point = target.pos, still right
 }

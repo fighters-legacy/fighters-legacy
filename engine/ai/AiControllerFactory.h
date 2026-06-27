@@ -5,6 +5,7 @@
 #include "ai/EvadeController.h"
 #include "ai/HighYoYoController.h"
 #include "ai/ImmelmannController.h"
+#include "ai/LagPursuitController.h"
 #include "ai/LeadPursuitController.h"
 #include "ai/LoiterController.h"
 #include "ai/LowYoYoController.h"
@@ -26,8 +27,8 @@
 namespace fl::ai {
 
 // Creates an AI controller from a behavior name and its arguments.
-// entityManager is required for "pursuit", "evade", "break", "lead", "high_yo_yo", and
-// "low_yo_yo" behaviors. Returns nullptr on unknown behavior, parse error, or missing entity.
+// entityManager is required for "pursuit", "evade", "break", "lead", "lag", "high_yo_yo",
+// and "low_yo_yo" behaviors. Returns nullptr on unknown behavior, parse error, or missing entity.
 //
 // Behaviors and their args:
 //   loiter      [cx cy cz [radius_m [alt_m [throttle [cw|ccw]]]]]
@@ -36,6 +37,7 @@ namespace fl::ai {
 //   evade       <entityIdx>
 //   break       <entityIdx> [rollDurationS]
 //   lead        <entityIdx> [navGain]
+//   lag         <entityIdx> [lagFraction]
 //   immelmann   [pullDurationS] [rollDurationS]
 //   split_s     [rollDurationS] [pullDurationS]
 //   high_yo_yo  <entityIdx> [climbDurationS] [reacquireDurationS]
@@ -230,6 +232,29 @@ inline std::unique_ptr<fl::IEntityController> createController(std::string_view 
             navGain = static_cast<float>(d2);
         }
         return std::make_unique<LeadPursuitController>(*entityManager, id, navGain);
+    }
+
+    // -----------------------------------------------------------------------
+    // lag  <entityIdx> [lagFraction]
+    // -----------------------------------------------------------------------
+    if (behavior == "lag") {
+        if (args.empty() || !entityManager)
+            return nullptr;
+        uint32_t idx{};
+        if (!parseUint32(args[0], idx))
+            return nullptr;
+        fl::EntityId id = findEntityById(idx);
+        if (!id.valid())
+            return nullptr;
+
+        float lagFraction = 1.0f;
+        if (args.size() >= 2) {
+            double d2 = 0.0;
+            if (!parseDouble(args[1], d2))
+                return nullptr;
+            lagFraction = static_cast<float>(d2);
+        }
+        return std::make_unique<LagPursuitController>(*entityManager, id, lagFraction);
     }
 
     // -----------------------------------------------------------------------
