@@ -27,25 +27,28 @@
 namespace fl::ai {
 
 // Creates an AI controller from a behavior name and its arguments.
-// entityManager is required for "pursuit", "evade", "break", "lead", "lag", "high_yo_yo",
-// and "low_yo_yo" behaviors. Returns nullptr on unknown behavior, parse error, or missing entity.
+// entityManager is required for entity-targeting behaviors. Returns nullptr on unknown
+// behavior, parse error, or missing entity.
 //
-// Behaviors and their args:
-//   loiter      [cx cy cz [radius_m [alt_m [throttle [cw|ccw]]]]]
-//   waypoint    x1 y1 z1 [x2 y2 z2 ...] [--loop]
-//   pursuit     <entityIdx>
-//   evade       <entityIdx>
-//   break       <entityIdx> [rollDurationS]
-//   lead        <entityIdx> [navGain]
-//   lag         <entityIdx> [lagFraction]
-//   immelmann   [pullDurationS] [rollDurationS]
-//   split_s     [rollDurationS] [pullDurationS]
-//   high_yo_yo  <entityIdx> [climbDurationS] [reacquireDurationS]
-//   low_yo_yo   <entityIdx> [diveDurationS] [pullDurationS]
+// Single-state behaviors:
+//   loiter        [cx cy cz [radius_m [alt_m [throttle [cw|ccw]]]]]
+//   waypoint      x1 y1 z1 [x2 y2 z2 ...] [--loop]
+//   pursuit       <entityIdx>
+//   evade         <entityIdx>
+//   break         <entityIdx> [rollDurationS]
+//   lead          <entityIdx> [navGain]
+//   lag           <entityIdx> [lagFraction]
+//   immelmann     [pullDurationS] [rollDurationS]
+//   split_s       [rollDurationS] [pullDurationS]
+//   high_yo_yo    <entityIdx> [climbDurationS] [reacquireDurationS]
+//   low_yo_yo     <entityIdx> [diveDurationS] [pullDurationS]
 //
-// For composed multi-state behaviors (patrol-attack-retreat, escort, etc.)
-// build a StateMachineController directly in C++, or use LuaController for
-// script-driven behavior — neither is expressible as flat string args.
+// StateMachineController templates (internally compose multiple states):
+//   patrol_attack <entityIdx> [engageRangeM=8000] [retreatHp=0.25]
+//   escort        <entityIdx> [standoffM=2000]
+//
+// Custom multi-state scenarios not covered by these templates must be constructed
+// in C++ via StateMachineController directly. Lua behavior via LuaController.
 inline std::unique_ptr<fl::IEntityController> createController(std::string_view behavior,
                                                                std::span<std::string_view> args,
                                                                const fl::EntityManager* entityManager = nullptr) {
@@ -353,6 +356,99 @@ inline std::unique_ptr<fl::IEntityController> createController(std::string_view 
             pullDur = static_cast<float>(d);
         }
         return std::make_unique<LowYoYoController>(*entityManager, id, diveDur, pullDur);
+    }
+
+    // -----------------------------------------------------------------------
+    // patrol_attack  <entityIdx> [engageRangeM=8000] [retreatHp=0.25]
+    // -----------------------------------------------------------------------
+    if (behavior == "patrol_attack") {
+        if (args.empty() || !entityManager)
+            return nullptr;
+        uint32_t idx{};
+        if (!parseUint32(args[0], idx))
+            return nullptr;
+        fl::EntityId id = findEntityById(idx);
+        if (!id.valid())
+            return nullptr;
+
+        float engageRangeM = 8000.f;
+        float retreatHp = 0.25f;
+        double d = 0.0;
+        if (args.size() >= 2) {
+            if (!parseDouble(args[1], d))
+                return nullptr;
+            engageRangeM = static_cast<float>(d);
+        }
+        if (args.size() >= 3) {
+            if (!parseDouble(args[2], d))
+                return nullptr;
+            retreatHp = static_cast<float>(d);
+        }
+
+        // Patrol loiter center: above the target's XZ position at 600 m altitude.
+        // Captured at factory-creation time; fixed for the lifetime of this controller.
+        const fl::EntityState* ts = entityManager->get(id);
+        glm::dvec3 patrolCenter =
+            ts ? glm::dvec3(ts->transform.pos[0], 600.0, ts->transform.pos[2]) : glm::dvec3{0.0, 600.0, 0.0};
+
+        auto sm = std::make_unique<StateMachineController>(*entityManager);
+        sm->addState("patrol", [patrolCenter]() {
+            return std::make_unique<LoiterController>(patrolCenter, 3000.f, 600.f, 0.65f, LoiterDir::Clockwise);
+        });
+        sm->addState("engage", [entityManager, id]() {
+            return std::make_unique<LeadPursuitController>(*entityManager, id, 1.0f, 0.9f, false);
+        });
+        sm->addState("retreat", [entityManager, id]() {
+            return std::make_unique<EvadeController>(*entityManager, id, 1.0f, true);
+        });
+        sm->addTransition("patrol", "engage", ThreatWithinRange(id, engageRangeM));
+        sm->addTransition("engage", "retreat", HpBelow(retreatHp));
+        sm->addTransition("engage", "patrol", ThreatBeyondRange(id, engageRangeM * 1.5f), 2.f);
+        sm->setInitialState("patrol");
+        return sm;
+    }
+
+    // -----------------------------------------------------------------------
+    // escort  <entityIdx> [standoffM=2000]
+    // -----------------------------------------------------------------------
+    if (behavior == "escort") {
+        if (args.empty() || !entityManager)
+            return nullptr;
+        uint32_t idx{};
+        if (!parseUint32(args[0], idx))
+            return nullptr;
+        fl::EntityId escortedId = findEntityById(idx);
+        if (!escortedId.valid())
+            return nullptr;
+
+        float standoffM = 2000.f;
+        double d = 0.0;
+        if (args.size() >= 2) {
+            if (!parseDouble(args[1], d))
+                return nullptr;
+            standoffM = static_cast<float>(d);
+        }
+
+        // Orbit center: escortee's position at factory-creation time (fixed).
+        // The escort loiters at standoffM radius; the escortee stays at the center (~standoffM
+        // away from the escort on orbit), so AnyEntityWithinRange(standoffM * 0.5) does not
+        // trigger on the escortee. For a proper moving-escort, a DynamicLoiterController is
+        // needed (tracked as a follow-on issue).
+        const fl::EntityState* es = entityManager->get(escortedId);
+        glm::dvec3 orbitCenter = es ? glm::dvec3(es->transform.pos[0], es->transform.pos[1], es->transform.pos[2])
+                                    : glm::dvec3{0.0, 600.0, 0.0};
+        const float innerRange = standoffM * 0.5f;
+
+        auto sm = std::make_unique<StateMachineController>(*entityManager);
+        sm->addState("follow", [orbitCenter, standoffM]() {
+            return std::make_unique<LoiterController>(orbitCenter, standoffM, static_cast<float>(orbitCenter.y), 0.65f,
+                                                      LoiterDir::Clockwise);
+        });
+        sm->addState("break", []() { return std::make_unique<ImmelmannController>(); });
+        sm->addTransition("follow", "break", AnyEntityWithinRange(innerRange));
+        sm->addTransition("break", "follow", Not(AnyEntityWithinRange(innerRange)), 6.0f);
+        sm->setInitialState("follow");
+        return sm;
     }
 
     return nullptr;

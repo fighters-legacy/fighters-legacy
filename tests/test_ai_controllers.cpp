@@ -2061,3 +2061,360 @@ TEST_CASE("StateMachineController: lead-to-lag transition on ThreatWithinRange")
     CHECK(lagOut.throttle == Catch::Approx(0.85f).margin(1e-5f)); // LagPursuit default
     CHECK(lagOut.aileron > 0.f); // target at +Z; vel=0 so lag point = target.pos, still right
 }
+
+// ---------------------------------------------------------------------------
+// AiControllerFactory — patrol_attack and escort templates
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Pool slot 0 = selfId (attacker, at origin), slot 1 = targetId (1 km ahead).
+struct PatrolAttackFixture {
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    fl::EntityManager em;
+    fl::EntityId selfId;
+    fl::EntityId targetId;
+
+    PatrolAttackFixture() : em(log, reg) {
+        reg.registerType(makeBasicDef());
+        fl::EntityTransform ta{};
+        ta.quat[3] = 1.f;
+        selfId = em.spawn("test:basic", ta); // index=0, at origin
+        fl::EntityTransform tt{};
+        tt.pos[0] = 1000.0; // 1 km ahead (within default 8000 m engage range)
+        tt.quat[3] = 1.f;
+        targetId = em.spawn("test:basic", tt); // index=1
+    }
+};
+
+// Pool slot 0 = selfId (escort, at origin), slot 1 = escorteeId (2 km away),
+// slot 2 = threatId (400 m away, within standoffM*0.5=1000 m).
+struct EscortFixture {
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    fl::EntityManager em;
+    fl::EntityId selfId;
+    fl::EntityId escorteeId;
+    fl::EntityId threatId;
+
+    EscortFixture() : em(log, reg) {
+        reg.registerType(makeBasicDef());
+        fl::EntityTransform ts{};
+        ts.quat[3] = 1.f;
+        selfId = em.spawn("test:basic", ts); // index=0, at origin
+        fl::EntityTransform te{};
+        te.pos[0] = 2000.0; // escortee at standoffM distance on +X
+        te.quat[3] = 1.f;
+        escorteeId = em.spawn("test:basic", te); // index=1
+        fl::EntityTransform tt{};
+        tt.pos[0] = 400.0; // threat 400 m from escort (< standoffM*0.5=1000)
+        tt.quat[3] = 1.f;
+        threatId = em.spawn("test:basic", tt); // index=2
+    }
+};
+
+} // namespace
+
+// --- patrol_attack: construction and error handling ---
+
+TEST_CASE("AiControllerFactory: patrol_attack creates controller") {
+    PatrolAttackFixture f;
+    std::string idxStr = std::to_string(f.targetId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("patrol_attack", std::span{args}, &f.em);
+    CHECK(ctrl != nullptr);
+}
+
+TEST_CASE("AiControllerFactory: patrol_attack with all optional args creates controller") {
+    PatrolAttackFixture f;
+    std::string idxStr = std::to_string(f.targetId.index);
+    std::vector<std::string_view> args = {idxStr, "5000", "0.3"};
+    auto ctrl = fl::ai::createController("patrol_attack", std::span{args}, &f.em);
+    CHECK(ctrl != nullptr);
+}
+
+TEST_CASE("AiControllerFactory: patrol_attack missing entityIdx returns nullptr") {
+    PatrolAttackFixture f;
+    std::vector<std::string_view> args;
+    CHECK(fl::ai::createController("patrol_attack", std::span{args}, &f.em) == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: patrol_attack null entityManager returns nullptr") {
+    std::vector<std::string_view> args = {"0"};
+    CHECK(fl::ai::createController("patrol_attack", std::span{args}, nullptr) == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: patrol_attack nonexistent entity returns nullptr") {
+    PatrolAttackFixture f;
+    std::vector<std::string_view> args = {"9999"};
+    CHECK(fl::ai::createController("patrol_attack", std::span{args}, &f.em) == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: patrol_attack invalid engageRangeM returns nullptr") {
+    PatrolAttackFixture f;
+    std::string idxStr = std::to_string(f.targetId.index);
+    std::vector<std::string_view> args = {idxStr, "not_a_float"};
+    CHECK(fl::ai::createController("patrol_attack", std::span{args}, &f.em) == nullptr);
+}
+
+// --- patrol_attack: initial state and output ---
+
+TEST_CASE("AiControllerFactory: patrol_attack initial state is patrol") {
+    PatrolAttackFixture f;
+    std::string idxStr = std::to_string(f.targetId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("patrol_attack", std::span{args}, &f.em);
+    REQUIRE(ctrl != nullptr);
+    auto* sm = dynamic_cast<fl::ai::StateMachineController*>(ctrl.get());
+    REQUIRE(sm != nullptr);
+    CHECK(sm->currentState() == "patrol");
+}
+
+TEST_CASE("AiControllerFactory: patrol_attack patrol state outputs non-zero throttle") {
+    PatrolAttackFixture f;
+    std::string idxStr = std::to_string(f.targetId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("patrol_attack", std::span{args}, &f.em);
+    REQUIRE(ctrl != nullptr);
+
+    fl::EntityState selfState = makeState(3000.0, 600.0, 0.0); // on orbit radius
+    selfState.id = f.selfId;
+    fl::ControlInput out = ctrl->sample(selfState, 0, 1.0 / 60.0);
+    CHECK(out.throttle > 0.f); // LoiterController always applies throttle
+}
+
+// --- patrol_attack: transitions ---
+
+TEST_CASE("AiControllerFactory: patrol_attack transitions to engage when target in range") {
+    PatrolAttackFixture f;
+    std::string idxStr = std::to_string(f.targetId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("patrol_attack", std::span{args}, &f.em);
+    REQUIRE(ctrl != nullptr);
+    auto* sm = dynamic_cast<fl::ai::StateMachineController*>(ctrl.get());
+    REQUIRE(sm != nullptr);
+
+    // Self at origin; target at {1000,0,0}: dist ≈ 1166 m < 8000 m engage range.
+    fl::EntityState selfState = makeState(0.0, 600.0, 0.0);
+    selfState.id = f.selfId;
+    sm->sample(selfState, 0, 1.0 / 60.0); // patrol output; ThreatWithinRange fires → engage
+    CHECK(sm->currentState() == "engage");
+}
+
+TEST_CASE("AiControllerFactory: patrol_attack engage state outputs LeadPursuitController throttle") {
+    PatrolAttackFixture f;
+    std::string idxStr = std::to_string(f.targetId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("patrol_attack", std::span{args}, &f.em);
+    REQUIRE(ctrl != nullptr);
+    auto* sm = dynamic_cast<fl::ai::StateMachineController*>(ctrl.get());
+    REQUIRE(sm != nullptr);
+
+    fl::EntityState selfState = makeState(0.0, 600.0, 0.0);
+    selfState.id = f.selfId;
+    sm->sample(selfState, 0, 1.0 / 60.0); // → engage
+    REQUIRE(sm->currentState() == "engage");
+
+    fl::ControlInput engageOut = sm->sample(selfState, 1, 1.0 / 60.0);
+    CHECK(engageOut.throttle == Catch::Approx(0.9f).margin(1e-5f)); // LeadPursuitController default
+}
+
+TEST_CASE("AiControllerFactory: patrol_attack transitions from engage to retreat on low HP") {
+    PatrolAttackFixture f;
+    std::string idxStr = std::to_string(f.targetId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("patrol_attack", std::span{args}, &f.em);
+    REQUIRE(ctrl != nullptr);
+    auto* sm = dynamic_cast<fl::ai::StateMachineController*>(ctrl.get());
+    REQUIRE(sm != nullptr);
+
+    fl::EntityState selfState = makeState(0.0, 600.0, 0.0);
+    selfState.id = f.selfId;
+    selfState.hp = 10.f;
+    selfState.maxHp = 100.f; // 10% HP < 25% retreatHp threshold
+
+    sm->sample(selfState, 0, 1.0 / 60.0); // patrol → engage
+    REQUIRE(sm->currentState() == "engage");
+    sm->sample(selfState, 1, 1.0 / 60.0); // engage; HpBelow(0.25) fires → retreat
+    CHECK(sm->currentState() == "retreat");
+}
+
+TEST_CASE("AiControllerFactory: patrol_attack retreat state outputs EvadeController full throttle and afterburner") {
+    PatrolAttackFixture f;
+    std::string idxStr = std::to_string(f.targetId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("patrol_attack", std::span{args}, &f.em);
+    REQUIRE(ctrl != nullptr);
+    auto* sm = dynamic_cast<fl::ai::StateMachineController*>(ctrl.get());
+    REQUIRE(sm != nullptr);
+
+    fl::EntityState selfState = makeState(0.0, 600.0, 0.0);
+    selfState.id = f.selfId;
+    selfState.hp = 10.f;
+    selfState.maxHp = 100.f;
+
+    sm->sample(selfState, 0, 1.0 / 60.0); // → engage
+    sm->sample(selfState, 1, 1.0 / 60.0); // → retreat
+    REQUIRE(sm->currentState() == "retreat");
+
+    fl::ControlInput retreatOut = sm->sample(selfState, 2, 1.0 / 60.0);
+    CHECK(retreatOut.throttle == Catch::Approx(1.0f).margin(1e-5f)); // EvadeController full throttle
+    CHECK(retreatOut.afterburner == true);                           // EvadeController useAfterburner=true
+}
+
+TEST_CASE("AiControllerFactory: patrol_attack transitions from engage to patrol when threat leaves after dwell") {
+    PatrolAttackFixture f;
+    std::string idxStr = std::to_string(f.targetId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("patrol_attack", std::span{args}, &f.em);
+    REQUIRE(ctrl != nullptr);
+    auto* sm = dynamic_cast<fl::ai::StateMachineController*>(ctrl.get());
+    REQUIRE(sm != nullptr);
+
+    fl::EntityState selfState = makeState(0.0, 600.0, 0.0);
+    selfState.id = f.selfId;
+
+    sm->sample(selfState, 0, 1.0 / 60.0); // → engage
+    REQUIRE(sm->currentState() == "engage");
+
+    // Move target beyond the 8000 * 1.5 = 12000 m disengage threshold.
+    fl::EntityState* tgt = f.em.get(f.targetId);
+    REQUIRE(tgt != nullptr);
+    tgt->transform.pos[0] = 15000.0;
+
+    // dt=2.1 s exceeds minDwell=2 s; ThreatBeyondRange(15000 > 12000) fires.
+    sm->sample(selfState, 1, 2.1);
+    CHECK(sm->currentState() == "patrol");
+}
+
+TEST_CASE("AiControllerFactory: patrol_attack dead target in engage transitions to patrol after dwell") {
+    PatrolAttackFixture f;
+    std::string idxStr = std::to_string(f.targetId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("patrol_attack", std::span{args}, &f.em);
+    REQUIRE(ctrl != nullptr);
+    auto* sm = dynamic_cast<fl::ai::StateMachineController*>(ctrl.get());
+    REQUIRE(sm != nullptr);
+
+    fl::EntityState selfState = makeState(0.0, 600.0, 0.0);
+    selfState.id = f.selfId;
+
+    sm->sample(selfState, 0, 1.0 / 60.0); // → engage
+    REQUIRE(sm->currentState() == "engage");
+
+    // Kill the target — ThreatBeyondRange returns true for dead/invalid entities.
+    f.em.kill(f.targetId);
+    f.em.onTick(1.0 / 60.0, 1);
+
+    sm->sample(selfState, 1, 2.1); // dt=2.1 > minDwell=2 s; dead target = beyond range → patrol
+    CHECK(sm->currentState() == "patrol");
+}
+
+// --- escort: construction and error handling ---
+
+TEST_CASE("AiControllerFactory: escort creates controller") {
+    EscortFixture f;
+    std::string idxStr = std::to_string(f.escorteeId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("escort", std::span{args}, &f.em);
+    CHECK(ctrl != nullptr);
+}
+
+TEST_CASE("AiControllerFactory: escort with custom standoffM creates controller") {
+    EscortFixture f;
+    std::string idxStr = std::to_string(f.escorteeId.index);
+    std::vector<std::string_view> args = {idxStr, "3000"};
+    auto ctrl = fl::ai::createController("escort", std::span{args}, &f.em);
+    CHECK(ctrl != nullptr);
+}
+
+TEST_CASE("AiControllerFactory: escort missing entityIdx returns nullptr") {
+    EscortFixture f;
+    std::vector<std::string_view> args;
+    CHECK(fl::ai::createController("escort", std::span{args}, &f.em) == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: escort null entityManager returns nullptr") {
+    std::vector<std::string_view> args = {"0"};
+    CHECK(fl::ai::createController("escort", std::span{args}, nullptr) == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: escort nonexistent entity returns nullptr") {
+    EscortFixture f;
+    std::vector<std::string_view> args = {"9999"};
+    CHECK(fl::ai::createController("escort", std::span{args}, &f.em) == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: escort invalid standoffM returns nullptr") {
+    EscortFixture f;
+    std::string idxStr = std::to_string(f.escorteeId.index);
+    std::vector<std::string_view> args = {idxStr, "bad_float"};
+    CHECK(fl::ai::createController("escort", std::span{args}, &f.em) == nullptr);
+}
+
+// --- escort: initial state and output ---
+
+TEST_CASE("AiControllerFactory: escort initial state is follow") {
+    EscortFixture f;
+    std::string idxStr = std::to_string(f.escorteeId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("escort", std::span{args}, &f.em);
+    REQUIRE(ctrl != nullptr);
+    auto* sm = dynamic_cast<fl::ai::StateMachineController*>(ctrl.get());
+    REQUIRE(sm != nullptr);
+    CHECK(sm->currentState() == "follow");
+}
+
+TEST_CASE("AiControllerFactory: escort follow state outputs non-zero throttle") {
+    EscortFixture f;
+    std::string idxStr = std::to_string(f.escorteeId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("escort", std::span{args}, &f.em);
+    REQUIRE(ctrl != nullptr);
+
+    fl::EntityState selfState = makeState(0.0, 600.0, 0.0);
+    selfState.id = f.selfId;
+    fl::ControlInput out = ctrl->sample(selfState, 0, 1.0 / 60.0, nullptr);
+    CHECK(out.throttle > 0.f); // LoiterController always applies throttle
+}
+
+// --- escort: transitions ---
+
+TEST_CASE("AiControllerFactory: escort stays in follow with null SpatialIndex") {
+    EscortFixture f;
+    std::string idxStr = std::to_string(f.escorteeId.index);
+    std::vector<std::string_view> args = {idxStr};
+    auto ctrl = fl::ai::createController("escort", std::span{args}, &f.em);
+    REQUIRE(ctrl != nullptr);
+    auto* sm = dynamic_cast<fl::ai::StateMachineController*>(ctrl.get());
+    REQUIRE(sm != nullptr);
+
+    fl::EntityState selfState = makeState(0.0, 600.0, 0.0);
+    selfState.id = f.selfId;
+    // AnyEntityWithinRange returns false when si == nullptr; no transition fires.
+    sm->sample(selfState, 0, 1.0 / 60.0, nullptr);
+    CHECK(sm->currentState() == "follow");
+}
+
+TEST_CASE("AiControllerFactory: escort transitions to break when entity within inner range") {
+    EscortFixture f;
+    std::string idxStr = std::to_string(f.escorteeId.index);
+    std::vector<std::string_view> args = {idxStr, "2000"};
+    auto ctrl = fl::ai::createController("escort", std::span{args}, &f.em);
+    REQUIRE(ctrl != nullptr);
+    auto* sm = dynamic_cast<fl::ai::StateMachineController*>(ctrl.get());
+    REQUIRE(sm != nullptr);
+    CHECK(sm->currentState() == "follow");
+
+    fl::EntityState selfState = makeState(0.0, 600.0, 0.0);
+    selfState.id = f.selfId; // index=0; not self-excluded from AnyEntityWithinRange
+
+    // Threat (index=2) at 400 m from self — within innerRange = standoffM*0.5 = 1000 m.
+    fl::SpatialIndex si;
+    double threatPos[3] = {400.0, 600.0, 0.0};
+    si.insert(f.threatId.index, threatPos); // index=2
+
+    sm->sample(selfState, 0, 1.0 / 60.0, &si); // AnyEntityWithinRange(1000) fires → break
+    CHECK(sm->currentState() == "break");
+}
