@@ -804,6 +804,214 @@ TEST_CASE("ClientNetEventHandler: second complete chunk stream prints correctly 
     CHECK(lines[1] == "[admin] second");
 }
 
+// ---------------------------------------------------------------------------
+// Multi-line admin response splitting tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ClientNetEventHandler: MsgAdminResponse multi-line body splits into one entry per line",
+          "[client_net_event_handler][admin_chunk]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdRegistry;
+    GameConsole console(logger, cmdRegistry);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    fl::MsgAdminResponse resp{};
+    std::snprintf(resp.text, sizeof(resp.text), "line1\nline2\nline3");
+    auto pkt = std::vector<uint8_t>(reinterpret_cast<const uint8_t*>(&resp),
+                                    reinterpret_cast<const uint8_t*>(&resp) + sizeof(resp));
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    auto lines = console.outputLines();
+    REQUIRE(lines.size() == 3u);
+    CHECK(lines[0] == "[admin] line1");
+    CHECK(lines[1] == "[admin] line2");
+    CHECK(lines[2] == "[admin] line3");
+}
+
+TEST_CASE("ClientNetEventHandler: MsgAdminResponse empty lines in body are skipped",
+          "[client_net_event_handler][admin_chunk]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdRegistry;
+    GameConsole console(logger, cmdRegistry);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    fl::MsgAdminResponse resp{};
+    std::snprintf(resp.text, sizeof(resp.text), "section:\n\n  entry");
+    auto pkt = std::vector<uint8_t>(reinterpret_cast<const uint8_t*>(&resp),
+                                    reinterpret_cast<const uint8_t*>(&resp) + sizeof(resp));
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    auto lines = console.outputLines();
+    REQUIRE(lines.size() == 2u);
+    CHECK(lines[0] == "[admin] section:");
+    CHECK(lines[1] == "[admin]   entry");
+}
+
+TEST_CASE("ClientNetEventHandler: MsgAdminResponse trailing newline does not produce extra entry",
+          "[client_net_event_handler][admin_chunk]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdRegistry;
+    GameConsole console(logger, cmdRegistry);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    fl::MsgAdminResponse resp{};
+    std::snprintf(resp.text, sizeof(resp.text), "done\n");
+    auto pkt = std::vector<uint8_t>(reinterpret_cast<const uint8_t*>(&resp),
+                                    reinterpret_cast<const uint8_t*>(&resp) + sizeof(resp));
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    auto lines = console.outputLines();
+    REQUIRE(lines.size() == 1u);
+    CHECK(lines[0] == "[admin] done");
+}
+
+TEST_CASE("ClientNetEventHandler: MsgAdminResponse CRLF line endings stripped",
+          "[client_net_event_handler][admin_chunk]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdRegistry;
+    GameConsole console(logger, cmdRegistry);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    fl::MsgAdminResponse resp{};
+    // Write CRLF body manually (snprintf would stop at \0, use memcpy).
+    const char* body = "line1\r\nline2\r\n";
+    std::memcpy(resp.text, body, std::strlen(body) + 1);
+    auto pkt = std::vector<uint8_t>(reinterpret_cast<const uint8_t*>(&resp),
+                                    reinterpret_cast<const uint8_t*>(&resp) + sizeof(resp));
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    auto lines = console.outputLines();
+    REQUIRE(lines.size() == 2u);
+    CHECK(lines[0] == "[admin] line1");
+    CHECK(lines[1] == "[admin] line2");
+}
+
+TEST_CASE("ClientNetEventHandler: MsgAdminResponse body of only newlines produces no output",
+          "[client_net_event_handler][admin_chunk]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdRegistry;
+    GameConsole console(logger, cmdRegistry);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    fl::MsgAdminResponse resp{};
+    const char* body = "\n\n\n";
+    std::memcpy(resp.text, body, std::strlen(body) + 1);
+    auto pkt = std::vector<uint8_t>(reinterpret_cast<const uint8_t*>(&resp),
+                                    reinterpret_cast<const uint8_t*>(&resp) + sizeof(resp));
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(console.outputLines().empty());
+}
+
+TEST_CASE("ClientNetEventHandler: MsgAdminResponseChunk multi-line final chunk splits on print",
+          "[client_net_event_handler][admin_chunk]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdRegistry;
+    GameConsole console(logger, cmdRegistry);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    auto pkt = makeChunkPacket(1u, 0u, fl::kChunkFlagEnd, "foo\nbar");
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    auto lines = console.outputLines();
+    REQUIRE(lines.size() == 2u);
+    CHECK(lines[0] == "[admin] foo");
+    CHECK(lines[1] == "[admin] bar");
+}
+
+TEST_CASE("ClientNetEventHandler: MsgAdminResponseChunk newline spanning two chunks splits correctly",
+          "[client_net_event_handler][admin_chunk]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdRegistry;
+    GameConsole console(logger, cmdRegistry);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    // First chunk carries the newline but no end flag — nothing printed yet.
+    auto pkt0 = makeChunkPacket(1u, 0u, 0u, "line1\n");
+    handler.onReceive(0u, pkt0.data(), pkt0.size());
+    CHECK(console.outputLines().empty());
+
+    // Second chunk ends the stream — assembled body "line1\nline2" splits into two entries.
+    auto pkt1 = makeChunkPacket(1u, 1u, fl::kChunkFlagEnd, "line2");
+    handler.onReceive(0u, pkt1.data(), pkt1.size());
+
+    auto lines = console.outputLines();
+    REQUIRE(lines.size() == 2u);
+    CHECK(lines[0] == "[admin] line1");
+    CHECK(lines[1] == "[admin] line2");
+}
+
+TEST_CASE("ClientNetEventHandler: MsgAdminResponseChunk consecutive multi-line streams reset correctly",
+          "[client_net_event_handler][admin_chunk]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    CommandRegistry cmdRegistry;
+    GameConsole console(logger, cmdRegistry);
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+
+    // First complete multi-line stream.
+    auto p0 = makeChunkPacket(1u, 0u, fl::kChunkFlagEnd, "a\nb");
+    handler.onReceive(0u, p0.data(), p0.size());
+
+    // Second complete multi-line stream — verifies m_chunkBuf.clear() reset correctly.
+    auto p1 = makeChunkPacket(2u, 0u, fl::kChunkFlagEnd, "c\nd");
+    handler.onReceive(0u, p1.data(), p1.size());
+
+    auto lines = console.outputLines();
+    REQUIRE(lines.size() == 4u);
+    CHECK(lines[0] == "[admin] a");
+    CHECK(lines[1] == "[admin] b");
+    CHECK(lines[2] == "[admin] c");
+    CHECK(lines[3] == "[admin] d");
+}
+
 TEST_CASE("ClientNetEventHandler: WorldSnapshot with SnapshotPeerCount extension stores peer count",
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
