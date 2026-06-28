@@ -1,23 +1,25 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Reference build/run environment for the bot_swarm load harness. The repo is bind-mounted at
-# runtime (/src); this image only carries the toolchain to build fl-server + bot_swarm headless
-# (no Vulkan/GPU — fl-server is a headless server). Pin the base tag for strict reproducibility.
-FROM registry.fedoraproject.org/fedora:latest
+# runtime (/src); this image carries the toolchain to build fl-server + bot_swarm headless.
+#
+# DETERMINISM: pinned to Fedora 44 to match the GCC 16 host (the container is the primary, reliable
+# benchmark path). SDL3 is built FROM SOURCE — the system SDL3-devel is deliberately NOT installed,
+# so CMake's find_package(SDL3 3.4.10) misses and falls back to the repo's FetchContent-pinned SDL3.
+# That makes the toolchain + SDL3 reproducible over time instead of varying with what the distro
+# ships. (The Vagrant VM is one release behind at Fedora 42 / GCC 15 — no working 43/44 libvirt box
+# exists; see Vagrantfile + README.)
+FROM registry.fedoraproject.org/fedora:44
 
+# Toolchain + SDL3's build dependencies (needed only to *compile* SDL3's backends — fl-server is
+# headless and uses none at runtime). No SDL3-devel: SDL3 is built from source (see above).
+# `dnf builddep SDL3` pulls Fedora's authoritative, complete SDL3 BuildRequires (X11/Xtst/Wayland/
+# audio/...); libXtst-devel + libXinerama-devel are belt-and-suspenders for the FetchContent SDL3.
 RUN dnf -y install \
-        gcc-c++ \
-        cmake \
-        ninja-build \
-        git \
-        SDL3-devel \
-        openal-soft-devel \
-        dnf-plugins-core \
-        glibc-langpack-en \
-        findutils \
-        procps-ng \
-        iproute \
+        gcc-c++ cmake ninja-build git dnf-plugins-core \
+        glibc-langpack-en findutils procps-ng iproute \
     && dnf builddep -y SDL3 \
+    && dnf -y install libXtst-devel libXinerama-devel \
     && dnf clean all
 
 ENV LANG=C.UTF-8

@@ -16,8 +16,20 @@ CLIENTS="${CLIENTS:-64 128 256}"
 DURATION="${DURATION:-30}"
 PATTERNS="${PATTERNS:-idle weave}"
 
-echo "=== reference env: $(nproc) CPUs, $(free -h 2>/dev/null | awk '/Mem:/{print $2}') RAM ==="
-cmake -S "$SRC" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF >/dev/null
+# `free` reads /proc/meminfo, which is NOT cgroup-aware (shows host RAM in a container). Report
+# the cgroup v2 memory cap when present (container), else free (VM, where the cap IS the VM size).
+_memmax="$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo max)"
+if [[ "$_memmax" =~ ^[0-9]+$ ]]; then
+    _mem="$((_memmax / 1024 / 1024 / 1024)) GiB (cgroup cap)"
+else
+    _mem="$(free -h 2>/dev/null | awk '/Mem:/{print $2}') RAM"
+fi
+echo "=== reference env: $(nproc) CPUs, ${_mem} ==="
+# Headless server build: force Vulkan "not found" so the GPU renderer target (which needs
+# glslangValidator) is skipped — fl-server + bot_swarm don't need it. Keeps the build deterministic
+# even though SDL3's `dnf builddep` transitively pulls in the Vulkan loader.
+cmake -S "$SRC" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF \
+    -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON >/dev/null
 cmake --build "$BUILD" --target fl-server bot_swarm
 
 # Each synthetic client is a UDP socket — raise the open-file limit toward the hard cap.

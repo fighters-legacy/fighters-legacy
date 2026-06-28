@@ -10,12 +10,12 @@
 #   vagrant ssh -c 'sudo CLIENTS="64 128 256" DURATION=30 PATTERNS="idle weave" \
 #                   bash /src/tools/bot_swarm/reference-env/run-benchmark.sh'
 Vagrant.configure("2") do |config|
-  # NOTE: the official fedora/NN-cloud-base boxes frequently 404 (the libvirt artifact is pruned
-  # from the mirror while Vagrant Cloud metadata lingers). alvistack/* is reliably hosted and
-  # regularly updated. Fedora 43 is needed because the project's find_package(SDL3 3.4.10) floor
-  # is above Fedora 41's system SDL3 (3.2.16) — on an older box CMake builds SDL3 from source
-  # (which then needs ALSA/X11/... build deps). Override with FL_REFENV_BOX (use Fedora >= 43).
-  config.vm.box = ENV.fetch("FL_REFENV_BOX", "alvistack/fedora-43")
+  # Box hosting for Fedora is flaky: the official fedora/NN-cloud-base artifacts 404 (pruned),
+  # and alvistack/fedora-43's artifact currently 400s — alvistack/fedora-42 downloads cleanly.
+  # If the box's system SDL3 is below the project's find_package(SDL3 3.4.10) floor, CMake builds
+  # SDL3 from source; vm-provision.sh installs SDL3's full build deps so that succeeds either way.
+  # Override with FL_REFENV_BOX if you have a known-good newer box.
+  config.vm.box = ENV.fetch("FL_REFENV_BOX", "alvistack/fedora-42")
   config.vm.hostname = "fl-refenv"
 
   # Repo root -> /src in the guest via rsync (one-way copy over SSH). This avoids the two

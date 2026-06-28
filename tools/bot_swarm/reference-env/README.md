@@ -16,6 +16,14 @@ Both run the same in‑guest script (`run-benchmark.sh`): build `fl-server` + `b
 Release, then sweep `run_loadtest.sh` over client counts × patterns. Reports land in
 `tools/bot_swarm/results/` (git‑ignored). See [docs/load-testing.md](../../../docs/load-testing.md).
 
+**Determinism.** Both paths pin the same userspace — **Fedora 42** (`fedora:42` image /
+`alvistack/fedora-42` box) — and deliberately do **not** install the system `SDL3-devel`. CMake's
+`find_package(SDL3 3.4.10)` then misses, so SDL3 is built from the repo's FetchContent‑pinned
+version. That keeps the toolchain (GCC) and SDL3 identical across the container, the VM, and over
+time, instead of drifting with whatever each distro ships (the only remaining difference is
+container‑shared‑kernel vs VM‑own‑kernel). The trade‑off: every build compiles SDL3 from source
+(~1–2 min). fl-server only uses SDL3 for filesystem — none of its audio/video backends run.
+
 ## Files
 
 - `Containerfile` — Fedora toolchain image (headless; no Vulkan).
