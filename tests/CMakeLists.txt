@@ -149,6 +149,15 @@ if(TARGET platform-enet)
     target_include_directories(test_server_config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     catch_discover_tests(test_server_config)
 
+    # bot_swarm pure-logic tests (patterns, NetStats, CLI, metrics) — no sockets, header-only.
+    add_executable(test_bot_swarm test_bot_swarm.cpp)
+    target_link_libraries(test_bot_swarm PRIVATE Catch2::Catch2WithMain)
+    target_include_directories(test_bot_swarm PRIVATE
+        "${CMAKE_SOURCE_DIR}/tools/bot_swarm"
+        "${CMAKE_SOURCE_DIR}/tools/common"
+    )
+    catch_discover_tests(test_bot_swarm)
+
     add_executable(test_lan_discovery test_lan_discovery.cpp)
     target_link_libraries(test_lan_discovery PRIVATE Catch2::Catch2WithMain engine-net)
     target_include_directories(test_lan_discovery PRIVATE

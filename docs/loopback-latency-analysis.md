@@ -189,6 +189,14 @@ expect ~10 ms jitter. On Windows with `timeBeginPeriod(1)`, expect 1–2 ms jitt
 
 ---
 
+## Multi-client load testing
+
+`net_check --bench` measures single-peer loopback RTT. Its multi-client companion is
+**`bot_swarm`** (`tools/bot_swarm/`), which drives N synthetic clients against `fl-server` to
+characterise behaviour at scale (observed server tick-Hz, per-client bandwidth) for the 128+
+player target — see [docs/load-testing.md](load-testing.md). Both tools share the percentile
+math in `tools/common/NetStats.h`.
+
 ## Related issues
 
 - [#128](https://github.com/fighters-legacy/fighters-legacy/issues/128) — Lua haptic API (Phase 3); Compensate path wired here

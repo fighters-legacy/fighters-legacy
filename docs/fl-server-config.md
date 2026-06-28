@@ -141,10 +141,14 @@ Network interface to bind on.
 
 | Type | Default | Valid range |
 |---|---|---|
-| integer | `32` | 1–128 |
+| integer | `32` | 1–1024 |
 
-Maximum number of simultaneous connected peers. Values outside `[1, 128]` are rejected
-with a warning and the default is used instead.
+Maximum number of simultaneous connected peers. Values outside `[1, 1024]` are rejected
+with a warning and the default is used instead. The ceiling was raised from 128 to 1024 by the
+128+ multiplayer re-target so the [bot_swarm load harness](load-testing.md) can drive the server
+past 128 to characterise the transport ceiling. **Note:** accepting a high `max_peers` is a
+testing affordance, not a capacity guarantee — real high-peer capacity is the Phase 3–4 scaling
+work.
 
 ### `game_modes`
 
@@ -490,10 +494,12 @@ default is kept (a warning is logged).
 
 | Type | Default | Valid range |
 |---|---|---|
-| integer | `5` | 1–100 |
+| integer | `5` | 1–100000 |
 
 Maximum number of times a single IP address may complete an ENet connection handshake within
 `connect_rate_limit_window_s` seconds. Peers that exceed this count are immediately disconnected.
+The ceiling was raised from 100 to 100000 so a load test can admit a large rapid ramp from
+`127.0.0.1` (see [bot_swarm](load-testing.md)).
 Note: limiting applies post-handshake (see [Access control](#access-control) for details).
 
 ### `connect_rate_limit_window_s`
@@ -546,7 +552,7 @@ values are rejected with a warning and the default is kept.
 
 | Type | Default | Valid range |
 |---|---|---|
-| integer | `0` (unlimited) | 0–128 |
+| integer | `0` (unlimited) | 0–1024 |
 
 Maximum number of simultaneous connections allowed from a single IP address. When non-zero,
 `onConnect` counts the number of currently-connected peers from the same IP and disconnects

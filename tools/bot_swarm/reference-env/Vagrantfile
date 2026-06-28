@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Cross-platform 8-vCPU / 16 GB reference VM for bot_swarm load characterisation. A true VM
+# (own kernel) is the most faithful analogue of an 8-vCPU cloud instance.
+#
+#   Linux         : vagrant up --provider=libvirt   (KVM; fastest)
+#   Windows/macOS : vagrant up --provider=virtualbox (Intel) — see README for Apple Silicon
+#
+# Then:
+#   vagrant ssh -c 'sudo CLIENTS="64 128 256" DURATION=30 PATTERNS="idle weave" \
+#                   bash /src/tools/bot_swarm/reference-env/run-benchmark.sh'
+Vagrant.configure("2") do |config|
+  # Box hosting for Fedora is flaky: the official fedora/NN-cloud-base artifacts 404 (pruned),
+  # and alvistack/fedora-43's artifact currently 400s — alvistack/fedora-42 downloads cleanly.
+  # If the box's system SDL3 is below the project's find_package(SDL3 3.4.10) floor, CMake builds
+  # SDL3 from source; vm-provision.sh installs SDL3's full build deps so that succeeds either way.
+  # Override with FL_REFENV_BOX if you have a known-good newer box.
+  config.vm.box = ENV.fetch("FL_REFENV_BOX", "alvistack/fedora-42")
+  config.vm.hostname = "fl-refenv"
+
+  # Repo root -> /src in the guest via rsync (one-way copy over SSH). This avoids the two
+  # vagrant-libvirt synced-folder traps: 9p/virtiofs under qemu:///system can't read your
+  # /home (Permission denied), and qemu:///session needs bespoke networking. rsync needs no
+  # special host/qemu access. Excludes the heavy host build tree. Results are written inside
+  # the guest (read them with `vagrant ssh`).
+  config.vm.synced_folder "../../..", "/src", type: "rsync",
+    rsync__exclude: [".git/", "build/", "build-*/", "tools/bot_swarm/results/"]
+
+  # Disable the default /vagrant share: vagrant-libvirt defaults it to NFS, which needs host
+  # root to edit /etc/exports (fails without passwordless sudo). We only use /src above.
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+
+  config.vm.provision "shell", path: "vm-provision.sh", privileged: true
+
+  config.vm.provider "libvirt" do |v|
+    v.cpus = 8
+    v.memory = 16384
+    # System mode (default): uses libvirt's working `default` NAT network. The /home access
+    # problem is avoided by the rsync synced folder above rather than session mode.
+  end
+
+  config.vm.provider "virtualbox" do |v|
+    v.cpus = 8
+    v.memory = 16384
+  end
+
+  config.vm.provider "vmware_desktop" do |v|
+    v.vmx["numvcpus"] = "8"
+    v.vmx["memsize"] = "16384"
+  end
+end

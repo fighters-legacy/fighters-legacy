@@ -92,6 +92,37 @@ TEST_CASE("double shutdown is safe", "[network]") {
     net.shutdown(); // must not crash
 }
 
+// The bot_swarm load harness runs many client hosts in one process with staggered lifetimes.
+// enet_initialize()/enet_deinitialize() are process-global and not ref-counted by ENet, so one
+// instance's shutdown() must not tear ENet down for the others. A ref-counted init guards this.
+TEST_CASE("ENet library stays initialized until the last instance shuts down", "[network]") {
+    ENetNetwork a;
+    ENetNetwork b;
+    REQUIRE(a.init());
+    REQUIRE(b.init());
+
+    // Shutting down the first instance must NOT deinitialize ENet for the second.
+    a.shutdown();
+
+    // b is still fully functional: bind a server, connect a fresh client, exchange the handshake.
+    EventSink serverSink;
+    EventSink clientSink;
+    b.setEventHandler(&serverSink);
+    REQUIRE(b.bind("127.0.0.1", 19009, 4));
+
+    ENetNetwork client;
+    REQUIRE(client.init());
+    client.setEventHandler(&clientSink);
+    REQUIRE(client.connect("127.0.0.1", 19009));
+
+    pump(b, client, 20);
+    CHECK(clientSink.countType(Event::Type::Connect) == 1);
+    CHECK(serverSink.countType(Event::Type::Connect) == 1);
+
+    client.shutdown();
+    b.shutdown();
+}
+
 // ---------------------------------------------------------------------------
 // Pre-connection guards
 // ---------------------------------------------------------------------------

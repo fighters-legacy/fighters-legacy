@@ -98,3 +98,9 @@ __pycache__/
 
 # Loopback latency analysis — auto-generated measurement results
 tools/latency_analysis/results/
+
+# bot_swarm load-test — auto-generated JSON reports
+tools/bot_swarm/results/
+
+# Vagrant machine state (reference-env VM) — keys, box metadata, etc.
+.vagrant/

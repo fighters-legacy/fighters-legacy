@@ -34,10 +34,10 @@ by dependency, not by phase boundary:
 
 | Epic | Theme | Phase |
 |---|---|---|
-| L | Network transport replacement (enet6 → GameNetworkingSockets behind `INetwork`) | 3 (foundational) |
-| I | Load-testing / bot-swarm harness + 128-client scale gate | 3→4 |
 | A | Server simulation scalability (data-parallel job system, tick budget) | 3→4 |
 | B | Network bandwidth & snapshot scaling (quantization, priority/budget, 3D interest) | 3→4 |
+| I | Load-testing / bot-swarm harness + 128-client scale gate | 3→4 |
+| L | Network transport replacement (enet6 → GameNetworkingSockets behind `INetwork`) | 3→4 (transport optimization) |
 | E | Multiplayer gameplay framework (game modes, teams, scoring, reconnect, spectator) | 4 |
 | F | Combat sensors, datalink & EW (radar modes, IFF, shared track picture) | 4 |
 | J | Voice comms (positional + team; moved earlier from Phase 7) | 4/6 |
@@ -47,8 +47,13 @@ by dependency, not by phase boundary:
 | G | Server ops & observability (metrics, Grafana, admin web interface) | 5 |
 | K | Cluster orchestration: k8s/OpenShift operator (Agones-native) | 5 |
 
-**Dependency order:** L → (I, A, B) → (H → C → D) with G alongside H/C → K last. E, F, and J
-run in Phase 4 independent of the live-services chain.
+**Dependency order (re-prioritised 2026-06-28 from reference-env load data, [#505](https://github.com/fighters-legacy/fighters-legacy/issues/505)):**
+**A and B lead** — the empirical 8-core ceiling is gated by the single-threaded sim (A) and
+per-client snapshot bandwidth (B), *not* the transport, and B's quantization is transport-agnostic.
+I (the harness) validates them. **L is no longer foundational/blocking** — enet6 is not the
+bottleneck in the 96–256 range; L is now a later transport optimisation (encryption, congestion
+control, connection-count headroom) that pairs with Epic C auth. Then (H → C → D) with G alongside
+H/C → K last. E, F, and J run in Phase 4 independent of the live-services chain.
 
 **New repos (Go):** `fl-account` (identity), `fl-review` (offline anti-cheat), `fl-operator`
 (k8s/OpenShift operator + Helm chart). The engine/game/server stay C++.
@@ -71,10 +76,13 @@ this in addition to its existing criteria.
    Broadphase index enables range queries needed for interest management; both must be in
    before Phase 4 multiplayer acceptance testing with real clients.
 
-0. **Transport replacement (Epic L) → wire quantization (Epic B) + load harness (Epic I) →
-   128-player acceptance.** The `enet6`-at-128 ceiling is validated by a scale-spike first;
-   the selected transport (behind `INetwork`) is the substrate the quantized snapshot stream
-   rides on. These foundational scaling seams land in Phase 3 ahead of Phase 4 acceptance.
+0. **Load harness (Epic I ✓) → sim parallelism (Epic A) + wire quantization (Epic B) →
+   128-player acceptance.** The bot-swarm harness ([#519](https://github.com/fighters-legacy/fighters-legacy/issues/519))
+   measured the 8-core ceiling ([#505](https://github.com/fighters-legacy/fighters-legacy/issues/505)):
+   it is gated by the single-threaded sim (A) and per-client snapshot bandwidth (B), **not** the
+   transport. A and B proceed on the current `enet6` (B's quantization is transport-agnostic).
+   Transport replacement (Epic L) is decoupled to a later optimisation (encryption/congestion/
+   connection-count headroom), to be re-evaluated once A/B raise the sim ceiling.
 
 2. **LuaSandbox wired (#359 ✓) → fl-base-pack AI scripts → AI System (#33)**
    fl-base-pack Lua behaviour scripts can now target the `compute_control` API shipped in #359.

@@ -132,9 +132,11 @@ jobs:
           sleep 10
           ./build/debug/tools/net_check 127.0.0.1 7002 --count 3 --interval 100
           ./build/debug/tools/net_check 127.0.0.1 7002 --bench 30 --bench-rate 60
-          status=$?
           kill "$FL_SERVER_PID" 2>/dev/null || true
-          exit $status
+          # bot_swarm load-harness smoke. run_loadtest.sh launches its own fl-server with a
+          # load-test config — the default connect_rate_limit_count=5 would reject 8 rapid
+          # connects. A nonzero exit (clients refused/dropped) fails the step under set -e.
+          bash tools/bot_swarm/run_loadtest.sh build/debug 8 3 weave
 
       - name: Smoke test asset pipeline tools (Windows)
         if: matrix.os == 'windows-latest'

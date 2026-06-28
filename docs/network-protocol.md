@@ -620,7 +620,9 @@ The following are documented as future optimization candidates:
 ### Scaling to 128+ (planned — Epics B & L)
 
 The fixed 64-byte compact update and radius-only unicast above are sized for ~32 players. The
-128+ re-target (decision record 2026-06-28) replaces them. This is a **forward-looking spec**;
+128+ re-target (decision record 2026-06-28) replaces them. The per-client bandwidth figures in
+this section are measured empirically by the `bot_swarm` load generator — see
+[docs/load-testing.md](load-testing.md). This is a **forward-looking spec**;
 the wire changes land with the epics, and the protocol can change freely until the
 `kProtocolVersion` freeze.
 

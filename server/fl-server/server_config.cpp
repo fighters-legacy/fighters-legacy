@@ -27,7 +27,7 @@ static const char* kDefaultToml =
     "# \"::1\"        = localhost-only IPv6\n"
     "bind_address = \"0.0.0.0\"\n"
     "\n"
-    "# Maximum number of simultaneous connected peers (1-128).\n"
+    "# Maximum number of simultaneous connected peers (1-1024).\n"
     "max_peers = 16\n"
     "\n"
     "# Scenario types this server will host.\n"
@@ -97,7 +97,7 @@ static const char* kDefaultToml =
     "pre_handshake_window_ms = 1000\n"
     "\n"
     "# Maximum simultaneous connections from a single IP address. 0 = unlimited (default).\n"
-    "# Range [0, 128]. Applies post-handshake, after the rate-limit check.\n"
+    "# Range [0, 1024]. Applies post-handshake, after the rate-limit check.\n"
     "max_connections_per_ip = 0\n"
     "\n"
     "# Per-IP lockout for the operator network admin channel (MsgAdminCommand).\n"
@@ -172,8 +172,8 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         if (auto v = tbl["server"]["bind_address"].value<std::string>())
             cfg.bindAddress = std::move(*v);
         if (auto v = tbl["server"]["max_peers"].value<int64_t>()) {
-            if (*v < 1 || *v > 128) {
-                log->log(LogLevel::Warn, __FILE__, __LINE__, "server.max_peers out of range [1,128]; using default");
+            if (*v < 1 || *v > 1024) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "server.max_peers out of range [1,1024]; using default");
             } else {
                 cfg.maxPeers = static_cast<int>(*v);
             }
@@ -347,9 +347,9 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
 
         // [security]
         if (auto v = tbl["security"]["connect_rate_limit_count"].value<int64_t>()) {
-            if (*v < 1 || *v > 100) {
+            if (*v < 1 || *v > 100000) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "security.connect_rate_limit_count out of range [1,100]; using default");
+                         "security.connect_rate_limit_count out of range [1,100000]; using default");
             } else {
                 cfg.connectRateLimitCount = static_cast<int>(*v);
             }
@@ -409,9 +409,9 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             }
         }
         if (auto v = tbl["security"]["max_connections_per_ip"].value<int64_t>()) {
-            if (*v < 0 || *v > 128) {
+            if (*v < 0 || *v > 1024) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
-                         "security.max_connections_per_ip out of range [0,128]; using default");
+                         "security.max_connections_per_ip out of range [0,1024]; using default");
             } else {
                 cfg.maxConnectionsPerIp = static_cast<int>(*v);
             }

@@ -12,17 +12,15 @@
 // internal RTT tracker at the given rate (default 60 Hz), then prints statistics and
 // disconnects. Intended for the loopback latency analysis (see tools/latency_analysis/).
 #include "ENetNetworkFactory.h"
+#include "NetStats.h"
 #include <ILogger.h>
 #include <Platform.h>
-#include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
-#include <numeric>
 #include <vector>
 
 using namespace fl;
@@ -92,43 +90,7 @@ static constexpr int kDefaultInterval = 1000;  // ms between pings (smoke-test m
 static constexpr int kConnectTimeoutMs = 5000; // 5 s connect timeout
 static constexpr int kDefaultBenchRate = 60;   // Hz
 
-// ---------------------------------------------------------------------------
-// Statistics helpers
-// ---------------------------------------------------------------------------
-
-struct Stats {
-    double min{0};
-    double mean{0};
-    double max{0};
-    double p95{0};
-    double p99{0};
-    double stddev{0};
-};
-
-static Stats computeStats(std::vector<double>& v) {
-    if (v.empty())
-        return {};
-    std::sort(v.begin(), v.end());
-    Stats s;
-    s.min = v.front();
-    s.max = v.back();
-    s.mean = std::accumulate(v.begin(), v.end(), 0.0) / static_cast<double>(v.size());
-    auto idx95 = static_cast<std::size_t>(0.95 * static_cast<double>(v.size() - 1));
-    auto idx99 = static_cast<std::size_t>(0.99 * static_cast<double>(v.size() - 1));
-    s.p95 = v[idx95];
-    s.p99 = v[idx99];
-    double var = 0.0;
-    for (double x : v)
-        var += (x - s.mean) * (x - s.mean);
-    s.stddev = std::sqrt(var / static_cast<double>(v.size()));
-    return s;
-}
-
-static void printStats(const char* label, const Stats& s, int samples, const char* unit) {
-    std::printf("%-10s  samples=%-4d  min=%.2f%s  mean=%.2f%s  max=%.2f%s"
-                "  p95=%.2f%s  p99=%.2f%s  stddev=%.2f%s\n",
-                label, samples, s.min, unit, s.mean, unit, s.max, unit, s.p95, unit, s.p99, unit, s.stddev, unit);
-}
+// Statistics helpers (Stats / computeStats / printStats) live in tools/common/NetStats.h.
 
 // ---------------------------------------------------------------------------
 // main

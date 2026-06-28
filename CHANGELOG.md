@@ -15,8 +15,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **ai**: `patrol_attack` and `escort` StateMachineController templates in AiControllerFactory (#430)
 - **ai**: LagPursuitController for guns employment on turning targets; completes the pursuit triangle alongside pure pursuit and `LeadPursuitController` (#432)
 - **engine**: `engine-world` foundation library — `AlertLevel`/`EscalationStage` enums, `FactionDef`/`FactionRegistry` (O(1)-by-index faction store with symmetric relationship graph and mutex-guarded per-faction alert levels), and the `AirspaceZone` descriptor; plus an `EntityState::factionIndex` seam. Foundation types only — `AlertSystem` (#162) and `IWorldAiProvider` (#163) build on top (#415)
+- **tools**: `bot_swarm` headless multi-client load generator — connects N synthetic clients to a running `fl-server`, sustains `MsgClientInput` via a pluggable `IFlightPattern` (`weave`/`level`/`aggressive`/`idle`/`random`), and reports connect success, downstream KB/s per client, RTT, and an observed-server-tick-Hz proxy (from snapshot `tickIndex` progression). Includes a `run_loadtest.sh` runner and `docs/load-testing.md`; shares `tools/common/NetStats.h` with `net_check`. First step of the 128+ scale gate (Epic I, #519)
 
 ### Changed
+
+- **server**: Raised the config validation ceilings — `max_peers` 128→1024, `connect_rate_limit_count` 100→100000, `max_connections_per_ip` 128→1024 — so the load harness can drive the server past 128 to characterise the transport ceiling. A testing affordance, not a capacity guarantee (#519)
+- **network**: `ENetNetwork` now ref-counts `enet_initialize`/`enet_deinitialize` (mutex-guarded) so many client hosts can coexist in one process with staggered/concurrent lifetimes — one instance's `shutdown()` no longer tears ENet down for the others (#519)
 
 - **docs**: Re-target the roadmap to 128+ simultaneous players — multiplayer is now a co-equal product pillar (PvP + co-op PvE + persistent world). Revises the locked `32+` decision via a dated decision record (`docs/architecture.md`), inserts a new **Phase 5 — Multiplayer at Scale & Live Services** (renumbering former Phases 5–8 to 6–9), adds scaling seams to Phases 3–4 (transport replacement behind `INetwork`, server job system, wire quantization, load harness), and documents the self-host-only hosting model plus the planned Go companion repos (`fl-account`, `fl-review`, `fl-operator`). Docs only; no code or wire changes in this entry
 

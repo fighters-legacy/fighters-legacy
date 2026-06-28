@@ -167,9 +167,9 @@ TEST_CASE("parseServerConfig: max_peers 0 warns and keeps default", "[server_con
     CHECK(log.hasMessage(LogLevel::Warn, "server.max_peers out of range"));
 }
 
-TEST_CASE("parseServerConfig: max_peers 129 warns and keeps default", "[server_config]") {
+TEST_CASE("parseServerConfig: max_peers 1025 warns and keeps default", "[server_config]") {
     MockLogger log;
-    auto cfg = parseServerConfig("[server]\nmax_peers = 129\n", &log);
+    auto cfg = parseServerConfig("[server]\nmax_peers = 1025\n", &log);
     CHECK(cfg.maxPeers == 32);
     CHECK(log.hasMessage(LogLevel::Warn, "server.max_peers out of range"));
 }
@@ -181,10 +181,17 @@ TEST_CASE("parseServerConfig: max_peers boundary 1 is accepted", "[server_config
     CHECK(log.entries.empty());
 }
 
-TEST_CASE("parseServerConfig: max_peers boundary 128 is accepted", "[server_config]") {
+TEST_CASE("parseServerConfig: max_peers above the old 128 cap is accepted (128+ re-target)", "[server_config]") {
     MockLogger log;
-    auto cfg = parseServerConfig("[server]\nmax_peers = 128\n", &log);
-    CHECK(cfg.maxPeers == 128);
+    auto cfg = parseServerConfig("[server]\nmax_peers = 256\n", &log);
+    CHECK(cfg.maxPeers == 256);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: max_peers boundary 1024 is accepted", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[server]\nmax_peers = 1024\n", &log);
+    CHECK(cfg.maxPeers == 1024);
     CHECK(log.entries.empty());
 }
 
@@ -574,9 +581,16 @@ TEST_CASE("parseServerConfig: connect_rate_limit_count out of range warns and us
     }
     {
         MockLogger log;
-        auto cfg = parseServerConfig("[security]\nconnect_rate_limit_count = 101\n", &log);
+        auto cfg = parseServerConfig("[security]\nconnect_rate_limit_count = 100001\n", &log);
         CHECK(cfg.connectRateLimitCount == 5);
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+    }
+    {
+        // 101 was rejected before the 128+ re-target raised the ceiling to 100000.
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\nconnect_rate_limit_count = 1000\n", &log);
+        CHECK(cfg.connectRateLimitCount == 1000);
+        CHECK(log.entries.empty());
     }
 }
 
@@ -715,9 +729,16 @@ TEST_CASE("parseServerConfig: max_connections_per_ip out of range warns and uses
     }
     {
         MockLogger log;
-        auto cfg = parseServerConfig("[security]\nmax_connections_per_ip = 129\n", &log);
+        auto cfg = parseServerConfig("[security]\nmax_connections_per_ip = 1025\n", &log);
         CHECK(cfg.maxConnectionsPerIp == 0);
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+    }
+    {
+        // 129 was rejected before the 128+ re-target raised the ceiling to 1024.
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\nmax_connections_per_ip = 256\n", &log);
+        CHECK(cfg.maxConnectionsPerIp == 256);
+        CHECK(log.entries.empty());
     }
 }
 

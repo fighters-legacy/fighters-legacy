@@ -45,10 +45,33 @@ if(TARGET platform-enet)
     target_link_libraries(net_check PRIVATE platform-enet platform-hal)
     target_include_directories(net_check PRIVATE
         "${CMAKE_SOURCE_DIR}/platform/net"
+        "${CMAKE_CURRENT_SOURCE_DIR}/common"
     )
 
     if(MSVC)
         target_compile_definitions(net_check PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
+
+    # bot_swarm: headless multi-client load generator. Pure client (connects to an
+    # existing fl-server); reuses engine/net wire types (header-only) + platform-enet.
+    # No SDL/Vulkan/OpenAL deps — builds headless in CI.
+    find_package(Threads REQUIRED)
+    add_executable(bot_swarm
+        bot_swarm/main.cpp
+        bot_swarm/BotClient.cpp
+    )
+    target_link_libraries(bot_swarm PRIVATE platform-enet platform-hal Threads::Threads)
+    target_include_directories(bot_swarm PRIVATE
+        "${CMAKE_SOURCE_DIR}/platform/net"
+        "${CMAKE_SOURCE_DIR}/engine"
+        "${CMAKE_CURRENT_SOURCE_DIR}/common"
+        "${CMAKE_CURRENT_SOURCE_DIR}/bot_swarm"
+    )
+    if(WIN32)
+        target_link_libraries(bot_swarm PRIVATE winmm)
+    endif()
+    if(MSVC)
+        target_compile_definitions(bot_swarm PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
 endif()
 

@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstring>
 #include <enet6/enet.h>
+#include <mutex>
 
 namespace fl {
 
@@ -77,13 +78,25 @@ ENetNetwork::~ENetNetwork() {
         shutdown();
 }
 
+// enet_initialize()/enet_deinitialize() are process-global and not ref-counted by ENet, so
+// when multiple ENetNetwork instances coexist (e.g. the bot_swarm load harness runs N client
+// hosts in one process, with staggered lifetimes and concurrent worker-thread init) a single
+// instance's shutdown must not deinitialize ENet out from under the others. A mutex-guarded
+// refcount initializes ENet on the first init() and deinitializes only on the last shutdown().
+namespace {
+std::mutex g_enetInitMutex;
+int g_enetRefCount = 0;
+} // namespace
+
 bool ENetNetwork::init() {
     if (m_initialized)
-        return true; // idempotent — enet_initialize() is not ref-counted
-    if (enet_initialize() != 0) {
+        return true;
+    std::lock_guard<std::mutex> lock(g_enetInitMutex);
+    if (g_enetRefCount == 0 && enet_initialize() != 0) {
         m_lastError = "enet_initialize() failed";
         return false;
     }
+    ++g_enetRefCount;
     m_initialized = true;
     return true;
 }
@@ -96,7 +109,9 @@ void ENetNetwork::shutdown() {
         m_host = nullptr;
     }
     if (m_initialized) {
-        enet_deinitialize();
+        std::lock_guard<std::mutex> lock(g_enetInitMutex);
+        if (--g_enetRefCount == 0)
+            enet_deinitialize();
         m_initialized = false;
     }
     m_isServer = false;
