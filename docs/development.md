@@ -513,6 +513,47 @@ bot_swarm 127.0.0.1 4778 --clients 128 --duration 30 --pattern weave --json out.
 > `connect_rate_limit_count = 5` rejects a rapid 128-client ramp. `run_loadtest.sh` writes the
 > required load-test config; see [docs/load-testing.md](load-testing.md).
 
+### Reference load-test environment (optional)
+
+For *comparable* numbers, run the sweep inside the fixed **8-core / 16 GB** reference profile in
+[`tools/bot_swarm/reference-env/`](../tools/bot_swarm/reference-env/README.md) rather than
+ad-hoc on your dev box (and always build **Release** — Debug numbers are pessimistic). Two
+paths, both optional and not needed for normal development:
+
+- **Container** (fast): `podman` (preferred on Fedora) or Docker. Then:
+
+  ```bash
+  tools/bot_swarm/reference-env/run-container.sh        # builds Release inside, sweeps under the cap
+  ```
+
+  **Rootless cpuset delegation (Linux, one-time).** Pinning to 8 cores (`--cpuset-cpus`) needs
+  the `cpuset` cgroup controller delegated to your user slice — by default it isn't, and the
+  wrapper falls back to a `--cpus` quota (the guest then still sees all host cores). To pin for
+  real:
+
+  ```bash
+  sudo mkdir -p /etc/systemd/system/user@.service.d
+  printf '[Service]\nDelegate=cpu cpuset io memory pids\n' \
+      | sudo tee /etc/systemd/system/user@.service.d/delegate.conf
+  sudo systemctl daemon-reload      # then log out / back in
+  # verify: podman run --rm --cpuset-cpus 0-7 <image> nproc  -> 8
+  ```
+
+  On a hybrid CPU (Intel P/E cores) set `CPUSET` to 8 performance-core threads (`lscpu -e`).
+
+- **VM** (most faithful — own kernel, dedicated vCPUs): `vagrant` + `libvirt`.
+
+  ```bash
+  sudo dnf install -y vagrant && sudo systemctl enable --now libvirtd
+  sudo usermod -aG libvirt "$USER"            # then re-login
+  cd tools/bot_swarm/reference-env && vagrant up
+  vagrant ssh -c 'sudo bash /src/tools/bot_swarm/reference-env/run-benchmark.sh'
+  ```
+
+Windows (Docker Desktop + `.wslconfig`) and macOS (`podman machine`/Docker Desktop sizing,
+Apple-Silicon arm64 caveat) are covered in the
+[reference-env README](../tools/bot_swarm/reference-env/README.md).
+
 ---
 
 ## locale-extract
