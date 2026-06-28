@@ -116,6 +116,15 @@ static fl::EntityDef makeDefWithDamage(const char* id = "test:damaged") {
 }
 
 // ---------------------------------------------------------------------------
+// EntityState
+// ---------------------------------------------------------------------------
+
+TEST_CASE("EntityState: factionIndex defaults to neutral", "[entity_state]") {
+    EntityState s{};
+    CHECK(s.factionIndex == 0u);
+}
+
+// ---------------------------------------------------------------------------
 // EntityId
 // ---------------------------------------------------------------------------
 

@@ -26,7 +26,8 @@ struct EntityState {
     DamageLevel damageLevel{DamageLevel::Intact};
     bool dead{false};
     bool playerOwned{false};
-    uint32_t ownerId{0}; // peer ID; 0 = server / AI
+    uint32_t ownerId{0};      // peer ID; 0 = server / AI
+    uint16_t factionIndex{0}; // 0 = no faction/neutral; indexes FactionRegistry (engine-world)
 };
 
 } // namespace fl
