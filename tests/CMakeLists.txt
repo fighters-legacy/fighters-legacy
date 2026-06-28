@@ -188,6 +188,10 @@ add_executable(test_spatial_index test_spatial_index.cpp)
 target_link_libraries(test_spatial_index PRIVATE Catch2::Catch2WithMain engine-spatial)
 catch_discover_tests(test_spatial_index)
 
+add_executable(test_faction_registry test_faction_registry.cpp)
+target_link_libraries(test_faction_registry PRIVATE Catch2::Catch2WithMain engine-world)
+catch_discover_tests(test_faction_registry)
+
 add_executable(test_audio test_audio.cpp)
 target_link_libraries(test_audio PRIVATE Catch2::Catch2WithMain platform-openal OpenAL::OpenAL)
 target_include_directories(test_audio PRIVATE "${CMAKE_SOURCE_DIR}/platform/openal")
