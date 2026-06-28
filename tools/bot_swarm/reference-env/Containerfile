@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Reference build/run environment for the bot_swarm load harness. The repo is bind-mounted at
+# runtime (/src); this image only carries the toolchain to build fl-server + bot_swarm headless
+# (no Vulkan/GPU — fl-server is a headless server). Pin the base tag for strict reproducibility.
+FROM registry.fedoraproject.org/fedora:latest
+
+RUN dnf -y install \
+        gcc-c++ \
+        cmake \
+        ninja-build \
+        git \
+        SDL3-devel \
+        openal-soft-devel \
+        glibc-langpack-en \
+        findutils \
+        procps-ng \
+        iproute \
+    && dnf clean all
+
+ENV LANG=C.UTF-8
+WORKDIR /src

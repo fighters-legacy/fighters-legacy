@@ -51,6 +51,7 @@ max_peers = $MAX_PEERS
 [security]
 connect_rate_limit_count = 100000
 connect_rate_limit_window_s = 1
+pre_handshake_rate_limit_count = 0
 packet_flood_multiplier = 3
 max_connections_per_ip = 0
 EOF
