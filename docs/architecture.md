@@ -101,7 +101,9 @@ Any repository that implements `IContentPack` and compiles to a shared library c
 
 ## Locked Architectural Decisions
 
-These decisions are finalized and not subject to revision without an RFC.
+These decisions are finalized and not subject to revision without an RFC — or, during primary
+development (pre-`kProtocolVersion` freeze), a dated **decision record** (see below). The
+2026-06-28 re-target to 128+ multiplayer revised several rows via that lightweight path.
 
 | Concern | Choice | Rationale |
 |---|---|---|
@@ -113,7 +115,7 @@ These decisions are finalized and not subject to revision without an RFC.
 | Depth convention | Reverse-Z (near=1 far→0, compare=GREATER, D32_SFLOAT) | Better floating-point precision distribution across scene depth |
 | Windowing / input | SDL3 | Wayland + modern controller support; long-term path |
 | Audio | OpenAL Soft | Positional 3D audio; native music in OGG; no MIDI dependency in engine core |
-| Network transport | SirLynix/enet6 v6.1.3 | Reliable + unreliable channels; congestion control; cross-platform. IPv4+IPv6 dual-stack. Migrated from lsalzman/enet 1.3.17 in #180. |
+| Network transport | Under replacement for 128+ (Epic L) — likely GameNetworkingSockets (BSD-3); `enet6` v6.1.3 today | enet6 was sized for ~32 peers; the per-peer host loop is unproven at 128 @ 60 Hz. Replacement is selected via a scale-spike and lands behind the `INetwork` HAL, so engine/game code is backend-agnostic. enet6 may remain a LAN/low-count option. (Revised by the 2026-06-28 decision record.) |
 | Build system | CMake 3.25+ | Cross-platform from day one |
 | Engine repo | `fighters-legacy` (this repo) | Separate from fighters-toolkit |
 | Content system | Plugin / content-pack architecture | Each content source = one plugin; mods = other plugins; engine core has zero content dependency |
@@ -126,6 +128,12 @@ These decisions are finalized and not subject to revision without an RFC.
 | Native terrain | Streaming heightmap chunks + JSON | No tile-count cap; supports large theaters |
 | Native AI scripts | Lua 5.5 | Embeddable, sandbox-able, moddable |
 | Multiplayer topology | `fl-server` dedicated binary + `fl-lobby` REST service | Server-authoritative; no P2P player-count cap; self-hostable |
+| Multiplayer scale target | **128+ simultaneous players** (32 = near-term acceptance floor) | Drives the scaling seams below; see [docs/design.md](design.md) "Multiplayer at Scale". (Revised by the 2026-06-28 decision record.) |
+| Server simulation | Data-parallel **job system** over a single authoritative tick | Parallelizes per-entity integration + AI so 128 players + AI + projectiles hold 60 Hz; spatial sharding deferred as a later option |
+| Wire state encoding | **Quantized / bit-packed** snapshot stream + per-client priority/budget scheduling | Keeps per-client bandwidth bounded as population grows; replaces fixed 64-byte `MsgEntityUpdate` |
+| Player identity / auth | **Server-side, pluggable `IIdentityProvider`** (offline-verifiable signed tokens) | Persistent stats/ranking/bans key on a verified account, not a spoofable client GUID; self-hostable, no first-party hosted infra |
+| Persistence | **`IPersistence` storage HAL** (SQLite single-server, Postgres for clusters) | Accounts, stats, bans, persistent-world state; promotes file-based banlists into a store |
+| Cluster orchestration / live services | **Go** (k8s/OpenShift operator, Agones-native; `fl-account`, `fl-review`) | Intentional polyglot boundary: C++ engine/game/server, Go infrastructure; idiomatic for the k8s ecosystem |
 | Single-player topology | `fl-server` running locally (`bind_address=127.0.0.1`, `max_peers=1`) | One simulation path; no bifurcated codebase; single-player is multiplayer with one peer |
 | LAN server discovery | Raw UDP broadcast + IPv6 link-local multicast (#91) | `DiscoveryBeacon` (fl-server) + `DiscoveryListener` (game client) in `engine/net/`; separate socket outside ENet; client server browser in issue #143 |
 | Weather and time of day | Server-authoritative `WeatherController` in `engine/weather/` | Autonomous cycle (Clear→PartlyCloudy→Overcast→Rain→Storm); `Snow` and `Blizzard` are operator-set presets that do not participate in the autonomous cycle; 10× time-scale default, wind/gust/turbulence model; synced via `MsgWeatherState` (0x04) at ~6 Hz |
@@ -133,6 +141,31 @@ These decisions are finalized and not subject to revision without an RFC.
 | License | GPL v3 | Engine modifications must stay open source; protects community investment |
 | Hosting | GitHub, public repository | Unlimited Actions CI on public repos; GitHub Free sufficient |
 | Async file I/O backend | Worker thread + `std::mutex` queue (`SDL3AsyncFilesystem`) | `SDL_AsyncIO` deferred; consistent cross-platform behaviour without conditional compilation in the interface |
+
+### Decision Records
+
+During primary development (before the `kProtocolVersion` freeze) a locked decision may be
+revised by a dated decision record instead of a full RFC, provided the change is recorded here
+with its rationale. This keeps the velocity of pre-1.0 architecture work without leaving the
+locked table silently stale.
+
+**2026-06-28 — Re-target to 128+ multiplayer.** A roadmap gap-analysis against the bar of a
+modern combat flight sim supporting 128+ simultaneous players found the architecture sized for
+~32. The following decisions were revised (rows above updated accordingly):
+
+- Multiplayer scale target **32+ → 128+** (32 becomes the near-term acceptance floor).
+- Multiplayer is now a **co-equal product pillar** (PvP + co-op PvE + persistent world), not a
+  secondary extension to single-player.
+- New seams added as locked decisions: data-parallel **server job system**, **quantized wire
+  state** + priority/budget scheduling, **server-side identity/auth**, **persistence HAL**, and
+  a **Go** cluster operator + live-services tier (polyglot boundary).
+- **Network transport** (`enet6`) reversed: under replacement for the 128-peer target
+  (GameNetworkingSockets lean) behind the `INetwork` HAL.
+- **Hosting model:** self-host only — the project ships the identity/live-services software but
+  runs no central infrastructure; communities self-host. (No first-party PII/GDPR liability.)
+
+These land across a new **Phase 5 — Multiplayer at Scale & Live Services** and scaling seams in
+Phases 3–4; see [docs/roadmap.md](roadmap.md).
 
 ## Content Pack Architecture
 

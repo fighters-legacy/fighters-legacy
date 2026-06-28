@@ -54,8 +54,8 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 > `sizeof`/`offsetof`/`alignof` lock it. A naturally-aligned received buffer may therefore be read in
 > place via `fl::viewMsg` (zero-copy); `fl::readMsg` (`memcpy`) is the portable default. The wire
 > format may change freely while `kProtocolVersion` stays at **1** — the client always runs the
-> same-tree server in primary development. The version field only begins to bind at the Phase 6
-> public-release freeze.
+> same-tree server in primary development. The version field only begins to bind at the Phase 7
+> (Platform Release) public-release freeze.
 
 ### MsgHello — 4 bytes
 
@@ -551,8 +551,8 @@ negotiation happens via `MsgHello`.
 **`kProtocolVersion`** is defined as `constexpr uint16_t kProtocolVersion = 1` in
 `engine/net/GameProtocol.h`. During primary development it stays at **1** — the game client always
 runs the same-tree `fl-server`, so the wire format may change freely without a bump. The constant
-begins to bind (incremented on any backward-incompatible change) only at the Phase 6 public-release
-freeze.
+begins to bind (incremented on any backward-incompatible change) only at the Phase 7 (Platform
+Release) public-release freeze.
 
 External tools (replay readers per #41, spectator clients, LAN discovery tools) built against
 this spec are **protocol version 1** and must implement `MsgHello` handling to interoperate.
@@ -616,6 +616,41 @@ The following are documented as future optimization candidates:
 - **`typeIndex` as uint32_t**: 4 bytes; a uint16_t would support 65,535 entity types and
   save 2 bytes/entity. Not changed here because `EntityTypeRegistry` and `EntityState`
   both use uint32_t throughout the engine — narrowing the wire type is deferred.
+
+### Scaling to 128+ (planned — Epics B & L)
+
+The fixed 64-byte compact update and radius-only unicast above are sized for ~32 players. The
+128+ re-target (decision record 2026-06-28) replaces them. This is a **forward-looking spec**;
+the wire changes land with the epics, and the protocol can change freely until the
+`kProtocolVersion` freeze.
+
+- **Quantized / bit-packed state (Epic B).** The fixed `MsgEntityUpdate` becomes a quantized
+  bitstream: position relative to a per-snapshot frame origin, **smallest-three** quaternion
+  encoding for orientation, and quantized velocity/omega. Target ~3–4× size reduction over the
+  current 64 bytes, pulling the single-fragment safe threshold well above 20 entities.
+- **Priority/budget snapshot scheduler (Epic B).** Instead of "everything within
+  `draw_distance_km`," each client gets a **per-tick byte budget**; entities are ranked by
+  relevance (distance, threat, recency) and the highest-priority set that fits is sent. Keeps
+  per-client bandwidth bounded as population grows.
+- **Client-acked delta baselines (Epic B).** Replace the fixed `baseline_interval_ticks`
+  re-sync with client-acknowledged baselines, so full re-sends happen only when a client
+  actually needs recovery.
+- **3D interest management (#402, Epic B).** Extend `SpatialIndex::queryRadius()` interest
+  from XZ to full XYZ distance culling.
+- **Transport replacement (Epic L).** `enet6` is being replaced (GameNetworkingSockets lean)
+  behind the `INetwork` HAL for higher peer counts, built-in congestion control, and
+  encryption. The MTU/fragmentation discussion above is transport-specific and will be
+  revised when the backend is selected. `MsgLanBeacon` (raw UDP) and RCON (TCP) are unaffected.
+
+### Authenticated connect handshake (planned — Epic C)
+
+Server-side identity adds a **signed-token** field to the connect flow: the client presents an
+offline-verifiable access token (e.g. Ed25519/JWT) issued by a pluggable identity provider;
+`fl-server` verifies the signature locally against the issuer's published public key (no live
+callback per connect). The verified account ID — not the client-generated `PilotProfile::guid`
+— keys persistent stats, ranking, and bans. Guest connections remain possible when the server
+permits them. A **voice channel** (Epic J — positional + team, Opus over an unreliable channel)
+is also reserved here. Exact message layout is specified when Epic C/J land.
 
 ## Notes
 

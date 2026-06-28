@@ -56,6 +56,16 @@ Required for:
 3. Decision recorded in the issue with `status: accepted` or `status: rejected` label
 4. Accepted RFCs become tracking issues linked to implementation PRs
 
+### Decision Records (primary development)
+
+During primary development — before the `kProtocolVersion` / 1.0 freeze — the Project Lead may
+revise a previously-locked architectural decision via a **dated decision record** instead of
+the full 14-day RFC, provided the change and its rationale are recorded in
+[docs/architecture.md](docs/architecture.md#decision-records). This keeps pre-1.0 architecture
+velocity without leaving the locked-decisions table silently stale. Once the protocol freezes,
+the full RFC process is required for the same classes of change. The 2026-06-28 re-target to
+128+ multiplayer is the first such record.
+
 ## Code of Conduct Enforcement
 
 Enforcement is handled by the Project Lead. Appeals may be sent to **fighters-legacy@mkz.io**. The enforcement ladder follows the [Code of Conduct](https://github.com/fighters-legacy/.github/blob/main/CODE_OF_CONDUCT.md):

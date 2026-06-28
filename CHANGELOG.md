@@ -16,6 +16,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **ai**: LagPursuitController for guns employment on turning targets; completes the pursuit triangle alongside pure pursuit and `LeadPursuitController` (#432)
 - **engine**: `engine-world` foundation library — `AlertLevel`/`EscalationStage` enums, `FactionDef`/`FactionRegistry` (O(1)-by-index faction store with symmetric relationship graph and mutex-guarded per-faction alert levels), and the `AirspaceZone` descriptor; plus an `EntityState::factionIndex` seam. Foundation types only — `AlertSystem` (#162) and `IWorldAiProvider` (#163) build on top (#415)
 
+### Changed
+
+- **docs**: Re-target the roadmap to 128+ simultaneous players — multiplayer is now a co-equal product pillar (PvP + co-op PvE + persistent world). Revises the locked `32+` decision via a dated decision record (`docs/architecture.md`), inserts a new **Phase 5 — Multiplayer at Scale & Live Services** (renumbering former Phases 5–8 to 6–9), adds scaling seams to Phases 3–4 (transport replacement behind `INetwork`, server job system, wire quantization, load harness), and documents the self-host-only hosting model plus the planned Go companion repos (`fl-account`, `fl-review`, `fl-operator`). Docs only; no code or wire changes in this entry
+
 ### Fixed
 
 - **game**: Split multi-line admin responses into one game console entry per line (#417)

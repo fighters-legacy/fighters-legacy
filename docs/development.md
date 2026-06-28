@@ -94,6 +94,22 @@ See [Testing → Code coverage](#code-coverage) for the full local workflow.
 
 Copyright is declared centrally in `REUSE.toml` rather than in each file. All `.h` and `.cpp` files are covered by a glob annotation there — new source files do not need an in-file `SPDX-FileCopyrightText` line. The `// SPDX-License-Identifier: GPL-3.0-or-later` line in each source file is still required (see `CLAUDE.md`).
 
+### Go toolchain (cluster + live-services repos)
+
+The C++ engine, game, and `fl-server` need only the CMake toolchain above. The 128+
+multiplayer re-target adds **Go** companion repositories that build independently of the CMake
+matrix:
+
+- `fl-operator` — Kubernetes / OpenShift operator built with the [Operator SDK](https://sdk.operatorframework.io/) / Kubebuilder (Agones-native).
+- `fl-account` — pluggable identity / account service.
+- `fl-review` — offline anti-cheat batch-analysis service.
+
+To work on those repos you need a recent **Go toolchain** (see each repo's `go.mod` for the
+pinned version), plus — for the operator — a local Kubernetes (kind/minikube) and the Agones
+chart for end-to-end testing. These tools are **not** required to build or run the game or
+`fl-server`; they live in separate repositories with their own Go CI lanes. New Go files carry
+`// SPDX-License-Identifier: GPL-3.0-or-later` headers per REUSE, same as the C++ tree.
+
 ---
 
 ## Building

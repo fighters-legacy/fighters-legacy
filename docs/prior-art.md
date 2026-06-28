@@ -142,6 +142,29 @@ quality — which is a valuable and currently unoccupied position in the open-so
 
 ---
 
+## Multiplayer at Scale — Prior Art
+
+The 128+ player re-target (decision record 2026-06-28) invites comparison to large-scale
+combat-flight multiplayer, a different axis from the single-player-fidelity comparisons above:
+
+- **War Thunder (Gaijin)** — the reference for large combat-air battles, with high player
+  counts per match, server-authoritative netcode, accounts/progression, and anti-cheat. Closed
+  and free-to-play with monetized progression — the opposite of our self-host, no-progression-
+  gate model, but the benchmark for what "many planes in one battle" should feel like.
+- **DCS World multiplayer** — dedicated servers with sizeable persistent missions; community-
+  run, but limited matchmaking/identity infrastructure and Windows-only servers. Shows the
+  appetite for large community-hosted combat servers that fighters-legacy can serve openly and
+  cross-platform.
+- **Falcon 4 BMS multiplayer** — coordinated mission play over community servers; demonstrates
+  the value of a shared track picture / datalink for team coordination (Epic F).
+
+The unoccupied position fighters-legacy targets: a **GPL, cross-platform, self-hostable**
+combat flight sim engineered for 128+ players with server-authoritative netcode, pluggable
+identity, and Kubernetes-native fleet operations — none of which the closed incumbents offer to
+self-hosting communities.
+
+---
+
 ## Flight Model Prior Art
 
 The FDM design decision — a simplified 6-DOF stability-derivative model — is documented in
