@@ -26,8 +26,10 @@ ulimit -n "$(ulimit -Hn 2>/dev/null || echo 4096)" 2>/dev/null || true
 for p in $PATTERNS; do
     for n in $CLIENTS; do
         echo "############### ${n} clients, pattern=${p} ###############"
+        # `|| true`: past the knee, run_loadtest.sh exits nonzero (clients dropped) — that's the
+        # point of the sweep, so don't let `set -e`/pipefail abort the remaining runs.
         bash "$SRC/tools/bot_swarm/run_loadtest.sh" "$BUILD" "$n" "$DURATION" "$p" \
-            | grep -E "clients:|tick-Hz|dn KB/s|RTT |loop dt|aggregate"
+            | grep -E "clients:|tick-Hz|dn KB/s|RTT |loop dt|aggregate" || true
     done
 done
 

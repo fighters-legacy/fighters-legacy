@@ -12,10 +12,12 @@ RUN dnf -y install \
         git \
         SDL3-devel \
         openal-soft-devel \
+        dnf-plugins-core \
         glibc-langpack-en \
         findutils \
         procps-ng \
         iproute \
+    && dnf builddep -y SDL3 \
     && dnf clean all
 
 ENV LANG=C.UTF-8
