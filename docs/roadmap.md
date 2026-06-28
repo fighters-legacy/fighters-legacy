@@ -12,12 +12,56 @@ drifted from reality during Phase 2. Ordering constraints are listed instead.
 |---|---|---|
 | 1 — Engine Foundation ✓ | HAL, content system, CI/CD | — |
 | 2 — Modern-Particles Engine ✓ | Game loop, flight model, networking, renderer, spherical Earth | Phase 1 complete |
-| 3 — Engine Systems | Spatial partitioning, AI framework, interest management, bindings, quality settings | Phase 2 complete |
-| 4 — Content & Gameplay | fl-base-pack content, radar/weapons, AI system, missions, multiplayer, advanced vehicle models | Phase 3 complete + fl-base-pack substantially ready |
-| 5 — UI Layer & Tooling | IGui HAL + Dear ImGui, in-game mission editor, welcome screen | Phase 4 complete |
-| 6 — Platform Release | macOS/Linux/Windows packages, Flathub, fl-server container, crash reporting | Phase 5 complete |
-| 7 — OpenGL & Alternative Renderers | OpenGL 4.1 Core, headless/software renderer for CI, voice chat | Phase 6 complete |
-| 8 — Modding Platform | GPG verification, subprocess isolation, in-game mod browser, community content distribution | Phase 7 complete |
+| 3 — Engine Systems | Spatial partitioning, AI framework, interest management, bindings, quality settings, **scaling seams** (transport replacement, sim job system, wire quantization, load harness) | Phase 2 complete |
+| 4 — Content & Gameplay | fl-base-pack content, radar/weapons + sensor framework, AI system, missions, **MP gameplay framework**, advanced vehicle models | Phase 3 complete + fl-base-pack substantially ready |
+| 5 — Multiplayer at Scale & Live Services | Server-side identity/auth, anti-cheat, persistence, ops/observability, k8s/OpenShift operator | Phase 4 complete |
+| 6 — UI Layer & Tooling | IGui HAL + Dear ImGui, in-game mission editor, welcome screen | Phase 5 complete |
+| 7 — Platform Release | macOS/Linux/Windows packages, Flathub, fl-server container, crash reporting | Phase 6 complete |
+| 8 — OpenGL & Alternative Renderers | OpenGL 4.1 Core, headless/software renderer for CI, voice chat | Phase 7 complete |
+| 9 — Modding Platform | GPG verification, subprocess isolation, in-game mod browser, community content distribution | Phase 8 complete |
+
+> **2026-06-28 re-target to 128+ multiplayer.** A new **Phase 5 — Multiplayer at Scale & Live
+> Services** was inserted and former Phases 5–8 renumbered to 6–9 (release slips one phase —
+> a conscious choice). Scaling seams were folded into Phases 3–4. See the
+> [decision record](architecture.md#decision-records) and the cross-cutting initiative below.
+
+---
+
+## Cross-Cutting Initiative: Multiplayer at Scale & Live Services
+
+The 128+ target is delivered by twelve epics that thread across Phases 3–5. They are sequenced
+by dependency, not by phase boundary:
+
+| Epic | Theme | Phase |
+|---|---|---|
+| L | Network transport replacement (enet6 → GameNetworkingSockets behind `INetwork`) | 3 (foundational) |
+| I | Load-testing / bot-swarm harness + 128-client scale gate | 3→4 |
+| A | Server simulation scalability (data-parallel job system, tick budget) | 3→4 |
+| B | Network bandwidth & snapshot scaling (quantization, priority/budget, 3D interest) | 3→4 |
+| E | Multiplayer gameplay framework (game modes, teams, scoring, reconnect, spectator) | 4 |
+| F | Combat sensors, datalink & EW (radar modes, IFF, shared track picture) | 4 |
+| J | Voice comms (positional + team; moved earlier from Phase 7) | 4/6 |
+| H | Persistence layer (`IPersistence`: accounts, stats, bans, world state) | 5 |
+| C | Player identity, accounts & authentication (pluggable, offline-verifiable tokens) | 5 |
+| D | Anti-cheat & competitive integrity (live validation + offline `fl-review`) | 5 |
+| G | Server ops & observability (metrics, Grafana, admin web interface) | 5 |
+| K | Cluster orchestration: k8s/OpenShift operator (Agones-native) | 5 |
+
+**Dependency order:** L → (I, A, B) → (H → C → D) with G alongside H/C → K last. E, F, and J
+run in Phase 4 independent of the live-services chain.
+
+**New repos (Go):** `fl-account` (identity), `fl-review` (offline anti-cheat), `fl-operator`
+(k8s/OpenShift operator + Helm chart). The engine/game/server stay C++.
+
+**Hosting model:** self-host only. The project ships the software; communities run their own
+servers and identity. No first-party hosted infrastructure, no PII/GDPR liability for the
+project. The path to optional official infrastructure later is kept open by globally-unique
+account IDs + a realm/scope field in persistence (additive, not a rewrite).
+
+**Scale acceptance (Epic I gate):** 128 players @ 60 Hz with sim tick ≤ 16.6 ms p99 on a
+reference 8-core / 16 GB instance; sustained ≤ ~150 KB/s/client downstream after quantization +
+budgeting; soak-stable for 2 h. Phase 4 multiplayer acceptance depends on Epics A/B/I proving
+this in addition to its existing criteria.
 
 ---
 
@@ -26,6 +70,11 @@ drifted from reality during Phase 2. Ordering constraints are listed instead.
 1. **Spatial partitioning (#360) → interest management (#346) → multiplayer at scale (Phase 4)**
    Broadphase index enables range queries needed for interest management; both must be in
    before Phase 4 multiplayer acceptance testing with real clients.
+
+0. **Transport replacement (Epic L) → wire quantization (Epic B) + load harness (Epic I) →
+   128-player acceptance.** The `enet6`-at-128 ceiling is validated by a scale-spike first;
+   the selected transport (behind `INetwork`) is the substrate the quantized snapshot stream
+   rides on. These foundational scaling seams land in Phase 3 ahead of Phase 4 acceptance.
 
 2. **LuaSandbox wired (#359 ✓) → fl-base-pack AI scripts → AI System (#33)**
    fl-base-pack Lua behaviour scripts can now target the `compute_control` API shipped in #359.
@@ -39,11 +88,15 @@ drifted from reality during Phase 2. Ordering constraints are listed instead.
    on fl-base-pack being substantially complete.
 
 5. **IGui HAL (#156) → in-game mission editor (#49), subtitle rendering (#165), crash overlay (#236)**
-   All Phase 5 features depend on the IGui interface being stable.
+   All Phase 6 features depend on the IGui interface being stable.
 
-6. **Platform packaging (Phase 6) → OpenGL renderer (Phase 7)**
+6. **Persistence (Epic H) → identity (Epic C) → anti-cheat (Epic D) + operator (Epic K)**
+   Anti-cheat verdicts and per-account ranking key on identity, which keys on the persistence
+   store; the operator packages and deploys the live-services tier last in Phase 5.
+
+7. **Platform packaging (Phase 7) → OpenGL renderer (Phase 8)**
    OpenGL is an optional compatibility layer; it should not block the primary release.
-   The headless/software renderer (Phase 7) enables GPU-free CI visual regression tests.
+   The headless/software renderer (Phase 8) enables GPU-free CI visual regression tests.
 
 ---
 
@@ -92,6 +145,10 @@ Phase 3 acceptance is a **complete engine layer** — all features testable with
 - `bindings.toml` loaded; per-axis HOTAS/gamepad mapping applied at startup.
 - WeatherPreset::Snow and WeatherPreset::Blizzard functional (weather state machine + visual presets).
 - NVG cockpit overlay toggles on/off in cockpit mode.
+- Scaling seams landed: transport replacement (Epic L) selected behind `INetwork` and passing
+  a transport scale-spike; load-test bot-swarm harness (Epic I) runs in CI; server tick-budget
+  instrumentation (Epic A) reports per-phase timing; wire quantization (Epic B) reduces
+  per-entity update size with snapshot/`sizeof` tests updated.
 - All three CI platforms green.
 
 ### Phase 4 — Content & Gameplay
@@ -107,13 +164,41 @@ Phase 4 acceptance requires a content pack (fl-base-pack) and is gated on Phase 
 - Instant Action / Quick Play: reachable without manual mission YAML setup.
 - Replay: mission records and plays back from cockpit and free-camera views.
 - Multiplayer: two clients on fl-server complete a cooperative strike mission.
+- MP gameplay framework (Epic E): a data-driven game mode (e.g. team deathmatch) runs a full
+  match lifecycle (warmup → active → end → rotation) with team assignment, scoring, spectator,
+  and drop-in/reconnect.
+- Sensor framework (Epic F): radar search/track + IFF + a shared team track picture function
+  against fl-base-pack content.
+- Scale proven: Epics A/B/I demonstrate the 128-client tick + bandwidth gate (see the
+  cross-cutting initiative) — a prerequisite for Phase 4 multiplayer acceptance.
 - Helicopter and multirotor force models functional with appropriate fl-base-pack aircraft types.
 - Per-engine failure simulation: L/R bits produce asymmetric thrust effects in cockpit.
 - Afterburner envelope limits enforced per aircraft TOML definition.
 - Lua scripting API documented (`docs/modding/ai.md`).
 - CI green on all three platforms.
 
-### Phase 5 — UI Layer & Tooling
+### Phase 5 — Multiplayer at Scale & Live Services
+
+Phase 5 acceptance is the **live-services tier** that makes 128-player public/community servers
+operable, identifiable, and cheat-resistant. Engine-layer scaling seams (transport, job system,
+wire quantization, load harness) are validated earlier as Phase 3–4 gates.
+
+- Transport replacement (Epic L) holds the Epic I scale gate: 128 clients @ 60 Hz, sim tick
+  ≤ 16.6 ms p99 on the reference instance, soak-stable for 2 h.
+- Quantized snapshot stream + priority/budget scheduling keep sustained downstream
+  ≤ ~150 KB/s/client at 128 players.
+- Server-side identity: a client authenticates via a pluggable `IIdentityProvider`
+  (offline-verifiable signed token); guest play still allowed when the server permits it.
+- Persistence (`IPersistence`): accounts, stats, and bans survive restart; file banlists import.
+- Anti-cheat: live input validation rejects impossible states in-tick; the offline `fl-review`
+  pipeline flags a seeded cheat corpus.
+- Observability: `fl-server` exports Prometheus metrics; bundled Grafana dashboards render; the
+  admin web interface performs kick/ban/config-reload against a running server.
+- Operator: the k8s/OpenShift operator deploys a fleet, autoscales on population, and drains a
+  live match gracefully on scale-down (reusing the shutdown countdown). Installs on OCP via OLM.
+- All three CI platforms green; new Go repos green on their own CI lanes.
+
+### Phase 6 — UI Layer & Tooling
 
 - IGui HAL implemented with Dear ImGui backend on all three platforms.
 - In-game mission editor: create, edit, and save a YAML mission on all three platforms.
@@ -122,7 +207,7 @@ Phase 4 acceptance requires a content pack (fl-base-pack) and is gated on Phase 
 - First-run welcome screen shown on initial launch.
 - Crash report and mod-load failure overlay display correctly via IGui.
 
-### Phase 6 — Platform Release
+### Phase 7 — Platform Release
 
 - macOS .app bundle signed and notarized; passes Gatekeeper on a clean machine.
 - Linux Flatpak published to Flathub; AppImage available for direct download.
@@ -131,13 +216,13 @@ Phase 4 acceptance requires a content pack (fl-base-pack) and is gated on Phase 
 - Crash reporting operational on all three platforms; reports reach the configured endpoint.
 - All three platforms in CI green with release artifacts attached.
 
-### Phase 7 — OpenGL & Alternative Renderers
+### Phase 8 — OpenGL & Alternative Renderers
 
 - OpenGL 4.1 Core backend: all seven render passes functional on Mesa + ANGLE + Intel iGPU.
 - Software/headless renderer: CI visual regression tests run without a physical GPU.
 - In-game voice chat functional in multiplayer sessions on all three platforms.
 
-### Phase 8 — Modding Platform
+### Phase 9 — Modding Platform
 
 - GPG signature verification for community and maintainer content packs.
 - SHA-256 manifest hash pinning enforced on update; tampered packs rejected.

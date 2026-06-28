@@ -35,8 +35,8 @@ is expected and welcome — not a leak to be plugged (see GPL note above).
 |---|---|---|---|---|
 | **GitHub Releases** | Source | 0% | Phase 1 alpha | Hosts **source** (GPL: source-accompanies-binary, not public hosting). First-party packaged binaries are intentionally **not** published here — ready-to-run builds come via Flathub + the paid storefronts. Primary entry point for developers and power users. |
 | **itch.io** | First-party paid | 0–10% | Phase 2 early access | Zero approval friction. Best channel for early community. Pay-what-you-want with a minimum, framed as supporting development. |
-| **Flathub** | Free packaged | 0% | Phase 5 (Linux milestone) | Free, zero-friction Linux desktop packaging via Flatpak. Reaches distro users who don't use itch.io. |
-| **Steam** | First-party paid | 30% | After Phase 5 polish | Largest gaming audience. $100 one-time publishing fee. Fixed price. No Steamworks SDK linkage. |
+| **Flathub** | Free packaged | 0% | Phase 7 (Platform Release / Linux milestone) | Free, zero-friction Linux desktop packaging via Flatpak. Reaches distro users who don't use itch.io. |
+| **Steam** | First-party paid | 30% | After Phase 7 polish | Largest gaming audience. $100 one-time publishing fee. Fixed price. No Steamworks SDK linkage. |
 | **GOG** | First-party paid | 30% | Aspirational post-Steam | GOG curates; apply after demonstrable Steam traction. Fixed price, DRM-free audience. |
 
 ### Recommended Rollout
@@ -45,8 +45,8 @@ is expected and welcome — not a leak to be plugged (see GPL note above).
    pre-monetization convenience for the developer audience (retired once Flathub + the
    paid storefronts exist; GitHub reverts to source-only).
 2. **Phase 2 early access** — Add itch.io. Pay-what-you-want pricing optional. Community feedback loop.
-3. **Phase 5** — Add Flathub. Linux Flatpak complements itch.io AppImage.
-4. **After Phase 5** — Submit to Steam once the build is polished enough for a general audience.
+3. **Phase 7** — Add Flathub. Linux Flatpak complements itch.io AppImage.
+4. **After Phase 7** — Submit to Steam once the build is polished enough for a general audience.
 5. **Post-Steam** — Apply to GOG if Steam reception warrants it.
 
 ---
@@ -116,3 +116,32 @@ zero financial barrier. Revenue model shifts to:
 - Donations via itch.io / GitHub Sponsors for the engine itself
 
 The engine itself remains GPL and free to compile from source at any time.
+
+---
+
+## Server Distribution & Self-Hosting
+
+The channels above distribute the **game client**. The dedicated server (`fl-server`) and the
+live-services tier introduced by the 128+ multiplayer re-target are distributed separately, and
+the model is **self-host only**: the project ships the software but operates **no central
+infrastructure**. Communities run their own servers and identity.
+
+| Artifact | Channel | Notes |
+|---|---|---|
+| `fl-server` binary | GitHub Releases (with the engine) | Same build used for single-player and dedicated hosting |
+| `fl-server` container image | GHCR (`ghcr.io/fighters-legacy/...`) | Official OCI image for containerized hosting |
+| Helm chart | `fl-operator` repo / chart repo | Deploys a server fleet + optional observability stack |
+| `fl-operator` | GHCR image + OLM bundle | Kubernetes operator; OpenShift via the certified-operator OLM bundle |
+| `fl-account` / `fl-review` | GHCR images | Optional identity + offline anti-cheat services, run by the community operator |
+
+**No first-party PII/GDPR liability.** Because the project runs no central accounts or
+matchmaking, player data (emails/credentials/stats) lives only on community-operated servers;
+privacy obligations fall to each self-hoster. The software ships a self-hosting privacy/
+compliance note describing what it stores and how to configure retention.
+
+**Path to official infrastructure later.** Should the project later operate official servers,
+identity, or a global ladder (funding permitting), it would run these same shipped services on
+the operator and take on the corresponding legal/compliance and hosting responsibilities. The
+design keeps that door open cheaply (globally-unique account IDs + a realm/scope field in
+persistence) without a rewrite — see [docs/roadmap.md](roadmap.md) and the
+[architecture decision record](architecture.md#decision-records).

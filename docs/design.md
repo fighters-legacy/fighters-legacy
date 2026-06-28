@@ -16,8 +16,12 @@ These are the non-negotiable design values that resolve every ambiguous feature 
 - **Approachable by default**: New players should be in the air and shooting within minutes
   of first launch. Every simulation-leaning feature has a difficulty toggle that makes it
   optional.
-- **Single-player first, multiplayer equal**: A rich solo experience (campaign, instant
-  action, training) is the foundation. Multiplayer extends it; it is not the primary draw.
+- **Single-player first, multiplayer co-equal**: A rich solo experience (campaign, instant
+  action, training) is a first-class foundation — *and* large-scale multiplayer is a co-equal
+  product pillar, not a secondary extension. PvP (squadron/team battles), co-op PvE (shared
+  strike/campaign missions), and persistent-world play are all in scope. The architectural
+  target is **128+ simultaneous players**, which makes scalability, server-side identity, and
+  anti-cheat first-class concerns from the engine layer up — not late-phase afterthoughts.
 - **Tools, not rules**: The engine exposes capabilities; players decide what to do with
   them. No content is locked behind progression in sandbox mode. The campaign layer is
   an optional narrative experience layered on top of a fundamentally open simulation —
@@ -39,7 +43,7 @@ Design choices that explicitly avoid constraints common in older games of this g
 | Theater size | Arbitrary; streaming terrain chunks |
 | Object pool | Dynamic allocation; soft limits tunable per server |
 | Multiplayer topology | Dedicated `fl-server`; optional `fl-lobby` matchmaking |
-| Multiplayer players | 32+ (server-authoritative) |
+| Multiplayer players | 128+ architectural target (server-authoritative); 32 is the near-term acceptance floor |
 | Campaign structure | Arbitrary YAML graph; branching, nested objectives, any count |
 | AI scripting | Lua 5.5; full scripting API; multiple concurrent behaviors |
 | Score / rank tiers | Data-driven; TOML-defined rank tables |
@@ -47,6 +51,32 @@ Design choices that explicitly avoid constraints common in older games of this g
 | Weapon hardpoints | Configurable per aircraft TOML |
 | Audio sample rates | OGG at any rate; arbitrary sample rate |
 | Render resolution | Any resolution; windowed or fullscreen |
+
+---
+
+## Multiplayer at Scale
+
+The 128+ player target turns several engine choices into non-negotiables. These are
+first-class concerns, designed in from the engine layer rather than retrofitted:
+
+- **Server-authoritative and cheat-resistant.** The client never owns physics or state.
+  Live input validation rejects impossible states in-tick; heavier statistical detection runs
+  offline against logs/replays. No kernel anti-cheat — server authority plus offline review
+  is the right posture for a GPL, self-hostable game.
+- **Bounded per-client bandwidth.** Quantized/bit-packed wire state plus per-client
+  priority/budget snapshot scheduling and 3D interest management keep bandwidth flat as player
+  count grows, rather than scaling with the square of the population.
+- **Parallel simulation.** The authoritative tick parallelizes per-entity integration and AI
+  across cores (data-parallel job system) so 128 players + AI + projectiles hold 60 Hz.
+- **Server-side identity.** Players authenticate against a pluggable identity provider
+  (offline-verifiable signed tokens); persistent stats, ranking, and bans key on a verified
+  account, not a spoofable client GUID. Self-hostable; no first-party hosted infra required.
+- **Live-ops observability.** Servers export metrics and structured logs; clustered fleets are
+  managed by a Kubernetes/OpenShift operator with health, autoscaling, and graceful session
+  draining.
+
+Self-hosting is the default: communities run their own servers and identity. The project
+ships the software; it does not operate central infrastructure.
 
 ---
 

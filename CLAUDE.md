@@ -3,7 +3,20 @@
 ## Project Overview
 
 GPL v3 general-purpose combat flight sim engine, inspired by Jane's Fighters Anthology (1998).
-Cross-platform: Windows 10/11, Linux, macOS. Phase 2 (Modern-Particles Engine) is active.
+Cross-platform: Windows 10/11, Linux, macOS. Phase 3 (Engine Systems) is active.
+
+**128+ multiplayer re-target (decision record 2026-06-28):** large-scale multiplayer is now a
+co-equal product pillar (target 128+ players; see `docs/architecture.md#decision-records`,
+`docs/roadmap.md`). This adds scaling seams in Phases 3–4 (transport replacement behind
+`INetwork`, a server job system, wire quantization, a load harness) and a new **Phase 5 —
+Multiplayer at Scale & Live Services** (identity, anti-cheat, persistence, observability, a
+k8s/OpenShift operator). Hosting is **self-host only** — no first-party infra.
+
+**Companion repositories** (under the `fighters-legacy` org; the engine/game/server stay C++):
+- `fl-base-pack` — starter content pack (existing).
+- `fl-account` — pluggable identity / account service (**Go**, planned, Epic C).
+- `fl-review` — offline anti-cheat batch service (**Go**, planned, Epic D).
+- `fl-operator` — Kubernetes / OpenShift operator + Helm chart (**Go**, Agones-native, planned, Epic K).
 
 ## Architecture
 

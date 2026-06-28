@@ -23,7 +23,7 @@ Runtime libraries the engine is built on.
 | tinygltf | glTF 2.0 mesh parsing in the Vulkan renderer and validate-mesh tool | [syoyo/tinygltf](https://github.com/syoyo/tinygltf) · [glTF spec](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html) |
 | SDL3 | Windowing, input, Vulkan surface creation (`platform/sdl3/`) | [SDL3 wiki](https://wiki.libsdl.org/SDL3/FrontPage) |
 | OpenAL Soft | 3D positional audio (`platform/openal/`) | [openal-soft.org](https://openal-soft.org) |
-| ENet | Reliable UDP networking (`platform/net/`) | [enet.bespin.org](http://enet.bespin.org) |
+| ENet / enet6 | Reliable UDP networking today (`platform/net/`); under replacement for 128+ (Epic L) | [enet.bespin.org](http://enet.bespin.org) · [SirLynix/enet6](https://github.com/SirLynix/enet6) |
 
 ---
 
@@ -60,6 +60,26 @@ graph). "Role" notes whether a technique is in the renderer today or planned und
 | clang-format | Code formatting; CI enforces on every PR | [ClangFormat docs](https://clang.llvm.org/docs/ClangFormat.html) |
 | REUSE / SPDX | License compliance tooling; CI enforces via `fsfe/reuse-action` | [reuse.software](https://reuse.software) |
 | git-cliff | Changelog generation for releases | [git-cliff.org](https://git-cliff.org) |
+
+---
+
+## Multiplayer & Live Services
+
+Technologies introduced by the 128+ multiplayer re-target (decision record 2026-06-28). "Role"
+notes whether each is in use today or planned under an epic. All are GPL-3.0-compatible.
+
+| Technology | Role in this project | License | Documentation |
+|---|---|---|---|
+| GameNetworkingSockets | Candidate transport replacement for 128+ peers (Epic L) — reliable+unreliable UDP, congestion control, built-in encryption | BSD-3 | [ValveSoftware/GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets) |
+| libsodium | Preferred crypto backend for the new transport (lighter cross-platform build than OpenSSL) | ISC | [doc.libsodium.org](https://doc.libsodium.org) |
+| Opus | Voice-chat codec (Epic J) | BSD-3 | [opus-codec.org](https://opus-codec.org) |
+| OIDC / OAuth 2.0 | Federated identity option for self-hosted communities (`OidcIdentityProvider`, Epic C) | — | [OpenID Connect](https://openid.net/developers/how-connect-works/) |
+| SQLite / PostgreSQL | Persistence backends (`IPersistence`, Epic H) — SQLite single-server, Postgres for clusters | Public domain / PostgreSQL | [sqlite.org](https://sqlite.org) · [postgresql.org/docs](https://www.postgresql.org/docs/) |
+| Prometheus / OpenMetrics | Server metrics export (Epic G) | Apache-2.0 | [prometheus.io/docs](https://prometheus.io/docs/) |
+| Grafana | Operator-deployed dashboards (Epic G); bundled dashboard JSON only — not redistributed | AGPL-3.0 (upstream images) | [grafana.com/docs](https://grafana.com/docs/) |
+| Agones | Dedicated-game-server fleet framework the operator builds on (Epic K) | Apache-2.0 | [agones.dev](https://agones.dev) |
+| Operator SDK / Kubebuilder | Go framework for `fl-operator` (Epic K) | Apache-2.0 | [sdk.operatorframework.io](https://sdk.operatorframework.io/) · [kubebuilder.io](https://kubebuilder.io/) |
+| Go | Language for the cluster + live-services repos (`fl-operator`, `fl-account`, `fl-review`) | BSD-3 | [go.dev/doc](https://go.dev/doc/) |
 
 ---
 

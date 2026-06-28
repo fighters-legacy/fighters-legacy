@@ -11,6 +11,11 @@ system, inspired by Jane's Fighters Anthology (1998). Runs natively on Windows 1
 Linux, and macOS. All game content is delivered through content packs —
 every asset source is a mod or plugin.
 
+A rich single-player experience and **large-scale multiplayer are co-equal goals**: the
+architecture targets **128+ simultaneous players** on self-hosted, server-authoritative
+dedicated servers, with pluggable identity, anti-cheat, and a Kubernetes/OpenShift operator
+for clustered fleets.
+
 > NOTE: The project is currently in active development toward an initial public release.
 
 ## Documentation
@@ -22,11 +27,23 @@ every asset source is a mod or plugin.
 | [docs/modding/formats.md](docs/modding/formats.md) | Native asset format specs (glTF, TOML, YAML, Lua) |
 | [docs/modding/localization.md](docs/modding/localization.md) | Translator guide: key scheme, TOML layout, plural forms, mod locale |
 | [docs/network-protocol.md](docs/network-protocol.md) | Wire protocol: fl-server ↔ client message format, channel assignments, scalability notes |
-| [docs/roadmap.md](docs/roadmap.md) | Schedule, critical path, acceptance criteria |
-| [docs/distribution.md](docs/distribution.md) | Distribution channels, monetization strategy |
-| [docs/development.md](docs/development.md) | Build prerequisites per platform |
+| [docs/roadmap.md](docs/roadmap.md) | Schedule, critical path, acceptance criteria, the Multiplayer-at-Scale initiative |
+| [docs/distribution.md](docs/distribution.md) | Distribution channels (incl. fl-server container/Helm/operator), monetization strategy |
+| [docs/development.md](docs/development.md) | Build prerequisites per platform (C++ engine + Go services) |
 | [docs/references.md](docs/references.md) | Technology reference index: upstream docs for every engine dependency and tool |
-| [GOVERNANCE.md](GOVERNANCE.md) | Decision-making and RFC process |
+| [GOVERNANCE.md](GOVERNANCE.md) | Decision-making, RFC process, and decision records |
+
+### Related repositories
+
+The engine and game live here. The 128+ multiplayer re-target introduces companion
+repositories under the [`fighters-legacy`](https://github.com/fighters-legacy) org:
+
+| Repository | Role |
+|---|---|
+| `fl-base-pack` | The starter content pack (aircraft, terrain, missions, audio, AI) |
+| `fl-account` *(planned, Go)* | Pluggable identity / account service (self-hostable) |
+| `fl-review` *(planned, Go)* | Offline anti-cheat batch-analysis service |
+| `fl-operator` *(planned, Go)* | Kubernetes / OpenShift operator + Helm chart for clustered fleets |
 
 ## Roadmap
 
@@ -36,12 +53,13 @@ Development is tracked through [GitHub milestones](https://github.com/fighters-l
 |---|---|
 | 1 — Engine Foundation ✓ | HAL, Vulkan, SDL3, OpenAL, ENet, content system, CI/CD |
 | 2 — Modern-Particles Engine ✓ | Game loop, flight model, AI, networking, renderer, spherical-Earth world model |
-| [3 — Engine Systems](https://github.com/fighters-legacy/fighters-legacy/milestone/8) | Spatial partitioning, interest management, AI framework, bindings, quality settings, pilot profiles |
-| [4 — Content & Gameplay](https://github.com/fighters-legacy/fighters-legacy/milestone/9) | fl-base-pack content, radar/weapons/EW, AI, missions, campaign, multiplayer, advanced vehicle models |
-| [5 — UI Layer & Tooling](https://github.com/fighters-legacy/fighters-legacy/milestone/4) | IGui HAL + Dear ImGui backend, in-game mission editor, welcome screen |
-| [6 — Platform Release](https://github.com/fighters-legacy/fighters-legacy/milestone/5) | macOS/Linux/Windows packages, Flathub, fl-server container, crash reporting |
-| [7 — OpenGL & Alternative Renderers](https://github.com/fighters-legacy/fighters-legacy/milestone/7) | OpenGL 4.1 Core backend, headless/software renderer for CI, voice chat |
-| [8 — Modding Platform](https://github.com/fighters-legacy/fighters-legacy/milestone/6) | GPG verification, subprocess isolation, in-game mod browser, community content distribution |
+| [3 — Engine Systems](https://github.com/fighters-legacy/fighters-legacy/milestone/8) | Spatial partitioning, interest management, AI framework, bindings, quality settings, pilot profiles, scaling seams (transport, sim job system, wire quantization, load harness) |
+| [4 — Content & Gameplay](https://github.com/fighters-legacy/fighters-legacy/milestone/9) | fl-base-pack content, radar/weapons/EW + sensor framework, AI, missions, campaign, MP gameplay framework, advanced vehicle models |
+| 5 — Multiplayer at Scale & Live Services | Server-side identity/auth, anti-cheat, persistence, ops/observability, k8s/OpenShift operator |
+| [6 — UI Layer & Tooling](https://github.com/fighters-legacy/fighters-legacy/milestone/4) | IGui HAL + Dear ImGui backend, in-game mission editor, welcome screen |
+| [7 — Platform Release](https://github.com/fighters-legacy/fighters-legacy/milestone/5) | macOS/Linux/Windows packages, Flathub, fl-server container, crash reporting |
+| [8 — OpenGL & Alternative Renderers](https://github.com/fighters-legacy/fighters-legacy/milestone/7) | OpenGL 4.1 Core backend, headless/software renderer for CI, voice chat |
+| [9 — Modding Platform](https://github.com/fighters-legacy/fighters-legacy/milestone/6) | GPG verification, subprocess isolation, in-game mod browser, community content distribution |
 
 See [docs/roadmap.md](docs/roadmap.md) for the schedule, critical path, and
 per-phase acceptance criteria.

@@ -980,6 +980,32 @@ Boolean env vars (`FL_PERSISTENT`, `FL_LOBBY_REGISTER`) accept `"true"` or `"1"`
 
 ---
 
+## Planned configuration (128+ multiplayer re-target)
+
+> **Forward-looking — not yet implemented.** The 128+ multiplayer re-target (decision record
+> 2026-06-28) adds the config sections below. Field names and ranges are indicative and will be
+> finalized as each epic lands; this section exists so operators can anticipate the surface.
+> Until then these keys are ignored.
+
+- **`[identity]`** *(Epic C)* — server-side player identity. Expected keys: `provider`
+  (`guest` | `standalone` | `oidc` | `platform`), `issuer_public_key` (path/PEM for offline
+  token verification), `issuer_url` (OIDC discovery), `allow_guests` (bool). Self-hostable; no
+  first-party hosted issuer.
+- **`[persistence]`** *(Epic H)* — storage backend for accounts/stats/bans/world state.
+  Expected keys: `backend` (`sqlite` | `postgres`), `dsn`/`path`, `migrate_on_start` (bool).
+  File banlists import into the store.
+- **`[metrics]`** *(Epic G)* — observability. Expected keys: `enabled` (bool), `bind`/`port`
+  (Prometheus/OpenMetrics scrape endpoint on a side port), `log_format` (`text` | `json`),
+  `match_log_dir` (per-match log/replay shipping for offline anti-cheat).
+- **`[gamemode]` / extended `[rotation]`** *(Epic E)* — data-driven game modes (team
+  deathmatch, conquest, escort), team assignment/balance, friendly-fire, scoring, and
+  warmup/active/end/rotation lifecycle. Builds on the existing `[rotation]` section.
+- **`[anticheat]`** *(Epic D)* — live input-validation thresholds + offline `fl-review`
+  pipeline toggles.
+
+Clustered deployments configure these through the `fl-operator` CRDs rather than hand-edited
+TOML; see [docs/distribution.md](distribution.md#server-distribution--self-hosting).
+
 ## See also
 
 - [docs/network-protocol.md](network-protocol.md) — wire format specification for all
