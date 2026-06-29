@@ -28,6 +28,7 @@ for clustered fleets.
 | [docs/modding/localization.md](docs/modding/localization.md) | Translator guide: key scheme, TOML layout, plural forms, mod locale |
 | [docs/network-protocol.md](docs/network-protocol.md) | Wire protocol: fl-server ↔ client message format, channel assignments, scalability notes |
 | [docs/load-testing.md](docs/load-testing.md) | bot_swarm load generator: client metrics + authoritative server tick-budget block, flight patterns, scale-gate targets, ceiling-characterisation runbook |
+| [docs/server-job-system-design.md](docs/server-job-system-design.md) | Data-parallel sim tick: engine-job worker pool, two-phase parallel onTick, serial-equivalence, `sim_worker_threads` |
 | [docs/roadmap.md](docs/roadmap.md) | Schedule, critical path, acceptance criteria, the Multiplayer-at-Scale initiative |
 | [docs/distribution.md](docs/distribution.md) | Distribution channels (incl. fl-server container/Helm/operator), monetization strategy |
 | [docs/development.md](docs/development.md) | Build prerequisites per platform (C++ engine + Go services) |

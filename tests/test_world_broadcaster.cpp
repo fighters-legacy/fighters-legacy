@@ -8,6 +8,7 @@
 #include "entity/EntityTypeRegistry.h"
 #include "entity/IEntityController.h"
 #include "flight/CentralGravityField.h"
+#include "job/JobSystem.h"
 #include "net/GameProtocol.h"
 #include "net/WireCodec.h"
 #include "net/WorldBroadcaster.h"
@@ -235,6 +236,84 @@ TEST_CASE("WorldBroadcaster: registerController steps a non-peer entity and seri
         }
     }
     CHECK(foundAiEntity);
+}
+
+// Run a fixed multi-entity scenario and capture final entity state. When `jobs` is non-null the
+// per-entity AI + integrate passes run data-parallel; otherwise they run inline. Used to prove the
+// parallel path is serial-equivalent.
+namespace {
+struct FinalState {
+    uint32_t idx;
+    double pos[3];
+    float quat[4];
+};
+
+std::vector<FinalState> runParallelScenario(fl::JobSystem* jobs) {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WeatherController weather;
+    weather.setPreset(fl::WeatherPreset::Storm); // turbulence on -> exercises the per-entity RNG
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger, &weather);
+    if (jobs)
+        broadcaster.setJobSystem(*jobs);
+    broadcaster.onConnect(0u);
+
+    std::vector<fl::EntityId> ids;
+    for (int i = 0; i < 16; ++i) {
+        fl::EntityTransform t{};
+        t.pos[0] = i * 100.0;
+        t.pos[1] = 1000.0;
+        t.pos[2] = i * 50.0;
+        fl::EntityId id = em.spawn("builtin:debug-entity", t);
+        REQUIRE(id.valid());
+        auto controller = std::make_unique<ConstantController>();
+        controller->throttle = 1.0f;
+        broadcaster.registerController(id, std::move(controller));
+        ids.push_back(id);
+    }
+
+    for (uint64_t tick = 1; tick <= 120; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    std::vector<FinalState> out;
+    for (fl::EntityId id : ids) {
+        const fl::EntityState* st = em.get(id);
+        REQUIRE(st != nullptr);
+        FinalState fsv{};
+        fsv.idx = id.index;
+        for (int k = 0; k < 3; ++k)
+            fsv.pos[k] = st->transform.pos[k];
+        for (int k = 0; k < 4; ++k)
+            fsv.quat[k] = st->transform.quat[k];
+        out.push_back(fsv);
+    }
+    std::sort(out.begin(), out.end(), [](const FinalState& a, const FinalState& b) { return a.idx < b.idx; });
+    return out;
+}
+} // namespace
+
+TEST_CASE("WorldBroadcaster: parallel sim tick is serial-equivalent across worker counts", "[world_broadcaster]") {
+    const std::vector<FinalState> baseline = runParallelScenario(nullptr); // inline / serial reference
+
+    for (unsigned total : {1u, 2u, 8u}) {
+        fl::JobSystem jobs(total);
+        const std::vector<FinalState> got = runParallelScenario(&jobs);
+        REQUIRE(got.size() == baseline.size());
+        for (size_t i = 0; i < baseline.size(); ++i) {
+            CHECK(got[i].idx == baseline[i].idx);
+            // Bit-identical, not Approx: each entity integrates independently with no cross-entity
+            // reduction, so parallelism must not change a single bit.
+            for (int k = 0; k < 3; ++k)
+                CHECK(got[i].pos[k] == baseline[i].pos[k]);
+            for (int k = 0; k < 4; ++k)
+                CHECK(got[i].quat[k] == baseline[i].quat[k]);
+        }
+    }
 }
 
 TEST_CASE("WorldBroadcaster: getTickBudget records per-phase timing after onTick", "[world_broadcaster]") {

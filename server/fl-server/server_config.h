@@ -45,6 +45,10 @@ struct ServerConfig {
     uint32_t jitterAdaptWindow = 60;      // EWMA smoothing window in ticks; [10, 3600]
     uint32_t jitterHysteresis = 2;        // resize dead-band in ticks; [0, 8]
     float jitterMultiplier = 2.0f;        // k factor: depth = ceil(ewma + k*jitter); [0.0, 8.0]
+    // Sim-tick CPU parallelism: total worker threads for the per-entity AI + integrate passes,
+    // including the sim thread. 0 = auto (hardware_concurrency), 1 = serial. CPU knob, NOT a
+    // capacity guarantee. CLI --sim-worker-threads overrides this. [0, 256]
+    uint32_t simWorkerThreads = 0;
 
     // [ai]  — Phase 2: parsed and stored; enforcement lands with AI runtime
     std::string aiDifficultyFloor = "recruit";

@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# ThreadSanitizer suppressions for the fighters-legacy server-side test run.
+#
+# The TSan CI job (tsan.yml) is scoped to the engine/job + WorldBroadcaster parallel-tick tests,
+# which do NOT link SDL3/OpenAL/ENet/Vulkan. These entries are a safety net for any third-party
+# threading that is not TSan-instrumented (and is therefore noise, not a real defect in our code).
+# Keep this list tight: the point of the TSan run is to catch races in OUR parallel sim path.
+
+# ENet runs its own host/service threads in some builds; not TSan-instrumented.
+called_from_lib:libenet
+race:enet_*
+
+# SDL3 spins worker/event threads internally.
+called_from_lib:libSDL3
+
+# OpenAL Soft mixer thread.
+called_from_lib:libopenal
+
+# Vulkan loader / ICD driver threads.
+called_from_lib:libvulkan

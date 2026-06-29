@@ -210,6 +210,10 @@ add_executable(test_spatial_index test_spatial_index.cpp)
 target_link_libraries(test_spatial_index PRIVATE Catch2::Catch2WithMain engine-spatial)
 catch_discover_tests(test_spatial_index)
 
+add_executable(test_job_system test_job_system.cpp)
+target_link_libraries(test_job_system PRIVATE Catch2::Catch2WithMain engine-job)
+catch_discover_tests(test_job_system)
+
 add_executable(test_faction_registry test_faction_registry.cpp)
 target_link_libraries(test_faction_registry PRIVATE Catch2::Catch2WithMain engine-world)
 catch_discover_tests(test_faction_registry)

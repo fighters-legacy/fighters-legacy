@@ -194,6 +194,16 @@ add_library(engine-spatial STATIC
 target_include_directories(engine-spatial PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # No external deps — pure ISO C++20 stdlib.
 
+# Data-parallel task scheduler: persistent worker pool + blocking parallel_for. Declared before
+# engine-net so the broadcaster can link it for the parallel sim tick.
+add_library(engine-job STATIC
+    job/JobSystem.cpp
+)
+target_include_directories(engine-job PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# No external deps — pure ISO C++20 stdlib (threads via the standard library).
+find_package(Threads REQUIRED)
+target_link_libraries(engine-job PUBLIC Threads::Threads)
+
 # Authoritative server-sim serializer and network broadcaster.
 add_library(engine-net STATIC
     net/NetworkUtils.cpp
@@ -205,6 +215,7 @@ target_include_directories(engine-net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-net
     PUBLIC  engine-entity
             engine-spatial
+            engine-job
             platform-hal
     PRIVATE engine-flight
             engine-weather
