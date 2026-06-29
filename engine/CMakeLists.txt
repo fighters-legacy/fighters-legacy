@@ -210,6 +210,7 @@ add_library(engine-net STATIC
     net/WorldBroadcaster.cpp
     net/DiscoveryBeacon.cpp
     net/DiscoveryListener.cpp
+    net/SnapshotCodec.cpp
 )
 target_include_directories(engine-net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-net

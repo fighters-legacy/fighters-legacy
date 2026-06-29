@@ -130,7 +130,7 @@ development (pre-`kProtocolVersion` freeze), a dated **decision record** (see be
 | Multiplayer topology | `fl-server` dedicated binary + `fl-lobby` REST service | Server-authoritative; no P2P player-count cap; self-hostable |
 | Multiplayer scale target | **128+ simultaneous players** (32 = near-term acceptance floor) | Drives the scaling seams below; see [docs/design.md](design.md) "Multiplayer at Scale". (Revised by the 2026-06-28 decision record.) |
 | Server simulation | Data-parallel **job system** over a single authoritative tick | Parallelizes per-entity integration + AI so 128 players + AI + projectiles hold 60 Hz; spatial sharding deferred as a later option |
-| Wire state encoding | **Quantized / bit-packed** snapshot stream + per-client priority/budget scheduling | Keeps per-client bandwidth bounded as population grows; replaces fixed 64-byte `MsgEntityUpdate` |
+| Wire state encoding | **Quantized / bit-packed** snapshot stream (#515 ✓) + 3D interest culling (#402 ✓) + per-client priority/budget scheduling (#516, planned) | Quantized codec landed: frame-origin-relative positions, smallest-three quaternion, quantized vel/omega — replaced the fixed 64/88-byte records (see [docs/snapshot-quantization.md](snapshot-quantization.md)). Priority/budget scheduling keeps per-client bandwidth bounded as population grows |
 | Player identity / auth | **Server-side, pluggable `IIdentityProvider`** (offline-verifiable signed tokens) | Persistent stats/ranking/bans key on a verified account, not a spoofable client GUID; self-hostable, no first-party hosted infra |
 | Persistence | **`IPersistence` storage HAL** (SQLite single-server, Postgres for clusters) | Accounts, stats, bans, persistent-world state; promotes file-based banlists into a store |
 | Cluster orchestration / live services | **Go** (k8s/OpenShift operator, Agones-native; `fl-account`, `fl-review`) | Intentional polyglot boundary: C++ engine/game/server, Go infrastructure; idiomatic for the k8s ecosystem |
@@ -177,6 +177,17 @@ regions. Rationale: per-entity work is already embarrassingly parallel (each ent
 single consistent world with no cross-shard hand-off or snapshot stitching. Spatial sharding is the
 deferred next scaling axis. Full design in
 [docs/server-job-system-design.md](server-job-system-design.md).
+
+**2026-06-29 — Quantized snapshot encoding + 3D interest (Epic B, #515/#402).** The reference-env
+characterisation (#505) measured ~480 KB/s/client downstream at 128 idle clients — 3.2× the
+≤150 KB/s gate — driven by the fixed 64/88-byte per-entity snapshot records. The per-tick entity
+body is now a quantized, bit-packed record stream (position relative to a per-snapshot `double`
+frame origin, smallest-three quaternion, quantized velocity/omega; full-vs-delta per-record `full`
+bit), and the per-peer interest query gained an exact 3D (XYZ) distance gate. Encoding-only and
+transport-agnostic (stays on `enet6`), so it proceeds independently of the transport replacement
+(Epic L). The priority/budget scheduler (#516), client-acked baselines (#517), and congestion
+response (#518) build on this codec. Full design in
+[docs/snapshot-quantization.md](snapshot-quantization.md).
 
 ## Content Pack Architecture
 

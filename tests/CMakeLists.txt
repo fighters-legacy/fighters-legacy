@@ -363,6 +363,10 @@ add_executable(test_wire_codec test_wire_codec.cpp)
 target_link_libraries(test_wire_codec PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_wire_codec)
 
+add_executable(test_snapshot_codec test_snapshot_codec.cpp)
+target_link_libraries(test_snapshot_codec PRIVATE Catch2::Catch2WithMain engine-net)
+catch_discover_tests(test_snapshot_codec)
+
 add_executable(test_performance_overlay test_performance_overlay.cpp)
 target_link_libraries(test_performance_overlay PRIVATE Catch2::Catch2WithMain engine-perf)
 catch_discover_tests(test_performance_overlay)

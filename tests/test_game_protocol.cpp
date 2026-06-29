@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "net/BitStream.h"
 #include "net/GameProtocol.h"
+#include "net/SnapshotCodec.h"
 #include "net/WireCodec.h"
 #include "weather/WeatherTypes.h"
 
@@ -9,11 +11,9 @@
 
 TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game_protocol]") {
     CHECK(sizeof(fl::MsgHello) == 4u);
-    CHECK(sizeof(fl::MsgConnectAck) == 16u);     // extended: +assignedEntityIdx/Gen, +planetRadiusKm
-    CHECK(sizeof(fl::MsgEntityTypeDef) == 196u); // 4 + 64 + 64 + 64
-    CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 16u);
-    CHECK(sizeof(fl::MsgEntityEntry) == 88u);
-    CHECK(sizeof(fl::MsgEntityUpdate) == 64u); // compact delta record: no typeIndex, float positions
+    CHECK(sizeof(fl::MsgConnectAck) == 16u);          // extended: +assignedEntityIdx/Gen, +planetRadiusKm
+    CHECK(sizeof(fl::MsgEntityTypeDef) == 196u);      // 4 + 64 + 64 + 64
+    CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 40u); // +bitstreamBytes +frameOrigin (quantized body)
     CHECK(sizeof(fl::MsgClientInput) == 48u);
     CHECK(sizeof(fl::MsgAdminCommand) == 128u);
     CHECK(sizeof(fl::MsgAdminResponse) == 128u);
@@ -23,14 +23,18 @@ TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game
 }
 
 TEST_CASE("GameProtocol: wire structs are naturally aligned for zero-copy", "[game_protocol]") {
-    // Records carrying a double must be 8-aligned; their sizes multiples of 8 so arrays stay aligned.
+    // The snapshot header carries frameOrigin[3] (double), so it must be 8-aligned and a multiple
+    // of 8 — the bitstream that follows is byte-addressed (no alignment requirement).
     CHECK(alignof(fl::MsgWorldSnapshotHeader) == 8u);
-    CHECK(alignof(fl::MsgEntityEntry) == 8u);
-    CHECK(sizeof(fl::MsgEntityEntry) % 8u == 0u);
+    CHECK(sizeof(fl::MsgWorldSnapshotHeader) % 8u == 0u);
     CHECK(alignof(fl::MsgClientInput) == 8u);
-    // MsgEntityUpdate is float-aligned; 52 is a multiple of 4
-    CHECK(alignof(fl::MsgEntityUpdate) == 4u);
-    CHECK(sizeof(fl::MsgEntityUpdate) % 4u == 0u);
+}
+
+TEST_CASE("GameProtocol: MsgWorldSnapshotHeader field offsets", "[game_protocol]") {
+    CHECK(offsetof(fl::MsgWorldSnapshotHeader, recordCount) == 2u);
+    CHECK(offsetof(fl::MsgWorldSnapshotHeader, bitstreamBytes) == 4u);
+    CHECK(offsetof(fl::MsgWorldSnapshotHeader, tickIndex) == 8u);
+    CHECK(offsetof(fl::MsgWorldSnapshotHeader, frameOrigin) == 16u);
 }
 
 TEST_CASE("GameProtocol: stays at protocol version 1 in primary development", "[game_protocol]") {
@@ -60,116 +64,30 @@ TEST_CASE("GameProtocol: MsgAdminResponseChunk field offsets", "[game_protocol]"
     CHECK(offsetof(fl::MsgAdminResponseChunk, body) == 6u);
 }
 
-TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {
-    // Build a packet: header + 3 entity entries.
-    constexpr uint16_t kCount = 3;
-
+TEST_CASE("GameProtocol: MsgWorldSnapshotHeader round-trip", "[game_protocol]") {
+    // The header is the only fixed struct in a snapshot; the entity body is a quantized bitstream
+    // exercised by test_snapshot_codec. Here we round-trip just the header (incl. frameOrigin).
     fl::MsgWorldSnapshotHeader hdr;
     hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
     hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-    hdr.fullEntityCount = kCount;
+    hdr.recordCount = 5u;
+    hdr.bitstreamBytes = 123u;
     hdr.tickIndex = 42u;
+    hdr.frameOrigin[0] = 6371000.0;
+    hdr.frameOrigin[1] = 500.0;
+    hdr.frameOrigin[2] = -2'000'000.0;
 
-    fl::MsgEntityEntry entries[kCount];
-    for (uint16_t i = 0; i < kCount; ++i) {
-        entries[i].entityIdx = 100u + i;
-        entries[i].entityGen = 1u;
-        entries[i].typeIndex = 0u;
-        entries[i].pos[0] = static_cast<double>(i) * 10.0;
-        entries[i].pos[1] = 500.0;
-        entries[i].pos[2] = 0.0;
-        entries[i].vel[0] = (i == 0) ? 25.5f : 0.0f;
-        entries[i].vel[1] = 0.0f;
-        entries[i].vel[2] = (i == 0) ? -100.f : 0.0f;
-        entries[i].ori[0] = 0.0f;
-        entries[i].ori[1] = 0.0f;
-        entries[i].ori[2] = 0.0f;
-        entries[i].ori[3] = 1.0f; // w=1 = identity
-        entries[i].damageLevel = 0;
-        entries[i].flags = (i == 0) ? 1u : 0u;
-        entries[i].throttle = 0;
-        entries[i].fuelPct = 0;
-        entries[i].omega[0] = 0.1f * static_cast<float>(i + 1);
-        entries[i].omega[1] = 0.2f * static_cast<float>(i + 1);
-        entries[i].omega[2] = 0.3f * static_cast<float>(i + 1);
-    }
-
-    // Pack into a byte buffer (simulating network send).
-    const std::size_t totalSize = sizeof(hdr) + kCount * sizeof(fl::MsgEntityEntry);
-    std::vector<uint8_t> buf(totalSize);
+    std::vector<uint8_t> buf(sizeof(hdr));
     std::memcpy(buf.data(), &hdr, sizeof(hdr));
-    std::memcpy(buf.data() + sizeof(hdr), entries, kCount * sizeof(fl::MsgEntityEntry));
 
-    // Parse back using memcpy (the safe packet-parsing pattern).
-    REQUIRE(buf.size() >= sizeof(fl::MsgWorldSnapshotHeader));
-    fl::MsgWorldSnapshotHeader parsedHdr;
-    std::memcpy(&parsedHdr, buf.data(), sizeof(parsedHdr));
-
-    CHECK(parsedHdr.msgId == static_cast<uint8_t>(fl::MsgId::WorldSnapshot));
-    CHECK(parsedHdr.protocolVersion == static_cast<uint8_t>(fl::kProtocolVersion));
-    CHECK(parsedHdr.fullEntityCount == kCount);
-    CHECK(parsedHdr.tickIndex == 42u);
-
-    const uint8_t* entryPtr = buf.data() + sizeof(parsedHdr);
-    for (uint16_t i = 0; i < parsedHdr.fullEntityCount; ++i) {
-        fl::MsgEntityEntry e;
-        std::memcpy(&e, entryPtr + i * sizeof(e), sizeof(e));
-        CHECK(e.entityIdx == 100u + i);
-        CHECK(e.pos[1] == 500.0);
-        CHECK(e.ori[3] == 1.0f);
-        CHECK(e.flags == (i == 0 ? 1u : 0u));
-        CHECK(e.omega[0] == Catch::Approx(0.1f * static_cast<float>(i + 1)));
-        CHECK(e.omega[1] == Catch::Approx(0.2f * static_cast<float>(i + 1)));
-        CHECK(e.omega[2] == Catch::Approx(0.3f * static_cast<float>(i + 1)));
-        if (i == 0) {
-            CHECK(e.vel[0] == 25.5f);
-            CHECK(e.vel[2] == -100.f);
-        }
-    }
-}
-
-TEST_CASE("GameProtocol: MsgEntityEntry double-precision round-trip at planet-scale coordinates", "[game_protocol]") {
-    // At 2,000 km from origin float32 precision is ~0.24 m; double must survive exact round-trip.
-    constexpr double kLargeX = 2'000'000.0;
-    constexpr double kLargeZ = 2'000'000.0;
-
-    fl::MsgEntityEntry src{};
-    src.pos[0] = kLargeX;
-    src.pos[1] = 500.0;
-    src.pos[2] = kLargeZ;
-
-    std::vector<uint8_t> buf(sizeof(src));
-    std::memcpy(buf.data(), &src, sizeof(src));
-
-    fl::MsgEntityEntry parsed{};
-    std::memcpy(&parsed, buf.data(), sizeof(parsed));
-
-    CHECK(parsed.pos[0] == kLargeX);
-    CHECK(parsed.pos[1] == 500.0);
-    CHECK(parsed.pos[2] == kLargeZ);
-}
-
-TEST_CASE("GameProtocol: MsgEntityUpdate omega field round-trip", "[game_protocol]") {
-    fl::MsgEntityUpdate src{};
-    src.entityIdx = 5u;
-    src.entityGen = 2u;
-    src.pos[0] = 1.f;
-    src.pos[1] = 2.f;
-    src.pos[2] = 3.f;
-    src.omega[0] = 0.4f;
-    src.omega[1] = -0.5f;
-    src.omega[2] = 0.6f;
-
-    std::vector<uint8_t> buf(sizeof(src));
-    std::memcpy(buf.data(), &src, sizeof(src));
-
-    fl::MsgEntityUpdate parsed{};
-    std::memcpy(&parsed, buf.data(), sizeof(parsed));
-
-    CHECK(parsed.entityIdx == 5u);
-    CHECK(parsed.omega[0] == Catch::Approx(0.4f));
-    CHECK(parsed.omega[1] == Catch::Approx(-0.5f));
-    CHECK(parsed.omega[2] == Catch::Approx(0.6f));
+    fl::MsgWorldSnapshotHeader parsed{};
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), parsed));
+    CHECK(parsed.msgId == static_cast<uint8_t>(fl::MsgId::WorldSnapshot));
+    CHECK(parsed.recordCount == 5u);
+    CHECK(parsed.bitstreamBytes == 123u);
+    CHECK(parsed.tickIndex == 42u);
+    CHECK(parsed.frameOrigin[0] == 6371000.0); // double survives exactly
+    CHECK(parsed.frameOrigin[2] == -2'000'000.0);
 }
 
 TEST_CASE("GameProtocol: ExtTag SnapshotPeerDelayTicks TLV encode and decode", "[game_protocol]") {
@@ -373,39 +291,55 @@ TEST_CASE("GameProtocol: MsgAdminResponseChunk round-trip", "[game_protocol]") {
     CHECK(std::string(parsed.body) == "chunk body text");
 }
 
-TEST_CASE("WireCodec ext: full WorldSnapshot packet with SnapshotPeerCount extension", "[game_protocol]") {
-    // Build a complete snapshot (header + 2 entities) followed by a SnapshotPeerCount extension.
+namespace {
+// Build a snapshot packet: header + a quantized record bitstream of `count` entities + caller TLVs.
+// Returns the buffer; sets hdr.recordCount / hdr.bitstreamBytes correctly. The TLV block begins at
+// sizeof(MsgWorldSnapshotHeader) + hdr.bitstreamBytes (the new offset contract).
+std::vector<uint8_t> buildSnapshot(uint64_t tick, uint16_t count) {
+    const double origin[3] = {0.0, 0.0, 0.0};
+    fl::BitWriter w;
+    uint32_t prev = 0;
+    for (uint16_t i = 0; i < count; ++i) {
+        fl::QuantEntity e;
+        e.idx = 10u + i;
+        e.isFull = true;
+        e.gen = 1u;
+        fl::encodeRecord(w, e, prev, origin, /*sendGen=*/true);
+    }
+    w.alignToByte();
+
     std::vector<uint8_t> buf;
     const std::size_t hdrOffset = buf.size();
-
     fl::MsgWorldSnapshotHeader hdr{};
-    hdr.tickIndex = 99u;
+    hdr.tickIndex = tick;
     fl::appendMsg(buf, hdr); // placeholder
-
-    constexpr uint16_t kCount = 2;
-    for (uint16_t i = 0; i < kCount; ++i) {
-        fl::MsgEntityEntry e{};
-        e.entityIdx = 10u + i;
-        fl::appendMsg(buf, e);
-    }
-    hdr.fullEntityCount = kCount;
+    buf.insert(buf.end(), w.bytes().begin(), w.bytes().end());
+    hdr.recordCount = count;
+    hdr.bitstreamBytes = static_cast<uint32_t>(w.byteCount());
     fl::writeMsgAt(buf, hdrOffset, hdr);
+    return buf;
+}
 
-    // Append TLV extension.
+// Offset of the TLV block: after the header and the quantized bitstream.
+std::size_t extOffsetOf(const std::vector<uint8_t>& buf) {
+    fl::MsgWorldSnapshotHeader rh{};
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), rh));
+    return sizeof(fl::MsgWorldSnapshotHeader) + rh.bitstreamBytes;
+}
+} // namespace
+
+TEST_CASE("WireCodec ext: full WorldSnapshot packet with SnapshotPeerCount extension", "[game_protocol]") {
+    std::vector<uint8_t> buf = buildSnapshot(/*tick=*/99u, /*count=*/2u);
     const uint16_t kPeers = 7u;
     fl::appendExt(buf, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), kPeers);
 
-    // Parse header and records exactly as ClientNetEventHandler does.
     fl::MsgWorldSnapshotHeader rh{};
     REQUIRE(fl::readMsg(buf.data(), buf.size(), rh));
     CHECK(rh.tickIndex == 99u);
-    CHECK(rh.fullEntityCount == kCount);
+    CHECK(rh.recordCount == 2u);
 
-    // Parse extension block.
-    const std::size_t extOffset =
-        sizeof(fl::MsgWorldSnapshotHeader) + static_cast<std::size_t>(rh.fullEntityCount) * sizeof(fl::MsgEntityEntry);
+    const std::size_t extOffset = extOffsetOf(buf);
     REQUIRE(buf.size() > extOffset);
-
     uint16_t pc{};
     CHECK(fl::readExtValue(buf.data() + extOffset, buf.size() - extOffset,
                            static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), pc));
@@ -413,27 +347,12 @@ TEST_CASE("WireCodec ext: full WorldSnapshot packet with SnapshotPeerCount exten
 }
 
 TEST_CASE("WireCodec ext: SnapshotPeerLatency round-trip", "[game_protocol]") {
-    // Build a minimal snapshot and append a SnapshotPeerLatency TLV; verify readExtValue recovers it.
-    std::vector<uint8_t> buf;
-    const std::size_t hdrOffset = buf.size();
-
-    fl::MsgWorldSnapshotHeader hdr{};
-    hdr.tickIndex = 7u;
-    fl::appendMsg(buf, hdr);
-
-    fl::MsgEntityEntry e{};
-    e.entityIdx = 1u;
-    fl::appendMsg(buf, e);
-
-    hdr.fullEntityCount = 1;
-    fl::writeMsgAt(buf, hdrOffset, hdr);
-
+    std::vector<uint8_t> buf = buildSnapshot(/*tick=*/7u, /*count=*/1u);
     const uint16_t kLatMs = 120u;
     fl::appendExt(buf, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), kLatMs);
 
-    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry);
+    const std::size_t extOffset = extOffsetOf(buf);
     REQUIRE(buf.size() > extOffset);
-
     uint16_t lat{};
     CHECK(fl::readExtValue(buf.data() + extOffset, buf.size() - extOffset,
                            static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), lat));
@@ -441,27 +360,13 @@ TEST_CASE("WireCodec ext: SnapshotPeerLatency round-trip", "[game_protocol]") {
 }
 
 TEST_CASE("WireCodec ext: SnapshotPeerCount and SnapshotPeerLatency coexist in same buffer", "[game_protocol]") {
-    // Append both tags; verify each is independently readable by the scanner.
-    std::vector<uint8_t> buf;
-    const std::size_t hdrOffset = buf.size();
-
-    fl::MsgWorldSnapshotHeader hdr{};
-    hdr.tickIndex = 1u;
-    fl::appendMsg(buf, hdr);
-
-    fl::MsgEntityEntry e{};
-    e.entityIdx = 2u;
-    fl::appendMsg(buf, e);
-
-    hdr.fullEntityCount = 1;
-    fl::writeMsgAt(buf, hdrOffset, hdr);
-
+    std::vector<uint8_t> buf = buildSnapshot(/*tick=*/1u, /*count=*/1u);
     const uint16_t kPeers = 5u;
     const uint16_t kLatMs = 83u;
     fl::appendExt(buf, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), kPeers);
     fl::appendExt(buf, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), kLatMs);
 
-    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry);
+    const std::size_t extOffset = extOffsetOf(buf);
     const auto* ext = buf.data() + extOffset;
     const auto extSz = buf.size() - extOffset;
 
@@ -475,31 +380,16 @@ TEST_CASE("WireCodec ext: SnapshotPeerCount and SnapshotPeerLatency coexist in s
 }
 
 TEST_CASE("WireCodec ext: old-receiver compatibility readMsg succeeds on extended packet", "[game_protocol]") {
-    // Build the same extended snapshot and verify that old-receiver code (readMsg only) still
-    // works correctly — it reads the header fields and ignores the extension bytes.
-    std::vector<uint8_t> buf;
-    const std::size_t hdrOffset = buf.size();
-
-    fl::MsgWorldSnapshotHeader hdr{};
-    hdr.tickIndex = 42u;
-    fl::appendMsg(buf, hdr);
-
-    fl::MsgEntityEntry e{};
-    e.entityIdx = 5u;
-    fl::appendMsg(buf, e);
-
-    hdr.fullEntityCount = 1;
-    fl::writeMsgAt(buf, hdrOffset, hdr);
-
+    // Old-receiver code (readMsg only) still reads the header and ignores the bitstream + extension.
+    std::vector<uint8_t> buf = buildSnapshot(/*tick=*/42u, /*count=*/1u);
     const uint16_t kPeers = 3u;
     fl::appendExt(buf, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), kPeers);
 
-    // Old-receiver path: just call readMsg — succeeds, extension bytes ignored.
     fl::MsgWorldSnapshotHeader rh{};
     CHECK(fl::readMsg(buf.data(), buf.size(), rh));
     CHECK(rh.msgId == static_cast<uint8_t>(fl::MsgId::WorldSnapshot));
     CHECK(rh.tickIndex == 42u);
-    CHECK(rh.fullEntityCount == 1u);
+    CHECK(rh.recordCount == 1u);
 }
 
 TEST_CASE("GameProtocol: MsgHeartbeat and MsgPeerDelay sizes and alignment", "[game_protocol]") {
@@ -539,60 +429,5 @@ TEST_CASE("GameProtocol: MsgPeerDelay round-trip", "[game_protocol]") {
     CHECK(dst.delayTicks == 42u);
 }
 
-TEST_CASE("GameProtocol: MsgEntityUpdate roundtrip via appendMsg/readRecordAt", "[game_protocol]") {
-    fl::MsgEntityUpdate src{};
-    src.entityIdx = 7u;
-    src.entityGen = 3u;
-    src.damageLevel = 1u;
-    src.engineFailFlags = 0x02u;
-    src.pos[0] = 1234.5f;
-    src.pos[1] = 500.0f;
-    src.pos[2] = -999.0f;
-    src.vel[0] = 10.f;
-    src.vel[1] = 0.5f;
-    src.vel[2] = -2.f;
-    src.ori[0] = 0.f;
-    src.ori[1] = 0.f;
-    src.ori[2] = 0.f;
-    src.ori[3] = 1.f;
-    src.throttle = 75u;
-    src.fuelPct = 50u;
-    src.abEngaged = 1u;
-    src.flags = 1u; // playerOwned
-
-    std::vector<uint8_t> buf;
-    fl::appendMsg(buf, src);
-    REQUIRE(buf.size() == sizeof(fl::MsgEntityUpdate));
-
-    fl::MsgEntityUpdate dst{};
-    REQUIRE(fl::readRecordAt(buf.data(), buf.size(), 0u, dst));
-    CHECK(dst.entityIdx == 7u);
-    CHECK(dst.entityGen == 3u);
-    CHECK(dst.damageLevel == 1u);
-    CHECK(dst.engineFailFlags == 0x02u);
-    CHECK(dst.pos[0] == 1234.5f);
-    CHECK(dst.pos[1] == 500.0f);
-    CHECK(dst.pos[2] == -999.0f);
-    CHECK(dst.vel[0] == 10.f);
-    CHECK(dst.throttle == 75u);
-    CHECK(dst.fuelPct == 50u);
-    CHECK(dst.abEngaged == 1u);
-    CHECK(dst.flags == 1u);
-}
-
-TEST_CASE("GameProtocol: MsgWorldSnapshotHeader fullEntityCount and updateCount roundtrip", "[game_protocol]") {
-    fl::MsgWorldSnapshotHeader hdr{};
-    hdr.fullEntityCount = 5u;
-    hdr.updateCount = 3u;
-    hdr.tickIndex = 42u;
-
-    std::vector<uint8_t> buf;
-    fl::appendMsg(buf, hdr);
-    REQUIRE(buf.size() == sizeof(fl::MsgWorldSnapshotHeader));
-
-    fl::MsgWorldSnapshotHeader parsed{};
-    REQUIRE(fl::readMsg(buf.data(), buf.size(), parsed));
-    CHECK(parsed.fullEntityCount == 5u);
-    CHECK(parsed.updateCount == 3u);
-    CHECK(parsed.tickIndex == 42u);
-}
+// (The compact entity record round-trip lives in test_snapshot_codec.cpp now that the entity body
+// is a quantized bitstream rather than fixed MsgEntityEntry/MsgEntityUpdate structs.)

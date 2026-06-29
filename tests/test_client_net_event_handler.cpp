@@ -12,7 +12,9 @@
 #include "console/CommandRegistry.h"
 #include "console/GameConsole.h"
 #include "entity/EntityTypeRegistry.h"
+#include "net/BitStream.h"
 #include "net/GameProtocol.h"
+#include "net/SnapshotCodec.h"
 #include "net/WireCodec.h"
 
 #include "SessionStatus.h"
@@ -20,6 +22,7 @@
 
 #include "mock_network.h"
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -29,6 +32,73 @@
 using namespace fl;
 
 namespace {
+
+// One entity record for the quantized snapshot builder below. Field names mirror the wire fields.
+struct TestRec {
+    uint32_t idx{0};
+    uint32_t gen{0};
+    uint32_t typeIndex{0};
+    bool isFull{false};   // full record: carries typeIndex + gen
+    bool sendGen{false};  // force the genPresent bit on a delta (e.g. to test the stale-gen guard)
+    bool hasOmega{false}; // own-entity omega
+    double pos[3]{};
+    float vel[3]{};
+    float quat[4]{0.f, 0.f, 0.f, 1.f};
+    float omega[3]{};
+    uint8_t damage{0};
+    uint8_t engineFail{0};
+    uint8_t throttle{0};
+    uint8_t fuel{0};
+    bool ab{false};
+    bool owned{false};
+};
+
+// Build a MsgWorldSnapshot packet (header + quantized bitstream) from a list of records. Append a
+// TLV block afterwards if needed. Mirrors WorldBroadcaster's encode path.
+inline std::vector<uint8_t> buildSnapshotPkt(uint64_t tick, const std::vector<TestRec>& recs,
+                                             std::array<double, 3> origin = {0.0, 0.0, 0.0}) {
+    fl::BitWriter w;
+    uint32_t prev = 0;
+    for (const auto& rrec : recs) {
+        fl::QuantEntity qe;
+        qe.idx = rrec.idx;
+        qe.gen = rrec.gen;
+        qe.typeIndex = rrec.typeIndex;
+        qe.isFull = rrec.isFull;
+        qe.hasOmega = rrec.hasOmega;
+        for (int i = 0; i < 3; ++i) {
+            qe.pos[i] = rrec.pos[i];
+            qe.vel[i] = rrec.vel[i];
+            qe.omega[i] = rrec.omega[i];
+        }
+        for (int i = 0; i < 4; ++i)
+            qe.quat[i] = rrec.quat[i];
+        qe.damageLevel = rrec.damage;
+        qe.engineFailFlags = rrec.engineFail;
+        qe.throttle = rrec.throttle;
+        qe.fuelPct = rrec.fuel;
+        qe.abEngaged = rrec.ab;
+        qe.playerOwned = rrec.owned;
+        fl::encodeRecord(w, qe, prev, origin.data(), /*sendGen=*/rrec.isFull || rrec.sendGen);
+    }
+    w.alignToByte();
+
+    std::vector<uint8_t> buf;
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
+    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
+    hdr.tickIndex = tick;
+    hdr.frameOrigin[0] = origin[0];
+    hdr.frameOrigin[1] = origin[1];
+    hdr.frameOrigin[2] = origin[2];
+    const std::size_t hdrOffset = buf.size();
+    fl::appendMsg(buf, hdr);
+    buf.insert(buf.end(), w.bytes().begin(), w.bytes().end());
+    hdr.recordCount = static_cast<uint16_t>(recs.size());
+    hdr.bitstreamBytes = static_cast<uint32_t>(w.byteCount());
+    fl::writeMsgAt(buf, hdrOffset, hdr);
+    return buf;
+}
 
 struct MockLogger : ILogger {
     void log(LogLevel, const char*, int, const char*) override {}
@@ -227,25 +297,19 @@ TEST_CASE("ClientNetEventHandler: MsgWorldSnapshot abEngaged and engineFailFlags
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
 
-    // Build a raw WorldSnapshot packet with one entity entry carrying new telemetry fields.
-    std::vector<uint8_t> pkt(sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry), 0);
-
-    fl::MsgWorldSnapshotHeader hdr{};
-    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
-    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-    hdr.fullEntityCount = 1u;
-    hdr.tickIndex = 1u;
-    std::memcpy(pkt.data(), &hdr, sizeof(hdr));
-
-    fl::MsgEntityEntry entry{};
-    entry.entityIdx = 0u;
-    entry.entityGen = 1u;
-    entry.abEngaged = 1u;
-    entry.engineFailFlags = fl::kEngineFailGeneric;
-    entry.omega[0] = 0.1f;
-    entry.omega[1] = 0.2f;
-    entry.omega[2] = 0.3f;
-    std::memcpy(pkt.data() + sizeof(hdr), &entry, sizeof(entry));
+    // Build a WorldSnapshot with one full record carrying new telemetry fields. omega is only on the
+    // wire for an own-entity record (hasOmega), so mark it as such.
+    TestRec rec;
+    rec.idx = 0u;
+    rec.gen = 1u;
+    rec.isFull = true;
+    rec.hasOmega = true;
+    rec.ab = true;
+    rec.engineFail = fl::kEngineFailGeneric;
+    rec.omega[0] = 0.1f;
+    rec.omega[1] = 0.2f;
+    rec.omega[2] = 0.3f;
+    auto pkt = buildSnapshotPkt(1u, {rec});
 
     handler.onReceive(0u, pkt.data(), pkt.size());
 
@@ -254,9 +318,9 @@ TEST_CASE("ClientNetEventHandler: MsgWorldSnapshot abEngaged and engineFailFlags
     REQUIRE(snap.entries.size() == 1u);
     CHECK(snap.entries[0].abEngaged == true);
     CHECK(snap.entries[0].engineFailFlags == fl::kEngineFailGeneric);
-    CHECK(snap.entries[0].omega.x == 0.1f);
-    CHECK(snap.entries[0].omega.y == 0.2f);
-    CHECK(snap.entries[0].omega.z == 0.3f);
+    CHECK(snap.entries[0].omega.x == Catch::Approx(0.1f).margin(0.02));
+    CHECK(snap.entries[0].omega.y == Catch::Approx(0.2f).margin(0.02));
+    CHECK(snap.entries[0].omega.z == Catch::Approx(0.3f).margin(0.02));
 }
 
 TEST_CASE("ClientNetEventHandler: MsgMotd honours custom motdDisplaySeconds", "[client_net_event_handler]") {
@@ -1022,20 +1086,12 @@ TEST_CASE("ClientNetEventHandler: WorldSnapshot with SnapshotPeerCount extension
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
 
-    // Build a WorldSnapshot with one entity entry followed by a SnapshotPeerCount TLV extension.
-    std::vector<uint8_t> pkt;
-    fl::MsgWorldSnapshotHeader hdr{};
-    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
-    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-    hdr.fullEntityCount = 1;
-    hdr.tickIndex = 10u;
-    fl::appendMsg(pkt, hdr);
-
-    fl::MsgEntityEntry e{};
-    e.entityIdx = 1u;
-    e.entityGen = 1u;
-    fl::appendMsg(pkt, e);
-
+    // Build a WorldSnapshot with one full record followed by a SnapshotPeerCount TLV extension.
+    TestRec rec;
+    rec.idx = 1u;
+    rec.gen = 1u;
+    rec.isFull = true;
+    auto pkt = buildSnapshotPkt(10u, {rec});
     const uint16_t kPeers = 5u;
     fl::appendExt(pkt, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), kPeers);
 
@@ -1062,7 +1118,6 @@ TEST_CASE("ClientNetEventHandler: WorldSnapshot without extension leaves peer co
     fl::MsgWorldSnapshotHeader hdr{};
     hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
     hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-    hdr.fullEntityCount = 0;
     hdr.tickIndex = 1u;
     fl::appendMsg(pkt, hdr);
 
@@ -1081,7 +1136,6 @@ static std::vector<uint8_t> makeSnapshotPacket(uint64_t tickIndex) {
     fl::MsgWorldSnapshotHeader hdr{};
     hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
     hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-    hdr.fullEntityCount = 0;
     hdr.tickIndex = tickIndex;
     std::vector<uint8_t> pkt;
     fl::appendMsg(pkt, hdr);
@@ -1281,34 +1335,26 @@ TEST_CASE("ClientNetEventHandler: sendHeartbeatIfNeeded uses last received snaps
 
 static std::vector<uint8_t> makeFullThenUpdatePacket(uint32_t entityIdx, uint32_t entityGen, uint32_t typeIndex,
                                                      bool sendUpdate) {
-    const uint16_t fullCount = 1u;
-    const uint16_t updateCount = sendUpdate ? 1u : 0u;
-    std::vector<uint8_t> pkt;
-    fl::MsgWorldSnapshotHeader hdr{};
-    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
-    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-    hdr.fullEntityCount = fullCount;
-    hdr.updateCount = updateCount;
-    hdr.tickIndex = 1u;
-    fl::appendMsg(pkt, hdr);
-
-    fl::MsgEntityEntry full{};
-    full.entityIdx = entityIdx;
-    full.entityGen = entityGen;
+    std::vector<TestRec> recs;
+    TestRec full;
+    full.idx = entityIdx;
+    full.gen = entityGen;
     full.typeIndex = typeIndex;
+    full.isFull = true;
     full.pos[1] = 500.0;
-    fl::appendMsg(pkt, full);
-
+    recs.push_back(full);
     if (sendUpdate) {
-        fl::MsgEntityUpdate upd{};
-        upd.entityIdx = entityIdx;
-        upd.entityGen = static_cast<uint16_t>(entityGen);
+        // Note: records must be sorted by idx ascending; this delta shares entityIdx so it would
+        // collide — kept distinct in callers. Here the update reuses the same idx for a single-entity
+        // packet, which is not a valid multi-record stream; callers that need both use buildSnapshotPkt.
+        TestRec upd;
+        upd.idx = entityIdx;
+        upd.gen = entityGen;
         upd.pos[0] = 1000.f;
         upd.pos[1] = 550.f;
-        upd.pos[2] = 0.f;
-        fl::appendMsg(pkt, upd);
+        recs.push_back(upd);
     }
-    return pkt;
+    return buildSnapshotPkt(1u, recs);
 }
 
 TEST_CASE("ClientNetEventHandler: MsgEntityUpdate decoded using cached typeIndex", "[client_net_event_handler]") {
@@ -1326,31 +1372,21 @@ TEST_CASE("ClientNetEventHandler: MsgEntityUpdate decoded using cached typeIndex
     REQUIRE(bridge.current().entries.size() == 1u);
     CHECK(bridge.current().entries[0].typeIndex == 7u);
 
-    // Second snapshot: update entry only (fullEntityCount=0, updateCount=1)
+    // Second snapshot: delta record only (gen omitted → client uses cache).
     {
-        std::vector<uint8_t> pkt2;
-        fl::MsgWorldSnapshotHeader hdr2{};
-        hdr2.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
-        hdr2.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-        hdr2.fullEntityCount = 0u;
-        hdr2.updateCount = 1u;
-        hdr2.tickIndex = 2u;
-        fl::appendMsg(pkt2, hdr2);
-
-        fl::MsgEntityUpdate upd{};
-        upd.entityIdx = 5u;
-        upd.entityGen = 1u; // same gen as cached
-        upd.pos[0] = 999.f;
-        upd.pos[1] = 600.f;
-        upd.pos[2] = 0.f;
+        TestRec upd;
+        upd.idx = 5u;
+        upd.isFull = false;
+        upd.pos[0] = 999.0;
+        upd.pos[1] = 600.0;
         upd.throttle = 80u;
-        fl::appendMsg(pkt2, upd);
+        auto pkt2 = buildSnapshotPkt(2u, {upd});
 
         handler.onReceive(0u, pkt2.data(), pkt2.size());
         bridge.tryAdvance();
         REQUIRE(bridge.current().entries.size() == 1u);
         CHECK(bridge.current().entries[0].typeIndex == 7u); // from cache
-        CHECK(Catch::Approx(bridge.current().entries[0].position.x) == 999.0);
+        CHECK(Catch::Approx(bridge.current().entries[0].position.x).margin(0.2) == 999.0);
         CHECK(bridge.current().entries[0].throttle == 80u);
     }
 }
@@ -1363,20 +1399,11 @@ TEST_CASE("ClientNetEventHandler: MsgEntityUpdate skipped when entity not in cac
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
 
-    // Send update-only snapshot for entity not previously seen
-    std::vector<uint8_t> pkt;
-    fl::MsgWorldSnapshotHeader hdr{};
-    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
-    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-    hdr.fullEntityCount = 0u;
-    hdr.updateCount = 1u;
-    hdr.tickIndex = 1u;
-    fl::appendMsg(pkt, hdr);
-
-    fl::MsgEntityUpdate upd{};
-    upd.entityIdx = 42u;
-    upd.entityGen = 1u;
-    fl::appendMsg(pkt, upd);
+    // Send delta-only snapshot for an entity not previously seen.
+    TestRec upd;
+    upd.idx = 42u;
+    upd.isFull = false;
+    auto pkt = buildSnapshotPkt(1u, {upd});
 
     handler.onReceive(0u, pkt.data(), pkt.size());
     bridge.tryAdvance();
@@ -1395,36 +1422,24 @@ TEST_CASE("ClientNetEventHandler: MsgEntityUpdate skipped when entityGen mismatc
 
     // Cache entity 3 with gen=1
     {
-        std::vector<uint8_t> pkt;
-        fl::MsgWorldSnapshotHeader hdr{};
-        hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
-        hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-        hdr.fullEntityCount = 1u;
-        hdr.tickIndex = 1u;
-        fl::appendMsg(pkt, hdr);
-        fl::MsgEntityEntry e{};
-        e.entityIdx = 3u;
-        e.entityGen = 1u;
-        e.typeIndex = 5u;
-        fl::appendMsg(pkt, e);
+        TestRec full;
+        full.idx = 3u;
+        full.gen = 1u;
+        full.typeIndex = 5u;
+        full.isFull = true;
+        auto pkt = buildSnapshotPkt(1u, {full});
         handler.onReceive(0u, pkt.data(), pkt.size());
     }
     bridge.tryAdvance();
 
-    // Send update with gen=2 (mismatches cached gen=1) → should be skipped
+    // Send delta carrying gen=2 (genPresent, mismatches cached gen=1) → should be skipped
     {
-        std::vector<uint8_t> pkt;
-        fl::MsgWorldSnapshotHeader hdr{};
-        hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
-        hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-        hdr.fullEntityCount = 0u;
-        hdr.updateCount = 1u;
-        hdr.tickIndex = 2u;
-        fl::appendMsg(pkt, hdr);
-        fl::MsgEntityUpdate upd{};
-        upd.entityIdx = 3u;
-        upd.entityGen = 2u; // stale — different from cached gen=1
-        fl::appendMsg(pkt, upd);
+        TestRec upd;
+        upd.idx = 3u;
+        upd.gen = 2u;
+        upd.isFull = false;
+        upd.sendGen = true; // force the genPresent bit so the stale-gen guard can fire
+        auto pkt = buildSnapshotPkt(2u, {upd});
         handler.onReceive(0u, pkt.data(), pkt.size());
     }
     bridge.tryAdvance();
@@ -1440,46 +1455,29 @@ TEST_CASE("ClientNetEventHandler: SnapshotPeerCount TLV at correct offset after 
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
 
-    // Build packet with 1 full entry + 1 update entry + SnapshotPeerCount TLV
-    // Entity for the update must be cached first; we send both in the same packet.
-    std::vector<uint8_t> pkt;
-    fl::MsgWorldSnapshotHeader hdr{};
-    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
-    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-    hdr.fullEntityCount = 1u;
-    hdr.updateCount = 0u; // no updates yet — cache first
-    hdr.tickIndex = 1u;
-    fl::appendMsg(pkt, hdr);
-    fl::MsgEntityEntry e{};
-    e.entityIdx = 10u;
-    e.entityGen = 1u;
-    e.typeIndex = 2u;
-    fl::appendMsg(pkt, e);
-    handler.onReceive(0u, pkt.data(), pkt.size());
+    // Cache entity 10 first (full record).
+    {
+        TestRec full;
+        full.idx = 10u;
+        full.gen = 1u;
+        full.typeIndex = 2u;
+        full.isFull = true;
+        auto pkt0 = buildSnapshotPkt(1u, {full});
+        handler.onReceive(0u, pkt0.data(), pkt0.size());
+    }
     bridge.tryAdvance();
 
-    // Now send full=1 + update=1 + TLV
-    pkt.clear();
-    fl::MsgWorldSnapshotHeader hdr2{};
-    hdr2.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
-    hdr2.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-    hdr2.fullEntityCount = 1u;
-    hdr2.updateCount = 1u;
-    hdr2.tickIndex = 2u;
-    fl::appendMsg(pkt, hdr2);
-    // Full entry (entity 11)
-    fl::MsgEntityEntry e2{};
-    e2.entityIdx = 11u;
-    e2.entityGen = 1u;
-    e2.typeIndex = 3u;
-    fl::appendMsg(pkt, e2);
-    // Update entry (entity 10, cached above)
-    fl::MsgEntityUpdate upd{};
-    upd.entityIdx = 10u;
-    upd.entityGen = 1u;
-    upd.pos[0] = 50.f;
-    fl::appendMsg(pkt, upd);
-    // TLV: SnapshotPeerCount = 7
+    // Now send a delta for entity 10 + a full record for entity 11 (sorted by idx) + TLV.
+    TestRec d10;
+    d10.idx = 10u;
+    d10.isFull = false;
+    d10.pos[0] = 50.0;
+    TestRec f11;
+    f11.idx = 11u;
+    f11.gen = 1u;
+    f11.typeIndex = 3u;
+    f11.isFull = true;
+    auto pkt = buildSnapshotPkt(2u, {d10, f11});
     fl::appendExt(pkt, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), uint16_t{7u});
 
     handler.onReceive(0u, pkt.data(), pkt.size());
@@ -1507,13 +1505,7 @@ TEST_CASE("ClientNetEventHandler: WorldSnapshot with SnapshotPeerLatency TLV sto
     CHECK(!handler.hasSnapshotLatency());
     CHECK(handler.snapshotLatencyMs() == 0u);
 
-    std::vector<uint8_t> pkt;
-    fl::MsgWorldSnapshotHeader hdr{};
-    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
-    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-    hdr.fullEntityCount = 0u;
-    hdr.tickIndex = 1u;
-    fl::appendMsg(pkt, hdr);
+    auto pkt = buildSnapshotPkt(1u, {});
     fl::appendExt(pkt, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), uint16_t{120u});
 
     handler.onReceive(0u, pkt.data(), pkt.size());
@@ -1531,13 +1523,7 @@ TEST_CASE("ClientNetEventHandler: WorldSnapshot without SnapshotPeerLatency leav
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
 
-    std::vector<uint8_t> pkt;
-    fl::MsgWorldSnapshotHeader hdr{};
-    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
-    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-    hdr.fullEntityCount = 0u;
-    hdr.tickIndex = 1u;
-    fl::appendMsg(pkt, hdr);
+    auto pkt = buildSnapshotPkt(1u, {});
 
     handler.onReceive(0u, pkt.data(), pkt.size());
 
@@ -1554,19 +1540,11 @@ TEST_CASE("ClientNetEventHandler: SnapshotPeerLatency TLV parsed correctly along
     EnvironmentState env{};
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
 
-    std::vector<uint8_t> pkt;
-    fl::MsgWorldSnapshotHeader hdr{};
-    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
-    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-    hdr.fullEntityCount = 1u;
-    hdr.tickIndex = 5u;
-    fl::appendMsg(pkt, hdr);
-
-    fl::MsgEntityEntry e{};
-    e.entityIdx = 3u;
-    e.entityGen = 1u;
-    fl::appendMsg(pkt, e);
-
+    TestRec rec;
+    rec.idx = 3u;
+    rec.gen = 1u;
+    rec.isFull = true;
+    auto pkt = buildSnapshotPkt(5u, {rec});
     fl::appendExt(pkt, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), uint16_t{4u});
     fl::appendExt(pkt, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), uint16_t{83u});
 
@@ -1586,37 +1564,28 @@ TEST_CASE("ClientNetEventHandler: MsgEntityUpdate omega parsed into EntityRender
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
 
-    // First, send a full MsgEntityEntry so the entity is in m_knownEntities.
-    std::vector<uint8_t> pkt;
-    fl::MsgWorldSnapshotHeader hdr{};
-    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
-    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-    hdr.fullEntityCount = 1u;
-    hdr.tickIndex = 1u;
-    fl::appendMsg(pkt, hdr);
-    fl::MsgEntityEntry fullEntry{};
-    fullEntry.entityIdx = 10u;
-    fullEntry.entityGen = 1u;
-    fullEntry.typeIndex = 0u;
-    fl::appendMsg(pkt, fullEntry);
-    handler.onReceive(0u, pkt.data(), pkt.size());
+    // First, send a full record so the entity is in m_knownEntities.
+    {
+        TestRec full;
+        full.idx = 10u;
+        full.gen = 1u;
+        full.isFull = true;
+        auto pkt = buildSnapshotPkt(1u, {full});
+        handler.onReceive(0u, pkt.data(), pkt.size());
+    }
 
-    // Now send a compact MsgEntityUpdate for the same entity with omega set.
-    std::vector<uint8_t> pkt2;
-    fl::MsgWorldSnapshotHeader hdr2{};
-    hdr2.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
-    hdr2.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
-    hdr2.updateCount = 1u;
-    hdr2.tickIndex = 2u;
-    fl::appendMsg(pkt2, hdr2);
-    fl::MsgEntityUpdate upd{};
-    upd.entityIdx = 10u;
-    upd.entityGen = 1u;
-    upd.omega[0] = 1.1f;
-    upd.omega[1] = 2.2f;
-    upd.omega[2] = 3.3f;
-    fl::appendMsg(pkt2, upd);
-    handler.onReceive(0u, pkt2.data(), pkt2.size());
+    // Now send a delta for the same entity carrying omega (hasOmega = own-entity record).
+    {
+        TestRec upd;
+        upd.idx = 10u;
+        upd.isFull = false;
+        upd.hasOmega = true;
+        upd.omega[0] = 1.1f;
+        upd.omega[1] = 2.2f;
+        upd.omega[2] = 3.3f;
+        auto pkt = buildSnapshotPkt(2u, {upd});
+        handler.onReceive(0u, pkt.data(), pkt.size());
+    }
 
     bridge.tryAdvance();
     const auto& snap = bridge.current();
@@ -1629,9 +1598,9 @@ TEST_CASE("ClientNetEventHandler: MsgEntityUpdate omega parsed into EntityRender
         return nullptr;
     }();
     REQUIRE(entry != nullptr);
-    CHECK(entry->omega.x == Catch::Approx(1.1f));
-    CHECK(entry->omega.y == Catch::Approx(2.2f));
-    CHECK(entry->omega.z == Catch::Approx(3.3f));
+    CHECK(entry->omega.x == Catch::Approx(1.1f).margin(0.02));
+    CHECK(entry->omega.y == Catch::Approx(2.2f).margin(0.02));
+    CHECK(entry->omega.z == Catch::Approx(3.3f).margin(0.02));
 }
 
 TEST_CASE("ClientNetEventHandler: SnapshotPeerDelayTicks TLV updates m_estimatedDelayTicks",

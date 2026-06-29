@@ -122,89 +122,31 @@ static_assert(offsetof(MsgEntityTypeDef, mesh) == 68u, "MsgEntityTypeDef::mesh o
 static_assert(offsetof(MsgEntityTypeDef, dmgMesh) == 132u, "MsgEntityTypeDef::dmgMesh offset changed");
 
 // Unreliable, unicast per-peer every sim tick.
-// Followed by fullEntityCount x MsgEntityEntry records (new or baseline-tick entities), then
-// updateCount x MsgEntityUpdate records (compact state for entities already known to the peer),
-// then the TLV extension block. Sized to 16 (multiple of 8) so each trailing MsgEntityEntry
-// stays 8-aligned (its pos[3] is double).
+// Followed by a QUANTIZED, BIT-PACKED record stream of recordCount entity records (see
+// SnapshotCodec.h / BitStream.h), then the TLV extension block. The bitstream occupies
+// bitstreamBytes bytes starting at offset sizeof(MsgWorldSnapshotHeader); the TLV block begins at
+// sizeof(MsgWorldSnapshotHeader) + bitstreamBytes. Each record carries a `full` bit (full records
+// add typeIndex; deltas omit it), and positions are quantized RELATIVE to frameOrigin (a double
+// per-snapshot origin = the receiving peer's position) so the stream is planet-scale accurate
+// without a double per record. Sized to 40 (multiple of 8) so frameOrigin[3] stays 8-aligned and a
+// received buffer can be read in place via fl::viewMsg / fl::readMsg.
 struct MsgWorldSnapshotHeader {
-    uint8_t msgId{static_cast<uint8_t>(MsgId::WorldSnapshot)};
-    uint8_t protocolVersion{static_cast<uint8_t>(kProtocolVersion)};
-    uint16_t fullEntityCount{0}; // number of MsgEntityEntry records that follow (new / baseline)
-    uint16_t updateCount{0};     // number of MsgEntityUpdate records after the full entries
-    uint16_t _reserved{0};       // pad so tickIndex is 8-aligned
-    uint64_t tickIndex{0};
-}; // 16 bytes, align 8
-static_assert(sizeof(MsgWorldSnapshotHeader) == 16u, "MsgWorldSnapshotHeader wire size changed");
+    uint8_t msgId{static_cast<uint8_t>(MsgId::WorldSnapshot)};       // @0 (byte-0 dispatch unchanged)
+    uint8_t protocolVersion{static_cast<uint8_t>(kProtocolVersion)}; // @1
+    uint16_t recordCount{0};    // @2 number of quantized entity records in the bitstream
+    uint32_t bitstreamBytes{0}; // @4 byte length of the bitstream after this header (TLV follows it)
+    uint64_t tickIndex{0};      // @8
+    double frameOrigin[3]{};    // @16 per-snapshot position-quantization origin (receiving peer's pos)
+}; // 40 bytes, align 8
+static_assert(sizeof(MsgWorldSnapshotHeader) == 40u, "MsgWorldSnapshotHeader wire size changed");
 static_assert(alignof(MsgWorldSnapshotHeader) == 8u, "MsgWorldSnapshotHeader alignment changed");
-static_assert(offsetof(MsgWorldSnapshotHeader, fullEntityCount) == 2u,
-              "MsgWorldSnapshotHeader::fullEntityCount offset changed");
-static_assert(offsetof(MsgWorldSnapshotHeader, updateCount) == 4u,
-              "MsgWorldSnapshotHeader::updateCount offset changed");
+static_assert(offsetof(MsgWorldSnapshotHeader, recordCount) == 2u,
+              "MsgWorldSnapshotHeader::recordCount offset changed");
+static_assert(offsetof(MsgWorldSnapshotHeader, bitstreamBytes) == 4u,
+              "MsgWorldSnapshotHeader::bitstreamBytes offset changed");
 static_assert(offsetof(MsgWorldSnapshotHeader, tickIndex) == 8u, "MsgWorldSnapshotHeader::tickIndex offset changed");
-
-// Per-entity snapshot record appended after MsgWorldSnapshotHeader. Laid out large->small: the
-// double pos[3] is first (8-aligned), and the struct is padded to 88 (multiple of 8) so record i at
-// header(16) + i*88 stays 8-aligned.
-struct MsgEntityEntry {
-    double pos[3]{}; // world position (m), XYZ - double for planet-scale precision
-    float vel[3]{};  // world velocity (m/s) for dead-reckoning
-    float ori[4]{};  // orientation quaternion: x, y, z, w (matches EntityTransform::quat)
-    uint32_t entityIdx{0};
-    uint32_t entityGen{0};
-    uint32_t typeIndex{0};
-    uint8_t damageLevel{0};
-    uint8_t flags{0};           // bit 0 = playerOwned
-    uint8_t throttle{0};        // [0-100] throttle_actual * 100; 0 for non-player entities
-    uint8_t fuelPct{0};         // [0-100] fuel_kg / max_fuel * 100; 0 for non-player entities
-    uint8_t abEngaged{0};       // 1 when afterburner physically lit (FlightState::ab_engaged)
-    uint8_t engineFailFlags{0}; // fl::kEngineFail* bitmask
-    uint8_t reserved[2]{};      // @70-71 pad (was sole pad; kept for layout stability)
-    float omega[3]{};           // @72 body-frame angular rates p,q,r (rad/s); used by client-side prediction
-    uint8_t reserved2[4]{};     // @84 pad to 88 (multiple of 8 for record-alignment)
-}; // 88 bytes, align 8
-static_assert(sizeof(MsgEntityEntry) == 88u, "MsgEntityEntry wire size changed");
-static_assert(alignof(MsgEntityEntry) == 8u, "MsgEntityEntry alignment changed");
-static_assert(sizeof(MsgEntityEntry) % alignof(MsgEntityEntry) == 0u, "MsgEntityEntry not record-aligned");
-static_assert(offsetof(MsgEntityEntry, pos) == 0u, "MsgEntityEntry::pos offset changed");
-static_assert(offsetof(MsgEntityEntry, vel) == 24u, "MsgEntityEntry::vel offset changed");
-static_assert(offsetof(MsgEntityEntry, ori) == 36u, "MsgEntityEntry::ori offset changed");
-static_assert(offsetof(MsgEntityEntry, entityIdx) == 52u, "MsgEntityEntry::entityIdx offset changed");
-static_assert(offsetof(MsgEntityEntry, typeIndex) == 60u, "MsgEntityEntry::typeIndex offset changed");
-static_assert(offsetof(MsgEntityEntry, damageLevel) == 64u, "MsgEntityEntry::damageLevel offset changed");
-static_assert(offsetof(MsgEntityEntry, engineFailFlags) == 69u, "MsgEntityEntry::engineFailFlags offset changed");
-static_assert(offsetof(MsgEntityEntry, omega) == 72u, "MsgEntityEntry::omega offset changed");
-
-// Compact per-tick state for entities already known to the receiving peer. Sent in the update
-// section of MsgWorldSnapshot (after fullEntityCount x MsgEntityEntry). Uses float positions
-// (absolute world coords — precision ~1.6 cm at 200 km from origin, sufficient for rendering;
-// authoritative physics always uses double on the server). Omits static fields (typeIndex) which
-// the client caches from the last full MsgEntityEntry for this entity.
-// entityGen is uint16_t (truncated from EntityId::generation uint32_t); 65535 respawns of the
-// same pool slot per session is impossible in practice, so the truncation is safe.
-struct MsgEntityUpdate {
-    uint32_t entityIdx{0};      // @0 — which entity
-    uint16_t entityGen{0};      // @4 — generation (truncated); mismatch vs cached → treat as new
-    uint8_t damageLevel{0};     // @6
-    uint8_t engineFailFlags{0}; // @7 — fl::kEngineFail* bitmask
-    float pos[3]{};             // @8  — absolute world position (float, see precision note above)
-    float vel[3]{};             // @20 — world-frame velocity (m/s)
-    float ori[4]{};             // @32 — orientation quaternion x,y,z,w
-    uint8_t throttle{0};        // @48 — [0-100]
-    uint8_t fuelPct{0};         // @49 — [0-100]
-    uint8_t abEngaged{0};       // @50 — 1 when afterburner lit
-    uint8_t flags{0};           // @51 — bit 0 = playerOwned (same as MsgEntityEntry::flags)
-    float omega[3]{};           // @52 — body-frame angular rates p,q,r (rad/s); used by client-side prediction
-}; // 64 bytes, align 4
-static_assert(sizeof(MsgEntityUpdate) == 64u, "MsgEntityUpdate wire size changed");
-static_assert(alignof(MsgEntityUpdate) == 4u, "MsgEntityUpdate alignment changed");
-static_assert(sizeof(MsgEntityUpdate) % alignof(MsgEntityUpdate) == 0u, "MsgEntityUpdate not record-aligned");
-static_assert(offsetof(MsgEntityUpdate, entityIdx) == 0u, "MsgEntityUpdate::entityIdx offset changed");
-static_assert(offsetof(MsgEntityUpdate, entityGen) == 4u, "MsgEntityUpdate::entityGen offset changed");
-static_assert(offsetof(MsgEntityUpdate, pos) == 8u, "MsgEntityUpdate::pos offset changed");
-static_assert(offsetof(MsgEntityUpdate, vel) == 20u, "MsgEntityUpdate::vel offset changed");
-static_assert(offsetof(MsgEntityUpdate, ori) == 32u, "MsgEntityUpdate::ori offset changed");
-static_assert(offsetof(MsgEntityUpdate, throttle) == 48u, "MsgEntityUpdate::throttle offset changed");
-static_assert(offsetof(MsgEntityUpdate, omega) == 52u, "MsgEntityUpdate::omega offset changed");
+static_assert(offsetof(MsgWorldSnapshotHeader, frameOrigin) == 16u,
+              "MsgWorldSnapshotHeader::frameOrigin offset changed");
 
 // Unreliable, client->server, sent each render frame. Padded to 48 (multiple of 8 for tickIndex).
 struct MsgClientInput {
@@ -400,7 +342,7 @@ static constexpr uint8_t kGameModeSandbox = 0x04u;
 // Wire format per entry: [tag: uint16_t LE][len: uint16_t LE][data: len bytes].
 // Senders include any subset; receivers skip unknown tags via their len field.
 // Range layout:
-//   0x0100–0x01FF  MsgWorldSnapshot extensions (appended after entity record array)
+//   0x0100–0x01FF  MsgWorldSnapshot extensions (appended after the quantized record bitstream)
 //   0x0200–0x02FF  MsgConnectAck extensions (reserved for future use)
 //   0x0300–0x03FF  MsgClientInput extensions (reserved for future use)
 //   0x0400–0x04FF  MsgWeatherState extensions (reserved for future use)

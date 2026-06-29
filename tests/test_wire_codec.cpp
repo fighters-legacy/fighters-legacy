@@ -61,25 +61,25 @@ TEST_CASE("WireCodec: readRecordAt bounds-checks variable-length tails", "[wire_
 }
 
 TEST_CASE("WireCodec: viewMsg returns a pointer when aligned, nullptr when not", "[wire_codec]") {
-    // MsgEntityEntry has alignof 8 (it carries a double). Use an over-aligned backing buffer so the
-    // alignment behaviour is deterministic across platforms.
-    alignas(8) std::byte storage[sizeof(fl::MsgEntityEntry) + 8]{};
-    fl::MsgEntityEntry src{};
-    src.entityIdx = 4242u;
-    src.pos[1] = 500.0;
+    // MsgWorldSnapshotHeader has alignof 8 (it carries frameOrigin[3] doubles). Use an over-aligned
+    // backing buffer so the alignment behaviour is deterministic across platforms.
+    alignas(8) std::byte storage[sizeof(fl::MsgWorldSnapshotHeader) + 8]{};
+    fl::MsgWorldSnapshotHeader src{};
+    src.tickIndex = 4242u;
+    src.frameOrigin[1] = 500.0;
     std::memcpy(storage, &src, sizeof(src));
 
     // Aligned base: view succeeds and reads the right value with no copy.
-    const fl::MsgEntityEntry* v = fl::viewMsg<fl::MsgEntityEntry>(storage, sizeof(src));
+    const fl::MsgWorldSnapshotHeader* v = fl::viewMsg<fl::MsgWorldSnapshotHeader>(storage, sizeof(src));
     REQUIRE(v != nullptr);
-    CHECK(v->entityIdx == 4242u);
-    CHECK(v->pos[1] == 500.0);
+    CHECK(v->tickIndex == 4242u);
+    CHECK(v->frameOrigin[1] == 500.0);
 
     // Misaligned pointer (base + 1): view declines, caller would fall back to readMsg.
-    CHECK(fl::viewMsg<fl::MsgEntityEntry>(storage + 1, sizeof(src)) == nullptr);
+    CHECK(fl::viewMsg<fl::MsgWorldSnapshotHeader>(storage + 1, sizeof(src)) == nullptr);
 
     // Too small: declines regardless of alignment.
-    CHECK(fl::viewMsg<fl::MsgEntityEntry>(storage, sizeof(src) - 1) == nullptr);
+    CHECK(fl::viewMsg<fl::MsgWorldSnapshotHeader>(storage, sizeof(src) - 1) == nullptr);
 }
 
 TEST_CASE("WireCodec ext: single extension round-trip via appendExt and readExtValue", "[wire_codec]") {
@@ -152,36 +152,34 @@ TEST_CASE("WireCodec ext: appendExtRaw and findExt raw bytes round-trip", "[wire
     CHECK(p[2] == 0x33);
 }
 
-TEST_CASE("WireCodec: appendMsg + writeMsgAt build a snapshot the reader round-trips", "[wire_codec]") {
-    // Mirror the server snapshot builder: placeholder header, append entries, patch the count back in.
+TEST_CASE("WireCodec: appendMsg + writeMsgAt build an array message the reader round-trips", "[wire_codec]") {
+    // Mirror the ConnectAck builder: placeholder header, append typeDef records, patch the count in.
     std::vector<uint8_t> buf;
     const std::size_t hdrOffset = buf.size();
-    fl::MsgWorldSnapshotHeader hdr{};
-    hdr.tickIndex = 7u;
+    fl::MsgConnectAck hdr{};
+    hdr.assignedEntityIdx = 7u;
     fl::appendMsg(buf, hdr); // placeholder
 
     constexpr uint16_t kCount = 3;
     for (uint16_t i = 0; i < kCount; ++i) {
-        fl::MsgEntityEntry e{};
-        e.entityIdx = 100u + i;
-        e.pos[0] = static_cast<double>(i) * 10.0;
-        fl::appendMsg(buf, e);
+        fl::MsgEntityTypeDef td{};
+        td.typeIndex = 100u + i;
+        fl::appendMsg(buf, td);
     }
-    hdr.fullEntityCount = kCount;
+    hdr.typeCount = kCount;
     fl::writeMsgAt(buf, hdrOffset, hdr);
 
-    // Read back exactly like ClientNetEventHandler.
-    fl::MsgWorldSnapshotHeader rh{};
+    // Read back the header then each trailing record via readRecordAt.
+    fl::MsgConnectAck rh{};
     REQUIRE(fl::readMsg(buf.data(), buf.size(), rh));
-    CHECK(rh.fullEntityCount == kCount);
-    CHECK(rh.tickIndex == 7u);
+    CHECK(rh.typeCount == kCount);
+    CHECK(rh.assignedEntityIdx == 7u);
 
     std::size_t off = sizeof(rh);
-    for (uint16_t i = 0; i < rh.fullEntityCount; ++i) {
-        fl::MsgEntityEntry e{};
-        REQUIRE(fl::readRecordAt(buf.data(), buf.size(), off, e));
-        off += sizeof(e);
-        CHECK(e.entityIdx == 100u + i);
-        CHECK(e.pos[0] == static_cast<double>(i) * 10.0);
+    for (uint16_t i = 0; i < rh.typeCount; ++i) {
+        fl::MsgEntityTypeDef td{};
+        REQUIRE(fl::readRecordAt(buf.data(), buf.size(), off, td));
+        off += sizeof(td);
+        CHECK(td.typeIndex == 100u + i);
     }
 }

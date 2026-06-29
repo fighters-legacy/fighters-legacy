@@ -59,6 +59,12 @@ The scale gate (#520) asserts on `server_tick.tick_ms.p99` via `--assert-max-tic
 quantization + budgeting, soak-stable for 2 h. (#520 owns the pass/fail thresholds; `bot_swarm`
 provides the measurement plus the optional `--assert-*` hooks.)
 
+The snapshot quantization codec (#515) and 3D interest culling (#402) have landed — the entity
+record is now bit-packed (~24 B steady-state vs. the former fixed 64 B; see
+[snapshot-quantization.md](snapshot-quantization.md)). Re-run the `downstream_kbs_per_client`
+sweep before/after to quantify the reduction against the gate; the priority/budget scheduler (#516)
+provides the hard per-client byte cap.
+
 ## Quick start
 
 The runner launches an `fl-server` with a load-test config and drives the swarm:

@@ -12,8 +12,10 @@
 #include "flight/CentralGravityField.h"
 #include "flight/FlightIntegrator.h"
 #include "job/JobSystem.h"
+#include "net/BitStream.h"
 #include "net/GameProtocol.h"
 #include "net/NetworkUtils.h"
+#include "net/SnapshotCodec.h"
 #include "net/WireCodec.h"
 #include "weather/WeatherController.h"
 
@@ -567,97 +569,87 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             knownGens.clear();
 
         std::vector<uint8_t> buf;
-        buf.reserve(sizeof(MsgWorldSnapshotHeader) + 24 * sizeof(MsgEntityEntry) + 24 * sizeof(MsgEntityUpdate));
+        buf.reserve(sizeof(MsgWorldSnapshotHeader) + 256);
 
         MsgWorldSnapshotHeader hdr;
         hdr.msgId = static_cast<uint8_t>(MsgId::WorldSnapshot);
         hdr.protocolVersion = static_cast<uint8_t>(kProtocolVersion);
-        hdr.fullEntityCount = 0;
-        hdr.updateCount = 0;
+        hdr.recordCount = 0;
+        hdr.bitstreamBytes = 0;
         hdr.tickIndex = tickIndex;
+        if (peerState) {
+            hdr.frameOrigin[0] = peerState->transform.pos[0];
+            hdr.frameOrigin[1] = peerState->transform.pos[1];
+            hdr.frameOrigin[2] = peerState->transform.pos[2];
+        }
         const std::size_t hdrOffset = buf.size();
-        appendMsg(buf, hdr); // placeholder; counts patched below
+        appendMsg(buf, hdr); // placeholder; recordCount/bitstreamBytes patched below
 
-        // Collect visible entity indices from the spatial index; categorise into full vs update.
-        // Two-pass ensures all full entries precede all update entries in the wire buffer.
-        std::vector<uint32_t> fullIndices, updateIndices;
+        // Collect visible entity indices via the spatial index (conservative XZ cells), then apply
+        // an exact 3D (XYZ) distance gate (#402) and sort ascending so the bitstream's idx deltas
+        // stay small. peerState null/dead → empty list → header-only empty snapshot.
+        std::vector<uint32_t> visible;
         if (peerState && !peerState->dead && m_drawDistanceM > 0.0) {
-            m_spatialIndex.queryRadius(
-                peerState->transform.pos, m_drawDistanceM, [&](uint32_t entityIdx, const double* /*pos*/) {
-                    if (snapMap.find(entityIdx) == snapMap.end())
-                        return; // died this tick after the index was built
-                    const uint16_t gen = static_cast<uint16_t>(snapMap.at(entityIdx).state->id.generation);
-                    auto kit = knownGens.find(entityIdx);
-                    if (kit == knownGens.end() || kit->second != gen)
-                        fullIndices.push_back(entityIdx);
-                    else
-                        updateIndices.push_back(entityIdx);
-                });
+            const double r2 = m_drawDistanceM * m_drawDistanceM;
+            const double px = peerState->transform.pos[0];
+            const double py = peerState->transform.pos[1];
+            const double pz = peerState->transform.pos[2];
+            m_spatialIndex.queryRadius(peerState->transform.pos, m_drawDistanceM,
+                                       [&](uint32_t entityIdx, const double* pos) {
+                                           if (snapMap.find(entityIdx) == snapMap.end())
+                                               return; // died this tick after the index was built
+                                           const double dx = pos[0] - px, dy = pos[1] - py, dz = pos[2] - pz;
+                                           if (dx * dx + dy * dy + dz * dz > r2)
+                                               return; // 3D interest cull (#402)
+                                           visible.push_back(entityIdx);
+                                       });
+            std::sort(visible.begin(), visible.end());
         }
-        // peerState null/dead → both lists empty → header-only empty snapshot sent below.
 
-        // Append full MsgEntityEntry records (new entities or baseline tick).
-        for (uint32_t idx : fullIndices) {
+        // Encode the quantized, bit-packed record stream (SnapshotCodec). A record is `full` (carries
+        // typeIndex + gen) when the peer has not seen this entity/gen before; otherwise a delta
+        // (gen + typeIndex omitted). Omega is sent only for the peer's own entity.
+        BitWriter writer;
+        uint32_t prevIdx = 0;
+        for (uint32_t idx : visible) {
             const EntitySnap& snap = snapMap.at(idx);
             const EntityState& state = *snap.state;
-            MsgEntityEntry entry;
-            entry.entityIdx = state.id.index;
-            entry.entityGen = state.id.generation;
-            entry.typeIndex = state.typeIndex;
-            entry.pos[0] = state.transform.pos[0];
-            entry.pos[1] = state.transform.pos[1];
-            entry.pos[2] = state.transform.pos[2];
-            entry.vel[0] = state.transform.vel[0];
-            entry.vel[1] = state.transform.vel[1];
-            entry.vel[2] = state.transform.vel[2];
-            entry.ori[0] = state.transform.quat[0]; // x
-            entry.ori[1] = state.transform.quat[1]; // y
-            entry.ori[2] = state.transform.quat[2]; // z
-            entry.ori[3] = state.transform.quat[3]; // w
-            entry.damageLevel = static_cast<uint8_t>(state.damageLevel);
-            entry.flags = state.playerOwned ? 1u : 0u;
-            entry.throttle = snap.throttle;
-            entry.fuelPct = snap.fuelPct;
-            entry.abEngaged = snap.abEngaged;
-            entry.engineFailFlags = snap.engineFailFlags;
-            entry.omega[0] = snap.omega[0];
-            entry.omega[1] = snap.omega[1];
-            entry.omega[2] = snap.omega[2];
-            appendMsg(buf, entry);
-            knownGens[idx] = static_cast<uint16_t>(state.id.generation);
-            ++hdr.fullEntityCount;
-        }
+            const uint16_t gen = static_cast<uint16_t>(state.id.generation);
+            auto kit = knownGens.find(idx);
+            const bool isFull = (kit == knownGens.end() || kit->second != gen);
 
-        // Append compact MsgEntityUpdate records (entities already known to this peer).
-        for (uint32_t idx : updateIndices) {
-            const EntitySnap& snap = snapMap.at(idx);
-            const EntityState& state = *snap.state;
-            MsgEntityUpdate upd;
-            upd.entityIdx = state.id.index;
-            upd.entityGen = static_cast<uint16_t>(state.id.generation);
-            upd.damageLevel = static_cast<uint8_t>(state.damageLevel);
-            upd.engineFailFlags = snap.engineFailFlags;
-            upd.pos[0] = static_cast<float>(state.transform.pos[0]);
-            upd.pos[1] = static_cast<float>(state.transform.pos[1]);
-            upd.pos[2] = static_cast<float>(state.transform.pos[2]);
-            upd.vel[0] = state.transform.vel[0];
-            upd.vel[1] = state.transform.vel[1];
-            upd.vel[2] = state.transform.vel[2];
-            upd.ori[0] = state.transform.quat[0]; // x
-            upd.ori[1] = state.transform.quat[1]; // y
-            upd.ori[2] = state.transform.quat[2]; // z
-            upd.ori[3] = state.transform.quat[3]; // w
-            upd.throttle = snap.throttle;
-            upd.fuelPct = snap.fuelPct;
-            upd.abEngaged = snap.abEngaged;
-            upd.flags = state.playerOwned ? 1u : 0u;
-            upd.omega[0] = snap.omega[0];
-            upd.omega[1] = snap.omega[1];
-            upd.omega[2] = snap.omega[2];
-            appendMsg(buf, upd);
-            ++hdr.updateCount;
+            QuantEntity qe;
+            qe.idx = state.id.index;
+            qe.gen = state.id.generation;
+            qe.typeIndex = state.typeIndex;
+            qe.isFull = isFull;
+            qe.hasOmega = (state.id.index == peerEid.index && state.id.generation == peerEid.generation);
+            qe.pos[0] = state.transform.pos[0];
+            qe.pos[1] = state.transform.pos[1];
+            qe.pos[2] = state.transform.pos[2];
+            qe.vel[0] = state.transform.vel[0];
+            qe.vel[1] = state.transform.vel[1];
+            qe.vel[2] = state.transform.vel[2];
+            qe.quat[0] = state.transform.quat[0];
+            qe.quat[1] = state.transform.quat[1];
+            qe.quat[2] = state.transform.quat[2];
+            qe.quat[3] = state.transform.quat[3];
+            qe.omega[0] = snap.omega[0];
+            qe.omega[1] = snap.omega[1];
+            qe.omega[2] = snap.omega[2];
+            qe.damageLevel = static_cast<uint8_t>(state.damageLevel);
+            qe.engineFailFlags = snap.engineFailFlags;
+            qe.throttle = snap.throttle;
+            qe.fuelPct = snap.fuelPct;
+            qe.abEngaged = snap.abEngaged != 0u;
+            qe.playerOwned = state.playerOwned;
+            encodeRecord(writer, qe, prevIdx, hdr.frameOrigin, /*sendGen=*/isFull);
+            knownGens[idx] = gen;
+            ++hdr.recordCount;
         }
-
+        writer.alignToByte();
+        buf.insert(buf.end(), writer.bytes().begin(), writer.bytes().end());
+        hdr.bitstreamBytes = static_cast<uint32_t>(writer.byteCount());
         writeMsgAt(buf, hdrOffset, hdr);
 
         // TLV extension block.
