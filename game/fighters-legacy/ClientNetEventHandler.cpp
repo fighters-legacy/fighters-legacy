@@ -99,6 +99,13 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         if (!fl::readMsg(data, size, hdr))
             return;
 
+        // Out-of-order / duplicate guard: UDP can reorder, so ignore any snapshot not newer than the
+        // last one processed. This keeps m_lastSnapshotTick a monotonic high-water mark — it is echoed
+        // back to the server (MsgClientInput/MsgHeartbeat tickIndex) as the snapshot ack that drives
+        // client-acked delta baselines, and it prevents a stale packet from clobbering newer state.
+        if (m_haveSnapshot && hdr.tickIndex <= m_lastSnapshotTick)
+            return;
+
         // The priority/budget scheduler (#516) may omit low-priority entities from any given
         // snapshot, so the rendered set is a persistent cache (m_entityCache) updated by each packet,
         // not rebuilt from scratch. Order of operations:
@@ -206,6 +213,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         }
 
         m_lastSnapshotTick = hdr.tickIndex;
+        m_haveSnapshot = true;
 
         char traceBuf[96];
         std::snprintf(traceBuf, sizeof(traceBuf), "WorldSnapshot: records=%u bytes=%u built=%zu", hdr.recordCount,

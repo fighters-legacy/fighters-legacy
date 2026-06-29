@@ -94,5 +94,8 @@ landed) builds directly on top: it reuses `estimateRecordBytes()` (added here, m
 bit layout) to fit the highest-relevance records into a per-client byte budget, and adds the
 `SnapshotDespawn` TLV + client-side entity retention so budget-deferred entities don't flicker. See
 `engine/net/SnapshotScheduler.{h,cpp}` and [network-protocol.md](network-protocol.md). Client-acked
-delta baselines (#517) and adaptive send-rate/congestion response (#518) build on this codec and the
-scheduler, and remain separate sub-tasks of #495.
+delta baselines (#517 — landed) build on this codec's per-record `full` bit: the server keys
+full-vs-delta off the snapshot tick each client echoes in `MsgClientInput`/`MsgHeartbeat` (the ack),
+re-sending a full every tick until the peer confirms it — no wire change to this codec. Adaptive
+send-rate/congestion response (#518) builds on the codec and the scheduler, and remains a separate
+sub-task of #495.

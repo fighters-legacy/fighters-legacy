@@ -185,8 +185,8 @@ body is now a quantized, bit-packed record stream (position relative to a per-sn
 frame origin, smallest-three quaternion, quantized velocity/omega; full-vs-delta per-record `full`
 bit), and the per-peer interest query gained an exact 3D (XYZ) distance gate. Encoding-only and
 transport-agnostic (stays on `enet6`), so it proceeds independently of the transport replacement
-(Epic L). The priority/budget scheduler (#516), client-acked baselines (#517), and congestion
-response (#518) build on this codec. Full design in
+(Epic L). The priority/budget scheduler (#516) and client-acked baselines (#517) build on this codec;
+congestion response (#518) follows. Full design in
 [docs/snapshot-quantization.md](snapshot-quantization.md).
 
 **2026-06-29 — Priority/budget snapshot scheduler (Epic B, #516).** The quantized codec (#515) cut the
@@ -201,8 +201,24 @@ model**: the client retains entity state across snapshots and evicts only on an 
 `SnapshotDespawn` TLV (a confirmed sim removal) or after a retention timeout (interest-out / lost
 despawn); the server force-sends a full record on re-entry past that window so a returning entity stays
 decodable. Wire-additive (new TLV tag only, `kProtocolVersion` unchanged); the bandwidth win is
-measured by `bot_swarm`'s `downstream_kbs_per_client`. Client-acked baselines (#517) and adaptive
-send-rate/congestion (#518) build on this.
+measured by `bot_swarm`'s `downstream_kbs_per_client`. Adaptive send-rate/congestion (#518) builds
+on this.
+
+**2026-06-29 — Client-acked delta baselines (Epic B, #517).** The fixed `[world]
+baseline_interval_ticks` re-sync cleared every peer's known-entity set on the same global tick,
+re-sending *all* visible entities as full records at once — a synchronized cross-peer bandwidth spike
+— and left a dropped full record undecodable for up to that interval (~2 s). The server now drives
+full-vs-delta off what each client has actually acknowledged: clients already echo the last snapshot
+tick they processed in `MsgClientInput`/`MsgHeartbeat`, and the server treats that `tickIndex` as the
+snapshot **ack** (clamped to the present, kept as a monotonic high-water mark). An entity is re-sent
+as a full record every tick until the peer acks the tick its full streak started on, then converges
+to deltas; a scheduler deferral restarts the streak so an ack of a tick on which the entity was
+withheld cannot falsely confirm it. Recovery is now ~1 RTT and per-entity rather than a periodic
+all-entity spike, with **no wire-format change** — the client additionally ignores out-of-order
+snapshots so its echoed tick stays monotonic. The per-entity `kSnapshotRetentionTicks` force-full
+(interest-out re-entry) is retained as an ack-independent backstop, and the `m_peerKnownGens` map is
+now pruned on that same window (the periodic baseline clear used to bound it). `baseline_interval_ticks`
+and `WorldBroadcaster::setBaselineInterval` are removed.
 
 ## Content Pack Architecture
 

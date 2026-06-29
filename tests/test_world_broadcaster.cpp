@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -206,6 +207,17 @@ static std::vector<DecodedEntity> parseFullEntries(const std::vector<uint8_t>& p
     return full;
 }
 
+// Simulate a client acknowledging snapshot `tick` by feeding an MsgClientInput that echoes it (the
+// realistic ack path for client-acked delta baselines: an entity stays full until the peer acks the
+// tick its full streak started on). seqNum must strictly increase per peer across calls (the
+// broadcaster's staleness guard discards non-newer inputs).
+static void ackTick(fl::WorldBroadcaster& b, uint32_t peerId, uint64_t tick, uint32_t seqNum) {
+    fl::MsgClientInput inp{};
+    inp.seqNum = seqNum;
+    inp.tickIndex = tick;
+    b.onReceive(peerId, &inp, sizeof(inp));
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -232,8 +244,7 @@ TEST_CASE("WorldBroadcaster: onTick broadcasts WorldSnapshot for N entities", "[
     // Drive one tick manually.
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    // Tick 1 is a baseline tick (1 % 120 != 0 ... actually 1 % 120 == 1, not 0 — but all entities
-    // are new to the peer so they appear as full entries regardless).
+    // All entities are new to the peer (and unacked), so they appear as full entries.
     auto snaps = snapshotsFor(net, 0);
     REQUIRE(snaps.size() == 1u);
     const auto& pkt = snaps[0];
@@ -303,7 +314,7 @@ TEST_CASE("WorldBroadcaster: registerController steps a non-peer entity and seri
     const auto& pkt = snaps.back();
     auto hdr = parseSnapshotHeader(pkt);
     REQUIRE(totalEntityCount(hdr) >= 1u);
-    // AI entity appears in full entries (baseline tick 120 % 120 == 0 → all full entries)
+    // AI entity appears in full entries (the peer never acks, so records stay full every tick)
     bool foundAiEntity = false;
     for (const auto& e : parseFullEntries(pkt)) {
         if (e.entityIdx == id.index) {
@@ -996,8 +1007,8 @@ TEST_CASE("WorldBroadcaster: two peers each control independent entities", "[wor
     broadcaster.onConnect(1u);
 
     // Peer 0: full throttle forward; peer 1: no throttle.
-    // Set inputs BEFORE tick 0 (a baseline tick: 0 % 120 == 0) so all entities appear as
-    // full MsgEntityEntry records. This lets us verify velocity via parseFullEntries.
+    // Set inputs BEFORE the first tick. On tick 0 all entities are new to their peers, so they
+    // appear as full records — this lets us verify velocity via parseFullEntries.
     fl::MsgClientInput inp0{};
     inp0.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
     inp0.seqNum = 1u;
@@ -1010,7 +1021,7 @@ TEST_CASE("WorldBroadcaster: two peers each control independent entities", "[wor
     inp1.throttle = 0.f;
     broadcaster.onReceive(1u, &inp1, sizeof(inp1));
 
-    broadcaster.onTick(1.0 / 60.0, 0u); // tick 0: baseline → full entries for all entities
+    broadcaster.onTick(1.0 / 60.0, 0u); // tick 0: all entities new → full entries
     REQUIRE(em.liveCount() == 2u);
 
     // Snapshot has both entities; find peer 0's and peer 1's entries by assigned idx.
@@ -4643,7 +4654,6 @@ TEST_CASE("WorldBroadcaster: first tick sends full entries, second tick sends up
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.setBaselineInterval(120); // baseline at tick 0, 120, 240...
     broadcaster.onConnect(0u);
 
     // Tick 1: all entities new — must be full entries
@@ -4653,7 +4663,8 @@ TEST_CASE("WorldBroadcaster: first tick sends full entries, second tick sends up
     CHECK(fullRecordCount(snaps1[0]) >= 1u);
     CHECK(deltaRecordCount(snaps1[0]) == 0u);
 
-    // Tick 2: entities already known — must be delta records
+    // Client acks tick 1, then tick 2: identities are confirmed — must be delta records.
+    ackTick(broadcaster, 0u, 1u, 1u);
     clearSnapshots(net);
     broadcaster.onTick(1.0 / 60.0, 2u);
     auto snaps2 = snapshotsFor(net, 0);
@@ -4662,7 +4673,7 @@ TEST_CASE("WorldBroadcaster: first tick sends full entries, second tick sends up
     CHECK(deltaRecordCount(snaps2[0]) >= 1u);
 }
 
-TEST_CASE("WorldBroadcaster: baseline tick forces full entries", "[world_broadcaster][delta]") {
+TEST_CASE("WorldBroadcaster: entity stays full every tick until the client acks", "[world_broadcaster][delta]") {
     MockLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
@@ -4670,22 +4681,222 @@ TEST_CASE("WorldBroadcaster: baseline tick forces full entries", "[world_broadca
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.setBaselineInterval(2); // baseline at ticks 0, 2, 4...
     broadcaster.onConnect(0u);
 
-    // Tick 1: new entities → full entries
-    broadcaster.onTick(1.0 / 60.0, 1u);
-    clearSnapshots(net);
+    // No ack: the peer's identity is unconfirmed, so the record is re-sent full every tick (loss
+    // recovery — whatever snapshot the client first receives carries the full).
+    for (uint64_t tick = 1; tick <= 5; ++tick) {
+        clearSnapshots(net);
+        broadcaster.onTick(1.0 / 60.0, tick);
+        auto snaps = snapshotsFor(net, 0);
+        REQUIRE(!snaps.empty());
+        CHECK(fullRecordCount(snaps[0]) >= 1u);
+        CHECK(deltaRecordCount(snaps[0]) == 0u);
+    }
 
-    // Tick 2: baseline (2 % 2 == 0) → known-gens cleared → full entries again
+    // The client acks tick 5; subsequent ticks converge to deltas.
+    ackTick(broadcaster, 0u, 5u, 1u);
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 6u);
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(!snaps.empty());
+    CHECK(fullRecordCount(snaps[0]) == 0u);
+    CHECK(deltaRecordCount(snaps[0]) >= 1u);
+}
+
+TEST_CASE("WorldBroadcaster: a fresh peer is sent full records for all entities until first ack",
+          "[world_broadcaster][delta]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    for (int i = 0; i < 5; ++i) {
+        fl::EntityTransform t{};
+        t.pos[0] = 100.0 + i * 10.0;
+        t.pos[1] = 500.0;
+        em.spawn("builtin:debug-entity", t);
+    }
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    // ackedTick == 0 (no ack yet): every visible entity bootstraps as a full record.
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    auto snaps1 = snapshotsFor(net, 0);
+    REQUIRE(!snaps1.empty());
+    CHECK(deltaRecordCount(snaps1[0]) == 0u);
+    const uint16_t fullsTick1 = fullRecordCount(snaps1[0]);
+    CHECK(fullsTick1 >= 5u);
+
+    // After acking tick 1, the same set downgrades to deltas.
+    ackTick(broadcaster, 0u, 1u, 1u);
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    auto snaps2 = snapshotsFor(net, 0);
+    REQUIRE(!snaps2.empty());
+    CHECK(fullRecordCount(snaps2[0]) == 0u);
+    CHECK(deltaRecordCount(snaps2[0]) >= 5u);
+}
+
+TEST_CASE("WorldBroadcaster: a heartbeat-only client still acks and downgrades to delta",
+          "[world_broadcaster][delta]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    REQUIRE(fullRecordCount(snapshotsFor(net, 0).back()) >= 1u);
+
+    // Ack tick 1 via a heartbeat (no MsgClientInput).
+    fl::MsgHeartbeat hb{};
+    hb.tickIndex = 1u;
+    broadcaster.onReceive(0u, &hb, sizeof(hb));
+
+    clearSnapshots(net);
     broadcaster.onTick(1.0 / 60.0, 2u);
     auto snaps = snapshotsFor(net, 0);
     REQUIRE(!snaps.empty());
-    CHECK(fullRecordCount(snaps[0]) >= 1u);
-    CHECK(deltaRecordCount(snaps[0]) == 0u);
+    CHECK(fullRecordCount(snaps[0]) == 0u);
+    CHECK(deltaRecordCount(snaps[0]) >= 1u);
 }
 
-TEST_CASE("WorldBroadcaster: entity gen change forces full entry on non-baseline tick", "[world_broadcaster][delta]") {
+TEST_CASE("WorldBroadcaster: a future-tick ack is clamped to the present and cannot pre-confirm",
+          "[world_broadcaster][delta]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    // Tick 1, then the client claims to have acked a far-future tick (9999). Clamped to the current
+    // tick (1), it cannot pre-confirm an entity the server has not even sent yet.
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    ackTick(broadcaster, 0u, 9999u, 1u);
+
+    // A new entity first appears at tick 2 (full streak starts at tick 2 > the clamped ack of 1).
+    fl::EntityTransform t{};
+    t.pos[1] = 500.0;
+    const uint32_t newIdx = em.spawn("builtin:debug-entity", t).index;
+
+    auto recordFor = [&](const std::vector<uint8_t>& pkt, uint32_t idx) -> std::optional<DecodedEntity> {
+        for (const auto& d : decodeEntities(pkt))
+            if (d.entityIdx == idx)
+                return d;
+        return std::nullopt;
+    };
+
+    broadcaster.onTick(1.0 / 60.0, 2u); // new entity → full (first sight)
+    REQUIRE(recordFor(snapshotsFor(net, 0).back(), newIdx).value().isFull);
+
+    // Tick 3 (no new ack): had the future ack NOT been clamped, ackedTick would be 9999 and the entity
+    // would wrongly drop to a delta. Clamped, ackedTick is 1 < its streak start (2), so it stays full.
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 3u);
+    auto rec3 = recordFor(snapshotsFor(net, 0).back(), newIdx);
+    REQUIRE(rec3.has_value());
+    CHECK(rec3->isFull);
+}
+
+TEST_CASE("WorldBroadcaster: a dropped full keeps re-sending full until a later tick is acked",
+          "[world_broadcaster][delta]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    // Ticks 1-3 sent but the client's acks stall at 0 (e.g. the full packets were lost): every tick
+    // re-sends a full so the first packet the client does receive carries the identity.
+    for (uint64_t tick = 1; tick <= 3; ++tick) {
+        clearSnapshots(net);
+        broadcaster.onTick(1.0 / 60.0, tick);
+        CHECK(fullRecordCount(snapshotsFor(net, 0).back()) >= 1u);
+    }
+
+    // The client finally receives and acks tick 3: the contiguous full streak started at tick 1,
+    // and 3 >= 1, so it converges to deltas.
+    ackTick(broadcaster, 0u, 3u, 1u);
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 4u);
+    CHECK(fullRecordCount(snapshotsFor(net, 0).back()) == 0u);
+    CHECK(deltaRecordCount(snapshotsFor(net, 0).back()) >= 1u);
+}
+
+TEST_CASE("WorldBroadcaster: a deferral restarts the full streak so an ack of the withheld tick cannot confirm",
+          "[world_broadcaster][delta][budget]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    // Two far entities competing for a one-extra-record budget so the scheduler admits one and defers
+    // the other each tick (the peer's own entity is always admitted first).
+    for (int i = 0; i < 2; ++i) {
+        fl::EntityTransform t{};
+        t.pos[0] = 5000.0 + i * 10.0;
+        t.pos[1] = 500.0;
+        em.spawn("builtin:debug-entity", t);
+    }
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setDrawDistance(200.f);
+    // Budget must clear the fixed header+TLV overhead (~72 B) plus the peer's own record, leaving room
+    // for exactly one of the two far records — so one far entity is deferred each tick.
+    broadcaster.setSnapshotBudget(140u);
+    broadcaster.onConnect(0u);
+
+    auto farIdxIn = [&](const std::vector<uint8_t>& pkt) -> std::optional<uint32_t> {
+        for (const auto& d : decodeEntities(pkt))
+            if (d.pos[0] > 4000.0) // a far entity (not the peer's own, which is near origin)
+                return d.entityIdx;
+        return std::nullopt;
+    };
+    auto recordFor = [&](const std::vector<uint8_t>& pkt, uint32_t idx) -> std::optional<DecodedEntity> {
+        for (const auto& d : decodeEntities(pkt))
+            if (d.entityIdx == idx)
+                return d;
+        return std::nullopt;
+    };
+
+    // Tick 1: one far entity X is sent (full), the other is deferred.
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    auto x = farIdxIn(snapshotsFor(net, 0).back());
+    REQUIRE(x.has_value());
+    REQUIRE(recordFor(snapshotsFor(net, 0).back(), *x)->isFull);
+
+    // Tick 2: X is deferred (the other far entity, higher recency, takes the slot). X is absent.
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    REQUIRE_FALSE(recordFor(snapshotsFor(net, 0).back(), *x).has_value());
+
+    // The client acks tick 2 (which did NOT contain X) — this models the client having dropped tick 1
+    // (X's full) and only received tick 2. A naive "delta if fullStreakTick <= ackedTick" would now
+    // mis-send X as an undecodable delta; the deferral guard pushed X's streak start past tick 2.
+    ackTick(broadcaster, 0u, 2u, 1u);
+
+    // Tick 3: X reappears and MUST be a full record (the client never learned it).
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 3u);
+    auto xRec = recordFor(snapshotsFor(net, 0).back(), *x);
+    REQUIRE(xRec.has_value());
+    CHECK(xRec->isFull);
+}
+
+TEST_CASE("WorldBroadcaster: entity gen change forces a full entry", "[world_broadcaster][delta]") {
     MockLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
@@ -4699,11 +4910,11 @@ TEST_CASE("WorldBroadcaster: entity gen change forces full entry on non-baseline
     const uint32_t slotIdx = id1.index;
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.setBaselineInterval(1000); // no baseline for a long time
     broadcaster.onConnect(0u);
 
     // Tick 1: entity appears as full entry, gen is cached
     broadcaster.onTick(1.0 / 60.0, 1u);
+    ackTick(broadcaster, 0u, 1u, 1u);
     clearSnapshots(net);
 
     // Kill the entity and spawn a new one — new entity may reuse the same pool slot with a new gen
@@ -4735,11 +4946,11 @@ TEST_CASE("WorldBroadcaster: reconnect after disconnect starts with fresh known-
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.setBaselineInterval(1000);
     broadcaster.onConnect(0u);
 
-    // Tick 1: entity known, cached
+    // Tick 1: entity known, cached; client acks it
     broadcaster.onTick(1.0 / 60.0, 1u);
+    ackTick(broadcaster, 0u, 1u, 1u);
     clearSnapshots(net);
 
     // Tick 2: entity should be update entry
@@ -4751,7 +4962,7 @@ TEST_CASE("WorldBroadcaster: reconnect after disconnect starts with fresh known-
     }
     clearSnapshots(net);
 
-    // Disconnect clears knownGens; reconnect gives fresh state
+    // Disconnect clears knownGens and ackedTick; reconnect gives fresh state
     broadcaster.onDisconnect(0u);
     broadcaster.onConnect(0u); // new peer gets peerId=0 again (TrackingNetwork reuses it)
 
@@ -4771,7 +4982,6 @@ TEST_CASE("WorldBroadcaster: totalEntityCount matches buffer content", "[world_b
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.setBaselineInterval(1000);
     broadcaster.onConnect(0u);
 
     // Tick 1 → full entries
@@ -5955,8 +6165,7 @@ TEST_CASE("WorldBroadcaster: starved entity eventually included under a tight bu
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setDrawDistance(200.f);
-    broadcaster.setSnapshotBudget(160u);      // only a few records per tick
-    broadcaster.setBaselineInterval(100000u); // disable baseline churn for this test
+    broadcaster.setSnapshotBudget(160u); // only a few records per tick
     broadcaster.onConnect(0u);
 
     // The farthest entity (highest idx) starts low priority; over enough ticks its recency term must
@@ -6062,10 +6271,9 @@ TEST_CASE("WorldBroadcaster: re-entry after retention gap forces a full record",
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setDrawDistance(200.f);
-    broadcaster.setBaselineInterval(100000u); // isolate the retention rule from baseline churn
     broadcaster.onConnect(0u);
 
-    // Tick 1: full record (first sight). Then ticks where it stays known → deltas.
+    // Tick 1: full record (first sight). After the client acks it, ticks where it stays known → deltas.
     broadcaster.onTick(1.0 / 60.0, 1u);
     auto isFullFor = [&](const std::vector<uint8_t>& pkt) {
         for (const auto& d : decodeEntities(pkt))
@@ -6075,9 +6283,10 @@ TEST_CASE("WorldBroadcaster: re-entry after retention gap forces a full record",
     };
     REQUIRE(isFullFor(snapshotsFor(net, 0).back())); // first sight = full
 
+    ackTick(broadcaster, 0u, 1u, 1u);
     clearSnapshots(net);
     broadcaster.onTick(1.0 / 60.0, 2u);
-    CHECK_FALSE(isFullFor(snapshotsFor(net, 0).back())); // known → delta
+    CHECK_FALSE(isFullFor(snapshotsFor(net, 0).back())); // known + acked → delta
 
     // Jump the tick index far past kSnapshotRetentionTicks since lastSentTick (=2): the entity is
     // re-sent as a full record because the client may have evicted it.

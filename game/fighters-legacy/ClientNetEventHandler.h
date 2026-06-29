@@ -135,7 +135,9 @@ struct ClientNetEventHandler : INetworkEventHandler {
 
     // Heartbeat / RTT state.
     const fl::IClock* m_clock{&fl::SystemClock::instance()};
-    uint64_t m_lastSnapshotTick{0}; // last received WorldSnapshot tickIndex
+    uint64_t m_lastSnapshotTick{0}; // highest processed WorldSnapshot tickIndex (also the server ack)
+    bool m_haveSnapshot{false};     // false until the first WorldSnapshot is processed (so the
+                                    // legitimate first snapshot at tickIndex 0 is not dropped as stale)
     uint32_t m_lastRttMs{0};        // ms from last MsgPeerDelay; 0 = not yet received
     bool m_rttValid{false};         // true once first MsgPeerDelay with delayTicks > 0 arrives
     std::chrono::steady_clock::time_point m_lastHeartbeatSentAt{}; // throttle to 1 Hz

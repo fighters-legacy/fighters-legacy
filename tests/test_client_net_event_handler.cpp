@@ -324,6 +324,58 @@ TEST_CASE("ClientNetEventHandler: MsgWorldSnapshot abEngaged and engineFailFlags
     CHECK(snap.entries[0].omega.z == Catch::Approx(0.3f).margin(0.02));
 }
 
+TEST_CASE("ClientNetEventHandler: out-of-order WorldSnapshot is ignored", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // Newer snapshot (tick 5) places the entity at x=500; a delayed older snapshot (tick 3) would
+    // place it at x=100. The older one must be dropped so it can't clobber newer state, keeping the
+    // tick echoed to the server (the ack) monotonic.
+    TestRec newer;
+    newer.idx = 0u;
+    newer.gen = 1u;
+    newer.isFull = true;
+    newer.pos[0] = 500.0;
+    auto pktNew = buildSnapshotPkt(5u, {newer});
+
+    TestRec older = newer;
+    older.pos[0] = 100.0;
+    auto pktOld = buildSnapshotPkt(3u, {older});
+
+    handler.onReceive(0u, pktNew.data(), pktNew.size());
+    handler.onReceive(0u, pktOld.data(), pktOld.size());
+
+    bridge.tryAdvance();
+    const auto& snap = bridge.current();
+    REQUIRE(snap.entries.size() == 1u);
+    CHECK(snap.tickIndex == 5u); // older tick 3 was not applied
+    CHECK(snap.entries[0].position.x == Catch::Approx(500.0).margin(fl::kPosStepM));
+}
+
+TEST_CASE("ClientNetEventHandler: first WorldSnapshot at tick 0 is processed", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // The out-of-order guard must not drop the legitimate first snapshot just because its tick is 0.
+    TestRec rec;
+    rec.idx = 0u;
+    rec.gen = 1u;
+    rec.isFull = true;
+    auto pkt = buildSnapshotPkt(0u, {rec});
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    bridge.tryAdvance();
+    CHECK(bridge.current().entries.size() == 1u);
+}
+
 TEST_CASE("ClientNetEventHandler: MsgMotd honours custom motdDisplaySeconds", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;

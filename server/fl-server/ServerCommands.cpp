@@ -718,7 +718,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     // reload_config
     registry.registerCommand("reload_config",
                              "reload_config  -- re-read server.toml and apply: name (beacon), motd, motd_display_s,"
-                             " draw_distance_km, baseline_interval_ticks, snapshot_budget_bytes, jitter_buffer_depth,"
+                             " draw_distance_km, snapshot_budget_bytes, jitter_buffer_depth,"
                              " jitter_buffer_adapt_window, jitter_buffer_hysteresis, jitter_buffer_jitter_multiplier"
                              " (other fields require restart)",
                              [ctx](std::span<std::string_view>) -> std::string {
@@ -736,19 +736,17 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                      auto newMotd = newCfg.motd;
                                      auto newMotdDisplayS = newCfg.motdDisplayS;
                                      auto newDraw = static_cast<float>(newCfg.drawDistanceKm);
-                                     auto newBaseline = newCfg.baselineIntervalTicks;
                                      auto newSnapshotBudget = newCfg.snapshotBudgetBytes;
                                      auto newJitterDepth = newCfg.jitterBufferDepth;
                                      auto newAdaptWindow = newCfg.jitterAdaptWindow;
                                      auto newHysteresis = newCfg.jitterHysteresis;
                                      auto newMultiplier = newCfg.jitterMultiplier;
                                      ctx.sim.gameLoop->enqueueSimCallback(
-                                         [ctx, newMotd, newMotdDisplayS, newDraw, newBaseline, newSnapshotBudget,
-                                          newJitterDepth, newAdaptWindow, newHysteresis, newMultiplier]() mutable {
+                                         [ctx, newMotd, newMotdDisplayS, newDraw, newSnapshotBudget, newJitterDepth,
+                                          newAdaptWindow, newHysteresis, newMultiplier]() mutable {
                                              ctx.sim.broadcaster->setMotd(std::move(newMotd));
                                              ctx.sim.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
                                              ctx.sim.broadcaster->setDrawDistance(newDraw);
-                                             ctx.sim.broadcaster->setBaselineInterval(newBaseline);
                                              ctx.sim.broadcaster->setSnapshotBudget(newSnapshotBudget);
                                              ctx.sim.broadcaster->setJitterBufferDepth(newJitterDepth);
                                              ctx.sim.broadcaster->setJitterAdaptWindow(newAdaptWindow);
@@ -759,7 +757,6 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                  return "reload_config: name=\"" + newCfg.name + "\"  motd=\"" + newCfg.motd +
                                         "\"  motd_display_s=" + std::to_string(newCfg.motdDisplayS) +
                                         "  draw_distance_km=" + std::to_string(newCfg.drawDistanceKm) +
-                                        "  baseline_interval_ticks=" + std::to_string(newCfg.baselineIntervalTicks) +
                                         "  snapshot_budget_bytes=" + std::to_string(newCfg.snapshotBudgetBytes) +
                                         "  jitter_buffer_depth=" + std::to_string(newCfg.jitterBufferDepth) +
                                         "  jitter_buffer_adapt_window=" + std::to_string(newCfg.jitterAdaptWindow) +

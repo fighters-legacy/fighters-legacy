@@ -44,6 +44,10 @@ struct PeerInputState {
     // 8-byte fields first to avoid padding.
     uint64_t lastActivityTick{0}; // tick of last MsgClientInput or MsgHeartbeat; set in onConnect
     uint64_t lastInputTick{0};    // m_currentTick at last accepted MsgClientInput (inter-arrival jitter timing)
+    uint64_t ackedTick{0};        // highest WorldSnapshot tick this peer has acknowledged (echoed in
+                                  // MsgClientInput/MsgHeartbeat tickIndex; clamped to m_currentTick).
+                                  // Drives client-acked delta baselines: an entity is sent full until
+                                  // the client acks the tick its full streak started on.
     // 4-byte fields next.
     float throttle{0.f}; // last drained value from jitterBuffer (effective input this tick)
     float elevator{0.f}; // last drained value
@@ -92,23 +96,22 @@ struct ControlledEntity {
 // instead of remembering six separate "call before gameLoop.start()" setters. The hot-reload setters
 // (setMotd, setBannedAddresses, setAllowedAddresses, ...) remain available for runtime changes.
 struct WorldBroadcasterConfig {
-    int connectRateLimit{5};             // max connects per window per IP
-    int connectRateWindowS{10};          // sliding-window length (seconds)
-    int floodMultiplier{3};              // MsgClientInput flood threshold multiplier
-    int maxConnectionsPerIp{0};          // simultaneous connections per IP; 0 = unlimited
-    int adminAuthMaxFailures{5};         // wrong operator passwords before per-IP lockout
-    int adminAuthLockoutSeconds{300};    // lockout duration (seconds)
-    std::string motd;                    // empty = no MOTD
-    uint16_t motdDisplaySeconds{0};      // 0 = client default
-    std::string operatorPassword;        // empty = network admin channel disabled
-    int idleTimeoutS{0};                 // 0 = disabled; seconds of peer inactivity before disconnect
-    float drawDistanceKm{200.f};         // per-peer interest radius; 0 = degenerate (empty snapshots)
-    uint32_t baselineIntervalTicks{120}; // force full quantized records every N ticks for loss recovery
-    uint32_t snapshotBudgetBytes{0};     // per-client snapshot byte budget; 0 = unlimited (#516)
-    uint32_t jitterBufferMaxDepth{4};    // per-peer input queue depth; [1, JitterBuffer::kHardMaxDepth]
-    uint32_t jitterAdaptWindow{60};      // EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
-    uint32_t jitterHysteresis{2};        // dead-band in ticks before resize fires; [0, 8]
-    float jitterMultiplier{2.0f};        // k factor: depth = ceil(ewma_delay + k*jitter); [0.0, 8.0]
+    int connectRateLimit{5};          // max connects per window per IP
+    int connectRateWindowS{10};       // sliding-window length (seconds)
+    int floodMultiplier{3};           // MsgClientInput flood threshold multiplier
+    int maxConnectionsPerIp{0};       // simultaneous connections per IP; 0 = unlimited
+    int adminAuthMaxFailures{5};      // wrong operator passwords before per-IP lockout
+    int adminAuthLockoutSeconds{300}; // lockout duration (seconds)
+    std::string motd;                 // empty = no MOTD
+    uint16_t motdDisplaySeconds{0};   // 0 = client default
+    std::string operatorPassword;     // empty = network admin channel disabled
+    int idleTimeoutS{0};              // 0 = disabled; seconds of peer inactivity before disconnect
+    float drawDistanceKm{200.f};      // per-peer interest radius; 0 = degenerate (empty snapshots)
+    uint32_t snapshotBudgetBytes{0};  // per-client snapshot byte budget; 0 = unlimited (#516)
+    uint32_t jitterBufferMaxDepth{4}; // per-peer input queue depth; [1, JitterBuffer::kHardMaxDepth]
+    uint32_t jitterAdaptWindow{60};   // EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
+    uint32_t jitterHysteresis{2};     // dead-band in ticks before resize fires; [0, 8]
+    float jitterMultiplier{2.0f};     // k factor: depth = ceil(ewma_delay + k*jitter); [0.0, 8.0]
 };
 
 // Wraps EntityManager to provide a server-side ISimUpdate that:
@@ -327,12 +330,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Call before gameLoop.start() or via enqueueSimCallback for hot-reload (reload_config).
     void setDrawDistance(float km) noexcept;
 
-    // Set the interval between full-snapshot baseline ticks (in sim ticks). On baseline ticks the
-    // per-peer known-gen set is cleared, forcing full quantized records for all visible
-    // entities — provides UDP packet-loss recovery. Default = 120 (2 s at 60 Hz). Range [1, +∞).
-    // Call before gameLoop.start() or via enqueueSimCallback.
-    void setBaselineInterval(uint32_t ticks) noexcept;
-
     // Set the per-client snapshot byte budget (#516). 0 = unlimited (legacy: send every visible
     // entity). When non-zero, each peer's snapshot is capped at roughly this many bytes; the scheduler
     // ranks visible entities by relevance (distance/threat/recency) and sends the highest-priority set
@@ -513,8 +510,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     TickProfiler m_tickProfiler;
 
     // Interest management + delta compression state (sim-thread only).
-    double m_drawDistanceM{200'000.0};      // precomputed from drawDistanceKm × 1000; 200 km default
-    uint64_t m_baselineIntervalTicks{120u}; // ticks between full-snapshot baselines for loss recovery
+    double m_drawDistanceM{200'000.0}; // precomputed from drawDistanceKm × 1000; 200 km default
     // Per-client snapshot byte budget (#516): 0 = unlimited (send every visible entity, legacy
     // behaviour used by unit tests). fl-server sets a real budget; atomic so reload_config can mutate
     // it (the read happens on the sim thread). The scheduler ranks visible entities by relevance and
@@ -527,12 +523,22 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     uint32_t m_jitterHysteresis{2};   // dead-band ticks before resize fires
     float m_jitterMultiplier{2.0f};   // k factor in depth = ceil(ewma + k*jitter)
 
-    // Per-peer entity tracking: peerId → (entityIdx → {last-sent gen, last-sent tick}). The gen drives
-    // full-vs-delta selection; lastSentTick drives the scheduler's recency term and the
-    // force-full-on-re-entry rule. Cleared at each baseline tick; erased in full on peer disconnect.
+    // Per-peer entity tracking: peerId → (entityIdx → record). Drives client-acked delta baselines:
+    //   * gen           — full vs delta on respawn (generation change forces a full).
+    //   * lastSentTick  — scheduler recency term + the kSnapshotRetentionTicks force-full (the
+    //                     interest-out / client-evicted re-entry case) + the knownGens GC prune.
+    //   * fullStreakTick— tick the CURRENT contiguous run of full records started on (0 = never sent
+    //                     a full). The entity is sent full every tick until the peer acks a tick
+    //                     >= fullStreakTick; freezing the streak start (rather than advancing it each
+    //                     tick) lets it converge to deltas in one RTT instead of re-fulling forever.
+    //   * lastWasFull   — whether the last record sent for this entity was a full (detects a
+    //                     contiguous full run together with lastSentTick).
+    // Erased in full on peer disconnect; pruned per-tick once stale past kSnapshotRetentionTicks.
     struct PeerEntityRec {
         uint16_t gen{0};
         uint64_t lastSentTick{0};
+        uint64_t fullStreakTick{0};
+        bool lastWasFull{false};
     };
     std::unordered_map<uint32_t, std::unordered_map<uint32_t, PeerEntityRec>> m_peerKnownGens;
 

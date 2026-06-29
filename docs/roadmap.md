@@ -35,7 +35,7 @@ by dependency, not by phase boundary:
 | Epic | Theme | Phase |
 |---|---|---|
 | A | Server simulation scalability (data-parallel job system, tick budget) | 3→4 |
-| B | Network bandwidth & snapshot scaling (quantization ✓ #515, 3D interest ✓ #402, priority/budget ✓ #516, acked baselines #517, congestion #518) | 3→4 |
+| B | Network bandwidth & snapshot scaling (quantization ✓ #515, 3D interest ✓ #402, priority/budget ✓ #516, acked baselines ✓ #517, congestion #518) | 3→4 |
 | I | Load-testing / bot-swarm harness + 128-client scale gate | 3→4 |
 | L | Network transport replacement (enet6 → GameNetworkingSockets behind `INetwork`) | 3→4 (transport optimization) |
 | E | Multiplayer gameplay framework (game modes, teams, scoring, reconnect, spectator) | 4 |

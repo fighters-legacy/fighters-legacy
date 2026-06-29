@@ -68,7 +68,6 @@ autosave_interval_s = 300
 time_scale         = 10.0        # game seconds per real second; 10 = full day/night ≈ 2.4 real hours
 # planet_radius_m         = 6371000  # planet sphere radius (m); Earth default
 # draw_distance_km        = 200.0    # per-peer interest management radius (km); [1, 100000]
-# baseline_interval_ticks = 120      # full-snapshot baseline interval for delta recovery; [1, 3600]
 # snapshot_budget_bytes   = 1200     # per-client snapshot byte budget; 0 = unlimited; [0, 65535]
 # jitter_buffer_depth           = 4    # per-peer input queue depth (ticks); global cap for adaptive sizing; [1, 32]
 # jitter_buffer_adapt_window    = 60   # EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
@@ -377,13 +376,11 @@ Planet sphere radius in metres. The engine always uses spherical-Earth physics a
 
 Per-peer interest management radius in kilometres. Only entities within this XZ-plane radius of a peer's own entity are included in that peer's `MsgWorldSnapshot`. The default of 200 km covers any current Phase 2 theater. Out-of-range values are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
 
-### `baseline_interval_ticks`
-
-| Type | Default | Range |
-|---|---|---|
-| integer | `120` | `[1, 3600]` |
-
-Interval in sim ticks between full-snapshot baselines. On baseline ticks all visible entities receive a full record regardless of known-entity state, providing UDP packet-loss recovery. At 60 Hz: `120` = 2 s recovery window. Smaller values reduce recovery time but increase bandwidth. Out-of-range values are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
+> **Delta-baseline recovery is automatic (client-acked, #517).** There is no baseline-interval knob.
+> The server keys full-vs-delta off the last snapshot tick each client echoes in
+> `MsgClientInput`/`MsgHeartbeat`: an entity is re-sent as a full record every tick until that client
+> acknowledges it, then it converges to deltas. A dropped full recovers in ~1 RTT, and there is no
+> periodic cross-peer full-resync spike. See [network-protocol.md](network-protocol.md) → *Scaling to 128+*.
 
 ### `snapshot_budget_bytes`
 
@@ -933,7 +930,7 @@ process.
 | `spawn` | `<type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn a registered entity type at the given world position; optionally attach an AI controller. C++ behaviors: `loiter [cx cy cz [radius_m [alt_m [throttle [cw\|ccw]]]]]`, `waypoint x y z [x y z ...] [--loop]`, `pursuit <entityIdx>`, `evade <entityIdx>`, `break <entityIdx> [rollDuration]`, `lead <entityIdx> [navGain]`, `lag <entityIdx> [lagFraction]`, `immelmann [pullDur] [rollDur]`, `split_s [rollDur] [pullDur]`, `high_yo_yo <entityIdx> [climbDur] [reacquireDur]`, `low_yo_yo <entityIdx> [diveDur] [pullDur]`. Lua behavior: `lua <script_name>` (loads `ai/<script_name>.lua` from content packs; see `docs/modding/ai.md`). If the entity type's TOML sets `ai_script`, that script is attached automatically when `--ai` is omitted. |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
 | `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's game console to teleport the player entity |
-| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `baseline_interval_ticks`, `snapshot_budget_bytes`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier` (all take effect on the next sim tick for all connected peers) |
+| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `snapshot_budget_bytes`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier` (all take effect on the next sim tick for all connected peers) |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
 | `pause` | — | Pause the simulation — ticks stop advancing; network connections remain active. In single-player the game client sends this automatically when the pause menu is opened. |

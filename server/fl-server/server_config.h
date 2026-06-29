@@ -36,16 +36,15 @@ struct ServerConfig {
     bool persistent = false;
     std::string worldSavePath = "world.sav";
     int worldAutosaveIntervalS = 300;
-    int entitySoftCap = 0;                // 0 = unlimited; server-enforced object count limit
-    double timeScale = 10.0;              // game seconds per real second; 10 = full day/night ~2.4 real hrs
-    double planetRadiusM = 6'371'000.0;   // sphere radius (m); Earth default
-    double drawDistanceKm = 200.0;        // per-peer interest radius (km); [1, 100000]
-    uint32_t baselineIntervalTicks = 120; // full-snapshot baseline interval (sim ticks); [1, 3600]
-    uint32_t snapshotBudgetBytes = 1200;  // per-client snapshot byte budget; 0 = unlimited; [0, 65535] (#516)
-    uint32_t jitterBufferDepth = 4;       // per-peer input queue depth (ticks); [1, 32]
-    uint32_t jitterAdaptWindow = 60;      // EWMA smoothing window in ticks; [10, 3600]
-    uint32_t jitterHysteresis = 2;        // resize dead-band in ticks; [0, 8]
-    float jitterMultiplier = 2.0f;        // k factor: depth = ceil(ewma + k*jitter); [0.0, 8.0]
+    int entitySoftCap = 0;               // 0 = unlimited; server-enforced object count limit
+    double timeScale = 10.0;             // game seconds per real second; 10 = full day/night ~2.4 real hrs
+    double planetRadiusM = 6'371'000.0;  // sphere radius (m); Earth default
+    double drawDistanceKm = 200.0;       // per-peer interest radius (km); [1, 100000]
+    uint32_t snapshotBudgetBytes = 1200; // per-client snapshot byte budget; 0 = unlimited; [0, 65535] (#516)
+    uint32_t jitterBufferDepth = 4;      // per-peer input queue depth (ticks); [1, 32]
+    uint32_t jitterAdaptWindow = 60;     // EWMA smoothing window in ticks; [10, 3600]
+    uint32_t jitterHysteresis = 2;       // resize dead-band in ticks; [0, 8]
+    float jitterMultiplier = 2.0f;       // k factor: depth = ceil(ewma + k*jitter); [0.0, 8.0]
     // Sim-tick CPU parallelism: total worker threads for the per-entity AI + integrate passes,
     // including the sim thread. 0 = auto (hardware_concurrency), 1 = serial. CPU knob, NOT a
     // capacity guarantee. CLI --sim-worker-threads overrides this. [0, 256]

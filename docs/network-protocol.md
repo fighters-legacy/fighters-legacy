@@ -155,7 +155,7 @@ delay all subsequent inputs behind the ACK round-trip.
 | 1 | 1 | `buttons` | `uint8_t` | Bit 0 = weaponTrigger, bit 1 = afterburner |
 | 2 | 2 | `protocolVersion` | `uint16_t` | Client's `kProtocolVersion`; server discards packet and logs a warning on mismatch |
 | 4 | 4 | `seqNum` | `uint32_t` | Monotonically increasing per-client sequence counter; server applies a half-window comparison to discard out-of-order and duplicate packets |
-| 8 | 8 | `tickIndex` | `uint64_t` | Server `tickIndex` from the client's last received `MsgWorldSnapshot`; server computes `estimatedDelayTicks = currentTick − tickIndex` for diagnostics |
+| 8 | 8 | `tickIndex` | `uint64_t` | Server `tickIndex` from the client's last received `MsgWorldSnapshot`. Server computes `estimatedDelayTicks = currentTick − tickIndex` for diagnostics, and also uses it as the **snapshot ack** (clamped to the current tick, kept as a monotonic high-water mark) that drives client-acked delta baselines — see *Scaling to 128+* |
 | 16 | 4 | `throttle` | `float` | `[0.0, 1.0]` |
 | 20 | 4 | `elevator` | `float` | `[-1.0, +1.0]` nose-up positive |
 | 24 | 4 | `aileron` | `float` | `[-1.0, +1.0]` right-roll positive |
@@ -576,11 +576,11 @@ entities within `draw_distance_km` of the peer's own entity position (via
 `MsgWeatherState` and `MsgServerNotice` remain global broadcasts.
 
 **Delta compression**: each record carries a `full` bit. A `full` record (typeIndex + generation)
-is sent the first time a peer sees an entity, on generation change, on the periodic baseline
-tick (`baseline_interval_ticks`, default 120 = 2 s at 60 Hz, for UDP packet-loss recovery), and when
-the entity has not been sent to that peer within `kSnapshotRetentionTicks` (the budget-deferral
-re-entry case, #516); every other tick the entity is a delta record that omits typeIndex (and the
-generation when unchanged).
+is sent the first time a peer sees an entity, on generation change, until the client **acknowledges**
+the full (client-acked delta baselines, #517 — see *Scaling to 128+*), and when the entity has not
+been sent to that peer within `kSnapshotRetentionTicks` (the budget-deferral re-entry case, #516);
+every other tick the entity is a delta record that omits typeIndex (and the generation when
+unchanged).
 
 **Priority/budget cap (#516)**: with `[world] snapshot_budget_bytes` set (default 1200, 0 = unlimited),
 the per-peer record set is no longer "everything within `draw_distance_km`" — it is the
@@ -588,8 +588,9 @@ highest-relevance subset that fits the budget (see *Scaling to 128+* above), wit
 later ticks. The client retains deferred entities and is told of true removals via the `SnapshotDespawn`
 TLV.
 
-Configure via `[world] draw_distance_km`, `[world] baseline_interval_ticks`, and
-`[world] snapshot_budget_bytes` in `server.toml`; all hot-reloadable via `reload_config`.
+Configure via `[world] draw_distance_km` and `[world] snapshot_budget_bytes` in `server.toml`; both
+hot-reloadable via `reload_config`. (Delta-baseline recovery is automatic and client-acked — see
+*Scaling to 128+* below — so there is no baseline-interval knob.)
 
 ### Position precision
 
@@ -630,9 +631,16 @@ this section are measured empirically by the `bot_swarm` load generator — see
   TLV (confirmed kill/removal) or after `kSnapshotRetentionTicks` (~3 s) with no update (the
   interest-out / lost-despawn backstop). The server force-sends a *full* record when it has not sent a
   known entity within that window, so a returning entity is decodable after the client evicted it.
-- **Client-acked delta baselines (Epic B, #517 — planned).** Replace the fixed
-  `baseline_interval_ticks` re-sync with client-acknowledged baselines, so full re-sends happen
-  only when a client actually needs recovery.
+- **Client-acked delta baselines (Epic B, #517 — landed).** Full-vs-delta is driven by what each
+  client has acknowledged, not a fixed timer. The client already echoes the last snapshot tick it
+  processed in `MsgClientInput`/`MsgHeartbeat` (`tickIndex`); the server treats that as the snapshot
+  **ack** (clamped to the present, monotonic). An entity is re-sent as a *full* record every tick
+  until the peer acks the tick its full streak started on, then it converges to *deltas*. This
+  removes the globally-synchronized periodic full-resync spike (the former `baseline_interval_ticks`
+  fired on the same tick for every peer) and recovers a dropped full in ~1 RTT instead of up to 2 s —
+  with no wire-format change. The client ignores out-of-order/duplicate snapshots so its echoed tick
+  stays a monotonic high-water mark. The per-entity `kSnapshotRetentionTicks` force-full (the
+  interest-out / client-evicted re-entry case) is retained as an ack-independent backstop.
 - **Adaptive send-rate / congestion response (Epic B, #518 — planned).**
 - **Transport replacement (Epic L).** `enet6` is being replaced (GameNetworkingSockets lean)
   behind the `INetwork` HAL for higher peer counts, built-in congestion control, and
