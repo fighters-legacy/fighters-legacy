@@ -34,6 +34,7 @@ for clustered fleets.
 | [docs/distribution.md](docs/distribution.md) | Distribution channels (incl. fl-server container/Helm/operator), monetization strategy |
 | [docs/development.md](docs/development.md) | Build prerequisites per platform (C++ engine + Go services) |
 | [docs/references.md](docs/references.md) | Technology reference index: upstream docs for every engine dependency and tool |
+| [docs/project-management.md](docs/project-management.md) | How work is managed: issue types, epics/sub-issues, labels, milestones, the Project board |
 | [GOVERNANCE.md](GOVERNANCE.md) | Decision-making, RFC process, and decision records |
 
 ### Related repositories

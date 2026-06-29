@@ -1,0 +1,53 @@
+name: Spike
+description: A time-boxed investigation that informs follow-on work
+type: Spike
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A spike is research, not a feature — it answers a question and produces a decision
+        plus follow-on issues. See [docs/project-management.md](../../docs/project-management.md).
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Primary component
+      options:
+        - engine / HAL
+        - renderer (Vulkan)
+        - audio (OpenAL)
+        - network (ENet)
+        - content system
+        - flight model
+        - ai system
+        - mission / campaign
+        - build system
+        - multiple / cross-cutting
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question to answer
+      description: What decision or unknown does this spike resolve?
+    validations:
+      required: true
+
+  - type: input
+    id: timebox
+    attributes:
+      label: Time box
+      description: How much time is allotted before reporting findings?
+      placeholder: "e.g. 2 days"
+    validations:
+      required: true
+
+  - type: textarea
+    id: deliverable
+    attributes:
+      label: Deliverable / what informs follow-on
+      description: What output (decision record, prototype, follow-on issues) does this produce?
+    validations:
+      required: true
