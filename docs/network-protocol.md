@@ -99,71 +99,48 @@ Appended N times after `MsgConnectAck` (one per registered entity type).
 | 68 | 64 | `mesh[64]` | `char[64]` | Null-terminated mesh asset name; empty = builtin tetrahedron |
 | 132 | 64 | `dmgMesh[64]` | `char[64]` | Null-terminated damage mesh; empty = none |
 
-### MsgWorldSnapshotHeader — 16 bytes
+### MsgWorldSnapshotHeader — 40 bytes
 
-Sent unreliably per-peer every sim tick (channel 1). Followed by `fullEntityCount` ×
-`MsgEntityEntry` records (new entities or baseline-tick resync), then `updateCount` ×
-`MsgEntityUpdate` records (compact state for entities the peer already knows), then the TLV
-extension block. Sized to 16 (a multiple of 8) so each trailing `MsgEntityEntry` stays
-8-aligned for in-place reads.
-
-| Offset | Size | Field | Type | Notes |
-|--------|------|-------|------|-------|
-| 0 | 1 | `msgId` | `uint8_t` | `0x02` |
-| 1 | 1 | `protocolVersion` | `uint8_t` | Server's `kProtocolVersion`; defense-in-depth echo — per-packet version stamp |
-| 2 | 2 | `fullEntityCount` | `uint16_t` | Number of `MsgEntityEntry` records that follow (new or baseline-tick entities) |
-| 4 | 2 | `updateCount` | `uint16_t` | Number of `MsgEntityUpdate` records following the full entries (compact deltas for known entities) |
-| 6 | 2 | `_reserved` | `uint16_t` | Padding so `tickIndex` is 8-aligned; always 0 |
-| 8 | 8 | `tickIndex` | `uint64_t` | Monotonically increasing server tick counter (naturally 8-aligned) |
-
-### MsgEntityEntry — 88 bytes
-
-Per-entity state appended N times after `MsgWorldSnapshotHeader`. Laid out large→small (`pos` first,
-8-aligned) and padded to 88 (a multiple of 8) so record `i` at `16 + i×88` stays 8-aligned.
+Sent unreliably per-peer every sim tick (channel 1). Followed by a **quantized, bit-packed record
+stream** of `recordCount` entity records occupying `bitstreamBytes` bytes, then the TLV extension
+block (which therefore begins at `40 + bitstreamBytes`). See
+[snapshot-quantization.md](snapshot-quantization.md) for the record bit-layout and the codec. Sized
+to 40 (a multiple of 8) so `frameOrigin[3]` is 8-aligned and the header reads in place.
 
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
-| 0 | 24 | `pos[3]` | `double[3]` | World position XYZ (metres); double for planet-scale precision; 8-aligned |
-| 24 | 12 | `vel[3]` | `float[3]` | World velocity XYZ (m/s), used for dead-reckoning |
-| 36 | 16 | `ori[4]` | `float[4]` | Orientation quaternion **`[x, y, z, w]`** wire order; GLM constructor is `(w, x, y, z)` |
-| 52 | 4 | `entityIdx` | `uint32_t` | Pool slot index |
-| 56 | 4 | `entityGen` | `uint32_t` | Generation counter (stale-handle detection) |
-| 60 | 4 | `typeIndex` | `uint32_t` | Index into entity type registry |
-| 64 | 1 | `damageLevel` | `uint8_t` | 0=Intact, 1=Minor, 2=Severe, 3=Critical |
-| 65 | 1 | `flags` | `uint8_t` | Bit 0 = playerOwned |
-| 66 | 1 | `throttle` | `uint8_t` | Actual throttle [0, 100] = 0%–100% (`FlightState::throttle_actual × 100`); 0 for non-player entities |
-| 67 | 1 | `fuelPct` | `uint8_t` | Fuel remaining [0, 100] = 0%–100% of max fuel; 0 for non-player entities |
-| 68 | 1 | `abEngaged` | `uint8_t` | `1` when afterburner physically lit (`FlightState::ab_engaged`); `0` otherwise |
-| 69 | 1 | `engineFailFlags` | `uint8_t` | Engine failure bitmask: bit `0x01` = generic thrust impairment (`damageLevel ≥ Heavy`); bit `0x02` = left-engine failure (Phase 6+); bit `0x04` = right-engine failure (Phase 6+); bit `0x08` = compressor stall (Phase 6+); bit `0x10` = flameout (Phase 6+) |
-| 70 | 2 | `reserved[2]` | `uint8_t[2]` | Padding (layout stability); always 0 |
-| 72 | 12 | `omega[3]` | `float[3]` | Body-frame angular rates p, q, r (rad/s); used by client-side prediction to seed the local `FlightIntegrator` at reconciliation time |
-| 84 | 4 | `reserved2[4]` | `uint8_t[4]` | Pad to 88 (multiple of 8 for record-alignment); always 0 |
+| 0 | 1 | `msgId` | `uint8_t` | `0x02` (byte-0 dispatch position unchanged) |
+| 1 | 1 | `protocolVersion` | `uint8_t` | Server's `kProtocolVersion`; per-packet version stamp |
+| 2 | 2 | `recordCount` | `uint16_t` | Number of quantized entity records in the bitstream |
+| 4 | 4 | `bitstreamBytes` | `uint32_t` | Byte length of the bitstream after this header; the TLV block starts at `40 + bitstreamBytes` |
+| 8 | 8 | `tickIndex` | `uint64_t` | Monotonically increasing server tick counter (8-aligned) |
+| 16 | 24 | `frameOrigin[3]` | `double[3]` | Per-snapshot position-quantization origin = the receiving peer's world position (8-aligned); record positions are encoded relative to it |
 
-### MsgEntityUpdate — 64 bytes
+### Quantized entity record (bit-packed)
 
-Compact per-tick state for entities already known to the receiving peer. Appended in the update
-section of `MsgWorldSnapshot` (after `fullEntityCount × MsgEntityEntry`). Uses `float` positions
-(absolute world coordinates; precision ~1.6 cm at 200 km from origin — sufficient for rendering).
-Omits static fields (`typeIndex`, padding) that the client caches from the last full
-`MsgEntityEntry` for this entity. `alignof(MsgEntityUpdate) == 4`; 64 is a multiple of 4.
+The entity body is **not** a fixed struct array — it is a single MSB-first bitstream of
+`recordCount` records produced by `engine/net/SnapshotCodec`. Each record (one entity) is laid out
+as below; full field semantics and the quantization constants are in
+[snapshot-quantization.md](snapshot-quantization.md). The fixed `MsgEntityEntry` (88 B) and
+`MsgEntityUpdate` (64 B) structs were removed in #515.
 
-`entityGen` is `uint16_t` (truncated from `EntityId::generation` `uint32_t`). Practical pool-slot
-reuse rate makes overflow impossible within a session.
+| Field | Bits | Notes |
+|---|---|---|
+| `idxDelta` | varint | `entityIdx − previousIdx`; records sorted by idx ascending |
+| `full` | 1 | full record (carries typeIndex + gen) vs. delta |
+| `genPresent` | 1 | generation on the wire; else client reuses its cache |
+| `omegaPresent` | 1 | angular rates present (set only for the receiving peer's own entity) |
+| `gen` | 16 | only if `genPresent`; truncated `EntityId::generation` |
+| `typeIndex` | varint | only if `full` |
+| position | 3 × 22 | signed offset from `frameOrigin`, 0.125 m resolution, ±262 km range |
+| orientation | 2 + 3 × 10 | smallest-three quaternion (dropped-component index + 3 components) |
+| velocity | 3 × 18 | ± 2000 m/s range |
+| omega | 3 × 12 | only if `omegaPresent`; ± 20 rad/s range, body-frame p,q,r |
+| byte fields | 3 + 5 + 7 + 7 + 1 + 1 | damageLevel, engineFailFlags, throttle [0–100], fuelPct [0–100], abEngaged, playerOwned |
 
-| Offset | Size | Field | Type | Notes |
-|--------|------|-------|------|-------|
-| 0 | 4 | `entityIdx` | `uint32_t` | Pool slot index (same as `MsgEntityEntry`) |
-| 4 | 2 | `entityGen` | `uint16_t` | Generation counter (truncated); mismatch vs. client cache → entity treated as new |
-| 6 | 1 | `damageLevel` | `uint8_t` | 0=Intact … 3=Critical |
-| 7 | 1 | `engineFailFlags` | `uint8_t` | `fl::kEngineFail*` bitmask (same encoding as `MsgEntityEntry`) |
-| 8 | 12 | `pos[3]` | `float[3]` | Absolute world position XYZ (metres), `float32` |
-| 20 | 12 | `vel[3]` | `float[3]` | World velocity XYZ (m/s) for dead-reckoning |
-| 32 | 16 | `ori[4]` | `float[4]` | Orientation quaternion **`[x, y, z, w]`** (same wire order as `MsgEntityEntry`) |
-| 48 | 1 | `throttle` | `uint8_t` | Actual throttle [0, 100] |
-| 49 | 1 | `fuelPct` | `uint8_t` | Fuel remaining [0, 100] |
-| 50 | 1 | `abEngaged` | `uint8_t` | `1` when afterburner physically lit |
-| 51 | 1 | `flags` | `uint8_t` | Bit 0 = playerOwned |
-| 52 | 12 | `omega[3]` | `float[3]` | Body-frame angular rates p, q, r (rad/s); used by client-side prediction |
+`engineFailFlags` bits: `0x01` generic thrust impairment (`damageLevel ≥ Severe`), `0x02` left-engine,
+`0x04` right-engine, `0x08` compressor stall, `0x10` flameout (last four Phase 6+). Orientation wire
+order is `[x, y, z, w]`; the GLM constructor is `(w, x, y, z)`.
 
 ### MsgClientInput — 48 bytes
 
@@ -473,11 +450,10 @@ any message packet. Each extension entry:
 The extension block begins at:
 - **Single-struct messages**: offset `sizeof(FixedStruct)`
 - **Array messages** (header + N records): offset `sizeof(Header) + N × sizeof(Record)`
-- **`MsgWorldSnapshot`** (two record types): offset
-  `sizeof(MsgWorldSnapshotHeader) + fullEntityCount × sizeof(MsgEntityEntry) + updateCount × sizeof(MsgEntityUpdate)`
+- **`MsgWorldSnapshot`** (quantized bitstream body): offset `sizeof(MsgWorldSnapshotHeader) + bitstreamBytes`
 
-**Backward compatibility**: old receivers that call `readMsg<T>()` or iterate records up to
-`fullEntityCount` naturally stop at the right byte count and ignore trailing extension bytes — no code
+**Backward compatibility**: old receivers that call `readMsg<T>()` or consume exactly `bitstreamBytes`
+of the record stream naturally stop at the right byte count and ignore trailing extension bytes — no code
 change is required for old receivers to remain correct. New receivers call `fl::readExtValue()` for
 known tags and skip unknown tags via their `len` field.
 
@@ -527,9 +503,8 @@ Client                              Server (fl-server sim thread)
   |                                     |   onTick:
   |                                     |     applyPeerInput → update entity transform
   |                                     |     EntityManager::onTick
-  |<-- MsgWorldSnapshot (unreliable, unicast) |  interest filter + delta compress → per-peer
-  |    fullEntityCount × MsgEntityEntry       |  (new or baseline-tick entities)
-  |    updateCount × MsgEntityUpdate          |  (compact updates for known entities)
+  |<-- MsgWorldSnapshot (unreliable, unicast) |  3D interest filter + per-peer quantized bitstream
+  |    header(40) + bit-packed records        |  (full vs delta per-record `full` bit)
   |                                     |
   |--- ENet disconnect --------------->|
   |                                     | onDisconnect(peerId):
@@ -565,84 +540,84 @@ this spec are **protocol version 1** and must implement `MsgHello` handling to i
 
 ### Snapshot packet size
 
-`MsgWorldSnapshot` is fixed-cost per entity: **88 bytes/entity** (full entry) or **64 bytes** (compact update) plus a 16-byte header.
+As of #515 the entity body is a quantized bitstream (see
+[snapshot-quantization.md](snapshot-quantization.md)), so the per-entity cost is **~24 bytes**
+(steady-state delta) or **~31 bytes** (full own-entity record), plus the 40-byte header and the TLV
+block — roughly a 2.5–3× reduction from the previous fixed 64/88-byte records.
 
-| Visible entities | Packet size | Per-client outbound (60 Hz) |
-|-----------------|-------------|-----------------------------|
-| 8 | 592 bytes | ~36 KB/s |
-| 20 | 1,456 bytes | ~87 KB/s |
-| 32 | 2,320 bytes | ~139 KB/s |
-| 64 | 4,624 bytes | ~277 KB/s |
-| 128 | 9,232 bytes | ~554 KB/s |
+| Visible entities | Approx. packet size (delta) | Per-client outbound (60 Hz) |
+|-----------------|-----------------------------|-----------------------------|
+| 8 | ~238 bytes | ~14 KB/s |
+| 20 | ~526 bytes | ~32 KB/s |
+| 32 | ~814 bytes | ~49 KB/s |
+| 64 | ~1,582 bytes | ~95 KB/s |
+| 128 | ~3,118 bytes | ~187 KB/s |
+
+(Indicative; actual bytes depend on the tuned bit budget and idx-delta varint sizes. The authoritative
+before/after numbers come from the bot_swarm `downstream_kbs_per_client` metric — see
+[load-testing.md](load-testing.md).)
 
 ### MTU fragmentation
 
 ENet fragments unreliable datagrams that exceed the path MTU (~1,400 bytes on standard
 Ethernet). Fragmented unreliable packets are reconstructed only if **all fragments arrive**.
 A single dropped fragment discards the whole snapshot — dead-reckoning absorbs occasional
-losses, but high fragment counts multiply the effective loss rate:
+losses, but high fragment counts multiply the effective loss rate. The quantized encoding pushes the
+single-fragment safe threshold from ~20 entities up to **~55 visible entities per client**
+(40 + 55×24 ≈ 1,360 bytes < typical 1,400-byte MTU); beyond that, the priority/budget scheduler
+(#516) bounds the per-client byte cost.
 
-> At 128 entities (8,716 bytes ≈ 6 fragments), a 5% per-fragment drop rate produces an
-> ~26% effective snapshot delivery rate — significantly degrading simulation fidelity.
+### Interest management and delta compression
 
-**The single-fragment safe threshold is approximately 20 visible entities per client**
-(12 + 20×68 = 1,372 bytes < typical 1,400-byte MTU).
+`WorldBroadcaster::onTick()` sends a **per-peer unicast** `MsgWorldSnapshot` containing only
+entities within `draw_distance_km` of the peer's own entity position (via
+`SpatialIndex::queryRadius()`, then an exact **3D (XYZ) distance gate** added in #402).
+`MsgWeatherState` and `MsgServerNotice` remain global broadcasts.
 
-### Interest management and delta compression (#346)
-
-As of #346, `WorldBroadcaster::onTick()` sends a **per-peer unicast** `MsgWorldSnapshot`
-containing only entities within `draw_distance_km` of the peer's own entity position (via
-`SpatialIndex::queryRadius()`). `MsgWeatherState` and `MsgServerNotice` remain global
-broadcasts.
-
-**Delta compression**: entities already known to a peer appear as compact `MsgEntityUpdate`
-records (64 bytes, float positions) rather than full `MsgEntityEntry` records (88 bytes).
-A full re-sync (all `MsgEntityEntry`) fires every `baseline_interval_ticks` ticks (default
-120 = 2 s at 60 Hz) for UDP packet-loss recovery.
-
-Typical bandwidth with 20 peers, 10 visible entities each, default baseline:
-- Baseline tick: 16 + 10×72 + TLV ≈ 742 bytes/peer (~45 KB/s per peer)
-- Update ticks: 16 + 10×52 + TLV ≈ 542 bytes/peer (~32 KB/s per peer)
-- Both are single-fragment (< 1,400-byte MTU threshold). ✓
+**Delta compression**: each record carries a `full` bit. A `full` record (typeIndex + generation)
+is sent the first time a peer sees an entity, on generation change, and on the periodic baseline
+tick (`baseline_interval_ticks`, default 120 = 2 s at 60 Hz, for UDP packet-loss recovery); every
+other tick the entity is a delta record that omits typeIndex (and the generation when unchanged).
 
 Configure via `[world] draw_distance_km` and `[world] baseline_interval_ticks` in
 `server.toml`; hot-reloadable via `reload_config`.
 
-### Known overhead in this format
+### Position precision
 
-The following are documented as future optimization candidates:
+Record positions are quantized to a fixed-point offset from the per-snapshot `double frameOrigin`
+(the receiving peer's position) at 0.125 m resolution over a ±262 km range — planet-scale accurate
+without storing a `double` per entity. The double-precision engine state is preserved on the server;
+only the wire representation is quantized.
 
-- **Double-precision positions in full entries**: `pos[3]` is 24 bytes (double) in
-  `MsgEntityEntry` vs. 12 bytes (float) in `MsgEntityUpdate`. Required for planet-scale
-  precision in full entries; compact updates use float32 (~1.6 cm at 200 km).
-- **Double-precision positions**: `pos[3]` is 24 bytes vs. 12 bytes for float. Required
+- **(historical)** The former fixed format stored `pos[3]` as 24 bytes (double) in full entries
   for planet-scale precision; float32 degrades to ~24 cm accuracy at 2,000 km from origin.
 - **`typeIndex` as uint32_t**: 4 bytes; a uint16_t would support 65,535 entity types and
   save 2 bytes/entity. Not changed here because `EntityTypeRegistry` and `EntityState`
   both use uint32_t throughout the engine — narrowing the wire type is deferred.
 
-### Scaling to 128+ (planned — Epics B & L)
+### Scaling to 128+ (Epics B & L)
 
-The fixed 64-byte compact update and radius-only unicast above are sized for ~32 players. The
+The original fixed 64/88-byte records and radius-only unicast were sized for ~32 players. The
 128+ re-target (decision record 2026-06-28) replaces them. The per-client bandwidth figures in
 this section are measured empirically by the `bot_swarm` load generator — see
-[docs/load-testing.md](load-testing.md). This is a **forward-looking spec**;
-the wire changes land with the epics, and the protocol can change freely until the
+[docs/load-testing.md](load-testing.md). The protocol can change freely until the
 `kProtocolVersion` freeze.
 
-- **Quantized / bit-packed state (Epic B).** The fixed `MsgEntityUpdate` becomes a quantized
-  bitstream: position relative to a per-snapshot frame origin, **smallest-three** quaternion
-  encoding for orientation, and quantized velocity/omega. Target ~3–4× size reduction over the
-  current 64 bytes, pulling the single-fragment safe threshold well above 20 entities.
-- **Priority/budget snapshot scheduler (Epic B).** Instead of "everything within
+- **Quantized / bit-packed state (Epic B, #515 — landed).** The entity body is a quantized bitstream
+  (position relative to a per-snapshot frame origin, **smallest-three** quaternion, quantized
+  velocity/omega; full vs delta per-record `full` bit). See
+  [snapshot-quantization.md](snapshot-quantization.md). ~2.5–3× reduction over the former 64-byte
+  record, raising the single-fragment safe threshold from ~20 to ~55 entities.
+- **3D interest management (#402, Epic B — landed).** `WorldBroadcaster` applies an exact full-XYZ
+  squared-distance gate over the conservative XZ cells returned by `SpatialIndex::queryRadius()`.
+- **Priority/budget snapshot scheduler (Epic B, #516 — planned).** Instead of "everything within
   `draw_distance_km`," each client gets a **per-tick byte budget**; entities are ranked by
   relevance (distance, threat, recency) and the highest-priority set that fits is sent. Keeps
   per-client bandwidth bounded as population grows.
-- **Client-acked delta baselines (Epic B).** Replace the fixed `baseline_interval_ticks`
-  re-sync with client-acknowledged baselines, so full re-sends happen only when a client
-  actually needs recovery.
-- **3D interest management (#402, Epic B).** Extend `SpatialIndex::queryRadius()` interest
-  from XZ to full XYZ distance culling.
+- **Client-acked delta baselines (Epic B, #517 — planned).** Replace the fixed
+  `baseline_interval_ticks` re-sync with client-acknowledged baselines, so full re-sends happen
+  only when a client actually needs recovery.
+- **Adaptive send-rate / congestion response (Epic B, #518 — planned).**
 - **Transport replacement (Epic L).** `enet6` is being replaced (GameNetworkingSockets lean)
   behind the `INetwork` HAL for higher peer counts, built-in congestion control, and
   encryption. The MTU/fragmentation discussion above is transport-specific and will be
@@ -662,8 +637,10 @@ is also reserved here. Exact message layout is specified when Epic C/J land.
 
 - **World coordinate system**: right-handed, Y-up, metres (matches glTF). Entity body `+X`
   axis is forward.
-- **Position precision**: `double` throughout the engine and wire format. At 2,000 km from
-  origin, float32 precision degrades to ~24 cm; double is accurate to sub-millimetre.
+- **Position precision**: `double` throughout the engine. On the wire, the snapshot `frameOrigin`
+  is `double` (sub-millimetre) and per-entity positions are quantized to a fixed-point offset from
+  it at 0.125 m resolution (±262 km range) — see [snapshot-quantization.md](snapshot-quantization.md).
+  `MsgClientInput`/`MsgConnectAck` and other non-snapshot positions remain full `double`/`float`.
 - **Snapshot tolerance**: `WorldSnapshot` is unreliable — dropped packets are tolerated via
   dead-reckoning. Clients extrapolate `rendered_pos = pos + vel × alpha × kTickDt` where
   `alpha = GameLoop::shellTick()` ∈ [0, 1] and `kTickDt = 1/60 s`.

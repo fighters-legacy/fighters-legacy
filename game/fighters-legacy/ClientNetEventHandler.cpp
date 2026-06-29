@@ -7,12 +7,15 @@
 #include "console/GameConsole.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityTypeRegistry.h"
+#include "net/BitStream.h"
 #include "net/GameProtocol.h"
+#include "net/SnapshotCodec.h"
 #include "net/WireCodec.h"
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
 #include "weather/WeatherController.h"
 
+#include <algorithm>
 #include <cstring>
 #include <glm/gtc/quaternion.hpp>
 #include <sstream>
@@ -97,71 +100,54 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
 
         fl::RenderSnapshot snap;
         snap.tickIndex = hdr.tickIndex;
-        snap.entries.reserve(static_cast<std::size_t>(hdr.fullEntityCount) + hdr.updateCount);
+        snap.entries.reserve(hdr.recordCount);
 
-        std::size_t off = sizeof(hdr);
+        // Decode the quantized record bitstream. Positions are relative to hdr.frameOrigin; full
+        // records carry typeIndex + gen, deltas reuse the per-entity cache (m_knownEntities).
+        const std::size_t bodyAvail = (size >= sizeof(hdr)) ? (size - sizeof(hdr)) : 0u;
+        const std::size_t bodyBytes = std::min<std::size_t>(hdr.bitstreamBytes, bodyAvail);
+        fl::BitReader reader(static_cast<const uint8_t*>(data) + sizeof(hdr), bodyBytes);
+        uint32_t prevIdx = 0;
+        for (uint16_t i = 0; i < hdr.recordCount; ++i) {
+            fl::QuantEntity qe;
+            bool genPresent = false;
+            if (!fl::decodeRecord(reader, qe, prevIdx, hdr.frameOrigin, genPresent))
+                break; // truncated/malformed — stop, keep what decoded
 
-        // Full entries: new entities or baseline tick — cache typeIndex for future update records.
-        for (uint16_t i = 0; i < hdr.fullEntityCount; ++i) {
-            fl::MsgEntityEntry e;
-            if (!fl::readRecordAt(data, size, off, e))
-                break;
-            off += sizeof(e);
-
-            fl::EntityRenderEntry re;
-            re.entityIdx = e.entityIdx;
-            re.entityGen = e.entityGen;
-            re.typeIndex = e.typeIndex;
-            re.position = {e.pos[0], e.pos[1], e.pos[2]};
-            re.velocity = {e.vel[0], e.vel[1], e.vel[2]};
-            // Wire format: x,y,z,w — glm::quat constructor: (w,x,y,z)
-            re.orientation = glm::quat(e.ori[3], e.ori[0], e.ori[1], e.ori[2]);
-            re.damageLevel = e.damageLevel;
-            re.playerOwned = (e.flags & 1u) != 0;
-            re.throttle = e.throttle;
-            re.fuelPct = e.fuelPct;
-            re.abEngaged = e.abEngaged != 0;
-            re.engineFailFlags = e.engineFailFlags;
-            re.omega = {e.omega[0], e.omega[1], e.omega[2]};
-            snap.entries.push_back(re);
-            m_knownEntities[e.entityIdx] = {static_cast<uint16_t>(e.entityGen), e.typeIndex};
-        }
-
-        // Compact update entries: entities the server knows we already have full data for.
-        for (uint16_t i = 0; i < hdr.updateCount; ++i) {
-            fl::MsgEntityUpdate u;
-            if (!fl::readRecordAt(data, size, off, u))
-                break;
-            off += sizeof(u);
-
-            auto kit = m_knownEntities.find(u.entityIdx);
-            if (kit == m_knownEntities.end() || kit->second.gen != u.entityGen) {
-                // Unknown or stale gen — full entry was dropped and baseline hasn't fired yet.
-                // Skip silently; entity reappears on the next baseline tick.
-                continue;
+            auto kit = m_knownEntities.find(qe.idx);
+            if (qe.isFull) {
+                // Full record: typeIndex + gen on the wire; refresh the cache.
+                m_knownEntities[qe.idx] = {static_cast<uint16_t>(qe.gen), qe.typeIndex};
+            } else {
+                if (kit == m_knownEntities.end())
+                    continue; // full record was dropped; entity reappears on the next baseline tick
+                if (genPresent && static_cast<uint16_t>(qe.gen) != kit->second.gen)
+                    continue; // stale generation
+                if (!genPresent)
+                    qe.gen = kit->second.gen; // cached generation
+                qe.typeIndex = kit->second.typeIndex;
             }
 
             fl::EntityRenderEntry re;
-            re.entityIdx = u.entityIdx;
-            re.entityGen = u.entityGen;
-            re.typeIndex = kit->second.typeIndex; // from cached full entry
-            re.position = {static_cast<double>(u.pos[0]), static_cast<double>(u.pos[1]), static_cast<double>(u.pos[2])};
-            re.velocity = {u.vel[0], u.vel[1], u.vel[2]};
-            re.orientation = glm::quat(u.ori[3], u.ori[0], u.ori[1], u.ori[2]);
-            re.damageLevel = u.damageLevel;
-            re.playerOwned = (u.flags & 1u) != 0;
-            re.throttle = u.throttle;
-            re.fuelPct = u.fuelPct;
-            re.abEngaged = u.abEngaged != 0;
-            re.engineFailFlags = u.engineFailFlags;
-            re.omega = {u.omega[0], u.omega[1], u.omega[2]};
+            re.entityIdx = qe.idx;
+            re.entityGen = qe.gen;
+            re.typeIndex = qe.typeIndex;
+            re.position = {qe.pos[0], qe.pos[1], qe.pos[2]};
+            re.velocity = {qe.vel[0], qe.vel[1], qe.vel[2]};
+            // Wire quaternion order x,y,z,w — glm::quat constructor is (w,x,y,z).
+            re.orientation = glm::quat(qe.quat[3], qe.quat[0], qe.quat[1], qe.quat[2]);
+            re.damageLevel = qe.damageLevel;
+            re.playerOwned = qe.playerOwned;
+            re.throttle = qe.throttle;
+            re.fuelPct = qe.fuelPct;
+            re.abEngaged = qe.abEngaged;
+            re.engineFailFlags = qe.engineFailFlags;
+            re.omega = {qe.omega[0], qe.omega[1], qe.omega[2]};
             snap.entries.push_back(re);
         }
 
-        // TLV extension block follows all entity records.
-        const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) +
-                                      static_cast<std::size_t>(hdr.fullEntityCount) * sizeof(fl::MsgEntityEntry) +
-                                      static_cast<std::size_t>(hdr.updateCount) * sizeof(fl::MsgEntityUpdate);
+        // TLV extension block follows the quantized bitstream.
+        const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) + hdr.bitstreamBytes;
         if (size > extOffset) {
             const auto* ext = static_cast<const uint8_t*>(data) + extOffset;
             const auto extSz = size - extOffset;
@@ -184,8 +170,8 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         m_lastSnapshotTick = hdr.tickIndex;
 
         char traceBuf[96];
-        std::snprintf(traceBuf, sizeof(traceBuf), "WorldSnapshot: full=%u update=%u built=%zu", hdr.fullEntityCount,
-                      hdr.updateCount, snap.entries.size());
+        std::snprintf(traceBuf, sizeof(traceBuf), "WorldSnapshot: records=%u bytes=%u built=%zu", hdr.recordCount,
+                      hdr.bitstreamBytes, snap.entries.size());
         logger.log(LogLevel::Trace, __FILE__, __LINE__, traceBuf);
         if (snapshotCallback)
             snapshotCallback(snap, snap.tickIndex, m_estimatedDelayTicks);

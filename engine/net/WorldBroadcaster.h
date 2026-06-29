@@ -102,7 +102,7 @@ struct WorldBroadcasterConfig {
     std::string operatorPassword;        // empty = network admin channel disabled
     int idleTimeoutS{0};                 // 0 = disabled; seconds of peer inactivity before disconnect
     float drawDistanceKm{200.f};         // per-peer interest radius; 0 = degenerate (empty snapshots)
-    uint32_t baselineIntervalTicks{120}; // force full MsgEntityEntry records every N ticks for loss recovery
+    uint32_t baselineIntervalTicks{120}; // force full quantized records every N ticks for loss recovery
     uint32_t jitterBufferMaxDepth{4};    // per-peer input queue depth; [1, JitterBuffer::kHardMaxDepth]
     uint32_t jitterAdaptWindow{60};      // EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
     uint32_t jitterHysteresis{2};        // dead-band in ticks before resize fires; [0, 8]
@@ -326,7 +326,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     void setDrawDistance(float km) noexcept;
 
     // Set the interval between full-snapshot baseline ticks (in sim ticks). On baseline ticks the
-    // per-peer known-gen set is cleared, forcing full MsgEntityEntry records for all visible
+    // per-peer known-gen set is cleared, forcing full quantized records for all visible
     // entities — provides UDP packet-loss recovery. Default = 120 (2 s at 60 Hz). Range [1, +∞).
     // Call before gameLoop.start() or via enqueueSimCallback.
     void setBaselineInterval(uint32_t ticks) noexcept;

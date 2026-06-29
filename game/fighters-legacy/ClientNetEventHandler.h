@@ -147,8 +147,9 @@ struct ClientNetEventHandler : INetworkEventHandler {
     uint32_t m_estimatedDelayTicks{0};
 
     // Delta-compression entity cache: entityIdx → {gen (uint16 truncated), typeIndex}.
-    // Populated from full MsgEntityEntry records; used to decode compact MsgEntityUpdate records.
-    // Cleared implicitly when ClientNetEventHandler is re-created per session (reinitFlight).
+    // Populated from `full` quantized records; supplies typeIndex (and gen when omitted) for the
+    // compact delta records that follow. Cleared implicitly when the handler is re-created per
+    // session (reinitFlight).
     struct KnownEntityInfo {
         uint16_t gen;
         uint32_t typeIndex;
