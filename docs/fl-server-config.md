@@ -73,6 +73,7 @@ time_scale         = 10.0        # game seconds per real second; 10 = full day/n
 # jitter_buffer_adapt_window    = 60   # EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
 # jitter_buffer_hysteresis      = 2    # resize dead-band in ticks; [0, 8]
 # jitter_buffer_jitter_multiplier = 2.0  # k factor: depth = ceil(ewma_delay + k*jitter); [0.0, 8.0]
+# sim_worker_threads      = 0        # sim-tick CPU parallelism; 0 = auto, 1 = serial; [0, 256]
 
 [ai]
 difficulty_floor = "recruit"
@@ -435,6 +436,24 @@ The jitter EWMA tracks RFC 3550-style inter-arrival deviation from the expected 
 Higher values add extra buffer headroom during bursty conditions; `0.0` disables the jitter
 term entirely (pure EWMA-delay sizing, equivalent to #424 without #429). Out-of-range values
 are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
+
+### `sim_worker_threads`
+
+| Type | Default | Range |
+|---|---|---|
+| integer | `0` | `[0, 256]` |
+
+Total CPU parallelism for the sim tick — the number of threads (including the sim thread) that
+share the per-entity AI + integration work each tick. `0` = auto (sized from the host's logical
+core count), `1` = serial (no worker pool). The parallel path is serial-equivalent (bit-identical
+results), so this only affects CPU usage and throughput, never simulation outcome.
+
+> **A CPU-parallelism knob, not a capacity guarantee.** Raising it lets the sim use more cores; it
+> does not by itself raise the player ceiling — see Epic A / `docs/server-job-system-design.md`.
+
+The CLI flag `--sim-worker-threads <n>` overrides this value (useful for load-test sweeps).
+Out-of-range values are rejected with a Warn and the default is used. **Requires restart** to take
+effect (the worker pool is built at startup).
 
 ---
 

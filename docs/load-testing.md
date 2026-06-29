@@ -87,6 +87,18 @@ must raise them (the runner writes this automatically):
 > guarantee** — the server *accepting* 1024 does not mean it *handles* 1024. Real high-peer
 > capacity is the Epic A/B/L work.
 
+### Sweeping sim-tick parallelism (Epic A)
+
+The server-side sim-tick CPU parallelism is set by `[world] sim_worker_threads` (0 = auto, 1 =
+serial), overridable per-run with `fl-server --sim-worker-threads <n>` — distinct from the harness's
+own `--threads`. To measure the data-parallel sim ([#511]), sweep `--sim-worker-threads` (e.g.
+`1, 2, 4, 8`) at a fixed client count and pattern and watch the authoritative `server_tick` block:
+the `integrate` and `ai` per-phase wall-times should drop with worker count, and the
+weave/aggressive tick-Hz knee should move to higher client counts. The result is bit-identical
+regardless of worker count, so only throughput changes.
+
+[#511]: https://github.com/fighters-legacy/fighters-legacy/issues/511
+
 ## CLI
 
     bot_swarm [host] [port] [options]

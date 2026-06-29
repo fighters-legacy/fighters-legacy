@@ -143,8 +143,17 @@ ctest --preset debug-msvc --output-on-failure     # Windows
 | `release-msvc` | Windows | Packaging |
 | `coverage` | Linux / macOS | Coverage reporting (Werror OFF) |
 | `asan` | Linux / macOS | AddressSanitizer + UBSan |
+| `tsan` | Linux / macOS | ThreadSanitizer (data races) |
 
-CI uses `debug` (Linux/macOS) and `debug-msvc` (Windows). The `coverage` and `asan` presets have their own dedicated CI jobs.
+CI uses `debug` (Linux/macOS) and `debug-msvc` (Windows). The `coverage`, `asan`, and `tsan` presets have their own dedicated CI jobs.
+
+The `tsan` preset (`-fsanitize=thread`) is for the data-parallel sim code (`engine-job` + the `WorldBroadcaster` parallel tick). ThreadSanitizer is **Linux/macOS only** (no MSVC support); on Fedora it needs the `libtsan` package, on Debian/Ubuntu it ships with `clang`/`gcc`. The CI job (`tsan.yml`) scopes the run to the parallel-sim test targets via a suppressions file (`tools/tsan.supp`):
+
+```bash
+CC=clang CXX=clang++ cmake --preset tsan
+cmake --build --preset tsan --target test_job_system test_world_broadcaster
+TSAN_OPTIONS=suppressions=$PWD/tools/tsan.supp ./build/tsan/tests/test_job_system
+```
 
 ### Local preset overrides
 

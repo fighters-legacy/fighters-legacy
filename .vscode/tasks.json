@@ -218,6 +218,44 @@
       "problemMatcher": []
     },
     {
+      "label": "CI: Configure (TSAN)",
+      "type": "shell",
+      "command": "cmake --preset tsan -DFETCHCONTENT_QUIET=OFF",
+      "env": {
+        "CC": "clang",
+        "CXX": "clang++"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CI: Build (TSAN)",
+      "type": "shell",
+      "command": "cmake --build --preset tsan --target test_job_system test_world_broadcaster",
+      "group": "build",
+      "dependsOn": "CI: Configure (TSAN)",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "CI: Test (TSAN)",
+      "type": "shell",
+      "command": "TSAN_OPTIONS=\"suppressions=$PWD/tools/tsan.supp\" ./build/tsan/tests/test_job_system && TSAN_OPTIONS=\"suppressions=$PWD/tools/tsan.supp\" ./build/tsan/tests/test_world_broadcaster",
+      "group": "test",
+      "dependsOn": "CI: Build (TSAN)",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "CI: All (Linux)",
       "dependsOrder": "sequence",
       "dependsOn": [

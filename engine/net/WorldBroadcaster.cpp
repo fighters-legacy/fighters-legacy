@@ -11,6 +11,7 @@
 #include "flight/BuiltinFlightModel.h"
 #include "flight/CentralGravityField.h"
 #include "flight/FlightIntegrator.h"
+#include "job/JobSystem.h"
 #include "net/GameProtocol.h"
 #include "net/NetworkUtils.h"
 #include "net/WireCodec.h"
@@ -425,35 +426,65 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     m_tickProfiler.addPhaseSample(
         TickPhase::Maintenance, std::chrono::duration<double, std::milli>(m_clock->now() - tMaintenanceStart).count());
 
-    // Step every controlled entity from its control source (peer/AI/script), then copy state back.
-    // AI control sampling and physics integration are timed as distinct phases (accumulated across
-    // all entities) so the budget shows which dominates.
+    // ---- Per-entity simulation: gather, AI sample pass, integrate pass ----
+    // Two passes (rather than one interleaved loop) so AI sampling reads a consistent pre-step
+    // world snapshot, and the integrate pass writes only each entity's own state — no cross-entity
+    // writes. Both passes are therefore safe to run data-parallel (see runEntityPass). Each pass is
+    // timed as one wall-clock phase.
+
+    // Gather the live controlled entities into a contiguous, indexable range.
+    m_stepItems.clear();
     for (auto& [entityIdx, ce] : m_controlledEntities) {
         EntityState* state = m_entityManager.get(ce.id);
         if (!state || state->dead)
             continue;
-        ControlInput ctrl;
-        {
-            TickPhaseScope aiScope(m_tickProfiler, TickPhase::Ai, *m_clock);
-            ctrl = ce.controller->sample(*state, tickIndex, simDt, &m_spatialIndex);
-        }
-        {
-            TickPhaseScope integrateScope(m_tickProfiler, TickPhase::Integrate, *m_clock);
-            stepFlightSim(*ce.sim, *state, ctrl, simDt);
-        }
+        m_stepItems.push_back({entityIdx, &ce, state});
+    }
+    m_stepInputs.resize(m_stepItems.size());
 
-        // NaN/Inf detection — log immediately so the cause is visible before any crash.
-        const FlightState& fs = ce.sim->state();
+    // AI pass: sample each controller. Read-only on shared world state (EntityState, SpatialIndex,
+    // EntityManager); each controller's own mutable state is per-entity / disjoint.
+    {
+        const auto tAiStart = m_clock->now();
+        runEntityPass(m_stepItems.size(), [this, tickIndex, simDt](size_t b, size_t e) {
+            for (size_t i = b; i < e; ++i) {
+                const StepItem& it = m_stepItems[i];
+                m_stepInputs[i] = it.ce->controller->sample(*it.state, tickIndex, simDt, &m_spatialIndex);
+            }
+        });
+        m_tickProfiler.addPhaseSample(TickPhase::Ai,
+                                      std::chrono::duration<double, std::milli>(m_clock->now() - tAiStart).count());
+    }
+
+    // Integrate pass: step each FlightIntegrator. Each worker writes only its own entity's state.
+    {
+        const auto tIntStart = m_clock->now();
+        runEntityPass(m_stepItems.size(), [this, tickIndex, simDt](size_t b, size_t e) {
+            for (size_t i = b; i < e; ++i) {
+                const StepItem& it = m_stepItems[i];
+                stepFlightSim(*it.ce->sim, *it.state, m_stepInputs[i], simDt, it.idx, tickIndex);
+            }
+        });
+        m_tickProfiler.addPhaseSample(TickPhase::Integrate,
+                                      std::chrono::duration<double, std::milli>(m_clock->now() - tIntStart).count());
+    }
+
+    // Cache the representative entity XZ for main-thread terrain streaming (single-player).
+    updateTerrainSteerCache();
+
+    // Diagnostics on the sim thread (after both passes, never from a worker): NaN/Inf detection and
+    // the periodic trajectory trace.
+    for (const StepItem& it : m_stepItems) {
+        const FlightState& fs = it.ce->sim->state();
         const bool badPos =
             !std::isfinite(fs.pos_world[0]) || !std::isfinite(fs.pos_world[1]) || !std::isfinite(fs.pos_world[2]);
         const bool badVel =
             !std::isfinite(fs.vel_body[0]) || !std::isfinite(fs.vel_body[1]) || !std::isfinite(fs.vel_body[2]);
         if (badPos || badVel) {
             char msg[256];
-            std::snprintf(msg, sizeof(msg),
-                          "[flight entity=%u] NaN/Inf — pos=(%.3g,%.3g,%.3g) vel_body=(%.3g,%.3g,%.3g)", entityIdx,
-                          fs.pos_world[0], fs.pos_world[1], fs.pos_world[2], fs.vel_body[0], fs.vel_body[1],
-                          fs.vel_body[2]);
+            std::snprintf(
+                msg, sizeof(msg), "[flight entity=%u] NaN/Inf — pos=(%.3g,%.3g,%.3g) vel_body=(%.3g,%.3g,%.3g)", it.idx,
+                fs.pos_world[0], fs.pos_world[1], fs.pos_world[2], fs.vel_body[0], fs.vel_body[1], fs.vel_body[2]);
             m_logger.log(LogLevel::Error, __FILE__, __LINE__, msg);
         }
         // Periodic state trace: once per second (60 Hz sim) for trajectory diagnostics.
@@ -461,7 +492,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             char msg[256];
             std::snprintf(msg, sizeof(msg),
                           "[flight entity=%u] tick=%llu pos=(%.1f,%.1f,%.1f) vel_body=(%.1f,%.1f,%.1f) thr=%.0f%%",
-                          entityIdx, static_cast<unsigned long long>(tickIndex), fs.pos_world[0], fs.pos_world[1],
+                          it.idx, static_cast<unsigned long long>(tickIndex), fs.pos_world[0], fs.pos_world[1],
                           fs.pos_world[2], fs.vel_body[0], fs.vel_body[1], fs.vel_body[2], fs.throttle_actual * 100.f);
             m_logger.log(LogLevel::Trace, __FILE__, __LINE__, msg);
         }
@@ -1070,14 +1101,50 @@ void WorldBroadcaster::registerController(EntityId id, std::unique_ptr<IEntityCo
     addControlledEntity(id, std::move(controller), std::move(model), 0.f);
 }
 
-void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, const ControlInput& ctrl, double simDt) {
+// Grain size for the per-entity parallel passes: enough indices per chunk to amortise the
+// dynamic-claim atomic without starving load balancing across workers.
+static constexpr std::size_t kEntityPassGrain = 16;
+
+void WorldBroadcaster::runEntityPass(std::size_t count, const std::function<void(std::size_t, std::size_t)>& fn) {
+    if (count == 0)
+        return;
+    if (m_jobs)
+        m_jobs->parallel_for(count, kEntityPassGrain, fn);
+    else
+        fn(0, count); // inline / serial fallback (unit tests, single-threaded servers)
+}
+
+void WorldBroadcaster::updateTerrainSteerCache() {
+    // Lowest live entity index = a stable representative (m_controlledEntities order is unordered).
+    const ControlledEntity* rep = nullptr;
+    uint32_t repIdx = 0;
+    for (const StepItem& it : m_stepItems) {
+        if (!rep || it.idx < repIdx) {
+            rep = it.ce;
+            repIdx = it.idx;
+        }
+    }
+    if (rep) {
+        const FlightState& fs = rep->sim->state();
+        m_entityX.store(fs.pos_world[0], std::memory_order_relaxed);
+        m_entityZ.store(fs.pos_world[2], std::memory_order_relaxed);
+    }
+}
+
+void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, const ControlInput& ctrl, double simDt,
+                                     uint32_t entityIdx, uint64_t tickIndex) {
     WindInfluence wind{};
     if (m_weather) {
         wind.wind_world[0] = m_weather->windX();
         wind.wind_world[2] = m_weather->windZ();
         float turb = m_weather->turbulenceAmplitude();
-        m_turbRng = m_turbRng * 1664525u + 1013904223u;
-        float r = static_cast<float>((m_turbRng >> 16) & 0xFFu) / 128.f - 1.f;
+        // Per-entity deterministic turbulence: seed an LCG from (entityIdx, tickIndex) so the
+        // perturbation is independent of evaluation order and identical across worker counts and
+        // platforms (no shared RNG state mutated across entities — this is the parallel-safe form).
+        uint32_t rng = entityIdx * 0x9E3779B1u + static_cast<uint32_t>(tickIndex) * 0x85EBCA77u +
+                       static_cast<uint32_t>(tickIndex >> 32) * 0xC2B2AE3Du;
+        rng = rng * 1664525u + 1013904223u;
+        float r = static_cast<float>((rng >> 16) & 0xFFu) / 128.f - 1.f;
         wind.turbulence_body[0] = turb * r;
         wind.turbulence_body[1] = turb * 0.3f * r;
         wind.turbulence_body[2] = turb * 0.5f * r;
@@ -1087,9 +1154,8 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
     fi.step(static_cast<float>(simDt), ctrl, {}, wind, groundElev);
 
     const FlightState& fs = fi.state();
-    // Cache entity XZ so the main thread can steer terrain loading and update the floor.
-    m_entityX.store(fs.pos_world[0], std::memory_order_relaxed);
-    m_entityZ.store(fs.pos_world[2], std::memory_order_relaxed);
+    // (Terrain-steer XZ cache moved to updateTerrainSteerCache(), run once after the integrate pass
+    // — keeps this routine free of cross-entity writes so it is safe to call from worker threads.)
 
     // World velocity: rotate body velocity into world frame.
     // vel_body is double; cast to float here — wire protocol and render bridge stay float.

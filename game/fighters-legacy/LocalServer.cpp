@@ -82,7 +82,10 @@ LocalServer::StartResult LocalServer::start(const char* bindAddr, uint16_t port)
     std::snprintf(portStr, sizeof(portStr), "%u", port);
     std::snprintf(maxPeersStr, sizeof(maxPeersStr), "1");
 
-    std::vector<std::string> args{portStr, maxPeersStr, "--bind", bindAddr, "--admin-token", m_impl->sessionToken};
+    // --sim-worker-threads 1: single-player has one entity, so run the sim tick serially rather
+    // than spawning an idle worker pool inside the embedded server.
+    std::vector<std::string> args{
+        portStr, maxPeersStr, "--bind", bindAddr, "--admin-token", m_impl->sessionToken, "--sim-worker-threads", "1"};
 
     // Spawn into a unique_ptr<Subprocess> to avoid Subprocess::Impl completion
     // requirements in LocalServer.cpp (pimpl isolation via pointer indirection).

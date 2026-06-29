@@ -55,7 +55,27 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.jitterAdaptWindow == 60u);
     CHECK(cfg.jitterHysteresis == 2u);
     CHECK(cfg.jitterMultiplier == Catch::Approx(2.0f));
+    CHECK(cfg.simWorkerThreads == 0u);
     CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: reads world.sim_worker_threads", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nsim_worker_threads = 8\n", &log);
+    CHECK(cfg.simWorkerThreads == 8u);
+}
+
+TEST_CASE("parseServerConfig: world.sim_worker_threads boundary values accepted", "[server_config]") {
+    MockLogger log;
+    CHECK(parseServerConfig("[world]\nsim_worker_threads = 1\n", &log).simWorkerThreads == 1u);
+    CHECK(parseServerConfig("[world]\nsim_worker_threads = 256\n", &log).simWorkerThreads == 256u);
+}
+
+TEST_CASE("parseServerConfig: world.sim_worker_threads out of range warns and keeps default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nsim_worker_threads = 257\n", &log);
+    CHECK(cfg.simWorkerThreads == 0u);
+    CHECK_FALSE(log.entries.empty());
 }
 
 // ---------------------------------------------------------------------------

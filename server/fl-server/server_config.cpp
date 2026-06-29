@@ -66,6 +66,7 @@ static const char* kDefaultToml =
     "# jitter_buffer_adapt_window = 60  # EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]\n"
     "# jitter_buffer_hysteresis = 2     # resize dead-band in ticks; [0, 8]\n"
     "# jitter_buffer_jitter_multiplier = 2.0  # k factor: depth = ceil(ewma_delay + k*jitter); [0.0, 8.0]\n"
+    "# sim_worker_threads = 0           # sim-tick CPU parallelism; 0 = auto, 1 = serial; [0, 256]\n"
     "\n"
     "[ai]\n"
     "difficulty_floor = \"recruit\"\n"
@@ -325,6 +326,14 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                          "world.jitter_buffer_jitter_multiplier out of range [0.0, 8.0]; using default 2.0");
             } else {
                 cfg.jitterMultiplier = static_cast<float>(*v);
+            }
+        }
+        if (auto v = tbl["world"]["sim_worker_threads"].value<int64_t>()) {
+            if (*v < int64_t{0} || *v > int64_t{256}) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.sim_worker_threads out of range [0, 256]; using default 0 (auto)");
+            } else {
+                cfg.simWorkerThreads = static_cast<uint32_t>(*v);
             }
         }
 

@@ -36,6 +36,7 @@
 #include <entity/EntityTypeRegistry.h>
 #include <flight/CentralGravityField.h>
 #include <flight/FlightModelParser.h>
+#include <job/JobSystem.h>
 #include <loop/GameLoop.h>
 #include <net/GameProtocol.h>
 #include <net/WorldBroadcaster.h>
@@ -129,6 +130,7 @@ int main(int argc, char** argv) {
     std::string flagBind;        // non-empty if --bind addr was given
     std::string flagAdminToken;  // non-empty if --admin-token was given (internal single-player use)
     std::string flagMetricsJson; // non-empty if --metrics-json path was given (overrides [metrics])
+    long flagSimWorkers = -1;    // >=0 if --sim-worker-threads was given (overrides [world])
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
@@ -141,6 +143,7 @@ int main(int argc, char** argv) {
                 "  --persistent       Enable persistent world mode (Phase 2 -- not yet active)\n"
                 "  --bind <addr>      Bind address (overrides server.toml and FL_BIND_ADDRESS)\n"
                 "  --metrics-json <p> Write the per-phase tick-budget JSON to <p> (overrides [metrics])\n"
+                "  --sim-worker-threads <n>  Sim-tick CPU parallelism; 0=auto, 1=serial (overrides [world])\n"
                 "\n"
                 "Admin console commands are available on stdin (type 'help' for a command list).\n"
                 "\n"
@@ -173,6 +176,12 @@ int main(int argc, char** argv) {
             flagAdminToken = argv[++i];
         if (std::strcmp(argv[i], "--metrics-json") == 0 && i + 1 < argc)
             flagMetricsJson = argv[++i];
+        if (std::strcmp(argv[i], "--sim-worker-threads") == 0 && i + 1 < argc) {
+            char* end = nullptr;
+            long n = std::strtol(argv[++i], &end, 10);
+            if (end != argv[i] && n >= 0 && n <= 256)
+                flagSimWorkers = n;
+        }
     }
 
     // ---- Set up platform ----
@@ -210,6 +219,9 @@ int main(int argc, char** argv) {
     // --metrics-json overrides the [metrics] tick_json_path from server.toml.
     if (!flagMetricsJson.empty())
         cfg.metrics.tickJsonPath = flagMetricsJson;
+    // --sim-worker-threads overrides the [world] sim_worker_threads from server.toml.
+    if (flagSimWorkers >= 0)
+        cfg.simWorkerThreads = static_cast<uint32_t>(flagSimWorkers);
 
     // ---- Phase 2 stub logs ----
     if (cfg.persistent)
@@ -477,6 +489,19 @@ int main(int argc, char** argv) {
     }
 
     GameLoop gameLoop(broadcaster, *log);
+
+    // Data-parallel sim tick: the worker pool that parallelises the per-entity AI + integrate
+    // passes. Constructed before gameLoop.start() and outlives it (declared here in main's scope).
+    // 0 = auto (hardware_concurrency), 1 = serial. Injected into the broadcaster below.
+    fl::JobSystem jobSystem(cfg.simWorkerThreads);
+    broadcaster.setJobSystem(jobSystem);
+    {
+        char wbuf[96];
+        std::snprintf(wbuf, sizeof(wbuf), "sim worker pool: %u background worker(s) (sim_worker_threads=%u)",
+                      jobSystem.workerCount(), cfg.simWorkerThreads);
+        log->log(LogLevel::Info, __FILE__, __LINE__, wbuf);
+    }
+
     fl::ServerCommandContext adminCtx;
     adminCtx.sim.broadcaster = &broadcaster;
     adminCtx.sim.entityManager = &entityManager;

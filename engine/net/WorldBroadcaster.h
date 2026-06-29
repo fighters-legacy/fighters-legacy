@@ -27,6 +27,7 @@ namespace fl {
 class ILogger;
 class EntityManager;
 class FlightIntegrator; // full definition in WorldBroadcaster.cpp
+class JobSystem;        // engine/job/JobSystem.h — full definition in WorldBroadcaster.cpp
 struct EntityState;
 struct ControlInput;      // engine/flight/AeroForces.h
 struct FlightModelData;   // engine/flight/FlightModelData.h
@@ -357,6 +358,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // 6371 km; only call this for non-Earth planets. Call before gameLoop.start().
     void setGravityField(const IGravityField& field, float planetRadiusKm = 6371.f) noexcept;
 
+    // Inject the data-parallel job system used to parallelise the per-entity AI + integrate passes
+    // in onTick. nullptr (the default) runs both passes inline on the sim thread — keeps unit tests
+    // thread-free and gives a serial-equivalent result. The JobSystem must outlive this broadcaster
+    // (and the GameLoop sim thread). Call before gameLoop.start().
+    void setJobSystem(JobSystem& jobs) noexcept {
+        m_jobs = &jobs;
+    }
+
   private:
     void sendConnectAck(uint32_t peerId, EntityId assigned);
     void sendConnectRefusal(uint32_t peerId, ConnectRefusalCode code, const char* reason);
@@ -378,7 +387,17 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // the builtin model.
     std::shared_ptr<const FlightModelData> resolveFlightModel(EntityId id);
 
-    void stepFlightSim(FlightIntegrator& fi, EntityState& state, const ControlInput& ctrl, double simDt);
+    // Run a per-entity pass over [0, count): via the injected JobSystem (data-parallel) when set,
+    // else inline on the sim thread. fn(begin, end) processes a contiguous index sub-range.
+    void runEntityPass(std::size_t count, const std::function<void(std::size_t, std::size_t)>& fn);
+
+    // Turbulence is seeded per (entityIdx, tickIndex) so the integrate step is deterministic and
+    // parallel-safe — no shared RNG state mutated across entities.
+    void stepFlightSim(FlightIntegrator& fi, EntityState& state, const ControlInput& ctrl, double simDt,
+                       uint32_t entityIdx, uint64_t tickIndex);
+    // After the integrate pass: cache the lowest-index live controlled entity's XZ for main-thread
+    // terrain streaming + floor updates (only meaningful in single-player).
+    void updateTerrainSteerCache();
     void broadcastShutdownNotice(uint16_t secsLeft, const char* text);
     static std::string makeShutdownMessage(uint32_t secsLeft, const std::string& reason = "");
 
@@ -397,10 +416,22 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::atomic<int> m_activePeerCount{0};
     uint64_t m_weatherBroadcastTick{0};        // throttle weather broadcasts to ~6 Hz
     uint64_t m_idleTimeoutTicks{0};            // 0 = disabled; pre-computed from idleTimeoutS × 60
-    uint32_t m_turbRng{0xCAFEBABEu};           // per-broadcaster RNG for turbulence perturbation
     std::atomic<float> m_groundElevation{0.f}; // floor elevation passed to each FlightIntegrator::step
-    std::atomic<double> m_entityX{0.0};        // last stepped entity world-X (sim writes; main reads)
-    std::atomic<double> m_entityZ{0.0};        // last stepped entity world-Z
+
+    // Data-parallel job system for the per-entity AI + integrate passes (nullptr = inline/serial).
+    JobSystem* m_jobs{nullptr};
+    // Per-tick scratch reused across ticks to avoid reallocation. m_stepItems gathers the live
+    // controlled entities into a contiguous indexable range; m_stepInputs holds each one's sampled
+    // control so the AI pass and integrate pass can be split (and parallelised).
+    struct StepItem {
+        uint32_t idx;
+        ControlledEntity* ce;
+        EntityState* state;
+    };
+    std::vector<StepItem> m_stepItems;
+    std::vector<ControlInput> m_stepInputs;
+    std::atomic<double> m_entityX{0.0}; // last stepped entity world-X (sim writes; main reads)
+    std::atomic<double> m_entityZ{0.0}; // last stepped entity world-Z
 
     std::vector<std::array<double, 3>> m_spawnPoints; // pre-cached [x,y,z]; sim-thread read-only after start
     uint32_t m_nextSpawnIdx{0};                       // round-robin counter; sim-thread only

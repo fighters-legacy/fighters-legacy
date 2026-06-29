@@ -83,6 +83,11 @@ this in addition to its existing criteria.
    transport. A and B proceed on the current `enet6` (B's quantization is transport-agnostic).
    Transport replacement (Epic L) is decoupled to a later optimisation (encryption/congestion/
    connection-count headroom), to be re-evaluated once A/B raise the sim ceiling.
+   **Epic A progress:** the design spike ([#510](https://github.com/fighters-legacy/fighters-legacy/issues/510))
+   chose a data-parallel single tick (not spatial sharding) and the `engine-job` worker pool +
+   parallel AI/integrate passes landed ([#511](https://github.com/fighters-legacy/fighters-legacy/issues/511));
+   snapshot-assembly parallelism (#512) and graceful overrun handling (#514) remain. See
+   [server-job-system-design.md](server-job-system-design.md).
 
 2. **LuaSandbox wired (#359 ✓) → fl-base-pack AI scripts → AI System (#33)**
    fl-base-pack Lua behaviour scripts can now target the `compute_control` API shipped in #359.

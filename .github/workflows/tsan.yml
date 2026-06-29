@@ -1,0 +1,53 @@
+name: ThreadSanitizer
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tsan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        uses: ./.github/actions/install-linux-deps
+        with:
+          clang: 'true'
+
+      - name: Cache CMake FetchContent dependencies
+        uses: actions/cache@v6
+        with:
+          path: build/_deps
+          key: cmake-deps-ubuntu-latest-${{ hashFiles('cmake/dependencies.cmake') }}
+
+      - name: Configure
+        run: cmake --preset tsan
+        env:
+          CC: clang
+          CXX: clang++
+
+      # Scope to the data-parallel sim targets: the engine-job pool and the WorldBroadcaster
+      # parallel-tick test. These do NOT link SDL3/OpenAL/ENet/Vulkan, so the TSan run stays
+      # focused on our parallel code rather than third-party (uninstrumented) library threads.
+      - name: Build TSan targets
+        run: cmake --build --preset tsan --target test_job_system test_world_broadcaster
+
+      - name: Run job-system tests under TSan
+        run: ./build/tsan/tests/test_job_system
+        env:
+          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:suppressions=${{ github.workspace }}/tools/tsan.supp
+
+      - name: Run WorldBroadcaster parallel-tick tests under TSan
+        run: ./build/tsan/tests/test_world_broadcaster
+        env:
+          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:suppressions=${{ github.workspace }}/tools/tsan.supp
