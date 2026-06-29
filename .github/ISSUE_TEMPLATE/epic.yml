@@ -1,0 +1,64 @@
+name: Epic
+description: A large, multi-issue initiative tracked via sub-issues
+type: Epic
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Epics group related work into a single initiative tracked via sub-issues.
+        See [docs/project-management.md](../../docs/project-management.md) for how epics,
+        milestones, and the Project board fit together.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Primary component
+      options:
+        - engine / HAL
+        - renderer (Vulkan)
+        - audio (OpenAL)
+        - network (ENet)
+        - content system
+        - flight model
+        - ai system
+        - mission / campaign
+        - build system
+        - multiple / cross-cutting
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal / outcome
+      description: What does "done" look like for this initiative? What capability or change does it deliver?
+    validations:
+      required: true
+
+  - type: textarea
+    id: subissues
+    attributes:
+      label: Sub-issues / decomposition
+      description: The child issues that make up this epic. Link them as sub-issues once created.
+      value: |
+        - [ ] #
+        - [ ] #
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How will we verify the epic is complete?
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies / blocked-by
+      description: Other epics or issues this depends on, and anything it blocks.
+    validations:
+      required: false
