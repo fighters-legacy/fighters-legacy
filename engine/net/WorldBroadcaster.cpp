@@ -206,6 +206,7 @@ void WorldBroadcaster::setSpawnPoints(std::vector<std::array<double, 3>> points)
 void WorldBroadcaster::setClock(const IClock& clock) {
     m_clock = &clock;
     m_adminAuthTracker.setClock(clock);
+    m_tickProfiler.setClock(clock);
 }
 
 void WorldBroadcaster::setMotd(std::string motd) {
@@ -313,6 +314,13 @@ void WorldBroadcaster::forEachPeer(std::function<void(const PeerInfo&)> fn) cons
 
 void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     m_currentTick = tickIndex;
+
+    // Per-phase tick-budget instrumentation. beginTick() resets the per-tick accumulators and
+    // records the wall start; each phase boundary records its elapsed wall-time; endTick() rolls
+    // the samples into the rolling window. See TickProfiler.h.
+    m_tickProfiler.beginTick();
+    const auto tMaintenanceStart = m_clock->now();
+
     // Coarse prune of stale rate-limit records every 600 ticks (~10 s at 60 Hz).
     if (++m_ratePruneTick % 600 == 0) {
         auto cutoff = m_clock->now() - std::chrono::seconds(m_connectRateWindowS);
@@ -414,13 +422,25 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         }
     }
 
+    m_tickProfiler.addPhaseSample(
+        TickPhase::Maintenance, std::chrono::duration<double, std::milli>(m_clock->now() - tMaintenanceStart).count());
+
     // Step every controlled entity from its control source (peer/AI/script), then copy state back.
+    // AI control sampling and physics integration are timed as distinct phases (accumulated across
+    // all entities) so the budget shows which dominates.
     for (auto& [entityIdx, ce] : m_controlledEntities) {
         EntityState* state = m_entityManager.get(ce.id);
         if (!state || state->dead)
             continue;
-        const ControlInput ctrl = ce.controller->sample(*state, tickIndex, simDt, &m_spatialIndex);
-        stepFlightSim(*ce.sim, *state, ctrl, simDt);
+        ControlInput ctrl;
+        {
+            TickPhaseScope aiScope(m_tickProfiler, TickPhase::Ai, *m_clock);
+            ctrl = ce.controller->sample(*state, tickIndex, simDt, &m_spatialIndex);
+        }
+        {
+            TickPhaseScope integrateScope(m_tickProfiler, TickPhase::Integrate, *m_clock);
+            stepFlightSim(*ce.sim, *state, ctrl, simDt);
+        }
 
         // NaN/Inf detection — log immediately so the cause is visible before any crash.
         const FlightState& fs = ce.sim->state();
@@ -447,7 +467,13 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         }
     }
 
+    const auto tCollisionStart = m_clock->now();
     m_entityManager.onTick(simDt, tickIndex);
+    m_tickProfiler.addPhaseSample(TickPhase::Collision,
+                                  std::chrono::duration<double, std::milli>(m_clock->now() - tCollisionStart).count());
+
+    // Serialize phase: telemetry, snapshot assembly + send, weather, and shutdown notices.
+    const auto tSerializeStart = m_clock->now();
 
     // Build per-peer world snapshots with interest management and delta compression.
     //
@@ -660,6 +686,10 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     }
 
     m_net.service(0);
+
+    m_tickProfiler.addPhaseSample(TickPhase::Serialize,
+                                  std::chrono::duration<double, std::milli>(m_clock->now() - tSerializeStart).count());
+    m_tickProfiler.endTick();
 }
 
 void WorldBroadcaster::onConnect(uint32_t peerId) {

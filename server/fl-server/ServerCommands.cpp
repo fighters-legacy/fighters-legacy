@@ -177,9 +177,11 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             auto uptimeSec = duration_cast<seconds>(steady_clock::now() - ctx.env.startTime).count();
             int peers = ctx.sim.broadcaster->getPeerCount();
             uint32_t entities = ctx.sim.entityManager->liveCount();
+            const fl::TickBudget tb = ctx.sim.broadcaster->getTickBudget();
             char buf[256];
-            std::snprintf(buf, sizeof(buf), "uptime: %llds  peers: %d  entities: %u  tick: 60 Hz",
-                          static_cast<long long>(uptimeSec), peers, entities);
+            std::snprintf(buf, sizeof(buf),
+                          "uptime: %llds  peers: %d  entities: %u  tick: %.1f Hz (%.2f/%.2f ms mean/p99)",
+                          static_cast<long long>(uptimeSec), peers, entities, tb.tickHz, tb.total.mean, tb.total.p99);
             std::string out(buf);
             auto ls = ctx.sim.broadcaster->getAuthLockoutSummary();
             if (ls.activeCount > 0) {
@@ -188,6 +190,34 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                               "\nadmin auth lockouts: %d active (use admin_auth_status for details)", ls.activeCount);
                 out += lbuf;
             }
+            return out;
+        });
+
+    // tickstats — per-phase server tick budget (integrate/ai/collision/serialize/total).
+    registry.registerCommand(
+        "tickstats", "tickstats  -- per-phase sim tick budget (ms: mean/p95/p99/max) + actual tick Hz",
+        [ctx](std::span<std::string_view>) -> std::string {
+            if (!ctx.sim.broadcaster)
+                return "tickstats: not available";
+            const fl::TickBudget tb = ctx.sim.broadcaster->getTickBudget();
+            if (tb.ticksSampled == 0)
+                return "tickstats: no ticks sampled yet";
+            std::string out;
+            char hdr[160];
+            std::snprintf(hdr, sizeof(hdr), "tick %.2f Hz  window %.1fs  samples %llu (total %llu)", tb.tickHz,
+                          tb.windowSeconds, static_cast<unsigned long long>(tb.ticksSampled),
+                          static_cast<unsigned long long>(tb.ticksTotal));
+            out += hdr;
+            auto appendRow = [&out](const char* label, const fl::Stats& s) {
+                char row[160];
+                std::snprintf(row, sizeof(row), "\n  %-12s mean %.3f  p95 %.3f  p99 %.3f  max %.3f ms", label, s.mean,
+                              s.p95, s.p99, s.max);
+                out += row;
+            };
+            appendRow("total", tb.total);
+            for (int i = 0; i < fl::kTickPhaseCount; ++i)
+                appendRow(fl::tickPhaseName(static_cast<fl::TickPhase>(i)), tb.phases[i]);
+            appendRow("other", tb.other);
             return out;
         });
 

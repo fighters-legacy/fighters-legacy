@@ -697,6 +697,49 @@ TEST_CASE("AdminConsole wb: status with one connected peer contains peers: 1", "
     CHECK(out.find("peers: 1") != std::string::npos);
 }
 
+TEST_CASE("AdminConsole wb: status shows the real tick Hz line", "[admin_console][wb]") {
+    WbFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("status");
+    CHECK(out.find("tick:") != std::string::npos);
+    CHECK(out.find("Hz") != std::string::npos);
+    CHECK(out.find("mean/p99") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// tickstats command tests
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AdminConsole: tickstats with null broadcaster returns not available", "[admin_console]") {
+    auto reg = makeRegistry(); // broadcaster == nullptr
+    std::string out = reg.dispatch("tickstats");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: tickstats before any tick reports no samples", "[admin_console][wb]") {
+    WbFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("tickstats");
+    CHECK(out.find("no ticks sampled") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: tickstats reports per-phase rows after ticks", "[admin_console][wb]") {
+    WbFixture f;
+    f.registry.registerType(makeWbEntityDef());
+    f.broadcaster.onConnect(0u);
+    for (uint64_t tick = 1; tick <= 5; ++tick)
+        f.broadcaster.onTick(1.0 / 60.0, tick);
+
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("tickstats");
+    CHECK(out.find("tick") != std::string::npos);
+    CHECK(out.find("integrate") != std::string::npos);
+    CHECK(out.find("ai") != std::string::npos);
+    CHECK(out.find("collision") != std::string::npos);
+    CHECK(out.find("serialize") != std::string::npos);
+    CHECK(out.find("total") != std::string::npos);
+}
+
 // ---------------------------------------------------------------------------
 // admin_auth_status command tests
 // ---------------------------------------------------------------------------

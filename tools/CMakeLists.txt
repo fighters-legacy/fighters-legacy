@@ -46,6 +46,7 @@ if(TARGET platform-enet)
     target_include_directories(net_check PRIVATE
         "${CMAKE_SOURCE_DIR}/platform/net"
         "${CMAKE_CURRENT_SOURCE_DIR}/common"
+        "${CMAKE_SOURCE_DIR}/engine" # NetStats.h -> perf/Stats.h
     )
 
     if(MSVC)

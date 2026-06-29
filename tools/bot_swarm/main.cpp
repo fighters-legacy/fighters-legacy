@@ -75,8 +75,10 @@ void printHelp() {
                 "  --threads N            Worker threads (default: auto)\n"
                 "  --pattern NAME         weave|level|aggressive|idle|random (default: weave)\n"
                 "  --json PATH            Write a JSON report to PATH\n"
+                "  --server-metrics PATH  Read fl-server --metrics-json file; embed authoritative server_tick block\n"
                 "  --assert-min-tick-hz X Exit nonzero if observed server tick-Hz min < X\n"
                 "  --assert-max-kbs Y     Exit nonzero if downstream KB/s per client max > Y\n"
+                "  --assert-max-tick-ms X Exit nonzero if authoritative server tick p99 (ms) > X\n"
                 "  --help, --version\n"
                 "\n"
                 "Environment:\n"
@@ -295,7 +297,16 @@ int main(int argc, char** argv) {
     for (auto& v : g_loopDt)
         allDt.insert(allDt.end(), v.begin(), v.end());
 
-    const SwarmReport report = buildReport(cfg, g_metrics, elapsed, std::move(allDt), threads);
+    // Read the authoritative server-side tick budget (if fl-server was given --metrics-json and
+    // the path was passed via --server-metrics). Missing/empty/malformed -> no server block.
+    std::optional<ServerTickReport> serverMetrics;
+    if (!cfg.serverMetricsPath.empty()) {
+        serverMetrics = loadServerMetrics(cfg.serverMetricsPath);
+        if (!serverMetrics)
+            std::printf("[WARN ] could not read server metrics from %s\n", cfg.serverMetricsPath.c_str());
+    }
+
+    const SwarmReport report = buildReport(cfg, g_metrics, elapsed, std::move(allDt), threads, serverMetrics);
     printReport(report);
 
     if (!cfg.jsonPath.empty()) {

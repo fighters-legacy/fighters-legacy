@@ -7,19 +7,23 @@
 // read on the main thread after the run (no locks). buildReport()/printReport()/reportToJson()
 // are pure functions over the collected metrics — unit-tested without sockets.
 //
-// The JSON shape is the #520/#513 contract (schema_version = 1); server-side tick metrics get
-// added later as a sibling block (extend, don't replace).
+// The JSON shape is the #520/#513 contract. schema_version = 2 adds the authoritative
+// "server_tick" sibling block (per-phase server tick budget) read from the fl-server
+// --metrics-json file via --server-metrics; the client-side "observed_server_tick_hz" proxy
+// is retained for comparison (extend, don't replace).
 
 #include "NetStats.h"
 #include "SwarmConfig.h"
+#include "perf/ServerTickReport.h"
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace fl {
 
-constexpr int kSwarmReportSchemaVersion = 1;
+constexpr int kSwarmReportSchemaVersion = 2;
 
 // Written by one worker thread; read after the run.
 struct ClientMetrics {
@@ -72,13 +76,19 @@ struct SwarmReport {
     bool assertsPassed{true};
     double assertMinTickHz{0.0};
     double assertMaxKbs{0.0};
+    double assertMaxTickMs{0.0};
+
+    // Authoritative server-side tick budget (from fl-server --metrics-json), when available.
+    bool hasServer{false};
+    ServerTickReport server{};
 };
 
 // Aggregates per-client metrics into a report. `elapsedS` is the steady measurement window;
 // `workerDtMs` are the worker-loop iteration times (harness-overrun signal). Mutates the input
 // vectors (computeStats sorts) — callers pass throwaway copies.
 inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientMetrics>& clients, double elapsedS,
-                               std::vector<double> workerDtMs, int threadsUsed) {
+                               std::vector<double> workerDtMs, int threadsUsed,
+                               std::optional<ServerTickReport> server = std::nullopt) {
     SwarmReport r;
     r.host = cfg.host;
     r.port = cfg.port;
@@ -89,6 +99,11 @@ inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientM
     r.threads = threadsUsed;
     r.assertMinTickHz = cfg.assertMinTickHz;
     r.assertMaxKbs = cfg.assertMaxKbs;
+    r.assertMaxTickMs = cfg.assertMaxTickMs;
+    if (server) {
+        r.hasServer = true;
+        r.server = *server;
+    }
 
     std::vector<double> kbs, rtt, connect, tick;
     uint64_t totalSnapshotBytes = 0;
@@ -128,6 +143,11 @@ inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientM
         pass = false;
     if (cfg.assertMaxKbs > 0.0 && r.downstreamKbs.max > cfg.assertMaxKbs)
         pass = false;
+    // Authoritative server tick budget gate (#520 hook): fail if the server's p99 tick time
+    // exceeds the cap. Missing server data while the assert is enabled is itself a failure
+    // (the gate cannot be evaluated -> treat as not-passing rather than silently passing).
+    if (cfg.assertMaxTickMs > 0.0 && (!r.hasServer || r.server.total.p99 > cfg.assertMaxTickMs))
+        pass = false;
     r.assertsPassed = pass;
     return r;
 }
@@ -144,7 +164,15 @@ inline void printReport(const SwarmReport& r) {
     printStats("loop dt", r.workerLoopDtMs, r.workerLoopDtSamples, "ms");
     std::printf("aggregate downstream: %.2f MB/s   max snapshot gap: %.1f ms\n", r.aggregateDownstreamMbs,
                 r.maxSnapshotGapMs);
-    if (r.assertMinTickHz > 0.0 || r.assertMaxKbs > 0.0)
+    if (r.hasServer)
+        std::printf("server tick (authoritative): %.1f Hz  total %.2f/%.2f ms mean/p99  "
+                    "(integ %.2f ai %.2f coll %.2f ser %.2f mean)\n",
+                    r.server.tickHz, r.server.total.mean, r.server.total.p99,
+                    r.server.phases[static_cast<int>(TickPhase::Integrate)].mean,
+                    r.server.phases[static_cast<int>(TickPhase::Ai)].mean,
+                    r.server.phases[static_cast<int>(TickPhase::Collision)].mean,
+                    r.server.phases[static_cast<int>(TickPhase::Serialize)].mean);
+    if (r.assertMinTickHz > 0.0 || r.assertMaxKbs > 0.0 || r.assertMaxTickMs > 0.0)
         std::printf("asserts: %s\n", r.assertsPassed ? "PASS" : "FAIL");
     std::printf("---\n");
 }
@@ -177,12 +205,19 @@ inline std::string reportToJson(const SwarmReport& r) {
     out += detail::jStat("rtt_ms", r.rttMs) + ",\n";
     out += detail::jStat("connect_ms", r.connectMs) + ",\n";
     out += detail::jStat("worker_loop_dt_ms", r.workerLoopDtMs) + ",\n";
+    // Authoritative server-side block (same shape fl-server writes; substr(2) trims the leading
+    // pad on toJson's opening brace so it sits after the key on one line).
+    if (r.hasServer) {
+        const std::string sj = toJson(r.server, 2);
+        out += "  \"server_tick\": " + sj.substr(2) + ",\n";
+    }
     char tail[512];
     std::snprintf(tail, sizeof(tail),
                   "  \"aggregate_downstream_mbs\": %.3f, \"max_snapshot_gap_ms\": %.3f,\n"
-                  "  \"asserts\": { \"min_tick_hz\": %.3f, \"max_kbs\": %.3f, \"passed\": %s }\n"
+                  "  \"asserts\": { \"min_tick_hz\": %.3f, \"max_kbs\": %.3f, \"max_tick_ms\": %.3f, "
+                  "\"passed\": %s }\n"
                   "}\n",
-                  r.aggregateDownstreamMbs, r.maxSnapshotGapMs, r.assertMinTickHz, r.assertMaxKbs,
+                  r.aggregateDownstreamMbs, r.maxSnapshotGapMs, r.assertMinTickHz, r.assertMaxKbs, r.assertMaxTickMs,
                   r.assertsPassed ? "true" : "false");
     out += tail;
     return out;

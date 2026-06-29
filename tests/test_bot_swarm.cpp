@@ -150,6 +150,16 @@ TEST_CASE("parseSwarmArgs parses assert thresholds with strtod", "[bot_swarm][co
     CHECK(r.cfg.assertMaxKbs == Catch::Approx(150.0));
 }
 
+TEST_CASE("parseSwarmArgs parses --server-metrics and --assert-max-tick-ms", "[bot_swarm][config]") {
+    const SwarmParseResult r = parse({"--server-metrics", "/tmp/tick.json", "--assert-max-tick-ms", "16.6"});
+    REQUIRE(r.status == ParseStatus::Ok);
+    CHECK(r.cfg.serverMetricsPath == "/tmp/tick.json");
+    CHECK(r.cfg.assertMaxTickMs == Catch::Approx(16.6));
+
+    const SwarmParseResult bad = parse({"--assert-max-tick-ms", "-1"});
+    CHECK(bad.status == ParseStatus::Error);
+}
+
 // ---------------------------------------------------------------------------
 // Metric aggregation + JSON
 // ---------------------------------------------------------------------------
@@ -225,9 +235,59 @@ TEST_CASE("reportToJson emits the versioned schema and key fields", "[bot_swarm]
     clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
     const std::string json = reportToJson(buildReport(cfg, clients, 10.0, {16.6}, 1));
 
-    CHECK(json.find("\"schema_version\": 1") != std::string::npos);
+    CHECK(json.find("\"schema_version\": 2") != std::string::npos);
     CHECK(json.find("\"observed_server_tick_hz\"") != std::string::npos);
     CHECK(json.find("\"downstream_kbs_per_client\"") != std::string::npos);
     CHECK(json.find("\"clients_connected\": 1") != std::string::npos);
     CHECK(json.find("\"asserts\"") != std::string::npos);
+    // No server metrics passed -> no authoritative block.
+    CHECK(json.find("\"server_tick\"") == std::string::npos);
+}
+
+static ServerTickReport makeServer(double p99) {
+    ServerTickReport s;
+    s.tickHz = 60.0;
+    s.ticksSampled = 600;
+    s.peers = 1;
+    s.total = {1.0, 2.0, 9.0, 4.0, p99, 0.5};
+    s.phases[static_cast<int>(TickPhase::Integrate)] = {0.1, 0.8, 2.0, 1.4, 1.8, 0.2};
+    return s;
+}
+
+TEST_CASE("reportToJson embeds the server_tick block when server metrics are present",
+          "[bot_swarm][metrics][servertick]") {
+    SwarmConfig cfg;
+    cfg.clients = 1;
+    std::vector<ClientMetrics> clients;
+    clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
+
+    const SwarmReport withServer = buildReport(cfg, clients, 10.0, {16.6}, 1, makeServer(6.0));
+    const std::string json = reportToJson(withServer);
+    CHECK(withServer.hasServer);
+    CHECK(json.find("\"server_tick\"") != std::string::npos);
+    CHECK(json.find("\"integrate_ms\"") != std::string::npos);
+    CHECK(json.find("\"tick_hz\"") != std::string::npos);
+
+    // The embedded block parses back to the same values (one shape on both sides).
+    ServerTickReport parsed;
+    REQUIRE(fromJson(json, parsed));
+    CHECK(parsed.tickHz == Catch::Approx(60.0).margin(1e-3));
+}
+
+TEST_CASE("assert-max-tick-ms gates on the authoritative server p99", "[bot_swarm][metrics][servertick]") {
+    SwarmConfig cfg;
+    cfg.clients = 1;
+    cfg.assertMaxTickMs = 16.6;
+    std::vector<ClientMetrics> clients;
+    clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
+
+    SECTION("passes when server p99 within budget") {
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, makeServer(6.0)).assertsPassed);
+    }
+    SECTION("fails when server p99 exceeds budget") {
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, makeServer(25.0)).assertsPassed);
+    }
+    SECTION("fails when the assert is enabled but no server metrics were provided") {
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed);
+    }
 }

@@ -126,6 +126,13 @@ static const char* kDefaultToml =
     "max_auth_failures = 5\n"
     "lockout_seconds = 60\n"
     "\n"
+    "[metrics]\n"
+    "# Per-phase server tick-budget JSON export. Empty path = disabled. Written atomically each\n"
+    "# interval; consumed by bot_swarm (--server-metrics) and any external scraper. See\n"
+    "# docs/load-testing.md for the JSON schema.\n"
+    "tick_json_path = \"\"\n"
+    "tick_json_interval_ms = 1000\n"
+    "\n"
     "[spawn]\n"
     "# AGL offset (metres) above terrain for all spawn points. Default 500 m.\n"
     "agl_offset = 500.0\n"
@@ -488,6 +495,17 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "rcon.password is empty; RCON will accept unauthenticated connections"
                      " -- set a password or disable rcon.enabled");
+
+        // [metrics]
+        if (auto v = tbl["metrics"]["tick_json_path"].value<std::string>())
+            cfg.metrics.tickJsonPath = std::move(*v);
+        if (auto v = tbl["metrics"]["tick_json_interval_ms"].value<int64_t>()) {
+            if (*v < 100 || *v > 60000)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "metrics.tick_json_interval_ms out of range [100,60000]; using default");
+            else
+                cfg.metrics.tickJsonIntervalMs = static_cast<uint32_t>(*v);
+        }
 
         // [spawn]
         if (auto v = tbl["spawn"]["agl_offset"].value<double>()) {

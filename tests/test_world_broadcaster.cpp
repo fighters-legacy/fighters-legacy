@@ -237,6 +237,44 @@ TEST_CASE("WorldBroadcaster: registerController steps a non-peer entity and seri
     CHECK(foundAiEntity);
 }
 
+TEST_CASE("WorldBroadcaster: getTickBudget records per-phase timing after onTick", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::EntityTransform t{};
+    t.pos[1] = 1000.0;
+    fl::EntityId id = em.spawn("builtin:debug-entity", t);
+    REQUIRE(id.valid());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+    broadcaster.registerController(id, std::make_unique<ConstantController>());
+
+    // Before any tick, nothing is sampled.
+    CHECK(broadcaster.getTickBudget().ticksSampled == 0u);
+
+    for (uint64_t tick = 1; tick <= 5; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    const fl::TickBudget tb = broadcaster.getTickBudget();
+    CHECK(tb.ticksSampled == 5u);
+    CHECK(tb.ticksTotal == 5u);
+    // Timing magnitudes are environment-dependent; assert only that every phase is finite and >= 0
+    // and that the integrate/ai split wiring populated the accumulators without NaN/negatives.
+    CHECK(std::isfinite(tb.total.mean));
+    CHECK(tb.total.mean >= 0.0);
+    CHECK(tb.tickHz >= 0.0);
+    CHECK(std::isfinite(tb.tickHz));
+    for (int i = 0; i < fl::kTickPhaseCount; ++i) {
+        CHECK(std::isfinite(tb.phases[i].mean));
+        CHECK(tb.phases[i].mean >= 0.0);
+    }
+    CHECK(tb.other.mean >= 0.0);
+}
+
 TEST_CASE("WorldBroadcaster: flight model resolver is consulted for a flightModelId, falls back on miss",
           "[world_broadcaster]") {
     MockLogger logger;

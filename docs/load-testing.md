@@ -18,15 +18,39 @@ client observes, which turns out to be exactly what the scale gate needs:
 
 | Metric | Meaning |
 |---|---|
-| **observed server tick-Hz** | `(lastTick − firstTick) / elapsed` from snapshot `tickIndex` progression. The headline **server-health proxy**: when the server falls behind, this sags below 60. Report the **min** across clients as the soak signal. |
+| **observed server tick-Hz** | `(lastTick − firstTick) / elapsed` from snapshot `tickIndex` progression. The client-side **proxy** (used when no `--server-metrics` is wired): when the server falls behind, this sags below 60. Report the **min** across clients as the soak signal. Superseded by the authoritative `server_tick` block below when available. |
 | **downstream KB/s per client** | Snapshot payload bytes per client per second — the per-client bandwidth the gate caps. |
 | **RTT (ms)** | ENet round-trip estimate / `MsgPeerDelay` per client. |
 | **connect time (ms)** | From connect issue to `onConnect` (includes the ramp queue). |
 | **worker loop dt (ms)** | Harness work-time per tick. If it approaches the tick interval (16.7 ms @ 60 Hz) the **harness** is the bottleneck and the numbers are suspect. |
 | clients connected / refused / disconnected | Admission + stability over the run. |
 
-The server exposes no authoritative per-tick metric yet; when Epic A (#513) adds one, the JSON
-report gains a server-side block (extend, don't replace) and the gate switches to it.
+### Authoritative server tick budget (`server_tick`)
+
+When `fl-server` is run with `--metrics-json PATH` (or `[metrics] tick_json_path`) it writes an
+atomic per-phase tick-budget JSON every `tick_json_interval_ms` (default 1000; the runner uses
+250). Point `bot_swarm --server-metrics PATH` at that file and the report gains an authoritative
+`server_tick` sibling block (the client-side `observed_server_tick_hz` proxy is retained for
+comparison). `bot_swarm` bumps `schema_version` to **2** when this block can be present.
+
+The same JSON shape is the standalone `--metrics-json` file and the embedded block:
+
+| Field | Meaning |
+|---|---|
+| `schema_version` | server-tick report schema (currently `1`) |
+| `tick_hz` | actual recent tick rate over the sampling window (ring-derived) |
+| `ticks_sampled` / `ticks_total` | ticks in the rolling window / monotonic all-time |
+| `window_s` | wall-clock span of the sampling window |
+| `peers` / `entities` | live peer count / live entity count at write time |
+| `tick_ms` | total `onTick` wall-time stats `{min,mean,max,p95,p99}` (ms) |
+| `maintenance_ms` | rate-limit prune, idle timeout, admin drains, spatial rebuild, input drain, jitter resize |
+| `integrate_ms` | physics integration (`stepFlightSim`) summed across entities |
+| `ai_ms` | controller `sample()` summed across entities |
+| `collision_ms` | `EntityManager::onTick` (damage/collision/reap) |
+| `serialize_ms` | telemetry + snapshot assembly/send + weather + shutdown notices |
+| `other_ms` | `tick_ms − Σ(phases)` (loop/function overhead), clamped ≥ 0 |
+
+The scale gate (#520) asserts on `server_tick.tick_ms.p99` via `--assert-max-tick-ms`.
 
 ## Scale-gate targets
 
@@ -73,8 +97,10 @@ must raise them (the runner writes this automatically):
       --threads N            worker threads (default auto = min(cores, ceil(clients/32)))
       --pattern NAME         weave | level | aggressive | idle | random (default weave)
       --json PATH            write a JSON report
-      --assert-min-tick-hz X exit nonzero if observed tick-Hz min < X
+      --server-metrics PATH  read fl-server --metrics-json file; embed authoritative server_tick block
+      --assert-min-tick-hz X exit nonzero if observed (proxy) tick-Hz min < X
       --assert-max-kbs Y     exit nonzero if downstream KB/s/client max > Y
+      --assert-max-tick-ms X exit nonzero if authoritative server tick p99 (ms) > X
     Env: FL_HOST, FL_PORT
 
 ## Flight patterns

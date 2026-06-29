@@ -39,6 +39,7 @@
 #include <loop/GameLoop.h>
 #include <net/GameProtocol.h>
 #include <net/WorldBroadcaster.h>
+#include <perf/ServerTickReport.h>
 #include <render/BuiltinGeometry.h>
 #include <render/TerrainStreamer.h>
 #include <sdl3/SDL3AsyncFilesystem.h>
@@ -125,8 +126,9 @@ static void applyCliAndEnvOverrides(fl::ServerConfig& cfg, int argc, char** argv
 int main(int argc, char** argv) {
     // Pre-pass: --help / --version / --persistent / --bind
     bool flagPersistent = false;
-    std::string flagBind;       // non-empty if --bind addr was given
-    std::string flagAdminToken; // non-empty if --admin-token was given (internal single-player use)
+    std::string flagBind;        // non-empty if --bind addr was given
+    std::string flagAdminToken;  // non-empty if --admin-token was given (internal single-player use)
+    std::string flagMetricsJson; // non-empty if --metrics-json path was given (overrides [metrics])
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
@@ -138,6 +140,7 @@ int main(int argc, char** argv) {
                 "  --version          Print version and exit\n"
                 "  --persistent       Enable persistent world mode (Phase 2 -- not yet active)\n"
                 "  --bind <addr>      Bind address (overrides server.toml and FL_BIND_ADDRESS)\n"
+                "  --metrics-json <p> Write the per-phase tick-budget JSON to <p> (overrides [metrics])\n"
                 "\n"
                 "Admin console commands are available on stdin (type 'help' for a command list).\n"
                 "\n"
@@ -168,6 +171,8 @@ int main(int argc, char** argv) {
             flagBind = argv[++i];
         if (std::strcmp(argv[i], "--admin-token") == 0 && i + 1 < argc)
             flagAdminToken = argv[++i];
+        if (std::strcmp(argv[i], "--metrics-json") == 0 && i + 1 < argc)
+            flagMetricsJson = argv[++i];
     }
 
     // ---- Set up platform ----
@@ -202,6 +207,9 @@ int main(int argc, char** argv) {
     // Used internally by LocalServer (single-player) to inject a per-session token.
     if (!flagAdminToken.empty())
         cfg.operatorPassword = flagAdminToken;
+    // --metrics-json overrides the [metrics] tick_json_path from server.toml.
+    if (!flagMetricsJson.empty())
+        cfg.metrics.tickJsonPath = flagMetricsJson;
 
     // ---- Phase 2 stub logs ----
     if (cfg.persistent)
@@ -549,6 +557,17 @@ int main(int argc, char** argv) {
         }
     }).detach();
 
+    // Per-phase tick-budget JSON export (atomic .tmp -> rename each interval). Disabled when path empty.
+    const std::string metricsPath = cfg.metrics.tickJsonPath;
+    const auto metricsInterval = std::chrono::milliseconds(cfg.metrics.tickJsonIntervalMs);
+    auto nextMetricsWrite = std::chrono::steady_clock::now();
+    if (!metricsPath.empty()) {
+        char mbuf[256];
+        std::snprintf(mbuf, sizeof(mbuf), "writing tick-budget metrics to %s every %u ms", metricsPath.c_str(),
+                      cfg.metrics.tickJsonIntervalMs);
+        log->log(LogLevel::Info, __FILE__, __LINE__, mbuf);
+    }
+
     while (!g_quit) {
         {
             std::lock_guard<std::mutex> lk(stdinMutex);
@@ -567,6 +586,14 @@ int main(int argc, char** argv) {
         const double entityX = broadcaster.cachedEntityX();
         const double entityZ = broadcaster.cachedEntityZ();
         terrainStreamer.update(glm::dvec3(entityX, 0.0, entityZ));
+
+        if (!metricsPath.empty() && std::chrono::steady_clock::now() >= nextMetricsWrite) {
+            const fl::ServerTickReport rep = fl::makeServerTickReport(
+                broadcaster.getTickBudget(), broadcaster.getPeerCount(), entityManager.liveCount());
+            fl::writeConfigFile(metricsPath, fl::toJson(rep) + "\n", *log);
+            nextMetricsWrite = std::chrono::steady_clock::now() + metricsInterval;
+        }
+
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 

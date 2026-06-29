@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **engine**: server tick-budget instrumentation — `engine/perf/TickProfiler` records per-phase wall-time (maintenance/integrate/ai/collision/serialize/total) every `WorldBroadcaster::onTick`, exposed via `WorldBroadcaster::getTickBudget()`. `fl-server` surfaces it through the `status` command (now reports real tick Hz + mean/p99 ms), a new `tickstats` admin command, and a `[metrics] tick_json_path` / `--metrics-json` atomic JSON export (`engine/perf/ServerTickReport`). `bot_swarm --server-metrics` embeds the authoritative `server_tick` block (schema_version 2) alongside the client-side proxy, with an `--assert-max-tick-ms` p99 gate hook for #520 (#513)
 - **network**: adaptive per-peer jitter buffer resizing — EWMA of one-way delay + RFC 3550 inter-arrival jitter estimator continuously drive `JitterBuffer::setMaxDepth()` via `[world].jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, and `jitter_buffer_jitter_multiplier`; hot-reloadable via `reload_config` (#424, #429)
 - **network**: `WorldBroadcaster::forEachPeer` callback now receives a `PeerInfo` struct, adding `bufferMaxDepth`, `ewmaDelayTicks`, and `ewmaJitterTicks` fields alongside existing fields
 - **network**: `peers` admin command output extended to show EWMA delay, jitter estimate, and buffer max depth

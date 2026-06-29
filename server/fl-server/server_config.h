@@ -84,6 +84,13 @@ struct ServerConfig {
     };
     RconConfig rcon;
 
+    // [metrics]
+    struct MetricsConfig {
+        std::string tickJsonPath;           // empty = disabled; atomic per-interval tick-budget JSON export
+        uint32_t tickJsonIntervalMs = 1000; // write cadence in ms; [100, 60000]
+    };
+    MetricsConfig metrics;
+
     // [spawn]
     struct SpawnPointDef {
         double x = 0.0;

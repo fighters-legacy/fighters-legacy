@@ -25,6 +25,10 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 - Always use `std::memcpy` to read/write struct fields from/to raw buffers. Direct pointer
   casting of unaligned wire data is undefined behaviour caught by UBSAN.
 - The first byte of every packet is the `MsgId` discriminator.
+- **Not on the wire:** the server tick-budget instrumentation (#513) is exported as a JSON file
+  (`fl-server --metrics-json`) and over the admin command channel (`tickstats`), **not** as a new
+  network message — no `MsgId` and no protocol-version bump. See
+  [docs/load-testing.md](load-testing.md#authoritative-server-tick-budget-server_tick).
 
 ## Messages
 

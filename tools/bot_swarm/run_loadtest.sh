@@ -42,6 +42,8 @@ REPORT="$RESULTS_DIR/loadtest_${CLIENTS}c_${PATTERN}_$(date -u +%Y%m%dT%H%M%SZ).
 MAX_PEERS=$(( CLIENTS + 16 ))
 [[ "$MAX_PEERS" -gt 1024 ]] && MAX_PEERS=1024
 
+METRICS="$WORKDIR/server_tick.json"
+
 cat >"$CONFIG" <<EOF
 [server]
 port = $PORT
@@ -54,6 +56,10 @@ connect_rate_limit_window_s = 1
 pre_handshake_rate_limit_count = 0
 packet_flood_multiplier = 3
 max_connections_per_ip = 0
+
+[metrics]
+tick_json_path = "$METRICS"
+tick_json_interval_ms = 250
 EOF
 
 echo "=== bot_swarm load test: $CLIENTS clients, pattern=$PATTERN, ${DURATION}s, port $PORT ==="
@@ -64,10 +70,18 @@ SERVER_PID=$!
 sleep 2
 kill -0 "$SERVER_PID" 2>/dev/null || { echo "ERROR: fl-server exited during startup"; exit 1; }
 
+# --server-metrics points bot_swarm at the file fl-server writes (above), so the report carries
+# the authoritative per-phase server_tick block alongside the client-side proxy.
 "$BOTSWARM" 127.0.0.1 "$PORT" \
     --clients "$CLIENTS" --duration "$DURATION" --pattern "$PATTERN" \
-    --json "$REPORT"
+    --json "$REPORT" --server-metrics "$METRICS"
 STATUS=$?
+
+# Sanity: the authoritative server-side block must be present in the report.
+if ! grep -q '"server_tick"' "$REPORT"; then
+    echo "ERROR: report $REPORT is missing the authoritative server_tick block"
+    exit 1
+fi
 
 echo "Report: $REPORT"
 exit $STATUS

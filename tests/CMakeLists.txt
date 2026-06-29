@@ -149,14 +149,27 @@ if(TARGET platform-enet)
     target_include_directories(test_server_config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     catch_discover_tests(test_server_config)
 
-    # bot_swarm pure-logic tests (patterns, NetStats, CLI, metrics) — no sockets, header-only.
+    # bot_swarm pure-logic tests (patterns, NetStats, CLI, metrics, server_tick block) — no
+    # sockets. platform-hal supplies the IClock.h include pulled in via perf/ServerTickReport.h.
     add_executable(test_bot_swarm test_bot_swarm.cpp)
-    target_link_libraries(test_bot_swarm PRIVATE Catch2::Catch2WithMain)
+    target_link_libraries(test_bot_swarm PRIVATE Catch2::Catch2WithMain platform-hal)
     target_include_directories(test_bot_swarm PRIVATE
         "${CMAKE_SOURCE_DIR}/tools/bot_swarm"
         "${CMAKE_SOURCE_DIR}/tools/common"
+        "${CMAKE_SOURCE_DIR}/engine"
     )
     catch_discover_tests(test_bot_swarm)
+
+    # Per-phase tick profiler + server tick report (header-only; platform-hal for IClock.h).
+    add_executable(test_tick_profiler test_tick_profiler.cpp)
+    target_link_libraries(test_tick_profiler PRIVATE Catch2::Catch2WithMain platform-hal)
+    target_include_directories(test_tick_profiler PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+    catch_discover_tests(test_tick_profiler)
+
+    add_executable(test_server_tick_report test_server_tick_report.cpp)
+    target_link_libraries(test_server_tick_report PRIVATE Catch2::Catch2WithMain platform-hal)
+    target_include_directories(test_server_tick_report PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+    catch_discover_tests(test_server_tick_report)
 
     add_executable(test_lan_discovery test_lan_discovery.cpp)
     target_link_libraries(test_lan_discovery PRIVATE Catch2::Catch2WithMain engine-net)

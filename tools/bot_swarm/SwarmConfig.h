@@ -22,9 +22,11 @@ struct SwarmConfig {
     int rampMs{20};
     int threads{0}; // 0 = auto (min(hw_concurrency, ceil(clients/32)))
     std::string pattern{"weave"};
-    std::string jsonPath;        // empty = no JSON output
-    double assertMinTickHz{0.0}; // 0 = disabled
-    double assertMaxKbs{0.0};    // 0 = disabled
+    std::string jsonPath;          // empty = no JSON output
+    std::string serverMetricsPath; // empty = no server-side tick block; fl-server --metrics-json file
+    double assertMinTickHz{0.0};   // 0 = disabled
+    double assertMaxKbs{0.0};      // 0 = disabled
+    double assertMaxTickMs{0.0};   // 0 = disabled; fails if server tick_ms.p99 > this (#520 gate hook)
 };
 
 enum class ParseStatus { Ok, Help, Version, Error };
@@ -92,6 +94,10 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
             r.cfg.jsonPath = argv[++i];
+        } else if (std::strcmp(a, "--server-metrics") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.serverMetricsPath = argv[++i];
         } else if (std::strcmp(a, "--assert-min-tick-hz") == 0) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
@@ -100,6 +106,10 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
             r.cfg.assertMaxKbs = std::strtod(argv[++i], nullptr);
+        } else if (std::strcmp(a, "--assert-max-tick-ms") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.assertMaxTickMs = std::strtod(argv[++i], nullptr);
         } else if (a[0] == '-' && a[1] != '\0') {
             r.status = ParseStatus::Error;
             r.error = std::string("unknown flag: ") + a;
@@ -140,6 +150,8 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
         fail("--assert-min-tick-hz must be >= 0");
     else if (r.cfg.assertMaxKbs < 0.0)
         fail("--assert-max-kbs must be >= 0");
+    else if (r.cfg.assertMaxTickMs < 0.0)
+        fail("--assert-max-tick-ms must be >= 0");
     return r;
 }
 

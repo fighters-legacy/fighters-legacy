@@ -8,6 +8,7 @@
 #include "entity/EntityId.h"
 #include "flight/IGravityField.h"
 #include "loop/ISimUpdate.h"
+#include "perf/TickProfiler.h"
 #include "spatial/SpatialIndex.h"
 
 #include <array>
@@ -185,6 +186,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Snapshot of admin auth lockout state — sim-thread-only read (acceptable monitoring
     // race, same pattern as getBannedAddresses() / liveCount()).
     AuthLockoutSummary getAuthLockoutSummary() const;
+
+    // Snapshot of the rolling per-phase tick budget (integrate / ai / collision / serialize /
+    // total). Thread-safe (mutex-guarded inside TickProfiler) — safe to call from any thread;
+    // read by the fl-server admin `status`/`tickstats` commands and the --metrics-json writer.
+    TickBudget getTickBudget() const {
+        return m_tickProfiler.snapshot();
+    }
 
     // Set the terrain floor elevation (m) used for ground collision in each peer's
     // FlightIntegrator. Thread-safe; may be called from any thread. Serves as a global
@@ -459,6 +467,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::function<std::vector<std::string>(int)> m_adminShellDrain; // null = drain disabled
 
     SpatialIndex m_spatialIndex; // rebuilt at the start of each onTick; default 10 km cell size
+
+    // Per-phase tick-budget instrumentation. Written on the sim thread in onTick (begin/end +
+    // TickPhaseScope); snapshot()ed (mutex-guarded) by getTickBudget() from any thread.
+    TickProfiler m_tickProfiler;
 
     // Interest management + delta compression state (sim-thread only).
     double m_drawDistanceM{200'000.0};         // precomputed from drawDistanceKm × 1000; 200 km default

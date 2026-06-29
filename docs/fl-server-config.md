@@ -28,6 +28,7 @@ multi-key sections). See [Environment variables](#environment-variables) for the
 | `--version`, `-v` | — | Print version and exit |
 | `--persistent` | — | Enable persistent world mode (Phase 2 — not yet active) |
 | `--bind <addr>` | IP or hostname | Override `server.bind_address` from the command line; takes precedence over `server.toml` and `FL_BIND_ADDRESS`. Used by the game client when spawning fl-server for single-player mode (`--bind 127.0.0.1`). |
+| `--metrics-json <path>` | file path | Write the per-phase tick-budget JSON to `<path>`; overrides `[metrics] tick_json_path`. See [metrics](#metrics--tick-budget-export). |
 
 CLI positional arguments (Tier 2): `fl-server [port] [maxPeers]`
 
@@ -790,6 +791,29 @@ All `[rcon]` fields **require a restart** to take effect.
 
 ---
 
+## [metrics] — Tick-budget export
+
+Exports the per-phase server tick budget (maintenance / integrate / ai / collision /
+serialize / total) as a JSON file, written atomically (`.tmp` → rename) every
+`tick_json_interval_ms`. Disabled when `tick_json_path` is empty. The same data is available
+live via the `tickstats` admin command and summarised in `status`.
+
+```toml
+[metrics]
+tick_json_path = ""          # empty = disabled; absolute or relative path
+tick_json_interval_ms = 1000 # write cadence, ms; [100, 60000]
+```
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `tick_json_path` | string | `""` | Output file; empty disables export. `--metrics-json` overrides this. |
+| `tick_json_interval_ms` | int | `1000` | Write cadence in milliseconds; clamped to `[100, 60000]`. |
+
+The JSON schema (also the shape embedded as `server_tick` in the `bot_swarm` report) is
+documented in [docs/load-testing.md](load-testing.md#authoritative-server-tick-budget-server_tick).
+`bot_swarm --server-metrics <path>` consumes this file; the #520 CI gate asserts on its
+`tick_ms.p99`.
+
 ## [spawn] — Peer spawn locations
 
 Controls where connecting peers appear in the world. Terrain elevation at each
@@ -868,7 +892,8 @@ process.
 | Command | Args | Description |
 |---|---|---|
 | `help` | `[command]` | List all commands, or show usage for a specific one |
-| `status` | — | Show uptime, peer count, entity count, tick rate |
+| `status` | — | Show uptime, peer count, entity count, and the real tick rate (Hz + mean/p99 ms) |
+| `tickstats` | — | Per-phase sim tick budget (integrate/ai/collision/serialize/total; ms mean/p95/p99/max) + actual tick Hz |
 | `peers` | — | List connected peers (peer ID, address, entity index/generation, one-way delay in ticks/ms, input queue depth `q=N`) |
 | `kick` | `<peerId\|IP>` | Disconnect a peer by numeric ID, or all peers from an IP address |
 | `ban` | `<peerId\|IP>` | Add IP to the ban list and kick matching peers; saves to `banlist_path` if configured |

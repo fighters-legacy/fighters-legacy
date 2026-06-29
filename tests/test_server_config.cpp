@@ -937,3 +937,48 @@ TEST_CASE("parseServerConfig: adaptive jitter defaults are correct", "[server_co
     CHECK(cfg.jitterHysteresis == 2u);
     CHECK(cfg.jitterMultiplier == Catch::Approx(2.0f));
 }
+
+// ---------------------------------------------------------------------------
+// [metrics]
+// ---------------------------------------------------------------------------
+
+TEST_CASE("parseServerConfig: metrics defaults are correct", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("", &log);
+    CHECK(cfg.metrics.tickJsonPath.empty());
+    CHECK(cfg.metrics.tickJsonIntervalMs == 1000u);
+}
+
+TEST_CASE("parseServerConfig: reads [metrics] tick_json_path and interval", "[server_config]") {
+    MockLogger log;
+    auto cfg =
+        parseServerConfig("[metrics]\ntick_json_path = '/var/run/fl/tick.json'\ntick_json_interval_ms = 500\n", &log);
+    CHECK(cfg.metrics.tickJsonPath == "/var/run/fl/tick.json");
+    CHECK(cfg.metrics.tickJsonIntervalMs == 500u);
+}
+
+TEST_CASE("parseServerConfig: tick_json_interval_ms below range warns and keeps default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[metrics]\ntick_json_interval_ms = 99\n", &log);
+    CHECK(cfg.metrics.tickJsonIntervalMs == 1000u);
+}
+
+TEST_CASE("parseServerConfig: tick_json_interval_ms above range warns and keeps default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[metrics]\ntick_json_interval_ms = 60001\n", &log);
+    CHECK(cfg.metrics.tickJsonIntervalMs == 1000u);
+}
+
+TEST_CASE("parseServerConfig: tick_json_interval_ms boundaries are accepted", "[server_config]") {
+    MockLogger log;
+    CHECK(parseServerConfig("[metrics]\ntick_json_interval_ms = 100\n", &log).metrics.tickJsonIntervalMs == 100u);
+    CHECK(parseServerConfig("[metrics]\ntick_json_interval_ms = 60000\n", &log).metrics.tickJsonIntervalMs == 60000u);
+}
+
+TEST_CASE("parseServerConfig: default template parses with the [metrics] section", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig(defaultServerConfigToml(), &log);
+    // The default template ships [metrics] with an empty path (disabled) and 1000 ms interval.
+    CHECK(cfg.metrics.tickJsonPath.empty());
+    CHECK(cfg.metrics.tickJsonIntervalMs == 1000u);
+}
