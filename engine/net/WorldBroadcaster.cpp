@@ -266,6 +266,7 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setJitterAdaptWindow(cfg.jitterAdaptWindow);
     setJitterHysteresis(cfg.jitterHysteresis);
     setJitterMultiplier(cfg.jitterMultiplier);
+    setCongestionParams(cfg.congestion);
 }
 
 void WorldBroadcaster::setIdleTimeout(int timeoutSeconds) noexcept {
@@ -296,6 +297,10 @@ void WorldBroadcaster::setJitterMultiplier(float k) noexcept {
     m_jitterMultiplier = (k < 0.f ? 0.f : k);
 }
 
+void WorldBroadcaster::setCongestionParams(const CongestionParams& params) noexcept {
+    m_congestionParams = params;
+}
+
 void WorldBroadcaster::forEachPeer(std::function<void(const PeerInfo&)> fn) const {
     for (const auto& [peerId, eid] : m_peerEntities) {
         PeerInfo pi;
@@ -310,6 +315,10 @@ void WorldBroadcaster::forEachPeer(std::function<void(const PeerInfo&)> fn) cons
             pi.bufferMaxDepth = ps.jitterBuffer.maxDepth();
             pi.ewmaDelayTicks = ps.ewmaDelayTicks;
             pi.ewmaJitterTicks = ps.ewmaJitterTicks;
+            const uint32_t interval = ps.congestion.sendIntervalTicks();
+            pi.sendRateHz = interval > 0u ? 60.f / static_cast<float>(interval) : 60.f;
+            pi.effectiveBudget = ps.congestion.effectiveBudget(m_snapshotBudgetBytes.load(std::memory_order_relaxed));
+            pi.packetLoss = m_net.getPeerLinkStats(peerId).packetLoss; // live ENet mean loss fraction
         }
         fn(pi);
     }
@@ -423,6 +432,23 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             if (shouldGrow || shouldShrink)
                 ps.jitterBuffer.setMaxDepth(target);
         }
+    }
+
+    // Adaptive send-rate / congestion response (#518): sample each connected peer's ENet link quality
+    // and step its AIMD controller. The controller holds a per-peer throttle that gates both the
+    // snapshot send cadence (decimation gate in the per-peer loop below) and the effective byte budget.
+    // configure() each tick so reload_config param changes (and the enabled flag) take effect live; the
+    // getPeerLinkStats call is a cheap field read (zeros from the mock/loopback => throttle stays 1).
+    for (auto& [peerId, eid] : m_peerEntities) {
+        (void)eid;
+        PeerInputState& ps = m_peerInputs[peerId];
+        const PeerLinkStats link = m_net.getPeerLinkStats(peerId);
+        CongestionSample sample;
+        sample.packetLoss = link.packetLoss;
+        sample.rttMs = link.rttMs;
+        sample.reliableBytesInFlight = link.reliableBytesInFlight;
+        ps.congestion.configure(m_congestionParams);
+        ps.congestion.update(tickIndex, sample);
     }
 
     m_tickProfiler.addPhaseSample(
@@ -573,10 +599,18 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
 
     // Step 3: per-peer snapshot — interest filter (queryRadius) + client-acked delta compression.
     for (auto& [peerId, peerEid] : m_peerEntities) {
+        // Adaptive send-rate decimation (#518): skip this peer's snapshot when the congestion
+        // controller has stretched its send interval and not enough ticks have elapsed since the last
+        // send. Skipped before the despawn-detection pass so a decimated tick mutates no per-peer state
+        // (despawn queueing, knownGens GC, lastSentTick) — everything defers to the next actual send.
+        PeerInputState& pin = m_peerInputs[peerId];
+        if (pin.sentSnapshot && tickIndex - pin.lastSnapshotSentTick < pin.congestion.sendIntervalTicks())
+            continue;
+
         const EntityState* peerState = m_entityManager.get(peerEid);
 
         auto& knownGens = m_peerKnownGens[peerId];
-        const uint64_t peerAckedTick = m_peerInputs[peerId].ackedTick;
+        const uint64_t peerAckedTick = pin.ackedTick;
 
         // Confirmed-despawn detection (#516) + GC prune, in one pass over the known set:
         //   * Absent from the live snapMap → removed from the sim entirely (kill/despawn). Queue an
@@ -643,7 +677,10 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         // highest-priority set that fits; the rest are deferred to a later tick. budget == 0 keeps the
         // legacy behaviour (every visible entity, ascending idx). The own entity is always admitted.
         std::vector<uint32_t> selected;
-        const uint32_t budget = m_snapshotBudgetBytes.load(std::memory_order_relaxed);
+        // Congestion response (#518): scale the static byte budget by this peer's congestion throttle.
+        // A static budget of 0 (unlimited) stays 0 here — under congestion only the send-rate lever
+        // applies for unlimited-budget servers.
+        const uint32_t budget = pin.congestion.effectiveBudget(m_snapshotBudgetBytes.load(std::memory_order_relaxed));
         if (budget == 0u || visible.size() <= 1u) {
             selected = visible;
         } else {
@@ -792,6 +829,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                          static_cast<uint16_t>(ids.size() * sizeof(uint32_t)));
         }
         m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/false);
+        pin.lastSnapshotSentTick = tickIndex; // decimation reference for the next tick (#518)
+        pin.sentSnapshot = true;
     }
 
     // Tick weather and broadcast MsgWeatherState every 10 ticks (~6 Hz at 60 Hz sim).

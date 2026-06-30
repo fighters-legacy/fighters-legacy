@@ -6294,3 +6294,167 @@ TEST_CASE("WorldBroadcaster: re-entry after retention gap forces a full record",
     broadcaster.onTick(1.0 / 60.0, 2u + fl::kSnapshotRetentionTicks + 5u);
     CHECK(isFullFor(snapshotsFor(net, 0).back()));
 }
+
+// ---------------------------------------------------------------------------
+// Adaptive send-rate / congestion response (#518)
+// ---------------------------------------------------------------------------
+
+// Build CongestionParams with a fast (every-tick) eval cadence for deterministic tests.
+static fl::CongestionParams testCongestion(bool enabled = true) {
+    fl::CongestionParams p = fl::makeCongestionParams(enabled, /*minSendHz=*/10.f, /*lossThreshold=*/0.02f,
+                                                      /*budgetFloorBytes=*/400u);
+    p.evalIntervalTicks = 1u; // step AIMD every tick so back-off/recovery is observable over few ticks
+    return p;
+}
+
+static fl::PeerLinkStats lossLink(float loss) {
+    fl::PeerLinkStats s;
+    s.packetLoss = loss;
+    return s;
+}
+
+TEST_CASE("WorldBroadcaster: congested peer is decimated, healthy peer keeps full rate",
+          "[world_broadcaster][congestion]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setCongestionParams(testCongestion());
+    broadcaster.onConnect(0u); // congested peer
+    broadcaster.onConnect(1u); // healthy peer
+    net.peerLinkStats[0] = lossLink(0.5f);
+    net.peerLinkStats[1] = lossLink(0.0f);
+
+    for (uint64_t tick = 1; tick <= 40; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    const auto congested = snapshotsFor(net, 0).size();
+    const auto healthy = snapshotsFor(net, 1).size();
+    CHECK(healthy == 40u);      // full 60 Hz: a snapshot every tick
+    CHECK(congested < healthy); // decimated under sustained loss
+    CHECK(congested >= 1u);     // recency still guarantees periodic sends (no starvation)
+}
+
+TEST_CASE("WorldBroadcaster: zero link stats leave every peer at the full per-tick rate",
+          "[world_broadcaster][congestion]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setCongestionParams(testCongestion()); // enabled, but no link stats injected => zeros
+    broadcaster.onConnect(0u);
+
+    for (uint64_t tick = 1; tick <= 30; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    CHECK(snapshotsFor(net, 0).size() == 30u); // unchanged from pre-#518 behaviour
+}
+
+TEST_CASE("WorldBroadcaster: congestion shrinks the effective byte budget (fewer records)",
+          "[world_broadcaster][congestion]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    // Many co-located entities so the byte budget — not interest — is the limiting factor.
+    for (int i = 0; i < 40; ++i) {
+        fl::EntityTransform t{};
+        t.pos[1] = 500.0;
+        em.spawn("builtin:debug-entity", t);
+    }
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setDrawDistance(200.f);
+    broadcaster.setSnapshotBudget(1200u);
+    broadcaster.setCongestionParams(testCongestion());
+    broadcaster.onConnect(0u); // congested
+    broadcaster.onConnect(1u); // healthy (both spawn at the fallback origin => same visible set)
+    net.peerLinkStats[0] = lossLink(0.5f);
+    net.peerLinkStats[1] = lossLink(0.0f);
+
+    for (uint64_t tick = 1; tick <= 50; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    const auto congested = snapshotsFor(net, 0);
+    const auto healthy = snapshotsFor(net, 1);
+    REQUIRE(!congested.empty());
+    REQUIRE(!healthy.empty());
+    const uint16_t congestedRecords = parseSnapshotHeader(congested.back()).recordCount;
+    const uint16_t healthyRecords = parseSnapshotHeader(healthy.back()).recordCount;
+    CHECK(congestedRecords < healthyRecords); // floor-budget peer carries fewer entities per snapshot
+}
+
+TEST_CASE("WorldBroadcaster: peer returns to full rate after congestion clears", "[world_broadcaster][congestion]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setCongestionParams(testCongestion());
+    broadcaster.onConnect(0u);
+    net.peerLinkStats[0] = lossLink(0.5f);
+    for (uint64_t tick = 1; tick <= 40; ++tick) // collapse to the floor
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    net.peerLinkStats[0] = lossLink(0.0f);        // link recovers
+    for (uint64_t tick = 41; tick <= 240; ++tick) // ramp back up
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    clearSnapshots(net);
+    for (uint64_t tick = 241; tick <= 260; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+    CHECK(snapshotsFor(net, 0).size() == 20u); // every tick again
+}
+
+TEST_CASE("WorldBroadcaster: congestion disabled never decimates under loss", "[world_broadcaster][congestion]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setCongestionParams(testCongestion(/*enabled=*/false));
+    broadcaster.onConnect(0u);
+    net.peerLinkStats[0] = lossLink(0.9f); // heavy loss, but the controller is off
+
+    for (uint64_t tick = 1; tick <= 30; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    CHECK(snapshotsFor(net, 0).size() == 30u);
+}
+
+TEST_CASE("WorldBroadcaster: forEachPeer reports throttled send rate and packet loss",
+          "[world_broadcaster][congestion]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setCongestionParams(testCongestion());
+    broadcaster.onConnect(0u);
+    net.peerLinkStats[0] = lossLink(0.5f);
+    for (uint64_t tick = 1; tick <= 40; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    float rate = 60.f;
+    float loss = -1.f;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) {
+        rate = pi.sendRateHz;
+        loss = pi.packetLoss;
+    });
+    CHECK(rate < 60.f);                 // decimated
+    CHECK(loss == Catch::Approx(0.5f)); // live ENet loss surfaced
+}

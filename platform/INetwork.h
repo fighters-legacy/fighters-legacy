@@ -20,6 +20,16 @@ class INetworkEventHandler {
 
 enum class PeerState : uint8_t { Connecting, Connected, Disconnecting, Disconnected };
 
+// Per-peer link-quality snapshot, surfaced from the transport backend for congestion control (#518).
+// All fields are 0 when the peer is not connected or the backend does not track the metric (e.g. mock
+// implementations). packetLoss is a fraction in [0, 1]; rtt fields are milliseconds.
+struct PeerLinkStats {
+    uint32_t rttMs{0};                 // mean round-trip time
+    uint32_t rttVarianceMs{0};         // round-trip time variance
+    float packetLoss{0.f};             // mean reliable-channel loss fraction, 0..1
+    uint32_t reliableBytesInFlight{0}; // reliable data sent but not yet acknowledged
+};
+
 // Threading: all methods must be called from the same thread (typically the main
 // thread). service() is called once per frame from the game loop.
 class INetwork {
@@ -82,6 +92,11 @@ class INetwork {
     // Returns 0 if peerId is out of range, the peer is not connected, or the backend
     // does not track RTT (e.g. mock implementations).
     virtual uint32_t getPeerRtt(uint32_t peerId) const = 0;
+
+    // Returns per-peer link-quality stats (RTT, RTT variance, packet loss, reliable bytes in flight)
+    // for congestion control (#518). All-zero when peerId is out of range, the peer is not connected,
+    // or the backend does not track link quality (mocks). Superset of getPeerRtt server-side.
+    virtual PeerLinkStats getPeerLinkStats(uint32_t peerId) const = 0;
 };
 
 } // namespace fl

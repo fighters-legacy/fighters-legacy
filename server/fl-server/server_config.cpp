@@ -66,6 +66,10 @@ static const char* kDefaultToml =
     "# jitter_buffer_adapt_window = 60  # EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]\n"
     "# jitter_buffer_hysteresis = 2     # resize dead-band in ticks; [0, 8]\n"
     "# jitter_buffer_jitter_multiplier = 2.0  # k factor: depth = ceil(ewma_delay + k*jitter); [0.0, 8.0]\n"
+    "# congestion_enabled = true        # adaptive per-client send-rate / congestion response (#518)\n"
+    "# congestion_min_send_hz = 10.0    # floor snapshot rate under congestion; [1, 60]\n"
+    "# congestion_loss_threshold = 0.02 # ENet mean loss fraction that marks a peer congested; [0, 1]\n"
+    "# congestion_budget_floor_bytes = 400  # never scale a set snapshot budget below this; [0, 65535]\n"
     "# sim_worker_threads = 0           # sim-tick CPU parallelism; 0 = auto, 1 = serial; [0, 256]\n"
     "\n"
     "[ai]\n"
@@ -326,6 +330,33 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                          "world.jitter_buffer_jitter_multiplier out of range [0.0, 8.0]; using default 2.0");
             } else {
                 cfg.jitterMultiplier = static_cast<float>(*v);
+            }
+        }
+        if (auto v = tbl["world"]["congestion_enabled"].value<bool>()) {
+            cfg.congestionEnabled = *v;
+        }
+        if (auto v = tbl["world"]["congestion_min_send_hz"].value<double>()) {
+            if (*v < 1.0 || *v > 60.0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.congestion_min_send_hz out of range [1, 60]; using default 10.0");
+            } else {
+                cfg.congestionMinSendHz = static_cast<float>(*v);
+            }
+        }
+        if (auto v = tbl["world"]["congestion_loss_threshold"].value<double>()) {
+            if (*v < 0.0 || *v > 1.0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.congestion_loss_threshold out of range [0, 1]; using default 0.02");
+            } else {
+                cfg.congestionLossThreshold = static_cast<float>(*v);
+            }
+        }
+        if (auto v = tbl["world"]["congestion_budget_floor_bytes"].value<int64_t>()) {
+            if (*v < int64_t{0} || *v > int64_t{65535}) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.congestion_budget_floor_bytes out of range [0, 65535]; using default 400");
+            } else {
+                cfg.congestionBudgetFloorBytes = static_cast<uint32_t>(*v);
             }
         }
         if (auto v = tbl["world"]["sim_worker_threads"].value<int64_t>()) {

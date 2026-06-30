@@ -51,6 +51,9 @@ struct NullNetwork : INetwork {
     uint32_t getPeerRtt(uint32_t) const override {
         return 0u;
     }
+    PeerLinkStats getPeerLinkStats(uint32_t) const override {
+        return {};
+    }
 };
 
 // Records emitted packets, disconnect calls, and the reliability flag; resolves per-peer addresses
@@ -62,10 +65,11 @@ struct TrackingNetwork : NullNetwork {
     // tests to assert on per-peer snapshot content without touching the existing sends list.
     std::vector<std::pair<uint32_t, std::vector<uint8_t>>> perPeerSends;
     bool sendReliable{false};
-    std::map<uint32_t, std::string> peerAddresses; // configure per-test
-    std::vector<uint32_t> disconnectedPeers;       // tracks disconnectPeer calls
-    int disconnectCount{0};                        // tracks the client-side disconnect() calls
-    mutable std::string addrBuf;                   // backing store for getPeerAddress
+    std::map<uint32_t, std::string> peerAddresses;   // configure per-test
+    std::map<uint32_t, PeerLinkStats> peerLinkStats; // configure per-test (congestion tests)
+    std::vector<uint32_t> disconnectedPeers;         // tracks disconnectPeer calls
+    int disconnectCount{0};                          // tracks the client-side disconnect() calls
+    mutable std::string addrBuf;                     // backing store for getPeerAddress
 
     void disconnect() override {
         ++disconnectCount;
@@ -89,6 +93,10 @@ struct TrackingNetwork : NullNetwork {
             return nullptr;
         addrBuf = it->second;
         return addrBuf.c_str();
+    }
+    PeerLinkStats getPeerLinkStats(uint32_t peerId) const override {
+        auto it = peerLinkStats.find(peerId);
+        return it == peerLinkStats.end() ? PeerLinkStats{} : it->second;
     }
 };
 

@@ -39,6 +39,7 @@ class ENetNetwork : public INetwork {
     void disconnectPeer(uint32_t peerId) override;
     const char* getLastError() const override;
     uint32_t getPeerRtt(uint32_t peerId) const override;
+    PeerLinkStats getPeerLinkStats(uint32_t peerId) const override;
 
     // Set aggregate host bandwidth caps (bytes/s). Call once after bind().
     // 0 = unlimited (ENet default). Not part of INetwork — server-only, called at startup.

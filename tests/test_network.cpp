@@ -155,6 +155,26 @@ TEST_CASE("getPeerRtt returns zero before connection", "[network]") {
     net.shutdown();
 }
 
+TEST_CASE("getPeerLinkStats returns zeros for out-of-range peer", "[network]") {
+    ENetNetwork net;
+    REQUIRE(net.init());
+    const fl::PeerLinkStats s = net.getPeerLinkStats(999);
+    CHECK(s.rttMs == 0u);
+    CHECK(s.rttVarianceMs == 0u);
+    CHECK(s.packetLoss == 0.f);
+    CHECK(s.reliableBytesInFlight == 0u);
+    net.shutdown();
+}
+
+TEST_CASE("getPeerLinkStats returns zeros before connection", "[network]") {
+    ENetNetwork net;
+    REQUIRE(net.init());
+    const fl::PeerLinkStats s = net.getPeerLinkStats(0);
+    CHECK(s.rttMs == 0u);
+    CHECK(s.packetLoss == 0.f);
+    net.shutdown();
+}
+
 TEST_CASE("send before bind returns false", "[network]") {
     ENetNetwork net;
     REQUIRE(net.init());

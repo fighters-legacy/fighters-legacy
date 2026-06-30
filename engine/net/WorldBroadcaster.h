@@ -2,6 +2,7 @@
 #pragma once
 
 #include "AuthTracker.h"
+#include "CongestionController.h"
 #include "GameProtocol.h"
 #include "INetwork.h"
 #include "JitterBuffer.h"
@@ -65,6 +66,11 @@ struct PeerInputState {
     // Jitter buffer: initialized to depth 1; sized from estimatedDelayTicks on first input,
     // then continuously adjusted by the adaptive resize loop in WorldBroadcaster::onTick.
     JitterBuffer jitterBuffer{1};
+    // Adaptive send-rate / congestion response (#518). Updated each tick from ENet link stats; gates
+    // both the per-peer snapshot send cadence and the effective byte budget.
+    CongestionController congestion{};
+    uint64_t lastSnapshotSentTick{0}; // tick of the last snapshot actually sent (decimation gate)
+    bool sentSnapshot{false};         // false until the first snapshot is sent (so tick 0 isn't skipped)
 };
 
 // Snapshot of a connected peer's state, delivered by forEachPeer. The struct form makes future
@@ -74,11 +80,14 @@ struct PeerInfo {
     uint32_t peerId{};
     EntityId eid{};
     std::string addr;
-    uint32_t delayTicks{};     // last estimatedDelayTicks (raw one-way delay measurement)
-    uint32_t queueDepth{};     // current jitter buffer fill (inputs waiting to be drained)
-    uint32_t bufferMaxDepth{}; // current jitter buffer max depth (set by adaptive resize)
-    float ewmaDelayTicks{};    // EWMA of one-way delay; drives adaptive depth targeting
-    float ewmaJitterTicks{};   // EWMA of inter-arrival jitter; scales depth via jitterMultiplier
+    uint32_t delayTicks{};      // last estimatedDelayTicks (raw one-way delay measurement)
+    uint32_t queueDepth{};      // current jitter buffer fill (inputs waiting to be drained)
+    uint32_t bufferMaxDepth{};  // current jitter buffer max depth (set by adaptive resize)
+    float ewmaDelayTicks{};     // EWMA of one-way delay; drives adaptive depth targeting
+    float ewmaJitterTicks{};    // EWMA of inter-arrival jitter; scales depth via jitterMultiplier
+    float sendRateHz{};         // current adaptive snapshot send rate (60 / congestion send interval)
+    uint32_t effectiveBudget{}; // current congestion-scaled per-snapshot byte budget (0 = unlimited)
+    float packetLoss{};         // last sampled ENet mean loss fraction (0..1)
 };
 
 // One simulated entity together with its control source. The registry is EntityId-keyed (not peer-
@@ -112,6 +121,7 @@ struct WorldBroadcasterConfig {
     uint32_t jitterAdaptWindow{60};   // EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
     uint32_t jitterHysteresis{2};     // dead-band in ticks before resize fires; [0, 8]
     float jitterMultiplier{2.0f};     // k factor: depth = ceil(ewma_delay + k*jitter); [0.0, 8.0]
+    CongestionParams congestion{};    // per-client adaptive send-rate / congestion response (#518)
 };
 
 // Wraps EntityManager to provide a server-side ISimUpdate that:
@@ -358,6 +368,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Call before gameLoop.start() or via enqueueSimCallback.
     void setJitterMultiplier(float k) noexcept;
 
+    // Set the per-client adaptive send-rate / congestion-response parameters (#518). Applied to every
+    // peer's controller each tick, so this is hot-reloadable (reload_config). Disabled params pin all
+    // peers to the full 60 Hz / full-budget behaviour. Call before gameLoop.start() or via
+    // enqueueSimCallback.
+    void setCongestionParams(const CongestionParams& params) noexcept;
+
     // Set the gravity field applied to all FlightIntegrators spawned on this broadcaster (current
     // and future). Also records the planet radius sent to clients in MsgConnectAck so their terrain
     // rendering matches server physics. Defaults to CentralGravityField::earthInstance() /
@@ -522,6 +538,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     uint32_t m_jitterAdaptWindow{60}; // EWMA smoothing window; alpha = 1/window
     uint32_t m_jitterHysteresis{2};   // dead-band ticks before resize fires
     float m_jitterMultiplier{2.0f};   // k factor in depth = ceil(ewma + k*jitter)
+
+    // Per-client adaptive send-rate / congestion-response params (#518): sim-thread only, copied into
+    // each peer's CongestionController every tick (so reload_config hot-reload is automatic). Default
+    // is enabled with full-rate-when-healthy behaviour — zero link stats (mocks, loopback) leave every
+    // peer at the full 60 Hz / full budget, so existing per-tick-send tests are unaffected.
+    CongestionParams m_congestionParams{};
 
     // Per-peer entity tracking: peerId → (entityIdx → record). Drives client-acked delta baselines:
     //   * gen           — full vs delta on respawn (generation change forces a full).

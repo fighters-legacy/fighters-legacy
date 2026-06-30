@@ -153,6 +153,24 @@ The knee — where tick-Hz sags and the max snapshot gap spikes — is the ceili
 profile. Run it for `idle` (overhead floor) and `aggressive` (worst case) too. Record the
 reference machine spec alongside the numbers.
 
+## Validating congestion response (#518)
+
+Loopback has zero loss, so the per-client congestion controller never triggers in a normal run — a
+clean run is exactly the no-regression baseline (`downstream_kbs_per_client` and held 60.0 Hz must be
+unchanged from before #518). To exercise the back-off you have to degrade the link. On Linux, inject
+loss/latency on the loopback device with `netem`:
+
+    sudo tc qdisc add dev lo root netem loss 5% delay 80ms
+    tools/bot_swarm/run_loadtest.sh build/debug 64 30 weave
+    sudo tc qdisc del dev lo root netem    # always restore
+
+Under the degraded link, congested clients show a **lower observed snapshot Hz** (toward the
+`congestion_min_send_hz` floor) and **lower `downstream_kbs_per_client`**, while the authoritative
+`server_tick` p99 stays healthy. (macOS: `dnctl`/`pfctl`; Windows: `clumsy`.) This is a manual,
+NET_ADMIN-only step and is **not** run in CI; the deterministic proof is the
+`test_world_broadcaster` `[congestion]` link-stats-injection tests. The deterministic AIMD logic itself
+is covered by `test_congestion_controller`. See [docs/congestion-control-design.md](congestion-control-design.md).
+
 ## Platform notes
 
 - **macOS / Linux:** each client is a UDP socket; `bot_swarm` raises `RLIMIT_NOFILE` and the

@@ -641,7 +641,28 @@ this section are measured empirically by the `bot_swarm` load generator — see
   with no wire-format change. The client ignores out-of-order/duplicate snapshots so its echoed tick
   stays a monotonic high-water mark. The per-entity `kSnapshotRetentionTicks` force-full (the
   interest-out / client-evicted re-entry case) is retained as an ack-independent backstop.
-- **Adaptive send-rate / congestion response (Epic B, #518 — planned).**
+- **Adaptive send-rate / congestion response (Epic B, #518).** Each connected peer owns an AIMD
+  congestion controller (`engine/net/CongestionController`) that the broadcaster steps every tick from
+  the peer's ENet link quality (`INetwork::getPeerLinkStats` → packet loss, RTT, reliable bytes in
+  flight). A peer is judged congested when loss exceeds a threshold (default 2 %), RTT rises a margin
+  above its running baseline (default 40 ms), or the reliable backlog grows large. On congestion the
+  controller multiplicatively lowers a per-peer `throttle ∈ [floor, 1]`; when healthy it additively
+  ramps it back toward 1. The throttle drives **two levers**: it stretches the snapshot **send
+  interval** (60 Hz down to a configurable floor, default 10 Hz — the broadcaster simply skips a
+  peer's per-tick snapshot until enough ticks elapse) and **scales the per-client byte budget** (the
+  #516 scheduler then defers more low-relevance entities). There is **no wire-format change** — the
+  client already tolerates a variable snapshot rate (render alpha is wall-clock; prediction uses
+  `estimatedDelayTicks`). A healthy peer, the mock/loopback case (zero link stats), or a disabled
+  controller all hold `throttle == 1`, i.e. the full 60 Hz / full-budget behaviour.
+
+  **Signal note (anti-feedback):** the delay term uses **ENet RTT**, *not* the application-level
+  snapshot one-way delay (`estimatedDelayTicks`). That metric inflates when we decimate — a staler
+  "last received tick" looks like more delay — which would drive *more* decimation: a self-reinforcing
+  collapse. ENet keeps RTT fresh via periodic reliable pings, independent of our snapshot cadence. See
+  [docs/congestion-control-design.md](congestion-control-design.md). Config: `[world]
+  congestion_enabled` / `congestion_min_send_hz` / `congestion_loss_threshold` /
+  `congestion_budget_floor_bytes` (all hot-reloadable via `reload_config`); per-peer send rate and loss
+  are visible in the `peers` admin command.
 - **Transport replacement (Epic L).** `enet6` is being replaced (GameNetworkingSockets lean)
   behind the `INetwork` HAL for higher peer counts, built-in congestion control, and
   encryption. The MTU/fragmentation discussion above is transport-specific and will be

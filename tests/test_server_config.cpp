@@ -431,6 +431,39 @@ TEST_CASE("parseServerConfig: snapshot_budget_bytes 70000 warns and uses default
     CHECK(log.hasMessage(LogLevel::Warn, "snapshot_budget_bytes"));
 }
 
+TEST_CASE("parseServerConfig: reads world.congestion_* fields", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\ncongestion_enabled = false\ncongestion_min_send_hz = 20.0\n"
+                                 "congestion_loss_threshold = 0.05\ncongestion_budget_floor_bytes = 600\n",
+                                 &log);
+    CHECK(cfg.congestionEnabled == false);
+    CHECK(cfg.congestionMinSendHz == 20.0f);
+    CHECK(cfg.congestionLossThreshold == 0.05f);
+    CHECK(cfg.congestionBudgetFloorBytes == 600u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: congestion_min_send_hz out of range warns and keeps default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\ncongestion_min_send_hz = 120.0\n", &log);
+    CHECK(cfg.congestionMinSendHz == 10.0f);
+    CHECK(log.hasMessage(LogLevel::Warn, "congestion_min_send_hz"));
+}
+
+TEST_CASE("parseServerConfig: congestion_loss_threshold out of range warns and keeps default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\ncongestion_loss_threshold = 2.0\n", &log);
+    CHECK(cfg.congestionLossThreshold == 0.02f);
+    CHECK(log.hasMessage(LogLevel::Warn, "congestion_loss_threshold"));
+}
+
+TEST_CASE("parseServerConfig: congestion_budget_floor_bytes out of range warns and keeps default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\ncongestion_budget_floor_bytes = 70000\n", &log);
+    CHECK(cfg.congestionBudgetFloorBytes == 400u);
+    CHECK(log.hasMessage(LogLevel::Warn, "congestion_budget_floor_bytes"));
+}
+
 TEST_CASE("parseServerConfig: reads world.jitter_buffer_depth", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\njitter_buffer_depth = 16\n", &log);
