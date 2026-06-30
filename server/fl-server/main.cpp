@@ -414,6 +414,8 @@ int main(int argc, char** argv) {
     wbConfig.jitterAdaptWindow = cfg.jitterAdaptWindow;
     wbConfig.jitterHysteresis = cfg.jitterHysteresis;
     wbConfig.jitterMultiplier = cfg.jitterMultiplier;
+    wbConfig.congestion = fl::makeCongestionParams(cfg.congestionEnabled, cfg.congestionMinSendHz,
+                                                   cfg.congestionLossThreshold, cfg.congestionBudgetFloorBytes);
     broadcaster.applyConfig(wbConfig);
     // Planet gravity and terrain curvature. Function-scope static so lifetime outlasts the broadcaster.
     static fl::CentralGravityField s_gravity{6'371'000.f};

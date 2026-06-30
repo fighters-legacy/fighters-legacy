@@ -212,6 +212,7 @@ add_library(engine-net STATIC
     net/DiscoveryListener.cpp
     net/SnapshotCodec.cpp
     net/SnapshotScheduler.cpp
+    net/CongestionController.cpp
 )
 target_include_directories(engine-net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-net

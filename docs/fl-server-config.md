@@ -73,6 +73,10 @@ time_scale         = 10.0        # game seconds per real second; 10 = full day/n
 # jitter_buffer_adapt_window    = 60   # EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
 # jitter_buffer_hysteresis      = 2    # resize dead-band in ticks; [0, 8]
 # jitter_buffer_jitter_multiplier = 2.0  # k factor: depth = ceil(ewma_delay + k*jitter); [0.0, 8.0]
+# congestion_enabled            = true   # adaptive per-client send-rate / congestion response (#518)
+# congestion_min_send_hz        = 10.0   # floor snapshot rate under congestion; [1, 60]
+# congestion_loss_threshold     = 0.02   # ENet mean loss fraction marking a peer congested; [0, 1]
+# congestion_budget_floor_bytes = 400    # never scale a set snapshot budget below this; [0, 65535]
 # sim_worker_threads      = 0        # sim-tick CPU parallelism; 0 = auto, 1 = serial; [0, 256]
 
 [ai]
@@ -442,6 +446,27 @@ The jitter EWMA tracks RFC 3550-style inter-arrival deviation from the expected 
 Higher values add extra buffer headroom during bursty conditions; `0.0` disables the jitter
 term entirely (pure EWMA-delay sizing, equivalent to #424 without #429). Out-of-range values
 are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
+
+### `congestion_enabled` / `congestion_min_send_hz` / `congestion_loss_threshold` / `congestion_budget_floor_bytes`
+
+| Key | Type | Default | Range |
+|---|---|---|---|
+| `congestion_enabled` | bool | `true` | — |
+| `congestion_min_send_hz` | float | `10.0` | `[1, 60]` |
+| `congestion_loss_threshold` | float | `0.02` | `[0, 1]` |
+| `congestion_budget_floor_bytes` | integer | `400` | `[0, 65535]` |
+
+Adaptive per-client send-rate / congestion response (#518). Each connected peer owns an AIMD
+controller that the server steps every tick from that peer's ENet link quality (packet loss, RTT,
+reliable bytes in flight). When a peer is judged congested — loss above `congestion_loss_threshold`,
+RTT a margin above its running baseline, or a large reliable backlog — the server **decimates that
+peer's snapshot rate** (60 Hz down toward `congestion_min_send_hz`) and **scales its byte budget
+down** (never below `congestion_budget_floor_bytes`, and never below a `snapshot_budget_bytes` that is
+already smaller); a healthy peer stays at the full rate and full budget. `congestion_enabled = false`
+pins every peer to the full behaviour. There is no wire-format change — the client tolerates a variable
+snapshot rate. Per-peer send rate and loss are shown by the `peers` admin command. Out-of-range values
+are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`. See
+[congestion-control-design.md](congestion-control-design.md).
 
 ### `sim_worker_threads`
 
@@ -919,7 +944,7 @@ process.
 | `help` | `[command]` | List all commands, or show usage for a specific one |
 | `status` | — | Show uptime, peer count, entity count, and the real tick rate (Hz + mean/p99 ms) |
 | `tickstats` | — | Per-phase sim tick budget (integrate/ai/collision/serialize/total; ms mean/p95/p99/max) + actual tick Hz |
-| `peers` | — | List connected peers (peer ID, address, entity index/generation, one-way delay in ticks/ms, input queue depth `q=N`) |
+| `peers` | — | List connected peers (peer ID, address, entity index/generation, one-way delay in ticks/ms, input queue buffer fill/max, adaptive snapshot send rate `rate=NN Hz`, ENet packet loss `loss=N.N%`) |
 | `kick` | `<peerId\|IP>` | Disconnect a peer by numeric ID, or all peers from an IP address |
 | `ban` | `<peerId\|IP>` | Add IP to the ban list and kick matching peers; saves to `banlist_path` if configured |
 | `unban` | `<IP>` | Remove an IP from the ban list; saves to `banlist_path` if configured |
@@ -930,7 +955,7 @@ process.
 | `spawn` | `<type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn a registered entity type at the given world position; optionally attach an AI controller. C++ behaviors: `loiter [cx cy cz [radius_m [alt_m [throttle [cw\|ccw]]]]]`, `waypoint x y z [x y z ...] [--loop]`, `pursuit <entityIdx>`, `evade <entityIdx>`, `break <entityIdx> [rollDuration]`, `lead <entityIdx> [navGain]`, `lag <entityIdx> [lagFraction]`, `immelmann [pullDur] [rollDur]`, `split_s [rollDur] [pullDur]`, `high_yo_yo <entityIdx> [climbDur] [reacquireDur]`, `low_yo_yo <entityIdx> [diveDur] [pullDur]`. Lua behavior: `lua <script_name>` (loads `ai/<script_name>.lua` from content packs; see `docs/modding/ai.md`). If the entity type's TOML sets `ai_script`, that script is attached automatically when `--ai` is omitted. |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
 | `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's game console to teleport the player entity |
-| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `snapshot_budget_bytes`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier` (all take effect on the next sim tick for all connected peers) |
+| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `snapshot_budget_bytes`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier`, `congestion_enabled`, `congestion_min_send_hz`, `congestion_loss_threshold`, `congestion_budget_floor_bytes` (all take effect on the next sim tick for all connected peers) |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
 | `pause` | — | Pause the simulation — ticks stop advancing; network connections remain active. In single-player the game client sends this automatically when the pause menu is opened. |

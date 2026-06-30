@@ -366,6 +366,21 @@ uint32_t ENetNetwork::getPeerRtt(uint32_t peerId) const {
     return static_cast<uint32_t>(peer->roundTripTime);
 }
 
+PeerLinkStats ENetNetwork::getPeerLinkStats(uint32_t peerId) const {
+    if (!m_host || peerId >= m_host->peerCount)
+        return {};
+    const ENetPeer* peer = &m_host->peers[peerId];
+    if (peer->state != ENET_PEER_STATE_CONNECTED)
+        return {};
+    PeerLinkStats s;
+    s.rttMs = static_cast<uint32_t>(peer->roundTripTime);
+    s.rttVarianceMs = static_cast<uint32_t>(peer->roundTripTimeVariance);
+    // ENet stores mean loss scaled by ENET_PEER_PACKET_LOSS_SCALE (1<<16); normalize to a [0, 1] fraction.
+    s.packetLoss = static_cast<float>(peer->packetLoss) / static_cast<float>(ENET_PEER_PACKET_LOSS_SCALE);
+    s.reliableBytesInFlight = static_cast<uint32_t>(peer->reliableDataInTransit);
+    return s;
+}
+
 void ENetNetwork::setBandwidthLimit(uint32_t incomingBps, uint32_t outgoingBps) {
     if (m_host)
         enet_host_bandwidth_limit(m_host, incomingBps, outgoingBps);

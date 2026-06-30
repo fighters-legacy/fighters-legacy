@@ -666,6 +666,17 @@ TEST_CASE("AdminConsole wb: peers with one connected peer returns 1 peer(s) conn
     CHECK(out == "1 peer(s) connected");
 }
 
+// The per-peer lines (with the #518 send-rate / loss columns) are emitted from an enqueueSimCallback
+// to stdout/shell, which a unit test can't drain without starting the loop. Assert the documented
+// columns via the command help text; the underlying PeerInfo values are covered in test_world_broadcaster.
+TEST_CASE("AdminConsole wb: peers help advertises send rate and loss columns", "[admin_console][wb]") {
+    WbFixture f;
+    auto reg = makeRegistry(f.ctx);
+    const std::string help = reg.helpFor("peers");
+    CHECK(help.find("send rate") != std::string::npos);
+    CHECK(help.find("loss") != std::string::npos);
+}
+
 // ---------------------------------------------------------------------------
 // WorldBroadcaster integration -- status command ack
 // (getPeerCount() and liveCount() are called synchronously during dispatch;

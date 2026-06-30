@@ -222,38 +222,41 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         });
 
     // peers
-    registry.registerCommand(
-        "peers", "peers  -- list connected peers (peerId, address, entity, delay, EWMA delay, jitter, buf fill/max)",
-        [ctx](std::span<std::string_view>) -> std::string {
-            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
-                return "peers: not available";
-            ctx.sim.gameLoop->enqueueSimCallback([ctx]() {
-                int count = 0;
-                ctx.sim.broadcaster->forEachPeer([&](const fl::PeerInfo& pi) {
-                    char m[320];
-                    std::snprintf(m, sizeof(m),
-                                  "[admin] peer %u  %s  entity=%u/%u  delay=%ut (~%ums)"
-                                  "  ewma=%.1ft  jitter=%.1ft  buf=%u/%u",
-                                  pi.peerId, pi.addr.c_str(), pi.eid.index, pi.eid.generation, pi.delayTicks,
-                                  (pi.delayTicks * 1000u + 30u) / 60u, pi.ewmaDelayTicks, pi.ewmaJitterTicks,
-                                  pi.queueDepth, pi.bufferMaxDepth);
-                    std::printf("%s\n", m);
-                    if (ctx.rcon.shell)
-                        ctx.rcon.shell->print(m);
-                    ++count;
-                });
-                if (count == 0) {
-                    std::printf("[admin] peers: no connected peers\n");
-                    if (ctx.rcon.shell)
-                        ctx.rcon.shell->print("[admin] peers: no connected peers");
-                }
-                std::fflush(stdout);
-            });
-            int count = ctx.sim.broadcaster->getPeerCount();
-            char peerBuf[64];
-            std::snprintf(peerBuf, sizeof(peerBuf), "%d peer(s) connected", count);
-            return std::string(peerBuf);
-        });
+    registry.registerCommand("peers",
+                             "peers  -- list connected peers (peerId, address, entity, delay, EWMA delay, jitter, buf "
+                             "fill/max, send rate, loss)",
+                             [ctx](std::span<std::string_view>) -> std::string {
+                                 if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                                     return "peers: not available";
+                                 ctx.sim.gameLoop->enqueueSimCallback([ctx]() {
+                                     int count = 0;
+                                     ctx.sim.broadcaster->forEachPeer([&](const fl::PeerInfo& pi) {
+                                         char m[384];
+                                         std::snprintf(
+                                             m, sizeof(m),
+                                             "[admin] peer %u  %s  entity=%u/%u  delay=%ut (~%ums)"
+                                             "  ewma=%.1ft  jitter=%.1ft  buf=%u/%u  rate=%.0fHz  loss=%.1f%%",
+                                             pi.peerId, pi.addr.c_str(), pi.eid.index, pi.eid.generation, pi.delayTicks,
+                                             (pi.delayTicks * 1000u + 30u) / 60u, pi.ewmaDelayTicks, pi.ewmaJitterTicks,
+                                             pi.queueDepth, pi.bufferMaxDepth, static_cast<double>(pi.sendRateHz),
+                                             static_cast<double>(pi.packetLoss) * 100.0);
+                                         std::printf("%s\n", m);
+                                         if (ctx.rcon.shell)
+                                             ctx.rcon.shell->print(m);
+                                         ++count;
+                                     });
+                                     if (count == 0) {
+                                         std::printf("[admin] peers: no connected peers\n");
+                                         if (ctx.rcon.shell)
+                                             ctx.rcon.shell->print("[admin] peers: no connected peers");
+                                     }
+                                     std::fflush(stdout);
+                                 });
+                                 int count = ctx.sim.broadcaster->getPeerCount();
+                                 char peerBuf[64];
+                                 std::snprintf(peerBuf, sizeof(peerBuf), "%d peer(s) connected", count);
+                                 return std::string(peerBuf);
+                             });
 
     // kick <peerId|IP>
     registry.registerCommand("kick", "kick <peerId|IP>  -- disconnect a peer by ID or all peers from an IP address",
@@ -719,8 +722,9 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     registry.registerCommand("reload_config",
                              "reload_config  -- re-read server.toml and apply: name (beacon), motd, motd_display_s,"
                              " draw_distance_km, snapshot_budget_bytes, jitter_buffer_depth,"
-                             " jitter_buffer_adapt_window, jitter_buffer_hysteresis, jitter_buffer_jitter_multiplier"
-                             " (other fields require restart)",
+                             " jitter_buffer_adapt_window, jitter_buffer_hysteresis, jitter_buffer_jitter_multiplier,"
+                             " congestion_enabled, congestion_min_send_hz, congestion_loss_threshold,"
+                             " congestion_budget_floor_bytes (other fields require restart)",
                              [ctx](std::span<std::string_view>) -> std::string {
                                  if (!ctx.env.configPath || ctx.env.configPath->empty())
                                      return "reload_config: not available";
@@ -741,9 +745,12 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                      auto newAdaptWindow = newCfg.jitterAdaptWindow;
                                      auto newHysteresis = newCfg.jitterHysteresis;
                                      auto newMultiplier = newCfg.jitterMultiplier;
+                                     auto newCongestion = fl::makeCongestionParams(
+                                         newCfg.congestionEnabled, newCfg.congestionMinSendHz,
+                                         newCfg.congestionLossThreshold, newCfg.congestionBudgetFloorBytes);
                                      ctx.sim.gameLoop->enqueueSimCallback(
                                          [ctx, newMotd, newMotdDisplayS, newDraw, newSnapshotBudget, newJitterDepth,
-                                          newAdaptWindow, newHysteresis, newMultiplier]() mutable {
+                                          newAdaptWindow, newHysteresis, newMultiplier, newCongestion]() mutable {
                                              ctx.sim.broadcaster->setMotd(std::move(newMotd));
                                              ctx.sim.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
                                              ctx.sim.broadcaster->setDrawDistance(newDraw);
@@ -752,6 +759,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                              ctx.sim.broadcaster->setJitterAdaptWindow(newAdaptWindow);
                                              ctx.sim.broadcaster->setJitterHysteresis(newHysteresis);
                                              ctx.sim.broadcaster->setJitterMultiplier(newMultiplier);
+                                             ctx.sim.broadcaster->setCongestionParams(newCongestion);
                                          });
                                  }
                                  return "reload_config: name=\"" + newCfg.name + "\"  motd=\"" + newCfg.motd +
