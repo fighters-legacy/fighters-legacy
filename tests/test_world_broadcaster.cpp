@@ -403,6 +403,117 @@ TEST_CASE("WorldBroadcaster: parallel sim tick is serial-equivalent across worke
     }
 }
 
+// Run a fixed multi-peer scenario and capture every per-peer WorldSnapshot packet, keyed by peerId.
+// When `jobs` is non-null the per-peer snapshot assembly runs data-parallel via runPeerPass; else it
+// runs inline. Used to prove the parallel snapshot build is byte-identical to the serial path. When
+// `killAtTick > 0`, one shared entity is killed at that tick so the per-peer despawn-detection +
+// SnapshotDespawn TLV path is exercised under parallelism.
+namespace {
+std::map<uint32_t, std::vector<std::vector<uint8_t>>> runSnapshotScenario(fl::JobSystem* jobs, uint64_t killAtTick) {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    if (jobs)
+        broadcaster.setJobSystem(*jobs);
+
+    // Distinct peer spawn positions so each peer gets a different frameOrigin, own-entity record, and
+    // interest set — making the per-peer byte comparison non-trivial. All within the 200 km default
+    // draw distance so peers see overlapping (but not identical) entity sets.
+    broadcaster.setSpawnPoints(
+        {{0.0, 1000.0, 0.0}, {40000.0, 1000.0, 0.0}, {0.0, 1000.0, 40000.0}, {40000.0, 1000.0, 40000.0}});
+    const std::vector<uint32_t> peerIds{0u, 1u, 2u, 3u};
+    for (uint32_t pid : peerIds)
+        broadcaster.onConnect(pid);
+
+    // 16 shared entities spread across the peers' interest region.
+    std::vector<fl::EntityId> ids;
+    for (int i = 0; i < 16; ++i) {
+        fl::EntityTransform t{};
+        t.pos[0] = i * 2000.0;
+        t.pos[1] = 1000.0;
+        t.pos[2] = (i % 4) * 5000.0;
+        fl::EntityId id = em.spawn("builtin:debug-entity", t);
+        REQUIRE(id.valid());
+        auto controller = std::make_unique<ConstantController>();
+        controller->throttle = 1.0f;
+        broadcaster.registerController(id, std::move(controller));
+        ids.push_back(id);
+    }
+
+    for (uint64_t tick = 1; tick <= 120; ++tick) {
+        if (killAtTick > 0 && tick == killAtTick)
+            em.kill(ids[7]); // remove a shared entity mid-run -> despawn detection on the next tick
+        broadcaster.onTick(1.0 / 60.0, tick);
+    }
+
+    std::map<uint32_t, std::vector<std::vector<uint8_t>>> out;
+    for (uint32_t pid : peerIds)
+        out[pid] = snapshotsFor(net, pid);
+    return out;
+}
+} // namespace
+
+TEST_CASE("WorldBroadcaster: parallel per-peer snapshot build is serial-equivalent across worker counts",
+          "[world_broadcaster]") {
+    for (uint64_t killAtTick : {uint64_t{0}, uint64_t{60}}) {
+        const auto baseline = runSnapshotScenario(nullptr, killAtTick); // inline / serial reference
+
+        for (unsigned total : {1u, 2u, 8u}) {
+            fl::JobSystem jobs(total);
+            const auto got = runSnapshotScenario(&jobs, killAtTick);
+            REQUIRE(got.size() == baseline.size());
+            for (const auto& [peerId, baseSnaps] : baseline) {
+                auto it = got.find(peerId);
+                REQUIRE(it != got.end());
+                const auto& gotSnaps = it->second;
+                INFO("workers=" << total << " peer=" << peerId << " killAtTick=" << killAtTick);
+                // Each peer must receive the same number of snapshot packets...
+                REQUIRE(gotSnaps.size() == baseSnaps.size());
+                // ...and each packet must be byte-identical: the per-peer build performs no cross-peer
+                // writes and no RNG, so parallelism must not change a single byte on the same binary.
+                // Compare via a bool so Catch2 never stringifies the (large) byte vectors.
+                for (size_t i = 0; i < baseSnaps.size(); ++i) {
+                    const bool identical = (gotSnaps[i] == baseSnaps[i]);
+                    INFO("snapshot packet index " << i);
+                    CHECK(identical);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("WorldBroadcaster: a congested peer is decimated while a healthy peer keeps sending", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u); // healthy peer
+    broadcaster.onConnect(1u); // congested peer
+
+    // Report sustained high packet loss for peer 1 only; peer 0 (absent from the map) reads zeros.
+    // Above the 0.02 loss threshold, the AIMD controller backs the throttle off, stretching peer 1's
+    // snapshot send interval > 1 tick — so it is skipped on some ticks by the gather-time decimation
+    // filter while peer 0 sends every tick.
+    fl::PeerLinkStats bad{};
+    bad.packetLoss = 0.5f;
+    net.peerLinkStats[1u] = bad;
+
+    for (uint64_t tick = 1; tick <= 120; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    const std::size_t healthySnaps = snapshotsFor(net, 0u).size();
+    const std::size_t congestedSnaps = snapshotsFor(net, 1u).size();
+    CHECK(congestedSnaps < healthySnaps); // decimation skipped the congested peer on some ticks
+    CHECK(congestedSnaps > 0u);           // but it still receives snapshots at the floor rate
+}
+
 TEST_CASE("WorldBroadcaster: getTickBudget records per-phase timing after onTick", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;

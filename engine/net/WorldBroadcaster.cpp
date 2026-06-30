@@ -598,239 +598,268 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     };
 
     // Step 3: per-peer snapshot — interest filter (queryRadius) + client-acked delta compression.
+    //
+    // Serial gather: resolve each sending peer's stable per-peer state pointers once. The operator[]
+    // insertions (and any rehash) happen here on the sim thread, never inside the parallel build, so
+    // the workers see a frozen map structure (unordered_map keeps element pointers valid across later
+    // rehashes). Decimated peers (#518) are excluded from the work set — a decimated tick mutates no
+    // per-peer state, exactly matching the previous in-loop `continue`.
+    m_peerWork.clear();
     for (auto& [peerId, peerEid] : m_peerEntities) {
-        // Adaptive send-rate decimation (#518): skip this peer's snapshot when the congestion
-        // controller has stretched its send interval and not enough ticks have elapsed since the last
-        // send. Skipped before the despawn-detection pass so a decimated tick mutates no per-peer state
-        // (despawn queueing, knownGens GC, lastSentTick) — everything defers to the next actual send.
         PeerInputState& pin = m_peerInputs[peerId];
         if (pin.sentSnapshot && tickIndex - pin.lastSnapshotSentTick < pin.congestion.sendIntervalTicks())
-            continue;
+            continue; // adaptive send-rate decimation: too few ticks since the last send
+        PeerSnapWork w;
+        w.peerId = peerId;
+        w.peerEid = peerEid;
+        w.pin = &pin;
+        w.peerState = m_entityManager.get(peerEid);
+        w.knownGens = &m_peerKnownGens[peerId];
+        w.pending = &m_peerPendingDespawn[peerId];
+        m_peerWork.push_back(std::move(w));
+    }
 
-        const EntityState* peerState = m_entityManager.get(peerEid);
+    // Parallel build: each worker assembles one peer's snapshot into its own w.buf and mutates only
+    // that peer's private state (knownGens GC/records, pending despawns, pin EWMA-free fields). Shared
+    // reads (snapMap, m_spatialIndex, m_entityManager.get, m_drawDistanceM, m_snapshotBudgetBytes,
+    // m_schedulerWeights, m_congestionParams) are read-only for the whole region. No m_net.send here —
+    // the ENetHost is sim-thread-owned, so the actual send + send-cadence bookkeeping is the serial
+    // flush below.
+    runPeerPass(m_peerWork.size(), [&](std::size_t wbegin, std::size_t wend) {
+        for (std::size_t wi = wbegin; wi < wend; ++wi) {
+            PeerSnapWork& w = m_peerWork[wi];
+            const EntityId peerEid = w.peerEid;
+            PeerInputState& pin = *w.pin;
+            const EntityState* peerState = w.peerState;
+            auto& knownGens = *w.knownGens;
+            const uint64_t peerAckedTick = pin.ackedTick;
 
-        auto& knownGens = m_peerKnownGens[peerId];
-        const uint64_t peerAckedTick = pin.ackedTick;
-
-        // Confirmed-despawn detection (#516) + GC prune, in one pass over the known set:
-        //   * Absent from the live snapMap → removed from the sim entirely (kill/despawn). Queue an
-        //     explicit despawn so the client drops it promptly rather than waiting out the retention
-        //     timeout, and erase it from the known set.
-        //   * Present but not sent within kSnapshotRetentionTicks → the client has already
-        //     time-evicted it (interest-out), so prune the record to bound the map (replacing the GC
-        //     the removed periodic baseline clear used to provide). No despawn TLV — it's a timeout,
-        //     not a kill; a re-entry is force-fulled by the retention clause in decideFull().
-        {
-            auto& pending = m_peerPendingDespawn[peerId];
-            for (auto it = knownGens.begin(); it != knownGens.end();) {
-                if (snapMap.find(it->first) == snapMap.end()) {
-                    pending[it->first] = kDespawnRepeatTicks;
-                    it = knownGens.erase(it);
-                } else if (tickIndex - it->second.lastSentTick >= kSnapshotRetentionTicks) {
-                    it = knownGens.erase(it);
-                } else {
-                    ++it;
+            // Confirmed-despawn detection (#516) + GC prune, in one pass over the known set:
+            //   * Absent from the live snapMap → removed from the sim entirely (kill/despawn). Queue an
+            //     explicit despawn so the client drops it promptly rather than waiting out the retention
+            //     timeout, and erase it from the known set.
+            //   * Present but not sent within kSnapshotRetentionTicks → the client has already
+            //     time-evicted it (interest-out), so prune the record to bound the map (replacing the GC
+            //     the removed periodic baseline clear used to provide). No despawn TLV — it's a timeout,
+            //     not a kill; a re-entry is force-fulled by the retention clause in decideFull().
+            {
+                auto& pending = *w.pending;
+                for (auto it = knownGens.begin(); it != knownGens.end();) {
+                    if (snapMap.find(it->first) == snapMap.end()) {
+                        pending[it->first] = kDespawnRepeatTicks;
+                        it = knownGens.erase(it);
+                    } else if (tickIndex - it->second.lastSentTick >= kSnapshotRetentionTicks) {
+                        it = knownGens.erase(it);
+                    } else {
+                        ++it;
+                    }
                 }
             }
-        }
 
-        std::vector<uint8_t> buf;
-        buf.reserve(sizeof(MsgWorldSnapshotHeader) + 256);
+            std::vector<uint8_t>& buf = w.buf; // reused scratch, retains capacity across ticks
+            buf.clear();
+            buf.reserve(sizeof(MsgWorldSnapshotHeader) + 256);
 
-        MsgWorldSnapshotHeader hdr;
-        hdr.msgId = static_cast<uint8_t>(MsgId::WorldSnapshot);
-        hdr.protocolVersion = static_cast<uint8_t>(kProtocolVersion);
-        hdr.recordCount = 0;
-        hdr.bitstreamBytes = 0;
-        hdr.tickIndex = tickIndex;
-        if (peerState) {
-            hdr.frameOrigin[0] = peerState->transform.pos[0];
-            hdr.frameOrigin[1] = peerState->transform.pos[1];
-            hdr.frameOrigin[2] = peerState->transform.pos[2];
-        }
-        const std::size_t hdrOffset = buf.size();
-        appendMsg(buf, hdr); // placeholder; recordCount/bitstreamBytes patched below
+            MsgWorldSnapshotHeader hdr;
+            hdr.msgId = static_cast<uint8_t>(MsgId::WorldSnapshot);
+            hdr.protocolVersion = static_cast<uint8_t>(kProtocolVersion);
+            hdr.recordCount = 0;
+            hdr.bitstreamBytes = 0;
+            hdr.tickIndex = tickIndex;
+            if (peerState) {
+                hdr.frameOrigin[0] = peerState->transform.pos[0];
+                hdr.frameOrigin[1] = peerState->transform.pos[1];
+                hdr.frameOrigin[2] = peerState->transform.pos[2];
+            }
+            const std::size_t hdrOffset = buf.size();
+            appendMsg(buf, hdr); // placeholder; recordCount/bitstreamBytes patched below
 
-        // Collect visible entity indices via the spatial index (conservative XZ cells), then apply
-        // an exact 3D (XYZ) distance gate (#402) and sort ascending so the bitstream's idx deltas
-        // stay small. peerState null/dead → empty list → header-only empty snapshot.
-        std::vector<uint32_t> visible;
-        if (peerState && !peerState->dead && m_drawDistanceM > 0.0) {
-            const double r2 = m_drawDistanceM * m_drawDistanceM;
-            const double px = peerState->transform.pos[0];
-            const double py = peerState->transform.pos[1];
-            const double pz = peerState->transform.pos[2];
-            m_spatialIndex.queryRadius(peerState->transform.pos, m_drawDistanceM,
-                                       [&](uint32_t entityIdx, const double* pos) {
-                                           if (snapMap.find(entityIdx) == snapMap.end())
-                                               return; // died this tick after the index was built
-                                           const double dx = pos[0] - px, dy = pos[1] - py, dz = pos[2] - pz;
-                                           if (dx * dx + dy * dy + dz * dz > r2)
-                                               return; // 3D interest cull (#402)
-                                           visible.push_back(entityIdx);
-                                       });
-            std::sort(visible.begin(), visible.end());
-        }
+            // Collect visible entity indices via the spatial index (conservative XZ cells), then apply
+            // an exact 3D (XYZ) distance gate (#402) and sort ascending so the bitstream's idx deltas
+            // stay small. peerState null/dead → empty list → header-only empty snapshot.
+            std::vector<uint32_t> visible;
+            if (peerState && !peerState->dead && m_drawDistanceM > 0.0) {
+                const double r2 = m_drawDistanceM * m_drawDistanceM;
+                const double px = peerState->transform.pos[0];
+                const double py = peerState->transform.pos[1];
+                const double pz = peerState->transform.pos[2];
+                m_spatialIndex.queryRadius(peerState->transform.pos, m_drawDistanceM,
+                                           [&](uint32_t entityIdx, const double* pos) {
+                                               if (snapMap.find(entityIdx) == snapMap.end())
+                                                   return; // died this tick after the index was built
+                                               const double dx = pos[0] - px, dy = pos[1] - py, dz = pos[2] - pz;
+                                               if (dx * dx + dy * dy + dz * dz > r2)
+                                                   return; // 3D interest cull (#402)
+                                               visible.push_back(entityIdx);
+                                           });
+                std::sort(visible.begin(), visible.end());
+            }
 
-        // Priority/budget scheduling (#516). When a per-client byte budget is set, rank the visible
-        // entities by relevance (distance / closing-speed / recency / player-owned) and keep only the
-        // highest-priority set that fits; the rest are deferred to a later tick. budget == 0 keeps the
-        // legacy behaviour (every visible entity, ascending idx). The own entity is always admitted.
-        std::vector<uint32_t> selected;
-        // Congestion response (#518): scale the static byte budget by this peer's congestion throttle.
-        // A static budget of 0 (unlimited) stays 0 here — under congestion only the send-rate lever
-        // applies for unlimited-budget servers.
-        const uint32_t budget = pin.congestion.effectiveBudget(m_snapshotBudgetBytes.load(std::memory_order_relaxed));
-        if (budget == 0u || visible.size() <= 1u) {
-            selected = visible;
-        } else {
-            // Reserve fixed overhead (header + TLV block) out of the budget for the record bitstream.
-            constexpr uint32_t kFixedOverhead = sizeof(MsgWorldSnapshotHeader) + 32u;
-            const uint32_t recordBudget = budget > kFixedOverhead ? budget - kFixedOverhead : 1u;
-            const double px = peerState->transform.pos[0];
-            const double py = peerState->transform.pos[1];
-            const double pz = peerState->transform.pos[2];
-            std::vector<SnapshotCandidate> cands;
-            cands.reserve(visible.size());
-            for (uint32_t idx : visible) {
-                const EntitySnap& snap = snapMap.at(idx);
-                const EntityState& st = *snap.state;
-                SnapshotCandidate c;
-                c.idx = idx;
-                const double dx = st.transform.pos[0] - px, dy = st.transform.pos[1] - py,
-                             dz = st.transform.pos[2] - pz;
-                c.distSq = dx * dx + dy * dy + dz * dz;
-                // Closing speed: range rate toward the peer (positive = approaching). r_hat points
-                // peer→entity; closing = dot(peerVel - entityVel, r_hat).
-                const double dist = std::sqrt(c.distSq);
-                if (dist > 1e-3) {
-                    const double rx = dx / dist, ry = dy / dist, rz = dz / dist;
-                    const double rvx = static_cast<double>(peerState->transform.vel[0]) - st.transform.vel[0];
-                    const double rvy = static_cast<double>(peerState->transform.vel[1]) - st.transform.vel[1];
-                    const double rvz = static_cast<double>(peerState->transform.vel[2]) - st.transform.vel[2];
-                    c.closingSpeed = static_cast<float>(rvx * rx + rvy * ry + rvz * rz);
+            // Priority/budget scheduling (#516). When a per-client byte budget is set, rank the visible
+            // entities by relevance (distance / closing-speed / recency / player-owned) and keep only the
+            // highest-priority set that fits; the rest are deferred to a later tick. budget == 0 keeps the
+            // legacy behaviour (every visible entity, ascending idx). The own entity is always admitted.
+            std::vector<uint32_t> selected;
+            // Congestion response (#518): scale the static byte budget by this peer's congestion throttle.
+            // A static budget of 0 (unlimited) stays 0 here — under congestion only the send-rate lever
+            // applies for unlimited-budget servers.
+            const uint32_t budget =
+                pin.congestion.effectiveBudget(m_snapshotBudgetBytes.load(std::memory_order_relaxed));
+            if (budget == 0u || visible.size() <= 1u) {
+                selected = visible;
+            } else {
+                // Reserve fixed overhead (header + TLV block) out of the budget for the record bitstream.
+                constexpr uint32_t kFixedOverhead = sizeof(MsgWorldSnapshotHeader) + 32u;
+                const uint32_t recordBudget = budget > kFixedOverhead ? budget - kFixedOverhead : 1u;
+                const double px = peerState->transform.pos[0];
+                const double py = peerState->transform.pos[1];
+                const double pz = peerState->transform.pos[2];
+                std::vector<SnapshotCandidate> cands;
+                cands.reserve(visible.size());
+                for (uint32_t idx : visible) {
+                    const EntitySnap& snap = snapMap.at(idx);
+                    const EntityState& st = *snap.state;
+                    SnapshotCandidate c;
+                    c.idx = idx;
+                    const double dx = st.transform.pos[0] - px, dy = st.transform.pos[1] - py,
+                                 dz = st.transform.pos[2] - pz;
+                    c.distSq = dx * dx + dy * dy + dz * dz;
+                    // Closing speed: range rate toward the peer (positive = approaching). r_hat points
+                    // peer→entity; closing = dot(peerVel - entityVel, r_hat).
+                    const double dist = std::sqrt(c.distSq);
+                    if (dist > 1e-3) {
+                        const double rx = dx / dist, ry = dy / dist, rz = dz / dist;
+                        const double rvx = static_cast<double>(peerState->transform.vel[0]) - st.transform.vel[0];
+                        const double rvy = static_cast<double>(peerState->transform.vel[1]) - st.transform.vel[1];
+                        const double rvz = static_cast<double>(peerState->transform.vel[2]) - st.transform.vel[2];
+                        c.closingSpeed = static_cast<float>(rvx * rx + rvy * ry + rvz * rz);
+                    }
+                    c.isOwn = (st.id.index == peerEid.index && st.id.generation == peerEid.generation);
+                    c.playerOwned = st.playerOwned;
+                    const uint16_t gen = static_cast<uint16_t>(st.id.generation);
+                    auto kit = knownGens.find(idx);
+                    const PeerEntityRec* rec = (kit == knownGens.end()) ? nullptr : &kit->second;
+                    c.ticksSinceSent = (rec == nullptr) ? UINT64_MAX : (tickIndex - rec->lastSentTick);
+                    const bool isFull = decideFull(rec, gen, peerAckedTick, tickIndex);
+                    // Conservative idx-delta of 2 (1-byte varint); the real neighbour gap is unknown until
+                    // after selection, but the budget is a soft cap so a per-record ±1 byte is acceptable.
+                    c.estBytes = estimateRecordBytes(isFull, isFull, c.isOwn, st.typeIndex, /*idxDelta=*/2u);
+                    cands.push_back(c);
                 }
-                c.isOwn = (st.id.index == peerEid.index && st.id.generation == peerEid.generation);
-                c.playerOwned = st.playerOwned;
-                const uint16_t gen = static_cast<uint16_t>(st.id.generation);
+                selected = selectSnapshotRecords(cands, recordBudget, m_schedulerWeights, m_drawDistanceM);
+                std::sort(selected.begin(), selected.end()); // ascending for the codec's idx-delta varints
+
+                // Deferral guard for client-acked baselines: an entity whose identity the client has not
+                // yet confirmed (fullStreakTick > ackedTick) that the scheduler now WITHHOLDS must not
+                // later be confirmed by an ack of this tick — the client never received it here. Push its
+                // streak start past the current tick so its next send is decided a fresh full. A confirmed
+                // entity is left untouched (the #516 benefit: a known entity returns as a cheap delta).
+                if (selected.size() < visible.size()) {
+                    std::unordered_set<uint32_t> sel(selected.begin(), selected.end());
+                    for (uint32_t idx : visible) {
+                        if (sel.count(idx))
+                            continue;
+                        auto kit = knownGens.find(idx);
+                        if (kit != knownGens.end() && kit->second.fullStreakTick > peerAckedTick)
+                            kit->second.fullStreakTick = tickIndex + 1;
+                    }
+                }
+            }
+
+            // Encode the quantized, bit-packed record stream (SnapshotCodec). Full vs delta is the
+            // client-acked decision (decideFull above). Omega is sent only for the peer's own entity.
+            BitWriter writer;
+            uint32_t prevIdx = 0;
+            for (uint32_t idx : selected) {
+                const EntitySnap& snap = snapMap.at(idx);
+                const EntityState& state = *snap.state;
+                const uint16_t gen = static_cast<uint16_t>(state.id.generation);
                 auto kit = knownGens.find(idx);
                 const PeerEntityRec* rec = (kit == knownGens.end()) ? nullptr : &kit->second;
-                c.ticksSinceSent = (rec == nullptr) ? UINT64_MAX : (tickIndex - rec->lastSentTick);
                 const bool isFull = decideFull(rec, gen, peerAckedTick, tickIndex);
-                // Conservative idx-delta of 2 (1-byte varint); the real neighbour gap is unknown until
-                // after selection, but the budget is a soft cap so a per-record ±1 byte is acceptable.
-                c.estBytes = estimateRecordBytes(isFull, isFull, c.isOwn, st.typeIndex, /*idxDelta=*/2u);
-                cands.push_back(c);
-            }
-            selected = selectSnapshotRecords(cands, recordBudget, m_schedulerWeights, m_drawDistanceM);
-            std::sort(selected.begin(), selected.end()); // ascending for the codec's idx-delta varints
 
-            // Deferral guard for client-acked baselines: an entity whose identity the client has not
-            // yet confirmed (fullStreakTick > ackedTick) that the scheduler now WITHHOLDS must not
-            // later be confirmed by an ack of this tick — the client never received it here. Push its
-            // streak start past the current tick so its next send is decided a fresh full. A confirmed
-            // entity is left untouched (the #516 benefit: a known entity returns as a cheap delta).
-            if (selected.size() < visible.size()) {
-                std::unordered_set<uint32_t> sel(selected.begin(), selected.end());
-                for (uint32_t idx : visible) {
-                    if (sel.count(idx))
-                        continue;
-                    auto kit = knownGens.find(idx);
-                    if (kit != knownGens.end() && kit->second.fullStreakTick > peerAckedTick)
-                        kit->second.fullStreakTick = tickIndex + 1;
+                QuantEntity qe;
+                qe.idx = state.id.index;
+                qe.gen = state.id.generation;
+                qe.typeIndex = state.typeIndex;
+                qe.isFull = isFull;
+                qe.hasOmega = (state.id.index == peerEid.index && state.id.generation == peerEid.generation);
+                qe.pos[0] = state.transform.pos[0];
+                qe.pos[1] = state.transform.pos[1];
+                qe.pos[2] = state.transform.pos[2];
+                qe.vel[0] = state.transform.vel[0];
+                qe.vel[1] = state.transform.vel[1];
+                qe.vel[2] = state.transform.vel[2];
+                qe.quat[0] = state.transform.quat[0];
+                qe.quat[1] = state.transform.quat[1];
+                qe.quat[2] = state.transform.quat[2];
+                qe.quat[3] = state.transform.quat[3];
+                qe.omega[0] = snap.omega[0];
+                qe.omega[1] = snap.omega[1];
+                qe.omega[2] = snap.omega[2];
+                qe.damageLevel = static_cast<uint8_t>(state.damageLevel);
+                qe.engineFailFlags = snap.engineFailFlags;
+                qe.throttle = snap.throttle;
+                qe.fuelPct = snap.fuelPct;
+                qe.abEngaged = snap.abEngaged != 0u;
+                qe.playerOwned = state.playerOwned;
+                encodeRecord(writer, qe, prevIdx, hdr.frameOrigin, /*sendGen=*/isFull);
+
+                // Record what we sent. Freeze fullStreakTick at the start of a contiguous run of fulls
+                // (same entity, full last tick, sent consecutively) so the client only has to ack the
+                // streak start to converge to deltas; a send gap (deferral) or a prior delta restarts it.
+                PeerEntityRec& r = knownGens[idx];
+                if (isFull) {
+                    const bool contiguous = r.lastWasFull && r.lastSentTick + 1 == tickIndex;
+                    r.fullStreakTick = contiguous ? r.fullStreakTick : tickIndex;
                 }
+                r.gen = gen;
+                r.lastSentTick = tickIndex;
+                r.lastWasFull = isFull;
+                ++hdr.recordCount;
             }
-        }
+            writer.alignToByte();
+            buf.insert(buf.end(), writer.bytes().begin(), writer.bytes().end());
+            hdr.bitstreamBytes = static_cast<uint32_t>(writer.byteCount());
+            writeMsgAt(buf, hdrOffset, hdr);
 
-        // Encode the quantized, bit-packed record stream (SnapshotCodec). Full vs delta is the
-        // client-acked decision (decideFull above). Omega is sent only for the peer's own entity.
-        BitWriter writer;
-        uint32_t prevIdx = 0;
-        for (uint32_t idx : selected) {
-            const EntitySnap& snap = snapMap.at(idx);
-            const EntityState& state = *snap.state;
-            const uint16_t gen = static_cast<uint16_t>(state.id.generation);
-            auto kit = knownGens.find(idx);
-            const PeerEntityRec* rec = (kit == knownGens.end()) ? nullptr : &kit->second;
-            const bool isFull = decideFull(rec, gen, peerAckedTick, tickIndex);
-
-            QuantEntity qe;
-            qe.idx = state.id.index;
-            qe.gen = state.id.generation;
-            qe.typeIndex = state.typeIndex;
-            qe.isFull = isFull;
-            qe.hasOmega = (state.id.index == peerEid.index && state.id.generation == peerEid.generation);
-            qe.pos[0] = state.transform.pos[0];
-            qe.pos[1] = state.transform.pos[1];
-            qe.pos[2] = state.transform.pos[2];
-            qe.vel[0] = state.transform.vel[0];
-            qe.vel[1] = state.transform.vel[1];
-            qe.vel[2] = state.transform.vel[2];
-            qe.quat[0] = state.transform.quat[0];
-            qe.quat[1] = state.transform.quat[1];
-            qe.quat[2] = state.transform.quat[2];
-            qe.quat[3] = state.transform.quat[3];
-            qe.omega[0] = snap.omega[0];
-            qe.omega[1] = snap.omega[1];
-            qe.omega[2] = snap.omega[2];
-            qe.damageLevel = static_cast<uint8_t>(state.damageLevel);
-            qe.engineFailFlags = snap.engineFailFlags;
-            qe.throttle = snap.throttle;
-            qe.fuelPct = snap.fuelPct;
-            qe.abEngaged = snap.abEngaged != 0u;
-            qe.playerOwned = state.playerOwned;
-            encodeRecord(writer, qe, prevIdx, hdr.frameOrigin, /*sendGen=*/isFull);
-
-            // Record what we sent. Freeze fullStreakTick at the start of a contiguous run of fulls
-            // (same entity, full last tick, sent consecutively) so the client only has to ack the
-            // streak start to converge to deltas; a send gap (deferral) or a prior delta restarts it.
-            PeerEntityRec& r = knownGens[idx];
-            if (isFull) {
-                const bool contiguous = r.lastWasFull && r.lastSentTick + 1 == tickIndex;
-                r.fullStreakTick = contiguous ? r.fullStreakTick : tickIndex;
-            }
-            r.gen = gen;
-            r.lastSentTick = tickIndex;
-            r.lastWasFull = isFull;
-            ++hdr.recordCount;
-        }
-        writer.alignToByte();
-        buf.insert(buf.end(), writer.bytes().begin(), writer.bytes().end());
-        hdr.bitstreamBytes = static_cast<uint32_t>(writer.byteCount());
-        writeMsgAt(buf, hdrOffset, hdr);
-
-        // TLV extension block.
-        appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerCount), activePeers);
-        // Per-peer latency TLVs. Omitted when estimatedDelayTicks == 0 (e.g. single-player localhost)
-        // so the client's m_hasSnapshotLatency stays false and the HUD indicator remains hidden.
-        if (auto it = m_peerInputs.find(peerId); it != m_peerInputs.end()) {
-            if (it->second.estimatedDelayTicks > 0) {
+            // TLV extension block.
+            appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerCount), activePeers);
+            // Per-peer latency TLVs. Omitted when estimatedDelayTicks == 0 (e.g. single-player localhost)
+            // so the client's m_hasSnapshotLatency stays false and the HUD indicator remains hidden.
+            if (pin.estimatedDelayTicks > 0) {
                 const auto latMs = static_cast<uint16_t>(
-                    std::min(static_cast<uint64_t>(it->second.estimatedDelayTicks) * 1000u / 60u, uint64_t{65535u}));
+                    std::min(static_cast<uint64_t>(pin.estimatedDelayTicks) * 1000u / 60u, uint64_t{65535u}));
                 appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerLatency), latMs);
-                const auto delayTicks =
-                    static_cast<uint16_t>(std::min(it->second.estimatedDelayTicks, uint32_t{65535u}));
+                const auto delayTicks = static_cast<uint16_t>(std::min(pin.estimatedDelayTicks, uint32_t{65535u}));
                 appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerDelayTicks), delayTicks);
             }
-        }
-        // Explicit despawn TLV (#516): indices the peer knew that left the sim. Repeated for a few
-        // ticks (drop tolerance on the unreliable channel), decrementing each entry's remaining count.
-        if (auto pit = m_peerPendingDespawn.find(peerId); pit != m_peerPendingDespawn.end() && !pit->second.empty()) {
-            std::vector<uint32_t> ids;
-            ids.reserve(pit->second.size());
-            for (auto it = pit->second.begin(); it != pit->second.end();) {
-                ids.push_back(it->first);
-                if (--(it->second) == 0u)
-                    it = pit->second.erase(it);
-                else
-                    ++it;
+            // Explicit despawn TLV (#516): indices the peer knew that left the sim. Repeated for a few
+            // ticks (drop tolerance on the unreliable channel), decrementing each entry's remaining count.
+            if (auto& pendingDespawn = *w.pending; !pendingDespawn.empty()) {
+                std::vector<uint32_t> ids;
+                ids.reserve(pendingDespawn.size());
+                for (auto it = pendingDespawn.begin(); it != pendingDespawn.end();) {
+                    ids.push_back(it->first);
+                    if (--(it->second) == 0u)
+                        it = pendingDespawn.erase(it);
+                    else
+                        ++it;
+                }
+                appendExtRaw(buf, static_cast<uint16_t>(ExtTag::SnapshotDespawn), ids.data(),
+                             static_cast<uint16_t>(ids.size() * sizeof(uint32_t)));
             }
-            appendExtRaw(buf, static_cast<uint16_t>(ExtTag::SnapshotDespawn), ids.data(),
-                         static_cast<uint16_t>(ids.size() * sizeof(uint32_t)));
+            // No m_net.send here — buf is flushed by the sim thread below.
         }
-        m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/false);
-        pin.lastSnapshotSentTick = tickIndex; // decimation reference for the next tick (#518)
-        pin.sentSnapshot = true;
+    });
+
+    // Serial flush (sim thread): send each built buffer over the sim-thread-owned ENetHost and record
+    // the send-cadence bookkeeping the decimation gate reads next tick (#518). Empty work entries are
+    // peers that were decimated this tick (excluded in the gather) and are simply not present.
+    for (PeerSnapWork& w : m_peerWork) {
+        m_net.send(w.peerId, w.buf.data(), w.buf.size(), /*reliable=*/false);
+        w.pin->lastSnapshotSentTick = tickIndex;
+        w.pin->sentSnapshot = true;
     }
 
     // Tick weather and broadcast MsgWeatherState every 10 ticks (~6 Hz at 60 Hz sim).
@@ -1274,6 +1303,20 @@ void WorldBroadcaster::runEntityPass(std::size_t count, const std::function<void
         return;
     if (m_jobs)
         m_jobs->parallel_for(count, kEntityPassGrain, fn);
+    else
+        fn(0, count); // inline / serial fallback (unit tests, single-threaded servers)
+}
+
+// Grain size for the per-peer snapshot build: 1, because each peer is a heavy, heterogeneous-cost
+// unit (a draw-distance interest query + priority/budget scheduler + quantized bitstream encode), so
+// the finest grain gives the dynamic-claim cursor the best load balancing across workers.
+static constexpr std::size_t kPeerPassGrain = 1;
+
+void WorldBroadcaster::runPeerPass(std::size_t count, const std::function<void(std::size_t, std::size_t)>& fn) {
+    if (count == 0)
+        return;
+    if (m_jobs)
+        m_jobs->parallel_for(count, kPeerPassGrain, fn);
     else
         fn(0, count); // inline / serial fallback (unit tests, single-threaded servers)
 }

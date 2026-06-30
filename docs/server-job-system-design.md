@@ -92,8 +92,51 @@ live controlled entities (`WorldBroadcaster::runEntityPass`, which dispatches vi
    `FlightState` + `EntityState.transform`. `m_groundQuery` (`TerrainStreamer::heightAt`) is
    concurrent-read-safe via its `shared_mutex`.
 
-The serial tail (`EntityManager::onTick` reap, snapshot serialize, weather, shutdown,
-`m_net.service`) is unchanged.
+The serial tail (`EntityManager::onTick` reap, weather, shutdown, `m_net.service`) is unchanged; the
+snapshot serialize is itself a third parallel pass (below).
+
+## Parallel snapshot assembly ([#512])
+
+The Serialize phase builds one interest-managed, delta-compressed `MsgWorldSnapshot` per peer. Each
+peer's build is **per-`peerId`-isolated**: it reads a shared read-only entity map (`snapMap`) + the
+`SpatialIndex`, and writes only that peer's own state (`m_peerKnownGens[peerId]`,
+`m_peerPendingDespawn[peerId]`, a per-peer buffer). It is therefore a natural third `parallel_for`,
+over peers rather than entities (`WorldBroadcaster::runPeerPass`, grain 1 — each peer is a heavy,
+heterogeneous-cost unit: a draw-distance interest query + priority/budget scheduler + quantized
+bitstream encode). The phase is structured in three steps:
+
+1. **Serial gather** (sim thread) — resolve each sending peer's stable per-peer state pointers once
+   into a reusable `m_peerWork` vector. All `unordered_map::operator[]` insertions (and any rehash)
+   happen here, so the parallel region sees a frozen map structure (and `unordered_map` keeps element
+   pointers valid across later rehashes anyway). Decimated peers (the #518 send-rate gate) are
+   excluded from the work set — a decimated tick mutates no per-peer state, exactly as the previous
+   in-loop `continue` did.
+2. **Parallel build** — `runPeerPass` over `m_peerWork`: each worker assembles its peer's snapshot
+   into its own `buf` and mutates only that peer's private maps. Shared reads (`snapMap`,
+   `SpatialIndex`, `EntityManager::get`, `m_drawDistanceM`, `m_snapshotBudgetBytes`,
+   `m_schedulerWeights`, `m_congestionParams`) are read-only for the whole region; the hot-reloadable
+   scalars are written only via `enqueueSimCallback`, which drains earlier in the same tick, so they
+   are stable here. **No `m_net.send`** — the server `ENetHost*` is sim-thread-owned.
+3. **Serial flush** (sim thread) — send each built `buf` and record the per-peer send-cadence
+   bookkeeping (`lastSnapshotSentTick`/`sentSnapshot`) the decimation gate reads next tick.
+
+### Determinism
+
+The per-peer build performs no cross-peer writes and no RNG, so each peer's snapshot bytes are
+**serial-equivalent across worker counts on a given binary** — `tests/test_world_broadcaster.cpp`
+asserts byte-identical per-peer packet streams for `workerCount ∈ {1, 2, 8}` against the inline
+reference (including a mid-run entity kill, exercising the parallel despawn-detection path), and
+`tsan.yml` proves the region is race-free. Unlike the per-entity transforms, this is **not** a
+cross-*platform* bit-identity claim: the priority/budget scheduler ranks candidates by floating-point
+relevance scores (distance / closing-speed), whose rounding can differ across compilers/ISAs and
+reorder ties. Parallelisation introduces no such divergence (the work is partitioned, not reduced);
+cross-platform server determinism is irrelevant in an authoritative model where the server is the
+sole source of truth (clients do not recompute snapshots). The **wire format is unchanged** — this
+is a sim-thread-internal restructuring, byte-identical to the serial output.
+
+> Possible future tuning lever (not yet needed, like "no work-stealing in v1"): `kPeerPassGrain` is
+> 1 today; if load-test profiling ever shows a single huge interest query dominating a worker, the
+> per-peer work could be split sub-peer (e.g. parallel interest query feeding a serial encode).
 
 > Note: the previous serial loop iterated in `unordered_map` order, so it was *already*
 > nondeterministic about which entities were pre/post-stepped when a controller sampled. The
@@ -154,11 +197,6 @@ turbulence; `tsan.yml` proves the region is race-free.
 
 ## Follow-ons
 
-- **[#512] Decouple snapshot assembly** — the per-peer snapshot loop is per-`peerId`-isolated
-  (`m_peerKnownGens[peerId]`, a local buffer) over a shared read-only entity map + `SpatialIndex`,
-  so it is a natural second `parallel_for` over peers. The server `ENetHost*` is sim-thread-owned,
-  so workers build per-peer buffers and the **sim thread flushes** (`m_net.send` stays on the sim
-  thread).
 - **[#514] Graceful overrun handling** — today `GameLoop` caps catch-up at
   `kMaxTicksPerIteration = 8`. A `TickProfiler`-budget-driven degradation policy (shed/space-out
   snapshot cadence, reduce broadcast Hz, or drop time-rate when p99 tick-ms exceeds budget) is the
@@ -172,8 +210,9 @@ turbulence; `tsan.yml` proves the region is race-free.
 
 On the 8-core reference-env (`tools/bot_swarm/reference-env/`, Release), sweep `idle`/`weave`/
 `aggressive` at 96/128/160/192 clients, varying `--sim-worker-threads`, and read the authoritative
-`server_tick` per-phase budget (`fl-server --metrics-json`, [#513]). Expect the Integrate+Ai
-wall-time to drop with worker count and the weave/aggressive tick-Hz knee to move right of the
-current ~96-client ceiling. See `docs/load-testing.md` for the methodology.
+`server_tick` per-phase budget (`fl-server --metrics-json`, [#513]). Expect the Integrate+Ai **and
+Serialize** wall-times to drop with worker count (the Serialize phase is now the parallel per-peer
+snapshot build, [#512]) and the weave/aggressive tick-Hz knee to move right of the current
+~96-client ceiling. See `docs/load-testing.md` for the methodology.
 
 [#513]: https://github.com/fighters-legacy/fighters-legacy/issues/513

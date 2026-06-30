@@ -104,13 +104,15 @@ must raise them (the runner writes this automatically):
 
 The server-side sim-tick CPU parallelism is set by `[world] sim_worker_threads` (0 = auto, 1 =
 serial), overridable per-run with `fl-server --sim-worker-threads <n>` — distinct from the harness's
-own `--threads`. To measure the data-parallel sim ([#511]), sweep `--sim-worker-threads` (e.g.
-`1, 2, 4, 8`) at a fixed client count and pattern and watch the authoritative `server_tick` block:
-the `integrate` and `ai` per-phase wall-times should drop with worker count, and the
-weave/aggressive tick-Hz knee should move to higher client counts. The result is bit-identical
-regardless of worker count, so only throughput changes.
+own `--threads`. To measure the data-parallel sim ([#511], [#512]), sweep `--sim-worker-threads`
+(e.g. `1, 2, 4, 8`) at a fixed client count and pattern and watch the authoritative `server_tick`
+block: the `integrate`, `ai`, **and `serialize`** per-phase wall-times should drop with worker count
+(`serialize` is now the parallel per-peer snapshot build, [#512]), and the weave/aggressive tick-Hz
+knee should move to higher client counts. Per-peer snapshot bytes are identical regardless of worker
+count, so only throughput changes.
 
 [#511]: https://github.com/fighters-legacy/fighters-legacy/issues/511
+[#512]: https://github.com/fighters-legacy/fighters-legacy/issues/512
 
 ## CLI
 

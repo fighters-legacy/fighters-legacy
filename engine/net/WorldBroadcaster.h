@@ -413,6 +413,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // else inline on the sim thread. fn(begin, end) processes a contiguous index sub-range.
     void runEntityPass(std::size_t count, const std::function<void(std::size_t, std::size_t)>& fn);
 
+    // Run a per-peer pass over [0, count): same dispatch as runEntityPass but with a finer grain
+    // (each peer is a heavy, heterogeneous-cost unit — interest query + scheduler + bitstream encode).
+    // Used to build per-peer snapshot buffers in parallel; the sim thread flushes them serially.
+    void runPeerPass(std::size_t count, const std::function<void(std::size_t, std::size_t)>& fn);
+
     // Turbulence is seeded per (entityIdx, tickIndex) so the integrate step is deterministic and
     // parallel-safe — no shared RNG state mutated across entities.
     void stepFlightSim(FlightIntegrator& fi, EntityState& state, const ControlInput& ctrl, double simDt,
@@ -569,6 +574,21 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // SnapshotDespawn TLV for kDespawnRepeatTicks ticks (drop tolerance on the unreliable channel).
     // Erased in full on peer disconnect.
     std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint8_t>> m_peerPendingDespawn;
+
+    // Per-tick scratch for the data-parallel per-peer snapshot build. Each entry resolves a peer's
+    // stable per-peer state pointers once (serially, in the gather), so the parallel build performs
+    // no map operator[] / rehash; the worker writes only into its own buf and the peer-private maps
+    // it points at. The sim thread then flushes buf via m_net.send. buf retains capacity across ticks.
+    struct PeerSnapWork {
+        uint32_t peerId{};
+        EntityId peerEid;
+        const EntityState* peerState{nullptr};
+        PeerInputState* pin{nullptr};
+        std::unordered_map<uint32_t, PeerEntityRec>* knownGens{nullptr};
+        std::unordered_map<uint32_t, uint8_t>* pending{nullptr};
+        std::vector<uint8_t> buf;
+    };
+    std::vector<PeerSnapWork> m_peerWork;
 
     // Shutdown countdown state (sim-thread only).
     bool m_shuttingDown{false};
