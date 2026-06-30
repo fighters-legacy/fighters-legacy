@@ -50,14 +50,17 @@ The same JSON shape is the standalone `--metrics-json` file and the embedded blo
 | `serialize_ms` | telemetry + snapshot assembly/send + weather + shutdown notices |
 | `other_ms` | `tick_ms − Σ(phases)` (loop/function overhead), clamped ≥ 0 |
 
-The scale gate (#520) asserts on `server_tick.tick_ms.p99` via `--assert-max-tick-ms`.
+The scale gate ([CI scale gate](#ci-scale-gate)) asserts on `server_tick.tick_ms.p99` via
+`--assert-max-tick-ms` (strict tier only).
 
 ## Scale-gate targets
 
 128 clients @ 60 Hz with sim tick **≤ 16.6 ms p99** (observed tick-Hz ≈ 60) on a reference
 **8-core / 16 GB** instance, sustained **≤ ~150 KB/s/client** downstream after Epic B
-quantization + budgeting, soak-stable for 2 h. (#520 owns the pass/fail thresholds; `bot_swarm`
-provides the measurement plus the optional `--assert-*` hooks.)
+quantization + budgeting, soak-stable for 2 h. The thresholds live in
+[`tools/bot_swarm/scale-gate.json`](../tools/bot_swarm/scale-gate.json) and are enforced by the
+[CI scale gate](#ci-scale-gate); `bot_swarm` provides the measurement plus the `--assert-*` hooks
+the gate forwards.
 
 The snapshot quantization codec (#515), 3D interest culling (#402), and the priority/budget snapshot
 scheduler (#516) have landed — the entity record is now bit-packed (~24 B steady-state vs. the former
@@ -179,8 +182,44 @@ is covered by `test_congestion_controller`. See [docs/congestion-control-design.
 - **Windows:** the run raises the timer resolution (`timeBeginPeriod(1)`) so 60 Hz pacing is
   accurate.
 
-## CI
+## CI scale gate
 
-The Linux/macOS "Smoke test tools" CI step runs `run_loadtest.sh build/debug 8 3 weave` and
-fails if any of the 8 clients are refused or dropped. The pure-logic unit tests
-(`test_bot_swarm`) run on all platforms including Windows.
+The smoke layer: the Linux/macOS "Smoke test tools" CI step runs `run_loadtest.sh build/debug 8 3
+weave` and fails if any of the 8 clients are refused or dropped. The pure-logic unit tests
+(`test_bot_swarm`, `test_scale_gate.py`) run on all platforms including Windows.
+
+The gate layer is [`.github/workflows/scale-gate.yml`](../.github/workflows/scale-gate.yml), driven
+by [`tools/bot_swarm/scale_gate.py`](../tools/bot_swarm/scale_gate.py) reading thresholds from
+[`scale-gate.json`](../tools/bot_swarm/scale-gate.json). The driver runs `run_loadtest.sh`/`.ps1`
+once per pattern with the profile's `--assert-*` flags wired in (a distinct port per pattern avoids
+the UDP rebind race; the report path is pinned via `FL_LOADTEST_REPORT`), evaluates each report,
+checks the machine-independent `downstream_kbs_per_client` against a committed baseline, and writes a
+Markdown summary to `$GITHUB_STEP_SUMMARY`.
+
+**Two tiers, because hosted runners are not the reference box:**
+
+| Tier | Trigger | Profile | Hard gates | Advisory |
+|---|---|---|---|---|
+| **PR** | every PR + push to `main` (Linux, Release) | `pr` (64 clients, weave) | bandwidth ≤150 KB/s/client, admission (no refused/dropped), KB/s baseline regression, tick-Hz collapse tripwire (≥30) | tick-ms p99 (disabled) |
+| **Reference** | nightly cron + `workflow_dispatch` | `reference` (128 clients; idle/weave/aggressive) | bandwidth + admission + baseline | tick-ms p99 ≤16.6 (enforced only with `--strict`) |
+| **Soak** | `workflow_dispatch` (`profile=soak`) | `soak` (128 clients, weave, 2 h) | + RSS-growth leak signal from the runner sampler | tick-ms p99 (advisory) |
+
+The PR tier hard-gates only machine-independent metrics: `bot_swarm`'s `--assert-min-tick-hz` reads
+the *client-side proxy*, which sags when the harness itself is CPU-starved on a shared runner — a
+false failure. So tick-Hz is only a total-collapse tripwire and tick-ms is advisory on PRs. The
+strict `16.6 ms` p99 is meaningful only on the 8‑core/16 GB
+[reference-env](../tools/bot_swarm/reference-env/README.md) (or a self-hosted runner), where the
+scheduled job is run with `--strict`. A Windows job smoke-runs `run_loadtest.ps1` (8 clients) on
+every PR so the PowerShell launcher can't bitrot.
+
+**Baseline.** [`scale-gate-baseline.json`](../tools/bot_swarm/scale-gate-baseline.json) holds the
+committed `downstream_kbs_per_client` mean per `<profile>/<pattern>`. Only this protocol-stable
+metric is baselined — CPU-timing numbers are too noisy on shared runners. The gate fails on a
+regression beyond `kbs_baseline_tolerance_pct` (10%). Regenerate after an intentional bandwidth
+change (e.g. Epic B budgeting) with:
+
+    python3 tools/bot_swarm/scale_gate.py --profile pr        --build-dir build/release --update-baseline
+    python3 tools/bot_swarm/scale_gate.py --profile reference --build-dir build/release --update-baseline
+
+The KB/s baseline is machine-independent, so it can be regenerated from any box (a failed run aborts
+the update rather than committing a partial baseline).

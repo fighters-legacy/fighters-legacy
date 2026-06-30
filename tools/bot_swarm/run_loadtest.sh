@@ -4,11 +4,14 @@
 # run_loadtest.sh — launch fl-server with a load-test config, run bot_swarm against it,
 # and capture a JSON report. Mirrors tools/latency_analysis/measure_linux.sh.
 #
-# Usage: run_loadtest.sh [BUILD_DIR] [CLIENTS] [DURATION] [PATTERN]
+# Usage: run_loadtest.sh [BUILD_DIR] [CLIENTS] [DURATION] [PATTERN] [-- <extra bot_swarm args>]
 #   BUILD_DIR  build tree containing the binaries (default: build/debug)
 #   CLIENTS    synthetic client count (default: 128)
 #   DURATION   soak seconds (default: 30)
 #   PATTERN    weave|level|aggressive|idle|random (default: weave)
+#   --         everything after a literal `--` is forwarded verbatim to bot_swarm; this is how
+#              the scale gate (scale_gate.py, #520) injects --assert-max-kbs / --assert-min-tick-hz
+#              / --assert-max-tick-ms. With no `--` block the behavior is identical to before.
 #
 # The server's connect-rate-limit and per-IP caps come ONLY from server.toml, so this writes
 # a load-test config and points fl-server at it via FL_CONFIG (which never overwrites an
@@ -23,6 +26,14 @@ DURATION="${3:-30}"
 PATTERN="${4:-weave}"
 PORT="${FL_LOADTEST_PORT:-4793}"
 
+# Collect any trailing args after a literal `--` to forward to bot_swarm (e.g. --assert-* flags).
+EXTRA_ARGS=()
+shift "$(( $# < 4 ? $# : 4 ))" || true
+if [[ "${1:-}" == "--" ]]; then
+    shift
+    EXTRA_ARGS=("$@")
+fi
+
 FLSERVER="$BUILD_DIR/server/fl-server/fl-server"
 BOTSWARM="$BUILD_DIR/tools/bot_swarm"
 [[ -x "$FLSERVER" ]] || { echo "ERROR: fl-server not found at $FLSERVER"; exit 1; }
@@ -36,7 +47,9 @@ trap 'kill "${SERVER_PID:-0}" 2>/dev/null || true; rm -rf "$WORKDIR"' EXIT
 CONFIG="$WORKDIR/server.toml"
 RESULTS_DIR="$SCRIPT_DIR/results"
 mkdir -p "$RESULTS_DIR"
-REPORT="$RESULTS_DIR/loadtest_${CLIENTS}c_${PATTERN}_$(date -u +%Y%m%dT%H%M%SZ).json"
+# FL_LOADTEST_REPORT lets a caller (scale_gate.py) pin the exact report path so it needn't guess the
+# auto-generated name. Default: timestamped name under results/.
+REPORT="${FL_LOADTEST_REPORT:-$RESULTS_DIR/loadtest_${CLIENTS}c_${PATTERN}_$(date -u +%Y%m%dT%H%M%SZ).json}"
 
 # Headroom on max_peers so the harness can also probe past the requested count.
 MAX_PEERS=$(( CLIENTS + 16 ))
@@ -70,12 +83,25 @@ SERVER_PID=$!
 sleep 2
 kill -0 "$SERVER_PID" 2>/dev/null || { echo "ERROR: fl-server exited during startup"; exit 1; }
 
+# Soak leak signal: sample fl-server RSS (KiB) right after startup. `|| true` keeps a flaky `ps`
+# from tripping `set -euo pipefail`; an empty value just disables the end-of-run delta below.
+RSS_START="$(ps -o rss= -p "$SERVER_PID" 2>/dev/null | tr -d ' ' || true)"
+
 # --server-metrics points bot_swarm at the file fl-server writes (above), so the report carries
-# the authoritative per-phase server_tick block alongside the client-side proxy.
+# the authoritative per-phase server_tick block alongside the client-side proxy. Any EXTRA_ARGS
+# (e.g. --assert-* from the scale gate) are forwarded verbatim.
+set +e
 "$BOTSWARM" 127.0.0.1 "$PORT" \
     --clients "$CLIENTS" --duration "$DURATION" --pattern "$PATTERN" \
-    --json "$REPORT" --server-metrics "$METRICS"
+    --json "$REPORT" --server-metrics "$METRICS" "${EXTRA_ARGS[@]}"
 STATUS=$?
+set -e
+
+# Soak leak signal: RSS again before teardown, and the delta. Printed for scale_gate.py / humans.
+RSS_END="$(ps -o rss= -p "$SERVER_PID" 2>/dev/null | tr -d ' ' || true)"
+if [[ -n "$RSS_START" && -n "$RSS_END" ]]; then
+    echo "server_rss_start_kb=$RSS_START server_rss_end_kb=$RSS_END server_rss_delta_kb=$(( RSS_END - RSS_START ))"
+fi
 
 # Sanity: the authoritative server-side block must be present in the report.
 if ! grep -q '"server_tick"' "$REPORT"; then

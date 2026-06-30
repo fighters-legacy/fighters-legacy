@@ -165,6 +165,26 @@
       "problemMatcher": []
     },
     {
+      "label": "CI: pytest (scale_gate)",
+      "type": "shell",
+      "command": "python3 -m pytest tests/test_scale_gate.py -v",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CI: Scale gate (PR)",
+      "type": "shell",
+      "command": "cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON && cmake --build --preset release --target fl-server bot_swarm && python3 tools/bot_swarm/scale_gate.py --profile pr --build-dir build/release --baseline tools/bot_swarm/scale-gate-baseline.json",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "CI: Locale lint",
       "type": "shell",
       "command": "cmake --build --preset debug --target locale-extract && ./build/debug/tools/locale-extract --src engine --locale locale --dry-run",
@@ -265,6 +285,7 @@
         "CI: Smoke tests",
         "CI: pytest (gen_terrain_chunks)",
         "CI: pytest (latency_compare)",
+        "CI: pytest (scale_gate)",
         "CI: Locale lint",
         "CI: Test (ASAN)"
       ],

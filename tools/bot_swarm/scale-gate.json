@@ -1,0 +1,36 @@
+{
+  "_comment": "Scale-gate thresholds for tools/bot_swarm/scale_gate.py (issue #520). Single source of truth for the gate numbers. See docs/load-testing.md.",
+  "kbs_baseline_tolerance_pct": 10,
+  "profiles": {
+    "pr": {
+      "_comment": "Deterministic PR tier: only machine-independent metrics are hard-gated (bandwidth + admission + KB/s baseline). tick-Hz is a total-collapse tripwire; tick-ms is advisory (0 = disabled) because the client-side proxy and CPU timing are noisy on shared runners.",
+      "clients": 64,
+      "duration_s": 30,
+      "patterns": ["weave"],
+      "sim_worker_threads": 0,
+      "assert_max_kbs": 150,
+      "assert_min_tick_hz": 30,
+      "assert_max_tick_ms": 0
+    },
+    "reference": {
+      "_comment": "Strict tier for the 8-core/16GB reference instance (or a self-hosted runner via --strict). tick-ms p99 enforced there; advisory on hosted runners.",
+      "clients": 128,
+      "duration_s": 60,
+      "patterns": ["idle", "weave", "aggressive"],
+      "sim_worker_threads": 0,
+      "assert_max_kbs": 150,
+      "assert_min_tick_hz": 58,
+      "assert_max_tick_ms": 16.6
+    },
+    "soak": {
+      "_comment": "2 h soak-stability run. Same strict thresholds; the runner's RSS sampler feeds the leak check.",
+      "clients": 128,
+      "duration_s": 7200,
+      "patterns": ["weave"],
+      "sim_worker_threads": 0,
+      "assert_max_kbs": 150,
+      "assert_min_tick_hz": 58,
+      "assert_max_tick_ms": 16.6
+    }
+  }
+}

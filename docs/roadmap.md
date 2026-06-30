@@ -159,7 +159,8 @@ Phase 3 acceptance is a **complete engine layer** — all features testable with
 - WeatherPreset::Snow and WeatherPreset::Blizzard functional (weather state machine + visual presets).
 - NVG cockpit overlay toggles on/off in cockpit mode.
 - Scaling seams landed: transport replacement (Epic L) selected behind `INetwork` and passing
-  a transport scale-spike; load-test bot-swarm harness (Epic I) runs in CI; server tick-budget
+  a transport scale-spike; load-test bot-swarm harness + the perf/soak scale gate (Epic I, #520 ✓)
+  run in CI; server tick-budget
   instrumentation (Epic A) reports per-phase timing; wire quantization (Epic B, #515 ✓) bit-packs
   the snapshot entity stream and 3D interest culling (#402 ✓) lands, with snapshot/`sizeof` tests
   updated.

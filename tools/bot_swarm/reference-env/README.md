@@ -116,3 +116,12 @@ The scale‑gate targets (per [docs/load-testing.md](../../../docs/load-testing.
 soak‑stable. Watch **observed server tick‑Hz min** fall away from 60 as you sweep up — the knee
 is the ceiling. Run `idle` (overhead floor) and `weave`/`aggressive` (with physics) to separate
 the snapshot‑bandwidth ceiling (Epic B) from the sim ceiling (Epic A).
+
+This environment is also where the **strict** tier of the CI scale gate
+([scale-gate.yml](../../../.github/workflows/scale-gate.yml)) belongs: the `reference`/`soak`
+profiles' `≤ 16.6 ms p99` tick assertion is only enforced with `scale_gate.py --strict`, which is
+meaningful solely on this pinned 8‑core/16 GB profile. On hosted GitHub runners the scheduled job
+runs the same profiles but the tick‑ms gate is advisory (the box isn't comparable); wiring a
+self‑hosted runner pinned to this profile to enforce it is the tracked Epic I follow‑on. Run it here:
+
+    python3 tools/bot_swarm/scale_gate.py --profile reference --build-dir /tmp/fl-ref-build --strict

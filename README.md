@@ -28,7 +28,7 @@ for clustered fleets.
 | [docs/modding/localization.md](docs/modding/localization.md) | Translator guide: key scheme, TOML layout, plural forms, mod locale |
 | [docs/network-protocol.md](docs/network-protocol.md) | Wire protocol: fl-server ↔ client message format, channel assignments, scalability notes |
 | [docs/snapshot-quantization.md](docs/snapshot-quantization.md) | Quantized/bit-packed snapshot codec: frame-origin encoding, smallest-three quaternion, bit budget, byte-determinism |
-| [docs/load-testing.md](docs/load-testing.md) | bot_swarm load generator: client metrics + authoritative server tick-budget block, flight patterns, scale-gate targets, ceiling-characterisation runbook |
+| [docs/load-testing.md](docs/load-testing.md) | bot_swarm load generator: client metrics + authoritative server tick-budget block, flight patterns, scale-gate targets, the CI perf/soak scale gate (PR + scheduled tiers), ceiling-characterisation runbook |
 | [docs/server-job-system-design.md](docs/server-job-system-design.md) | Data-parallel sim tick: engine-job worker pool, two-phase parallel onTick, serial-equivalence, `sim_worker_threads` |
 | [docs/congestion-control-design.md](docs/congestion-control-design.md) | Adaptive per-client send-rate / congestion response: AIMD controller, ENet-RTT anti-feedback signal, send-rate + byte-budget levers, `[world] congestion_*` |
 | [docs/roadmap.md](docs/roadmap.md) | Schedule, critical path, acceptance criteria, the Multiplayer-at-Scale initiative |

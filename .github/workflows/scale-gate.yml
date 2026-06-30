@@ -1,0 +1,158 @@
+name: Scale Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Nightly 128-client reference run (06:30 UTC).
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Profile to run (reference or soak)'
+        type: choice
+        options: [reference, soak]
+        default: reference
+      strict:
+        description: 'Hard-fail on the tick-ms p99 gate (only meaningful on an 8-core reference runner)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # Deterministic PR tier: Release build, modest client count, machine-independent hard gates
+  # (bandwidth + admission + KB/s baseline). tick-Hz is a collapse tripwire; tick-ms is advisory.
+  pr-gate:
+    name: PR gate (Linux, profile=pr)
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        uses: ./.github/actions/install-linux-deps
+        with:
+          gcc: 'true'
+
+      - name: Cache CMake FetchContent dependencies
+        uses: actions/cache@v6
+        with:
+          path: build/_deps
+          key: cmake-deps-v2-ubuntu-latest-${{ hashFiles('cmake/dependencies.cmake') }}
+
+      # Vulkan disabled: fl-server + bot_swarm are headless and don't need the renderer/glslang.
+      # Matches tools/bot_swarm/reference-env/run-benchmark.sh — a known-good Release config.
+      - name: Configure (Release, headless)
+        run: cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON
+
+      - name: Build fl-server + bot_swarm
+        run: cmake --build --preset release --target fl-server bot_swarm
+
+      - name: Run scale gate (pr profile)
+        run: |
+          python3 tools/bot_swarm/scale_gate.py \
+            --profile pr --build-dir build/release \
+            --baseline tools/bot_swarm/scale-gate-baseline.json
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scale-gate-pr-reports
+          path: tools/bot_swarm/results/*.json
+          if-no-files-found: ignore
+
+  # Bitrot guard for run_loadtest.ps1 — same 8-client/3s scale as the Linux smoke; no perf assert.
+  windows-smoke:
+    name: Windows .ps1 smoke
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: '1.3.290.0'
+          cache: true
+
+      - name: Cache CMake FetchContent dependencies
+        uses: actions/cache@v6
+        with:
+          path: build/_deps
+          key: cmake-deps-v2-windows-latest-${{ hashFiles('cmake/dependencies.cmake') }}
+
+      - name: Set up MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure
+        run: cmake --preset release-msvc
+
+      - name: Build fl-server + bot_swarm
+        run: cmake --build --preset release-msvc --target fl-server bot_swarm
+
+      - name: Smoke run_loadtest.ps1 (8 clients, 3s)
+        shell: pwsh
+        run: .\tools\bot_swarm\run_loadtest.ps1 build\release-msvc 8 3 weave
+
+  # Strict scheduled/dispatch tier: full 128-client reference (or soak) run on the canonical repo.
+  # tick-ms p99 is enforced only with --strict (an 8-core reference/self-hosted runner); advisory on
+  # hosted runners. The dedicated reference runner is tracked as an Epic I follow-on.
+  reference-gate:
+    name: Reference gate (profile=${{ github.event.inputs.profile || 'reference' }})
+    if: >-
+      github.repository == 'fighters-legacy/fighters-legacy' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        uses: ./.github/actions/install-linux-deps
+        with:
+          gcc: 'true'
+
+      - name: Cache CMake FetchContent dependencies
+        uses: actions/cache@v6
+        with:
+          path: build/_deps
+          key: cmake-deps-v2-ubuntu-latest-${{ hashFiles('cmake/dependencies.cmake') }}
+
+      - name: Configure (Release, headless)
+        run: cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON
+
+      - name: Build fl-server + bot_swarm
+        run: cmake --build --preset release --target fl-server bot_swarm
+
+      - name: Run scale gate
+        run: |
+          python3 tools/bot_swarm/scale_gate.py \
+            --profile "${{ github.event.inputs.profile || 'reference' }}" \
+            --build-dir build/release \
+            --baseline tools/bot_swarm/scale-gate-baseline.json \
+            ${{ github.event.inputs.strict == 'true' && '--strict' || '' }}
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scale-gate-reference-reports
+          path: tools/bot_swarm/results/*.json
+          if-no-files-found: ignore
