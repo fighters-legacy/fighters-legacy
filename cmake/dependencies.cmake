@@ -85,50 +85,30 @@ FetchContent_Declare(enet6
 # Declared here (gated on FL_ENABLE_GNS); platform/net links OpenSSL + protobuf and calls
 # FetchContent_MakeAvailable(GameNetworkingSockets).
 #
-# Crypto = OpenSSL (system find_package; GNS rejects libsodium AES on ARM / Apple Silicon, see
-# docs/transport-selection.md). protobuf = SYSTEM-PREFERRED with a FetchContent fallback — the same
-# pattern this repo uses for SDL3 / OpenAL / Catch2. (Pure FetchContent-into-GNS is blocked by
-# CMake's export-file include guard, so system protobuf is the clean, GNS-recommended path.)
-# No WebRTC/ICE (dedicated-server, P2P off) so no abseil. If OpenSSL is absent, FL_ENABLE_GNS is
-# force-disabled and the build stays enet6-only.
+# Crypto = OpenSSL (GNS rejects libsodium AES on ARM / Apple Silicon, see docs/transport-selection.md).
+# protobuf = SYSTEM. find_package(Protobuf) here both gates GNS on availability AND seeds the module
+# cache vars that GNS's own find_package(Protobuf) reuses. If OpenSSL or system protobuf is absent,
+# FL_ENABLE_GNS is force-disabled and the build stays enet6-only — so CI legs that don't install the
+# deps configure fine. GNS is Linux-only in CI for now (Windows: no runner protobuf; macOS: Homebrew
+# protobuf 35 is the abseil-based 5.x line GNS v1.6.0 doesn't build against — both set FL_ENABLE_GNS
+# OFF, so the mixed module/config double-find that clashes on newer protobuf never triggers).
+# No WebRTC/ICE (dedicated-server) ⇒ no abseil.
 # ---------------------------------------------------------------------------
 if(FL_ENABLE_GNS)
-    # OpenSSL 1.1.1+ required for GNS's EVP_PKEY 25519 raw-key API.
-    find_package(OpenSSL 1.1.1 QUIET)
-    if(NOT OpenSSL_FOUND)
-        message(WARNING "FL_ENABLE_GNS=ON but OpenSSL >= 1.1.1 not found — disabling the GNS backend "
-                        "(enet6-only build). Install libssl-dev / openssl@3 to enable it.")
+    find_package(OpenSSL 1.1.1 QUIET) # 1.1.1+ for GNS's EVP_PKEY 25519 raw-key API
+    find_package(Protobuf QUIET)      # module mode; seeds Protobuf_* cache for GNS's find_package
+    if(OpenSSL_FOUND AND Protobuf_FOUND)
+        message(STATUS "GameNetworkingSockets: enabled (OpenSSL ${OPENSSL_VERSION}, "
+                       "system protobuf ${Protobuf_VERSION})")
+    else()
+        message(WARNING "FL_ENABLE_GNS=ON but OpenSSL>=1.1.1 + system protobuf were not both found — "
+                        "building enet6-only. Install libssl-dev + libprotobuf-dev + protobuf-compiler "
+                        "(Linux) to enable GNS.")
         set(FL_ENABLE_GNS OFF CACHE BOOL "" FORCE)
     endif()
 endif()
 
 if(FL_ENABLE_GNS)
-    # protobuf: system-preferred (module mode finds libprotobuf + protoc), FetchContent fallback.
-    find_package(Protobuf QUIET)
-    if(Protobuf_FOUND)
-        set(FL_GNS_PROTOBUF_SYSTEM ON CACHE INTERNAL "GNS uses system protobuf")
-        message(STATUS "GameNetworkingSockets: enabled (OpenSSL ${OPENSSL_VERSION}, "
-                       "system protobuf ${Protobuf_VERSION})")
-    else()
-        set(FL_GNS_PROTOBUF_SYSTEM OFF CACHE INTERNAL "GNS uses system protobuf")
-        message(STATUS "GameNetworkingSockets: enabled (OpenSSL ${OPENSSL_VERSION}, "
-                       "protobuf FetchContent fallback 3.21.12)")
-        # -- protobuf 3.21.12 (pre-abseil), static, no tests, protoc built for codegen --
-        set(protobuf_BUILD_TESTS         OFF CACHE BOOL "" FORCE)
-        set(protobuf_BUILD_SHARED_LIBS   OFF CACHE BOOL "" FORCE)
-        set(protobuf_BUILD_PROTOC_BINARIES ON CACHE BOOL "" FORCE)
-        set(protobuf_INSTALL             OFF CACHE BOOL "" FORCE)
-        set(protobuf_WITH_ZLIB           OFF CACHE BOOL "" FORCE)
-        set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE) # match our /MD runtime
-        FetchContent_Declare(protobuf
-            GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
-            GIT_TAG        v3.21.12
-            GIT_SHALLOW    TRUE
-            GIT_PROGRESS   TRUE
-            SYSTEM
-        )
-    endif()
-
     # -- GameNetworkingSockets v1.6.0: static only, no P2P/ICE/tests, OpenSSL crypto --
     set(BUILD_STATIC_LIB    ON  CACHE BOOL "" FORCE)
     set(BUILD_SHARED_LIB    OFF CACHE BOOL "" FORCE)

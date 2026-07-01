@@ -41,7 +41,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Windows: GNS off for now (no system protobuf on the runner; vcpkg wiring is a follow-up).
+          # GNS is Linux-only in CI for now. Windows has no system protobuf on the runner; macOS
+          # Homebrew ships protobuf 35 (abseil-based 5.x) which GNS v1.6.0 does not build against.
+          # Both are enet6-only pending per-platform protobuf sourcing (vcpkg / a pinned formula).
           - os: windows-latest
             preset: debug-msvc
             gns_flag: '-DFL_ENABLE_GNS=OFF'
@@ -50,7 +52,7 @@ jobs:
             gns_flag: ''
           - os: macos-latest
             preset: debug
-            gns_flag: ''
+            gns_flag: '-DFL_ENABLE_GNS=OFF'
 
     steps:
       - uses: actions/checkout@v7
@@ -70,9 +72,7 @@ jobs:
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
         run: |
-          brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang protobuf openssl@3
-          # Point find_package(OpenSSL) at brew's openssl@3 (system is LibreSSL) for the GNS build.
-          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang
 
       - name: Install Vulkan SDK (Windows)
         if: matrix.os == 'windows-latest'

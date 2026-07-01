@@ -27,17 +27,12 @@ target_include_directories(platform-enet PRIVATE "${enet6_SOURCE_DIR}/include")
 
 # ---------------------------------------------------------------------------
 # GameNetworkingSockets backend — implements INetwork (#507). Gated on FL_ENABLE_GNS.
-# Pulls protobuf (FetchContent) + OpenSSL (system) via the declarations in
-# cmake/dependencies.cmake. Kept in its own static lib so the heavy protobuf/GNS chain
-# stays out of the enet6-only build (net_check / bot_swarm / lean CI).
+# Uses system protobuf + OpenSSL (probed in cmake/dependencies.cmake); GNS runs its own
+# find_package(Protobuf). Kept in its own static lib so the heavy protobuf/GNS chain stays
+# out of the enet6-only build (net_check / bot_swarm / lean CI legs).
 # ---------------------------------------------------------------------------
 if(FL_ENABLE_GNS)
     set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
-    # protobuf is resolved in cmake/dependencies.cmake: system-preferred (FL_GNS_PROTOBUF_SYSTEM ON),
-    # else built from the FetchContent fallback first so GNS's find_package(Protobuf) resolves it.
-    if(NOT FL_GNS_PROTOBUF_SYSTEM)
-        FetchContent_MakeAvailable(protobuf)
-    endif()
     FetchContent_MakeAvailable(GameNetworkingSockets)
     unset(CMAKE_COMPILE_WARNING_AS_ERROR)
 

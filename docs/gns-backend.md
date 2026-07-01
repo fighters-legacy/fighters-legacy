@@ -110,13 +110,21 @@ no abseil/webrtc submodules (`GIT_SUBMODULES ""`). Declared in `cmake/dependenci
 `FL_ENABLE_GNS`); `platform/net/CMakeLists.txt` links it. GNS/protobuf headers are `SYSTEM` includes
 so their warnings don't fail our `-Werror` build.
 
-Per-platform dependency sourcing:
+Per-platform dependency sourcing. **GNS is Linux-only in CI for now**; macOS + Windows build
+enet6-only (`FL_ENABLE_GNS=OFF`) pending per-platform protobuf work (tracked follow-ups):
 
-| Platform | OpenSSL | protobuf |
-|---|---|---|
-| Linux | `libssl-dev` (apt) | `libprotobuf-dev` + `protobuf-compiler` (apt) |
-| macOS | `brew openssl@3` (+ `OPENSSL_ROOT_DIR`) | `brew protobuf` |
-| Windows | runner-provided / vcpkg | **not yet wired — GNS off in CI** (follow-up) |
+| Platform | Status | OpenSSL | protobuf |
+|---|---|---|---|
+| Linux | **GNS on** | `libssl-dev` (apt) | `libprotobuf-dev` + `protobuf-compiler` (apt) |
+| macOS | enet6-only | `brew openssl@3` | Homebrew ships protobuf 35 (abseil-based 5.x) which GNS v1.6.0 doesn't build against — needs a pinned formula |
+| Windows | enet6-only | runner-provided | no system protobuf on the runner — needs vcpkg |
+
+`cmake/dependencies.cmake` auto-disables `FL_ENABLE_GNS` (with a warning) when OpenSSL or system
+protobuf is absent, so any build/CI leg without the deps configures cleanly as enet6-only. It uses
+`find_package(Protobuf)` to both gate and seed the module cache that GNS's own `find_package`
+reuses; we keep GNS off on the only platform with a newer protobuf CMake **config** (macOS/Homebrew),
+which is where a mixed module/config double-`find_package` would otherwise clash
+("some but not all targets already defined" — Homebrew protobuf 35 adds `libupb`).
 
 ## Testing
 
