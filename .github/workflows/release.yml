@@ -13,15 +13,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Windows: GNS off (no system protobuf on the runner; vcpkg wiring is a follow-up).
           - os: windows-latest
             preset: release-msvc
             artifact: fighters-legacy-windows
+            gns_flag: '-DFL_ENABLE_GNS=OFF'
           - os: ubuntu-latest
             preset: release
             artifact: fighters-legacy-linux
+            gns_flag: ''
           - os: macos-latest
             preset: release
             artifact: fighters-legacy-macos
+            gns_flag: ''
 
     steps:
       - uses: actions/checkout@v7
@@ -36,6 +40,7 @@ jobs:
           gcc: 'true'
           clang: 'true'
           vulkan: 'true'
+          gns: 'true'
 
       - name: Install Vulkan SDK (Windows)
         if: matrix.os == 'windows-latest'
@@ -47,7 +52,8 @@ jobs:
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
         run: |
-          brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang
+          brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang protobuf openssl@3
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
       - name: Cache CMake FetchContent dependencies
         uses: actions/cache@v6
@@ -62,7 +68,7 @@ jobs:
           arch: x64
 
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        run: cmake --preset ${{ matrix.preset }} ${{ matrix.gns_flag }}
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}

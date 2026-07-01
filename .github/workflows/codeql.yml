@@ -41,7 +41,9 @@ jobs:
           key: cmake-deps-ubuntu-latest-debug-${{ hashFiles('cmake/dependencies.cmake') }}
 
       - name: Configure
-        run: cmake --preset debug
+        # GNS off: avoids the protobuf/GNS build in the CodeQL autobuild (build-time + no need to
+        # scan the third-party transport). The GnsNetwork backend is covered by the normal CI build.
+        run: cmake --preset debug -DFL_ENABLE_GNS=OFF
 
       - name: Build
         run: cmake --build --preset debug

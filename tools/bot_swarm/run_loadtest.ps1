@@ -98,7 +98,9 @@ tick_json_interval_ms = 250
 $ConfigText | Set-Content -Path $Config -Encoding UTF8
 
 # FL_SIM_WORKER_THREADS sweeps the data-parallel sim worker count without editing config (#511/#573).
-$SrvArgs = @("$Port", "$MaxPeers", "--bind", "127.0.0.1")
+# --transport enet: bot_swarm is the enet6 regression instrument (#507/#519); the server under test
+# must speak enet6 to accept it, regardless of the [network].transport default.
+$SrvArgs = @("$Port", "$MaxPeers", "--bind", "127.0.0.1", "--transport", "enet")
 if ($env:FL_SIM_WORKER_THREADS) { $SrvArgs += @("--sim-worker-threads", "$($env:FL_SIM_WORKER_THREADS)") }
 
 Write-Host "=== bot_swarm load test: $Clients clients, pattern=$Pattern, ${Duration}s, port $Port (test_spawn_ai=$TestSpawnAi) ==="

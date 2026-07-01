@@ -152,6 +152,15 @@ static const char* kDefaultToml =
     "tick_json_path = \"\"\n"
     "tick_json_interval_ms = 1000\n"
     "\n"
+    "[network]\n"
+    "# Transport backend: \"gns\" (GameNetworkingSockets — encrypted UDP, congestion control, 128+\n"
+    "# headroom; default for dedicated servers) or \"enet\" (enet6 — LAN / low-count). See\n"
+    "# docs/transport-selection.md. Requires a server restart to change.\n"
+    "transport = \"gns\"\n"
+    "# GNS only: accept unauthenticated peers (standalone GNS has no Steam PKI). true = encrypted but\n"
+    "# unauthenticated (opportunistic, like TLS-without-cert). Ignored by the enet backend.\n"
+    "allow_insecure = true\n"
+    "\n"
     "[spawn]\n"
     "# AGL offset (metres) above terrain for all spawn points. Default 500 m.\n"
     "agl_offset = 500.0\n"
@@ -645,6 +654,17 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             else
                 cfg.metrics.tickJsonIntervalMs = static_cast<uint32_t>(*v);
         }
+
+        // [network]
+        if (auto v = tbl["network"]["transport"].value<std::string>()) {
+            if (*v == "gns" || *v == "enet")
+                cfg.network.transport = std::move(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "network.transport must be \"gns\" or \"enet\"; using default \"gns\"");
+        }
+        if (auto v = tbl["network"]["allow_insecure"].value<bool>())
+            cfg.network.allowInsecure = *v;
 
         // [spawn]
         if (auto v = tbl["spawn"]["agl_offset"].value<double>()) {

@@ -10,6 +10,22 @@ This is a **writeup spike** — no backend is implemented and no dependency is p
 mirrors how the sibling spikes resolved: [#505] (enet6 ceiling characterisation) and [#510]
 (server job-system design).
 
+> **Implementation outcome ([#507]/[#508]/[#509], landed).** GameNetworkingSockets was implemented
+> behind `INetwork` as selected. Two build-level choices below were **reversed** during
+> implementation, for concrete reasons — see [gns-backend.md](gns-backend.md):
+> 1. **Crypto backend = OpenSSL, not libsodium.** GNS makes `USE_CRYPTO=libsodium` a `FATAL_ERROR`
+>    on non-x86 CPUs (its libsodium AES path is x86-only); the macOS CI runner is Apple-Silicon
+>    arm64. OpenSSL (Apache-2.0) is GPL-3-compatible and builds on every target.
+> 2. **protobuf = system-preferred + FetchContent fallback**, not pure FetchContent. CMake refuses
+>    to `include()` protobuf's `export()`-generated build-tree targets file within the same build, so
+>    the pure-FetchContent handoff is blocked; system protobuf (GNS's own recommendation) is clean
+>    and matches how this repo already sources SDL3 / OpenAL / Catch2. No abseil, since GNS is built
+>    with ICE/WebRTC off.
+>
+> Unchanged as selected: GNS behind `INetwork` with **no interface change** to the transport surface
+> (three optional server-tuning virtuals were added), `enet6` retained via `createNetwork(kind)`, the
+> wire format (`kProtocolVersion = 1`), and the game-client HAL-leak closure.
+
 [#493]: https://github.com/fighters-legacy/fighters-legacy/issues/493
 [#505]: https://github.com/fighters-legacy/fighters-legacy/issues/505
 [#506]: https://github.com/fighters-legacy/fighters-legacy/issues/506

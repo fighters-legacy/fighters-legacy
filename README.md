@@ -33,6 +33,7 @@ for clustered fleets.
 | [docs/entity-scale-characterization.md](docs/entity-scale-characterization.md) | Entity-pool + SpatialIndex scaling to thousands of entities: load-spawn affordance, entity×worker run matrix, cell-size + O(liveCount) findings |
 | [docs/congestion-control-design.md](docs/congestion-control-design.md) | Adaptive per-client send-rate / congestion response: AIMD controller, ENet-RTT anti-feedback signal, send-rate + byte-budget levers, `[world] congestion_*` |
 | [docs/transport-selection.md](docs/transport-selection.md) | Transport-selection spike (Epic L, #506): GameNetworkingSockets vs bespoke UDP vs harden-enet6 evaluation matrix, selection + rationale, `INetwork`→GNS mapping, follow-on de-risking |
+| [docs/gns-backend.md](docs/gns-backend.md) | GameNetworkingSockets backend (#507): `createNetwork()` factory + `FL_ENABLE_GNS`, `INetwork`→GNS mapping, multi-instance refcount, encryption, and the OpenSSL/system-protobuf dependency reversals |
 | [docs/roadmap.md](docs/roadmap.md) | Schedule, critical path, acceptance criteria, the Multiplayer-at-Scale initiative |
 | [docs/distribution.md](docs/distribution.md) | Distribution channels (incl. fl-server container/Helm/operator), monetization strategy |
 | [docs/development.md](docs/development.md) | Build prerequisites per platform (C++ engine + Go services) |

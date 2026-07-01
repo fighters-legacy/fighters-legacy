@@ -53,7 +53,9 @@ jobs:
       # Vulkan disabled: fl-server + bot_swarm are headless and don't need the renderer/glslang.
       # Matches tools/bot_swarm/reference-env/run-benchmark.sh — a known-good Release config.
       - name: Configure (Release, headless)
-        run: cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON
+        # GNS off: bot_swarm is the enet6 regression instrument, so fl-server is built enet6-only
+        # here (leaner, no protobuf dep). A GNS-vs-GNS scale profile is a follow-up.
+        run: cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON -DFL_ENABLE_GNS=OFF
 
       - name: Build fl-server + bot_swarm
         run: cmake --build --preset release --target fl-server bot_swarm
@@ -100,7 +102,7 @@ jobs:
           arch: x64
 
       - name: Configure
-        run: cmake --preset release-msvc
+        run: cmake --preset release-msvc -DFL_ENABLE_GNS=OFF
 
       - name: Build fl-server + bot_swarm
         run: cmake --build --preset release-msvc --target fl-server bot_swarm
@@ -136,7 +138,9 @@ jobs:
           key: cmake-deps-v2-ubuntu-latest-${{ hashFiles('cmake/dependencies.cmake') }}
 
       - name: Configure (Release, headless)
-        run: cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON
+        # GNS off: bot_swarm is the enet6 regression instrument, so fl-server is built enet6-only
+        # here (leaner, no protobuf dep). A GNS-vs-GNS scale profile is a follow-up.
+        run: cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON -DFL_ENABLE_GNS=OFF
 
       - name: Build fl-server + bot_swarm
         run: cmake --build --preset release --target fl-server bot_swarm

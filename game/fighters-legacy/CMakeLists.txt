@@ -38,7 +38,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         platform-sdl3
         platform-vulkan
         platform-openal
-        platform-enet
+        platform-net
         platform-hal
         Vulkan::Vulkan
         SDL3::SDL3

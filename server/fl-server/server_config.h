@@ -126,6 +126,13 @@ struct ServerConfig {
         std::vector<SpawnPointDef> points; // empty = use origin
     };
     SpawnConfig spawn;
+
+    // [network]  — transport backend selection (#507)
+    struct NetworkConfig {
+        std::string transport = "gns"; // "gns" (GameNetworkingSockets, default) or "enet" (enet6)
+        bool allowInsecure = true;     // GNS: accept unauthenticated peers (no Steam PKI); AllowWithoutAuth
+    };
+    NetworkConfig network;
 };
 
 // Returns the embedded default server.toml content written on first run.

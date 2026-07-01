@@ -81,6 +81,76 @@ FetchContent_Declare(enet6
 )
 
 # ---------------------------------------------------------------------------
+# GameNetworkingSockets (#507) — the 128+ transport behind INetwork.
+# Declared here (gated on FL_ENABLE_GNS); platform/net links OpenSSL + protobuf and calls
+# FetchContent_MakeAvailable(GameNetworkingSockets).
+#
+# Crypto = OpenSSL (system find_package; GNS rejects libsodium AES on ARM / Apple Silicon, see
+# docs/transport-selection.md). protobuf = SYSTEM-PREFERRED with a FetchContent fallback — the same
+# pattern this repo uses for SDL3 / OpenAL / Catch2. (Pure FetchContent-into-GNS is blocked by
+# CMake's export-file include guard, so system protobuf is the clean, GNS-recommended path.)
+# No WebRTC/ICE (dedicated-server, P2P off) so no abseil. If OpenSSL is absent, FL_ENABLE_GNS is
+# force-disabled and the build stays enet6-only.
+# ---------------------------------------------------------------------------
+if(FL_ENABLE_GNS)
+    # OpenSSL 1.1.1+ required for GNS's EVP_PKEY 25519 raw-key API.
+    find_package(OpenSSL 1.1.1 QUIET)
+    if(NOT OpenSSL_FOUND)
+        message(WARNING "FL_ENABLE_GNS=ON but OpenSSL >= 1.1.1 not found — disabling the GNS backend "
+                        "(enet6-only build). Install libssl-dev / openssl@3 to enable it.")
+        set(FL_ENABLE_GNS OFF CACHE BOOL "" FORCE)
+    endif()
+endif()
+
+if(FL_ENABLE_GNS)
+    # protobuf: system-preferred (module mode finds libprotobuf + protoc), FetchContent fallback.
+    find_package(Protobuf QUIET)
+    if(Protobuf_FOUND)
+        set(FL_GNS_PROTOBUF_SYSTEM ON CACHE INTERNAL "GNS uses system protobuf")
+        message(STATUS "GameNetworkingSockets: enabled (OpenSSL ${OPENSSL_VERSION}, "
+                       "system protobuf ${Protobuf_VERSION})")
+    else()
+        set(FL_GNS_PROTOBUF_SYSTEM OFF CACHE INTERNAL "GNS uses system protobuf")
+        message(STATUS "GameNetworkingSockets: enabled (OpenSSL ${OPENSSL_VERSION}, "
+                       "protobuf FetchContent fallback 3.21.12)")
+        # -- protobuf 3.21.12 (pre-abseil), static, no tests, protoc built for codegen --
+        set(protobuf_BUILD_TESTS         OFF CACHE BOOL "" FORCE)
+        set(protobuf_BUILD_SHARED_LIBS   OFF CACHE BOOL "" FORCE)
+        set(protobuf_BUILD_PROTOC_BINARIES ON CACHE BOOL "" FORCE)
+        set(protobuf_INSTALL             OFF CACHE BOOL "" FORCE)
+        set(protobuf_WITH_ZLIB           OFF CACHE BOOL "" FORCE)
+        set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE) # match our /MD runtime
+        FetchContent_Declare(protobuf
+            GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
+            GIT_TAG        v3.21.12
+            GIT_SHALLOW    TRUE
+            GIT_PROGRESS   TRUE
+            SYSTEM
+        )
+    endif()
+
+    # -- GameNetworkingSockets v1.6.0: static only, no P2P/ICE/tests, OpenSSL crypto --
+    set(BUILD_STATIC_LIB    ON  CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIB    OFF CACHE BOOL "" FORCE)
+    set(BUILD_EXAMPLES      OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTS         OFF CACHE BOOL "" FORCE)
+    set(BUILD_TOOLS         OFF CACHE BOOL "" FORCE)
+    set(ENABLE_ICE          OFF CACHE BOOL "" FORCE) # dedicated-server: no NAT-punch P2P
+    set(USE_STEAMWEBRTC     OFF CACHE BOOL "" FORCE) # ⇒ no webrtc/abseil submodules
+    set(USE_CRYPTO          "OpenSSL" CACHE STRING "" FORCE)
+    set(USE_CRYPTO25519     "OpenSSL" CACHE STRING "" FORCE)
+    set(Protobuf_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(GameNetworkingSockets
+        GIT_REPOSITORY https://github.com/ValveSoftware/GameNetworkingSockets.git
+        GIT_TAG        v1.6.0
+        GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
+        GIT_SUBMODULES "" # ICE/WebRTC off ⇒ skip abseil/webrtc/vjson submodules (webrtc is huge)
+        SYSTEM
+    )
+endif()
+
+# ---------------------------------------------------------------------------
 # Catch2 — system preferred, FetchContent fallback; always needed for tests
 # ---------------------------------------------------------------------------
 find_package(Catch2 3.15.0 QUIET)

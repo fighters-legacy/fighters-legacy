@@ -20,6 +20,9 @@ inputs:
   lcov:
     description: 'Install lcov for coverage'
     default: 'false'
+  gns:
+    description: 'Install GameNetworkingSockets deps (OpenSSL + protobuf) for FL_ENABLE_GNS'
+    default: 'false'
 
 runs:
   using: composite
@@ -54,6 +57,11 @@ runs:
         fi
         if [ "${{ inputs.lcov }}" = "true" ]; then
           pkgs="$pkgs lcov"
+        fi
+        if [ "${{ inputs.gns }}" = "true" ]; then
+          # GameNetworkingSockets deps: OpenSSL crypto + system protobuf (compiler + libs). protobuf
+          # is system-preferred (find_package); no abseil since GNS is built with ICE/WebRTC off.
+          pkgs="$pkgs libssl-dev libprotobuf-dev protobuf-compiler pkg-config"
         fi
         sudo apt-get update
         sudo apt-get install -y $pkgs

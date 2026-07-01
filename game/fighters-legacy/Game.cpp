@@ -8,13 +8,13 @@
 #include "CameraInput.h"
 #include "ClientNetEventHandler.h"
 #include "DebriefScreen.h"
-#include "ENetNetwork.h"
 #include "FileLogger.h"
 #include "FlightInputCollector.h"
 #include "FlightScreen.h"
 #include "HapticController.h"
 #include "IWindowEventHandler.h"
 #include "LocalServer.h"
+#include "NetworkFactory.h"
 #include "Platform.h"
 #include "PrecipitationController.h"
 #include "ScreenManager.h"
@@ -315,7 +315,7 @@ struct GameServices {
 // empties them before ~GameImpl, so the program-exit destruction order is moot.
 struct SessionContext {
     std::optional<LocalServer> localServer;
-    std::unique_ptr<ENetNetwork> clientNet;
+    std::unique_ptr<INetwork> clientNet;
     std::unique_ptr<ClientNetEventHandler> clientHandler;
     std::optional<HapticController> hapticController;
     std::optional<DiscoveryListener> discoveryListener;
@@ -666,9 +666,12 @@ void Game::startGame() {
         d.services.activeHud = &d.services.flightHud;
         d.session.hapticController.emplace(*d.services.p.input);
 
-        d.session.clientNet = std::make_unique<ENetNetwork>();
+        // Single-player uses enet6 to match the embedded LocalServer (spawned with --transport enet);
+        // multiplayer joins a dedicated server over GNS (encrypted). Both via the HAL factory.
+        const TransportKind clientTransport = isMultiplayer ? TransportKind::Gns : TransportKind::Enet;
+        d.session.clientNet = createNetwork(clientTransport, d.services.rawLogger);
         if (!d.session.clientNet->init()) {
-            d.services.rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "client ENet init failed");
+            d.services.rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "client network init failed");
             return;
         }
 

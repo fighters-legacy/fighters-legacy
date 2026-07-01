@@ -31,7 +31,8 @@ jobs:
           key: cmake-deps-ubuntu-latest-${{ hashFiles('cmake/dependencies.cmake') }}
 
       - name: Configure
-        run: cmake --preset asan
+        # GNS off: ASan/LSan value is our code; GNS + protobuf globals add third-party sanitizer noise.
+        run: cmake --preset asan -DFL_ENABLE_GNS=OFF
         env:
           CC: clang
           CXX: clang++

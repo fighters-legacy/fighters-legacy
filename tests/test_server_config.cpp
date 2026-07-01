@@ -244,6 +244,45 @@ TEST_CASE("parseServerConfig: motd_display_s 0 is accepted", "[server_config]") 
     CHECK(log.entries.empty());
 }
 
+// ---------------------------------------------------------------------------
+// [network] transport selection (#507)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("parseServerConfig: network defaults are gns + allow_insecure", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("", &log);
+    CHECK(cfg.network.transport == "gns");
+    CHECK(cfg.network.allowInsecure == true);
+}
+
+TEST_CASE("parseServerConfig: reads network.transport enet", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[network]\ntransport = \"enet\"\n", &log);
+    CHECK(cfg.network.transport == "enet");
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: reads network.transport gns", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[network]\ntransport = \"gns\"\n", &log);
+    CHECK(cfg.network.transport == "gns");
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: invalid network.transport warns and keeps default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[network]\ntransport = \"quic\"\n", &log);
+    CHECK(cfg.network.transport == "gns");
+    CHECK_FALSE(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: reads network.allow_insecure false", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[network]\nallow_insecure = false\n", &log);
+    CHECK(cfg.network.allowInsecure == false);
+    CHECK(log.entries.empty());
+}
+
 TEST_CASE("parseServerConfig: motd_display_s boundary 65535 is accepted", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[server]\nmotd_display_s = 65535\n", &log);
