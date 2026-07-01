@@ -21,11 +21,13 @@
 #include "RconServer.h"
 #include "ServerCommands.h"
 #include "StdoutLogger.h"
+#include "TestSpawn.h"
 #include "net/DiscoveryBeacon.h"
 #include "server_config.h"
 
 #include <ILogger.h>
 #include <Platform.h>
+#include <ai/LoiterController.h>
 #include <config/ConfigFile.h>
 #include <console/CommandRegistry.h>
 #include <console/CommandShell.h>
@@ -505,6 +507,35 @@ int main(int argc, char** argv) {
         std::snprintf(wbuf, sizeof(wbuf), "sim worker pool: %u background worker(s) (sim_worker_threads=%u)",
                       jobSystem.workerCount(), cfg.simWorkerThreads);
         log->log(LogLevel::Info, __FILE__, __LINE__, wbuf);
+    }
+
+    // ---- Load-test affordance (#573): pre-spawn N server-side AI entities to stress the entity pool
+    // + SpatialIndex at scale. A TESTING AFFORDANCE, NOT A CAPACITY GUARANTEE. Disabled (0) by default;
+    // must be wired before gameLoop.start() (registerController is sim-thread-only afterward).
+    if (cfg.testSpawnAiCount > 0) {
+        const double baseElev = terrainStreamer.heightAt(0.0, 0.0); // origin chunk primed above
+        const double spreadM = cfg.testSpawnSpreadKm * 1000.0;
+        const auto positions = fl::testSpawnPositions(cfg.testSpawnAiCount, spreadM, cfg.testSpawnAglM, baseElev);
+        uint32_t spawned = 0;
+        for (const auto& pos : positions) {
+            fl::EntityTransform t{};
+            t.pos[0] = pos[0];
+            t.pos[1] = pos[1];
+            t.pos[2] = pos[2];
+            const fl::EntityId id = entityManager.spawn("builtin:debug-entity", t);
+            if (!id.valid())
+                break; // soft cap or unregistered type — stop cleanly
+            broadcaster.registerController(
+                id, std::make_unique<fl::ai::LoiterController>(glm::dvec3(pos[0], pos[1], pos[2]), 3000.f,
+                                                               static_cast<float>(pos[1])));
+            ++spawned;
+        }
+        char sbuf[160];
+        std::snprintf(sbuf, sizeof(sbuf),
+                      "test spawn: %u AI entities over %.1f km at %.0f m AGL "
+                      "(testing affordance, NOT a capacity guarantee)",
+                      spawned, cfg.testSpawnSpreadKm, cfg.testSpawnAglM);
+        log->log(LogLevel::Warn, __FILE__, __LINE__, sbuf);
     }
 
     fl::ServerCommandContext adminCtx;

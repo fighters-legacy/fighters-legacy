@@ -160,6 +160,15 @@ TEST_CASE("parseSwarmArgs parses --server-metrics and --assert-max-tick-ms", "[b
     CHECK(bad.status == ParseStatus::Error);
 }
 
+TEST_CASE("parseSwarmArgs parses --assert-min-entities", "[bot_swarm][config]") {
+    const SwarmParseResult r = parse({"--assert-min-entities", "2000"});
+    REQUIRE(r.status == ParseStatus::Ok);
+    CHECK(r.cfg.assertMinEntities == 2000);
+
+    const SwarmParseResult bad = parse({"--assert-min-entities", "-1"});
+    CHECK(bad.status == ParseStatus::Error);
+}
+
 // ---------------------------------------------------------------------------
 // Metric aggregation + JSON
 // ---------------------------------------------------------------------------
@@ -286,6 +295,31 @@ TEST_CASE("assert-max-tick-ms gates on the authoritative server p99", "[bot_swar
     }
     SECTION("fails when server p99 exceeds budget") {
         CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, makeServer(25.0)).assertsPassed);
+    }
+    SECTION("fails when the assert is enabled but no server metrics were provided") {
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed);
+    }
+}
+
+TEST_CASE("assert-min-entities gates on the authoritative server entity count (#573)",
+          "[bot_swarm][metrics][servertick]") {
+    SwarmConfig cfg;
+    cfg.clients = 1;
+    cfg.assertMinEntities = 2000;
+    std::vector<ClientMetrics> clients;
+    clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
+
+    auto serverWithEntities = [](uint32_t n) {
+        ServerTickReport s = makeServer(6.0);
+        s.entities = n;
+        return s;
+    };
+
+    SECTION("passes when the server reached the requested entity count") {
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithEntities(2050)).assertsPassed);
+    }
+    SECTION("fails when the server is short of the requested count") {
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, serverWithEntities(128)).assertsPassed);
     }
     SECTION("fails when the assert is enabled but no server metrics were provided") {
         CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed);

@@ -57,6 +57,13 @@ MAX_PEERS=$(( CLIENTS + 16 ))
 
 METRICS="$WORKDIR/server_tick.json"
 
+# Optional entity-scale knobs (#573). FL_TEST_SPAWN_AI pre-spawns N server-side AI entities to stress
+# the entity pool + SpatialIndex; FL_SNAPSHOT_BUDGET overrides the per-client snapshot byte budget.
+# All default to "off"/unset so a normal run is byte-identical to before.
+TEST_SPAWN_AI="${FL_TEST_SPAWN_AI:-0}"
+TEST_SPAWN_SPREAD_KM="${FL_TEST_SPAWN_SPREAD_KM:-50}"
+SNAPSHOT_BUDGET="${FL_SNAPSHOT_BUDGET:-}"
+
 cat >"$CONFIG" <<EOF
 [server]
 port = $PORT
@@ -76,14 +83,31 @@ max_connections_per_ip = 0
 # and mask the very regressions the gate exists to catch (validating the governor itself is a separate
 # synthetic-overrun profile). The governor defaults ON in production server.toml.
 overrun_governor_enabled = false
+# Entity-scale load-spawn (#573). 0 = disabled (normal run).
+test_spawn_ai_count = $TEST_SPAWN_AI
+test_spawn_spread_km = $TEST_SPAWN_SPREAD_KM
+EOF
+# Only emit snapshot_budget_bytes when explicitly requested (else keep the server default).
+if [[ -n "$SNAPSHOT_BUDGET" ]]; then
+    echo "snapshot_budget_bytes = $SNAPSHOT_BUDGET" >>"$CONFIG"
+fi
+cat >>"$CONFIG" <<EOF
 
 [metrics]
 tick_json_path = "$METRICS"
 tick_json_interval_ms = 250
 EOF
 
-echo "=== bot_swarm load test: $CLIENTS clients, pattern=$PATTERN, ${DURATION}s, port $PORT ==="
-FL_CONFIG="$CONFIG" "$FLSERVER" "$PORT" "$MAX_PEERS" --bind 127.0.0.1 &
+# FL_SIM_WORKER_THREADS sweeps the data-parallel sim worker count without editing config (#511/#573).
+SIM_WORKER_ARGS=()
+if [[ -n "${FL_SIM_WORKER_THREADS:-}" ]]; then
+    SIM_WORKER_ARGS=(--sim-worker-threads "$FL_SIM_WORKER_THREADS")
+fi
+
+echo "=== bot_swarm load test: $CLIENTS clients, pattern=$PATTERN, ${DURATION}s, port $PORT" \
+     "(test_spawn_ai=$TEST_SPAWN_AI sim_workers=${FL_SIM_WORKER_THREADS:-default}) ==="
+FL_CONFIG="$CONFIG" "$FLSERVER" "$PORT" "$MAX_PEERS" --bind 127.0.0.1 \
+    ${SIM_WORKER_ARGS[@]+"${SIM_WORKER_ARGS[@]}"} &
 SERVER_PID=$!
 
 # Give the server a moment to bind, then confirm it is still alive.

@@ -40,6 +40,7 @@ struct ServerConfig {
     double timeScale = 10.0;             // game seconds per real second; 10 = full day/night ~2.4 real hrs
     double planetRadiusM = 6'371'000.0;  // sphere radius (m); Earth default
     double drawDistanceKm = 200.0;       // per-peer interest radius (km); [1, 100000]
+    double spatialCellSizeKm = 10.0;     // SpatialIndex cell size (km); 0 = auto from draw distance; [0, 1000]; restart
     uint32_t snapshotBudgetBytes = 1200; // per-client snapshot byte budget; 0 = unlimited; [0, 65535] (#516)
     uint32_t jitterBufferDepth = 4;      // per-peer input queue depth (ticks); [1, 32]
     uint32_t jitterAdaptWindow = 60;     // EWMA smoothing window in ticks; [10, 3600]
@@ -63,6 +64,12 @@ struct ServerConfig {
     // including the sim thread. 0 = auto (hardware_concurrency), 1 = serial. CPU knob, NOT a
     // capacity guarantee. CLI --sim-worker-threads overrides this. [0, 256]
     uint32_t simWorkerThreads = 0;
+    // Load-test affordance (#573): spawn N server-side AI entities (cheap loiter controllers spread over
+    // testSpawnSpreadKm at testSpawnAglM) at startup to stress the entity pool + SpatialIndex at scale.
+    // A TESTING AFFORDANCE, NOT A CAPACITY GUARANTEE. 0 = disabled. Restart-only.
+    uint32_t testSpawnAiCount = 0;   // number of AI entities to pre-spawn; [0, 1000000]
+    double testSpawnSpreadKm = 50.0; // spread radius (km) of the phyllotaxis distribution; [0, 100000]
+    double testSpawnAglM = 500.0;    // spawn/loiter altitude above the origin ground elevation (m); [0, 50000]
 
     // [ai]  — Phase 2: parsed and stored; enforcement lands with AI runtime
     std::string aiDifficultyFloor = "recruit";

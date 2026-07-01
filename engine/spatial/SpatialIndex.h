@@ -20,6 +20,15 @@ namespace fl {
 // highly non-uniform configurations — well beyond the planned entity scale of this sim.
 // See docs/architecture.md (engine-spatial section) for the full rationale.
 //
+// Cell size is a runtime knob, not a constant: 10 km is a sensible DEFAULT, but at high entity
+// density with a large draw distance a smaller cell keeps queryRadius from degenerating toward
+// O(N). Configurable via the constructor / setCellSize(); 0 selects an auto heuristic (see
+// SpatialIndex.cpp and WorldBroadcaster::setSpatialCellSize).
+//
+// Allocation: clear() recycles each cell's vector into a spare pool instead of freeing it, and
+// insert() draws a recycled (capacity-retaining) buffer for a new cell — so a steady-state
+// per-tick rebuild does no bucket (re)allocation. Memory is bounded by the peak live cell count.
+//
 // No ISpatialIndex interface: queryRadius is a function template (Fn&&) that cannot be
 // virtualized without erasing Fn to std::function, adding allocator overhead on every
 // per-entity callback at 60 Hz. Swapping to a different algorithm means replacing the body
@@ -29,8 +38,13 @@ class SpatialIndex {
   public:
     explicit SpatialIndex(double cellSizeM = 10000.0) noexcept;
 
-    // Remove all entries. Call before each per-tick rebuild.
-    void clear() noexcept;
+    // Remove all entries (recycling cell buffers into the spare pool). Call before each per-tick
+    // rebuild. Not noexcept: recycling may grow the spare pool.
+    void clear();
+
+    // Change the cell size and drop all entries (buffers are recycled). Pre-start / between-tick
+    // use only. Asserts cellSizeM > 0 (floor(pos/0) is UB — guarded by asan.yml).
+    void setCellSize(double cellSizeM);
 
     // Insert an entity at the given world position.
     void insert(uint32_t entityIdx, const double pos[3]);
@@ -74,6 +88,7 @@ class SpatialIndex {
 
     double m_cellSize;
     std::unordered_map<CellKey, std::vector<Entry>, CellKeyHash> m_grid;
+    std::vector<std::vector<Entry>> m_spare; // recycled cell buffers (retain capacity across ticks)
     size_t m_count{0};
 };
 

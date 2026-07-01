@@ -134,6 +134,36 @@ degraded), useful for an A/B in a single session.
 
 [#514]: https://github.com/fighters-legacy/fighters-legacy/issues/514
 
+### Entity-pool + SpatialIndex scaling ([#573])
+
+`bot_swarm` is a pure client, so `peers == entities` in a plain run. To stress the per-tick data
+structures (the `EntityManager` pool + `SpatialIndex`) at **thousands** of entities, the server has a
+load-spawn affordance — `[world] test_spawn_ai_count = N` pre-spawns N cheap loiter-AI entities over
+`test_spawn_spread_km` at `test_spawn_agl_m`. **A testing affordance, not a capacity guarantee.**
+
+The runner exposes it (and the worker sweep) via env, so you can sweep entity count × worker count and
+read the authoritative `server_tick` per-phase budget:
+
+    FL_TEST_SPAWN_AI=2000 FL_SIM_WORKER_THREADS=4 FL_SNAPSHOT_BUDGET=1200 \
+        tools/bot_swarm/run_loadtest.sh build/release 64 30 weave -- --assert-min-entities 2000
+
+- `FL_TEST_SPAWN_AI` / `FL_TEST_SPAWN_SPREAD_KM` → the `[world]` load-spawn keys.
+- `FL_SIM_WORKER_THREADS` → `fl-server --sim-worker-threads` (sweep `1 2 4 8`).
+- `FL_SNAPSHOT_BUDGET` → `[world] snapshot_budget_bytes` (0 = unlimited); sweep `1200` vs `0` to split
+  the pool/index cost from the snapshot-budget cost.
+- `--assert-min-entities N` fails the run if the server did not reach N live entities (the spawn took).
+
+The whole matrix is a driver profile (advisory, **never baselined** — its sweep would corrupt the KB/s
+baseline): `python3 tools/bot_swarm/scale_gate.py --profile entity-scale --build-dir build/release`,
+or the reference-env sweep `ENTITY_COUNTS="0 2000 5000" SIM_WORKERS="1 4 8" … run-container.sh`. The
+`spatial_cell_size_km` knob (`0` = auto from draw distance) tunes the index cell size — a cell much
+smaller than the draw distance explodes the `queryRadius` cell count. What to watch in `server_tick`:
+`serialize_ms` (the per-peer snapshot build — dominant at scale), `integrate_ms`/`ai_ms` (parallel
+passes; should fall with worker count), and `maintenance_ms` (the spatial rebuild). Findings and the
+run matrix live in [entity-scale-characterization.md](entity-scale-characterization.md).
+
+[#573]: https://github.com/fighters-legacy/fighters-legacy/issues/573
+
 ## CLI
 
     bot_swarm [host] [port] [options]
@@ -148,6 +178,7 @@ degraded), useful for an A/B in a single session.
       --assert-min-tick-hz X exit nonzero if observed (proxy) tick-Hz min < X
       --assert-max-kbs Y     exit nonzero if downstream KB/s/client max > Y
       --assert-max-tick-ms X exit nonzero if authoritative server tick p99 (ms) > X
+      --assert-min-entities N exit nonzero if authoritative server_tick.entities < N
     Env: FL_HOST, FL_PORT
 
 ## Flight patterns

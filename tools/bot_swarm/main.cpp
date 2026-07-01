@@ -79,6 +79,7 @@ void printHelp() {
                 "  --assert-min-tick-hz X Exit nonzero if observed server tick-Hz min < X\n"
                 "  --assert-max-kbs Y     Exit nonzero if downstream KB/s per client max > Y\n"
                 "  --assert-max-tick-ms X Exit nonzero if authoritative server tick p99 (ms) > X\n"
+                "  --assert-min-entities N Exit nonzero if authoritative server_tick.entities < N\n"
                 "  --help, --version\n"
                 "\n"
                 "Environment:\n"

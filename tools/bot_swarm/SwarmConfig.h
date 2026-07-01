@@ -27,6 +27,7 @@ struct SwarmConfig {
     double assertMinTickHz{0.0};   // 0 = disabled
     double assertMaxKbs{0.0};      // 0 = disabled
     double assertMaxTickMs{0.0};   // 0 = disabled; fails if server tick_ms.p99 > this (#520 gate hook)
+    int assertMinEntities{0};      // 0 = disabled; fails if server_tick.entities < this (#573 gate hook)
 };
 
 enum class ParseStatus { Ok, Help, Version, Error };
@@ -110,6 +111,10 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
             r.cfg.assertMaxTickMs = std::strtod(argv[++i], nullptr);
+        } else if (std::strcmp(a, "--assert-min-entities") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.assertMinEntities = std::atoi(argv[++i]);
         } else if (a[0] == '-' && a[1] != '\0') {
             r.status = ParseStatus::Error;
             r.error = std::string("unknown flag: ") + a;
@@ -152,6 +157,8 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
         fail("--assert-max-kbs must be >= 0");
     else if (r.cfg.assertMaxTickMs < 0.0)
         fail("--assert-max-tick-ms must be >= 0");
+    else if (r.cfg.assertMinEntities < 0)
+        fail("--assert-min-entities must be >= 0");
     return r;
 }
 

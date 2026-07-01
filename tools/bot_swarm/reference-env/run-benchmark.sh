@@ -7,7 +7,8 @@
 # IMPORTANT: this builds Release (optimized). The ad-hoc dev-box numbers in #505 were Debug
 # (-O0) builds and are pessimistic — always characterise on a Release build.
 #
-# Env knobs: SRC (default /src), BUILD (default /tmp/fl-ref-build), CLIENTS, DURATION, PATTERNS.
+# Env knobs: SRC (default /src), BUILD (default /tmp/fl-ref-build), CLIENTS, DURATION, PATTERNS,
+# ENTITY_COUNTS, SIM_WORKERS.
 set -euo pipefail
 
 SRC="${SRC:-/src}"
@@ -15,6 +16,13 @@ BUILD="${BUILD:-/tmp/fl-ref-build}"
 CLIENTS="${CLIENTS:-64 128 256}"
 DURATION="${DURATION:-30}"
 PATTERNS="${PATTERNS:-idle weave}"
+# Entity-pool + SpatialIndex scaling sweep (#573). ENTITY_COUNTS pre-spawns N server-side AI entities
+# per run (FL_TEST_SPAWN_AI); SIM_WORKERS sweeps the data-parallel sim worker count (#511,
+# FL_SIM_WORKER_THREADS). Defaults reproduce the pre-#573 behaviour: no extra entities, server-default
+# worker count ("" = let the server auto-pick). Example matrix:
+#   ENTITY_COUNTS="0 2000 5000" SIM_WORKERS="1 4 8" PATTERNS=weave CLIENTS=64 run-benchmark.sh
+ENTITY_COUNTS="${ENTITY_COUNTS:-0}"
+SIM_WORKERS="${SIM_WORKERS:-}"
 
 # `free` reads /proc/meminfo, which is NOT cgroup-aware (shows host RAM in a container). Report
 # the cgroup v2 memory cap when present (container), else free (VM, where the cap IS the VM size).
@@ -37,12 +45,26 @@ ulimit -n "$(ulimit -Hn 2>/dev/null || echo 4096)" 2>/dev/null || true
 
 for p in $PATTERNS; do
     for n in $CLIENTS; do
-        echo "############### ${n} clients, pattern=${p} ###############"
-        # `|| true`: past the knee, run_loadtest.sh exits nonzero (clients dropped) — that's the
-        # point of the sweep, so don't let `set -e`/pipefail abort the remaining runs.
-        bash "$SRC/tools/bot_swarm/run_loadtest.sh" "$BUILD" "$n" "$DURATION" "$p" \
-            | grep -E "clients:|tick-Hz|dn KB/s|RTT |loop dt|aggregate" || true
+        for e in $ENTITY_COUNTS; do
+            # SIM_WORKERS may be empty (server default) → iterate a single sentinel pass.
+            for w in ${SIM_WORKERS:-__default__}; do
+                if [[ "$w" == "__default__" ]]; then
+                    unset FL_SIM_WORKER_THREADS
+                    wlabel="default"
+                else
+                    export FL_SIM_WORKER_THREADS="$w"
+                    wlabel="$w"
+                fi
+                export FL_TEST_SPAWN_AI="$e"
+                echo "############### ${n} clients, pattern=${p}, ai_entities=${e}, sim_workers=${wlabel} ###############"
+                # `|| true`: past the knee, run_loadtest.sh exits nonzero (clients dropped) — that's the
+                # point of the sweep, so don't let `set -e`/pipefail abort the remaining runs.
+                bash "$SRC/tools/bot_swarm/run_loadtest.sh" "$BUILD" "$n" "$DURATION" "$p" \
+                    | grep -E "clients:|tick-Hz|dn KB/s|RTT |loop dt|aggregate|server tick" || true
+            done
+        done
     done
 done
+unset FL_TEST_SPAWN_AI FL_SIM_WORKER_THREADS 2>/dev/null || true
 
 echo "Reports written to: $SRC/tools/bot_swarm/results/"

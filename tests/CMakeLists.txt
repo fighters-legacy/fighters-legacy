@@ -149,6 +149,12 @@ if(TARGET platform-enet)
     target_include_directories(test_server_config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     catch_discover_tests(test_server_config)
 
+    # Pure geometry for the #573 load-test spawn spread (header-only, no link deps).
+    add_executable(test_load_spawn test_load_spawn.cpp)
+    target_link_libraries(test_load_spawn PRIVATE Catch2::Catch2WithMain)
+    target_include_directories(test_load_spawn PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server")
+    catch_discover_tests(test_load_spawn)
+
     # bot_swarm pure-logic tests (patterns, NetStats, CLI, metrics, server_tick block) — no
     # sockets. platform-hal supplies the IClock.h include pulled in via perf/ServerTickReport.h.
     add_executable(test_bot_swarm test_bot_swarm.cpp)
@@ -209,6 +215,13 @@ catch_discover_tests(test_ai_controllers)
 add_executable(test_spatial_index test_spatial_index.cpp)
 target_link_libraries(test_spatial_index PRIVATE Catch2::Catch2WithMain engine-spatial)
 catch_discover_tests(test_spatial_index)
+
+# Isolated scale/characterisation benchmarks (issue #573). All cases are [.]-hidden so the default
+# ctest run skips them; run explicitly via `ctest -R test_entity_scale` or the [scale] tag.
+add_executable(test_entity_scale test_entity_scale.cpp)
+target_link_libraries(test_entity_scale PRIVATE Catch2::Catch2WithMain engine-entity engine-spatial)
+target_include_directories(test_entity_scale PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_entity_scale)
 
 add_executable(test_job_system test_job_system.cpp)
 target_link_libraries(test_job_system PRIVATE Catch2::Catch2WithMain engine-job)

@@ -17,6 +17,8 @@
 
 #include <cstdint>
 #include <limits>
+#include <random>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -315,6 +317,87 @@ TEST_CASE("EntityPool: free silently ignores already-freed ID", "[entity_pool]")
     pool.free(id);
     REQUIRE_NOTHROW(pool.free(id)); // second free must not crash
     CHECK(pool.liveCount() == 0);
+}
+
+// --- dense O(liveCount) iteration: swap-remove correctness (issue #573) ------------------------
+// free() does an O(1) swap-remove on the live-index list, so forEach visits exactly the live set
+// regardless of which slot is freed (middle / last / only / free-list head) and its order is
+// free-history-dependent. These lock the invariant every forEach consumer relies on.
+
+namespace {
+// Collect the set of live entity indices via forEach (order-independent).
+std::set<uint32_t> liveIndexSet(const fl::EntityPool& pool) {
+    std::set<uint32_t> s;
+    pool.forEach([&](const fl::EntityState& e) { s.insert(e.id.index); });
+    return s;
+}
+} // namespace
+
+TEST_CASE("EntityPool: forEach visits exact live set when freeing a MIDDLE slot", "[entity_pool]") {
+    fl::EntityPool pool;
+    auto a = pool.alloc();
+    auto b = pool.alloc();
+    auto c = pool.alloc();
+    pool.free(b); // middle of the live list
+    CHECK(pool.liveCount() == 2);
+    CHECK(liveIndexSet(pool) == std::set<uint32_t>{a.index, c.index});
+}
+
+TEST_CASE("EntityPool: forEach visits exact live set when freeing the LAST slot", "[entity_pool]") {
+    fl::EntityPool pool;
+    auto a = pool.alloc();
+    auto b = pool.alloc();
+    auto c = pool.alloc();
+    pool.free(c); // tail of the live list — swap-remove is a self-move
+    CHECK(pool.liveCount() == 2);
+    CHECK(liveIndexSet(pool) == std::set<uint32_t>{a.index, b.index});
+}
+
+TEST_CASE("EntityPool: forEach empty after freeing the ONLY slot", "[entity_pool]") {
+    fl::EntityPool pool;
+    auto a = pool.alloc();
+    pool.free(a);
+    CHECK(pool.liveCount() == 0);
+    CHECK(liveIndexSet(pool).empty());
+}
+
+TEST_CASE("EntityPool: free-then-realloc reuses the slot and stays iterable", "[entity_pool]") {
+    fl::EntityPool pool;
+    auto a = pool.alloc();
+    auto b = pool.alloc();
+    pool.free(a);          // a.index becomes the free-list head
+    auto c = pool.alloc(); // must reuse a.index with a bumped generation
+    CHECK(c.index == a.index);
+    CHECK(c.generation != a.generation);
+    CHECK(pool.liveCount() == 2);
+    CHECK(liveIndexSet(pool) == std::set<uint32_t>{b.index, c.index});
+    CHECK_FALSE(pool.valid(a)); // stale handle stays invalid
+}
+
+TEST_CASE("EntityPool: heavy interleaved churn keeps forEach == live set", "[entity_pool]") {
+    fl::EntityPool pool(8);
+    std::vector<fl::EntityId> live;
+    std::mt19937 rng(1234);
+    for (int step = 0; step < 4000; ++step) {
+        // Bias toward growth early, churn later.
+        const bool doAlloc = live.empty() || (rng() % 100) < 55;
+        if (doAlloc) {
+            live.push_back(pool.alloc());
+        } else {
+            auto pick = rng() % live.size();
+            pool.free(live[pick]);
+            live[pick] = live.back();
+            live.pop_back();
+        }
+    }
+    // Expected live index set from the bookkeeping vector.
+    std::set<uint32_t> expected;
+    for (auto id : live) {
+        REQUIRE(pool.valid(id));
+        expected.insert(id.index);
+    }
+    CHECK(pool.liveCount() == static_cast<uint32_t>(live.size()));
+    CHECK(liveIndexSet(pool) == expected);
 }
 
 // ---------------------------------------------------------------------------
