@@ -12,6 +12,15 @@ co-equal product pillar (target 128+ players; see `docs/architecture.md#decision
 Multiplayer at Scale & Live Services** (identity, anti-cheat, persistence, observability, a
 k8s/OpenShift operator). Hosting is **self-host only** — no first-party infra.
 
+**Transport selection settled (decision record 2026-07-01, spike #506):** **GameNetworkingSockets**
+(BSD-3) is selected as the 128+ transport behind `INetwork`, with `enet6` retained as the
+LAN/single-player/low-count backend via a backend-selecting factory (crypto = **libsodium**).
+Justified on encryption + congestion control + connection headroom, *not* throughput (#505 showed
+the transport is not the ceiling). No `INetwork` interface change is anticipated; `kProtocolVersion`
+is unchanged. **Still `enet6`-only in-tree** until #507 lands the GNS backend + factory (which also
+closes the game client's direct `ENetNetwork` instantiation in `Game.cpp`); #508 = encryption/DTLS,
+#509 = FetchContent (GNS + protobuf + libsodium) + CI. Full evaluation: `docs/transport-selection.md`.
+
 **Companion repositories** (under the `fighters-legacy` org; the engine/game/server stay C++):
 - `fl-base-pack` — starter content pack (existing).
 - `fl-account` — pluggable identity / account service (**Go**, planned, Epic C).

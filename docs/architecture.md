@@ -115,7 +115,7 @@ development (pre-`kProtocolVersion` freeze), a dated **decision record** (see be
 | Depth convention | Reverse-Z (near=1 far→0, compare=GREATER, D32_SFLOAT) | Better floating-point precision distribution across scene depth |
 | Windowing / input | SDL3 | Wayland + modern controller support; long-term path |
 | Audio | OpenAL Soft | Positional 3D audio; native music in OGG; no MIDI dependency in engine core |
-| Network transport | Under replacement for 128+ (Epic L) — likely GameNetworkingSockets (BSD-3); `enet6` v6.1.3 today | enet6 was sized for ~32 peers; the per-peer host loop is unproven at 128 @ 60 Hz. Replacement is selected via a scale-spike and lands behind the `INetwork` HAL, so engine/game code is backend-agnostic. enet6 may remain a LAN/low-count option. (Revised by the 2026-06-28 decision record.) |
+| Network transport | **GameNetworkingSockets** (BSD-3) selected for 128+ (Epic L, #506); `enet6` v6.1.3 retained as the LAN/single-player/low-count backend. `enet6` is still the only backend in-tree until #507 lands GNS. | enet6 was sized for ~32 peers and ships no encryption. GNS is selected for encryption + mature congestion control + connection-count headroom (not throughput — #505 showed transport is not the ceiling). Both live behind the `INetwork` HAL via a backend-selecting factory, so engine/game code is backend-agnostic and single-player/LAN/CI keep a protobuf-free build. Crypto backend = libsodium. See [docs/transport-selection.md](transport-selection.md). (Revised by the 2026-06-28 and 2026-07-01 decision records.) |
 | Build system | CMake 3.25+ | Cross-platform from day one |
 | Engine repo | `fighters-legacy` (this repo) | Separate from fighters-toolkit |
 | Content system | Plugin / content-pack architecture | Each content source = one plugin; mods = other plugins; engine core has zero content dependency |
@@ -160,7 +160,8 @@ modern combat flight sim supporting 128+ simultaneous players found the architec
   state** + priority/budget scheduling, **server-side identity/auth**, **persistence HAL**, and
   a **Go** cluster operator + live-services tier (polyglot boundary).
 - **Network transport** (`enet6`) reversed: under replacement for the 128-peer target
-  (GameNetworkingSockets lean) behind the `INetwork` HAL.
+  (GameNetworkingSockets lean) behind the `INetwork` HAL. *(Selection settled 2026-07-01 — see the
+  decision record below and [docs/transport-selection.md](transport-selection.md).)*
 - **Hosting model:** self-host only — the project ships the identity/live-services software but
   runs no central infrastructure; communities self-host. (No first-party PII/GDPR liability.)
 
@@ -237,6 +238,25 @@ start). No wire-size or protocol-version change — `ackMask` reuses the two mes
 padding. Truncated-but-received snapshots remain out of scope (a partially-decoded tick still sets its
 ack bit); the per-client byte budget keeps snapshots within one MTU fragment and the retention force-full
 is the backstop.
+
+**2026-07-01 — Network transport selected: GameNetworkingSockets, `enet6` retained (Epic L, #506).**
+The transport-selection spike (#506) evaluated GameNetworkingSockets vs a bespoke UDP layer vs
+hardening `enet6`, against the `INetwork` HAL contract. **GameNetworkingSockets (BSD-3) is
+selected** as the strategic backend; `enet6` (MIT) is **retained** behind a backend-selecting
+factory for LAN / single-player / low-count servers. The selection is justified **not** on
+throughput — #505 proved the 96–256 ceiling is the sim + snapshot build, not the transport — but on
+the three things `enet6` cannot give the 128+ target: **transport encryption** (carries Epic C auth
+tokens), **mature congestion control** (beneath the application-level #518 response), and
+**connection-count headroom**. Bespoke UDP is rejected as a man-months reinvention of a solved,
+BSD-3-licensed problem; the honest fallback if GNS's Protobuf FetchContent build proves untenable
+across MSVC/Apple Clang is defer-and-harden (keep `enet6` + add a libsodium/DTLS shim). Retaining
+`enet6` behind the factory keeps the heavy Protobuf/crypto chain **out of** the single-player, LAN,
+and CI-tool build paths. Crypto backend = **libsodium** (ISC). No `INetwork` interface change is
+anticipated (encryption is backend-internal; the identity token travels in-band). Wire format
+(`kProtocolVersion = 1`) is unchanged. Implementation follows in #507 (backend + factory,
+closing the `Game.cpp` direct-`ENetNetwork` HAL leak), #508 (encryption/DTLS + LAN-beacon/RCON
+reconciliation), and #509 (FetchContent GNS + Protobuf + libsodium + CI). Full evaluation in
+[docs/transport-selection.md](transport-selection.md).
 
 ## Content Pack Architecture
 
