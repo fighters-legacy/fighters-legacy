@@ -50,6 +50,10 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.maxConnectionsPerIp == 0);
     CHECK(cfg.idleTimeoutS == 0);
     CHECK(cfg.drawDistanceKm == 200.0);
+    CHECK(cfg.spatialCellSizeKm == 10.0);
+    CHECK(cfg.testSpawnAiCount == 0u);
+    CHECK(cfg.testSpawnSpreadKm == 50.0);
+    CHECK(cfg.testSpawnAglM == 500.0);
     CHECK(cfg.snapshotBudgetBytes == 1200u);
     CHECK(cfg.jitterBufferDepth == 4u);
     CHECK(cfg.jitterAdaptWindow == 60u);
@@ -82,6 +86,56 @@ TEST_CASE("parseServerConfig: world.sim_worker_threads out of range warns and ke
     MockLogger log;
     auto cfg = parseServerConfig("[world]\nsim_worker_threads = 257\n", &log);
     CHECK(cfg.simWorkerThreads == 0u);
+    CHECK_FALSE(log.entries.empty());
+}
+
+// ---------------------------------------------------------------------------
+// SpatialIndex cell size + load-test spawn affordance (#573)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("parseServerConfig: reads world.spatial_cell_size_km", "[server_config]") {
+    MockLogger log;
+    CHECK(parseServerConfig("[world]\nspatial_cell_size_km = 2.5\n", &log).spatialCellSizeKm == 2.5);
+    // 0 = auto is a valid, accepted value (no warning).
+    MockLogger log2;
+    CHECK(parseServerConfig("[world]\nspatial_cell_size_km = 0\n", &log2).spatialCellSizeKm == 0.0);
+    CHECK(log2.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: world.spatial_cell_size_km out of range warns and keeps default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nspatial_cell_size_km = 2000\n", &log);
+    CHECK(cfg.spatialCellSizeKm == 10.0);
+    CHECK_FALSE(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: reads world.test_spawn_* keys", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig(R"(
+[world]
+test_spawn_ai_count = 5000
+test_spawn_spread_km = 80.0
+test_spawn_agl_m = 1200.0
+)",
+                                 &log);
+    CHECK(cfg.testSpawnAiCount == 5000u);
+    CHECK(cfg.testSpawnSpreadKm == 80.0);
+    CHECK(cfg.testSpawnAglM == 1200.0);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: world.test_spawn_* out of range warns and keeps defaults", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig(R"(
+[world]
+test_spawn_ai_count = 2000000
+test_spawn_spread_km = -1
+test_spawn_agl_m = 999999
+)",
+                                 &log);
+    CHECK(cfg.testSpawnAiCount == 0u);
+    CHECK(cfg.testSpawnSpreadKm == 50.0);
+    CHECK(cfg.testSpawnAglM == 500.0);
     CHECK_FALSE(log.entries.empty());
 }
 

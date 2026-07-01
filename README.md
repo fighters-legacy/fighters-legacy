@@ -30,6 +30,7 @@ for clustered fleets.
 | [docs/snapshot-quantization.md](docs/snapshot-quantization.md) | Quantized/bit-packed snapshot codec: frame-origin encoding, smallest-three quaternion, bit budget, byte-determinism |
 | [docs/load-testing.md](docs/load-testing.md) | bot_swarm load generator: client metrics + authoritative server tick-budget block, flight patterns, scale-gate targets, the CI perf/soak scale gate (PR + scheduled tiers), ceiling-characterisation runbook |
 | [docs/server-job-system-design.md](docs/server-job-system-design.md) | Data-parallel sim tick: engine-job worker pool, two-phase parallel onTick, serial-equivalence, `sim_worker_threads` |
+| [docs/entity-scale-characterization.md](docs/entity-scale-characterization.md) | Entity-pool + SpatialIndex scaling to thousands of entities: load-spawn affordance, entity×worker run matrix, cell-size + O(liveCount) findings |
 | [docs/congestion-control-design.md](docs/congestion-control-design.md) | Adaptive per-client send-rate / congestion response: AIMD controller, ENet-RTT anti-feedback signal, send-rate + byte-budget levers, `[world] congestion_*` |
 | [docs/roadmap.md](docs/roadmap.md) | Schedule, critical path, acceptance criteria, the Multiplayer-at-Scale initiative |
 | [docs/distribution.md](docs/distribution.md) | Distribution channels (incl. fl-server container/Helm/operator), monetization strategy |

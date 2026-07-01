@@ -39,6 +39,14 @@ PROFILE_DEFAULTS = {
     "assert_max_kbs": 0.0,
     "assert_min_tick_hz": 0.0,
     "assert_max_tick_ms": 0.0,
+    # Entity-scale sweep (#573). Empty lists => a normal one-run-per-pattern profile. When populated,
+    # the profile sweeps the cartesian product of patterns x entity_spawn_counts x
+    # sim_worker_threads_sweep, driving FL_TEST_SPAWN_AI / FL_SIM_WORKER_THREADS per run.
+    "entity_spawn_counts": [],
+    "sim_worker_threads_sweep": [],
+    # entity-scale is advisory characterisation, not a bandwidth gate: it must NOT read or write the
+    # committed downstream_kbs_per_client baseline (its sweep collapses many KB/s values onto one key).
+    "baselined": True,
 }
 
 
@@ -172,6 +180,35 @@ def baseline_key(profile_name, pattern):
     return f"{profile_name}/{pattern}"
 
 
+def expand_runs(profile):
+    """Expand a profile into a list of run specs. Pure (no I/O).
+
+    Normal profile: one run per pattern, no extra env, participates in the KB/s baseline.
+    Entity-scale sweep (entity_spawn_counts / sim_worker_threads_sweep non-empty): the cartesian
+    product of patterns x counts x workers, each carrying FL_TEST_SPAWN_AI / FL_SIM_WORKER_THREADS
+    and a per-run --assert-min-entities flag. Labels are unique so report files never collide.
+    """
+    counts = profile.get("entity_spawn_counts") or [None]
+    workers = profile.get("sim_worker_threads_sweep") or [None]
+    runs = []
+    for pattern in profile["patterns"]:
+        for c in counts:
+            for w in workers:
+                env = {}
+                flags = []
+                label = pattern
+                if c is not None:
+                    env["FL_TEST_SPAWN_AI"] = str(c)
+                    label += f"_e{c}"
+                    if c > 0:
+                        flags += ["--assert-min-entities", str(c)]
+                if w is not None:
+                    env["FL_SIM_WORKER_THREADS"] = str(w)
+                    label += f"_w{w}"
+                runs.append({"pattern": pattern, "label": label, "env": env, "flags": flags})
+    return runs
+
+
 def render_summary(profile_name, results):
     """Render a Markdown summary table from a list of per-pattern result dicts."""
     lines = [f"## Scale gate — profile `{profile_name}`", ""]
@@ -198,17 +235,20 @@ def runner_for_platform(platform):
 # --------------------------------------------------------------------------------------------------
 # I/O orchestration (thin; exercised by CI, not unit tests)
 # --------------------------------------------------------------------------------------------------
-def run_pattern(build_dir, clients, duration_s, pattern, flags, runner, port, report_path):
+def run_pattern(build_dir, clients, duration_s, pattern, flags, runner, port, report_path, extra_env=None):
     """Invoke run_loadtest.sh/.ps1 for one pattern. Returns (exit_code, report_path | None).
 
     The report path is pinned via FL_LOADTEST_REPORT (deterministic — no glob/mtime guessing, and
-    nothing buffered for a multi-hour soak), and a distinct FL_LOADTEST_PORT per pattern avoids the
-    UDP rebind race when servers are launched back-to-back. Output streams live to the console.
+    nothing buffered for a multi-hour soak), and a distinct FL_LOADTEST_PORT per run avoids the UDP
+    rebind race when servers are launched back-to-back. `extra_env` (entity-scale FL_TEST_SPAWN_AI /
+    FL_SIM_WORKER_THREADS) is merged into the child environment. Output streams live to the console.
     """
     runner_path = SCRIPT_DIR / runner
     env = dict(os.environ)
     env["FL_LOADTEST_PORT"] = str(port)
     env["FL_LOADTEST_REPORT"] = str(report_path)
+    if extra_env:
+        env.update({k: str(v) for k, v in extra_env.items()})
     if runner.endswith(".ps1"):
         cmd = ["pwsh", "-File", str(runner_path), build_dir, str(clients), str(duration_s), pattern]
     else:
@@ -254,37 +294,52 @@ def main(argv=None):
 
     flags = assert_flags(profile, args.strict)
     runner = runner_for_platform(sys.platform)
+    baselined = profile.get("baselined", True)
+    if args.update_baseline and not baselined:
+        print(f"[scale_gate] ERROR: profile '{args.profile}' is not baselined (advisory "
+              "characterisation); nothing to update", file=sys.stderr)
+        return 1
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     base_port = int(os.environ.get("FL_LOADTEST_PORT", "4793"))
 
+    runs = expand_runs(profile)
     results = []
     any_runner_failed = False
     new_baseline = dict(baseline)
-    for idx, pattern in enumerate(profile["patterns"]):
-        # Distinct port per pattern dodges the UDP rebind race between back-to-back servers.
+    for idx, run in enumerate(runs):
+        pattern, label = run["pattern"], run["label"]
+        # Distinct port per run dodges the UDP rebind race between back-to-back servers.
         port = base_port + idx
-        report_path = RESULTS_DIR / f"loadtest_{profile['clients']}c_{pattern}_{args.profile}.json"
+        report_path = RESULTS_DIR / f"loadtest_{profile['clients']}c_{label}_{args.profile}.json"
         code, report_path = run_pattern(args.build_dir, profile["clients"], profile["duration_s"],
-                                        pattern, flags, runner, port, report_path)
+                                        pattern, flags + run["flags"], runner, port, report_path,
+                                        extra_env=run["env"])
         if report_path is None:
             any_runner_failed = True
-            print(f"[scale_gate] ERROR: '{pattern}' run failed (exit {code}, no report)",
+            print(f"[scale_gate] ERROR: '{label}' run failed (exit {code}, no report)",
                   file=sys.stderr)
-            results.append({"pattern": pattern, "passed": False,
+            results.append({"pattern": label, "passed": False,
                             "checks": [{"name": "runner", "ok": False,
                                         "detail": f"no report (exit {code})", "advisory": False}],
                             "baseline": {"regressed": False, "detail": "n/a"}})
             continue
         report = json.loads(report_path.read_text(encoding="utf-8"))
         evaluation = evaluate_report(report, profile, args.strict)
-        key = baseline_key(args.profile, pattern)
-        cmp = compare_baseline(report, baseline.get(key), tolerance)
+        if baselined:
+            key = baseline_key(args.profile, pattern)
+            cmp = compare_baseline(report, baseline.get(key), tolerance)
+            new_baseline[key] = report.get("downstream_kbs_per_client", {}).get("mean", 0.0)
+        else:
+            # Advisory characterisation: report entity count + tick p99, never touch the baseline.
+            srv = report.get("server_tick") or {}
+            detail = (f"entities={srv.get('entities', 0)} "
+                      f"tick_p99={srv.get('tick_ms', {}).get('p99', 0.0):.2f} ms (advisory)")
+            cmp = {"regressed": False, "detail": detail}
         if code != 0 or cmp["regressed"]:
             evaluation["passed"] = False
-        results.append({"pattern": pattern, "passed": evaluation["passed"],
+        results.append({"pattern": label, "passed": evaluation["passed"],
                         "checks": evaluation["checks"], "baseline": cmp})
-        new_baseline[key] = report.get("downstream_kbs_per_client", {}).get("mean", 0.0)
 
     if args.update_baseline:
         if any_runner_failed:

@@ -155,6 +155,29 @@ def test_compare_baseline_improvement_never_regresses():
     assert not sg.compare_baseline({"downstream_kbs_per_client": {"mean": 50.0}}, 100.0, 10)["regressed"]
 
 
+# ---- expand_runs (entity-scale sweep, #573) ------------------------------------------------------
+def test_expand_runs_normal_profile_is_one_run_per_pattern():
+    prof = dict(sg.PROFILE_DEFAULTS)
+    prof.update(patterns=["idle", "weave"])
+    runs = sg.expand_runs(prof)
+    assert [r["label"] for r in runs] == ["idle", "weave"]
+    # No entity-scale env or flags on a normal profile.
+    assert all(r["env"] == {} and r["flags"] == [] for r in runs)
+
+
+def test_expand_runs_entity_scale_cartesian_product():
+    prof = dict(sg.PROFILE_DEFAULTS)
+    prof.update(patterns=["weave"], entity_spawn_counts=[0, 2000], sim_worker_threads_sweep=[1, 8])
+    runs = sg.expand_runs(prof)
+    # 1 pattern x 2 counts x 2 workers = 4 runs, unique labels.
+    assert [r["label"] for r in runs] == ["weave_e0_w1", "weave_e0_w8", "weave_e2000_w1", "weave_e2000_w8"]
+    # env carries the sweep knobs.
+    assert runs[3]["env"] == {"FL_TEST_SPAWN_AI": "2000", "FL_SIM_WORKER_THREADS": "8"}
+    # --assert-min-entities only when count > 0.
+    assert runs[0]["flags"] == []  # e0
+    assert runs[3]["flags"] == ["--assert-min-entities", "2000"]
+
+
 # ---- runner_for_platform -------------------------------------------------------------------------
 def test_runner_for_platform():
     assert sg.runner_for_platform("win32") == "run_loadtest.ps1"
@@ -260,3 +283,50 @@ def test_main_update_baseline_roundtrip(tmp_path, monkeypatch):
     assert rc == 0
     data = json.loads(Path(baseline_path).read_text(encoding="utf-8"))
     assert data["kbs"]["pr/weave"] == pytest.approx(80.0)
+
+
+# ---- entity-scale profile (#573): advisory, never baselined ------------------------------------
+def _write_entity_scale_config(tmp_path):
+    cfg = {
+        "kbs_baseline_tolerance_pct": 10,
+        "profiles": {
+            "entity-scale": {
+                "clients": 64, "duration_s": 60, "patterns": ["weave"],
+                "entity_spawn_counts": [0, 2000], "sim_worker_threads_sweep": [1, 4],
+                "baselined": False,
+                "assert_max_kbs": 0, "assert_min_tick_hz": 0, "assert_max_tick_ms": 16.6,
+            },
+        },
+    }
+    p = tmp_path / "scale-gate.json"
+    p.write_text(json.dumps(cfg), encoding="utf-8")
+    return p
+
+
+def test_main_entity_scale_passes_and_never_writes_baseline(tmp_path, monkeypatch):
+    cfg = _write_entity_scale_config(tmp_path)
+    baseline = tmp_path / "bl.json"
+    baseline.write_text(json.dumps({"kbs": {"pr/weave": 66.0}}), encoding="utf-8")
+    report = _report(kbs_max=66.0)
+    report["server_tick"]["entities"] = 2048  # advisory detail source
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    monkeypatch.setattr(sg, "run_pattern", lambda *a, **k: (0, report_path))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    # advisory-only (kbs asserts disabled) -> passes; baseline file must be untouched.
+    before = baseline.read_text(encoding="utf-8")
+    rc = sg.main(["--profile", "entity-scale", "--build-dir", "x", "--config", str(cfg),
+                  "--baseline", str(baseline), "--strict"])
+    assert rc == 0
+    assert baseline.read_text(encoding="utf-8") == before
+
+
+def test_main_update_baseline_refuses_non_baselined_profile(tmp_path, monkeypatch):
+    cfg = _write_entity_scale_config(tmp_path)
+    baseline = tmp_path / "bl.json"
+    monkeypatch.setattr(sg, "run_pattern", lambda *a, **k: (0, None))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    rc = sg.main(["--profile", "entity-scale", "--build-dir", "x", "--config", str(cfg),
+                  "--baseline", str(baseline), "--update-baseline"])
+    assert rc == 1
+    assert not baseline.exists()

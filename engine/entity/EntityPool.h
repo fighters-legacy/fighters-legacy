@@ -18,6 +18,14 @@ namespace fl {
 // Soft cap: if softCap > 0, alloc() returns null() when liveCount() == softCap instead of
 // growing. 0 means unlimited.
 //
+// Iteration: forEach() walks a dense list of live slot indices, so it is O(liveCount), NOT
+// O(capacity) — dead slots left behind by high spawn/reap churn (e.g. projectiles) cost nothing.
+// The iteration ORDER is free-history-dependent (free() does an O(1) swap-remove on the live-index
+// list), so every consumer must be order-independent. Today they all are: the SpatialIndex insert
+// is order-free, the WorldBroadcaster snapshot map is keyed by entity index with the visible set
+// sorted, the render snapshot is a flat list re-sorted by the renderer, and Lua / AI-factory lookups
+// search by index. This is guarded by the test_world_broadcaster serial-equivalence + TSan tests.
+//
 // Threading: all methods are sim-thread-only.
 class EntityPool {
   public:
@@ -52,18 +60,16 @@ class EntityPool {
     }
 
     // Visits every live entity. Fn signature: void(EntityState&) or void(const EntityState&).
+    // O(liveCount): iterates the dense live-index list, not the (possibly sparse) slot vector.
+    // Order is free-history-dependent — see the class comment; consumers must be order-independent.
     template <typename Fn> void forEach(Fn&& fn) {
-        for (auto& slot : m_slots) {
-            if (slot.alive)
-                fn(slot.state);
-        }
+        for (uint32_t idx : m_liveIndices)
+            fn(m_slots[idx].state);
     }
 
     template <typename Fn> void forEach(Fn&& fn) const {
-        for (const auto& slot : m_slots) {
-            if (slot.alive)
-                fn(slot.state);
-        }
+        for (uint32_t idx : m_liveIndices)
+            fn(m_slots[idx].state);
     }
 
   private:
@@ -73,10 +79,12 @@ class EntityPool {
         EntityState state;
         uint32_t generation{0}; // 0 = never allocated; increments on each free()
         uint32_t nextFree{kNull};
+        uint32_t livePos{kNull}; // index into m_liveIndices while alive; kNull when free
         bool alive{false};
     };
 
     std::vector<Slot> m_slots;
+    std::vector<uint32_t> m_liveIndices; // dense list of live slot indices (drives O(liveCount) forEach)
     uint32_t m_freeHead{kNull};
     uint32_t m_count{0};
     uint32_t m_softCap{0};

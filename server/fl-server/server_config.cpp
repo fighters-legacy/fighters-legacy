@@ -61,6 +61,8 @@ static const char* kDefaultToml =
     "autosave_interval_s = 300\n"
     "# planet_radius_m = 6371000        # planet sphere radius (m); Earth default\n"
     "# draw_distance_km = 200.0         # per-peer interest management radius (km); [1, 100000]\n"
+    "# spatial_cell_size_km = 10.0      # SpatialIndex cell size (km); 0 = auto from draw distance; [0, 1000]; "
+    "restart\n"
     "# snapshot_budget_bytes = 1200     # per-client snapshot byte budget; 0 = unlimited; [0, 65535]\n"
     "# jitter_buffer_depth = 4          # per-peer input queue depth (ticks); global cap for adaptive sizing; [1, 32]\n"
     "# jitter_buffer_adapt_window = 60  # EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]\n"
@@ -78,6 +80,11 @@ static const char* kDefaultToml =
     "# overrun_budget_floor_bytes = 400 # never scale the snapshot budget below this under overrun; [0, 65535]\n"
     "# max_catchup_ticks = 8            # GameLoop catch-up cap (spiral backstop); [1, 64]; needs restart\n"
     "# sim_worker_threads = 0           # sim-tick CPU parallelism; 0 = auto, 1 = serial; [0, 256]\n"
+    "# --- load-test affordance (#573): pre-spawn AI entities to stress the pool/index at scale. ---\n"
+    "# --- A TESTING AFFORDANCE, NOT A CAPACITY GUARANTEE. Leave at 0 for normal operation. ---\n"
+    "# test_spawn_ai_count = 0          # server-side AI entities to pre-spawn at startup; 0 = disabled; [0, 1000000]\n"
+    "# test_spawn_spread_km = 50.0      # phyllotaxis spread radius (km); [0, 100000]\n"
+    "# test_spawn_agl_m = 500.0         # spawn/loiter altitude above origin ground elevation (m); [0, 50000]\n"
     "\n"
     "[ai]\n"
     "difficulty_floor = \"recruit\"\n"
@@ -299,6 +306,14 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.drawDistanceKm = *v;
             }
         }
+        if (auto v = tbl["world"]["spatial_cell_size_km"].value<double>()) {
+            if (*v < 0.0 || *v > 1'000.0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.spatial_cell_size_km out of range [0, 1000]; using default 10.0");
+            } else {
+                cfg.spatialCellSizeKm = *v;
+            }
+        }
         if (auto v = tbl["world"]["snapshot_budget_bytes"].value<int64_t>()) {
             if (*v < int64_t{0} || *v > int64_t{65535}) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
@@ -372,6 +387,31 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                          "world.sim_worker_threads out of range [0, 256]; using default 0 (auto)");
             } else {
                 cfg.simWorkerThreads = static_cast<uint32_t>(*v);
+            }
+        }
+        // Load-test affordance (#573): pre-spawn N server-side AI entities.
+        if (auto v = tbl["world"]["test_spawn_ai_count"].value<int64_t>()) {
+            if (*v < int64_t{0} || *v > int64_t{1'000'000}) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.test_spawn_ai_count out of range [0, 1000000]; using default 0 (disabled)");
+            } else {
+                cfg.testSpawnAiCount = static_cast<uint32_t>(*v);
+            }
+        }
+        if (auto v = tbl["world"]["test_spawn_spread_km"].value<double>()) {
+            if (*v < 0.0 || *v > 100'000.0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.test_spawn_spread_km out of range [0, 100000]; using default 50.0");
+            } else {
+                cfg.testSpawnSpreadKm = *v;
+            }
+        }
+        if (auto v = tbl["world"]["test_spawn_agl_m"].value<double>()) {
+            if (*v < 0.0 || *v > 50'000.0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.test_spawn_agl_m out of range [0, 50000]; using default 500.0");
+            } else {
+                cfg.testSpawnAglM = *v;
             }
         }
         // Graceful tick-overrun governor (#514).

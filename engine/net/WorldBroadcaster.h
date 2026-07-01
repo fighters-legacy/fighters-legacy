@@ -122,6 +122,7 @@ struct WorldBroadcasterConfig {
     std::string operatorPassword;     // empty = network admin channel disabled
     int idleTimeoutS{0};              // 0 = disabled; seconds of peer inactivity before disconnect
     float drawDistanceKm{200.f};      // per-peer interest radius; 0 = degenerate (empty snapshots)
+    double spatialCellSizeM{10000.0}; // SpatialIndex cell size (m); 0 = auto from draw distance; restart-only
     uint32_t snapshotBudgetBytes{0};  // per-client snapshot byte budget; 0 = unlimited (#516)
     uint32_t jitterBufferMaxDepth{4}; // per-peer input queue depth; [1, JitterBuffer::kHardMaxDepth]
     uint32_t jitterAdaptWindow{60};   // EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
@@ -367,6 +368,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // 0 km = degenerate (queryRadius finds nothing; peers see empty snapshots). Default = 200 km.
     // Call before gameLoop.start() or via enqueueSimCallback for hot-reload (reload_config).
     void setDrawDistance(float km) noexcept;
+
+    // Set the SpatialIndex cell size (metres) used for per-peer interest queries + AI range queries.
+    // cellSizeM <= 0 selects an auto heuristic derived from the current draw distance (so a query
+    // spans a bounded number of cells rather than degenerating toward O(N) at high density). This
+    // reassigns the index, so it is RESTART-ONLY: call before gameLoop.start() (applyConfig does),
+    // never via reload_config. Depends on m_drawDistanceM, so call after setDrawDistance().
+    void setSpatialCellSize(double cellSizeM);
 
     // Set the per-client snapshot byte budget (#516). 0 = unlimited (legacy: send every visible
     // entity). When non-zero, each peer's snapshot is capped at roughly this many bytes; the scheduler

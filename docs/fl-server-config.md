@@ -68,6 +68,7 @@ autosave_interval_s = 300
 time_scale         = 10.0        # game seconds per real second; 10 = full day/night ≈ 2.4 real hours
 # planet_radius_m         = 6371000  # planet sphere radius (m); Earth default
 # draw_distance_km        = 200.0    # per-peer interest management radius (km); [1, 100000]
+# spatial_cell_size_km    = 10.0     # SpatialIndex cell size (km); 0 = auto from draw distance; [0, 1000]; restart
 # snapshot_budget_bytes   = 1200     # per-client snapshot byte budget; 0 = unlimited; [0, 65535]
 # jitter_buffer_depth           = 4    # per-peer input queue depth (ticks); global cap for adaptive sizing; [1, 32]
 # jitter_buffer_adapt_window    = 60   # EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
@@ -85,6 +86,10 @@ time_scale         = 10.0        # game seconds per real second; 10 = full day/n
 # overrun_budget_floor_bytes  = 400    # never scale the snapshot budget below this under overrun; [0, 65535]
 # max_catchup_ticks       = 8        # GameLoop catch-up cap (spiral backstop); [1, 64]; needs restart
 # sim_worker_threads      = 0        # sim-tick CPU parallelism; 0 = auto, 1 = serial; [0, 256]
+# --- load-test affordance (#573); A TESTING AFFORDANCE, NOT A CAPACITY GUARANTEE; leave at 0 normally ---
+# test_spawn_ai_count     = 0        # pre-spawn N server-side AI entities at startup; [0, 1000000]; restart
+# test_spawn_spread_km    = 50.0     # phyllotaxis spread radius (km); [0, 100000]; restart
+# test_spawn_agl_m        = 500.0    # spawn/loiter altitude above origin ground (m); [0, 50000]; restart
 
 [ai]
 difficulty_floor = "recruit"
@@ -393,6 +398,20 @@ Per-peer interest management radius in kilometres. Only entities within this XZ-
 > acknowledges it, then it converges to deltas. A dropped full recovers in ~1 RTT, and there is no
 > periodic cross-peer full-resync spike. See [network-protocol.md](network-protocol.md) → *Scaling to 128+*.
 
+### `spatial_cell_size_km`
+
+| Type | Default | Range |
+|---|---|---|
+| float | `10.0` | `[0, 1000]` |
+
+`SpatialIndex` cell size in kilometres for per-peer interest queries and AI range queries. `0` selects
+an auto heuristic derived from the draw distance (`clamp(draw_distance / 32, 500 m, 10 km)`) so a
+full-radius query spans a bounded number of cells rather than degenerating toward O(N) at high density.
+A cell much smaller than the draw distance is counter-productive — the query then iterates many
+mostly-empty cells (see [entity-scale-characterization.md](entity-scale-characterization.md)).
+Out-of-range values are rejected with a Warn and the default is used. **Restart-only** (reassigns the
+index; not hot-reloaded).
+
 ### `snapshot_budget_bytes`
 
 | Type | Default | Range |
@@ -492,6 +511,23 @@ results), so this only affects CPU usage and throughput, never simulation outcom
 The CLI flag `--sim-worker-threads <n>` overrides this value (useful for load-test sweeps).
 Out-of-range values are rejected with a Warn and the default is used. **Requires restart** to take
 effect (the worker pool is built at startup).
+
+### `test_spawn_ai_count` / `test_spawn_spread_km` / `test_spawn_agl_m`
+
+| Key | Type | Default | Range |
+|---|---|---|---|
+| `test_spawn_ai_count` | integer | `0` | `[0, 1000000]` |
+| `test_spawn_spread_km` | float | `50.0` | `[0, 100000]` |
+| `test_spawn_agl_m` | float | `500.0` | `[0, 50000]` |
+
+**A testing affordance, not a capacity guarantee.** When `test_spawn_ai_count > 0`, the server
+pre-spawns that many server-side loiter-AI entities at startup, spread over a `test_spawn_spread_km`
+disk (phyllotaxis pattern) at `test_spawn_agl_m` above the origin ground elevation. This exists to
+stress the entity pool + `SpatialIndex` at thousands of entities (peers + AI) without needing that
+many real clients — see [entity-scale-characterization.md](entity-scale-characterization.md) and
+[load-testing.md](load-testing.md). The server *accepting* a large count does **not** mean it *serves*
+that many players at rate. Leave at `0` for normal operation. Out-of-range values are rejected with a
+Warn and the default is used. **Requires restart** (entities are spawned before the sim loop starts).
 
 ### `overrun_governor_enabled` / `overrun_high_watermark` / `overrun_low_watermark` / `overrun_min_snapshot_hz` / `overrun_max_ai_stride` / `overrun_budget_floor_bytes`
 
@@ -1012,7 +1048,7 @@ process.
 | `spawn` | `<type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn a registered entity type at the given world position; optionally attach an AI controller. C++ behaviors: `loiter [cx cy cz [radius_m [alt_m [throttle [cw\|ccw]]]]]`, `waypoint x y z [x y z ...] [--loop]`, `pursuit <entityIdx>`, `evade <entityIdx>`, `break <entityIdx> [rollDuration]`, `lead <entityIdx> [navGain]`, `lag <entityIdx> [lagFraction]`, `immelmann [pullDur] [rollDur]`, `split_s [rollDur] [pullDur]`, `high_yo_yo <entityIdx> [climbDur] [reacquireDur]`, `low_yo_yo <entityIdx> [diveDur] [pullDur]`. Lua behavior: `lua <script_name>` (loads `ai/<script_name>.lua` from content packs; see `docs/modding/ai.md`). If the entity type's TOML sets `ai_script`, that script is attached automatically when `--ai` is omitted. |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
 | `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's game console to teleport the player entity |
-| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `snapshot_budget_bytes`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier`, `congestion_*`, `overrun_governor_enabled`, `overrun_high_watermark`, `overrun_low_watermark`, `overrun_min_snapshot_hz`, `overrun_max_ai_stride`, `overrun_budget_floor_bytes` (all take effect on the next sim tick; `max_catchup_ticks` and `sim_worker_threads` require restart) |
+| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `snapshot_budget_bytes`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier`, `congestion_*`, `overrun_governor_enabled`, `overrun_high_watermark`, `overrun_low_watermark`, `overrun_min_snapshot_hz`, `overrun_max_ai_stride`, `overrun_budget_floor_bytes` (all take effect on the next sim tick; `max_catchup_ticks`, `sim_worker_threads`, `spatial_cell_size_km`, and the `test_spawn_*` keys require restart) |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
 | `pause` | — | Pause the simulation — ticks stop advancing; network connections remain active. In single-player the game client sends this automatically when the pause menu is opened. |
@@ -1038,7 +1074,9 @@ Most `[world]` fields are also hot-reloaded on the next sim tick — `draw_dista
 
 Fields that **require a restart** to take effect: `port`, `bind_address`, `max_peers`,
 `game_modes`, `password`, `discovery.*`, `mods.stack`, `rotation.*`, `world.sim_worker_threads`,
-`world.max_catchup_ticks`, `world.planet_radius_m`, `ai.*`, `security.connect_rate_limit_*`,
+`world.max_catchup_ticks`, `world.planet_radius_m`, `world.spatial_cell_size_km`,
+`world.test_spawn_ai_count`, `world.test_spawn_spread_km`, `world.test_spawn_agl_m`, `ai.*`,
+`security.connect_rate_limit_*`,
 `security.packet_flood_multiplier`, `security.*_bandwidth_bps`,
 `security.pre_handshake_rate_limit_count`, `security.pre_handshake_window_ms`,
 `security.max_connections_per_ip`, `rcon.*`.

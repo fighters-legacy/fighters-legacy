@@ -4775,6 +4775,67 @@ TEST_CASE("WorldBroadcaster: entity beyond draw distance excluded from peer snap
         CHECK(e.entityIdx != farIdx);
 }
 
+TEST_CASE("WorldBroadcaster: interest management correct at a non-default spatial cell size (#573)",
+          "[world_broadcaster][interest]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::EntityTransform near{};
+    near.pos[1] = 500.0; // near origin — visible
+    em.spawn("builtin:debug-entity", near);
+    fl::EntityTransform far{};
+    far.pos[0] = 20'000.0; // 20 km — outside a 1 km draw distance
+    far.pos[1] = 500.0;
+    auto farId = em.spawn("builtin:debug-entity", far);
+    REQUIRE(farId.valid());
+    const uint32_t farIdx = farId.index;
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::WorldBroadcasterConfig cfg;
+    cfg.drawDistanceKm = 1.f;      // 1 km interest sphere
+    cfg.spatialCellSizeM = 2000.0; // explicit non-default cell size
+    broadcaster.applyConfig(cfg);
+    CHECK(broadcaster.spatialIndex().cellSizeM() == Catch::Approx(2000.0));
+
+    broadcaster.onConnect(0u); // peer spawns near origin
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(!snaps.empty());
+    for (const auto& e : parseFullEntries(snaps[0]))
+        CHECK(e.entityIdx != farIdx); // far entity excluded despite the smaller cell size
+}
+
+TEST_CASE("WorldBroadcaster: auto spatial cell size resolves from draw distance (#573)",
+          "[world_broadcaster][interest]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::EntityTransform t{};
+    t.pos[1] = 500.0;
+    em.spawn("builtin:debug-entity", t);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::WorldBroadcasterConfig cfg;
+    cfg.drawDistanceKm = 200.f; // 200 km → auto = clamp(200000/32, 500, 10000) = 6250 m
+    cfg.spatialCellSizeM = 0.0; // auto
+    broadcaster.applyConfig(cfg);
+    CHECK(broadcaster.spatialIndex().cellSizeM() == Catch::Approx(6250.0));
+
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(!snaps.empty());
+    auto hdr = parseSnapshotHeader(snaps[0]);
+    CHECK(totalEntityCount(hdr) >= 1u); // interest still works with the auto cell size
+}
+
 TEST_CASE("WorldBroadcaster: two peers at different positions see disjoint entity sets",
           "[world_broadcaster][interest]") {
     MockLogger logger;

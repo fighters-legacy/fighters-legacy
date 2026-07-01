@@ -97,6 +97,8 @@ container‑shared‑kernel vs VM‑own‑kernel). The trade‑off: every build 
 | `CLIENTS` | `64 128 256` | client counts to sweep |
 | `DURATION` | `30` | soak seconds per run |
 | `PATTERNS` | `idle weave` | flight patterns to sweep |
+| `ENTITY_COUNTS` | `0` | server-side AI entities to pre-spawn per run (#573 pool/index scaling; `FL_TEST_SPAWN_AI`) |
+| `SIM_WORKERS` | *(server default)* | data-parallel sim worker counts to sweep (#511; `FL_SIM_WORKER_THREADS`) |
 
 ## Topology caveats (read before trusting absolute numbers)
 

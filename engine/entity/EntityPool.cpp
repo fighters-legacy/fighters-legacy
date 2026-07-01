@@ -28,6 +28,8 @@ EntityId EntityPool::alloc() {
     slot.generation = (slot.generation == 0) ? 1 : slot.generation; // keep non-zero
     slot.alive = true;
     slot.nextFree = kNull;
+    slot.livePos = static_cast<uint32_t>(m_liveIndices.size());
+    m_liveIndices.push_back(index);
     slot.state = EntityState{};
     slot.state.id = {index, slot.generation};
 
@@ -42,7 +44,16 @@ void EntityPool::free(EntityId id) {
     if (!slot.alive || slot.generation != id.generation)
         return;
 
+    // O(1) swap-remove from the dense live-index list: move the last live index into this slot's
+    // slot, fix its back-reference, then pop. This makes forEach order free-history-dependent
+    // (documented on the class — all consumers are order-independent).
+    const uint32_t lastIdx = m_liveIndices.back();
+    m_liveIndices[slot.livePos] = lastIdx;
+    m_slots[lastIdx].livePos = slot.livePos;
+    m_liveIndices.pop_back();
+
     slot.alive = false;
+    slot.livePos = kNull;
     ++slot.generation;
     if (slot.generation == 0)
         slot.generation = 1; // skip 0 so generation==0 always means "never used"

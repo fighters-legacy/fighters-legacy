@@ -77,6 +77,7 @@ struct SwarmReport {
     double assertMinTickHz{0.0};
     double assertMaxKbs{0.0};
     double assertMaxTickMs{0.0};
+    int assertMinEntities{0};
 
     // Authoritative server-side tick budget (from fl-server --metrics-json), when available.
     bool hasServer{false};
@@ -100,6 +101,7 @@ inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientM
     r.assertMinTickHz = cfg.assertMinTickHz;
     r.assertMaxKbs = cfg.assertMaxKbs;
     r.assertMaxTickMs = cfg.assertMaxTickMs;
+    r.assertMinEntities = cfg.assertMinEntities;
     if (server) {
         r.hasServer = true;
         r.server = *server;
@@ -148,6 +150,11 @@ inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientM
     // (the gate cannot be evaluated -> treat as not-passing rather than silently passing).
     if (cfg.assertMaxTickMs > 0.0 && (!r.hasServer || r.server.total.p99 > cfg.assertMaxTickMs))
         pass = false;
+    // Entity-scale gate (#573 hook): confirm the server actually reached the requested live entity
+    // count (e.g. the [world] test_spawn_ai_count load-spawn took). Missing server data while the
+    // assert is enabled is a failure, like assert-max-tick-ms.
+    if (cfg.assertMinEntities > 0 && (!r.hasServer || r.server.entities < static_cast<uint32_t>(cfg.assertMinEntities)))
+        pass = false;
     r.assertsPassed = pass;
     return r;
 }
@@ -172,7 +179,7 @@ inline void printReport(const SwarmReport& r) {
                     r.server.phases[static_cast<int>(TickPhase::Ai)].mean,
                     r.server.phases[static_cast<int>(TickPhase::Collision)].mean,
                     r.server.phases[static_cast<int>(TickPhase::Serialize)].mean);
-    if (r.assertMinTickHz > 0.0 || r.assertMaxKbs > 0.0 || r.assertMaxTickMs > 0.0)
+    if (r.assertMinTickHz > 0.0 || r.assertMaxKbs > 0.0 || r.assertMaxTickMs > 0.0 || r.assertMinEntities > 0)
         std::printf("asserts: %s\n", r.assertsPassed ? "PASS" : "FAIL");
     std::printf("---\n");
 }
@@ -215,10 +222,10 @@ inline std::string reportToJson(const SwarmReport& r) {
     std::snprintf(tail, sizeof(tail),
                   "  \"aggregate_downstream_mbs\": %.3f, \"max_snapshot_gap_ms\": %.3f,\n"
                   "  \"asserts\": { \"min_tick_hz\": %.3f, \"max_kbs\": %.3f, \"max_tick_ms\": %.3f, "
-                  "\"passed\": %s }\n"
+                  "\"min_entities\": %d, \"passed\": %s }\n"
                   "}\n",
                   r.aggregateDownstreamMbs, r.maxSnapshotGapMs, r.assertMinTickHz, r.assertMaxKbs, r.assertMaxTickMs,
-                  r.assertsPassed ? "true" : "false");
+                  r.assertMinEntities, r.assertsPassed ? "true" : "false");
     out += tail;
     return out;
 }

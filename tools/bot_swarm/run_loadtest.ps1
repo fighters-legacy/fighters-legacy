@@ -58,8 +58,12 @@ if ($env:FL_LOADTEST_REPORT) {
     $Report = Join-Path $ResultsDir "loadtest_${Clients}c_${Pattern}_$Timestamp.json"
 }
 
+# Optional entity-scale knobs (#573), default off so a normal run is byte-identical to before.
+$TestSpawnAi = if ($env:FL_TEST_SPAWN_AI) { [int]$env:FL_TEST_SPAWN_AI } else { 0 }
+$TestSpawnSpreadKm = if ($env:FL_TEST_SPAWN_SPREAD_KM) { $env:FL_TEST_SPAWN_SPREAD_KM } else { "50" }
+
 # Single-quoted TOML literal strings so Windows backslashes in paths are not treated as escapes.
-@"
+$ConfigText = @"
 [server]
 port = $Port
 bind_address = "127.0.0.1"
@@ -77,16 +81,30 @@ max_connections_per_ip = 0
 # tick-overrun governor (#514) is disabled here — otherwise it would shed snapshot/AI work under load
 # and mask the very regressions the gate exists to catch. The governor defaults ON in production.
 overrun_governor_enabled = false
+# Entity-scale load-spawn (#573). 0 = disabled (normal run).
+test_spawn_ai_count = $TestSpawnAi
+test_spawn_spread_km = $TestSpawnSpreadKm
+"@
+# Only emit snapshot_budget_bytes when explicitly requested (else keep the server default).
+if ($env:FL_SNAPSHOT_BUDGET) {
+    $ConfigText += "`nsnapshot_budget_bytes = $($env:FL_SNAPSHOT_BUDGET)"
+}
+$ConfigText += @"
 
 [metrics]
 tick_json_path = '$Metrics'
 tick_json_interval_ms = 250
-"@ | Set-Content -Path $Config -Encoding UTF8
+"@
+$ConfigText | Set-Content -Path $Config -Encoding UTF8
 
-Write-Host "=== bot_swarm load test: $Clients clients, pattern=$Pattern, ${Duration}s, port $Port ==="
+# FL_SIM_WORKER_THREADS sweeps the data-parallel sim worker count without editing config (#511/#573).
+$SrvArgs = @("$Port", "$MaxPeers", "--bind", "127.0.0.1")
+if ($env:FL_SIM_WORKER_THREADS) { $SrvArgs += @("--sim-worker-threads", "$($env:FL_SIM_WORKER_THREADS)") }
+
+Write-Host "=== bot_swarm load test: $Clients clients, pattern=$Pattern, ${Duration}s, port $Port (test_spawn_ai=$TestSpawnAi) ==="
 $env:FL_CONFIG = $Config
 $SrvProc = Start-Process -FilePath $FlServer `
-    -ArgumentList "$Port", "$MaxPeers", "--bind", "127.0.0.1" `
+    -ArgumentList $SrvArgs `
     -PassThru -NoNewWindow
 
 try {

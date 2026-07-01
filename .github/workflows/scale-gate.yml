@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: 'Profile to run (reference or soak)'
+        description: 'Profile to run (reference, soak, or entity-scale)'
         type: choice
-        options: [reference, soak]
+        options: [reference, soak, entity-scale]
         default: reference
       strict:
         description: 'Hard-fail on the tick-ms p99 gate (only meaningful on an 8-core reference runner)'

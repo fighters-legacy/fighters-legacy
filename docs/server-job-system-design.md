@@ -265,6 +265,26 @@ as relaxed atoms (cross-thread-safe). The `status` and `tickstats` admin command
 `overrun_budget_floor_bytes` (400), `max_catchup_ticks` (8). `makeTickGovernorParams(...)` maps the
 operator knobs to the controller internals, shared by startup + `reload_config`.
 
+## Entity-pool + SpatialIndex scaling validation ([#573])
+
+The per-tick data structures were characterised at thousands of entities (peers + AI) via the
+`[world] test_spawn_ai_count` load-spawn affordance and the `entity-scale` sweep profile. Findings
+(full matrix in [entity-scale-characterization.md](entity-scale-characterization.md)):
+
+- The **entity pool and `SpatialIndex` are not the cliff** — `integrate`/`ai`/`collision` stay cheap
+  even at 5000 entities; the dominant per-tick cost at scale is the **Serialize phase** (per-peer,
+  interest-managed, budgeted snapshot build ∝ `clients × visible entities`), which the parallel
+  per-peer pass ([#512]) scales down with worker count.
+- Two tunings landed from this: `EntityPool::forEach` is now **O(liveCount)** (dense live-index list,
+  no cost for dead slots under spawn/reap churn), and `SpatialIndex` gained a **configurable/auto cell
+  size** (`[world] spatial_cell_size_km`; a cell far smaller than the draw distance explodes the query
+  cell count) plus a **recycled-buffer `clear()`** (no per-tick bucket reallocation).
+- The graceful degradation path for the serialize/AI-bound case is the [#514] overrun governor; the
+  next scaling axis once a single tick is serialize-bound at max workers is spatial sharding ([#572]).
+
+[#573]: https://github.com/fighters-legacy/fighters-legacy/issues/573
+[#572]: https://github.com/fighters-legacy/fighters-legacy/issues/572
+
 ## Follow-ons
 
 - **Collision phase** — collision detection (not yet implemented) is cross-entity and will need its

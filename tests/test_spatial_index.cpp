@@ -293,3 +293,69 @@ TEST_CASE("SpatialIndex - rebuild cycle: clear then reinsert yields only the new
     REQUIRE(found.size() == 1u);
     CHECK(found[0] == 2u);
 }
+
+// ---------------------------------------------------------------------------
+// Recycled-buffer clear + configurable cell size (issue #573)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SpatialIndex - recycled clear across many rebuild cycles stays correct") {
+    fl::SpatialIndex idx(1000.0);
+    // Many clear+rebuild cycles at varying positions exercise the spare-buffer recycling path.
+    for (int cycle = 0; cycle < 50; ++cycle) {
+        idx.clear();
+        CHECK(idx.entityCount() == 0u);
+        for (int i = 0; i < 20; ++i) {
+            double p[3]{static_cast<double>(cycle * 2000 + i * 1500), 0.0, static_cast<double>(i * 1500)};
+            idx.insert(static_cast<uint32_t>(i), p);
+        }
+        CHECK(idx.entityCount() == 20u);
+    }
+    // After the final rebuild, a broad query still sees exactly the last cycle's 20 entities — no
+    // stale entries leaked in from recycled buffers.
+    double center[3]{49.0 * 2000.0, 0.0, 0.0};
+    std::vector<uint32_t> found;
+    idx.queryRadius(center, 1e7, [&](uint32_t id, const double*) { found.push_back(id); });
+    CHECK(found.size() == 20u);
+}
+
+TEST_CASE("SpatialIndex - setCellSize drops entries and rebuckets subsequent inserts") {
+    fl::SpatialIndex idx(10000.0);
+    CHECK(idx.cellSizeM() == Catch::Approx(10000.0));
+
+    double a[3]{100.0, 0.0, 100.0};
+    double b[3]{5000.0, 0.0, 5000.0}; // same 10 km cell as a
+    idx.insert(0u, a);
+    idx.insert(1u, b);
+    CHECK(idx.entityCount() == 2u);
+
+    // Shrinking the cell size clears the index and changes bucketing.
+    idx.setCellSize(1000.0);
+    CHECK(idx.cellSizeM() == Catch::Approx(1000.0));
+    CHECK(idx.entityCount() == 0u);
+
+    idx.insert(0u, a);
+    idx.insert(1u, b); // now a different 1 km cell than a
+    // A tight query around a must find only a (b is >4 km away).
+    std::vector<uint32_t> found;
+    idx.queryRadius(a, 500.0, [&](uint32_t id, const double*) { found.push_back(id); });
+    REQUIRE(found.size() == 1u);
+    CHECK(found[0] == 0u);
+}
+
+TEST_CASE("SpatialIndex - queryRadius correct at a non-default cell size") {
+    fl::SpatialIndex idx(250.0); // fine cells
+    // Ring of entities at 1 km radius around origin.
+    for (int i = 0; i < 16; ++i) {
+        const double ang = i * 6.2831853 / 16.0;
+        double p[3]{1000.0 * std::cos(ang), 0.0, 1000.0 * std::sin(ang)};
+        idx.insert(static_cast<uint32_t>(i), p);
+    }
+    double center[3]{0.0, 0.0, 0.0};
+    // Exact distance filter on top of the conservative cell query must recover all 16.
+    int within = 0;
+    idx.queryRadius(center, 1100.0, [&](uint32_t, const double* p) {
+        if (dist2D(center, p) <= 1100.0)
+            ++within;
+    });
+    CHECK(within == 16);
+}

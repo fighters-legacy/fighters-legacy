@@ -262,6 +262,7 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setOperatorPassword(cfg.operatorPassword);
     setIdleTimeout(cfg.idleTimeoutS);
     setDrawDistance(cfg.drawDistanceKm);
+    setSpatialCellSize(cfg.spatialCellSizeM); // after setDrawDistance: auto mode reads m_drawDistanceM
     setSnapshotBudget(cfg.snapshotBudgetBytes);
     setJitterBufferDepth(cfg.jitterBufferMaxDepth);
     setJitterAdaptWindow(cfg.jitterAdaptWindow);
@@ -277,6 +278,18 @@ void WorldBroadcaster::setIdleTimeout(int timeoutSeconds) noexcept {
 
 void WorldBroadcaster::setDrawDistance(float km) noexcept {
     m_drawDistanceM = static_cast<double>(km) * 1000.0;
+}
+
+void WorldBroadcaster::setSpatialCellSize(double cellSizeM) {
+    // Auto (<= 0): pick a cell so a full draw-distance query spans a bounded number of cells rather
+    // than degenerating toward O(N) at high density. drawDistance/32 with a 500 m floor keeps a
+    // 200 km radius near ~6 km cells (~13x13 cells/query) while never producing a zero/UB cell size.
+    double resolved = cellSizeM;
+    if (resolved <= 0.0) {
+        const double dd = m_drawDistanceM > 0.0 ? m_drawDistanceM : 200'000.0;
+        resolved = std::clamp(dd / 32.0, 500.0, 10'000.0);
+    }
+    m_spatialIndex.setCellSize(resolved);
 }
 
 void WorldBroadcaster::setSnapshotBudget(uint32_t bytes) noexcept {
