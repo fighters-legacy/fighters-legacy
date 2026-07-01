@@ -96,6 +96,10 @@ bit layout) to fit the highest-relevance records into a per-client byte budget, 
 `engine/net/SnapshotScheduler.{h,cpp}` and [network-protocol.md](network-protocol.md). Client-acked
 delta baselines (#517 — landed) build on this codec's per-record `full` bit: the server keys
 full-vs-delta off the snapshot tick each client echoes in `MsgClientInput`/`MsgHeartbeat` (the ack),
-re-sending a full every tick until the peer confirms it — no wire change to this codec. Adaptive
-send-rate/congestion response (#518) builds on the codec and the scheduler, and remains a separate
-sub-task of #495.
+re-sending a full every tick until the peer confirms it — no wire change to this codec. Selective-ack
+identity precision (#566 — landed) tightens that confirmation: the client→server ack carries a 32-bit
+bitmask (`ackMask`, `engine/net/AckWindow.h`) of recently **decoded** ticks, so the server confirms the
+*specific* tick a full was sent in rather than a high-water mark — closing the residual where acking a
+later tick could falsely confirm a full the client never decoded, and retiring the #517 deferral guard.
+Adaptive send-rate/congestion response (#518) builds on the codec and the scheduler, and remains a
+separate sub-task of #495.

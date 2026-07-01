@@ -49,8 +49,10 @@ struct PeerInputState {
     uint64_t ackedTick{0};        // highest WorldSnapshot tick this peer has acknowledged (echoed in
                                   // MsgClientInput/MsgHeartbeat tickIndex; clamped to m_currentTick).
                                   // Drives client-acked delta baselines: an entity is sent full until
-                                  // the client acks the tick its full streak started on.
+                                  // the client confirms it decoded the tick its full streak started on.
     // 4-byte fields next.
+    uint32_t ackMask{0}; // selective-ack bitmask paired with ackedTick (#566); adopted together on a
+                         // strict high-water advance. Bit b = decoded tick ackedTick-1-b (see AckWindow.h).
     float throttle{0.f}; // last drained value from jitterBuffer (effective input this tick)
     float elevator{0.f}; // last drained value
     float aileron{0.f};  // last drained value
@@ -597,9 +599,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     //   * lastSentTick  — scheduler recency term + the kSnapshotRetentionTicks force-full (the
     //                     interest-out / client-evicted re-entry case) + the knownGens GC prune.
     //   * fullStreakTick— tick the CURRENT contiguous run of full records started on (0 = never sent
-    //                     a full). The entity is sent full every tick until the peer acks a tick
-    //                     >= fullStreakTick; freezing the streak start (rather than advancing it each
-    //                     tick) lets it converge to deltas in one RTT instead of re-fulling forever.
+    //                     a full). The entity is sent full every tick until the peer confirms it decoded
+    //                     fullStreakTick (selective-ack, #566); freezing the streak start (rather than
+    //                     advancing it each tick) lets it converge to deltas in one RTT rather than
+    //                     re-fulling forever (the confirm target must be a fixed tick the ack can catch).
     //   * lastWasFull   — whether the last record sent for this entity was a full (detects a
     //                     contiguous full run together with lastSentTick).
     // Erased in full on peer disconnect; pruned per-tick once stale past kSnapshotRetentionTicks.

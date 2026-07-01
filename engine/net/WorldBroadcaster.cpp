@@ -12,6 +12,7 @@
 #include "flight/CentralGravityField.h"
 #include "flight/FlightIntegrator.h"
 #include "job/JobSystem.h"
+#include "net/AckWindow.h"
 #include "net/BitStream.h"
 #include "net/GameProtocol.h"
 #include "net/NetworkUtils.h"
@@ -612,17 +613,20 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     const auto activePeers =
         static_cast<uint16_t>(std::max(0, std::min(m_activePeerCount.load(std::memory_order_relaxed), 65535)));
 
-    // Client-acked delta baselines: a record is `full` (carries typeIndex + gen) when the peer has
-    // not seen this entity/gen before, the generation changed, the last full has not been
-    // acknowledged yet (fullStreakTick > ackedTick), or the peer was not sent it within
-    // kSnapshotRetentionTicks (it may have time-evicted it, so a delta would be undecodable);
-    // otherwise a delta. Pure — captures nothing. (An existing rec always has a real fullStreakTick:
-    // the first send for any entity is a full, which seeds it; rec == nullptr is the "never" case.
-    // The only residual edge is ackedTick == 0 being ambiguous between "no ack yet" and "acked tick
-    // 0" — a one-tick startup case that self-heals via the retention force-full and never arises in
-    // production, where the first snapshot a connecting client sees is at a large tick index.)
-    auto decideFull = [](const PeerEntityRec* rec, uint16_t gen, uint64_t ackedTick, uint64_t T) -> bool {
-        return rec == nullptr || rec->gen != gen || rec->fullStreakTick > ackedTick ||
+    // Client-acked delta baselines with selective-ack precision (#566): a record is `full` (carries
+    // typeIndex + gen) when the peer has not seen this entity/gen before, the generation changed, the
+    // peer has not confirmed it DECODED the tick this full streak started on (fullStreakTick), or the
+    // peer was not sent it within kSnapshotRetentionTicks (it may have time-evicted it, so a delta
+    // would be undecodable); otherwise a delta. Pure — captures nothing.
+    //
+    // ackReceived() consults the peer's selective-ack window (high-water ackedTick + ackMask bitmask):
+    // it confirms delivery of the SPECIFIC fullStreakTick rather than a high-water mark, closing the
+    // #517 residual where acking a later tick could falsely confirm a full the client never decoded.
+    // (An existing rec always has a real fullStreakTick: the first send for any entity is a full,
+    // which seeds it; rec == nullptr is the "never" case.)
+    auto decideFull = [](const PeerEntityRec* rec, uint16_t gen, uint64_t ackedTick, uint32_t ackMask,
+                         uint64_t T) -> bool {
+        return rec == nullptr || rec->gen != gen || !ackReceived(ackedTick, ackMask, rec->fullStreakTick) ||
                (T - rec->lastSentTick) >= kSnapshotRetentionTicks;
     };
 
@@ -670,6 +674,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             const EntityState* peerState = w.peerState;
             auto& knownGens = *w.knownGens;
             const uint64_t peerAckedTick = pin.ackedTick;
+            const uint32_t peerAckMask = pin.ackMask;
 
             // Confirmed-despawn detection (#516) + GC prune, in one pass over the known set:
             //   * Absent from the live snapMap → removed from the sim entirely (kill/despawn). Queue an
@@ -778,7 +783,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                     auto kit = knownGens.find(idx);
                     const PeerEntityRec* rec = (kit == knownGens.end()) ? nullptr : &kit->second;
                     c.ticksSinceSent = (rec == nullptr) ? UINT64_MAX : (tickIndex - rec->lastSentTick);
-                    const bool isFull = decideFull(rec, gen, peerAckedTick, tickIndex);
+                    const bool isFull = decideFull(rec, gen, peerAckedTick, peerAckMask, tickIndex);
                     // Conservative idx-delta of 2 (1-byte varint); the real neighbour gap is unknown until
                     // after selection, but the budget is a soft cap so a per-record ±1 byte is acceptable.
                     c.estBytes = estimateRecordBytes(isFull, isFull, c.isOwn, st.typeIndex, /*idxDelta=*/2u);
@@ -787,21 +792,11 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 selected = selectSnapshotRecords(cands, recordBudget, m_schedulerWeights, m_drawDistanceM);
                 std::sort(selected.begin(), selected.end()); // ascending for the codec's idx-delta varints
 
-                // Deferral guard for client-acked baselines: an entity whose identity the client has not
-                // yet confirmed (fullStreakTick > ackedTick) that the scheduler now WITHHOLDS must not
-                // later be confirmed by an ack of this tick — the client never received it here. Push its
-                // streak start past the current tick so its next send is decided a fresh full. A confirmed
-                // entity is left untouched (the #516 benefit: a known entity returns as a cheap delta).
-                if (selected.size() < visible.size()) {
-                    std::unordered_set<uint32_t> sel(selected.begin(), selected.end());
-                    for (uint32_t idx : visible) {
-                        if (sel.count(idx))
-                            continue;
-                        auto kit = knownGens.find(idx);
-                        if (kit != knownGens.end() && kit->second.fullStreakTick > peerAckedTick)
-                            kit->second.fullStreakTick = tickIndex + 1;
-                    }
-                }
+                // No deferral guard is needed under selective-ack (#566): a scheduler-withheld entity is
+                // not SENT this tick, so its fullStreakTick keeps its earlier value; the peer's ack of
+                // this tick sets only this tick's bit and cannot confirm that earlier fullStreakTick.
+                // decideFull() confirms the specific full-sent tick, so the #517 streak-bump workaround
+                // (which the high-water mark required) is now redundant.
             }
 
             // Encode the quantized, bit-packed record stream (SnapshotCodec). Full vs delta is the
@@ -814,7 +809,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 const uint16_t gen = static_cast<uint16_t>(state.id.generation);
                 auto kit = knownGens.find(idx);
                 const PeerEntityRec* rec = (kit == knownGens.end()) ? nullptr : &kit->second;
-                const bool isFull = decideFull(rec, gen, peerAckedTick, tickIndex);
+                const bool isFull = decideFull(rec, gen, peerAckedTick, peerAckMask, tickIndex);
 
                 QuantEntity qe;
                 qe.idx = state.id.index;
@@ -1120,10 +1115,17 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         if (msg.tickIndex <= m_currentTick)
             stored.estimatedDelayTicks = static_cast<uint32_t>(m_currentTick - msg.tickIndex);
 
-        // Snapshot ack: the client echoes the last WorldSnapshot tick it processed (client-acked
-        // delta baselines). Clamp to the present so a client can't ack a future tick, and keep the
-        // monotonic high-water mark.
-        stored.ackedTick = std::max(stored.ackedTick, std::min(msg.tickIndex, m_currentTick));
+        // Snapshot ack: the client echoes the last WorldSnapshot tick it processed plus a selective-ack
+        // bitmask of recently decoded ticks (#566). Clamp to the present so a client can't ack a future
+        // tick. Adopt the high-water tick and its mask together, only on a strict advance, so ackedTick
+        // and ackMask always describe the same frame (a stale/reordered input keeps the prior pair).
+        {
+            const uint64_t ackT = std::min(msg.tickIndex, m_currentTick);
+            if (ackT > stored.ackedTick) {
+                stored.ackedTick = ackT;
+                stored.ackMask = msg.ackMask;
+            }
+        }
 
         // On first input, seed the jitter buffer depth from the measured one-way delay,
         // capped at the configured global maximum.
@@ -1254,8 +1256,15 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         ps.lastActivityTick = m_currentTick;
         if (hb.tickIndex <= m_currentTick)
             ps.estimatedDelayTicks = static_cast<uint32_t>(m_currentTick - hb.tickIndex);
-        // Heartbeat also acks the last processed snapshot (idle clients with no MsgClientInput).
-        ps.ackedTick = std::max(ps.ackedTick, std::min(hb.tickIndex, m_currentTick));
+        // Heartbeat also acks the last processed snapshot (idle clients with no MsgClientInput),
+        // carrying the same selective-ack bitmask. Adopt tick + mask together on a strict advance.
+        {
+            const uint64_t ackT = std::min(hb.tickIndex, m_currentTick);
+            if (ackT > ps.ackedTick) {
+                ps.ackedTick = ackT;
+                ps.ackMask = hb.ackMask;
+            }
+        }
 
         // Reply with the current delay estimate so the client can display "Ping: N ms".
         MsgPeerDelay pd;

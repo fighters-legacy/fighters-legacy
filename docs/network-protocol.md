@@ -36,7 +36,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 |-------|-------|-----------|---------|------|---------|
 | `Hello` | `0x00` | server→client | reliable | 4 bytes | Protocol version handshake; first message on every new connection |
 | `ConnectAck` | `0x01` | server→client | reliable | 16 + N×196 bytes | Handshake on connect; assigns entity slot and delivers type registry |
-| `WorldSnapshot` | `0x02` | server→client | unreliable | 16 + F×88 + U×64 bytes | Per-tick entity state, unicast per peer; F = full entries (new or baseline), U = compact updates (known entities) |
+| `WorldSnapshot` | `0x02` | server→client | unreliable | 40 + quantized bitstream + TLV | Per-tick entity state, unicast per peer; 40-byte header + a quantized, bit-packed record stream (each record carries a `full` bit) + TLV extension block — see *Quantized entity record* below |
 | `ClientInput` | `0x03` | client→server | unreliable | 48 bytes | Per-frame flight inputs |
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
 | `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
@@ -155,13 +155,13 @@ delay all subsequent inputs behind the ACK round-trip.
 | 1 | 1 | `buttons` | `uint8_t` | Bit 0 = weaponTrigger, bit 1 = afterburner |
 | 2 | 2 | `protocolVersion` | `uint16_t` | Client's `kProtocolVersion`; server discards packet and logs a warning on mismatch |
 | 4 | 4 | `seqNum` | `uint32_t` | Monotonically increasing per-client sequence counter; server applies a half-window comparison to discard out-of-order and duplicate packets |
-| 8 | 8 | `tickIndex` | `uint64_t` | Server `tickIndex` from the client's last received `MsgWorldSnapshot`. Server computes `estimatedDelayTicks = currentTick − tickIndex` for diagnostics, and also uses it as the **snapshot ack** (clamped to the current tick, kept as a monotonic high-water mark) that drives client-acked delta baselines — see *Scaling to 128+* |
+| 8 | 8 | `tickIndex` | `uint64_t` | Server `tickIndex` from the client's last received `MsgWorldSnapshot`. Server computes `estimatedDelayTicks = currentTick − tickIndex` for diagnostics, and also uses it as the **snapshot ack** high-water mark (clamped to the current tick), paired with `ackMask` below, that drives client-acked delta baselines — see *Scaling to 128+* |
 | 16 | 4 | `throttle` | `float` | `[0.0, 1.0]` |
 | 20 | 4 | `elevator` | `float` | `[-1.0, +1.0]` nose-up positive |
 | 24 | 4 | `aileron` | `float` | `[-1.0, +1.0]` right-roll positive |
 | 28 | 4 | `rudder` | `float` | `[-1.0, +1.0]` right-yaw positive |
 | 32 | 12 | `viewAxis[3]` | `float[3]` | Normalized camera look direction (world space) |
-| 44 | 4 | `reserved[4]` | `uint8_t[4]` | Padding to 48; always 0 |
+| 44 | 4 | `ackMask` | `uint32_t` | Selective-ack bitmask of recently **decoded** snapshot ticks below `tickIndex`: bit `b` = tick `tickIndex − 1 − b` was decoded (`tickIndex` itself is implicitly decoded). Lets the server confirm the specific tick a full record was sent in rather than a high-water mark — see *Scaling to 128+* |
 
 The server clamps all control surface inputs to their valid ranges and normalises `viewAxis` to unit
 length. Packets smaller than 48 bytes are silently discarded. ENet's sequenced unreliable delivery
@@ -381,7 +381,8 @@ Unreliable, **client→server**, channel 1. Sent by the client at ~1 Hz while in
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
 | 0 | 1 | `msgId` | `uint8_t` | `0x0B` |
-| 1 | 7 | `reserved[7]` | `uint8_t[7]` | padding to 8-align `tickIndex` |
+| 1 | 3 | `reserved[3]` | `uint8_t[3]` | padding to 4-align `ackMask` |
+| 4 | 4 | `ackMask` | `uint32_t` | selective-ack bitmask; same semantic as `MsgClientInput::ackMask` |
 | 8 | 8 | `tickIndex` | `uint64_t` | last received `MsgWorldSnapshot::tickIndex`; same semantic as `MsgClientInput::tickIndex` |
 
 `MsgId::Heartbeat = 0x0B` is an additive message ID — old servers silently discard.
@@ -635,12 +636,24 @@ this section are measured empirically by the `bot_swarm` load generator — see
   client has acknowledged, not a fixed timer. The client already echoes the last snapshot tick it
   processed in `MsgClientInput`/`MsgHeartbeat` (`tickIndex`); the server treats that as the snapshot
   **ack** (clamped to the present, monotonic). An entity is re-sent as a *full* record every tick
-  until the peer acks the tick its full streak started on, then it converges to *deltas*. This
-  removes the globally-synchronized periodic full-resync spike (the former `baseline_interval_ticks`
-  fired on the same tick for every peer) and recovers a dropped full in ~1 RTT instead of up to 2 s —
-  with no wire-format change. The client ignores out-of-order/duplicate snapshots so its echoed tick
+  until the peer confirms it decoded the tick its full streak started on, then it converges to
+  *deltas*. This removes the globally-synchronized periodic full-resync spike (the former
+  `baseline_interval_ticks` fired on the same tick for every peer) and recovers a dropped full in
+  ~1 RTT instead of up to 2 s. The client ignores out-of-order/duplicate snapshots so its echoed tick
   stays a monotonic high-water mark. The per-entity `kSnapshotRetentionTicks` force-full (the
   interest-out / client-evicted re-entry case) is retained as an ack-independent backstop.
+- **Selective-ack identity precision (Epic B, #566 — landed).** A single high-water-mark ack cannot
+  distinguish "the client decoded the full sent at tick S" from "the client received a *later* tick
+  ≥ S but missed S", so a full dropped on a couple of consecutive ticks could be briefly mis-confirmed
+  and the entity turns invisible until the retention backstop heals it. The client→server ack is
+  therefore paired with a 32-bit **selective-ack bitmask** (`MsgClientInput`/`MsgHeartbeat` `ackMask`,
+  TCP-SACK style) reporting which of the ticks just below the high-water mark it actually **decoded**
+  (`engine/net/AckWindow.h`). The server confirms delivery of the *specific* `fullStreakTick` rather
+  than a high-water mark, closing the residual at the root and retiring the #517 "deferral guard"
+  workaround. No wire-size or protocol-version change — `ackMask` reuses the messages' former reserved
+  padding. **Limitation:** a snapshot the client receives but does not fully decode (mid-bitstream
+  truncation) still sets its ack bit; the per-client byte budget keeps snapshots within a single MTU
+  fragment so truncation is rare, and the retention force-full remains the backstop for it.
 - **Adaptive send-rate / congestion response (Epic B, #518).** Each connected peer owns an AIMD
   congestion controller (`engine/net/CongestionController`) that the broadcaster steps every tick from
   the peer's ENet link quality (`INetwork::getPeerLinkStats` → packet loss, RTT, reliable bytes in

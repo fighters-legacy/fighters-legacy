@@ -130,7 +130,7 @@ development (pre-`kProtocolVersion` freeze), a dated **decision record** (see be
 | Multiplayer topology | `fl-server` dedicated binary + `fl-lobby` REST service | Server-authoritative; no P2P player-count cap; self-hostable |
 | Multiplayer scale target | **128+ simultaneous players** (32 = near-term acceptance floor) | Drives the scaling seams below; see [docs/design.md](design.md) "Multiplayer at Scale". (Revised by the 2026-06-28 decision record.) |
 | Server simulation | Data-parallel **job system** over a single authoritative tick + a graceful **overrun governor** | Parallelizes per-entity integration + AI **and per-peer snapshot assembly** (workers build buffers, the sim thread flushes) so 128 players + AI + projectiles hold 60 Hz; when the tick still exceeds budget the `TickGovernor` sheds work (snapshot cadence/budget + AI-sample decimation) rather than spiralling, with the `GameLoop` catch-up cap as the bounded backstop. Spatial sharding deferred as a later option |
-| Wire state encoding | **Quantized / bit-packed** snapshot stream (#515 ✓) + 3D interest culling (#402 ✓) + per-client priority/budget scheduling (#516 ✓) + adaptive per-client send-rate / congestion response (#518 ✓) | Quantized codec landed: frame-origin-relative positions, smallest-three quaternion, quantized vel/omega — replaced the fixed 64/88-byte records (see [docs/snapshot-quantization.md](snapshot-quantization.md)). Priority/budget scheduling (relevance-ranked per-client byte budget + hybrid despawn/retention) keeps per-client bandwidth bounded as population grows. A per-peer AIMD `CongestionController` then sheds bandwidth on degraded links by decimating the snapshot send rate and scaling the byte budget, driven by ENet loss/RTT — see [docs/congestion-control-design.md](congestion-control-design.md) |
+| Wire state encoding | **Quantized / bit-packed** snapshot stream (#515 ✓) + 3D interest culling (#402 ✓) + per-client priority/budget scheduling (#516 ✓) + client-acked delta baselines (#517 ✓) + selective-ack identity precision (#566 ✓) + adaptive per-client send-rate / congestion response (#518 ✓) | Quantized codec landed: frame-origin-relative positions, smallest-three quaternion, quantized vel/omega — replaced the fixed 64/88-byte records (see [docs/snapshot-quantization.md](snapshot-quantization.md)). Priority/budget scheduling (relevance-ranked per-client byte budget + hybrid despawn/retention) keeps per-client bandwidth bounded as population grows. A per-peer AIMD `CongestionController` then sheds bandwidth on degraded links by decimating the snapshot send rate and scaling the byte budget, driven by ENet loss/RTT — see [docs/congestion-control-design.md](congestion-control-design.md) |
 | Player identity / auth | **Server-side, pluggable `IIdentityProvider`** (offline-verifiable signed tokens) | Persistent stats/ranking/bans key on a verified account, not a spoofable client GUID; self-hostable, no first-party hosted infra |
 | Persistence | **`IPersistence` storage HAL** (SQLite single-server, Postgres for clusters) | Accounts, stats, bans, persistent-world state; promotes file-based banlists into a store |
 | Cluster orchestration / live services | **Go** (k8s/OpenShift operator, Agones-native; `fl-account`, `fl-review`) | Intentional polyglot boundary: C++ engine/game/server, Go infrastructure; idiomatic for the k8s ecosystem |
@@ -222,6 +222,21 @@ snapshots so its echoed tick stays monotonic. The per-entity `kSnapshotRetention
 (interest-out re-entry) is retained as an ack-independent backstop, and the `m_peerKnownGens` map is
 now pruned on that same window (the periodic baseline clear used to bound it). `baseline_interval_ticks`
 and `WorldBroadcaster::setBaselineInterval` are removed.
+
+**2026-06-30 — Selective-ack identity precision (Epic B, #566).** The #517 high-water-mark ack cannot
+distinguish "the client decoded the full sent at tick S" from "the client received a later tick ≥ S but
+missed S", leaving a narrow residual: a full dropped on ≥2 consecutive ticks, plus a scheduler deferral
+on the first tick the client does receive, could briefly mis-confirm the identity so the next delta is
+undecodable (self-healing via the retention force-full, but a visible flicker). The client→server ack is
+now paired with a 32-bit **selective-ack bitmask** (`MsgClientInput`/`MsgHeartbeat` `ackMask`, TCP-SACK
+style) reporting which recent ticks below the high-water mark the client actually **decoded**; the pure
+`engine/net/AckWindow.h` helper lets the server confirm the *specific* `fullStreakTick` rather than a
+high-water mark. This closes the residual at the root and retires the #517 "deferral guard" (a
+scheduler-withheld entity is never sent that tick, so acking it can no longer confirm its earlier streak
+start). No wire-size or protocol-version change — `ackMask` reuses the two messages' former reserved
+padding. Truncated-but-received snapshots remain out of scope (a partially-decoded tick still sets its
+ack bit); the per-client byte budget keeps snapshots within one MTU fragment and the retention force-full
+is the backstop.
 
 ## Content Pack Architecture
 

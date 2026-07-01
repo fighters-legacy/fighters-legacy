@@ -14,9 +14,10 @@
 
 namespace fl {
 
-std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRenderBridge& bridge, CameraInput& camInput,
-                                                             const GameConsole& console, IInput& input,
-                                                             IJoystick* joystick, const ControlsSettings& cs) {
+std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRenderBridge& /*bridge*/,
+                                                             CameraInput& camInput, const GameConsole& console,
+                                                             IInput& input, IJoystick* joystick,
+                                                             const ControlsSettings& cs) {
     m_weaponFired = false;
 
     const auto now = m_clock->now();
@@ -26,7 +27,8 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
 
     fl::MsgClientInput inp;
     inp.seqNum = m_inputSeq++;
-    inp.tickIndex = bridge.hasSnapshot() ? bridge.current().tickIndex : 0;
+    // tickIndex + ackMask (the snapshot ack) are stamped by ClientNetEventHandler::stampAck() at the
+    // send site (#566) — the net handler is the single ack authority. Left default (0) here.
 
     constexpr float kThrottleStep = 1.0f / 60.0f;
     if (!console.isOpen()) {

@@ -7,6 +7,7 @@
 #include "console/GameConsole.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityTypeRegistry.h"
+#include "net/AckWindow.h"
 #include "net/BitStream.h"
 #include "net/GameProtocol.h"
 #include "net/SnapshotCodec.h"
@@ -212,6 +213,11 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
                 m_estimatedDelayTicks = delayTicks;
         }
 
+        // Advance the selective-ack decoded-tick mask before moving the high-water mark (#566). This
+        // path only runs for snapshots we accept and DECODE, so every bit ackAdvance sets corresponds to
+        // a tick whose records were actually applied — a dropped or reordered-and-discarded tick leaves
+        // its bit 0. stampAck() then reports {m_lastSnapshotTick, m_ackMask} to the server.
+        m_ackMask = fl::ackAdvance(m_ackMask, m_lastSnapshotTick, hdr.tickIndex, m_haveSnapshot);
         m_lastSnapshotTick = hdr.tickIndex;
         m_haveSnapshot = true;
 
@@ -342,8 +348,18 @@ void ClientNetEventHandler::sendHeartbeatIfNeeded() {
     m_lastHeartbeatSentAt = now;
 
     fl::MsgHeartbeat hb;
-    hb.tickIndex = m_lastSnapshotTick;
+    stampAck(hb);
     net.send(0, &hb, sizeof(hb), /*reliable=*/false);
+}
+
+void ClientNetEventHandler::stampAck(fl::MsgClientInput& in) const noexcept {
+    in.tickIndex = m_lastSnapshotTick;
+    in.ackMask = m_ackMask;
+}
+
+void ClientNetEventHandler::stampAck(fl::MsgHeartbeat& hb) const noexcept {
+    hb.tickIndex = m_lastSnapshotTick;
+    hb.ackMask = m_ackMask;
 }
 
 } // namespace fl

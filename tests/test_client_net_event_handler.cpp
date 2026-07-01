@@ -1880,3 +1880,104 @@ TEST_CASE("ClientNetEventHandler: retained entity ages out after the retention w
     CHECK(entriesContain(bridge.current(), 1u));
     CHECK_FALSE(entriesContain(bridge.current(), 2u)); // evicted by the retention timeout
 }
+
+// -- Selective-ack mask maintenance (#566) -----------------------------------------------------------
+
+namespace {
+// Feed a one-record full snapshot at `tick` so the handler accepts and decodes it.
+void feedTick(ClientNetEventHandler& handler, uint64_t tick) {
+    TestRec a;
+    a.idx = 1u;
+    a.gen = 1u;
+    a.isFull = true;
+    a.pos[1] = 500.0;
+    auto pkt = buildSnapshotPkt(tick, {a});
+    handler.onReceive(0u, pkt.data(), pkt.size());
+}
+} // namespace
+
+TEST_CASE("ClientNetEventHandler: consecutive snapshots fill the selective-ack mask",
+          "[client_net_event_handler][identity-ack]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    for (uint64_t tick = 1; tick <= 4; ++tick)
+        feedTick(handler, tick);
+
+    // stampAck reports the high-water tick + the decoded-tick bitmask. Ticks 1-3 (below high-water 4)
+    // were all decoded → bits 0..2 set.
+    MsgClientInput inp{};
+    handler.stampAck(inp);
+    CHECK(inp.tickIndex == 4u);
+    CHECK(inp.ackMask == 0b111u);
+
+    // The heartbeat path stamps the same pair.
+    MsgHeartbeat hb{};
+    handler.stampAck(hb);
+    CHECK(hb.tickIndex == 4u);
+    CHECK(hb.ackMask == 0b111u);
+}
+
+TEST_CASE("ClientNetEventHandler: a dropped snapshot leaves its ack bit clear",
+          "[client_net_event_handler][identity-ack]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    feedTick(handler, 1u);
+    feedTick(handler, 2u);
+    // Tick 3 is dropped (never delivered); tick 4 arrives with a gap.
+    feedTick(handler, 4u);
+
+    MsgClientInput inp{};
+    handler.stampAck(inp);
+    CHECK(inp.tickIndex == 4u);
+    // High-water 4: bit 0 = tick 3 (dropped → clear), bit 1 = tick 2, bit 2 = tick 1.
+    CHECK(inp.ackMask == 0b110u);
+}
+
+TEST_CASE("ClientNetEventHandler: a reordered/duplicate snapshot does not set its ack bit",
+          "[client_net_event_handler][identity-ack]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    feedTick(handler, 4u);
+    feedTick(handler, 5u);
+    // A stale (already-superseded) tick 3 arrives late; the handler drops it WITHOUT decoding, so it
+    // must NOT be marked as decoded — proving the deliberate "no ackMark" decision.
+    feedTick(handler, 3u);
+
+    MsgClientInput inp{};
+    handler.stampAck(inp);
+    CHECK(inp.tickIndex == 5u); // high-water unchanged by the stale packet
+    CHECK(inp.ackMask == 0b1u); // only tick 4 (bit 0) decoded; tick 3's bit (age 2) stays clear
+}
+
+TEST_CASE("ClientNetEventHandler: a jump beyond the ack window resets the mask",
+          "[client_net_event_handler][identity-ack]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    feedTick(handler, 10u);
+    feedTick(handler, 50u); // delta 40 > 32-tick window → the whole mask rolls out
+
+    MsgClientInput inp{};
+    handler.stampAck(inp);
+    CHECK(inp.tickIndex == 50u);
+    CHECK(inp.ackMask == 0u);
+}

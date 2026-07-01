@@ -3,13 +3,14 @@
 Design record for the per-client congestion-response work (Epic B, [#495]). Implements [#518], the
 last engine sub-task of the bandwidth/snapshot-scaling epic. Builds directly on the steady-state
 scaling already landed: quantized bitstream ([#515]), priority/budget scheduler ([#516]), client-acked
-delta baselines ([#517]), and 3D interest culling ([#402]).
+delta baselines ([#517], with selective-ack identity precision [#566]), and 3D interest culling ([#402]).
 
 [#495]: https://github.com/fighters-legacy/fighters-legacy/issues/495
 [#515]: https://github.com/fighters-legacy/fighters-legacy/issues/515
 [#516]: https://github.com/fighters-legacy/fighters-legacy/issues/516
 [#517]: https://github.com/fighters-legacy/fighters-legacy/issues/517
 [#518]: https://github.com/fighters-legacy/fighters-legacy/issues/518
+[#566]: https://github.com/fighters-legacy/fighters-legacy/issues/566
 [#402]: https://github.com/fighters-legacy/fighters-legacy/issues/402
 
 ## Problem

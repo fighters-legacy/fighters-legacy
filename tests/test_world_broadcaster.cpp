@@ -208,13 +208,17 @@ static std::vector<DecodedEntity> parseFullEntries(const std::vector<uint8_t>& p
 }
 
 // Simulate a client acknowledging snapshot `tick` by feeding an MsgClientInput that echoes it (the
-// realistic ack path for client-acked delta baselines: an entity stays full until the peer acks the
-// tick its full streak started on). seqNum must strictly increase per peer across calls (the
-// broadcaster's staleness guard discards non-newer inputs).
-static void ackTick(fl::WorldBroadcaster& b, uint32_t peerId, uint64_t tick, uint32_t seqNum) {
+// realistic ack path for client-acked delta baselines: an entity stays full until the peer confirms it
+// decoded the tick its full streak started on). seqNum must strictly increase per peer across calls (the
+// broadcaster's staleness guard discards non-newer inputs). The default all-ones selective-ack mask
+// (#566) reports "every in-window tick decoded", matching the pre-#566 high-water semantics; tests
+// exercising a specific drop pass an explicit mask with the relevant bit cleared.
+static void ackTick(fl::WorldBroadcaster& b, uint32_t peerId, uint64_t tick, uint32_t seqNum,
+                    uint32_t ackMask = 0xFFFFFFFFu) {
     fl::MsgClientInput inp{};
     inp.seqNum = seqNum;
     inp.tickIndex = tick;
+    inp.ackMask = ackMask;
     b.onReceive(peerId, &inp, sizeof(inp));
 }
 
@@ -5096,8 +5100,137 @@ TEST_CASE("WorldBroadcaster: a dropped full keeps re-sending full until a later 
     CHECK(deltaRecordCount(snapshotsFor(net, 0).back()) >= 1u);
 }
 
-TEST_CASE("WorldBroadcaster: a deferral restarts the full streak so an ack of the withheld tick cannot confirm",
-          "[world_broadcaster][delta][budget]") {
+// -- Selective-ack identity precision (#566) ---------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: acking a later tick does not confirm a full whose streak-start tick was "
+          "not decoded",
+          "[world_broadcaster][identity-ack]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    // Full sent every tick 1-3, streak frozen at tick 1 (contiguous run, no acks yet).
+    for (uint64_t tick = 1; tick <= 3; ++tick) {
+        clearSnapshots(net);
+        broadcaster.onTick(1.0 / 60.0, tick);
+        CHECK(fullRecordCount(snapshotsFor(net, 0).back()) >= 1u);
+    }
+
+    // The client acks tick 3 but its selective-ack mask reports tick 1 (the streak start) was NOT
+    // decoded — age = 3 - 1 = 2 → bit 1 cleared. A pre-#566 high-water mark (1 <= 3) would have falsely
+    // confirmed the identity and dropped to an undecodable delta; selective-ack keeps re-sending full.
+    ackTick(broadcaster, 0u, 3u, 1u, 0xFFFFFFFFu & ~(1u << 1));
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 4u);
+    CHECK(fullRecordCount(snapshotsFor(net, 0).back()) >= 1u);
+    CHECK(deltaRecordCount(snapshotsFor(net, 0).back()) == 0u);
+
+    // Now the client acks tick 4 with the streak-start bit set (age = 4 - 1 = 3 → bit 2 of the full
+    // mask): the identity is confirmed and the entity converges to a delta.
+    ackTick(broadcaster, 0u, 4u, 2u, 0xFFFFFFFFu);
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 5u);
+    CHECK(fullRecordCount(snapshotsFor(net, 0).back()) == 0u);
+    CHECK(deltaRecordCount(snapshotsFor(net, 0).back()) >= 1u);
+}
+
+TEST_CASE("WorldBroadcaster: a heartbeat carries the selective-ack mask", "[world_broadcaster][identity-ack]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    for (uint64_t tick = 1; tick <= 3; ++tick) {
+        clearSnapshots(net);
+        broadcaster.onTick(1.0 / 60.0, tick);
+    }
+
+    // Heartbeat acking tick 3 with the streak-start bit (tick 1, age 2 → bit 1) cleared: stays full.
+    fl::MsgHeartbeat hb{};
+    hb.tickIndex = 3u;
+    hb.ackMask = 0xFFFFFFFFu & ~(1u << 1);
+    broadcaster.onReceive(0u, &hb, sizeof(hb));
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 4u);
+    CHECK(fullRecordCount(snapshotsFor(net, 0).back()) >= 1u);
+
+    // Heartbeat acking tick 4 with the streak-start bit set: converges to delta.
+    fl::MsgHeartbeat hb2{};
+    hb2.tickIndex = 4u;
+    hb2.ackMask = 0xFFFFFFFFu;
+    broadcaster.onReceive(0u, &hb2, sizeof(hb2));
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 5u);
+    CHECK(fullRecordCount(snapshotsFor(net, 0).back()) == 0u);
+    CHECK(deltaRecordCount(snapshotsFor(net, 0).back()) >= 1u);
+}
+
+TEST_CASE("WorldBroadcaster: a non-advancing ack does not clobber the stored mask",
+          "[world_broadcaster][identity-ack]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    for (uint64_t tick = 1; tick <= 5; ++tick) {
+        clearSnapshots(net);
+        broadcaster.onTick(1.0 / 60.0, tick);
+    }
+
+    // Confirm the identity with a full mask acking tick 5.
+    ackTick(broadcaster, 0u, 5u, 1u, 0xFFFFFFFFu);
+    // A later input (strictly newer seqNum) but an OLDER/non-advancing tickIndex with an empty mask must
+    // NOT overwrite the stored {ackedTick=5, mask=full} pair — otherwise the entity would revert to full.
+    ackTick(broadcaster, 0u, 3u, 2u, 0u);
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 6u);
+    CHECK(fullRecordCount(snapshotsFor(net, 0).back()) == 0u);
+    CHECK(deltaRecordCount(snapshotsFor(net, 0).back()) >= 1u);
+}
+
+TEST_CASE("WorldBroadcaster: a full streak older than the ack window converges to delta with an empty mask",
+          "[world_broadcaster][identity-ack]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    // Full streak frozen at tick 1; run well past the 32-tick window with no acks.
+    for (uint64_t tick = 1; tick <= 40; ++tick) {
+        clearSnapshots(net);
+        broadcaster.onTick(1.0 / 60.0, tick);
+        CHECK(fullRecordCount(snapshotsFor(net, 0).back()) >= 1u);
+    }
+
+    // Ack tick 40 with an EMPTY mask. The streak-start tick 1 is age 39 — outside the 32-bit window — so
+    // ackReceived() assumes it was decoded (the retention force-full is the backstop for old ticks), and
+    // the entity converges to deltas. This keeps steady-state bandwidth flat regardless of mask fidelity.
+    ackTick(broadcaster, 0u, 40u, 1u, 0u);
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 41u);
+    CHECK(fullRecordCount(snapshotsFor(net, 0).back()) == 0u);
+    CHECK(deltaRecordCount(snapshotsFor(net, 0).back()) >= 1u);
+}
+
+TEST_CASE("WorldBroadcaster: a deferred entity acked-but-not-decoded stays full under selective-ack",
+          "[world_broadcaster][delta][budget][identity-ack]") {
     MockLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
@@ -5144,10 +5277,12 @@ TEST_CASE("WorldBroadcaster: a deferral restarts the full streak so an ack of th
     broadcaster.onTick(1.0 / 60.0, 2u);
     REQUIRE_FALSE(recordFor(snapshotsFor(net, 0).back(), *x).has_value());
 
-    // The client acks tick 2 (which did NOT contain X) — this models the client having dropped tick 1
-    // (X's full) and only received tick 2. A naive "delta if fullStreakTick <= ackedTick" would now
-    // mis-send X as an undecodable delta; the deferral guard pushed X's streak start past tick 2.
-    ackTick(broadcaster, 0u, 2u, 1u);
+    // The client acks tick 2 (which did NOT contain X) with a selective-ack mask reporting that tick 1
+    // (X's full, streak start age = 2 - 1 = 1 → bit 0) was NOT decoded — modelling the client dropping
+    // tick 1 and only receiving tick 2. A naive "delta if fullStreakTick <= ackedTick" high-water mark
+    // would mis-send X as an undecodable delta; selective-ack (#566) confirms the SPECIFIC streak-start
+    // tick, so X is correctly kept full (this is the case the removed #517 deferral guard used to cover).
+    ackTick(broadcaster, 0u, 2u, 1u, 0xFFFFFFFFu & ~(1u << 0));
 
     // Tick 3: X reappears and MUST be a full record (the client never learned it).
     clearSnapshots(net);
