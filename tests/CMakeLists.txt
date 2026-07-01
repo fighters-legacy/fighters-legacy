@@ -371,6 +371,10 @@ add_executable(test_snapshot_scheduler test_snapshot_scheduler.cpp)
 target_link_libraries(test_snapshot_scheduler PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_snapshot_scheduler)
 
+add_executable(test_ack_window test_ack_window.cpp)
+target_link_libraries(test_ack_window PRIVATE Catch2::Catch2WithMain engine-net)
+catch_discover_tests(test_ack_window)
+
 add_executable(test_congestion_controller test_congestion_controller.cpp)
 target_link_libraries(test_congestion_controller PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_congestion_controller)

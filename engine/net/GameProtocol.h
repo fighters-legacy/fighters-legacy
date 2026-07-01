@@ -160,7 +160,7 @@ struct MsgClientInput {
     float aileron{0.f};    // [-1.0, +1.0] right-roll positive
     float rudder{0.f};     // [-1.0, +1.0] right-yaw positive
     float viewAxis[3]{};   // normalized look direction (world space)
-    uint8_t reserved[4]{}; // pad to 48
+    uint32_t ackMask{0};   // @44 selective-ack bitmask (#566): bit b = decoded snapshot tick tickIndex-1-b
 }; // 48 bytes, align 8
 static_assert(sizeof(MsgClientInput) == 48u, "MsgClientInput wire size changed");
 static_assert(alignof(MsgClientInput) == 8u, "MsgClientInput alignment changed");
@@ -168,6 +168,7 @@ static_assert(offsetof(MsgClientInput, seqNum) == 4u, "MsgClientInput::seqNum of
 static_assert(offsetof(MsgClientInput, tickIndex) == 8u, "MsgClientInput::tickIndex offset changed");
 static_assert(offsetof(MsgClientInput, throttle) == 16u, "MsgClientInput::throttle offset changed");
 static_assert(offsetof(MsgClientInput, viewAxis) == 32u, "MsgClientInput::viewAxis offset changed");
+static_assert(offsetof(MsgClientInput, ackMask) == 44u, "MsgClientInput::ackMask offset changed");
 
 // Unreliable, server->client, broadcast every 10 sim ticks (~6 Hz at 60 Hz).
 // timeOfDayTenths: encode timeOfDay as uint16 (hours * 10) to keep it 2-aligned.
@@ -290,11 +291,13 @@ static_assert(offsetof(MsgConnectRefusal, reason) == 2u, "MsgConnectRefusal::rea
 // (tickIndex == 0 would produce a bogus server-side delay estimate).
 struct MsgHeartbeat {
     uint8_t msgId{static_cast<uint8_t>(MsgId::Heartbeat)};
-    uint8_t reserved[7]{}; // pad so tickIndex is 8-aligned
+    uint8_t reserved[3]{}; // pad so ackMask is 4-aligned
+    uint32_t ackMask{0};   // @4 selective-ack bitmask (#566); same semantic as MsgClientInput::ackMask
     uint64_t tickIndex{0}; // last received WorldSnapshot tickIndex (same semantic as MsgClientInput)
 }; // 16 bytes, align 8
 static_assert(sizeof(MsgHeartbeat) == 16u, "MsgHeartbeat wire size changed");
 static_assert(alignof(MsgHeartbeat) == 8u, "MsgHeartbeat alignment changed");
+static_assert(offsetof(MsgHeartbeat, ackMask) == 4u, "MsgHeartbeat::ackMask offset changed");
 static_assert(offsetof(MsgHeartbeat, tickIndex) == 8u, "MsgHeartbeat::tickIndex offset changed");
 
 // Unreliable, server->client unicast. Reply to MsgHeartbeat; delivers the server's current

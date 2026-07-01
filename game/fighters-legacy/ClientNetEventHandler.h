@@ -21,6 +21,8 @@ class GameConsole;
 class ILogger;
 class ServerNotice;
 struct RenderSnapshot;
+struct MsgClientInput;
+struct MsgHeartbeat;
 class INetwork;
 
 class EntityTypeRegistry;
@@ -98,6 +100,12 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // Call once per frame from FlightScreen::update().
     void sendHeartbeatIfNeeded();
 
+    // Stamp the snapshot ack (high-water tickIndex + selective-ack ackMask, #566) onto an outgoing
+    // client->server message from this handler's tracked state. This handler is the single ack
+    // authority — call before sending a MsgClientInput so tickIndex/ackMask stay consistent.
+    void stampAck(MsgClientInput& in) const noexcept;
+    void stampAck(MsgHeartbeat& hb) const noexcept;
+
     uint32_t lastRttMs() const noexcept {
         return m_lastRttMs;
     }
@@ -136,6 +144,9 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // Heartbeat / RTT state.
     const fl::IClock* m_clock{&fl::SystemClock::instance()};
     uint64_t m_lastSnapshotTick{0}; // highest processed WorldSnapshot tickIndex (also the server ack)
+    uint32_t m_ackMask{0};          // selective-ack bitmask of recently DECODED ticks below the high-water
+                                    // mark (#566); bit b = decoded tick m_lastSnapshotTick-1-b. Maintained
+                                    // via fl::ackAdvance on each accepted snapshot; sent via stampAck().
     bool m_haveSnapshot{false};     // false until the first WorldSnapshot is processed (so the
                                     // legitimate first snapshot at tickIndex 0 is not dropped as stale)
     uint32_t m_lastRttMs{0};        // ms from last MsgPeerDelay; 0 = not yet received

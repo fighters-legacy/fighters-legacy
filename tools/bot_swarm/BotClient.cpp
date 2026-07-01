@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "BotClient.h"
 #include "ENetNetworkFactory.h"
+#include <net/AckWindow.h>
 #include <net/GameProtocol.h>
 #include <net/WireCodec.h>
 
@@ -40,6 +41,7 @@ void BotClient::sendInputIfDue(double now) {
     in.buttons = ctl.buttons;
     in.seqNum = m_seq++;
     in.tickIndex = m_lastTick;
+    in.ackMask = m_ackMask; // selective-ack of decoded ticks (#566); loopback = no loss = all-1s
     in.throttle = ctl.throttle;
     in.elevator = ctl.elevator;
     in.aileron = ctl.aileron;
@@ -99,7 +101,14 @@ void BotClient::onReceive(uint32_t /*peerId*/, const void* data, std::size_t siz
     case MsgId::WorldSnapshot: {
         MsgWorldSnapshotHeader hdr;
         if (readMsg(data, size, hdr)) {
-            m_lastTick = hdr.tickIndex;
+            // Advance the selective-ack mask and monotonic high-water tick (#566), mirroring a real
+            // client. Loopback has no loss, so the mask fills to all-1s and the server converges to
+            // deltas immediately — keeping the scale-gate bandwidth baseline stable.
+            if (!m_haveTick || hdr.tickIndex > m_lastTick) {
+                m_ackMask = fl::ackAdvance(m_ackMask, m_lastTick, hdr.tickIndex, m_haveTick);
+                m_lastTick = hdr.tickIndex;
+                m_haveTick = true;
+            }
             m_metrics.snapshotBytes += size;
             ++m_metrics.snapshotCount;
             if (m_metrics.snapshotCount == 1) {

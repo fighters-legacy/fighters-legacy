@@ -117,31 +117,17 @@ TEST_CASE("FlightInputCollector seqNum increments across polls", "[flight_input]
 }
 
 // ---------------------------------------------------------------------------
-// tickIndex branch
+// Snapshot ack (tickIndex + ackMask) is NOT stamped here (#566)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("FlightInputCollector tickIndex is 0 when bridge has no snapshot", "[flight_input]") {
+TEST_CASE("FlightInputCollector leaves the snapshot ack unset", "[flight_input]") {
     MockLogger log;
     CommandRegistry reg;
     GameConsole console(log, reg);
     MockInput inp;
     CameraInput cam;
-    fl::SimRenderBridge bridge;
-    FlightInputCollector fic;
-    fl::ManualClock t;
-    fic.setClock(t);
-
-    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
-    REQUIRE(r.has_value());
-    CHECK(r->tickIndex == 0u);
-}
-
-TEST_CASE("FlightInputCollector tickIndex taken from bridge snapshot", "[flight_input]") {
-    MockLogger log;
-    CommandRegistry reg;
-    GameConsole console(log, reg);
-    MockInput inp;
-    CameraInput cam;
+    // A populated bridge must NOT be read for the ack: ClientNetEventHandler::stampAck() is now the
+    // single ack authority and fills tickIndex + ackMask at the send site (FlightScreen).
     fl::SimRenderBridge bridge;
     fl::RenderSnapshot snap;
     snap.tickIndex = 42u;
@@ -154,7 +140,8 @@ TEST_CASE("FlightInputCollector tickIndex taken from bridge snapshot", "[flight_
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
-    CHECK(r->tickIndex == 42u);
+    CHECK(r->tickIndex == 0u); // left default — stamped later by stampAck()
+    CHECK(r->ackMask == 0u);
 }
 
 // ---------------------------------------------------------------------------

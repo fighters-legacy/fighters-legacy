@@ -15,6 +15,7 @@ TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game
     CHECK(sizeof(fl::MsgEntityTypeDef) == 196u);      // 4 + 64 + 64 + 64
     CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 40u); // +bitstreamBytes +frameOrigin (quantized body)
     CHECK(sizeof(fl::MsgClientInput) == 48u);
+    CHECK(sizeof(fl::MsgHeartbeat) == 16u);
     CHECK(sizeof(fl::MsgAdminCommand) == 128u);
     CHECK(sizeof(fl::MsgAdminResponse) == 128u);
     CHECK(sizeof(fl::MsgAdminResponseChunk) == 512u);
@@ -35,6 +36,13 @@ TEST_CASE("GameProtocol: MsgWorldSnapshotHeader field offsets", "[game_protocol]
     CHECK(offsetof(fl::MsgWorldSnapshotHeader, bitstreamBytes) == 4u);
     CHECK(offsetof(fl::MsgWorldSnapshotHeader, tickIndex) == 8u);
     CHECK(offsetof(fl::MsgWorldSnapshotHeader, frameOrigin) == 16u);
+}
+
+TEST_CASE("GameProtocol: selective-ack fields (#566)", "[game_protocol]") {
+    // ackMask reuses the former trailing/reserved padding — no size change, must stay 4-aligned.
+    CHECK(offsetof(fl::MsgClientInput, ackMask) == 44u);
+    CHECK(offsetof(fl::MsgHeartbeat, ackMask) == 4u);
+    CHECK(offsetof(fl::MsgHeartbeat, tickIndex) == 8u);
 }
 
 TEST_CASE("GameProtocol: stays at protocol version 1 in primary development", "[game_protocol]") {

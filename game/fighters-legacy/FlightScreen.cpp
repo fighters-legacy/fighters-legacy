@@ -81,6 +81,10 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
 
     const ControlsSettings cs = d.userConfig->controls();
     if (auto msg = d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, input, d.joystick, cs)) {
+        // Stamp the snapshot ack (tickIndex + selective-ack mask, #566) from the net handler — the single
+        // ack authority — before prediction and send, so the outgoing input carries a consistent ack.
+        if (d.clientNetHandler)
+            d.clientNetHandler->stampAck(*msg);
         if (d.prediction && d.env)
             d.prediction->onInput(*msg, *d.env);
         d.clientNet->send(0, &*msg, sizeof(*msg), /*reliable=*/false);

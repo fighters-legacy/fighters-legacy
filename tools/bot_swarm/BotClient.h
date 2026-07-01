@@ -60,6 +60,8 @@ class BotClient : public INetworkEventHandler {
     double m_activeStart{0.0};  // when onConnect fired (pattern time origin)
     double m_lastInputAt{-1.0};
     uint64_t m_lastTick{0}; // last snapshot tickIndex (echoed in MsgClientInput)
+    uint32_t m_ackMask{0};  // selective-ack bitmask of decoded ticks below m_lastTick (#566)
+    bool m_haveTick{false}; // false until the first snapshot (seeds ackAdvance)
     uint32_t m_seq{0};
     bool m_versionOk{true};
 };
