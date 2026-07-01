@@ -7,17 +7,19 @@ over ENet UDP. All structs are defined in `engine/net/GameProtocol.h`.
 
 The wire protocol rides on a UDP transport behind the `platform/INetwork.h` HAL, so the message
 format is **transport-agnostic** (`kProtocolVersion` does not change with the transport). Two
-backends coexist behind a backend-selecting factory:
+backends coexist behind the `createNetwork(TransportKind)` factory (both landed, #507/#508/#509):
 
-- **`enet6`** (MIT) — the only backend in-tree today; the LAN / single-player / low-count option.
-- **GameNetworkingSockets** (BSD-3) — **selected** for the 128+ dedicated server (Epic L, #506),
-  adding transport encryption, mature congestion control, and connection-count headroom. Lands in
-  #507; see [transport-selection.md](transport-selection.md).
+- **`enet6`** (MIT) — the LAN / single-player / low-count option; also the load-test transport.
+- **GameNetworkingSockets** (BSD-3, v1.6.0) — the 128+ dedicated-server default (Epic L), adding
+  **transport encryption** (curve25519 + AES-GCM, on by default), mature congestion control, and
+  connection-count headroom. See [gns-backend.md](gns-backend.md).
 
-The two logical channels below map to the transport's reliable / unreliable ordered lanes
-(ENet channels today; GNS `Reliable`/`Unreliable` send flags after #507). **LAN discovery**
-(`MsgLanBeacon`, raw UDP broadcast / IPv6 multicast) and **RCON** (TCP) sit *outside* the game
-transport and are unaffected by the backend choice.
+`fl-server` selects the backend via `[network] transport = "gns"|"enet"` (default `gns`) or
+`--transport`; the game client uses GNS for internet multiplayer and enet6 for single-player. The two
+logical channels below map to the transport's reliable / unreliable ordered lanes (ENet channels /
+GNS `Reliable`/`Unreliable` send flags). **LAN discovery** (`MsgLanBeacon`, raw UDP broadcast / IPv6
+multicast) and **RCON** (TCP) sit *outside* the game transport (both plaintext) and are unaffected by
+the backend choice.
 
 ## Channels
 

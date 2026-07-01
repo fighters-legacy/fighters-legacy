@@ -143,6 +143,25 @@ if(TARGET platform-enet)
         "${CMAKE_SOURCE_DIR}/platform/net"
     )
     catch_discover_tests(test_network)
+endif()
+
+# Backend-selecting factory (enet path always available via the facade).
+if(TARGET platform-net)
+    add_executable(test_network_factory test_network_factory.cpp)
+    target_link_libraries(test_network_factory PRIVATE Catch2::Catch2WithMain platform-net)
+    target_include_directories(test_network_factory PRIVATE "${CMAKE_SOURCE_DIR}/platform/net")
+    catch_discover_tests(test_network_factory)
+endif()
+
+# GameNetworkingSockets backend — only when FL_ENABLE_GNS built it.
+if(TARGET platform-gns)
+    add_executable(test_gns_network test_gns_network.cpp)
+    target_link_libraries(test_gns_network PRIVATE Catch2::Catch2WithMain platform-gns)
+    target_include_directories(test_gns_network PRIVATE "${CMAKE_SOURCE_DIR}/platform/net")
+    catch_discover_tests(test_gns_network)
+endif()
+
+if(TARGET platform-enet)
 
     add_executable(test_server_config test_server_config.cpp)
     target_link_libraries(test_server_config PRIVATE Catch2::Catch2WithMain fl-server-config)

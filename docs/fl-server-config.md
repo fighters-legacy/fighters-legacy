@@ -114,6 +114,10 @@ agl_offset = 500.0  # metres AGL above terrain for all spawn points
 # [[spawn.points]]
 # x = 0.0
 # z = 0.0
+
+[network]
+transport      = "gns"   # "gns" (GameNetworkingSockets, default) or "enet" (enet6)
+allow_insecure = true     # GNS only: accept unauthenticated peers (no Steam PKI)
 ```
 
 ---
@@ -629,6 +633,38 @@ servers where LAN presence is undesirable (e.g. tournament setups, cloud deploym
 
 How often to broadcast the beacon, in milliseconds. Out-of-range values are ignored and the
 default is kept (a warning is logged).
+
+---
+
+## [network] — Transport backend
+
+Selects the network transport. See [transport-selection.md](transport-selection.md) and
+[gns-backend.md](gns-backend.md).
+
+### `transport`
+
+- **Type:** string — `"gns"` or `"enet"`
+- **Default:** `"gns"`
+- **Restart required.**
+
+`"gns"` = **GameNetworkingSockets**: encrypted UDP (curve25519 + AES-GCM), mature congestion
+control, 128+ connection headroom — the recommended default for dedicated servers. `"enet"` =
+**enet6**: lighter, for LAN / single-player / low-count servers. An unrecognised value logs a warning
+and keeps the default. Overridable with the `--transport <gns|enet>` CLI flag (highest precedence).
+
+> The server must be **built with `-DFL_ENABLE_GNS=ON`** (the default) to use `"gns"`; an enet6-only
+> build falls back to enet6 with a warning. `net_check` / `bot_swarm` speak enet6 only, so a server
+> under load test must run `transport = "enet"` (the load-test runners pass `--transport enet`).
+
+### `allow_insecure`
+
+- **Type:** bool
+- **Default:** `true`
+- **GNS only** (ignored by the enet backend). **Restart required.**
+
+Accept unauthenticated peers. Standalone GNS has no Steam PKI, so connections are **encrypted but
+unauthenticated** (opportunistic, like TLS-without-cert). Maps to GNS `AllowWithoutAuth`. Identity /
+account authentication (Epic C) rides an in-band wire message on top of the encrypted channel.
 
 ---
 

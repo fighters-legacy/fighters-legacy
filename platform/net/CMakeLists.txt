@@ -24,3 +24,41 @@ if(WIN32)
 endif()
 # enet6 target may not propagate its include path; be explicit.
 target_include_directories(platform-enet PRIVATE "${enet6_SOURCE_DIR}/include")
+
+# ---------------------------------------------------------------------------
+# GameNetworkingSockets backend — implements INetwork (#507). Gated on FL_ENABLE_GNS.
+# Uses system protobuf + OpenSSL (probed in cmake/dependencies.cmake); GNS runs its own
+# find_package(Protobuf). Kept in its own static lib so the heavy protobuf/GNS chain stays
+# out of the enet6-only build (net_check / bot_swarm / lean CI legs).
+# ---------------------------------------------------------------------------
+if(FL_ENABLE_GNS)
+    set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
+    FetchContent_MakeAvailable(GameNetworkingSockets)
+    unset(CMAKE_COMPILE_WARNING_AS_ERROR)
+
+    add_library(platform-gns STATIC GnsNetwork.cpp GnsNetworkFactory.cpp)
+    target_compile_definitions(platform-gns PRIVATE FL_ENABLE_GNS)
+    target_link_libraries(platform-gns
+        PUBLIC  platform-hal
+        PRIVATE GameNetworkingSockets::static OpenSSL::SSL OpenSSL::Crypto
+    )
+    # GNS/protobuf headers are third-party; keep them off our -Werror path.
+    target_include_directories(platform-gns SYSTEM PRIVATE
+        "${gamenetworkingsockets_SOURCE_DIR}/include")
+    if(WIN32)
+        # GNS on Windows needs the socket + crypto system libs.
+        target_link_libraries(platform-gns PRIVATE ws2_32 crypt32 iphlpapi winmm)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# platform-net — backend-selecting facade. Consumers (game, fl-server) link THIS and
+# call createNetwork(TransportKind); they never see a concrete backend header. Links
+# enet6 always, GNS conditionally.
+# ---------------------------------------------------------------------------
+add_library(platform-net STATIC NetworkFactory.cpp)
+target_link_libraries(platform-net PUBLIC platform-hal PRIVATE platform-enet)
+if(FL_ENABLE_GNS)
+    target_compile_definitions(platform-net PRIVATE FL_ENABLE_GNS)
+    target_link_libraries(platform-net PRIVATE platform-gns)
+endif()

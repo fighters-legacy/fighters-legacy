@@ -15,9 +15,8 @@
 //
 // See docs/fl-server-config.md for the full operator configuration reference.
 // fl-lobby integration is tracked in issue #36.
-#include "ENetNetwork.h"
-#include "ENetNetworkFactory.h"
 #include "IpListFile.h"
+#include "NetworkFactory.h"
 #include "RconServer.h"
 #include "ServerCommands.h"
 #include "StdoutLogger.h"
@@ -131,6 +130,7 @@ int main(int argc, char** argv) {
     bool flagPersistent = false;
     std::string flagBind;        // non-empty if --bind addr was given
     std::string flagAdminToken;  // non-empty if --admin-token was given (internal single-player use)
+    std::string flagTransport;   // non-empty if --transport <gns|enet> was given (overrides [network])
     std::string flagMetricsJson; // non-empty if --metrics-json path was given (overrides [metrics])
     long flagSimWorkers = -1;    // >=0 if --sim-worker-threads was given (overrides [world])
 
@@ -167,13 +167,15 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {
-            std::printf("fl-server %s (%s)\n", "0.0.1", enetLibraryVersion());
+            std::printf("fl-server %s (%s)\n", "0.0.1", networkBackendVersion(TransportKind::Gns));
             return 0;
         }
         if (std::strcmp(argv[i], "--persistent") == 0)
             flagPersistent = true;
         if (std::strcmp(argv[i], "--bind") == 0 && i + 1 < argc)
             flagBind = argv[++i];
+        if (std::strcmp(argv[i], "--transport") == 0 && i + 1 < argc)
+            flagTransport = argv[++i];
         if (std::strcmp(argv[i], "--admin-token") == 0 && i + 1 < argc)
             flagAdminToken = argv[++i];
         if (std::strcmp(argv[i], "--metrics-json") == 0 && i + 1 < argc)
@@ -187,18 +189,13 @@ int main(int argc, char** argv) {
     }
 
     // ---- Set up platform ----
+    // The network backend is created later (createNetwork), once [network].transport is known.
     Platform p;
     p.logger = std::make_unique<StdoutLogger>();
-    p.network = createENetNetwork();
 
     ILogger* log = p.logger.get();
-    INetwork* net = p.network.get();
 
-    {
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "fl-server %s (%s) starting", "0.0.1", enetLibraryVersion());
-        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
-    }
+    log->log(LogLevel::Info, __FILE__, __LINE__, "fl-server 0.0.1 starting");
 
     // ---- Tier 1: server.toml ----
     const char* configEnv = std::getenv("FL_CONFIG");
@@ -224,6 +221,21 @@ int main(int argc, char** argv) {
     // --sim-worker-threads overrides the [world] sim_worker_threads from server.toml.
     if (flagSimWorkers >= 0)
         cfg.simWorkerThreads = static_cast<uint32_t>(flagSimWorkers);
+
+    // ---- Select + create the transport backend (now that [network].transport is known) ----
+    // --transport <gns|enet> from the pre-pass overrides the config. Single-player LocalServer passes
+    // --transport enet so the enet6 game client and this server match.
+    if (!flagTransport.empty())
+        cfg.network.transport = flagTransport;
+    const TransportKind transportKind = parseTransportKind(cfg.network.transport, TransportKind::Gns);
+    p.network = createNetwork(transportKind, log);
+    INetwork* net = p.network.get();
+    net->setAllowInsecure(cfg.network.allowInsecure);
+    {
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "transport: %s", networkBackendVersion(transportKind));
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
 
     // ---- Phase 2 stub logs ----
     if (cfg.persistent)
@@ -266,14 +278,14 @@ int main(int argc, char** argv) {
                   cfg.bindAddress.c_str(), cfg.port, cfg.maxPeers, cfg.name.c_str());
 
     if (cfg.incomingBandwidthBps || cfg.outgoingBandwidthBps) {
-        static_cast<ENetNetwork*>(net)->setBandwidthLimit(cfg.incomingBandwidthBps, cfg.outgoingBandwidthBps);
+        net->setBandwidthLimit(cfg.incomingBandwidthBps, cfg.outgoingBandwidthBps);
         char buf[96];
         std::snprintf(buf, sizeof(buf), "bandwidth cap: in=%u B/s out=%u B/s", cfg.incomingBandwidthBps,
                       cfg.outgoingBandwidthBps);
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
 
-    static_cast<ENetNetwork*>(net)->setPreHandshakeRateLimit(cfg.preHandshakeRateLimitCount, cfg.preHandshakeWindowMs);
+    net->setPreHandshakeRateLimit(cfg.preHandshakeRateLimitCount, cfg.preHandshakeWindowMs);
 
     // ---- LAN discovery beacon ----
     uint8_t discoveryGameModeFlags = 0;

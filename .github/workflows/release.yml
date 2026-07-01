@@ -13,15 +13,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # GNS is Linux-only for now (Windows: no runner protobuf; macOS: Homebrew protobuf 35 is the
+          # abseil-based 5.x line GNS v1.6.0 does not build against). Both ship enet6-only.
           - os: windows-latest
             preset: release-msvc
             artifact: fighters-legacy-windows
+            gns_flag: '-DFL_ENABLE_GNS=OFF'
           - os: ubuntu-latest
             preset: release
             artifact: fighters-legacy-linux
+            gns_flag: ''
           - os: macos-latest
             preset: release
             artifact: fighters-legacy-macos
+            gns_flag: '-DFL_ENABLE_GNS=OFF'
 
     steps:
       - uses: actions/checkout@v7
@@ -36,6 +41,7 @@ jobs:
           gcc: 'true'
           clang: 'true'
           vulkan: 'true'
+          gns: 'true'
 
       - name: Install Vulkan SDK (Windows)
         if: matrix.os == 'windows-latest'
@@ -62,7 +68,7 @@ jobs:
           arch: x64
 
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        run: cmake --preset ${{ matrix.preset }} ${{ matrix.gns_flag }}
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}

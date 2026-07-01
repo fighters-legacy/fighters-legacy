@@ -42,13 +42,14 @@ class ENetNetwork : public INetwork {
     PeerLinkStats getPeerLinkStats(uint32_t peerId) const override;
 
     // Set aggregate host bandwidth caps (bytes/s). Call once after bind().
-    // 0 = unlimited (ENet default). Not part of INetwork — server-only, called at startup.
-    void setBandwidthLimit(uint32_t incomingBps, uint32_t outgoingBps);
+    // 0 = unlimited (ENet default). INetwork server-only tuning hook.
+    void setBandwidthLimit(uint32_t incomingBps, uint32_t outgoingBps) override;
 
     // Pre-handshake rate limiting — drop CONNECT packets from IPs that exceed
     // maxAttempts within windowMs milliseconds before ENet peer state is allocated.
-    // maxAttempts = 0 disables the filter. Not part of INetwork — server-only.
-    void setPreHandshakeRateLimit(int maxAttempts, int windowMs);
+    // maxAttempts = 0 disables the filter. INetwork server-only tuning hook.
+    void setPreHandshakeRateLimit(int maxAttempts, int windowMs) override;
+    // Clock injection for the pre-handshake filter (tests only) — ENet-concrete, not on INetwork.
     void setPreHandshakeClock(const fl::IClock& clock);
 
     // Called from the ENet intercept callback (ENetNetwork.cpp anonymous namespace).

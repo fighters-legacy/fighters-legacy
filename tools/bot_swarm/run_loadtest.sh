@@ -106,7 +106,9 @@ fi
 
 echo "=== bot_swarm load test: $CLIENTS clients, pattern=$PATTERN, ${DURATION}s, port $PORT" \
      "(test_spawn_ai=$TEST_SPAWN_AI sim_workers=${FL_SIM_WORKER_THREADS:-default}) ==="
-FL_CONFIG="$CONFIG" "$FLSERVER" "$PORT" "$MAX_PEERS" --bind 127.0.0.1 \
+# --transport enet: bot_swarm is the enet6 regression instrument (#507/#519); the server under test
+# must speak enet6 to accept it, regardless of the [network].transport default.
+FL_CONFIG="$CONFIG" "$FLSERVER" "$PORT" "$MAX_PEERS" --bind 127.0.0.1 --transport enet \
     ${SIM_WORKER_ARGS[@]+"${SIM_WORKER_ARGS[@]}"} &
 SERVER_PID=$!
 

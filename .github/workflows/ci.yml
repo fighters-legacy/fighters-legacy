@@ -41,12 +41,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # GNS is Linux-only in CI for now. Windows has no system protobuf on the runner; macOS
+          # Homebrew ships protobuf 35 (abseil-based 5.x) which GNS v1.6.0 does not build against.
+          # Both are enet6-only pending per-platform protobuf sourcing (vcpkg / a pinned formula).
           - os: windows-latest
             preset: debug-msvc
+            gns_flag: '-DFL_ENABLE_GNS=OFF'
           - os: ubuntu-latest
             preset: debug
+            gns_flag: ''
           - os: macos-latest
             preset: debug
+            gns_flag: '-DFL_ENABLE_GNS=OFF'
 
     steps:
       - uses: actions/checkout@v7
@@ -61,6 +67,7 @@ jobs:
           vulkan: 'true'
           gcc: 'true'
           python_tools: 'true'
+          gns: 'true'
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -87,7 +94,7 @@ jobs:
           arch: x64
 
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        run: cmake --preset ${{ matrix.preset }} ${{ matrix.gns_flag }}
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
@@ -125,7 +132,9 @@ jobs:
           ./build/debug/tools/validate-licenses --version
           ./build/debug/tools/validate-playlist --version
           ./build/debug/tools/terrain-chunk-io --version
-          ./build/debug/server/fl-server/fl-server 7002 1 &
+          # --transport enet: net_check is an enet6 client, so the smoke server must speak enet6
+          # (fl-server defaults to GNS when built with FL_ENABLE_GNS).
+          ./build/debug/server/fl-server/fl-server 7002 1 --transport enet &
           FL_SERVER_PID=$!
           # Wait up to 10 s for the server to finish startup (primeSpawnHeight can block up to
           # 5 s on first run with no cached terrain chunks, e.g. in CI without content packs).
@@ -153,6 +162,8 @@ jobs:
       - name: Verify static linking (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
+          # Guards our bundled libs (statically linked). GNS's libssl/libcrypto/libprotobuf are
+          # intentionally dynamic system deps (like libc) and are not in the reject set.
           bad=$(ldd build/debug/game/fighters-legacy/fighters-legacy \
                 | grep -Ei "sdl3|openal|ktx" || true)
           [ -z "$bad" ] || (echo "Unexpected dynamic deps: $bad" && exit 1)

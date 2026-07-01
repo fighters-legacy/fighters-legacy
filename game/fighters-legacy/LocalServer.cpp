@@ -84,8 +84,11 @@ LocalServer::StartResult LocalServer::start(const char* bindAddr, uint16_t port)
 
     // --sim-worker-threads 1: single-player has one entity, so run the sim tick serially rather
     // than spawning an idle worker pool inside the embedded server.
+    // --transport enet: the embedded single-player server uses enet6 to match the enet6 game client
+    // (Game.cpp), keeping the heavy GNS/protobuf handshake out of the loopback single-player path.
     std::vector<std::string> args{
-        portStr, maxPeersStr, "--bind", bindAddr, "--admin-token", m_impl->sessionToken, "--sim-worker-threads", "1"};
+        portStr, maxPeersStr,   "--bind", bindAddr, "--admin-token", m_impl->sessionToken, "--sim-worker-threads",
+        "1",     "--transport", "enet"};
 
     // Spawn into a unique_ptr<Subprocess> to avoid Subprocess::Impl completion
     // requirements in LocalServer.cpp (pimpl isolation via pointer indirection).

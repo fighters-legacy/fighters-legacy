@@ -81,6 +81,56 @@ FetchContent_Declare(enet6
 )
 
 # ---------------------------------------------------------------------------
+# GameNetworkingSockets (#507) — the 128+ transport behind INetwork.
+# Declared here (gated on FL_ENABLE_GNS); platform/net links OpenSSL + protobuf and calls
+# FetchContent_MakeAvailable(GameNetworkingSockets).
+#
+# Crypto = OpenSSL (GNS rejects libsodium AES on ARM / Apple Silicon, see docs/transport-selection.md).
+# protobuf = SYSTEM. find_package(Protobuf) here both gates GNS on availability AND seeds the module
+# cache vars that GNS's own find_package(Protobuf) reuses. If OpenSSL or system protobuf is absent,
+# FL_ENABLE_GNS is force-disabled and the build stays enet6-only — so CI legs that don't install the
+# deps configure fine. GNS is Linux-only in CI for now (Windows: no runner protobuf; macOS: Homebrew
+# protobuf 35 is the abseil-based 5.x line GNS v1.6.0 doesn't build against — both set FL_ENABLE_GNS
+# OFF, so the mixed module/config double-find that clashes on newer protobuf never triggers).
+# No WebRTC/ICE (dedicated-server) ⇒ no abseil.
+# ---------------------------------------------------------------------------
+if(FL_ENABLE_GNS)
+    find_package(OpenSSL 1.1.1 QUIET) # 1.1.1+ for GNS's EVP_PKEY 25519 raw-key API
+    find_package(Protobuf QUIET)      # module mode; seeds Protobuf_* cache for GNS's find_package
+    if(OpenSSL_FOUND AND Protobuf_FOUND)
+        message(STATUS "GameNetworkingSockets: enabled (OpenSSL ${OPENSSL_VERSION}, "
+                       "system protobuf ${Protobuf_VERSION})")
+    else()
+        message(WARNING "FL_ENABLE_GNS=ON but OpenSSL>=1.1.1 + system protobuf were not both found — "
+                        "building enet6-only. Install libssl-dev + libprotobuf-dev + protobuf-compiler "
+                        "(Linux) to enable GNS.")
+        set(FL_ENABLE_GNS OFF CACHE BOOL "" FORCE)
+    endif()
+endif()
+
+if(FL_ENABLE_GNS)
+    # -- GameNetworkingSockets v1.6.0: static only, no P2P/ICE/tests, OpenSSL crypto --
+    set(BUILD_STATIC_LIB    ON  CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIB    OFF CACHE BOOL "" FORCE)
+    set(BUILD_EXAMPLES      OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTS         OFF CACHE BOOL "" FORCE)
+    set(BUILD_TOOLS         OFF CACHE BOOL "" FORCE)
+    set(ENABLE_ICE          OFF CACHE BOOL "" FORCE) # dedicated-server: no NAT-punch P2P
+    set(USE_STEAMWEBRTC     OFF CACHE BOOL "" FORCE) # ⇒ no webrtc/abseil submodules
+    set(USE_CRYPTO          "OpenSSL" CACHE STRING "" FORCE)
+    set(USE_CRYPTO25519     "OpenSSL" CACHE STRING "" FORCE)
+    set(Protobuf_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(GameNetworkingSockets
+        GIT_REPOSITORY https://github.com/ValveSoftware/GameNetworkingSockets.git
+        GIT_TAG        v1.6.0
+        GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
+        GIT_SUBMODULES "" # ICE/WebRTC off ⇒ skip abseil/webrtc/vjson submodules (webrtc is huge)
+        SYSTEM
+    )
+endif()
+
+# ---------------------------------------------------------------------------
 # Catch2 — system preferred, FetchContent fallback; always needed for tests
 # ---------------------------------------------------------------------------
 find_package(Catch2 3.15.0 QUIET)

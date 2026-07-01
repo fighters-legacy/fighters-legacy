@@ -97,6 +97,23 @@ class INetwork {
     // for congestion control (#518). All-zero when peerId is out of range, the peer is not connected,
     // or the backend does not track link quality (mocks). Superset of getPeerRtt server-side.
     virtual PeerLinkStats getPeerLinkStats(uint32_t peerId) const = 0;
+
+    // --- Server-only tuning (optional; default no-op) ---
+    // Set once at startup by fl-server through the INetwork handle, so a backend-selecting factory
+    // need not down-cast to a concrete type. Backends that do not model the knob no-op it.
+
+    // Aggregate host bandwidth caps in bytes/s (0 = unlimited). ENet maps to enet_host_bandwidth_limit;
+    // GNS maps to per-connection send-rate config. Call once after bind().
+    virtual void setBandwidthLimit(uint32_t /*incomingBps*/, uint32_t /*outgoingBps*/) {}
+
+    // Pre-handshake connection-flood filter: drop CONNECT attempts from an IP exceeding maxAttempts
+    // within windowMs before per-peer state is allocated (maxAttempts = 0 disables). ENet implements
+    // it via the intercept callback; other backends may no-op if the transport drops floods itself.
+    virtual void setPreHandshakeRateLimit(int /*maxAttempts*/, int /*windowMs*/) {}
+
+    // Accept unauthenticated peers. Meaningful for encrypted transports without a PKI (GNS →
+    // AllowWithoutAuth); backends without a peer-auth concept (ENet) no-op it. Call before bind().
+    virtual void setAllowInsecure(bool /*allow*/) {}
 };
 
 } // namespace fl

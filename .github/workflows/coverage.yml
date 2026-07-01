@@ -22,6 +22,7 @@ jobs:
         with:
           vulkan: 'true'
           lcov: 'true'
+          gns: 'true' # instrument GnsNetwork / NetworkFactory (coverage builds GNS on)
 
       - name: Install gcovr
         run: pip install gcovr

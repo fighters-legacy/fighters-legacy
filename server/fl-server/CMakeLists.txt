@@ -8,8 +8,10 @@ target_link_libraries(fl-server-config PUBLIC platform-hal tomlplusplus::tomlplu
 target_include_directories(fl-server-config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_executable(fl-server main.cpp ServerCommands.cpp IpListFile.cpp RconServer.cpp)
+# platform-net is the backend-selecting facade (enet6 always, GNS when FL_ENABLE_GNS); fl-server
+# picks the transport at runtime via createNetwork(cfg.network.transport).
 target_link_libraries(fl-server PRIVATE
-    fl-server-config platform-enet engine-net engine-entity engine-loop engine-weather engine-console
+    fl-server-config platform-net engine-net engine-entity engine-loop engine-weather engine-console
     engine-config engine-render engine-content engine-flight engine-ai engine-script platform-sdl3)
 target_include_directories(fl-server PRIVATE
     "${CMAKE_SOURCE_DIR}/platform/net"

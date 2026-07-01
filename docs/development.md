@@ -7,7 +7,8 @@
 ```bash
 sudo dnf install cmake ninja-build gcc g++ clang clang-tools-extra \
   vulkan-devel SDL3-devel openal-soft-devel lcov \
-  libasan libubsan glslang vulkan-validation-layers lua-devel
+  libasan libubsan glslang vulkan-validation-layers lua-devel \
+  openssl-devel protobuf-devel protobuf-compiler
 ```
 
 `libasan` and `libubsan` are required for the `asan` build preset (`-fsanitize=address,undefined`). They are separate packages from `gcc` on Fedora.
@@ -28,7 +29,7 @@ For Bluetooth gamepad support (Xbox controllers), see [docs/linux-gamepad.md](li
 sudo apt-get update
 sudo apt-get install -y cmake ninja-build gcc g++ clang clang-format \
   libvulkan-dev libsdl3-dev libopenal-dev lcov glslang-tools \
-  vulkan-validationlayers
+  vulkan-validationlayers libssl-dev libprotobuf-dev protobuf-compiler
 ```
 
 `glslang-tools` provides `glslangValidator` for Vulkan shader compilation. `vulkan-validationlayers` provides `VK_LAYER_KHRONOS_validation` for debug builds.
@@ -36,6 +37,8 @@ sudo apt-get install -y cmake ninja-build gcc g++ clang clang-format \
 > **Note:** `libsdl3-dev` and `libopenal-dev` are optional. CMake automatically fetches and statically compiles both when they are absent — this is what CI and release builds do. Installing them speeds up local dev builds but means your dev binary will dynamically link those libraries, unlike the self-contained CI and release artifacts.
 >
 > **Note (Lua):** `liblua5.5-dev` is not yet available in Ubuntu apt. Lua 5.5 is always built from source via FetchContent on Linux — no extra install needed.
+>
+> **Note (GameNetworkingSockets):** `libssl-dev` + `libprotobuf-dev` + `protobuf-compiler` are the deps for the GNS transport backend (`FL_ENABLE_GNS=ON`, the default). GNS itself is built from source (FetchContent, static). protobuf is **system-preferred** (find_package); OpenSSL is the crypto backend. Build `-DFL_ENABLE_GNS=OFF` for a lean enet6-only build without these. See [gns-backend.md](gns-backend.md).
 
 ### Windows (MSVC 2026)
 
@@ -93,6 +96,20 @@ See [Testing → Code coverage](#code-coverage) for the full local workflow.
 **gh (GitHub CLI)** — used by `scripts/roadmap-status.sh` and `scripts/prune_merged_branches.py`. Both scripts degrade gracefully without it, but `prune_merged_branches.py` will miss squash-merged and rebase-merged branches if `gh` is not authenticated. Install from [cli.github.com](https://cli.github.com) and authenticate with `gh auth login`.
 
 Copyright is declared centrally in `REUSE.toml` rather than in each file. All `.h` and `.cpp` files are covered by a glob annotation there — new source files do not need an in-file `SPDX-FileCopyrightText` line. The `// SPDX-License-Identifier: GPL-3.0-or-later` line in each source file is still required (see `CLAUDE.md`).
+
+### Third-party dependencies & licenses
+
+Dependencies are pulled via FetchContent or system packages (they are **not** vendored in-tree, so REUSE does not scan them), but a distributed **binary** must reproduce their notices. All are GPL-3-compatible:
+
+| Dependency | License | Notes |
+|---|---|---|
+| GameNetworkingSockets | BSD-3-Clause | GNS transport (`FL_ENABLE_GNS`) |
+| Protobuf | BSD-3-Clause | GNS dependency (system-preferred) |
+| OpenSSL | Apache-2.0 | GNS crypto backend |
+| enet6 | MIT | enet6 transport |
+| SDL3 / OpenAL Soft / GLM / KTX / Lua / tomlplusplus / Catch2 | zlib / LGPL-2.1 / MIT / Apache-2.0 / MIT / MIT / BSL-1.0 | see `cmake/dependencies.cmake` |
+
+> Release packaging (`release.yml`) is responsible for bundling the BSD-3-Clause / Apache-2.0 / MIT notice texts alongside the shipped binaries (the GPL source-offer covers the rest). Tracked as a release-hardening follow-up.
 
 ### Go toolchain (cluster + live-services repos)
 
@@ -287,7 +304,7 @@ fighters-legacy/
 │   ├── sdl3/           # SDL3 windowing and input backend
 │   ├── vulkan/         # Vulkan renderer backend
 │   ├── openal/         # OpenAL Soft audio backend
-│   └── net/            # ENet networking backend
+│   └── net/            # INetwork backends: enet6, GameNetworkingSockets, createNetwork() facade
 ├── game/               # Game binaries
 │   └── fighters-legacy/  # fighters-legacy game client (Phase 1 stub)
 ├── server/             # Dedicated server binary

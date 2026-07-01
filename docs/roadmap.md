@@ -37,7 +37,7 @@ by dependency, not by phase boundary:
 | A | Server simulation scalability (data-parallel job system, tick budget) | 3→4 |
 | B | Network bandwidth & snapshot scaling (quantization ✓ #515, 3D interest ✓ #402, priority/budget ✓ #516, acked baselines ✓ #517, selective-ack precision ✓ #566, congestion ✓ #518) | 3→4 |
 | I | Load-testing / bot-swarm harness + 128-client scale gate | 3→4 |
-| L | Network transport replacement (enet6 → **GameNetworkingSockets** behind `INetwork`; selected [#506](https://github.com/fighters-legacy/fighters-legacy/issues/506), enet6 retained as LAN/low-count backend) | 3→4 (transport optimization) |
+| L | Network transport replacement — **GameNetworkingSockets landed behind `INetwork`** ([#507](https://github.com/fighters-legacy/fighters-legacy/issues/507)/#508/#509; selected [#506](https://github.com/fighters-legacy/fighters-legacy/issues/506)), enet6 retained as the LAN/low-count backend via `createNetwork()`. Remaining: GNS-native 128-client scale validation + enet6-retirement decision. | 3→4 (transport optimization) |
 | E | Multiplayer gameplay framework (game modes, teams, scoring, reconnect, spectator) | 4 |
 | F | Combat sensors, datalink & EW (radar modes, IFF, shared track picture) | 4 |
 | J | Voice comms (positional + team; moved earlier from Phase 7) | 4/6 |

@@ -31,7 +31,9 @@ jobs:
           key: cmake-deps-ubuntu-latest-${{ hashFiles('cmake/dependencies.cmake') }}
 
       - name: Configure
-        run: cmake --preset tsan
+        # GNS off: the TSan scope (test_job_system + test_world_broadcaster) links INetwork via mocks,
+        # not platform-net; GNS spins its own threads and is excluded from the SDL/ENet-free scoping.
+        run: cmake --preset tsan -DFL_ENABLE_GNS=OFF
         env:
           CC: clang
           CXX: clang++

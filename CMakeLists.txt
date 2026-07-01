@@ -22,6 +22,11 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# GameNetworkingSockets transport backend (#507). ON pulls protobuf (FetchContent) + OpenSSL
+# (system) into the game/fl-server build. OFF yields an enet6-only build for lean tool/CI configs.
+# Auto-disabled in dependencies.cmake if OpenSSL is not found.
+option(FL_ENABLE_GNS "Build the GameNetworkingSockets transport backend (protobuf + OpenSSL)" ON)
+
 include(cmake/dependencies.cmake)
 
 enable_testing()
