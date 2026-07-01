@@ -23,7 +23,7 @@ Runtime libraries the engine is built on.
 | tinygltf | glTF 2.0 mesh parsing in the Vulkan renderer and validate-mesh tool | [syoyo/tinygltf](https://github.com/syoyo/tinygltf) · [glTF spec](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html) |
 | SDL3 | Windowing, input, Vulkan surface creation (`platform/sdl3/`) | [SDL3 wiki](https://wiki.libsdl.org/SDL3/FrontPage) |
 | OpenAL Soft | 3D positional audio (`platform/openal/`) | [openal-soft.org](https://openal-soft.org) |
-| ENet / enet6 | Reliable UDP networking today (`platform/net/`); under replacement for 128+ (Epic L) | [enet.bespin.org](http://enet.bespin.org) · [SirLynix/enet6](https://github.com/SirLynix/enet6) |
+| ENet / enet6 | Reliable UDP networking (`platform/net/`); retained as the LAN/single-player/low-count backend after Epic L (#506) selected GameNetworkingSockets for 128+ | [enet.bespin.org](http://enet.bespin.org) · [SirLynix/enet6](https://github.com/SirLynix/enet6) |
 
 ---
 
@@ -70,8 +70,8 @@ notes whether each is in use today or planned under an epic. All are GPL-3.0-com
 
 | Technology | Role in this project | License | Documentation |
 |---|---|---|---|
-| GameNetworkingSockets | Candidate transport replacement for 128+ peers (Epic L) — reliable+unreliable UDP, congestion control, built-in encryption | BSD-3 | [ValveSoftware/GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets) |
-| libsodium | Preferred crypto backend for the new transport (lighter cross-platform build than OpenSSL) | ISC | [doc.libsodium.org](https://doc.libsodium.org) |
+| GameNetworkingSockets | **Selected** transport for 128+ peers (Epic L, #506) — reliable+unreliable UDP, congestion control, built-in encryption; behind `INetwork`, `enet6` retained as fallback | BSD-3 | [ValveSoftware/GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets) |
+| libsodium | Selected crypto backend for the new transport (lighter cross-platform build than OpenSSL) | ISC | [doc.libsodium.org](https://doc.libsodium.org) |
 | Opus | Voice-chat codec (Epic J) | BSD-3 | [opus-codec.org](https://opus-codec.org) |
 | OIDC / OAuth 2.0 | Federated identity option for self-hosted communities (`OidcIdentityProvider`, Epic C) | — | [OpenID Connect](https://openid.net/developers/how-connect-works/) |
 | SQLite / PostgreSQL | Persistence backends (`IPersistence`, Epic H) — SQLite single-server, Postgres for clusters | Public domain / PostgreSQL | [sqlite.org](https://sqlite.org) · [postgresql.org/docs](https://www.postgresql.org/docs/) |

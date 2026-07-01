@@ -3,6 +3,22 @@
 This document describes the binary message format used between `fl-server` and game clients
 over ENet UDP. All structs are defined in `engine/net/GameProtocol.h`.
 
+## Transport
+
+The wire protocol rides on a UDP transport behind the `platform/INetwork.h` HAL, so the message
+format is **transport-agnostic** (`kProtocolVersion` does not change with the transport). Two
+backends coexist behind a backend-selecting factory:
+
+- **`enet6`** (MIT) — the only backend in-tree today; the LAN / single-player / low-count option.
+- **GameNetworkingSockets** (BSD-3) — **selected** for the 128+ dedicated server (Epic L, #506),
+  adding transport encryption, mature congestion control, and connection-count headroom. Lands in
+  #507; see [transport-selection.md](transport-selection.md).
+
+The two logical channels below map to the transport's reliable / unreliable ordered lanes
+(ENet channels today; GNS `Reliable`/`Unreliable` send flags after #507). **LAN discovery**
+(`MsgLanBeacon`, raw UDP broadcast / IPv6 multicast) and **RCON** (TCP) sit *outside* the game
+transport and are unaffected by the backend choice.
+
 ## Channels
 
 | Channel | Constant | Delivery | Use |
@@ -676,10 +692,12 @@ this section are measured empirically by the `bot_swarm` load generator — see
   congestion_enabled` / `congestion_min_send_hz` / `congestion_loss_threshold` /
   `congestion_budget_floor_bytes` (all hot-reloadable via `reload_config`); per-peer send rate and loss
   are visible in the `peers` admin command.
-- **Transport replacement (Epic L).** `enet6` is being replaced (GameNetworkingSockets lean)
-  behind the `INetwork` HAL for higher peer counts, built-in congestion control, and
-  encryption. The MTU/fragmentation discussion above is transport-specific and will be
-  revised when the backend is selected. `MsgLanBeacon` (raw UDP) and RCON (TCP) are unaffected.
+- **Transport replacement (Epic L).** **GameNetworkingSockets** is selected (#506) as the 128+
+  backend behind the `INetwork` HAL for higher peer counts, built-in congestion control, and
+  encryption; `enet6` is retained as the LAN/low-count backend (see
+  [transport-selection.md](transport-selection.md)). The MTU/fragmentation discussion above is
+  transport-specific and will be revised when the GNS backend lands (#507). `MsgLanBeacon` (raw
+  UDP) and RCON (TCP) are unaffected.
 
 ### Authenticated connect handshake (planned — Epic C)
 

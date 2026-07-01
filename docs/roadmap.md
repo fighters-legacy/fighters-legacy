@@ -37,7 +37,7 @@ by dependency, not by phase boundary:
 | A | Server simulation scalability (data-parallel job system, tick budget) | 3→4 |
 | B | Network bandwidth & snapshot scaling (quantization ✓ #515, 3D interest ✓ #402, priority/budget ✓ #516, acked baselines ✓ #517, selective-ack precision ✓ #566, congestion ✓ #518) | 3→4 |
 | I | Load-testing / bot-swarm harness + 128-client scale gate | 3→4 |
-| L | Network transport replacement (enet6 → GameNetworkingSockets behind `INetwork`) | 3→4 (transport optimization) |
+| L | Network transport replacement (enet6 → **GameNetworkingSockets** behind `INetwork`; selected [#506](https://github.com/fighters-legacy/fighters-legacy/issues/506), enet6 retained as LAN/low-count backend) | 3→4 (transport optimization) |
 | E | Multiplayer gameplay framework (game modes, teams, scoring, reconnect, spectator) | 4 |
 | F | Combat sensors, datalink & EW (radar modes, IFF, shared track picture) | 4 |
 | J | Voice comms (positional + team; moved earlier from Phase 7) | 4/6 |
@@ -52,7 +52,10 @@ by dependency, not by phase boundary:
 per-client snapshot bandwidth (B), *not* the transport, and B's quantization is transport-agnostic.
 I (the harness) validates them. **L is no longer foundational/blocking** — enet6 is not the
 bottleneck in the 96–256 range; L is now a later transport optimisation (encryption, congestion
-control, connection-count headroom) that pairs with Epic C auth. Then (H → C → D) with G alongside
+control, connection-count headroom) that pairs with Epic C auth. Its selection spike
+([#506](https://github.com/fighters-legacy/fighters-legacy/issues/506)) chose **GameNetworkingSockets**
+(BSD-3) behind `INetwork`, with `enet6` retained as the LAN/low-count backend — see
+[docs/transport-selection.md](transport-selection.md). Then (H → C → D) with G alongside
 H/C → K last. E, F, and J run in Phase 4 independent of the live-services chain.
 
 **New repos (Go):** `fl-account` (identity), `fl-review` (offline anti-cheat), `fl-operator`
@@ -82,7 +85,9 @@ this in addition to its existing criteria.
    it is gated by the single-threaded sim (A) and per-client snapshot bandwidth (B), **not** the
    transport. A and B proceed on the current `enet6` (B's quantization is transport-agnostic).
    Transport replacement (Epic L) is decoupled to a later optimisation (encryption/congestion/
-   connection-count headroom), to be re-evaluated once A/B raise the sim ceiling.
+   connection-count headroom); its selection spike ([#506](https://github.com/fighters-legacy/fighters-legacy/issues/506))
+   chose **GameNetworkingSockets** behind `INetwork` (enet6 retained as the LAN/low-count backend),
+   with implementation to follow once A/B raise the sim ceiling.
    **Epic A progress:** the design spike ([#510](https://github.com/fighters-legacy/fighters-legacy/issues/510))
    chose a data-parallel single tick (not spatial sharding); the `engine-job` worker pool +
    parallel AI/integrate passes ([#511](https://github.com/fighters-legacy/fighters-legacy/issues/511)),
@@ -159,7 +164,8 @@ Phase 3 acceptance is a **complete engine layer** — all features testable with
 - `bindings.toml` loaded; per-axis HOTAS/gamepad mapping applied at startup.
 - WeatherPreset::Snow and WeatherPreset::Blizzard functional (weather state machine + visual presets).
 - NVG cockpit overlay toggles on/off in cockpit mode.
-- Scaling seams landed: transport replacement (Epic L) selected behind `INetwork` and passing
+- Scaling seams landed: transport replacement (Epic L) selected (GameNetworkingSockets, #506)
+  behind `INetwork` and passing
   a transport scale-spike; load-test bot-swarm harness + the perf/soak scale gate (Epic I, #520 ✓)
   run in CI; server tick-budget
   instrumentation (Epic A) reports per-phase timing; wire quantization (Epic B, #515 ✓) bit-packs
