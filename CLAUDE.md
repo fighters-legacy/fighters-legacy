@@ -6,10 +6,13 @@ GPL v3 general-purpose combat flight sim engine, inspired by Jane's Fighters Ant
 Cross-platform: Windows 10/11, Linux, macOS. Phase 3 (Engine Systems) is active — close-out
 re-scoped 2026-07-01: the spherical-Earth epic (#468) moved to Phase 4, renderer-advancement
 items moved to Phase 8 (milestone renamed "Rendering & Alternative Backends", epic #597), and
-Phase 4 now hosts the gameplay epics (#583 weapons/damage, #584 mission/campaign runtime, #585
-vehicles, #586 audio, #587 avionics, #588 replay) plus the start of the agentic-AI initiative.
-Legacy umbrella issues #33/#34/#42/#50 are closed as superseded — don't reference them for new
-work.
+the gameplay epics (#583 weapons/damage, #584 mission/campaign runtime, #585 vehicles, #586
+audio, #587 avionics, #588 replay) plus the agentic-AI initiative start in Phase 4. Epic
+milestones mark the epic's *finish* phase (last open sub-issue), so epics whose decomposition
+extends later carry later milestones (#588–#590 → P5, #591/#592 → P6) — see
+`docs/project-management.md` for this and the board Order conventions (unified epic sequence
+1–N + phase-banded work items). Legacy umbrella issues #33/#34/#42/#50 and the pre-epic stubs
+#130/#144/#145/#249 are closed as superseded — don't reference them for new work.
 
 **128+ multiplayer re-target (decision record 2026-06-28):** large-scale multiplayer is now a
 co-equal product pillar (target 128+ players; see `docs/architecture.md#decision-records`,

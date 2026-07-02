@@ -46,6 +46,11 @@ from the parent issue's "Create sub-issue" control in the GitHub UI, or via tool
 (`gh`/the GitHub MCP `sub_issue_write`). The Project board's **Sub-issues progress** field
 then tracks epic completion automatically.
 
+Sub-issues may live in a **different repository within the org**: epic #54 (fl-base-pack
+initial content) parents the `fl-base-pack` repo's issues, so the board rollup tracks
+content-pack readiness — the fl-base-pack half of the Phase 4 gate — from the engine repo's
+board. Use the issue URL as the parent reference when linking across repos.
+
 ## Issue types
 
 Issue types are enabled org-wide and are the **source of truth for what kind of work an
@@ -91,6 +96,16 @@ a piece of work is scheduled; phase gating (a phase depends on prior phases) is 
 [roadmap.md](roadmap.md). Assign every issue to its phase milestone at triage. Items with no
 scheduled phase get the `backlog` label instead.
 
+**Epics carry the milestone of their *finish* phase** — the phase of their last open
+sub-issue. Epics span phases (their sub-issues keep their own per-phase milestones), so an
+epic whose decomposition extends into a later phase is re-homed forward rather than left
+blocking an earlier milestone or closed with open subs (convention set 2026-07-01 with
+#494/#496, applied to #588–#592).
+
+**Due dates** are set only on the active phase's milestone and on externally anchored gates
+(Phase 4 carries the fl-base-pack readiness date). Later phases are sequentially gated, not
+date-driven — their milestones stay dateless.
+
 ## The Project board
 
 A single org Project, **"Fighters Legacy 1.0"**, holds every open item. New issues and PRs
@@ -109,7 +124,21 @@ board is the complete picture without manual curation.
 
 - **Status** — `Todo` → `In Progress` → `Done`. The kanban columns.
 - **Effort** — single-select size estimate (see [Lessons & Rev 2](#lessons--rev-2)).
-- **Order** — manual priority ranking within a view.
+- **Order** — the explicit implementation-order ranking (number field), two layers
+  (convention set 2026-07-01):
+  - **Epics: `1–N`** — one unified initiative sequence across all open epics, in planned
+    implementation-start order. Derived from the roadmap's dependency records (e.g. the
+    scaling spine finishes first; mission runtime → weapons; M precedes N/O/P; H→C→D with
+    G alongside and K last). Epics sort to the top of an Order-sorted view as initiative
+    headers.
+  - **Work items: phase bands** — the thousands digit encodes the phase sequence: the
+    active phase uses small numbers (`10+`, step 10), then Phase 4 = `1000s` (step 5,
+    largest band), Phase 5 = `2000s`, Phase 6 = `3000s`, Phase 7 = `4000s`,
+    Phase 8 = `5000s`, Phase 9 = `6000s` (step 10). An item's band always matches its own
+    milestone. Within a band, items group into blocks following the epic sequence, and
+    within a block follow the epic's curated sub-issue order; standalones are slotted by
+    dependency. Gaps allow insertion without renumbering; re-band items when they change
+    milestone.
 - **Start Date** / **Target Date** — drive the Roadmap timeline.
 - **Parent issue** / **Sub-issues progress** — epic decomposition and rollup.
 - **Milestone**, **Labels**, **Assignees** — mirrored from the issue.
@@ -196,5 +225,7 @@ What worked, and what we would change starting from scratch:
 - **Enable the Project's Auto-add workflow at creation.** Board membership was manual for much
   of the project, so issues silently missed the board until this was turned on.
 - **Use the `Order` / priority field deliberately.** Priority lived implicitly in epic
-  sequencing and the critical path; an explicit ranking would make the table view
-  self-prioritizing.
+  sequencing and the critical path for the first three phases; the explicit two-layer
+  ranking (unified epic sequence + phase-banded work items, see
+  [Fields](#the-project-board)) was only adopted 2026-07-01. Adopt it from day one next
+  time — retrofitting meant renumbering the whole board once phases were re-planned.
