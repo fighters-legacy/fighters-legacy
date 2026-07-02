@@ -99,8 +99,8 @@ provoke a fork. Any brand policy we adopt should be **permissive** — restrict 
 
 The durable revenue lever is **content, not engine**. As covered in
 [What the Free Base Pack Changes](#what-the-free-base-pack-changes), the free experience
-is the GPL engine plus fl-base-pack; premium aircraft, campaigns, and packs like
-fa-content are paid and non-GPL. An unofficial free build is "engine + free base pack" —
+is the GPL engine plus fl-base-pack; premium aircraft, campaigns, and expansion
+packs are paid and non-GPL. An unofficial free build is "engine + free base pack" —
 fully playable, but not the full experience. This is the lever that survives any amount
 of free binary redistribution.
 
@@ -111,7 +111,7 @@ of free binary redistribution.
 Once fl-base-pack (Phase 2) is available, Fighters Legacy becomes playable with
 zero financial barrier. Revenue model shifts to:
 
-- **Content plugins** (e.g. fa-content, future community packs) as optional paid plugins if redistributed as compiled binaries
+- **Content plugins** (e.g. fa-bridge, future community packs) as optional paid plugins if redistributed as compiled binaries — fa-bridge is currently GPL-3.0-or-later and its final distribution positioning is an open decision ([fa-bridge#37](https://github.com/fighters-legacy/fa-bridge/issues/37))
 - **Community packs** priced independently by their creators
 - Donations via itch.io / GitHub Sponsors for the engine itself
 

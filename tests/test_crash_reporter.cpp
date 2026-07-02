@@ -340,14 +340,14 @@ TEST_CASE("CrashReporter: setMods stores mod entries", "[crash]") {
     cr.init({tmp.str(), "https://example.com", &logger, &win}, info);
 
     CrashInfo::ModEntry mods[2];
-    std::snprintf(mods[0].id, sizeof(mods[0].id), "%s", "fa-content");
+    std::snprintf(mods[0].id, sizeof(mods[0].id), "%s", "fa-bridge");
     std::snprintf(mods[0].version, sizeof(mods[0].version), "%s", "1.0.0");
     std::snprintf(mods[1].id, sizeof(mods[1].id), "%s", "extra-mod");
     std::snprintf(mods[1].version, sizeof(mods[1].version), "%s", "2.1.0");
     cr.setMods(mods, 2);
 
     auto header = cr.formatCrashHeader(SIGSEGV);
-    CHECK(header.find("fa-content@1.0.0") != std::string::npos);
+    CHECK(header.find("fa-bridge@1.0.0") != std::string::npos);
     CHECK(header.find("extra-mod@2.1.0") != std::string::npos);
     cr.shutdown();
 }

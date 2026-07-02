@@ -88,7 +88,7 @@ generated/
 *.LIB
 *.PIC
 *.PAL
-mods/fa-content/
+mods/fa-bridge/
 
 # Python artifacts
 __pycache__/

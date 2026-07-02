@@ -548,12 +548,12 @@ Theaters are geographic bounding boxes in world coordinates defined by `theaters
 
 ## Repository Naming Convention
 
-All first-party repositories and binaries in the fighters-legacy ecosystem use the `fl-` prefix. Content pack plugins for specific external games use a `<game>-content` pattern. Core repositories keep their full names.
+All first-party repositories and binaries in the fighters-legacy ecosystem use the `fl-` prefix. Bridge plugins for specific external games use a `<game>-bridge` pattern (they provide no content of their own; they bridge the user's own install of that game). Core repositories keep their full names.
 
 | Pattern | Examples |
 |---|---|
 | `fl-<name>` | `fl-server` (dedicated server), `fl-lobby` (matchmaking service), `fl-base-pack` (bundled default content) |
-| `<game>-content` | `fa-content` (Jane's Fighters Anthology content plugin) |
+| `<game>-bridge` | `fa-bridge` (Jane's Fighters Anthology bridge plugin, renamed from `fa-content`) |
 | Full name | `fighters-legacy` (engine + game), `fighters-codex` (reference repo) |
 
 ---
