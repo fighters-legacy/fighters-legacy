@@ -165,6 +165,28 @@ self-hosting communities.
 
 ---
 
+## Dynamic AI
+
+The Dynamic World & Agentic AI initiative (decision record 2026-07-01, Epics M–P) has a
+classical ancestor and a modern contrast:
+
+- **Left 4 Dead's AI Director (Valve)** — the canonical scripted pacing director: it observes
+  player state and modulates spawns/intensity through fixed rules. Our campaign director
+  generalizes the concept from pacing to **theater-level mission generation and narrative**,
+  driven by a language model over live campaign state rather than hand-tuned intensity curves.
+- **In-loop RL agents (OpenAI Five, AlphaStar era)** — demonstrate learned policies *inside*
+  the control loop. We deliberately take the opposite bet: the 60 Hz sim stays deterministic
+  and scripted; LLM-speed agents act **out-of-band** through validated command/content paths
+  (mission YAML through `validate-mission`, the AI behaviour grammar, an allowlisted admin/MCP
+  surface). This preserves replay determinism, server authority, and anti-cheat auditability —
+  properties in-loop learned agents give up.
+- No shipped combat flight sim offers a conversational wingman/GCI or an agentic campaign
+  director; the closest analogues are scripted radio-menu wingmen (Falcon 4, DCS) and static
+  dynamic-campaign engines (Falcon 4's campaign). The initiative's bet is that **local-first,
+  degradation-safe** agentic AI is the first genuinely new axis in this genre in two decades.
+
+---
+
 ## Flight Model Prior Art
 
 The FDM design decision — a simplified 6-DOF stability-derivative model — is documented in

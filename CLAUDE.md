@@ -3,7 +3,13 @@
 ## Project Overview
 
 GPL v3 general-purpose combat flight sim engine, inspired by Jane's Fighters Anthology (1998).
-Cross-platform: Windows 10/11, Linux, macOS. Phase 3 (Engine Systems) is active.
+Cross-platform: Windows 10/11, Linux, macOS. Phase 3 (Engine Systems) is active — close-out
+re-scoped 2026-07-01: the spherical-Earth epic (#468) moved to Phase 4, renderer-advancement
+items moved to Phase 8 (milestone renamed "Rendering & Alternative Backends", epic #597), and
+Phase 4 now hosts the gameplay epics (#583 weapons/damage, #584 mission/campaign runtime, #585
+vehicles, #586 audio, #587 avionics, #588 replay) plus the start of the agentic-AI initiative.
+Legacy umbrella issues #33/#34/#42/#50 are closed as superseded — don't reference them for new
+work.
 
 **128+ multiplayer re-target (decision record 2026-06-28):** large-scale multiplayer is now a
 co-equal product pillar (target 128+ players; see `docs/architecture.md#decision-records`,
@@ -28,11 +34,21 @@ runners force `--transport enet`). Three optional `INetwork` server-tuning virtu
 (`setBandwidthLimit`/`setPreHandshakeRateLimit`/`setAllowInsecure`). Full detail:
 `docs/gns-backend.md`, `docs/transport-selection.md`.
 
+**Dynamic World & Agentic AI (decision record 2026-07-01, Epics M–P = #589/#590/#591/#592):**
+pluggable local-first LLM runtime (any OpenAI-compatible endpoint; Ollama/llama.cpp reference;
+config `[ai.provider]`/`[ai.mcp]`, distinct from the `[ai]` difficulty section). LLMs never run in
+the 60 Hz tick — agents consume a ~1 Hz world-state snapshot + event stream and act only through
+validated paths (allowlisted admin/MCP surface, mission YAML via validate-mission, the
+AiControllerFactory grammar); every AI feature degrades to scripted behavior with no provider, and
+that fallback is the CI-tested path (**CI never requires a model**). See `docs/ai-architecture.md`.
+
 **Companion repositories** (under the `fighters-legacy` org; the engine/game/server stay C++):
 - `fl-base-pack` — starter content pack (existing).
 - `fl-account` — pluggable identity / account service (**Go**, planned, Epic C).
 - `fl-review` — offline anti-cheat batch service (**Go**, planned, Epic D).
 - `fl-operator` — Kubernetes / OpenShift operator + Helm chart (**Go**, Agones-native, planned, Epic K).
+- `fl-director` — dynamic campaign director / agentic mission generation (**Go**, planned, Epic N #590).
+- `fl-ops` — agentic server-operations service (**Go**, planned, Epic P #592).
 
 ## Architecture
 
@@ -229,6 +245,8 @@ CI structure: a `lint` job (REUSE + clang-format-22) gates the `build` matrix vi
 - `README.md` — project overview and documentation index
 - `CHANGELOG.md` — Keep a Changelog format; always add an `[Unreleased]` entry (under `### Added`, `### Fixed`, or `### Changed`) for every PR before staging
 - `docs/architecture.md` — engine architecture overview
+- `docs/ai-architecture.md` — Dynamic World & Agentic AI initiative design (Epics M–P): provider seam, world-state/MCP surface, security + degradation + testing model ("CI never requires a model"), platform matrix
+- `docs/roadmap.md` — phase schedule + the two cross-cutting initiative tables (A–L Multiplayer at Scale, M–P Dynamic World & Agentic AI) with epic→issue maps, dependency order, and per-phase acceptance criteria
 - `docs/development.md` — build prerequisites per platform
 - `docs/loopback-latency-analysis.md` — ENet loopback latency decision record (Accept + Compensate) + re-run runbook for `tools/latency_analysis/` scripts; fill in baseline results table after running `compare.py` (#179)
 - `docs/sandbox.md` — developer key map (camera/flight controls + gamepad axis table + HOTAS axis table) + debug console command reference

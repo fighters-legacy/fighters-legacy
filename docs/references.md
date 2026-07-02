@@ -71,7 +71,7 @@ notes whether each is in use today or planned under an epic. All are GPL-3.0-com
 | Technology | Role in this project | License | Documentation |
 |---|---|---|---|
 | GameNetworkingSockets | **Selected** transport for 128+ peers (Epic L, #506) — reliable+unreliable UDP, congestion control, built-in encryption; behind `INetwork`, `enet6` retained as fallback | BSD-3 | [ValveSoftware/GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets) |
-| libsodium | Selected crypto backend for the new transport (lighter cross-platform build than OpenSSL) | ISC | [doc.libsodium.org](https://doc.libsodium.org) |
+| OpenSSL | Crypto backend for the GNS transport (the #506 spike's libsodium pick was reversed during #507 — GNS rejects libsodium AES on ARM/Apple Silicon; see `docs/gns-backend.md`) | Apache-2.0 | [openssl.org/docs](https://www.openssl.org/docs/) |
 | Opus | Voice-chat codec (Epic J) | BSD-3 | [opus-codec.org](https://opus-codec.org) |
 | OIDC / OAuth 2.0 | Federated identity option for self-hosted communities (`OidcIdentityProvider`, Epic C) | — | [OpenID Connect](https://openid.net/developers/how-connect-works/) |
 | SQLite / PostgreSQL | Persistence backends (`IPersistence`, Epic H) — SQLite single-server, Postgres for clusters | Public domain / PostgreSQL | [sqlite.org](https://sqlite.org) · [postgresql.org/docs](https://www.postgresql.org/docs/) |
@@ -79,7 +79,24 @@ notes whether each is in use today or planned under an epic. All are GPL-3.0-com
 | Grafana | Operator-deployed dashboards (Epic G); bundled dashboard JSON only — not redistributed | AGPL-3.0 (upstream images) | [grafana.com/docs](https://grafana.com/docs/) |
 | Agones | Dedicated-game-server fleet framework the operator builds on (Epic K) | Apache-2.0 | [agones.dev](https://agones.dev) |
 | Operator SDK / Kubebuilder | Go framework for `fl-operator` (Epic K) | Apache-2.0 | [sdk.operatorframework.io](https://sdk.operatorframework.io/) · [kubebuilder.io](https://kubebuilder.io/) |
-| Go | Language for the cluster + live-services repos (`fl-operator`, `fl-account`, `fl-review`) | BSD-3 | [go.dev/doc](https://go.dev/doc/) |
+| Go | Language for the cluster + live-services repos (`fl-operator`, `fl-account`, `fl-review`, `fl-director`, `fl-ops`) | BSD-3 | [go.dev/doc](https://go.dev/doc/) |
+
+---
+
+## AI & Agentic Services
+
+Technologies introduced by the Dynamic World & Agentic AI initiative (decision record
+2026-07-01, Epics M–P). All optional at runtime — no provider configured means fully scripted
+behaviour; see [docs/ai-architecture.md](ai-architecture.md).
+
+| Technology | Role in this project | License | Documentation |
+|---|---|---|---|
+| OpenAI-compatible API | The provider lingua franca — `[ai.provider]` points at any compatible endpoint | — | [platform.openai.com/docs/api-reference](https://platform.openai.com/docs/api-reference) |
+| Ollama | Reference local model server for self-host operators | MIT | [github.com/ollama/ollama](https://github.com/ollama/ollama) |
+| llama.cpp / `llama-server` | Alternative local inference stack (Metal / CUDA / ROCm / Vulkan backends) | MIT | [github.com/ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) |
+| Model Context Protocol (MCP) | Agent-facing tool surface of `fl-server` (Epic M) — world-state, events, allowlisted admin commands | MIT (spec/SDKs) | [modelcontextprotocol.io](https://modelcontextprotocol.io) |
+| whisper.cpp | Local speech-to-text for the crew-comms voice loop (Epic O) | MIT | [github.com/ggml-org/whisper.cpp](https://github.com/ggml-org/whisper.cpp) |
+| Piper | Optional local text-to-speech for crew/GCI replies (Epic O) | MIT | [github.com/rhasspy/piper](https://github.com/rhasspy/piper) |
 
 ---
 

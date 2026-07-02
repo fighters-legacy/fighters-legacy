@@ -63,6 +63,30 @@
   color: "BDC1C6"
   description: "Touches docs/ or modding guide files"
 
+- name: "component: netcode"
+  color: "1D76DB"
+  description: "Wire protocol, transport, snapshot scaling"
+
+- name: "component: game"
+  color: "ededed"
+  description: "Game binary layer (screens, session, input glue)"
+
+- name: "component: ui"
+  color: "B39DDB"
+  description: "IGui HAL / in-game UI framework"
+
+- name: "component: anti-cheat"
+  color: "d73a4a"
+  description: "Anti-cheat and competitive integrity"
+
+- name: "component: identity"
+  color: "5A4FCF"
+  description: "Player identity, accounts, authentication"
+
+- name: "component: server-ops"
+  color: "478F6E"
+  description: "Server operations, observability, metrics"
+
 # Type labels
 - name: "bug"
   color: "d73a4a"

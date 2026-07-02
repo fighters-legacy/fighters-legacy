@@ -242,9 +242,12 @@ to load. Rename any such variables before shipping a pack targeting this engine 
 
 ---
 
-## Coming in Phase 4 (#33)
+## Coming in Phase 4 (mission & campaign runtime epic, #584)
 
-The full AI System milestone will add richer engine bindings to a `world.*` module. Planned APIs:
+The mission & campaign runtime epic ([#584](https://github.com/fighters-legacy/fighters-legacy/issues/584);
+`world.*` bindings [#413](https://github.com/fighters-legacy/fighters-legacy/issues/413), coroutines
+[#412](https://github.com/fighters-legacy/fighters-legacy/issues/412)) will add richer engine
+bindings in a `world.*` module. Planned APIs:
 
 | Function | Description |
 |----------|-------------|
