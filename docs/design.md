@@ -31,6 +31,10 @@ These are the non-negotiable design values that resolve every ambiguous feature 
   scripting API make Fighters Legacy a platform people build content on, not just a game
   they consume. The tools developers use to build the game are the same tools players and
   modders use. There is no privileged content pipeline.
+- **Dynamic world, optional intelligence**: Agentic AI — a campaign director, conversational
+  crew, self-operating servers — runs local-first through a pluggable provider and always
+  degrades to scripted behaviour. Intelligence is an amplifier, never a dependency: the game
+  is complete with no model configured.
 
 ---
 
@@ -77,6 +81,30 @@ first-class concerns, designed in from the engine layer rather than retrofitted:
 
 Self-hosting is the default: communities run their own servers and identity. The project
 ships the software; it does not operate central infrastructure.
+
+---
+
+## Dynamic World & Agentic AI
+
+A second cross-cutting initiative (Epics M–P, decision record 2026-07-01) layers modern
+agentic-AI patterns onto the deterministic core — in ways the genre has not shipped — under
+five non-negotiable principles:
+
+- **LLMs never run in the 60 Hz tick.** Agents act at human timescale against a ~1 Hz
+  world-state snapshot and event stream, assembled off the sim thread.
+- **Validated paths only.** Agents act through the same surfaces humans use — the allowlisted
+  admin/MCP command surface, mission YAML gated by `validate-mission`, and the AI behaviour
+  grammar. No direct state mutation, ever.
+- **Graceful degradation.** Every AI feature has a scripted fallback that is the CI-tested
+  path; CI never requires a model.
+- **Tiered ops autonomy.** observe → recommend → act-with-allowlist for server operations.
+- **Untrusted player text.** Chat and names entering a prompt are data, not instructions.
+
+What this buys: a campaign director that generates and narrates missions from live theater
+state; wingmen and GCI you can talk to; servers that triage their own incidents. The provider
+is pluggable and local-first (Ollama / llama.cpp reference; any OpenAI-compatible endpoint) —
+consistent with the self-host pillar. Full design in
+[docs/ai-architecture.md](ai-architecture.md).
 
 ---
 

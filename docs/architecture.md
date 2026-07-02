@@ -141,6 +141,7 @@ development (pre-`kProtocolVersion` freeze), a dated **decision record** (see be
 | License | GPL v3 | Engine modifications must stay open source; protects community investment |
 | Hosting | GitHub, public repository | Unlimited Actions CI on public repos; GitHub Free sufficient |
 | Async file I/O backend | Worker thread + `std::mutex` queue (`SDL3AsyncFilesystem`) | `SDL_AsyncIO` deferred; consistent cross-platform behaviour without conditional compilation in the interface |
+| AI runtime / agentic services | **Pluggable OpenAI-compatible provider, local-first** (Ollama / llama.cpp reference); agents out-of-tick, validated-paths-only, MCP surface; **Go** `fl-director`/`fl-ops` services | Every AI feature degrades to scripted behaviour when no provider is configured (the CI-tested path — CI never requires a model); self-host posture preserved: no required cloud dependency, no first-party inference infra. See the 2026-07-01 decision record + [docs/ai-architecture.md](ai-architecture.md) |
 
 ### Decision Records
 
@@ -257,6 +258,55 @@ anticipated (encryption is backend-internal; the identity token travels in-band)
 closing the `Game.cpp` direct-`ENetNetwork` HAL leak), #508 (encryption/DTLS + LAN-beacon/RCON
 reconciliation), and #509 (FetchContent GNS + Protobuf + libsodium + CI). Full evaluation in
 [docs/transport-selection.md](transport-selection.md).
+
+**2026-07-01 — Dynamic World & Agentic AI initiative: pluggable local-first inference (Epics M–P,
+#589/#590/#591/#592).** A strategic re-plan found the roadmap covered no ML/LLM/agentic patterns at
+all, while the architecture is ideally shaped for them: agents operate at human timescale *outside*
+the 60 Hz authoritative tick, acting through paths that already validate their inputs. A second
+cross-cutting initiative ("Dynamic World & Agentic AI", epic letters M–P continuing A–L) adds an
+agentic campaign director (`fl-director`), conversational crew/GCI, and agentic server operations
+(`fl-ops`), on these locked choices:
+
+- **Provider seam:** any OpenAI-compatible HTTP endpoint; the reference deployment is **local**
+  (Ollama / llama.cpp server; Metal on Apple Silicon, CUDA/Vulkan on Windows, CUDA/ROCm/Vulkan on
+  Linux); vLLM/hosted APIs allowed, never required. No engine SDK dependency — a minimal client over
+  `IHttpClient` (#490). The engine and services never manage the inference-server lifecycle
+  (endpoint-only). Mirrors the pluggable `IIdentityProvider` pattern; preserves the self-host,
+  no-first-party-infra posture.
+- **Out-of-tick guarantee:** LLMs never run in the 60 Hz tick. Agents consume a ~1 Hz structured
+  world-state snapshot + match event stream assembled off the sim thread; sim tick p99 must be
+  unchanged with agents attached (validated under the Epic I load harness).
+- **Validated-paths-only actuation:** agents act exclusively through the admin/MCP command surface
+  (server-side allowlist, building on the #233 REST substrate), mission YAML gated by
+  `validate-mission`, and the `AiControllerFactory`/`StateMachineController` behaviour grammar.
+  Direct state-mutation APIs for agents are rejected by design. Every agent action is audit-logged
+  and captured in match recordings (epic #588).
+- **Graceful degradation is normative:** with no provider configured, every feature falls back to
+  scripted behaviour (command menu, scripted/random campaign, canned calls, dashboards-only ops) —
+  and that fallback is the CI-tested path. **CI never requires a model**; model-dependent metrics
+  run in spike-produced eval harnesses on the reference environment.
+- **Tiered ops autonomy:** observe → recommend → act-with-allowlist; the act tier is limited to an
+  operator-configured command allowlist.
+- **Security posture:** player chat/names are untrusted input to agents (prompt-injection
+  hardening: templated prompts, schema-validated outputs, grammar allowlists); the MCP surface
+  threat model coordinates with the Epic D anti-cheat threat model (#545).
+- **New repos (Go):** `fl-director` (Epic N) and `fl-ops` (Epic P) — the same polyglot service
+  boundary as `fl-account`/`fl-review`/`fl-operator`; created when their scaffold issues start.
+
+Full design in [docs/ai-architecture.md](ai-architecture.md); initiative sequencing in
+[docs/roadmap.md](roadmap.md).
+
+**2026-07-01 — Phase 3 close-out re-scope.** With the scaling spine landed (Epics A/B/L complete,
+Epic I residuals only), Phase 3 (due 2026-07-31) was re-scoped to close on the engine-systems work
+it actually gates: the spherical-Earth epic (#468, untouched at 22 sub-issues) moved to Phase 4 —
+it enables content, not engine seams — taking the biome-texture items (#446/#447) with it;
+renderer-advancement items (#443–#445, #448–#454) moved to Phase 8 under epic #597, and the Phase 8
+milestone was renamed **"Rendering & Alternative Backends"** (its stale "voice chat deferred from
+Phase 2" note removed — voice is Epic J in Phase 4); avionics/gameplay orphans (#210, #438, #462,
+#128, #322, #226, #358, #233, #163) re-homed into the new Phase 4 epics. Phase 3 retains the Epic
+A/I residuals, fuzzers (#94), layering CI (#559), and #439. In the same pass the Phase 4–9 backlog
+was fully epic-structured (new epics #583–#598, legacy umbrellas #33/#34/#42/#50 closed as
+superseded).
 
 ## Content Pack Architecture
 

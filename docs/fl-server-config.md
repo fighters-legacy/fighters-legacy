@@ -1219,6 +1219,15 @@ Boolean env vars (`FL_PERSISTENT`, `FL_LOBBY_REGISTER`) accept `"true"` or `"1"`
   warmup/active/end/rotation lifecycle. Builds on the existing `[rotation]` section.
 - **`[anticheat]`** *(Epic D)* — live input-validation thresholds + offline `fl-review`
   pipeline toggles.
+- **`[ai.provider]` / `[ai.mcp]`** *(Epics M–P — Dynamic World & Agentic AI, decision record
+  2026-07-01)* — the pluggable LLM provider and the agent-facing surface. `[ai.provider]`:
+  `base_url` (any OpenAI-compatible endpoint; local Ollama / llama.cpp reference), `model`,
+  `api_key_env` (key read from the environment, never the TOML). `[ai.mcp]`: `enabled`
+  (default false), `bind`/`port`, `autonomy` (`observe` | `recommend` | `act`), `allowlist`
+  (admin command names agents may invoke). Absent/unset = fully scripted behaviour — AI
+  features degrade gracefully with no provider. **Namespaced under `[ai.*]` deliberately:
+  distinct from the existing `[ai]` difficulty-policy section above.** See
+  [docs/ai-architecture.md](ai-architecture.md).
 
 Clustered deployments configure these through the `fl-operator` CRDs rather than hand-edited
 TOML; see [docs/distribution.md](distribution.md#server-distribution--self-hosting).
