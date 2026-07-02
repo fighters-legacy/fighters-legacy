@@ -1,0 +1,19 @@
+name: Add to project
+
+# pull_request_target (not pull_request) so runs triggered by fork PRs can
+# read the org secret; the job never checks out PR code, so this is safe.
+on:
+  issues:
+    types: [opened, reopened]
+  pull_request_target:
+    types: [opened, reopened]
+
+jobs:
+  add-to-project:
+    name: Add issue or PR to org project
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/add-to-project@v1.0.2
+        with:
+          project-url: https://github.com/orgs/fighters-legacy/projects/3
+          github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
