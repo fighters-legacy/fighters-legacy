@@ -49,6 +49,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **content**: native content-pack plugins now actually load — the game and `fl-server` constructed `ModLoader` without `assetsAbsoluteRoot`, so the dlopen/`LoadLibrary` step was silently skipped and a compiled plugin fell back to a folder pack. Both binaries now pass their assets root; `ModLoader` logs `Info` on a successful native plugin load and `Warn` when a detected plugin is skipped because no assets root was provided (#662)
 - **game**: Split multi-line admin responses into one game console entry per line (#417)
 
 ## [0.2.5] - 2026-06-26

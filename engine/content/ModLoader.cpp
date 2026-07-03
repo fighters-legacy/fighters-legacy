@@ -329,6 +329,8 @@ std::vector<std::unique_ptr<IContentPack>> ModLoader::load(IContentPackEventHand
                 continue;
             }
             std::unique_ptr<IContentPack> pluginPack(raw);
+            m_logger.log(LogLevel::Info, __FILE__, __LINE__,
+                         ("loaded native plugin '" + c.manifest.id + "' from " + pluginRelPath).c_str());
             if (handler) {
                 handler->onNativeCodePackLoaded(*pluginPack);
                 if (c.manifest.trustLevel == TrustLevel::Unsigned)
@@ -336,6 +338,13 @@ std::vector<std::unique_ptr<IContentPack>> ModLoader::load(IContentPackEventHand
             }
             packs.push_back(std::move(pluginPack));
         } else {
+            if (c.manifest.nativePlugin) {
+                m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
+                             ("mod '" + c.manifest.id +
+                              "': native plugin detected but plugin loading is disabled (no assets root) — "
+                              "loading as a folder pack")
+                                 .c_str());
+            }
             auto folderPack = std::make_unique<FolderContentPack>(m_fs, m_logger, std::move(c.modDir), std::move(fm));
             if (handler) {
                 if (c.manifest.nativePlugin)
