@@ -498,7 +498,7 @@ bool Game::initWindowAndRenderer() {
 bool Game::initContent() {
     auto& d = *m_impl;
 
-    ModLoader modLoader(*d.services.p.filesystem, *d.services.rawLogger);
+    ModLoader modLoader(*d.services.p.filesystem, *d.services.rawLogger, d.services.assetsRoot.string());
     auto packs = modLoader.load();
     const bool hasPacks = !packs.empty();
 

@@ -331,7 +331,7 @@ int main(int argc, char** argv) {
         p.asyncFilesystem = std::move(asyncFs);
     }
 
-    ModLoader modLoader(*p.filesystem, *log);
+    ModLoader modLoader(*p.filesystem, *log, assetsRoot.string());
     auto packs = modLoader.load();
     {
         char buf[128];
