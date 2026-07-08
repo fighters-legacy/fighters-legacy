@@ -28,6 +28,7 @@ endif()
 option(FL_ENABLE_GNS "Build the GameNetworkingSockets transport backend (protobuf + OpenSSL)" ON)
 
 include(cmake/dependencies.cmake)
+include(cmake/layering.cmake)
 
 enable_testing()
 

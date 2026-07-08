@@ -42,11 +42,12 @@ target_link_libraries(validate-playlist PRIVATE validate-playlist-lib)
 
 if(TARGET platform-enet)
     add_executable(net_check net_check/main.cpp)
-    target_link_libraries(net_check PRIVATE platform-enet platform-hal)
+    # engine-protocol PUBLIC-exposes the engine/ include root (NetStats.h -> perf/Stats.h) without
+    # pulling engine-net / engine-entity.
+    target_link_libraries(net_check PRIVATE platform-enet platform-hal engine-protocol)
     target_include_directories(net_check PRIVATE
         "${CMAKE_SOURCE_DIR}/platform/net"
         "${CMAKE_CURRENT_SOURCE_DIR}/common"
-        "${CMAKE_SOURCE_DIR}/engine" # NetStats.h -> perf/Stats.h
     )
 
     if(MSVC)
@@ -54,17 +55,17 @@ if(TARGET platform-enet)
     endif()
 
     # bot_swarm: headless multi-client load generator. Pure client (connects to an
-    # existing fl-server); reuses engine/net wire types (header-only) + platform-enet.
+    # existing fl-server); reuses the wire protocol via engine-protocol (zero-dep — no
+    # WorldBroadcaster / engine-entity) + platform-enet.
     # No SDL/Vulkan/OpenAL deps — builds headless in CI.
     find_package(Threads REQUIRED)
     add_executable(bot_swarm
         bot_swarm/main.cpp
         bot_swarm/BotClient.cpp
     )
-    target_link_libraries(bot_swarm PRIVATE platform-enet platform-hal Threads::Threads)
+    target_link_libraries(bot_swarm PRIVATE platform-enet platform-hal engine-protocol Threads::Threads)
     target_include_directories(bot_swarm PRIVATE
         "${CMAKE_SOURCE_DIR}/platform/net"
-        "${CMAKE_SOURCE_DIR}/engine"
         "${CMAKE_CURRENT_SOURCE_DIR}/common"
         "${CMAKE_CURRENT_SOURCE_DIR}/bot_swarm"
     )
