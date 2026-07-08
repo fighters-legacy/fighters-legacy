@@ -308,6 +308,21 @@ A/I residuals, fuzzers (#94), layering CI (#559), and #439. In the same pass the
 was fully epic-structured (new epics #583–#598, legacy umbrellas #33/#34/#42/#50 closed as
 superseded).
 
+**2026-07-08 — `engine-protocol` wire-protocol seam (#712, sub-task of #559).** The wire protocol —
+naturally-aligned message types (`GameProtocol.h`), the bit-packed snapshot codec (`SnapshotCodec` +
+`BitStream` + `Quantization`) and the selective-ack window (`AckWindow.h`) — is promoted to its own
+**zero-dependency** static library `engine-protocol` (only `SnapshotCodec.cpp` is a compiled TU; the
+rest are header-only). It reaches nothing but the C++ stdlib, so the game client, `fl-server`, and the
+headless tools (`bot_swarm`, `net_check`) consume the protocol **without transitively pulling
+`WorldBroadcaster` / `engine-entity`** — the clean seam a future `fl-engine`/`fl-client`/`fl-server`
+split needs. The server-sim *policy* pieces (`SnapshotScheduler`, `CongestionController`,
+`TickGovernor`) and the peer-management code (`WorldBroadcaster`, `JitterBuffer`, `NetworkUtils`) stay
+in `engine-net`, which now PUBLIC-links `engine-protocol` (existing consumers unchanged, no
+include-path change — the files stay in `engine/net/`). The zero-dep guarantee is enforced at CMake
+configure time by `fl_assert_zero_dep()` in the new `cmake/layering.cmake`, seeding the layering-guard
+work; the full engine/client/server layer-DAG enforcement + CI `ldd` extension land in #559's
+remaining sub-tasks.
+
 ## Content Pack Architecture
 
 This is the central design decision that affects every other phase. **The engine core has no dependency on any content library.** All asset access goes through an `IContentPack` interface.

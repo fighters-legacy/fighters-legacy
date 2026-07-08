@@ -387,24 +387,26 @@ if(WIN32)
 endif()
 catch_discover_tests(test_async_filesystem_sdl3 DISCOVERY_MODE PRE_TEST)
 
+# Pure wire-protocol/codec tests link the zero-dep engine-protocol seam, not engine-net.
 add_executable(test_game_protocol test_game_protocol.cpp)
-target_link_libraries(test_game_protocol PRIVATE Catch2::Catch2WithMain engine-net engine-weather)
+target_link_libraries(test_game_protocol PRIVATE Catch2::Catch2WithMain engine-protocol engine-weather)
 catch_discover_tests(test_game_protocol)
 
 add_executable(test_wire_codec test_wire_codec.cpp)
-target_link_libraries(test_wire_codec PRIVATE Catch2::Catch2WithMain engine-net)
+target_link_libraries(test_wire_codec PRIVATE Catch2::Catch2WithMain engine-protocol)
 catch_discover_tests(test_wire_codec)
 
 add_executable(test_snapshot_codec test_snapshot_codec.cpp)
-target_link_libraries(test_snapshot_codec PRIVATE Catch2::Catch2WithMain engine-net)
+target_link_libraries(test_snapshot_codec PRIVATE Catch2::Catch2WithMain engine-protocol)
 catch_discover_tests(test_snapshot_codec)
 
+# Scheduler lives in engine-net (SnapshotScheduler.cpp), so this test keeps the engine-net link.
 add_executable(test_snapshot_scheduler test_snapshot_scheduler.cpp)
 target_link_libraries(test_snapshot_scheduler PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_snapshot_scheduler)
 
 add_executable(test_ack_window test_ack_window.cpp)
-target_link_libraries(test_ack_window PRIVATE Catch2::Catch2WithMain engine-net)
+target_link_libraries(test_ack_window PRIVATE Catch2::Catch2WithMain engine-protocol)
 catch_discover_tests(test_ack_window)
 
 add_executable(test_congestion_controller test_congestion_controller.cpp)

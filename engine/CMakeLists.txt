@@ -204,20 +204,30 @@ target_include_directories(engine-job PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 find_package(Threads REQUIRED)
 target_link_libraries(engine-job PUBLIC Threads::Threads)
 
+# Zero-dependency wire protocol: naturally-aligned wire types (GameProtocol.h), the bit-packed
+# snapshot codec (SnapshotCodec + BitStream + Quantization), and the selective-ack window
+# (AckWindow.h). Consumed by the server sim, the game client, and headless tools WITHOUT pulling
+# WorldBroadcaster / engine-entity. Reaches only the C++ stdlib — enforced by fl_assert_zero_dep().
+add_library(engine-protocol STATIC
+    net/SnapshotCodec.cpp
+)
+target_include_directories(engine-protocol PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+fl_assert_zero_dep(engine-protocol)
+
 # Authoritative server-sim serializer and network broadcaster.
 add_library(engine-net STATIC
     net/NetworkUtils.cpp
     net/WorldBroadcaster.cpp
     net/DiscoveryBeacon.cpp
     net/DiscoveryListener.cpp
-    net/SnapshotCodec.cpp
     net/SnapshotScheduler.cpp
     net/CongestionController.cpp
     net/TickGovernor.cpp
 )
 target_include_directories(engine-net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-net
-    PUBLIC  engine-entity
+    PUBLIC  engine-protocol
+            engine-entity
             engine-spatial
             engine-job
             platform-hal
