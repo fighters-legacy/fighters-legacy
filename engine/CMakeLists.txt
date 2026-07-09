@@ -207,12 +207,12 @@ target_link_libraries(engine-job PUBLIC Threads::Threads)
 # Zero-dependency wire protocol: naturally-aligned wire types (GameProtocol.h), the bit-packed
 # snapshot codec (SnapshotCodec + BitStream + Quantization), and the selective-ack window
 # (AckWindow.h). Consumed by the server sim, the game client, and headless tools WITHOUT pulling
-# WorldBroadcaster / engine-entity. Reaches only the C++ stdlib — enforced by fl_assert_zero_dep().
+# WorldBroadcaster / engine-entity. Reaches only the C++ stdlib — enforced at configure time by
+# fl_assert_layering() (cmake/layering.cmake, deferred from the root CMakeLists.txt).
 add_library(engine-protocol STATIC
     net/SnapshotCodec.cpp
 )
 target_include_directories(engine-protocol PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-fl_assert_zero_dep(engine-protocol)
 
 # Authoritative server-sim serializer and network broadcaster.
 add_library(engine-net STATIC
