@@ -249,21 +249,25 @@ the UDP rebind race; the report path is pinned via `FL_LOADTEST_REPORT`), evalua
 checks the machine-independent `downstream_kbs_per_client` against a committed baseline, and writes a
 Markdown summary to `$GITHUB_STEP_SUMMARY`.
 
-**Two tiers, because hosted runners are not the reference box:**
+**Two tiers, split by runner — hosted for PRs, the self-hosted reference VM for strict:**
 
 | Tier | Trigger | Profile | Hard gates | Advisory |
 |---|---|---|---|---|
 | **PR** | every PR + push to `main` (Linux, Release) | `pr` (64 clients, weave) | bandwidth ≤150 KB/s/client, admission (no refused/dropped), KB/s baseline regression, tick-Hz collapse tripwire (≥30) | tick-ms p99 (disabled) |
-| **Reference** | nightly cron + `workflow_dispatch` | `reference` (128 clients; idle/weave/aggressive) | bandwidth + admission + baseline | tick-ms p99 ≤16.6 (enforced only with `--strict`) |
-| **Soak** | `workflow_dispatch` (`profile=soak`) | `soak` (128 clients, weave, 2 h) | + RSS-growth leak signal from the runner sampler | tick-ms p99 (advisory) |
+| **Reference** | manual `workflow_dispatch` on the self-hosted `fl-reference` runner | `reference` (128 clients; idle/weave/aggressive) | bandwidth + admission + baseline + **tick-ms p99 ≤16.6 (`--strict`, unconditional)** | — |
+| **Soak** | manual `workflow_dispatch` (`profile=soak`) on `fl-reference` | `soak` (128 clients, weave, 2 h) | strict gates + RSS-growth leak (hard gate lands with [#707](https://github.com/fighters-legacy/fighters-legacy/issues/707)) | — |
 
 The PR tier hard-gates only machine-independent metrics: `bot_swarm`'s `--assert-min-tick-hz` reads
 the *client-side proxy*, which sags when the harness itself is CPU-starved on a shared runner — a
 false failure. So tick-Hz is only a total-collapse tripwire and tick-ms is advisory on PRs. The
 strict `16.6 ms` p99 is meaningful only on the 8‑core/16 GB
-[reference-env](../tools/bot_swarm/reference-env/README.md) (or a self-hosted runner), where the
-scheduled job is run with `--strict`. A Windows job smoke-runs `run_loadtest.ps1` (8 clients) on
-every PR so the PowerShell launcher can't bitrot.
+[reference-env](../tools/bot_swarm/reference-env/README.md), so it is enforced there: the
+[strict tier](../tools/bot_swarm/reference-env/README.md#self-hosted-reference-runner-ci-strict-tier)
+runs on a self-hosted runner registered on that VM and is triggered **manually** via
+`workflow_dispatch` (`gh workflow run scale-gate.yml -f profile=reference`), with `--strict`
+unconditional. Scheduled cron is deferred until an always-on box exists — the runner is a dev VM and
+GitHub skips missed crons. A Windows job smoke-runs `run_loadtest.ps1` (8 clients) on every PR so the
+PowerShell launcher can't bitrot.
 
 **Baseline.** [`scale-gate-baseline.json`](../tools/bot_swarm/scale-gate-baseline.json) holds the
 committed `downstream_kbs_per_client` mean per `<profile>/<pattern>`. Only this protocol-stable

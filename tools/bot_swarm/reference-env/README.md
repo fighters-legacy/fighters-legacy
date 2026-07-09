@@ -121,9 +121,79 @@ the snapshot‑bandwidth ceiling (Epic B) from the sim ceiling (Epic A).
 
 This environment is also where the **strict** tier of the CI scale gate
 ([scale-gate.yml](../../../.github/workflows/scale-gate.yml)) belongs: the `reference`/`soak`
-profiles' `≤ 16.6 ms p99` tick assertion is only enforced with `scale_gate.py --strict`, which is
-meaningful solely on this pinned 8‑core/16 GB profile. On hosted GitHub runners the scheduled job
-runs the same profiles but the tick‑ms gate is advisory (the box isn't comparable); wiring a
-self‑hosted runner pinned to this profile to enforce it is the tracked Epic I follow‑on. Run it here:
+profiles' `≤ 16.6 ms p99` tick assertion is only meaningful on this pinned 8‑core/16 GB profile. On
+hosted GitHub runners the same profiles run but the tick‑ms gate is advisory (the box isn't
+comparable). Registering this VM as a self‑hosted runner that enforces it is set up in
+[Self-hosted reference runner](#self-hosted-reference-runner-ci-strict-tier) below (#569). Run it
+manually here any time:
 
     python3 tools/bot_swarm/scale_gate.py --profile reference --build-dir /tmp/fl-ref-build --strict
+
+## Self-hosted reference runner (CI strict tier)
+
+The scale gate's `≤ 16.6 ms p99` tick assertion (`scale_gate.py --strict`) is only trustworthy on
+this pinned 8‑core/16 GB profile. To enforce it in CI, register **this reference VM** as a repo
+self-hosted runner and dispatch the strict tier at it. Self-host only, no first-party infra (per the
+architecture decision record). Setup is scripted in
+[`setup-self-hosted-runner.sh`](setup-self-hosted-runner.sh) — the version-controlled form of the
+runbook below.
+
+**The box is the reference VM on the dev machine** — the same libvirt guest this directory already
+builds (8 vCPU / 16 GB, no hardware to acquire). Prereq is the Linux `vagrant-libvirt` path above.
+
+### Register
+
+1. Get a short-lived **registration token**: repo → Settings → Actions → Runners → *New self-hosted
+   runner*. It expires in ~1 h and is never committed.
+2. Bring the VM up with the runner provisioner on (one command):
+
+        FL_REFENV_RUNNER=1 FL_RUNNER_TOKEN=<token> vagrant up --provider=libvirt
+
+   Or, if the VM already exists, run the setup script inside it:
+
+        vagrant ssh -c 'sudo FL_RUNNER_TOKEN=<token> bash /src/tools/bot_swarm/reference-env/setup-self-hosted-runner.sh'
+
+3. Verify: `vagrant ssh -c 'sudo /opt/actions-runner/svc.sh status'` shows *active*, and the runner
+   shows **Idle** in repo Settings → Runners with labels `self-hosted, linux, x64, fl-reference`.
+4. Flip the CI on-switch: set repo variable `FL_REFERENCE_RUNNER_READY = true` (Settings → Actions →
+   Variables). The `reference-gate` job stays skipped until this is set.
+
+The runner is **non-ephemeral** — a warm box gives comparable benchmark timing across runs. The
+per-job cleanup hook ([`runner-job-cleanup.sh`](runner-job-cleanup.sh)) reclaims the Release build
+tree between jobs so non-ephemeral state doesn't accumulate.
+
+### Run the strict tier
+
+Runs are **manual** (`workflow_dispatch`) while this machine isn't 24/7 — GitHub does not queue
+missed cron runs, so scheduling on an intermittently-on box would silently skip. Trigger the *Scale
+Gate* workflow from the Actions tab (or `gh workflow run scale-gate.yml -f profile=reference`),
+picking a profile: `reference`, `soak`, `overrun`, `entity-scale`, or `nightly` (= reference +
+overrun). Cron scheduling is deferred until an always-on runner exists — the crons are preserved as
+commented lines in the workflow for a one-line re-enable.
+
+`virsh autostart <domain>` (optional) brings the VM up with the host so the runner reconnects
+whenever the machine is on.
+
+### Security (public repo + self-hosted)
+
+A self-hosted runner on a public repo must never execute fork-PR code. The layers:
+
+- **Trigger guard** — `reference-gate` is `workflow_dispatch`-only (write-access-gated) behind
+  `github.repository == 'fighters-legacy/fighters-legacy'`. No `pull_request`/fork path reaches it;
+  the PR tier stays on hosted runners.
+- **The VM is the sandbox** — a compromise's blast radius is a disposable guest, not the host. The
+  one-way rsync synced folder + NAT networking keep the guest off the host filesystem.
+- **Dedicated unprivileged user** (`flrunner`, no login shell) + a systemd hardening drop-in
+  ([`runner-hardening.conf`](runner-hardening.conf): `ProtectSystem=strict`, `ProtectHome`,
+  `PrivateTmp`, `NoNewPrivileges`).
+- Set repo → Settings → Actions → *Fork pull request workflows* → **require approval for all
+  outside collaborators**.
+
+### Unregister / off-switch
+
+Set `FL_REFERENCE_RUNNER_READY = false` (or delete it) to disable the CI job immediately. To remove
+the runner entirely:
+
+    vagrant ssh -c 'cd /opt/actions-runner && sudo ./svc.sh uninstall && sudo -u flrunner ./config.sh remove --token <removal-token>'
+
+or `vagrant destroy` to tear down the whole VM.
