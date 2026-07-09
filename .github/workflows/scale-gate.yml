@@ -68,7 +68,7 @@ jobs:
 
       - name: Upload reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scale-gate-pr-reports
           path: tools/bot_swarm/results/*.json
@@ -155,7 +155,7 @@ jobs:
 
       - name: Upload reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scale-gate-reference-reports
           path: tools/bot_swarm/results/*.json
