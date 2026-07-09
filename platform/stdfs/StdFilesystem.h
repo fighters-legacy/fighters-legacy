@@ -4,17 +4,20 @@
 #include "IFilesystem.h"
 
 #include <filesystem>
-#include <string>
+#include <fstream>
+#include <memory>
 #include <unordered_map>
-
-struct SDL_IOStream;
 
 namespace fl {
 
-class SDL3Filesystem : public IFilesystem {
+// std::filesystem / std::fstream backed IFilesystem. No windowing/library
+// dependencies — used by both the headless server and the GUI client. Callers
+// resolve the assets/user-data roots (the server uses the CWD; the client uses
+// SDL path helpers) and pass them in; this backend knows nothing about SDL.
+class StdFilesystem : public IFilesystem {
   public:
-    SDL3Filesystem(std::filesystem::path assetsRoot, std::filesystem::path userDataRoot);
-    ~SDL3Filesystem() override;
+    StdFilesystem(std::filesystem::path assetsRoot, std::filesystem::path userDataRoot);
+    ~StdFilesystem() override = default;
 
     int openFile(PathDomain domain, const char* path, bool write) override;
     void closeFile(int handle) override;
@@ -37,7 +40,7 @@ class SDL3Filesystem : public IFilesystem {
     std::filesystem::path m_userDataRoot;
 
     int m_nextHandle = 1;
-    std::unordered_map<int, SDL_IOStream*> m_handles;
+    std::unordered_map<int, std::unique_ptr<std::fstream>> m_handles;
 };
 
 } // namespace fl

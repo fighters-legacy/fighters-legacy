@@ -15,7 +15,8 @@ add_library(platform-subprocess STATIC Subprocess.cpp)
 target_include_directories(platform-subprocess PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(platform-subprocess PUBLIC platform-hal)
 
-# HAL backends: SDL3 windowing/input, Vulkan renderer, OpenAL Soft audio, ENet networking
+# HAL backends: std filesystem, SDL3 windowing/input, Vulkan renderer, OpenAL Soft audio, ENet networking
+add_subdirectory(stdfs)
 add_subdirectory(sdl3)
 add_subdirectory(vulkan)
 add_subdirectory(openal)

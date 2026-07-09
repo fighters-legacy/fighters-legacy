@@ -372,20 +372,15 @@ target_link_libraries(test_tex_compress
     PRIVATE Catch2::Catch2WithMain tex-compress-lib)
 catch_discover_tests(test_tex_compress)
 
-add_executable(test_async_filesystem_sdl3 test_async_filesystem_sdl3.cpp)
-target_link_libraries(test_async_filesystem_sdl3 PRIVATE Catch2::Catch2WithMain platform-sdl3)
-target_include_directories(test_async_filesystem_sdl3 PRIVATE
+# Real std::filesystem async backend, exercised against a temp dir. No runtime
+# DLL (unlike the former SDL3 backend), so default discovery works.
+add_executable(test_async_filesystem_std test_async_filesystem_std.cpp)
+target_link_libraries(test_async_filesystem_std PRIVATE Catch2::Catch2WithMain platform-stdfs)
+target_include_directories(test_async_filesystem_std PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    "${CMAKE_SOURCE_DIR}/platform/sdl3"
+    "${CMAKE_SOURCE_DIR}/platform/stdfs"
 )
-if(WIN32)
-    add_custom_command(TARGET test_async_filesystem_sdl3 POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:SDL3::SDL3>
-            $<TARGET_FILE_DIR:test_async_filesystem_sdl3>
-    )
-endif()
-catch_discover_tests(test_async_filesystem_sdl3 DISCOVERY_MODE PRE_TEST)
+catch_discover_tests(test_async_filesystem_std)
 
 # Pure wire-protocol/codec tests link the zero-dep engine-protocol seam, not engine-net.
 add_executable(test_game_protocol test_game_protocol.cpp)

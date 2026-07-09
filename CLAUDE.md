@@ -69,6 +69,7 @@ engine/job/     — data-parallel task scheduler: JobSystem (persistent worker p
 engine/weather/ — server-authoritative weather state machine, time-of-day clock, wind/gust/turbulence model: WeatherController (engine-weather library)
 engine/world/   — world-systems foundation types: AlertLevel/EscalationStage, FactionDef/FactionRegistry, AirspaceZone (engine-world library); foundation only — AlertSystem (#162) and IWorldAiProvider (#163) logic deferred
 platform/       — HAL: Vulkan, SDL3, OpenAL Soft, network backends (enet6 + GameNetworkingSockets)
+platform/stdfs/ — platform-stdfs: the single SDL-free IFilesystem/IAsyncFilesystem backend (StdFilesystem + StdAsyncFilesystem over std::fstream/std::filesystem); used by both fl-server (headless, no SDL) and the game client (SDL kept only for path resolution + windowing). Replaced the removed SDL3Filesystem/SDL3AsyncFilesystem (#711)
 platform/net/   — INetwork backends: platform-enet (enet6), platform-gns (GameNetworkingSockets, when FL_ENABLE_GNS), and platform-net (the createNetwork(TransportKind) facade consumers link)
 platform/RenderTypes.h — GPU-agnostic scene types shared across the HAL boundary
 server/         — dedicated server binary

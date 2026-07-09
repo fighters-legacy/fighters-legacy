@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <catch2/catch_test_macros.hpp>
 
-#include "SDL3AsyncFilesystem.h"
+#include "StdAsyncFilesystem.h"
 #include "test_helpers.h"
 
 using namespace fl;
@@ -38,18 +38,18 @@ static void writeFile(const TempDir& dir, const std::string& name, const std::st
 }
 
 // Calls fs.service() in a spin-loop until col.results.size() >= expected or timeout.
-static void drainUntil(SDL3AsyncFilesystem& fs, Collector& col, std::size_t expected, int maxIterations = 200) {
+static void drainUntil(StdAsyncFilesystem& fs, Collector& col, std::size_t expected, int maxIterations = 200) {
     for (int i = 0; i < maxIterations && col.results.size() < expected; ++i) {
         fs.service();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
 
-TEST_CASE("SDL3AsyncFilesystem reads existing file", "[async_fs_sdl3]") {
+TEST_CASE("StdAsyncFilesystem reads existing file", "[async_fs_std]") {
     TempDir dir;
     writeFile(dir, "tile0.bin", "hello world");
 
-    SDL3AsyncFilesystem fs(dir.path, dir.path);
+    StdAsyncFilesystem fs(dir.path, dir.path);
     Collector col;
     REQUIRE(fs.init());
     fs.setEventHandler(&col);
@@ -68,9 +68,9 @@ TEST_CASE("SDL3AsyncFilesystem reads existing file", "[async_fs_sdl3]") {
     fs.shutdown();
 }
 
-TEST_CASE("SDL3AsyncFilesystem fires Error for missing file", "[async_fs_sdl3]") {
+TEST_CASE("StdAsyncFilesystem fires Error for missing file", "[async_fs_std]") {
     TempDir dir;
-    SDL3AsyncFilesystem fs(dir.path, dir.path);
+    StdAsyncFilesystem fs(dir.path, dir.path);
     Collector col;
     REQUIRE(fs.init());
     fs.setEventHandler(&col);
@@ -88,13 +88,13 @@ TEST_CASE("SDL3AsyncFilesystem fires Error for missing file", "[async_fs_sdl3]")
     fs.shutdown();
 }
 
-TEST_CASE("SDL3AsyncFilesystem multiple concurrent reads all complete", "[async_fs_sdl3]") {
+TEST_CASE("StdAsyncFilesystem multiple concurrent reads all complete", "[async_fs_std]") {
     TempDir dir;
     const int N = 5;
     for (int i = 0; i < N; ++i)
         writeFile(dir, "tile" + std::to_string(i) + ".bin", std::string(64, static_cast<char>('a' + i)));
 
-    SDL3AsyncFilesystem fs(dir.path, dir.path);
+    StdAsyncFilesystem fs(dir.path, dir.path);
     Collector col;
     REQUIRE(fs.init());
     fs.setEventHandler(&col);
@@ -117,12 +117,12 @@ TEST_CASE("SDL3AsyncFilesystem multiple concurrent reads all complete", "[async_
     fs.shutdown();
 }
 
-TEST_CASE("SDL3AsyncFilesystem shutdown drains pending before returning", "[async_fs_sdl3]") {
+TEST_CASE("StdAsyncFilesystem shutdown drains pending before returning", "[async_fs_std]") {
     TempDir dir;
     writeFile(dir, "a.bin", "aaa");
     writeFile(dir, "b.bin", "bbb");
 
-    SDL3AsyncFilesystem fs(dir.path, dir.path);
+    StdAsyncFilesystem fs(dir.path, dir.path);
     Collector col;
     REQUIRE(fs.init());
     fs.setEventHandler(&col);
@@ -145,11 +145,11 @@ TEST_CASE("SDL3AsyncFilesystem shutdown drains pending before returning", "[asyn
     REQUIRE(saw2);
 }
 
-TEST_CASE("SDL3AsyncFilesystem reads empty file as Success with zero bytes", "[async_fs_sdl3]") {
+TEST_CASE("StdAsyncFilesystem reads empty file as Success with zero bytes", "[async_fs_std]") {
     TempDir dir;
     writeFile(dir, "empty.bin", "");
 
-    SDL3AsyncFilesystem fs(dir.path, dir.path);
+    StdAsyncFilesystem fs(dir.path, dir.path);
     Collector col;
     REQUIRE(fs.init());
     fs.setEventHandler(&col);
