@@ -44,8 +44,8 @@
 #include <perf/ServerTickReport.h>
 #include <render/BuiltinGeometry.h>
 #include <render/TerrainStreamer.h>
-#include <sdl3/SDL3AsyncFilesystem.h>
-#include <sdl3/SDL3Filesystem.h>
+#include <stdfs/StdAsyncFilesystem.h>
+#include <stdfs/StdFilesystem.h>
 #include <weather/WeatherController.h>
 
 #include <array>
@@ -320,10 +320,10 @@ int main(int argc, char** argv) {
     fs::path assetsRoot = fs::current_path();
     fs::path userDataRoot = fs::current_path();
 
-    p.filesystem = std::make_unique<SDL3Filesystem>(assetsRoot, userDataRoot);
+    p.filesystem = std::make_unique<StdFilesystem>(assetsRoot, userDataRoot);
 
     {
-        auto asyncFs = std::make_unique<SDL3AsyncFilesystem>(assetsRoot, userDataRoot);
+        auto asyncFs = std::make_unique<StdAsyncFilesystem>(assetsRoot, userDataRoot);
         if (!asyncFs->init()) {
             log->log(LogLevel::Error, __FILE__, __LINE__, "async filesystem init failed");
             return 1;

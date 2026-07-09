@@ -35,6 +35,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         engine-console
         platform-file-logger
         platform-subprocess
+        platform-stdfs
         platform-sdl3
         platform-vulkan
         platform-openal

@@ -323,6 +323,21 @@ configure time by `fl_assert_zero_dep()` in the new `cmake/layering.cmake`, seed
 work; the full engine/client/server layer-DAG enforcement + CI `ldd` extension land in #559's
 remaining sub-tasks.
 
+**2026-07-08 — `platform-stdfs` single filesystem backend; `fl-server` drops SDL3 (#711, sub-task of
+#559).** The `IFilesystem`/`IAsyncFilesystem` HAL is now backed by one implementation,
+`platform-stdfs` (`StdFilesystem` + `StdAsyncFilesystem` over `std::fstream`/`std::filesystem`), and
+the old `SDL3Filesystem`/`SDL3AsyncFilesystem` backends are deleted. The headless `fl-server` linked
+`platform-sdl3` **solely** for terrain heightmap I/O — the last engine/server → client-backend leak;
+it now links `platform-stdfs` and pulls in no windowing library. The decision was to *unify* rather
+than add a second parallel backend: the SDL3 filesystem backends held no SDL-specific path logic (roots
+are resolved by callers and passed into the constructor), so a `std::filesystem` implementation is a
+true drop-in. The GUI client uses `platform-stdfs` too and keeps SDL only for what it is uniquely good
+at — path *resolution* (`SDL_GetBasePath`/`SDL_GetPrefPath` in `Game.cpp`) and windowing. Files are
+opened from `std::filesystem::path` objects (not narrow strings) so UTF-8 paths stay correct on
+Windows; the async worker-thread + `service()` swap-drain model is unchanged. Enforced by extending the
+CI "Verify static linking" step to assert `ldd fl-server` shows no SDL3. The remaining #559 sub-task
+grows `cmake/layering.cmake` into full layer-DAG enforcement.
+
 ## Content Pack Architecture
 
 This is the central design decision that affects every other phase. **The engine core has no dependency on any content library.** All asset access goes through an `IContentPack` interface.

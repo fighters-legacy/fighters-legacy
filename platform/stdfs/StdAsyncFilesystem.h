@@ -15,13 +15,17 @@
 
 namespace fl {
 
-class SDL3AsyncFilesystem : public IAsyncFilesystem {
+// std::ifstream backed IAsyncFilesystem: a single worker thread reads whole
+// files off a mutex/condvar queue; completions are swap-drained on the main
+// thread in service(). No windowing/library dependency (unlike the former SDL3
+// backend). Callers pass in already-resolved assets/user-data roots.
+class StdAsyncFilesystem : public IAsyncFilesystem {
   public:
-    explicit SDL3AsyncFilesystem(std::filesystem::path assetsRoot, std::filesystem::path userDataRoot);
-    ~SDL3AsyncFilesystem() override;
+    explicit StdAsyncFilesystem(std::filesystem::path assetsRoot, std::filesystem::path userDataRoot);
+    ~StdAsyncFilesystem() override;
 
-    SDL3AsyncFilesystem(const SDL3AsyncFilesystem&) = delete;
-    SDL3AsyncFilesystem& operator=(const SDL3AsyncFilesystem&) = delete;
+    StdAsyncFilesystem(const StdAsyncFilesystem&) = delete;
+    StdAsyncFilesystem& operator=(const StdAsyncFilesystem&) = delete;
 
     bool init() override;
     void shutdown() override;

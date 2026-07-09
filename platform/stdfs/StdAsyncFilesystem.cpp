@@ -1,32 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "SDL3AsyncFilesystem.h"
-
-#include <SDL3/SDL.h>
+#include "StdAsyncFilesystem.h"
 
 #include <cstddef>
+#include <fstream>
+#include <system_error>
 
 namespace fl {
 
-SDL3AsyncFilesystem::SDL3AsyncFilesystem(std::filesystem::path assetsRoot, std::filesystem::path userDataRoot)
+StdAsyncFilesystem::StdAsyncFilesystem(std::filesystem::path assetsRoot, std::filesystem::path userDataRoot)
     : m_assetsRoot(std::move(assetsRoot)), m_userDataRoot(std::move(userDataRoot)) {}
 
-SDL3AsyncFilesystem::~SDL3AsyncFilesystem() {
+StdAsyncFilesystem::~StdAsyncFilesystem() {
     if (m_worker.joinable())
         shutdown();
 }
 
-bool SDL3AsyncFilesystem::init() {
+bool StdAsyncFilesystem::init() {
     if (m_initialized) {
-        m_lastError = "SDL3AsyncFilesystem::init() called while already initialised";
+        m_lastError = "StdAsyncFilesystem::init() called while already initialised";
         return false;
     }
     m_shutdown = false;
     m_initialized = true;
-    m_worker = std::thread(&SDL3AsyncFilesystem::workerLoop, this);
+    m_worker = std::thread(&StdAsyncFilesystem::workerLoop, this);
     return true;
 }
 
-void SDL3AsyncFilesystem::shutdown() {
+void StdAsyncFilesystem::shutdown() {
     // Mark all live requests as cancelled so the worker skips or discards them.
     for (auto& [id, req] : m_liveRequests)
         req->cancelled.store(true, std::memory_order_relaxed);
@@ -47,11 +47,11 @@ void SDL3AsyncFilesystem::shutdown() {
     m_initialized = false;
 }
 
-void SDL3AsyncFilesystem::setEventHandler(IAsyncFilesystemHandler* handler) {
+void StdAsyncFilesystem::setEventHandler(IAsyncFilesystemHandler* handler) {
     m_handler = handler;
 }
 
-AsyncReadId SDL3AsyncFilesystem::readFileAsync(PathDomain domain, const char* path) {
+AsyncReadId StdAsyncFilesystem::readFileAsync(PathDomain domain, const char* path) {
     if (!m_initialized || !path)
         return 0;
 
@@ -74,13 +74,13 @@ AsyncReadId SDL3AsyncFilesystem::readFileAsync(PathDomain domain, const char* pa
     return id;
 }
 
-void SDL3AsyncFilesystem::cancelRead(AsyncReadId id) {
+void StdAsyncFilesystem::cancelRead(AsyncReadId id) {
     auto it = m_liveRequests.find(id);
     if (it != m_liveRequests.end())
         it->second->cancelled.store(true, std::memory_order_relaxed);
 }
 
-void SDL3AsyncFilesystem::service() {
+void StdAsyncFilesystem::service() {
     std::vector<CompletedRequest> batch;
     {
         std::lock_guard lock(m_completedMtx);
@@ -94,11 +94,11 @@ void SDL3AsyncFilesystem::service() {
     }
 }
 
-const char* SDL3AsyncFilesystem::getLastError() const {
+const char* StdAsyncFilesystem::getLastError() const {
     return m_lastError.empty() ? nullptr : m_lastError.c_str();
 }
 
-void SDL3AsyncFilesystem::workerLoop() {
+void StdAsyncFilesystem::workerLoop() {
     auto push = [&](CompletedRequest r) {
         std::lock_guard lock(m_completedMtx);
         m_completedQueue.push_back(std::move(r));
@@ -125,16 +125,18 @@ void SDL3AsyncFilesystem::workerLoop() {
         const std::filesystem::path base = (req->domain == PathDomain::Assets) ? m_assetsRoot : m_userDataRoot;
         const std::filesystem::path fullPath = base / req->path;
 
-        SDL_IOStream* stream = SDL_IOFromFile(fullPath.string().c_str(), "rb");
-        if (!stream) {
-            push({id, AsyncReadStatus::Error, {}, SDL_GetError()});
+        // Open from the fs::path object so Windows uses the wide native path
+        // (UTF-8-safe). std::ifstream needs no per-thread TLS cleanup.
+        std::ifstream ifs(fullPath, std::ios::binary);
+        if (!ifs) {
+            push({id, AsyncReadStatus::Error, {}, "failed to open file: " + fullPath.string()});
             continue;
         }
 
-        Sint64 rawSize = SDL_GetIOSize(stream);
-        if (rawSize < 0) {
-            SDL_CloseIO(stream);
-            push({id, AsyncReadStatus::Error, {}, SDL_GetError()});
+        std::error_code ec;
+        std::uintmax_t rawSize = std::filesystem::file_size(fullPath, ec);
+        if (ec) {
+            push({id, AsyncReadStatus::Error, {}, ec.message()});
             continue;
         }
 
@@ -142,15 +144,12 @@ void SDL3AsyncFilesystem::workerLoop() {
         std::vector<uint8_t> data(fileSize);
 
         if (fileSize > 0) {
-            std::size_t bytesRead = SDL_ReadIO(stream, data.data(), fileSize);
-            if (bytesRead != fileSize) {
-                SDL_CloseIO(stream);
-                push({id, AsyncReadStatus::Error, {}, SDL_GetError()});
+            ifs.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(fileSize));
+            if (static_cast<std::size_t>(ifs.gcount()) != fileSize) {
+                push({id, AsyncReadStatus::Error, {}, "short read: " + fullPath.string()});
                 continue;
             }
         }
-
-        SDL_CloseIO(stream);
 
         if (req->cancelled.load(std::memory_order_relaxed)) {
             push({id, AsyncReadStatus::Cancelled, {}, {}});
@@ -158,10 +157,6 @@ void SDL3AsyncFilesystem::workerLoop() {
             push({id, AsyncReadStatus::Success, std::move(data), {}});
         }
     }
-
-    // Free SDL's per-thread error buffer allocated lazily by SDL_IOFromFile.
-    // Without this, LSAN reports the TLS allocation as a leak when the thread exits.
-    SDL_CleanupTLS();
 }
 
 } // namespace fl

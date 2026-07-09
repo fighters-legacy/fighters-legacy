@@ -52,13 +52,13 @@
 #include "render/TerrainStreamer.h"
 #include "render/WindshieldRain.h"
 #include "sandbox/SandboxInspector.h"
-#include "sdl3/SDL3AsyncFilesystem.h"
 #include "sdl3/SDL3Cursor.h"
 #include "sdl3/SDL3Display.h"
-#include "sdl3/SDL3Filesystem.h"
 #include "sdl3/SDL3Input.h"
 #include "sdl3/SDL3Joystick.h"
 #include "sdl3/SDL3Window.h"
+#include "stdfs/StdAsyncFilesystem.h"
+#include "stdfs/StdFilesystem.h"
 #include "vulkan/VkRendererFactory.h"
 
 #include "ClientPrediction.h"
@@ -392,7 +392,7 @@ bool Game::initPlatform(int argc, char** argv) {
 
     const char* baseRaw = SDL_GetBasePath();
     d.services.assetsRoot = baseRaw ? fs::path(baseRaw) : fs::path(".");
-    d.services.p.filesystem = std::make_unique<SDL3Filesystem>(d.services.assetsRoot, d.services.userDataDir);
+    d.services.p.filesystem = std::make_unique<StdFilesystem>(d.services.assetsRoot, d.services.userDataDir);
 
     d.services.userConfig.emplace(*d.services.p.filesystem, *d.services.rawLogger);
     d.services.userConfig->load();
@@ -477,7 +477,7 @@ bool Game::initWindowAndRenderer() {
         return false;
     }
 
-    auto asyncFs = std::make_unique<SDL3AsyncFilesystem>(d.services.assetsRoot, d.services.userDataDir);
+    auto asyncFs = std::make_unique<StdAsyncFilesystem>(d.services.assetsRoot, d.services.userDataDir);
     if (!asyncFs->init()) {
         d.services.rawLogger->log(LogLevel::Error, __FILE__, __LINE__, asyncFs->getLastError());
         return false;
