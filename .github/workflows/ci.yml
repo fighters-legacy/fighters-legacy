@@ -261,3 +261,99 @@ jobs:
           assert m["lod_levels"] == 3
           print("OK: all chunk sizes, dtypes, and manifest fields correct")
           EOF
+
+  # ---------------------------------------------------------------------------
+  # libFuzzer per-PR smoke (#708). fuzz-changes gates on touched paths and emits
+  # a JSON matrix of harnesses; fuzz-run builds+smokes each; fuzz-smoke is the
+  # single stable required check (green even when fuzz-run is skipped).
+  # ---------------------------------------------------------------------------
+  fuzz-changes:
+    needs: [lint]
+    name: Fuzz changes
+    runs-on: ubuntu-latest
+    outputs:
+      harnesses: ${{ steps.set.outputs.harnesses }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Detect fuzzable changes and enumerate harnesses
+        id: set
+        run: |
+          # A change to any fuzzable source, the fuzz scaffold, the build config, or this workflow
+          # arms the smoke. Push events with an unknown/absent base run the full set.
+          filter='^(engine|server|game|fuzz)/|^CMakeLists\.txt$|^CMakePresets\.json$|^\.github/workflows/ci\.yml$'
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            changed=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD)
+          elif git cat-file -e "${{ github.event.before }}" 2>/dev/null; then
+            changed=$(git diff --name-only "${{ github.event.before }}" HEAD)
+          else
+            changed="__ALL__"
+          fi
+          if [ "$changed" = "__ALL__" ] || echo "$changed" | grep -qE "$filter"; then
+            harnesses=$(ls fuzz/fuzz_*.cpp | sed 's#^fuzz/##; s#\.cpp$##' | jq -R . | jq -sc .)
+          else
+            harnesses='[]'
+          fi
+          echo "Fuzzable change: ${harnesses}"
+          echo "harnesses=${harnesses}" >> "$GITHUB_OUTPUT"
+
+  fuzz-run:
+    needs: [fuzz-changes]
+    if: needs.fuzz-changes.outputs.harnesses != '[]'
+    name: Fuzz (${{ matrix.harness }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        harness: ${{ fromJSON(needs.fuzz-changes.outputs.harnesses) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install dependencies
+        uses: ./.github/actions/install-linux-deps
+        with:
+          clang: 'true'
+
+      - name: Cache CMake FetchContent dependencies
+        uses: actions/cache@v6
+        with:
+          path: build/_deps
+          key: cmake-deps-v2-fuzz-${{ hashFiles('cmake/dependencies.cmake') }}
+
+      - name: Configure
+        run: cmake --preset fuzz
+
+      - name: Build harness
+        run: cmake --build --preset fuzz --target ${{ matrix.harness }}
+
+      - name: Smoke (60 s over seed corpus)
+        run: ctest --preset fuzz -R "^fuzz_smoke_${{ matrix.harness }}$" --output-on-failure
+
+      - name: Upload findings
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-findings-${{ matrix.harness }}
+          path: build/fuzz/fuzz/artifacts/${{ matrix.harness }}/
+          if-no-files-found: ignore
+
+  fuzz-smoke:
+    needs: [fuzz-changes, fuzz-run]
+    if: always()
+    name: fuzz-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate fuzz result
+        run: |
+          result="${{ needs.fuzz-run.result }}"
+          echo "fuzz-run result: ${result}"
+          if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
+            echo "Fuzz smoke failed."
+            exit 1
+          fi
+          echo "Fuzz smoke OK (ran or skipped — no fuzzable change)."
