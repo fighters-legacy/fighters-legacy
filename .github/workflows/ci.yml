@@ -167,10 +167,11 @@ jobs:
           bad=$(ldd build/debug/game/fighters-legacy/fighters-legacy \
                 | grep -Ei "sdl3|openal|ktx" || true)
           [ -z "$bad" ] || (echo "Unexpected dynamic deps: $bad" && exit 1)
-          # fl-server is headless: it must not link SDL3 (#711 — filesystem I/O
-          # moved to the SDL-free platform-stdfs backend).
-          bad_srv=$(ldd build/debug/server/fl-server/fl-server | grep -Ei "sdl3" || true)
-          [ -z "$bad_srv" ] || (echo "fl-server unexpectedly links SDL3: $bad_srv" && exit 1)
+          # fl-server is headless: no client backend may reach it (#711 dropped SDL3; #713
+          # guards the full set — the binary-level backstop for cmake/layering.cmake).
+          bad_srv=$(ldd build/debug/server/fl-server/fl-server \
+                    | grep -Ei "sdl3|vulkan|openal" || true)
+          [ -z "$bad_srv" ] || (echo "fl-server links a client backend: $bad_srv" && exit 1)
 
       - name: Configure OpenAL Soft null backend
         if: matrix.os == 'ubuntu-latest'

@@ -29,7 +29,7 @@ Thin abstraction over OS and hardware APIs. Each backend is isolated:
 | Audio | OpenAL Soft | `platform/openal/` |
 | Networking | ENet | `platform/net/` |
 
-The HAL exposes platform-independent interfaces to the engine core. Nothing above the HAL layer links directly against Vulkan, SDL3, OpenAL, or ENet headers.
+The HAL exposes platform-independent interfaces to the engine core. Nothing above the HAL layer links directly against Vulkan, SDL3, OpenAL, or ENet headers — formalized and enforced at configure time; see [Module Boundary Policy](#module-boundary-policy) below.
 
 For upstream documentation on each backend, see [`docs/references.md`](references.md).
 
@@ -98,6 +98,72 @@ Mods can ship translations by placing TOML files under `locale/<lang>/` inside t
 ### Content Packs (external)
 
 Any repository that implements `IContentPack` and compiles to a shared library can be loaded as a content pack. The engine is indifferent to the source or format of the underlying assets.
+
+## Module Boundary Policy
+
+The monorepo is kept **split-ready** (2026-06-28 decision record): a future
+`fl-engine`/`fl-client`/`fl-server` repo split (post-protocol-freeze) must be nearly free. The
+layered model above is therefore not just a drawing — it is a set of CMake-target-level link rules
+asserted on every configure. At the target level the layer DAG is:
+
+```
+  fighters-legacy (game client)              fl-server (headless server)
+      │  │  │                                     │
+      │  │  └── client backends:                  │  (no client backend may
+      │  │      platform-sdl3 / platform-vulkan / │   reach fl-server)
+      │  │      platform-openal                   │
+      │  └───────────┬────────────────────────────┘
+      │              ▼
+      │      platform-net (createNetwork() facade)
+      │              ├── platform-enet  (enet6)
+      │              └── platform-gns   (GameNetworkingSockets, FL_ENABLE_GNS)
+      ▼
+  engine-* ──────────────▶ platform-hal (INTERFACE: HAL headers + GLM)
+      │                        headless platform utilities also allowed:
+      │                        platform-file-logger / platform-subprocess / platform-stdfs
+      ▼
+  engine-protocol (zero-dep wire-protocol seam: stdlib only)
+      ▲
+      └── consumed by engine-net, the game client, and the headless tools
+          (bot_swarm, net_check) without pulling WorldBroadcaster / engine-entity
+```
+
+**Allowed edges (policy):**
+
+- **`engine-*` → `platform-hal` is the one allowed platform edge** for backends: `platform-hal` is an
+  INTERFACE target carrying only the HAL headers and GLM. Engine targets may additionally link engine
+  siblings, the pure-stdlib headless platform utilities (`platform-file-logger` — the existing
+  `engine-crash` edge — `platform-subprocess`, `platform-stdfs`), and vetted header/static third-party
+  libraries (tomlplusplus, Lua, stb). They may **never** reach a client backend (`platform-sdl3`,
+  `platform-vulkan`, `platform-openal`) or a transport backend (`platform-enet`, `platform-gns`,
+  `platform-net`), nor the third-party libraries behind them (SDL3, Vulkan, OpenAL, enet6,
+  GameNetworkingSockets). Concrete backends are constructed in the binaries (`main.cpp`/`Game.cpp`)
+  and injected through the HAL interfaces.
+- **`engine-protocol` reaches only the C++ stdlib** (`Threads::Threads` permitted as the stdlib's
+  threading facility). This is the seam a repo split would cut: the wire types + codec are consumable
+  by the server sim, the game client, and headless tools without transitively pulling the server sim
+  or the entity system.
+- **`fl-server` links no client backend** — headless means headless: no SDL3, Vulkan, or OpenAL,
+  statically or dynamically. Transport backends are legitimate server dependencies.
+- **Transport backends are reached only through the `platform-net` facade**: the game binary and
+  `fl-server` link `platform-net` and select a backend at runtime via `createNetwork(TransportKind)`;
+  neither may link `platform-enet`/`platform-gns` directly (the #507 HAL-leak fix, kept fixed). The
+  load tools (`net_check`, `bot_swarm`) deliberately link `platform-enet` as a regression instrument
+  and are exempt.
+
+**Enforcement mechanics:**
+
+- **Configure time** — `fl_assert_layering()` in [`cmake/layering.cmake`](../cmake/layering.cmake),
+  armed from the root `CMakeLists.txt` via `cmake_language(DEFER CALL ...)` so it runs after every
+  `add_subdirectory()` (all targets exist, including conditional ones). It walks
+  `LINK_LIBRARIES`/`INTERFACE_LINK_LIBRARIES` transitively (aliases resolved, `$<LINK_ONLY:...>`
+  stripped) and fails the configure with the full offending link chain
+  (e.g. `engine-world -> platform-sdl3`) for any of the four rule classes above. The walker
+  self-tests against synthetic targets on every configure, so a refactor that silently broke the
+  graph walk fails configure instead of disabling enforcement.
+- **CI binary backstop** — the "Verify static linking (Linux)" step in `ci.yml` runs `ldd` on both
+  the game binary (rejects dynamic `sdl3|openal|ktx`; our bundled libs must be static) and
+  `fl-server` (rejects `sdl3|vulkan|openal`; no client backend at all).
 
 ## Locked Architectural Decisions
 
@@ -337,6 +403,21 @@ opened from `std::filesystem::path` objects (not narrow strings) so UTF-8 paths 
 Windows; the async worker-thread + `service()` swap-drain model is unchanged. Enforced by extending the
 CI "Verify static linking" step to assert `ldd fl-server` shows no SDL3. The remaining #559 sub-task
 grows `cmake/layering.cmake` into full layer-DAG enforcement.
+
+**2026-07-09 — split-ready layering enforced (#713, closes #559).** The module boundaries the
+2026-06-28 monorepo-vs-split decision committed to — most already true, the last violation fixed by
+#711/#712 — are now asserted on every configure instead of relying on review discipline. The seed
+`fl_assert_zero_dep()` grew into `fl_assert_layering()` (`cmake/layering.cmake`, deferred from the
+root `CMakeLists.txt`), which walks `LINK_LIBRARIES`/`INTERFACE_LINK_LIBRARIES` transitively and
+fails configure with the offending link chain on four rule classes: (1) no `engine-*` target reaches
+a client or transport backend; (2) `engine-protocol` links nothing beyond stdlib/`Threads::Threads`
+(the direct `fl_assert_zero_dep` call folded in); (3) `fl-server` reaches no client backend; and
+(4) — a deliberate scope addition beyond the #713 text — the game binary and `fl-server` link the
+`platform-net` facade only, never `platform-enet`/`platform-gns` directly, locking in the #507
+HAL-leak fix. The walker self-tests against synthetic targets each configure so a broken walk cannot
+silently disable enforcement. The CI `ldd` backstop on `fl-server` broadened from `sdl3` to
+`sdl3|vulkan|openal`. The full policy (layer DAG, allowed edges, enforcement mechanics) is documented
+in the new "Module Boundary Policy" section above.
 
 ## Content Pack Architecture
 

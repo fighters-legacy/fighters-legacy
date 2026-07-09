@@ -34,6 +34,9 @@ option(FL_BUILD_FUZZERS "Build libFuzzer harnesses (clang only; see fuzz/)" OFF)
 
 include(cmake/dependencies.cmake)
 include(cmake/layering.cmake)
+# Runs at the end of this directory scope — after every add_subdirectory() below, so all targets
+# (including conditional ones) exist when the module-boundary rules are asserted.
+cmake_language(DEFER CALL fl_assert_layering)
 
 enable_testing()
 
