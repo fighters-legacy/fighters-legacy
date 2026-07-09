@@ -35,6 +35,13 @@ path = ["tools/**/*.sh", "tools/**/*.ps1"]
 SPDX-FileCopyrightText = "2026 MKZ Systems LLC"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
+# libFuzzer seed corpora (#708): tiny synthetic binary wire artifacts minted by fuzz/mint_seeds.cpp.
+# Binary seeds carry no inline SPDX header, so they are covered here.
+[[annotations]]
+path = ["fuzz/corpus/**", "fuzz/**.dict"]
+SPDX-FileCopyrightText = "2026 MKZ Systems LLC"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
 [[annotations]]
 path = "AUTHORS"
 SPDX-FileCopyrightText = "2026 MKZ Systems LLC"

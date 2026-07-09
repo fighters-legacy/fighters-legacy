@@ -95,7 +95,9 @@ See [Testing → Code coverage](#code-coverage) for the full local workflow.
 
 **gh (GitHub CLI)** — used by `scripts/roadmap-status.sh` and `scripts/prune_merged_branches.py`. Both scripts degrade gracefully without it, but `prune_merged_branches.py` will miss squash-merged and rebase-merged branches if `gh` is not authenticated. Install from [cli.github.com](https://cli.github.com) and authenticate with `gh auth login`.
 
+<!-- REUSE-IgnoreStart -->
 Copyright is declared centrally in `REUSE.toml` rather than in each file. All `.h` and `.cpp` files are covered by a glob annotation there — new source files do not need an in-file `SPDX-FileCopyrightText` line. The `// SPDX-License-Identifier: GPL-3.0-or-later` line in each source file is still required (see `CLAUDE.md`).
+<!-- REUSE-IgnoreEnd -->
 
 ### Third-party dependencies & licenses
 
@@ -125,7 +127,9 @@ To work on those repos you need a recent **Go toolchain** (see each repo's `go.m
 pinned version), plus — for the operator — a local Kubernetes (kind/minikube) and the Agones
 chart for end-to-end testing. These tools are **not** required to build or run the game or
 `fl-server`; they live in separate repositories with their own Go CI lanes. New Go files carry
+<!-- REUSE-IgnoreStart -->
 `// SPDX-License-Identifier: GPL-3.0-or-later` headers per REUSE, same as the C++ tree.
+<!-- REUSE-IgnoreEnd -->
 
 ---
 
@@ -229,6 +233,63 @@ genhtml coverage.info --output-directory coverage-report --branch-coverage
 ```
 
 Codecov also posts a PR coverage delta comment automatically.
+
+---
+
+## Fuzzing
+
+Binary-format parsers and network packet handlers are the engine's highest-risk attack
+surfaces — a malformed content pack or a spoofed packet could trigger memory corruption.
+[libFuzzer](https://llvm.org/docs/LibFuzzer.html) harnesses under `fuzz/` exercise these
+parsers on adversarial input under AddressSanitizer + UndefinedBehaviorSanitizer. The
+`fuzz` preset is **clang-only and Linux-only**; the MSVC/GCC build matrix is unaffected.
+
+**Build and run all harnesses:**
+
+```bash
+cmake --preset fuzz
+cmake --build --preset fuzz --target fuzzers
+ctest --preset fuzz --output-on-failure   # 60 s smoke per harness over its seed corpus
+```
+
+Each `fuzz_smoke_<name>` ctest replays the committed seeds in `fuzz/corpus/<name>/` plus a
+build-tree working corpus for 60 s. Requires clang with the libFuzzer runtime
+(`libclang_rt.fuzzer`, bundled with the `clang` package on Ubuntu).
+
+**Run one harness manually (longer, to explore new states):**
+
+```bash
+./build/fuzz/fuzz/fuzz_snapshot_codec fuzz/corpus/fuzz_snapshot_codec -max_total_time=300
+```
+
+### Adding a harness
+
+1. Write `fuzz/fuzz_<name>.cpp` with an `extern "C" int LLVMFuzzerTestOneInput(const
+   uint8_t* data, size_t size)` that drives one parser (fail-soft: `return 0` on rejected
+   input; only a genuine sanitizer trip should abort).
+2. Add one line to `fuzz/CMakeLists.txt`: `fl_add_fuzzer(fuzz_<name>)` followed by the
+   harness's `target_link_libraries` (link the zero-dep `engine-protocol` seam where the
+   parser lives there; compile the owning `.cpp` directly otherwise, as `fuzz_rcon_packet`
+   does for `RconServer.cpp`).
+3. Mint tiny **synthetic** seeds (never copyrighted assets) into `fuzz/corpus/fuzz_<name>/`.
+   Extend `fuzz/mint_seeds.cpp` (reusing the same builders the unit tests use), then run
+   `cmake --build --preset fuzz --target fuzz-mint-seeds && ./build/fuzz/fuzz/fuzz-mint-seeds`.
+   Regeneration must be byte-stable (`git diff` clean).
+4. Optionally add a `fuzz/fuzz_<name>.dict` — it is auto-detected and passed via `-dict=`.
+
+The per-PR CI gate (`fuzz-smoke`) auto-enumerates every `fuzz/fuzz_*.cpp` into a matrix, so
+a new harness needs no workflow change.
+
+### Finding policy
+
+When a harness finds a crash:
+
+1. Minimize the reproducer: `./build/fuzz/fuzz/fuzz_<name> -minimize_crash=1 <crash-file>`.
+2. Fix the parser.
+3. In the **same PR**, commit the minimized input as `fuzz/corpus/fuzz_<name>/regress-*.bin`
+   **and** add a Catch2 regression test that feeds those bytes to the parser and asserts the
+   fixed behavior. The seed prevents libFuzzer regressions; the unit test documents the bug
+   and runs in the fast `debug`/`asan` suites.
 
 ---
 

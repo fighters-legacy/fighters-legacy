@@ -27,6 +27,11 @@ endif()
 # Auto-disabled in dependencies.cmake if OpenSSL is not found.
 option(FL_ENABLE_GNS "Build the GameNetworkingSockets transport backend (protobuf + OpenSSL)" ON)
 
+# libFuzzer harnesses (#708). OFF by default; ON only via the clang-only `fuzz` preset. Gates the
+# top-level fuzz/ subdir, which needs a libFuzzer main (-fsanitize=fuzzer) and clang coverage
+# instrumentation, so it must never enter the MSVC/GCC build matrix.
+option(FL_BUILD_FUZZERS "Build libFuzzer harnesses (clang only; see fuzz/)" OFF)
+
 include(cmake/dependencies.cmake)
 include(cmake/layering.cmake)
 
@@ -38,3 +43,7 @@ add_subdirectory(game)
 add_subdirectory(server)
 add_subdirectory(tools)
 add_subdirectory(tests)
+
+if(FL_BUILD_FUZZERS)
+    add_subdirectory(fuzz)
+endif()

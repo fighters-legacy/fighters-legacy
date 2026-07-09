@@ -108,6 +108,10 @@
   color: "e6b905"
   description: "Design proposal requiring community discussion"
 
+- name: "fuzzing"
+  color: "b60205"
+  description: "libFuzzer harness / finding (see fuzz/)"
+
 # Status labels
 - name: "duplicate"
   color: "cfd3d7"
