@@ -5,20 +5,23 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  schedule:
-    # Nightly 128-client reference run (06:30 UTC).
-    - cron: '30 6 * * *'
+  # NOTE: no `schedule:` — the self-hosted reference runner is a VM on a dev box that is not online
+  # 24/7, and GitHub does not queue missed cron runs (a scheduled run while the box is off silently
+  # skips, giving false confidence). The strict tier is therefore manual `workflow_dispatch` only
+  # (#569). Once an always-on self-hosted runner exists, re-enable scheduling by uncommenting the
+  # crons below and adding `github.event_name == 'schedule'` back to the `reference-gate` job's `if`
+  # (map `github.event.schedule` -> profile set in the `select-profiles` job):
+  #   schedule:
+  #     - cron: '30 6 * * *'   # nightly -> reference (+ overrun once #574 lands)
+  #     - cron: '0 4 * * 6'    # weekly  -> soak
   workflow_dispatch:
     inputs:
       profile:
-        description: 'Profile to run (reference, soak, or entity-scale)'
+        description: 'Profile to run on the self-hosted reference runner'
+        # `overrun` joins this list once #574 lands (see select-profiles / reference-gate).
         type: choice
-        options: [reference, soak, entity-scale]
+        options: [reference, nightly, soak, entity-scale]
         default: reference
-      strict:
-        description: 'Hard-fail on the tick-ms p99 gate (only meaningful on an 8-core reference runner)'
-        type: boolean
-        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -111,31 +114,57 @@ jobs:
         shell: pwsh
         run: .\tools\bot_swarm\run_loadtest.ps1 build\release-msvc 8 3 weave
 
-  # Strict scheduled/dispatch tier: full 128-client reference (or soak) run on the canonical repo.
-  # tick-ms p99 is enforced only with --strict (an 8-core reference/self-hosted runner); advisory on
-  # hosted runners. The dedicated reference runner is tracked as an Epic I follow-on.
-  reference-gate:
-    name: Reference gate (profile=${{ github.event.inputs.profile || 'reference' }})
+  # Cheap hosted orchestration: expand the dispatched profile into a JSON list of matrix "legs".
+  # Kept off the sensitive self-hosted runner, and structured so a future `github.event.schedule`
+  # branch (deferred cron) drops in here without touching the benchmark job.
+  select-profiles:
+    name: Select profiles
     if: >-
       github.repository == 'fighters-legacy/fighters-legacy' &&
-      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    outputs:
+      legs: ${{ steps.pick.outputs.legs }}
+    steps:
+      - id: pick
+        env:
+          PROFILE: ${{ github.event.inputs.profile }}
+        run: |
+          case "$PROFILE" in
+            # `nightly` = the deferred nightly cron's set. The `overrun` leg (governor on) is
+            # appended here once #574 lands; the run step keys FL_LOADTEST_GOVERNOR off leg.governor.
+            nightly) legs='[{"profile":"reference"}]' ;;
+            *)       legs="[{\"profile\":\"$PROFILE\"}]" ;;
+          esac
+          echo "legs=$legs" >> "$GITHUB_OUTPUT"
+          echo "Selected legs: $legs"
+
+  # Strict tier on the self-hosted 8-core/16GB reference VM (#569): full 128-client reference / soak
+  # runs where the `≤ 16.6 ms p99` tick gate is meaningful, so `--strict` is UNCONDITIONAL here.
+  #
+  # SECURITY INVARIANT (self-hosted runner on a PUBLIC repo): this job must never execute fork-PR
+  # code. It is gated to `workflow_dispatch` (only write-access holders can trigger) on the canonical
+  # repo, and gated again on `vars.FL_REFERENCE_RUNNER_READY` (the operator's on-switch, also the
+  # off-switch when the VM is torn down). There is no `pull_request`/fork path to this runner — the
+  # PR tier stays on hosted runners above. Do NOT add `pull_request`/`pull_request_target` triggers.
+  reference-gate:
+    name: Reference gate (profile=${{ matrix.leg.profile }})
+    needs: select-profiles
+    if: >-
+      github.repository == 'fighters-legacy/fighters-legacy' &&
+      github.event_name == 'workflow_dispatch' &&
+      vars.FL_REFERENCE_RUNNER_READY == 'true'
+    runs-on: [self-hosted, linux, x64, fl-reference]
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 1 # one benchmark at a time on the single reference box (isolation)
+      matrix:
+        leg: ${{ fromJSON(needs.select-profiles.outputs.legs) }}
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-
-      - name: Install dependencies
-        uses: ./.github/actions/install-linux-deps
-        with:
-          gcc: 'true'
-
-      - name: Cache CMake FetchContent dependencies
-        uses: actions/cache@v6
-        with:
-          path: build/_deps
-          key: cmake-deps-v2-ubuntu-latest-${{ hashFiles('cmake/dependencies.cmake') }}
 
       - name: Configure (Release, headless)
         # GNS off: bot_swarm is the enet6 regression instrument, so fl-server is built enet6-only
@@ -145,18 +174,18 @@ jobs:
       - name: Build fl-server + bot_swarm
         run: cmake --build --preset release --target fl-server bot_swarm
 
-      - name: Run scale gate
+      - name: Run scale gate (strict)
         run: |
           python3 tools/bot_swarm/scale_gate.py \
-            --profile "${{ github.event.inputs.profile || 'reference' }}" \
+            --profile "${{ matrix.leg.profile }}" \
             --build-dir build/release \
             --baseline tools/bot_swarm/scale-gate-baseline.json \
-            ${{ github.event.inputs.strict == 'true' && '--strict' || '' }}
+            --strict
 
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: scale-gate-reference-reports
+          name: scale-gate-${{ matrix.leg.profile }}-reports
           path: tools/bot_swarm/results/*.json
           if-no-files-found: ignore

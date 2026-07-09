@@ -33,6 +33,17 @@ Vagrant.configure("2") do |config|
 
   config.vm.provision "shell", path: "vm-provision.sh", privileged: true
 
+  # Optional: register this guest as the self-hosted CI runner for the scale-gate strict tier
+  # (issue #569). Off by default — `vagrant up` stays the benchmark-sweep VM. Turn on with a
+  # short-lived registration token (repo Settings -> Actions -> Runners -> New):
+  #   FL_REFENV_RUNNER=1 FL_RUNNER_TOKEN=<token> vagrant up --provider=libvirt
+  # The token is passed through the environment (never committed); see setup-self-hosted-runner.sh.
+  if ENV["FL_REFENV_RUNNER"] == "1"
+    config.vm.provision "shell", privileged: true,
+      env: { "FL_RUNNER_TOKEN" => ENV["FL_RUNNER_TOKEN"] },
+      inline: "bash /src/tools/bot_swarm/reference-env/setup-self-hosted-runner.sh"
+  end
+
   config.vm.provider "libvirt" do |v|
     v.cpus = 8
     v.memory = 16384
