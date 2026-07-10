@@ -57,6 +57,11 @@ class EntityManager : public ISimUpdate {
     [[nodiscard]] EntityState* get(EntityId id) noexcept;
     [[nodiscard]] const EntityState* get(EntityId id) const noexcept;
 
+    // Returns the live entity state at pool slot `idx` (the index yielded by
+    // SpatialIndex::queryRadius / EntityState::id.index), or nullptr if the slot is out of range
+    // or not alive. Lets AI range conditions look up a candidate's state without a generation.
+    [[nodiscard]] const EntityState* getByIndex(uint32_t idx) const noexcept;
+
     // Visits every live entity. Fn: void(EntityState&) or void(const EntityState&).
     template <typename Fn> void forEach(Fn&& fn) {
         m_pool.forEach(std::forward<Fn>(fn));

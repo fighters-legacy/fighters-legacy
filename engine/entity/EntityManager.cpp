@@ -136,6 +136,10 @@ const EntityState* EntityManager::get(EntityId id) const noexcept {
     return m_pool.get(id);
 }
 
+const EntityState* EntityManager::getByIndex(uint32_t idx) const noexcept {
+    return m_pool.getByIndex(idx);
+}
+
 // ── configuration ─────────────────────────────────────────────────────────────
 
 void EntityManager::addEventHandler(IEntityEventHandler* handler) {
