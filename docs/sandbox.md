@@ -211,7 +211,7 @@ The console is a half-screen drop-down overlay. It is fully independent of the c
 | `help [command]` | List all commands, or show usage for one |
 | `types` | List all registered entity types with their indices |
 | `entities` | List all live entities (idx/gen, type, world position) |
-| `spawn <type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn entity with optional AI controller (see AI behaviors below) |
+| `spawn <type> <x> <y> <z> [--faction <n>] [--ai <behavior> [args...]]` | Spawn entity with an optional faction/team (`n` = 0–65535; 0 = neutral) and AI controller (see AI behaviors below) |
 | `kill <idx>` | Remove entity from simulation (queued to sim thread) |
 | `tp <x> <y> <z>` | Teleport player entity to world position |
 | `toggle_pos` | Toggle entity world-position readout below the camera position display |
@@ -240,7 +240,7 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 | `low_yo_yo` | `<entityIdx> [diveDur] [pullDur]` | Dive-and-cut-corner to close on a turning target (defaults: 1.5 s, 2.5 s) |
 | `lua` | `<script_name>` | Load a Lua AI script from the content pack's `ai/` directory (e.g. `patrol`, `interceptor`). See `docs/modding/ai.md`. |
 | `patrol_attack` | `<entityIdx> [engageRangeM] [retreatHp]` | Three-state machine: loiter patrol → lead-pursuit engage when target within range → evade retreat when HP below threshold (defaults: engageRangeM=8000 m, retreatHp=0.25) |
-| `escort` | `<entityIdx> [standoffM]` | Two-state orbit protection: clockwise loiter at standoffM radius around the escorted entity's spawn position → Immelmann reversal when any entity enters the inner defense zone (standoffM×0.5). Best used for fixed or slow-moving assets. (default: standoffM=2000 m) |
+| `escort` | `<entityIdx> [standoffM]` | Two-state orbit protection: clockwise loiter at standoffM radius around the escorted entity's spawn position → Immelmann reversal when a **hostile** entity enters the inner defense zone (standoffM×0.5). Hostiles are classified by faction, so the escort and escortee should be spawned with the same non-neutral `--faction`; friendlies and neutrals are ignored. Best used for fixed or slow-moving assets. (default: standoffM=2000 m) |
 
 **Weather presets:**
 

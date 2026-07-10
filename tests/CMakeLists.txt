@@ -75,6 +75,13 @@ add_executable(test_local_frame test_local_frame.cpp)
 target_link_libraries(test_local_frame PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_local_frame)
 
+# Cube-sphere tile addressing + geometry core (#469); header-only, needs glm (engine-render) +
+# Geodetic.h (engine/flight, header-only).
+add_executable(test_cube_sphere test_cube_sphere.cpp)
+target_link_libraries(test_cube_sphere PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_cube_sphere PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+catch_discover_tests(test_cube_sphere)
+
 add_executable(test_force_model test_force_model.cpp)
 target_link_libraries(test_force_model PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_force_model)

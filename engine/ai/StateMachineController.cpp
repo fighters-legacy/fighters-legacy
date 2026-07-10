@@ -4,6 +4,7 @@
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "spatial/SpatialIndex.h"
+#include "world/FactionDef.h" // areFactionsHostile (header-only inline; no link dep)
 
 #include <cstdio>
 #include <utility>
@@ -161,6 +162,33 @@ Condition AnyEntityWithinRange(float rangeM) {
             double dx = pos[0] - self.transform.pos[0];
             double dy = pos[1] - self.transform.pos[1];
             double dz = pos[2] - self.transform.pos[2];
+            if (dx * dx + dy * dy + dz * dz <= rangeSq) {
+                found = true;
+            }
+        });
+        return found;
+    };
+}
+
+Condition AnyHostileEntityWithinRange(float rangeM) {
+    return [rangeM](const fl::EntityState& self, const fl::EntityManager& em, const fl::SpatialIndex* si) -> bool {
+        if (!si || self.factionIndex == 0) {
+            return false; // no spatial index, or a neutral entity has no enemies
+        }
+        bool found = false;
+        const double rangeSq = static_cast<double>(rangeM) * static_cast<double>(rangeM);
+        // queryRadius is conservative (cell-level): exact distance + faction check required.
+        si->queryRadius(self.transform.pos, static_cast<double>(rangeM), [&](uint32_t idx, const double* pos) {
+            if (found || idx == self.id.index) {
+                return;
+            }
+            const fl::EntityState* other = em.getByIndex(idx);
+            if (!other || !fl::areFactionsHostile(self.factionIndex, other->factionIndex)) {
+                return;
+            }
+            const double dx = pos[0] - self.transform.pos[0];
+            const double dy = pos[1] - self.transform.pos[1];
+            const double dz = pos[2] - self.transform.pos[2];
             if (dx * dx + dy * dy + dz * dz <= rangeSq) {
                 found = true;
             }

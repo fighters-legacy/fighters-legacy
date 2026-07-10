@@ -46,6 +46,15 @@ class EntityPool {
     [[nodiscard]] EntityState* get(EntityId id) noexcept;
     [[nodiscard]] const EntityState* get(EntityId id) const noexcept;
 
+    // Returns the live entity state at pool slot `idx` (as yielded by SpatialIndex::queryRadius
+    // and EntityState::id.index), or nullptr if the slot is out of range or not alive. Unlike
+    // get(EntityId), no generation is required — the caller already holds the current slot index.
+    [[nodiscard]] const EntityState* getByIndex(uint32_t idx) const noexcept {
+        if (idx >= m_slots.size() || !m_slots[idx].alive)
+            return nullptr;
+        return &m_slots[idx].state;
+    }
+
     [[nodiscard]] uint32_t liveCount() const noexcept {
         return m_count;
     }

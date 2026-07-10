@@ -429,10 +429,11 @@ inline std::unique_ptr<fl::IEntityController> createController(std::string_view 
             standoffM = static_cast<float>(d);
         }
 
-        // Orbit center: escortee's position at factory-creation time (fixed).
-        // The escort loiters at standoffM radius; the escortee stays at the center (~standoffM
-        // away from the escort on orbit), so AnyEntityWithinRange(standoffM * 0.5) does not
-        // trigger on the escortee. For a proper moving-escort, a DynamicLoiterController is
+        // Orbit center: escortee's position at factory-creation time (fixed). The escort loiters
+        // at standoffM radius. The break transition uses AnyHostileEntityWithinRange, which ignores
+        // the escortee by faction (same faction as the escort) rather than by geometry (#465) — so
+        // the escort and escortee must be spawned with the same non-neutral faction, and only a
+        // hostile intruder trips the break. For a proper moving-escort, a DynamicLoiterController is
         // needed (tracked as a follow-on issue).
         const fl::EntityState* es = entityManager->get(escortedId);
         glm::dvec3 orbitCenter = es ? glm::dvec3(es->transform.pos[0], es->transform.pos[1], es->transform.pos[2])
@@ -445,8 +446,8 @@ inline std::unique_ptr<fl::IEntityController> createController(std::string_view 
                                                       LoiterDir::Clockwise);
         });
         sm->addState("break", []() { return std::make_unique<ImmelmannController>(); });
-        sm->addTransition("follow", "break", AnyEntityWithinRange(innerRange));
-        sm->addTransition("break", "follow", Not(AnyEntityWithinRange(innerRange)), 6.0f);
+        sm->addTransition("follow", "break", AnyHostileEntityWithinRange(innerRange));
+        sm->addTransition("break", "follow", Not(AnyHostileEntityWithinRange(innerRange)), 6.0f);
         sm->setInitialState("follow");
         return sm;
     }

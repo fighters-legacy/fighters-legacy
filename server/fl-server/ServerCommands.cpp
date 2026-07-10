@@ -496,12 +496,14 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                  return buf;
                              });
 
-    // spawn <type> <x> <y> <z> [--ai <behavior> [behavior-args...]]
+    // spawn <type> <x> <y> <z> [--faction <n>] [--ai <behavior> [behavior-args...]]
     registry.registerCommand(
-        "spawn", "spawn <type> <x> <y> <z> [--ai <behavior> [args...]]  -- spawn entity with optional AI controller",
+        "spawn",
+        "spawn <type> <x> <y> <z> [--faction <n>] [--ai <behavior> [args...]]  -- spawn entity with optional "
+        "faction and AI controller",
         [ctx](std::span<std::string_view> args) -> std::string {
             if (args.size() < 4)
-                return "usage: spawn <type> <x> <y> <z> [--ai <behavior> [args...]]";
+                return "usage: spawn <type> <x> <y> <z> [--faction <n>] [--ai <behavior> [args...]]";
             if (!ctx.sim.entityManager || !ctx.sim.gameLoop)
                 return "spawn: not available";
             std::string typeId(args[0]);
@@ -519,16 +521,35 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             if (!parseD(args[1], x) || !parseD(args[2], y) || !parseD(args[3], z))
                 return "spawn: invalid coordinates";
 
-            // Parse optional --ai <behavior> [behavior-args...]
+            // Pull --faction <n> out first (order-independent), leaving the rest for --ai parsing.
+            // Faction 0 = neutral (default); factions are server-assigned at spawn time (#465).
+            uint16_t factionIndex = 0;
+            std::vector<std::string_view> rest;
+            for (std::size_t i = 4; i < args.size(); ++i) {
+                if (args[i] == "--faction") {
+                    if (i + 1 >= args.size())
+                        return "spawn: --faction requires a number";
+                    uint32_t f = 0;
+                    std::string_view fv = args[++i];
+                    auto [ptr, ec] = std::from_chars(fv.data(), fv.data() + fv.size(), f);
+                    if (ec != std::errc{} || ptr != fv.data() + fv.size() || f > 0xFFFFu)
+                        return "spawn: --faction must be an integer in [0, 65535]";
+                    factionIndex = static_cast<uint16_t>(f);
+                } else {
+                    rest.push_back(args[i]);
+                }
+            }
+
+            // Parse optional --ai <behavior> [behavior-args...] from the remaining tokens.
             std::string behavior;
             std::vector<std::string> behaviorArgStrings;
-            for (std::size_t i = 4; i < args.size(); ++i) {
-                if (args[i] == "--ai") {
-                    if (i + 1 >= args.size())
+            for (std::size_t i = 0; i < rest.size(); ++i) {
+                if (rest[i] == "--ai") {
+                    if (i + 1 >= rest.size())
                         return "spawn: --ai requires a behavior name";
-                    behavior = std::string(args[++i]);
-                    while (i + 1 < args.size())
-                        behaviorArgStrings.emplace_back(args[++i]);
+                    behavior = std::string(rest[++i]);
+                    while (i + 1 < rest.size())
+                        behaviorArgStrings.emplace_back(rest[++i]);
                     break;
                 }
             }
@@ -567,7 +588,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             }
 
             ctx.sim.gameLoop->enqueueSimCallback(
-                [ctx, typeId, x, y, z, behavior, behaviorArgStrings, luaScriptSrc, luaScriptRoot]() {
+                [ctx, typeId, x, y, z, factionIndex, behavior, behaviorArgStrings, luaScriptSrc, luaScriptRoot]() {
                     fl::EntityTransform t{};
                     t.pos[0] = x;
                     t.pos[1] = y;
@@ -575,6 +596,11 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                     fl::EntityId id = ctx.sim.entityManager->spawn(typeId.c_str(), t);
                     char m[160];
                     if (id.valid()) {
+                        // Faction is server-assigned at spawn time (#465); 0 = neutral (default).
+                        if (factionIndex != 0) {
+                            if (fl::EntityState* s = ctx.sim.entityManager->get(id))
+                                s->factionIndex = factionIndex;
+                        }
                         std::snprintf(m, sizeof(m), "[admin] spawned %s entity=%u/%u", typeId.c_str(), id.index,
                                       id.generation);
                         std::printf("%s\n", m);
