@@ -221,6 +221,17 @@ if(TARGET platform-enet)
         "${CMAKE_CURRENT_SOURCE_DIR}")
     catch_discover_tests(test_admin_console)
 
+    # Server content bootstrap (#683): pack entity defs -> EntityTypeRegistry. Compiles the
+    # server-layer helper directly (idiom from test_admin_console); mock_content.h from tests/.
+    add_executable(test_content_bootstrap test_content_bootstrap.cpp
+        "${CMAKE_SOURCE_DIR}/server/fl-server/ContentBootstrap.cpp")
+    target_link_libraries(test_content_bootstrap PRIVATE
+        Catch2::Catch2WithMain engine-content engine-entity)
+    target_include_directories(test_content_bootstrap PRIVATE
+        "${CMAKE_SOURCE_DIR}/server/fl-server"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    catch_discover_tests(test_content_bootstrap)
+
     add_executable(test_rcon_server test_rcon_server.cpp
         "${CMAKE_SOURCE_DIR}/server/fl-server/RconServer.cpp")
     target_link_libraries(test_rcon_server PRIVATE

@@ -15,6 +15,7 @@
 //
 // See docs/fl-server-config.md for the full operator configuration reference.
 // fl-lobby integration is tracked in issue #36.
+#include "ContentBootstrap.h"
 #include "IpListFile.h"
 #include "NetworkFactory.h"
 #include "RconServer.h"
@@ -361,6 +362,16 @@ int main(int argc, char** argv) {
     debugDef.category = fl::ObjectCategory::AirVehicle;
     debugDef.maxHp = 100.0f;
     entityRegistry.registerType(std::move(debugDef));
+
+    // Load content-pack entity definitions into the registry (#683) after the builtin type, so pack
+    // types become spawnable via the `spawn` admin command and appear in `types`. MsgEntityTypeDef
+    // already ships the populated registry to clients on connect -- no protocol change.
+    {
+        const uint32_t packTypes = registerPackEntityDefs(assets, entityRegistry, *log);
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "content: %u pack entity type(s) registered", packTypes);
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
     // Entities are spawned on-demand by WorldBroadcaster::onConnect; none pre-spawned here.
 
     // ---- Pre-cache peer spawn-point elevations (main-thread only, before gameLoop.start()) ----
