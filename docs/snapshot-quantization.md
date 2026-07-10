@@ -15,39 +15,54 @@ fields; this epic does the same, targeting a ~3–4× reduction while staying tr
 
 ## Design
 
-Each `MsgWorldSnapshot` is `header(40) → quantized bitstream(bitstreamBytes) → TLV block`. The
-header carries a **per-snapshot `double frameOrigin[3]`** (the receiving peer's authoritative
-position) and a `recordCount`. The body is a single bit-packed stream of `recordCount` entity
-records, MSB-first.
+Each `MsgWorldSnapshot` is
+`header(24) → origin table(originCount × double[3]) → stitched record stream(bitstreamBytes) → TLV
+block`. Positions are quantized relative to a **shared per-region origin** — the floor of the
+entity's position onto a fixed `kOriginGridM` (~65 km) grid (`SnapshotCodec::originForPos`) — instead
+of the receiving peer's position, so the sim encodes each entity **once per tick** (a full and a delta
+blob) and each peer's snapshot is assembled by *stitching* the pre-encoded blobs (memcpy), not
+re-quantizing per peer (#725). The header carries `recordCount` + `originCount`; the origin table holds
+the distinct grid origins this snapshot's records reference (deduped); each record is prefixed with an
+origin-index varint into that table.
 
-### Record layout (one entity)
+### Record layout (one stitched entity, byte-aligned)
 
 | Field | Encoding |
 |---|---|
-| `idxDelta` | unsigned varint of `entityIdx − previousIdx` (records are sorted by idx ascending) |
+| `originIndex` | unsigned varint into the origin table (written at stitch time, not baked into the blob) |
+| `idx` | unsigned varint of the **absolute** entityIdx (peer-independent → blobs stitch in any order) |
 | `full` | 1 bit — full record (carries typeIndex + gen) vs. delta |
 | `genPresent` | 1 bit — generation is on the wire (else the client reuses its cache) |
 | `omegaPresent` | 1 bit — angular rates present (set only for the receiving peer's own entity) |
 | `gen` | 16 bits, only if `genPresent` |
 | `typeIndex` | varint, only if `full` |
-| position | 3 × `kPosBitsPerAxis` (22), signed offset from `frameOrigin` at `kPosStepM` (0.125 m) |
+| position | 3 × `kPosBitsPerAxis` (22), signed offset from the record's shared grid origin at `kPosStepM` (0.125 m) |
 | orientation | 2-bit dropped-component index + 3 × `kQuatBits` (10) — smallest-three |
 | velocity | 3 × `kVelBits` (18), range ± `kVelMaxMps` (2000) |
 | omega | 3 × `kOmegaBits` (12), range ± `kOmegaMaxRadS` (20), only if `omegaPresent` |
 | byte fields | `damageLevel`(3) + `engineFailFlags`(5) + `throttle`(7) + `fuelPct`(7) + `abEngaged`(1) + `playerOwned`(1) |
+| padding | zero bits to the next byte boundary (so the next record's `originIndex` starts on a byte) |
 
 Constants live in `engine/net/SnapshotCodec.h` and are tuned against the bot_swarm
-`downstream_kbs_per_client` metric. Representative sizes at the current budget: a steady-state delta
-record is **24 bytes** (vs. the old 64), a full own-entity record (typeIndex + gen + omega) is
-**31 bytes** (vs. 88). These exact sizes are locked by a golden-bytes test in `test_snapshot_codec`.
+`downstream_kbs_per_client` metric. Representative blob sizes: a steady-state delta blob is
+**24 bytes**, a full own-entity blob (typeIndex + gen + omega) is **31 bytes**; the stitched record
+adds the origin-index varint (1 byte for a small index). These blob sizes are locked by a golden-bytes
+test in `test_snapshot_codec`. The encode-once trade adds a small per-record overhead (origin index +
+byte alignment) plus the per-snapshot origin table in exchange for O(entities) encode instead of
+O(peers × visible).
 
 ### Why these choices
 
-- **Frame-origin-relative position.** Storing a `double` per entity is wasteful; storing absolute
-  `float` loses precision at planet scale. Encoding the offset from a per-snapshot `double` origin
-  keeps fine resolution everywhere within the interest radius. `kPosBitsPerAxis = 22` at
-  `kPosStepM = 0.125` covers ±262 km — comfortably beyond the default 200 km draw distance. Offsets
-  beyond the encodable range are clamped (interest culling removes them first in practice).
+- **Shared-grid-origin-relative position (#725).** Storing a `double` per entity is wasteful; storing
+  absolute `float` loses precision at planet scale. Encoding the offset from a shared **grid-cell**
+  `double` origin keeps fine resolution everywhere while making a record peer-independent: the same
+  quantized blob is valid for every peer, so it is encoded once per tick and stitched (memcpy) into
+  each peer's stream. `kPosBitsPerAxis = 22` at `kPosStepM = 0.125` covers ±262 km — far beyond the
+  ~65 km grid cell, so the offset always fits. The grid origins actually referenced by a snapshot are
+  carried (deduped) in its origin table as exact `double`s, so precision is uniform at planet scale.
+  (The old per-peer `frameOrigin` gave the peer's *own* entity a near-exact position as an artifact of
+  `frameOrigin == own position`; under the shared origin the own entity is quantized to 0.125 m like
+  every other entity.)
 - **Smallest-three quaternion.** A unit quaternion's largest component is reconstructed from the
   other three (each in ±1/√2), so 32 bits replaces 16 bytes with imperceptible error after
   renormalization.
@@ -73,7 +88,7 @@ agree bit-for-bit):
   running width stays ≤ 39 bits — no shift-by-≥width UB (enforced by the ASan/UBSan CI job).
 - NaN/Inf inputs are clamped before any float→int cast.
 - The bitstream is byte-addressed, so there are no misaligned multi-byte loads on ARM64; only the
-  40-byte header is read via `WireCodec readMsg` (memcpy), with `frameOrigin` 8-aligned within it.
+  24-byte header is read via `WireCodec readMsg` (memcpy); the origin table's `double`s are 8-aligned after it.
 
 ## Validation
 

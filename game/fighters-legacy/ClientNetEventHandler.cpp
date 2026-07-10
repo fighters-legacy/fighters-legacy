@@ -123,7 +123,10 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         //   2. Decode + upsert this packet's records.
         //   3. Age out entries not seen within kSnapshotRetentionTicks (interest-out / lost despawns).
         //   4. Build the RenderSnapshot from the whole cache.
-        const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) + hdr.bitstreamBytes;
+        // Body layout (#725): [origin table: originCount x double[3]][stitched record stream][TLV].
+        const std::size_t originBytes = static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double);
+        const std::size_t recordOffset = sizeof(fl::MsgWorldSnapshotHeader) + originBytes;
+        const std::size_t extOffset = recordOffset + hdr.bitstreamBytes;
         const uint8_t* ext = (size > extOffset) ? static_cast<const uint8_t*>(data) + extOffset : nullptr;
         const std::size_t extSz = (size > extOffset) ? size - extOffset : 0u;
 
@@ -139,16 +142,28 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             }
         }
 
-        // 2. Decode the quantized record bitstream. Positions are relative to hdr.frameOrigin; full
-        // records carry typeIndex + gen, deltas reuse the per-entity cache (m_knownEntities).
-        const std::size_t bodyAvail = (size >= sizeof(hdr)) ? (size - sizeof(hdr)) : 0u;
-        const std::size_t bodyBytes = std::min<std::size_t>(hdr.bitstreamBytes, bodyAvail);
-        fl::BitReader reader(static_cast<const uint8_t*>(data) + sizeof(hdr), bodyBytes);
-        uint32_t prevIdx = 0;
-        for (uint16_t i = 0; i < hdr.recordCount; ++i) {
+        // Read the shared-origin table (double[3] each; unaligned-safe memcpy, bounded by the packet).
+        // originsOk == false means a truncated packet — skip record decode and keep the existing cache.
+        // Only allocate the table when the packet actually contains it: a malformed header can claim a
+        // huge originCount, so never size the buffer off the claim alone (allocation-amplification DoS).
+        const bool originsOk = recordOffset <= size;
+        std::vector<double> originTable;
+        if (originsOk && hdr.originCount > 0) {
+            originTable.resize(static_cast<std::size_t>(hdr.originCount) * 3u);
+            std::memcpy(originTable.data(), static_cast<const uint8_t*>(data) + sizeof(fl::MsgWorldSnapshotHeader),
+                        originBytes);
+        }
+
+        // 2. Decode the stitched record stream (#725). Each record carries an origin index into the
+        // table above; positions are relative to that shared origin. Full records carry typeIndex + gen,
+        // deltas reuse the per-entity cache (m_knownEntities).
+        const std::size_t recordAvail = (size > recordOffset) ? (size - recordOffset) : 0u;
+        const std::size_t recordBytes = std::min<std::size_t>(hdr.bitstreamBytes, recordAvail);
+        fl::BitReader reader(static_cast<const uint8_t*>(data) + recordOffset, recordBytes);
+        for (uint16_t i = 0; originsOk && i < hdr.recordCount; ++i) {
             fl::QuantEntity qe;
             bool genPresent = false;
-            if (!fl::decodeRecord(reader, qe, prevIdx, hdr.frameOrigin, genPresent))
+            if (!fl::decodeStandaloneRecord(reader, qe, originTable.data(), hdr.originCount, genPresent))
                 break; // truncated/malformed — stop, keep what decoded
 
             auto kit = m_knownEntities.find(qe.idx);

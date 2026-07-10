@@ -62,19 +62,19 @@ TEST_CASE("WireCodec: readRecordAt bounds-checks variable-length tails", "[wire_
 }
 
 TEST_CASE("WireCodec: viewMsg returns a pointer when aligned, nullptr when not", "[wire_codec]") {
-    // MsgWorldSnapshotHeader has alignof 8 (it carries frameOrigin[3] doubles). Use an over-aligned
-    // backing buffer so the alignment behaviour is deterministic across platforms.
+    // MsgWorldSnapshotHeader has alignof 8 (the origin table that follows it is double[3] entries).
+    // Use an over-aligned backing buffer so the alignment behaviour is deterministic across platforms.
     alignas(8) std::byte storage[sizeof(fl::MsgWorldSnapshotHeader) + 8]{};
     fl::MsgWorldSnapshotHeader src{};
     src.tickIndex = 4242u;
-    src.frameOrigin[1] = 500.0;
+    src.originCount = 2u;
     std::memcpy(storage, &src, sizeof(src));
 
     // Aligned base: view succeeds and reads the right value with no copy.
     const fl::MsgWorldSnapshotHeader* v = fl::viewMsg<fl::MsgWorldSnapshotHeader>(storage, sizeof(src));
     REQUIRE(v != nullptr);
     CHECK(v->tickIndex == 4242u);
-    CHECK(v->frameOrigin[1] == 500.0);
+    CHECK(v->originCount == 2u);
 
     // Misaligned pointer (base + 1): view declines, caller would fall back to readMsg.
     CHECK(fl::viewMsg<fl::MsgWorldSnapshotHeader>(storage + 1, sizeof(src)) == nullptr);

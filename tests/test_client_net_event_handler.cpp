@@ -58,8 +58,8 @@ struct TestRec {
 // TLV block afterwards if needed. Mirrors WorldBroadcaster's encode path.
 inline std::vector<uint8_t> buildSnapshotPkt(uint64_t tick, const std::vector<TestRec>& recs,
                                              std::array<double, 3> origin = {0.0, 0.0, 0.0}) {
-    fl::BitWriter w;
-    uint32_t prev = 0;
+    // All records reference a single shared origin at table index 0 (#725 encode-once layout).
+    std::vector<uint8_t> stream;
     for (const auto& rrec : recs) {
         fl::QuantEntity qe;
         qe.idx = rrec.idx;
@@ -80,23 +80,25 @@ inline std::vector<uint8_t> buildSnapshotPkt(uint64_t tick, const std::vector<Te
         qe.fuelPct = rrec.fuel;
         qe.abEngaged = rrec.ab;
         qe.playerOwned = rrec.owned;
-        fl::encodeRecord(w, qe, prev, origin.data(), /*sendGen=*/rrec.isFull || rrec.sendGen);
+        std::vector<uint8_t> blob;
+        fl::encodeStandaloneRecord(blob, qe, origin.data(), /*sendGen=*/rrec.isFull || rrec.sendGen);
+        fl::appendStitchedRecord(stream, /*originIndex=*/0u, blob);
     }
-    w.alignToByte();
 
     std::vector<uint8_t> buf;
     fl::MsgWorldSnapshotHeader hdr{};
     hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
     hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
     hdr.tickIndex = tick;
-    hdr.frameOrigin[0] = origin[0];
-    hdr.frameOrigin[1] = origin[1];
-    hdr.frameOrigin[2] = origin[2];
     const std::size_t hdrOffset = buf.size();
     fl::appendMsg(buf, hdr);
-    buf.insert(buf.end(), w.bytes().begin(), w.bytes().end());
+    // Origin table: one entry (all records reference index 0).
+    const auto* op = reinterpret_cast<const uint8_t*>(origin.data());
+    buf.insert(buf.end(), op, op + 3u * sizeof(double));
+    buf.insert(buf.end(), stream.begin(), stream.end());
     hdr.recordCount = static_cast<uint16_t>(recs.size());
-    hdr.bitstreamBytes = static_cast<uint32_t>(w.byteCount());
+    hdr.originCount = 1u;
+    hdr.bitstreamBytes = static_cast<uint32_t>(stream.size());
     fl::writeMsgAt(buf, hdrOffset, hdr);
     return buf;
 }

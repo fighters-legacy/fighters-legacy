@@ -9,6 +9,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: Shared-origin snapshot quantization — encode each entity once per tick (#725). Records are quantized relative to a shared grid-cell origin (not the receiving peer's position) and written peer-independently (absolute idx, byte-aligned), so per-peer snapshots are assembled by stitching pre-encoded blobs (memcpy) instead of re-quantizing per peer: `O(entities)` encode + `O(peers × visible)` memcpy. `MsgWorldSnapshotHeader` gains an origin table; ~+7% bandwidth for the O(entities) encode win. `kProtocolVersion` unchanged
+
 - **flight**: Local-level frame utilities (`LocalFrame.h`) — `radialUp`, ENU basis, `localAltitude`, `headingTo`, and `pitchOf` on a spherical planet; header-only foundation for the radial physics floor and local-level nav/HUD (#470)
 - **server**: Self-reported process RSS in the tick metrics (`ServerTickReport` schema v3: `rss_kb`/`rss_startup_kb` via `ProcessStats::currentRssKb()`) plus a portable `bot_swarm --assert-max-rss-growth-kb` soak leak gate wired into the `soak` scale-gate profile, replacing the Linux-only shell `ps` sampler (#707)
 - **ai**: Entity faction/team tagging with an `AnyHostileEntityWithinRange` StateMachineController condition and a `spawn --faction <n>` flag; the `escort` template now ignores same-faction friendlies by faction rather than by geometry (#465)

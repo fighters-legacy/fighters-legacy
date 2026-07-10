@@ -623,6 +623,54 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             {omegaPtr ? omegaPtr[0] : 0.f, omegaPtr ? omegaPtr[1] : 0.f, omegaPtr ? omegaPtr[2] : 0.f}};
     });
 
+    // Encode-once (#725): quantize + bit-pack each live entity ONCE this tick, relative to its shared
+    // grid origin (SnapshotCodec::originForPos), as a full and a delta blob. Per-peer assembly stitches
+    // these blobs by memcpy instead of re-quantizing, so encode is O(entities) not O(peers x visible).
+    // Blobs carry no per-peer state (absolute idx, byte-aligned, position relative to the shared
+    // origin), so they drop into any peer's stream in any order. The receiving peer's OWN record is the
+    // sole exception — it alone carries omega — so it is re-encoded per peer below (one extra encode per
+    // peer, negligible). Order-free: each blob is independent, so the map's iteration order is irrelevant
+    // (serial-equivalence preserved).
+    struct EncodedRecord {
+        double origin[3];
+        std::vector<uint8_t> fullBlob;
+        std::vector<uint8_t> deltaBlob;
+    };
+    std::unordered_map<uint32_t, EncodedRecord> encoded;
+    encoded.reserve(snapMap.size());
+    for (const auto& [encIdx, snap] : snapMap) {
+        const EntityState& st = *snap.state;
+        QuantEntity qe;
+        qe.idx = st.id.index;
+        qe.gen = st.id.generation;
+        qe.typeIndex = st.typeIndex;
+        qe.hasOmega = false; // the once-encoded blob never carries omega (own record re-encoded per peer)
+        qe.pos[0] = st.transform.pos[0];
+        qe.pos[1] = st.transform.pos[1];
+        qe.pos[2] = st.transform.pos[2];
+        qe.vel[0] = st.transform.vel[0];
+        qe.vel[1] = st.transform.vel[1];
+        qe.vel[2] = st.transform.vel[2];
+        qe.quat[0] = st.transform.quat[0];
+        qe.quat[1] = st.transform.quat[1];
+        qe.quat[2] = st.transform.quat[2];
+        qe.quat[3] = st.transform.quat[3];
+        qe.damageLevel = static_cast<uint8_t>(st.damageLevel);
+        qe.engineFailFlags = snap.engineFailFlags;
+        qe.throttle = snap.throttle;
+        qe.fuelPct = snap.fuelPct;
+        qe.abEngaged = snap.abEngaged != 0u;
+        qe.playerOwned = st.playerOwned;
+
+        EncodedRecord rec;
+        originForPos(qe.pos, rec.origin);
+        qe.isFull = true;
+        encodeStandaloneRecord(rec.fullBlob, qe, rec.origin, /*sendGen=*/true);
+        qe.isFull = false;
+        encodeStandaloneRecord(rec.deltaBlob, qe, rec.origin, /*sendGen=*/false);
+        encoded.emplace(encIdx, std::move(rec));
+    }
+
     const auto activePeers =
         static_cast<uint16_t>(std::max(0, std::min(m_activePeerCount.load(std::memory_order_relaxed), 65535)));
 
@@ -721,13 +769,9 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             hdr.recordCount = 0;
             hdr.bitstreamBytes = 0;
             hdr.tickIndex = tickIndex;
-            if (peerState) {
-                hdr.frameOrigin[0] = peerState->transform.pos[0];
-                hdr.frameOrigin[1] = peerState->transform.pos[1];
-                hdr.frameOrigin[2] = peerState->transform.pos[2];
-            }
+            hdr.originCount = 0; // shared-origin table (#725); filled after the stitch loop below
             const std::size_t hdrOffset = buf.size();
-            appendMsg(buf, hdr); // placeholder; recordCount/bitstreamBytes patched below
+            appendMsg(buf, hdr); // placeholder; recordCount/originCount/bitstreamBytes patched below
 
             // Collect visible entity indices via the spatial index (conservative XZ cells), then apply
             // an exact 3D (XYZ) distance gate (#402) and sort ascending so the bitstream's idx deltas
@@ -797,9 +841,11 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                     const PeerEntityRec* rec = (kit == knownGens.end()) ? nullptr : &kit->second;
                     c.ticksSinceSent = (rec == nullptr) ? UINT64_MAX : (tickIndex - rec->lastSentTick);
                     const bool isFull = decideFull(rec, gen, peerAckedTick, peerAckMask, tickIndex);
-                    // Conservative idx-delta of 2 (1-byte varint); the real neighbour gap is unknown until
-                    // after selection, but the budget is a soft cap so a per-record ±1 byte is acceptable.
-                    c.estBytes = estimateRecordBytes(isFull, isFull, c.isOwn, st.typeIndex, /*idxDelta=*/2u);
+                    // Absolute idx (#725) + a conservative 1-byte origin index; the real origin index
+                    // isn't known until the per-peer origin table is built after selection, but the budget
+                    // is a soft cap so a per-record ±1 byte is acceptable.
+                    c.estBytes = estimateRecordBytes(isFull, isFull, c.isOwn, st.typeIndex, /*entityIndex=*/idx,
+                                                     /*originIndex=*/1u);
                     cands.push_back(c);
                 }
                 selected = selectSnapshotRecords(cands, recordBudget, m_schedulerWeights, m_drawDistanceM);
@@ -812,10 +858,23 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 // (which the high-water mark required) is now redundant.
             }
 
-            // Encode the quantized, bit-packed record stream (SnapshotCodec). Full vs delta is the
-            // client-acked decision (decideFull above). Omega is sent only for the peer's own entity.
-            BitWriter writer;
-            uint32_t prevIdx = 0;
+            // Assemble the stitched record stream (#725): for each selected entity, pick its pre-encoded
+            // blob (full or delta per decideFull), record its shared origin into this peer's origin table
+            // (deduped), and stitch [origin index][blob]. The peer's OWN entity is the one per-peer record
+            // — re-encoded here with omega. Records are byte-aligned, so the stitch is a memcpy, not a
+            // re-quantization. Deterministic (selected is sorted; origin table is first-seen order) so the
+            // per-peer buffer is byte-identical across worker counts (serial-equivalence, #512).
+            std::vector<std::array<double, 3>> originTable;
+            std::vector<uint8_t> recordStream;
+            auto originIndexOf = [&originTable](const double o[3]) -> uint32_t {
+                for (uint32_t i = 0; i < originTable.size(); ++i)
+                    if (originTable[i][0] == o[0] && originTable[i][1] == o[1] && originTable[i][2] == o[2])
+                        return i;
+                originTable.push_back({o[0], o[1], o[2]});
+                return static_cast<uint32_t>(originTable.size() - 1u);
+            };
+
+            std::vector<uint8_t> ownBlob; // scratch for the (single) own-entity re-encode
             for (uint32_t idx : selected) {
                 const EntitySnap& snap = snapMap.at(idx);
                 const EntityState& state = *snap.state;
@@ -823,33 +882,48 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 auto kit = knownGens.find(idx);
                 const PeerEntityRec* rec = (kit == knownGens.end()) ? nullptr : &kit->second;
                 const bool isFull = decideFull(rec, gen, peerAckedTick, peerAckMask, tickIndex);
+                const bool isOwn = (state.id.index == peerEid.index && state.id.generation == peerEid.generation);
 
-                QuantEntity qe;
-                qe.idx = state.id.index;
-                qe.gen = state.id.generation;
-                qe.typeIndex = state.typeIndex;
-                qe.isFull = isFull;
-                qe.hasOmega = (state.id.index == peerEid.index && state.id.generation == peerEid.generation);
-                qe.pos[0] = state.transform.pos[0];
-                qe.pos[1] = state.transform.pos[1];
-                qe.pos[2] = state.transform.pos[2];
-                qe.vel[0] = state.transform.vel[0];
-                qe.vel[1] = state.transform.vel[1];
-                qe.vel[2] = state.transform.vel[2];
-                qe.quat[0] = state.transform.quat[0];
-                qe.quat[1] = state.transform.quat[1];
-                qe.quat[2] = state.transform.quat[2];
-                qe.quat[3] = state.transform.quat[3];
-                qe.omega[0] = snap.omega[0];
-                qe.omega[1] = snap.omega[1];
-                qe.omega[2] = snap.omega[2];
-                qe.damageLevel = static_cast<uint8_t>(state.damageLevel);
-                qe.engineFailFlags = snap.engineFailFlags;
-                qe.throttle = snap.throttle;
-                qe.fuelPct = snap.fuelPct;
-                qe.abEngaged = snap.abEngaged != 0u;
-                qe.playerOwned = state.playerOwned;
-                encodeRecord(writer, qe, prevIdx, hdr.frameOrigin, /*sendGen=*/isFull);
+                double recOrigin[3];
+                const std::vector<uint8_t>* blob = nullptr;
+                if (isOwn) {
+                    QuantEntity qe;
+                    qe.idx = state.id.index;
+                    qe.gen = state.id.generation;
+                    qe.typeIndex = state.typeIndex;
+                    qe.isFull = isFull;
+                    qe.hasOmega = true; // the own record alone carries omega
+                    qe.pos[0] = state.transform.pos[0];
+                    qe.pos[1] = state.transform.pos[1];
+                    qe.pos[2] = state.transform.pos[2];
+                    qe.vel[0] = state.transform.vel[0];
+                    qe.vel[1] = state.transform.vel[1];
+                    qe.vel[2] = state.transform.vel[2];
+                    qe.quat[0] = state.transform.quat[0];
+                    qe.quat[1] = state.transform.quat[1];
+                    qe.quat[2] = state.transform.quat[2];
+                    qe.quat[3] = state.transform.quat[3];
+                    qe.omega[0] = snap.omega[0];
+                    qe.omega[1] = snap.omega[1];
+                    qe.omega[2] = snap.omega[2];
+                    qe.damageLevel = static_cast<uint8_t>(state.damageLevel);
+                    qe.engineFailFlags = snap.engineFailFlags;
+                    qe.throttle = snap.throttle;
+                    qe.fuelPct = snap.fuelPct;
+                    qe.abEngaged = snap.abEngaged != 0u;
+                    qe.playerOwned = state.playerOwned;
+                    originForPos(qe.pos, recOrigin);
+                    ownBlob.clear();
+                    encodeStandaloneRecord(ownBlob, qe, recOrigin, /*sendGen=*/isFull);
+                    blob = &ownBlob;
+                } else {
+                    const EncodedRecord& er = encoded.at(idx);
+                    recOrigin[0] = er.origin[0];
+                    recOrigin[1] = er.origin[1];
+                    recOrigin[2] = er.origin[2];
+                    blob = isFull ? &er.fullBlob : &er.deltaBlob;
+                }
+                appendStitchedRecord(recordStream, originIndexOf(recOrigin), *blob);
 
                 // Record what we sent. Freeze fullStreakTick at the start of a contiguous run of fulls
                 // (same entity, full last tick, sent consecutively) so the client only has to ack the
@@ -864,9 +938,16 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 r.lastWasFull = isFull;
                 ++hdr.recordCount;
             }
-            writer.alignToByte();
-            buf.insert(buf.end(), writer.bytes().begin(), writer.bytes().end());
-            hdr.bitstreamBytes = static_cast<uint32_t>(writer.byteCount());
+
+            // Body layout: [origin table: originCount x double[3]][stitched record stream]. Append both
+            // after the header placeholder, then patch the header counts.
+            hdr.originCount = static_cast<uint16_t>(originTable.size());
+            for (const auto& o : originTable) {
+                const auto* p = reinterpret_cast<const uint8_t*>(o.data());
+                buf.insert(buf.end(), p, p + 3u * sizeof(double));
+            }
+            buf.insert(buf.end(), recordStream.begin(), recordStream.end());
+            hdr.bitstreamBytes = static_cast<uint32_t>(recordStream.size());
             writeMsgAt(buf, hdrOffset, hdr);
 
             // TLV extension block.

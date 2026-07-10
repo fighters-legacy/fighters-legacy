@@ -118,6 +118,19 @@ class BitReader {
         return true;
     }
 
+    // Discard the pending sub-byte bits so the next read starts at a byte boundary. Mirrors
+    // BitWriter::alignToByte at the decode side; call at each byte-aligned record boundary (#725).
+    // m_count is always in [0,7] after a read, so this drops exactly the writer's zero padding.
+    void alignToByte() noexcept {
+        m_acc = 0;
+        m_count = 0;
+    }
+
+    // Bytes consumed so far (whole bytes pulled from the buffer). Meaningful at a byte boundary.
+    [[nodiscard]] std::size_t bytePos() const noexcept {
+        return m_bytePos;
+    }
+
   private:
     const uint8_t* m_data;
     std::size_t m_size;

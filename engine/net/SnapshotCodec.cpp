@@ -4,12 +4,19 @@
 #include "net/BitStream.h"
 #include "net/Quantization.h"
 
+#include <cmath>
+
 namespace fl {
 
-void encodeRecord(BitWriter& w, const QuantEntity& e, uint32_t& prevIdx, const double origin[3], bool sendGen) {
-    // idx delta (records are sorted ascending, so this is non-negative).
-    w.writeVarint(e.idx - prevIdx);
-    prevIdx = e.idx;
+void originForPos(const double pos[3], double out[3]) noexcept {
+    for (int i = 0; i < 3; ++i)
+        out[i] = std::floor(pos[i] / kOriginGridM) * kOriginGridM;
+}
+
+// Writes the peer-independent record body (absolute idx + fields) into `w`. Shared by encode; the
+// caller byte-aligns and the stitch prepends the origin index.
+static void encodeBody(BitWriter& w, const QuantEntity& e, const double origin[3], bool sendGen) {
+    w.writeVarint(e.idx); // absolute entity index (peer-independent; not a per-stream delta)
 
     w.writeBits(e.isFull ? 1u : 0u, 1);
     w.writeBits(sendGen ? 1u : 0u, 1);
@@ -20,7 +27,7 @@ void encodeRecord(BitWriter& w, const QuantEntity& e, uint32_t& prevIdx, const d
     if (e.isFull)
         w.writeVarint(e.typeIndex);
 
-    // Position relative to frame origin.
+    // Position relative to the shared grid origin.
     for (int i = 0; i < 3; ++i) {
         const int32_t q = quantizeSigned(e.pos[i] - origin[i], kPosStepM, kPosBitsPerAxis);
         w.writeBits(toOffsetBinary(q, kPosBitsPerAxis), kPosBitsPerAxis);
@@ -51,12 +58,34 @@ void encodeRecord(BitWriter& w, const QuantEntity& e, uint32_t& prevIdx, const d
     w.writeBits(e.playerOwned ? 1u : 0u, 1);
 }
 
-bool decodeRecord(BitReader& r, QuantEntity& out, uint32_t& prevIdx, const double origin[3], bool& genPresent) {
-    uint32_t idxDelta = 0;
-    if (!r.readVarint(idxDelta))
+void encodeStandaloneRecord(std::vector<uint8_t>& out, const QuantEntity& e, const double origin[3], bool sendGen) {
+    BitWriter w;
+    encodeBody(w, e, origin, sendGen);
+    w.alignToByte(); // each record is byte-aligned so it can be stitched by memcpy in any order
+    out.insert(out.end(), w.bytes().begin(), w.bytes().end());
+}
+
+void appendStitchedRecord(std::vector<uint8_t>& stream, uint32_t originIndex, const std::vector<uint8_t>& blob) {
+    // Origin index as LEB128 whole bytes — keeps the stream byte-aligned for the blob that follows.
+    while (originIndex >= 0x80u) {
+        stream.push_back(static_cast<uint8_t>((originIndex & 0x7Fu) | 0x80u));
+        originIndex >>= 7;
+    }
+    stream.push_back(static_cast<uint8_t>(originIndex));
+    stream.insert(stream.end(), blob.begin(), blob.end());
+}
+
+bool decodeStandaloneRecord(BitReader& r, QuantEntity& out, const double* originTable, uint32_t originCount,
+                            bool& genPresent) {
+    uint32_t originIdx = 0;
+    if (!r.readVarint(originIdx) || originIdx >= originCount)
         return false;
-    out.idx = prevIdx + idxDelta;
-    prevIdx = out.idx;
+    const double* origin = originTable + static_cast<std::size_t>(originIdx) * 3u;
+
+    uint32_t idx = 0;
+    if (!r.readVarint(idx))
+        return false;
+    out.idx = idx;
 
     uint32_t fullBit = 0, genBit = 0, omegaBit = 0;
     if (!r.readBits(1, fullBit) || !r.readBits(1, genBit) || !r.readBits(1, omegaBit))
@@ -78,7 +107,7 @@ bool decodeRecord(BitReader& r, QuantEntity& out, uint32_t& prevIdx, const doubl
         out.typeIndex = t;
     }
 
-    // Position.
+    // Position (relative to the shared grid origin).
     for (int i = 0; i < 3; ++i) {
         uint32_t u = 0;
         if (!r.readBits(kPosBitsPerAxis, u))
@@ -127,6 +156,8 @@ bool decodeRecord(BitReader& r, QuantEntity& out, uint32_t& prevIdx, const doubl
     out.fuelPct = static_cast<uint8_t>(fuel);
     out.abEngaged = (ab != 0u);
     out.playerOwned = (owned != 0u);
+
+    r.alignToByte(); // skip the blob's trailing padding to land on the next record boundary
     return true;
 }
 
@@ -142,9 +173,11 @@ uint32_t varintBits(uint32_t value) noexcept {
 }
 } // namespace
 
-uint32_t estimateRecordBytes(bool isFull, bool sendGen, bool hasOmega, uint32_t typeIndex, uint32_t idxDelta) noexcept {
-    uint32_t bits = varintBits(idxDelta); // idx delta varint
-    bits += 3;                            // full + genPresent + omegaPresent flag bits
+uint32_t estimateRecordBytes(bool isFull, bool sendGen, bool hasOmega, uint32_t typeIndex, uint32_t entityIndex,
+                             uint32_t originIndex) noexcept {
+    uint32_t bits = varintBits(originIndex); // origin index varint (whole bytes)
+    bits += varintBits(entityIndex);         // absolute idx varint
+    bits += 3;                               // full + genPresent + omegaPresent flag bits
     if (sendGen)
         bits += 16; // gen
     if (isFull)
