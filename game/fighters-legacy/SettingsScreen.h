@@ -53,6 +53,13 @@ class SettingsScreen : public IScreen {
     int m_focusedRow{0};
     static constexpr int kRowCount = 13;
 
+    // Drawn y of each row (rows 0-11 + Back at 12), shared by buildElements()
+    // and the mouse-hover hit-test so the hover bands always match the
+    // rendered rows.
+    static constexpr float kRowHitH = 0.05f; // hover band height (normalized)
+    static constexpr std::array<float, kRowCount> kRowY = {0.20f, 0.27f, 0.34f, 0.39f, 0.45f, 0.51f, 0.57f,
+                                                           0.63f, 0.69f, 0.77f, 0.83f, 0.89f, 0.95f};
+
     void applyAndSave();
     void buildModes();
 
@@ -60,8 +67,6 @@ class SettingsScreen : public IScreen {
     std::array<HudElement, kMaxElements> m_elements{};
     std::array<std::string, kMaxElements> m_strings{};
     int m_elementCount{0};
-
-    void buildRow(int row, float y, const std::string& label, const std::string& value);
 };
 
 } // namespace fl

@@ -53,6 +53,7 @@ class ServerNotice {
         m_elem = {};
         m_elem.type = HudElement::Type::Text;
         m_elem.x = 0.5f;
+        m_elem.align = HudAlign::Center;
         m_elem.y = 0.02f;
         m_elem.r = 1.f;
         m_elem.g = 0.9f;

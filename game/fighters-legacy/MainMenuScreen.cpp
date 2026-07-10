@@ -102,6 +102,7 @@ std::span<const HudElement> MainMenuScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[0];
         el.x = 0.5f;
+        el.align = HudAlign::Center;
         el.y = 0.15f;
         el.scale = 2.f;
         el.r = 1.f;
@@ -119,6 +120,7 @@ std::span<const HudElement> MainMenuScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[static_cast<std::size_t>(2 + i)];
         el.x = 0.5f;
+        el.align = HudAlign::Center;
         el.y = kStartY + static_cast<float>(i) * kSpacing;
         el.scale = 1.f;
         if (i == m_selectedIdx) {

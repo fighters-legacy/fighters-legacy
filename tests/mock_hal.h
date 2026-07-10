@@ -107,8 +107,11 @@ struct MockInput : public IInput {
         return "Unknown";
     }
 
+    int mouseX = 0;
+    int mouseY = 0;
     void getMousePosition(int& x, int& y) const override {
-        x = y = 0;
+        x = mouseX;
+        y = mouseY;
     }
     void getMouseDelta(int& dx, int& dy) const override {
         dx = dy = 0;

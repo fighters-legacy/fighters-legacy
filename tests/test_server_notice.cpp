@@ -34,6 +34,7 @@ TEST_CASE("ServerNotice: element is horizontally centered") {
     auto elems = n.buildElements();
     REQUIRE(elems.size() == 1);
     CHECK(elems[0].x == Catch::Approx(0.5f));
+    CHECK(elems[0].align == HudAlign::Center);
 }
 
 TEST_CASE("ServerNotice: subsequent setNotice replaces previous") {

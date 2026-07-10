@@ -4434,8 +4434,8 @@ bool VkRenderer::createOverlayPipeline() {
 }
 
 void VkRenderer::recordOverlayPass(VkCommandBuffer cmd) {
-    constexpr float kCharW = 8.0f;
-    constexpr float kCharH = 16.0f;
+    constexpr float kCharW = kHudGlyphWidthPx;
+    constexpr float kCharH = kHudGlyphHeightPx;
     constexpr float kAtlasW = 4096.0f; // 512 cols × 8 px
     constexpr float kAtlasH = 2048.0f; // 128 rows × 16 px
     constexpr float kMarginX = 8.0f;
@@ -4489,10 +4489,14 @@ void VkRenderer::recordOverlayPass(VkCommandBuffer cmd) {
         for (const HudElement& el : elems) {
             switch (el.type) {
             case HudElement::Type::Text: {
+                const float cw = kCharW * el.scale;
+                const float ch = kCharH * el.scale;
                 float cx = el.x * vpW;
+                if (el.align != HudAlign::Left) {
+                    const float textW = static_cast<float>(fl::countUtf8Codepoints(el.text)) * cw;
+                    cx += hudAlignOffsetPx(el.align, textW);
+                }
                 float baseY = el.y * vpH;
-                float cw = kCharW * el.scale;
-                float ch = kCharH * el.scale;
                 {
                     const char* tp = el.text.data();
                     const char* tEnd = tp + el.text.size();

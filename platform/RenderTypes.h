@@ -213,23 +213,43 @@ struct SubtitleEntry {
     float alpha{1.0f}; // reserved for future fade envelope; currently always 1.0
 };
 
+// Horizontal anchoring for HudElement Text: how `x` positions the string.
+enum class HudAlign : uint8_t { Left, Center, Right };
+
+// Base glyph cell of the HUD monospace font (GNU Unifont) in pixels at scale
+// 1.0. Atlas layout details live in platform/vulkan/UnifontBitmap.h.
+inline constexpr float kHudGlyphWidthPx = 8.0f;
+inline constexpr float kHudGlyphHeightPx = 16.0f;
+
+// Pixel offset added to the anchor x for a text run `widthPx` wide.
+constexpr float hudAlignOffsetPx(HudAlign align, float widthPx) noexcept {
+    if (align == HudAlign::Center)
+        return -0.5f * widthPx;
+    if (align == HudAlign::Right)
+        return -widthPx;
+    return 0.0f;
+}
+
 // ---------------------------------------------------------------------------
 // Screen-space 2D overlay element for IRenderer::submitOverlayElements().
-// Positions are normalized (0–1), top-left origin.
+// Positions are normalized (0–1), top-left origin. For Text, `x` is the
+// anchor point interpreted per `align` (left edge / center / right edge);
+// Line/Rect ignore `align`.
 // string_view data must remain alive until after IRenderer::endFrame().
 // ---------------------------------------------------------------------------
 struct HudElement {
     enum class Type : uint8_t { Text, Line, Rect };
 
     Type type{Type::Text};
-    float x{0.f};           // top-left / line-start X (0–1)
+    float x{0.f};           // Text anchor / line-start X (0–1)
     float y{0.f};           // top-left / line-start Y (0–1)
     float x2{0.f};          // line-end X / rect right / unused for Text
     float y2{0.f};          // line-end Y / rect bottom / unused for Text
     float strokeWidth{1.f}; // Line: thickness in screen pixels
     float r{1.f}, g{1.f}, b{1.f}, a{1.f};
-    float scale{1.f};      // Text: glyph scale multiplier (1.0 = base 8×16 px)
-    std::string_view text; // Type::Text only; empty for Line/Rect
+    float scale{1.f};               // Text: glyph scale multiplier (1.0 = base 8×16 px)
+    HudAlign align{HudAlign::Left}; // Text only: x anchors left edge / center / right edge
+    std::string_view text;          // Type::Text only; empty for Line/Rect
 };
 
 // ---------------------------------------------------------------------------

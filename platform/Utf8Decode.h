@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace fl {
 
@@ -28,6 +30,19 @@ inline uint32_t nextUtf8Codepoint(const char*& p, const char* end) noexcept {
     while (p < end && (static_cast<unsigned char>(*p) & 0xC0u) == 0x80u)
         ++p;
     return 0xFFFDu;
+}
+
+// Number of glyphs the HUD renderer will draw for `s` — one per decoded
+// codepoint, including one U+FFFD per invalid or non-BMP sequence.
+inline std::size_t countUtf8Codepoints(std::string_view s) noexcept {
+    const char* p = s.data();
+    const char* end = p + s.size();
+    std::size_t n = 0;
+    while (p < end) {
+        nextUtf8Codepoint(p, end);
+        ++n;
+    }
+    return n;
 }
 
 } // namespace fl

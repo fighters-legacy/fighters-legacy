@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "SettingsScreen.h"
@@ -279,4 +280,72 @@ TEST_CASE("SettingsScreen: master volume clamps at 1 when incremented from 1") {
         s.update(inp, f.window);
     }
     CHECK(f.cfg.audio().masterVolume <= 1.0f);
+}
+
+TEST_CASE("SettingsScreen: labels right-align at 0.48 and values left-align at 0.52") {
+    Fixture f;
+    SettingsScreen s(f.cfg, f.renderer, f.window, f.display);
+    s.update(g_inp, f.window);
+    auto elems = s.buildElements();
+    int labels = 0;
+    int values = 0;
+    int centered = 0;
+    for (const auto& el : elems) {
+        if (el.type != HudElement::Type::Text)
+            continue;
+        if (el.align == HudAlign::Right) {
+            ++labels;
+            CHECK(el.x == Catch::Approx(0.48f));
+            CHECK(el.text.back() == ':'); // row labels end with a colon
+        } else if (el.align == HudAlign::Left) {
+            ++values;
+            CHECK(el.x == Catch::Approx(0.52f));
+        } else {
+            ++centered; // SETTINGS title + [ Back ]
+            CHECK(el.x == Catch::Approx(0.5f));
+        }
+    }
+    CHECK(labels == 12);
+    CHECK(values == 12);
+    CHECK(centered == 2);
+}
+
+TEST_CASE("SettingsScreen: mouse hover focuses the row drawn under the cursor") {
+    Fixture f;
+    SettingsScreen s(f.cfg, f.renderer, f.window, f.display);
+    MockInput inp;
+    inp.mouseX = 640;
+    // Inside the Anti-aliasing row: drawn at y=0.39, hover band [0.39,0.44).
+    inp.mouseY = static_cast<int>(0.41f * 720.f);
+    s.update(inp, f.window);
+    auto elems = s.buildElements();
+    bool found = false;
+    for (const auto& el : elems) {
+        if (el.type == HudElement::Type::Text && el.text.find("Anti-aliasing") != std::string_view::npos) {
+            found = true;
+            CHECK(el.r == Catch::Approx(1.0f)); // focused label renders white
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("SettingsScreen: hover matches drawn rows on the lower block (drift regression)") {
+    Fixture f;
+    SettingsScreen s(f.cfg, f.renderer, f.window, f.display);
+    MockInput inp;
+    inp.mouseX = 640;
+    // Cursor on the drawn "SFX volume:" glyphs (row 11 at y=0.89; glyphs span
+    // 0.890-0.912 at 720p logical height). The old uniform hover formula
+    // (0.20 + r*0.06) matched no row at ny=0.911.
+    inp.mouseY = 656;
+    s.update(inp, f.window);
+    auto elems = s.buildElements();
+    bool found = false;
+    for (const auto& el : elems) {
+        if (el.type == HudElement::Type::Text && el.text.find("SFX volume") != std::string_view::npos) {
+            found = true;
+            CHECK(el.r == Catch::Approx(1.0f)); // focused label renders white
+        }
+    }
+    CHECK(found);
 }
