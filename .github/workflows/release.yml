@@ -104,8 +104,8 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
-          path: "dist/*.zip"
-          if-no-files-found: ignore
+          path: ${{ matrix.artifact }}.zip
+          if-no-files-found: error
           retention-days: 1
 
   release:
@@ -123,6 +123,9 @@ jobs:
 
       - name: Download artifacts
         uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Generate release notes
         uses: orhun/git-cliff-action@v4
