@@ -10,6 +10,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **flight**: Local-level frame utilities (`LocalFrame.h`) — `radialUp`, ENU basis, `localAltitude`, `headingTo`, and `pitchOf` on a spherical planet; header-only foundation for the radial physics floor and local-level nav/HUD (#470)
+- **engine**: Load content-pack entity definitions into the fl-server type registry at startup, so pack entity types are spawnable on a dedicated server (malformed defs warn and skip; no protocol change) (#683)
 
 ### Fixed
 
