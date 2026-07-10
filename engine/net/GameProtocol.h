@@ -122,31 +122,36 @@ static_assert(offsetof(MsgEntityTypeDef, mesh) == 68u, "MsgEntityTypeDef::mesh o
 static_assert(offsetof(MsgEntityTypeDef, dmgMesh) == 132u, "MsgEntityTypeDef::dmgMesh offset changed");
 
 // Unreliable, unicast per-peer every sim tick.
-// Followed by a QUANTIZED, BIT-PACKED record stream of recordCount entity records (see
-// SnapshotCodec.h / BitStream.h), then the TLV extension block. The bitstream occupies
-// bitstreamBytes bytes starting at offset sizeof(MsgWorldSnapshotHeader); the TLV block begins at
-// sizeof(MsgWorldSnapshotHeader) + bitstreamBytes. Each record carries a `full` bit (full records
-// add typeIndex; deltas omit it), and positions are quantized RELATIVE to frameOrigin (a double
-// per-snapshot origin = the receiving peer's position) so the stream is planet-scale accurate
-// without a double per record. Sized to 40 (multiple of 8) so frameOrigin[3] stays 8-aligned and a
-// received buffer can be read in place via fl::viewMsg / fl::readMsg.
+// Body layout after this 24-byte header (#725 shared-origin encode-once):
+//   1. ORIGIN TABLE: originCount entries of double[3] (8-aligned; each a shared grid-cell quantization
+//      origin, SnapshotCodec::originForPos), at offset sizeof(MsgWorldSnapshotHeader).
+//   2. STITCHED RECORD STREAM: recordCount byte-aligned entity records occupying bitstreamBytes bytes,
+//      starting at sizeof(MsgWorldSnapshotHeader) + originCount * sizeof(double[3]). Each record is
+//      prefixed with an origin-index varint into the origin table; positions are quantized RELATIVE to
+//      that origin, so a record is peer-INDEPENDENT and the sim encodes it once per tick (see
+//      SnapshotCodec.h).
+//   3. TLV extension block, immediately after the record stream.
+// Sized to 24 (multiple of 8) so the origin table's doubles stay 8-aligned and the fixed header can be
+// read in place via fl::viewMsg / fl::readMsg.
 struct MsgWorldSnapshotHeader {
     uint8_t msgId{static_cast<uint8_t>(MsgId::WorldSnapshot)};       // @0 (byte-0 dispatch unchanged)
     uint8_t protocolVersion{static_cast<uint8_t>(kProtocolVersion)}; // @1
-    uint16_t recordCount{0};    // @2 number of quantized entity records in the bitstream
-    uint32_t bitstreamBytes{0}; // @4 byte length of the bitstream after this header (TLV follows it)
+    uint16_t recordCount{0};    // @2 number of stitched entity records in the record stream
+    uint32_t bitstreamBytes{0}; // @4 byte length of the record stream (after the origin table; TLV follows)
     uint64_t tickIndex{0};      // @8
-    double frameOrigin[3]{};    // @16 per-snapshot position-quantization origin (receiving peer's pos)
-}; // 40 bytes, align 8
-static_assert(sizeof(MsgWorldSnapshotHeader) == 40u, "MsgWorldSnapshotHeader wire size changed");
+    uint16_t originCount{0};    // @16 number of double[3] origins in the table between this header and the stream
+    uint16_t reserved0{0};      // @18
+    uint32_t reserved1{0};      // @20
+}; // 24 bytes, align 8
+static_assert(sizeof(MsgWorldSnapshotHeader) == 24u, "MsgWorldSnapshotHeader wire size changed");
 static_assert(alignof(MsgWorldSnapshotHeader) == 8u, "MsgWorldSnapshotHeader alignment changed");
 static_assert(offsetof(MsgWorldSnapshotHeader, recordCount) == 2u,
               "MsgWorldSnapshotHeader::recordCount offset changed");
 static_assert(offsetof(MsgWorldSnapshotHeader, bitstreamBytes) == 4u,
               "MsgWorldSnapshotHeader::bitstreamBytes offset changed");
 static_assert(offsetof(MsgWorldSnapshotHeader, tickIndex) == 8u, "MsgWorldSnapshotHeader::tickIndex offset changed");
-static_assert(offsetof(MsgWorldSnapshotHeader, frameOrigin) == 16u,
-              "MsgWorldSnapshotHeader::frameOrigin offset changed");
+static_assert(offsetof(MsgWorldSnapshotHeader, originCount) == 16u,
+              "MsgWorldSnapshotHeader::originCount offset changed");
 
 // Unreliable, client->server, sent each render frame. Padded to 48 (multiple of 8 for tickIndex).
 struct MsgClientInput {

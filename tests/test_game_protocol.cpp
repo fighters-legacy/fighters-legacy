@@ -13,7 +13,7 @@ TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game
     CHECK(sizeof(fl::MsgHello) == 4u);
     CHECK(sizeof(fl::MsgConnectAck) == 16u);          // extended: +assignedEntityIdx/Gen, +planetRadiusKm
     CHECK(sizeof(fl::MsgEntityTypeDef) == 196u);      // 4 + 64 + 64 + 64
-    CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 40u); // +bitstreamBytes +frameOrigin (quantized body)
+    CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 24u); // #725: origin table + record stream follow the header
     CHECK(sizeof(fl::MsgClientInput) == 48u);
     CHECK(sizeof(fl::MsgHeartbeat) == 16u);
     CHECK(sizeof(fl::MsgAdminCommand) == 128u);
@@ -24,8 +24,8 @@ TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game
 }
 
 TEST_CASE("GameProtocol: wire structs are naturally aligned for zero-copy", "[game_protocol]") {
-    // The snapshot header carries frameOrigin[3] (double), so it must be 8-aligned and a multiple
-    // of 8 — the bitstream that follows is byte-addressed (no alignment requirement).
+    // The origin table that follows the header is double[3] entries, so the header must be 8-aligned
+    // and a multiple of 8 — the byte-aligned record stream after it is byte-addressed (#725).
     CHECK(alignof(fl::MsgWorldSnapshotHeader) == 8u);
     CHECK(sizeof(fl::MsgWorldSnapshotHeader) % 8u == 0u);
     CHECK(alignof(fl::MsgClientInput) == 8u);
@@ -35,7 +35,7 @@ TEST_CASE("GameProtocol: MsgWorldSnapshotHeader field offsets", "[game_protocol]
     CHECK(offsetof(fl::MsgWorldSnapshotHeader, recordCount) == 2u);
     CHECK(offsetof(fl::MsgWorldSnapshotHeader, bitstreamBytes) == 4u);
     CHECK(offsetof(fl::MsgWorldSnapshotHeader, tickIndex) == 8u);
-    CHECK(offsetof(fl::MsgWorldSnapshotHeader, frameOrigin) == 16u);
+    CHECK(offsetof(fl::MsgWorldSnapshotHeader, originCount) == 16u);
 }
 
 TEST_CASE("GameProtocol: selective-ack fields (#566)", "[game_protocol]") {
@@ -73,17 +73,15 @@ TEST_CASE("GameProtocol: MsgAdminResponseChunk field offsets", "[game_protocol]"
 }
 
 TEST_CASE("GameProtocol: MsgWorldSnapshotHeader round-trip", "[game_protocol]") {
-    // The header is the only fixed struct in a snapshot; the entity body is a quantized bitstream
-    // exercised by test_snapshot_codec. Here we round-trip just the header (incl. frameOrigin).
+    // The header is the only fixed struct in a snapshot; the origin table + quantized record stream
+    // are exercised by test_snapshot_codec. Here we round-trip just the header.
     fl::MsgWorldSnapshotHeader hdr;
     hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
     hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
     hdr.recordCount = 5u;
     hdr.bitstreamBytes = 123u;
     hdr.tickIndex = 42u;
-    hdr.frameOrigin[0] = 6371000.0;
-    hdr.frameOrigin[1] = 500.0;
-    hdr.frameOrigin[2] = -2'000'000.0;
+    hdr.originCount = 3u;
 
     std::vector<uint8_t> buf(sizeof(hdr));
     std::memcpy(buf.data(), &hdr, sizeof(hdr));
@@ -94,8 +92,7 @@ TEST_CASE("GameProtocol: MsgWorldSnapshotHeader round-trip", "[game_protocol]") 
     CHECK(parsed.recordCount == 5u);
     CHECK(parsed.bitstreamBytes == 123u);
     CHECK(parsed.tickIndex == 42u);
-    CHECK(parsed.frameOrigin[0] == 6371000.0); // double survives exactly
-    CHECK(parsed.frameOrigin[2] == -2'000'000.0);
+    CHECK(parsed.originCount == 3u);
 }
 
 TEST_CASE("GameProtocol: ExtTag SnapshotPeerDelayTicks TLV encode and decode", "[game_protocol]") {
@@ -304,35 +301,39 @@ namespace {
 // Returns the buffer; sets hdr.recordCount / hdr.bitstreamBytes correctly. The TLV block begins at
 // sizeof(MsgWorldSnapshotHeader) + hdr.bitstreamBytes (the new offset contract).
 std::vector<uint8_t> buildSnapshot(uint64_t tick, uint16_t count) {
-    const double origin[3] = {0.0, 0.0, 0.0};
-    fl::BitWriter w;
-    uint32_t prev = 0;
+    const double origin[3] = {0.0, 0.0, 0.0}; // one shared origin at table index 0 (#725)
+    std::vector<uint8_t> stream;
     for (uint16_t i = 0; i < count; ++i) {
         fl::QuantEntity e;
         e.idx = 10u + i;
         e.isFull = true;
         e.gen = 1u;
-        fl::encodeRecord(w, e, prev, origin, /*sendGen=*/true);
+        std::vector<uint8_t> blob;
+        fl::encodeStandaloneRecord(blob, e, origin, /*sendGen=*/true);
+        fl::appendStitchedRecord(stream, /*originIndex=*/0u, blob);
     }
-    w.alignToByte();
 
     std::vector<uint8_t> buf;
     const std::size_t hdrOffset = buf.size();
     fl::MsgWorldSnapshotHeader hdr{};
     hdr.tickIndex = tick;
     fl::appendMsg(buf, hdr); // placeholder
-    buf.insert(buf.end(), w.bytes().begin(), w.bytes().end());
+    const auto* op = reinterpret_cast<const uint8_t*>(origin);
+    buf.insert(buf.end(), op, op + 3u * sizeof(double)); // origin table (one entry)
+    buf.insert(buf.end(), stream.begin(), stream.end());
     hdr.recordCount = count;
-    hdr.bitstreamBytes = static_cast<uint32_t>(w.byteCount());
+    hdr.originCount = 1u;
+    hdr.bitstreamBytes = static_cast<uint32_t>(stream.size());
     fl::writeMsgAt(buf, hdrOffset, hdr);
     return buf;
 }
 
-// Offset of the TLV block: after the header and the quantized bitstream.
+// Offset of the TLV block: after the header, the origin table, and the stitched record stream (#725).
 std::size_t extOffsetOf(const std::vector<uint8_t>& buf) {
     fl::MsgWorldSnapshotHeader rh{};
     REQUIRE(fl::readMsg(buf.data(), buf.size(), rh));
-    return sizeof(fl::MsgWorldSnapshotHeader) + rh.bitstreamBytes;
+    return sizeof(fl::MsgWorldSnapshotHeader) + static_cast<std::size_t>(rh.originCount) * 3u * sizeof(double) +
+           rh.bitstreamBytes;
 }
 } // namespace
 

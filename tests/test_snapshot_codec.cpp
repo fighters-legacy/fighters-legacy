@@ -13,17 +13,18 @@ using Catch::Approx;
 
 namespace {
 
-// Decode helper: run encode then decode of a single record and return the decoded entity.
+// Decode helper: encode a single record standalone, stitch it against a one-entry origin table at
+// index 0, then decode it back and return the decoded entity (#725 encode-once path).
 fl::QuantEntity roundTrip(const fl::QuantEntity& in, const double origin[3], bool sendGen, bool& genPresentOut) {
-    fl::BitWriter w;
-    uint32_t prevW = 0;
-    fl::encodeRecord(w, in, prevW, origin, sendGen);
-    w.alignToByte();
+    const double originTable[3] = {origin[0], origin[1], origin[2]};
+    std::vector<uint8_t> blob;
+    fl::encodeStandaloneRecord(blob, in, origin, sendGen);
+    std::vector<uint8_t> stream;
+    fl::appendStitchedRecord(stream, /*originIndex=*/0u, blob);
 
-    fl::BitReader r(w.bytes().data(), w.byteCount());
+    fl::BitReader r(stream.data(), stream.size());
     fl::QuantEntity out;
-    uint32_t prevR = 0;
-    REQUIRE(fl::decodeRecord(r, out, prevR, origin, genPresentOut));
+    REQUIRE(fl::decodeStandaloneRecord(r, out, originTable, /*originCount=*/1u, genPresentOut));
     return out;
 }
 
@@ -263,29 +264,92 @@ TEST_CASE("SnapshotCodec: delta record omits gen/type/omega", "[snapshot_codec]"
     CHECK(out.omega[0] == Approx(0.f).margin(1e-6)); // absent -> zeroed
 }
 
-TEST_CASE("SnapshotCodec: idx delta varint chains across multiple records", "[snapshot_codec]") {
+TEST_CASE("SnapshotCodec: originForPos floors onto the shared grid", "[snapshot_codec]") {
+    const double G = fl::kOriginGridM;
+    const double pos[3] = {G + 100.0, -0.5, 3 * G - 1.0};
+    double o[3];
+    fl::originForPos(pos, o);
+    CHECK(o[0] == Approx(G));     // floor(1.001..) * G
+    CHECK(o[1] == Approx(-G));    // floor(-tiny) * G = -1 cell
+    CHECK(o[2] == Approx(2 * G)); // floor(2.99..) * G
+    // The per-axis offset is always within [0, G).
+    for (int i = 0; i < 3; ++i) {
+        CHECK(pos[i] - o[i] >= 0.0);
+        CHECK(pos[i] - o[i] < G);
+    }
+}
+
+TEST_CASE("SnapshotCodec: absolute idx survives stitching in any order", "[snapshot_codec]") {
+    // Encode-once: each record is standalone with an ABSOLUTE index, so it decodes correctly no
+    // matter the order it is stitched into a peer's stream.
     const double origin[3] = {0.0, 0.0, 0.0};
-    const uint32_t ids[] = {3u, 4u, 260u, 5000u};
-    fl::BitWriter w;
-    uint32_t prevW = 0;
+    const double originTable[3] = {0.0, 0.0, 0.0};
+    const uint32_t ids[] = {5000u, 3u, 260u, 4u}; // deliberately unsorted
+    std::vector<uint8_t> stream;
     for (uint32_t id : ids) {
         fl::QuantEntity e;
         e.idx = id;
-        fl::encodeRecord(w, e, prevW, origin, /*sendGen=*/false);
+        std::vector<uint8_t> blob;
+        fl::encodeStandaloneRecord(blob, e, origin, /*sendGen=*/false);
+        fl::appendStitchedRecord(stream, /*originIndex=*/0u, blob);
     }
-    w.alignToByte();
 
-    fl::BitReader r(w.bytes().data(), w.byteCount());
-    uint32_t prevR = 0;
+    fl::BitReader r(stream.data(), stream.size());
     for (uint32_t id : ids) {
         fl::QuantEntity out;
         bool gp = false;
-        REQUIRE(fl::decodeRecord(r, out, prevR, origin, gp));
+        REQUIRE(fl::decodeStandaloneRecord(r, out, originTable, /*originCount=*/1u, gp));
         CHECK(out.idx == id);
     }
 }
 
-TEST_CASE("SnapshotCodec: planet-scale frame origin preserves position precision", "[snapshot_codec]") {
+TEST_CASE("SnapshotCodec: a record stitched against different origins decodes to the right position",
+          "[snapshot_codec]") {
+    // A two-origin table; each record references its own grid origin (as it would across cells).
+    const double originTable[6] = {0.0, 0.0, 0.0, 100000.0, 0.0, -50000.0};
+    std::vector<uint8_t> stream;
+
+    fl::QuantEntity a;
+    a.idx = 1;
+    a.pos[0] = 12.5; // near origin 0
+    std::vector<uint8_t> blobA;
+    fl::encodeStandaloneRecord(blobA, a, &originTable[0], /*sendGen=*/false);
+    fl::appendStitchedRecord(stream, /*originIndex=*/0u, blobA);
+
+    fl::QuantEntity b;
+    b.idx = 2;
+    b.pos[0] = 100000.0 + 8.0; // near origin 1
+    b.pos[2] = -50000.0 - 3.0;
+    std::vector<uint8_t> blobB;
+    fl::encodeStandaloneRecord(blobB, b, &originTable[3], /*sendGen=*/false);
+    fl::appendStitchedRecord(stream, /*originIndex=*/1u, blobB);
+
+    fl::BitReader r(stream.data(), stream.size());
+    fl::QuantEntity outA, outB;
+    bool gp = false;
+    REQUIRE(fl::decodeStandaloneRecord(r, outA, originTable, /*originCount=*/2u, gp));
+    REQUIRE(fl::decodeStandaloneRecord(r, outB, originTable, /*originCount=*/2u, gp));
+    CHECK(outA.pos[0] == Approx(a.pos[0]).margin(fl::kPosStepM));
+    CHECK(outB.pos[0] == Approx(b.pos[0]).margin(fl::kPosStepM));
+    CHECK(outB.pos[2] == Approx(b.pos[2]).margin(fl::kPosStepM));
+}
+
+TEST_CASE("SnapshotCodec: an out-of-range origin index fails closed", "[snapshot_codec]") {
+    const double originTable[3] = {0.0, 0.0, 0.0};
+    std::vector<uint8_t> blob;
+    fl::QuantEntity e;
+    e.idx = 1;
+    fl::encodeStandaloneRecord(blob, e, originTable, /*sendGen=*/false);
+    std::vector<uint8_t> stream;
+    fl::appendStitchedRecord(stream, /*originIndex=*/5u, blob); // index beyond the 1-entry table
+
+    fl::BitReader r(stream.data(), stream.size());
+    fl::QuantEntity out;
+    bool gp = false;
+    CHECK_FALSE(fl::decodeStandaloneRecord(r, out, originTable, /*originCount=*/1u, gp));
+}
+
+TEST_CASE("SnapshotCodec: planet-scale grid origin preserves position precision", "[snapshot_codec]") {
     const double origin[3] = {6371000.0, 200000.0, -6371000.0};
     fl::QuantEntity in;
     in.idx = 1;
@@ -300,7 +364,7 @@ TEST_CASE("SnapshotCodec: planet-scale frame origin preserves position precision
     CHECK(out.pos[2] == Approx(in.pos[2]).margin(fl::kPosStepM));
 }
 
-TEST_CASE("SnapshotCodec: deterministic encoding and locked byte sizes", "[snapshot_codec]") {
+TEST_CASE("SnapshotCodec: deterministic encoding and locked blob sizes", "[snapshot_codec]") {
     const double origin[3] = {0.0, 0.0, 0.0};
     fl::QuantEntity full;
     full.idx = 10;
@@ -309,51 +373,47 @@ TEST_CASE("SnapshotCodec: deterministic encoding and locked byte sizes", "[snaps
     full.isFull = true;
     full.hasOmega = true;
 
-    fl::BitWriter w1, w2;
-    uint32_t p1 = 0, p2 = 0;
-    fl::encodeRecord(w1, full, p1, origin, true);
-    fl::encodeRecord(w2, full, p2, origin, true);
-    w1.alignToByte();
-    w2.alignToByte();
+    std::vector<uint8_t> b1, b2;
+    fl::encodeStandaloneRecord(b1, full, origin, true);
+    fl::encodeStandaloneRecord(b2, full, origin, true);
     // Deterministic: identical bytes (locks the wire layout against accidental drift).
-    CHECK(w1.bytes() == w2.bytes());
-    // Locked size for this exact field set (idxDelta=8b + flags=3 + gen=16 + type=8 + pos=66 +
-    // quat=32 + vel=54 + omega=36 + bytefields=24 = 247 bits => 31 bytes).
-    CHECK(w1.byteCount() == 31u);
+    CHECK(b1 == b2);
+    // Locked blob size for this field set (absIdx=8b + flags=3 + gen=16 + type=8 + pos=66 + quat=32 +
+    // vel=54 + omega=36 + bytefields=24 = 247 bits => 31 bytes). The stitched record adds the origin
+    // index varint (1 byte for a small index).
+    CHECK(b1.size() == 31u);
 
     fl::QuantEntity delta;
     delta.idx = 11;
     delta.isFull = false;
     delta.hasOmega = false;
-    fl::BitWriter wd;
-    uint32_t pd = 0;
-    fl::encodeRecord(wd, delta, pd, origin, false);
-    wd.alignToByte();
-    // Steady-state delta: 8 + 3 + 66 + 32 + 54 + 24 = 187 bits => 24 bytes.
-    CHECK(wd.byteCount() == 24u);
+    std::vector<uint8_t> bd;
+    fl::encodeStandaloneRecord(bd, delta, origin, false);
+    // Steady-state delta blob: 8 + 3 + 66 + 32 + 54 + 24 = 187 bits => 24 bytes.
+    CHECK(bd.size() == 24u);
 }
 
-TEST_CASE("SnapshotCodec: estimateRecordBytes matches the encoder across record variants", "[snapshot_codec]") {
+TEST_CASE("SnapshotCodec: estimateRecordBytes matches the stitched record size", "[snapshot_codec]") {
     const double origin[3] = {0.0, 0.0, 0.0};
 
-    // Encode one record and return its byte-aligned size for comparison.
-    auto encodedBytes = [&](const fl::QuantEntity& e, bool sendGen) {
-        fl::BitWriter w;
-        uint32_t prev = 0; // idxDelta == e.idx
-        fl::encodeRecord(w, e, prev, origin, sendGen);
-        w.alignToByte();
-        return static_cast<uint32_t>(w.byteCount());
+    // Encode + stitch one record and return the stitched byte size for comparison.
+    auto stitchedBytes = [&](const fl::QuantEntity& e, bool sendGen, uint32_t originIndex) {
+        std::vector<uint8_t> blob;
+        fl::encodeStandaloneRecord(blob, e, origin, sendGen);
+        std::vector<uint8_t> stream;
+        fl::appendStitchedRecord(stream, originIndex, blob);
+        return static_cast<uint32_t>(stream.size());
     };
 
     struct Variant {
         bool isFull, sendGen, hasOmega;
-        uint32_t typeIndex, idx;
+        uint32_t typeIndex, idx, originIndex;
     };
     const Variant variants[] = {
-        {true, true, true, 42u, 10u},    // full + gen + own-omega
-        {true, true, false, 300u, 7u},   // full + gen, no omega, multi-byte typeIndex varint
-        {false, false, false, 0u, 11u},  // steady-state delta
-        {false, true, false, 0u, 5000u}, // delta carrying gen, multi-byte idx-delta varint
+        {true, true, true, 42u, 10u, 0u},      // full + gen + own-omega
+        {true, true, false, 300u, 7u, 3u},     // full + gen, no omega, multi-byte typeIndex varint
+        {false, false, false, 0u, 11u, 0u},    // steady-state delta
+        {false, true, false, 0u, 5000u, 200u}, // delta carrying gen, multi-byte idx + origin varints
     };
 
     for (const auto& v : variants) {
@@ -363,50 +423,51 @@ TEST_CASE("SnapshotCodec: estimateRecordBytes matches the encoder across record 
         e.typeIndex = v.typeIndex;
         e.isFull = v.isFull;
         e.hasOmega = v.hasOmega;
-        const uint32_t est = fl::estimateRecordBytes(v.isFull, v.sendGen, v.hasOmega, v.typeIndex, v.idx);
-        const uint32_t actual = encodedBytes(e, v.sendGen);
-        // For a single byte-aligned record the per-record ceil estimate equals the encoded size, and
-        // is never an under-count (the budget never overflows the wire).
+        const uint32_t est =
+            fl::estimateRecordBytes(v.isFull, v.sendGen, v.hasOmega, v.typeIndex, v.idx, v.originIndex);
+        const uint32_t actual = stitchedBytes(e, v.sendGen, v.originIndex);
+        // Per byte-aligned record the ceil estimate equals the stitched size, and never under-counts.
         CHECK(est == actual);
         CHECK(est >= actual);
     }
 }
 
-TEST_CASE("SnapshotCodec: bandwidth guard - quantized records beat the old 64-byte encoding", "[snapshot_codec]") {
+TEST_CASE("SnapshotCodec: bandwidth guard - stitched records beat the old 64-byte encoding", "[snapshot_codec]") {
     const double origin[3] = {0.0, 0.0, 0.0};
     const int kCount = 32;
-    fl::BitWriter w;
-    uint32_t prev = 0;
+    std::vector<uint8_t> stream;
     for (int i = 0; i < kCount; ++i) {
         fl::QuantEntity e;
         e.idx = static_cast<uint32_t>(i + 1);
         e.isFull = false; // steady-state delta
         e.pos[0] = i * 10.0;
-        fl::encodeRecord(w, e, prev, origin, false);
+        std::vector<uint8_t> blob;
+        fl::encodeStandaloneRecord(blob, e, origin, false);
+        fl::appendStitchedRecord(stream, /*originIndex=*/0u, blob);
     }
-    w.alignToByte();
     // The old wire used a fixed 64-byte MsgEntityUpdate per entity.
     const std::size_t oldBytes = static_cast<std::size_t>(kCount) * 64u;
-    CHECK(w.byteCount() < oldBytes);
-    // Per-record average comfortably under a 28-byte bound (locks the bandwidth win).
-    CHECK(w.byteCount() <= static_cast<std::size_t>(kCount) * 28u);
+    CHECK(stream.size() < oldBytes);
+    // Per-record average under a 28-byte bound even with the encode-once overhead (origin index +
+    // per-record byte alignment) — locks the bandwidth win.
+    CHECK(stream.size() <= static_cast<std::size_t>(kCount) * 28u);
 }
 
 TEST_CASE("SnapshotCodec: truncated record decode fails closed", "[snapshot_codec]") {
     const double origin[3] = {0.0, 0.0, 0.0};
+    const double originTable[3] = {0.0, 0.0, 0.0};
     fl::QuantEntity in;
     in.idx = 1;
     in.isFull = true;
     in.typeIndex = 9;
-    fl::BitWriter w;
-    uint32_t prevW = 0;
-    fl::encodeRecord(w, in, prevW, origin, true);
-    w.alignToByte();
+    std::vector<uint8_t> blob;
+    fl::encodeStandaloneRecord(blob, in, origin, true);
+    std::vector<uint8_t> stream;
+    fl::appendStitchedRecord(stream, /*originIndex=*/0u, blob);
 
     // Feed only the first few bytes: decode must return false, not crash or read OOB.
-    fl::BitReader r(w.bytes().data(), 3u);
+    fl::BitReader r(stream.data(), 3u);
     fl::QuantEntity out;
-    uint32_t prevR = 0;
     bool gp = false;
-    CHECK_FALSE(fl::decodeRecord(r, out, prevR, origin, gp));
+    CHECK_FALSE(fl::decodeStandaloneRecord(r, out, originTable, /*originCount=*/1u, gp));
 }

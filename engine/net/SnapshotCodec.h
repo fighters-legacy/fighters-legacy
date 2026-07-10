@@ -4,30 +4,43 @@
 // Quantized per-entity snapshot record codec — the single audited encode/decode path shared by the
 // server (WorldBroadcaster) and the client (ClientNetEventHandler), analogous to WireCodec.h for the
 // fixed byte structs. Records are bit-packed (BitStream.h) and quantized (Quantization.h) into the
-// body of MsgWorldSnapshot, after the 40-byte MsgWorldSnapshotHeader and before the TLV block.
+// body of MsgWorldSnapshot, after the origin table and before the TLV block.
 //
-// Position is encoded RELATIVE to the per-snapshot double frame origin carried in the header, so the
-// stream stays planet-scale accurate without a double per record. Static/unused fields are omitted:
+// Encode-once (#725): each entity is quantized relative to a SHARED per-region origin — the floor of
+// its position onto a fixed kOriginGridM grid — instead of the receiving peer's position. That makes
+// a record peer-INDEPENDENT, so the sim encodes each entity ONCE per tick and each peer's snapshot is
+// assembled by stitching pre-encoded record blobs (memcpy), not re-quantizing per peer. Two things
+// make a record peer-independent: (1) position is relative to the shared grid origin, and (2) the
+// entity index is written ABSOLUTELY (not as a delta against the previous record) and each record is
+// BYTE-ALIGNED, so a blob can be dropped into any peer's stream in any order. Per peer, the snapshot
+// carries an ORIGIN TABLE (the distinct grid origins its records reference, deduped) and each record
+// is prefixed with an origin index into that table (written at stitch time, not baked into the blob).
+//
+// Static/unused fields are omitted from a record:
 //   * typeIndex   — only in `full` records (client caches it per entity);
 //   * gen         — only when it changed (`genPresent`); else the client reuses its cache;
 //   * omega       — only on the receiving peer's OWN entity (`hasOmega`); the sole client consumer
 //                   is client-side prediction reconciliation.
 //
-// Wire bit-layout of one record (MSB-first):
-//   idxDelta : varint (cur.idx - prevIdx; records are sorted by idx ascending, so delta >= 0)
+// Wire layout of one STITCHED record (byte-aligned; MSB-first within the blob):
+//   originIndex : varint (index into the snapshot's origin table; written by the stitch)
+//   -- blob (encodeStandaloneRecord), byte-aligned: --
+//   idx      : varint (absolute entity index)
 //   full     : 1 bit
 //   genPresent : 1 bit
 //   omegaPresent : 1 bit
 //   gen      : 16 bits        (only if genPresent)
 //   typeIndex: varint         (only if full)
-//   pos[3]   : kPosBitsPerAxis each, signed offset from frame origin at kPosStepM resolution
+//   pos[3]   : kPosBitsPerAxis each, signed offset from the grid origin at kPosStepM resolution
 //   ori      : 2-bit dropped-component index + 3 x kQuatBits (smallest-three)
 //   vel[3]   : kVelBits each, range +/- kVelMaxMps
 //   omega[3] : kOmegaBits each, range +/- kOmegaMaxRadS   (only if omegaPresent)
 //   damageLevel : kDamageBits | engineFailFlags : kEngineFailBits | throttle : kThrottleBits |
 //   fuelPct : kFuelBits | abEngaged : 1 | playerOwned : 1
+//   (zero-padded to the next byte boundary)
 
 #include <cstdint>
+#include <vector>
 
 namespace fl {
 
@@ -67,24 +80,43 @@ struct QuantEntity {
     bool playerOwned{false};
 };
 
-// Encode one record. prevIdx is updated to e.idx (pass 0 before the first record of a snapshot).
-// sendGen controls the genPresent bit (caller policy: true for full or when gen changed since the
-// peer last saw the entity).
-void encodeRecord(BitWriter& w, const QuantEntity& e, uint32_t& prevIdx, const double origin[3], bool sendGen);
+// Shared quantization origin grid (#725). Each entity is quantized relative to the origin of the
+// grid cell containing it: origin[i] = floor(pos[i] / kOriginGridM) * kOriginGridM. ~65 km keeps the
+// per-axis offset well inside the fixed-point position range (kPosBitsPerAxis) at kPosStepM
+// resolution, and is coarse enough that spatially-clustered visible entities share a handful of
+// origins (a small per-peer origin table).
+inline constexpr double kOriginGridM = 65536.0;
 
-// Decode one record. prevIdx is updated to the decoded idx. genPresent reports whether gen was on
-// the wire (else out.gen is left untouched for the caller to fill from cache); typeIndex is only set
-// when out.isFull. Returns false on a truncated/malformed buffer.
-[[nodiscard]] bool decodeRecord(BitReader& r, QuantEntity& out, uint32_t& prevIdx, const double origin[3],
-                                bool& genPresent);
+// Grid-cell origin (the shared quantization origin) for a world position.
+void originForPos(const double pos[3], double out[3]) noexcept;
 
-// Estimated encoded size in bytes of one record with the given shape — the byte cost the priority/
-// budget scheduler (#516) accounts per candidate. Mirrors encodeRecord's bit layout exactly; the two
-// varints (idx delta, typeIndex) are the only value-dependent parts. Pass the real idxDelta/typeIndex
-// when known; for pre-ordering budgeting pass a conservative idxDelta (the neighbor gap isn't known
-// until after selection). Returns ceil(bits/8) — a per-record upper bound (the stream is byte-aligned
-// once at the end), so summing it over admitted records never under-counts the encoded size.
+// Encode one entity into a self-contained, BYTE-ALIGNED record blob with an ABSOLUTE index varint,
+// position relative to `origin` (its grid-cell origin). Appends the blob's bytes to `out`. The blob
+// is peer-INDEPENDENT — the per-peer origin index is written separately by appendStitchedRecord — so
+// this is the once-per-tick encode whose output is stitched into every peer's stream. `sendGen`
+// controls the genPresent bit (caller policy: true for full or when gen changed since the peer last
+// saw the entity).
+void encodeStandaloneRecord(std::vector<uint8_t>& out, const QuantEntity& e, const double origin[3], bool sendGen);
+
+// Stitch one pre-encoded record into a peer's byte-aligned record stream: appends the origin index
+// (varint, into that snapshot's origin table) followed by the record `blob`. Keeps the stream
+// byte-aligned so the next record's origin index starts on a byte boundary.
+void appendStitchedRecord(std::vector<uint8_t>& stream, uint32_t originIndex, const std::vector<uint8_t>& blob);
+
+// Decode one stitched record from a reader positioned at a byte-aligned record boundary: reads the
+// origin-index varint, resolves the origin from `originTable` (originCount entries of double[3]),
+// decodes the body, and leaves the reader byte-aligned at the next record. genPresent reports whether
+// gen was on the wire (else out.gen is left for the caller to fill from cache); typeIndex is only set
+// when out.isFull. Returns false on truncation or an origin index >= originCount.
+[[nodiscard]] bool decodeStandaloneRecord(BitReader& r, QuantEntity& out, const double* originTable,
+                                          uint32_t originCount, bool& genPresent);
+
+// Estimated stitched size in bytes of one record with the given shape — the byte cost the priority/
+// budget scheduler (#516) accounts per candidate. Mirrors the stitched layout exactly; the value-
+// dependent parts are the origin-index, absolute-idx, and typeIndex varints plus the per-record byte
+// alignment. Returns a per-record upper bound (each record is byte-aligned), so summing it over
+// admitted records never under-counts the encoded size.
 [[nodiscard]] uint32_t estimateRecordBytes(bool isFull, bool sendGen, bool hasOmega, uint32_t typeIndex,
-                                           uint32_t idxDelta) noexcept;
+                                           uint32_t entityIndex, uint32_t originIndex) noexcept;
 
 } // namespace fl

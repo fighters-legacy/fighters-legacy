@@ -54,7 +54,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 |-------|-------|-----------|---------|------|---------|
 | `Hello` | `0x00` | server→client | reliable | 4 bytes | Protocol version handshake; first message on every new connection |
 | `ConnectAck` | `0x01` | server→client | reliable | 16 + N×196 bytes | Handshake on connect; assigns entity slot and delivers type registry |
-| `WorldSnapshot` | `0x02` | server→client | unreliable | 40 + quantized bitstream + TLV | Per-tick entity state, unicast per peer; 40-byte header + a quantized, bit-packed record stream (each record carries a `full` bit) + TLV extension block — see *Quantized entity record* below |
+| `WorldSnapshot` | `0x02` | server→client | unreliable | 24 + origin table + record stream + TLV | Per-tick entity state, unicast per peer; 24-byte header + shared-origin table + a byte-aligned stitched record stream (each record: origin index + a `full` bit) + TLV extension block — see *Quantized entity record* below |
 | `ClientInput` | `0x03` | client→server | unreliable | 48 bytes | Per-frame flight inputs |
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
 | `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
@@ -117,40 +117,48 @@ Appended N times after `MsgConnectAck` (one per registered entity type).
 | 68 | 64 | `mesh[64]` | `char[64]` | Null-terminated mesh asset name; empty = builtin tetrahedron |
 | 132 | 64 | `dmgMesh[64]` | `char[64]` | Null-terminated damage mesh; empty = none |
 
-### MsgWorldSnapshotHeader — 40 bytes
+### MsgWorldSnapshotHeader — 24 bytes
 
-Sent unreliably per-peer every sim tick (channel 1). Followed by a **quantized, bit-packed record
-stream** of `recordCount` entity records occupying `bitstreamBytes` bytes, then the TLV extension
-block (which therefore begins at `40 + bitstreamBytes`). See
-[snapshot-quantization.md](snapshot-quantization.md) for the record bit-layout and the codec. Sized
-to 40 (a multiple of 8) so `frameOrigin[3]` is 8-aligned and the header reads in place.
+Sent unreliably per-peer every sim tick (channel 1). The body after the header is (#725):
+**origin table** of `originCount` × `double[3]` grid-cell quantization origins, then a **byte-aligned
+stitched record stream** of `recordCount` entity records occupying `bitstreamBytes` bytes, then the
+TLV extension block. The record stream begins at `24 + originCount×24`; the TLV block begins at
+`24 + originCount×24 + bitstreamBytes`. See [snapshot-quantization.md](snapshot-quantization.md) for
+the record bit-layout and the codec. Sized to 24 (a multiple of 8) so the origin table's `double`s are
+8-aligned and the header reads in place.
 
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
 | 0 | 1 | `msgId` | `uint8_t` | `0x02` (byte-0 dispatch position unchanged) |
 | 1 | 1 | `protocolVersion` | `uint8_t` | Server's `kProtocolVersion`; per-packet version stamp |
-| 2 | 2 | `recordCount` | `uint16_t` | Number of quantized entity records in the bitstream |
-| 4 | 4 | `bitstreamBytes` | `uint32_t` | Byte length of the bitstream after this header; the TLV block starts at `40 + bitstreamBytes` |
+| 2 | 2 | `recordCount` | `uint16_t` | Number of stitched entity records in the record stream |
+| 4 | 4 | `bitstreamBytes` | `uint32_t` | Byte length of the record stream (after the origin table); the TLV block starts at `24 + originCount×24 + bitstreamBytes` |
 | 8 | 8 | `tickIndex` | `uint64_t` | Monotonically increasing server tick counter (8-aligned) |
-| 16 | 24 | `frameOrigin[3]` | `double[3]` | Per-snapshot position-quantization origin = the receiving peer's world position (8-aligned); record positions are encoded relative to it |
+| 16 | 2 | `originCount` | `uint16_t` | Number of `double[3]` shared-origin entries in the table that follows this header |
+| 18 | 6 | `reserved` | — | padding to 24 (keeps the origin table 8-aligned) |
 
-### Quantized entity record (bit-packed)
+Immediately after the header: `originCount` entries of `double[3]` (24 bytes each) — the distinct
+grid-cell quantization origins (`floor(pos / kOriginGridM) * kOriginGridM`) the records reference.
 
-The entity body is **not** a fixed struct array — it is a single MSB-first bitstream of
-`recordCount` records produced by `engine/net/SnapshotCodec`. Each record (one entity) is laid out
-as below; full field semantics and the quantization constants are in
+### Quantized entity record (byte-aligned, stitched)
+
+The entity body is **not** a fixed struct array — it is a byte-aligned stream of `recordCount` records
+produced by `engine/net/SnapshotCodec`. Each record is peer-independent (absolute idx, position
+relative to a shared origin), so the sim encodes it once per tick and stitches the blob into every
+peer's stream. Full field semantics and the quantization constants are in
 [snapshot-quantization.md](snapshot-quantization.md). The fixed `MsgEntityEntry` (88 B) and
 `MsgEntityUpdate` (64 B) structs were removed in #515.
 
 | Field | Bits | Notes |
 |---|---|---|
-| `idxDelta` | varint | `entityIdx − previousIdx`; records sorted by idx ascending |
+| `originIndex` | varint | index into the origin table (written at stitch time) |
+| `idx` | varint | **absolute** `entityIdx` (peer-independent; blobs stitch in any order) |
 | `full` | 1 | full record (carries typeIndex + gen) vs. delta |
 | `genPresent` | 1 | generation on the wire; else client reuses its cache |
 | `omegaPresent` | 1 | angular rates present (set only for the receiving peer's own entity) |
 | `gen` | 16 | only if `genPresent`; truncated `EntityId::generation` |
 | `typeIndex` | varint | only if `full` |
-| position | 3 × 22 | signed offset from `frameOrigin`, 0.125 m resolution, ±262 km range |
+| position | 3 × 22 | signed offset from the record's shared grid origin, 0.125 m resolution, ±262 km range |
 | orientation | 2 + 3 × 10 | smallest-three quaternion (dropped-component index + 3 components) |
 | velocity | 3 × 18 | ± 2000 m/s range |
 | omega | 3 × 12 | only if `omegaPresent`; ± 20 rad/s range, body-frame p,q,r |
@@ -469,7 +477,7 @@ any message packet. Each extension entry:
 The extension block begins at:
 - **Single-struct messages**: offset `sizeof(FixedStruct)`
 - **Array messages** (header + N records): offset `sizeof(Header) + N × sizeof(Record)`
-- **`MsgWorldSnapshot`** (quantized bitstream body): offset `sizeof(MsgWorldSnapshotHeader) + bitstreamBytes`
+- **`MsgWorldSnapshot`** (origin table + record stream): offset `sizeof(MsgWorldSnapshotHeader) + originCount×24 + bitstreamBytes`
 
 **Backward compatibility**: old receivers that call `readMsg<T>()` or consume exactly `bitstreamBytes`
 of the record stream naturally stop at the right byte count and ignore trailing extension bytes — no code
@@ -562,8 +570,9 @@ this spec are **protocol version 1** and must implement `MsgHello` handling to i
 
 As of #515 the entity body is a quantized bitstream (see
 [snapshot-quantization.md](snapshot-quantization.md)), so the per-entity cost is **~24 bytes**
-(steady-state delta) or **~31 bytes** (full own-entity record), plus the 40-byte header and the TLV
-block — roughly a 2.5–3× reduction from the previous fixed 64/88-byte records.
+(steady-state delta) or **~31 bytes** (full own-entity record) plus a 1-byte origin index, plus the
+24-byte header, the shared-origin table, and the TLV block — roughly a 2.5–3× reduction from the
+previous fixed 64/88-byte records.
 
 | Visible entities | Approx. packet size (delta) | Per-client outbound (60 Hz) |
 |-----------------|-----------------------------|-----------------------------|
@@ -613,10 +622,13 @@ hot-reloadable via `reload_config`. (Delta-baseline recovery is automatic and cl
 
 ### Position precision
 
-Record positions are quantized to a fixed-point offset from the per-snapshot `double frameOrigin`
-(the receiving peer's position) at 0.125 m resolution over a ±262 km range — planet-scale accurate
-without storing a `double` per entity. The double-precision engine state is preserved on the server;
-only the wire representation is quantized.
+Record positions are quantized to a fixed-point offset from a **shared grid-cell `double` origin**
+(`floor(pos / kOriginGridM) * kOriginGridM`, ~65 km cells; #725) at 0.125 m resolution over a ±262 km
+range — planet-scale accurate without storing a `double` per entity. The distinct origins a snapshot
+references are carried (deduped) in its origin table. Sharing the origin across peers makes each record
+peer-independent, so the sim encodes each entity once per tick and stitches the blob into every peer's
+stream. The double-precision engine state is preserved on the server; only the wire representation is
+quantized.
 
 - **(historical)** The former fixed format stored `pos[3]` as 24 bytes (double) in full entries
   for planet-scale precision; float32 degrades to ~24 cm accuracy at 2,000 km from origin.
@@ -715,9 +727,9 @@ is also reserved here. Exact message layout is specified when Epic C/J land.
 
 - **World coordinate system**: right-handed, Y-up, metres (matches glTF). Entity body `+X`
   axis is forward.
-- **Position precision**: `double` throughout the engine. On the wire, the snapshot `frameOrigin`
-  is `double` (sub-millimetre) and per-entity positions are quantized to a fixed-point offset from
-  it at 0.125 m resolution (±262 km range) — see [snapshot-quantization.md](snapshot-quantization.md).
+- **Position precision**: `double` throughout the engine. On the wire, the snapshot's shared grid
+  origins are `double` (sub-millimetre) and per-entity positions are quantized to a fixed-point offset
+  from them at 0.125 m resolution (±262 km range) — see [snapshot-quantization.md](snapshot-quantization.md).
   `MsgClientInput`/`MsgConnectAck` and other non-snapshot positions remain full `double`/`float`.
 - **Snapshot tolerance**: `WorldSnapshot` is unreliable — dropped packets are tolerated via
   dead-reckoning. Clients extrapolate `rendered_pos = pos + vel × alpha × kTickDt` where

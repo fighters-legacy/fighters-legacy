@@ -137,14 +137,19 @@ struct DecodedEntity {
 static std::vector<DecodedEntity> decodeEntities(const std::vector<uint8_t>& pkt) {
     fl::MsgWorldSnapshotHeader hdr = parseSnapshotHeader(pkt);
     std::vector<DecodedEntity> out;
-    const std::size_t bodyAvail = pkt.size() - sizeof(hdr);
+    // Body layout (#725): [origin table: originCount x double[3]][record stream].
+    const std::size_t originBytes = static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double);
+    const std::size_t recordOffset = sizeof(hdr) + originBytes;
+    std::vector<double> originTable(static_cast<std::size_t>(hdr.originCount) * 3u);
+    if (hdr.originCount > 0 && recordOffset <= pkt.size())
+        std::memcpy(originTable.data(), pkt.data() + sizeof(hdr), originBytes);
+    const std::size_t bodyAvail = (pkt.size() > recordOffset) ? (pkt.size() - recordOffset) : 0u;
     const std::size_t bodyBytes = std::min<std::size_t>(hdr.bitstreamBytes, bodyAvail);
-    fl::BitReader r(pkt.data() + sizeof(hdr), bodyBytes);
-    uint32_t prevIdx = 0;
+    fl::BitReader r(pkt.data() + recordOffset, bodyBytes);
     for (uint16_t i = 0; i < hdr.recordCount; ++i) {
         fl::QuantEntity qe;
         bool gp = false;
-        if (!fl::decodeRecord(r, qe, prevIdx, hdr.frameOrigin, gp))
+        if (!fl::decodeStandaloneRecord(r, qe, originTable.data(), hdr.originCount, gp))
             break;
         DecodedEntity d;
         d.entityIdx = qe.idx;
@@ -788,7 +793,8 @@ TEST_CASE("WorldBroadcaster: onTick with connected peer and no extra entities se
     // Packet = header + quantized bitstream (one full own-entity record) + SnapshotPeerCount TLV
     // (6 bytes). SnapshotPeerLatency TLV is absent (estimatedDelayTicks == 0; no heartbeat sent).
     CHECK(hdr.bitstreamBytes > 0u);
-    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) + hdr.bitstreamBytes;
+    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) +
+                                  static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
     REQUIRE(pkt.size() == extOffset + 6u);
     uint16_t pc{};
     CHECK(fl::readExtValue(pkt.data() + extOffset, 6u, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), pc));
@@ -4435,9 +4441,12 @@ TEST_CASE("WorldBroadcaster: spawn position preserves sub-mm precision at large 
     REQUIRE(!_ents.empty());
     const DecodedEntity& e = _ents[0];
 
-    // With float pos_world the spawn would be rounded to exactly 1e5; the 1 mm fractional
-    // offset must be preserved.  Lateral gravity (~4e-7 m/tick) is negligible.
-    CHECK(e.pos[0] > 1e5 + 5e-4);
+    // World positions are double throughout the sim, and the shared quantization origin (#725) is
+    // carried as a double, so a large coordinate round-trips to within the 0.125 m quantization step
+    // rather than being float-truncated (which loses metres at planet scale). The own entity is now
+    // quantized like every other entity — the near-exact own position was an artifact of the old
+    // per-peer frameOrigin == own position. Lateral gravity (~4e-7 m/tick) is negligible.
+    CHECK(e.pos[0] == Catch::Approx(1e5 + 1e-3).margin(fl::kPosStepM));
 }
 
 // ---------------------------------------------------------------------------
@@ -5449,7 +5458,8 @@ TEST_CASE("WorldBroadcaster: totalEntityCount matches buffer content", "[world_b
         const auto& pkt = snaps[0];
         auto hdr = parseSnapshotHeader(pkt);
         const std::size_t expectedSize =
-            sizeof(fl::MsgWorldSnapshotHeader) + hdr.bitstreamBytes +
+            sizeof(fl::MsgWorldSnapshotHeader) + static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) +
+            hdr.bitstreamBytes +
             6u; // SnapshotPeerCount TLV only (estimatedDelayTicks == 0; SnapshotPeerLatency absent)
         CHECK(pkt.size() == expectedSize);
     }
@@ -5462,7 +5472,9 @@ TEST_CASE("WorldBroadcaster: totalEntityCount matches buffer content", "[world_b
         REQUIRE(!snaps.empty());
         const auto& pkt = snaps[0];
         auto hdr = parseSnapshotHeader(pkt);
-        const std::size_t expectedSize = sizeof(fl::MsgWorldSnapshotHeader) + hdr.bitstreamBytes + 6u;
+        const std::size_t expectedSize = sizeof(fl::MsgWorldSnapshotHeader) +
+                                         static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) +
+                                         hdr.bitstreamBytes + 6u;
         CHECK(pkt.size() == expectedSize);
     }
 }
@@ -5517,7 +5529,8 @@ TEST_CASE("WorldBroadcaster: SnapshotPeerLatency TLV present when estimatedDelay
     const auto& pkt = snaps[0];
 
     const auto hdr = parseSnapshotHeader(pkt);
-    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) + hdr.bitstreamBytes;
+    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) +
+                                  static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
     REQUIRE(pkt.size() > extOffset);
     const auto* ext = pkt.data() + extOffset;
     const auto extSz = pkt.size() - extOffset;
@@ -5549,7 +5562,8 @@ TEST_CASE("WorldBroadcaster: SnapshotPeerLatency TLV absent when estimatedDelayT
     const auto& pkt = snaps[0];
 
     const auto hdr = parseSnapshotHeader(pkt);
-    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) + hdr.bitstreamBytes;
+    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) +
+                                  static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
     REQUIRE(pkt.size() > extOffset);
     const auto* ext = pkt.data() + extOffset;
     const auto extSz = pkt.size() - extOffset;
@@ -5563,7 +5577,9 @@ TEST_CASE("WorldBroadcaster: SnapshotPeerLatency TLV absent when estimatedDelayT
     CHECK_FALSE(fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerLatency), lat));
 
     // Packet size: header + quantized bitstream + 6 bytes (SnapshotPeerCount TLV only).
-    const std::size_t expected = sizeof(fl::MsgWorldSnapshotHeader) + hdr.bitstreamBytes + 6u;
+    const std::size_t expected = sizeof(fl::MsgWorldSnapshotHeader) +
+                                 static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes +
+                                 6u;
     CHECK(pkt.size() == expected);
 }
 
@@ -5637,7 +5653,8 @@ TEST_CASE("WorldBroadcaster: snapshot includes SnapshotPeerDelayTicks TLV when d
     const auto& pkt = snaps[0];
 
     const auto hdr = parseSnapshotHeader(pkt);
-    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) + hdr.bitstreamBytes;
+    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) +
+                                  static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
     REQUIRE(pkt.size() > extOffset);
     const auto* ext = pkt.data() + extOffset;
     const auto extSz = pkt.size() - extOffset;
@@ -6522,7 +6539,8 @@ TEST_CASE("WorldBroadcaster: applyConfig wires jitterAdaptWindow hysteresis mult
 static std::vector<uint32_t> decodeDespawns(const std::vector<uint8_t>& pkt) {
     std::vector<uint32_t> ids;
     fl::MsgWorldSnapshotHeader hdr = parseSnapshotHeader(pkt);
-    const std::size_t extOffset = sizeof(hdr) + hdr.bitstreamBytes;
+    const std::size_t extOffset =
+        sizeof(hdr) + static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
     if (pkt.size() <= extOffset)
         return ids;
     uint16_t valueLen{};
