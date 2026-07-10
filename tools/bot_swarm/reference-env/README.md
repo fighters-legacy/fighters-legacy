@@ -16,13 +16,18 @@ Both run the same in‑guest script (`run-benchmark.sh`): build `fl-server` + `b
 Release, then sweep `run_loadtest.sh` over client counts × patterns. Reports land in
 `tools/bot_swarm/results/` (git‑ignored). See [docs/load-testing.md](../../../docs/load-testing.md).
 
-**Determinism.** Both paths pin the same userspace — **Fedora 42** (`fedora:42` image /
-`alvistack/fedora-42` box) — and deliberately do **not** install the system `SDL3-devel`. CMake's
-`find_package(SDL3 3.4.10)` then misses, so SDL3 is built from the repo's FetchContent‑pinned
-version. That keeps the toolchain (GCC) and SDL3 identical across the container, the VM, and over
-time, instead of drifting with whatever each distro ships (the only remaining difference is
-container‑shared‑kernel vs VM‑own‑kernel). The trade‑off: every build compiles SDL3 from source
-(~1–2 min). fl-server only uses SDL3 for filesystem — none of its audio/video backends run.
+**Determinism.** Each path pins a fixed userspace so the toolchain (GCC) doesn't drift with whatever
+each distro ships — the **container** on **Fedora 44** (`fedora:44`, GCC 16, the primary benchmark
+path) and the **VM** on **Fedora 42** (`alvistack/fedora-42`, GCC 15 — one release behind because no
+working 43/44 libvirt box exists). The harness builds only the headless `fl-server` (SDL‑free,
+`platform-stdfs` over `std::filesystem`) and `bot_swarm` (a pure enet6 client) with the GPU renderer
+disabled, so **neither target compiles SDL3** — the toolchain image carries just the
+compiler/cmake/ninja/git and needs no SDL3 build dependencies. (CMake still processes the
+FetchContent SDL3 for the client/tool targets, but with the renderer disabled `dependencies.cmake`
+forces `SDL_UNIX_CONSOLE_BUILD=ON` so SDL3's configure requires no X11/Wayland/desktop dev packages;
+it is declared, never compiled here. Before #711/#716 `fl-server` linked SDL3 for filesystem I/O and
+the harness did compile it from source — that's no longer the case.) The only remaining
+container↔VM difference is shared‑kernel vs own‑kernel.
 
 ## Files
 

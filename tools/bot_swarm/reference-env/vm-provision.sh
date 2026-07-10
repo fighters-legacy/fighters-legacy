@@ -7,14 +7,12 @@
 #   vagrant ssh -c 'sudo bash /src/tools/bot_swarm/reference-env/run-benchmark.sh'
 set -euo pipefail
 
-# Toolchain + SDL3's build dependencies (same approach as the Containerfile). No SDL3-devel: SDL3
-# is built FROM SOURCE (the repo's FetchContent-pinned version) for determinism. `dnf builddep
-# SDL3` pulls Fedora's complete SDL3 BuildRequires; libXtst/libXinerama cover the FetchContent SDL3.
+# Just the build toolchain (same approach as the Containerfile): the harness builds only fl-server
+# (SDL-free platform-stdfs) + bot_swarm (enet6) headless, neither of which links SDL3 — so no SDL3
+# build dependencies are needed (dropped after #711/#716 moved fl-server off platform-sdl3; #718).
 dnf -y install \
-    gcc-c++ cmake ninja-build git dnf-plugins-core \
+    gcc-c++ cmake ninja-build git \
     findutils procps-ng
-dnf builddep -y SDL3
-dnf -y install libXtst-devel libXinerama-devel
 
 echo "reference VM provisioned: $(nproc) CPUs, $(free -h | awk '/Mem:/{print $2}') RAM"
 echo "run: sudo bash /src/tools/bot_swarm/reference-env/run-benchmark.sh"

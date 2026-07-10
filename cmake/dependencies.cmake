@@ -32,6 +32,15 @@ else()
     # These are SDL3-specific cache vars; they don't affect any other FetchContent dep.
     set(SDL_SHARED OFF CACHE BOOL "" FORCE)
     set(SDL_STATIC ON  CACHE BOOL "" FORCE)
+    # Headless builds (renderer disabled, e.g. the fl-server + bot_swarm load harness or the
+    # scale-gate CI leg) never link platform-sdl3, but SDL3's CMakeLists is still processed by the
+    # unconditional platform/sdl3 subdir and hard-errors (FATAL_ERROR) when it can find neither X11
+    # nor Wayland dev libraries. Since nothing compiles SDL3 in a no-Vulkan configure, let it build
+    # as a console-only SDL so the configure needs zero X11/Wayland/desktop dev packages (#718).
+    # Client builds have Vulkan and keep the full windowing SDL unchanged.
+    if(NOT Vulkan_FOUND)
+        set(SDL_UNIX_CONSOLE_BUILD ON CACHE BOOL "" FORCE)
+    endif()
     FetchContent_Declare(SDL3
         GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
         GIT_TAG        release-3.4.10

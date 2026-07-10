@@ -13,8 +13,8 @@
 Vagrant.configure("2") do |config|
   # Box hosting for Fedora is flaky: the official fedora/NN-cloud-base artifacts 404 (pruned),
   # and alvistack/fedora-43's artifact currently 400s — alvistack/fedora-42 downloads cleanly.
-  # If the box's system SDL3 is below the project's find_package(SDL3 3.4.10) floor, CMake builds
-  # SDL3 from source; vm-provision.sh installs SDL3's full build deps so that succeeds either way.
+  # The harness builds only headless fl-server + bot_swarm (no SDL3), so the box's SDL3 (if any)
+  # is irrelevant; vm-provision.sh installs just the build toolchain.
   # Override with FL_REFENV_BOX if you have a known-good newer box.
   config.vm.box = ENV.fetch("FL_REFENV_BOX", "alvistack/fedora-42")
   config.vm.hostname = "fl-refenv"
