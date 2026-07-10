@@ -1,0 +1,8 @@
+
+[crossfade]
+duration_s = 2.5
+
+[[states]]
+id = "Menu"
+tracks = ["music/menu"]
+loop = true

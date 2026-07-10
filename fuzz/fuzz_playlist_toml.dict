@@ -1,0 +1,10 @@
+# libFuzzer dictionary for the music-playlist TOML parser (fuzz_playlist_toml).
+"[crossfade]"
+"[[states]]"
+"duration_s"
+"id"
+"tracks"
+"loop"
+"shuffle"
+"true"
+"false"

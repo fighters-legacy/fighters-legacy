@@ -1,0 +1,159 @@
+[server]
+# Human-readable server name shown in the lobby browser.
+name = "Unnamed Server"
+
+# UDP port fl-server binds on. Port 4778 is the fighters-legacy default.
+# See IANA registration note in docs/architecture.md.
+port = 4778
+
+# Network interface to bind on.
+# "::"         = dual-stack all interfaces (IPv4+IPv6; recommended for internet servers)
+# "0.0.0.0"   = IPv4 all interfaces
+# "127.0.0.1" = localhost-only IPv4 (single-player; game client uses this)
+# "::1"        = localhost-only IPv6
+bind_address = "0.0.0.0"
+
+# Maximum number of simultaneous connected peers (1-1024).
+max_peers = 16
+
+# Scenario types this server will host.
+# Valid values: "campaign", "mission", "sandbox"
+game_modes = ["campaign", "mission", "sandbox"]
+
+# Message shown to connecting clients. Empty string = no message.
+motd = ""
+
+# Override client MOTD banner timeout (seconds). 0 = use client's motd_display_s setting.
+motd_display_s = 0
+
+# Server password. Empty string = no password required.
+password = ""
+
+[rotation]
+order = "sequential"
+items = []
+time_limit_min = 0
+
+[lobby]
+register = false
+url = "https://lobby.fighters-legacy.org"
+visibility = "public"
+
+[mods]
+stack = []
+
+[world]
+save_path = "world.sav"
+autosave_interval_s = 300
+# planet_radius_m = 6371000        # planet sphere radius (m); Earth default
+# draw_distance_km = 200.0         # per-peer interest management radius (km); [1, 100000]
+# spatial_cell_size_km = 10.0      # SpatialIndex cell size (km); 0 = auto from draw distance; [0, 1000]; restart
+# snapshot_budget_bytes = 1200     # per-client snapshot byte budget; 0 = unlimited; [0, 65535]
+# jitter_buffer_depth = 4          # per-peer input queue depth (ticks); global cap for adaptive sizing; [1, 32]
+# jitter_buffer_adapt_window = 60  # EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
+# jitter_buffer_hysteresis = 2     # resize dead-band in ticks; [0, 8]
+# jitter_buffer_jitter_multiplier = 2.0  # k factor: depth = ceil(ewma_delay + k*jitter); [0.0, 8.0]
+# congestion_enabled = true        # adaptive per-client send-rate / congestion response (#518)
+# congestion_min_send_hz = 10.0    # floor snapshot rate under congestion; [1, 60]
+# congestion_loss_threshold = 0.02 # ENet mean loss fraction that marks a peer congested; [0, 1]
+# congestion_budget_floor_bytes = 400  # never scale a set snapshot budget below this; [0, 65535]
+# overrun_governor_enabled = true  # graceful tick-overrun governor: shed work over budget (#514)
+# overrun_high_watermark = 0.90    # EWMA tick-ms / budget that triggers shedding; [0.1, 1.0]
+# overrun_low_watermark = 0.60     # recovery threshold (dead-band below high); [0.0, high)
+# overrun_min_snapshot_hz = 15.0   # floor broadcast rate under overrun; [1, 60]
+# overrun_max_ai_stride = 4        # deepest AI-sample decimation for non-player entities; [1, 32]
+# overrun_budget_floor_bytes = 400 # never scale the snapshot budget below this under overrun; [0, 65535]
+# max_catchup_ticks = 8            # GameLoop catch-up cap (spiral backstop); [1, 64]; needs restart
+# sim_worker_threads = 0           # sim-tick CPU parallelism; 0 = auto, 1 = serial; [0, 256]
+# --- load-test affordance (#573): pre-spawn AI entities to stress the pool/index at scale. ---
+# --- A TESTING AFFORDANCE, NOT A CAPACITY GUARANTEE. Leave at 0 for normal operation. ---
+# test_spawn_ai_count = 0          # server-side AI entities to pre-spawn at startup; 0 = disabled; [0, 1000000]
+# test_spawn_spread_km = 50.0      # phyllotaxis spread radius (km); [0, 100000]
+# test_spawn_agl_m = 500.0         # spawn/loiter altitude above origin ground elevation (m); [0, 50000]
+
+[ai]
+difficulty_floor = "recruit"
+
+[discovery]
+# LAN server discovery beacon.
+enabled = true
+interval_ms = 2000
+
+[security]
+connect_rate_limit_count = 5
+connect_rate_limit_window_s = 10
+packet_flood_multiplier = 3
+banlist_path = ""
+allowlist_path = ""
+incoming_bandwidth_bps = 0
+outgoing_bandwidth_bps = 0
+
+# Operator password for authenticated admin commands from connected game clients.
+# Empty string (default) = network admin commands disabled (stdin pipe only).
+# For single-player, fl-server uses a per-session token passed via --admin-token.
+operator_password = ""
+
+# Pre-handshake CONNECT flood mitigation. Drops ENet CONNECT packets from any
+# source IP that exceeds pre_handshake_rate_limit_count attempts within the
+# pre_handshake_window_ms sliding window, before ENet peer state is allocated.
+# Set pre_handshake_rate_limit_count = 0 to disable.
+pre_handshake_rate_limit_count = 20
+pre_handshake_window_ms = 1000
+
+# Maximum simultaneous connections from a single IP address. 0 = unlimited (default).
+# Range [0, 1024]. Applies post-handshake, after the rate-limit check.
+max_connections_per_ip = 0
+
+# Per-IP lockout for the operator network admin channel (MsgAdminCommand).
+# After admin_auth_max_failures consecutive wrong passwords from the same IP the peer
+# is kicked and reconnections from that IP are refused for admin_auth_lockout_s seconds.
+# Range: max_failures [1,100], lockout_s [1,86400].
+admin_auth_max_failures = 5
+admin_auth_lockout_s = 300
+
+# Disconnect peers that send no MsgClientInput or MsgHeartbeat for this many seconds.
+# 0 = disabled (default). Recommended: 60-300 for public servers. Range: [0,86400].
+idle_timeout_s = 0
+
+[shutdown]
+shutdown_warning_interval_s = 300
+min_shutdown_delay_s = 0
+shutdown_require_confirm = true
+
+[rcon]
+# Source Engine RCON (TCP) remote admin channel. Disabled by default.
+# Set a strong password before enabling. Password travels over plain TCP;
+# use only on trusted/VPN networks or behind a TLS-terminating reverse proxy.
+enabled = false
+port = 27015
+password = ""
+max_auth_failures = 5
+lockout_seconds = 60
+
+[metrics]
+# Per-phase server tick-budget JSON export. Empty path = disabled. Written atomically each
+# interval; consumed by bot_swarm (--server-metrics) and any external scraper. See
+# docs/load-testing.md for the JSON schema.
+tick_json_path = ""
+tick_json_interval_ms = 1000
+
+[network]
+# Transport backend: "gns" (GameNetworkingSockets — encrypted UDP, congestion control, 128+
+# headroom; default for dedicated servers) or "enet" (enet6 — LAN / low-count). See
+# docs/transport-selection.md. Requires a server restart to change.
+transport = "gns"
+# GNS only: accept unauthenticated peers (standalone GNS has no Steam PKI). true = encrypted but
+# unauthenticated (opportunistic, like TLS-without-cert). Ignored by the enet backend.
+allow_insecure = true
+
+[spawn]
+# AGL offset (metres) above terrain for all spawn points. Default 500 m.
+agl_offset = 500.0
+
+# Peer spawn locations (round-robin). Terrain height is queried at each point
+# on startup and cached; changing spawn points requires a server restart.
+# Omit this section to use the default (origin).
+#
+# [[spawn.points]]
+# x = 0.0
+# z = 0.0

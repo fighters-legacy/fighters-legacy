@@ -262,6 +262,44 @@ build-tree working corpus for 60 s. Requires clang with the libFuzzer runtime
 ./build/fuzz/fuzz/fuzz_snapshot_codec fuzz/corpus/fuzz_snapshot_codec -max_total_time=300
 ```
 
+### Coverage
+
+- **Network codecs** (pure): `fuzz_snapshot_codec`, `fuzz_wire_tlv`, `fuzz_rcon_packet`.
+- **Message handlers** (stateful, over the `tests/` mocks): `fuzz_server_msg`
+  (`WorldBroadcaster::onReceive`), `fuzz_client_msg` (`ClientNetEventHandler::onReceive` — the widest
+  untrusted client surface). Both use `fuzz/FuzzFrames.h` to pack several `onReceive` packets into one
+  input so a single corpus entry reaches the multi-packet states (chunk reassembly, delta-after-full
+  snapshot decode, ack advance).
+- **Content / asset parsers**: `fuzz_asset_validator`, `fuzz_terrain_png`, `fuzz_flight_model_toml`,
+  `fuzz_entity_def_toml`, `fuzz_playlist_toml`, `fuzz_server_config_toml`, `fuzz_mod_manifest`,
+  `fuzz_mesh_json`.
+
+### Vendored-parser sanitizer configuration
+
+Fuzzing drives vendored C/C++ parsers (toml++, stb_image, tinygltf) on adversarial input, where they
+trip a few **standard-UB-but-benign** idioms that only fire under a debug + sanitizer build. The fuzz
+build neutralizes exactly these, and nothing more (see the `FL_BUILD_FUZZERS` block in the root
+`CMakeLists.txt`):
+
+- `TOML_ASSERT` is `#define`d to a no-op — toml++'s internal debug assert would otherwise `abort()`
+  on malformed TOML the parser is meant to reject via `toml::parse_error` (release defines `NDEBUG`).
+- `-fno-sanitize=unreachable,pointer-overflow,nonnull-attribute` — toml++/stb use
+  `__builtin_unreachable` for "can't happen for valid input" branches, the `if (buf + n <= end)`
+  reader idiom (forms the past-the-end pointer *before* the bounds check), and zero-length
+  `memcpy(nullptr, _, 0)`. None is an actual memory error.
+
+Engine code relies on none of these idioms, so **every other UBSan check plus all of ASan's
+memory-safety checks (OOB read/write, use-after-free, real null deref) stay on** — a genuine
+fighters-legacy bug is still caught; only the vendored parsers' pedantry is quieted.
+
+### Disabled harnesses
+
+A harness that targets a real surface but depends on a vendored decoder with **actual** memory-safety
+defects on malformed input (memory corruption, not benign UB) is parked under `fuzz/disabled/` — not
+built, not run, out of the smoke enumeration — with the reproducers and a re-enable checklist in
+`fuzz/disabled/README.md`. Current: `fuzz_ogg` (stb_vorbis SEGVs in its own cleanup on malformed
+audio); the untrusted-OGG decode path needs hardening/sandboxing first, tracked as a follow-up.
+
 ### Adding a harness
 
 1. Write `fuzz/fuzz_<name>.cpp` with an `extern "C" int LLVMFuzzerTestOneInput(const

@@ -424,3 +424,14 @@ TEST_CASE("WeatherController: auto-transition from Storm wraps to Clear not Snow
     CHECK(wc.preset() != WeatherPreset::Snow);
     CHECK(wc.preset() != WeatherPreset::Blizzard);
 }
+
+// Regression (#94 fuzzing): an out-of-range preset arriving from an untrusted MsgWeatherState must be
+// clamped to Clear rather than indexing past the internal preset table (an OOB read).
+TEST_CASE("WeatherController::applyPresetToEnv clamps an out-of-range preset", "[weather]") {
+    EnvironmentState env{};
+    WeatherController::applyPresetToEnv(static_cast<WeatherPreset>(139), 12.f, env);
+    WeatherController::applyPresetToEnv(static_cast<WeatherPreset>(255), 12.f, env);
+    // Clamped to Clear: cloudCoverage 0, no precipitation.
+    CHECK(env.cloudCoverage == 0.0f);
+    CHECK_FALSE(env.isSnowPrecipitation);
+}

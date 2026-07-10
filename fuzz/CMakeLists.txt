@@ -68,12 +68,72 @@ if(WIN32)
     target_link_libraries(fuzz_rcon_packet PRIVATE ws2_32)
 endif()
 
+# --- v2 message-handler harnesses (#709; stateful, over the tests/ mocks — no real SDL/ENet) ---
+
+# WorldBroadcaster::onReceive — the server's untrusted client-packet path (ClientInput/AdminCommand/
+# Heartbeat). Uses TrackingNetwork + a real EntityManager; the tests/ dir is on the include path for
+# mock_network.h. FuzzFrames.h splits the input into ordered onReceive() packets.
+fl_add_fuzzer(fuzz_server_msg)
+target_link_libraries(fuzz_server_msg PRIVATE engine-net)
+target_include_directories(fuzz_server_msg PRIVATE "${CMAKE_SOURCE_DIR}/tests")
+
+# ClientNetEventHandler::onReceive — the widest untrusted-input surface on the client. The handler
+# lives in the SDL-gated game exe, so compile its .cpp directly (mirrors tests/test_client_net_event_handler).
+fl_add_fuzzer(fuzz_client_msg)
+target_sources(fuzz_client_msg PRIVATE "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp")
+target_link_libraries(fuzz_client_msg PRIVATE engine-net engine-render engine-entity engine-console engine-weather
+                                              platform-hal)
+target_include_directories(fuzz_client_msg PRIVATE "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
+                                                   "${CMAKE_SOURCE_DIR}/tests")
+
+# --- v2 content / asset parser harnesses (#709; mostly pure) ---
+
+# AssetValidator::validate — magic-byte + size gate (first fuzz byte selects the AssetType).
+fl_add_fuzzer(fuzz_asset_validator)
+target_link_libraries(fuzz_asset_validator PRIVATE engine-content)
+
+# decodeTerrainChunkPng — 16-bit grayscale PNG decoder (stb_image).
+fl_add_fuzzer(fuzz_terrain_png)
+target_link_libraries(fuzz_terrain_png PRIVATE engine-render)
+
+# NOTE: the OGG/stb_vorbis harness is parked in fuzz/disabled/ (not built, not run). stb_vorbis has
+# memory-safety defects on malformed input (a SEGV in its own cleanup, wild allocations) that would
+# keep the smoke red; the decode path needs hardening/sandboxing first. See fuzz/disabled/README.md
+# for the reproducers, the upstream-report note, and the re-enable steps.
+
+# parseFlightModel — flight-model TOML parser (throws; harness catches).
+fl_add_fuzzer(fuzz_flight_model_toml)
+target_link_libraries(fuzz_flight_model_toml PRIVATE engine-flight)
+
+# parseEntityDef — entity-definition TOML parser (throws; harness catches).
+fl_add_fuzzer(fuzz_entity_def_toml)
+target_link_libraries(fuzz_entity_def_toml PRIVATE engine-entity)
+
+# parsePlaylist — music-playlist TOML parser (needs an ILogger&).
+fl_add_fuzzer(fuzz_playlist_toml)
+target_link_libraries(fuzz_playlist_toml PRIVATE engine-audio)
+
+# parseServerConfig — fl-server config TOML parser (nullable logger; already proven fuzz-linkable).
+fl_add_fuzzer(fuzz_server_config_toml)
+target_link_libraries(fuzz_server_config_toml PRIVATE fl-server-config)
+target_include_directories(fuzz_server_config_toml PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server")
+
+# ModLoader::load — content-pack discovery + manifest.toml parse + name sanitizers, over MockFilesystem.
+fl_add_fuzzer(fuzz_mod_manifest)
+target_link_libraries(fuzz_mod_manifest PRIVATE engine-content)
+target_include_directories(fuzz_mod_manifest PRIVATE "${CMAKE_SOURCE_DIR}/tests")
+
+# validateMeshFromJson — in-memory glTF 2.0 validator (tinygltf; graphics-free lib).
+fl_add_fuzzer(fuzz_mesh_json)
+target_link_libraries(fuzz_mesh_json PRIVATE validate-mesh-lib)
+
 # --- Seed-corpus mint tool (NOT a fuzzer: own main, no -fsanitize=fuzzer, no ctest) ---
 # Regenerates the committed corpus/<name>/seed-*.bin from the same builders the unit tests use.
 # Run once after building: ./build/fuzz/fuzz/fuzz-mint-seeds
 add_executable(fuzz-mint-seeds mint_seeds.cpp "${CMAKE_SOURCE_DIR}/server/fl-server/RconServer.cpp")
 target_link_libraries(fuzz-mint-seeds PRIVATE engine-protocol fl-server-config engine-console)
-target_include_directories(fuzz-mint-seeds PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server")
+target_include_directories(fuzz-mint-seeds PRIVATE "${CMAKE_SOURCE_DIR}/server/fl-server"
+                                                   "${CMAKE_SOURCE_DIR}/tests")
 target_compile_definitions(fuzz-mint-seeds PRIVATE FL_FUZZ_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 if(WIN32)
     target_link_libraries(fuzz-mint-seeds PRIVATE ws2_32)

@@ -1,0 +1,7 @@
+
+[entity]
+id       = "test:fighter"
+name     = "Test Fighter"
+category = "air_vehicle"
+max_hp   = 100.0
+mesh     = "aircraft/test"

@@ -179,3 +179,28 @@ TEST_CASE("builtinWorldTerrainManifest has expected values") {
     CHECK(m.originX == Catch::Approx(-7680.0));
     CHECK(m.originZ == Catch::Approx(-7680.0));
 }
+
+// ---------------------------------------------------------------------------
+// TerrainChunkIO — malformed-PNG hardening (regression, #94 fuzzing)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("decodeTerrainChunkPng rejects a PNG whose chunk length overruns the buffer") {
+    // Valid 8-byte signature + IHDR (4x4, 16-bit gray) + an IDAT chunk declaring ~738 MB of data in a
+    // tiny file. Without the chunk-length sanity check, stb_image allocates the declared IDAT length
+    // up front — a memory-exhaustion DoS from an untrusted content-pack chunk.
+    static const uint8_t png[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // signature
+                                  0x00, 0x00, 0x00, 0x0D, 'I',  'H',  'D',  'R',  // IHDR len=13
+                                  0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, // width=4 height=4
+                                  0x10, 0x00, 0x00, 0x00, 0x00,                   // bitdepth=16, gray, no interlace
+                                  0xDC, 0x0A, 0x1D, 0xE1,                         // IHDR crc
+                                  0x2C, 0x00, 0x00, 0x00, 'I',  'D',  'A',  'T'}; // IDAT len=0x2C000000 (~738 MB)
+    int w = 0, h = 0;
+    CHECK(decodeTerrainChunkPng(png, sizeof(png), &w, &h).empty());
+}
+
+TEST_CASE("decodeTerrainChunkPng rejects non-PNG input (no stb format auto-probe)") {
+    // A JPEG magic must not reach stb_image's other, more fragile format decoders (PSD/PNM/HDR/...).
+    static const uint8_t jpeg[] = {0xFF, 0xD8, 0xFF, 0xE0, 'J', 'F', 'I', 'F', 0, 1, 2, 3, 4, 5, 6, 7};
+    int w = 0, h = 0;
+    CHECK(decodeTerrainChunkPng(jpeg, sizeof(jpeg), &w, &h).empty());
+}

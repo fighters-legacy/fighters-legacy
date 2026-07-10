@@ -39,7 +39,13 @@ static constexpr PresetDefaults kPresetDefaults[7] = {
 };
 
 inline const PresetDefaults& defaults(WeatherPreset p) {
-    return kPresetDefaults[static_cast<uint8_t>(p)];
+    // p can originate from an untrusted MsgWeatherState.preset (any uint8_t value): clamp an
+    // out-of-range preset to Clear so a malicious/garbage value can never index past
+    // kPresetDefaults. This is the single indexing site, so the guard covers every caller.
+    std::size_t idx = static_cast<std::size_t>(p);
+    if (idx >= sizeof(kPresetDefaults) / sizeof(kPresetDefaults[0]))
+        idx = 0; // Clear
+    return kPresetDefaults[idx];
 }
 
 // Wrap hours to [0, 24)
