@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// DISABLED HARNESS — parked, not built or run. See fuzz/disabled/README.md.
-//
-// Fuzz target: the OGG Vorbis decode paths (stb_vorbis) — decodeOgg (full decode) plus the
-// streaming API (openOggStream / getOggStreamInfo / readOggSamples / seekOggStart / closeOggStream)
-// that MusicManager drives. Content-pack audio is attacker-controlled, so this IS a real attack
-// surface — but stb_vorbis is a trusted-input decoder with memory-safety defects on malformed input
-// (a SEGV in its own vorbis_deinit/setup_free cleanup, plus integer-overflow-driven wild allocations)
-// that no sanitizer configuration papers over. The harness is preserved for the day the underlying
-// OGG decode path is hardened or sandboxed (tracked as #723); re-enabling instructions are in
-// fuzz/disabled/README.md.
+// Fuzz target: the OGG Vorbis decode paths — decodeOgg (full decode, with its decompression-bomb
+// cap) plus the streaming API (openOggStream / getOggStreamInfo / readOggSamples / seekOggStart /
+// closeOggStream) that MusicManager drives. Content-pack audio is attacker-controlled, so this is
+// a real attack surface: everything past the 4-byte OggS magic that AssetValidator checks reaches
+// the decoder unvalidated. Backed by libvorbis (vorbisfile) since #723 — the earlier stb_vorbis
+// backend was a trusted-input decoder with real memory-safety defects on malformed input, which is
+// why this harness spent time parked in fuzz/disabled/. Invariant: no crash, leak, OOM, or hang on
+// any input; rejected input returns cleanly.
 
 #include <cstddef>
 #include <cstdint>

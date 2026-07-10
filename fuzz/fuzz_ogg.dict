@@ -1,0 +1,7 @@
+# libFuzzer dictionary for the OGG Vorbis decoder (fuzz_ogg).
+# OGG page capture pattern + the three Vorbis header-packet signatures.
+"OggS"
+"\x01vorbis"
+"\x03vorbis"
+"\x05vorbis"
+"vorbis"

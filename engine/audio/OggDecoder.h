@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -17,14 +19,23 @@ struct DecodedPcm {
     }
 };
 
+// Decompression-bomb cap for decodeOgg(): maximum total interleaved int16_t
+// elements (samples x channels) a full decode may produce — 64 MiB of PCM,
+// ~6 minutes of 44.1 kHz stereo. Content-pack bytes are attacker-controlled;
+// a tiny OGG can legally expand to gigabytes without this. Exceeding the cap
+// FAILS the decode (invalid DecodedPcm) rather than truncating.
+inline constexpr std::size_t kMaxDecodedSamples = 32u * 1024u * 1024u;
+
 // Fully decodes an OGG Vorbis byte blob into interleaved int16_t PCM.
 // Suitable for short SFX clips loaded via AssetManager::loadAudio().
-// Returns an invalid (empty) DecodedPcm on any decode failure.
-DecodedPcm decodeOgg(std::span<const uint8_t> bytes);
+// Returns an invalid (empty) DecodedPcm on any decode failure, including
+// output exceeding maxTotalSamples (interleaved elements).
+DecodedPcm decodeOgg(std::span<const uint8_t> bytes, std::size_t maxTotalSamples = kMaxDecodedSamples);
 
 // ---------------------------------------------------------------------------
 // Opaque streaming handle — for long music tracks decoded chunk-by-chunk.
-// MusicManager uses this API; stb_vorbis internals stay in OggDecoder.cpp.
+// MusicManager uses this API; libvorbis (vorbisfile) internals stay in
+// OggDecoder.cpp.
 // ---------------------------------------------------------------------------
 struct OggStream;
 
@@ -34,7 +45,9 @@ struct OggStreamInfo {
 };
 
 // Opens a streaming decoder over a byte span. The caller must keep bytes alive
-// for the lifetime of the returned handle. Returns nullptr on failure.
+// for the lifetime of the returned handle. Returns nullptr on failure —
+// including structurally invalid streams and streams outside the sanity
+// envelope (channels 1..8, sample rate 8000..192000 Hz).
 OggStream* openOggStream(std::span<const uint8_t> bytes);
 
 // Metadata of the stream (valid after openOggStream succeeds).
@@ -49,5 +62,13 @@ void seekOggStart(OggStream* stream);
 
 // Closes and frees the stream handle.
 void closeOggStream(OggStream* stream);
+
+// RAII holder for OggStream (closeOggStream on destruction).
+struct OggStreamCloser {
+    void operator()(OggStream* stream) const {
+        closeOggStream(stream);
+    }
+};
+using OggStreamPtr = std::unique_ptr<OggStream, OggStreamCloser>;
 
 } // namespace fl

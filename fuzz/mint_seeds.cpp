@@ -25,6 +25,8 @@
 #include <RconServer.h>
 #include <server_config.h>
 
+#include "ogg_fixture.h"
+
 #ifndef FL_FUZZ_CORPUS_DIR
 #error "FL_FUZZ_CORPUS_DIR must be defined by CMake"
 #endif
@@ -281,6 +283,18 @@ void mintTerrainPngSeeds() {
     writeSeed("fuzz_terrain_png", "seed-4x4-gray16.bin", std::vector<uint8_t>(std::begin(png), std::end(png)));
 }
 
+void mintOggSeeds() {
+    printf("fuzz_ogg:\n");
+    // Real minimal OGG Vorbis stream (0.05 s mono 44.1 kHz silence), shared with
+    // tests/test_music_manager.cpp via tests/ogg_fixture.h so the two never drift.
+    writeSeed("fuzz_ogg", "seed-silence.bin",
+              std::vector<uint8_t>(std::begin(fl::kMinimalOgg), std::end(fl::kMinimalOgg)));
+    // Truncated first page — a structurally interesting invalid stream so the mutator
+    // starts on the open-failure/reject paths as well as the happy path.
+    writeSeed("fuzz_ogg", "seed-truncated.bin",
+              std::vector<uint8_t>(std::begin(fl::kMinimalOgg), std::begin(fl::kMinimalOgg) + 64));
+}
+
 void mintTomlSeeds() {
     // Minimal valid documents cribbed from the corresponding unit-test fixtures so the seeds start on
     // the parser success path; the fuzzer + dictionaries explore malformed variants from there.
@@ -392,6 +406,7 @@ int main() {
     mintClientMsgSeeds();
     mintAssetValidatorSeeds();
     mintTerrainPngSeeds();
+    mintOggSeeds();
     mintTomlSeeds();
     mintModManifestSeeds();
     mintMeshJsonSeeds();

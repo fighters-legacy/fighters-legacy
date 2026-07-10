@@ -2,7 +2,6 @@
 #include "audio/MusicManager.h"
 
 #include "ILogger.h"
-#include "audio/ogg_impl.h"
 #include "content/AssetManager.h"
 
 #include <algorithm>
@@ -63,11 +62,11 @@ void MusicManager::loadPlaylist(const PlaylistData& playlist) {
 }
 
 // Fills one streaming buffer and queues it onto the source. Returns false at EOF.
-static bool fillAndQueue(IAudio* audio, AudioSourceId src, AudioBufferId buf, OggStreamImpl* stream, int sampleRate,
+static bool fillAndQueue(IAudio* audio, AudioSourceId src, AudioBufferId buf, OggStream* stream, int sampleRate,
                          int channels) {
     // Stack buffer: kDecodeChunkSamples samples * up to 2 channels * 2 bytes each = 32 KB max.
     int16_t pcm[MusicManager::kDecodeChunkSamples * 2];
-    int decoded = ogg_stream_read(stream, pcm, MusicManager::kDecodeChunkSamples);
+    int decoded = readOggSamples(stream, pcm, MusicManager::kDecodeChunkSamples);
     if (decoded <= 0)
         return false;
     audio->queueBuffer(src, buf, pcm, static_cast<std::size_t>(decoded) * channels * sizeof(int16_t), sampleRate,
@@ -86,7 +85,7 @@ void MusicManager::openSlot(StreamSlot& slot, const std::string& assetName) {
     }
 
     slot.oggBytes = audioAsset->bytes;
-    slot.oggStream = ogg_stream_open(slot.oggBytes.data(), static_cast<int>(slot.oggBytes.size()));
+    slot.oggStream.reset(openOggStream(slot.oggBytes));
     if (!slot.oggStream) {
         m_logger->log(LogLevel::Warn, __FILE__, __LINE__,
                       (std::string("music: failed to open OGG: ") + assetName).c_str());
@@ -94,22 +93,21 @@ void MusicManager::openSlot(StreamSlot& slot, const std::string& assetName) {
         return;
     }
 
-    auto* s = static_cast<OggStreamImpl*>(slot.oggStream);
-    slot.sampleRate = ogg_stream_sample_rate(s);
-    slot.channels = ogg_stream_channels(s);
+    const OggStreamInfo info = getOggStreamInfo(slot.oggStream.get());
+    slot.sampleRate = info.sampleRate;
+    slot.channels = info.channels;
 
     // Prime: fill all kNumStreamBuffers buffers and queue them before starting playback.
     int primed = 0;
     for (int i = 0; i < kNumStreamBuffers; ++i) {
-        if (!fillAndQueue(m_audio, slot.source, slot.bufs[i], s, slot.sampleRate, slot.channels))
+        if (!fillAndQueue(m_audio, slot.source, slot.bufs[i], slot.oggStream.get(), slot.sampleRate, slot.channels))
             break;
         ++primed;
     }
 
     if (primed == 0) {
         m_logger->log(LogLevel::Warn, __FILE__, __LINE__, (std::string("music: empty OGG: ") + assetName).c_str());
-        ogg_stream_close(s);
-        slot.oggStream = nullptr;
+        slot.oggStream.reset();
         slot.oggBytes.clear();
         return;
     }
@@ -129,11 +127,10 @@ void MusicManager::refillSlot(StreamSlot& slot) {
     AudioBufferId unqueued[kNumStreamBuffers]{};
     m_audio->unqueueProcessed(slot.source, unqueued, processed);
 
-    auto* s = static_cast<OggStreamImpl*>(slot.oggStream);
     for (int i = 0; i < processed; ++i) {
         if (!unqueued[i])
             continue;
-        if (!fillAndQueue(m_audio, slot.source, unqueued[i], s, slot.sampleRate, slot.channels)) {
+        if (!fillAndQueue(m_audio, slot.source, unqueued[i], slot.oggStream.get(), slot.sampleRate, slot.channels)) {
             // EOF — mark inactive; update() will advance track or loop.
             slot.active = false;
             return;
@@ -148,10 +145,7 @@ void MusicManager::refillSlot(StreamSlot& slot) {
 void MusicManager::stopSlot(StreamSlot& slot) {
     if (slot.source)
         m_audio->detachBuffers(slot.source); // stops + detaches all queued AL buffers
-    if (slot.oggStream) {
-        ogg_stream_close(static_cast<OggStreamImpl*>(slot.oggStream));
-        slot.oggStream = nullptr;
-    }
+    slot.oggStream.reset();
     slot.oggBytes.clear();
     slot.active = false;
     slot.gain = 0.0f;
