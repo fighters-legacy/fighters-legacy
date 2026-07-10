@@ -109,6 +109,7 @@ Dependencies are pulled via FetchContent or system packages (they are **not** ve
 | Protobuf | BSD-3-Clause | GNS dependency (system-preferred) |
 | OpenSSL | Apache-2.0 | GNS crypto backend |
 | enet6 | MIT | enet6 transport |
+| libogg / libvorbis | BSD-3-Clause | OGG Vorbis audio decode (engine-audio; FetchContent-pinned, #723) |
 | SDL3 / OpenAL Soft / GLM / KTX / Lua / tomlplusplus / Catch2 | zlib / LGPL-2.1 / MIT / Apache-2.0 / MIT / MIT / BSL-1.0 | see `cmake/dependencies.cmake` |
 
 > Release packaging (`release.yml`) is responsible for bundling the BSD-3-Clause / Apache-2.0 / MIT notice texts alongside the shipped binaries (the GPL source-offer covers the rest). Tracked as a release-hardening follow-up.
@@ -270,9 +271,10 @@ build-tree working corpus for 60 s. Requires clang with the libFuzzer runtime
   untrusted client surface). Both use `fuzz/FuzzFrames.h` to pack several `onReceive` packets into one
   input so a single corpus entry reaches the multi-packet states (chunk reassembly, delta-after-full
   snapshot decode, ack advance).
-- **Content / asset parsers**: `fuzz_asset_validator`, `fuzz_terrain_png`, `fuzz_flight_model_toml`,
-  `fuzz_entity_def_toml`, `fuzz_playlist_toml`, `fuzz_server_config_toml`, `fuzz_mod_manifest`,
-  `fuzz_mesh_json`.
+- **Content / asset parsers**: `fuzz_asset_validator`, `fuzz_terrain_png`, `fuzz_ogg` (the
+  libvorbis-backed `decodeOgg` + streaming API — the untrusted content-pack audio path, #723),
+  `fuzz_flight_model_toml`, `fuzz_entity_def_toml`, `fuzz_playlist_toml`, `fuzz_server_config_toml`,
+  `fuzz_mod_manifest`, `fuzz_mesh_json`.
 
 ### Vendored-parser sanitizer configuration
 
@@ -297,8 +299,9 @@ fighters-legacy bug is still caught; only the vendored parsers' pedantry is quie
 A harness that targets a real surface but depends on a vendored decoder with **actual** memory-safety
 defects on malformed input (memory corruption, not benign UB) is parked under `fuzz/disabled/` — not
 built, not run, out of the smoke enumeration — with the reproducers and a re-enable checklist in
-`fuzz/disabled/README.md`. Current: `fuzz_ogg` (stb_vorbis SEGVs in its own cleanup on malformed
-audio); the untrusted-OGG decode path needs hardening/sandboxing first, tracked as #723.
+`fuzz/disabled/README.md`. **None currently parked.** (`fuzz_ogg` lived there while OGG decode was
+backed by stb_vorbis, a trusted-input decoder that SEGVs on malformed streams; #723 replaced it with
+the reference libvorbis decoder and the harness moved back into the smoke.)
 
 ### Adding a harness
 

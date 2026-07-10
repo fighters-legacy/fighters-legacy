@@ -96,10 +96,11 @@ target_link_libraries(fuzz_asset_validator PRIVATE engine-content)
 fl_add_fuzzer(fuzz_terrain_png)
 target_link_libraries(fuzz_terrain_png PRIVATE engine-render)
 
-# NOTE: the OGG/stb_vorbis harness is parked in fuzz/disabled/ (not built, not run). stb_vorbis has
-# memory-safety defects on malformed input (a SEGV in its own cleanup, wild allocations) that would
-# keep the smoke red; the decode path needs hardening/sandboxing first. See fuzz/disabled/README.md
-# for the reproducers and the re-enable steps (tracked as #723).
+# decodeOgg + the OGG streaming API — the untrusted content-pack audio path, backed by libvorbis
+# (vorbisfile) since #723 (the prior stb_vorbis backend crashed on malformed input and had this
+# harness parked in fuzz/disabled/).
+fl_add_fuzzer(fuzz_ogg)
+target_link_libraries(fuzz_ogg PRIVATE engine-audio)
 
 # parseFlightModel — flight-model TOML parser (throws; harness catches).
 fl_add_fuzzer(fuzz_flight_model_toml)

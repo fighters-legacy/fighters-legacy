@@ -2,6 +2,7 @@
 #pragma once
 
 #include "IAudio.h"
+#include "audio/OggDecoder.h"
 #include "audio/PlaylistLoader.h"
 #include "loop/GameState.h"
 
@@ -50,7 +51,7 @@ class MusicManager {
     struct StreamSlot {
         AudioSourceId source{0};
         AudioBufferId bufs[kNumStreamBuffers]{};
-        void* oggStream{nullptr};      // OggStreamImpl* from ogg_impl.h (void* to avoid header dep)
+        OggStreamPtr oggStream;        // streaming decoder handle (RAII)
         std::vector<uint8_t> oggBytes; // raw OGG bytes; kept alive for the stream's lifetime
         float gain{0.0f};              // current gain envelope [0, 1]
         int sampleRate{0};

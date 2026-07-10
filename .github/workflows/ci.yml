@@ -164,8 +164,9 @@ jobs:
         run: |
           # Guards our bundled libs (statically linked). GNS's libssl/libcrypto/libprotobuf are
           # intentionally dynamic system deps (like libc) and are not in the reject set.
+          # vorbis|ogg guards the FetchContent-pinned decoder (#723) against a system pickup.
           bad=$(ldd build/debug/game/fighters-legacy/fighters-legacy \
-                | grep -Ei "sdl3|openal|ktx" || true)
+                | grep -Ei "sdl3|openal|ktx|vorbis|ogg" || true)
           [ -z "$bad" ] || (echo "Unexpected dynamic deps: $bad" && exit 1)
           # fl-server is headless: no client backend may reach it (#711 dropped SDL3; #713
           # guards the full set — the binary-level backstop for cmake/layering.cmake).

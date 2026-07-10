@@ -323,9 +323,11 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# stb — single-file C libraries; used for stb_vorbis OGG decode in engine-audio.
-# stb has no CMakeLists.txt; use FetchContent_Populate to download source only.
-# stb_vorbis.c is compiled directly as a source file in the engine-audio target.
+# stb — single-file C libraries; used for stb_image 16-bit PNG decode in
+# engine-render (TerrainChunkIO). stb has no CMakeLists.txt; use
+# FetchContent_Populate to download source only.
+# (stb_vorbis is NOT used: it is a trusted-input decoder and was replaced by
+# libogg/libvorbis for the attacker-controlled content-pack audio path, #723.)
 # ---------------------------------------------------------------------------
 FetchContent_Declare(stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
@@ -338,6 +340,58 @@ FetchContent_GetProperties(stb)
 if(NOT stb_POPULATED)
     FetchContent_Populate(stb)
 endif()
+
+# ---------------------------------------------------------------------------
+# libogg + libvorbis (vorbisfile) — reference OGG Vorbis decoder for engine-audio (#723).
+# FetchContent-always (pinned, static), NOT system-preferred: content-pack audio is
+# attacker-controlled and this decoder is a fuzz target (fuzz_ogg), so the exact
+# version must be deterministic across all platforms and CI legs. Both are BSD-3.
+# OVERRIDE_FIND_PACKAGE redirects libvorbis's internal find_package(Ogg REQUIRED)
+# to this build (the redirects dir outranks vorbis's bundled FindOgg.cmake since
+# CMake 3.24; if that ever regresses, set OGG_INCLUDE_DIR/OGG_LIBRARY instead).
+# ---------------------------------------------------------------------------
+FetchContent_Declare(Ogg
+    GIT_REPOSITORY https://github.com/xiph/ogg.git
+    GIT_TAG        v1.3.6
+    GIT_SHALLOW    TRUE
+    GIT_PROGRESS   TRUE
+    SYSTEM
+    OVERRIDE_FIND_PACKAGE
+)
+FetchContent_Declare(Vorbis
+    GIT_REPOSITORY https://github.com/xiph/vorbis.git
+    GIT_TAG        v1.3.7
+    GIT_SHALLOW    TRUE
+    GIT_PROGRESS   TRUE
+    SYSTEM
+)
+# Shadow BUILD_TESTING with a plain variable for the subproject scope only — libogg
+# would otherwise register its test_bitwise/test_framing ctest entries in our suite.
+# A plain set() shadows the cache variable for the add_subdirectory scopes below and
+# is restored afterwards, so the project's own test registration is unaffected.
+set(FL_SAVED_BUILD_TESTING "${BUILD_TESTING}")
+set(BUILD_TESTING OFF)
+set(INSTALL_DOCS OFF)
+FetchContent_MakeAvailable(Ogg)
+if(NOT TARGET Ogg::ogg)
+    add_library(Ogg::ogg ALIAS ogg)
+endif()
+# vorbis v1.3.7 declares a cmake_minimum_required below 3.5, which CMake 4.x rejects.
+# CMAKE_POLICY_VERSION_MINIMUM is the CMake 4.x mechanism for this (same workaround
+# as tinygltf/yaml-cpp); keep until a vorbis release bumps its minimum to 3.5+.
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
+    set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE INTERNAL "")
+endif()
+FetchContent_MakeAvailable(Vorbis)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
+    unset(CMAKE_POLICY_VERSION_MINIMUM CACHE)
+endif()
+set(BUILD_TESTING "${FL_SAVED_BUILD_TESTING}")
+unset(FL_SAVED_BUILD_TESTING)
+unset(INSTALL_DOCS)
+# Prevent the vendored C sources from inheriting CMAKE_COMPILE_WARNING_AS_ERROR=ON
+# (same pattern as the Lua FetchContent fallback).
+set_target_properties(ogg vorbis vorbisenc vorbisfile PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
 
 # ---------------------------------------------------------------------------
 # Lua 5.5 — system preferred, FetchContent fallback

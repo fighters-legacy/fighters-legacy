@@ -103,12 +103,24 @@ struct FakeAudioPack : NullContentPack {
     }
 };
 
-// GarbageAudioPack — returns bytes that are NOT valid OGG.
-// Used to exercise the decodeOgg-failure path in VoiceCalloutManager.
+// GarbageAudioPack — returns bytes that are NOT valid OGG. These fail AssetManager's
+// magic-byte gate (AssetValidator), so loadAudio() callers see "asset not found".
 struct GarbageAudioPack : NullContentPack {
     std::optional<AudioBuffer> loadAudio(const char*) override {
         AudioBuffer buf;
         buf.bytes = {0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x02, 0x03};
+        return buf;
+    }
+};
+
+// OggPrefixGarbagePack — a valid "OggS" magic followed by garbage. This PASSES the
+// AssetValidator magic-byte gate (the real attack shape for content-pack audio) and
+// exercises the decoder's own malformed-stream rejection paths.
+struct OggPrefixGarbagePack : NullContentPack {
+    std::optional<AudioBuffer> loadAudio(const char*) override {
+        AudioBuffer buf;
+        buf.bytes = {0x4F, 0x67, 0x67, 0x53}; // "OggS"
+        buf.bytes.insert(buf.bytes.end(), 64, 0xFF);
         return buf;
     }
 };
@@ -254,6 +266,34 @@ TEST_CASE("openOggStream returns nullptr for garbage bytes", "[audio][ogg]") {
     std::vector<uint8_t> garbage(64, 0xAB);
     OggStream* s = openOggStream(garbage);
     REQUIRE(s == nullptr);
+}
+
+TEST_CASE("decodeOgg and openOggStream reject OggS magic followed by garbage", "[audio][ogg]") {
+    // Passes AssetValidator's 4-byte magic check — the realistic malicious content-pack
+    // shape — so the decoder itself must reject it.
+    std::vector<uint8_t> bytes = {0x4F, 0x67, 0x67, 0x53}; // "OggS"
+    bytes.insert(bytes.end(), 64, 0xFF);
+    REQUIRE(!decodeOgg(bytes).valid());
+    REQUIRE(openOggStream(bytes) == nullptr);
+}
+
+TEST_CASE("decodeOgg and openOggStream reject truncated valid streams", "[audio][ogg]") {
+    // Bare capture pattern only.
+    std::vector<uint8_t> magicOnly(kMinimalOgg, kMinimalOgg + 4);
+    REQUIRE(!decodeOgg(magicOnly).valid());
+    REQUIRE(openOggStream(magicOnly) == nullptr);
+
+    // First half of an otherwise-valid stream (headers cut mid-setup).
+    std::vector<uint8_t> half(kMinimalOgg, kMinimalOgg + sizeof(kMinimalOgg) / 2);
+    REQUIRE(!decodeOgg(half).valid());
+    REQUIRE(openOggStream(half) == nullptr);
+}
+
+TEST_CASE("decodeOgg fails when output exceeds the sample cap", "[audio][ogg]") {
+    // kMinimalOgg decodes to ~2200 samples; a cap of 4 must reject (never truncate).
+    DecodedPcm pcm = decodeOgg(kMinimalOgg, 4);
+    REQUIRE(!pcm.valid());
+    REQUIRE(pcm.samples.empty());
 }
 
 TEST_CASE("getOggStreamInfo returns zero for null stream", "[audio][ogg]") {
@@ -445,6 +485,35 @@ TEST_CASE("readOggSamples returns samples from valid stream", "[audio][ogg]") {
     closeOggStream(s);
 }
 
+TEST_CASE("readOggSamples drains to EOF and seekOggStart rewinds for looping", "[audio][ogg]") {
+    OggStream* s = openOggStream(kMinimalOgg);
+    REQUIRE(s != nullptr);
+
+    auto drain = [&] {
+        int16_t buf[512];
+        int total = 0;
+        for (;;) {
+            const int n = readOggSamples(s, buf, 512);
+            if (n <= 0)
+                break;
+            total += n;
+        }
+        return total;
+    };
+
+    const int firstPass = drain();
+    REQUIRE(firstPass > 0); // 0.05 s @ 44100 Hz mono => ~2200 samples
+
+    // Past EOF: further reads return 0, not an error or crash.
+    int16_t buf[16];
+    REQUIRE(readOggSamples(s, buf, 16) == 0);
+
+    // Rewind and decode the same stream again — the MusicManager loop path.
+    seekOggStart(s);
+    REQUIRE(drain() == firstPass);
+    closeOggStream(s);
+}
+
 // ---------------------------------------------------------------------------
 // VoiceCalloutManager with real OGG asset (exercises play + upload paths)
 // ---------------------------------------------------------------------------
@@ -488,6 +557,28 @@ TEST_CASE("MusicManager openSlot succeeds with valid OGG asset", "[audio][music]
     mm.loadPlaylist(pd);
 
     mm.setState(GameState::Menu); // openSlot succeeds: slot.active = true
+    mm.update(0.016f, 1.0f, 1.0f);
+    mm.shutdown();
+}
+
+TEST_CASE("MusicManager openSlot fails gracefully on malformed OGG that passes validation", "[audio][music]") {
+    NullAudio audio;
+    NullLogger log;
+
+    // OggS magic + garbage passes AssetManager's magic-byte gate, so openSlot reaches
+    // openOggStream and must take the "failed to open OGG" warn path without crashing.
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::make_unique<OggPrefixGarbagePack>());
+    AssetManager assets(std::move(packs), log);
+    assets.initialize(nullptr);
+
+    MusicManager mm;
+    mm.init(&audio, &assets, &log);
+
+    PlaylistData pd = parsePlaylist(kValidPlaylist, log);
+    mm.loadPlaylist(pd);
+
+    mm.setState(GameState::Menu); // openSlot fails: slot stays inactive
     mm.update(0.016f, 1.0f, 1.0f);
     mm.shutdown();
 }
