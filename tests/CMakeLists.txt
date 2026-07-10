@@ -475,6 +475,11 @@ target_link_libraries(test_terrain_streamer PRIVATE Catch2::Catch2WithMain engin
 target_include_directories(test_terrain_streamer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_terrain_streamer)
 
+add_executable(test_terrain_mesh_builder test_terrain_mesh_builder.cpp)
+target_link_libraries(test_terrain_mesh_builder PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_terrain_mesh_builder PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_terrain_mesh_builder)
+
 add_executable(test_config_file test_config_file.cpp)
 target_link_libraries(test_config_file PRIVATE Catch2::Catch2WithMain engine-config)
 catch_discover_tests(test_config_file)
