@@ -86,6 +86,13 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             if (!fl::readRecordAt(data, size, off, td))
                 break;
             off += sizeof(td);
+            // Force-terminate the fixed-size wire char[] fields before treating them as C strings: a
+            // malicious server may send a fully-populated (non-NUL-terminated) field, which would
+            // otherwise over-read past the array in findById/std::string (matches how every other
+            // handler here terminates its char[] fields).
+            td.id[sizeof(td.id) - 1] = '\0';
+            td.mesh[sizeof(td.mesh) - 1] = '\0';
+            td.dmgMesh[sizeof(td.dmgMesh) - 1] = '\0';
             if (registry.findById(td.id))
                 continue; // already registered
             fl::EntityDef def;

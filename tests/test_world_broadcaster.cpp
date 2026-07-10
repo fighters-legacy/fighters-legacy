@@ -6915,3 +6915,28 @@ TEST_CASE("WorldBroadcaster: forEachPeer reports throttled send rate and packet 
     CHECK(rate < 60.f);                 // decimated
     CHECK(loss == Catch::Approx(0.5f)); // live ENet loss surfaced
 }
+
+// Regression (#94 fuzzing): NaN/Inf control floats from an untrusted client must be sanitized before
+// entering the sim. std::clamp passes NaN through unchanged, and a NaN throttle later trips UB at the
+// float->uint8 telemetry cast during snapshot assembly.
+TEST_CASE("WorldBroadcaster: NaN/Inf client input is sanitized, not propagated", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    fl::MsgClientInput inp{};
+    inp.seqNum = 1;
+    inp.throttle = std::nanf("");
+    inp.elevator = HUGE_VALF; // +inf
+    inp.aileron = -HUGE_VALF; // -inf
+    inp.rudder = std::nanf("");
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    // Stepping assembles a snapshot (the float->uint8 telemetry cast). Sanitized input keeps it UB-free.
+    REQUIRE_NOTHROW(broadcaster.onTick(1.0 / 60.0, 1u));
+}

@@ -1187,3 +1187,13 @@ TEST_CASE("parseServerConfig: default template parses with the [metrics] section
     CHECK(cfg.metrics.tickJsonPath.empty());
     CHECK(cfg.metrics.tickJsonIntervalMs == 1000u);
 }
+
+// Regression (#94 fuzzing): the logger parameter is documented as optional (nullptr = no logging).
+// Malformed input that fires a parse-error or a validation-warning log path must tolerate a null log.
+TEST_CASE("parseServerConfig: null logger is tolerated on malformed input", "[server_config]") {
+    auto cfg = parseServerConfig("this = = not valid toml [[[", nullptr);
+    CHECK(cfg.name == "Unnamed Server"); // parse error -> defaults
+
+    auto cfg2 = parseServerConfig("[server]\nport = 999999\n", nullptr);
+    CHECK(cfg2.port == 4778); // out-of-range -> warning logged (to the null sink) + default
+}

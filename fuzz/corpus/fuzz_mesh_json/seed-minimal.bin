@@ -1,0 +1,13 @@
+{
+  "asset": {"version": "2.0"},
+  "scene": 0,
+  "scenes": [{"nodes": [0]}],
+  "nodes": [{"name": "fa18c", "mesh": 0}],
+  "meshes": [{"name": "fa18c", "primitives": [{"attributes": {"POSITION": 0}}]}],
+  "accessors": [{
+    "bufferView": 0, "componentType": 5126, "count": 3,
+    "type": "VEC3", "max": [1,1,1], "min": [0,0,0]
+  }],
+  "bufferViews": [{"buffer": 0, "byteLength": 36}],
+  "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]
+}

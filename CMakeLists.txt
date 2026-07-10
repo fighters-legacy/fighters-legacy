@@ -32,6 +32,30 @@ option(FL_ENABLE_GNS "Build the GameNetworkingSockets transport backend (protobu
 # instrumentation, so it must never enter the MSVC/GCC build matrix.
 option(FL_BUILD_FUZZERS "Build libFuzzer harnesses (clang only; see fuzz/)" OFF)
 
+# The fuzz preset inherits the debug build, which leaves toml++'s internal TOML_ASSERT active. That
+# assert aborts on some malformed TOML the parsers are meant to reject via toml::parse_error — a
+# library debug-assert, not a fighters-legacy bug (release defines NDEBUG and toml++ throws cleanly).
+# Neutralize it for the whole fuzz build so the harnesses reach the real parse-error handling, with
+# ASan/UBSan remaining the memory-safety arbiter. add_compile_options (not add_compile_definitions,
+# which rejects a function-like macro name, nor a raw CMAKE_CXX_FLAGS -D, which ninja hands to
+# /bin/sh unquoted and chokes on the parens) emits the -D as a single shell-quoted argument.
+if(FL_BUILD_FUZZERS)
+    add_compile_options("-DTOML_ASSERT(expr)=static_cast<void>(0)")
+    # Vendored parsers (toml++, stb_image, tinygltf) use two standard-UB-but-benign idioms that
+    # adversarial fuzz input legitimately reaches, and which only these two UBSan sub-checks flag:
+    #   * unreachable      — toml++ marks "can't happen for valid input" switch defaults with
+    #                        __builtin_unreachable (an optimization hint in release).
+    #   * pointer-overflow — stb's `if (buf + n <= end)` reader idiom forms the past-the-end pointer
+    #                        BEFORE the bounds check that immediately follows (no actual OOB access).
+    #   * nonnull-attribute — stb passes a zero-length range with a null base to memcpy (memcpy(nullptr,
+    #                        _, 0)), benign but technically UB against memcpy's nonnull parameter.
+    # Disable ONLY these three sub-checks for the fuzz build. Engine code doesn't rely on these C
+    # idioms, and every other UBSan check (integer/signed overflow, alignment, ...) plus ALL of ASan's
+    # memory-safety checks (OOB read/write, use-after-free, real null deref) stay ON — so a genuine
+    # fighters-legacy memory bug is still caught; only the vendored parsers' benign pedantry is quieted.
+    add_compile_options(-fno-sanitize=unreachable -fno-sanitize=pointer-overflow -fno-sanitize=nonnull-attribute)
+endif()
+
 include(cmake/dependencies.cmake)
 include(cmake/layering.cmake)
 # Runs at the end of this directory scope — after every add_subdirectory() below, so all targets

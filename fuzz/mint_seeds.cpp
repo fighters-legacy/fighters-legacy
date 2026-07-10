@@ -10,9 +10,11 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <net/BitStream.h>
@@ -21,6 +23,7 @@
 #include <net/WireCodec.h>
 
 #include <RconServer.h>
+#include <server_config.h>
 
 #ifndef FL_FUZZ_CORPUS_DIR
 #error "FL_FUZZ_CORPUS_DIR must be defined by CMake"
@@ -37,6 +40,31 @@ void writeSeed(const std::string& harness, const std::string& name, const std::v
     std::ofstream f(out, std::ios::binary | std::ios::trunc);
     f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     printf("  wrote %s (%zu bytes)\n", out.string().c_str(), bytes.size());
+}
+
+void writeSeed(const std::string& harness, const std::string& name, std::string_view text) {
+    writeSeed(harness, name, std::vector<uint8_t>(text.begin(), text.end()));
+}
+
+// Serialize a wire struct to bytes (via the same appendMsg the server/client use).
+template <typename T> std::vector<uint8_t> wireBytes(const T& msg) {
+    std::vector<uint8_t> b;
+    fl::appendMsg(b, msg);
+    return b;
+}
+
+// Append a length-prefixed frame ([len: uint16_t LE][bytes]) — the format fuzz/FuzzFrames.h reads,
+// so a single seed can carry several onReceive() packets in order for the handler harnesses.
+void appendFrame(std::vector<uint8_t>& out, const std::vector<uint8_t>& msg) {
+    const uint16_t len = static_cast<uint16_t>(msg.size());
+    out.push_back(static_cast<uint8_t>(len & 0xFFu));
+    out.push_back(static_cast<uint8_t>((len >> 8) & 0xFFu));
+    out.insert(out.end(), msg.begin(), msg.end());
+}
+
+// A null-terminated field-copy into a fixed wire char[] (mirrors how the server fills these).
+template <std::size_t N> void setField(char (&dst)[N], const char* src) {
+    std::strncpy(dst, src, N - 1);
 }
 
 // Mirror of tests/test_client_net_event_handler.cpp buildSnapshotPkt: header + byte-aligned
@@ -147,6 +175,212 @@ void mintRconSeeds() {
     writeSeed("fuzz_rcon_packet", "seed-two.bin", a);
 }
 
+// --- Sub 2 (#709) harnesses ---
+
+void mintServerMsgSeeds() {
+    printf("fuzz_server_msg:\n");
+
+    // seed-input: a valid MsgClientInput frame followed by a MsgHeartbeat frame.
+    std::vector<uint8_t> input;
+    fl::MsgClientInput inp{};
+    inp.seqNum = 1;
+    inp.throttle = 0.5f;
+    inp.aileron = 0.25f;
+    appendFrame(input, wireBytes(inp));
+    fl::MsgHeartbeat hb{};
+    hb.tickIndex = 1;
+    appendFrame(input, wireBytes(hb));
+    writeSeed("fuzz_server_msg", "seed-input.bin", input);
+
+    // seed-admin: a MsgAdminCommand frame carrying the harness's operator token ("fz") + "status".
+    std::vector<uint8_t> admin;
+    fl::MsgAdminCommand ac{};
+    ac.reqId = 7;
+    setField(ac.token, "fz");
+    setField(ac.command, "status");
+    appendFrame(admin, wireBytes(ac));
+    writeSeed("fuzz_server_msg", "seed-admin.bin", admin);
+}
+
+void mintClientMsgSeeds() {
+    printf("fuzz_client_msg:\n");
+    const double origin[3] = {1000.0, 500.0, -2000.0};
+
+    // seed-handshake: Hello + ConnectAck + a full snapshot + Motd + WeatherState + ServerNotice + PeerDelay.
+    std::vector<uint8_t> s;
+    appendFrame(s, wireBytes(fl::MsgHello{}));
+    fl::MsgConnectAck ack{};
+    ack.assignedEntityIdx = 7;
+    ack.assignedEntityGen = 3;
+    ack.planetRadiusKm = 6371.f;
+    appendFrame(s, wireBytes(ack));
+    appendFrame(s, buildSnapshotPkt(1, {makeFullRecord()}, origin));
+    std::vector<uint8_t> motd = wireBytes(fl::MsgMotdHeader{});
+    const char* motdText = "Welcome";
+    motd.insert(motd.end(), motdText, motdText + std::strlen(motdText));
+    motd.push_back(0u);
+    appendFrame(s, motd);
+    appendFrame(s, wireBytes(fl::MsgWeatherState{}));
+    appendFrame(s, wireBytes(fl::MsgServerNotice{}));
+    fl::MsgPeerDelay pd{};
+    pd.delayTicks = 6;
+    appendFrame(s, wireBytes(pd));
+    writeSeed("fuzz_client_msg", "seed-handshake.bin", s);
+
+    // seed-chunks: a two-part AdminResponseChunk stream (reassembly) + a fast-path AdminResponse + ConnectRefusal.
+    std::vector<uint8_t> c;
+    fl::MsgAdminResponseChunk c0{};
+    c0.reqId = 5;
+    c0.seqNum = 0;
+    setField(c0.body, "part one ");
+    appendFrame(c, wireBytes(c0));
+    fl::MsgAdminResponseChunk c1{};
+    c1.reqId = 5;
+    c1.seqNum = 1;
+    c1.flags = fl::kChunkFlagEnd;
+    setField(c1.body, "part two");
+    appendFrame(c, wireBytes(c1));
+    fl::MsgAdminResponse ar{};
+    ar.reqId = 9;
+    setField(ar.text, "ok");
+    appendFrame(c, wireBytes(ar));
+    fl::MsgConnectRefusal cr{};
+    cr.code = 1;
+    setField(cr.reason, "banned");
+    appendFrame(c, wireBytes(cr));
+    writeSeed("fuzz_client_msg", "seed-chunks.bin", c);
+}
+
+void mintAssetValidatorSeeds() {
+    printf("fuzz_asset_validator:\n");
+    // Layout: [type-selector byte][magic bytes...]; the harness does type = byte0 % AssetType::Count.
+    auto seed = [](uint8_t typeSel, std::vector<uint8_t> magic) {
+        std::vector<uint8_t> b;
+        b.push_back(typeSel);
+        b.insert(b.end(), magic.begin(), magic.end());
+        return b;
+    };
+    writeSeed("fuzz_asset_validator", "seed-mesh-glb.bin", seed(0, {0x67, 0x6C, 0x54, 0x46, 0x02, 0, 0, 0})); // "glTF"
+    writeSeed("fuzz_asset_validator", "seed-texture-png.bin",
+              seed(1, {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}));                       // PNG
+    writeSeed("fuzz_asset_validator", "seed-audio-ogg.bin", seed(2, {0x4F, 0x67, 0x67, 0x53})); // "OggS"
+}
+
+void mintTerrainPngSeeds() {
+    printf("fuzz_terrain_png:\n");
+    // A tiny valid 4x4 16-bit grayscale PNG. Generated once with Python zlib+struct (color type 0,
+    // bit depth 16); the exact byte-writer is recorded in fuzz/fuzz_terrain_png notes. Kept inline so
+    // the seed is regenerated byte-stably without a checked-in .png tool dependency.
+    static const uint8_t png[] = {
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00,
+        0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x10, 0x00, 0x00, 0x00, 0x00, 0xdc, 0x0a, 0x1d, 0xe1, 0x00,
+        0x00, 0x00, 0x2c, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x60, 0x60, 0x60, 0xd0, 0x60, 0x08, 0x60,
+        0xa8, 0x60, 0x60, 0x48, 0x61, 0xe8, 0x61, 0xd8, 0xc2, 0x70, 0x87, 0x81, 0xe1, 0x04, 0xc3, 0x07, 0x46,
+        0x09, 0x46, 0x07, 0x06, 0x46, 0x1d, 0xc6, 0x10, 0xc6, 0x1a, 0xc6, 0x25, 0x00, 0x73, 0x70, 0x07, 0x27,
+        0x51, 0xb9, 0x54, 0x8b, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
+    writeSeed("fuzz_terrain_png", "seed-4x4-gray16.bin", std::vector<uint8_t>(std::begin(png), std::end(png)));
+}
+
+void mintTomlSeeds() {
+    // Minimal valid documents cribbed from the corresponding unit-test fixtures so the seeds start on
+    // the parser success path; the fuzzer + dictionaries explore malformed variants from there.
+    static constexpr std::string_view kFlightModel = R"(
+[aircraft]
+name         = "Test Fighter"
+type         = "fighter"
+engine_type  = "turbofan"
+has_fbw      = false
+cruise_alt_m = 10000.0
+mesh         = "test_mesh"
+cockpit      = "test_hud"
+
+[flight_model]
+mass_kg      = 10000.0
+wing_area_m2 = 35.0
+wingspan_m   = 10.0
+mac_m        = 3.5
+fuel_kg      = 4000.0
+ixx_kg_m2    = 10000.0
+iyy_kg_m2    = 70000.0
+izz_kg_m2    = 78000.0
+
+[aero.cl_table]
+alpha  = [-5.0, 0.0, 5.0, 10.0, 15.0]
+mach   = [0.3, 0.9]
+values = [-0.2, -0.2, 0.05, 0.05, 0.4, 0.4, 0.75, 0.75, 1.05, 1.05]
+
+[aero.drag_polar]
+cd0           = 0.018
+k             = 0.14
+speedbrake_cd = 0.07
+gear_cd       = 0.03
+
+[aero.moments]
+cm_alpha = -0.7
+cm_q     = -10.0
+cm_de    = -1.0
+cl_beta  = -0.08
+cl_p     = -0.40
+cl_da    =  0.07
+cn_beta  =  0.10
+cn_r     = -0.12
+cn_dr    = -0.05
+)";
+    static constexpr std::string_view kEntityDef = R"(
+[entity]
+id       = "test:fighter"
+name     = "Test Fighter"
+category = "air_vehicle"
+max_hp   = 100.0
+mesh     = "aircraft/test"
+)";
+    static constexpr std::string_view kPlaylist = R"(
+[crossfade]
+duration_s = 2.5
+
+[[states]]
+id = "Menu"
+tracks = ["music/menu"]
+loop = true
+)";
+
+    printf("fuzz_flight_model_toml:\n");
+    writeSeed("fuzz_flight_model_toml", "seed-minimal.bin", kFlightModel);
+    printf("fuzz_entity_def_toml:\n");
+    writeSeed("fuzz_entity_def_toml", "seed-minimal.bin", kEntityDef);
+    printf("fuzz_playlist_toml:\n");
+    writeSeed("fuzz_playlist_toml", "seed-minimal.bin", kPlaylist);
+    printf("fuzz_server_config_toml:\n");
+    writeSeed("fuzz_server_config_toml", "seed-default.bin", fl::defaultServerConfigToml());
+}
+
+void mintModManifestSeeds() {
+    printf("fuzz_mod_manifest:\n");
+    const std::string manifest = "[mod]\nname = \"Test Mod\"\nid = \"test-mod\"\nversion = \"1.0.0\"\n"
+                                 "\"engine-api\" = \"1.0\"\npriority = 10\ndepends = []\n";
+    writeSeed("fuzz_mod_manifest", "seed-valid.bin", std::string_view("test-mod\n" + manifest));
+    // A path-traversal pack name exercising the directory-name sanitizer.
+    writeSeed("fuzz_mod_manifest", "seed-traversal.bin", std::string_view("../../etc\n" + manifest));
+}
+
+void mintMeshJsonSeeds() {
+    printf("fuzz_mesh_json:\n");
+    static constexpr std::string_view kGltf = R"json({
+  "asset": {"version": "2.0"},
+  "scene": 0,
+  "scenes": [{"nodes": [0]}],
+  "nodes": [{"name": "fa18c", "mesh": 0}],
+  "meshes": [{"name": "fa18c", "primitives": [{"attributes": {"POSITION": 0}}]}],
+  "accessors": [{
+    "bufferView": 0, "componentType": 5126, "count": 3,
+    "type": "VEC3", "max": [1,1,1], "min": [0,0,0]
+  }],
+  "bufferViews": [{"buffer": 0, "byteLength": 36}],
+  "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]
+})json";
+    writeSeed("fuzz_mesh_json", "seed-minimal.bin", kGltf);
+}
+
 } // namespace
 
 int main() {
@@ -154,6 +388,13 @@ int main() {
     mintSnapshotSeeds();
     mintWireTlvSeeds();
     mintRconSeeds();
+    mintServerMsgSeeds();
+    mintClientMsgSeeds();
+    mintAssetValidatorSeeds();
+    mintTerrainPngSeeds();
+    mintTomlSeeds();
+    mintModManifestSeeds();
+    mintMeshJsonSeeds();
     printf("Done.\n");
     return 0;
 }

@@ -1175,11 +1175,16 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
 
         // Clamp and enqueue into the jitter buffer. Control fields (throttle etc.) are
         // written to stored in onTick when the buffer is drained — not here.
+        // Sanitize control floats from an untrusted client: reject NaN/Inf FIRST (std::clamp passes
+        // NaN straight through — NaN < lo and hi < NaN are both false), then clamp to the actuator
+        // range. An unsanitized NaN would propagate into the flight sim and later trip UB at, e.g.,
+        // the float->uint8 throttle telemetry cast.
+        auto ctl = [](float v, float lo, float hi) { return std::isfinite(v) ? std::clamp(v, lo, hi) : 0.f; };
         BufferedInput bi;
-        bi.throttle = std::clamp(msg.throttle, 0.f, 1.f);
-        bi.elevator = std::clamp(msg.elevator, -1.f, 1.f);
-        bi.aileron = std::clamp(msg.aileron, -1.f, 1.f);
-        bi.rudder = std::clamp(msg.rudder, -1.f, 1.f);
+        bi.throttle = ctl(msg.throttle, 0.f, 1.f);
+        bi.elevator = ctl(msg.elevator, -1.f, 1.f);
+        bi.aileron = ctl(msg.aileron, -1.f, 1.f);
+        bi.rudder = ctl(msg.rudder, -1.f, 1.f);
         bi.buttons = msg.buttons;
         stored.jitterBuffer.push(bi);
 
