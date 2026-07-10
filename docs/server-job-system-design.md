@@ -44,7 +44,9 @@ Data-parallel wins for the near term because:
 - It composes with the existing per-peer interest management and delta compression unchanged.
 
 Spatial sharding remains the **next scaling axis** if a single tick's parallel headroom is
-exhausted; it is deliberately deferred (tracked as a contingent follow-on under Epic A).
+exhausted; it is deliberately deferred (tracked as a contingent follow-on under Epic A). The
+follow-on spike ([#572]) resolved that contingency 2026-07-10: **defer with an explicit trigger
+criterion** — see [spatial-sharding-design.md](spatial-sharding-design.md).
 
 ## The `engine-job` library
 
@@ -280,7 +282,8 @@ The per-tick data structures were characterised at thousands of entities (peers 
   size** (`[world] spatial_cell_size_km`; a cell far smaller than the draw distance explodes the query
   cell count) plus a **recycled-buffer `clear()`** (no per-tick bucket reallocation).
 - The graceful degradation path for the serialize/AI-bound case is the [#514] overrun governor; the
-  next scaling axis once a single tick is serialize-bound at max workers is spatial sharding ([#572]).
+  next scaling axis once a single tick is serialize-bound at max workers is spatial sharding ([#572]
+  — resolved **defer with trigger**, see [spatial-sharding-design.md](spatial-sharding-design.md)).
 
 [#573]: https://github.com/fighters-legacy/fighters-legacy/issues/573
 [#572]: https://github.com/fighters-legacy/fighters-legacy/issues/572

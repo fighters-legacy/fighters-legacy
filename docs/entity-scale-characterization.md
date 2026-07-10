@@ -82,5 +82,7 @@ At thousands of entities the bottleneck is snapshot serialization (peers × inte
 the existing budget (#516), congestion (#518), and overrun-governor (#514) levers — not the pool or
 index, which this work confirmed are cheap and now scale cleanly. If a single authoritative tick
 becomes serialize-bound even at maximum worker count, **spatial sharding ([#572](https://github.com/fighters-legacy/fighters-legacy/issues/572))**
-is the next scaling axis. No further pool/index restructuring is required beyond what landed here
+is the next scaling axis — the #572 spike resolved that contingency as **defer with an explicit
+trigger criterion** (see [spatial-sharding-design.md](spatial-sharding-design.md)); this
+characterisation's serialize-bound conclusion is its primary evidence. No further pool/index restructuring is required beyond what landed here
 (O(liveCount) iteration, configurable/auto cell size, recycled clear).

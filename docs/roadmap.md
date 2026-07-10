@@ -144,8 +144,13 @@ agents attached (out-of-tick guarantee, validated under Epic I load).
    chose a data-parallel single tick (not spatial sharding); the `engine-job` worker pool +
    parallel AI/integrate passes ([#511](https://github.com/fighters-legacy/fighters-legacy/issues/511)),
    per-peer snapshot-assembly parallelism (#512), tick-budget instrumentation (#513), and graceful
-   tick-overrun handling (#514) have all landed. Spatial sharding remains the deferred next scaling
-   axis. See [server-job-system-design.md](server-job-system-design.md).
+   tick-overrun handling (#514) have all landed. The spatial-sharding contingency spike
+   ([#572](https://github.com/fighters-legacy/fighters-legacy/issues/572)) resolved **defer with an
+   explicit trigger criterion** — on one box sharding is dominated by the data-parallel tick; a
+   pre-sharding ladder (shared snapshot encode, governor interest-radius lever) attacks the
+   serialize bottleneck first, and multi-machine sharding is a Phase 5+ product decision. See
+   [server-job-system-design.md](server-job-system-design.md) +
+   [spatial-sharding-design.md](spatial-sharding-design.md).
 
 3. **LuaSandbox wired (#359 ✓) → fl-base-pack AI scripts → mission runtime Lua surface (#584)**
    fl-base-pack Lua behaviour scripts can now target the `compute_control` API shipped in #359;
