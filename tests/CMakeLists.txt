@@ -70,6 +70,11 @@ add_executable(test_geodetic test_geodetic.cpp)
 target_link_libraries(test_geodetic PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_geodetic)
 
+# Local-level (ENU tangent-plane) frame utilities (#470); header-only, glm via engine-flight.
+add_executable(test_local_frame test_local_frame.cpp)
+target_link_libraries(test_local_frame PRIVATE Catch2::Catch2WithMain engine-flight)
+catch_discover_tests(test_local_frame)
+
 add_executable(test_force_model test_force_model.cpp)
 target_link_libraries(test_force_model PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_force_model)
