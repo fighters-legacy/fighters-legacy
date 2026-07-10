@@ -419,6 +419,30 @@ silently disable enforcement. The CI `ldd` backstop on `fl-server` broadened fro
 `sdl3|vulkan|openal`. The full policy (layer DAG, allowed edges, enforcement mechanics) is documented
 in the new "Module Boundary Policy" section above.
 
+**2026-07-10 — Spatial sharding: deferred with an explicit trigger (Epic A, #572).** The
+spatial-sharding spike (#572) — the contingent "next scaling axis" the #510 job-system decision
+deferred — concludes **do not implement sharding now**, on three findings. (1) On a single machine,
+sharding is *strictly dominated* by the data-parallel tick that already landed: shards and the
+`JobSystem` consume the same cores, everything expensive (integrate, AI, per-peer serialize) is
+already a `parallel_for`, and sharding re-partitions the same work while adding seam costs (ghost
+halos, authority hand-off, migration) — a barriered-lockstep shard-threads design is functionally
+the existing partitioning with extra steps. (2) The flight-sim workload is hostile to spatial
+partitioning: the 200 km interest radius forces ~1000 km-class regions before the ghost halo stops
+exceeding the owned area (a whole theater fits in one region), and combat *converges* — the furball
+is a fully-connected interest graph in one region exactly at peak load. (3) What sharding uniquely
+buys is **multi-machine** scale (shard-per-process + gateway + inter-shard bus + global entity IDs),
+which is beyond the 128+ single-box target and is a Phase 5+ *product* decision that would ride
+Epic K, not a performance contingency. Instead, a **pre-sharding ladder** attacks the measured
+serialize bottleneck first: scale-up (worker headroom), shared snapshot quantization (#725 —
+encode each entity once per tick instead of per peer; the per-peer `frameOrigin` is a chosen
+constant, not a law), a governor interest-radius shedding lever (#726), LOD physics (#575) for the
+integrate-bound case, and peer/transport sharding if the serial flush tail ever binds. An explicit **trigger criterion**
+(sustained `load_factor` at floor + rising `dropped_ticks` + serialize-dominant tick at max workers
+on the 8-core reference env, after the ladder lands — all observable from `ServerTickReport` v2 via
+the #574/#569 outputs) defines when to revisit; a product decision to exceed one box triggers the
+process-model epic independently. Full analysis, seam protocol, migration state inventory, and
+determinism story in [docs/spatial-sharding-design.md](spatial-sharding-design.md).
+
 ## Content Pack Architecture
 
 This is the central design decision that affects every other phase. **The engine core has no dependency on any content library.** All asset access goes through an `IContentPack` interface.
