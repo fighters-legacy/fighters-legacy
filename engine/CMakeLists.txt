@@ -234,9 +234,13 @@ endif()
 # Per-frame stats collection and debug overlay line builder.
 add_library(engine-perf STATIC
     perf/PerformanceOverlay.cpp
+    perf/ProcessStats.cpp
 )
 target_include_directories(engine-perf PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-perf PUBLIC platform-hal)
+if(WIN32)
+    target_link_libraries(engine-perf PUBLIC psapi) # GetProcessMemoryInfo (ProcessStats)
+endif()
 
 # Console subsystem: command registry, builtin commands, base shell, in-game HUD overlay.
 add_library(engine-console STATIC

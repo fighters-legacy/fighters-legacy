@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **server**: Self-reported process RSS in the tick metrics (`ServerTickReport` schema v3: `rss_kb`/`rss_startup_kb` via `ProcessStats::currentRssKb()`) plus a portable `bot_swarm --assert-max-rss-growth-kb` soak leak gate wired into the `soak` scale-gate profile, replacing the Linux-only shell `ps` sampler (#707)
+
 ### Fixed
 
 - **ci**: release workflow now actually attaches the Windows/Linux/macOS binaries to the GitHub Release. The `Package` steps write `<artifact>.zip` at the workspace root, but `upload-artifact` globbed `dist/*.zip` (no match) under `if-no-files-found: ignore`, so every release since v0.2.x published with zero assets. Upload the root-level zip, harden `if-no-files-found: error` so a future path drift fails loudly, and flatten `download-artifact` into `dist/` (`merge-multiple: true`) so the release `files:`/attestation `subject-path:` globs resolve

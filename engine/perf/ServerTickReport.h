@@ -27,7 +27,8 @@
 namespace fl {
 
 // v2 (#514) adds the overrun-governor load_factor + the GameLoop dropped_ticks counter.
-inline constexpr int kServerTickSchemaVersion = 2;
+// v3 (#707) adds self-reported process RSS (rss_kb + rss_startup_kb) for the soak leak gate.
+inline constexpr int kServerTickSchemaVersion = 3;
 
 struct ServerTickReport {
     int schemaVersion{kServerTickSchemaVersion};
@@ -42,11 +43,13 @@ struct ServerTickReport {
     Stats other{};
     double loadFactor{1.0};   // overrun governor: [floor, 1]; 1 = no degradation (#514)
     uint64_t droppedTicks{0}; // all-time GameLoop catch-up drops (sim overrun / time dilation) (#514)
+    uint64_t rssKb{0};        // current process resident set size, KiB; 0 = unavailable (#707)
+    uint64_t rssStartupKb{0}; // RSS captured once after init; the soak leak gate tracks the delta (#707)
 };
 
 // Build a report from a profiler snapshot plus the live peer/entity counts and overrun state.
 inline ServerTickReport makeServerTickReport(const TickBudget& b, int peers, uint32_t entities, double loadFactor = 1.0,
-                                             uint64_t droppedTicks = 0) {
+                                             uint64_t droppedTicks = 0, uint64_t rssKb = 0, uint64_t rssStartupKb = 0) {
     ServerTickReport r;
     r.tickHz = b.tickHz;
     r.ticksSampled = b.ticksSampled;
@@ -59,6 +62,8 @@ inline ServerTickReport makeServerTickReport(const TickBudget& b, int peers, uin
     r.other = b.other;
     r.loadFactor = loadFactor;
     r.droppedTicks = droppedTicks;
+    r.rssKb = rssKb;
+    r.rssStartupKb = rssStartupKb;
     return r;
 }
 
@@ -124,7 +129,7 @@ inline bool parseStat(std::string_view json, std::string_view key, Stats& out) {
 inline std::string toJson(const ServerTickReport& r, int indentSpaces = 0) {
     const std::string pad(static_cast<std::size_t>(indentSpaces < 0 ? 0 : indentSpaces), ' ');
     const std::string in = pad + "  ";
-    char head[512];
+    char head[640];
     std::snprintf(head, sizeof(head),
                   "%s{\n"
                   "%s\"schema_version\": %d,\n"
@@ -132,11 +137,13 @@ inline std::string toJson(const ServerTickReport& r, int indentSpaces = 0) {
                   "%s\"ticks_sampled\": %llu, \"ticks_total\": %llu,\n"
                   "%s\"window_s\": %.4f,\n"
                   "%s\"peers\": %d, \"entities\": %u,\n"
-                  "%s\"load_factor\": %.4f, \"dropped_ticks\": %llu,\n",
+                  "%s\"load_factor\": %.4f, \"dropped_ticks\": %llu,\n"
+                  "%s\"rss_kb\": %llu, \"rss_startup_kb\": %llu,\n",
                   pad.c_str(), in.c_str(), r.schemaVersion, in.c_str(), r.tickHz, in.c_str(),
                   static_cast<unsigned long long>(r.ticksSampled), static_cast<unsigned long long>(r.ticksTotal),
                   in.c_str(), r.windowSeconds, in.c_str(), r.peers, r.entities, in.c_str(), r.loadFactor,
-                  static_cast<unsigned long long>(r.droppedTicks));
+                  static_cast<unsigned long long>(r.droppedTicks), in.c_str(), static_cast<unsigned long long>(r.rssKb),
+                  static_cast<unsigned long long>(r.rssStartupKb));
     std::string out = head;
     out += detail::statJson("tick_ms", r.total, in) + ",\n";
     for (int i = 0; i < kTickPhaseCount; ++i) {
@@ -185,6 +192,14 @@ inline bool fromJson(std::string_view json, ServerTickReport& out) {
     }
     if (auto v = detail::findNumber(json, "dropped_ticks")) {
         out.droppedTicks = static_cast<uint64_t>(*v);
+        any = true;
+    }
+    if (auto v = detail::findNumber(json, "rss_kb")) {
+        out.rssKb = static_cast<uint64_t>(*v);
+        any = true;
+    }
+    if (auto v = detail::findNumber(json, "rss_startup_kb")) {
+        out.rssStartupKb = static_cast<uint64_t>(*v);
         any = true;
     }
     any |= detail::parseStat(json, "tick_ms", out.total);

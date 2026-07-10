@@ -41,6 +41,7 @@
 #include <loop/GameLoop.h>
 #include <net/GameProtocol.h>
 #include <net/WorldBroadcaster.h>
+#include <perf/ProcessStats.h>
 #include <perf/ServerTickReport.h>
 #include <render/BuiltinGeometry.h>
 #include <render/TerrainStreamer.h>
@@ -642,6 +643,9 @@ int main(int argc, char** argv) {
     }
 
     uint64_t lastDroppedTicks = 0; // for the sim-overrun drop-rate Warn (#514)
+    // Baseline RSS captured once after all init, before the main loop; the soak leak gate tracks
+    // the growth (rss_kb - rss_startup_kb) over the run (#707). 0 when unavailable on this platform.
+    const uint64_t rssStartupKb = fl::currentRssKb();
     while (!g_quit) {
         {
             std::lock_guard<std::mutex> lk(stdinMutex);
@@ -675,9 +679,9 @@ int main(int argc, char** argv) {
 
         if (!metricsPath.empty() && std::chrono::steady_clock::now() >= nextMetricsWrite) {
             const fl::OverrunStatus ov = broadcaster.getOverrunStatus();
-            const fl::ServerTickReport rep =
-                fl::makeServerTickReport(broadcaster.getTickBudget(), broadcaster.getPeerCount(),
-                                         entityManager.liveCount(), ov.loadFactor, droppedTicks);
+            const fl::ServerTickReport rep = fl::makeServerTickReport(
+                broadcaster.getTickBudget(), broadcaster.getPeerCount(), entityManager.liveCount(), ov.loadFactor,
+                droppedTicks, fl::currentRssKb(), rssStartupKb);
             fl::writeConfigFile(metricsPath, fl::toJson(rep) + "\n", *log);
             nextMetricsWrite = std::chrono::steady_clock::now() + metricsInterval;
         }

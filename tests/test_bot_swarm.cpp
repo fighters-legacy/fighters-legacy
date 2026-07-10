@@ -169,6 +169,15 @@ TEST_CASE("parseSwarmArgs parses --assert-min-entities", "[bot_swarm][config]") 
     CHECK(bad.status == ParseStatus::Error);
 }
 
+TEST_CASE("parseSwarmArgs parses --assert-max-rss-growth-kb (#707)", "[bot_swarm][config]") {
+    const SwarmParseResult r = parse({"--assert-max-rss-growth-kb", "50000"});
+    REQUIRE(r.status == ParseStatus::Ok);
+    CHECK(r.cfg.assertMaxRssGrowthKb == 50000);
+
+    const SwarmParseResult bad = parse({"--assert-max-rss-growth-kb", "-1"});
+    CHECK(bad.status == ParseStatus::Error);
+}
+
 // ---------------------------------------------------------------------------
 // Metric aggregation + JSON
 // ---------------------------------------------------------------------------
@@ -320,6 +329,34 @@ TEST_CASE("assert-min-entities gates on the authoritative server entity count (#
     }
     SECTION("fails when the server is short of the requested count") {
         CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, serverWithEntities(128)).assertsPassed);
+    }
+    SECTION("fails when the assert is enabled but no server metrics were provided") {
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed);
+    }
+}
+
+TEST_CASE("assert-max-rss-growth-kb gates on the server RSS growth (#707)", "[bot_swarm][metrics][servertick]") {
+    SwarmConfig cfg;
+    cfg.clients = 1;
+    cfg.assertMaxRssGrowthKb = 50000; // allow up to ~50 MB growth
+    std::vector<ClientMetrics> clients;
+    clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
+
+    auto serverWithRss = [](uint64_t startupKb, uint64_t nowKb) {
+        ServerTickReport s = makeServer(6.0);
+        s.rssStartupKb = startupKb;
+        s.rssKb = nowKb;
+        return s;
+    };
+
+    SECTION("passes when RSS growth is within the cap") {
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithRss(200000, 240000)).assertsPassed); // +40 MB
+    }
+    SECTION("passes when RSS is flat") {
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithRss(200000, 200000)).assertsPassed);
+    }
+    SECTION("fails when RSS grew beyond the cap") {
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, serverWithRss(200000, 300000)).assertsPassed); // +100 MB
     }
     SECTION("fails when the assert is enabled but no server metrics were provided") {
         CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed);

@@ -39,6 +39,8 @@ PROFILE_DEFAULTS = {
     "assert_max_kbs": 0.0,
     "assert_min_tick_hz": 0.0,
     "assert_max_tick_ms": 0.0,
+    # Soak leak gate (#707): max allowed RSS growth over the run (rss_kb - rss_startup_kb). 0 = disabled.
+    "assert_max_rss_growth_kb": 0,
     # Entity-scale sweep (#573). Empty lists => a normal one-run-per-pattern profile. When populated,
     # the profile sweeps the cartesian product of patterns x entity_spawn_counts x
     # sim_worker_threads_sweep, driving FL_TEST_SPAWN_AI / FL_SIM_WORKER_THREADS per run.
@@ -88,6 +90,8 @@ def assert_flags(profile, strict):
         flags += ["--assert-min-tick-hz", _num(profile["assert_min_tick_hz"])]
     if strict and profile["assert_max_tick_ms"] > 0:
         flags += ["--assert-max-tick-ms", _num(profile["assert_max_tick_ms"])]
+    if profile["assert_max_rss_growth_kb"] > 0:
+        flags += ["--assert-max-rss-growth-kb", _num(profile["assert_max_rss_growth_kb"])]
     return flags
 
 
@@ -151,6 +155,22 @@ def evaluate_report(report, profile, strict):
             "ok": ok,
             "detail": detail + ("" if strict else " (advisory)"),
             "advisory": not strict,
+        })
+
+    if profile["assert_max_rss_growth_kb"] > 0:
+        server = report.get("server_tick")
+        if server is None:
+            ok = False
+            detail = "no server_tick block (cannot evaluate)"
+        else:
+            growth = server.get("rss_kb", 0) - server.get("rss_startup_kb", 0)
+            ok = growth <= profile["assert_max_rss_growth_kb"]
+            detail = f"{growth} <= {profile['assert_max_rss_growth_kb']} KiB growth"
+        checks.append({
+            "name": "server_tick.rss_growth_kb",
+            "ok": ok,
+            "detail": detail,
+            "advisory": False,
         })
 
     passed = all(c["ok"] for c in checks if not c["advisory"])

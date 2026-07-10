@@ -116,8 +116,10 @@ SERVER_PID=$!
 sleep 2
 kill -0 "$SERVER_PID" 2>/dev/null || { echo "ERROR: fl-server exited during startup"; exit 1; }
 
-# Soak leak signal: sample fl-server RSS (KiB) right after startup. `|| true` keeps a flaky `ps`
-# from tripping `set -euo pipefail`; an empty value just disables the end-of-run delta below.
+# Debug-only RSS sample (KiB) right after startup. The AUTHORITATIVE soak leak signal is now the
+# server's self-reported server_tick.rss_kb / rss_startup_kb (#707), which scale_gate.py hard-gates
+# via --assert-max-rss-growth-kb; this `ps` echo is retained only as a human diagnostic and is not
+# Windows-portable. `|| true` keeps a flaky `ps` from tripping `set -euo pipefail`.
 RSS_START="$(ps -o rss= -p "$SERVER_PID" 2>/dev/null | tr -d ' ' || true)"
 
 # --server-metrics points bot_swarm at the file fl-server writes (above), so the report carries
@@ -130,10 +132,11 @@ set +e
 STATUS=$?
 set -e
 
-# Soak leak signal: RSS again before teardown, and the delta. Printed for scale_gate.py / humans.
+# Debug-only: RSS again before teardown, and the delta. Diagnostic echo only — the gate reads the
+# authoritative server_tick.rss_kb from the report, not this line.
 RSS_END="$(ps -o rss= -p "$SERVER_PID" 2>/dev/null | tr -d ' ' || true)"
 if [[ -n "$RSS_START" && -n "$RSS_END" ]]; then
-    echo "server_rss_start_kb=$RSS_START server_rss_end_kb=$RSS_END server_rss_delta_kb=$(( RSS_END - RSS_START ))"
+    echo "[debug] server_rss_start_kb=$RSS_START server_rss_end_kb=$RSS_END server_rss_delta_kb=$(( RSS_END - RSS_START ))"
 fi
 
 # Sanity: the authoritative server-side block must be present in the report.

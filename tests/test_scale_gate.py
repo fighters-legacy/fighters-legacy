@@ -83,7 +83,7 @@ def test_assert_flags_tick_ms_only_when_strict():
 
 # ---- evaluate_report -----------------------------------------------------------------------------
 def _report(kbs_max=66.0, tick_hz_min=60.0, tick_p99=10.0, connected=64, requested=64,
-            disconnected=0, with_server=True):
+            disconnected=0, with_server=True, rss_kb=200000, rss_startup_kb=200000):
     r = {
         "clients_requested": requested,
         "clients_connected": connected,
@@ -92,7 +92,7 @@ def _report(kbs_max=66.0, tick_hz_min=60.0, tick_p99=10.0, connected=64, request
         "observed_server_tick_hz": {"min": tick_hz_min},
     }
     if with_server:
-        r["server_tick"] = {"tick_ms": {"p99": tick_p99}}
+        r["server_tick"] = {"tick_ms": {"p99": tick_p99}, "rss_kb": rss_kb, "rss_startup_kb": rss_startup_kb}
     return r
 
 
@@ -136,6 +136,36 @@ def test_evaluate_missing_server_block_when_tick_ms_enabled():
     ev = sg.evaluate_report(r, _profile(), strict=True)
     assert not ev["passed"]
     check = next(c for c in ev["checks"] if c["name"] == "server_tick.tick_ms.p99")
+    assert not check["ok"]
+
+
+# ---- soak RSS leak gate (#707) -------------------------------------------------------------------
+def test_assert_flags_emits_rss_growth_when_set():
+    prof = dict(sg.PROFILE_DEFAULTS)
+    prof.update(assert_max_rss_growth_kb=262144)
+    assert sg.assert_flags(prof, strict=False) == ["--assert-max-rss-growth-kb", "262144"]
+
+
+def test_evaluate_pass_on_rss_growth_within_cap():
+    prof = _profile(assert_max_rss_growth_kb=262144)
+    r = _report(rss_startup_kb=200000, rss_kb=240000)  # +40 MiB
+    assert sg.evaluate_report(r, prof, strict=True)["passed"]
+
+
+def test_evaluate_fail_on_rss_growth_over_cap():
+    prof = _profile(assert_max_rss_growth_kb=262144)
+    r = _report(rss_startup_kb=200000, rss_kb=600000)  # +~390 MiB
+    ev = sg.evaluate_report(r, prof, strict=True)
+    assert not ev["passed"]
+    check = next(c for c in ev["checks"] if c["name"] == "server_tick.rss_growth_kb")
+    assert not check["ok"]
+
+
+def test_evaluate_missing_server_block_when_rss_enabled():
+    prof = _profile(assert_max_rss_growth_kb=262144)
+    ev = sg.evaluate_report(_report(with_server=False), prof, strict=True)
+    assert not ev["passed"]
+    check = next(c for c in ev["checks"] if c["name"] == "server_tick.rss_growth_kb")
     assert not check["ok"]
 
 
