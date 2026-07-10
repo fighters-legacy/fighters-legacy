@@ -99,7 +99,7 @@ target_link_libraries(fuzz_terrain_png PRIVATE engine-render)
 # NOTE: the OGG/stb_vorbis harness is parked in fuzz/disabled/ (not built, not run). stb_vorbis has
 # memory-safety defects on malformed input (a SEGV in its own cleanup, wild allocations) that would
 # keep the smoke red; the decode path needs hardening/sandboxing first. See fuzz/disabled/README.md
-# for the reproducers, the upstream-report note, and the re-enable steps.
+# for the reproducers and the re-enable steps (tracked as #723).
 
 # parseFlightModel — flight-model TOML parser (throws; harness catches).
 fl_add_fuzzer(fuzz_flight_model_toml)

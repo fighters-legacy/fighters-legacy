@@ -8,8 +8,8 @@
 // surface — but stb_vorbis is a trusted-input decoder with memory-safety defects on malformed input
 // (a SEGV in its own vorbis_deinit/setup_free cleanup, plus integer-overflow-driven wild allocations)
 // that no sanitizer configuration papers over. The harness is preserved for the day the underlying
-// OGG decode path is hardened or sandboxed (tracked as a follow-up); re-enabling instructions and the
-// upstream report are in fuzz/disabled/README.md.
+// OGG decode path is hardened or sandboxed (tracked as #723); re-enabling instructions are in
+// fuzz/disabled/README.md.
 
 #include <cstddef>
 #include <cstdint>

@@ -29,10 +29,11 @@ None of these are fighters-legacy bugs and none are resolvable by sanitizer conf
 `stb_vorbis`'s own cleanup then SEGVs on).
 
 **Follow-up.** Hardening the untrusted-audio path — sandboxing the decode, adding an OGG structural
-pre-validator, or replacing `stb_vorbis` for content-pack audio — is tracked as **#723**. An upstream
-report to the `stb` project (github.com/nothings/stb) accompanies it: the SEGV in
-`vorbis_deinit`/`setup_free` on malformed input is the highest-value one to file, with a minimized
-reproducer produced via `-minimize_crash=1`.
+pre-validator, or replacing `stb_vorbis` for content-pack audio — is tracked as **#723**. The fix
+lives entirely on our side: `stb_vorbis` is an upstream trusted-input decoder, so re-enabling this
+harness does not depend on any upstream change. (The `start_decoder` temp-buffer leak and the
+`vorbis_deinit`/`setup_free` cleanup SEGV were both confirmed to reproduce against current `stb`
+master, so vendoring a newer `stb_vorbis` would not resolve them.)
 
 **Re-enabling** (once the decode path is hardened or sandboxed):
 
