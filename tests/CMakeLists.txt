@@ -70,6 +70,11 @@ add_executable(test_geodetic test_geodetic.cpp)
 target_link_libraries(test_geodetic PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_geodetic)
 
+# Local-level (ENU tangent-plane) frame utilities (#470); header-only, glm via engine-flight.
+add_executable(test_local_frame test_local_frame.cpp)
+target_link_libraries(test_local_frame PRIVATE Catch2::Catch2WithMain engine-flight)
+catch_discover_tests(test_local_frame)
+
 # Cube-sphere tile addressing + geometry core (#469); header-only, needs glm (engine-render) +
 # Geodetic.h (engine/flight, header-only).
 add_executable(test_cube_sphere test_cube_sphere.cpp)
