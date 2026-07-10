@@ -128,6 +128,12 @@ Condition HpBelow(float fraction);
 // Returns false when si == nullptr (e.g. in tests without a spatial index).
 Condition AnyEntityWithinRange(float rangeM);
 
+// True when any HOSTILE entity (per fl::areFactionsHostile against self's factionIndex) is
+// found within rangeM via the SpatialIndex. Same-faction friendlies and neutral (faction 0)
+// entities are ignored, so an escort no longer triggers on the entity it is protecting.
+// Returns false when si == nullptr or self is neutral (faction 0 has no enemies).
+Condition AnyHostileEntityWithinRange(float rangeM);
+
 // Always returns true. Useful as a final fallback transition.
 Condition Always();
 
