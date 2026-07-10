@@ -52,17 +52,12 @@ fi
 # ---- toolchain (defensive; the Vagrant provisioner already ran vm-provision.sh) -----------------
 # libicu is the actions/runner runtime dep; curl/tar fetch+unpack the runner; the build toolchain
 # lets a job configure+build fl-server+bot_swarm. Reuses vm-provision.sh's list so the box matches
-# the reference toolchain even when this script is run standalone on a bare box.
+# the reference toolchain even when this script is run standalone on a bare box. No SDL3 build deps:
+# fl-server (platform-stdfs) + bot_swarm (enet6) are headless and link no SDL3 (#711/#716; #718).
 echo "=== ensuring toolchain (dnf) ==="
 dnf -y install \
     libicu curl tar \
-    gcc-c++ cmake ninja-build git dnf-plugins-core findutils procps-ng
-if ! rpm -q SDL3-devel >/dev/null 2>&1; then
-    # No SDL3-devel on purpose (determinism): CMake's find_package misses and SDL3 builds from the
-    # repo's FetchContent pin — same rationale as the Containerfile/VM. builddep pulls its BuildRequires.
-    dnf builddep -y SDL3 || true
-    dnf -y install libXtst-devel libXinerama-devel || true
-fi
+    gcc-c++ cmake ninja-build git findutils procps-ng
 
 # ---- dedicated unprivileged runner user --------------------------------------------------------
 if ! id "$RUNNER_USER" >/dev/null 2>&1; then

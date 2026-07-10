@@ -34,8 +34,7 @@ else
 fi
 echo "=== reference env: $(nproc) CPUs, ${_mem} ==="
 # Headless server build: force Vulkan "not found" so the GPU renderer target (which needs
-# glslangValidator) is skipped — fl-server + bot_swarm don't need it. Keeps the build deterministic
-# even though SDL3's `dnf builddep` transitively pulls in the Vulkan loader.
+# glslangValidator) is skipped — fl-server + bot_swarm don't need it (they link no SDL3/Vulkan).
 cmake -S "$SRC" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF \
     -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON >/dev/null
 cmake --build "$BUILD" --target fl-server bot_swarm
