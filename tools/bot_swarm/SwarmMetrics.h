@@ -78,6 +78,7 @@ struct SwarmReport {
     double assertMaxKbs{0.0};
     double assertMaxTickMs{0.0};
     int assertMinEntities{0};
+    int64_t assertMaxRssGrowthKb{0};
 
     // Authoritative server-side tick budget (from fl-server --metrics-json), when available.
     bool hasServer{false};
@@ -102,6 +103,7 @@ inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientM
     r.assertMaxKbs = cfg.assertMaxKbs;
     r.assertMaxTickMs = cfg.assertMaxTickMs;
     r.assertMinEntities = cfg.assertMinEntities;
+    r.assertMaxRssGrowthKb = cfg.assertMaxRssGrowthKb;
     if (server) {
         r.hasServer = true;
         r.server = *server;
@@ -155,6 +157,12 @@ inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientM
     // assert is enabled is a failure, like assert-max-tick-ms.
     if (cfg.assertMinEntities > 0 && (!r.hasServer || r.server.entities < static_cast<uint32_t>(cfg.assertMinEntities)))
         pass = false;
+    // Soak leak gate (#707 hook): fail if the server's RSS grew more than the cap over the run.
+    // Missing server data while the assert is enabled is a failure, like the other server gates.
+    if (cfg.assertMaxRssGrowthKb > 0 &&
+        (!r.hasServer || (static_cast<int64_t>(r.server.rssKb) - static_cast<int64_t>(r.server.rssStartupKb)) >
+                             cfg.assertMaxRssGrowthKb))
+        pass = false;
     r.assertsPassed = pass;
     return r;
 }
@@ -179,7 +187,8 @@ inline void printReport(const SwarmReport& r) {
                     r.server.phases[static_cast<int>(TickPhase::Ai)].mean,
                     r.server.phases[static_cast<int>(TickPhase::Collision)].mean,
                     r.server.phases[static_cast<int>(TickPhase::Serialize)].mean);
-    if (r.assertMinTickHz > 0.0 || r.assertMaxKbs > 0.0 || r.assertMaxTickMs > 0.0 || r.assertMinEntities > 0)
+    if (r.assertMinTickHz > 0.0 || r.assertMaxKbs > 0.0 || r.assertMaxTickMs > 0.0 || r.assertMinEntities > 0 ||
+        r.assertMaxRssGrowthKb > 0)
         std::printf("asserts: %s\n", r.assertsPassed ? "PASS" : "FAIL");
     std::printf("---\n");
 }
@@ -218,14 +227,15 @@ inline std::string reportToJson(const SwarmReport& r) {
         const std::string sj = toJson(r.server, 2);
         out += "  \"server_tick\": " + sj.substr(2) + ",\n";
     }
-    char tail[512];
+    char tail[640];
     std::snprintf(tail, sizeof(tail),
                   "  \"aggregate_downstream_mbs\": %.3f, \"max_snapshot_gap_ms\": %.3f,\n"
                   "  \"asserts\": { \"min_tick_hz\": %.3f, \"max_kbs\": %.3f, \"max_tick_ms\": %.3f, "
-                  "\"min_entities\": %d, \"passed\": %s }\n"
+                  "\"min_entities\": %d, \"max_rss_growth_kb\": %lld, \"passed\": %s }\n"
                   "}\n",
                   r.aggregateDownstreamMbs, r.maxSnapshotGapMs, r.assertMinTickHz, r.assertMaxKbs, r.assertMaxTickMs,
-                  r.assertMinEntities, r.assertsPassed ? "true" : "false");
+                  r.assertMinEntities, static_cast<long long>(r.assertMaxRssGrowthKb),
+                  r.assertsPassed ? "true" : "false");
     out += tail;
     return out;
 }

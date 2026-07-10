@@ -22,12 +22,13 @@ struct SwarmConfig {
     int rampMs{20};
     int threads{0}; // 0 = auto (min(hw_concurrency, ceil(clients/32)))
     std::string pattern{"weave"};
-    std::string jsonPath;          // empty = no JSON output
-    std::string serverMetricsPath; // empty = no server-side tick block; fl-server --metrics-json file
-    double assertMinTickHz{0.0};   // 0 = disabled
-    double assertMaxKbs{0.0};      // 0 = disabled
-    double assertMaxTickMs{0.0};   // 0 = disabled; fails if server tick_ms.p99 > this (#520 gate hook)
-    int assertMinEntities{0};      // 0 = disabled; fails if server_tick.entities < this (#573 gate hook)
+    std::string jsonPath;            // empty = no JSON output
+    std::string serverMetricsPath;   // empty = no server-side tick block; fl-server --metrics-json file
+    double assertMinTickHz{0.0};     // 0 = disabled
+    double assertMaxKbs{0.0};        // 0 = disabled
+    double assertMaxTickMs{0.0};     // 0 = disabled; fails if server tick_ms.p99 > this (#520 gate hook)
+    int assertMinEntities{0};        // 0 = disabled; fails if server_tick.entities < this (#573 gate hook)
+    int64_t assertMaxRssGrowthKb{0}; // 0 = disabled; fails if server_tick.rss_kb - rss_startup_kb > this (#707)
 };
 
 enum class ParseStatus { Ok, Help, Version, Error };
@@ -115,6 +116,10 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
             r.cfg.assertMinEntities = std::atoi(argv[++i]);
+        } else if (std::strcmp(a, "--assert-max-rss-growth-kb") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.assertMaxRssGrowthKb = std::strtoll(argv[++i], nullptr, 10);
         } else if (a[0] == '-' && a[1] != '\0') {
             r.status = ParseStatus::Error;
             r.error = std::string("unknown flag: ") + a;
@@ -159,6 +164,8 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
         fail("--assert-max-tick-ms must be >= 0");
     else if (r.cfg.assertMinEntities < 0)
         fail("--assert-min-entities must be >= 0");
+    else if (r.cfg.assertMaxRssGrowthKb < 0)
+        fail("--assert-max-rss-growth-kb must be >= 0");
     return r;
 }
 

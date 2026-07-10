@@ -37,11 +37,14 @@ The same JSON shape is the standalone `--metrics-json` file and the embedded blo
 
 | Field | Meaning |
 |---|---|
-| `schema_version` | server-tick report schema (currently `1`) |
+| `schema_version` | server-tick report schema (currently `3`: `2` added `load_factor`/`dropped_ticks`, `3` added `rss_kb`/`rss_startup_kb`) |
 | `tick_hz` | actual recent tick rate over the sampling window (ring-derived) |
 | `ticks_sampled` / `ticks_total` | ticks in the rolling window / monotonic all-time |
 | `window_s` | wall-clock span of the sampling window |
 | `peers` / `entities` | live peer count / live entity count at write time |
+| `load_factor` | overrun-governor load factor `[floor, 1]`; `1` = no degradation (#514) |
+| `dropped_ticks` | all-time `GameLoop` catch-up drops (sim overrun / time dilation) (#514) |
+| `rss_kb` / `rss_startup_kb` | current process RSS (KiB) / RSS captured once after init; the soak leak gate tracks the delta (#707). `0` = unavailable on this platform |
 | `tick_ms` | total `onTick` wall-time stats `{min,mean,max,p95,p99}` (ms) |
 | `maintenance_ms` | rate-limit prune, idle timeout, admin drains, spatial rebuild, input drain, jitter resize |
 | `integrate_ms` | physics integration (`stepFlightSim`) summed across entities |
@@ -51,7 +54,9 @@ The same JSON shape is the standalone `--metrics-json` file and the embedded blo
 | `other_ms` | `tick_ms − Σ(phases)` (loop/function overhead), clamped ≥ 0 |
 
 The scale gate ([CI scale gate](#ci-scale-gate)) asserts on `server_tick.tick_ms.p99` via
-`--assert-max-tick-ms` (strict tier only).
+`--assert-max-tick-ms` (strict tier only) and, in the `soak` profile, on RSS growth
+(`rss_kb − rss_startup_kb`) via `--assert-max-rss-growth-kb` — a portable, hard-gated memory-leak
+signal that replaces the shell `ps` sampler (#707).
 
 ## Scale-gate targets
 
@@ -179,6 +184,7 @@ run matrix live in [entity-scale-characterization.md](entity-scale-characterizat
       --assert-max-kbs Y     exit nonzero if downstream KB/s/client max > Y
       --assert-max-tick-ms X exit nonzero if authoritative server tick p99 (ms) > X
       --assert-min-entities N exit nonzero if authoritative server_tick.entities < N
+      --assert-max-rss-growth-kb N  exit nonzero if server RSS growth (rss_kb - rss_startup_kb) > N
     Env: FL_HOST, FL_PORT
 
 ## Flight patterns
@@ -255,7 +261,7 @@ Markdown summary to `$GITHUB_STEP_SUMMARY`.
 |---|---|---|---|---|
 | **PR** | every PR + push to `main` (Linux, Release) | `pr` (64 clients, weave) | bandwidth ≤150 KB/s/client, admission (no refused/dropped), KB/s baseline regression, tick-Hz collapse tripwire (≥30) | tick-ms p99 (disabled) |
 | **Reference** | manual `workflow_dispatch` on the self-hosted `fl-reference` runner | `reference` (128 clients; idle/weave/aggressive) | bandwidth + admission + baseline + **tick-ms p99 ≤16.6 (`--strict`, unconditional)** | — |
-| **Soak** | manual `workflow_dispatch` (`profile=soak`) on `fl-reference` | `soak` (128 clients, weave, 2 h) | strict gates + RSS-growth leak (hard gate lands with [#707](https://github.com/fighters-legacy/fighters-legacy/issues/707)) | — |
+| **Soak** | manual `workflow_dispatch` (`profile=soak`) on `fl-reference` | `soak` (128 clients, weave, 2 h) | strict gates + RSS-growth leak (`--assert-max-rss-growth-kb`, from the server's self-reported `rss_kb`, [#707](https://github.com/fighters-legacy/fighters-legacy/issues/707)) | — |
 
 The PR tier hard-gates only machine-independent metrics: `bot_swarm`'s `--assert-min-tick-hz` reads
 the *client-side proxy*, which sags when the harness itself is CPU-starved on a shared runner — a

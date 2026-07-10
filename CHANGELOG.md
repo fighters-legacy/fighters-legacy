@@ -10,6 +10,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **flight**: Local-level frame utilities (`LocalFrame.h`) — `radialUp`, ENU basis, `localAltitude`, `headingTo`, and `pitchOf` on a spherical planet; header-only foundation for the radial physics floor and local-level nav/HUD (#470)
+- **server**: Self-reported process RSS in the tick metrics (`ServerTickReport` schema v3: `rss_kb`/`rss_startup_kb` via `ProcessStats::currentRssKb()`) plus a portable `bot_swarm --assert-max-rss-growth-kb` soak leak gate wired into the `soak` scale-gate profile, replacing the Linux-only shell `ps` sampler (#707)
 - **ai**: Entity faction/team tagging with an `AnyHostileEntityWithinRange` StateMachineController condition and a `spawn --faction <n>` flag; the `escort` template now ignores same-faction friendlies by faction rather than by geometry (#465)
 - **terrain**: Cube-sphere tile addressing and geometry core (`CubeSphere.h`) — TileKey quadtree, tangent-adaptive face↔sphere warp, `tileToWorld`/`worldToTile`, and parent/child/neighbour topology; pure header-only math, foundation for the spherical-Earth terrain rewrite (#469)
 - **engine**: Load content-pack entity definitions into the fl-server type registry at startup, so pack entity types are spawnable on a dedicated server (malformed defs warn and skip; no protocol change) (#683)
