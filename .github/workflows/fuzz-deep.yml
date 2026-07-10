@@ -1,0 +1,121 @@
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Weekly deep fuzz run (#710, Sub 3 of #94). The per-PR 60-second smoke lives in ci.yml
+# (fuzz-changes -> fuzz-run -> fuzz-smoke); this goes 30 minutes per harness to reach states the
+# smoke never will. A finding fails the run, uploads the reproducer, and auto-files (or extends) a
+# `fuzzing`-labeled issue. Policy: docs/development.md "Fuzzing".
+#
+# Unlike the fighters-codex reference (all harnesses serially in one 180-min job), this fans the
+# harnesses across a matrix — 13+ harnesses x 30 min would blow past GitHub's 6-hour job cap, and the
+# matrix parallelizes the wall clock. Harnesses are auto-enumerated from fuzz/fuzz_*.cpp, so a new
+# one is picked up with no workflow edit.
+
+name: Fuzz (deep)
+
+on:
+  schedule:
+    - cron: "41 5 * * 2" # Tuesdays 05:41 UTC — offset from the Monday 06:00 CodeQL sweep
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  enumerate:
+    name: Enumerate harnesses
+    runs-on: ubuntu-latest
+    outputs:
+      harnesses: ${{ steps.set.outputs.harnesses }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Enumerate fuzz/fuzz_*.cpp
+        id: set
+        run: |
+          harnesses=$(ls fuzz/fuzz_*.cpp | sed 's#^fuzz/##; s#\.cpp$##' | jq -R . | jq -sc .)
+          echo "Harnesses: ${harnesses}"
+          echo "harnesses=${harnesses}" >> "$GITHUB_OUTPUT"
+
+  deep:
+    needs: [enumerate]
+    name: Deep (${{ matrix.harness }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60 # 30-min run + build/config headroom
+    strategy:
+      fail-fast: false
+      matrix:
+        harness: ${{ fromJSON(needs.enumerate.outputs.harnesses) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        uses: ./.github/actions/install-linux-deps
+        with:
+          clang: 'true'
+
+      - name: Cache CMake FetchContent dependencies
+        uses: actions/cache@v6
+        with:
+          path: build/_deps
+          key: cmake-deps-v2-fuzz-${{ hashFiles('cmake/dependencies.cmake') }}
+
+      - name: Configure
+        run: cmake --preset fuzz
+
+      - name: Build harness
+        run: cmake --build --preset fuzz --target ${{ matrix.harness }}
+
+      - name: Deep run (30 min over the committed corpus)
+        run: |
+          bin="build/fuzz/fuzz/${{ matrix.harness }}"
+          work="build/fuzz/deep/${{ matrix.harness }}"
+          mkdir -p "$work/corpus"
+          args=(-max_total_time=1800 -rss_limit_mb=2048 -malloc_limit_mb=512
+                -max_len=1048576 -print_final_stats=1 -artifact_prefix="$work/"
+                "$work/corpus")
+          [ -d "fuzz/corpus/${{ matrix.harness }}" ] && args+=("fuzz/corpus/${{ matrix.harness }}")
+          [ -f "fuzz/${{ matrix.harness }}.dict" ] && args+=("-dict=fuzz/${{ matrix.harness }}.dict")
+          "$bin" "${args[@]}"
+
+      - name: Upload reproducers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-deep-findings-${{ matrix.harness }}
+          path: |
+            build/fuzz/deep/${{ matrix.harness }}/crash-*
+            build/fuzz/deep/${{ matrix.harness }}/oom-*
+            build/fuzz/deep/${{ matrix.harness }}/timeout-*
+            build/fuzz/deep/${{ matrix.harness }}/leak-*
+          if-no-files-found: ignore
+
+  report:
+    needs: [enumerate, deep]
+    name: File findings
+    runs-on: ubuntu-latest
+    if: always() && needs.deep.result == 'failure'
+    steps:
+      - name: File or extend the findings issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="Scheduled deep fuzz run found reproducers.
+
+          - Run: $run_url
+          - Reproducers: the per-harness \`fuzz-deep-findings-*\` artifacts on that run.
+          - Policy (docs/development.md \"Fuzzing\"): minimize with \`-minimize_crash=1\`, fix, and in the
+            same PR commit the minimized input as a \`regress-*.bin\` seed plus a Catch2 regression test."
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label fuzzing --state open \
+                       --search 'in:title "fuzz: scheduled deep-run findings"' \
+                       --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --label fuzzing \
+              --title "fuzz: scheduled deep-run findings" --body "$body"
+          fi

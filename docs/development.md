@@ -329,6 +329,17 @@ When a harness finds a crash:
    fixed behavior. The seed prevents libFuzzer regressions; the unit test documents the bug
    and runs in the fast `debug`/`asan` suites.
 
+### Weekly deep run
+
+`.github/workflows/fuzz-deep.yml` runs **30 minutes per harness** every Tuesday (offset from the
+Monday CodeQL sweep) and on `workflow_dispatch`, reaching states the 60 s per-PR smoke never will.
+It auto-enumerates `fuzz/fuzz_*.cpp` into a matrix (one job per harness), so a new harness is picked
+up with no workflow edit. A finding fails the run red, uploads the minimized-able reproducer as a
+per-harness `fuzz-deep-findings-*` artifact, and auto-files (or extends) an open `fuzzing`-labeled
+issue titled `fuzz: scheduled deep-run findings` that links the run and restates the finding policy
+above. To reproduce a deep-run finding locally, download the artifact and run the harness on it:
+`./build/fuzz/fuzz/fuzz_<name> <reproducer>`.
+
 ---
 
 ## Git setup
