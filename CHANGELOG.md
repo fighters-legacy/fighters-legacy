@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **engine**: Load content-pack entity definitions into the fl-server type registry at startup, so pack entity types are spawnable on a dedicated server (malformed defs warn and skip; no protocol change) (#683)
+
 ### Fixed
 
 - **ci**: release workflow now actually attaches the Windows/Linux/macOS binaries to the GitHub Release. The `Package` steps write `<artifact>.zip` at the workspace root, but `upload-artifact` globbed `dist/*.zip` (no match) under `if-no-files-found: ignore`, so every release since v0.2.x published with zero assets. Upload the root-level zip, harden `if-no-files-found: error` so a future path drift fails loudly, and flatten `download-artifact` into `dist/` (`merge-multiple: true`) so the release `files:`/attestation `subject-path:` globs resolve
