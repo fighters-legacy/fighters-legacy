@@ -189,7 +189,22 @@ static bool isOneOf(const char* val, const char* const* arr, std::size_t n) {
     return false;
 }
 
+// No-op ILogger used when the caller passes a null logger (the parameter is documented as optional).
+// Routing through this sink keeps the 50+ log->log(...) diagnostic sites below from dereferencing a
+// null pointer on any config that triggers a validation warning or a parse error.
+namespace {
+struct NullLogSink final : ILogger {
+    void log(LogLevel, const char*, int, const char*) override {}
+    void setMinLevel(LogLevel) override {}
+    void flush() override {}
+};
+} // namespace
+
 ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
+    static NullLogSink nullSink;
+    if (!log)
+        log = &nullSink;
+
     ServerConfig cfg;
     try {
         auto tbl = toml::parse(content);

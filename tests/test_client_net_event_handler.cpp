@@ -1981,3 +1981,31 @@ TEST_CASE("ClientNetEventHandler: a jump beyond the ack window resets the mask",
     CHECK(inp.tickIndex == 50u);
     CHECK(inp.ackMask == 0u);
 }
+
+// Regression (#94 fuzzing): a MsgConnectAck whose trailing MsgEntityTypeDef char[] fields are fully
+// populated (NOT NUL-terminated) must not over-read when copied into std::string / passed to findById.
+TEST_CASE("ClientNetEventHandler: non-terminated type-def fields do not over-read", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    std::vector<uint8_t> pkt;
+    fl::MsgConnectAck ack{};
+    ack.typeCount = 1;
+    fl::appendMsg(pkt, ack);
+
+    fl::MsgEntityTypeDef td{};
+    td.typeIndex = 1;
+    std::memset(td.id, 'A', sizeof(td.id)); // fully filled: no NUL terminator
+    std::memset(td.mesh, 'B', sizeof(td.mesh));
+    std::memset(td.dmgMesh, 'C', sizeof(td.dmgMesh));
+    fl::appendMsg(pkt, td);
+
+    // Must not over-read past the char[] fields (ASan/UBSan would catch); the type registers with a
+    // truncated, in-bounds id.
+    handler.onReceive(0u, pkt.data(), pkt.size());
+    CHECK(registry.typeCount() >= 1u);
+}

@@ -226,7 +226,8 @@ struct MockFilesystem : public IFilesystem {
             return 0;
         auto& data = files[hit->second];
         std::size_t n = std::min(size, data.size());
-        std::memcpy(buffer, data.data(), n);
+        if (n > 0) // data.data() is nullptr for an empty file; memcpy(_, nullptr, 0) is UB
+            std::memcpy(buffer, data.data(), n);
         return n;
     }
 
