@@ -80,6 +80,7 @@ void printHelp() {
                 "  --assert-max-kbs Y     Exit nonzero if downstream KB/s per client max > Y\n"
                 "  --assert-max-tick-ms X Exit nonzero if authoritative server tick p99 (ms) > X\n"
                 "  --assert-min-entities N Exit nonzero if authoritative server_tick.entities < N\n"
+                "  --assert-max-rss-growth-kb N  Exit nonzero if server RSS growth (rss_kb - rss_startup_kb) > N\n"
                 "  --help, --version\n"
                 "\n"
                 "Environment:\n"

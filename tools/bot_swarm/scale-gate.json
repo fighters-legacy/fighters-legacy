@@ -23,14 +23,15 @@
       "assert_max_tick_ms": 16.6
     },
     "soak": {
-      "_comment": "2 h soak-stability run. Same strict thresholds; the runner's RSS sampler feeds the leak check.",
+      "_comment": "2 h soak-stability run. Same strict thresholds; the server self-reports RSS in the tick metrics (#707) and the leak gate hard-fails if growth exceeds assert_max_rss_growth_kb (~256 MiB over 2 h).",
       "clients": 128,
       "duration_s": 7200,
       "patterns": ["weave"],
       "sim_worker_threads": 0,
       "assert_max_kbs": 150,
       "assert_min_tick_hz": 58,
-      "assert_max_tick_ms": 16.6
+      "assert_max_tick_ms": 16.6,
+      "assert_max_rss_growth_kb": 262144
     },
     "entity-scale": {
       "_comment": "Entity-pool + SpatialIndex scaling characterisation (#573). Sweeps entity count x sim worker count via FL_TEST_SPAWN_AI / FL_SIM_WORKER_THREADS, driven from the [world] load-spawn affordance. Advisory only (baselined=false): reads server_tick.entities + tick p99 into the summary but never gates the committed KB/s baseline. Reference-tier (nightly / workflow_dispatch) — needs the 8-core reference box for meaningful CPU timing.",
