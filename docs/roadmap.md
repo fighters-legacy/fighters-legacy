@@ -25,6 +25,27 @@ drifted from reality during Phase 2. Ordering constraints are listed instead.
 > a conscious choice). Scaling seams were folded into Phases 3–4. See the
 > [decision record](architecture.md#decision-records) and the cross-cutting initiative below.
 
+## Releases
+
+Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html), pre-1.0.
+**`v0.N.0` tags the Phase N gate** — cut when the phase's milestone closes with its
+[acceptance criteria](#verification--acceptance-criteria) verified. Interim patch releases
+(`v0.N.x`) ship fixes and increments while the next phase is in development, as
+v0.2.1–v0.2.6 did during Phase 3.
+
+Each phase gate is tracked by a `release`-labeled Task in the phase's milestone. It sits at
+milestone level rather than under an epic — a phase-gate release serves every epic in the
+phase — and it is deliberately the last issue to close in its milestone, so a milestone
+cannot close before its release ships.
+
+**Runbook:** `./scripts/cut-release.sh vX.Y.Z` (release branch + git-cliff changelog +
+CMake version bump) → the release PR merges → `./scripts/tag-release.sh vX.Y.Z` → the tag
+push runs `release.yml` (Windows/Linux/macOS artifacts) → verify the attached artifacts →
+close the milestone.
+
+**v1.0.0** follows the Phase 9 gate (v0.9.x is the last pre-1.0 series) and adds the
+maintenance-mode policy to README/CONTRIBUTING.
+
 ---
 
 ## Cross-Cutting Initiative: Multiplayer at Scale & Live Services
