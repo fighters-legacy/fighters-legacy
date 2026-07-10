@@ -262,6 +262,25 @@ TEST_CASE("EntityPool: soft cap enforced, alloc returns null when full", "[entit
     CHECK(pool.liveCount() == 3);
 }
 
+TEST_CASE("EntityPool: getByIndex returns the live slot or nullptr", "[entity_pool]") {
+    fl::EntityPool pool;
+    fl::EntityId a = pool.alloc();
+    REQUIRE(a.valid());
+    pool.get(a)->factionIndex = 7;
+
+    // Live slot: returns the state at that index.
+    const fl::EntityState* s = pool.getByIndex(a.index);
+    REQUIRE(s != nullptr);
+    CHECK(s->factionIndex == 7);
+
+    // Out-of-range index: nullptr.
+    CHECK(pool.getByIndex(a.index + 1000u) == nullptr);
+
+    // Freed slot: nullptr (not alive), even though the index is in range.
+    pool.free(a);
+    CHECK(pool.getByIndex(a.index) == nullptr);
+}
+
 TEST_CASE("EntityPool: forEach visits only live entities", "[entity_pool]") {
     fl::EntityPool pool;
     auto a = pool.alloc();

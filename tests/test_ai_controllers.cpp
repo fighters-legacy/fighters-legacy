@@ -987,6 +987,59 @@ TEST_CASE("AnyEntityWithinRange: false when si is null") {
     CHECK(cond(self, f.em, nullptr) == false);
 }
 
+// --- AnyHostileEntityWithinRange (#465) ---
+
+// Builds `self` (faction 1) at the origin and inserts the SmFixture target into a SpatialIndex
+// 500 m away, with the target's faction set to `targetFaction`.
+static bool hostileCond(SmFixture& f, uint16_t selfFaction, uint16_t targetFaction, float rangeM, double targetZ) {
+    fl::SpatialIndex si;
+    double selfPos[3] = {0.0, 0.0, 0.0};
+    double neighPos[3] = {0.0, 0.0, targetZ};
+    si.insert(f.selfId.index, selfPos);
+    si.insert(f.targetId.index, neighPos);
+    f.em.get(f.targetId)->factionIndex = targetFaction;
+
+    fl::EntityState self{};
+    self.id = f.selfId;
+    self.factionIndex = selfFaction;
+    auto cond = fl::ai::AnyHostileEntityWithinRange(rangeM);
+    return cond(self, f.em, &si);
+}
+
+TEST_CASE("AnyHostileEntityWithinRange: true when a hostile entity is within range") {
+    SmFixture f;
+    CHECK(hostileCond(f, /*self*/ 1, /*target*/ 2, 1000.f, 500.0) == true);
+}
+
+TEST_CASE("AnyHostileEntityWithinRange: false when the only neighbor is same-faction friendly") {
+    SmFixture f;
+    CHECK(hostileCond(f, /*self*/ 1, /*target*/ 1, 1000.f, 500.0) == false);
+}
+
+TEST_CASE("AnyHostileEntityWithinRange: false when the neighbor is neutral (faction 0)") {
+    SmFixture f;
+    CHECK(hostileCond(f, /*self*/ 1, /*target*/ 0, 1000.f, 500.0) == false);
+}
+
+TEST_CASE("AnyHostileEntityWithinRange: false when self is neutral (faction 0)") {
+    SmFixture f;
+    CHECK(hostileCond(f, /*self*/ 0, /*target*/ 2, 1000.f, 500.0) == false);
+}
+
+TEST_CASE("AnyHostileEntityWithinRange: false when the hostile is out of range") {
+    SmFixture f;
+    CHECK(hostileCond(f, /*self*/ 1, /*target*/ 2, 1000.f, 5000.0) == false);
+}
+
+TEST_CASE("AnyHostileEntityWithinRange: false when si is null") {
+    SmFixture f;
+    fl::EntityState self{};
+    self.id = f.selfId;
+    self.factionIndex = 1;
+    auto cond = fl::ai::AnyHostileEntityWithinRange(1000.f);
+    CHECK(cond(self, f.em, nullptr) == false);
+}
+
 TEST_CASE("Always: returns true") {
     SmFixture f;
     fl::EntityState self{};
@@ -2397,8 +2450,10 @@ TEST_CASE("AiControllerFactory: escort stays in follow with null SpatialIndex") 
     CHECK(sm->currentState() == "follow");
 }
 
-TEST_CASE("AiControllerFactory: escort transitions to break when entity within inner range") {
+TEST_CASE("AiControllerFactory: escort transitions to break when a hostile is within inner range") {
     EscortFixture f;
+    // Escort (self) and escortee share faction 1; the threat is faction 2 (hostile).
+    f.em.get(f.threatId)->factionIndex = 2;
     std::string idxStr = std::to_string(f.escorteeId.index);
     std::vector<std::string_view> args = {idxStr, "2000"};
     auto ctrl = fl::ai::createController("escort", std::span{args}, &f.em);
@@ -2408,13 +2463,39 @@ TEST_CASE("AiControllerFactory: escort transitions to break when entity within i
     CHECK(sm->currentState() == "follow");
 
     fl::EntityState selfState = makeState(0.0, 600.0, 0.0);
-    selfState.id = f.selfId; // index=0; not self-excluded from AnyEntityWithinRange
+    selfState.id = f.selfId; // index=0; not self-excluded from the range query
+    selfState.factionIndex = 1;
 
-    // Threat (index=2) at 400 m from self — within innerRange = standoffM*0.5 = 1000 m.
+    // Threat (index=2, faction 2) at 400 m from self — within innerRange = standoffM*0.5 = 1000 m.
     fl::SpatialIndex si;
     double threatPos[3] = {400.0, 600.0, 0.0};
     si.insert(f.threatId.index, threatPos); // index=2
 
-    sm->sample(selfState, 0, 1.0 / 60.0, &si); // AnyEntityWithinRange(1000) fires → break
+    sm->sample(selfState, 0, 1.0 / 60.0, &si); // AnyHostileEntityWithinRange(1000) fires → break
     CHECK(sm->currentState() == "break");
+}
+
+TEST_CASE("AiControllerFactory: escort ignores a same-faction escortee within inner range") {
+    EscortFixture f;
+    // Escortee shares the escort's faction (1); it must NOT trip the break transition even inside
+    // the inner range — this is the whole point of the hostility-filtered escort (#465).
+    f.em.get(f.escorteeId)->factionIndex = 1;
+    std::string idxStr = std::to_string(f.escorteeId.index);
+    std::vector<std::string_view> args = {idxStr, "2000"};
+    auto ctrl = fl::ai::createController("escort", std::span{args}, &f.em);
+    REQUIRE(ctrl != nullptr);
+    auto* sm = dynamic_cast<fl::ai::StateMachineController*>(ctrl.get());
+    REQUIRE(sm != nullptr);
+
+    fl::EntityState selfState = makeState(0.0, 600.0, 0.0);
+    selfState.id = f.selfId;
+    selfState.factionIndex = 1;
+
+    // Place the friendly escortee (index=1) right next to the escort, well inside inner range.
+    fl::SpatialIndex si;
+    double escorteePos[3] = {300.0, 600.0, 0.0};
+    si.insert(f.escorteeId.index, escorteePos); // index=1, faction 1 (friendly)
+
+    sm->sample(selfState, 0, 1.0 / 60.0, &si);
+    CHECK(sm->currentState() == "follow"); // friendly ignored → stays in follow
 }
