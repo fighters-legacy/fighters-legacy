@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "MainMenuScreen.h"
@@ -103,4 +104,21 @@ TEST_CASE("MainMenuScreen: multiplayer item count matches no-packs single-player
     MainMenuScreen sp(/*hasPacks=*/false, /*isMultiplayer=*/false);
     MainMenuScreen mp(/*hasPacks=*/false, /*isMultiplayer=*/true);
     CHECK(mp.itemCount() == sp.itemCount());
+}
+
+TEST_CASE("MainMenuScreen: title and items are center-aligned at x=0.5") {
+    MainMenuScreen s(/*hasPacks=*/true);
+    MockInput inp;
+    MockWindow win;
+    s.update(inp, win);
+    auto elems = s.buildElements();
+    int textCount = 0;
+    for (const auto& el : elems) {
+        if (el.type != HudElement::Type::Text)
+            continue;
+        ++textCount;
+        CHECK(el.align == HudAlign::Center);
+        CHECK(el.x == Catch::Approx(0.5f));
+    }
+    CHECK(textCount == s.itemCount() + 1); // title + menu items
 }

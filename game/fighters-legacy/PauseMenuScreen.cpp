@@ -74,6 +74,7 @@ std::span<const HudElement> PauseMenuScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[0];
         el.x = 0.5f;
+        el.align = HudAlign::Center;
         el.y = 0.28f;
         el.scale = 1.3f;
         el.r = 1.f;
@@ -91,6 +92,7 @@ std::span<const HudElement> PauseMenuScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[static_cast<std::size_t>(si)];
         el.x = 0.5f;
+        el.align = HudAlign::Center;
         el.y = 0.35f + static_cast<float>(i) * 0.09f;
         if (i == m_selectedIdx) {
             el.r = 0.2f;

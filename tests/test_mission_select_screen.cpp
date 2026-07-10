@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "MissionSelectScreen.h"
@@ -75,4 +76,19 @@ TEST_CASE("MissionSelectScreen: buildElements not empty even with no missions") 
     MissionSelectScreen s({});
     s.update(g_inp, g_win);
     CHECK(!s.buildElements().empty());
+}
+
+TEST_CASE("MissionSelectScreen: title and rows are center-aligned at x=0.5") {
+    MissionSelectScreen s({"m01", "m02"});
+    s.update(g_inp, g_win);
+    auto elems = s.buildElements();
+    int textCount = 0;
+    for (const auto& el : elems) {
+        if (el.type != HudElement::Type::Text)
+            continue;
+        ++textCount;
+        CHECK(el.align == HudAlign::Center);
+        CHECK(el.x == Catch::Approx(0.5f));
+    }
+    CHECK(textCount == 3); // title + two mission rows
 }

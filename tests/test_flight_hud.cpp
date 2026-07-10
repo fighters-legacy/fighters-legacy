@@ -3,6 +3,7 @@
 #include "render/IHud.h"
 #include "render/RenderSnapshot.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <glm/glm.hpp>
@@ -236,6 +237,41 @@ TEST_CASE("FlightHud AGL is negative when below terrain level") {
             el.text.find('-') != std::string_view::npos)
             found = true;
     CHECK(found);
+}
+
+TEST_CASE("FlightHud alignment anchors: HDG and damage centered, clock right-aligned") {
+    fl::FlightHud hud;
+    auto e = makeEntry();
+    e.damageLevel = 1;
+    hud.update(&e, 9.0f);
+    bool hdgFound = false;
+    bool dmgFound = false;
+    bool clockFound = false;
+    bool iasFound = false;
+    for (const auto& el : hud.elements()) {
+        if (el.type != HudElement::Type::Text)
+            continue;
+        if (el.text.find("HDG") != std::string_view::npos) {
+            hdgFound = true;
+            CHECK(el.align == HudAlign::Center);
+            CHECK(el.x == Catch::Approx(0.5f));
+        } else if (el.text.find("DAMAGE") != std::string_view::npos) {
+            dmgFound = true;
+            CHECK(el.align == HudAlign::Center);
+            CHECK(el.x == Catch::Approx(0.5f));
+        } else if (el.text.find("09:00") != std::string_view::npos) {
+            clockFound = true;
+            CHECK(el.align == HudAlign::Right);
+            CHECK(el.x == Catch::Approx(0.98f));
+        } else if (el.text.find("IAS") != std::string_view::npos) {
+            iasFound = true;
+            CHECK(el.align == HudAlign::Left);
+        }
+    }
+    CHECK(hdgFound);
+    CHECK(dmgFound);
+    CHECK(clockFound);
+    CHECK(iasFound);
 }
 
 TEST_CASE("FlightHud satisfies IHud via abstract pointer") {

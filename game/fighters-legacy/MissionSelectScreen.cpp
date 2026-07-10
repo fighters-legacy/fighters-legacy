@@ -97,6 +97,7 @@ std::span<const HudElement> MissionSelectScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[0];
         el.x = 0.5f;
+        el.align = HudAlign::Center;
         el.y = 0.1f;
         el.scale = 1.5f;
         el.r = 1.f;
@@ -112,6 +113,7 @@ std::span<const HudElement> MissionSelectScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[1];
         el.x = 0.5f;
+        el.align = HudAlign::Center;
         el.y = 0.5f;
         el.r = 0.6f;
         el.g = 0.6f;
@@ -132,6 +134,7 @@ std::span<const HudElement> MissionSelectScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[static_cast<std::size_t>(si)];
         el.x = 0.5f;
+        el.align = HudAlign::Center;
         el.y = 0.25f + static_cast<float>(i) * 0.065f;
         el.scale = 1.f;
         if (idx == m_selectedIdx) {

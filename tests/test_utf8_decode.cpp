@@ -150,3 +150,30 @@ TEST_CASE("Utf8Decode: continuation bytes after invalid lead are skipped", "[utf
     CHECK(nextUtf8Codepoint(p, buf + 4) == 0x0058u); // X
     CHECK(p == buf + 4);
 }
+
+// ---------------------------------------------------------------------------
+// countUtf8Codepoints — glyph count used for HUD text alignment
+// ---------------------------------------------------------------------------
+
+TEST_CASE("countUtf8Codepoints: empty string is zero", "[utf8]") {
+    CHECK(fl::countUtf8Codepoints(std::string_view{}) == 0u);
+    CHECK(fl::countUtf8Codepoints("") == 0u);
+}
+
+TEST_CASE("countUtf8Codepoints: ASCII counts one per byte", "[utf8]") {
+    CHECK(fl::countUtf8Codepoints("Hello") == 5u);
+    CHECK(fl::countUtf8Codepoints("FIGHTERS LEGACY") == 15u);
+}
+
+TEST_CASE("countUtf8Codepoints: multibyte sequences count one glyph each", "[utf8]") {
+    CHECK(fl::countUtf8Codepoints("\xC2\xB0") == 1u);                // 2-byte degree sign
+    CHECK(fl::countUtf8Codepoints("\xE2\x96\x88") == 1u);            // 3-byte full block
+    CHECK(fl::countUtf8Codepoints("90\xC2\xB0 \xE2\x96\x88") == 5u); // mixed ASCII + multibyte
+}
+
+TEST_CASE("countUtf8Codepoints: invalid and non-BMP sequences count one U+FFFD glyph", "[utf8]") {
+    CHECK(fl::countUtf8Codepoints("\xFF") == 1u);             // invalid lead byte
+    CHECK(fl::countUtf8Codepoints("\xC2") == 1u);             // truncated 2-byte tail
+    CHECK(fl::countUtf8Codepoints("\xF0\x9F\x98\x80") == 1u); // 4-byte emoji (out of BMP)
+    CHECK(fl::countUtf8Codepoints("A\xFF\x80\x80X") == 3u);   // A + one FFFD + X
+}

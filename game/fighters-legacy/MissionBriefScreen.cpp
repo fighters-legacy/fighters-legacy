@@ -79,6 +79,7 @@ std::span<const HudElement> MissionBriefScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[0];
         el.x = 0.5f;
+        el.align = HudAlign::Center;
         el.y = 0.15f;
         el.scale = 1.5f;
         el.r = 1.f;
@@ -95,6 +96,7 @@ std::span<const HudElement> MissionBriefScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[1];
         el.x = 0.5f;
+        el.align = HudAlign::Center;
         el.y = 0.30f;
         el.r = 0.8f;
         el.g = 0.8f;
@@ -110,6 +112,7 @@ std::span<const HudElement> MissionBriefScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[2];
         el.x = 0.5f;
+        el.align = HudAlign::Center;
         el.y = 0.40f;
         el.r = 0.7f;
         el.g = 0.7f;
@@ -124,7 +127,8 @@ std::span<const HudElement> MissionBriefScreen::buildElements() {
         el = HudElement{};
         el.type = HudElement::Type::Text;
         el.text = m_strings[3];
-        el.x = 0.35f;
+        el.x = 0.35f; // hover band [0.25,0.45) is centered on this anchor
+        el.align = HudAlign::Center;
         el.y = 0.77f;
         el.scale = 1.f;
         if (m_selectedIdx == 0) {
@@ -147,7 +151,8 @@ std::span<const HudElement> MissionBriefScreen::buildElements() {
         el = HudElement{};
         el.type = HudElement::Type::Text;
         el.text = m_strings[4];
-        el.x = 0.65f;
+        el.x = 0.65f; // hover band [0.55,0.75) is centered on this anchor
+        el.align = HudAlign::Center;
         el.y = 0.77f;
         el.scale = 1.f;
         if (m_selectedIdx == 1) {

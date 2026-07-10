@@ -202,8 +202,8 @@ Screen SettingsScreen::update(IInput& input, IWindow& window) {
     if (fh > 0.f) {
         const float ny = static_cast<float>(my) / fh;
         for (int r = 0; r < kRowCount; ++r) {
-            float ry = 0.20f + static_cast<float>(r) * 0.06f;
-            if (ny >= ry && ny < ry + 0.05f)
+            const float ry = kRowY[static_cast<std::size_t>(r)];
+            if (ny >= ry && ny < ry + kRowHitH)
                 m_focusedRow = r;
         }
     }
@@ -321,6 +321,7 @@ std::span<const HudElement> SettingsScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[static_cast<std::size_t>(si++)];
         el.x = 0.5f;
+        el.align = HudAlign::Center;
         el.y = 0.10f;
         el.scale = 1.5f;
         el.r = 1.f;
@@ -329,10 +330,12 @@ std::span<const HudElement> SettingsScreen::buildElements() {
         el.a = 1.f;
     }
 
-    // Build a data row: label (left) + value (right)
+    // Build a data row: label right-aligned into the left column, value
+    // left-aligned into the right column, split at screen center.
     // Returns two elements; consumes two string slots from si
-    auto row = [&](int rowIdx, float y, std::string label, std::string value) {
+    auto row = [&](int rowIdx, std::string label, std::string value) {
         const bool focused = (rowIdx == m_focusedRow);
+        const float y = kRowY[static_cast<std::size_t>(rowIdx)];
 
         m_strings[static_cast<std::size_t>(si)] = std::move(label);
         {
@@ -340,7 +343,8 @@ std::span<const HudElement> SettingsScreen::buildElements() {
             el = HudElement{};
             el.type = HudElement::Type::Text;
             el.text = m_strings[static_cast<std::size_t>(si++)];
-            el.x = 0.33f;
+            el.x = 0.48f;
+            el.align = HudAlign::Right;
             el.y = y;
             el.r = focused ? 1.0f : 0.7f;
             el.g = focused ? 1.0f : 0.7f;
@@ -354,7 +358,8 @@ std::span<const HudElement> SettingsScreen::buildElements() {
             el = HudElement{};
             el.type = HudElement::Type::Text;
             el.text = m_strings[static_cast<std::size_t>(si++)];
-            el.x = 0.67f;
+            el.x = 0.52f;
+            el.align = HudAlign::Left;
             el.y = y;
             el.r = focused ? 0.2f : 0.5f;
             el.g = focused ? 1.0f : 0.8f;
@@ -367,20 +372,20 @@ std::span<const HudElement> SettingsScreen::buildElements() {
     std::string resVal = m_modes.empty() ? "Native"
                                          : std::to_string(m_modes[static_cast<std::size_t>(m_modeIdx)].first) + "x" +
                                                std::to_string(m_modes[static_cast<std::size_t>(m_modeIdx)].second);
-    row(0, 0.20f, "Resolution:", resVal);
-    row(1, 0.27f, "Display:", m_fullscreen ? "Fullscreen" : "Windowed");
-    row(2, 0.34f, "Vsync:", vsyncLabel(m_graphics.vsync));
-    row(3, 0.39f, "Anti-aliasing:", aaModeLabel(m_graphics.aaMode));
-    row(4, 0.45f, "Shadow quality:", shadowQualityLabel(m_graphics.shadowQuality));
-    row(5, 0.51f, "Ambient occlusion:", aoModeLabel(m_graphics.ambientOcclusion));
-    row(6, 0.57f, "Sky quality:", skyQualityLabel(m_graphics.skyQuality));
-    row(7, 0.63f, "Particle density:", particleDensityLabel(m_graphics.particleDensity));
-    row(8, 0.69f, "Draw distance:", drawDistLabel(m_graphics.drawDistance));
+    row(0, "Resolution:", resVal);
+    row(1, "Display:", m_fullscreen ? "Fullscreen" : "Windowed");
+    row(2, "Vsync:", vsyncLabel(m_graphics.vsync));
+    row(3, "Anti-aliasing:", aaModeLabel(m_graphics.aaMode));
+    row(4, "Shadow quality:", shadowQualityLabel(m_graphics.shadowQuality));
+    row(5, "Ambient occlusion:", aoModeLabel(m_graphics.ambientOcclusion));
+    row(6, "Sky quality:", skyQualityLabel(m_graphics.skyQuality));
+    row(7, "Particle density:", particleDensityLabel(m_graphics.particleDensity));
+    row(8, "Draw distance:", drawDistLabel(m_graphics.drawDistance));
 
     auto volStr = [](float v) { return std::to_string(static_cast<int>(std::round(v * 100.f))) + "%"; };
-    row(9, 0.77f, "Master volume:", volStr(m_audio.masterVolume));
-    row(10, 0.83f, "Music volume:", volStr(m_audio.musicVolume));
-    row(11, 0.89f, "SFX volume:", volStr(m_audio.sfxVolume));
+    row(9, "Master volume:", volStr(m_audio.masterVolume));
+    row(10, "Music volume:", volStr(m_audio.musicVolume));
+    row(11, "SFX volume:", volStr(m_audio.sfxVolume));
 
     // Back button
     m_strings[static_cast<std::size_t>(si)] = "[ Back ]";
@@ -390,7 +395,8 @@ std::span<const HudElement> SettingsScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[static_cast<std::size_t>(si++)];
         el.x = 0.5f;
-        el.y = 0.95f;
+        el.align = HudAlign::Center;
+        el.y = kRowY[12];
         el.r = (m_focusedRow == 12) ? 0.2f : 0.7f;
         el.g = (m_focusedRow == 12) ? 1.0f : 0.7f;
         el.b = (m_focusedRow == 12) ? 0.2f : 0.7f;

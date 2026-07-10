@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "MissionBriefScreen.h"
@@ -78,4 +79,29 @@ TEST_CASE("MissionBriefScreen: buildElements shows terrain-id placeholder") {
             foundMap = true;
     }
     CHECK(foundMap);
+}
+
+TEST_CASE("MissionBriefScreen: text centered; buttons anchor at 0.35 and 0.65") {
+    MissionBriefScreen s;
+    s.setMission("m01", "Desert Storm");
+    s.update(g_inp, g_win);
+    auto elems = s.buildElements();
+    bool foundFly = false;
+    bool foundBack = false;
+    for (const auto& el : elems) {
+        if (el.type != HudElement::Type::Text)
+            continue;
+        CHECK(el.align == HudAlign::Center);
+        if (el.text == "[ Fly ]") {
+            foundFly = true;
+            CHECK(el.x == Catch::Approx(0.35f)); // hover band [0.25,0.45) centers here
+        } else if (el.text == "[ Back ]") {
+            foundBack = true;
+            CHECK(el.x == Catch::Approx(0.65f)); // hover band [0.55,0.75) centers here
+        } else {
+            CHECK(el.x == Catch::Approx(0.5f));
+        }
+    }
+    CHECK(foundFly);
+    CHECK(foundBack);
 }

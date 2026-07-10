@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "PauseMenuScreen.h"
@@ -100,4 +101,20 @@ TEST_CASE("PauseMenuScreen: buildElements not empty") {
     MockInput inp;
     s.update(inp, g_win);
     CHECK(!s.buildElements().empty());
+}
+
+TEST_CASE("PauseMenuScreen: title and items are center-aligned at x=0.5") {
+    PauseMenuScreen s;
+    MockInput inp;
+    s.update(inp, g_win);
+    auto elems = s.buildElements();
+    int textCount = 0;
+    for (const auto& el : elems) {
+        if (el.type != HudElement::Type::Text)
+            continue;
+        ++textCount;
+        CHECK(el.align == HudAlign::Center);
+        CHECK(el.x == Catch::Approx(0.5f));
+    }
+    CHECK(textCount == s.itemCount() + 1); // title + menu items
 }

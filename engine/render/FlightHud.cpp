@@ -20,7 +20,7 @@ void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrai
     if (!e)
         return;
 
-    auto pushText = [&](float x, float y, float r, float g, float b, const char* fmt, auto... args) {
+    auto pushText = [&](HudAlign align, float x, float y, float r, float g, float b, const char* fmt, auto... args) {
         if (m_elementCount >= kMaxElements || m_stringCount >= kMaxStrings)
             return;
         char buf[64];
@@ -29,6 +29,7 @@ void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrai
         HudElement el;
         el.type = HudElement::Type::Text;
         el.x = x;
+        el.align = align;
         el.y = y;
         el.r = r;
         el.g = g;
@@ -60,39 +61,39 @@ void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrai
     float speedKts =
         std::sqrt(e->velocity.x * e->velocity.x + e->velocity.y * e->velocity.y + e->velocity.z * e->velocity.z) *
         1.94384f;
-    pushText(0.03f, 0.46f, kHudR, kHudG, kHudB, "IAS %5.0fkts", speedKts);
+    pushText(HudAlign::Left, 0.03f, 0.46f, kHudR, kHudG, kHudB, "IAS %5.0fkts", speedKts);
 
     // Altitude MSL and AGL (left side, below airspeed)
-    pushText(0.03f, 0.50f, kHudR, kHudG, kHudB, "ALT %5.0fm", static_cast<float>(e->position.y));
+    pushText(HudAlign::Left, 0.03f, 0.50f, kHudR, kHudG, kHudB, "ALT %5.0fm", static_cast<float>(e->position.y));
     const float agl = static_cast<float>(e->position.y) - terrainElevation;
-    pushText(0.03f, 0.54f, kHudR, kHudG, kHudB, "AGL %5.0fm", agl);
+    pushText(HudAlign::Left, 0.03f, 0.54f, kHudR, kHudG, kHudB, "AGL %5.0fm", agl);
 
     // Heading (bottom-center)
     // Yaw from GLM quaternion (Y-up RH): atan2(2*(w*y + x*z), 1 - 2*(y² + z²))
     float yawRad = std::atan2(2.f * (e->orientation.w * e->orientation.y + e->orientation.x * e->orientation.z),
                               1.f - 2.f * (e->orientation.y * e->orientation.y + e->orientation.z * e->orientation.z));
     float hdg = std::fmod(glm::degrees(yawRad) + 360.f, 360.f);
-    pushText(0.44f, 0.94f, kHudR, kHudG, kHudB, "HDG %3.0f", hdg);
+    pushText(HudAlign::Center, 0.5f, 0.94f, kHudR, kHudG, kHudB, "HDG %3.0f", hdg);
 
     // Heading tape underline
     pushLine(0.35f, 0.97f, 0.65f, 0.97f, 1.f, kHudR, kHudG, kHudB);
 
     // Throttle + fuel (right side, vertically centered)
-    pushText(0.80f, 0.46f, kHudR, kHudG, kHudB, "THR %3d%%", static_cast<int>(e->throttle));
-    pushText(0.80f, 0.50f, kHudR, kHudG, kHudB, "FUEL %3d%%", static_cast<int>(e->fuelPct));
+    pushText(HudAlign::Left, 0.80f, 0.46f, kHudR, kHudG, kHudB, "THR %3d%%", static_cast<int>(e->throttle));
+    pushText(HudAlign::Left, 0.80f, 0.50f, kHudR, kHudG, kHudB, "FUEL %3d%%", static_cast<int>(e->fuelPct));
 
     // Damage warning in red (center screen)
     if (e->damageLevel > 0)
-        pushText(0.40f, 0.48f, 1.f, 0.2f, 0.2f, "%s", "*** DAMAGE ***");
+        pushText(HudAlign::Center, 0.5f, 0.48f, 1.f, 0.2f, 0.2f, "%s", "*** DAMAGE ***");
 
     // Time of day clock (top-right) — HH:MM, purely ASCII
     int hr = static_cast<int>(timeOfDay) % 24;
     int min = static_cast<int>((timeOfDay - static_cast<float>(static_cast<int>(timeOfDay))) * 60.f) % 60;
-    pushText(0.80f, 0.38f, kHudR, kHudG, kHudB, "%02d:%02d", hr, min);
+    pushText(HudAlign::Right, 0.98f, 0.38f, kHudR, kHudG, kHudB, "%02d:%02d", hr, min);
 
     // Per-peer latency indicator (right column, below fuel) — e.g. "42 ms"
     if (showLatency && latencyMs > 0)
-        pushText(0.80f, 0.54f, kHudR, kHudG, kHudB, "%u ms", latencyMs);
+        pushText(HudAlign::Left, 0.80f, 0.54f, kHudR, kHudG, kHudB, "%u ms", latencyMs);
 }
 
 std::span<const HudElement> FlightHud::elements() const {

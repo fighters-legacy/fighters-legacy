@@ -420,6 +420,10 @@ add_executable(test_utf8_decode test_utf8_decode.cpp)
 target_link_libraries(test_utf8_decode PRIVATE Catch2::Catch2WithMain platform-hal)
 catch_discover_tests(test_utf8_decode)
 
+add_executable(test_hud_align test_hud_align.cpp)
+target_link_libraries(test_hud_align PRIVATE Catch2::Catch2WithMain platform-hal)
+catch_discover_tests(test_hud_align)
+
 add_executable(test_game_console test_game_console.cpp)
 target_link_libraries(test_game_console PRIVATE Catch2::Catch2WithMain engine-console engine-entity engine-weather)
 target_include_directories(test_game_console PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

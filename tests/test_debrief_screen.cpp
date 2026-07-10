@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "DebriefScreen.h"
@@ -78,4 +79,20 @@ TEST_CASE("DebriefScreen: buildElements not empty") {
     DebriefScreen s;
     s.update(g_inp, g_win);
     CHECK(!s.buildElements().empty());
+}
+
+TEST_CASE("DebriefScreen: all text elements are center-aligned at x=0.5") {
+    DebriefScreen s;
+    s.setStats(3, 1, true);
+    s.update(g_inp, g_win);
+    auto elems = s.buildElements();
+    int textCount = 0;
+    for (const auto& el : elems) {
+        if (el.type != HudElement::Type::Text)
+            continue;
+        ++textCount;
+        CHECK(el.align == HudAlign::Center);
+        CHECK(el.x == Catch::Approx(0.5f));
+    }
+    CHECK(textCount == 4); // outcome, kills, losses, continue
 }

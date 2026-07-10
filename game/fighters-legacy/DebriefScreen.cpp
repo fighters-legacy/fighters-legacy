@@ -48,6 +48,7 @@ std::span<const HudElement> DebriefScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[static_cast<std::size_t>(si++)];
         el.x = 0.5f;
+        el.align = HudAlign::Center;
         el.y = 0.20f;
         el.scale = 1.8f;
         el.r = m_success ? 0.2f : 1.0f;
@@ -64,6 +65,7 @@ std::span<const HudElement> DebriefScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[static_cast<std::size_t>(si++)];
         el.x = 0.5f;
+        el.align = HudAlign::Center;
         el.y = 0.40f;
         el.r = 0.9f;
         el.g = 0.9f;
@@ -79,6 +81,7 @@ std::span<const HudElement> DebriefScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[static_cast<std::size_t>(si++)];
         el.x = 0.5f;
+        el.align = HudAlign::Center;
         el.y = 0.48f;
         el.r = 0.9f;
         el.g = 0.9f;
@@ -94,6 +97,7 @@ std::span<const HudElement> DebriefScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[static_cast<std::size_t>(si++)];
         el.x = 0.5f;
+        el.align = HudAlign::Center;
         el.y = 0.70f;
         el.r = 0.2f;
         el.g = 1.f;
