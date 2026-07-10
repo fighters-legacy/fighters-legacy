@@ -298,7 +298,7 @@ A harness that targets a real surface but depends on a vendored decoder with **a
 defects on malformed input (memory corruption, not benign UB) is parked under `fuzz/disabled/` — not
 built, not run, out of the smoke enumeration — with the reproducers and a re-enable checklist in
 `fuzz/disabled/README.md`. Current: `fuzz_ogg` (stb_vorbis SEGVs in its own cleanup on malformed
-audio); the untrusted-OGG decode path needs hardening/sandboxing first, tracked as a follow-up.
+audio); the untrusted-OGG decode path needs hardening/sandboxing first, tracked as #723.
 
 ### Adding a harness
 
