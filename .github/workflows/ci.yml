@@ -338,7 +338,7 @@ jobs:
 
       - name: Upload findings
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-findings-${{ matrix.harness }}
           path: build/fuzz/fuzz/artifacts/${{ matrix.harness }}/
