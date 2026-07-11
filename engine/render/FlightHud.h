@@ -2,6 +2,7 @@
 #pragma once
 
 #include "RenderTypes.h"
+#include "flight/Geodetic.h" // kEarthRadiusM (default planet radius)
 #include "render/IHud.h"
 #include "render/RenderSnapshot.h"
 
@@ -27,14 +28,14 @@ class FlightHud : public IHud {
     // terrainElevation: ground height in metres at the player XZ position (from
     // TerrainStreamer::heightAt). Falls back to 0.0 (AGL == MSL) when not loaded.
     void update(const EntityRenderEntry* playerEntry, float timeOfDay = 12.0f, float terrainElevation = 0.0f,
-                uint32_t latencyMs = 0, bool showLatency = false) override;
+                uint32_t latencyMs = 0, bool showLatency = false, double planetRadiusM = kEarthRadiusM) override;
 
     // Returns elements for IRenderer::submitOverlayElements(). Valid until next update().
     [[nodiscard]] std::span<const HudElement> elements() const override;
 
   private:
-    static constexpr int kMaxElements = 16;
-    static constexpr int kMaxStrings = 10;
+    static constexpr int kMaxElements = 20;
+    static constexpr int kMaxStrings = 12;
 
     std::array<HudElement, kMaxElements> m_elements;
     std::array<std::string, kMaxStrings> m_strings;

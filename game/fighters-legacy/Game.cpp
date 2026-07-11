@@ -853,9 +853,12 @@ void Game::handleTransition(Screen next) {
 
     if (next == Screen::Flight) {
         d.services.musicManager.setState(GameState::FlightPatrol);
-        if (d.session.clientHandler && d.services.terrainStreamer) {
+        if (d.session.clientHandler) {
             const double radiusM = static_cast<double>(d.session.clientHandler->planetRadiusKm()) * 1000.0;
-            d.services.terrainStreamer->setPlanetRadius(radiusM);
+            if (d.services.terrainStreamer)
+                d.services.terrainStreamer->setPlanetRadius(radiusM);
+            // Camera "up" = radial direction on the planet, so the horizon stays level far from origin.
+            d.services.camInput.setPlanetRadius(radiusM);
         }
     } else if (next == Screen::MainMenu)
         d.services.musicManager.setState(GameState::Menu);

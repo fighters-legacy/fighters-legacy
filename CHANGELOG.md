@@ -18,6 +18,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **terrain**: Cube-sphere tile mesh builder (`buildTileMeshGlb`) — true curved tiles with per-vertex world positions from `CubeSphere::tileToWorld`, curvature-correct normals from the surface tangent cross-product, optional `COLOR_0` (WorldCover class) / `TEXCOORD_0` attributes, and camera-relative rebase against a tile origin; CCW-from-outside winding (validate-mesh clean). Added alongside the planar `buildTerrainMeshGlb` pending the streamer rewrite (#471)
 - **engine**: Load content-pack entity definitions into the fl-server type registry at startup, so pack entity types are spawnable on a dedicated server (malformed defs warn and skip; no protocol change) (#683)
 
+### Changed
+
+- **game**: Radial HUD artificial horizon + camera up (#479). The HUD attitude (pitch/heading/bank), the new artificial-horizon line, and the Free/Chase camera "up" vector are now computed on the local-level frame (`LocalFrame.h`) at the entity/camera position — radial up on a spherical planet — instead of assuming world +Y is up and world-XZ is the horizon plane. They stay correct far from the world origin (and are unchanged near it, since ENU ≈ world frame there). Adds `headingOf`/`bankOf` to `LocalFrame.h`, a `PTCH` readout + horizon line to `FlightHud`, and threads the server's `planetRadiusKm` (from `MsgConnectAck`) into `FlightHud::update`, `WindshieldRain` roll, and `CameraInput`
+
 ### Fixed
 
 - **ci**: release workflow now actually attaches the Windows/Linux/macOS binaries to the GitHub Release. The `Package` steps write `<artifact>.zip` at the workspace root, but `upload-artifact` globbed `dist/*.zip` (no match) under `if-no-files-found: ignore`, so every release since v0.2.x published with zero assets. Upload the root-level zip, harden `if-no-files-found: error` so a future path drift fails loudly, and flatten `download-artifact` into `dist/` (`merge-multiple: true`) so the release `files:`/attestation `subject-path:` globs resolve

@@ -12,6 +12,8 @@
 #include "config/ControlsSettings.h"
 #include "config/UserConfig.h"
 #include "console/GameConsole.h"
+#include "flight/Geodetic.h"   // kEarthRadiusM
+#include "flight/LocalFrame.h" // bankOf on the local-level frame
 #include "render/CameraController.h"
 #include "render/FlightHud.h"
 #include "render/IHud.h"
@@ -34,12 +36,13 @@ static const fl::EntityRenderEntry* findEntry(const fl::SimRenderBridge& bridge,
     return nullptr;
 }
 
-static float rollAngleRad(const fl::EntityRenderEntry* p) {
+static float rollAngleRad(const fl::EntityRenderEntry* p, double planetRadiusM) {
     if (!p)
         return 0.f;
-    const glm::vec3 up = p->orientation * glm::vec3(0.f, 1.f, 0.f);
-    const glm::vec3 right = p->orientation * glm::vec3(0.f, 0.f, 1.f);
-    return std::atan2(-right.y, up.y);
+    // Bank relative to the LOCAL up (radial on a spherical planet), so the windshield lean stays
+    // correct far from the world origin (#479). Reduces to atan2(-right.y, up.y) near the origin.
+    const float q[4] = {p->orientation.x, p->orientation.y, p->orientation.z, p->orientation.w};
+    return fl::bankOf(q, p->position, planetRadiusM);
 }
 
 FlightScreen::FlightScreen(FlightScreenDeps deps) : m_deps(std::move(deps)) {
@@ -104,9 +107,15 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     const bool showLat = d.userConfig->hud().showLatency && d.clientNetHandler &&
                          d.clientNetHandler->hasSnapshotLatency() && latencyMs >= kMinLatencyDisplayMs;
 
-    (*d.activeHud)->update(cockpit ? m_playerEntry : nullptr, d.env->timeOfDay, terrainElev, latencyMs, showLat);
+    // Planet radius (m) from the server's MsgConnectAck; drives the local-level HUD attitude/horizon
+    // and windshield lean. Earth default until the ack arrives.
+    const double radiusM =
+        d.clientNetHandler ? static_cast<double>(d.clientNetHandler->planetRadiusKm()) * 1000.0 : fl::kEarthRadiusM;
+
+    (*d.activeHud)
+        ->update(cockpit ? m_playerEntry : nullptr, d.env->timeOfDay, terrainElev, latencyMs, showLat, radiusM);
     d.windshieldRain->update(cockpit ? (1.f / 60.f) : 0.f, cockpit ? *d.env : EnvironmentState{},
-                             cockpit ? rollAngleRad(m_playerEntry) : 0.f);
+                             cockpit ? rollAngleRad(m_playerEntry, radiusM) : 0.f);
     if (d.hapticController)
         d.hapticController->update(m_playerEntry, m_weaponFired, terrainElev, 1.f / 60.f);
 

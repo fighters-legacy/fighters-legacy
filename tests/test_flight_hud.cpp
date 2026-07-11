@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "flight/Geodetic.h" // kEarthRadiusM
 #include "render/FlightHud.h"
 #include "render/IHud.h"
 #include "render/RenderSnapshot.h"
@@ -6,6 +7,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <cmath>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
@@ -320,4 +322,79 @@ TEST_CASE("FlightHud latency element not shown when latencyMs is zero", "[flight
         if (el.type == HudElement::Type::Text && el.text.find("ms") != std::string_view::npos)
             found = true;
     CHECK_FALSE(found);
+}
+
+// ---------------------------------------------------------------------------
+// Radial artificial-horizon / pitch reference (#479)
+// ---------------------------------------------------------------------------
+
+// The artificial horizon is the Line element near screen centre (y in [0.2, 0.8]); the heading
+// tape underline sits at y ~= 0.97.
+static const HudElement* findHorizon(const fl::FlightHud& hud) {
+    for (const auto& el : hud.elements())
+        if (el.type == HudElement::Type::Line && el.y > 0.2f && el.y < 0.8f)
+            return &el;
+    return nullptr;
+}
+
+TEST_CASE("FlightHud shows a pitch readout", "[flight_hud][spherical]") {
+    fl::FlightHud hud;
+    auto e = makeEntry(); // identity orientation, near the world origin -> pitch ~ 0
+    hud.update(&e);
+    bool found = false;
+    for (const auto& el : hud.elements())
+        if (el.type == HudElement::Type::Text && el.text.find("PTCH") != std::string_view::npos)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("FlightHud level flight puts the horizon through screen centre", "[flight_hud][spherical]") {
+    fl::FlightHud hud;
+    auto e = makeEntry(); // identity orientation: wings level, nose on the horizon
+    hud.update(&e);
+    const HudElement* h = findHorizon(hud);
+    REQUIRE(h != nullptr);
+    const float midY = 0.5f * (h->y + h->y2);
+    CHECK(midY == Catch::Approx(0.5f).margin(1e-3f));
+    // Wings level -> the two endpoints share the same height.
+    CHECK(h->y == Catch::Approx(h->y2).margin(1e-3f));
+}
+
+TEST_CASE("FlightHud nose-up drops the horizon below centre", "[flight_hud][spherical]") {
+    fl::FlightHud hud;
+    auto e = makeEntry();
+    // Rotate the nose up ~30 deg: rotation about body-right (+Z) tilts forward +X toward +Y (up).
+    e.orientation = glm::angleAxis(glm::radians(30.f), glm::vec3(0.f, 0.f, 1.f));
+    hud.update(&e);
+    const HudElement* h = findHorizon(hud);
+    REQUIRE(h != nullptr);
+    const float midY = 0.5f * (h->y + h->y2);
+    CHECK(midY > 0.5f); // screen y grows downward, so a nose-up horizon sits below centre
+}
+
+TEST_CASE("FlightHud bank tilts the horizon line", "[flight_hud][spherical]") {
+    fl::FlightHud hud;
+    auto e = makeEntry();
+    // Roll ~30 deg about the forward (+X) axis.
+    e.orientation = glm::angleAxis(glm::radians(30.f), glm::vec3(1.f, 0.f, 0.f));
+    hud.update(&e);
+    const HudElement* h = findHorizon(hud);
+    REQUIRE(h != nullptr);
+    CHECK(std::abs(h->y - h->y2) > 1e-3f); // banked -> endpoints at different heights
+}
+
+TEST_CASE("FlightHud attitude stays correct far from the world origin", "[flight_hud][spherical]") {
+    // Equator point on Earth (Geodetic.h): world (0, -R, R). Local up = +Z there.
+    constexpr double R = fl::kEarthRadiusM;
+    fl::FlightHud hud;
+    auto e = makeEntry();
+    e.position = {0.0, -R, R};
+    // Wings level on the LOCAL up (+Z): rotate body up +Y -> +Z via +90 deg about forward +X.
+    e.orientation = glm::angleAxis(glm::radians(90.f), glm::vec3(1.f, 0.f, 0.f));
+    hud.update(&e, 12.0f, 0.0f, 0u, false, R);
+    const HudElement* h = findHorizon(hud);
+    REQUIRE(h != nullptr);
+    // Level far from origin -> horizon centred and untilted (would be wrong with a world-Y horizon).
+    CHECK(0.5f * (h->y + h->y2) == Catch::Approx(0.5f).margin(2e-3f));
+    CHECK(h->y == Catch::Approx(h->y2).margin(2e-3f));
 }

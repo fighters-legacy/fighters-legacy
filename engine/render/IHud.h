@@ -2,6 +2,7 @@
 #pragma once
 
 #include "RenderTypes.h"
+#include "flight/Geodetic.h" // kEarthRadiusM (default planet radius)
 #include "render/RenderSnapshot.h"
 
 #include <span>
@@ -22,8 +23,11 @@ class IHud {
     // latencyMs: receiving peer's one-way latency in ms (from SnapshotPeerLatency TLV); 0 = not yet received.
     // showLatency: true when the latency indicator should be rendered (gated by config + threshold +
     // hasSnapshotLatency).
+    // planetRadiusM: planet sphere radius in metres (from MsgConnectAck). Attitude (pitch/heading/bank)
+    // and the artificial horizon are computed on the local-level frame at the entity position, so they
+    // stay correct far from the world origin. Defaults to Earth radius.
     virtual void update(const EntityRenderEntry* playerEntry, float timeOfDay = 12.0f, float terrainElevation = 0.0f,
-                        uint32_t latencyMs = 0, bool showLatency = false) = 0;
+                        uint32_t latencyMs = 0, bool showLatency = false, double planetRadiusM = kEarthRadiusM) = 0;
 
     // Returns overlay elements. Valid until the next call to update().
     [[nodiscard]] virtual std::span<const HudElement> elements() const = 0;
