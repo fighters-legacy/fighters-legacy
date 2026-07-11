@@ -120,8 +120,9 @@ TEST_CASE("Guidance: bankToTurnAileron clamps to 1.0 for large heading error") {
 
 TEST_CASE("Guidance: pitchErrorFromAlt positive for entity below target altitude") {
     float q[4] = {0.f, 0.f, 0.f, 1.f}; // identity: level flight
-    float altErr = 100.f;              // 100 m below target
-    float pitchErr = fl::ai::pitchErrorFromAlt(q, altErr);
+    double own[3] = {0.0, 600.0, 0.0};
+    float altErr = 100.f; // 100 m below target
+    float pitchErr = fl::ai::pitchErrorFromAlt(q, own, altErr);
     CHECK(pitchErr > 0.f); // need to pitch up
 }
 

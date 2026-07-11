@@ -31,6 +31,11 @@ void StateMachineController::enterState(int idx) {
     m_activeIdx = idx;
     m_dwellTime = 0.f;
     m_active = (idx >= 0) ? m_states[idx].factory() : nullptr;
+    if (m_active) {
+        // Forward the local-level planet radius to the freshly-constructed child so its guidance
+        // math is correct far from the world origin (children are recreated on every state entry).
+        m_active->setPlanetRadius(m_planetRadiusM);
+    }
 }
 
 void StateMachineController::addState(std::string name, ControllerFactory factory) {

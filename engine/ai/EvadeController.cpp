@@ -25,7 +25,7 @@ fl::ControlInput EvadeController::sample(const fl::EntityState& state, uint64_t 
     };
 
     // Negate heading error to bank away from the threat.
-    float headErr = -horizontalHeadingError(state.transform.quat, state.transform.pos, threatPos);
+    float headErr = -horizontalHeadingError(state.transform.quat, state.transform.pos, threatPos, m_planetRadiusM);
 
     ctrl.throttle = m_throttle;
     ctrl.afterburner = m_useAfterburner;

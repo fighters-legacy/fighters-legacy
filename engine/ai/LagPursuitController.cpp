@@ -47,9 +47,12 @@ fl::ControlInput LagPursuitController::sample(const fl::EntityState& state, uint
     }
 
     const double lagPos[3] = {lagPosX, lagPosY, lagPosZ};
-    float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, lagPos);
-    float altErr = static_cast<float>(lagPosY - state.transform.pos[1]);
-    float pitchErr = pitchErrorFromAlt(state.transform.quat, altErr);
+    const glm::dvec3 ownWorld(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]);
+    const glm::dvec3 lagWorld(lagPosX, lagPosY, lagPosZ);
+    float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, lagPos, m_planetRadiusM);
+    float altErr =
+        static_cast<float>(fl::localAltitude(lagWorld, m_planetRadiusM) - fl::localAltitude(ownWorld, m_planetRadiusM));
+    float pitchErr = pitchErrorFromAlt(state.transform.quat, state.transform.pos, altErr, m_planetRadiusM);
 
     ctrl.throttle = m_throttle;
     ctrl.afterburner = m_useAfterburner;

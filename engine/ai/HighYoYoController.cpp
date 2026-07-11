@@ -31,7 +31,7 @@ fl::ControlInput HighYoYoController::sample(const fl::EntityState& state, uint64
 
     if (m_phase == Phase::Climb) {
         const double tgtPos[3] = {target->transform.pos[0], target->transform.pos[1], target->transform.pos[2]};
-        float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, tgtPos);
+        float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, tgtPos, m_planetRadiusM);
         // Bank away from target at half authority; pull hard up to bleed speed and gain altitude.
         ctrl.aileron = -bankToTurnAileron(headErr) * 0.5f;
         ctrl.rudder = coordinatedRudder(ctrl.aileron);
@@ -39,7 +39,7 @@ fl::ControlInput HighYoYoController::sample(const fl::EntityState& state, uint64
         ctrl.throttle = 0.7f;
     } else if (m_phase == Phase::Reacquire) {
         const double tgtPos[3] = {target->transform.pos[0], target->transform.pos[1], target->transform.pos[2]};
-        float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, tgtPos);
+        float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, tgtPos, m_planetRadiusM);
         // Roll back toward target and ease in with a moderate elevator pull.
         ctrl.aileron = bankToTurnAileron(headErr);
         ctrl.rudder = coordinatedRudder(ctrl.aileron);
