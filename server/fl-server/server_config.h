@@ -71,6 +71,15 @@ struct ServerConfig {
     uint32_t testSpawnAiCount = 0;   // number of AI entities to pre-spawn; [0, 1000000]
     double testSpawnSpreadKm = 50.0; // spread radius (km) of the phyllotaxis distribution; [0, 100000]
     double testSpawnAglM = 500.0;    // spawn/loiter altitude above the origin ground elevation (m); [0, 50000]
+    // #580: weighted controller mix for the pre-spawned entities, "loiter:70,pursuit:20,patrol:10"
+    // (deterministic per-index assignment; behaviors: loiter | pursuit | patrol). Empty = all loiter
+    // (the #573 baseline). Invalid specs log Warn and fall back to all loiter. Restart-only.
+    std::string testSpawnAiMix;
+    // #580: projectile-churn generator — spawn testProjectileRate short-lived entities per second,
+    // each killed after testProjectileTtlS, to stress the pool free-list, O(liveCount) forEach under
+    // fragmentation, and the SnapshotDespawn TLV path. 0 = disabled. Restart-only.
+    double testProjectileRate = 0.0; // spawns per second; [0, 100000]
+    double testProjectileTtlS = 3.0; // lifetime of each churned entity (s); [0.05, 600]
 
     // [ai]  — Phase 2: parsed and stored; enforcement lands with AI runtime
     std::string aiDifficultyFloor = "recruit";
