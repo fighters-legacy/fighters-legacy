@@ -28,6 +28,8 @@
 #include <ILogger.h>
 #include <Platform.h>
 #include <ai/LoiterController.h>
+#include <ai/PursuitController.h>
+#include <ai/StateMachineController.h>
 #include <config/ConfigFile.h>
 #include <console/CommandRegistry.h>
 #include <console/CommandShell.h>
@@ -57,7 +59,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -65,6 +69,7 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 using namespace fl;
@@ -559,6 +564,17 @@ int main(int argc, char** argv) {
         aiScriptCache.emplace(name, std::pair<std::string, std::string>{std::move(src), std::move(root)});
     }
 
+    // Projectile-churn state (#580). Declared BEFORE gameLoop: the churn callback re-enqueues a
+    // copy of itself each tick, and those queued copies capture this state by reference — it must
+    // outlive the sim thread (LIFO destruction: gameLoop's destructor joins the thread first).
+    struct ChurnState {
+        double spawnAccum{0.0};                                // fractional spawns/tick remainder
+        uint64_t spawnCounter{0};                              // monotonic; drives placement
+        std::deque<std::pair<fl::EntityId, uint64_t>> pending; // FIFO of (entity, death tick)
+        uint64_t tick{0};                                      // churn-local tick counter
+    } churnState;
+    std::function<void()> churnTick;
+
     GameLoop gameLoop(broadcaster, *log, 60.0, cfg.maxCatchupTicks);
 
     // Data-parallel sim tick: the worker pool that parallelises the per-entity AI + integrate
@@ -580,7 +596,20 @@ int main(int argc, char** argv) {
         const double baseElev = terrainStreamer.heightAt(glm::dvec3{0.0, 0.0, 0.0}); // origin chunk primed above
         const double spreadM = cfg.testSpawnSpreadKm * 1000.0;
         const auto positions = fl::testSpawnPositions(cfg.testSpawnAiCount, spreadM, cfg.testSpawnAglM, baseElev);
+
+        // Controller mix (#580): weighted per-index assignment (deterministic, no RNG). Empty mix
+        // (the default) = all loiter, keeping the #573 pool+index characterisation baseline intact.
+        // Already validated by parseServerConfig — a parse failure here can't happen, but fall back
+        // to all-loiter defensively anyway.
+        std::vector<fl::TestSpawnMixEntry> mix;
+        if (!cfg.testSpawnAiMix.empty()) {
+            std::string mixErr;
+            if (!fl::parseTestSpawnMix(cfg.testSpawnAiMix, mix, mixErr))
+                mix.clear();
+        }
+
         uint32_t spawned = 0;
+        fl::EntityId prevId; // pursuit/patrol target: the previously spawned load entity
         for (const auto& pos : positions) {
             fl::EntityTransform t{};
             t.pos[0] = pos[0];
@@ -589,17 +618,94 @@ int main(int argc, char** argv) {
             const fl::EntityId id = entityManager.spawn("builtin:debug-entity", t);
             if (!id.valid())
                 break; // soft cap or unregistered type — stop cleanly
-            broadcaster.registerController(
-                id, std::make_unique<fl::ai::LoiterController>(glm::dvec3(pos[0], pos[1], pos[2]), 3000.f,
-                                                               static_cast<float>(pos[1])));
+
+            // Pick the behavior for this index. pursuit/patrol reference the PREVIOUS load entity
+            // (a moving target); the very first entity has no predecessor and loiters regardless
+            // of the mix. Per-tick AI cost by behavior: loiter = pure guidance math; pursuit =
+            // EntityManager::get() on the moving target; patrol = a StateMachineController whose
+            // AnyEntityWithinRange transitions run SpatialIndex::queryRadius() EVERY tick in both
+            // states (built directly — the patrol_attack factory template's conditions are
+            // target-keyed get() lookups, which would not exercise the range-query path #580 is
+            // after).
+            std::string_view behavior = "loiter";
+            if (!mix.empty())
+                behavior = fl::assignTestSpawnBehavior(mix, spawned, cfg.testSpawnAiCount);
+            std::unique_ptr<fl::IEntityController> ctrl;
+            if (behavior == "pursuit" && prevId.valid()) {
+                ctrl = std::make_unique<fl::ai::PursuitController>(entityManager, prevId);
+            } else if (behavior == "patrol" && prevId.valid()) {
+                const glm::dvec3 center(pos[0], pos[1], pos[2]);
+                const fl::EntityId target = prevId;
+                auto sm = std::make_unique<fl::ai::StateMachineController>(entityManager);
+                sm->addState("patrol", [center]() {
+                    return std::make_unique<fl::ai::LoiterController>(center, 3000.f, static_cast<float>(center.y));
+                });
+                sm->addState("investigate", [&entityManager, target]() {
+                    return std::make_unique<fl::ai::PursuitController>(entityManager, target);
+                });
+                // Both transitions run a queryRadius each tick regardless of outcome — the cost is
+                // incurred in every state. 2 s dwell prevents thrash at the range boundary.
+                sm->addTransition("patrol", "investigate", fl::ai::AnyEntityWithinRange(2000.f), 2.0f);
+                sm->addTransition("investigate", "patrol", fl::ai::Not(fl::ai::AnyEntityWithinRange(2500.f)), 2.0f);
+                sm->setInitialState("patrol");
+                ctrl = std::move(sm);
+            }
+            if (!ctrl)
+                ctrl = std::make_unique<fl::ai::LoiterController>(glm::dvec3(pos[0], pos[1], pos[2]), 3000.f,
+                                                                  static_cast<float>(pos[1]));
+            broadcaster.registerController(id, std::move(ctrl));
+            prevId = id;
             ++spawned;
         }
-        char sbuf[160];
+        char sbuf[224];
         std::snprintf(sbuf, sizeof(sbuf),
-                      "test spawn: %u AI entities over %.1f km at %.0f m AGL "
+                      "test spawn: %u AI entities over %.1f km at %.0f m AGL, mix=%s "
                       "(testing affordance, NOT a capacity guarantee)",
-                      spawned, cfg.testSpawnSpreadKm, cfg.testSpawnAglM);
+                      spawned, cfg.testSpawnSpreadKm, cfg.testSpawnAglM,
+                      cfg.testSpawnAiMix.empty() ? "loiter" : cfg.testSpawnAiMix.c_str());
         log->log(LogLevel::Warn, __FILE__, __LINE__, sbuf);
+    }
+
+    // ---- Projectile churn (#580): a self-rearming sim callback spawns testProjectileRate
+    // short-lived entities per second and kills each after testProjectileTtlS — sustained
+    // spawn+reap traffic through the EntityPool free-list, the O(liveCount) forEach, and the
+    // SnapshotDespawn TLV path. Runs on the sim thread (callbacks drain at the top of each tick,
+    // before onTick), so spawn/kill need no extra synchronisation. A TESTING AFFORDANCE.
+    if (cfg.testProjectileRate > 0.0) {
+        const double baseElev = terrainStreamer.heightAt(glm::dvec3{0.0, 0.0, 0.0});
+        const double spreadM = cfg.testSpawnSpreadKm * 1000.0;
+        const double y = baseElev + cfg.testSpawnAglM;
+        const uint64_t ttlTicks = static_cast<uint64_t>(cfg.testProjectileTtlS * 60.0) + 1u;
+        const double rate = cfg.testProjectileRate;
+        churnTick = [&churnState, &churnTick, &entityManager, &gameLoop, rate, ttlTicks, spreadM, y]() {
+            ++churnState.tick;
+            // Reap expired projectiles (FIFO: deadlines are monotonic).
+            while (!churnState.pending.empty() && churnState.pending.front().second <= churnState.tick) {
+                entityManager.kill(churnState.pending.front().first);
+                churnState.pending.pop_front();
+            }
+            // Spawn this tick's quota (fractional accumulator carries sub-tick rates).
+            const uint32_t n = fl::churnSpawnCount(churnState.spawnAccum, rate, 1.0 / 60.0);
+            for (uint32_t i = 0; i < n; ++i) {
+                const auto pos = fl::testProjectilePosition(churnState.spawnCounter++, spreadM, y);
+                fl::EntityTransform t{};
+                t.pos[0] = pos[0];
+                t.pos[1] = pos[1];
+                t.pos[2] = pos[2];
+                const fl::EntityId id = entityManager.spawn("builtin:debug-entity", t);
+                if (!id.valid())
+                    break; // soft cap — skip this tick's remainder, retire existing ones first
+                churnState.pending.emplace_back(id, churnState.tick + ttlTicks);
+            }
+            gameLoop.enqueueSimCallback(churnTick); // re-arm for the next tick
+        };
+        gameLoop.enqueueSimCallback(churnTick);
+        char cbuf[160];
+        std::snprintf(cbuf, sizeof(cbuf),
+                      "test churn: %.1f projectile spawns/s, ttl %.2f s (~%.0f live at steady state; "
+                      "testing affordance)",
+                      cfg.testProjectileRate, cfg.testProjectileTtlS, cfg.testProjectileRate * cfg.testProjectileTtlS);
+        log->log(LogLevel::Warn, __FILE__, __LINE__, cbuf);
     }
 
     fl::ServerCommandContext adminCtx;

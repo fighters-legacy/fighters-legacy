@@ -336,6 +336,39 @@ def test_expand_runs_entity_scale_cartesian_product():
     assert runs[3]["flags"] == ["--assert-min-entities", "2000"]
 
 
+# ---- AI mix + projectile churn (#580) ------------------------------------------------------------
+def test_expand_runs_sets_mix_and_churn_env():
+    prof = dict(sg.PROFILE_DEFAULTS)
+    prof.update(patterns=["weave"], entity_spawn_counts=[2000], sim_worker_threads_sweep=[8],
+                ai_mix="loiter:60,pursuit:25,patrol:15", projectile_rate=120, projectile_ttl_s=3.0)
+    runs = sg.expand_runs(prof)
+    assert len(runs) == 1
+    env = runs[0]["env"]
+    assert env["FL_TEST_SPAWN_MIX"] == "loiter:60,pursuit:25,patrol:15"
+    assert env["FL_TEST_PROJECTILE_RATE"] == "120"
+    assert env["FL_TEST_PROJECTILE_TTL_S"] == "3.0"
+    assert env["FL_TEST_SPAWN_AI"] == "2000"
+
+
+def test_expand_runs_omits_mix_and_churn_env_by_default():
+    prof = dict(sg.PROFILE_DEFAULTS)
+    prof.update(patterns=["weave"])
+    runs = sg.expand_runs(prof)
+    assert "FL_TEST_SPAWN_MIX" not in runs[0]["env"]
+    assert "FL_TEST_PROJECTILE_RATE" not in runs[0]["env"]
+
+
+def test_committed_entity_churn_profile_loads():
+    # The shipped scale-gate.json entity-churn profile must carry the mix + churn knobs (#580).
+    cfg = sg.load_config(sg.DEFAULT_CONFIG)
+    prof = sg.load_profile(cfg, "entity-churn")
+    assert prof["baselined"] is False
+    assert prof["ai_mix"] == "loiter:60,pursuit:25,patrol:15"
+    assert prof["projectile_rate"] == 120
+    assert prof["entity_spawn_counts"] == [500, 2000, 5000]
+    assert prof["sim_worker_threads_sweep"] == [1, 8]
+
+
 # ---- runner_for_platform -------------------------------------------------------------------------
 def test_runner_for_platform():
     assert sg.runner_for_platform("win32") == "run_loadtest.ps1"

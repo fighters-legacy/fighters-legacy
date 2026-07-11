@@ -190,7 +190,32 @@ smaller than the draw distance explodes the `queryRadius` cell count. What to wa
 passes; should fall with worker count), and `maintenance_ms` (the spatial rebuild). Findings and the
 run matrix live in [entity-scale-characterization.md](entity-scale-characterization.md).
 
+### Heavier AI mix + projectile churn ([#580])
+
+The #573 load-spawn deliberately uses **cheap static loiterers** (isolating pool+index cost), which
+leaves the AI phase and spawn/reap churn unstressed. Two additive knobs fix that:
+
+- `FL_TEST_SPAWN_MIX="loiter:60,pursuit:25,patrol:15"` → `[world] test_spawn_ai_mix`: a weighted
+  controller mix for the pre-spawned entities (deterministic per-index assignment). `pursuit` does an
+  `EntityManager::get()` on a moving target each tick; `patrol` is a `StateMachineController` whose
+  `AnyEntityWithinRange` transitions run `SpatialIndex::queryRadius()` **every tick** — the expensive
+  AI path, and the one the overrun governor's AI-sample stride (#514) decimates.
+- `FL_TEST_PROJECTILE_RATE=120` (+ `FL_TEST_PROJECTILE_TTL_S=3.0`) → `[world] test_projectile_rate` /
+  `test_projectile_ttl_s`: a projectile-churn generator spawning short-lived entities at that rate,
+  each killed after the TTL (steady-state extra population ≈ rate × ttl) — sustained `EntityPool`
+  alloc/free, O(liveCount) `forEach` under a fragmented store, and `SnapshotDespawn` TLV traffic.
+
+The `entity-churn` driver profile runs the representative combination over the
+`entity_spawn_counts × sim_worker_threads` sweep (advisory, never baselined):
+`python3 tools/bot_swarm/scale_gate.py --profile entity-churn --build-dir build/release`. Compare its
+`ai_ms` / `collision_ms` / `maintenance_ms` against the same points in the plain `entity-scale`
+matrix. Indicative debug-build deltas at 2000 entities / 1 worker (mix + 120/s churn vs. all-loiter):
+`ai_ms` +12%, `maintenance_ms` +17%, `serialize_ms` +13% (the ~360 extra churned entities are
+snapshot-visible), `tick_ms` +11% — reference-environment numbers belong in
+[entity-scale-characterization.md](entity-scale-characterization.md).
+
 [#573]: https://github.com/fighters-legacy/fighters-legacy/issues/573
+[#580]: https://github.com/fighters-legacy/fighters-legacy/issues/580
 
 ## CLI
 

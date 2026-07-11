@@ -93,6 +93,15 @@ test_spawn_spread_km = $TestSpawnSpreadKm
 if ($env:FL_SNAPSHOT_BUDGET) {
     $ConfigText += "`nsnapshot_budget_bytes = $($env:FL_SNAPSHOT_BUDGET)"
 }
+# #580: only emit the mix/churn keys when requested (default runs stay byte-identical).
+if ($env:FL_TEST_SPAWN_MIX) {
+    $ConfigText += "`ntest_spawn_ai_mix = `"$($env:FL_TEST_SPAWN_MIX)`""
+}
+if ($env:FL_TEST_PROJECTILE_RATE) {
+    $TtlS = if ($env:FL_TEST_PROJECTILE_TTL_S) { $env:FL_TEST_PROJECTILE_TTL_S } else { "3.0" }
+    $ConfigText += "`ntest_projectile_rate = $($env:FL_TEST_PROJECTILE_RATE)"
+    $ConfigText += "`ntest_projectile_ttl_s = $TtlS"
+}
 $ConfigText += @"
 
 [metrics]

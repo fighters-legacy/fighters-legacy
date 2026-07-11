@@ -75,6 +75,21 @@
       "assert_max_tick_ms": 0,
       "assert_congestion_engaged_hz": 30,
       "assert_congestion_recovered_hz": 55
+    },
+    "entity-churn": {
+      "_comment": "Heavier-AI-mix + projectile-churn characterisation (#580, extends the #573 entity-scale matrix which deliberately used cheap static loiterers). Pre-spawns entities with a representative controller mix (60% loiter / 25% pursuit [EntityManager::get on a moving target each tick] / 15% patrol [a StateMachineController whose AnyEntityWithinRange transitions run SpatialIndex::queryRadius EVERY tick — the expensive AI path the governor's AI stride decimates]) and runs the projectile-churn generator (120 spawn+reap/s, 3 s TTL => ~360 extra live entities at steady state; continuous EntityPool alloc/free + SnapshotDespawn TLV traffic). Compare ai_ms / collision_ms / maintenance_ms against the same entity_spawn_counts points in the entity-scale matrix (docs/entity-scale-characterization.md). Advisory only (baselined=false). Reference tier (workflow_dispatch on demand, like entity-scale).",
+      "clients": 64,
+      "duration_s": 60,
+      "patterns": ["weave"],
+      "entity_spawn_counts": [500, 2000, 5000],
+      "sim_worker_threads_sweep": [1, 8],
+      "ai_mix": "loiter:60,pursuit:25,patrol:15",
+      "projectile_rate": 120,
+      "projectile_ttl_s": 3.0,
+      "baselined": false,
+      "assert_max_kbs": 0,
+      "assert_min_tick_hz": 0,
+      "assert_max_tick_ms": 16.6
     }
   }
 }

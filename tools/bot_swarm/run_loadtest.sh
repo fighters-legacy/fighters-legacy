@@ -64,6 +64,13 @@ TEST_SPAWN_AI="${FL_TEST_SPAWN_AI:-0}"
 TEST_SPAWN_SPREAD_KM="${FL_TEST_SPAWN_SPREAD_KM:-50}"
 SNAPSHOT_BUDGET="${FL_SNAPSHOT_BUDGET:-}"
 
+# #580 knobs: FL_TEST_SPAWN_MIX = weighted controller mix for the pre-spawned entities
+# ("loiter:70,pursuit:20,patrol:10"); FL_TEST_PROJECTILE_RATE + FL_TEST_PROJECTILE_TTL_S =
+# projectile spawn/reap churn. All default off so a normal run is byte-identical to before.
+TEST_SPAWN_MIX="${FL_TEST_SPAWN_MIX:-}"
+TEST_PROJECTILE_RATE="${FL_TEST_PROJECTILE_RATE:-}"
+TEST_PROJECTILE_TTL_S="${FL_TEST_PROJECTILE_TTL_S:-3.0}"
+
 # FL_LOADTEST_GOVERNOR=1 flips the graceful tick-overrun governor (#514) ON — used by the synthetic
 # overrun profile (#574) to validate that the governor sheds under load. Default OFF, so the raw
 # capacity gate still measures un-shed sim/bandwidth against the committed baseline.
@@ -97,6 +104,14 @@ EOF
 if [[ -n "$SNAPSHOT_BUDGET" ]]; then
     echo "snapshot_budget_bytes = $SNAPSHOT_BUDGET" >>"$CONFIG"
 fi
+# #580: only emit the mix/churn keys when requested (default runs stay byte-identical).
+if [[ -n "$TEST_SPAWN_MIX" ]]; then
+    echo "test_spawn_ai_mix = \"$TEST_SPAWN_MIX\"" >>"$CONFIG"
+fi
+if [[ -n "$TEST_PROJECTILE_RATE" ]]; then
+    echo "test_projectile_rate = $TEST_PROJECTILE_RATE" >>"$CONFIG"
+    echo "test_projectile_ttl_s = $TEST_PROJECTILE_TTL_S" >>"$CONFIG"
+fi
 cat >>"$CONFIG" <<EOF
 
 [metrics]
@@ -111,7 +126,8 @@ if [[ -n "${FL_SIM_WORKER_THREADS:-}" ]]; then
 fi
 
 echo "=== bot_swarm load test: $CLIENTS clients, pattern=$PATTERN, ${DURATION}s, port $PORT" \
-     "(test_spawn_ai=$TEST_SPAWN_AI sim_workers=${FL_SIM_WORKER_THREADS:-default} governor=$GOVERNOR_ENABLED) ==="
+     "(test_spawn_ai=$TEST_SPAWN_AI mix=${TEST_SPAWN_MIX:-loiter} churn=${TEST_PROJECTILE_RATE:-0}/s" \
+     "sim_workers=${FL_SIM_WORKER_THREADS:-default} governor=$GOVERNOR_ENABLED) ==="
 # --transport enet: bot_swarm is the enet6 regression instrument (#507/#519); the server under test
 # must speak enet6 to accept it, regardless of the [network].transport default.
 FL_CONFIG="$CONFIG" "$FLSERVER" "$PORT" "$MAX_PEERS" --bind 127.0.0.1 --transport enet \

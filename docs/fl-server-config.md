@@ -91,6 +91,9 @@ time_scale         = 10.0        # game seconds per real second; 10 = full day/n
 # test_spawn_ai_count     = 0        # pre-spawn N server-side AI entities at startup; [0, 1000000]; restart
 # test_spawn_spread_km    = 50.0     # phyllotaxis spread radius (km); [0, 100000]; restart
 # test_spawn_agl_m        = 500.0    # spawn/loiter altitude above origin ground (m); [0, 50000]; restart
+# test_spawn_ai_mix       = ""       # weighted controller mix, e.g. "loiter:60,pursuit:25,patrol:15"; restart (#580)
+# test_projectile_rate    = 0.0      # short-lived entities spawned per second (churn); [0, 100000]; restart (#580)
+# test_projectile_ttl_s   = 3.0      # churned-entity lifetime (s); [0.05, 600]; restart (#580)
 
 [ai]
 difficulty_floor = "recruit"
@@ -536,6 +539,27 @@ many real clients — see [entity-scale-characterization.md](entity-scale-charac
 [load-testing.md](load-testing.md). The server *accepting* a large count does **not** mean it *serves*
 that many players at rate. Leave at `0` for normal operation. Out-of-range values are rejected with a
 Warn and the default is used. **Requires restart** (entities are spawned before the sim loop starts).
+
+### `test_spawn_ai_mix` / `test_projectile_rate` / `test_projectile_ttl_s`
+
+| Key | Type | Default | Range |
+|---|---|---|---|
+| `test_spawn_ai_mix` | string | `""` | behaviors `loiter` \| `pursuit` \| `patrol` |
+| `test_projectile_rate` | float | `0.0` | `[0, 100000]` |
+| `test_projectile_ttl_s` | float | `3.0` | `[0.05, 600]` |
+
+**Testing affordances (#580), extending the load-spawn above.** `test_spawn_ai_mix` assigns the
+pre-spawned entities a weighted controller mix instead of all-loiter, e.g.
+`"loiter:60,pursuit:25,patrol:15"` (deterministic per-index assignment, no RNG). Per-tick AI cost
+by behavior: `loiter` = pure guidance math (the #573 baseline); `pursuit` = `EntityManager::get()`
+on a moving target; `patrol` = a `StateMachineController` whose `AnyEntityWithinRange` transitions
+run `SpatialIndex::queryRadius()` every tick (the expensive AI path, and the one the overrun
+governor's AI stride decimates). An invalid spec logs a Warn and falls back to all-loiter.
+
+`test_projectile_rate > 0` enables the projectile-churn generator: that many short-lived entities
+are spawned per second and each killed after `test_projectile_ttl_s` — sustained spawn+reap traffic
+through the `EntityPool` free-list, the O(liveCount) `forEach`, and the `SnapshotDespawn` TLV path.
+Steady-state extra population ≈ `rate × ttl`. Both **require restart**.
 
 ### `overrun_governor_enabled` / `overrun_high_watermark` / `overrun_low_watermark` / `overrun_min_snapshot_hz` / `overrun_max_ai_stride` / `overrun_budget_floor_bytes` / `overrun_min_interest_fraction`
 
