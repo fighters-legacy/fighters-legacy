@@ -517,6 +517,12 @@ int main(int argc, char** argv) {
     // Peer spawn positions are set separately via setSpawnPoints() above.
     primeSpawnHeight(0.0, 0.0); // no-op if already Ready (default-spawn path primed it above)
     broadcaster.setGroundElevation(static_cast<float>(terrainStreamer.heightAt(glm::dvec3{0.0, 0.0, 0.0})));
+    if (!cfg.trace.inputTraceDir.empty()) {
+        broadcaster.setInputTraceDir(cfg.trace.inputTraceDir);
+        char buf[256];
+        std::snprintf(buf, sizeof(buf), "input tracing enabled -> %s", cfg.trace.inputTraceDir.c_str());
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
     if (!cfg.banlistPath.empty()) {
         auto banned = fl::loadIpListFile(cfg.banlistPath, log);
         char buf[128];
@@ -606,6 +612,7 @@ int main(int argc, char** argv) {
     adminCtx.env.logger = log;
     adminCtx.env.configPath = &configPath;
     adminCtx.env.quitFlag = &g_quit;
+    adminCtx.env.traceDir = cfg.trace.inputTraceDir;
     adminCtx.env.loadAIScript = [&aiScriptCache](std::string_view name) -> std::pair<std::string, std::string> {
         auto it = aiScriptCache.find(std::string(name));
         return (it != aiScriptCache.end()) ? it->second : std::pair<std::string, std::string>{};

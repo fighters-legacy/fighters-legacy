@@ -83,7 +83,8 @@ def test_assert_flags_tick_ms_only_when_strict():
 
 # ---- evaluate_report -----------------------------------------------------------------------------
 def _report(kbs_max=66.0, tick_hz_min=60.0, tick_p99=10.0, connected=64, requested=64,
-            disconnected=0, with_server=True, rss_kb=200000, rss_startup_kb=200000):
+            disconnected=0, with_server=True, rss_kb=200000, rss_startup_kb=200000,
+            load_factor=1.0, dropped_ticks=0):
     r = {
         "clients_requested": requested,
         "clients_connected": connected,
@@ -92,7 +93,8 @@ def _report(kbs_max=66.0, tick_hz_min=60.0, tick_p99=10.0, connected=64, request
         "observed_server_tick_hz": {"min": tick_hz_min},
     }
     if with_server:
-        r["server_tick"] = {"tick_ms": {"p99": tick_p99}, "rss_kb": rss_kb, "rss_startup_kb": rss_startup_kb}
+        r["server_tick"] = {"tick_ms": {"p99": tick_p99}, "rss_kb": rss_kb, "rss_startup_kb": rss_startup_kb,
+                            "load_factor": load_factor, "dropped_ticks": dropped_ticks}
     return r
 
 
@@ -183,6 +185,70 @@ def test_compare_baseline_boundary():
 
 def test_compare_baseline_improvement_never_regresses():
     assert not sg.compare_baseline({"downstream_kbs_per_client": {"mean": 50.0}}, 100.0, 10)["regressed"]
+
+
+# ---- overrun governor gate (#574) ----------------------------------------------------------------
+def test_assert_flags_emits_governor_asserts_when_enabled():
+    prof = dict(sg.PROFILE_DEFAULTS)
+    prof.update(assert_max_load_factor=0.99, assert_max_dropped_ticks=0)
+    flags = sg.assert_flags(prof, strict=False)
+    assert "--assert-max-load-factor" in flags
+    assert flags[flags.index("--assert-max-load-factor") + 1] == "0.99"
+    assert "--assert-max-dropped-ticks" in flags
+    assert flags[flags.index("--assert-max-dropped-ticks") + 1] == "0"
+
+
+def test_assert_flags_omits_governor_asserts_when_negative():
+    # Negative sentinel = disabled (0 is a real value for both, so it must NOT be the off-switch).
+    prof = dict(sg.PROFILE_DEFAULTS)  # defaults are -1.0 / -1
+    assert "--assert-max-load-factor" not in sg.assert_flags(prof, strict=False)
+    assert "--assert-max-dropped-ticks" not in sg.assert_flags(prof, strict=False)
+
+
+def test_evaluate_governor_engaged_pass_and_never_engaged_fail():
+    prof = _profile(assert_max_load_factor=0.99, assert_max_dropped_ticks=0)
+    # Governor shed under load -> load_factor < 1, no drops -> pass.
+    assert sg.evaluate_report(_report(load_factor=0.70, dropped_ticks=0), prof, strict=True)["passed"]
+    # Governor never engaged -> load_factor stayed 1.0 -> fail.
+    ev = sg.evaluate_report(_report(load_factor=1.0), prof, strict=True)
+    assert not ev["passed"]
+    check = next(c for c in ev["checks"] if c["name"] == "server_tick.load_factor")
+    assert not check["ok"]
+
+
+def test_evaluate_governor_dropped_ticks_and_missing_server():
+    prof = _profile(assert_max_load_factor=0.99, assert_max_dropped_ticks=0)
+    # Sim spiralled and dropped ticks -> fail.
+    ev = sg.evaluate_report(_report(load_factor=0.70, dropped_ticks=5), prof, strict=True)
+    assert not ev["passed"]
+    assert not next(c for c in ev["checks"] if c["name"] == "server_tick.dropped_ticks")["ok"]
+    # Assert enabled but no server block -> fail (cannot evaluate).
+    ev2 = sg.evaluate_report(_report(with_server=False), prof, strict=True)
+    assert not ev2["passed"]
+
+
+def test_expand_runs_sets_governor_env():
+    prof = dict(sg.PROFILE_DEFAULTS)
+    prof.update(patterns=["weave"], entity_spawn_counts=[5000], sim_worker_threads_sweep=[1], governor=True)
+    runs = sg.expand_runs(prof)
+    assert len(runs) == 1
+    assert runs[0]["env"]["FL_LOADTEST_GOVERNOR"] == "1"
+    assert runs[0]["env"]["FL_TEST_SPAWN_AI"] == "5000"
+    assert runs[0]["env"]["FL_SIM_WORKER_THREADS"] == "1"
+    assert runs[0]["flags"] == ["--assert-min-entities", "5000"]
+
+
+def test_committed_overrun_profile_loads_with_governor_on():
+    # The shipped scale-gate.json overrun profile must carry the governor + gate values (#574).
+    cfg = sg.load_config(sg.DEFAULT_CONFIG)
+    prof = sg.load_profile(cfg, "overrun")
+    assert prof["governor"] is True
+    assert prof["baselined"] is False
+    assert prof["assert_max_load_factor"] == 0.99
+    # A small dropped-ticks allowance absorbs the startup-spawn transient; a spiral produces far more.
+    assert prof["assert_max_dropped_ticks"] == 100
+    assert prof["entity_spawn_counts"] == [5000]
+    assert prof["sim_worker_threads_sweep"] == [1]
 
 
 # ---- expand_runs (entity-scale sweep, #573) ------------------------------------------------------

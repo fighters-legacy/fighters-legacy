@@ -7,8 +7,8 @@
 
 namespace fl {
 
-BotClient::BotClient(uint32_t index, const std::string& patternName, int rateHz)
-    : m_index(index), m_rateHz(rateHz), m_pattern(makePattern(patternName, index + 1u)) {}
+BotClient::BotClient(uint32_t index, std::unique_ptr<IFlightPattern> pattern, int rateHz)
+    : m_index(index), m_rateHz(rateHz), m_pattern(std::move(pattern)) {}
 
 BotClient::~BotClient() = default;
 

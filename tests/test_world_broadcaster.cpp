@@ -11,6 +11,7 @@
 #include "job/JobSystem.h"
 #include "net/BitStream.h"
 #include "net/GameProtocol.h"
+#include "net/InputTraceReader.h"
 #include "net/SnapshotCodec.h"
 #include "net/WireCodec.h"
 #include "net/WorldBroadcaster.h"
@@ -26,6 +27,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <string>
@@ -7106,4 +7110,101 @@ TEST_CASE("WorldBroadcaster: NaN/Inf client input is sanitized, not propagated",
 
     // Stepping assembles a snapshot (the float->uint8 telemetry cast). Sanitized input keeps it UB-free.
     REQUIRE_NOTHROW(broadcaster.onTick(1.0 / 60.0, 1u));
+}
+
+// ---------------------------------------------------------------------------
+// Server-side input tracing (#560)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: input tracing records accepted inputs only", "[world_broadcaster][trace]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "fl_wb_trace_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+
+    broadcaster.setInputTraceDir(dir.string());
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 5u); // establish m_currentTick = 5 for the recorded serverTick
+
+    // Two accepted inputs bracket a stale (non-newer seq) and a version-mismatch input, both rejected
+    // before the trace-record write — so only the two accepted samples land in the trace.
+    fl::MsgClientInput a{};
+    a.seqNum = 1;
+    a.tickIndex = 5;
+    a.throttle = 0.5f;
+    a.elevator = 0.25f;
+    a.buttons = 0x01;
+    broadcaster.onReceive(0u, &a, sizeof(a));
+
+    fl::MsgClientInput stale{}; // seqNum not newer -> discarded by the staleness guard
+    stale.seqNum = 1;
+    stale.tickIndex = 5;
+    stale.throttle = 0.9f;
+    broadcaster.onReceive(0u, &stale, sizeof(stale));
+
+    fl::MsgClientInput bad{}; // protocol mismatch -> discarded
+    bad.seqNum = 2;
+    bad.protocolVersion = 999;
+    bad.throttle = 0.9f;
+    broadcaster.onReceive(0u, &bad, sizeof(bad));
+
+    fl::MsgClientInput b{};
+    b.seqNum = 3;
+    b.tickIndex = 5;
+    b.throttle = 1.0f;
+    b.buttons = 0x02;
+    broadcaster.onReceive(0u, &b, sizeof(b));
+
+    broadcaster.onDisconnect(0u); // flushes + closes the per-peer trace file
+
+    // Exactly one trace file was produced; parse it and confirm only the accepted inputs are present.
+    // (First-entry iterator idiom rather than a range-for with an unconditional break, which MSVC
+    // flags as C4702 unreachable-code — the loop continuation can never be reached.)
+    fs::directory_iterator dirIt(dir);
+    REQUIRE(dirIt != fs::directory_iterator{});
+    const fs::path tracePath = dirIt->path();
+    REQUIRE_FALSE(tracePath.empty());
+    std::ifstream f(tracePath, std::ios::binary);
+    REQUIRE(f.good());
+    std::vector<uint8_t> buf((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    fl::InputTrace tr;
+    std::string err;
+    REQUIRE(fl::parseInputTrace(buf.data(), buf.size(), tr, err));
+    REQUIRE(tr.records.size() == 2u);
+    CHECK(tr.records[0].serverTick == 5u);
+    CHECK(tr.records[0].throttle == Catch::Approx(0.5f));
+    CHECK(tr.records[0].elevator == Catch::Approx(0.25f));
+    CHECK(tr.records[0].buttons == 0x01u);
+    CHECK(tr.records[1].throttle == Catch::Approx(1.0f));
+    CHECK(tr.records[1].buttons == 0x02u);
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("WorldBroadcaster: tracing disabled writes nothing", "[world_broadcaster][trace]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "fl_wb_trace_off_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+
+    // Never call setInputTraceDir: tracing is off by default.
+    broadcaster.onConnect(0u);
+    ackTick(broadcaster, 0u, 0u, 1u);
+    broadcaster.onDisconnect(0u);
+
+    CHECK_FALSE(fs::exists(dir)); // no directory created, no files written
 }

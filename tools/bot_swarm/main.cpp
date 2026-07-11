@@ -73,7 +73,9 @@ void printHelp() {
                 "  --rate HZ              MsgClientInput send rate per client (default: 60)\n"
                 "  --ramp-ms MS           Delay between successive connects (default: 20)\n"
                 "  --threads N            Worker threads (default: auto)\n"
-                "  --pattern NAME         weave|level|aggressive|idle|random (default: weave)\n"
+                "  --pattern NAME         weave|level|aggressive|idle|random|trace:<file> (default: weave)\n"
+                "  --pattern-mix SPEC     Weighted heterogeneous swarm, e.g. \"weave:80,aggressive:20\"\n"
+                "                         (supersedes --pattern; deterministic per-client assignment)\n"
                 "  --json PATH            Write a JSON report to PATH\n"
                 "  --server-metrics PATH  Read fl-server --metrics-json file; embed authoritative server_tick block\n"
                 "  --assert-min-tick-hz X Exit nonzero if observed server tick-Hz min < X\n"
@@ -81,6 +83,8 @@ void printHelp() {
                 "  --assert-max-tick-ms X Exit nonzero if authoritative server tick p99 (ms) > X\n"
                 "  --assert-min-entities N Exit nonzero if authoritative server_tick.entities < N\n"
                 "  --assert-max-rss-growth-kb N  Exit nonzero if server RSS growth (rss_kb - rss_startup_kb) > N\n"
+                "  --assert-max-load-factor X  Exit nonzero if server_tick.load_factor > X (governor engaged? <0=off)\n"
+                "  --assert-max-dropped-ticks N  Exit nonzero if server_tick.dropped_ticks > N (<0=off)\n"
                 "  --help, --version\n"
                 "\n"
                 "Environment:\n"
@@ -108,12 +112,14 @@ void raiseFdLimit(int clients) {
 #endif
 }
 
-void runWorker(int threadIdx, int startIdx, int count, const SwarmConfig cfg, std::string host) {
+void runWorker(int threadIdx, int startIdx, int count, const SwarmConfig cfg, std::string host, SwarmPatternPlan plan) {
     using namespace std::chrono;
     std::vector<std::unique_ptr<BotClient>> bots;
     bots.reserve(static_cast<size_t>(count));
-    for (int i = 0; i < count; ++i)
-        bots.push_back(std::make_unique<BotClient>(static_cast<uint32_t>(startIdx + i), cfg.pattern, cfg.rateHz));
+    for (int i = 0; i < count; ++i) {
+        const auto idx = static_cast<uint32_t>(startIdx + i);
+        bots.push_back(std::make_unique<BotClient>(idx, plan.make(idx), cfg.rateHz));
+    }
 
     // ---- Ramp connect ----
     for (int i = 0; i < count && !g_quit; ++i) {
@@ -258,8 +264,38 @@ int main(int argc, char** argv) {
     timeBeginPeriod(1);
 #endif
 
+    // Resolve the flight pattern once for the whole swarm: a shared trace, a weighted mix, or a
+    // single built-in. A trace file is loaded (and shared read-only) here so N clients don't each
+    // re-read it. The CLI already validated the mix spec / pattern shape.
+    SwarmPatternPlan plan;
+    plan.totalClients = cfg.clients;
+    if (!cfg.patternMix.empty()) {
+        std::string err;
+        if (!parsePatternMix(cfg.patternMix, plan.mix, err)) {
+            std::printf("[ERROR] --pattern-mix: %s\n", err.c_str());
+            return 2;
+        }
+    } else if (isTracePattern(cfg.pattern)) {
+        const std::string path(tracePatternPath(cfg.pattern));
+        InputTrace tr;
+        std::string err;
+        if (!loadInputTraceFile(path, tr, err)) {
+            std::printf("[ERROR] %s\n", err.c_str());
+            return 2;
+        }
+        if (tr.records.empty()) {
+            std::printf("[ERROR] trace %s has no input records\n", path.c_str());
+            return 2;
+        }
+        std::printf("[INFO ] loaded trace %s: %zu records @ %u Hz\n", path.c_str(), tr.records.size(), tr.tickRate);
+        plan.trace = std::make_shared<const InputTrace>(std::move(tr));
+    } else {
+        plan.single = cfg.pattern;
+    }
+
+    const std::string patternLabel = cfg.patternMix.empty() ? cfg.pattern : cfg.patternMix;
     std::printf("[INFO ] bot_swarm: %d clients, %d threads, pattern=%s, rate=%dHz, duration=%ds -> %s:%u\n",
-                cfg.clients, threads, cfg.pattern.c_str(), cfg.rateHz, cfg.durationS, cfg.host.c_str(), cfg.port);
+                cfg.clients, threads, patternLabel.c_str(), cfg.rateHz, cfg.durationS, cfg.host.c_str(), cfg.port);
 
     g_metrics.assign(static_cast<size_t>(cfg.clients), ClientMetrics{});
     g_loopDt.assign(static_cast<size_t>(threads), {});
@@ -276,7 +312,7 @@ int main(int argc, char** argv) {
         const int count = base + (t < rem ? 1 : 0);
         const int startIdx = next;
         next += count;
-        workers.emplace_back(runWorker, t, startIdx, count, cfg, cfg.host);
+        workers.emplace_back(runWorker, t, startIdx, count, cfg, cfg.host, plan);
     }
     for (auto& w : workers)
         w.join();

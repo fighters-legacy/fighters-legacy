@@ -61,6 +61,9 @@ if ($env:FL_LOADTEST_REPORT) {
 # Optional entity-scale knobs (#573), default off so a normal run is byte-identical to before.
 $TestSpawnAi = if ($env:FL_TEST_SPAWN_AI) { [int]$env:FL_TEST_SPAWN_AI } else { 0 }
 $TestSpawnSpreadKm = if ($env:FL_TEST_SPAWN_SPREAD_KM) { $env:FL_TEST_SPAWN_SPREAD_KM } else { "50" }
+# FL_LOADTEST_GOVERNOR=1 flips the graceful tick-overrun governor (#514) ON for the synthetic overrun
+# profile (#574). Default OFF, so the raw capacity gate still measures un-shed capacity.
+$GovernorEnabled = if ($env:FL_LOADTEST_GOVERNOR -eq "1") { "true" } else { "false" }
 
 # Single-quoted TOML literal strings so Windows backslashes in paths are not treated as escapes.
 $ConfigText = @"
@@ -78,9 +81,10 @@ max_connections_per_ip = 0
 
 [world]
 # The scale gate measures RAW sim/bandwidth capacity against the committed baseline, so the graceful
-# tick-overrun governor (#514) is disabled here — otherwise it would shed snapshot/AI work under load
-# and mask the very regressions the gate exists to catch. The governor defaults ON in production.
-overrun_governor_enabled = false
+# tick-overrun governor (#514) is disabled here by default — otherwise it would shed snapshot/AI work
+# under load and mask the very regressions the gate exists to catch. The synthetic-overrun profile
+# (#574) flips it on via FL_LOADTEST_GOVERNOR=1. Defaults ON in production.
+overrun_governor_enabled = $GovernorEnabled
 # Entity-scale load-spawn (#573). 0 = disabled (normal run).
 test_spawn_ai_count = $TestSpawnAi
 test_spawn_spread_km = $TestSpawnSpreadKm
@@ -103,7 +107,7 @@ $ConfigText | Set-Content -Path $Config -Encoding UTF8
 $SrvArgs = @("$Port", "$MaxPeers", "--bind", "127.0.0.1", "--transport", "enet")
 if ($env:FL_SIM_WORKER_THREADS) { $SrvArgs += @("--sim-worker-threads", "$($env:FL_SIM_WORKER_THREADS)") }
 
-Write-Host "=== bot_swarm load test: $Clients clients, pattern=$Pattern, ${Duration}s, port $Port (test_spawn_ai=$TestSpawnAi) ==="
+Write-Host "=== bot_swarm load test: $Clients clients, pattern=$Pattern, ${Duration}s, port $Port (test_spawn_ai=$TestSpawnAi governor=$GovernorEnabled) ==="
 $env:FL_CONFIG = $Config
 $SrvProc = Start-Process -FilePath $FlServer `
     -ArgumentList $SrvArgs `

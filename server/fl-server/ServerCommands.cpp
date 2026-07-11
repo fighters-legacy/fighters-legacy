@@ -866,6 +866,48 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                  return buf;
                              });
 
+    // trace_start / trace_stop -- server-side input tracing (#560). Toggles recording of every
+    // peer's accepted MsgClientInput to per-peer FLIT traces for bot_swarm `--pattern trace:` replay.
+    registry.registerCommand(
+        "trace_start", "trace_start [dir]  -- start recording peer inputs to FLIT traces (default: configured dir)",
+        [ctx](std::span<std::string_view> args) -> std::string {
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                return "trace_start: not available";
+            std::string dir;
+            if (!args.empty())
+                dir = std::string(args[0]);
+            else if (!ctx.env.traceDir.empty())
+                dir = ctx.env.traceDir;
+            else
+                dir = "traces";
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, dir]() {
+                ctx.sim.broadcaster->setInputTraceDir(dir);
+                char m[256];
+                std::snprintf(m, sizeof(m), "[admin] trace_start: recording peer inputs to %s", dir.c_str());
+                std::printf("%s\n", m);
+                if (ctx.rcon.shell)
+                    ctx.rcon.shell->print(m);
+                std::fflush(stdout);
+            });
+            char buf[256];
+            std::snprintf(buf, sizeof(buf), "trace_start: recording peer inputs to %s", dir.c_str());
+            return buf;
+        });
+
+    registry.registerCommand("trace_stop", "trace_stop  -- stop input tracing and close all trace files",
+                             [ctx](std::span<std::string_view>) -> std::string {
+                                 if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                                     return "trace_stop: not available";
+                                 ctx.sim.gameLoop->enqueueSimCallback([ctx]() {
+                                     ctx.sim.broadcaster->setInputTraceDir("");
+                                     std::printf("[admin] trace_stop: input tracing stopped\n");
+                                     if (ctx.rcon.shell)
+                                         ctx.rcon.shell->print("[admin] trace_stop: input tracing stopped");
+                                     std::fflush(stdout);
+                                 });
+                                 return "trace_stop: input tracing stopped";
+                             });
+
     // shutdown
     registry.registerCommand(
         "shutdown",

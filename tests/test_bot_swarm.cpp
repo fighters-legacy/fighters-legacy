@@ -74,6 +74,116 @@ TEST_CASE("random pattern is reproducible for a seed and stays in range", "[bot_
 }
 
 // ---------------------------------------------------------------------------
+// Trace replay + weighted pattern mix (#560)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("isTracePattern recognises trace:<file> specs", "[bot_swarm][pattern][trace]") {
+    CHECK(isTracePattern("trace:/tmp/a.flit"));
+    CHECK(tracePatternPath("trace:foo.flit") == "foo.flit");
+    CHECK_FALSE(isTracePattern("trace:")); // empty path
+    CHECK_FALSE(isTracePattern("weave"));
+    CHECK_FALSE(isKnownPattern("trace:foo.flit")); // trace is not a built-in registry name
+}
+
+TEST_CASE("TracePattern replays an in-memory trace, phases per client, and loops", "[bot_swarm][pattern][trace]") {
+    auto trace = std::make_shared<InputTrace>();
+    trace->tickRate = 60u;
+    for (uint32_t i = 0; i < 4; ++i)
+        trace->records.push_back(InputTraceRecord{i, 0.1f * static_cast<float>(i), 0.f, 0.f, 0.f, i});
+    TracePattern p(trace);
+
+    // t=0, client 0 -> record 0.
+    CHECK(p.sample(0.0, 0).throttle == Catch::Approx(0.0f));
+    CHECK(p.sample(0.0, 0).buttons == 0u);
+    // Each client offsets its cursor by its index: client 1 at t=0 -> record 1.
+    CHECK(p.sample(0.0, 1).throttle == Catch::Approx(0.1f));
+    CHECK(p.sample(0.0, 1).buttons == 1u);
+    // Wall time advances the cursor at tickRate: client 0 at t = 2/60 s -> record 2.
+    CHECK(p.sample(2.0 / 60.0, 0).throttle == Catch::Approx(0.2f));
+    // Playback loops: 4 records, so index 5 wraps to record 1.
+    CHECK(p.sample(0.0, 5).buttons == 1u);
+}
+
+TEST_CASE("TracePattern on an empty trace yields neutral input", "[bot_swarm][pattern][trace]") {
+    auto trace = std::make_shared<InputTrace>();
+    trace->tickRate = 60u;
+    TracePattern p(trace);
+    const BotControl c = p.sample(1.0, 3);
+    CHECK(c.throttle == Catch::Approx(0.0f));
+    CHECK(c.buttons == 0u);
+}
+
+TEST_CASE("parsePatternMix parses valid specs and rejects malformed ones", "[bot_swarm][pattern][mix]") {
+    std::vector<PatternMixEntry> mix;
+    std::string err;
+
+    REQUIRE(parsePatternMix("weave:80,aggressive:15,idle:5", mix, err));
+    REQUIRE(mix.size() == 3);
+    CHECK(mix[0].name == "weave");
+    CHECK(mix[0].weight == 80);
+    CHECK(mix[2].name == "idle");
+    CHECK(mix[2].weight == 5);
+
+    CHECK(parsePatternMix("weave:100", mix, err));
+
+    CHECK_FALSE(parsePatternMix("weave", mix, err));     // missing :weight
+    CHECK_FALSE(parsePatternMix("nope:50", mix, err));   // unknown pattern
+    CHECK_FALSE(parsePatternMix("weave:0", mix, err));   // non-positive weight
+    CHECK_FALSE(parsePatternMix("weave:-5", mix, err));  // negative weight
+    CHECK_FALSE(parsePatternMix("weave:80,", mix, err)); // trailing empty entry
+    CHECK_FALSE(parsePatternMix("weave:1.5", mix, err)); // non-integer weight
+    CHECK_FALSE(parsePatternMix("", mix, err));          // empty spec
+}
+
+TEST_CASE("assignMixPattern distributes clients deterministically by weight", "[bot_swarm][pattern][mix]") {
+    std::vector<PatternMixEntry> mix;
+    std::string err;
+    REQUIRE(parsePatternMix("weave:80,aggressive:20", mix, err));
+
+    const int n = 100;
+    int weave = 0, aggressive = 0;
+    for (int i = 0; i < n; ++i) {
+        const std::string& name = assignMixPattern(mix, static_cast<uint32_t>(i), n);
+        if (name == "weave")
+            ++weave;
+        else if (name == "aggressive")
+            ++aggressive;
+    }
+    CHECK(weave == 80);
+    CHECK(aggressive == 20);
+
+    // Deterministic: same index -> same assignment on a repeat pass.
+    CHECK(assignMixPattern(mix, 42u, n) == assignMixPattern(mix, 42u, n));
+}
+
+TEST_CASE("SwarmPatternPlan selects the active mode and builds patterns", "[bot_swarm][pattern][mix]") {
+    // Single built-in.
+    SwarmPatternPlan single;
+    single.single = "weave";
+    single.totalClients = 4;
+    CHECK(single.make(0) != nullptr);
+
+    // Weighted mix -> non-null instances across the swarm.
+    SwarmPatternPlan mixPlan;
+    mixPlan.totalClients = 10;
+    std::string err;
+    REQUIRE(parsePatternMix("weave:50,idle:50", mixPlan.mix, err));
+    for (uint32_t i = 0; i < 10; ++i)
+        CHECK(mixPlan.make(i) != nullptr);
+
+    // Trace -> TracePattern instances.
+    auto trace = std::make_shared<InputTrace>();
+    trace->tickRate = 60u;
+    trace->records.push_back(InputTraceRecord{0, 0.6f, 0.f, 0.f, 0.f, 0u});
+    SwarmPatternPlan tracePlan;
+    tracePlan.trace = trace;
+    tracePlan.totalClients = 2;
+    auto pat = tracePlan.make(0);
+    REQUIRE(pat != nullptr);
+    CHECK(pat->sample(0.0, 0).throttle == Catch::Approx(0.6f));
+}
+
+// ---------------------------------------------------------------------------
 // NetStats
 // ---------------------------------------------------------------------------
 
@@ -143,6 +253,22 @@ TEST_CASE("parseSwarmArgs rejects bad input", "[bot_swarm][config]") {
     CHECK(parse({"--version"}).status == ParseStatus::Version);
 }
 
+TEST_CASE("parseSwarmArgs accepts trace patterns and pattern mixes", "[bot_swarm][config][trace][mix]") {
+    // trace:<file> is a valid --pattern (the file is loaded at run time, not parse time).
+    const SwarmParseResult t = parse({"--pattern", "trace:session.flit"});
+    REQUIRE(t.status == ParseStatus::Ok);
+    CHECK(t.cfg.pattern == "trace:session.flit");
+
+    const SwarmParseResult m = parse({"--pattern-mix", "weave:80,aggressive:20"});
+    REQUIRE(m.status == ParseStatus::Ok);
+    CHECK(m.cfg.patternMix == "weave:80,aggressive:20");
+
+    // A malformed mix is rejected at parse time.
+    CHECK(parse({"--pattern-mix", "weave:80,nope:20"}).status == ParseStatus::Error);
+    CHECK(parse({"--pattern-mix", "garbage"}).status == ParseStatus::Error);
+    CHECK(parse({"--pattern-mix"}).status == ParseStatus::Error); // missing value
+}
+
 TEST_CASE("parseSwarmArgs parses assert thresholds with strtod", "[bot_swarm][config]") {
     const SwarmParseResult r = parse({"--assert-min-tick-hz", "58.5", "--assert-max-kbs", "150"});
     REQUIRE(r.status == ParseStatus::Ok);
@@ -176,6 +302,22 @@ TEST_CASE("parseSwarmArgs parses --assert-max-rss-growth-kb (#707)", "[bot_swarm
 
     const SwarmParseResult bad = parse({"--assert-max-rss-growth-kb", "-1"});
     CHECK(bad.status == ParseStatus::Error);
+}
+
+TEST_CASE("parseSwarmArgs parses the governor asserts with negative-disabled sentinels (#574)", "[bot_swarm][config]") {
+    // Defaults are disabled (negative), since 0 is a real value for both.
+    const SwarmParseResult d = parse({});
+    CHECK(d.cfg.assertMaxLoadFactor < 0.0);
+    CHECK(d.cfg.assertMaxDroppedTicks < 0);
+
+    const SwarmParseResult r = parse({"--assert-max-load-factor", "0.99", "--assert-max-dropped-ticks", "0"});
+    REQUIRE(r.status == ParseStatus::Ok);
+    CHECK(r.cfg.assertMaxLoadFactor == Catch::Approx(0.99));
+    CHECK(r.cfg.assertMaxDroppedTicks == 0); // 0 enables the gate (not the disabled sentinel)
+
+    // A missing value is still an error.
+    CHECK(parse({"--assert-max-load-factor"}).status == ParseStatus::Error);
+    CHECK(parse({"--assert-max-dropped-ticks"}).status == ParseStatus::Error);
 }
 
 // ---------------------------------------------------------------------------
@@ -361,4 +503,80 @@ TEST_CASE("assert-max-rss-growth-kb gates on the server RSS growth (#707)", "[bo
     SECTION("fails when the assert is enabled but no server metrics were provided") {
         CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed);
     }
+}
+
+TEST_CASE("assert-max-load-factor gates on the overrun governor engaging (#574)", "[bot_swarm][metrics][servertick]") {
+    SwarmConfig cfg;
+    cfg.clients = 1;
+    cfg.assertMaxLoadFactor = 0.99; // require the governor to have shed (load_factor < 1)
+    std::vector<ClientMetrics> clients;
+    clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
+
+    auto serverWithLoad = [](double lf) {
+        ServerTickReport s = makeServer(6.0);
+        s.loadFactor = lf;
+        return s;
+    };
+
+    SECTION("passes when the governor engaged and shed under load") {
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithLoad(0.70)).assertsPassed);
+    }
+    SECTION("fails when the governor never engaged (load_factor stayed 1.0)") {
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, serverWithLoad(1.0)).assertsPassed);
+    }
+    SECTION("fails when the assert is enabled but no server metrics were provided") {
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed);
+    }
+    SECTION("a threshold of exactly 0 is still enabled (negative-disabled sentinel, not zero)") {
+        cfg.assertMaxLoadFactor = 0.0;
+        // load_factor 0.0 <= 0.0 passes; any positive load_factor fails.
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithLoad(0.0)).assertsPassed);
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, serverWithLoad(0.5)).assertsPassed);
+    }
+    SECTION("a negative threshold disables the gate") {
+        cfg.assertMaxLoadFactor = -1.0;
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithLoad(1.0)).assertsPassed);
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed); // no server block, but gate off
+    }
+}
+
+TEST_CASE("assert-max-dropped-ticks gates on the graceful-not-spiral property (#574)",
+          "[bot_swarm][metrics][servertick]") {
+    SwarmConfig cfg;
+    cfg.clients = 1;
+    cfg.assertMaxDroppedTicks = 0; // graceful: the governor should keep GameLoop drops at zero
+    std::vector<ClientMetrics> clients;
+    clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
+
+    auto serverWithDrops = [](uint64_t n) {
+        ServerTickReport s = makeServer(6.0);
+        s.droppedTicks = n;
+        return s;
+    };
+
+    SECTION("passes when no ticks were dropped") {
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithDrops(0)).assertsPassed);
+    }
+    SECTION("fails when the sim spiralled and dropped ticks") {
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, serverWithDrops(42)).assertsPassed);
+    }
+    SECTION("fails when the assert is enabled but no server metrics were provided") {
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed);
+    }
+    SECTION("a negative threshold disables the gate") {
+        cfg.assertMaxDroppedTicks = -1;
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithDrops(99)).assertsPassed);
+    }
+}
+
+TEST_CASE("reportToJson emits the governor assert thresholds (#574)", "[bot_swarm][metrics][servertick]") {
+    SwarmConfig cfg;
+    cfg.clients = 1;
+    cfg.assertMaxLoadFactor = 0.99;
+    cfg.assertMaxDroppedTicks = 0;
+    std::vector<ClientMetrics> clients;
+    clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
+    const std::string json = reportToJson(buildReport(cfg, clients, 10.0, {}, 1, makeServer(6.0)));
+    CHECK(json.find("\"max_load_factor\"") != std::string::npos);
+    CHECK(json.find("\"max_dropped_ticks\"") != std::string::npos);
 }
