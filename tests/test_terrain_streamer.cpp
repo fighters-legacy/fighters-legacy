@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Tests for the cube-sphere quadtree TerrainStreamer (#472): SSE refinement, 2:1 edge
-// balance, LRU residency, radial dvec3 height/surface queries + transitional (x, z)
-// shims, deterministic global procedural tiles, and the async pack-tile layer path.
+// balance, LRU residency, radial dvec3 height/surface queries, deterministic global
+// procedural tiles, and the async pack-tile layer path (resolveTilePath, #473).
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -145,14 +145,14 @@ static std::vector<uint8_t> makeFlatPng16(int w, int h, uint16_t fill) {
 }
 
 // ===========================================================================
-// MockTerrainPack — IContentPack with configurable resolveTerrainChunk
+// MockTerrainPack — IContentPack with configurable resolveTilePath
 // ===========================================================================
 
 // Resolves tile paths from an in-memory map; everything else null-object.
-// The streamer probes with the transitional face-folded id (#472/#473):
-// resolveTerrainChunk("<terrainId>/f<face>", i, j, level).
+// The streamer probes with the explicit TileKey (#473):
+// resolveTilePath("<terrainId>", face, level, i, j, layer).
 struct MockTerrainPack : NullContentPack {
-    // key format: "<terrainId>:<i>:<j>:<level>"
+    // key format: "<terrainId>:<face>:<level>:<i>:<j>:<layer>" (layer 0=Height, 1=LandCover)
     std::map<std::string, std::string> tilePaths;
 
     const char* name() const override {
@@ -164,10 +164,11 @@ struct MockTerrainPack : NullContentPack {
     const char* id() const override {
         return "test:terrain";
     }
-    std::optional<std::string> resolveTerrainChunk(const char* terrainId, uint32_t i, uint32_t j,
-                                                   uint32_t level) const override {
-        const std::string key =
-            std::string(terrainId) + ":" + std::to_string(i) + ":" + std::to_string(j) + ":" + std::to_string(level);
+    std::optional<std::string> resolveTilePath(const char* terrainId, uint8_t face, uint8_t level, uint32_t i,
+                                               uint32_t j, TileLayer layer) const override {
+        const std::string key = std::string(terrainId) + ":" + std::to_string(static_cast<unsigned>(face)) + ":" +
+                                std::to_string(static_cast<unsigned>(level)) + ":" + std::to_string(i) + ":" +
+                                std::to_string(j) + ":" + std::to_string(static_cast<unsigned>(layer));
         auto it = tilePaths.find(key);
         if (it == tilePaths.end())
             return std::nullopt;
@@ -379,10 +380,10 @@ TEST_CASE("TerrainStreamer procedural tiles are seamless across sibling edges") 
     }
 }
 
-TEST_CASE("TerrainStreamer loads a pack tile PNG via the transitional path encoding") {
+TEST_CASE("TerrainStreamer loads a pack tile PNG via resolveTilePath") {
     auto pack = std::make_unique<MockTerrainPack>();
-    const std::string tilePath = "terrain/world/f2/lod0/chunk_0000_0000.png";
-    pack->tilePaths["world/f2:0:0:0"] = tilePath;
+    const std::string tilePath = "terrain/world/f2/l0/tile_0_0.png";
+    pack->tilePaths["world:2:0:0:0:0"] = tilePath;
 
     StreamerFixture fx(std::move(pack));
     // 33318 - 32768 = 550 m radial elevation, flat.
@@ -397,7 +398,7 @@ TEST_CASE("TerrainStreamer loads a pack tile PNG via the transitional path encod
 
 TEST_CASE("TerrainStreamer async read error falls back to procedural") {
     auto pack = std::make_unique<MockTerrainPack>();
-    pack->tilePaths["world/f2:0:0:0"] = "terrain/world/f2/lod0/chunk_0000_0000.png";
+    pack->tilePaths["world:2:0:0:0:0"] = "terrain/world/f2/l0/tile_0_0.png";
     // No file added to asyncFs -> service() fires the Error callback.
 
     StreamerFixture fx(std::move(pack));
@@ -411,8 +412,8 @@ TEST_CASE("TerrainStreamer async read error falls back to procedural") {
 
 TEST_CASE("TerrainStreamer wrong-size pack PNG falls back to procedural") {
     auto pack = std::make_unique<MockTerrainPack>();
-    const std::string tilePath = "terrain/world/f2/lod0/chunk_0000_0000.png";
-    pack->tilePaths["world/f2:0:0:0"] = tilePath;
+    const std::string tilePath = "terrain/world/f2/l0/tile_0_0.png";
+    pack->tilePaths["world:2:0:0:0:0"] = tilePath;
 
     StreamerFixture fx(std::move(pack));
     // Legacy 513x513 chunk-sized PNG: valid image, wrong tile dimensions.
@@ -428,10 +429,10 @@ TEST_CASE("TerrainStreamer wrong-size pack PNG falls back to procedural") {
 
 TEST_CASE("TerrainStreamer land-cover layer feeds surfaceAt") {
     auto pack = std::make_unique<MockTerrainPack>();
-    const std::string heightPath = "terrain/world/f2/lod0/chunk_0000_0000.png";
-    const std::string coverPath = "terrain/world/f2-cover/lod0/chunk_0000_0000.png";
-    pack->tilePaths["world/f2:0:0:0"] = heightPath;
-    pack->tilePaths["world/f2-cover:0:0:0"] = coverPath;
+    const std::string heightPath = "terrain/world/f2/l0/tile_0_0.png";
+    const std::string coverPath = "terrain/world/f2/l0/tile_0_0_lc.png";
+    pack->tilePaths["world:2:0:0:0:0"] = heightPath; // Height layer
+    pack->tilePaths["world:2:0:0:0:1"] = coverPath;  // LandCover layer
 
     StreamerFixture fx(std::move(pack));
     fx.asyncFs.addFile(heightPath, makeFlatPng16(kTileHeightmapSize, kTileHeightmapSize, 33318));
@@ -488,8 +489,9 @@ TEST_CASE("TerrainStreamer eviction cancels an in-flight pack read without crash
     const std::string tilePath = "terrain/pack/pole_tile.png";
 
     auto pack = std::make_unique<MockTerrainPack>();
-    pack->tilePaths["world/f" + std::to_string(packKey.face) + ":" + std::to_string(packKey.i) + ":" +
-                    std::to_string(packKey.j) + ":2"] = tilePath;
+    // key: terrainId:face:level:i:j:layer (level 2, Height layer 0)
+    pack->tilePaths["world:" + std::to_string(static_cast<unsigned>(packKey.face)) + ":2:" + std::to_string(packKey.i) +
+                    ":" + std::to_string(packKey.j) + ":0"] = tilePath;
     StreamerFixture fx(std::move(pack));
     fx.asyncFs.addFile(tilePath, makeFlatPng16(kTileHeightmapSize, kTileHeightmapSize, 33318));
 

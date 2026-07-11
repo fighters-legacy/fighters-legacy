@@ -46,8 +46,8 @@ class AssetManager {
 
     // Walks the priority stack; returns the resolved path from the first pack
     // that provides the given chunk, or nullopt if none do.
-    std::optional<std::string> resolveTerrainChunk(const char* terrainId, uint32_t chunkX, uint32_t chunkY,
-                                                   uint32_t lod);
+    std::optional<std::string> resolveTilePath(const char* terrainId, uint8_t face, uint8_t level, uint32_t i,
+                                               uint32_t j, TileLayer layer);
 
     // Returns the root directory of the first content pack that owns the named asset.
     // Used by LuaController to configure require() to the correct pack ai/ directory.

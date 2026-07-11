@@ -32,9 +32,10 @@ namespace fl {
 // CubeSphere::neighbor) bounds the level delta across shared edges; residual hairline
 // cracks are hidden by mesh skirts (buildTileMeshGlb skirtDepthM).
 //
-// Tile content: content packs are probed first via the transitional path encoding
-// resolveTerrainChunk("<terrainId>/f<face>", i, j, level) (replaced by resolveTilePath
-// in #473); misses fall back to generateProceduralTile — deterministic global-sphere
+// Tile content: content packs are probed first via
+// AssetManager::resolveTilePath(terrainId, face, level, i, j, layer) (#473 — resolves
+// terrain/<id>/f<face>/l<level>/tile_<i>_<j>{.png,_lc.png}); misses fall back to
+// generateProceduralTile — deterministic global-sphere
 // FBM, so a headless server and every client generate bit-identical terrain with no
 // wire transfer. Async reads are tracked per {TileKey, layer} (height + optional
 // land-cover); a tile finalizes when its required layers arrive.

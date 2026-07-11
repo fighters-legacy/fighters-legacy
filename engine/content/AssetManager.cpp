@@ -129,10 +129,10 @@ std::optional<std::string> AssetManager::loadConfig(const char* name) {
     return std::nullopt;
 }
 
-std::optional<std::string> AssetManager::resolveTerrainChunk(const char* terrainId, uint32_t chunkX, uint32_t chunkY,
-                                                             uint32_t lod) {
+std::optional<std::string> AssetManager::resolveTilePath(const char* terrainId, uint8_t face, uint8_t level, uint32_t i,
+                                                         uint32_t j, TileLayer layer) {
     for (auto& pack : m_packs) {
-        if (auto result = pack->resolveTerrainChunk(terrainId, chunkX, chunkY, lod))
+        if (auto result = pack->resolveTilePath(terrainId, face, level, i, j, layer))
             return result;
     }
     return std::nullopt;

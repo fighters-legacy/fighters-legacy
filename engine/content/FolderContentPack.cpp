@@ -116,14 +116,23 @@ std::optional<std::string> FolderContentPack::loadConfig(const char* name) const
     return content;
 }
 
-std::optional<std::string> FolderContentPack::resolveTerrainChunk(const char* terrainId, uint32_t chunkX,
-                                                                  uint32_t chunkY, uint32_t lod) const {
-    auto pad4 = [](uint32_t v) -> std::string {
-        std::string s = std::to_string(v);
-        return s.size() < 4 ? std::string(4 - s.size(), '0') + s : s;
-    };
-    std::string path = m_modDir + "/terrain/" + terrainId + "/lod" + std::to_string(lod) + "/chunk_" + pad4(chunkX) +
-                       "_" + pad4(chunkY) + ".png";
+std::optional<std::string> FolderContentPack::resolveTilePath(const char* terrainId, uint8_t face, uint8_t level,
+                                                              uint32_t i, uint32_t j, TileLayer layer) const {
+    const char* suffix = ".png";
+    switch (layer) {
+    case TileLayer::Height:
+        suffix = ".png";
+        break;
+    case TileLayer::LandCover:
+        suffix = "_lc.png";
+        break;
+    case TileLayer::Satellite:
+        suffix = "_sat.ktx2";
+        break;
+    }
+    std::string path = m_modDir + "/terrain/" + terrainId + "/f" + std::to_string(static_cast<unsigned>(face)) + "/l" +
+                       std::to_string(static_cast<unsigned>(level)) + "/tile_" + std::to_string(i) + "_" +
+                       std::to_string(j) + suffix;
     if (!m_fs.fileExists(PathDomain::Assets, path.c_str()))
         return std::nullopt;
     return path;

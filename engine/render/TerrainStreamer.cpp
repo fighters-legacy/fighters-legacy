@@ -224,16 +224,13 @@ void TerrainStreamer::update(glm::dvec3 cameraWorldPos) {
 // ---------------------------------------------------------------------------
 
 void TerrainStreamer::loadTile(const TileKey& key, int& proceduralCount) {
-    // Transitional pack probe until #473's resolveTilePath: face folded into the
-    // terrain id, so packs may ship tiles at terrain/<id>/f<face>/lod<level>/
-    // chunk_<iiii>_<jjjj>.png (FolderContentPack zero-pads the coordinates to 4
-    // digits). Skipped entirely when no packs are loaded — the builtin-terrain
-    // common case — so the per-frame missing-tile sweep does no pack probing.
-    std::string faceId;
+    // Resolve the pack tile path for this TileKey (terrain/<id>/f<face>/l<level>/tile_<i>_<j>.png).
+    // Skipped entirely when no packs are loaded — the builtin-terrain common case — so the per-frame
+    // missing-tile sweep does no pack probing.
     std::optional<std::string> path;
     if (m_assets.hasPacks()) {
-        faceId = m_manifest.terrainId + "/f" + std::to_string(key.face);
-        path = m_assets.resolveTerrainChunk(faceId.c_str(), key.i, key.j, key.level);
+        path = m_assets.resolveTilePath(m_manifest.terrainId.c_str(), key.face, key.level, key.i, key.j,
+                                        fl::TileLayer::Height);
     }
     if (!path) {
         // Procedural fallback — rate-limited to avoid a first-frame hitch.
@@ -263,9 +260,9 @@ void TerrainStreamer::loadTile(const TileKey& key, int& proceduralCount) {
     }
     m_pendingByReadId[id] = PendingRead{key, TileLayer::Height};
 
-    // Optional land-cover layer, same transitional encoding with a -cover suffix.
-    const std::string coverId = faceId + "-cover";
-    auto coverPath = m_assets.resolveTerrainChunk(coverId.c_str(), key.i, key.j, key.level);
+    // Optional land-cover layer (terrain/<id>/f<face>/l<level>/tile_<i>_<j>_lc.png).
+    auto coverPath = m_assets.resolveTilePath(m_manifest.terrainId.c_str(), key.face, key.level, key.i, key.j,
+                                              fl::TileLayer::LandCover);
     if (coverPath) {
         const AsyncReadId cid = m_asyncFs.readFileAsync(PathDomain::Assets, coverPath->c_str());
         if (cid != 0) {

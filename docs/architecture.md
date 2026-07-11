@@ -673,7 +673,7 @@ Spherical-Earth physics and terrain curvature is the engine's only supported mod
 
 ### Terrain ID and overrides
 
-`"world"` is the canonical terrain ID. fl-base-pack provides global coverage at base priority. Theater content packs override individual chunks at higher mod priority via `IContentPack::resolveTerrainChunk(terrainId, chunkX, chunkY, lod)` — the engine walks the content stack and uses the first pack that resolves a given chunk.
+`"world"` is the canonical terrain ID. fl-base-pack provides global coverage at base priority. Theater content packs override individual tiles at higher mod priority via `IContentPack::resolveTilePath(terrainId, face, level, i, j, layer)` (#473) — the engine walks the content stack and uses the first pack that resolves a given cube-sphere tile.
 
 ### Theaters
 
