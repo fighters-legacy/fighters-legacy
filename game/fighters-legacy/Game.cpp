@@ -326,10 +326,11 @@ struct SessionContext {
     // Typed session failure, first-writer-wins (server thread + ClientNetEventHandler write;
     // LoadingScreen reads). Replaces the prior two atomic<const char*> + static-string signals.
     std::atomic<SessionFailure> sessionFailure{SessionFailure::None};
-    // True once the server's MsgConnectAck planet radius has been applied to the terrain
-    // streamer + camera this session (terrain streaming is gated on it — tiles bake the
-    // radius at generation time).
-    bool planetRadiusApplied{false};
+    // Set once per session at the first tick after MsgConnectAck (assignedEntityGen != 0):
+    // applies the server's planet radius to the terrain streamer + camera (terrain streaming
+    // is gated on it — tiles bake the radius at generation time) and wires ClientPrediction
+    // with the post-ack player idx/gen/radius (#755).
+    bool connectAckApplied{false};
 };
 
 struct GameImpl {
@@ -743,36 +744,11 @@ void Game::startGame() {
         fsd.assignedEntityIdx = &d.session.clientHandler->assignedEntityIdx;
         fsd.assignedEntityGen = &d.session.clientHandler->assignedEntityGen;
 
-        // Build the flight-model resolver: typeIndex → entity def (from content packs) →
-        // flightModelId → FlightModelData. Falls back to BuiltinFlightModel at any miss.
-        auto flightModelResolver = [&d](uint32_t typeIndex) -> std::shared_ptr<const fl::FlightModelData> {
-            const fl::EntityDef* def = d.services.entityRegistry.byIndex(typeIndex);
-            if (def && !def->id.empty()) {
-                if (auto raw = d.services.assets->loadEntityDef(def->id.c_str())) {
-                    try {
-                        const std::string_view src(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size());
-                        const fl::EntityDef fullDef = fl::parseEntityDef(src);
-                        if (!fullDef.flightModelId.empty()) {
-                            if (auto fm = d.services.assets->loadFlightModel(fullDef.flightModelId.c_str())) {
-                                const std::string_view fmSrc(reinterpret_cast<const char*>(fm->bytes.data()),
-                                                             fm->bytes.size());
-                                return std::make_shared<fl::FlightModelData>(fl::parseFlightModel(fmSrc));
-                            }
-                        }
-                    } catch (...) {
-                    }
-                }
-            }
-            return fl::BuiltinFlightModel::get();
-        };
-        auto heightQuery = [&d](double x, double z) -> float {
-            return d.services.terrainStreamer ? static_cast<float>(d.services.terrainStreamer->heightAt(x, z)) : 0.f;
-        };
-        d.services.prediction.init(d.services.userConfig->prediction(), std::move(flightModelResolver),
-                                   std::move(heightQuery), d.session.clientHandler->assignedEntityIdx,
-                                   d.session.clientHandler->assignedEntityGen,
-                                   d.session.clientHandler->planetRadiusKm());
-
+        // NOTE: ClientPrediction::init() is deliberately NOT called here. onConnect runs
+        // before clientNet->connect() below, so the player's entity idx/gen and the
+        // server's planet radius are still the pre-MsgConnectAck defaults (0/0/6371).
+        // Prediction is wired at the ConnectAck one-shot gate in the run loop instead
+        // (#755); reinitFlight only stores live pointers, so it can stay here.
         d.services.screenMgr->reinitFlight(std::move(fsd));
 
         const char* host = isMultiplayer ? d.services.connectHost.c_str() : "127.0.0.1";
@@ -835,7 +811,7 @@ void Game::stopGame() {
     d.session.discoveryListener.reset();
     d.session.inspector.reset();
     d.session.hapticController.reset();
-    d.session.planetRadiusApplied = false;
+    d.session.connectAckApplied = false;
     d.services.prediction.reset();
     d.services.renderBridge.reset();
     d.services.entityRegistry.clear();
@@ -933,13 +909,51 @@ void Game::run() {
         if (inSession) {
             d.services.p.asyncFilesystem->service();
             if (d.session.clientHandler && d.session.clientHandler->assignedEntityGen != 0) {
-                if (!d.session.planetRadiusApplied) {
+                if (!d.session.connectAckApplied) {
                     const double radiusM = static_cast<double>(d.session.clientHandler->planetRadiusKm()) * 1000.0;
                     d.services.terrainStreamer->setPlanetRadius(radiusM);
                     // Camera "up" = radial direction on the planet, so the horizon stays
                     // level far from the origin.
                     d.services.camInput.setPlanetRadius(radiusM);
-                    d.session.planetRadiusApplied = true;
+
+                    // Wire client-side prediction now that MsgConnectAck has populated the
+                    // player's entity idx/gen and the server's planet radius. Doing this in
+                    // onConnect (before connect()) captured the pre-ack defaults (0/0/6371),
+                    // leaving reconcile() a permanent no-op (#755). The resolver captures only
+                    // &d (session-lived services), so building it here is equivalent.
+                    auto flightModelResolver = [&d](uint32_t typeIndex) -> std::shared_ptr<const fl::FlightModelData> {
+                        const fl::EntityDef* def = d.services.entityRegistry.byIndex(typeIndex);
+                        if (def && !def->id.empty()) {
+                            if (auto raw = d.services.assets->loadEntityDef(def->id.c_str())) {
+                                try {
+                                    const std::string_view src(reinterpret_cast<const char*>(raw->bytes.data()),
+                                                               raw->bytes.size());
+                                    const fl::EntityDef fullDef = fl::parseEntityDef(src);
+                                    if (!fullDef.flightModelId.empty()) {
+                                        if (auto fm =
+                                                d.services.assets->loadFlightModel(fullDef.flightModelId.c_str())) {
+                                            const std::string_view fmSrc(
+                                                reinterpret_cast<const char*>(fm->bytes.data()), fm->bytes.size());
+                                            return std::make_shared<fl::FlightModelData>(fl::parseFlightModel(fmSrc));
+                                        }
+                                    }
+                                } catch (...) {
+                                }
+                            }
+                        }
+                        return fl::BuiltinFlightModel::get();
+                    };
+                    auto heightQuery = [&d](double x, double z) -> float {
+                        return d.services.terrainStreamer
+                                   ? static_cast<float>(d.services.terrainStreamer->heightAt(x, z))
+                                   : 0.f;
+                    };
+                    d.services.prediction.init(d.services.userConfig->prediction(), std::move(flightModelResolver),
+                                               std::move(heightQuery), d.session.clientHandler->assignedEntityIdx,
+                                               d.session.clientHandler->assignedEntityGen,
+                                               d.session.clientHandler->planetRadiusKm());
+
+                    d.session.connectAckApplied = true;
                 }
                 // Real screen height + FOV for the SSE refinement metric (window is resizable;
                 // fovY matches CameraController's 60 deg default).

@@ -28,6 +28,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **game**: Client-side prediction was inert in the wired-up game (#755). `ClientPrediction::init()` was called from the `onConnect` lambda before `clientNet->connect()`, so it captured the player's entity idx/gen and the planet radius as their pre-`MsgConnectAck` defaults (`0`/`0`/`6371`). Since a valid live entity always has `gen != 0`, `reconcile()` never matched the player's snapshot entry and returned early on every snapshot — the ownship was never predicted or reconciled, and the non-Earth gravity field was never built. Prediction is now wired at the same post-ConnectAck one-shot gate that applies the server planet radius to the terrain streamer and camera (`assignedEntityGen != 0`), so idx/gen/radius are read after the handshake
 - **ci**: release workflow now actually attaches the Windows/Linux/macOS binaries to the GitHub Release. The `Package` steps write `<artifact>.zip` at the workspace root, but `upload-artifact` globbed `dist/*.zip` (no match) under `if-no-files-found: ignore`, so every release since v0.2.x published with zero assets. Upload the root-level zip, harden `if-no-files-found: error` so a future path drift fails loudly, and flatten `download-artifact` into `dist/` (`merge-multiple: true`) so the release `files:`/attestation `subject-path:` globs resolve
 
 ## [0.3.0] - 2026-07-10
