@@ -41,19 +41,21 @@ fl::ControlInput LoiterController::sample(const fl::EntityState& state, uint64_t
 
     // Lookahead point along the tangent from current position.
     // Scale with the orbit radius so larger circles get a proportionally farther target.
-    // Y component is irrelevant to horizontalHeadingError (uses only X,Z).
+    // Y component is irrelevant to horizontalHeadingError (projected into the local tangent plane).
     double lookahead[3] = {
         state.transform.pos[0] + static_cast<double>(m_radiusM) * static_cast<double>(tanX),
         m_center.y,
         state.transform.pos[2] + static_cast<double>(m_radiusM) * static_cast<double>(tanZ),
     };
 
-    float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, lookahead);
+    float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, lookahead, m_planetRadiusM);
     ctrl.aileron = bankToTurnAileron(headErr);
     ctrl.rudder = coordinatedRudder(ctrl.aileron);
 
-    float altErr = m_altitudeM - static_cast<float>(state.transform.pos[1]);
-    float pitchErr = pitchErrorFromAlt(state.transform.quat, altErr);
+    // Radial (local-up) altitude error toward the orbit altitude.
+    const glm::dvec3 ownWorld(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]);
+    float altErr = m_altitudeM - static_cast<float>(fl::localAltitude(ownWorld, m_planetRadiusM));
+    float pitchErr = pitchErrorFromAlt(state.transform.quat, state.transform.pos, altErr, m_planetRadiusM);
     ctrl.elevator = elevatorFromPitchError(pitchErr);
 
     return ctrl;

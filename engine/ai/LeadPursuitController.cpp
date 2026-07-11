@@ -47,9 +47,12 @@ fl::ControlInput LeadPursuitController::sample(const fl::EntityState& state, uin
     }
 
     const double leadPos[3] = {leadPosX, leadPosY, leadPosZ};
-    float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, leadPos);
-    float altErr = static_cast<float>(leadPosY - state.transform.pos[1]);
-    float pitchErr = pitchErrorFromAlt(state.transform.quat, altErr);
+    const glm::dvec3 ownWorld(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]);
+    const glm::dvec3 leadWorld(leadPosX, leadPosY, leadPosZ);
+    float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, leadPos, m_planetRadiusM);
+    float altErr = static_cast<float>(fl::localAltitude(leadWorld, m_planetRadiusM) -
+                                      fl::localAltitude(ownWorld, m_planetRadiusM));
+    float pitchErr = pitchErrorFromAlt(state.transform.quat, state.transform.pos, altErr, m_planetRadiusM);
 
     ctrl.throttle = m_throttle;
     ctrl.afterburner = m_useAfterburner;

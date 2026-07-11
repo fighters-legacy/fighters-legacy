@@ -224,7 +224,7 @@ TEST_CASE("LuaController: guidance heading_error callable and returns number") {
 
 TEST_CASE("LuaController: guidance pitch_error_from_alt callable and returns number") {
     auto c = makeCtrl("function compute_control(s,t,dt)\n"
-                      "  local err = guidance.pitch_error_from_alt(s.quat, 100.0)\n"
+                      "  local err = guidance.pitch_error_from_alt(s.quat, s.pos, 100.0)\n"
                       "  return {throttle = (type(err)=='number') and 1.0 or 0.0}\n"
                       "end");
     REQUIRE(c->isValid());

@@ -32,7 +32,7 @@ fl::ControlInput BreakTurnController::sample(const fl::EntityState& state, uint6
             threat->transform.pos[2],
         };
         // Bank toward the threat to orient the lift vector for the maximum-G pull.
-        float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, threatPos);
+        float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, threatPos, m_planetRadiusM);
         ctrl.aileron = bankToTurnAileron(headErr);
         ctrl.rudder = coordinatedRudder(ctrl.aileron);
         ctrl.throttle = 1.f;

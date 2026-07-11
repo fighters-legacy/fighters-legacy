@@ -137,6 +137,7 @@ static bool readBoolField(lua_State* L, int idx, const char* field) {
 // guidance.* C closures (pure math, no C++ objects — longjmp-safe)
 // ---------------------------------------------------------------------------
 
+// heading_error(quat, own_pos, target_pos, [radius_m]) — radius defaults to Earth.
 static int guidanceHeadingError(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE); // quat
     luaL_checktype(L, 2, LUA_TTABLE); // own_pos
@@ -147,16 +148,22 @@ static int guidanceHeadingError(lua_State* L) {
     readQuat(L, 1, quat);
     readVec3(L, 2, own);
     readVec3(L, 3, tgt);
-    lua_pushnumber(L, static_cast<double>(fl::ai::horizontalHeadingError(quat, own, tgt)));
+    const double R = luaL_optnumber(L, 4, fl::kEarthRadiusM);
+    lua_pushnumber(L, static_cast<double>(fl::ai::horizontalHeadingError(quat, own, tgt, R)));
     return 1;
 }
 
+// pitch_error_from_alt(quat, own_pos, alt_error_m, [radius_m]) — radius defaults to Earth.
 static int guidancePitchErrorFromAlt(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE); // quat
-    float altError = static_cast<float>(luaL_checknumber(L, 2));
+    luaL_checktype(L, 2, LUA_TTABLE); // own_pos
+    float altError = static_cast<float>(luaL_checknumber(L, 3));
     float quat[4];
+    double own[3];
     readQuat(L, 1, quat);
-    lua_pushnumber(L, static_cast<double>(fl::ai::pitchErrorFromAlt(quat, altError)));
+    readVec3(L, 2, own);
+    const double R = luaL_optnumber(L, 4, fl::kEarthRadiusM);
+    lua_pushnumber(L, static_cast<double>(fl::ai::pitchErrorFromAlt(quat, own, altError, R)));
     return 1;
 }
 

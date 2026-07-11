@@ -24,9 +24,12 @@ fl::ControlInput PursuitController::sample(const fl::EntityState& state, uint64_
         target->transform.pos[2],
     };
 
-    float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, tgtPos);
-    float altErr = static_cast<float>(tgtPos[1] - state.transform.pos[1]);
-    float pitchErr = pitchErrorFromAlt(state.transform.quat, altErr);
+    const glm::dvec3 ownWorld(state.transform.pos[0], state.transform.pos[1], state.transform.pos[2]);
+    const glm::dvec3 tgtWorld(tgtPos[0], tgtPos[1], tgtPos[2]);
+    float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, tgtPos, m_planetRadiusM);
+    float altErr =
+        static_cast<float>(fl::localAltitude(tgtWorld, m_planetRadiusM) - fl::localAltitude(ownWorld, m_planetRadiusM));
+    float pitchErr = pitchErrorFromAlt(state.transform.quat, state.transform.pos, altErr, m_planetRadiusM);
 
     ctrl.throttle = m_throttle;
     ctrl.afterburner = m_useAfterburner;
