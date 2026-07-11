@@ -15,6 +15,17 @@ namespace fl {
 
 class IWindow; // configure() passes the window for packs that display a config UI
 
+// Per-tile data layer selecting which cube-sphere terrain file a pack resolves for a TileKey.
+// Path suffix convention (see FolderContentPack::resolveTilePath):
+//   Height    → terrain/<id>/f<face>/l<level>/tile_<i>_<j>.png       (16-bit grayscale heightmap)
+//   LandCover → terrain/<id>/f<face>/l<level>/tile_<i>_<j>_lc.png    (WorldCover class map)
+//   Satellite → terrain/<id>/f<face>/l<level>/tile_<i>_<j>_sat.ktx2  (orthophoto; path reserved)
+enum class TileLayer : uint8_t {
+    Height,
+    LandCover,
+    Satellite,
+};
+
 class IContentPack {
   public:
     virtual ~IContentPack() = default;
@@ -53,11 +64,11 @@ class IContentPack {
     // Used for data-driven config files (e.g. difficulty.toml) that mods can override.
     virtual std::optional<std::string> loadConfig(const char* name) const = 0;
 
-    // Returns the path (relative to PathDomain::Assets) of a terrain chunk PNG,
-    // or nullopt if this pack does not provide it. Synchronous; called before
-    // queuing an async read via IAsyncFilesystem.
-    virtual std::optional<std::string> resolveTerrainChunk(const char* terrainId, uint32_t chunkX, uint32_t chunkY,
-                                                           uint32_t lod) const = 0;
+    // Returns the path (relative to PathDomain::Assets) of the cube-sphere terrain tile file for
+    // TileKey{face, level, i, j} and the given data layer, or nullopt if this pack does not provide
+    // it. Synchronous; called before queuing an async read via IAsyncFilesystem.
+    virtual std::optional<std::string> resolveTilePath(const char* terrainId, uint8_t face, uint8_t level, uint32_t i,
+                                                       uint32_t j, TileLayer layer) const = 0;
 
     // Returns the trust tier assigned to this pack based on its manifest signature.
     // GPG verification is Phase 6 work; in Phase 2 only the enum value is stored.

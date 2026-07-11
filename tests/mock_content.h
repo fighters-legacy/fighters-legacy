@@ -4,7 +4,7 @@
 // Shared IContentPack test double. Kept out of mock_hal.h so HAL-only tests don't pull in
 // engine/content (IContentPack.h drags in content/AssetTypes.h). Naming convention (mirrors
 // mock_hal.h): Null* = no-op base. Derive and override only the loaders a test exercises
-// (e.g. loadAudio for an audio fixture, resolveTerrainChunk for a terrain fixture).
+// (e.g. loadAudio for an audio fixture, resolveTilePath for a terrain fixture).
 
 #include "content/IContentPack.h"
 
@@ -71,7 +71,8 @@ struct NullContentPack : IContentPack {
     std::optional<std::string> loadConfig(const char*) const override {
         return std::nullopt;
     }
-    std::optional<std::string> resolveTerrainChunk(const char*, uint32_t, uint32_t, uint32_t) const override {
+    std::optional<std::string> resolveTilePath(const char*, uint8_t, uint8_t, uint32_t, uint32_t,
+                                               TileLayer) const override {
         return std::nullopt;
     }
     TrustLevel getTrustLevel() const override {

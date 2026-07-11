@@ -223,14 +223,15 @@ struct MockContentPack : public NullContentPack {
         return it->second;
     }
 
-    std::map<std::string, std::string> chunkPaths; // key: "terrainId:x:y:lod"
+    std::map<std::string, std::string> tilePaths; // key: "terrainId:face:level:i:j:layer"
 
-    std::optional<std::string> resolveTerrainChunk(const char* terrainId, uint32_t chunkX, uint32_t chunkY,
-                                                   uint32_t lod) const override {
-        std::string key = std::string(terrainId) + ":" + std::to_string(chunkX) + ":" + std::to_string(chunkY) + ":" +
-                          std::to_string(lod);
-        auto it = chunkPaths.find(key);
-        if (it == chunkPaths.end())
+    std::optional<std::string> resolveTilePath(const char* terrainId, uint8_t face, uint8_t level, uint32_t i,
+                                               uint32_t j, TileLayer layer) const override {
+        std::string key = std::string(terrainId) + ":" + std::to_string(static_cast<unsigned>(face)) + ":" +
+                          std::to_string(static_cast<unsigned>(level)) + ":" + std::to_string(i) + ":" +
+                          std::to_string(j) + ":" + std::to_string(static_cast<unsigned>(layer));
+        auto it = tilePaths.find(key);
+        if (it == tilePaths.end())
             return std::nullopt;
         return it->second;
     }
@@ -403,9 +404,9 @@ static std::vector<std::unique_ptr<IContentPack>> makePacks(MockContentPack* pac
         std::optional<std::string> loadConfig(const char* n) const override {
             return p->loadConfig(n);
         }
-        std::optional<std::string> resolveTerrainChunk(const char* terrainId, uint32_t chunkX, uint32_t chunkY,
-                                                       uint32_t lod) const override {
-            return p->resolveTerrainChunk(terrainId, chunkX, chunkY, lod);
+        std::optional<std::string> resolveTilePath(const char* terrainId, uint8_t face, uint8_t level, uint32_t i,
+                                                   uint32_t j, TileLayer layer) const override {
+            return p->resolveTilePath(terrainId, face, level, i, j, layer);
         }
         TrustLevel getTrustLevel() const override {
             return p->getTrustLevel();
@@ -1473,65 +1474,81 @@ TEST_CASE("AssetManager::loadConfig returns higher-priority pack's config", "[co
 }
 
 // ---------------------------------------------------------------------------
-// FolderContentPack::resolveTerrainChunk
+// FolderContentPack::resolveTilePath
 // ---------------------------------------------------------------------------
 
-TEST_CASE("FolderContentPack::resolveTerrainChunk returns path when file present", "[content]") {
+TEST_CASE("FolderContentPack::resolveTilePath returns path when file present", "[content]") {
     MockFilesystem fs;
     MockLogger logger;
-    fs.addFile("mods/test-mod/terrain/world/lod0/chunk_0001_0002.png", "");
+    fs.addFile("mods/test-mod/terrain/world/f2/l1/tile_1_2.png", "");
 
     FolderContentPack pack(fs, logger, "mods/test-mod", makeTestManifest());
-    auto result = pack.resolveTerrainChunk("world", 1, 2, 0);
+    auto result = pack.resolveTilePath("world", 2, 1, 1, 2, TileLayer::Height);
 
     REQUIRE(result.has_value());
-    CHECK(*result == "mods/test-mod/terrain/world/lod0/chunk_0001_0002.png");
+    CHECK(*result == "mods/test-mod/terrain/world/f2/l1/tile_1_2.png");
 }
 
-TEST_CASE("FolderContentPack::resolveTerrainChunk returns nullopt when file absent", "[content]") {
+TEST_CASE("FolderContentPack::resolveTilePath land-cover and satellite layers use the right suffix", "[content]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("mods/test-mod/terrain/world/f0/l3/tile_4_5_lc.png", "");
+    fs.addFile("mods/test-mod/terrain/world/f0/l3/tile_4_5_sat.ktx2", "");
+
+    FolderContentPack pack(fs, logger, "mods/test-mod", makeTestManifest());
+    auto lc = pack.resolveTilePath("world", 0, 3, 4, 5, TileLayer::LandCover);
+    REQUIRE(lc.has_value());
+    CHECK(*lc == "mods/test-mod/terrain/world/f0/l3/tile_4_5_lc.png");
+    auto sat = pack.resolveTilePath("world", 0, 3, 4, 5, TileLayer::Satellite);
+    REQUIRE(sat.has_value());
+    CHECK(*sat == "mods/test-mod/terrain/world/f0/l3/tile_4_5_sat.ktx2");
+}
+
+TEST_CASE("FolderContentPack::resolveTilePath returns nullopt when file absent", "[content]") {
     MockFilesystem fs;
     MockLogger logger;
 
     FolderContentPack pack(fs, logger, "mods/test-mod", makeTestManifest());
-    auto result = pack.resolveTerrainChunk("world", 1, 2, 0);
+    auto result = pack.resolveTilePath("world", 2, 1, 1, 2, TileLayer::Height);
 
     CHECK_FALSE(result.has_value());
 }
 
 // ---------------------------------------------------------------------------
-// AssetManager::resolveTerrainChunk
+// AssetManager::resolveTilePath
 // ---------------------------------------------------------------------------
 
-TEST_CASE("AssetManager::resolveTerrainChunk returns path from first pack that provides it", "[content]") {
+TEST_CASE("AssetManager::resolveTilePath returns path from first pack that provides it", "[content]") {
     MockContentPack pack;
     MockLogger logger;
-    pack.chunkPaths["world:3:7:1"] = "mods/test-mod/terrain/world/lod1/chunk_0003_0007.png";
+    // key: terrainId:face:level:i:j:layer (layer 0 = Height)
+    pack.tilePaths["world:4:1:3:7:0"] = "mods/test-mod/terrain/world/f4/l1/tile_3_7.png";
 
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
 
-    auto result = am.resolveTerrainChunk("world", 3, 7, 1);
+    auto result = am.resolveTilePath("world", 4, 1, 3, 7, TileLayer::Height);
     REQUIRE(result.has_value());
-    CHECK(*result == "mods/test-mod/terrain/world/lod1/chunk_0003_0007.png");
+    CHECK(*result == "mods/test-mod/terrain/world/f4/l1/tile_3_7.png");
 }
 
-TEST_CASE("AssetManager::resolveTerrainChunk returns nullopt when no pack provides it", "[content]") {
+TEST_CASE("AssetManager::resolveTilePath returns nullopt when no pack provides it", "[content]") {
     MockContentPack pack;
     MockLogger logger;
 
     AssetManager am(makePacks(&pack), logger);
     am.initialize(nullptr);
 
-    CHECK_FALSE(am.resolveTerrainChunk("world", 0, 0, 0).has_value());
+    CHECK_FALSE(am.resolveTilePath("world", 0, 0, 0, 0, TileLayer::Height).has_value());
 }
 
-TEST_CASE("AssetManager::resolveTerrainChunk higher-priority pack overrides lower", "[content]") {
+TEST_CASE("AssetManager::resolveTilePath higher-priority pack overrides lower", "[content]") {
     MockContentPack highPack, lowPack;
     MockLogger logger;
     highPack.packPriority = 20;
-    highPack.chunkPaths["world:0:0:0"] = "theater-pack/terrain/world/lod0/chunk_0000_0000.png";
+    highPack.tilePaths["world:0:0:0:0:0"] = "theater-pack/terrain/world/f0/l0/tile_0_0.png";
     lowPack.packPriority = 10;
-    lowPack.chunkPaths["world:0:0:0"] = "fl-base-pack/terrain/world/lod0/chunk_0000_0000.png";
+    lowPack.tilePaths["world:0:0:0:0:0"] = "fl-base-pack/terrain/world/f0/l0/tile_0_0.png";
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::make_unique<MockContentPack>(highPack));
@@ -1540,18 +1557,18 @@ TEST_CASE("AssetManager::resolveTerrainChunk higher-priority pack overrides lowe
     AssetManager am(std::move(packs), logger);
     am.initialize(nullptr);
 
-    auto result = am.resolveTerrainChunk("world", 0, 0, 0);
+    auto result = am.resolveTilePath("world", 0, 0, 0, 0, TileLayer::Height);
     REQUIRE(result.has_value());
-    CHECK(*result == "theater-pack/terrain/world/lod0/chunk_0000_0000.png");
+    CHECK(*result == "theater-pack/terrain/world/f0/l0/tile_0_0.png");
 }
 
-TEST_CASE("AssetManager::resolveTerrainChunk falls through to lower-priority pack when higher does not provide it",
+TEST_CASE("AssetManager::resolveTilePath falls through to lower-priority pack when higher does not provide it",
           "[content]") {
     MockContentPack highPack, lowPack;
     MockLogger logger;
     highPack.packPriority = 20;
     lowPack.packPriority = 10;
-    lowPack.chunkPaths["world:5:3:2"] = "fl-base-pack/terrain/world/lod2/chunk_0005_0003.png";
+    lowPack.tilePaths["world:5:2:5:3:0"] = "fl-base-pack/terrain/world/f5/l2/tile_5_3.png";
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::make_unique<MockContentPack>(highPack));
@@ -1560,9 +1577,9 @@ TEST_CASE("AssetManager::resolveTerrainChunk falls through to lower-priority pac
     AssetManager am(std::move(packs), logger);
     am.initialize(nullptr);
 
-    auto result = am.resolveTerrainChunk("world", 5, 3, 2);
+    auto result = am.resolveTilePath("world", 5, 2, 5, 3, TileLayer::Height);
     REQUIRE(result.has_value());
-    CHECK(*result == "fl-base-pack/terrain/world/lod2/chunk_0005_0003.png");
+    CHECK(*result == "fl-base-pack/terrain/world/f5/l2/tile_5_3.png");
 }
 
 // ---------------------------------------------------------------------------

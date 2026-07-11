@@ -67,8 +67,8 @@ class FolderContentPack final : public IContentPack {
 
     std::optional<std::string> loadConfig(const char* name) const override;
 
-    std::optional<std::string> resolveTerrainChunk(const char* terrainId, uint32_t chunkX, uint32_t chunkY,
-                                                   uint32_t lod) const override;
+    std::optional<std::string> resolveTilePath(const char* terrainId, uint8_t face, uint8_t level, uint32_t i,
+                                               uint32_t j, TileLayer layer) const override;
 
   private:
     // Returns the asset file path for the given name and type, trying the primary

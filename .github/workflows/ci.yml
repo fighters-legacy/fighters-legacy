@@ -187,6 +187,10 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_gen_terrain_chunks.py -v
 
+      - name: Unit test gen_terrain_tiles.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_gen_terrain_tiles.py -v
+
       - name: Unit test gen_unifont_header.py (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_gen_unifont_header.py -v
@@ -262,6 +266,59 @@ jobs:
           assert m["grid_width"] == 1 and m["grid_height"] == 1
           assert m["lod_levels"] == 3
           print("OK: all chunk sizes, dtypes, and manifest fields correct")
+          EOF
+
+      - name: Smoke test gen_terrain_tiles.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          python3 tools/gen_terrain_tiles.py --help
+
+          # Synthesize a small GLOBAL lat/lon DEM + land-cover source (EPSG:4326, 360x180 = 1 deg/px).
+          python3 - <<'EOF'
+          from osgeo import gdal, osr
+          import numpy as np
+          srs = osr.SpatialReference(); srs.ImportFromEPSG(4326)
+          def make(path, dtype, fill):
+              ds = gdal.GetDriverByName("GTiff").Create(path, 360, 180, 1, dtype)
+              ds.SetProjection(srs.ExportToWkt())
+              ds.SetGeoTransform([-180.0, 1.0, 0, 90.0, 0, -1.0])  # north-up, 1 deg/px
+              ds.GetRasterBand(1).WriteArray(fill)
+              ds.FlushCache()
+          make("/tmp/global_dem.tif", gdal.GDT_Int16,
+               np.random.randint(0, 800, (180, 360), dtype=np.int16))
+          make("/tmp/global_lc.tif", gdal.GDT_Byte,
+               np.full((180, 360), 10, dtype=np.uint8))
+          EOF
+
+          python3 tools/gen_terrain_tiles.py \
+            --input /tmp/global_dem.tif \
+            --landcover-source /tmp/global_lc.tif \
+            --terrain-id world \
+            --faces 2 \
+            --min-level 0 --max-level 1 \
+            --workers 1 \
+            --output-dir /tmp/tiles-out
+
+          python3 - <<'EOF'
+          from osgeo import gdal
+          # Level 0: one +Y tile; level 1: four. Height + land-cover PNGs, 129x129 GDT_UInt16.
+          expected = [(0, 0, 0)] + [(1, i, j) for j in range(2) for i in range(2)]
+          for level, i, j in expected:
+              for layer, suffix in (("height", ".png"), ("landcover", "_lc.png")):
+                  p = f"/tmp/tiles-out/terrain/world/f2/l{level}/tile_{i}_{j}{suffix}"
+                  ds = gdal.Open(p)
+                  assert ds is not None, f"missing {layer} tile: {p}"
+                  assert ds.RasterXSize == 129 and ds.RasterYSize == 129, \
+                      f"{p}: expected 129x129, got {ds.RasterXSize}x{ds.RasterYSize}"
+                  assert ds.GetRasterBand(1).DataType == 2, \
+                      f"{p}: expected GDT_UInt16 (2), got {ds.GetRasterBand(1).DataType}"
+          # The +Y face centre samples the north pole; its centre height decodes near sea level +
+          # offset. Just confirm the encoding is in-range (non-zero, <= 65535).
+          ds = gdal.Open("/tmp/tiles-out/terrain/world/f2/l0/tile_0_0.png")
+          import numpy as np
+          arr = ds.GetRasterBand(1).ReadAsArray()
+          assert arr.min() > 0 and arr.max() <= 65535, "height encode out of range"
+          print("OK: cube-sphere tile sizes, dtypes, and layers correct")
           EOF
 
   # ---------------------------------------------------------------------------
