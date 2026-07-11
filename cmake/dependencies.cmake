@@ -97,10 +97,13 @@ FetchContent_Declare(enet6
 # Crypto = OpenSSL (GNS rejects libsodium AES on ARM / Apple Silicon, see docs/transport-selection.md).
 # protobuf = SYSTEM. find_package(Protobuf) here both gates GNS on availability AND seeds the module
 # cache vars that GNS's own find_package(Protobuf) reuses. If OpenSSL or system protobuf is absent,
-# FL_ENABLE_GNS is force-disabled and the build stays enet6-only — so CI legs that don't install the
-# deps configure fine. GNS is Linux-only in CI for now (Windows: no runner protobuf; macOS: Homebrew
-# protobuf 35 is the abseil-based 5.x line GNS v1.6.0 doesn't build against — both set FL_ENABLE_GNS
-# OFF, so the mixed module/config double-find that clashes on newer protobuf never triggers).
+# FL_ENABLE_GNS is force-disabled and the build stays enet6-only — so build legs that don't install
+# the deps configure fine. GNS v1.6.0 needs the PRE-ABSEIL protobuf 3.21.x line; CI sources it per
+# platform (#653): Linux = apt libprotobuf-dev, macOS = pinned Homebrew protobuf@21 via
+# CMAKE_PREFIX_PATH (avoids the abseil-based `protobuf` 5.x formula, whose CMake config clashes in a
+# mixed module/config double-find — "some but not all targets already defined"/libupb), Windows =
+# the repo-root vcpkg.json manifest pinning protobuf 3.21.12 under the vcpkg toolchain. The CI legs
+# assert FL_ENABLE_GNS stayed ON post-configure, so this graceful fallback can't mask a broken leg.
 # No WebRTC/ICE (dedicated-server) ⇒ no abseil.
 # ---------------------------------------------------------------------------
 if(FL_ENABLE_GNS)

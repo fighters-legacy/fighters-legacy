@@ -1,0 +1,17 @@
+{
+    "$comment1": "vcpkg manifest for the Windows GNS CI leg (#653). Only consulted when CMake runs under the vcpkg toolchain (CMAKE_TOOLCHAIN_FILE=.../vcpkg.cmake) — local non-vcpkg builds ignore this file entirely. It exists to source protobuf on Windows, where there is no system package for GameNetworkingSockets to find.",
+    "$comment2": "protobuf is pinned to 3.21.12 (the last pre-abseil 3.x line): GNS v1.6.0 does not build against the abseil-based protobuf 4.x/5.x that vcpkg HEAD ships. Port-version 4 carries the accumulated portfile fixes. Keep this pin in sync with the GNS version in cmake/dependencies.cmake.",
+    "name": "fighters-legacy",
+    "version-string": "0.0.0",
+    "builtin-baseline": "cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3",
+    "dependencies": [
+        "protobuf"
+    ],
+    "overrides": [
+        {
+            "name": "protobuf",
+            "version": "3.21.12",
+            "port-version": 4
+        }
+    ]
+}
