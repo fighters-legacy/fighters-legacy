@@ -33,7 +33,9 @@ class ClientPrediction {
     // The lambda in Game.cpp captures EntityTypeRegistry + AssetManager and does
     // the full lookup: typeIndex → entity def → flightModelId → parseFlightModel.
     using FlightModelResolver = std::function<std::shared_ptr<const FlightModelData>(uint32_t typeIndex)>;
-    using HeightQuery = std::function<float(double x, double z)>;
+    // worldPos → terrain elevation (m) above the datum along the radial (TerrainStreamer::heightAt(dvec3)).
+    // FlightIntegrator compares it against the geodetic altitude for radial ground contact (#477).
+    using HeightQuery = std::function<float(glm::dvec3 worldPos)>;
 
     ClientPrediction() = default;
     ~ClientPrediction();

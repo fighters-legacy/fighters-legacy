@@ -45,7 +45,10 @@ class FlightIntegrator {
     // ctrl:       pilot or AI inputs for this tick.
     // payload:    weapon mass and drag contribution for this tick.
     // wind:       optional weather perturbation; zero-initialised default = no wind effect.
-    // groundElev: terrain elevation (m) used for collision response; 0 = sea-level floor.
+    // groundElev: terrain elevation (m) ABOVE THE DATUM along the radial through the aircraft —
+    //             i.e. TerrainStreamer::heightAt(dvec3). Ground contact compares it against the
+    //             geodetic (MSL) altitude and snaps along the local radial up, so collision is
+    //             correct anywhere on the planet (#477); 0 = sea-level (datum) floor.
     void step(float dt, const ControlInput& ctrl, const PayloadEffect& payload, const WindInfluence& wind = {},
               float groundElev = 0.f);
 

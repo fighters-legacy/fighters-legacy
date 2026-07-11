@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "perf/PerformanceOverlay.h"
 
+#include "flight/Geodetic.h" // fl::geodeticAltitude (radial AGL readouts, #477)
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -32,7 +34,7 @@ void PerformanceOverlay::update(const FrameStats& stats, uint32_t entityCount, f
 }
 
 void PerformanceOverlay::setSceneInfo(const char* modeStr, const CameraView& cam, const glm::dvec3* entityPos,
-                                      double terrainAtCam, double terrainAtEntity) {
+                                      double terrainAtCam, double terrainAtEntity, double planetRadiusM) {
     if (m_mode == OverlayMode::Off)
         return;
 
@@ -45,9 +47,13 @@ void PerformanceOverlay::setSceneInfo(const char* modeStr, const CameraView& cam
     const glm::vec3 fwd = -glm::vec3(cam.view[0][2], cam.view[1][2], cam.view[2][2]);
     const float fwdPitch = glm::degrees(std::asin(std::clamp(fwd.y, -1.0f, 1.0f)));
 
+    // Radial AGL: geodetic (MSL) altitude minus the terrain radial elevation, correct far from the
+    // world origin where world-Y no longer aliases altitude (#477).
+    const double camAgl = geodeticAltitude(eye.x, eye.y, eye.z, planetRadiusM) - terrainAtCam;
+
     if (line < kMaxLines) {
         std::snprintf(buf, sizeof(buf), "CAM %s eye=(%.1f, %.1f, %.1f) pitch=%+.1f AGL=%.1f", modeStr, eye.x, eye.y,
-                      eye.z, fwdPitch, eye.y - terrainAtCam);
+                      eye.z, fwdPitch, camAgl);
         m_line[line] = buf;
         m_lineViews[line] = m_line[line];
         ++line;
@@ -60,8 +66,10 @@ void PerformanceOverlay::setSceneInfo(const char* modeStr, const CameraView& cam
         const double dist = glm::length(toEnt);
         const float entPitch =
             dist > 1e-6 ? glm::degrees(std::asin(std::clamp(static_cast<float>(toEnt.y / dist), -1.0f, 1.0f))) : 0.0f;
+        const double entAgl =
+            geodeticAltitude(entityPos->x, entityPos->y, entityPos->z, planetRadiusM) - terrainAtEntity;
         std::snprintf(buf, sizeof(buf), "ENT pos=(%.1f, %.1f, %.1f) AGL=%.1f  to-ent pitch=%+.1f dist=%.0f",
-                      entityPos->x, entityPos->y, entityPos->z, entityPos->y - terrainAtEntity, entPitch, dist);
+                      entityPos->x, entityPos->y, entityPos->z, entAgl, entPitch, dist);
         m_line[line] = buf;
         m_lineViews[line] = m_line[line];
         ++line;

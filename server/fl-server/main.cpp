@@ -389,20 +389,36 @@ int main(int argc, char** argv) {
     // startup. Without this the entity spawns too low and the per-tick floor query snaps it up
     // to the terrain surface once it streams in, which the client sees as the camera jumping a
     // couple seconds after load-in.
+    // Spawn config coordinates are planar (x, z) — near-origin theaters. Map a column onto the
+    // sphere's NEAR side at radial altitude `agl` above the terrain: solve geodeticAltitude(x,y,z)
+    // = terrainRadialElev + agl for the near-side y. General ground queries use the radial
+    // heightAt(dvec3) API (#477); this near-side convention stays confined to spawn placement.
+    const double planetR = cfg.planetRadiusM;
+    auto nearSideSurface = [&](double x, double z, double agl) -> glm::dvec3 {
+        const double h = terrainStreamer.heightAt(glm::dvec3{x, 0.0, z}); // radial terrain elevation
+        const double target = planetR + h + agl;
+        const double rr = target * target - x * x - z * z;
+        const double y = rr > 0.0 ? -planetR + std::sqrt(rr) : (h + agl);
+        return glm::dvec3{x, y, z};
+    };
+    // Pump terrain streaming until the covering tile chain above the (x, z) column is Ready to
+    // heightReadyAt depth, so the spawn elevation is spawn-accurate rather than a coarse or datum
+    // placeholder. Bounded by a wall-clock deadline so a missing/stuck tile can never hang startup.
+    // Without this the entity spawns too low and the per-tick floor query snaps it up to the terrain
+    // surface once it streams in, which the client sees as the camera jumping after load-in.
     auto primeSpawnHeight = [&](double x, double z) {
         using namespace std::chrono;
         const auto deadline = steady_clock::now() + seconds(5);
-        while (!terrainStreamer.heightReadyAt(x, z) && steady_clock::now() < deadline) {
-            // Pump at the current surface estimate, not world-Y 0: far from the origin the
-            // near side of the sphere sits well below y=0, and SSE refinement only reaches
-            // heightReadyAt depth when the pumped position is close to the surface. The
-            // estimate starts at the datum and converges as covering tiles stream in.
-            terrainStreamer.update(glm::dvec3(x, terrainStreamer.heightAt(x, z), z));
+        // Pump at the near-side surface estimate, not world-Y 0: far from the origin the near side
+        // of the sphere sits well below y=0, and SSE refinement only reaches heightReadyAt depth
+        // when the pumped position is close to the surface. The estimate converges as tiles stream.
+        while (!terrainStreamer.heightReadyAt(nearSideSurface(x, z, 0.0)) && steady_clock::now() < deadline) {
+            terrainStreamer.update(nearSideSurface(x, z, 0.0));
             p.asyncFilesystem->service();
-            if (!terrainStreamer.heightReadyAt(x, z))
+            if (!terrainStreamer.heightReadyAt(nearSideSurface(x, z, 0.0)))
                 std::this_thread::sleep_for(milliseconds(2));
         }
-        if (!terrainStreamer.heightReadyAt(x, z))
+        if (!terrainStreamer.heightReadyAt(nearSideSurface(x, z, 0.0)))
             log->log(LogLevel::Warn, __FILE__, __LINE__,
                      "terrain: spawn-point chunk not ready within timeout; spawning at AGL only");
     };
@@ -417,13 +433,13 @@ int main(int argc, char** argv) {
             // Default spawn: origin.
             constexpr double kDefaultSpawnZ = 0.0;
             primeSpawnHeight(0.0, kDefaultSpawnZ);
-            cachedSpawns.push_back(
-                std::array<double, 3>{0.0, terrainStreamer.heightAt(0.0, kDefaultSpawnZ) + agl, kDefaultSpawnZ});
+            const glm::dvec3 s = nearSideSurface(0.0, kDefaultSpawnZ, agl);
+            cachedSpawns.push_back(std::array<double, 3>{s.x, s.y, s.z});
         } else {
             for (const auto& pt : cfg.spawn.points) {
                 primeSpawnHeight(pt.x, pt.z);
-                const double y = terrainStreamer.heightAt(pt.x, pt.z) + agl;
-                cachedSpawns.push_back(std::array<double, 3>{pt.x, y, pt.z});
+                const glm::dvec3 s = nearSideSurface(pt.x, pt.z, agl);
+                cachedSpawns.push_back(std::array<double, 3>{s.x, s.y, s.z});
             }
         }
     }
@@ -468,7 +484,7 @@ int main(int argc, char** argv) {
     // The entity origin is the mesh's ground-contact point, so the floor clamps it directly to the
     // terrain — the mesh then rests ON the ground.
     broadcaster.setGroundElevationQuery(
-        [&terrainStreamer](double x, double z) { return static_cast<float>(terrainStreamer.heightAt(x, z)); });
+        [&terrainStreamer](glm::dvec3 pos) { return static_cast<float>(terrainStreamer.heightAt(pos)); });
     // Resolve EntityDef::flightModelId -> parsed FlightModelData on the spawn path. Loads the raw
     // TOML asset via AssetManager, parses it with engine-flight's parseFlightModel, and caches the
     // result by id (sim-thread-only access). Empty/unknown ids fall back to the builtin model in
@@ -492,7 +508,7 @@ int main(int argc, char** argv) {
     // Used by FlightIntegrator::step for ground collision. Updated each frame below.
     // Peer spawn positions are set separately via setSpawnPoints() above.
     primeSpawnHeight(0.0, 0.0); // no-op if already Ready (default-spawn path primed it above)
-    broadcaster.setGroundElevation(static_cast<float>(terrainStreamer.heightAt(0.0, 0.0)));
+    broadcaster.setGroundElevation(static_cast<float>(terrainStreamer.heightAt(glm::dvec3{0.0, 0.0, 0.0})));
     if (!cfg.banlistPath.empty()) {
         auto banned = fl::loadIpListFile(cfg.banlistPath, log);
         char buf[128];
@@ -547,7 +563,7 @@ int main(int argc, char** argv) {
     // + SpatialIndex at scale. A TESTING AFFORDANCE, NOT A CAPACITY GUARANTEE. Disabled (0) by default;
     // must be wired before gameLoop.start() (registerController is sim-thread-only afterward).
     if (cfg.testSpawnAiCount > 0) {
-        const double baseElev = terrainStreamer.heightAt(0.0, 0.0); // origin chunk primed above
+        const double baseElev = terrainStreamer.heightAt(glm::dvec3{0.0, 0.0, 0.0}); // origin chunk primed above
         const double spreadM = cfg.testSpawnSpreadKm * 1000.0;
         const auto positions = fl::testSpawnPositions(cfg.testSpawnAiCount, spreadM, cfg.testSpawnAglM, baseElev);
         uint32_t spawned = 0;

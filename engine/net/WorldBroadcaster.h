@@ -15,6 +15,8 @@
 #include "perf/TickProfiler.h"
 #include "spatial/SpatialIndex.h"
 
+#include <glm/vec3.hpp> // glm::dvec3 (ground-elevation query — radial floor #477)
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -249,11 +251,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     }
 
     // Inject a per-entity terrain height query called on the sim thread each tick.
-    // fn(worldX, worldZ) → terrain elevation (m). When set, this overrides the global
+    // fn(worldPos) → terrain elevation (m) ABOVE THE DATUM along the radial through worldPos
+    // (i.e. TerrainStreamer::heightAt(dvec3)); FlightIntegrator compares it against the entity's
+    // geodetic altitude for radial ground contact (#477). When set, this overrides the global
     // m_groundElevation scalar for each entity's FlightIntegrator::step() call.
     // Requires TerrainStreamer::heightAt() to be thread-safe (shared_mutex). Call before
     // gameLoop.start().
-    void setGroundElevationQuery(std::function<float(double, double)> fn);
+    void setGroundElevationQuery(std::function<float(glm::dvec3)> fn);
 
     // Set pre-cached peer spawn positions [x, y, z] in world space.
     // y must already include the terrain height + AGL offset, computed on the main thread
@@ -546,7 +550,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     // Per-entity terrain height query (sim-thread only). When set, called each tick per entity instead
     // of the global m_groundElevation scalar.
-    std::function<float(double, double)> m_groundQuery;
+    std::function<float(glm::dvec3)> m_groundQuery;
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword;                               // empty = admin channel disabled

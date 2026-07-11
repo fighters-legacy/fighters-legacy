@@ -585,23 +585,6 @@ uint8_t TerrainStreamer::surfaceAt(glm::dvec3 worldPos) const noexcept {
     return best->landCover[static_cast<std::size_t>(iz) * s + ix];
 }
 
-// ---- Transitional near-side (x, z) overloads (world-Y semantics; #477 removes) ----
-
-double TerrainStreamer::heightAt(double x, double z) const noexcept {
-    const double h = heightAt(glm::dvec3{x, 0.0, z});
-    const double R = m_planetRadiusM;
-    const double rr = (R + h) * (R + h) - (x * x + z * z);
-    return rr > 0.0 ? -R + std::sqrt(rr) : 0.0;
-}
-
-bool TerrainStreamer::heightReadyAt(double x, double z) const noexcept {
-    return heightReadyAt(glm::dvec3{x, 0.0, z});
-}
-
-uint8_t TerrainStreamer::surfaceAt(double x, double z) const noexcept {
-    return surfaceAt(glm::dvec3{x, 0.0, z});
-}
-
 // ---------------------------------------------------------------------------
 // Misc
 // ---------------------------------------------------------------------------
