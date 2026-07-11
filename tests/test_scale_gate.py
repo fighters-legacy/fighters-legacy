@@ -84,7 +84,7 @@ def test_assert_flags_tick_ms_only_when_strict():
 # ---- evaluate_report -----------------------------------------------------------------------------
 def _report(kbs_max=66.0, tick_hz_min=60.0, tick_p99=10.0, connected=64, requested=64,
             disconnected=0, with_server=True, rss_kb=200000, rss_startup_kb=200000,
-            load_factor=1.0, dropped_ticks=0):
+            load_factor=1.0, dropped_ticks=0, congestion_min_hz=60.0, congestion_recovered_hz=60.0):
     r = {
         "clients_requested": requested,
         "clients_connected": connected,
@@ -94,7 +94,9 @@ def _report(kbs_max=66.0, tick_hz_min=60.0, tick_p99=10.0, connected=64, request
     }
     if with_server:
         r["server_tick"] = {"tick_ms": {"p99": tick_p99}, "rss_kb": rss_kb, "rss_startup_kb": rss_startup_kb,
-                            "load_factor": load_factor, "dropped_ticks": dropped_ticks}
+                            "load_factor": load_factor, "dropped_ticks": dropped_ticks,
+                            "congestion_min_send_hz": congestion_min_hz,
+                            "congestion_recovered_send_hz": congestion_recovered_hz}
     return r
 
 
@@ -249,6 +251,66 @@ def test_committed_overrun_profile_loads_with_governor_on():
     assert prof["assert_max_dropped_ticks"] == 100
     assert prof["entity_spawn_counts"] == [5000]
     assert prof["sim_worker_threads_sweep"] == [1]
+
+
+# ---- congestion gate (#714) ----------------------------------------------------------------------
+def test_assert_flags_emits_congestion_asserts_when_enabled():
+    prof = dict(sg.PROFILE_DEFAULTS)
+    prof.update(assert_congestion_engaged_hz=30, assert_congestion_recovered_hz=55)
+    flags = sg.assert_flags(prof, strict=False)
+    assert flags[flags.index("--assert-congestion-engaged-hz") + 1] == "30"
+    assert flags[flags.index("--assert-congestion-recovered-hz") + 1] == "55"
+    # 0 = disabled: the defaults emit neither flag.
+    off = sg.assert_flags(dict(sg.PROFILE_DEFAULTS), strict=False)
+    assert "--assert-congestion-engaged-hz" not in off
+    assert "--assert-congestion-recovered-hz" not in off
+
+
+def test_degrade_flags_forward_the_lossy_proxy_window():
+    prof = dict(sg.PROFILE_DEFAULTS)
+    prof.update(degrade_start_s=25, degrade_duration_s=30, degrade_loss=0.15, degrade_delay_ms=100)
+    flags = sg.degrade_flags(prof)
+    assert flags[flags.index("--degrade-duration") + 1] == "30"
+    assert flags[flags.index("--degrade-start") + 1] == "25"
+    assert flags[flags.index("--degrade-loss") + 1] == "0.15"
+    assert flags[flags.index("--degrade-delay-ms") + 1] == "100"
+    # No degrade window (the default) -> no proxy flags at all.
+    assert sg.degrade_flags(dict(sg.PROFILE_DEFAULTS)) == []
+
+
+def test_evaluate_congestion_engaged_and_recovered():
+    prof = _profile(assert_congestion_engaged_hz=30, assert_congestion_recovered_hz=55)
+    # Engaged (min fell to 10) and recovered (back to 60) -> pass.
+    assert sg.evaluate_report(_report(congestion_min_hz=10.0, congestion_recovered_hz=60.0),
+                              prof, strict=True)["passed"]
+    # Never engaged (min stuck at 60) -> fail on the engaged check.
+    ev = sg.evaluate_report(_report(congestion_min_hz=60.0), prof, strict=True)
+    assert not ev["passed"]
+    assert not next(c for c in ev["checks"] if c["name"] == "server_tick.congestion_min_send_hz")["ok"]
+    # Engaged but never recovered -> fail on the recovered check.
+    ev2 = sg.evaluate_report(_report(congestion_min_hz=10.0, congestion_recovered_hz=20.0),
+                             prof, strict=True)
+    assert not ev2["passed"]
+    assert not next(c for c in ev2["checks"]
+                    if c["name"] == "server_tick.congestion_recovered_send_hz")["ok"]
+    # Missing server block while enabled -> fail.
+    assert not sg.evaluate_report(_report(with_server=False), prof, strict=True)["passed"]
+
+
+def test_committed_congestion_profile_loads_with_degrade_window():
+    # The shipped scale-gate.json congestion profile must carry the proxy window + gates (#714).
+    cfg = sg.load_config(sg.DEFAULT_CONFIG)
+    prof = sg.load_profile(cfg, "congestion")
+    assert prof["baselined"] is False
+    assert prof["degrade_duration_s"] == 30
+    # 5% loss stays below ENet's own peer-timeout threshold (15% dropped a client in a dev run);
+    # the 100 ms delay is the deterministic engage trigger.
+    assert prof["degrade_loss"] == 0.05
+    assert prof["degrade_delay_ms"] == 100
+    assert prof["assert_congestion_engaged_hz"] == 30
+    assert prof["assert_congestion_recovered_hz"] == 55
+    # The window must open after the ramp and close well before the run ends (recovery tail).
+    assert prof["degrade_start_s"] + prof["degrade_duration_s"] < prof["duration_s"]
 
 
 # ---- expand_runs (entity-scale sweep, #573) ------------------------------------------------------

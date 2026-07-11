@@ -478,6 +478,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // snapshot send cadence (decimation gate in the per-peer loop below) and the effective byte budget.
     // configure() each tick so reload_config param changes (and the enabled flag) take effect live; the
     // getPeerLinkStats call is a cheap field read (zeros from the mock/loopback => throttle stays 1).
+    float congMinHzThisTick = 60.f; // min adaptive send rate across peers this tick
+    float congMaxLossThisTick = 0.f;
     for (auto& [peerId, eid] : m_peerEntities) {
         (void)eid;
         PeerInputState& ps = m_peerInputs[peerId];
@@ -488,6 +490,24 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         sample.reliableBytesInFlight = link.reliableBytesInFlight;
         ps.congestion.configure(m_congestionParams);
         ps.congestion.update(tickIndex, sample);
+        congMinHzThisTick = std::min(congMinHzThisTick, 60.f / static_cast<float>(ps.congestion.sendIntervalTicks()));
+        congMaxLossThisTick = std::max(congMaxLossThisTick, link.packetLoss);
+    }
+    // Congestion telemetry watermarks (#714) — only advanced while peers are connected, so the values
+    // freeze (rather than reset toward 60/0) once the load clients disconnect and the final metrics
+    // writes still carry the run's evidence. A new all-time minimum resets the recovered watermark to
+    // the current rate; recovery is then the max the (slowest) peer climbs back to afterwards.
+    if (!m_peerEntities.empty()) {
+        if (congMinHzThisTick < m_congMinSendHzSim) {
+            m_congMinSendHzSim = congMinHzThisTick;
+            m_congRecoveredSendHzSim = congMinHzThisTick;
+        } else {
+            m_congRecoveredSendHzSim = std::max(m_congRecoveredSendHzSim, congMinHzThisTick);
+        }
+        m_congMinSendHz.store(m_congMinSendHzSim, std::memory_order_relaxed);
+        m_congRecoveredSendHz.store(m_congRecoveredSendHzSim, std::memory_order_relaxed);
+        if (congMaxLossThisTick > m_congMaxLoss.load(std::memory_order_relaxed))
+            m_congMaxLoss.store(congMaxLossThisTick, std::memory_order_relaxed);
     }
 
     // Graceful tick-overrun governor (#514/#726): step from the PREVIOUS tick's measured wall-time vs

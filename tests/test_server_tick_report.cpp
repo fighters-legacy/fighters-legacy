@@ -22,11 +22,14 @@ ServerTickReport sample() {
     r.phases[static_cast<int>(TickPhase::Ai)] = {0.0, 0.3, 1.1, 0.6, 0.9, 0.1};
     r.phases[static_cast<int>(TickPhase::Serialize)] = {0.2, 1.0, 3.0, 2.0, 2.6, 0.4};
     r.other = {0.0, 0.4, 1.0, 0.7, 0.9, 0.1};
-    r.loadFactor = 0.73;     // governor actively shedding (#514)
-    r.interestScale = 0.62;  // interest-radius lever engaged (#726)
-    r.droppedTicks = 42;     // sim overrun drops (#514)
-    r.rssKb = 262144;        // 256 MiB current RSS (#707)
-    r.rssStartupKb = 204800; // 200 MiB baseline (#707)
+    r.loadFactor = 0.73;                // governor actively shedding (#514)
+    r.interestScale = 0.62;             // interest-radius lever engaged (#726)
+    r.droppedTicks = 42;                // sim overrun drops (#514)
+    r.rssKb = 262144;                   // 256 MiB current RSS (#707)
+    r.rssStartupKb = 204800;            // 200 MiB baseline (#707)
+    r.congestionMinSendHz = 12.5;       // controller engaged during the run (#714)
+    r.congestionRecoveredSendHz = 60.0; // and recovered after the link cleared (#714)
+    r.congestionMaxLoss = 0.11;         // peak sampled ENet loss (#714)
     return r;
 }
 } // namespace
@@ -39,7 +42,7 @@ TEST_CASE("ServerTickReport JSON round-trips", "[servertick]") {
     REQUIRE(fromJson(json, out));
 
     CHECK(out.schemaVersion == in.schemaVersion);
-    CHECK(in.schemaVersion == 4); // v4 (#726) added interest_scale
+    CHECK(in.schemaVersion == 5); // v5 (#714) added the congestion watermarks
     CHECK(out.tickHz == Approx(in.tickHz).margin(1e-3));
     CHECK(out.ticksSampled == in.ticksSampled);
     CHECK(out.ticksTotal == in.ticksTotal);
@@ -58,6 +61,9 @@ TEST_CASE("ServerTickReport JSON round-trips", "[servertick]") {
     CHECK(out.droppedTicks == in.droppedTicks);
     CHECK(out.rssKb == in.rssKb);
     CHECK(out.rssStartupKb == in.rssStartupKb);
+    CHECK(out.congestionMinSendHz == Approx(in.congestionMinSendHz).margin(1e-3));
+    CHECK(out.congestionRecoveredSendHz == Approx(in.congestionRecoveredSendHz).margin(1e-3));
+    CHECK(out.congestionMaxLoss == Approx(in.congestionMaxLoss).margin(1e-3));
 }
 
 TEST_CASE("ServerTickReport toJson nesting indent is valid", "[servertick]") {
@@ -77,7 +83,7 @@ TEST_CASE("makeServerTickReport maps a TickBudget plus counts", "[servertick]") 
     b.total = {0.5, 1.0, 2.0, 1.5, 1.9, 0.1};
     b.phases[static_cast<int>(TickPhase::Ai)] = {0.0, 0.2, 0.5, 0.4, 0.45, 0.05};
 
-    const ServerTickReport r = makeServerTickReport(b, 42, 7, 0.55, 9, 262144, 204800, 0.62);
+    const ServerTickReport r = makeServerTickReport(b, 42, 7, 0.55, 9, 262144, 204800, 0.62, 15.0, 58.0, 0.07);
     CHECK(r.peers == 42);
     CHECK(r.entities == 7u);
     CHECK(r.tickHz == Approx(60.0));
@@ -90,15 +96,21 @@ TEST_CASE("makeServerTickReport maps a TickBudget plus counts", "[servertick]") 
     CHECK(r.droppedTicks == 9u);
     CHECK(r.rssKb == 262144u);
     CHECK(r.rssStartupKb == 204800u);
+    CHECK(r.congestionMinSendHz == Approx(15.0));
+    CHECK(r.congestionRecoveredSendHz == Approx(58.0));
+    CHECK(r.congestionMaxLoss == Approx(0.07));
 
-    // Default overrun/rss args = healthy (loadFactor 1, full interest radius, no drops, rss 0) —
-    // back-compat for callers that omit them.
+    // Default overrun/rss/congestion args = healthy (loadFactor 1, full interest radius, no drops,
+    // rss 0, controller never engaged) — back-compat for callers that omit them.
     const ServerTickReport rDefault = makeServerTickReport(b, 1, 1);
     CHECK(rDefault.loadFactor == Approx(1.0));
     CHECK(rDefault.interestScale == Approx(1.0));
     CHECK(rDefault.droppedTicks == 0u);
     CHECK(rDefault.rssKb == 0u);
     CHECK(rDefault.rssStartupKb == 0u);
+    CHECK(rDefault.congestionMinSendHz == Approx(60.0));
+    CHECK(rDefault.congestionRecoveredSendHz == Approx(60.0));
+    CHECK(rDefault.congestionMaxLoss == Approx(0.0));
 }
 
 TEST_CASE("fromJson is tolerant of malformed and partial input", "[servertick]") {

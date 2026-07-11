@@ -62,6 +62,7 @@ if(TARGET platform-enet)
     add_executable(bot_swarm
         bot_swarm/main.cpp
         bot_swarm/BotClient.cpp
+        bot_swarm/LossyProxy.cpp
     )
     target_link_libraries(bot_swarm PRIVATE platform-enet platform-hal engine-protocol Threads::Threads)
     target_include_directories(bot_swarm PRIVATE
@@ -70,7 +71,8 @@ if(TARGET platform-enet)
         "${CMAKE_CURRENT_SOURCE_DIR}/bot_swarm"
     )
     if(WIN32)
-        target_link_libraries(bot_swarm PRIVATE winmm)
+        # winmm: timeBeginPeriod; ws2_32: the LossyProxy raw UDP relay (#714).
+        target_link_libraries(bot_swarm PRIVATE winmm ws2_32)
     endif()
     if(MSVC)
         target_compile_definitions(bot_swarm PRIVATE _CRT_SECURE_NO_WARNINGS)

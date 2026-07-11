@@ -15,6 +15,7 @@
 //                  [--assert-min-tick-hz X] [--assert-max-kbs Y]
 #include "BotClient.h"
 #include "ENetNetworkFactory.h"
+#include "LossyProxy.h"
 #include "SwarmConfig.h"
 #include "SwarmMetrics.h"
 #include <algorithm>
@@ -85,6 +86,12 @@ void printHelp() {
                 "  --assert-max-rss-growth-kb N  Exit nonzero if server RSS growth (rss_kb - rss_startup_kb) > N\n"
                 "  --assert-max-load-factor X  Exit nonzero if server_tick.load_factor > X (governor engaged? <0=off)\n"
                 "  --assert-max-dropped-ticks N  Exit nonzero if server_tick.dropped_ticks > N (<0=off)\n"
+                "  --degrade-duration S   Lossy-proxy degraded window length; enables the proxy (default: 0 = off)\n"
+                "  --degrade-start S      Seconds from proxy start until the window opens (default: 10)\n"
+                "  --degrade-loss F       Drop fraction while degraded, [0,1] (default: 0)\n"
+                "  --degrade-delay-ms N   Added one-way delay while degraded (default: 0)\n"
+                "  --assert-congestion-engaged-hz X    Exit nonzero if congestion_min_send_hz > X (0=off)\n"
+                "  --assert-congestion-recovered-hz Y  Exit nonzero if congestion_recovered_send_hz < Y (0=off)\n"
                 "  --help, --version\n"
                 "\n"
                 "Environment:\n"
@@ -112,7 +119,10 @@ void raiseFdLimit(int clients) {
 #endif
 }
 
-void runWorker(int threadIdx, int startIdx, int count, const SwarmConfig cfg, std::string host, SwarmPatternPlan plan) {
+// `host`/`port` are the CONNECT target — the real server, or the local lossy proxy when link
+// degradation is enabled (#714); cfg.host/cfg.port stay the real server for the report.
+void runWorker(int threadIdx, int startIdx, int count, const SwarmConfig cfg, std::string host, uint16_t port,
+               SwarmPatternPlan plan) {
     using namespace std::chrono;
     std::vector<std::unique_ptr<BotClient>> bots;
     bots.reserve(static_cast<size_t>(count));
@@ -123,7 +133,7 @@ void runWorker(int threadIdx, int startIdx, int count, const SwarmConfig cfg, st
 
     // ---- Ramp connect ----
     for (int i = 0; i < count && !g_quit; ++i) {
-        bots[static_cast<size_t>(i)]->connect(nowS(), host.c_str(), cfg.port);
+        bots[static_cast<size_t>(i)]->connect(nowS(), host.c_str(), port);
         const auto rampEnd = steady_clock::now() + milliseconds(cfg.rampMs);
         do {
             const double n = nowS();
@@ -297,6 +307,30 @@ int main(int argc, char** argv) {
     std::printf("[INFO ] bot_swarm: %d clients, %d threads, pattern=%s, rate=%dHz, duration=%ds -> %s:%u\n",
                 cfg.clients, threads, patternLabel.c_str(), cfg.rateHz, cfg.durationS, cfg.host.c_str(), cfg.port);
 
+    // Lossy-proxy link degradation (#714): when a degraded window is configured, clients connect
+    // through a local UDP relay that drops/delays datagrams inside the window, so the server's
+    // per-peer congestion controller sees a genuinely degraded link — then recovers on the clean
+    // tail. The proxy targets the real server; the clients target the proxy.
+    LossyProxy proxy;
+    std::string connectHost = cfg.host;
+    uint16_t connectPort = cfg.port;
+    if (cfg.degradeDurationS > 0.0) {
+        LossySchedule sched;
+        sched.degradeStartS = cfg.degradeStartS;
+        sched.degradeDurationS = cfg.degradeDurationS;
+        sched.lossFraction = static_cast<float>(cfg.degradeLoss);
+        sched.delayMs = static_cast<uint32_t>(cfg.degradeDelayMs);
+        if (!proxy.start(cfg.host.c_str(), cfg.port, sched, /*seed=*/1u)) {
+            std::printf("[ERROR] lossy proxy failed to start (IPv4 literal host required, e.g. 127.0.0.1)\n");
+            return 2;
+        }
+        connectHost = "127.0.0.1";
+        connectPort = proxy.listenPort();
+        std::printf("[INFO ] lossy proxy: 127.0.0.1:%u -> %s:%u  (degrade @%.0fs for %.0fs: loss=%.2f delay=%dms)\n",
+                    connectPort, cfg.host.c_str(), cfg.port, cfg.degradeStartS, cfg.degradeDurationS, cfg.degradeLoss,
+                    cfg.degradeDelayMs);
+    }
+
     g_metrics.assign(static_cast<size_t>(cfg.clients), ClientMetrics{});
     g_loopDt.assign(static_cast<size_t>(threads), {});
     g_windowS.assign(static_cast<size_t>(threads), 0.0);
@@ -312,10 +346,17 @@ int main(int argc, char** argv) {
         const int count = base + (t < rem ? 1 : 0);
         const int startIdx = next;
         next += count;
-        workers.emplace_back(runWorker, t, startIdx, count, cfg, cfg.host, plan);
+        workers.emplace_back(runWorker, t, startIdx, count, cfg, connectHost, connectPort, plan);
     }
     for (auto& w : workers)
         w.join();
+
+    if (cfg.degradeDurationS > 0.0) {
+        proxy.stop();
+        std::printf("[INFO ] lossy proxy: %llu datagrams forwarded, %llu dropped\n",
+                    static_cast<unsigned long long>(proxy.forwardedCount()),
+                    static_cast<unsigned long long>(proxy.droppedCount()));
+    }
 
 #ifdef _WIN32
     timeEndPeriod(1);
