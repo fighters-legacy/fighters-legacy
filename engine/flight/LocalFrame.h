@@ -84,4 +84,30 @@ namespace fl {
     return std::asin(s);
 }
 
+// Compass heading (rad) of the entity's forward (+X body) axis in the local tangent plane at `pos`.
+// 0 = North, +pi/2 = East (clockwise, standard aviation convention). Returns 0 when the forward
+// axis is (near) vertical, leaving heading undefined. quat is EntityTransform order [x, y, z, w].
+[[nodiscard]] inline float headingOf(const float quat[4], glm::dvec3 pos, double R) noexcept {
+    const glm::quat q(quat[3], quat[0], quat[1], quat[2]);
+    const glm::vec3 forward = q * glm::vec3(1.f, 0.f, 0.f);
+    const glm::mat3 enu = enuBasis(pos, R);
+    const float e = glm::dot(forward, enu[0]); // east component
+    const float n = glm::dot(forward, enu[1]); // north component
+    if (e * e + n * n < 1e-12f)
+        return 0.f;
+    return std::atan2(e, n);
+}
+
+// Bank/roll angle (rad) of the entity relative to the local up at `pos`. 0 = wings level.
+// Same convention as the historical world-frame roll (atan2(-right.y, up.y)) generalised to the
+// radial up: reduces to it exactly when the local up is world +Y (near the origin). quat is
+// EntityTransform order [x, y, z, w].
+[[nodiscard]] inline float bankOf(const float quat[4], glm::dvec3 pos, double R) noexcept {
+    const glm::quat q(quat[3], quat[0], quat[1], quat[2]);
+    const glm::vec3 up = q * glm::vec3(0.f, 1.f, 0.f);    // body up
+    const glm::vec3 right = q * glm::vec3(0.f, 0.f, 1.f); // body right
+    const glm::vec3 lu = radialUp(pos, R);
+    return std::atan2(-glm::dot(lu, right), glm::dot(lu, up));
+}
+
 } // namespace fl

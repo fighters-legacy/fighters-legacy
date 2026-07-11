@@ -3,6 +3,7 @@
 
 #include "IInput.h"
 #include "console/GameConsole.h"
+#include "flight/LocalFrame.h" // radialUp: camera "up" = radial direction on a spherical planet
 #include "render/CameraController.h"
 #include "render/RenderSnapshot.h"
 #include "render/TerrainStreamer.h"
@@ -179,7 +180,8 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
         const float pr = toRad(m_flyPitch);
         const float cp = std::cos(pr);
         const glm::vec3 forward{-std::sin(yr) * cp, std::sin(pr), -std::cos(yr) * cp};
-        ctrl.setPose(m_flyEye, forward, glm::vec3{0.f, 1.f, 0.f});
+        // Up = radial direction from the planet centre so the horizon stays level far from origin.
+        ctrl.setPose(m_flyEye, forward, radialUp(m_flyEye, m_planetRadiusM));
         break;
     }
     case CameraMode::Chase:
@@ -192,7 +194,8 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
             const double horiz = static_cast<double>(m_chaseDistance) * std::cos(pr);
             const double vert = static_cast<double>(m_chaseDistance) * std::sin(pr);
             const glm::dvec3 eye = target + behindHorizontal(fwd) * horiz + glm::dvec3{0.0, vert, 0.0};
-            ctrl.setPose(eye, glm::vec3(target - eye), glm::vec3{0.f, 1.f, 0.f});
+            // Up = radial direction so the chase view keeps a level horizon planet-wide.
+            ctrl.setPose(eye, glm::vec3(target - eye), radialUp(eye, m_planetRadiusM));
         }
         break;
     case CameraMode::Cockpit:

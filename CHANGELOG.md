@@ -20,6 +20,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **game**: Radial HUD artificial horizon + camera up (#479). The HUD attitude (pitch/heading/bank), the new artificial-horizon line, and the Free/Chase camera "up" vector are now computed on the local-level frame (`LocalFrame.h`) at the entity/camera position — radial up on a spherical planet — instead of assuming world +Y is up and world-XZ is the horizon plane. They stay correct far from the world origin (and are unchanged near it, since ENU ≈ world frame there). Adds `headingOf`/`bankOf` to `LocalFrame.h`, a `PTCH` readout + horizon line to `FlightHud`, and threads the server's `planetRadiusKm` (from `MsgConnectAck`) into `FlightHud::update`, `WindshieldRain` roll, and `CameraInput`
 - **ai**: AI guidance now works on the local tangent (ENU) frame at the entity's position instead of the world XZ/Y frame, so pursuit/loiter/waypoint and every autopilot controller steer correctly far from the world origin (previously AI banked the wrong way / flew sideways away from origin). `Guidance.h`'s `horizontalHeadingError` and `pitchErrorFromAlt` take the planet radius (default Earth) and build on `LocalFrame.h`; `IEntityController` gains a `setPlanetRadius()` seam that `WorldBroadcaster` wires from the world's configured radius. Near-origin behavior is unchanged (#478)
 
 ### Fixed

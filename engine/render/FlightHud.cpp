@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render/FlightHud.h"
 
+#include "flight/LocalFrame.h" // headingOf / pitchOf / bankOf on the local-level frame
+
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <glm/glm.hpp>
@@ -14,7 +17,7 @@ static constexpr float kHudG = 1.0f;
 static constexpr float kHudB = 0.0f;
 
 void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrainElevation, uint32_t latencyMs,
-                       bool showLatency) {
+                       bool showLatency, double planetRadiusM) {
     m_elementCount = 0;
     m_stringCount = 0;
     if (!e)
@@ -68,15 +71,37 @@ void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrai
     const float agl = static_cast<float>(e->position.y) - terrainElevation;
     pushText(HudAlign::Left, 0.03f, 0.54f, kHudR, kHudG, kHudB, "AGL %5.0fm", agl);
 
-    // Heading (bottom-center)
-    // Yaw from GLM quaternion (Y-up RH): atan2(2*(w*y + x*z), 1 - 2*(y² + z²))
-    float yawRad = std::atan2(2.f * (e->orientation.w * e->orientation.y + e->orientation.x * e->orientation.z),
-                              1.f - 2.f * (e->orientation.y * e->orientation.y + e->orientation.z * e->orientation.z));
-    float hdg = std::fmod(glm::degrees(yawRad) + 360.f, 360.f);
+    // Attitude on the LOCAL-LEVEL frame at the entity position (radial up on a spherical planet).
+    // These reduce to the world-frame values near the origin but stay correct planet-wide (#479).
+    const float q[4] = {e->orientation.x, e->orientation.y, e->orientation.z, e->orientation.w};
+    const float pitchRad = pitchOf(q, e->position, planetRadiusM);
+    const float bankRad = bankOf(q, e->position, planetRadiusM);
+
+    // Pitch readout (left column, above airspeed)
+    pushText(HudAlign::Left, 0.03f, 0.42f, kHudR, kHudG, kHudB, "PTCH %+03.0f", glm::degrees(pitchRad));
+
+    // Heading (bottom-center) — compass bearing of the nose in the local tangent plane (0 = N, 90 = E).
+    const float hdgRad = headingOf(q, e->position, planetRadiusM);
+    float hdg = std::fmod(glm::degrees(hdgRad) + 360.f, 360.f);
     pushText(HudAlign::Center, 0.5f, 0.94f, kHudR, kHudG, kHudB, "HDG %3.0f", hdg);
 
     // Heading tape underline
     pushLine(0.35f, 0.97f, 0.65f, 0.97f, 1.f, kHudR, kHudG, kHudB);
+
+    // Artificial horizon line: displaced vertically by pitch, tilted by bank relative to local up.
+    // Screen y grows downward, so nose-up (positive pitch) pushes the horizon below centre.
+    // The bank tilt is applied in normalized space with a nominal aspect so the slope reads as a
+    // physical roll; the exact look is manual-flight verified.
+    {
+        constexpr float kPitchGain = 0.35f; // screen fraction per radian of pitch
+        constexpr float kHalfWidth = 0.20f; // half-length of the horizon bar (normalized x)
+        constexpr float kHudAspect = 16.f / 9.f;
+        const float yc = std::clamp(0.5f + pitchRad * kPitchGain, 0.12f, 0.88f);
+        const float dx = kHalfWidth * std::cos(bankRad);
+        const float dy = kHalfWidth * std::sin(bankRad) / kHudAspect;
+        // Right bank raises the right side of the outside horizon relative to the aircraft frame.
+        pushLine(0.5f - dx, yc + dy, 0.5f + dx, yc - dy, 1.5f, kHudR, kHudG, kHudB);
+    }
 
     // Throttle + fuel (right side, vertically centered)
     pushText(HudAlign::Left, 0.80f, 0.46f, kHudR, kHudG, kHudB, "THR %3d%%", static_cast<int>(e->throttle));

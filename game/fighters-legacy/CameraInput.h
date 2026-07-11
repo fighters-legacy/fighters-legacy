@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "flight/Geodetic.h" // kEarthRadiusM (default planet radius)
+
 #include <chrono>
 #include <glm/glm.hpp>
 
@@ -49,6 +51,13 @@ class CameraInput {
         m_renderAlpha = alpha;
     }
 
+    // Set the planet sphere radius (metres) used to compute the camera "up" as the radial direction
+    // from the planet centre, so the horizon stays level far from the world origin (#479). From
+    // MsgConnectAck; defaults to Earth radius. Call on entering Flight.
+    void setPlanetRadius(double radiusM) noexcept {
+        m_planetRadiusM = radiusM;
+    }
+
     // Reset per-session state so the free-fly camera re-initialises relative to the player entity
     // on the first frame of a new session. Call at the start of each session.
     void startSession() noexcept;
@@ -89,6 +98,9 @@ class CameraInput {
 
     // Render alpha — set by Game.cpp via setRenderAlpha() before update() each frame.
     float m_renderAlpha{0.f};
+
+    // Planet radius (m) for the radial camera "up"; Earth default until MsgConnectAck arrives.
+    double m_planetRadiusM{kEarthRadiusM};
 
     // Mode-key edge detection.
     bool m_f1Prev{false};

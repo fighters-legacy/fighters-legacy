@@ -101,3 +101,46 @@ TEST_CASE("LocalFrame: pitchOf is measured against the local horizon") {
     auto q30 = quatPitchAboutY(-static_cast<float>(std::numbers::pi) / 6.f);
     CHECK(pitchOf(q30.data(), p, R) == Catch::Approx(static_cast<float>(std::numbers::pi) / 6.f).margin(1e-4f));
 }
+
+namespace {
+// Quaternion [x,y,z,w] rotating `angle` (rad) about an arbitrary world axis.
+std::array<float, 4> quatAxisAngle(glm::vec3 axis, float angle) {
+    glm::quat q = glm::angleAxis(angle, glm::normalize(axis));
+    return {q.x, q.y, q.z, q.w};
+}
+} // namespace
+
+TEST_CASE("LocalFrame: headingOf is the nose compass bearing in the local tangent plane") {
+    const glm::dvec3 p{0.0, -R, R}; // equator lon 0: ENU = East +X, North +Y, Up +Z
+    const float halfPi = static_cast<float>(std::numbers::pi) / 2.f;
+
+    // forward = +X (East): identity quat -> heading +90 deg.
+    const std::array<float, 4> qEast{0.f, 0.f, 0.f, 1.f};
+    CHECK(headingOf(qEast.data(), p, R) == Catch::Approx(halfPi).margin(1e-4f));
+    // forward = +Y (North): rotate +X to +Y about +Z -> heading 0.
+    auto qNorth = quatAxisAngle({0.f, 0.f, 1.f}, halfPi);
+    CHECK(headingOf(qNorth.data(), p, R) == Catch::Approx(0.f).margin(1e-4f));
+    // forward = -X (West): rotate +X to -X about +Z -> heading -90 deg.
+    auto qWest = quatAxisAngle({0.f, 0.f, 1.f}, static_cast<float>(std::numbers::pi));
+    CHECK(headingOf(qWest.data(), p, R) == Catch::Approx(-halfPi).margin(1e-4f));
+}
+
+TEST_CASE("LocalFrame: bankOf is roll relative to the local up") {
+    const float sixth = static_cast<float>(std::numbers::pi) / 6.f;
+
+    SECTION("at the origin, level flight is zero bank and a right roll is positive") {
+        const glm::dvec3 origin{0.0, 0.0, 0.0}; // up = +Y
+        const std::array<float, 4> qLevel{0.f, 0.f, 0.f, 1.f};
+        CHECK(bankOf(qLevel.data(), origin, R) == Catch::Approx(0.f).margin(1e-5f));
+        // Roll +30 deg about the forward (+X) axis -> +30 deg bank (matches atan2(-right.y, up.y)).
+        auto qRoll = quatAxisAngle({1.f, 0.f, 0.f}, sixth);
+        CHECK(bankOf(qRoll.data(), origin, R) == Catch::Approx(sixth).margin(1e-4f));
+    }
+
+    SECTION("far from the origin, a wings-level attitude on the local up reads zero bank") {
+        const glm::dvec3 p{0.0, -R, R}; // up = +Z here
+        // Body up -> +Z (local up), forward stays +X: rotate +90 deg about +X.
+        auto qLevel = quatAxisAngle({1.f, 0.f, 0.f}, static_cast<float>(std::numbers::pi) / 2.f);
+        CHECK(bankOf(qLevel.data(), p, R) == Catch::Approx(0.f).margin(1e-4f));
+    }
+}
