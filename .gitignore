@@ -104,3 +104,7 @@ tools/bot_swarm/results/
 
 # Vagrant machine state (reference-env VM) — keys, box metadata, etc.
 .vagrant/
+
+# Bundled coarse global base terrain (#474) — large generated tiles, produced out-of-band
+# by tools/build_global_base.sh; staged into the release but never committed.
+base-terrain/
