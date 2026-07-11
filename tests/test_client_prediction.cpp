@@ -68,6 +68,28 @@ TEST_CASE("ClientPrediction / not initialized before init", "[client_prediction]
     CHECK(snap.entries[0].position.x == Catch::Approx(origPos.x));
 }
 
+TEST_CASE("ClientPrediction / init with pre-ConnectAck defaults never reconciles (regression 755)",
+          "[client_prediction]") {
+    // Regression for #755. ClientPrediction::init() was wired in onConnect, which runs
+    // before MsgConnectAck populates the player's entity idx/gen, so it captured the
+    // stale defaults (idx=0, gen=0). A valid live entity always has gen != 0, so the
+    // idx/gen match in reconcile() never succeeded and prediction stayed a permanent
+    // no-op. This guards that exact mechanism: init'd with 0/0, reconcile leaves a real
+    // (gen != 0) player entry untouched and the lazy integrator init never fires.
+    ClientPrediction pred;
+    pred.init(PredictionSettings{}, builtinResolver(), flatGround(), 0u, 0u);
+
+    auto snap = makeSnap(1u, 1u, glm::dvec3{0, 500, 0});
+    const auto origPos = snap.entries[0].position;
+    pred.reconcile(snap, 1u, 4u, makeEnv());
+
+    // Entry untouched; the lazy model resolve + integrator build never ran.
+    CHECK(!pred.isInitialized());
+    CHECK(snap.entries[0].position.x == Catch::Approx(origPos.x));
+    CHECK(snap.entries[0].position.y == Catch::Approx(origPos.y));
+    CHECK(snap.entries[0].position.z == Catch::Approx(origPos.z));
+}
+
 TEST_CASE("ClientPrediction / reconcile replaces player entry", "[client_prediction]") {
     ClientPrediction pred;
     pred.init(PredictionSettings{}, builtinResolver(), flatGround(), 1u, 1u);
