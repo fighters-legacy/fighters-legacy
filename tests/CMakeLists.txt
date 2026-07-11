@@ -431,6 +431,11 @@ add_executable(test_ack_window test_ack_window.cpp)
 target_link_libraries(test_ack_window PRIVATE Catch2::Catch2WithMain engine-protocol)
 catch_discover_tests(test_ack_window)
 
+# FLIT input-trace codec (writer + reader; header-only, stdlib-only — #560).
+add_executable(test_input_trace test_input_trace.cpp)
+target_link_libraries(test_input_trace PRIVATE Catch2::Catch2WithMain engine-protocol)
+catch_discover_tests(test_input_trace)
+
 add_executable(test_congestion_controller test_congestion_controller.cpp)
 target_link_libraries(test_congestion_controller PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_congestion_controller)

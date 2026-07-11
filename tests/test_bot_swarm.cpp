@@ -74,6 +74,116 @@ TEST_CASE("random pattern is reproducible for a seed and stays in range", "[bot_
 }
 
 // ---------------------------------------------------------------------------
+// Trace replay + weighted pattern mix (#560)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("isTracePattern recognises trace:<file> specs", "[bot_swarm][pattern][trace]") {
+    CHECK(isTracePattern("trace:/tmp/a.flit"));
+    CHECK(tracePatternPath("trace:foo.flit") == "foo.flit");
+    CHECK_FALSE(isTracePattern("trace:")); // empty path
+    CHECK_FALSE(isTracePattern("weave"));
+    CHECK_FALSE(isKnownPattern("trace:foo.flit")); // trace is not a built-in registry name
+}
+
+TEST_CASE("TracePattern replays an in-memory trace, phases per client, and loops", "[bot_swarm][pattern][trace]") {
+    auto trace = std::make_shared<InputTrace>();
+    trace->tickRate = 60u;
+    for (uint32_t i = 0; i < 4; ++i)
+        trace->records.push_back(InputTraceRecord{i, 0.1f * static_cast<float>(i), 0.f, 0.f, 0.f, i});
+    TracePattern p(trace);
+
+    // t=0, client 0 -> record 0.
+    CHECK(p.sample(0.0, 0).throttle == Catch::Approx(0.0f));
+    CHECK(p.sample(0.0, 0).buttons == 0u);
+    // Each client offsets its cursor by its index: client 1 at t=0 -> record 1.
+    CHECK(p.sample(0.0, 1).throttle == Catch::Approx(0.1f));
+    CHECK(p.sample(0.0, 1).buttons == 1u);
+    // Wall time advances the cursor at tickRate: client 0 at t = 2/60 s -> record 2.
+    CHECK(p.sample(2.0 / 60.0, 0).throttle == Catch::Approx(0.2f));
+    // Playback loops: 4 records, so index 5 wraps to record 1.
+    CHECK(p.sample(0.0, 5).buttons == 1u);
+}
+
+TEST_CASE("TracePattern on an empty trace yields neutral input", "[bot_swarm][pattern][trace]") {
+    auto trace = std::make_shared<InputTrace>();
+    trace->tickRate = 60u;
+    TracePattern p(trace);
+    const BotControl c = p.sample(1.0, 3);
+    CHECK(c.throttle == Catch::Approx(0.0f));
+    CHECK(c.buttons == 0u);
+}
+
+TEST_CASE("parsePatternMix parses valid specs and rejects malformed ones", "[bot_swarm][pattern][mix]") {
+    std::vector<PatternMixEntry> mix;
+    std::string err;
+
+    REQUIRE(parsePatternMix("weave:80,aggressive:15,idle:5", mix, err));
+    REQUIRE(mix.size() == 3);
+    CHECK(mix[0].name == "weave");
+    CHECK(mix[0].weight == 80);
+    CHECK(mix[2].name == "idle");
+    CHECK(mix[2].weight == 5);
+
+    CHECK(parsePatternMix("weave:100", mix, err));
+
+    CHECK_FALSE(parsePatternMix("weave", mix, err));     // missing :weight
+    CHECK_FALSE(parsePatternMix("nope:50", mix, err));   // unknown pattern
+    CHECK_FALSE(parsePatternMix("weave:0", mix, err));   // non-positive weight
+    CHECK_FALSE(parsePatternMix("weave:-5", mix, err));  // negative weight
+    CHECK_FALSE(parsePatternMix("weave:80,", mix, err)); // trailing empty entry
+    CHECK_FALSE(parsePatternMix("weave:1.5", mix, err)); // non-integer weight
+    CHECK_FALSE(parsePatternMix("", mix, err));          // empty spec
+}
+
+TEST_CASE("assignMixPattern distributes clients deterministically by weight", "[bot_swarm][pattern][mix]") {
+    std::vector<PatternMixEntry> mix;
+    std::string err;
+    REQUIRE(parsePatternMix("weave:80,aggressive:20", mix, err));
+
+    const int n = 100;
+    int weave = 0, aggressive = 0;
+    for (int i = 0; i < n; ++i) {
+        const std::string& name = assignMixPattern(mix, static_cast<uint32_t>(i), n);
+        if (name == "weave")
+            ++weave;
+        else if (name == "aggressive")
+            ++aggressive;
+    }
+    CHECK(weave == 80);
+    CHECK(aggressive == 20);
+
+    // Deterministic: same index -> same assignment on a repeat pass.
+    CHECK(assignMixPattern(mix, 42u, n) == assignMixPattern(mix, 42u, n));
+}
+
+TEST_CASE("SwarmPatternPlan selects the active mode and builds patterns", "[bot_swarm][pattern][mix]") {
+    // Single built-in.
+    SwarmPatternPlan single;
+    single.single = "weave";
+    single.totalClients = 4;
+    CHECK(single.make(0) != nullptr);
+
+    // Weighted mix -> non-null instances across the swarm.
+    SwarmPatternPlan mixPlan;
+    mixPlan.totalClients = 10;
+    std::string err;
+    REQUIRE(parsePatternMix("weave:50,idle:50", mixPlan.mix, err));
+    for (uint32_t i = 0; i < 10; ++i)
+        CHECK(mixPlan.make(i) != nullptr);
+
+    // Trace -> TracePattern instances.
+    auto trace = std::make_shared<InputTrace>();
+    trace->tickRate = 60u;
+    trace->records.push_back(InputTraceRecord{0, 0.6f, 0.f, 0.f, 0.f, 0u});
+    SwarmPatternPlan tracePlan;
+    tracePlan.trace = trace;
+    tracePlan.totalClients = 2;
+    auto pat = tracePlan.make(0);
+    REQUIRE(pat != nullptr);
+    CHECK(pat->sample(0.0, 0).throttle == Catch::Approx(0.6f));
+}
+
+// ---------------------------------------------------------------------------
 // NetStats
 // ---------------------------------------------------------------------------
 
@@ -141,6 +251,22 @@ TEST_CASE("parseSwarmArgs rejects bad input", "[bot_swarm][config]") {
     CHECK(parse({"--bogus-flag"}).status == ParseStatus::Error); // unknown flag
     CHECK(parse({"--help"}).status == ParseStatus::Help);
     CHECK(parse({"--version"}).status == ParseStatus::Version);
+}
+
+TEST_CASE("parseSwarmArgs accepts trace patterns and pattern mixes", "[bot_swarm][config][trace][mix]") {
+    // trace:<file> is a valid --pattern (the file is loaded at run time, not parse time).
+    const SwarmParseResult t = parse({"--pattern", "trace:session.flit"});
+    REQUIRE(t.status == ParseStatus::Ok);
+    CHECK(t.cfg.pattern == "trace:session.flit");
+
+    const SwarmParseResult m = parse({"--pattern-mix", "weave:80,aggressive:20"});
+    REQUIRE(m.status == ParseStatus::Ok);
+    CHECK(m.cfg.patternMix == "weave:80,aggressive:20");
+
+    // A malformed mix is rejected at parse time.
+    CHECK(parse({"--pattern-mix", "weave:80,nope:20"}).status == ParseStatus::Error);
+    CHECK(parse({"--pattern-mix", "garbage"}).status == ParseStatus::Error);
+    CHECK(parse({"--pattern-mix"}).status == ParseStatus::Error); // missing value
 }
 
 TEST_CASE("parseSwarmArgs parses assert thresholds with strtod", "[bot_swarm][config]") {

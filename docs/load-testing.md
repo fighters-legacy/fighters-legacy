@@ -177,7 +177,8 @@ run matrix live in [entity-scale-characterization.md](entity-scale-characterizat
       --rate HZ              MsgClientInput rate per client (default 60)
       --ramp-ms MS           delay between successive connects (default 20)
       --threads N            worker threads (default auto = min(cores, ceil(clients/32)))
-      --pattern NAME         weave | level | aggressive | idle | random (default weave)
+      --pattern NAME         weave | level | aggressive | idle | random | trace:<file> (default weave)
+      --pattern-mix SPEC     weighted mix, e.g. "weave:80,aggressive:20" (supersedes --pattern)
       --json PATH            write a JSON report
       --server-metrics PATH  read fl-server --metrics-json file; embed authoritative server_tick block
       --assert-min-tick-hz X exit nonzero if observed (proxy) tick-Hz min < X
@@ -198,9 +199,51 @@ different parts of the server:
 - **aggressive** — high-rate rolls/pulls + afterburner; max entity churn (physics + snapshot size).
 - **idle** — no input; pure connection + snapshot overhead.
 - **random** — seeded per-client walk; heterogeneity.
+- **trace:`<file>`** — replays a recorded real session (see [Trace replay](#trace-replay-560));
+  reproduces real player behaviour at scale.
 
-Adding a pattern (e.g. a `trace:<file>` replay of recorded input, or a weighted mix) is a new
-`IFlightPattern` subclass + a branch in `makePattern()` — no harness changes.
+Adding a built-in pattern is a new `IFlightPattern` subclass + a branch in `makePattern()` — no
+harness changes.
+
+### Weighted pattern mix (#560)
+
+A single pattern makes every client fly identically. `--pattern-mix` builds a heterogeneous swarm:
+
+    bot_swarm 127.0.0.1 4778 --clients 100 --pattern-mix "weave:80,aggressive:15,idle:5"
+
+Weights are positive integers over built-in pattern names; the assignment is **deterministic** —
+client _i_ of _N_ maps to the cumulative-weight bucket containing `floor(i * totalWeight / N)`, so
+the counts match the weight fractions with no RNG and reproduce across runs and platforms. The mix
+spec supersedes `--pattern` and is echoed in the report's `pattern` field.
+
+### Trace replay (#560)
+
+`--pattern trace:<file>` replays a **recorded** input stream instead of a synthetic one, so the
+harness reproduces real player behaviour (including from live multiplayer) at scale.
+
+Traces are recorded **server-side**: set `[trace] input_trace_dir` in `server.toml` (or run the
+`trace_start [dir]` / `trace_stop` admin commands), and the server appends every peer's *accepted*
+(post-validation) `MsgClientInput` to a per-peer file `trace_peer<id>_<n>.flit` in that directory.
+The trace is loaded once and shared read-only across all synthetic clients; each client offsets its
+playback cursor by its index (so the swarm doesn't fly in lockstep) and loops at the end.
+
+    # 1. record a real session
+    #    server.toml:  [trace]\n    input_trace_dir = "traces"
+    # 2. replay it at scale
+    bot_swarm 127.0.0.1 4778 --clients 128 --pattern trace:traces/trace_peer0_0.flit
+
+**FLIT trace format** (little-endian, versioned so the Phase 4 replay epic #588 can extend rather
+than fork it; codec in `engine/net/InputTrace{Format,Writer,Reader}.h`):
+
+| Section | Bytes | Fields |
+| --- | --- | --- |
+| Header | 10 | magic `"FLIT"` (4) · version `u16` (=1) · tickRate `u32` |
+| Record | 28 | serverTick `u64` · throttle `f32` · elevator `f32` · aileron `f32` · rudder `f32` · buttons `u32` |
+
+Records follow the header back-to-back; the record count is `(fileSize − 10) / 28`. The five
+control fields map 1:1 onto `MsgClientInput`'s flight-control fields and onto the harness's
+`BotControl`. `serverTick` is the authoritative tick at which the input was accepted (for
+deterministic replay in #588); the load harness keys playback off wall-time × `tickRate`.
 
 ## Characterisation runbook (for #505)
 

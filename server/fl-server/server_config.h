@@ -117,6 +117,12 @@ struct ServerConfig {
     };
     MetricsConfig metrics;
 
+    // [trace]  — server-side input tracing (#560)
+    struct TraceConfig {
+        std::string inputTraceDir; // empty = disabled; per-peer FLIT traces written here
+    };
+    TraceConfig trace;
+
     // [spawn]
     struct SpawnPointDef {
         double x = 0.0;

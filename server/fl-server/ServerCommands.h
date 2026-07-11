@@ -43,6 +43,7 @@ struct ServerCommandContext {
         std::chrono::steady_clock::time_point startTime{};
         volatile sig_atomic_t* quitFlag{nullptr}; // quit command sets this to 1
         DiscoveryBeacon* beacon{nullptr};         // for reload_config name update
+        std::string traceDir; // configured [trace] input_trace_dir; trace_start default when no arg (#560)
         // Loads an AI script by asset name. Returns {source_bytes_as_string, pack_root_dir}.
         // Empty source = not found. Null = Lua AI scripting unavailable.
         // Must be safe to call from any thread (pre-loaded read-only cache in fl-server).

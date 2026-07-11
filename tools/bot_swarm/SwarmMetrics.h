@@ -97,7 +97,8 @@ inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientM
     r.clientsRequested = cfg.clients;
     r.durationS = elapsedS;
     r.rateHz = cfg.rateHz;
-    r.pattern = cfg.pattern;
+    // The report carries the mix spec when a weighted mix is used, else the single pattern label.
+    r.pattern = cfg.patternMix.empty() ? cfg.pattern : cfg.patternMix;
     r.threads = threadsUsed;
     r.assertMinTickHz = cfg.assertMinTickHz;
     r.assertMaxKbs = cfg.assertMaxKbs;

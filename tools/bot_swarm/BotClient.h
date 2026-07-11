@@ -13,13 +13,14 @@
 #include <INetwork.h>
 #include <cstdint>
 #include <memory>
-#include <string>
 
 namespace fl {
 
 class BotClient : public INetworkEventHandler {
   public:
-    BotClient(uint32_t index, const std::string& patternName, int rateHz);
+    // The flight pattern is built by the caller (SwarmPatternPlan) so a shared trace / weighted
+    // mix is resolved once for the whole swarm; BotClient takes ownership of its instance.
+    BotClient(uint32_t index, std::unique_ptr<IFlightPattern> pattern, int rateHz);
     ~BotClient() override;
 
     BotClient(const BotClient&) = delete;

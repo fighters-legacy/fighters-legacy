@@ -20,8 +20,9 @@ struct SwarmConfig {
     int durationS{30};
     int rateHz{60};
     int rampMs{20};
-    int threads{0}; // 0 = auto (min(hw_concurrency, ceil(clients/32)))
-    std::string pattern{"weave"};
+    int threads{0};                  // 0 = auto (min(hw_concurrency, ceil(clients/32)))
+    std::string pattern{"weave"};    // built-in name or "trace:<file>"; ignored when patternMix is set
+    std::string patternMix;          // weighted mix spec e.g. "weave:80,aggressive:20"; empty = single pattern
     std::string jsonPath;            // empty = no JSON output
     std::string serverMetricsPath;   // empty = no server-side tick block; fl-server --metrics-json file
     double assertMinTickHz{0.0};     // 0 = disabled
@@ -92,6 +93,10 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
             r.cfg.pattern = argv[++i];
+        } else if (std::strcmp(a, "--pattern-mix") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.patternMix = argv[++i];
         } else if (std::strcmp(a, "--json") == 0) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
@@ -154,8 +159,14 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
         fail("--ramp-ms must be >= 0");
     else if (r.cfg.threads < 0)
         fail("--threads must be >= 0");
-    else if (!isKnownPattern(r.cfg.pattern))
-        fail("--pattern must be one of: weave, level, aggressive, idle, random");
+    else if (!r.cfg.patternMix.empty()) {
+        // --pattern-mix supersedes --pattern; validate the mix spec (names + weights) up front.
+        std::vector<PatternMixEntry> mix;
+        std::string mixErr;
+        if (!parsePatternMix(r.cfg.patternMix, mix, mixErr))
+            fail("--pattern-mix: " + mixErr);
+    } else if (!isKnownPattern(r.cfg.pattern) && !isTracePattern(r.cfg.pattern))
+        fail("--pattern must be one of: weave, level, aggressive, idle, random, or trace:<file>");
     else if (r.cfg.assertMinTickHz < 0.0)
         fail("--assert-min-tick-hz must be >= 0");
     else if (r.cfg.assertMaxKbs < 0.0)
