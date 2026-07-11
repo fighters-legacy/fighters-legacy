@@ -46,6 +46,15 @@ PROFILE_DEFAULTS = {
     "assert_max_load_factor": -1.0,
     "assert_max_dropped_ticks": -1,
     "governor": False,
+    # Congestion gate (#714): the bot_swarm lossy-proxy degrade window (forwarded as --degrade-*
+    # flags; degrade_duration_s 0 = proxy off) plus the engaged/recovered watermark asserts
+    # (0 = disabled — a 0 Hz threshold is meaningless for either, so no negative sentinel).
+    "degrade_start_s": 0.0,
+    "degrade_duration_s": 0.0,
+    "degrade_loss": 0.0,
+    "degrade_delay_ms": 0,
+    "assert_congestion_engaged_hz": 0.0,
+    "assert_congestion_recovered_hz": 0.0,
     # Entity-scale sweep (#573). Empty lists => a normal one-run-per-pattern profile. When populated,
     # the profile sweeps the cartesian product of patterns x entity_spawn_counts x
     # sim_worker_threads_sweep, driving FL_TEST_SPAWN_AI / FL_SIM_WORKER_THREADS per run.
@@ -102,6 +111,25 @@ def assert_flags(profile, strict):
         flags += ["--assert-max-load-factor", _num(profile["assert_max_load_factor"])]
     if profile["assert_max_dropped_ticks"] >= 0:
         flags += ["--assert-max-dropped-ticks", str(int(profile["assert_max_dropped_ticks"]))]
+    # Congestion gate (#714).
+    if profile["assert_congestion_engaged_hz"] > 0:
+        flags += ["--assert-congestion-engaged-hz", _num(profile["assert_congestion_engaged_hz"])]
+    if profile["assert_congestion_recovered_hz"] > 0:
+        flags += ["--assert-congestion-recovered-hz", _num(profile["assert_congestion_recovered_hz"])]
+    return flags
+
+
+def degrade_flags(profile):
+    """Assemble the bot_swarm lossy-proxy --degrade-* flags (#714). Empty when the profile has no
+    degrade window (degrade_duration_s 0), so every other profile runs proxy-free."""
+    if profile["degrade_duration_s"] <= 0:
+        return []
+    flags = ["--degrade-duration", _num(profile["degrade_duration_s"]),
+             "--degrade-start", _num(profile["degrade_start_s"])]
+    if profile["degrade_loss"] > 0:
+        flags += ["--degrade-loss", _num(profile["degrade_loss"])]
+    if profile["degrade_delay_ms"] > 0:
+        flags += ["--degrade-delay-ms", str(int(profile["degrade_delay_ms"]))]
     return flags
 
 
@@ -212,6 +240,41 @@ def evaluate_report(report, profile, strict):
             detail = f"{dropped} <= {profile['assert_max_dropped_ticks']} dropped ticks"
         checks.append({
             "name": "server_tick.dropped_ticks",
+            "ok": ok,
+            "detail": detail,
+            "advisory": False,
+        })
+
+    # Congestion controller engaged (#714): the run-long min send rate must have fallen to the
+    # threshold or below (stuck at 60 = the controller never responded to the degraded link).
+    if profile["assert_congestion_engaged_hz"] > 0:
+        server = report.get("server_tick")
+        if server is None:
+            ok = False
+            detail = "no server_tick block (cannot evaluate)"
+        else:
+            min_hz = server.get("congestion_min_send_hz", 60.0)
+            ok = min_hz <= profile["assert_congestion_engaged_hz"]
+            detail = f"{min_hz:.1f} <= {profile['assert_congestion_engaged_hz']:.1f} Hz (engaged)"
+        checks.append({
+            "name": "server_tick.congestion_min_send_hz",
+            "ok": ok,
+            "detail": detail,
+            "advisory": False,
+        })
+
+    # Congestion controller recovered (#714): after the min, the send rate must have climbed back.
+    if profile["assert_congestion_recovered_hz"] > 0:
+        server = report.get("server_tick")
+        if server is None:
+            ok = False
+            detail = "no server_tick block (cannot evaluate)"
+        else:
+            rec_hz = server.get("congestion_recovered_send_hz", 60.0)
+            ok = rec_hz >= profile["assert_congestion_recovered_hz"]
+            detail = f"{rec_hz:.1f} >= {profile['assert_congestion_recovered_hz']:.1f} Hz (recovered)"
+        checks.append({
+            "name": "server_tick.congestion_recovered_send_hz",
             "ok": ok,
             "detail": detail,
             "advisory": False,
@@ -358,7 +421,7 @@ def main(argv=None):
     if Path(args.baseline).is_file():
         baseline = load_config(args.baseline).get("kbs", {})
 
-    flags = assert_flags(profile, args.strict)
+    flags = assert_flags(profile, args.strict) + degrade_flags(profile)
     runner = runner_for_platform(sys.platform)
     baselined = profile.get("baselined", True)
     if args.update_baseline and not baselined:

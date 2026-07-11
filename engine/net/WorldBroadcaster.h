@@ -145,6 +145,23 @@ struct OverrunStatus {
     bool degraded{false};              // loadFactor < 1
 };
 
+// Run-long watermarks of the per-peer adaptive send-rate controller (#518), read cross-thread via
+// getCongestionTelemetry() (relaxed atomics published each tick by the sim thread). Designed for the
+// synthetic congestion gate (#714), which reads a single --metrics-json snapshot at run end:
+//   minSendHz         — all-time minimum across peers of the adaptive snapshot send rate. 60 = the
+//                       controller never engaged over the run.
+//   recoveredSendHz   — maximum send rate observed SINCE minSendHz was last lowered (reset to the
+//                       current rate whenever a new minimum is set). Climbs back toward 60 when the
+//                       controller recovers after the link clears.
+//   maxPacketLoss     — all-time maximum sampled ENet mean loss fraction across peers (diagnostic).
+// All three freeze while no peers are connected, so the trailing metrics writes after the load
+// clients disconnect don't wipe the evidence the gate asserts on.
+struct CongestionTelemetry {
+    float minSendHz{60.f};
+    float recoveredSendHz{60.f};
+    float maxPacketLoss{0.f};
+};
+
 // Wraps EntityManager to provide a server-side ISimUpdate that:
 //   1. Advances each peer's FlightIntegrator from stored client inputs.
 //   2. Advances the entity simulation each tick (calls EntityManager::onTick).
@@ -242,6 +259,16 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
         s.interestScale = m_overrunInterestScale.load(std::memory_order_relaxed);
         s.degraded = s.loadFactor < 1.f;
         return s;
+    }
+
+    // Run-long congestion-controller watermarks (#714). Thread-safe (relaxed-atomic reads of values
+    // the sim thread publishes each tick) — read by the --metrics-json writer from the main thread.
+    CongestionTelemetry getCongestionTelemetry() const noexcept {
+        CongestionTelemetry t;
+        t.minSendHz = m_congMinSendHz.load(std::memory_order_relaxed);
+        t.recoveredSendHz = m_congRecoveredSendHz.load(std::memory_order_relaxed);
+        t.maxPacketLoss = m_congMaxLoss.load(std::memory_order_relaxed);
+        return t;
     }
 
     // Set the terrain floor elevation (m) used for ground collision in each peer's
@@ -602,6 +629,15 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::atomic<uint32_t> m_overrunSnapInterval{1};
     std::atomic<uint32_t> m_overrunAiStride{1};
     std::atomic<float> m_overrunInterestScale{1.f};
+
+    // Congestion-controller run-long watermarks (#714). Updated on the sim thread in the congestion
+    // pass (only while >= 1 peer is connected, so they freeze rather than reset when the load clients
+    // disconnect); mirrored into atomics so getCongestionTelemetry() is a safe cross-thread read.
+    float m_congMinSendHzSim{60.f};       // sim-thread working copy of the min watermark
+    float m_congRecoveredSendHzSim{60.f}; // sim-thread working copy of the max-since-min watermark
+    std::atomic<float> m_congMinSendHz{60.f};
+    std::atomic<float> m_congRecoveredSendHz{60.f};
+    std::atomic<float> m_congMaxLoss{0.f};
 
     // Interest management + delta compression state (sim-thread only).
     double m_drawDistanceM{200'000.0}; // precomputed from drawDistanceKm × 1000; 200 km default

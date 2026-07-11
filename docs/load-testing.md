@@ -37,14 +37,18 @@ The same JSON shape is the standalone `--metrics-json` file and the embedded blo
 
 | Field | Meaning |
 |---|---|
-| `schema_version` | server-tick report schema (currently `3`: `2` added `load_factor`/`dropped_ticks`, `3` added `rss_kb`/`rss_startup_kb`) |
+| `schema_version` | server-tick report schema (currently `5`: `2` added `load_factor`/`dropped_ticks`, `3` added `rss_kb`/`rss_startup_kb`, `4` added `interest_scale`, `5` added the `congestion_*` watermarks) |
 | `tick_hz` | actual recent tick rate over the sampling window (ring-derived) |
 | `ticks_sampled` / `ticks_total` | ticks in the rolling window / monotonic all-time |
 | `window_s` | wall-clock span of the sampling window |
 | `peers` / `entities` | live peer count / live entity count at write time |
 | `load_factor` | overrun-governor load factor `[floor, 1]`; `1` = no degradation (#514) |
+| `interest_scale` | overrun-governor interest-radius scale `[fraction floor, 1]`; `1` = full radius (#726) |
 | `dropped_ticks` | all-time `GameLoop` catch-up drops (sim overrun / time dilation) (#514) |
 | `rss_kb` / `rss_startup_kb` | current process RSS (KiB) / RSS captured once after init; the soak leak gate tracks the delta (#707). `0` = unavailable on this platform |
+| `congestion_min_send_hz` | all-time minimum across peers of the adaptive snapshot send rate (#518); `60` = the controller never engaged over the run (#714) |
+| `congestion_recovered_send_hz` | max send rate observed since the minimum was set — recovery evidence after the link cleared (#714) |
+| `congestion_max_loss` | all-time max sampled ENet mean loss fraction across peers (diagnostic) (#714) |
 | `tick_ms` | total `onTick` wall-time stats `{min,mean,max,p95,p99}` (ms) |
 | `maintenance_ms` | rate-limit prune, idle timeout, admin drains, spatial rebuild, input drain, jitter resize |
 | `integrate_ms` | physics integration (`stepFlightSim`) summed across entities |
@@ -207,6 +211,12 @@ run matrix live in [entity-scale-characterization.md](entity-scale-characterizat
       --assert-max-rss-growth-kb N  exit nonzero if server RSS growth (rss_kb - rss_startup_kb) > N
       --assert-max-load-factor X  exit nonzero if server_tick.load_factor > X (governor engaged? <0 = off)
       --assert-max-dropped-ticks N  exit nonzero if server_tick.dropped_ticks > N (<0 = off)
+      --degrade-duration S   lossy-proxy degraded window length; enables the proxy (default 0 = off)
+      --degrade-start S      seconds from proxy start until the window opens (default 10)
+      --degrade-loss F       drop fraction while degraded, [0,1] (default 0)
+      --degrade-delay-ms N   added one-way delay while degraded (default 0)
+      --assert-congestion-engaged-hz X    exit nonzero if congestion_min_send_hz > X (0 = off)
+      --assert-congestion-recovered-hz Y  exit nonzero if congestion_recovered_send_hz < Y (0 = off)
     Env: FL_HOST, FL_PORT
 
 ## Flight patterns
@@ -279,23 +289,41 @@ The knee — where tick-Hz sags and the max snapshot gap spikes — is the ceili
 profile. Run it for `idle` (overhead floor) and `aggressive` (worst case) too. Record the
 reference machine spec alongside the numbers.
 
-## Validating congestion response (#518)
+## Validating congestion response (#518 / #714)
 
 Loopback has zero loss, so the per-client congestion controller never triggers in a normal run — a
 clean run is exactly the no-regression baseline (`downstream_kbs_per_client` and held 60.0 Hz must be
-unchanged from before #518). To exercise the back-off you have to degrade the link. On Linux, inject
-loss/latency on the loopback device with `netem`:
+unchanged from before #518). To exercise the back-off you have to degrade the link.
 
-    sudo tc qdisc add dev lo root netem loss 5% delay 80ms
-    tools/bot_swarm/run_loadtest.sh build/debug 64 30 weave
-    sudo tc qdisc del dev lo root netem    # always restore
+**CI automates this via the built-in lossy proxy** ([#714]). `bot_swarm --degrade-*` routes the
+synthetic clients through a local UDP relay (`LossyProxy`, portable — no `NET_ADMIN`, no `tc`) that
+drops a fraction of datagrams and adds one-way delay inside a scheduled window, then runs clean so
+the controller can recover:
 
-Under the degraded link, congested clients show a **lower observed snapshot Hz** (toward the
-`congestion_min_send_hz` floor) and **lower `downstream_kbs_per_client`**, while the authoritative
-`server_tick` p99 stays healthy. (macOS: `dnctl`/`pfctl`; Windows: `clumsy`.) This is a manual,
-NET_ADMIN-only step and is **not** run in CI; the deterministic proof is the
-`test_world_broadcaster` `[congestion]` link-stats-injection tests. The deterministic AIMD logic itself
-is covered by `test_congestion_controller`. See [docs/congestion-control-design.md](congestion-control-design.md).
+    bot_swarm 127.0.0.1 4778 --clients 16 --duration 90 \
+      --degrade-start 25 --degrade-duration 30 --degrade-loss 0.05 --degrade-delay-ms 100 \
+      --server-metrics tick.json \
+      --assert-congestion-engaged-hz 30 --assert-congestion-recovered-hz 55
+
+The server tracks **run-long watermarks** (schema v5: `congestion_min_send_hz`,
+`congestion_recovered_send_hz`, `congestion_max_loss` — frozen once the load clients disconnect, so
+the single end-of-run metrics read still carries the evidence), and the two asserts express
+*engaged-then-recovered*: the min send rate must have fallen to ≤ the engaged threshold during the
+window (stuck at 60 = the controller never responded), and must have climbed back to ≥ the recovered
+threshold afterwards. The `congestion` scale-gate profile (reference/nightly tier, `baselined: false`)
+runs exactly this; a healthy-link run with the same asserts **fails** the engaged gate (verified —
+the gate bites). Tuning notes: the **+100 ms delay is the deterministic engage trigger** (+200 ms RTT
+over the controller's 40 ms margin — ENet's loss metric only counts unACKed *reliable* packets, so
+datagram drop barely moves it on this mostly-unreliable workload), and the loss fraction is kept at
+5% — a 15% dev run tripped ENet's own peer timeout and dropped a client, failing admission.
+
+The manual `netem` route remains available for ad-hoc experiments (`sudo tc qdisc add dev lo root
+netem loss 5% delay 80ms`, restore with `... del ...`; macOS: `dnctl`/`pfctl`; Windows: `clumsy`),
+and the deterministic AIMD logic itself is covered by `test_congestion_controller` + the
+`test_world_broadcaster` `[congestion]` watermark tests. See
+[docs/congestion-control-design.md](congestion-control-design.md).
+
+[#714]: https://github.com/fighters-legacy/fighters-legacy/issues/714
 
 ## Platform notes
 
@@ -327,6 +355,7 @@ Markdown summary to `$GITHUB_STEP_SUMMARY`.
 | **Reference** | manual `workflow_dispatch` on the self-hosted `fl-reference` runner | `reference` (128 clients; idle/weave/aggressive) | bandwidth + admission + baseline + **tick-ms p99 ≤16.6 (`--strict`, unconditional)** | — |
 | **Soak** | manual `workflow_dispatch` (`profile=soak`) on `fl-reference` | `soak` (128 clients, weave, 2 h) | strict gates + RSS-growth leak (`--assert-max-rss-growth-kb`, from the server's self-reported `rss_kb`, [#707](https://github.com/fighters-legacy/fighters-legacy/issues/707)) | — |
 | **Overrun** | manual `workflow_dispatch` (`profile=overrun`, or `nightly` set) on `fl-reference` | `overrun` (32 clients, weave, governor **on**, `test_spawn_ai=5000` @ `sim_workers=1`) | governor engaged (`--assert-max-load-factor 0.99`) + graceful-not-spiral (`--assert-max-dropped-ticks 0`) + admission; **not baselined** ([#574](https://github.com/fighters-legacy/fighters-legacy/issues/574)) | tick-ms p99 |
+| **Congestion** | manual `workflow_dispatch` (`profile=congestion`, or `nightly` set) on `fl-reference` | `congestion` (16 clients, weave, lossy proxy: 5% loss + 100 ms delay in [25 s, 55 s)) | controller engaged (`--assert-congestion-engaged-hz 30`) + recovered (`--assert-congestion-recovered-hz 55`) + admission; **not baselined** ([#714](https://github.com/fighters-legacy/fighters-legacy/issues/714)) | — |
 
 The PR tier hard-gates only machine-independent metrics: `bot_swarm`'s `--assert-min-tick-hz` reads
 the *client-side proxy*, which sags when the harness itself is CPU-starved on a shared runner — a

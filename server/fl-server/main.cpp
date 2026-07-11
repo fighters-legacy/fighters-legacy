@@ -731,9 +731,11 @@ int main(int argc, char** argv) {
 
         if (!metricsPath.empty() && std::chrono::steady_clock::now() >= nextMetricsWrite) {
             const fl::OverrunStatus ov = broadcaster.getOverrunStatus();
+            const fl::CongestionTelemetry ct = broadcaster.getCongestionTelemetry();
             const fl::ServerTickReport rep = fl::makeServerTickReport(
                 broadcaster.getTickBudget(), broadcaster.getPeerCount(), entityManager.liveCount(), ov.loadFactor,
-                droppedTicks, fl::currentRssKb(), rssStartupKb, ov.interestScale);
+                droppedTicks, fl::currentRssKb(), rssStartupKb, ov.interestScale, ct.minSendHz, ct.recoveredSendHz,
+                ct.maxPacketLoss);
             fl::writeConfigFile(metricsPath, fl::toJson(rep) + "\n", *log);
             nextMetricsWrite = std::chrono::steady_clock::now() + metricsInterval;
         }

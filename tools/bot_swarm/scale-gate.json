@@ -59,6 +59,22 @@
       "assert_max_tick_ms": 0,
       "assert_max_load_factor": 0.99,
       "assert_max_dropped_ticks": 100
+    },
+    "congestion": {
+      "_comment": "Synthetic congestion profile (#714): proves the #518 per-peer AIMD send-rate controller ENGAGES on a degraded link and RECOVERS when it clears. bot_swarm routes its clients through a local lossy UDP proxy that drops 5% of datagrams + adds 100 ms one-way delay in a mid-run window ([25s, 55s) from proxy start — after the connect ramp, ending ~35s before the run ends so the additive ramp-up has a clean tail to recover in). The +100 ms delay (+200 ms RTT, far over the controller's 40 ms margin) is the deterministic engage trigger; the 5% loss is a secondary delivery stressor kept BELOW the level that trips ENet's own peer timeout (a 15% dev run dropped a client mid-window, failing admission — verified 5%+100ms keeps all peers connected while still engaging to the 10 Hz floor). Gates (schema v5 run-long watermarks): congestion_min_send_hz must fall to <= 30 (engaged; the controller floor is 10 Hz) and congestion_recovered_send_hz must climb back to >= 55 (recovered). baselined=false: degraded KB/s must never touch the committed bandwidth baseline. Reference tier only (nightly / workflow_dispatch).",
+      "clients": 16,
+      "duration_s": 90,
+      "patterns": ["weave"],
+      "degrade_start_s": 25,
+      "degrade_duration_s": 30,
+      "degrade_loss": 0.05,
+      "degrade_delay_ms": 100,
+      "baselined": false,
+      "assert_max_kbs": 0,
+      "assert_min_tick_hz": 0,
+      "assert_max_tick_ms": 0,
+      "assert_congestion_engaged_hz": 30,
+      "assert_congestion_recovered_hz": 55
     }
   }
 }
