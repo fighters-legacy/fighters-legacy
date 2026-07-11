@@ -31,7 +31,7 @@ fl::ControlInput LowYoYoController::sample(const fl::EntityState& state, uint64_
 
     if (m_phase == Phase::Dive || m_phase == Phase::Pull) {
         const double tgtPos[3] = {target->transform.pos[0], target->transform.pos[1], target->transform.pos[2]};
-        float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, tgtPos);
+        float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, tgtPos, m_planetRadiusM);
         ctrl.aileron = bankToTurnAileron(headErr);
         ctrl.rudder = coordinatedRudder(ctrl.aileron);
         ctrl.throttle = 1.f;

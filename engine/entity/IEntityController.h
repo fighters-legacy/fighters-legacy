@@ -2,6 +2,7 @@
 #pragma once
 
 #include "flight/AeroForces.h" // ControlInput — the shared control currency
+#include "flight/Geodetic.h"   // kEarthRadiusM — default planet radius for local-level guidance
 
 #include <cstdint>
 
@@ -26,6 +27,21 @@ struct IEntityController {
     // contexts. Called on the sim thread inside WorldBroadcaster::onTick.
     virtual ControlInput sample(const EntityState& state, uint64_t tick, double dt,
                                 const SpatialIndex* si = nullptr) = 0;
+
+    // Planet radius (m) for local-level (tangent-plane) guidance math. Defaults to Earth so the
+    // controllers and unit tests behave correctly near the world origin without any wiring.
+    // WorldBroadcaster sets this from its configured planet radius when it takes ownership of a
+    // controller (see addControlledEntity), so AI flies correctly far from the origin on any
+    // planet. Composite controllers (e.g. StateMachineController) forward it to their children.
+    void setPlanetRadius(double radiusM) noexcept {
+        m_planetRadiusM = radiusM;
+    }
+    [[nodiscard]] double planetRadiusM() const noexcept {
+        return m_planetRadiusM;
+    }
+
+  protected:
+    double m_planetRadiusM{kEarthRadiusM};
 };
 
 } // namespace fl

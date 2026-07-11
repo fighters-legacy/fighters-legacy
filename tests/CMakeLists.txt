@@ -254,6 +254,10 @@ add_executable(test_ai_controllers test_ai_controllers.cpp)
 target_link_libraries(test_ai_controllers PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
 catch_discover_tests(test_ai_controllers)
 
+add_executable(test_guidance test_guidance.cpp)
+target_link_libraries(test_guidance PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
+catch_discover_tests(test_guidance)
+
 add_executable(test_spatial_index test_spatial_index.cpp)
 target_link_libraries(test_spatial_index PRIVATE Catch2::Catch2WithMain engine-spatial)
 catch_discover_tests(test_spatial_index)

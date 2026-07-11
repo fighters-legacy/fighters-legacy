@@ -1435,6 +1435,10 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     auto fi = std::make_unique<FlightIntegrator>(model);
     fi->setGravityField(*m_gravity);
     fi->reset(fs);
+    // Give the controller the world's planet radius so its local-level (tangent-plane) guidance is
+    // correct far from the origin. Every controller — peer or AI — enters through this single path.
+    if (controller)
+        controller->setPlanetRadius(static_cast<double>(m_planetRadiusKm) * 1000.0);
     ControlledEntity ce{id, std::move(fi), std::move(controller)};
     ce.decimatable = decimatable;
     m_controlledEntities[id.index] = std::move(ce);
