@@ -16,11 +16,17 @@ void HapticController::savePrev(const fl::EntityRenderEntry* player, float agl) 
     m_prevAgl = agl;
 }
 
-void HapticController::update(const fl::EntityRenderEntry* player, bool weaponFired, float terrainElev, float dt) {
+void HapticController::update(const fl::EntityRenderEntry* player, bool weaponFired, float terrainElev, float dt,
+                              double planetRadiusM) {
     const bool canRumble = m_input.supportsRumble(0);
     const bool canTrigger = m_input.supportsTriggerRumble(0);
 
-    const float agl = player ? static_cast<float>(player->position.y) - terrainElev : 0.0f;
+    // Radial AGL: geodetic (MSL) altitude minus the terrain radial elevation — correct far from the
+    // world origin, reduces to (position.y - terrainElev) near it (#477).
+    const float agl = player ? static_cast<float>(geodeticAltitude(player->position.x, player->position.y,
+                                                                   player->position.z, planetRadiusM)) -
+                                   terrainElev
+                             : 0.0f;
 
     if (!canRumble && !canTrigger) {
         savePrev(player, agl);

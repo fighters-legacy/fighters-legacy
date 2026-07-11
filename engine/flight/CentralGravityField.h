@@ -38,6 +38,17 @@ class CentralGravityField final : public IGravityField {
         return std::sqrt(dx * dx + dy * dy + dz * dz) + static_cast<double>(m_centerY); // |r_vec| - R
     }
 
+    std::array<float, 3> geodeticUp(const double p[3]) const override {
+        const double dx = p[0];
+        const double dy = p[1] - static_cast<double>(m_centerY); // p[1] + R
+        const double dz = p[2];
+        const double r2 = dx * dx + dy * dy + dz * dz;
+        if (r2 < 1.0)
+            return {0.f, 1.f, 0.f}; // at/inside planet centre — degenerate, fall back to world up
+        const double inv = 1.0 / std::sqrt(r2);
+        return {static_cast<float>(dx * inv), static_cast<float>(dy * inv), static_cast<float>(dz * inv)};
+    }
+
     // Pre-built Earth instance (R = 6 371 000 m, g = 9.80665 m/s²).
     static const CentralGravityField& earthInstance() {
         static const CentralGravityField e{6'371'000.f, 9.80665f};

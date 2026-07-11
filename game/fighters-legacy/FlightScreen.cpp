@@ -96,10 +96,10 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
         d.clientNetHandler->sendHeartbeatIfNeeded();
     m_weaponFired = d.flightInput->wasWeaponFired();
 
+    // Terrain elevation above the datum along the radial through the entity (heightAt(dvec3));
+    // the HUD/haptics derive radial AGL from it against the geodetic altitude (#477).
     const float terrainElev =
-        m_playerEntry
-            ? static_cast<float>(d.terrainStreamer->heightAt(m_playerEntry->position.x, m_playerEntry->position.z))
-            : 0.f;
+        m_playerEntry ? static_cast<float>(d.terrainStreamer->heightAt(m_playerEntry->position)) : 0.f;
     const bool cockpit = (d.cameraController->mode() == fl::CameraMode::Cockpit);
 
     static constexpr uint32_t kMinLatencyDisplayMs = 5u;
@@ -117,7 +117,7 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     d.windshieldRain->update(cockpit ? (1.f / 60.f) : 0.f, cockpit ? *d.env : EnvironmentState{},
                              cockpit ? rollAngleRad(m_playerEntry, radiusM) : 0.f);
     if (d.hapticController)
-        d.hapticController->update(m_playerEntry, m_weaponFired, terrainElev, 1.f / 60.f);
+        d.hapticController->update(m_playerEntry, m_weaponFired, terrainElev, 1.f / 60.f, radiusM);
 
     if (!consoleWasOpen && !d.gameConsole->isOpen() && input.isKeyJustPressed(Key::Escape))
         return Screen::Pause;

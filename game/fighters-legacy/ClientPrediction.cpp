@@ -153,7 +153,9 @@ void ClientPrediction::stepIntegrator(const BufferedInput& bi, const Environment
     wind.wind_world[2] = env.windZ;
 
     const float groundElev =
-        m_heightQuery ? m_heightQuery(m_integrator->state().pos_world[0], m_integrator->state().pos_world[2]) : 0.f;
+        m_heightQuery ? m_heightQuery(glm::dvec3{m_integrator->state().pos_world[0], m_integrator->state().pos_world[1],
+                                                 m_integrator->state().pos_world[2]})
+                      : 0.f;
     m_integrator->step(kPredTickDt, ctrl, {}, wind, groundElev);
 }
 

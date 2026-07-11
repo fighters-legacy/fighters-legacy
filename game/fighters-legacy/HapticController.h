@@ -2,6 +2,7 @@
 #pragma once
 
 #include "IInput.h"
+#include "flight/Geodetic.h" // fl::kEarthRadiusM, fl::geodeticAltitude (radial AGL, #477)
 #include "render/RenderSnapshot.h"
 
 #include <cstdint>
@@ -14,8 +15,12 @@ class HapticController {
   public:
     explicit HapticController(IInput& input);
 
-    // Called every frame. terrainElev is used to derive AGL from player position.
-    void update(const fl::EntityRenderEntry* player, bool weaponFired, float terrainElev, float dt);
+    // Called every frame. terrainElev is the terrain RADIAL elevation above the datum
+    // (TerrainStreamer::heightAt(dvec3)); AGL is derived as the geodetic altitude minus it, so it
+    // is correct far from the world origin (#477). planetRadiusM defaults to Earth for near-origin
+    // callers/tests where geodetic altitude ≈ world-Y.
+    void update(const fl::EntityRenderEntry* player, bool weaponFired, float terrainElev, float dt,
+                double planetRadiusM = fl::kEarthRadiusM);
 
     // Call on pause, console open, window focus loss, and game exit.
     void onPause(int gamepadId = 0);

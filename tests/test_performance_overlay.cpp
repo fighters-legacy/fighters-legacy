@@ -2,6 +2,7 @@
 #include "perf/PerformanceOverlay.h"
 
 #include "Utf8Decode.h"
+#include "flight/Geodetic.h" // fl::kEarthRadiusM
 
 #include <catch2/catch_test_macros.hpp>
 #include <string>
@@ -150,7 +151,7 @@ TEST_CASE("PerformanceOverlay: setSceneInfo appends CAM and ENT lines after perf
     cam.worldOrigin = glm::dvec3{10.0, 600.0, 20.0};
     cam.view = glm::mat4(1.0f); // identity: forward = -Z, pitch 0
     const glm::dvec3 ent{10.0, 600.0, -30.0};
-    ov.setSceneInfo("FREE", cam, &ent, 575.0, 575.0);
+    ov.setSceneInfo("FREE", cam, &ent, 575.0, 575.0, fl::kEarthRadiusM);
 
     auto lines = ov.lines();
     REQUIRE(lines.size() == perfLines + 2u);
@@ -172,7 +173,7 @@ TEST_CASE("PerformanceOverlay: setSceneInfo is a no-op when overlay is Off", "[p
     CameraView cam{};
     cam.worldOrigin = glm::dvec3{0.0, 100.0, 0.0};
     cam.view = glm::mat4(1.0f);
-    ov.setSceneInfo("CHASE", cam, nullptr, 0.0, 0.0);
+    ov.setSceneInfo("CHASE", cam, nullptr, 0.0, 0.0, fl::kEarthRadiusM);
 
     CHECK(ov.lines().empty());
 }
@@ -188,11 +189,35 @@ TEST_CASE("PerformanceOverlay: setSceneInfo with null entity emits only the CAM 
     CameraView cam{};
     cam.worldOrigin = glm::dvec3{0.0, 100.0, 0.0};
     cam.view = glm::mat4(1.0f);
-    ov.setSceneInfo("FREE", cam, nullptr, 50.0, 0.0);
+    ov.setSceneInfo("FREE", cam, nullptr, 50.0, 0.0, fl::kEarthRadiusM);
 
     auto lines = ov.lines();
     REQUIRE(lines.size() == perfLines + 1u);
     CHECK(std::string(lines.back()).find("CAM FREE") != std::string::npos);
+}
+
+TEST_CASE("PerformanceOverlay: setSceneInfo AGL is radial far from the world origin (477/756)", "[perf_overlay]") {
+    PerformanceOverlay ov;
+    ov.setMode(OverlayMode::Compact);
+
+    FrameStats stats{};
+    ov.update(stats, 0, 16.7f);
+    const size_t perfLines = ov.lines().size();
+
+    // 100 km along +X, world-Y placed on the near-side surface at radial altitude 300 m; terrain
+    // radial elevation 0. The radial AGL is the geodetic altitude (300 m), NOT world-Y (~205 m) —
+    // the read-side of the planar-floor bug the far-from-origin flight surfaced (#756).
+    const double R = fl::kEarthRadiusM;
+    const double x = 1e5;
+    const double worldY = std::sqrt((R + 300.0) * (R + 300.0) - x * x) - R; // ~205 m
+    CameraView cam{};
+    cam.worldOrigin = glm::dvec3{x, worldY, 0.0};
+    cam.view = glm::mat4(1.0f);
+    ov.setSceneInfo("FREE", cam, nullptr, 0.0, 0.0, R);
+
+    const std::string camLine(ov.lines()[perfLines]);
+    CHECK(camLine.find("AGL=300.") != std::string::npos); // geodetic altitude, not world-Y
+    CHECK(camLine.find("AGL=205.") == std::string::npos); // the planar bug would read ~205
 }
 
 TEST_CASE("PerformanceOverlay: setMode persists across update calls", "[perf_overlay]") {

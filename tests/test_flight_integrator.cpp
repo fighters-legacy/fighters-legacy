@@ -947,6 +947,73 @@ TEST_CASE("FlightIntegrator: CentralGravityField at lateral position tilts gravi
     CHECK(fi.state().vel_body[0] < 0.f);
 }
 
+TEST_CASE("CentralGravityField: geodeticUp is the outward radial direction", "[integrator][gravity][spherical]") {
+    const fl::CentralGravityField g; // Earth
+    const double R = 6'371'000.0;
+
+    // At the north pole (world-origin column) the radial up is world +Y.
+    const double atPole[3] = {0.0, 500.0, 0.0};
+    const auto up0 = g.geodeticUp(atPole);
+    CHECK(up0[0] == Catch::Approx(0.0).margin(1e-6));
+    CHECK(up0[1] == Catch::Approx(1.0).margin(1e-6));
+    CHECK(up0[2] == Catch::Approx(0.0).margin(1e-6));
+
+    // 100 km along +X: up tilts toward +X but stays mostly +Y, and is unit length.
+    const double lateral[3] = {1e5, 500.0, 0.0};
+    const auto up1 = g.geodeticUp(lateral);
+    const double len = std::sqrt(up1[0] * up1[0] + up1[1] * up1[1] + up1[2] * up1[2]);
+    CHECK(len == Catch::Approx(1.0).margin(1e-5));
+    CHECK(up1[0] > 0.0);
+    CHECK(up1[1] > 0.99f);
+    // Exactly normalize({x, y+R, z}).
+    const double ex = 1e5, ey = 500.0 + R;
+    const double el = std::sqrt(ex * ex + ey * ey);
+    CHECK(up1[0] == Catch::Approx(static_cast<float>(ex / el)).margin(1e-5));
+    CHECK(up1[1] == Catch::Approx(static_cast<float>(ey / el)).margin(1e-5));
+}
+
+TEST_CASE("FlightIntegrator: radial ground floor snaps to the surface far from the world origin",
+          "[integrator][gravity][spherical]") {
+    // #477: the ground floor is radial. An aircraft below the terrain surface far from the origin
+    // must be snapped back out along the local radial up so its geodetic altitude equals the terrain
+    // elevation — NOT clamped to a world-Y plane (the old planar bug).
+    auto model = fl::BuiltinFlightModel::get();
+    fl::FlightIntegrator fi(model); // default Earth central gravity
+    const fl::CentralGravityField g;
+    const double R = 6'371'000.0;
+    const float groundElev = 300.f; // terrain radial elevation above the datum
+
+    // Start 50 m BELOW the terrain surface, 100 km along +X (penetrating), on the sphere's near side.
+    const double x = 1e5;
+    const double startAlt = static_cast<double>(groundElev) - 50.0;
+    const double y = std::sqrt((R + startAlt) * (R + startAlt) - x * x) - R;
+    fl::FlightState s{};
+    s.pos_world[0] = x;
+    s.pos_world[1] = y;
+    s.pos_world[2] = 0.0;
+    s.quat[3] = 1.f; // identity
+    s.mass_kg = model->geometry.mass_kg + model->geometry.fuel_kg;
+    s.fuel_kg = model->geometry.fuel_kg;
+    fi.reset(s);
+
+    const double p0[3] = {s.pos_world[0], s.pos_world[1], s.pos_world[2]};
+    REQUIRE(g.geodeticAltitude(p0) == Catch::Approx(startAlt).margin(1.0)); // starts below the surface
+
+    fl::ControlInput ctrl{}; // idle
+    fl::PayloadEffect px{};
+    fi.step(1.f / 60.f, ctrl, px, {}, groundElev); // one step: the radial floor catches it
+
+    const double pf[3] = {fi.state().pos_world[0], fi.state().pos_world[1], fi.state().pos_world[2]};
+    // Snapped radially up to the terrain surface (geodetic AGL ~ 0).
+    CHECK(g.geodeticAltitude(pf) == Catch::Approx(static_cast<double>(groundElev)).margin(1.0));
+    // The snap moved along the radial up, which has an +X component here, so world-X grew...
+    CHECK(pf[0] > x);
+    // ...and world-Y sits well BELOW the geodetic altitude (the curvature drop): this is what
+    // distinguishes the radial clamp from the old planar one, which would have pinned world-Y to
+    // groundElev directly.
+    CHECK(g.geodeticAltitude(pf) - pf[1] > 50.0);
+}
+
 TEST_CASE("Integrator: double-precision position accumulates at large world offset", "[flight]") {
     // At x = 1e5 m, float ULP ~0.0078 m exceeds the per-step lateral gravity
     // displacement toward planet centre (~0.001 m).  With float pos_world the

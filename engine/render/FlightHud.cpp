@@ -66,9 +66,14 @@ void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrai
         1.94384f;
     pushText(HudAlign::Left, 0.03f, 0.46f, kHudR, kHudG, kHudB, "IAS %5.0fkts", speedKts);
 
-    // Altitude MSL and AGL (left side, below airspeed)
-    pushText(HudAlign::Left, 0.03f, 0.50f, kHudR, kHudG, kHudB, "ALT %5.0fm", static_cast<float>(e->position.y));
-    const float agl = static_cast<float>(e->position.y) - terrainElevation;
+    // Altitude MSL and AGL (left side, below airspeed). Both radial: ALT is the geodetic (MSL)
+    // altitude above the datum and AGL subtracts the terrain radial elevation — correct planet-wide,
+    // not just where world-Y aliases altitude near the origin (#477). terrainElevation is the terrain
+    // radial elevation (heightAt(dvec3)) supplied by the caller.
+    const float altMsl =
+        static_cast<float>(geodeticAltitude(e->position.x, e->position.y, e->position.z, planetRadiusM));
+    pushText(HudAlign::Left, 0.03f, 0.50f, kHudR, kHudG, kHudB, "ALT %5.0fm", altMsl);
+    const float agl = altMsl - terrainElevation;
     pushText(HudAlign::Left, 0.03f, 0.54f, kHudR, kHudG, kHudB, "AGL %5.0fm", agl);
 
     // Attitude on the LOCAL-LEVEL frame at the entity position (radial up on a spherical planet).

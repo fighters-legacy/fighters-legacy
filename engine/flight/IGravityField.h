@@ -19,6 +19,13 @@ struct IGravityField {
     virtual double geodeticAltitude(const double pos_world[3]) const {
         return pos_world[1];
     }
+    // Local "up": unit vector (world frame) pointing away from the planet surface at a world
+    // position — the radial direction on a spherical planet. Used by the ground-collision floor
+    // to test/snap along the true vertical anywhere on the planet (#477). Default: world +Y
+    // (flat planet). CentralGravityField overrides this with the radial direction.
+    virtual std::array<float, 3> geodeticUp(const double /*pos_world*/[3]) const {
+        return {0.f, 1.f, 0.f};
+    }
 };
 
 } // namespace fl

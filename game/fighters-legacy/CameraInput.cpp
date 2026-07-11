@@ -171,10 +171,15 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
                 initFlyFromPlayer(*player);
         }
 
-        // Hard floor: never pass through the ground.
-        const double minY = terrain.heightAt(m_flyEye.x, m_flyEye.z) + kFlyGroundMarginM;
-        if (m_flyEye.y < minY)
-            m_flyEye.y = minY;
+        // Hard floor: never pass through the ground. Keep the eye's geodetic altitude at least a
+        // margin above the terrain radial elevation, pushing outward along the local radial up so
+        // the clamp holds far from the world origin (#477). Near origin this reduces to a world-Y
+        // floor.
+        const double terrElev = terrain.heightAt(m_flyEye);
+        const double eyeAlt = geodeticAltitude(m_flyEye.x, m_flyEye.y, m_flyEye.z, m_planetRadiusM);
+        const double minAlt = terrElev + kFlyGroundMarginM;
+        if (eyeAlt < minAlt)
+            m_flyEye += glm::dvec3(radialUp(m_flyEye, m_planetRadiusM)) * (minAlt - eyeAlt);
 
         const float yr = toRad(m_flyYaw);
         const float pr = toRad(m_flyPitch);

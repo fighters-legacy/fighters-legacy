@@ -249,7 +249,7 @@ void WorldBroadcaster::setGravityField(const IGravityField& field, float planetR
     m_planetRadiusKm = planetRadiusKm;
 }
 
-void WorldBroadcaster::setGroundElevationQuery(std::function<float(double, double)> fn) {
+void WorldBroadcaster::setGroundElevationQuery(std::function<float(glm::dvec3)> fn) {
     m_groundQuery = std::move(fn);
 }
 
@@ -1526,8 +1526,10 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
         wind.turbulence_body[1] = turb * 0.3f * r;
         wind.turbulence_body[2] = turb * 0.5f * r;
     }
-    const float groundElev = m_groundQuery ? m_groundQuery(fi.state().pos_world[0], fi.state().pos_world[2])
-                                           : m_groundElevation.load(std::memory_order_relaxed);
+    const float groundElev =
+        m_groundQuery
+            ? m_groundQuery(glm::dvec3{fi.state().pos_world[0], fi.state().pos_world[1], fi.state().pos_world[2]})
+            : m_groundElevation.load(std::memory_order_relaxed);
     fi.step(static_cast<float>(simDt), ctrl, {}, wind, groundElev);
 
     const FlightState& fs = fi.state();

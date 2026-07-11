@@ -146,7 +146,12 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     // friction (step 14c). Without this a stationary entity slides downwind whenever the weather
     // changes, because the relative-airspeed model turns steady wind into aerodynamic drag.
     constexpr float kGroundContactMarginM = 0.5f;
-    const bool inGroundContact = m_state.pos_world[1] <= groundElev + kGroundContactMarginM;
+    // Radial ground contact: compare the aircraft's geodetic (MSL) altitude against the terrain
+    // elevation above the datum (groundElev), so contact is correct anywhere on the planet — not
+    // just where world-Y aliases altitude near the origin (#477). Reduces exactly to the old planar
+    // test at the world origin, where geodeticAltitude == pos_world[1] and the local up is world +Y.
+    const double startAlt = m_gravity->geodeticAltitude(m_state.pos_world);
+    const bool inGroundContact = (startAlt - static_cast<double>(groundElev)) <= kGroundContactMarginM;
 
     // 1. Spool and optional gear/control surfaces
     advanceSpool(dt, ctrl.throttle);
@@ -273,24 +278,39 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     m_state.pos_world[1] += vel_world[1] * double(dt);
     m_state.pos_world[2] += vel_world[2] * double(dt);
 
-    // 14b. Ground collision response.
-    // If the entity crossed below groundElev this tick, snap it back up and apply an
-    // impulse: high-speed impact bounces (coefficient of restitution 0.35), low-speed
-    // contact stops the vertical component. Horizontal velocity decays via friction.
-    if (m_state.pos_world[1] < groundElev) {
-        m_state.pos_world[1] = groundElev;
-        if (vel_world[1] < 0.f) {
+    // 14b. Ground collision response (radial).
+    // If the entity dropped below the terrain surface this tick, snap it back out along the local
+    // radial up and apply an impulse: high-speed impact bounces (coefficient of restitution 0.35),
+    // low-speed contact stops the vertical (radial) component; the horizontal remainder decays via
+    // friction. "Vertical" is the component along the local up, so this is correct far from the
+    // origin; near it the up is world +Y and this reduces exactly to the old planar clamp.
+    const double altPost = m_gravity->geodeticAltitude(m_state.pos_world);
+    if (altPost < static_cast<double>(groundElev)) {
+        const std::array<float, 3> up = m_gravity->geodeticUp(m_state.pos_world);
+        const double penetration = static_cast<double>(groundElev) - altPost;
+        m_state.pos_world[0] += static_cast<double>(up[0]) * penetration;
+        m_state.pos_world[1] += static_cast<double>(up[1]) * penetration;
+        m_state.pos_world[2] += static_cast<double>(up[2]) * penetration;
+        const float vUp = float(vel_world[0]) * up[0] + float(vel_world[1]) * up[1] + float(vel_world[2]) * up[2];
+        if (vUp < 0.f) {
             constexpr float kCoR = 0.35f;         // coefficient of restitution
             constexpr float kSlideImpact = 0.80f; // hard-landing friction (≥10 m/s vertical)
             constexpr float kSlideRoll = 0.999f;  // ground-roll friction (near-zero vertical)
-            std::array<float, 3> vw = {float(vel_world[0]), float(vel_world[1]), float(vel_world[2])};
-            float impactSpd = std::abs(vw[1]);
+            const float impactSpd = std::abs(vUp);
             // Scale friction by impact severity so gravity's ~0.16 m/s/frame floor-tickle
             // does not act as a continuous brake during ground roll.
-            float kSlide = kSlideRoll + (kSlideImpact - kSlideRoll) * std::min(impactSpd / 10.f, 1.f);
-            vw[1] = (impactSpd < 2.f) ? 0.f : -vw[1] * kCoR;
-            vw[0] *= kSlide;
-            vw[2] *= kSlide;
+            const float kSlide = kSlideRoll + (kSlideImpact - kSlideRoll) * std::min(impactSpd / 10.f, 1.f);
+            const float newVUp = (impactSpd < 2.f) ? 0.f : -vUp * kCoR;
+            std::array<float, 3> vw = {float(vel_world[0]), float(vel_world[1]), float(vel_world[2])};
+            // Decompose into radial (vertical) + horizontal, reflect/stop the radial part, apply
+            // ground friction to the horizontal remainder, then recombine.
+            std::array<float, 3> horiz = {vw[0] - vUp * up[0], vw[1] - vUp * up[1], vw[2] - vUp * up[2]};
+            horiz[0] *= kSlide;
+            horiz[1] *= kSlide;
+            horiz[2] *= kSlide;
+            vw[0] = horiz[0] + newVUp * up[0];
+            vw[1] = horiz[1] + newVUp * up[1];
+            vw[2] = horiz[2] + newVUp * up[2];
             // Attenuate angular rates on impact to prevent post-contact spinning.
             m_state.omega[0] *= 0.5f;
             m_state.omega[1] *= 0.5f;
@@ -308,7 +328,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     // by its gear/brakes and must not creep under residual forcing (gravity tickle, numerical
     // drift, a gust the instant before contact). Engages only at very low ground speed and
     // near-idle throttle, so it never interferes with the takeoff roll.
-    if (m_state.pos_world[1] <= groundElev + kGroundContactMarginM) {
+    if ((m_gravity->geodeticAltitude(m_state.pos_world) - static_cast<double>(groundElev)) <= kGroundContactMarginM) {
         constexpr float kParkingSpeedM_s = 1.0f;  // hold below ~1 m/s of horizontal motion
         constexpr float kParkingThrottle = 0.05f; // and only near idle
         const float horizSpd =

@@ -191,10 +191,10 @@ static void updatePerfOverlay(GameConsole& console, IRenderer& renderer, Perform
         const char* modeStr = camMode == fl::CameraMode::Cockpit ? "COCKPIT"
                               : camMode == fl::CameraMode::Chase ? "CHASE"
                                                                  : "FREE";
-        const double terrCam = terrain ? terrain->heightAt(cam.worldOrigin.x, cam.worldOrigin.z) : 0.0;
-        const double terrEnt =
-            (terrain && playerEntry) ? terrain->heightAt(playerEntry->position.x, playerEntry->position.z) : 0.0;
-        overlay.setSceneInfo(modeStr, cam, playerEntry ? &playerEntry->position : nullptr, terrCam, terrEnt);
+        const double planetR = terrain ? terrain->planetRadiusM() : fl::kEarthRadiusM;
+        const double terrCam = terrain ? terrain->heightAt(cam.worldOrigin) : 0.0;
+        const double terrEnt = (terrain && playerEntry) ? terrain->heightAt(playerEntry->position) : 0.0;
+        overlay.setSceneInfo(modeStr, cam, playerEntry ? &playerEntry->position : nullptr, terrCam, terrEnt, planetR);
     }
 
     renderer.setOverlayLines(overlay.lines());
@@ -943,9 +943,9 @@ void Game::run() {
                         }
                         return fl::BuiltinFlightModel::get();
                     };
-                    auto heightQuery = [&d](double x, double z) -> float {
+                    auto heightQuery = [&d](glm::dvec3 pos) -> float {
                         return d.services.terrainStreamer
-                                   ? static_cast<float>(d.services.terrainStreamer->heightAt(x, z))
+                                   ? static_cast<float>(d.services.terrainStreamer->heightAt(pos))
                                    : 0.f;
                     };
                     d.services.prediction.init(d.services.userConfig->prediction(), std::move(flightModelResolver),

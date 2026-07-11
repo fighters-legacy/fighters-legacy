@@ -90,18 +90,6 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // land-cover layer; 0 when none. Thread-safe.
     uint8_t surfaceAt(glm::dvec3 worldPos) const noexcept;
 
-    // ---- Transitional near-side (x, z) overloads — world-Y semantics ----
-    // These preserve the planar API: the return value / query is the world-Y of the
-    // terrain surface vertically above/below (x, ~, z) on the NEAR side of the planet
-    // (y > -R). Derived from the radial core: y = -R + sqrt((R+h)^2 - x^2 - z^2).
-    // When no tile covers the position yet, the radial core's 0.0 sentinel makes this
-    // return the DATUM surface world-Y (the spherical generalization of the old planar
-    // 0.0 sentinel). Callers migrate to the dvec3 forms with the radial ground
-    // floor (#477).
-    double heightAt(double x, double z) const noexcept;
-    [[nodiscard]] bool heightReadyAt(double x, double z) const noexcept;
-    uint8_t surfaceAt(double x, double z) const noexcept;
-
     // Total resident tile entries (all states). Exposed for tests.
     std::size_t tileCount() const noexcept;
 
@@ -120,6 +108,12 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // regenerates at the new radius. Same-value calls are no-ops; values <= 0 are
     // ignored. Main-thread only (like update()).
     void setPlanetRadius(double radius_m);
+
+    // Current planet radius (m) the resident tiles were baked at. Used by callers that need to
+    // convert world positions to radial (geodetic) altitude — e.g. the AGL overlay/HUD readouts.
+    [[nodiscard]] double planetRadiusM() const noexcept {
+        return m_planetRadiusM;
+    }
 
     // Screen height (px) and vertical FOV (rad) for the SSE refinement metric.
     // Defaults (1080 px, 60 deg) are fine headless — server refinement only needs

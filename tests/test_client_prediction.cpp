@@ -23,7 +23,7 @@ static ClientPrediction::FlightModelResolver builtinResolver() {
 
 // Flat-ground height query.
 static ClientPrediction::HeightQuery flatGround() {
-    return [](double, double) -> float { return 0.f; };
+    return [](glm::dvec3) -> float { return 0.f; };
 }
 
 static EnvironmentState makeEnv() {

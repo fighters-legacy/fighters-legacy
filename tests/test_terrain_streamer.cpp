@@ -262,7 +262,6 @@ TEST_CASE("TerrainStreamer null renderer returns empty render items but height w
 
     CHECK(ts.getRenderItems(kPoleCam).empty());
     CHECK(ts.heightAt(kPoleProbe) > 0.0);
-    CHECK(ts.heightAt(0.0, 0.0) > 0.0); // transitional 2D shim
 }
 
 TEST_CASE("TerrainStreamer heightReadyAt gates on covering-tile depth") {
@@ -276,7 +275,6 @@ TEST_CASE("TerrainStreamer heightReadyAt gates on covering-tile depth") {
     pumpUntilReady(ts, fx.asyncFs, kPoleCam, kPoleProbe);
     CHECK(ts.heightReadyAt(kPoleProbe));
     CHECK(ts.heightAt(kPoleProbe) > 0.0);
-    CHECK(ts.heightReadyAt(0.0, 0.0)); // 2D shim agrees
 }
 
 TEST_CASE("TerrainStreamer refinement is camera-local") {
@@ -444,7 +442,6 @@ TEST_CASE("TerrainStreamer land-cover layer feeds surfaceAt") {
 
     CHECK(ts.heightAt(kPoleProbe) == Catch::Approx(550.0).margin(0.5));
     CHECK(ts.surfaceAt(kPoleProbe) == 7);
-    CHECK(ts.surfaceAt(0.0, 0.0) == 7); // 2D shim
 }
 
 TEST_CASE("TerrainStreamer surfaceAt returns zero without a land-cover layer") {
@@ -452,25 +449,6 @@ TEST_CASE("TerrainStreamer surfaceAt returns zero without a land-cover layer") {
     fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, nullptr};
     pump(ts, fx.asyncFs, kPoleCam, 30);
     CHECK(ts.surfaceAt(kPoleProbe) == 0);
-}
-
-TEST_CASE("TerrainStreamer 2D shim applies the near-side curvature drop", "[spherical]") {
-    StreamerFixture fx;
-    fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, nullptr};
-    pump(ts, fx.asyncFs, kPoleCam, 60);
-
-    // At the origin the radial and the vertical coincide: shim == radial height.
-    const double radial0 = ts.heightAt(kPoleProbe);
-    REQUIRE(radial0 > 0.0);
-    CHECK(ts.heightAt(0.0, 0.0) == Catch::Approx(radial0).margin(1e-6));
-
-    // 100 km out, the surface world-Y sits ~785 m below the radial height
-    // (drop = R - sqrt(R^2 - d^2) for d = 100 km on the Earth sphere).
-    const double d = 100'000.0;
-    const double radial = ts.heightAt(glm::dvec3{d, 0.0, 0.0});
-    const double shim = ts.heightAt(d, 0.0);
-    const double expectedDrop = kR - std::sqrt(kR * kR - d * d);
-    CHECK(shim == Catch::Approx(radial - expectedDrop).margin(5.0));
 }
 
 TEST_CASE("TerrainStreamer heightAt is callable from a background thread", "[threading]") {

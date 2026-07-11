@@ -31,10 +31,12 @@ class PerformanceOverlay {
 
     // Append camera + entity debug lines after the perf lines. Call after update(), before lines().
     // No-op when the overlay is Off. modeStr is the camera mode label (e.g. "FREE"); cam supplies
-    // the eye (worldOrigin) and forward (from the view matrix); entityPos may be null; the terrain
-    // heights are the ground elevation under the camera and under the entity (for AGL readouts).
+    // the eye (worldOrigin) and forward (from the view matrix); entityPos may be null; terrainAtCam/
+    // terrainAtEntity are the terrain RADIAL elevations above the datum (TerrainStreamer::heightAt(dvec3))
+    // under the camera and entity; planetRadiusM is the planet radius used to convert world positions
+    // to geodetic altitude for the radial AGL readouts (#477).
     void setSceneInfo(const char* modeStr, const CameraView& cam, const glm::dvec3* entityPos, double terrainAtCam,
-                      double terrainAtEntity);
+                      double terrainAtEntity, double planetRadiusM);
 
     // Set or clear the ping (RTT) overlay line. When show==true, "Ping: N ms" (or "Ping: -- ms"
     // before the first reply) is appended to lines() regardless of OverlayMode — show_ping
