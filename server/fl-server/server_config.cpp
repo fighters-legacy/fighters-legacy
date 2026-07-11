@@ -78,6 +78,8 @@ static const char* kDefaultToml =
     "# overrun_min_snapshot_hz = 15.0   # floor broadcast rate under overrun; [1, 60]\n"
     "# overrun_max_ai_stride = 4        # deepest AI-sample decimation for non-player entities; [1, 32]\n"
     "# overrun_budget_floor_bytes = 400 # never scale the snapshot budget below this under overrun; [0, 65535]\n"
+    "# overrun_min_interest_fraction = 0.5 # interest-radius floor fraction under overrun; [0.1, 1.0]; 1.0 = lever "
+    "off\n"
     "# max_catchup_ticks = 8            # GameLoop catch-up cap (spiral backstop); [1, 64]; needs restart\n"
     "# sim_worker_threads = 0           # sim-tick CPU parallelism; 0 = auto, 1 = serial; [0, 256]\n"
     "# --- load-test affordance (#573): pre-spawn AI entities to stress the pool/index at scale. ---\n"
@@ -480,6 +482,14 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                          "world.overrun_budget_floor_bytes out of range [0, 65535]; using default 400");
             } else {
                 cfg.overrunBudgetFloorBytes = static_cast<uint32_t>(*v);
+            }
+        }
+        if (auto v = tbl["world"]["overrun_min_interest_fraction"].value<double>()) {
+            if (*v < 0.1 || *v > 1.0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.overrun_min_interest_fraction out of range [0.1, 1.0]; using default 0.5");
+            } else {
+                cfg.overrunMinInterestFraction = static_cast<float>(*v);
             }
         }
         if (auto v = tbl["world"]["max_catchup_ticks"].value<int64_t>()) {

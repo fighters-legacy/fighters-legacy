@@ -218,7 +218,7 @@ and freezes its lever values for the tick.
 - **AIMD:** every `evalIntervalTicks` (hysteresis) it classifies the tick — `ewma > budget·high`
   (0.90) → multiplicative decrease (`×0.7`); `ewma < budget·low` (0.60) → additive increase (`+0.125`);
   the dead-band between holds. A single `loadFactor ∈ [floor, 1]` results (1 = no degradation).
-- **Three composing levers**, folded in on top of the per-client `CongestionController`:
+- **Four composing levers**, folded in on top of the per-client `CongestionController`:
   1. **Send-rate** — `snapshotIntervalTicks()`; the gather-time decimation gate uses
      `max(perPeerCongestionInterval, governorInterval)`, so a peer is decimated by whichever lever
      spaces it out more. (This is "reduce broadcast Hz", applied server-wide.)
@@ -231,8 +231,19 @@ and freezes its lever values for the tick.
      each worker writes only its own entity's cached input, so it is **serial-equivalent** across
      worker counts (`test_world_broadcaster` asserts bit-identical transforms for `{1,2,8}` under an
      over-budget clock) and TSan-clean.
+  4. **Interest radius** — `interestScale()` ([#726], ladder item 3 of the [#572] spike): the per-peer
+     interest radius (`m_drawDistanceM`) is multiplied by `max(min_interest_fraction, loadFactor)` —
+     BOTH the `SpatialIndex::queryRadius` bound and the exact XYZ distance gate. Unlike the budget
+     lever (which trims encoded output *after* ranking the full visible set), this shrinks the
+     `clients × visible entities` input itself, so the interest query, scheduler ranking, and encode
+     all get cheaper together. The scaled radius is a pure function of `loadFactor`, uniform across
+     peers, frozen into a sim-thread local **before** the parallel `runPeerPass` region — the
+     per-peer snapshot build stays byte-identical across worker counts (`test_world_broadcaster`
+     asserts it for `{1,2,8}` under an over-budget clock). Entities leaving the shrunk radius are
+     ordinary interest-out (client retention + the `kSnapshotRetentionTicks` force-full backstop
+     handle re-entry); the #516 recency term keeps the remaining set unstarved. No wire change.
 
-A healthy server, a disabled governor, or any never-overrun tick holds `loadFactor == 1` → all three
+A healthy server, a disabled governor, or any never-overrun tick holds `loadFactor == 1` → all four
 levers are no-ops → **byte-for-byte the pre-#514 behaviour**.
 
 > **Why the integrate pass is never decimated.** Physics uses a fixed `dt`; skipping integration steps
@@ -255,17 +266,19 @@ iteration — the spiral-of-death backstop. The cap + drop accounting is now a p
 ### Observability
 
 `WorldBroadcaster::getOverrunStatus()` publishes `loadFactor` / `snapshotIntervalTicks` / `aiStride`
-as relaxed atoms (cross-thread-safe). The `status` and `tickstats` admin commands show them, and
-`--metrics-json` (`ServerTickReport` schema v2) adds `load_factor` + `dropped_ticks`. fl-server logs a
-`Warn` when `totalDroppedTicks()` rises (the sim is falling behind even after shedding).
+/ `interestScale` as relaxed atoms (cross-thread-safe). The `status` and `tickstats` admin commands
+show them, and `--metrics-json` (`ServerTickReport` schema v2+) adds `load_factor` + `dropped_ticks`
+(+ `interest_scale` at schema v4, [#726]). fl-server logs a `Warn` when `totalDroppedTicks()` rises
+(the sim is falling behind even after shedding).
 
 ### Configuration
 
 `[world]` keys (all hot-reloadable via `reload_config` except `max_catchup_ticks`):
 `overrun_governor_enabled` (default `true`), `overrun_high_watermark` (0.90), `overrun_low_watermark`
 (0.60), `overrun_min_snapshot_hz` (15 → floor/interval cap), `overrun_max_ai_stride` (4),
-`overrun_budget_floor_bytes` (400), `max_catchup_ticks` (8). `makeTickGovernorParams(...)` maps the
-operator knobs to the controller internals, shared by startup + `reload_config`.
+`overrun_budget_floor_bytes` (400), `overrun_min_interest_fraction` (0.5; 1.0 = interest lever off),
+`max_catchup_ticks` (8). `makeTickGovernorParams(...)` maps the operator knobs to the controller
+internals, shared by startup + `reload_config`.
 
 ## Entity-pool + SpatialIndex scaling validation ([#573])
 

@@ -673,6 +673,155 @@ TEST_CASE("WorldBroadcaster: AI-sample decimation is serial-equivalent across wo
     }
 }
 
+TEST_CASE("WorldBroadcaster: overrun governor interest-radius lever shrinks the visible set",
+          "[world_broadcaster][overrun]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    // Near entity well inside the floor-scaled radius; far entity inside the full 200 km default
+    // draw distance but outside the 100 km (= 200 km x 0.5 fraction floor) shed radius.
+    fl::EntityTransform nearT{};
+    nearT.pos[0] = 10'000.0;
+    nearT.pos[1] = 1000.0;
+    auto nearId = em.spawn("builtin:debug-entity", nearT);
+    REQUIRE(nearId.valid());
+    fl::EntityTransform farT{};
+    farT.pos[0] = 150'000.0;
+    farT.pos[1] = 1000.0;
+    auto farId = em.spawn("builtin:debug-entity", farT);
+    REQUIRE(farId.valid());
+
+    AutoAdvanceClock clock(std::chrono::milliseconds(3));
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setClock(clock);
+    fl::TickGovernorParams gp = fl::makeTickGovernorParams(true, 0.90f, 0.60f, 15.0f, 4u, 400u, 0.5f);
+    gp.evalIntervalTicks = 1u;
+    gp.ewmaAlpha = 1.0f;
+    broadcaster.setGovernorParams(gp);
+    broadcaster.onConnect(0u); // peer spawns near origin (default), 200 km default draw distance
+
+    // Tick 1: the governor steps from the PREVIOUS tick's wall-time (none yet) -> healthy -> the
+    // full radius, so the 150 km entity is visible.
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    {
+        auto snaps = snapshotsFor(net, 0);
+        REQUIRE(!snaps.empty());
+        bool farSeen = false;
+        for (const auto& e : decodeEntities(snaps[0]))
+            if (e.entityIdx == farId.index)
+                farSeen = true;
+        CHECK(farSeen);
+    }
+
+    for (uint64_t tick = 2; tick <= 120; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    const fl::OverrunStatus ov = broadcaster.getOverrunStatus();
+    CHECK(ov.degraded);
+    // loadFactor bottoms at 0.25 (15 Hz floor) but the interest scale clamps at the 0.5 fraction.
+    CHECK(ov.interestScale == Catch::Approx(0.5f));
+
+    // The last snapshot was built with the shed 100 km radius: the far entity is interest-out (an
+    // ordinary omission — no despawn), the near one stays visible.
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(!snaps.empty());
+    bool farSeen = false;
+    bool nearSeen = false;
+    for (const auto& e : decodeEntities(snaps.back())) {
+        if (e.entityIdx == farId.index)
+            farSeen = true;
+        if (e.entityIdx == nearId.index)
+            nearSeen = true;
+    }
+    CHECK_FALSE(farSeen);
+    CHECK(nearSeen);
+}
+
+// Run a fixed multi-peer scenario under the over-budget clock with the interest-radius lever engaged
+// (#726): entities spread out to ~150 km so the floor-scaled radius (200 km x 0.5) actually changes
+// each peer's visible set. Captures every per-peer snapshot packet + the final governor state; used
+// to prove the radius lever preserves the byte-identical serial-equivalence of the peer pass.
+namespace {
+struct InterestShedResult {
+    std::map<uint32_t, std::vector<std::vector<uint8_t>>> snaps;
+    float finalInterestScale{1.f};
+};
+
+InterestShedResult runInterestShedScenario(fl::JobSystem* jobs) {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    AutoAdvanceClock clock(std::chrono::milliseconds(3));
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setClock(clock);
+    if (jobs)
+        broadcaster.setJobSystem(*jobs);
+    fl::TickGovernorParams gp = fl::makeTickGovernorParams(true, 0.90f, 0.60f, 15.0f, 4u, 400u, 0.5f);
+    gp.evalIntervalTicks = 1u;
+    gp.ewmaAlpha = 1.0f;
+    broadcaster.setGovernorParams(gp);
+
+    // Two peers at distinct spawn points so their (shrunk) interest sets differ.
+    broadcaster.setSpawnPoints({{0.0, 1000.0, 0.0}, {40'000.0, 1000.0, 0.0}});
+    const std::vector<uint32_t> peerIds{0u, 1u};
+    for (uint32_t pid : peerIds)
+        broadcaster.onConnect(pid);
+
+    // Static entities from 10 km out to 150 km: all inside the full 200 km radius, the far ones
+    // outside the floor-scaled 100 km radius of at least one peer.
+    for (int i = 0; i < 15; ++i) {
+        fl::EntityTransform t{};
+        t.pos[0] = 10'000.0 + i * 10'000.0;
+        t.pos[1] = 1000.0;
+        fl::EntityId id = em.spawn("builtin:debug-entity", t);
+        REQUIRE(id.valid());
+    }
+
+    for (uint64_t tick = 1; tick <= 120; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    InterestShedResult res;
+    res.finalInterestScale = broadcaster.getOverrunStatus().interestScale;
+    for (uint32_t pid : peerIds)
+        res.snaps[pid] = snapshotsFor(net, pid);
+    return res;
+}
+} // namespace
+
+TEST_CASE("WorldBroadcaster: interest-radius lever is serial-equivalent across worker counts",
+          "[world_broadcaster][overrun]") {
+    const InterestShedResult baseline = runInterestShedScenario(nullptr); // inline reference
+    // The lever must actually have engaged, else the test is vacuous.
+    REQUIRE(baseline.finalInterestScale < 1.0f);
+
+    for (unsigned total : {1u, 2u, 8u}) {
+        fl::JobSystem jobs(total);
+        const InterestShedResult got = runInterestShedScenario(&jobs);
+        CHECK(got.finalInterestScale == baseline.finalInterestScale);
+        REQUIRE(got.snaps.size() == baseline.snaps.size());
+        for (const auto& [peerId, baseSnaps] : baseline.snaps) {
+            auto it = got.snaps.find(peerId);
+            REQUIRE(it != got.snaps.end());
+            const auto& gotSnaps = it->second;
+            INFO("workers=" << total << " peer=" << peerId);
+            REQUIRE(gotSnaps.size() == baseSnaps.size());
+            // Byte-identical: the scaled radius is a frozen sim-thread local, uniform across peers,
+            // read-only in the parallel build — parallelism must not change a single byte.
+            for (size_t i = 0; i < baseSnaps.size(); ++i) {
+                const bool identical = (gotSnaps[i] == baseSnaps[i]);
+                INFO("snapshot packet index " << i);
+                CHECK(identical);
+            }
+        }
+    }
+}
+
 TEST_CASE("WorldBroadcaster: getTickBudget records per-phase timing after onTick", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;

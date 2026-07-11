@@ -28,7 +28,8 @@ namespace fl {
 
 // v2 (#514) adds the overrun-governor load_factor + the GameLoop dropped_ticks counter.
 // v3 (#707) adds self-reported process RSS (rss_kb + rss_startup_kb) for the soak leak gate.
-inline constexpr int kServerTickSchemaVersion = 3;
+// v4 (#726) adds the overrun-governor interest_scale (interest-radius shed lever).
+inline constexpr int kServerTickSchemaVersion = 4;
 
 struct ServerTickReport {
     int schemaVersion{kServerTickSchemaVersion};
@@ -41,15 +42,17 @@ struct ServerTickReport {
     std::array<Stats, kTickPhaseCount> phases{}; // indexed by TickPhase
     Stats total{};
     Stats other{};
-    double loadFactor{1.0};   // overrun governor: [floor, 1]; 1 = no degradation (#514)
-    uint64_t droppedTicks{0}; // all-time GameLoop catch-up drops (sim overrun / time dilation) (#514)
-    uint64_t rssKb{0};        // current process resident set size, KiB; 0 = unavailable (#707)
-    uint64_t rssStartupKb{0}; // RSS captured once after init; the soak leak gate tracks the delta (#707)
+    double loadFactor{1.0};    // overrun governor: [floor, 1]; 1 = no degradation (#514)
+    double interestScale{1.0}; // overrun governor interest-radius scale: [fraction floor, 1] (#726)
+    uint64_t droppedTicks{0};  // all-time GameLoop catch-up drops (sim overrun / time dilation) (#514)
+    uint64_t rssKb{0};         // current process resident set size, KiB; 0 = unavailable (#707)
+    uint64_t rssStartupKb{0};  // RSS captured once after init; the soak leak gate tracks the delta (#707)
 };
 
 // Build a report from a profiler snapshot plus the live peer/entity counts and overrun state.
 inline ServerTickReport makeServerTickReport(const TickBudget& b, int peers, uint32_t entities, double loadFactor = 1.0,
-                                             uint64_t droppedTicks = 0, uint64_t rssKb = 0, uint64_t rssStartupKb = 0) {
+                                             uint64_t droppedTicks = 0, uint64_t rssKb = 0, uint64_t rssStartupKb = 0,
+                                             double interestScale = 1.0) {
     ServerTickReport r;
     r.tickHz = b.tickHz;
     r.ticksSampled = b.ticksSampled;
@@ -61,6 +64,7 @@ inline ServerTickReport makeServerTickReport(const TickBudget& b, int peers, uin
     r.total = b.total;
     r.other = b.other;
     r.loadFactor = loadFactor;
+    r.interestScale = interestScale;
     r.droppedTicks = droppedTicks;
     r.rssKb = rssKb;
     r.rssStartupKb = rssStartupKb;
@@ -137,13 +141,13 @@ inline std::string toJson(const ServerTickReport& r, int indentSpaces = 0) {
                   "%s\"ticks_sampled\": %llu, \"ticks_total\": %llu,\n"
                   "%s\"window_s\": %.4f,\n"
                   "%s\"peers\": %d, \"entities\": %u,\n"
-                  "%s\"load_factor\": %.4f, \"dropped_ticks\": %llu,\n"
+                  "%s\"load_factor\": %.4f, \"interest_scale\": %.4f, \"dropped_ticks\": %llu,\n"
                   "%s\"rss_kb\": %llu, \"rss_startup_kb\": %llu,\n",
                   pad.c_str(), in.c_str(), r.schemaVersion, in.c_str(), r.tickHz, in.c_str(),
                   static_cast<unsigned long long>(r.ticksSampled), static_cast<unsigned long long>(r.ticksTotal),
                   in.c_str(), r.windowSeconds, in.c_str(), r.peers, r.entities, in.c_str(), r.loadFactor,
-                  static_cast<unsigned long long>(r.droppedTicks), in.c_str(), static_cast<unsigned long long>(r.rssKb),
-                  static_cast<unsigned long long>(r.rssStartupKb));
+                  r.interestScale, static_cast<unsigned long long>(r.droppedTicks), in.c_str(),
+                  static_cast<unsigned long long>(r.rssKb), static_cast<unsigned long long>(r.rssStartupKb));
     std::string out = head;
     out += detail::statJson("tick_ms", r.total, in) + ",\n";
     for (int i = 0; i < kTickPhaseCount; ++i) {
@@ -188,6 +192,10 @@ inline bool fromJson(std::string_view json, ServerTickReport& out) {
     }
     if (auto v = detail::findNumber(json, "load_factor")) {
         out.loadFactor = *v;
+        any = true;
+    }
+    if (auto v = detail::findNumber(json, "interest_scale")) {
+        out.interestScale = *v;
         any = true;
     }
     if (auto v = detail::findNumber(json, "dropped_ticks")) {

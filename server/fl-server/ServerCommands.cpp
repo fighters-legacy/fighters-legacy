@@ -184,9 +184,9 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                           static_cast<long long>(uptimeSec), peers, entities, tb.tickHz, tb.total.mean, tb.total.p99);
             std::string out(buf);
             const fl::OverrunStatus ov = ctx.sim.broadcaster->getOverrunStatus();
-            char ovbuf[64];
-            std::snprintf(ovbuf, sizeof(ovbuf), "  load: %.0f%%%s", ov.loadFactor * 100.0,
-                          ov.degraded ? " [DEGRADED]" : "");
+            char ovbuf[96];
+            std::snprintf(ovbuf, sizeof(ovbuf), "  load: %.0f%%  interest: %.0f%%%s", ov.loadFactor * 100.0,
+                          ov.interestScale * 100.0, ov.degraded ? " [DEGRADED]" : "");
             out += ovbuf;
             auto ls = ctx.sim.broadcaster->getAuthLockoutSummary();
             if (ls.activeCount > 0) {
@@ -214,9 +214,10 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                           static_cast<unsigned long long>(tb.ticksTotal));
             out += hdr;
             const fl::OverrunStatus ov = ctx.sim.broadcaster->getOverrunStatus();
-            char ovrow[128];
-            std::snprintf(ovrow, sizeof(ovrow), "\n  overrun: load %.2f  snapshot %.1f Hz  ai_stride %u%s",
-                          ov.loadFactor, 60.0 / static_cast<double>(ov.snapshotIntervalTicks), ov.aiStride,
+            char ovrow[160];
+            std::snprintf(ovrow, sizeof(ovrow),
+                          "\n  overrun: load %.2f  snapshot %.1f Hz  ai_stride %u  interest %.2f%s", ov.loadFactor,
+                          60.0 / static_cast<double>(ov.snapshotIntervalTicks), ov.aiStride, ov.interestScale,
                           ov.degraded ? "  [DEGRADED]" : "");
             out += ovrow;
             auto appendRow = [&out](const char* label, const fl::Stats& s) {
@@ -764,7 +765,8 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         " congestion_enabled, congestion_min_send_hz, congestion_loss_threshold,"
         " congestion_budget_floor_bytes, overrun_governor_enabled, overrun_high_watermark,"
         " overrun_low_watermark, overrun_min_snapshot_hz, overrun_max_ai_stride,"
-        " overrun_budget_floor_bytes (other fields, incl. max_catchup_ticks, require restart)",
+        " overrun_budget_floor_bytes, overrun_min_interest_fraction (other fields, incl."
+        " max_catchup_ticks, require restart)",
         [ctx](std::span<std::string_view>) -> std::string {
             if (!ctx.env.configPath || ctx.env.configPath->empty())
                 return "reload_config: not available";
@@ -790,7 +792,8 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                              newCfg.congestionLossThreshold, newCfg.congestionBudgetFloorBytes);
                 auto newGovernor = fl::makeTickGovernorParams(
                     newCfg.overrunGovernorEnabled, newCfg.overrunHighWatermark, newCfg.overrunLowWatermark,
-                    newCfg.overrunMinSnapshotHz, newCfg.overrunMaxAiStride, newCfg.overrunBudgetFloorBytes);
+                    newCfg.overrunMinSnapshotHz, newCfg.overrunMaxAiStride, newCfg.overrunBudgetFloorBytes,
+                    newCfg.overrunMinInterestFraction);
                 ctx.sim.gameLoop->enqueueSimCallback([ctx, newMotd, newMotdDisplayS, newDraw, newSnapshotBudget,
                                                       newJitterDepth, newAdaptWindow, newHysteresis, newMultiplier,
                                                       newCongestion, newGovernor]() mutable {

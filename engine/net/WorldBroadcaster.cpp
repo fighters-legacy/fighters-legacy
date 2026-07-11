@@ -470,17 +470,20 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         ps.congestion.update(tickIndex, sample);
     }
 
-    // Graceful tick-overrun governor (#514): step from the PREVIOUS tick's measured wall-time vs the
-    // fixed-step budget, then freeze its three lever values for this tick's parallel regions. configure()
-    // each tick so reload_config (m_governorParams) takes effect live, like the per-peer congestion
-    // controllers. Publish the levers into the atomics that getOverrunStatus() reads from the main thread.
+    // Graceful tick-overrun governor (#514/#726): step from the PREVIOUS tick's measured wall-time vs
+    // the fixed-step budget, then freeze its four lever values for this tick's parallel regions.
+    // configure() each tick so reload_config (m_governorParams) takes effect live, like the per-peer
+    // congestion controllers. Publish the levers into the atomics that getOverrunStatus() reads from
+    // the main thread.
     m_tickGovernor.configure(m_governorParams);
     m_tickGovernor.update(tickIndex, m_tickProfiler.lastTotalMs(), simDt * 1000.0);
     const uint32_t govSnapInterval = m_tickGovernor.snapshotIntervalTicks();
     const uint32_t govAiStride = m_tickGovernor.aiSampleStride();
+    const float govInterestScale = m_tickGovernor.interestScale();
     m_overrunLoadFactor.store(m_tickGovernor.loadFactor(), std::memory_order_relaxed);
     m_overrunSnapInterval.store(govSnapInterval, std::memory_order_relaxed);
     m_overrunAiStride.store(govAiStride, std::memory_order_relaxed);
+    m_overrunInterestScale.store(govInterestScale, std::memory_order_relaxed);
 
     m_tickProfiler.addPhaseSample(
         TickPhase::Maintenance, std::chrono::duration<double, std::milli>(m_clock->now() - tMaintenanceStart).count());
@@ -705,6 +708,15 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // build region never touches the governor object.
     const uint32_t govStaticBudget =
         m_tickGovernor.effectiveBudget(m_snapshotBudgetBytes.load(std::memory_order_relaxed));
+    // Overrun interest-radius lever (#726): scale the per-peer interest radius by the governor's
+    // frozen interestScale — the only lever that shrinks the visible set itself (the input to the
+    // interest query, scheduler ranking, and encode) rather than trimming the encoded output after
+    // ranking. A pure function of loadFactor, uniform across peers and frozen here BEFORE the
+    // parallel build region, so the peer pass stays serial-equivalent by construction. Entities
+    // leaving the shrunk radius are ordinary interest-out (client retention + the
+    // kSnapshotRetentionTicks force-full backstop handle re-entry) — never despawned, no wire
+    // change. Healthy / disabled governor => interestScale == 1 => the exact configured radius.
+    const double govInterestRadiusM = m_drawDistanceM * static_cast<double>(govInterestScale);
     m_peerWork.clear();
     for (auto& [peerId, peerEid] : m_peerEntities) {
         PeerInputState& pin = m_peerInputs[peerId];
@@ -723,8 +735,9 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
 
     // Parallel build: each worker assembles one peer's snapshot into its own w.buf and mutates only
     // that peer's private state (knownGens GC/records, pending despawns, pin EWMA-free fields). Shared
-    // reads (snapMap, m_spatialIndex, m_entityManager.get, m_drawDistanceM, m_snapshotBudgetBytes,
-    // m_schedulerWeights, m_congestionParams) are read-only for the whole region. No m_net.send here —
+    // reads (snapMap, m_spatialIndex, m_entityManager.get, m_drawDistanceM, the frozen
+    // govInterestRadiusM local, m_snapshotBudgetBytes, m_schedulerWeights, m_congestionParams) are
+    // read-only for the whole region. No m_net.send here —
     // the ENetHost is sim-thread-owned, so the actual send + send-cadence bookkeeping is the serial
     // flush below.
     runPeerPass(m_peerWork.size(), [&](std::size_t wbegin, std::size_t wend) {
@@ -775,14 +788,15 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
 
             // Collect visible entity indices via the spatial index (conservative XZ cells), then apply
             // an exact 3D (XYZ) distance gate (#402) and sort ascending so the bitstream's idx deltas
-            // stay small. peerState null/dead → empty list → header-only empty snapshot.
+            // stay small. Both bounds use the governor-scaled interest radius (#726 — frozen before
+            // this parallel region). peerState null/dead → empty list → header-only empty snapshot.
             std::vector<uint32_t> visible;
-            if (peerState && !peerState->dead && m_drawDistanceM > 0.0) {
-                const double r2 = m_drawDistanceM * m_drawDistanceM;
+            if (peerState && !peerState->dead && govInterestRadiusM > 0.0) {
+                const double r2 = govInterestRadiusM * govInterestRadiusM;
                 const double px = peerState->transform.pos[0];
                 const double py = peerState->transform.pos[1];
                 const double pz = peerState->transform.pos[2];
-                m_spatialIndex.queryRadius(peerState->transform.pos, m_drawDistanceM,
+                m_spatialIndex.queryRadius(peerState->transform.pos, govInterestRadiusM,
                                            [&](uint32_t entityIdx, const double* pos) {
                                                if (snapMap.find(entityIdx) == snapMap.end())
                                                    return; // died this tick after the index was built

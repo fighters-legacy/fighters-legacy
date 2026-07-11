@@ -71,4 +71,14 @@ uint32_t TickGovernor::aiSampleStride() const noexcept {
     return static_cast<uint32_t>(stride);
 }
 
+float TickGovernor::interestScale() const noexcept {
+    if (!m_params.enabled)
+        return 1.f;
+    // loadFactor is already clamped to [floor, 1]; the fraction floor clamps the shed depth. A
+    // misconfigured fraction outside [0, 1] is clamped defensively (config validation should have
+    // caught it) so the scale can never grow the radius or go non-positive.
+    const float minFrac = std::clamp(m_params.minInterestFraction, 0.f, 1.f);
+    return std::max(minFrac, m_loadFactor);
+}
+
 } // namespace fl
