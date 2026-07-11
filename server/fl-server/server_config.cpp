@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "server_config.h"
+#include "TestSpawn.h" // parseTestSpawnMix — validates [world] test_spawn_ai_mix at parse time (#580)
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -87,6 +88,11 @@ static const char* kDefaultToml =
     "# test_spawn_ai_count = 0          # server-side AI entities to pre-spawn at startup; 0 = disabled; [0, 1000000]\n"
     "# test_spawn_spread_km = 50.0      # phyllotaxis spread radius (km); [0, 100000]\n"
     "# test_spawn_agl_m = 500.0         # spawn/loiter altitude above origin ground elevation (m); [0, 50000]\n"
+    "# test_spawn_ai_mix = \"\"           # weighted controller mix, e.g. \"loiter:70,pursuit:20,patrol:10\"; empty = "
+    "all loiter (#580)\n"
+    "# test_projectile_rate = 0.0       # short-lived entities spawned per second (churn); 0 = disabled; [0, 100000] "
+    "(#580)\n"
+    "# test_projectile_ttl_s = 3.0      # churned-entity lifetime (s); [0.05, 600] (#580)\n"
     "\n"
     "[ai]\n"
     "difficulty_floor = \"recruit\"\n"
@@ -446,6 +452,33 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                          "world.test_spawn_agl_m out of range [0, 50000]; using default 500.0");
             } else {
                 cfg.testSpawnAglM = *v;
+            }
+        }
+        // #580: controller mix + projectile churn for the load-spawn.
+        if (auto v = tbl["world"]["test_spawn_ai_mix"].value<std::string>()) {
+            std::vector<TestSpawnMixEntry> mix;
+            std::string mixErr;
+            if (v->empty() || parseTestSpawnMix(*v, mix, mixErr)) {
+                cfg.testSpawnAiMix = std::move(*v);
+            } else {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         ("world.test_spawn_ai_mix invalid (" + mixErr + "); using all-loiter default").c_str());
+            }
+        }
+        if (auto v = tbl["world"]["test_projectile_rate"].value<double>()) {
+            if (*v < 0.0 || *v > 100'000.0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.test_projectile_rate out of range [0, 100000]; using default 0 (disabled)");
+            } else {
+                cfg.testProjectileRate = *v;
+            }
+        }
+        if (auto v = tbl["world"]["test_projectile_ttl_s"].value<double>()) {
+            if (*v < 0.05 || *v > 600.0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.test_projectile_ttl_s out of range [0.05, 600]; using default 3.0");
+            } else {
+                cfg.testProjectileTtlS = *v;
             }
         }
         // Graceful tick-overrun governor (#514).

@@ -86,3 +86,26 @@ is the next scaling axis — the #572 spike resolved that contingency as **defer
 trigger criterion** (see [spatial-sharding-design.md](spatial-sharding-design.md)); this
 characterisation's serialize-bound conclusion is its primary evidence. No further pool/index restructuring is required beyond what landed here
 (O(liveCount) iteration, configurable/auto cell size, recycled clear).
+
+## Follow-on: heavier AI mix + projectile churn ([#580](https://github.com/fighters-legacy/fighters-legacy/issues/580))
+
+The matrix above deliberately isolated pool+index cost with **cheap static loiterers** — leaving the
+AI phase and spawn/reap churn unstressed. #580 adds the affordances to load them:
+`[world] test_spawn_ai_mix` (weighted loiter/pursuit/patrol controller mix; `patrol` is a
+`StateMachineController` whose `AnyEntityWithinRange` transitions run `SpatialIndex::queryRadius()`
+every tick) and `[world] test_projectile_rate`/`test_projectile_ttl_s` (short-lived spawn+reap churn
+through the pool free-list, the O(liveCount) `forEach`, and the `SnapshotDespawn` TLV path). The
+`entity-churn` scale-gate profile sweeps the representative combination
+(`loiter:60,pursuit:25,patrol:15` + 120 spawns/s × 3 s TTL) over
+`entity_spawn_counts × sim_worker_threads`.
+
+Indicative **debug-build** deltas at 2000 entities / 1 worker / 8 clients (mix + churn vs. the
+all-loiter baseline row above): entities 2000→2362 (steady-state churn population), `ai_ms` +12%,
+`maintenance_ms` +17%, `serialize_ms` +13% (churned entities are snapshot-visible), `tick_ms` +11%,
+with the churn generator holding a stable population (no unbounded growth). Directionally: the mix
+moves `ai_ms` (as intended — the queryRadius patrol path), churn lands mostly in
+maintenance/serialize, and **serialize remains dominant**, consistent with the conclusion above.
+
+The Release-build reference-environment matrix (`--profile entity-churn` on the 8-core box /
+`reference-env/` container) has not been run yet — record its `ai_ms`/`collision_ms`/`maintenance_ms`
+deltas alongside the tables above when it is.

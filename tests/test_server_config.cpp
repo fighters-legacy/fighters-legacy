@@ -140,6 +140,45 @@ test_spawn_agl_m = 999999
     CHECK_FALSE(log.entries.empty());
 }
 
+TEST_CASE("parseServerConfig: reads world AI-mix + projectile-churn keys (#580)", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig(R"(
+[world]
+test_spawn_ai_mix = "loiter:60,pursuit:25,patrol:15"
+test_projectile_rate = 120.0
+test_projectile_ttl_s = 2.5
+)",
+                                 &log);
+    CHECK(cfg.testSpawnAiMix == "loiter:60,pursuit:25,patrol:15");
+    CHECK(cfg.testProjectileRate == 120.0);
+    CHECK(cfg.testProjectileTtlS == 2.5);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: AI-mix/churn defaults are off", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\n", &log);
+    CHECK(cfg.testSpawnAiMix.empty()); // all loiter (the #573 baseline)
+    CHECK(cfg.testProjectileRate == 0.0);
+    CHECK(cfg.testProjectileTtlS == 3.0);
+}
+
+TEST_CASE("parseServerConfig: invalid AI-mix warns and falls back to all loiter (#580)", "[server_config]") {
+    MockLogger log;
+    // Unknown behavior 'evade' -> Warn + empty mix (all loiter); the valid churn keys still apply.
+    auto cfg = parseServerConfig(R"(
+[world]
+test_spawn_ai_mix = "loiter:50,evade:50"
+test_projectile_rate = 500000
+test_projectile_ttl_s = 0.001
+)",
+                                 &log);
+    CHECK(cfg.testSpawnAiMix.empty());
+    CHECK(cfg.testProjectileRate == 0.0); // out of range [0, 100000] -> default
+    CHECK(cfg.testProjectileTtlS == 3.0); // out of range [0.05, 600] -> default
+    CHECK_FALSE(log.entries.empty());
+}
+
 // ---------------------------------------------------------------------------
 // Graceful tick-overrun governor keys (#514)
 // ---------------------------------------------------------------------------

@@ -60,6 +60,13 @@ PROFILE_DEFAULTS = {
     # sim_worker_threads_sweep, driving FL_TEST_SPAWN_AI / FL_SIM_WORKER_THREADS per run.
     "entity_spawn_counts": [],
     "sim_worker_threads_sweep": [],
+    # Heavier AI mix + projectile churn (#580): ai_mix is the weighted controller mix for the
+    # pre-spawned entities ("loiter:70,pursuit:20,patrol:10"; "" = all loiter, the #573 baseline);
+    # projectile_rate/_ttl_s drive the spawn/reap churn generator (0 = disabled). Forwarded per run
+    # as FL_TEST_SPAWN_MIX / FL_TEST_PROJECTILE_RATE / FL_TEST_PROJECTILE_TTL_S.
+    "ai_mix": "",
+    "projectile_rate": 0,
+    "projectile_ttl_s": 3.0,
     # entity-scale is advisory characterisation, not a bandwidth gate: it must NOT read or write the
     # committed downstream_kbs_per_client baseline (its sweep collapses many KB/s values onto one key).
     "baselined": True,
@@ -318,12 +325,18 @@ def expand_runs(profile):
     counts = profile.get("entity_spawn_counts") or [None]
     workers = profile.get("sim_worker_threads_sweep") or [None]
     # Overrun profile (#574): flip the governor ON for every run in the profile.
-    governor_env = {"FL_LOADTEST_GOVERNOR": "1"} if profile.get("governor") else {}
+    profile_env = {"FL_LOADTEST_GOVERNOR": "1"} if profile.get("governor") else {}
+    # AI mix + projectile churn (#580): profile-constant, applied to every run in the sweep.
+    if profile.get("ai_mix"):
+        profile_env["FL_TEST_SPAWN_MIX"] = profile["ai_mix"]
+    if profile.get("projectile_rate"):
+        profile_env["FL_TEST_PROJECTILE_RATE"] = str(profile["projectile_rate"])
+        profile_env["FL_TEST_PROJECTILE_TTL_S"] = str(profile["projectile_ttl_s"])
     runs = []
     for pattern in profile["patterns"]:
         for c in counts:
             for w in workers:
-                env = dict(governor_env)
+                env = dict(profile_env)
                 flags = []
                 label = pattern
                 if c is not None:
