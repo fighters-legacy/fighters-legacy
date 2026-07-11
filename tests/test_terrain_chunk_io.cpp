@@ -100,69 +100,58 @@ TEST_CASE("readTerrainChunkCache returns empty for wrong magic") {
 }
 
 // ---------------------------------------------------------------------------
-// ProceduralTerrainChunk
+// ProceduralTerrainChunk (cube-sphere tiles, #472)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("generateProceduralChunk returns 513x513 elements") {
-    const auto manifest = builtinWorldTerrainManifest();
-    const auto chunk = generateProceduralChunk(0, 0, manifest, kBuiltinProceduralParams);
-    CHECK(chunk.size() == 513u * 513u);
+TEST_CASE("generateProceduralTile returns kTileHeightmapSize^2 elements") {
+    const auto tile = generateProceduralTile(TileKey{2, 0, 0, 0}, 6'371'000.0, kBuiltinProceduralParams);
+    CHECK(tile.size() == static_cast<std::size_t>(kTileHeightmapSize) * kTileHeightmapSize);
 }
 
-TEST_CASE("generateProceduralChunk values are in valid uint16 range") {
-    const auto manifest = builtinWorldTerrainManifest();
-    const auto chunk = generateProceduralChunk(3, 3, manifest, kBuiltinProceduralParams);
-    REQUIRE(!chunk.empty());
-    for (auto v : chunk) {
-        CHECK(v <= 65535u);
-    }
-}
-
-TEST_CASE("generateProceduralChunk elevation range matches params") {
-    // base=550, amplitude=150 → elevations in [400, 700] m
+TEST_CASE("generateProceduralTile elevation range matches params") {
+    // base=550, amplitude=150 -> elevations in [400, 700] m
     // encoded: [32768+400, 32768+700] = [33168, 33468]
-    const auto manifest = builtinWorldTerrainManifest();
-    const auto chunk = generateProceduralChunk(0, 0, manifest, kBuiltinProceduralParams);
-    REQUIRE(!chunk.empty());
-    for (auto v : chunk) {
+    const auto tile = generateProceduralTile(TileKey{4, 2, 1, 3}, 6'371'000.0, kBuiltinProceduralParams);
+    REQUIRE(!tile.empty());
+    for (auto v : tile) {
         CHECK(v >= 33168u);
         CHECK(v <= 33468u);
     }
 }
 
-TEST_CASE("generateProceduralChunk is deterministic") {
-    const auto manifest = builtinWorldTerrainManifest();
-    const auto a = generateProceduralChunk(5, 7, manifest, kBuiltinProceduralParams);
-    const auto b = generateProceduralChunk(5, 7, manifest, kBuiltinProceduralParams);
+TEST_CASE("generateProceduralTile is deterministic") {
+    const TileKey key{1, 5, 7, 11};
+    const auto a = generateProceduralTile(key, 6'371'000.0, kBuiltinProceduralParams);
+    const auto b = generateProceduralTile(key, 6'371'000.0, kBuiltinProceduralParams);
     REQUIRE(a.size() == b.size());
     CHECK(a == b);
 }
 
-TEST_CASE("generateProceduralChunk is seamless on X axis") {
-    // Rightmost column of (cx=0, cy=0) must equal leftmost column of (cx=1, cy=0).
-    const auto manifest = builtinWorldTerrainManifest();
-    const auto left = generateProceduralChunk(0, 0, manifest, kBuiltinProceduralParams);
-    const auto right = generateProceduralChunk(1, 0, manifest, kBuiltinProceduralParams);
-    REQUIRE(left.size() == 513u * 513u);
-    REQUIRE(right.size() == 513u * 513u);
-    for (int row = 0; row < 513; ++row) {
-        const uint16_t lv = left[row * 513 + 512]; // last column of left chunk
-        const uint16_t rv = right[row * 513 + 0];  // first column of right chunk
-        CHECK(lv == rv);
+TEST_CASE("generateProceduralTile is seamless across sibling tile edges") {
+    // Two level-1 siblings on face 4 share the u=0.5 edge: the last sample column of
+    // the left tile equals the first column of the right tile, row for row.
+    const auto left = generateProceduralTile(TileKey{4, 1, 0, 0}, 6'371'000.0, kBuiltinProceduralParams);
+    const auto right = generateProceduralTile(TileKey{4, 1, 1, 0}, 6'371'000.0, kBuiltinProceduralParams);
+    const int s = kTileHeightmapSize;
+    for (int row = 0; row < s; ++row) {
+        CHECK(left[static_cast<std::size_t>(row) * s + (s - 1)] == right[static_cast<std::size_t>(row) * s]);
     }
 }
 
-TEST_CASE("generateProceduralChunk is seamless on Z axis") {
-    // Bottom row of (cx=0, cy=0) must equal top row of (cx=0, cy=1).
-    const auto manifest = builtinWorldTerrainManifest();
-    const auto bottom = generateProceduralChunk(0, 0, manifest, kBuiltinProceduralParams);
-    const auto top = generateProceduralChunk(0, 1, manifest, kBuiltinProceduralParams);
-    REQUIRE(bottom.size() == 513u * 513u);
-    REQUIRE(top.size() == 513u * 513u);
-    for (int col = 0; col < 513; ++col) {
-        const uint16_t bv = bottom[512 * 513 + col]; // last row of bottom chunk
-        const uint16_t tv = top[0 * 513 + col];      // first row of top chunk
-        CHECK(bv == tv);
+TEST_CASE("generateProceduralTile matches its parent at shared sample points") {
+    // A child tile's even samples coincide with half of its parent's samples: the
+    // shared directions must produce identical values (coarse-to-fine consistency).
+    const TileKey parentKey{4, 2, 1, 1};
+    const auto parentTile = generateProceduralTile(parentKey, 6'371'000.0, kBuiltinProceduralParams);
+    const auto childTile = generateProceduralTile(child(parentKey, 0), 6'371'000.0, kBuiltinProceduralParams);
+    const int s = kTileHeightmapSize;
+    // Child quadrant 0 covers the parent's lower-left quarter: child sample (2c, 2r)
+    // = parent sample (c, r) for c, r in [0, (s-1)/2].
+    for (int r = 0; r <= (s - 1) / 2; r += 8) {
+        for (int c = 0; c <= (s - 1) / 2; c += 8) {
+            CHECK(childTile[static_cast<std::size_t>(2 * r) * s + 2 * c] ==
+                  parentTile[static_cast<std::size_t>(r) * s + c]);
+        }
     }
 }
 
@@ -173,11 +162,7 @@ TEST_CASE("generateProceduralChunk is seamless on Z axis") {
 TEST_CASE("builtinWorldTerrainManifest has expected values") {
     const auto m = builtinWorldTerrainManifest();
     CHECK(m.terrainId == "world");
-    CHECK(m.chunkSizeM == Catch::Approx(15360.f));
-    CHECK(m.gridWidth == -1);
-    CHECK(m.gridHeight == -1);
-    CHECK(m.originX == Catch::Approx(-7680.0));
-    CHECK(m.originZ == Catch::Approx(-7680.0));
+    CHECK(m.maxTileLevel == 12);
 }
 
 // ---------------------------------------------------------------------------

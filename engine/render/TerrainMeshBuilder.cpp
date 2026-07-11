@@ -5,7 +5,6 @@
 #include <glm/geometric.hpp> // cross, normalize, dot, length
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -26,223 +25,10 @@ void writeLE32(uint8_t* p, uint32_t v) {
 
 } // namespace
 
-std::vector<uint8_t> buildTerrainMeshGlb(const std::vector<uint16_t>& heights, int heightmapSize, int meshGrid,
-                                         float chunkSizeM, double chunkWorldX, double chunkWorldZ,
-                                         double planetRadius) noexcept {
-    // Validate input
-    if (heights.empty() || heightmapSize < 2 || meshGrid <= 0)
-        return {};
-    if (heightmapSize < meshGrid + 1)
-        return {};
-    if (static_cast<int>(heights.size()) < heightmapSize * heightmapSize)
-        return {};
-
-    const int stride = (heightmapSize - 1) / meshGrid; // integer, ≥1
-    const int gridPts = meshGrid + 1;                  // vertices per side
-    const int vertCount = gridPts * gridPts;
-    const int quadCount = meshGrid * meshGrid;
-    const int indexCount = quadCount * 6;
-
-    const float cellM = chunkSizeM / static_cast<float>(meshGrid);
-
-    // World-space distance per heightmap pixel (for spherical correction lookup)
-    const double hPixelToWorld = static_cast<double>(chunkSizeM) / static_cast<double>(heightmapSize - 1);
-    const double R2 = planetRadius * planetRadius;
-
-    // height lookup (clamped)
-    auto hAt = [&](int col, int row) -> float {
-        col = std::clamp(col, 0, heightmapSize - 1);
-        row = std::clamp(row, 0, heightmapSize - 1);
-        return static_cast<float>(heights[static_cast<std::size_t>(row) * heightmapSize + col]) - 32768.0f;
-    };
-
-    // Height + spherical correction at heightmap pixel (hcIn, hrIn).
-    // hcIn/hrIn are intentionally unclamped for world-position lookup; hAt() clamps internally.
-    auto hAtSphere = [&](int hcIn, int hrIn) -> float {
-        const float base = hAt(hcIn, hrIn);
-        if (planetRadius <= 0.0)
-            return base;
-        const double vx = chunkWorldX + hcIn * hPixelToWorld;
-        const double vz = chunkWorldZ + hrIn * hPixelToWorld;
-        const double D2 = vx * vx + vz * vz;
-        return base + static_cast<float>(std::sqrt(std::max(0.0, R2 - D2)) - planetRadius);
-    };
-
-    // Build vertex arrays
-    std::vector<float> positions(static_cast<std::size_t>(vertCount) * 3);
-    std::vector<float> normals(static_cast<std::size_t>(vertCount) * 3);
-
-    float yMin = std::numeric_limits<float>::max();
-    float yMax = -std::numeric_limits<float>::max();
-
-    for (int row = 0; row < gridPts; ++row) {
-        for (int col = 0; col < gridPts; ++col) {
-            const int hc = col * stride;
-            const int hr = row * stride;
-            const float y = hAtSphere(hc, hr);
-
-            const std::size_t vi = static_cast<std::size_t>(row * gridPts + col);
-            positions[vi * 3 + 0] = static_cast<float>(col) * cellM;
-            positions[vi * 3 + 1] = y;
-            positions[vi * 3 + 2] = static_cast<float>(row) * cellM;
-
-            if (y < yMin)
-                yMin = y;
-            if (y > yMax)
-                yMax = y;
-
-            // Central-difference normal (uses spherical-corrected Y to account for curvature gradient)
-            const float hl = hAtSphere(hc - stride, hr);
-            const float hr_ = hAtSphere(hc + stride, hr);
-            const float hu = hAtSphere(hc, hr - stride);
-            const float hd = hAtSphere(hc, hr + stride);
-            const float dx = hr_ - hl;
-            const float dz = hd - hu;
-            // sampleSpacing = cellM * 2 (distance between samples for central diff)
-            const float sc = cellM * 2.0f;
-            // normal = normalize(-dx, sc, -dz)
-            const float nx = -dx;
-            const float ny = sc;
-            const float nz = -dz;
-            const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
-            normals[vi * 3 + 0] = (len > 0.0f) ? nx / len : 0.0f;
-            normals[vi * 3 + 1] = (len > 0.0f) ? ny / len : 1.0f;
-            normals[vi * 3 + 2] = (len > 0.0f) ? nz / len : 0.0f;
-        }
-    }
-
-    // Build index array. Standard glTF winding: CCW-from-above so the winding cross-product
-    // agrees with the +Y stored normal (front-faces the top surface under frontFace=CCW).
-    std::vector<uint16_t> indices(static_cast<std::size_t>(indexCount));
-    std::size_t ii = 0;
-    for (int row = 0; row < meshGrid; ++row) {
-        for (int col = 0; col < meshGrid; ++col) {
-            const uint16_t v = static_cast<uint16_t>(row * gridPts + col);
-            const uint16_t vr = static_cast<uint16_t>(v + 1);
-            const uint16_t vd = static_cast<uint16_t>(v + gridPts);
-            const uint16_t vdr = static_cast<uint16_t>(v + gridPts + 1);
-            // tri 0: v, vd, vdr
-            indices[ii++] = v;
-            indices[ii++] = vd;
-            indices[ii++] = vdr;
-            // tri 1: v, vdr, vr
-            indices[ii++] = v;
-            indices[ii++] = vdr;
-            indices[ii++] = vr;
-        }
-    }
-
-    // ---------------------------------------------------------------------------
-    // Assemble BIN buffer (non-interleaved)
-    // ---------------------------------------------------------------------------
-    const std::size_t posBytes = static_cast<std::size_t>(vertCount) * 3 * sizeof(float);
-    const std::size_t nrmBytes = posBytes;
-    const std::size_t idxBytes = static_cast<std::size_t>(indexCount) * sizeof(uint16_t);
-    const std::size_t binBytes = posBytes + nrmBytes + idxBytes;
-    // Pad to 4-byte boundary (all our sizes are already multiples of 4, but pad anyway)
-    const std::size_t binPadded = (binBytes + 3u) & ~3u;
-
-    std::vector<uint8_t> bin(binPadded, 0);
-    std::memcpy(bin.data(), positions.data(), posBytes);
-    std::memcpy(bin.data() + posBytes, normals.data(), nrmBytes);
-    std::memcpy(bin.data() + posBytes + nrmBytes, indices.data(), idxBytes);
-
-    // ---------------------------------------------------------------------------
-    // Build JSON (glTF 2.0)
-    // ---------------------------------------------------------------------------
-    const std::size_t posOff = 0;
-    const std::size_t nrmOff = posBytes;
-    const std::size_t idxOff = posBytes + nrmBytes;
-
-    // POSITION min/max for accessor
-    const float xMax = static_cast<float>(meshGrid) * cellM;
-    const float zMax = xMax;
-
-    std::string json = "{";
-    json += R"("asset":{"version":"2.0"},)";
-    json += R"("scene":0,)";
-    json += R"("scenes":[{"nodes":[0]}],)";
-    json += R"("nodes":[{"mesh":0}],)";
-    json +=
-        R"("meshes":[{"name":"terrain","primitives":[{"attributes":{"POSITION":0,"NORMAL":1},"indices":2,"mode":4}]}],)";
-
-    // accessors
-    json += "\"accessors\":[";
-    // 0: POSITION
-    json += "{\"bufferView\":0,\"byteOffset\":0,\"componentType\":5126,\"count\":" + std::to_string(vertCount) +
-            ",\"type\":\"VEC3\""
-            ",\"min\":[0.0,";
-    json += std::to_string(yMin) + ",0.0],\"max\":[" + std::to_string(xMax) + "," + std::to_string(yMax) + "," +
-            std::to_string(zMax) + "]},";
-    // 1: NORMAL
-    json += "{\"bufferView\":1,\"byteOffset\":0,\"componentType\":5126,\"count\":" + std::to_string(vertCount) +
-            ",\"type\":\"VEC3\"},";
-    // 2: INDICES
-    json += "{\"bufferView\":2,\"byteOffset\":0,\"componentType\":5123,\"count\":" + std::to_string(indexCount) +
-            ",\"type\":\"SCALAR\"}],";
-
-    // bufferViews
-    json += "\"bufferViews\":[";
-    json += "{\"buffer\":0,\"byteOffset\":" + std::to_string(posOff) + ",\"byteLength\":" + std::to_string(posBytes) +
-            ",\"target\":34962},";
-    json += "{\"buffer\":0,\"byteOffset\":" + std::to_string(nrmOff) + ",\"byteLength\":" + std::to_string(nrmBytes) +
-            ",\"target\":34962},";
-    json += "{\"buffer\":0,\"byteOffset\":" + std::to_string(idxOff) + ",\"byteLength\":" + std::to_string(idxBytes) +
-            ",\"target\":34963}],";
-
-    // buffer
-    json += "\"buffers\":[{\"byteLength\":" + std::to_string(binPadded) + "}]";
-    json += "}";
-
-    // Pad JSON to 4-byte boundary with spaces
-    while (json.size() % 4 != 0)
-        json += ' ';
-
-    // ---------------------------------------------------------------------------
-    // Assemble GLB
-    // ---------------------------------------------------------------------------
-    // Chunk types
-    static constexpr uint32_t kChunkJSON = 0x4E4F534Au;
-    static constexpr uint32_t kChunkBIN = 0x004E4942u;
-    static constexpr uint32_t kMagic = 0x46546C67u;
-
-    const std::size_t jsonChunkSize = 8 + json.size();
-    const std::size_t binChunkSize = 8 + binPadded;
-    const std::size_t totalSize = 12 + jsonChunkSize + binChunkSize;
-
-    std::vector<uint8_t> glb(totalSize, 0);
-    uint8_t* p = glb.data();
-
-    // GLB header
-    writeLE32(p, kMagic);
-    p += 4;
-    writeLE32(p, 2u);
-    p += 4;
-    writeLE32(p, static_cast<uint32_t>(totalSize));
-    p += 4;
-
-    // JSON chunk
-    writeLE32(p, static_cast<uint32_t>(json.size()));
-    p += 4;
-    writeLE32(p, kChunkJSON);
-    p += 4;
-    std::memcpy(p, json.data(), json.size());
-    p += json.size();
-
-    // BIN chunk
-    writeLE32(p, static_cast<uint32_t>(binPadded));
-    p += 4;
-    writeLE32(p, kChunkBIN);
-    p += 4;
-    std::memcpy(p, bin.data(), binPadded);
-
-    return glb;
-}
-
 std::vector<uint8_t> buildTileMeshGlb(const std::vector<uint16_t>& heights, int heightmapSize, int meshGrid,
                                       const TileKey& key, double R, glm::dvec3 tileOriginWorld,
-                                      const uint8_t* landCover, bool emitTexcoord) noexcept {
-    // Validate input (mirrors buildTerrainMeshGlb).
+                                      const uint8_t* landCover, bool emitTexcoord, double skirtDepthM) noexcept {
+    // Validate input.
     if (heights.empty() || heightmapSize < 2 || meshGrid <= 0)
         return {};
     if (heightmapSize < meshGrid + 1)
@@ -252,9 +38,14 @@ std::vector<uint8_t> buildTileMeshGlb(const std::vector<uint16_t>& heights, int 
 
     const int stride = (heightmapSize - 1) / meshGrid; // integer, >= 1
     const int gridPts = meshGrid + 1;                  // vertices per side
-    const int vertCount = gridPts * gridPts;
+    const int baseVertCount = gridPts * gridPts;
+    const bool hasSkirt = skirtDepthM > 0.0;
+    const int skirtVertCount = hasSkirt ? 4 * gridPts : 0;
+    const int vertCount = baseVertCount + skirtVertCount;
+    if (vertCount > static_cast<int>(std::numeric_limits<uint16_t>::max()) + 1)
+        return {}; // uint16 index budget exceeded
     const int quadCount = meshGrid * meshGrid;
-    const int indexCount = quadCount * 6;
+    const int indexCount = quadCount * 6 + (hasSkirt ? 4 * meshGrid * 6 : 0);
     const double n = static_cast<double>(meshGrid);
     const glm::dvec3 centre{0.0, -R, 0.0};
 
@@ -334,9 +125,8 @@ std::vector<uint8_t> buildTileMeshGlb(const std::vector<uint16_t>& heights, int 
         }
     }
 
-    // Indices. CCW-from-outside: the tile basis (col->U, row->V, out=U x V) is right-handed, the
-    // opposite handedness to the planar builder's (col->X, row->Z, up->+Y), so the winding is reversed
-    // relative to buildTerrainMeshGlb to keep the face normal outward (validate-mesh clean).
+    // Indices. CCW-from-outside: the tile basis (col->U, row->V, out=U x V) is right-handed, so
+    // triangles wind (v, vdr, vd) / (v, vr, vdr) to keep the face normal outward (validate-mesh clean).
     std::vector<uint16_t> indices(static_cast<std::size_t>(indexCount));
     std::size_t ii = 0;
     for (int row = 0; row < meshGrid; ++row) {
@@ -345,13 +135,92 @@ std::vector<uint8_t> buildTileMeshGlb(const std::vector<uint16_t>& heights, int 
             const uint16_t vr = static_cast<uint16_t>(v + 1);
             const uint16_t vd = static_cast<uint16_t>(v + gridPts);
             const uint16_t vdr = static_cast<uint16_t>(v + gridPts + 1);
-            // tri 0: v, vdr, vd   tri 1: v, vr, vdr  (reversed vs the planar grid)
             indices[ii++] = v;
             indices[ii++] = vdr;
             indices[ii++] = vd;
             indices[ii++] = v;
             indices[ii++] = vr;
             indices[ii++] = vdr;
+        }
+    }
+
+    // Skirt (#472): duplicate each border vertex, push it toward the planet centre by skirtDepthM,
+    // and seal the border with side quads. Copies of normal/texcoord/color make the flap shade like
+    // the surface, so the crack it hides is invisible rather than a dark seam.
+    if (hasSkirt) {
+        // Border vertex source indices, one run of gridPts per edge: -V row, +V row, -U col, +U col.
+        std::vector<uint16_t> edgeSrc(static_cast<std::size_t>(4) * gridPts);
+        for (int k = 0; k < gridPts; ++k) {
+            edgeSrc[static_cast<std::size_t>(0) * gridPts + k] = static_cast<uint16_t>(k); // row 0
+            edgeSrc[static_cast<std::size_t>(1) * gridPts + k] =
+                static_cast<uint16_t>(meshGrid * gridPts + k);                                       // row meshGrid
+            edgeSrc[static_cast<std::size_t>(2) * gridPts + k] = static_cast<uint16_t>(k * gridPts); // col 0
+            edgeSrc[static_cast<std::size_t>(3) * gridPts + k] =
+                static_cast<uint16_t>(k * gridPts + meshGrid); // col meshGrid
+        }
+
+        const glm::dvec3 tileCentre = tileToWorld(key, 0.5, 0.5, 0.0, R);
+        for (int e = 0; e < 4; ++e) {
+            const int firstSkirt = baseVertCount + e * gridPts;
+            for (int k = 0; k < gridPts; ++k) {
+                const std::size_t src = edgeSrc[static_cast<std::size_t>(e) * gridPts + k];
+                const std::size_t dst = static_cast<std::size_t>(firstSkirt + k);
+                const glm::dvec3 world{static_cast<double>(positions[src * 3 + 0]) + tileOriginWorld.x,
+                                       static_cast<double>(positions[src * 3 + 1]) + tileOriginWorld.y,
+                                       static_cast<double>(positions[src * 3 + 2]) + tileOriginWorld.z};
+                const glm::dvec3 inward = glm::normalize(centre - world);
+                const glm::vec3 rel = glm::vec3(world + inward * skirtDepthM - tileOriginWorld);
+                positions[dst * 3 + 0] = rel.x;
+                positions[dst * 3 + 1] = rel.y;
+                positions[dst * 3 + 2] = rel.z;
+                relMin = glm::min(relMin, rel);
+                relMax = glm::max(relMax, rel);
+                normals[dst * 3 + 0] = normals[src * 3 + 0];
+                normals[dst * 3 + 1] = normals[src * 3 + 1];
+                normals[dst * 3 + 2] = normals[src * 3 + 2];
+                if (emitTexcoord) {
+                    texcoords[dst * 2 + 0] = texcoords[src * 2 + 0];
+                    texcoords[dst * 2 + 1] = texcoords[src * 2 + 1];
+                }
+                if (landCover) {
+                    for (int c = 0; c < 4; ++c)
+                        colors[dst * 4 + c] = colors[src * 4 + c];
+                }
+            }
+
+            // Winding per edge: pick the triangulation whose face normal points away from the tile
+            // centre (front-facing from outside the tile border under back-face culling).
+            auto relAt = [&](std::size_t idx) -> glm::dvec3 {
+                return {static_cast<double>(positions[idx * 3 + 0]), static_cast<double>(positions[idx * 3 + 1]),
+                        static_cast<double>(positions[idx * 3 + 2])};
+            };
+            const std::size_t a0 = edgeSrc[static_cast<std::size_t>(e) * gridPts];
+            const std::size_t b0 = edgeSrc[static_cast<std::size_t>(e) * gridPts + 1];
+            const glm::dvec3 pa = relAt(a0), pb = relAt(b0), pb2 = relAt(static_cast<std::size_t>(firstSkirt + 1));
+            const glm::dvec3 edgeOut = (pa + pb) * 0.5 - (tileCentre - tileOriginWorld);
+            const bool forward = glm::dot(glm::cross(pb - pa, pb2 - pa), edgeOut) >= 0.0;
+
+            for (int k = 0; k < meshGrid; ++k) {
+                const uint16_t a = edgeSrc[static_cast<std::size_t>(e) * gridPts + k];
+                const uint16_t b = edgeSrc[static_cast<std::size_t>(e) * gridPts + k + 1];
+                const uint16_t a2 = static_cast<uint16_t>(firstSkirt + k);
+                const uint16_t b2 = static_cast<uint16_t>(firstSkirt + k + 1);
+                if (forward) {
+                    indices[ii++] = a;
+                    indices[ii++] = b;
+                    indices[ii++] = b2;
+                    indices[ii++] = a;
+                    indices[ii++] = b2;
+                    indices[ii++] = a2;
+                } else {
+                    indices[ii++] = a;
+                    indices[ii++] = b2;
+                    indices[ii++] = b;
+                    indices[ii++] = a;
+                    indices[ii++] = a2;
+                    indices[ii++] = b2;
+                }
+            }
         }
     }
 
@@ -388,19 +257,14 @@ std::vector<uint8_t> buildTileMeshGlb(const std::vector<uint16_t>& heights, int 
     // ---------------------------------------------------------------------------
     int accPos = 0, accNrm = 1, accNext = 2;
     int accTex = -1, accCol = -1;
-    int bvNext = 2; // bv0=POSITION, bv1=NORMAL
-    if (emitTexcoord) {
+    if (emitTexcoord)
         accTex = accNext++;
-        ++bvNext;
-    }
-    if (landCover) {
+    if (landCover)
         accCol = accNext++;
-        ++bvNext;
-    }
     const int accIdx = accNext;
-    const int bvIdx = bvNext;
     const int bvTex = emitTexcoord ? 2 : -1;
     const int bvCol = landCover ? (emitTexcoord ? 3 : 2) : -1;
+    const int bvIdx = accIdx;
 
     std::string attrs = "\"POSITION\":" + std::to_string(accPos) + ",\"NORMAL\":" + std::to_string(accNrm);
     if (emitTexcoord)

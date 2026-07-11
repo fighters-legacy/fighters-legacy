@@ -192,6 +192,18 @@ constexpr double kQuarterPi = 0.785398163397448309616;
     return {k.face, static_cast<uint8_t>(k.level + 1), (k.i << 1) | (q & 1u), (k.j << 1) | ((q >> 1) & 1u)};
 }
 
+// Tile index along one axis at `level` for a face-uv coordinate in [0, 1]:
+// floor(uv * 2^level) clamped into [0, 2^level - 1] (guards a floating-point uv
+// landing exactly on 1.0 or just below 0.0).
+[[nodiscard]] inline uint32_t tileIndexForUv(double uv, uint8_t level) noexcept {
+    const uint32_t n = uint32_t{1} << level;
+    double c = uv * static_cast<double>(n);
+    if (c < 0.0)
+        c = 0.0;
+    const uint32_t idx = static_cast<uint32_t>(c);
+    return idx >= n ? n - 1 : idx;
+}
+
 // Edge-neighbour direction for neighbor().
 enum class TileEdge : uint8_t { NegU = 0, PosU = 1, NegV = 2, PosV = 3 };
 
@@ -240,15 +252,7 @@ enum class TileEdge : uint8_t { NegU = 0, PosU = 1, NegV = 2, PosV = 3 };
         break;
     }
     const TileCoord nc = directionToFaceUv(faceUvToDirection(k.face, u, v));
-    // Clamp the fractional uv (guard against a floating-point landing exactly on 1.0) and quantize.
-    auto quant = [n](double x) -> uint32_t {
-        double c = x * static_cast<double>(n);
-        if (c < 0.0)
-            c = 0.0;
-        uint32_t idx = static_cast<uint32_t>(c);
-        return idx >= n ? n - 1 : idx;
-    };
-    return {nc.key.face, k.level, quant(nc.s), quant(nc.t)};
+    return {nc.key.face, k.level, tileIndexForUv(nc.s, k.level), tileIndexForUv(nc.t, k.level)};
 }
 
 } // namespace fl

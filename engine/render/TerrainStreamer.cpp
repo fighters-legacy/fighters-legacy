@@ -11,47 +11,31 @@
 #include <cmath>
 #include <cstdio>
 #include <mutex>
+#include <numbers>
+#include <optional>
 #include <shared_mutex>
+#include <string>
 
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace fl {
 
+namespace {
+
+constexpr int kTileMeshGrid = kTileHeightmapSize - 1;                  // 128 quads per tile axis
+constexpr double kQuarterCircumferenceFactor = std::numbers::pi / 2.0; // face arc / R
+
+} // namespace
+
 // ---------------------------------------------------------------------------
-// ChunkKeyHash
+// TileKeyHash
 // ---------------------------------------------------------------------------
 
-std::size_t TerrainStreamer::ChunkKeyHash::operator()(const ChunkKey& k) const noexcept {
-    std::size_t h = std::hash<int32_t>{}(k.cx);
-    h ^= std::hash<int32_t>{}(k.cy) + 0x9e3779b9u + (h << 6) + (h >> 2);
-    h ^= std::hash<uint32_t>{}(k.lod) + 0x9e3779b9u + (h << 6) + (h >> 2);
+std::size_t TerrainStreamer::TileKeyHash::operator()(const TileKey& k) const noexcept {
+    std::size_t h = std::hash<uint32_t>{}((static_cast<uint32_t>(k.face) << 8) | k.level);
+    h ^= std::hash<uint32_t>{}(k.i) + 0x9e3779b9u + (h << 6) + (h >> 2);
+    h ^= std::hash<uint32_t>{}(k.j) + 0x9e3779b9u + (h << 6) + (h >> 2);
     return h;
-}
-
-// ---------------------------------------------------------------------------
-// Static helpers
-// ---------------------------------------------------------------------------
-
-int TerrainStreamer::hmSizeForLod(int lod) noexcept {
-    switch (lod) {
-    case 0:
-        return 513;
-    case 1:
-        return 257;
-    default:
-        return 129;
-    }
-}
-
-int TerrainStreamer::meshGridForLod(int lod) noexcept {
-    switch (lod) {
-    case 0:
-        return 128;
-    case 1:
-        return 64;
-    default:
-        return 32;
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -68,16 +52,90 @@ TerrainStreamer::~TerrainStreamer() {
     // Deregister first so any late service() calls hit a null handler, not dead this.
     m_asyncFs.setEventHandler(nullptr);
     // Cancel all in-flight reads (callbacks now go nowhere).
-    for (auto& [id, key] : m_pendingByReadId)
+    for (auto& [id, pending] : m_pendingByReadId)
         m_asyncFs.cancelRead(id);
     // Destroy GPU resources.
     if (m_renderer) {
-        for (auto& [key, chunk] : m_chunks) {
-            if (chunk.mesh.valid())
-                m_renderer->destroyMesh(chunk.mesh);
+        for (auto& [key, tile] : m_tiles) {
+            if (tile.mesh.valid())
+                m_renderer->destroyMesh(tile.mesh);
         }
         if (m_terrainMat.valid())
             m_renderer->destroyMaterial(m_terrainMat);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SSE refinement
+// ---------------------------------------------------------------------------
+
+double TerrainStreamer::tileExtentM(int level) const noexcept {
+    return kQuarterCircumferenceFactor * m_planetRadiusM / static_cast<double>(uint64_t{1} << level);
+}
+
+double TerrainStreamer::skirtDepthFor(int level) const noexcept {
+    return std::clamp(tileExtentM(level) / 64.0, 2.0, 200.0);
+}
+
+bool TerrainStreamer::shouldRefine(const TileKey& key, glm::dvec3 camPos) const noexcept {
+    if (static_cast<int>(key.level) >= m_manifest.maxTileLevel)
+        return false;
+    const double ext = tileExtentM(key.level);
+    const glm::dvec3 centre = tileToWorld(key, 0.5, 0.5, 0.0, m_planetRadiusM);
+    // Distance to the tile's bounding sphere (half-diagonal; terrain amplitude deliberately
+    // NOT added -- a fat slack forces max-depth refinement for every tile within slack range,
+    // exploding the desired set. Under-refining a peak directly below the camera is benign).
+    const double bound = ext * 0.75;
+    const double d = std::max(glm::length(camPos - centre) - bound, 1.0);
+    // Geometric error proxy: a fraction of one mesh quad (the height deviation a coarser
+    // level introduces is far smaller than the full quad extent). Projected size in pixels:
+    const double eps = ext * (kGeomErrorFactor / static_cast<double>(kTileMeshGrid));
+    const double sse =
+        eps * static_cast<double>(m_screenHeightPx) / (2.0 * d * std::tan(static_cast<double>(m_fovYRad) * 0.5));
+    return sse > static_cast<double>(kSseTauPx);
+}
+
+void TerrainStreamer::refine(const TileKey& key, glm::dvec3 camPos, std::vector<TileKey>& leaves) const {
+    if (shouldRefine(key, camPos)) {
+        for (uint8_t q = 0; q < 4; ++q)
+            refine(child(key, q), camPos, leaves);
+        return;
+    }
+    leaves.push_back(key);
+}
+
+// Restricted-quadtree pass: no leaf may border a leaf more than one level coarser
+// across a shared edge. Splits the too-coarse leaf and repeats until stable.
+void TerrainStreamer::balanceLeaves(TileSet& leaves) const {
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        const std::vector<TileKey> snapshot(leaves.begin(), leaves.end());
+        for (const TileKey& t : snapshot) {
+            if (t.level < 2 || leaves.find(t) == leaves.end())
+                continue;
+            for (int e = 0; e < 4; ++e) {
+                const TileKey nb = neighbor(t, static_cast<TileEdge>(e));
+                // Find the desired leaf covering the neighbour region.
+                TileKey cover = nb;
+                bool found = false;
+                while (true) {
+                    if (leaves.find(cover) != leaves.end()) {
+                        found = true;
+                        break;
+                    }
+                    if (cover.level == 0)
+                        break;
+                    cover = parent(cover);
+                }
+                if (found && static_cast<int>(cover.level) < static_cast<int>(t.level) - 1) {
+                    leaves.erase(cover);
+                    for (uint8_t q = 0; q < 4; ++q)
+                        leaves.insert(child(cover, q));
+                    changed = true;
+                }
+            }
+        }
     }
 }
 
@@ -86,97 +144,149 @@ TerrainStreamer::~TerrainStreamer() {
 // ---------------------------------------------------------------------------
 
 void TerrainStreamer::update(glm::dvec3 cameraWorldPos) {
-    const int centerCx = static_cast<int>(std::floor((cameraWorldPos.x - m_manifest.originX) / m_manifest.chunkSizeM));
-    const int centerCy = static_cast<int>(std::floor((cameraWorldPos.z - m_manifest.originZ) / m_manifest.chunkSizeM));
+    ++m_frame;
+    m_updated = true;
 
-    m_lastCx = centerCx;
-    m_lastCy = centerCy;
+    // 1. SSE-driven desired leaves from the six face roots.
+    std::vector<TileKey> leafVec;
+    for (uint8_t f = 0; f < kCubeFaceCount; ++f)
+        refine(TileKey{f, 0, 0, 0}, cameraWorldPos, leafVec);
+    TileSet leaves(leafVec.begin(), leafVec.end());
 
-    // Build desired set
-    std::unordered_map<ChunkKey, bool, ChunkKeyHash> desired;
-    desired.reserve(83);
-    for (int lod = 0; lod < kNumLods; ++lod) {
-        const int he = kLodHalfExtent[lod];
-        for (int dy = -he; dy <= he; ++dy) {
-            for (int dx = -he; dx <= he; ++dx) {
-                ChunkKey key;
-                key.cx = centerCx + dx;
-                key.cy = centerCy + dy;
-                key.lod = static_cast<uint32_t>(lod);
-                desired[key] = true;
-            }
+    // 2. 2:1 edge balance (crack rule).
+    balanceLeaves(leaves);
+
+    // 3. Desired tree = leaves plus every ancestor (coarse fallbacks + walk chain).
+    m_desiredLeaves = std::move(leaves);
+    m_desiredAll.clear();
+    for (const TileKey& leaf : m_desiredLeaves) {
+        TileKey k = leaf;
+        while (true) {
+            if (!m_desiredAll.insert(k).second)
+                break; // ancestors above already inserted via another leaf
+            if (k.level == 0)
+                break;
+            k = parent(k);
         }
     }
 
-    // Evict chunks no longer wanted (collect first to avoid iterator invalidation)
-    std::vector<ChunkKey> toEvict;
-    for (auto& [key, chunk] : m_chunks) {
-        if (desired.find(key) == desired.end())
-            toEvict.push_back(key);
+    // 4. Touch resident desired tiles; queue loads for missing ones. Missing tiles are
+    //    sorted coarse-first, then nearest-to-camera within a level: the fallback
+    //    ancestors load before detail, and the camera's covering chain (which
+    //    heightReadyAt walks) becomes Ready within the first few pumps instead of
+    //    waiting behind far-side tiles.
+    std::vector<std::pair<double, TileKey>> missing;
+    for (const TileKey& k : m_desiredAll) {
+        auto it = m_tiles.find(k);
+        if (it != m_tiles.end()) {
+            it->second.lastDesiredFrame = m_frame;
+            continue;
+        }
+        const glm::dvec3 centre = tileToWorld(k, 0.5, 0.5, 0.0, m_planetRadiusM);
+        const glm::dvec3 dvec = cameraWorldPos - centre;
+        missing.emplace_back(glm::dot(dvec, dvec), k);
     }
-    for (auto& key : toEvict)
-        evictChunk(key);
-
-    // Load new chunks (rate-limited for procedural fallback)
+    std::sort(missing.begin(), missing.end(), [](const auto& a, const auto& b) {
+        if (a.second.level != b.second.level)
+            return a.second.level < b.second.level;
+        return a.first < b.first;
+    });
     int proceduralCount = 0;
-    for (auto& [key, _] : desired) {
-        if (m_chunks.find(key) == m_chunks.end())
-            loadChunk(key, proceduralCount);
+    for (const auto& [d2, k] : missing)
+        loadTile(k, proceduralCount);
+
+    // 5. LRU eviction: tiles outside the desired tree are cached until the residency
+    //    cap, then evicted least-recently-desired first.
+    if (m_tiles.size() > m_maxResidentTiles) {
+        std::vector<std::pair<uint64_t, TileKey>> evictable;
+        for (const auto& [key, tile] : m_tiles) {
+            if (m_desiredAll.find(key) == m_desiredAll.end())
+                evictable.emplace_back(tile.lastDesiredFrame, key);
+        }
+        std::sort(evictable.begin(), evictable.end(), [](const auto& a, const auto& b) {
+            if (a.first != b.first)
+                return a.first < b.first;
+            // Equal last-desired frame: evict deeper tiles first, so a covering chain
+            // never loses an ancestor while a deeper descendant stays resident
+            // (deepestReadyTile walks the chain contiguously from the root).
+            return a.second.level > b.second.level;
+        });
+        for (const auto& [frame, key] : evictable) {
+            if (m_tiles.size() <= m_maxResidentTiles)
+                break;
+            evictTile(key);
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
-// loadChunk
+// loadTile
 // ---------------------------------------------------------------------------
 
-void TerrainStreamer::loadChunk(const ChunkKey& key, int& proceduralCount) {
-    auto path = m_assets.resolveTerrainChunk(m_manifest.terrainId.c_str(), static_cast<uint32_t>(key.cx),
-                                             static_cast<uint32_t>(key.cy), key.lod);
+void TerrainStreamer::loadTile(const TileKey& key, int& proceduralCount) {
+    // Transitional pack probe until #473's resolveTilePath: face folded into the
+    // terrain id, so packs may ship tiles at terrain/<id>/f<face>/lod<level>/
+    // chunk_<iiii>_<jjjj>.png (FolderContentPack zero-pads the coordinates to 4
+    // digits). Skipped entirely when no packs are loaded — the builtin-terrain
+    // common case — so the per-frame missing-tile sweep does no pack probing.
+    std::string faceId;
+    std::optional<std::string> path;
+    if (m_assets.hasPacks()) {
+        faceId = m_manifest.terrainId + "/f" + std::to_string(key.face);
+        path = m_assets.resolveTerrainChunk(faceId.c_str(), key.i, key.j, key.level);
+    }
     if (!path) {
-        // Procedural fallback — rate-limited to avoid first-frame hitch
+        // Procedural fallback — rate-limited to avoid a first-frame hitch.
         if (proceduralCount >= kMaxProceduralPerUpdate)
             return;
         ++proceduralCount;
-        loadChunkProcedural(key);
+        loadTileProcedural(key);
         return;
     }
 
-    // Queue async read
-    Chunk& chunk = m_chunks[key];
-    chunk.state = ChunkState::Loading;
-    chunk.pendingReadId = 0;
-
+    {
+        std::unique_lock lock(m_tileMutex);
+        Tile& tile = m_tiles[key];
+        tile.state = TileState::Loading;
+        tile.lastDesiredFrame = m_frame;
+    }
     const AsyncReadId id = m_asyncFs.readFileAsync(PathDomain::Assets, path->c_str());
     if (id == 0) {
-        // readFileAsync failed — remove the entry and retry next frame
-        m_chunks.erase(key);
+        // readFileAsync failed — remove the entry and retry next frame.
+        std::unique_lock lock(m_tileMutex);
+        m_tiles.erase(key);
         return;
     }
-    chunk.pendingReadId = id;
-    m_pendingByReadId[id] = key;
-}
+    {
+        std::unique_lock lock(m_tileMutex);
+        m_tiles[key].pendingHeightRead = id;
+    }
+    m_pendingByReadId[id] = PendingRead{key, TileLayer::Height};
 
-// ---------------------------------------------------------------------------
-// loadChunkProcedural (no rate limiting — used from error fallback path too)
-// ---------------------------------------------------------------------------
-
-void TerrainStreamer::loadChunkProcedural(const ChunkKey& key) {
-    const int lod = static_cast<int>(key.lod);
-    const int hmSize = hmSizeForLod(lod);
-    static constexpr int kFullSize = 513;
-
-    auto full = fl::generateProceduralChunk(key.cx, key.cy, m_manifest, fl::kBuiltinProceduralParams);
-
-    // Subsample full 513×513 down to target hmSize
-    const std::size_t step = static_cast<std::size_t>((kFullSize - 1) / (hmSize - 1)); // 1, 2, or 4
-    std::vector<uint16_t> heights(static_cast<std::size_t>(hmSize) * hmSize);
-    for (int r = 0; r < hmSize; ++r) {
-        for (int c = 0; c < hmSize; ++c) {
-            heights[static_cast<std::size_t>(r) * static_cast<std::size_t>(hmSize) + static_cast<std::size_t>(c)] =
-                full[static_cast<std::size_t>(r) * step * kFullSize + static_cast<std::size_t>(c) * step];
+    // Optional land-cover layer, same transitional encoding with a -cover suffix.
+    const std::string coverId = faceId + "-cover";
+    auto coverPath = m_assets.resolveTerrainChunk(coverId.c_str(), key.i, key.j, key.level);
+    if (coverPath) {
+        const AsyncReadId cid = m_asyncFs.readFileAsync(PathDomain::Assets, coverPath->c_str());
+        if (cid != 0) {
+            {
+                std::unique_lock lock(m_tileMutex);
+                m_tiles[key].pendingCoverRead = cid;
+            }
+            m_pendingByReadId[cid] = PendingRead{key, TileLayer::LandCover};
         }
     }
-    finalizeChunk(key, std::move(heights), hmSize);
+}
+
+void TerrainStreamer::loadTileProcedural(const TileKey& key) {
+    auto heights = generateProceduralTile(key, m_planetRadiusM, kBuiltinProceduralParams);
+    {
+        std::unique_lock lock(m_tileMutex);
+        Tile& tile = m_tiles[key];
+        tile.heightmap = std::move(heights);
+        tile.lastDesiredFrame = m_frame;
+    }
+    finalizeTile(key);
 }
 
 // ---------------------------------------------------------------------------
@@ -188,223 +298,354 @@ void TerrainStreamer::onReadComplete(AsyncReadId id, AsyncReadStatus status, con
     auto pendIt = m_pendingByReadId.find(id);
     if (pendIt == m_pendingByReadId.end())
         return; // already evicted — ignore
-
-    const ChunkKey key = pendIt->second;
+    const PendingRead pending = pendIt->second;
     m_pendingByReadId.erase(pendIt);
 
-    // If the chunk was evicted between cancelRead() and this callback, bail out.
-    if (m_chunks.find(key) == m_chunks.end())
-        return;
+    auto tileIt = m_tiles.find(pending.key);
+    if (tileIt == m_tiles.end())
+        return; // evicted between cancelRead() and this callback
 
-    if (status == AsyncReadStatus::Success && data != nullptr && bytesRead > 0) {
-        int w = 0, h = 0;
-        auto heights = fl::decodeTerrainChunkPng(static_cast<const uint8_t*>(data), bytesRead, &w, &h);
-        if (!heights.empty()) {
-            const int expected = hmSizeForLod(static_cast<int>(key.lod));
-            if (w == expected && h == expected) {
-                finalizeChunk(key, std::move(heights), w);
+    if (pending.layer == TileLayer::Height) {
+        if (status == AsyncReadStatus::Success && data != nullptr && bytesRead > 0) {
+            int w = 0, h = 0;
+            auto heights = fl::decodeTerrainChunkPng(static_cast<const uint8_t*>(data), bytesRead, &w, &h);
+            if (!heights.empty() && w == kTileHeightmapSize && h == kTileHeightmapSize) {
+                bool coverStillPending = false;
+                {
+                    std::unique_lock lock(m_tileMutex);
+                    Tile& tile = tileIt->second;
+                    tile.heightmap = std::move(heights);
+                    tile.pendingHeightRead = 0;
+                    coverStillPending = tile.pendingCoverRead != 0;
+                }
+                if (!coverStillPending)
+                    finalizeTile(pending.key);
                 return;
             }
             std::fprintf(stderr,
-                         "[TerrainStreamer] chunk %d,%d lod%u: expected %dx%d PNG, got %dx%d — "
+                         "[TerrainStreamer] tile f%u L%u %u,%u: expected %dx%d PNG, got %dx%d — "
                          "falling back to procedural\n",
-                         key.cx, key.cy, key.lod, expected, expected, w, h);
+                         pending.key.face, pending.key.level, pending.key.i, pending.key.j, kTileHeightmapSize,
+                         kTileHeightmapSize, w, h);
+        }
+        // Error, cancelled, decode failure, or size mismatch — procedural fallback.
+        // Cancel a cover read still in flight, then rebuild the entry from scratch.
+        {
+            std::unique_lock lock(m_tileMutex);
+            Tile& tile = tileIt->second;
+            if (tile.pendingCoverRead != 0) {
+                m_asyncFs.cancelRead(tile.pendingCoverRead);
+                m_pendingByReadId.erase(tile.pendingCoverRead);
+            }
+            m_tiles.erase(tileIt);
+        }
+        loadTileProcedural(pending.key);
+        return;
+    }
+
+    // LandCover layer: optional — attach on success, proceed without on failure.
+    {
+        std::unique_lock lock(m_tileMutex);
+        Tile& tile = tileIt->second;
+        tile.pendingCoverRead = 0;
+        if (status == AsyncReadStatus::Success && data != nullptr && bytesRead > 0) {
+            int w = 0, h = 0;
+            auto cover16 = fl::decodeTerrainChunkPng(static_cast<const uint8_t*>(data), bytesRead, &w, &h);
+            if (!cover16.empty() && w == kTileHeightmapSize && h == kTileHeightmapSize) {
+                tile.landCover.resize(cover16.size());
+                for (std::size_t px = 0; px < cover16.size(); ++px)
+                    tile.landCover[px] = static_cast<uint8_t>(cover16[px] & 0xFFu); // low byte = class
+            }
         }
     }
-
-    // Error, Cancelled, decode failure, or size mismatch — fall back to procedural.
-    // Erase the Loading entry so loadChunkProcedural can re-insert as Ready.
-    m_chunks.erase(key);
-    loadChunkProcedural(key);
+    bool heightArrived = false;
+    {
+        std::shared_lock lock(m_tileMutex);
+        const Tile& tile = tileIt->second;
+        heightArrived = !tile.heightmap.empty() && tile.pendingHeightRead == 0;
+    }
+    if (heightArrived)
+        finalizeTile(pending.key);
 }
 
 // ---------------------------------------------------------------------------
-// finalizeChunk
+// finalizeTile
 // ---------------------------------------------------------------------------
 
-void TerrainStreamer::finalizeChunk(const ChunkKey& key, std::vector<uint16_t> heights, int hmSize) {
-    std::unique_lock lock(m_chunkMutex);
-    Chunk& chunk = m_chunks[key];
-    chunk.heightmap = std::move(heights);
-    chunk.hmSize = hmSize;
-    chunk.state = ChunkState::Ready;
-    chunk.pendingReadId = 0;
-
-    if (!m_renderer)
+void TerrainStreamer::finalizeTile(const TileKey& key) {
+    // The main thread is the sole writer of m_tiles, so reading the tile's decoded
+    // data needs no lock and the expensive mesh build + GPU upload run unlocked —
+    // concurrent sim-thread height queries (shared_lock) never stall behind them.
+    // Only the state/mesh publication at the end takes the writer lock.
+    auto it = m_tiles.find(key);
+    if (it == m_tiles.end() || it->second.heightmap.empty())
         return;
+    Tile& tile = it->second;
 
-    // Create shared terrain material on first use
-    if (!m_terrainMat.valid()) {
-        MaterialDesc md{};
-        md.baseColorFactor = {0.55f, 0.50f, 0.35f, 1.0f}; // sandy tan
-        md.roughnessFactor = 0.9f;
-        md.metallicFactor = 0.0f;
-        m_terrainMat = m_renderer->createMaterial(md);
+    MeshHandle mesh{};
+    if (m_renderer) {
+        // Create shared terrain material on first use.
+        if (!m_terrainMat.valid()) {
+            MaterialDesc md{};
+            md.baseColorFactor = {0.55f, 0.50f, 0.35f, 1.0f}; // sandy tan
+            md.roughnessFactor = 0.9f;
+            md.metallicFactor = 0.0f;
+            m_terrainMat = m_renderer->createMaterial(md);
+        }
+
+        const glm::dvec3 origin = tileToWorld(key, 0.5, 0.5, 0.0, m_planetRadiusM);
+        auto glb =
+            buildTileMeshGlb(tile.heightmap, kTileHeightmapSize, kTileMeshGrid, key, m_planetRadiusM, origin,
+                             tile.landCover.empty() ? nullptr : tile.landCover.data(), true, skirtDepthFor(key.level));
+        if (!glb.empty()) {
+            const std::string meshName = "tile:" + m_manifest.terrainId + ":f" + std::to_string(key.face) + ":L" +
+                                         std::to_string(key.level) + ":" + std::to_string(key.i) + ":" +
+                                         std::to_string(key.j);
+            mesh = m_renderer->createMesh({meshName, glb});
+        }
+        // Mesh-build failure still publishes Ready: the heightmap is valid (height
+        // queries and the covering chain must not stall on it); the render walk
+        // skips tiles without a valid mesh.
     }
 
-    const int lod = static_cast<int>(key.lod);
-    const int meshGrid = meshGridForLod(lod);
-    const double chunkWorldX = m_manifest.originX + static_cast<double>(key.cx) * m_manifest.chunkSizeM;
-    const double chunkWorldZ = m_manifest.originZ + static_cast<double>(key.cy) * m_manifest.chunkSizeM;
-    auto glb = fl::buildTerrainMeshGlb(chunk.heightmap, hmSize, meshGrid, m_manifest.chunkSizeM, chunkWorldX,
-                                       chunkWorldZ, m_sphericalRadius);
-    if (glb.empty())
-        return;
-
-    const std::string meshName = "terrain:" + m_manifest.terrainId + ":" + std::to_string(key.cx) + ":" +
-                                 std::to_string(key.cy) + ":lod" + std::to_string(lod);
-    chunk.mesh = m_renderer->createMesh({meshName, glb});
+    std::unique_lock lock(m_tileMutex);
+    tile.state = TileState::Ready;
+    tile.pendingHeightRead = 0;
+    tile.mesh = mesh;
 }
 
 // ---------------------------------------------------------------------------
-// evictChunk
+// evictTile
 // ---------------------------------------------------------------------------
 
-void TerrainStreamer::evictChunk(const ChunkKey& key) {
-    std::unique_lock lock(m_chunkMutex);
-    auto it = m_chunks.find(key);
-    if (it == m_chunks.end())
+void TerrainStreamer::evictTile(const TileKey& key) {
+    std::unique_lock lock(m_tileMutex);
+    auto it = m_tiles.find(key);
+    if (it == m_tiles.end())
         return;
-    Chunk& chunk = it->second;
-    if (chunk.state == ChunkState::Loading && chunk.pendingReadId != 0) {
-        m_asyncFs.cancelRead(chunk.pendingReadId);
-        m_pendingByReadId.erase(chunk.pendingReadId);
+    Tile& tile = it->second;
+    if (tile.pendingHeightRead != 0) {
+        m_asyncFs.cancelRead(tile.pendingHeightRead);
+        m_pendingByReadId.erase(tile.pendingHeightRead);
     }
-    if (m_renderer && chunk.mesh.valid())
-        m_renderer->destroyMesh(chunk.mesh);
-    m_chunks.erase(it);
+    if (tile.pendingCoverRead != 0) {
+        m_asyncFs.cancelRead(tile.pendingCoverRead);
+        m_pendingByReadId.erase(tile.pendingCoverRead);
+    }
+    if (m_renderer && tile.mesh.valid())
+        m_renderer->destroyMesh(tile.mesh);
+    m_tiles.erase(it);
 }
 
 // ---------------------------------------------------------------------------
 // getRenderItems
 // ---------------------------------------------------------------------------
 
+bool TerrainStreamer::emitRenderTiles(const TileKey& key, std::vector<const Tile*>& outTiles,
+                                      std::vector<TileKey>& outKeys) const {
+    if (m_desiredLeaves.find(key) == m_desiredLeaves.end()) {
+        // Interior node: try to emit the child subtrees; if any part cannot render
+        // yet, roll back its emissions and fall through to drawing this tile as the
+        // coarse fallback — coverage never overlaps (a finer tile is never drawn
+        // under a fallback ancestor).
+        const std::size_t mark = outTiles.size();
+        bool allOk = true;
+        for (uint8_t q = 0; q < 4; ++q) {
+            const TileKey c = child(key, q);
+            if (m_desiredAll.find(c) == m_desiredAll.end() || !emitRenderTiles(c, outTiles, outKeys)) {
+                allOk = false;
+                break;
+            }
+        }
+        if (allOk)
+            return true;
+        outTiles.resize(mark);
+        outKeys.resize(mark);
+    }
+    // Leaf, or interior whose subtree is still loading: draw this tile if it can.
+    auto it = m_tiles.find(key);
+    if (it != m_tiles.end() && it->second.state == TileState::Ready && it->second.mesh.valid()) {
+        outTiles.push_back(&it->second);
+        outKeys.push_back(key);
+        return true;
+    }
+    return false; // brief hole while the coarse ancestor itself is still loading
+}
+
 std::vector<RenderItem> TerrainStreamer::getRenderItems(glm::dvec3 worldOrigin) const {
-    if (m_lastCx == kNeverUpdated)
+    if (!m_updated || !m_renderer)
         return {};
 
+    std::vector<const Tile*> tiles;
+    std::vector<TileKey> keys;
+    tiles.reserve(m_desiredLeaves.size());
+    keys.reserve(m_desiredLeaves.size());
+    for (uint8_t f = 0; f < kCubeFaceCount; ++f)
+        emitRenderTiles(TileKey{f, 0, 0, 0}, tiles, keys);
+
     std::vector<RenderItem> items;
-    items.reserve(49); // up to 7×7 unique positions
+    items.reserve(tiles.size());
+    for (std::size_t t = 0; t < tiles.size(); ++t) {
+        // Camera-relative translation: tile rebase origin in world -> relative to camera.
+        // All curvature is baked into the vertices relative to this origin (#471).
+        const glm::dvec3 origin = tileToWorld(keys[t], 0.5, 0.5, 0.0, m_planetRadiusM);
+        const glm::vec3 relOrigin = glm::vec3(origin - worldOrigin);
 
-    const int he = kLodHalfExtent[kNumLods - 1]; // outermost ring half-extent = 3
-    for (int dy = -he; dy <= he; ++dy) {
-        for (int dx = -he; dx <= he; ++dx) {
-            const int cx = m_lastCx + dx;
-            const int cy = m_lastCy + dy;
-            const int dist = std::max(std::abs(dx), std::abs(dy));
-
-            // Determine target LOD for this position
-            const int targetLod = (dist <= kLodHalfExtent[0]) ? 0 : (dist <= kLodHalfExtent[1]) ? 1 : 2;
-
-            // Find best ready LOD (target first, then fallback to coarser)
-            const Chunk* best = nullptr;
-            for (int lod = targetLod; lod < kNumLods; ++lod) {
-                ChunkKey key;
-                key.cx = cx;
-                key.cy = cy;
-                key.lod = static_cast<uint32_t>(lod);
-                auto it = m_chunks.find(key);
-                if (it != m_chunks.end() && it->second.state == ChunkState::Ready) {
-                    best = &it->second;
-                    break;
-                }
-            }
-
-            if (!best || !best->mesh.valid())
-                continue;
-
-            // Camera-relative translation: chunk local-origin in world → relative to camera.
-            // All spherical curvature is baked into vertex Y by buildTerrainMeshGlb(), so Y=0 here.
-            const double chunkCornerX = m_manifest.originX + static_cast<double>(cx) * m_manifest.chunkSizeM;
-            const double chunkCornerZ = m_manifest.originZ + static_cast<double>(cy) * m_manifest.chunkSizeM;
-            const glm::dvec3 chunkOrigin{chunkCornerX, 0.0, chunkCornerZ};
-            const glm::vec3 relOrigin = glm::vec3(chunkOrigin - worldOrigin);
-
-            RenderItem item;
-            item.mesh = best->mesh;
-            item.material = m_terrainMat;
-            item.transform = glm::translate(glm::mat4(1.0f), relOrigin);
-            item.flags = kRenderFlagTerrain; // forward pass applies elevation/slope shading
-            items.push_back(item);
-        }
+        RenderItem item;
+        item.mesh = tiles[t]->mesh;
+        item.material = m_terrainMat;
+        item.transform = glm::translate(glm::mat4(1.0f), relOrigin);
+        item.flags = kRenderFlagTerrain; // forward pass applies elevation/slope shading
+        items.push_back(item);
     }
     return items;
 }
 
 // ---------------------------------------------------------------------------
-// heightAt / surfaceAt / chunkCount
+// Height / surface queries
 // ---------------------------------------------------------------------------
 
-double TerrainStreamer::heightAt(double x, double z) const noexcept {
-    std::shared_lock lock(m_chunkMutex);
+const TerrainStreamer::Tile* TerrainStreamer::deepestReadyTile(const TileCoord& tc, TileKey* outKey,
+                                                               bool requireLandCover) const noexcept {
+    const Tile* best = nullptr;
+    TileKey bestKey{};
+    for (int level = 0; level <= m_manifest.maxTileLevel; ++level) {
+        TileKey k;
+        k.face = tc.key.face;
+        k.level = static_cast<uint8_t>(level);
+        k.i = tileIndexForUv(tc.s, k.level);
+        k.j = tileIndexForUv(tc.t, k.level);
+        auto it = m_tiles.find(k);
+        if (it == m_tiles.end() || it->second.state != TileState::Ready)
+            break; // finer never loaded (or still loading) — stop at the last Ready level
+        if (requireLandCover && it->second.landCover.empty())
+            continue; // keep walking: a deeper tile may carry the layer
+        best = &it->second;
+        bestKey = k;
+    }
+    if (outKey)
+        *outKey = bestKey;
+    return best;
+}
 
-    const int cx = static_cast<int>(std::floor((x - m_manifest.originX) / m_manifest.chunkSizeM));
-    const int cy = static_cast<int>(std::floor((z - m_manifest.originZ) / m_manifest.chunkSizeM));
+double TerrainStreamer::heightAt(glm::dvec3 worldPos) const noexcept {
+    std::shared_lock lock(m_tileMutex);
 
-    ChunkKey key;
-    key.cx = cx;
-    key.cy = cy;
-    key.lod = 0u; // LOD0 only for highest accuracy
-
-    auto it = m_chunks.find(key);
-    if (it == m_chunks.end() || it->second.state != ChunkState::Ready)
+    const TileCoord tc = worldToTile(worldPos, m_planetRadiusM);
+    TileKey key{};
+    const Tile* tile = deepestReadyTile(tc, &key);
+    if (!tile || tile->heightmap.empty())
         return 0.0;
 
-    const Chunk& chunk = it->second;
-    const int s = chunk.hmSize;
+    // Tile-local (s, t) of the query point within the found tile.
+    const double scale = static_cast<double>(uint64_t{1} << key.level);
+    const double ls = std::clamp(tc.s * scale - static_cast<double>(key.i), 0.0, 1.0);
+    const double lt = std::clamp(tc.t * scale - static_cast<double>(key.j), 0.0, 1.0);
 
-    // Local position within chunk [0, chunkSizeM)
-    const double lx = (x - m_manifest.originX) - static_cast<double>(cx) * m_manifest.chunkSizeM;
-    const double lz = (z - m_manifest.originZ) - static_cast<double>(cy) * m_manifest.chunkSizeM;
-
-    // Pixel coords [0, s-1]
-    const double px = lx / m_manifest.chunkSizeM * static_cast<double>(s - 1);
-    const double pz = lz / m_manifest.chunkSizeM * static_cast<double>(s - 1);
-
+    const int s = kTileHeightmapSize;
+    const double px = ls * static_cast<double>(s - 1);
+    const double pz = lt * static_cast<double>(s - 1);
     const int ix = std::clamp(static_cast<int>(px), 0, s - 2);
     const int iz = std::clamp(static_cast<int>(pz), 0, s - 2);
     const double fx = px - static_cast<double>(ix);
     const double fz = pz - static_cast<double>(iz);
 
     auto h = [&](int col, int row) noexcept -> double {
-        return static_cast<double>(chunk.heightmap[static_cast<std::size_t>(row) * s + col]) - 32768.0;
+        return static_cast<double>(tile->heightmap[static_cast<std::size_t>(row) * s + col]) - 32768.0;
     };
 
-    double elevation =
-        glm::mix(glm::mix(h(ix, iz), h(ix + 1, iz), fx), glm::mix(h(ix, iz + 1), h(ix + 1, iz + 1), fx), fz);
+    return glm::mix(glm::mix(h(ix, iz), h(ix + 1, iz), fx), glm::mix(h(ix, iz + 1), h(ix + 1, iz + 1), fx), fz);
+}
 
-    const double R = m_sphericalRadius;
-    const double D2 = x * x + z * z;
-    elevation += std::sqrt(std::max(0.0, R * R - D2)) - R;
+bool TerrainStreamer::heightReadyAt(glm::dvec3 worldPos) const noexcept {
+    std::shared_lock lock(m_tileMutex);
+    const TileCoord tc = worldToTile(worldPos, m_planetRadiusM);
+    TileKey key{};
+    const Tile* tile = deepestReadyTile(tc, &key);
+    const int required = std::min(m_manifest.maxTileLevel, kHeightReadyMinLevel);
+    return tile != nullptr && static_cast<int>(key.level) >= required;
+}
 
-    return elevation;
+uint8_t TerrainStreamer::surfaceAt(glm::dvec3 worldPos) const noexcept {
+    std::shared_lock lock(m_tileMutex);
+
+    const TileCoord tc = worldToTile(worldPos, m_planetRadiusM);
+    // Deepest Ready tile that carries a land-cover layer.
+    TileKey bestKey{};
+    const Tile* best = deepestReadyTile(tc, &bestKey, /*requireLandCover=*/true);
+    if (!best)
+        return 0;
+
+    const double scale = static_cast<double>(uint64_t{1} << bestKey.level);
+    const double ls = std::clamp(tc.s * scale - static_cast<double>(bestKey.i), 0.0, 1.0);
+    const double lt = std::clamp(tc.t * scale - static_cast<double>(bestKey.j), 0.0, 1.0);
+    const int s = kTileHeightmapSize;
+    const int ix = std::clamp(static_cast<int>(ls * (s - 1) + 0.5), 0, s - 1);
+    const int iz = std::clamp(static_cast<int>(lt * (s - 1) + 0.5), 0, s - 1);
+    return best->landCover[static_cast<std::size_t>(iz) * s + ix];
+}
+
+// ---- Transitional near-side (x, z) overloads (world-Y semantics; #477 removes) ----
+
+double TerrainStreamer::heightAt(double x, double z) const noexcept {
+    const double h = heightAt(glm::dvec3{x, 0.0, z});
+    const double R = m_planetRadiusM;
+    const double rr = (R + h) * (R + h) - (x * x + z * z);
+    return rr > 0.0 ? -R + std::sqrt(rr) : 0.0;
 }
 
 bool TerrainStreamer::heightReadyAt(double x, double z) const noexcept {
-    std::shared_lock lock(m_chunkMutex);
-
-    const int cx = static_cast<int>(std::floor((x - m_manifest.originX) / m_manifest.chunkSizeM));
-    const int cy = static_cast<int>(std::floor((z - m_manifest.originZ) / m_manifest.chunkSizeM));
-
-    ChunkKey key;
-    key.cx = cx;
-    key.cy = cy;
-    key.lod = 0u;
-
-    auto it = m_chunks.find(key);
-    return it != m_chunks.end() && it->second.state == ChunkState::Ready;
+    return heightReadyAt(glm::dvec3{x, 0.0, z});
 }
 
-uint8_t TerrainStreamer::surfaceAt(double /*x*/, double /*z*/) const noexcept {
-    return 0;
+uint8_t TerrainStreamer::surfaceAt(double x, double z) const noexcept {
+    return surfaceAt(glm::dvec3{x, 0.0, z});
 }
 
-std::size_t TerrainStreamer::chunkCount() const noexcept {
-    return m_chunks.size();
+// ---------------------------------------------------------------------------
+// Misc
+// ---------------------------------------------------------------------------
+
+std::size_t TerrainStreamer::tileCount() const noexcept {
+    std::shared_lock lock(m_tileMutex);
+    return m_tiles.size();
 }
 
-void TerrainStreamer::setPlanetRadius(double radius_m) noexcept {
-    m_sphericalRadius = radius_m;
+std::vector<TileKey> TerrainStreamer::desiredLeaves() const {
+    return {m_desiredLeaves.begin(), m_desiredLeaves.end()};
+}
+
+void TerrainStreamer::setResidencyCap(std::size_t cap) noexcept {
+    m_maxResidentTiles = cap > 0 ? cap : 1;
+}
+
+void TerrainStreamer::setPlanetRadius(double radius_m) {
+    if (!(radius_m > 0.0) || radius_m == m_planetRadiusM)
+        return;
+    // Tiles bake the radius (curvature + procedural elevations) at generation time:
+    // drop every resident tile and in-flight read so the next update() regenerates
+    // at the new radius instead of leaving stale-curvature terrain behind.
+    std::unique_lock lock(m_tileMutex);
+    for (auto& [id, pending] : m_pendingByReadId)
+        m_asyncFs.cancelRead(id);
+    m_pendingByReadId.clear();
+    if (m_renderer) {
+        for (auto& [key, tile] : m_tiles) {
+            if (tile.mesh.valid())
+                m_renderer->destroyMesh(tile.mesh);
+        }
+    }
+    m_tiles.clear();
+    m_desiredLeaves.clear();
+    m_desiredAll.clear();
+    m_planetRadiusM = radius_m;
+}
+
+void TerrainStreamer::setViewParams(float screenHeightPx, float fovYRad) noexcept {
+    if (screenHeightPx > 0.f)
+        m_screenHeightPx = screenHeightPx;
+    if (fovYRad > 0.f)
+        m_fovYRad = fovYRad;
 }
 
 } // namespace fl

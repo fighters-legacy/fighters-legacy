@@ -347,10 +347,15 @@ int main(int argc, char** argv) {
     fl::TerrainStreamer terrainStreamer(fl::builtinWorldTerrainManifest(), assets, *p.asyncFilesystem, nullptr);
     log->log(LogLevel::Info, __FILE__, __LINE__, "terrain: headless streamer initialized");
 
+    // Apply the configured planet radius BEFORE the first update(): tiles bake curvature and
+    // procedural elevations at generation time, so streaming first would generate Earth-radius
+    // terrain (and prime wrong spawn elevations) on a non-Earth planet.
+    terrainStreamer.setPlanetRadius(cfg.planetRadiusM);
+
     // Kick off terrain streaming at the origin. A single update() is not enough to guarantee the
-    // exact spawn chunk is Ready (procedural loads are rate-limited to 8 chunks/frame and iterate an
-    // unordered set; content-pack chunks load asynchronously), so spawn elevations are primed below
-    // via primeSpawnHeight() before they are queried.
+    // spawn point's covering tile chain is Ready (procedural loads are rate-limited per update;
+    // content-pack tiles load asynchronously), so spawn elevations are primed below via
+    // primeSpawnHeight() before they are queried.
     terrainStreamer.update(glm::dvec3(0.0, 0.0, 0.0));
 
     // ---- Entity system ----
@@ -378,16 +383,21 @@ int main(int argc, char** argv) {
     // ---- Pre-cache peer spawn-point elevations (main-thread only, before gameLoop.start()) ----
     // TerrainStreamer::heightAt() is not thread-safe; all queries must complete before the sim
     // thread starts.
-    // Pump terrain streaming until the LOD0 chunk covering (x, z) is Ready so heightAt() returns a
-    // real elevation rather than the 0.0 not-loaded sentinel. Bounded by a wall-clock deadline so a
-    // missing/stuck chunk can never hang startup. Without this the entity spawns at y~0 and the
-    // per-tick floor query snaps it up to the terrain surface once it streams in, which the client
-    // sees as the camera jumping from ~0 to terrain height a couple seconds after load-in.
+    // Pump terrain streaming until the covering tile chain at (x, z) is Ready to heightReadyAt
+    // depth, so heightAt() returns a spawn-accurate elevation rather than a coarse or datum
+    // placeholder. Bounded by a wall-clock deadline so a missing/stuck tile can never hang
+    // startup. Without this the entity spawns too low and the per-tick floor query snaps it up
+    // to the terrain surface once it streams in, which the client sees as the camera jumping a
+    // couple seconds after load-in.
     auto primeSpawnHeight = [&](double x, double z) {
         using namespace std::chrono;
         const auto deadline = steady_clock::now() + seconds(5);
         while (!terrainStreamer.heightReadyAt(x, z) && steady_clock::now() < deadline) {
-            terrainStreamer.update(glm::dvec3(x, 0.0, z));
+            // Pump at the current surface estimate, not world-Y 0: far from the origin the
+            // near side of the sphere sits well below y=0, and SSE refinement only reaches
+            // heightReadyAt depth when the pumped position is close to the surface. The
+            // estimate starts at the datum and converges as covering tiles stream in.
+            terrainStreamer.update(glm::dvec3(x, terrainStreamer.heightAt(x, z), z));
             p.asyncFilesystem->service();
             if (!terrainStreamer.heightReadyAt(x, z))
                 std::this_thread::sleep_for(milliseconds(2));
@@ -446,13 +456,13 @@ int main(int argc, char** argv) {
         fl::makeTickGovernorParams(cfg.overrunGovernorEnabled, cfg.overrunHighWatermark, cfg.overrunLowWatermark,
                                    cfg.overrunMinSnapshotHz, cfg.overrunMaxAiStride, cfg.overrunBudgetFloorBytes);
     broadcaster.applyConfig(wbConfig);
-    // Planet gravity and terrain curvature. Function-scope static so lifetime outlasts the broadcaster.
+    // Planet gravity (terrain curvature was applied to the streamer before the first update()).
+    // Function-scope static so lifetime outlasts the broadcaster.
     static fl::CentralGravityField s_gravity{6'371'000.f};
     {
         const auto R_m = static_cast<float>(cfg.planetRadiusM);
         s_gravity = fl::CentralGravityField(R_m);
         broadcaster.setGravityField(s_gravity, R_m / 1000.f);
-        terrainStreamer.setPlanetRadius(cfg.planetRadiusM);
     }
     // Per-entity terrain height query: sim thread calls heightAt() (thread-safe via shared_mutex).
     // The entity origin is the mesh's ground-contact point, so the floor clamps it directly to the

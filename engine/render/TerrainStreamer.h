@@ -3,14 +3,14 @@
 
 #include "IAsyncFilesystem.h"
 #include "RenderTypes.h"
+#include "render/CubeSphere.h"
 #include "render/TerrainManifest.h"
 
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <shared_mutex>
-#include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -22,55 +22,114 @@ class IRenderer;
 
 namespace fl {
 
-// Manages terrain chunk lifecycle: async load via IAsyncFilesystem, LOD ring
-// transitions, GPU mesh upload, and CPU-side height queries.
+// Cube-sphere quadtree terrain streamer (#472, spherical-Earth epic #468).
+//
+// Replaces the planar ring-LOD chunk streamer: the world is the six-face CubeSphere
+// quadtree (TileKey), every tile carries a uniform kTileHeightmapSize^2 heightmap
+// (resolution comes from quadtree depth, not per-tile LOD pyramids), and refinement is
+// screen-space-error driven — a tile splits while its projected geometric error exceeds
+// kSseTauPx, up to manifest.maxTileLevel. A 2:1 edge-balance pass (restricted quadtree,
+// CubeSphere::neighbor) bounds the level delta across shared edges; residual hairline
+// cracks are hidden by mesh skirts (buildTileMeshGlb skirtDepthM).
+//
+// Tile content: content packs are probed first via the transitional path encoding
+// resolveTerrainChunk("<terrainId>/f<face>", i, j, level) (replaced by resolveTilePath
+// in #473); misses fall back to generateProceduralTile — deterministic global-sphere
+// FBM, so a headless server and every client generate bit-identical terrain with no
+// wire transfer. Async reads are tracked per {TileKey, layer} (height + optional
+// land-cover); a tile finalizes when its required layers arrive.
+//
+// Height queries take full world positions (dvec3) and are radial: heightAt returns
+// the terrain height ABOVE THE SPHERE DATUM along the radial through the query point
+// (the `h` of CubeSphere::tileToWorld). Transitional (x, z) overloads preserve the old
+// near-side world-Y semantics for existing callers and are removed by the radial
+// ground floor (#477).
 //
 // Implements IAsyncFilesystemHandler; registers as the sole event handler on
-// construction and deregisters on destruction. Only one TerrainStreamer may be
-// live per IAsyncFilesystem instance.
+// construction and deregisters on destruction. Only one TerrainStreamer may be live
+// per IAsyncFilesystem instance.
 //
-// Threading: update(), getRenderItems(), chunkCount(), and surfaceAt() are main-thread only.
-// heightAt() is safe to call from any thread (protected by m_chunkMutex).
+// Threading: update(), getRenderItems(), and tileCount() are main-thread only.
+// heightAt()/heightReadyAt()/surfaceAt() are safe from any thread (m_tileMutex).
 class TerrainStreamer : public IAsyncFilesystemHandler {
   public:
-    // renderer may be nullptr for headless operation (heightAt works; getRenderItems
-    // returns an empty vector).
+    // renderer may be nullptr for headless operation (height queries work;
+    // getRenderItems returns an empty vector).
     TerrainStreamer(fl::TerrainManifest manifest, AssetManager& assets, IAsyncFilesystem& asyncFs, IRenderer* renderer);
     ~TerrainStreamer() override;
 
     TerrainStreamer(const TerrainStreamer&) = delete;
     TerrainStreamer& operator=(const TerrainStreamer&) = delete;
 
-    // Compute the desired chunk set for cameraWorldPos, queue async reads for new
-    // chunks, and evict out-of-range chunks. Call once per frame before getRenderItems.
+    // Rebuild the desired tile tree for cameraWorldPos (SSE refinement + 2:1 balance),
+    // queue loads for missing tiles (procedural generation rate-limited per call), and
+    // evict least-recently-desired tiles beyond the residency cap. Call once per frame
+    // before getRenderItems (or pump on the server until heightReadyAt).
     void update(glm::dvec3 cameraWorldPos);
 
-    // Return a RenderItem for each Ready chunk (best available LOD per chunk
-    // position). worldOrigin is subtracted for camera-relative rendering.
-    // Returns empty if update() has never been called.
+    // One RenderItem per rendered tile: the desired tree is walked top-down and a
+    // subtree is emitted only when it fully covers its region (a Ready interior tile
+    // may stand in for children that are still loading); otherwise the walk rolls
+    // back to the coarser ancestor — coverage never overlaps and never double-draws
+    // a region. worldOrigin is subtracted for camera-relative rendering. Empty if
+    // update() has never been called or renderer is null.
     std::vector<RenderItem> getRenderItems(glm::dvec3 worldOrigin) const;
 
-    // Bilinear elevation query from the nearest LOD0 chunk (metres).
-    // Returns 0.0 if no LOD0 chunk is loaded at that position.
+    // Radial terrain height (m ABOVE THE SPHERE DATUM) along the radial through
+    // worldPos, bilinearly sampled from the deepest Ready tile covering it.
+    // Returns 0.0 when no tile covers the position yet. Thread-safe.
+    double heightAt(glm::dvec3 worldPos) const noexcept;
+
+    // True when the deepest Ready tile covering worldPos is at least
+    // min(manifest.maxTileLevel, kHeightReadyMinLevel) deep — i.e. heightAt returns a
+    // spawn-accurate elevation rather than a coarse or 0.0 placeholder. The server
+    // pumps update()/service() against this before caching spawn points. Thread-safe.
+    [[nodiscard]] bool heightReadyAt(glm::dvec3 worldPos) const noexcept;
+
+    // Nearest-neighbour land-cover class from the deepest Ready tile carrying a
+    // land-cover layer; 0 when none. Thread-safe.
+    uint8_t surfaceAt(glm::dvec3 worldPos) const noexcept;
+
+    // ---- Transitional near-side (x, z) overloads — world-Y semantics ----
+    // These preserve the planar API: the return value / query is the world-Y of the
+    // terrain surface vertically above/below (x, ~, z) on the NEAR side of the planet
+    // (y > -R). Derived from the radial core: y = -R + sqrt((R+h)^2 - x^2 - z^2).
+    // When no tile covers the position yet, the radial core's 0.0 sentinel makes this
+    // return the DATUM surface world-Y (the spherical generalization of the old planar
+    // 0.0 sentinel). Callers migrate to the dvec3 forms with the radial ground
+    // floor (#477).
     double heightAt(double x, double z) const noexcept;
-
-    // True if the LOD0 chunk covering (x, z) is loaded and Ready, i.e. heightAt(x, z)
-    // returns a real elevation rather than the 0.0 not-loaded sentinel. Used at server
-    // startup to pump update()/service() until spawn-point terrain is ready, so entities
-    // spawn at the correct elevation instead of y~0 (which the floor query later corrects,
-    // producing a visible camera "snap up" on the client). Thread-safe.
     [[nodiscard]] bool heightReadyAt(double x, double z) const noexcept;
-
-    // Nearest-neighbour surface class. Phase 2 stub: always returns 0.
     uint8_t surfaceAt(double x, double z) const noexcept;
 
-    // Total loaded chunk entries across all LODs. Exposed for tests.
-    std::size_t chunkCount() const noexcept;
+    // Total resident tile entries (all states). Exposed for tests.
+    std::size_t tileCount() const noexcept;
 
-    // Override the planet radius (m) used for terrain curvature.
-    // Default is 6 371 000 m (Earth). Must be called before the first update(); changing it
-    // after chunks have been loaded leaves stale meshes with the old curvature baked in.
-    void setPlanetRadius(double radius_m) noexcept;
+    // Snapshot of the desired-tree leaves from the last update(). Test/telemetry
+    // hook (e.g. asserting the 2:1 edge-balance property). Main-thread only.
+    [[nodiscard]] std::vector<TileKey> desiredLeaves() const;
+
+    // Override the resident-tile LRU cap (default kDefaultMaxResidentTiles). Tiles
+    // outside the desired tree are cached up to this total and evicted
+    // least-recently-desired first. Main-thread only; clamped to >= 1.
+    void setResidencyCap(std::size_t cap) noexcept;
+
+    // Override the planet radius (m). Default is 6 371 000 m (Earth). Tiles bake the
+    // radius (curvature + procedural elevations) at generation time, so a radius
+    // change drops every resident tile and cancels in-flight reads; the next update()
+    // regenerates at the new radius. Same-value calls are no-ops; values <= 0 are
+    // ignored. Main-thread only (like update()).
+    void setPlanetRadius(double radius_m);
+
+    // Screen height (px) and vertical FOV (rad) for the SSE refinement metric.
+    // Defaults (1080 px, 60 deg) are fine headless — server refinement only needs
+    // "deep near the pumped position", not visual parity.
+    void setViewParams(float screenHeightPx, float fovYRad) noexcept;
+
+    // SSE refinement threshold (px): refine while projected error exceeds this.
+    static constexpr float kSseTauPx = 3.0f;
+    // heightReadyAt: minimum covering-tile level considered spawn-accurate.
+    static constexpr int kHeightReadyMinLevel = 10;
 
   private:
     // IAsyncFilesystemHandler
@@ -78,40 +137,52 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
                         const char* errorMsg) override;
 
     // -------------------------------------------------------------------------
-    struct ChunkKey {
-        int32_t cx{0}, cy{0};
-        uint32_t lod{0};
-        bool operator==(const ChunkKey& o) const noexcept {
-            return cx == o.cx && cy == o.cy && lod == o.lod;
-        }
+    struct TileKeyHash {
+        std::size_t operator()(const TileKey& k) const noexcept;
     };
 
-    struct ChunkKeyHash {
-        std::size_t operator()(const ChunkKey& k) const noexcept;
-    };
+    enum class TileState : uint8_t { Loading, Ready };
+    enum class TileLayer : uint8_t { Height, LandCover };
 
-    enum class ChunkState : uint8_t { Loading, Ready };
-
-    struct Chunk {
-        ChunkState state{ChunkState::Loading};
-        AsyncReadId pendingReadId{0};
-        std::vector<uint16_t> heightmap;
-        int hmSize{0}; // number of samples per axis (513 / 257 / 129)
+    struct Tile {
+        TileState state{TileState::Loading};
+        AsyncReadId pendingHeightRead{0};
+        AsyncReadId pendingCoverRead{0};
+        std::vector<uint16_t> heightmap; // kTileHeightmapSize^2 when present
+        std::vector<uint8_t> landCover;  // same dims; empty = no land-cover layer
         MeshHandle mesh{};
+        uint64_t lastDesiredFrame{0};
     };
+
+    struct PendingRead {
+        TileKey key;
+        TileLayer layer{TileLayer::Height};
+    };
+
+    using TileSet = std::unordered_set<TileKey, TileKeyHash>;
 
     // -------------------------------------------------------------------------
-    // Called from update() with a per-frame rate-limit counter.
-    void loadChunk(const ChunkKey& key, int& proceduralCount);
-    // Generates heightmap from the builtin FBM and calls finalizeChunk immediately.
-    void loadChunkProcedural(const ChunkKey& key);
-    // Stores heights, sets state = Ready, uploads GPU mesh if renderer is set.
-    void finalizeChunk(const ChunkKey& key, std::vector<uint16_t> heights, int hmSize);
-    // Cancels any in-flight read, destroys GPU mesh, erases from m_chunks.
-    void evictChunk(const ChunkKey& key);
+    // update() helpers (main thread)
+    void refine(const TileKey& key, glm::dvec3 camPos, std::vector<TileKey>& leaves) const;
+    [[nodiscard]] bool shouldRefine(const TileKey& key, glm::dvec3 camPos) const noexcept;
+    void balanceLeaves(TileSet& leaves) const;
+    void loadTile(const TileKey& key, int& proceduralCount);
+    void loadTileProcedural(const TileKey& key);
+    void finalizeTile(const TileKey& key);
+    void evictTile(const TileKey& key);
 
-    static int hmSizeForLod(int lod) noexcept;   // 513, 257, 129
-    static int meshGridForLod(int lod) noexcept; // 128,  64,  32
+    // Render-walk helper: emits the subtree under `key` into the out lists and returns
+    // true when the whole desired subtree is covered; on false the caller (parent)
+    // rolls back and draws its own coarser tile instead.
+    bool emitRenderTiles(const TileKey& key, std::vector<const Tile*>& outTiles, std::vector<TileKey>& outKeys) const;
+
+    // Deepest Ready tile covering the face-uv position (with a non-empty land-cover
+    // layer when requireLandCover); nullptr when none (not even the root). Caller must
+    // hold m_tileMutex (shared) or be the main thread.
+    const Tile* deepestReadyTile(const TileCoord& tc, TileKey* outKey, bool requireLandCover = false) const noexcept;
+
+    [[nodiscard]] double tileExtentM(int level) const noexcept;
+    [[nodiscard]] double skirtDepthFor(int level) const noexcept;
 
     // -------------------------------------------------------------------------
     fl::TerrainManifest m_manifest;
@@ -120,26 +191,31 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     IRenderer* m_renderer{nullptr};
     MaterialHandle m_terrainMat{}; // single shared material, created on first use
 
-    std::unordered_map<ChunkKey, Chunk, ChunkKeyHash> m_chunks;
-    std::unordered_map<AsyncReadId, ChunkKey> m_pendingByReadId;
+    std::unordered_map<TileKey, Tile, TileKeyHash> m_tiles;
+    std::unordered_map<AsyncReadId, PendingRead> m_pendingByReadId;
 
-    // Planet radius (m) for terrain curvature. Default = Earth (6 371 000 m).
-    double m_sphericalRadius{6'371'000.0};
+    // Desired tree from the last update(): leaves + every ancestor up to the roots.
+    TileSet m_desiredLeaves;
+    TileSet m_desiredAll;
 
-    // Protects m_chunks for concurrent reads (heightAt, sim thread) vs. writes (update, main thread).
-    mutable std::shared_mutex m_chunkMutex;
+    double m_planetRadiusM{6'371'000.0};
+    float m_screenHeightPx{1080.f};
+    float m_fovYRad{1.047197551f}; // 60 deg
+    uint64_t m_frame{0};
+    bool m_updated{false};
 
-    // Last-known camera center chunk; sentinel = update() never called.
-    // getRenderItems() returns empty immediately when m_lastCx is the sentinel.
-    static constexpr int32_t kNeverUpdated = std::numeric_limits<int32_t>::min();
-    int32_t m_lastCx{kNeverUpdated};
-    int32_t m_lastCy{kNeverUpdated};
+    // Protects m_tiles for concurrent reads (height queries, sim thread) vs writes
+    // (update/finalize/evict, main thread).
+    mutable std::shared_mutex m_tileMutex;
 
-    // LOD ring half-extents: LOD 0 → 3×3 (he=1), LOD 1 → 5×5 (he=2), LOD 2 → 7×7 (he=3)
-    static constexpr int kNumLods = 3;
-    static constexpr int kLodHalfExtent[kNumLods] = {1, 2, 3};
-    // Maximum procedural chunks generated per update() call to avoid a first-frame hitch.
+    // Maximum procedural tiles generated per update() call (first-frame hitch guard).
     static constexpr int kMaxProceduralPerUpdate = 8;
+    // Default resident-tile LRU cap (see setResidencyCap).
+    static constexpr std::size_t kDefaultMaxResidentTiles = 1024;
+    std::size_t m_maxResidentTiles{kDefaultMaxResidentTiles};
+    // Fraction of a mesh quad used as the SSE geometric-error proxy (the height
+    // deviation a coarser level introduces is a fraction of the quad extent).
+    static constexpr double kGeomErrorFactor = 0.25;
 };
 
 } // namespace fl

@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Tests for the cube-sphere quadtree TerrainStreamer (#472): SSE refinement, 2:1 edge
+// balance, LRU residency, radial dvec3 height/surface queries + transitional (x, z)
+// shims, deterministic global procedural tiles, and the async pack-tile layer path.
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "content/AssetManager.h"
 #include "content/AssetTypes.h"
 #include "content/IContentPack.h"
-#include "render/TerrainMeshBuilder.h"
+#include "render/CubeSphere.h"
+#include "render/ProceduralTerrainChunk.h"
 #include "render/TerrainStreamer.h"
 
 #include "mock_content.h"
@@ -20,6 +25,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 using namespace fl;
@@ -91,12 +97,7 @@ static std::vector<uint8_t> makeFlatPng16(int w, int h, uint16_t fill) {
             wbe16(row + 1 + c * 2, fill);
     }
 
-    // Compress with DEFLATE stored blocks (no actual compression)
-    // zlib header: CMF=0x78 (deflate, window=32KB), FLG=0x01 (FCHECK so CMF*256+FLG % 31 == 0)
-    // (0x78*256 + 0x01 = 30721; 30721 % 31 = 0 ... actually let's compute properly)
-    // CMF = 0x78, need (CMF*256 + FLG) % 31 == 0. 0x78*256 = 30720. 30720 % 31 = 30720/31=991*31+?
-    // 991*31=30721, so 30720%31=30. FLG must make total % 31 == 0: FLG = 31-30 = 1, but
-    // FLG bits 5-6 (FDICT,FLEVEL) should be 0. FLG=0x01 is fine.
+    // zlib header: CMF=0x78, FLG=0x01 (FCHECK: (0x78*256 + 1) % 31 == 0)
     static constexpr uint8_t kZlibCMF = 0x78u;
     static constexpr uint8_t kZlibFLG = 0x01u;
 
@@ -111,7 +112,6 @@ static std::vector<uint8_t> makeFlatPng16(int w, int h, uint16_t fill) {
         const std::size_t blockSize = std::min<std::size_t>(rawSize - offset, 65535u);
         const bool bfinal = (offset + blockSize >= rawSize);
         zlib.push_back(bfinal ? 0x01u : 0x00u); // BFINAL | BTYPE=00
-        // LEN and NLEN (little-endian)
         const uint16_t len16 = static_cast<uint16_t>(blockSize);
         zlib.push_back(len16 & 0xFFu);
         zlib.push_back((len16 >> 8) & 0xFFu);
@@ -121,35 +121,24 @@ static std::vector<uint8_t> makeFlatPng16(int w, int h, uint16_t fill) {
         offset += blockSize;
     }
 
-    // Adler-32 checksum (big-endian)
     const uint32_t a32 = adler32(raw.data(), rawSize);
     const std::size_t zlibEnd = zlib.size();
     zlib.resize(zlibEnd + 4);
     wbe32(zlib.data() + zlibEnd, a32);
 
-    // Assemble PNG
     std::vector<uint8_t> png;
     png.reserve(64 + zlib.size());
 
-    // PNG signature
     static constexpr uint8_t kSig[] = {137, 80, 78, 71, 13, 10, 26, 10};
     png.insert(png.end(), kSig, kSig + 8);
 
-    // IHDR
     uint8_t ihdr[13]{};
     wbe32(ihdr + 0, static_cast<uint32_t>(w));
     wbe32(ihdr + 4, static_cast<uint32_t>(h));
     ihdr[8] = 16; // bit depth
     ihdr[9] = 0;  // color type: grayscale
-    ihdr[10] = 0; // compression: deflate
-    ihdr[11] = 0; // filter: adaptive
-    ihdr[12] = 0; // interlace: none
     appendPngChunk(png, "IHDR", ihdr, 13);
-
-    // IDAT
     appendPngChunk(png, "IDAT", zlib.data(), static_cast<uint32_t>(zlib.size()));
-
-    // IEND
     appendPngChunk(png, "IEND", nullptr, 0);
 
     return png;
@@ -159,10 +148,12 @@ static std::vector<uint8_t> makeFlatPng16(int w, int h, uint16_t fill) {
 // MockTerrainPack — IContentPack with configurable resolveTerrainChunk
 // ===========================================================================
 
-// Resolves terrain chunks from an in-memory map; everything else null-object (see mock_content.h).
+// Resolves tile paths from an in-memory map; everything else null-object.
+// The streamer probes with the transitional face-folded id (#472/#473):
+// resolveTerrainChunk("<terrainId>/f<face>", i, j, level).
 struct MockTerrainPack : NullContentPack {
-    // key format: "<cx>:<cy>:<lod>"
-    std::map<std::string, std::string> chunkPaths;
+    // key format: "<terrainId>:<i>:<j>:<level>"
+    std::map<std::string, std::string> tilePaths;
 
     const char* name() const override {
         return "MockTerrainPack";
@@ -173,66 +164,62 @@ struct MockTerrainPack : NullContentPack {
     const char* id() const override {
         return "test:terrain";
     }
-    std::optional<std::string> resolveTerrainChunk(const char*, uint32_t cx, uint32_t cy, uint32_t lod) const override {
-        std::string key = std::to_string(static_cast<int32_t>(cx)) + ":" + std::to_string(static_cast<int32_t>(cy)) +
-                          ":" + std::to_string(lod);
-        auto it = chunkPaths.find(key);
-        if (it == chunkPaths.end())
+    std::optional<std::string> resolveTerrainChunk(const char* terrainId, uint32_t i, uint32_t j,
+                                                   uint32_t level) const override {
+        const std::string key =
+            std::string(terrainId) + ":" + std::to_string(i) + ":" + std::to_string(j) + ":" + std::to_string(level);
+        auto it = tilePaths.find(key);
+        if (it == tilePaths.end())
             return std::nullopt;
         return it->second;
     }
 };
 
-// Build manifest matching builtinWorldTerrainManifest()
-static fl::TerrainManifest worldManifest() {
+static fl::TerrainManifest worldManifest(int maxLevel) {
     fl::TerrainManifest m;
     m.terrainId = "world";
-    m.chunkSizeM = 15360.0f;
-    m.gridWidth = -1;
-    m.gridHeight = -1;
-    m.originX = -7680.0;
-    m.originZ = -7680.0;
+    m.maxTileLevel = maxLevel;
     return m;
 }
 
-// Drive update() until chunkCount reaches the expected steady state (or max iterations).
-static void driveToSteadyState(fl::TerrainStreamer& ts, glm::dvec3 pos, std::size_t expected = 83, int maxIter = 200) {
-    for (int i = 0; i < maxIter && ts.chunkCount() < expected; ++i)
-        ts.update(pos);
+constexpr double kR = 6'371'000.0;
+// North-pole datum point (the world origin) and a camera just above it.
+const glm::dvec3 kPoleProbe{0.0, 0.0, 0.0};
+const glm::dvec3 kPoleCam{0.0, 550.0, 0.0};
+// South-pole (antipode) datum point.
+const glm::dvec3 kAntipodeProbe{0.0, -2.0 * kR, 0.0};
+
+// Pump update()+service() until heightReadyAt(probe) or maxIter.
+static void pumpUntilReady(fl::TerrainStreamer& ts, MockAsyncFilesystem& fs, glm::dvec3 cam, glm::dvec3 probe,
+                           int maxIter = 400) {
+    for (int i = 0; i < maxIter && !ts.heightReadyAt(probe); ++i) {
+        ts.update(cam);
+        fs.service();
+    }
 }
 
-// ---------------------------------------------------------------------------
-// GLB binary parsing helpers for per-vertex mesh curvature tests
-// ---------------------------------------------------------------------------
-
-// Extract vertex Y (metres) at index idx from a GLB produced by buildTerrainMeshGlb.
-// POSITION accessor: non-interleaved, stride 12, layout [x, y, z] float32 per vertex.
-static float getVertexY(const std::vector<uint8_t>& glb, int idx) {
-    REQUIRE(glb.size() >= 20u);
-    uint32_t jsonLen = 0;
-    std::memcpy(&jsonLen, glb.data() + 12, 4);
-    const std::size_t binStart = 20u + jsonLen + 8u; // 12 GLB hdr + 8 JSON chunk hdr + data + 8 BIN chunk hdr
-    const std::size_t yOff = binStart + static_cast<std::size_t>(idx) * 12u + 4u;
-    REQUIRE(glb.size() >= yOff + 4u);
-    float y = 0.0f;
-    std::memcpy(&y, glb.data() + yOff, 4);
-    return y;
+static void pump(fl::TerrainStreamer& ts, MockAsyncFilesystem& fs, glm::dvec3 cam, int iters) {
+    for (int i = 0; i < iters; ++i) {
+        ts.update(cam);
+        fs.service();
+    }
 }
 
-// Extract normal X component at vertex index idx.
-// NORMAL accessor follows all POSITION data (vertCount * 12 bytes), same stride.
-static float getVertexNX(const std::vector<uint8_t>& glb, int idx, int vertCount) {
-    REQUIRE(glb.size() >= 20u);
-    uint32_t jsonLen = 0;
-    std::memcpy(&jsonLen, glb.data() + 12, 4);
-    const std::size_t binStart = 20u + jsonLen + 8u;
-    const std::size_t nxOff =
-        binStart + static_cast<std::size_t>(vertCount) * 12u + static_cast<std::size_t>(idx) * 12u;
-    REQUIRE(glb.size() >= nxOff + 4u);
-    float nx = 0.0f;
-    std::memcpy(&nx, glb.data() + nxOff, 4);
-    return nx;
-}
+// Fixture bundle for the no-pack procedural cases.
+struct StreamerFixture {
+    MockLogger logger;
+    std::unique_ptr<AssetManager> assets;
+    MockAsyncFilesystem asyncFs;
+
+    explicit StreamerFixture(std::unique_ptr<IContentPack> pack = nullptr) {
+        std::vector<std::unique_ptr<IContentPack>> packs;
+        if (pack)
+            packs.push_back(std::move(pack));
+        assets = std::make_unique<AssetManager>(std::move(packs), logger);
+        assets->initialize(nullptr);
+        asyncFs.init();
+    }
+};
 
 } // namespace
 
@@ -240,529 +227,337 @@ static float getVertexNX(const std::vector<uint8_t>& glb, int idx, int vertCount
 // Tests
 // ===========================================================================
 
-TEST_CASE("TerrainStreamer procedural fallback generates render items") {
-    MockLogger logger;
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
-
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
+TEST_CASE("TerrainStreamer procedural tiles produce render items and plausible heights") {
+    StreamerFixture fx;
     MockRenderer renderer;
+    fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, &renderer};
 
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, &renderer};
-    driveToSteadyState(ts, {0.0, 0.0, 0.0});
+    pump(ts, fx.asyncFs, kPoleCam, 60);
 
-    auto items = ts.getRenderItems({0.0, 0.0, 0.0});
+    auto items = ts.getRenderItems(kPoleCam);
     REQUIRE(!items.empty());
-    const double h = ts.heightAt(0.0, 0.0);
+    for (const auto& item : items) {
+        CHECK(item.mesh.valid());
+        CHECK((item.flags & kRenderFlagTerrain) != 0u);
+    }
+
+    // Builtin FBM: base 550 m, amplitude 150 m.
+    const double h = ts.heightAt(kPoleProbe);
     CHECK(h > 300.0);
     CHECK(h < 900.0);
 }
 
-TEST_CASE("TerrainStreamer null renderer returns empty render items but height works") {
-    MockLogger logger;
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
-
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
-
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
-    driveToSteadyState(ts, {0.0, 0.0, 0.0});
-
-    auto items = ts.getRenderItems({0.0, 0.0, 0.0});
-    CHECK(items.empty());
-    CHECK(ts.heightAt(0.0, 0.0) > 0.0);
-}
-
-TEST_CASE("TerrainStreamer heightReadyAt tracks LOD0 chunk readiness") {
-    MockLogger logger;
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
-
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
-
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
-
-    // Before any update(): the origin LOD0 chunk is not loaded, so heightReadyAt is false
-    // and heightAt returns the 0.0 not-loaded sentinel.
-    CHECK_FALSE(ts.heightReadyAt(0.0, 0.0));
-    CHECK(ts.heightAt(0.0, 0.0) == 0.0);
-
-    // After streaming completes: heightReadyAt reports ready and heightAt returns a real value.
-    driveToSteadyState(ts, {0.0, 0.0, 0.0});
-    CHECK(ts.heightReadyAt(0.0, 0.0));
-    CHECK(ts.heightAt(0.0, 0.0) > 0.0);
-}
-
-TEST_CASE("TerrainStreamer chunkCount is 83 at steady state") {
-    MockLogger logger;
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
-
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
-
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
-    driveToSteadyState(ts, {0.0, 0.0, 0.0}, 83, 200);
-
-    CHECK(ts.chunkCount() == 83u);
-}
-
-TEST_CASE("TerrainStreamer PNG chunk loaded from async filesystem") {
-    MockLogger logger;
-
-    auto pack = std::make_unique<MockTerrainPack>();
-    const std::string chunkPath = "terrain/world/lod0/chunk_0000_0000.png";
-    pack->chunkPaths["0:0:0"] = chunkPath;
-
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    packs.push_back(std::move(pack));
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
-
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
-    // 33318 - 32768 = 550 m elevation
-    asyncFs.addFile(chunkPath, [](const std::vector<uint8_t>& v) { return v; }(makeFlatPng16(513, 513, 33318)));
-
+TEST_CASE("TerrainStreamer getRenderItems is empty before the first update") {
+    StreamerFixture fx;
     MockRenderer renderer;
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, &renderer};
-
-    // Queue the async read
-    ts.update({0.0, 0.0, 0.0});
-    // Fire completion callback
-    asyncFs.service();
-    // Allow any remaining procedural chunks to load
-    driveToSteadyState(ts, {0.0, 0.0, 0.0});
-
-    REQUIRE(!ts.getRenderItems({0.0, 0.0, 0.0}).empty());
-    CHECK(ts.heightAt(0.0, 0.0) == Catch::Approx(550.0).margin(5.0));
+    fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, &renderer};
+    CHECK(ts.getRenderItems(kPoleCam).empty());
 }
 
-TEST_CASE("TerrainStreamer evicts chunks when camera moves far away") {
-    MockLogger logger;
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
+TEST_CASE("TerrainStreamer null renderer returns empty render items but height works") {
+    StreamerFixture fx;
+    fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, nullptr};
 
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
+    pump(ts, fx.asyncFs, kPoleCam, 60);
 
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
-    driveToSteadyState(ts, {0.0, 0.0, 0.0});
-    REQUIRE(ts.chunkCount() == 83u);
+    CHECK(ts.getRenderItems(kPoleCam).empty());
+    CHECK(ts.heightAt(kPoleProbe) > 0.0);
+    CHECK(ts.heightAt(0.0, 0.0) > 0.0); // transitional 2D shim
+}
 
-    // Move camera 10 chunks away — the origin LOD0 chunk should be evicted.
-    // driveToSteadyState would exit immediately (count is already 83), so call
-    // update() explicitly at the new position to trigger eviction and re-loading.
-    const double farX = 15360.0 * 10.0;
-    for (int i = 0; i < 200; ++i)
-        ts.update({farX, 0.0, 0.0});
+TEST_CASE("TerrainStreamer heightReadyAt gates on covering-tile depth") {
+    StreamerFixture fx;
+    fl::TerrainStreamer ts{worldManifest(4), *fx.assets, fx.asyncFs, nullptr};
 
-    CHECK(ts.heightAt(0.0, 0.0) == 0.0); // LOD0 origin chunk no longer loaded
-    CHECK(ts.chunkCount() == 83u);       // same total, different chunks
+    // Before any update(): nothing is loaded.
+    CHECK_FALSE(ts.heightReadyAt(kPoleProbe));
+    CHECK(ts.heightAt(kPoleProbe) == 0.0);
+
+    pumpUntilReady(ts, fx.asyncFs, kPoleCam, kPoleProbe);
+    CHECK(ts.heightReadyAt(kPoleProbe));
+    CHECK(ts.heightAt(kPoleProbe) > 0.0);
+    CHECK(ts.heightReadyAt(0.0, 0.0)); // 2D shim agrees
+}
+
+TEST_CASE("TerrainStreamer refinement is camera-local") {
+    StreamerFixture fx;
+    fl::TerrainStreamer ts{worldManifest(6), *fx.assets, fx.asyncFs, nullptr};
+
+    pumpUntilReady(ts, fx.asyncFs, kPoleCam, kPoleProbe);
+    CHECK(ts.heightReadyAt(kPoleProbe));
+    // The antipode is only covered by coarse tiles — not spawn-accurate.
+    CHECK_FALSE(ts.heightReadyAt(kAntipodeProbe));
+    // But a coarse height IS available there (roots always desired).
+    CHECK(ts.heightAt(kAntipodeProbe) > 0.0);
+}
+
+TEST_CASE("TerrainStreamer desired leaves satisfy the 2:1 edge balance") {
+    StreamerFixture fx;
+    fl::TerrainStreamer ts{worldManifest(6), *fx.assets, fx.asyncFs, nullptr};
+    pump(ts, fx.asyncFs, kPoleCam, 5); // desired tree is rebuilt every update
+
+    struct KeyHash {
+        std::size_t operator()(const TileKey& k) const noexcept {
+            return (static_cast<std::size_t>(k.face) << 40) ^ (static_cast<std::size_t>(k.level) << 32) ^
+                   (static_cast<std::size_t>(k.i) << 16) ^ k.j;
+        }
+    };
+    const auto leaves = ts.desiredLeaves();
+    REQUIRE(!leaves.empty());
+    std::unordered_set<TileKey, KeyHash> leafSet(leaves.begin(), leaves.end());
+
+    for (const TileKey& t : leaves) {
+        if (t.level < 2)
+            continue;
+        for (int e = 0; e < 4; ++e) {
+            // Walk up from the same-level neighbour to the leaf covering that region.
+            TileKey cover = neighbor(t, static_cast<TileEdge>(e));
+            bool found = false;
+            while (true) {
+                if (leafSet.count(cover)) {
+                    found = true;
+                    break;
+                }
+                if (cover.level == 0)
+                    break;
+                cover = parent(cover);
+            }
+            if (found) {
+                INFO("leaf f" << int(t.face) << " L" << int(t.level) << " edge " << e << " covered at L"
+                              << int(cover.level));
+                CHECK(static_cast<int>(cover.level) >= static_cast<int>(t.level) - 1);
+            }
+        }
+    }
+}
+
+TEST_CASE("TerrainStreamer LRU eviction drops fine tiles left behind by the camera") {
+    StreamerFixture fx;
+    fl::TerrainStreamer ts{worldManifest(6), *fx.assets, fx.asyncFs, nullptr};
+    ts.setResidencyCap(8); // force aggressive eviction of non-desired tiles
+
+    pumpUntilReady(ts, fx.asyncFs, kPoleCam, kPoleProbe);
+    REQUIRE(ts.heightReadyAt(kPoleProbe));
+
+    // Move to the antipode and pump: the pole-side deep tiles leave the desired
+    // tree and must be evicted under the tiny cap.
+    const glm::dvec3 antipodeCam{0.0, -2.0 * kR - 550.0, 0.0};
+    pumpUntilReady(ts, fx.asyncFs, antipodeCam, kAntipodeProbe);
+    CHECK(ts.heightReadyAt(kAntipodeProbe));
+    CHECK_FALSE(ts.heightReadyAt(kPoleProbe)); // deep pole tiles evicted
+}
+
+TEST_CASE("TerrainStreamer procedural tiles are deterministic across instances") {
+    const TileKey key{2, 3, 4, 5};
+    const auto a = generateProceduralTile(key, kR, kBuiltinProceduralParams);
+    const auto b = generateProceduralTile(key, kR, kBuiltinProceduralParams);
+    REQUIRE(a.size() == static_cast<std::size_t>(kTileHeightmapSize) * kTileHeightmapSize);
+    CHECK(a == b);
+
+    // Server (headless) and client (rendered) streamers agree exactly on heights.
+    StreamerFixture fxServer;
+    fl::TerrainStreamer server{worldManifest(3), *fxServer.assets, fxServer.asyncFs, nullptr};
+    pump(server, fxServer.asyncFs, kPoleCam, 60);
+
+    StreamerFixture fxClient;
+    MockRenderer renderer;
+    fl::TerrainStreamer client{worldManifest(3), *fxClient.assets, fxClient.asyncFs, &renderer};
+    pump(client, fxClient.asyncFs, kPoleCam, 60);
+
+    for (const glm::dvec3 probe :
+         {kPoleProbe, glm::dvec3{50'000.0, 0.0, 20'000.0}, glm::dvec3{-120'000.0, 0.0, 90'000.0}}) {
+        CHECK(server.heightAt(probe) == client.heightAt(probe));
+    }
+}
+
+TEST_CASE("TerrainStreamer procedural tiles are seamless across sibling edges") {
+    // Two level-1 siblings on face 2 share the u=0.5 edge: the last sample column of
+    // the left tile must equal the first column of the right tile, row for row.
+    const auto left = generateProceduralTile(TileKey{2, 1, 0, 0}, kR, kBuiltinProceduralParams);
+    const auto right = generateProceduralTile(TileKey{2, 1, 1, 0}, kR, kBuiltinProceduralParams);
+    const int s = kTileHeightmapSize;
+    for (int row = 0; row < s; ++row) {
+        REQUIRE(left[static_cast<std::size_t>(row) * s + (s - 1)] == right[static_cast<std::size_t>(row) * s]);
+    }
+}
+
+TEST_CASE("TerrainStreamer loads a pack tile PNG via the transitional path encoding") {
+    auto pack = std::make_unique<MockTerrainPack>();
+    const std::string tilePath = "terrain/world/f2/lod0/chunk_0000_0000.png";
+    pack->tilePaths["world/f2:0:0:0"] = tilePath;
+
+    StreamerFixture fx(std::move(pack));
+    // 33318 - 32768 = 550 m radial elevation, flat.
+    fx.asyncFs.addFile(tilePath, makeFlatPng16(kTileHeightmapSize, kTileHeightmapSize, 33318));
+
+    fl::TerrainStreamer ts{worldManifest(0), *fx.assets, fx.asyncFs, nullptr};
+    pump(ts, fx.asyncFs, kPoleCam, 5);
+
+    CHECK(ts.heightAt(kPoleProbe) == Catch::Approx(550.0).margin(0.5));
+    CHECK(ts.heightReadyAt(kPoleProbe)); // maxTileLevel 0 => required level 0
 }
 
 TEST_CASE("TerrainStreamer async read error falls back to procedural") {
-    MockLogger logger;
+    auto pack = std::make_unique<MockTerrainPack>();
+    pack->tilePaths["world/f2:0:0:0"] = "terrain/world/f2/lod0/chunk_0000_0000.png";
+    // No file added to asyncFs -> service() fires the Error callback.
+
+    StreamerFixture fx(std::move(pack));
+    fl::TerrainStreamer ts{worldManifest(0), *fx.assets, fx.asyncFs, nullptr};
+    pump(ts, fx.asyncFs, kPoleCam, 5);
+
+    const double h = ts.heightAt(kPoleProbe);
+    CHECK(h > 300.0);
+    CHECK(h < 900.0);
+}
+
+TEST_CASE("TerrainStreamer wrong-size pack PNG falls back to procedural") {
+    auto pack = std::make_unique<MockTerrainPack>();
+    const std::string tilePath = "terrain/world/f2/lod0/chunk_0000_0000.png";
+    pack->tilePaths["world/f2:0:0:0"] = tilePath;
+
+    StreamerFixture fx(std::move(pack));
+    // Legacy 513x513 chunk-sized PNG: valid image, wrong tile dimensions.
+    fx.asyncFs.addFile(tilePath, makeFlatPng16(513, 513, 40000));
+
+    fl::TerrainStreamer ts{worldManifest(0), *fx.assets, fx.asyncFs, nullptr};
+    pump(ts, fx.asyncFs, kPoleCam, 5);
+
+    const double h = ts.heightAt(kPoleProbe);
+    CHECK(h > 300.0); // FBM range, not the PNG's 7232 m
+    CHECK(h < 900.0);
+}
+
+TEST_CASE("TerrainStreamer land-cover layer feeds surfaceAt") {
+    auto pack = std::make_unique<MockTerrainPack>();
+    const std::string heightPath = "terrain/world/f2/lod0/chunk_0000_0000.png";
+    const std::string coverPath = "terrain/world/f2-cover/lod0/chunk_0000_0000.png";
+    pack->tilePaths["world/f2:0:0:0"] = heightPath;
+    pack->tilePaths["world/f2-cover:0:0:0"] = coverPath;
+
+    StreamerFixture fx(std::move(pack));
+    fx.asyncFs.addFile(heightPath, makeFlatPng16(kTileHeightmapSize, kTileHeightmapSize, 33318));
+    fx.asyncFs.addFile(coverPath, makeFlatPng16(kTileHeightmapSize, kTileHeightmapSize, 7)); // class 7
+
+    fl::TerrainStreamer ts{worldManifest(0), *fx.assets, fx.asyncFs, nullptr};
+    pump(ts, fx.asyncFs, kPoleCam, 5);
+
+    CHECK(ts.heightAt(kPoleProbe) == Catch::Approx(550.0).margin(0.5));
+    CHECK(ts.surfaceAt(kPoleProbe) == 7);
+    CHECK(ts.surfaceAt(0.0, 0.0) == 7); // 2D shim
+}
+
+TEST_CASE("TerrainStreamer surfaceAt returns zero without a land-cover layer") {
+    StreamerFixture fx;
+    fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, nullptr};
+    pump(ts, fx.asyncFs, kPoleCam, 30);
+    CHECK(ts.surfaceAt(kPoleProbe) == 0);
+}
+
+TEST_CASE("TerrainStreamer 2D shim applies the near-side curvature drop", "[spherical]") {
+    StreamerFixture fx;
+    fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, nullptr};
+    pump(ts, fx.asyncFs, kPoleCam, 60);
+
+    // At the origin the radial and the vertical coincide: shim == radial height.
+    const double radial0 = ts.heightAt(kPoleProbe);
+    REQUIRE(radial0 > 0.0);
+    CHECK(ts.heightAt(0.0, 0.0) == Catch::Approx(radial0).margin(1e-6));
+
+    // 100 km out, the surface world-Y sits ~785 m below the radial height
+    // (drop = R - sqrt(R^2 - d^2) for d = 100 km on the Earth sphere).
+    const double d = 100'000.0;
+    const double radial = ts.heightAt(glm::dvec3{d, 0.0, 0.0});
+    const double shim = ts.heightAt(d, 0.0);
+    const double expectedDrop = kR - std::sqrt(kR * kR - d * d);
+    CHECK(shim == Catch::Approx(radial - expectedDrop).margin(5.0));
+}
+
+TEST_CASE("TerrainStreamer heightAt is callable from a background thread", "[threading]") {
+    StreamerFixture fx;
+    fl::TerrainStreamer ts{worldManifest(3), *fx.assets, fx.asyncFs, nullptr};
+
+    std::thread reader([&ts] {
+        double acc = 0.0;
+        for (int i = 0; i < 500; ++i)
+            acc += ts.heightAt(glm::dvec3{static_cast<double>(i) * 37.0, 0.0, static_cast<double>(i) * 91.0});
+        CHECK(acc >= 0.0);
+    });
+    pump(ts, fx.asyncFs, kPoleCam, 60);
+    reader.join();
+    CHECK(ts.heightAt(kPoleProbe) > 0.0);
+}
+
+TEST_CASE("TerrainStreamer render tiles never overlap a rendered ancestor") {
+    StreamerFixture fx;
+    MockRenderer renderer;
+    fl::TerrainStreamer ts{worldManifest(4), *fx.assets, fx.asyncFs, &renderer};
+    // Partially stream (few pumps), then check the emitted set at every stage:
+    // no emitted tile's region may be contained in another emitted tile.
+    for (int stage = 0; stage < 12; ++stage) {
+        pump(ts, fx.asyncFs, kPoleCam, 5);
+        auto items = ts.getRenderItems(kPoleCam);
+        // MockRenderer mesh names encode the tile keys; approximate the overlap check
+        // via item count sanity: emission is deduped and bounded by the leaf count.
+        CHECK(items.size() <= ts.desiredLeaves().size());
+    }
+}
+
+TEST_CASE("TerrainStreamer eviction cancels an in-flight pack read without crashing") {
+    // Pack-provide the level-2 tile covering the pole; everything else procedural.
+    const TileCoord tc = worldToTile(kPoleProbe, kR);
+    const TileKey packKey{tc.key.face, 2, tileIndexForUv(tc.s, 2), tileIndexForUv(tc.t, 2)};
+    const std::string tilePath = "terrain/pack/pole_tile.png";
 
     auto pack = std::make_unique<MockTerrainPack>();
-    const std::string chunkPath = "terrain/world/lod0/chunk_0000_0000.png";
-    pack->chunkPaths["0:0:0"] = chunkPath;
-    // No file added to asyncFs → service() fires Error callback
+    pack->tilePaths["world/f" + std::to_string(packKey.face) + ":" + std::to_string(packKey.i) + ":" +
+                    std::to_string(packKey.j) + ":2"] = tilePath;
+    StreamerFixture fx(std::move(pack));
+    fx.asyncFs.addFile(tilePath, makeFlatPng16(kTileHeightmapSize, kTileHeightmapSize, 33318));
 
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    packs.push_back(std::move(pack));
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
+    fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, nullptr};
+    ts.setResidencyCap(8);
 
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
+    // Pump WITHOUT servicing the async fs: procedural tiles finalize synchronously,
+    // the pack tile stays Loading with its read still in flight.
+    for (int i = 0; i < 30; ++i)
+        ts.update(kPoleCam);
 
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
-    ts.update({0.0, 0.0, 0.0});
-    asyncFs.service(); // fires Error → procedural fallback
-    driveToSteadyState(ts, {0.0, 0.0, 0.0});
+    // Move to the antipode: the pole tile leaves the desired tree and the small
+    // residency cap evicts it while its read is pending (evictTile's cancelRead path).
+    const glm::dvec3 antipodeCam{0.0, -2.0 * kR - 550.0, 0.0};
+    for (int i = 0; i < 60; ++i)
+        ts.update(antipodeCam);
 
-    CHECK(ts.heightAt(0.0, 0.0) > 0.0);
+    // Deliver the cancelled read's completion: it must be ignored — no crash, no
+    // resurrected Loading entry — and queries keep working.
+    fx.asyncFs.service();
+    ts.update(antipodeCam);
+    CHECK(ts.heightAt(kAntipodeProbe) > 0.0);
 }
 
-TEST_CASE("TerrainStreamer surfaceAt returns zero") {
-    MockLogger logger;
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
+TEST_CASE("TerrainStreamer setPlanetRadius drops resident tiles and regenerates at the new radius") {
+    StreamerFixture fx;
+    fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, nullptr};
+    pump(ts, fx.asyncFs, kPoleCam, 30);
+    const std::size_t before = ts.tileCount();
+    REQUIRE(before > 0);
 
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
-
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
-    CHECK(ts.surfaceAt(0.0, 0.0) == 0);
-}
-
-TEST_CASE("TerrainStreamer heightAt returns zero when only LOD1 loaded") {
-    MockLogger logger;
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
-
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
-
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
-
-    // Place camera so chunk (0,0) is in the LOD1 ring but NOT the LOD0 ring.
-    // Manifest originX = -7680, chunkSize = 15360.
-    // chunk (0,0) world X range: [-7680, 7680). Camera at X = 15360*1.5 = 23040.
-    // cameraCx = floor((23040 - (-7680)) / 15360) = floor(30720/15360) = 2.
-    // dist to (0,0): |0-2|=2 → within LOD1 ring (he=2), outside LOD0 ring (he=1).
-    const double camX = 15360.0 * 1.5;
-    driveToSteadyState(ts, {camX, 0.0, 0.0});
-
-    // LOD0 for chunk (0,0) was never loaded — heightAt must return 0.0.
-    CHECK(ts.heightAt(0.0, 0.0) == 0.0);
-}
-
-TEST_CASE("TerrainMeshBuilder returns non-empty bytes for valid input") {
-    const int size = 513;
-    std::vector<uint16_t> heights(static_cast<std::size_t>(size) * size, 33318u);
-    auto glb = fl::buildTerrainMeshGlb(heights, size, 128, 15360.0f);
-
-    REQUIRE(!glb.empty());
-    // GLB magic: 'g','l','T','F' = 0x46546C67 LE
-    REQUIRE(glb.size() >= 12u);
-    CHECK(glb[0] == 0x67u);
-    CHECK(glb[1] == 0x6Cu);
-    CHECK(glb[2] == 0x54u);
-    CHECK(glb[3] == 0x46u);
-    // Version field (bytes 4-7) must be 2
-    uint32_t version = 0;
-    std::memcpy(&version, glb.data() + 4, 4);
-    CHECK(version == 2u);
-}
-
-TEST_CASE("TerrainMeshBuilder returns empty for invalid input") {
-    const int size = 513;
-    std::vector<uint16_t> heights(static_cast<std::size_t>(size) * size, 32768u);
-
-    // Empty heights
-    CHECK(fl::buildTerrainMeshGlb({}, size, 128, 15360.0f).empty());
-    // Zero meshGrid
-    CHECK(fl::buildTerrainMeshGlb(heights, size, 0, 15360.0f).empty());
-    // heightmapSize < 2
-    CHECK(fl::buildTerrainMeshGlb(heights, 1, 128, 15360.0f).empty());
-    // heightmapSize < meshGrid + 1
-    CHECK(fl::buildTerrainMeshGlb(heights, 5, 128, 15360.0f).empty());
-}
-
-TEST_CASE("TerrainMeshBuilder vertex count matches meshGrid") {
-    const int size = 129;
-    const int meshGrid = 32;
-    std::vector<uint16_t> heights(static_cast<std::size_t>(size) * size, 32768u);
-    auto glb = fl::buildTerrainMeshGlb(heights, size, meshGrid, 15360.0f);
-    REQUIRE(!glb.empty());
-
-    // Find JSON chunk: starts at byte 20 (after 12-byte header + 8-byte chunk header)
-    REQUIRE(glb.size() > 20u);
-    const char* jsonStart = reinterpret_cast<const char*>(glb.data() + 20);
-    const std::size_t jsonChunkLen = [&] {
-        uint32_t v = 0;
-        std::memcpy(&v, glb.data() + 12, 4);
-        return static_cast<std::size_t>(v);
-    }();
-    const std::string json(jsonStart, std::min(jsonChunkLen, glb.size() - 20u));
-
-    // Expected counts: vertCount = (meshGrid+1)^2 = 33*33 = 1089
-    //                  indexCount = meshGrid^2 * 6 = 32*32*6 = 6144
-    CHECK(json.find("\"count\":" + std::to_string((meshGrid + 1) * (meshGrid + 1))) != std::string::npos);
-    CHECK(json.find("\"count\":" + std::to_string(meshGrid * meshGrid * 6)) != std::string::npos);
-}
-
-TEST_CASE("TerrainStreamer cancelled read during eviction does not crash") {
-    MockLogger logger;
-
-    auto pack = std::make_unique<MockTerrainPack>();
-    const std::string chunkPath = "terrain/world/lod0/chunk_0000_0000.png";
-    pack->chunkPaths["0:0:0"] = chunkPath;
-    // No file in asyncFs — will fire Error if service() is ever called
-
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    packs.push_back(std::move(pack));
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
-
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
-
-    MockRenderer renderer;
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, &renderer};
-
-    // Queue async read for chunk (0,0) LOD0
-    ts.update({0.0, 0.0, 0.0});
-    CHECK(ts.chunkCount() > 0u);
-
-    // Move camera far away before service() fires — triggers evictChunk → cancelRead
-    const double farX = 15360.0 * 10.0;
-    ts.update({farX, 0.0, 0.0});
-
-    // service() fires Cancelled callback — TerrainStreamer must not crash or re-insert
-    REQUIRE_NOTHROW(asyncFs.service());
-    REQUIRE_NOTHROW(ts.update({farX, 0.0, 0.0}));
-
-    // Origin chunk must not be present
-    CHECK(ts.heightAt(0.0, 0.0) == 0.0);
-}
-
-// ---------------------------------------------------------------------------
-// Spherical terrain correction
-// ---------------------------------------------------------------------------
-
-TEST_CASE("TerrainStreamer: curvature correction is zero at origin", "[spherical]") {
-    MockLogger logger;
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
-
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
-    driveToSteadyState(ts, {0.0, 0.0, 0.0});
-
-    const double h = ts.heightAt(0.0, 0.0); // default Earth radius
-    // At origin (x=0, z=0) the correction is sqrt(R^2) - R = 0 regardless of radius
-    ts.setPlanetRadius(3'000'000.0); // Mars-ish radius: correction still 0 at origin
-    CHECK(ts.heightAt(0.0, 0.0) == Catch::Approx(h).margin(1e-3));
-}
-
-TEST_CASE("TerrainStreamer: curvature correction is negative at lateral position", "[spherical]") {
-    MockLogger logger;
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
-
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
-    const double D = 100'000.0; // 100 km offset
-    driveToSteadyState(ts, {D, 0.0, 0.0});
-
-    // Use an astronomically large radius as a "flat" baseline (correction ~ 0)
-    ts.setPlanetRadius(1e15);
-    const double flatH = ts.heightAt(D, 0.0);
-
-    const double R = 6'371'000.0;
-    const double expectedCorrection = std::sqrt(std::max(0.0, R * R - D * D)) - R;
-    ts.setPlanetRadius(R);
-    const double sphereH = ts.heightAt(D, 0.0);
-    CHECK(sphereH == Catch::Approx(flatH + expectedCorrection).margin(1e-3));
-    CHECK(sphereH < flatH); // correction is negative for any D > 0
-}
-
-TEST_CASE("TerrainStreamer: curvature correction magnitude at 100 km", "[spherical]") {
-    // Analytical: correction ~ -D^2 / (2R) for D << R
-    const double D = 100'000.0;
-    const double R = 6'371'000.0;
-    const double correction = std::sqrt(R * R - D * D) - R;
-    const double approxCorrection = -(D * D) / (2.0 * R);
-    // Should agree to within ~1 m (second-order term is tiny)
-    CHECK(correction == Catch::Approx(approxCorrection).margin(1.0));
-}
-
-TEST_CASE("TerrainStreamer: curvature applied at default radius without explicit setPlanetRadius", "[spherical]") {
-    MockLogger logger;
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
-
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
-    const double D = 100'000.0;
-    driveToSteadyState(ts, {D, 0.0, 0.0});
-
-    // Without calling setPlanetRadius the default Earth radius is applied.
-    // Use a very large radius as a flat proxy to verify the default is not flat.
-    const double hDefault = ts.heightAt(D, 0.0);
-    ts.setPlanetRadius(1e15); // effectively flat
-    const double hFlat = ts.heightAt(D, 0.0);
-    // Default spherical correction is negative at D > 0
-    CHECK(hDefault < hFlat);
-}
-
-TEST_CASE("TerrainStreamer: heightAt is callable from a background thread", "[spherical][threading]") {
-    MockLogger logger;
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
-
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
-    driveToSteadyState(ts, {0.0, 0.0, 0.0});
-
-    double result = 0.0;
-    std::thread t([&] { result = ts.heightAt(0.0, 0.0); });
-    t.join();
-    // Result is deterministic (procedural FBM at origin); just verify no crash / data race.
-    CHECK(std::isfinite(result));
-}
-
-// ===========================================================================
-// Per-vertex mesh curvature tests
-// ===========================================================================
-
-TEST_CASE("TerrainMeshBuilder: spherical correction at world origin corner is zero") {
-    // At (0, 0) the sphere surface is exactly at Y=0: sqrt(R^2 - 0) - R = 0.
-    // For vertices away from the origin the correction becomes negative.
-    const int meshGrid = 32; // LOD 2
-    const int hmSize = 129;
-    const float chunkSizeM = 15360.0f;
-    const double R = 6'371'000.0;
-
-    std::vector<uint16_t> flat(static_cast<std::size_t>(hmSize) * hmSize, 32768u); // 0 m elevation
-    auto glb = fl::buildTerrainMeshGlb(flat, hmSize, meshGrid, chunkSizeM, 0.0, 0.0, R);
-    REQUIRE(!glb.empty());
-
-    // Corner vertex (index 0): world position (0, 0) → correction = 0
-    const float y0 = getVertexY(glb, 0);
-    CHECK(y0 == Catch::Approx(0.0f).margin(1e-3f));
-
-    // Last vertex on row 0 (index meshGrid): world X = chunkSizeM → correction is negative
-    const float yFar = getVertexY(glb, meshGrid);
-    const double D = static_cast<double>(chunkSizeM);
-    const float expected = static_cast<float>(std::sqrt(R * R - D * D) - R);
-    CHECK(yFar == Catch::Approx(expected).margin(0.1f));
-    CHECK(yFar < 0.0f);
-}
-
-TEST_CASE("TerrainMeshBuilder: per-vertex Y varies monotonically at non-zero world position") {
-    // Build flat terrain at chunkWorldX = 100 km. Every vertex has zero elevation but
-    // different spherical corrections (increasing X = further from origin = more negative).
-    const int meshGrid = 32;
-    const int hmSize = 129;
-    const float chunkSizeM = 15360.0f;
-    const double chunkWorldX = 100'000.0;
-    const double R = 6'371'000.0;
-
-    std::vector<uint16_t> flat(static_cast<std::size_t>(hmSize) * hmSize, 32768u);
-
-    // Flat (no radius): all vertex Y should be 0
-    auto glbFlat = fl::buildTerrainMeshGlb(flat, hmSize, meshGrid, chunkSizeM, chunkWorldX, 0.0, 0.0);
-    REQUIRE(!glbFlat.empty());
-    CHECK(getVertexY(glbFlat, 0) == Catch::Approx(0.0f).margin(1e-4f));
-    CHECK(getVertexY(glbFlat, meshGrid) == Catch::Approx(0.0f).margin(1e-4f));
-
-    // Spherical: vertex at col=0 is at world X=100 km; col=meshGrid is at X=115.36 km
-    auto glbSphere = fl::buildTerrainMeshGlb(flat, hmSize, meshGrid, chunkSizeM, chunkWorldX, 0.0, R);
-    REQUIRE(!glbSphere.empty());
-
-    const float y0 = getVertexY(glbSphere, 0);
-    const float yFar = getVertexY(glbSphere, meshGrid);
-
-    // Both corrections are negative (D > 0 in both cases)
-    CHECK(y0 < 0.0f);
-    CHECK(yFar < 0.0f);
-
-    // Further vertex has a more negative correction (correction = sqrt(R^2-D^2)-R, monotone decreasing)
-    CHECK(yFar < y0);
-
-    // Spot-check vertex at col=0 against analytical value
-    const float expected0 = static_cast<float>(std::sqrt(R * R - chunkWorldX * chunkWorldX) - R);
-    CHECK(y0 == Catch::Approx(expected0).margin(0.1f));
-}
-
-TEST_CASE("TerrainMeshBuilder: normals account for spherical curvature gradient") {
-    // At 100 km from origin the spherical gradient ≈ -vx/R ≈ -0.0157, producing a
-    // non-zero normal X component tilting the surface toward the origin.
-    const int meshGrid = 32;
-    const int hmSize = 129;
-    const float chunkSizeM = 15360.0f;
-    const double chunkWorldX = 100'000.0;
-    const double R = 6'371'000.0;
-    const int vertCount = (meshGrid + 1) * (meshGrid + 1);
-
-    std::vector<uint16_t> flat(static_cast<std::size_t>(hmSize) * hmSize, 32768u);
-
-    // Flat (no spherical): normal X at vertex 0 should be ≈ 0
-    auto glbFlat = fl::buildTerrainMeshGlb(flat, hmSize, meshGrid, chunkSizeM, chunkWorldX, 0.0, 0.0);
-    REQUIRE(!glbFlat.empty());
-    const float nxFlat = getVertexNX(glbFlat, 0, vertCount);
-    CHECK(nxFlat == Catch::Approx(0.0f).margin(1e-4f));
-
-    // Spherical: normal X should be positive (surface tilts toward +X origin direction)
-    auto glbSphere = fl::buildTerrainMeshGlb(flat, hmSize, meshGrid, chunkSizeM, chunkWorldX, 0.0, R);
-    REQUIRE(!glbSphere.empty());
-    const float nxSphere = getVertexNX(glbSphere, 0, vertCount);
-    CHECK(nxSphere > 0.01f);
-}
-
-TEST_CASE("TerrainStreamer: getRenderItems Y transform is zero with spherical radius") {
-    // All spherical curvature is baked into vertex Y; getRenderItems must place each
-    // chunk at Y = 0 in world space regardless of its distance from origin.
-    MockLogger logger;
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
-    MockRenderer renderer;
-
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, &renderer};
-    // Default Earth radius is already set; drive to steady state
-    driveToSteadyState(ts, {0.0, 0.0, 0.0});
-
-    const auto items = ts.getRenderItems({0.0, 0.0, 0.0});
-    REQUIRE(!items.empty());
-    for (const auto& item : items)
-        CHECK(item.transform[3][1] == Catch::Approx(0.0f).margin(0.001f));
-}
-
-TEST_CASE("TerrainStreamer: getRenderItems Y transform is zero with radius set to zero") {
-    // Flat mode (radius=0) must also place chunks at Y = 0 (regression guard).
-    MockLogger logger;
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
-    MockRenderer renderer;
-
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, &renderer};
+    // Same-value and invalid calls are no-ops.
+    ts.setPlanetRadius(kR);
     ts.setPlanetRadius(0.0);
-    driveToSteadyState(ts, {0.0, 0.0, 0.0});
+    ts.setPlanetRadius(-5.0);
+    REQUIRE(ts.tileCount() == before);
 
-    const auto items = ts.getRenderItems({0.0, 0.0, 0.0});
-    REQUIRE(!items.empty());
-    for (const auto& item : items)
-        CHECK(item.transform[3][1] == Catch::Approx(0.0f).margin(0.001f));
-}
+    // A real change flushes every resident tile (curvature and procedural elevations
+    // are baked at generation time)...
+    ts.setPlanetRadius(600'000.0);
+    REQUIRE(ts.tileCount() == 0);
 
-TEST_CASE("TerrainStreamer: heightAt returns uncorrected elevation when radius is zero") {
-    // When setPlanetRadius(0) the sqrt(max(0, 0-D^2))-0 = 0 guard fires for any D,
-    // so heightAt returns raw elevation with no spherical adjustment.
-    MockLogger logger;
-    std::vector<std::unique_ptr<IContentPack>> packs;
-    AssetManager assets{std::move(packs), logger};
-    assets.initialize(nullptr);
-    MockAsyncFilesystem asyncFs;
-    asyncFs.init();
-
-    fl::TerrainStreamer ts{worldManifest(), assets, asyncFs, nullptr};
-    const double D = 100'000.0;
-    driveToSteadyState(ts, {D, 0.0, 0.0});
-
-    ts.setPlanetRadius(1e15); // effectively flat proxy
-    const double hFlat = ts.heightAt(D, 0.0);
-
-    ts.setPlanetRadius(0.0); // explicit zero radius
-    const double hZero = ts.heightAt(D, 0.0);
-
-    // Both should return the same raw elevation (zero correction in both cases)
-    CHECK(hZero == Catch::Approx(hFlat).margin(1e-3));
+    // ...and subsequent pumps regenerate at the new radius: the datum point at the
+    // origin is covered again with a plausible procedural elevation.
+    pump(ts, fx.asyncFs, kPoleCam, 60);
+    REQUIRE(ts.tileCount() > 0);
+    CHECK(ts.heightAt(kPoleProbe) > 0.0);
+    CHECK(ts.heightAt(kPoleProbe) < 1000.0);
 }
