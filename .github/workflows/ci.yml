@@ -207,14 +207,14 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           ./build/debug/tools/terrain-chunk-io gen-procedural \
-            --cx 0 --cy 0 --output /tmp/builtin_chunk.u16
+            --face 2 --level 0 --i 0 --j 0 --output /tmp/builtin_tile.u16
 
           python3 - <<'EOF'
           import struct
-          with open("/tmp/builtin_chunk.u16", "rb") as f:
+          with open("/tmp/builtin_tile.u16", "rb") as f:
               magic, w, h = struct.unpack("<IHH", f.read(8))
           assert magic == 0x464C4348, f"wrong magic: {magic:#x}"
-          assert w == 513 and h == 513, f"wrong size: {w}x{h}"
+          assert w == 129 and h == 129, f"wrong size: {w}x{h}"
           print(f"OK: terrain-chunk-io gen-procedural output valid ({w}x{h}, magic {magic:#x})")
           EOF
 
