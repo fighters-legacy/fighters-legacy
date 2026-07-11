@@ -44,6 +44,21 @@
       "assert_max_kbs": 0,
       "assert_min_tick_hz": 0,
       "assert_max_tick_ms": 16.6
+    },
+    "overrun": {
+      "_comment": "Synthetic tick-overrun profile (#574): proves the #514 graceful overrun governor ENGAGES and SHEDS rather than spiralling. Runs with the governor ON (governor=true -> FL_LOADTEST_GOVERNOR=1) and deterministically overloads a serialize-bound tick with test_spawn_ai=5000 at sim_workers=1 (the #573 characterisation measured ~36.8 Hz governor-off here — a large portable margin below 60 Hz). Gates: max_load_factor 0.99 fails if the governor never engaged (load_factor stayed 1.0 — the primary bite, verified during dev to drop to ~0.25 governor-on vs 1.0 governor-off); max_dropped_ticks 100 is the graceful-not-spiral bound (a small allowance absorbs the one-time startup-spawn + EWMA-ramp transient before the governor engages — measured ~24 drops in a debug smoke; a genuine spiral produces thousands over 90 s); --assert-min-entities 5000 (auto from the load-spawn) confirms the overload took. baselined=false: the shed KB/s must NEVER touch the committed bandwidth baseline. Reference tier only (nightly / workflow_dispatch) — the collapse margin is reliable only on a controlled runtime.",
+      "clients": 32,
+      "duration_s": 90,
+      "patterns": ["weave"],
+      "entity_spawn_counts": [5000],
+      "sim_worker_threads_sweep": [1],
+      "governor": true,
+      "baselined": false,
+      "assert_max_kbs": 0,
+      "assert_min_tick_hz": 0,
+      "assert_max_tick_ms": 0,
+      "assert_max_load_factor": 0.99,
+      "assert_max_dropped_ticks": 100
     }
   }
 }

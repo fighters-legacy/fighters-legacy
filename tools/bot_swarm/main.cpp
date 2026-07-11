@@ -83,6 +83,8 @@ void printHelp() {
                 "  --assert-max-tick-ms X Exit nonzero if authoritative server tick p99 (ms) > X\n"
                 "  --assert-min-entities N Exit nonzero if authoritative server_tick.entities < N\n"
                 "  --assert-max-rss-growth-kb N  Exit nonzero if server RSS growth (rss_kb - rss_startup_kb) > N\n"
+                "  --assert-max-load-factor X  Exit nonzero if server_tick.load_factor > X (governor engaged? <0=off)\n"
+                "  --assert-max-dropped-ticks N  Exit nonzero if server_tick.dropped_ticks > N (<0=off)\n"
                 "  --help, --version\n"
                 "\n"
                 "Environment:\n"

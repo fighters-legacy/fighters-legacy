@@ -304,6 +304,22 @@ TEST_CASE("parseSwarmArgs parses --assert-max-rss-growth-kb (#707)", "[bot_swarm
     CHECK(bad.status == ParseStatus::Error);
 }
 
+TEST_CASE("parseSwarmArgs parses the governor asserts with negative-disabled sentinels (#574)", "[bot_swarm][config]") {
+    // Defaults are disabled (negative), since 0 is a real value for both.
+    const SwarmParseResult d = parse({});
+    CHECK(d.cfg.assertMaxLoadFactor < 0.0);
+    CHECK(d.cfg.assertMaxDroppedTicks < 0);
+
+    const SwarmParseResult r = parse({"--assert-max-load-factor", "0.99", "--assert-max-dropped-ticks", "0"});
+    REQUIRE(r.status == ParseStatus::Ok);
+    CHECK(r.cfg.assertMaxLoadFactor == Catch::Approx(0.99));
+    CHECK(r.cfg.assertMaxDroppedTicks == 0); // 0 enables the gate (not the disabled sentinel)
+
+    // A missing value is still an error.
+    CHECK(parse({"--assert-max-load-factor"}).status == ParseStatus::Error);
+    CHECK(parse({"--assert-max-dropped-ticks"}).status == ParseStatus::Error);
+}
+
 // ---------------------------------------------------------------------------
 // Metric aggregation + JSON
 // ---------------------------------------------------------------------------
@@ -487,4 +503,80 @@ TEST_CASE("assert-max-rss-growth-kb gates on the server RSS growth (#707)", "[bo
     SECTION("fails when the assert is enabled but no server metrics were provided") {
         CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed);
     }
+}
+
+TEST_CASE("assert-max-load-factor gates on the overrun governor engaging (#574)", "[bot_swarm][metrics][servertick]") {
+    SwarmConfig cfg;
+    cfg.clients = 1;
+    cfg.assertMaxLoadFactor = 0.99; // require the governor to have shed (load_factor < 1)
+    std::vector<ClientMetrics> clients;
+    clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
+
+    auto serverWithLoad = [](double lf) {
+        ServerTickReport s = makeServer(6.0);
+        s.loadFactor = lf;
+        return s;
+    };
+
+    SECTION("passes when the governor engaged and shed under load") {
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithLoad(0.70)).assertsPassed);
+    }
+    SECTION("fails when the governor never engaged (load_factor stayed 1.0)") {
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, serverWithLoad(1.0)).assertsPassed);
+    }
+    SECTION("fails when the assert is enabled but no server metrics were provided") {
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed);
+    }
+    SECTION("a threshold of exactly 0 is still enabled (negative-disabled sentinel, not zero)") {
+        cfg.assertMaxLoadFactor = 0.0;
+        // load_factor 0.0 <= 0.0 passes; any positive load_factor fails.
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithLoad(0.0)).assertsPassed);
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, serverWithLoad(0.5)).assertsPassed);
+    }
+    SECTION("a negative threshold disables the gate") {
+        cfg.assertMaxLoadFactor = -1.0;
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithLoad(1.0)).assertsPassed);
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed); // no server block, but gate off
+    }
+}
+
+TEST_CASE("assert-max-dropped-ticks gates on the graceful-not-spiral property (#574)",
+          "[bot_swarm][metrics][servertick]") {
+    SwarmConfig cfg;
+    cfg.clients = 1;
+    cfg.assertMaxDroppedTicks = 0; // graceful: the governor should keep GameLoop drops at zero
+    std::vector<ClientMetrics> clients;
+    clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
+
+    auto serverWithDrops = [](uint64_t n) {
+        ServerTickReport s = makeServer(6.0);
+        s.droppedTicks = n;
+        return s;
+    };
+
+    SECTION("passes when no ticks were dropped") {
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithDrops(0)).assertsPassed);
+    }
+    SECTION("fails when the sim spiralled and dropped ticks") {
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, serverWithDrops(42)).assertsPassed);
+    }
+    SECTION("fails when the assert is enabled but no server metrics were provided") {
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed);
+    }
+    SECTION("a negative threshold disables the gate") {
+        cfg.assertMaxDroppedTicks = -1;
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithDrops(99)).assertsPassed);
+    }
+}
+
+TEST_CASE("reportToJson emits the governor assert thresholds (#574)", "[bot_swarm][metrics][servertick]") {
+    SwarmConfig cfg;
+    cfg.clients = 1;
+    cfg.assertMaxLoadFactor = 0.99;
+    cfg.assertMaxDroppedTicks = 0;
+    std::vector<ClientMetrics> clients;
+    clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
+    const std::string json = reportToJson(buildReport(cfg, clients, 10.0, {}, 1, makeServer(6.0)));
+    CHECK(json.find("\"max_load_factor\"") != std::string::npos);
+    CHECK(json.find("\"max_dropped_ticks\"") != std::string::npos);
 }

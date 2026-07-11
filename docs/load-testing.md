@@ -137,7 +137,26 @@ work and mask regressions). To observe the governor itself, run a *separate* ove
 `reload_config` toggling `overrun_governor_enabled` mid-run flips the levers live (full rate ⇄
 degraded), useful for an A/B in a single session.
 
+**CI now automates this runbook** ([#574]). The `overrun` scale-gate profile runs the governor **on**
+(`FL_LOADTEST_GOVERNOR=1`, wired from the profile's `governor: true`) and deterministically overloads a
+serialize-bound tick with `test_spawn_ai = 5000` at `sim_workers = 1` (the [#573] characterisation
+measured ~36.8 Hz governor-off there — a large, portable margin below 60 Hz). It asserts the governor
+*responded*:
+
+- `--assert-max-load-factor 0.99` fails if the governor **never engaged** (`load_factor` stayed `1.0` —
+  the primary bite; a dev smoke measured `~0.25` governor-on vs `1.0` governor-off);
+- `--assert-max-dropped-ticks 100` is the **graceful-not-spiral** bound — a small allowance absorbs the
+  one-time startup-spawn + EWMA-ramp transient before the governor engages; a genuine spiral produces
+  orders of magnitude more drops over the 90 s run.
+
+Both use a **negative-disabled** sentinel (`< 0` = off) because `0` is a real value for each. The
+profile is `baselined: false` — the shed KB/s must never touch the committed bandwidth baseline — and
+runs in the **reference tier only** (nightly / `workflow_dispatch`), where the collapse margin is
+reliable. A one-off run with `FL_LOADTEST_GOVERNOR=0` fails the load-factor assert, proving the gate
+bites. There is no `taskset` dependency: entity-count overload is portable across runner core counts.
+
 [#514]: https://github.com/fighters-legacy/fighters-legacy/issues/514
+[#574]: https://github.com/fighters-legacy/fighters-legacy/issues/574
 
 ### Entity-pool + SpatialIndex scaling ([#573])
 
@@ -186,6 +205,8 @@ run matrix live in [entity-scale-characterization.md](entity-scale-characterizat
       --assert-max-tick-ms X exit nonzero if authoritative server tick p99 (ms) > X
       --assert-min-entities N exit nonzero if authoritative server_tick.entities < N
       --assert-max-rss-growth-kb N  exit nonzero if server RSS growth (rss_kb - rss_startup_kb) > N
+      --assert-max-load-factor X  exit nonzero if server_tick.load_factor > X (governor engaged? <0 = off)
+      --assert-max-dropped-ticks N  exit nonzero if server_tick.dropped_ticks > N (<0 = off)
     Env: FL_HOST, FL_PORT
 
 ## Flight patterns
@@ -305,6 +326,7 @@ Markdown summary to `$GITHUB_STEP_SUMMARY`.
 | **PR** | every PR + push to `main` (Linux, Release) | `pr` (64 clients, weave) | bandwidth ≤150 KB/s/client, admission (no refused/dropped), KB/s baseline regression, tick-Hz collapse tripwire (≥30) | tick-ms p99 (disabled) |
 | **Reference** | manual `workflow_dispatch` on the self-hosted `fl-reference` runner | `reference` (128 clients; idle/weave/aggressive) | bandwidth + admission + baseline + **tick-ms p99 ≤16.6 (`--strict`, unconditional)** | — |
 | **Soak** | manual `workflow_dispatch` (`profile=soak`) on `fl-reference` | `soak` (128 clients, weave, 2 h) | strict gates + RSS-growth leak (`--assert-max-rss-growth-kb`, from the server's self-reported `rss_kb`, [#707](https://github.com/fighters-legacy/fighters-legacy/issues/707)) | — |
+| **Overrun** | manual `workflow_dispatch` (`profile=overrun`, or `nightly` set) on `fl-reference` | `overrun` (32 clients, weave, governor **on**, `test_spawn_ai=5000` @ `sim_workers=1`) | governor engaged (`--assert-max-load-factor 0.99`) + graceful-not-spiral (`--assert-max-dropped-ticks 0`) + admission; **not baselined** ([#574](https://github.com/fighters-legacy/fighters-legacy/issues/574)) | tick-ms p99 |
 
 The PR tier hard-gates only machine-independent metrics: `bot_swarm`'s `--assert-min-tick-hz` reads
 the *client-side proxy*, which sags when the harness itself is CPU-starved on a shared runner — a
