@@ -84,6 +84,7 @@ time_scale         = 10.0        # game seconds per real second; 10 = full day/n
 # overrun_min_snapshot_hz     = 15.0   # floor broadcast rate under overrun; [1, 60]
 # overrun_max_ai_stride       = 4      # deepest AI-sample decimation for non-player entities; [1, 32]
 # overrun_budget_floor_bytes  = 400    # never scale the snapshot budget below this under overrun; [0, 65535]
+# overrun_min_interest_fraction = 0.5  # interest-radius floor fraction under overrun; [0.1, 1.0]; 1.0 = lever off
 # max_catchup_ticks       = 8        # GameLoop catch-up cap (spiral backstop); [1, 64]; needs restart
 # sim_worker_threads      = 0        # sim-tick CPU parallelism; 0 = auto, 1 = serial; [0, 256]
 # --- load-test affordance (#573); A TESTING AFFORDANCE, NOT A CAPACITY GUARANTEE; leave at 0 normally ---
@@ -533,7 +534,7 @@ many real clients — see [entity-scale-characterization.md](entity-scale-charac
 that many players at rate. Leave at `0` for normal operation. Out-of-range values are rejected with a
 Warn and the default is used. **Requires restart** (entities are spawned before the sim loop starts).
 
-### `overrun_governor_enabled` / `overrun_high_watermark` / `overrun_low_watermark` / `overrun_min_snapshot_hz` / `overrun_max_ai_stride` / `overrun_budget_floor_bytes`
+### `overrun_governor_enabled` / `overrun_high_watermark` / `overrun_low_watermark` / `overrun_min_snapshot_hz` / `overrun_max_ai_stride` / `overrun_budget_floor_bytes` / `overrun_min_interest_fraction`
 
 | Key | Type | Default | Range |
 |---|---|---|---|
@@ -543,12 +544,13 @@ Warn and the default is used. **Requires restart** (entities are spawned before 
 | `overrun_min_snapshot_hz` | float | `15.0` | `[1, 60]` |
 | `overrun_max_ai_stride` | integer | `4` | `[1, 32]` |
 | `overrun_budget_floor_bytes` | integer | `400` | `[0, 65535]` |
+| `overrun_min_interest_fraction` | float | `0.5` | `[0.1, 1.0]` |
 
-The graceful tick-overrun governor (#514). When the authoritative tick's measured wall-time exceeds
-its fixed-step budget (~16.667 ms at 60 Hz) under load, the governor **sheds work** to bring the tick
-back under budget rather than spiralling or silently dilating time. It tracks an EWMA of per-tick
-wall-ms and, when it crosses `overrun_high_watermark × budget`, lowers a server-wide `loadFactor` that
-drives three composing levers (on top of the per-client congestion response):
+The graceful tick-overrun governor (#514, #726). When the authoritative tick's measured wall-time
+exceeds its fixed-step budget (~16.667 ms at 60 Hz) under load, the governor **sheds work** to bring
+the tick back under budget rather than spiralling or silently dilating time. It tracks an EWMA of
+per-tick wall-ms and, when it crosses `overrun_high_watermark × budget`, lowers a server-wide
+`loadFactor` that drives four composing levers (on top of the per-client congestion response):
 
 - **snapshot send-rate decimation** — broadcasts are spaced out server-wide, down toward
   `overrun_min_snapshot_hz`;
@@ -556,14 +558,21 @@ drives three composing levers (on top of the per-client congestion response):
   `overrun_budget_floor_bytes`), so the priority/budget scheduler defers more low-relevance entities;
 - **AI-sample decimation** — non-player (AI/scripted) entities have their controller `sample()`
   skipped on some ticks (reusing their last command), up to `overrun_max_ai_stride`. Players are never
-  decimated, and the **physics integration step always runs every tick** (so flight stays stable).
+  decimated, and the **physics integration step always runs every tick** (so flight stays stable);
+- **interest-radius shedding** (#726) — each peer's effective interest radius (`draw_distance_km`) is
+  scaled down with `loadFactor`, never below `overrun_min_interest_fraction` of the configured value
+  (`1.0` disables this lever). Unlike the byte-budget lever, which trims the encoded output *after*
+  ranking the full visible set, this shrinks the visible set itself — the interest query, scheduler
+  ranking, and encode all get cheaper together. Entities leaving the shrunk radius are ordinary
+  interest-out (the client's retention window and force-full re-entry handle their return); nothing
+  is despawned and there is no wire change.
 
 The governor recovers (raises `loadFactor` back toward 1) once the EWMA drops below
 `overrun_low_watermark × budget`. `overrun_governor_enabled = false`, or any tick comfortably under
 budget, pins `loadFactor = 1` — identical to the pre-#514 behaviour, no wire-format change. The
-current load is shown by `status` (`load: NN%`) and `tickstats`, and exported in `--metrics-json`
-(`load_factor`). Out-of-range values are rejected with a Warn and the default is used.
-**Hot-reloadable** via `reload_config`.
+current load is shown by `status` (`load: NN%  interest: NN%`) and `tickstats`, and exported in
+`--metrics-json` (`load_factor`, `interest_scale`). Out-of-range values are rejected with a Warn and
+the default is used. **Hot-reloadable** via `reload_config`.
 
 > The governor reduces snapshot/AI *work*. If the **integration** step alone exceeds budget (a fully
 > CPU-bound sim), no lever can help and the `max_catchup_ticks` backstop absorbs it as bounded time

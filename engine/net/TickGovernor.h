@@ -8,13 +8,18 @@
 // When the authoritative 60 Hz tick can no longer complete inside its fixed-step budget (~16.667 ms at
 // 60 Hz), the server must shed work and degrade gracefully rather than spiral or silently dilate time.
 // The governor maintains a single loadFactor in [floor, 1] (1 = no degradation, floor = maximum shed)
-// driven by an EWMA of the measured per-tick wall-time vs the budget, and exposes THREE composing
+// driven by an EWMA of the measured per-tick wall-time vs the budget, and exposes FOUR composing
 // levers the broadcaster folds in on top of the per-client CongestionController:
 //   * snapshotIntervalTicks() — server-wide send-rate decimation (max(perPeer, governor));
 //   * effectiveBudget()       — shrink the per-client snapshot byte budget (the #516 scheduler then
 //                               defers more low-priority entities; no new encode-loop logic needed);
 //   * aiSampleStride()        — decimate AI sample() for non-player entities (the only lever that cuts
-//                               the AI phase; the integrate pass is never decimated — fixed-dt stability).
+//                               the AI phase; the integrate pass is never decimated — fixed-dt stability);
+//   * interestScale()         — shrink each peer's effective interest radius toward a configured floor
+//                               (#726; ladder item 3 of the #572 spike). Unlike the budget lever, which
+//                               trims the encoded output AFTER ranking the full visible set, this cuts
+//                               the clients x visible-entities cost at its source (interest query +
+//                               scheduler ranking + encode all shrink together).
 // A healthy server (or a disabled governor, or one that never overruns) holds loadFactor == 1, i.e. the
 // exact pre-#514 behaviour: a snapshot every tick at the full budget, every entity sampled every tick.
 //
@@ -32,7 +37,7 @@
 
 namespace fl {
 
-// Operator-facing knobs (the first six map to [world] config) plus internal AIMD constants.
+// Operator-facing knobs (the first seven map to [world] config) plus internal AIMD constants.
 struct TickGovernorParams {
     bool enabled{true};                   // false => no-op (loadFactor pinned to 1)
     float floor{0.25f};                   // min loadFactor (max shed)
@@ -45,6 +50,7 @@ struct TickGovernorParams {
     uint32_t maxSnapshotIntervalTicks{4}; // hard cap on send-rate decimation (=> 15 Hz floor at 60 Hz)
     uint32_t maxAiStride{4};              // hard cap on AI-sample decimation
     uint32_t budgetFloorBytes{400};       // never scale a set snapshot budget below this
+    float minInterestFraction{0.5f};      // floor on interestScale(); 1 = interest lever disabled (#726)
 };
 
 // Server-wide AIMD overrun controller. Sim-thread only (no internal synchronization).
@@ -75,6 +81,16 @@ class TickGovernor {
     // serial-equivalent across worker counts.
     uint32_t aiSampleStride() const noexcept;
 
+    // Interest-radius scale in [minInterestFraction, 1] (#726): 1 (full radius) when healthy or
+    // disabled, tracking loadFactor down until it clamps at minInterestFraction. The broadcaster
+    // multiplies each peer's interest radius (draw distance) by this — BOTH the SpatialIndex
+    // queryRadius bound and the exact XYZ distance gate — shrinking the visible set at its source.
+    // A pure function of loadFactor, uniform across peers, frozen once per tick before the parallel
+    // peer pass, so it preserves serial-equivalence by construction. Entities leaving the shrunk
+    // radius are ordinary interest-out (client retention + kSnapshotRetentionTicks force-full handle
+    // re-entry) — never despawned, no wire change. minInterestFraction == 1 pins the lever off.
+    float interestScale() const noexcept;
+
     // Current loadFactor in [floor, 1] — diagnostics / observability (OverrunStatus, status command).
     float loadFactor() const noexcept {
         return m_loadFactor;
@@ -97,11 +113,12 @@ class TickGovernor {
 // Build TickGovernorParams from the operator-facing config scalars. minSnapshotHz (the floor send rate
 // under overrun) maps to the loadFactor floor and the send-rate cap the same way CongestionController's
 // minSendHz does: floor = minSnapshotHz/simHz and maxSnapshotIntervalTicks = round(simHz/minSnapshotHz),
-// so at the loadFactor floor the send-rate lever bottoms out at exactly minSnapshotHz. The remaining
+// so at the loadFactor floor the send-rate lever bottoms out at exactly minSnapshotHz.
+// minInterestFraction is the interest-radius lever floor (#726; 1 = lever disabled). The remaining
 // AIMD constants keep their defaults. Shared by startup config and the reload_config path.
 inline TickGovernorParams makeTickGovernorParams(bool enabled, float highWatermark, float lowWatermark,
                                                  float minSnapshotHz, uint32_t maxAiStride, uint32_t budgetFloorBytes,
-                                                 float simHz = 60.f) noexcept {
+                                                 float minInterestFraction = 0.5f, float simHz = 60.f) noexcept {
     TickGovernorParams p;
     p.enabled = enabled;
     p.highWatermark = highWatermark;
@@ -112,6 +129,7 @@ inline TickGovernorParams makeTickGovernorParams(bool enabled, float highWaterma
     p.maxSnapshotIntervalTicks = interval < 1 ? 1u : static_cast<uint32_t>(interval);
     p.maxAiStride = maxAiStride < 1u ? 1u : maxAiStride;
     p.budgetFloorBytes = budgetFloorBytes;
+    p.minInterestFraction = std::clamp(minInterestFraction, 0.f, 1.f);
     return p;
 }
 

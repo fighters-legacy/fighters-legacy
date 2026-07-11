@@ -40,6 +40,7 @@ TEST_CASE("TickGovernor: a healthy under-budget server holds loadFactor at 1", "
     CHECK(g.snapshotIntervalTicks() == 1u);
     CHECK(g.aiSampleStride() == 1u);
     CHECK(g.effectiveBudget(1200u) == 1200u);
+    CHECK(g.interestScale() == Catch::Approx(1.0f)); // full interest radius when healthy
 }
 
 TEST_CASE("TickGovernor: sustained over-budget ticks drive loadFactor to the floor", "[tick_governor]") {
@@ -52,6 +53,8 @@ TEST_CASE("TickGovernor: sustained over-budget ticks drive loadFactor to the flo
     // At the floor the levers bottom out at their configured caps.
     CHECK(g.snapshotIntervalTicks() == p.maxSnapshotIntervalTicks);
     CHECK(g.aiSampleStride() == p.maxAiStride);
+    // Interest scale clamps at its own fraction floor (default 0.5 > the 0.25 loadFactor floor).
+    CHECK(g.interestScale() == Catch::Approx(p.minInterestFraction));
 }
 
 TEST_CASE("TickGovernor: multiplicative decrease then additive recovery", "[tick_governor]") {
@@ -105,6 +108,7 @@ TEST_CASE("TickGovernor: disabled pins all levers to no-op", "[tick_governor]") 
     CHECK(g.snapshotIntervalTicks() == 1u);
     CHECK(g.aiSampleStride() == 1u);
     CHECK(g.effectiveBudget(1200u) == 1200u);
+    CHECK(g.interestScale() == Catch::Approx(1.0f));
 }
 
 TEST_CASE("TickGovernor: effectiveBudget scaling and floor", "[tick_governor]") {
@@ -132,6 +136,40 @@ TEST_CASE("TickGovernor: lever clamps are UBSan-safe at the floor", "[tick_gover
     CHECK(g.aiSampleStride() == 6u);
 }
 
+TEST_CASE("TickGovernor: interestScale tracks loadFactor and clamps at the fraction floor", "[tick_governor]") {
+    TickGovernor g;
+    auto p = baseParams();
+    p.minInterestFraction = 0.5f;
+    g.configure(p);
+    // One overrun eval: loadFactor 0.7 is above the fraction floor -> scale tracks it exactly.
+    g.update(0, 30.0, kBudgetMs);
+    CHECK(g.loadFactor() == Catch::Approx(0.7f));
+    CHECK(g.interestScale() == Catch::Approx(0.7f));
+    // Drive to the loadFactor floor (0.25): the scale clamps at the 0.5 fraction floor instead.
+    run(g, p, 30.0, 200, /*startTick=*/1);
+    CHECK(g.loadFactor() == Catch::Approx(p.floor));
+    CHECK(g.interestScale() == Catch::Approx(0.5f));
+}
+
+TEST_CASE("TickGovernor: minInterestFraction of 1 pins the interest lever off", "[tick_governor]") {
+    TickGovernor g;
+    auto p = baseParams();
+    p.minInterestFraction = 1.0f;
+    run(g, p, 30.0, 200);                            // drive to the loadFactor floor
+    CHECK(g.degraded());                             // the other levers still shed...
+    CHECK(g.interestScale() == Catch::Approx(1.0f)); // ...but the interest radius never shrinks
+}
+
+TEST_CASE("TickGovernor: interestScale never drops below a loadFactor floor above the fraction", "[tick_governor]") {
+    TickGovernor g;
+    auto p = baseParams();
+    p.floor = 0.8f;               // loadFactor cannot fall below 0.8...
+    p.minInterestFraction = 0.5f; // ...so the scale bottoms out at 0.8, not 0.5
+    run(g, p, 30.0, 200);
+    CHECK(g.loadFactor() == Catch::Approx(0.8f));
+    CHECK(g.interestScale() == Catch::Approx(0.8f));
+}
+
 TEST_CASE("TickGovernor: zero or negative budget treated as healthy", "[tick_governor]") {
     TickGovernor g;
     auto p = baseParams();
@@ -156,4 +194,10 @@ TEST_CASE("TickGovernor: makeTickGovernorParams maps Hz to floor and interval", 
     // maxAiStride floored at 1.
     auto p3 = makeTickGovernorParams(true, 0.90f, 0.60f, 15.0f, 0u, 400u);
     CHECK(p3.maxAiStride == 1u);
+    // minInterestFraction (#726): default 0.5, explicit value passed through, clamped to [0, 1].
+    CHECK(p.minInterestFraction == Catch::Approx(0.5f));
+    auto p4 = makeTickGovernorParams(true, 0.90f, 0.60f, 15.0f, 4u, 400u, 0.75f);
+    CHECK(p4.minInterestFraction == Catch::Approx(0.75f));
+    auto p5 = makeTickGovernorParams(true, 0.90f, 0.60f, 15.0f, 4u, 400u, 2.0f);
+    CHECK(p5.minInterestFraction == Catch::Approx(1.0f));
 }

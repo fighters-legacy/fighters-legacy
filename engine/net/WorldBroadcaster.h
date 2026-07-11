@@ -138,6 +138,7 @@ struct OverrunStatus {
     float loadFactor{1.f};             // [floor, 1]; 1 = no degradation
     uint32_t snapshotIntervalTicks{1}; // server-wide snapshot send spacing
     uint32_t aiStride{1};              // AI sample() decimation stride
+    float interestScale{1.f};          // interest-radius scale [min_interest_fraction, 1] (#726)
     bool degraded{false};              // loadFactor < 1
 };
 
@@ -235,6 +236,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
         s.loadFactor = m_overrunLoadFactor.load(std::memory_order_relaxed);
         s.snapshotIntervalTicks = m_overrunSnapInterval.load(std::memory_order_relaxed);
         s.aiStride = m_overrunAiStride.load(std::memory_order_relaxed);
+        s.interestScale = m_overrunInterestScale.load(std::memory_order_relaxed);
         s.degraded = s.loadFactor < 1.f;
         return s;
     }
@@ -571,8 +573,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // TickPhaseScope); snapshot()ed (mutex-guarded) by getTickBudget() from any thread.
     TickProfiler m_tickProfiler;
 
-    // Graceful tick-overrun governor (#514). Stepped once per onTick on the sim thread from the prior
-    // tick's measured wall-time; its three lever values are frozen into sim-thread locals for the
+    // Graceful tick-overrun governor (#514/#726). Stepped once per onTick on the sim thread from the
+    // prior tick's measured wall-time; its four lever values are frozen into sim-thread locals for the
     // parallel regions and mirrored into the atomics below so getOverrunStatus() is a safe cross-thread
     // read (main thread). m_governorParams is sim-thread-only (configure()d into the governor each tick
     // so reload_config is automatic, like m_congestionParams).
@@ -581,6 +583,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::atomic<float> m_overrunLoadFactor{1.f};
     std::atomic<uint32_t> m_overrunSnapInterval{1};
     std::atomic<uint32_t> m_overrunAiStride{1};
+    std::atomic<float> m_overrunInterestScale{1.f};
 
     // Interest management + delta compression state (sim-thread only).
     double m_drawDistanceM{200'000.0}; // precomputed from drawDistanceKm × 1000; 200 km default

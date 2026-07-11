@@ -66,6 +66,7 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.overrunMinSnapshotHz == Catch::Approx(15.0f));
     CHECK(cfg.overrunMaxAiStride == 4u);
     CHECK(cfg.overrunBudgetFloorBytes == 400u);
+    CHECK(cfg.overrunMinInterestFraction == Catch::Approx(0.5f));
     CHECK(cfg.maxCatchupTicks == 8);
     CHECK(log.entries.empty());
 }
@@ -153,6 +154,7 @@ overrun_low_watermark = 0.5
 overrun_min_snapshot_hz = 20.0
 overrun_max_ai_stride = 8
 overrun_budget_floor_bytes = 600
+overrun_min_interest_fraction = 0.75
 max_catchup_ticks = 16
 )",
                                  &log);
@@ -162,6 +164,7 @@ max_catchup_ticks = 16
     CHECK(cfg.overrunMinSnapshotHz == Catch::Approx(20.0f));
     CHECK(cfg.overrunMaxAiStride == 8u);
     CHECK(cfg.overrunBudgetFloorBytes == 600u);
+    CHECK(cfg.overrunMinInterestFraction == Catch::Approx(0.75f));
     CHECK(cfg.maxCatchupTicks == 16);
     CHECK(log.entries.empty());
 }
@@ -179,6 +182,23 @@ TEST_CASE("parseServerConfig: overrun_max_ai_stride out of range warns and keeps
     auto cfg = parseServerConfig("[world]\noverrun_max_ai_stride = 99\n", &log);
     CHECK(cfg.overrunMaxAiStride == 4u);
     CHECK(log.hasMessage(LogLevel::Warn, "world.overrun_max_ai_stride out of range"));
+}
+
+TEST_CASE("parseServerConfig: overrun_min_interest_fraction boundary + out-of-range", "[server_config]") {
+    MockLogger log;
+    CHECK(parseServerConfig("[world]\noverrun_min_interest_fraction = 0.1\n", &log).overrunMinInterestFraction ==
+          Catch::Approx(0.1f));
+    CHECK(parseServerConfig("[world]\noverrun_min_interest_fraction = 1.0\n", &log).overrunMinInterestFraction ==
+          Catch::Approx(1.0f)); // 1.0 = lever disabled
+    CHECK(log.entries.empty());
+    MockLogger log2;
+    auto cfg = parseServerConfig("[world]\noverrun_min_interest_fraction = 0.05\n", &log2);
+    CHECK(cfg.overrunMinInterestFraction == Catch::Approx(0.5f));
+    CHECK(log2.hasMessage(LogLevel::Warn, "world.overrun_min_interest_fraction out of range"));
+    MockLogger log3;
+    auto cfg2 = parseServerConfig("[world]\noverrun_min_interest_fraction = 1.5\n", &log3);
+    CHECK(cfg2.overrunMinInterestFraction == Catch::Approx(0.5f));
+    CHECK(log3.hasMessage(LogLevel::Warn, "world.overrun_min_interest_fraction out of range"));
 }
 
 TEST_CASE("parseServerConfig: max_catchup_ticks boundary + out-of-range", "[server_config]") {

@@ -452,9 +452,9 @@ int main(int argc, char** argv) {
     wbConfig.jitterMultiplier = cfg.jitterMultiplier;
     wbConfig.congestion = fl::makeCongestionParams(cfg.congestionEnabled, cfg.congestionMinSendHz,
                                                    cfg.congestionLossThreshold, cfg.congestionBudgetFloorBytes);
-    wbConfig.governor =
-        fl::makeTickGovernorParams(cfg.overrunGovernorEnabled, cfg.overrunHighWatermark, cfg.overrunLowWatermark,
-                                   cfg.overrunMinSnapshotHz, cfg.overrunMaxAiStride, cfg.overrunBudgetFloorBytes);
+    wbConfig.governor = fl::makeTickGovernorParams(
+        cfg.overrunGovernorEnabled, cfg.overrunHighWatermark, cfg.overrunLowWatermark, cfg.overrunMinSnapshotHz,
+        cfg.overrunMaxAiStride, cfg.overrunBudgetFloorBytes, cfg.overrunMinInterestFraction);
     broadcaster.applyConfig(wbConfig);
     // Planet gravity (terrain curvature was applied to the streamer before the first update()).
     // Function-scope static so lifetime outlasts the broadcaster.
@@ -702,7 +702,7 @@ int main(int argc, char** argv) {
             const fl::OverrunStatus ov = broadcaster.getOverrunStatus();
             const fl::ServerTickReport rep = fl::makeServerTickReport(
                 broadcaster.getTickBudget(), broadcaster.getPeerCount(), entityManager.liveCount(), ov.loadFactor,
-                droppedTicks, fl::currentRssKb(), rssStartupKb);
+                droppedTicks, fl::currentRssKb(), rssStartupKb, ov.interestScale);
             fl::writeConfigFile(metricsPath, fl::toJson(rep) + "\n", *log);
             nextMetricsWrite = std::chrono::steady_clock::now() + metricsInterval;
         }
