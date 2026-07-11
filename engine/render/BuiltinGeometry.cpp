@@ -299,9 +299,10 @@ std::span<const uint8_t> builtinTetrahedronFaceGlb(int face) noexcept {
 }
 
 TerrainManifest builtinWorldTerrainManifest() noexcept {
-    // originX = originZ = -0.5 * chunkSizeM so chunk [0,0] is centred on engine
-    // origin (0, 0).  gridWidth/gridHeight = -1 signals an infinite procedural world.
-    return {"world", 15360.f, -1, -1, -7680.0, -7680.0};
+    // Cube-sphere quadtree world (#472): six face roots refined to level 12
+    // (~30 m per mesh quad on Earth). Procedural tiles cover any TileKey, so no
+    // extent fields are needed.
+    return {"world", 12};
 }
 
 } // namespace fl

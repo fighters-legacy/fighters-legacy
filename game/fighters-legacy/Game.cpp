@@ -326,6 +326,10 @@ struct SessionContext {
     // Typed session failure, first-writer-wins (server thread + ClientNetEventHandler write;
     // LoadingScreen reads). Replaces the prior two atomic<const char*> + static-string signals.
     std::atomic<SessionFailure> sessionFailure{SessionFailure::None};
+    // True once the server's MsgConnectAck planet radius has been applied to the terrain
+    // streamer + camera this session (terrain streaming is gated on it — tiles bake the
+    // radius at generation time).
+    bool planetRadiusApplied{false};
 };
 
 struct GameImpl {
@@ -790,7 +794,7 @@ void Game::startGame() {
             if (!d.services.renderBridge.hasSnapshot() || !d.session.clientHandler)
                 return false;
             const uint32_t gen = d.session.clientHandler->assignedEntityGen;
-            if (gen == 0 || d.services.terrainStreamer->chunkCount() == 0)
+            if (gen == 0 || d.services.terrainStreamer->tileCount() == 0)
                 return false;
             const uint32_t idx = d.session.clientHandler->assignedEntityIdx;
             for (const auto& e : d.services.renderBridge.current().entries)
@@ -831,6 +835,7 @@ void Game::stopGame() {
     d.session.discoveryListener.reset();
     d.session.inspector.reset();
     d.session.hapticController.reset();
+    d.session.planetRadiusApplied = false;
     d.services.prediction.reset();
     d.services.renderBridge.reset();
     d.services.entityRegistry.clear();
@@ -853,13 +858,8 @@ void Game::handleTransition(Screen next) {
 
     if (next == Screen::Flight) {
         d.services.musicManager.setState(GameState::FlightPatrol);
-        if (d.session.clientHandler) {
-            const double radiusM = static_cast<double>(d.session.clientHandler->planetRadiusKm()) * 1000.0;
-            if (d.services.terrainStreamer)
-                d.services.terrainStreamer->setPlanetRadius(radiusM);
-            // Camera "up" = radial direction on the planet, so the horizon stays level far from origin.
-            d.services.camInput.setPlanetRadius(radiusM);
-        }
+        // Planet radius from MsgConnectAck is applied in the per-frame terrain block in
+        // run() as soon as the ConnectAck is processed — before any tile is streamed.
     } else if (next == Screen::MainMenu)
         d.services.musicManager.setState(GameState::Menu);
     else if (next == Screen::Debrief) {
@@ -923,14 +923,31 @@ void Game::run() {
         }
 
         // Service terrain and async I/O every session frame, before the screen update,
-        // so chunkCount() reflects the current state when isConnected() is evaluated
-        // inside LoadingScreen. For procedural terrain this makes chunks available in
-        // the same frame they are requested. For content-pack PNG chunks, reads progress
-        // before the transition check runs.
+        // so tileCount() reflects the current state when isConnected() is evaluated
+        // inside LoadingScreen. For procedural terrain this makes tiles available in
+        // the same frame they are requested. For content-pack PNG tiles, reads progress
+        // before the transition check runs. Streaming waits for the server's
+        // MsgConnectAck (assignedEntityGen != 0): tiles bake the planet radius at
+        // generation time, so updating earlier would bake Earth-radius tiles during
+        // Loading and immediately invalidate them on a non-Earth server.
         if (inSession) {
             d.services.p.asyncFilesystem->service();
-            const glm::dvec3 terrainPos = playerEntry ? playerEntry->position : glm::dvec3{};
-            d.services.terrainStreamer->update(terrainPos);
+            if (d.session.clientHandler && d.session.clientHandler->assignedEntityGen != 0) {
+                if (!d.session.planetRadiusApplied) {
+                    const double radiusM = static_cast<double>(d.session.clientHandler->planetRadiusKm()) * 1000.0;
+                    d.services.terrainStreamer->setPlanetRadius(radiusM);
+                    // Camera "up" = radial direction on the planet, so the horizon stays
+                    // level far from the origin.
+                    d.services.camInput.setPlanetRadius(radiusM);
+                    d.session.planetRadiusApplied = true;
+                }
+                // Real screen height + FOV for the SSE refinement metric (window is resizable;
+                // fovY matches CameraController's 60 deg default).
+                d.services.terrainStreamer->setViewParams(static_cast<float>(d.services.p.window->height()),
+                                                          glm::radians(60.0f));
+                const glm::dvec3 terrainPos = playerEntry ? playerEntry->position : glm::dvec3{};
+                d.services.terrainStreamer->update(terrainPos);
+            }
         }
 
         // Audio update (always — so music plays on main menu too).

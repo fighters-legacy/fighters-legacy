@@ -192,6 +192,43 @@ TEST_CASE("buildTileMeshGlb winding is CCW-from-outside", "[terrain][tile-mesh]"
     }
 }
 
+TEST_CASE("buildTileMeshGlb skirt appends border ring and side quads", "[terrain][tile-mesh]") {
+    const int size = 129;
+    const int meshGrid = 32;
+    const int gridPts = meshGrid + 1;
+    std::vector<uint16_t> heights(static_cast<std::size_t>(size) * size, 32768);
+    const TileKey key{4, 5, 16, 16};
+    const double R = 6371000.0;
+    const glm::dvec3 origin = tileToWorld(key, 0.5, 0.5, 0.0, R);
+    const glm::dvec3 centre{0.0, -R, 0.0};
+    const double skirt = 50.0;
+
+    auto plain = buildTileMeshGlb(heights, size, meshGrid, key, R, origin, nullptr, true, 0.0);
+    auto skirted = buildTileMeshGlb(heights, size, meshGrid, key, R, origin, nullptr, true, skirt);
+    REQUIRE(!plain.empty());
+    REQUIRE(!skirted.empty());
+
+    // skirtDepthM == 0 must be byte-identical to the default-arg output (#471 compat).
+    auto defaulted = buildTileMeshGlb(heights, size, meshGrid, key, R, origin);
+    CHECK(plain == defaulted);
+    CHECK(skirted.size() > plain.size());
+
+    // Accessor counts: +4*gridPts vertices, +4*meshGrid*6 indices.
+    auto view = parseGlb(skirted);
+    const int vertCount = gridPts * gridPts + 4 * gridPts;
+    const int indexCount = meshGrid * meshGrid * 6 + 4 * meshGrid * 6;
+    CHECK(view.json.find("\"count\":" + std::to_string(vertCount)) != std::string::npos);
+    CHECK(view.json.find("\"count\":" + std::to_string(indexCount)) != std::string::npos);
+
+    // A skirt vertex sits skirtDepthM closer to the planet centre than its source
+    // border vertex. The first skirt vertex duplicates main vertex (row 0, col 0).
+    const glm::dvec3 srcWorld = glm::dvec3(readVec3(view.bin, 0, 0)) + origin;
+    const glm::dvec3 skirtWorld = glm::dvec3(readVec3(view.bin, 0, gridPts * gridPts)) + origin;
+    const double srcRad = glm::length(srcWorld - centre);
+    const double skirtRad = glm::length(skirtWorld - centre);
+    CHECK(srcRad - skirtRad == Catch::Approx(skirt).margin(0.01));
+}
+
 TEST_CASE("buildTileMeshGlb emits TEXCOORD_0 and COLOR_0 per flags", "[terrain][tile-mesh]") {
     const int size = 129;
     const int meshGrid = 32;

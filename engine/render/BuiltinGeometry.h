@@ -25,10 +25,9 @@ std::span<const uint8_t> builtinFloorPlaneGlb() noexcept;
 // face 0: red   face 1: green   face 2: blue   face 3: yellow
 std::span<const uint8_t> builtinTetrahedronFaceGlb(int face) noexcept; // face in [0,3]
 
-// TerrainManifest for the builtin procedural world.
-// The terrain grid is centered on engine origin (0, 0): originX = originZ = -7680 m
-// (= -0.5 * chunkSizeM), placing the centre of chunk [0,0] at engine (0, 0).
-// gridWidth = gridHeight = -1 (unbounded — procedural generation covers any chunk).
+// TerrainManifest for the builtin procedural world: the cube-sphere quadtree
+// ("world", maxTileLevel 12 — ~30 m per mesh quad on Earth). Procedural tiles
+// cover any TileKey, so the world is globally unbounded (#472).
 TerrainManifest builtinWorldTerrainManifest() noexcept;
 
 } // namespace fl

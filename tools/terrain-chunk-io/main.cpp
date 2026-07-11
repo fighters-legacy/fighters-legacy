@@ -4,13 +4,13 @@
 //
 // Subcommands:
 //   decode   --input  <file.png>  --output <file.u16>
-//   gen-procedural --cx <n> --cy <n> --output <file.u16> [--chunk-size-m <m>]
+//   gen-procedural --face <f> --level <l> --i <n> --j <n> --output <file.u16> [--radius-m <m>]
 //
 // The binary .u16 format: 4-byte magic (FLCH) + uint16 width + uint16 height
 // + width*height uint16 values, row-major, little-endian.  Height encoding:
 //   uint16 = clamp(elevation_m + 32768, 0, 65535)
 
-#include "render/BuiltinGeometry.h"
+#include "render/CubeSphere.h"
 #include "render/ProceduralTerrainChunk.h"
 #include "render/TerrainChunkIO.h"
 
@@ -32,17 +32,19 @@ static void printHelp() {
                 "\n"
                 "Subcommands:\n"
                 "  decode          Decode a 16-bit grayscale PNG to binary .u16 cache\n"
-                "  gen-procedural  Generate a procedural terrain chunk\n"
+                "  gen-procedural  Generate a procedural cube-sphere tile\n"
                 "\n"
                 "decode options:\n"
                 "  --input  <file.png>   Source 16-bit grayscale PNG\n"
                 "  --output <file.u16>   Destination binary cache file\n"
                 "\n"
                 "gen-procedural options:\n"
-                "  --cx <n>              Chunk X index (default: 0)\n"
-                "  --cy <n>              Chunk Y index (default: 0)\n"
+                "  --face <f>            Cube face index 0..5 (default: 2, +Y north pole)\n"
+                "  --level <l>           Quadtree level (default: 0)\n"
+                "  --i <n>               Tile column within the face (default: 0)\n"
+                "  --j <n>               Tile row within the face (default: 0)\n"
                 "  --output <file.u16>   Destination binary cache file\n"
-                "  --chunk-size-m <m>    Chunk physical size in metres (default: 15360)\n"
+                "  --radius-m <m>        Planet radius in metres (default: 6371000)\n"
                 "\n"
                 "Options:\n"
                 "  --help, -h      Show this help and exit\n"
@@ -113,37 +115,46 @@ static int cmdDecode(int argc, char* argv[]) {
 // ---------------------------------------------------------------------------
 
 static int cmdGenProcedural(int argc, char* argv[]) {
-    int cx = 0, cy = 0;
-    float chunkSizeM = 15360.f;
+    int face = 2, level = 0;
+    long ti = 0, tj = 0;
+    double radiusM = 6'371'000.0;
     std::string outputPath;
 
     for (int i = 0; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--cx") == 0 && i + 1 < argc)
-            cx = std::atoi(argv[++i]);
-        else if (std::strcmp(argv[i], "--cy") == 0 && i + 1 < argc)
-            cy = std::atoi(argv[++i]);
+        if (std::strcmp(argv[i], "--face") == 0 && i + 1 < argc)
+            face = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--level") == 0 && i + 1 < argc)
+            level = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--i") == 0 && i + 1 < argc)
+            ti = std::atol(argv[++i]);
+        else if (std::strcmp(argv[i], "--j") == 0 && i + 1 < argc)
+            tj = std::atol(argv[++i]);
         else if (std::strcmp(argv[i], "--output") == 0 && i + 1 < argc)
             outputPath = argv[++i];
-        else if (std::strcmp(argv[i], "--chunk-size-m") == 0 && i + 1 < argc)
-            chunkSizeM = std::stof(argv[++i]);
+        else if (std::strcmp(argv[i], "--radius-m") == 0 && i + 1 < argc)
+            radiusM = std::atof(argv[++i]);
     }
 
     if (outputPath.empty()) {
         std::fprintf(stderr, "error: gen-procedural requires --output\n");
         return 2;
     }
+    if (face < 0 || face > 5 || level < 0 || level > 31 || ti < 0 || tj < 0 || ti >= (1L << level) ||
+        tj >= (1L << level)) {
+        std::fprintf(stderr, "error: invalid tile key (face 0..5, level 0..31, 0 <= i,j < 2^level)\n");
+        return 2;
+    }
 
-    fl::TerrainManifest manifest = fl::builtinWorldTerrainManifest();
-    manifest.chunkSizeM = chunkSizeM;
+    const fl::TileKey key{static_cast<uint8_t>(face), static_cast<uint8_t>(level), static_cast<uint32_t>(ti),
+                          static_cast<uint32_t>(tj)};
+    const auto pixels = fl::generateProceduralTile(key, radiusM, fl::kBuiltinProceduralParams);
 
-    const auto pixels = fl::generateProceduralChunk(cx, cy, manifest, fl::kBuiltinProceduralParams);
-
-    if (!fl::writeTerrainChunkCache(outputPath, pixels.data(), 513, 513)) {
+    if (!fl::writeTerrainChunkCache(outputPath, pixels.data(), fl::kTileHeightmapSize, fl::kTileHeightmapSize)) {
         std::fprintf(stderr, "error: cannot write '%s'\n", outputPath.c_str());
         return 1;
     }
 
-    std::printf("Generated procedural chunk (%d, %d) → %s\n", cx, cy, outputPath.c_str());
+    std::printf("Generated procedural tile f%d L%d (%ld, %ld) -> %s\n", face, level, ti, tj, outputPath.c_str());
     return 0;
 }
 
