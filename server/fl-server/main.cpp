@@ -32,6 +32,7 @@
 #include <console/CommandRegistry.h>
 #include <console/CommandShell.h>
 #include <content/AssetManager.h>
+#include <content/BundledBaseTerrain.h>
 #include <content/ModLoader.h>
 #include <entity/EntityDef.h>
 #include <entity/EntityManager.h>
@@ -340,6 +341,13 @@ int main(int argc, char** argv) {
         std::snprintf(buf, sizeof(buf), "content: %zu mod(s) loaded", packs.size());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
+
+    // Mount the bundled coarse global base (#474) at lowest priority so the authoritative server
+    // serves real-Earth root tiles for physics even with zero user packs (procedural fills finer
+    // detail; user packs override). No-op when no base is bundled.
+    if (auto base = fl::loadBundledBaseTerrain(*p.filesystem, *log, "base-terrain",
+                                               fl::builtinWorldTerrainManifest().terrainId))
+        packs.push_back(std::move(base));
 
     AssetManager assets(std::move(packs), *log);
     assets.initialize(nullptr); // headless — window is null; NeedsConfiguration packs dropped

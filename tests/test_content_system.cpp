@@ -6,6 +6,7 @@
 #include "ILogger.h"
 #include "content/AssetManager.h"
 #include "content/AssetTypes.h"
+#include "content/BundledBaseTerrain.h"
 #include "content/FolderContentPack.h"
 #include "content/IContentPack.h"
 #include "content/ModLoader.h"
@@ -14,6 +15,7 @@
 #include "mock_content.h"
 
 #include <cstring>
+#include <limits>
 #include <map>
 #include <string>
 #include <utility>
@@ -1580,6 +1582,67 @@ TEST_CASE("AssetManager::resolveTilePath falls through to lower-priority pack wh
     auto result = am.resolveTilePath("world", 5, 2, 5, 3, TileLayer::Height);
     REQUIRE(result.has_value());
     CHECK(*result == "fl-base-pack/terrain/world/f5/l2/tile_5_3.png");
+}
+
+// ---------------------------------------------------------------------------
+// loadBundledBaseTerrain (#474)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("loadBundledBaseTerrain returns nullptr when no base is bundled", "[content]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    // No sentinel tile present -> the procedural-only fast path is preserved.
+    CHECK(loadBundledBaseTerrain(fs, logger, "base-terrain", "world") == nullptr);
+}
+
+TEST_CASE("loadBundledBaseTerrain mounts a lowest-priority base pack when the sentinel tile exists", "[content]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    // Sentinel: the +X face (0) level-0 root height tile.
+    fs.addFile("base-terrain/terrain/world/f0/l0/tile_0_0.png", "");
+    fs.addFile("base-terrain/terrain/world/f2/l3/tile_1_2.png", "");
+    fs.addFile("base-terrain/terrain/world/f2/l3/tile_1_2_lc.png", "");
+
+    auto pack = loadBundledBaseTerrain(fs, logger, "base-terrain", "world");
+    REQUIRE(pack != nullptr);
+    // Lowest priority so every user pack overrides it via the first-wins stack.
+    CHECK(pack->priority() == std::numeric_limits<int>::min());
+
+    // Resolves base tiles via the standard path convention (height + land cover).
+    auto h = pack->resolveTilePath("world", 2, 3, 1, 2, TileLayer::Height);
+    REQUIRE(h.has_value());
+    CHECK(*h == "base-terrain/terrain/world/f2/l3/tile_1_2.png");
+    auto lc = pack->resolveTilePath("world", 2, 3, 1, 2, TileLayer::LandCover);
+    REQUIRE(lc.has_value());
+    CHECK(*lc == "base-terrain/terrain/world/f2/l3/tile_1_2_lc.png");
+
+    // A finer tile the coarse base does not ship -> nullopt (procedural fills it).
+    CHECK_FALSE(pack->resolveTilePath("world", 2, 9, 5, 5, TileLayer::Height).has_value());
+}
+
+TEST_CASE("loadBundledBaseTerrain base pack is overridden by a higher-priority user pack", "[content]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("base-terrain/terrain/world/f0/l0/tile_0_0.png", "");
+
+    auto base = loadBundledBaseTerrain(fs, logger, "base-terrain", "world");
+    REQUIRE(base != nullptr);
+
+    // A user pack at normal priority resolving the same tile.
+    MockContentPack userPack;
+    userPack.packPriority = 50;
+    userPack.tilePaths["world:0:0:0:0:0"] = "mods/theater/terrain/world/f0/l0/tile_0_0.png";
+
+    // AssetManager walks in vector order (base appended last, lowest priority) — user pack wins.
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::make_unique<MockContentPack>(userPack));
+    packs.push_back(std::move(base));
+    AssetManager am(std::move(packs), logger);
+    am.initialize(nullptr);
+
+    auto result = am.resolveTilePath("world", 0, 0, 0, 0, TileLayer::Height);
+    REQUIRE(result.has_value());
+    CHECK(*result == "mods/theater/terrain/world/f0/l0/tile_0_0.png");
 }
 
 // ---------------------------------------------------------------------------

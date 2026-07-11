@@ -29,6 +29,7 @@
 #include "console/CommandRegistry.h"
 #include "console/GameConsole.h"
 #include "content/AssetManager.h"
+#include "content/BundledBaseTerrain.h"
 #include "content/ModLoader.h"
 #include "crash/CrashInfo.h"
 #include "crash/CrashReporter.h"
@@ -517,6 +518,14 @@ bool Game::initContent() {
         std::snprintf(e.version, sizeof(e.version), "%s", pack->version());
     }
     d.services.crashReporter.setMods(modEntries, modCount);
+
+    // Mount the bundled coarse global base (#474) at lowest priority so a zero-user-pack launch
+    // still gets real-Earth root tiles (generateProceduralTile fills finer detail; user packs
+    // override). No-op when no base is bundled. Appended after hasPacks/crash-list so those still
+    // reflect user packs only.
+    if (auto base = fl::loadBundledBaseTerrain(*d.services.p.filesystem, *d.services.rawLogger, "base-terrain",
+                                               fl::builtinWorldTerrainManifest().terrainId))
+        packs.push_back(std::move(base));
 
     d.services.assets = std::make_unique<AssetManager>(std::move(packs), *d.services.rawLogger);
     d.services.assets->initialize(d.services.p.window.get());
