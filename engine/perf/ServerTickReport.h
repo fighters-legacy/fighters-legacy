@@ -29,7 +29,9 @@ namespace fl {
 // v2 (#514) adds the overrun-governor load_factor + the GameLoop dropped_ticks counter.
 // v3 (#707) adds self-reported process RSS (rss_kb + rss_startup_kb) for the soak leak gate.
 // v4 (#726) adds the overrun-governor interest_scale (interest-radius shed lever).
-inline constexpr int kServerTickSchemaVersion = 4;
+// v5 (#714) adds the congestion-controller run-long watermarks (congestion_min_send_hz +
+//           congestion_recovered_send_hz + congestion_max_loss) for the synthetic congestion gate.
+inline constexpr int kServerTickSchemaVersion = 5;
 
 struct ServerTickReport {
     int schemaVersion{kServerTickSchemaVersion};
@@ -47,12 +49,17 @@ struct ServerTickReport {
     uint64_t droppedTicks{0};  // all-time GameLoop catch-up drops (sim overrun / time dilation) (#514)
     uint64_t rssKb{0};         // current process resident set size, KiB; 0 = unavailable (#707)
     uint64_t rssStartupKb{0};  // RSS captured once after init; the soak leak gate tracks the delta (#707)
+    // Congestion-controller run-long watermarks (#714/#518); frozen while no peers are connected.
+    double congestionMinSendHz{60.0};       // all-time min adaptive send rate across peers; 60 = never engaged
+    double congestionRecoveredSendHz{60.0}; // max send rate observed since the min was set (recovery evidence)
+    double congestionMaxLoss{0.0};          // all-time max sampled ENet mean loss fraction (diagnostic)
 };
 
 // Build a report from a profiler snapshot plus the live peer/entity counts and overrun state.
 inline ServerTickReport makeServerTickReport(const TickBudget& b, int peers, uint32_t entities, double loadFactor = 1.0,
                                              uint64_t droppedTicks = 0, uint64_t rssKb = 0, uint64_t rssStartupKb = 0,
-                                             double interestScale = 1.0) {
+                                             double interestScale = 1.0, double congestionMinSendHz = 60.0,
+                                             double congestionRecoveredSendHz = 60.0, double congestionMaxLoss = 0.0) {
     ServerTickReport r;
     r.tickHz = b.tickHz;
     r.ticksSampled = b.ticksSampled;
@@ -68,6 +75,9 @@ inline ServerTickReport makeServerTickReport(const TickBudget& b, int peers, uin
     r.droppedTicks = droppedTicks;
     r.rssKb = rssKb;
     r.rssStartupKb = rssStartupKb;
+    r.congestionMinSendHz = congestionMinSendHz;
+    r.congestionRecoveredSendHz = congestionRecoveredSendHz;
+    r.congestionMaxLoss = congestionMaxLoss;
     return r;
 }
 
@@ -133,7 +143,7 @@ inline bool parseStat(std::string_view json, std::string_view key, Stats& out) {
 inline std::string toJson(const ServerTickReport& r, int indentSpaces = 0) {
     const std::string pad(static_cast<std::size_t>(indentSpaces < 0 ? 0 : indentSpaces), ' ');
     const std::string in = pad + "  ";
-    char head[640];
+    char head[832];
     std::snprintf(head, sizeof(head),
                   "%s{\n"
                   "%s\"schema_version\": %d,\n"
@@ -142,12 +152,15 @@ inline std::string toJson(const ServerTickReport& r, int indentSpaces = 0) {
                   "%s\"window_s\": %.4f,\n"
                   "%s\"peers\": %d, \"entities\": %u,\n"
                   "%s\"load_factor\": %.4f, \"interest_scale\": %.4f, \"dropped_ticks\": %llu,\n"
-                  "%s\"rss_kb\": %llu, \"rss_startup_kb\": %llu,\n",
+                  "%s\"rss_kb\": %llu, \"rss_startup_kb\": %llu,\n"
+                  "%s\"congestion_min_send_hz\": %.4f, \"congestion_recovered_send_hz\": %.4f, "
+                  "\"congestion_max_loss\": %.4f,\n",
                   pad.c_str(), in.c_str(), r.schemaVersion, in.c_str(), r.tickHz, in.c_str(),
                   static_cast<unsigned long long>(r.ticksSampled), static_cast<unsigned long long>(r.ticksTotal),
                   in.c_str(), r.windowSeconds, in.c_str(), r.peers, r.entities, in.c_str(), r.loadFactor,
                   r.interestScale, static_cast<unsigned long long>(r.droppedTicks), in.c_str(),
-                  static_cast<unsigned long long>(r.rssKb), static_cast<unsigned long long>(r.rssStartupKb));
+                  static_cast<unsigned long long>(r.rssKb), static_cast<unsigned long long>(r.rssStartupKb), in.c_str(),
+                  r.congestionMinSendHz, r.congestionRecoveredSendHz, r.congestionMaxLoss);
     std::string out = head;
     out += detail::statJson("tick_ms", r.total, in) + ",\n";
     for (int i = 0; i < kTickPhaseCount; ++i) {
@@ -208,6 +221,18 @@ inline bool fromJson(std::string_view json, ServerTickReport& out) {
     }
     if (auto v = detail::findNumber(json, "rss_startup_kb")) {
         out.rssStartupKb = static_cast<uint64_t>(*v);
+        any = true;
+    }
+    if (auto v = detail::findNumber(json, "congestion_min_send_hz")) {
+        out.congestionMinSendHz = *v;
+        any = true;
+    }
+    if (auto v = detail::findNumber(json, "congestion_recovered_send_hz")) {
+        out.congestionRecoveredSendHz = *v;
+        any = true;
+    }
+    if (auto v = detail::findNumber(json, "congestion_max_loss")) {
+        out.congestionMaxLoss = *v;
         any = true;
     }
     any |= detail::parseStat(json, "tick_ms", out.total);

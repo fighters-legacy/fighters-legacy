@@ -79,8 +79,10 @@ struct SwarmReport {
     double assertMaxTickMs{0.0};
     int assertMinEntities{0};
     int64_t assertMaxRssGrowthKb{0};
-    double assertMaxLoadFactor{-1.0};  // <0 = disabled (#574)
-    int64_t assertMaxDroppedTicks{-1}; // <0 = disabled (#574)
+    double assertMaxLoadFactor{-1.0};        // <0 = disabled (#574)
+    int64_t assertMaxDroppedTicks{-1};       // <0 = disabled (#574)
+    double assertCongestionEngagedHz{0.0};   // 0 = disabled (#714)
+    double assertCongestionRecoveredHz{0.0}; // 0 = disabled (#714)
 
     // Authoritative server-side tick budget (from fl-server --metrics-json), when available.
     bool hasServer{false};
@@ -109,6 +111,8 @@ inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientM
     r.assertMaxRssGrowthKb = cfg.assertMaxRssGrowthKb;
     r.assertMaxLoadFactor = cfg.assertMaxLoadFactor;
     r.assertMaxDroppedTicks = cfg.assertMaxDroppedTicks;
+    r.assertCongestionEngagedHz = cfg.assertCongestionEngagedHz;
+    r.assertCongestionRecoveredHz = cfg.assertCongestionRecoveredHz;
     if (server) {
         r.hasServer = true;
         r.server = *server;
@@ -178,6 +182,17 @@ inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientM
     if (cfg.assertMaxDroppedTicks >= 0 &&
         (!r.hasServer || static_cast<int64_t>(r.server.droppedTicks) > cfg.assertMaxDroppedTicks))
         pass = false;
+    // Congestion-controller gate (#714 hook), over the run-long server watermarks (schema v5).
+    // engaged: the controller must have throttled the slowest peer's send rate to <= the threshold
+    // at some point (congestion_min_send_hz stuck at 60 = it never responded to the degraded link).
+    // recovered: after the min was set, the send rate must have climbed back to >= the threshold
+    // (proves recovery once the link cleared). Missing server data while enabled = failure.
+    if (cfg.assertCongestionEngagedHz > 0.0 &&
+        (!r.hasServer || r.server.congestionMinSendHz > cfg.assertCongestionEngagedHz))
+        pass = false;
+    if (cfg.assertCongestionRecoveredHz > 0.0 &&
+        (!r.hasServer || r.server.congestionRecoveredSendHz < cfg.assertCongestionRecoveredHz))
+        pass = false;
     r.assertsPassed = pass;
     return r;
 }
@@ -202,8 +217,12 @@ inline void printReport(const SwarmReport& r) {
                     r.server.phases[static_cast<int>(TickPhase::Ai)].mean,
                     r.server.phases[static_cast<int>(TickPhase::Collision)].mean,
                     r.server.phases[static_cast<int>(TickPhase::Serialize)].mean);
+    if (r.hasServer && (r.assertCongestionEngagedHz > 0.0 || r.assertCongestionRecoveredHz > 0.0))
+        std::printf("congestion: min send %.1f Hz, recovered to %.1f Hz, max loss %.3f\n", r.server.congestionMinSendHz,
+                    r.server.congestionRecoveredSendHz, r.server.congestionMaxLoss);
     if (r.assertMinTickHz > 0.0 || r.assertMaxKbs > 0.0 || r.assertMaxTickMs > 0.0 || r.assertMinEntities > 0 ||
-        r.assertMaxRssGrowthKb > 0 || r.assertMaxLoadFactor >= 0.0 || r.assertMaxDroppedTicks >= 0)
+        r.assertMaxRssGrowthKb > 0 || r.assertMaxLoadFactor >= 0.0 || r.assertMaxDroppedTicks >= 0 ||
+        r.assertCongestionEngagedHz > 0.0 || r.assertCongestionRecoveredHz > 0.0)
         std::printf("asserts: %s\n", r.assertsPassed ? "PASS" : "FAIL");
     std::printf("---\n");
 }
@@ -242,16 +261,18 @@ inline std::string reportToJson(const SwarmReport& r) {
         const std::string sj = toJson(r.server, 2);
         out += "  \"server_tick\": " + sj.substr(2) + ",\n";
     }
-    char tail[768];
+    char tail[896];
     std::snprintf(tail, sizeof(tail),
                   "  \"aggregate_downstream_mbs\": %.3f, \"max_snapshot_gap_ms\": %.3f,\n"
                   "  \"asserts\": { \"min_tick_hz\": %.3f, \"max_kbs\": %.3f, \"max_tick_ms\": %.3f, "
                   "\"min_entities\": %d, \"max_rss_growth_kb\": %lld, \"max_load_factor\": %.3f, "
-                  "\"max_dropped_ticks\": %lld, \"passed\": %s }\n"
+                  "\"max_dropped_ticks\": %lld, \"congestion_engaged_hz\": %.3f, "
+                  "\"congestion_recovered_hz\": %.3f, \"passed\": %s }\n"
                   "}\n",
                   r.aggregateDownstreamMbs, r.maxSnapshotGapMs, r.assertMinTickHz, r.assertMaxKbs, r.assertMaxTickMs,
                   r.assertMinEntities, static_cast<long long>(r.assertMaxRssGrowthKb), r.assertMaxLoadFactor,
-                  static_cast<long long>(r.assertMaxDroppedTicks), r.assertsPassed ? "true" : "false");
+                  static_cast<long long>(r.assertMaxDroppedTicks), r.assertCongestionEngagedHz,
+                  r.assertCongestionRecoveredHz, r.assertsPassed ? "true" : "false");
     out += tail;
     return out;
 }

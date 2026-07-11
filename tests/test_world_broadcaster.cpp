@@ -7208,3 +7208,58 @@ TEST_CASE("WorldBroadcaster: tracing disabled writes nothing", "[world_broadcast
 
     CHECK_FALSE(fs::exists(dir)); // no directory created, no files written
 }
+
+// ---------------------------------------------------------------------------
+// Congestion telemetry watermarks (#714)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: congestion telemetry watermarks record engage then recovery",
+          "[world_broadcaster][congestion]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+
+    uint64_t tick = 1;
+    auto runTicks = [&](int n) {
+        for (int i = 0; i < n; ++i)
+            broadcaster.onTick(1.0 / 60.0, tick++);
+    };
+
+    // Healthy link: the controller stays at full rate; watermarks read "never engaged".
+    runTicks(12);
+    fl::CongestionTelemetry t0 = broadcaster.getCongestionTelemetry();
+    CHECK(t0.minSendHz == Catch::Approx(60.f));
+    CHECK(t0.recoveredSendHz == Catch::Approx(60.f));
+    CHECK(t0.maxPacketLoss == Catch::Approx(0.f));
+
+    // Degrade the link: 20% ENet loss (over the 2% threshold). The AIMD controller backs the
+    // throttle off to its floor (1/6 => 10 Hz at the default 6-tick max interval).
+    fl::PeerLinkStats bad;
+    bad.packetLoss = 0.2f;
+    net.peerLinkStats[0u] = bad;
+    runTicks(90); // >= 10 AIMD evals at the default 6-tick cadence — enough to hit the floor
+    fl::CongestionTelemetry t1 = broadcaster.getCongestionTelemetry();
+    CHECK(t1.minSendHz == Catch::Approx(10.f)); // engaged all the way to the floor
+    CHECK(t1.maxPacketLoss == Catch::Approx(0.2f));
+
+    // Clear the link: additive ramp-up recovers the send rate; the recovered watermark climbs
+    // back to 60 while the all-time minimum stays put.
+    net.peerLinkStats[0u] = fl::PeerLinkStats{};
+    runTicks(90);
+    fl::CongestionTelemetry t2 = broadcaster.getCongestionTelemetry();
+    CHECK(t2.minSendHz == Catch::Approx(10.f));
+    CHECK(t2.recoveredSendHz == Catch::Approx(60.f));
+
+    // The watermarks freeze once the last peer disconnects (the gate reads the metrics file after
+    // the load clients drop — trailing empty-peer ticks must not wipe the evidence).
+    broadcaster.onDisconnect(0u);
+    runTicks(30);
+    fl::CongestionTelemetry t3 = broadcaster.getCongestionTelemetry();
+    CHECK(t3.minSendHz == Catch::Approx(10.f));
+    CHECK(t3.recoveredSendHz == Catch::Approx(60.f));
+    CHECK(t3.maxPacketLoss == Catch::Approx(0.2f));
+}
