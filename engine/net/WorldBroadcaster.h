@@ -5,6 +5,7 @@
 #include "CongestionController.h"
 #include "GameProtocol.h"
 #include "INetwork.h"
+#include "InputTraceWriter.h"
 #include "JitterBuffer.h"
 #include "SnapshotScheduler.h"
 #include "TickGovernor.h"
@@ -369,6 +370,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // via enqueueSimCallback.
     void setIdleTimeout(int timeoutSeconds) noexcept;
 
+    // Enable/disable server-side input tracing (#560). When `dir` is non-empty, each connected
+    // peer's accepted MsgClientInput is appended to a per-peer FLIT trace in `dir` (created if
+    // needed); an empty string disables tracing and closes all open trace files. Sim-thread only:
+    // call before gameLoop.start() or via enqueueSimCallback (the trace_start/trace_stop admin
+    // commands). Switching directories reopens fresh per-peer files on the next accepted input.
+    void setInputTraceDir(std::string dir);
+
     // Set the per-peer draw distance for snapshot interest management. Only entities within this
     // radius of a peer's own entity position are included in that peer's MsgWorldSnapshot.
     // 0 km = degenerate (queryRadius finds nothing; peers see empty snapshots). Default = 200 km.
@@ -542,6 +550,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     // Resolves EntityDef::flightModelId -> FlightModelData at spawn (null = always builtin model).
     FlightModelResolver m_flightModelResolver;
+
+    // Server-side input tracing (#560): while m_inputTraceDir is non-empty, each peer's accepted
+    // (post-validation) MsgClientInput is appended to a per-peer FLIT trace. Sim-thread only.
+    std::string m_inputTraceDir; // empty = tracing disabled
+    std::unordered_map<uint32_t, std::unique_ptr<InputTraceWriter>> m_peerTraceWriters;
+    uint32_t m_traceFileSeq{0}; // disambiguates trace filenames across reconnects/restarts
 
     // Gravity field applied to all spawned integrators. Initialized to CentralGravityField::earthInstance()
     // in the constructor; override with setGravityField() for non-Earth servers.

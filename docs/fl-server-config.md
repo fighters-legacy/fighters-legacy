@@ -109,6 +109,9 @@ password          = ""
 max_auth_failures = 5    # lock out IP after N consecutive failed auth attempts
 lockout_seconds   = 60   # per-IP lockout duration in seconds
 
+[trace]
+input_trace_dir = ""  # empty = disabled; per-peer FLIT input traces written here
+
 [spawn]
 agl_offset = 500.0  # metres AGL above terrain for all spawn points
 
@@ -1002,6 +1005,27 @@ documented in [docs/load-testing.md](load-testing.md#authoritative-server-tick-b
 `bot_swarm --server-metrics <path>` consumes this file; the #520 CI gate asserts on its
 `tick_ms.p99`.
 
+## [trace] — Server-side input tracing
+
+Records every peer's **accepted** (post-validation) `MsgClientInput` to a per-peer FLIT trace
+file `trace_peer<id>_<n>.flit` in `input_trace_dir` (created if missing). Captured sessions —
+including live multiplayer — replay at scale with `bot_swarm --pattern trace:<file>`, and the
+format is the versioned server-side input stream the Phase 4 replay epic (#588) builds on.
+Disabled when `input_trace_dir` is empty; toggle at runtime with the `trace_start [dir]` /
+`trace_stop` admin commands.
+
+```toml
+[trace]
+input_trace_dir = ""   # empty = disabled; per-peer FLIT traces written here
+```
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `input_trace_dir` | string | `""` | Directory for per-peer traces; empty disables tracing. |
+
+The FLIT trace format (header + 28-byte records) is documented in
+[docs/load-testing.md](load-testing.md#trace-replay-560).
+
 ## [spawn] — Peer spawn locations
 
 Controls where connecting peers appear in the world. Terrain elevation at each
@@ -1096,6 +1120,8 @@ process.
 | `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `snapshot_budget_bytes`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier`, `congestion_*`, `overrun_governor_enabled`, `overrun_high_watermark`, `overrun_low_watermark`, `overrun_min_snapshot_hz`, `overrun_max_ai_stride`, `overrun_budget_floor_bytes` (all take effect on the next sim tick; `max_catchup_ticks`, `sim_worker_threads`, `spatial_cell_size_km`, and the `test_spawn_*` keys require restart) |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
+| `trace_start` | `[dir]` | Start recording each peer's accepted `MsgClientInput` to per-peer FLIT traces (`[trace] input_trace_dir` if `dir` omitted, else `traces/`); replay with `bot_swarm --pattern trace:<file>` |
+| `trace_stop` | — | Stop input tracing and close all open trace files |
 | `pause` | — | Pause the simulation — ticks stop advancing; network connections remain active. In single-player the game client sends this automatically when the pause menu is opened. |
 | `resume` | — | Resume the simulation at normal (1×) tick rate. |
 | `shutdown` | `[--in <dur>] [--interval <dur>] [--delay <dur>] [--cancel] [--now] [--force] [--reason <text>]` | Schedule or cancel a graceful shutdown with countdown notices to connected clients; `--now` exits immediately after notifying clients; `--interval` overrides `shutdown.warning_interval_s` for this run; `--force` required when `shutdown.require_confirm = true` (default); `--reason` prepends custom operator text to each countdown broadcast (long reasons are truncated to fit in `MsgServerNotice::text[60]`; `--reason` stops consuming tokens at the next `--` flag) |

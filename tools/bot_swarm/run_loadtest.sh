@@ -64,6 +64,12 @@ TEST_SPAWN_AI="${FL_TEST_SPAWN_AI:-0}"
 TEST_SPAWN_SPREAD_KM="${FL_TEST_SPAWN_SPREAD_KM:-50}"
 SNAPSHOT_BUDGET="${FL_SNAPSHOT_BUDGET:-}"
 
+# FL_LOADTEST_GOVERNOR=1 flips the graceful tick-overrun governor (#514) ON — used by the synthetic
+# overrun profile (#574) to validate that the governor sheds under load. Default OFF, so the raw
+# capacity gate still measures un-shed sim/bandwidth against the committed baseline.
+GOVERNOR_ENABLED="false"
+[[ "${FL_LOADTEST_GOVERNOR:-0}" == "1" ]] && GOVERNOR_ENABLED="true"
+
 cat >"$CONFIG" <<EOF
 [server]
 port = $PORT
@@ -79,10 +85,10 @@ max_connections_per_ip = 0
 
 [world]
 # The scale gate measures RAW sim/bandwidth capacity against the committed baseline, so the graceful
-# tick-overrun governor (#514) is disabled here — otherwise it would shed snapshot/AI work under load
-# and mask the very regressions the gate exists to catch (validating the governor itself is a separate
-# synthetic-overrun profile). The governor defaults ON in production server.toml.
-overrun_governor_enabled = false
+# tick-overrun governor (#514) is disabled here by default — otherwise it would shed snapshot/AI work
+# under load and mask the very regressions the gate exists to catch. The synthetic-overrun profile
+# (#574) flips it on via FL_LOADTEST_GOVERNOR=1 to validate the governor sheds. Defaults ON in prod.
+overrun_governor_enabled = $GOVERNOR_ENABLED
 # Entity-scale load-spawn (#573). 0 = disabled (normal run).
 test_spawn_ai_count = $TEST_SPAWN_AI
 test_spawn_spread_km = $TEST_SPAWN_SPREAD_KM
@@ -105,7 +111,7 @@ if [[ -n "${FL_SIM_WORKER_THREADS:-}" ]]; then
 fi
 
 echo "=== bot_swarm load test: $CLIENTS clients, pattern=$PATTERN, ${DURATION}s, port $PORT" \
-     "(test_spawn_ai=$TEST_SPAWN_AI sim_workers=${FL_SIM_WORKER_THREADS:-default}) ==="
+     "(test_spawn_ai=$TEST_SPAWN_AI sim_workers=${FL_SIM_WORKER_THREADS:-default} governor=$GOVERNOR_ENABLED) ==="
 # --transport enet: bot_swarm is the enet6 regression instrument (#507/#519); the server under test
 # must speak enet6 to accept it, regardless of the [network].transport default.
 FL_CONFIG="$CONFIG" "$FLSERVER" "$PORT" "$MAX_PEERS" --bind 127.0.0.1 --transport enet \

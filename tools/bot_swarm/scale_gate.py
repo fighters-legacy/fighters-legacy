@@ -41,6 +41,11 @@ PROFILE_DEFAULTS = {
     "assert_max_tick_ms": 0.0,
     # Soak leak gate (#707): max allowed RSS growth over the run (rss_kb - rss_startup_kb). 0 = disabled.
     "assert_max_rss_growth_kb": 0,
+    # Overrun-governor gate (#574). Both use a NEGATIVE-disabled sentinel (0 is a real value for each).
+    # governor=true flips FL_LOADTEST_GOVERNOR=1 so the run exercises the governor ON.
+    "assert_max_load_factor": -1.0,
+    "assert_max_dropped_ticks": -1,
+    "governor": False,
     # Entity-scale sweep (#573). Empty lists => a normal one-run-per-pattern profile. When populated,
     # the profile sweeps the cartesian product of patterns x entity_spawn_counts x
     # sim_worker_threads_sweep, driving FL_TEST_SPAWN_AI / FL_SIM_WORKER_THREADS per run.
@@ -92,6 +97,11 @@ def assert_flags(profile, strict):
         flags += ["--assert-max-tick-ms", _num(profile["assert_max_tick_ms"])]
     if profile["assert_max_rss_growth_kb"] > 0:
         flags += ["--assert-max-rss-growth-kb", _num(profile["assert_max_rss_growth_kb"])]
+    # Overrun-governor gate (#574): negative-disabled, so >= 0 enables the flag (0 is a real value).
+    if profile["assert_max_load_factor"] >= 0:
+        flags += ["--assert-max-load-factor", _num(profile["assert_max_load_factor"])]
+    if profile["assert_max_dropped_ticks"] >= 0:
+        flags += ["--assert-max-dropped-ticks", str(int(profile["assert_max_dropped_ticks"]))]
     return flags
 
 
@@ -173,6 +183,40 @@ def evaluate_report(report, profile, strict):
             "advisory": False,
         })
 
+    # Overrun governor engaged (#574): load_factor <= threshold means it shed; > means it never fired.
+    if profile["assert_max_load_factor"] >= 0:
+        server = report.get("server_tick")
+        if server is None:
+            ok = False
+            detail = "no server_tick block (cannot evaluate)"
+        else:
+            lf = server.get("load_factor", 1.0)
+            ok = lf <= profile["assert_max_load_factor"]
+            detail = f"{lf:.3f} <= {profile['assert_max_load_factor']:.3f} (governor engaged)"
+        checks.append({
+            "name": "server_tick.load_factor",
+            "ok": ok,
+            "detail": detail,
+            "advisory": False,
+        })
+
+    # Graceful-not-spiral (#574): the governor should keep GameLoop catch-up drops at ~0 under overload.
+    if profile["assert_max_dropped_ticks"] >= 0:
+        server = report.get("server_tick")
+        if server is None:
+            ok = False
+            detail = "no server_tick block (cannot evaluate)"
+        else:
+            dropped = server.get("dropped_ticks", 0)
+            ok = dropped <= profile["assert_max_dropped_ticks"]
+            detail = f"{dropped} <= {profile['assert_max_dropped_ticks']} dropped ticks"
+        checks.append({
+            "name": "server_tick.dropped_ticks",
+            "ok": ok,
+            "detail": detail,
+            "advisory": False,
+        })
+
     passed = all(c["ok"] for c in checks if not c["advisory"])
     return {"passed": passed, "checks": checks}
 
@@ -210,11 +254,13 @@ def expand_runs(profile):
     """
     counts = profile.get("entity_spawn_counts") or [None]
     workers = profile.get("sim_worker_threads_sweep") or [None]
+    # Overrun profile (#574): flip the governor ON for every run in the profile.
+    governor_env = {"FL_LOADTEST_GOVERNOR": "1"} if profile.get("governor") else {}
     runs = []
     for pattern in profile["patterns"]:
         for c in counts:
             for w in workers:
-                env = {}
+                env = dict(governor_env)
                 flags = []
                 label = pattern
                 if c is not None:

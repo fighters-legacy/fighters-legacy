@@ -137,7 +137,26 @@ work and mask regressions). To observe the governor itself, run a *separate* ove
 `reload_config` toggling `overrun_governor_enabled` mid-run flips the levers live (full rate ⇄
 degraded), useful for an A/B in a single session.
 
+**CI now automates this runbook** ([#574]). The `overrun` scale-gate profile runs the governor **on**
+(`FL_LOADTEST_GOVERNOR=1`, wired from the profile's `governor: true`) and deterministically overloads a
+serialize-bound tick with `test_spawn_ai = 5000` at `sim_workers = 1` (the [#573] characterisation
+measured ~36.8 Hz governor-off there — a large, portable margin below 60 Hz). It asserts the governor
+*responded*:
+
+- `--assert-max-load-factor 0.99` fails if the governor **never engaged** (`load_factor` stayed `1.0` —
+  the primary bite; a dev smoke measured `~0.25` governor-on vs `1.0` governor-off);
+- `--assert-max-dropped-ticks 100` is the **graceful-not-spiral** bound — a small allowance absorbs the
+  one-time startup-spawn + EWMA-ramp transient before the governor engages; a genuine spiral produces
+  orders of magnitude more drops over the 90 s run.
+
+Both use a **negative-disabled** sentinel (`< 0` = off) because `0` is a real value for each. The
+profile is `baselined: false` — the shed KB/s must never touch the committed bandwidth baseline — and
+runs in the **reference tier only** (nightly / `workflow_dispatch`), where the collapse margin is
+reliable. A one-off run with `FL_LOADTEST_GOVERNOR=0` fails the load-factor assert, proving the gate
+bites. There is no `taskset` dependency: entity-count overload is portable across runner core counts.
+
 [#514]: https://github.com/fighters-legacy/fighters-legacy/issues/514
+[#574]: https://github.com/fighters-legacy/fighters-legacy/issues/574
 
 ### Entity-pool + SpatialIndex scaling ([#573])
 
@@ -177,7 +196,8 @@ run matrix live in [entity-scale-characterization.md](entity-scale-characterizat
       --rate HZ              MsgClientInput rate per client (default 60)
       --ramp-ms MS           delay between successive connects (default 20)
       --threads N            worker threads (default auto = min(cores, ceil(clients/32)))
-      --pattern NAME         weave | level | aggressive | idle | random (default weave)
+      --pattern NAME         weave | level | aggressive | idle | random | trace:<file> (default weave)
+      --pattern-mix SPEC     weighted mix, e.g. "weave:80,aggressive:20" (supersedes --pattern)
       --json PATH            write a JSON report
       --server-metrics PATH  read fl-server --metrics-json file; embed authoritative server_tick block
       --assert-min-tick-hz X exit nonzero if observed (proxy) tick-Hz min < X
@@ -185,6 +205,8 @@ run matrix live in [entity-scale-characterization.md](entity-scale-characterizat
       --assert-max-tick-ms X exit nonzero if authoritative server tick p99 (ms) > X
       --assert-min-entities N exit nonzero if authoritative server_tick.entities < N
       --assert-max-rss-growth-kb N  exit nonzero if server RSS growth (rss_kb - rss_startup_kb) > N
+      --assert-max-load-factor X  exit nonzero if server_tick.load_factor > X (governor engaged? <0 = off)
+      --assert-max-dropped-ticks N  exit nonzero if server_tick.dropped_ticks > N (<0 = off)
     Env: FL_HOST, FL_PORT
 
 ## Flight patterns
@@ -198,9 +220,51 @@ different parts of the server:
 - **aggressive** — high-rate rolls/pulls + afterburner; max entity churn (physics + snapshot size).
 - **idle** — no input; pure connection + snapshot overhead.
 - **random** — seeded per-client walk; heterogeneity.
+- **trace:`<file>`** — replays a recorded real session (see [Trace replay](#trace-replay-560));
+  reproduces real player behaviour at scale.
 
-Adding a pattern (e.g. a `trace:<file>` replay of recorded input, or a weighted mix) is a new
-`IFlightPattern` subclass + a branch in `makePattern()` — no harness changes.
+Adding a built-in pattern is a new `IFlightPattern` subclass + a branch in `makePattern()` — no
+harness changes.
+
+### Weighted pattern mix (#560)
+
+A single pattern makes every client fly identically. `--pattern-mix` builds a heterogeneous swarm:
+
+    bot_swarm 127.0.0.1 4778 --clients 100 --pattern-mix "weave:80,aggressive:15,idle:5"
+
+Weights are positive integers over built-in pattern names; the assignment is **deterministic** —
+client _i_ of _N_ maps to the cumulative-weight bucket containing `floor(i * totalWeight / N)`, so
+the counts match the weight fractions with no RNG and reproduce across runs and platforms. The mix
+spec supersedes `--pattern` and is echoed in the report's `pattern` field.
+
+### Trace replay (#560)
+
+`--pattern trace:<file>` replays a **recorded** input stream instead of a synthetic one, so the
+harness reproduces real player behaviour (including from live multiplayer) at scale.
+
+Traces are recorded **server-side**: set `[trace] input_trace_dir` in `server.toml` (or run the
+`trace_start [dir]` / `trace_stop` admin commands), and the server appends every peer's *accepted*
+(post-validation) `MsgClientInput` to a per-peer file `trace_peer<id>_<n>.flit` in that directory.
+The trace is loaded once and shared read-only across all synthetic clients; each client offsets its
+playback cursor by its index (so the swarm doesn't fly in lockstep) and loops at the end.
+
+    # 1. record a real session
+    #    server.toml:  [trace]\n    input_trace_dir = "traces"
+    # 2. replay it at scale
+    bot_swarm 127.0.0.1 4778 --clients 128 --pattern trace:traces/trace_peer0_0.flit
+
+**FLIT trace format** (little-endian, versioned so the Phase 4 replay epic #588 can extend rather
+than fork it; codec in `engine/net/InputTrace{Format,Writer,Reader}.h`):
+
+| Section | Bytes | Fields |
+| --- | --- | --- |
+| Header | 10 | magic `"FLIT"` (4) · version `u16` (=1) · tickRate `u32` |
+| Record | 28 | serverTick `u64` · throttle `f32` · elevator `f32` · aileron `f32` · rudder `f32` · buttons `u32` |
+
+Records follow the header back-to-back; the record count is `(fileSize − 10) / 28`. The five
+control fields map 1:1 onto `MsgClientInput`'s flight-control fields and onto the harness's
+`BotControl`. `serverTick` is the authoritative tick at which the input was accepted (for
+deterministic replay in #588); the load harness keys playback off wall-time × `tickRate`.
 
 ## Characterisation runbook (for #505)
 
@@ -262,6 +326,7 @@ Markdown summary to `$GITHUB_STEP_SUMMARY`.
 | **PR** | every PR + push to `main` (Linux, Release) | `pr` (64 clients, weave) | bandwidth ≤150 KB/s/client, admission (no refused/dropped), KB/s baseline regression, tick-Hz collapse tripwire (≥30) | tick-ms p99 (disabled) |
 | **Reference** | manual `workflow_dispatch` on the self-hosted `fl-reference` runner | `reference` (128 clients; idle/weave/aggressive) | bandwidth + admission + baseline + **tick-ms p99 ≤16.6 (`--strict`, unconditional)** | — |
 | **Soak** | manual `workflow_dispatch` (`profile=soak`) on `fl-reference` | `soak` (128 clients, weave, 2 h) | strict gates + RSS-growth leak (`--assert-max-rss-growth-kb`, from the server's self-reported `rss_kb`, [#707](https://github.com/fighters-legacy/fighters-legacy/issues/707)) | — |
+| **Overrun** | manual `workflow_dispatch` (`profile=overrun`, or `nightly` set) on `fl-reference` | `overrun` (32 clients, weave, governor **on**, `test_spawn_ai=5000` @ `sim_workers=1`) | governor engaged (`--assert-max-load-factor 0.99`) + graceful-not-spiral (`--assert-max-dropped-ticks 0`) + admission; **not baselined** ([#574](https://github.com/fighters-legacy/fighters-legacy/issues/574)) | tick-ms p99 |
 
 The PR tier hard-gates only machine-independent metrics: `bot_swarm`'s `--assert-min-tick-hz` reads
 the *client-side proxy*, which sags when the harness itself is CPU-starved on a shared runner — a

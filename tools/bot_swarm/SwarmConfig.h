@@ -20,8 +20,9 @@ struct SwarmConfig {
     int durationS{30};
     int rateHz{60};
     int rampMs{20};
-    int threads{0}; // 0 = auto (min(hw_concurrency, ceil(clients/32)))
-    std::string pattern{"weave"};
+    int threads{0};                  // 0 = auto (min(hw_concurrency, ceil(clients/32)))
+    std::string pattern{"weave"};    // built-in name or "trace:<file>"; ignored when patternMix is set
+    std::string patternMix;          // weighted mix spec e.g. "weave:80,aggressive:20"; empty = single pattern
     std::string jsonPath;            // empty = no JSON output
     std::string serverMetricsPath;   // empty = no server-side tick block; fl-server --metrics-json file
     double assertMinTickHz{0.0};     // 0 = disabled
@@ -29,6 +30,11 @@ struct SwarmConfig {
     double assertMaxTickMs{0.0};     // 0 = disabled; fails if server tick_ms.p99 > this (#520 gate hook)
     int assertMinEntities{0};        // 0 = disabled; fails if server_tick.entities < this (#573 gate hook)
     int64_t assertMaxRssGrowthKb{0}; // 0 = disabled; fails if server_tick.rss_kb - rss_startup_kb > this (#707)
+    // Overrun-governor gate (#574). Both use a NEGATIVE-disabled sentinel because 0 is a real value
+    // for each (load_factor 0 = fully shed; dropped_ticks 0 = no drops, the healthy target).
+    double assertMaxLoadFactor{-1.0}; // <0 = disabled; fails if server_tick.load_factor > this (governor engaged?)
+    int64_t assertMaxDroppedTicks{
+        -1}; // <0 = disabled; fails if server_tick.dropped_ticks > this (graceful, not spiral)
 };
 
 enum class ParseStatus { Ok, Help, Version, Error };
@@ -92,6 +98,10 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
             r.cfg.pattern = argv[++i];
+        } else if (std::strcmp(a, "--pattern-mix") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.patternMix = argv[++i];
         } else if (std::strcmp(a, "--json") == 0) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
@@ -120,6 +130,14 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
             r.cfg.assertMaxRssGrowthKb = std::strtoll(argv[++i], nullptr, 10);
+        } else if (std::strcmp(a, "--assert-max-load-factor") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.assertMaxLoadFactor = std::strtod(argv[++i], nullptr);
+        } else if (std::strcmp(a, "--assert-max-dropped-ticks") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.assertMaxDroppedTicks = std::strtoll(argv[++i], nullptr, 10);
         } else if (a[0] == '-' && a[1] != '\0') {
             r.status = ParseStatus::Error;
             r.error = std::string("unknown flag: ") + a;
@@ -154,8 +172,14 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
         fail("--ramp-ms must be >= 0");
     else if (r.cfg.threads < 0)
         fail("--threads must be >= 0");
-    else if (!isKnownPattern(r.cfg.pattern))
-        fail("--pattern must be one of: weave, level, aggressive, idle, random");
+    else if (!r.cfg.patternMix.empty()) {
+        // --pattern-mix supersedes --pattern; validate the mix spec (names + weights) up front.
+        std::vector<PatternMixEntry> mix;
+        std::string mixErr;
+        if (!parsePatternMix(r.cfg.patternMix, mix, mixErr))
+            fail("--pattern-mix: " + mixErr);
+    } else if (!isKnownPattern(r.cfg.pattern) && !isTracePattern(r.cfg.pattern))
+        fail("--pattern must be one of: weave, level, aggressive, idle, random, or trace:<file>");
     else if (r.cfg.assertMinTickHz < 0.0)
         fail("--assert-min-tick-hz must be >= 0");
     else if (r.cfg.assertMaxKbs < 0.0)

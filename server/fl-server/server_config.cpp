@@ -154,6 +154,14 @@ static const char* kDefaultToml =
     "tick_json_path = \"\"\n"
     "tick_json_interval_ms = 1000\n"
     "\n"
+    "[trace]\n"
+    "# Server-side input tracing (#560). When input_trace_dir is non-empty, every peer's accepted\n"
+    "# MsgClientInput is recorded to a per-peer FLIT trace (trace_peer<id>_<n>.flit) in that\n"
+    "# directory, capturing real sessions for bot_swarm `--pattern trace:<file>` replay and the\n"
+    "# Phase 4 replay epic. Empty = disabled. The trace_start [dir] / trace_stop admin commands\n"
+    "# toggle it at runtime. See docs/load-testing.md for the trace format.\n"
+    "input_trace_dir = \"\"\n"
+    "\n"
     "[network]\n"
     "# Transport backend: \"gns\" (GameNetworkingSockets — encrypted UDP, congestion control, 128+\n"
     "# headroom; default for dedicated servers) or \"enet\" (enet6 — LAN / low-count). See\n"
@@ -679,6 +687,10 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             else
                 cfg.metrics.tickJsonIntervalMs = static_cast<uint32_t>(*v);
         }
+
+        // [trace]
+        if (auto v = tbl["trace"]["input_trace_dir"].value<std::string>())
+            cfg.trace.inputTraceDir = std::move(*v);
 
         // [network]
         if (auto v = tbl["network"]["transport"].value<std::string>()) {

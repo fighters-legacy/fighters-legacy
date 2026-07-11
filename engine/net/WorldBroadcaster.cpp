@@ -25,6 +25,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -274,6 +275,25 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
 
 void WorldBroadcaster::setIdleTimeout(int timeoutSeconds) noexcept {
     m_idleTimeoutTicks = timeoutSeconds > 0 ? static_cast<uint64_t>(timeoutSeconds) * 60u : 0u;
+}
+
+void WorldBroadcaster::setInputTraceDir(std::string dir) {
+    // Any change closes the currently open per-peer trace files so records never straddle two
+    // directories; disabling clears the dir, enabling/switching creates the target and lets each
+    // peer's writer reopen lazily on its next accepted input.
+    m_peerTraceWriters.clear();
+    m_inputTraceDir = std::move(dir);
+    if (m_inputTraceDir.empty())
+        return;
+    std::error_code ec;
+    std::filesystem::create_directories(m_inputTraceDir, ec);
+    if (ec) {
+        char msg[256];
+        std::snprintf(msg, sizeof(msg), "input trace dir '%s' could not be created (%s) — tracing disabled",
+                      m_inputTraceDir.c_str(), ec.message().c_str());
+        m_logger.log(LogLevel::Warn, __FILE__, __LINE__, msg);
+        m_inputTraceDir.clear();
+    }
 }
 
 void WorldBroadcaster::setDrawDistance(float km) noexcept {
@@ -1166,6 +1186,7 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     m_peerFloodState.erase(peerId);
     m_peerKnownGens.erase(peerId);
     m_peerPendingDespawn.erase(peerId);
+    m_peerTraceWriters.erase(peerId); // close this peer's input trace (#560), if any
     m_activePeerCount.fetch_sub(1, std::memory_order_relaxed);
 
     m_pendingAdminDrains.erase(std::remove_if(m_pendingAdminDrains.begin(), m_pendingAdminDrains.end(),
@@ -1282,6 +1303,27 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         bi.rudder = ctl(msg.rudder, -1.f, 1.f);
         bi.buttons = msg.buttons;
         stored.jitterBuffer.push(bi);
+
+        // Server-side input tracing (#560): append the accepted, sanitized control sample to this
+        // peer's FLIT trace. The writer is opened lazily so trace_start mid-session captures already
+        // connected peers too; tickRate is the fixed 60 Hz server step.
+        if (!m_inputTraceDir.empty()) {
+            auto& writer = m_peerTraceWriters[peerId];
+            if (!writer) {
+                char path[512];
+                std::snprintf(path, sizeof(path), "%s/trace_peer%u_%u.flit", m_inputTraceDir.c_str(), peerId,
+                              m_traceFileSeq++);
+                writer = std::make_unique<InputTraceWriter>(std::string(path), 60u);
+                if (!writer->good()) {
+                    char wmsg[576];
+                    std::snprintf(wmsg, sizeof(wmsg), "could not open input trace '%s' for peer %u — not tracing it",
+                                  path, peerId);
+                    m_logger.log(LogLevel::Warn, __FILE__, __LINE__, wmsg);
+                }
+            }
+            if (writer && writer->good())
+                writer->writeRecord(m_currentTick, bi.throttle, bi.elevator, bi.aileron, bi.rudder, bi.buttons);
+        }
 
         // viewAxis is updated immediately — it is camera state, not a flight sim input.
         float vmag = std::sqrt(msg.viewAxis[0] * msg.viewAxis[0] + msg.viewAxis[1] * msg.viewAxis[1] +
