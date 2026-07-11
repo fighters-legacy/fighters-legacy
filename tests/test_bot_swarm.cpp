@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Pure-logic unit tests for the bot_swarm load harness: flight patterns + registry, the shared
-// NetStats percentile math, CLI parsing, and metric aggregation + JSON. No sockets.
+// NetStats percentile math, CLI parsing, metric aggregation + JSON, and the lossy-link
+// drop/delay policy (#714). No sockets (LossyProxy's relay is exercised by the gate itself).
 #include "IFlightPattern.h"
+#include "LossyLink.h"
 #include "NetStats.h"
 #include "SwarmConfig.h"
 #include "SwarmMetrics.h"
@@ -184,6 +186,84 @@ TEST_CASE("SwarmPatternPlan selects the active mode and builds patterns", "[bot_
 }
 
 // ---------------------------------------------------------------------------
+// Lossy-link drop/delay policy (#714)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("LossyLink window boundaries and disabled schedules", "[bot_swarm][lossy]") {
+    LossySchedule s;
+    s.degradeStartS = 10.0;
+    s.degradeDurationS = 5.0;
+    s.lossFraction = 0.f;
+    s.delayMs = 100;
+    LossyLink link(s, 42u);
+
+    CHECK_FALSE(link.degradedAt(9.99));
+    CHECK(link.degradedAt(10.0)); // window start is inclusive
+    CHECK(link.degradedAt(14.99));
+    CHECK_FALSE(link.degradedAt(15.0)); // window end is exclusive
+
+    // Outside the window every datagram forwards immediately (delay 0, never dropped).
+    auto before = link.classify(5.0);
+    REQUIRE(before.has_value());
+    CHECK(*before == 0u);
+    // Inside the window (no loss configured) every datagram carries the added delay.
+    auto during = link.classify(12.0);
+    REQUIRE(during.has_value());
+    CHECK(*during == 100u);
+
+    // A zero-duration schedule is a no-op policy.
+    LossySchedule off;
+    off.lossFraction = 0.5f;
+    off.delayMs = 500; // irrelevant: durationS 0 disables
+    CHECK_FALSE(off.enabled());
+    LossyLink offLink(off, 1u);
+    CHECK_FALSE(offLink.degradedAt(100.0));
+    auto v = offLink.classify(100.0);
+    REQUIRE(v.has_value());
+    CHECK(*v == 0u);
+}
+
+TEST_CASE("LossyLink drops roughly lossFraction of datagrams, deterministically per seed", "[bot_swarm][lossy]") {
+    LossySchedule s;
+    s.degradeStartS = 0.0;
+    s.degradeDurationS = 1000.0;
+    s.lossFraction = 0.30f;
+    s.delayMs = 0;
+
+    auto countDrops = [&](uint32_t seed) {
+        LossyLink link(s, seed);
+        int drops = 0;
+        for (int i = 0; i < 10000; ++i)
+            if (!link.classify(1.0))
+                ++drops;
+        return drops;
+    };
+
+    const int dropsA = countDrops(7u);
+    // ~30% of 10k, generous tolerance — this is a sanity band, not a distribution test.
+    CHECK(dropsA > 2600);
+    CHECK(dropsA < 3400);
+    // Same seed -> identical decision sequence (reproducible runs).
+    CHECK(dropsA == countDrops(7u));
+}
+
+TEST_CASE("LossyLink RNG only advances inside the degraded window", "[bot_swarm][lossy]") {
+    LossySchedule s;
+    s.degradeStartS = 10.0;
+    s.degradeDurationS = 1.0;
+    s.lossFraction = 0.5f;
+    LossyLink a(s, 3u);
+    LossyLink b(s, 3u);
+
+    // Feed `a` a burst of clean-phase datagrams first; decisions inside the window must still
+    // match `b` exactly (clean traffic must not perturb the degraded-phase sequence).
+    for (int i = 0; i < 100; ++i)
+        (void)a.classify(1.0);
+    for (int i = 0; i < 50; ++i)
+        CHECK(a.classify(10.5).has_value() == b.classify(10.5).has_value());
+}
+
+// ---------------------------------------------------------------------------
 // NetStats
 // ---------------------------------------------------------------------------
 
@@ -318,6 +398,32 @@ TEST_CASE("parseSwarmArgs parses the governor asserts with negative-disabled sen
     // A missing value is still an error.
     CHECK(parse({"--assert-max-load-factor"}).status == ParseStatus::Error);
     CHECK(parse({"--assert-max-dropped-ticks"}).status == ParseStatus::Error);
+}
+
+TEST_CASE("parseSwarmArgs parses the lossy-proxy schedule and congestion asserts (#714)", "[bot_swarm][config]") {
+    const SwarmParseResult r =
+        parse({"--degrade-duration", "20", "--degrade-start", "15", "--degrade-loss", "0.1", "--degrade-delay-ms",
+               "150", "--assert-congestion-engaged-hz", "30", "--assert-congestion-recovered-hz", "55"});
+    REQUIRE(r.status == ParseStatus::Ok);
+    CHECK(r.cfg.degradeDurationS == Catch::Approx(20.0));
+    CHECK(r.cfg.degradeStartS == Catch::Approx(15.0));
+    CHECK(r.cfg.degradeLoss == Catch::Approx(0.1));
+    CHECK(r.cfg.degradeDelayMs == 150);
+    CHECK(r.cfg.assertCongestionEngagedHz == Catch::Approx(30.0));
+    CHECK(r.cfg.assertCongestionRecoveredHz == Catch::Approx(55.0));
+
+    // Defaults: proxy off, asserts disabled.
+    const SwarmParseResult d = parse({});
+    CHECK(d.cfg.degradeDurationS == Catch::Approx(0.0));
+    CHECK(d.cfg.assertCongestionEngagedHz == Catch::Approx(0.0));
+
+    // Validation: loss out of range, negative delay, a degrade window with nothing degraded, and
+    // out-of-range assert thresholds are all rejected.
+    CHECK(parse({"--degrade-duration", "5", "--degrade-loss", "1.5"}).status == ParseStatus::Error);
+    CHECK(parse({"--degrade-delay-ms", "-5"}).status == ParseStatus::Error);
+    CHECK(parse({"--degrade-duration", "5"}).status == ParseStatus::Error); // no loss and no delay
+    CHECK(parse({"--assert-congestion-engaged-hz", "61"}).status == ParseStatus::Error);
+    CHECK(parse({"--assert-congestion-recovered-hz", "-1"}).status == ParseStatus::Error);
 }
 
 // ---------------------------------------------------------------------------
@@ -579,4 +685,57 @@ TEST_CASE("reportToJson emits the governor assert thresholds (#574)", "[bot_swar
     const std::string json = reportToJson(buildReport(cfg, clients, 10.0, {}, 1, makeServer(6.0)));
     CHECK(json.find("\"max_load_factor\"") != std::string::npos);
     CHECK(json.find("\"max_dropped_ticks\"") != std::string::npos);
+}
+
+TEST_CASE("congestion gates assert on the run-long server watermarks (#714)", "[bot_swarm][metrics][servertick]") {
+    SwarmConfig cfg;
+    cfg.clients = 1;
+    std::vector<ClientMetrics> clients;
+    clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
+
+    auto serverWithCongestion = [](double minHz, double recoveredHz) {
+        ServerTickReport s = makeServer(6.0);
+        s.congestionMinSendHz = minHz;
+        s.congestionRecoveredSendHz = recoveredHz;
+        return s;
+    };
+
+    SECTION("engaged: passes when the controller throttled below the threshold") {
+        cfg.assertCongestionEngagedHz = 30.0;
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithCongestion(12.0, 60.0)).assertsPassed);
+    }
+    SECTION("engaged: fails when the controller never engaged (min stayed 60)") {
+        cfg.assertCongestionEngagedHz = 30.0;
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, serverWithCongestion(60.0, 60.0)).assertsPassed);
+    }
+    SECTION("recovered: passes when the rate climbed back above the threshold") {
+        cfg.assertCongestionRecoveredHz = 55.0;
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithCongestion(12.0, 58.0)).assertsPassed);
+    }
+    SECTION("recovered: fails when the controller stayed throttled after the window") {
+        cfg.assertCongestionRecoveredHz = 55.0;
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, serverWithCongestion(12.0, 20.0)).assertsPassed);
+    }
+    SECTION("both gates together express engaged-then-recovered") {
+        cfg.assertCongestionEngagedHz = 30.0;
+        cfg.assertCongestionRecoveredHz = 55.0;
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithCongestion(12.0, 60.0)).assertsPassed);
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, serverWithCongestion(60.0, 60.0)).assertsPassed);
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1, serverWithCongestion(12.0, 30.0)).assertsPassed);
+    }
+    SECTION("fails when a gate is enabled but no server metrics were provided") {
+        cfg.assertCongestionEngagedHz = 30.0;
+        CHECK_FALSE(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed);
+    }
+    SECTION("0 disables both gates") {
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1, serverWithCongestion(60.0, 60.0)).assertsPassed);
+        CHECK(buildReport(cfg, clients, 10.0, {}, 1).assertsPassed); // no server block, gates off
+    }
+    SECTION("thresholds appear in the JSON asserts block") {
+        cfg.assertCongestionEngagedHz = 30.0;
+        cfg.assertCongestionRecoveredHz = 55.0;
+        const std::string json = reportToJson(buildReport(cfg, clients, 10.0, {}, 1, serverWithCongestion(12.0, 60.0)));
+        CHECK(json.find("\"congestion_engaged_hz\"") != std::string::npos);
+        CHECK(json.find("\"congestion_recovered_hz\"") != std::string::npos);
+    }
 }

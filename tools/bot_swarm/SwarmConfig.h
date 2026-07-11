@@ -35,6 +35,18 @@ struct SwarmConfig {
     double assertMaxLoadFactor{-1.0}; // <0 = disabled; fails if server_tick.load_factor > this (governor engaged?)
     int64_t assertMaxDroppedTicks{
         -1}; // <0 = disabled; fails if server_tick.dropped_ticks > this (graceful, not spiral)
+    // Lossy-proxy link degradation (#714): clients connect through a local UDP relay that drops
+    // degradeLoss of datagrams and adds degradeDelayMs one-way delay inside the window
+    // [degradeStartS, degradeStartS + degradeDurationS) measured from proxy start (i.e. before the
+    // connect ramp). degradeDurationS 0 = proxy disabled entirely (clients connect direct).
+    double degradeStartS{10.0};
+    double degradeDurationS{0.0};
+    double degradeLoss{0.0}; // drop fraction while degraded [0, 1]
+    int degradeDelayMs{0};   // added one-way delay while degraded
+    // Congestion-controller gate (#714); 0 = disabled (a 0 Hz threshold is meaningless for both, so
+    // no negative sentinel is needed here, unlike the #574 governor asserts).
+    double assertCongestionEngagedHz{0.0};   // fails if server_tick.congestion_min_send_hz > this
+    double assertCongestionRecoveredHz{0.0}; // fails if server_tick.congestion_recovered_send_hz < this
 };
 
 enum class ParseStatus { Ok, Help, Version, Error };
@@ -138,6 +150,30 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
             r.cfg.assertMaxDroppedTicks = std::strtoll(argv[++i], nullptr, 10);
+        } else if (std::strcmp(a, "--degrade-start") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.degradeStartS = std::strtod(argv[++i], nullptr);
+        } else if (std::strcmp(a, "--degrade-duration") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.degradeDurationS = std::strtod(argv[++i], nullptr);
+        } else if (std::strcmp(a, "--degrade-loss") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.degradeLoss = std::strtod(argv[++i], nullptr);
+        } else if (std::strcmp(a, "--degrade-delay-ms") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.degradeDelayMs = std::atoi(argv[++i]);
+        } else if (std::strcmp(a, "--assert-congestion-engaged-hz") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.assertCongestionEngagedHz = std::strtod(argv[++i], nullptr);
+        } else if (std::strcmp(a, "--assert-congestion-recovered-hz") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.assertCongestionRecoveredHz = std::strtod(argv[++i], nullptr);
         } else if (a[0] == '-' && a[1] != '\0') {
             r.status = ParseStatus::Error;
             r.error = std::string("unknown flag: ") + a;
@@ -190,6 +226,20 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
         fail("--assert-min-entities must be >= 0");
     else if (r.cfg.assertMaxRssGrowthKb < 0)
         fail("--assert-max-rss-growth-kb must be >= 0");
+    else if (r.cfg.degradeStartS < 0.0)
+        fail("--degrade-start must be >= 0");
+    else if (r.cfg.degradeDurationS < 0.0)
+        fail("--degrade-duration must be >= 0");
+    else if (r.cfg.degradeLoss < 0.0 || r.cfg.degradeLoss > 1.0)
+        fail("--degrade-loss must be in [0, 1]");
+    else if (r.cfg.degradeDelayMs < 0 || r.cfg.degradeDelayMs > 10000)
+        fail("--degrade-delay-ms must be in [0, 10000]");
+    else if (r.cfg.degradeDurationS > 0.0 && r.cfg.degradeLoss == 0.0 && r.cfg.degradeDelayMs == 0)
+        fail("--degrade-duration needs --degrade-loss and/or --degrade-delay-ms");
+    else if (r.cfg.assertCongestionEngagedHz < 0.0 || r.cfg.assertCongestionEngagedHz > 60.0)
+        fail("--assert-congestion-engaged-hz must be in [0, 60]");
+    else if (r.cfg.assertCongestionRecoveredHz < 0.0 || r.cfg.assertCongestionRecoveredHz > 60.0)
+        fail("--assert-congestion-recovered-hz must be in [0, 60]");
     return r;
 }
 

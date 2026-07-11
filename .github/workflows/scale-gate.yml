@@ -12,14 +12,14 @@ on:
   # crons below and adding `github.event_name == 'schedule'` back to the `reference-gate` job's `if`
   # (map `github.event.schedule` -> profile set in the `select-profiles` job):
   #   schedule:
-  #     - cron: '30 6 * * *'   # nightly -> reference + overrun (#574)
+  #     - cron: '30 6 * * *'   # nightly -> reference + overrun (#574) + congestion (#714)
   #     - cron: '0 4 * * 6'    # weekly  -> soak
   workflow_dispatch:
     inputs:
       profile:
         description: 'Profile to run on the self-hosted reference runner'
         type: choice
-        options: [reference, nightly, soak, entity-scale, overrun]
+        options: [reference, nightly, soak, entity-scale, overrun, congestion]
         default: reference
 
 concurrency:
@@ -130,10 +130,11 @@ jobs:
           PROFILE: ${{ github.event.inputs.profile }}
         run: |
           case "$PROFILE" in
-            # `nightly` = the deferred nightly cron's set: the raw-capacity reference run plus the
-            # synthetic tick-overrun profile (#574), which runs the governor ON (scale_gate.py sets
-            # FL_LOADTEST_GOVERNOR=1 from the profile's `governor: true`) and asserts it sheds.
-            nightly) legs='[{"profile":"reference"},{"profile":"overrun"}]' ;;
+            # `nightly` = the deferred nightly cron's set: the raw-capacity reference run, the
+            # synthetic tick-overrun profile (#574, governor ON via FL_LOADTEST_GOVERNOR=1 from the
+            # profile's `governor: true`), and the synthetic congestion profile (#714, lossy-proxy
+            # degrade window via the profile's --degrade-* flags).
+            nightly) legs='[{"profile":"reference"},{"profile":"overrun"},{"profile":"congestion"}]' ;;
             *)       legs="[{\"profile\":\"$PROFILE\"}]" ;;
           esac
           echo "legs=$legs" >> "$GITHUB_OUTPUT"
