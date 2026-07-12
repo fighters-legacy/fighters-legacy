@@ -117,6 +117,20 @@ target_include_directories(validate-flight-model-lib PUBLIC
 add_executable(validate-flight-model validate-flight-model/main.cpp)
 target_link_libraries(validate-flight-model PRIVATE validate-flight-model-lib)
 
+# Schema validity is delegated to the engine's own parser (engine-weapon), so the validator and the
+# runtime cannot drift. engine-weapon is pure stdlib + toml++ — it pulls in no platform-hal, so this
+# stays an always-built asset tool.
+add_library(validate-weapon-lib STATIC
+    validate-weapon/weapon_validator.cpp)
+target_link_libraries(validate-weapon-lib
+    PUBLIC tomlplusplus::tomlplusplus
+    PRIVATE engine-weapon)
+target_include_directories(validate-weapon-lib PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/validate-weapon")
+
+add_executable(validate-weapon validate-weapon/main.cpp)
+target_link_libraries(validate-weapon PRIVATE validate-weapon-lib)
+
 add_library(validate-mission-lib STATIC validate-mission/mission_validator.cpp)
 target_link_libraries(validate-mission-lib PUBLIC yaml-cpp::yaml-cpp)
 target_include_directories(validate-mission-lib PUBLIC

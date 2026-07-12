@@ -381,6 +381,10 @@ if(WIN32)
 endif()
 catch_discover_tests(test_input_hal DISCOVERY_MODE PRE_TEST)
 
+add_executable(test_validate_weapon test_validate_weapon.cpp)
+target_link_libraries(test_validate_weapon PRIVATE Catch2::Catch2WithMain validate-weapon-lib)
+catch_discover_tests(test_validate_weapon)
+
 add_executable(test_validate_flight_model test_validate_flight_model.cpp)
 target_link_libraries(test_validate_flight_model
     PRIVATE Catch2::Catch2WithMain validate-flight-model-lib)
