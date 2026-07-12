@@ -238,6 +238,13 @@ default = "gbu32"
 
 Each weapon is a standalone TOML file. Aircraft TOML hardpoints reference weapon IDs.
 
+> **`[seeker]` is scheduled to change.** The 2026-07-12 sensor decision record
+> (`docs/architecture.md` → Decision Records) locks a **single `SensorDef` vocabulary** shared by
+> missile seekers, player avionics and AI detection. This block's ad-hoc fields (`fov_deg`,
+> `acquisition_nm`) will become a **reference to a sensor def** when the sensor core lands
+> (tracked under #583). The shape below still describes what the parser accepts today; treat it as
+> provisional and expect a documented migration rather than authoring a large library against it.
+
 ```toml
 # weapons/aim120c.toml — Active-radar air-to-air missile
 [weapon]
@@ -300,6 +307,13 @@ drag_factor = 0.020
 ---
 
 ## Ground & Naval Unit Data — TOML
+
+> **`[radar]` is scheduled to change.** Like `[seeker]` above, this block is superseded by the
+> shared `SensorDef` vocabulary locked in the 2026-07-12 sensor decision record: `track_range_nm`
+> and the search/track distinction move into a sensor def, and `can_shutdown` generalizes into the
+> per-observer **`emitting`** flag that radar and laser track lobes require (the EMCON/RWR seam).
+> `emitter_id` survives as the sensor-def reference. Migration lands with player avionics (#526);
+> the block below is what the parser accepts today.
 
 ```toml
 # units/sa10_battery.toml

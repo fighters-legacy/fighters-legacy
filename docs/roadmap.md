@@ -60,7 +60,7 @@ by dependency, not by phase boundary:
 | I | Load-testing / bot-swarm harness + 128-client scale gate | 3→4 |
 | L | Network transport replacement — **GameNetworkingSockets landed behind `INetwork`** ([#507](https://github.com/fighters-legacy/fighters-legacy/issues/507)/#508/#509; selected [#506](https://github.com/fighters-legacy/fighters-legacy/issues/506)), enet6 retained as the LAN/low-count backend via `createNetwork()`. Remaining: GNS-native 128-client scale validation ([#649](https://github.com/fighters-legacy/fighters-legacy/issues/649), under Epic I) + Windows/macOS GNS CI legs ([#653](https://github.com/fighters-legacy/fighters-legacy/issues/653)) + enet6-retirement decision ([#652](https://github.com/fighters-legacy/fighters-legacy/issues/652)). | 3→4 (transport optimization) |
 | E | Multiplayer gameplay framework (game modes, teams, scoring, reconnect, spectator) | 4 |
-| F | Combat sensors, datalink & EW (radar modes, IFF, shared track picture) | 4 |
+| F | Combat sensors, datalink & EW (radar modes, IFF, shared track picture). Built on one shared sensor core ([#677](https://github.com/fighters-legacy/fighters-legacy/issues/677)) whose vocabulary is locked by the 2026-07-12 decision record — a single `SensorDef` schema and `Contact` track model serving avionics, AI detection ([#670](https://github.com/fighters-legacy/fighters-legacy/issues/670)) and missile seekers alike. | 4 |
 | J | Voice comms (positional + team; moved earlier from Phase 7) | 4/6 |
 | H | Persistence layer (`IPersistence`: accounts, stats, bans, world state) | 5 |
 | C | Player identity, accounts & authentication (pluggable, offline-verifiable tokens) | 5 |
