@@ -6,7 +6,9 @@
       "_comment": "Deterministic PR tier: only machine-independent metrics are hard-gated (bandwidth + admission + KB/s baseline). tick-Hz is a total-collapse tripwire; tick-ms is advisory (0 = disabled) because the client-side proxy and CPU timing are noisy on shared runners.",
       "clients": 64,
       "duration_s": 30,
-      "patterns": ["weave"],
+      "patterns": [
+        "weave"
+      ],
       "sim_worker_threads": 0,
       "assert_max_kbs": 150,
       "assert_min_tick_hz": 30,
@@ -16,7 +18,11 @@
       "_comment": "Strict tier for the 8-core/16GB reference instance (or a self-hosted runner via --strict). tick-ms p99 enforced there; advisory on hosted runners.",
       "clients": 128,
       "duration_s": 60,
-      "patterns": ["idle", "weave", "aggressive"],
+      "patterns": [
+        "idle",
+        "weave",
+        "aggressive"
+      ],
       "sim_worker_threads": 0,
       "assert_max_kbs": 150,
       "assert_min_tick_hz": 58,
@@ -26,7 +32,9 @@
       "_comment": "2 h soak-stability run. Same strict thresholds; the server self-reports RSS in the tick metrics (#707) and the leak gate hard-fails if growth exceeds assert_max_rss_growth_kb (~256 MiB over 2 h).",
       "clients": 128,
       "duration_s": 7200,
-      "patterns": ["weave"],
+      "patterns": [
+        "weave"
+      ],
       "sim_worker_threads": 0,
       "assert_max_kbs": 150,
       "assert_min_tick_hz": 58,
@@ -34,24 +42,42 @@
       "assert_max_rss_growth_kb": 262144
     },
     "entity-scale": {
-      "_comment": "Entity-pool + SpatialIndex scaling characterisation (#573). Sweeps entity count x sim worker count via FL_TEST_SPAWN_AI / FL_SIM_WORKER_THREADS, driven from the [world] load-spawn affordance. Advisory only (baselined=false): reads server_tick.entities + tick p99 into the summary but never gates the committed KB/s baseline. Reference-tier (nightly / workflow_dispatch) — needs the 8-core reference box for meaningful CPU timing.",
+      "_comment": "Entity-pool + SpatialIndex scaling characterisation (#573). Sweeps entity count x sim worker count via FL_TEST_SPAWN_AI / FL_SIM_WORKER_THREADS, driven from the [world] load-spawn affordance. Advisory only (baselined=false): reads server_tick.entities + tick p99 into the summary but never gates the committed KB/s baseline. Reference-tier (nightly / workflow_dispatch) \u2014 needs the 8-core reference box for meaningful CPU timing.",
       "clients": 64,
       "duration_s": 60,
-      "patterns": ["weave"],
-      "entity_spawn_counts": [0, 500, 2000, 5000],
-      "sim_worker_threads_sweep": [1, 2, 4, 8],
+      "patterns": [
+        "weave"
+      ],
+      "entity_spawn_counts": [
+        0,
+        500,
+        2000,
+        5000
+      ],
+      "sim_worker_threads_sweep": [
+        1,
+        2,
+        4,
+        8
+      ],
       "baselined": false,
       "assert_max_kbs": 0,
       "assert_min_tick_hz": 0,
       "assert_max_tick_ms": 16.6
     },
     "overrun": {
-      "_comment": "Synthetic tick-overrun profile (#574): proves the #514 graceful overrun governor ENGAGES and SHEDS rather than spiralling. Runs with the governor ON (governor=true -> FL_LOADTEST_GOVERNOR=1) and deterministically overloads a serialize-bound tick with test_spawn_ai=5000 at sim_workers=1 (the #573 characterisation measured ~36.8 Hz governor-off here — a large portable margin below 60 Hz). Gates: max_load_factor 0.99 fails if the governor never engaged (load_factor stayed 1.0 — the primary bite, verified during dev to drop to ~0.25 governor-on vs 1.0 governor-off); max_dropped_ticks 100 is the graceful-not-spiral bound (a small allowance absorbs the one-time startup-spawn + EWMA-ramp transient before the governor engages — measured ~24 drops in a debug smoke; a genuine spiral produces thousands over 90 s); --assert-min-entities 5000 (auto from the load-spawn) confirms the overload took. baselined=false: the shed KB/s must NEVER touch the committed bandwidth baseline. Reference tier only (nightly / workflow_dispatch) — the collapse margin is reliable only on a controlled runtime.",
+      "_comment": "Synthetic tick-overrun profile (#574): proves the #514 graceful overrun governor ENGAGES and SHEDS rather than spiralling. Runs with the governor ON (governor=true -> FL_LOADTEST_GOVERNOR=1) and deterministically overloads a serialize-bound tick with test_spawn_ai=5000 at sim_workers=1 (the #573 characterisation measured ~36.8 Hz governor-off here \u2014 a large portable margin below 60 Hz). Gates: max_load_factor 0.99 fails if the governor never engaged (load_factor stayed 1.0 \u2014 the primary bite, verified during dev to drop to ~0.25 governor-on vs 1.0 governor-off); max_dropped_ticks 100 is the graceful-not-spiral bound (a small allowance absorbs the one-time startup-spawn + EWMA-ramp transient before the governor engages \u2014 measured ~24 drops in a debug smoke; a genuine spiral produces thousands over 90 s); --assert-min-entities 5000 (auto from the load-spawn) confirms the overload took. baselined=false: the shed KB/s must NEVER touch the committed bandwidth baseline. Reference tier only (nightly / workflow_dispatch) \u2014 the collapse margin is reliable only on a controlled runtime.",
       "clients": 32,
       "duration_s": 90,
-      "patterns": ["weave"],
-      "entity_spawn_counts": [5000],
-      "sim_worker_threads_sweep": [1],
+      "patterns": [
+        "weave"
+      ],
+      "entity_spawn_counts": [
+        5000
+      ],
+      "sim_worker_threads_sweep": [
+        1
+      ],
       "governor": true,
       "baselined": false,
       "assert_max_kbs": 0,
@@ -61,10 +87,12 @@
       "assert_max_dropped_ticks": 100
     },
     "congestion": {
-      "_comment": "Synthetic congestion profile (#714): proves the #518 per-peer AIMD send-rate controller ENGAGES on a degraded link and RECOVERS when it clears. bot_swarm routes its clients through a local lossy UDP proxy that drops 5% of datagrams + adds 100 ms one-way delay in a mid-run window ([25s, 55s) from proxy start — after the connect ramp, ending ~35s before the run ends so the additive ramp-up has a clean tail to recover in). The +100 ms delay (+200 ms RTT, far over the controller's 40 ms margin) is the deterministic engage trigger; the 5% loss is a secondary delivery stressor kept BELOW the level that trips ENet's own peer timeout (a 15% dev run dropped a client mid-window, failing admission — verified 5%+100ms keeps all peers connected while still engaging to the 10 Hz floor). Gates (schema v5 run-long watermarks): congestion_min_send_hz must fall to <= 30 (engaged; the controller floor is 10 Hz) and congestion_recovered_send_hz must climb back to >= 55 (recovered). baselined=false: degraded KB/s must never touch the committed bandwidth baseline. Reference tier only (nightly / workflow_dispatch).",
+      "_comment": "Synthetic congestion profile (#714): proves the #518 per-peer AIMD send-rate controller ENGAGES on a degraded link and RECOVERS when it clears. bot_swarm routes its clients through a local lossy UDP proxy that drops 5% of datagrams + adds 100 ms one-way delay in a mid-run window ([25s, 55s) from proxy start \u2014 after the connect ramp, ending ~35s before the run ends so the additive ramp-up has a clean tail to recover in). The +100 ms delay (+200 ms RTT, far over the controller's 40 ms margin) is the deterministic engage trigger; the 5% loss is a secondary delivery stressor kept BELOW the level that trips ENet's own peer timeout (a 15% dev run dropped a client mid-window, failing admission \u2014 verified 5%+100ms keeps all peers connected while still engaging to the 10 Hz floor). Gates (schema v5 run-long watermarks): congestion_min_send_hz must fall to <= 30 (engaged; the controller floor is 10 Hz) and congestion_recovered_send_hz must climb back to >= 55 (recovered). baselined=false: degraded KB/s must never touch the committed bandwidth baseline. Reference tier only (nightly / workflow_dispatch).",
       "clients": 16,
       "duration_s": 90,
-      "patterns": ["weave"],
+      "patterns": [
+        "weave"
+      ],
       "degrade_start_s": 25,
       "degrade_duration_s": 30,
       "degrade_loss": 0.05,
@@ -77,18 +105,43 @@
       "assert_congestion_recovered_hz": 55
     },
     "entity-churn": {
-      "_comment": "Heavier-AI-mix + projectile-churn characterisation (#580, extends the #573 entity-scale matrix which deliberately used cheap static loiterers). Pre-spawns entities with a representative controller mix (60% loiter / 25% pursuit [EntityManager::get on a moving target each tick] / 15% patrol [a StateMachineController whose AnyEntityWithinRange transitions run SpatialIndex::queryRadius EVERY tick — the expensive AI path the governor's AI stride decimates]) and runs the projectile-churn generator (120 spawn+reap/s, 3 s TTL => ~360 extra live entities at steady state; continuous EntityPool alloc/free + SnapshotDespawn TLV traffic). Compare ai_ms / collision_ms / maintenance_ms against the same entity_spawn_counts points in the entity-scale matrix (docs/entity-scale-characterization.md). Advisory only (baselined=false). Reference tier (workflow_dispatch on demand, like entity-scale).",
+      "_comment": "Heavier-AI-mix + projectile-churn characterisation (#580, extends the #573 entity-scale matrix which deliberately used cheap static loiterers). Pre-spawns entities with a representative controller mix (60% loiter / 25% pursuit [EntityManager::get on a moving target each tick] / 15% patrol [a StateMachineController whose AnyEntityWithinRange transitions run SpatialIndex::queryRadius EVERY tick \u2014 the expensive AI path the governor's AI stride decimates]) and runs the projectile-churn generator (120 spawn+reap/s, 3 s TTL => ~360 extra live entities at steady state; continuous EntityPool alloc/free + SnapshotDespawn TLV traffic). Compare ai_ms / collision_ms / maintenance_ms against the same entity_spawn_counts points in the entity-scale matrix (docs/entity-scale-characterization.md). Advisory only (baselined=false). Reference tier (workflow_dispatch on demand, like entity-scale).",
       "clients": 64,
       "duration_s": 60,
-      "patterns": ["weave"],
-      "entity_spawn_counts": [500, 2000, 5000],
-      "sim_worker_threads_sweep": [1, 8],
+      "patterns": [
+        "weave"
+      ],
+      "entity_spawn_counts": [
+        500,
+        2000,
+        5000
+      ],
+      "sim_worker_threads_sweep": [
+        1,
+        8
+      ],
       "ai_mix": "loiter:60,pursuit:25,patrol:15",
       "projectile_rate": 120,
       "projectile_ttl_s": 3.0,
       "baselined": false,
       "assert_max_kbs": 0,
       "assert_min_tick_hz": 0,
+      "assert_max_tick_ms": 16.6
+    },
+    "gns": {
+      "_comment": "128-client GNS scale gate (#649). GameNetworkingSockets is the DEFAULT internet transport on all three platforms (#507) but every gate leg is deliberately enet6 (bot_swarm is the enet6 regression instrument), so the transport most players will actually use had never been scale-tested. This profile pins BOTH ends to GNS (FL_LOADTEST_TRANSPORT=gns -> fl-server --transport gns + bot_swarm --transport gns) and otherwise mirrors `reference` so the two are directly comparable. REQUIRES an FL_ENABLE_GNS=ON build: bot_swarm hard-fails rather than silently falling back to enet6, and the gate cross-checks the report's `transport` key, so a downgraded run fails instead of passing as a GNS validation. baselined=false: GNS carries encryption + different framing, so its KB/s is legitimately NOT the enet6 number and must never be compared against the committed enet6 baseline (bandwidth is still hard-gated by the absolute 150 KB/s/client ceiling). Reference tier only (nightly / workflow_dispatch).",
+      "clients": 128,
+      "duration_s": 60,
+      "patterns": [
+        "idle",
+        "weave",
+        "aggressive"
+      ],
+      "transport": "gns",
+      "baselined": false,
+      "sim_worker_threads": 0,
+      "assert_max_kbs": 150,
+      "assert_min_tick_hz": 58,
       "assert_max_tick_ms": 16.6
     }
   }

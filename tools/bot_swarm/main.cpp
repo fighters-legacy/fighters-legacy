@@ -2,7 +2,8 @@
 //
 // bot_swarm — headless multi-client load generator for fighters-legacy.
 //
-// Spins up N synthetic game clients (each its own ENetNetwork) against a running fl-server,
+// Spins up N synthetic game clients (each its own INetwork backend — enet6 by default, GNS via
+// --transport, #649) against a running fl-server,
 // sustains MsgClientInput at a configurable rate using a pluggable flight pattern, and reports
 // the client-observable scale metrics: connect success, downstream KB/s per client, RTT,
 // observed server tick-Hz (from snapshot tickIndex progression), and worker loop dt.
@@ -11,10 +12,9 @@
 // launch fl-server with a load-test config, and docs/load-testing.md for the methodology.
 //
 // Usage: bot_swarm [host] [port] [--clients N] [--duration S] [--rate HZ] [--ramp-ms MS]
-//                  [--threads N] [--pattern NAME] [--json PATH]
+//                  [--threads N] [--pattern NAME] [--transport enet|gns] [--json PATH]
 //                  [--assert-min-tick-hz X] [--assert-max-kbs Y]
 #include "BotClient.h"
-#include "ENetNetworkFactory.h"
 #include "LossyProxy.h"
 #include "SwarmConfig.h"
 #include "SwarmMetrics.h"
@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <net/NetworkFactory.h>
 #include <string>
 #include <thread>
 #include <vector>
@@ -77,6 +78,8 @@ void printHelp() {
                 "  --pattern NAME         weave|level|aggressive|idle|random|trace:<file> (default: weave)\n"
                 "  --pattern-mix SPEC     Weighted heterogeneous swarm, e.g. \"weave:80,aggressive:20\"\n"
                 "                         (supersedes --pattern; deterministic per-client assignment)\n"
+                "  --transport NAME       enet|gns — transport the synthetic clients speak (default: enet).\n"
+                "                         gns requires an FL_ENABLE_GNS=ON build AND fl-server --transport gns\n"
                 "  --json PATH            Write a JSON report to PATH\n"
                 "  --server-metrics PATH  Read fl-server --metrics-json file; embed authoritative server_tick block\n"
                 "  --assert-min-tick-hz X Exit nonzero if observed server tick-Hz min < X\n"
@@ -128,7 +131,8 @@ void runWorker(int threadIdx, int startIdx, int count, const SwarmConfig cfg, st
     bots.reserve(static_cast<size_t>(count));
     for (int i = 0; i < count; ++i) {
         const auto idx = static_cast<uint32_t>(startIdx + i);
-        bots.push_back(std::make_unique<BotClient>(idx, plan.make(idx), cfg.rateHz));
+        bots.push_back(std::make_unique<BotClient>(idx, plan.make(idx), cfg.rateHz,
+                                                   parseTransportKind(cfg.transport, TransportKind::Enet)));
     }
 
     // ---- Ramp connect ----
@@ -235,7 +239,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (pr.status == ParseStatus::Version) {
-        std::printf("bot_swarm %s (%s)\n", kVersion, enetLibraryVersion());
+        std::printf("bot_swarm %s (%s)\n", kVersion, networkBackendVersion(TransportKind::Enet));
         return 0;
     }
     if (pr.status == ParseStatus::Error) {
@@ -253,6 +257,18 @@ int main(int argc, char** argv) {
         if (const char* e = std::getenv("FL_PORT"))
             cfg.port = static_cast<uint16_t>(std::atoi(e));
     }
+
+    // Transport availability (#649). createNetwork() falls back to enet6 when GNS was requested in
+    // an enet6-only build — a convenience for the game, but a LIE for a gate: the run would report
+    // "gns" while measuring enet6 and pass. Fail loudly instead. (Same class of trap as #653's
+    // silent dependencies.cmake fallback, which is why that leg asserts FL_ENABLE_GNS post-configure.)
+    const TransportKind transport = parseTransportKind(cfg.transport, TransportKind::Enet);
+    if (!transportAvailable(transport)) {
+        std::printf("[ERROR] --transport gns requires an FL_ENABLE_GNS=ON build; this binary is "
+                    "enet6-only. Refusing to silently run on enet6.\n");
+        return 2;
+    }
+    std::printf("[INFO ] transport: %s (%s)\n", cfg.transport.c_str(), networkBackendVersion(transport));
 
     // Worker thread count.
     int threads = cfg.threads;

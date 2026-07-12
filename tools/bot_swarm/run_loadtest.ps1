@@ -110,13 +110,19 @@ tick_json_interval_ms = 250
 "@
 $ConfigText | Set-Content -Path $Config -Encoding UTF8
 
+# FL_LOADTEST_TRANSPORT (#649): transport BOTH ends speak, overriding the [network].transport
+# default. Default enet6 — bot_swarm is the enet6 regression instrument (#507/#519). "gns" needs an
+# FL_ENABLE_GNS=ON build; bot_swarm hard-fails rather than silently falling back to enet6.
+$Transport = if ($env:FL_LOADTEST_TRANSPORT) { $env:FL_LOADTEST_TRANSPORT } else { "enet" }
+if ($Transport -ne "enet" -and $Transport -ne "gns") {
+    Write-Error "FL_LOADTEST_TRANSPORT must be enet or gns (got '$Transport')"
+}
+
 # FL_SIM_WORKER_THREADS sweeps the data-parallel sim worker count without editing config (#511/#573).
-# --transport enet: bot_swarm is the enet6 regression instrument (#507/#519); the server under test
-# must speak enet6 to accept it, regardless of the [network].transport default.
-$SrvArgs = @("$Port", "$MaxPeers", "--bind", "127.0.0.1", "--transport", "enet")
+$SrvArgs = @("$Port", "$MaxPeers", "--bind", "127.0.0.1", "--transport", "$Transport")
 if ($env:FL_SIM_WORKER_THREADS) { $SrvArgs += @("--sim-worker-threads", "$($env:FL_SIM_WORKER_THREADS)") }
 
-Write-Host "=== bot_swarm load test: $Clients clients, pattern=$Pattern, ${Duration}s, port $Port (test_spawn_ai=$TestSpawnAi governor=$GovernorEnabled) ==="
+Write-Host "=== bot_swarm load test: $Clients clients, pattern=$Pattern, ${Duration}s, port $Port (test_spawn_ai=$TestSpawnAi governor=$GovernorEnabled transport=$Transport) ==="
 $env:FL_CONFIG = $Config
 $SrvProc = Start-Process -FilePath $FlServer `
     -ArgumentList $SrvArgs `
@@ -127,7 +133,7 @@ try {
     if ($SrvProc.HasExited) { Write-Error "fl-server exited during startup" }
 
     & $BotSwarm 127.0.0.1 $Port `
-        --clients $Clients --duration $Duration --pattern $Pattern `
+        --clients $Clients --duration $Duration --pattern $Pattern --transport $Transport `
         --json $Report --server-metrics $Metrics @ExtraArgs
     $Status = $LASTEXITCODE
 

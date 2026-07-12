@@ -521,3 +521,54 @@ def test_main_update_baseline_refuses_non_baselined_profile(tmp_path, monkeypatc
                   "--baseline", str(baseline), "--update-baseline"])
     assert rc == 1
     assert not baseline.exists()
+
+
+# ---- transport (#649) ----------------------------------------------------------------------------
+def test_default_profile_transport_is_enet():
+    # bot_swarm stays the enet6 regression instrument: every pre-existing profile must be unchanged.
+    assert sg.PROFILE_DEFAULTS["transport"] == "enet"
+
+
+def test_evaluate_passes_when_the_measured_transport_matches_the_profile():
+    r = _report()
+    r["transport"] = "gns"
+    ev = sg.evaluate_report(r, _profile(transport="gns"), strict=True)
+    assert ev["passed"]
+
+
+def test_evaluate_fails_a_gns_profile_that_actually_measured_enet():
+    # The whole point of the gate: a GNS run that silently fell back to enet6 must FAIL, not pass.
+    # bot_swarm refuses the fallback outright; this is the gate-layer backstop (and it catches a
+    # stale binary that predates the transport plumbing).
+    r = _report()
+    r["transport"] = "enet"
+    ev = sg.evaluate_report(r, _profile(transport="gns"), strict=True)
+    assert not ev["passed"]
+    assert any(c["name"] == "transport" and not c["ok"] for c in ev["checks"])
+
+
+def test_pre_v3_reports_without_a_transport_key_are_treated_as_enet():
+    ev = sg.evaluate_report(_report(), _profile(), strict=True)  # no "transport" key at all
+    assert ev["passed"]
+
+
+def test_gns_profile_is_not_baselined_and_pins_both_ends():
+    cfg = sg.load_config(sg.DEFAULT_CONFIG)
+    prof = sg.load_profile(cfg, "gns")
+    assert prof["transport"] == "gns"
+    assert prof["clients"] == 128
+    # GNS bandwidth (encryption + framing) is legitimately not the enet6 number: it must never be
+    # compared against the committed enet6 KB/s baseline.
+    assert prof["baselined"] is False
+
+
+def test_gns_profile_sets_the_runner_transport_env():
+    cfg = sg.load_config(sg.DEFAULT_CONFIG)
+    runs = sg.expand_runs(sg.load_profile(cfg, "gns"))
+    assert all(r["env"].get("FL_LOADTEST_TRANSPORT") == "gns" for r in runs)
+
+
+def test_enet_profiles_do_not_set_the_transport_env():
+    cfg = sg.load_config(sg.DEFAULT_CONFIG)
+    runs = sg.expand_runs(sg.load_profile(cfg, "pr"))
+    assert all("FL_LOADTEST_TRANSPORT" not in r["env"] for r in runs)

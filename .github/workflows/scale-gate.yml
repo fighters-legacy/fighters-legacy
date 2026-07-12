@@ -19,7 +19,7 @@ on:
       profile:
         description: 'Profile to run on the self-hosted reference runner'
         type: choice
-        options: [reference, nightly, soak, entity-scale, overrun, congestion, entity-churn]
+        options: [reference, nightly, soak, entity-scale, overrun, congestion, entity-churn, gns]
         default: reference
 
 concurrency:
@@ -55,8 +55,9 @@ jobs:
       # Vulkan disabled: fl-server + bot_swarm are headless and don't need the renderer/glslang.
       # Matches tools/bot_swarm/reference-env/run-benchmark.sh — a known-good Release config.
       - name: Configure (Release, headless)
-        # GNS off: bot_swarm is the enet6 regression instrument, so fl-server is built enet6-only
-        # here (leaner, no protobuf dep). A GNS-vs-GNS scale profile is a follow-up.
+        # GNS off on the PR tier: bot_swarm defaults to enet6 (the regression instrument) and an
+        # enet6-only build keeps this leg fast (no protobuf/OpenSSL dep). The GNS-vs-GNS profile
+        # (#649) runs on the reference runner, where 128 clients are meaningful — see the `gns` leg.
         run: cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON -DFL_ENABLE_GNS=OFF
 
       - name: Build fl-server + bot_swarm
@@ -132,9 +133,10 @@ jobs:
           case "$PROFILE" in
             # `nightly` = the deferred nightly cron's set: the raw-capacity reference run, the
             # synthetic tick-overrun profile (#574, governor ON via FL_LOADTEST_GOVERNOR=1 from the
-            # profile's `governor: true`), and the synthetic congestion profile (#714, lossy-proxy
-            # degrade window via the profile's --degrade-* flags).
-            nightly) legs='[{"profile":"reference"},{"profile":"overrun"},{"profile":"congestion"}]' ;;
+            # profile's `governor: true`), the synthetic congestion profile (#714, lossy-proxy
+            # degrade window via the profile's --degrade-* flags), and the GNS profile (#649 — the
+            # DEFAULT internet transport, validated at 128 clients; built FL_ENABLE_GNS=ON below).
+            nightly) legs='[{"profile":"reference"},{"profile":"overrun"},{"profile":"congestion"},{"profile":"gns"}]' ;;
             *)       legs="[{\"profile\":\"$PROFILE\"}]" ;;
           esac
           echo "legs=$legs" >> "$GITHUB_OUTPUT"
@@ -168,9 +170,27 @@ jobs:
           submodules: recursive
 
       - name: Configure (Release, headless)
-        # GNS off: bot_swarm is the enet6 regression instrument, so fl-server is built enet6-only
-        # here (leaner, no protobuf dep). A GNS-vs-GNS scale profile is a follow-up.
-        run: cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON -DFL_ENABLE_GNS=OFF
+        # Every leg but `gns` is enet6-only: bot_swarm is the enet6 regression instrument, and an
+        # enet6-only build is leaner (no protobuf/OpenSSL dep). The `gns` leg (#649) builds with
+        # FL_ENABLE_GNS=ON so the DEFAULT internet transport is the one under test.
+        env:
+          PROFILE: ${{ matrix.leg.profile }}
+        run: |
+          # NB: `[ x = y ] && GNS=ON` would return non-zero for every non-gns leg and, under the
+          # runner's `bash -e`, abort the step. Use a plain if.
+          GNS=OFF
+          if [ "$PROFILE" = "gns" ]; then GNS=ON; fi
+          cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON -DFL_ENABLE_GNS=$GNS
+          # KEY GUARD (same trap as #653): cmake/dependencies.cmake *silently* force-disables GNS
+          # when OpenSSL/protobuf are missing, so a misprovisioned runner would build enet6-only and
+          # the "GNS gate" would happily measure enet6 and pass. Fail the leg instead. (bot_swarm
+          # also refuses --transport gns in an enet6-only build, and scale_gate.py cross-checks the
+          # report's `transport` key — three independent ways this cannot pass silently.)
+          if [ "$PROFILE" = "gns" ] && ! grep -qx 'FL_ENABLE_GNS:BOOL=ON' build/release/CMakeCache.txt; then
+            echo "::error::FL_ENABLE_GNS was force-disabled during configure — the runner is missing"\
+                 "OpenSSL/protobuf dev packages (see tools/bot_swarm/reference-env/vm-provision.sh)."
+            exit 1
+          fi
 
       - name: Build fl-server + bot_swarm
         run: cmake --build --preset release --target fl-server bot_swarm

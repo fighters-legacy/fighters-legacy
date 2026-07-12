@@ -409,7 +409,16 @@ void GnsNetwork::setPreHandshakeRateLimit(int /*maxAttempts*/, int /*windowMs*/)
 
 uint32_t GnsNetwork::connForPeer(uint32_t peerId) const {
     auto it = m_peerToConn.find(peerId);
-    return it != m_peerToConn.end() ? it->second : 0u;
+    if (it != m_peerToConn.end())
+        return it->second;
+    // Client side: the single outbound server connection is implicitly peer 0 — the receive and
+    // connection-status paths already report it as peerId 0 — but it lives in m_clientConn, not in
+    // the peer maps (which only the server's accept path populates). Without this fallback a GNS
+    // CLIENT's getPeerRtt(0) / getPeerLinkStats(0) always returned 0 while the enet6 backend
+    // reported real values (found by the #649 GNS load runs: the RTT column came back empty).
+    if (!m_isServer && peerId == 0u && m_clientConn)
+        return m_clientConn;
+    return 0u;
 }
 
 void GnsNetwork::closeAndErase(uint32_t conn, bool notify) {

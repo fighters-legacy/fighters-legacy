@@ -74,6 +74,15 @@ TEST_PROJECTILE_TTL_S="${FL_TEST_PROJECTILE_TTL_S:-3.0}"
 # FL_LOADTEST_GOVERNOR=1 flips the graceful tick-overrun governor (#514) ON — used by the synthetic
 # overrun profile (#574) to validate that the governor sheds under load. Default OFF, so the raw
 # capacity gate still measures un-shed sim/bandwidth against the committed baseline.
+# FL_LOADTEST_TRANSPORT (#649): transport BOTH ends speak. Default enet — bot_swarm is the enet6
+# regression instrument and every pre-existing profile must keep its exact behaviour. "gns" needs an
+# FL_ENABLE_GNS=ON build; bot_swarm hard-fails rather than silently falling back to enet6, so a GNS
+# run that cannot speak GNS fails the gate instead of quietly measuring the wrong transport.
+TRANSPORT="${FL_LOADTEST_TRANSPORT:-enet}"
+if [[ "$TRANSPORT" != "enet" && "$TRANSPORT" != "gns" ]]; then
+    echo "ERROR: FL_LOADTEST_TRANSPORT must be enet or gns (got '$TRANSPORT')"; exit 1
+fi
+
 GOVERNOR_ENABLED="false"
 [[ "${FL_LOADTEST_GOVERNOR:-0}" == "1" ]] && GOVERNOR_ENABLED="true"
 
@@ -127,10 +136,11 @@ fi
 
 echo "=== bot_swarm load test: $CLIENTS clients, pattern=$PATTERN, ${DURATION}s, port $PORT" \
      "(test_spawn_ai=$TEST_SPAWN_AI mix=${TEST_SPAWN_MIX:-loiter} churn=${TEST_PROJECTILE_RATE:-0}/s" \
-     "sim_workers=${FL_SIM_WORKER_THREADS:-default} governor=$GOVERNOR_ENABLED) ==="
-# --transport enet: bot_swarm is the enet6 regression instrument (#507/#519); the server under test
-# must speak enet6 to accept it, regardless of the [network].transport default.
-FL_CONFIG="$CONFIG" "$FLSERVER" "$PORT" "$MAX_PEERS" --bind 127.0.0.1 --transport enet \
+     "sim_workers=${FL_SIM_WORKER_THREADS:-default} governor=$GOVERNOR_ENABLED transport=$TRANSPORT) ==="
+# Both ends are pinned to the SAME transport explicitly, overriding the [network].transport default:
+# enet6 by default (bot_swarm is the enet6 regression instrument, #507/#519), gns for the #649 leg
+# that validates the DEFAULT internet transport at scale.
+FL_CONFIG="$CONFIG" "$FLSERVER" "$PORT" "$MAX_PEERS" --bind 127.0.0.1 --transport "$TRANSPORT" \
     ${SIM_WORKER_ARGS[@]+"${SIM_WORKER_ARGS[@]}"} &
 SERVER_PID=$!
 
@@ -149,7 +159,7 @@ RSS_START="$(ps -o rss= -p "$SERVER_PID" 2>/dev/null | tr -d ' ' || true)"
 # (e.g. --assert-* from the scale gate) are forwarded verbatim.
 set +e
 "$BOTSWARM" 127.0.0.1 "$PORT" \
-    --clients "$CLIENTS" --duration "$DURATION" --pattern "$PATTERN" \
+    --clients "$CLIENTS" --duration "$DURATION" --pattern "$PATTERN" --transport "$TRANSPORT" \
     --json "$REPORT" --server-metrics "$METRICS" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 STATUS=$?
 set -e

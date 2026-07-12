@@ -10,6 +10,7 @@
 #include "SwarmMetrics.h"
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include <string>
 #include <vector>
 
@@ -501,7 +502,7 @@ TEST_CASE("reportToJson emits the versioned schema and key fields", "[bot_swarm]
     clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
     const std::string json = reportToJson(buildReport(cfg, clients, 10.0, {16.6}, 1));
 
-    CHECK(json.find("\"schema_version\": 2") != std::string::npos);
+    CHECK(json.find("\"schema_version\": 3") != std::string::npos); // v3 adds "transport" (#649)
     CHECK(json.find("\"observed_server_tick_hz\"") != std::string::npos);
     CHECK(json.find("\"downstream_kbs_per_client\"") != std::string::npos);
     CHECK(json.find("\"clients_connected\": 1") != std::string::npos);
@@ -738,4 +739,46 @@ TEST_CASE("congestion gates assert on the run-long server watermarks (#714)", "[
         CHECK(json.find("\"congestion_engaged_hz\"") != std::string::npos);
         CHECK(json.find("\"congestion_recovered_hz\"") != std::string::npos);
     }
+}
+
+// ---- --transport (#649) -------------------------------------------------------------------------
+
+TEST_CASE("transport defaults to enet - bot_swarm stays the enet6 regression instrument (#649)",
+          "[bot_swarm][config][transport]") {
+    const SwarmParseResult r = parse({});
+    REQUIRE(r.status == ParseStatus::Ok);
+    CHECK(r.cfg.transport == "enet");
+}
+
+TEST_CASE("parseSwarmArgs accepts --transport gns and enet (#649)", "[bot_swarm][config][transport]") {
+    const SwarmParseResult g = parse({"--transport", "gns"});
+    REQUIRE(g.status == ParseStatus::Ok);
+    CHECK(g.cfg.transport == "gns");
+
+    const SwarmParseResult e = parse({"--transport", "enet"});
+    REQUIRE(e.status == ParseStatus::Ok);
+    CHECK(e.cfg.transport == "enet");
+}
+
+TEST_CASE("parseSwarmArgs rejects an unknown transport (#649)", "[bot_swarm][config][transport]") {
+    const SwarmParseResult r = parse({"--transport", "quic"});
+    CHECK(r.status == ParseStatus::Error);
+    CHECK_THAT(r.error, Catch::Matchers::ContainsSubstring("--transport"));
+}
+
+TEST_CASE("the report records the transport actually spoken, normalizing the enet6 alias (#649)",
+          "[bot_swarm][metrics][transport]") {
+    // The gate cross-checks this key: a GNS run that silently fell back to enet6 must not be able
+    // to report "gns". bot_swarm refuses that fallback outright, and the report states the truth.
+    SwarmConfig cfg;
+    cfg.transport = "gns";
+    std::vector<ClientMetrics> clients(1);
+    clients[0].connected = true;
+    const SwarmReport gns = buildReport(cfg, clients, 1.0, {}, 1);
+    CHECK(gns.transport == "gns");
+    CHECK_THAT(reportToJson(gns), Catch::Matchers::ContainsSubstring("\"transport\": \"gns\""));
+
+    cfg.transport = "enet6"; // accepted alias — normalized so the gate only ever sees enet/gns
+    const SwarmReport enet = buildReport(cfg, clients, 1.0, {}, 1);
+    CHECK(enet.transport == "enet");
 }

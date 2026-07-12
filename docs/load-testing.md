@@ -31,7 +31,8 @@ When `fl-server` is run with `--metrics-json PATH` (or `[metrics] tick_json_path
 atomic per-phase tick-budget JSON every `tick_json_interval_ms` (default 1000; the runner uses
 250). Point `bot_swarm --server-metrics PATH` at that file and the report gains an authoritative
 `server_tick` sibling block (the client-side `observed_server_tick_hz` proxy is retained for
-comparison). `bot_swarm` bumps `schema_version` to **2** when this block can be present.
+comparison). `bot_swarm` bumps `schema_version` to **2** when this block can be present, and to
+**3** for the `transport` key ([#649]) — the backend the swarm *actually* spoke.
 
 The same JSON shape is the standalone `--metrics-json` file and the embedded block:
 
@@ -223,6 +224,8 @@ snapshot-visible), `tick_ms` +11% — reference-environment numbers belong in
       --clients N            synthetic clients (default 32)
       --duration S           soak seconds (default 30)
       --rate HZ              MsgClientInput rate per client (default 60)
+      --transport NAME       enet|gns (default enet). gns needs an FL_ENABLE_GNS=ON build and an
+                             fl-server on --transport gns; it never falls back silently (#649)
       --ramp-ms MS           delay between successive connects (default 20)
       --threads N            worker threads (default auto = min(cores, ceil(clients/32)))
       --pattern NAME         weave | level | aggressive | idle | random | trace:<file> (default weave)
@@ -350,6 +353,71 @@ and the deterministic AIMD logic itself is covered by `test_congestion_controlle
 
 [#714]: https://github.com/fighters-legacy/fighters-legacy/issues/714
 
+## Validating the GNS transport (#649)
+
+`bot_swarm` defaults to **enet6** and always will: it is the enet6 regression instrument, and every
+pre-existing profile depends on that default. But **GameNetworkingSockets is the default internet
+transport** ([#507]) — the one most players actually use — and until #649 no gate leg ever spoke it.
+
+`--transport gns` points both ends at GNS:
+
+    FL_LOADTEST_TRANSPORT=gns ./tools/bot_swarm/run_loadtest.sh build/release 128 60 weave
+    python3 tools/bot_swarm/scale_gate.py --profile gns --build-dir build/release --strict
+
+It requires an `FL_ENABLE_GNS=ON` build. **A GNS run can never silently degrade into an enet6 run** —
+that would be a gate that lies, which is worse than no gate — so three independent things prevent it:
+
+1. `bot_swarm` **refuses** `--transport gns` in an enet6-only build (exit 2) instead of taking
+   `createNetwork`'s convenience fallback.
+2. The report records the backend actually spoken (`"transport"`, schema v3), and `scale_gate.py`
+   fails the run if it does not match the profile.
+3. The workflow asserts `FL_ENABLE_GNS:BOOL=ON` in `CMakeCache.txt` after configure — because
+   `cmake/dependencies.cmake` *silently* force-disables GNS when OpenSSL/protobuf are missing (the
+   same trap [#653] hit). The reference runner installs them via `reference-env/vm-provision.sh`.
+
+The `gns` profile is **not baselined**: GNS carries encryption and different framing, so its byte
+profile is legitimately not enet6's and must never be diffed against the committed enet6 KB/s
+baseline. Bandwidth is still hard-gated by the absolute 150 KB/s/client ceiling.
+
+### Measured: GNS vs enet6 at 128 clients
+
+Same box (8-core reference VM), same build, same session, Release, 60 s per pattern:
+
+| Pattern | enet6 tick p99 | **GNS tick p99** | enet6 KB/s | GNS KB/s | Admission |
+|---|---:|---:|---:|---:|---|
+| idle | 5.48 ms | **1.47 ms** | 71.4 | 71.4 | 128/128 both |
+| weave | 12.62 ms | **1.51 ms** | 72.3 | 72.3 | 128/128 both |
+| aggressive | 12.60 ms | **1.73 ms** | 73.5 | 73.5 | 128/128 both |
+
+**GNS cuts server tick p99 by ~7–8×.** The reason is *where the packet work happens*: ENet's `send()`
+does its per-packet work inline on the calling thread, so it lands inside the sim tick's **serialize**
+phase; GNS's `SendMessageToConnection` queues to its own internal service thread and returns. The
+sim thread stops paying for the packet pump.
+
+This materially changes a standing assumption: the **serialize-dominant tick** (8.09 of 8.28 ms mean
+at 128 clients) that motivated the deferral triggers in
+[spatial-sharding-design.md](spatial-sharding-design.md) and
+[physics-lod-design.md](physics-lod-design.md) is substantially an **ENet artifact**, not an inherent
+cost of the snapshot pipeline. Those trigger criteria should be re-derived on GNS before anyone acts
+on them.
+
+Two honest caveats:
+
+- **The KB/s figures cannot show GNS's wire overhead.** `downstream_kbs_per_client` counts
+  *application* snapshot payload bytes, not wire bytes — so identical KB/s is expected, and is *not*
+  evidence that encryption and framing are free. Measuring that needs a wire-level counter.
+- **Loopback.** The tick win is real and mechanical (work moved off the sim thread), but the absolute
+  numbers come from a loopback run on one box. GNS also spends CPU on its own service threads, which
+  an 8-core box pays for somewhere; the tick thread simply stops paying it.
+
+RTT reads 0 ms on loopback under GNS — that is honest, not broken: GNS reports integer-millisecond
+ping and loopback is sub-millisecond (enet6's coarser estimator floors near 16 ms). Through the
+lossy proxy's +50 ms one-way delay, GNS correctly reports 100 ms.
+
+[#649]: https://github.com/fighters-legacy/fighters-legacy/issues/649
+[#653]: https://github.com/fighters-legacy/fighters-legacy/issues/653
+[#507]: https://github.com/fighters-legacy/fighters-legacy/issues/507
+
 ## Platform notes
 
 - **macOS / Linux:** each client is a UDP socket; `bot_swarm` raises `RLIMIT_NOFILE` and the
@@ -381,6 +449,7 @@ Markdown summary to `$GITHUB_STEP_SUMMARY`.
 | **Soak** | manual `workflow_dispatch` (`profile=soak`) on `fl-reference` | `soak` (128 clients, weave, 2 h) | strict gates + RSS-growth leak (`--assert-max-rss-growth-kb`, from the server's self-reported `rss_kb`, [#707](https://github.com/fighters-legacy/fighters-legacy/issues/707)) | — |
 | **Overrun** | manual `workflow_dispatch` (`profile=overrun`, or `nightly` set) on `fl-reference` | `overrun` (32 clients, weave, governor **on**, `test_spawn_ai=5000` @ `sim_workers=1`) | governor engaged (`--assert-max-load-factor 0.99`) + graceful-not-spiral (`--assert-max-dropped-ticks 0`) + admission; **not baselined** ([#574](https://github.com/fighters-legacy/fighters-legacy/issues/574)) | tick-ms p99 |
 | **Congestion** | manual `workflow_dispatch` (`profile=congestion`, or `nightly` set) on `fl-reference` | `congestion` (16 clients, weave, lossy proxy: 5% loss + 100 ms delay in [25 s, 55 s)) | controller engaged (`--assert-congestion-engaged-hz 30`) + recovered (`--assert-congestion-recovered-hz 55`) + admission; **not baselined** ([#714](https://github.com/fighters-legacy/fighters-legacy/issues/714)) | — |
+| **GNS** | manual `workflow_dispatch` (`profile=gns`, or `nightly` set) on `fl-reference` | `gns` (128 clients; idle/weave/aggressive — mirrors `reference`, but **both ends speak GameNetworkingSockets**) | transport identity + admission + bandwidth + tick-Hz + **tick-ms p99 ≤16.6** (`--strict`); **not baselined** ([#649]) | — |
 
 The PR tier hard-gates only machine-independent metrics: `bot_swarm`'s `--assert-min-tick-hz` reads
 the *client-side proxy*, which sags when the harness itself is CPU-starved on a shared runner — a

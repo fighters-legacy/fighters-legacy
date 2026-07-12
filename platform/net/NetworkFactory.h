@@ -21,6 +21,12 @@ enum class TransportKind : uint8_t { Enet, Gns };
 // callers always get a usable transport.
 std::unique_ptr<INetwork> createNetwork(TransportKind kind, ILogger* log = nullptr);
 
+// True when `kind` is actually compiled into this build. Enet is always available; Gns only
+// under FL_ENABLE_GNS. Callers that must NOT be silently downgraded — a GNS scale-gate leg
+// would otherwise "pass" while measuring enet6 (#649) — check this and fail loudly instead of
+// relying on createNetwork's convenience fallback.
+bool transportAvailable(TransportKind kind);
+
 // Human-readable backend version string (e.g. "enet6 6.1.3" / "GameNetworkingSockets 1.6.0").
 // Valid for the lifetime of the process. Returns the enet string for Gns in an enet6-only build.
 const char* networkBackendVersion(TransportKind kind);

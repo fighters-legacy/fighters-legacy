@@ -56,7 +56,11 @@ if(TARGET platform-enet)
 
     # bot_swarm: headless multi-client load generator. Pure client (connects to an
     # existing fl-server); reuses the wire protocol via engine-protocol (zero-dep — no
-    # WorldBroadcaster / engine-entity) + platform-enet.
+    # WorldBroadcaster / engine-entity) + the platform-net transport facade.
+    # Links platform-net (not platform-enet directly) since #649: the swarm still DEFAULTS to
+    # enet6 — it remains the enet6 regression instrument — but --transport gns lets it exercise
+    # the default internet transport, which was otherwise never scale-tested. In an
+    # FL_ENABLE_GNS=OFF build, platform-net is enet6-only and bot_swarm refuses --transport gns.
     # No SDL/Vulkan/OpenAL deps — builds headless in CI.
     find_package(Threads REQUIRED)
     add_executable(bot_swarm
@@ -64,7 +68,7 @@ if(TARGET platform-enet)
         bot_swarm/BotClient.cpp
         bot_swarm/LossyProxy.cpp
     )
-    target_link_libraries(bot_swarm PRIVATE platform-enet platform-hal engine-protocol Threads::Threads)
+    target_link_libraries(bot_swarm PRIVATE platform-net platform-hal engine-protocol Threads::Threads)
     target_include_directories(bot_swarm PRIVATE
         "${CMAKE_SOURCE_DIR}/platform/net"
         "${CMAKE_CURRENT_SOURCE_DIR}/common"

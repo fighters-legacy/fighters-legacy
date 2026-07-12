@@ -20,8 +20,10 @@
 #   4. Transport facade (direct): the game binary and `fl-server` must not link `platform-enet` /
 #      `platform-gns` directly — they go through the `createNetwork()` facade (`platform-net`),
 #      which reaches the backends transitively by design (so this rule is direct-links-only).
-#      Locks in the #507 HAL-leak fix. The load tools (net_check, bot_swarm) deliberately link
-#      platform-enet and are exempt (the rule names only the two binaries).
+#      Locks in the #507 HAL-leak fix. The load tools are exempt (the rule names only the two
+#      binaries): net_check links platform-enet directly (it IS the enet6 regression instrument),
+#      and bot_swarm links the platform-net facade so it can select enet6 (its default) or GNS
+#      via --transport for the #649 GNS scale gate.
 #
 # fl_assert_layering() is armed from the root CMakeLists.txt via cmake_language(DEFER CALL ...) so
 # it runs after every add_subdirectory() — all targets exist, including conditional ones

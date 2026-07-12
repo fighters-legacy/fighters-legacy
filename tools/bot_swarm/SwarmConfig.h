@@ -20,9 +20,15 @@ struct SwarmConfig {
     int durationS{30};
     int rateHz{60};
     int rampMs{20};
-    int threads{0};                  // 0 = auto (min(hw_concurrency, ceil(clients/32)))
-    std::string pattern{"weave"};    // built-in name or "trace:<file>"; ignored when patternMix is set
-    std::string patternMix;          // weighted mix spec e.g. "weave:80,aggressive:20"; empty = single pattern
+    int threads{0};               // 0 = auto (min(hw_concurrency, ceil(clients/32)))
+    std::string pattern{"weave"}; // built-in name or "trace:<file>"; ignored when patternMix is set
+    std::string patternMix;       // weighted mix spec e.g. "weave:80,aggressive:20"; empty = single pattern
+    // Transport backend the synthetic clients speak (#649). Defaults to "enet": bot_swarm is the
+    // enet6 regression instrument, so every pre-existing profile keeps its exact behaviour. "gns"
+    // points the swarm at the DEFAULT internet transport (the server must also run --transport gns).
+    // A "gns" run in an enet6-only build (FL_ENABLE_GNS=OFF) is a hard error, never a silent
+    // downgrade — a GNS gate that quietly measured enet6 would be worse than no gate.
+    std::string transport{"enet"};
     std::string jsonPath;            // empty = no JSON output
     std::string serverMetricsPath;   // empty = no server-side tick block; fl-server --metrics-json file
     double assertMinTickHz{0.0};     // 0 = disabled
@@ -114,6 +120,10 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
             r.cfg.patternMix = argv[++i];
+        } else if (std::strcmp(a, "--transport") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.transport = argv[++i];
         } else if (std::strcmp(a, "--json") == 0) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
@@ -198,7 +208,9 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
         r.status = ParseStatus::Error;
         r.error = std::move(msg);
     };
-    if (r.cfg.clients < 1)
+    if (r.cfg.transport != "enet" && r.cfg.transport != "enet6" && r.cfg.transport != "gns")
+        fail("--transport must be one of: enet, gns");
+    else if (r.cfg.clients < 1)
         fail("--clients must be >= 1");
     else if (r.cfg.durationS < 1)
         fail("--duration must be >= 1");
