@@ -44,8 +44,16 @@ section = fully scripted behaviour.
 - **Engine-side client is minimal:** a thin OpenAI-compatible client over `IHttpClient` (#490);
   no vendor SDK. Most inference consumers are the Go services, which talk to the endpoint
   directly.
-- **Model-size guidance** comes from the Epic M provider spike (#599); the initiative acceptance
-  gate assumes a local 7–8B instruct model on the 8-core/16 GB reference instance.
+- **Model-size guidance (measured, spike #599 — see [ai-provider-evaluation.md](ai-provider-evaluation.md)):**
+  a **~9B–14B instruct model**, reference `qwen2.5-coder:14b`. 9B is the floor at which the workloads
+  start working (96 % intent accuracy, 100 % validate-clean mission generation); below ~7B they
+  collapse. This **revises the earlier "7–8B" assumption upward** — 8B is the edge of viable, not the
+  comfortable default. Prefer an *instruct* model over a *reasoning* model wherever the output has a
+  strict schema: reasoning traces leak into responses and cost schema validity. **Screen candidates
+  for prompt-injection resistance** before using them on the chat path — one 9B model in the sweep
+  obeyed an injected instruction embedded in a pilot utterance, and team chat is untrusted data.
+  Latency budgets (§9) were met with wide margin on a GPU; **CPU-only inference on the 8-core/16 GB
+  reference instance is not yet measured**, and the 2 s intent budget is the one at risk there.
 
 ## 3. World-state API & event stream (Epic M, #600)
 
@@ -110,6 +118,17 @@ engine. Incident digests go to operator webhooks. LLM-assisted `fl-review` triag
 summarizes and prioritizes — verdicts remain statistical/deterministic. Fleet-level scale/drain
 recommendations integrate with the Epic K operator (#621).
 
+**Autonomy is capped at `recommend` until triage quality improves (measured, #599).** In the spike's
+ops suite no local model exceeded 75 % root-cause accuracy, and the errors were systematic in both
+directions — over-eager models recommended action against healthy servers, under-eager ones called
+an active auth-abuse incident "healthy", and *every* model misread network congestion as either a
+server fault or nothing at all. `act` is not justified by that data. The likely fix is better inputs
+rather than a bigger model: derived/labelled signals instead of raw counters, few-shot examples, and
+one runbook per failure class rather than a single open-ended triage prompt. The `ops` suite in
+`tools/ai_eval/` is the regression test for that work. (Action-allowlist compliance *was* 100 % —
+no model invented a command outside its declared runbook — but the policy engine remains mandatory:
+that is one sweep on one endpoint.)
+
 ## 6. Degradation matrix
 
 | Feature | With provider | Without provider (CI-tested path) |
@@ -128,7 +147,11 @@ recommendations integrate with the Epic K operator (#621).
 - The no-provider fallback of every feature is the CI-tested path (unit + integration).
 - Model-dependent metrics (intent accuracy ≥ 90 %, director ≤ 60 s validate-clean generation, ops
   triage correctness) are measured by **reusable eval harnesses produced by each epic's spike**,
-  run locally or on the reference environment.
+  run locally or on the reference environment. The first of these is
+  [`tools/ai_eval/`](../tools/ai_eval/README.md) (#599): one suite per workload (`intent`,
+  `mission`, `ops`), scored against the real `validate-mission` binary and the declared
+  grammars/allowlists. It is a developer tool — not wired into `ctest`; only its pure scoring logic
+  is unit-tested (`tests/test_ai_eval.py`, zero network calls).
 - Go services test their pipelines against a **fake provider** (canned completions) so
   generate/validate/repair and runbook logic are deterministic in `go test`; `validate-mission`
   is invoked as a subprocess fixture.

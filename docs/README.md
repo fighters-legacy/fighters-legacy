@@ -9,6 +9,7 @@
 | [references.md](references.md) | Technology reference index: upstream docs and learning resources for every engine dependency and tool |
 | [roadmap.md](roadmap.md) | Phase schedule, critical path, per-phase acceptance criteria |
 | [ai-architecture.md](ai-architecture.md) | Dynamic World & Agentic AI initiative: provider seam, world-state/MCP surface, epic designs, security, degradation and testing model |
+| [ai-provider-evaluation.md](ai-provider-evaluation.md) | Local-provider spike (#599): measured latency / structured-output / task accuracy per model size, model-size guidance, and what is not yet established |
 | [distribution.md](distribution.md) | Distribution channels, monetization strategy |
 | [haptics.md](haptics.md) | Haptic feedback design reference: rumble event catalogue and guidance for game-system implementors |
 | [modding/formats.md](modding/formats.md) | Native asset format specifications (glTF, TOML, YAML, Lua) |
