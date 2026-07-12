@@ -11,6 +11,7 @@
 #include "net/BitStream.h"
 #include "net/GameProtocol.h"
 #include "net/SnapshotCodec.h"
+#include "net/SnapshotCompression.h"
 #include "net/SnapshotScheduler.h" // kSnapshotRetentionTicks
 #include "net/WireCodec.h"
 #include "render/RenderSnapshot.h"
@@ -111,8 +112,28 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         // last one processed. This keeps m_lastSnapshotTick a monotonic high-water mark — it is echoed
         // back to the server (MsgClientInput/MsgHeartbeat tickIndex) as the snapshot ack that drives
         // client-acked delta baselines, and it prevents a stale packet from clobbering newer state.
+        // (Deliberately checked BEFORE decompression — the header is always raw, so a stale packet
+        // never costs a decompress.)
         if (m_haveSnapshot && hdr.tickIndex <= m_lastSnapshotTick)
             return;
+
+        // Compressed payload (#775): everything after the raw 24-byte header is one zstd frame.
+        // Rebuild [header][decompressed payload] in the reused scratch and repoint data/size, so the
+        // whole parse path below runs unchanged on either form. decompressSnapshotPayload fails
+        // closed on an oversized claim, a malformed frame, or a length mismatch — drop the packet
+        // (the ack mask simply never marks the tick; the server keeps that entity on fulls).
+        if (hdr.flags & fl::kSnapshotFlagCompressed) {
+            const auto* comp = static_cast<const uint8_t*>(data) + sizeof(fl::MsgWorldSnapshotHeader);
+            const std::size_t compSize = size - sizeof(fl::MsgWorldSnapshotHeader);
+            if (!fl::decompressSnapshotPayload(comp, compSize, hdr.uncompressedBytes, m_decompressScratch))
+                return;
+            m_snapshotScratch.resize(sizeof(fl::MsgWorldSnapshotHeader) + m_decompressScratch.size());
+            std::memcpy(m_snapshotScratch.data(), data, sizeof(fl::MsgWorldSnapshotHeader));
+            std::memcpy(m_snapshotScratch.data() + sizeof(fl::MsgWorldSnapshotHeader), m_decompressScratch.data(),
+                        m_decompressScratch.size());
+            data = m_snapshotScratch.data();
+            size = m_snapshotScratch.size();
+        }
 
         // The priority/budget scheduler (#516) may omit low-priority entities from any given
         // snapshot, so the rendered set is a persistent cache (m_entityCache) updated by each packet,

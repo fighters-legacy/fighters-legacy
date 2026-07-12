@@ -19,7 +19,7 @@ set -euo pipefail
 # after configure so that can't pass silently.
 dnf -y install \
     gcc-c++ cmake ninja-build git \
-    openssl-devel protobuf-devel protobuf-compiler \
+    openssl-devel protobuf-devel protobuf-compiler libzstd-devel \
     findutils procps-ng
 
 echo "reference VM provisioned: $(nproc) CPUs, $(free -h | awk '/Mem:/{print $2}') RAM"

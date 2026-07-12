@@ -176,6 +176,14 @@ static const char* kDefaultToml =
     "# GNS only: accept unauthenticated peers (standalone GNS has no Steam PKI). true = encrypted but\n"
     "# unauthenticated (opportunistic, like TLS-without-cert). Ignored by the enet backend.\n"
     "allow_insecure = true\n"
+    "# zstd-compress snapshot payloads at the engine layer (#775). Transport-agnostic: enet6's own\n"
+    "# range coder compressed on the wire, GNS (the default) does not compress at all — this makes\n"
+    "# the shipping transport pay enet6-or-better wire bytes. Hot-reloadable via reload_config.\n"
+    "compress_snapshots = true\n"
+    "# GNS only: datagram-coalescing (Nagle) window in microseconds. 0 = GNS default (5000). Larger\n"
+    "# values merge more acks/messages per datagram at the cost of up to that much added delivery\n"
+    "# latency. Range [0, 200000]. Requires a server restart.\n"
+    "gns_nagle_time_us = 0\n"
     "\n"
     "[spawn]\n"
     "# AGL offset (metres) above terrain for all spawn points. Default 500 m.\n"
@@ -735,6 +743,15 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
         if (auto v = tbl["network"]["allow_insecure"].value<bool>())
             cfg.network.allowInsecure = *v;
+        if (auto v = tbl["network"]["compress_snapshots"].value<bool>())
+            cfg.network.compressSnapshots = *v;
+        if (auto v = tbl["network"]["gns_nagle_time_us"].value<int64_t>()) {
+            if (*v >= 0 && *v <= 200000)
+                cfg.network.gnsNagleTimeUs = static_cast<uint32_t>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "network.gns_nagle_time_us out of range [0, 200000]; using default 0");
+        }
 
         // [spawn]
         if (auto v = tbl["spawn"]["agl_offset"].value<double>()) {

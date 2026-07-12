@@ -123,8 +123,10 @@ agl_offset = 500.0  # metres AGL above terrain for all spawn points
 # z = 0.0
 
 [network]
-transport      = "gns"   # "gns" (GameNetworkingSockets, default) or "enet" (enet6)
-allow_insecure = true     # GNS only: accept unauthenticated peers (no Steam PKI)
+transport          = "gns"  # "gns" (GameNetworkingSockets, default) or "enet" (enet6)
+allow_insecure     = true   # GNS only: accept unauthenticated peers (no Steam PKI)
+compress_snapshots = true   # zstd snapshot payload compression (#775); hot-reloadable
+gns_nagle_time_us  = 0      # GNS only: datagram-coalescing window, us; 0 = GNS default (5000)
 ```
 
 ---
@@ -689,8 +691,9 @@ control, 128+ connection headroom — the recommended default for dedicated serv
 and keeps the default. Overridable with the `--transport <gns|enet>` CLI flag (highest precedence).
 
 > The server must be **built with `-DFL_ENABLE_GNS=ON`** (the default) to use `"gns"`; an enet6-only
-> build falls back to enet6 with a warning. `net_check` / `bot_swarm` speak enet6 only, so a server
-> under load test must run `transport = "enet"` (the load-test runners pass `--transport enet`).
+> build falls back to enet6 with a warning. `net_check` speaks enet6 only; `bot_swarm` takes
+> `--transport enet|gns` (#649) and the load-test runners pin both ends to the same backend via
+> `FL_LOADTEST_TRANSPORT`.
 
 ### `allow_insecure`
 
@@ -701,6 +704,34 @@ and keeps the default. Overridable with the `--transport <gns|enet>` CLI flag (h
 Accept unauthenticated peers. Standalone GNS has no Steam PKI, so connections are **encrypted but
 unauthenticated** (opportunistic, like TLS-without-cert). Maps to GNS `AllowWithoutAuth`. Identity /
 account authentication (Epic C) rides an in-band wire message on top of the encrypted channel.
+
+### `compress_snapshots`
+
+- **Type:** bool
+- **Default:** `true`
+- **Hot-reloadable** via `reload_config`.
+
+zstd-compress snapshot payloads at the engine layer (#775). Transport-agnostic: enet6's own range
+coder used to compress on the wire while GNS (the default transport) does not compress at all —
+with this on, both backends carry the same compressed bytes and GNS pays enet6-or-better wire
+bandwidth. Tiny or incompressible snapshots are automatically sent raw, so there is no pathological
+case where this costs bytes; the CPU cost is a few microseconds per peer per tick inside the
+parallel snapshot build. Turn off only for wire-level debugging or when characterising the raw
+payload (the load-test runners expose `FL_LOADTEST_COMPRESSION=0` for exactly that).
+
+### `gns_nagle_time_us`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer (microseconds) | `0` | `0` – `200000` |
+
+**GNS only** (ignored by the enet backend). **Restart required.**
+
+Datagram-coalescing (Nagle) window: small sends and protocol acks wait up to this long to share a
+datagram (GNS `k_ESteamNetworkingConfig_NagleTime`). `0` keeps GNS's library default (5000 µs).
+Larger values cut per-datagram framing/AEAD overhead at the cost of up to that much added delivery
+latency — measure the RTT effect before raising it (see
+[load-testing.md](load-testing.md)).
 
 ---
 

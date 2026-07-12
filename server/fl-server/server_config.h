@@ -147,6 +147,9 @@ struct ServerConfig {
     struct NetworkConfig {
         std::string transport = "gns"; // "gns" (GameNetworkingSockets, default) or "enet" (enet6)
         bool allowInsecure = true;     // GNS: accept unauthenticated peers (no Steam PKI); AllowWithoutAuth
+        bool compressSnapshots = true; // zstd snapshot payload compression (#775); hot-reloadable
+        uint32_t gnsNagleTimeUs = 0;   // GNS datagram-coalescing window, us; 0 = GNS default (5000);
+                                       // range [0, 200000]; restart-only (#775)
     };
     NetworkConfig network;
 };

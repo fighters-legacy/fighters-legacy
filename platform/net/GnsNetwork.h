@@ -48,6 +48,8 @@ class GnsNetwork : public INetwork {
     void setBandwidthLimit(uint32_t incomingBps, uint32_t outgoingBps) override;
     // Pre-handshake flooding is handled by GNS itself; this is a documented no-op for parity.
     void setPreHandshakeRateLimit(int maxAttempts, int windowMs) override;
+    // Global k_ESteamNetworkingConfig_NagleTime (#775); 0 = keep GNS's 5000 us default.
+    void setNagleTime(uint32_t nagleUs) override;
 
     // Whether unauthenticated peers are accepted (standalone GNS has no Steam PKI). Default true;
     // fl-server maps [network] allow_insecure here. Call before bind()/connect().

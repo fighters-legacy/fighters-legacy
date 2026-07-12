@@ -64,6 +64,9 @@ $TestSpawnSpreadKm = if ($env:FL_TEST_SPAWN_SPREAD_KM) { $env:FL_TEST_SPAWN_SPRE
 # FL_LOADTEST_GOVERNOR=1 flips the graceful tick-overrun governor (#514) ON for the synthetic overrun
 # profile (#574). Default OFF, so the raw capacity gate still measures un-shed capacity.
 $GovernorEnabled = if ($env:FL_LOADTEST_GOVERNOR -eq "1") { "true" } else { "false" }
+# FL_LOADTEST_COMPRESSION (#775): zstd snapshot payload compression. Defaults ON (the production
+# default); set 0 for a raw-payload A/B leg when characterising the compression win itself.
+$CompressionEnabled = if ($env:FL_LOADTEST_COMPRESSION -eq "0") { "false" } else { "true" }
 
 # Single-quoted TOML literal strings so Windows backslashes in paths are not treated as escapes.
 $ConfigText = @"
@@ -103,6 +106,9 @@ if ($env:FL_TEST_PROJECTILE_RATE) {
     $ConfigText += "`ntest_projectile_ttl_s = $TtlS"
 }
 $ConfigText += @"
+
+[network]
+compress_snapshots = $CompressionEnabled
 
 [metrics]
 tick_json_path = '$Metrics'

@@ -14,6 +14,7 @@
 #include <functional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace fl {
 
@@ -140,6 +141,13 @@ struct ClientNetEventHandler : INetworkEventHandler {
     std::string m_chunkBuf;
     bool m_chunkBufActive{false};
     static constexpr std::size_t kMaxChunkAssemblyBytes = 64u * 1024u; // 64 KB hard cap
+
+    // Compressed-snapshot scratch (#775): m_decompressScratch holds the decompressed payload,
+    // m_snapshotScratch the rebuilt [raw 24-byte header][payload] the unchanged parse path then
+    // runs on. Both reused across packets; decompressSnapshotPayload bounds the claimed size
+    // before either ever grows.
+    std::vector<uint8_t> m_decompressScratch;
+    std::vector<uint8_t> m_snapshotScratch;
 
     // Heartbeat / RTT state.
     const fl::IClock* m_clock{&fl::SystemClock::instance()};

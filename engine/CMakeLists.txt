@@ -208,6 +208,15 @@ add_library(engine-protocol STATIC
 )
 target_include_directories(engine-protocol PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
+# Engine-layer snapshot payload compression (#775). Deliberately NOT part of engine-protocol —
+# that target is stdlib-only (layering rule 2, cmake/layering.cmake); the zstd dependency hangs
+# off this target instead, and both the server (via engine-net) and the game client link it.
+add_library(engine-compress STATIC
+    net/SnapshotCompression.cpp
+)
+target_include_directories(engine-compress PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-compress PRIVATE fl::zstd)
+
 # Authoritative server-sim serializer and network broadcaster.
 add_library(engine-net STATIC
     net/NetworkUtils.cpp
@@ -221,6 +230,7 @@ add_library(engine-net STATIC
 target_include_directories(engine-net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-net
     PUBLIC  engine-protocol
+            engine-compress
             engine-entity
             engine-spatial
             engine-job

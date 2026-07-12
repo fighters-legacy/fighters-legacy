@@ -14,7 +14,7 @@ FROM registry.fedoraproject.org/fedora:44
 # (enet6) headless — neither links SDL3, so no SDL3 build dependencies are needed (dropped after
 # #711/#716 moved fl-server off platform-sdl3; #718).
 RUN dnf -y install \
-        gcc-c++ cmake ninja-build git \
+        gcc-c++ cmake ninja-build git libzstd-devel \
         glibc-langpack-en findutils procps-ng iproute \
     && dnf clean all
 

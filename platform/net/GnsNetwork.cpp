@@ -432,6 +432,15 @@ void GnsNetwork::setPreHandshakeRateLimit(int /*maxAttempts*/, int /*windowMs*/)
     // No-op: GNS drops unauthenticated connection floods internally before app-visible state exists.
 }
 
+void GnsNetwork::setNagleTime(uint32_t nagleUs) {
+    // Global (all connections on this process): the knob exists to trade datagram count against
+    // delivery latency for the whole server, not per peer. 0 = leave GNS's default (5000 us).
+    if (nagleUs == 0u)
+        return;
+    if (ISteamNetworkingUtils* utils = SteamNetworkingUtils())
+        utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_NagleTime, static_cast<int32_t>(nagleUs));
+}
+
 // -------------------------------------------------------------------------
 // Private helpers
 // -------------------------------------------------------------------------

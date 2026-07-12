@@ -15,6 +15,7 @@
 #include "net/BitStream.h"
 #include "net/GameProtocol.h"
 #include "net/SnapshotCodec.h"
+#include "net/SnapshotCompression.h"
 #include "net/SnapshotScheduler.h" // kSnapshotRetentionTicks
 #include "net/WireCodec.h"
 
@@ -23,6 +24,7 @@
 
 #include "mock_network.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -324,6 +326,110 @@ TEST_CASE("ClientNetEventHandler: MsgWorldSnapshot abEngaged and engineFailFlags
     CHECK(snap.entries[0].omega.x == Catch::Approx(0.1f).margin(0.02));
     CHECK(snap.entries[0].omega.y == Catch::Approx(0.2f).margin(0.02));
     CHECK(snap.entries[0].omega.z == Catch::Approx(0.3f).margin(0.02));
+}
+
+// Compress a raw snapshot packet into its #775 wire form: zstd the payload after the 24-byte
+// header, patch flags + uncompressedBytes. Requires the payload to be big enough to compress
+// (callers build multi-record packets).
+static std::vector<uint8_t> compressSnapshotPacket(const std::vector<uint8_t>& raw) {
+    const std::size_t hdrSize = sizeof(fl::MsgWorldSnapshotHeader);
+    REQUIRE(raw.size() > hdrSize);
+    std::vector<uint8_t> z;
+    const std::size_t csz = fl::compressSnapshotPayload(raw.data() + hdrSize, raw.size() - hdrSize, z);
+    REQUIRE(csz > 0u);
+    std::vector<uint8_t> pkt(raw.begin(), raw.begin() + hdrSize);
+    fl::MsgWorldSnapshotHeader hdr{};
+    std::memcpy(&hdr, pkt.data(), hdrSize);
+    hdr.flags |= fl::kSnapshotFlagCompressed;
+    hdr.uncompressedBytes = static_cast<uint32_t>(raw.size() - hdrSize);
+    std::memcpy(pkt.data(), &hdr, hdrSize);
+    pkt.insert(pkt.end(), z.begin(), z.end());
+    return pkt;
+}
+
+// Enough similar records to clear kMinSnapshotCompressBytes so the compressed path is exercised.
+static std::vector<TestRec> manyRecords(int n) {
+    std::vector<TestRec> recs;
+    for (int i = 0; i < n; ++i) {
+        TestRec rec;
+        rec.idx = static_cast<uint32_t>(i);
+        rec.gen = 1u;
+        rec.isFull = true;
+        rec.pos[0] = 100.0 * i;
+        rec.pos[1] = 500.0;
+        recs.push_back(rec);
+    }
+    return recs;
+}
+
+TEST_CASE("ClientNetEventHandler: compressed WorldSnapshot decodes like the raw one",
+          "[client_net_event_handler][compress]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    const auto raw = buildSnapshotPkt(1u, manyRecords(8));
+    const auto pkt = compressSnapshotPacket(raw);
+    REQUIRE(pkt.size() < raw.size());
+
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    bridge.tryAdvance();
+    const auto& snap = bridge.current();
+    REQUIRE(snap.entries.size() == 8u);
+    CHECK(snap.tickIndex == 1u);
+    // The rendered set is rebuilt from an unordered cache — locate by entityIdx, not position.
+    const auto it = std::find_if(snap.entries.begin(), snap.entries.end(),
+                                 [](const fl::EntityRenderEntry& e) { return e.entityIdx == 3u; });
+    REQUIRE(it != snap.entries.end());
+    CHECK(it->position.x == Catch::Approx(300.0).margin(fl::kPosStepM));
+}
+
+TEST_CASE("ClientNetEventHandler: malformed compressed snapshots are dropped fail-closed",
+          "[client_net_event_handler][compress]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    const auto raw = buildSnapshotPkt(1u, manyRecords(8));
+    const auto good = compressSnapshotPacket(raw);
+    const std::size_t hdrSize = sizeof(fl::MsgWorldSnapshotHeader);
+
+    SECTION("oversized uncompressedBytes claim") {
+        auto pkt = good;
+        fl::MsgWorldSnapshotHeader hdr{};
+        std::memcpy(&hdr, pkt.data(), hdrSize);
+        hdr.uncompressedBytes = static_cast<uint32_t>(fl::kMaxSnapshotPayloadBytes + 1u);
+        std::memcpy(pkt.data(), &hdr, hdrSize);
+        handler.onReceive(0u, pkt.data(), pkt.size());
+    }
+    SECTION("claim does not match the frame") {
+        auto pkt = good;
+        fl::MsgWorldSnapshotHeader hdr{};
+        std::memcpy(&hdr, pkt.data(), hdrSize);
+        hdr.uncompressedBytes += 1u;
+        std::memcpy(pkt.data(), &hdr, hdrSize);
+        handler.onReceive(0u, pkt.data(), pkt.size());
+    }
+    SECTION("garbage zstd frame") {
+        auto pkt = good;
+        for (std::size_t i = hdrSize; i < pkt.size(); ++i)
+            pkt[i] = 0xA5u;
+        handler.onReceive(0u, pkt.data(), pkt.size());
+    }
+    SECTION("flag set with no payload at all") {
+        std::vector<uint8_t> pkt(good.begin(), good.begin() + hdrSize);
+        handler.onReceive(0u, pkt.data(), pkt.size());
+    }
+
+    // Every malformed form must be dropped without publishing anything (and without crashing).
+    CHECK_FALSE(bridge.tryAdvance());
 }
 
 TEST_CASE("ClientNetEventHandler: out-of-order WorldSnapshot is ignored", "[client_net_event_handler]") {
