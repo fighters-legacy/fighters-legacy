@@ -404,4 +404,14 @@ change (e.g. Epic B budgeting) with:
     python3 tools/bot_swarm/scale_gate.py --profile reference --build-dir build/release --update-baseline
 
 The KB/s baseline is machine-independent, so it can be regenerated from any box (a failed run aborts
-the update rather than committing a partial baseline).
+the update rather than committing a partial baseline). That independence is measured, not assumed:
+the values committed in #766 were produced on the 8-core reference VM and the hosted PR runner
+independently measured the same `pr/weave` figure to within 0.1 KB/s (71.4 vs 71.379). Prefer the
+reference VM anyway, so every key in the file comes from one box.
+
+**When the gate fires, decide which kind of change it caught.** The tolerance band is a *regression
+detector*, not a capacity limit — the real capacity gate is `assert_max_kbs` (150 KB/s/client), and
+current runs sit around 71–73, i.e. roughly 2× headroom. So a baseline breach means "bytes moved",
+not "we are out of budget". If the move is unintended, fix the code; if it is a reviewed, accepted
+cost (as #725's shared-origin encode-once was), regenerate the baseline — otherwise the stale band
+keeps firing on *later, unrelated* PRs and stops being a signal.
