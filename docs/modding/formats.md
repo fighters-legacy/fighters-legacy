@@ -366,27 +366,33 @@ triggers:
 
 ## Campaign Files — YAML
 
+A campaign is a **theater graph** with two interleaved mission sources: a *dynamic* generator that
+produces sorties from the current frontline state, and a *story* list of authored missions that fire
+on triggers. Consumed by the campaign engine (#635).
+
 ```yaml
 name: "Forgotten Skies"
 version: "1.0"
-sides: [nato, russia]
+sides: [nato, russia]          # exactly two; index 0 = side A, index 1 = side B (see frontline raster)
 pilot:
+  side: nato                   # which side the player flies for
   rank_table: ranks/nato_ranks.toml
   persistent_stats: true
 
 dynamic:
   enabled: true
   theaters:
-    - id: ukraine
+    - id: ukraine              # must match a theater manifest id
       initial_frontline: frontlines/ukraine_start.png
+      frontline_grid: { cols: 180, rows: 85 }    # raster resolution — see Frontline Raster below
       ground_units:
         nato:   { armor: 40, infantry: 60, artillery: 20 }
         russia: { armor: 55, infantry: 80, artillery: 30 }
       templates:
-        - { type: intercept, file: templates/ukraine_intercept.yaml }
-        - { type: cap,       file: templates/ukraine_cap.yaml }
-        - { type: strike,    file: templates/ukraine_strike.yaml }
-        - { type: sead,      file: templates/ukraine_sead.yaml }
+        - { role: intercept, file: templates/ukraine_intercept.yaml, weight: 3 }
+        - { role: cap,       file: templates/ukraine_cap.yaml,       weight: 2 }
+        - { role: strike,    file: templates/ukraine_strike.yaml,    weight: 2 }
+        - { role: sead,      file: templates/ukraine_sead.yaml,      weight: 1, requires: enemy_sam }
 
 story:
   - id: u01_storm_warning
@@ -398,7 +404,184 @@ story:
       set_frontline: frontlines/ukraine_after_u01.png
       unlock: ukraine
       next: { after_sorties: 3, id: u02_iron_fist }
+    on_fail:
+      retry: true              # default — mission stays pending, dynamic stays locked
 ```
+
+### Top-level fields
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Display name |
+| `version` | string | Campaign content version (author-managed; not the engine version) |
+| `sides` | string[2] | Exactly two faction IDs. **Order is significant** — index 0 is *side A*, index 1 is *side B* in every frontline raster |
+| `pilot.side` | string | Which of `sides` the player flies for |
+| `pilot.rank_table` | path | Rank table TOML (pack-relative) |
+| `pilot.persistent_stats` | bool | Carry kills/losses/flight time across missions |
+| `dynamic` | table | Dynamic sortie generation (below); omit or `enabled: false` for a purely scripted campaign |
+| `story` | list | Authored missions fired by trigger (below) |
+
+### `dynamic.theaters[]`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `id` | string | — | Theater manifest ID; supplies the geographic `bounds` the frontline raster covers |
+| `initial_frontline` | path | — | Frontline PNG applied when the campaign starts |
+| `frontline_grid` | table | — | `{ cols, rows }` — the raster resolution **the campaign declares**. Every frontline PNG in this theater must match it exactly |
+| `ground_units` | table | — | Starting order of battle per side (free-form counters; the generator scales force composition from them and decrements them as missions resolve) |
+| `templates` | list | — | Mission templates the generator draws from (below) |
+
+### `dynamic.theaters[].templates[]` — what a template is and when it instantiates
+
+A **template** is a mission YAML with holes in it. It is a normal mission file (same schema as
+`missions/*.yaml`) plus a `template:` header block declaring which fields the generator fills:
+
+```yaml
+# templates/ukraine_strike.yaml
+template:
+  role: strike
+  fills:
+    - target_area:  { from: frontline, side: enemy, prefer: contested }
+    - ingress:      { from: frontline, side: friendly, min_distance_km: 60 }
+    - opfor:        { from: ground_units, side: enemy, scale: 0.15 }
+    - player_flight: { size: 2..4 }
+
+name: "Strike — ${target_area.name}"
+map: ukraine
+# ... the rest is a normal mission file; ${...} refers to filled values
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `role` | string | — | What kind of sortie this is (`intercept`, `cap`, `strike`, `sead`, … — a free-form tag; the generator matches on it, the engine does not enumerate it). Renamed from `type` in the original draft, which collided with the `type` field used elsewhere for entity classes |
+| `file` | path | — | The template mission YAML |
+| `weight` | int | `1` | Relative selection weight among templates whose `requires` is satisfied |
+| `requires` | string | — | Optional precondition tag (e.g. `enemy_sam`) — the template is only eligible when the theater state satisfies it |
+
+**Instantiation is at mission-generation time, not on frontline change.** When the player asks for
+the next sortie, the generator: (1) reads the *current* frontline raster and `ground_units`,
+(2) filters templates by `requires`, (3) picks one by `weight`, (4) resolves each `fills` entry
+against the live theater state, and (5) emits a concrete mission YAML that is then loaded by the
+ordinary mission parser (#632). A generated mission is therefore a plain mission file — it can be
+saved, replayed, hand-edited and validated like any other, which is what keeps the dynamic path
+debuggable. Changing the frontline does **not** retroactively alter an already-generated mission.
+
+### `story[]` — authored missions
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `id` | string | — | Unique within the campaign |
+| `file` | path | — | Mission YAML |
+| `label` | string | — | Display name in the briefing/menu |
+| `trigger` | string | — | When it becomes available: `campaign_start`, `after_sorties: N`, `frontline_reaches: <tag>`, or the `next:` of a prior story mission |
+| `locks_dynamic` | bool | `false` | See below |
+| `on_complete` | table | — | Applied when the mission is **completed successfully** |
+| `on_complete.set_frontline` | path | — | Frontline PNG that **replaces** the theater's frontline state |
+| `on_complete.unlock` | string | — | Theater ID to unlock (adds it to the dynamic rotation) |
+| `on_complete.next` | table | — | The next story mission and its trigger, e.g. `{ after_sorties: 3, id: u02_iron_fist }` |
+| `on_fail` | table | `{ retry: true }` | Applied when the mission fails (below) |
+
+### `locks_dynamic` — what it pauses, and what failure does
+
+`locks_dynamic: true` means: **while this story mission is pending, the campaign's dynamic side
+stops.** Concretely, for the theater the mission belongs to:
+
+- the generator produces **no** new sorties — the story mission is the only thing the player can fly;
+- frontline progression is **frozen** — `ground_units` are not decremented and the frontline raster
+  is not advanced by attrition;
+- `after_sorties:` counters do not advance (there are no sorties to count).
+
+This exists so a scripted beat cannot be undermined by the simulation moving underneath it: the
+frontline the mission was authored against is the frontline the player flies.
+
+**On success:** `on_complete` is applied (frontline replaced, theaters unlocked, `next` armed), the
+lock lifts, and dynamic generation resumes from the *new* state.
+
+**On failure:** by default (`on_fail.retry: true`) the mission stays pending and **the lock stays
+on** — the frontline does not move, and the player re-flies it. This is the deliberate choice: the
+alternative (lift the lock and let the dynamic war grind on while a story beat is unresolved) makes
+the campaign's authored spine depend on the player losing. Authors who want a losable beat set:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `on_fail.retry` | bool | `true` | Mission stays pending and dynamic stays locked |
+| `on_fail.set_frontline` | path | — | Apply a *setback* frontline instead of retrying (implies `retry: false`) |
+| `on_fail.next` | table | — | Branch to a different story mission on failure (implies `retry: false`) |
+| `on_fail.unlock_dynamic` | bool | `false` | Lift the lock and resume the dynamic war despite the failure |
+
+Abandoning a mission (quitting to menu) is **not** a failure — the mission stays pending, unchanged.
+
+### `set_frontline` — application semantics
+
+`set_frontline` replaces the theater's frontline raster **wholesale and instantly**, between
+missions. It is not interpolated and there is no blend: the campaign's frontline is a *state*, and a
+story beat sets it. Specifically:
+
+- It is applied **between missions**, while no simulation is running, so it cannot move anything
+  mid-flight. There are no live entity positions to reset — a mission's units are spawned from the
+  mission file when the mission loads, not carried across missions.
+- It **replaces**, not merges: the new PNG is the entire new control field. Pixels the author left
+  unchanged are unchanged because they were authored that way, not because of any merge rule.
+- `ground_units` are **not** reset by it. A story beat that should also change the order of battle
+  says so; a frontline change alone moves control, not force levels.
+- The next generated sortie reads the new raster, so the dynamic war resumes from the new lines.
+
+---
+
+## Frontline Raster — PNG
+
+The frontline is an **8-bit grayscale PNG** covering the theater's geographic bounds. It is
+**independent of terrain tiling** — the pixels do not correspond to terrain tiles, chunks or
+quadtree levels. That decoupling is deliberate: terrain resolution is an engine/streaming concern
+that changes with the DEM and the maximum tile level, while a frontline is campaign content. Keying
+one to the other would mean a terrain re-tile silently invalidating every authored frontline in
+every pack.
+
+*(This supersedes the original "1 pixel per terrain chunk, dimensions from the terrain manifest's
+grid_width × grid_height" proposal, which was written for the planar chunk grid that #472 removed —
+`TerrainManifest` no longer carries a grid at all.)*
+
+**Format**
+
+| Property | Value |
+|---|---|
+| File type | PNG, 8-bit grayscale, no alpha |
+| Dimensions | Exactly the theater's `frontline_grid` `{cols, rows}` — every raster in a theater matches |
+| Extent | The theater manifest's geographic `bounds` |
+| Pixel (0, 0) | **North-west corner** — `(max_lat, min_lon)`. Row index increases southward, column index increases eastward (standard image orientation over a north-up map) |
+
+**Pixel values**
+
+| Value | Meaning |
+|---|---|
+| `0` | Unclaimed / no man's land |
+| `1`–`127` | **Side A** control (`sides[0]`); brightness = strength (1 = tenuous, 127 = firmly held) |
+| `128`–`254` | **Side B** control (`sides[1]`); `128` = tenuous, `254` = firmly held |
+| `255` | Contested — both sides present, control undecided |
+
+**Coordinate mapping.** A pixel's centre maps to geographic coordinates by linear interpolation over
+the theater bounds, and to world coordinates via `geodeticToWorld()`:
+
+    lon = min_lon + (col + 0.5) * (max_lon - min_lon) / cols
+    lat = max_lat - (row + 0.5) * (max_lat - min_lat) / rows
+
+The inverse (world position → pixel) is used for "who controls the ground under this entity?"
+queries. Longitude wrap is handled by the engine when `min_lon > max_lon` (antimeridian theaters).
+
+**Choosing a resolution.** `frontline_grid` is a campaign decision, not a terrain-derived one.
+Roughly 5–15 km per pixel is the useful band: fine enough that a frontline reads as a line rather
+than a staircase, coarse enough that a theater raster stays small and an author can paint it. The
+example above (180 × 85 over ~18° × 8.5°) is ~10 km/px.
+
+**Validation rules** (enforced by `validate-campaign`, #784):
+
+- every `initial_frontline` / `set_frontline` / `on_fail.set_frontline` path resolves inside the pack;
+- the PNG is 8-bit grayscale;
+- its dimensions equal the theater's `frontline_grid`;
+- the theater `id` referenced exists and its `bounds` are a valid geographic box.
+
+All 8-bit values are meaningful (0–255 are all defined above), so there is no "pixel out of range"
+check — the original issue's third check does not survive contact with a full encoding.
 
 ---
 
@@ -443,7 +626,7 @@ Theater manifests live in `theaters/<id>.toml` inside a content pack.
 [theater]
 id     = "ukraine"
 name   = "Ukraine"
-bounds = { min_x = 500000, min_z = 200000, max_x = 800000, max_z = 500000 }  # meters, world coords
+bounds = { min_lat = 44.0, min_lon = 22.0, max_lat = 52.5, max_lon = 40.0 }  # degrees, WGS84-ish
 layer  = "ukraine_clear"   # default weather/lighting layer for this theater
 ```
 
@@ -451,8 +634,19 @@ layer  = "ukraine_clear"   # default weather/lighting layer for this theater
 |---|---|---|
 | `id` | string | Unique identifier; matches `map:` field in mission YAML |
 | `name` | string | Display name |
-| `bounds` | table | Rectangular region in world coordinates (meters, right-handed Y-up) |
+| `bounds` | table | Geographic bounding box in **degrees**: `min_lat`, `min_lon`, `max_lat`, `max_lon` |
 | `layer` | string | Default weather/lighting preset (references a layer definition) |
+
+**Bounds are geographic, not planar.** The world is a sphere (the cube-sphere terrain rewrite,
+#472), and the engine's world origin sits at the **north pole** in engine coordinates — so a
+theater in the mid-latitudes is thousands of kilometres from the origin, where a rectangle in
+world X/Z is a badly distorted region on the ground, not a box. Latitude/longitude bounds are
+well-defined anywhere on the planet, including across the antimeridian (`min_lon > max_lon` wraps)
+and near the poles. The engine converts to world coordinates with `geodeticToWorld()`
+(`engine/flight/Geodetic.h`); content never writes raw world metres for a theater.
+
+Latitude is clamped to [-90, 90]; longitude to [-180, 180]. The box may wrap the antimeridian but
+may not span more than 180° of longitude in one theater.
 
 ---
 
