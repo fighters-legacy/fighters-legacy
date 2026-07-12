@@ -241,6 +241,26 @@ follow-on coupling — deliberately out of scope here (Serialize has its own lad
    `test_spawn_ai_count` large enough to integrate-bind, before/after — the acceptance
    measurement for the lever actually moving `integrate_ms` and `load_factor`.
 
+## ⚠ Measurement caveat: the phase numbers here were taken on enet6 ([#649])
+
+The [#572] measurements this document builds on were taken on **enet6**; the default internet
+transport is **GameNetworkingSockets** ([#507]). On GNS the `serialize` phase collapses from 8.03 ms
+to 0.81 ms (128 clients, weave, same box) because ~90 % of it was ENet's inline per-packet send, not
+the snapshot pipeline. **`integrate` is unaffected** (0.06 → 0.05 ms) — it is transport-independent,
+as it must be.
+
+For *this* document that is mostly good news, and one thing to watch:
+
+- The trigger's clause 3 is a **ratio** (`integrate_ms > 0.5 × tick_ms`). A cheaper serialize phase
+  shrinks `tick_ms`, so the same integrate cost is a *larger fraction* of it — the ratio moves toward
+  firing without integrate having gotten any more expensive. That is **not** a false alarm, because
+  clauses 1 and 2 gate it: the ratio only routes an overrun that is *already happening*. It cannot
+  fire on a healthy server. The router is sound; do not "fix" it by re-tuning 0.5.
+- With the tick running ~16× under budget on GNS (1.0 ms vs 16.6 ms), clauses 1 and 2 are far from
+  firing at all — so this remains correctly deferred.
+
+Re-derive the absolute figures on GNS before acting ([#649] follow-up).
+
 ## Trigger criterion
 
 All quantities come from `fl-server --metrics-json` (`ServerTickReport`) via the scale gate
@@ -298,3 +318,5 @@ Title: `feat(engine): reduced-rate physics integration for distant AI under over
 - Measurement: overrun-profile before/after on the 8-core reference env demonstrating
   `integrate_ms` reduction and `load_factor` recovery at the trigger workload; CHANGELOG + this
   document's status updated.
+[#649]: https://github.com/fighters-legacy/fighters-legacy/issues/649
+[#507]: https://github.com/fighters-legacy/fighters-legacy/issues/507

@@ -394,12 +394,23 @@ does its per-packet work inline on the calling thread, so it lands inside the si
 phase; GNS's `SendMessageToConnection` queues to its own internal service thread and returns. The
 sim thread stops paying for the packet pump.
 
-This materially changes a standing assumption: the **serialize-dominant tick** (8.09 of 8.28 ms mean
-at 128 clients) that motivated the deferral triggers in
-[spatial-sharding-design.md](spatial-sharding-design.md) and
-[physics-lod-design.md](physics-lod-design.md) is substantially an **ENet artifact**, not an inherent
-cost of the snapshot pipeline. Those trigger criteria should be re-derived on GNS before anyone acts
-on them.
+Phase breakdown makes it concrete (weave, 128 clients, same box):
+
+| | tick mean | serialize | integrate | serialize share |
+|---|---:|---:|---:|---:|
+| enet6 | 8.20 ms | 8.03 ms | 0.06 ms | 98 % |
+| GNS | 1.01 ms | 0.81 ms | 0.05 ms | 80 % |
+
+**~90 % of what the `serialize` phase cost was ENet's inline send, not our snapshot pipeline** — whose
+real cost is ~0.8 ms at 128 clients. Integrate is unchanged, as it must be (transport-independent).
+
+Read this carefully before acting on the [#572] / [#575] trigger criteria. Serialize is *still* the
+dominant phase on GNS (80 %), so their phase-routing clauses (`serialize_ms > 0.5 × tick_ms` routes to
+sharding, `integrate_ms > 0.5 × tick_ms` routes to LOD physics) still hold — the routing logic is
+sound. What changes is the **magnitude**: on the default transport the tick runs ~16x under its
+16.6 ms budget instead of ~2x, so both triggers are far further away than the enet6 numbers imply,
+and any encode optimisation justified against an "8 ms serialize phase" is sized against a number
+that is really 0.8 ms on the transport that ships.
 
 Two honest caveats:
 
