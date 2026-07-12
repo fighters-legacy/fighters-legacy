@@ -359,3 +359,22 @@ def test_render_markdown_emits_a_row_per_model_suite():
     out = ae.render_markdown([("m1", metrics), ("m2", metrics)])
     assert out.count("\n") == 3  # header + separator + 2 rows
     assert "`m1`" in out and "`m2`" in out
+
+
+# ---- build_messages ----------------------------------------------------------------------------
+
+
+def test_build_messages_sends_a_system_turn_by_default():
+    msgs = ae.build_messages("GRAMMAR", "engage at will")
+    assert [m["role"] for m in msgs] == ["system", "user"]
+    assert msgs[0]["content"] == "GRAMMAR"
+    assert msgs[1]["content"] == "engage at will"
+
+
+def test_build_messages_merges_system_into_the_user_turn():
+    # Templates with no system role (gemma2 on Ollama) drop a system message outright: the
+    # model never sees the grammar and answers "unknown" to every case.
+    msgs = ae.build_messages("GRAMMAR", "engage at will", merge_system=True)
+    assert [m["role"] for m in msgs] == ["user"]
+    assert "GRAMMAR" in msgs[0]["content"]
+    assert msgs[0]["content"].endswith("engage at will")

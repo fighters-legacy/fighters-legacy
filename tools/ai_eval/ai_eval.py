@@ -299,14 +299,28 @@ def render_markdown(all_metrics):
 # ---- I/O edges ---------------------------------------------------------------------------------
 
 
-def chat_completion(base_url, api_key, model, system, user, timeout, json_mode):
+def build_messages(system, user, merge_system=False):
+    """Chat messages for one turn.
+
+    Some chat templates have no system turn at all (gemma2 is the one that bites: served
+    directly by Ollama it silently DROPS a `system` message, so the model never sees the
+    grammar and answers `unknown` to everything — a 96 % model measures 35 %). Gateways such
+    as LiteLLM merge it for you, which is why the same model can score differently on two
+    endpoints. `merge_system` folds the system prompt into the user turn instead.
+    """
+    if merge_system:
+        return [{"role": "user", "content": f"{system}\n\n{user}"}]
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
+def chat_completion(base_url, api_key, model, system, user, timeout, json_mode, merge_system=False):
     """POST /v1/chat/completions. Returns (text, latency_s). Raises RuntimeError on failure."""
     payload = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        "messages": build_messages(system, user, merge_system),
         "temperature": 0,
         "stream": False,
     }
@@ -359,6 +373,7 @@ def run_intent_case(cfg, suite, case):
     text, latency = chat_completion(
         cfg["base_url"], cfg["api_key"], cfg["model"],
         suite["system_prompt"], case["utterance"], cfg["timeout"], json_mode=True,
+        merge_system=cfg["merge_system"],
     )
     case = dict(case, _grammar=suite["grammar"])
     result = score_intent(case, text)
@@ -371,6 +386,7 @@ def run_ops_case(cfg, suite, case):
     text, latency = chat_completion(
         cfg["base_url"], cfg["api_key"], cfg["model"],
         suite["system_prompt"], user, cfg["timeout"], json_mode=True,
+        merge_system=cfg["merge_system"],
     )
     case = dict(case, _causes=suite["root_causes"], _allowlist=suite["action_allowlist"])
     result = score_ops(case, text)
@@ -384,6 +400,7 @@ def run_mission_case(cfg, suite, case):
     text, _ = chat_completion(
         cfg["base_url"], cfg["api_key"], cfg["model"],
         suite["system_prompt"], case["brief"], cfg["timeout"], json_mode=False,
+        merge_system=cfg["merge_system"],
     )
     yaml_text = extract_yaml_document(text)
     valid, stderr = (False, "empty response")
@@ -403,6 +420,7 @@ def run_mission_case(cfg, suite, case):
         text, _ = chat_completion(
             cfg["base_url"], cfg["api_key"], cfg["model"],
             suite["system_prompt"], repair_user, cfg["timeout"], json_mode=False,
+            merge_system=cfg["merge_system"],
         )
         yaml_text = extract_yaml_document(text)
         valid, stderr = (False, "empty response")
@@ -467,6 +485,13 @@ def main(argv=None):
     parser.add_argument("--repeat", type=int, default=1, help="repetitions per case")
     parser.add_argument("--timeout", type=float, default=180.0, help="per-request timeout (s)")
     parser.add_argument(
+        "--merge-system",
+        action="store_true",
+        help="fold the system prompt into the user turn; REQUIRED for chat templates with no "
+        "system role (gemma2 served directly by Ollama silently drops it and answers 'unknown' "
+        "to everything). Gateways like LiteLLM do this for you.",
+    )
+    parser.add_argument(
         "--validate-mission",
         default="build/release/tools/validate-mission",
         help="path to the validate-mission binary (mission suite only)",
@@ -492,7 +517,7 @@ def main(argv=None):
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     table = []
-    report = {"base_url": args.base_url, "models": {}}
+    report = {"base_url": args.base_url, "merge_system": args.merge_system, "models": {}}
 
     for model in [m.strip() for m in args.models.split(",") if m.strip()]:
         report["models"][model] = {}
@@ -505,6 +530,7 @@ def main(argv=None):
                 "timeout": args.timeout,
                 "repeat": args.repeat,
                 "validate_mission": args.validate_mission,
+                "merge_system": args.merge_system,
             }
             print(f"[ai_eval] {model} :: {suite_name} ({len(suite['cases'])} cases)", flush=True)
             case_results = run_suite(cfg, suite)

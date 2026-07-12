@@ -46,7 +46,20 @@ flag — mirroring the `[ai.provider] api_key_env` seam):
         --suite all --repeat 3
 
 Useful flags: `--suite intent,ops` (subset), `--repeat N` (stability across runs), `--timeout`,
-`--validate-mission <path>`, `--out <dir>`.
+`--validate-mission <path>`, `--out <dir>`, `--merge-system` (below).
+
+### `--merge-system` — models with no system role
+
+Some chat templates have **no system turn**, and Ollama drops the message *silently* instead of
+erroring. `gemma2` is the one that bites: served directly it never sees the system prompt, so it
+never sees the command grammar, answers `unknown` to every case, and scores **35 %** when it is
+really a 92 % model. Gateways hide this — LiteLLM merges the turn for gemma, which is why the same
+model scores differently on two endpoints.
+
+    python3 tools/ai_eval/ai_eval.py --models gemma2:9b --suite intent --merge-system
+
+**If a model scores far below its reputation and the failures are a wall of identical "I don't know"
+answers, suspect the prompt before you believe the score.**
 
 Each run writes `results/ai-eval-<stamp>.json` (full per-case detail, including the raw response of
 every failure) and `results/ai-eval-<stamp>.md` (the comparison table). `results/` is git-ignored.
