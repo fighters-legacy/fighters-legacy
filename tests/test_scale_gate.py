@@ -552,27 +552,58 @@ def test_pre_v3_reports_without_a_transport_key_are_treated_as_enet():
     assert ev["passed"]
 
 
-def test_gns_profile_is_baselined_per_transport_and_pins_both_ends():
+def test_reference_profile_is_gns_and_baselined_per_transport():
+    # #773: the PRIMARY reference profile pins both ends to GNS — the default internet transport is
+    # the one the headline numbers describe.
     cfg = sg.load_config(sg.DEFAULT_CONFIG)
-    prof = sg.load_profile(cfg, "gns")
+    prof = sg.load_profile(cfg, "reference")
     assert prof["transport"] == "gns"
     assert prof["clients"] == 128
-    # Baselined, but keyed per PROFILE — so GNS gets its own keys. That is what makes it safe: GNS's
-    # wire bytes are legitimately not enet6's (enet6 range-coder-compresses; GNS encrypts and does
-    # not compress), so the two must never be diffed against one another (#772).
+    # Baselined, but keyed per PROFILE — so each transport gets its own keys. That is what makes it
+    # safe: GNS's wire bytes are legitimately not enet6's (enet6 range-coder-compresses; GNS encrypts
+    # and does not compress), so the two must never be diffed against one another (#772).
     assert prof["baselined"] is True
 
 
-def test_gns_profile_sets_the_runner_transport_env():
+def test_reference_enet_profile_keeps_the_enet6_regression_leg_at_scale():
+    # enet6 stays a gate leg (#773): the LAN/single-player backend keeps a 128-client strict-tier
+    # run, mirroring `reference` so the two transports remain directly comparable.
     cfg = sg.load_config(sg.DEFAULT_CONFIG)
-    runs = sg.expand_runs(sg.load_profile(cfg, "gns"))
+    prof = sg.load_profile(cfg, "reference-enet")
+    assert prof["transport"] == "enet"
+    assert prof["clients"] == 128
+    assert prof["patterns"] == ["idle", "weave", "aggressive"]
+    assert prof["baselined"] is True
+
+
+def test_characterisation_profiles_run_on_the_shipping_transport():
+    # #773: soak + every characterisation profile measures GNS — published figures describe what
+    # ships. (enet6 regression coverage = `pr` on every PR + `reference-enet` on the strict tier.)
+    cfg = sg.load_config(sg.DEFAULT_CONFIG)
+    for name in ("soak", "entity-scale", "overrun", "congestion", "entity-churn"):
+        assert sg.load_profile(cfg, name)["transport"] == "gns", name
+
+
+def test_sweep_profiles_carry_no_tick_ms_assert():
+    # The reference-runner workflow leg always passes --strict, which turns assert_max_tick_ms into
+    # a hard bot_swarm assert. The sweeps' deliberately-collapsing single-worker cells ARE the
+    # characterisation, so the two sweep profiles must not carry a tick-ms threshold (#773).
+    cfg = sg.load_config(sg.DEFAULT_CONFIG)
+    for name in ("entity-scale", "entity-churn"):
+        assert sg.load_profile(cfg, name)["assert_max_tick_ms"] == 0, name
+
+
+def test_gns_profiles_set_the_runner_transport_env():
+    cfg = sg.load_config(sg.DEFAULT_CONFIG)
+    runs = sg.expand_runs(sg.load_profile(cfg, "reference"))
     assert all(r["env"].get("FL_LOADTEST_TRANSPORT") == "gns" for r in runs)
 
 
 def test_enet_profiles_do_not_set_the_transport_env():
     cfg = sg.load_config(sg.DEFAULT_CONFIG)
-    runs = sg.expand_runs(sg.load_profile(cfg, "pr"))
-    assert all("FL_LOADTEST_TRANSPORT" not in r["env"] for r in runs)
+    for name in ("pr", "reference-enet"):
+        runs = sg.expand_runs(sg.load_profile(cfg, name))
+        assert all("FL_LOADTEST_TRANSPORT" not in r["env"] for r in runs), name
 
 
 # ---- wire-byte baseline (#772) -------------------------------------------------------------------
@@ -637,7 +668,7 @@ def test_shipped_profiles_gate_on_wire_not_payload():
     # The 150 KB/s ceiling moved to WIRE bytes: payload KB/s is transport-independent and so cannot
     # see what a transport actually costs to run (enet6 range-coder-compresses, GNS does not).
     cfg = sg.load_config(sg.DEFAULT_CONFIG)
-    for name in ("pr", "reference", "soak", "gns"):
+    for name in ("pr", "reference", "reference-enet", "soak"):
         prof = sg.load_profile(cfg, name)
         assert prof["assert_max_wire_kbs"] == 150, name
         assert prof["assert_max_kbs"] == 0, name

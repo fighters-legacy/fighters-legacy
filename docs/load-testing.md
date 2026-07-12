@@ -38,7 +38,7 @@ The same JSON shape is the standalone `--metrics-json` file and the embedded blo
 
 | Field | Meaning |
 |---|---|
-| `schema_version` | server-tick report schema (currently `5`: `2` added `load_factor`/`dropped_ticks`, `3` added `rss_kb`/`rss_startup_kb`, `4` added `interest_scale`, `5` added the `congestion_*` watermarks) |
+| `schema_version` | server-tick report schema (currently `6`: `2` added `load_factor`/`dropped_ticks`, `3` added `rss_kb`/`rss_startup_kb`, `4` added `interest_scale`, `5` added the `congestion_*` watermarks, `6` added the `wire_*` egress fields, [#772]) |
 | `tick_hz` | actual recent tick rate over the sampling window (ring-derived) |
 | `ticks_sampled` / `ticks_total` | ticks in the rolling window / monotonic all-time |
 | `window_s` | wall-clock span of the sampling window |
@@ -49,7 +49,9 @@ The same JSON shape is the standalone `--metrics-json` file and the embedded blo
 | `rss_kb` / `rss_startup_kb` | current process RSS (KiB) / RSS captured once after init; the soak leak gate tracks the delta (#707). `0` = unavailable on this platform |
 | `congestion_min_send_hz` | all-time minimum across peers of the adaptive snapshot send rate (#518); `60` = the controller never engaged over the run (#714) |
 | `congestion_recovered_send_hz` | max send rate observed since the minimum was set — recovery evidence after the link cleared (#714) |
-| `congestion_max_loss` | all-time max sampled ENet mean loss fraction across peers (diagnostic) (#714) |
+| `congestion_max_loss` | all-time max sampled transport mean loss fraction across peers (diagnostic) (#714) |
+| `wire_out_kbs` / `wire_in_kbs` / `wire_out_pps` | socket-level egress/ingress rates from `INetwork::getWireStats()` — framing, compression, and encryption included; the sample kept is the one at the highest peer count seen (#772) |
+| `wire_peers` / `wire_out_kbs_per_client` | peer count the kept wire sample was taken at / egress wire KB/s divided by it — the number the **150 KB/s/client ceiling** gates (#772) |
 | `tick_ms` | total `onTick` wall-time stats `{min,mean,max,p95,p99}` (ms) |
 | `maintenance_ms` | rate-limit prune, idle timeout, admin drains, spatial rebuild, input drain, jitter resize |
 | `integrate_ms` | physics integration (`stepFlightSim`) summed across entities |
@@ -144,15 +146,20 @@ degraded), useful for an A/B in a single session.
 
 **CI now automates this runbook** ([#574]). The `overrun` scale-gate profile runs the governor **on**
 (`FL_LOADTEST_GOVERNOR=1`, wired from the profile's `governor: true`) and deterministically overloads a
-serialize-bound tick with `test_spawn_ai = 5000` at `sim_workers = 1` (the [#573] characterisation
-measured ~36.8 Hz governor-off there — a large, portable margin below 60 Hz). It asserts the governor
+serialize-bound tick with `test_spawn_ai = 5000` at `sim_workers = 1` — on **GNS**, the shipping
+transport ([#773]): the governor-off probe on the 8-core reference box measured **24.6 Hz** there
+(34.8 ms tick, serialize 32.5 ms — at this entity count serialize is the engine's own encode work,
+not ENet's inline send, so the overload carries across transports; see
+[entity-scale-characterization.md](entity-scale-characterization.md)). It asserts the governor
 *responded*:
 
 - `--assert-max-load-factor 0.99` fails if the governor **never engaged** (`load_factor` stayed `1.0` —
-  the primary bite; a dev smoke measured `~0.25` governor-on vs `1.0` governor-off);
+  the primary bite; the [#773] reference run measured `0.25` governor-on vs `1.0` governor-off, with
+  `interest_scale` shed to its `0.5` floor);
 - `--assert-max-dropped-ticks 100` is the **graceful-not-spiral** bound — a small allowance absorbs the
   one-time startup-spawn + EWMA-ramp transient before the governor engages; a genuine spiral produces
-  orders of magnitude more drops over the 90 s run.
+  orders of magnitude more (the governor-off probe dropped ~1060 ticks in just 30 s, while the
+  governor-on reference run dropped **zero** in 90 s and held 60 Hz on a 13.5 ms shed tick).
 
 Both use a **negative-disabled** sentinel (`< 0` = off) because `0` is a real value for each. The
 profile is `baselined: false` — the shed KB/s must never touch the committed bandwidth baseline — and
@@ -161,7 +168,10 @@ reliable. A one-off run with `FL_LOADTEST_GOVERNOR=0` fails the load-factor asse
 bites. There is no `taskset` dependency: entity-count overload is portable across runner core counts.
 
 [#514]: https://github.com/fighters-legacy/fighters-legacy/issues/514
+[#572]: https://github.com/fighters-legacy/fighters-legacy/issues/572
 [#574]: https://github.com/fighters-legacy/fighters-legacy/issues/574
+[#575]: https://github.com/fighters-legacy/fighters-legacy/issues/575
+[#773]: https://github.com/fighters-legacy/fighters-legacy/issues/773
 
 ### Entity-pool + SpatialIndex scaling ([#573])
 
@@ -183,7 +193,9 @@ read the authoritative `server_tick` per-phase budget:
 - `--assert-min-entities N` fails the run if the server did not reach N live entities (the spawn took).
 
 The whole matrix is a driver profile (advisory, **never baselined** — its sweep would corrupt the KB/s
-baseline): `python3 tools/bot_swarm/scale_gate.py --profile entity-scale --build-dir build/release`,
+baseline; pins `transport: gns` since [#773], and deliberately carries **no tick-ms assert**: the
+collapsing single-worker cells are the characterisation, not a regression):
+`python3 tools/bot_swarm/scale_gate.py --profile entity-scale --build-dir build/release`,
 or the reference-env sweep `ENTITY_COUNTS="0 2000 5000" SIM_WORKERS="1 4 8" … run-container.sh`. The
 `spatial_cell_size_km` knob (`0` = auto from draw distance) tunes the index cell size — a cell much
 smaller than the draw distance explodes the `queryRadius` cell count. What to watch in `server_tick`:
@@ -306,8 +318,9 @@ deterministic replay in #588); the load harness keys playback off wall-time × `
 
 ## Characterisation runbook (for #505)
 
-To find the `enet6` ceiling, sweep the client count under a fixed pattern and watch the
-**observed server tick-Hz min** fall away from 60:
+To find a transport's client-count ceiling, sweep the client count under a fixed pattern and watch
+the **observed server tick-Hz min** fall away from 60 (set `FL_LOADTEST_TRANSPORT=gns` to sweep the
+shipping transport; the bare invocation sweeps enet6, the original #505 instrument):
 
     for n in 32 64 96 128 160 200 256; do
       tools/bot_swarm/run_loadtest.sh build/debug "$n" 30 weave
@@ -339,11 +352,17 @@ the single end-of-run metrics read still carries the evidence), and the two asse
 *engaged-then-recovered*: the min send rate must have fallen to ≤ the engaged threshold during the
 window (stuck at 60 = the controller never responded), and must have climbed back to ≥ the recovered
 threshold afterwards. The `congestion` scale-gate profile (reference/nightly tier, `baselined: false`)
-runs exactly this; a healthy-link run with the same asserts **fails** the engaged gate (verified —
-the gate bites). Tuning notes: the **+100 ms delay is the deterministic engage trigger** (+200 ms RTT
-over the controller's 40 ms margin — ENet's loss metric only counts unACKed *reliable* packets, so
-datagram drop barely moves it on this mostly-unreliable workload), and the loss fraction is kept at
-5% — a 15% dev run tripped ENet's own peer timeout and dropped a client, failing admission.
+runs exactly this — **on GNS, the shipping transport, since [#773]**: the proxy is a plain UDP
+datagram relay, so it degrades GNS traffic the same way, and GNS feeds the controller real link stats
+(`SteamNetConnectionRealTimeStatus_t` ping / connection quality via `getPeerLinkStats`), so the
+RTT-over-baseline trigger sees the window exactly as it saw ENet's `roundTripTime` — verified on the
+reference box: engaged to the 10 Hz controller floor inside the window, recovered to 60 Hz after it.
+A healthy-link run with the same asserts **fails** the engaged gate (verified — the gate bites).
+Tuning notes: the **+100 ms delay is the deterministic engage trigger** (+200 ms RTT over the
+controller's 40 ms margin — neither transport's loss metric responds much to datagram drop on this
+mostly-unreliable workload: ENet only counts unACKed *reliable* packets, GNS reports a smoothed
+connection-quality fraction), and the loss fraction is kept at 5% — a 15% dev run tripped ENet's own
+peer timeout and dropped a client, failing admission.
 
 The manual `netem` route remains available for ad-hoc experiments (`sudo tc qdisc add dev lo root
 netem loss 5% delay 80ms`, restore with `... del ...`; macOS: `dnctl`/`pfctl`; Windows: `clumsy`),
@@ -353,19 +372,24 @@ and the deterministic AIMD logic itself is covered by `test_congestion_controlle
 
 [#714]: https://github.com/fighters-legacy/fighters-legacy/issues/714
 
-## Validating the GNS transport (#649)
+## The transport the gate measures (#649, #773)
 
-`bot_swarm` defaults to **enet6** and always will: it is the enet6 regression instrument, and every
-pre-existing profile depends on that default. But **GameNetworkingSockets is the default internet
-transport** ([#507]) — the one most players actually use — and until #649 no gate leg ever spoke it.
+`bot_swarm` defaults to **enet6** and always will: it is the enet6 regression instrument. But
+**GameNetworkingSockets is the default internet transport** ([#507]) — the one most players actually
+use — so since [#773] every headline and characterisation profile pins `transport: gns` and **the
+published numbers describe what ships**: `reference` (the primary 128-client profile), `soak`,
+`overrun`, `congestion`, `entity-scale`, and `entity-churn` all run GNS on both ends. enet6 keeps two
+regression legs: `pr` (every PR, hosted runner) and `reference-enet` (128 clients on the strict tier,
+mirroring `reference` so the transports stay directly comparable).
 
 `--transport gns` points both ends at GNS:
 
     FL_LOADTEST_TRANSPORT=gns ./tools/bot_swarm/run_loadtest.sh build/release 128 60 weave
-    python3 tools/bot_swarm/scale_gate.py --profile gns --build-dir build/release --strict
+    python3 tools/bot_swarm/scale_gate.py --profile reference --build-dir build/release --strict
 
-It requires an `FL_ENABLE_GNS=ON` build. **A GNS run can never silently degrade into an enet6 run** —
-that would be a gate that lies, which is worse than no gate — so three independent things prevent it:
+It requires an `FL_ENABLE_GNS=ON` build (the default). **A GNS run can never silently degrade into an
+enet6 run** — that would be a gate that lies, which is worse than no gate — so three independent
+things prevent it:
 
 1. `bot_swarm` **refuses** `--transport gns` in an enet6-only build (exit 2) instead of taking
    `createNetwork`'s convenience fallback.
@@ -375,21 +399,24 @@ that would be a gate that lies, which is worse than no gate — so three indepen
    `cmake/dependencies.cmake` *silently* force-disables GNS when OpenSSL/protobuf are missing (the
    same trap [#653] hit). The reference runner installs them via `reference-env/vm-provision.sh`.
 
-The `gns` profile is **not baselined**: GNS carries encryption and different framing, so its byte
-profile is legitimately not enet6's and must never be diffed against the committed enet6 KB/s
-baseline. Bandwidth is still hard-gated by the absolute 150 KB/s/client ceiling.
+Baselines are keyed **per profile** (`reference/*` = GNS, `reference-enet/*` = enet6), so each
+transport diffs only against itself — which the wire-byte baseline needs, because the two transports
+legitimately put very different byte counts on the wire for identical payload ([#772]; the payload
+baseline agrees across transports by construction). Bandwidth is hard-gated by the absolute
+150 KB/s/client **wire** ceiling on both.
 
 ### Measured: GNS vs enet6 at 128 clients
 
-Same box (8-core reference VM), same build, same session, Release, 60 s per pattern:
+Same box (8-core reference VM), same build, same session, Release, 60 s per pattern (the [#773]
+re-derivation run; the original [#649] session measured the same values to within 0.3 ms):
 
-| Pattern | enet6 tick p99 | **GNS tick p99** | enet6 KB/s | GNS KB/s | Admission |
-|---|---:|---:|---:|---:|---|
-| idle | 5.48 ms | **1.47 ms** | 71.4 | 71.4 | 128/128 both |
-| weave | 12.62 ms | **1.51 ms** | 72.3 | 72.3 | 128/128 both |
-| aggressive | 12.60 ms | **1.73 ms** | 73.5 | 73.5 | 128/128 both |
+| Pattern | enet6 tick p99 | **GNS tick p99** | payload KB/s (both) | Admission |
+|---|---:|---:|---:|---|
+| idle | 5.53 ms | **1.55 ms** | 71.4 | 128/128 both |
+| weave | 13.07 ms | **1.54 ms** | 71.9 | 128/128 both |
+| aggressive | 13.15 ms | **1.84 ms** | 73.4 | 128/128 both |
 
-**GNS cuts server tick p99 by ~7–8×.** The reason is *where the packet work happens*: ENet's `send()`
+**GNS cuts server tick p99 by ~4–8×.** The reason is *where the packet work happens*: ENet's `send()`
 does its per-packet work inline on the calling thread, so it lands inside the sim tick's **serialize**
 phase; GNS's `SendMessageToConnection` queues to its own internal service thread and returns. The
 sim thread stops paying for the packet pump.
@@ -398,25 +425,26 @@ Phase breakdown makes it concrete (weave, 128 clients, same box):
 
 | | tick mean | serialize | integrate | serialize share |
 |---|---:|---:|---:|---:|
-| enet6 | 8.20 ms | 8.03 ms | 0.06 ms | 98 % |
-| GNS | 1.01 ms | 0.81 ms | 0.05 ms | 80 % |
+| enet6 | 8.34 ms | 8.16 ms | 0.06 ms | 98 % |
+| GNS | 1.00 ms | 0.79 ms | 0.05 ms | 79 % |
 
 **~90 % of what the `serialize` phase cost was ENet's inline send, not our snapshot pipeline** — whose
 real cost is ~0.8 ms at 128 clients. Integrate is unchanged, as it must be (transport-independent).
 
-Read this carefully before acting on the [#572] / [#575] trigger criteria. Serialize is *still* the
-dominant phase on GNS (80 %), so their phase-routing clauses (`serialize_ms > 0.5 × tick_ms` routes to
-sharding, `integrate_ms > 0.5 × tick_ms` routes to LOD physics) still hold — the routing logic is
-sound. What changes is the **magnitude**: on the default transport the tick runs ~16x under its
-16.6 ms budget instead of ~2x, so both triggers are far further away than the enet6 numbers imply,
-and any encode optimisation justified against an "8 ms serialize phase" is sized against a number
-that is really 0.8 ms on the transport that ships.
+**That 90 % finding is a low-entity-count statement.** At thousands of AI entities the serialize
+phase is dominated by the engine's own per-peer interest + scheduling + encode work
+(`clients × visible entities`), which lands on the sim thread on *every* transport — at 5000 entities
+/ 64 clients / 1 worker the GNS serialize phase is still 66 ms. The [#773] re-derivation of the
+[#573] matrix on GNS, including the collapse curve out to 20 000 entities, lives in
+[entity-scale-characterization.md](entity-scale-characterization.md); the [#572] / [#575] trigger
+criteria carry the GNS-derived magnitudes in their design records.
 
 Two honest caveats:
 
 - **The KB/s figures cannot show GNS's wire overhead.** `downstream_kbs_per_client` counts
   *application* snapshot payload bytes, not wire bytes — so identical KB/s is expected, and is *not*
-  evidence that encryption and framing are free. Measuring that needs a wire-level counter.
+  evidence that encryption and framing are free. That is what `wire_out_kbs_per_client` measures
+  (next section).
 - **Loopback.** The tick win is real and mechanical (work moved off the sim thread), but the absolute
   numbers come from a loopback run on one box. GNS also spends CPU on its own service threads, which
   an 8-core box pays for somewhere; the tick thread simply stops paying it.
@@ -510,12 +538,12 @@ Markdown summary to `$GITHUB_STEP_SUMMARY`.
 
 | Tier | Trigger | Profile | Hard gates | Advisory |
 |---|---|---|---|---|
-| **PR** | every PR + push to `main` (Linux, Release) | `pr` (64 clients, weave) | bandwidth ≤150 KB/s/client, admission (no refused/dropped), KB/s baseline regression, tick-Hz collapse tripwire (≥30) | tick-ms p99 (disabled) |
-| **Reference** | manual `workflow_dispatch` on the self-hosted `fl-reference` runner | `reference` (128 clients; idle/weave/aggressive) | bandwidth + admission + baseline + **tick-ms p99 ≤16.6 (`--strict`, unconditional)** | — |
-| **Soak** | manual `workflow_dispatch` (`profile=soak`) on `fl-reference` | `soak` (128 clients, weave, 2 h) | strict gates + RSS-growth leak (`--assert-max-rss-growth-kb`, from the server's self-reported `rss_kb`, [#707](https://github.com/fighters-legacy/fighters-legacy/issues/707)) | — |
-| **Overrun** | manual `workflow_dispatch` (`profile=overrun`, or `nightly` set) on `fl-reference` | `overrun` (32 clients, weave, governor **on**, `test_spawn_ai=5000` @ `sim_workers=1`) | governor engaged (`--assert-max-load-factor 0.99`) + graceful-not-spiral (`--assert-max-dropped-ticks 0`) + admission; **not baselined** ([#574](https://github.com/fighters-legacy/fighters-legacy/issues/574)) | tick-ms p99 |
-| **Congestion** | manual `workflow_dispatch` (`profile=congestion`, or `nightly` set) on `fl-reference` | `congestion` (16 clients, weave, lossy proxy: 5% loss + 100 ms delay in [25 s, 55 s)) | controller engaged (`--assert-congestion-engaged-hz 30`) + recovered (`--assert-congestion-recovered-hz 55`) + admission; **not baselined** ([#714](https://github.com/fighters-legacy/fighters-legacy/issues/714)) | — |
-| **GNS** | manual `workflow_dispatch` (`profile=gns`, or `nightly` set) on `fl-reference` | `gns` (128 clients; idle/weave/aggressive — mirrors `reference`, but **both ends speak GameNetworkingSockets**) | transport identity + admission + bandwidth + tick-Hz + **tick-ms p99 ≤16.6** (`--strict`); **not baselined** ([#649]) | — |
+| **PR** | every PR + push to `main` (Linux, Release) | `pr` (64 clients, weave, **enet6** — the regression instrument) | wire bandwidth ≤150 KB/s/client, admission (no refused/dropped), KB/s + wire baseline regression, tick-Hz collapse tripwire (≥30) | tick-ms p99 (disabled) |
+| **Reference** | manual `workflow_dispatch` on the self-hosted `fl-reference` runner | `reference` (128 clients; idle/weave/aggressive; **both ends GNS** — the shipping transport, [#773]) | transport identity + wire bandwidth + admission + baselines + **tick-ms p99 ≤16.6 (`--strict`, unconditional)** | — |
+| **Reference-enet** | manual `workflow_dispatch` (`profile=reference-enet`, or `nightly` set) on `fl-reference` | `reference-enet` (128 clients; idle/weave/aggressive; **enet6** — the LAN/single-player backend's full-scale regression leg, [#773]) | same gates as Reference, on its own baseline keys | — |
+| **Soak** | manual `workflow_dispatch` (`profile=soak`) on `fl-reference` | `soak` (128 clients, weave, 2 h, **GNS**) | strict gates + RSS-growth leak (`--assert-max-rss-growth-kb`, from the server's self-reported `rss_kb`, [#707](https://github.com/fighters-legacy/fighters-legacy/issues/707)) | — |
+| **Overrun** | manual `workflow_dispatch` (`profile=overrun`, or `nightly` set) on `fl-reference` | `overrun` (32 clients, weave, governor **on**, `test_spawn_ai=5000` @ `sim_workers=1`, **GNS**) | governor engaged (`--assert-max-load-factor 0.99`) + graceful-not-spiral (`--assert-max-dropped-ticks 100`) + admission; **not baselined** ([#574](https://github.com/fighters-legacy/fighters-legacy/issues/574)) | — |
+| **Congestion** | manual `workflow_dispatch` (`profile=congestion`, or `nightly` set) on `fl-reference` | `congestion` (16 clients, weave, lossy proxy: 5% loss + 100 ms delay in [25 s, 55 s), **GNS**) | controller engaged (`--assert-congestion-engaged-hz 30`) + recovered (`--assert-congestion-recovered-hz 55`) + admission; **not baselined** ([#714](https://github.com/fighters-legacy/fighters-legacy/issues/714)) | — |
 
 The PR tier hard-gates only machine-independent metrics: `bot_swarm`'s `--assert-min-tick-hz` reads
 the *client-side proxy*, which sags when the harness itself is CPU-starved on a shared runner — a
@@ -530,23 +558,28 @@ GitHub skips missed crons. A Windows job smoke-runs `run_loadtest.ps1` (8 client
 PowerShell launcher can't bitrot.
 
 **Baseline.** [`scale-gate-baseline.json`](../tools/bot_swarm/scale-gate-baseline.json) holds the
-committed `downstream_kbs_per_client` mean per `<profile>/<pattern>`. Only this protocol-stable
-metric is baselined — CPU-timing numbers are too noisy on shared runners. The gate fails on a
+committed `downstream_kbs_per_client` mean (`kbs`) and egress wire KB/s (`wire_kbs`, [#772]) per
+`<profile>/<pattern>` — since the transport is a profile property, each transport gets its own keys
+(`reference/*` = GNS, `reference-enet/*` + `pr/weave` = enet6, [#773]). Only these protocol-stable
+byte metrics are baselined — CPU-timing numbers are too noisy on shared runners. The gate fails on a
 regression beyond `kbs_baseline_tolerance_pct` (10%). Regenerate after an intentional bandwidth
 change (e.g. Epic B budgeting) with:
 
-    python3 tools/bot_swarm/scale_gate.py --profile pr        --build-dir build/release --update-baseline
-    python3 tools/bot_swarm/scale_gate.py --profile reference --build-dir build/release --update-baseline
+    python3 tools/bot_swarm/scale_gate.py --profile pr             --build-dir build/release --update-baseline
+    python3 tools/bot_swarm/scale_gate.py --profile reference      --build-dir build/release --update-baseline
+    python3 tools/bot_swarm/scale_gate.py --profile reference-enet --build-dir build/release --update-baseline
 
-The KB/s baseline is machine-independent, so it can be regenerated from any box (a failed run aborts
-the update rather than committing a partial baseline). That independence is measured, not assumed:
-the values committed in #766 were produced on the 8-core reference VM and the hosted PR runner
-independently measured the same `pr/weave` figure to within 0.1 KB/s (71.4 vs 71.379). Prefer the
-reference VM anyway, so every key in the file comes from one box.
+The payload KB/s baseline is machine-independent, so it can be regenerated from any box (a failed run
+aborts the update rather than committing a partial baseline). That independence is measured, not
+assumed: the values committed in #766 were produced on the 8-core reference VM and the hosted PR
+runner independently measured the same `pr/weave` figure to within 0.1 KB/s (71.4 vs 71.379). Prefer
+the reference VM anyway, so every key in the file comes from one box (the wire baseline additionally
+*depends* on the loopback path being comparable, so treat it as reference-VM-only).
 
 **When the gate fires, decide which kind of change it caught.** The tolerance band is a *regression
-detector*, not a capacity limit — the real capacity gate is `assert_max_kbs` (150 KB/s/client), and
-current runs sit around 71–73, i.e. roughly 2× headroom. So a baseline breach means "bytes moved",
-not "we are out of budget". If the move is unintended, fix the code; if it is a reviewed, accepted
+detector*, not a capacity limit — the real capacity gate is the wire ceiling (`assert_max_wire_kbs`,
+150 KB/s/client, [#772]), and current runs sit around 76–81 KB/s wire on GNS (18–62 on enet6), i.e.
+roughly 2× headroom on the shipping transport. So a baseline breach means "bytes moved", not "we are
+out of budget". If the move is unintended, fix the code; if it is a reviewed, accepted
 cost (as #725's shared-origin encode-once was), regenerate the baseline — otherwise the stale band
 keeps firing on *later, unrelated* PRs and stops being a signal.

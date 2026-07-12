@@ -31,6 +31,7 @@ first. The corresponding dated decision record is in
 [#575]: https://github.com/fighters-legacy/fighters-legacy/issues/575
 [#725]: https://github.com/fighters-legacy/fighters-legacy/issues/725
 [#726]: https://github.com/fighters-legacy/fighters-legacy/issues/726
+[#773]: https://github.com/fighters-legacy/fighters-legacy/issues/773
 
 ## Problem and evidence
 
@@ -43,11 +44,12 @@ The entity-scale characterisation ([#573],
 [entity-scale-characterization.md](entity-scale-characterization.md)) established:
 
 - The **entity pool and `SpatialIndex` are not the ceiling** — integrate/AI/collision stay cheap
-  even at 5000 entities. The dominant per-tick cost at scale is the **Serialize phase**: the
+  even at 20 000 entities. The dominant per-tick cost at scale is the **Serialize phase**: the
   per-peer, interest-managed, budgeted snapshot build, ∝ `clients × visible entities`.
-- The Serialize phase **already parallelises with worker count** (the [#512] per-peer pass):
-  22.4 → 9.1 ms at 5000 entities from 1 → 4 workers; the 5000-entity single-worker collapse
-  (36.8 Hz) recovers to a held 60 Hz at 4 workers.
+- The Serialize phase **already parallelises with worker count** (the [#512] per-peer pass): on the
+  shipping transport ([#773] GNS figures, reference env, 64 clients) 66.4 → 13.6 ms at 5000
+  entities from 1 → 8 workers; the 5000-entity single-worker collapse (12.6 Hz) recovers to a held
+  60 Hz at 8 workers.
 - The graceful path when the tick is over budget anyway is the [#514] overrun governor
   (send-rate + byte-budget + AI-stride shedding), and the `GameLoop` catch-up cap bounds the
   failure mode as time dilation with a visible `dropped_ticks` counter.
@@ -286,42 +288,60 @@ is last.
 6. **Spatial sharding** — only on the trigger below, and only in its process/multi-machine form
    (the threads form is dominated — see above).
 
-## ⚠ Measurement caveat: these numbers were taken on enet6, not the default transport ([#649])
+## Measured magnitudes on the shipping transport ([#649] → [#773])
 
-**Everything measured in this document was measured on enet6. The default internet transport is
-GameNetworkingSockets** ([#507]), and it changes the picture by an order of magnitude. Same box
-(8-core reference), same build, 128 clients, weave:
+The original #572 evidence was measured on enet6; [#773] re-derived it on **GameNetworkingSockets**
+(the default internet transport, [#507]) on the 8-core reference environment. The absolute figures
+below supersede the enet6 ones everywhere in this document; the trigger's *routing logic* is
+unchanged (see [entity-scale-characterization.md](entity-scale-characterization.md) for the full
+matrix).
+
+**At the product-target workload (128 clients, ~128 entities) the two transports differ by ~8×:**
 
 | | tick mean | serialize | integrate | serialize share |
 |---|---:|---:|---:|---:|
-| enet6 | 8.20 ms | 8.03 ms | 0.06 ms | 98 % |
-| **GNS** | **1.01 ms** | **0.81 ms** | 0.05 ms | 80 % |
+| enet6 | 8.34 ms | 8.16 ms | 0.06 ms | 98 % |
+| **GNS** | **1.00 ms** | **0.79 ms** | 0.05 ms | 79 % |
 
-**~90 % of what the `serialize` phase cost was ENet's inline per-packet send, not this engine's
-snapshot pipeline** — ENet does that work on the calling thread, so it lands inside the sim tick;
-GNS queues to its own service thread and returns. Our actual encode + schedule cost is ~0.8 ms at
-128 clients.
+~90 % of what the `serialize` phase cost there was ENet's inline per-packet send — ENet does that
+work on the calling thread, so it lands inside the sim tick; GNS queues to its own service thread
+and returns. On the transport that ships, the 128-client tick runs **~16× under its 16.6 ms
+budget**, so clauses 1 and 2 of the trigger (governor pinned at floor, `dropped_ticks` rising) are
+far from firing at the product target — this deferral is *better* justified than the enet6 numbers
+suggested.
 
-What this does **not** change: serialize is still the dominant phase on GNS (80 %), so the
-phase-routing clause below (clause 3) still routes correctly, and integrate is unchanged.
+**At high entity counts the serialize cost is real on every transport.** The inline-send discount
+does not extend to mission-scale AI populations: serialize is the engine's own per-peer interest +
+scheduling + encode work (∝ `clients × visible entities`) and lands on the sim thread regardless of
+backend. On GNS (64 clients, weave, reference env):
 
-What this **does** change is the magnitude, and therefore the urgency:
+| AI entities | workers | tick Hz | serialize mean |
+|---|---|---:|---:|
+| 2000 | 1 | 33.1 | 27.1 ms |
+| 2000 | 8 | 60.0 (held) | 5.2 ms |
+| 5000 | 1 | 12.6 | 66.4 ms |
+| 5000 | 8 | 60.0 (held) | 13.6 ms |
 
-- On the transport that ships, the tick runs **~16× under its 16.6 ms budget**, not ~2×. Clauses 1
-  and 2 (governor pinned at floor, `dropped_ticks` rising) are correspondingly much further from
-  firing — **this deferral is better justified than the enet6 numbers suggest**, not worse.
-- **Any optimisation on the pre-sharding ladder justified against an "8 ms serialize phase" is sized
-  against a number that is really ~0.8 ms on the default transport.** Re-derive the prize before
-  spending effort on it.
-
-The characterization is being re-derived on GNS ([#649] follow-up); until then, treat every absolute
-figure in this document as an **enet6 upper bound**.
+- Serialize **still parallelises with worker count** (the [#512] per-peer pass): 66.4 → 13.6 ms at
+  5000 entities from 1 → 8 workers, and the single-worker collapse recovers to a held 60 Hz at 8
+  workers — the data-parallel tick, not sharding, remains the first line.
+- Serialize **still dominates** the overloaded tick (93–97 % of it at ≥ 5000 entities), so clause 3's
+  phase routing (`serialize_ms > 0.5 × tick_ms` → sharding ladder; integrate-dominant → [#575])
+  routes exactly as designed. Integrate is single-digit ms even at 20 000 entities on one worker.
+- The pre-sharding ladder's prize is correspondingly real at scale: the [#725] shared-encode item is
+  sized against a **66 ms** serialize phase at 5000 entities — not against the ~0.8 ms low-entity
+  figure the enet6 caveat once implied it might shrink to.
+- The [#514]/[#726] governor demonstrably holds the graceful path at this load: at the `overrun`
+  profile's 5000-entity/1-worker point, governor-off collapses to 24.6 Hz with ~1060 dropped ticks
+  in 30 s (32 clients); governor-on sheds to `load_factor 0.25` / `interest_scale 0.5` and holds
+  60 Hz with **zero** drops.
 
 ## Trigger criterion
 
-All quantities are already produced by `fl-server --metrics-json` (`ServerTickReport` schema
-v2) and surfaced through the scale gate ([#520]), the overrun profile ([#574]), and the 8-core
-reference runner ([#569]).
+All quantities are already produced by `fl-server --metrics-json` (`ServerTickReport`) and
+surfaced through the scale gate ([#520]), the overrun profile ([#574]), and the 8-core reference
+runner ([#569]) — all GNS-primary since [#773], so a trigger evaluation measures the shipping
+transport by default.
 
 > **Implement spatial sharding only when, on the 8-core reference environment at a
 > product-target workload (≤ 128 real clients + mission-scale AI), with

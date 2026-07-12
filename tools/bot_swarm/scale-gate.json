@@ -1,9 +1,9 @@
 {
-  "_comment": "Scale-gate thresholds for tools/bot_swarm/scale_gate.py (issue #520). Single source of truth for the gate numbers. See docs/load-testing.md.",
+  "_comment": "Scale-gate thresholds for tools/bot_swarm/scale_gate.py (issue #520). Single source of truth for the gate numbers. See docs/load-testing.md. Transport policy (#773): GameNetworkingSockets is the DEFAULT internet transport (#507), so every headline/characterisation profile pins `transport: gns` — the published numbers describe what ships. enet6 (the LAN/single-player backend) keeps two regression legs: `pr` (every PR, hosted runner) and `reference-enet` (128-client strict tier).",
   "kbs_baseline_tolerance_pct": 10,
   "profiles": {
     "pr": {
-      "_comment": "Deterministic PR tier: only machine-independent metrics are hard-gated (bandwidth + admission + KB/s baseline). tick-Hz is a total-collapse tripwire; tick-ms is advisory (0 = disabled) because the client-side proxy and CPU timing are noisy on shared runners.",
+      "_comment": "Deterministic PR tier: only machine-independent metrics are hard-gated (bandwidth + admission + KB/s baseline). tick-Hz is a total-collapse tripwire; tick-ms is advisory (0 = disabled) because the client-side proxy and CPU timing are noisy on shared runners. Deliberately enet6 (bot_swarm's default): it is the enet6 regression instrument, and an enet6-only build keeps the PR leg lean (no protobuf/OpenSSL).",
       "clients": 64,
       "duration_s": 30,
       "patterns": [
@@ -16,7 +16,23 @@
       "assert_max_wire_kbs": 150
     },
     "reference": {
-      "_comment": "Strict tier for the 8-core/16GB reference instance (or a self-hosted runner via --strict). tick-ms p99 enforced there; advisory on hosted runners.",
+      "_comment": "The PRIMARY reference profile (#773): 128 clients with BOTH ends on GNS (FL_LOADTEST_TRANSPORT=gns -> fl-server --transport gns + bot_swarm --transport gns) — the default internet transport is the one the headline numbers describe. Strict tick-ms p99 on the 8-core/16GB reference instance (or a self-hosted runner via --strict); advisory on hosted runners. REQUIRES an FL_ENABLE_GNS=ON build: bot_swarm hard-fails rather than silently falling back to enet6, and the gate cross-checks the report's `transport` key, so a downgraded run fails instead of passing as a GNS validation. Baselined per-profile; the wire KB/s baseline is the one that tracks what the transport actually costs (#772 — enet6 range-coder-compresses, GNS encrypts and does not compress).",
+      "clients": 128,
+      "duration_s": 60,
+      "patterns": [
+        "idle",
+        "weave",
+        "aggressive"
+      ],
+      "transport": "gns",
+      "sim_worker_threads": 0,
+      "assert_max_kbs": 0,
+      "assert_min_tick_hz": 58,
+      "assert_max_tick_ms": 16.6,
+      "assert_max_wire_kbs": 150
+    },
+    "reference-enet": {
+      "_comment": "enet6 regression leg at full reference scale (#773; this was the pre-#773 `reference` profile). enet6 is the LAN/single-player backend and a genuine regression instrument (net_check, bot_swarm's default), so it keeps a 128-client strict-tier gate — but its figures are NOT the headline capacity numbers; those come from `reference` (GNS, what ships).",
       "clients": 128,
       "duration_s": 60,
       "patterns": [
@@ -31,12 +47,13 @@
       "assert_max_wire_kbs": 150
     },
     "soak": {
-      "_comment": "2 h soak-stability run. Same strict thresholds; the server self-reports RSS in the tick metrics (#707) and the leak gate hard-fails if growth exceeds assert_max_rss_growth_kb (~256 MiB over 2 h).",
+      "_comment": "2 h soak-stability run on the shipping transport (GNS, #773). Same strict thresholds as `reference`; the server self-reports RSS in the tick metrics (#707) and the leak gate hard-fails if growth exceeds assert_max_rss_growth_kb (~256 MiB over 2 h).",
       "clients": 128,
       "duration_s": 7200,
       "patterns": [
         "weave"
       ],
+      "transport": "gns",
       "sim_worker_threads": 0,
       "assert_max_kbs": 0,
       "assert_min_tick_hz": 58,
@@ -45,12 +62,13 @@
       "assert_max_wire_kbs": 150
     },
     "entity-scale": {
-      "_comment": "Entity-pool + SpatialIndex scaling characterisation (#573). Sweeps entity count x sim worker count via FL_TEST_SPAWN_AI / FL_SIM_WORKER_THREADS, driven from the [world] load-spawn affordance. Advisory only (baselined=false): reads server_tick.entities + tick p99 into the summary but never gates the committed KB/s baseline. Reference-tier (nightly / workflow_dispatch) \u2014 needs the 8-core reference box for meaningful CPU timing.",
+      "_comment": "Entity-pool + SpatialIndex scaling characterisation (#573), re-derived on GNS (#773). Sweeps entity count x sim worker count via FL_TEST_SPAWN_AI / FL_SIM_WORKER_THREADS, driven from the [world] load-spawn affordance. Advisory only (baselined=false): reads server_tick.entities + tick p99 into the summary but never gates the committed KB/s baseline. assert_max_tick_ms is DELIBERATELY 0 (#773): the reference-runner workflow leg always passes --strict, which would turn a tick-ms threshold into a hard bot_swarm assert and fail the sweep's deliberately-collapsing single-worker cells — which ARE the characterisation, not a regression (the advisory summary still records per-cell tick p99). Reference-tier (workflow_dispatch) — needs the 8-core reference box for meaningful CPU timing.",
       "clients": 64,
       "duration_s": 60,
       "patterns": [
         "weave"
       ],
+      "transport": "gns",
       "entity_spawn_counts": [
         0,
         500,
@@ -66,15 +84,16 @@
       "baselined": false,
       "assert_max_kbs": 0,
       "assert_min_tick_hz": 0,
-      "assert_max_tick_ms": 16.6
+      "assert_max_tick_ms": 0
     },
     "overrun": {
-      "_comment": "Synthetic tick-overrun profile (#574): proves the #514 graceful overrun governor ENGAGES and SHEDS rather than spiralling. Runs with the governor ON (governor=true -> FL_LOADTEST_GOVERNOR=1) and deterministically overloads a serialize-bound tick with test_spawn_ai=5000 at sim_workers=1 (the #573 characterisation measured ~36.8 Hz governor-off here \u2014 a large portable margin below 60 Hz). Gates: max_load_factor 0.99 fails if the governor never engaged (load_factor stayed 1.0 \u2014 the primary bite, verified during dev to drop to ~0.25 governor-on vs 1.0 governor-off); max_dropped_ticks 100 is the graceful-not-spiral bound (a small allowance absorbs the one-time startup-spawn + EWMA-ramp transient before the governor engages \u2014 measured ~24 drops in a debug smoke; a genuine spiral produces thousands over 90 s); --assert-min-entities 5000 (auto from the load-spawn) confirms the overload took. baselined=false: the shed KB/s must NEVER touch the committed bandwidth baseline. Reference tier only (nightly / workflow_dispatch) \u2014 the collapse margin is reliable only on a controlled runtime.",
+      "_comment": "Synthetic tick-overrun profile (#574): proves the #514 graceful overrun governor ENGAGES and SHEDS rather than spiralling — on GNS, the shipping transport (#773). Runs with the governor ON (governor=true -> FL_LOADTEST_GOVERNOR=1) and deterministically overloads a serialize-bound tick with test_spawn_ai=5000 at sim_workers=1. The 5000-entity overload carries over from enet6 UNCHANGED: at high entity counts the serialize cost is the engine's own per-peer encode/schedule work (entities x peers), not ENet's inline send — the #773 governor-off probe on the 8-core reference box measured ~24.6 Hz / 34.8 ms tick (serialize 32.5 ms, 93%) on GNS, an even larger collapse margin below 60 Hz than enet6's ~36.8 Hz (#573). Gates: max_load_factor 0.99 fails if the governor never engaged (load_factor stayed 1.0); max_dropped_ticks 100 is the graceful-not-spiral bound (a small allowance absorbs the one-time startup-spawn + EWMA-ramp transient; a genuine governor-off spiral measured ~1060 drops in just 30 s at this load); --assert-min-entities 5000 (auto from the load-spawn) confirms the overload took. baselined=false: the shed KB/s must NEVER touch the committed bandwidth baseline. Reference tier only (workflow_dispatch) — the collapse margin is reliable only on a controlled runtime.",
       "clients": 32,
       "duration_s": 90,
       "patterns": [
         "weave"
       ],
+      "transport": "gns",
       "entity_spawn_counts": [
         5000
       ],
@@ -90,12 +109,13 @@
       "assert_max_dropped_ticks": 100
     },
     "congestion": {
-      "_comment": "Synthetic congestion profile (#714): proves the #518 per-peer AIMD send-rate controller ENGAGES on a degraded link and RECOVERS when it clears. bot_swarm routes its clients through a local lossy UDP proxy that drops 5% of datagrams + adds 100 ms one-way delay in a mid-run window ([25s, 55s) from proxy start \u2014 after the connect ramp, ending ~35s before the run ends so the additive ramp-up has a clean tail to recover in). The +100 ms delay (+200 ms RTT, far over the controller's 40 ms margin) is the deterministic engage trigger; the 5% loss is a secondary delivery stressor kept BELOW the level that trips ENet's own peer timeout (a 15% dev run dropped a client mid-window, failing admission \u2014 verified 5%+100ms keeps all peers connected while still engaging to the 10 Hz floor). Gates (schema v5 run-long watermarks): congestion_min_send_hz must fall to <= 30 (engaged; the controller floor is 10 Hz) and congestion_recovered_send_hz must climb back to >= 55 (recovered). baselined=false: degraded KB/s must never touch the committed bandwidth baseline. Reference tier only (nightly / workflow_dispatch).",
+      "_comment": "Synthetic congestion profile (#714): proves the #518 per-peer AIMD send-rate controller ENGAGES on a degraded link and RECOVERS when it clears — on GNS, the shipping transport (#773; GNS supplies real link stats via SteamNetConnectionRealTimeStatus_t ping/quality, so the controller's RTT-over-baseline trigger sees the degraded window the same way it does ENet's roundTripTime). bot_swarm routes its clients through a local lossy UDP proxy (transport-agnostic — it forwards datagrams) that drops 5% of datagrams + adds 100 ms one-way delay in a mid-run window ([25s, 55s) from proxy start — after the connect ramp, ending ~35s before the run ends so the additive ramp-up has a clean tail to recover in). The +100 ms delay (+200 ms RTT, far over the controller's 40 ms margin) is the deterministic engage trigger; the 5% loss is a secondary delivery stressor kept below the level that trips the transport's own peer timeout. Gates (schema v5 run-long watermarks): congestion_min_send_hz must fall to <= 30 (engaged; the controller floor is 10 Hz) and congestion_recovered_send_hz must climb back to >= 55 (recovered). baselined=false: degraded KB/s must never touch the committed bandwidth baseline. Reference tier only (workflow_dispatch).",
       "clients": 16,
       "duration_s": 90,
       "patterns": [
         "weave"
       ],
+      "transport": "gns",
       "degrade_start_s": 25,
       "degrade_duration_s": 30,
       "degrade_loss": 0.05,
@@ -108,12 +128,13 @@
       "assert_congestion_recovered_hz": 55
     },
     "entity-churn": {
-      "_comment": "Heavier-AI-mix + projectile-churn characterisation (#580, extends the #573 entity-scale matrix which deliberately used cheap static loiterers). Pre-spawns entities with a representative controller mix (60% loiter / 25% pursuit [EntityManager::get on a moving target each tick] / 15% patrol [a StateMachineController whose AnyEntityWithinRange transitions run SpatialIndex::queryRadius EVERY tick \u2014 the expensive AI path the governor's AI stride decimates]) and runs the projectile-churn generator (120 spawn+reap/s, 3 s TTL => ~360 extra live entities at steady state; continuous EntityPool alloc/free + SnapshotDespawn TLV traffic). Compare ai_ms / collision_ms / maintenance_ms against the same entity_spawn_counts points in the entity-scale matrix (docs/entity-scale-characterization.md). Advisory only (baselined=false). Reference tier (workflow_dispatch on demand, like entity-scale).",
+      "_comment": "Heavier-AI-mix + projectile-churn characterisation (#580, extends the #573 entity-scale matrix which deliberately used cheap static loiterers), re-derived on GNS (#773). Pre-spawns entities with a representative controller mix (60% loiter / 25% pursuit [EntityManager::get on a moving target each tick] / 15% patrol [a StateMachineController whose AnyEntityWithinRange transitions run SpatialIndex::queryRadius EVERY tick — the expensive AI path the governor's AI stride decimates]) and runs the projectile-churn generator (120 spawn+reap/s, 3 s TTL => ~360 extra live entities at steady state; continuous EntityPool alloc/free + SnapshotDespawn TLV traffic). Compare ai_ms / collision_ms / maintenance_ms against the same entity_spawn_counts points in the entity-scale matrix (docs/entity-scale-characterization.md). Advisory only (baselined=false); assert_max_tick_ms deliberately 0, same reason as entity-scale (#773 — the collapsing cells are the data). Reference tier (workflow_dispatch on demand, like entity-scale).",
       "clients": 64,
       "duration_s": 60,
       "patterns": [
         "weave"
       ],
+      "transport": "gns",
       "entity_spawn_counts": [
         500,
         2000,
@@ -129,24 +150,7 @@
       "baselined": false,
       "assert_max_kbs": 0,
       "assert_min_tick_hz": 0,
-      "assert_max_tick_ms": 16.6
-    },
-    "gns": {
-      "_comment": "128-client GNS scale gate (#649). GameNetworkingSockets is the DEFAULT internet transport on all three platforms (#507) but every gate leg is deliberately enet6 (bot_swarm is the enet6 regression instrument), so the transport most players will actually use had never been scale-tested. This profile pins BOTH ends to GNS (FL_LOADTEST_TRANSPORT=gns -> fl-server --transport gns + bot_swarm --transport gns) and otherwise mirrors `reference` so the two are directly comparable. REQUIRES an FL_ENABLE_GNS=ON build: bot_swarm hard-fails rather than silently falling back to enet6, and the gate cross-checks the report's `transport` key, so a downgraded run fails instead of passing as a GNS validation. Baselined per-profile, which gives GNS its OWN keys \u2014 necessary because the two transports put very different byte counts on the wire for identical payload (#772: enet6 range-coder-compresses, GNS encrypts and does not compress). The payload KB/s baseline is transport-independent; the wire KB/s baseline is not, and it is the one that tracks what the transport actually costs to run. Reference tier only (nightly / workflow_dispatch).",
-      "clients": 128,
-      "duration_s": 60,
-      "patterns": [
-        "idle",
-        "weave",
-        "aggressive"
-      ],
-      "transport": "gns",
-      "baselined": true,
-      "sim_worker_threads": 0,
-      "assert_max_kbs": 0,
-      "assert_min_tick_hz": 58,
-      "assert_max_tick_ms": 16.6,
-      "assert_max_wire_kbs": 150
+      "assert_max_tick_ms": 0
     }
   }
 }

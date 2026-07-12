@@ -241,13 +241,17 @@ follow-on coupling — deliberately out of scope here (Serialize has its own lad
    `test_spawn_ai_count` large enough to integrate-bind, before/after — the acceptance
    measurement for the lever actually moving `integrate_ms` and `load_factor`.
 
-## ⚠ Measurement caveat: the phase numbers here were taken on enet6 ([#649])
+## Measured magnitudes on the shipping transport ([#649] → [#773])
 
-The [#572] measurements this document builds on were taken on **enet6**; the default internet
-transport is **GameNetworkingSockets** ([#507]). On GNS the `serialize` phase collapses from 8.03 ms
-to 0.81 ms (128 clients, weave, same box) because ~90 % of it was ENet's inline per-packet send, not
-the snapshot pipeline. **`integrate` is unaffected** (0.06 → 0.05 ms) — it is transport-independent,
-as it must be.
+The [#572] measurements this document builds on were re-derived on **GameNetworkingSockets** (the
+default internet transport, [#507]) on the 8-core reference environment by [#773]. On GNS the
+128-client `serialize` phase collapses from 8.16 ms to 0.79 ms (weave, same box) because ~90 % of it
+was ENet's inline per-packet send, not the snapshot pipeline. **`integrate` is unaffected**
+(0.06 → 0.05 ms) — it is transport-independent, as it must be, and it stays cheap at scale: even at
+20 000 entities on a single worker, integrate is ~6.2 ms while serialize is ~104 ms
+(see [entity-scale-characterization.md](entity-scale-characterization.md)). Per-entity integrate on
+the reference VM measures ~0.31–0.40 µs single-worker (1.73 ms / 5000, 6.2 ms / 20 000) — the same
+order as the ~0.21 µs this design was sized against, on a slower box.
 
 For *this* document that is mostly good news, and one thing to watch:
 
@@ -256,10 +260,10 @@ For *this* document that is mostly good news, and one thing to watch:
   firing without integrate having gotten any more expensive. That is **not** a false alarm, because
   clauses 1 and 2 gate it: the ratio only routes an overrun that is *already happening*. It cannot
   fire on a healthy server. The router is sound; do not "fix" it by re-tuning 0.5.
-- With the tick running ~16× under budget on GNS (1.0 ms vs 16.6 ms), clauses 1 and 2 are far from
-  firing at all — so this remains correctly deferred.
-
-Re-derive the absolute figures on GNS before acting ([#649] follow-up).
+- With the 128-client tick running ~16× under budget on GNS (1.0 ms vs 16.6 ms), and every measured
+  overrun to 20 000 entities remaining decisively **serialize**-bound (integrate never exceeds ~6 %
+  of the overloaded tick), clauses 1–3 are far from firing together — so this remains correctly
+  deferred, now on shipping-transport evidence rather than an enet6 upper bound.
 
 ## Trigger criterion
 
@@ -319,4 +323,5 @@ Title: `feat(engine): reduced-rate physics integration for distant AI under over
   `integrate_ms` reduction and `load_factor` recovery at the trigger workload; CHANGELOG + this
   document's status updated.
 [#649]: https://github.com/fighters-legacy/fighters-legacy/issues/649
+[#773]: https://github.com/fighters-legacy/fighters-legacy/issues/773
 [#507]: https://github.com/fighters-legacy/fighters-legacy/issues/507

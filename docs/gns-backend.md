@@ -131,16 +131,21 @@ would cause ("some but not all targets already defined" — protobuf 5.x adds `l
 repo-root `vcpkg.json` only takes effect under the vcpkg toolchain — local non-vcpkg builds
 ignore it.
 
+[#508]: https://github.com/fighters-legacy/fighters-legacy/issues/508
+[#649]: https://github.com/fighters-legacy/fighters-legacy/issues/649
 [#653]: https://github.com/fighters-legacy/fighters-legacy/issues/653
+[#773]: https://github.com/fighters-legacy/fighters-legacy/issues/773
 
-## Scale validation ([#649])
+## Scale validation ([#649], GNS-primary since [#773])
 
-GNS ships as the default internet transport, so it is gated at scale, not just built. The `gns`
-scale-gate profile runs 128 clients with **both ends on GNS** (`FL_LOADTEST_TRANSPORT=gns` →
-`fl-server --transport gns` + `bot_swarm --transport gns`) on the 8-core reference runner, mirroring
-the enet6 `reference` profile so the two are directly comparable. See
-[load-testing.md](load-testing.md#validating-the-gns-transport-649) for the runbook, the measured
-enet6-vs-GNS comparison, and the three independent guards that stop a GNS run from silently
+GNS ships as the default internet transport, so it is gated at scale, not just built — and since
+[#773] it is the **primary** scale-gate profile, not a side leg: the `reference` profile runs 128
+clients with **both ends on GNS** (`FL_LOADTEST_TRANSPORT=gns` → `fl-server --transport gns` +
+`bot_swarm --transport gns`) on the 8-core reference runner, and the `soak`/`overrun`/`congestion`/
+`entity-scale`/`entity-churn` characterisation profiles all pin GNS too. enet6 keeps two regression
+legs (`pr` on every PR, `reference-enet` at full 128-client scale) as the LAN/single-player backend.
+See [load-testing.md](load-testing.md#the-transport-the-gate-measures-649-773) for the runbook, the
+measured enet6-vs-GNS comparison, and the three independent guards that stop a GNS run from silently
 degrading into an enet6 run.
 
 Headline: at 128 clients GNS admits all 128 and holds 60 Hz, and **server tick p99 is ~7–8× lower

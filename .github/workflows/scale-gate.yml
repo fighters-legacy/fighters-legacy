@@ -19,7 +19,7 @@ on:
       profile:
         description: 'Profile to run on the self-hosted reference runner'
         type: choice
-        options: [reference, nightly, soak, entity-scale, overrun, congestion, entity-churn, gns]
+        options: [reference, reference-enet, nightly, soak, entity-scale, overrun, congestion, entity-churn]
         default: reference
 
 concurrency:
@@ -131,12 +131,13 @@ jobs:
           PROFILE: ${{ github.event.inputs.profile }}
         run: |
           case "$PROFILE" in
-            # `nightly` = the deferred nightly cron's set: the raw-capacity reference run, the
+            # `nightly` = the deferred nightly cron's set: the raw-capacity reference run (GNS —
+            # the DEFAULT internet transport, the headline numbers; #773), the enet6 regression
+            # leg at the same scale (`reference-enet` — the LAN/single-player backend), the
             # synthetic tick-overrun profile (#574, governor ON via FL_LOADTEST_GOVERNOR=1 from the
-            # profile's `governor: true`), the synthetic congestion profile (#714, lossy-proxy
-            # degrade window via the profile's --degrade-* flags), and the GNS profile (#649 — the
-            # DEFAULT internet transport, validated at 128 clients; built FL_ENABLE_GNS=ON below).
-            nightly) legs='[{"profile":"reference"},{"profile":"overrun"},{"profile":"congestion"},{"profile":"gns"}]' ;;
+            # profile's `governor: true`), and the synthetic congestion profile (#714, lossy-proxy
+            # degrade window via the profile's --degrade-* flags).
+            nightly) legs='[{"profile":"reference"},{"profile":"reference-enet"},{"profile":"overrun"},{"profile":"congestion"}]' ;;
             *)       legs="[{\"profile\":\"$PROFILE\"}]" ;;
           esac
           echo "legs=$legs" >> "$GITHUB_OUTPUT"
@@ -170,23 +171,20 @@ jobs:
           submodules: recursive
 
       - name: Configure (Release, headless)
-        # Every leg but `gns` is enet6-only: bot_swarm is the enet6 regression instrument, and an
-        # enet6-only build is leaner (no protobuf/OpenSSL dep). The `gns` leg (#649) builds with
-        # FL_ENABLE_GNS=ON so the DEFAULT internet transport is the one under test.
-        env:
-          PROFILE: ${{ matrix.leg.profile }}
+        # FL_ENABLE_GNS=ON for EVERY reference-runner leg (#773): the headline profiles
+        # (`reference`, `soak`) and the characterisation profiles (`overrun`, `congestion`,
+        # `entity-scale`, `entity-churn`) all pin `transport: gns` — GNS is the default internet
+        # transport, so the published numbers describe what ships. The enet6 legs (`reference-enet`
+        # here, `pr` on hosted runners) run fine in a GNS-enabled build: bot_swarm's default
+        # transport is enet6 and the profile does not set FL_LOADTEST_TRANSPORT.
         run: |
-          # NB: `[ x = y ] && GNS=ON` would return non-zero for every non-gns leg and, under the
-          # runner's `bash -e`, abort the step. Use a plain if.
-          GNS=OFF
-          if [ "$PROFILE" = "gns" ]; then GNS=ON; fi
-          cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON -DFL_ENABLE_GNS=$GNS
+          cmake --preset release -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON -DFL_ENABLE_GNS=ON
           # KEY GUARD (same trap as #653): cmake/dependencies.cmake *silently* force-disables GNS
           # when OpenSSL/protobuf are missing, so a misprovisioned runner would build enet6-only and
-          # the "GNS gate" would happily measure enet6 and pass. Fail the leg instead. (bot_swarm
+          # every GNS leg would happily measure enet6 and pass. Fail the leg instead. (bot_swarm
           # also refuses --transport gns in an enet6-only build, and scale_gate.py cross-checks the
           # report's `transport` key — three independent ways this cannot pass silently.)
-          if [ "$PROFILE" = "gns" ] && ! grep -qx 'FL_ENABLE_GNS:BOOL=ON' build/release/CMakeCache.txt; then
+          if ! grep -qx 'FL_ENABLE_GNS:BOOL=ON' build/release/CMakeCache.txt; then
             echo "::error::FL_ENABLE_GNS was force-disabled during configure — the runner is missing"\
                  "OpenSSL/protobuf dev packages (see tools/bot_swarm/reference-env/vm-provision.sh)."
             exit 1
