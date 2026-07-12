@@ -10,7 +10,9 @@
 // The JSON shape is the #520/#513 contract. schema_version = 2 adds the authoritative
 // "server_tick" sibling block (per-phase server tick budget) read from the fl-server
 // --metrics-json file via --server-metrics; the client-side "observed_server_tick_hz" proxy
-// is retained for comparison (extend, don't replace).
+// is retained for comparison (extend, don't replace). schema_version = 3 adds "transport"
+// (#649) — the backend the swarm ACTUALLY spoke, so a GNS gate can prove it measured GNS
+// rather than an enet6 fallback.
 
 #include "NetStats.h"
 #include "SwarmConfig.h"
@@ -23,7 +25,7 @@
 
 namespace fl {
 
-constexpr int kSwarmReportSchemaVersion = 2;
+constexpr int kSwarmReportSchemaVersion = 3;
 
 // Written by one worker thread; read after the run.
 struct ClientMetrics {
@@ -64,6 +66,7 @@ struct SwarmReport {
     double durationS{0.0};
     int rateHz{0};
     std::string pattern;
+    std::string transport; // backend actually spoken ("enet"/"gns") — #649
     int threads{0};
     Stats tickHz;
     Stats downstreamKbs;
@@ -101,6 +104,8 @@ inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientM
     r.clientsRequested = cfg.clients;
     r.durationS = elapsedS;
     r.rateHz = cfg.rateHz;
+    // Normalize the alias so the report (and the gate's cross-check) always reads "enet" or "gns".
+    r.transport = (cfg.transport == "enet6") ? "enet" : cfg.transport;
     // The report carries the mix spec when a weighted mix is used, else the single pattern label.
     r.pattern = cfg.patternMix.empty() ? cfg.pattern : cfg.patternMix;
     r.threads = threadsUsed;
@@ -238,7 +243,7 @@ inline std::string jStat(const char* name, const Stats& s) {
 } // namespace detail
 
 inline std::string reportToJson(const SwarmReport& r) {
-    char head[512];
+    char head[640];
     std::snprintf(head, sizeof(head),
                   "{\n"
                   "  \"schema_version\": %d,\n"
@@ -246,10 +251,11 @@ inline std::string reportToJson(const SwarmReport& r) {
                   "  \"clients_requested\": %d, \"clients_connected\": %d,\n"
                   "  \"clients_refused\": %d, \"clients_disconnected\": %d,\n"
                   "  \"duration_s\": %.3f, \"rate_hz\": %d, \"pattern\": \"%s\", \"threads\": %d,\n"
+                  "  \"transport\": \"%s\",\n"
                   "  \"observed_server_tick_hz\": { \"min\": %.3f, \"mean\": %.3f },\n",
                   kSwarmReportSchemaVersion, r.host.c_str(), r.port, r.clientsRequested, r.clientsConnected,
                   r.clientsRefused, r.clientsDisconnected, r.durationS, r.rateHz, r.pattern.c_str(), r.threads,
-                  r.tickHz.min, r.tickHz.mean);
+                  r.transport.c_str(), r.tickHz.min, r.tickHz.mean);
     std::string out = head;
     out += detail::jStat("downstream_kbs_per_client", r.downstreamKbs) + ",\n";
     out += detail::jStat("rtt_ms", r.rttMs) + ",\n";

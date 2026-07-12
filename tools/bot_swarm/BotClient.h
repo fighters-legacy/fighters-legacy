@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-// BotClient — one synthetic game client: owns a single ENetNetwork (one ENetHost / UDP
-// socket), replicates the minimum handshake (MsgHello version check -> MsgConnectAck), sends
-// MsgClientInput at the configured rate, and accounts received snapshot bytes + tick progression.
-// Network-coupled (not unit-tested directly); the pure logic it drives lives in the other
-// bot_swarm headers. One BotClient is touched by exactly one worker thread (ENet hosts are not
-// thread-safe).
+// BotClient — one synthetic game client: owns a single INetwork backend (enet6 or GNS, per
+// --transport; one host / UDP socket), replicates the minimum handshake (MsgHello version check -> MsgConnectAck),
+// sends MsgClientInput at the configured rate, and accounts received snapshot bytes + tick progression. Network-coupled
+// (not unit-tested directly); the pure logic it drives lives in the other bot_swarm headers. One BotClient is touched
+// by exactly one worker thread (ENet hosts are not thread-safe).
 
 #include "IFlightPattern.h"
 #include "SwarmMetrics.h"
 #include <INetwork.h>
 #include <cstdint>
 #include <memory>
+#include <net/NetworkFactory.h>
 
 namespace fl {
 
@@ -20,7 +20,8 @@ class BotClient : public INetworkEventHandler {
   public:
     // The flight pattern is built by the caller (SwarmPatternPlan) so a shared trace / weighted
     // mix is resolved once for the whole swarm; BotClient takes ownership of its instance.
-    BotClient(uint32_t index, std::unique_ptr<IFlightPattern> pattern, int rateHz);
+    BotClient(uint32_t index, std::unique_ptr<IFlightPattern> pattern, int rateHz,
+              TransportKind transport = TransportKind::Enet);
     ~BotClient() override;
 
     BotClient(const BotClient&) = delete;
@@ -54,6 +55,7 @@ class BotClient : public INetworkEventHandler {
     int m_rateHz;
     std::unique_ptr<IFlightPattern> m_pattern;
     std::unique_ptr<INetwork> m_net;
+    TransportKind m_transport{TransportKind::Enet};
     ClientMetrics m_metrics;
 
     double m_now{0.0};          // current steady seconds, set each loop iteration

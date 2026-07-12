@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "BotClient.h"
-#include "ENetNetworkFactory.h"
 #include <net/AckWindow.h>
 #include <net/GameProtocol.h>
 #include <net/WireCodec.h>
 
 namespace fl {
 
-BotClient::BotClient(uint32_t index, std::unique_ptr<IFlightPattern> pattern, int rateHz)
-    : m_index(index), m_rateHz(rateHz), m_pattern(std::move(pattern)) {}
+BotClient::BotClient(uint32_t index, std::unique_ptr<IFlightPattern> pattern, int rateHz, TransportKind transport)
+    : m_index(index), m_rateHz(rateHz), m_pattern(std::move(pattern)), m_transport(transport) {}
 
 BotClient::~BotClient() = default;
 
 bool BotClient::connect(double now, const char* host, uint16_t port) {
     m_now = now;
     m_connectStart = now;
-    m_net = createENetNetwork();
+    m_net = createNetwork(m_transport);
     if (!m_net || !m_net->init())
         return false;
     m_net->setEventHandler(this);

@@ -133,6 +133,20 @@ ignore it.
 
 [#653]: https://github.com/fighters-legacy/fighters-legacy/issues/653
 
+## Scale validation ([#649])
+
+GNS ships as the default internet transport, so it is gated at scale, not just built. The `gns`
+scale-gate profile runs 128 clients with **both ends on GNS** (`FL_LOADTEST_TRANSPORT=gns` →
+`fl-server --transport gns` + `bot_swarm --transport gns`) on the 8-core reference runner, mirroring
+the enet6 `reference` profile so the two are directly comparable. See
+[load-testing.md](load-testing.md#validating-the-gns-transport-649) for the runbook, the measured
+enet6-vs-GNS comparison, and the three independent guards that stop a GNS run from silently
+degrading into an enet6 run.
+
+Headline: at 128 clients GNS admits all 128 and holds 60 Hz, and **server tick p99 is ~7–8× lower
+than enet6** (1.5–1.7 ms vs 5.5–12.6 ms on the same box) — ENet does its per-packet send work inline
+on the sim thread (inside the serialize phase) while GNS hands off to its own service thread.
+
 ## Testing
 
 `tests/test_gns_network.cpp` holds `GnsNetwork` to the same contract as `test_network.cpp`: loopback

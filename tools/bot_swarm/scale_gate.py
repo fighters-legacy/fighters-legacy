@@ -36,6 +36,12 @@ PROFILE_DEFAULTS = {
     "duration_s": 30,
     "patterns": ["weave"],
     "sim_worker_threads": 0,
+    # Transport BOTH ends speak (#649). "enet" keeps every pre-existing profile byte-identical
+    # (bot_swarm is the enet6 regression instrument); "gns" validates the DEFAULT internet
+    # transport, which shipped as the default without ever being scale-tested. A "gns" profile
+    # needs an FL_ENABLE_GNS=ON build — bot_swarm refuses to fall back to enet6, and the report's
+    # "transport" key is cross-checked below so a fallback can never masquerade as a GNS pass.
+    "transport": "enet",
     "assert_max_kbs": 0.0,
     "assert_min_tick_hz": 0.0,
     "assert_max_tick_ms": 0.0,
@@ -154,6 +160,19 @@ def evaluate_report(report, profile, strict):
     the admission check. tick-ms is reported but only counts toward pass/fail when ``strict``.
     """
     checks = []
+
+    # Transport identity (#649). The report states the backend the swarm ACTUALLY spoke. A GNS
+    # profile whose run came back "enet" measured the wrong transport and must fail loudly — a
+    # silently-downgraded gate is worse than no gate (bot_swarm already refuses the fallback; this
+    # is the belt-and-braces check at the gate layer, and it also catches a stale binary).
+    want_transport = profile.get("transport", "enet")
+    got_transport = report.get("transport", "enet")  # pre-v3 reports have no key => enet
+    checks.append({
+        "name": "transport",
+        "ok": got_transport == want_transport,
+        "detail": f"measured {got_transport}, profile wants {want_transport}",
+        "advisory": False,
+    })
 
     requested = report.get("clients_requested", 0)
     connected = report.get("clients_connected", 0)
@@ -326,6 +345,10 @@ def expand_runs(profile):
     workers = profile.get("sim_worker_threads_sweep") or [None]
     # Overrun profile (#574): flip the governor ON for every run in the profile.
     profile_env = {"FL_LOADTEST_GOVERNOR": "1"} if profile.get("governor") else {}
+    # Only set the transport env when the profile asks for a non-default one, so existing runs
+    # invoke the runners exactly as before.
+    if profile.get("transport", "enet") != "enet":
+        profile_env["FL_LOADTEST_TRANSPORT"] = profile["transport"]
     # AI mix + projectile churn (#580): profile-constant, applied to every run in the sweep.
     if profile.get("ai_mix"):
         profile_env["FL_TEST_SPAWN_MIX"] = profile["ai_mix"]

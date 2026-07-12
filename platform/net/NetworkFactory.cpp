@@ -29,6 +29,17 @@ std::unique_ptr<INetwork> createNetwork(TransportKind kind, ILogger* log) {
     return createENetNetwork();
 }
 
+bool transportAvailable(TransportKind kind) {
+    if (kind == TransportKind::Gns) {
+#ifdef FL_ENABLE_GNS
+        return true;
+#else
+        return false;
+#endif
+    }
+    return true; // enet6 is always compiled in
+}
+
 const char* networkBackendVersion(TransportKind kind) {
     if (kind == TransportKind::Gns) {
 #ifdef FL_ENABLE_GNS

@@ -32,8 +32,10 @@ encryption (curve25519+AES-GCM, on by default) + congestion control + connection
 throughput (#505). `kProtocolVersion` unchanged. Built via `-DFL_ENABLE_GNS=ON` (default; `OFF` =
 lean enet6-only build — tools + several CI legs). **Crypto = OpenSSL** (not libsodium — GNS rejects
 libsodium AES on ARM) and **protobuf = system-preferred + FetchContent fallback** (both reverse the
-spike; see `docs/gns-backend.md`). `net_check`/`bot_swarm` stay enet6 (regression instrument;
-runners force `--transport enet`). Three optional `INetwork` server-tuning virtuals added
+spike; see `docs/gns-backend.md`). `net_check` stays enet6 (the regression instrument). `bot_swarm`
+defaults to enet6 but links the `platform-net` facade and takes `--transport enet|gns` (#649) — the
+`gns` scale-gate profile runs 128 clients with both ends on GNS; a `gns` run in an enet6-only build
+is a hard error, never a silent fallback. Three optional `INetwork` server-tuning virtuals added
 (`setBandwidthLimit`/`setPreHandshakeRateLimit`/`setAllowInsecure`). Full detail:
 `docs/gns-backend.md`, `docs/transport-selection.md`.
 
