@@ -36,11 +36,12 @@ PROFILE_DEFAULTS = {
     "duration_s": 30,
     "patterns": ["weave"],
     "sim_worker_threads": 0,
-    # Transport BOTH ends speak (#649). "enet" keeps every pre-existing profile byte-identical
-    # (bot_swarm is the enet6 regression instrument); "gns" validates the DEFAULT internet
-    # transport, which shipped as the default without ever being scale-tested. A "gns" profile
-    # needs an FL_ENABLE_GNS=ON build — bot_swarm refuses to fall back to enet6, and the report's
-    # "transport" key is cross-checked below so a fallback can never masquerade as a GNS pass.
+    # Transport BOTH ends speak (#649). The default stays "enet" (bot_swarm is the enet6
+    # regression instrument), but since #773 every headline/characterisation profile pins
+    # "gns" — GameNetworkingSockets is the DEFAULT internet transport, so the published numbers
+    # describe what ships. A gns-transport profile needs an FL_ENABLE_GNS=ON build — bot_swarm
+    # refuses to fall back to enet6, and the report's "transport" key is cross-checked below so
+    # a fallback can never masquerade as a GNS pass.
     "transport": "enet",
     # Capacity ceiling. The HARD ceiling is on WIRE bytes (#772) — bytes actually on the socket,
     # including transport framing, ENet's range-coder compression and GNS's AES-GCM overhead. That is
