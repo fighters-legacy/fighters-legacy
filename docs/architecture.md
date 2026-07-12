@@ -204,6 +204,7 @@ development (pre-`kProtocolVersion` freeze), a dated **decision record** (see be
 | LAN server discovery | Raw UDP broadcast + IPv6 link-local multicast (#91) | `DiscoveryBeacon` (fl-server) + `DiscoveryListener` (game client) in `engine/net/`; separate socket outside ENet; client server browser in issue #143 |
 | Weather and time of day | Server-authoritative `WeatherController` in `engine/weather/` | Autonomous cycle (Clear→PartlyCloudy→Overcast→Rain→Storm); `Snow` and `Blizzard` are operator-set presets that do not participate in the autonomous cycle; 10× time-scale default, wind/gust/turbulence model; synced via `MsgWeatherState` (0x04) at ~6 Hz |
 | Entity system | Dynamic pool, no hard caps | No fixed object count limit |
+| Sensing / detection | **One `SensorDef` vocabulary** (dual search/track lobes, per-check PoD at a 10 Hz reference cadence) in a new `engine/sensor/`; **`Contact` tracks are the only downstream representation** — avionics, AI, Lua and missile seekers never read ground truth. Signatures are unitless multipliers (radar range × `sqrt(sig)`; IR/visual linear); AI entities with no declared sensors get an implicit builtin eyeball. | One schema serves player avionics (#526), AI detection (#670) and seekers (#628/#676) instead of three drifting fragments. Routing every consumer through `Contact` makes "no omniscience" structural rather than a rule reviewers must remember — ground truth is not reachable from a consumer. (2026-07-12 decision record, Epic F #677/#678.) |
 | License | GPL v3 | Engine modifications must stay open source; protects community investment |
 | Hosting | GitHub, public repository | Unlimited Actions CI on public repos; GitHub Free sufficient |
 | Async file I/O backend | Worker thread + `std::mutex` queue (`SDL3AsyncFilesystem`) | `SDL_AsyncIO` deferred; consistent cross-platform behaviour without conditional compilation in the interface |
@@ -442,6 +443,62 @@ on the 8-core reference env, after the ladder lands — all observable from `Ser
 the #574/#569 outputs) defines when to revisit; a product decision to exceed one box triggers the
 process-model epic independently. Full analysis, seam protocol, migration state inventory, and
 determinism story in [docs/spatial-sharding-design.md](spatial-sharding-design.md).
+
+**2026-07-12 — Unified sensor vocabulary and the contact track model (Epic F, #677/#678).** Three
+subsystems were each about to grow their own idea of "what can this thing see": player avionics
+(#526), AI detection (#670), and missile seekers (#628/#676). The weapon TOML already carries a
+`[seeker]` fragment (`fov_deg`/`acquisition_nm`) and ground/naval units a `[radar]` fragment
+(`emitter_id`/`track_range_nm`/`can_shutdown`) — two vocabularies for the same physical question,
+with a third implied by the AI. Locked before any of them ships, because the schema is
+community-facing and fl-base-pack authors content against it. Jane's FA drove radar, IR, laser,
+AWACS/GCI and AI visual acquisition from one schema; that is the design lesson taken here — a
+clean-room reimplementation, not ported code.
+
+- **One vocabulary, three consumers.** A single `SensorDef` schema — dual **search** and **track**
+  lobes (azimuth/elevation half-angles, min/max range, per-check probability of detection) — serves
+  avionics, AI, and seekers. A radar, an IRST, a laser designator and an eyeball differ in their
+  *parameters*, not in their model.
+- **`Contact` is the only downstream representation.** Everything below `SensorSystem` — AI
+  conditions, Lua behaviors, avionics serialization (#526), datalink fusion (#528), missile guidance
+  (#628) — reads **contact tracks with last-known state**, never ground-truth entity positions. This
+  makes the "no omniscience" principle already normative in
+  [docs/ai-architecture.md](ai-architecture.md) *structurally* true rather than a rule to remember:
+  the ground truth is not reachable from a consumer, so an omniscient AI cannot be written by
+  accident. A stale or lost track is a first-class state, not a bug.
+- **Signatures are unitless multipliers**, 1.0 = baseline fighter. Radar detection range scales by
+  **`sqrt(sig)`**; IR and visual scale **linearly**. The square root echoes the fourth-root range
+  dependence of the radar equation (RCS enters as the fourth power of range) closely enough to make
+  stealth *feel* right and to keep authored numbers monotonic and intuitive, without dragging a real
+  radar equation — and its calibration burden — into a content pack. Consistent with the fidelity
+  pillar: the *behavior* is modelled, not the physics.
+- **Probability of detection is defined per check at the reference 10 Hz cadence**
+  (`[world] sensor_check_hz`, default 10). PoD is meaningless without a rate: the same 0.3 is a
+  different sensor at 1 Hz than at 60 Hz. Authors tune against the reference cadence; an operator who
+  changes it changes effective acquisition time, which is the honest consequence and is documented as
+  such rather than silently renormalized.
+- **The default sensor is an implicit builtin eyeball.** An AI-controlled entity that declares no
+  `sensors` list gets a compiled-in visual-acquisition sensor (the `BuiltinFlightModel` pattern), so
+  honest sensing is the default *everywhere* — including the zero-content sandbox. Sensing is not an
+  opt-in feature flag: there is no configuration in which an AI sees through terrain, and no content
+  pack can accidentally produce one by omission.
+- **Library placement: a new `engine/sensor/` (`engine-sensor`, `fl::sensor`).** PUBLIC-links
+  `engine-entity` + `engine-spatial`; `engine-net` PUBLIC-links it; `engine-ai`/`engine-script` link
+  it PRIVATE. **`engine-entity` stays sensor-independent** (the signature POD lives in
+  `engine/entity/`), so the entity system does not acquire a dependency on the thing that observes
+  it. Enforced by `cmake/layering.cmake` like every other edge.
+- **Emissions kernel: a per-observer `emitting` flag** (default true) that radar and laser **track**
+  lobes require. This is deliberately a *seam*, not a feature — it is what SAM radar shutdown, EMCON
+  discipline and RWR will later hang off (#526/#529). Landing the flag now costs one bool and keeps
+  those behaviors from having to retrofit the sensor core.
+- **Deferred migrations, named now so the fragments stop drifting.** The weapon `[seeker]` block
+  (#583) and the ground/naval `[radar]` block (#526) in
+  [docs/modding/formats.md](modding/formats.md) become **references to sensor defs** rather than
+  parallel schemas. They are not migrated in this record — the sensor core has to exist first — but
+  their target shape is pinned here so new content is not authored deeper into a vocabulary that is
+  already scheduled to be replaced.
+
+Full decomposition: sensor core #677 (this record → #679 schema/parser → #680 entity fields → #684
+detection math → #685 sensing pass → #686 tick-report schema), AI consumers under #670.
 
 ## Content Pack Architecture
 
