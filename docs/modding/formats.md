@@ -218,32 +218,102 @@ values = [
 [refueling]
 type          = "boom"
 max_rate_kg_s = 3.0
-
-[[hardpoints]]
-slot    = 0
-type    = "missile"
-allowed = ["aim120c", "aim9x"]
-default = "aim120c"
-
-[[hardpoints]]
-slot    = 4
-type    = "bomb"
-allowed = ["gbu32", "mk82"]
-default = "gbu32"
 ```
+
+> **`[[hardpoints]]` moved out of the flight model** (#623). Weapon stations are a property of the
+> **entity**, not of its aerodynamics — see [Entity Definition TOML](#entity-definition-toml). A
+> flight model that still declares them is now a **validation error**, not a silently ignored block,
+> so a pack learns why its stations vanished. The only coupling that remains is the physical one: a
+> loadout's mass and drag reach the flight model through `PayloadEffect`.
 
 ---
 
 ## Weapon Data — TOML
 
-Each weapon is a standalone TOML file. Aircraft TOML hardpoints reference weapon IDs.
+Each weapon is a standalone TOML file, parsed by `parseWeaponDef` (`engine/weapon/`). Entity
+hardpoints reference weapon IDs.
+
+**Units are authored in aviation units and stored in SI.** You write nautical miles, knots, pounds
+and feet — what the source data uses — and the parser converts on the way in (`nm → m`, `kts → m/s`,
+`lb → kg`, `ft → m`). Nothing downstream has to remember which field was imperial.
+
+**A malformed weapon is not loaded.** Like the flight-model and entity parsers, this one *throws* on
+any error rather than clamping or defaulting: a weapon that is half-parsed is worse than one that is
+absent, because it flies.
 
 > **`[seeker]` is scheduled to change.** The 2026-07-12 sensor decision record
 > (`docs/architecture.md` → Decision Records) locks a **single `SensorDef` vocabulary** shared by
 > missile seekers, player avionics and AI detection. This block's ad-hoc fields (`fov_deg`,
 > `acquisition_nm`) will become a **reference to a sensor def** when the sensor core lands
-> (tracked under #583). The shape below still describes what the parser accepts today; treat it as
-> provisional and expect a documented migration rather than authoring a large library against it.
+> (tracked under #583). The shape below is what the parser accepts today; authored content survives
+> the migration, these field names do not.
+
+### `[weapon]` (required)
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | Pack-scoped identifier, e.g. `aim120c`. Referenced by entity hardpoints |
+| `name` | string | Display name |
+| `type` | string | `missile`, `bomb`, `rocket`, `gun`, `pod` |
+| `category` | string | `air-to-air`, `air-to-ground`, `air-to-sea`, `anti-radiation` |
+
+### `[seeker]` / `[guidance]` (optional, mutually exclusive)
+
+Two authored spellings of one concept: `[seeker]` is self-guided (the weapon looks), `[guidance]` is
+externally guided (someone else looks). Both parse into the same struct. Omit both for an unguided
+store. Declaring both is an error — a weapon does not have two different ideas of how it finds a
+target.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `type` | string | — | `active-radar`, `semi-active-radar`, `ir`, `laser`, `gps`, `anti-radiation`, `unguided` |
+| `fov_deg` | float | `0` | Seeker gimbal half-angle, `[0, 180]`. `0` = no seeker lobe |
+| `acquisition_nm` | float | `0` | Range at which the seeker can take a lock |
+| `fire_and_forget` | bool | `false` | `false` = the launch platform must keep supporting the shot |
+| `requires_designator` | bool | `false` | Laser/GPS: someone must hold the spot |
+
+### `[performance]` (required)
+
+**Exactly one of `max_range_nm` or `standoff_range_ft` is required** — a powered weapon states its
+own reach, a dropped one states how far it glides from release. Neither is an error (a weapon with no
+reach is meaningless); both is an error (which one is the range?).
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `max_range_nm` | float | — | Powered weapons: maximum engagement range |
+| `standoff_range_ft` | float | — | Dropped weapons: glide range from release |
+| `min_range_nm` | float | `0` | Minimum arming/engagement range; must not exceed the max |
+| `max_speed_kts` | float | `0` | Terminal/max speed |
+| `motor_burn_time_s` | float | `0` | `0` = unpowered |
+| `max_g` | float | `0` | `0` = unmanoeuvring |
+| `CEP_ft` | float | `0` | Circular error probable; `0` = unspecified |
+
+### `[warhead]` (required)
+
+| Field | Type | Description |
+|---|---|---|
+| `blast_radius_ft` | float | Lethal radius |
+| `damage` | float | Damage applied at the centre of the blast |
+
+### `[countermeasures]` (optional)
+
+Susceptibility fractions in `[0, 1]`: `0` = immune, `1` = always defeated. Absent = immune to all.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `chaff_susceptibility` | float | `0` | Defeated by chaff (radar seekers) |
+| `flare_susceptibility` | float | `0` | Defeated by flares (IR seekers) |
+| `notch_susceptibility` | float | `0` | Defeated by a beam/notch manoeuvre (doppler seekers) |
+
+### `[load]` (required)
+
+What carrying the weapon costs the airframe. Feeds `PayloadEffect` — this is the *only* coupling
+between a loadout and the flight model.
+
+| Field | Type | Description |
+|---|---|---|
+| `weight_lb` | float | Store mass; must be `> 0` |
+| `drag_factor` | float | Added to the carrier's `cd0` while the store is on the rail |
 
 ```toml
 # weapons/aim120c.toml — Active-radar air-to-air missile
@@ -599,7 +669,39 @@ avionics_failure = true
 
 [classic]
 damage_mesh = "aircraft/f15c_dmg"
+
+[[hardpoints]]
+slot    = 0
+type    = "missile"
+allowed = ["aim120c", "aim9x"]
+default = "aim120c"
+
+[[hardpoints]]
+slot    = 4
+type    = "bomb"
+allowed = ["gbu12", "mk82"]
+default = "gbu12"
 ```
+
+### `[[hardpoints]]` (optional) — weapon stations
+
+Moved here from the flight-model TOML in #623. Weapon stations describe what an airframe is *allowed
+to carry*, which is a property of the entity, not of its aerodynamics — the flight model stays pure
+aero, and a loadout reaches it only through the mass and drag in each weapon's `[load]` block. A
+flight model that still declares `[[hardpoints]]` is now a validation error, with a message pointing
+here.
+
+Omit the array entirely for an entity that carries nothing.
+
+| Field | Type | Description |
+|---|---|---|
+| `slot` | int | Station number, `>= 0`, **unique** within the entity |
+| `type` | string | `missile`, `bomb`, `rocket`, `gun`, `fuel`, `pod` (`fuel`/`pod` occupy a station without being a weapon) |
+| `allowed` | string[] | Weapon IDs this station accepts; must be **non-empty** |
+| `default` | string | Pre-loaded weapon ID; must be a member of `allowed` |
+
+Nothing yet verifies that an `allowed` ID resolves to a real weapon file — that cross-file check
+belongs to the offline weapon validator (#624).
 
 ---
 

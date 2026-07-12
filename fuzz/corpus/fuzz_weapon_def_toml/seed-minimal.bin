@@ -1,0 +1,29 @@
+[weapon]
+id = "aim9x"
+name = "AIM-9X"
+type = "missile"
+category = "air-to-air"
+
+[seeker]
+type = "ir"
+fov_deg = 90
+acquisition_nm = 10
+fire_and_forget = true
+
+[performance]
+max_range_nm = 12
+min_range_nm = 0.2
+max_speed_kts = 1800
+motor_burn_time_s = 5.0
+max_g = 50
+
+[warhead]
+blast_radius_ft = 30
+damage = 90
+
+[countermeasures]
+flare_susceptibility = 0.35
+
+[load]
+weight_lb = 188
+drag_factor = 0.006

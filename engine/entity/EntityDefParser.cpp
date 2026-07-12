@@ -3,6 +3,8 @@
 
 #include <toml++/toml.hpp>
 
+#include <algorithm>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -58,6 +60,23 @@ namespace {
     throw std::runtime_error(std::string("unknown category: ") + std::string(s) +
                              " (expected air_vehicle, ground_vehicle, naval_vehicle, "
                              "projectile, effect, or player)");
+}
+
+[[nodiscard]] HardpointType parse_hardpoint_type(std::string_view s) {
+    if (s == "missile")
+        return HardpointType::Missile;
+    if (s == "bomb")
+        return HardpointType::Bomb;
+    if (s == "rocket")
+        return HardpointType::Rocket;
+    if (s == "gun")
+        return HardpointType::Gun;
+    if (s == "fuel")
+        return HardpointType::Fuel;
+    if (s == "pod")
+        return HardpointType::Pod;
+    throw std::runtime_error(std::string("unknown hardpoint type: ") + std::string(s) +
+                             " (expected missile, bomb, rocket, gun, fuel, or pod)");
 }
 
 [[nodiscard]] DamagePenalty parse_penalty(toml::node_view<toml::node> node, const char* name) {
@@ -118,6 +137,56 @@ EntityDef parseEntityDef(std::string_view toml_src) {
     auto classic_node = tbl["classic"];
     if (classic_node && classic_node.as_table())
         def.classicDamageMesh = opt_string(classic_node["damage_mesh"]);
+
+    // Optional weapon stations. Authored as an array-of-tables:
+    //     [[hardpoints]]
+    //     slot = 0
+    //     type = "missile"
+    //     allowed = ["aim120c", "aim9x"]
+    //     default = "aim120c"
+    if (auto hp_node = tbl["hardpoints"]; hp_node) {
+        auto* arr = hp_node.as_array();
+        if (!arr)
+            throw std::runtime_error("hardpoints must be an array of tables ([[hardpoints]])");
+
+        for (auto& el : *arr) {
+            auto* hp_tbl = el.as_table();
+            if (!hp_tbl)
+                throw std::runtime_error("hardpoints must be an array of tables ([[hardpoints]])");
+
+            Hardpoint hp;
+            auto slot = (*hp_tbl)["slot"].value<int64_t>();
+            if (!slot)
+                throw std::runtime_error("missing required field: hardpoints.slot");
+            if (*slot < 0)
+                throw std::runtime_error("hardpoints.slot must be >= 0");
+            hp.slot = static_cast<int>(*slot);
+
+            for (const auto& existing : def.hardpoints) {
+                if (existing.slot == hp.slot)
+                    throw std::runtime_error("duplicate hardpoints.slot: " + std::to_string(hp.slot));
+            }
+
+            hp.type = parse_hardpoint_type(req_string((*hp_tbl)["type"], "hardpoints.type"));
+
+            auto* allowed = (*hp_tbl)["allowed"].as_array();
+            if (!allowed || allowed->empty())
+                throw std::runtime_error("hardpoints.allowed must be a non-empty array of weapon ids");
+            for (auto& a : *allowed) {
+                auto id = a.value<std::string>();
+                if (!id || id->empty())
+                    throw std::runtime_error("hardpoints.allowed entries must be non-empty strings");
+                hp.allowed.push_back(std::move(*id));
+            }
+
+            hp.defaultWeapon = req_string((*hp_tbl)["default"], "hardpoints.default");
+            if (std::find(hp.allowed.begin(), hp.allowed.end(), hp.defaultWeapon) == hp.allowed.end())
+                throw std::runtime_error("hardpoints.default \"" + hp.defaultWeapon +
+                                         "\" is not listed in hardpoints.allowed");
+
+            def.hardpoints.push_back(std::move(hp));
+        }
+    }
 
     return def;
 }

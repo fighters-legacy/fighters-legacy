@@ -289,53 +289,29 @@ TEST_CASE("optional [carrier] with zero approach speed fails", "[flight-model-va
     CHECK_FALSE(r.ok);
 }
 
-TEST_CASE("[[hardpoints]] with default not in allowed fails", "[flight-model-validator]") {
-    std::string s(kValidFighter);
-    s += "\n[[hardpoints]]\nslot    = 0\ntype    = \"missile\"\n"
-         "allowed = [\"aim120c\"]\ndefault = \"aim9x\"\n";
-    auto r = validateFlightModel(s);
-    CHECK_FALSE(r.ok);
-    bool found = false;
-    for (const auto& e : r.errors)
-        if (e.find("default") != std::string::npos) {
-            found = true;
-            break;
-        }
-    CHECK(found);
-}
+// Hardpoints moved to the entity definition TOML in #623. The flight model must now REJECT them,
+// not validate them: a pack that leaves them here would otherwise fly with no stations and no
+// explanation. These cases replace the old slot/type/allowed/default checks, which now live in
+// parseEntityDef (tests/test_entity.cpp).
 
-TEST_CASE("[[hardpoints]] with duplicate slot fails", "[flight-model-validator]") {
+TEST_CASE("[[hardpoints]] in a flight model fails with a migration message", "[flight-model-validator]") {
     std::string s(kValidFighter);
     s += "\n[[hardpoints]]\nslot = 0\ntype = \"missile\"\n"
-         "allowed = [\"aim120c\"]\ndefault = \"aim120c\"\n"
-         "[[hardpoints]]\nslot = 0\ntype = \"bomb\"\n"
-         "allowed = [\"gbu12\"]\ndefault = \"gbu12\"\n";
+         "allowed = [\"aim120c\", \"aim9x\"]\ndefault = \"aim120c\"\n";
     auto r = validateFlightModel(s);
     CHECK_FALSE(r.ok);
-    bool found = false;
+
+    bool explained = false;
     for (const auto& e : r.errors)
-        if (e.find("duplicated") != std::string::npos) {
-            found = true;
+        if (e.find("entity definition TOML") != std::string::npos) {
+            explained = true;
             break;
         }
-    CHECK(found);
+    CHECK(explained); // the error has to say WHERE they went, not just that they are wrong
 }
 
-TEST_CASE("[[hardpoints]] with invalid type fails", "[flight-model-validator]") {
-    std::string s(kValidFighter);
-    s += "\n[[hardpoints]]\nslot = 0\ntype = \"torpedo\"\n"
-         "allowed = [\"mk46\"]\ndefault = \"mk46\"\n";
-    auto r = validateFlightModel(s);
-    CHECK_FALSE(r.ok);
-}
-
-TEST_CASE("valid [[hardpoints]] passes", "[flight-model-validator]") {
-    std::string s(kValidFighter);
-    s += "\n[[hardpoints]]\nslot = 0\ntype = \"missile\"\n"
-         "allowed = [\"aim120c\", \"aim9x\"]\ndefault = \"aim120c\"\n"
-         "[[hardpoints]]\nslot = 1\ntype = \"bomb\"\n"
-         "allowed = [\"gbu12\"]\ndefault = \"gbu12\"\n";
-    auto r = validateFlightModel(s);
+TEST_CASE("a flight model without hardpoints still passes", "[flight-model-validator]") {
+    auto r = validateFlightModel(kValidFighter);
     CHECK(r.ok);
     CHECK(r.errors.empty());
 }

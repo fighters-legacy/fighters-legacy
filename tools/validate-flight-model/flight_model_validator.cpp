@@ -35,9 +35,6 @@ static constexpr std::size_t kValidAircraftTypesCount = sizeof(kValidAircraftTyp
 static constexpr const char* kValidEngineTypes[] = {"turbojet", "turbofan", "turboprop", "piston"};
 static constexpr std::size_t kValidEngineTypesCount = sizeof(kValidEngineTypes) / sizeof(kValidEngineTypes[0]);
 
-static constexpr const char* kValidHardpointTypes[] = {"missile", "bomb", "fuel", "gun", "pod"};
-static constexpr std::size_t kValidHardpointTypesCount = sizeof(kValidHardpointTypes) / sizeof(kValidHardpointTypes[0]);
-
 static constexpr const char* kValidPropRotations[] = {"cw", "ccw", "contra"};
 static constexpr std::size_t kValidPropRotationsCount = sizeof(kValidPropRotations) / sizeof(kValidPropRotations[0]);
 
@@ -587,61 +584,12 @@ static void validateHardpoints(const toml::table& tbl, FlightModelValidationResu
     if (!hp_arr || hp_arr->empty())
         return;
 
-    std::set<int64_t> seenSlots;
-    std::size_t idx = 0;
-    for (auto& el : *hp_arr) {
-        auto* hp = el.as_table();
-        if (!hp) {
-            r.errors.push_back("hardpoints[" + std::to_string(idx) + "] is not a table");
-            r.ok = false;
-            ++idx;
-            continue;
-        }
-        auto slot_v = (*hp)["slot"].value<int64_t>();
-        if (!slot_v) {
-            r.errors.push_back("hardpoints[" + std::to_string(idx) + "] missing slot");
-            r.ok = false;
-        } else if (*slot_v < 0) {
-            r.errors.push_back("hardpoints[" + std::to_string(idx) + "].slot must be >= 0");
-            r.ok = false;
-        } else if (!seenSlots.insert(*slot_v).second) {
-            r.errors.push_back("hardpoints[" + std::to_string(idx) + "].slot " + std::to_string(*slot_v) +
-                               " is duplicated");
-            r.ok = false;
-        }
-        auto type_str = (*hp)["type"].value<std::string>();
-        if (!type_str) {
-            r.errors.push_back("hardpoints[" + std::to_string(idx) + "] missing type");
-            r.ok = false;
-        } else if (!isOneOf(*type_str, kValidHardpointTypes, kValidHardpointTypesCount)) {
-            r.errors.push_back("hardpoints[" + std::to_string(idx) + "].type: unknown value \"" + *type_str + "\"");
-            r.ok = false;
-        }
-        auto* allowed = (*hp)["allowed"].as_array();
-        if (!allowed || allowed->empty()) {
-            r.errors.push_back("hardpoints[" + std::to_string(idx) + "].allowed must be a non-empty array");
-            r.ok = false;
-        }
-        auto default_v = (*hp)["default"].value<std::string>();
-        if (!default_v) {
-            r.errors.push_back("hardpoints[" + std::to_string(idx) + "] missing default");
-            r.ok = false;
-        } else if (allowed && !allowed->empty()) {
-            bool found = false;
-            for (auto& a : *allowed) {
-                if (a.value<std::string>() == *default_v) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                r.errors.push_back("hardpoints[" + std::to_string(idx) + "].default \"" + *default_v +
-                                   "\" is not in allowed list");
-                r.ok = false;
-            }
-        }
-        ++idx;
-    }
+    // Hardpoints moved to the entity definition TOML in #623: weapon stations are a property of the
+    // entity, not of its aerodynamics. Fail loudly rather than ignoring them, so a pack that still
+    // declares them here learns why its stations stopped existing instead of silently flying clean.
+    r.errors.push_back("[[hardpoints]] is no longer part of the flight model: weapon stations moved to the entity "
+                       "definition TOML (#623). Move the [[hardpoints]] blocks to the entity's .toml unchanged.");
+    r.ok = false;
 }
 
 // ── public entry point ────────────────────────────────────────────────────────

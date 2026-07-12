@@ -54,6 +54,10 @@ add_executable(test_flight_model_parser test_flight_model_parser.cpp)
 target_link_libraries(test_flight_model_parser PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_flight_model_parser)
 
+add_executable(test_weapon_def_parser test_weapon_def_parser.cpp)
+target_link_libraries(test_weapon_def_parser PRIVATE Catch2::Catch2WithMain engine-weapon)
+catch_discover_tests(test_weapon_def_parser)
+
 add_executable(test_aero_forces test_aero_forces.cpp)
 target_link_libraries(test_aero_forces PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_aero_forces)

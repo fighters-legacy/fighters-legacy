@@ -170,6 +170,17 @@ target_link_libraries(engine-flight
     PRIVATE tomlplusplus::tomlplusplus
 )
 
+# Weapon definitions (content-pack weapon TOML). Deliberately independent of engine-entity:
+# hardpoints reference weapon ids as strings, so the entity system does not depend on the weapon
+# system to describe what an airframe can carry.
+add_library(engine-weapon STATIC
+    weapon/WeaponDefParser.cpp
+)
+target_include_directories(engine-weapon PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-weapon
+    PRIVATE tomlplusplus::tomlplusplus
+)
+
 add_subdirectory(ai)
 
 # World-systems foundation types (faction registry, alert levels, airspace zones).

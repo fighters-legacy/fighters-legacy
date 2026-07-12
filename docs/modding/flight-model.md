@@ -711,6 +711,13 @@ offload_reserve = 0.20
 
 ## Payload interaction (no schema changes needed)
 
+> **Hardpoints are not in the flight model.** `[[hardpoints]]` moved to the **entity definition
+> TOML** in #623 — what an airframe is *allowed to carry* is a property of the entity, not of its
+> aerodynamics. See [`formats.md`](formats.md#hardpoints-optional--weapon-stations). A flight model
+> that still declares `[[hardpoints]]` is a validation error, with a message pointing there. The
+> physical consequence of a loadout still reaches the flight model — through the mass and drag below,
+> which is the only coupling that should exist.
+
 The `drag_factor` and `weight_lb` fields in each weapon TOML are automatically consumed by the
 flight integrator on each tick:
 
@@ -871,11 +878,6 @@ values = [
     90.0, 77.0, 64.0, 51.0, 37.0, 23.0,
 ]
 
-[[hardpoints]]
-slot    = 0
-type    = "missile"
-allowed = ["aim120c", "aim9x"]
-default = "aim120c"
 ```
 
 ---
@@ -1005,17 +1007,7 @@ hook_length_m    =  4.88  # 16 ft
 type          = "drogue"   # probe-and-drogue (F/A-18 uses a retractable probe)
 max_rate_kg_s = 1.7        # ~220 lb/min typical for probe-drogue
 
-[[hardpoints]]
-slot    = 0
-type    = "missile"
-allowed = ["aim120c", "aim9x", "aim7m"]
-default = "aim120c"
 
-[[hardpoints]]
-slot    = 1
-type    = "bomb"
-allowed = ["gbu12", "mk82", "agm65"]
-default = "gbu12"
 ```
 
 ---
@@ -1118,9 +1110,4 @@ values = [
 type          = "drogue"
 max_rate_kg_s = 2.0
 
-[[hardpoints]]
-slot    = 0
-type    = "missile"
-allowed = ["kh55sm"]
-default = "kh55sm"
 ```
