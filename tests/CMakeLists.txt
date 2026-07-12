@@ -434,6 +434,11 @@ add_executable(test_ack_window test_ack_window.cpp)
 target_link_libraries(test_ack_window PRIVATE Catch2::Catch2WithMain engine-protocol)
 catch_discover_tests(test_ack_window)
 
+# Engine-layer snapshot payload codec (#775; zstd wrapper in engine-compress).
+add_executable(test_snapshot_compression test_snapshot_compression.cpp)
+target_link_libraries(test_snapshot_compression PRIVATE Catch2::Catch2WithMain engine-compress)
+catch_discover_tests(test_snapshot_compression)
+
 # FLIT input-trace codec (writer + reader; header-only, stdlib-only — #560).
 add_executable(test_input_trace test_input_trace.cpp)
 target_link_libraries(test_input_trace PRIVATE Catch2::Catch2WithMain engine-protocol)

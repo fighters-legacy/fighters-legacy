@@ -17,6 +17,7 @@
 #include "net/GameProtocol.h"
 #include "net/NetworkUtils.h"
 #include "net/SnapshotCodec.h"
+#include "net/SnapshotCompression.h"
 #include "net/WireCodec.h"
 #include "weather/WeatherController.h"
 
@@ -265,6 +266,7 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setDrawDistance(cfg.drawDistanceKm);
     setSpatialCellSize(cfg.spatialCellSizeM); // after setDrawDistance: auto mode reads m_drawDistanceM
     setSnapshotBudget(cfg.snapshotBudgetBytes);
+    setSnapshotCompression(cfg.compressSnapshots);
     setJitterBufferDepth(cfg.jitterBufferMaxDepth);
     setJitterAdaptWindow(cfg.jitterAdaptWindow);
     setJitterHysteresis(cfg.jitterHysteresis);
@@ -314,6 +316,10 @@ void WorldBroadcaster::setSpatialCellSize(double cellSizeM) {
 
 void WorldBroadcaster::setSnapshotBudget(uint32_t bytes) noexcept {
     m_snapshotBudgetBytes.store(bytes, std::memory_order_relaxed);
+}
+
+void WorldBroadcaster::setSnapshotCompression(bool enabled) noexcept {
+    m_compressSnapshots.store(enabled, std::memory_order_relaxed);
 }
 
 void WorldBroadcaster::setJitterBufferDepth(uint32_t maxDepth) noexcept {
@@ -781,6 +787,9 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // kSnapshotRetentionTicks force-full backstop handle re-entry) — never despawned, no wire
     // change. Healthy / disabled governor => interestScale == 1 => the exact configured radius.
     const double govInterestRadiusM = m_drawDistanceM * static_cast<double>(govInterestScale);
+    // Snapshot payload compression (#775): frozen before the parallel region like the governor
+    // levers, so every peer in this tick sees the same setting.
+    const bool compressSnap = m_compressSnapshots.load(std::memory_order_relaxed);
     m_peerWork.clear();
     for (auto& [peerId, peerEid] : m_peerEntities) {
         PeerInputState& pin = m_peerInputs[peerId];
@@ -1053,6 +1062,25 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 }
                 appendExtRaw(buf, static_cast<uint16_t>(ExtTag::SnapshotDespawn), ids.data(),
                              static_cast<uint16_t>(ids.size() * sizeof(uint32_t)));
+            }
+            // Snapshot payload compression (#775): zstd the fully-assembled payload (origin table +
+            // record stream + TLV block) in place, still inside the parallel per-peer region — the
+            // codec is deterministic and this worker owns buf, so the #512 byte-identical-across-
+            // worker-counts guarantee holds. Raw fallback when compression does not strictly win
+            // (tiny/incompressible payloads keep flags == 0 and are wire-identical to compression
+            // off). The 24-byte header always stays raw: dispatch, the client's tick dedup, and
+            // bot_swarm's metrics read it without decompressing.
+            if (const std::size_t payloadSize = buf.size() - sizeof(MsgWorldSnapshotHeader);
+                compressSnap && payloadSize <= kMaxSnapshotPayloadBytes) {
+                const std::size_t csz = compressSnapshotPayload(buf.data() + sizeof(MsgWorldSnapshotHeader),
+                                                                payloadSize, w.compressScratch);
+                if (csz > 0u) {
+                    hdr.flags |= kSnapshotFlagCompressed;
+                    hdr.uncompressedBytes = static_cast<uint32_t>(payloadSize);
+                    writeMsgAt(buf, hdrOffset, hdr);
+                    buf.resize(sizeof(MsgWorldSnapshotHeader) + csz);
+                    std::memcpy(buf.data() + sizeof(MsgWorldSnapshotHeader), w.compressScratch.data(), csz);
+                }
             }
             // No m_net.send here — buf is flushed by the sim thread below.
         }

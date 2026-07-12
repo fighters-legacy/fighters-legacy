@@ -82,7 +82,7 @@ jobs:
         run: |
           # protobuf@21 (keg-only 3.21.12) + openssl@3 feed the GNS build (#653); the main
           # `protobuf` formula is the abseil-based 5.x line GNS v1.6.0 does not build against.
-          brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang protobuf@21 openssl@3
+          brew install cmake ninja vulkan-headers molten-vk vulkan-loader glslang protobuf@21 openssl@3 zstd
 
       - name: Set up GNS dependencies (macOS)
         if: matrix.os == 'macos-latest'

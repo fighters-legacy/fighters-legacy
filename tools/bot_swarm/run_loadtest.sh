@@ -86,6 +86,11 @@ fi
 GOVERNOR_ENABLED="false"
 [[ "${FL_LOADTEST_GOVERNOR:-0}" == "1" ]] && GOVERNOR_ENABLED="true"
 
+# FL_LOADTEST_COMPRESSION (#775): zstd snapshot payload compression. Defaults ON (the production
+# default); set 0 for a raw-payload A/B leg when characterising the compression win itself.
+COMPRESSION_ENABLED="true"
+[[ "${FL_LOADTEST_COMPRESSION:-1}" == "0" ]] && COMPRESSION_ENABLED="false"
+
 cat >"$CONFIG" <<EOF
 [server]
 port = $PORT
@@ -123,6 +128,9 @@ if [[ -n "$TEST_PROJECTILE_RATE" ]]; then
 fi
 cat >>"$CONFIG" <<EOF
 
+[network]
+compress_snapshots = $COMPRESSION_ENABLED
+
 [metrics]
 tick_json_path = "$METRICS"
 tick_json_interval_ms = 250
@@ -136,7 +144,8 @@ fi
 
 echo "=== bot_swarm load test: $CLIENTS clients, pattern=$PATTERN, ${DURATION}s, port $PORT" \
      "(test_spawn_ai=$TEST_SPAWN_AI mix=${TEST_SPAWN_MIX:-loiter} churn=${TEST_PROJECTILE_RATE:-0}/s" \
-     "sim_workers=${FL_SIM_WORKER_THREADS:-default} governor=$GOVERNOR_ENABLED transport=$TRANSPORT) ==="
+     "sim_workers=${FL_SIM_WORKER_THREADS:-default} governor=$GOVERNOR_ENABLED transport=$TRANSPORT" \
+     "compression=$COMPRESSION_ENABLED) ==="
 # Both ends are pinned to the SAME transport explicitly, overriding the [network].transport default:
 # enet6 by default (bot_swarm is the enet6 regression instrument, #507/#519), gns for the #649 leg
 # that validates the DEFAULT internet transport at scale.

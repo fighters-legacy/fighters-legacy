@@ -133,15 +133,21 @@ static_assert(offsetof(MsgEntityTypeDef, dmgMesh) == 132u, "MsgEntityTypeDef::dm
 //   3. TLV extension block, immediately after the record stream.
 // Sized to 24 (multiple of 8) so the origin table's doubles stay 8-aligned and the fixed header can be
 // read in place via fl::viewMsg / fl::readMsg.
+// MsgWorldSnapshotHeader::flags bits (#775). When kSnapshotFlagCompressed is set, everything after
+// this 24-byte header (origin table + record stream + TLV block) is one zstd frame;
+// `uncompressedBytes` is the exact decompressed byte length (bounded by the receiver before
+// allocating). recordCount/bitstreamBytes/originCount always describe the UNCOMPRESSED layout.
+inline constexpr uint16_t kSnapshotFlagCompressed = 0x0001u;
+
 struct MsgWorldSnapshotHeader {
     uint8_t msgId{static_cast<uint8_t>(MsgId::WorldSnapshot)};       // @0 (byte-0 dispatch unchanged)
     uint8_t protocolVersion{static_cast<uint8_t>(kProtocolVersion)}; // @1
-    uint16_t recordCount{0};    // @2 number of stitched entity records in the record stream
-    uint32_t bitstreamBytes{0}; // @4 byte length of the record stream (after the origin table; TLV follows)
-    uint64_t tickIndex{0};      // @8
-    uint16_t originCount{0};    // @16 number of double[3] origins in the table between this header and the stream
-    uint16_t reserved0{0};      // @18
-    uint32_t reserved1{0};      // @20
+    uint16_t recordCount{0};       // @2 number of stitched entity records in the record stream
+    uint32_t bitstreamBytes{0};    // @4 byte length of the record stream (after the origin table; TLV follows)
+    uint64_t tickIndex{0};         // @8
+    uint16_t originCount{0};       // @16 number of double[3] origins in the table between this header and the stream
+    uint16_t flags{0};             // @18 kSnapshotFlag* bits (#775); 0 = raw payload
+    uint32_t uncompressedBytes{0}; // @20 decompressed payload length when kSnapshotFlagCompressed; else 0
 }; // 24 bytes, align 8
 static_assert(sizeof(MsgWorldSnapshotHeader) == 24u, "MsgWorldSnapshotHeader wire size changed");
 static_assert(alignof(MsgWorldSnapshotHeader) == 8u, "MsgWorldSnapshotHeader alignment changed");
@@ -152,6 +158,9 @@ static_assert(offsetof(MsgWorldSnapshotHeader, bitstreamBytes) == 4u,
 static_assert(offsetof(MsgWorldSnapshotHeader, tickIndex) == 8u, "MsgWorldSnapshotHeader::tickIndex offset changed");
 static_assert(offsetof(MsgWorldSnapshotHeader, originCount) == 16u,
               "MsgWorldSnapshotHeader::originCount offset changed");
+static_assert(offsetof(MsgWorldSnapshotHeader, flags) == 18u, "MsgWorldSnapshotHeader::flags offset changed");
+static_assert(offsetof(MsgWorldSnapshotHeader, uncompressedBytes) == 20u,
+              "MsgWorldSnapshotHeader::uncompressedBytes offset changed");
 
 // Unreliable, client->server, sent each render frame. Padded to 48 (multiple of 8 for tickIndex).
 struct MsgClientInput {

@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -69,30 +70,53 @@ template <std::size_t N> void setField(char (&dst)[N], const char* src) {
     std::strncpy(dst, src, N - 1);
 }
 
-// Mirror of tests/test_client_net_event_handler.cpp buildSnapshotPkt: header + byte-aligned
-// quantized record bitstream, header back-patched with recordCount/bitstreamBytes. An optional TLV
-// block is appended after the bitstream.
+// Mirror of tests/test_client_net_event_handler.cpp buildSnapshotPkt: header + shared-origin table
+// (#725: one origin at index 0) + byte-aligned stitched record stream. An optional TLV block is
+// appended after the stream.
 std::vector<uint8_t> buildSnapshotPkt(uint64_t tick, const std::vector<fl::QuantEntity>& recs, const double origin[3],
                                       const std::vector<uint8_t>& tlv = {}) {
-    fl::BitWriter w;
-    uint32_t prev = 0;
-    for (const auto& qe : recs)
-        fl::encodeRecord(w, qe, prev, origin, /*sendGen=*/qe.isFull);
-    w.alignToByte();
+    std::vector<uint8_t> stream;
+    for (const auto& qe : recs) {
+        std::vector<uint8_t> blob;
+        fl::encodeStandaloneRecord(blob, qe, origin, /*sendGen=*/qe.isFull);
+        fl::appendStitchedRecord(stream, /*originIndex=*/0u, blob);
+    }
 
     std::vector<uint8_t> buf;
     fl::MsgWorldSnapshotHeader hdr{};
     hdr.tickIndex = tick;
-    hdr.frameOrigin[0] = origin[0];
-    hdr.frameOrigin[1] = origin[1];
-    hdr.frameOrigin[2] = origin[2];
-    fl::appendMsg(buf, hdr);
-    buf.insert(buf.end(), w.bytes().begin(), w.bytes().end());
     hdr.recordCount = static_cast<uint16_t>(recs.size());
-    hdr.bitstreamBytes = static_cast<uint32_t>(w.byteCount());
-    fl::writeMsgAt(buf, 0, hdr);
+    hdr.originCount = 1u;
+    hdr.bitstreamBytes = static_cast<uint32_t>(stream.size());
+    fl::appendMsg(buf, hdr);
+    const auto* op = reinterpret_cast<const uint8_t*>(origin);
+    buf.insert(buf.end(), op, op + 3u * sizeof(double));
+    buf.insert(buf.end(), stream.begin(), stream.end());
     buf.insert(buf.end(), tlv.begin(), tlv.end());
     return buf;
+}
+
+// A zstd frame containing the payload as a single RAW block (RFC 8878: magic, single-segment frame
+// header with a 1-byte Frame_Content_Size, one last/raw block). Hand-assembled so regeneration is
+// byte-stable: linking libzstd here would make the committed corpus depend on the system zstd
+// version. Any zstd decoder accepts it, so the #775 client decompress path gets real coverage.
+std::vector<uint8_t> rawZstdFrame(const std::vector<uint8_t>& payload) {
+    if (payload.size() > 255u) {
+        std::fprintf(stderr, "rawZstdFrame: payload %zu exceeds the 1-byte FCS form\n", payload.size());
+        std::exit(1);
+    }
+    std::vector<uint8_t> f{0x28u,
+                           0xB5u,
+                           0x2Fu,
+                           0xFDu, // magic (LE 0xFD2FB528)
+                           0x20u, // FHD: single-segment, 1-byte content size
+                           static_cast<uint8_t>(payload.size())};
+    const auto bh = static_cast<uint32_t>((payload.size() << 3) | 0x1u); // last=1, type=raw
+    f.push_back(static_cast<uint8_t>(bh & 0xFFu));
+    f.push_back(static_cast<uint8_t>((bh >> 8) & 0xFFu));
+    f.push_back(static_cast<uint8_t>((bh >> 16) & 0xFFu));
+    f.insert(f.end(), payload.begin(), payload.end());
+    return f;
 }
 
 fl::QuantEntity makeFullRecord() {
@@ -251,6 +275,31 @@ void mintClientMsgSeeds() {
     setField(cr.reason, "banned");
     appendFrame(c, wireBytes(cr));
     writeSeed("fuzz_client_msg", "seed-chunks.bin", c);
+
+    // seed-compressed: a snapshot in the #775 compressed wire form (flags bit 0 + uncompressedBytes
+    // in the header, zstd frame after it). Multiple records so mutations around record boundaries
+    // stay interesting after decompression.
+    std::vector<uint8_t> zc;
+    std::vector<fl::QuantEntity> recs;
+    for (uint32_t i = 0; i < 5u; ++i) {
+        fl::QuantEntity e = makeFullRecord();
+        e.idx = 7u + i;
+        e.pos[0] += 40.0 * i;
+        recs.push_back(e);
+    }
+    std::vector<uint8_t> rawPkt = buildSnapshotPkt(2, recs, origin);
+    const std::size_t hdrSize = sizeof(fl::MsgWorldSnapshotHeader);
+    std::vector<uint8_t> payload(rawPkt.begin() + static_cast<std::ptrdiff_t>(hdrSize), rawPkt.end());
+    fl::MsgWorldSnapshotHeader zhdr{};
+    std::memcpy(&zhdr, rawPkt.data(), hdrSize);
+    zhdr.flags |= fl::kSnapshotFlagCompressed;
+    zhdr.uncompressedBytes = static_cast<uint32_t>(payload.size());
+    std::vector<uint8_t> zpkt(rawPkt.begin(), rawPkt.begin() + static_cast<std::ptrdiff_t>(hdrSize));
+    std::memcpy(zpkt.data(), &zhdr, hdrSize);
+    const std::vector<uint8_t> frame = rawZstdFrame(payload);
+    zpkt.insert(zpkt.end(), frame.begin(), frame.end());
+    appendFrame(zc, zpkt);
+    writeSeed("fuzz_client_msg", "seed-compressed.bin", zc);
 }
 
 void mintAssetValidatorSeeds() {

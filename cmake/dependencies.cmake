@@ -335,6 +335,62 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# zstd — snapshot payload compression at the engine layer (#775; engine-compress).
+# System-preferred. Three tiers, normalized onto one imported/interface target
+# `fl::zstd`, because distros disagree about what a zstd dev package provides:
+#  1. find_package(zstd CONFIG) — upstream's own CMake config (Fedora, brew, vcpkg).
+#  2. find_path/find_library — Debian/Ubuntu libzstd-dev ships only headers +
+#     pkg-config, no CMake config.
+#  3. FetchContent v1.5.7 (build/cmake subdir; static, programs/tests off) —
+#     Windows CI and any box with no dev package. BSD-3.
+# ---------------------------------------------------------------------------
+find_package(zstd CONFIG QUIET)
+if(TARGET zstd::libzstd_shared OR TARGET zstd::libzstd_static OR TARGET zstd::libzstd)
+    add_library(fl-zstd INTERFACE)
+    if(TARGET zstd::libzstd_shared)
+        target_link_libraries(fl-zstd INTERFACE zstd::libzstd_shared)
+    elseif(TARGET zstd::libzstd_static)
+        target_link_libraries(fl-zstd INTERFACE zstd::libzstd_static)
+    else()
+        target_link_libraries(fl-zstd INTERFACE zstd::libzstd)
+    endif()
+    add_library(fl::zstd ALIAS fl-zstd)
+    message(STATUS "zstd: system (CMake config)")
+else()
+    find_path(FL_ZSTD_INCLUDE_DIR zstd.h)
+    find_library(FL_ZSTD_LIBRARY NAMES zstd libzstd)
+    if(FL_ZSTD_INCLUDE_DIR AND FL_ZSTD_LIBRARY)
+        add_library(fl-zstd INTERFACE)
+        target_include_directories(fl-zstd SYSTEM INTERFACE ${FL_ZSTD_INCLUDE_DIR})
+        target_link_libraries(fl-zstd INTERFACE ${FL_ZSTD_LIBRARY})
+        add_library(fl::zstd ALIAS fl-zstd)
+        message(STATUS "zstd: system (${FL_ZSTD_LIBRARY})")
+    else()
+        message(STATUS "zstd: FetchContent")
+        set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+        set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+        set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
+        set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(ZSTD_LEGACY_SUPPORT OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(zstd_src
+            GIT_REPOSITORY https://github.com/facebook/zstd.git
+            GIT_TAG        v1.5.7
+            GIT_SHALLOW    TRUE
+            GIT_PROGRESS   TRUE
+            SOURCE_SUBDIR  build/cmake
+            SYSTEM
+        )
+        FetchContent_MakeAvailable(zstd_src)
+        # Third-party C sources must not inherit -Werror (see the Lua block above).
+        set_target_properties(libzstd_static PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+        add_library(fl-zstd INTERFACE)
+        target_link_libraries(fl-zstd INTERFACE libzstd_static)
+        target_include_directories(fl-zstd SYSTEM INTERFACE "${zstd_src_SOURCE_DIR}/lib")
+        add_library(fl::zstd ALIAS fl-zstd)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # stb — single-file C libraries; used for stb_image 16-bit PNG decode in
 # engine-render (TerrainChunkIO). stb has no CMakeLists.txt; use
 # FetchContent_Populate to download source only.

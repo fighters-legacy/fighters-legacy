@@ -17,7 +17,11 @@ fields; this epic does the same, targeting a ~3–4× reduction while staying tr
 
 Each `MsgWorldSnapshot` is
 `header(24) → origin table(originCount × double[3]) → stitched record stream(bitstreamBytes) → TLV
-block`. Positions are quantized relative to a **shared per-region origin** — the floor of the
+block`. Since #775 the whole body after the header may additionally be one **zstd frame**
+(`MsgWorldSnapshotHeader::flags` bit 0 + `uncompressedBytes`; engine-layer, transport-agnostic, raw
+fallback when it does not strictly win) — everything below describes the *decompressed* body; the
+codec seam is `engine/net/SnapshotCompression.h` and the framing is specified in
+[network-protocol.md](network-protocol.md). Positions are quantized relative to a **shared per-region origin** — the floor of the
 entity's position onto a fixed `kOriginGridM` (~65 km) grid (`SnapshotCodec::originForPos`) — instead
 of the receiving peer's position, so the sim encodes each entity **once per tick** (a full and a delta
 blob) and each peer's snapshot is assembled by *stitching* the pre-encoded blobs (memcpy), not

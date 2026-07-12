@@ -239,6 +239,7 @@ int main(int argc, char** argv) {
     p.network = createNetwork(transportKind, log);
     INetwork* net = p.network.get();
     net->setAllowInsecure(cfg.network.allowInsecure);
+    net->setNagleTime(cfg.network.gnsNagleTimeUs);
     {
         char buf[96];
         std::snprintf(buf, sizeof(buf), "transport: %s", networkBackendVersion(transportKind));
@@ -475,6 +476,7 @@ int main(int argc, char** argv) {
     wbConfig.idleTimeoutS = cfg.idleTimeoutS;
     wbConfig.drawDistanceKm = static_cast<float>(cfg.drawDistanceKm);
     wbConfig.snapshotBudgetBytes = cfg.snapshotBudgetBytes;
+    wbConfig.compressSnapshots = cfg.network.compressSnapshots;
     wbConfig.jitterBufferMaxDepth = cfg.jitterBufferDepth;
     wbConfig.jitterAdaptWindow = cfg.jitterAdaptWindow;
     wbConfig.jitterHysteresis = cfg.jitterHysteresis;

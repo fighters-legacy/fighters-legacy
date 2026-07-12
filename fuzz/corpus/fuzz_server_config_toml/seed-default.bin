@@ -63,6 +63,7 @@ autosave_interval_s = 300
 # overrun_min_snapshot_hz = 15.0   # floor broadcast rate under overrun; [1, 60]
 # overrun_max_ai_stride = 4        # deepest AI-sample decimation for non-player entities; [1, 32]
 # overrun_budget_floor_bytes = 400 # never scale the snapshot budget below this under overrun; [0, 65535]
+# overrun_min_interest_fraction = 0.5 # interest-radius floor fraction under overrun; [0.1, 1.0]; 1.0 = lever off
 # max_catchup_ticks = 8            # GameLoop catch-up cap (spiral backstop); [1, 64]; needs restart
 # sim_worker_threads = 0           # sim-tick CPU parallelism; 0 = auto, 1 = serial; [0, 256]
 # --- load-test affordance (#573): pre-spawn AI entities to stress the pool/index at scale. ---
@@ -70,6 +71,9 @@ autosave_interval_s = 300
 # test_spawn_ai_count = 0          # server-side AI entities to pre-spawn at startup; 0 = disabled; [0, 1000000]
 # test_spawn_spread_km = 50.0      # phyllotaxis spread radius (km); [0, 100000]
 # test_spawn_agl_m = 500.0         # spawn/loiter altitude above origin ground elevation (m); [0, 50000]
+# test_spawn_ai_mix = ""           # weighted controller mix, e.g. "loiter:70,pursuit:20,patrol:10"; empty = all loiter (#580)
+# test_projectile_rate = 0.0       # short-lived entities spawned per second (churn); 0 = disabled; [0, 100000] (#580)
+# test_projectile_ttl_s = 3.0      # churned-entity lifetime (s); [0.05, 600] (#580)
 
 [ai]
 difficulty_floor = "recruit"
@@ -137,6 +141,14 @@ lockout_seconds = 60
 tick_json_path = ""
 tick_json_interval_ms = 1000
 
+[trace]
+# Server-side input tracing (#560). When input_trace_dir is non-empty, every peer's accepted
+# MsgClientInput is recorded to a per-peer FLIT trace (trace_peer<id>_<n>.flit) in that
+# directory, capturing real sessions for bot_swarm `--pattern trace:<file>` replay and the
+# Phase 4 replay epic. Empty = disabled. The trace_start [dir] / trace_stop admin commands
+# toggle it at runtime. See docs/load-testing.md for the trace format.
+input_trace_dir = ""
+
 [network]
 # Transport backend: "gns" (GameNetworkingSockets — encrypted UDP, congestion control, 128+
 # headroom; default for dedicated servers) or "enet" (enet6 — LAN / low-count). See
@@ -145,6 +157,14 @@ transport = "gns"
 # GNS only: accept unauthenticated peers (standalone GNS has no Steam PKI). true = encrypted but
 # unauthenticated (opportunistic, like TLS-without-cert). Ignored by the enet backend.
 allow_insecure = true
+# zstd-compress snapshot payloads at the engine layer (#775). Transport-agnostic: enet6's own
+# range coder compressed on the wire, GNS (the default) does not compress at all — this makes
+# the shipping transport pay enet6-or-better wire bytes. Hot-reloadable via reload_config.
+compress_snapshots = true
+# GNS only: datagram-coalescing (Nagle) window in microseconds. 0 = GNS default (5000). Larger
+# values merge more acks/messages per datagram at the cost of up to that much added delivery
+# latency. Range [0, 200000]. Requires a server restart.
+gns_nagle_time_us = 0
 
 [spawn]
 # AGL offset (metres) above terrain for all spawn points. Default 500 m.

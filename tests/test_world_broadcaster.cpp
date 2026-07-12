@@ -13,6 +13,7 @@
 #include "net/GameProtocol.h"
 #include "net/InputTraceReader.h"
 #include "net/SnapshotCodec.h"
+#include "net/SnapshotCompression.h"
 #include "net/WireCodec.h"
 #include "net/WorldBroadcaster.h"
 #include "render/RenderSnapshot.h"
@@ -430,7 +431,8 @@ TEST_CASE("WorldBroadcaster: parallel sim tick is serial-equivalent across worke
 // `killAtTick > 0`, one shared entity is killed at that tick so the per-peer despawn-detection +
 // SnapshotDespawn TLV path is exercised under parallelism.
 namespace {
-std::map<uint32_t, std::vector<std::vector<uint8_t>>> runSnapshotScenario(fl::JobSystem* jobs, uint64_t killAtTick) {
+std::map<uint32_t, std::vector<std::vector<uint8_t>>> runSnapshotScenario(fl::JobSystem* jobs, uint64_t killAtTick,
+                                                                          bool compress = false) {
     MockLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
@@ -440,6 +442,7 @@ std::map<uint32_t, std::vector<std::vector<uint8_t>>> runSnapshotScenario(fl::Jo
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     if (jobs)
         broadcaster.setJobSystem(*jobs);
+    broadcaster.setSnapshotCompression(compress);
 
     // Distinct peer spawn positions so each peer gets a different frameOrigin, own-entity record, and
     // interest set — making the per-peer byte comparison non-trivial. All within the 200 km default
@@ -502,6 +505,96 @@ TEST_CASE("WorldBroadcaster: parallel per-peer snapshot build is serial-equivale
                     INFO("snapshot packet index " << i);
                     CHECK(identical);
                 }
+            }
+        }
+    }
+}
+
+TEST_CASE("WorldBroadcaster: compressed snapshots round-trip to the raw payload byte-for-byte",
+          "[world_broadcaster][compress]") {
+    // Same deterministic scenario with compression off (reference) and on: every compressed packet
+    // must carry the flag + the exact uncompressed length, decompress to the reference payload, and
+    // actually be smaller — the wire form changes, the decoded stream must not.
+    const auto rawRun = runSnapshotScenario(nullptr, 0, /*compress=*/false);
+    const auto zRun = runSnapshotScenario(nullptr, 0, /*compress=*/true);
+    REQUIRE(zRun.size() == rawRun.size());
+    size_t compressedSeen = 0;
+    for (const auto& [pid, rawSnaps] : rawRun) {
+        auto it = zRun.find(pid);
+        REQUIRE(it != zRun.end());
+        const auto& zSnaps = it->second;
+        REQUIRE(zSnaps.size() == rawSnaps.size());
+        for (size_t i = 0; i < rawSnaps.size(); ++i) {
+            INFO("peer " << pid << " snapshot " << i);
+            const auto rawHdr = parseSnapshotHeader(rawSnaps[i]);
+            const auto zHdr = parseSnapshotHeader(zSnaps[i]);
+            // Counts + tick always describe the uncompressed layout, identical either way.
+            CHECK(zHdr.tickIndex == rawHdr.tickIndex);
+            CHECK(zHdr.recordCount == rawHdr.recordCount);
+            CHECK(zHdr.originCount == rawHdr.originCount);
+            CHECK(zHdr.bitstreamBytes == rawHdr.bitstreamBytes);
+            const std::size_t rawPayload = rawSnaps[i].size() - sizeof(fl::MsgWorldSnapshotHeader);
+            if ((zHdr.flags & fl::kSnapshotFlagCompressed) == 0u) {
+                // Raw fallback (payload under the min, or incompressible): must be wire-identical.
+                const bool identical = (zSnaps[i] == rawSnaps[i]);
+                CHECK(identical);
+                CHECK(zHdr.uncompressedBytes == 0u);
+                continue;
+            }
+            ++compressedSeen;
+            CHECK(zHdr.uncompressedBytes == rawPayload);
+            CHECK(zSnaps[i].size() < rawSnaps[i].size()); // compression only used when it wins
+            std::vector<uint8_t> payload;
+            REQUIRE(fl::decompressSnapshotPayload(zSnaps[i].data() + sizeof(fl::MsgWorldSnapshotHeader),
+                                                  zSnaps[i].size() - sizeof(fl::MsgWorldSnapshotHeader),
+                                                  zHdr.uncompressedBytes, payload));
+            const bool payloadIdentical =
+                payload ==
+                std::vector<uint8_t>(rawSnaps[i].begin() + sizeof(fl::MsgWorldSnapshotHeader), rawSnaps[i].end());
+            CHECK(payloadIdentical);
+        }
+    }
+    CHECK(compressedSeen > 0u); // the 16-entity scenario must actually exercise the compressed path
+}
+
+TEST_CASE("WorldBroadcaster: tiny snapshots are sent raw even with compression enabled",
+          "[world_broadcaster][compress]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setSnapshotCompression(true);
+    broadcaster.onConnect(0u); // own entity only -> payload well under kMinSnapshotCompressBytes
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(snaps.size() == 1u);
+    const auto hdr = parseSnapshotHeader(snaps[0]);
+    CHECK((hdr.flags & fl::kSnapshotFlagCompressed) == 0u);
+    CHECK(hdr.uncompressedBytes == 0u);
+    // And the packet parses exactly like a compression-off packet.
+    const auto fullEntries = parseFullEntries(snaps[0]);
+    CHECK(!fullEntries.empty());
+}
+
+TEST_CASE("WorldBroadcaster: compressed snapshot build is serial-equivalent across worker counts",
+          "[world_broadcaster][compress]") {
+    // zstd is deterministic for identical input, and each worker owns its peer's buffer — so the
+    // #512 guarantee must survive compression: byte-identical packets at any worker count.
+    const auto baseline = runSnapshotScenario(nullptr, 0, /*compress=*/true);
+    for (unsigned total : {1u, 4u}) {
+        fl::JobSystem jobs(total);
+        const auto got = runSnapshotScenario(&jobs, 0, /*compress=*/true);
+        REQUIRE(got.size() == baseline.size());
+        for (const auto& [pid, baseSnaps] : baseline) {
+            auto it = got.find(pid);
+            REQUIRE(it != got.end());
+            REQUIRE(it->second.size() == baseSnaps.size());
+            for (size_t i = 0; i < baseSnaps.size(); ++i) {
+                const bool identical = (it->second[i] == baseSnaps[i]);
+                INFO("workers=" << total << " peer=" << pid << " packet " << i);
+                CHECK(identical);
             }
         }
     }

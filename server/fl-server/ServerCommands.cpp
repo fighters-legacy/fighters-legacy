@@ -765,8 +765,8 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         " congestion_enabled, congestion_min_send_hz, congestion_loss_threshold,"
         " congestion_budget_floor_bytes, overrun_governor_enabled, overrun_high_watermark,"
         " overrun_low_watermark, overrun_min_snapshot_hz, overrun_max_ai_stride,"
-        " overrun_budget_floor_bytes, overrun_min_interest_fraction (other fields, incl."
-        " max_catchup_ticks, require restart)",
+        " overrun_budget_floor_bytes, overrun_min_interest_fraction, compress_snapshots (other"
+        " fields, incl. max_catchup_ticks and gns_nagle_time_us, require restart)",
         [ctx](std::span<std::string_view>) -> std::string {
             if (!ctx.env.configPath || ctx.env.configPath->empty())
                 return "reload_config: not available";
@@ -794,13 +794,15 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                     newCfg.overrunGovernorEnabled, newCfg.overrunHighWatermark, newCfg.overrunLowWatermark,
                     newCfg.overrunMinSnapshotHz, newCfg.overrunMaxAiStride, newCfg.overrunBudgetFloorBytes,
                     newCfg.overrunMinInterestFraction);
+                auto newCompress = newCfg.network.compressSnapshots;
                 ctx.sim.gameLoop->enqueueSimCallback([ctx, newMotd, newMotdDisplayS, newDraw, newSnapshotBudget,
                                                       newJitterDepth, newAdaptWindow, newHysteresis, newMultiplier,
-                                                      newCongestion, newGovernor]() mutable {
+                                                      newCongestion, newGovernor, newCompress]() mutable {
                     ctx.sim.broadcaster->setMotd(std::move(newMotd));
                     ctx.sim.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
                     ctx.sim.broadcaster->setDrawDistance(newDraw);
                     ctx.sim.broadcaster->setSnapshotBudget(newSnapshotBudget);
+                    ctx.sim.broadcaster->setSnapshotCompression(newCompress);
                     ctx.sim.broadcaster->setJitterBufferDepth(newJitterDepth);
                     ctx.sim.broadcaster->setJitterAdaptWindow(newAdaptWindow);
                     ctx.sim.broadcaster->setJitterHysteresis(newHysteresis);

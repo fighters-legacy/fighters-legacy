@@ -127,6 +127,8 @@ struct WorldBroadcasterConfig {
     float drawDistanceKm{200.f};      // per-peer interest radius; 0 = degenerate (empty snapshots)
     double spatialCellSizeM{10000.0}; // SpatialIndex cell size (m); 0 = auto from draw distance; restart-only
     uint32_t snapshotBudgetBytes{0};  // per-client snapshot byte budget; 0 = unlimited (#516)
+    bool compressSnapshots{false};    // zstd snapshot payload compression (#775); internal default
+                                      // OFF (byte-stable tests), fl-server config default ON
     uint32_t jitterBufferMaxDepth{4}; // per-peer input queue depth; [1, JitterBuffer::kHardMaxDepth]
     uint32_t jitterAdaptWindow{60};   // EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
     uint32_t jitterHysteresis{2};     // dead-band in ticks before resize fires; [0, 8]
@@ -456,6 +458,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // gameLoop.start() or via enqueueSimCallback (reload_config).
     void setSnapshotBudget(uint32_t bytes) noexcept;
 
+    // Enable zstd compression of snapshot payloads (#775). The per-peer payload after the raw
+    // 24-byte header is compressed in the parallel build pass when it wins (strictly smaller;
+    // payloads under kMinSnapshotCompressBytes are sent raw), signalled via
+    // MsgWorldSnapshotHeader::flags + uncompressedBytes. Internal default OFF so the broadcast
+    // byte-shape tests stay stable; the fl-server config default is ON ([network]
+    // compress_snapshots). Atomic / hot-reloadable like setSnapshotBudget.
+    void setSnapshotCompression(bool enabled) noexcept;
+
     // Set the global maximum jitter buffer depth (ticks). The actual per-peer initial depth is
     // min(estimatedDelayTicks, maxDepth), floored at 1. The adaptive resize loop in onTick
     // continuously adjusts per-peer depths within this bound. Thread-safe; may be called before
@@ -687,6 +697,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // it (the read happens on the sim thread). The scheduler ranks visible entities by relevance and
     // sends only the highest-priority set that fits.
     std::atomic<uint32_t> m_snapshotBudgetBytes{0};
+    // Snapshot payload compression (#775): internal default OFF (unit tests assert raw byte shapes);
+    // fl-server config default ON. Atomic for reload_config; frozen into a local before the parallel
+    // per-peer pass.
+    std::atomic<bool> m_compressSnapshots{false};
     SchedulerWeights m_schedulerWeights{};     // relevance weights (tuned defaults; sim-thread only)
     std::atomic<uint32_t> m_jitterMaxDepth{4}; // global cap for per-peer jitter buffer initialization
     // Adaptive resize parameters — sim-thread only; hot-reloadable via enqueueSimCallback.
@@ -738,6 +752,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
         std::unordered_map<uint32_t, PeerEntityRec>* knownGens{nullptr};
         std::unordered_map<uint32_t, uint8_t>* pending{nullptr};
         std::vector<uint8_t> buf;
+        std::vector<uint8_t> compressScratch; // zstd output scratch (#775); reused across ticks
     };
     std::vector<PeerSnapWork> m_peerWork;
 

@@ -135,10 +135,34 @@ the record bit-layout and the codec. Sized to 24 (a multiple of 8) so the origin
 | 4 | 4 | `bitstreamBytes` | `uint32_t` | Byte length of the record stream (after the origin table); the TLV block starts at `24 + originCount×24 + bitstreamBytes` |
 | 8 | 8 | `tickIndex` | `uint64_t` | Monotonically increasing server tick counter (8-aligned) |
 | 16 | 2 | `originCount` | `uint16_t` | Number of `double[3]` shared-origin entries in the table that follows this header |
-| 18 | 6 | `reserved` | — | padding to 24 (keeps the origin table 8-aligned) |
+| 18 | 2 | `flags` | `uint16_t` | `kSnapshotFlag*` bits (#775). Bit 0 = `kSnapshotFlagCompressed`: the whole body after this header is one zstd frame. 0 = raw body |
+| 20 | 4 | `uncompressedBytes` | `uint32_t` | Decompressed body length when bit 0 of `flags` is set; 0 otherwise |
 
 Immediately after the header: `originCount` entries of `double[3]` (24 bytes each) — the distinct
 grid-cell quantization origins (`floor(pos / kOriginGridM) * kOriginGridM`) the records reference.
+
+#### Compressed snapshot body (#775)
+
+When `flags & 0x0001` (`kSnapshotFlagCompressed`), everything after the 24-byte header — origin
+table, record stream, and TLV block — is a single **zstd** frame whose decompressed length is
+exactly `uncompressedBytes`; `recordCount`/`originCount`/`bitstreamBytes` always describe the
+**decompressed** layout. The header itself is never compressed, so byte-0 dispatch, the
+protocol-version stamp, and the receiver's out-of-order tick guard work without a decompress. The
+sender uses compression only when it strictly wins: bodies under `kMinSnapshotCompressBytes`
+(128) or that do not shrink are sent raw with `flags == 0`, byte-identical to a
+compression-disabled server. Receivers must bound `uncompressedBytes` by
+`kMaxSnapshotPayloadBytes` (4 MiB) before allocating, and must reject a frame whose decoded
+length differs from the claim (`fl::decompressSnapshotPayload` in
+`engine/net/SnapshotCompression.h` — the single audited path, used by the game client and the
+tests alike). Compression is transport-agnostic and server-controlled (`[network]
+compress_snapshots`, default on): enet6's range coder used to compress on the wire, GNS (the
+default internet transport) does not compress at all, so the engine owns the codec and both
+backends carry identical bytes.
+
+**Version decision (#775):** `kProtocolVersion` stays 1. A pre-#775 client that received a
+compressed snapshot would mis-parse the zstd frame as an origin table and fail record decode
+(fail-closed in `decodeStandaloneRecord`, no crash) — per the standing primary-development
+convention, both sides update together and the version bump is reserved for the 1.0 wire freeze.
 
 ### Quantized entity record (byte-aligned, stitched)
 
