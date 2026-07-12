@@ -458,11 +458,44 @@ is the number an operator's bandwidth bill is denominated in. That is `wire_kbs`
 independent reasons: `ENetNetwork` enables ENet's **range coder** (`enet_host_compress_with_range_coder`)
 and **GNS does not compress at all** — it encrypts; and GNS sends ~1.8× the **datagrams** on active
 patterns, paying per-packet framing more often. Idle traffic is the extreme case: highly repetitive
-snapshots compress 75 % on enet6 and 0 % on GNS. Closing that gap is [#775].
+snapshots compress 75 % on enet6 and 0 % on GNS.
 
 Note the two rows are the same engine and the same snapshots — **the payload columns agree to within
 0.1 KB/s**. That agreement is not a result; it is the tautology that made this cost invisible until
 wire bytes were counted.
+
+### Engine-layer snapshot compression closed the gap ([#775])
+
+`[network] compress_snapshots` (default **on**) zstd-compresses each snapshot body at the engine
+layer — transport-agnostic, so a transport swap cannot lose it. Measured on the reference VM at
+128 clients, compression off → on, **GNS**:
+
+| Pattern | wire KB/s/cl | datagrams/s | serialize mean | payload KB/s/cl |
+|---|---:|---:|---:|---:|
+| idle | 75.5 → **16.9** (−78 %) | 8 438 → 7 639 | 0.77 → 0.87 ms | 71.4 → 14.4 |
+| weave | 77.5 → **66.5** (−14 %) | 12 156 → **7 673** | 0.83 → 0.94 ms | 71.8 → 60.9 |
+| aggressive | 80.4 → **67.8** (−16 %) | 15 315 → **7 681** | 1.56 → 0.99 ms | 73.5 → 63.0 |
+
+- **GNS idle now beats enet6's compressed wire** (16.9 vs 17.6 KB/s) — the 4.3× headline gap is
+  gone; the active-pattern gap closes from ~1.3× to ~1.1× (GNS still pays AES-GCM + framing that
+  no codec can remove).
+- **The ~1.8× datagram multiplier was MTU fragmentation, not ack overhead**: ~1.2 KB snapshots +
+  GNS framing straddled the 1300-byte MTU on active patterns; compressed snapshots fit one
+  datagram, so pps collapses to the 60 Hz × peers data floor — *below* enet6's. The
+  `[network] gns_nagle_time_us` coalescing knob therefore ships defaulted to GNS's own 5 ms
+  (`0` = untouched): with fragmentation gone there is nothing left to coalesce, and raising it
+  would only add delivery latency.
+- **The CPU cost is ~0.1 ms of `serialize_ms`** at 128 clients across 8 workers (≈0.6 % of the
+  16.6 ms budget) — bandwidth bought, not paid for out of tick time. The congestion profile
+  engages and recovers identically with compression on.
+- **enet6 is the one caveat**: its range coder cannot compress zstd output, and its whole-packet
+  compression was slightly better than zstd's payload-only form — enet6 weave wire measured
+  58.7 → 64.9 KB/s (+10 %) with engine compression on. The default stays on (GNS is what ships,
+  and enet6 is the LAN/loopback backend where wire bytes matter least); a bandwidth-sensitive
+  enet6 operator can set `compress_snapshots = false` and let the range coder do the work. The
+  runners expose `FL_LOADTEST_COMPRESSION=0` for raw A/B legs, and the committed `wire_kbs`
+  baselines need regenerating on the reference runner now that the production default changed
+  the byte profile of every leg.
 
 ### How it is measured
 

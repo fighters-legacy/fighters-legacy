@@ -711,13 +711,15 @@ account authentication (Epic C) rides an in-band wire message on top of the encr
 - **Default:** `true`
 - **Hot-reloadable** via `reload_config`.
 
-zstd-compress snapshot payloads at the engine layer (#775). Transport-agnostic: enet6's own range
-coder used to compress on the wire while GNS (the default transport) does not compress at all —
-with this on, both backends carry the same compressed bytes and GNS pays enet6-or-better wire
-bandwidth. Tiny or incompressible snapshots are automatically sent raw, so there is no pathological
-case where this costs bytes; the CPU cost is a few microseconds per peer per tick inside the
-parallel snapshot build. Turn off only for wire-level debugging or when characterising the raw
-payload (the load-test runners expose `FL_LOADTEST_COMPRESSION=0` for exactly that).
+zstd-compress snapshot payloads at the engine layer (#775). GNS (the default transport) does not
+compress at all, so this is where its wire bytes come down: measured at 128 clients, idle wire
+drops 78 % (to below enet6's range-coder figure) and active patterns ~15 %. Tiny or incompressible
+snapshots are automatically sent raw; the CPU cost is a few microseconds per peer per tick inside
+the parallel snapshot build. **One caveat on the `enet` transport:** ENet's own range coder cannot
+compress zstd output, and its whole-packet compression is slightly better than payload-only zstd —
+measured ~+10 % wire on active patterns with both enabled. A bandwidth-sensitive enet6 server can
+set this `false` and let the range coder do the work; on GNS leave it on. The load-test runners
+expose `FL_LOADTEST_COMPRESSION=0` for raw A/B legs.
 
 ### `gns_nagle_time_us`
 
