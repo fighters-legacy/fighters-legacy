@@ -1,8 +1,16 @@
-# Local provider evaluation (spike #599)
+# Local provider evaluation (spikes #599, #604, #609)
 
 Resolution of spike [#599](https://github.com/fighters-legacy/fighters-legacy/issues/599) — *which
 local OpenAI-compatible stacks and model sizes give acceptable latency and structured-output
 reliability for the initiative's three workloads?*
+
+Two narrower spikes ask the same question of one workload each, and are resolved from the same
+measurements rather than re-run: [#604](https://github.com/fighters-legacy/fighters-legacy/issues/604)
+(can a local model generate valid mission YAML through a generate → validate → repair loop?) and
+[#609](https://github.com/fighters-legacy/fighters-legacy/issues/609) (how accurately do small local
+models map free text to the wingman command grammar, and where should that inference run?). Their
+verdicts, and what this evidence does *not* settle for them, are in
+[Spike resolutions](#spike-resolutions) at the end.
 
 Measured with [`tools/ai_eval/`](../tools/ai_eval/README.md), the reusable harness this spike owes
 the follow-on epics. Re-running it is one command; every number below is reproducible.
@@ -161,6 +169,40 @@ The one non-injection miss shared by every capable model (*"Take out my bandit, 
 error — worth revisiting when [#610](https://github.com/fighters-legacy/fighters-legacy/issues/610)
 fixes the real vocabulary.
 
+### Where intent inference should run — **server-side, not client-local**
+
+#609 was written expecting the opposite ("small intent models are expected to default to CPU
+inference on the client"), and asked for GPU-contention measurements to price that. The accuracy
+data removes the premise before contention becomes the deciding question:
+
+- **There is no "small" model here.** The ≥ 90 % gate is met only at 9B (92 %) and 14B (96 %). The
+  sizes that fit a client's spare CPU comfortably are the sizes that miss the gate — 3B maps one
+  command in five wrong. A client-local intent model is a 6–9 GB resident model, not a light one.
+- **Keep-warm decides it.** Cold-loading a 14B costs **55 s**, and idle models get evicted in
+  minutes. Radio calls are bursty and minutes apart, so a client-local model is either evicted
+  exactly when the pilot speaks (missing a 2 s budget by ~25×) or permanently pinned in RAM/VRAM
+  against a renderer that wants all of it. One warm model on the server amortizes that load across
+  every peer and every call; N client-local models each pay it alone.
+- **The data is already server-side.** Team chat is routed through the server, and the mapped
+  command executes through the server's scripted grammar allowlist. Server-side inference adds no
+  new data flow and keeps the allowlist — the thing that bounds prompt-injection blast radius — on
+  the authority that already enforces it.
+- **It takes the LLM off the frame budget entirely**, which is the honest reason to be glad about
+  this answer: GPU contention with Vulkan is the one thing this spike could not measure (no Mac or
+  Windows hardware in reach — see [Caveats](#caveats--what-this-does-not-establish)). Server-side
+  hosting means that unmeasured risk is not on the critical path of a 60 Hz frame.
+
+**Recommendation: host the intent model server-side, behind the existing `[ai.provider]` seam on
+`fl-server`**, and treat client-local inference as an unsupported opt-in rather than the default.
+This does not make the wingman a GPU-only feature by itself — it makes it a feature of servers that
+*have* a provider. With no provider, or on a CPU-only server that cannot meet the budget, the
+wingman degrades to scripted behavior, which is the CI-tested path. That degradation is Epic O's
+fork (#769), and it is unchanged by where the model runs.
+
+This is a recommendation from latency, accuracy and deployment cost — **not** from a contention
+measurement. If Epic O ever revisits client-local inference, the per-OS contention runs #609 asked
+for become required work again.
+
 ### Mission generation (Epic N) — solved at 9B
 
 Every model ≥ 9B produced **validate-clean missions on the first attempt**, judged by the real
@@ -223,6 +265,75 @@ For `docs/ai-architecture.md` §2 (provider seam):
 - **Prefer an instruct model over a reasoning model** for anything with a strict output schema.
 - **Screen candidate models for prompt-injection resistance** before adopting them for the chat
   path. `tools/ai_eval/` includes that case.
+
+## Spike resolutions
+
+### #604 — mission YAML generate/validate/repair: **GO**, if generation is asynchronous
+
+*Can a local 7–8B instruct model reliably produce valid mission YAML from campaign state through a
+generate → validate-mission → repair loop?*
+
+**Yes at ≥ 9B, no at 7–8B.** Both `gemma2:9b` and `qwen2.5-coder:14b` produce **100 % validate-clean
+missions at pass@1**, judged by the real `validate-mission` binary — not a re-implementation of it,
+which is why the answer is trustworthy. Below that the floor falls away fast (3B: 67 % on CPU, and
+it emits YAML the validator rejects; 1.5B: 50 %). The spike's own "7–8B" premise is the thing that
+does not survive: 9B is the floor, so 8B is the edge and 7B is optimistic.
+
+**Repair budget: one iteration is enough, and the loop still earns its place.** Nothing at 9B/14B
+needed repairing, so the loop was exercised only by the 32B q2_K case that failed once and recovered
+when fed the validator's stderr (83 % → 100 %). Feed the actual validator output back verbatim; one
+round-trip, then give up and re-roll.
+
+**Design notes for the fl-director pipeline (Epic N):**
+
+- **Generate ahead; never block a player on a synchronous call.** The 60 s target is met with huge
+  margin on a GPU (≈5 s p95) and **missed on the CPU-only reference instance at exactly the model
+  sizes worth using** (p95 70.6 s at 9B, 95.2 s at 14B — quality is unaffected, it is purely a
+  latency wall). A director that generates mission *N+1* while mission *N* is being flown hides even
+  the 95 s case completely. If it must ever be interactive, revisit the budget, not the model.
+- **Pin the model warm.** Cold-loading a 14B costs 55 s before inference starts.
+- **Keep the validator in the loop as the gate, not as a test.** The director should refuse to ship
+  a mission the binary rejects, rather than trusting a pass@1 rate.
+
+**Not established:** 6 briefs producing small missions (2–6 objects). Campaign-scale generation,
+coherent narrative briefings, and adaptive OPFOR composition are unmeasured — they are Epic N's
+work, not this spike's.
+
+### #609 — NL → command-grammar intent mapping: **GO on accuracy, with two deliverables unmet**
+
+*How accurately do small local models map free text to the wingman command grammar, and what is the
+client-side cost?*
+
+**The accuracy gate is met, but not by a "small" model.** On the reference instance: `gemma2:9b`
+**92 %**, `qwen2.5-coder:14b` **96 %** — both clear the ≥ 90 % initiative gate; `qwen2.5:3b` reaches
+81 % and 1.5B collapses to 65 % with invented commands. Two findings outrank the headline: **prompt
+injection is a model-selection criterion** (`gemma2:9b`'s only miss was obeying *"ignore your
+previous instructions…"*; the `qwen2.5-coder` models refused it), and **reasoning models are the
+wrong tool** (`deepseek-r1:14b` leaks traces into the response, so 15 % of its answers were not
+schema-valid at all).
+
+**Hosting recommendation: server-side** — see
+[Where intent inference should run](#where-intent-inference-should-run--server-side-not-client-local).
+The spike's expectation of client-side CPU inference does not survive the accuracy data: the models
+that clear the gate are 9–14B, and a 55 s cold load against bursty, minutes-apart radio calls makes
+per-client hosting the expensive way to do it.
+
+**What this spike does *not* deliver, stated plainly:**
+
+- **The eval set is 26 utterances, not the ≥ 100 the spike asked for.** The ≥ 90 % gate is therefore
+  called on 2 misses out of 26 at 9B — enough to separate a 3B from a 14B, not enough to defend a
+  number to the point. Expanding it now would be throwaway work: the intent suite encodes a
+  **provisional six-command grammar**, and #610 owns the real vocabulary. The expansion belongs with
+  #610, against the vocabulary that ships. Suites are data (`suites/intent.json`), so that is a file
+  edit plus a re-run, not new engineering.
+- **The per-OS contention notes were never measured.** #609 asked for inference-vs-Vulkan contention
+  on all three platforms; no Apple Silicon or Windows hardware was in reach. The server-side
+  recommendation takes that question off the critical path rather than answering it — if Epic O ever
+  reconsiders client-local inference, those runs become required work again.
+
+Neither gap changes the verdict — **≥ 9B maps intent accurately enough to build on** — so the spike
+is resolved rather than extended. The CPU **latency** budget (2 s) is a separate, real failure and
+is Epic O's design fork, tracked in #769; it is not an accuracy question and does not belong here.
 
 ## Reproducing
 
