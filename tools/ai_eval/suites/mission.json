@@ -1,0 +1,38 @@
+{
+  "name": "mission",
+  "_comment": "Epic N — campaign brief -> mission YAML. Correctness is decided by the REAL validate-mission binary (subprocess), not by a re-implemented schema check, plus cheap semantic checks (requested sides declared, object count, weather preset). Scored as pass@1 and pass-after-one-repair, because the director pipeline is generate -> validate -> repair -> submit: a model that needs the validator's stderr to get there is still usable, one that cannot converge is not. Schema source of truth: docs/modding/missions.md.",
+  "budget_s": 60.0,
+  "system_prompt": "You generate mission files for a combat flight simulator. Output ONLY a YAML document — no prose, no explanation, no code fence.\n\nRequired top-level fields:\n  name: string (non-empty)\n  map: string (terrain id)\n  layer: string (weather/lighting layer id)\n  time: { hour: 0-23, minute: 0-59 }\n  wind: { heading: 0-359, speed: >= 0 }   # speed in m/s\n  sides: [list of coalition ids, at least 1]\n  objects: [list, at least 1]\n  triggers: [list]\n\nOptional:\n  weather: { preset: clear|partly_cloudy|overcast|rain|storm|snow|blizzard }\n  time_scale: float > 0\n\nEach entry of `objects` requires:\n  type: string (aircraft/unit type id)\n  id: string (UNIQUE across the file)\n  side: string (MUST be one of the ids listed in top-level `sides`)\n  pos: [x, y, z]  (exactly 3 numbers, metres; y is up)\n  heading: number (degrees)\n  alt: number (optional, metres)\n\nEach entry of `triggers` requires:\n  on: string   e.g. destroy(<object id>), timer(<seconds>), mission_start\n  do: string   e.g. mission_success, mission_failure, spawn(<type>,<side>,[x,y,z])\nAny object id referenced by destroy(...) MUST be one of the object ids you defined.\n\nExample of a valid document:\nname: \"Storm Warning\"\nmap: ukraine\nlayer: ukraine_clear\ntime: { hour: 14, minute: 0 }\nwind: { heading: 270, speed: 12 }\nsides: [nato, russia]\nobjects:\n  - type: F22\n    id: player1\n    side: nato\n    pos: [12400, 0, 8800]\n    heading: 90\n    alt: 500\n  - type: SA10\n    id: sam1\n    side: russia\n    pos: [15000, 0, 9000]\n    heading: 0\ntriggers:\n  - on: destroy(sam1)\n    do: mission_success",
+  "cases": [
+    {
+      "id": "sead-strike",
+      "brief": "Generate a SEAD mission. Coalitions: nato and russia. The player flies an F22 for nato. Place at least one russian SA10 site as the target. The mission succeeds when the SAM site is destroyed. Map: ukraine, layer ukraine_clear. Midday, light wind.",
+      "expect": { "sides": ["nato", "russia"], "min_objects": 2 }
+    },
+    {
+      "id": "cap-storm",
+      "brief": "Generate a combat air patrol mission in bad weather. Coalitions: nato and russia. Two nato F15 fighters on patrol, at least two russian Su27 interceptors inbound. Weather preset must be storm. Map: ukraine, layer ukraine_overcast. Dawn (around 05:30), strong wind from the west.",
+      "expect": { "sides": ["nato", "russia"], "min_objects": 4, "weather_preset": "storm" }
+    },
+    {
+      "id": "escort-timer",
+      "brief": "Generate an escort mission with a time limit. Coalitions: nato and russia. A nato C130 transport must survive; escort it with one nato F16. Include at least one russian MiG29 threat. The mission fails if a timer of 600 seconds expires before the threat is destroyed. Map: ukraine, layer ukraine_clear.",
+      "expect": { "sides": ["nato", "russia"], "min_objects": 3 }
+    },
+    {
+      "id": "three-sides",
+      "brief": "Generate a mission with THREE coalitions: nato, russia and militia. At least one object per coalition. Map: ukraine, layer ukraine_clear. Night mission (around 23:00), calm wind, weather preset clear.",
+      "expect": { "sides": ["nato", "russia", "militia"], "min_objects": 3, "weather_preset": "clear" }
+    },
+    {
+      "id": "snow-intercept",
+      "brief": "Generate an intercept mission in snow. Coalitions: nato and russia. One nato F22 intercepting two russian Tu95 bombers. Weather preset must be snow. Map: ukraine, layer ukraine_overcast. Early morning, moderate wind from the north. Mission succeeds when both bombers are destroyed.",
+      "expect": { "sides": ["nato", "russia"], "min_objects": 3, "weather_preset": "snow" }
+    },
+    {
+      "id": "strike-package",
+      "brief": "Generate a large strike package mission. Coalitions: nato and russia. At least six objects total: multiple nato strike aircraft and escorts, and multiple russian ground targets and defenders. Map: ukraine, layer ukraine_clear. Afternoon, moderate wind. Mission succeeds when a specific named russian ground target is destroyed.",
+      "expect": { "sides": ["nato", "russia"], "min_objects": 6 }
+    }
+  ]
+}

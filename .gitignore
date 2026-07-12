@@ -102,6 +102,9 @@ tools/latency_analysis/results/
 # bot_swarm load-test — auto-generated JSON reports
 tools/bot_swarm/results/
 
+# Agentic-AI provider evaluation — auto-generated sweep results (#599)
+tools/ai_eval/results/
+
 # Vagrant machine state (reference-env VM) — keys, box metadata, etc.
 .vagrant/
 
