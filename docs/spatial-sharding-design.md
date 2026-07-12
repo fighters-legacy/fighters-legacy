@@ -286,6 +286,37 @@ is last.
 6. **Spatial sharding** — only on the trigger below, and only in its process/multi-machine form
    (the threads form is dominated — see above).
 
+## ⚠ Measurement caveat: these numbers were taken on enet6, not the default transport ([#649])
+
+**Everything measured in this document was measured on enet6. The default internet transport is
+GameNetworkingSockets** ([#507]), and it changes the picture by an order of magnitude. Same box
+(8-core reference), same build, 128 clients, weave:
+
+| | tick mean | serialize | integrate | serialize share |
+|---|---:|---:|---:|---:|
+| enet6 | 8.20 ms | 8.03 ms | 0.06 ms | 98 % |
+| **GNS** | **1.01 ms** | **0.81 ms** | 0.05 ms | 80 % |
+
+**~90 % of what the `serialize` phase cost was ENet's inline per-packet send, not this engine's
+snapshot pipeline** — ENet does that work on the calling thread, so it lands inside the sim tick;
+GNS queues to its own service thread and returns. Our actual encode + schedule cost is ~0.8 ms at
+128 clients.
+
+What this does **not** change: serialize is still the dominant phase on GNS (80 %), so the
+phase-routing clause below (clause 3) still routes correctly, and integrate is unchanged.
+
+What this **does** change is the magnitude, and therefore the urgency:
+
+- On the transport that ships, the tick runs **~16× under its 16.6 ms budget**, not ~2×. Clauses 1
+  and 2 (governor pinned at floor, `dropped_ticks` rising) are correspondingly much further from
+  firing — **this deferral is better justified than the enet6 numbers suggest**, not worse.
+- **Any optimisation on the pre-sharding ladder justified against an "8 ms serialize phase" is sized
+  against a number that is really ~0.8 ms on the default transport.** Re-derive the prize before
+  spending effort on it.
+
+The characterization is being re-derived on GNS ([#649] follow-up); until then, treat every absolute
+figure in this document as an **enet6 upper bound**.
+
 ## Trigger criterion
 
 All quantities are already produced by `fl-server --metrics-json` (`ServerTickReport` schema
@@ -319,3 +350,6 @@ Defer. File no implementation epic. Adopt the ladder: land the shared-encode opt
 integrate-bound contingency, and re-measure on the reference runner. Revisit only on the trigger
 above — and if the trigger that fires is the product one, implement the **process model** as a
 Phase 5+ epic; do not build the threads model at all.
+
+[#649]: https://github.com/fighters-legacy/fighters-legacy/issues/649
+[#507]: https://github.com/fighters-legacy/fighters-legacy/issues/507
