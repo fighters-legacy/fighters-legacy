@@ -44,6 +44,7 @@ class GnsNetwork : public INetwork {
     const char* getLastError() const override;
     uint32_t getPeerRtt(uint32_t peerId) const override;
     PeerLinkStats getPeerLinkStats(uint32_t peerId) const override;
+    WireStats getWireStats() const override;
     void setBandwidthLimit(uint32_t incomingBps, uint32_t outgoingBps) override;
     // Pre-handshake flooding is handled by GNS itself; this is a documented no-op for parity.
     void setPreHandshakeRateLimit(int maxAttempts, int windowMs) override;

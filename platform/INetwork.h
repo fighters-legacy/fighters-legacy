@@ -30,6 +30,26 @@ struct PeerLinkStats {
     uint32_t reliableBytesInFlight{0}; // reliable data sent but not yet acknowledged
 };
 
+// Host-wide WIRE traffic — bytes actually handed to / taken from the UDP socket, INCLUDING the
+// transport's own framing and (on GNS) encryption overhead (#772).
+//
+// This is deliberately NOT the same number as the snapshot payload the scale gate baselines
+// (`downstream_kbs_per_client`), which counts application bytes and is therefore
+// transport-independent by construction — it cannot see what a transport costs on the wire. Wire
+// bytes are what an operator's bandwidth bill is denominated in, and the only way to compare enet6
+// against GNS honestly.
+//
+// RATES, not cumulative counters, because that is the intersection of what the two backends can
+// report truthfully: GNS exposes per-connection rates (`m_flOutBytesPerSec`) and no lifetime
+// totals, while ENet exposes cumulative host totals from which a rate is a clean delta. Zeroed by
+// backends/mocks that do not implement it.
+struct WireStats {
+    double outBytesPerSec{0.0};
+    double inBytesPerSec{0.0};
+    double outPacketsPerSec{0.0};
+    double inPacketsPerSec{0.0};
+};
+
 // Threading: all methods must be called from the same thread (typically the main
 // thread). service() is called once per frame from the game loop.
 class INetwork {
@@ -97,6 +117,14 @@ class INetwork {
     // for congestion control (#518). All-zero when peerId is out of range, the peer is not connected,
     // or the backend does not track link quality (mocks). Superset of getPeerRtt server-side.
     virtual PeerLinkStats getPeerLinkStats(uint32_t peerId) const = 0;
+
+    // Host-wide wire-traffic rates (#772) — see WireStats. Defaulted to zero rather than pure so
+    // mocks and any future backend compile unchanged; a backend that cannot report wire bytes
+    // truthfully should leave it zeroed rather than report payload bytes, which would silently
+    // conflate the two numbers this metric exists to separate.
+    virtual WireStats getWireStats() const {
+        return {};
+    }
 
     // --- Server-only tuning (optional; default no-op) ---
     // Set once at startup by fl-server through the INetwork handle, so a backend-selecting factory

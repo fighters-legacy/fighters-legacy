@@ -31,7 +31,12 @@ namespace fl {
 // v4 (#726) adds the overrun-governor interest_scale (interest-radius shed lever).
 // v5 (#714) adds the congestion-controller run-long watermarks (congestion_min_send_hz +
 //           congestion_recovered_send_hz + congestion_max_loss) for the synthetic congestion gate.
-inline constexpr int kServerTickSchemaVersion = 5;
+// v6 (#772) adds WIRE traffic (wire_out_kbs / wire_in_kbs / wire_out_pps / wire_out_kbs_per_client):
+//           bytes actually on the socket, including transport framing and (GNS) AES-GCM overhead.
+//           Distinct from the swarm's `downstream_kbs_per_client`, which counts application payload
+//           and is transport-independent by construction — it cannot see what a transport costs to
+//           run, which is the number an operator's bandwidth bill is denominated in.
+inline constexpr int kServerTickSchemaVersion = 6;
 
 struct ServerTickReport {
     int schemaVersion{kServerTickSchemaVersion};
@@ -53,13 +58,31 @@ struct ServerTickReport {
     double congestionMinSendHz{60.0};       // all-time min adaptive send rate across peers; 60 = never engaged
     double congestionRecoveredSendHz{60.0}; // max send rate observed since the min was set (recovery evidence)
     double congestionMaxLoss{0.0};          // all-time max sampled ENet mean loss fraction (diagnostic)
+    // Wire traffic (#772) — socket bytes, NOT application payload. 0 on backends that don't report it.
+    double wireOutKbs{0.0};           // host egress KB/s
+    double wireInKbs{0.0};            // host ingress KB/s
+    double wireOutPacketsPerSec{0.0}; // host egress datagrams/s
+    int wirePeers{0};                 // peers connected when the wire sample was taken (NOT the live `peers` count)
+
+    // Egress per connected client, KB/s — the per-client comparable of `downstream_kbs_per_client`,
+    // but wire rather than payload.
+    //
+    // Divides by `wirePeers`, NOT the live `peers`: the wire sample is frozen at the last tick that
+    // had peers, while `peers` is whatever is connected when the metrics file is written — which,
+    // for the gate's end-of-run snapshot, is zero. Dividing by the live count produced 0.00 KB/s and
+    // silently destroyed the measurement.
+    double wireOutKbsPerClient() const {
+        return wirePeers > 0 ? wireOutKbs / static_cast<double>(wirePeers) : 0.0;
+    }
 };
 
 // Build a report from a profiler snapshot plus the live peer/entity counts and overrun state.
 inline ServerTickReport makeServerTickReport(const TickBudget& b, int peers, uint32_t entities, double loadFactor = 1.0,
                                              uint64_t droppedTicks = 0, uint64_t rssKb = 0, uint64_t rssStartupKb = 0,
                                              double interestScale = 1.0, double congestionMinSendHz = 60.0,
-                                             double congestionRecoveredSendHz = 60.0, double congestionMaxLoss = 0.0) {
+                                             double congestionRecoveredSendHz = 60.0, double congestionMaxLoss = 0.0,
+                                             double wireOutKbs = 0.0, double wireInKbs = 0.0,
+                                             double wireOutPacketsPerSec = 0.0, int wirePeers = 0) {
     ServerTickReport r;
     r.tickHz = b.tickHz;
     r.ticksSampled = b.ticksSampled;
@@ -78,6 +101,10 @@ inline ServerTickReport makeServerTickReport(const TickBudget& b, int peers, uin
     r.congestionMinSendHz = congestionMinSendHz;
     r.congestionRecoveredSendHz = congestionRecoveredSendHz;
     r.congestionMaxLoss = congestionMaxLoss;
+    r.wireOutKbs = wireOutKbs;
+    r.wireInKbs = wireInKbs;
+    r.wireOutPacketsPerSec = wireOutPacketsPerSec;
+    r.wirePeers = wirePeers;
     return r;
 }
 
@@ -143,7 +170,7 @@ inline bool parseStat(std::string_view json, std::string_view key, Stats& out) {
 inline std::string toJson(const ServerTickReport& r, int indentSpaces = 0) {
     const std::string pad(static_cast<std::size_t>(indentSpaces < 0 ? 0 : indentSpaces), ' ');
     const std::string in = pad + "  ";
-    char head[832];
+    char head[1024];
     std::snprintf(head, sizeof(head),
                   "%s{\n"
                   "%s\"schema_version\": %d,\n"
@@ -154,13 +181,16 @@ inline std::string toJson(const ServerTickReport& r, int indentSpaces = 0) {
                   "%s\"load_factor\": %.4f, \"interest_scale\": %.4f, \"dropped_ticks\": %llu,\n"
                   "%s\"rss_kb\": %llu, \"rss_startup_kb\": %llu,\n"
                   "%s\"congestion_min_send_hz\": %.4f, \"congestion_recovered_send_hz\": %.4f, "
-                  "\"congestion_max_loss\": %.4f,\n",
+                  "\"congestion_max_loss\": %.4f,\n"
+                  "%s\"wire_out_kbs\": %.4f, \"wire_in_kbs\": %.4f, \"wire_out_pps\": %.4f, "
+                  "\"wire_peers\": %d, \"wire_out_kbs_per_client\": %.4f,\n",
                   pad.c_str(), in.c_str(), r.schemaVersion, in.c_str(), r.tickHz, in.c_str(),
                   static_cast<unsigned long long>(r.ticksSampled), static_cast<unsigned long long>(r.ticksTotal),
                   in.c_str(), r.windowSeconds, in.c_str(), r.peers, r.entities, in.c_str(), r.loadFactor,
                   r.interestScale, static_cast<unsigned long long>(r.droppedTicks), in.c_str(),
                   static_cast<unsigned long long>(r.rssKb), static_cast<unsigned long long>(r.rssStartupKb), in.c_str(),
-                  r.congestionMinSendHz, r.congestionRecoveredSendHz, r.congestionMaxLoss);
+                  r.congestionMinSendHz, r.congestionRecoveredSendHz, r.congestionMaxLoss, in.c_str(), r.wireOutKbs,
+                  r.wireInKbs, r.wireOutPacketsPerSec, r.wirePeers, r.wireOutKbsPerClient());
     std::string out = head;
     out += detail::statJson("tick_ms", r.total, in) + ",\n";
     for (int i = 0; i < kTickPhaseCount; ++i) {
@@ -235,6 +265,24 @@ inline bool fromJson(std::string_view json, ServerTickReport& out) {
         out.congestionMaxLoss = *v;
         any = true;
     }
+    if (auto v = detail::findNumber(json, "wire_out_kbs")) {
+        out.wireOutKbs = *v;
+        any = true;
+    }
+    if (auto v = detail::findNumber(json, "wire_in_kbs")) {
+        out.wireInKbs = *v;
+        any = true;
+    }
+    if (auto v = detail::findNumber(json, "wire_out_pps")) {
+        out.wireOutPacketsPerSec = *v;
+        any = true;
+    }
+    if (auto v = detail::findNumber(json, "wire_peers")) {
+        out.wirePeers = static_cast<int>(*v);
+        any = true;
+    }
+    // wire_out_kbs_per_client is DERIVED (wireOutKbs / peers) and deliberately not parsed back:
+    // it is emitted for the gate/human reader, and re-deriving it keeps one source of truth.
     any |= detail::parseStat(json, "tick_ms", out.total);
     for (int i = 0; i < kTickPhaseCount; ++i) {
         const std::string name = std::string(tickPhaseName(static_cast<TickPhase>(i))) + "_ms";

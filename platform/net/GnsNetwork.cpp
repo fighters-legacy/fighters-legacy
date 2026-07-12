@@ -369,6 +369,35 @@ uint32_t GnsNetwork::getPeerRtt(uint32_t peerId) const {
     return status.m_nPing < 0 ? 0u : static_cast<uint32_t>(status.m_nPing);
 }
 
+WireStats GnsNetwork::getWireStats() const {
+    // GNS reports per-connection RATES (m_flOutBytesPerSec et al.) and no lifetime counters, so the
+    // host figure is the sum over live connections — the server sums its accepted peers, a client
+    // has the single outbound connection. These rates include GNS's framing and AES-GCM overhead:
+    // that is the entire point of the metric (#772), and it is what `downstream_kbs_per_client`
+    // (application payload) structurally cannot see.
+    if (!m_sockets)
+        return {};
+    WireStats total;
+    auto add = [&](uint32_t conn) {
+        if (!conn)
+            return;
+        SteamNetConnectionRealTimeStatus_t st;
+        if (m_sockets->GetConnectionRealTimeStatus(conn, &st, 0, nullptr) != k_EResultOK)
+            return;
+        total.outBytesPerSec += static_cast<double>(st.m_flOutBytesPerSec);
+        total.inBytesPerSec += static_cast<double>(st.m_flInBytesPerSec);
+        total.outPacketsPerSec += static_cast<double>(st.m_flOutPacketsPerSec);
+        total.inPacketsPerSec += static_cast<double>(st.m_flInPacketsPerSec);
+    };
+    if (m_isServer) {
+        for (const auto& [conn, peerId] : m_connToPeer)
+            add(conn);
+    } else {
+        add(m_clientConn);
+    }
+    return total;
+}
+
 PeerLinkStats GnsNetwork::getPeerLinkStats(uint32_t peerId) const {
     const uint32_t conn = connForPeer(peerId);
     if (!conn || !m_sockets)

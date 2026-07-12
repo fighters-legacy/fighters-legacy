@@ -429,6 +429,61 @@ lossy proxy's +50 ms one-way delay, GNS correctly reports 100 ms.
 [#653]: https://github.com/fighters-legacy/fighters-legacy/issues/653
 [#507]: https://github.com/fighters-legacy/fighters-legacy/issues/507
 
+## Wire bytes vs payload bytes (#772) — read this before quoting a bandwidth number
+
+There are **two** bandwidth numbers and they are not interchangeable:
+
+| Metric | What it counts | Transport-dependent? |
+|---|---|---|
+| `downstream_kbs_per_client` | **Application** snapshot payload the client received | **No** — identical on enet6 and GNS by construction |
+| `server_tick.wire_out_kbs_per_client` | **Socket** bytes the server actually sent — transport framing, ENet's range-coder compression, GNS's AES-GCM overhead | **Yes** |
+
+Payload KB/s is the right signal for *protocol* regressions (a snapshot that got fatter), and it is
+what the committed `kbs` baseline tracks. But it **cannot see what a transport costs to run** — which
+is the number an operator's bandwidth bill is denominated in. That is `wire_kbs`, and it is the
+**hard 150 KB/s/client ceiling** the gate enforces.
+
+### Measured: enet6 vs GNS at 128 clients (8-core reference box)
+
+| | payload KB/s/cl | **wire KB/s/cl** | vs payload | datagrams/s |
+|---|---:|---:|---:|---:|
+| enet6 / idle | 71.41 | **17.56** | −75.4 % | 7 884 |
+| enet6 / weave | 71.94 | **58.89** | −18.1 % | 7 926 |
+| enet6 / aggressive | 73.24 | **63.02** | −14.0 % | 7 884 |
+| GNS / idle | 71.42 | **75.64** | +5.9 % | 8 456 |
+| GNS / weave | 71.93 | **78.00** | +8.4 % | 13 089 |
+| GNS / aggressive | 73.40 | **80.45** | +9.6 % | 15 319 |
+
+**GNS puts 1.3×–4.3× more bytes on the wire than enet6 for identical application payload**, for two
+independent reasons: `ENetNetwork` enables ENet's **range coder** (`enet_host_compress_with_range_coder`)
+and **GNS does not compress at all** — it encrypts; and GNS sends ~1.8× the **datagrams** on active
+patterns, paying per-packet framing more often. Idle traffic is the extreme case: highly repetitive
+snapshots compress 75 % on enet6 and 0 % on GNS. Closing that gap is [#775].
+
+Note the two rows are the same engine and the same snapshots — **the payload columns agree to within
+0.1 KB/s**. That agreement is not a result; it is the tautology that made this cost invisible until
+wire bytes were counted.
+
+### How it is measured
+
+`INetwork::getWireStats()` returns **rates**, not cumulative counters — the honest intersection of
+what the backends can report: GNS exposes per-connection rates (`m_flOutBytesPerSec`) and no lifetime
+totals, ENet exposes cumulative host totals from which a rate is a clean delta
+(`platform/net/WireRateSampler.h`, wrap-safe: ENet's `uint32` counters wrap roughly every 8 minutes at
+128 clients, so a soak run wraps repeatedly).
+
+`WorldBroadcaster` samples every 30 ticks on the sim thread and publishes to relaxed atomics; the
+sample kept is the one taken at the **highest peer count** seen, and `wire_peers` travels with it.
+That matters: fl-server keeps rewriting `--metrics-json` while the swarm ramps up and drains away, and
+the gate reads only the final snapshot — so a live rate reports an *idle* server (0 peers → 0 KB/s),
+and even "the last sample with any peers" catches the disconnect drain (a 16-client run reported its
+wire rate at 2 peers). The per-client figure divides by the peers that produced the traffic, never by
+whoever happens to be connected when the file is written. (Same class of trap the [#714] congestion
+watermarks freeze to avoid.)
+
+[#772]: https://github.com/fighters-legacy/fighters-legacy/issues/772
+[#775]: https://github.com/fighters-legacy/fighters-legacy/issues/775
+
 ## Platform notes
 
 - **macOS / Linux:** each client is a UDP socket; `bot_swarm` raises `RLIMIT_NOFILE` and the

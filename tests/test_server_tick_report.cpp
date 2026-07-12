@@ -42,7 +42,7 @@ TEST_CASE("ServerTickReport JSON round-trips", "[servertick]") {
     REQUIRE(fromJson(json, out));
 
     CHECK(out.schemaVersion == in.schemaVersion);
-    CHECK(in.schemaVersion == 5); // v5 (#714) added the congestion watermarks
+    CHECK(in.schemaVersion == 6); // v6 (#772) added the wire-byte block
     CHECK(out.tickHz == Approx(in.tickHz).margin(1e-3));
     CHECK(out.ticksSampled == in.ticksSampled);
     CHECK(out.ticksTotal == in.ticksTotal);

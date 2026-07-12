@@ -2,6 +2,7 @@
 #pragma once
 #include "IClock.h"
 #include "INetwork.h"
+#include "WireRateSampler.h"
 #include <chrono>
 #include <deque>
 #include <functional>
@@ -40,6 +41,7 @@ class ENetNetwork : public INetwork {
     const char* getLastError() const override;
     uint32_t getPeerRtt(uint32_t peerId) const override;
     PeerLinkStats getPeerLinkStats(uint32_t peerId) const override;
+    WireStats getWireStats() const override;
 
     // Set aggregate host bandwidth caps (bytes/s). Call once after bind().
     // 0 = unlimited (ENet default). INetwork server-only tuning hook.
@@ -64,6 +66,9 @@ class ENetNetwork : public INetwork {
     static constexpr int kChannelCount = 2;
 
     _ENetHost* m_host{nullptr};
+    // Cumulative-counter -> rate conversion for getWireStats (#772). Mutable because the
+    // getter is const and the sampler must remember the previous sample to form a delta.
+    mutable WireRateSampler m_wireSampler;
     INetworkEventHandler* m_handler{nullptr};
     bool m_isServer{false};
     bool m_initialized{false};
