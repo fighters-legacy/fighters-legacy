@@ -538,6 +538,103 @@ TEST_CASE("EntityDefParser: missing [entity] table throws runtime_error", "[pars
     CHECK_THROWS_AS(fl::parseEntityDef("[other]\nfoo=1\n"), std::runtime_error);
 }
 
+// ── hardpoints (#623) ────────────────────────────────────────────────────────
+// Weapon stations are a property of the entity, not of its flight model.
+
+namespace {
+
+std::string entityWithHardpoints(const char* hardpoints) {
+    return std::string("[entity]\nid=\"x\"\nname=\"X\"\ncategory=\"air_vehicle\"\nmax_hp=100.0\n") + hardpoints;
+}
+
+} // namespace
+
+TEST_CASE("EntityDefParser: hardpoints are optional", "[parser]") {
+    const fl::EntityDef def = fl::parseEntityDef(entityWithHardpoints(""));
+    CHECK(def.hardpoints.empty());
+}
+
+TEST_CASE("EntityDefParser: parses a hardpoint array", "[parser]") {
+    const fl::EntityDef def = fl::parseEntityDef(entityWithHardpoints(R"(
+[[hardpoints]]
+slot    = 0
+type    = "missile"
+allowed = ["aim120c", "aim9x"]
+default = "aim120c"
+
+[[hardpoints]]
+slot    = 4
+type    = "bomb"
+allowed = ["gbu12"]
+default = "gbu12"
+)"));
+
+    REQUIRE(def.hardpoints.size() == 2);
+
+    CHECK(def.hardpoints[0].slot == 0);
+    CHECK(def.hardpoints[0].type == fl::HardpointType::Missile);
+    CHECK(def.hardpoints[0].allowed == std::vector<std::string>{"aim120c", "aim9x"});
+    CHECK(def.hardpoints[0].defaultWeapon == "aim120c");
+
+    CHECK(def.hardpoints[1].slot == 4);
+    CHECK(def.hardpoints[1].type == fl::HardpointType::Bomb);
+    CHECK(def.hardpoints[1].defaultWeapon == "gbu12");
+}
+
+TEST_CASE("EntityDefParser: every hardpoint type string is accepted", "[parser]") {
+    for (const char* type : {"missile", "bomb", "rocket", "gun", "fuel", "pod"}) {
+        const std::string toml = entityWithHardpoints(
+            (std::string("[[hardpoints]]\nslot=0\ntype=\"") + type + "\"\nallowed=[\"w\"]\ndefault=\"w\"\n").c_str());
+        REQUIRE_NOTHROW(fl::parseEntityDef(toml));
+    }
+}
+
+TEST_CASE("EntityDefParser: unknown hardpoint type throws runtime_error", "[parser]") {
+    const std::string toml =
+        entityWithHardpoints("[[hardpoints]]\nslot=0\ntype=\"railgun\"\nallowed=[\"w\"]\ndefault=\"w\"\n");
+    CHECK_THROWS_AS(fl::parseEntityDef(toml), std::runtime_error);
+}
+
+TEST_CASE("EntityDefParser: duplicate hardpoint slot throws runtime_error", "[parser]") {
+    const std::string toml = entityWithHardpoints(R"(
+[[hardpoints]]
+slot=0
+type="missile"
+allowed=["w"]
+default="w"
+
+[[hardpoints]]
+slot=0
+type="bomb"
+allowed=["b"]
+default="b"
+)");
+    CHECK_THROWS_AS(fl::parseEntityDef(toml), std::runtime_error);
+}
+
+TEST_CASE("EntityDefParser: negative hardpoint slot throws runtime_error", "[parser]") {
+    const std::string toml =
+        entityWithHardpoints("[[hardpoints]]\nslot=-1\ntype=\"missile\"\nallowed=[\"w\"]\ndefault=\"w\"\n");
+    CHECK_THROWS_AS(fl::parseEntityDef(toml), std::runtime_error);
+}
+
+TEST_CASE("EntityDefParser: empty hardpoint allowed list throws runtime_error", "[parser]") {
+    const std::string toml =
+        entityWithHardpoints("[[hardpoints]]\nslot=0\ntype=\"missile\"\nallowed=[]\ndefault=\"w\"\n");
+    CHECK_THROWS_AS(fl::parseEntityDef(toml), std::runtime_error);
+}
+
+TEST_CASE("EntityDefParser: hardpoint default outside allowed throws runtime_error", "[parser]") {
+    const std::string toml =
+        entityWithHardpoints("[[hardpoints]]\nslot=0\ntype=\"missile\"\nallowed=[\"aim9x\"]\ndefault=\"aim120c\"\n");
+    CHECK_THROWS_AS(fl::parseEntityDef(toml), std::runtime_error);
+}
+
+TEST_CASE("EntityDefParser: missing hardpoint default throws runtime_error", "[parser]") {
+    const std::string toml = entityWithHardpoints("[[hardpoints]]\nslot=0\ntype=\"missile\"\nallowed=[\"aim9x\"]\n");
+    CHECK_THROWS_AS(fl::parseEntityDef(toml), std::runtime_error);
+}
+
 TEST_CASE("EntityDefParser: hp_fraction zero in damage section throws runtime_error", "[parser]") {
     const char* toml = R"(
 [entity]
