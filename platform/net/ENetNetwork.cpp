@@ -366,6 +366,19 @@ uint32_t ENetNetwork::getPeerRtt(uint32_t peerId) const {
     return static_cast<uint32_t>(peer->roundTripTime);
 }
 
+WireStats ENetNetwork::getWireStats() const {
+    if (!m_host)
+        return {};
+    // ENetHost's totals are UDP-payload bytes as handed to/from the socket — they include ENet's own
+    // protocol headers, which is exactly the "wire" granularity we want (#772). They are uint32 and
+    // wrap; WireRateSampler's unsigned delta is exact across a wrap, so we never reset them (a reset
+    // would race with any other reader).
+    const double nowS = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    return m_wireSampler.sample(
+        static_cast<uint32_t>(m_host->totalSentData), static_cast<uint32_t>(m_host->totalReceivedData),
+        static_cast<uint32_t>(m_host->totalSentPackets), static_cast<uint32_t>(m_host->totalReceivedPackets), nowS);
+}
+
 PeerLinkStats ENetNetwork::getPeerLinkStats(uint32_t peerId) const {
     if (!m_host || peerId >= m_host->peerCount)
         return {};

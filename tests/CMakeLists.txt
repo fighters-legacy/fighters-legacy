@@ -200,7 +200,10 @@ if(TARGET platform-enet)
     # Per-phase tick profiler + server tick report (header-only; platform-hal for IClock.h).
     add_executable(test_tick_profiler test_tick_profiler.cpp)
     target_link_libraries(test_tick_profiler PRIVATE Catch2::Catch2WithMain platform-hal)
-    target_include_directories(test_tick_profiler PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+    # platform/net for WireRateSampler.h (#772) — header-only, pure logic, no backend link needed.
+    target_include_directories(test_tick_profiler PRIVATE
+        "${CMAKE_SOURCE_DIR}/engine"
+        "${CMAKE_SOURCE_DIR}/platform")
     catch_discover_tests(test_tick_profiler)
 
     add_executable(test_server_tick_report test_server_tick_report.cpp)

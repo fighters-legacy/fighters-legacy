@@ -147,6 +147,17 @@ Headline: at 128 clients GNS admits all 128 and holds 60 Hz, and **server tick p
 than enet6** (1.5–1.7 ms vs 5.5–12.6 ms on the same box) — ENet does its per-packet send work inline
 on the sim thread (inside the serialize phase) while GNS hands off to its own service thread.
 
+**The tick win is not free: GNS puts 1.3×–4.3× more bytes on the wire** than enet6 for identical
+application payload ([#772]). `ENetNetwork` enables ENet's range coder; **GNS does not compress at
+all** (it encrypts), and it sends ~1.8× the datagrams. Idle traffic compresses 75 % on enet6 and 0 %
+on GNS. Wire bytes — not the transport-independent payload figure — are what an operator's bandwidth
+bill is denominated in, so the gate's hard 150 KB/s/client ceiling is enforced on them. Closing the
+gap (engine-layer payload compression + GNS packet coalescing) is [#775]. Full table:
+[load-testing.md](load-testing.md#wire-bytes-vs-payload-bytes-772--read-this-before-quoting-a-bandwidth-number).
+
+[#772]: https://github.com/fighters-legacy/fighters-legacy/issues/772
+[#775]: https://github.com/fighters-legacy/fighters-legacy/issues/775
+
 ## Testing
 
 `tests/test_gns_network.cpp` holds `GnsNetwork` to the same contract as `test_network.cpp`: loopback

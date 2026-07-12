@@ -552,14 +552,15 @@ def test_pre_v3_reports_without_a_transport_key_are_treated_as_enet():
     assert ev["passed"]
 
 
-def test_gns_profile_is_not_baselined_and_pins_both_ends():
+def test_gns_profile_is_baselined_per_transport_and_pins_both_ends():
     cfg = sg.load_config(sg.DEFAULT_CONFIG)
     prof = sg.load_profile(cfg, "gns")
     assert prof["transport"] == "gns"
     assert prof["clients"] == 128
-    # GNS bandwidth (encryption + framing) is legitimately not the enet6 number: it must never be
-    # compared against the committed enet6 KB/s baseline.
-    assert prof["baselined"] is False
+    # Baselined, but keyed per PROFILE — so GNS gets its own keys. That is what makes it safe: GNS's
+    # wire bytes are legitimately not enet6's (enet6 range-coder-compresses; GNS encrypts and does
+    # not compress), so the two must never be diffed against one another (#772).
+    assert prof["baselined"] is True
 
 
 def test_gns_profile_sets_the_runner_transport_env():
@@ -572,3 +573,71 @@ def test_enet_profiles_do_not_set_the_transport_env():
     cfg = sg.load_config(sg.DEFAULT_CONFIG)
     runs = sg.expand_runs(sg.load_profile(cfg, "pr"))
     assert all("FL_LOADTEST_TRANSPORT" not in r["env"] for r in runs)
+
+
+# ---- wire-byte baseline (#772) -------------------------------------------------------------------
+def _wire_report(wire_kbs=31.9, **kw):
+    r = _report(**kw)
+    r["server_tick"]["wire_out_kbs_per_client"] = wire_kbs
+    return r
+
+
+def test_wire_kbs_reads_the_server_tick_block():
+    assert sg.wire_kbs(_wire_report(wire_kbs=24.4)) == 24.4
+    assert sg.wire_kbs(_report()) == 0.0  # pre-v6 server report: no wire keys
+
+
+def test_wire_baseline_regression_fails_the_run():
+    cmp = sg.compare_wire_baseline(_wire_report(wire_kbs=40.0), 24.4, 10)
+    assert cmp["regressed"]
+
+
+def test_wire_baseline_within_tolerance_passes():
+    cmp = sg.compare_wire_baseline(_wire_report(wire_kbs=25.0), 24.4, 10)
+    assert not cmp["regressed"]
+
+
+def test_wire_baseline_improvement_never_fails():
+    cmp = sg.compare_wire_baseline(_wire_report(wire_kbs=10.0), 24.4, 10)
+    assert not cmp["regressed"]
+
+
+def test_missing_wire_baseline_is_not_a_regression():
+    cmp = sg.compare_wire_baseline(_wire_report(), None, 10)
+    assert not cmp["regressed"]
+
+
+def test_pre_v6_server_report_is_skipped_not_treated_as_a_regression_to_zero():
+    # A server that predates the wire keys reports nothing; that must not read as "0 KB/s, improved"
+    # (which would silently rewrite the baseline to zero on the next --update-baseline).
+    cmp = sg.compare_wire_baseline(_report(), 24.4, 10)
+    assert not cmp["regressed"]
+    assert "pre-v6" in cmp["detail"]
+
+
+# ---- wire ceiling replaces the payload ceiling (#772) --------------------------------------------
+def test_wire_ceiling_fails_when_wire_bytes_exceed_it():
+    ev = sg.evaluate_report(_wire_report(wire_kbs=200.0), _profile(assert_max_wire_kbs=150), strict=True)
+    assert not ev["passed"]
+    assert any(c["name"] == "wire_out_kbs_per_client" and not c["ok"] for c in ev["checks"])
+
+
+def test_wire_ceiling_passes_under_the_limit():
+    ev = sg.evaluate_report(_wire_report(wire_kbs=80.5), _profile(assert_max_wire_kbs=150), strict=True)
+    assert ev["passed"]
+
+
+def test_a_server_that_cannot_report_wire_bytes_fails_the_wire_ceiling():
+    # Silently passing a ceiling you cannot measure is how a gate becomes decorative.
+    ev = sg.evaluate_report(_report(), _profile(assert_max_wire_kbs=150), strict=True)
+    assert not ev["passed"]
+
+
+def test_shipped_profiles_gate_on_wire_not_payload():
+    # The 150 KB/s ceiling moved to WIRE bytes: payload KB/s is transport-independent and so cannot
+    # see what a transport actually costs to run (enet6 range-coder-compresses, GNS does not).
+    cfg = sg.load_config(sg.DEFAULT_CONFIG)
+    for name in ("pr", "reference", "soak", "gns"):
+        prof = sg.load_profile(cfg, name)
+        assert prof["assert_max_wire_kbs"] == 150, name
+        assert prof["assert_max_kbs"] == 0, name

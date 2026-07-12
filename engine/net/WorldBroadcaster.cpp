@@ -510,6 +510,30 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             m_congMaxLoss.store(congMaxLossThisTick, std::memory_order_relaxed);
     }
 
+    // Wire-traffic sample (#772). Sim-thread only — the transport host is sim-thread-owned — and
+    // only every kWireSampleTicks, because the GNS backend walks every live connection to build it.
+    // Published to relaxed atomics for the --metrics-json writer.
+    //
+    // We keep the sample taken at the HIGHEST peer count seen so far (refreshing on ties, so it
+    // tracks steady state rather than the first tick of the ramp), and never publish an idle one.
+    // The gate reads a single end-of-run snapshot, and fl-server keeps writing that file while the
+    // swarm ramps up and drains away — so "latest sample" would report the connect ramp or, worse,
+    // the disconnect drain (measured: a 16-client run reported its wire rate at 2 peers), and
+    // "latest sample with any peers" is no better. Full-load is the number worth gating on, and the
+    // peer count travels WITH the sample so the per-client figure divides by the peers that actually
+    // produced the traffic, not by whoever happens to be connected when the file is written. (Same
+    // class of trap as the #714 congestion watermarks, which freeze for the same reason.)
+    if (m_currentTick % kWireSampleTicks == 0 && !m_peerEntities.empty()) {
+        const int peersNow = static_cast<int>(m_peerEntities.size());
+        if (peersNow >= m_wirePeersAtSample.load(std::memory_order_relaxed)) {
+            const WireStats w = m_net.getWireStats();
+            m_wireOutKbs.store(w.outBytesPerSec / 1000.0, std::memory_order_relaxed);
+            m_wireInKbs.store(w.inBytesPerSec / 1000.0, std::memory_order_relaxed);
+            m_wireOutPps.store(w.outPacketsPerSec, std::memory_order_relaxed);
+            m_wirePeersAtSample.store(peersNow, std::memory_order_relaxed);
+        }
+    }
+
     // Graceful tick-overrun governor (#514/#726): step from the PREVIOUS tick's measured wall-time vs
     // the fixed-step budget, then freeze its four lever values for this tick's parallel regions.
     // configure() each tick so reload_config (m_governorParams) takes effect live, like the per-peer

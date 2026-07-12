@@ -42,7 +42,13 @@ PROFILE_DEFAULTS = {
     # needs an FL_ENABLE_GNS=ON build — bot_swarm refuses to fall back to enet6, and the report's
     # "transport" key is cross-checked below so a fallback can never masquerade as a GNS pass.
     "transport": "enet",
+    # Capacity ceiling. The HARD ceiling is on WIRE bytes (#772) — bytes actually on the socket,
+    # including transport framing, ENet's range-coder compression and GNS's AES-GCM overhead. That is
+    # the number an operator's bandwidth bill is denominated in. `assert_max_kbs` (application payload)
+    # is transport-independent by construction and therefore cannot see what a transport costs to run;
+    # it is retained only as a payload-regression signal via the committed baseline, not as the ceiling.
     "assert_max_kbs": 0.0,
+    "assert_max_wire_kbs": 0.0,
     "assert_min_tick_hz": 0.0,
     "assert_max_tick_ms": 0.0,
     # Soak leak gate (#707): max allowed RSS growth over the run (rss_kb - rss_startup_kb). 0 = disabled.
@@ -184,6 +190,27 @@ def evaluate_report(report, profile, strict):
         "detail": f"connected={connected}/{requested} disconnected={disconnected}",
         "advisory": False,
     })
+
+    # Wire-byte capacity ceiling (#772) — the hard gate. Server-side, so it is checked here rather
+    # than by a bot_swarm --assert-* flag (the swarm only sees application payload).
+    wire = wire_kbs(report)
+    if profile.get("assert_max_wire_kbs", 0.0) > 0:
+        if wire <= 0.0:
+            # A server too old to report wire bytes must not silently pass the ceiling it cannot measure.
+            checks.append({
+                "name": "wire_out_kbs_per_client",
+                "ok": False,
+                "detail": "no wire data (server report pre-v6) — cannot enforce the wire ceiling",
+                "advisory": False,
+            })
+        else:
+            ok = wire <= profile["assert_max_wire_kbs"]
+            checks.append({
+                "name": "wire_out_kbs_per_client",
+                "ok": ok,
+                "detail": f"{wire:.1f} <= {profile['assert_max_wire_kbs']:.1f} KB/s wire",
+                "advisory": False,
+            })
 
     kbs_max = report.get("downstream_kbs_per_client", {}).get("max", 0.0)
     if profile["assert_max_kbs"] > 0:
@@ -329,6 +356,38 @@ def compare_baseline(report, baseline_entry, tolerance_pct):
     }
 
 
+def wire_kbs(report):
+    """Egress WIRE KB/s per client from the server's tick report (#772), 0.0 when absent.
+
+    Distinct from `downstream_kbs_per_client`, which counts application snapshot payload and is
+    transport-independent by construction. Wire bytes include transport framing, ENet's range-coder
+    compression, and GNS's AES-GCM overhead — i.e. what the operator's bandwidth bill is actually
+    denominated in. Pre-v6 server reports have no wire keys; treat as 0 (skipped), not as a
+    regression to zero.
+    """
+    return (report.get("server_tick") or {}).get("wire_out_kbs_per_client", 0.0)
+
+
+def compare_wire_baseline(report, baseline_entry, tolerance_pct):
+    """Same contract as compare_baseline, on wire bytes (#772).
+
+    Baselined PER PROFILE, and since the transport is a profile property (`gns` is its own profile),
+    each transport gets its own keys automatically — which it needs, because the two transports
+    legitimately put very different byte counts on the wire for identical payload.
+    """
+    current = wire_kbs(report)
+    if baseline_entry is None:
+        return {"regressed": False, "detail": f"{current:.1f} KB/s (no wire baseline)"}
+    if current <= 0.0:
+        return {"regressed": False, "detail": "no wire data (server report pre-v6)"}
+    limit = baseline_entry * (1.0 + tolerance_pct / 100.0)
+    return {
+        "regressed": current > limit,
+        "detail": f"{current:.1f} vs baseline {baseline_entry:.1f} KB/s wire "
+                  f"(+{tolerance_pct:.0f}% = {limit:.1f})",
+    }
+
+
 def baseline_key(profile_name, pattern):
     return f"{profile_name}/{pattern}"
 
@@ -377,8 +436,8 @@ def expand_runs(profile):
 def render_summary(profile_name, results):
     """Render a Markdown summary table from a list of per-pattern result dicts."""
     lines = [f"## Scale gate — profile `{profile_name}`", ""]
-    lines.append("| Pattern | Result | Checks | Baseline (KB/s) |")
-    lines.append("|---|---|---|---|")
+    lines.append("| Pattern | Result | Checks | Payload baseline (KB/s) | Wire baseline (KB/s) |")
+    lines.append("|---|---|---|---|---|")
     for r in results:
         status = "✅ pass" if r["passed"] else "❌ FAIL"
         checks = "<br>".join(
@@ -387,7 +446,13 @@ def render_summary(profile_name, results):
         bl = r["baseline"]["detail"]
         if r["baseline"]["regressed"]:
             bl = "❌ REGRESSED " + bl
-        lines.append(f"| {r['pattern']} | {status} | {checks} | {bl} |")
+        # Wire bytes (#772) are what the transport actually puts on the socket — the payload column
+        # cannot see framing/encryption/compression, so the two are shown side by side, never merged.
+        wire = r.get("wire", {"detail": "n/a", "regressed": False})
+        wl = wire["detail"]
+        if wire["regressed"]:
+            wl = "❌ REGRESSED " + wl
+        lines.append(f"| {r['pattern']} | {status} | {checks} | {bl} | {wl} |")
     lines.append("")
     return "\n".join(lines)
 
@@ -454,8 +519,11 @@ def main(argv=None):
     tolerance = config.get("kbs_baseline_tolerance_pct", 10)
 
     baseline = {}
+    wire_baseline = {}
     if Path(args.baseline).is_file():
-        baseline = load_config(args.baseline).get("kbs", {})
+        _b = load_config(args.baseline)
+        baseline = _b.get("kbs", {})
+        wire_baseline = _b.get("wire_kbs", {})  # #772; absent until first --update-baseline
 
     flags = assert_flags(profile, args.strict) + degrade_flags(profile)
     runner = runner_for_platform(sys.platform)
@@ -472,6 +540,7 @@ def main(argv=None):
     results = []
     any_runner_failed = False
     new_baseline = dict(baseline)
+    new_wire_baseline = dict(wire_baseline)
     for idx, run in enumerate(runs):
         pattern, label = run["pattern"], run["label"]
         # Distinct port per run dodges the UDP rebind race between back-to-back servers.
@@ -491,20 +560,24 @@ def main(argv=None):
             continue
         report = json.loads(report_path.read_text(encoding="utf-8"))
         evaluation = evaluate_report(report, profile, args.strict)
+        wire_cmp = {"regressed": False, "detail": f"{wire_kbs(report):.1f} KB/s (not baselined)"}
         if baselined:
             key = baseline_key(args.profile, pattern)
             cmp = compare_baseline(report, baseline.get(key), tolerance)
             new_baseline[key] = report.get("downstream_kbs_per_client", {}).get("mean", 0.0)
+            wire_cmp = compare_wire_baseline(report, wire_baseline.get(key), tolerance)
+            if wire_kbs(report) > 0.0:
+                new_wire_baseline[key] = wire_kbs(report)
         else:
             # Advisory characterisation: report entity count + tick p99, never touch the baseline.
             srv = report.get("server_tick") or {}
             detail = (f"entities={srv.get('entities', 0)} "
                       f"tick_p99={srv.get('tick_ms', {}).get('p99', 0.0):.2f} ms (advisory)")
             cmp = {"regressed": False, "detail": detail}
-        if code != 0 or cmp["regressed"]:
+        if code != 0 or cmp["regressed"] or wire_cmp["regressed"]:
             evaluation["passed"] = False
         results.append({"pattern": label, "passed": evaluation["passed"],
-                        "checks": evaluation["checks"], "baseline": cmp})
+                        "checks": evaluation["checks"], "baseline": cmp, "wire": wire_cmp})
 
     if args.update_baseline:
         if any_runner_failed:
@@ -512,7 +585,8 @@ def main(argv=None):
                   file=sys.stderr)
             return 1
         Path(args.baseline).write_text(
-            json.dumps({"kbs": new_baseline}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            json.dumps({"kbs": new_baseline, "wire_kbs": new_wire_baseline},
+                       indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"[scale_gate] wrote baseline {args.baseline}")
         return 0
 

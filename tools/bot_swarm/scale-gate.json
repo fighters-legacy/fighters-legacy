@@ -10,9 +10,10 @@
         "weave"
       ],
       "sim_worker_threads": 0,
-      "assert_max_kbs": 150,
+      "assert_max_kbs": 0,
       "assert_min_tick_hz": 30,
-      "assert_max_tick_ms": 0
+      "assert_max_tick_ms": 0,
+      "assert_max_wire_kbs": 150
     },
     "reference": {
       "_comment": "Strict tier for the 8-core/16GB reference instance (or a self-hosted runner via --strict). tick-ms p99 enforced there; advisory on hosted runners.",
@@ -24,9 +25,10 @@
         "aggressive"
       ],
       "sim_worker_threads": 0,
-      "assert_max_kbs": 150,
+      "assert_max_kbs": 0,
       "assert_min_tick_hz": 58,
-      "assert_max_tick_ms": 16.6
+      "assert_max_tick_ms": 16.6,
+      "assert_max_wire_kbs": 150
     },
     "soak": {
       "_comment": "2 h soak-stability run. Same strict thresholds; the server self-reports RSS in the tick metrics (#707) and the leak gate hard-fails if growth exceeds assert_max_rss_growth_kb (~256 MiB over 2 h).",
@@ -36,10 +38,11 @@
         "weave"
       ],
       "sim_worker_threads": 0,
-      "assert_max_kbs": 150,
+      "assert_max_kbs": 0,
       "assert_min_tick_hz": 58,
       "assert_max_tick_ms": 16.6,
-      "assert_max_rss_growth_kb": 262144
+      "assert_max_rss_growth_kb": 262144,
+      "assert_max_wire_kbs": 150
     },
     "entity-scale": {
       "_comment": "Entity-pool + SpatialIndex scaling characterisation (#573). Sweeps entity count x sim worker count via FL_TEST_SPAWN_AI / FL_SIM_WORKER_THREADS, driven from the [world] load-spawn affordance. Advisory only (baselined=false): reads server_tick.entities + tick p99 into the summary but never gates the committed KB/s baseline. Reference-tier (nightly / workflow_dispatch) \u2014 needs the 8-core reference box for meaningful CPU timing.",
@@ -129,7 +132,7 @@
       "assert_max_tick_ms": 16.6
     },
     "gns": {
-      "_comment": "128-client GNS scale gate (#649). GameNetworkingSockets is the DEFAULT internet transport on all three platforms (#507) but every gate leg is deliberately enet6 (bot_swarm is the enet6 regression instrument), so the transport most players will actually use had never been scale-tested. This profile pins BOTH ends to GNS (FL_LOADTEST_TRANSPORT=gns -> fl-server --transport gns + bot_swarm --transport gns) and otherwise mirrors `reference` so the two are directly comparable. REQUIRES an FL_ENABLE_GNS=ON build: bot_swarm hard-fails rather than silently falling back to enet6, and the gate cross-checks the report's `transport` key, so a downgraded run fails instead of passing as a GNS validation. baselined=false: GNS carries encryption + different framing, so its KB/s is legitimately NOT the enet6 number and must never be compared against the committed enet6 baseline (bandwidth is still hard-gated by the absolute 150 KB/s/client ceiling). Reference tier only (nightly / workflow_dispatch).",
+      "_comment": "128-client GNS scale gate (#649). GameNetworkingSockets is the DEFAULT internet transport on all three platforms (#507) but every gate leg is deliberately enet6 (bot_swarm is the enet6 regression instrument), so the transport most players will actually use had never been scale-tested. This profile pins BOTH ends to GNS (FL_LOADTEST_TRANSPORT=gns -> fl-server --transport gns + bot_swarm --transport gns) and otherwise mirrors `reference` so the two are directly comparable. REQUIRES an FL_ENABLE_GNS=ON build: bot_swarm hard-fails rather than silently falling back to enet6, and the gate cross-checks the report's `transport` key, so a downgraded run fails instead of passing as a GNS validation. Baselined per-profile, which gives GNS its OWN keys \u2014 necessary because the two transports put very different byte counts on the wire for identical payload (#772: enet6 range-coder-compresses, GNS encrypts and does not compress). The payload KB/s baseline is transport-independent; the wire KB/s baseline is not, and it is the one that tracks what the transport actually costs to run. Reference tier only (nightly / workflow_dispatch).",
       "clients": 128,
       "duration_s": 60,
       "patterns": [
@@ -138,11 +141,12 @@
         "aggressive"
       ],
       "transport": "gns",
-      "baselined": false,
+      "baselined": true,
       "sim_worker_threads": 0,
-      "assert_max_kbs": 150,
+      "assert_max_kbs": 0,
       "assert_min_tick_hz": 58,
-      "assert_max_tick_ms": 16.6
+      "assert_max_tick_ms": 16.6,
+      "assert_max_wire_kbs": 150
     }
   }
 }

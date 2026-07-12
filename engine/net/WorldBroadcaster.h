@@ -162,6 +162,27 @@ struct CongestionTelemetry {
     float maxPacketLoss{0.f};
 };
 
+// Host-wide WIRE traffic sampled from the transport (#772), read cross-thread via getWireTelemetry()
+// (relaxed atomics published by the sim thread). These are bytes actually on the socket — including
+// transport framing and, on GNS, AES-GCM overhead — as distinct from the application snapshot
+// payload the scale gate baselines (`downstream_kbs_per_client`), which is transport-independent by
+// construction and therefore blind to what a transport costs to run. Zero on backends that don't
+// report wire traffic.
+//
+// Sampled at FULL LOAD and held: the published sample is the one taken at the highest peer count
+// seen so far (refreshed on ties, so it settles on steady state). fl-server keeps rewriting
+// --metrics-json while the swarm ramps up and drains away, and the gate reads only the final
+// snapshot — so a plain "latest sample" reports the connect ramp or the disconnect drain (measured:
+// a 16-client run reported its wire rate at 2 peers), and an unguarded rate reports an idle server.
+// `peersAtSample` travels with the rates so the per-client figure divides by the peers that actually
+// produced the traffic. Same class of trap the #714 congestion watermarks freeze to avoid.
+struct WireTelemetry {
+    double outKbs{0.0}; // host egress, KB/s
+    double inKbs{0.0};  // host ingress, KB/s
+    double outPacketsPerSec{0.0};
+    int peersAtSample{0}; // peers connected when the sample was taken (see the freeze note above)
+};
+
 // Wraps EntityManager to provide a server-side ISimUpdate that:
 //   1. Advances each peer's FlightIntegrator from stored client inputs.
 //   2. Advances the entity simulation each tick (calls EntityManager::onTick).
@@ -268,6 +289,17 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
         t.minSendHz = m_congMinSendHz.load(std::memory_order_relaxed);
         t.recoveredSendHz = m_congRecoveredSendHz.load(std::memory_order_relaxed);
         t.maxPacketLoss = m_congMaxLoss.load(std::memory_order_relaxed);
+        return t;
+    }
+
+    // Host-wide wire traffic (#772). Thread-safe (relaxed-atomic reads of values the sim thread
+    // publishes) — read by the --metrics-json writer from the main thread.
+    WireTelemetry getWireTelemetry() const noexcept {
+        WireTelemetry t;
+        t.outKbs = m_wireOutKbs.load(std::memory_order_relaxed);
+        t.inKbs = m_wireInKbs.load(std::memory_order_relaxed);
+        t.outPacketsPerSec = m_wireOutPps.load(std::memory_order_relaxed);
+        t.peersAtSample = m_wirePeersAtSample.load(std::memory_order_relaxed);
         return t;
     }
 
@@ -635,6 +667,15 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // disconnect); mirrored into atomics so getCongestionTelemetry() is a safe cross-thread read.
     float m_congMinSendHzSim{60.f};       // sim-thread working copy of the min watermark
     float m_congRecoveredSendHzSim{60.f}; // sim-thread working copy of the max-since-min watermark
+    // Wire-traffic telemetry (#772): sampled on the sim thread every kWireSampleTicks and mirrored
+    // into atomics so getWireTelemetry() is a safe cross-thread read. Sampled periodically rather
+    // than every tick because GNS's getWireStats() walks every live connection.
+    static constexpr uint64_t kWireSampleTicks = 30; // ~0.5 s at 60 Hz
+    std::atomic<double> m_wireOutKbs{0.0};
+    std::atomic<double> m_wireInKbs{0.0};
+    std::atomic<double> m_wireOutPps{0.0};
+    std::atomic<int> m_wirePeersAtSample{0};
+
     std::atomic<float> m_congMinSendHz{60.f};
     std::atomic<float> m_congRecoveredSendHz{60.f};
     std::atomic<float> m_congMaxLoss{0.f};
