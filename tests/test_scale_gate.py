@@ -84,7 +84,8 @@ def test_assert_flags_tick_ms_only_when_strict():
 # ---- evaluate_report -----------------------------------------------------------------------------
 def _report(kbs_max=66.0, tick_hz_min=60.0, tick_p99=10.0, connected=64, requested=64,
             disconnected=0, with_server=True, rss_kb=200000, rss_startup_kb=200000,
-            load_factor=1.0, dropped_ticks=0, congestion_min_hz=60.0, congestion_recovered_hz=60.0):
+            load_factor=1.0, dropped_ticks=0, congestion_min_hz=60.0, congestion_recovered_hz=60.0,
+            sensing=None):
     r = {
         "clients_requested": requested,
         "clients_connected": connected,
@@ -97,6 +98,9 @@ def _report(kbs_max=66.0, tick_hz_min=60.0, tick_p99=10.0, connected=64, request
                             "load_factor": load_factor, "dropped_ticks": dropped_ticks,
                             "congestion_min_send_hz": congestion_min_hz,
                             "congestion_recovered_send_hz": congestion_recovered_hz}
+        if sensing is not None:
+            r["server_tick"]["sensing_ms"] = sensing
+            r["server_tick"]["tick_ms"]["mean"] = 5.0
     return r
 
 
@@ -672,3 +676,36 @@ def test_shipped_profiles_gate_on_wire_not_payload():
         prof = sg.load_profile(cfg, name)
         assert prof["assert_max_wire_kbs"] == 150, name
         assert prof["assert_max_kbs"] == 0, name
+
+
+# --- sensing phase (#685/#686) ------------------------------------------------
+
+
+def test_sensing_phase_is_reported_as_advisory():
+    """A sensing regression must be VISIBLE, but must not fail a run on a number we invented."""
+    report = _report(sensing={"mean": 0.5, "p99": 1.2})
+    result = sg.evaluate_report(report, _profile(), strict=True)
+
+    sensing = [c for c in result["checks"] if c["name"] == "server_tick.sensing_ms"]
+    assert len(sensing) == 1
+    assert sensing[0]["advisory"] is True
+    assert sensing[0]["ok"] is True
+    assert "0.500" in sensing[0]["detail"]
+    assert "10.0% of tick" in sensing[0]["detail"]  # 0.5 of a 5.0 ms tick
+
+
+def test_sensing_phase_absent_is_not_a_check():
+    """An older metrics file simply has no sensing block. That is a missing field, not a failure —
+    the report format is additive and name-keyed, which is exactly why it needs no schema bump."""
+    report = _report()  # no sensing_ms
+    result = sg.evaluate_report(report, _profile(), strict=True)
+    assert not [c for c in result["checks"] if c["name"] == "server_tick.sensing_ms"]
+
+
+def test_sensing_advisory_never_fails_the_gate():
+    """Even a pathological sensing cost passes: tick_ms.p99 is the backstop that actually fails."""
+    report = _report(sensing={"mean": 99.0, "p99": 99.0})
+    result = sg.evaluate_report(report, _profile(), strict=True)
+    sensing = [c for c in result["checks"] if c["name"] == "server_tick.sensing_ms"][0]
+    assert sensing["advisory"] is True
+    assert sensing["ok"] is True

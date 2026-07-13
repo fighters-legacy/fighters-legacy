@@ -142,3 +142,42 @@ TEST_CASE("fromJson is tolerant of malformed and partial input", "[servertick]")
 TEST_CASE("loadServerMetrics returns nullopt for a missing file", "[servertick]") {
     CHECK_FALSE(loadServerMetrics("/nonexistent/path/does/not/exist.json").has_value());
 }
+
+// --- the sensing phase (#685/#686) -------------------------------------------------------------
+
+TEST_CASE("ServerTickReport carries the sensing phase, and adding it needed no schema bump", "[servertick]") {
+    // toJson/fromJson iterate the phase table, so a new TickPhase appears in the report with no
+    // per-phase code anywhere. That is exactly why `sensing_ms` did not need a schema bump: the
+    // format is ADDITIVE and NAME-KEYED, and every consumer looks fields up by name. This test pins
+    // both halves — that sensing is really in the report, and that the version did not move.
+    ServerTickReport r{};
+    r.phases[static_cast<int>(TickPhase::Sensing)].mean = 0.42;
+    r.phases[static_cast<int>(TickPhase::Sensing)].p99 = 1.25;
+
+    const std::string json = toJson(r, 0);
+    CHECK(json.find("\"sensing_ms\"") != std::string::npos);
+    CHECK(json.find("\"schema_version\": 6") != std::string::npos);
+
+    ServerTickReport back{};
+    REQUIRE(fromJson(json, back));
+    CHECK(back.phases[static_cast<int>(TickPhase::Sensing)].mean == Catch::Approx(0.42));
+    CHECK(back.phases[static_cast<int>(TickPhase::Sensing)].p99 == Catch::Approx(1.25));
+    CHECK(back.schemaVersion == 6);
+}
+
+TEST_CASE("ServerTickReport: an older file with no sensing block still parses", "[servertick]") {
+    // The compatibility property the frozen version relies on: a reader that gains a field keeps
+    // working against a file written before it existed. The missing phase simply stays zero — it is
+    // absent, not corrupt, which is why no version gate is needed to tell the two apart.
+    const std::string oldJson = R"({
+  "schema_version": 6,
+  "tick_hz": 60.0,
+  "tick_ms": { "min": 1.0, "mean": 2.0, "max": 3.0, "p95": 2.5, "p99": 2.9 },
+  "integrate_ms": { "min": 0.1, "mean": 0.2, "max": 0.3, "p95": 0.25, "p99": 0.29 }
+})";
+
+    ServerTickReport out{};
+    REQUIRE(fromJson(oldJson, out));
+    CHECK(out.phases[static_cast<int>(TickPhase::Integrate)].mean == Catch::Approx(0.2));
+    CHECK(out.phases[static_cast<int>(TickPhase::Sensing)].mean == Catch::Approx(0.0));
+}
