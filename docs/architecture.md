@@ -500,6 +500,29 @@ clean-room reimplementation, not ported code.
 Full decomposition: sensor core #677 (this record → #679 schema/parser → #680 entity fields → #684
 detection math → #685 sensing pass → #686 tick-report schema), AI consumers under #670.
 
+**2026-07-13 amendment (#684) — probability of detection gates ACQUISITION; geometry MAINTAINS the
+contact.** A `pod` is the chance of *finding* something you were not already looking at. It is
+**not** re-rolled to keep a contact you already hold: a target inside the cone stays held without a
+die, and is lost when it leaves the cone or when its `lock_hold_s` coast expires — never because a
+die came up short. Dice are therefore owed on exactly two edges, `Lost → Detected` and
+`Detected → Locked`.
+
+This is recorded as a decision rather than left in the implementation because it is the rule a
+consumer is most likely to undo *by accident*: the obvious shape for a per-tick sensing loop is
+"evaluate the sensor, roll, keep the contact if it passes", and that shape is wrong. A 0.35-PoD
+radar re-rolled at the 10 Hz reference cadence drops and re-acquires an untouched target several
+times a second — a flicker that is neither physical nor playable, and that no amount of downstream
+smoothing can honestly repair. The rule binds the sensing pass (#685), player avionics (#526) and
+missile seekers (#628/#676) alike; a consumer that wants a contact to decay must do it through the
+coast, which is the mechanism that exists for exactly that purpose.
+
+Two corollaries follow, and both are load-bearing:
+
+- **Recovering a coasting contact costs no roll.** It was never lost, only unobserved.
+- **A search-only sensor (`lock_hold_s = 0`, e.g. the builtin eyeball) drops the instant its target
+  leaves the cone.** You have not "lost track" of something you were only ever looking at — you have
+  simply stopped seeing it.
+
 ## Content Pack Architecture
 
 This is the central design decision that affects every other phase. **The engine core has no dependency on any content library.** All asset access goes through an `IContentPack` interface.
