@@ -65,6 +65,8 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `ConnectRefusal` | `0x09` | server→client | reliable | 64 bytes | Rejection reason sent before `disconnectPeer()` on every `onConnect` rejection (ban, allowlist, rate-limit, per-IP limit, admin auth lockout). Additive ID — old clients silently discard and fall back to the generic "Connection refused by server." message. |
 | `Heartbeat` | `0x0B` | client→server | unreliable | 16 bytes | Liveness signal sent at ~1 Hz when flying; carries the client's last received `tickIndex` so the server can refresh `estimatedDelayTicks`. Only sent after at least one `MsgWorldSnapshot` has been received. Additive ID — old servers silently discard. |
 | `PeerDelay` | `0x0C` | server→client | unreliable | 4 bytes | Reply to `MsgHeartbeat`; delivers `estimatedDelayTicks` for this peer. Client converts to ms: `delayTicks × 1000 / 60`. `delayTicks == 0` means no valid estimate yet (client ignores). Additive ID — old clients silently discard. |
+| `WingmanCommand` | `0x0D` | client→server | reliable | 16 bytes | Order a formation (#610). Authorized by **commanding the formation**, never by anything in the packet. Additive ID — old servers silently discard. |
+| `WingmanAck` | `0x0E` | server→client | reliable | 16 bytes | Outcome of an order, the on-connect flight check-in, or a radio call **relayed** to a human member of someone's flight. Carries a result **code**, never server-authored text. Additive ID. |
 | `LanBeacon` | `0x10` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast |
 
 ## Struct Definitions
@@ -449,6 +451,78 @@ Unreliable, **server→client unicast**, channel 1. Reply to `MsgHeartbeat`; del
 | 2 | 2 | `delayTicks` | `uint16_t` | `estimatedDelayTicks` capped at 65535 (≈18 min at 60 Hz). `0` = estimate not yet valid; client ignores. Convert to ms: `delayTicks × 1000 / 60`. |
 
 `MsgId::PeerDelay = 0x0C` is an additive message ID — old clients silently discard.
+
+### MsgWingmanCommand — 16 bytes
+
+Reliable, **client→server**, channel 0. Orders a formation — the scripted wingman command grammar
+(#610). See `engine/ai/WingmanCommand.h` for the six commands; the ordinal on the wire is
+`fl::ai::WingmanCommand`.
+
+**Authority never comes out of the packet.** The server resolves the addressed formation and checks
+that the *sender* commands it (directly, or via an ancestor — command cascades down the formation
+tree). A peer that does not command it receives `NoFlight` — deliberately the **same** code an
+unknown formation returns, so the order channel cannot be used to enumerate which formations exist
+or who leads them.
+
+This is *not* `MsgAdminCommand`: that is a password-gated shell tunnel, and a gameplay order is
+authorized by a role in the world, not by a token.
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x0D` |
+| 1 | 1 | `command` | `uint8_t` | `fl::ai::WingmanCommand` ordinal. `>= 6` is rejected with `Rejected`. |
+| 2 | 2 | `protocolVersion` | `uint16_t` | `kProtocolVersion`; mismatch is discarded. |
+| 4 | 4 | `memberIdx` | `uint32_t` | Entity pool index of one addressed member, or `kFlightAll` (`0xFFFFFFFF`) for the whole formation. |
+| 8 | 4 | `seqNum` | `uint32_t` | Client-monotonic; the server discards packets that are not newer (dup/reorder guard). |
+| 12 | 2 | `flightId` | `uint16_t` | Formation to order, or `kOwnFlight` (`0xFFFF`) = "the one I command". A commander of *several* formations (an AWACS, a package commander) must name one — `kOwnFlight` is refused as ambiguous. |
+| 14 | 1 | `flags` | `uint8_t` | Bit 0 = `kFlightFlagCascade`: apply to every sub-formation beneath the addressed one. |
+| 15 | 1 | `reserved` | `uint8_t` | |
+
+Rate-limited per peer (`[flight] command_rate_limit_per_s`, default 4/s). The limit is acked **once
+per window**, never once per packet — an ack for every rejected packet would turn a flood into an
+amplifier pointed back at the sender.
+
+### MsgWingmanAck — 16 bytes
+
+Reliable, **server→client**. Three things arrive on this ID:
+
+1. **An order outcome**, to the commander.
+2. **The flight check-in** (`CheckIn`), unsolicited, once after `MsgConnectAck` when the peer's
+   flight is formed. This is how a client learns it *has* a flight and what id to address it by.
+   (`MsgConnectAck` cannot carry it: that packet is immediately followed by `MsgEntityTypeDef`
+   records, so appending a field there would shift them — breaking, not additive.)
+3. **A relayed radio call** (`Relayed`), to a **human** member of someone's flight. The server cannot
+   retask a person, so an order aimed at a player is delivered as a call they may choose to obey.
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x0E` |
+| 1 | 1 | `command` | `uint8_t` | Echoed `WingmanCommand` ordinal (`rejoin` for a check-in). |
+| 2 | 1 | `result` | `uint8_t` | `WingmanResult` (below). |
+| 3 | 1 | `flightSize` | `uint8_t` | Live members in the addressed formation. |
+| 4 | 4 | `memberIdx` | `uint32_t` | Member the order applied to, or `kFlightAll`. On a **relayed** call this is the *caller's* entity index — i.e. who is ordering you. |
+| 8 | 4 | `targetIdx` | `uint32_t` | Designated target for `attack_my_target`, else `kNoTarget` (`0xFFFFFFFF`). |
+| 12 | 2 | `flightId` | `uint16_t` | The formation this ack refers to. |
+| 14 | 2 | `reserved` | `uint16_t` | |
+
+**`WingmanResult`** — a machine-readable code, **not** server-authored text. Brevity calls ("Two,
+engaging.") are UI strings that must be localizable; the client already needs the same table to label
+its radio menu; and it keeps a server-controlled string off the HUD text path entirely. This is the
+same reasoning as `ConnectRefusalCode`.
+
+| Value | Name | Meaning |
+|-------|------|---------|
+| 0 | `Acknowledged` | An AI member's behavior changed. |
+| 1 | `NoFlight` | You command no formation with live members, **or** you named one that is not yours. Deliberately the same code for both. |
+| 2 | `NoTarget` | `attack_my_target`: nothing hostile in the commander's boresight cone. **Behavior is unchanged** — the wingman does not pick its own target. |
+| 3 | `Unavailable` | The addressed member is dead. |
+| 4 | `Rejected` | Unknown command ordinal. |
+| 5 | `RateLimited` | Too many orders this window (acked once per window). |
+| 6 | `CheckIn` | Unsolicited: your flight is formed; this is its size and id. |
+| 7 | `Relayed` | Sent **to a human member**: your commander has ordered `command`. Advisory — compliance is the player's choice. Also returned to the commander when every addressed member was human. |
+| 8 | `NotLead` | Reserved: you are in a formation but do not command it. |
+
+Both IDs are additive — old peers discard them, and `kProtocolVersion` stays **1**.
 
 ### MsgLanBeacon — 74 bytes
 
