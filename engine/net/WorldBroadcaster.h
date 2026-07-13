@@ -453,6 +453,23 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Acked once per window, never per packet — an ack per rejected packet would be an amplifier.
     void setFlightCommandRateLimit(int perSecond) noexcept;
 
+    // Apply an order to a formation WITHOUT a peer-authority check — the game-master path, used by
+    // the `flight order` admin command. The console is authorized by the operator password, so it
+    // does not have (or need) a commander role, and it must not pretend to be peer 0 to get one:
+    // authority bypasses here are explicit and visible rather than forged.
+    //
+    // The GM has no boresight, so `attack_my_target` cannot designate through this path — the caller
+    // should point an AI at a specific entity with `spawn --ai pursuit` instead. Relayed orders to
+    // human members still go out (a GM CAN radio a player).
+    // Returns the number of AI members actually retasked. Sim-thread only.
+    struct FlightOrderReport {
+        int aiRetasked{0};
+        int humansRelayed{0};
+        int deadSkipped{0};
+    };
+    FlightOrderReport applyFlightOrder(fl::FormationId fid, uint8_t command, uint32_t memberIdx, bool cascade,
+                                       EntityId designatedTarget = {});
+
     // The formation tree. Sim-thread only. fl-server reaches it via enqueueSimCallback to build
     // AI-only formations and to serve the `flight` admin command family (the game-master and AWACS
     // surface); WorldBroadcaster itself uses it to authorize and dispatch MsgWingmanCommand.
@@ -586,6 +603,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     // Wingman/flight order path (#610). Sim-thread only (called from onReceive).
     void handleWingmanCommand(uint32_t peerId, const void* data, std::size_t size);
+    // The shared dispatch core behind BOTH the network order path and the `flight order` admin
+    // command, so a radio order and a console order cannot behave differently. callerPeerId 0 = the
+    // game master (no relay attribution to a player entity).
+    FlightOrderReport dispatchOrder(fl::FormationId fid, uint8_t command, uint32_t memberIdx, bool cascade,
+                                    EntityId designatedTarget, uint32_t callerPeerId, uint32_t callerEntityIdx);
     void sendWingmanAck(uint32_t peerId, uint8_t command, WingmanResult result, uint16_t flightId, uint8_t flightSize,
                         uint32_t memberIdx, uint32_t targetIdx);
     // Log, send a MsgConnectRefusal with the reason text for `code`, and disconnect the peer.

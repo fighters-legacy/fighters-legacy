@@ -61,6 +61,14 @@ static const char* kDefaultToml =
     "save_path = \"world.sav\"\n"
     "autosave_interval_s = 300\n"
     "# planet_radius_m = 6371000        # planet sphere radius (m); Earth default\n"
+    "# player_faction = 1               # faction stamped on every player entity on connect (#610).\n"
+    "#                                  # MUST be non-zero for combat: faction 0 is NEUTRAL, and a\n"
+    "#                                  # neutral entity has NO ENEMIES — nothing is hostile to a\n"
+    "#                                  # player, so AI engage/cover logic never fires and the\n"
+    "#                                  # wingman cannot designate a target. 0 = pre-#610 behaviour.\n"
+    "#                                  # NOTE: with this set, a `spawn --faction 2 --ai escort` AI\n"
+    "#                                  # now reacts to an approaching player, where before the\n"
+    "#                                  # player was invisible to it. [0, 65535]\n"
     "# draw_distance_km = 200.0         # per-peer interest management radius (km); [1, 100000]\n"
     "# spatial_cell_size_km = 10.0      # SpatialIndex cell size (km); 0 = auto from draw distance; [0, 1000]; "
     "restart\n"
@@ -195,7 +203,33 @@ static const char* kDefaultToml =
     "#\n"
     "# [[spawn.points]]\n"
     "# x = 0.0\n"
-    "# z = 0.0\n";
+    "# z = 0.0\n"
+    "\n"
+    "[flight]\n"
+    "# AI wingmen spawned for each connecting player (#610). 0 = players fly alone.\n"
+    "#\n"
+    "# Deliberately 0 by default: N extra AI entities per peer would move every load-test and\n"
+    "# scale-gate number, so a dedicated server is unchanged unless you ask for a flight.\n"
+    "# Single-player is unaffected — the game client starts its embedded server with\n"
+    "# --flight-size 1, so you always fly with a wingman there.\n"
+    "#\n"
+    "# Larger structures — all-AI flights, strike packages, an AWACS commanding aircraft it is\n"
+    "# not flying with — are built at runtime with the `flight` admin command, not here.\n"
+    "size = 0\n"
+    "# entity_type = \"builtin:debug-entity\"  # entity spawned for each wingman\n"
+    "#\n"
+    "# Formation geometry: slot spacing per rank. Members alternate right/left and step\n"
+    "# out, back and down each rank, so any flight size stacks into a legible echelon.\n"
+    "# lateral_m = 150.0                #  [10, 5000]\n"
+    "# aft_m = 100.0                    #  [0, 5000]\n"
+    "# vertical_m = -15.0               #  negative = stepped down; [-1000, 1000]\n"
+    "#\n"
+    "# Behaviour tuning for the six scripted commands.\n"
+    "# engage_range_m = 12000.0         # engage_bandits trigger radius about the wingman; [500, 200000]\n"
+    "# cover_range_m = 6000.0           # cover_me trigger radius about the LEAD; [500, 200000]\n"
+    "# designate_range_m = 15000.0      # attack_my_target boresight range; [500, 200000]\n"
+    "# designate_half_angle_deg = 15.0  # boresight cone half-angle; [1, 90]\n"
+    "# command_rate_limit_per_s = 4     # wingman orders per second per player; [1, 60]\n";
 
 std::string_view defaultServerConfigToml() {
     return kDefaultToml;
@@ -222,6 +256,23 @@ struct NullLogSink final : ILogger {
     void setMinLevel(LogLevel) override {}
     void flush() override {}
 };
+
+// Read a double key, accept it only inside [lo, hi], and Warn + keep the existing default otherwise.
+// This is the range-validated-default contract every key in this file follows; it is spelled out by
+// hand dozens of times above, and new sections should not add a dozen more.
+void clampDouble(const toml::table& tbl, const char* section, const char* key, double lo, double hi, double& out,
+                 ILogger* log) {
+    auto v = tbl[section][key].template value<double>();
+    if (!v)
+        return;
+    if (*v >= lo && *v <= hi) {
+        out = *v;
+        return;
+    }
+    char buf[192];
+    std::snprintf(buf, sizeof(buf), "%s.%s out of range [%g, %g]; using default %g", section, key, lo, hi, out);
+    log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+}
 } // namespace
 
 ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
@@ -336,6 +387,14 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__, "world.time_scale must be > 0; using default 10.0");
             } else {
                 cfg.timeScale = *v;
+            }
+        }
+        if (auto v = tbl["world"]["player_faction"].value<int64_t>()) {
+            if (*v >= 0 && *v <= 65535) {
+                cfg.playerFaction = static_cast<uint16_t>(*v);
+            } else {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.player_faction out of range [0, 65535]; using default 1");
             }
         }
         if (auto v = tbl["world"]["planet_radius_m"].value<double>()) {
@@ -772,6 +831,34 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                         log->log(LogLevel::Warn, __FILE__, __LINE__, "spawn.points entry missing x or z; skipping");
                 }
             }
+        }
+
+        // [flight]  — the player's auto-spawned flight (#610)
+        if (auto v = tbl["flight"]["size"].value<int64_t>()) {
+            if (*v >= 0 && *v <= 8)
+                cfg.flight.size = static_cast<uint32_t>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "flight.size out of range [0, 8]; using default 0");
+        }
+        if (auto v = tbl["flight"]["entity_type"].value<std::string>()) {
+            if (!v->empty())
+                cfg.flight.entityType = *v;
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "flight.entity_type empty; using default");
+        }
+        clampDouble(tbl, "flight", "lateral_m", 10.0, 5000.0, cfg.flight.lateralM, log);
+        clampDouble(tbl, "flight", "aft_m", 0.0, 5000.0, cfg.flight.aftM, log);
+        clampDouble(tbl, "flight", "vertical_m", -1000.0, 1000.0, cfg.flight.verticalM, log);
+        clampDouble(tbl, "flight", "engage_range_m", 500.0, 200000.0, cfg.flight.engageRangeM, log);
+        clampDouble(tbl, "flight", "cover_range_m", 500.0, 200000.0, cfg.flight.coverRangeM, log);
+        clampDouble(tbl, "flight", "designate_range_m", 500.0, 200000.0, cfg.flight.designateRangeM, log);
+        clampDouble(tbl, "flight", "designate_half_angle_deg", 1.0, 90.0, cfg.flight.designateHalfAngleDeg, log);
+        if (auto v = tbl["flight"]["command_rate_limit_per_s"].value<int64_t>()) {
+            if (*v >= 1 && *v <= 60)
+                cfg.flight.commandRateLimitPerS = static_cast<int>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "flight.command_rate_limit_per_s out of range [1, 60]; using default 4");
         }
 
     } catch (const toml::parse_error& e) {

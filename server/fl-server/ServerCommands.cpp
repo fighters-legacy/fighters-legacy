@@ -31,6 +31,26 @@
 namespace fl {
 
 // ---------------------------------------------------------------------------
+// Sim-callback output + parsing helpers (#610)
+// ---------------------------------------------------------------------------
+
+// Emit a line from INSIDE an enqueueSimCallback. Commands that mutate the world run on the sim
+// thread, long after dispatch() returned its ack, so their real result has to reach the operator
+// through stdout and (when RCON is configured) the shell ring that RconServer drains. Every existing
+// mutating command open-codes exactly this; new ones should not add another copy.
+static void printAdmin(const ServerCommandContext& ctx, const char* line) {
+    std::printf("%s\n", line);
+    if (ctx.rcon.shell)
+        ctx.rcon.shell->print(line);
+    std::fflush(stdout);
+}
+
+static bool parseU32(std::string_view s, uint32_t& out) {
+    const auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), out);
+    return ec == std::errc{} && ptr == s.data() + s.size();
+}
+
+// ---------------------------------------------------------------------------
 // Local IP helpers (mirrors WorldBroadcaster.cpp — kept file-static)
 // ---------------------------------------------------------------------------
 
@@ -1077,6 +1097,200 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                              });
 
     // quit
+    // -------------------------------------------------------------------------------------------
+    // flight  -- the formation / command-hierarchy surface (#610)
+    //
+    // This is the GAME MASTER and AWACS path. The wire order channel (MsgWingmanCommand) is
+    // authorized by commanding a formation; the console is authorized by the operator password, so
+    // it can build and order formations it is not part of. Both dispatch through the SAME code
+    // (WorldBroadcaster::dispatchOrder), so a console order and a radio order cannot behave
+    // differently — which is the property that makes this the future MCP-allowlistable surface too.
+    // -------------------------------------------------------------------------------------------
+    registry.registerCommand(
+        "flight",
+        "flight list | create <anchorIdx> [--commander <peerId>] [--parent <id>] [--callsign <name>]\n"
+        "       | add <id> <entityIdx> [slot] | order <id> <command> [--member <idx>] [--cascade]\n"
+        "       | disband <id>   -- formations and the chain of command; `order` commands are the six "
+        "wingman commands (attack_my_target, engage_bandits, rejoin, cover_me, hold_fire, return_to_base)",
+        [ctx](std::span<std::string_view> args) -> std::string {
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop || !ctx.sim.entityManager)
+                return "flight: not available";
+            if (args.empty())
+                return "usage: flight list | create | add | order | disband";
+
+            const std::string_view sub = args[0];
+
+            if (sub == "list") {
+                ctx.sim.gameLoop->enqueueSimCallback([ctx]() {
+                    const auto& reg = ctx.sim.broadcaster->formations();
+                    if (reg.size() == 0) {
+                        printAdmin(ctx, "[admin] no formations");
+                        return;
+                    }
+                    reg.forEach([&](const fl::Formation& f) {
+                        char m[320];
+                        std::snprintf(m, sizeof(m),
+                                      "[admin] flight %u \"%s\"  anchor=%u  commander=%u  parent=%u  members=%zu",
+                                      static_cast<unsigned>(f.id), f.callsign.c_str(), f.anchor.index,
+                                      f.commanderPeerId, static_cast<unsigned>(f.parent), f.members.size());
+                        printAdmin(ctx, m);
+                        for (const fl::FormationMember& mem : f.members) {
+                            char mm[192];
+                            std::snprintf(mm, sizeof(mm), "[admin]   member entity=%u slot=%u %s%s", mem.id.index,
+                                          mem.slotIndex, mem.isAi() ? "AI" : "HUMAN",
+                                          mem.weaponsHold ? " [weapons hold]" : "");
+                            printAdmin(ctx, mm);
+                        }
+                    });
+                });
+                return "flight list: queued";
+            }
+
+            if (sub == "create") {
+                if (args.size() < 2)
+                    return "usage: flight create <anchorIdx> [--commander <peerId>] [--parent <id>] [--callsign "
+                           "<name>]";
+                uint32_t anchorIdx = 0;
+                if (!parseU32(args[1], anchorIdx))
+                    return "flight create: invalid anchor index";
+
+                uint32_t commander = 0;
+                uint32_t parent = 0;
+                std::string callsign = "Flight";
+                for (std::size_t i = 2; i + 1 < args.size(); ++i) {
+                    if (args[i] == "--commander")
+                        (void)parseU32(args[++i], commander);
+                    else if (args[i] == "--parent")
+                        (void)parseU32(args[++i], parent);
+                    else if (args[i] == "--callsign")
+                        callsign = std::string(args[++i]);
+                }
+
+                ctx.sim.gameLoop->enqueueSimCallback([ctx, anchorIdx, commander, parent, callsign]() {
+                    fl::EntityId anchor;
+                    ctx.sim.entityManager->forEach([&](const fl::EntityState& s) {
+                        if (!anchor.valid() && s.id.index == anchorIdx && !s.dead)
+                            anchor = s.id;
+                    });
+                    char m[192];
+                    if (!anchor.valid()) {
+                        std::snprintf(m, sizeof(m), "[admin] flight create: no live entity with index %u", anchorIdx);
+                        printAdmin(ctx, m);
+                        return;
+                    }
+                    const fl::FormationId fid = ctx.sim.broadcaster->formations().create(
+                        callsign, anchor, commander, static_cast<fl::FormationId>(parent));
+                    if (fid == fl::kNoFormation) {
+                        printAdmin(ctx, "[admin] flight create: failed (unknown parent, or tree too deep)");
+                        return;
+                    }
+                    std::snprintf(m, sizeof(m), "[admin] created flight %u \"%s\" anchored on entity %u (commander %u)",
+                                  static_cast<unsigned>(fid), callsign.c_str(), anchorIdx, commander);
+                    printAdmin(ctx, m);
+                });
+                return "flight create: queued";
+            }
+
+            if (sub == "add") {
+                if (args.size() < 3)
+                    return "usage: flight add <flightId> <entityIdx> [slot]";
+                uint32_t fid = 0, entIdx = 0, slot = 0;
+                if (!parseU32(args[1], fid) || !parseU32(args[2], entIdx))
+                    return "flight add: invalid id or entity index";
+                if (args.size() >= 4)
+                    (void)parseU32(args[3], slot);
+
+                ctx.sim.gameLoop->enqueueSimCallback([ctx, fid, entIdx, slot]() {
+                    fl::EntityId ent;
+                    uint32_t ownerPeer = 0;
+                    ctx.sim.entityManager->forEach([&](const fl::EntityState& s) {
+                        if (!ent.valid() && s.id.index == entIdx && !s.dead) {
+                            ent = s.id;
+                            ownerPeer = s.ownerId; // 0 = AI; non-zero = the peer flying it
+                        }
+                    });
+                    char m[192];
+                    if (!ent.valid()) {
+                        std::snprintf(m, sizeof(m), "[admin] flight add: no live entity with index %u", entIdx);
+                        printAdmin(ctx, m);
+                        return;
+                    }
+                    fl::FormationMember mem{};
+                    mem.id = ent;
+                    mem.peerId = ownerPeer; // a player's aircraft joins as a HUMAN member: orders are
+                                            // relayed to them as radio calls, never applied to them
+                    mem.slotIndex = slot;
+                    if (!ctx.sim.broadcaster->formations().addMember(static_cast<fl::FormationId>(fid), mem)) {
+                        std::snprintf(m, sizeof(m), "[admin] flight add: no such flight %u", fid);
+                        printAdmin(ctx, m);
+                        return;
+                    }
+                    std::snprintf(m, sizeof(m), "[admin] added entity %u to flight %u as %s (slot %u)", entIdx, fid,
+                                  ownerPeer == 0 ? "AI" : "HUMAN", slot);
+                    printAdmin(ctx, m);
+                });
+                return "flight add: queued";
+            }
+
+            if (sub == "order") {
+                if (args.size() < 3)
+                    return "usage: flight order <flightId> <command> [--member <entityIdx>] [--cascade]";
+                uint32_t fid = 0;
+                if (!parseU32(args[1], fid))
+                    return "flight order: invalid flight id";
+                const std::optional<fl::ai::WingmanCommand> cmd = fl::ai::parseWingmanCommand(args[2]);
+                if (!cmd)
+                    return "flight order: unknown command (attack_my_target, engage_bandits, rejoin, cover_me, "
+                           "hold_fire, return_to_base)";
+
+                uint32_t memberIdx = fl::kFlightAll;
+                bool cascade = false;
+                for (std::size_t i = 3; i < args.size(); ++i) {
+                    if (args[i] == "--cascade")
+                        cascade = true;
+                    else if (args[i] == "--member" && i + 1 < args.size())
+                        (void)parseU32(args[++i], memberIdx);
+                }
+
+                // The game master has no boresight, so attack_my_target cannot designate through this
+                // path. Say so rather than silently degrading the order to "hold station".
+                if (*cmd == fl::ai::WingmanCommand::AttackMyTarget)
+                    return "flight order: attack_my_target needs a commander's boresight, which the console does not "
+                           "have -- use `spawn --ai pursuit <idx>` to point an AI at a specific entity";
+
+                const auto ordinal = static_cast<uint8_t>(*cmd);
+                ctx.sim.gameLoop->enqueueSimCallback([ctx, fid, ordinal, memberIdx, cascade]() {
+                    const auto rep = ctx.sim.broadcaster->applyFlightOrder(static_cast<fl::FormationId>(fid), ordinal,
+                                                                           memberIdx, cascade);
+                    char m[192];
+                    std::snprintf(m, sizeof(m), "[admin] flight %u ordered %s: %d AI retasked, %d relayed to players%s",
+                                  fid, std::string(fl::ai::kWingmanCommandNames[ordinal]).c_str(), rep.aiRetasked,
+                                  rep.humansRelayed, rep.deadSkipped > 0 ? " (some members are dead)" : "");
+                    printAdmin(ctx, m);
+                });
+                return "flight order: queued";
+            }
+
+            if (sub == "disband") {
+                if (args.size() < 2)
+                    return "usage: flight disband <flightId>";
+                uint32_t fid = 0;
+                if (!parseU32(args[1], fid))
+                    return "flight disband: invalid flight id";
+                ctx.sim.gameLoop->enqueueSimCallback([ctx, fid]() {
+                    // Children are re-parented, not destroyed: disbanding a package must not delete
+                    // the flights inside it, and the aircraft keep flying whatever they were last told.
+                    const bool ok = ctx.sim.broadcaster->formations().destroy(static_cast<fl::FormationId>(fid));
+                    char m[128];
+                    std::snprintf(m, sizeof(m), ok ? "[admin] disbanded flight %u" : "[admin] no such flight %u", fid);
+                    printAdmin(ctx, m);
+                });
+                return "flight disband: queued";
+            }
+
+            return "usage: flight list | create | add | order | disband";
+        });
+
     registry.registerCommand("quit", "quit  -- shut down fl-server gracefully",
                              [ctx](std::span<std::string_view>) -> std::string {
                                  if (!ctx.env.quitFlag)

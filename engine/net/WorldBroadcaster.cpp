@@ -1696,16 +1696,52 @@ void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, s
         }
     }
 
-    // The formations an order reaches: just this one, or its whole subtree when the cascade flag is
-    // set (a package commander sending the whole package home, rather than each flight in turn).
-    const std::vector<fl::FormationId> targets =
-        (msg.flags & kFlightFlagCascade) ? m_formations.subtree(fid) : std::vector<fl::FormationId>{fid};
+    const auto callerEnt = m_peerEntities.find(peerId);
+    const uint32_t callerIdx = callerEnt != m_peerEntities.end() ? callerEnt->second.index : kFlightAll;
 
-    bool anyAi = false;    // at least one AI member was retasked
-    bool anyHuman = false; // at least one human member had the call relayed to them
-    bool anyDead = false;
-    bool matchedMember = false;
-    uint8_t liveMembers = 0;
+    const FlightOrderReport rep = dispatchOrder(fid, msg.command, msg.memberIdx, (msg.flags & kFlightFlagCascade) != 0,
+                                                designated, peerId, callerIdx);
+
+    // Fold the per-member outcomes into one answer for the commander.
+    WingmanResult result = WingmanResult::NoFlight;
+    if (rep.aiRetasked > 0) {
+        result = WingmanResult::Acknowledged;
+    } else if (rep.humansRelayed > 0) {
+        // Every addressed member was human: the call went out, but no aircraft was retasked. Say so,
+        // rather than letting the commander believe a machine is now obeying.
+        result = WingmanResult::Relayed;
+    } else if (rep.deadSkipped > 0) {
+        result = WingmanResult::Unavailable;
+    }
+
+    const auto liveMembers = static_cast<uint8_t>(std::min(rep.aiRetasked + rep.humansRelayed, 255));
+    sendWingmanAck(peerId, msg.command, result, fid, liveMembers, msg.memberIdx,
+                   designated.valid() ? designated.index : kNoTarget);
+}
+
+WorldBroadcaster::FlightOrderReport WorldBroadcaster::applyFlightOrder(fl::FormationId fid, uint8_t command,
+                                                                       uint32_t memberIdx, bool cascade,
+                                                                       EntityId designatedTarget) {
+    // callerPeerId 0 = the game master: no peer-authority check (the console is authorized by the
+    // operator password, not by commanding the formation), and relays carry no caller entity because
+    // the GM is not flying one.
+    return dispatchOrder(fid, command, memberIdx, cascade, designatedTarget, /*callerPeerId=*/0,
+                         /*callerEntityIdx=*/kFlightAll);
+}
+
+WorldBroadcaster::FlightOrderReport WorldBroadcaster::dispatchOrder(fl::FormationId fid, uint8_t command,
+                                                                    uint32_t memberIdx, bool cascade,
+                                                                    EntityId designatedTarget, uint32_t callerPeerId,
+                                                                    uint32_t callerEntityIdx) {
+    FlightOrderReport rep{};
+    if (!m_flightOrderHandler || !fl::ai::isWingmanCommandOrdinal(command))
+        return rep;
+    const auto cmd = static_cast<fl::ai::WingmanCommand>(command);
+
+    // The formations an order reaches: just this one, or its whole subtree when cascading (a package
+    // commander sending the whole package home, rather than each flight in turn).
+    const std::vector<fl::FormationId> targets =
+        cascade ? m_formations.subtree(fid) : std::vector<fl::FormationId>{fid};
 
     for (const fl::FormationId tid : targets) {
         const fl::Formation* f = m_formations.get(tid);
@@ -1715,24 +1751,24 @@ void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, s
         // Copy the member list: the order handler retasks controllers, and a handler that spawns or
         // kills would otherwise invalidate the vector we are walking.
         const std::vector<fl::FormationMember> members = f->members;
+        const auto flightSize = static_cast<uint8_t>(std::min<std::size_t>(members.size(), 255));
+
         for (const fl::FormationMember& m : members) {
-            if (msg.memberIdx != kFlightAll && m.id.index != msg.memberIdx)
+            if (memberIdx != kFlightAll && m.id.index != memberIdx)
                 continue;
-            matchedMember = true;
 
             const EntityState* ms = m_entityManager.get(m.id);
             if (!ms || ms->dead) {
-                anyDead = true;
+                ++rep.deadSkipped;
                 continue;
             }
-            ++liveMembers;
 
             if (m.isAi()) {
                 // The server owns this aircraft: retask its controller.
-                if (m_flightOrderHandler(*f, m, msg.command, designated)) {
-                    anyAi = true;
-                    // Track the weapons hold. It has no teeth until weapons land (#583) — this is
-                    // where the firing trigger will read it — but the order is recorded rather than
+                if (m_flightOrderHandler(*f, m, command, designatedTarget)) {
+                    ++rep.aiRetasked;
+                    // Record the weapons hold. It has no teeth until weapons land (#583) - this is
+                    // where the firing trigger will read it - but the order is stored rather than
                     // dropped on the floor.
                     if (fl::Formation* mut = m_formations.get(tid)) {
                         for (fl::FormationMember& mm : mut->members) {
@@ -1746,34 +1782,17 @@ void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, s
                         }
                     }
                 }
-            } else if (m.peerId != peerId) {
+            } else if (m.peerId != callerPeerId) {
                 // A HUMAN member. The server cannot retask a person, and pretending otherwise would
                 // be the dishonest design: relay the call to their client and let them decide.
-                // memberIdx carries the CALLER's entity so the recipient knows who is ordering them.
-                const auto callerEnt = m_peerEntities.find(peerId);
-                const uint32_t callerIdx = callerEnt != m_peerEntities.end() ? callerEnt->second.index : kFlightAll;
-                sendWingmanAck(m.peerId, msg.command, WingmanResult::Relayed, tid,
-                               static_cast<uint8_t>(std::min<std::size_t>(f->members.size(), 255)), callerIdx,
-                               designated.valid() ? designated.index : kNoTarget);
-                anyHuman = true;
+                // memberIdx carries the CALLER's entity, so the recipient knows who is ordering them.
+                sendWingmanAck(m.peerId, command, WingmanResult::Relayed, tid, flightSize, callerEntityIdx,
+                               designatedTarget.valid() ? designatedTarget.index : kNoTarget);
+                ++rep.humansRelayed;
             }
         }
     }
-
-    // Fold the per-member outcomes into one answer for the commander.
-    WingmanResult result = WingmanResult::NoFlight;
-    if (anyAi) {
-        result = WingmanResult::Acknowledged;
-    } else if (anyHuman) {
-        // Every addressed member was human: the call went out, but no aircraft was retasked. Say so,
-        // rather than letting the commander believe a machine is now obeying.
-        result = WingmanResult::Relayed;
-    } else if (matchedMember && anyDead) {
-        result = WingmanResult::Unavailable;
-    }
-
-    sendWingmanAck(peerId, msg.command, result, fid, liveMembers, msg.memberIdx,
-                   designated.valid() ? designated.index : kNoTarget);
+    return rep;
 }
 
 void WorldBroadcaster::sendAdminResponse(INetwork& net, uint32_t peerId, uint16_t reqId, const std::string& result) {
