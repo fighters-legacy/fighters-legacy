@@ -931,6 +931,7 @@ Lua AI script. Place entity definition files anywhere in the pack directory (typ
 | `classic_damage_mesh` | string | `""` | Battle-damaged glTF variant (renderer)                     |
 | `flight_model`      | string | `""`    | Flight model TOML asset name; empty = builtin UFO model (server-side only) |
 | `ai_script`         | string | `""`    | Lua AI script name from the pack's `ai/` directory; auto-assigned when spawned without `--ai`; empty = no scripted AI (server-side only) |
+| `sensors`           | string[] | `[]`  | Sensor-def IDs this entity carries (see [Sensor Data](#sensor-data--toml)); empty = the builtin eyeball for AI-controlled entities |
 
 **Example:**
 
@@ -943,6 +944,17 @@ max_hp       = 300.0
 mesh         = "aircraft/f15c"
 flight_model = "flight/f15c"
 ai_script    = "f15c_patrol"
+sensors      = ["fl-base:eyeball", "fl-base:apg63"]
+
+[signatures]
+rcs    = 1.0
+ir     = 1.0
+visual = 1.0
+laser  = 1.0
+
+[ai]
+skill    = 0.6
+reaction = 0.4
 
 [damage.light]
 hp_fraction    = 0.70
@@ -996,8 +1008,59 @@ Omit the array entirely for an entity that carries nothing.
 | `allowed` | string[] | Weapon IDs this station accepts; must be **non-empty** |
 | `default` | string | Pre-loaded weapon ID; must be a member of `allowed` |
 
-Nothing yet verifies that an `allowed` ID resolves to a real weapon file — that cross-file check
-belongs to the offline weapon validator (#624).
+Every `allowed` and `default` ID is cross-checked against the pack's real weapon files by
+`validate-weapon --pack <dir>` (#624) — a typo'd ID otherwise produces a station that silently
+carries nothing.
+
+### `[signatures]` (optional) — what the entity looks like to a sensor
+
+The **target** side of detection, where a sensor def is the observer side. Values are **unitless
+multipliers** against a baseline fighter (`1.0`), which is what a sensor def's ranges are quoted
+against: radar detection range scales by `sqrt(rcs)`, IR and visual **linearly**. So `rcs = 0.01` is
+seen at a tenth of a radar's baseline range, and `ir = 2.0` at twice an IRST's.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `rcs` | float | `1.0` | Seen by `type = "radar"` |
+| `ir` | float | `1.0` | Seen by `type = "ir"` |
+| `visual` | float | `1.0` | Seen by `type = "visual"` |
+| `laser` | float | `1.0` | Seen by `type = "laser"` |
+
+All four are in **`(0, 100]`**, and each is independent — a stealth airframe with a tiny `rcs` is
+still exactly as hot to an IRST unless you say otherwise. **Zero is rejected**: a signature of `0` is
+not "very stealthy", it is a target that sensor type can never detect at any range, and an author who
+wants that should say so with a number.
+
+Omit the section (or any field in it) to keep the baseline.
+
+### `[ai]` (optional) — per-unit acquisition tuning
+
+How good this particular *crew* is, as distinct from its hardware. Two units flying identical
+airframes with identical sensors can still differ here.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `skill` | float | `0.5` | `[0, 1]`. Scales probability of detection **up** — higher sees sooner |
+| `reaction` | float | `0.5` | `[0, 1]`. Scales the delay between detecting and acting **up** — higher is **slower** |
+
+They are deliberately separate rather than one "difficulty" scalar: a veteran spots a contact early
+*and* acts on it immediately, a rookie does neither, and a distracted SAM crew can see you perfectly
+well and still be slow off the mark.
+
+### `sensors` — the sensor suite
+
+A list of sensor-def IDs (`[Sensor Data](#sensor-data--toml)`) the entity carries:
+
+```toml
+[entity]
+sensors = ["fl-base:eyeball", "fl-base:apg63"]
+```
+
+**Leaving it off does not make an entity blind, and does not make it omniscient.** An AI-controlled
+entity with no declared sensors gets the compiled-in builtin eyeball, so honest sensing is the
+default everywhere and a pack cannot opt out of it by omission. An unknown sensor ID is a load-time
+**warning**, not a parse error — a pack's cross-references resolve after every file in it is read,
+and one missing sensor should not stop an aircraft from loading with the rest of its suite.
 
 ---
 

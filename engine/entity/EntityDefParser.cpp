@@ -44,6 +44,29 @@ namespace {
     return v ? std::move(*v) : std::string{};
 }
 
+// A signature multiplier: absent keeps the baseline the caller passed in. Zero is rejected along
+// with the negatives — a signature of 0 is not "very stealthy", it is a target no sensor of that
+// type can ever detect at any range, and an author who wants that should say so with a number.
+[[nodiscard]] float parse_signature(toml::node_view<toml::node> node, const char* field, float fallback) {
+    auto v = node.value<double>();
+    if (!v)
+        return fallback;
+    const auto value = static_cast<float>(*v);
+    if (value <= 0.f || value > 100.f)
+        throw std::runtime_error(std::string(field) + " must be in (0, 100]");
+    return value;
+}
+
+[[nodiscard]] float parse_unit_fraction(toml::node_view<toml::node> node, const char* field, float fallback) {
+    auto v = node.value<double>();
+    if (!v)
+        return fallback;
+    const auto value = static_cast<float>(*v);
+    if (value < 0.f || value > 1.f)
+        throw std::runtime_error(std::string(field) + " must be in [0, 1]");
+    return value;
+}
+
 [[nodiscard]] ObjectCategory parse_category(std::string_view s) {
     if (s == "air_vehicle")
         return ObjectCategory::AirVehicle;
@@ -186,6 +209,46 @@ EntityDef parseEntityDef(std::string_view toml_src) {
 
             def.hardpoints.push_back(std::move(hp));
         }
+    }
+
+    // Optional sensor suite: sensor-def ids the entity carries.
+    //
+    //     [entity]
+    //     sensors = ["fl-base:eyeball", "fl-base:apg63"]
+    //
+    // Unknown ids are NOT rejected here: a pack's cross-references resolve once every file in it has
+    // been read, so the check belongs at resolve time (a warning), not in a single-file parser. What
+    // IS rejected is a list that cannot mean anything — a non-array, an empty id, a duplicate.
+    if (auto sensors_node = entity["sensors"]; sensors_node) {
+        auto* arr = sensors_node.as_array();
+        if (!arr)
+            throw std::runtime_error("entity.sensors must be an array of sensor ids");
+
+        for (auto& el : *arr) {
+            auto id = el.value<std::string>();
+            if (!id || id->empty())
+                throw std::runtime_error("entity.sensors entries must be non-empty strings");
+            if (std::find(def.sensorIds.begin(), def.sensorIds.end(), *id) != def.sensorIds.end())
+                throw std::runtime_error("duplicate entity.sensors id: " + *id);
+            def.sensorIds.push_back(std::move(*id));
+        }
+    }
+
+    // Optional signature section. Unitless multipliers against a baseline fighter (1.0); absent
+    // fields keep the baseline, so a pack tunes only what differs.
+    if (auto sig_node = tbl["signatures"]; sig_node && sig_node.as_table()) {
+        def.signatures.rcs = parse_signature(sig_node["rcs"], "signatures.rcs", def.signatures.rcs);
+        def.signatures.ir = parse_signature(sig_node["ir"], "signatures.ir", def.signatures.ir);
+        def.signatures.visual = parse_signature(sig_node["visual"], "signatures.visual", def.signatures.visual);
+        def.signatures.laser = parse_signature(sig_node["laser"], "signatures.laser", def.signatures.laser);
+    }
+
+    // Optional per-unit AI tuning.
+    if (auto ai_node = tbl["ai"]; ai_node && ai_node.as_table()) {
+        AiTuning tuning;
+        tuning.skill = parse_unit_fraction(ai_node["skill"], "ai.skill", tuning.skill);
+        tuning.reaction = parse_unit_fraction(ai_node["reaction"], "ai.reaction", tuning.reaction);
+        def.aiTuning = tuning;
     }
 
     return def;
