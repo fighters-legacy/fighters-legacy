@@ -28,6 +28,7 @@ class IHud;
 class SimRenderBridge;
 class TerrainStreamer;
 class WindshieldRain;
+class WingmanMenu;
 
 struct EnvironmentState;
 
@@ -49,6 +50,7 @@ struct FlightScreenDeps {
     UserConfig* userConfig{nullptr};
     SandboxInspector* inspector{nullptr};  // null = no inspector
     ClientPrediction* prediction{nullptr}; // null = no prediction
+    WingmanMenu* wingmanMenu{nullptr};     // null = no radio menu (#610)
     uint32_t* assignedEntityIdx{nullptr};
     uint32_t* assignedEntityGen{nullptr};
 };
@@ -70,7 +72,8 @@ class FlightScreen : public IScreen {
     bool m_weaponFired{false};
 
     // HUD (max 16) + rain (max 48) + slack
-    static constexpr int kMaxElements = 72;
+    // HUD (<=16) + windshield rain (<=48) + the radio menu (<=10) + slack.
+    static constexpr int kMaxElements = 88;
     std::array<HudElement, kMaxElements> m_elements{};
     int m_elementCount{0};
 };

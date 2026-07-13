@@ -292,6 +292,7 @@ struct GameServices {
     fl::IHud* activeHud{nullptr};
     fl::WindshieldRain windshieldRain;
     ServerNotice serverNotice;
+    WingmanMenu wingmanMenu; // the radio menu for ordering your flight (#610)
 
     // Debug console
     CommandRegistry cmdRegistry;
@@ -693,6 +694,7 @@ void Game::startGame() {
             std::make_unique<ClientNetEventHandler>(d.services.renderBridge, d.services.entityRegistry,
                                                     *d.services.rawLogger, *d.session.clientNet, d.services.env);
         d.session.clientHandler->notice = &d.services.serverNotice;
+        d.session.clientHandler->wingman = &d.services.wingmanMenu; // check-ins, order acks, relayed calls
         d.session.clientHandler->console = &*d.services.gameConsole;
         d.session.clientHandler->motdDisplaySeconds = d.services.userConfig->client().motdDisplayS;
         d.session.clientHandler->sessionFailure = &d.session.sessionFailure;
@@ -750,6 +752,7 @@ void Game::startGame() {
         fsd.userConfig = &*d.services.userConfig;
         fsd.inspector = d.session.inspector ? &*d.session.inspector : nullptr;
         fsd.prediction = &d.services.prediction;
+        fsd.wingmanMenu = &d.services.wingmanMenu;
         fsd.assignedEntityIdx = &d.session.clientHandler->assignedEntityIdx;
         fsd.assignedEntityGen = &d.session.clientHandler->assignedEntityGen;
 

@@ -593,7 +593,9 @@ target_include_directories(test_server_notice PRIVATE
 catch_discover_tests(test_server_notice)
 
 add_executable(test_client_net_event_handler test_client_net_event_handler.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp")
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
+    # ClientNetEventHandler dispatches MsgWingmanAck into the radio menu (#610).
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp")
 target_link_libraries(test_client_net_event_handler PRIVATE
     Catch2::Catch2WithMain engine-net engine-render engine-entity engine-console engine-weather platform-hal)
 target_include_directories(test_client_net_event_handler PRIVATE
@@ -666,6 +668,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/DebriefScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CameraInput.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"

@@ -376,6 +376,14 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             m_lastRttMs = static_cast<uint32_t>(pd.delayTicks) * 1000u / 60u;
             m_rttValid = true;
         }
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::WingmanAck)) {
+        // Order outcome, the on-connect flight check-in, or a radio call relayed to us as a human
+        // member of someone's flight (#610). All three land on the menu, which renders the brevity.
+        fl::MsgWingmanAck ack;
+        if (!fl::readMsg(data, size, ack))
+            return;
+        if (wingman)
+            wingman->onAck(ack);
     }
     // Unknown msgIds: silently discard
 }

@@ -29,8 +29,13 @@ class FlightInputCollector {
   public:
     // Returns a populated MsgClientInput if 1/60 s has elapsed since the last
     // packet, otherwise returns nullopt. Never call from the server thread.
+    // uiFocused: an in-flight overlay (the radio menu, #610) has the discrete keys/buttons this
+    // frame. The AXES keep working — the menu is non-modal on purpose, because suppressing flight
+    // input would leave throttle at 0, which is what opening the console already does and is exactly
+    // what a combat radio menu must not do. Only the buttons the overlay consumes are gated.
     std::optional<MsgClientInput> poll(const SimRenderBridge& bridge, CameraInput& camInput, const GameConsole& console,
-                                       IInput& input, IJoystick* joystick, const ControlsSettings& cs);
+                                       IInput& input, IJoystick* joystick, const ControlsSettings& cs,
+                                       bool uiFocused = false);
 
     // True if the most recent poll() that returned a message had the weapon
     // trigger bit set. Resets to false on each poll() call.
