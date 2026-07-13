@@ -605,7 +605,7 @@ int main(int argc, char** argv) {
 
                 fl::FormationMember m{};
                 m.id = id;
-                m.peerId = 0; // AI
+                m.peerId = fl::kNoPeer; // AI: the server owns this aircraft and may retask it
                 m.slotIndex = slot;
                 broadcaster.formations().addMember(fid, m);
             }

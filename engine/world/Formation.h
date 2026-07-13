@@ -46,15 +46,21 @@ using FormationId = uint16_t;
 // 0 is never a valid formation. Reserved as "none / not in a formation".
 inline constexpr FormationId kNoFormation = 0;
 
+// "No peer." NOT zero: peer id 0 is a perfectly ordinary connected player (ENet hands them out from
+// 0), so using 0 as the sentinel would mean the first player to connect could never command their own
+// flight — and, far worse, a HUMAN member with peer id 0 would be classified as AI and the server
+// would replace a live player's controller with an autopilot.
+inline constexpr uint32_t kNoPeer = 0xFFFFFFFFu;
+
 // Depth cap on the command tree. Element -> flight -> squadron -> package -> mission is five; the cap
 // is a cycle/runaway guard, not a doctrinal statement.
 inline constexpr uint8_t kMaxFormationDepth = 8;
 
 struct FormationMember {
     EntityId id;
-    // Peer flying this aircraft; 0 = AI (server-controlled). This single field is what separates
+    // Peer flying this aircraft; kNoPeer = AI (server-controlled). This single field is what separates
     // "retask the controller" from "relay a radio call and hope".
-    uint32_t peerId{0};
+    uint32_t peerId{kNoPeer};
     // Station in the formation geometry (ai::formationSlotOffset). Slot 0 is the first member.
     uint32_t slotIndex{0};
     // Set by hold_fire, cleared by an engage order. Has no teeth until weapons land (#583) — it is
@@ -62,16 +68,16 @@ struct FormationMember {
     bool weaponsHold{false};
 
     [[nodiscard]] bool isAi() const noexcept {
-        return peerId == 0;
+        return peerId == kNoPeer;
     }
 };
 
 struct Formation {
     FormationId id{kNoFormation};
-    FormationId parent{kNoFormation}; // kNoFormation = top of its chain
-    std::string callsign;             // "Viper", "Uzi 3" — display + admin addressing
-    EntityId anchor;                  // the entity members fly formation ON: a player, or an AI lead
-    uint32_t commanderPeerId{0};      // who may order this formation; 0 = server/game-master only
+    FormationId parent{kNoFormation};  // kNoFormation = top of its chain
+    std::string callsign;              // "Viper", "Uzi 3" — display + admin addressing
+    EntityId anchor;                   // the entity members fly formation ON: a player, or an AI lead
+    uint32_t commanderPeerId{kNoPeer}; // who may order this formation; kNoPeer = game-master only
     std::vector<FormationMember> members;
     std::vector<FormationId> children;
 };

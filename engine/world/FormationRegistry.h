@@ -46,9 +46,9 @@ class FormationRegistry {
 
     // AUTHORITY. True when `peerId` commands `id` directly, or commands any ANCESTOR of it — command
     // cascades down the tree, which is what makes a package commander able to order a flight inside
-    // it without being that flight's own commander. peerId 0 (the server / game master) is NOT
-    // granted authority here: the admin console bypasses this check deliberately and visibly, rather
-    // than by pretending to be peer 0.
+    // it without being that flight's own commander. kNoPeer (the game master) is NOT granted
+    // authority here: the admin console bypasses this check deliberately and visibly, rather than by
+    // forging a peer identity.
     [[nodiscard]] bool commands(uint32_t peerId, FormationId id) const noexcept;
 
     // `id` plus every descendant, parents before children. The unit an order cascades over.

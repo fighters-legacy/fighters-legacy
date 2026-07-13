@@ -261,6 +261,21 @@ add_executable(test_ai_controllers test_ai_controllers.cpp)
 target_link_libraries(test_ai_controllers PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
 catch_discover_tests(test_ai_controllers)
 
+# The scripted wingman grammar + its two wire messages (#610). Header-only + engine-protocol only.
+add_executable(test_wingman_command test_wingman_command.cpp)
+target_link_libraries(test_wingman_command PRIVATE engine-protocol engine-world engine-ai Catch2::Catch2WithMain)
+catch_discover_tests(test_wingman_command)
+
+# The formation / command tree (#610). Pure stdlib — no entity manager, no network.
+add_executable(test_formation_registry test_formation_registry.cpp)
+target_link_libraries(test_formation_registry PRIVATE engine-world Catch2::Catch2WithMain)
+catch_discover_tests(test_formation_registry)
+
+# FormationController, boresight designation, and the six commands (#610).
+add_executable(test_wingman_behavior test_wingman_behavior.cpp)
+target_link_libraries(test_wingman_behavior PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
+catch_discover_tests(test_wingman_behavior)
+
 add_executable(test_guidance test_guidance.cpp)
 target_link_libraries(test_guidance PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
 catch_discover_tests(test_guidance)

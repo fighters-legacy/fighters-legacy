@@ -1722,10 +1722,10 @@ void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, s
 WorldBroadcaster::FlightOrderReport WorldBroadcaster::applyFlightOrder(fl::FormationId fid, uint8_t command,
                                                                        uint32_t memberIdx, bool cascade,
                                                                        EntityId designatedTarget) {
-    // callerPeerId 0 = the game master: no peer-authority check (the console is authorized by the
-    // operator password, not by commanding the formation), and relays carry no caller entity because
-    // the GM is not flying one.
-    return dispatchOrder(fid, command, memberIdx, cascade, designatedTarget, /*callerPeerId=*/0,
+    // kNoPeer = the game master: no peer-authority check (the console is authorized by the operator
+    // password, not by commanding the formation), and relays carry no caller entity because the GM is
+    // not flying one. Note this is NOT peer 0 — peer 0 is an ordinary player.
+    return dispatchOrder(fid, command, memberIdx, cascade, designatedTarget, /*callerPeerId=*/fl::kNoPeer,
                          /*callerEntityIdx=*/kFlightAll);
 }
 

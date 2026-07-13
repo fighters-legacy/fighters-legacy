@@ -604,8 +604,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Wingman/flight order path (#610). Sim-thread only (called from onReceive).
     void handleWingmanCommand(uint32_t peerId, const void* data, std::size_t size);
     // The shared dispatch core behind BOTH the network order path and the `flight order` admin
-    // command, so a radio order and a console order cannot behave differently. callerPeerId 0 = the
-    // game master (no relay attribution to a player entity).
+    // command, so a radio order and a console order cannot behave differently. callerPeerId kNoPeer
+    // = the game master (no relay attribution to a player entity).
     FlightOrderReport dispatchOrder(fl::FormationId fid, uint8_t command, uint32_t memberIdx, bool cascade,
                                     EntityId designatedTarget, uint32_t callerPeerId, uint32_t callerEntityIdx);
     void sendWingmanAck(uint32_t peerId, uint8_t command, WingmanResult result, uint16_t flightId, uint8_t flightSize,

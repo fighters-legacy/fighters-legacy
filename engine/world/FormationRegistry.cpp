@@ -157,8 +157,8 @@ FormationId FormationRegistry::formationAnchoredOn(EntityId entity) const noexce
 }
 
 bool FormationRegistry::commands(uint32_t peerId, FormationId id) const noexcept {
-    if (peerId == 0 || id == kNoFormation) {
-        return false; // peer 0 is not a real peer; the game master goes through the admin console
+    if (peerId == kNoPeer || id == kNoFormation) {
+        return false; // the game master goes through the admin console, which bypasses this check
     }
     FormationId cur = id;
     for (uint8_t hops = 0; cur != kNoFormation && hops < kMaxFormationDepth; ++hops) {
@@ -198,7 +198,7 @@ std::vector<FormationId> FormationRegistry::subtree(FormationId id) const {
 
 std::vector<FormationId> FormationRegistry::commandedBy(uint32_t peerId) const {
     std::vector<FormationId> out;
-    if (peerId == 0) {
+    if (peerId == kNoPeer) {
         return out;
     }
     for (const auto& [id, f] : m_formations) {
@@ -211,14 +211,14 @@ std::vector<FormationId> FormationRegistry::commandedBy(uint32_t peerId) const {
 }
 
 void FormationRegistry::releasePeer(uint32_t peerId) {
-    if (peerId == 0) {
+    if (peerId == kNoPeer) {
         return;
     }
     for (auto& [id, f] : m_formations) {
         if (f.commanderPeerId == peerId) {
             // The formation outlives its commander: an AI flight whose AWACS logged off is still
             // flying, and the game master can still order it. It is simply unclaimed.
-            f.commanderPeerId = 0;
+            f.commanderPeerId = kNoPeer;
         }
         auto& ms = f.members;
         for (const FormationMember& m : ms) {

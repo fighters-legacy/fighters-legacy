@@ -1129,10 +1129,15 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                     }
                     reg.forEach([&](const fl::Formation& f) {
                         char m[320];
+                        char cmdr[24];
+                        if (f.commanderPeerId == fl::kNoPeer)
+                            std::snprintf(cmdr, sizeof(cmdr), "game-master");
+                        else
+                            std::snprintf(cmdr, sizeof(cmdr), "peer %u", f.commanderPeerId);
                         std::snprintf(m, sizeof(m),
-                                      "[admin] flight %u \"%s\"  anchor=%u  commander=%u  parent=%u  members=%zu",
-                                      static_cast<unsigned>(f.id), f.callsign.c_str(), f.anchor.index,
-                                      f.commanderPeerId, static_cast<unsigned>(f.parent), f.members.size());
+                                      "[admin] flight %u \"%s\"  anchor=%u  commander=%s  parent=%u  members=%zu",
+                                      static_cast<unsigned>(f.id), f.callsign.c_str(), f.anchor.index, cmdr,
+                                      static_cast<unsigned>(f.parent), f.members.size());
                         printAdmin(ctx, m);
                         for (const fl::FormationMember& mem : f.members) {
                             char mm[192];
@@ -1154,7 +1159,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                 if (!parseU32(args[1], anchorIdx))
                     return "flight create: invalid anchor index";
 
-                uint32_t commander = 0;
+                uint32_t commander = fl::kNoPeer; // no --commander = game-master-owned (NOT peer 0)
                 uint32_t parent = 0;
                 std::string callsign = "Flight";
                 for (std::size_t i = 2; i + 1 < args.size(); ++i) {
@@ -1184,8 +1189,14 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                         printAdmin(ctx, "[admin] flight create: failed (unknown parent, or tree too deep)");
                         return;
                     }
-                    std::snprintf(m, sizeof(m), "[admin] created flight %u \"%s\" anchored on entity %u (commander %u)",
-                                  static_cast<unsigned>(fid), callsign.c_str(), anchorIdx, commander);
+                    if (commander == fl::kNoPeer)
+                        std::snprintf(m, sizeof(m),
+                                      "[admin] created flight %u \"%s\" anchored on entity %u (game-master commanded)",
+                                      static_cast<unsigned>(fid), callsign.c_str(), anchorIdx);
+                    else
+                        std::snprintf(m, sizeof(m),
+                                      "[admin] created flight %u \"%s\" anchored on entity %u (commander peer %u)",
+                                      static_cast<unsigned>(fid), callsign.c_str(), anchorIdx, commander);
                     printAdmin(ctx, m);
                 });
                 return "flight create: queued";
@@ -1202,12 +1213,9 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
                 ctx.sim.gameLoop->enqueueSimCallback([ctx, fid, entIdx, slot]() {
                     fl::EntityId ent;
-                    uint32_t ownerPeer = 0;
                     ctx.sim.entityManager->forEach([&](const fl::EntityState& s) {
-                        if (!ent.valid() && s.id.index == entIdx && !s.dead) {
+                        if (!ent.valid() && s.id.index == entIdx && !s.dead)
                             ent = s.id;
-                            ownerPeer = s.ownerId; // 0 = AI; non-zero = the peer flying it
-                        }
                     });
                     char m[192];
                     if (!ent.valid()) {
@@ -1215,6 +1223,17 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                         printAdmin(ctx, m);
                         return;
                     }
+
+                    // Is a PERSON flying this? Resolve it against the live peer map rather than
+                    // EntityState::ownerId, whose "0 = server/AI" convention collides with peer id 0
+                    // — an ordinary player. Getting this wrong would mean the server retasks a live
+                    // player's aircraft with an autopilot.
+                    uint32_t ownerPeer = fl::kNoPeer;
+                    ctx.sim.broadcaster->forEachPeer([&](const fl::PeerInfo& pi) {
+                        if (pi.eid == ent)
+                            ownerPeer = pi.peerId;
+                    });
+
                     fl::FormationMember mem{};
                     mem.id = ent;
                     mem.peerId = ownerPeer; // a player's aircraft joins as a HUMAN member: orders are
