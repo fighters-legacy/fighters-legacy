@@ -63,6 +63,7 @@ visibility = "public"
 stack = []
 
 [world]
+player_faction = 1  # faction stamped on every player; MUST be non-zero for combat (see below)
 save_path          = "world.sav"
 autosave_interval_s = 300
 time_scale         = 10.0        # game seconds per real second; 10 = full day/night ≈ 2.4 real hours
@@ -121,6 +122,9 @@ agl_offset = 500.0  # metres AGL above terrain for all spawn points
 # [[spawn.points]]
 # x = 0.0
 # z = 0.0
+
+[flight]
+size = 0  # AI wingmen spawned per connecting player; 0 = players fly alone
 
 [network]
 transport          = "gns"  # "gns" (GameNetworkingSockets, default) or "enet" (enet6)
@@ -396,6 +400,34 @@ lighting changes (e.g. afternoon → golden hour). Per-mission overrides are ava
 | float | `6371000.0` (Earth radius in metres) | `[1000, 1e9]` |
 
 Planet sphere radius in metres. The engine always uses spherical-Earth physics and terrain curvature; this field sets the radius for non-Earth planets. `MsgConnectAck.planetRadiusKm` is set to `planet_radius_m / 1000` so clients match server physics. Out-of-range values are rejected with a warning and the default is used.
+
+### `player_faction`
+
+| Type | Default | Range |
+|---|---|---|
+| integer | `1` | `[0, 65535]` |
+
+Faction stamped onto every player entity when it spawns on connect (#610).
+
+**This must be non-zero for combat to work at all.** `fl::areFactionsHostile` treats faction 0 as
+*neutral* — an entity with **no enemies**. With `player_faction = 0`, nothing in the world is hostile
+to a player: an AI wingman's `engage_bandits` and `cover_me` orders can never trigger, and
+`attack_my_target` can never designate a target. fl-server warns at startup if `[flight] size > 0` is
+configured alongside `player_faction = 0`, because that combination is a silently broken wingman
+rather than a configuration.
+
+> **Behaviour change, introduced with the default of 1.** An AI spawned with a *different* faction now
+> reacts to players where it previously could not see them. Concretely: a `spawn --faction 2 --ai
+> escort <idx>` AI will now break-turn on an approaching player (its `escort` template triggers on
+> `AnyHostileEntityWithinRange`). That is what #465 intended when it added factions. `patrol_attack`
+> is **unaffected** — its transitions are keyed on a specific target entity, not on faction.
+>
+> All players share one faction, i.e. everyone is on the same side and no player is hostile to another
+> player. That is the right default for a co-op sandbox and is not a regression (players could not
+> harm each other before either). Per-team factions arrive with the multiplayer game-mode framework
+> (Epic E).
+
+Setting `0` restores the pre-#610 behaviour exactly.
 
 ### `draw_distance_km`
 
@@ -673,6 +705,66 @@ How often to broadcast the beacon, in milliseconds. Out-of-range values are igno
 default is kept (a warning is logged).
 
 ---
+
+## [flight] — The player's flight (AI wingmen)
+
+Gives each connecting player a flight of AI wingmen they can order from the in-game radio menu (`C`).
+This is the scripted wingman (#610) — the zero-AI path, and what a server ships instead of the
+natural-language wingman when no LLM provider is configured (or when the provider is CPU-only and
+cannot meet the 2 s radio-comms budget; see `docs/ai-architecture.md` §9).
+
+```toml
+[flight]
+size = 0  # AI wingmen spawned per connecting player; 0 = disabled; [0, 8]
+
+# entity_type = "builtin:debug-entity"
+
+# Formation geometry: slot spacing per rank. Members alternate right/left and step out,
+# back and down each rank, so a flight of any size stacks into a legible echelon.
+# lateral_m  = 150.0    # [10, 5000]
+# aft_m      = 100.0    # [0, 5000]
+# vertical_m = -15.0    # negative = stepped down; [-1000, 1000]
+
+# Behaviour tuning for the six scripted commands.
+# engage_range_m           = 12000.0  # engage_bandits trigger radius about the WINGMAN
+# cover_range_m            = 6000.0   # cover_me trigger radius about the LEAD
+# designate_range_m        = 15000.0  # attack_my_target boresight range
+# designate_half_angle_deg = 15.0     # boresight cone half-angle; [1, 90]
+# command_rate_limit_per_s = 4        # wingman orders per second per player; [1, 60]
+```
+
+### `size`
+
+| Type | Default | Range |
+|---|---|---|
+| integer | `0` | `[0, 8]` |
+
+AI wingmen spawned for each connecting player. **Defaults to 0 deliberately:** N extra AI entities
+per peer would move every load-test and scale-gate number, so a dedicated server is byte-for-byte
+unchanged unless you ask for a flight.
+
+**Single-player is unaffected** — the game client starts its embedded server with `--flight-size 1`,
+so you always fly with a wingman there. The `--flight-size <n>` CLI flag overrides this key.
+
+> **Requires `[world] player_faction` to be non-zero** (it is, by default). With `player_faction = 0`
+> the player is *neutral*, a neutral entity has **no enemies**, and so the wingman's `engage_bandits`
+> and `cover_me` orders can never trigger and `attack_my_target` can never designate. fl-server logs a
+> warning at startup if you configure a flight alongside `player_faction = 0`.
+
+### Larger formations, all-AI flights, and strike packages
+
+This section only describes what a *player* gets on connect. The formation model underneath is a
+command **tree** — a formation is `{anchor, commander, members, children}`, the commander need not be
+in the formation, and a member may be an AI **or another player**. Everything past the default player
+flight is built at runtime with the **`flight` admin command** (see
+[Runtime administration](#runtime-administration)):
+
+    flight create 12 --callsign Chevy --commander 3   # an AI flight commanded by peer 3 (an AWACS)
+    flight add 1 13                                   # add an aircraft to flight 1
+    flight order 1 return_to_base --cascade           # order flight 1 and everything under it home
+
+An order to a **human** member is *relayed* to them as a radio call, never applied — the server
+cannot fly a person's aircraft for them.
 
 ## [network] — Transport backend
 
@@ -1171,7 +1263,8 @@ process.
 | `admin_auth_status` | — | Show per-IP lockout state for the MsgAdminCommand operator channel and (when RCON is enabled) the RCON TCP channel; both active lockouts and pending failure counts |
 | `set_weather` | `<preset>` | Change weather: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm`, `snow`, `blizzard` |
 | `set_time` | `<0–24>` | Set in-game time of day (float, hours) |
-| `spawn` | `<type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn a registered entity type at the given world position; optionally attach an AI controller. C++ behaviors: `loiter [cx cy cz [radius_m [alt_m [throttle [cw\|ccw]]]]]`, `waypoint x y z [x y z ...] [--loop]`, `pursuit <entityIdx>`, `evade <entityIdx>`, `break <entityIdx> [rollDuration]`, `lead <entityIdx> [navGain]`, `lag <entityIdx> [lagFraction]`, `immelmann [pullDur] [rollDur]`, `split_s [rollDur] [pullDur]`, `high_yo_yo <entityIdx> [climbDur] [reacquireDur]`, `low_yo_yo <entityIdx> [diveDur] [pullDur]`. Lua behavior: `lua <script_name>` (loads `ai/<script_name>.lua` from content packs; see `docs/modding/ai.md`). If the entity type's TOML sets `ai_script`, that script is attached automatically when `--ai` is omitted. |
+| `spawn` | `<type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn a registered entity type at the given world position; optionally attach an AI controller. C++ behaviors: `loiter [cx cy cz [radius_m [alt_m [throttle [cw\|ccw]]]]]`, `waypoint x y z [x y z ...] [--loop]`, `formation <anchorIdx> [slot] [lateralM] [aftM]` (holds station on a **moving** anchor — unlike `escort`, which orbits the point where the escortee stood when the order was given), `wingman <anchorIdx> <command> [slot]`, `pursuit <entityIdx>`, `evade <entityIdx>`, `break <entityIdx> [rollDuration]`, `lead <entityIdx> [navGain]`, `lag <entityIdx> [lagFraction]`, `immelmann [pullDur] [rollDur]`, `split_s [rollDur] [pullDur]`, `high_yo_yo <entityIdx> [climbDur] [reacquireDur]`, `low_yo_yo <entityIdx> [diveDur] [pullDur]`. Lua behavior: `lua <script_name>` (loads `ai/<script_name>.lua` from content packs; see `docs/modding/ai.md`). If the entity type's TOML sets `ai_script`, that script is attached automatically when `--ai` is omitted. |
+| `flight` | `list \| create <anchorIdx> [--commander <peerId>] [--parent <id>] [--callsign <name>] \| add <id> <entityIdx> [slot] \| order <id> <command> [--member <idx>] [--cascade] \| disband <id>` | The formation / command-hierarchy surface (#610) — the **game-master and AWACS path**. Build formations (including all-AI flights and nested strike packages) and order them. `order` takes the six wingman commands (`attack_my_target`, `engage_bandits`, `rejoin`, `cover_me`, `hold_fire`, `return_to_base`); `--cascade` applies it to every sub-formation beneath the addressed one. Dispatches through the **same** code as the network order path, so a console order and a radio order cannot behave differently. `attack_my_target` is **refused** here — it needs a commander's boresight, which the console does not have; use `spawn --ai pursuit <idx>` to point an AI at a specific entity. |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
 | `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's game console to teleport the player entity |
 | `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `snapshot_budget_bytes`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier`, `congestion_*`, `overrun_governor_enabled`, `overrun_high_watermark`, `overrun_low_watermark`, `overrun_min_snapshot_hz`, `overrun_max_ai_stride`, `overrun_budget_floor_bytes` (all take effect on the next sim tick; `max_catchup_ticks`, `sim_worker_threads`, `spatial_cell_size_km`, and the `test_spawn_*` keys require restart) |

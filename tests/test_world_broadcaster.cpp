@@ -7356,3 +7356,421 @@ TEST_CASE("WorldBroadcaster: congestion telemetry watermarks record engage then 
     CHECK(t3.recoveredSendHz == Catch::Approx(60.f));
     CHECK(t3.maxPacketLoss == Catch::Approx(0.2f));
 }
+
+// ---------------------------------------------------------------------------
+// Wingman / flight order channel (#610)
+//
+// NOTE: this file must stay free of engine-ai (it is in the TSan target set). It can, because the
+// order path reaches engine-ai only through std::function hooks — which is exactly why they are
+// hooks. The tests fill them with stubs.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Collect every MsgWingmanAck the server unicast to `peerId`.
+std::vector<fl::MsgWingmanAck> acksFor(const MockNetwork& net, uint32_t peerId) {
+    std::vector<fl::MsgWingmanAck> out;
+    for (const auto& [pid, pkt] : net.perPeerSends) {
+        if (pid != peerId || pkt.empty())
+            continue;
+        if (pkt[0] != static_cast<uint8_t>(fl::MsgId::WingmanAck))
+            continue;
+        fl::MsgWingmanAck ack;
+        if (fl::readMsg(pkt.data(), pkt.size(), ack))
+            out.push_back(ack);
+    }
+    return out;
+}
+
+fl::MsgWingmanCommand makeOrder(uint8_t command, uint16_t flightId, uint32_t memberIdx = fl::kFlightAll,
+                                uint32_t seq = 1) {
+    fl::MsgWingmanCommand m{};
+    m.command = command;
+    m.flightId = flightId;
+    m.memberIdx = memberIdx;
+    m.seqNum = seq;
+    return m;
+}
+
+constexpr uint8_t kRejoin = 2; // fl::ai::WingmanCommand::Rejoin — spelled out to keep engine-ai out
+
+} // namespace
+
+TEST_CASE("WorldBroadcaster: a player entity is stamped with the configured faction", "[world_broadcaster][wingman]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setPlayerFaction(7);
+    broadcaster.onConnect(0u);
+
+    bool found = false;
+    em.forEach([&](const fl::EntityState& s) {
+        if (s.playerOwned || s.ownerId == 0u) {
+            // The peer's entity: without a non-zero faction nothing in the world is hostile to it.
+            found = true;
+            CHECK(s.factionIndex == 7);
+        }
+    });
+    CHECK(found);
+}
+
+TEST_CASE("WorldBroadcaster: player faction 0 restores the legacy neutral behavior", "[world_broadcaster][wingman]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setPlayerFaction(0);
+    broadcaster.onConnect(0u);
+
+    em.forEach([&](const fl::EntityState& s) { CHECK(s.factionIndex == 0); });
+}
+
+TEST_CASE("WorldBroadcaster: the flight check-in tells the client its flight id and size",
+          "[world_broadcaster][wingman]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setFlightSpawner([&](uint32_t peerId, fl::EntityId lead) {
+        const fl::FormationId fid = broadcaster.formations().create("Viper", lead, peerId);
+        fl::EntityTransform t{};
+        const fl::EntityId ai = em.spawn("builtin:debug-entity", t);
+        fl::FormationMember m{};
+        m.id = ai;
+        m.peerId = fl::kNoPeer; // AI
+        broadcaster.formations().addMember(fid, m);
+        return fid;
+    });
+    broadcaster.onConnect(0u);
+
+    const auto acks = acksFor(net, 0);
+    REQUIRE(acks.size() == 1u);
+    CHECK(acks[0].result == static_cast<uint8_t>(fl::WingmanResult::CheckIn));
+    CHECK(acks[0].flightSize == 1u);
+    CHECK(acks[0].flightId != fl::kNoFlightId);
+}
+
+TEST_CASE("WorldBroadcaster: an order retasks an AI member and is acknowledged", "[world_broadcaster][wingman]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::FormationId theFlight = fl::kNoFormation;
+    broadcaster.setFlightSpawner([&](uint32_t peerId, fl::EntityId lead) {
+        theFlight = broadcaster.formations().create("Viper", lead, peerId);
+        fl::EntityTransform t{};
+        fl::FormationMember m{};
+        m.id = em.spawn("builtin:debug-entity", t);
+        broadcaster.formations().addMember(theFlight, m);
+        return theFlight;
+    });
+
+    int handlerCalls = 0;
+    broadcaster.setFlightOrderHandler([&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
+        ++handlerCalls;
+        return true;
+    });
+
+    broadcaster.onConnect(0u);
+    net.perPeerSends.clear();
+
+    const auto order = makeOrder(kRejoin, theFlight);
+    broadcaster.onReceive(0u, &order, sizeof(order));
+
+    CHECK(handlerCalls == 1);
+    const auto acks = acksFor(net, 0);
+    REQUIRE(acks.size() == 1u);
+    CHECK(acks[0].result == static_cast<uint8_t>(fl::WingmanResult::Acknowledged));
+    CHECK(acks[0].command == kRejoin);
+}
+
+TEST_CASE("WorldBroadcaster: a peer cannot order a flight it does not command", "[world_broadcaster][wingman]") {
+    // THE AUTHORIZATION TEST. Authority comes from commanding the formation, never from the packet —
+    // and the refusal is the SAME code as "no such flight", so the order channel cannot be used to
+    // enumerate which formations exist or who leads them.
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::FormationId peer0Flight = fl::kNoFormation;
+    broadcaster.setFlightSpawner([&](uint32_t peerId, fl::EntityId lead) {
+        const fl::FormationId fid = broadcaster.formations().create("Viper", lead, peerId);
+        fl::EntityTransform t{};
+        fl::FormationMember m{};
+        m.id = em.spawn("builtin:debug-entity", t);
+        broadcaster.formations().addMember(fid, m);
+        if (peerId == 0)
+            peer0Flight = fid;
+        return fid;
+    });
+
+    int handlerCalls = 0;
+    broadcaster.setFlightOrderHandler([&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
+        ++handlerCalls;
+        return true;
+    });
+
+    broadcaster.onConnect(0u);
+    broadcaster.onConnect(1u);
+    net.perPeerSends.clear();
+
+    // Peer 1 names peer 0's flight explicitly.
+    const auto order = makeOrder(kRejoin, peer0Flight);
+    broadcaster.onReceive(1u, &order, sizeof(order));
+
+    CHECK(handlerCalls == 0); // the handler is never reached
+    const auto acks = acksFor(net, 1);
+    REQUIRE(acks.size() == 1u);
+    CHECK(acks[0].result == static_cast<uint8_t>(fl::WingmanResult::NoFlight));
+}
+
+TEST_CASE("WorldBroadcaster: an unknown command ordinal is rejected without calling the handler",
+          "[world_broadcaster][wingman]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::FormationId theFlight = fl::kNoFormation;
+    broadcaster.setFlightSpawner([&](uint32_t peerId, fl::EntityId lead) {
+        theFlight = broadcaster.formations().create("Viper", lead, peerId);
+        fl::EntityTransform t{};
+        fl::FormationMember m{};
+        m.id = em.spawn("builtin:debug-entity", t);
+        broadcaster.formations().addMember(theFlight, m);
+        return theFlight;
+    });
+    int handlerCalls = 0;
+    broadcaster.setFlightOrderHandler([&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
+        ++handlerCalls;
+        return true;
+    });
+
+    broadcaster.onConnect(0u);
+    net.perPeerSends.clear();
+
+    const auto order = makeOrder(/*command=*/200, theFlight); // outside the grammar
+    broadcaster.onReceive(0u, &order, sizeof(order));
+
+    CHECK(handlerCalls == 0);
+    const auto acks = acksFor(net, 0);
+    REQUIRE(acks.size() == 1u);
+    CHECK(acks[0].result == static_cast<uint8_t>(fl::WingmanResult::Rejected));
+}
+
+TEST_CASE("WorldBroadcaster: attack_my_target refuses when nothing is in the boresight cone",
+          "[world_broadcaster][wingman]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::FormationId theFlight = fl::kNoFormation;
+    broadcaster.setFlightSpawner([&](uint32_t peerId, fl::EntityId lead) {
+        theFlight = broadcaster.formations().create("Viper", lead, peerId);
+        fl::EntityTransform t{};
+        fl::FormationMember m{};
+        m.id = em.spawn("builtin:debug-entity", t);
+        broadcaster.formations().addMember(theFlight, m);
+        return theFlight;
+    });
+    int handlerCalls = 0;
+    broadcaster.setFlightOrderHandler([&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
+        ++handlerCalls;
+        return true;
+    });
+    // A designator that finds nothing — the same thing an empty sky produces.
+    broadcaster.setTargetDesignator([](const fl::EntityState&, const float[3]) { return fl::EntityId{}; });
+
+    broadcaster.onConnect(0u);
+    net.perPeerSends.clear();
+
+    const auto order = makeOrder(/*attack_my_target=*/0, theFlight);
+    broadcaster.onReceive(0u, &order, sizeof(order));
+
+    // Behavior is UNCHANGED and the player is told. An attack order that quietly picks its own target
+    // would be worse than one that declines.
+    CHECK(handlerCalls == 0);
+    const auto acks = acksFor(net, 0);
+    REQUIRE(acks.size() == 1u);
+    CHECK(acks[0].result == static_cast<uint8_t>(fl::WingmanResult::NoTarget));
+    CHECK(acks[0].targetIdx == fl::kNoTarget);
+}
+
+TEST_CASE("WorldBroadcaster: an order to a HUMAN member is relayed, not applied", "[world_broadcaster][wingman]") {
+    // The server cannot retask a person. It relays the call and tells the commander it was passed on,
+    // rather than letting them believe an aircraft is now obeying.
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::FormationId theFlight = fl::kNoFormation;
+    int handlerCalls = 0;
+    broadcaster.setFlightOrderHandler([&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
+        ++handlerCalls;
+        return true;
+    });
+
+    broadcaster.onConnect(0u); // the commander
+    broadcaster.onConnect(1u); // the human wingman
+
+    // Peer 0 leads a flight whose only member is peer 1's aircraft.
+    fl::EntityId lead0, wing1;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) {
+        if (pi.peerId == 0)
+            lead0 = pi.eid;
+        if (pi.peerId == 1)
+            wing1 = pi.eid;
+    });
+    REQUIRE(lead0.valid());
+    REQUIRE(wing1.valid());
+
+    theFlight = broadcaster.formations().create("Viper", lead0, /*commander=*/0);
+    fl::FormationMember human{};
+    human.id = wing1;
+    human.peerId = 1; // a PERSON
+    broadcaster.formations().addMember(theFlight, human);
+
+    net.perPeerSends.clear();
+    const auto order = makeOrder(kRejoin, theFlight);
+    broadcaster.onReceive(0u, &order, sizeof(order));
+
+    CHECK(handlerCalls == 0); // no controller was swapped: there is no controller to swap
+
+    // The human member got the radio call...
+    const auto memberAcks = acksFor(net, 1);
+    REQUIRE(memberAcks.size() == 1u);
+    CHECK(memberAcks[0].result == static_cast<uint8_t>(fl::WingmanResult::Relayed));
+    CHECK(memberAcks[0].command == kRejoin);
+    CHECK(memberAcks[0].memberIdx == lead0.index); // ...and knows who is calling
+
+    // ...and the commander is told it was relayed, not acknowledged.
+    const auto leadAcks = acksFor(net, 0);
+    REQUIRE(leadAcks.size() == 1u);
+    CHECK(leadAcks[0].result == static_cast<uint8_t>(fl::WingmanResult::Relayed));
+}
+
+TEST_CASE("WorldBroadcaster: the order rate limit acks once per window, not once per packet",
+          "[world_broadcaster][wingman]") {
+    // An ack for every rejected packet would turn a flood into an amplifier pointed at the sender.
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::FormationId theFlight = fl::kNoFormation;
+    broadcaster.setFlightSpawner([&](uint32_t peerId, fl::EntityId lead) {
+        theFlight = broadcaster.formations().create("Viper", lead, peerId);
+        fl::EntityTransform t{};
+        fl::FormationMember m{};
+        m.id = em.spawn("builtin:debug-entity", t);
+        broadcaster.formations().addMember(theFlight, m);
+        return theFlight;
+    });
+    broadcaster.setFlightOrderHandler(
+        [&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) { return true; });
+    broadcaster.setFlightCommandRateLimit(2);
+
+    broadcaster.onConnect(0u);
+    net.perPeerSends.clear();
+
+    for (uint32_t i = 0; i < 10; ++i) {
+        const auto order = makeOrder(kRejoin, theFlight, fl::kFlightAll, /*seq=*/i + 1);
+        broadcaster.onReceive(0u, &order, sizeof(order));
+    }
+
+    const auto acks = acksFor(net, 0);
+    int rateLimited = 0;
+    for (const auto& a : acks) {
+        if (a.result == static_cast<uint8_t>(fl::WingmanResult::RateLimited))
+            ++rateLimited;
+    }
+    CHECK(rateLimited == 1); // exactly one, for the whole window
+}
+
+TEST_CASE("WorldBroadcaster: a truncated or mis-versioned order is discarded", "[world_broadcaster][wingman]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    int handlerCalls = 0;
+    broadcaster.setFlightOrderHandler([&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) {
+        ++handlerCalls;
+        return true;
+    });
+    broadcaster.onConnect(0u);
+    net.perPeerSends.clear();
+
+    // Truncated: one byte of msgId and nothing else.
+    const uint8_t stub = static_cast<uint8_t>(fl::MsgId::WingmanCommand);
+    broadcaster.onReceive(0u, &stub, sizeof(stub));
+
+    // Wrong protocol version.
+    auto bad = makeOrder(kRejoin, 1);
+    bad.protocolVersion = fl::kProtocolVersion + 1;
+    broadcaster.onReceive(0u, &bad, sizeof(bad));
+
+    CHECK(handlerCalls == 0);
+    CHECK(acksFor(net, 0).empty()); // neither is worth answering
+}
+
+TEST_CASE("WorldBroadcaster: disconnect tears the peer's flight down", "[world_broadcaster][wingman]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setFlightSpawner([&](uint32_t peerId, fl::EntityId lead) {
+        const fl::FormationId fid = broadcaster.formations().create("Viper", lead, peerId);
+        fl::EntityTransform t{};
+        fl::FormationMember m{};
+        m.id = em.spawn("builtin:debug-entity", t);
+        broadcaster.formations().addMember(fid, m);
+        return fid;
+    });
+
+    broadcaster.onConnect(0u);
+    CHECK(broadcaster.formations().size() == 1u);
+
+    broadcaster.onTick(1.0 / 60.0, 1u); // EntityManager::liveCount() only refreshes on tick
+    const uint32_t before = em.liveCount();
+    CHECK(before == 2u); // the player, plus their one AI wingman
+
+    broadcaster.onDisconnect(0u);
+
+    // The formation and its AI aircraft go with the player: they existed to fly on them, and leaving
+    // them holding station on a dead anchor would leak an entity + a controller per disconnect.
+    CHECK(broadcaster.formations().size() == 0u);
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    CHECK(em.liveCount() == 0u); // both gone
+}

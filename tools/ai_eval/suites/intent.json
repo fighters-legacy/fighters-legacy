@@ -1,6 +1,6 @@
 {
   "name": "intent",
-  "_comment": "Epic O — free-text utterance -> structured wingman command. The grammar below is PROVISIONAL: issue #610 owns the final scripted wingman vocabulary (the Phase 4 'six commands' acceptance). It is captured here as data so re-running the sweep after #610 lands is a suite edit, not a code change. The out-of-grammar cases (expect 'unknown') are the load-bearing ones: an agent that maps an unsupported request onto a real command is worse than one that declines, because execution goes through the grammar with no human in the loop.",
+  "_comment": "Epic O - free-text utterance -> structured wingman command. The grammar below is the SHIPPED vocabulary: it mirrors fl::ai::WingmanCommand (engine/ai/WingmanCommand.h), which is the single source of truth, and tests/test_ai_eval.py asserts the two match - so a rename in the engine fails here. The out-of-grammar cases (expect 'unknown') are the load-bearing ones: an agent that maps an unsupported request onto a real command is worse than one that declines, because execution goes through the grammar with no human in the loop. 'unknown' is a DECLINE sentinel and is deliberately NOT an executable command - fl::ai::parseWingmanCommand rejects it.",
   "budget_s": 2.0,
   "grammar": [
     "attack_my_target",
@@ -11,7 +11,7 @@
     "return_to_base",
     "unknown"
   ],
-  "system_prompt": "You map a pilot's radio call to exactly one wingman command.\n\nAllowed commands:\n- attack_my_target: attack the target the flight lead has locked/designated\n- engage_bandits: engage hostile aircraft at will\n- rejoin: return to formation on the lead\n- cover_me: defensive support for the lead\n- hold_fire: weapons hold, do not fire\n- return_to_base: disengage and fly home\n- unknown: the call does not map to ANY command above\n\nRules:\n- Reply with ONLY a JSON object: {\"command\": \"<one of the commands above>\"}\n- Never invent a command that is not in the list.\n- If the call is ambiguous, or asks for something outside the list, answer \"unknown\". Answering \"unknown\" is CORRECT and preferred over guessing.",
+  "system_prompt": "Map a pilot's radio call to one wingman command.\n\nattack_my_target: attack the target the lead designated\nengage_bandits: engage hostile aircraft at will\nrejoin: return to formation on the lead\ncover_me: defensive support for the lead\nhold_fire: weapons hold, do not fire\nreturn_to_base: disengage and fly home\nunknown: the call matches none of the above\n\nReply with only {\"command\": \"<one of the above>\"}. Never invent a command. If the call is ambiguous or outside the list, answer \"unknown\" - declining is correct and preferred over guessing.",
   "cases": [
     { "id": "attack-1", "utterance": "Two, engage my target.", "expect": { "command": "attack_my_target" } },
     { "id": "attack-2", "utterance": "Hit the guy I'm locked onto.", "expect": { "command": "attack_my_target" } },

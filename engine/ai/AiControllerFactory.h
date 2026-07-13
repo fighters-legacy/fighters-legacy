@@ -3,6 +3,7 @@
 
 #include "ai/BreakTurnController.h"
 #include "ai/EvadeController.h"
+#include "ai/FormationController.h"
 #include "ai/HighYoYoController.h"
 #include "ai/ImmelmannController.h"
 #include "ai/LagPursuitController.h"
@@ -13,12 +14,15 @@
 #include "ai/SplitSController.h"
 #include "ai/StateMachineController.h" // exposes Condition helpers + StateMachineController
 #include "ai/WaypointController.h"
+#include "ai/WingmanBehavior.h" // makeWingmanController + WingmanParams
+#include "ai/WingmanCommand.h"  // the six-command grammar
 #include "entity/EntityManager.h"
 
 #include <charconv>
 #include <cstdlib>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -42,10 +46,15 @@ namespace fl::ai {
 //   split_s       [rollDurationS] [pullDurationS]
 //   high_yo_yo    <entityIdx> [climbDurationS] [reacquireDurationS]
 //   low_yo_yo     <entityIdx> [diveDurationS] [pullDurationS]
+//   formation     <anchorIdx> [slotIndex=0] [lateralM=150] [aftM=100]   — holds station on a MOVING
+//                 anchor (unlike `escort`, which orbits a point captured at creation)
 //
 // StateMachineController templates (internally compose multiple states):
 //   patrol_attack <entityIdx> [engageRangeM=8000] [retreatHp=0.25]
 //   escort        <entityIdx> [standoffM=2000]
+//   wingman       <anchorIdx> <command> [slotIndex=0]  — one of the six scripted wingman commands
+//                 (WingmanCommand.h); the same code the network order path drives, so a console
+//                 order and a radio order cannot behave differently
 //
 // Custom multi-state scenarios not covered by these templates must be constructed
 // in C++ via StateMachineController directly. Lua behavior via LuaController.
@@ -450,6 +459,77 @@ inline std::unique_ptr<fl::IEntityController> createController(std::string_view 
         sm->addTransition("break", "follow", Not(AnyHostileEntityWithinRange(innerRange)), 6.0f);
         sm->setInitialState("follow");
         return sm;
+    }
+
+    // -----------------------------------------------------------------------
+    // formation <anchorIdx> [slotIndex=0] [lateralM=150] [aftM=100]
+    //
+    // Hold station on a MOVING anchor. Unlike `escort` above (which orbits the point where the
+    // escortee was standing when the order was given), this tracks the anchor continuously — it is
+    // the controller `escort`'s own comment says is missing.
+    // -----------------------------------------------------------------------
+    if (behavior == "formation") {
+        if (args.empty() || !entityManager)
+            return nullptr;
+        uint32_t idx{};
+        if (!parseUint32(args[0], idx))
+            return nullptr;
+        fl::EntityId anchorId = findEntityById(idx);
+        if (!anchorId.valid())
+            return nullptr;
+
+        uint32_t slotIndex = 0;
+        FormationParams fp{};
+        double d = 0.0;
+        if (args.size() >= 2 && !parseUint32(args[1], slotIndex))
+            return nullptr;
+        if (args.size() >= 3) {
+            if (!parseDouble(args[2], d))
+                return nullptr;
+            fp.lateralM = static_cast<float>(d);
+        }
+        if (args.size() >= 4) {
+            if (!parseDouble(args[3], d))
+                return nullptr;
+            fp.aftM = static_cast<float>(d);
+        }
+        return std::make_unique<FormationController>(*entityManager, anchorId, slotIndex, fp);
+    }
+
+    // -----------------------------------------------------------------------
+    // wingman <anchorIdx> <command> [slotIndex=0]
+    //
+    // Attach one of the six scripted wingman commands (WingmanCommand.h) directly, without a
+    // formation roster. This is the game-master / debugging path and the same code the network order
+    // path drives, so a console order and a radio order cannot behave differently.
+    //
+    // NOTE: `attack_my_target` has no designated target on this path (designation comes from the
+    // commander's boresight, which the console does not have), so it degrades to holding station.
+    // Use `pursuit`/`lead` to point an AI at a specific entity from the console.
+    // -----------------------------------------------------------------------
+    if (behavior == "wingman") {
+        if (args.size() < 2 || !entityManager)
+            return nullptr;
+        uint32_t idx{};
+        if (!parseUint32(args[0], idx))
+            return nullptr;
+        fl::EntityId anchorId = findEntityById(idx);
+        if (!anchorId.valid())
+            return nullptr;
+
+        const std::optional<WingmanCommand> cmd = parseWingmanCommand(args[1]);
+        if (!cmd)
+            return nullptr;
+
+        WingmanParams wp{};
+        if (args.size() >= 3 && !parseUint32(args[2], wp.slotIndex))
+            return nullptr;
+
+        // Home = the anchor's current position, so an RTB from the console goes somewhere sane.
+        if (const fl::EntityState* as = entityManager->get(anchorId)) {
+            wp.homePoint = glm::dvec3(as->transform.pos[0], as->transform.pos[1], as->transform.pos[2]);
+        }
+        return makeWingmanController(*entityManager, anchorId, *cmd, fl::EntityId{}, wp);
     }
 
     return nullptr;

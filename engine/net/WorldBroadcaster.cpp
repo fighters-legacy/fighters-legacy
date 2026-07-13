@@ -4,6 +4,11 @@
 
 #include "ILogger.h"
 #include "INetwork.h"
+// The wingman grammar (#610). Header-only and stdlib-only, so this adds NO link dependency —
+// engine-net still does not link engine-ai (cmake/layering.cmake), and must not: building a
+// controller is engine-ai's job and reaches this file only through the FlightOrderHandler hook.
+// Including it here rather than hardcoding ordinals keeps one source of truth for the vocabulary.
+#include "ai/WingmanCommand.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
@@ -138,6 +143,15 @@ RejectInfo rejectInfoFor(fl::ConnectRefusalCode code) {
 
 namespace fl {
 
+// GameProtocol.h must stay stdlib-only (engine-protocol is zero-dep, enforced by fl_assert_zero_dep),
+// so it MIRRORS these two values rather than including the headers that define them. This is the one
+// TU that sees both sides, so this is where the mirrors are checked. If either fires, the wire and
+// the engine disagree about the vocabulary, which is exactly the drift the #678 record and the #624
+// validator were both cleaning up.
+static_assert(kWingmanCommandCount == static_cast<uint8_t>(fl::ai::WingmanCommand::Count),
+              "GameProtocol kWingmanCommandCount is out of sync with fl::ai::WingmanCommand");
+static_assert(kNoFlightId == fl::kNoFormation, "GameProtocol kNoFlightId is out of sync with fl::kNoFormation");
+
 WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegistry& registry, INetwork& net,
                                    ILogger& logger, WeatherController* weather)
     : m_entityManager(entityManager), m_registry(registry), m_net(net), m_logger(logger), m_weather(weather),
@@ -221,6 +235,26 @@ void WorldBroadcaster::setMotd(std::string motd) {
 
 void WorldBroadcaster::setMotdDisplaySeconds(uint16_t seconds) noexcept {
     m_motdDisplaySeconds = seconds;
+}
+
+void WorldBroadcaster::setPlayerFaction(uint16_t faction) noexcept {
+    m_playerFaction = faction;
+}
+
+void WorldBroadcaster::setFlightSpawner(FlightSpawner fn) {
+    m_flightSpawner = std::move(fn);
+}
+
+void WorldBroadcaster::setFlightOrderHandler(FlightOrderHandler fn) {
+    m_flightOrderHandler = std::move(fn);
+}
+
+void WorldBroadcaster::setTargetDesignator(TargetDesignator fn) {
+    m_targetDesignator = std::move(fn);
+}
+
+void WorldBroadcaster::setFlightCommandRateLimit(int perSecond) noexcept {
+    m_flightCmdRateLimit = perSecond > 0 ? perSecond : 1;
 }
 
 void WorldBroadcaster::setFlightModelResolver(FlightModelResolver fn) {
@@ -1217,6 +1251,14 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         m_peerInputs[peerId] = {};
         m_peerInputs[peerId].lastActivityTick = m_currentTick;
 
+        // Stamp the player's faction. Without a non-zero faction the player is NEUTRAL, and
+        // fl::areFactionsHostile gives a neutral entity no enemies at all — so nothing would be
+        // hostile to them, their wingman's engage/cover conditions could never fire, and boresight
+        // designation could never designate. Setting this to 0 restores the pre-#610 behavior.
+        if (EntityState* s = m_entityManager.get(id); s && m_playerFaction != 0) {
+            s->factionIndex = m_playerFaction;
+        }
+
         // Resolve the entity type's flight model (server-authoritative; never sent on the wire).
         // Empty id, no resolver, or an unknown id falls back to the builtin UFO model.
         std::shared_ptr<const FlightModelData> model = resolveFlightModel(id);
@@ -1239,6 +1281,26 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         pkt.push_back(0u); // NUL terminator
         m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/true);
     }
+
+    // Form this peer's flight (#610). The spawner lives in fl-server (it needs engine-ai to build
+    // controllers); with no spawner installed the peer simply flies alone, which is exactly the
+    // pre-#610 behavior.
+    if (id.valid() && m_flightSpawner) {
+        const fl::FormationId fid = m_flightSpawner(peerId, id);
+        if (const fl::Formation* f = m_formations.get(fid)) {
+            // Unsolicited check-in: this is how the client learns it HAS a flight, how big it is, and
+            // what id to address it by. MsgConnectAck cannot carry it — it is immediately followed by
+            // MsgEntityTypeDef records, so appending a field there would shift them.
+            MsgWingmanAck ack{};
+            ack.command = static_cast<uint8_t>(fl::ai::WingmanCommand::Rejoin);
+            ack.result = static_cast<uint8_t>(WingmanResult::CheckIn);
+            ack.flightSize = static_cast<uint8_t>(std::min<std::size_t>(f->members.size(), 255));
+            ack.memberIdx = f->members.empty() ? kFlightAll : f->members.front().id.index;
+            ack.flightId = fid;
+            m_net.send(peerId, &ack, sizeof(ack), /*reliable=*/true);
+        }
+    }
+
     m_activePeerCount.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -1249,6 +1311,29 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
 
     auto it = m_peerEntities.find(peerId);
     if (it != m_peerEntities.end()) {
+        // Tear down this peer's flight (#610) before its own entity goes away.
+        //
+        // The formation the peer ANCHORED (their own flight) is destroyed with its AI members: those
+        // aircraft exist to fly on that player, and leaving them holding station on a dead anchor
+        // would leak an entity and a controller per disconnect. Formations the peer merely COMMANDED
+        // from outside (an AWACS's AI flights) survive — the aircraft are still flying, and the game
+        // master can still order them; releasePeer just clears the command role.
+        const fl::FormationId owned = m_formations.formationAnchoredOn(it->second);
+        if (const fl::Formation* f = m_formations.get(owned)) {
+            const std::vector<fl::FormationMember> members = f->members;
+            for (const fl::FormationMember& m : members) {
+                if (m.isAi()) {
+                    m_controlledEntities.erase(m.id.index);
+                    m_entityManager.kill(m.id);
+                }
+            }
+            m_formations.destroy(owned);
+        }
+        // Remove the peer's own aircraft from any formation it was flying IN as a member (a human
+        // wingman in someone else's flight), and drop its command role everywhere.
+        m_formations.removeEntity(it->second);
+        m_formations.releasePeer(peerId);
+
         // Tear down the controller (which points into m_peerInputs) before erasing the input slot.
         m_controlledEntities.erase(it->second.index);
         m_entityManager.kill(it->second);
@@ -1497,8 +1582,217 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         MsgPeerDelay pd;
         pd.delayTicks = static_cast<uint16_t>(std::min(ps.estimatedDelayTicks, 65535u));
         m_net.send(peerId, &pd, sizeof(pd), /*reliable=*/false);
+
+    } else if (msgId == static_cast<uint8_t>(MsgId::WingmanCommand)) {
+        handleWingmanCommand(peerId, data, size);
     }
     // Unknown msgIds: silently discard (no log spam; future protocol versions may add new IDs)
+}
+
+void WorldBroadcaster::sendWingmanAck(uint32_t peerId, uint8_t command, WingmanResult result, uint16_t flightId,
+                                      uint8_t flightSize, uint32_t memberIdx, uint32_t targetIdx) {
+    MsgWingmanAck ack{};
+    ack.command = command;
+    ack.result = static_cast<uint8_t>(result);
+    ack.flightSize = flightSize;
+    ack.memberIdx = memberIdx;
+    ack.targetIdx = targetIdx;
+    ack.flightId = flightId;
+    m_net.send(peerId, &ack, sizeof(ack), /*reliable=*/true);
+}
+
+void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, std::size_t size) {
+    MsgWingmanCommand msg;
+    if (!readMsg(data, size, msg))
+        return; // truncated; silently discard
+
+    if (msg.protocolVersion != kProtocolVersion) {
+        char vmsg[96];
+        std::snprintf(vmsg, sizeof(vmsg), "peer %u: WingmanCommand version mismatch (got %u, want %u) — discarding",
+                      peerId, static_cast<unsigned>(msg.protocolVersion), static_cast<unsigned>(kProtocolVersion));
+        m_logger.log(LogLevel::Warn, __FILE__, __LINE__, vmsg);
+        return;
+    }
+
+    // The order channel is off (no handler wired): discard rather than acking, so a server without
+    // the feature is indistinguishable from one that never received the packet.
+    if (!m_flightOrderHandler)
+        return;
+
+    auto& ps = m_peerInputs[peerId];
+
+    // Dup/reorder guard. Reliable delivery is ordered, but a reconnecting client restarts its
+    // counter, so accept the first packet unconditionally (hasSeq mirrors the MsgClientInput path).
+    if (ps.hasWingmanSeq && !isNewerSeq(msg.seqNum, ps.lastWingmanSeq))
+        return;
+    ps.hasWingmanSeq = true;
+    ps.lastWingmanSeq = msg.seqNum;
+
+    // Per-peer order rate limit. Acked ONCE per window, never per packet: an ack for every rejected
+    // packet would turn a flood into an amplifier pointed back at the sender.
+    {
+        const auto now = m_clock->now();
+        if (now - ps.wingmanCmdWindowStart >= std::chrono::seconds(1)) {
+            ps.wingmanCmdWindowStart = now;
+            ps.wingmanCmdCount = 0;
+            ps.wingmanRateLimitAcked = false;
+        }
+        ++ps.wingmanCmdCount;
+        if (ps.wingmanCmdCount > static_cast<uint32_t>(m_flightCmdRateLimit)) {
+            if (!ps.wingmanRateLimitAcked) {
+                ps.wingmanRateLimitAcked = true;
+                sendWingmanAck(peerId, msg.command, WingmanResult::RateLimited, msg.flightId, 0, kFlightAll, kNoTarget);
+            }
+            return;
+        }
+    }
+
+    // Resolve the addressed formation. kOwnFlight = "the one I command" — the common case, so a
+    // pilot who leads a single flight never has to know its id. A commander of several (an AWACS, a
+    // package commander) MUST name one, because "my flight" is then ambiguous: refuse rather than
+    // guess which of their formations they meant.
+    fl::FormationId fid = msg.flightId;
+    if (fid == kOwnFlight) {
+        const std::vector<fl::FormationId> mine = m_formations.commandedBy(peerId);
+        if (mine.size() != 1) {
+            sendWingmanAck(peerId, msg.command, WingmanResult::NoFlight, kNoFlightId, 0, kFlightAll, kNoTarget);
+            return;
+        }
+        fid = mine.front();
+    }
+
+    const fl::Formation* formation = m_formations.get(fid);
+
+    // AUTHORITY. `commands()` walks UP the parent chain, so a package commander may order a flight
+    // inside their package without being that flight's own commander. A peer that does not command
+    // it gets NoFlight — deliberately the same code an unknown formation returns, so the order
+    // channel cannot be used to enumerate which formations exist or who leads them.
+    if (!formation || !m_formations.commands(peerId, fid)) {
+        sendWingmanAck(peerId, msg.command, WingmanResult::NoFlight, kNoFlightId, 0, kFlightAll, kNoTarget);
+        return;
+    }
+
+    if (!fl::ai::isWingmanCommandOrdinal(msg.command)) {
+        sendWingmanAck(peerId, msg.command, WingmanResult::Rejected, fid, 0, kFlightAll, kNoTarget);
+        return;
+    }
+    const auto cmd = static_cast<fl::ai::WingmanCommand>(msg.command);
+
+    // Designate a target for attack_my_target from the COMMANDER's own boresight — state the server
+    // already owns (PeerInputState::viewAxis, refreshed at 60 Hz from MsgClientInput). Nothing in the
+    // cone means the order is REFUSED and behavior is unchanged: an attack order that quietly picks
+    // its own target is worse than one that declines.
+    EntityId designated{};
+    if (cmd == fl::ai::WingmanCommand::AttackMyTarget) {
+        const auto peerEnt = m_peerEntities.find(peerId);
+        const EntityState* commander = peerEnt != m_peerEntities.end() ? m_entityManager.get(peerEnt->second) : nullptr;
+        if (commander && m_targetDesignator) {
+            designated = m_targetDesignator(*commander, ps.viewAxis);
+        }
+        if (!designated.valid()) {
+            const auto liveNow = static_cast<uint8_t>(std::min<std::size_t>(formation->members.size(), 255));
+            sendWingmanAck(peerId, msg.command, WingmanResult::NoTarget, fid, liveNow, msg.memberIdx, kNoTarget);
+            return;
+        }
+    }
+
+    const auto callerEnt = m_peerEntities.find(peerId);
+    const uint32_t callerIdx = callerEnt != m_peerEntities.end() ? callerEnt->second.index : kFlightAll;
+
+    const FlightOrderReport rep = dispatchOrder(fid, msg.command, msg.memberIdx, (msg.flags & kFlightFlagCascade) != 0,
+                                                designated, peerId, callerIdx);
+
+    // Fold the per-member outcomes into one answer for the commander.
+    WingmanResult result = WingmanResult::NoFlight;
+    if (rep.aiRetasked > 0) {
+        result = WingmanResult::Acknowledged;
+    } else if (rep.humansRelayed > 0) {
+        // Every addressed member was human: the call went out, but no aircraft was retasked. Say so,
+        // rather than letting the commander believe a machine is now obeying.
+        result = WingmanResult::Relayed;
+    } else if (rep.deadSkipped > 0) {
+        result = WingmanResult::Unavailable;
+    }
+
+    const auto liveMembers = static_cast<uint8_t>(std::min(rep.aiRetasked + rep.humansRelayed, 255));
+    sendWingmanAck(peerId, msg.command, result, fid, liveMembers, msg.memberIdx,
+                   designated.valid() ? designated.index : kNoTarget);
+}
+
+WorldBroadcaster::FlightOrderReport WorldBroadcaster::applyFlightOrder(fl::FormationId fid, uint8_t command,
+                                                                       uint32_t memberIdx, bool cascade,
+                                                                       EntityId designatedTarget) {
+    // kNoPeer = the game master: no peer-authority check (the console is authorized by the operator
+    // password, not by commanding the formation), and relays carry no caller entity because the GM is
+    // not flying one. Note this is NOT peer 0 — peer 0 is an ordinary player.
+    return dispatchOrder(fid, command, memberIdx, cascade, designatedTarget, /*callerPeerId=*/fl::kNoPeer,
+                         /*callerEntityIdx=*/kFlightAll);
+}
+
+WorldBroadcaster::FlightOrderReport WorldBroadcaster::dispatchOrder(fl::FormationId fid, uint8_t command,
+                                                                    uint32_t memberIdx, bool cascade,
+                                                                    EntityId designatedTarget, uint32_t callerPeerId,
+                                                                    uint32_t callerEntityIdx) {
+    FlightOrderReport rep{};
+    if (!m_flightOrderHandler || !fl::ai::isWingmanCommandOrdinal(command))
+        return rep;
+    const auto cmd = static_cast<fl::ai::WingmanCommand>(command);
+
+    // The formations an order reaches: just this one, or its whole subtree when cascading (a package
+    // commander sending the whole package home, rather than each flight in turn).
+    const std::vector<fl::FormationId> targets =
+        cascade ? m_formations.subtree(fid) : std::vector<fl::FormationId>{fid};
+
+    for (const fl::FormationId tid : targets) {
+        const fl::Formation* f = m_formations.get(tid);
+        if (!f)
+            continue;
+
+        // Copy the member list: the order handler retasks controllers, and a handler that spawns or
+        // kills would otherwise invalidate the vector we are walking.
+        const std::vector<fl::FormationMember> members = f->members;
+        const auto flightSize = static_cast<uint8_t>(std::min<std::size_t>(members.size(), 255));
+
+        for (const fl::FormationMember& m : members) {
+            if (memberIdx != kFlightAll && m.id.index != memberIdx)
+                continue;
+
+            const EntityState* ms = m_entityManager.get(m.id);
+            if (!ms || ms->dead) {
+                ++rep.deadSkipped;
+                continue;
+            }
+
+            if (m.isAi()) {
+                // The server owns this aircraft: retask its controller.
+                if (m_flightOrderHandler(*f, m, command, designatedTarget)) {
+                    ++rep.aiRetasked;
+                    // Record the weapons hold. It has no teeth until weapons land (#583) - this is
+                    // where the firing trigger will read it - but the order is stored rather than
+                    // dropped on the floor.
+                    if (fl::Formation* mut = m_formations.get(tid)) {
+                        for (fl::FormationMember& mm : mut->members) {
+                            if (mm.id == m.id) {
+                                if (cmd == fl::ai::WingmanCommand::HoldFire) {
+                                    mm.weaponsHold = true;
+                                } else if (fl::ai::clearsWeaponsHold(cmd)) {
+                                    mm.weaponsHold = false; // an engage order implies weapons free
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (m.peerId != callerPeerId) {
+                // A HUMAN member. The server cannot retask a person, and pretending otherwise would
+                // be the dishonest design: relay the call to their client and let them decide.
+                // memberIdx carries the CALLER's entity, so the recipient knows who is ordering them.
+                sendWingmanAck(m.peerId, command, WingmanResult::Relayed, tid, flightSize, callerEntityIdx,
+                               designatedTarget.valid() ? designatedTarget.index : kNoTarget);
+                ++rep.humansRelayed;
+            }
+        }
+    }
+    return rep;
 }
 
 void WorldBroadcaster::sendAdminResponse(INetwork& net, uint32_t peerId, uint16_t reqId, const std::string& result) {

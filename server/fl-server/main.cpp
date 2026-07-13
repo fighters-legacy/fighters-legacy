@@ -27,9 +27,13 @@
 
 #include <ILogger.h>
 #include <Platform.h>
+#include <ai/FormationController.h>
 #include <ai/LoiterController.h>
 #include <ai/PursuitController.h>
 #include <ai/StateMachineController.h>
+#include <ai/Threat.h>
+#include <ai/WingmanBehavior.h>
+#include <ai/WingmanCommand.h>
 #include <config/ConfigFile.h>
 #include <console/CommandRegistry.h>
 #include <console/CommandShell.h>
@@ -65,6 +69,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <numbers>
 #include <queue>
 #include <string>
 #include <thread>
@@ -141,6 +146,7 @@ int main(int argc, char** argv) {
     std::string flagTransport;   // non-empty if --transport <gns|enet> was given (overrides [network])
     std::string flagMetricsJson; // non-empty if --metrics-json path was given (overrides [metrics])
     long flagSimWorkers = -1;    // >=0 if --sim-worker-threads was given (overrides [world])
+    long flagFlightSize = -1;    // >=0 if --flight-size was given (overrides [flight] size)
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
@@ -154,6 +160,7 @@ int main(int argc, char** argv) {
                 "  --bind <addr>      Bind address (overrides server.toml and FL_BIND_ADDRESS)\n"
                 "  --metrics-json <p> Write the per-phase tick-budget JSON to <p> (overrides [metrics])\n"
                 "  --sim-worker-threads <n>  Sim-tick CPU parallelism; 0=auto, 1=serial (overrides [world])\n"
+                "  --flight-size <n>         AI wingmen per player; 0=none (overrides [flight])\n"
                 "\n"
                 "Admin console commands are available on stdin (type 'help' for a command list).\n"
                 "\n"
@@ -194,6 +201,12 @@ int main(int argc, char** argv) {
             if (end != argv[i] && n >= 0 && n <= 256)
                 flagSimWorkers = n;
         }
+        if (std::strcmp(argv[i], "--flight-size") == 0 && i + 1 < argc) {
+            char* end = nullptr;
+            long n = std::strtol(argv[++i], &end, 10);
+            if (end != argv[i] && n >= 0 && n <= 8)
+                flagFlightSize = n;
+        }
     }
 
     // ---- Set up platform ----
@@ -229,6 +242,11 @@ int main(int argc, char** argv) {
     // --sim-worker-threads overrides the [world] sim_worker_threads from server.toml.
     if (flagSimWorkers >= 0)
         cfg.simWorkerThreads = static_cast<uint32_t>(flagSimWorkers);
+    // --flight-size overrides [flight] size. The game client's embedded single-player server passes
+    // --flight-size 1, so single-player always flies with a wingman without changing the shipped
+    // dedicated-server default (0), which would otherwise move every load-test number.
+    if (flagFlightSize >= 0)
+        cfg.flight.size = static_cast<uint32_t>(flagFlightSize);
 
     // ---- Select + create the transport backend (now that [network].transport is known) ----
     // --transport <gns|enet> from the pre-pass overrides the config. Single-player LocalServer passes
@@ -517,6 +535,125 @@ int main(int argc, char** argv) {
             (*fmCache)[id] = model; // cache misses too, so a bad id isn't re-parsed every connect
             return model;
         });
+    // ---- Formations and the scripted wingman (#610) ----------------------------------------------
+    // engine-net does not link engine-ai (cmake/layering.cmake), so the three places an order needs
+    // engine-ai — spawning a flight, building a controller, designating a target — are injected here
+    // as std::functions. fl-server links both, so this is the seam where they meet.
+    broadcaster.setPlayerFaction(cfg.playerFaction);
+    broadcaster.setFlightCommandRateLimit(cfg.flight.commandRateLimitPerS);
+
+    if (cfg.flight.size > 0 && cfg.playerFaction == 0) {
+        // A flight whose threat logic can never fire is a silently broken feature, not a
+        // configuration: areFactionsHostile gives a faction-0 entity no enemies at all.
+        log->log(LogLevel::Warn, __FILE__, __LINE__,
+                 "[flight] size > 0 but [world] player_faction = 0: players are NEUTRAL, so nothing is "
+                 "hostile to them - the wingman's engage/cover orders will never trigger and "
+                 "attack_my_target can never designate. Set player_faction = 1.");
+    }
+
+    // Formation geometry + behaviour tuning, shared by the spawner and the order handler so a
+    // wingman spawned into a slot and a wingman ordered back to it agree on where the slot is.
+    fl::ai::WingmanParams wingmanParams{};
+    wingmanParams.formation.lateralM = static_cast<float>(cfg.flight.lateralM);
+    wingmanParams.formation.aftM = static_cast<float>(cfg.flight.aftM);
+    wingmanParams.formation.verticalM = static_cast<float>(cfg.flight.verticalM);
+    wingmanParams.engageRangeM = static_cast<float>(cfg.flight.engageRangeM);
+    wingmanParams.coverRangeM = static_cast<float>(cfg.flight.coverRangeM);
+
+    if (cfg.flight.size > 0) {
+        const std::string flightEntityType = cfg.flight.entityType;
+        const uint32_t flightSize = cfg.flight.size;
+        broadcaster.setFlightSpawner([&broadcaster, &entityManager, flightEntityType, flightSize,
+                                      wingmanParams](uint32_t peerId, fl::EntityId leadEntity) -> fl::FormationId {
+            const fl::EntityState* lead = entityManager.get(leadEntity);
+            if (!lead)
+                return fl::kNoFormation;
+
+            // The player is the anchor AND the commander of their own flight — the common case, but
+            // only a special case of the general model (an AWACS commands a flight it is not in).
+            const fl::FormationId fid = broadcaster.formations().create("Viper", leadEntity, peerId, fl::kNoFormation);
+            if (fid == fl::kNoFormation)
+                return fid;
+
+            for (uint32_t slot = 0; slot < flightSize; ++slot) {
+                // Spawn each member on its station, so the flight starts formed rather than
+                // converging from a pile at the lead's position.
+                fl::ai::FormationParams fp = wingmanParams.formation;
+                const glm::vec3 off = fl::ai::formationSlotOffset(slot, fp);
+                fl::EntityTransform t{};
+                std::memcpy(t.quat, lead->transform.quat, sizeof(t.quat));
+                // Offsets are in the lead's frame; at spawn the lead is level, so applying them in
+                // world axes is close enough — FormationController closes the rest in a second.
+                t.pos[0] = lead->transform.pos[0] + static_cast<double>(off.x);
+                t.pos[1] = lead->transform.pos[1] + static_cast<double>(off.z);
+                t.pos[2] = lead->transform.pos[2] + static_cast<double>(off.y);
+
+                const fl::EntityId id = entityManager.spawn(flightEntityType.c_str(), t);
+                if (!id.valid())
+                    break;
+                // Same faction as the lead: a wingman that is neutral is invisible to hostiles and
+                // blind to them in turn.
+                if (fl::EntityState* ms = entityManager.get(id)) {
+                    ms->factionIndex = lead->factionIndex;
+                }
+
+                fl::ai::WingmanParams wp = wingmanParams;
+                wp.slotIndex = slot;
+                wp.homePoint = glm::dvec3(t.pos[0], t.pos[1], t.pos[2]); // RTB returns to where it started
+                broadcaster.registerController(id, fl::ai::makeWingmanController(entityManager, leadEntity,
+                                                                                 fl::ai::WingmanCommand::Rejoin,
+                                                                                 fl::EntityId{}, wp));
+
+                fl::FormationMember m{};
+                m.id = id;
+                m.peerId = fl::kNoPeer; // AI: the server owns this aircraft and may retask it
+                m.slotIndex = slot;
+                broadcaster.formations().addMember(fid, m);
+            }
+            return fid;
+        });
+    }
+
+    // Retask one AI member. The formation supplies the anchor (who to form on) and the member its
+    // slot, so an order never has to be told where the aircraft belongs.
+    broadcaster.setFlightOrderHandler(
+        [&broadcaster, &entityManager, wingmanParams](const fl::Formation& formation, const fl::FormationMember& member,
+                                                      uint8_t command, fl::EntityId designatedTarget) -> bool {
+            if (!fl::ai::isWingmanCommandOrdinal(command))
+                return false;
+            const auto cmd = static_cast<fl::ai::WingmanCommand>(command);
+
+            fl::ai::WingmanParams wp = wingmanParams;
+            wp.slotIndex = member.slotIndex;
+            if (const fl::EntityState* ms = entityManager.get(member.id)) {
+                // RTB heads for where this aircraft currently is if we never recorded a home; good enough
+                // and never NaN. (A real base comes with the mission system, #584.)
+                wp.homePoint = glm::dvec3(ms->transform.pos[0], ms->transform.pos[1], ms->transform.pos[2]);
+            }
+
+            auto ctrl = fl::ai::makeWingmanController(entityManager, formation.anchor, cmd, designatedTarget, wp);
+            if (!ctrl)
+                return false;
+            broadcaster.registerController(member.id, std::move(ctrl)); // REPLACES the existing controller
+            return true;
+        });
+
+    // Boresight designation for attack_my_target — the provisional stand-in for a radar lock. The
+    // look axis is state the server already owns (PeerInputState::viewAxis, 60 Hz from
+    // MsgClientInput), not something newly trusted from the client. THIS LAMBDA IS THE SEAM: when the
+    // sensor framework lands (#677/#684), re-point it at the Contact track the player has locked and
+    // nothing else changes — not the grammar, not the wire, not the client.
+    {
+        const auto designateRangeM = static_cast<float>(cfg.flight.designateRangeM);
+        const auto halfAngleRad =
+            static_cast<float>(cfg.flight.designateHalfAngleDeg * std::numbers::pi_v<double> / 180.0);
+        broadcaster.setTargetDesignator([&broadcaster, &entityManager, designateRangeM, halfAngleRad](
+                                            const fl::EntityState& commander, const float viewAxis[3]) -> fl::EntityId {
+            return fl::ai::designateBoresightTarget(entityManager, commander, viewAxis, designateRangeM, halfAngleRad,
+                                                    &broadcaster.spatialIndex());
+        });
+    }
+
     // Wire pre-cached spawn positions. Must be called before gameLoop.start() (never mutated after).
     broadcaster.setSpawnPoints(std::move(cachedSpawns));
     // Seed the physics floor from the already-primed TerrainStreamer at origin.

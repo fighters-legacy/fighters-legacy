@@ -41,6 +41,9 @@ enum class InputAction : uint32_t {
     Pause,
     Menu,
 
+    // Comms — opens the radio menu for ordering your flight (#610)
+    WingmanMenu,
+
     Count
 };
 

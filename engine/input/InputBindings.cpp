@@ -10,10 +10,10 @@ namespace fl {
 // ---------------------------------------------------------------------------
 
 static constexpr const char* kActionNames[] = {
-    "PitchAxis",  "RollAxis",    "YawAxis",    "ThrottleAxis", "PitchUp",      "PitchDown", "RollLeft",
-    "RollRight",  "YawLeft",     "YawRight",   "ThrottleUp",   "ThrottleDown", "Airbrake",  "Afterburner",
-    "FireWeapon", "FireMissile", "NextWeapon", "PrevWeapon",   "ViewUp",       "ViewDown",  "ViewLeft",
-    "ViewRight",  "LandingGear", "Flaps",      "Pause",        "Menu",
+    "PitchAxis",  "RollAxis",    "YawAxis",    "ThrottleAxis", "PitchUp",      "PitchDown",   "RollLeft",
+    "RollRight",  "YawLeft",     "YawRight",   "ThrottleUp",   "ThrottleDown", "Airbrake",    "Afterburner",
+    "FireWeapon", "FireMissile", "NextWeapon", "PrevWeapon",   "ViewUp",       "ViewDown",    "ViewLeft",
+    "ViewRight",  "LandingGear", "Flaps",      "Pause",        "Menu",         "WingmanMenu",
 };
 static_assert(std::size(kActionNames) == static_cast<size_t>(InputAction::Count),
               "kActionNames must have one entry per InputAction");
@@ -583,6 +583,9 @@ void InputBindings::applyDefaults() {
     m_primary[static_cast<int>(InputAction::Pause)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::Escape),
                                                        false};
     m_primary[static_cast<int>(InputAction::Menu)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::Tab), false};
+    // Radio menu (#610). C is free today; the menu is non-modal, so this does not steal flight input.
+    m_primary[static_cast<int>(InputAction::WingmanMenu)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::C),
+                                                             false};
 
     // Gamepad alt defaults
     m_alt[static_cast<int>(InputAction::PitchAxis)] = {BindingSource::GamepadAxis,

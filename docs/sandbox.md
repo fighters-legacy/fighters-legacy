@@ -71,6 +71,33 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | Z / X | Rudder left / right |
 | Space | Weapon trigger (bit 0) |
 | Tab | Afterburner command (bit 1) |
+| C | Open the wingman radio menu (#610) |
+
+## Wingman radio menu (C)
+
+Order your flight. `C` opens the menu, `1`–`6` pick a command (arrows + Enter also work), `Escape`
+closes it. It auto-closes after 8 s if you leave it open.
+
+**The menu does not suspend flight control**, unlike the console — the aircraft keeps flying while it
+is up, because a radio call is a sub-second action and freezing the jet to make one would be wrong in
+a fight. Only the discrete keys the menu consumes are taken; the axes stay live.
+
+| Key | Command | What the wingman does |
+|---|---|---|
+| 1 | `attack_my_target` | Attacks whatever you are **looking at** — the hostile nearest your boresight. Nothing in the cone means the order is **refused** ("Two, no joy"), not quietly redirected at something else. |
+| 2 | `engage_bandits` | Engages hostiles near **itself**, at will; returns to formation when the sky is clear. |
+| 3 | `rejoin` | Returns to formation on you. |
+| 4 | `cover_me` | Engages hostiles closing on **you**, then returns to your wing. (The difference from `engage_bandits` is *whose* threats it reacts to.) |
+| 5 | `hold_fire` | Breaks off and holds station. Sets a weapons-hold flag; an engage order clears it. **The flag has no teeth until weapons land (#583)** — today the flight behavior is the whole effect. |
+| 6 | `return_to_base` | Disengages and orbits home. (There is no landing system yet.) |
+
+The wingman answers with a brevity call on the HUD. In **single-player you always have one** — the
+embedded server is started with `--flight-size 1`. A dedicated server gives players a flight only if
+the operator sets `[flight] size` (default 0).
+
+If another **player** is in your flight, an order is *relayed* to them as a radio call ("LEAD: Engage
+bandits.") rather than applied: the server cannot fly a person's aircraft for them, and compliance is
+their choice.
 
 ## Gamepad controls
 

@@ -9,11 +9,13 @@ is the extraction/scoring/aggregation layer; the HTTP and subprocess edges are n
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
 
-_MODULE_PATH = Path(__file__).resolve().parent.parent / "tools" / "ai_eval" / "ai_eval.py"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+_MODULE_PATH = REPO_ROOT / "tools" / "ai_eval" / "ai_eval.py"
 _spec = importlib.util.spec_from_file_location("ai_eval", _MODULE_PATH)
 ae = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ae)
@@ -319,6 +321,40 @@ def test_intent_suite_expectations_are_inside_the_grammar():
     suite = ae.load_suite(ae.suite_path("intent"))
     for case in suite["cases"]:
         assert case["expect"]["command"] in suite["grammar"]
+
+
+def test_intent_grammar_matches_the_shipped_wingman_commands():
+    """The eval grammar must match engine/ai/WingmanCommand.h, which is the single source of truth.
+
+    #769 made the wingman vocabulary load-bearing twice over: it is what a CPU-only server ships
+    instead of the LLM wingman, and it IS the prompt whose length dominates CPU intent latency. If the
+    engine renames a command and the suite is not re-pointed, every subsequent measurement scores the
+    model against a vocabulary the game does not speak — and it would look like a model regression.
+
+    Deliberately regex, not a build artifact: this test must run with zero network calls, no model,
+    and no compiled binary (docs/ai-architecture.md §7 — CI never requires a model).
+    """
+    header = REPO_ROOT / "engine" / "ai" / "WingmanCommand.h"
+    text = header.read_text(encoding="utf-8")
+
+    # kWingmanCommandNames[...] = { "attack_my_target", "engage_bandits", ... };
+    block = re.search(r"kWingmanCommandNames\[[^\]]*\]\s*=\s*\{(.*?)\}", text, re.S)
+    assert block, "could not find kWingmanCommandNames in WingmanCommand.h"
+    shipped = set(re.findall(r'"([a-z_]+)"', block.group(1)))
+    assert len(shipped) == 6, f"expected six shipped commands, got {sorted(shipped)}"
+
+    suite = ae.load_suite(ae.suite_path("intent"))
+    grammar = set(suite["grammar"])
+
+    # "unknown" is the mapper's DECLINE sentinel — an eval-only concept. It must be in the suite (5 of
+    # its cases depend on it) and must NOT be an executable command in the engine.
+    assert "unknown" in grammar, "the decline sentinel must stay in the eval grammar"
+    assert "unknown" not in shipped, "unknown must never be an executable wingman command"
+
+    assert grammar - {"unknown"} == shipped, (
+        "the intent suite grammar and engine/ai/WingmanCommand.h have drifted: "
+        f"suite={sorted(grammar - {'unknown'})} engine={sorted(shipped)}"
+    )
 
 
 def test_ops_suite_expectations_are_inside_the_cause_enum():

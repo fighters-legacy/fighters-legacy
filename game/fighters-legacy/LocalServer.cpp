@@ -86,9 +86,22 @@ LocalServer::StartResult LocalServer::start(const char* bindAddr, uint16_t port)
     // than spawning an idle worker pool inside the embedded server.
     // --transport enet: the embedded single-player server uses enet6 to match the enet6 game client
     // (Game.cpp), keeping the heavy GNS/protobuf handshake out of the loopback single-player path.
-    std::vector<std::string> args{
-        portStr, maxPeersStr,   "--bind", bindAddr, "--admin-token", m_impl->sessionToken, "--sim-worker-threads",
-        "1",     "--transport", "enet"};
+    // --flight-size 1: single-player always flies with a wingman, which is the Phase 4 acceptance
+    // path ("wingman follows player and responds to all six commands"). The DEDICATED-server default
+    // stays 0 — N extra AI entities per peer would move every scale-gate and load-test number — so
+    // this is set here rather than in the shipped server.toml.
+    std::vector<std::string> args{portStr,
+                                  maxPeersStr,
+                                  "--bind",
+                                  bindAddr,
+                                  "--admin-token",
+                                  m_impl->sessionToken,
+                                  "--sim-worker-threads",
+                                  "1",
+                                  "--transport",
+                                  "enet",
+                                  "--flight-size",
+                                  "1"};
 
     // Spawn into a unique_ptr<Subprocess> to avoid Subprocess::Impl completion
     // requirements in LocalServer.cpp (pimpl isolation via pointer indirection).

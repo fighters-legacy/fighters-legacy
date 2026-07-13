@@ -17,7 +17,7 @@ namespace fl {
 std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRenderBridge& /*bridge*/,
                                                              CameraInput& camInput, const GameConsole& console,
                                                              IInput& input, IJoystick* joystick,
-                                                             const ControlsSettings& cs) {
+                                                             const ControlsSettings& cs, bool uiFocused) {
     m_weaponFired = false;
 
     const auto now = m_clock->now();
@@ -83,12 +83,16 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
                 return false;
             };
 
-            if (readButton(fl::InputAction::FireWeapon)) {
-                inp.buttons |= 1u;
-                m_weaponFired = true;
+            // While an overlay owns the discrete inputs, its confirm button must not also pull the
+            // trigger. The axes above are deliberately still live.
+            if (!uiFocused) {
+                if (readButton(fl::InputAction::FireWeapon)) {
+                    inp.buttons |= 1u;
+                    m_weaponFired = true;
+                }
+                if (readButton(fl::InputAction::Afterburner))
+                    inp.buttons |= 0x02u;
             }
-            if (readButton(fl::InputAction::Afterburner))
-                inp.buttons |= 0x02u;
         }
 
         // HOTAS / raw joystick blend — throttle always sets absolute position;

@@ -124,6 +124,36 @@ the expensive way to do it — server-side also keeps the grammar allowlist on t
 enforces it, and keeps the LLM off the client's frame budget. On a CPU-only server the chat path is
 not offered and Epic O ships its scripted half (#610), which stands on its own.
 
+#### The scripted wingman (#610) — shipped, and the zero-AI path
+
+The deterministic half of Epic O is built and is what a server runs with no provider configured. Its
+vocabulary is six parameterless commands — `attack_my_target`, `engage_bandits`, `rejoin`,
+`cover_me`, `hold_fire`, `return_to_base` — defined once in **`engine/ai/WingmanCommand.h`**, which
+is the single source of truth: the radio menu, the admin console, the wire ordinal, and the eval
+suite's grammar all derive from it (`tests/test_ai_eval.py` fails if the suite and the header drift).
+
+Two properties matter to the LLM path that sits on top of it:
+
+- **The grammar is the security boundary.** A provider maps free text to one of these ordinals, and
+  the ordinal executes through the same code the menu drives. That is what bounds a successful prompt
+  injection to *a real command at the wrong time* rather than arbitrary actuation. `unknown` — the
+  mapper's decline sentinel — is deliberately **not** an executable command; `parseWingmanCommand`
+  rejects it, so a model that correctly refuses an out-of-grammar utterance cannot accidentally order
+  the wingman.
+- **The grammar is also the latency lever (§9).** Intent latency on CPU is *prompt-eval dominated*,
+  so the vocabulary's length is the cost. Keeping it a flat, parameterless enum keeps the prompt as
+  short as it can be, makes constrained decoding a one-line alternation, and lets the eval score by
+  string equality with no harness change. A command that needs a target does not get one from the
+  model: `attack_my_target` is resolved **server-side** from the commander's boresight.
+
+**Orders are issued against a formation, not "your wingman".** The underlying model is a command
+*tree* (`engine/world/Formation.h`): a formation is `{anchor, commander, members, children}`, the
+commander is a **role** rather than a seat (an AWACS or game master commands a flight it is not in,
+and command cascades down to sub-formations), and a member is an **aircraft** — which may be AI (the
+server retasks its controller) or **another player** (the server cannot retask a person, so the order
+is *relayed* to them as a radio call and compliance is theirs). That distinction is visible on the
+wire, and it is the honest model of a human wingman.
+
 ### Epic P — agentic server operations (`fl-ops`, Go)
 
 Consumes Epic G Prometheus metrics + structured logs (#546/#547); acts through the MCP surface
@@ -250,14 +280,18 @@ host: a tighter grammar, few-shot examples, and constrained/grammar-guided decod
 removes a whole class of schema-invalid answers outright).
 
 **That work belongs to #610**, because the first lever *is* #610: latency is prompt-eval bound, so a
-materially shorter grammar moves it directly — and #610 owns the real wingman vocabulary, where the
-`intent` suite today encodes only a provisional six-command placeholder. Re-measuring against the
-shipped grammar is the first move and may be most of the answer; measuring the placeholder would
-produce a number that changes the moment #610 lands. The `intent` suite in
-[`tools/ai_eval/`](../tools/ai_eval/README.md) is the regression test, and suites are data — the
-re-run is a file edit, not new engineering. **Until that work lands *and is measured*, do not assume
-a CPU-only server can serve a 2 s conversational loop.** If the levers do not close the gap, that is
-a real result: the GPU requirement above is then the permanent answer rather than a provisional one.
+materially shorter grammar moves it directly — and #610 owns the real wingman vocabulary. The
+`intent` suite in [`tools/ai_eval/`](../tools/ai_eval/README.md) is the regression test, and suites
+are data — the re-run is a file edit, not new engineering.
+
+**Status after #610 shipped the grammar:** the vocabulary is final (six flat, parameterless commands
+in `engine/ai/WingmanCommand.h`), the suite is re-pointed at it, and the system prompt is down from
+~176 to ~136 tokens — **a 23 % cut**. That is real movement on the dominant cost, but it is **not
+enough on its own**: a 23 % shorter prompt does not turn a 3.3 s p95 into 2 s. **The remaining
+levers — few-shot examples and constrained/grammar-guided decoding — are untried, and the number has
+not been re-measured on the reference VM.** So the position is unchanged: **do not assume a CPU-only
+server can serve a 2 s conversational loop.** If the remaining levers do not close the gap, that is a
+real result — the GPU requirement above becomes the permanent answer rather than a provisional one.
 
 **Prompt-injection resistance remains a model-selection criterion on this path** (§1, §2): the
 grammar allowlist bounds the blast radius of a successful injection to a real command fired at the

@@ -70,6 +70,19 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     d.camInput->pollModeKeys(*d.cameraController, *d.gameConsole, input, m_playerEntry);
     d.camInput->update(*d.cameraController, m_playerEntry, *d.gameConsole, *d.terrainStreamer);
 
+    // Radio menu (#610). Non-modal: the aircraft keeps flying while it is open (see WingmanMenu.h),
+    // so only the discrete keys it consumes are suppressed, via FlightInputCollector's uiFocused.
+    const bool menuWasOpen = d.wingmanMenu && d.wingmanMenu->isOpen();
+    if (d.wingmanMenu && !d.gameConsole->isOpen()) {
+        if (!menuWasOpen && input.isKeyJustPressed(Key::C)) {
+            d.wingmanMenu->toggle();
+        } else if (menuWasOpen) {
+            if (auto order = d.wingmanMenu->update(input); order && d.clientNet) {
+                d.clientNet->send(fl::kNetChReliable, &*order, sizeof(*order), /*reliable=*/true);
+            }
+        }
+    }
+
     const bool consoleWasOpen = d.gameConsole->isOpen();
     if (consoleWasOpen) {
         if (d.gameConsole->tick(input))
@@ -83,7 +96,9 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
         return Screen::MainMenu;
 
     const ControlsSettings cs = d.userConfig->controls();
-    if (auto msg = d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, input, d.joystick, cs)) {
+    const bool uiFocused = d.wingmanMenu && d.wingmanMenu->isOpen();
+    if (auto msg =
+            d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, input, d.joystick, cs, uiFocused)) {
         // Stamp the snapshot ack (tickIndex + selective-ack mask, #566) from the net handler — the single
         // ack authority — before prediction and send, so the outgoing input carries a consistent ack.
         if (d.clientNetHandler)
@@ -119,7 +134,8 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     if (d.hapticController)
         d.hapticController->update(m_playerEntry, m_weaponFired, terrainElev, 1.f / 60.f, radiusM);
 
-    if (!consoleWasOpen && !d.gameConsole->isOpen() && input.isKeyJustPressed(Key::Escape))
+    // Escape closed the radio menu this frame; it must NOT also open the pause screen.
+    if (!menuWasOpen && !consoleWasOpen && !d.gameConsole->isOpen() && input.isKeyJustPressed(Key::Escape))
         return Screen::Pause;
 
     return Screen::Flight;
@@ -139,6 +155,13 @@ std::span<const HudElement> FlightScreen::buildElements() {
         if (m_elementCount >= kMaxElements)
             break;
         m_elements[static_cast<std::size_t>(m_elementCount++)] = e;
+    }
+    if (m_deps.wingmanMenu) {
+        for (const auto& e : m_deps.wingmanMenu->buildElements()) {
+            if (m_elementCount >= kMaxElements)
+                break;
+            m_elements[static_cast<std::size_t>(m_elementCount++)] = e;
+        }
     }
     return {m_elements.data(), static_cast<std::size_t>(m_elementCount)};
 }

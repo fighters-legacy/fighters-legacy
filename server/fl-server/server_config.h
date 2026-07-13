@@ -81,6 +81,14 @@ struct ServerConfig {
     double testProjectileRate = 0.0; // spawns per second; [0, 100000]
     double testProjectileTtlS = 3.0; // lifetime of each churned entity (s); [0.05, 600]
 
+    // Faction stamped onto every player entity on connect (#610). MUST be non-zero for any threat
+    // logic to work: fl::areFactionsHostile treats faction 0 as neutral — an entity with NO ENEMIES.
+    // With the legacy value of 0 nothing in the world is hostile to a player, so a wingman's
+    // engage/cover conditions can never fire and boresight designation can never designate.
+    // Setting 0 restores the pre-#610 behavior exactly (and disables the wingman's threat logic —
+    // fl-server warns at startup if a flight is configured alongside it). [0, 65535]
+    uint16_t playerFaction = 1;
+
     // [ai]  — Phase 2: parsed and stored; enforcement lands with AI runtime
     std::string aiDifficultyFloor = "recruit";
 
@@ -142,6 +150,30 @@ struct ServerConfig {
         std::vector<SpawnPointDef> points; // empty = use origin
     };
     SpawnConfig spawn;
+
+    // [flight]  — the player's flight: AI wingmen auto-spawned per connecting peer (#610)
+    //
+    // `size` DEFAULTS TO 0 on purpose. N extra AI entities per peer would move every scale-gate and
+    // load-test number, so a dedicated server is byte-for-byte unchanged unless an operator asks for
+    // a flight. Single-player still works out of the box: LocalServer passes --flight-size 1, which
+    // is the Phase 4 acceptance path ("wingman follows player and responds to all six commands").
+    //
+    // Formations larger than the auto-spawned player flight — all-AI flights, strike packages, an
+    // AWACS commanding aircraft it is not flying with — are built at runtime through the `flight`
+    // admin command family, not here. This section only describes what a peer gets on connect.
+    struct FlightConfig {
+        uint32_t size = 0;                               // AI wingmen spawned per connecting peer; 0 = disabled; [0, 8]
+        std::string entityType = "builtin:debug-entity"; // entity type spawned for each member
+        double lateralM = 150.0;                         // formation slot spacing: lateral, per rank; [10, 5000]
+        double aftM = 100.0;                             // aft, per rank; [0, 5000]
+        double verticalM = -15.0;                        // vertical, per rank (negative = stepped down); [-1000, 1000]
+        double engageRangeM = 12000.0;       // engage_bandits trigger radius about the member; [500, 200000]
+        double coverRangeM = 6000.0;         // cover_me trigger radius about the ANCHOR; [500, 200000]
+        double designateRangeM = 15000.0;    // attack_my_target: boresight designation range; [500, 200000]
+        double designateHalfAngleDeg = 15.0; // boresight cone half-angle; [1, 90]
+        int commandRateLimitPerS = 4;        // wingman orders per second per peer; [1, 60]
+    };
+    FlightConfig flight;
 
     // [network]  — transport backend selection (#507)
     struct NetworkConfig {

@@ -5,6 +5,7 @@
 #include "INetwork.h"
 #include "RenderTypes.h"
 #include "SessionStatus.h"
+#include "WingmanMenu.h"
 #include "render/RenderSnapshot.h" // EntityRenderEntry (stored by value in the retention cache)
 
 #include <algorithm>
@@ -54,6 +55,7 @@ struct ClientNetEventHandler : INetworkEventHandler {
     EnvironmentState& env;           // updated on MsgWeatherState
     GameConsole* console{nullptr};   // optional: server notices are printed here
     ServerNotice* notice{nullptr};   // optional: server notices shown as screen banner
+    WingmanMenu* wingman{nullptr};   // optional: flight check-in / order acks / relayed radio calls (#610)
     uint32_t motdDisplaySeconds{15}; // user-configurable; 0 = persistent
 
     uint32_t assignedEntityIdx{0};

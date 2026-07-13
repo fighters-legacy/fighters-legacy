@@ -60,7 +60,13 @@ enum class MsgId : uint8_t {
     Heartbeat = 0x0B,          // client->server, unreliable: liveness signal when idle; carries tickIndex to
                                // refresh estimatedDelayTicks without a full MsgClientInput
     PeerDelay = 0x0C,          // server->client, unreliable: server's estimatedDelayTicks reply to MsgHeartbeat
-    // 0x0D-0x0E reserved for future ENet message types; 0x0F reserved.
+    WingmanCommand = 0x0D,     // client->server, reliable: order this peer's wingman(s) (#610)
+    WingmanAck = 0x0E,         // server->client, reliable: outcome of a wingman order, and the
+                               // unsolicited flight check-in sent once after ConnectAck
+    // 0x0F is the LAST free ENet id. The next message type after it needs a conscious band decision:
+    // extending past 0x10 is safe in practice (MsgLanBeacon is raw UDP and never enters the ENet
+    // dispatch), but "0x10+ = non-ENet" is a documented invariant and breaking it should be a choice,
+    // not an accident.
     LanBeacon = 0x10, // raw UDP broadcast - NOT sent over ENet; 0x10+ reserved for non-ENet ids.
 };
 
@@ -326,6 +332,130 @@ struct MsgPeerDelay {
 static_assert(sizeof(MsgPeerDelay) == 4u, "MsgPeerDelay wire size changed");
 static_assert(alignof(MsgPeerDelay) == 2u, "MsgPeerDelay alignment changed");
 static_assert(offsetof(MsgPeerDelay, delayTicks) == 2u, "MsgPeerDelay::delayTicks offset changed");
+
+// ---------------------------------------------------------------------------------------------
+// Flight command channel (#610)
+// ---------------------------------------------------------------------------------------------
+// The scripted wingman order path. The unit of organisation is the FLIGHT: a lead plus N members,
+// where N may be 1 or 6+. "Wingman" is the radio VOCABULARY (engine/ai/WingmanCommand.h), not the
+// data model -- so these messages address flight MEMBERS by entity index, and nothing here assumes a
+// member is AI or that a flight has exactly one of them.
+//
+// A member may be an AI aircraft OR ANOTHER PLAYER. Those are handled differently and the difference
+// is visible on the wire:
+//   * AI member    -> the server retasks its controller. The commander gets Acknowledged.
+//   * HUMAN member -> the server CANNOT retask a person. The order is RELAYED to that player's client
+//                     as a radio call (WingmanResult::Relayed, delivered TO the member), and the
+//                     commander is told it was passed on. Compliance is the human's choice. A flight
+//                     of two players is therefore a comms structure, not a control structure -- which
+//                     is the only honest model of it.
+//
+// THE COMMANDER NEED NOT BE IN THE FLIGHT. A flight is {id, anchor entity, commander, members}, and
+// the commander is a ROLE, not "the aircraft in front":
+//   * A player leading their own flight is the common case: commander == the peer flying the anchor.
+//   * An ALL-AI flight is commanded from outside it -- by an AWACS/GCI player, or by a game master
+//     through the `flight` admin command family. Neither is a member; both order it the same way.
+// That is why orders address a FLIGHT ID rather than "my wingman", and why authority is checked as
+// "are you this flight's commander", not "do you own this entity".
+//
+// Deliberately NOT MsgAdminCommand: that is a password-gated shell tunnel, and a gameplay order is
+// authorized by COMMANDING THE FLIGHT, not by a token. The server resolves the flight from the id
+// and rejects any packet whose sender is not its commander -- authority never comes out of the packet.
+//
+// The command ordinal is fl::ai::WingmanCommand (engine/ai/WingmanCommand.h), which this header
+// cannot include: engine-protocol must reach only the stdlib (cmake/layering.cmake enforces it).
+// kWingmanCommandCount below mirrors that enum's size, and fl-server static_asserts the two agree in
+// a TU that sees both, so they cannot drift silently.
+
+// Number of commands in the scripted grammar; mirrors fl::ai::WingmanCommand::Count.
+static constexpr uint8_t kWingmanCommandCount = 6;
+
+// MsgWingmanCommand::memberIdx sentinel: address the whole flight rather than one member.
+static constexpr uint32_t kFlightAll = 0xFFFFFFFFu;
+// MsgWingmanAck::targetIdx sentinel: no target was designated (every command except attack_my_target,
+// and attack_my_target itself when nothing lay in the boresight cone).
+static constexpr uint32_t kNoTarget = 0xFFFFFFFFu;
+
+// Outcome of a flight order. A machine-readable code, NOT server-authored text: brevity calls are UI
+// strings that must be localizable (same reasoning as ConnectRefusalCode), the client already needs
+// this table to label its radio menu, and it keeps a server-controlled string off the HUD text path.
+enum class WingmanResult : uint8_t {
+    Acknowledged = 0, // order accepted; an AI member's behavior changed
+    NoFlight = 1,     // sender leads no flight with live members, OR named a member that is not in it --
+                      // deliberately the SAME code for both, so a peer cannot probe which entity
+                      // indices exist or who they belong to
+    NoTarget = 2,     // attack_my_target: nothing hostile in the lead's boresight cone; behavior unchanged
+    Unavailable = 3,  // the addressed member is dead
+    Rejected = 4,     // unknown command ordinal
+    RateLimited = 5,  // too many orders in the rate-limit window (acked once per window, never per packet)
+    CheckIn = 6,      // unsolicited, sent TO a lead once on connect: your flight is formed, this is its
+                      // size. MsgConnectAck cannot carry this -- it is immediately followed by
+                      // MsgEntityTypeDef records, so appending a field there would shift them
+                      // (breaking, not additive).
+    Relayed = 7,      // sent TO A HUMAN MEMBER: your lead has ordered `command`. Advisory -- the server
+                      // does not and cannot make a player comply. Also returned to the LEAD when every
+                      // addressed member was human, so the lead knows the call went out rather than
+                      // believing an aircraft was retasked.
+    NotLead = 8,      // sender is in a flight but is not its lead; only the lead issues orders
+};
+
+// MsgWingmanCommand::flightId sentinel: "the formation I command", resolved server-side. The radio
+// menu of a pilot who leads exactly one flight never has to know its id; an AWACS or package
+// commander who commands several MUST name one, because "my flight" is then ambiguous.
+static constexpr uint16_t kOwnFlight = 0xFFFFu;
+
+// "No formation." Mirrors fl::kNoFormation (engine/world/Formation.h), which this header cannot
+// include -- engine-protocol must reach only the stdlib. WorldBroadcaster static_asserts they agree.
+static constexpr uint16_t kNoFlightId = 0u;
+
+// MsgWingmanCommand::flags
+// Cascade the order to every sub-formation beneath the addressed one — a package commander telling
+// the whole package to RTB, rather than each flight in turn. Without it the order stops at the
+// addressed node's own members.
+static constexpr uint8_t kFlightFlagCascade = 0x01u;
+
+// Order a formation (or one member of it). Client->server, RELIABLE (an order must not be dropped).
+struct MsgWingmanCommand {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::WingmanCommand)};
+    uint8_t command{0}; // fl::ai::WingmanCommand ordinal; >= kWingmanCommandCount is rejected
+    uint16_t protocolVersion{kProtocolVersion};
+    uint32_t memberIdx{kFlightAll}; // entity pool index of the addressed member, or kFlightAll
+    uint32_t seqNum{0};             // client-monotonic; server discards packets not newer (dup/reorder guard)
+    uint16_t flightId{kOwnFlight};  // formation to order; kOwnFlight = the one this peer commands
+    uint8_t flags{0};               // kFlightFlagCascade
+    uint8_t reserved{0};
+}; // 16 bytes, align 4
+static_assert(sizeof(MsgWingmanCommand) == 16u, "MsgWingmanCommand wire size changed");
+static_assert(alignof(MsgWingmanCommand) == 4u, "MsgWingmanCommand alignment changed");
+static_assert(offsetof(MsgWingmanCommand, command) == 1u, "MsgWingmanCommand::command offset changed");
+static_assert(offsetof(MsgWingmanCommand, protocolVersion) == 2u, "MsgWingmanCommand::protocolVersion offset changed");
+static_assert(offsetof(MsgWingmanCommand, memberIdx) == 4u, "MsgWingmanCommand::memberIdx offset changed");
+static_assert(offsetof(MsgWingmanCommand, seqNum) == 8u, "MsgWingmanCommand::seqNum offset changed");
+static_assert(offsetof(MsgWingmanCommand, flightId) == 12u, "MsgWingmanCommand::flightId offset changed");
+static_assert(offsetof(MsgWingmanCommand, flags) == 14u, "MsgWingmanCommand::flags offset changed");
+
+// Outcome of an order (to the commander), the on-connect check-in (to a commander), or a relayed
+// radio call (to a human member). Server->client, reliable.
+struct MsgWingmanAck {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::WingmanAck)};
+    uint8_t command{0};             // echoed WingmanCommand ordinal (Rejoin for a check-in)
+    uint8_t result{0};              // WingmanResult
+    uint8_t flightSize{0};          // live members in the addressed formation right now (0 = none)
+    uint32_t memberIdx{kFlightAll}; // member the order applied to, or kFlightAll. On a Relayed call to
+                                    // a human member this is the CALLER's entity index — who is
+                                    // ordering them.
+    uint32_t targetIdx{kNoTarget};  // designated target for attack_my_target, else kNoTarget
+    uint16_t flightId{kNoFlightId}; // formation this ack refers to; the check-in is how a client
+                                    // learns the id of the flight it commands
+    uint16_t reserved{0};
+}; // 16 bytes, align 4
+static_assert(sizeof(MsgWingmanAck) == 16u, "MsgWingmanAck wire size changed");
+static_assert(alignof(MsgWingmanAck) == 4u, "MsgWingmanAck alignment changed");
+static_assert(offsetof(MsgWingmanAck, result) == 2u, "MsgWingmanAck::result offset changed");
+static_assert(offsetof(MsgWingmanAck, flightSize) == 3u, "MsgWingmanAck::flightSize offset changed");
+static_assert(offsetof(MsgWingmanAck, memberIdx) == 4u, "MsgWingmanAck::memberIdx offset changed");
+static_assert(offsetof(MsgWingmanAck, targetIdx) == 8u, "MsgWingmanAck::targetIdx offset changed");
+static_assert(offsetof(MsgWingmanAck, flightId) == 12u, "MsgWingmanAck::flightId offset changed");
 
 // Raw UDP presence broadcast sent by fl-server on 255.255.255.255:<port> (IPv4 broadcast) and
 // [ff02::1]:<port> (IPv6 link-local multicast) every discoveryIntervalMs milliseconds.
