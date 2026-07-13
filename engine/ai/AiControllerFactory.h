@@ -410,9 +410,15 @@ inline std::unique_ptr<fl::IEntityController> createController(std::string_view 
         sm->addState("retreat", [entityManager, id]() {
             return std::make_unique<EvadeController>(*entityManager, id, 1.0f, true);
         });
-        sm->addTransition("patrol", "engage", ThreatWithinRange(id, engageRangeM));
+        // HONEST TRIGGERS (#690). The behavior string is unchanged, so `spawn --ai patrol_attack <idx>`
+        // means exactly what it always did to an operator — but the AI now engages only what it has
+        // actually DETECTED and REACTED to, and goes back to patrol when it has lost the contact
+        // rather than when the target crosses an invisible radius it could never have measured. With
+        // no sensing evaluated (unit tests, headless callers) these fall back to their ground-truth
+        // ancestors, so nothing that worked before behaves differently.
+        sm->addTransition("patrol", "engage", DetectsThreatWithinRange(id, engageRangeM));
         sm->addTransition("engage", "retreat", HpBelow(retreatHp));
-        sm->addTransition("engage", "patrol", ThreatBeyondRange(id, engageRangeM * 1.5f), 2.f);
+        sm->addTransition("engage", "patrol", LostContact(id, engageRangeM * 1.5f), 2.f);
         sm->setInitialState("patrol");
         return sm;
     }
@@ -455,8 +461,10 @@ inline std::unique_ptr<fl::IEntityController> createController(std::string_view 
                                                       LoiterDir::Clockwise);
         });
         sm->addState("break", []() { return std::make_unique<ImmelmannController>(); });
-        sm->addTransition("follow", "break", AnyHostileEntityWithinRange(innerRange));
-        sm->addTransition("break", "follow", Not(AnyHostileEntityWithinRange(innerRange)), 6.0f);
+        // The escort breaks on a hostile it has actually SEEN (#690) — not on one it could not
+        // possibly have noticed. Same fallback rule as patrol_attack when sensing is not evaluated.
+        sm->addTransition("follow", "break", DetectedHostileWithinRange(innerRange));
+        sm->addTransition("break", "follow", Not(DetectedHostileWithinRange(innerRange)), 6.0f);
         sm->setInitialState("follow");
         return sm;
     }

@@ -3,6 +3,7 @@
 
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
+#include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
 #include "world/FactionDef.h" // areFactionsHostile (header-only inline; no link dep)
 
@@ -233,6 +234,95 @@ Condition AnyHostileEntityWithinRangeOf(fl::EntityId anchorId, float rangeM) {
             }
         });
         return found;
+    };
+}
+
+// ── Sensing-gated conditions (#690) ─────────────────────────────────────────
+
+namespace {
+
+// Distance from self to a contact's LAST-KNOWN position. Not to where the target is — to where this
+// entity last saw it, which is all it is entitled to know.
+[[nodiscard]] double distSqToContact(const fl::EntityState& self, const fl::sensor::Contact& c) noexcept {
+    const double dx = c.lastKnownPos[0] - self.transform.pos[0];
+    const double dy = c.lastKnownPos[1] - self.transform.pos[1];
+    const double dz = c.lastKnownPos[2] - self.transform.pos[2];
+    return dx * dx + dy * dy + dz * dz;
+}
+
+} // namespace
+
+Condition DetectedHostileWithinRange(float rangeM) {
+    auto groundTruth = AnyHostileEntityWithinRange(rangeM);
+    return [rangeM, groundTruth](const fl::EntityState& self, const fl::EntityManager& em,
+                                 const fl::AiTickContext& ctx) -> bool {
+        if (!ctx.contacts)
+            return groundTruth(self, em, ctx); // sensing not evaluated: the pre-#690 behavior
+        if (self.factionIndex == 0)
+            return false; // a neutral entity has no enemies
+
+        const double rangeSq = static_cast<double>(rangeM) * static_cast<double>(rangeM);
+        for (const fl::sensor::Contact& c : *ctx.contacts) {
+            if (!c.reacted)
+                continue; // seen, but not yet noticed — the reaction delay is not a formality
+            if (!fl::areFactionsHostile(self.factionIndex, c.factionIndex))
+                continue;
+            if (distSqToContact(self, c) <= rangeSq)
+                return true;
+        }
+        return false;
+    };
+}
+
+Condition DetectsThreatWithinRange(fl::EntityId targetId, float rangeM) {
+    auto groundTruth = ThreatWithinRange(targetId, rangeM);
+    return [targetId, rangeM, groundTruth](const fl::EntityState& self, const fl::EntityManager& em,
+                                           const fl::AiTickContext& ctx) -> bool {
+        if (!ctx.contacts)
+            return groundTruth(self, em, ctx);
+
+        const fl::sensor::Contact* c = ctx.contacts->find(targetId);
+        if (!c || !c->held() || !c->reacted)
+            return false;
+
+        const double rangeSq = static_cast<double>(rangeM) * static_cast<double>(rangeM);
+        return distSqToContact(self, *c) <= rangeSq;
+    };
+}
+
+Condition LostContact(fl::EntityId targetId, float rangeM) {
+    auto groundTruth = ThreatBeyondRange(targetId, rangeM);
+    return [targetId, rangeM, groundTruth](const fl::EntityState& self, const fl::EntityManager& em,
+                                           const fl::AiTickContext& ctx) -> bool {
+        if (!ctx.contacts)
+            return groundTruth(self, em, ctx);
+
+        const fl::sensor::Contact* c = ctx.contacts->find(targetId);
+        if (!c || !c->held())
+            return true; // never found it, or the coast ran out — he is gone
+
+        const double rangeSq = static_cast<double>(rangeM) * static_cast<double>(rangeM);
+        return distSqToContact(self, *c) > rangeSq;
+    };
+}
+
+Condition HasLockedContact() {
+    return [](const fl::EntityState&, const fl::EntityManager&, const fl::AiTickContext& ctx) -> bool {
+        if (!ctx.contacts)
+            return false; // no sensing ⇒ no lock. A controller cannot claim a track it never took.
+        for (const fl::sensor::Contact& c : *ctx.contacts) {
+            if (c.locked())
+                return true;
+        }
+        return false;
+    };
+}
+
+Condition NoContacts() {
+    return [](const fl::EntityState&, const fl::EntityManager&, const fl::AiTickContext& ctx) -> bool {
+        if (!ctx.contacts)
+            return false; // an entity with no sensing must not conclude "all clear"
+        return ctx.contacts->empty();
     };
 }
 
