@@ -55,11 +55,11 @@ section = fully scripted behaviour.
   Latency budgets (§9) were met with wide margin on a GPU. **On the 8-core/16 GB CPU-only reference
   instance, two of the three fail** — quality is identical (accuracy belongs to the model, not the
   host), the models are simply too slow. **Intent:** no model is both ≥ 90 % accurate and inside 2 s
-  (9B = 92 % at 4.8 s p95; 14B = 96 % at 3.3 s; the only model inside budget is a 3B at 81 %) — the
-  wingman chat path is effectively a **GPU feature** unless the budget is relaxed or the prompt is
-  cut (**#769** owns the decision). **Mission:** 9B/14B stay 100 % validate-clean but take p95
-  71 s / 95 s against a 60 s budget — the director must generate ahead rather than block. **Ops**
-  fits on CPU. See §9 and
+  (9B = 92 % at 4.8 s p95; 14B = 96 % at 3.3 s; the only model inside budget is a 3B at 81 %), so the
+  natural-language wingman **requires a GPU-backed provider** and CPU-only servers degrade to the
+  scripted wingman — decided in §9 (#769); the budget was kept, not relaxed. **Mission:** 9B/14B stay
+  100 % validate-clean but take p95 71 s / 95 s against a 60 s budget — the director must generate
+  ahead rather than block. **Ops** fits on CPU. See §9 and
   [ai-provider-evaluation.md](ai-provider-evaluation.md#cpu-only-reference-instance--the-box-the-acceptance-gate-names).
   **Deployment requirement:** pin the model in memory (`OLLAMA_KEEP_ALIVE` or equivalent) — a cold
   14B costs **55 s** to load on that box and idle models are evicted after 5 minutes by default.
@@ -117,6 +117,13 @@ through the scripted wingman command grammar (#610, the zero-AI fallback satisfy
 from match events at low rate. Voice later: Epic J Opus capture (#531) + whisper.cpp STT +
 optional Piper TTS; voice never bypasses the grammar.
 
+**The natural-language path requires a GPU-backed provider (§9, #769).** Intent inference runs
+**server-side, not client-local** (measured, #609): the models that clear the ≥ 90 % accuracy gate
+are 9–14B, and a 55 s cold load against bursty, minutes-apart radio calls makes per-client hosting
+the expensive way to do it — server-side also keeps the grammar allowlist on the authority that
+enforces it, and keeps the LLM off the client's frame budget. On a CPU-only server the chat path is
+not offered and Epic O ships its scripted half (#610), which stands on its own.
+
 ### Epic P — agentic server operations (`fl-ops`, Go)
 
 Consumes Epic G Prometheus metrics + structured logs (#546/#547); acts through the MCP surface
@@ -149,6 +156,12 @@ that is one sweep on one endpoint.)
 | Server ops | Runbook triage, digests, recommendations | Dashboards + alerts only (Epic G) |
 | fl-review | Ranked triage + evidence summaries | Raw statistical detector output |
 
+**A configured provider is not the same as a *fast enough* provider.** The right-hand column is also
+the behaviour of a **CPU-only** deployment on the two rows with a real-time budget: the wingman NL
+path needs a GPU to hold its 2 s budget and degrades to the scripted grammar without one (§9, #769),
+and GCI/AWACS shares that path. The other rows have between-mission or advisory timescales and are
+served by a CPU-only provider — the director simply has to generate ahead (§9).
+
 ## 7. Testing & CI policy (normative)
 
 - **CI never requires a model.** Default CI runs zero LLM calls; ctest/go-test suites must pass on
@@ -175,8 +188,14 @@ that is one sweep on one endpoint.)
 | Local inference backends | CUDA / Vulkan (llama.cpp), Ollama | Metal (Apple Silicon — best-in-class local inference) | CUDA / ROCm / Vulkan, Ollama |
 | Go services (`fl-director`/`fl-ops`) | native binary | native binary | native binary + container image |
 | STT/TTS (Epic O voice) | whisper.cpp (CPU/CUDA); capture via WASAPI (SDL3) | whisper.cpp (Metal); CoreAudio | whisper.cpp (CPU/CUDA/ROCm); PipeWire |
-| Client-side intent models | CPU inference by default (avoid Vulkan GPU contention — measured in the O spike) | CPU/ANE | CPU |
+| Intent inference host | Server-side (#609) — a **GPU-backed** provider; CPU-only servers ship the scripted wingman (#769) | same | same |
 | MCP/world-state sockets | WSAPoll, no SIGPIPE concern | poll + `SO_NOSIGPIPE` | poll + `MSG_NOSIGNAL` |
+
+Client-local intent inference — the original assumption — is **not** the plan (#609), which is why
+this table no longer carries a per-OS row for it. The one question that row implied and never
+answered, *how much does local inference contend with Vulkan for the GPU on each OS*, only becomes
+required work again if client-local hosting is reconsidered; it is parked in **#782** rather than
+deleted, because that is a hardware-availability gap, not a settled question.
 
 ## 9. Latency & timescale budgets
 
@@ -184,7 +203,7 @@ that is one sweep on one endpoint.)
 |---|---|---|
 | Sim tick with agents attached | p99 unchanged (≤ 16.6 ms at 128 clients) | Out-of-tick guarantee; Epic I gate |
 | World-state snapshot assembly | ≤ 1 ms off-thread per publish | ~1 Hz cadence |
-| Wingman intent mapping | ≤ 2 s utterance → acknowledged command | Human radio-comms timescale. **Not met on the CPU-only reference instance** — see below (#769) |
+| Wingman intent mapping | ≤ 2 s utterance → acknowledged command | Human radio-comms timescale. **Held, and scoped to a GPU-backed provider** — see the decision below (#769) |
 | GCI calls / chatter | 5–30 s cadence | Advisory only |
 | Director mission generation | ≤ 60 s from campaign state | Between-mission timescale. **Not met on CPU** (p95 71 s at 9B, 95 s at 14B) — generate ahead of time |
 | Ops triage | ≤ 60 s from alert to recommendation | Digest delivery may batch. Met on CPU (p95 ≤ 24 s) |
@@ -193,18 +212,58 @@ that is one sweep on one endpoint.)
 #599 follow-up, measured on the 8-core box). In both cases *quality is unaffected* — accuracy is a
 property of the model, not the host — so this is purely a latency wall:
 
-- **Intent (2 s) — fails, and it is a design fork (#769).** The accurate models are 1.7–2.4× over
-  budget (9B = 92 % at 4.8 s p95; 14B = 96 % at 3.3 s); the only model inside budget is a 3B at 81 %.
-  Latency is *prompt-eval* dominated — the cost is ingesting the command grammar, not generating the
-  ~12-token answer — so the levers are a **shorter grammar** (#610 owns the real vocabulary) and
-  prefix caching, not a faster decoder. **Epic O must choose explicitly:** treat the LLM wingman as a
-  GPU feature and degrade to the scripted wingman on CPU-only servers (already the CI-tested fallback,
-  and the cheapest option); relax the budget to 3–5 s; or make a small model accurate. **Do not assume
-  a CPU-only server can serve a 2 s conversational loop.**
+- **Intent (2 s) — the budget is kept and the feature is scoped to the hardware that can serve it
+  (decision, #769).** The accurate models are 1.7–2.4× over budget on CPU (9B = 92 % at 4.8 s p95;
+  14B = 96 % at 3.3 s); the only model inside budget is a 3B at 81 %. Latency is *prompt-eval*
+  dominated — the cost is ingesting the command grammar, not generating the ~12-token answer — so
+  the lever is a shorter prompt, not a faster decoder. See the decision record below.
 - **Mission (60 s) — fails, but scheduling fixes it.** 9B and 14B still generate **100 %
   validate-clean** missions; they just take p95 71 s / 95 s. Mission generation is not inherently
   synchronous — a director that generates the *next* mission while the current one is flown hides
   this entirely. **Epic N must generate ahead, not block on a 60 s call.**
+
+### Decision (#769) — the conversational wingman is a GPU feature
+
+The 2 s budget is **not relaxed**. It exists because it is the human radio-comms timescale, and a
+wingman that answers in five seconds is not a wingman — degrading the *number* would quietly degrade
+the *feature* everywhere, including on the hardware where it works fine. Instead the feature is
+scoped to the hardware that can serve it, and the hardware that cannot gets the fallback that
+already exists:
+
+- **A GPU-backed provider is a stated requirement of the natural-language wingman.** On CPU-only
+  servers the chat path is not offered and the wingman degrades to the **scripted command menu and
+  grammar (#610)** — already the zero-provider fallback, already the CI-tested path, and already
+  sufficient for Phase 4's "six commands" acceptance on its own. This costs nothing to build. It has
+  to be *stated*, so an operator knows what a GPU buys them and is not left diagnosing a wingman
+  that merely feels slow. `fl-server` should say so at startup rather than let it be discovered:
+  a provider configured for the intent path on a host that cannot meet the budget is a
+  **misconfiguration to warn about**, not a performance characteristic to absorb.
+- **Epic O's ≥ 90 % intent-accuracy gate is measured on a GPU-backed provider deployment.** It was
+  always an accuracy gate; the CPU wall is a latency question and does not move it (9B/14B clear
+  ≥ 90 % on *both* machine classes — see
+  [ai-provider-evaluation.md](ai-provider-evaluation.md#cpu-only-reference-instance--the-box-the-acceptance-gate-names)).
+
+**Bringing the LLM wingman back to CPU is a small-model-accuracy problem, not a big-model-speed
+problem.** 3B is the only size that clears the budget (0.7 s p95) and it sits at 81 % — one command
+in five wrong. Every lever that would close that gap acts on the *model and the prompt*, not the
+host: a tighter grammar, few-shot examples, and constrained/grammar-guided decoding (which also
+removes a whole class of schema-invalid answers outright).
+
+**That work belongs to #610**, because the first lever *is* #610: latency is prompt-eval bound, so a
+materially shorter grammar moves it directly — and #610 owns the real wingman vocabulary, where the
+`intent` suite today encodes only a provisional six-command placeholder. Re-measuring against the
+shipped grammar is the first move and may be most of the answer; measuring the placeholder would
+produce a number that changes the moment #610 lands. The `intent` suite in
+[`tools/ai_eval/`](../tools/ai_eval/README.md) is the regression test, and suites are data — the
+re-run is a file edit, not new engineering. **Until that work lands *and is measured*, do not assume
+a CPU-only server can serve a 2 s conversational loop.** If the levers do not close the gap, that is
+a real result: the GPU requirement above is then the permanent answer rather than a provisional one.
+
+**Prompt-injection resistance remains a model-selection criterion on this path** (§1, §2): the
+grammar allowlist bounds the blast radius of a successful injection to a real command fired at the
+wrong time, and it is load-bearing precisely because a capable 9B model in the sweep obeyed an
+injected instruction. Anything done to make a *small* model accurate must not be assumed to preserve
+that — re-screen it.
 
 **Deployment requirement, whichever path wins:** pin the model in memory (`OLLAMA_KEEP_ALIVE` or
 equivalent). A cold 14B costs **55 s** to load on that box, and idle models are evicted after 5

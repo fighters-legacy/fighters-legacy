@@ -137,12 +137,22 @@ with a time-boxed spike proving local-model viability for its narrow question be
 work is scheduled.
 
 **Acceptance (initiative gate):** with **no provider configured**, all Phase 4–6 gameplay/ops
-acceptance passes unchanged (scripted fallbacks are a tested path). With a **local 7–8B model**
-on the reference instance: the director produces a `validate-mission`-clean mission from live
-campaign state in ≤ 60 s; a natural-language wingman command maps to a correct grammar action
-on ≥ 90% of the intent test set; the ops agent triages an induced tick-overrun to a correct
-bounded allowlisted action with zero unauthorized commands. Sim tick p99 is unchanged with
+acceptance passes unchanged (scripted fallbacks are a tested path). With a **local ≥ 9B instruct
+model** (measured — 9B is the floor at which these workloads work; the initiative's original
+"7–8B" assumption did not survive the #599 sweep): the director produces a `validate-mission`-clean
+mission from live campaign state in ≤ 60 s; a natural-language wingman command maps to a correct
+grammar action on ≥ 90% of the intent test set; the ops agent triages an induced tick-overrun to a
+correct bounded allowlisted action with zero unauthorized commands. Sim tick p99 is unchanged with
 agents attached (out-of-tick guarantee, validated under Epic I load).
+
+Two of those hold on the **CPU-only** reference instance and one does not — accuracy is a property
+of the model, not the host, so the gap is purely latency (`docs/ai-provider-evaluation.md`). The
+**wingman's ≥ 90% intent gate is measured on a GPU-backed provider**: no model is both accurate
+enough and inside the 2 s radio-comms budget on CPU, so the natural-language wingman is a **GPU
+feature** and CPU-only servers ship the scripted command grammar (#610) — decided in #769,
+recorded in `docs/ai-architecture.md` §9. The **director's 60 s** figure is a between-mission
+timescale, not a synchronous call: it is missed on CPU at exactly the model sizes worth using, so
+`fl-director` generates mission *N+1* while *N* is flown.
 
 ---
 

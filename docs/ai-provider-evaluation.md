@@ -113,23 +113,44 @@ Two consequences that shape the fix:
   ~25× on model load alone, before inference. Any deployment must pin `OLLAMA_KEEP_ALIVE` (or the
   equivalent) — this is a deployment requirement, not a tuning preference.
 
-### What this means for Epic O
+### What this means for Epic O — **decided (#769)**
 
 **A local CPU-only LLM cannot sit on the critical path of a 2 s radio-comms interaction on the
-reference box.** Epic O must pick one of these, and it is a design decision, not a tuning task:
+reference box.** That was a design fork, not a tuning task, and it is now settled. The full decision
+record is `docs/ai-architecture.md` §9; in short:
+
+- **The 2 s budget is kept, and the natural-language wingman is scoped to a GPU-backed provider.**
+  CPU-only servers degrade to the scripted command menu and grammar (#610) — already the
+  zero-provider fallback, already the CI-tested path, already sufficient for the Phase 4 acceptance
+  on its own. Relaxing the budget was rejected: 2 s is the human radio-comms timescale, and moving
+  the number would have degraded the feature on the hardware where it works fine in order to make it
+  nominally "pass" on hardware where it does not.
+- **Bringing it back to CPU is a small-model-accuracy problem, not a big-model-speed problem** —
+  3B is the only size inside the budget (0.7 s) and it is 81 %. The levers act on the model and the
+  prompt, not the host: a shorter grammar, few-shot examples, and constrained/grammar-guided
+  decoding. **That work is folded into #610**, because the first lever *is* #610 — latency is
+  prompt-eval bound, so the shipped grammar moves it directly, and re-measuring the provisional
+  placeholder would produce a number that changes the moment the real vocabulary lands. The `intent`
+  suite is the regression test.
+
+The four options that were on the table, and why the fork resolved the way it did:
 
 1. **The chat path targets a GPU deployment** and CPU-only servers fall back to the scripted wingman.
-   This costs nothing to build — every AI feature already degrades to scripted behavior with no
-   provider, and that fallback is the CI-tested path. It just has to be *stated*, so operators know
-   the wingman is a GPU feature.
-2. **Relax the 2 s budget** for CPU deployments (3–5 s is reachable at 9–14B). This is a felt
-   regression: 2 s exists because it is the human radio-comms timescale.
+   Costs nothing to build — every AI feature already degrades to scripted behavior with no provider,
+   and that fallback is the CI-tested path. It just has to be *stated*, so operators know the wingman
+   is a GPU feature. **Chosen.**
+2. **Relax the 2 s budget** for CPU deployments (3–5 s is reachable at 9–14B). **Rejected** — a felt
+   regression, and the budget is not the thing that is wrong.
 3. **Cut the prompt.** Latency is prompt-bound, so a materially shorter grammar moves it. #610 owns
    the real wingman vocabulary — if it lands smaller than this provisional six-command placeholder,
-   re-measure before concluding anything. This is the cheapest lever and it is not yet exhausted.
+   re-measure before concluding anything. **Not a decision on its own** — it is the cheapest lever
+   and it is still unexhausted, so it survives as the first move of (4) rather than as an
+   alternative to (1). Nothing about it makes a CPU-only server *safe to promise* today.
 4. **Accept a ~3B model at ~81 %** — one in five commands wrong. Not viable as-is, but 3B is the only
    size that clears the budget, so if intent must be LLM-mapped on CPU, the work is making a small
-   model accurate (tighter grammar, few-shot examples), not making a big model fast.
+   model accurate (tighter grammar, few-shot examples, constrained decoding), not making a big model
+   fast. **Adopted as the track back to CPU — folded into #610**, and explicitly *not* a reason to
+   ship 81 % now. If it does not close the gap, (1) is the permanent answer, not a provisional one.
 
 ### What this means for Epic N (the director)
 
@@ -196,8 +217,8 @@ data removes the premise before contention becomes the deciding question:
 `fl-server`**, and treat client-local inference as an unsupported opt-in rather than the default.
 This does not make the wingman a GPU-only feature by itself — it makes it a feature of servers that
 *have* a provider. With no provider, or on a CPU-only server that cannot meet the budget, the
-wingman degrades to scripted behavior, which is the CI-tested path. That degradation is Epic O's
-fork (#769), and it is unchanged by where the model runs.
+wingman degrades to scripted behavior, which is the CI-tested path. That degradation is now the
+decided behaviour (#769 → `ai-architecture.md` §9), and it is unchanged by where the model runs.
 
 This is a recommendation from latency, accuracy and deployment cost — **not** from a contention
 measurement. If Epic O ever revisits client-local inference, the per-OS contention runs #609 asked
@@ -333,7 +354,8 @@ per-client hosting the expensive way to do it.
 
 Neither gap changes the verdict — **≥ 9B maps intent accurately enough to build on** — so the spike
 is resolved rather than extended. The CPU **latency** budget (2 s) is a separate, real failure and
-is Epic O's design fork, tracked in #769; it is not an accuracy question and does not belong here.
+was Epic O's design fork, decided in #769 (the wingman NL path requires a GPU-backed provider; the
+budget stands) — it is not an accuracy question and does not belong here.
 
 ## Reproducing
 
