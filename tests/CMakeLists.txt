@@ -58,6 +58,10 @@ add_executable(test_weapon_def_parser test_weapon_def_parser.cpp)
 target_link_libraries(test_weapon_def_parser PRIVATE Catch2::Catch2WithMain engine-weapon)
 catch_discover_tests(test_weapon_def_parser)
 
+add_executable(test_sensor_def_parser test_sensor_def_parser.cpp)
+target_link_libraries(test_sensor_def_parser PRIVATE Catch2::Catch2WithMain engine-sensor)
+catch_discover_tests(test_sensor_def_parser)
+
 add_executable(test_aero_forces test_aero_forces.cpp)
 target_link_libraries(test_aero_forces PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_aero_forces)
@@ -101,7 +105,8 @@ target_include_directories(test_sandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_sandbox)
 
 add_executable(test_content_system test_content_system.cpp)
-target_link_libraries(test_content_system PRIVATE Catch2::Catch2WithMain engine-content engine-difficulty)
+target_link_libraries(test_content_system PRIVATE Catch2::Catch2WithMain engine-content engine-difficulty
+    engine-sensor)
 catch_discover_tests(test_content_system)
 
 add_executable(test_difficulty test_difficulty.cpp)
@@ -399,6 +404,10 @@ catch_discover_tests(test_input_hal DISCOVERY_MODE PRE_TEST)
 add_executable(test_validate_weapon test_validate_weapon.cpp)
 target_link_libraries(test_validate_weapon PRIVATE Catch2::Catch2WithMain validate-weapon-lib)
 catch_discover_tests(test_validate_weapon)
+
+add_executable(test_validate_sensor test_validate_sensor.cpp)
+target_link_libraries(test_validate_sensor PRIVATE Catch2::Catch2WithMain validate-sensor-lib)
+catch_discover_tests(test_validate_sensor)
 
 add_executable(test_validate_flight_model test_validate_flight_model.cpp)
 target_link_libraries(test_validate_flight_model

@@ -131,6 +131,18 @@ target_include_directories(validate-weapon-lib PUBLIC
 add_executable(validate-weapon validate-weapon/main.cpp)
 target_link_libraries(validate-weapon PRIVATE validate-weapon-lib)
 
+# Same shape as validate-weapon: the schema lives in engine-sensor's parser, and this tool only adds
+# the plausibility checks a runtime parser must not make.
+add_library(validate-sensor-lib STATIC
+    validate-sensor/sensor_validator.cpp)
+target_link_libraries(validate-sensor-lib
+    PRIVATE engine-sensor)
+target_include_directories(validate-sensor-lib PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/validate-sensor")
+
+add_executable(validate-sensor validate-sensor/main.cpp)
+target_link_libraries(validate-sensor PRIVATE validate-sensor-lib)
+
 add_library(validate-mission-lib STATIC validate-mission/mission_validator.cpp)
 target_link_libraries(validate-mission-lib PUBLIC yaml-cpp::yaml-cpp)
 target_include_directories(validate-mission-lib PUBLIC

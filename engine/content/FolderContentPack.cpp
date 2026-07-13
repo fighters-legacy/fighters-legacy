@@ -25,6 +25,7 @@ static constexpr std::array<AssetPathInfo, static_cast<size_t>(AssetType::Count)
     {"terrain", ".json", ""},      // Terrain
     {"ai", ".lua", ""},            // AIScript
     {"entities", ".toml", ""},     // EntityDef
+    {"sensors", ".toml", ""},      // SensorDef
 }};
 static_assert(kAssetPaths.size() == static_cast<size_t>(AssetType::Count),
               "kAssetPaths out of sync with AssetType enum");
@@ -100,6 +101,9 @@ std::optional<AIScript> FolderContentPack::loadAIScript(const char* name) {
 }
 std::optional<EntityDefData> FolderContentPack::loadEntityDef(const char* name) {
     return loadBytes<EntityDefData>(name, AssetType::EntityDef);
+}
+std::optional<SensorDefData> FolderContentPack::loadSensorDef(const char* name) {
+    return loadBytes<SensorDefData>(name, AssetType::SensorDef);
 }
 
 std::optional<std::string> FolderContentPack::loadConfig(const char* name) const {

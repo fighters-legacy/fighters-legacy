@@ -181,6 +181,21 @@ target_link_libraries(engine-weapon
     PRIVATE tomlplusplus::tomlplusplus
 )
 
+# Sensor definitions (content-pack sensor TOML). One vocabulary, three consumers: player avionics,
+# AI detection, and missile seekers all read the same SensorDef (2026-07-12 decision record).
+#
+# Dep-free for now, like engine-weapon: this target is the schema, the parser and the builtin
+# eyeball, and none of that needs to know what an entity is. The decision record's PUBLIC edges on
+# engine-entity + engine-spatial arrive with the detection math (#684), which is the first code here
+# that actually observes something.
+add_library(engine-sensor STATIC
+    sensor/SensorDefParser.cpp
+)
+target_include_directories(engine-sensor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-sensor
+    PRIVATE tomlplusplus::tomlplusplus
+)
+
 add_subdirectory(ai)
 
 # World-systems foundation types (faction registry, alert levels, airspace zones).

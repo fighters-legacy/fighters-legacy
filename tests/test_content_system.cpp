@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "IFilesystem.h"
@@ -11,6 +12,7 @@
 #include "content/IContentPack.h"
 #include "content/ModLoader.h"
 #include "difficulty/DifficultyMultipliers.h"
+#include "sensor/SensorDefParser.h"
 
 #include "mock_content.h"
 
@@ -214,6 +216,9 @@ struct MockContentPack : public NullContentPack {
     std::optional<EntityDefData> loadEntityDef(const char* n) override {
         return loadByType<EntityDefData>(n, AssetType::EntityDef);
     }
+    std::optional<SensorDefData> loadSensorDef(const char* n) override {
+        return loadByType<SensorDefData>(n, AssetType::SensorDef);
+    }
     // listAssets, getTrustLevel, isNativePlugin inherited from NullContentPack.
 
     std::map<std::string, std::string> configs;
@@ -400,6 +405,9 @@ static std::vector<std::unique_ptr<IContentPack>> makePacks(MockContentPack* pac
         std::optional<EntityDefData> loadEntityDef(const char* n) override {
             return p->loadEntityDef(n);
         }
+        std::optional<SensorDefData> loadSensorDef(const char* n) override {
+            return p->loadSensorDef(n);
+        }
         std::vector<std::string> listAssets(AssetType t) const override {
             return p->listAssets(t);
         }
@@ -501,6 +509,43 @@ TEST_CASE("AssetManager returns asset bytes from highest-priority pack") {
     auto result = am.loadMesh("f22");
     REQUIRE(result != nullptr);
     REQUIRE(result->bytes == (std::vector<uint8_t>{'{', 0xAA}));
+}
+
+TEST_CASE("AssetManager loads a sensor def, and a higher-priority pack overrides it", "[content]") {
+    // The point of sensors being an asset type at all: a theater pack can re-tune the radar an
+    // aircraft carries without shipping a fork of the aircraft.
+    MockContentPack base, theater;
+    MockLogger logger;
+    base.packId = "base";
+    base.packPriority = 10;
+    theater.packId = "theater";
+    theater.packPriority = 100;
+
+    auto toml = [](const char* podLine) {
+        std::string s = "[sensor]\nid = \"fl-base:apg63\"\nname = \"APG-63\"\ntype = \"radar\"\n"
+                        "emitter = true\n\n[search]\naz_half_angle_deg = 60.0\n"
+                        "el_half_angle_deg = 30.0\nmax_range_nm = 40.0\n";
+        s += podLine;
+        return std::vector<uint8_t>(s.begin(), s.end());
+    };
+    base.assets[{"apg63", AssetType::SensorDef}] = toml("pod = 0.35\n");
+    theater.assets[{"apg63", AssetType::SensorDef}] = toml("pod = 0.50\n");
+
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::make_unique<MockContentPack>(theater)); // highest first, as ModLoader does
+    packs.push_back(std::make_unique<MockContentPack>(base));
+
+    AssetManager am(std::move(packs), logger);
+    am.initialize(nullptr);
+
+    auto raw = am.loadSensorDef("apg63");
+    REQUIRE(raw != nullptr);
+
+    // The bytes AssetManager hands back are what the engine's parser consumes.
+    const auto def = fl::sensor::parseSensorDef(
+        std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size()));
+    CHECK(def.id == "fl-base:apg63");
+    CHECK(def.search.pod == Catch::Approx(0.50f)); // the theater pack's value, not the base pack's
 }
 
 TEST_CASE("AssetManager returns same shared_ptr on second request (cache hit)") {

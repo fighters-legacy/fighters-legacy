@@ -7,7 +7,18 @@
 
 namespace fl {
 
-enum class AssetType : uint8_t { Mesh, Texture, Audio, FlightModel, Mission, Terrain, AIScript, EntityDef, Count };
+enum class AssetType : uint8_t {
+    Mesh,
+    Texture,
+    Audio,
+    FlightModel,
+    Mission,
+    Terrain,
+    AIScript,
+    EntityDef,
+    SensorDef,
+    Count
+};
 
 // Raw-byte asset base. Format-specific fields are added by the renderer/audio
 // workstreams once those subsystems exist. All IContentPack load methods return subtypes.
@@ -25,5 +36,6 @@ struct MissionData : AssetBase {};
 struct TerrainData : AssetBase {};
 struct AIScript : AssetBase {};
 struct EntityDefData : AssetBase {};
+struct SensorDefData : AssetBase {};
 
 } // namespace fl

@@ -117,6 +117,10 @@ target_link_libraries(fuzz_entity_def_toml PRIVATE engine-entity)
 fl_add_fuzzer(fuzz_weapon_def_toml)
 target_link_libraries(fuzz_weapon_def_toml PRIVATE engine-weapon)
 
+# parseSensorDef — sensor TOML parser (throws; harness catches).
+fl_add_fuzzer(fuzz_sensor_def_toml)
+target_link_libraries(fuzz_sensor_def_toml PRIVATE engine-sensor)
+
 # parsePlaylist — music-playlist TOML parser (needs an ILogger&).
 fl_add_fuzzer(fuzz_playlist_toml)
 target_link_libraries(fuzz_playlist_toml PRIVATE engine-audio)

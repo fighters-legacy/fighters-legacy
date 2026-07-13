@@ -376,6 +376,108 @@ drag_factor = 0.020
 
 ---
 
+## Sensor Data — TOML
+
+Each sensor is a standalone TOML file in `sensors/*.toml`, parsed by `fl::sensor::parseSensorDef`
+(`engine/sensor/`) and loaded through the content-pack priority stack like any other asset — a
+theater pack can re-tune an aircraft's radar without forking the aircraft.
+
+**One sensor vocabulary, three consumers.** The same def is read by player avionics, AI detection,
+and missile seekers (2026-07-12 decision record, [architecture.md](../architecture.md)). A radar, an
+IRST, a laser designator and a human eyeball differ in their *parameters*, not in their model: each
+is a cone, a range band, and a probability of seeing something inside it.
+
+**Units are authored in aviation units and stored in SI** — the same rule as weapons. You write
+nautical miles; the parser converts to metres on the way in. Angles are degrees, times are seconds.
+
+**A malformed sensor is not loaded.** The parser throws rather than defaulting: a sensor that
+silently fell back to defaults would be an aircraft whose radar quietly became an eyeball.
+
+### `[sensor]` (required)
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `id` | string | — | Pack-scoped, e.g. `"fl-base:apg63"` |
+| `name` | string | — | Display name |
+| `type` | string | — | `radar`, `ir` (or `infrared`), `visual`, `laser` |
+| `omnidirectional` | bool | `false` | No cone to point (an RWR). Lobe half-angles may then be omitted; they default to a full sphere |
+| `emitter` | bool | `false` | The sensor announces itself when it looks. **Radar and laser `[track]` lobes require it** — this is the seam RWR, EMCON and SAM radar shutdown hang off |
+
+### `[search]` (required) and `[track]` (optional)
+
+The **search** lobe is how a target is *found*; the **track** lobe is how it is *held*. A track lobe
+is normally narrower, shorter-ranged and more reliable than the search lobe that feeds it. Omitting
+`[track]` makes the sensor search-only — an eyeball finds an aircraft, it does not hold a lock on
+one.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `az_half_angle_deg` | float | — | `(0, 180]`. Required unless `omnidirectional`, then `180` |
+| `el_half_angle_deg` | float | — | `(0, 180]`. Required unless `omnidirectional`, then `90` |
+| `min_range_nm` | float | `0` | Dead zone; `0` = none |
+| `max_range_nm` | float | — | Range against a **baseline** (signature 1.0) target |
+| `pod` | float | — | `(0, 1]` — probability of detection **per check at 10 Hz** |
+| `lock_hold_s` | float | `0` | `[track]` only, `[0, 60]`: how long a track coasts after a check fails. `0` = the lock drops instantly |
+
+**`pod` is per check, not per second.** The reference cadence is 10 Hz (`[world] sensor_check_hz`).
+A PoD is meaningless without a rate — the same `0.3` is a different sensor at 1 Hz than at 60 Hz —
+so author against the reference. An operator who changes the cadence changes effective acquisition
+time; that is the honest consequence, and it is not silently renormalized.
+
+**`max_range_nm` is quoted against a baseline target** (signature `1.0`). An entity's `[signatures]`
+scale it: radar range by `sqrt(sig)`, IR and visual linearly.
+
+```toml
+# sensors/apg63.toml — pulse-doppler fighter radar
+[sensor]
+id              = "fl-base:apg63"
+name            = "APG-63 pulse-doppler radar"
+type            = "radar"
+omnidirectional = false
+emitter         = true
+
+[search]
+az_half_angle_deg = 60.0
+el_half_angle_deg = 30.0
+min_range_nm      = 0.08
+max_range_nm      = 40.0
+pod               = 0.35
+
+[track]
+az_half_angle_deg = 30.0
+el_half_angle_deg = 20.0
+min_range_nm      = 0.08
+max_range_nm      = 30.0
+pod               = 0.65
+lock_hold_s       = 4.0
+```
+
+```toml
+# sensors/eyeball.toml — passive visual acquisition; no [track] lobe
+[sensor]
+id   = "fl-base:eyeball"
+name = "Mark One Eyeball"
+type = "visual"
+
+[search]
+az_half_angle_deg = 90.0
+el_half_angle_deg = 60.0
+max_range_nm      = 8.0
+pod               = 0.15
+```
+
+**You get an eyeball whether you author one or not.** An AI-controlled entity that declares no
+sensors gets the compiled-in builtin eyeball (`builtin:eyeball` — the def above, near enough), so
+honest sensing is the default in every configuration including the zero-content-pack sandbox. There
+is no setup in which an AI sees through terrain, and no pack can produce one by omission.
+
+Validate with `validate-sensor sensors/*.toml`. It runs the engine's own parser (a sensor it passes
+is a sensor the engine loads) and adds plausibility warnings a parser must not make — an IR sensor
+that emits, a track lobe wider than its search lobe, a non-emitting radar that can therefore never
+take a lock.
+
+---
+
 ## Ground & Naval Unit Data — TOML
 
 > **`[radar]` is scheduled to change.** Like `[seeker]` above, this block is superseded by the
