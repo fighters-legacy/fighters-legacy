@@ -107,12 +107,12 @@
     { "name": "fuzz",         "configurePreset": "fuzz"         }
   ],
   "testPresets": [
-    { "name": "debug",        "configurePreset": "debug",        "output": { "outputOnFailure": true } },
-    { "name": "release",      "configurePreset": "release",      "output": { "outputOnFailure": true } },
-    { "name": "debug-msvc",   "configurePreset": "debug-msvc",   "configuration": "Debug",   "output": { "outputOnFailure": true } },
-    { "name": "release-msvc", "configurePreset": "release-msvc", "configuration": "Release", "output": { "outputOnFailure": true } },
+    { "name": "debug",        "configurePreset": "debug",        "output": { "outputOnFailure": true }, "execution": { "jobs": 8 } },
+    { "name": "release",      "configurePreset": "release",      "output": { "outputOnFailure": true }, "execution": { "jobs": 8 } },
+    { "name": "debug-msvc",   "configurePreset": "debug-msvc",   "configuration": "Debug",   "output": { "outputOnFailure": true }, "execution": { "jobs": 8 } },
+    { "name": "release-msvc", "configurePreset": "release-msvc", "configuration": "Release", "output": { "outputOnFailure": true }, "execution": { "jobs": 8 } },
     { "name": "coverage",     "configurePreset": "coverage",     "output": { "outputOnFailure": true } },
-    { "name": "asan",         "configurePreset": "asan",         "output": { "outputOnFailure": true } },
+    { "name": "asan",         "configurePreset": "asan",         "output": { "outputOnFailure": true }, "execution": { "jobs": 4 } },
     { "name": "tsan",         "configurePreset": "tsan",         "output": { "outputOnFailure": true } },
     {
       "name": "fuzz",

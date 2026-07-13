@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "temp_path.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "weapon_validator.h"
@@ -53,7 +55,8 @@ struct TempPack {
     fs::path root;
 
     TempPack() {
-        root = fs::temp_directory_path() / ("fl-validate-weapon-" + std::to_string(reinterpret_cast<uintptr_t>(this)));
+        // Was keyed on `this`, which is only unique per process by grace of ASLR (#787).
+        root = fl::test::uniqueTempPath("fl-validate-weapon");
         fs::create_directories(root / "weapons");
         fs::create_directories(root / "entities");
     }

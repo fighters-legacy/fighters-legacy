@@ -1,5 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ENetNetwork.h"
+
+// boundPort() calls getsockname() directly rather than going through enet6 — see the comment there.
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <winsock2.h>
+#include <ws2ipdef.h>
+#else
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
+
 #include <chrono>
 #include <cstring>
 #include <enet6/enet.h>
@@ -158,6 +170,40 @@ bool ENetNetwork::bind(const char* address, uint16_t port, int maxClients) {
     enet_host_set_intercept_callback(m_host, preHandshakeIntercept);
     m_isServer = true;
     return true;
+}
+
+uint16_t ENetNetwork::boundPort() const {
+    if (!m_host) {
+        return 0;
+    }
+
+    // m_host->address holds what was REQUESTED (port 0 for an ephemeral bind), so the socket has to be
+    // asked what it actually got.
+    //
+    // Deliberately NOT enet_socket_get_address(): enet6 leaves the getsockname() length argument
+    // UNINITIALIZED (`int bufferLength;` in both src/win32.c and src/unix.c). getsockname() takes that
+    // as the *input* buffer size, so the call is reading a garbage stack value. On Linux the garbage
+    // is usually large enough and it works by luck; Winsock validates it and fails, which made every
+    // ENet integration test fail on Windows and nowhere else. Call getsockname() directly and pass the
+    // length correctly.
+#if defined(_WIN32)
+    int len = static_cast<int>(sizeof(sockaddr_in6));
+#else
+    socklen_t len = static_cast<socklen_t>(sizeof(sockaddr_in6));
+#endif
+    sockaddr_in6 ss{}; // large enough for both v4 and v6
+    if (::getsockname(m_host->socket, reinterpret_cast<sockaddr*>(&ss), &len) != 0) {
+        return 0;
+    }
+    if (ss.sin6_family == AF_INET6) {
+        return ntohs(ss.sin6_port);
+    }
+    if (ss.sin6_family == AF_INET) {
+        sockaddr_in v4{};
+        std::memcpy(&v4, &ss, sizeof(v4));
+        return ntohs(v4.sin_port);
+    }
+    return 0;
 }
 
 bool ENetNetwork::connect(const char* host, uint16_t port) {

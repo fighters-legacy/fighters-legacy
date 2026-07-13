@@ -169,13 +169,44 @@ ctest --preset debug-msvc --output-on-failure     # Windows
 
 CI uses `debug` (Linux/macOS) and `debug-msvc` (Windows). The `coverage`, `asan`, and `tsan` presets have their own dedicated CI jobs.
 
-The `tsan` preset (`-fsanitize=thread`) is for the data-parallel sim code (`engine-job` + the `WorldBroadcaster` parallel tick). ThreadSanitizer is **Linux/macOS only** (no MSVC support); on Fedora it needs the `libtsan` package, on Debian/Ubuntu it ships with `clang`/`gcc`. The CI job (`tsan.yml`) scopes the run to the parallel-sim test targets via a suppressions file (`tools/tsan.supp`):
+### Sanitizers: ASan and TSan catch different bugs
+
+They are **not** two settings of the same dial, and neither subsumes the other. A data race is invisible to ASan; a use-after-free is invisible to TSan.
+
+| | **`asan`** (AddressSanitizer + UBSan) | **`tsan`** (ThreadSanitizer) |
+|---|---|---|
+| Finds | Memory errors — heap/stack/global buffer overflows, use-after-free, use-after-scope, double-free, leaks. Plus UBSan: signed overflow, null/misaligned deref, bad shifts, invalid enum/bool values | **Data races** — two threads touching the same memory unsynchronized, at least one writing. Also lock-order inversions |
+| Scope | The **whole** test suite: any line of code can have a memory bug | Only the genuinely concurrent code: `test_job_system` + `test_world_broadcaster` (the data-parallel sim tick). The rest of the engine is single-threaded, so TSan there finds nothing and costs a lot |
+| Cost | ~2× slower, ~3× memory | ~5–15× slower, ~5–10× memory |
+
+**They are mutually exclusive** — the two instrumentations conflict and cannot be built together. That is why they are two separate CI jobs (`asan.yml`, `tsan.yml`) rather than one, and why a bug that reproduces under one may need the other to explain it.
+
+⚠ **Do not run the full suite under `tsan`.** `ctest --preset tsan` fails ~26 network tests, and has for a long time: TSan's instrumentation slows the ENet/GNS handshake past the fixed pump budgets those integration tests allow, so they time out. This is a property of the sanitizer, not a bug in the transport. `tsan.yml` therefore runs the two scoped binaries **directly**, not through ctest:
 
 ```bash
 CC=clang CXX=clang++ cmake --preset tsan
 cmake --build --preset tsan --target test_job_system test_world_broadcaster
 TSAN_OPTIONS=suppressions=$PWD/tools/tsan.supp ./build/tsan/tests/test_job_system
 ```
+
+ThreadSanitizer is **Linux/macOS only** (no MSVC support); on Fedora it needs the `libtsan` package, on Debian/Ubuntu it ships with `clang`/`gcc`. `tools/tsan.supp` suppresses races inside third-party threads.
+
+### Tests run in parallel
+
+The `debug`, `release`, `debug-msvc` and `release-msvc` test presets set `execution.jobs = 8` (`asan` uses 4, for sanitizer memory), so `ctest --preset debug` is parallel by default — **79 s → 18 s** on a 24-core box. Override for a bigger machine with `ctest --preset debug -j 24`.
+
+⚠ **`jobs` must be an explicit bound. Do not set it to `0`.** CTest does *not* read 0 as "one per core" — it treats it as *unlimited* and oversubscribes (measured: 53 concurrent processes on a 24-core box). That is survivable on a big Linux box and fatal on a macOS runner, where it exhausts the process limit and ~1600 tests never start — reported as `***Not Run`, not as failures. A bound of 8 is no slower in practice anyway: wall-clock is set by the slowest few tests, not by throughput.
+
+Two presets stay **serial**, deliberately:
+
+- **`coverage`** — concurrent test processes writing the same `.gcda` counter files is a known way to corrupt coverage data, and the coverage leg is a post-merge metric, not a gate, so its wall-clock does not matter.
+- **`tsan`** — see the warning above; it is not run through ctest at all.
+
+Because each `TEST_CASE` is registered as its own ctest test, parallel runs execute them as **concurrent processes**. A test may therefore not assume it is the only process on the machine (#787):
+
+- **Never hardcode a port.** Bind an ephemeral port (`bind(addr, 0, n)`) and read it back with `ENetNetwork::boundPort()`, or ask the OS for a free one. Two tests once shared port 19009 and only "worked" because they never ran at once.
+- **Never name a fixed temp path**, and note that a *per-process counter is not unique* — it restarts at 1 in every process. Use `fl::test::uniqueTempPath()` / `TempDirGuard` from `tests/temp_path.h`, which salt the name with a per-process token.
+- **Do not sleep a fixed interval and hope** a packet/file arrived. Poll to a deadline; a sleep that is too short on a loaded machine passes for the wrong reason.
 
 ### Local preset overrides
 
