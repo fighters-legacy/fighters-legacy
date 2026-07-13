@@ -315,4 +315,5 @@ target_link_libraries(engine-script
             engine-entity      # IEntityController, EntityState, EntityManager
     PRIVATE lua::lua
             engine-ai          # Guidance.h math for LuaController bindings
+            engine-sensor      # detected_contacts() reads AiTickContext::contacts (#691)
 )

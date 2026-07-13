@@ -135,7 +135,64 @@ Extracts the world-frame forward vector (+X body axis) from the quaternion.
 
 ---
 
+## `detected_contacts() → array`
+
+**The honest view — use this one.** Returns what your entity has actually *detected* through its
+sensors, and nothing else.
+
+`nearby_entities()` (below) is a raw radius query over ground truth: it sees through terrain, through
+the back of your aircraft's head, and at any range you ask for. `detected_contacts()` returns only
+targets your sensors have found, with **last-known** position and velocity — a *coasting* contact
+reports where the target **was**, not where it is.
+
+Each entry:
+
+| Field | Type | Notes |
+|---|---|---|
+| `idx` | int | Target entity index |
+| `state` | string | `detected` (search lobe — bearing, no firing-quality track), `locked` (track lobe), `coasting` (was held, geometry lost, running out `lock_hold_s` on last-known state) |
+| `pos` | `{x,y,z}` | **Last-known** position — not live truth |
+| `vel` | `{x,y,z}` | Last-known velocity |
+| `age_s` | number | Seconds since the target was last actually *seen*. `0` while it is being seen; it grows while coasting — which is exactly when you should stop trusting `pos` |
+| `reacted` | bool | `false` until the reaction delay has elapsed. **A contact exists before its owner has noticed it** — see below |
+| `faction` | int | Target's faction index (`0` = neutral) |
+| `sensor_types` | string[] | Which kinds hold it: `radar`, `ir`, `visual`, `laser`. "He has me on radar" and "he can see me" are different tactical facts |
+
+```lua
+function compute_control(state, tick, dt)
+    for _, c in ipairs(detected_contacts()) do
+        if c.reacted and c.faction ~= 0 and c.faction ~= state.faction then
+            -- Steer at the LAST-KNOWN position. If the contact is coasting, this is a guess —
+            -- age_s tells you how old a guess it is.
+            local herr = guidance.heading_error(state.quat, state.pos, c.pos)
+            return { aileron = guidance.bank_to_turn_aileron(herr), throttle = 1.0 }
+        end
+    end
+    return { throttle = 0.6 }   -- nothing detected: no target to chase
+end
+```
+
+**`reacted` is not a formality.** Detection and reaction are separate: your entity *sees* a contact
+the instant its sensors find it, and `reacted` flips only once the reaction delay has elapsed
+(server `[ai] difficulty` × the entity's own `[ai].reaction`). A script that ignores `reacted` is a
+script whose AI has superhuman reflexes on every difficulty setting.
+
+**Returns `{}` when sensing was not evaluated** (a headless caller or a unit test). That is not the
+same as an empty table from a real check, which means your sensors ran and found nothing — but for a
+script both simply mean "no contacts", so existing scripts keep working unchanged.
+
+> **`get_entity(idx)` still returns live ground truth**, including for an entity you have not
+> detected. It is not restricted today because existing scripts depend on it. **Prefer the contact's
+> own `pos`/`vel`** if you want your AI to behave honestly — a script that reads `get_entity` on a
+> coasting contact is quietly cheating.
+
+---
+
 ## `nearby_entities(cx, cz, radius_m) → array`
+
+> **This is a ground-truth query, and it is omniscient.** It ignores cones, ranges, terrain and
+> probability. Prefer [`detected_contacts()`](#detected_contacts--array) for anything that should
+> behave like a pilot rather than a cheat.
 
 Returns an array of `{idx, pos={x,y,z}}` tables for entities within `radius_m` metres in the XZ
 plane, queried from the server's spatial index. Returns `{}` when the spatial index is unavailable.

@@ -10,6 +10,7 @@ extern "C" {
 #include "ai/Guidance.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
+#include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
 
 #include <cstdint>
@@ -28,6 +29,8 @@ struct LuaController::Impl {
     // through this same pointer. Set for the duration of one compute_control pcall, cleared on every
     // exit path — a Lua script must never see a stale view of a previous tick's world.
     const fl::AiTickContext* currentCtx{nullptr};
+    uint64_t currentTick{0}; // for contact age_s (ticks since last seen × dt)
+    double currentDt{0.0};
     bool valid{false};
     std::string lastError;
     uint64_t nextErrorLogTick{0}; // rate-limit: log at most once per 60 ticks
@@ -269,6 +272,107 @@ static int luaGetEntity(lua_State* L) {
 }
 
 // ---------------------------------------------------------------------------
+// detected_contacts() → array of {idx, state, pos, vel, age_s, reacted, sensor_types}
+// Upvalue 1: LuaController::Impl* (lightuserdata)
+//
+// THE HONEST VIEW. nearby_entities() is a raw radius query over ground truth — it sees through
+// terrain, through the back of the aircraft's head, and at any range. This returns only what the
+// entity has actually DETECTED, with LAST-KNOWN position and velocity: a coasting contact reports
+// where the target WAS, not where it is.
+//
+// Returns {} when sensing was not evaluated (ctx.contacts == nullptr — headless callers and tests),
+// so every existing script keeps working unchanged. Note that is different from an EMPTY table,
+// which means the sensors ran and found nothing.
+// ---------------------------------------------------------------------------
+
+static const char* contactStateName(fl::sensor::ContactState s) {
+    switch (s) {
+    case fl::sensor::ContactState::Detected:
+        return "detected";
+    case fl::sensor::ContactState::Locked:
+        return "locked";
+    case fl::sensor::ContactState::Coasting:
+        return "coasting";
+    case fl::sensor::ContactState::Lost:
+        break;
+    }
+    return "lost"; // never stored in a table; a Lost contact is not in it at all
+}
+
+static int luaDetectedContacts(lua_State* L) {
+    LuaController::Impl* impl = static_cast<LuaController::Impl*>(lua_touserdata(L, lua_upvalueindex(1)));
+
+    lua_newtable(L);
+    const int resultTable = lua_gettop(L);
+
+    if (!impl->currentCtx || !impl->currentCtx->contacts)
+        return 1; // sensing not evaluated — an empty table, and existing scripts carry on
+
+    lua_Integer n = 1;
+    for (const fl::sensor::Contact& c : *impl->currentCtx->contacts) {
+        lua_newtable(L);
+
+        lua_pushinteger(L, static_cast<lua_Integer>(c.id.index));
+        lua_setfield(L, -2, "idx");
+
+        lua_pushstring(L, contactStateName(c.state));
+        lua_setfield(L, -2, "state");
+
+        // LAST-KNOWN, not live. A script that wants honest behavior steers at these.
+        lua_newtable(L);
+        lua_pushnumber(L, c.lastKnownPos[0]);
+        lua_setfield(L, -2, "x");
+        lua_pushnumber(L, c.lastKnownPos[1]);
+        lua_setfield(L, -2, "y");
+        lua_pushnumber(L, c.lastKnownPos[2]);
+        lua_setfield(L, -2, "z");
+        lua_setfield(L, -2, "pos");
+
+        lua_newtable(L);
+        lua_pushnumber(L, static_cast<double>(c.lastKnownVel[0]));
+        lua_setfield(L, -2, "x");
+        lua_pushnumber(L, static_cast<double>(c.lastKnownVel[1]));
+        lua_setfield(L, -2, "y");
+        lua_pushnumber(L, static_cast<double>(c.lastKnownVel[2]));
+        lua_setfield(L, -2, "z");
+        lua_setfield(L, -2, "vel");
+
+        // How stale this is. 0 while the contact is actually being seen; it grows while coasting,
+        // which is precisely when a script should stop trusting `pos`.
+        const uint64_t ticksSince = impl->currentTick > c.lastSeenTick ? impl->currentTick - c.lastSeenTick : 0;
+        lua_pushnumber(L, static_cast<double>(ticksSince) * impl->currentDt);
+        lua_setfield(L, -2, "age_s");
+
+        lua_pushboolean(L, c.reacted ? 1 : 0);
+        lua_setfield(L, -2, "reacted");
+
+        lua_pushinteger(L, static_cast<lua_Integer>(c.factionIndex));
+        lua_setfield(L, -2, "faction");
+
+        // Which KINDS of sensor hold it. "He has me on radar" and "he can see me" are different
+        // tactical facts, and a script is entitled to tell them apart.
+        lua_newtable(L);
+        lua_Integer si = 1;
+        const std::pair<fl::sensor::SensorType, const char*> kTypes[] = {
+            {fl::sensor::SensorType::Visual, "visual"},
+            {fl::sensor::SensorType::Ir, "ir"},
+            {fl::sensor::SensorType::Radar, "radar"},
+            {fl::sensor::SensorType::Laser, "laser"},
+        };
+        for (const auto& [type, name] : kTypes) {
+            if (fl::sensor::holdsSensorType(c.sensorTypeMask, type)) {
+                lua_pushstring(L, name);
+                lua_rawseti(L, -2, si++);
+            }
+        }
+        lua_setfield(L, -2, "sensor_types");
+
+        lua_rawseti(L, resultTable, n++);
+    }
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
 // API registration
 // ---------------------------------------------------------------------------
 
@@ -295,6 +399,10 @@ static void registerSpatialFuncs(lua_State* L, LuaController::Impl* impl) {
     lua_pushlightuserdata(L, impl);
     lua_pushcclosure(L, luaGetEntity, 1);
     lua_setglobal(L, "get_entity");
+
+    lua_pushlightuserdata(L, impl);
+    lua_pushcclosure(L, luaDetectedContacts, 1);
+    lua_setglobal(L, "detected_contacts");
 }
 
 // ---------------------------------------------------------------------------
@@ -341,6 +449,8 @@ fl::ControlInput LuaController::sample(const fl::EntityState& state, uint64_t ti
 
     lua_State* L = m_impl->sandbox->luaState();
     m_impl->currentCtx = &ctx;
+    m_impl->currentTick = tick;
+    m_impl->currentDt = dt;
 
     // Push compute_control function.
     lua_getglobal(L, "compute_control");

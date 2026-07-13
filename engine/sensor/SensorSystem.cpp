@@ -208,6 +208,7 @@ void SensorSystem::evaluateObserver(const ObserverWork& work, const SpatialIndex
         ContactState best = ContactState::Lost;
         uint64_t firstDetected = 0;
         uint64_t lastSeen = 0;
+        uint8_t typeMask = 0;
 
         for (uint32_t slot = 0; slot < obs.sensors.size(); ++slot) {
             const SensorDef& def = *obs.sensors[slot];
@@ -228,6 +229,8 @@ void SensorSystem::evaluateObserver(const ObserverWork& work, const SpatialIndex
             else
                 obs.tracks[key] = next;
 
+            if (next.state != ContactState::Lost)
+                typeMask |= static_cast<uint8_t>(1u << static_cast<int>(def.type));
             if (stateRank(next.state) > stateRank(best))
                 best = next.state;
             if (next.firstDetectedTick != 0 && (firstDetected == 0 || next.firstDetectedTick < firstDetected))
@@ -243,6 +246,7 @@ void SensorSystem::evaluateObserver(const ObserverWork& work, const SpatialIndex
         c.typeIndex = tgt.typeIndex;
         c.factionIndex = tgt.factionIndex;
         c.state = best;
+        c.sensorTypeMask = typeMask;
         c.firstDetectedTick = firstDetected;
         c.lastSeenTick = lastSeen;
 
