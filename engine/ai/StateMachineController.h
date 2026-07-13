@@ -144,6 +144,50 @@ Condition AnyHostileEntityWithinRange(float rangeM);
 // dead/invalid.
 Condition AnyHostileEntityWithinRangeOf(fl::EntityId anchorId, float rangeM);
 
+// ── Sensing-gated conditions (#690) ─────────────────────────────────────────
+//
+// These are the honest versions of the conditions above: they read ctx.contacts — what the entity
+// has actually DETECTED — instead of querying the world. An AI built on these cannot react to
+// something it has not seen, which is the entire point of #670.
+//
+// NULL-CONTACTS SEMANTICS (normative, and what keeps every existing test valid): when
+// `ctx.contacts == nullptr`, sensing was NOT EVALUATED (a unit test, a headless caller), and each of
+// these behaves as its ground-truth ancestor. A null table is not "sees nothing"; an EMPTY table is.
+
+// True when the entity has a REACTED hostile contact whose last-known position is within rangeM.
+//
+// Three things it deliberately does NOT do: it does not see through the entity's sensor cones (a
+// bandit behind a visual-only unit is simply not in the table); it does not fire before the reaction
+// delay has elapsed (`Contact::reacted` — seeing is not the same as noticing); and it does not drop
+// a contact the instant a target beams or masks — a coasting contact still counts, at its LAST-KNOWN
+// position, until its coast expires. That last one is why the AI does not twitch back to patrol the
+// moment a target's radar return fades.
+//
+// Falls back to AnyHostileEntityWithinRange when sensing was not evaluated.
+Condition DetectedHostileWithinRange(float rangeM);
+
+// True when the entity holds a reacted contact on targetId, within rangeM of its last-known
+// position. The specific-target gate for pursuit/evade wiring.
+// Falls back to ThreatWithinRange when sensing was not evaluated.
+Condition DetectsThreatWithinRange(fl::EntityId targetId, float rangeM);
+
+// True when the entity has NO contact on targetId at all — it never detected it, or the track has
+// dropped after coasting. The "I have lost him" edge.
+// Falls back to ThreatBeyondRange(targetId, rangeM) when sensing was not evaluated.
+Condition LostContact(fl::EntityId targetId, float rangeM);
+
+// True when the entity holds a firing-quality track (a Locked contact) on anything.
+// Returns false when sensing was not evaluated — a controller cannot claim a lock it never took.
+Condition HasLockedContact();
+
+// True when the contact table is empty — the sensors ran and found nothing. The "go back to patrol"
+// edge. Pair it with a transition `minDwellSeconds` if you want the AI to stay committed for a while
+// before giving up; the sensor's own `lock_hold_s` coast already provides the short-term hysteresis,
+// which is why this needs no grace timer of its own (a timer here would be a second, invented,
+// version of a mechanism the content already authors).
+// Returns false when sensing was not evaluated (an AI with no sensors must not conclude "all clear").
+Condition NoContacts();
+
 // Always returns true. Useful as a final fallback transition.
 Condition Always();
 

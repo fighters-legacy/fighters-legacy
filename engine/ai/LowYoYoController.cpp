@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ai/LowYoYoController.h"
 
+#include "ai/TargetView.h"
+
 #include "ai/Guidance.h"
 #include "entity/EntityState.h"
 
@@ -12,11 +14,14 @@ LowYoYoController::LowYoYoController(const fl::EntityManager& entityManager, fl:
       m_pullDuration(pullDurationS) {}
 
 fl::ControlInput LowYoYoController::sample(const fl::EntityState& state, uint64_t /*tick*/, double dt,
-                                           const fl::AiTickContext& /*ctx*/) {
+                                           const fl::AiTickContext& ctx) {
     fl::ControlInput ctrl{};
 
-    const fl::EntityState* target = m_entityManager.get(m_targetId);
-    if (!target || target->dead)
+    // Honest targeting (#690): the target must be a CONTACT when sensing ran — a controller does
+    // not chase what its entity cannot see. A coasting contact returns LAST-KNOWN state (steering at
+    // a memory is what a coast is for); a dropped one is treated exactly like a dead target.
+    const TargetView tv = resolveTarget(m_entityManager, ctx, m_targetId);
+    if (!tv.valid)
         return ctrl;
 
     m_timer += static_cast<float>(dt);
@@ -30,7 +35,7 @@ fl::ControlInput LowYoYoController::sample(const fl::EntityState& state, uint64_
     }
 
     if (m_phase == Phase::Dive || m_phase == Phase::Pull) {
-        const double tgtPos[3] = {target->transform.pos[0], target->transform.pos[1], target->transform.pos[2]};
+        const double tgtPos[3] = {tv.pos[0], tv.pos[1], tv.pos[2]};
         float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, tgtPos, m_planetRadiusM);
         ctrl.aileron = bankToTurnAileron(headErr);
         ctrl.rudder = coordinatedRudder(ctrl.aileron);

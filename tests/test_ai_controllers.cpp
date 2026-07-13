@@ -12,6 +12,7 @@
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
+#include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
 
 #include <catch2/catch_approx.hpp>
@@ -2499,4 +2500,182 @@ TEST_CASE("AiControllerFactory: escort ignores a same-faction escortee within in
 
     sm->sample(selfState, 0, 1.0 / 60.0, fl::AiTickContext{&si});
     CHECK(sm->currentState() == "follow"); // friendly ignored → stays in follow
+}
+
+// ---------------------------------------------------------------------------
+// Sensing-gated conditions and honest targeting (#690)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A contact table for `targetId`, as the sensing pass would have produced it.
+fl::sensor::ContactTable contactOn(fl::EntityId id, fl::sensor::ContactState state, bool reacted, double x, double y,
+                                   double z, uint16_t faction = 2) {
+    fl::sensor::Contact c{};
+    c.id = id;
+    c.state = state;
+    c.reacted = reacted;
+    c.factionIndex = faction;
+    c.lastKnownPos[0] = x;
+    c.lastKnownPos[1] = y;
+    c.lastKnownPos[2] = z;
+
+    fl::sensor::ContactTable t;
+    t.contacts.push_back(c);
+    return t;
+}
+
+} // namespace
+
+TEST_CASE("DetectedHostileWithinRange: a hostile the entity has NOT detected does not trigger") {
+    // THE #670 ACCEPTANCE CRITERION, as a unit test. The bandit is alive, hostile, and 1 km away —
+    // and the entity has not seen it, so as far as its AI is concerned it is not there.
+    SmFixture f;
+    fl::EntityState self = makeState(0.0, 0.0, 0.0);
+    self.id = f.selfId;
+    self.factionIndex = 1;
+
+    const fl::sensor::ContactTable empty; // sensors ran, found nothing
+    fl::AiTickContext ctx{};
+    ctx.contacts = &empty;
+
+    auto cond = fl::ai::DetectedHostileWithinRange(5000.f);
+    CHECK(cond(self, f.em, ctx) == false);
+}
+
+TEST_CASE("DetectedHostileWithinRange: a detected, reacted hostile in range triggers") {
+    SmFixture f;
+    fl::EntityState self = makeState(0.0, 0.0, 0.0);
+    self.id = f.selfId;
+    self.factionIndex = 1;
+
+    const auto contacts = contactOn(f.targetId, fl::sensor::ContactState::Detected, /*reacted=*/true, 1000.0, 0.0, 0.0);
+    fl::AiTickContext ctx{};
+    ctx.contacts = &contacts;
+
+    CHECK(fl::ai::DetectedHostileWithinRange(5000.f)(self, f.em, ctx) == true);
+    CHECK(fl::ai::DetectedHostileWithinRange(500.f)(self, f.em, ctx) == false); // in the table, out of range
+}
+
+TEST_CASE("DetectedHostileWithinRange: a detected hostile does NOT trigger before the reaction delay") {
+    // Seeing is not noticing. The contact exists; the entity has not yet reacted to it.
+    SmFixture f;
+    fl::EntityState self = makeState(0.0, 0.0, 0.0);
+    self.id = f.selfId;
+    self.factionIndex = 1;
+
+    const auto contacts = contactOn(f.targetId, fl::sensor::ContactState::Locked, /*reacted=*/false, 1000.0, 0.0, 0.0);
+    fl::AiTickContext ctx{};
+    ctx.contacts = &contacts;
+
+    CHECK(fl::ai::DetectedHostileWithinRange(5000.f)(self, f.em, ctx) == false);
+}
+
+TEST_CASE("DetectedHostileWithinRange: a FRIENDLY contact never triggers") {
+    SmFixture f;
+    fl::EntityState self = makeState(0.0, 0.0, 0.0);
+    self.id = f.selfId;
+    self.factionIndex = 1;
+
+    const auto contacts = contactOn(f.targetId, fl::sensor::ContactState::Locked, true, 1000.0, 0.0, 0.0,
+                                    /*faction=*/1); // same faction as self
+    fl::AiTickContext ctx{};
+    ctx.contacts = &contacts;
+
+    CHECK(fl::ai::DetectedHostileWithinRange(5000.f)(self, f.em, ctx) == false);
+}
+
+TEST_CASE("Sensing-gated conditions fall back to ground truth when sensing was not evaluated") {
+    // Null contacts = "not evaluated", NOT "sees nothing" — so the honest conditions behave exactly
+    // as their ground-truth ancestors. This is what keeps every pre-#690 test and headless caller
+    // working, and it is why the template migration is a no-op for them.
+    SmFixture f;
+    fl::EntityState* tgt = f.em.get(f.targetId);
+    REQUIRE(tgt != nullptr);
+    tgt->transform.pos[2] = 1000.0;
+
+    fl::EntityState self = makeState(0.0, 0.0, 0.0);
+    self.id = f.selfId;
+    self.factionIndex = 1;
+
+    CHECK(fl::ai::DetectsThreatWithinRange(f.targetId, 5000.f)(self, f.em, fl::AiTickContext{}) == true);
+    CHECK(fl::ai::LostContact(f.targetId, 5000.f)(self, f.em, fl::AiTickContext{}) == false);
+}
+
+TEST_CASE("LostContact: true when the track has dropped, false while it is still coasting") {
+    SmFixture f;
+    fl::EntityState self = makeState(0.0, 0.0, 0.0);
+    self.id = f.selfId;
+    self.factionIndex = 1;
+
+    // Coasting: he beamed or masked, but the track is still alive on last-known state. The AI must
+    // NOT twitch back to patrol here — that is precisely what the coast is for.
+    const auto coasting = contactOn(f.targetId, fl::sensor::ContactState::Coasting, true, 1000.0, 0.0, 0.0);
+    fl::AiTickContext ctxCoast{};
+    ctxCoast.contacts = &coasting;
+    CHECK(fl::ai::LostContact(f.targetId, 5000.f)(self, f.em, ctxCoast) == false);
+
+    // Dropped: the coast expired and the contact is gone from the table.
+    const fl::sensor::ContactTable empty;
+    fl::AiTickContext ctxLost{};
+    ctxLost.contacts = &empty;
+    CHECK(fl::ai::LostContact(f.targetId, 5000.f)(self, f.em, ctxLost) == true);
+}
+
+TEST_CASE("HasLockedContact and NoContacts") {
+    SmFixture f;
+    fl::EntityState self = makeState(0.0, 0.0, 0.0);
+    self.id = f.selfId;
+    self.factionIndex = 1;
+
+    const auto locked = contactOn(f.targetId, fl::sensor::ContactState::Locked, true, 100.0, 0.0, 0.0);
+    fl::AiTickContext ctxLocked{};
+    ctxLocked.contacts = &locked;
+    CHECK(fl::ai::HasLockedContact()(self, f.em, ctxLocked) == true);
+    CHECK(fl::ai::NoContacts()(self, f.em, ctxLocked) == false);
+
+    const auto detected = contactOn(f.targetId, fl::sensor::ContactState::Detected, true, 100.0, 0.0, 0.0);
+    fl::AiTickContext ctxDetected{};
+    ctxDetected.contacts = &detected;
+    CHECK(fl::ai::HasLockedContact()(self, f.em, ctxDetected) == false); // a bearing is not a lock
+
+    const fl::sensor::ContactTable empty;
+    fl::AiTickContext ctxEmpty{};
+    ctxEmpty.contacts = &empty;
+    CHECK(fl::ai::NoContacts()(self, f.em, ctxEmpty) == true);
+
+    // No sensing at all: an entity must not conclude either "I have a lock" or "all clear".
+    CHECK(fl::ai::HasLockedContact()(self, f.em, fl::AiTickContext{}) == false);
+    CHECK(fl::ai::NoContacts()(self, f.em, fl::AiTickContext{}) == false);
+}
+
+TEST_CASE(
+    "PursuitController: does not chase an undetected target, and steers at a COASTING one's last-known position") {
+    // The controller-side half of honest targeting: every targeting controller resolves its target
+    // through TargetView, so none of them can reach past the sensors into the EntityManager.
+    SmFixture f;
+    fl::EntityState* tgt = f.em.get(f.targetId);
+    REQUIRE(tgt != nullptr);
+    tgt->transform.pos[0] = 5000.0; // LIVE position: dead ahead
+
+    fl::EntityState self = makeState(0.0, 0.0, 0.0);
+    self.id = f.selfId;
+
+    fl::ai::PursuitController pc(f.em, f.targetId, 0.9f, false);
+
+    // Sensors ran and found nothing: no throttle, no chase. Same as a dead target.
+    const fl::sensor::ContactTable empty;
+    fl::AiTickContext blind{};
+    blind.contacts = &empty;
+    const fl::ControlInput none = pc.sample(self, 0, 1.0 / 60.0, blind);
+    CHECK(none.throttle == Catch::Approx(0.f));
+
+    // A coasting contact whose LAST-KNOWN position is off to the right (+Z), while the target is
+    // really dead ahead. The controller must steer at the memory, not at the truth.
+    const auto coasting = contactOn(f.targetId, fl::sensor::ContactState::Coasting, true, 0.0, 0.0, 5000.0);
+    fl::AiTickContext ctx{};
+    ctx.contacts = &coasting;
+    const fl::ControlInput ctrl = pc.sample(self, 0, 1.0 / 60.0, ctx);
+    CHECK(ctrl.throttle == Catch::Approx(0.9f));
+    CHECK(ctrl.aileron > 0.f); // banking right, toward the last-known position — not straight ahead
 }

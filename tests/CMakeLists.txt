@@ -271,7 +271,8 @@ if(TARGET platform-enet)
 endif()
 
 add_executable(test_ai_controllers test_ai_controllers.cpp)
-target_link_libraries(test_ai_controllers PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
+target_link_libraries(test_ai_controllers PRIVATE engine-ai engine-entity engine-spatial engine-sensor
+    Catch2::Catch2WithMain)
 catch_discover_tests(test_ai_controllers)
 
 # The scripted wingman grammar + its two wire messages (#610). Header-only + engine-protocol only.

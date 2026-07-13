@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ai/HighYoYoController.h"
 
+#include "ai/TargetView.h"
+
 #include "ai/Guidance.h"
 #include "entity/EntityState.h"
 
@@ -12,11 +14,14 @@ HighYoYoController::HighYoYoController(const fl::EntityManager& entityManager, f
       m_reacquireDuration(reacquireDurationS) {}
 
 fl::ControlInput HighYoYoController::sample(const fl::EntityState& state, uint64_t /*tick*/, double dt,
-                                            const fl::AiTickContext& /*ctx*/) {
+                                            const fl::AiTickContext& ctx) {
     fl::ControlInput ctrl{};
 
-    const fl::EntityState* target = m_entityManager.get(m_targetId);
-    if (!target || target->dead)
+    // Honest targeting (#690): the target must be a CONTACT when sensing ran — a controller does
+    // not chase what its entity cannot see. A coasting contact returns LAST-KNOWN state (steering at
+    // a memory is what a coast is for); a dropped one is treated exactly like a dead target.
+    const TargetView tv = resolveTarget(m_entityManager, ctx, m_targetId);
+    if (!tv.valid)
         return ctrl;
 
     m_timer += static_cast<float>(dt);
@@ -30,7 +35,7 @@ fl::ControlInput HighYoYoController::sample(const fl::EntityState& state, uint64
     }
 
     if (m_phase == Phase::Climb) {
-        const double tgtPos[3] = {target->transform.pos[0], target->transform.pos[1], target->transform.pos[2]};
+        const double tgtPos[3] = {tv.pos[0], tv.pos[1], tv.pos[2]};
         float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, tgtPos, m_planetRadiusM);
         // Bank away from target at half authority; pull hard up to bleed speed and gain altitude.
         ctrl.aileron = -bankToTurnAileron(headErr) * 0.5f;
@@ -38,7 +43,7 @@ fl::ControlInput HighYoYoController::sample(const fl::EntityState& state, uint64
         ctrl.elevator = 1.f;
         ctrl.throttle = 0.7f;
     } else if (m_phase == Phase::Reacquire) {
-        const double tgtPos[3] = {target->transform.pos[0], target->transform.pos[1], target->transform.pos[2]};
+        const double tgtPos[3] = {tv.pos[0], tv.pos[1], tv.pos[2]};
         float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, tgtPos, m_planetRadiusM);
         // Roll back toward target and ease in with a moderate elevator pull.
         ctrl.aileron = bankToTurnAileron(headErr);

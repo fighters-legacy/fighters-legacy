@@ -25,4 +25,5 @@ target_link_libraries(engine-ai
     PRIVATE engine-entity
             engine-flight
             engine-world
+            engine-sensor   # sensing-gated conditions + TargetView read ctx.contacts (#690)
 )
