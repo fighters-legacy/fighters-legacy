@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "license_validator.h"
 
+#include "temp_path.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
@@ -20,9 +22,10 @@ struct TempDir {
     fs::path path;
 
     explicit TempDir(const std::string& suffix = "") {
-        // Use a counter for cross-platform uniqueness without getpid/GetCurrentProcessId
-        static std::size_t counter = 0;
-        path = fs::temp_directory_path() / ("fl_lic_test_" + std::to_string(++counter) + suffix);
+        // Salted per-process, NOT just a counter (#787). A counter restarts at 1 in every process, so
+        // under `ctest -j` — where each TEST_CASE is its own process — every case here claimed the
+        // same directory and the first to finish deleted it out from under the others.
+        path = fl::test::uniqueTempPath("fl_lic_test" + suffix);
         fs::create_directories(path);
     }
     ~TempDir() {

@@ -61,11 +61,25 @@ static void pumpN(INetwork& server, std::initializer_list<INetwork*> clients, in
     }
 }
 
-// Each integration test uses a unique port to prevent cross-test interference
-// within the sequential Catch2 binary run. Reserved ranges:
-//   [19001, 19010] -- basic tests
-//   [19021, 19024] -- IPv6 tests
-//   [19030, 19033] -- pre-handshake rate limit tests
+// PORTS ARE EPHEMERAL, NOT HARDCODED (#787).
+//
+// These tests used to hand out fixed ports from reserved ranges, on the theory that Catch2 runs the
+// cases in one binary sequentially. That stopped being true the moment `catch_discover_tests` began
+// registering each TEST_CASE as its own ctest test: under `ctest -j`, cases run as CONCURRENT
+// PROCESSES, so a fixed port is shared with whatever sibling case happens to be running. Two cases
+// here had even been given the same port (19009) and only "worked" because they never ran at once.
+//
+// The fix is to stop naming ports at all: bind port 0, let the OS pick a free one, and read it back
+// with ENetNetwork::boundPort(). That is race-free by construction rather than by convention, and a
+// new test cannot reintroduce the bug by copy-pasting a port number.
+//
+// bindEphemeral() binds the server and returns the port the client should connect to.
+static uint16_t bindEphemeral(ENetNetwork& server, const char* address, int maxClients) {
+    REQUIRE(server.bind(address, 0, maxClients));
+    const uint16_t port = server.boundPort();
+    REQUIRE(port != 0); // the OS assigned one, and we can see which
+    return port;
+}
 
 // ---------------------------------------------------------------------------
 // Init / shutdown
@@ -108,12 +122,12 @@ TEST_CASE("ENet library stays initialized until the last instance shuts down", "
     EventSink serverSink;
     EventSink clientSink;
     b.setEventHandler(&serverSink);
-    REQUIRE(b.bind("127.0.0.1", 19009, 4));
+    const uint16_t port = bindEphemeral(b, "127.0.0.1", 4);
 
     ENetNetwork client;
     REQUIRE(client.init());
     client.setEventHandler(&clientSink);
-    REQUIRE(client.connect("127.0.0.1", 19009));
+    REQUIRE(client.connect("127.0.0.1", port));
 
     pump(b, client, 20);
     CHECK(clientSink.countType(Event::Type::Connect) == 1);
@@ -196,8 +210,8 @@ TEST_CASE("loopback connect", "[network][integration]") {
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind(nullptr, 19001, 4));
-    REQUIRE(client.connect("127.0.0.1", 19001));
+    const uint16_t port = bindEphemeral(server, nullptr, 4);
+    REQUIRE(client.connect("127.0.0.1", port));
 
     pump(server, client, 20);
 
@@ -222,8 +236,8 @@ TEST_CASE("getPeerAddress returns ip:port", "[network][integration]") {
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind(nullptr, 19002, 4));
-    REQUIRE(client.connect("127.0.0.1", 19002));
+    const uint16_t port = bindEphemeral(server, nullptr, 4);
+    REQUIRE(client.connect("127.0.0.1", port));
 
     pump(server, client, 20);
 
@@ -248,8 +262,8 @@ TEST_CASE("reliable send client to server", "[network][integration]") {
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind(nullptr, 19003, 4));
-    REQUIRE(client.connect("127.0.0.1", 19003));
+    const uint16_t port = bindEphemeral(server, nullptr, 4);
+    REQUIRE(client.connect("127.0.0.1", port));
     pump(server, client, 20);
 
     const uint8_t payload[] = {0xDE, 0xAD, 0xBE, 0xEF};
@@ -273,8 +287,8 @@ TEST_CASE("unreliable send server to client", "[network][integration]") {
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind(nullptr, 19004, 4));
-    REQUIRE(client.connect("127.0.0.1", 19004));
+    const uint16_t port = bindEphemeral(server, nullptr, 4);
+    REQUIRE(client.connect("127.0.0.1", port));
     pump(server, client, 20);
 
     REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
@@ -300,8 +314,8 @@ TEST_CASE("large packet fragmentation", "[network][integration]") {
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind(nullptr, 19005, 4));
-    REQUIRE(client.connect("127.0.0.1", 19005));
+    const uint16_t port = bindEphemeral(server, nullptr, 4);
+    REQUIRE(client.connect("127.0.0.1", port));
     pump(server, client, 20);
 
     // 10 KB — well above the MTU (~1400 bytes); ENet must fragment and reassemble.
@@ -336,9 +350,9 @@ TEST_CASE("multiple clients connect", "[network][integration]") {
     c1.setEventHandler(&s1);
     c2.setEventHandler(&s2);
 
-    REQUIRE(server.bind(nullptr, 19006, 4));
-    REQUIRE(c1.connect("127.0.0.1", 19006));
-    REQUIRE(c2.connect("127.0.0.1", 19006));
+    const uint16_t port = bindEphemeral(server, nullptr, 4);
+    REQUIRE(c1.connect("127.0.0.1", port));
+    REQUIRE(c2.connect("127.0.0.1", port));
 
     pumpN(server, {&c1, &c2}, 30);
 
@@ -377,9 +391,9 @@ TEST_CASE("server broadcast reaches all clients", "[network][integration]") {
     c1.setEventHandler(&s1);
     c2.setEventHandler(&s2);
 
-    REQUIRE(server.bind(nullptr, 19007, 4));
-    REQUIRE(c1.connect("127.0.0.1", 19007));
-    REQUIRE(c2.connect("127.0.0.1", 19007));
+    const uint16_t port = bindEphemeral(server, nullptr, 4);
+    REQUIRE(c1.connect("127.0.0.1", port));
+    REQUIRE(c2.connect("127.0.0.1", port));
 
     pumpN(server, {&c1, &c2}, 30);
     REQUIRE(srvSink.countType(Event::Type::Connect) == 2);
@@ -408,8 +422,8 @@ TEST_CASE("disconnect fires callback", "[network][integration]") {
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind(nullptr, 19008, 4));
-    REQUIRE(client.connect("127.0.0.1", 19008));
+    const uint16_t port = bindEphemeral(server, nullptr, 4);
+    REQUIRE(client.connect("127.0.0.1", port));
     pump(server, client, 20);
     REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
 
@@ -430,8 +444,8 @@ TEST_CASE("send to disconnected peer returns false", "[network][integration]") {
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind(nullptr, 19009, 4));
-    REQUIRE(client.connect("127.0.0.1", 19009));
+    const uint16_t port = bindEphemeral(server, nullptr, 4);
+    REQUIRE(client.connect("127.0.0.1", port));
     pump(server, client, 20);
     REQUIRE(srvSink.countType(Event::Type::Connect) == 1);
 
@@ -461,12 +475,12 @@ TEST_CASE("server full rejects new connection", "[network][integration]") {
     c1.setEventHandler(&s1);
     c2.setEventHandler(&s2);
 
-    REQUIRE(server.bind(nullptr, 19010, 1)); // only 1 peer slot
-    REQUIRE(c1.connect("127.0.0.1", 19010));
+    const uint16_t port = bindEphemeral(server, nullptr, 1); // only 1 peer slot
+    REQUIRE(c1.connect("127.0.0.1", port));
     pumpN(server, {&c1, &c2}, 20);
     REQUIRE(s1.countType(Event::Type::Connect) == 1);
 
-    REQUIRE(c2.connect("127.0.0.1", 19010));
+    REQUIRE(c2.connect("127.0.0.1", port));
     // Pump 100 x 10 ms = 1 s -- enough to see if the server accepted a second peer.
     pumpN(server, {&c1, &c2}, 100);
 
@@ -480,7 +494,6 @@ TEST_CASE("server full rejects new connection", "[network][integration]") {
 
 // ---------------------------------------------------------------------------
 // IPv6 dual-stack (enet6)
-// Ports 19021-19024 are reserved for these tests.
 // ---------------------------------------------------------------------------
 
 TEST_CASE("IPv6 loopback round-trip", "[network][integration]") {
@@ -491,8 +504,8 @@ TEST_CASE("IPv6 loopback round-trip", "[network][integration]") {
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind("::", 19021, 4));
-    REQUIRE(client.connect("::1", 19021));
+    const uint16_t port = bindEphemeral(server, "::", 4);
+    REQUIRE(client.connect("::1", port));
 
     pump(server, client, 20);
 
@@ -520,8 +533,8 @@ TEST_CASE("getPeerAddress bracket notation for IPv6 peer", "[network][integratio
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind("::", 19022, 4));
-    REQUIRE(client.connect("::1", 19022));
+    const uint16_t port = bindEphemeral(server, "::", 4);
+    REQUIRE(client.connect("::1", port));
 
     pump(server, client, 20);
 
@@ -549,8 +562,8 @@ TEST_CASE("dual-stack: IPv4 client connects to :: server", "[network][integratio
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind("::", 19023, 4));
-    REQUIRE(client.connect("127.0.0.1", 19023));
+    const uint16_t port = bindEphemeral(server, "::", 4);
+    REQUIRE(client.connect("127.0.0.1", port));
 
     pump(server, client, 50);
 
@@ -584,8 +597,8 @@ TEST_CASE("getPeerAddress plain format preserved for IPv4 peer", "[network][inte
     server.setEventHandler(&srvSink);
     client.setEventHandler(&cliSink);
 
-    REQUIRE(server.bind(nullptr, 19024, 4));
-    REQUIRE(client.connect("127.0.0.1", 19024));
+    const uint16_t port = bindEphemeral(server, nullptr, 4);
+    REQUIRE(client.connect("127.0.0.1", port));
 
     pump(server, client, 20);
 
@@ -604,7 +617,6 @@ TEST_CASE("getPeerAddress plain format preserved for IPv4 peer", "[network][inte
 
 // ---------------------------------------------------------------------------
 // Pre-handshake rate limiting
-// Ports 19030-19033 are reserved for these tests.
 // ---------------------------------------------------------------------------
 
 TEST_CASE("pre-handshake rate limit blocks excess connect attempts", "[network][integration]") {
@@ -621,14 +633,14 @@ TEST_CASE("pre-handshake rate limit blocks excess connect attempts", "[network][
     c2.setEventHandler(&s2);
     c3.setEventHandler(&s3);
 
-    REQUIRE(server.bind(nullptr, 19030, 8));
+    const uint16_t port = bindEphemeral(server, nullptr, 8);
     server.setPreHandshakeRateLimit(2, 2000);
     server.setPreHandshakeClock(fakeNow);
 
     // Flush all three SYNs onto the wire before the server processes any of them.
-    REQUIRE(c1.connect("127.0.0.1", 19030));
-    REQUIRE(c2.connect("127.0.0.1", 19030));
-    REQUIRE(c3.connect("127.0.0.1", 19030));
+    REQUIRE(c1.connect("127.0.0.1", port));
+    REQUIRE(c2.connect("127.0.0.1", port));
+    REQUIRE(c3.connect("127.0.0.1", port));
     c1.service(0);
     c2.service(0);
     c3.service(0);
@@ -662,13 +674,13 @@ TEST_CASE("pre-handshake rate limit window expiry allows reconnection", "[networ
     c2.setEventHandler(&s2);
     c3.setEventHandler(&s3);
 
-    REQUIRE(server.bind(nullptr, 19031, 8));
+    const uint16_t port = bindEphemeral(server, nullptr, 8);
     server.setPreHandshakeRateLimit(1, 1000);
     server.setPreHandshakeClock(fakeNow);
 
     // c1 SYN -> count=1 -> allowed; c2 SYN -> count=1 >= limit=1 -> dropped.
-    REQUIRE(c1.connect("127.0.0.1", 19031));
-    REQUIRE(c2.connect("127.0.0.1", 19031));
+    REQUIRE(c1.connect("127.0.0.1", port));
+    REQUIRE(c2.connect("127.0.0.1", port));
     c1.service(0);
     c2.service(0);
     server.service(0);
@@ -684,7 +696,7 @@ TEST_CASE("pre-handshake rate limit window expiry allows reconnection", "[networ
     // (ENet's initial retry backoff is ~1000 ms; pumpN completes in microseconds
     // of real time, so we cannot rely on c2 retrying within the pump window).
     // c3's SYN is now allowed because c1's timestamp has been pruned.
-    REQUIRE(c3.connect("127.0.0.1", 19031));
+    REQUIRE(c3.connect("127.0.0.1", port));
     c3.service(0);
     server.service(0);
     pumpN(server, {&c1, &c2, &c3}, 60);
@@ -710,12 +722,12 @@ TEST_CASE("pre-handshake rate limit 0 disables pre-handshake filter", "[network]
     c2.setEventHandler(&s2);
     c3.setEventHandler(&s3);
 
-    REQUIRE(server.bind(nullptr, 19032, 8));
+    const uint16_t port = bindEphemeral(server, nullptr, 8);
     server.setPreHandshakeRateLimit(0, 1000); // 0 = disabled
 
-    REQUIRE(c1.connect("127.0.0.1", 19032));
-    REQUIRE(c2.connect("127.0.0.1", 19032));
-    REQUIRE(c3.connect("127.0.0.1", 19032));
+    REQUIRE(c1.connect("127.0.0.1", port));
+    REQUIRE(c2.connect("127.0.0.1", port));
+    REQUIRE(c3.connect("127.0.0.1", port));
     pumpN(server, {&c1, &c2, &c3}, 100);
 
     CHECK(srvSink.countType(Event::Type::Connect) == 3);
@@ -739,12 +751,12 @@ TEST_CASE("pre-handshake rate limit passes through established peer traffic", "[
     c1.setEventHandler(&s1);
     c2.setEventHandler(&s2);
 
-    REQUIRE(server.bind(nullptr, 19033, 8));
+    const uint16_t port = bindEphemeral(server, nullptr, 8);
     server.setPreHandshakeRateLimit(1, 60000); // limit=1, very long window
     server.setPreHandshakeClock(fakeNow);
 
     // c1 connects (count=1 = limit reached for 127.0.0.1).
-    REQUIRE(c1.connect("127.0.0.1", 19033));
+    REQUIRE(c1.connect("127.0.0.1", port));
     c1.service(0);
     server.service(0);
     pumpN(server, {&c1}, 30);
@@ -762,7 +774,7 @@ TEST_CASE("pre-handshake rate limit passes through established peer traffic", "[
 
     // c2 attempts to connect. SYN has peerID=0xFFF; count=1 (from c1 SYN only,
     // not inflated by the 10 data packets) >= limit=1 -- dropped.
-    REQUIRE(c2.connect("127.0.0.1", 19033));
+    REQUIRE(c2.connect("127.0.0.1", port));
     c2.service(0);
     server.service(0);
     pumpN(server, {&c1, &c2}, 50);

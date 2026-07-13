@@ -43,6 +43,18 @@ class ENetNetwork : public INetwork {
     PeerLinkStats getPeerLinkStats(uint32_t peerId) const override;
     WireStats getWireStats() const override;
 
+    // The port this host is actually bound to, or 0 if not bound.
+    //
+    // Exists so callers can bind an EPHEMERAL port (`bind(addr, 0, n)`, letting the OS pick a free
+    // one) and then discover which one they got. That is the only way to bind a socket in a process
+    // that may be running alongside arbitrary other processes without risking a collision — which is
+    // exactly the situation every test is in under `ctest -j`, where each Catch2 TEST_CASE runs as
+    // its own process (#787). Hardcoded test ports are a race waiting for a many-core box.
+    //
+    // Not on INetwork: this is a test/diagnostic affordance, and putting it on the interface would
+    // oblige every mock and the GNS backend to implement it for no gain.
+    [[nodiscard]] uint16_t boundPort() const;
+
     // Set aggregate host bandwidth caps (bytes/s). Call once after bind().
     // 0 = unlimited (ENet default). INetwork server-only tuning hook.
     void setBandwidthLimit(uint32_t incomingBps, uint32_t outgoingBps) override;

@@ -431,6 +431,24 @@ TEST_CASE("WorldBroadcaster: parallel sim tick is serial-equivalent across worke
 // `killAtTick > 0`, one shared entity is killed at that tick so the per-peer despawn-detection +
 // SnapshotDespawn TLV path is exercised under parallelism.
 namespace {
+// Disable the graceful tick-overrun governor (#514) on a broadcaster under test.
+//
+// The governor reads WALL-CLOCK tick time (TickProfiler::lastTotalMs) and sheds snapshots when the
+// tick exceeds its budget. That is exactly right in production and exactly wrong in a test that
+// asserts "a snapshot was sent on tick N": on a loaded machine — a CI runner, or a developer running
+// `ctest -j` with 24 sanitized processes in flight — an instrumented tick easily blows 16.6 ms, the
+// governor correctly concludes the server is overloaded, and the snapshot the test is waiting for is
+// legitimately never sent. The test then fails for a reason that has nothing to do with what it is
+// testing (#787).
+//
+// So any test that asserts on snapshot PRESENCE or byte-identity must call this. Tests that are
+// specifically exercising the governor obviously must not.
+void disableOverrunGovernor(fl::WorldBroadcaster& b) {
+    fl::TickGovernorParams gp;
+    gp.enabled = false;
+    b.setGovernorParams(gp);
+}
+
 std::map<uint32_t, std::vector<std::vector<uint8_t>>> runSnapshotScenario(fl::JobSystem* jobs, uint64_t killAtTick,
                                                                           bool compress = false) {
     MockLogger logger;
@@ -440,6 +458,7 @@ std::map<uint32_t, std::vector<std::vector<uint8_t>>> runSnapshotScenario(fl::Jo
     registry.registerType(makeDebugDef());
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    disableOverrunGovernor(broadcaster); // byte-identity must not depend on how busy the host is
     if (jobs)
         broadcaster.setJobSystem(*jobs);
     broadcaster.setSnapshotCompression(compress);
@@ -6885,6 +6904,7 @@ TEST_CASE("WorldBroadcaster: starved entity eventually included under a tight bu
     }
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    disableOverrunGovernor(broadcaster); // #787: a slow host must not shed the snapshot we assert on
     broadcaster.setDrawDistance(200.f);
     broadcaster.setSnapshotBudget(160u); // only a few records per tick
     broadcaster.onConnect(0u);
@@ -7093,6 +7113,7 @@ TEST_CASE("WorldBroadcaster: congestion shrinks the effective byte budget (fewer
     }
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    disableOverrunGovernor(broadcaster); // #787: a slow host must not shed the snapshot we assert on
     broadcaster.setDrawDistance(200.f);
     broadcaster.setSnapshotBudget(1200u);
     broadcaster.setCongestionParams(testCongestion());
