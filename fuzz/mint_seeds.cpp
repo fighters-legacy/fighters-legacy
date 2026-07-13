@@ -226,6 +226,21 @@ void mintServerMsgSeeds() {
     setField(ac.command, "status");
     appendFrame(admin, wireBytes(ac));
     writeSeed("fuzz_server_msg", "seed-admin.bin", admin);
+
+    // seed-wingman: a MsgClientInput (so the peer has a viewAxis for boresight designation) followed
+    // by a MsgWingmanCommand order (#610). The order path is reachable from the network, so it is
+    // fuzzed like every other handler.
+    std::vector<uint8_t> wing;
+    fl::MsgClientInput wi{};
+    wi.seqNum = 1;
+    wi.viewAxis[0] = 1.f;
+    appendFrame(wing, wireBytes(wi));
+    fl::MsgWingmanCommand wc{};
+    wc.command = 1; // engage_bandits
+    wc.seqNum = 1;
+    wc.flightId = fl::kOwnFlight;
+    appendFrame(wing, wireBytes(wc));
+    writeSeed("fuzz_server_msg", "seed-wingman.bin", wing);
 }
 
 void mintClientMsgSeeds() {
@@ -251,6 +266,12 @@ void mintClientMsgSeeds() {
     fl::MsgPeerDelay pd{};
     pd.delayTicks = 6;
     appendFrame(s, wireBytes(pd));
+    // The flight check-in + an order ack (#610): the client parses these into the radio menu.
+    fl::MsgWingmanAck wa{};
+    wa.result = static_cast<uint8_t>(fl::WingmanResult::CheckIn);
+    wa.flightSize = 1;
+    wa.flightId = 1;
+    appendFrame(s, wireBytes(wa));
     writeSeed("fuzz_client_msg", "seed-handshake.bin", s);
 
     // seed-chunks: a two-part AdminResponseChunk stream (reassembly) + a fast-path AdminResponse + ConnectRefusal.

@@ -46,6 +46,14 @@ stack = []
 save_path = "world.sav"
 autosave_interval_s = 300
 # planet_radius_m = 6371000        # planet sphere radius (m); Earth default
+# player_faction = 1               # faction stamped on every player entity on connect (#610).
+#                                  # MUST be non-zero for combat: faction 0 is NEUTRAL, and a
+#                                  # neutral entity has NO ENEMIES — nothing is hostile to a
+#                                  # player, so AI engage/cover logic never fires and the
+#                                  # wingman cannot designate a target. 0 = pre-#610 behaviour.
+#                                  # NOTE: with this set, a `spawn --faction 2 --ai escort` AI
+#                                  # now reacts to an approaching player, where before the
+#                                  # player was invisible to it. [0, 65535]
 # draw_distance_km = 200.0         # per-peer interest management radius (km); [1, 100000]
 # spatial_cell_size_km = 10.0      # SpatialIndex cell size (km); 0 = auto from draw distance; [0, 1000]; restart
 # snapshot_budget_bytes = 1200     # per-client snapshot byte budget; 0 = unlimited; [0, 65535]
@@ -177,3 +185,29 @@ agl_offset = 500.0
 # [[spawn.points]]
 # x = 0.0
 # z = 0.0
+
+[flight]
+# AI wingmen spawned for each connecting player (#610). 0 = players fly alone.
+#
+# Deliberately 0 by default: N extra AI entities per peer would move every load-test and
+# scale-gate number, so a dedicated server is unchanged unless you ask for a flight.
+# Single-player is unaffected — the game client starts its embedded server with
+# --flight-size 1, so you always fly with a wingman there.
+#
+# Larger structures — all-AI flights, strike packages, an AWACS commanding aircraft it is
+# not flying with — are built at runtime with the `flight` admin command, not here.
+size = 0
+# entity_type = "builtin:debug-entity"  # entity spawned for each wingman
+#
+# Formation geometry: slot spacing per rank. Members alternate right/left and step
+# out, back and down each rank, so any flight size stacks into a legible echelon.
+# lateral_m = 150.0                #  [10, 5000]
+# aft_m = 100.0                    #  [0, 5000]
+# vertical_m = -15.0               #  negative = stepped down; [-1000, 1000]
+#
+# Behaviour tuning for the six scripted commands.
+# engage_range_m = 12000.0         # engage_bandits trigger radius about the wingman; [500, 200000]
+# cover_range_m = 6000.0           # cover_me trigger radius about the LEAD; [500, 200000]
+# designate_range_m = 15000.0      # attack_my_target boresight range; [500, 200000]
+# designate_half_angle_deg = 15.0  # boresight cone half-angle; [1, 90]
+# command_rate_limit_per_s = 4     # wingman orders per second per player; [1, 60]

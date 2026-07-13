@@ -55,6 +55,22 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     broadcaster.setClock(clock);
     broadcaster.setOperatorPassword("fz"); // enable the admin channel (dispatch reachable via a seed's token)
     broadcaster.setAdminDispatch([](std::string_view cmd) { return std::string(cmd); });
+
+    // Wingman/flight order channel (#610). Without these hooks installed the MsgWingmanCommand branch
+    // discards early and the whole path would be fuzzed as a no-op — so wire the same seams fl-server
+    // does, with stubs. The spawner gives peer 0 a real flight so orders have something to address.
+    broadcaster.setFlightSpawner([&](uint32_t peerId, fl::EntityId lead) {
+        const fl::FormationId fid = broadcaster.formations().create("Fz", lead, peerId);
+        fl::EntityTransform t{};
+        fl::FormationMember m{};
+        m.id = em.spawn("builtin:debug-entity", t);
+        broadcaster.formations().addMember(fid, m);
+        return fid;
+    });
+    broadcaster.setFlightOrderHandler(
+        [](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) { return true; });
+    broadcaster.setTargetDesignator([](const fl::EntityState&, const float[3]) { return fl::EntityId{}; });
+
     broadcaster.onConnect(0u); // peer required for the per-peer unicast paths
 
     uint64_t tick = 1;
