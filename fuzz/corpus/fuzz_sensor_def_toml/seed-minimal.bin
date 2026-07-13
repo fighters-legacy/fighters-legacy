@@ -1,0 +1,18 @@
+[sensor]
+id = "s"
+name = "s"
+type = "radar"
+emitter = true
+
+[search]
+az_half_angle_deg = 60.0
+el_half_angle_deg = 30.0
+max_range_nm = 40.0
+pod = 0.35
+
+[track]
+az_half_angle_deg = 30.0
+el_half_angle_deg = 20.0
+max_range_nm = 30.0
+pod = 0.65
+lock_hold_s = 4.0

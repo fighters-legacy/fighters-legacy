@@ -65,6 +65,9 @@ struct NullContentPack : IContentPack {
     std::optional<EntityDefData> loadEntityDef(const char*) override {
         return std::nullopt;
     }
+    std::optional<SensorDefData> loadSensorDef(const char*) override {
+        return std::nullopt;
+    }
     std::vector<std::string> listAssets(AssetType) const override {
         return {};
     }

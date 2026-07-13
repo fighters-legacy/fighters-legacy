@@ -176,6 +176,7 @@ jobs:
           ./build/debug/tools/validate-flight-model --version
           ./build/debug/tools/validate-mission --version
           ./build/debug/tools/validate-weapon --version
+          ./build/debug/tools/validate-sensor --version
           ./build/debug/tools/validate-mesh --version
           # The builtin reference meshes (docs/modding/3d-models.md) must validate with zero
           # warnings or errors — clean validation prints nothing, so fail on any output.
@@ -207,6 +208,7 @@ jobs:
           .\build\debug-msvc\tools\validate-flight-model.exe --version
           .\build\debug-msvc\tools\validate-mission.exe --version
           .\build\debug-msvc\tools\validate-weapon.exe --version
+          .\build\debug-msvc\tools\validate-sensor.exe --version
           .\build\debug-msvc\tools\validate-mesh.exe --version
           .\build\debug-msvc\tools\tex-compress.exe --version
           .\build\debug-msvc\tools\validate-licenses.exe --version

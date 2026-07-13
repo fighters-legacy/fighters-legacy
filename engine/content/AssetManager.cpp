@@ -121,6 +121,10 @@ std::shared_ptr<EntityDefData> AssetManager::loadEntityDef(const char* name) {
     return loadAsset<EntityDefData>(AssetType::EntityDef, name, &IContentPack::loadEntityDef);
 }
 
+std::shared_ptr<SensorDefData> AssetManager::loadSensorDef(const char* name) {
+    return loadAsset<SensorDefData>(AssetType::SensorDef, name, &IContentPack::loadSensorDef);
+}
+
 std::optional<std::string> AssetManager::loadConfig(const char* name) {
     for (auto& pack : m_packs) {
         if (auto result = pack->loadConfig(name))
