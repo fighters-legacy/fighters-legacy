@@ -98,6 +98,7 @@ time_scale         = 10.0        # game seconds per real second; 10 = full day/n
 # test_projectile_ttl_s   = 3.0      # churned-entity lifetime (s); [0.05, 600]; restart (#580)
 
 [ai]
+difficulty       = "pilot"        # what the server runs: AI radar range + reaction time; cadet|pilot|ace
 difficulty_floor = "recruit"
 
 [security]
@@ -680,10 +681,39 @@ values are rejected with a Warn and the default is used. **Requires restart** to
 
 ## [ai] — AI policy
 
-> **Phase 2:** `difficulty_floor` is parsed and stored; server-side difficulty enforcement
-> lands with the AI runtime.
+### `difficulty`
+
+| Type | Default | Values |
+|---|---|---|
+| string | `"pilot"` | `cadet` \| `pilot` \| `ace` |
+
+**What the server actually runs** (#682) — the first server-side consumer of the difficulty system.
+Resolved at startup to an `AiScaling` and fed into the sim tick, where the sensing pass (#685) uses
+two of its fields:
+
+- **`radarSensorRange`** — a fraction applied to the max range of **radar** sensors only. A Cadet
+  server's AI radar reaches half as far as its content pack says it does; an Ace server's reaches
+  all the way.
+- **`reactionTimeS`** — the base delay between an AI **detecting** a contact and **acting** on it,
+  scaled per-unit by the entity's `[ai].reaction`.
+
+It gates **acting**, not **seeing**: a Cadet AI detects a target at exactly the same moment an Ace
+one does — it just takes longer to do anything about it (and, for radar, has to be closer to detect
+it at all). A knob that made the low-difficulty AI's *eyes* worse would be a different, dishonest
+thing.
+
+The table is **mod-overridable**: the preset values come from `data/difficulty.toml` through the
+AssetManager (highest-priority pack wins), exactly like the client path, so a content pack tunes its
+own AI without patching the server. Unknown values log a Warn and keep the default.
+
+**Hot-reloadable** via `reload_config`.
 
 ### `difficulty_floor`
+
+> **`difficulty` and `difficulty_floor` are different things.** `difficulty` is what the server runs
+> right now. `difficulty_floor` is the future **per-client clamp** — the minimum a connecting player
+> may set for themselves. It is still parsed-and-stored only.
+
 
 | Type | Default |
 |---|---|

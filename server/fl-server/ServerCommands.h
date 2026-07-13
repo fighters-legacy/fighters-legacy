@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <config/DifficultySettings.h> // AiScaling — server-side difficulty (#682)
 #include <net/AuthTracker.h>
 
 #include <chrono>
@@ -48,6 +49,12 @@ struct ServerCommandContext {
         // Empty source = not found. Null = Lua AI scripting unavailable.
         // Must be safe to call from any thread (pre-loaded read-only cache in fl-server).
         std::function<std::pair<std::string, std::string>(std::string_view name)> loadAIScript;
+
+        // Resolves an [ai] difficulty preset name ("cadet"|"pilot"|"ace") to its AiScaling (#682).
+        // Injected by fl-server, which owns the DifficultyMultipliers table (mod-overridable
+        // data/difficulty.toml); null = difficulty scaling unavailable, and reload_config leaves the
+        // running scaling untouched rather than silently resetting it to a default.
+        std::function<fl::AiScaling(const std::string& preset)> resolveAiScaling;
     } env;
 
     // Shutdown command policy (from ServerConfig [shutdown] section).

@@ -5010,6 +5010,40 @@ TEST_CASE("WorldBroadcaster: sample receives the AiTickContext from onTick", "[w
     CHECK(spyPtr->lastCtx.difficulty == nullptr);
 }
 
+TEST_CASE("WorldBroadcaster: an injected AiScaling reaches the controller through the context", "[world_broadcaster]") {
+    // #682: difficulty is resolved by fl-server (from a mod-overridable difficulty.toml) and injected
+    // here, rather than invented in the engine. A controller sees it through ctx.difficulty; the
+    // sensing pass applies radarSensorRange to radar ranges and reactionTimeS to the reaction delay.
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::EntityTransform t{};
+    t.pos[1] = 500.0;
+    const fl::EntityId id = em.spawn("builtin:debug-entity", t);
+    REQUIRE(id.valid());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::AiScaling scaling{};
+    scaling.radarSensorRange = 0.25f;
+    scaling.reactionTimeS = 3.5f;
+    broadcaster.setAiScaling(scaling);
+
+    auto spy = std::make_unique<SpyController>();
+    SpyController* spyPtr = spy.get();
+    broadcaster.registerController(id, std::move(spy));
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    REQUIRE(spyPtr->sampled);
+    REQUIRE(spyPtr->lastCtx.difficulty != nullptr);
+    CHECK(spyPtr->lastCtx.difficulty->radarSensorRange == Catch::Approx(0.25f));
+    CHECK(spyPtr->lastCtx.difficulty->reactionTimeS == Catch::Approx(3.5f));
+}
+
 // ---------------------------------------------------------------------------
 // Interest management + delta compression tests (#346)
 // ---------------------------------------------------------------------------
