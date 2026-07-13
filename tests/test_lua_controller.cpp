@@ -5,6 +5,7 @@
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
 #include "script/LuaController.h"
+#include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
 
 #include <catch2/catch_approx.hpp>
@@ -393,4 +394,108 @@ TEST_CASE("LuaController: script uses require from pack ai dir") {
     CHECK(ctrl.throttle == Catch::Approx(0.75f).epsilon(0.001f));
 
     fs::remove_all(tmpDir);
+}
+
+// --- detected_contacts() (#691) ------------------------------------------------------------------
+
+namespace {
+
+// A contact table a script can be handed directly. The sensing pass builds these for real; here we
+// inject one so the BINDING is under test, not the detection math (test_sensor_system covers that).
+fl::sensor::ContactTable makeContacts() {
+    fl::sensor::Contact c{};
+    c.id.index = 42;
+    c.id.generation = 1;
+    c.factionIndex = 2;
+    c.state = fl::sensor::ContactState::Locked;
+    c.lastKnownPos[0] = 1000.0;
+    c.lastKnownPos[1] = 500.0;
+    c.lastKnownPos[2] = -250.0;
+    c.lastKnownVel[0] = 200.f;
+    c.lastSeenTick = 100;
+    c.firstDetectedTick = 50;
+    c.reacted = true;
+    c.sensorTypeMask = static_cast<uint8_t>(1u << static_cast<int>(fl::sensor::SensorType::Radar)) |
+                       static_cast<uint8_t>(1u << static_cast<int>(fl::sensor::SensorType::Visual));
+
+    fl::sensor::ContactTable t;
+    t.contacts.push_back(c);
+    return t;
+}
+
+} // namespace
+
+TEST_CASE("LuaController: detected_contacts returns the honest view of what the entity has found") {
+    const fl::sensor::ContactTable contacts = makeContacts();
+
+    auto c = makeCtrl("function compute_control(s,t,dt)\n"
+                      "  local cs = detected_contacts()\n"
+                      "  if #cs ~= 1 then return {} end\n"
+                      "  local k = cs[1]\n"
+                      "  if k.idx == 42 and k.state == 'locked' and k.reacted == true\n"
+                      "     and k.faction == 2 and k.pos.x == 1000.0 and k.vel.x == 200.0 then\n"
+                      "    return {throttle=1.0}\n"
+                      "  end\n"
+                      "  return {}\n"
+                      "end");
+    REQUIRE(c->isValid());
+
+    fl::AiTickContext ctx{};
+    ctx.contacts = &contacts;
+    const auto ctrl = c->sample(makeState(), 100, 1.0 / 60.0, ctx);
+    CHECK(ctrl.throttle == Catch::Approx(1.f).epsilon(0.001f));
+}
+
+TEST_CASE("LuaController: detected_contacts reports which SENSOR TYPES hold the contact") {
+    // "He has me on radar" and "he can see me" are different tactical facts, and a script is
+    // entitled to tell them apart.
+    const fl::sensor::ContactTable contacts = makeContacts();
+
+    auto c = makeCtrl("function compute_control(s,t,dt)\n"
+                      "  local k = detected_contacts()[1]\n"
+                      "  local has_radar, has_visual, has_ir = false, false, false\n"
+                      "  for _, ty in ipairs(k.sensor_types) do\n"
+                      "    if ty == 'radar'  then has_radar  = true end\n"
+                      "    if ty == 'visual' then has_visual = true end\n"
+                      "    if ty == 'ir'     then has_ir     = true end\n"
+                      "  end\n"
+                      "  if has_radar and has_visual and not has_ir then return {throttle=1.0} end\n"
+                      "  return {}\n"
+                      "end");
+    REQUIRE(c->isValid());
+
+    fl::AiTickContext ctx{};
+    ctx.contacts = &contacts;
+    const auto ctrl = c->sample(makeState(), 100, 1.0 / 60.0, ctx);
+    CHECK(ctrl.throttle == Catch::Approx(1.f).epsilon(0.001f));
+}
+
+TEST_CASE("LuaController: a stale contact reports its AGE, so a script knows not to trust pos") {
+    // 30 ticks after it was last actually seen, at 60 Hz, age_s = 0.5.
+    const fl::sensor::ContactTable contacts = makeContacts();
+
+    auto c = makeCtrl("function compute_control(s,t,dt)\n"
+                      "  local k = detected_contacts()[1]\n"
+                      "  if math.abs(k.age_s - 0.5) < 0.001 then return {throttle=1.0} end\n"
+                      "  return {}\n"
+                      "end");
+    REQUIRE(c->isValid());
+
+    fl::AiTickContext ctx{};
+    ctx.contacts = &contacts;
+    const auto ctrl = c->sample(makeState(), 130, 1.0 / 60.0, ctx); // lastSeenTick = 100
+    CHECK(ctrl.throttle == Catch::Approx(1.f).epsilon(0.001f));
+}
+
+TEST_CASE("LuaController: detected_contacts returns an empty table when sensing was not evaluated") {
+    // Null contacts = "sensing did not run here" (headless callers, tests). Existing scripts must
+    // keep working unchanged, so this is an empty table rather than an error.
+    auto c = makeCtrl("function compute_control(s,t,dt)\n"
+                      "  local cs = detected_contacts()\n"
+                      "  return {throttle = (#cs == 0) and 1.0 or 0.0}\n"
+                      "end");
+    REQUIRE(c->isValid());
+
+    const auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0, fl::AiTickContext{});
+    CHECK(ctrl.throttle == Catch::Approx(1.f).epsilon(0.001f));
 }

@@ -571,7 +571,7 @@ catch_discover_tests(test_lua_sandbox)
 
 add_executable(test_lua_controller test_lua_controller.cpp)
 target_link_libraries(test_lua_controller PRIVATE
-    Catch2::Catch2WithMain engine-script engine-spatial)
+    Catch2::Catch2WithMain engine-script engine-spatial engine-sensor)
 target_include_directories(test_lua_controller PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_lua_controller)
 

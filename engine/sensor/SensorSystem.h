@@ -44,6 +44,12 @@ struct Contact {
     uint64_t firstDetectedTick{0}; //
     uint64_t lastSeenTick{0};      //
 
+    // Which KINDS of sensor are holding this contact, as a bitmask of (1 << SensorType). A target can
+    // be held by two at once (found on radar, also visible to the eyeball), and the difference
+    // matters downstream: "he has me on radar" and "he can see me" are not the same tactical fact,
+    // and RWR/EMCON (#526/#529) will need exactly this distinction.
+    uint8_t sensorTypeMask{0};
+
     // False until the observer's reaction delay has elapsed since first detection. A contact exists
     // before its owner has reacted to it: seeing is not the same as noticing, and a difficulty knob
     // that made a rookie SEE less would be a lie — what a rookie does is take longer to act.
@@ -57,6 +63,11 @@ struct Contact {
         return state == ContactState::Locked;
     }
 };
+
+// True when `mask` (a Contact::sensorTypeMask) includes `type`.
+[[nodiscard]] inline bool holdsSensorType(uint8_t mask, SensorType type) noexcept {
+    return (mask & static_cast<uint8_t>(1u << static_cast<int>(type))) != 0;
+}
 
 // One observer's view of the world. Ordered by entity index, so iteration is deterministic.
 struct ContactTable {
