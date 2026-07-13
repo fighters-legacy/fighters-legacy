@@ -22,7 +22,7 @@ class LagPursuitController : public fl::IEntityController {
                          float throttle = 0.85f, bool useAfterburner = false);
 
     fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
-                            const fl::SpatialIndex* /*si*/ = nullptr) override;
+                            const fl::AiTickContext& /*ctx*/ = {}) override;
 
     void setTarget(fl::EntityId id) noexcept {
         m_targetId = id;

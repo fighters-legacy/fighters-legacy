@@ -77,20 +77,20 @@ const std::string& StateMachineController::currentState() const noexcept {
 }
 
 fl::ControlInput StateMachineController::sample(const fl::EntityState& state, uint64_t tick, double dt,
-                                                const fl::SpatialIndex* si) {
+                                                const fl::AiTickContext& ctx) {
     if (m_activeIdx < 0 || !m_active) {
         return {};
     }
 
     m_dwellTime += static_cast<float>(dt);
 
-    fl::ControlInput inp = m_active->sample(state, tick, dt, si);
+    fl::ControlInput inp = m_active->sample(state, tick, dt, ctx);
 
     for (const Transition& tr : m_states[m_activeIdx].transitions) {
         if (m_dwellTime < tr.minDwellSeconds) {
             continue;
         }
-        if (!tr.cond(state, m_entityManager, si)) {
+        if (!tr.cond(state, m_entityManager, ctx)) {
             continue;
         }
         int nextIdx = findState(tr.to);
@@ -115,7 +115,7 @@ fl::ControlInput StateMachineController::sample(const fl::EntityState& state, ui
 
 Condition ThreatWithinRange(fl::EntityId targetId, float rangeM) {
     return
-        [targetId, rangeM](const fl::EntityState& self, const fl::EntityManager& em, const fl::SpatialIndex*) -> bool {
+        [targetId, rangeM](const fl::EntityState& self, const fl::EntityManager& em, const fl::AiTickContext&) -> bool {
             const fl::EntityState* target = em.get(targetId);
             if (!target || target->dead) {
                 return false;
@@ -130,7 +130,7 @@ Condition ThreatWithinRange(fl::EntityId targetId, float rangeM) {
 
 Condition ThreatBeyondRange(fl::EntityId targetId, float rangeM) {
     return
-        [targetId, rangeM](const fl::EntityState& self, const fl::EntityManager& em, const fl::SpatialIndex*) -> bool {
+        [targetId, rangeM](const fl::EntityState& self, const fl::EntityManager& em, const fl::AiTickContext&) -> bool {
             const fl::EntityState* target = em.get(targetId);
             if (!target || target->dead) {
                 return true;
@@ -144,7 +144,7 @@ Condition ThreatBeyondRange(fl::EntityId targetId, float rangeM) {
 }
 
 Condition HpBelow(float fraction) {
-    return [fraction](const fl::EntityState& self, const fl::EntityManager&, const fl::SpatialIndex*) -> bool {
+    return [fraction](const fl::EntityState& self, const fl::EntityManager&, const fl::AiTickContext&) -> bool {
         if (self.maxHp <= 0.f) {
             return false;
         }
@@ -153,14 +153,14 @@ Condition HpBelow(float fraction) {
 }
 
 Condition AnyEntityWithinRange(float rangeM) {
-    return [rangeM](const fl::EntityState& self, const fl::EntityManager&, const fl::SpatialIndex* si) -> bool {
-        if (!si) {
+    return [rangeM](const fl::EntityState& self, const fl::EntityManager&, const fl::AiTickContext& ctx) -> bool {
+        if (!ctx.si) {
             return false;
         }
         bool found = false;
         const double rangeSq = static_cast<double>(rangeM) * static_cast<double>(rangeM);
         // queryRadius is conservative (cell-level): exact distance check required.
-        si->queryRadius(self.transform.pos, static_cast<double>(rangeM), [&](uint32_t idx, const double* pos) {
+        ctx.si->queryRadius(self.transform.pos, static_cast<double>(rangeM), [&](uint32_t idx, const double* pos) {
             if (idx == self.id.index) {
                 return;
             }
@@ -176,14 +176,14 @@ Condition AnyEntityWithinRange(float rangeM) {
 }
 
 Condition AnyHostileEntityWithinRange(float rangeM) {
-    return [rangeM](const fl::EntityState& self, const fl::EntityManager& em, const fl::SpatialIndex* si) -> bool {
-        if (!si || self.factionIndex == 0) {
+    return [rangeM](const fl::EntityState& self, const fl::EntityManager& em, const fl::AiTickContext& ctx) -> bool {
+        if (!ctx.si || self.factionIndex == 0) {
             return false; // no spatial index, or a neutral entity has no enemies
         }
         bool found = false;
         const double rangeSq = static_cast<double>(rangeM) * static_cast<double>(rangeM);
         // queryRadius is conservative (cell-level): exact distance + faction check required.
-        si->queryRadius(self.transform.pos, static_cast<double>(rangeM), [&](uint32_t idx, const double* pos) {
+        ctx.si->queryRadius(self.transform.pos, static_cast<double>(rangeM), [&](uint32_t idx, const double* pos) {
             if (found || idx == self.id.index) {
                 return;
             }
@@ -204,8 +204,8 @@ Condition AnyHostileEntityWithinRange(float rangeM) {
 
 Condition AnyHostileEntityWithinRangeOf(fl::EntityId anchorId, float rangeM) {
     return [anchorId, rangeM](const fl::EntityState& self, const fl::EntityManager& em,
-                              const fl::SpatialIndex* si) -> bool {
-        if (!si || self.factionIndex == 0) {
+                              const fl::AiTickContext& ctx) -> bool {
+        if (!ctx.si || self.factionIndex == 0) {
             return false; // no spatial index, or a neutral entity has no enemies
         }
         const fl::EntityState* anchor = em.get(anchorId);
@@ -217,7 +217,7 @@ Condition AnyHostileEntityWithinRangeOf(fl::EntityId anchorId, float rangeM) {
         const double rangeSq = static_cast<double>(rangeM) * static_cast<double>(rangeM);
         // Geometry about the ANCHOR (the entity being protected); hostility about SELF (the escort).
         // queryRadius is conservative (cell-level), so the exact distance test is still required.
-        si->queryRadius(anchor->transform.pos, static_cast<double>(rangeM), [&](uint32_t idx, const double* pos) {
+        ctx.si->queryRadius(anchor->transform.pos, static_cast<double>(rangeM), [&](uint32_t idx, const double* pos) {
             if (found || idx == self.id.index || idx == anchor->id.index) {
                 return;
             }
@@ -237,26 +237,26 @@ Condition AnyHostileEntityWithinRangeOf(fl::EntityId anchorId, float rangeM) {
 }
 
 Condition Always() {
-    return [](const fl::EntityState&, const fl::EntityManager&, const fl::SpatialIndex*) -> bool { return true; };
+    return [](const fl::EntityState&, const fl::EntityManager&, const fl::AiTickContext&) -> bool { return true; };
 }
 
 Condition And(Condition a, Condition b) {
     return [a = std::move(a), b = std::move(b)](const fl::EntityState& self, const fl::EntityManager& em,
-                                                const fl::SpatialIndex* si) -> bool {
-        return a(self, em, si) && b(self, em, si);
+                                                const fl::AiTickContext& ctx) -> bool {
+        return a(self, em, ctx) && b(self, em, ctx);
     };
 }
 
 Condition Or(Condition a, Condition b) {
     return [a = std::move(a), b = std::move(b)](const fl::EntityState& self, const fl::EntityManager& em,
-                                                const fl::SpatialIndex* si) -> bool {
-        return a(self, em, si) || b(self, em, si);
+                                                const fl::AiTickContext& ctx) -> bool {
+        return a(self, em, ctx) || b(self, em, ctx);
     };
 }
 
 Condition Not(Condition a) {
     return [a = std::move(a)](const fl::EntityState& self, const fl::EntityManager& em,
-                              const fl::SpatialIndex* si) -> bool { return !a(self, em, si); };
+                              const fl::AiTickContext& ctx) -> bool { return !a(self, em, ctx); };
 }
 
 } // namespace fl::ai

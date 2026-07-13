@@ -16,7 +16,7 @@ class EvadeController : public fl::IEntityController {
                     bool useAfterburner = true);
 
     fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
-                            const fl::SpatialIndex* /*si*/ = nullptr) override;
+                            const fl::AiTickContext& /*ctx*/ = {}) override;
 
     void setThreat(fl::EntityId id) noexcept {
         m_threatId = id;

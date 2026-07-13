@@ -280,7 +280,7 @@ TEST_CASE("WorldBroadcaster: onTick broadcasts WorldSnapshot for N entities", "[
 struct ConstantController : fl::IEntityController {
     float throttle{1.0f};
     int sampleCount{0};
-    fl::ControlInput sample(const fl::EntityState&, uint64_t, double, const fl::SpatialIndex*) override {
+    fl::ControlInput sample(const fl::EntityState&, uint64_t, double, const fl::AiTickContext&) override {
         ++sampleCount;
         fl::ControlInput ctrl{};
         ctrl.throttle = throttle;
@@ -4961,16 +4961,18 @@ TEST_CASE("WorldBroadcaster: spatialIndex is populated with live entity count af
     CHECK(broadcaster.spatialIndex().entityCount() == 3u);
 }
 
-// Spy controller: captures the SpatialIndex pointer received via sample().
+// Spy controller: captures the AiTickContext received via sample().
 struct SpyController : fl::IEntityController {
-    const fl::SpatialIndex* lastSi{nullptr};
-    fl::ControlInput sample(const fl::EntityState&, uint64_t, double, const fl::SpatialIndex* si) override {
-        lastSi = si;
+    fl::AiTickContext lastCtx{};
+    bool sampled{false};
+    fl::ControlInput sample(const fl::EntityState&, uint64_t, double, const fl::AiTickContext& ctx) override {
+        lastCtx = ctx;
+        sampled = true;
         return {};
     }
 };
 
-TEST_CASE("WorldBroadcaster: sample receives non-null SpatialIndex pointer from onTick", "[world_broadcaster]") {
+TEST_CASE("WorldBroadcaster: sample receives the AiTickContext from onTick", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
@@ -4991,8 +4993,16 @@ TEST_CASE("WorldBroadcaster: sample receives non-null SpatialIndex pointer from 
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     // si must be non-null and the index must already hold the entity (rebuilt before sample())
-    REQUIRE(spyPtr->lastSi != nullptr);
-    CHECK(spyPtr->lastSi->entityCount() == 1u);
+    REQUIRE(spyPtr->sampled);
+    REQUIRE(spyPtr->lastCtx.si != nullptr);
+    CHECK(spyPtr->lastCtx.si->entityCount() == 1u);
+
+    // The other fields are null until their producers land, and null is NORMATIVE: it means "not
+    // evaluated", not "empty". A controller must read it as "sensing did not run", never as "this
+    // entity sees nothing" — the sensing pass (#685) is what makes them non-null.
+    CHECK(spyPtr->lastCtx.contacts == nullptr);
+    CHECK(spyPtr->lastCtx.env == nullptr);
+    CHECK(spyPtr->lastCtx.difficulty == nullptr);
 }
 
 // ---------------------------------------------------------------------------

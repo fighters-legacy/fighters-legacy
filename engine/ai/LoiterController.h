@@ -18,7 +18,7 @@ class LoiterController : public fl::IEntityController {
                               float throttle = 0.65f, LoiterDir dir = LoiterDir::Clockwise);
 
     fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
-                            const fl::SpatialIndex* /*si*/ = nullptr) override;
+                            const fl::AiTickContext& /*ctx*/ = {}) override;
 
   private:
     glm::dvec3 m_center;

@@ -296,7 +296,7 @@ TEST_CASE("cover_me engages a threat closing on the LEAD, not one near the wingm
     REQUIRE(wing != nullptr);
 
     rebuildIndex(si, em);
-    sm->sample(*wing, 0, 1.0 / 60.0, &si);
+    sm->sample(*wing, 0, 1.0 / 60.0, fl::AiTickContext{&si});
     CHECK(sm->currentState() == "form"); // sky is clear
 
     // Put a bandit 2 km from the LEAD (and ~18 km from the wingman).
@@ -306,7 +306,7 @@ TEST_CASE("cover_me engages a threat closing on the LEAD, not one near the wingm
     // The transition carries 1 s of dwell (hysteresis, so a threat skimming the range boundary does
     // not make the wingman flip-flop), so it needs more than a tick or two of simulated time.
     for (int i = 0; i < 120; ++i)
-        sm->sample(*wing, static_cast<uint64_t>(i + 1), 1.0 / 60.0, &si);
+        sm->sample(*wing, static_cast<uint64_t>(i + 1), 1.0 / 60.0, fl::AiTickContext{&si});
     CHECK(sm->currentState() == "engage"); // it went to protect the LEAD
 }
 
@@ -334,7 +334,7 @@ TEST_CASE("engage_bandits ignores a threat that is only near the lead") {
     const EntityState* wing = em.get(wingId);
     // Well past the dwell the cover_me case needs — so this is a real "never fires", not "not yet".
     for (int i = 0; i < 120; ++i)
-        sm->sample(*wing, static_cast<uint64_t>(i), 1.0 / 60.0, &si);
+        sm->sample(*wing, static_cast<uint64_t>(i), 1.0 / 60.0, fl::AiTickContext{&si});
     CHECK(sm->currentState() == "form"); // stays on the wing
 }
 
@@ -370,7 +370,7 @@ TEST_CASE("attack_my_target rejoins the formation once the target is dead") {
 
     const EntityState* wing = em.get(wingId);
     rebuildIndex(si, em);
-    sm->sample(*wing, 0, 1.0 / 60.0, &si);
+    sm->sample(*wing, 0, 1.0 / 60.0, fl::AiTickContext{&si});
     CHECK(sm->currentState() == "attack");
 
     // Kill the bandit. ThreatBeyondRange is true for a dead/invalid target, so the wingman rejoins
@@ -378,7 +378,7 @@ TEST_CASE("attack_my_target rejoins the formation once the target is dead") {
     em.kill(targetId);
     rebuildIndex(si, em);
     for (int i = 0; i < 200; ++i)
-        sm->sample(*wing, static_cast<uint64_t>(i + 1), 1.0 / 60.0, &si);
+        sm->sample(*wing, static_cast<uint64_t>(i + 1), 1.0 / 60.0, fl::AiTickContext{&si});
 
     CHECK(sm->currentState() == "form");
 }

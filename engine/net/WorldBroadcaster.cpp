@@ -54,7 +54,7 @@ class PeerController final : public fl::IEntityController {
     explicit PeerController(const fl::PeerInputState* input) : m_input(input) {}
 
     fl::ControlInput sample(const fl::EntityState& /*state*/, uint64_t /*tick*/, double /*dt*/,
-                            const fl::SpatialIndex* /*si*/ = nullptr) override {
+                            const fl::AiTickContext& /*ctx*/ = {}) override {
         fl::ControlInput ctrl{};
         ctrl.throttle = m_input->throttle;
         ctrl.elevator = m_input->elevator;
@@ -610,9 +610,15 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
 
     // AI pass: sample each controller. Read-only on shared world state (EntityState, SpatialIndex,
     // EntityManager); each controller's own mutable state is per-entity / disjoint.
+    //
+    // The context is built ONCE on the sim thread and shared, const, across all workers — it holds
+    // only pointers to state that is immutable for the duration of the pass. The sensing pass (#685)
+    // makes `contacts` per-observer, at which point this becomes a per-entity copy of the same
+    // struct; the fields that are world-wide (si, env, difficulty) stay shared.
+    const AiTickContext aiCtx{&m_spatialIndex, nullptr, nullptr, nullptr};
     {
         const auto tAiStart = m_clock->now();
-        runEntityPass(m_stepItems.size(), [this, tickIndex, simDt, govAiStride](size_t b, size_t e) {
+        runEntityPass(m_stepItems.size(), [this, tickIndex, simDt, govAiStride, &aiCtx](size_t b, size_t e) {
             for (size_t i = b; i < e; ++i) {
                 const StepItem& it = m_stepItems[i];
                 // AI-sample decimation (#514): a decimatable (non-player) entity reuses its last sampled
@@ -624,7 +630,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                     ((tickIndex + it.idx) % govAiStride) != 0u) {
                     m_stepInputs[i] = it.ce->lastInput;
                 } else {
-                    m_stepInputs[i] = it.ce->controller->sample(*it.state, tickIndex, simDt, &m_spatialIndex);
+                    m_stepInputs[i] = it.ce->controller->sample(*it.state, tickIndex, simDt, aiCtx);
                     it.ce->lastInput = m_stepInputs[i];
                     it.ce->lastInputValid = true;
                 }

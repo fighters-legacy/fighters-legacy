@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-#include "flight/AeroForces.h" // ControlInput — the shared control currency
-#include "flight/Geodetic.h"   // kEarthRadiusM — default planet radius for local-level guidance
+#include "entity/AiTickContext.h" // AiTickContext — the bundled per-tick world view
+#include "flight/AeroForces.h"    // ControlInput — the shared control currency
+#include "flight/Geodetic.h"      // kEarthRadiusM — default planet radius for local-level guidance
 
 #include <cstdint>
 
 namespace fl {
 
 struct EntityState; // engine/entity/EntityState.h
-class SpatialIndex; // engine/spatial/SpatialIndex.h — pointer only; no include needed here
 
 // Source of per-tick control inputs for a single simulated entity. Decouples the flight sim from the
 // network-peer assumption: WorldBroadcaster keeps an EntityId-keyed registry of controllers and steps
@@ -22,11 +22,12 @@ struct IEntityController {
     virtual ~IEntityController() = default;
 
     // Produce this tick's control inputs for the given entity. tick is the sim tick index; dt is the
-    // step duration in seconds. si is the spatial index rebuilt at the start of this tick by
-    // WorldBroadcaster — non-null when called from the broadcaster, nullptr in tests and other
-    // contexts. Called on the sim thread inside WorldBroadcaster::onTick.
-    virtual ControlInput sample(const EntityState& state, uint64_t tick, double dt,
-                                const SpatialIndex* si = nullptr) = 0;
+    // step duration in seconds. ctx is everything the controller is allowed to know about the world
+    // this tick (spatial index, detected contacts, environment, difficulty) — see AiTickContext.h;
+    // each of its fields may be null, meaning "not evaluated in the context you were called from",
+    // and a default-constructed context is the behavior every controller had before the bundle
+    // existed. Called on the sim thread inside WorldBroadcaster::onTick.
+    virtual ControlInput sample(const EntityState& state, uint64_t tick, double dt, const AiTickContext& ctx = {}) = 0;
 
     // Planet radius (m) for local-level (tangent-plane) guidance math. Defaults to Earth so the
     // controllers and unit tests behave correctly near the world origin without any wiring.

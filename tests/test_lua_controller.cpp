@@ -288,7 +288,7 @@ TEST_CASE("LuaController: nearby_entities with null si returns empty table") {
                       "  return {throttle = (#nb == 0) and 1.0 or 0.0}\n"
                       "end");
     REQUIRE(c->isValid());
-    auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0, nullptr);
+    auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0, fl::AiTickContext{});
     CHECK(ctrl.throttle == Catch::Approx(1.f).epsilon(0.001f));
 }
 
@@ -305,7 +305,7 @@ TEST_CASE("LuaController: nearby_entities with real SpatialIndex returns idx and
                       "  return {}\n"
                       "end");
     REQUIRE(c->isValid());
-    auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0, &si);
+    auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0, fl::AiTickContext{&si});
     CHECK(ctrl.throttle == Catch::Approx(1.f).epsilon(0.001f));
 }
 

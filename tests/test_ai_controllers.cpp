@@ -824,7 +824,7 @@ TEST_CASE("ThreatWithinRange: true when target within range") {
     fl::EntityState self = makeState(0.0, 0.0, 0.0);
     self.id = f.selfId;
     auto cond = fl::ai::ThreatWithinRange(f.targetId, 5000.f);
-    CHECK(cond(self, f.em, nullptr) == true);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == true);
 }
 
 TEST_CASE("ThreatWithinRange: false when target beyond range") {
@@ -836,7 +836,7 @@ TEST_CASE("ThreatWithinRange: false when target beyond range") {
     fl::EntityState self = makeState(0.0, 0.0, 0.0);
     self.id = f.selfId;
     auto cond = fl::ai::ThreatWithinRange(f.targetId, 3000.f);
-    CHECK(cond(self, f.em, nullptr) == false);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == false);
 }
 
 TEST_CASE("ThreatWithinRange: false when target is dead") {
@@ -851,7 +851,7 @@ TEST_CASE("ThreatWithinRange: false when target is dead") {
     fl::EntityState self = makeState(0.0, 0.0, 0.0);
     self.id = f.selfId;
     auto cond = fl::ai::ThreatWithinRange(f.targetId, 5000.f);
-    CHECK(cond(self, f.em, nullptr) == false);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == false);
 }
 
 TEST_CASE("ThreatWithinRange: false for null EntityId") {
@@ -859,7 +859,7 @@ TEST_CASE("ThreatWithinRange: false for null EntityId") {
     fl::EntityState self = makeState(0.0, 0.0, 0.0);
     self.id = f.selfId;
     auto cond = fl::ai::ThreatWithinRange(fl::EntityId::null(), 5000.f);
-    CHECK(cond(self, f.em, nullptr) == false);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == false);
 }
 
 TEST_CASE("ThreatBeyondRange: false when target is alive and within range") {
@@ -871,7 +871,7 @@ TEST_CASE("ThreatBeyondRange: false when target is alive and within range") {
     fl::EntityState self = makeState(0.0, 0.0, 0.0);
     self.id = f.selfId;
     auto cond = fl::ai::ThreatBeyondRange(f.targetId, 5000.f);
-    CHECK(cond(self, f.em, nullptr) == false);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == false);
 }
 
 TEST_CASE("ThreatBeyondRange: true when target beyond range") {
@@ -883,7 +883,7 @@ TEST_CASE("ThreatBeyondRange: true when target beyond range") {
     fl::EntityState self = makeState(0.0, 0.0, 0.0);
     self.id = f.selfId;
     auto cond = fl::ai::ThreatBeyondRange(f.targetId, 5000.f);
-    CHECK(cond(self, f.em, nullptr) == true);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == true);
 }
 
 TEST_CASE("ThreatBeyondRange: true when target is dead") {
@@ -894,7 +894,7 @@ TEST_CASE("ThreatBeyondRange: true when target is dead") {
     fl::EntityState self = makeState(0.0, 0.0, 0.0);
     self.id = f.selfId;
     auto cond = fl::ai::ThreatBeyondRange(f.targetId, 5000.f);
-    CHECK(cond(self, f.em, nullptr) == true);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == true);
 }
 
 TEST_CASE("HpBelow: true when hp fraction below threshold") {
@@ -904,7 +904,7 @@ TEST_CASE("HpBelow: true when hp fraction below threshold") {
     self.maxHp = 100.f;
     self.id = f.selfId;
     auto cond = fl::ai::HpBelow(0.25f);
-    CHECK(cond(self, f.em, nullptr) == true);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == true);
 }
 
 TEST_CASE("HpBelow: false when hp fraction at or above threshold") {
@@ -914,7 +914,7 @@ TEST_CASE("HpBelow: false when hp fraction at or above threshold") {
     self.maxHp = 100.f;
     self.id = f.selfId;
     auto cond = fl::ai::HpBelow(0.25f);
-    CHECK(cond(self, f.em, nullptr) == false);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == false);
 }
 
 TEST_CASE("HpBelow: false when maxHp is zero") {
@@ -924,7 +924,7 @@ TEST_CASE("HpBelow: false when maxHp is zero") {
     self.maxHp = 0.f;
     self.id = f.selfId;
     auto cond = fl::ai::HpBelow(0.5f);
-    CHECK(cond(self, f.em, nullptr) == false);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == false);
 }
 
 TEST_CASE("AnyEntityWithinRange: true when si has a non-self neighbor") {
@@ -943,7 +943,7 @@ TEST_CASE("AnyEntityWithinRange: true when si has a non-self neighbor") {
     self.transform.pos[2] = selfPos[2];
 
     auto cond = fl::ai::AnyEntityWithinRange(1000.f);
-    CHECK(cond(self, f.em, &si) == true);
+    CHECK(cond(self, f.em, fl::AiTickContext{&si}) == true);
 }
 
 TEST_CASE("AnyEntityWithinRange: false when only self is within range") {
@@ -959,7 +959,7 @@ TEST_CASE("AnyEntityWithinRange: false when only self is within range") {
     self.transform.pos[2] = selfPos[2];
 
     auto cond = fl::ai::AnyEntityWithinRange(1000.f);
-    CHECK(cond(self, f.em, &si) == false);
+    CHECK(cond(self, f.em, fl::AiTickContext{&si}) == false);
 }
 
 TEST_CASE("AnyEntityWithinRange: false when si has entities but all out of range") {
@@ -977,7 +977,7 @@ TEST_CASE("AnyEntityWithinRange: false when si has entities but all out of range
     self.transform.pos[2] = selfPos[2];
 
     auto cond = fl::ai::AnyEntityWithinRange(1000.f);
-    CHECK(cond(self, f.em, &si) == false);
+    CHECK(cond(self, f.em, fl::AiTickContext{&si}) == false);
 }
 
 TEST_CASE("AnyEntityWithinRange: false when si is null") {
@@ -985,7 +985,7 @@ TEST_CASE("AnyEntityWithinRange: false when si is null") {
     fl::EntityState self{};
     self.id = f.selfId;
     auto cond = fl::ai::AnyEntityWithinRange(1000.f);
-    CHECK(cond(self, f.em, nullptr) == false);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == false);
 }
 
 // --- AnyHostileEntityWithinRange (#465) ---
@@ -1004,7 +1004,7 @@ static bool hostileCond(SmFixture& f, uint16_t selfFaction, uint16_t targetFacti
     self.id = f.selfId;
     self.factionIndex = selfFaction;
     auto cond = fl::ai::AnyHostileEntityWithinRange(rangeM);
-    return cond(self, f.em, &si);
+    return cond(self, f.em, fl::AiTickContext{&si});
 }
 
 TEST_CASE("AnyHostileEntityWithinRange: true when a hostile entity is within range") {
@@ -1038,7 +1038,7 @@ TEST_CASE("AnyHostileEntityWithinRange: false when si is null") {
     self.id = f.selfId;
     self.factionIndex = 1;
     auto cond = fl::ai::AnyHostileEntityWithinRange(1000.f);
-    CHECK(cond(self, f.em, nullptr) == false);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == false);
 }
 
 TEST_CASE("Always: returns true") {
@@ -1046,7 +1046,7 @@ TEST_CASE("Always: returns true") {
     fl::EntityState self{};
     self.id = f.selfId;
     auto cond = fl::ai::Always();
-    CHECK(cond(self, f.em, nullptr) == true);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == true);
 }
 
 TEST_CASE("And: true when both conditions true") {
@@ -1054,7 +1054,7 @@ TEST_CASE("And: true when both conditions true") {
     fl::EntityState self{};
     self.id = f.selfId;
     auto cond = fl::ai::And(fl::ai::Always(), fl::ai::Always());
-    CHECK(cond(self, f.em, nullptr) == true);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == true);
 }
 
 TEST_CASE("And: false when first condition false") {
@@ -1062,7 +1062,7 @@ TEST_CASE("And: false when first condition false") {
     fl::EntityState self{};
     self.id = f.selfId;
     auto cond = fl::ai::And(fl::ai::Not(fl::ai::Always()), fl::ai::Always());
-    CHECK(cond(self, f.em, nullptr) == false);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == false);
 }
 
 TEST_CASE("And: false when second condition false") {
@@ -1070,7 +1070,7 @@ TEST_CASE("And: false when second condition false") {
     fl::EntityState self{};
     self.id = f.selfId;
     auto cond = fl::ai::And(fl::ai::Always(), fl::ai::Not(fl::ai::Always()));
-    CHECK(cond(self, f.em, nullptr) == false);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == false);
 }
 
 TEST_CASE("Or: false when both conditions false") {
@@ -1078,7 +1078,7 @@ TEST_CASE("Or: false when both conditions false") {
     fl::EntityState self{};
     self.id = f.selfId;
     auto cond = fl::ai::Or(fl::ai::Not(fl::ai::Always()), fl::ai::Not(fl::ai::Always()));
-    CHECK(cond(self, f.em, nullptr) == false);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == false);
 }
 
 TEST_CASE("Or: true when first condition true") {
@@ -1086,7 +1086,7 @@ TEST_CASE("Or: true when first condition true") {
     fl::EntityState self{};
     self.id = f.selfId;
     auto cond = fl::ai::Or(fl::ai::Always(), fl::ai::Not(fl::ai::Always()));
-    CHECK(cond(self, f.em, nullptr) == true);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == true);
 }
 
 TEST_CASE("Or: true when only second condition true") {
@@ -1094,7 +1094,7 @@ TEST_CASE("Or: true when only second condition true") {
     fl::EntityState self{};
     self.id = f.selfId;
     auto cond = fl::ai::Or(fl::ai::Not(fl::ai::Always()), fl::ai::Always());
-    CHECK(cond(self, f.em, nullptr) == true);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == true);
 }
 
 TEST_CASE("Not: inverts true to false") {
@@ -1102,7 +1102,7 @@ TEST_CASE("Not: inverts true to false") {
     fl::EntityState self{};
     self.id = f.selfId;
     auto cond = fl::ai::Not(fl::ai::Always());
-    CHECK(cond(self, f.em, nullptr) == false);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == false);
 }
 
 TEST_CASE("Not: inverts false to true") {
@@ -1110,7 +1110,7 @@ TEST_CASE("Not: inverts false to true") {
     fl::EntityState self{};
     self.id = f.selfId;
     auto cond = fl::ai::Not(fl::ai::Not(fl::ai::Always()));
-    CHECK(cond(self, f.em, nullptr) == true);
+    CHECK(cond(self, f.em, fl::AiTickContext{}) == true);
 }
 
 // ---------------------------------------------------------------------------
@@ -2429,7 +2429,7 @@ TEST_CASE("AiControllerFactory: escort follow state outputs non-zero throttle") 
 
     fl::EntityState selfState = makeState(0.0, 600.0, 0.0);
     selfState.id = f.selfId;
-    fl::ControlInput out = ctrl->sample(selfState, 0, 1.0 / 60.0, nullptr);
+    fl::ControlInput out = ctrl->sample(selfState, 0, 1.0 / 60.0, fl::AiTickContext{});
     CHECK(out.throttle > 0.f); // LoiterController always applies throttle
 }
 
@@ -2447,7 +2447,7 @@ TEST_CASE("AiControllerFactory: escort stays in follow with null SpatialIndex") 
     fl::EntityState selfState = makeState(0.0, 600.0, 0.0);
     selfState.id = f.selfId;
     // AnyEntityWithinRange returns false when si == nullptr; no transition fires.
-    sm->sample(selfState, 0, 1.0 / 60.0, nullptr);
+    sm->sample(selfState, 0, 1.0 / 60.0, fl::AiTickContext{});
     CHECK(sm->currentState() == "follow");
 }
 
@@ -2472,7 +2472,7 @@ TEST_CASE("AiControllerFactory: escort transitions to break when a hostile is wi
     double threatPos[3] = {400.0, 600.0, 0.0};
     si.insert(f.threatId.index, threatPos); // index=2
 
-    sm->sample(selfState, 0, 1.0 / 60.0, &si); // AnyHostileEntityWithinRange(1000) fires → break
+    sm->sample(selfState, 0, 1.0 / 60.0, fl::AiTickContext{&si}); // AnyHostileEntityWithinRange(1000) fires → break
     CHECK(sm->currentState() == "break");
 }
 
@@ -2497,6 +2497,6 @@ TEST_CASE("AiControllerFactory: escort ignores a same-faction escortee within in
     double escorteePos[3] = {300.0, 600.0, 0.0};
     si.insert(f.escorteeId.index, escorteePos); // index=1, faction 1 (friendly)
 
-    sm->sample(selfState, 0, 1.0 / 60.0, &si);
+    sm->sample(selfState, 0, 1.0 / 60.0, fl::AiTickContext{&si});
     CHECK(sm->currentState() == "follow"); // friendly ignored → stays in follow
 }

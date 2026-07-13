@@ -12,7 +12,6 @@
 
 namespace fl {
 class EntityManager; // forward-declare; pointer/ref only in this header
-class SpatialIndex;  // forward-declare; pointer only in this header
 } // namespace fl
 
 namespace fl::ai {
@@ -20,9 +19,10 @@ namespace fl::ai {
 // Condition evaluated at the end of each tick to test outgoing transitions.
 //   self — current state of the controlled entity
 //   em   — entity manager (for target lookups via em.get())
-//   si   — spatial index rebuilt this tick by WorldBroadcaster; nullptr in tests
+//   ctx  — the per-tick world view (spatial index, contacts, environment, difficulty); every
+//          field may be null, meaning "not evaluated here" — see entity/AiTickContext.h
 using Condition =
-    std::function<bool(const fl::EntityState& self, const fl::EntityManager& em, const fl::SpatialIndex* si)>;
+    std::function<bool(const fl::EntityState& self, const fl::EntityManager& em, const fl::AiTickContext& ctx)>;
 
 // Produces a fresh child controller on state entry. Called once per state entry;
 // the returned controller is owned until the state is exited or re-entered.
@@ -80,7 +80,7 @@ class StateMachineController : public fl::IEntityController {
     void setInitialState(const std::string& name);
 
     fl::ControlInput sample(const fl::EntityState& state, uint64_t tick, double dt,
-                            const fl::SpatialIndex* si = nullptr) override;
+                            const fl::AiTickContext& ctx = {}) override;
 
     // Name of the currently active state. Empty string if setInitialState() has not
     // been called or named an unknown state.
@@ -111,7 +111,7 @@ class StateMachineController : public fl::IEntityController {
 // ---------------------------------------------------------------------------
 // Built-in Condition helpers
 //
-// All helpers capture only ids/scalars; em and si arrive as parameters at
+// All helpers capture only ids/scalars; em and ctx arrive as parameters at
 // call time via StateMachineController::sample().
 // ---------------------------------------------------------------------------
 
@@ -125,13 +125,13 @@ Condition ThreatBeyondRange(fl::EntityId targetId, float rangeM);
 Condition HpBelow(float fraction);
 
 // True when any entity other than self is found within rangeM via the SpatialIndex.
-// Returns false when si == nullptr (e.g. in tests without a spatial index).
+// Returns false when ctx.si == nullptr (e.g. in tests without a spatial index).
 Condition AnyEntityWithinRange(float rangeM);
 
 // True when any HOSTILE entity (per fl::areFactionsHostile against self's factionIndex) is
 // found within rangeM via the SpatialIndex. Same-faction friendlies and neutral (faction 0)
 // entities are ignored, so an escort no longer triggers on the entity it is protecting.
-// Returns false when si == nullptr or self is neutral (faction 0 has no enemies).
+// Returns false when ctx.si == nullptr or self is neutral (faction 0 has no enemies).
 Condition AnyHostileEntityWithinRange(float rangeM);
 
 // True when any entity HOSTILE TO SELF is within rangeM of `anchorId` — geometry about the anchor,
@@ -140,7 +140,7 @@ Condition AnyHostileEntityWithinRange(float rangeM);
 // against self (not against the anchor) is what lets a neutral-faction anchor still be covered by a
 // factioned wingman, and keeps the semantics identical to every other condition here.
 // AnyHostileEntityWithinRange is the degenerate case where the anchor is self.
-// Returns false when si == nullptr, self is neutral (faction 0 has no enemies), or the anchor is
+// Returns false when ctx.si == nullptr, self is neutral (faction 0 has no enemies), or the anchor is
 // dead/invalid.
 Condition AnyHostileEntityWithinRangeOf(fl::EntityId anchorId, float rangeM);
 
