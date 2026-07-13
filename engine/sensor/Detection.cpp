@@ -24,6 +24,14 @@ constexpr uint32_t kRollDomain = 1u << 24;
 // time. Sub-millisecond precision on a coast timer is meaningless anyway.
 constexpr float kCoastEpsilonS = 1e-4f;
 
+// What the dark costs an unaided eye (#209). Large on purpose: night attacks work precisely because
+// the visual channel mostly stops working, and an IR-equipped aircraft owns the night. A timid value
+// here would make darkness cosmetic.
+constexpr float kNightVisualScale = 0.25f;
+
+// No channel ever reaches exactly zero — see environmentPodScale.
+constexpr float kMinEnvScale = 0.05f;
+
 // Body frame: forward = +X, up = +Y, right = +Z. (+X × +Y = +Z in the engine's Y-up right-handed
 // world, which is why +Z is RIGHT and not left — the same convention every AI controller uses.)
 struct BodyBasis {
@@ -109,15 +117,56 @@ bool inLobe(const double observerPos[3], const float observerQuat[4], const doub
     return std::abs(azDeg) <= lobe.azHalfAngleDeg + kEps && std::abs(elDeg) <= lobe.elHalfAngleDeg + kEps;
 }
 
-float effectivePod(float authoredPod, float skill, SensorType /*type*/, const SensingEnvironment& /*env*/) noexcept {
+float environmentPodScale(SensorType type, const SensingEnvironment& env) noexcept {
+    // Clear daylight costs NOTHING — exactly 1.0, not 0.99. Every authored `pod` is quoted against
+    // these conditions, so fair weather must be the identity or every pack's numbers quietly drift.
+    const float cloud = std::clamp(env.cloudCoverage, 0.f, 1.f);
+    const float fog = std::clamp(env.fogDensity, 0.f, 1.f);
+
+    // Weight per channel: how much of this sensor's job the weather takes. Not measured physics —
+    // these are behavioural numbers chosen so the four channels stay meaningfully DIFFERENT, which is
+    // the point of having four (see the header).
+    float cloudWeight = 0.f;
+    float fogWeight = 0.f;
+    float nightScale = 1.f;
+
+    switch (type) {
+    case SensorType::Visual:
+        cloudWeight = 0.70f;
+        fogWeight = 0.80f;
+        nightScale = kNightVisualScale; // the dark is the visual channel's problem, and only its
+        break;
+    case SensorType::Ir:
+        cloudWeight = 0.40f; // moisture attenuates in the infrared...
+        fogWeight = 0.50f;
+        nightScale = 1.f; // ...but a jet engine is exactly as hot at midnight
+        break;
+    case SensorType::Radar:
+        cloudWeight = 0.15f; // rain clutter, and not much of it
+        fogWeight = 0.10f;
+        nightScale = 1.f;
+        break;
+    case SensorType::Laser:
+        cloudWeight = 0.70f; // the same line-of-sight problem as the eyeball...
+        fogWeight = 0.80f;
+        nightScale = 1.f; // ...without the eyeball's dependence on daylight
+        break;
+    }
+
+    const float scale = (1.f - cloudWeight * cloud) * (1.f - fogWeight * fog) * (env.isNight ? nightScale : 1.f);
+
+    // Never exactly zero: in the worst conditions a sensor still has SOME chance, so a target is
+    // never mathematically undetectable — acquiring it just takes a very long time. A hard zero would
+    // be an invisibility cloak issued by the weather.
+    return std::clamp(scale, kMinEnvScale, 1.f);
+}
+
+float effectivePod(float authoredPod, float skill, SensorType type, const SensingEnvironment& env) noexcept {
     // Skill 0.5 (the AiTuning default) is exactly unity, so an entity that authors no [ai] section
     // detects at precisely the probability its sensor def states.
     const float skillScale = 0.5f + std::clamp(skill, 0.f, 1.f);
 
-    // Environment modifiers are identity in v1 — the seam is here, the curves are #209.
-    constexpr float envScale = 1.f;
-
-    return std::clamp(authoredPod * skillScale * envScale, 0.f, 1.f);
+    return std::clamp(authoredPod * skillScale * environmentPodScale(type, env), 0.f, 1.f);
 }
 
 uint32_t detectionHash(uint32_t observerIdx, uint32_t targetIdx, uint64_t tickIndex, uint32_t sensorSlot,

@@ -433,6 +433,24 @@ acquisition time with `pod`, but stickiness with `lock_hold_s`.
 **`max_range_nm` is quoted against a baseline target** (signature `1.0`). An entity's `[signatures]`
 scale it: radar range by `sqrt(sig)`, IR and visual linearly.
 
+**`pod` is also quoted against CLEAR DAYLIGHT.** Weather and darkness scale it down per channel
+(#209), and fair weather at noon costs exactly nothing — so the number you author is the number you
+get in good conditions. What the conditions cost, by channel:
+
+| | Full storm (cloud 1.0, fog 0.8) | Night (clear) |
+|---|---|---|
+| `visual` | **×0.11** | **×0.25** |
+| `ir` | ×0.36 | ×1.00 |
+| `radar` | ×0.78 | ×1.00 |
+| `laser` | ×0.11 | ×1.00 |
+
+The channels are deliberately *not* alike, and that asymmetry is the point of carrying more than one
+sensor. **The dark is the eyeball's problem and nobody else's** — a jet engine is exactly as hot at
+midnight, radar does not care what time it is, so an IR-equipped aircraft owns the night. **Radar
+barely notices weather at all** (a little rain clutter); that indifference is most of why it exists.
+No condition ever drives a channel to zero: the worst weather leaves a small chance, so a target is
+never *mathematically* undetectable — acquiring it just takes a very long time.
+
 ```toml
 # sensors/apg63.toml — pulse-doppler fighter radar
 [sensor]
