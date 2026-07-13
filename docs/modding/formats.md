@@ -424,6 +424,12 @@ A PoD is meaningless without a rate — the same `0.3` is a different sensor at 
 so author against the reference. An operator who changes the cadence changes effective acquisition
 time; that is the honest consequence, and it is not silently renormalized.
 
+**`pod` is an ACQUISITION chance, not a retention roll.** It decides how long your sensor takes to
+*find* a target it is not yet holding. It is never re-rolled to *keep* one: a contact already inside
+the cone stays held, and is lost only when it leaves the cone or when its `lock_hold_s` coast runs
+out. So a low `pod` reads as "slow to notice things", not "loses what it has found" — and you tune
+acquisition time with `pod`, but stickiness with `lock_hold_s`.
+
 **`max_range_nm` is quoted against a baseline target** (signature `1.0`). An entity's `[signatures]`
 scale it: radar range by `sqrt(sig)`, IR and visual linearly.
 
