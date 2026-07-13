@@ -64,6 +64,11 @@ struct ServerConfig {
     // Sim-tick CPU parallelism: total worker threads for the per-entity AI + integrate passes,
     // including the sim thread. 0 = auto (hardware_concurrency), 1 = serial. CPU knob, NOT a
     // capacity guarantee. CLI --sim-worker-threads overrides this. [0, 256]
+    // Sensor geometry checks per second (#685). 10 is the REFERENCE cadence every authored `pod` is
+    // tuned against — changing it changes effective acquisition time, which is the honest
+    // consequence and is documented rather than silently renormalized. [1, 60]
+    double sensorCheckHz = 10.0;
+
     uint32_t simWorkerThreads = 0;
     // Load-test affordance (#573): spawn N server-side AI entities (cheap loiter controllers spread over
     // testSpawnSpreadKm at testSpawnAglM) at startup to stress the entity pool + SpatialIndex at scale.

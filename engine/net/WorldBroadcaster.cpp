@@ -155,7 +155,8 @@ static_assert(kNoFlightId == fl::kNoFormation, "GameProtocol kNoFlightId is out 
 WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegistry& registry, INetwork& net,
                                    ILogger& logger, WeatherController* weather)
     : m_entityManager(entityManager), m_registry(registry), m_net(net), m_logger(logger), m_weather(weather),
-      m_gravity(&fl::CentralGravityField::earthInstance()), m_planetRadiusKm(6371.f) {}
+      m_sensorSystem(entityManager, registry), m_gravity(&fl::CentralGravityField::earthInstance()),
+      m_planetRadiusKm(6371.f) {}
 
 WorldBroadcaster::~WorldBroadcaster() = default;
 
@@ -259,6 +260,26 @@ void WorldBroadcaster::setFlightCommandRateLimit(int perSecond) noexcept {
 
 void WorldBroadcaster::setFlightModelResolver(FlightModelResolver fn) {
     m_flightModelResolver = std::move(fn);
+}
+
+void WorldBroadcaster::setSensorDefResolver(sensor::SensorSystem::SensorDefResolver fn) {
+    m_sensorSystem.setResolver(std::move(fn));
+}
+
+void WorldBroadcaster::setSensorCheckHz(float hz) noexcept {
+    m_sensorCheckHz.store(std::clamp(hz, 1.f, 60.f), std::memory_order_relaxed);
+}
+
+void WorldBroadcaster::setEmitting(uint32_t entityIdx, bool emitting) {
+    m_sensorSystem.setEmitting(entityIdx, emitting);
+}
+
+const sensor::ContactTable* WorldBroadcaster::contactsFor(uint32_t entityIdx) const {
+    return m_sensorSystem.contactsFor(entityIdx);
+}
+
+void WorldBroadcaster::setAiScaling(const AiScaling& scaling) noexcept {
+    m_aiScaling = scaling;
 }
 
 void WorldBroadcaster::setOperatorPassword(std::string password) {
@@ -608,34 +629,78 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     }
     m_stepInputs.resize(m_stepItems.size());
 
+    // ---- Sensing pass (#685) ----
+    // Runs BEFORE the AI pass and AFTER the spatial rebuild, so a controller samples against contacts
+    // detected from the same pre-step world it is about to steer in. Each observer writes only its own
+    // ObserverState and reads only const world state, so the pass is data-parallel and
+    // serial-equivalent: the dice are seeded from (observer, target, tick, slot, lobe) rather than
+    // drawn from shared RNG state, so the contact tables are byte-identical on 1 worker and on 16.
+    sensor::SensingEnvironment sensingEnv{};
+    if (m_weather) {
+        const EnvironmentState envState = m_weather->computeEnvironment();
+        sensingEnv.cloudCoverage = envState.cloudCoverage;
+        sensingEnv.fogDensity = envState.fogDensity;
+        sensingEnv.fogStartDist = envState.fogStartDist;
+        sensingEnv.timeOfDayH = envState.timeOfDay;
+        sensingEnv.isNight = (envState.timeOfDay < 6.f || envState.timeOfDay >= 20.f);
+    }
+    // Unset difficulty = NO scaling: radar reaches its authored range and the AI reacts the moment it
+    // detects. See setAiScaling — defaulting to AiScaling{} would silently apply the Cadet preset.
+    const float radarRangeFraction = m_aiScaling ? m_aiScaling->radarSensorRange : 1.f;
+    const float reactionTimeS = m_aiScaling ? m_aiScaling->reactionTimeS : 0.f;
+    {
+        const auto tSensingStart = m_clock->now();
+
+        const float checkHz = m_sensorCheckHz.load(std::memory_order_relaxed);
+        const auto stride =
+            static_cast<uint32_t>(std::max(1L, std::lround(1.0 / (simDt * static_cast<double>(checkHz)))));
+
+        auto& work = m_sensorSystem.gatherDue(tickIndex, stride, simDt);
+        runEntityPass(work.size(),
+                      [this, &work, tickIndex, &sensingEnv, radarRangeFraction, reactionTimeS](size_t b, size_t e) {
+                          for (size_t i = b; i < e; ++i)
+                              m_sensorSystem.evaluateObserver(work[i], m_spatialIndex, tickIndex, sensingEnv,
+                                                              radarRangeFraction, reactionTimeS);
+                      });
+
+        // Reaction bookkeeping is NOT staggered: a contact's `reacted` flag must flip on the exact
+        // tick its delay elapses, not up to a stride later. It touches no geometry, so it is cheap
+        // enough to run every tick for every observer on the sim thread.
+        m_sensorSystem.updateReactions(tickIndex, simDt, reactionTimeS);
+
+        m_tickProfiler.addPhaseSample(
+            TickPhase::Sensing, std::chrono::duration<double, std::milli>(m_clock->now() - tSensingStart).count());
+    }
+
     // AI pass: sample each controller. Read-only on shared world state (EntityState, SpatialIndex,
     // EntityManager); each controller's own mutable state is per-entity / disjoint.
     //
-    // The context is built ONCE on the sim thread and shared, const, across all workers — it holds
-    // only pointers to state that is immutable for the duration of the pass. The sensing pass (#685)
-    // makes `contacts` per-observer, at which point this becomes a per-entity copy of the same
-    // struct; the fields that are world-wide (si, env, difficulty) stay shared.
-    const AiTickContext aiCtx{&m_spatialIndex, nullptr, nullptr, nullptr};
+    // The world-wide parts of the context are shared const across workers; `contacts` is per-observer
+    // and is looked up inside the worker, so a controller can only ever see ITS OWN detections.
+    const AiScaling* difficulty = m_aiScaling ? &*m_aiScaling : nullptr;
     {
         const auto tAiStart = m_clock->now();
-        runEntityPass(m_stepItems.size(), [this, tickIndex, simDt, govAiStride, &aiCtx](size_t b, size_t e) {
-            for (size_t i = b; i < e; ++i) {
-                const StepItem& it = m_stepItems[i];
-                // AI-sample decimation (#514): a decimatable (non-player) entity reuses its last sampled
-                // input on ticks where (tickIndex + idx) % stride != 0 — a pure function of (idx, tick,
-                // stride), so the skip pattern is identical across worker counts (serial-equivalent), and
-                // each worker writes only its own entity's lastInput cache (disjoint). Players (stride
-                // applies to all, but decimatable=false) and any entity not yet sampled always sample.
-                if (it.ce->decimatable && it.ce->lastInputValid && govAiStride > 1u &&
-                    ((tickIndex + it.idx) % govAiStride) != 0u) {
-                    m_stepInputs[i] = it.ce->lastInput;
-                } else {
-                    m_stepInputs[i] = it.ce->controller->sample(*it.state, tickIndex, simDt, aiCtx);
-                    it.ce->lastInput = m_stepInputs[i];
-                    it.ce->lastInputValid = true;
-                }
-            }
-        });
+        runEntityPass(m_stepItems.size(),
+                      [this, tickIndex, simDt, govAiStride, &sensingEnv, difficulty](size_t b, size_t e) {
+                          for (size_t i = b; i < e; ++i) {
+                              const StepItem& it = m_stepItems[i];
+                              // AI-sample decimation (#514): a decimatable (non-player) entity reuses its last sampled
+                              // input on ticks where (tickIndex + idx) % stride != 0 — a pure function of (idx, tick,
+                              // stride), so the skip pattern is identical across worker counts (serial-equivalent), and
+                              // each worker writes only its own entity's lastInput cache (disjoint). Players (stride
+                              // applies to all, but decimatable=false) and any entity not yet sampled always sample.
+                              if (it.ce->decimatable && it.ce->lastInputValid && govAiStride > 1u &&
+                                  ((tickIndex + it.idx) % govAiStride) != 0u) {
+                                  m_stepInputs[i] = it.ce->lastInput;
+                              } else {
+                                  const AiTickContext aiCtx{&m_spatialIndex, m_sensorSystem.contactsFor(it.idx),
+                                                            &sensingEnv, difficulty};
+                                  m_stepInputs[i] = it.ce->controller->sample(*it.state, tickIndex, simDt, aiCtx);
+                                  it.ce->lastInput = m_stepInputs[i];
+                                  it.ce->lastInputValid = true;
+                              }
+                          }
+                      });
         m_tickProfiler.addPhaseSample(TickPhase::Ai,
                                       std::chrono::duration<double, std::milli>(m_clock->now() - tAiStart).count());
     }
@@ -1330,6 +1395,7 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
             for (const fl::FormationMember& m : members) {
                 if (m.isAi()) {
                     m_controlledEntities.erase(m.id.index);
+                    m_sensorSystem.removeObserver(m.id.index);
                     m_entityManager.kill(m.id);
                 }
             }
@@ -1342,6 +1408,7 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
 
         // Tear down the controller (which points into m_peerInputs) before erasing the input slot.
         m_controlledEntities.erase(it->second.index);
+        m_sensorSystem.removeObserver(it->second.index);
         m_entityManager.kill(it->second);
         m_peerEntities.erase(it);
     }
@@ -1870,6 +1937,19 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     ControlledEntity ce{id, std::move(fi), std::move(controller)};
     ce.decimatable = decimatable;
     m_controlledEntities[id.index] = std::move(ce);
+
+    // Every controlled entity is an observer — PLAYERS INCLUDED. Player avionics (#526) inherits
+    // exactly these semantics rather than growing a parallel "what can the player see" path, which is
+    // the whole point of one vocabulary with three consumers.
+    const EntityDef* def = m_registry.byIndex(st->typeIndex);
+    const std::vector<std::string> sensorIds = def ? def->sensorIds : std::vector<std::string>{};
+    const AiTuning tuning = (def && def->aiTuning) ? *def->aiTuning : AiTuning{};
+    m_sensorSystem.addObserver(id.index, sensorIds, tuning.skill, tuning.reaction);
+
+    // The candidate query is widened by the loudest signature in the registry, which can only change
+    // as types are registered. Recomputing here is cheap (types are registered at startup) and keeps
+    // it correct without a callback into the registry.
+    m_sensorSystem.recomputeSignatureScale();
 }
 
 void WorldBroadcaster::registerController(EntityId id, std::unique_ptr<IEntityController> controller,

@@ -70,6 +70,8 @@ static const char* kDefaultToml =
     "#                                  # now reacts to an approaching player, where before the\n"
     "#                                  # player was invisible to it. [0, 65535]\n"
     "# draw_distance_km = 200.0         # per-peer interest management radius (km); [1, 100000]\n"
+    "# sensor_check_hz = 10.0           # sensor geometry checks/sec; the REFERENCE cadence every "
+    "authored pod is tuned against; [1, 60]\n"
     "# spatial_cell_size_km = 10.0      # SpatialIndex cell size (km); 0 = auto from draw distance; [0, 1000]; "
     "restart\n"
     "# snapshot_budget_bytes = 1200     # per-client snapshot byte budget; 0 = unlimited; [0, 65535]\n"
@@ -411,6 +413,14 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                          "world.draw_distance_km out of range [1, 100000]; using default 200.0");
             } else {
                 cfg.drawDistanceKm = *v;
+            }
+        }
+        if (auto v = tbl["world"]["sensor_check_hz"].value<double>()) {
+            if (*v < 1.0 || *v > 60.0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.sensor_check_hz out of range [1, 60]; using default 10.0");
+            } else {
+                cfg.sensorCheckHz = *v;
             }
         }
         if (auto v = tbl["world"]["spatial_cell_size_km"].value<double>()) {

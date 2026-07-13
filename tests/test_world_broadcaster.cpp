@@ -4997,11 +4997,16 @@ TEST_CASE("WorldBroadcaster: sample receives the AiTickContext from onTick", "[w
     REQUIRE(spyPtr->lastCtx.si != nullptr);
     CHECK(spyPtr->lastCtx.si->entityCount() == 1u);
 
-    // The other fields are null until their producers land, and null is NORMATIVE: it means "not
-    // evaluated", not "empty". A controller must read it as "sensing did not run", never as "this
-    // entity sees nothing" — the sensing pass (#685) is what makes them non-null.
-    CHECK(spyPtr->lastCtx.contacts == nullptr);
-    CHECK(spyPtr->lastCtx.env == nullptr);
+    // The sensing pass (#685) fills in contacts and env: every controlled entity is an observer, so
+    // its table exists — and it is EMPTY here (nothing else is in the world), which is the meaningful
+    // distinction from null. Null would mean "sensing was not evaluated for me"; empty means "my
+    // sensors ran and found nothing", and a controller must not confuse the two.
+    REQUIRE(spyPtr->lastCtx.contacts != nullptr);
+    CHECK(spyPtr->lastCtx.contacts->empty());
+    CHECK(spyPtr->lastCtx.env != nullptr);
+
+    // Difficulty stays null until a scaling is set (#682): unset = no scaling, NOT AiScaling{},
+    // whose defaults are the Cadet preset and would silently halve every radar range.
     CHECK(spyPtr->lastCtx.difficulty == nullptr);
 }
 

@@ -25,7 +25,7 @@
 
 namespace fl {
 
-enum class TickPhase : int { Maintenance = 0, Integrate, Ai, Collision, Serialize, Count };
+enum class TickPhase : int { Maintenance = 0, Sensing, Integrate, Ai, Collision, Serialize, Count };
 
 inline constexpr int kTickPhaseCount = static_cast<int>(TickPhase::Count);
 
@@ -33,6 +33,8 @@ inline const char* tickPhaseName(TickPhase p) {
     switch (p) {
     case TickPhase::Maintenance:
         return "maintenance";
+    case TickPhase::Sensing:
+        return "sensing";
     case TickPhase::Integrate:
         return "integrate";
     case TickPhase::Ai:
