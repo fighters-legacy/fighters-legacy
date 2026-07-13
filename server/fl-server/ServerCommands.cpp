@@ -785,7 +785,8 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         " congestion_enabled, congestion_min_send_hz, congestion_loss_threshold,"
         " congestion_budget_floor_bytes, overrun_governor_enabled, overrun_high_watermark,"
         " overrun_low_watermark, overrun_min_snapshot_hz, overrun_max_ai_stride,"
-        " overrun_budget_floor_bytes, overrun_min_interest_fraction, compress_snapshots (other"
+        " overrun_budget_floor_bytes, overrun_min_interest_fraction, compress_snapshots,"
+        " sensor_check_hz, ai.difficulty (other"
         " fields, incl. max_catchup_ticks and gns_nagle_time_us, require restart)",
         [ctx](std::span<std::string_view>) -> std::string {
             if (!ctx.env.configPath || ctx.env.configPath->empty())
@@ -815,9 +816,17 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                     newCfg.overrunMinSnapshotHz, newCfg.overrunMaxAiStride, newCfg.overrunBudgetFloorBytes,
                     newCfg.overrunMinInterestFraction);
                 auto newCompress = newCfg.network.compressSnapshots;
+                auto newSensorHz = static_cast<float>(newCfg.sensorCheckHz);
+                // Resolve the preset OFF the sim thread (it may read data/difficulty.toml through the
+                // AssetManager); only the resulting POD crosses into the callback. Null resolver ⇒
+                // nullopt ⇒ the running scaling is left alone rather than reset to a default.
+                std::optional<fl::AiScaling> newAiScaling;
+                if (ctx.env.resolveAiScaling)
+                    newAiScaling = ctx.env.resolveAiScaling(newCfg.aiDifficulty);
                 ctx.sim.gameLoop->enqueueSimCallback([ctx, newMotd, newMotdDisplayS, newDraw, newSnapshotBudget,
                                                       newJitterDepth, newAdaptWindow, newHysteresis, newMultiplier,
-                                                      newCongestion, newGovernor, newCompress]() mutable {
+                                                      newCongestion, newGovernor, newCompress, newSensorHz,
+                                                      newAiScaling]() mutable {
                     ctx.sim.broadcaster->setMotd(std::move(newMotd));
                     ctx.sim.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
                     ctx.sim.broadcaster->setDrawDistance(newDraw);
@@ -829,6 +838,9 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                     ctx.sim.broadcaster->setJitterMultiplier(newMultiplier);
                     ctx.sim.broadcaster->setCongestionParams(newCongestion);
                     ctx.sim.broadcaster->setGovernorParams(newGovernor);
+                    ctx.sim.broadcaster->setSensorCheckHz(newSensorHz);
+                    if (newAiScaling)
+                        ctx.sim.broadcaster->setAiScaling(*newAiScaling);
                 });
             }
             return "reload_config: name=\"" + newCfg.name + "\"  motd=\"" + newCfg.motd +
@@ -839,7 +851,8 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                    "  jitter_buffer_adapt_window=" + std::to_string(newCfg.jitterAdaptWindow) +
                    "  jitter_buffer_hysteresis=" + std::to_string(newCfg.jitterHysteresis) +
                    "  jitter_buffer_jitter_multiplier=" + std::to_string(newCfg.jitterMultiplier) +
-                   "  (other fields require restart)";
+                   "  sensor_check_hz=" + std::to_string(newCfg.sensorCheckHz) + "  ai.difficulty=\"" +
+                   newCfg.aiDifficulty + "\"" + "  (other fields require restart)";
         });
 
     // reload_banlist

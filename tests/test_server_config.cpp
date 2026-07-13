@@ -1256,3 +1256,33 @@ TEST_CASE("parseServerConfig: null logger is tolerated on malformed input", "[se
     auto cfg2 = parseServerConfig("[server]\nport = 999999\n", nullptr);
     CHECK(cfg2.port == 4778); // out-of-range -> warning logged (to the null sink) + default
 }
+
+// --- [ai] difficulty (#682) ---------------------------------------------------------------------
+
+TEST_CASE("parseServerConfig: each valid ai.difficulty is accepted", "[server_config]") {
+    for (const char* val : {"cadet", "pilot", "ace"}) {
+        const std::string toml = std::string("[ai]\ndifficulty = \"") + val + "\"\n";
+        MockLogger logger;
+        const ServerConfig cfg = parseServerConfig(toml, &logger);
+        CHECK(cfg.aiDifficulty == val);
+    }
+}
+
+TEST_CASE("parseServerConfig: ai.difficulty defaults to pilot and rejects unknown values", "[server_config]") {
+    MockLogger logger;
+    CHECK(parseServerConfig("", &logger).aiDifficulty == "pilot");
+
+    // An unknown preset keeps the default rather than inventing one — the established
+    // range-validated-default idiom, and a warn so the operator sees the typo.
+    const ServerConfig cfg = parseServerConfig("[ai]\ndifficulty = \"godlike\"\n", &logger);
+    CHECK(cfg.aiDifficulty == "pilot");
+}
+
+TEST_CASE("parseServerConfig: ai.difficulty and ai.difficulty_floor are distinct keys", "[server_config]") {
+    // `difficulty` is what the SERVER runs (it scales AI radar range + reaction time in the sim
+    // tick). `difficulty_floor` is the future per-client clamp. Setting one must not move the other.
+    MockLogger logger;
+    const ServerConfig cfg = parseServerConfig("[ai]\ndifficulty = \"ace\"\ndifficulty_floor = \"veteran\"\n", &logger);
+    CHECK(cfg.aiDifficulty == "ace");
+    CHECK(cfg.aiDifficultyFloor == "veteran");
+}
