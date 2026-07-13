@@ -23,6 +23,7 @@
 #include "StdoutLogger.h"
 #include "TestSpawn.h"
 #include "net/DiscoveryBeacon.h"
+#include "sensor/SensorDefParser.h"
 #include "server_config.h"
 
 #include <ILogger.h>
@@ -535,6 +536,33 @@ int main(int argc, char** argv) {
             (*fmCache)[id] = model; // cache misses too, so a bad id isn't re-parsed every connect
             return model;
         });
+    // Resolve EntityDef::sensorIds -> parsed SensorDef on the spawn path (#685), the same shape as
+    // the flight-model resolver above. An unknown id logs once and is skipped: the entity keeps the
+    // rest of its suite (and, if it ends up with none, the builtin eyeball) rather than being denied
+    // a spawn because one sensor file is missing.
+    auto sensorCache =
+        std::make_shared<std::unordered_map<std::string, std::shared_ptr<const fl::sensor::SensorDef>>>();
+    broadcaster.setSensorDefResolver(
+        [&assets, log, sensorCache](const std::string& id) -> std::shared_ptr<const fl::sensor::SensorDef> {
+            if (auto it = sensorCache->find(id); it != sensorCache->end())
+                return it->second;
+            std::shared_ptr<const fl::sensor::SensorDef> def;
+            if (auto raw = assets.loadSensorDef(id.c_str()); raw && !raw->bytes.empty()) {
+                try {
+                    def = std::make_shared<const fl::sensor::SensorDef>(fl::sensor::parseSensorDef(
+                        std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size())));
+                } catch (const std::exception& e) {
+                    log->log(fl::LogLevel::Warn, __FILE__, __LINE__,
+                             ("sensor def '" + id + "' failed to parse: " + e.what()).c_str());
+                }
+            } else {
+                log->log(fl::LogLevel::Warn, __FILE__, __LINE__, ("unknown sensor def id: " + id).c_str());
+            }
+            (*sensorCache)[id] = def; // cache misses too, so a bad id isn't re-parsed every spawn
+            return def;
+        });
+    broadcaster.setSensorCheckHz(static_cast<float>(cfg.sensorCheckHz));
+
     // ---- Formations and the scripted wingman (#610) ----------------------------------------------
     // engine-net does not link engine-ai (cmake/layering.cmake), so the three places an order needs
     // engine-ai — spawning a flight, building a controller, designating a target — are injected here

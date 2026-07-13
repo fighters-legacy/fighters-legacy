@@ -189,15 +189,18 @@ target_link_libraries(engine-weapon
 # engine-entity and NOT the reverse: the observed must not depend on the observer, which is why
 # SignatureDef is a POD in engine/entity/ rather than a type in this library.
 #
-# engine-spatial (the record's other PUBLIC edge) arrives with the sensing pass (#685), which is what
-# actually queries the index for candidates; this target is pure math over positions it is handed.
+# PUBLIC engine-spatial (#685): the sensing pass queries the index for detection candidates. Both
+# PUBLIC edges from the decision record are now in place, and both point AWAY from engine-sensor's
+# consumers — engine-net links this, not the other way round.
 add_library(engine-sensor STATIC
     sensor/SensorDefParser.cpp
     sensor/Detection.cpp
+    sensor/SensorSystem.cpp
 )
 target_include_directories(engine-sensor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-sensor
     PUBLIC  engine-entity
+            engine-spatial
     PRIVATE tomlplusplus::tomlplusplus
 )
 
@@ -263,6 +266,7 @@ target_link_libraries(engine-net
     PUBLIC  engine-protocol
             engine-compress
             engine-entity
+            engine-sensor
             engine-spatial
             engine-job
             engine-world

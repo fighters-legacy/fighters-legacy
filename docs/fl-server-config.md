@@ -69,6 +69,7 @@ autosave_interval_s = 300
 time_scale         = 10.0        # game seconds per real second; 10 = full day/night ≈ 2.4 real hours
 # planet_radius_m         = 6371000  # planet sphere radius (m); Earth default
 # draw_distance_km        = 200.0    # per-peer interest management radius (km); [1, 100000]
+# sensor_check_hz         = 10.0     # sensor geometry checks/sec; the reference cadence pods are tuned to; [1, 60]
 # spatial_cell_size_km    = 10.0     # SpatialIndex cell size (km); 0 = auto from draw distance; [0, 1000]; restart
 # snapshot_budget_bytes   = 1200     # per-client snapshot byte budget; 0 = unlimited; [0, 65535]
 # jitter_buffer_depth           = 4    # per-peer input queue depth (ticks); global cap for adaptive sizing; [1, 32]
@@ -442,6 +443,28 @@ Per-peer interest management radius in kilometres. Only entities within this XZ-
 > `MsgClientInput`/`MsgHeartbeat`: an entity is re-sent as a full record every tick until that client
 > acknowledges it, then it converges to deltas. A dropped full recovers in ~1 RTT, and there is no
 > periodic cross-peer full-resync spike. See [network-protocol.md](network-protocol.md) → *Scaling to 128+*.
+
+### `sensor_check_hz`
+
+| Type | Default | Range |
+|---|---|---|
+| float | `10.0` | `[1, 60]` |
+
+How many times per second each sensor runs its geometry + probability check (#685). Converted to a
+tick stride, with checks **staggered** across it — observers do not all fire on the same tick, so the
+cost spreads evenly instead of one tick in six carrying the whole world's sensing.
+
+**10 Hz is the reference cadence every authored `pod` is tuned against.** A probability of detection
+is meaningless without a rate: the same `0.35` is a different sensor at 1 Hz than at 60 Hz. Raising
+this makes every sensor in the world acquire *faster*, and lowering it makes them slower — that is the
+honest consequence of the knob, and it is **not** silently renormalized behind your back. If you
+change it, you are re-tuning every content pack on the server, not just paying for more CPU.
+
+Note this affects **acquisition** only. A contact already held is maintained by geometry, not by
+re-rolling the die (see the sensor decision record in [architecture.md](architecture.md)), so the
+cadence does not make locks flicker — and a coast still runs out in real seconds regardless of it.
+
+**Hot-reloadable** via `reload_config`.
 
 ### `spatial_cell_size_km`
 

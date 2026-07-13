@@ -9,11 +9,13 @@
 #include "JitterBuffer.h"
 #include "SnapshotScheduler.h"
 #include "TickGovernor.h"
+#include "config/DifficultySettings.h" // AiScaling — sensing difficulty scaling (#685)
 #include "entity/EntityId.h"
 #include "flight/AeroForces.h"
 #include "flight/IGravityField.h"
 #include "loop/ISimUpdate.h"
 #include "perf/TickProfiler.h"
+#include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
 #include "world/FormationRegistry.h" // the formation / command tree (#610)
 
@@ -26,6 +28,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -409,6 +412,34 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     void setFlightModelResolver(FlightModelResolver fn);
 
     // ---------------------------------------------------------------------------------------------
+    // Sensing (#685)
+    // ---------------------------------------------------------------------------------------------
+    // Resolves a sensor-def id to a parsed def, the setFlightModelResolver pattern (engine-net must
+    // not link engine-content). Unset ⇒ every observer falls back to the builtin eyeball, which is
+    // the honest default and is what the zero-content sandbox runs on. Call before gameLoop.start().
+    void setSensorDefResolver(sensor::SensorSystem::SensorDefResolver fn);
+
+    // Geometry checks per second (default 10 = the reference cadence every authored `pod` is tuned
+    // against). Converted to a tick stride; checks are staggered across it. Changing this changes
+    // effective acquisition time — that is the honest consequence, and it is documented rather than
+    // silently renormalized. [1, 60]; atomic, hot-reloadable.
+    void setSensorCheckHz(float hz) noexcept;
+
+    // The EMCON / RWR seam: a non-emitting observer cannot hold a radar or laser TRACK lobe. Nothing
+    // flips it yet (#526/#529 do); sim-thread only.
+    void setEmitting(uint32_t entityIdx, bool emitting);
+
+    // What this entity has honestly detected. Null = it has no sensors (or sensing has not run for
+    // it yet) — which a consumer must read as "not evaluated", never as "sees nothing".
+    [[nodiscard]] const sensor::ContactTable* contactsFor(uint32_t entityIdx) const;
+
+    // Difficulty scaling for sensing (radar range fraction, reaction time). Unset = NO scaling:
+    // radar reaches its authored range and the AI reacts the moment it detects. Deliberately not
+    // defaulted to AiScaling{} — those defaults are the Cadet preset, and silently halving every
+    // radar range on a server that never configured a difficulty would be a lie. #682 wires it.
+    void setAiScaling(const AiScaling& scaling) noexcept;
+
+    // ---------------------------------------------------------------------------------------------
     // Formations and the wingman command channel (#610)
     // ---------------------------------------------------------------------------------------------
     // engine-net must never link engine-ai (cmake/layering.cmake enforces the module boundary), so
@@ -718,6 +749,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     // Resolves EntityDef::flightModelId -> FlightModelData at spawn (null = always builtin model).
     FlightModelResolver m_flightModelResolver;
+
+    // Sensing (#685). The system owns the observer side-storage; EntityState stays a flat POD that
+    // knows nothing about being observed.
+    sensor::SensorSystem m_sensorSystem;
+    std::atomic<float> m_sensorCheckHz{10.f};
+    std::optional<AiScaling> m_aiScaling; // unset = no difficulty scaling (see setAiScaling)
 
     // Server-side input tracing (#560): while m_inputTraceDir is non-empty, each peer's accepted
     // (post-validation) MsgClientInput is appended to a per-peer FLIT trace. Sim-thread only.

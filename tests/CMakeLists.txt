@@ -66,6 +66,10 @@ add_executable(test_sensor_detection test_sensor_detection.cpp)
 target_link_libraries(test_sensor_detection PRIVATE Catch2::Catch2WithMain engine-sensor)
 catch_discover_tests(test_sensor_detection)
 
+add_executable(test_sensor_system test_sensor_system.cpp)
+target_link_libraries(test_sensor_system PRIVATE Catch2::Catch2WithMain engine-sensor engine-entity engine-spatial)
+catch_discover_tests(test_sensor_system)
+
 add_executable(test_aero_forces test_aero_forces.cpp)
 target_link_libraries(test_aero_forces PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_aero_forces)
