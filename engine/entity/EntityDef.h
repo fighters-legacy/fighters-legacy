@@ -3,6 +3,7 @@
 
 #include "entity/DamageDef.h"
 #include "entity/ObjectCategory.h"
+#include "entity/SignatureDef.h"
 
 #include <cstdint>
 #include <optional>
@@ -39,6 +40,27 @@ struct EntityDef {
     std::string flightModelId;         // flight-model asset id; empty = builtin UFO model (server-side only)
     std::string aiScriptId;            // Lua AI script asset name; empty = no scripted AI (server-side only)
     std::vector<Hardpoint> hardpoints; // weapon stations; empty = carries nothing
+
+    // ── sensing (#680) ───────────────────────────────────────────────────────
+    // What the entity looks like to an observer. Defaults are the baseline fighter (all 1.0), so an
+    // entity that says nothing is exactly as detectable as the numbers in a sensor def assume.
+    SignatureDef signatures{};
+
+    // Which sensors the entity carries, as sensor-def ids (e.g. "fl-base:apg63"). Plain strings, so
+    // engine-entity does not depend on engine-sensor; ids are resolved against the AssetManager at
+    // load time, where an unknown one is a WARNING, not a parse error — a pack's cross-references
+    // resolve after all its files are read, and a missing sensor should not stop an aircraft from
+    // loading with the rest of its suite.
+    //
+    // EMPTY IS MEANINGFUL: an AI-controlled entity with no declared sensors gets the builtin
+    // eyeball, not omniscience and not blindness (2026-07-12 decision record). Honest sensing is the
+    // default; a pack cannot opt out of it by leaving this list off.
+    std::vector<std::string> sensorIds;
+
+    // Per-unit acquisition tuning. Absent = the engine default (AiTuning{}), so authors tune only
+    // the units they care about; an elite interceptor and a conscript SAM crew can fly identical
+    // hardware and still behave differently.
+    std::optional<AiTuning> aiTuning;
 };
 
 } // namespace fl

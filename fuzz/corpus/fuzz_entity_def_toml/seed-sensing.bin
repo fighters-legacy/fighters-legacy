@@ -1,0 +1,16 @@
+[entity]
+id = "x"
+name = "X"
+category = "air_vehicle"
+max_hp = 100.0
+sensors = ["fl-base:eyeball", "fl-base:apg63"]
+
+[signatures]
+rcs = 0.05
+ir = 0.8
+visual = 1.2
+laser = 1.0
+
+[ai]
+skill = 0.9
+reaction = 0.2

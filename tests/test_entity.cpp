@@ -1046,3 +1046,122 @@ TEST_CASE("EntityManager: setRenderBridge nullptr suppresses publish", "[manager
 
     CHECK_FALSE(bridge.hasSnapshot());
 }
+
+// ---------------------------------------------------------------------------
+// EntityDefParser — sensing: [signatures], sensors, [ai] (#680)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Appends TOML after the required [entity] block. Bare keys land INSIDE [entity]; a table header in
+// `extra` starts a new top-level section.
+std::string entityWith(const char* extra) {
+    return std::string("[entity]\nid=\"x\"\nname=\"X\"\ncategory=\"air_vehicle\"\nmax_hp=100.0\n") + extra;
+}
+
+} // namespace
+
+TEST_CASE("EntityDefParser: an entity with no sensing sections is the baseline fighter", "[parser]") {
+    // The defaults are load-bearing: a sensor def quotes its ranges against signature 1.0, so an
+    // entity that says nothing must be exactly as detectable as those numbers assume.
+    const fl::EntityDef def = fl::parseEntityDef(kMinimalEntityToml);
+
+    CHECK_THAT(def.signatures.rcs, WithinAbs(1.0f, 1e-6f));
+    CHECK_THAT(def.signatures.ir, WithinAbs(1.0f, 1e-6f));
+    CHECK_THAT(def.signatures.visual, WithinAbs(1.0f, 1e-6f));
+    CHECK_THAT(def.signatures.laser, WithinAbs(1.0f, 1e-6f));
+
+    // Empty is meaningful: an AI entity with no declared sensors gets the builtin eyeball, not
+    // omniscience and not blindness.
+    CHECK(def.sensorIds.empty());
+    CHECK_FALSE(def.aiTuning.has_value());
+}
+
+TEST_CASE("EntityDefParser: parses [signatures], sensors and [ai]", "[parser]") {
+    const fl::EntityDef def = fl::parseEntityDef(entityWith(R"(
+sensors = ["fl-base:eyeball", "fl-base:apg63"]
+
+[signatures]
+rcs    = 0.05
+ir     = 0.8
+visual = 1.2
+laser  = 1.0
+
+[ai]
+skill    = 0.9
+reaction = 0.2
+)"));
+
+    REQUIRE(def.sensorIds.size() == 2);
+    CHECK(def.sensorIds[0] == "fl-base:eyeball");
+    CHECK(def.sensorIds[1] == "fl-base:apg63");
+
+    CHECK_THAT(def.signatures.rcs, WithinAbs(0.05f, 1e-6f));
+    CHECK_THAT(def.signatures.ir, WithinAbs(0.8f, 1e-6f));
+    CHECK_THAT(def.signatures.visual, WithinAbs(1.2f, 1e-6f));
+    CHECK_THAT(def.signatures.laser, WithinAbs(1.0f, 1e-6f));
+
+    REQUIRE(def.aiTuning.has_value());
+    CHECK_THAT(def.aiTuning->skill, WithinAbs(0.9f, 1e-6f));
+    CHECK_THAT(def.aiTuning->reaction, WithinAbs(0.2f, 1e-6f));
+}
+
+TEST_CASE("EntityDefParser: a partial [signatures] section keeps the baseline for the rest", "[parser]") {
+    const fl::EntityDef def = fl::parseEntityDef(entityWith("\n[signatures]\nrcs = 0.01\n"));
+
+    CHECK_THAT(def.signatures.rcs, WithinAbs(0.01f, 1e-6f)); // authored
+    CHECK_THAT(def.signatures.ir, WithinAbs(1.0f, 1e-6f));   // a stealth airframe is still hot
+    CHECK_THAT(def.signatures.visual, WithinAbs(1.0f, 1e-6f));
+    CHECK_THAT(def.signatures.laser, WithinAbs(1.0f, 1e-6f));
+}
+
+TEST_CASE("EntityDefParser: a partial [ai] section keeps the default for the other field", "[parser]") {
+    const fl::EntityDef def = fl::parseEntityDef(entityWith("\n[ai]\nskill = 1.0\n"));
+
+    REQUIRE(def.aiTuning.has_value());
+    CHECK_THAT(def.aiTuning->skill, WithinAbs(1.0f, 1e-6f));
+    CHECK_THAT(def.aiTuning->reaction, WithinAbs(0.5f, 1e-6f)); // AiTuning{} default
+}
+
+TEST_CASE("EntityDefParser: signature values outside (0, 100] throw runtime_error", "[parser]") {
+    // Zero is rejected with the negatives on purpose: a signature of 0 is not "very stealthy", it is
+    // a target that sensor type can NEVER detect at any range.
+    CHECK_THROWS_AS(fl::parseEntityDef(entityWith("\n[signatures]\nrcs = 0.0\n")), std::runtime_error);
+    CHECK_THROWS_AS(fl::parseEntityDef(entityWith("\n[signatures]\nrcs = -1.0\n")), std::runtime_error);
+    CHECK_THROWS_AS(fl::parseEntityDef(entityWith("\n[signatures]\nir = 100.1\n")), std::runtime_error);
+    CHECK_THROWS_AS(fl::parseEntityDef(entityWith("\n[signatures]\nvisual = -0.5\n")), std::runtime_error);
+    CHECK_THROWS_AS(fl::parseEntityDef(entityWith("\n[signatures]\nlaser = 1000.0\n")), std::runtime_error);
+
+    // The boundary itself is legal.
+    CHECK_NOTHROW(fl::parseEntityDef(entityWith("\n[signatures]\nrcs = 100.0\n")));
+}
+
+TEST_CASE("EntityDefParser: ai skill and reaction outside [0, 1] throw runtime_error", "[parser]") {
+    CHECK_THROWS_AS(fl::parseEntityDef(entityWith("\n[ai]\nskill = 1.5\n")), std::runtime_error);
+    CHECK_THROWS_AS(fl::parseEntityDef(entityWith("\n[ai]\nskill = -0.1\n")), std::runtime_error);
+    CHECK_THROWS_AS(fl::parseEntityDef(entityWith("\n[ai]\nreaction = 2.0\n")), std::runtime_error);
+
+    // Both endpoints are legal: a perfect crew and a hopeless one are both authorable.
+    CHECK_NOTHROW(fl::parseEntityDef(entityWith("\n[ai]\nskill = 0.0\nreaction = 1.0\n")));
+    CHECK_NOTHROW(fl::parseEntityDef(entityWith("\n[ai]\nskill = 1.0\nreaction = 0.0\n")));
+}
+
+TEST_CASE("EntityDefParser: a malformed sensors list throws runtime_error", "[parser]") {
+    CHECK_THROWS_AS(fl::parseEntityDef(entityWith("sensors = \"fl-base:apg63\"\n")), std::runtime_error); // not array
+    CHECK_THROWS_AS(fl::parseEntityDef(entityWith("sensors = [\"\"]\n")), std::runtime_error);            // empty id
+    CHECK_THROWS_AS(fl::parseEntityDef(entityWith("sensors = [1, 2]\n")), std::runtime_error);            // not strings
+    CHECK_THROWS_AS(fl::parseEntityDef(entityWith("sensors = [\"a\", \"a\"]\n")), std::runtime_error);    // duplicate
+
+    // An empty list is legal and means the same as omitting it: the entity falls back to the
+    // builtin eyeball rather than being blind.
+    const fl::EntityDef def = fl::parseEntityDef(entityWith("sensors = []\n"));
+    CHECK(def.sensorIds.empty());
+}
+
+TEST_CASE("EntityDefParser: an unknown sensor id is NOT a parse error", "[parser]") {
+    // Cross-references resolve once the whole pack is read, so an id this parser has never heard of
+    // is a resolve-time warning, not a reason to refuse the aircraft.
+    const fl::EntityDef def = fl::parseEntityDef(entityWith("sensors = [\"nosuchpack:nosuchsensor\"]\n"));
+    REQUIRE(def.sensorIds.size() == 1);
+    CHECK(def.sensorIds[0] == "nosuchpack:nosuchsensor");
+}
