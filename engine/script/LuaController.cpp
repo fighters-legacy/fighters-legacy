@@ -24,7 +24,10 @@ namespace fl {
 struct LuaController::Impl {
     std::unique_ptr<LuaSandbox> sandbox;
     const fl::EntityManager* entityManager{nullptr};
-    const fl::SpatialIndex* currentSi{nullptr};
+    // The whole context, not just the spatial index: detected_contacts() (#691) reads ctx.contacts
+    // through this same pointer. Set for the duration of one compute_control pcall, cleared on every
+    // exit path — a Lua script must never see a stale view of a previous tick's world.
+    const fl::AiTickContext* currentCtx{nullptr};
     bool valid{false};
     std::string lastError;
     uint64_t nextErrorLogTick{0}; // rate-limit: log at most once per 60 ticks
@@ -214,10 +217,10 @@ static int luaNearbyEntities(lua_State* L) {
     lua_newtable(L);
     int resultTable = lua_gettop(L);
 
-    if (impl->currentSi) {
+    if (impl->currentCtx && impl->currentCtx->si) {
         double center[3] = {cx, 0.0, cz};
         lua_Integer n = 1;
-        impl->currentSi->queryRadius(center, radius, [L, resultTable, &n](uint32_t idx, const double* pos) {
+        impl->currentCtx->si->queryRadius(center, radius, [L, resultTable, &n](uint32_t idx, const double* pos) {
             lua_newtable(L);
             lua_pushinteger(L, static_cast<lua_Integer>(idx));
             lua_setfield(L, -2, "idx");
@@ -332,12 +335,12 @@ const std::string& LuaController::lastError() const {
 }
 
 fl::ControlInput LuaController::sample(const fl::EntityState& state, uint64_t tick, double dt,
-                                       const fl::SpatialIndex* si) {
+                                       const fl::AiTickContext& ctx) {
     if (!m_impl->valid)
         return {};
 
     lua_State* L = m_impl->sandbox->luaState();
-    m_impl->currentSi = si;
+    m_impl->currentCtx = &ctx;
 
     // Push compute_control function.
     lua_getglobal(L, "compute_control");
@@ -347,7 +350,7 @@ fl::ControlInput LuaController::sample(const fl::EntityState& state, uint64_t ti
             std::fprintf(stderr, "[LUA WARN] compute_control is not a function\n");
             m_impl->nextErrorLogTick = tick + 60;
         }
-        m_impl->currentSi = nullptr;
+        m_impl->currentCtx = nullptr;
         return {};
     }
 
@@ -364,7 +367,7 @@ fl::ControlInput LuaController::sample(const fl::EntityState& state, uint64_t ti
             m_impl->nextErrorLogTick = tick + 60;
         }
         lua_pop(L, 1);
-        m_impl->currentSi = nullptr;
+        m_impl->currentCtx = nullptr;
         return {};
     }
 
@@ -375,7 +378,7 @@ fl::ControlInput LuaController::sample(const fl::EntityState& state, uint64_t ti
             m_impl->nextErrorLogTick = tick + 60;
         }
         lua_pop(L, 1);
-        m_impl->currentSi = nullptr;
+        m_impl->currentCtx = nullptr;
         return {};
     }
 
@@ -390,7 +393,7 @@ fl::ControlInput LuaController::sample(const fl::EntityState& state, uint64_t ti
     ctrl.gear_down = readBoolField(L, resultIdx, "gear_down");
     lua_pop(L, 1);
 
-    m_impl->currentSi = nullptr;
+    m_impl->currentCtx = nullptr;
     return ctrl;
 }
 

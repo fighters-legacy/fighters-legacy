@@ -18,7 +18,7 @@ class WaypointController : public fl::IEntityController {
                                 bool loop = false);
 
     fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
-                            const fl::SpatialIndex* /*si*/ = nullptr) override;
+                            const fl::AiTickContext& /*ctx*/ = {}) override;
 
     int currentWaypointIndex() const noexcept {
         return m_currentIdx;

@@ -19,7 +19,7 @@ class HighYoYoController : public fl::IEntityController {
                        float reacquireDurationS = 3.0f);
 
     fl::ControlInput sample(const fl::EntityState& state, uint64_t /*tick*/, double dt,
-                            const fl::SpatialIndex* /*si*/ = nullptr) override;
+                            const fl::AiTickContext& /*ctx*/ = {}) override;
 
     void setTarget(fl::EntityId id) noexcept {
         m_targetId = id;

@@ -9,7 +9,7 @@ SplitSController::SplitSController(float rollDurationS, float pullDurationS)
     : m_rollDuration(rollDurationS), m_pullDuration(pullDurationS) {}
 
 fl::ControlInput SplitSController::sample(const fl::EntityState& /*state*/, uint64_t /*tick*/, double dt,
-                                          const fl::SpatialIndex* /*si*/) {
+                                          const fl::AiTickContext& /*ctx*/) {
     fl::ControlInput ctrl{};
 
     m_timer += static_cast<float>(dt);

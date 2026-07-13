@@ -66,7 +66,7 @@ class FormationController : public fl::IEntityController {
                         FormationParams params = {});
 
     fl::ControlInput sample(const fl::EntityState& state, uint64_t tick, double dt,
-                            const fl::SpatialIndex* si = nullptr) override;
+                            const fl::AiTickContext& ctx = {}) override;
 
     [[nodiscard]] fl::EntityId lead() const noexcept {
         return m_leadId;

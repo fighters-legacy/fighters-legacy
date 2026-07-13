@@ -11,7 +11,7 @@ PursuitController::PursuitController(const fl::EntityManager& entityManager, fl:
     : m_entityManager(entityManager), m_targetId(targetId), m_throttle(throttle), m_useAfterburner(useAfterburner) {}
 
 fl::ControlInput PursuitController::sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
-                                           const fl::SpatialIndex* /*si*/) {
+                                           const fl::AiTickContext& /*ctx*/) {
     fl::ControlInput ctrl{};
 
     const fl::EntityState* target = m_entityManager.get(m_targetId);

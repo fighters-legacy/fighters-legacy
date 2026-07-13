@@ -9,7 +9,7 @@ ImmelmannController::ImmelmannController(float pullDurationS, float rollDuration
     : m_pullDuration(pullDurationS), m_rollDuration(rollDurationS) {}
 
 fl::ControlInput ImmelmannController::sample(const fl::EntityState& /*state*/, uint64_t /*tick*/, double dt,
-                                             const fl::SpatialIndex* /*si*/) {
+                                             const fl::AiTickContext& /*ctx*/) {
     fl::ControlInput ctrl{};
 
     m_timer += static_cast<float>(dt);

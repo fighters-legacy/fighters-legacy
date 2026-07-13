@@ -13,7 +13,7 @@ WaypointController::WaypointController(std::vector<glm::dvec3> waypoints, float 
     : m_waypoints(std::move(waypoints)), m_captureRadiusM(captureRadiusM), m_throttle(throttle), m_loop(loop) {}
 
 fl::ControlInput WaypointController::sample(const fl::EntityState& state, uint64_t /*tick*/, double /*dt*/,
-                                            const fl::SpatialIndex* /*si*/) {
+                                            const fl::AiTickContext& /*ctx*/) {
     fl::ControlInput ctrl{};
 
     // Exhausted (or empty list): return neutral.

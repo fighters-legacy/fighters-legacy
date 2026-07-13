@@ -10,7 +10,6 @@
 namespace fl {
 
 class EntityManager;
-class SpatialIndex;
 
 // IEntityController backed by a sandboxed Lua 5.5 script.
 //
@@ -42,7 +41,7 @@ class LuaController : public IEntityController {
     LuaController(std::string_view scriptSource, std::string packRootDir, const EntityManager* entityManager = nullptr);
     ~LuaController();
 
-    ControlInput sample(const EntityState& state, uint64_t tick, double dt, const SpatialIndex* si = nullptr) override;
+    ControlInput sample(const EntityState& state, uint64_t tick, double dt, const AiTickContext& ctx = {}) override;
 
     // False if LuaSandbox::create() or loadScript() failed at construction.
     [[nodiscard]] bool isValid() const;
