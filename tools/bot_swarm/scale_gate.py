@@ -334,6 +334,26 @@ def evaluate_report(report, profile, strict):
             "advisory": False,
         })
 
+    # Sensing phase (#685/#686). ADVISORY, deliberately: the sensing pass is new, its cost depends on
+    # how much content a pack ships (sensors, signatures) rather than on the engine alone, and a hard
+    # threshold set today would be a number invented from nothing. What this DOES buy is visibility —
+    # a sensing regression shows up in the gate output instead of hiding inside `tick_ms.p99` as a
+    # few tenths of a millisecond nobody attributes to anything. The tick-ms gate above is still the
+    # backstop that actually fails a run.
+    server = report.get("server_tick")
+    if server is not None and "sensing_ms" in server:
+        sensing = server.get("sensing_ms", {})
+        mean = sensing.get("mean", 0.0)
+        p99 = sensing.get("p99", 0.0)
+        total = server.get("tick_ms", {}).get("mean", 0.0)
+        share = (mean / total * 100.0) if total > 0 else 0.0
+        checks.append({
+            "name": "server_tick.sensing_ms",
+            "ok": True,
+            "detail": f"mean {mean:.3f} ms, p99 {p99:.3f} ms ({share:.1f}% of tick) (advisory)",
+            "advisory": True,
+        })
+
     passed = all(c["ok"] for c in checks if not c["advisory"])
     return {"passed": passed, "checks": checks}
 
