@@ -105,6 +105,8 @@ static const char* kDefaultToml =
     "# test_projectile_ttl_s = 3.0      # churned-entity lifetime (s); [0.05, 600] (#580)\n"
     "\n"
     "[ai]\n"
+    "difficulty = \"pilot\"               # what the SERVER runs: scales AI radar range + reaction time; "
+    "cadet|pilot|ace\n"
     "difficulty_floor = \"recruit\"\n"
     "\n"
     "[discovery]\n"
@@ -620,6 +622,17 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
 
         // [ai]
+        if (auto v = tbl["ai"]["difficulty"].value<std::string>()) {
+            static constexpr const char* kValidAiDifficulty[] = {"cadet", "pilot", "ace"};
+            if (isOneOf(v->c_str(), kValidAiDifficulty, 3)) {
+                cfg.aiDifficulty = std::move(*v);
+            } else {
+                char buf[128];
+                std::snprintf(buf, sizeof(buf), "ai.difficulty: unknown value \"%s\"; defaulting to \"pilot\"",
+                              v->c_str());
+                log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+            }
+        }
         if (auto v = tbl["ai"]["difficulty_floor"].value<std::string>()) {
             if (isOneOf(v->c_str(), kValidDifficulties, 4)) {
                 cfg.aiDifficultyFloor = std::move(*v);

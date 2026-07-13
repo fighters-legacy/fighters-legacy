@@ -38,7 +38,7 @@ The same JSON shape is the standalone `--metrics-json` file and the embedded blo
 
 | Field | Meaning |
 |---|---|
-| `schema_version` | server-tick report schema (currently `6`: `2` added `load_factor`/`dropped_ticks`, `3` added `rss_kb`/`rss_startup_kb`, `4` added `interest_scale`, `5` added the `congestion_*` watermarks, `6` added the `wire_*` egress fields, [#772]) |
+| `schema_version` | server-tick report schema. **Frozen at `6` for the rest of primary development** (#686) — see below |
 | `tick_hz` | actual recent tick rate over the sampling window (ring-derived) |
 | `ticks_sampled` / `ticks_total` | ticks in the rolling window / monotonic all-time |
 | `window_s` | wall-clock span of the sampling window |
@@ -54,11 +54,25 @@ The same JSON shape is the standalone `--metrics-json` file and the embedded blo
 | `wire_peers` / `wire_out_kbs_per_client` | peer count the kept wire sample was taken at / egress wire KB/s divided by it — the number the **150 KB/s/client ceiling** gates (#772) |
 | `tick_ms` | total `onTick` wall-time stats `{min,mean,max,p95,p99}` (ms) |
 | `maintenance_ms` | rate-limit prune, idle timeout, admin drains, spatial rebuild, input drain, jitter resize |
+| `sensing_ms` | cone + probability checks and contact-table assembly (`SensorSystem`, #685); staggered at `[world] sensor_check_hz`, so a single tick carries only its share of the window |
 | `integrate_ms` | physics integration (`stepFlightSim`) summed across entities |
 | `ai_ms` | controller `sample()` summed across entities |
 | `collision_ms` | `EntityManager::onTick` (damage/collision/reap) |
 | `serialize_ms` | telemetry + snapshot assembly/send + weather + shutdown notices |
 | `other_ms` | `tick_ms − Σ(phases)` (loop/function overhead), clamped ≥ 0 |
+
+> **`schema_version` is frozen at 6, and a new phase does not bump it (#686).** It was being bumped
+> ritually and bought nothing: **nothing has ever gated on it** — fl-server writes it, `fromJson`
+> parses it into a field, and no consumer compares it against anything. Both sides of the "contract"
+> live in this repo and land in the same commit (fl-server writes the file; `bot_swarm` and
+> `scale_gate.py` read it), so there is no third party to stay compatible with and no old reader in
+> the wild to protect — the same reasoning that keeps `kProtocolVersion` at 1 through primary
+> development. And the format is **additive and name-keyed**: `toJson`/`fromJson` iterate the phase
+> table and every consumer looks fields up by name, so a new phase simply *appears* and an older
+> reader keeps working (both properties are pinned by tests). Bump it only if a field's **meaning**
+> changes under an unchanged name, or one is removed — the cases where a reader would silently
+> misread a file rather than merely miss something. Near release, when metrics files start outliving
+> the binary that wrote them, this becomes a real compatibility contract again.
 
 The scale gate ([CI scale gate](#ci-scale-gate)) asserts on `server_tick.tick_ms.p99` via
 `--assert-max-tick-ms` (strict tier only) and, in the `soak` profile, on RSS growth

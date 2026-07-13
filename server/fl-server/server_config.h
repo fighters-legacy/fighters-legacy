@@ -94,7 +94,14 @@ struct ServerConfig {
     // fl-server warns at startup if a flight is configured alongside it). [0, 65535]
     uint16_t playerFaction = 1;
 
-    // [ai]  — Phase 2: parsed and stored; enforcement lands with AI runtime
+    // [ai]
+    // What the SERVER runs (#682): resolved to AiScaling and fed to the sim tick, where it scales
+    // radar range (radarSensorRange) and the AI's reaction delay (reactionTimeS). `cadet|pilot|ace`;
+    // unknown value logs Warn and keeps the default. Hot-reloadable via reload_config.
+    std::string aiDifficulty = "pilot";
+
+    // A FUTURE PER-CLIENT CLAMP, not what the server runs — distinct from `difficulty` above.
+    // Phase 2: parsed and stored; enforcement lands with the AI runtime.
     std::string aiDifficultyFloor = "recruit";
 
     // [discovery]

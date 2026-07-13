@@ -36,6 +36,26 @@ namespace fl {
 //           Distinct from the swarm's `downstream_kbs_per_client`, which counts application payload
 //           and is transport-independent by construction — it cannot see what a transport costs to
 //           run, which is the number an operator's bandwidth bill is denominated in.
+//
+// ── FROZEN AT 6 FOR THE REST OF PRIMARY DEVELOPMENT (#686) ────────────────────────────────────────
+// The sensing phase (#685) added `sensing_ms` and did NOT bump this, and neither should the next
+// additive change. The number was being bumped ritually, and it bought nothing:
+//
+//   * NOTHING GATES ON IT. fl-server writes it, fromJson parses it into a field, and no consumer has
+//     ever compared it against anything. It was a version on a door nobody checks.
+//   * Both sides of the "contract" live in this repo and land in the same commit — fl-server writes
+//     the file, bot_swarm and scale_gate.py read it. There is no third party to be compatible with,
+//     and no old reader in the wild to protect (same reasoning that keeps kProtocolVersion at 1).
+//   * The format is ADDITIVE and NAME-KEYED: toJson/fromJson iterate the phase table, and every
+//     consumer looks fields up by name and ignores what it does not recognise. A new phase or field
+//     simply appears; an old reader keeps working. That is what makes the version redundant, and it
+//     is a property worth preserving deliberately rather than a happy accident.
+//
+// So: DO NOT bump this for a new phase, a new stat, or a new field. Bump it only if a field's
+// MEANING changes under an unchanged name, or one is removed — the cases where a reader would
+// silently misinterpret a file rather than merely miss something. Near release, when metrics files
+// start outliving the binary that wrote them, this becomes a real compatibility contract again and
+// the bumping discipline comes back with it.
 inline constexpr int kServerTickSchemaVersion = 6;
 
 struct ServerTickReport {

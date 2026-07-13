@@ -41,6 +41,7 @@
 #include <content/AssetManager.h>
 #include <content/BundledBaseTerrain.h>
 #include <content/ModLoader.h>
+#include <difficulty/DifficultyMultipliers.h>
 #include <entity/EntityDef.h>
 #include <entity/EntityManager.h>
 #include <entity/EntityTypeRegistry.h>
@@ -563,6 +564,37 @@ int main(int argc, char** argv) {
         });
     broadcaster.setSensorCheckHz(static_cast<float>(cfg.sensorCheckHz));
 
+    // ---- Server-side difficulty (#682) -----------------------------------------------------------
+    // The FIRST server-side consumer of the difficulty system: until now AiScaling was parsed and
+    // round-tripped client-side only, and fl-server knew nothing beyond an `[ai] difficulty_floor`
+    // string it never acted on. The sensing pass needs two of its fields in the sim tick —
+    // radarSensorRange (how far an AI's radar actually reaches) and reactionTimeS (how long it takes
+    // to act on what it saw) — so they arrive here rather than being invented in the engine.
+    //
+    // The table is mod-overridable (data/difficulty.toml through the AssetManager, highest-priority
+    // pack wins) exactly like the client path, so a content pack tunes its own AI without patching
+    // the server.
+    const fl::DifficultyMultipliers difficultyTable = fl::DifficultyMultipliers::load(assets, *p.filesystem, *log);
+    auto resolveAiScaling = [&difficultyTable](const std::string& name) -> fl::AiScaling {
+        fl::DifficultyPreset preset = fl::DifficultyPreset::Pilot;
+        if (name == "cadet")
+            preset = fl::DifficultyPreset::Cadet;
+        else if (name == "ace")
+            preset = fl::DifficultyPreset::Ace;
+        fl::DifficultySettings ds{};
+        difficultyTable.applyPreset(preset, ds);
+        return ds.ai;
+    };
+    broadcaster.setAiScaling(resolveAiScaling(cfg.aiDifficulty));
+    {
+        const fl::AiScaling scaling = resolveAiScaling(cfg.aiDifficulty);
+        char buf[192];
+        std::snprintf(buf, sizeof(buf), "ai difficulty \"%s\": radar range x%.2f, reaction %.2f s",
+                      cfg.aiDifficulty.c_str(), static_cast<double>(scaling.radarSensorRange),
+                      static_cast<double>(scaling.reactionTimeS));
+        log->log(fl::LogLevel::Info, __FILE__, __LINE__, buf);
+    }
+
     // ---- Formations and the scripted wingman (#610) ----------------------------------------------
     // engine-net does not link engine-ai (cmake/layering.cmake), so the three places an order needs
     // engine-ai — spawning a flight, building a controller, designating a target — are injected here
@@ -886,6 +918,7 @@ int main(int argc, char** argv) {
     adminCtx.env.configPath = &configPath;
     adminCtx.env.quitFlag = &g_quit;
     adminCtx.env.traceDir = cfg.trace.inputTraceDir;
+    adminCtx.env.resolveAiScaling = resolveAiScaling;
     adminCtx.env.loadAIScript = [&aiScriptCache](std::string_view name) -> std::pair<std::string, std::string> {
         auto it = aiScriptCache.find(std::string(name));
         return (it != aiScriptCache.end()) ? it->second : std::pair<std::string, std::string>{};
