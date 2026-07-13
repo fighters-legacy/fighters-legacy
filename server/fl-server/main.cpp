@@ -69,6 +69,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <numbers>
 #include <queue>
 #include <string>
 #include <thread>
