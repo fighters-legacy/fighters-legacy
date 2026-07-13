@@ -245,6 +245,7 @@ target_link_libraries(engine-net
             engine-entity
             engine-spatial
             engine-job
+            engine-world
             platform-hal
     PRIVATE engine-flight
             engine-weather

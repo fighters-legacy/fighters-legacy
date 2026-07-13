@@ -202,6 +202,40 @@ Condition AnyHostileEntityWithinRange(float rangeM) {
     };
 }
 
+Condition AnyHostileEntityWithinRangeOf(fl::EntityId anchorId, float rangeM) {
+    return [anchorId, rangeM](const fl::EntityState& self, const fl::EntityManager& em,
+                              const fl::SpatialIndex* si) -> bool {
+        if (!si || self.factionIndex == 0) {
+            return false; // no spatial index, or a neutral entity has no enemies
+        }
+        const fl::EntityState* anchor = em.get(anchorId);
+        if (!anchor || anchor->dead) {
+            return false; // nothing left to protect
+        }
+
+        bool found = false;
+        const double rangeSq = static_cast<double>(rangeM) * static_cast<double>(rangeM);
+        // Geometry about the ANCHOR (the entity being protected); hostility about SELF (the escort).
+        // queryRadius is conservative (cell-level), so the exact distance test is still required.
+        si->queryRadius(anchor->transform.pos, static_cast<double>(rangeM), [&](uint32_t idx, const double* pos) {
+            if (found || idx == self.id.index || idx == anchor->id.index) {
+                return;
+            }
+            const fl::EntityState* other = em.getByIndex(idx);
+            if (!other || other->dead || !fl::areFactionsHostile(self.factionIndex, other->factionIndex)) {
+                return;
+            }
+            const double dx = pos[0] - anchor->transform.pos[0];
+            const double dy = pos[1] - anchor->transform.pos[1];
+            const double dz = pos[2] - anchor->transform.pos[2];
+            if (dx * dx + dy * dy + dz * dz <= rangeSq) {
+                found = true;
+            }
+        });
+        return found;
+    };
+}
+
 Condition Always() {
     return [](const fl::EntityState&, const fl::EntityManager&, const fl::SpatialIndex*) -> bool { return true; };
 }

@@ -134,6 +134,16 @@ Condition AnyEntityWithinRange(float rangeM);
 // Returns false when si == nullptr or self is neutral (faction 0 has no enemies).
 Condition AnyHostileEntityWithinRange(float rangeM);
 
+// True when any entity HOSTILE TO SELF is within rangeM of `anchorId` — geometry about the anchor,
+// hostility about self. This is the wingman's `cover_me` trigger (#610): the threats that matter are
+// the ones closing on the entity being PROTECTED, not the ones near the escort. Judging hostility
+// against self (not against the anchor) is what lets a neutral-faction anchor still be covered by a
+// factioned wingman, and keeps the semantics identical to every other condition here.
+// AnyHostileEntityWithinRange is the degenerate case where the anchor is self.
+// Returns false when si == nullptr, self is neutral (faction 0 has no enemies), or the anchor is
+// dead/invalid.
+Condition AnyHostileEntityWithinRangeOf(fl::EntityId anchorId, float rangeM);
+
 // Always returns true. Useful as a final fallback transition.
 Condition Always();
 

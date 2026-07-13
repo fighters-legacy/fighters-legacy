@@ -12,6 +12,9 @@ add_library(engine-ai STATIC
     SplitSController.cpp
     HighYoYoController.cpp
     LowYoYoController.cpp
+    FormationController.cpp
+    Threat.cpp
+    WingmanBehavior.cpp
 )
 
 # Expose engine/ as the public include root so consumers can use
@@ -21,4 +24,5 @@ target_include_directories(engine-ai PUBLIC ${CMAKE_SOURCE_DIR}/engine)
 target_link_libraries(engine-ai
     PRIVATE engine-entity
             engine-flight
+            engine-world
 )

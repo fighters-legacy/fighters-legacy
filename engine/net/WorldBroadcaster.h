@@ -15,6 +15,7 @@
 #include "loop/ISimUpdate.h"
 #include "perf/TickProfiler.h"
 #include "spatial/SpatialIndex.h"
+#include "world/FormationRegistry.h" // the formation / command tree (#610)
 
 #include <glm/vec3.hpp> // glm::dvec3 (ground-elevation query — radial floor #477)
 
@@ -77,6 +78,14 @@ struct PeerInputState {
     CongestionController congestion{};
     uint64_t lastSnapshotSentTick{0}; // tick of the last snapshot actually sent (decimation gate)
     bool sentSnapshot{false};         // false until the first snapshot is sent (so tick 0 isn't skipped)
+
+    // Wingman/flight order channel (#610). Lives here because this struct is already per-peer and is
+    // already erased on disconnect, so the rate-limit window has no lifetime of its own to manage.
+    std::chrono::steady_clock::time_point wingmanCmdWindowStart{}; // 1 s rate-limit window
+    uint32_t wingmanCmdCount{0};                                   // orders seen in the current window
+    uint32_t lastWingmanSeq{0};                                    // dup/reorder guard
+    bool hasWingmanSeq{false};         // false until the first order (a reconnect restarts the counter)
+    bool wingmanRateLimitAcked{false}; // one RateLimited ack per window, never one per packet
 };
 
 // Snapshot of a connected peer's state, delivered by forEachPeer. The struct form makes future
@@ -399,6 +408,61 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     using FlightModelResolver = std::function<std::shared_ptr<const FlightModelData>(const std::string& id)>;
     void setFlightModelResolver(FlightModelResolver fn);
 
+    // ---------------------------------------------------------------------------------------------
+    // Formations and the wingman command channel (#610)
+    // ---------------------------------------------------------------------------------------------
+    // engine-net must never link engine-ai (cmake/layering.cmake enforces the module boundary), so
+    // the two places where an order needs to *build a controller* are std::function hooks filled in
+    // by fl-server — the same injection pattern as setFlightModelResolver above. It also keeps
+    // test_world_broadcaster free of engine-ai, which matters because that test is in the TSan set.
+
+    // Faction stamped onto every player entity at spawn. MUST be non-zero for any threat logic to
+    // work at all: fl::areFactionsHostile treats faction 0 as neutral, i.e. an entity with no
+    // enemies — so with the legacy default of 0, nothing in the world is hostile to a player, the
+    // wingman's engage/cover conditions can never fire, and boresight designation can never
+    // designate. Default 1. Call before gameLoop.start().
+    void setPlayerFaction(uint16_t faction) noexcept;
+    [[nodiscard]] uint16_t playerFaction() const noexcept {
+        return m_playerFaction;
+    }
+
+    // Called on the sim thread at the end of onConnect, after the peer's entity and controller exist.
+    // The implementation spawns the peer's flight (N AI members), registers their controllers, and
+    // returns the formation it created. kNoFormation (the default with no hook installed) = the peer
+    // flies alone, which is exactly today's behavior.
+    using FlightSpawner = std::function<fl::FormationId(uint32_t peerId, EntityId leadEntity)>;
+    void setFlightSpawner(FlightSpawner fn);
+
+    // Called on the sim thread once per addressed, live, AI member of a formation. Builds the new
+    // controller for `cmd` and registers it (registerController REPLACES the existing one).
+    // `designatedTarget` is resolved by the server (boresight, ai/Threat.h) before this is called;
+    // an invalid target on an attack order means the order was already refused.
+    // Returns false if the controller could not be built, which the caller reports as Rejected.
+    using FlightOrderHandler = std::function<bool(const fl::Formation& formation, const fl::FormationMember& member,
+                                                  uint8_t command, EntityId designatedTarget)>;
+    void setFlightOrderHandler(FlightOrderHandler fn);
+
+    // Resolves the target for `attack_my_target` from the commander's own state. Injected because it
+    // lives in engine-ai (ai::designateBoresightTarget). Unset = attack orders always refuse with
+    // NoTarget, which is the correct degradation: never invent a target.
+    // Args: the commanding entity, and its last-known look axis (PeerInputState::viewAxis).
+    using TargetDesignator = std::function<EntityId(const EntityState& commander, const float viewAxis[3])>;
+    void setTargetDesignator(TargetDesignator fn);
+
+    // Max wingman orders a peer may issue per second before the excess is refused with RateLimited.
+    // Acked once per window, never per packet — an ack per rejected packet would be an amplifier.
+    void setFlightCommandRateLimit(int perSecond) noexcept;
+
+    // The formation tree. Sim-thread only. fl-server reaches it via enqueueSimCallback to build
+    // AI-only formations and to serve the `flight` admin command family (the game-master and AWACS
+    // surface); WorldBroadcaster itself uses it to authorize and dispatch MsgWingmanCommand.
+    [[nodiscard]] fl::FormationRegistry& formations() noexcept {
+        return m_formations;
+    }
+    [[nodiscard]] const fl::FormationRegistry& formations() const noexcept {
+        return m_formations;
+    }
+
     // Configure the operator password for MsgAdminCommand authentication.
     // Empty string disables the network admin channel. Call before gameLoop.start().
     void setOperatorPassword(std::string password);
@@ -519,6 +583,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // chars) go as a single MsgAdminResponse; longer results are streamed as MsgAdminResponseChunk
     // packets terminated by kChunkFlagEnd. reqId is echoed from the triggering MsgAdminCommand.
     static void sendAdminResponse(INetwork& net, uint32_t peerId, uint16_t reqId, const std::string& result);
+
+    // Wingman/flight order path (#610). Sim-thread only (called from onReceive).
+    void handleWingmanCommand(uint32_t peerId, const void* data, std::size_t size);
+    void sendWingmanAck(uint32_t peerId, uint8_t command, WingmanResult result, uint16_t flightId, uint8_t flightSize,
+                        uint32_t memberIdx, uint32_t targetIdx);
     // Log, send a MsgConnectRefusal with the reason text for `code`, and disconnect the peer.
     // Centralizes the five onConnect rejection paths.
     void rejectConnection(uint32_t peerId, const std::string& ip, ConnectRefusalCode code);
@@ -560,6 +629,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     std::unordered_map<uint32_t, EntityId> m_peerEntities;
     std::unordered_map<uint32_t, PeerInputState> m_peerInputs;
+
+    // Formations and the wingman order path (#610). Sim-thread only, like every other roster here.
+    fl::FormationRegistry m_formations;
+    FlightSpawner m_flightSpawner;           // null = peers fly alone (today's behavior)
+    FlightOrderHandler m_flightOrderHandler; // null = the order channel is off; orders are discarded
+    TargetDesignator m_targetDesignator;     // null = attack orders always refuse (never invent a target)
+    uint16_t m_playerFaction{1};             // 0 restores the legacy neutral-player behavior
+    int m_flightCmdRateLimit{4};             // orders per second per peer
     // EntityId.index -> {sim, controller}. Replaces the old peerId-keyed flight-sim map: any control
     // source (peer, AI, script) registers here and is stepped uniformly in onTick.
     std::unordered_map<uint32_t, ControlledEntity> m_controlledEntities;
