@@ -82,8 +82,27 @@ struct AeroLimits {
     float max_mach{1.6f};
 };
 
+// Control-surface travel, in degrees of deflection at full stick.
+//
+// ASYMMETRY IS THE NORM ON THE PITCH AXIS (#822). A fighter needs far more nose-up authority than
+// nose-down: the F-5E's all-moving stabilator travels 17° nose-up but only 5° nose-down (T.O.
+// 1F-5E-1), a 3.4:1 ratio, and the F-16's and T-38's are asymmetric too. With one scalar per axis
+// the author must pick a number, and picking the nose-up figure (which governs pitch authority and
+// the ability to reach the G limit) models the aircraft's nose-down authority 3.4x too generous: a
+// bunt or a negative-G push is far more effective than the real aeroplane's.
+//
+// So the elevator gets an optional negative-side travel. It defaults to the positive value, which
+// makes a model that does not use it bit-identical to before.
+//
+// ROLL AND YAW DELIBERATELY DO NOT GET ONE. Left and right are mirror images: `aileron = -1` is the
+// same deflection as `aileron = +1` seen from the other side, so a sign-dependent travel would mean
+// an aircraft that rolls harder one way than the other. (The F-5E's 35°-up/25°-down aileron is a
+// per-SURFACE differential, not a per-command asymmetry, and its gear-driven aileron spring stop is
+// a control-system behaviour — a soft stop the pilot can overpower at the cost of a structural limit
+// — not a travel limit. Neither belongs here.)
 struct AeroControls {
-    float max_elevator_deg{25.f};
+    float max_elevator_deg{25.f};     // nose-up authority at full aft stick
+    float max_elevator_neg_deg{25.f}; // nose-down authority at full forward stick; = max_elevator_deg when unset
     float max_aileron_deg{20.f};
     float max_rudder_deg{30.f};
 };

@@ -129,18 +129,47 @@ TrimResult trim(const FlightModelData& d, const TrimPoint& pt, const PayloadEffe
         return r; // cannot fly level at all here — converged stays false, and we say so
 
     // ── max level speed: fastest speed where thrust still matches drag at the alpha that holds 1 g.
-    const bool hasAb = d.engine.ab_thrust.has_value();
+    // The manual's turn and Ps numbers are quoted at max thrust, so the point's `afterburner` flag
+    // selects the thrust setting for every thrust-dependent metric below (#826).
+    const bool hasAb = d.engine.ab_thrust.has_value() && pt.afterburner;
+    // THE LEVEL-FLIGHT DRAG CURVE IS U-SHAPED. DO NOT BREAK ON THE FIRST NEGATIVE (#825).
+    //
+    // The original loop stopped at the first speed where drag exceeded thrust, on the assumption that
+    // "everything faster is unreachable". That assumption is false, and it is false for every
+    // aeroplane ever built. At the stall speed the wing is at CL_max, where induced drag is enormous:
+    // this is the region of reversed command -- the back side of the power curve -- and it is a real
+    // place a real aircraft can be. As it accelerates, CL falls, induced drag collapses, total drag
+    // reaches a minimum at best L/D, and only THEN climbs again toward the true max speed.
+    //
+    // So excess thrust is routinely negative AT the stall, positive across the whole usable envelope,
+    // and negative again past max speed. Breaking on the first negative saw the back side, concluded
+    // the aircraft could not fly, and reported `converged = false` -- for an F-5E with FOURTEEN
+    // kilonewtons of excess thrust in the middle of its envelope. It read like a content bug and
+    // would have sent the next author hunting through a drag table for a fault that was not there.
+    //
+    // Scan the whole range instead. The `a < 0` break stays, and is a different thing entirely: if no
+    // alpha holds 1 g at this speed, the wing genuinely cannot carry the weight, and nothing faster
+    // changes that (CL_max only falls with Mach).
     float maxLevel = 0.f;
+    float minLevel = 0.f;
     for (float v = r.stall_speed_1g_mps; v <= kSpeedMax; v += kSpeedStep) {
         const float a = alphaForLoad(d, payload, c, v, 1.f);
         if (a < 0.f)
             break;
-        if (excessThrustAt(d, payload, c, a, v, hasAb) >= 0.f)
-            maxLevel = v;
-        else
-            break; // drag has overtaken thrust: everything faster is unreachable
+        if (excessThrustAt(d, payload, c, a, v, hasAb) >= 0.f) {
+            if (minLevel <= 0.f)
+                minLevel = v; // the slowest speed the engine can actually sustain
+            maxLevel = v;     // keep going — drag is U-shaped, not monotonic
+        }
     }
     r.max_level_mach = (c.atmos.speed_of_sound_m_s > 0.f) ? maxLevel / c.atmos.speed_of_sound_m_s : 0.f;
+
+    // The honest answer to "how slow can this thing actually go". Above the stall it is genuinely a
+    // different number: on the back side of the curve the wing can still carry the weight, but the
+    // engine cannot pay for the drag, so the aircraft sinks. If NO speed in the range has non-negative
+    // excess thrust, minLevel stays 0 and `converged` below is false — which is then the true "cannot
+    // hold level flight here", rather than an artefact of where the scan happened to stop.
+    r.min_level_speed_mps = minLevel;
 
     // ── rate of climb: max over V of (T − D) · V / W, at MIL and at AB. ─────────────────────────
     auto bestRoc = [&](bool ab) {
@@ -201,6 +230,54 @@ TrimResult trim(const FlightModelData& d, const TrimPoint& pt, const PayloadEffe
             r.sustained_turn_deg_s = susRate;
             r.sustained_g = lo;
             r.corner_speed_mps = v; // best sustained turn = the corner
+        }
+    }
+
+    // ── AT A PINNED MACH (#826) ─────────────────────────────────────────────────────────────────
+    //
+    // Everything above answers "what is the best this aircraft can do, at any speed". The flight
+    // manual does not ask that question. It publishes numbers AT a Mach, and the model can only be
+    // gated against them if the solver can be asked the same question. So when a Mach is pinned, the
+    // turn figures are recomputed AT it, and Ps and the lift limit become available.
+    if (pt.mach > 0.f && c.atmos.speed_of_sound_m_s > 0.f) {
+        const float v = pt.mach * c.atmos.speed_of_sound_m_s;
+
+        // The lift limit at this Mach: what pins CL_max, and it is published (5.2 g at 15 000 ft /
+        // M 0.60 for the F-5E). NOT capped by the structure — this is what the WING can make.
+        r.max_lift_g = maxAeroLoad(d, payload, c, v);
+
+        // Sustained: the largest n whose drag the engine can still pay for AT THIS SPEED.
+        const float nCeiling = std::min(r.max_lift_g, nStruct);
+        if (nCeiling > 1.f && excessThrustAt(d, payload, c, alphaForLoad(d, payload, c, v, 1.f), v, hasAb) >= 0.f) {
+            float lo = 1.f, hi = nCeiling;
+            for (int i = 0; i < 30; ++i) {
+                const float mid = 0.5f * (lo + hi);
+                const float a = alphaForLoad(d, payload, c, v, mid);
+                if (a >= 0.f && excessThrustAt(d, payload, c, a, v, hasAb) >= 0.f)
+                    lo = mid;
+                else
+                    hi = mid;
+            }
+            r.sustained_g = lo;
+            r.sustained_turn_deg_s = turnRateDegS(lo, v);
+        } else {
+            r.sustained_g = 0.f;
+            r.sustained_turn_deg_s = 0.f;
+        }
+
+        // Instantaneous at this Mach: the wing's limit, then the structure's.
+        r.instant_g = nCeiling;
+        r.instant_turn_deg_s = turnRateDegS(nCeiling, v);
+        r.corner_speed_mps = v;
+
+        // Specific excess power at this Mach and load factor: Ps = V·(T − D)/W. This is the ladder the
+        // drag table is fitted to, and it is plumbing, not new physics — every term already existed.
+        if (pt.load_factor > 0.f) {
+            const float a = alphaForLoad(d, payload, c, v, pt.load_factor);
+            if (a >= 0.f)
+                r.ps_mps = excessThrustAt(d, payload, c, a, v, hasAb) * v / c.weight_n;
+            else
+                r.ps_mps = 0.f; // the wing cannot hold this n here: there is no such flight condition
         }
     }
 

@@ -1286,3 +1286,59 @@ TEST_CASE("parseServerConfig: ai.difficulty and ai.difficulty_floor are distinct
     CHECK(cfg.aiDifficulty == "ace");
     CHECK(cfg.aiDifficultyFloor == "veteran");
 }
+
+// ---------------------------------------------------------------------------
+// Numeric hardening (#824) — found by the scheduled deep fuzz run.
+//
+// toml++'s float→int conversion performs static_cast<int64_t>(double) INSIDE the guard that is
+// supposed to decide whether the cast is safe. A float literal outside int64's range is therefore
+// undefined behaviour in the library, and TOML makes it trivially reachable: nothing stops anyone
+// writing a floating-point literal where an integer field is expected. fl-server parses server.toml,
+// and content packs parse entity/flight-model TOML from untrusted mods, so this is reachable input.
+//
+// fl::tomlInt (engine/config/TomlNumeric.h) is what stands between the parsers and that cast.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("parseServerConfig: an out-of-range float port does not invoke UB", "[server_config][fuzz]") {
+    // THE REPRODUCER, verbatim (fuzz/corpus/fuzz_server_config_toml/regress-824-float-port.bin).
+    MockLogger log;
+    auto cfg = parseServerConfig("[server]\n port = 10888888888888888888888888888888.0\n", &log);
+
+    // It must not crash, and it must not silently adopt garbage: an unusable value is no value, so
+    // the field keeps its default, exactly as it would for a missing key.
+    CHECK(cfg.port == 4778);
+}
+
+TEST_CASE("parseServerConfig: assorted hostile numeric literals are all survivable", "[server_config][fuzz]") {
+    MockLogger log;
+
+    // Every one of these reaches the same float→int path.
+    for (const char* src : {
+             "[server]\nport = 1e308\n",
+             "[server]\nport = -1e308\n",
+             "[server]\nport = nan\n",
+             "[server]\nport = inf\n",
+             "[server]\nport = -inf\n",
+             "[world]\nsim_worker_threads = 1e30\n",
+             "[world]\nsnapshot_budget_bytes = -1e30\n",
+             "[security]\nmax_connections_per_ip = 9.3e18\n", // just past INT64_MAX
+         }) {
+        INFO(src);
+        CHECK_NOTHROW(parseServerConfig(src, &log));
+    }
+}
+
+TEST_CASE("parseServerConfig: a whole-number float IS accepted for an integer field", "[server_config]") {
+    // `port = 4778.0` is a legitimate spelling and toml++ means to allow it. The hardening rejects
+    // values that cannot be represented, not values that merely look like floats.
+    MockLogger log;
+    auto cfg = parseServerConfig("[server]\nport = 4778.0\n", &log);
+    CHECK(cfg.port == 4778);
+}
+
+TEST_CASE("parseServerConfig: a fractional value for an integer field is refused", "[server_config]") {
+    // Silently truncating 4778.7 to 4778 would be a lie about what the operator asked for.
+    MockLogger log;
+    auto cfg = parseServerConfig("[server]\nport = 4778.7\n", &log);
+    CHECK(cfg.port == 4778); // the default, not a truncation — the field was never applied
+}

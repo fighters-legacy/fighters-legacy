@@ -11,6 +11,7 @@
 
 #include "flight/Trim.h"
 
+#include "flight/Atmosphere.h"
 #include "flight/BuiltinFlightModel.h"
 #include "flight/FlightModelParser.h"
 
@@ -181,10 +182,16 @@ TEST_CASE("fm-trim: a payload measurably degrades performance", "[fm_trim]") {
 }
 
 TEST_CASE("fm-trim: an aircraft that cannot fly at an altitude reports it rather than guessing", "[fm_trim]") {
-    // A model with no thrust left at 20 km has no performance there. Reporting `converged = false` is
-    // the honest answer; inventing a max level Mach would be worse than saying so.
+    // Heavy, in the stratosphere: there is no speed at which the engine can pay for the drag, so the
+    // aircraft genuinely has no performance here. Reporting `converged = false` is the honest answer;
+    // inventing a max level Mach would be worse than saying so.
+    //
+    // THIS TEST USED TO ASSERT 20 km / 6500 kg, WHICH THE AIRCRAFT CAN ACTUALLY FLY. It passed only
+    // because the solver broke out of its scan at the first negative excess thrust -- the back side of
+    // the power curve (#825) -- and declared the aeroplane unflyable. The assertion was encoding the
+    // bug, not the aircraft's limits, which is exactly how a wrong test outlives the code it guards.
     const FlightModelData d = parseFlightModel(kLightFighter);
-    const TrimResult r = trim(d, at(20000.f, 6500.f));
+    const TrimResult r = trim(d, at(15000.f, 12000.f));
 
     CHECK_FALSE(r.converged);
 }
@@ -302,4 +309,214 @@ TEST_CASE("fm-trim: JSON output carries every metric", "[fm_trim]") {
         INFO("missing key: " << key);
         CHECK(json.find(key) != std::string::npos);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The back side of the power curve (#825)
+//
+// The level-flight drag curve is U-SHAPED. At the stall speed the wing is at CL_max, where induced
+// drag is enormous -- the region of reversed command. As the aircraft accelerates, CL falls, induced
+// drag collapses, total drag reaches a minimum at best L/D, and only THEN climbs again toward max
+// speed. So excess thrust is routinely negative AT the stall, positive across the whole usable
+// envelope, and negative again past max speed.
+//
+// The original solver broke out of the scan at the first negative, on the assumption that "everything
+// faster is unreachable". It saw the back side, concluded the aircraft could not fly, and reported
+// `converged = false` -- for an F-5E with fourteen kilonewtons of excess thrust in the middle of its
+// envelope. It read like a content bug and would have sent the next author hunting through a drag
+// table for a fault that was not there.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("fm-trim: an aircraft on the back side of its power curve still trims", "[fm_trim][back_side]") {
+    const FlightModelData d = parseFlightModel(kLightFighter);
+
+    // High and heavy: thin air plus weight puts the stall speed deep into the region of reversed
+    // command, where drag at CL_max exceeds the thrust available. Stall is 148 m/s here, but the
+    // slowest speed the engine can actually sustain is 180 m/s. The old solver saw the negative
+    // excess thrust at 148, broke, and declared the aircraft unable to hold level flight.
+    const TrimResult r = trim(d, at(11000.f, 9000.f));
+
+    REQUIRE(r.converged);
+    CHECK(r.max_level_mach > 0.f);
+
+    // Prove the back side is actually PRESENT here -- otherwise this test would pass against the buggy
+    // solver too, and prove nothing. The engine cannot sustain flight at the stall speed: the slowest
+    // speed it can hold is strictly faster than the speed at which the wing runs out of lift.
+    CHECK(r.min_level_speed_mps > r.stall_speed_1g_mps);
+}
+
+TEST_CASE("fm-trim: min level speed is the slowest the ENGINE can sustain, not the stall", "[fm_trim][back_side]") {
+    // Above the stall, on the back side, the wing still carries the weight but the engine cannot pay
+    // for the drag -- so the aircraft sinks. That gap is the whole point of the metric, and it is the
+    // honest answer to "how slow can this thing actually go".
+    const FlightModelData d = parseFlightModel(kLightFighter);
+    const TrimResult r = trim(d, at(11000.f, 9000.f));
+
+    REQUIRE(r.converged);
+    CHECK(r.min_level_speed_mps > r.stall_speed_1g_mps); // ~180 m/s vs a 148 m/s stall
+    CHECK(r.max_level_mach > 0.f);
+}
+
+TEST_CASE("fm-trim: no regression at sea level, where the bug did not bite", "[fm_trim][back_side]") {
+    // At sea level thrust is usually large enough to overcome even stall-speed drag, which is why the
+    // bug went unnoticed: min level speed IS the stall speed there.
+    const FlightModelData d = parseFlightModel(kLightFighter);
+    const TrimResult r = trim(d, at(0.f, 6500.f));
+
+    REQUIRE(r.converged);
+    CHECK(r.min_level_speed_mps == Approx(r.stall_speed_1g_mps).margin(4.f));
+}
+
+TEST_CASE("fm-trim: an aircraft with NO usable speed still reports not-converged", "[fm_trim][back_side]") {
+    // Removing the early break must not turn "cannot fly here" into a false positive. When NO speed in
+    // the range has non-negative excess thrust, that IS the real condition, and it must still be said.
+    const FlightModelData d = parseFlightModel(kLightFighter);
+    const TrimResult r = trim(d, at(15000.f, 12000.f)); // heavy, in the stratosphere: no speed works
+
+    CHECK_FALSE(r.converged);
+    CHECK(r.min_level_speed_mps == Approx(0.f));
+}
+
+// ---------------------------------------------------------------------------
+// Pinned conditions: per-Mach, per-load-factor, per-row payload (#826)
+//
+// Published flight-manual data is almost never a speed-maximised value. Every F-5E turn number in
+// T.O. 1F-5E-1 is quoted AT A MACH (15 000 ft, M 0.60: sustained 3.3 g), and its specific-excess-power
+// ladder is quoted at a Mach AND a load factor (M 0.60, n = 4.0 -> Ps = -225 ft/s). Those are not the
+// same quantities as "the best turn the aircraft can manage at any speed", so they could not be
+// compared against the maximised numbers -- which meant the aircraft's RICHEST drag constraint, the
+// one [aero.cd_table] is actually fitted to, was the one the gate could not protect.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("fm-trim: pinning a Mach evaluates AT it rather than maximising over speed", "[fm_trim][pinned]") {
+    const FlightModelData d = parseFlightModel(kLightFighter);
+
+    TrimPoint maximised = at(4572.f, 6137.f);
+    TrimPoint pinned = at(4572.f, 6137.f);
+    pinned.mach = 0.60f;
+
+    const TrimResult best = trim(d, maximised);
+    const TrimResult atMach = trim(d, pinned);
+
+    REQUIRE(best.converged);
+    REQUIRE(atMach.converged);
+
+    // The best turn the aircraft can manage anywhere is at least as good as its turn at one
+    // arbitrary Mach -- and in general strictly better, which is exactly why the two numbers cannot
+    // be compared against each other.
+    CHECK(atMach.sustained_turn_deg_s <= best.sustained_turn_deg_s);
+    // The evaluation speed is the pinned Mach at THIS altitude's speed of sound (~322 m/s at 15 000 ft),
+    // not at sea level's.
+    const float aSound = computeAtmosphere(4572.f).speed_of_sound_m_s;
+    CHECK(atMach.corner_speed_mps == Approx(0.60f * aSound).epsilon(0.02));
+}
+
+TEST_CASE("fm-trim: max_lift_g at a pinned Mach is the wing's limit, not the structure's", "[fm_trim][pinned]") {
+    const FlightModelData d = parseFlightModel(kLightFighter);
+
+    TrimPoint pt = at(4572.f, 6137.f);
+    pt.mach = 0.60f;
+    const TrimResult r = trim(d, pt);
+
+    REQUIRE(r.converged);
+    // It is what pins CL_max, so it must NOT be clipped to max_g_structural -- an aircraft that can
+    // pull more lift than its airframe can take is a real and important thing to know.
+    CHECK(r.max_lift_g > 1.f);
+    CHECK(r.sustained_g <= r.max_lift_g);
+}
+
+TEST_CASE("fm-trim: ps_mps falls with load factor and crosses zero at the sustained condition", "[fm_trim][pinned]") {
+    // THE PS LADDER. This is the shape of the T.O.'s table, and the whole reason the metric exists:
+    // pulling harder costs energy, and the load factor at which Ps hits zero IS the sustained turn.
+    const FlightModelData d = parseFlightModel(kLightFighter);
+
+    auto psAt = [&](float n) {
+        TrimPoint pt = at(4572.f, 6137.f);
+        pt.mach = 0.60f;
+        pt.load_factor = n;
+        return trim(d, pt);
+    };
+
+    const TrimResult ps1 = psAt(1.0f);
+    const TrimResult ps3 = psAt(3.0f);
+    const TrimResult ps5 = psAt(5.0f);
+
+    REQUIRE(ps1.converged);
+
+    // Monotonic in n: every extra g costs energy.
+    CHECK(ps1.ps_mps > ps3.ps_mps);
+    CHECK(ps3.ps_mps > ps5.ps_mps);
+
+    // At 1 g with afterburner the aircraft is climbing; pulled hard enough it is bleeding energy.
+    CHECK(ps1.ps_mps > 0.f);
+    CHECK(ps5.ps_mps < 0.f);
+
+    // And Ps = 0 IS the sustained turn -- the two definitions must agree, or one of them is wrong.
+    const float nSustained = ps1.sustained_g;
+    const TrimResult atSustained = psAt(nSustained);
+    CHECK(atSustained.ps_mps == Approx(0.f).margin(3.f));
+}
+
+TEST_CASE("fm-trim: afterburner is honoured per point", "[fm_trim][pinned]") {
+    const FlightModelData d = parseFlightModel(kLightFighter);
+
+    TrimPoint ab = at(4572.f, 6137.f);
+    ab.mach = 0.60f;
+    ab.load_factor = 2.0f;
+    ab.afterburner = true;
+
+    TrimPoint mil = ab;
+    mil.afterburner = false;
+
+    CHECK(trim(d, ab).ps_mps > trim(d, mil).ps_mps); // burner buys energy
+}
+
+TEST_CASE("fm-trim: a per-row payload gates the store-drag path", "[fm_trim][pinned]") {
+    // The published clean-vs-loaded max-Mach delta is the ONLY check there is on the whole
+    // hardpoints -> WeaponLoad.drag_factor -> PayloadEffect path, and it needs two conditions in ONE
+    // file -- which a single CLI --payload flag cannot express.
+    const FlightModelData d = parseFlightModel(kLightFighter);
+
+    const std::string expect = "[[expect]]\n"
+                               "metric = \"max_level_mach\"\n"
+                               "altitude_m = 10973\n"
+                               "mass_kg = 6137\n"
+                               "expected = 99.0\n" // deliberately unreachable, so we can read `actual`
+                               "tolerance = 0.01\n"
+                               "\n"
+                               "[[expect]]\n"
+                               "metric = \"max_level_mach\"\n"
+                               "altitude_m = 10973\n"
+                               "mass_kg = 6137\n"
+                               "payload_kg = 171.0\n"
+                               "payload_cd0 = 0.0021\n"
+                               "expected = 99.0\n"
+                               "tolerance = 0.01\n";
+
+    const ExpectResult r = checkExpectations(d, expect);
+    REQUIRE(r.failures.size() == 2);
+
+    // Row 2 carries the stores, so it must be measurably slower than row 1. If the per-row payload
+    // were ignored, these would be identical -- and the store-drag path would be ungated.
+    CHECK(r.failures[1].actual < r.failures[0].actual);
+}
+
+TEST_CASE("fm-trim: ps_mps and max_lift_g demand the condition they need", "[fm_trim][pinned]") {
+    // Without a Mach there is no condition to evaluate them at. Silently returning 0 would look like a
+    // failing model rather than a malformed row, and would send an author to debug their aircraft.
+    const FlightModelData d = parseFlightModel(kLightFighter);
+
+    const ExpectResult noMach = checkExpectations(d, "[[expect]]\nmetric = \"ps_mps\"\naltitude_m = 4572\n"
+                                                     "mass_kg = 6137\nexpected = 0.0\n");
+    CHECK_FALSE(noMach.ok);
+    CHECK_FALSE(noMach.errors.empty());
+
+    const ExpectResult noN = checkExpectations(d, "[[expect]]\nmetric = \"ps_mps\"\naltitude_m = 4572\n"
+                                                  "mach = 0.6\nmass_kg = 6137\nexpected = 0.0\n");
+    CHECK_FALSE(noN.ok);
+
+    const ExpectResult ok = checkExpectations(d, "[[expect]]\nmetric = \"max_lift_g\"\naltitude_m = 4572\n"
+                                                 "mach = 0.6\nmass_kg = 6137\nexpected = 5.2\ntolerance = 0.5\n");
+    INFO("errors: " << (ok.errors.empty() ? std::string("none") : ok.errors[0]));
+    CHECK(ok.checked == 1);
 }

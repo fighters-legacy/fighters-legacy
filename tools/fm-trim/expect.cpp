@@ -60,7 +60,11 @@ ExpectResult checkExpectations(const FlightModelData& d, std::string_view expect
         ex.mass_kg = static_cast<float>((*e)["mass_kg"].value_or(0.0));
         ex.expected = static_cast<float>((*e)["expected"].value_or(0.0));
         ex.tolerance = static_cast<float>((*e)["tolerance"].value_or(0.05));
-        ex.afterburner = (*e)["afterburner"].value_or(false);
+        ex.afterburner = (*e)["afterburner"].value_or(true);
+        ex.mach = static_cast<float>((*e)["mach"].value_or(0.0));
+        ex.load_factor = static_cast<float>((*e)["load_factor"].value_or(0.0));
+        ex.payload_kg = static_cast<float>((*e)["payload_kg"].value_or(0.0));
+        ex.payload_cd0 = static_cast<float>((*e)["payload_cd0"].value_or(0.0));
 
         if (ex.metric.empty()) {
             out.errors.push_back("an [[expect]] entry has no `metric`");
@@ -71,7 +75,17 @@ ExpectResult checkExpectations(const FlightModelData& d, std::string_view expect
         TrimPoint pt;
         pt.altitude_m = ex.altitude_m;
         pt.mass_kg = ex.mass_kg;
-        const TrimResult r = trim(d, pt, payload);
+        pt.mach = ex.mach;
+        pt.load_factor = ex.load_factor;
+        pt.afterburner = ex.afterburner;
+
+        // A row's own stores override the CLI-wide payload, so one file can gate the clean AND the
+        // loaded condition -- which is what checks the store-drag path at all (#826).
+        PayloadEffect rowPayload = payload;
+        if (ex.payload_kg > 0.f || ex.payload_cd0 > 0.f)
+            rowPayload = PayloadEffect{ex.payload_kg, ex.payload_cd0};
+
+        const TrimResult r = trim(d, pt, rowPayload);
 
         if (!r.converged) {
             out.errors.push_back("could not trim '" + ex.metric + "' at " + std::to_string(ex.altitude_m) +
@@ -83,6 +97,8 @@ ExpectResult checkExpectations(const FlightModelData& d, std::string_view expect
         float actual = 0.f;
         if (ex.metric == "stall_speed_1g_mps")
             actual = r.stall_speed_1g_mps;
+        else if (ex.metric == "min_level_speed_mps")
+            actual = r.min_level_speed_mps;
         else if (ex.metric == "max_level_mach")
             actual = r.max_level_mach;
         else if (ex.metric == "roc_mps")
@@ -97,14 +113,30 @@ ExpectResult checkExpectations(const FlightModelData& d, std::string_view expect
             actual = r.sustained_g;
         else if (ex.metric == "specific_range_m_per_kg")
             actual = r.specific_range_m_per_kg;
-        else {
+        else if (ex.metric == "max_lift_g" || ex.metric == "ps_mps") {
+            // These only exist AT a pinned Mach; without one there is no condition to evaluate them at,
+            // and silently returning 0 would look like a failing model rather than a malformed row.
+            if (ex.mach <= 0.f) {
+                out.errors.push_back("metric '" + ex.metric + "' requires a `mach` on the row");
+                out.ok = false;
+                continue;
+            }
+            if (ex.metric == "ps_mps" && ex.load_factor <= 0.f) {
+                out.errors.push_back("metric 'ps_mps' requires a `load_factor` on the row");
+                out.ok = false;
+                continue;
+            }
+            actual = (ex.metric == "max_lift_g") ? r.max_lift_g : r.ps_mps;
+        } else {
             out.errors.push_back("unknown metric '" + ex.metric + "'");
             out.ok = false;
             continue;
         }
 
         ++out.checked;
-        const float allowed = std::abs(ex.expected) * ex.tolerance;
+        // ps_mps is signed and passes through zero (that IS the sustained condition), so a fractional
+        // tolerance is meaningless on it -- 5% of 0 is 0. Treat its tolerance as ABSOLUTE, in m/s.
+        const float allowed = (ex.metric == "ps_mps") ? ex.tolerance : std::abs(ex.expected) * ex.tolerance;
         if (std::abs(actual - ex.expected) > allowed) {
             ExpectFailure f;
             f.metric = ex.metric;
@@ -147,6 +179,7 @@ std::string toJson(const FlightModelData& d, const std::vector<TrimPoint>& point
         os << "      \"mass_kg\": " << p.mass_kg << ",\n";
         os << "      \"converged\": " << (r.converged ? "true" : "false") << ",\n";
         os << "      \"stall_speed_1g_mps\": " << r.stall_speed_1g_mps << ",\n";
+        os << "      \"min_level_speed_mps\": " << r.min_level_speed_mps << ",\n";
         os << "      \"max_level_mach\": " << r.max_level_mach << ",\n";
         os << "      \"roc_mps_mil\": " << r.roc_mps_mil << ",\n";
         os << "      \"roc_mps_ab\": " << r.roc_mps_ab << ",\n";

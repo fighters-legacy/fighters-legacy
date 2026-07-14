@@ -9,6 +9,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **tools**: `fm-trim` gate rows can pin a Mach, a load factor and a payload — the Ps ladder is now checkable in CI (#826)
+- **flight**: `[aero.controls] max_elevator_neg_deg` — asymmetric pitch travel (#822)
+
+### Fixed
+
+- **flight**: `fm-trim` declared every aircraft unflyable above ~8 km — the back side of the power curve (#825)
+- **engine**: Hardened every TOML integer read against a float→int UB bug in toml++ (#824)
+
+### Added
+
 - **ui**: The in-game aircraft manual is generated from the flight model, not hand-written (#821)
 - **tools**: `fm-trim` — derives an aircraft's performance from its flight model and gates it against the flight manual (#817)
 - **flight**: `[aero.limits]` is enforced — stall flag, load factor, FBW G-limiter, over-G damage (#816)

@@ -97,6 +97,7 @@ void addPerformance(AircraftManual& out, const ManualSources& src, float mass, c
         }
 
         sec.rows.push_back({std::string(cond.label) + " — stall speed (1 g)", speedStr(r.stall_speed_1g_mps)});
+        sec.rows.push_back({std::string(cond.label) + " — min level speed", speedStr(r.min_level_speed_mps)});
         sec.rows.push_back({std::string(cond.label) + " — max level speed", fmt("Mach %.2f", r.max_level_mach)});
         sec.rows.push_back({std::string(cond.label) + " — rate of climb",
                             fmt("%.0f m/s MIL", r.roc_mps_mil) + fmt(" / %.0f m/s AB", r.roc_mps_ab)});

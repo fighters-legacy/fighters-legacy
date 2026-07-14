@@ -44,14 +44,30 @@ void usage() {
                 "\n"
                 "Expectation file format:\n"
                 "  [[expect]]\n"
-                "  metric     = \"stall_speed_1g_mps\"   # or max_level_mach, roc_mps,\n"
-                "                                       # sustained_turn_deg_s, instant_turn_deg_s,\n"
-                "                                       # corner_speed_mps, sustained_g,\n"
-                "                                       # specific_range_m_per_kg\n"
-                "  altitude_m = 0\n"
-                "  mass_kg    = 6500\n"
-                "  expected   = 64.0\n"
-                "  tolerance  = 0.05                    # fractional; default 5%%\n");
+                "  metric     = \"stall_speed_1g_mps\"   # also: min_level_speed_mps, max_level_mach,\n"
+                "                                       # roc_mps, sustained_turn_deg_s, sustained_g,\n"
+                "                                       # instant_turn_deg_s, corner_speed_mps,\n"
+                "                                       # specific_range_m_per_kg,\n"
+                "                                       # max_lift_g, ps_mps  (both need `mach`)\n"
+                "  altitude_m = 4572\n"
+                "  mass_kg    = 6137\n"
+                "  expected   = 3.3\n"
+                "  tolerance  = 0.15                    # fractional; default 5%%\n"
+                "\n"
+                "  # Pin the condition the number was PUBLISHED at. A flight manual quotes turn and Ps\n"
+                "  # figures at a specific Mach, not maximised over speed -- so without these, the\n"
+                "  # richest data an aircraft has cannot be gated at all.\n"
+                "  mach        = 0.60                   # evaluate here; omit to maximise over speed\n"
+                "  load_factor = 4.0                    # required by ps_mps\n"
+                "  afterburner = true                   # default; the manual quotes max thrust\n"
+                "\n"
+                "  # Per-row stores. The published clean-vs-loaded delta is the only check there is on\n"
+                "  # the whole store-drag path, and it needs two rows in one file.\n"
+                "  payload_kg  = 171.0\n"
+                "  payload_cd0 = 0.0021\n"
+                "\n"
+                "  # NOTE: ps_mps passes through zero (that IS the sustained condition), so its\n"
+                "  # tolerance is ABSOLUTE, in m/s -- a fractional tolerance on zero is zero.\n");
 }
 
 std::vector<float> parseFloatList(const std::string& s) {
@@ -146,9 +162,16 @@ int main(int argc, char** argv) {
 
         for (const auto& e : r.errors)
             std::fprintf(stderr, "ERROR: %s\n", e.c_str());
-        for (const auto& f : r.failures)
-            std::fprintf(stderr, "FAIL: %s (%s): expected %.3f +/- %.0f%%, got %.3f\n", f.metric.c_str(),
-                         f.detail.c_str(), f.expected, f.tolerance * 100.f, f.actual);
+        for (const auto& f : r.failures) {
+            // ps_mps's tolerance is absolute (it passes through zero, so a percentage of it is
+            // meaningless); everything else is fractional. Report each in its own units.
+            if (f.metric == "ps_mps")
+                std::fprintf(stderr, "FAIL: %s (%s): expected %.3f +/- %.3f m/s, got %.3f\n", f.metric.c_str(),
+                             f.detail.c_str(), f.expected, f.tolerance, f.actual);
+            else
+                std::fprintf(stderr, "FAIL: %s (%s): expected %.3f +/- %.0f%%, got %.3f\n", f.metric.c_str(),
+                             f.detail.c_str(), f.expected, f.tolerance * 100.f, f.actual);
+        }
 
         if (r.ok) {
             std::printf("%s: %d expectation(s) met\n", modelPath.c_str(), r.checked);
@@ -192,6 +215,8 @@ int main(int argc, char** argv) {
         }
         std::printf("    stall speed (1 g)   %7.1f m/s  (%.0f kt)\n", r.stall_speed_1g_mps,
                     r.stall_speed_1g_mps * 1.94384f);
+        std::printf("    min level speed     %7.1f m/s  (%.0f kt)\n", r.min_level_speed_mps,
+                    r.min_level_speed_mps * 1.94384f);
         std::printf("    max level speed     %7.2f M\n", r.max_level_mach);
         std::printf("    rate of climb       %7.1f m/s MIL   %7.1f m/s AB\n", r.roc_mps_mil, r.roc_mps_ab);
         std::printf("    sustained turn      %7.1f deg/s  (%.1f g)\n", r.sustained_turn_deg_s, r.sustained_g);

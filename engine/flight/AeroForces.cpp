@@ -138,7 +138,13 @@ std::array<float, 3> computeMoments(float alpha_rad, float beta_rad, float p_rad
     // Pull (+1 elevator) = trailing-edge UP = negative NACA deflection → positive pitch moment.
     // Right yaw (+1 rudder) = trailing-edge LEFT = negative NACA deflection → positive yaw moment.
     // Right roll (+1 aileron) = left-aileron-down convention → positive roll moment (no sign flip).
-    const float elev_rad = -ctrl.elevator * data.controls.max_elevator_deg * kDegToRad;
+    // Asymmetric pitch travel (#822): a fighter's stabilator has far more nose-up authority than
+    // nose-down (17° vs 5° on an F-5E). ctrl.elevator is +1 = pull = nose-up, so the positive side
+    // uses max_elevator_deg and the negative side uses max_elevator_neg_deg — which equals it unless
+    // the model says otherwise, so a symmetric model is unaffected.
+    const float elev_travel_deg =
+        (ctrl.elevator >= 0.f) ? data.controls.max_elevator_deg : data.controls.max_elevator_neg_deg;
+    const float elev_rad = -ctrl.elevator * elev_travel_deg * kDegToRad;
     const float ail_rad = ctrl.aileron * data.controls.max_aileron_deg * kDegToRad;
     const float rudder_rad = -ctrl.rudder * data.controls.max_rudder_deg * kDegToRad;
 

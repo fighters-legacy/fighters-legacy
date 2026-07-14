@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "server_config.h"
 #include "TestSpawn.h" // parseTestSpawnMix — validates [world] test_spawn_ai_mix at parse time (#580)
+#include "config/TomlNumeric.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -291,7 +292,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         // [server]
         if (auto v = tbl["server"]["name"].value<std::string>())
             cfg.name = std::move(*v);
-        if (auto v = tbl["server"]["port"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["server"]["port"])) {
             if (*v < 1 || *v > 65535) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__, "server.port out of range [1,65535]; using default");
             } else {
@@ -300,7 +301,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
         if (auto v = tbl["server"]["bind_address"].value<std::string>())
             cfg.bindAddress = std::move(*v);
-        if (auto v = tbl["server"]["max_peers"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["server"]["max_peers"])) {
             if (*v < 1 || *v > 1024) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__, "server.max_peers out of range [1,1024]; using default");
             } else {
@@ -326,7 +327,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
         if (auto v = tbl["server"]["motd"].value<std::string>())
             cfg.motd = std::move(*v);
-        if (auto v = tbl["server"]["motd_display_s"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["server"]["motd_display_s"])) {
             int64_t clamped = std::clamp(*v, int64_t{0}, int64_t{65535});
             if (clamped != *v)
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
@@ -350,7 +351,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 if (auto s = elem.value<std::string>())
                     cfg.rotationItems.push_back(std::move(*s));
         }
-        if (auto v = tbl["rotation"]["time_limit_min"].value<int64_t>())
+        if (auto v = tomlInt(tbl["rotation"]["time_limit_min"]))
             cfg.rotationTimeLimitMin = static_cast<int>(*v);
 
         // [lobby]
@@ -377,9 +378,9 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         // [world]
         if (auto v = tbl["world"]["save_path"].value<std::string>())
             cfg.worldSavePath = std::move(*v);
-        if (auto v = tbl["world"]["autosave_interval_s"].value<int64_t>())
+        if (auto v = tomlInt(tbl["world"]["autosave_interval_s"]))
             cfg.worldAutosaveIntervalS = static_cast<int>(*v);
-        if (auto v = tbl["world"]["entity_soft_cap"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["world"]["entity_soft_cap"])) {
             if (*v < 0) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__, "world.entity_soft_cap must be >= 0; using 0 (unlimited)");
             } else {
@@ -393,7 +394,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.timeScale = *v;
             }
         }
-        if (auto v = tbl["world"]["player_faction"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["world"]["player_faction"])) {
             if (*v >= 0 && *v <= 65535) {
                 cfg.playerFaction = static_cast<uint16_t>(*v);
             } else {
@@ -433,7 +434,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.spatialCellSizeKm = *v;
             }
         }
-        if (auto v = tbl["world"]["snapshot_budget_bytes"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["world"]["snapshot_budget_bytes"])) {
             if (*v < int64_t{0} || *v > int64_t{65535}) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "world.snapshot_budget_bytes out of range [0, 65535]; using default 1200");
@@ -441,7 +442,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.snapshotBudgetBytes = static_cast<uint32_t>(*v);
             }
         }
-        if (auto v = tbl["world"]["jitter_buffer_depth"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["world"]["jitter_buffer_depth"])) {
             if (*v < int64_t{1} || *v > int64_t{32}) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "world.jitter_buffer_depth out of range [1, 32]; using default 4");
@@ -449,7 +450,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.jitterBufferDepth = static_cast<uint32_t>(*v);
             }
         }
-        if (auto v = tbl["world"]["jitter_buffer_adapt_window"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["world"]["jitter_buffer_adapt_window"])) {
             if (*v < int64_t{10} || *v > int64_t{3600}) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "world.jitter_buffer_adapt_window out of range [10, 3600]; using default 60");
@@ -457,7 +458,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.jitterAdaptWindow = static_cast<uint32_t>(*v);
             }
         }
-        if (auto v = tbl["world"]["jitter_buffer_hysteresis"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["world"]["jitter_buffer_hysteresis"])) {
             if (*v < int64_t{0} || *v > int64_t{8}) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "world.jitter_buffer_hysteresis out of range [0, 8]; using default 2");
@@ -492,7 +493,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.congestionLossThreshold = static_cast<float>(*v);
             }
         }
-        if (auto v = tbl["world"]["congestion_budget_floor_bytes"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["world"]["congestion_budget_floor_bytes"])) {
             if (*v < int64_t{0} || *v > int64_t{65535}) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "world.congestion_budget_floor_bytes out of range [0, 65535]; using default 400");
@@ -500,7 +501,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.congestionBudgetFloorBytes = static_cast<uint32_t>(*v);
             }
         }
-        if (auto v = tbl["world"]["sim_worker_threads"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["world"]["sim_worker_threads"])) {
             if (*v < int64_t{0} || *v > int64_t{256}) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "world.sim_worker_threads out of range [0, 256]; using default 0 (auto)");
@@ -509,7 +510,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             }
         }
         // Load-test affordance (#573): pre-spawn N server-side AI entities.
-        if (auto v = tbl["world"]["test_spawn_ai_count"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["world"]["test_spawn_ai_count"])) {
             if (*v < int64_t{0} || *v > int64_t{1'000'000}) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "world.test_spawn_ai_count out of range [0, 1000000]; using default 0 (disabled)");
@@ -588,7 +589,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.overrunMinSnapshotHz = static_cast<float>(*v);
             }
         }
-        if (auto v = tbl["world"]["overrun_max_ai_stride"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["world"]["overrun_max_ai_stride"])) {
             if (*v < int64_t{1} || *v > int64_t{32}) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "world.overrun_max_ai_stride out of range [1, 32]; using default 4");
@@ -596,7 +597,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.overrunMaxAiStride = static_cast<uint32_t>(*v);
             }
         }
-        if (auto v = tbl["world"]["overrun_budget_floor_bytes"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["world"]["overrun_budget_floor_bytes"])) {
             if (*v < int64_t{0} || *v > int64_t{65535}) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "world.overrun_budget_floor_bytes out of range [0, 65535]; using default 400");
@@ -612,7 +613,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.overrunMinInterestFraction = static_cast<float>(*v);
             }
         }
-        if (auto v = tbl["world"]["max_catchup_ticks"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["world"]["max_catchup_ticks"])) {
             if (*v < int64_t{1} || *v > int64_t{64}) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "world.max_catchup_ticks out of range [1, 64]; using default 8");
@@ -647,7 +648,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         // [discovery]
         if (auto v = tbl["discovery"]["enabled"].value<bool>())
             cfg.discoveryEnabled = *v;
-        if (auto v = tbl["discovery"]["interval_ms"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["discovery"]["interval_ms"])) {
             if (*v < 100 || *v > 60000) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "discovery.interval_ms out of range [100,60000]; using default");
@@ -657,7 +658,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
 
         // [security]
-        if (auto v = tbl["security"]["connect_rate_limit_count"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["security"]["connect_rate_limit_count"])) {
             if (*v < 1 || *v > 100000) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "security.connect_rate_limit_count out of range [1,100000]; using default");
@@ -665,7 +666,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.connectRateLimitCount = static_cast<int>(*v);
             }
         }
-        if (auto v = tbl["security"]["connect_rate_limit_window_s"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["security"]["connect_rate_limit_window_s"])) {
             if (*v < 1 || *v > 3600) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "security.connect_rate_limit_window_s out of range [1,3600]; using default");
@@ -673,7 +674,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.connectRateLimitWindowS = static_cast<int>(*v);
             }
         }
-        if (auto v = tbl["security"]["packet_flood_multiplier"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["security"]["packet_flood_multiplier"])) {
             if (*v < 1 || *v > 100) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "security.packet_flood_multiplier out of range [1,100]; using default");
@@ -685,7 +686,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             cfg.banlistPath = std::move(*v);
         if (auto v = tbl["security"]["allowlist_path"].value<std::string>())
             cfg.allowlistPath = std::move(*v);
-        if (auto v = tbl["security"]["incoming_bandwidth_bps"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["security"]["incoming_bandwidth_bps"])) {
             if (*v < 0) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "security.incoming_bandwidth_bps must be >= 0; using 0 (unlimited)");
@@ -693,7 +694,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.incomingBandwidthBps = static_cast<uint32_t>(*v);
             }
         }
-        if (auto v = tbl["security"]["outgoing_bandwidth_bps"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["security"]["outgoing_bandwidth_bps"])) {
             if (*v < 0) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "security.outgoing_bandwidth_bps must be >= 0; using 0 (unlimited)");
@@ -703,7 +704,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
         if (auto v = tbl["security"]["operator_password"].value<std::string>())
             cfg.operatorPassword = std::move(*v);
-        if (auto v = tbl["security"]["pre_handshake_rate_limit_count"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["security"]["pre_handshake_rate_limit_count"])) {
             if (*v < 0 || *v > 10000) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "security.pre_handshake_rate_limit_count out of range [0,10000]; using default");
@@ -711,7 +712,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.preHandshakeRateLimitCount = static_cast<int>(*v);
             }
         }
-        if (auto v = tbl["security"]["pre_handshake_window_ms"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["security"]["pre_handshake_window_ms"])) {
             if (*v < 100 || *v > 60000) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "security.pre_handshake_window_ms out of range [100,60000]; using default");
@@ -719,7 +720,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.preHandshakeWindowMs = static_cast<int>(*v);
             }
         }
-        if (auto v = tbl["security"]["max_connections_per_ip"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["security"]["max_connections_per_ip"])) {
             if (*v < 0 || *v > 1024) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "security.max_connections_per_ip out of range [0,1024]; using default");
@@ -727,7 +728,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.maxConnectionsPerIp = static_cast<int>(*v);
             }
         }
-        if (auto v = tbl["security"]["admin_auth_max_failures"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["security"]["admin_auth_max_failures"])) {
             if (*v < 1 || *v > 100) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "security.admin_auth_max_failures out of range [1,100]; using default");
@@ -735,7 +736,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.adminAuthMaxFailures = static_cast<int>(*v);
             }
         }
-        if (auto v = tbl["security"]["admin_auth_lockout_s"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["security"]["admin_auth_lockout_s"])) {
             if (*v < 1 || *v > 86400) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "security.admin_auth_lockout_s out of range [1,86400]; using default");
@@ -743,7 +744,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.adminAuthLockoutSeconds = static_cast<int>(*v);
             }
         }
-        if (auto v = tbl["security"]["idle_timeout_s"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["security"]["idle_timeout_s"])) {
             if (*v < 0 || *v > 86400) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "security.idle_timeout_s out of range [0,86400]; using 0 (disabled)");
@@ -753,14 +754,14 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
 
         // [shutdown]
-        if (auto v = tbl["shutdown"]["warning_interval_s"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["shutdown"]["warning_interval_s"])) {
             if (*v < 1 || *v > 86400)
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "shutdown.warning_interval_s out of range [1,86400]; using default");
             else
                 cfg.shutdownWarningIntervalS = static_cast<int>(*v);
         }
-        if (auto v = tbl["shutdown"]["min_shutdown_delay_s"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["shutdown"]["min_shutdown_delay_s"])) {
             if (*v < 0 || *v > 86400)
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "shutdown.min_shutdown_delay_s out of range [0,86400]; using default");
@@ -773,7 +774,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         // [rcon]
         if (auto v = tbl["rcon"]["enabled"].value<bool>())
             cfg.rcon.enabled = *v;
-        if (auto v = tbl["rcon"]["port"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["rcon"]["port"])) {
             if (*v < 1 || *v > 65535)
                 log->log(LogLevel::Warn, __FILE__, __LINE__, "rcon.port out of range [1,65535]; using default");
             else
@@ -781,14 +782,14 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
         if (auto v = tbl["rcon"]["password"].value<std::string>())
             cfg.rcon.password = std::move(*v);
-        if (auto v = tbl["rcon"]["max_auth_failures"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["rcon"]["max_auth_failures"])) {
             if (*v < 1 || *v > 1000)
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "rcon.max_auth_failures out of range [1,1000]; using default");
             else
                 cfg.rcon.maxAuthFailures = static_cast<int>(*v);
         }
-        if (auto v = tbl["rcon"]["lockout_seconds"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["rcon"]["lockout_seconds"])) {
             if (*v < 1 || *v > 86400)
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "rcon.lockout_seconds out of range [1,86400]; using default");
@@ -803,7 +804,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         // [metrics]
         if (auto v = tbl["metrics"]["tick_json_path"].value<std::string>())
             cfg.metrics.tickJsonPath = std::move(*v);
-        if (auto v = tbl["metrics"]["tick_json_interval_ms"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["metrics"]["tick_json_interval_ms"])) {
             if (*v < 100 || *v > 60000)
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "metrics.tick_json_interval_ms out of range [100,60000]; using default");
@@ -827,7 +828,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             cfg.network.allowInsecure = *v;
         if (auto v = tbl["network"]["compress_snapshots"].value<bool>())
             cfg.network.compressSnapshots = *v;
-        if (auto v = tbl["network"]["gns_nagle_time_us"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["network"]["gns_nagle_time_us"])) {
             if (*v >= 0 && *v <= 200000)
                 cfg.network.gnsNagleTimeUs = static_cast<uint32_t>(*v);
             else
@@ -857,7 +858,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
 
         // [flight]  — the player's auto-spawned flight (#610)
-        if (auto v = tbl["flight"]["size"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["flight"]["size"])) {
             if (*v >= 0 && *v <= 8)
                 cfg.flight.size = static_cast<uint32_t>(*v);
             else
@@ -876,7 +877,7 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         clampDouble(tbl, "flight", "cover_range_m", 500.0, 200000.0, cfg.flight.coverRangeM, log);
         clampDouble(tbl, "flight", "designate_range_m", 500.0, 200000.0, cfg.flight.designateRangeM, log);
         clampDouble(tbl, "flight", "designate_half_angle_deg", 1.0, 90.0, cfg.flight.designateHalfAngleDeg, log);
-        if (auto v = tbl["flight"]["command_rate_limit_per_s"].value<int64_t>()) {
+        if (auto v = tomlInt(tbl["flight"]["command_rate_limit_per_s"])) {
             if (*v >= 1 && *v <= 60)
                 cfg.flight.commandRateLimitPerS = static_cast<int>(*v);
             else

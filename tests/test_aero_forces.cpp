@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
@@ -10,6 +11,7 @@
 #include <string>
 
 using Catch::Matchers::WithinAbs;
+using Catch::Matchers::WithinRel;
 using namespace fl;
 
 static const std::string kGenericToml = R"(
@@ -325,4 +327,95 @@ TEST_CASE("a model with no cd_table produces bit-identical forces", "[aero][cd_t
 
     const float expected_y = lift * std::cos(0.09f) + drag * std::sin(0.09f);
     CHECK_THAT(f[1], WithinAbs(expected_y, std::abs(expected_y) * 1e-4f));
+}
+
+// ---------------------------------------------------------------------------
+// Asymmetric control travel (#822)
+//
+// [aero.controls] gave one scalar per axis, and real stabilators are not symmetric: the F-5E's
+// travels 17 deg nose-up but only 5 deg nose-down (T.O. 1F-5E-1). With one number, an author must
+// pick -- and picking the nose-up figure (which governs pitch authority and reaching the G limit)
+// models the aircraft's nose-down authority 3.4x too generous. A bunt would be far more effective
+// than the real aeroplane's.
+// ---------------------------------------------------------------------------
+
+// kGenericToml with the F-5E's asymmetric stabilator travel.
+static std::string withAsymmetricElevator() {
+    std::string s = kGenericToml;
+    auto pos = s.find("max_elevator_deg = 25.0");
+    REQUIRE(pos != std::string::npos);
+    s.replace(pos, std::string("max_elevator_deg = 25.0").size(),
+              "max_elevator_deg     = 17.0\nmax_elevator_neg_deg =  5.0");
+    return s;
+}
+
+TEST_CASE("controls: max_elevator_neg_deg defaults to the positive travel", "[aero][controls]") {
+    // A model that says nothing gets symmetric travel, exactly as before.
+    auto d = makeData();
+    CHECK(d.controls.max_elevator_neg_deg == d.controls.max_elevator_deg);
+}
+
+TEST_CASE("controls: a symmetric model produces bit-identical pitching moments", "[aero][controls]") {
+    // The regression guard. Every existing aircraft, and all community content, uses the symmetric
+    // spelling and must be completely unaffected.
+    auto d = makeData();
+    auto atmos = computeAtmosphere(3000.f);
+
+    ControlInput up{};
+    up.elevator = 1.f;
+    ControlInput down{};
+    down.elevator = -1.f;
+
+    const auto mUp = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, up, d, atmos);
+    const auto mDown = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, down, d, atmos);
+
+    // Same magnitude of elevator contribution either way: the only difference between the two is the
+    // sign of the command, so the pitching moments straddle the stick-free value symmetrically.
+    const auto mNeutral = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, ControlInput{}, d, atmos);
+    // Relative, not absolute: these moments are ~1e6 N·m, where a float ULP is larger than 1e-3.
+    CHECK_THAT(mUp[1] - mNeutral[1], WithinRel(-(mDown[1] - mNeutral[1]), 1e-5f));
+}
+
+TEST_CASE("controls: full nose-down gives 5/17 of the nose-up pitching moment", "[aero][controls]") {
+    // THE ACCEPTANCE CRITERION. The F-5E's stabilator: 17 deg up, 5 deg down.
+    auto d = parseFlightModel(withAsymmetricElevator());
+    REQUIRE(d.controls.max_elevator_deg == Catch::Approx(17.f));
+    REQUIRE(d.controls.max_elevator_neg_deg == Catch::Approx(5.f));
+
+    auto atmos = computeAtmosphere(3000.f);
+
+    ControlInput up{};
+    up.elevator = 1.f;
+    ControlInput down{};
+    down.elevator = -1.f;
+
+    const auto mNeutral = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, ControlInput{}, d, atmos);
+    const auto mUp = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, up, d, atmos);
+    const auto mDown = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, down, d, atmos);
+
+    // Isolate the elevator's contribution by subtracting the stick-free moment.
+    const float upContribution = mUp[1] - mNeutral[1];
+    const float downContribution = mDown[1] - mNeutral[1];
+
+    // They still act in opposite directions...
+    CHECK(upContribution * downContribution < 0.f);
+    // ...but the nose-down authority is 5/17 of the nose-up authority, not equal to it.
+    CHECK_THAT(std::abs(downContribution), WithinRel(std::abs(upContribution) * (5.f / 17.f), 1e-3f));
+}
+
+TEST_CASE("controls: partial nose-down scales against the negative travel", "[aero][controls]") {
+    // Half forward stick is half of the NOSE-DOWN travel, not half of the nose-up travel.
+    auto d = parseFlightModel(withAsymmetricElevator());
+    auto atmos = computeAtmosphere(3000.f);
+
+    ControlInput half{};
+    half.elevator = -0.5f;
+    ControlInput full{};
+    full.elevator = -1.f;
+
+    const auto mNeutral = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, ControlInput{}, d, atmos);
+    const auto mHalf = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, half, d, atmos);
+    const auto mFull = computeMoments(0.05f, 0.f, 0.f, 0.f, 0.f, 200.f, 0.f, 0.f, full, d, atmos);
+
+    CHECK_THAT(mHalf[1] - mNeutral[1], WithinRel((mFull[1] - mNeutral[1]) * 0.5f, 1e-3f));
 }
