@@ -24,6 +24,7 @@
 #include "Version.h"
 #include "audio/MusicManager.h"
 #include "audio/PlaylistLoader.h"
+#include "audio/SfxManager.h"
 #include "audio/SubtitleQueue.h"
 #include "config/ConfigFile.h"
 #include "config/UserConfig.h"
@@ -292,6 +293,8 @@ struct GameServices {
     std::unique_ptr<fl::TerrainStreamer> terrainStreamer;
     SubtitleQueue subtitleQueue;
     MusicManager musicManager;
+    fl::SfxManager sfxManager;     // positional weapon SFX (#631)
+    AudioSettings audioSettings{}; // a stable copy the effect router points at; refreshed on apply
 
     // Multiplayer connection target (empty = single-player, spawn LocalServer).
     // Populated from --connect CLI arg in initPlatform().
@@ -373,6 +376,7 @@ Game::~Game() {
     if (d.session.serverThread.joinable() || d.session.clientNet || d.session.localServer)
         stopGame();
     d.services.musicManager.shutdown();
+    d.services.sfxManager.shutdown();
     d.services.p.cursor.reset();
     if (d.services.p.audio)
         d.services.p.audio->shutdown();
@@ -725,6 +729,18 @@ void Game::initGameSystems() {
         d.services.musicManager.loadPlaylist(playlist);
         d.services.musicManager.setState(GameState::Menu);
     }
+
+    // Weapon SFX (#631): the fire path's audio. A null audio device (rare) is tolerated — the
+    // manager no-ops. Presets map the wire effect vocabulary to a pack asset (overridable) with a
+    // compiled-in procedural fallback, so the guns are audible with zero content mounted.
+    d.services.sfxManager.init(d.services.p.audio.get(), d.services.assets.get(), d.services.rawLogger);
+    d.services.sfxManager.registerPreset("sfx.gunfire", "sfx/gunfire", fl::SfxKind::Gunfire);
+    d.services.sfxManager.registerPreset("sfx.launch", "sfx/launch", fl::SfxKind::Launch);
+    d.services.sfxManager.registerPreset("sfx.release", "sfx/release", fl::SfxKind::Release);
+    d.services.sfxManager.registerPreset("sfx.impact", "sfx/impact", fl::SfxKind::Impact);
+    d.services.sfxManager.registerPreset("sfx.explosion", "sfx/explosion", fl::SfxKind::Explosion);
+    d.services.audioSettings = d.services.userConfig->audio();
+    d.services.effectRouter.setSfx(&d.services.sfxManager, &d.services.audioSettings);
 }
 
 // Steps 19–20: debug console — console widget only; server commands wired in startGame().
@@ -806,6 +822,7 @@ void Game::startGame() {
     auto onConnect = [&d, isMultiplayer]() {
         d.services.activeHud = &d.services.flightHud;
         d.session.hapticController.emplace(*d.services.p.input);
+        d.services.effectRouter.setHaptics(&*d.session.hapticController); // own-ship launch/release feedback (#631)
 
         // Single-player uses enet6 to match the embedded LocalServer (spawned with --transport enet);
         // multiplayer joins a dedicated server over GNS (encrypted). Both via the HAL factory.
@@ -1152,6 +1169,18 @@ void Game::run() {
             cam = d.services.cameraController.view(aspect);
             camOrigin = cam.worldOrigin;
             updateAudioListener(*d.services.p.audio, cam, playerEntry ? playerEntry->velocity : glm::vec3{});
+
+            // Weapon SFX (#631): the listener sits at the camera origin (sources are placed
+            // camera-relative), and the router needs the origin + the own entity index to
+            // spatialise effects and drive own-ship haptics. Set once per frame before the router
+            // processes any effect.
+            {
+                const glm::vec3 fwd = -glm::vec3(cam.view[2][0], cam.view[2][1], cam.view[2][2]);
+                const glm::vec3 up = glm::vec3(cam.view[1][0], cam.view[1][1], cam.view[1][2]);
+                d.services.sfxManager.updateListener(fwd, up);
+                d.services.effectRouter.setCameraOrigin(cam.worldOrigin);
+                d.services.effectRouter.setOwnEntity(d.session.clientHandler->assignedEntityIdx);
+            }
 
             // In cockpit view the camera sits at the player entity, so render that entity
             // shadow-only — you should not see your own aircraft from inside it, but its shadow

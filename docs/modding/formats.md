@@ -40,6 +40,24 @@ For authoring tools and workflow guides, see the other files in this directory.
 - Content packs that use legacy audio formats handle their own conversion before providing OGG to the engine
 - Streaming sources (long music tracks) use OpenAL streaming buffers
 
+### Weapon SFX presets (#631)
+
+The fire path plays positional weapon SFX from a fixed preset vocabulary. Each preset resolves to a
+content-pack OGG **asset name** when one exists (so a theater pack retunes the guns), else to a
+compiled-in procedural fallback — so the sandbox has sound with zero content mounted. Ship the asset
+to override:
+
+| Preset | Asset name | Plays on |
+|---|---|---|
+| `sfx.gunfire` | `sfx/gunfire` | every gun round (own gunfire plays head-relative) |
+| `sfx.launch` | `sfx/launch` | a missile leaving the rails |
+| `sfx.release` | `sfx/release` | a store dropped |
+| `sfx.impact` | `sfx/impact` | a round connecting |
+| `sfx.explosion` | `sfx/explosion` | a warhead detonation |
+
+SFX are one-shot, 3D-spatialised (a 16-voice steal-oldest pool), and scaled by the master + SFX
+volume sliders. Keep them short (< 1 s) — long clips belong to the streaming/music path.
+
 ---
 
 ## Music Playlist — TOML

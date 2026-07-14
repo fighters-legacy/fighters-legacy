@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ClientEffectRouter.h"
 
+#include "HapticController.h"
+#include "audio/SfxManager.h"
+
 #include <cstring>
 
 namespace fl {
@@ -14,6 +17,22 @@ struct EffectRow {
     float ttl;
     float intensity;
 };
+
+// The SFX preset name for an EffectType — the same vocabulary SfxManager registers. Empty = silent.
+const char* sfxPresetFor(uint8_t type) {
+    switch (static_cast<EffectType>(type)) {
+    case EffectType::WeaponFired:
+        return "sfx.gunfire";
+    case EffectType::MissileLaunch:
+        return "sfx.launch";
+    case EffectType::Impact:
+        return "sfx.impact";
+    case EffectType::Detonation:
+    case EffectType::NuclearFlash:
+        return "sfx.explosion";
+    }
+    return nullptr;
+}
 
 const EffectRow* rowFor(uint8_t type) {
     static constexpr EffectRow kWeaponFired{"muzzle_flash", 0.08f, 1.f};
@@ -40,6 +59,27 @@ const EffectRow* rowFor(uint8_t type) {
 } // namespace
 
 void ClientEffectRouter::onEffect(const EffectEvent& ev) {
+    const bool ownShip = m_ownEntityIdx != 0xFFFFFFFFu && ev.srcIdx == m_ownEntityIdx;
+
+    // Audio (#631): play the mapped SFX at the effect's world position, spatialised camera-relative.
+    // Own gunfire plays AT the camera (head-relative) — your own gun is loud regardless of the
+    // chase-cam distance — by placing it at the camera origin.
+    if (m_sfx && m_audioSettings) {
+        if (const char* preset = sfxPresetFor(ev.type)) {
+            const glm::dvec3 at =
+                (ownShip && ev.type == static_cast<uint8_t>(EffectType::WeaponFired)) ? m_cameraOrigin : ev.pos;
+            m_sfx->play(preset, at, m_cameraOrigin, *m_audioSettings);
+        }
+    }
+
+    // Haptics (#631): an own-ship store leaving the rails kicks the controller. Gun recoil is NOT
+    // here — HapticController::update already drives it from the per-frame wasWeaponFired flag, and
+    // firing one pulse per round at the rate of fire would double it. Missile-approach WARNING is
+    // deliberately absent too: an inbound-missile cue the moment the server knows would leak the
+    // launch through the controller (a wallhack); it waits for the RWR/#529 sensor work.
+    if (m_haptics && ownShip && ev.type == static_cast<uint8_t>(EffectType::MissileLaunch))
+        m_haptics->notifyOrdnanceRelease();
+
     const EffectRow* row = rowFor(ev.type);
     if (!row)
         return;

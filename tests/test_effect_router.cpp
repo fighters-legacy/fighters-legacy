@@ -7,11 +7,23 @@
 
 #include "ClientEffectRouter.h"
 
+#include "ILogger.h"
+#include "audio/SfxManager.h"
+#include "mock_hal.h" // MockAudio
+
 #include <cstring>
 #include <string>
 #include <vector>
 
 using namespace fl;
+
+namespace {
+struct NullLoggerER : ILogger {
+    void log(LogLevel, const char*, int, const char*) override {}
+    void setMinLevel(LogLevel) override {}
+    void flush() override {}
+};
+} // namespace
 
 namespace {
 
@@ -112,4 +124,37 @@ TEST_CASE("EffectRouter: routeEffectsTlv decodes packed records and drops a trai
     CHECK(emitters[0].position.x == 10.f);
     CHECK(std::string(emitters[1].effectName) == "impact_sparks");
     CHECK(emitters[1].position.x == 20.f);
+}
+
+// ---------------------------------------------------------------------------
+// Audio wiring (#631)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("EffectRouter: wired to an SfxManager, effects play their SFX", "[effect_router][sfx]") {
+    NullLoggerER log;
+    MockAudio audio;
+    SfxManager sfx;
+    sfx.init(&audio, nullptr, &log);
+    sfx.registerPreset("sfx.gunfire", "", SfxKind::Gunfire);
+    sfx.registerPreset("sfx.explosion", "", SfxKind::Explosion);
+
+    AudioSettings settings;
+    ClientEffectRouter r;
+    r.setSfx(&sfx, &settings);
+
+    r.onEffect(ev(EffectType::WeaponFired));
+    r.onEffect(ev(EffectType::Detonation));
+    CHECK(audio.playCount == 2); // gunfire + explosion
+
+    // An effect with no SFX mapping (none currently) or an unregistered preset stays silent; here
+    // the router still routes the particle side, so buildEmitters is unaffected.
+    ParticleSystem ps = makePs();
+    CHECK(emitterNames(r, ps).size() == 2u);
+}
+
+TEST_CASE("EffectRouter: with no SfxManager wired, it is exactly the particle-only router", "[effect_router][sfx]") {
+    ClientEffectRouter r; // no setSfx
+    r.onEffect(ev(EffectType::WeaponFired));
+    ParticleSystem ps = makePs();
+    CHECK(emitterNames(r, ps).size() == 1u); // particles still work; no audio, no crash
 }

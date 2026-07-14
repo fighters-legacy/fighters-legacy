@@ -710,12 +710,14 @@ catch_discover_tests(test_server_notice)
 
 add_executable(test_client_net_event_handler test_client_net_event_handler.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp" # ClientEffectRouter own-ship haptics (#631)
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     # ClientNetEventHandler dispatches MsgWingmanAck into the radio menu (#610).
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp")
 target_link_libraries(test_client_net_event_handler PRIVATE
-    Catch2::Catch2WithMain engine-net engine-render engine-entity engine-console engine-weather platform-hal)
+    Catch2::Catch2WithMain engine-net engine-render engine-entity engine-console engine-weather engine-audio
+    engine-config platform-hal)
 target_include_directories(test_client_net_event_handler PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
     "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -794,7 +796,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
 target_link_libraries(test_screen_manager PRIVATE
-    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual platform-sdl3 platform-hal SDL3::SDL3)
+    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual engine-audio platform-sdl3 platform-hal SDL3::SDL3)
 target_include_directories(test_screen_manager PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_screen_manager)
@@ -830,14 +832,23 @@ target_include_directories(test_client_prediction PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_client_prediction)
 
-# ClientEffectRouter (#625): wire effect vocabulary -> particle presets, ttl lifecycle, TLV decode.
+# ClientEffectRouter (#625/#631): wire effect vocabulary -> particles + SFX + haptics.
 add_executable(test_effect_router test_effect_router.cpp
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp")
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
 target_link_libraries(test_effect_router PRIVATE
     Catch2::Catch2WithMain
     engine-render
     engine-protocol
+    engine-audio
+    engine-config
     platform-hal)
 target_include_directories(test_effect_router PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
 catch_discover_tests(test_effect_router)
+
+# SfxBuiltinSounds byte-stability + SfxManager voice pool / camera-relative play (#631).
+add_executable(test_sfx test_sfx.cpp)
+target_link_libraries(test_sfx PRIVATE Catch2::Catch2WithMain engine-audio engine-config engine-content)
+target_include_directories(test_sfx PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_sfx)
