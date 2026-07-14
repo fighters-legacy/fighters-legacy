@@ -59,6 +59,12 @@ target_link_libraries(test_weapon_def_parser PRIVATE Catch2::Catch2WithMain engi
 catch_discover_tests(test_weapon_def_parser)
 
 # WeaponRegistry + defaultPayload (#812): a loadout that actually costs the airframe mass and drag.
+# fm-trim (#817): the tests LOCK the derived numbers, so they double as the engine's guard against
+# someone changing AeroForces.cpp and silently altering every aircraft's performance.
+add_executable(test_fm_trim test_fm_trim.cpp)
+target_link_libraries(test_fm_trim PRIVATE Catch2::Catch2WithMain fm-trim-lib)
+catch_discover_tests(test_fm_trim)
+
 add_executable(test_loadout test_loadout.cpp)
 target_link_libraries(test_loadout PRIVATE Catch2::Catch2WithMain engine-weapon engine-entity engine-flight)
 catch_discover_tests(test_loadout)

@@ -178,6 +178,7 @@ jobs:
           ./build/debug/tools/validate-weapon --version
           ./build/debug/tools/validate-sensor --version
           ./build/debug/tools/validate-mesh --version
+          ./build/debug/tools/fm-trim --version
           # The builtin reference meshes (docs/modding/3d-models.md) must validate with zero
           # warnings or errors — clean validation prints nothing, so fail on any output.
           python3 tools/gen_builtin_glb.py --export-dir /tmp/builtin-meshes

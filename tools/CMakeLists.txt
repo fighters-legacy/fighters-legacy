@@ -117,6 +117,20 @@ target_include_directories(validate-flight-model-lib PUBLIC
 add_executable(validate-flight-model validate-flight-model/main.cpp)
 target_link_libraries(validate-flight-model PRIVATE validate-flight-model-lib)
 
+# fm-trim (#817): derives an aircraft's performance from its flight model, and gates it against the
+# numbers its flight manual publishes. Links engine-flight and calls computeForces DIRECTLY -- trim is
+# a function of state, and routing it through FlightIntegrator would fold integration error into
+# numbers whose entire purpose is comparison against a published chart.
+add_library(fm-trim-lib STATIC
+    fm-trim/trim.cpp)
+target_link_libraries(fm-trim-lib
+    PUBLIC engine-flight
+    PRIVATE tomlplusplus::tomlplusplus)
+target_include_directories(fm-trim-lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/fm-trim")
+
+add_executable(fm-trim fm-trim/main.cpp)
+target_link_libraries(fm-trim PRIVATE fm-trim-lib)
+
 # Schema validity is delegated to the engine's own parser (engine-weapon), so the validator and the
 # runtime cannot drift. engine-weapon is pure stdlib + toml++ — it pulls in no platform-hal, so this
 # stays an always-built asset tool.

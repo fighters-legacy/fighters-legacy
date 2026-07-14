@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **tools**: `fm-trim` — derives an aircraft's performance from its flight model and gates it against the flight manual (#817)
 - **flight**: `[aero.limits]` is enforced — stall flag, load factor, FBW G-limiter, over-G damage (#816)
 - **flight**: `[aero.cd_table]` — tabulated total clean drag; the parabolic polar cannot represent a real fighter (#820)
 - **content**: Weapons are a real asset type — `WeaponRegistry` + a default loadout that costs the airframe mass and drag (#812)
