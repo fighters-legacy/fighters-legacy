@@ -27,14 +27,19 @@ enum class AircraftRole {
 
 enum class PropRotation { CW, CCW, Contra };
 
+// A FLIGHT MODEL IS AERODYNAMICS. IT DOES NOT KNOW WHAT IT LOOKS LIKE (#813).
+//
+// `mesh` and `cockpit` used to live here, were REQUIRED by the parser, and were read by absolutely
+// nothing -- the renderer has always used EntityDef::mesh. Two sources of truth for an aircraft's
+// asset wiring, and the one the parser enforced was the dead one. EntityDef is now the sole owner
+// (mesh, cockpitMesh, flightModelAsset, aiScriptAsset, classicDamageMesh); the flight model owns
+// only physics. The keys are still accepted in TOML and ignored, so existing files parse.
 struct AircraftMeta {
     std::string name;
     AircraftRole role{AircraftRole::Fighter};
     EngineType engine_type{EngineType::Turbofan};
-    bool has_fbw{false};
+    bool has_fbw{false}; // gates the G-limiter, and nothing else (#816)
     float cruise_alt_m{10000.f};
-    std::string mesh;
-    std::string cockpit;
 };
 
 struct FlightModelGeometry {
@@ -147,6 +152,27 @@ struct FlightModelData {
     FlightModelGeometry geometry;
     Table2D cl_table; // (alpha_deg, Mach) -> CL
     AeroDragPolar drag_polar;
+
+    // Tabulated TOTAL clean drag (alpha_deg, Mach) -> CD (#820).
+    //
+    // WHY THIS EXISTS. A strictly parabolic polar (cd0 + k*CL^2) forces specific excess power to be
+    // exactly quadratic in load factor, which means the implied induced-drag coefficient must be
+    // CONSTANT across a Ps chart. Real fighters do not behave that way: against T.O. 1F-5E-1's worked
+    // examples the implied coefficient grows 3.5x from the 1-2 g region to the 4-5 g region, because
+    // a real wing's drag rises far faster than CL^2 as it approaches max lift. Fit k to cruise and
+    // the F-5E sustains 3.92 g where the manual says 3.30; fit k to the hard-turn end and cruise drag
+    // is overstated, wrecking range and acceleration. THERE IS NO VALUE OF k THAT GIVES BOTH.
+    //
+    // It is also the form real published data arrives in: NASA TP-1538 gives the F-16's CD as a table
+    // against alpha and Mach, and it cannot be transcribed into a parabolic polar at all.
+    //
+    // WHEN PRESENT, THIS REPLACES cd0 + k*CL^2 ENTIRELY -- the table is total clean drag and already
+    // includes the induced term. cd_wave, speedbrake_cd, gear_cd and payload.extra_cd0 still add on
+    // top (an author whose table already spans Mach may fold wave drag into it and omit cd_wave; the
+    // terms are additive and independent, so that is their call). When absent, nothing changes and
+    // [aero.drag_polar] remains the simple path -- which is what most community content will use.
+    std::optional<Table2D> cd_table;
+
     std::optional<Table1D> cd_wave; // Mach -> delta-CD
     AeroMoments moments;
     AeroLimits limits;

@@ -18,6 +18,7 @@ class FolderContentPack final : public IContentPack {
     struct Manifest {
         std::string name;
         std::string id;
+        std::string namespaceId; // def-id prefix; defaults to `id` when the manifest omits it
         std::string version;
         std::string engineApi;
         int priority = 0;
@@ -35,6 +36,9 @@ class FolderContentPack final : public IContentPack {
     }
     const char* id() const override {
         return m_manifest.id.c_str();
+    }
+    const char* namespaceId() const override {
+        return m_manifest.namespaceId.empty() ? m_manifest.id.c_str() : m_manifest.namespaceId.c_str();
     }
     int priority() const override {
         return m_manifest.priority;
@@ -63,6 +67,8 @@ class FolderContentPack final : public IContentPack {
     std::optional<AIScript> loadAIScript(const char* name) override;
     std::optional<EntityDefData> loadEntityDef(const char* name) override;
     std::optional<SensorDefData> loadSensorDef(const char* name) override;
+    std::optional<WeaponDefData> loadWeaponDef(const char* name) override;
+    std::optional<ManualProse> loadManualProse(const char* name) override;
 
     std::vector<std::string> listAssets(AssetType type) const override;
 

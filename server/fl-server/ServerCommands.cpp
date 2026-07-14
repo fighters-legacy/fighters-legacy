@@ -579,7 +579,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             // ctx.env.loadAIScript reads from a pre-loaded read-only cache — safe from any thread.
             std::string luaScriptSrc;
             std::string luaScriptRoot;
-            std::string effectiveBehavior = behavior; // may change to "lua" from aiScriptId auto-detect
+            std::string effectiveBehavior = behavior; // may change to "lua" from aiScriptAsset auto-detect
 
             if (behavior == "lua") {
                 if (!ctx.env.loadAIScript)
@@ -598,12 +598,12 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             } else if (behavior.empty() && ctx.sim.typeRegistry && ctx.env.loadAIScript) {
                 // Auto-detect: check if the entity type has a default AI script.
                 const fl::EntityDef* def = ctx.sim.typeRegistry->findById(typeId.c_str());
-                if (def && !def->aiScriptId.empty()) {
-                    auto [src, root] = ctx.env.loadAIScript(def->aiScriptId);
+                if (def && !def->aiScriptAsset.empty()) {
+                    auto [src, root] = ctx.env.loadAIScript(def->aiScriptAsset);
                     if (!src.empty()) {
                         luaScriptSrc = std::move(src);
                         luaScriptRoot = std::move(root);
-                        effectiveBehavior = "lua:" + def->aiScriptId;
+                        effectiveBehavior = "lua:" + def->aiScriptAsset;
                     }
                 }
             }

@@ -252,7 +252,7 @@ absent, because it flies.
 
 | Field | Type | Description |
 |---|---|---|
-| `id` | string | Pack-scoped identifier, e.g. `aim120c`. Referenced by entity hardpoints |
+| `id` | string | **Def ID** — namespaced, e.g. `fl-base:aim120c`. This is what an entity's hardpoints reference; it is not a filename |
 | `name` | string | Display name |
 | `type` | string | `missile`, `bomb`, `rocket`, `gun`, `pod` |
 | `category` | string | `air-to-air`, `air-to-ground`, `air-to-sea`, `anti-radiation` |
@@ -492,7 +492,7 @@ id      = "fl-base:f15c"
 name    = "F-15C Eagle"
 category = "air_vehicle"
 max_hp  = 300.0
-mesh    = "aircraft/f15c"
+mesh    = "f15c"   # ASSET NAME: resolves to aircraft/f15c.glb
 sensors = ["fl-base:eyeball", "fl-base:apg63"]   # what it can see WITH
 
 [signatures]                                      # what it can be seen AS
@@ -960,6 +960,34 @@ icon      = "icons/ranks/ace.png"
 
 ---
 
+## Asset names vs. def IDs — read this before you write anything
+
+**There are two kinds of string in a content pack, they are not interchangeable, and getting them
+backwards is the single most common way to ship a pack that silently does nothing.**
+
+| | What it is | What it looks like | Where it may appear |
+|---|---|---|---|
+| **Asset name** | A **file**, minus its directory and extension — a bare stem. `FolderContentPack` prepends the directory and appends the extension itself. | `f5e` | `mesh`, `cockpit`, `flight_model`, `ai_script`, `damage_mesh`, `manual` |
+| **Def ID** | A **definition inside a file**, namespaced by the pack that owns it. It is never a filename, and it never touches the filesystem. | `fl-base:apq159` | `entity.id`, `entity.sensors`, `hardpoints.allowed`, `hardpoints.default` |
+
+So `mesh = "f5e"` resolves to `<pack>/aircraft/f5e.glb`. Writing `mesh = "aircraft/f5e"` resolves to
+`<pack>/aircraft/aircraft/f5e.glb`, which does not exist — **and the aircraft renders nothing.**
+
+Conversely, `sensors = ["fl-base:apq159"]` is looked up in the pack's *sensor index* — the engine
+finds whichever file declares `[sensor] id = "fl-base:apq159"`, whatever that file is called. Def IDs
+are matched case-insensitively, and an ID containing `/` or `\` is rejected outright.
+
+Your pack declares its namespace in `manifest.toml`:
+
+```toml
+[mod]
+id        = "fl-base-pack"   # the pack's identity, and its directory name
+namespace = "fl-base"        # the prefix every def ID in this pack carries
+```
+
+`namespace` defaults to `id` if omitted. A def whose ID prefix disagrees with its pack's namespace
+still loads, but the engine logs a warning — it is almost always a typo.
+
 ## Entity Definition TOML
 
 Controls what an entity is: its mesh, HP, damage model, flight physics, and optional default
@@ -972,7 +1000,7 @@ Lua AI script. Place entity definition files anywhere in the pack directory (typ
 |------------|--------|---------------------------------------------------------|
 | `id`       | string | Pack-scoped identifier, e.g. `fl-base:f15c`            |
 | `name`     | string | Human-readable display name                             |
-| `category` | string | `air_vehicle`, `ground_vehicle`, `naval`, `projectile`, `structure` |
+| `category` | string | `air_vehicle`, `ground_vehicle`, `naval_vehicle`, `projectile`, `effect`, `player` |
 | `max_hp`   | float  | Maximum hit points                                      |
 
 **Optional fields:**
@@ -980,7 +1008,8 @@ Lua AI script. Place entity definition files anywhere in the pack directory (typ
 | Field               | Type   | Default | Description                                                |
 |---------------------|--------|---------|------------------------------------------------------------|
 | `mesh`              | string | `""`    | Primary glTF asset name (renderer)                         |
-| `classic_damage_mesh` | string | `""` | Battle-damaged glTF variant (renderer)                     |
+| `cockpit`           | string | `""`    | Cockpit interior glTF **asset name** |
+| `manual`            | string | `""`    | Hand-written manual prose (`manual/<name>.md`); the performance numbers are **generated**, never authored |
 | `flight_model`      | string | `""`    | Flight model TOML asset name; empty = builtin UFO model (server-side only) |
 | `ai_script`         | string | `""`    | Lua AI script name from the pack's `ai/` directory; auto-assigned when spawned without `--ai`; empty = no scripted AI (server-side only) |
 | `sensors`           | string[] | `[]`  | Sensor-def IDs this entity carries (see [Sensor Data](#sensor-data--toml)); empty = the builtin eyeball for AI-controlled entities |
@@ -993,9 +1022,9 @@ id           = "fl-base:f15c"
 name         = "F-15C Eagle"
 category     = "air_vehicle"
 max_hp       = 300.0
-mesh         = "aircraft/f15c"
-flight_model = "flight/f15c"
-ai_script    = "f15c_patrol"
+mesh         = "f15c"          # ASSET NAME -> aircraft/f15c.glb  (NOT "aircraft/f15c")
+flight_model = "f15c"          # ASSET NAME -> aircraft/f15c.toml
+ai_script    = "f15c_patrol"   # ASSET NAME -> ai/f15c_patrol.lua
 sensors      = ["fl-base:eyeball", "fl-base:apg63"]
 
 [signatures]
@@ -1028,19 +1057,19 @@ control_factor   = 0.30
 avionics_failure = true
 
 [classic]
-damage_mesh = "aircraft/f15c_dmg"
+damage_mesh = "f15c_dmg"   # ASSET NAME -> aircraft/f15c_dmg.glb
 
 [[hardpoints]]
 slot    = 0
 type    = "missile"
-allowed = ["aim120c", "aim9x"]
-default = "aim120c"
+allowed = ["fl-base:aim120c", "fl-base:aim9x"]   # DEF IDS, resolved through the pack index
+default = "fl-base:aim120c"
 
 [[hardpoints]]
 slot    = 4
 type    = "bomb"
-allowed = ["gbu12", "mk82"]
-default = "gbu12"
+allowed = ["fl-base:gbu12", "fl-base:mk82"]
+default = "fl-base:gbu12"
 ```
 
 ### `[[hardpoints]]` (optional) — weapon stations

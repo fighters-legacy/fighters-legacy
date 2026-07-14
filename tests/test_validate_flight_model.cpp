@@ -15,8 +15,6 @@ type         = "fighter"
 engine_type  = "turbofan"
 has_fbw      = false
 cruise_alt_m = 10000
-mesh         = "generic"
-cockpit      = "generic_hud"
 
 [flight_model]
 mass_kg      = 12000.0
@@ -107,6 +105,17 @@ TEST_CASE("valid generic fighter TOML passes", "[flight-model-validator]") {
     CHECK(r.errors.empty());
 }
 
+TEST_CASE("a flight model with no mesh and no cockpit validates clean", "[flight-model-validator]") {
+    // kValidFighter declares neither (#813): asset wiring belongs to the entity def, so the
+    // validator has no business demanding it of an aerodynamic model.
+    auto r = validateFlightModel(kValidFighter);
+    REQUIRE(r.ok);
+    for (const auto& e : r.errors)
+        CHECK(e.find("mesh") == std::string::npos);
+    for (const auto& e : r.errors)
+        CHECK(e.find("cockpit") == std::string::npos);
+}
+
 TEST_CASE("malformed TOML fails with parse error", "[flight-model-validator]") {
     auto r = validateFlightModel("not valid toml {{{{");
     CHECK_FALSE(r.ok);
@@ -155,6 +164,92 @@ TEST_CASE("mass_kg below fighter range produces warning, not error", "[flight-mo
     CHECK(r.ok);
     REQUIRE(!r.warnings.empty());
     CHECK(r.warnings[0].find("mass_kg") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// Plausibility bands (#815) — the light-fighter class must not be excluded.
+//
+// The old bands (mass [8000, 25000], area [25, 75], span [8, 20]) were calibrated on the
+// F-15/F-16/F-18 class. An honest F-5E Tiger II trips two of the three, and so would a MiG-21, a
+// Gnat, or a Tejas. The F-5E IS a fighter and must be declared `type = "fighter"` — calling it a
+// trainer to dodge a lint would be a lie in the content to work around a bug in the tool.
+// ---------------------------------------------------------------------------
+
+// Applies a real aircraft's geometry to the generic-fighter fixture.
+static std::string withGeometry(const char* type, double mass, double area, double span) {
+    std::string s = patch(kValidFighter, "mass_kg      = 12000.0", ("mass_kg      = " + std::to_string(mass)).c_str());
+    s = patch(s.c_str(), "wing_area_m2 = 35.0", ("wing_area_m2 = " + std::to_string(area)).c_str());
+    s = patch(s.c_str(), "wingspan_m   = 10.0", ("wingspan_m   = " + std::to_string(span)).c_str());
+    s = patch(s.c_str(), "type         = \"fighter\"", (std::string("type         = \"") + type + "\"").c_str());
+    return s;
+}
+
+TEST_CASE("F-5E Tiger II geometry produces ZERO warnings", "[flight-model-validator]") {
+    // 4349 kg, 17.28 m^2, 8.13 m => wing loading 252 kg/m^2, aspect ratio 3.83.
+    // This is the whole point of #815: fl-base-pack's first aircraft must validate clean.
+    auto r = withGeometry("fighter", 4349.0, 17.28, 8.13);
+    auto res = validateFlightModel(r);
+    CHECK(res.ok);
+    INFO("warnings: " << (res.warnings.empty() ? std::string("none") : res.warnings[0]));
+    CHECK(res.warnings.empty());
+}
+
+TEST_CASE("F-15C geometry still produces zero warnings", "[flight-model-validator]") {
+    // No regression at the other end of the class: 20 200 kg, 56.5 m^2, 13.05 m
+    // => wing loading 358, aspect ratio 3.01.
+    auto res = validateFlightModel(withGeometry("fighter", 20200.0, 56.5, 13.05));
+    CHECK(res.ok);
+    INFO("warnings: " << (res.warnings.empty() ? std::string("none") : res.warnings[0]));
+    CHECK(res.warnings.empty());
+}
+
+TEST_CASE("T-38A Talon geometry produces zero warnings as a trainer", "[flight-model-validator]") {
+    // 3270 kg, 15.79 m^2, 7.7 m => wing loading 207, aspect ratio 3.76.
+    auto res = validateFlightModel(withGeometry("trainer", 3270.0, 15.79, 7.7));
+    CHECK(res.ok);
+    INFO("warnings: " << (res.warnings.empty() ? std::string("none") : res.warnings[0]));
+    CHECK(res.warnings.empty());
+}
+
+TEST_CASE("a mass entered in pounds is still caught", "[flight-model-validator]") {
+    // The F-5E's 4349 kg written as 9588 lb. The absolute band cannot see this (9588 is a
+    // perfectly plausible fighter mass in kg) -- but the WING LOADING can: 9588 / 17.28 = 555,
+    // which is at the very top of the fighter band, and the ratio check is what catches the
+    // egregious version below.
+    auto nearMiss = validateFlightModel(withGeometry("fighter", 9588.0, 17.28, 8.13));
+    CHECK(nearMiss.ok); // still only warnings, never a hard failure
+
+    // A gross unit error -- an F-15C's 44 500 lb entered as kg -- IS caught by the absolute band.
+    auto gross = validateFlightModel(withGeometry("fighter", 44500.0, 56.5, 13.05));
+    REQUIRE(!gross.warnings.empty());
+    bool named = false;
+    for (const auto& w : gross.warnings)
+        if (w.find("mass_kg") != std::string::npos)
+            named = true;
+    CHECK(named);
+}
+
+TEST_CASE("an implausible wing loading is warned even when the absolutes pass", "[flight-model-validator]") {
+    // 20 000 kg on an F-5E's wing: every absolute is in range, but 1157 kg/m^2 is not an aeroplane.
+    // This is the class of error the old absolute-only bands could not see at all.
+    auto res = validateFlightModel(withGeometry("fighter", 20000.0, 17.28, 8.13));
+    CHECK(res.ok);
+    bool named = false;
+    for (const auto& w : res.warnings)
+        if (w.find("wing loading") != std::string::npos)
+            named = true;
+    CHECK(named);
+}
+
+TEST_CASE("an implausible aspect ratio is warned", "[flight-model-validator]") {
+    // A 25 m span on a 17.28 m^2 wing: AR 36, a sailplane, not a fighter.
+    auto res = validateFlightModel(withGeometry("fighter", 4349.0, 17.28, 25.0));
+    CHECK(res.ok);
+    bool named = false;
+    for (const auto& w : res.warnings)
+        if (w.find("aspect ratio") != std::string::npos)
+            named = true;
+    CHECK(named);
 }
 
 TEST_CASE("cl_table with 3 alpha breakpoints fails", "[flight-model-validator]") {
@@ -334,4 +429,88 @@ TEST_CASE("bomber type does not trigger fighter mass warning", "[flight-model-va
     auto r = validateFlightModel(s);
     CHECK(r.ok);
     CHECK(r.warnings.empty());
+}
+
+// ---------------------------------------------------------------------------
+// [aero.cd_table] (#820)
+// ---------------------------------------------------------------------------
+
+static std::string withCdTable(const char* extra, const char* kValue = "k             = 0.0") {
+    std::string s = patch(kValidFighter, "k             = 0.14", kValue);
+    s += std::string("\n[aero.cd_table]\n") + extra;
+    return s;
+}
+
+static constexpr const char* kGoodCdTable = "alpha  = [-10, 0, 10, 20]\n"
+                                            "mach   = [0.3, 0.9]\n"
+                                            "values = [0.10, 0.12, 0.02, 0.03, 0.08, 0.10, 0.30, 0.34]\n";
+
+TEST_CASE("a valid cd_table passes", "[flight-model-validator]") {
+    auto r = validateFlightModel(withCdTable(kGoodCdTable));
+    INFO("errors: " << (r.errors.empty() ? std::string("none") : r.errors[0]));
+    CHECK(r.ok);
+    CHECK(r.errors.empty());
+}
+
+TEST_CASE("cd_table with a non-zero drag_polar.k is an ERROR", "[flight-model-validator]") {
+    // The double-count guard: a cd_table is TOTAL clean drag and already includes induced drag, so
+    // a non-zero k would silently apply roughly twice the intended drag.
+    auto r = validateFlightModel(withCdTable(kGoodCdTable, "k             = 0.14"));
+    CHECK_FALSE(r.ok);
+    bool found = false;
+    for (const auto& e : r.errors)
+        if (e.find("double-count") != std::string::npos)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("cd_table with 3 alpha breakpoints fails", "[flight-model-validator]") {
+    auto r = validateFlightModel(withCdTable("alpha  = [-10, 0, 10]\n"
+                                             "mach   = [0.3, 0.9]\n"
+                                             "values = [0.1, 0.12, 0.02, 0.03, 0.08, 0.10]\n"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("cd_table values size mismatch fails", "[flight-model-validator]") {
+    auto r = validateFlightModel(withCdTable("alpha  = [-10, 0, 10, 20]\n"
+                                             "mach   = [0.3, 0.9]\n"
+                                             "values = [0.10, 0.12, 0.02, 0.03, 0.08]\n"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("cd_table with a non-positive CD fails", "[flight-model-validator]") {
+    // A zero or negative CD is a transcription error; the aircraft would accelerate under its drag.
+    auto r = validateFlightModel(withCdTable("alpha  = [-10, 0, 10, 20]\n"
+                                             "mach   = [0.3, 0.9]\n"
+                                             "values = [0.10, 0.12, 0.0, 0.03, 0.08, 0.10, 0.30, 0.34]\n"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("a model with no cd_table still validates (the parabolic path is untouched)", "[flight-model-validator]") {
+    auto r = validateFlightModel(kValidFighter);
+    CHECK(r.ok);
+}
+
+// ---------------------------------------------------------------------------
+// Stall consistency (#816) — the check that makes alpha_stall_deg load-bearing.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("a cl_table peaking away from alpha_stall_deg is an ERROR", "[flight-model-validator]") {
+    // The engine does not clamp CL at the stall -- the table IS the stall. A model whose lift peaks
+    // at 25 deg while declaring it departs at 18 is lying about itself, and the flag, the buffet, the
+    // HUD and #54's stall-speed gate all inherit the lie.
+    auto r = validateFlightModel(patch(kValidFighter, "alpha_stall_deg  = 18.0", "alpha_stall_deg  = 25.0"));
+    CHECK_FALSE(r.ok);
+    bool found = false;
+    for (const auto& e : r.errors)
+        if (e.find("alpha_stall_deg") != std::string::npos && e.find("peaks") != std::string::npos)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("a cl_table peaking within tolerance of alpha_stall_deg passes", "[flight-model-validator]") {
+    // The fixture's table peaks at 18 deg; 19 is inside the 2-degree tolerance (breakpoints are coarse).
+    auto r = validateFlightModel(patch(kValidFighter, "alpha_stall_deg  = 18.0", "alpha_stall_deg  = 19.0"));
+    INFO("errors: " << (r.errors.empty() ? std::string("none") : r.errors[0]));
+    CHECK(r.ok);
 }

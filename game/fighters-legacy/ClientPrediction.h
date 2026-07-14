@@ -31,8 +31,13 @@ class ClientPrediction {
   public:
     // Resolver: typeIndex → FlightModelData (or BuiltinFlightModel as fallback).
     // The lambda in Game.cpp captures EntityTypeRegistry + AssetManager and does
-    // the full lookup: typeIndex → entity def → flightModelId → parseFlightModel.
+    // the full lookup: typeIndex → entity def → flightModelAsset → parseFlightModel.
     using FlightModelResolver = std::function<std::shared_ptr<const FlightModelData>(uint32_t typeIndex)>;
+    // Resolver: typeIndex → what the type's default loadout costs the airframe (#812). The two floats
+    // arrive on MsgEntityTypeDef, so the client reads them off EntityDef rather than owning a weapon
+    // registry it has no other use for. Unset ⇒ a clean airframe — which would silently make the
+    // client lighter and slicker than the server, so Game.cpp always wires it.
+    using PayloadResolver = std::function<PayloadEffect(uint32_t typeIndex)>;
     // worldPos → terrain elevation (m) above the datum along the radial (TerrainStreamer::heightAt(dvec3)).
     // FlightIntegrator compares it against the geodetic altitude for radial ground contact (#477).
     using HeightQuery = std::function<float(glm::dvec3 worldPos)>;
@@ -43,8 +48,8 @@ class ClientPrediction {
     // Must be called before the first reconcile(). Resolver is invoked lazily on
     // first snapshot that contains the player's entry.
     // planetRadiusKm: from MsgConnectAck; used to match the server's gravity field.
-    void init(PredictionSettings cfg, FlightModelResolver resolver, HeightQuery heightQuery, uint32_t playerIdx,
-              uint32_t playerGen, float planetRadiusKm = 6371.f);
+    void init(PredictionSettings cfg, FlightModelResolver resolver, PayloadResolver payloadResolver,
+              HeightQuery heightQuery, uint32_t playerIdx, uint32_t playerGen, float planetRadiusKm = 6371.f);
 
     // Called before each MsgClientInput is sent. Pushes input into the history
     // ring and steps the local integrator one tick (if initialized).
@@ -79,13 +84,22 @@ class ClientPrediction {
 
     PredictionSettings m_cfg{};
     FlightModelResolver m_resolver;
+    PayloadResolver m_payloadResolver;
     HeightQuery m_heightQuery;
     uint32_t m_playerIdx{0};
     uint32_t m_playerGen{0};
     float m_planetRadiusKm{6371.f};
 
+    // The server tick this integrator's state corresponds to. Set from the snapshot in reconcile()
+    // and advanced by one on every stepIntegrator() call, so a replayed input is seeded with the same
+    // tick the server used for it. It is the seed for the deterministic stall buffet (#816): if the
+    // delay estimate is off by a tick the buffet differs slightly, which reconciliation absorbs like
+    // any other prediction error -- unlike weather turbulence, which could never be reproduced at all.
+    uint64_t m_predictedTick{0};
+
     bool m_initialized{false};
     std::shared_ptr<const FlightModelData> m_model;
+    PayloadEffect m_payload{}; // resolved with m_model on the first snapshot; the server does the same at spawn
     std::unique_ptr<FlightIntegrator> m_integrator;
     // Stored when planetRadiusKm differs from Earth; setGravityField() holds a ref to it.
     std::optional<CentralGravityField> m_customGravity;

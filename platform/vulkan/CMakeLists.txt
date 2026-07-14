@@ -112,6 +112,9 @@ target_compile_definitions(platform-vulkan PRIVATE
 # resolver finds them at share/fighters-legacy/shaders/ (Linux/Windows) or
 # Contents/Resources/shaders/ (macOS .app).
 # ---------------------------------------------------------------------------
+# Shaders ship beside the game binary in the release archive (VkRenderer::resolveShaderDir looks for
+# "shaders/" next to the executable), so they belong to the runtime component (#814).
 install(FILES ${SPIRV_FILES}
-    DESTINATION share/fighters-legacy/shaders
+    DESTINATION shaders
+    COMPONENT runtime
 )

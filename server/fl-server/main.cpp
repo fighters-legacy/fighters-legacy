@@ -15,7 +15,6 @@
 //
 // See docs/fl-server-config.md for the full operator configuration reference.
 // fl-lobby integration is tracked in issue #36.
-#include "ContentBootstrap.h"
 #include "IpListFile.h"
 #include "NetworkFactory.h"
 #include "RconServer.h"
@@ -25,6 +24,7 @@
 #include "net/DiscoveryBeacon.h"
 #include "sensor/SensorDefParser.h"
 #include "server_config.h"
+#include <content/ContentBootstrap.h>
 
 #include <ILogger.h>
 #include <Platform.h>
@@ -40,6 +40,7 @@
 #include <console/CommandShell.h>
 #include <content/AssetManager.h>
 #include <content/BundledBaseTerrain.h>
+#include <content/ContentIndex.h>
 #include <content/ModLoader.h>
 #include <difficulty/DifficultyMultipliers.h>
 #include <entity/EntityDef.h>
@@ -57,6 +58,8 @@
 #include <render/TerrainStreamer.h>
 #include <stdfs/StdAsyncFilesystem.h>
 #include <stdfs/StdFilesystem.h>
+#include <weapon/Loadout.h>
+#include <weapon/WeaponRegistry.h>
 #include <weather/WeatherController.h>
 
 #include <array>
@@ -392,6 +395,28 @@ int main(int argc, char** argv) {
     // primeSpawnHeight() before they are queried.
     terrainStreamer.update(glm::dvec3(0.0, 0.0, 0.0));
 
+    // ---- Content index (#810) ----
+    // Def cross-references (an entity's `sensors`, a hardpoint's `allowed`/`default`) are namespaced
+    // IDS, while AssetManager resolves assets by FILENAME STEM. This index reconciles the two, once,
+    // and is the only place they meet: without it, `sensors = ["fl-base:apq159"]` builds the path
+    // "sensors/fl-base:apq159.toml" and every aircraft in the pack silently flies with no radar.
+    fl::ContentIndex contentIndex;
+    {
+        static constexpr fl::AssetType kIndexedTypes[] = {fl::AssetType::EntityDef, fl::AssetType::SensorDef};
+        contentIndex.build(assets, kIndexedTypes, *log);
+    }
+
+    // ---- Weapons (#812) ----
+    // Registered BEFORE entity defs, so an entity's hardpoints have weapons to resolve against.
+    // Keyed by id, so that resolution never touches the filesystem.
+    fl::WeaponRegistry weaponRegistry;
+    {
+        const uint32_t packWeapons = registerPackWeaponDefs(assets, weaponRegistry, *log);
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "content: %u pack weapon(s) registered", packWeapons);
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
+
     // ---- Entity system ----
     fl::EntityTypeRegistry entityRegistry;
     fl::EntityManager entityManager(*log, entityRegistry);
@@ -520,7 +545,7 @@ int main(int argc, char** argv) {
     // terrain — the mesh then rests ON the ground.
     broadcaster.setGroundElevationQuery(
         [&terrainStreamer](glm::dvec3 pos) { return static_cast<float>(terrainStreamer.heightAt(pos)); });
-    // Resolve EntityDef::flightModelId -> parsed FlightModelData on the spawn path. Loads the raw
+    // Resolve EntityDef::flightModelAsset -> parsed FlightModelData on the spawn path. Loads the raw
     // TOML asset via AssetManager, parses it with engine-flight's parseFlightModel, and caches the
     // result by id (sim-thread-only access). Empty/unknown ids fall back to the builtin model in
     // WorldBroadcaster.
@@ -537,31 +562,16 @@ int main(int argc, char** argv) {
             (*fmCache)[id] = model; // cache misses too, so a bad id isn't re-parsed every connect
             return model;
         });
-    // Resolve EntityDef::sensorIds -> parsed SensorDef on the spawn path (#685), the same shape as
-    // the flight-model resolver above. An unknown id logs once and is skipped: the entity keeps the
-    // rest of its suite (and, if it ends up with none, the builtin eyeball) rather than being denied
-    // a spawn because one sensor file is missing.
-    auto sensorCache =
-        std::make_shared<std::unordered_map<std::string, std::shared_ptr<const fl::sensor::SensorDef>>>();
-    broadcaster.setSensorDefResolver(
-        [&assets, log, sensorCache](const std::string& id) -> std::shared_ptr<const fl::sensor::SensorDef> {
-            if (auto it = sensorCache->find(id); it != sensorCache->end())
-                return it->second;
-            std::shared_ptr<const fl::sensor::SensorDef> def;
-            if (auto raw = assets.loadSensorDef(id.c_str()); raw && !raw->bytes.empty()) {
-                try {
-                    def = std::make_shared<const fl::sensor::SensorDef>(fl::sensor::parseSensorDef(
-                        std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size())));
-                } catch (const std::exception& e) {
-                    log->log(fl::LogLevel::Warn, __FILE__, __LINE__,
-                             ("sensor def '" + id + "' failed to parse: " + e.what()).c_str());
-                }
-            } else {
-                log->log(fl::LogLevel::Warn, __FILE__, __LINE__, ("unknown sensor def id: " + id).c_str());
-            }
-            (*sensorCache)[id] = def; // cache misses too, so a bad id isn't re-parsed every spawn
-            return def;
-        });
+    // What an entity's DEFAULT loadout costs it in mass and drag (#812). Same injection shape as the
+    // resolvers above -- the summation lives in engine-weapon, and engine-net must not link it.
+    // Unset would mean every aircraft flies clean, which is exactly the bug this closes.
+    broadcaster.setPayloadResolver([&weaponRegistry, log](const fl::EntityDef& def) -> fl::PayloadEffect {
+        return fl::defaultPayload(def, weaponRegistry, *log);
+    });
+
+    // Resolve EntityDef::sensorIds -> parsed SensorDef on the spawn path (#685). A sensor reference
+    // is an ID, not an asset name, so it goes through ContentIndex (#810) -- see makeSensorDefResolver.
+    broadcaster.setSensorDefResolver(fl::makeSensorDefResolver(assets, contentIndex, *log));
     broadcaster.setSensorCheckHz(static_cast<float>(cfg.sensorCheckHz));
 
     // ---- Server-side difficulty (#682) -----------------------------------------------------------

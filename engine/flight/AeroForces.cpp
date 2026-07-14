@@ -67,7 +67,28 @@ std::array<float, 3> computeForces(float alpha_rad, float beta_rad, float mach, 
     float cd_device =
         ctrl.speedbrake * data.drag_polar.speedbrake_cd + (ctrl.gear_down ? data.drag_polar.gear_cd : 0.f);
 
-    float cd_total = cd0 + k_eff * cl * cl + cd_wave + cd_device;
+    // Clean drag: tabulated when the model provides one, parabolic otherwise (#820).
+    //
+    // A cd_table is TOTAL clean drag — it already contains the induced term, because that is how real
+    // aerodynamic data is published (NASA TP-1538 gives the F-16's CD against alpha and Mach; it
+    // cannot be transcribed into cd0 + k*CL^2 at all). So the table REPLACES the parabolic pair
+    // rather than adding to it: summing them would double-count induced drag, a silent 2x drag bug
+    // that a content author has no way to debug. The validator makes authoring both an error.
+    //
+    // Device drag, wave drag and the payload's cd0 still add on top of either path — they are
+    // additive and independent of how the clean airframe's drag was expressed.
+    float cd_clean;
+    if (data.cd_table) {
+        cd_clean = data.cd_table->lookup(alpha_deg, mach) + payload.extra_cd0;
+        if (data.wing_sweep) {
+            auto sc = sweepCorrection(current_sweep_deg, *data.wing_sweep);
+            cd_clean += sc.cd0_delta;
+        }
+    } else {
+        cd_clean = cd0 + k_eff * cl * cl;
+    }
+
+    float cd_total = cd_clean + cd_wave + cd_device;
     float drag = q_dyn * S * cd_total; // N, opposing velocity
 
     // ── Thrust ────────────────────────────────────────────────────────────────

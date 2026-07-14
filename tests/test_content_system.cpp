@@ -366,6 +366,9 @@ static std::vector<std::unique_ptr<IContentPack>> makePacks(MockContentPack* pac
         const char* id() const override {
             return p->id();
         }
+        const char* namespaceId() const override {
+            return p->namespaceId();
+        }
         int priority() const override {
             return p->priority();
         }
@@ -407,6 +410,12 @@ static std::vector<std::unique_ptr<IContentPack>> makePacks(MockContentPack* pac
         }
         std::optional<SensorDefData> loadSensorDef(const char* n) override {
             return p->loadSensorDef(n);
+        }
+        std::optional<WeaponDefData> loadWeaponDef(const char* n) override {
+            return p->loadWeaponDef(n);
+        }
+        std::optional<ManualProse> loadManualProse(const char* n) override {
+            return p->loadManualProse(n);
         }
         std::vector<std::string> listAssets(AssetType t) const override {
             return p->listAssets(t);
@@ -1447,7 +1456,14 @@ TEST_CASE("AssetManager::initialize keeps pack when NeedsConfiguration and confi
 // ---------------------------------------------------------------------------
 
 static FolderContentPack::Manifest makeTestManifest() {
-    return {"Test Mod", "test-mod", "1.0.0", "1.0", 10};
+    FolderContentPack::Manifest m;
+    m.name = "Test Mod";
+    m.id = "test-mod";
+    m.namespaceId = "test-mod";
+    m.version = "1.0.0";
+    m.engineApi = "1.0";
+    m.priority = 10;
+    return m;
 }
 
 TEST_CASE("FolderContentPack::loadConfig returns file content when present", "[content]") {
@@ -1849,4 +1865,34 @@ TEST_CASE("AssetManager::findPackRootForAsset returns empty string when asset no
 
     std::string root = am.findPackRootForAsset(AssetType::AIScript, "nonexistent");
     CHECK(root.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Every AssetType must have a real path row in FolderContentPack (regression).
+//
+// The size static_assert on kAssetPaths is TAUTOLOGICAL: the array's length is *defined* as
+// AssetType::Count, so adding an enumerator without adding a row does not shorten the array -- it
+// leaves the row value-initialized (`subdir == nullptr`). listAssets() for that type then evaluates
+// `m_modDir + "/" + nullptr` and segfaults.
+//
+// This is not hypothetical. It shipped: AssetType::Weapon was added without its row, every unit test
+// passed (they use mock packs, not FolderContentPack), and fl-server crashed on the first real
+// content pack. This test exercises the REAL pack for EVERY asset type, so the next person to add one
+// finds out here.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("FolderContentPack: every AssetType resolves a path without crashing", "[content]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    FolderContentPack pack(fs, logger, "mods/test", makeTestManifest());
+
+    for (uint8_t i = 0; i < static_cast<uint8_t>(AssetType::Count); ++i) {
+        const auto type = static_cast<AssetType>(i);
+        INFO("AssetType ordinal " << static_cast<int>(i));
+
+        // Both of these paste kAssetPaths[type].subdir into a std::string. A missing row is a nullptr
+        // there, and this is where it goes bang.
+        CHECK_NOTHROW(pack.hasAsset("anything", type));
+        CHECK_NOTHROW(pack.listAssets(type));
+    }
 }

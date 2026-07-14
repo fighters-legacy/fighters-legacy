@@ -976,7 +976,7 @@ TEST_CASE("WorldBroadcaster: getTickBudget records per-phase timing after onTick
     CHECK(tb.other.mean >= 0.0);
 }
 
-TEST_CASE("WorldBroadcaster: flight model resolver is consulted for a flightModelId, falls back on miss",
+TEST_CASE("WorldBroadcaster: flight model resolver is consulted for a flightModelAsset, falls back on miss",
           "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;
@@ -984,7 +984,7 @@ TEST_CASE("WorldBroadcaster: flight model resolver is consulted for a flightMode
     fl::EntityManager em(logger, registry);
 
     fl::EntityDef def = makeDebugDef();
-    def.flightModelId = "models/x";
+    def.flightModelAsset = "models/x";
     registry.registerType(def);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -998,16 +998,16 @@ TEST_CASE("WorldBroadcaster: flight model resolver is consulted for a flightMode
     broadcaster.onConnect(0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
-    CHECK(requestedId == "models/x"); // resolver consulted with the entity's flightModelId
+    CHECK(requestedId == "models/x"); // resolver consulted with the entity's flightModelAsset
     CHECK(em.liveCount() == 1u);      // spawn still succeeded via the builtin fallback
 }
 
-TEST_CASE("WorldBroadcaster: flight model resolver is skipped when flightModelId is empty", "[world_broadcaster]") {
+TEST_CASE("WorldBroadcaster: flight model resolver is skipped when flightModelAsset is empty", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;
     fl::EntityTypeRegistry registry;
     fl::EntityManager em(logger, registry);
-    registry.registerType(makeDebugDef()); // empty flightModelId
+    registry.registerType(makeDebugDef()); // empty flightModelAsset
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 

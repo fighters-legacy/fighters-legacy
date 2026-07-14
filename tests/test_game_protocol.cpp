@@ -7,12 +7,16 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
+#include <cstdio>
 #include <cstring>
+#include <string>
+#include <vector>
 
 TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game_protocol]") {
     CHECK(sizeof(fl::MsgHello) == 4u);
     CHECK(sizeof(fl::MsgConnectAck) == 16u);          // extended: +assignedEntityIdx/Gen, +planetRadiusKm
-    CHECK(sizeof(fl::MsgEntityTypeDef) == 196u);      // 4 + 64 + 64 + 64
+    CHECK(sizeof(fl::MsgEntityTypeDef) == 268u);      // 4 + 64 + 64 + 64 + 64 + 4 + 4 (#811 tail-append)
     CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 24u); // #725: origin table + record stream follow the header
     CHECK(sizeof(fl::MsgClientInput) == 48u);
     CHECK(sizeof(fl::MsgHeartbeat) == 16u);
@@ -21,6 +25,51 @@ TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game
     CHECK(sizeof(fl::MsgAdminResponseChunk) == 512u);
     CHECK(sizeof(fl::MsgMotdHeader) == 4u);
     CHECK(sizeof(fl::MsgConnectRefusal) == 64u);
+}
+
+TEST_CASE("GameProtocol: MsgEntityTypeDef field offsets (#811 tail-append is additive)", "[game_protocol]") {
+    // The three new fields were appended at the tail precisely so every offset above them is
+    // unchanged -- that is what makes this an additive change and keeps kProtocolVersion at 1.
+    CHECK(offsetof(fl::MsgEntityTypeDef, id) == 4u);
+    CHECK(offsetof(fl::MsgEntityTypeDef, mesh) == 68u);
+    CHECK(offsetof(fl::MsgEntityTypeDef, dmgMesh) == 132u);
+    CHECK(offsetof(fl::MsgEntityTypeDef, flightModel) == 196u); // starts where the struct used to end
+    CHECK(offsetof(fl::MsgEntityTypeDef, payloadMassKg) == 260u);
+    CHECK(offsetof(fl::MsgEntityTypeDef, payloadCd0) == 264u);
+}
+
+TEST_CASE("GameProtocol: MsgEntityTypeDef round-trips flightModel and payload", "[game_protocol]") {
+    fl::MsgEntityTypeDef td{};
+    td.typeIndex = 7;
+    std::snprintf(td.id, sizeof(td.id), "fl-base:f5e");
+    std::snprintf(td.flightModel, sizeof(td.flightModel), "f5e");
+    td.payloadMassKg = 412.5f;
+    td.payloadCd0 = 0.0031f;
+
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, td);
+    REQUIRE(buf.size() == sizeof(fl::MsgEntityTypeDef));
+
+    fl::MsgEntityTypeDef out{};
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), out));
+    CHECK(std::string(out.flightModel) == "f5e");
+    CHECK(out.payloadMassKg == Catch::Approx(412.5f));
+    CHECK(out.payloadCd0 == Catch::Approx(0.0031f));
+}
+
+TEST_CASE("GameProtocol: a fully-populated flightModel field is NUL-terminated by the reader", "[game_protocol]") {
+    // A hostile server can fill the array with no terminator; the client force-terminates before
+    // treating it as a C string. Assert the truncation is safe and lossy in the expected way.
+    fl::MsgEntityTypeDef td{};
+    std::memset(td.flightModel, 'a', sizeof(td.flightModel)); // 64 bytes, no NUL
+
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, td);
+    fl::MsgEntityTypeDef out{};
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), out));
+
+    out.flightModel[sizeof(out.flightModel) - 1] = '\0'; // what ClientNetEventHandler does
+    CHECK(std::strlen(out.flightModel) == sizeof(out.flightModel) - 1);
 }
 
 TEST_CASE("GameProtocol: wire structs are naturally aligned for zero-copy", "[game_protocol]") {

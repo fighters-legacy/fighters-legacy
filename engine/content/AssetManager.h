@@ -40,6 +40,13 @@ class AssetManager {
     std::shared_ptr<AIScript> loadAIScript(const char* name);
     std::shared_ptr<EntityDefData> loadEntityDef(const char* name);
     std::shared_ptr<SensorDefData> loadSensorDef(const char* name);
+    std::shared_ptr<WeaponDefData> loadWeaponDef(const char* name);
+    std::shared_ptr<ManualProse> loadManualProse(const char* name);
+
+    // Type-generic accessor for the def asset types (EntityDef / SensorDef / ...), returning the
+    // same cached bytes the typed loader above would. ContentIndex uses it to shallow-parse an id
+    // out of every def without a switch over asset types; returns nullptr for a non-def type.
+    std::shared_ptr<AssetBase> loadDefBytes(AssetType type, const char* name);
 
     // Walks the priority stack. Returns the raw text of the first pack
     // that returns non-nullopt for loadConfig(name). Not cached.
@@ -49,6 +56,11 @@ class AssetManager {
     // that provides the given chunk, or nullopt if none do.
     std::optional<std::string> resolveTilePath(const char* terrainId, uint8_t face, uint8_t level, uint32_t i,
                                                uint32_t j, TileLayer layer);
+
+    // Returns the highest-priority content pack that owns the named asset, or nullptr.
+    // ContentIndex uses it to attribute a def id to the pack that declared it, so a def whose id
+    // prefix disagrees with its pack's declared namespace can be reported.
+    const IContentPack* findPackForAsset(AssetType type, const char* name) const;
 
     // Returns the root directory of the first content pack that owns the named asset.
     // Used by LuaController to configure require() to the correct pack ai/ directory.

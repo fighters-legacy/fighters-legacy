@@ -4,6 +4,7 @@
 #include <toml++/toml.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <set>
 #include <string>
@@ -18,12 +19,46 @@ static constexpr int kClTableMachMin = 2;
 static constexpr int kMilThrustMachMin = 2;
 static constexpr int kMilThrustAltMin = 2;
 
-static constexpr double kFighterMassMin_kg = 8000.0;
-static constexpr double kFighterMassMax_kg = 25000.0;
-static constexpr double kFighterWingAreaMin_m2 = 25.0;
-static constexpr double kFighterWingAreaMax_m2 = 75.0;
-static constexpr double kFighterWingspanMin_m = 8.0;
-static constexpr double kFighterWingspanMax_m = 20.0;
+// The alpha at which cl_table peaks must agree with aero.limits.alpha_stall_deg to within this many
+// degrees (#816). Breakpoints are coarse, so the tolerance is one typical table step, not zero.
+static constexpr double kStallPeakToleranceDeg = 2.0;
+
+// ── plausibility bands ────────────────────────────────────────────────────────
+//
+// TWO KINDS OF CHECK, AND THEY ARE NOT THE SAME THING (#815).
+//
+// The ABSOLUTE bands below are wide, and deliberately so. An absolute band can only ever catch a
+// TYPO or a UNIT ERROR -- a mass entered in pounds, a wing area in square feet. It has no business
+// encoding a design philosophy. The old bands (mass [8000, 25000], area [25, 75]) were calibrated on
+// the F-15/F-16/F-18 class and excluded the entire light-fighter class: an honest F-5E Tiger II
+// (4349 kg, 17.28 m^2, 8.13 m) tripped two of the three, and so would a MiG-21, a Gnat or a Tejas.
+//
+// The RATIO bands are the ones that actually mean something, because they are class-independent:
+// wing loading and aspect ratio are what make an aeroplane a fighter, and the F-5E, the F-15C and
+// the F-16 all sit comfortably inside them despite a 3x spread in mass.
+//
+// We deliberately did NOT add a `light_fighter` aircraft type. That would push a validator's problem
+// into the content schema and make every pack author pick a bucket to satisfy a lint. The content
+// describes the aircraft; it does not describe the validator's taxonomy.
+
+static constexpr double kMassMin_kg = 3000.0;   // below this, someone has typo'd
+static constexpr double kMassMax_kg = 40000.0;  // above this, it is not a fighter-class airframe
+static constexpr double kWingAreaMin_m2 = 12.0; // F-5E is 17.28
+static constexpr double kWingAreaMax_m2 = 90.0;
+static constexpr double kWingspanMin_m = 6.0; // F-5E is 8.13
+static constexpr double kWingspanMax_m = 24.0;
+
+// Wing loading (kg/m^2): F-5E 252, F-15C 225, F-16 ~330, T-38A 207.
+static constexpr double kFighterWingLoadingMin = 120.0;
+static constexpr double kFighterWingLoadingMax = 600.0;
+static constexpr double kTrainerWingLoadingMin = 100.0;
+static constexpr double kTrainerWingLoadingMax = 400.0;
+
+// Aspect ratio (b^2/S): F-5E 3.83, F-15C 3.01, F-16 3.2, T-38A 3.76.
+static constexpr double kFighterAspectRatioMin = 1.5;
+static constexpr double kFighterAspectRatioMax = 5.0;
+static constexpr double kTrainerAspectRatioMin = 2.5;
+static constexpr double kTrainerAspectRatioMax = 6.0;
 
 // ── valid enum strings ────────────────────────────────────────────────────────
 
@@ -90,14 +125,9 @@ static void validateAircraft(const toml::table& tbl, FlightModelValidationResult
         r.errors.push_back("aircraft.engine_type: unknown value \"" + *et_str + "\"");
         r.ok = false;
     }
-    if (!ac["mesh"].value<std::string>()) {
-        r.errors.push_back("missing aircraft.mesh");
-        r.ok = false;
-    }
-    if (!ac["cockpit"].value<std::string>()) {
-        r.errors.push_back("missing aircraft.cockpit");
-        r.ok = false;
-    }
+    // aircraft.mesh / aircraft.cockpit are NOT required (#813): a flight model is aerodynamics and
+    // does not know what it looks like. Asset wiring belongs to the entity def (entity.mesh /
+    // entity.cockpit), which is where the renderer has always read it from.
 }
 
 static void validateFlightModelGeometry(const toml::table& tbl, FlightModelValidationResult& r,
@@ -140,19 +170,42 @@ static void validateFlightModelGeometry(const toml::table& tbl, FlightModelValid
     checkPos("iyy_kg_m2");
     checkPos("izz_kg_m2");
 
-    if (aircraftType == "fighter") {
-        if (mass && (*mass > 0.0) && (*mass < kFighterMassMin_kg || *mass > kFighterMassMax_kg))
-            r.warnings.push_back("flight_model.mass_kg " + std::to_string(*mass) +
-                                 " is outside typical fighter range [" + std::to_string(kFighterMassMin_kg) + ", " +
-                                 std::to_string(kFighterMassMax_kg) + "]");
-        if (wing && (*wing > 0.0) && (*wing < kFighterWingAreaMin_m2 || *wing > kFighterWingAreaMax_m2))
-            r.warnings.push_back("flight_model.wing_area_m2 " + std::to_string(*wing) +
-                                 " is outside typical fighter range [" + std::to_string(kFighterWingAreaMin_m2) + ", " +
-                                 std::to_string(kFighterWingAreaMax_m2) + "]");
-        if (span && (*span > 0.0) && (*span < kFighterWingspanMin_m || *span > kFighterWingspanMax_m))
-            r.warnings.push_back("flight_model.wingspan_m " + std::to_string(*span) +
-                                 " is outside typical fighter range [" + std::to_string(kFighterWingspanMin_m) + ", " +
-                                 std::to_string(kFighterWingspanMax_m) + "]");
+    // `interceptor` and `attacker` are the same class of aeroplane for this purpose.
+    const bool isFighterClass =
+        (aircraftType == "fighter" || aircraftType == "interceptor" || aircraftType == "attacker");
+    const bool isTrainer = (aircraftType == "trainer");
+    if (!isFighterClass && !isTrainer)
+        return;
+
+    auto band = [&](const char* field, double value, double lo, double hi, const char* what) {
+        if (value < lo || value > hi)
+            r.warnings.push_back(std::string(field) + " " + std::to_string(value) + " is outside the plausible " +
+                                 what + " range [" + std::to_string(lo) + ", " + std::to_string(hi) + "]");
+    };
+
+    // Absolutes: unit-error and typo detection only (see the note on the constants).
+    if (mass && *mass > 0.0)
+        band("flight_model.mass_kg", *mass, kMassMin_kg, kMassMax_kg, "airframe");
+    if (wing && *wing > 0.0)
+        band("flight_model.wing_area_m2", *wing, kWingAreaMin_m2, kWingAreaMax_m2, "airframe");
+    if (span && *span > 0.0)
+        band("flight_model.wingspan_m", *span, kWingspanMin_m, kWingspanMax_m, "airframe");
+
+    // Ratios: the checks that actually describe an aeroplane, and the reason the F-5E and the F-15C
+    // can both pass despite a 3x difference in mass.
+    if (mass && wing && *mass > 0.0 && *wing > 0.0) {
+        const double wingLoading = *mass / *wing;
+        band("wing loading (mass_kg / wing_area_m2)", wingLoading,
+             isTrainer ? kTrainerWingLoadingMin : kFighterWingLoadingMin,
+             isTrainer ? kTrainerWingLoadingMax : kFighterWingLoadingMax,
+             isTrainer ? "trainer wing-loading" : "fighter wing-loading");
+    }
+    if (span && wing && *span > 0.0 && *wing > 0.0) {
+        const double aspectRatio = (*span * *span) / *wing;
+        band("aspect ratio (wingspan_m^2 / wing_area_m2)", aspectRatio,
+             isTrainer ? kTrainerAspectRatioMin : kFighterAspectRatioMin,
+             isTrainer ? kTrainerAspectRatioMax : kFighterAspectRatioMax,
+             isTrainer ? "trainer aspect-ratio" : "fighter aspect-ratio");
     }
 }
 
@@ -193,6 +246,115 @@ static void validateClTable(const toml::table& tbl, FlightModelValidationResult&
     }
 }
 
+// THE CHECK THAT MAKES alpha_stall_deg LOAD-BEARING (#816).
+//
+// The engine deliberately does NOT clamp CL at alpha_stall_deg -- the cl_table already carries the
+// post-stall collapse if the author wrote an honest one, and clamping on top would double-count the
+// stall and reward an author who did not. But that only works if the two agree. A model whose lift
+// peaks at 25 deg while declaring it stalls at 18 is lying about itself, and every consumer of the
+// flag -- buffet, HUD, AI, and #54's "stall speed matches design spec" gate -- inherits the lie.
+//
+// So: the alpha at which cl_table peaks must be within kStallPeakToleranceDeg of alpha_stall_deg.
+static void validateStallConsistency(const toml::table& tbl, FlightModelValidationResult& r) {
+    auto cl = tbl["aero"]["cl_table"];
+    auto stallNode = tbl["aero"]["limits"]["alpha_stall_deg"].value<double>();
+    if (!cl || !stallNode)
+        return; // missing sections are reported by their own validators
+
+    auto* alphaArr = cl["alpha"].as_array();
+    auto* valArr = cl["values"].as_array();
+    if (!alphaArr || !valArr || alphaArr->empty())
+        return;
+
+    const std::size_t alphaLen = alphaArr->size();
+    const std::size_t machLen = arrayLen(cl["mach"]);
+    if (machLen == 0 || valArr->size() != alphaLen * machLen)
+        return; // shape errors are reported by validateClTable
+
+    // Peak CL over the whole table: the highest lift the aircraft can make, at whichever alpha it
+    // happens at. Row-major, so row i (alpha i) spans [i*machLen, (i+1)*machLen).
+    double peakCl = -1e30;
+    double peakAlpha = 0.0;
+    for (std::size_t i = 0; i < alphaLen; ++i) {
+        for (std::size_t j = 0; j < machLen; ++j) {
+            auto v = valArr->get(i * machLen + j)->value<double>();
+            if (v && *v > peakCl) {
+                peakCl = *v;
+                auto a = alphaArr->get(i)->value<double>();
+                peakAlpha = a ? *a : 0.0;
+            }
+        }
+    }
+
+    const double declared = *stallNode;
+    if (std::abs(peakAlpha - declared) > kStallPeakToleranceDeg) {
+        r.errors.push_back("aero.cl_table peaks at alpha " + std::to_string(peakAlpha) +
+                           " deg but aero.limits.alpha_stall_deg declares " + std::to_string(declared) +
+                           " deg. The engine does not clamp CL at the stall -- the table IS the stall -- so the two "
+                           "must agree within " +
+                           std::to_string(kStallPeakToleranceDeg) + " deg or the model is lying about itself.");
+        r.ok = false;
+    }
+}
+
+// Optional tabulated total clean drag (#820). Same shape rules as cl_table.
+static void validateCdTable(const toml::table& tbl, FlightModelValidationResult& r) {
+    auto cd = tbl["aero"]["cd_table"];
+    if (!cd)
+        return; // optional -- the parabolic drag_polar remains the simple path
+
+    std::size_t alphaLen = arrayLen(cd["alpha"]);
+    std::size_t machLen = arrayLen(cd["mach"]);
+    if (static_cast<int>(alphaLen) < kClTableAlphaMin) {
+        r.errors.push_back("aero.cd_table.alpha must have at least " + std::to_string(kClTableAlphaMin) +
+                           " breakpoints (got " + std::to_string(alphaLen) + ")");
+        r.ok = false;
+    }
+    if (static_cast<int>(machLen) < kClTableMachMin) {
+        r.errors.push_back("aero.cd_table.mach must have at least " + std::to_string(kClTableMachMin) +
+                           " breakpoints (got " + std::to_string(machLen) + ")");
+        r.ok = false;
+    }
+
+    std::size_t valLen = arrayLen(cd["values"]);
+    if (alphaLen > 0 && machLen > 0) {
+        std::size_t expected = alphaLen * machLen;
+        if (valLen != expected) {
+            r.errors.push_back("aero.cd_table.values size mismatch: alpha=" + std::to_string(alphaLen) +
+                               " x mach=" + std::to_string(machLen) + " = " + std::to_string(expected) +
+                               " expected, got " + std::to_string(valLen));
+            r.ok = false;
+        }
+    }
+
+    // Drag is strictly positive. A zero or negative CD is a transcription error, and it would make
+    // the aircraft accelerate under its own drag.
+    if (auto* arr = cd["values"].as_array()) {
+        for (std::size_t i = 0; i < arr->size(); ++i) {
+            auto v = arr->get(i)->value<double>();
+            if (v && *v <= 0.0) {
+                r.errors.push_back("aero.cd_table.values[" + std::to_string(i) + "] must be > 0 (got " +
+                                   std::to_string(*v) + ")");
+                r.ok = false;
+                break;
+            }
+        }
+    }
+
+    // THE DOUBLE-COUNT GUARD. A cd_table is TOTAL clean drag -- it already includes the induced term.
+    // Authoring a non-zero drag_polar.k alongside it means the author believes one of the two is
+    // additive, and computeForces would silently apply roughly twice the drag they intended. That is
+    // exactly the class of bug a content author cannot debug from the outside, so it is an error, not
+    // a warning. Set k = 0.0 to say "the table owns the drag".
+    auto k = tbl["aero"]["drag_polar"]["k"].value<double>();
+    if (k && *k > 0.0) {
+        r.errors.push_back("aero.cd_table and a non-zero aero.drag_polar.k are both authored: the table is TOTAL "
+                           "clean drag and already includes induced drag, so k would double-count it. Set "
+                           "drag_polar.k = 0.0 when using cd_table.");
+        r.ok = false;
+    }
+}
+
 static void validateDragPolar(const toml::table& tbl, FlightModelValidationResult& r) {
     auto dp = tbl["aero"]["drag_polar"];
     if (!dp) {
@@ -221,7 +383,13 @@ static void validateDragPolar(const toml::table& tbl, FlightModelValidationResul
         }
     };
     checkPos("cd0");
-    checkPos("k");
+    // k must be positive on the parabolic path -- an aircraft with no induced drag is not an
+    // aircraft. But when a cd_table owns the drag (#820), k = 0.0 is exactly how the author declares
+    // that, and validateCdTable errors if it is anything else.
+    if (tbl["aero"]["cd_table"])
+        checkNonNeg("k");
+    else
+        checkPos("k");
     checkNonNeg("speedbrake_cd");
     checkNonNeg("gear_cd");
 }
@@ -610,6 +778,8 @@ FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
     validateAircraft(tbl, r, aircraftType);
     validateFlightModelGeometry(tbl, r, aircraftType);
     validateClTable(tbl, r);
+    validateStallConsistency(tbl, r);
+    validateCdTable(tbl, r);
     validateDragPolar(tbl, r);
     validateMoments(tbl, r);
     validateAeroLimits(tbl, r);

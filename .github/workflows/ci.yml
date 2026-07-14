@@ -170,6 +170,32 @@ jobs:
         run: .\build\debug-msvc\server\fl-server\fl-server.exe --version
         shell: pwsh
 
+      # A release is the worst possible place to discover that a binary stopped being packaged, so
+      # the check runs on the PR instead (#814). If a target is renamed in CMake, or dropped from the
+      # install set, THIS fails -- not the release three weeks later.
+      - name: Verify the release install set (Linux / macOS)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cmake --install build/debug --prefix /tmp/dist --component runtime
+          cmake --install build/debug --prefix /tmp/dist --component tools
+          missing=0
+          for f in fighters-legacy fl-server validate-flight-model validate-weapon validate-sensor \
+                   validate-mission validate-mesh validate-playlist validate-licenses tex-compress fm-trim; do
+            if [ ! -f "/tmp/dist/$f" ]; then echo "MISSING from the release archive: $f"; missing=1; fi
+          done
+          # fl-base-pack's CI downloads its validators from a fighters-legacy release; a missing one
+          # silently disables a content gate over there.
+          if [ ! -d /tmp/dist/shaders ] || [ -z "$(ls -A /tmp/dist/shaders)" ]; then
+            echo "MISSING from the release archive: compiled shaders"; missing=1
+          fi
+          # The FetchContent dependencies are not EXCLUDE_FROM_ALL, so an unscoped install would drag
+          # their headers and static libs into the archive. Component scoping is what stops that.
+          leaked=$(find /tmp/dist \( -name '*.h' -o -name '*.hpp' -o -name '*.a' -o -name '*.cmake' \) | wc -l)
+          if [ "$leaked" -ne 0 ]; then
+            echo "dependency files leaked into the release archive:"; find /tmp/dist \( -name '*.h' -o -name '*.a' \); missing=1
+          fi
+          exit $missing
+
       - name: Smoke test tools (Linux / macOS)
         if: matrix.os != 'windows-latest'
         run: |
@@ -178,6 +204,7 @@ jobs:
           ./build/debug/tools/validate-weapon --version
           ./build/debug/tools/validate-sensor --version
           ./build/debug/tools/validate-mesh --version
+          ./build/debug/tools/fm-trim --version
           # The builtin reference meshes (docs/modding/3d-models.md) must validate with zero
           # warnings or errors — clean validation prints nothing, so fail on any output.
           python3 tools/gen_builtin_glb.py --export-dir /tmp/builtin-meshes

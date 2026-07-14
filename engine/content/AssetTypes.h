@@ -17,6 +17,8 @@ enum class AssetType : uint8_t {
     AIScript,
     EntityDef,
     SensorDef,
+    Weapon,
+    Manual, // hand-written aircraft prose (#821); the NUMBERS are generated, never authored
     Count
 };
 
@@ -37,5 +39,7 @@ struct TerrainData : AssetBase {};
 struct AIScript : AssetBase {};
 struct EntityDefData : AssetBase {};
 struct SensorDefData : AssetBase {};
+struct WeaponDefData : AssetBase {};
+struct ManualProse : AssetBase {};
 
 } // namespace fl

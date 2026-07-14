@@ -58,6 +58,23 @@ add_executable(test_weapon_def_parser test_weapon_def_parser.cpp)
 target_link_libraries(test_weapon_def_parser PRIVATE Catch2::Catch2WithMain engine-weapon)
 catch_discover_tests(test_weapon_def_parser)
 
+# WeaponRegistry + defaultPayload (#812): a loadout that actually costs the airframe mass and drag.
+# fm-trim (#817): the tests LOCK the derived numbers, so they double as the engine's guard against
+# someone changing AeroForces.cpp and silently altering every aircraft's performance.
+# The generated aircraft manual (#821): retuning the flight model must move the manual.
+add_executable(test_aircraft_manual test_aircraft_manual.cpp)
+target_link_libraries(test_aircraft_manual PRIVATE Catch2::Catch2WithMain engine-manual engine-entity
+    engine-weapon engine-sensor)
+catch_discover_tests(test_aircraft_manual)
+
+add_executable(test_fm_trim test_fm_trim.cpp)
+target_link_libraries(test_fm_trim PRIVATE Catch2::Catch2WithMain fm-trim-lib)
+catch_discover_tests(test_fm_trim)
+
+add_executable(test_loadout test_loadout.cpp)
+target_link_libraries(test_loadout PRIVATE Catch2::Catch2WithMain engine-weapon engine-entity engine-flight)
+catch_discover_tests(test_loadout)
+
 add_executable(test_sensor_def_parser test_sensor_def_parser.cpp)
 target_link_libraries(test_sensor_def_parser PRIVATE Catch2::Catch2WithMain engine-sensor)
 catch_discover_tests(test_sensor_def_parser)
@@ -127,6 +144,11 @@ add_executable(test_content_system test_content_system.cpp)
 target_link_libraries(test_content_system PRIVATE Catch2::Catch2WithMain engine-content engine-difficulty
     engine-sensor)
 catch_discover_tests(test_content_system)
+
+add_executable(test_content_index test_content_index.cpp)
+target_link_libraries(test_content_index PRIVATE Catch2::Catch2WithMain engine-content)
+target_include_directories(test_content_index PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_content_index)
 
 add_executable(test_difficulty test_difficulty.cpp)
 target_link_libraries(test_difficulty PRIVATE Catch2::Catch2WithMain engine-difficulty)
@@ -259,12 +281,10 @@ if(TARGET platform-enet)
 
     # Server content bootstrap (#683): pack entity defs -> EntityTypeRegistry. Compiles the
     # server-layer helper directly (idiom from test_admin_console); mock_content.h from tests/.
-    add_executable(test_content_bootstrap test_content_bootstrap.cpp
-        "${CMAKE_SOURCE_DIR}/server/fl-server/ContentBootstrap.cpp")
+    add_executable(test_content_bootstrap test_content_bootstrap.cpp)
     target_link_libraries(test_content_bootstrap PRIVATE
-        Catch2::Catch2WithMain engine-content engine-entity)
+        Catch2::Catch2WithMain engine-bootstrap engine-content engine-entity engine-sensor engine-weapon)
     target_include_directories(test_content_bootstrap PRIVATE
-        "${CMAKE_SOURCE_DIR}/server/fl-server"
         "${CMAKE_CURRENT_SOURCE_DIR}")
     catch_discover_tests(test_content_bootstrap)
 
@@ -639,7 +659,8 @@ catch_discover_tests(test_server_notice)
 add_executable(test_client_net_event_handler test_client_net_event_handler.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     # ClientNetEventHandler dispatches MsgWingmanAck into the radio menu (#610).
-    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp")
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp")
 target_link_libraries(test_client_net_event_handler PRIVATE
     Catch2::Catch2WithMain engine-net engine-render engine-entity engine-console engine-weather platform-hal)
 target_include_directories(test_client_net_event_handler PRIVATE
@@ -713,12 +734,13 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CameraInput.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
 target_link_libraries(test_screen_manager PRIVATE
-    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight platform-sdl3 platform-hal SDL3::SDL3)
+    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual platform-sdl3 platform-hal SDL3::SDL3)
 target_include_directories(test_screen_manager PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_screen_manager)
@@ -728,6 +750,18 @@ target_link_libraries(test_connect_args PRIVATE Catch2::Catch2WithMain)
 target_include_directories(test_connect_args PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
 catch_discover_tests(test_connect_args)
+
+# The client/server flight-model parity gate (#811): drives the real WorldBroadcaster connect path
+# and the real client-side resolver, and asserts the two integrate the same aeroplane.
+add_executable(test_prediction_parity test_prediction_parity.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientFlightModelResolver.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp")
+target_link_libraries(test_prediction_parity PRIVATE
+    Catch2::Catch2WithMain engine-net engine-entity engine-content engine-flight engine-render engine-config
+    engine-weapon)
+target_include_directories(test_prediction_parity PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_prediction_parity)
 
 add_executable(test_client_prediction test_client_prediction.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp")

@@ -155,6 +155,17 @@ std::optional<ModLoader::Manifest> ModLoader::parseManifest(const char* path) {
         return std::nullopt;
     }
 
+    // Optional def-id prefix. Defaults to the mod id, which is what a pack whose def ids agree with
+    // its id gets for free. A ':' is rejected outright: the namespace IS the part before the colon,
+    // so one inside it would make "a:b:c" ambiguous to every id parser downstream.
+    manifest.namespaceId = mod["namespace"].value<std::string>().value_or(manifest.id);
+    if (!isValidIdentifier(manifest.namespaceId) || manifest.namespaceId.find(':') != std::string::npos) {
+        m_logger.log(
+            LogLevel::Error, __FILE__, __LINE__,
+            (std::string("manifest '") + path + "': invalid namespace field '" + manifest.namespaceId + "'").c_str());
+        return std::nullopt;
+    }
+
     // Optional depends array
     if (auto deps = mod["depends"].as_array()) {
         for (auto& dep : *deps) {
@@ -313,6 +324,7 @@ std::vector<std::unique_ptr<IContentPack>> ModLoader::load(IContentPackEventHand
         FolderContentPack::Manifest fm;
         fm.name = c.manifest.name;
         fm.id = c.manifest.id;
+        fm.namespaceId = c.manifest.namespaceId;
         fm.version = c.manifest.version;
         fm.engineApi = c.manifest.engineApi;
         fm.priority = c.manifest.priority;

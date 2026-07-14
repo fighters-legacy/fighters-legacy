@@ -73,15 +73,16 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
+      # ONE code path, both platforms, no hand-maintained list (#814). The two `cp` lists this
+      # replaces had already drifted from each other, and neither shipped validate-weapon,
+      # validate-sensor, or fl-server -- which the game spawns for single-player, so every release
+      # was unplayable offline. install(TARGETS) in CMake now owns the set; --component keeps the
+      # FetchContent dependencies' own install rules (SDL3, ktx, yaml-cpp, ...) out of the archive.
       - name: Package (Linux / macOS)
         if: matrix.os != 'windows-latest'
         run: |
-          mkdir -p dist/shaders
-          cp build/${{ matrix.preset }}/game/fighters-legacy/fighters-legacy dist/ 2>/dev/null || true
-          for tool in validate-flight-model validate-mission validate-mesh tex-compress validate-licenses; do
-            cp build/${{ matrix.preset }}/tools/$tool dist/ 2>/dev/null || true
-          done
-          cp build/${{ matrix.preset }}/platform/vulkan/shaders/*.spv dist/shaders/ 2>/dev/null || true
+          cmake --install build/${{ matrix.preset }} --prefix dist --component runtime
+          cmake --install build/${{ matrix.preset }} --prefix dist --component tools
           # Bundle the coarse global base terrain (#474) next to the binary if present (produced
           # out-of-band by tools/build_global_base.sh). No-op until the base is generated/committed.
           if [ -d base-terrain ]; then cp -r base-terrain dist/base-terrain; fi
@@ -90,16 +91,8 @@ jobs:
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          New-Item -ItemType Directory -Force dist\shaders | Out-Null
-          $tools = @("validate-flight-model","validate-mission","validate-mesh","tex-compress","validate-licenses","validate-playlist")
-          foreach ($t in $tools) {
-            $src = "build\${{ matrix.preset }}\tools\$t.exe"
-            if (Test-Path $src) { Copy-Item $src dist\ }
-          }
-          $game = "build\${{ matrix.preset }}\game\fighters-legacy\fighters-legacy.exe"
-          if (Test-Path $game) { Copy-Item $game dist\ }
-          $spvDir = "build\${{ matrix.preset }}\platform\vulkan\shaders"
-          if (Test-Path $spvDir) { Copy-Item "$spvDir\*.spv" dist\shaders\ }
+          cmake --install build/${{ matrix.preset }} --prefix dist --component runtime
+          cmake --install build/${{ matrix.preset }} --prefix dist --component tools
           # Bundle the coarse global base terrain (#474) next to the binary if present. No-op until generated.
           if (Test-Path base-terrain) { Copy-Item -Recurse base-terrain dist\base-terrain }
           Compress-Archive -Path dist\* -DestinationPath ${{ matrix.artifact }}.zip -Force

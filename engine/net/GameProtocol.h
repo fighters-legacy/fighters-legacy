@@ -114,18 +114,34 @@ static_assert(offsetof(MsgConnectAck, assignedEntityGen) == 8u, "MsgConnectAck::
 static_assert(offsetof(MsgConnectAck, planetRadiusKm) == 12u, "MsgConnectAck::planetRadiusKm offset changed");
 
 // Entity type definition record appended after MsgConnectAck.
+//
+// flightModel (#811) is here because the client MUST integrate the same aircraft the server does.
+// Without it, the client had no way to learn an entity type's flight model except to re-load the
+// entity def from disk BY ITS ID -- a lookup for "entities/fl-base:f15c.toml", which cannot exist --
+// and it silently fell back to the builtin UFO model. Permanent, invisible prediction divergence.
+//
+// payloadMassKg / payloadCd0 (#812) are the aggregate cost of the type's DEFAULT loadout. The client
+// has no hardpoints and no WeaponRegistry, and must not need one: it needs two floats. When per-entity
+// loadouts land (#583) these move into the snapshot record and this pair becomes the spawn default.
 struct MsgEntityTypeDef {
     uint32_t typeIndex{0};
     char id[64]{};      // null-terminated type id, e.g. "builtin:debug-entity"
     char mesh[64]{};    // null-terminated mesh asset name; empty = builtin tetrahedron
     char dmgMesh[64]{}; // null-terminated damage mesh; empty = none
-}; // 196 bytes, align 4
-static_assert(sizeof(MsgEntityTypeDef) == 196u, "MsgEntityTypeDef wire size changed");
+    // --- appended at the tail (#811); every offset above is unchanged, so this is additive ---
+    char flightModel[64]{};   // ASSET NAME, not a def id; empty = builtin (UFO) flight model
+    float payloadMassKg{0.f}; // default-loadout store mass (kg); 0 = clean airframe
+    float payloadCd0{0.f};    // default-loadout parasite-drag delta; 0 = clean airframe
+}; // 268 bytes, align 4
+static_assert(sizeof(MsgEntityTypeDef) == 268u, "MsgEntityTypeDef wire size changed");
 static_assert(alignof(MsgEntityTypeDef) == 4u, "MsgEntityTypeDef alignment changed");
 static_assert(sizeof(MsgEntityTypeDef) % alignof(MsgEntityTypeDef) == 0u, "MsgEntityTypeDef not record-aligned");
 static_assert(offsetof(MsgEntityTypeDef, id) == 4u, "MsgEntityTypeDef::id offset changed");
 static_assert(offsetof(MsgEntityTypeDef, mesh) == 68u, "MsgEntityTypeDef::mesh offset changed");
 static_assert(offsetof(MsgEntityTypeDef, dmgMesh) == 132u, "MsgEntityTypeDef::dmgMesh offset changed");
+static_assert(offsetof(MsgEntityTypeDef, flightModel) == 196u, "MsgEntityTypeDef::flightModel offset changed");
+static_assert(offsetof(MsgEntityTypeDef, payloadMassKg) == 260u, "MsgEntityTypeDef::payloadMassKg offset changed");
+static_assert(offsetof(MsgEntityTypeDef, payloadCd0) == 264u, "MsgEntityTypeDef::payloadCd0 offset changed");
 
 // Unreliable, unicast per-peer every sim tick.
 // Body layout after this 24-byte header (#725 shared-origin encode-once):

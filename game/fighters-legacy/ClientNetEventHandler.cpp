@@ -94,12 +94,19 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             td.id[sizeof(td.id) - 1] = '\0';
             td.mesh[sizeof(td.mesh) - 1] = '\0';
             td.dmgMesh[sizeof(td.dmgMesh) - 1] = '\0';
+            td.flightModel[sizeof(td.flightModel) - 1] = '\0';
             if (registry.findById(td.id))
                 continue; // already registered
             fl::EntityDef def;
             def.id = td.id;
             def.mesh = td.mesh;
             def.classicDamageMesh = td.dmgMesh;
+            // Which aircraft to integrate, and what its default loadout costs (#811/#812). Both
+            // arrive on the wire because the client must not re-derive them: when it did, it
+            // derived them wrong and flew a different aeroplane from the server.
+            def.flightModelAsset = td.flightModel;
+            def.payloadMassKg = td.payloadMassKg;
+            def.payloadCd0 = td.payloadCd0;
             def.maxHp = 100.0f;
             registry.registerType(std::move(def));
         }

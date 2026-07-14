@@ -16,6 +16,7 @@
 #include "flight/BuiltinFlightModel.h"
 #include "flight/CentralGravityField.h"
 #include "flight/FlightIntegrator.h"
+#include "flight/StallBuffet.h"
 #include "job/JobSystem.h"
 #include "net/AckWindow.h"
 #include "net/BitStream.h"
@@ -143,6 +144,12 @@ RejectInfo rejectInfoFor(fl::ConnectRefusalCode code) {
 
 namespace fl {
 
+// Over-G damage scale (#816): hit points per g beyond the structural limit, per damage event
+// (one event per 0.5 s of sustained overstress). Tuned so that yanking an 8 g airframe to 12 g and
+// holding it there costs real airframe life within a few seconds, without turning a brief excursion
+// into an instant kill -- the pilot should be able to break the aeroplane, but should have to work at it.
+constexpr float kOverGDamagePerG = 6.0f;
+
 // GameProtocol.h must stay stdlib-only (engine-protocol is zero-dep, enforced by fl_assert_zero_dep),
 // so it MIRRORS these two values rather than including the headers that define them. This is the one
 // TU that sees both sides, so this is where the mirrors are checked. If either fires, the wire and
@@ -260,6 +267,10 @@ void WorldBroadcaster::setFlightCommandRateLimit(int perSecond) noexcept {
 
 void WorldBroadcaster::setFlightModelResolver(FlightModelResolver fn) {
     m_flightModelResolver = std::move(fn);
+}
+
+void WorldBroadcaster::setPayloadResolver(PayloadResolver fn) {
+    m_payloadResolver = std::move(fn);
 }
 
 void WorldBroadcaster::setSensorDefResolver(sensor::SensorSystem::SensorDefResolver fn) {
@@ -711,11 +722,30 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         runEntityPass(m_stepItems.size(), [this, tickIndex, simDt](size_t b, size_t e) {
             for (size_t i = b; i < e; ++i) {
                 const StepItem& it = m_stepItems[i];
-                stepFlightSim(*it.ce->sim, *it.state, m_stepInputs[i], simDt, it.idx, tickIndex);
+                stepFlightSim(*it.ce->sim, *it.state, m_stepInputs[i], it.ce->payload, simDt, it.idx, tickIndex);
             }
         });
         m_tickProfiler.addPhaseSample(TickPhase::Integrate,
                                       std::chrono::duration<double, std::milli>(m_clock->now() - tIntStart).count());
+    }
+
+    // Over-G damage (#816), applied SERIALLY on the sim thread after the parallel integrate pass.
+    //
+    // The integrator only raises a one-shot flag; it does not damage the entity itself. It must not:
+    // EntityManager::applyDamage fires event handlers and can kill the entity, and the integrate pass
+    // above is data-parallel, so touching the entity manager from a worker would be a data race. This
+    // is the same discipline updateTerrainSteerCache follows for its cross-entity write.
+    for (const StepItem& it : m_stepItems) {
+        if (!it.ce->sim->state().overg_damage)
+            continue;
+        // Damage scales with how far past the limit the airframe was pulled. instigator = null: this
+        // is self-inflicted, and the pilot is the one who did it.
+        const float n = std::abs(it.ce->sim->state().load_factor);
+        const float limit = std::max(1.f, it.ce->sim->flightModel().limits.max_g_structural);
+        const float excess = std::max(0.f, n - limit);
+        const float damage = kOverGDamagePerG * excess;
+        if (damage > 0.f)
+            m_entityManager.applyDamage(it.ce->id, damage, EntityId::null());
     }
 
     // Cache the representative entity XZ for main-thread terrain streaming (single-player).
@@ -1898,13 +1928,13 @@ std::shared_ptr<const FlightModelData> WorldBroadcaster::resolveFlightModel(Enti
     if (!st)
         return nullptr;
     const EntityDef* def = m_registry.byIndex(st->typeIndex);
-    if (!def || def->flightModelId.empty() || !m_flightModelResolver)
+    if (!def || def->flightModelAsset.empty() || !m_flightModelResolver)
         return nullptr;
-    std::shared_ptr<const FlightModelData> model = m_flightModelResolver(def->flightModelId);
+    std::shared_ptr<const FlightModelData> model = m_flightModelResolver(def->flightModelAsset);
     if (!model) {
         char wmsg[160];
         std::snprintf(wmsg, sizeof(wmsg), "flight model '%s' not found -- using builtin model",
-                      def->flightModelId.c_str());
+                      def->flightModelAsset.c_str());
         m_logger.log(LogLevel::Warn, __FILE__, __LINE__, wmsg);
     }
     return model;
@@ -1936,6 +1966,15 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
         controller->setPlanetRadius(static_cast<double>(m_planetRadiusKm) * 1000.0);
     ControlledEntity ce{id, std::move(fi), std::move(controller)};
     ce.decimatable = decimatable;
+
+    // What the default loadout costs this airframe (#812), resolved ONCE here and carried for the
+    // life of the entity. NOT folded into fs.mass_kg above: FlightIntegrator::step adds
+    // payload.extra_mass_kg to the effective mass on every tick, so doing both would count the
+    // stores twice.
+    const EntityDef* spawnDef = m_registry.byIndex(st->typeIndex);
+    if (m_payloadResolver && spawnDef)
+        ce.payload = m_payloadResolver(*spawnDef);
+
     m_controlledEntities[id.index] = std::move(ce);
 
     // Every controlled entity is an observer — PLAYERS INCLUDED. Player avionics (#526) inherits
@@ -1954,6 +1993,12 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
 
 void WorldBroadcaster::registerController(EntityId id, std::unique_ptr<IEntityController> controller,
                                           std::shared_ptr<const FlightModelData> model) {
+    // An AI aircraft flies ITS OWN aeroplane. When the caller does not hand us a model, resolve the
+    // entity type's own flightModelAsset rather than silently defaulting to the builtin UFO -- which
+    // is what every `spawn <type> --ai <behavior>` did, so an AI F-5E flew a UFO with an F-5E's mesh
+    // on it. Same silent-builtin-fallback bug as #811, on the server side of the same seam.
+    if (!model)
+        model = resolveFlightModel(id); // logs and returns null if the id is unknown; builtin below
     // AI/scripted entities are decimatable — their sample() may be skipped under tick overrun (#514).
     addControlledEntity(id, std::move(controller), std::move(model), 0.f, /*decimatable=*/true);
 }
@@ -2002,8 +2047,9 @@ void WorldBroadcaster::updateTerrainSteerCache() {
     }
 }
 
-void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, const ControlInput& ctrl, double simDt,
-                                     uint32_t entityIdx, uint64_t tickIndex) {
+void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, const ControlInput& ctrl,
+                                     const PayloadEffect& payload, double simDt, uint32_t entityIdx,
+                                     uint64_t tickIndex) {
     WindInfluence wind{};
     if (m_weather) {
         wind.wind_world[0] = m_weather->windX();
@@ -2020,11 +2066,22 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
         wind.turbulence_body[1] = turb * 0.3f * r;
         wind.turbulence_body[2] = turb * 0.5f * r;
     }
+
+    // Stall buffet (#816). Folded in HERE rather than inside the integrator, and computed from a
+    // deterministic (entityIdx, tickIndex) seed, so ClientPrediction can reproduce it exactly --
+    // see StallBuffet.h. A buffet the client could not predict would tear prediction apart at
+    // precisely the moment the aircraft is hardest to fly.
+    if (fi.state().stalled) {
+        const auto buffet = stallBuffet(entityIdx, tickIndex);
+        wind.turbulence_body[0] += buffet[0];
+        wind.turbulence_body[1] += buffet[1];
+        wind.turbulence_body[2] += buffet[2];
+    }
     const float groundElev =
         m_groundQuery
             ? m_groundQuery(glm::dvec3{fi.state().pos_world[0], fi.state().pos_world[1], fi.state().pos_world[2]})
             : m_groundElevation.load(std::memory_order_relaxed);
-    fi.step(static_cast<float>(simDt), ctrl, {}, wind, groundElev);
+    fi.step(static_cast<float>(simDt), ctrl, payload, wind, groundElev);
 
     const FlightState& fs = fi.state();
     // (Terrain-steer XZ cache moved to updateTerrainSteerCache(), run once after the integrate pass
@@ -2072,6 +2129,13 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned) {
         std::snprintf(typeDef.id, sizeof(typeDef.id), "%s", def->id.c_str());
         std::snprintf(typeDef.mesh, sizeof(typeDef.mesh), "%s", def->mesh.c_str());
         std::snprintf(typeDef.dmgMesh, sizeof(typeDef.dmgMesh), "%s", def->classicDamageMesh.c_str());
+        // The client integrates the same aircraft we do, or its prediction is a fiction (#811).
+        std::snprintf(typeDef.flightModel, sizeof(typeDef.flightModel), "%s", def->flightModelAsset.c_str());
+        // ...carrying the same stores, at the same cost (#812). The client gets two floats rather
+        // than the hardpoints and a weapon registry it would need to derive them itself.
+        const PayloadEffect payload = m_payloadResolver ? m_payloadResolver(*def) : PayloadEffect{};
+        typeDef.payloadMassKg = payload.extra_mass_kg;
+        typeDef.payloadCd0 = payload.extra_cd0;
 
         appendMsg(buf, typeDef);
     }

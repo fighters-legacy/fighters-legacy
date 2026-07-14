@@ -25,10 +25,12 @@ class SandboxInspector;
 class CameraController;
 class ClientPrediction;
 class IHud;
+class ManualOverlay;
 class SimRenderBridge;
 class TerrainStreamer;
 class WindshieldRain;
 class WingmanMenu;
+class ManualOverlay;
 
 struct EnvironmentState;
 
@@ -51,6 +53,7 @@ struct FlightScreenDeps {
     SandboxInspector* inspector{nullptr};  // null = no inspector
     ClientPrediction* prediction{nullptr}; // null = no prediction
     WingmanMenu* wingmanMenu{nullptr};     // null = no radio menu (#610)
+    ManualOverlay* manual{nullptr};        // null = no in-flight aircraft manual (#821)
     uint32_t* assignedEntityIdx{nullptr};
     uint32_t* assignedEntityGen{nullptr};
 };
@@ -73,7 +76,9 @@ class FlightScreen : public IScreen {
 
     // HUD (max 16) + rain (max 48) + slack
     // HUD (<=16) + windshield rain (<=48) + the radio menu (<=10) + slack.
-    static constexpr int kMaxElements = 88;
+    // Sized for the worst case: cockpit HUD + 48 windshield-rain streaks + the radio menu + the
+    // in-flight manual (#821), which is a full page of text.
+    static constexpr int kMaxElements = 176;
     std::array<HudElement, kMaxElements> m_elements{};
     int m_elementCount{0};
 };

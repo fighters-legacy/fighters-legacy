@@ -127,15 +127,8 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.meta.has_fbw = ac["has_fbw"].value<bool>().value_or(false);
         d.meta.cruise_alt_m = static_cast<float>(ac["cruise_alt_m"].value<double>().value_or(10000.0));
 
-        auto mesh = ac["mesh"].value<std::string>();
-        if (!mesh)
-            throw std::runtime_error("missing aircraft.mesh");
-        d.meta.mesh = std::move(*mesh);
-
-        auto cockpit = ac["cockpit"].value<std::string>();
-        if (!cockpit)
-            throw std::runtime_error("missing aircraft.cockpit");
-        d.meta.cockpit = std::move(*cockpit);
+        // `mesh` and `cockpit` are accepted here and ignored (#813). They belong to the entity, not
+        // to the aerodynamics; EntityDef::mesh / ::cockpitMesh are what the engine actually reads.
     }
 
     // ── [flight_model] ────────────────────────────────────────────────────────
@@ -178,6 +171,19 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.drag_polar.k = req_float(dp["k"], "aero.drag_polar.k");
         d.drag_polar.speedbrake_cd = req_float(dp["speedbrake_cd"], "aero.drag_polar.speedbrake_cd");
         d.drag_polar.gear_cd = req_float(dp["gear_cd"], "aero.drag_polar.gear_cd");
+    }
+
+    // ── [aero.cd_table] (optional) ────────────────────────────────────────────
+    // Tabulated TOTAL clean drag, the form real published aero data arrives in (#820). When present
+    // it REPLACES cd0 + k*CL^2 in computeForces — see the note on FlightModelData::cd_table for why
+    // no single value of k can represent a real fighter's drag rise with load factor.
+    if (auto cd = tbl["aero"]["cd_table"]; cd && cd.as_table()) {
+        Table2D t = parse_table2d(*cd.as_table(), "alpha", "mach");
+        if (t.rows.size() < 4)
+            throw std::runtime_error("aero.cd_table: alpha must have at least 4 breakpoints");
+        if (t.cols.size() < 2)
+            throw std::runtime_error("aero.cd_table: mach must have at least 2 breakpoints");
+        d.cd_table = std::move(t);
     }
 
     // ── [aero.cd_wave] (optional) ─────────────────────────────────────────────

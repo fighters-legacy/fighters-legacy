@@ -11,6 +11,10 @@ using Catch::Matchers::WithinAbs;
 using namespace fl;
 
 // Minimal valid TOML that satisfies every required field.
+//
+// Note what is NOT here: `mesh` and `cockpit` (#813). A flight model is aerodynamics and does not
+// know what it looks like -- asset wiring lives on the entity def. They used to be required by the
+// parser and read by nothing.
 static const std::string kMinimalToml = R"(
 [aircraft]
 name         = "Test Fighter"
@@ -18,8 +22,6 @@ type         = "fighter"
 engine_type  = "turbofan"
 has_fbw      = false
 cruise_alt_m = 10000.0
-mesh         = "test_mesh"
-cockpit      = "test_hud"
 
 [flight_model]
 mass_kg      = 10000.0
@@ -106,6 +108,51 @@ TEST_CASE("Parser reads aircraft metadata correctly", "[parser]") {
     CHECK(d.meta.engine_type == EngineType::Turbofan);
     CHECK_FALSE(d.meta.has_fbw);
     CHECK_THAT(d.geometry.mass_kg, WithinAbs(10000.f, 0.1f));
+}
+
+TEST_CASE("Parser accepts a flight model with no mesh and no cockpit", "[parser]") {
+    // kMinimalToml declares neither -- the parse succeeding IS the assertion (#813). Before this,
+    // both were required and the parser threw without them, while nothing read either one.
+    CHECK_NOTHROW(parseFlightModel(kMinimalToml));
+}
+
+TEST_CASE("Parser ignores a legacy aircraft.mesh / aircraft.cockpit", "[parser]") {
+    // Existing packs that still carry the dead keys keep parsing; the values just go nowhere.
+    std::string toml = kMinimalToml;
+    auto pos = toml.find("cruise_alt_m = 10000.0");
+    toml.insert(pos, "mesh    = \"legacy_mesh\"\ncockpit = \"legacy_hud\"\n");
+    CHECK_NOTHROW(parseFlightModel(toml));
+}
+
+TEST_CASE("Parser: cd_table is absent by default and parses when present", "[parser]") {
+    // Optional by design (#820): the parabolic [aero.drag_polar] stays the simple path, which is what
+    // most community content will use. A cd_table is for aircraft with real tabulated data.
+    auto plain = parseFlightModel(kMinimalToml);
+    CHECK_FALSE(plain.cd_table.has_value());
+
+    std::string toml = kMinimalToml;
+    toml += "\n[aero.cd_table]\n"
+            "alpha  = [-10.0, 0.0, 10.0, 20.0]\n"
+            "mach   = [0.3, 0.9]\n"
+            "values = [0.10, 0.12,\n"
+            "          0.02, 0.03,\n"
+            "          0.08, 0.10,\n"
+            "          0.30, 0.34]\n";
+    auto d = parseFlightModel(toml);
+    REQUIRE(d.cd_table.has_value());
+    CHECK(d.cd_table->rows.size() == 4);
+    CHECK(d.cd_table->cols.size() == 2);
+    CHECK_THAT(d.cd_table->lookup(0.f, 0.3f), WithinAbs(0.02f, 1e-5f));
+    CHECK_THAT(d.cd_table->lookup(20.f, 0.9f), WithinAbs(0.34f, 1e-5f));
+}
+
+TEST_CASE("Parser rejects a cd_table with too few breakpoints", "[parser]") {
+    std::string toml = kMinimalToml;
+    toml += "\n[aero.cd_table]\n"
+            "alpha  = [-10.0, 0.0, 10.0]\n"
+            "mach   = [0.3, 0.9]\n"
+            "values = [0.10, 0.12, 0.02, 0.03, 0.08, 0.10]\n";
+    CHECK_THROWS_AS(parseFlightModel(toml), std::runtime_error);
 }
 
 TEST_CASE("Parser reads drag polar fields", "[parser]") {

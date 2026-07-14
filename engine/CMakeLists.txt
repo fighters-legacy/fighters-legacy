@@ -7,6 +7,7 @@ add_library(engine-content STATIC
     content/AssetManager.cpp
     content/AssetValidator.cpp
     content/BundledBaseTerrain.cpp
+    content/ContentIndex.cpp
 )
 
 target_include_directories(engine-content PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -163,6 +164,7 @@ add_library(engine-flight STATIC
     flight/AeroForces.cpp
     flight/FlightIntegrator.cpp
     flight/FixedWingForceModel.cpp
+    flight/Trim.cpp
 )
 target_include_directories(engine-flight PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-flight
@@ -170,15 +172,50 @@ target_link_libraries(engine-flight
     PRIVATE tomlplusplus::tomlplusplus
 )
 
-# Weapon definitions (content-pack weapon TOML). Deliberately independent of engine-entity:
-# hardpoints reference weapon ids as strings, so the entity system does not depend on the weapon
-# system to describe what an airframe can carry.
+# Weapon definitions (content-pack weapon TOML), the id-keyed registry, and the loadout -> payload
+# summation (#812).
+#
+# The DEPENDENCY DIRECTION is deliberate and one-way: engine-weapon knows about entities and flight,
+# not the reverse. engine-entity still does not depend on engine-weapon -- a hardpoint names its
+# stores as plain id strings, so an airframe describes what it can carry without the entity system
+# knowing anything about weapons. Loadout.cpp is the one place the two meet, and it lives on this
+# side of the line because turning stores into mass and drag is a WEAPON question, not an entity one.
 add_library(engine-weapon STATIC
     weapon/WeaponDefParser.cpp
+    weapon/WeaponRegistry.cpp
+    weapon/Loadout.cpp
 )
 target_include_directories(engine-weapon PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-weapon
-    PRIVATE tomlplusplus::tomlplusplus
+    PUBLIC  engine-flight   # PayloadEffect is in the defaultPayload() signature
+    PRIVATE engine-entity   # EntityDef::hardpoints, read only
+            tomlplusplus::tomlplusplus
+)
+
+# Content bootstrap: turning a pack's files into the registries the sim and the UI read (#683/#810/#812).
+# Promoted out of fl-server because the GAME needs it too -- the in-game manual (#821) resolves an
+# aircraft's stations and sensors from the same pack, and a second copy of this logic is a second
+# chance for the client and the server to disagree about what an aircraft carries.
+add_library(engine-bootstrap STATIC
+    content/ContentBootstrap.cpp
+)
+target_include_directories(engine-bootstrap PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-bootstrap
+    PUBLIC  engine-content
+    PRIVATE engine-entity engine-weapon engine-sensor
+)
+
+# The in-game aircraft manual (#821). It is a CONSUMER of the same sources of truth as the sim --
+# fl::trim() for performance (the same function fm-trim's CI gate uses), [aero.limits] for limits,
+# EntityDef::hardpoints + the WeaponRegistry for stores, and resolved SensorDefs for the sensor suite.
+# Nothing in it is authored twice, so it cannot drift from the aircraft the player is flying.
+add_library(engine-manual STATIC
+    manual/AircraftManual.cpp
+)
+target_include_directories(engine-manual PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-manual
+    PUBLIC  engine-flight
+    PRIVATE engine-entity engine-weapon engine-sensor
 )
 
 # Sensor definitions (content-pack sensor TOML). One vocabulary, three consumers: player avionics,

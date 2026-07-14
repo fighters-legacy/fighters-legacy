@@ -26,6 +26,29 @@ struct FlightState {
     bool ab_engaged{false};
     uint8_t engineFailFlags{0}; // fl::kEngineFail* bitmask; 0 until per-engine sim is modelled
     float tvc_angle_deg{0.f};   // current TVC nozzle angle
+
+    // ── [aero.limits] enforcement outputs (#816) ─────────────────────────────
+    // These are OUTPUTS of step(), not inputs. Until now alpha_stall_deg, max_g_structural and
+    // min_g_structural were parsed, required, and read by absolutely nothing.
+
+    // True when alpha exceeds limits.alpha_stall_deg. The CL collapse itself is NOT applied here —
+    // the cl_table already carries it if the author wrote an honest one, and clamping CL on top would
+    // double-count the stall (and quietly reward an author who did not). This flag drives buffet, the
+    // HUD cue, and audio; it does not change the aerodynamics.
+    bool stalled{false};
+
+    // Normal (body-y) load factor in g. n = aero_force_y / (eff_mass * g0), so it excludes gravity —
+    // this is what an accelerometer in the cockpit reads, and what a G-meter shows.
+    float load_factor{1.f};
+
+    // Cumulative seconds spent beyond kOverGMargin past the structural limit. Reset when back inside.
+    float overg_seconds{0.f};
+
+    // ONE-SHOT: set true by step() on the tick an over-G damage event fires, and cleared on the next
+    // step(). The integrator does NOT apply the damage itself: EntityManager::applyDamage fires event
+    // handlers, and the integrate pass is data-parallel, so calling it from a worker would be a data
+    // race. WorldBroadcaster latches this flag and applies the damage serially after the pass.
+    bool overg_damage{false};
 };
 
 // Wind and turbulence injected each tick by WorldBroadcaster from WeatherController state.
@@ -54,6 +77,12 @@ class FlightIntegrator {
 
     [[nodiscard]] const FlightState& state() const {
         return m_state;
+    }
+
+    // The model this integrator is flying. Callers reacting to an over-G event (#816) need its
+    // structural limit to scale the damage; nobody should be re-deriving it from the entity def.
+    [[nodiscard]] const FlightModelData& flightModel() const {
+        return *m_data;
     }
 
     // Inject an alternative gravity field (default: CentralGravityField::earthInstance()).

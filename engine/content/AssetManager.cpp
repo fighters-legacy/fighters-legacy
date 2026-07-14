@@ -108,14 +108,20 @@ std::shared_ptr<AIScript> AssetManager::loadAIScript(const char* name) {
     return loadAsset<AIScript>(AssetType::AIScript, name, &IContentPack::loadAIScript);
 }
 
-std::string AssetManager::findPackRootForAsset(AssetType type, const char* name) const {
+const IContentPack* AssetManager::findPackForAsset(AssetType type, const char* name) const {
     for (auto& pack : m_packs) {
-        if (pack->hasAsset(name, type)) {
-            const char* root = pack->rootDirectory();
-            return root ? root : "";
-        }
+        if (pack->hasAsset(name, type))
+            return pack.get();
     }
-    return "";
+    return nullptr;
+}
+
+std::string AssetManager::findPackRootForAsset(AssetType type, const char* name) const {
+    const IContentPack* pack = findPackForAsset(type, name);
+    if (!pack)
+        return "";
+    const char* root = pack->rootDirectory();
+    return root ? root : "";
 }
 std::shared_ptr<EntityDefData> AssetManager::loadEntityDef(const char* name) {
     return loadAsset<EntityDefData>(AssetType::EntityDef, name, &IContentPack::loadEntityDef);
@@ -123,6 +129,27 @@ std::shared_ptr<EntityDefData> AssetManager::loadEntityDef(const char* name) {
 
 std::shared_ptr<SensorDefData> AssetManager::loadSensorDef(const char* name) {
     return loadAsset<SensorDefData>(AssetType::SensorDef, name, &IContentPack::loadSensorDef);
+}
+
+std::shared_ptr<WeaponDefData> AssetManager::loadWeaponDef(const char* name) {
+    return loadAsset<WeaponDefData>(AssetType::Weapon, name, &IContentPack::loadWeaponDef);
+}
+
+std::shared_ptr<ManualProse> AssetManager::loadManualProse(const char* name) {
+    return loadAsset<ManualProse>(AssetType::Manual, name, &IContentPack::loadManualProse);
+}
+
+std::shared_ptr<AssetBase> AssetManager::loadDefBytes(AssetType type, const char* name) {
+    switch (type) {
+    case AssetType::EntityDef:
+        return loadEntityDef(name);
+    case AssetType::SensorDef:
+        return loadSensorDef(name);
+    case AssetType::Weapon:
+        return loadWeaponDef(name);
+    default:
+        return nullptr; // not a def type
+    }
 }
 
 std::optional<std::string> AssetManager::loadConfig(const char* name) {

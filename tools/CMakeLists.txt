@@ -117,6 +117,24 @@ target_include_directories(validate-flight-model-lib PUBLIC
 add_executable(validate-flight-model validate-flight-model/main.cpp)
 target_link_libraries(validate-flight-model PRIVATE validate-flight-model-lib)
 
+# fm-trim (#817): derives an aircraft's performance from its flight model, and gates it against the
+# numbers its flight manual publishes. Links engine-flight and calls computeForces DIRECTLY -- trim is
+# a function of state, and routing it through FlightIntegrator would fold integration error into
+# numbers whose entire purpose is comparison against a published chart.
+# The trim MATH lives in engine-flight (Trim.h), not here: the in-game aircraft manual (#821) renders
+# the same numbers, and a second implementation is a second chance to disagree with the aircraft the
+# player is actually flying. This library is only the parts that are ABOUT a model rather than part of
+# one -- the expectation gate and the JSON report.
+add_library(fm-trim-lib STATIC
+    fm-trim/expect.cpp)
+target_link_libraries(fm-trim-lib
+    PUBLIC engine-flight
+    PRIVATE tomlplusplus::tomlplusplus)
+target_include_directories(fm-trim-lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/fm-trim")
+
+add_executable(fm-trim fm-trim/main.cpp)
+target_link_libraries(fm-trim PRIVATE fm-trim-lib)
+
 # Schema validity is delegated to the engine's own parser (engine-weapon), so the validator and the
 # runtime cannot drift. engine-weapon is pure stdlib + toml++ — it pulls in no platform-hal, so this
 # stays an always-built asset tool.
@@ -186,3 +204,29 @@ endif()
 # Unconditional — no Vulkan or SDL3 dependency required.
 add_executable(terrain-chunk-io terrain-chunk-io/main.cpp)
 target_link_libraries(terrain-chunk-io PRIVATE engine-render)
+
+# ---------------------------------------------------------------------------
+# Install rules (#814)
+# ---------------------------------------------------------------------------
+#
+# release.yml used to carry a hand-maintained list of tool binaries PER PLATFORM, and the two lists
+# had already drifted: Linux shipped 5 tools, Windows shipped 6. Neither shipped validate-weapon or
+# validate-sensor -- exactly the two asset types the first aircraft introduces -- so fl-base-pack
+# could not gate on weapons or sensors at all. Delete the lists; let CMake own the set.
+#
+# COMPONENT IS NOT DECORATION. The FetchContent dependencies (SDL3, ktx, yaml-cpp, GameNetworkingSockets,
+# Catch2, ...) are not EXCLUDE_FROM_ALL, so they contribute their own install rules. A bare
+# `cmake --install` would dump their headers, static libraries and CMake config packages into the
+# release archive. Scoping to a component keeps the archive to what we actually ship.
+install(TARGETS
+    validate-flight-model
+    validate-weapon
+    validate-sensor
+    validate-mission
+    validate-mesh
+    validate-playlist
+    validate-licenses
+    tex-compress
+    fm-trim
+    RUNTIME DESTINATION .
+    COMPONENT tools)

@@ -26,6 +26,9 @@ struct NullContentPack : IContentPack {
     const char* id() const override {
         return "null";
     }
+    const char* namespaceId() const override {
+        return "null";
+    }
     int priority() const override {
         return 0;
     }
@@ -66,6 +69,12 @@ struct NullContentPack : IContentPack {
         return std::nullopt;
     }
     std::optional<SensorDefData> loadSensorDef(const char*) override {
+        return std::nullopt;
+    }
+    std::optional<WeaponDefData> loadWeaponDef(const char*) override {
+        return std::nullopt;
+    }
+    std::optional<ManualProse> loadManualProse(const char*) override {
         return std::nullopt;
     }
     std::vector<std::string> listAssets(AssetType) const override {
