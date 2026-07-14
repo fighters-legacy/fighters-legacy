@@ -21,6 +21,9 @@ struct TrimPoint {
 // was "build the game and fly it".
 struct TrimResult {
     float stall_speed_1g_mps{0.f};   // slowest speed at which CL_max still carries the weight
+    float min_level_speed_mps{0.f};  // slowest speed the ENGINE can sustain: above the stall on the back
+                                     // side of the power curve the wing still carries the weight, but the
+                                     // engine cannot pay for the drag, so the aircraft sinks (#825)
     float max_level_mach{0.f};       // where thrust = drag in level flight
     float roc_mps_mil{0.f};          // best rate of climb, military power
     float roc_mps_ab{0.f};           // best rate of climb, afterburner (== MIL if the model has no AB)

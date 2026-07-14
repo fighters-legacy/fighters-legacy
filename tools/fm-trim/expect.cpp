@@ -83,6 +83,8 @@ ExpectResult checkExpectations(const FlightModelData& d, std::string_view expect
         float actual = 0.f;
         if (ex.metric == "stall_speed_1g_mps")
             actual = r.stall_speed_1g_mps;
+        else if (ex.metric == "min_level_speed_mps")
+            actual = r.min_level_speed_mps;
         else if (ex.metric == "max_level_mach")
             actual = r.max_level_mach;
         else if (ex.metric == "roc_mps")
@@ -147,6 +149,7 @@ std::string toJson(const FlightModelData& d, const std::vector<TrimPoint>& point
         os << "      \"mass_kg\": " << p.mass_kg << ",\n";
         os << "      \"converged\": " << (r.converged ? "true" : "false") << ",\n";
         os << "      \"stall_speed_1g_mps\": " << r.stall_speed_1g_mps << ",\n";
+        os << "      \"min_level_speed_mps\": " << r.min_level_speed_mps << ",\n";
         os << "      \"max_level_mach\": " << r.max_level_mach << ",\n";
         os << "      \"roc_mps_mil\": " << r.roc_mps_mil << ",\n";
         os << "      \"roc_mps_ab\": " << r.roc_mps_ab << ",\n";

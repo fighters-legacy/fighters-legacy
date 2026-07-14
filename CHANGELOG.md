@@ -13,6 +13,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **flight**: `fm-trim` declared every aircraft unflyable above ~8 km — the back side of the power curve (#825)
 - **engine**: Hardened every TOML integer read against a float→int UB bug in toml++ (#824)
 
 ### Added

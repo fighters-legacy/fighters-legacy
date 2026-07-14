@@ -130,17 +130,44 @@ TrimResult trim(const FlightModelData& d, const TrimPoint& pt, const PayloadEffe
 
     // ── max level speed: fastest speed where thrust still matches drag at the alpha that holds 1 g.
     const bool hasAb = d.engine.ab_thrust.has_value();
+    // THE LEVEL-FLIGHT DRAG CURVE IS U-SHAPED. DO NOT BREAK ON THE FIRST NEGATIVE (#825).
+    //
+    // The original loop stopped at the first speed where drag exceeded thrust, on the assumption that
+    // "everything faster is unreachable". That assumption is false, and it is false for every
+    // aeroplane ever built. At the stall speed the wing is at CL_max, where induced drag is enormous:
+    // this is the region of reversed command -- the back side of the power curve -- and it is a real
+    // place a real aircraft can be. As it accelerates, CL falls, induced drag collapses, total drag
+    // reaches a minimum at best L/D, and only THEN climbs again toward the true max speed.
+    //
+    // So excess thrust is routinely negative AT the stall, positive across the whole usable envelope,
+    // and negative again past max speed. Breaking on the first negative saw the back side, concluded
+    // the aircraft could not fly, and reported `converged = false` -- for an F-5E with FOURTEEN
+    // kilonewtons of excess thrust in the middle of its envelope. It read like a content bug and
+    // would have sent the next author hunting through a drag table for a fault that was not there.
+    //
+    // Scan the whole range instead. The `a < 0` break stays, and is a different thing entirely: if no
+    // alpha holds 1 g at this speed, the wing genuinely cannot carry the weight, and nothing faster
+    // changes that (CL_max only falls with Mach).
     float maxLevel = 0.f;
+    float minLevel = 0.f;
     for (float v = r.stall_speed_1g_mps; v <= kSpeedMax; v += kSpeedStep) {
         const float a = alphaForLoad(d, payload, c, v, 1.f);
         if (a < 0.f)
             break;
-        if (excessThrustAt(d, payload, c, a, v, hasAb) >= 0.f)
-            maxLevel = v;
-        else
-            break; // drag has overtaken thrust: everything faster is unreachable
+        if (excessThrustAt(d, payload, c, a, v, hasAb) >= 0.f) {
+            if (minLevel <= 0.f)
+                minLevel = v; // the slowest speed the engine can actually sustain
+            maxLevel = v;     // keep going — drag is U-shaped, not monotonic
+        }
     }
     r.max_level_mach = (c.atmos.speed_of_sound_m_s > 0.f) ? maxLevel / c.atmos.speed_of_sound_m_s : 0.f;
+
+    // The honest answer to "how slow can this thing actually go". Above the stall it is genuinely a
+    // different number: on the back side of the curve the wing can still carry the weight, but the
+    // engine cannot pay for the drag, so the aircraft sinks. If NO speed in the range has non-negative
+    // excess thrust, minLevel stays 0 and `converged` below is false — which is then the true "cannot
+    // hold level flight here", rather than an artefact of where the scan happened to stop.
+    r.min_level_speed_mps = minLevel;
 
     // ── rate of climb: max over V of (T − D) · V / W, at MIL and at AB. ─────────────────────────
     auto bestRoc = [&](bool ab) {

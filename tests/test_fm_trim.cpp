@@ -181,10 +181,16 @@ TEST_CASE("fm-trim: a payload measurably degrades performance", "[fm_trim]") {
 }
 
 TEST_CASE("fm-trim: an aircraft that cannot fly at an altitude reports it rather than guessing", "[fm_trim]") {
-    // A model with no thrust left at 20 km has no performance there. Reporting `converged = false` is
-    // the honest answer; inventing a max level Mach would be worse than saying so.
+    // Heavy, in the stratosphere: there is no speed at which the engine can pay for the drag, so the
+    // aircraft genuinely has no performance here. Reporting `converged = false` is the honest answer;
+    // inventing a max level Mach would be worse than saying so.
+    //
+    // THIS TEST USED TO ASSERT 20 km / 6500 kg, WHICH THE AIRCRAFT CAN ACTUALLY FLY. It passed only
+    // because the solver broke out of its scan at the first negative excess thrust -- the back side of
+    // the power curve (#825) -- and declared the aeroplane unflyable. The assertion was encoding the
+    // bug, not the aircraft's limits, which is exactly how a wrong test outlives the code it guards.
     const FlightModelData d = parseFlightModel(kLightFighter);
-    const TrimResult r = trim(d, at(20000.f, 6500.f));
+    const TrimResult r = trim(d, at(15000.f, 12000.f));
 
     CHECK_FALSE(r.converged);
 }
@@ -302,4 +308,70 @@ TEST_CASE("fm-trim: JSON output carries every metric", "[fm_trim]") {
         INFO("missing key: " << key);
         CHECK(json.find(key) != std::string::npos);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The back side of the power curve (#825)
+//
+// The level-flight drag curve is U-SHAPED. At the stall speed the wing is at CL_max, where induced
+// drag is enormous -- the region of reversed command. As the aircraft accelerates, CL falls, induced
+// drag collapses, total drag reaches a minimum at best L/D, and only THEN climbs again toward max
+// speed. So excess thrust is routinely negative AT the stall, positive across the whole usable
+// envelope, and negative again past max speed.
+//
+// The original solver broke out of the scan at the first negative, on the assumption that "everything
+// faster is unreachable". It saw the back side, concluded the aircraft could not fly, and reported
+// `converged = false` -- for an F-5E with fourteen kilonewtons of excess thrust in the middle of its
+// envelope. It read like a content bug and would have sent the next author hunting through a drag
+// table for a fault that was not there.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("fm-trim: an aircraft on the back side of its power curve still trims", "[fm_trim][back_side]") {
+    const FlightModelData d = parseFlightModel(kLightFighter);
+
+    // High and heavy: thin air plus weight puts the stall speed deep into the region of reversed
+    // command, where drag at CL_max exceeds the thrust available. Stall is 148 m/s here, but the
+    // slowest speed the engine can actually sustain is 180 m/s. The old solver saw the negative
+    // excess thrust at 148, broke, and declared the aircraft unable to hold level flight.
+    const TrimResult r = trim(d, at(11000.f, 9000.f));
+
+    REQUIRE(r.converged);
+    CHECK(r.max_level_mach > 0.f);
+
+    // Prove the back side is actually PRESENT here -- otherwise this test would pass against the buggy
+    // solver too, and prove nothing. The engine cannot sustain flight at the stall speed: the slowest
+    // speed it can hold is strictly faster than the speed at which the wing runs out of lift.
+    CHECK(r.min_level_speed_mps > r.stall_speed_1g_mps);
+}
+
+TEST_CASE("fm-trim: min level speed is the slowest the ENGINE can sustain, not the stall", "[fm_trim][back_side]") {
+    // Above the stall, on the back side, the wing still carries the weight but the engine cannot pay
+    // for the drag -- so the aircraft sinks. That gap is the whole point of the metric, and it is the
+    // honest answer to "how slow can this thing actually go".
+    const FlightModelData d = parseFlightModel(kLightFighter);
+    const TrimResult r = trim(d, at(11000.f, 9000.f));
+
+    REQUIRE(r.converged);
+    CHECK(r.min_level_speed_mps > r.stall_speed_1g_mps); // ~180 m/s vs a 148 m/s stall
+    CHECK(r.max_level_mach > 0.f);
+}
+
+TEST_CASE("fm-trim: no regression at sea level, where the bug did not bite", "[fm_trim][back_side]") {
+    // At sea level thrust is usually large enough to overcome even stall-speed drag, which is why the
+    // bug went unnoticed: min level speed IS the stall speed there.
+    const FlightModelData d = parseFlightModel(kLightFighter);
+    const TrimResult r = trim(d, at(0.f, 6500.f));
+
+    REQUIRE(r.converged);
+    CHECK(r.min_level_speed_mps == Approx(r.stall_speed_1g_mps).margin(4.f));
+}
+
+TEST_CASE("fm-trim: an aircraft with NO usable speed still reports not-converged", "[fm_trim][back_side]") {
+    // Removing the early break must not turn "cannot fly here" into a false positive. When NO speed in
+    // the range has non-negative excess thrust, that IS the real condition, and it must still be said.
+    const FlightModelData d = parseFlightModel(kLightFighter);
+    const TrimResult r = trim(d, at(15000.f, 12000.f)); // heavy, in the stratosphere: no speed works
+
+    CHECK_FALSE(r.converged);
+    CHECK(r.min_level_speed_mps == Approx(0.f));
 }

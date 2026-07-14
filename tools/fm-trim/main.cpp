@@ -192,6 +192,8 @@ int main(int argc, char** argv) {
         }
         std::printf("    stall speed (1 g)   %7.1f m/s  (%.0f kt)\n", r.stall_speed_1g_mps,
                     r.stall_speed_1g_mps * 1.94384f);
+        std::printf("    min level speed     %7.1f m/s  (%.0f kt)\n", r.min_level_speed_mps,
+                    r.min_level_speed_mps * 1.94384f);
         std::printf("    max level speed     %7.2f M\n", r.max_level_mach);
         std::printf("    rate of climb       %7.1f m/s MIL   %7.1f m/s AB\n", r.roc_mps_mil, r.roc_mps_ab);
         std::printf("    sustained turn      %7.1f deg/s  (%.1f g)\n", r.sustained_turn_deg_s, r.sustained_g);
