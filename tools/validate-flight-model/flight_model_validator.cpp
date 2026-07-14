@@ -18,12 +18,42 @@ static constexpr int kClTableMachMin = 2;
 static constexpr int kMilThrustMachMin = 2;
 static constexpr int kMilThrustAltMin = 2;
 
-static constexpr double kFighterMassMin_kg = 8000.0;
-static constexpr double kFighterMassMax_kg = 25000.0;
-static constexpr double kFighterWingAreaMin_m2 = 25.0;
-static constexpr double kFighterWingAreaMax_m2 = 75.0;
-static constexpr double kFighterWingspanMin_m = 8.0;
-static constexpr double kFighterWingspanMax_m = 20.0;
+// ── plausibility bands ────────────────────────────────────────────────────────
+//
+// TWO KINDS OF CHECK, AND THEY ARE NOT THE SAME THING (#815).
+//
+// The ABSOLUTE bands below are wide, and deliberately so. An absolute band can only ever catch a
+// TYPO or a UNIT ERROR -- a mass entered in pounds, a wing area in square feet. It has no business
+// encoding a design philosophy. The old bands (mass [8000, 25000], area [25, 75]) were calibrated on
+// the F-15/F-16/F-18 class and excluded the entire light-fighter class: an honest F-5E Tiger II
+// (4349 kg, 17.28 m^2, 8.13 m) tripped two of the three, and so would a MiG-21, a Gnat or a Tejas.
+//
+// The RATIO bands are the ones that actually mean something, because they are class-independent:
+// wing loading and aspect ratio are what make an aeroplane a fighter, and the F-5E, the F-15C and
+// the F-16 all sit comfortably inside them despite a 3x spread in mass.
+//
+// We deliberately did NOT add a `light_fighter` aircraft type. That would push a validator's problem
+// into the content schema and make every pack author pick a bucket to satisfy a lint. The content
+// describes the aircraft; it does not describe the validator's taxonomy.
+
+static constexpr double kMassMin_kg = 3000.0;   // below this, someone has typo'd
+static constexpr double kMassMax_kg = 40000.0;  // above this, it is not a fighter-class airframe
+static constexpr double kWingAreaMin_m2 = 12.0; // F-5E is 17.28
+static constexpr double kWingAreaMax_m2 = 90.0;
+static constexpr double kWingspanMin_m = 6.0; // F-5E is 8.13
+static constexpr double kWingspanMax_m = 24.0;
+
+// Wing loading (kg/m^2): F-5E 252, F-15C 225, F-16 ~330, T-38A 207.
+static constexpr double kFighterWingLoadingMin = 120.0;
+static constexpr double kFighterWingLoadingMax = 600.0;
+static constexpr double kTrainerWingLoadingMin = 100.0;
+static constexpr double kTrainerWingLoadingMax = 400.0;
+
+// Aspect ratio (b^2/S): F-5E 3.83, F-15C 3.01, F-16 3.2, T-38A 3.76.
+static constexpr double kFighterAspectRatioMin = 1.5;
+static constexpr double kFighterAspectRatioMax = 5.0;
+static constexpr double kTrainerAspectRatioMin = 2.5;
+static constexpr double kTrainerAspectRatioMax = 6.0;
 
 // ── valid enum strings ────────────────────────────────────────────────────────
 
@@ -135,19 +165,42 @@ static void validateFlightModelGeometry(const toml::table& tbl, FlightModelValid
     checkPos("iyy_kg_m2");
     checkPos("izz_kg_m2");
 
-    if (aircraftType == "fighter") {
-        if (mass && (*mass > 0.0) && (*mass < kFighterMassMin_kg || *mass > kFighterMassMax_kg))
-            r.warnings.push_back("flight_model.mass_kg " + std::to_string(*mass) +
-                                 " is outside typical fighter range [" + std::to_string(kFighterMassMin_kg) + ", " +
-                                 std::to_string(kFighterMassMax_kg) + "]");
-        if (wing && (*wing > 0.0) && (*wing < kFighterWingAreaMin_m2 || *wing > kFighterWingAreaMax_m2))
-            r.warnings.push_back("flight_model.wing_area_m2 " + std::to_string(*wing) +
-                                 " is outside typical fighter range [" + std::to_string(kFighterWingAreaMin_m2) + ", " +
-                                 std::to_string(kFighterWingAreaMax_m2) + "]");
-        if (span && (*span > 0.0) && (*span < kFighterWingspanMin_m || *span > kFighterWingspanMax_m))
-            r.warnings.push_back("flight_model.wingspan_m " + std::to_string(*span) +
-                                 " is outside typical fighter range [" + std::to_string(kFighterWingspanMin_m) + ", " +
-                                 std::to_string(kFighterWingspanMax_m) + "]");
+    // `interceptor` and `attacker` are the same class of aeroplane for this purpose.
+    const bool isFighterClass =
+        (aircraftType == "fighter" || aircraftType == "interceptor" || aircraftType == "attacker");
+    const bool isTrainer = (aircraftType == "trainer");
+    if (!isFighterClass && !isTrainer)
+        return;
+
+    auto band = [&](const char* field, double value, double lo, double hi, const char* what) {
+        if (value < lo || value > hi)
+            r.warnings.push_back(std::string(field) + " " + std::to_string(value) + " is outside the plausible " +
+                                 what + " range [" + std::to_string(lo) + ", " + std::to_string(hi) + "]");
+    };
+
+    // Absolutes: unit-error and typo detection only (see the note on the constants).
+    if (mass && *mass > 0.0)
+        band("flight_model.mass_kg", *mass, kMassMin_kg, kMassMax_kg, "airframe");
+    if (wing && *wing > 0.0)
+        band("flight_model.wing_area_m2", *wing, kWingAreaMin_m2, kWingAreaMax_m2, "airframe");
+    if (span && *span > 0.0)
+        band("flight_model.wingspan_m", *span, kWingspanMin_m, kWingspanMax_m, "airframe");
+
+    // Ratios: the checks that actually describe an aeroplane, and the reason the F-5E and the F-15C
+    // can both pass despite a 3x difference in mass.
+    if (mass && wing && *mass > 0.0 && *wing > 0.0) {
+        const double wingLoading = *mass / *wing;
+        band("wing loading (mass_kg / wing_area_m2)", wingLoading,
+             isTrainer ? kTrainerWingLoadingMin : kFighterWingLoadingMin,
+             isTrainer ? kTrainerWingLoadingMax : kFighterWingLoadingMax,
+             isTrainer ? "trainer wing-loading" : "fighter wing-loading");
+    }
+    if (span && wing && *span > 0.0 && *wing > 0.0) {
+        const double aspectRatio = (*span * *span) / *wing;
+        band("aspect ratio (wingspan_m^2 / wing_area_m2)", aspectRatio,
+             isTrainer ? kTrainerAspectRatioMin : kFighterAspectRatioMin,
+             isTrainer ? kTrainerAspectRatioMax : kFighterAspectRatioMax,
+             isTrainer ? "trainer aspect-ratio" : "fighter aspect-ratio");
     }
 }
 

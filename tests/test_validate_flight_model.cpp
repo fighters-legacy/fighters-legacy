@@ -166,6 +166,92 @@ TEST_CASE("mass_kg below fighter range produces warning, not error", "[flight-mo
     CHECK(r.warnings[0].find("mass_kg") != std::string::npos);
 }
 
+// ---------------------------------------------------------------------------
+// Plausibility bands (#815) — the light-fighter class must not be excluded.
+//
+// The old bands (mass [8000, 25000], area [25, 75], span [8, 20]) were calibrated on the
+// F-15/F-16/F-18 class. An honest F-5E Tiger II trips two of the three, and so would a MiG-21, a
+// Gnat, or a Tejas. The F-5E IS a fighter and must be declared `type = "fighter"` — calling it a
+// trainer to dodge a lint would be a lie in the content to work around a bug in the tool.
+// ---------------------------------------------------------------------------
+
+// Applies a real aircraft's geometry to the generic-fighter fixture.
+static std::string withGeometry(const char* type, double mass, double area, double span) {
+    std::string s = patch(kValidFighter, "mass_kg      = 12000.0", ("mass_kg      = " + std::to_string(mass)).c_str());
+    s = patch(s.c_str(), "wing_area_m2 = 35.0", ("wing_area_m2 = " + std::to_string(area)).c_str());
+    s = patch(s.c_str(), "wingspan_m   = 10.0", ("wingspan_m   = " + std::to_string(span)).c_str());
+    s = patch(s.c_str(), "type         = \"fighter\"", (std::string("type         = \"") + type + "\"").c_str());
+    return s;
+}
+
+TEST_CASE("F-5E Tiger II geometry produces ZERO warnings", "[flight-model-validator]") {
+    // 4349 kg, 17.28 m^2, 8.13 m => wing loading 252 kg/m^2, aspect ratio 3.83.
+    // This is the whole point of #815: fl-base-pack's first aircraft must validate clean.
+    auto r = withGeometry("fighter", 4349.0, 17.28, 8.13);
+    auto res = validateFlightModel(r);
+    CHECK(res.ok);
+    INFO("warnings: " << (res.warnings.empty() ? std::string("none") : res.warnings[0]));
+    CHECK(res.warnings.empty());
+}
+
+TEST_CASE("F-15C geometry still produces zero warnings", "[flight-model-validator]") {
+    // No regression at the other end of the class: 20 200 kg, 56.5 m^2, 13.05 m
+    // => wing loading 358, aspect ratio 3.01.
+    auto res = validateFlightModel(withGeometry("fighter", 20200.0, 56.5, 13.05));
+    CHECK(res.ok);
+    INFO("warnings: " << (res.warnings.empty() ? std::string("none") : res.warnings[0]));
+    CHECK(res.warnings.empty());
+}
+
+TEST_CASE("T-38A Talon geometry produces zero warnings as a trainer", "[flight-model-validator]") {
+    // 3270 kg, 15.79 m^2, 7.7 m => wing loading 207, aspect ratio 3.76.
+    auto res = validateFlightModel(withGeometry("trainer", 3270.0, 15.79, 7.7));
+    CHECK(res.ok);
+    INFO("warnings: " << (res.warnings.empty() ? std::string("none") : res.warnings[0]));
+    CHECK(res.warnings.empty());
+}
+
+TEST_CASE("a mass entered in pounds is still caught", "[flight-model-validator]") {
+    // The F-5E's 4349 kg written as 9588 lb. The absolute band cannot see this (9588 is a
+    // perfectly plausible fighter mass in kg) -- but the WING LOADING can: 9588 / 17.28 = 555,
+    // which is at the very top of the fighter band, and the ratio check is what catches the
+    // egregious version below.
+    auto nearMiss = validateFlightModel(withGeometry("fighter", 9588.0, 17.28, 8.13));
+    CHECK(nearMiss.ok); // still only warnings, never a hard failure
+
+    // A gross unit error -- an F-15C's 44 500 lb entered as kg -- IS caught by the absolute band.
+    auto gross = validateFlightModel(withGeometry("fighter", 44500.0, 56.5, 13.05));
+    REQUIRE(!gross.warnings.empty());
+    bool named = false;
+    for (const auto& w : gross.warnings)
+        if (w.find("mass_kg") != std::string::npos)
+            named = true;
+    CHECK(named);
+}
+
+TEST_CASE("an implausible wing loading is warned even when the absolutes pass", "[flight-model-validator]") {
+    // 20 000 kg on an F-5E's wing: every absolute is in range, but 1157 kg/m^2 is not an aeroplane.
+    // This is the class of error the old absolute-only bands could not see at all.
+    auto res = validateFlightModel(withGeometry("fighter", 20000.0, 17.28, 8.13));
+    CHECK(res.ok);
+    bool named = false;
+    for (const auto& w : res.warnings)
+        if (w.find("wing loading") != std::string::npos)
+            named = true;
+    CHECK(named);
+}
+
+TEST_CASE("an implausible aspect ratio is warned", "[flight-model-validator]") {
+    // A 25 m span on a 17.28 m^2 wing: AR 36, a sailplane, not a fighter.
+    auto res = validateFlightModel(withGeometry("fighter", 4349.0, 17.28, 25.0));
+    CHECK(res.ok);
+    bool named = false;
+    for (const auto& w : res.warnings)
+        if (w.find("aspect ratio") != std::string::npos)
+            named = true;
+    CHECK(named);
+}
+
 TEST_CASE("cl_table with 3 alpha breakpoints fails", "[flight-model-validator]") {
     std::string s(kValidFighter);
     auto pos = s.find("alpha  = [-5, 0, 5, 10, 15, 18, 20, 25]");

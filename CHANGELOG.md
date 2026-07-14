@@ -17,6 +17,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **tools**: Flight-model plausibility bands excluded the entire light-fighter class (#815)
 - **netcode**: The client flew a different flight model from the server, silently and permanently (#811)
 - **content**: Def cross-references resolve by id, not filename — sensors reached the builtin eyeball on every pack aircraft (#810)
 
