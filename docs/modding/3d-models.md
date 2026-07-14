@@ -3,6 +3,12 @@
 This guide covers the engine conventions for glTF 2.0 aircraft and unit meshes. Follow it
 to ensure your models are accepted by `validate-mesh` and render correctly at runtime.
 
+> **Modelling a real aircraft?** Read
+> [docs/legal/aircraft-likeness.md](../legal/aircraft-likeness.md) before you start. Real types may be
+> modelled, but **only** from public-domain government sources — nothing traced, derived, or converted
+> out of another simulator or commercial 3D model — and every aircraft ships a `SOURCES.md` citing
+> every dimension to a public document.
+
 ---
 
 ## Overview

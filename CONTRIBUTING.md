@@ -74,6 +74,14 @@ BREAKING CHANGE: all content pack implementations must rename the method.
 
 Examples: `feat/vulkan-swapchain`, `fix/enet-packet-fragmentation`, `docs/architecture-overview`
 
+## Modelling real aircraft
+
+If you are contributing an aircraft — a mesh, a flight model, or the numbers behind either — read
+[docs/legal/aircraft-likeness.md](docs/legal/aircraft-likeness.md) **first**. In short: real types may
+be modelled, from **public-domain government sources only**; nothing may be traced, derived, or
+converted out of another simulator or commercial 3D model; aerodynamic values are **derived, not
+copied**; and every aircraft ships a `SOURCES.md` citing every number to a public document.
+
 ## License Headers
 
 All new `.cpp` and `.h` files must begin with an SPDX identifier:
