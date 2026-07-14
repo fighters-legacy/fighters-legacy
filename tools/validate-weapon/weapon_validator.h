@@ -27,15 +27,12 @@ struct WeaponValidationResult {
 // without failing the build.
 WeaponValidationResult validateWeapon(std::string_view tomlContent);
 
-// Cross-file check across a content pack: every weapon id named by an entity's [[hardpoints]]
-// (`allowed` and `default`) must resolve to a real weapon definition in the pack.
+// Validates every `weapons/*.toml` in a content pack — full schema + plausibility per file, plus
+// the one check that only makes sense across files: duplicate weapon ids.
 //
-// This is the check that has never existed anywhere: parseEntityDef validates that `default` is in
-// `allowed`, but nothing verifies either names a weapon that exists. A typo'd id currently produces
-// an aircraft with a station that silently carries nothing.
-//
-// `packDir` is scanned for `weapons/*.toml` (the weapon ids) and `entities/*.toml` (the references).
-// A pack with no entities or no weapons is not an error — it just has nothing to cross-check.
-WeaponValidationResult validatePackLoadouts(const std::string& packDir);
+// The hardpoint↔weapon cross-check that used to live here moved to `validate-entity --pack`
+// (#829): the references live in entity files, so the tool that parses entity files owns them.
+// This tool now answers exactly one question — are the pack's WEAPONS valid?
+WeaponValidationResult validatePackWeapons(const std::string& packDir);
 
 } // namespace fl

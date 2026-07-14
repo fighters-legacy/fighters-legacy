@@ -71,12 +71,6 @@ struct TempPack {
     }
 };
 
-std::string entityWithHardpoint(const std::string& allowed, const std::string& def) {
-    return "[entity]\nid=\"test:f15\"\nname=\"F-15\"\ncategory=\"air_vehicle\"\nmax_hp=100.0\n\n"
-           "[[hardpoints]]\nslot=0\ntype=\"missile\"\nallowed=[" +
-           allowed + "]\ndefault=\"" + def + "\"\n";
-}
-
 } // namespace
 
 TEST_CASE("A valid weapon passes cleanly", "[weapon-validator]") {
@@ -131,57 +125,54 @@ TEST_CASE("Implausible-but-legal values warn without failing", "[weapon-validato
     }
 }
 
-TEST_CASE("Pack cross-check resolves hardpoint weapon references", "[weapon-validator]") {
+TEST_CASE("Pack mode validates every weapon file", "[weapon-validator]") {
+    // The hardpoint↔weapon cross-check moved to validate-entity --pack (#829) — the references
+    // live in entity files. This tool's pack mode owns the WEAPONS: per-file schema +
+    // plausibility, and duplicate-id detection across files.
     TempPack pack;
     pack.write("weapons/aim120c.toml", kValidMissile);
 
-    SECTION("every referenced weapon exists") {
-        pack.write("entities/f15.toml", entityWithHardpoint("\"aim120c\"", "aim120c"));
-        const auto r = validatePackLoadouts(pack.root.string());
+    SECTION("a valid pack passes cleanly") {
+        const auto r = validatePackWeapons(pack.root.string());
         CHECK(r.ok);
         CHECK(r.errors.empty());
-    }
-
-    SECTION("a typo'd weapon id in allowed is caught") {
-        // This is the failure the tool exists for: today it produces an aircraft with a station
-        // that silently carries nothing.
-        pack.write("entities/f15.toml", entityWithHardpoint("\"aim120c\", \"aim9x\"", "aim120c"));
-        const auto r = validatePackLoadouts(pack.root.string());
-        CHECK_FALSE(r.ok);
-        CHECK(hasSubstr(r.errors, "aim9x"));
-    }
-
-    SECTION("a typo'd default is caught") {
-        pack.write("entities/f15.toml", entityWithHardpoint("\"aim120c\"", "aim120x"));
-        const auto r = validatePackLoadouts(pack.root.string());
-        CHECK_FALSE(r.ok);
-        CHECK(hasSubstr(r.errors, "aim120x"));
+        CHECK(r.warnings.empty());
     }
 
     SECTION("a malformed weapon file is reported, not silently skipped") {
         pack.write("weapons/broken.toml", "[weapon]\nid=\"broken\"\n");
-        pack.write("entities/f15.toml", entityWithHardpoint("\"aim120c\"", "aim120c"));
-        const auto r = validatePackLoadouts(pack.root.string());
+        const auto r = validatePackWeapons(pack.root.string());
         CHECK_FALSE(r.ok);
         CHECK(hasSubstr(r.errors, "broken.toml"));
     }
 
     SECTION("duplicate weapon ids across files are caught") {
         pack.write("weapons/copy.toml", kValidMissile); // same id
-        const auto r = validatePackLoadouts(pack.root.string());
+        const auto r = validatePackWeapons(pack.root.string());
         CHECK_FALSE(r.ok);
         CHECK(hasSubstr(r.errors, "duplicate weapon id"));
     }
+
+    SECTION("plausibility warnings carry the file name") {
+        std::string s(kValidMissile);
+        s.replace(s.find("id       = \"aim120c\""), std::string("id       = \"aim120c\"").size(),
+                  "id       = \"heavy\"");
+        s.replace(s.find("weight_lb   = 335"), std::string("weight_lb   = 335").size(), "weight_lb   = 90000");
+        pack.write("weapons/heavy.toml", s);
+        const auto r = validatePackWeapons(pack.root.string());
+        CHECK(r.ok); // implausible is legal
+        CHECK(hasSubstr(r.warnings, "heavy.toml"));
+    }
 }
 
-TEST_CASE("A pack with no entities or weapons has nothing to cross-check", "[weapon-validator]") {
+TEST_CASE("A pack with no weapons has nothing to validate", "[weapon-validator]") {
     TempPack pack;
-    const auto r = validatePackLoadouts(pack.root.string());
+    const auto r = validatePackWeapons(pack.root.string());
     CHECK(r.ok);
     CHECK(r.errors.empty());
 }
 
 TEST_CASE("A missing pack directory is an error", "[weapon-validator]") {
-    const auto r = validatePackLoadouts("/nonexistent/pack/dir");
+    const auto r = validatePackWeapons("/nonexistent/pack/dir");
     CHECK_FALSE(r.ok);
 }

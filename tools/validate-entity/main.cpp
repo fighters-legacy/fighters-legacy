@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "weapon_validator.h"
+#include "entity_validator.h"
 
 #include <cstdio>
 #include <cstring>
@@ -12,16 +12,21 @@ using namespace fl;
 static constexpr const char* kVersion = "0.0.1";
 
 static void printHelp() {
-    std::printf("Usage: validate-weapon <file.toml> [file2.toml ...]\n"
-                "       validate-weapon --pack <pack-dir>\n"
+    std::printf("Usage: validate-entity <file.toml> [file2.toml ...]\n"
+                "       validate-entity --pack <pack-dir>\n"
                 "\n"
-                "Validates weapon TOML files against the schema in docs/modding/formats.md,\n"
-                "using the engine's own parser — a weapon this tool passes is a weapon the\n"
-                "engine loads. Also warns about values that are legal but implausible.\n"
+                "Validates entity TOML files with the engine's own parser — an entity this tool\n"
+                "passes is an entity the engine registers.\n"
                 "\n"
-                "With --pack, validates every weapons/*.toml in a content pack and rejects\n"
-                "duplicate weapon ids. The hardpoint-to-weapon cross-check lives in\n"
-                "validate-entity --pack (the references are in entity files).\n"
+                "With --pack, resolves every reference against the pack the way the engine does:\n"
+                "asset names (mesh, cockpit, flight_model, ai_script, damage_mesh, manual) must\n"
+                "name files the pack actually has, and def ids (sensors, hardpoint weapons) must\n"
+                "resolve through the id index. An unresolvable flight_model is an ERROR: at\n"
+                "runtime it silently degrades to the builtin model and the aircraft flies wrong\n"
+                "rather than not at all.\n"
+                "\n"
+                "Single-file mode parses and warns about silent fallbacks only — references can\n"
+                "only be resolved against a pack.\n"
                 "\n"
                 "Exit codes:\n"
                 "  0  all files valid\n"
@@ -29,12 +34,13 @@ static void printHelp() {
                 "  2  bad arguments\n"
                 "\n"
                 "Options:\n"
-                "  --pack <dir>   Validate every weapon definition in a content pack\n"
+                "  --pack <dir>   Validate every entities/*.toml in a content pack, with\n"
+                "                 cross-file reference resolution\n"
                 "  --help, -h     Show this help and exit\n"
                 "  --version, -v  Show version and exit\n");
 }
 
-static void report(const WeaponValidationResult& result, const char* label, int& exitCode) {
+static void report(const EntityValidationResult& result, const char* label, int& exitCode) {
     for (const auto& w : result.warnings)
         std::fprintf(stderr, "WARN  [%s] %s\n", label, w.c_str());
     for (const auto& e : result.errors)
@@ -54,7 +60,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     if (std::strcmp(argv[1], "--version") == 0 || std::strcmp(argv[1], "-v") == 0) {
-        std::printf("validate-weapon %s\n", kVersion);
+        std::printf("validate-entity %s\n", kVersion);
         return 0;
     }
 
@@ -65,7 +71,7 @@ int main(int argc, char* argv[]) {
             std::fprintf(stderr, "error: --pack takes exactly one directory\n");
             return 2;
         }
-        report(validatePackWeapons(argv[2]), argv[2], exitCode);
+        report(validateEntityPack(argv[2]), argv[2], exitCode);
         return exitCode;
     }
 
@@ -82,7 +88,7 @@ int main(int argc, char* argv[]) {
         }
         std::ostringstream ss;
         ss << f.rdbuf();
-        report(validateWeapon(ss.str()), argv[i], exitCode);
+        report(validateEntity(ss.str()), argv[i], exitCode);
     }
     return exitCode;
 }

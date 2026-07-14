@@ -455,6 +455,10 @@ add_executable(test_validate_sensor test_validate_sensor.cpp)
 target_link_libraries(test_validate_sensor PRIVATE Catch2::Catch2WithMain validate-sensor-lib)
 catch_discover_tests(test_validate_sensor)
 
+add_executable(test_validate_entity test_validate_entity.cpp)
+target_link_libraries(test_validate_entity PRIVATE Catch2::Catch2WithMain validate-entity-lib)
+catch_discover_tests(test_validate_entity)
+
 add_executable(test_validate_flight_model test_validate_flight_model.cpp)
 target_link_libraries(test_validate_flight_model
     PRIVATE Catch2::Catch2WithMain validate-flight-model-lib)

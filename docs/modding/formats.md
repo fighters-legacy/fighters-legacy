@@ -521,6 +521,7 @@ Validate the whole pack before you fly it:
 ```
 validate-sensor sensors/*.toml
 validate-weapon --pack .
+validate-entity --pack .
 ```
 
 Validate with `validate-sensor sensors/*.toml`. It runs the engine's own parser (a sensor it passes
@@ -1089,9 +1090,17 @@ Omit the array entirely for an entity that carries nothing.
 | `allowed` | string[] | Weapon IDs this station accepts; must be **non-empty** |
 | `default` | string | Pre-loaded weapon ID; must be a member of `allowed` |
 
+An empty `default` (`""`) is a legitimate loadout choice — the station exists, can carry the
+`allowed` stores, and starts empty (#828).
+
 Every `allowed` and `default` ID is cross-checked against the pack's real weapon files by
-`validate-weapon --pack <dir>` (#624) — a typo'd ID otherwise produces a station that silently
-carries nothing.
+`validate-entity --pack <dir>` (#829, moved there from `validate-weapon --pack` because the
+references live in entity files) — a typo'd ID otherwise produces a station that silently
+carries nothing. The same tool resolves every asset-name reference (`mesh`, `cockpit`,
+`flight_model`, `ai_script`, `classic.damage_mesh`, `manual`) against the pack the way the
+engine does, and every `sensors` ID through the def-id index: an unresolvable `flight_model`
+does not fail at runtime, it silently flies the builtin placeholder model, which is why the
+validator treats it as an error.
 
 ### `[signatures]` (optional) — what the entity looks like to a sensor
 

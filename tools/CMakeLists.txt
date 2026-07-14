@@ -141,7 +141,6 @@ target_link_libraries(fm-trim PRIVATE fm-trim-lib)
 add_library(validate-weapon-lib STATIC
     validate-weapon/weapon_validator.cpp)
 target_link_libraries(validate-weapon-lib
-    PUBLIC tomlplusplus::tomlplusplus
     PRIVATE engine-weapon)
 target_include_directories(validate-weapon-lib PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/validate-weapon")
@@ -160,6 +159,26 @@ target_include_directories(validate-sensor-lib PUBLIC
 
 add_executable(validate-sensor validate-sensor/main.cpp)
 target_link_libraries(validate-sensor PRIVATE validate-sensor-lib)
+
+# The entity-def validator (#829). Same delegation rule as validate-weapon/-sensor — the schema is
+# parseEntityDef's — plus the check no validator made before it: --pack resolves every asset-name
+# and def-id reference through the REAL content system (FolderContentPack + ContentIndex), because
+# the defect that let a broken aircraft into fl-base-pack main was a path rule, and a validator
+# with its own copy of the path rules would just drift the same way.
+add_library(validate-entity-lib STATIC
+    validate-entity/entity_validator.cpp)
+target_link_libraries(validate-entity-lib
+    PRIVATE engine-entity
+            engine-content
+            engine-sensor
+            engine-weapon
+            platform-stdfs
+            tomlplusplus::tomlplusplus)
+target_include_directories(validate-entity-lib PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/validate-entity")
+
+add_executable(validate-entity validate-entity/main.cpp)
+target_link_libraries(validate-entity PRIVATE validate-entity-lib)
 
 add_library(validate-mission-lib STATIC validate-mission/mission_validator.cpp)
 target_link_libraries(validate-mission-lib PUBLIC yaml-cpp::yaml-cpp)
@@ -222,6 +241,7 @@ install(TARGETS
     validate-flight-model
     validate-weapon
     validate-sensor
+    validate-entity
     validate-mission
     validate-mesh
     validate-playlist

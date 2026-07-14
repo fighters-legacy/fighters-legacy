@@ -9,6 +9,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **tools**: `validate-entity` — the entity-def validator that did not exist when a broken aircraft merged with all of CI green; `--pack` resolves every asset-name and def-id reference through the real content system, and an unresolvable `flight_model` is an error because the runtime fallback is silent (#829)
+
+### Changed
+
+- **tools**: `validate-weapon --pack` now validates the pack's weapons (per-file schema + plausibility, duplicate ids); the hardpoint↔weapon cross-check moved to `validate-entity --pack`, where the referencing files live (#829)
+
+### Added
+
 - **tools**: `fm-trim` gate rows can pin a Mach, a load factor and a payload — the Ps ladder is now checkable in CI (#826)
 - **flight**: `[aero.controls] max_elevator_neg_deg` — asymmetric pitch travel (#822)
 
