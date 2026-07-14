@@ -24,6 +24,8 @@ const char* rootTableFor(AssetType type) noexcept {
         return "entity";
     case AssetType::SensorDef:
         return "sensor";
+    case AssetType::Weapon:
+        return "weapon";
     default:
         return nullptr; // not a def type — has no id
     }

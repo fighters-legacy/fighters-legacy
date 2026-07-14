@@ -89,11 +89,12 @@ static void stateToEntry(const FlightState& fs, float maxFuel, EntityRenderEntry
 
 ClientPrediction::~ClientPrediction() = default;
 
-void ClientPrediction::init(PredictionSettings cfg, FlightModelResolver resolver, HeightQuery heightQuery,
-                            uint32_t playerIdx, uint32_t playerGen, float planetRadiusKm) {
+void ClientPrediction::init(PredictionSettings cfg, FlightModelResolver resolver, PayloadResolver payloadResolver,
+                            HeightQuery heightQuery, uint32_t playerIdx, uint32_t playerGen, float planetRadiusKm) {
     reset();
     m_cfg = cfg;
     m_resolver = std::move(resolver);
+    m_payloadResolver = std::move(payloadResolver);
     m_heightQuery = std::move(heightQuery);
     m_playerIdx = playerIdx;
     m_playerGen = playerGen;
@@ -156,7 +157,7 @@ void ClientPrediction::stepIntegrator(const BufferedInput& bi, const Environment
         m_heightQuery ? m_heightQuery(glm::dvec3{m_integrator->state().pos_world[0], m_integrator->state().pos_world[1],
                                                  m_integrator->state().pos_world[2]})
                       : 0.f;
-    m_integrator->step(kPredTickDt, ctrl, {}, wind, groundElev);
+    m_integrator->step(kPredTickDt, ctrl, m_payload, wind, groundElev);
 }
 
 void ClientPrediction::onInput(const MsgClientInput& msg, const EnvironmentState& env) {
@@ -201,6 +202,10 @@ void ClientPrediction::reconcile(RenderSnapshot& snap, uint64_t /*tickIndex*/, u
         if (!m_model) {
             m_model = BuiltinFlightModel::get();
         }
+        // The stores the server is flying with. Resolved here, beside the model, because the server
+        // resolves its payload once at spawn too -- if the two disagree, prediction diverges by the
+        // exact weight and drag of the loadout, which is precisely the bug #812 exists to prevent.
+        m_payload = m_payloadResolver ? m_payloadResolver(playerEntry->typeIndex) : PayloadEffect{};
         m_integrator = std::make_unique<FlightIntegrator>(m_model);
         // Match the server's gravity field for non-Earth planet radii.
         if (std::abs(m_planetRadiusKm - 6371.f) > 1.f) {

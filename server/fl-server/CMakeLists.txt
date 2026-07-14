@@ -13,7 +13,7 @@ add_executable(fl-server main.cpp ServerCommands.cpp IpListFile.cpp RconServer.c
 target_link_libraries(fl-server PRIVATE
     fl-server-config platform-net engine-net engine-entity engine-loop engine-weather engine-console
     engine-config engine-render engine-content engine-difficulty engine-flight engine-ai engine-script
-    engine-perf platform-stdfs)
+    engine-perf engine-weapon platform-stdfs)
 target_include_directories(fl-server PRIVATE
     "${CMAKE_SOURCE_DIR}/platform/net"
     "${enet6_SOURCE_DIR}/include")

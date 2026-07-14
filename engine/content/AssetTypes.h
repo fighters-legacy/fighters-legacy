@@ -17,6 +17,7 @@ enum class AssetType : uint8_t {
     AIScript,
     EntityDef,
     SensorDef,
+    Weapon,
     Count
 };
 
@@ -37,5 +38,6 @@ struct TerrainData : AssetBase {};
 struct AIScript : AssetBase {};
 struct EntityDefData : AssetBase {};
 struct SensorDefData : AssetBase {};
+struct WeaponDefData : AssetBase {};
 
 } // namespace fl

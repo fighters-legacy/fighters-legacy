@@ -28,7 +28,11 @@
 #include <net/GameProtocol.h>
 #include <net/WireCodec.h>
 #include <net/WorldBroadcaster.h>
+#include <weapon/Loadout.h>
+#include <weapon/WeaponDef.h>
+#include <weapon/WeaponRegistry.h>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
@@ -338,6 +342,103 @@ TEST_CASE("client and server integrators do not diverge over 600 ticks", "[predi
 
     // Sanity: the aircraft actually went somewhere, so the assertion above is not vacuous.
     CHECK(std::abs(a.pos_world[0]) > 100.0);
+}
+
+TEST_CASE("a non-zero payload reaches BOTH integrators and they still agree", "[prediction_parity]") {
+    // #812's half of the contract. The server resolves the default loadout from its WeaponRegistry
+    // and sends the resulting mass/drag on MsgEntityTypeDef; the client reads those two floats. If
+    // either side skipped the payload, the aircraft would be ~250 kg lighter and slicker on that
+    // side, and prediction would drift by exactly the weight of the stores.
+    QuietLog log;
+    TrackingNetwork net;
+    EntityTypeRegistry serverRegistry;
+    EntityManager em(log, serverRegistry);
+
+    // An armed jet: two wingtip missiles.
+    EntityDef armed = parseEntityDef(entityToml());
+    Hardpoint hp;
+    hp.slot = 1;
+    hp.type = HardpointType::Missile;
+    hp.allowed = {"fl-base:aim9p"};
+    hp.defaultWeapon = "fl-base:aim9p";
+    armed.hardpoints = {hp, hp};
+    armed.hardpoints[1].slot = 2;
+    serverRegistry.registerType(armed);
+
+    WeaponRegistry weapons;
+    WeaponDef aim9p;
+    aim9p.id = "fl-base:aim9p";
+    aim9p.name = "AIM-9P";
+    aim9p.type = WeaponType::Missile;
+    aim9p.load.massKg = 85.5f;
+    aim9p.load.dragFactor = 0.0012f;
+    weapons.registerWeapon(aim9p);
+
+    auto assets = makeAssets(log);
+
+    WorldBroadcaster broadcaster(em, serverRegistry, net, log);
+    broadcaster.setPayloadResolver(
+        [&weapons, &log](const EntityDef& d) -> PayloadEffect { return defaultPayload(d, weapons, log); });
+    broadcaster.onConnect(0u);
+
+    const std::vector<uint8_t>* ack = findConnectAck(net);
+    REQUIRE(ack != nullptr);
+
+    EntityTypeRegistry clientRegistry;
+    registerFromWire(*ack, clientRegistry);
+
+    // The payload made it onto the wire, and it is not zero.
+    const EntityDef* clientDef = clientRegistry.byIndex(0);
+    REQUIRE(clientDef != nullptr);
+    CHECK(clientDef->payloadMassKg == Catch::Approx(171.0f)); // 2 x 85.5
+    CHECK(clientDef->payloadCd0 == Catch::Approx(0.0024f));   // 2 x 0.0012
+
+    const PayloadEffect serverPayload = defaultPayload(*serverRegistry.byIndex(0), weapons, log);
+    const PayloadEffect clientPayload{clientDef->payloadMassKg, clientDef->payloadCd0};
+
+    auto rawFm = assets->loadFlightModel("testjet");
+    REQUIRE(rawFm != nullptr);
+    auto model = std::make_shared<const FlightModelData>(
+        parseFlightModel(std::string_view(reinterpret_cast<const char*>(rawFm->bytes.data()), rawFm->bytes.size())));
+
+    auto seed = [&model](FlightIntegrator& fi) {
+        FlightState s{};
+        s.pos_world[1] = 5000.0;
+        s.quat[3] = 1.f;
+        s.vel_body[0] = 250.0;
+        s.mass_kg = model->geometry.mass_kg + model->geometry.fuel_kg;
+        s.fuel_kg = model->geometry.fuel_kg;
+        fi.reset(s);
+    };
+
+    FlightIntegrator server(model);
+    FlightIntegrator client(model);
+    FlightIntegrator clean(model); // the control: what the bug used to fly
+    seed(server);
+    seed(client);
+    seed(clean);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 1.0f;
+
+    constexpr float kDt = 1.f / 60.f;
+    for (int tick = 0; tick < 600; ++tick) {
+        server.step(kDt, ctrl, serverPayload, {}, 0.f);
+        client.step(kDt, ctrl, clientPayload, {}, 0.f);
+        clean.step(kDt, ctrl, {}, {}, 0.f); // PayloadEffect{} -- the pre-#812 hard-code
+    }
+
+    const double dx = server.state().pos_world[0] - client.state().pos_world[0];
+    const double dy = server.state().pos_world[1] - client.state().pos_world[1];
+    const double dz = server.state().pos_world[2] - client.state().pos_world[2];
+    CHECK(std::sqrt(dx * dx + dy * dy + dz * dz) < 1e-3);
+
+    // And the payload is not cosmetic: 171 kg of missiles measurably slows the jet down. Without
+    // this, the test above would pass trivially with the payload ignored on both sides.
+    const double armedDist = server.state().pos_world[0];
+    const double cleanDist = clean.state().pos_world[0];
+    INFO("armed travelled " << armedDist << " m, clean travelled " << cleanDist << " m");
+    CHECK(cleanDist > armedDist);
 }
 
 TEST_CASE("a missing flight model logs at Error and names the id", "[prediction_parity]") {

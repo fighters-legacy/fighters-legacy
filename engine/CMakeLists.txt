@@ -171,15 +171,24 @@ target_link_libraries(engine-flight
     PRIVATE tomlplusplus::tomlplusplus
 )
 
-# Weapon definitions (content-pack weapon TOML). Deliberately independent of engine-entity:
-# hardpoints reference weapon ids as strings, so the entity system does not depend on the weapon
-# system to describe what an airframe can carry.
+# Weapon definitions (content-pack weapon TOML), the id-keyed registry, and the loadout -> payload
+# summation (#812).
+#
+# The DEPENDENCY DIRECTION is deliberate and one-way: engine-weapon knows about entities and flight,
+# not the reverse. engine-entity still does not depend on engine-weapon -- a hardpoint names its
+# stores as plain id strings, so an airframe describes what it can carry without the entity system
+# knowing anything about weapons. Loadout.cpp is the one place the two meet, and it lives on this
+# side of the line because turning stores into mass and drag is a WEAPON question, not an entity one.
 add_library(engine-weapon STATIC
     weapon/WeaponDefParser.cpp
+    weapon/WeaponRegistry.cpp
+    weapon/Loadout.cpp
 )
 target_include_directories(engine-weapon PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-weapon
-    PRIVATE tomlplusplus::tomlplusplus
+    PUBLIC  engine-flight   # PayloadEffect is in the defaultPayload() signature
+    PRIVATE engine-entity   # EntityDef::hardpoints, read only
+            tomlplusplus::tomlplusplus
 )
 
 # Sensor definitions (content-pack sensor TOML). One vocabulary, three consumers: player avionics,

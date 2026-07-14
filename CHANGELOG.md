@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **content**: Weapons are a real asset type — `WeaponRegistry` + a default loadout that costs the airframe mass and drag (#812)
+
 ### Changed
 
 - **flight**: `EntityDef` owns mesh/cockpit wiring; the dead `[aircraft] mesh`/`cockpit` keys are gone (#813)

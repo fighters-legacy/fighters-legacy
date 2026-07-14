@@ -12,6 +12,7 @@ class AssetManager;
 class ContentIndex;
 class EntityTypeRegistry;
 class ILogger;
+class WeaponRegistry;
 
 namespace sensor {
 struct SensorDef;
@@ -25,6 +26,16 @@ struct SensorDef;
 // caller. Must run on the main thread before GameLoop::start() (the registry is read-only during
 // simulation). Returns the number of pack types successfully registered.
 uint32_t registerPackEntityDefs(AssetManager& assets, EntityTypeRegistry& registry, ILogger& log);
+
+// Loads every content-pack weapon definition into `registry` (#812), the same shape as
+// registerPackEntityDefs above. Enumerates AssetManager::listAssets(AssetType::Weapon), parses each
+// via parseWeaponDef, and registers it by its ID -- so a hardpoint resolves its stores without ever
+// touching the filesystem. A def that fails to load, fails to parse, or duplicates an already
+// registered id logs a Warn and is skipped; it never aborts the caller.
+//
+// Call BEFORE registerPackEntityDefs, so an entity's hardpoints have weapons to resolve against.
+// Main thread, before GameLoop::start(). Returns the number of weapons registered.
+uint32_t registerPackWeaponDefs(AssetManager& assets, WeaponRegistry& registry, ILogger& log);
 
 // Builds the resolver WorldBroadcaster calls on the spawn path to turn an EntityDef::sensorIds entry
 // into a parsed SensorDef (#685), routed through ContentIndex (#810).

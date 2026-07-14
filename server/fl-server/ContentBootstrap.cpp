@@ -9,6 +9,9 @@
 #include <entity/EntityTypeRegistry.h>
 #include <sensor/SensorDef.h>
 #include <sensor/SensorDefParser.h>
+#include <weapon/WeaponDef.h>
+#include <weapon/WeaponDefParser.h>
+#include <weapon/WeaponRegistry.h>
 
 #include <exception>
 #include <limits>
@@ -39,6 +42,32 @@ uint32_t registerPackEntityDefs(AssetManager& assets, EntityTypeRegistry& regist
         } catch (const std::exception& e) {
             log.log(LogLevel::Warn, __FILE__, __LINE__,
                     (std::string("entity def '") + name + "' parse error: " + e.what() + "; skipping").c_str());
+        }
+    }
+    return registered;
+}
+
+uint32_t registerPackWeaponDefs(AssetManager& assets, WeaponRegistry& registry, ILogger& log) {
+    uint32_t registered = 0;
+    for (const auto& name : assets.listAssets(AssetType::Weapon)) {
+        auto raw = assets.loadWeaponDef(name.c_str());
+        if (!raw || raw->bytes.empty()) {
+            log.log(LogLevel::Warn, __FILE__, __LINE__,
+                    (std::string("weapon def '") + name + "' could not be loaded; skipping").c_str());
+            continue;
+        }
+        try {
+            WeaponDef def =
+                parseWeaponDef(std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size()));
+            const std::string id = def.id;
+            if (registry.registerWeapon(std::move(def)) == std::numeric_limits<uint32_t>::max())
+                log.log(LogLevel::Warn, __FILE__, __LINE__,
+                        (std::string("weapon def id '") + id + "' already registered; skipping duplicate").c_str());
+            else
+                ++registered;
+        } catch (const std::exception& e) {
+            log.log(LogLevel::Warn, __FILE__, __LINE__,
+                    (std::string("weapon def '") + name + "' parse error: " + e.what() + "; skipping").c_str());
         }
     }
     return registered;

@@ -67,6 +67,7 @@ class FolderContentPack final : public IContentPack {
     std::optional<AIScript> loadAIScript(const char* name) override;
     std::optional<EntityDefData> loadEntityDef(const char* name) override;
     std::optional<SensorDefData> loadSensorDef(const char* name) override;
+    std::optional<WeaponDefData> loadWeaponDef(const char* name) override;
 
     std::vector<std::string> listAssets(AssetType type) const override;
 

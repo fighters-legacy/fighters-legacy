@@ -62,6 +62,7 @@ ValidationResult AssetValidator::validate(AssetType type, std::span<const uint8_
     case AssetType::FlightModel:
     case AssetType::EntityDef:
     case AssetType::SensorDef:
+    case AssetType::Weapon:
         // TOML — plain text, no magic bytes; size check only
         if (totalSize > m_limits.maxToml)
             return {false, "config: exceeds size limit"};

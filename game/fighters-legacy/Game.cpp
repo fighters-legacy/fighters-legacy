@@ -939,15 +939,24 @@ void Game::run() {
                     // filename. Every fallback to the builtin model is logged at Error and names the id.
                     auto flightModelResolver = fl::makeFlightModelResolver(d.services.entityRegistry,
                                                                            *d.services.assets, *d.services.p.logger);
+                    // The default loadout's mass and drag, straight off MsgEntityTypeDef (#812) --
+                    // the client carries the same stores as the server without needing a weapon
+                    // registry to work out what they weigh.
+                    auto payloadResolver = [&d](uint32_t typeIndex) -> fl::PayloadEffect {
+                        const fl::EntityDef* def = d.services.entityRegistry.byIndex(typeIndex);
+                        if (!def)
+                            return {};
+                        return fl::PayloadEffect{def->payloadMassKg, def->payloadCd0};
+                    };
                     auto heightQuery = [&d](glm::dvec3 pos) -> float {
                         return d.services.terrainStreamer
                                    ? static_cast<float>(d.services.terrainStreamer->heightAt(pos))
                                    : 0.f;
                     };
-                    d.services.prediction.init(d.services.userConfig->prediction(), std::move(flightModelResolver),
-                                               std::move(heightQuery), d.session.clientHandler->assignedEntityIdx,
-                                               d.session.clientHandler->assignedEntityGen,
-                                               d.session.clientHandler->planetRadiusKm());
+                    d.services.prediction.init(
+                        d.services.userConfig->prediction(), std::move(flightModelResolver), std::move(payloadResolver),
+                        std::move(heightQuery), d.session.clientHandler->assignedEntityIdx,
+                        d.session.clientHandler->assignedEntityGen, d.session.clientHandler->planetRadiusKm());
 
                     d.session.connectAckApplied = true;
                 }

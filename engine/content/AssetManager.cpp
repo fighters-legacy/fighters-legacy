@@ -131,12 +131,18 @@ std::shared_ptr<SensorDefData> AssetManager::loadSensorDef(const char* name) {
     return loadAsset<SensorDefData>(AssetType::SensorDef, name, &IContentPack::loadSensorDef);
 }
 
+std::shared_ptr<WeaponDefData> AssetManager::loadWeaponDef(const char* name) {
+    return loadAsset<WeaponDefData>(AssetType::Weapon, name, &IContentPack::loadWeaponDef);
+}
+
 std::shared_ptr<AssetBase> AssetManager::loadDefBytes(AssetType type, const char* name) {
     switch (type) {
     case AssetType::EntityDef:
         return loadEntityDef(name);
     case AssetType::SensorDef:
         return loadSensorDef(name);
+    case AssetType::Weapon:
+        return loadWeaponDef(name);
     default:
         return nullptr; // not a def type
     }

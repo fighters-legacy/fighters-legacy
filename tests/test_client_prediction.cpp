@@ -16,6 +16,12 @@ using namespace fl;
 
 namespace {
 
+// A clean airframe: no stores, so no payload mass or drag. The server resolves the same thing for
+// an entity with no hardpoints, so the two still agree (#812).
+static ClientPrediction::PayloadResolver noPayload() {
+    return [](uint32_t) -> PayloadEffect { return {}; };
+}
+
 // Default resolver: always returns the builtin UFO model.
 static ClientPrediction::FlightModelResolver builtinResolver() {
     return [](uint32_t) -> std::shared_ptr<const FlightModelData> { return BuiltinFlightModel::get(); };
@@ -77,7 +83,7 @@ TEST_CASE("ClientPrediction / init with pre-ConnectAck defaults never reconciles
     // no-op. This guards that exact mechanism: init'd with 0/0, reconcile leaves a real
     // (gen != 0) player entry untouched and the lazy integrator init never fires.
     ClientPrediction pred;
-    pred.init(PredictionSettings{}, builtinResolver(), flatGround(), 0u, 0u);
+    pred.init(PredictionSettings{}, builtinResolver(), noPayload(), flatGround(), 0u, 0u);
 
     auto snap = makeSnap(1u, 1u, glm::dvec3{0, 500, 0});
     const auto origPos = snap.entries[0].position;
@@ -92,7 +98,7 @@ TEST_CASE("ClientPrediction / init with pre-ConnectAck defaults never reconciles
 
 TEST_CASE("ClientPrediction / reconcile replaces player entry", "[client_prediction]") {
     ClientPrediction pred;
-    pred.init(PredictionSettings{}, builtinResolver(), flatGround(), 1u, 1u);
+    pred.init(PredictionSettings{}, builtinResolver(), noPayload(), flatGround(), 1u, 1u);
 
     auto snap = makeSnap(1u, 1u, glm::dvec3{0, 1, 0});
     pred.reconcile(snap, 1u, 0u, makeEnv());
@@ -105,7 +111,7 @@ TEST_CASE("ClientPrediction / reconcile replaces player entry", "[client_predict
 
 TEST_CASE("ClientPrediction / onInput steps integrator", "[client_prediction]") {
     ClientPrediction pred;
-    pred.init(PredictionSettings{}, builtinResolver(), flatGround(), 1u, 1u);
+    pred.init(PredictionSettings{}, builtinResolver(), noPayload(), flatGround(), 1u, 1u);
 
     auto snap = makeSnap(1u, 1u, glm::dvec3{0, 500, 0});
     pred.reconcile(snap, 1u, 0u, makeEnv());
@@ -125,7 +131,7 @@ TEST_CASE("ClientPrediction / onInput steps integrator", "[client_prediction]") 
 
 TEST_CASE("ClientPrediction / replay depth matches estimatedDelayTicks", "[client_prediction]") {
     ClientPrediction pred;
-    pred.init(PredictionSettings{}, builtinResolver(), flatGround(), 1u, 1u);
+    pred.init(PredictionSettings{}, builtinResolver(), noPayload(), flatGround(), 1u, 1u);
 
     auto snap = makeSnap(1u, 1u, glm::dvec3{0, 500, 0});
     pred.reconcile(snap, 1u, 0u, makeEnv());
@@ -156,7 +162,7 @@ TEST_CASE("ClientPrediction / hard snap on large divergence", "[client_predictio
     cfg.blendRate = 0.5f;
 
     ClientPrediction pred;
-    pred.init(cfg, builtinResolver(), flatGround(), 1u, 1u);
+    pred.init(cfg, builtinResolver(), noPayload(), flatGround(), 1u, 1u);
 
     // First reconcile establishes the predicted position.
     auto snap1 = makeSnap(1u, 1u, glm::dvec3{0, 500, 0});
@@ -176,7 +182,7 @@ TEST_CASE("ClientPrediction / blend on small divergence", "[client_prediction]")
     cfg.blendRate = 0.5f;
 
     ClientPrediction pred;
-    pred.init(cfg, builtinResolver(), flatGround(), 1u, 1u);
+    pred.init(cfg, builtinResolver(), noPayload(), flatGround(), 1u, 1u);
 
     auto snap1 = makeSnap(1u, 1u, glm::dvec3{0, 500, 0});
     pred.reconcile(snap1, 1u, 0u, makeEnv());
@@ -194,7 +200,7 @@ TEST_CASE("ClientPrediction / blend on small divergence", "[client_prediction]")
 
 TEST_CASE("ClientPrediction / history ring overflow is safe", "[client_prediction]") {
     ClientPrediction pred;
-    pred.init(PredictionSettings{}, builtinResolver(), flatGround(), 1u, 1u);
+    pred.init(PredictionSettings{}, builtinResolver(), noPayload(), flatGround(), 1u, 1u);
 
     auto snap = makeSnap(1u, 1u, glm::dvec3{0, 500, 0});
     pred.reconcile(snap, 1u, 0u, makeEnv());
@@ -212,7 +218,7 @@ TEST_CASE("ClientPrediction / history ring overflow is safe", "[client_predictio
 
 TEST_CASE("ClientPrediction / reset clears state", "[client_prediction]") {
     ClientPrediction pred;
-    pred.init(PredictionSettings{}, builtinResolver(), flatGround(), 1u, 1u);
+    pred.init(PredictionSettings{}, builtinResolver(), noPayload(), flatGround(), 1u, 1u);
 
     auto snap = makeSnap(1u, 1u);
     pred.reconcile(snap, 1u, 0u, makeEnv());
@@ -228,7 +234,7 @@ TEST_CASE("ClientPrediction / reset clears state", "[client_prediction]") {
 
 TEST_CASE("ClientPrediction / non-player entries untouched", "[client_prediction]") {
     ClientPrediction pred;
-    pred.init(PredictionSettings{}, builtinResolver(), flatGround(), 1u, 1u);
+    pred.init(PredictionSettings{}, builtinResolver(), noPayload(), flatGround(), 1u, 1u);
 
     RenderSnapshot snap;
     snap.tickIndex = 1u;
@@ -263,7 +269,7 @@ TEST_CASE("ClientPrediction / non-player entries untouched", "[client_prediction
 TEST_CASE("ClientPrediction / omega from server snapshot seeds integrator and propagates to entry",
           "[client_prediction]") {
     ClientPrediction pred;
-    pred.init(PredictionSettings{}, builtinResolver(), flatGround(), 1u, 1u);
+    pred.init(PredictionSettings{}, builtinResolver(), noPayload(), flatGround(), 1u, 1u);
 
     RenderSnapshot snap;
     snap.tickIndex = 1u;
@@ -292,7 +298,7 @@ TEST_CASE("ClientPrediction / prediction disabled is a no-op", "[client_predicti
     cfg.enabled = false;
 
     ClientPrediction pred;
-    pred.init(cfg, builtinResolver(), flatGround(), 1u, 1u);
+    pred.init(cfg, builtinResolver(), noPayload(), flatGround(), 1u, 1u);
 
     auto snap = makeSnap(1u, 1u, glm::dvec3{0, 500, 0});
     const glm::dvec3 origPos = snap.entries[0].position;

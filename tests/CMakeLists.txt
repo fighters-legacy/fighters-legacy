@@ -58,6 +58,11 @@ add_executable(test_weapon_def_parser test_weapon_def_parser.cpp)
 target_link_libraries(test_weapon_def_parser PRIVATE Catch2::Catch2WithMain engine-weapon)
 catch_discover_tests(test_weapon_def_parser)
 
+# WeaponRegistry + defaultPayload (#812): a loadout that actually costs the airframe mass and drag.
+add_executable(test_loadout test_loadout.cpp)
+target_link_libraries(test_loadout PRIVATE Catch2::Catch2WithMain engine-weapon engine-entity engine-flight)
+catch_discover_tests(test_loadout)
+
 add_executable(test_sensor_def_parser test_sensor_def_parser.cpp)
 target_link_libraries(test_sensor_def_parser PRIVATE Catch2::Catch2WithMain engine-sensor)
 catch_discover_tests(test_sensor_def_parser)
@@ -267,7 +272,7 @@ if(TARGET platform-enet)
     add_executable(test_content_bootstrap test_content_bootstrap.cpp
         "${CMAKE_SOURCE_DIR}/server/fl-server/ContentBootstrap.cpp")
     target_link_libraries(test_content_bootstrap PRIVATE
-        Catch2::Catch2WithMain engine-content engine-entity engine-sensor)
+        Catch2::Catch2WithMain engine-content engine-entity engine-sensor engine-weapon)
     target_include_directories(test_content_bootstrap PRIVATE
         "${CMAKE_SOURCE_DIR}/server/fl-server"
         "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -740,7 +745,8 @@ add_executable(test_prediction_parity test_prediction_parity.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientFlightModelResolver.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp")
 target_link_libraries(test_prediction_parity PRIVATE
-    Catch2::Catch2WithMain engine-net engine-entity engine-content engine-flight engine-render engine-config)
+    Catch2::Catch2WithMain engine-net engine-entity engine-content engine-flight engine-render engine-config
+    engine-weapon)
 target_include_directories(test_prediction_parity PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_prediction_parity)

@@ -12,6 +12,7 @@
 #include <entity/EntityTypeRegistry.h>
 #include <mock_content.h>
 #include <sensor/SensorDef.h>
+#include <weapon/WeaponRegistry.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -200,6 +201,99 @@ TEST_CASE("registerPackEntityDefs returns zero with no packs") {
     EntityTypeRegistry registry;
     REQUIRE(registerPackEntityDefs(assets, registry, log) == 0);
     REQUIRE(registry.typeCount() == 0);
+}
+
+// ---------------------------------------------------------------------------
+// registerPackWeaponDefs (#812)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Serves weapon-def TOML blobs keyed by asset name.
+struct WeaponDefPack : public NullContentPack {
+    std::map<std::string, std::string> weapons;
+
+    bool hasAsset(const char* n, AssetType t) const override {
+        return t == AssetType::Weapon && weapons.count(n) != 0;
+    }
+    std::optional<WeaponDefData> loadWeaponDef(const char* n) override {
+        auto it = weapons.find(n);
+        if (it == weapons.end())
+            return std::nullopt;
+        WeaponDefData d;
+        d.name = n;
+        d.bytes.assign(it->second.begin(), it->second.end());
+        return d;
+    }
+    std::vector<std::string> listAssets(AssetType t) const override {
+        std::vector<std::string> out;
+        if (t == AssetType::Weapon)
+            for (const auto& [k, v] : weapons)
+                out.push_back(k);
+        return out;
+    }
+};
+
+std::string weaponToml(const std::string& id, const std::string& name) {
+    return "[weapon]\nid = \"" + id + "\"\nname = \"" + name +
+           "\"\ntype = \"missile\"\ncategory = \"air-to-air\"\n\n"
+           "[performance]\nmax_range_nm = 10.0\nmax_speed_kts = 1500.0\n\n"
+           "[warhead]\nblast_radius_ft = 30.0\ndamage = 50.0\n\n"
+           "[load]\nweight_lb = 188.0\ndrag_factor = 0.0012\n";
+}
+
+std::vector<std::unique_ptr<IContentPack>> weaponPacksFrom(WeaponDefPack pack) {
+    std::vector<std::unique_ptr<IContentPack>> v;
+    v.push_back(std::make_unique<WeaponDefPack>(std::move(pack)));
+    return v;
+}
+
+} // namespace
+
+TEST_CASE("registerPackWeaponDefs registers pack weapons by id") {
+    WeaponDefPack pack;
+    pack.weapons["aim9p"] = weaponToml("fl-base:aim9p", "AIM-9P Sidewinder");
+    pack.weapons["aim120c"] = weaponToml("fl-base:aim120c", "AIM-120C AMRAAM");
+
+    NullLog log;
+    AssetManager assets(weaponPacksFrom(std::move(pack)), log);
+    assets.initialize(nullptr);
+
+    WeaponRegistry registry;
+    const uint32_t n = registerPackWeaponDefs(assets, registry, log);
+
+    REQUIRE(n == 2);
+    REQUIRE(registry.weaponCount() == 2u);
+    // Registered by ID, from a file whose STEM is different -- which is what lets a hardpoint
+    // resolve its stores without ever touching the filesystem.
+    REQUIRE(registry.findById("fl-base:aim9p") != nullptr);
+    CHECK(registry.findById("aim9p") == nullptr);
+}
+
+TEST_CASE("registerPackWeaponDefs skips a malformed weapon and keeps going") {
+    WeaponDefPack pack;
+    pack.weapons["good"] = weaponToml("fl-base:aim9p", "AIM-9P");
+    pack.weapons["bad"] = "[weapon]\nid = \"fl-base:broken\"\n"; // missing required tables
+
+    NullLog log;
+    AssetManager assets(weaponPacksFrom(std::move(pack)), log);
+    assets.initialize(nullptr);
+
+    WeaponRegistry registry;
+    const uint32_t n = registerPackWeaponDefs(assets, registry, log);
+
+    REQUIRE(n == 1);
+    CHECK(registry.findById("fl-base:aim9p") != nullptr);
+}
+
+TEST_CASE("registerPackWeaponDefs returns zero with no packs") {
+    NullLog log;
+    std::vector<std::unique_ptr<IContentPack>> none;
+    AssetManager assets(std::move(none), log);
+    assets.initialize(nullptr);
+
+    WeaponRegistry registry;
+    REQUIRE(registerPackWeaponDefs(assets, registry, log) == 0);
 }
 
 // ---------------------------------------------------------------------------

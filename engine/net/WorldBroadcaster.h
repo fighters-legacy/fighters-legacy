@@ -39,6 +39,7 @@ class ILogger;
 class EntityManager;
 class FlightIntegrator; // full definition in WorldBroadcaster.cpp
 class JobSystem;        // engine/job/JobSystem.h — full definition in WorldBroadcaster.cpp
+struct EntityDef;       // engine/entity/EntityDef.h — the PayloadResolver's argument
 struct EntityState;
 struct FlightModelData;   // engine/flight/FlightModelData.h
 struct IEntityController; // engine/entity/IEntityController.h
@@ -119,6 +120,7 @@ struct ControlledEntity {
     bool decimatable{false};    // AI/scripted entity whose sample() may be skipped under overrun; players never
     ControlInput lastInput{};   // last sampled control input, reused on a decimated (skipped) AI tick
     bool lastInputValid{false}; // false until the first sample() — forces a sample on the entity's first tick
+    PayloadEffect payload{};    // what the default loadout costs this airframe (#812); resolved once at spawn
 };
 
 // Pre-start scalar configuration. Bundles the init-time setters so callers configure rate limiting,
@@ -411,6 +413,16 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     using FlightModelResolver = std::function<std::shared_ptr<const FlightModelData>(const std::string& id)>;
     void setFlightModelResolver(FlightModelResolver fn);
 
+    // Resolves an entity type's DEFAULT loadout to the mass and drag it costs the airframe (#812).
+    // Same std::function injection as the flight-model resolver, and for the same reason: the
+    // summation lives in engine-weapon (fl::defaultPayload), and engine-net must not link it.
+    //
+    // Resolved ONCE per controlled entity at spawn and cached on the ControlledEntity -- a loadout
+    // does not change mid-flight (rearm/jettison is #583). Unset => every entity flies clean, which
+    // is exactly the pre-#812 behaviour.
+    using PayloadResolver = std::function<PayloadEffect(const EntityDef& def)>;
+    void setPayloadResolver(PayloadResolver fn);
+
     // ---------------------------------------------------------------------------------------------
     // Sensing (#685)
     // ---------------------------------------------------------------------------------------------
@@ -666,8 +678,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     // Turbulence is seeded per (entityIdx, tickIndex) so the integrate step is deterministic and
     // parallel-safe — no shared RNG state mutated across entities.
-    void stepFlightSim(FlightIntegrator& fi, EntityState& state, const ControlInput& ctrl, double simDt,
-                       uint32_t entityIdx, uint64_t tickIndex);
+    void stepFlightSim(FlightIntegrator& fi, EntityState& state, const ControlInput& ctrl, const PayloadEffect& payload,
+                       double simDt, uint32_t entityIdx, uint64_t tickIndex);
     // After the integrate pass: cache the lowest-index live controlled entity's XZ for main-thread
     // terrain streaming + floor updates (only meaningful in single-player).
     void updateTerrainSteerCache();
@@ -749,6 +761,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     // Resolves EntityDef::flightModelAsset -> FlightModelData at spawn (null = always builtin model).
     FlightModelResolver m_flightModelResolver;
+    PayloadResolver m_payloadResolver;
 
     // Sensing (#685). The system owns the observer side-storage; EntityState stays a flat POD that
     // knows nothing about being observed.

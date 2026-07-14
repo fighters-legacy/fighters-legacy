@@ -262,6 +262,10 @@ void WorldBroadcaster::setFlightModelResolver(FlightModelResolver fn) {
     m_flightModelResolver = std::move(fn);
 }
 
+void WorldBroadcaster::setPayloadResolver(PayloadResolver fn) {
+    m_payloadResolver = std::move(fn);
+}
+
 void WorldBroadcaster::setSensorDefResolver(sensor::SensorSystem::SensorDefResolver fn) {
     m_sensorSystem.setResolver(std::move(fn));
 }
@@ -711,7 +715,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         runEntityPass(m_stepItems.size(), [this, tickIndex, simDt](size_t b, size_t e) {
             for (size_t i = b; i < e; ++i) {
                 const StepItem& it = m_stepItems[i];
-                stepFlightSim(*it.ce->sim, *it.state, m_stepInputs[i], simDt, it.idx, tickIndex);
+                stepFlightSim(*it.ce->sim, *it.state, m_stepInputs[i], it.ce->payload, simDt, it.idx, tickIndex);
             }
         });
         m_tickProfiler.addPhaseSample(TickPhase::Integrate,
@@ -1936,6 +1940,15 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
         controller->setPlanetRadius(static_cast<double>(m_planetRadiusKm) * 1000.0);
     ControlledEntity ce{id, std::move(fi), std::move(controller)};
     ce.decimatable = decimatable;
+
+    // What the default loadout costs this airframe (#812), resolved ONCE here and carried for the
+    // life of the entity. NOT folded into fs.mass_kg above: FlightIntegrator::step adds
+    // payload.extra_mass_kg to the effective mass on every tick, so doing both would count the
+    // stores twice.
+    const EntityDef* spawnDef = m_registry.byIndex(st->typeIndex);
+    if (m_payloadResolver && spawnDef)
+        ce.payload = m_payloadResolver(*spawnDef);
+
     m_controlledEntities[id.index] = std::move(ce);
 
     // Every controlled entity is an observer — PLAYERS INCLUDED. Player avionics (#526) inherits
@@ -2002,8 +2015,9 @@ void WorldBroadcaster::updateTerrainSteerCache() {
     }
 }
 
-void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, const ControlInput& ctrl, double simDt,
-                                     uint32_t entityIdx, uint64_t tickIndex) {
+void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, const ControlInput& ctrl,
+                                     const PayloadEffect& payload, double simDt, uint32_t entityIdx,
+                                     uint64_t tickIndex) {
     WindInfluence wind{};
     if (m_weather) {
         wind.wind_world[0] = m_weather->windX();
@@ -2024,7 +2038,7 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
         m_groundQuery
             ? m_groundQuery(glm::dvec3{fi.state().pos_world[0], fi.state().pos_world[1], fi.state().pos_world[2]})
             : m_groundElevation.load(std::memory_order_relaxed);
-    fi.step(static_cast<float>(simDt), ctrl, {}, wind, groundElev);
+    fi.step(static_cast<float>(simDt), ctrl, payload, wind, groundElev);
 
     const FlightState& fs = fi.state();
     // (Terrain-steer XZ cache moved to updateTerrainSteerCache(), run once after the integrate pass
@@ -2074,6 +2088,11 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned) {
         std::snprintf(typeDef.dmgMesh, sizeof(typeDef.dmgMesh), "%s", def->classicDamageMesh.c_str());
         // The client integrates the same aircraft we do, or its prediction is a fiction (#811).
         std::snprintf(typeDef.flightModel, sizeof(typeDef.flightModel), "%s", def->flightModelAsset.c_str());
+        // ...carrying the same stores, at the same cost (#812). The client gets two floats rather
+        // than the hardpoints and a weapon registry it would need to derive them itself.
+        const PayloadEffect payload = m_payloadResolver ? m_payloadResolver(*def) : PayloadEffect{};
+        typeDef.payloadMassKg = payload.extra_mass_kg;
+        typeDef.payloadCd0 = payload.extra_cd0;
 
         appendMsg(buf, typeDef);
     }

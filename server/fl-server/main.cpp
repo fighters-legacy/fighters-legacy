@@ -58,6 +58,8 @@
 #include <render/TerrainStreamer.h>
 #include <stdfs/StdAsyncFilesystem.h>
 #include <stdfs/StdFilesystem.h>
+#include <weapon/Loadout.h>
+#include <weapon/WeaponRegistry.h>
 #include <weather/WeatherController.h>
 
 #include <array>
@@ -404,6 +406,17 @@ int main(int argc, char** argv) {
         contentIndex.build(assets, kIndexedTypes, *log);
     }
 
+    // ---- Weapons (#812) ----
+    // Registered BEFORE entity defs, so an entity's hardpoints have weapons to resolve against.
+    // Keyed by id, so that resolution never touches the filesystem.
+    fl::WeaponRegistry weaponRegistry;
+    {
+        const uint32_t packWeapons = registerPackWeaponDefs(assets, weaponRegistry, *log);
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "content: %u pack weapon(s) registered", packWeapons);
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
+
     // ---- Entity system ----
     fl::EntityTypeRegistry entityRegistry;
     fl::EntityManager entityManager(*log, entityRegistry);
@@ -549,6 +562,13 @@ int main(int argc, char** argv) {
             (*fmCache)[id] = model; // cache misses too, so a bad id isn't re-parsed every connect
             return model;
         });
+    // What an entity's DEFAULT loadout costs it in mass and drag (#812). Same injection shape as the
+    // resolvers above -- the summation lives in engine-weapon, and engine-net must not link it.
+    // Unset would mean every aircraft flies clean, which is exactly the bug this closes.
+    broadcaster.setPayloadResolver([&weaponRegistry, log](const fl::EntityDef& def) -> fl::PayloadEffect {
+        return fl::defaultPayload(def, weaponRegistry, *log);
+    });
+
     // Resolve EntityDef::sensorIds -> parsed SensorDef on the spawn path (#685). A sensor reference
     // is an ID, not an asset name, so it goes through ContentIndex (#810) -- see makeSensorDefResolver.
     broadcaster.setSensorDefResolver(fl::makeSensorDefResolver(assets, contentIndex, *log));
