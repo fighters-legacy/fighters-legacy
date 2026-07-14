@@ -22,6 +22,10 @@ class SpatialIndex;
 class IGravityField;
 struct EntityState;
 
+namespace sensor {
+struct ContactTable; // SensorSystem.h — the SARH/ARH support source (#628)
+}
+
 // One projectile in flight (#625). Deliberately NOT a FlightIntegrator (6-DOF, spool lag, a
 // Mach-6 numerical guard — all wrong for ordnance) and NOT a ControlledEntity: a 3-DOF point mass
 // with its own tiny integrator. It mirrors into a pooled ObjectCategory::Projectile entity each
@@ -41,6 +45,7 @@ struct Projectile {
     SeekerTrack seeker;
     std::shared_ptr<const sensor::SensorDef> seekerDef;
     bool emitting{false}; // the seeker head is radiating (ARH pitbull turns this on, #628)
+    bool pitbull{false};  // ARH only: the missile's own radar has taken over from the datalink (#628)
 };
 
 // Where and why a projectile stopped flying. The system only DETECTS — warhead application,
@@ -65,6 +70,9 @@ class ProjectileSystem {
     // the same function) as SensorSystem::SensorDefResolver, so seekers and aircraft radars read
     // one vocabulary through one resolution path (#810).
     using SensorResolver = std::function<std::shared_ptr<const sensor::SensorDef>(const std::string& id)>;
+    // The SHOOTER's contact table (#628): what a SARH or pre-pitbull ARH shot is supported BY. The
+    // missile inherits the shooter's honest belief — never ground truth. Null table = no support.
+    using SupportQuery = std::function<const sensor::ContactTable*(uint32_t shooterIdx)>;
 
     void configure(const WeaponRegistry* weapons, const IGravityField* gravity) noexcept {
         m_weapons = weapons;
@@ -79,6 +87,16 @@ class ProjectileSystem {
     void setCountermeasureCheck(SeekerCountermeasureCheck fn) {
         m_cmCheck = std::move(fn); // #529 plugs in here; null = no expendables exist
     }
+    void setSupportQuery(SupportQuery fn) {
+        m_supportQuery = std::move(fn); // WorldBroadcaster wires SensorSystem::contactsFor (#628)
+    }
+
+    // Would `weaponIndex`'s seeker take `target` from `shooter`'s hands right now (#628)? The
+    // launch gate as a question — a supported (SARH / pitbull-ARH) weapon asks whether the
+    // shooter's contact table holds the target LOCKED; a self-contained seeker asks its own
+    // acquisition-lobe geometry. Drives the pre-launch HUD LOCK cue; costs one lobe test.
+    [[nodiscard]] bool wouldAcquire(const EntityManager& em, uint32_t weaponIndex, const EntityState& shooter,
+                                    EntityId target) const;
 
     // Launch `def` from the shooter's current state: spawns the projectile's pooled entity
     // (typeId = "projectile:<weapon id>", registered at startup because MsgEntityTypeDef only
@@ -126,6 +144,7 @@ class ProjectileSystem {
     const EntityTypeRegistry* m_registry{nullptr};
     SensorResolver m_sensorResolver;
     SeekerCountermeasureCheck m_cmCheck;
+    SupportQuery m_supportQuery;
     std::vector<Projectile> m_projectiles;
 };
 

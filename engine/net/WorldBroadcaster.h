@@ -774,6 +774,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     void runWeaponsPass(double simDt, uint64_t tickIndex);
     void executeFireRequest(const FireRequest& req, uint64_t tickIndex);
     void resolveHitscan(const FireRequest& req, const WeaponDef& def, uint64_t tickIndex);
+    // The shooter's designated target through the #610 seam: peer viewAxis or AI nose (#627/#628).
+    EntityId designateFor(const EntityState& shooter, uint32_t ownerPeer) const;
     void queueEffect(uint8_t type, uint8_t weaponClass, uint32_t srcIdx, uint32_t tgtIdx, const double pos[3]);
 
     // ── combat scoring + kill feed (#626) — sim-thread only ─────────────────

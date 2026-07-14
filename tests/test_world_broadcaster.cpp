@@ -141,6 +141,10 @@ struct DecodedEntity {
     float omega[3]{};
     bool isFull{false};
     bool genPresent{false};
+    bool hasLoadout{false};       // the own-record loadout block was on the wire (#625)
+    uint8_t selectedStation{255}; //
+    uint16_t stationRounds{0};    //
+    uint8_t weaponFlags{0};       // bit 0 = seeker LOCK cue (#628)
 };
 
 // Decode every quantized record in a snapshot packet (full + delta). Stateless: typeIndex/gen are
@@ -188,6 +192,10 @@ static std::vector<DecodedEntity> decodeEntities(const std::vector<uint8_t>& pkt
         d.omega[2] = qe.omega[2];
         d.isFull = qe.isFull;
         d.genPresent = gp;
+        d.hasLoadout = qe.hasOmega; // the loadout block rides the same own-record bit (#625)
+        d.selectedStation = qe.selectedStation;
+        d.stationRounds = qe.stationRounds;
+        d.weaponFlags = qe.weaponFlags;
         out.push_back(d);
     }
     return out;
@@ -8427,4 +8435,52 @@ TEST_CASE("WorldBroadcaster: a designated IR missile launch flies out and kills 
         victimHit = !vs || vs->dead || vs->hp < 100.f;
     }
     CHECK(victimHit); // the warhead connected through the same damage pipeline as everything else
+}
+
+TEST_CASE("WorldBroadcaster: the pre-launch LOCK cue reaches the own record's weaponFlags",
+          "[world_broadcaster][firepath][seeker]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(fl::builtinDebugEntityDef());
+
+    fl::WeaponRegistry weapons;
+    fl::registerBuiltinWeapons(weapons);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setWeaponRegistry(&weapons);
+    broadcaster.setSensorDefResolver([](const std::string& id) -> std::shared_ptr<const fl::sensor::SensorDef> {
+        if (id == "builtin:ir-seeker")
+            return {std::shared_ptr<const fl::sensor::SensorDef>{}, &fl::sensor::BuiltinSensors::irSeeker()};
+        return nullptr;
+    });
+
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(shooter != nullptr);
+
+    // A target 2 km dead ahead, inside the IR head's acquisition envelope; the designator points
+    // at it. The default selection is the first IR rail, so the growl should come up.
+    fl::EntityTransform vt{};
+    vt.pos[0] = shooter->transform.pos[0] + 2000.0;
+    vt.pos[1] = shooter->transform.pos[1];
+    vt.pos[2] = shooter->transform.pos[2];
+    vt.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
+    broadcaster.setTargetDesignator([victim](const fl::EntityState&, const float*) -> fl::EntityId { return victim; });
+
+    // Run past a full cue cadence window (the cue is computed at ~10 Hz per peer).
+    for (uint64_t t = 1; t <= 12; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+
+    bool sawLock = false;
+    for (const auto& pkt : snapshotsFor(net, 0)) {
+        for (const DecodedEntity& e : decodeEntities(pkt)) {
+            if (e.hasLoadout && (e.weaponFlags & 0x01u))
+                sawLock = true;
+        }
+    }
+    CHECK(sawLock);
 }

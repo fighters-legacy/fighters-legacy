@@ -125,6 +125,11 @@ void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrai
                      static_cast<unsigned>(e->stationRounds));
     }
 
+    // Seeker LOCK annunciator (#628) — the pre-launch growl, replicated from the own-record
+    // weaponFlags bit 0: the server says the selected seeker sees the designated target right now.
+    if (e->hasLoadout && (e->weaponFlags & 0x01u))
+        pushText(HudAlign::Center, 0.5f, 0.42f, kHudR, kHudG, kHudB, "%s", "LOCK");
+
     // Damage warning in red (center screen)
     if (e->damageLevel > 0)
         pushText(HudAlign::Center, 0.5f, 0.48f, 1.f, 0.2f, 0.2f, "%s", "*** DAMAGE ***");

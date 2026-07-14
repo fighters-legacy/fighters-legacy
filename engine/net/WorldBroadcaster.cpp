@@ -171,6 +171,10 @@ WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegis
       m_planetRadiusKm(6371.f) {
     // Seeker target signatures come from the same type registry the sensor system reads (#627).
     m_projectileSystem.setTypeRegistry(&registry);
+    // SARH / pre-pitbull ARH shots are supported by the SHOOTER's contact table (#628): the missile
+    // inherits the shooter's honest belief, never ground truth.
+    m_projectileSystem.setSupportQuery(
+        [this](uint32_t shooterIdx) -> const sensor::ContactTable* { return m_sensorSystem.contactsFor(shooterIdx); });
 }
 
 WorldBroadcaster::~WorldBroadcaster() = default;
@@ -900,6 +904,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             snap.selectedStation = lo.selected;
             if (lo.selected < lo.stations.size())
                 snap.stationRounds = lo.stations[lo.selected].rounds;
+            snap.weaponFlags = cit->second.fire.seekerCue ? 0x01u : 0x00u; // HUD LOCK cue (#628)
             snap.payloadMassKg = lo.payloadMassKg;
             snap.payloadCd0 = lo.payloadCd0;
         }
@@ -1700,38 +1705,43 @@ void WorldBroadcaster::executeFireRequest(const FireRequest& req, uint64_t tickI
     const uint32_t ownerPeer = peerIdForEntity(shooter->id);
 
     // Launch designation (#627): a seeker weapon is launched AT something the shooter designated —
-    // the missile never invents a target. The designator is the #610 seam (fl-server wires the
-    // contact-honest lambda); the look axis is the peer's viewAxis for a player and the nose for an
-    // AI. No designator wired, or nothing designated ⇒ the store flies dumb, which is the honest
-    // outcome of firing blind.
+    // the missile never invents a target. No designator wired, or nothing designated ⇒ the store
+    // flies dumb, which is the honest outcome of firing blind.
     EntityId designated = EntityId::null();
-    if (def->seeker && def->seeker->type != SeekerType::Unguided && m_targetDesignator) {
-        float axis[3];
-        bool haveAxis = false;
-        if (ownerPeer != kNoOwningPeer) {
-            if (const auto pit = m_peerInputs.find(ownerPeer); pit != m_peerInputs.end()) {
-                axis[0] = pit->second.viewAxis[0];
-                axis[1] = pit->second.viewAxis[1];
-                axis[2] = pit->second.viewAxis[2];
-                haveAxis = true;
-            }
-        }
-        if (!haveAxis) {
-            const float* q = shooter->transform.quat;
-            const glm::quat rot{q[3], q[0], q[1], q[2]};
-            const glm::vec3 nose = rot * glm::vec3{1.f, 0.f, 0.f};
-            axis[0] = nose.x;
-            axis[1] = nose.y;
-            axis[2] = nose.z;
-        }
-        designated = m_targetDesignator(*shooter, axis);
-    }
+    if (def->seeker && def->seeker->type != SeekerType::Unguided)
+        designated = designateFor(*shooter, ownerPeer);
 
     const EntityId pid = m_projectileSystem.launch(m_entityManager, req.weaponIndex, *shooter,
                                                    ownerPeer == kNoOwningPeer ? 0u : ownerPeer, designated);
     if (pid.valid())
         queueEffect(static_cast<uint8_t>(EffectType::MissileLaunch), static_cast<uint8_t>(def->type), req.shooterIdx,
                     0xFFFFFFFFu, shooter->transform.pos);
+}
+
+EntityId WorldBroadcaster::designateFor(const EntityState& shooter, uint32_t ownerPeer) const {
+    // The designator is the #610 seam (fl-server wires the contact-honest lambda); the look axis
+    // is the peer's viewAxis for a player and the nose for an AI.
+    if (!m_targetDesignator)
+        return EntityId::null();
+    float axis[3];
+    bool haveAxis = false;
+    if (ownerPeer != kNoOwningPeer) {
+        if (const auto pit = m_peerInputs.find(ownerPeer); pit != m_peerInputs.end()) {
+            axis[0] = pit->second.viewAxis[0];
+            axis[1] = pit->second.viewAxis[1];
+            axis[2] = pit->second.viewAxis[2];
+            haveAxis = true;
+        }
+    }
+    if (!haveAxis) {
+        const float* q = shooter.transform.quat;
+        const glm::quat rot{q[3], q[0], q[1], q[2]};
+        const glm::vec3 nose = rot * glm::vec3{1.f, 0.f, 0.f};
+        axis[0] = nose.x;
+        axis[1] = nose.y;
+        axis[2] = nose.z;
+    }
+    return m_targetDesignator(shooter, axis);
 }
 
 void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
@@ -1752,6 +1762,23 @@ void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
         // integrator carries next tick.
         ce.payload.extra_mass_kg = ce.fire.loadout.payloadMassKg;
         ce.payload.extra_cd0 = ce.fire.loadout.payloadCd0;
+
+        // The pre-launch LOCK cue (#628), at the sensing cadence so it costs one lobe test per
+        // peer per 100 ms: would the SELECTED seeker take the designated target right now? Peers
+        // only — AI reads its contacts directly and needs no annunciator.
+        if (const uint32_t peer = peerIdForEntity(ce.id); peer != kNoOwningPeer && (tickIndex + idx) % 6 == 0) {
+            bool cue = false;
+            if (const StationState* sel = ce.fire.loadout.selectedStation();
+                sel && sel->weaponIndex != UINT32_MAX && sel->rounds > 0) {
+                const WeaponDef* w = m_weaponRegistry->byIndex(sel->weaponIndex);
+                if (w && w->seeker && w->seeker->type != SeekerType::Unguided) {
+                    const EntityId designated = designateFor(*st, peer);
+                    cue = designated.valid() &&
+                          m_projectileSystem.wouldAcquire(m_entityManager, sel->weaponIndex, *st, designated);
+                }
+            }
+            ce.fire.seekerCue = cue;
+        }
     }
     // Deterministic execution order regardless of map iteration: shooter idx, then station.
     std::sort(m_fireRequests.begin(), m_fireRequests.end(), [](const FireRequest& a, const FireRequest& b) {

@@ -15,6 +15,8 @@ namespace fl {
 struct FireState {
     LoadoutState loadout;
     bool prevRelease{false};     // store-release edge detector
+    bool seekerCue{false};       // #628: the selected seeker sees the designated target right now —
+                                 // the pre-launch growl, replicated as the own-record LOCK flag
     uint64_t nextGunTick{0};     // earliest tick the gun may fire again (rate limit)
     uint64_t nextReleaseTick{0}; // store-release cooldown (ripple guard)
 };

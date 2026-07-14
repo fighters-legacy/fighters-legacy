@@ -5,13 +5,16 @@
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
 #include "flight/IGravityField.h"
+#include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
 #include "weapon/ProjectileGuidance.h"
 
 #include <glm/geometric.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/trigonometric.hpp>
 
 #include <algorithm>
+#include <cmath>
 
 namespace fl {
 
@@ -52,6 +55,12 @@ SignatureDef signatureFor(const EntityTypeRegistry* registry, const EntityState&
             return def->signatures;
     }
     return SignatureDef{};
+}
+
+// A supported shot (#628): the missile flies on the SHOOTER's radar picture rather than its own —
+// semi-active always, active-radar until pitbull.
+bool usesSupport(const SeekerDef& s) noexcept {
+    return s.type == SeekerType::SemiActiveRadar || (s.type == SeekerType::ActiveRadar && s.pitbullRangeM > 0.f);
 }
 
 } // namespace
@@ -107,11 +116,17 @@ EntityId ProjectileSystem::launch(EntityManager& em, uint32_t weaponIndex, const
     }
     p.armed = def->performance.minRangeM <= 0.f;
 
-    // The launch acquisition gate (#627). A seeker weapon with a designated target resolves its
-    // head (sensor_id through the shared resolver; the deprecated legacy lobe is synthesized) and
-    // starts LOCKED only if the target is inside the acquisition lobe at release — the pre-launch
-    // growl compressed to geometry; the PoD dice were paid during the shooter's own acquisition of
-    // the target. A failed gate, a missing head, or no designation at all = the store flies dumb.
+    // The launch acquisition gate (#627/#628). A seeker weapon with a designated target resolves
+    // its head (sensor_id through the shared resolver; the deprecated legacy lobe is synthesized):
+    //
+    //   - a SUPPORTED shot (SARH, pre-pitbull ARH) launches on the SHOOTER's radar: the gate is
+    //     the shooter's contact table holding the target LOCKED, and the missile's opening picture
+    //     is the shooter's honest belief (the contact's last-known state) — never ground truth;
+    //   - a self-contained seeker (IR; ARH authored with no pitbull) starts LOCKED only if the
+    //     target is inside its own acquisition lobe at release — the pre-launch growl compressed
+    //     to geometry; the PoD dice were paid during the shooter's own acquisition.
+    //
+    // A failed gate, a missing head, or no designation at all = the store flies dumb.
     if (def->seeker && def->seeker->type != SeekerType::Unguided && designatedTarget.valid()) {
         std::shared_ptr<const sensor::SensorDef> head;
         if (!def->seeker->sensorId.empty()) {
@@ -122,25 +137,69 @@ EntityId ProjectileSystem::launch(EntityManager& em, uint32_t weaponIndex, const
         }
         const EntityState* target = em.get(designatedTarget);
         if (head && target && !target->dead) {
-            const SignatureDef sig = signatureFor(m_registry, *target);
-            const float eff = sensor::effectiveMaxRangeM(head->search, head->type, sig);
-            const double mp[3] = {p.pos.x, p.pos.y, p.pos.z};
-            if (sensor::inLobe(mp, t.quat, target->transform.pos, head->search, head->omnidirectional, eff)) {
-                p.seekerDef = std::move(head);
-                p.seeker.targetId = designatedTarget;
-                p.seeker.track.state = sensor::ContactState::Locked;
-                p.seeker.track.lastSeenTick = 0;
-                p.seeker.lastKnownPos = {target->transform.pos[0], target->transform.pos[1], target->transform.pos[2]};
-                p.seeker.lastKnownVel = {target->transform.vel[0], target->transform.vel[1], target->transform.vel[2]};
-                // A radiating head (ARH) stays quiet until pitbull (#628); everything else that
-                // emits is active off the rail. IR is passive and never emits.
-                p.emitting = p.seekerDef->emitter && def->seeker->pitbullRangeM <= 0.f;
+            if (usesSupport(*def->seeker)) {
+                const sensor::ContactTable* table = m_supportQuery ? m_supportQuery(shooterState.id.index) : nullptr;
+                const sensor::Contact* contact = table ? table->find(designatedTarget) : nullptr;
+                if (contact && contact->state == sensor::ContactState::Locked) {
+                    p.seekerDef = std::move(head);
+                    p.seeker.targetId = designatedTarget;
+                    p.seeker.track.state = sensor::ContactState::Locked;
+                    p.seeker.lastKnownPos = {contact->lastKnownPos[0], contact->lastKnownPos[1],
+                                             contact->lastKnownPos[2]};
+                    p.seeker.lastKnownVel = {contact->lastKnownVel[0], contact->lastKnownVel[1],
+                                             contact->lastKnownVel[2]};
+                    p.emitting = false; // quiet until pitbull; SARH never radiates at all
+                }
+            } else {
+                const SignatureDef sig = signatureFor(m_registry, *target);
+                const float eff = sensor::effectiveMaxRangeM(head->search, head->type, sig);
+                const double mp[3] = {p.pos.x, p.pos.y, p.pos.z};
+                if (sensor::inLobe(mp, t.quat, target->transform.pos, head->search, head->omnidirectional, eff)) {
+                    p.seekerDef = std::move(head);
+                    p.seeker.targetId = designatedTarget;
+                    p.seeker.track.state = sensor::ContactState::Locked;
+                    p.seeker.lastKnownPos = {target->transform.pos[0], target->transform.pos[1],
+                                             target->transform.pos[2]};
+                    p.seeker.lastKnownVel = {target->transform.vel[0], target->transform.vel[1],
+                                             target->transform.vel[2]};
+                    p.emitting = p.seekerDef->emitter; // an emitter with no pitbull is active off the rail
+                }
             }
         }
     }
 
     m_projectiles.push_back(p);
     return id;
+}
+
+bool ProjectileSystem::wouldAcquire(const EntityManager& em, uint32_t weaponIndex, const EntityState& shooter,
+                                    EntityId target) const {
+    if (!m_weapons || !target.valid())
+        return false;
+    const WeaponDef* def = m_weapons->byIndex(weaponIndex);
+    if (!def || !def->seeker || def->seeker->type == SeekerType::Unguided)
+        return false;
+
+    if (usesSupport(*def->seeker)) {
+        const sensor::ContactTable* table = m_supportQuery ? m_supportQuery(shooter.id.index) : nullptr;
+        const sensor::Contact* contact = table ? table->find(target) : nullptr;
+        return contact && contact->state == sensor::ContactState::Locked;
+    }
+
+    std::shared_ptr<const sensor::SensorDef> head;
+    if (!def->seeker->sensorId.empty()) {
+        if (m_sensorResolver)
+            head = m_sensorResolver(def->seeker->sensorId);
+    } else if (def->seeker->usesLegacyLobe()) {
+        head = std::make_shared<const sensor::SensorDef>(synthesizeLegacySeekerDef(*def->seeker));
+    }
+    const EntityState* ts = em.get(target);
+    if (!head || !ts || ts->dead)
+        return false;
+    const SignatureDef sig = signatureFor(m_registry, *ts);
+    const float eff = sensor::effectiveMaxRangeM(head->search, head->type, sig);
+    return sensor::inLobe(shooter.transform.pos, shooter.transform.quat, ts->transform.pos, head->search,
+                          head->omnidirectional, eff);
 }
 
 void ProjectileSystem::step(EntityManager& em, const SpatialIndex& si, float dt, const GroundQuery& ground,
@@ -160,15 +219,70 @@ void ProjectileSystem::step(EntityManager& em, const SpatialIndex& si, float dt,
             continue;
         }
 
-        // ── seeker check (#627): the 10 Hz reference cadence, staggered by projectile id ─────
+        // ── pitbull transition (#628): the ARH missile's own radar takes over ────────────────
+        // At pitbull range-to-go the seeker goes ACTIVE (it starts EMITTING — the #529 RWR seam)
+        // and the datalink is done. Acquisition is CUED: the datalink pointed the head exactly at
+        // the contact, so geometry against the true target decides — in the lobe means Locked, out
+        // of it means the head searches on its own dice from here.
+        const bool supported = p.seekerDef && def->seeker && usesSupport(*def->seeker) && !p.pitbull;
+        if (supported && def->seeker->type == SeekerType::ActiveRadar) {
+            const glm::dvec3 toGo = p.seeker.lastKnownPos - p.pos;
+            if (glm::dot(toGo, toGo) <=
+                static_cast<double>(def->seeker->pitbullRangeM) * static_cast<double>(def->seeker->pitbullRangeM)) {
+                p.pitbull = true;
+                p.emitting = true;
+                const EntityState* target = em.get(p.seeker.targetId);
+                bool cued = false;
+                if (target && !target->dead) {
+                    const SignatureDef sig = signatureFor(m_registry, *target);
+                    const float eff = sensor::effectiveMaxRangeM(p.seekerDef->search, p.seekerDef->type, sig);
+                    const double mp[3] = {p.pos.x, p.pos.y, p.pos.z};
+                    cued = sensor::inLobe(mp, es->transform.quat, target->transform.pos, p.seekerDef->search,
+                                          p.seekerDef->omnidirectional, eff);
+                }
+                if (cued) {
+                    p.seeker.track.state = sensor::ContactState::Locked;
+                } else {
+                    // Fly on at the frozen point while the head looks for it.
+                    p.seeker.track.state = sensor::ContactState::Coasting;
+                    p.seeker.track.coastRemainingS = p.seekerDef->lockHoldS;
+                }
+            }
+        }
+
+        // ── seeker check: the 10 Hz reference cadence, staggered by projectile id ────────────
         if (p.seekerDef && p.seeker.targetId.valid() && (tickIndex + p.entityId.index) % kSeekerCheckTicks == 0) {
-            const EntityState* target = em.get(p.seeker.targetId); // gen-checked: a reused slot is null
-            const bool seduced = m_cmCheck && target && m_cmCheck(p.entityId, p.seeker.targetId, tickIndex);
             const float checkDtS = p.seeker.everChecked ? static_cast<float>(tickIndex - p.seeker.lastCheckTick) * dt
                                                         : static_cast<float>(kSeekerCheckTicks) * dt;
-            const SignatureDef sig = target ? signatureFor(m_registry, *target) : SignatureDef{};
-            stepSeekerCheck(p.seeker, *p.seekerDef, p.emitting, p.pos, es->transform.quat, target, sig, env,
-                            p.entityId.index, tickIndex, checkDtS, seduced);
+            if (supported && (!p.pitbull || def->seeker->type == SeekerType::SemiActiveRadar)) {
+                // Supported flight (#628): the missile's picture IS the shooter's. Held while the
+                // shooter is alive and its contact table holds the target LOCKED; a support drop
+                // coasts out on the head's lock_hold_s, then the shot goes dumb. The synthetic
+                // evaluation reuses the shared state machine — support is the geometry.
+                const EntityState* shooterNow = em.get(p.shooter);
+                const sensor::ContactTable* table =
+                    (shooterNow && !shooterNow->dead && m_supportQuery) ? m_supportQuery(p.shooter.index) : nullptr;
+                const sensor::Contact* contact = table ? table->find(p.seeker.targetId) : nullptr;
+                const bool held = contact && contact->state == sensor::ContactState::Locked;
+                sensor::SensorEvaluation eval{};
+                eval.searchInLobe = eval.trackInLobe = held;
+                eval.searchRollPass = eval.trackRollPass = held; // datalink re-established = re-acquired
+                p.seeker.track = sensor::stepContact(p.seeker.track, eval, p.seekerDef->lockHoldS, checkDtS, tickIndex);
+                p.seeker.lastCheckTick = tickIndex;
+                p.seeker.everChecked = true;
+                if (held) {
+                    p.seeker.lastKnownPos = {contact->lastKnownPos[0], contact->lastKnownPos[1],
+                                             contact->lastKnownPos[2]};
+                    p.seeker.lastKnownVel = {contact->lastKnownVel[0], contact->lastKnownVel[1],
+                                             contact->lastKnownVel[2]};
+                }
+            } else {
+                const EntityState* target = em.get(p.seeker.targetId); // gen-checked: a reused slot is null
+                const bool seduced = m_cmCheck && target && m_cmCheck(p.entityId, p.seeker.targetId, tickIndex);
+                const SignatureDef sig = target ? signatureFor(m_registry, *target) : SignatureDef{};
+                stepSeekerCheck(p.seeker, *p.seekerDef, p.emitting, p.pos, es->transform.quat, target, sig, env,
+                                p.entityId.index, tickIndex, checkDtS, seduced);
+            }
         }
 
         // ── 3-DOF point-mass step ────────────────────────────────────────────
@@ -189,8 +303,22 @@ void ProjectileSystem::step(EntityManager& em, const SpatialIndex& si, float dt,
         // ballistically on whatever course guidance last set.
         if (p.seekerDef && p.seeker.targetId.valid() && p.seeker.track.state != sensor::ContactState::Lost) {
             const float maxAccel = (def->performance.maxG > 0.f ? def->performance.maxG : 30.f) * kGravityAccelMps2;
-            accel += proportionalNavAccel(p.pos, p.vel, p.seeker.lastKnownPos, p.seeker.lastKnownVel,
-                                          kProportionalNavGain, maxAccel);
+            glm::dvec3 aim = p.seeker.lastKnownPos;
+            // Loft (#628): while range-to-go exceeds the loft threshold, the aim point is raised
+            // along local up by tan(bias) × range — the missile climbs into thin air, trading the
+            // climb for range, and drops onto pure PN when the threshold passes.
+            if (def->seeker && def->seeker->loftBiasDeg > 0.f && def->seeker->loftRangeM > 0.f) {
+                const glm::dvec3 toGo = aim - p.pos;
+                const double range2 = glm::dot(toGo, toGo);
+                const double loftR = static_cast<double>(def->seeker->loftRangeM);
+                if (range2 > loftR * loftR) {
+                    const glm::vec3 up = -glm::normalize(glm::vec3{g[0], g[1], g[2]}); // radial up
+                    const double lift =
+                        std::tan(static_cast<double>(glm::radians(def->seeker->loftBiasDeg))) * std::sqrt(range2);
+                    aim += glm::dvec3(up) * lift;
+                }
+            }
+            accel += proportionalNavAccel(p.pos, p.vel, aim, p.seeker.lastKnownVel, kProportionalNavGain, maxAccel);
         }
 
         const glm::dvec3 prevPos = p.pos;
