@@ -786,7 +786,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         " congestion_budget_floor_bytes, overrun_governor_enabled, overrun_high_watermark,"
         " overrun_low_watermark, overrun_min_snapshot_hz, overrun_max_ai_stride,"
         " overrun_budget_floor_bytes, overrun_min_interest_fraction, compress_snapshots,"
-        " sensor_check_hz, ai.difficulty (other"
+        " sensor_check_hz, gameplay.friendly_fire, gameplay.crash_damage, ai.difficulty (other"
         " fields, incl. max_catchup_ticks and gns_nagle_time_us, require restart)",
         [ctx](std::span<std::string_view>) -> std::string {
             if (!ctx.env.configPath || ctx.env.configPath->empty())
@@ -817,6 +817,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                     newCfg.overrunMinInterestFraction);
                 auto newCompress = newCfg.network.compressSnapshots;
                 auto newSensorHz = static_cast<float>(newCfg.sensorCheckHz);
+                auto newRules = fl::DamageRules{newCfg.friendlyFire, newCfg.crashDamage};
                 // Resolve the preset OFF the sim thread (it may read data/difficulty.toml through the
                 // AssetManager); only the resulting POD crosses into the callback. Null resolver ⇒
                 // nullopt ⇒ the running scaling is left alone rather than reset to a default.
@@ -825,7 +826,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                     newAiScaling = ctx.env.resolveAiScaling(newCfg.aiDifficulty);
                 ctx.sim.gameLoop->enqueueSimCallback([ctx, newMotd, newMotdDisplayS, newDraw, newSnapshotBudget,
                                                       newJitterDepth, newAdaptWindow, newHysteresis, newMultiplier,
-                                                      newCongestion, newGovernor, newCompress, newSensorHz,
+                                                      newCongestion, newGovernor, newCompress, newSensorHz, newRules,
                                                       newAiScaling]() mutable {
                     ctx.sim.broadcaster->setMotd(std::move(newMotd));
                     ctx.sim.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
@@ -839,6 +840,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                     ctx.sim.broadcaster->setCongestionParams(newCongestion);
                     ctx.sim.broadcaster->setGovernorParams(newGovernor);
                     ctx.sim.broadcaster->setSensorCheckHz(newSensorHz);
+                    ctx.sim.broadcaster->setDamageRules(newRules);
                     if (newAiScaling)
                         ctx.sim.broadcaster->setAiScaling(*newAiScaling);
                 });

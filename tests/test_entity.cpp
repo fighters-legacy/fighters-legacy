@@ -4,6 +4,7 @@
 
 #include "ILogger.h"
 
+#include "entity/DamageApplication.h"
 #include "entity/DamageDef.h"
 #include "entity/EntityDefParser.h"
 #include "entity/EntityEvent.h"
@@ -1180,4 +1181,82 @@ TEST_CASE("EntityDefParser: an unknown sensor id is NOT a parse error", "[parser
     const fl::EntityDef def = fl::parseEntityDef(entityWith("sensors = [\"nosuchpack:nosuchsensor\"]\n"));
     REQUIRE(def.sensorIds.size() == 1);
     CHECK(def.sensorIds[0] == "nosuchpack:nosuchsensor");
+}
+
+// ---------------------------------------------------------------------------
+// applyPointDamage — the combat damage funnel (#626)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("applyPointDamage: the friendly-fire gate suppresses same-faction damage", "[damage-rules]") {
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeAirVehicleDef("ff:a"));
+    fl::EntityManager mgr(logger, registry);
+
+    fl::EntityTransform t{};
+    auto shooter = mgr.spawn("ff:a", t);
+    auto victim = mgr.spawn("ff:a", t);
+    mgr.get(shooter)->factionIndex = 2;
+    mgr.get(victim)->factionIndex = 2;
+
+    fl::DamageRules noFF{};
+    noFF.friendlyFire = false;
+
+    SECTION("teammate damage is suppressed and reported as such") {
+        CHECK_FALSE(fl::applyPointDamage(mgr, victim, 40.f, shooter, noFF));
+        CHECK(mgr.get(victim)->hp == 100.f);
+    }
+
+    SECTION("with friendly fire enabled the same shot lands") {
+        fl::DamageRules ff{};
+        ff.friendlyFire = true;
+        CHECK(fl::applyPointDamage(mgr, victim, 40.f, shooter, ff));
+        CHECK(mgr.get(victim)->hp == 60.f);
+    }
+
+    SECTION("neutral faction 0 is not a team") {
+        mgr.get(shooter)->factionIndex = 0;
+        mgr.get(victim)->factionIndex = 0;
+        CHECK(fl::applyPointDamage(mgr, victim, 40.f, shooter, noFF));
+        CHECK(mgr.get(victim)->hp == 60.f);
+    }
+
+    SECTION("self-damage always applies (your own blast radius is not friendly fire)") {
+        CHECK(fl::applyPointDamage(mgr, victim, 40.f, victim, noFF));
+        CHECK(mgr.get(victim)->hp == 60.f);
+    }
+
+    SECTION("environmental damage (null instigator) always applies") {
+        CHECK(fl::applyPointDamage(mgr, victim, 40.f, fl::EntityId::null(), noFF));
+        CHECK(mgr.get(victim)->hp == 60.f);
+    }
+}
+
+TEST_CASE("applyPointDamage: instigator attribution flows through to the kill", "[damage-rules]") {
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeAirVehicleDef("ff:b"));
+    fl::EntityManager mgr(logger, registry);
+
+    struct Collector : fl::IEntityEventHandler {
+        std::vector<fl::EntityEvent> events;
+        void onEntityEvent(const fl::EntityEvent& e) override {
+            events.push_back(e);
+        }
+    } collector;
+    mgr.addEventHandler(&collector);
+
+    fl::EntityTransform t{};
+    auto shooter = mgr.spawn("ff:b", t);
+    auto victim = mgr.spawn("ff:b", t);
+    mgr.get(shooter)->factionIndex = 1;
+    mgr.get(victim)->factionIndex = 2;
+
+    CHECK(fl::applyPointDamage(mgr, victim, 200.f, shooter, fl::DamageRules{}));
+
+    REQUIRE(collector.events.size() == 2); // Died + ScoreAwarded
+    CHECK(collector.events[0].type == fl::EntityEventType::Died);
+    CHECK(collector.events[0].instigator == shooter);
+    CHECK(collector.events[1].type == fl::EntityEventType::ScoreAwarded);
+    CHECK(collector.events[1].instigator == shooter);
 }

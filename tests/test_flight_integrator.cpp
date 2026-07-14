@@ -1248,3 +1248,85 @@ TEST_CASE("Integrator: the stall flag sets past alpha_stall_deg and clears below
     integ.step(1.f / 60.f, ctrl, {});
     CHECK_FALSE(integ.state().stalled);
 }
+
+// ---------------------------------------------------------------------------
+// Damage penalties + crash-impact report (#626)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Integrator: damage thrust penalty caps what the throttle can command", "[integrator][damage]") {
+    auto data = makeData();
+    FlightIntegrator integ(data);
+    FlightState s{};
+    s.vel_body[0] = 200.0;
+    s.pos_world[1] = 5000.0;
+    s.quat[3] = 1.f;
+    s.mass_kg = data->geometry.mass_kg;
+    integ.reset(s);
+
+    integ.setDamagePenalty(0.4f, 1.f);
+    CHECK(integ.damageThrustFactor() == Catch::Approx(0.4f));
+
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    for (int i = 0; i < 1200; ++i) // let the spool converge
+        integ.step(1.f / 60.f, ctrl, {});
+    // Full stick asked for 1.0; a shot-up engine delivers what the penalty allows.
+    CHECK(integ.state().throttle_actual > 0.3f);
+    CHECK(integ.state().throttle_actual < 0.45f);
+}
+
+TEST_CASE("Integrator: damage control penalty degrades pitch response", "[integrator][damage]") {
+    auto data = makeData();
+    auto flyPitch = [&](float controlFactor) {
+        FlightIntegrator integ(data);
+        FlightState s{};
+        s.vel_body[0] = 200.0;
+        s.pos_world[1] = 5000.0;
+        s.quat[3] = 1.f;
+        s.mass_kg = data->geometry.mass_kg;
+        integ.reset(s);
+        integ.setDamagePenalty(1.f, controlFactor);
+        ControlInput ctrl{};
+        ctrl.throttle = 0.8f;
+        ctrl.elevator = 1.f;
+        // A single step: the raw command-to-pitch-acceleration response, before aerodynamic
+        // damping and alpha feedback blur the comparison.
+        integ.step(1.f / 60.f, ctrl, {});
+        return std::abs(integ.state().omega[2]); // pitch = around body Z (right axis)
+    };
+
+    const float healthy = flyPitch(1.f);
+    const float damaged = flyPitch(0.3f);
+    CHECK(healthy > 0.f);
+    CHECK(damaged < healthy * 0.75f); // shot-up linkages cannot be asked for full deflection
+}
+
+TEST_CASE("Integrator: a hard ground impact is reported once, a firm landing not at all", "[integrator][damage]") {
+    auto data = makeData();
+    FlightIntegrator integ(data);
+
+    FlightState s{};
+    s.vel_body[0] = 60.0;
+    s.vel_body[1] = -40.0; // 40 m/s of sink — an arrival, not a landing
+    s.pos_world[1] = 0.4;  // about to hit the datum floor this tick
+    s.quat[3] = 1.f;
+    s.mass_kg = data->geometry.mass_kg;
+    integ.reset(s);
+
+    ControlInput ctrl{};
+    integ.step(1.f / 60.f, ctrl, {}, {}, 0.f);
+    CHECK(integ.state().ground_impact_speed > 6.f); // reported...
+    integ.step(1.f / 60.f, ctrl, {}, {}, 0.f);
+    CHECK(integ.state().ground_impact_speed == 0.f); // ...exactly once (one-shot)
+
+    // A firm-but-survivable landing stays below the reporting threshold.
+    FlightState gentle{};
+    gentle.vel_body[0] = 60.0;
+    gentle.vel_body[1] = -3.0;
+    gentle.pos_world[1] = 0.04;
+    gentle.quat[3] = 1.f;
+    gentle.mass_kg = data->geometry.mass_kg;
+    integ.reset(gentle);
+    integ.step(1.f / 60.f, ctrl, {}, {}, 0.f);
+    CHECK(integ.state().ground_impact_speed == 0.f);
+}

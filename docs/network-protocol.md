@@ -67,6 +67,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `PeerDelay` | `0x0C` | server→client | unreliable | 4 bytes | Reply to `MsgHeartbeat`; delivers `estimatedDelayTicks` for this peer. Client converts to ms: `delayTicks × 1000 / 60`. `delayTicks == 0` means no valid estimate yet (client ignores). Additive ID — old clients silently discard. |
 | `WingmanCommand` | `0x0D` | client→server | reliable | 16 bytes | Order a formation (#610). Authorized by **commanding the formation**, never by anything in the packet. Additive ID — old servers silently discard. |
 | `WingmanAck` | `0x0E` | server→client | reliable | 16 bytes | Outcome of an order, the on-connect flight check-in, or a radio call **relayed** to a human member of someone's flight. Carries a result **code**, never server-authored text. Additive ID. |
+| `CombatEvent` | `0x0F` | server→client | reliable | 4 + n×32 bytes | Kill feed (broadcast) + the receiving peer's own combat stats (unicast). A multiplexed record stream — this took the **last free ENet id**, so future gameplay events extend the record vocabulary, not the id space. Additive ID. |
 | `LanBeacon` | `0x10` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast |
 
 ## Struct Definitions
@@ -533,6 +534,39 @@ same reasoning as `ConnectRefusalCode`.
 | 8 | `NotLead` | Reserved: you are in a formation but do not command it. |
 
 Both IDs are additive — old peers discard them, and `kProtocolVersion` stays **1**.
+
+### MsgCombatEvent — 4 + n×32 bytes
+
+Reliable, **server→client** (#626). The gameplay-event stream: a 4-byte header followed by
+`count` 32-byte records. Kill records are **broadcast**; a `Stats` record is **unicast** and
+always describes the *receiving* peer's own tallies. Cosmetic effects (tracers, impacts) do not
+ride here — they are unreliable snapshot TLVs, because a lost muzzle flash is nothing and a lost
+kill credit is a bug.
+
+Header:
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x0F` |
+| 1 | 1 | `count` | `uint8_t` | Records following the header |
+| 2 | 2 | `reserved` | `uint16_t` | |
+
+`CombatEventRecord` (each):
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `type` | `uint8_t` | `0` = Kill, `1` = Stats; unknown types must be skipped, not rejected |
+| 1 | 1 | `weaponClass` | `uint8_t` | `WeaponType` ordinal of the credited weapon; `0xFF` = none/unknown |
+| 2 | 2 | `reserved` | `uint16_t` | |
+| 4 | 4 | `subjectIdx` | `uint32_t` | Kill: the destroyed entity |
+| 8 | 2 | `subjectGen` | `uint16_t` | |
+| 10 | 2 | `pad0` | `uint16_t` | |
+| 12 | 4 | `instigatorIdx` | `uint32_t` | Kill: the credited entity; `0xFFFFFFFF` = environment |
+| 16 | 2 | `instigatorGen` | `uint16_t` | |
+| 18 | 2 | `pad1` | `uint16_t` | |
+| 20 | 4 | `a` | `uint32_t` | Kill: instigator's owning **peer id** (`kNoOwningPeer` = AI/server — peer id 0 is a real player). Stats: kills |
+| 24 | 4 | `b` | `uint32_t` | Kill: subject's owning peer id. Stats: losses |
+| 28 | 4 | `c` | `int32_t` | Stats: score |
 
 ### MsgLanBeacon — 74 bytes
 

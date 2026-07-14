@@ -489,3 +489,41 @@ TEST_CASE("GameProtocol: MsgPeerDelay round-trip", "[game_protocol]") {
 
 // (The compact entity record round-trip lives in test_snapshot_codec.cpp now that the entity body
 // is a quantized bitstream rather than fixed MsgEntityEntry/MsgEntityUpdate structs.)
+
+TEST_CASE("GameProtocol: CombatEvent wire layout", "[game_protocol]") {
+    CHECK(sizeof(fl::MsgCombatEventHeader) == 4u);
+    CHECK(offsetof(fl::MsgCombatEventHeader, count) == 1u);
+    CHECK(sizeof(fl::CombatEventRecord) == 32u);
+    CHECK(alignof(fl::CombatEventRecord) == 4u);
+    CHECK(offsetof(fl::CombatEventRecord, subjectIdx) == 4u);
+    CHECK(offsetof(fl::CombatEventRecord, instigatorIdx) == 12u);
+    CHECK(offsetof(fl::CombatEventRecord, a) == 20u);
+    CHECK(offsetof(fl::CombatEventRecord, b) == 24u);
+    CHECK(offsetof(fl::CombatEventRecord, c) == 28u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::CombatEvent) == 0x0Fu);
+}
+
+TEST_CASE("GameProtocol: CombatEventRecord round-trip through WireCodec", "[game_protocol]") {
+    std::vector<uint8_t> buf;
+    fl::MsgCombatEventHeader hdr;
+    hdr.count = 1;
+    fl::appendMsg(buf, hdr);
+    fl::CombatEventRecord rec{};
+    rec.type = static_cast<uint8_t>(fl::CombatEventType::Kill);
+    rec.subjectIdx = 42;
+    rec.subjectGen = 7;
+    rec.instigatorIdx = 3;
+    rec.instigatorGen = 1;
+    rec.a = 0; // peer 0 gets the credit — a REAL peer id (the kNoPeer lesson)
+    rec.b = fl::kNoOwningPeer;
+    fl::appendMsg(buf, rec);
+
+    fl::MsgCombatEventHeader outHdr;
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), outHdr));
+    CHECK(outHdr.count == 1);
+    fl::CombatEventRecord out;
+    REQUIRE(fl::readRecordAt(buf.data(), buf.size(), sizeof(outHdr), out));
+    CHECK(out.subjectIdx == 42u);
+    CHECK(out.a == 0u);
+    CHECK(out.b == fl::kNoOwningPeer);
+}

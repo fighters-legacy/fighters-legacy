@@ -8,6 +8,7 @@
 #include "entity/EntityTypeRegistry.h"
 #include "entity/IEntityController.h"
 #include "flight/CentralGravityField.h"
+#include "flight/FlightIntegrator.h"
 #include "job/JobSystem.h"
 #include "net/BitStream.h"
 #include "net/GameProtocol.h"
@@ -7843,4 +7844,143 @@ TEST_CASE("WorldBroadcaster: disconnect tears the peer's flight down", "[world_b
     CHECK(broadcaster.formations().size() == 0u);
     broadcaster.onTick(1.0 / 60.0, 2u);
     CHECK(em.liveCount() == 0u); // both gone
+}
+
+// ---------------------------------------------------------------------------
+// Combat scoring, the kill feed, and damage penalties (#626)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// All MsgCombatEvent packets broadcast so far, decoded into records.
+std::vector<fl::CombatEventRecord> combatBroadcasts(const MockNetwork& net) {
+    std::vector<fl::CombatEventRecord> out;
+    for (const auto& pkt : net.broadcasts) {
+        if (pkt.empty() || pkt[0] != static_cast<uint8_t>(fl::MsgId::CombatEvent))
+            continue;
+        fl::MsgCombatEventHeader hdr;
+        REQUIRE(fl::readMsg(pkt.data(), pkt.size(), hdr));
+        for (uint8_t i = 0; i < hdr.count; ++i) {
+            fl::CombatEventRecord rec;
+            REQUIRE(fl::readRecordAt(pkt.data(), pkt.size(), sizeof(hdr) + std::size_t(i) * sizeof(rec), rec));
+            out.push_back(rec);
+        }
+    }
+    return out;
+}
+
+// The last Stats record unicast to `peerId`, if any.
+std::optional<fl::CombatEventRecord> lastStatsFor(const MockNetwork& net, uint32_t peerId) {
+    std::optional<fl::CombatEventRecord> out;
+    for (const auto& [pid, pkt] : net.perPeerSends) {
+        if (pid != peerId || pkt.empty() || pkt[0] != static_cast<uint8_t>(fl::MsgId::CombatEvent))
+            continue;
+        fl::MsgCombatEventHeader hdr;
+        if (!fl::readMsg(pkt.data(), pkt.size(), hdr))
+            continue;
+        for (uint8_t i = 0; i < hdr.count; ++i) {
+            fl::CombatEventRecord rec;
+            if (fl::readRecordAt(pkt.data(), pkt.size(), sizeof(hdr) + std::size_t(i) * sizeof(rec), rec) &&
+                rec.type == static_cast<uint8_t>(fl::CombatEventType::Stats))
+                out = rec;
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+TEST_CASE("WorldBroadcaster: a kill broadcasts credit and unicasts the killer's stats", "[world_broadcaster][combat]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::EntityTransform t{};
+    t.pos[1] = 500.0;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", t);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    em.addEventHandler(&broadcaster);
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityId shooter{ack.assignedEntityIdx, ack.assignedEntityGen};
+
+    em.applyDamage(victim, 200.f, shooter); // lethal, credited to peer 0's aircraft
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    const auto kills = combatBroadcasts(net);
+    REQUIRE(kills.size() == 1u);
+    CHECK(kills[0].type == static_cast<uint8_t>(fl::CombatEventType::Kill));
+    CHECK(kills[0].subjectIdx == victim.index);
+    CHECK(kills[0].instigatorIdx == shooter.index);
+    CHECK(kills[0].a == 0u);                // peer 0 gets the credit — a REAL peer id
+    CHECK(kills[0].b == fl::kNoOwningPeer); // the victim was AI/server-owned
+
+    const auto stats = lastStatsFor(net, 0u);
+    REQUIRE(stats.has_value());
+    CHECK(stats->a == 1u); // kills
+    CHECK(stats->b == 0u); // losses
+    CHECK(stats->c == 1);  // ScoreAwarded's default credit
+}
+
+TEST_CASE("WorldBroadcaster: losing your aircraft is a loss on your stats", "[world_broadcaster][combat]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    em.addEventHandler(&broadcaster);
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+
+    em.applyDamage({ack.assignedEntityIdx, ack.assignedEntityGen}, 200.f, fl::EntityId::null());
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    const auto stats = lastStatsFor(net, 0u);
+    REQUIRE(stats.has_value());
+    CHECK(stats->a == 0u);
+    CHECK(stats->b == 1u);
+}
+
+TEST_CASE("WorldBroadcaster: DamageLevelChanged applies the DamageDef penalties to the integrator",
+          "[world_broadcaster][combat]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+
+    fl::EntityDef def = makeDebugDef();
+    fl::DamageDef dmg;
+    dmg.light.hpFraction = 0.7f;
+    dmg.light.thrustFactor = 0.5f;
+    dmg.light.controlFactor = 0.6f;
+    dmg.heavy.hpFraction = 0.35f;
+    dmg.critical.hpFraction = 0.1f;
+    dmg.critical.thrustFactor = 0.1f;
+    dmg.critical.controlFactor = 0.2f;
+    dmg.critical.avionicsFailure = true;
+    def.damage = dmg;
+    registry.registerType(def);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    em.addEventHandler(&broadcaster);
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityId player{ack.assignedEntityIdx, ack.assignedEntityGen};
+
+    const fl::FlightIntegrator* fi = broadcaster.integratorFor(player.index);
+    REQUIRE(fi != nullptr);
+    CHECK(fi->damageThrustFactor() == 1.f);
+
+    em.applyDamage(player, 40.f, fl::EntityId::null()); // 60/100 -> Light
+    CHECK(fi->damageThrustFactor() == 0.5f);
+    CHECK(fi->damageControlFactor() == 0.6f);
+
+    em.applyDamage(player, 55.f, fl::EntityId::null()); // 5/100 -> Critical (avionics gone)
+    CHECK(fi->damageThrustFactor() == 0.1f);
+    CHECK(fi->damageControlFactor() == 0.2f);
 }

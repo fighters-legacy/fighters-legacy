@@ -2117,3 +2117,77 @@ TEST_CASE("ClientNetEventHandler: non-terminated type-def fields do not over-rea
     handler.onReceive(0u, pkt.data(), pkt.size());
     CHECK(registry.typeCount() >= 1u);
 }
+
+TEST_CASE("ClientNetEventHandler: CombatEvent feeds the kill feed and the session stats",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    fl::CommandRegistry cmdReg;
+    fl::GameConsole console(logger, cmdReg);
+    ServerNotice notice;
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.console = &console;
+    handler.notice = &notice;
+    handler.assignedEntityIdx = 5;
+    handler.assignedEntityGen = 2;
+
+    std::vector<uint8_t> pkt;
+    fl::MsgCombatEventHeader hdr;
+    hdr.count = 2;
+    fl::appendMsg(pkt, hdr);
+    fl::CombatEventRecord kill{};
+    kill.type = static_cast<uint8_t>(fl::CombatEventType::Kill);
+    kill.subjectIdx = 9;
+    kill.subjectGen = 1;
+    kill.instigatorIdx = 5; // our own aircraft: this is OUR kill
+    kill.instigatorGen = 2;
+    kill.a = 0; // we are peer 0
+    kill.b = fl::kNoOwningPeer;
+    fl::appendMsg(pkt, kill);
+    fl::CombatEventRecord stats{};
+    stats.type = static_cast<uint8_t>(fl::CombatEventType::Stats);
+    stats.a = 3;
+    stats.b = 1;
+    stats.c = 3;
+    fl::appendMsg(pkt, stats);
+
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    // Kill feed reached the console...
+    bool sawKillLine = false;
+    for (const auto& line : console.outputLines())
+        if (line.find("[kill] you destroyed") != std::string::npos)
+            sawKillLine = true;
+    CHECK(sawKillLine);
+    // ...the banner celebrates the right party...
+    auto elems = notice.buildElements();
+    REQUIRE(!elems.empty());
+    CHECK(std::string(elems[0].text).find("DESTROYED") != std::string::npos);
+    // ...and the tallies are the SERVER's, verbatim.
+    CHECK(handler.sessionStats().kills == 3u);
+    CHECK(handler.sessionStats().losses == 1u);
+    CHECK(handler.sessionStats().score == 3);
+}
+
+TEST_CASE("ClientNetEventHandler: a truncated CombatEvent packet fails closed", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    std::vector<uint8_t> pkt;
+    fl::MsgCombatEventHeader hdr;
+    hdr.count = 4; // claims four records, carries half of one
+    fl::appendMsg(pkt, hdr);
+    pkt.resize(pkt.size() + sizeof(fl::CombatEventRecord) / 2, 0u);
+
+    handler.onReceive(0u, pkt.data(), pkt.size()); // must not read past the buffer or crash
+    CHECK(handler.sessionStats().kills == 0u);
+}

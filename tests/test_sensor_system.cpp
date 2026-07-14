@@ -323,3 +323,28 @@ TEST_CASE("SensorSystem: removing an observer drops its table", "[sensor_system]
     CHECK(f.sys.contactsFor(observer.index) == nullptr); // null = "not evaluated", per AiTickContext
     CHECK(f.sys.observerCount() == 0u);
 }
+
+TEST_CASE("SensorSystem: avionics failure strips the suite to eyes and drops every track", "[sensor_system]") {
+    Fixture f;
+    const EntityId observer = f.spawn(0, 0, 0);
+    const EntityId target = f.spawn(5.0 * kMPerNm, 0, 0); // dead ahead, well inside the radar
+
+    f.sys.addObserver(observer.index, {"t:radar"}, 1.0f, 0.5f); // skill 1 so acquisition lands fast
+    for (uint64_t t = 1;
+         t <= 200 && !(f.sys.contactsFor(observer.index) && f.sys.contactsFor(observer.index)->find(target) != nullptr);
+         ++t)
+        f.check(t);
+    REQUIRE(f.sys.contactsFor(observer.index)->find(target) != nullptr);
+    REQUIRE(f.sys.emitting(observer.index));
+
+    f.sys.setAvionicsFailed(observer.index);
+
+    // Emissions stop, and the radar's held contact is gone — the eyes must re-acquire honestly.
+    CHECK_FALSE(f.sys.emitting(observer.index));
+    REQUIRE(f.sys.contactsFor(observer.index) != nullptr); // still an observer: eyes, not blindness
+    CHECK(f.sys.contactsFor(observer.index)->empty());
+
+    // Idempotent, and a non-observer is a no-op.
+    f.sys.setAvionicsFailed(observer.index);
+    f.sys.setAvionicsFailed(9999u);
+}

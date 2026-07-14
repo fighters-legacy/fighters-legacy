@@ -730,6 +730,32 @@ Minimum AI difficulty enforced server-side, regardless of individual client pref
 
 ---
 
+## [gameplay] — The damage gates
+
+Server-authoritative (#626): single-player configures these through the same path via the embedded
+`fl-server`, never client-side. Both hot-reload via `reload_config`.
+
+### `friendly_fire`
+
+| Type | Default |
+|---|---|
+| bool | `false` |
+
+When `false`, weapon damage from an instigator sharing the target's **non-zero** faction is
+suppressed. Faction `0` is *neutral*, not a team — neutral-on-neutral damage always applies, as do
+self-damage (your own blast radius) and environmental damage.
+
+### `crash_damage`
+
+| Type | Default |
+|---|---|
+| bool | `true` |
+
+When `true`, a hard ground impact damages the airframe (scaling with impact speed past a
+survivable-arrival threshold). Ordinary landings are never affected.
+
+---
+
 ## [discovery] — LAN server discovery
 
 Configures the UDP broadcast beacon that lets players on the same LAN find this server

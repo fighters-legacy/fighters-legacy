@@ -339,6 +339,7 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setJitterMultiplier(cfg.jitterMultiplier);
     setCongestionParams(cfg.congestion);
     setGovernorParams(cfg.governor);
+    setDamageRules(cfg.gameplay);
 }
 
 void WorldBroadcaster::setIdleTimeout(int timeoutSeconds) noexcept {
@@ -746,6 +747,22 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         const float damage = kOverGDamagePerG * excess;
         if (damage > 0.f)
             m_entityManager.applyDamage(it.ce->id, damage, EntityId::null());
+    }
+
+    // Crash damage (#626), same serial-apply discipline as over-G: the integrator reported a hard
+    // ground impact this tick (a one-shot, cleared on its next step); the damage is applied here on
+    // the sim thread, gated by the crashDamage difficulty toggle. Damage scales with how far past a
+    // survivable arrival the impact was — a firm landing reports nothing, a 26 m/s arrival is fatal
+    // to a 100 hp airframe.
+    for (const StepItem& it : m_stepItems) {
+        const float impact = it.ce->sim->state().ground_impact_speed;
+        if (impact <= 0.f || !m_damageRules.crashDamage)
+            continue;
+        constexpr float kCrashFreeImpactMps = 6.f; // matches the integrator's reporting threshold
+        constexpr float kCrashDamagePerMps = 5.f;
+        const float damage = kCrashDamagePerMps * std::max(0.f, impact - kCrashFreeImpactMps);
+        if (damage > 0.f)
+            applyPointDamage(m_entityManager, it.ce->id, damage, EntityId::null(), m_damageRules);
     }
 
     // Cache the representative entity XZ for main-thread terrain streaming (single-player).
@@ -1249,6 +1266,10 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         }
     }
 
+    // Kill feed + per-peer combat stats (#626), reliable — after the snapshot sends so a kill's
+    // despawn and its credit arrive in the same tick's traffic.
+    flushCombatEvents();
+
     // Shutdown countdown: fire at each interval and at T=0.
     if (m_shuttingDown) {
         using namespace std::chrono;
@@ -1447,11 +1468,143 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     m_peerKnownGens.erase(peerId);
     m_peerPendingDespawn.erase(peerId);
     m_peerTraceWriters.erase(peerId); // close this peer's input trace (#560), if any
+    m_scores.erase(peerId);           // ENet reuses peer ids; a rejoiner must not inherit tallies (#626)
     m_activePeerCount.fetch_sub(1, std::memory_order_relaxed);
 
     m_pendingAdminDrains.erase(std::remove_if(m_pendingAdminDrains.begin(), m_pendingAdminDrains.end(),
                                               [peerId](const PendingAdminDrain& d) { return d.peerId == peerId; }),
                                m_pendingAdminDrains.end());
+}
+
+const FlightIntegrator* WorldBroadcaster::integratorFor(uint32_t entityIdx) const noexcept {
+    auto it = m_controlledEntities.find(entityIdx);
+    return (it != m_controlledEntities.end() && it->second.sim) ? it->second.sim.get() : nullptr;
+}
+
+uint32_t WorldBroadcaster::peerIdForEntity(EntityId id) const noexcept {
+    if (!id.valid())
+        return kNoOwningPeer;
+    for (const auto& [peerId, eid] : m_peerEntities) {
+        if (eid == id)
+            return peerId;
+    }
+    return kNoOwningPeer;
+}
+
+void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
+    switch (event.type) {
+    case EntityEventType::Died: {
+        const uint32_t victimPeer = peerIdForEntity(event.subject);
+        const uint32_t killerPeer = peerIdForEntity(event.instigator);
+        if (victimPeer != kNoOwningPeer) {
+            PeerScore& s = m_scores[victimPeer];
+            ++s.losses;
+            s.dirty = true;
+        }
+
+        CombatEventRecord rec{};
+        rec.type = static_cast<uint8_t>(CombatEventType::Kill);
+        rec.weaponClass = 0xFF; // no weapon vocabulary on this path yet; the fire path (#625) sets it
+        rec.subjectIdx = event.subject.index;
+        rec.subjectGen = static_cast<uint16_t>(event.subject.generation);
+        rec.instigatorIdx = event.instigator.valid() ? event.instigator.index : 0xFFFFFFFFu;
+        rec.instigatorGen = static_cast<uint16_t>(event.instigator.generation);
+        rec.a = killerPeer;
+        rec.b = victimPeer;
+        m_pendingKillEvents.push_back(rec);
+        break;
+    }
+    case EntityEventType::ScoreAwarded: {
+        const uint32_t killerPeer = peerIdForEntity(event.instigator);
+        if (killerPeer != kNoOwningPeer) {
+            PeerScore& s = m_scores[killerPeer];
+            ++s.kills;
+            s.score += event.score;
+            s.dirty = true;
+        }
+        break;
+    }
+    case EntityEventType::DamageLevelChanged: {
+        // DamageDef's penalties finally act (#626): pick the tier the entity just entered and apply
+        // it to the flight integrator; avionics failure strips the sensor suite to eyes.
+        auto it = m_controlledEntities.find(event.subject.index);
+        if (it == m_controlledEntities.end() || !it->second.sim)
+            break;
+        const EntityState* state = m_entityManager.get(event.subject);
+        if (!state)
+            break;
+        const EntityDef* def = m_registry.byIndex(state->typeIndex);
+        if (!def || !def->damage)
+            break;
+
+        float thrust = 1.f;
+        float control = 1.f;
+        bool avionics = false;
+        switch (event.newDamageLevel) {
+        case DamageLevel::Intact:
+            break;
+        case DamageLevel::Light:
+            thrust = def->damage->light.thrustFactor;
+            control = def->damage->light.controlFactor;
+            avionics = def->damage->light.avionicsFailure;
+            break;
+        case DamageLevel::Heavy:
+            thrust = def->damage->heavy.thrustFactor;
+            control = def->damage->heavy.controlFactor;
+            avionics = def->damage->heavy.avionicsFailure;
+            break;
+        case DamageLevel::Critical:
+        case DamageLevel::Destroyed:
+            thrust = def->damage->critical.thrustFactor;
+            control = def->damage->critical.controlFactor;
+            avionics = def->damage->critical.avionicsFailure;
+            break;
+        }
+        it->second.sim->setDamagePenalty(thrust, control);
+        if (avionics)
+            m_sensorSystem.setAvionicsFailed(event.subject.index);
+        break;
+    }
+    }
+}
+
+void WorldBroadcaster::flushCombatEvents() {
+    // Kill records broadcast to everyone, chunked to stay inside a single unfragmented packet.
+    if (!m_pendingKillEvents.empty()) {
+        constexpr std::size_t kMaxRecordsPerPacket = 15; // 4 + 15*32 = 484 bytes
+        std::vector<uint8_t> buf;
+        for (std::size_t off = 0; off < m_pendingKillEvents.size(); off += kMaxRecordsPerPacket) {
+            const std::size_t n = std::min(kMaxRecordsPerPacket, m_pendingKillEvents.size() - off);
+            buf.clear();
+            MsgCombatEventHeader hdr;
+            hdr.count = static_cast<uint8_t>(n);
+            appendMsg(buf, hdr);
+            for (std::size_t i = 0; i < n; ++i)
+                appendMsg(buf, m_pendingKillEvents[off + i]);
+            m_net.broadcast(buf.data(), buf.size(), /*reliable=*/true);
+        }
+        m_pendingKillEvents.clear();
+    }
+
+    // Per-peer stats, unicast — each peer only ever sees its own tallies.
+    for (auto& [peerId, score] : m_scores) {
+        if (!score.dirty)
+            continue;
+        score.dirty = false;
+
+        std::vector<uint8_t> buf;
+        MsgCombatEventHeader hdr;
+        hdr.count = 1;
+        appendMsg(buf, hdr);
+        CombatEventRecord rec{};
+        rec.type = static_cast<uint8_t>(CombatEventType::Stats);
+        rec.weaponClass = 0xFF;
+        rec.a = score.kills;
+        rec.b = score.losses;
+        rec.c = score.score;
+        appendMsg(buf, rec);
+        m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/true);
+    }
 }
 
 void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t size) {

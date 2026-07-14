@@ -531,7 +531,12 @@ int main(int argc, char** argv) {
     wbConfig.governor = fl::makeTickGovernorParams(
         cfg.overrunGovernorEnabled, cfg.overrunHighWatermark, cfg.overrunLowWatermark, cfg.overrunMinSnapshotHz,
         cfg.overrunMaxAiStride, cfg.overrunBudgetFloorBytes, cfg.overrunMinInterestFraction);
+    wbConfig.gameplay = fl::DamageRules{cfg.friendlyFire, cfg.crashDamage};
     broadcaster.applyConfig(wbConfig);
+    // The first production entity-event consumer (#626): kill attribution, the scoreboard, the
+    // kill-feed broadcast, and DamageDef penalties all hang off entity events reaching the
+    // broadcaster. Must be registered before gameLoop.start().
+    entityManager.addEventHandler(&broadcaster);
     // Planet gravity (terrain curvature was applied to the streamer before the first update()).
     // Function-scope static so lifetime outlasts the broadcaster.
     static fl::CentralGravityField s_gravity{6'371'000.f};

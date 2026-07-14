@@ -86,6 +86,19 @@ struct ClientNetEventHandler : INetworkEventHandler {
         return m_serverPeerCount.load(std::memory_order_relaxed);
     }
 
+    // This session's combat tallies, as the SERVER counts them (#626) — updated from the unicast
+    // Stats records on the CombatEvent channel. Zero until the first stat-changing event. Read on
+    // the main thread for the debrief screen and the pilot profile; reset per session because the
+    // handler is re-created per session (reinitFlight).
+    struct SessionCombatStats {
+        uint32_t kills{0};
+        uint32_t losses{0};
+        int32_t score{0};
+    };
+    const SessionCombatStats& sessionStats() const noexcept {
+        return m_sessionStats;
+    }
+
     // Issue a monotonically incrementing request ID for the next MsgAdminCommand.
     // Each call increments the counter; wraps at uint16_t max (harmless — ENet ordering prevents
     // interleaving and the client does not enforce reqId matching in chunk reassembly).
@@ -136,6 +149,7 @@ struct ClientNetEventHandler : INetworkEventHandler {
 
     bool m_connected{false};
     float m_planetRadiusKm{6371.f};
+    SessionCombatStats m_sessionStats{};        // #626 — fed by CombatEvent Stats records
     uint16_t m_nextReqId{1};                    // next reqId to stamp on outgoing MsgAdminCommand
     std::atomic<uint16_t> m_serverPeerCount{0}; // updated from SnapshotPeerCount TLV extension
 

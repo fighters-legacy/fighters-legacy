@@ -7,6 +7,7 @@
 #include "flight/FlightModelData.h"
 #include "flight/IGravityField.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 
@@ -49,6 +50,12 @@ struct FlightState {
     // handlers, and the integrate pass is data-parallel, so calling it from a worker would be a data
     // race. WorldBroadcaster latches this flag and applies the damage serially after the pass.
     bool overg_damage{false};
+
+    // ONE-SHOT (#626): the radial impact speed (m/s) of a hard ground contact this tick, 0 when
+    // none. Same discipline as overg_damage — the integrator only reports; WorldBroadcaster applies
+    // crash damage serially after the parallel pass, gated by the crashDamage difficulty toggle.
+    // Ordinary landings stay below the reporting threshold and never raise it.
+    float ground_impact_speed{0.f};
 };
 
 // Wind and turbulence injected each tick by WorldBroadcaster from WeatherController state.
@@ -97,11 +104,28 @@ class FlightIntegrator {
         m_forceModel = &model;
     }
 
+    // Progressive damage penalties (#626) — this is where DamageDef's thrustFactor/controlFactor
+    // finally act on the physics. Applied to the COMMANDED inputs at the top of step(): thrust
+    // scales the throttle command, control scales surface deflection commands. Both clamped to
+    // [0, 1]; (1, 1) = undamaged. WorldBroadcaster sets them on DamageLevelChanged.
+    void setDamagePenalty(float thrustFactor, float controlFactor) noexcept {
+        m_damageThrust = std::clamp(thrustFactor, 0.f, 1.f);
+        m_damageControl = std::clamp(controlFactor, 0.f, 1.f);
+    }
+    [[nodiscard]] float damageThrustFactor() const noexcept {
+        return m_damageThrust;
+    }
+    [[nodiscard]] float damageControlFactor() const noexcept {
+        return m_damageControl;
+    }
+
   private:
     std::shared_ptr<const FlightModelData> m_data;
     FlightState m_state;
     const IGravityField* m_gravity{&CentralGravityField::earthInstance()};
     const IForceModel* m_forceModel{&FixedWingForceModel::instance()};
+    float m_damageThrust{1.f};
+    float m_damageControl{1.f};
 
     void advanceSpool(float dt, float commanded_throttle);
     void advanceSweep(float dt, float commanded_sweep_deg);

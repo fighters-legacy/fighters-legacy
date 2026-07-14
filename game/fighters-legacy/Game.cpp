@@ -951,7 +951,22 @@ void Game::handleTransition(Screen next) {
     } else if (next == Screen::MainMenu)
         d.services.musicManager.setState(GameState::Menu);
     else if (next == Screen::Debrief) {
-        d.services.screenMgr->debrief().setStats(0, 0, true);
+        // Real session stats (#626): the server's tallies, delivered on the CombatEvent channel.
+        // Success stays true until the mission runtime (#584) defines failure.
+        uint32_t kills = 0;
+        uint32_t losses = 0;
+        if (d.session.clientHandler) {
+            kills = d.session.clientHandler->sessionStats().kills;
+            losses = d.session.clientHandler->sessionStats().losses;
+        }
+        d.services.screenMgr->debrief().setStats(static_cast<int>(kills), static_cast<int>(losses), true);
+        // The pilot's career log accumulates per session, exactly once, on the way into debrief.
+        if (d.services.userConfig && d.session.clientHandler && (kills > 0 || losses > 0)) {
+            PilotSettings ps = d.services.userConfig->pilot();
+            ps.profile.kills += static_cast<int>(kills);
+            ps.profile.losses += static_cast<int>(losses);
+            d.services.userConfig->setPilot(ps);
+        }
         d.services.musicManager.setState(GameState::Debrief);
     }
 

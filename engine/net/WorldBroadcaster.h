@@ -10,6 +10,8 @@
 #include "SnapshotScheduler.h"
 #include "TickGovernor.h"
 #include "config/DifficultySettings.h" // AiScaling — sensing difficulty scaling (#685)
+#include "entity/DamageApplication.h"  // DamageRules — the gameplay damage gates (#626)
+#include "entity/EntityEvent.h"        // IEntityEventHandler — kill attribution + scoring (#626)
 #include "entity/EntityId.h"
 #include "flight/AeroForces.h"
 #include "flight/IGravityField.h"
@@ -149,6 +151,7 @@ struct WorldBroadcasterConfig {
     float jitterMultiplier{2.0f};     // k factor: depth = ceil(ewma_delay + k*jitter); [0.0, 8.0]
     CongestionParams congestion{};    // per-client adaptive send-rate / congestion response (#518)
     TickGovernorParams governor{};    // graceful tick-overrun governor (#514)
+    DamageRules gameplay{};           // friendly-fire / crash-damage gates (#626); hot-reloadable
 };
 
 // Snapshot of the overrun governor's current degradation state — read cross-thread (fl-server main
@@ -214,7 +217,7 @@ struct WireTelemetry {
 // Threading: all ISimUpdate and INetworkEventHandler methods are called from
 // the GameLoop sim thread. INetwork::setEventHandler(&broadcaster) must be
 // called before GameLoop::start().
-class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
+class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public IEntityEventHandler {
   public:
     // weather may be nullptr; when non-null it is ticked and broadcast each sim tick.
     WorldBroadcaster(EntityManager& entityManager, EntityTypeRegistry& registry, INetwork& net, ILogger& logger,
@@ -228,6 +231,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     void onConnect(uint32_t peerId) override;
     void onDisconnect(uint32_t peerId) override;
     void onReceive(uint32_t peerId, const void* data, std::size_t size) override;
+
+    // IEntityEventHandler (#626) — the first production consumer of entity events. fl-server
+    // registers the broadcaster with EntityManager::addEventHandler() before gameLoop.start().
+    // Died/ScoreAwarded feed the per-peer scoreboard and queue the reliable kill-feed broadcast;
+    // DamageLevelChanged applies the entity's DamageDef penalties to its flight integrator (this is
+    // where thrustFactor/controlFactor/avionicsFailure finally act). Fires on the sim thread, from
+    // inside EntityManager calls that already run serially in onTick.
+    void onEntityEvent(const EntityEvent& event) override;
 
     // Safe to call from any thread (main thread reads this for the LAN discovery beacon).
     int getPeerCount() const noexcept {
@@ -615,6 +626,17 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // peer's controller each tick, so this is hot-reloadable (reload_config). Disabled params pin all
     // peers to the full 60 Hz / full-budget behaviour. Call before gameLoop.start() or via
     // enqueueSimCallback.
+    // Gameplay damage gates (#626): friendly fire + crash damage. Sim-thread-only state — call
+    // before gameLoop.start(), or via enqueueSimCallback for reload_config hot-reload.
+    void setDamageRules(const DamageRules& rules) noexcept {
+        m_damageRules = rules;
+    }
+
+    // The flight integrator driving a controlled entity, or nullptr. Sim-thread only. Consumers:
+    // tests asserting damage penalties actually landed (#626) and the fire path's launch-state
+    // reads (#625) — never a back door for controllers, which see the world through AiTickContext.
+    [[nodiscard]] const FlightIntegrator* integratorFor(uint32_t entityIdx) const noexcept;
+
     void setCongestionParams(const CongestionParams& params) noexcept;
 
     // Set the graceful tick-overrun governor parameters (#514). Applied to the governor each tick, so
@@ -705,6 +727,23 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // EntityId.index -> {sim, controller}. Replaces the old peerId-keyed flight-sim map: any control
     // source (peer, AI, script) registers here and is stepped uniformly in onTick.
     std::unordered_map<uint32_t, ControlledEntity> m_controlledEntities;
+
+    // ── combat scoring + kill feed (#626) — sim-thread only ─────────────────
+    struct PeerScore {
+        uint32_t kills{0};
+        uint32_t losses{0};
+        int32_t score{0};
+        bool dirty{false}; // a Stats record is owed to this peer in the next serialize
+    };
+    std::unordered_map<uint32_t, PeerScore> m_scores; // keyed by peerId; erased on disconnect
+    std::vector<CombatEventRecord> m_pendingKillEvents;
+    DamageRules m_damageRules{};
+
+    // The owning peer of an entity, or kNoOwningPeer. Resolved against the LIVE peer map, never
+    // against EntityState::ownerId — whose "0 = server/AI" convention collides with real peer 0
+    // (the #610 kNoPeer lesson).
+    [[nodiscard]] uint32_t peerIdForEntity(EntityId id) const noexcept;
+    void flushCombatEvents();
 
     std::atomic<int> m_activePeerCount{0};
     uint64_t m_weatherBroadcastTick{0};        // throttle weather broadcasts to ~6 Hz

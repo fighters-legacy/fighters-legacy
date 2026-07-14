@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **entity**: The kill chain's damage half is closed (#626): every combat damage source funnels through one gate (`applyPointDamage`) where friendly fire finally means something; `DamageDef`'s thrust/control/avionics penalties act on the flight model instead of being parsed and ignored; hard ground impacts damage the airframe under the `crash_damage` toggle; the first production entity-event consumer turns kills into per-peer scores, a reliable kill-feed/stats channel (`MsgCombatEvent`, the last free ENet id, deliberately multiplexed), real debrief numbers, and a pilot-profile career log
 - **content**: The missile endgame is decided (resolves RFC #676): kinematic flyout, ALL probability in the seeker (PoD dice through the shared detection math), proximity-fuze geometry at the end — no terminal Pk table. The weapon `[seeker]` block now references a sensor def (`sensor_id`) per the one-vocabulary rule; the ad-hoc `fov_deg`/`acquisition_nm` lobe is deprecated with one release of grace. New weapon fields: `mesh` (projectile visual), `pitbull_nm`, `loft_bias_deg`/`loft_range_nm`, `rate_of_fire_rpm`, `nuclear`/`yield_kt` (#676)
 - **tools**: `validate-entity` — the entity-def validator that did not exist when a broken aircraft merged with all of CI green; `--pack` resolves every asset-name and def-id reference through the real content system, and an unresolvable `flight_model` is an error because the runtime fallback is silent (#829)
 
