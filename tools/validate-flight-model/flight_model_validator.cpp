@@ -90,14 +90,9 @@ static void validateAircraft(const toml::table& tbl, FlightModelValidationResult
         r.errors.push_back("aircraft.engine_type: unknown value \"" + *et_str + "\"");
         r.ok = false;
     }
-    if (!ac["mesh"].value<std::string>()) {
-        r.errors.push_back("missing aircraft.mesh");
-        r.ok = false;
-    }
-    if (!ac["cockpit"].value<std::string>()) {
-        r.errors.push_back("missing aircraft.cockpit");
-        r.ok = false;
-    }
+    // aircraft.mesh / aircraft.cockpit are NOT required (#813): a flight model is aerodynamics and
+    // does not know what it looks like. Asset wiring belongs to the entity def (entity.mesh /
+    // entity.cockpit), which is where the renderer has always read it from.
 }
 
 static void validateFlightModelGeometry(const toml::table& tbl, FlightModelValidationResult& r,

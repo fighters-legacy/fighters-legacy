@@ -127,15 +127,8 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.meta.has_fbw = ac["has_fbw"].value<bool>().value_or(false);
         d.meta.cruise_alt_m = static_cast<float>(ac["cruise_alt_m"].value<double>().value_or(10000.0));
 
-        auto mesh = ac["mesh"].value<std::string>();
-        if (!mesh)
-            throw std::runtime_error("missing aircraft.mesh");
-        d.meta.mesh = std::move(*mesh);
-
-        auto cockpit = ac["cockpit"].value<std::string>();
-        if (!cockpit)
-            throw std::runtime_error("missing aircraft.cockpit");
-        d.meta.cockpit = std::move(*cockpit);
+        // `mesh` and `cockpit` are accepted here and ignored (#813). They belong to the entity, not
+        // to the aerodynamics; EntityDef::mesh / ::cockpitMesh are what the engine actually reads.
     }
 
     // ── [flight_model] ────────────────────────────────────────────────────────

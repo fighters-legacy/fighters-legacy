@@ -484,7 +484,23 @@ TEST_CASE("EntityDefParser: minimal TOML without damage section", "[parser]") {
     CHECK(def.mesh == "aircraft/test");
     CHECK_FALSE(def.damage.has_value());
     CHECK(def.classicDamageMesh.empty());
+    CHECK(def.cockpitMesh.empty());      // optional field defaults empty -> no cockpit geometry
     CHECK(def.flightModelAsset.empty()); // optional field defaults empty -> builtin model
+}
+
+TEST_CASE("EntityDefParser: entity.cockpit parses into cockpitMesh", "[parser]") {
+    // The cockpit belongs to the ENTITY, not to the flight model (#813) -- a flight model is
+    // aerodynamics and does not know what it looks like.
+    const std::string toml = "[entity]\n"
+                             "id = \"test:fighter\"\n"
+                             "name = \"Test Fighter\"\n"
+                             "category = \"air_vehicle\"\n"
+                             "max_hp = 100.0\n"
+                             "mesh = \"f5e\"\n"
+                             "cockpit = \"f5e_cockpit\"\n";
+    fl::EntityDef def = fl::parseEntityDef(toml);
+    CHECK(def.mesh == "f5e");
+    CHECK(def.cockpitMesh == "f5e_cockpit");
 }
 
 TEST_CASE("EntityDefParser: full TOML with damage and classic sections", "[parser]") {

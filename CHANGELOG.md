@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **flight**: `EntityDef` owns mesh/cockpit wiring; the dead `[aircraft] mesh`/`cockpit` keys are gone (#813)
+
 ### Fixed
 
 - **content**: Def cross-references resolve by id, not filename — sensors reached the builtin eyeball on every pack aircraft (#810)

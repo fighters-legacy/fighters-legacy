@@ -27,14 +27,19 @@ enum class AircraftRole {
 
 enum class PropRotation { CW, CCW, Contra };
 
+// A FLIGHT MODEL IS AERODYNAMICS. IT DOES NOT KNOW WHAT IT LOOKS LIKE (#813).
+//
+// `mesh` and `cockpit` used to live here, were REQUIRED by the parser, and were read by absolutely
+// nothing -- the renderer has always used EntityDef::mesh. Two sources of truth for an aircraft's
+// asset wiring, and the one the parser enforced was the dead one. EntityDef is now the sole owner
+// (mesh, cockpitMesh, flightModelAsset, aiScriptAsset, classicDamageMesh); the flight model owns
+// only physics. The keys are still accepted in TOML and ignored, so existing files parse.
 struct AircraftMeta {
     std::string name;
     AircraftRole role{AircraftRole::Fighter};
     EngineType engine_type{EngineType::Turbofan};
-    bool has_fbw{false};
+    bool has_fbw{false}; // gates the G-limiter, and nothing else (#816)
     float cruise_alt_m{10000.f};
-    std::string mesh;
-    std::string cockpit;
 };
 
 struct FlightModelGeometry {

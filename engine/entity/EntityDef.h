@@ -44,6 +44,7 @@ struct EntityDef {
     float maxHp{100.f};
     std::optional<DamageDef> damage;   // absent = binary death (no progressive damage)
     std::string mesh;                  // ASSET NAME for primary geometry
+    std::string cockpitMesh;           // ASSET NAME: cockpit interior geometry; empty if none (#813)
     std::string classicDamageMesh;     // ASSET NAME: JumpToDamage geometry variant; empty if none
     std::string flightModelAsset;      // ASSET NAME: flight-model TOML; empty = builtin UFO model
     std::string aiScriptAsset;         // ASSET NAME: Lua AI script; empty = no scripted AI (server-side)

@@ -15,8 +15,6 @@ type         = "fighter"
 engine_type  = "turbofan"
 has_fbw      = false
 cruise_alt_m = 10000
-mesh         = "generic"
-cockpit      = "generic_hud"
 
 [flight_model]
 mass_kg      = 12000.0
@@ -105,6 +103,17 @@ TEST_CASE("valid generic fighter TOML passes", "[flight-model-validator]") {
     auto r = validateFlightModel(kValidFighter);
     CHECK(r.ok);
     CHECK(r.errors.empty());
+}
+
+TEST_CASE("a flight model with no mesh and no cockpit validates clean", "[flight-model-validator]") {
+    // kValidFighter declares neither (#813): asset wiring belongs to the entity def, so the
+    // validator has no business demanding it of an aerodynamic model.
+    auto r = validateFlightModel(kValidFighter);
+    REQUIRE(r.ok);
+    for (const auto& e : r.errors)
+        CHECK(e.find("mesh") == std::string::npos);
+    for (const auto& e : r.errors)
+        CHECK(e.find("cockpit") == std::string::npos);
 }
 
 TEST_CASE("malformed TOML fails with parse error", "[flight-model-validator]") {

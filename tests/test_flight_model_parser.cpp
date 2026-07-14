@@ -11,6 +11,10 @@ using Catch::Matchers::WithinAbs;
 using namespace fl;
 
 // Minimal valid TOML that satisfies every required field.
+//
+// Note what is NOT here: `mesh` and `cockpit` (#813). A flight model is aerodynamics and does not
+// know what it looks like -- asset wiring lives on the entity def. They used to be required by the
+// parser and read by nothing.
 static const std::string kMinimalToml = R"(
 [aircraft]
 name         = "Test Fighter"
@@ -18,8 +22,6 @@ type         = "fighter"
 engine_type  = "turbofan"
 has_fbw      = false
 cruise_alt_m = 10000.0
-mesh         = "test_mesh"
-cockpit      = "test_hud"
 
 [flight_model]
 mass_kg      = 10000.0
@@ -106,6 +108,20 @@ TEST_CASE("Parser reads aircraft metadata correctly", "[parser]") {
     CHECK(d.meta.engine_type == EngineType::Turbofan);
     CHECK_FALSE(d.meta.has_fbw);
     CHECK_THAT(d.geometry.mass_kg, WithinAbs(10000.f, 0.1f));
+}
+
+TEST_CASE("Parser accepts a flight model with no mesh and no cockpit", "[parser]") {
+    // kMinimalToml declares neither -- the parse succeeding IS the assertion (#813). Before this,
+    // both were required and the parser threw without them, while nothing read either one.
+    CHECK_NOTHROW(parseFlightModel(kMinimalToml));
+}
+
+TEST_CASE("Parser ignores a legacy aircraft.mesh / aircraft.cockpit", "[parser]") {
+    // Existing packs that still carry the dead keys keep parsing; the values just go nowhere.
+    std::string toml = kMinimalToml;
+    auto pos = toml.find("cruise_alt_m = 10000.0");
+    toml.insert(pos, "mesh    = \"legacy_mesh\"\ncockpit = \"legacy_hud\"\n");
+    CHECK_NOTHROW(parseFlightModel(toml));
 }
 
 TEST_CASE("Parser reads drag polar fields", "[parser]") {
