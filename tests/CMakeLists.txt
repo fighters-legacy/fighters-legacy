@@ -734,6 +734,17 @@ target_include_directories(test_connect_args PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
 catch_discover_tests(test_connect_args)
 
+# The client/server flight-model parity gate (#811): drives the real WorldBroadcaster connect path
+# and the real client-side resolver, and asserts the two integrate the same aeroplane.
+add_executable(test_prediction_parity test_prediction_parity.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientFlightModelResolver.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp")
+target_link_libraries(test_prediction_parity PRIVATE
+    Catch2::Catch2WithMain engine-net engine-entity engine-content engine-flight engine-render engine-config)
+target_include_directories(test_prediction_parity PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_prediction_parity)
+
 add_executable(test_client_prediction test_client_prediction.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp")
 target_link_libraries(test_client_prediction PRIVATE

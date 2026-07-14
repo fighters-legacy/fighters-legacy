@@ -62,6 +62,7 @@
 #include "stdfs/StdFilesystem.h"
 #include "vulkan/VkRendererFactory.h"
 
+#include "ClientFlightModelResolver.h"
 #include "ClientPrediction.h"
 #include "ConnectArgs.h"
 #include "console/ConsoleCommands.h"
@@ -933,28 +934,11 @@ void Game::run() {
                     // onConnect (before connect()) captured the pre-ack defaults (0/0/6371),
                     // leaving reconcile() a permanent no-op (#755). The resolver captures only
                     // &d (session-lived services), so building it here is equivalent.
-                    auto flightModelResolver = [&d](uint32_t typeIndex) -> std::shared_ptr<const fl::FlightModelData> {
-                        const fl::EntityDef* def = d.services.entityRegistry.byIndex(typeIndex);
-                        if (def && !def->id.empty()) {
-                            if (auto raw = d.services.assets->loadEntityDef(def->id.c_str())) {
-                                try {
-                                    const std::string_view src(reinterpret_cast<const char*>(raw->bytes.data()),
-                                                               raw->bytes.size());
-                                    const fl::EntityDef fullDef = fl::parseEntityDef(src);
-                                    if (!fullDef.flightModelAsset.empty()) {
-                                        if (auto fm =
-                                                d.services.assets->loadFlightModel(fullDef.flightModelAsset.c_str())) {
-                                            const std::string_view fmSrc(
-                                                reinterpret_cast<const char*>(fm->bytes.data()), fm->bytes.size());
-                                            return std::make_shared<fl::FlightModelData>(fl::parseFlightModel(fmSrc));
-                                        }
-                                    }
-                                } catch (...) {
-                                }
-                            }
-                        }
-                        return fl::BuiltinFlightModel::get();
-                    };
+                    // The entity's flight model now arrives on MsgEntityTypeDef (#811), so the client
+                    // reads the field instead of re-deriving it from disk by an id that was never a
+                    // filename. Every fallback to the builtin model is logged at Error and names the id.
+                    auto flightModelResolver = fl::makeFlightModelResolver(d.services.entityRegistry,
+                                                                           *d.services.assets, *d.services.p.logger);
                     auto heightQuery = [&d](glm::dvec3 pos) -> float {
                         return d.services.terrainStreamer
                                    ? static_cast<float>(d.services.terrainStreamer->heightAt(pos))

@@ -3,6 +3,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         main.cpp
         Game.cpp
         ClientNetEventHandler.cpp
+        ClientFlightModelResolver.cpp
         ClientPrediction.cpp
         CameraInput.cpp
         FlightInputCollector.cpp

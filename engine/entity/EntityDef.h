@@ -50,6 +50,15 @@ struct EntityDef {
     std::string aiScriptAsset;         // ASSET NAME: Lua AI script; empty = no scripted AI (server-side)
     std::vector<Hardpoint> hardpoints; // weapon stations; empty = carries nothing
 
+    // ── resolved default loadout (#812) ──────────────────────────────────────
+    // What the DEFAULT loadout costs the airframe, summed over `hardpoints` once at load time and
+    // cached here. Plain floats rather than a PayloadEffect so engine-entity does not have to link
+    // engine-flight -- the same reason sensorIds are plain strings. The server computes them from
+    // the WeaponRegistry (fl::defaultPayload); the client receives them on MsgEntityTypeDef, because
+    // it has no hardpoints and no weapon registry and must not need one to predict its own aircraft.
+    float payloadMassKg{0.f};
+    float payloadCd0{0.f};
+
     // ── sensing (#680) ───────────────────────────────────────────────────────
     // What the entity looks like to an observer. Defaults are the baseline fighter (all 1.0), so an
     // entity that says nothing is exactly as detectable as the numbers in a sensor def assume.

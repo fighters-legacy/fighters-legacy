@@ -2072,6 +2072,8 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned) {
         std::snprintf(typeDef.id, sizeof(typeDef.id), "%s", def->id.c_str());
         std::snprintf(typeDef.mesh, sizeof(typeDef.mesh), "%s", def->mesh.c_str());
         std::snprintf(typeDef.dmgMesh, sizeof(typeDef.dmgMesh), "%s", def->classicDamageMesh.c_str());
+        // The client integrates the same aircraft we do, or its prediction is a fiction (#811).
+        std::snprintf(typeDef.flightModel, sizeof(typeDef.flightModel), "%s", def->flightModelAsset.c_str());
 
         appendMsg(buf, typeDef);
     }

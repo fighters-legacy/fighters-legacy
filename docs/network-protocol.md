@@ -53,7 +53,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | MsgId | Value | Direction | Channel | Size | Purpose |
 |-------|-------|-----------|---------|------|---------|
 | `Hello` | `0x00` | server→client | reliable | 4 bytes | Protocol version handshake; first message on every new connection |
-| `ConnectAck` | `0x01` | server→client | reliable | 16 + N×196 bytes | Handshake on connect; assigns entity slot and delivers type registry |
+| `ConnectAck` | `0x01` | server→client | reliable | 16 + N×268 bytes | Handshake on connect; assigns entity slot and delivers type registry |
 | `WorldSnapshot` | `0x02` | server→client | unreliable | 24 + origin table + record stream + TLV | Per-tick entity state, unicast per peer; 24-byte header + shared-origin table + a byte-aligned stitched record stream (each record: origin index + a `full` bit) + TLV extension block — see *Quantized entity record* below |
 | `ClientInput` | `0x03` | client→server | unreliable | 48 bytes | Per-frame flight inputs |
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
@@ -108,7 +108,7 @@ Sent once per peer on connect (reliable channel 0), immediately followed by
 | 8 | 4 | `assignedEntityGen` | `uint32_t` | Entity generation; 0 = no entity assigned |
 | 12 | 4 | `planetRadiusKm` | `float32` | Planet sphere radius in km; Earth default = 6371.0 |
 
-### MsgEntityTypeDef — 196 bytes
+### MsgEntityTypeDef — 268 bytes
 
 Appended N times after `MsgConnectAck` (one per registered entity type).
 
@@ -118,6 +118,16 @@ Appended N times after `MsgConnectAck` (one per registered entity type).
 | 4 | 64 | `id[64]` | `char[64]` | Null-terminated type ID, e.g. `"builtin:debug-entity"` |
 | 68 | 64 | `mesh[64]` | `char[64]` | Null-terminated mesh asset name; empty = builtin tetrahedron |
 | 132 | 64 | `dmgMesh[64]` | `char[64]` | Null-terminated damage mesh; empty = none |
+| 196 | 64 | `flightModel[64]` | `char[64]` | Null-terminated flight-model **asset name** (not a def id); empty = builtin model |
+| 260 | 4 | `payloadMassKg` | `float32` | Default-loadout store mass (kg); 0 = clean airframe |
+| 264 | 4 | `payloadCd0` | `float32` | Default-loadout parasite-drag delta; 0 = clean airframe |
+
+`flightModel` (#811) exists because the client must integrate the **same** aircraft the server does.
+Without it the client had no way to learn an entity type's flight model, silently fell back to the
+builtin model, and diverged from the server permanently. `payloadMassKg` / `payloadCd0` (#812) are the
+aggregate cost of the type's default loadout: the client has no hardpoints and no weapon registry, so
+it receives the two numbers rather than the data to derive them. All three were **appended at the
+tail**, so every pre-existing field offset is unchanged and `kProtocolVersion` stays at 1.
 
 ### MsgWorldSnapshotHeader — 24 bytes
 
