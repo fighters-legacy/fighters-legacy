@@ -794,6 +794,36 @@ FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
     }
 
     std::string aircraftType;
+
+    // Ballistic vehicles (#354) validate against the reduced schema the runtime parser accepts:
+    // [aircraft] name/type, [flight_model] masses, and [engine.boost]. Requiring CL tables and
+    // turbine fuel flows of an unwinged booster would force authors to invent numbers nothing
+    // reads (BallisticForceModel flies thrust + drag only).
+    if (const auto typeStr = tbl["aircraft"]["type"].value<std::string>(); typeStr && *typeStr == "ballistic") {
+        if (!tbl["aircraft"]["name"].value<std::string>()) {
+            r.errors.push_back("missing aircraft.name");
+            r.ok = false;
+        }
+        validateFlightModelGeometry(tbl, r, "ballistic");
+        auto boost = tbl["engine"]["boost"];
+        if (!boost) {
+            r.errors.push_back("ballistic model: missing [engine.boost] table");
+            r.ok = false;
+            return r;
+        }
+        const auto thrust = boost["thrust_n"].value<double>();
+        const auto burn = boost["burn_time_s"].value<double>();
+        if (!thrust || *thrust <= 0.0) {
+            r.errors.push_back("engine.boost.thrust_n must be a number > 0");
+            r.ok = false;
+        }
+        if (!burn || *burn <= 0.0) {
+            r.errors.push_back("engine.boost.burn_time_s must be a number > 0");
+            r.ok = false;
+        }
+        return r;
+    }
+
     validateAircraft(tbl, r, aircraftType);
     validateFlightModelGeometry(tbl, r, aircraftType);
     validateClTable(tbl, r);

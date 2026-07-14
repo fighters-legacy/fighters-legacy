@@ -514,3 +514,63 @@ TEST_CASE("a cl_table peaking within tolerance of alpha_stall_deg passes", "[fli
     INFO("errors: " << (r.errors.empty() ? std::string("none") : r.errors[0]));
     CHECK(r.ok);
 }
+
+TEST_CASE("Ballistic models validate against the reduced schema (#354)", "[validator][ballistic]") {
+    const char* ok = R"(
+[aircraft]
+name = "Test MRBM"
+type = "ballistic"
+[flight_model]
+mass_kg = 2000.0
+wing_area_m2 = 0.8
+wingspan_m = 0.8
+mac_m = 0.8
+fuel_kg = 3000.0
+ixx_kg_m2 = 800.0
+iyy_kg_m2 = 12000.0
+izz_kg_m2 = 12000.0
+[engine.boost]
+thrust_n = 300000.0
+burn_time_s = 60.0
+)";
+    auto r = fl::validateFlightModel(ok);
+    CHECK(r.ok);
+    CHECK(r.errors.empty()); // no CL-table/turbine demands of an unwinged booster
+
+    // The one thing a booster cannot omit is its boost.
+    const char* noBoost = R"(
+[aircraft]
+name = "No Boost"
+type = "ballistic"
+[flight_model]
+mass_kg = 2000.0
+wing_area_m2 = 0.8
+wingspan_m = 0.8
+mac_m = 0.8
+fuel_kg = 3000.0
+ixx_kg_m2 = 800.0
+iyy_kg_m2 = 12000.0
+izz_kg_m2 = 12000.0
+)";
+    auto r2 = fl::validateFlightModel(noBoost);
+    CHECK_FALSE(r2.ok);
+
+    const char* badBurn = R"(
+[aircraft]
+name = "Bad Burn"
+type = "ballistic"
+[flight_model]
+mass_kg = 2000.0
+wing_area_m2 = 0.8
+wingspan_m = 0.8
+mac_m = 0.8
+fuel_kg = 3000.0
+ixx_kg_m2 = 800.0
+iyy_kg_m2 = 12000.0
+izz_kg_m2 = 12000.0
+[engine.boost]
+thrust_n = 300000.0
+burn_time_s = 0.0
+)";
+    CHECK_FALSE(fl::validateFlightModel(badBurn).ok);
+}

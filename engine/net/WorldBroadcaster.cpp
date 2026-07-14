@@ -13,6 +13,7 @@
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
 #include "entity/IEntityController.h"
+#include "flight/BallisticForceModel.h"
 #include "flight/BuiltinFlightModel.h"
 #include "flight/CentralGravityField.h"
 #include "flight/FlightIntegrator.h"
@@ -2442,6 +2443,12 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
 
     auto fi = std::make_unique<FlightIntegrator>(model);
     fi->setGravityField(*m_gravity);
+    // A ballistic vehicle (#354) flies the boost/coast force model and gets the wider NaN guard —
+    // an MRBM legitimately outruns the backstop built for aircraft. Same integrator core.
+    if (model->isBallistic()) {
+        fi->setForceModel(BallisticForceModel::instance());
+        fi->setSpeedGuard(8000.0);
+    }
     fi->reset(fs);
     // Give the controller the world's planet radius so its local-level (tangent-plane) guidance is
     // correct far from the origin. Every controller — peer or AI — enters through this single path.

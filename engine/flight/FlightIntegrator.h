@@ -104,6 +104,15 @@ class FlightIntegrator {
         m_forceModel = &model;
     }
 
+    // The NaN/overflow backstop on body velocity (#354) — NOT a top-speed limiter (max_mach is
+    // enforced by fm-trim in CI). Default 2000 m/s (≈ Mach 6 at sea level) suits every winged
+    // vehicle; ballistic entities set ~8000 because an MRBM legitimately flies faster than the
+    // guard built for aircraft.
+    void setSpeedGuard(double mps) noexcept {
+        if (mps > 0.0)
+            m_speedGuardMps = mps;
+    }
+
     // Progressive damage penalties (#626) — this is where DamageDef's thrustFactor/controlFactor
     // finally act on the physics. Applied to the COMMANDED inputs at the top of step(): thrust
     // scales the throttle command, control scales surface deflection commands. Both clamped to
@@ -122,6 +131,7 @@ class FlightIntegrator {
   private:
     std::shared_ptr<const FlightModelData> m_data;
     FlightState m_state;
+    double m_speedGuardMps{2000.0}; // see setSpeedGuard (#354)
     const IGravityField* m_gravity{&CentralGravityField::earthInstance()};
     const IForceModel* m_forceModel{&FixedWingForceModel::instance()};
     float m_damageThrust{1.f};

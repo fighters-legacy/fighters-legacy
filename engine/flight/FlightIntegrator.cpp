@@ -401,10 +401,11 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     // exceed its declared max_mach in level flight, the MODEL is wrong, and fm-trim (#817) fails it
     // in CI. The engine does not paper over that with an artificial wall, so this is raised well
     // clear of any flyable regime and left as the overflow backstop it always was.
-    constexpr double kMaxBodySpeed = 2000.0; // m/s ≈ Mach 6 at sea level — pure overflow backstop
-    m_state.vel_body[0] = std::clamp(m_state.vel_body[0], -kMaxBodySpeed, kMaxBodySpeed);
-    m_state.vel_body[1] = std::clamp(m_state.vel_body[1], -kMaxBodySpeed, kMaxBodySpeed);
-    m_state.vel_body[2] = std::clamp(m_state.vel_body[2], -kMaxBodySpeed, kMaxBodySpeed);
+    // Per-instance since #354 (setSpeedGuard): ballistic vehicles legitimately pass Mach 6, so
+    // their guard sits at ~8000 m/s — still a NaN backstop, never a top-speed limiter.
+    m_state.vel_body[0] = std::clamp(m_state.vel_body[0], -m_speedGuardMps, m_speedGuardMps);
+    m_state.vel_body[1] = std::clamp(m_state.vel_body[1], -m_speedGuardMps, m_speedGuardMps);
+    m_state.vel_body[2] = std::clamp(m_state.vel_body[2], -m_speedGuardMps, m_speedGuardMps);
 
     // 13. Integrate rotation quaternion
     integrateRotation(dt);

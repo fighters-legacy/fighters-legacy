@@ -4,11 +4,13 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "flight/Atmosphere.h"
+#include "flight/BallisticForceModel.h"
 #include "flight/BuiltinFlightModel.h"
 #include "flight/CentralGravityField.h"
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelParser.h"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -1329,4 +1331,146 @@ TEST_CASE("Integrator: a hard ground impact is reported once, a firm landing not
     integ.reset(gentle);
     integ.step(1.f / 60.f, ctrl, {}, {}, 0.f);
     CHECK(integ.state().ground_impact_speed == 0.f);
+}
+
+// ---------------------------------------------------------------------------
+// Ballistic vehicles (#354)
+// ---------------------------------------------------------------------------
+
+static const std::string kBallisticToml = R"(
+[aircraft]
+name = "Test MRBM"
+type = "ballistic"
+
+[flight_model]
+mass_kg      = 2000.0
+wing_area_m2 = 0.8
+wingspan_m   = 0.8
+mac_m        = 0.8
+fuel_kg      = 3000.0
+ixx_kg_m2    = 800.0
+iyy_kg_m2    = 12000.0
+izz_kg_m2    = 12000.0
+
+[engine.boost]
+thrust_n    = 300000.0
+burn_time_s = 60.0
+)";
+
+TEST_CASE("Ballistic: the reduced schema parses and folds the burn into the fuel flow", "[ballistic]") {
+    const FlightModelData d = parseFlightModel(kBallisticToml);
+    CHECK(d.isBallistic());
+    CHECK(d.boost_thrust_n == 300000.f);
+    // 3000 kg of propellant over 60 s: 50 kg/s at every throttle — a solid motor burns to depletion.
+    CHECK(d.engine.fuel_flow_idle_kg_s == Catch::Approx(50.f));
+    CHECK(d.engine.fuel_flow_mil_kg_s == Catch::Approx(50.f));
+    CHECK(d.drag_polar.cd0 == Catch::Approx(0.20f)); // blunt-body default
+    CHECK(d.limits.alpha_stall_deg == 90.f);         // nothing to stall
+
+    // The wings-and-turbines schema is NOT required of it.
+    CHECK_THROWS(parseFlightModel(R"(
+[aircraft]
+name = "No Boost"
+type = "ballistic"
+[flight_model]
+mass_kg = 2000.0
+wing_area_m2 = 0.8
+wingspan_m = 0.8
+mac_m = 0.8
+fuel_kg = 3000.0
+ixx_kg_m2 = 800.0
+iyy_kg_m2 = 12000.0
+izz_kg_m2 = 12000.0
+)")); // missing [engine.boost]
+}
+
+TEST_CASE("Ballistic: drag-free trajectory matches the closed-form range", "[ballistic]") {
+    // A 45-degree, 300 m/s shot in (near-)vacuum drag terms: cd0 = 0 via a table-free copy.
+    auto data = std::make_shared<FlightModelData>(parseFlightModel(kBallisticToml));
+    auto zeroDrag = std::make_shared<FlightModelData>(*data);
+    zeroDrag->drag_polar.cd0 = 0.f;
+    zeroDrag->boost_thrust_n = 0.f; // no motor: pure ballistic arc from the initial state
+
+    FlightIntegrator fi(zeroDrag);
+    fi.setForceModel(BallisticForceModel::instance());
+    fi.setSpeedGuard(8000.0);
+
+    FlightState s{};
+    s.pos_world[1] = 1.0;     // just above the datum
+    s.vel_body[0] = 212.132f; // 300 m/s at 45 deg, identity attitude: body == world
+    s.vel_body[1] = 212.132f;
+    s.fuel_kg = 0.f;
+    s.mass_kg = 2000.f;
+    fi.reset(s);
+
+    ControlInput ctrl{};
+    PayloadEffect px{};
+    const double posArr0[3] = {0.0, 1.0, 0.0};
+    const float g0 = std::abs(CentralGravityField::earthInstance().accelWorld(posArr0)[1]);
+
+    double maxAlt = 0.0;
+    int ticks = 0;
+    for (; ticks < 60 * 120; ++ticks) {
+        fi.step(1.f / 60.f, ctrl, px);
+        maxAlt = std::max(maxAlt, fi.state().pos_world[1]);
+        if (ticks > 60 && fi.state().pos_world[1] <= 1.0)
+            break; // back on the deck
+    }
+
+    // Closed form (flat earth, constant g): R = v^2 sin(2*45)/g, apex = v^2 sin^2(45)/(2g),
+    // T = 2 v sin(45)/g. The 1/r^2 field and the spherical floor perturb this by well under 1%.
+    const double v = 300.0;
+    const double rangeExact = v * v / static_cast<double>(g0);
+    const double apexExact = v * v * 0.5 * 0.5 / static_cast<double>(g0) * 2.0 / 2.0; // v^2/(4g)... keep explicit below
+    (void)apexExact;
+    CHECK(fi.state().pos_world[0] == Catch::Approx(rangeExact).epsilon(0.02));
+    CHECK(maxAlt == Catch::Approx(v * v * 0.25 / static_cast<double>(g0)).epsilon(0.02));
+    CHECK(static_cast<double>(ticks) / 60.0 ==
+          Catch::Approx(2.0 * v * 0.70710678 / static_cast<double>(g0)).epsilon(0.02));
+}
+
+TEST_CASE("Ballistic: boost accelerates until propellant depletion, then the motor is done", "[ballistic]") {
+    auto data = std::make_shared<FlightModelData>(parseFlightModel(kBallisticToml));
+    FlightIntegrator fi(data);
+    fi.setForceModel(BallisticForceModel::instance());
+    fi.setSpeedGuard(8000.0);
+
+    FlightState s{};
+    s.pos_world[1] = 30000.0; // thin 1976-layer air: the #354 atmosphere is what makes this work
+    s.vel_body[0] = 50.f;
+    s.fuel_kg = 3000.f;
+    s.mass_kg = 5000.f;
+    fi.reset(s);
+
+    ControlInput ctrl{}; // throttle 0: a solid motor does not care
+    PayloadEffect px{};
+    for (int i = 0; i < 60 * 30; ++i)
+        fi.step(1.f / 60.f, ctrl, px);
+
+    // Half the 60 s burn elapsed: still burning, well past the old 2000 m/s aircraft guard.
+    CHECK(fi.state().fuel_kg > 0.f);
+    CHECK(fi.state().vel_body[0] > 2000.0);
+}
+
+TEST_CASE("Ballistic: the speed guard is per-instance — aircraft keep the 2000 m/s backstop",
+          "[ballistic][integrator]") {
+    auto data = std::make_shared<FlightModelData>(parseFlightModel(kBallisticToml));
+
+    FlightIntegrator guarded(data); // default guard: 2000 m/s
+    FlightState s{};
+    s.pos_world[1] = 50000.0;
+    s.vel_body[0] = 5000.f;
+    s.fuel_kg = 0.f;
+    s.mass_kg = 2000.f;
+    guarded.reset(s);
+    ControlInput ctrl{};
+    PayloadEffect px{};
+    guarded.step(1.f / 60.f, ctrl, px);
+    CHECK(guarded.state().vel_body[0] <= 2000.0);
+
+    FlightIntegrator wide(data);
+    wide.setSpeedGuard(8000.0);
+    wide.reset(s);
+    wide.step(1.f / 60.f, ctrl, px);
+    CHECK(wide.state().vel_body[0] > 4900.0);
 }

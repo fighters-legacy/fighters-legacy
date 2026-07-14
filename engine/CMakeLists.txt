@@ -164,6 +164,7 @@ add_library(engine-flight STATIC
     flight/FlightModelParser.cpp
     flight/AeroForces.cpp
     flight/FlightIntegrator.cpp
+    flight/BallisticForceModel.cpp
     flight/FixedWingForceModel.cpp
     flight/Trim.cpp
 )

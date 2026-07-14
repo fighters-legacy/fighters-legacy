@@ -226,6 +226,40 @@ max_rate_kg_s = 3.0
 > so a pack learns why its stations vanished. The only coupling that remains is the physical one: a
 > loadout's mass and drag reach the flight model through `PayloadEffect`.
 
+### Ballistic vehicles — `type = "ballistic"`
+
+A boost/coast vehicle (SRBM/MRBM-class, #354) uses a much smaller schema: the CL tables, stability
+derivatives and turbine fuel flows of the winged schema are **not required** (and not read —
+`BallisticForceModel` flies thrust + drag only, with thrust-vector control authority during the
+burn and inertial flight after burnout). The atmosphere follows the US Standard Atmosphere 1976
+to 86 km and vacuum above, so reentry deceleration emerges from the same drag term.
+
+```toml
+[aircraft]
+name = "Example MRBM"
+type = "ballistic"          # engine_type not required
+
+[flight_model]              # same required masses/inertias as any model
+mass_kg      = 2000.0       # dry mass; fuel_kg below is the PROPELLANT
+wing_area_m2 = 0.8          # reference area for drag
+wingspan_m   = 0.8
+mac_m        = 0.8
+fuel_kg      = 3000.0
+ixx_kg_m2    = 800.0
+iyy_kg_m2    = 12000.0
+izz_kg_m2    = 12000.0
+
+[engine.boost]              # required for ballistic models
+thrust_n     = 300000.0     # constant motor thrust while propellant remains
+burn_time_s  = 60.0         # propellant burns to depletion over this time, throttle ignored
+
+[aero.drag_polar]           # optional; only cd0 is read
+cd0 = 0.20                  # default 0.20 — a blunt body
+```
+
+Ballistic entities are full entities (spawnable via the `spawn` admin command with a guidance
+controller, #355), **not** hardpoint stores — a missile a fighter carries is a weapon TOML.
+
 ---
 
 ## Weapon Data — TOML
