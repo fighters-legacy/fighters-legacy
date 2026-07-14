@@ -58,6 +58,11 @@ add_executable(test_weapon_def_parser test_weapon_def_parser.cpp)
 target_link_libraries(test_weapon_def_parser PRIVATE Catch2::Catch2WithMain engine-weapon)
 catch_discover_tests(test_weapon_def_parser)
 
+# TransformHistory (#425): the lag-compensation rewind ring (header-only, engine-net).
+add_executable(test_transform_history test_transform_history.cpp)
+target_link_libraries(test_transform_history PRIVATE Catch2::Catch2WithMain engine-net)
+catch_discover_tests(test_transform_history)
+
 # FireControl + ProjectileSystem (#625): the pure fire-decision logic and the 3-DOF projectile pool.
 # engine-weapon's entity/spatial deps are PRIVATE, so the test links them explicitly.
 add_executable(test_fire_control test_fire_control.cpp)

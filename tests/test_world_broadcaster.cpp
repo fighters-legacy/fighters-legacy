@@ -8228,3 +8228,99 @@ TEST_CASE("WorldBroadcaster: store release spawns ONE replicated projectile; sta
     }
     CHECK(sawProjectile);
 }
+
+TEST_CASE("WorldBroadcaster: a delayed player's gun hits where the target WAS -- lag compensation",
+          "[world_broadcaster][firepath][lagcomp]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeArmedDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(fl::parseWeaponDef(kFpGunToml));
+    weapons.registerWeapon(fl::parseWeaponDef(kFpMissileToml));
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setWeaponRegistry(&weapons);
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(shooter != nullptr);
+
+    // The victim sits dead ahead on the bore for ticks 1..10 -- that world is what the history
+    // ring records and what a 5-tick-delayed client is still SEEING.
+    fl::EntityTransform vt{};
+    vt.pos[0] = shooter->transform.pos[0] + 100.0;
+    vt.pos[1] = shooter->transform.pos[1];
+    vt.pos[2] = shooter->transform.pos[2];
+    vt.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
+
+    for (uint64_t t = 1; t <= 10; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+
+    // NOW the victim jinks 200 m off the bore. On the server it is nowhere near the ray.
+    em.get(victim)->transform.pos[2] += 200.0;
+
+    // The trigger packet echoes snapshot tick 5: estimatedDelayTicks = 10 - 5 = 5, so the hitscan
+    // at tick 11 rewinds to tick 6 -- where the victim was still on the bore.
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.buttons = 0x01u;
+    inp.selectedStation = 255u;
+    inp.tickIndex = 5u;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+    broadcaster.onTick(1.0 / 60.0, 11u);
+
+    const fl::EntityState* vs = em.get(victim);
+    REQUIRE(vs != nullptr);
+    CHECK(vs->hp == 92.f); // the shot landed at the rewound position; damage lands on the entity NOW
+}
+
+TEST_CASE("WorldBroadcaster: with no delay the same jink is a clean miss -- no free rewind",
+          "[world_broadcaster][firepath][lagcomp]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeArmedDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(fl::parseWeaponDef(kFpGunToml));
+    weapons.registerWeapon(fl::parseWeaponDef(kFpMissileToml));
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setWeaponRegistry(&weapons);
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(shooter != nullptr);
+
+    fl::EntityTransform vt{};
+    vt.pos[0] = shooter->transform.pos[0] + 100.0;
+    vt.pos[1] = shooter->transform.pos[1];
+    vt.pos[2] = shooter->transform.pos[2];
+    vt.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
+
+    for (uint64_t t = 1; t <= 10; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+    em.get(victim)->transform.pos[2] += 200.0;
+
+    // Same shot, but the packet echoes tick 10: estimatedDelayTicks = 0, rewind 0 -- the ray is
+    // tested against the CURRENT (jinked) position and misses.
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.buttons = 0x01u;
+    inp.selectedStation = 255u;
+    inp.tickIndex = 10u;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+    broadcaster.onTick(1.0 / 60.0, 11u);
+
+    const fl::EntityState* vs = em.get(victim);
+    REQUIRE(vs != nullptr);
+    CHECK(vs->hp == 100.f);
+}

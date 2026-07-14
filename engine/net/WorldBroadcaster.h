@@ -9,6 +9,7 @@
 #include "JitterBuffer.h"
 #include "SnapshotScheduler.h"
 #include "TickGovernor.h"
+#include "TransformHistory.h"          // lag-compensation rewind ring (#425)
 #include "config/DifficultySettings.h" // AiScaling — sensing difficulty scaling (#685)
 #include "entity/DamageApplication.h"  // DamageRules — the gameplay damage gates (#626)
 #include "entity/EntityEvent.h"        // IEntityEventHandler — kill attribution + scoring (#626)
@@ -751,6 +752,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // ── the fire path (#625) — sim-thread only ──────────────────────────────
     const WeaponRegistry* m_weaponRegistry{nullptr};
     ProjectileSystem m_projectileSystem;
+    // Rolling post-integrate position history (#425): player hitscan rewinds targets to the tick
+    // the shooter actually saw (currentTick − estimatedDelayTicks, clamped to the ring depth).
+    TransformHistory m_transformHistory;
     std::vector<FireRequest> m_fireRequests;     // scratch, cleared each tick
     std::vector<ProjectileImpact> m_tickImpacts; // scratch, cleared each tick
     uint8_t m_currentWeaponClass{0xFF};          // WeaponType ordinal for kill attribution while a

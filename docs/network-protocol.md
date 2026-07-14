@@ -914,5 +914,30 @@ latency by running a local `FlightIntegrator` that mirrors the server's physics:
 
 **Known limitation**: server-side turbulence is not replicated client-side (requires a
 future seed-broadcast mechanism). The resulting small positional divergence is corrected each
-reconciliation. Server-side lag compensation / hit-detection rewind is a separate follow-on
-that builds on this infrastructure.
+reconciliation.
+
+## Server-Side Lag Compensation (Hit-Detection Rewind)
+
+A player aiming a gun aims at where targets were `estimatedDelayTicks` ago — the world their
+last snapshot showed. Without compensation every shot must *lead* the target by the shooter's
+own latency, which punishes exactly the players a 128-player internet server has most of.
+
+The server keeps a rolling **`TransformHistory`** ring (`engine/net/TransformHistory.h`): the
+post-integrate position of every live entity for the last 32 ticks (≈533 ms at 60 Hz). When a
+**player's** hitscan gun fires at tick `T`, targets are ray-tested at their positions from tick
+`T − clamp(estimatedDelayTicks, 0, 31)`; damage is applied to the entity as it is *now*. Rules:
+
+- **Players only.** AI shooters have no latency and rewind 0 ticks. Missiles, rockets, and
+  bombs fly in real time and never rewind — a projectile is a physical object in the current
+  world, not an instantaneous ray. Both are deliberate.
+- **Generation-checked.** Each history entry stores the entity generation; a recycled pool slot
+  can never be hit through history. An entity that did not exist at the rewound tick is tested
+  at its current position instead (the shooter could not have seen it, but it is physically in
+  the bullet's path).
+- **Broadphase inflation.** The spatial index holds current positions, so the broadphase radius
+  is inflated by the maximum possible drift since the rewound tick (bounded by the snapshot
+  codec's ±2000 m/s velocity cap); the exact ray test then uses each candidate's rewound
+  position.
+- **Bounded unfairness.** The 32-tick clamp bounds the classic "shot from around the corner"
+  effect to ≈533 ms: a victim can be hit at most that long after they, in their own view,
+  broke line of sight. High-latency shooters past the clamp are back to leading their targets.

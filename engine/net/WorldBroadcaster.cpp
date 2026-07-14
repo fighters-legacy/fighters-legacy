@@ -781,6 +781,14 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             applyPointDamage(m_entityManager, it.ce->id, damage, EntityId::null(), m_damageRules);
     }
 
+    // Lag-compensation history (#425): record every live entity's post-integrate position BEFORE
+    // the weapons pass, so a rewind of 0 ticks and a live query see the same world. Dead entities
+    // are simply not recorded — despawn GC is the ring wrapping.
+    m_transformHistory.beginTick(tickIndex);
+    m_entityManager.forEach([this, tickIndex](const EntityState& s) {
+        m_transformHistory.add(tickIndex, s.id.index, static_cast<uint16_t>(s.id.generation), s.transform.pos);
+    });
+
     // Weapons phase (#625): fire intents → hitscan/spawn, projectile flight, detonations. Serial
     // by design (spawn/kill/applyDamage all fire handlers), after the integrate pass so shots
     // originate from this tick's positions, before EntityManager::onTick so a same-tick kill reaps
@@ -1604,24 +1612,48 @@ void WorldBroadcaster::resolveHitscan(const FireRequest& req, const WeaponDef& d
     const double range = static_cast<double>(def.performance.maxRangeM);
     const glm::dvec3 origin{shooter->transform.pos[0], shooter->transform.pos[1], shooter->transform.pos[2]};
 
+    // Lag compensation (#425): a PLAYER's gun tests targets where they were when the shooter saw
+    // them — `tickIndex − estimatedDelayTicks`, clamped to the history ring (≈533 ms; the bound on
+    // the "shot from around the corner" effect, see docs/network-protocol.md). AI shooters have no
+    // latency and rewind 0; projectiles fly real-time and never rewind — both deliberate.
+    uint64_t rewindTicks = 0;
+    if (const uint32_t peerId = peerIdForEntity(shooter->id); peerId != kNoOwningPeer) {
+        if (const auto pit = m_peerInputs.find(peerId); pit != m_peerInputs.end())
+            rewindTicks = std::min<uint64_t>(pit->second.estimatedDelayTicks, TransformHistory::kHistoryTicks - 1);
+    }
+    rewindTicks = std::min(rewindTicks, tickIndex);
+    const uint64_t rewTick = tickIndex - rewindTicks;
+
     // Nearest entity whose centre passes within the hit radius of the ray, ahead of the muzzle and
     // inside the weapon's reach. A fixed target radius until #630 introduces per-entity extents.
+    // The broadphase runs on CURRENT positions, so its radius is inflated by the farthest any
+    // entity can have moved since the rewound tick (the snapshot codec's velocity cap bounds it);
+    // the exact ray test then uses each candidate's REWOUND position.
     constexpr double kTargetRadiusM = 8.0;
+    const double drift = static_cast<double>(rewindTicks) * (kVelMaxMps / 60.0);
     double bestT = range + 1.0;
     EntityId hitId = EntityId::null();
     glm::dvec3 hitPos{};
-    m_spatialIndex.queryRadius(shooter->transform.pos, range, [&](uint32_t idx, const double* ep) {
+    m_spatialIndex.queryRadius(shooter->transform.pos, range + drift, [&](uint32_t idx, const double* ep) {
         if (idx == req.shooterIdx)
             return;
-        const glm::dvec3 rel{ep[0] - origin.x, ep[1] - origin.y, ep[2] - origin.z};
+        const EntityState* cand = m_entityManager.getByIndex(idx);
+        if (!cand || cand->dead)
+            return;
+        glm::dvec3 targetPos{ep[0], ep[1], ep[2]};
+        if (rewindTicks > 0) {
+            // The generation check means a recycled pool slot can never be hit through history.
+            // An entity that did not exist at the rewound tick is tested where it is NOW — the
+            // shooter could not have seen it, but it is physically in the bullet's path.
+            if (const auto past = m_transformHistory.queryAt(rewTick, idx, static_cast<uint16_t>(cand->id.generation)))
+                targetPos = *past;
+        }
+        const glm::dvec3 rel = targetPos - origin;
         const double t = rel.x * bore.x + rel.y * bore.y + rel.z * bore.z; // along-ray distance
         if (t < 0.0 || t > range || t >= bestT)
             return;
         const glm::dvec3 closest = rel - glm::dvec3(bore) * t;
         if (glm::dot(closest, closest) > kTargetRadiusM * kTargetRadiusM)
-            return;
-        const EntityState* cand = m_entityManager.getByIndex(idx);
-        if (!cand || cand->dead)
             return;
         bestT = t;
         hitId = cand->id;
