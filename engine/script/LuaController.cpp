@@ -119,6 +119,12 @@ static void pushEntityState(lua_State* L, const fl::EntityState& s) {
     lua_setfield(L, t, "dead");
     lua_pushboolean(L, s.playerOwned ? 1 : 0);
     lua_setfield(L, t, "player_owned");
+    // Without this a script cannot tell friend from foe: `detected_contacts()` reports each contact's
+    // faction, but a script had no way to learn its OWN, so `c.faction ~= state.faction` compared
+    // against nil and every contact — friendly ones included — looked hostile (#694 found this by
+    // executing the documented example, which is the entire reason the docs are now a test).
+    lua_pushinteger(L, static_cast<lua_Integer>(s.factionIndex));
+    lua_setfield(L, t, "faction");
     lua_pushinteger(L, static_cast<lua_Integer>(s.ownerId));
     lua_setfield(L, t, "owner_id");
     lua_pushinteger(L, static_cast<lua_Integer>(s.typeIndex));

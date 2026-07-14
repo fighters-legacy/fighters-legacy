@@ -433,24 +433,6 @@ acquisition time with `pod`, but stickiness with `lock_hold_s`.
 **`max_range_nm` is quoted against a baseline target** (signature `1.0`). An entity's `[signatures]`
 scale it: radar range by `sqrt(sig)`, IR and visual linearly.
 
-**`pod` is also quoted against CLEAR DAYLIGHT.** Weather and darkness scale it down per channel
-(#209), and fair weather at noon costs exactly nothing — so the number you author is the number you
-get in good conditions. What the conditions cost, by channel:
-
-| | Full storm (cloud 1.0, fog 0.8) | Night (clear) |
-|---|---|---|
-| `visual` | **×0.11** | **×0.25** |
-| `ir` | ×0.36 | ×1.00 |
-| `radar` | ×0.78 | ×1.00 |
-| `laser` | ×0.11 | ×1.00 |
-
-The channels are deliberately *not* alike, and that asymmetry is the point of carrying more than one
-sensor. **The dark is the eyeball's problem and nobody else's** — a jet engine is exactly as hot at
-midnight, radar does not care what time it is, so an IR-equipped aircraft owns the night. **Radar
-barely notices weather at all** (a little rain clutter); that indifference is most of why it exists.
-No condition ever drives a channel to zero: the worst weather leaves a small chance, so a target is
-never *mathematically* undetectable — acquiring it just takes a very long time.
-
 ```toml
 # sensors/apg63.toml — pulse-doppler fighter radar
 [sensor]
@@ -494,6 +476,52 @@ pod               = 0.15
 sensors gets the compiled-in builtin eyeball (`builtin:eyeball` — the def above, near enough), so
 honest sensing is the default in every configuration including the zero-content-pack sandbox. There
 is no setup in which an AI sees through terrain, and no pack can produce one by omission.
+
+### Putting it together: a sensing-capable aircraft
+
+Three files, and the entity is the only one that names the other two.
+
+**1. The sensor** (`sensors/apg63.toml`) — see the example above.
+
+**2. The aircraft** (`entities/f15c.toml`) — carries the sensor, and declares how loud it is to
+everyone else's:
+
+```toml
+[entity]
+id      = "fl-base:f15c"
+name    = "F-15C Eagle"
+category = "air_vehicle"
+max_hp  = 300.0
+mesh    = "aircraft/f15c"
+sensors = ["fl-base:eyeball", "fl-base:apg63"]   # what it can see WITH
+
+[signatures]                                      # what it can be seen AS
+rcs    = 1.2      # a big fighter: seen 10% further than baseline by radar (sqrt(1.2) ≈ 1.10)
+ir     = 1.3      # two big engines
+visual = 1.2
+laser  = 1.0
+
+[ai]
+skill    = 0.6    # slightly better than average at spotting things
+reaction = 0.4    # and slightly quicker to act on them
+```
+
+**3. Nothing.** There is no third file: if you omit `sensors`, the aircraft still gets the builtin
+eyeball, and if you omit `[signatures]` it is a baseline target. **Honest sensing is the default —
+you cannot opt out of it, only tune it.**
+
+What that aircraft experiences in the air: it finds a baseline fighter on radar out to 40 nm in
+clear air (further if the target is big, much closer if the target is stealthy — `sqrt(rcs)`), holds
+a lock inside 30 nm, sees unaided out to ~8 nm, keeps a broken lock alive for 4 seconds of coast, and
+takes a fraction of a second (server `[ai] difficulty` × its own `reaction`) to *act* on anything it
+finds. At night its eyes are worth a quarter of what they are at noon; its radar does not notice.
+
+Validate the whole pack before you fly it:
+
+```
+validate-sensor sensors/*.toml
+validate-weapon --pack .
+```
 
 Validate with `validate-sensor sensors/*.toml`. It runs the engine's own parser (a sensor it passes
 is a sensor the engine loads) and adds plausibility warnings a parser must not make — an IR sensor

@@ -252,6 +252,16 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 
 **AI behaviors** (optional `--ai` flag on `spawn`):
 
+> **Every AI behaviour is sensing-gated (#670).** A spawned AI engages only what its sensors have
+> actually detected. A bandit behind a forward-looking aircraft is **invisible** to it; a fresh
+> contact takes a **reaction delay** to act on (scaled by the server's `[ai] difficulty` and the
+> entity's own `[ai].reaction`); and a target that breaks the lock keeps being flown at its
+> **last-known** position until the track's `lock_hold_s` coast runs out.
+>
+> So if a spawned AI seems to be ignoring you, first check whether it can *see* you. That is now a
+> real question with a real answer, rather than a bug.
+
+
 | Behavior | Args | Description |
 |---|---|---|
 | `loiter` | `[cx cy cz] [radius_m] [alt_m] [throttle] [cw\|ccw]` | Orbit a fixed center point; `cw` = clockwise (default), `ccw` = counterclockwise |
@@ -266,7 +276,7 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 | `high_yo_yo` | `<entityIdx> [climbDur] [reacquireDur]` | Overshoot correction: bank away from target, pull up to bleed speed, then reacquire (defaults: 2.5 s, 3.0 s) |
 | `low_yo_yo` | `<entityIdx> [diveDur] [pullDur]` | Dive-and-cut-corner to close on a turning target (defaults: 1.5 s, 2.5 s) |
 | `lua` | `<script_name>` | Load a Lua AI script from the content pack's `ai/` directory (e.g. `patrol`, `interceptor`). See `docs/modding/ai.md`. |
-| `patrol_attack` | `<entityIdx> [engageRangeM] [retreatHp]` | Three-state machine: loiter patrol → lead-pursuit engage when target within range → evade retreat when HP below threshold (defaults: engageRangeM=8000 m, retreatHp=0.25) |
+| `patrol_attack` | `<entityIdx> [engageRangeM] [retreatHp]` | Three-state machine: loiter patrol → lead-pursuit engage when the target is **detected** within range → evade retreat when HP below threshold (defaults: engageRangeM=8000 m, retreatHp=0.25). **Sensing-gated (#690):** it engages what it has actually seen and reacted to, not whatever is within the radius |
 | `escort` | `<entityIdx> [standoffM]` | Two-state orbit protection: clockwise loiter at standoffM radius around the escorted entity's spawn position → Immelmann reversal when a **hostile** entity enters the inner defense zone (standoffM×0.5). Hostiles are classified by faction, so the escort and escortee should be spawned with the same non-neutral `--faction`; friendlies and neutrals are ignored. Best used for fixed or slow-moving assets. (default: standoffM=2000 m) |
 
 **Weather presets:**
