@@ -499,3 +499,81 @@ TEST_CASE("LuaController: detected_contacts returns an empty table when sensing 
     const auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0, fl::AiTickContext{});
     CHECK(ctrl.throttle == Catch::Approx(1.f).epsilon(0.001f));
 }
+
+// --- the documented example actually runs (#694) --------------------------------------------------
+
+TEST_CASE("LuaController: the detected_contacts() example from docs/modding/ai.md runs as documented") {
+    // The acceptance bullet for #694 is "docs/modding/ai.md examples run against the implemented Lua
+    // API". A doc example that has never been executed is a promise, not a fact — so this IS the
+    // example, verbatim from the guide. If someone changes the API and forgets the docs, this fails.
+    auto c = makeCtrl("function compute_control(state, tick, dt)\n"
+                      "    for _, c in ipairs(detected_contacts()) do\n"
+                      "        if c.reacted and c.faction ~= 0 and c.faction ~= state.faction then\n"
+                      "            local herr = guidance.heading_error(state.quat, state.pos, c.pos)\n"
+                      "            return { aileron = guidance.bank_to_turn_aileron(herr), throttle = 1.0 }\n"
+                      "        end\n"
+                      "    end\n"
+                      "    return { throttle = 0.6 }   -- nothing detected: no target to chase\n"
+                      "end");
+    REQUIRE(c->isValid());
+
+    // With no contacts it cruises — it does not chase a target it has not found.
+    const fl::ControlInput idle = c->sample(makeState(), 0, 1.0 / 60.0, fl::AiTickContext{});
+    CHECK(idle.throttle == Catch::Approx(0.6f).epsilon(0.001f));
+
+    // With a reacted hostile contact off to the right (+Z), it firewalls the throttle and banks
+    // toward the contact's LAST-KNOWN position.
+    fl::sensor::Contact k{};
+    k.id.index = 7;
+    k.id.generation = 1;
+    k.state = fl::sensor::ContactState::Locked;
+    k.reacted = true;
+    k.factionIndex = 2;
+    k.lastKnownPos[2] = 5000.0; // to the right of a nose-along-+X aircraft
+
+    fl::sensor::ContactTable table;
+    table.contacts.push_back(k);
+
+    fl::AiTickContext ctx{};
+    ctx.contacts = &table;
+
+    fl::EntityState self = makeState();
+    self.factionIndex = 1; // hostile to faction 2
+
+    const fl::ControlInput engaged = c->sample(self, 0, 1.0 / 60.0, ctx);
+    CHECK(engaged.throttle == Catch::Approx(1.0f).epsilon(0.001f));
+    CHECK(engaged.aileron > 0.f); // banking right, toward the contact
+}
+
+TEST_CASE("LuaController: state.faction lets a script tell friend from foe") {
+    // The gap the documented example exposed: `detected_contacts()` reports each contact's faction,
+    // but a script had no way to learn its OWN — so `c.faction ~= state.faction` compared against nil,
+    // every contact looked hostile, and the documented AI would have opened fire on its own wingman.
+    auto c = makeCtrl("function compute_control(state, tick, dt)\n"
+                      "    for _, k in ipairs(detected_contacts()) do\n"
+                      "        if k.reacted and k.faction ~= 0 and k.faction ~= state.faction then\n"
+                      "            return { throttle = 1.0 }   -- engage\n"
+                      "        end\n"
+                      "    end\n"
+                      "    return { throttle = 0.6 }           -- hold\n"
+                      "end");
+    REQUIRE(c->isValid());
+
+    fl::sensor::Contact k{};
+    k.id.index = 7;
+    k.id.generation = 1;
+    k.state = fl::sensor::ContactState::Locked;
+    k.reacted = true;
+    k.factionIndex = 1; // SAME faction as self — a friendly
+
+    fl::sensor::ContactTable table;
+    table.contacts.push_back(k);
+    fl::AiTickContext ctx{};
+    ctx.contacts = &table;
+
+    fl::EntityState self = makeState();
+    self.factionIndex = 1;
+
+    const fl::ControlInput ctrl = c->sample(self, 0, 1.0 / 60.0, ctx);
+    CHECK(ctrl.throttle == Catch::Approx(0.6f).epsilon(0.001f)); // holds fire on its own side
+}

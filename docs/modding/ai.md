@@ -57,6 +57,29 @@ end
 
 ---
 
+## What your script can and cannot see
+
+**Your AI is not omniscient, and this is not optional.** Every entity the server controls runs its
+sensors each tick, and a script sees the result — not the world.
+
+| Question | Answer |
+|---|---|
+| Where is the enemy? | Only if you have **detected** it. `detected_contacts()` is your world. |
+| How do I know where it is *now*? | You do not. A contact carries **last-known** position; `age_s` tells you how stale that is. |
+| Can I see behind me? | Only if a sensor's cone covers it. An aircraft with a forward-facing suite genuinely cannot see its own six. |
+| Can I see through cloud, or at night? | Worse than in clear daylight, and it depends on the sensor: at night an eyeball keeps ~25% of its chance while radar and IR are unaffected. |
+| What if the entity has no sensors declared? | It gets the **builtin eyeball**. There is no configuration in which an AI sees through terrain. |
+
+**An entity with no sensors is not blind and not omniscient — it has eyes.** A content pack cannot
+opt out of honest sensing by leaving the `sensors` list off an entity; it just gets the default one.
+
+Two escape hatches still exist for compatibility, and both are cheating: `nearby_entities()` and
+`get_entity()` read ground truth directly. Use them for debug scripts and for anything that is
+deliberately not a pilot (a scripted camera, a test rig). If you use them to fly a fighter, your AI
+will behave like it is reading the server's memory — because it is.
+
+---
+
 ## `compute_control(state, tick, dt)` — required function
 
 | Parameter | Type   | Description                                           |
@@ -82,6 +105,7 @@ end
 | `state.dead`   | boolean | True when the entity is destroyed (controller is not called while dead) |
 | `state.player_owned` | boolean | True for player-controlled entities             |
 | `state.owner_id` | integer | Peer ID of the owning player; `0` for server/AI   |
+| `state.faction` | integer | This entity's faction (`0` = neutral). **Compare against a contact's `faction` to tell friend from foe** — without it every contact looks hostile |
 | `state.type_index` | integer | Entity type index into the server's type registry |
 
 **Coordinate convention:** Y-up, right-handed, +X forward.
