@@ -7,9 +7,11 @@
 
 #include <ILogger.h>
 #include <content/AssetManager.h>
+#include <content/ContentIndex.h>
 #include <content/IContentPack.h>
 #include <entity/EntityTypeRegistry.h>
 #include <mock_content.h>
+#include <sensor/SensorDef.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -28,6 +30,75 @@ struct NullLog : public ILogger {
     void setMinLevel(LogLevel) override {}
     void flush() override {}
 };
+
+struct RecordingLog : public ILogger {
+    struct Entry {
+        LogLevel level;
+        std::string msg;
+    };
+    std::vector<Entry> entries;
+
+    void log(LogLevel lvl, const char*, int, const char* msg) override {
+        entries.push_back({lvl, msg ? msg : ""});
+    }
+    void setMinLevel(LogLevel) override {}
+    void flush() override {}
+
+    int count(LogLevel lvl, std::string_view needle) const {
+        int n = 0;
+        for (const auto& e : entries)
+            if (e.level == lvl && e.msg.find(needle) != std::string::npos)
+                ++n;
+        return n;
+    }
+    bool has(LogLevel lvl, std::string_view needle = "") const {
+        return count(lvl, needle) > 0;
+    }
+};
+
+constexpr AssetType kDefTypes[] = {AssetType::EntityDef, AssetType::SensorDef};
+
+// Content pack serving sensor-def TOML blobs keyed by asset name (the FILE stem -- deliberately not
+// the def id, which is the whole distinction under test).
+struct SensorDefPack : public NullContentPack {
+    std::string ns{"fl-base"};
+    std::map<std::string, std::string> sensors; // assetName -> TOML source
+
+    const char* namespaceId() const override {
+        return ns.c_str();
+    }
+    bool hasAsset(const char* n, AssetType t) const override {
+        return t == AssetType::SensorDef && sensors.count(n) != 0;
+    }
+    std::optional<SensorDefData> loadSensorDef(const char* n) override {
+        auto it = sensors.find(n);
+        if (it == sensors.end())
+            return std::nullopt;
+        SensorDefData d;
+        d.name = n;
+        d.bytes.assign(it->second.begin(), it->second.end());
+        return d;
+    }
+    std::vector<std::string> listAssets(AssetType t) const override {
+        std::vector<std::string> out;
+        if (t == AssetType::SensorDef)
+            for (const auto& [k, v] : sensors)
+                out.push_back(k);
+        return out;
+    }
+};
+
+std::string sensorToml(const std::string& id, const std::string& name) {
+    return "[sensor]\nid = \"" + id + "\"\nname = \"" + name +
+           "\"\ntype = \"radar\"\nemitter = true\n\n[search]\naz_half_angle_deg = 60.0\n"
+           "el_half_angle_deg = 60.0\nmax_range_nm = 20.0\npod = 0.9\n";
+}
+
+std::vector<std::unique_ptr<IContentPack>> packsFrom(SensorDefPack pack) {
+    std::vector<std::unique_ptr<IContentPack>> v;
+    v.push_back(std::make_unique<SensorDefPack>(std::move(pack)));
+    return v;
+}
 
 // Content pack serving a fixed set of entity-def TOML blobs keyed by asset name.
 struct EntityDefPack : public NullContentPack {
@@ -129,4 +200,73 @@ TEST_CASE("registerPackEntityDefs returns zero with no packs") {
     EntityTypeRegistry registry;
     REQUIRE(registerPackEntityDefs(assets, registry, log) == 0);
     REQUIRE(registry.typeCount() == 0);
+}
+
+// ---------------------------------------------------------------------------
+// makeSensorDefResolver (#810) -- THE regression for the epic's headline defect.
+//
+// Before ContentIndex, an entity's `sensors = ["fl-base:apq159"]` was handed straight to
+// AssetManager, which built "sensors/fl-base:apq159.toml" -- a file that cannot exist. The miss was
+// a Warn, and the aircraft silently fell back to the builtin eyeball. Every aircraft. Every pack.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("makeSensorDefResolver resolves a namespaced sensor id to a real SensorDef") {
+    SensorDefPack pack;
+    pack.ns = "fl-base";
+    pack.sensors["apq159"] = sensorToml("fl-base:apq159", "AN/APQ-159");
+
+    RecordingLog log;
+    AssetManager assets(packsFrom(std::move(pack)), log);
+    assets.initialize(nullptr);
+
+    ContentIndex index;
+    index.build(assets, kDefTypes, log);
+
+    auto resolver = makeSensorDefResolver(assets, index, log);
+    std::shared_ptr<const sensor::SensorDef> def = resolver("fl-base:apq159");
+
+    // The load-bearing assertion: a REAL sensor def, not a null that degrades to the eyeball.
+    REQUIRE(def != nullptr);
+    CHECK(def->id == "fl-base:apq159");
+    CHECK(def->type == sensor::SensorType::Radar);
+    CHECK_FALSE(log.has(LogLevel::Error));
+}
+
+TEST_CASE("makeSensorDefResolver logs an unknown sensor id at Error, not Warn") {
+    SensorDefPack pack;
+    pack.ns = "fl-base";
+    pack.sensors["apq159"] = sensorToml("fl-base:apq159", "AN/APQ-159");
+
+    RecordingLog log;
+    AssetManager assets(packsFrom(std::move(pack)), log);
+    assets.initialize(nullptr);
+
+    ContentIndex index;
+    index.build(assets, kDefTypes, log);
+
+    auto resolver = makeSensorDefResolver(assets, index, log);
+    CHECK(resolver("fl-base:typo") == nullptr);
+    CHECK(log.has(LogLevel::Error, "unknown sensor def id 'fl-base:typo'"));
+}
+
+TEST_CASE("makeSensorDefResolver caches both hits and misses") {
+    SensorDefPack pack;
+    pack.ns = "fl-base";
+    pack.sensors["apq159"] = sensorToml("fl-base:apq159", "AN/APQ-159");
+
+    RecordingLog log;
+    AssetManager assets(packsFrom(std::move(pack)), log);
+    assets.initialize(nullptr);
+
+    ContentIndex index;
+    index.build(assets, kDefTypes, log);
+    auto resolver = makeSensorDefResolver(assets, index, log);
+
+    CHECK(resolver("fl-base:apq159") == resolver("fl-base:apq159")); // same shared_ptr, parsed once
+
+    log.entries.clear();
+    resolver("fl-base:typo");
+    resolver("fl-base:typo");
+    // A bad id is reported once, not once per spawn.
+    CHECK(log.count(LogLevel::Error, "unknown sensor def id") == 1);
 }

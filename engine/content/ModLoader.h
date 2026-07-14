@@ -19,6 +19,7 @@ class ModLoader {
     struct Manifest {
         std::string name;
         std::string id;
+        std::string namespaceId; // optional `[mod] namespace`; defaults to `id`
         std::string version;
         std::string engineApi;
         int priority = 0;

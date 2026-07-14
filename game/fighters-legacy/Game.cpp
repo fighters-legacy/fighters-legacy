@@ -941,9 +941,9 @@ void Game::run() {
                                     const std::string_view src(reinterpret_cast<const char*>(raw->bytes.data()),
                                                                raw->bytes.size());
                                     const fl::EntityDef fullDef = fl::parseEntityDef(src);
-                                    if (!fullDef.flightModelId.empty()) {
+                                    if (!fullDef.flightModelAsset.empty()) {
                                         if (auto fm =
-                                                d.services.assets->loadFlightModel(fullDef.flightModelId.c_str())) {
+                                                d.services.assets->loadFlightModel(fullDef.flightModelAsset.c_str())) {
                                             const std::string_view fmSrc(
                                                 reinterpret_cast<const char*>(fm->bytes.data()), fm->bytes.size());
                                             return std::make_shared<fl::FlightModelData>(fl::parseFlightModel(fmSrc));

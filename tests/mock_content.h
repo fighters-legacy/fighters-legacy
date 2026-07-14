@@ -26,6 +26,9 @@ struct NullContentPack : IContentPack {
     const char* id() const override {
         return "null";
     }
+    const char* namespaceId() const override {
+        return "null";
+    }
     int priority() const override {
         return 0;
     }

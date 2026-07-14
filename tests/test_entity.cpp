@@ -484,7 +484,7 @@ TEST_CASE("EntityDefParser: minimal TOML without damage section", "[parser]") {
     CHECK(def.mesh == "aircraft/test");
     CHECK_FALSE(def.damage.has_value());
     CHECK(def.classicDamageMesh.empty());
-    CHECK(def.flightModelId.empty()); // optional field defaults empty -> builtin model
+    CHECK(def.flightModelAsset.empty()); // optional field defaults empty -> builtin model
 }
 
 TEST_CASE("EntityDefParser: full TOML with damage and classic sections", "[parser]") {
@@ -498,7 +498,7 @@ TEST_CASE("EntityDefParser: full TOML with damage and classic sections", "[parse
     CHECK(def.damage->critical.avionicsFailure == true);
     CHECK(def.damage->light.visualEffect == "smoke_light");
     CHECK(def.classicDamageMesh == "ground/tank_damaged");
-    CHECK(def.flightModelId == "models/tank_drive");
+    CHECK(def.flightModelAsset == "models/tank_drive");
 }
 
 TEST_CASE("EntityDefParser: all category strings are accepted", "[parser]") {
@@ -654,9 +654,9 @@ TEST_CASE("EntityDefParser: absent optional [classic] section leaves classicDama
     CHECK(def.classicDamageMesh.empty());
 }
 
-TEST_CASE("EntityDefParser: minimal TOML leaves aiScriptId empty", "[parser]") {
+TEST_CASE("EntityDefParser: minimal TOML leaves aiScriptAsset empty", "[parser]") {
     fl::EntityDef def = fl::parseEntityDef(kMinimalEntityToml);
-    CHECK(def.aiScriptId.empty());
+    CHECK(def.aiScriptAsset.empty());
 }
 
 TEST_CASE("EntityDefParser: ai_script field is parsed when present", "[parser]") {
@@ -670,7 +670,7 @@ mesh      = "aircraft/bot"
 ai_script = "patrol"
 )";
     fl::EntityDef def = fl::parseEntityDef(kTomlWithScript);
-    CHECK(def.aiScriptId == "patrol");
+    CHECK(def.aiScriptAsset == "patrol");
 }
 
 TEST_CASE("EntityDefParser: invalid TOML syntax throws runtime_error", "[parser]") {

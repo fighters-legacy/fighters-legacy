@@ -35,6 +35,12 @@ class IContentPack {
     virtual const char* name() const = 0;
     virtual const char* version() const = 0;
     virtual const char* id() const = 0;
+    // The prefix every def id in this pack is expected to carry: a def id is "<namespace>:<local>",
+    // e.g. "fl-base:apq159" in a pack whose namespace is "fl-base". Declared as `[mod] namespace` in
+    // manifest.toml and defaulting to id(); it exists because the two are NOT the same string in
+    // practice (fl-base-pack's manifest id is "fl-base-pack" while its def ids say "fl-base:"), and
+    // nothing checked them against each other before #810. Never contains ':'.
+    virtual const char* namespaceId() const = 0;
     virtual int priority() const = 0;
     // Returns the root directory of this pack relative to PathDomain::Assets
     // (used for hot-reload path registration), or nullptr for packs with no

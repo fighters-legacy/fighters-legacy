@@ -366,6 +366,9 @@ static std::vector<std::unique_ptr<IContentPack>> makePacks(MockContentPack* pac
         const char* id() const override {
             return p->id();
         }
+        const char* namespaceId() const override {
+            return p->namespaceId();
+        }
         int priority() const override {
             return p->priority();
         }
@@ -1447,7 +1450,14 @@ TEST_CASE("AssetManager::initialize keeps pack when NeedsConfiguration and confi
 // ---------------------------------------------------------------------------
 
 static FolderContentPack::Manifest makeTestManifest() {
-    return {"Test Mod", "test-mod", "1.0.0", "1.0", 10};
+    FolderContentPack::Manifest m;
+    m.name = "Test Mod";
+    m.id = "test-mod";
+    m.namespaceId = "test-mod";
+    m.version = "1.0.0";
+    m.engineApi = "1.0";
+    m.priority = 10;
+    return m;
 }
 
 TEST_CASE("FolderContentPack::loadConfig returns file content when present", "[content]") {

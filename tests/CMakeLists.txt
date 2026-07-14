@@ -128,6 +128,11 @@ target_link_libraries(test_content_system PRIVATE Catch2::Catch2WithMain engine-
     engine-sensor)
 catch_discover_tests(test_content_system)
 
+add_executable(test_content_index test_content_index.cpp)
+target_link_libraries(test_content_index PRIVATE Catch2::Catch2WithMain engine-content)
+target_include_directories(test_content_index PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_content_index)
+
 add_executable(test_difficulty test_difficulty.cpp)
 target_link_libraries(test_difficulty PRIVATE Catch2::Catch2WithMain engine-difficulty)
 target_include_directories(test_difficulty PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -262,7 +267,7 @@ if(TARGET platform-enet)
     add_executable(test_content_bootstrap test_content_bootstrap.cpp
         "${CMAKE_SOURCE_DIR}/server/fl-server/ContentBootstrap.cpp")
     target_link_libraries(test_content_bootstrap PRIVATE
-        Catch2::Catch2WithMain engine-content engine-entity)
+        Catch2::Catch2WithMain engine-content engine-entity engine-sensor)
     target_include_directories(test_content_bootstrap PRIVATE
         "${CMAKE_SOURCE_DIR}/server/fl-server"
         "${CMAKE_CURRENT_SOURCE_DIR}")

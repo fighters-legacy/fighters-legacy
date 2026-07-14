@@ -403,10 +403,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Call alongside setMotd() before gameLoop.start() or via enqueueSimCallback.
     void setMotdDisplaySeconds(uint16_t seconds) noexcept;
 
-    // Resolves an EntityDef::flightModelId to a parsed flight model for the spawn path. Injected as a
+    // Resolves an EntityDef::flightModelAsset to a parsed flight model for the spawn path. Injected as a
     // std::function so engine-net stays free of engine-content/engine-flight asset deps (the parse
     // lives in fl-server, which links both). Returns nullptr when the id is unknown; an empty
-    // flightModelId or an unset resolver falls back to the builtin UFO model. Call before
+    // flightModelAsset or an unset resolver falls back to the builtin UFO model. Call before
     // gameLoop.start().
     using FlightModelResolver = std::function<std::shared_ptr<const FlightModelData>(const std::string& id)>;
     void setFlightModelResolver(FlightModelResolver fn);
@@ -650,7 +650,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     void addControlledEntity(EntityId id, std::unique_ptr<IEntityController> controller,
                              std::shared_ptr<const FlightModelData> model, float initialThrottle, bool decimatable);
 
-    // Resolve an entity type's EntityDef::flightModelId via the injected resolver. Returns null when
+    // Resolve an entity type's EntityDef::flightModelAsset via the injected resolver. Returns null when
     // the id is empty, no resolver is set, or the id is unknown (logs Warn) — callers fall back to
     // the builtin model.
     std::shared_ptr<const FlightModelData> resolveFlightModel(EntityId id);
@@ -747,7 +747,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::string m_motd;               // empty = no MOTD sent
     uint16_t m_motdDisplaySeconds{0}; // 0 = client default
 
-    // Resolves EntityDef::flightModelId -> FlightModelData at spawn (null = always builtin model).
+    // Resolves EntityDef::flightModelAsset -> FlightModelData at spawn (null = always builtin model).
     FlightModelResolver m_flightModelResolver;
 
     // Sensing (#685). The system owns the observer side-storage; EntityState stays a flat POD that

@@ -1898,13 +1898,13 @@ std::shared_ptr<const FlightModelData> WorldBroadcaster::resolveFlightModel(Enti
     if (!st)
         return nullptr;
     const EntityDef* def = m_registry.byIndex(st->typeIndex);
-    if (!def || def->flightModelId.empty() || !m_flightModelResolver)
+    if (!def || def->flightModelAsset.empty() || !m_flightModelResolver)
         return nullptr;
-    std::shared_ptr<const FlightModelData> model = m_flightModelResolver(def->flightModelId);
+    std::shared_ptr<const FlightModelData> model = m_flightModelResolver(def->flightModelAsset);
     if (!model) {
         char wmsg[160];
         std::snprintf(wmsg, sizeof(wmsg), "flight model '%s' not found -- using builtin model",
-                      def->flightModelId.c_str());
+                      def->flightModelAsset.c_str());
         m_logger.log(LogLevel::Warn, __FILE__, __LINE__, wmsg);
     }
     return model;

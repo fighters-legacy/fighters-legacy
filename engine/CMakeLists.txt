@@ -7,6 +7,7 @@ add_library(engine-content STATIC
     content/AssetManager.cpp
     content/AssetValidator.cpp
     content/BundledBaseTerrain.cpp
+    content/ContentIndex.cpp
 )
 
 target_include_directories(engine-content PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

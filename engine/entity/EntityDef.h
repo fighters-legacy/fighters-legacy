@@ -29,16 +29,24 @@ struct Hardpoint {
 
 // Immutable definition for one entity type, loaded from a content pack TOML file and
 // registered with EntityTypeRegistry. Shared by all live instances of the same type.
+//
+// TWO VOCABULARIES, AND THEY ARE NOT INTERCHANGEABLE (#810). A field naming a FILE is an ASSET NAME
+// — a bare stem that FolderContentPack pastes into a path (`mesh`, `classicDamageMesh`,
+// `flightModelAsset`, `aiScriptAsset`, `cockpitMesh`). A field naming a DEF is a NAMESPACED ID —
+// resolved through ContentIndex, never through the filesystem (`id`, `sensorIds`,
+// `Hardpoint::allowed`, `Hardpoint::defaultWeapon`). The `*Asset` / `*Id` suffixes say which is
+// which, and they are load-bearing: passing an id to AssetManager builds
+// "sensors/fl-base:apq159.toml", which cannot exist and is not a legal Windows filename.
 struct EntityDef {
-    std::string id; // content-pack-scoped, e.g. "fl-base:f15c"
+    std::string id; // content-pack-scoped def ID, e.g. "fl-base:f15c"
     std::string name;
     ObjectCategory category{ObjectCategory::AirVehicle};
     float maxHp{100.f};
     std::optional<DamageDef> damage;   // absent = binary death (no progressive damage)
-    std::string mesh;                  // asset name for primary geometry
-    std::string classicDamageMesh;     // JumpToDamage geometry variant; empty if none
-    std::string flightModelId;         // flight-model asset id; empty = builtin UFO model (server-side only)
-    std::string aiScriptId;            // Lua AI script asset name; empty = no scripted AI (server-side only)
+    std::string mesh;                  // ASSET NAME for primary geometry
+    std::string classicDamageMesh;     // ASSET NAME: JumpToDamage geometry variant; empty if none
+    std::string flightModelAsset;      // ASSET NAME: flight-model TOML; empty = builtin UFO model
+    std::string aiScriptAsset;         // ASSET NAME: Lua AI script; empty = no scripted AI (server-side)
     std::vector<Hardpoint> hardpoints; // weapon stations; empty = carries nothing
 
     // ── sensing (#680) ───────────────────────────────────────────────────────
@@ -46,11 +54,11 @@ struct EntityDef {
     // entity that says nothing is exactly as detectable as the numbers in a sensor def assume.
     SignatureDef signatures{};
 
-    // Which sensors the entity carries, as sensor-def ids (e.g. "fl-base:apg63"). Plain strings, so
-    // engine-entity does not depend on engine-sensor; ids are resolved against the AssetManager at
-    // load time, where an unknown one is a WARNING, not a parse error — a pack's cross-references
-    // resolve after all its files are read, and a missing sensor should not stop an aircraft from
-    // loading with the rest of its suite.
+    // Which sensors the entity carries, as sensor-def IDS (e.g. "fl-base:apg63"). Plain strings, so
+    // engine-entity does not depend on engine-sensor; ids are resolved through ContentIndex to an
+    // asset name at load time (#810 — they are NOT filenames), where an unknown one is an ERROR that
+    // does not stop the spawn: an aircraft still loads with the rest of its suite, but a typo that
+    // silently leaves it flying blind is not a warning-grade event.
     //
     // EMPTY IS MEANINGFUL: an AI-controlled entity with no declared sensors gets the builtin
     // eyeball, not omniscience and not blindness (2026-07-12 decision record). Honest sensing is the

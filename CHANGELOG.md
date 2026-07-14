@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **content**: Def cross-references resolve by id, not filename — sensors reached the builtin eyeball on every pack aircraft (#810)
+
 ## [0.3.1] - 2026-07-13
 
 ### Added
