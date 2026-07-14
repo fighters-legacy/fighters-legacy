@@ -111,7 +111,12 @@ catch_discover_tests(test_force_model)
 add_executable(test_loop test_loop.cpp)
 target_link_libraries(test_loop PRIVATE Catch2::Catch2WithMain engine-loop)
 target_include_directories(test_loop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-catch_discover_tests(test_loop)
+# RUN_SERIAL: test_loop contains WALL-CLOCK RATE assertions (it sleeps 1 s and asserts the loop fired
+# ~60 times). Since #787 made the suite parallel by default, those ran while ~20 other test binaries
+# saturated the CPU — so they were no longer measuring the game loop, they were measuring how busy the
+# runner was, and they flaked on shared macOS runners. Serialising them restores what the assertion is
+# actually for. It costs a few seconds of wall time; a rate test that competes for the CPU is worthless.
+catch_discover_tests(test_loop PROPERTIES RUN_SERIAL TRUE)
 
 add_executable(test_sandbox test_sandbox.cpp)
 target_link_libraries(test_sandbox PRIVATE Catch2::Catch2WithMain engine-sandbox)
