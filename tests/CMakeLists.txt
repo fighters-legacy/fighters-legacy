@@ -82,6 +82,13 @@ target_link_libraries(test_release_ballistics PRIVATE Catch2::Catch2WithMain eng
     engine-entity engine-spatial)
 catch_discover_tests(test_release_ballistics)
 
+# Ballistic missile guidance + the MIRV controller-spawn seam (#355).
+add_executable(test_ballistic_guidance test_ballistic_guidance.cpp)
+target_link_libraries(test_ballistic_guidance PRIVATE Catch2::Catch2WithMain engine-ai engine-net
+    engine-entity engine-flight engine-bootstrap)
+target_include_directories(test_ballistic_guidance PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_ballistic_guidance)
+
 # WeaponRegistry + defaultPayload (#812): a loadout that actually costs the airframe mass and drag.
 # fm-trim (#817): the tests LOCK the derived numbers, so they double as the engine's guard against
 # someone changing AeroForces.cpp and silently altering every aircraft's performance.

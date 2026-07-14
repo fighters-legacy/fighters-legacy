@@ -1748,6 +1748,39 @@ EntityId WorldBroadcaster::designateFor(const EntityState& shooter, uint32_t own
 }
 
 void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
+    // Controller spawn intents (#355 — a MIRV bus deploying RVs) drain FIRST and unconditionally:
+    // the seam does not depend on the weapon vocabulary. Serial here, never in the parallel AI
+    // pass: spawn mutates the pool and registerController mutates the roster. The child inherits
+    // the REQUESTER's ownership (an RV kill credits whoever launched the bus) and, when the
+    // request names no type, the requester's own entity type.
+    {
+        std::vector<std::pair<SpawnRequest, EntityId>> spawnWork;
+        for (auto& [idx, ce] : m_controlledEntities) {
+            if (!ce.controller)
+                continue;
+            for (SpawnRequest& req : ce.controller->drainSpawnRequests())
+                spawnWork.emplace_back(std::move(req), ce.id);
+        }
+        for (auto& [req, requester] : spawnWork) {
+            if (!req.makeController)
+                continue; // a vehicle nobody integrates would hang in the air — refuse
+            const EntityState* parent = m_entityManager.get(requester);
+            if (!parent)
+                continue;
+            std::string typeId = req.typeId;
+            if (typeId.empty()) {
+                const EntityDef* parentDef = m_registry.byIndex(parent->typeIndex);
+                if (!parentDef)
+                    continue;
+                typeId = parentDef->id;
+            }
+            const uint32_t ownerId = parent->ownerId;
+            const EntityId child = m_entityManager.spawn(typeId.c_str(), req.transform, ownerId);
+            if (child.valid())
+                registerController(child, req.makeController(), nullptr);
+        }
+    }
+
     if (!m_weaponRegistry)
         return; // no vocabulary, no fire path — trigger intent is read and discarded (pre-#583)
 

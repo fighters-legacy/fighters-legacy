@@ -32,8 +32,13 @@ class BallisticForceModel final : public IForceModel {
                         const FlightModelData& data, const AtmosphereState& atmos,
                         const AeroInputs& aero) const override;
 
-    // TVC moment arm as a fraction of thrust: moment = ctrl × thrust × kTvcArmM.
+    // TVC moment arm as a fraction of thrust: moment = (ctrl − kTvcRateFeedback·ω) × thrust × arm.
     static constexpr float kTvcArmM = 1.5f;
+    // Rate-feedback gain inside the TVC loop (seconds of lead) — a real autopilot's inner loop,
+    // and what keeps a 60 Hz outer guidance command from tumbling the airframe.
+    static constexpr float kTvcRateFeedback = 1.0f;
+    // Fin weathervane damping coefficient on q̄·S·mac² — also ends any post-burnout tumble in air.
+    static constexpr float kFinDampCoeff = 30.f;
 };
 
 } // namespace fl

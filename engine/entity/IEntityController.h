@@ -2,14 +2,31 @@
 #pragma once
 
 #include "entity/AiTickContext.h" // AiTickContext — the bundled per-tick world view
+#include "entity/EntityState.h"   // EntityTransform — the SpawnRequest's spawn state (#355)
 #include "flight/AeroForces.h"    // ControlInput — the shared control currency
 #include "flight/Geodetic.h"      // kEarthRadiusM — default planet radius for local-level guidance
 
 #include <cstdint>
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace fl {
 
-struct EntityState; // engine/entity/EntityState.h
+struct IEntityController;
+
+// A controller's request to bring a NEW entity into the world (#355 — MIRV bus deploying RVs).
+// Controllers are sampled in a data-parallel, read-only pass and can never spawn directly:
+// EntityManager::spawn mutates the pool and fires handlers. So a controller RAISES this intent and
+// WorldBroadcaster drains it serially in the weapons phase — the same discipline as over-G damage.
+struct SpawnRequest {
+    std::string typeId;        // entity type to spawn; EMPTY = "the same type as the requester"
+    EntityTransform transform; // world spawn state (position, velocity, orientation)
+    // Controller for the child; REQUIRED — a spawned vehicle with no controller would never be
+    // integrated. Called on the sim thread at execution time.
+    std::function<std::unique_ptr<IEntityController>()> makeController;
+};
 
 // Source of per-tick control inputs for a single simulated entity. Decouples the flight sim from the
 // network-peer assumption: WorldBroadcaster keeps an EntityId-keyed registry of controllers and steps
@@ -28,6 +45,14 @@ struct IEntityController {
     // and a default-constructed context is the behavior every controller had before the bundle
     // existed. Called on the sim thread inside WorldBroadcaster::onTick.
     virtual ControlInput sample(const EntityState& state, uint64_t tick, double dt, const AiTickContext& ctx = {}) = 0;
+
+    // Spawn intents raised since the last drain (#355). WorldBroadcaster drains this SERIALLY in
+    // the weapons phase — never from the parallel AI pass — and executes each request through the
+    // ordinary spawn + controller-registration path with the requester's ownership chained onto
+    // the child (a MIRV kill credits whoever launched the bus). Default: nothing to say.
+    virtual std::vector<SpawnRequest> drainSpawnRequests() {
+        return {};
+    }
 
     // Planet radius (m) for local-level (tangent-plane) guidance math. Defaults to Earth so the
     // controllers and unit tests behave correctly near the world origin without any wiring.
