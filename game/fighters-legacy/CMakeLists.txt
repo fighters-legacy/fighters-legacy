@@ -66,9 +66,12 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
     if(WIN32)
         target_link_libraries(fighters-legacy PRIVATE ws2_32 winmm)
     endif()
+    # Inside the guard: the game target only exists when SDL3 and Vulkan are available. Several CI
+    # legs configure without them (lint, asan, tsan, fuzz, the scale gate), and an install() naming a
+    # target that does not exist is a hard CONFIGURE error, not a skipped rule.
+    install(TARGETS fighters-legacy RUNTIME DESTINATION . COMPONENT runtime)
+
     if(MSVC)
         target_compile_definitions(fighters-legacy PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
 endif()
-
-install(TARGETS fighters-legacy RUNTIME DESTINATION . COMPONENT runtime)
