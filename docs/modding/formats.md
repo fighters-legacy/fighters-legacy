@@ -241,13 +241,6 @@ and feet — what the source data uses — and the parser converts on the way in
 any error rather than clamping or defaulting: a weapon that is half-parsed is worse than one that is
 absent, because it flies.
 
-> **`[seeker]` is scheduled to change.** The 2026-07-12 sensor decision record
-> (`docs/architecture.md` → Decision Records) locks a **single `SensorDef` vocabulary** shared by
-> missile seekers, player avionics and AI detection. This block's ad-hoc fields (`fov_deg`,
-> `acquisition_nm`) will become a **reference to a sensor def** when the sensor core lands
-> (tracked under #583). The shape below is what the parser accepts today; authored content survives
-> the migration, these field names do not.
-
 ### `[weapon]` (required)
 
 | Field | Type | Description |
@@ -256,6 +249,7 @@ absent, because it flies.
 | `name` | string | Display name |
 | `type` | string | `missile`, `bomb`, `rocket`, `gun`, `pod` |
 | `category` | string | `air-to-air`, `air-to-ground`, `air-to-sea`, `anti-radiation` |
+| `mesh` | string | *Optional.* **Asset name** for the in-flight projectile visual (missiles/rockets/bombs — they fly as entities). Includes its own subdirectory like every mesh field; empty = the builtin placeholder. Guns are hitscan and never render one |
 
 ### `[seeker]` / `[guidance]` (optional, mutually exclusive)
 
@@ -264,13 +258,27 @@ externally guided (someone else looks). Both parse into the same struct. Omit bo
 store. Declaring both is an error — a weapon does not have two different ideas of how it finds a
 target.
 
+**The seeker head IS a sensor** (2026-07-14 decision record — one `SensorDef` vocabulary for
+player avionics, AI detection, and missile seekers). `sensor_id` references a sensor def in the
+pack's `sensors/`; its search/track lobes, ranges and per-check probability of detection are the
+seeker's, evaluated through the same detection math as every other observer in the game. What stays
+on the weapon is employment doctrine and trajectory shaping — things about the *shot*, not the
+sensor.
+
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `type` | string | — | `active-radar`, `semi-active-radar`, `ir`, `laser`, `gps`, `anti-radiation`, `unguided` |
-| `fov_deg` | float | `0` | Seeker gimbal half-angle, `[0, 180]`. `0` = no seeker lobe |
-| `acquisition_nm` | float | `0` | Range at which the seeker can take a lock |
+| `sensor_id` | string | — | **Def ID** of the seeker-head sensor, e.g. `fl-base:aim9p-seeker`. Cross-checked by `validate-weapon --pack` |
 | `fire_and_forget` | bool | `false` | `false` = the launch platform must keep supporting the shot |
 | `requires_designator` | bool | `false` | Laser/GPS: someone must hold the spot |
+| `pitbull_nm` | float | `0` | Active-radar only: range-to-go at which the missile's own radar goes active (and starts *emitting*). `0` = active off the rail |
+| `loft_bias_deg` | float | `0` | Climb bias flown while range-to-go > `loft_range_nm`; comes as a pair with it. `[0, 45]` |
+| `loft_range_nm` | float | `0` | Where the loft phase ends and the seeker flies pure proportional navigation |
+
+> **Deprecated (removed after one release):** the pre-#583 ad-hoc lobe — `fov_deg` +
+> `acquisition_nm` on the weapon itself. It still parses so existing packs load, and both the
+> engine and `validate-weapon` warn on it. It is mutually exclusive with `sensor_id`; migrate by
+> moving the lobe into a sensor def and referencing it.
 
 ### `[performance]` (required)
 
@@ -287,6 +295,7 @@ reach is meaningless); both is an error (which one is the range?).
 | `motor_burn_time_s` | float | `0` | `0` = unpowered |
 | `max_g` | float | `0` | `0` = unmanoeuvring |
 | `CEP_ft` | float | `0` | Circular error probable; `0` = unspecified |
+| `rate_of_fire_rpm` | float | `0` | Guns: rounds per minute. `0` = the engine default |
 
 ### `[warhead]` (required)
 
@@ -294,6 +303,8 @@ reach is meaningless); both is an error (which one is the range?).
 |---|---|---|
 | `blast_radius_ft` | float | Lethal radius |
 | `damage` | float | Damage applied at the centre of the blast |
+| `nuclear` | bool | *Optional.* Gates the nuclear effects path (EMP, flash, mushroom cloud). Requires `yield_kt` |
+| `yield_kt` | float | *Optional.* Yield in kilotons; the effect radii scale from it. Only legal with `nuclear = true` |
 
 ### `[countermeasures]` (optional)
 
@@ -322,12 +333,15 @@ id       = "aim120c"
 name     = "AIM-120C AMRAAM"
 type     = "missile"
 category = "air-to-air"
+mesh     = "aim120c"
 
 [seeker]
 type            = "active-radar"
-fov_deg         = 60
-acquisition_nm  = 20
+sensor_id       = "aim120c-seeker"   # the seeker head, defined in sensors/aim120c_seeker.toml
 fire_and_forget = true
+pitbull_nm      = 10                 # own radar goes active (and emitting) inside 10 nm to go
+loft_bias_deg   = 20                 # climb 20 deg while further out than...
+loft_range_nm   = 15                 # ...15 nm to go, then pure proportional navigation
 
 [performance]
 max_range_nm      = 30

@@ -59,6 +59,13 @@ uint32_t registerPackWeaponDefs(AssetManager& assets, WeaponRegistry& registry, 
         try {
             WeaponDef def =
                 parseWeaponDef(std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size()));
+            if (def.seeker && def.seeker->usesLegacyLobe())
+                log.log(LogLevel::Warn, __FILE__, __LINE__,
+                        (std::string("weapon def '") + name +
+                         "' uses the deprecated [seeker] fov_deg/acquisition_nm lobe — reference a "
+                         "sensor def with sensor_id (2026-07-14 decision record); the legacy form is "
+                         "removed after one release")
+                            .c_str());
             const std::string id = def.id;
             if (registry.registerWeapon(std::move(def)) == std::numeric_limits<uint32_t>::max())
                 log.log(LogLevel::Warn, __FILE__, __LINE__,

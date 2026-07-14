@@ -141,7 +141,10 @@ target_link_libraries(fm-trim PRIVATE fm-trim-lib)
 add_library(validate-weapon-lib STATIC
     validate-weapon/weapon_validator.cpp)
 target_link_libraries(validate-weapon-lib
-    PRIVATE engine-weapon)
+    PRIVATE engine-weapon
+            engine-content   # --pack: seeker sensor_id resolves through the real id index (#676)
+            engine-sensor
+            platform-stdfs)
 target_include_directories(validate-weapon-lib PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/validate-weapon")
 

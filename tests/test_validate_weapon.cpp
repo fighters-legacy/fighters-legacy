@@ -23,8 +23,7 @@ category = "air-to-air"
 
 [seeker]
 type            = "active-radar"
-fov_deg         = 60
-acquisition_nm  = 20
+sensor_id       = "aim120c-seeker"
 fire_and_forget = true
 
 [performance]
@@ -41,6 +40,27 @@ damage          = 100
 [load]
 weight_lb   = 335
 drag_factor = 0.008
+)toml";
+
+// A seeker sensor def that sees as far as the weapon shoots (30 nm max range above).
+const char* kSeekerSensor = R"toml(
+[sensor]
+id      = "aim120c-seeker"
+name    = "AMRAAM seeker head"
+type    = "radar"
+emitter = true
+
+[search]
+az_half_angle_deg = 60.0
+el_half_angle_deg = 60.0
+max_range_nm      = 16.0
+pod               = 0.5
+
+[track]
+az_half_angle_deg = 40.0
+el_half_angle_deg = 40.0
+max_range_nm      = 14.0
+pod               = 0.6
 )toml";
 
 bool hasSubstr(const std::vector<std::string>& v, const std::string& needle) {
@@ -66,6 +86,7 @@ struct TempPack {
     }
 
     void write(const fs::path& rel, const std::string& content) const {
+        fs::create_directories((root / rel).parent_path());
         std::ofstream f(root / rel);
         f << content;
     }
@@ -116,13 +137,24 @@ TEST_CASE("Implausible-but-legal values warn without failing", "[weapon-validato
         CHECK(hasSubstr(r.warnings, "unpowered"));
     }
 
-    SECTION("a seeker that cannot see as far as the weapon shoots") {
+    SECTION("a legacy seeker that cannot see as far as the weapon shoots") {
         std::string s(kValidMissile);
-        s.replace(s.find("acquisition_nm  = 20"), std::string("acquisition_nm  = 20").size(), "acquisition_nm  = 2");
+        s.replace(s.find("sensor_id       = \"aim120c-seeker\""),
+                  std::string("sensor_id       = \"aim120c-seeker\"").size(),
+                  "fov_deg         = 60\nacquisition_nm  = 2");
         const auto r = validateWeapon(s);
         CHECK(r.ok);
         CHECK(hasSubstr(r.warnings, "acquisition_nm"));
     }
+}
+
+TEST_CASE("The deprecated legacy seeker lobe warns", "[weapon-validator]") {
+    std::string s(kValidMissile);
+    s.replace(s.find("sensor_id       = \"aim120c-seeker\""),
+              std::string("sensor_id       = \"aim120c-seeker\"").size(), "fov_deg         = 60\nacquisition_nm  = 20");
+    const auto r = validateWeapon(s);
+    CHECK(r.ok); // one release of grace — a warning, not an error
+    CHECK(hasSubstr(r.warnings, "sensor_id"));
 }
 
 TEST_CASE("Pack mode validates every weapon file", "[weapon-validator]") {
@@ -131,12 +163,34 @@ TEST_CASE("Pack mode validates every weapon file", "[weapon-validator]") {
     // plausibility, and duplicate-id detection across files.
     TempPack pack;
     pack.write("weapons/aim120c.toml", kValidMissile);
+    pack.write("sensors/aim120c_seeker.toml", kSeekerSensor);
 
     SECTION("a valid pack passes cleanly") {
         const auto r = validatePackWeapons(pack.root.string());
         CHECK(r.ok);
         CHECK(r.errors.empty());
         CHECK(r.warnings.empty());
+    }
+
+    SECTION("a seeker sensor_id that resolves to nothing is an error") {
+        std::string s(kValidMissile);
+        s.replace(s.find("id       = \"aim120c\""), std::string("id       = \"aim120c\"").size(),
+                  "id       = \"blind\"");
+        s.replace(s.find("aim120c-seeker"), std::string("aim120c-seeker").size(), "no-such-seeker");
+        pack.write("weapons/blind.toml", s);
+        const auto r = validatePackWeapons(pack.root.string());
+        CHECK_FALSE(r.ok);
+        CHECK(hasSubstr(r.errors, "no-such-seeker"));
+    }
+
+    SECTION("a seeker whose resolved lobe is far shorter than the weapon's reach warns") {
+        std::string shortEyes(kSeekerSensor);
+        shortEyes.replace(shortEyes.find("max_range_nm      = 16.0"), std::string("max_range_nm      = 16.0").size(),
+                          "max_range_nm      = 2.0");
+        pack.write("sensors/aim120c_seeker.toml", shortEyes);
+        const auto r = validatePackWeapons(pack.root.string());
+        CHECK(r.ok);
+        CHECK(hasSubstr(r.warnings, "search lobe"));
     }
 
     SECTION("a malformed weapon file is reported, not silently skipped") {

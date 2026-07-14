@@ -123,6 +123,7 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
     w.name = req_string(wpn["name"], "weapon.name");
     w.type = parse_type(req_string(wpn["type"], "weapon.type"));
     w.category = parse_category(req_string(wpn["category"], "weapon.category"));
+    w.mesh = wpn["mesh"].value<std::string>().value_or(std::string{}); // ASSET NAME; empty = builtin
 
     // ── [seeker] / [guidance] (optional, mutually exclusive) ─────────────────
     // Two authored spellings of one concept: [seeker] is self-guided (the weapon looks), [guidance]
@@ -138,15 +139,42 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
 
         SeekerDef s;
         s.type = parse_seeker_type(req_string(node["type"], hasSeeker ? "seeker.type" : "guidance.type"), section);
+
+        // The seeker head is a SENSOR (2026-07-14 decision record): sensor_id references a sensor
+        // def and the missile evaluates it through the same Detection.h math as every observer.
+        s.sensorId = node["sensor_id"].value<std::string>().value_or(std::string{});
+
+        // DEPRECATED pre-#583 ad-hoc lobe. Still parsed so existing packs load; the bootstrap and
+        // validate-weapon both warn. Authoring both forms is an error, not a precedence puzzle.
         s.fovDeg = opt_float(node["fov_deg"], 0.f);
         if (s.fovDeg < 0.f || s.fovDeg > 180.f)
             throw std::runtime_error(std::string(section) + ".fov_deg must be in [0, 180]");
-
         s.acquisitionRangeM = opt_float(node["acquisition_nm"], 0.f) * kMetresPerNauticalMile;
         require_non_negative(s.acquisitionRangeM, "seeker.acquisition_nm");
+        if (!s.sensorId.empty() && (s.fovDeg > 0.f || s.acquisitionRangeM > 0.f))
+            throw std::runtime_error(std::string(section) +
+                                     ": sensor_id and the legacy fov_deg/acquisition_nm lobe are "
+                                     "mutually exclusive — the sensor def carries the lobe now");
 
         s.fireAndForget = opt_bool(node["fire_and_forget"], false);
         s.requiresDesignator = opt_bool(node["requires_designator"], false);
+
+        s.pitbullRangeM = opt_float(node["pitbull_nm"], 0.f) * kMetresPerNauticalMile;
+        require_non_negative(s.pitbullRangeM, "seeker.pitbull_nm");
+        if (s.pitbullRangeM > 0.f && s.type != SeekerType::ActiveRadar)
+            throw std::runtime_error(std::string(section) + ".pitbull_nm only means something on an "
+                                                            "active-radar seeker (going active IS the pitbull)");
+
+        s.loftBiasDeg = opt_float(node["loft_bias_deg"], 0.f);
+        if (s.loftBiasDeg < 0.f || s.loftBiasDeg > 45.f)
+            throw std::runtime_error(std::string(section) + ".loft_bias_deg must be in [0, 45]");
+        s.loftRangeM = opt_float(node["loft_range_nm"], 0.f) * kMetresPerNauticalMile;
+        require_non_negative(s.loftRangeM, "seeker.loft_range_nm");
+        if ((s.loftBiasDeg > 0.f) != (s.loftRangeM > 0.f))
+            throw std::runtime_error(std::string(section) +
+                                     ": loft_bias_deg and loft_range_nm come as a pair — one says how "
+                                     "steep, the other says until when");
+
         w.seeker = s;
     }
 
@@ -186,6 +214,9 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
     w.performance.cepM = opt_float(perf["CEP_ft"], 0.f) * kMetresPerFoot;
     require_non_negative(w.performance.cepM, "performance.CEP_ft");
 
+    w.performance.rateOfFireRpm = opt_float(perf["rate_of_fire_rpm"], 0.f);
+    require_non_negative(w.performance.rateOfFireRpm, "performance.rate_of_fire_rpm");
+
     // ── [warhead] (required) ─────────────────────────────────────────────────
     auto wh = tbl["warhead"];
     if (!wh || !wh.as_table())
@@ -195,6 +226,14 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
     require_non_negative(w.warhead.blastRadiusM, "warhead.blast_radius_ft");
     w.warhead.damage = req_float(wh["damage"], "warhead.damage");
     require_non_negative(w.warhead.damage, "warhead.damage");
+
+    w.warhead.nuclear = opt_bool(wh["nuclear"], false);
+    w.warhead.yieldKt = opt_float(wh["yield_kt"], 0.f);
+    require_non_negative(w.warhead.yieldKt, "warhead.yield_kt");
+    if (w.warhead.nuclear && w.warhead.yieldKt <= 0.f)
+        throw std::runtime_error("warhead: nuclear = true requires a yield_kt > 0 — the effect radii scale from it");
+    if (!w.warhead.nuclear && w.warhead.yieldKt > 0.f)
+        throw std::runtime_error("warhead: yield_kt without nuclear = true — say what you mean");
 
     // ── [countermeasures] (optional) ─────────────────────────────────────────
     if (auto cm = tbl["countermeasures"]; cm && cm.as_table()) {

@@ -1,0 +1,27 @@
+[weapon]
+id = "z"
+name = "Z"
+type = "missile"
+category = "air-to-air"
+mesh = "z"
+
+[seeker]
+type = "active-radar"
+sensor_id = "z-seeker"
+pitbull_nm = 10
+loft_bias_deg = 20
+loft_range_nm = 15
+
+[performance]
+max_range_nm = 30
+rate_of_fire_rpm = 0
+
+[warhead]
+blast_radius_ft = 50
+damage = 100
+nuclear = true
+yield_kt = 15
+
+[load]
+weight_lb = 335
+drag_factor = 0.008
