@@ -7,6 +7,7 @@
 #include "entity/EntityDef.h"
 #include "entity/EntityDefParser.h"
 #include "entity/EntityTypeRegistry.h"
+#include "sensor/BuiltinSensors.h"
 #include "sensor/SensorDef.h"
 #include "sensor/SensorDefParser.h"
 #include "weapon/BuiltinWeapon.h"    // the sandbox loadout (#440)
@@ -89,6 +90,20 @@ SensorDefResolver makeSensorDefResolver(AssetManager& assets, const ContentIndex
     return [&assets, &index, &log, cache](const std::string& id) -> std::shared_ptr<const sensor::SensorDef> {
         if (auto it = cache->find(id); it != cache->end())
             return it->second;
+
+        // Builtin ids resolve to the compiled-in defs — no pack, no file, no error (#440/#627).
+        // Checked BEFORE the index, deliberately: "builtin:" is engine vocabulary, and a pack that
+        // shadowed it could make the sandbox seeker mean something different per server. Non-owning
+        // pointers via the aliasing constructor — the statics outlive everything.
+        for (const sensor::SensorDef* builtin :
+             {&sensor::BuiltinSensors::eyeball(), &sensor::BuiltinSensors::irSeeker(),
+              &sensor::BuiltinSensors::radarSeeker()}) {
+            if (id == builtin->id) {
+                std::shared_ptr<const sensor::SensorDef> def(std::shared_ptr<const sensor::SensorDef>{}, builtin);
+                (*cache)[id] = def;
+                return def;
+            }
+        }
 
         std::shared_ptr<const sensor::SensorDef> def;
         const std::string* assetName = index.assetNameFor(AssetType::SensorDef, id);

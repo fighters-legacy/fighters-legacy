@@ -70,6 +70,12 @@ target_link_libraries(test_fire_control PRIVATE Catch2::Catch2WithMain engine-we
     engine-spatial)
 catch_discover_tests(test_fire_control)
 
+# SeekerTrack + PN guidance (#627): the missile seeker over the shared Detection.h machine.
+add_executable(test_seeker test_seeker.cpp)
+target_link_libraries(test_seeker PRIVATE Catch2::Catch2WithMain engine-weapon engine-entity
+    engine-sensor engine-spatial)
+catch_discover_tests(test_seeker)
+
 # WeaponRegistry + defaultPayload (#812): a loadout that actually costs the airframe mass and drag.
 # fm-trim (#817): the tests LOCK the derived numbers, so they double as the engine's guard against
 # someone changing AeroForces.cpp and silently altering every aircraft's performance.

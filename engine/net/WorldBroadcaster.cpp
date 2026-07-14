@@ -168,7 +168,10 @@ WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegis
                                    ILogger& logger, WeatherController* weather)
     : m_entityManager(entityManager), m_registry(registry), m_net(net), m_logger(logger), m_weather(weather),
       m_sensorSystem(entityManager, registry), m_gravity(&fl::CentralGravityField::earthInstance()),
-      m_planetRadiusKm(6371.f) {}
+      m_planetRadiusKm(6371.f) {
+    // Seeker target signatures come from the same type registry the sensor system reads (#627).
+    m_projectileSystem.setTypeRegistry(&registry);
+}
 
 WorldBroadcaster::~WorldBroadcaster() = default;
 
@@ -279,6 +282,9 @@ void WorldBroadcaster::setPayloadResolver(PayloadResolver fn) {
 }
 
 void WorldBroadcaster::setSensorDefResolver(sensor::SensorSystem::SensorDefResolver fn) {
+    // Aircraft radars and missile seeker heads resolve through the SAME function (#627): one
+    // vocabulary, one resolution path, one cache.
+    m_projectileSystem.setSensorResolver(fn);
     m_sensorSystem.setResolver(std::move(fn));
 }
 
@@ -672,6 +678,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         sensingEnv.timeOfDayH = envState.timeOfDay;
         sensingEnv.isNight = (envState.timeOfDay < 6.f || envState.timeOfDay >= 20.f);
     }
+    m_sensingEnv = sensingEnv; // the weapons pass reads the same conditions the sensing pass ran under (#627)
     // Unset difficulty = NO scaling: radar reaches its authored range and the AI reacts the moment it
     // detects. See setAiScaling — defaulting to AiScaling{} would silently apply the Cadet preset.
     const float radarRangeFraction = m_aiScaling ? m_aiScaling->radarSensorRange : 1.f;
@@ -1691,8 +1698,37 @@ void WorldBroadcaster::executeFireRequest(const FireRequest& req, uint64_t tickI
     if (!shooter || shooter->dead)
         return;
     const uint32_t ownerPeer = peerIdForEntity(shooter->id);
+
+    // Launch designation (#627): a seeker weapon is launched AT something the shooter designated —
+    // the missile never invents a target. The designator is the #610 seam (fl-server wires the
+    // contact-honest lambda); the look axis is the peer's viewAxis for a player and the nose for an
+    // AI. No designator wired, or nothing designated ⇒ the store flies dumb, which is the honest
+    // outcome of firing blind.
+    EntityId designated = EntityId::null();
+    if (def->seeker && def->seeker->type != SeekerType::Unguided && m_targetDesignator) {
+        float axis[3];
+        bool haveAxis = false;
+        if (ownerPeer != kNoOwningPeer) {
+            if (const auto pit = m_peerInputs.find(ownerPeer); pit != m_peerInputs.end()) {
+                axis[0] = pit->second.viewAxis[0];
+                axis[1] = pit->second.viewAxis[1];
+                axis[2] = pit->second.viewAxis[2];
+                haveAxis = true;
+            }
+        }
+        if (!haveAxis) {
+            const float* q = shooter->transform.quat;
+            const glm::quat rot{q[3], q[0], q[1], q[2]};
+            const glm::vec3 nose = rot * glm::vec3{1.f, 0.f, 0.f};
+            axis[0] = nose.x;
+            axis[1] = nose.y;
+            axis[2] = nose.z;
+        }
+        designated = m_targetDesignator(*shooter, axis);
+    }
+
     const EntityId pid = m_projectileSystem.launch(m_entityManager, req.weaponIndex, *shooter,
-                                                   ownerPeer == kNoOwningPeer ? 0u : ownerPeer);
+                                                   ownerPeer == kNoOwningPeer ? 0u : ownerPeer, designated);
     if (pid.valid())
         queueEffect(static_cast<uint8_t>(EffectType::MissileLaunch), static_cast<uint8_t>(def->type), req.shooterIdx,
                     0xFFFFFFFFu, shooter->transform.pos);
@@ -1729,7 +1765,8 @@ void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
     // 3. Projectile flight + endings. Detection inside step(), application here — the over-G
     // discipline: applyWarheadAt fires event handlers and must never run inside a traversal.
     m_tickImpacts.clear();
-    m_projectileSystem.step(m_entityManager, m_spatialIndex, static_cast<float>(simDt), m_groundQuery, m_tickImpacts);
+    m_projectileSystem.step(m_entityManager, m_spatialIndex, static_cast<float>(simDt), m_groundQuery, tickIndex,
+                            m_sensingEnv, m_tickImpacts);
     for (const ProjectileImpact& imp : m_tickImpacts) {
         const WeaponDef* def = m_weaponRegistry->byIndex(imp.weaponIndex);
         if (!def)

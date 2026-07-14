@@ -19,6 +19,7 @@
 #include "net/WireCodec.h"
 #include "net/WorldBroadcaster.h"
 #include "render/RenderSnapshot.h"
+#include "sensor/BuiltinSensors.h"
 #include "weapon/BuiltinWeapon.h"
 #include "weapon/ProjectileSystem.h"
 #include "weapon/WeaponDefParser.h"
@@ -8371,4 +8372,59 @@ TEST_CASE("WorldBroadcaster: the zero-pack sandbox peer spawns ARMED and the can
     const fl::LoadoutState ls = fl::buildLoadout(fl::builtinDebugEntityDef(), weapons);
     CHECK(ls.stations.size() == 5u);
     CHECK(ls.selected == 1u); // first IR rail
+}
+
+TEST_CASE("WorldBroadcaster: a designated IR missile launch flies out and kills through the pipeline",
+          "[world_broadcaster][firepath][seeker]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(fl::builtinDebugEntityDef());
+
+    fl::WeaponRegistry weapons;
+    fl::registerBuiltinWeapons(weapons);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    em.addEventHandler(&broadcaster);
+    broadcaster.setWeaponRegistry(&weapons);
+    // Missiles get projectile entity types the same way the server registers them at startup.
+    fl::registerProjectileEntityDefs(weapons, registry, logger);
+    // Seeker heads resolve to the compiled-in defs (the fl-server resolver does the same, #440).
+    broadcaster.setSensorDefResolver([](const std::string& id) -> std::shared_ptr<const fl::sensor::SensorDef> {
+        if (id == "builtin:ir-seeker")
+            return {std::shared_ptr<const fl::sensor::SensorDef>{}, &fl::sensor::BuiltinSensors::irSeeker()};
+        return nullptr;
+    });
+
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(shooter != nullptr);
+
+    // A hostile 2 km dead ahead. The designator is the #610 seam: here a test lambda standing in
+    // for fl-server's contact-honest one.
+    fl::EntityTransform vt{};
+    vt.pos[0] = shooter->transform.pos[0] + 2000.0;
+    vt.pos[1] = shooter->transform.pos[1];
+    vt.pos[2] = shooter->transform.pos[2];
+    vt.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
+    broadcaster.setTargetDesignator([victim](const fl::EntityState&, const float*) -> fl::EntityId { return victim; });
+
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.buttons = 0x04u;        // fire selected store
+    inp.selectedStation = 255u; // default selection = the first IR rail
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    // Fly the engagement out. 2 km at missile speeds is a few seconds; give it ten.
+    bool victimHit = false;
+    for (uint64_t t = 1; t <= 600 && !victimHit; ++t) {
+        broadcaster.onTick(1.0 / 60.0, t);
+        const fl::EntityState* vs = em.get(victim);
+        victimHit = !vs || vs->dead || vs->hp < 100.f;
+    }
+    CHECK(victimHit); // the warhead connected through the same damage pipeline as everything else
 }

@@ -752,6 +752,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // ── the fire path (#625) — sim-thread only ──────────────────────────────
     const WeaponRegistry* m_weaponRegistry{nullptr};
     ProjectileSystem m_projectileSystem;
+    // The conditions the sensing pass ran under this tick; seeker checks (#627) read the same ones.
+    sensor::SensingEnvironment m_sensingEnv{};
     // Rolling post-integrate position history (#425): player hitscan rewinds targets to the tick
     // the shooter actually saw (currentTick − estimatedDelayTicks, clamped to the ring depth).
     TransformHistory m_transformHistory;

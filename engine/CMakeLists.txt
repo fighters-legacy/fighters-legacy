@@ -187,6 +187,7 @@ add_library(engine-weapon STATIC
     weapon/Loadout.cpp
     weapon/FireControl.cpp
     weapon/ProjectileSystem.cpp
+    weapon/Seeker.cpp
 )
 target_include_directories(engine-weapon PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-weapon
@@ -194,6 +195,7 @@ target_link_libraries(engine-weapon
             platform-hal    # GLM for the projectile point-mass math (#625)
     PRIVATE engine-entity   # EntityDef::hardpoints, read only; the projectile pool mirrors entities
             engine-spatial  # contact-fuze broadphase
+            engine-sensor   # the seeker runs the shared Detection.h machine (#627)
             tomlplusplus::tomlplusplus
 )
 

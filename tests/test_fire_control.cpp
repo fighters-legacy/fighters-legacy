@@ -241,7 +241,7 @@ TEST_CASE("ProjectileSystem: launch inherits shooter velocity, boosts, and self-
     // impact, never silently vanish.
     std::vector<ProjectileImpact> impacts;
     for (int i = 0; i < 60 * 60 && impacts.empty(); ++i)
-        ps.step(em, si, 1.f / 60.f, {}, impacts);
+        ps.step(em, si, 1.f / 60.f, {}, static_cast<uint64_t>(i), {}, impacts);
     REQUIRE(impacts.size() == 1u);
     CHECK(ps.liveCount() == 0u);
     CHECK_FALSE(impacts[0].directHit.valid());
