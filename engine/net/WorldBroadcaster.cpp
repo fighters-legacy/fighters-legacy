@@ -1993,6 +1993,12 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
 
 void WorldBroadcaster::registerController(EntityId id, std::unique_ptr<IEntityController> controller,
                                           std::shared_ptr<const FlightModelData> model) {
+    // An AI aircraft flies ITS OWN aeroplane. When the caller does not hand us a model, resolve the
+    // entity type's own flightModelAsset rather than silently defaulting to the builtin UFO -- which
+    // is what every `spawn <type> --ai <behavior>` did, so an AI F-5E flew a UFO with an F-5E's mesh
+    // on it. Same silent-builtin-fallback bug as #811, on the server side of the same seam.
+    if (!model)
+        model = resolveFlightModel(id); // logs and returns null if the id is unknown; builtin below
     // AI/scripted entities are decimatable — their sample() may be skipped under tick overrun (#514).
     addControlledEntity(id, std::move(controller), std::move(model), 0.f, /*decimatable=*/true);
 }

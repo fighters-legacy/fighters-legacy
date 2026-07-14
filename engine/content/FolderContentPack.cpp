@@ -26,9 +26,32 @@ static constexpr std::array<AssetPathInfo, static_cast<size_t>(AssetType::Count)
     {"ai", ".lua", ""},            // AIScript
     {"entities", ".toml", ""},     // EntityDef
     {"sensors", ".toml", ""},      // SensorDef
+    {"weapons", ".toml", ""},      // Weapon
+    {"manual", ".md", ""},         // Manual (prose only — the numbers are generated, never authored)
 }};
+
+// THE SIZE ASSERT BELOW IS TAUTOLOGICAL AND CANNOT FAIL. The array's length is *defined* as
+// AssetType::Count, so adding an enumerator without adding a row here does not shorten the array --
+// it leaves the new row VALUE-INITIALIZED, i.e. `subdir == nullptr`. The first listAssets() for that
+// type then does `m_modDir + "/" + nullptr` and segfaults. That is exactly what happened when
+// AssetType::Weapon was added: every unit test passed (they use mock packs, not FolderContentPack)
+// and fl-server crashed on the first real content pack.
+//
+// It is kept only for the case where someone changes the array's declared length. The check that
+// actually protects you is the next one.
 static_assert(kAssetPaths.size() == static_cast<size_t>(AssetType::Count),
               "kAssetPaths out of sync with AssetType enum");
+
+// THIS is the guard that works: every row must name a directory and an extension. Add an AssetType
+// and forget the row, and the build stops here instead of the server dying on a content pack.
+static_assert(
+    [] {
+        for (const auto& info : kAssetPaths)
+            if (info.subdir == nullptr || info.ext == nullptr || info.extFallback == nullptr)
+                return false;
+        return true;
+    }(),
+    "kAssetPaths has a value-initialized row: an AssetType was added without a path entry");
 
 FolderContentPack::FolderContentPack(IFilesystem& fs, ILogger& logger, std::string modDir, Manifest manifest)
     : m_fs(fs), m_logger(logger), m_modDir(std::move(modDir)), m_manifest(std::move(manifest)) {}
