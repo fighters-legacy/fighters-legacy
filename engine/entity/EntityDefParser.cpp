@@ -157,6 +157,29 @@ EntityDef parseEntityDef(std::string_view toml_src) {
         dmg.light = parse_penalty(damage_node["light"], "light");
         dmg.heavy = parse_penalty(damage_node["heavy"], "heavy");
         dmg.critical = parse_penalty(damage_node["critical"], "critical");
+
+        // Optional per-subsystem granularity (#675): [damage.subsystems] with the fixed vocabulary.
+        // Absent = the 3-level model above is the whole story. Any subsystem key may be omitted (its
+        // hp stays 0 = not modelled); each present one is { hp, weight }.
+        if (auto subs = damage_node["subsystems"]; subs && subs.as_table()) {
+            SubsystemSet set;
+            auto parse_subsystem = [&](const char* key, Subsystem s) {
+                if (auto node = subs[key]; node && node.as_table()) {
+                    SubsystemDef sd;
+                    sd.hp = opt_float(node["hp"], 0.f);
+                    sd.weight = opt_float(node["weight"], 1.f);
+                    set.parts[static_cast<int>(s)] = sd;
+                }
+            };
+            parse_subsystem("engine_left", Subsystem::EngineLeft);
+            parse_subsystem("engine_right", Subsystem::EngineRight);
+            parse_subsystem("controls", Subsystem::Controls);
+            parse_subsystem("avionics", Subsystem::Avionics);
+            parse_subsystem("hydraulics", Subsystem::Hydraulics);
+            parse_subsystem("fuel", Subsystem::Fuel);
+            if (set.any())
+                dmg.subsystems = set;
+        }
         def.damage = std::move(dmg);
     }
 

@@ -9,6 +9,7 @@
 #include "entity/EntityTypeRegistry.h"
 #include "entity/IEntityController.h"
 #include "flight/CentralGravityField.h"
+#include "flight/EngineFailFlags.h"
 #include "flight/FlightIntegrator.h"
 #include "job/JobSystem.h"
 #include "net/BitStream.h"
@@ -8574,4 +8575,78 @@ TEST_CASE("WorldBroadcaster: collision detection is serial-equivalent across wor
             REQUIRE(out.hpB == ref.hpB);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Per-subsystem damage (#675)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: a warhead that fails an engine subsystem shows on the wire flags",
+          "[world_broadcaster][subsystem]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+
+    // A twin whose ONLY subsystems are the two engines (low HP, so one blast fails one). The pick
+    // is therefore deterministically an engine, and its failure must reach the integrator's
+    // engineFailFlags (which the snapshot already replicates).
+    fl::EntityDef def = makeDebugDef("test:twin");
+    fl::DamageDef dmg;
+    dmg.light.hpFraction = 0.7f;
+    dmg.heavy.hpFraction = 0.35f;
+    dmg.critical.hpFraction = 0.1f;
+    fl::SubsystemSet subs;
+    subs.parts[static_cast<int>(fl::Subsystem::EngineLeft)] = {10.f, 1.f};
+    subs.parts[static_cast<int>(fl::Subsystem::EngineRight)] = {10.f, 1.f};
+    dmg.subsystems = subs;
+    def.damage = dmg;
+    def.maxHp = 1000.f; // survives the blast so we see the ENGINE failure, not death
+    registry.registerType(def);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::EntityTransform t{};
+    t.pos[1] = 5000.0;
+    t.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("test:twin", t);
+    broadcaster.registerController(victim,
+                                   std::make_unique<ConstantController>()); // gives it an integrator + subsystems
+
+    broadcaster.onTick(1.0 / 60.0, 1u); // build the spatial index + integrator
+
+    const fl::EntityState* vs = em.get(victim);
+    REQUIRE(vs != nullptr);
+    double pos[3] = {vs->transform.pos[0] + 3.0, vs->transform.pos[1], vs->transform.pos[2]};
+    fl::BlastSpec blast{20.f, 60.f, false}; // > the 10 hp engine pool
+    broadcaster.applyWarheadAt(pos, blast, fl::EntityId::null());
+
+    const fl::FlightIntegrator* fi = broadcaster.integratorFor(victim.index);
+    REQUIRE(fi != nullptr);
+    CHECK((fi->engineFailFlags() & (fl::kEngineFailLeft | fl::kEngineFailRight)) != 0);
+}
+
+TEST_CASE("WorldBroadcaster: an entity without a subsystems table is unaffected by the router",
+          "[world_broadcaster][subsystem]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef()); // no [damage.subsystems]
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityId player{ack.assignedEntityIdx, ack.assignedEntityGen};
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    const fl::EntityState* ps = em.get(player);
+    REQUIRE(ps != nullptr);
+    double pos[3] = {ps->transform.pos[0] + 3.0, ps->transform.pos[1], ps->transform.pos[2]};
+    broadcaster.applyWarheadAt(pos, fl::BlastSpec{20.f, 40.f, false}, fl::EntityId::null());
+
+    // No subsystem model → no engine-out flags, ever (the 3-level tier model is untouched).
+    const fl::FlightIntegrator* fi = broadcaster.integratorFor(player.index);
+    REQUIRE(fi != nullptr);
+    CHECK((fi->engineFailFlags() & (fl::kEngineFailLeft | fl::kEngineFailRight)) == 0);
 }

@@ -30,7 +30,7 @@ bool applyPointDamage(EntityManager& em, EntityId target, float amount, EntityId
 
 WarheadResult applyWarhead(EntityManager& em, const SpatialIndex& si, const double pos[3], const BlastSpec& blast,
                            EntityId instigator, const DamageRules& rules,
-                           const std::function<void(EntityId)>& empEffect) {
+                           const std::function<void(EntityId)>& empEffect, const WarheadVictimHook& onVictim) {
     WarheadResult result;
     if (blast.radiusM <= 0.f || blast.damage <= 0.f)
         return result;
@@ -44,6 +44,7 @@ WarheadResult applyWarhead(EntityManager& em, const SpatialIndex& si, const doub
     struct Victim {
         EntityId id;
         double distM;
+        float dir[3]; // blast-to-victim unit direction (the shrapnel's travel), for #675 routing
     };
     std::vector<Victim> victims;
     si.queryRadius(pos, outerR, [&](uint32_t idx, const double* p) {
@@ -56,14 +57,25 @@ WarheadResult applyWarhead(EntityManager& em, const SpatialIndex& si, const doub
         const EntityState* s = em.getByIndex(idx);
         if (!s || s->dead)
             return;
-        victims.push_back({s->id, std::sqrt(d2)});
+        const double d = std::sqrt(d2);
+        Victim v{s->id, d, {0.f, 0.f, 0.f}};
+        if (d > 1e-6) {
+            v.dir[0] = static_cast<float>(dx / d);
+            v.dir[1] = static_cast<float>(dy / d);
+            v.dir[2] = static_cast<float>(dz / d);
+        }
+        victims.push_back(v);
     });
 
     for (const Victim& v : victims) {
         if (v.distM <= blastR) {
             const float falloff = 1.f - static_cast<float>(v.distM / blastR);
-            if (applyPointDamage(em, v.id, blast.damage * falloff, instigator, rules))
+            const float amount = blast.damage * falloff;
+            if (applyPointDamage(em, v.id, amount, instigator, rules)) {
                 ++result.damaged;
+                if (onVictim)
+                    onVictim(v.id, amount, v.dir);
+            }
         }
         if (blast.nuclear && empEffect) {
             empEffect(v.id);

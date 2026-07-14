@@ -25,7 +25,7 @@ struct FlightState {
     float throttle_actual{0.f};    // actual throttle after spool lag [0,1]
     float current_sweep_deg{55.f}; // current wing sweep angle (fixed-geometry: equals ref_sweep_deg)
     bool ab_engaged{false};
-    uint8_t engineFailFlags{0}; // fl::kEngineFail* bitmask; 0 until per-engine sim is modelled
+    uint8_t engineFailFlags{0}; // fl::kEngineFail* bitmask; drives asymmetric thrust (#675)
     float tvc_angle_deg{0.f};   // current TVC nozzle angle
 
     // ── [aero.limits] enforcement outputs (#816) ─────────────────────────────
@@ -128,6 +128,23 @@ class FlightIntegrator {
         return m_damageControl;
     }
 
+    // Per-subsystem damage effects (#675), independent of the tier penalties above so the two layer
+    // rather than overwrite. Engine-out flags drive the force model's asymmetric thrust; the
+    // subsystem control factor (controls + hydraulics losses) multiplies the tier control factor; a
+    // fuel leak drains on top of the burn.
+    void setEngineFailFlags(uint8_t flags) noexcept {
+        m_state.engineFailFlags = flags;
+    }
+    [[nodiscard]] uint8_t engineFailFlags() const noexcept {
+        return m_state.engineFailFlags;
+    }
+    void setSubsystemControlFactor(float factor) noexcept {
+        m_subsystemControl = std::clamp(factor, 0.f, 1.f);
+    }
+    void setFuelLeakRate(float kgPerS) noexcept {
+        m_fuelLeakKgS = std::max(0.f, kgPerS);
+    }
+
   private:
     std::shared_ptr<const FlightModelData> m_data;
     FlightState m_state;
@@ -136,6 +153,8 @@ class FlightIntegrator {
     const IForceModel* m_forceModel{&FixedWingForceModel::instance()};
     float m_damageThrust{1.f};
     float m_damageControl{1.f};
+    float m_subsystemControl{1.f}; // #675: controls/hydraulics loss, multiplies m_damageControl
+    float m_fuelLeakKgS{0.f};      // #675: ruptured-tank drain on top of the burn
 
     void advanceSpool(float dt, float commanded_throttle);
     void advanceSweep(float dt, float commanded_sweep_deg);

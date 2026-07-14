@@ -64,6 +64,11 @@ add_executable(test_collision test_collision.cpp)
 target_link_libraries(test_collision PRIVATE Catch2::Catch2WithMain engine-entity)
 catch_discover_tests(test_collision)
 
+# Per-subsystem damage routing (#675) — the pure pick/apply logic.
+add_executable(test_subsystem_damage test_subsystem_damage.cpp)
+target_link_libraries(test_subsystem_damage PRIVATE Catch2::Catch2WithMain engine-entity)
+catch_discover_tests(test_subsystem_damage)
+
 add_executable(test_transform_history test_transform_history.cpp)
 target_link_libraries(test_transform_history PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_transform_history)

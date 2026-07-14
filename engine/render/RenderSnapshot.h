@@ -1,21 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "flight/EngineFailFlags.h" // kEngineFail* — the shared vocabulary (#675)
+
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <vector>
 
 namespace fl {
-
-// Bitmask constants for EntityRenderEntry::engineFailFlags and MsgEntityEntry::engineFailFlags.
-// kEngineFailGeneric is derived from entity damage state (damageLevel >= 2) in WorldBroadcaster.
-// Remaining bits are populated by FlightIntegrator once per-engine failure is modelled (Phase 6+).
-constexpr uint8_t kEngineFailGeneric = 0x01; // generic thrust impairment (from damage)
-constexpr uint8_t kEngineFailLeft = 0x02;    // left-engine failure (Phase 6+)
-constexpr uint8_t kEngineFailRight = 0x04;   // right-engine failure (Phase 6+)
-constexpr uint8_t kEngineCompStall = 0x08;   // compressor stall (Phase 6+)
-constexpr uint8_t kEngineFlameout = 0x10;    // flameout (Phase 6+)
 
 // Per-entity data captured at the end of each sim tick and shipped to the render thread.
 // Uses primitive types only to avoid introducing a header dependency on engine-entity.

@@ -1599,8 +1599,13 @@ const FlightIntegrator* WorldBroadcaster::integratorFor(uint32_t entityIdx) cons
 }
 
 WarheadResult WorldBroadcaster::applyWarheadAt(const double pos[3], const BlastSpec& blast, EntityId instigator) {
-    return applyWarhead(m_entityManager, m_spatialIndex, pos, blast, instigator, m_damageRules,
-                        [this](EntityId victim) { m_sensorSystem.setAvionicsFailed(victim.index); });
+    return applyWarhead(
+        m_entityManager, m_spatialIndex, pos, blast, instigator, m_damageRules,
+        [this](EntityId victim) { m_sensorSystem.setAvionicsFailed(victim.index); },
+        // Route blast damage to a subsystem (#675); direction = the shrapnel's travel (blast → victim).
+        [this](EntityId victim, float amount, const float hitDir[3]) {
+            routeSubsystemDamage(victim, amount, hitDir, m_currentTick);
+        });
 }
 
 void WorldBroadcaster::setWeaponRegistry(const WeaponRegistry* weapons) noexcept {
@@ -1699,9 +1704,13 @@ void WorldBroadcaster::resolveHitscan(const FireRequest& req, const WeaponDef& d
         m_currentWeaponClass = static_cast<uint8_t>(def.type);
         const bool applied = applyPointDamage(m_entityManager, hitId, def.warhead.damage, shooter->id, m_damageRules);
         m_currentWeaponClass = 0xFF;
-        if (applied)
+        if (applied) {
             queueEffect(static_cast<uint8_t>(EffectType::Impact), static_cast<uint8_t>(def.type), req.shooterIdx,
                         hitId.index, at);
+            // The round's travel direction routes the damage to a subsystem (#675).
+            const float hitDir[3] = {bore.x, bore.y, bore.z};
+            routeSubsystemDamage(hitId, def.warhead.damage, hitDir, tickIndex);
+        }
     }
 }
 
@@ -1945,12 +1954,85 @@ void WorldBroadcaster::runCollisionPass(uint64_t tickIndex) {
         // Re-check liveness: an earlier pair this tick may have already killed one side.
         const EntityState* sa = m_entityManager.get(p.a);
         const EntityState* sb = m_entityManager.get(p.b);
-        if (sa && !sa->dead)
+        if (sa && !sa->dead) {
             applyPointDamage(m_entityManager, p.a, dmg, EntityId::null(), m_damageRules);
-        if (sb && !sb->dead)
+            routeSubsystemDamage(p.a, dmg, nullptr, tickIndex); // undirected — a merge is everywhere at once
+        }
+        if (sb && !sb->dead) {
             applyPointDamage(m_entityManager, p.b, dmg, EntityId::null(), m_damageRules);
+            routeSubsystemDamage(p.b, dmg, nullptr, tickIndex);
+        }
     }
-    (void)tickIndex;
+}
+
+// Fuel-leak rate when the fuel subsystem fails (#675) — a ruptured tank the pilot cannot throttle
+// away. ~2 kg/s empties a typical 4000 kg internal load over ~30 minutes: a slow bleed that turns a
+// long egress into a coin flip, not an instant flame-out.
+static constexpr float kSubsystemFuelLeakKgS = 2.f;
+
+void WorldBroadcaster::routeSubsystemDamage(EntityId target, float amount, const float* hitDirWorld,
+                                            uint64_t tickIndex) {
+    if (amount <= 0.f)
+        return;
+    auto it = m_controlledEntities.find(target.index);
+    if (it == m_controlledEntities.end() || !it->second.hasSubsystems || it->second.id != target)
+        return;
+    ControlledEntity& ce = it->second;
+    const EntityState* state = m_entityManager.get(target);
+    const EntityDef* def = state ? m_registry.byIndex(state->typeIndex) : nullptr;
+    if (!state || !def || !def->damage || !def->damage->subsystems)
+        return;
+
+    // Rotate the world-frame hit direction into the target's body frame (x=fwd, y=up, z=right); a
+    // null direction stays zero = undirected (weight-only pick).
+    float hitDirBody[3] = {0.f, 0.f, 0.f};
+    if (hitDirWorld) {
+        const float* q = state->transform.quat;
+        const glm::quat rot{q[3], q[0], q[1], q[2]};
+        const glm::vec3 body = glm::conjugate(rot) * glm::vec3{hitDirWorld[0], hitDirWorld[1], hitDirWorld[2]};
+        hitDirBody[0] = body.x;
+        hitDirBody[1] = body.y;
+        hitDirBody[2] = body.z;
+    }
+
+    const uint32_t h = subsystemHash(target.index, tickIndex, 0x51A5u);
+    const Subsystem s = pickSubsystem(*def->damage->subsystems, ce.subsystems, hitDirBody, h);
+    if (s == Subsystem::Count)
+        return;
+    if (applySubsystemDamage(ce.subsystems, s, amount) != 0)
+        applySubsystemEffects(ce); // a subsystem newly failed — recompute the effects from the mask
+}
+
+void WorldBroadcaster::applySubsystemEffects(ControlledEntity& ce) {
+    if (!ce.sim)
+        return;
+
+    // Engine-out flags → the force model's asymmetric thrust. OR into whatever the tier model set
+    // (kEngineFailGeneric), so a shot-out left engine and a damage-tier generic impairment coexist.
+    uint8_t engineFlags = ce.sim->engineFailFlags();
+    if (ce.subsystems.failed(Subsystem::EngineLeft))
+        engineFlags |= kEngineFailLeft;
+    if (ce.subsystems.failed(Subsystem::EngineRight))
+        engineFlags |= kEngineFailRight;
+    ce.sim->setEngineFailFlags(engineFlags);
+
+    // Controls and hydraulics each strip control authority; both failed = near-total loss.
+    float control = 1.f;
+    if (ce.subsystems.failed(Subsystem::Controls))
+        control *= 0.4f;
+    if (ce.subsystems.failed(Subsystem::Hydraulics))
+        control *= 0.5f;
+    ce.sim->setSubsystemControlFactor(control);
+
+    // Avionics failure strips the sensor suite to eyes (honest — it changes what the AI can see).
+    if (ce.subsystems.failed(Subsystem::Avionics))
+        m_sensorSystem.setAvionicsFailed(ce.id.index);
+
+    // A ruptured fuel tank leaks; the rate scales with how much tank capacity was in that pool.
+    if (ce.subsystems.failed(Subsystem::Fuel)) {
+        ce.fuelLeakKgS = kSubsystemFuelLeakKgS;
+        ce.sim->setFuelLeakRate(ce.fuelLeakKgS);
+    }
 }
 
 uint32_t WorldBroadcaster::peerIdForEntity(EntityId id) const noexcept {
@@ -2611,6 +2693,13 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     // here on the LOADOUT is the truth — a released store shrinks both, in evaluateFire.
     if (m_weaponRegistry && spawnDef && !spawnDef->hardpoints.empty())
         ce.fire.loadout = buildLoadout(*spawnDef, *m_weaponRegistry);
+
+    // Per-subsystem damage pools (#675), born from the def's [damage.subsystems]. Absent = the
+    // 3-level tier model is the whole story (hasSubsystems stays false, routing is a no-op).
+    if (spawnDef && spawnDef->damage && spawnDef->damage->subsystems) {
+        ce.subsystems.init(*spawnDef->damage->subsystems);
+        ce.hasSubsystems = true;
+    }
 
     m_controlledEntities[id.index] = std::move(ce);
 

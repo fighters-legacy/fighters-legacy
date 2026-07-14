@@ -162,11 +162,14 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     // a command-authority model — a shot-up engine cannot be asked for full power, shot-up linkages
     // cannot be asked for full deflection — which is the honest granularity for a 3-level global
     // damage model; per-subsystem effects layer on top later (#675).
+    // The tier control factor (#626) and the per-subsystem control factor (#675 — controls +
+    // hydraulics losses) multiply: two independent ways to lose deflection authority.
+    const float controlFactor = m_damageControl * m_subsystemControl;
     ControlInput ctrl = ctrlIn;
     ctrl.throttle *= m_damageThrust;
-    ctrl.elevator *= m_damageControl;
-    ctrl.aileron *= m_damageControl;
-    ctrl.rudder *= m_damageControl;
+    ctrl.elevator *= controlFactor;
+    ctrl.aileron *= controlFactor;
+    ctrl.rudder *= controlFactor;
 
     // Clear the previous tick's one-shot outputs.
     m_state.ground_impact_speed = 0.f;
@@ -498,7 +501,8 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
         flow = m_data->engine.fuel_flow_idle_kg_s +
                m_state.throttle_actual * (m_data->engine.fuel_flow_mil_kg_s - m_data->engine.fuel_flow_idle_kg_s);
 
-    float burned = flow * dt;
+    // A ruptured fuel tank (#675) drains on top of the burn — a leak the pilot cannot throttle away.
+    float burned = flow * dt + m_fuelLeakKgS * dt;
     m_state.fuel_kg = std::max(0.f, m_state.fuel_kg - burned);
     m_state.mass_kg = m_data->geometry.mass_kg + m_state.fuel_kg;
 }

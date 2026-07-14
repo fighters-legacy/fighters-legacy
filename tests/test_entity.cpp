@@ -521,6 +521,57 @@ TEST_CASE("EntityDefParser: full TOML with damage and classic sections", "[parse
     CHECK(def.flightModelAsset == "models/tank_drive");
 }
 
+TEST_CASE("EntityDefParser: no subsystems section leaves the 3-level model intact (#675)", "[parser]") {
+    // Regression guard: an entity that does not declare [damage.subsystems] behaves exactly as
+    // before — the optional stays empty.
+    fl::EntityDef def = fl::parseEntityDef(kFullEntityToml);
+    REQUIRE(def.damage.has_value());
+    CHECK_FALSE(def.damage->subsystems.has_value());
+}
+
+TEST_CASE("EntityDefParser: [damage.subsystems] parses the fixed vocabulary (#675)", "[parser]") {
+    const char* toml = R"(
+[entity]
+id = "test:twin"
+name = "Twin"
+category = "air_vehicle"
+max_hp = 100.0
+
+[damage.light]
+hp_fraction = 0.75
+
+[damage.heavy]
+hp_fraction = 0.4
+
+[damage.critical]
+hp_fraction = 0.15
+
+[damage.subsystems.engine_left]
+hp = 40
+weight = 2.0
+
+[damage.subsystems.engine_right]
+hp = 40
+weight = 2.0
+
+[damage.subsystems.avionics]
+hp = 15
+weight = 1.0
+)";
+    fl::EntityDef def = fl::parseEntityDef(toml);
+    REQUIRE(def.damage.has_value());
+    REQUIRE(def.damage->subsystems.has_value());
+    const fl::SubsystemSet& s = *def.damage->subsystems;
+    CHECK(s[fl::Subsystem::EngineLeft].hp == 40.f);
+    CHECK(s[fl::Subsystem::EngineLeft].weight == 2.f);
+    CHECK(s[fl::Subsystem::EngineRight].hp == 40.f);
+    CHECK(s[fl::Subsystem::Avionics].hp == 15.f);
+    // Omitted subsystems stay absent (hp 0 = not modelled).
+    CHECK(s[fl::Subsystem::Controls].hp == 0.f);
+    CHECK(s[fl::Subsystem::Fuel].hp == 0.f);
+    CHECK(s.any());
+}
+
 TEST_CASE("EntityDefParser: all category strings are accepted", "[parser]") {
     const char* categories[] = {"air_vehicle", "ground_vehicle", "naval_vehicle", "projectile", "effect", "player"};
     for (const char* cat : categories) {

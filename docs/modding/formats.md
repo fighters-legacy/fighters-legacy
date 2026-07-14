@@ -1107,6 +1107,30 @@ thrust_factor    = 0.10
 control_factor   = 0.30
 avionics_failure = true
 
+# Optional per-subsystem granularity (#675). ABSENT = the 3-level model above is the whole story.
+# A CLOSED vocabulary — every subsystem maps onto machinery the sim already has, so a pack cannot
+# invent one the engine would not know how to fail. Each subsystem has its own HP pool (independent
+# of max_hp) and a `weight` biasing an undirected hit toward it; a directed hit (a bullet, shrapnel)
+# also biases by where it struck. Omit any subsystem to leave it unmodelled. Effects when a
+# subsystem's pool is exhausted: engine_left/right = asymmetric thrust + yaw (one engine out halves
+# thrust and yaws toward the dead engine); controls / hydraulics = lost control authority; avionics =
+# sensor suite stripped to the eyeball; fuel = a tank leak on top of the burn.
+[damage.subsystems.engine_left]
+hp     = 40
+weight = 2.0
+
+[damage.subsystems.engine_right]
+hp     = 40
+weight = 2.0
+
+[damage.subsystems.controls]
+hp     = 25
+weight = 1.5
+
+[damage.subsystems.avionics]
+hp     = 15
+weight = 1.0
+
 [classic]
 damage_mesh = "f15c_dmg"   # ASSET NAME -> aircraft/f15c_dmg.glb
 

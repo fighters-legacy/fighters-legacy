@@ -65,8 +65,12 @@ struct WarheadResult {
     int emped{0};   // entities inside the EMP radius (nuclear only)
 };
 
+// `onVictim` (#675) fires for each entity that took blast damage, with the applied amount and the
+// blast-to-victim direction — the caller routes it to per-subsystem damage. Null = no consumer.
+using WarheadVictimHook = std::function<void(EntityId victim, float amount, const float hitDirWorld[3])>;
+
 WarheadResult applyWarhead(EntityManager& em, const SpatialIndex& si, const double pos[3], const BlastSpec& blast,
                            EntityId instigator, const DamageRules& rules,
-                           const std::function<void(EntityId)>& empEffect = {});
+                           const std::function<void(EntityId)>& empEffect = {}, const WarheadVictimHook& onVictim = {});
 
 } // namespace fl

@@ -15,6 +15,7 @@
 #include "entity/DamageApplication.h"  // DamageRules — the gameplay damage gates (#626)
 #include "entity/EntityEvent.h"        // IEntityEventHandler — kill attribution + scoring (#626)
 #include "entity/EntityId.h"
+#include "entity/SubsystemDamage.h" // SubsystemStateSet — per-subsystem damage (#675)
 #include "flight/AeroForces.h"
 #include "flight/IGravityField.h"
 #include "loop/ISimUpdate.h"
@@ -124,12 +125,15 @@ struct ControlledEntity {
     EntityId id;
     std::unique_ptr<FlightIntegrator> sim;
     std::unique_ptr<IEntityController> controller;
-    bool decimatable{false};    // AI/scripted entity whose sample() may be skipped under overrun; players never
-    ControlInput lastInput{};   // last sampled control input, reused on a decimated (skipped) AI tick
-    bool lastInputValid{false}; // false until the first sample() — forces a sample on the entity's first tick
-    PayloadEffect payload{};    // what the CURRENT loadout costs this airframe; starts at the #812
-                                // default and shrinks as stores release (#625)
-    FireState fire{};           // stations, ammo, edge/rate state (#625); empty when no registry/hardpoints
+    bool decimatable{false};        // AI/scripted entity whose sample() may be skipped under overrun; players never
+    ControlInput lastInput{};       // last sampled control input, reused on a decimated (skipped) AI tick
+    bool lastInputValid{false};     // false until the first sample() — forces a sample on the entity's first tick
+    PayloadEffect payload{};        // what the CURRENT loadout costs this airframe; starts at the #812
+                                    // default and shrinks as stores release (#625)
+    FireState fire{};               // stations, ammo, edge/rate state (#625); empty when no registry/hardpoints
+    SubsystemStateSet subsystems{}; // per-subsystem damage pools (#675); hasSubsystems gates its use
+    bool hasSubsystems{false};      // true when the entity def declares [damage.subsystems]
+    float fuelLeakKgS{0.f};         // accumulated fuel-leak rate from failed fuel subsystem(s) (#675)
 };
 
 // Pre-start scalar configuration. Bundles the init-time setters so callers configure rate limiting,
@@ -831,6 +835,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     std::vector<std::vector<CollisionPair>> m_collisionScratch;  // per-candidate detected pairs
     std::vector<CollisionPair> m_collisionPairs;                 // flattened + sorted for serial apply
     void runCollisionPass(uint64_t tickIndex);
+
+    // Route damage that already landed on `target` (via applyPointDamage) into a subsystem (#675).
+    // `hitDirWorld` is the direction the damage travelled in WORLD space (rotated to body frame
+    // here); null = undirected (a weight-only pick, e.g. a crash). No-op unless the target is a
+    // controlled entity that declared [damage.subsystems]. Applies the failed subsystem's effect.
+    void routeSubsystemDamage(EntityId target, float amount, const float* hitDirWorld, uint64_t tickIndex);
+    void applySubsystemEffects(ControlledEntity& ce); // recompute integrator/sensor state from the mask
 
     std::vector<std::array<double, 3>> m_spawnPoints; // pre-cached [x,y,z]; sim-thread read-only after start
     uint32_t m_nextSpawnIdx{0};                       // round-robin counter; sim-thread only

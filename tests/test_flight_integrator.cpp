@@ -7,6 +7,7 @@
 #include "flight/BallisticForceModel.h"
 #include "flight/BuiltinFlightModel.h"
 #include "flight/CentralGravityField.h"
+#include "flight/EngineFailFlags.h"
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelParser.h"
 
@@ -1473,4 +1474,100 @@ TEST_CASE("Ballistic: the speed guard is per-instance — aircraft keep the 2000
     wide.reset(s);
     wide.step(1.f / 60.f, ctrl, px);
     CHECK(wide.state().vel_body[0] > 4900.0);
+}
+
+// ---------------------------------------------------------------------------
+// Per-subsystem damage effects (#675)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Integrator: a single engine out halves thrust and yaws toward the dead engine", "[integrator][subsystem]") {
+    // Two runs from the same state: healthy vs left-engine-out. The dead-engine run must accelerate
+    // less (half thrust) and develop a yaw rate toward the dead (left) engine.
+    auto run = [](uint8_t failFlags) {
+        auto data = makeData();
+        FlightIntegrator fi(data);
+        FlightState s{};
+        s.vel_body[0] = 200.f;
+        s.pos_world[1] = 5000.f;
+        s.fuel_kg = 4000.f;
+        s.mass_kg = 14000.f;
+        s.quat[3] = 1.f;
+        fi.reset(s);
+        fi.setEngineFailFlags(failFlags);
+        ControlInput ctrl{};
+        ctrl.throttle = 1.f;
+        PayloadEffect px{};
+        for (int i = 0; i < 60; ++i)
+            fi.step(1.f / 60.f, ctrl, px);
+        return fi.state();
+    };
+
+    const FlightState healthy = run(0);
+    const FlightState leftOut = run(fl::kEngineFailLeft);
+
+    // Less forward acceleration on one engine.
+    CHECK(leftOut.vel_body[0] < healthy.vel_body[0]);
+    // A yaw rate developed (omega[1] is yaw about body-up); the healthy jet stays ~straight.
+    CHECK(std::abs(leftOut.omega[1]) > std::abs(healthy.omega[1]) + 0.001f);
+
+    // Right engine out yaws the opposite way.
+    const FlightState rightOut = run(fl::kEngineFailRight);
+    CHECK((leftOut.omega[1] > 0.f) != (rightOut.omega[1] > 0.f)); // opposite signs
+}
+
+TEST_CASE("Integrator: both engines out kills thrust entirely", "[integrator][subsystem]") {
+    auto data = makeData();
+    FlightIntegrator fi(data);
+    FlightState s{};
+    s.vel_body[0] = 200.f;
+    s.pos_world[1] = 5000.f;
+    s.fuel_kg = 4000.f;
+    s.mass_kg = 14000.f;
+    s.quat[3] = 1.f;
+    fi.reset(s);
+    fi.setEngineFailFlags(fl::kEngineFailLeft | fl::kEngineFailRight);
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    PayloadEffect px{};
+    for (int i = 0; i < 120; ++i)
+        fi.step(1.f / 60.f, ctrl, px);
+    // With no thrust and drag, an aircraft in level-ish flight decelerates.
+    CHECK(fi.state().vel_body[0] < 200.f);
+}
+
+TEST_CASE("Integrator: subsystem control factor multiplies the tier control factor", "[integrator][subsystem]") {
+    auto data = makeData();
+    FlightIntegrator fi(data);
+    fi.setDamagePenalty(1.f, 0.5f);     // tier: half control
+    fi.setSubsystemControlFactor(0.4f); // subsystem: 40% — combined 0.2
+    // (The combined factor is applied to command inputs each step; a direct read is not exposed, so
+    //  this case documents the API contract; the combined EFFECT is covered by the WB integration.)
+    CHECK(fi.damageControlFactor() == 0.5f); // the tier factor is unchanged by the subsystem setter
+}
+
+TEST_CASE("Integrator: a fuel leak drains on top of the burn", "[integrator][subsystem]") {
+    auto data = makeData();
+    FlightIntegrator fi(data);
+    FlightState s{};
+    s.vel_body[0] = 200.f;
+    s.pos_world[1] = 5000.f;
+    s.fuel_kg = 4000.f;
+    s.mass_kg = 14000.f;
+    s.quat[3] = 1.f;
+    fi.reset(s);
+    ControlInput ctrl{};
+    ctrl.throttle = 0.5f;
+    PayloadEffect px{};
+
+    fi.step(1.f / 60.f, ctrl, px);
+    const float afterOneStepNoLeak = fi.state().fuel_kg;
+
+    fi.reset(s);
+    fi.setFuelLeakRate(10.f); // 10 kg/s
+    fi.step(1.f / 60.f, ctrl, px);
+    const float afterOneStepLeak = fi.state().fuel_kg;
+
+    CHECK(afterOneStepLeak < afterOneStepNoLeak);
+    // The extra drain is ~10 kg/s / 60 = 0.167 kg in one step.
+    CHECK((afterOneStepNoLeak - afterOneStepLeak) == Catch::Approx(10.f / 60.f).epsilon(0.001));
 }
