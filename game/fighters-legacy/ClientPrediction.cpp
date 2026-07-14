@@ -6,6 +6,7 @@
 #include "flight/BuiltinFlightModel.h"
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelData.h"
+#include "flight/StallBuffet.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -136,6 +137,7 @@ uint32_t ClientPrediction::tailHistory(uint32_t count, HistoryEntry* out) const 
 }
 
 void ClientPrediction::stepIntegrator(const BufferedInput& bi, const EnvironmentState& env) {
+    ++m_predictedTick; // the server tick this input will be (or was) applied on
     if (!m_integrator) {
         return;
     }
@@ -152,6 +154,16 @@ void ClientPrediction::stepIntegrator(const BufferedInput& bi, const Environment
     wind.wind_world[0] = env.windX;
     wind.wind_world[1] = 0.f;
     wind.wind_world[2] = env.windZ;
+
+    // Stall buffet (#816). The server folds the SAME deterministic (entityIdx, tickIndex) buffet into
+    // its turbulence, so unlike weather turbulence this one CAN be predicted -- and must be, or the
+    // aircraft would diverge from the server exactly when it is stalled. See StallBuffet.h.
+    if (m_integrator->state().stalled) {
+        const auto buffet = stallBuffet(m_playerIdx, m_predictedTick);
+        wind.turbulence_body[0] += buffet[0];
+        wind.turbulence_body[1] += buffet[1];
+        wind.turbulence_body[2] += buffet[2];
+    }
 
     const float groundElev =
         m_heightQuery ? m_heightQuery(glm::dvec3{m_integrator->state().pos_world[0], m_integrator->state().pos_world[1],
@@ -178,7 +190,7 @@ void ClientPrediction::onInput(const MsgClientInput& msg, const EnvironmentState
     }
 }
 
-void ClientPrediction::reconcile(RenderSnapshot& snap, uint64_t /*tickIndex*/, uint32_t estimatedDelayTicks,
+void ClientPrediction::reconcile(RenderSnapshot& snap, uint64_t tickIndex, uint32_t estimatedDelayTicks,
                                  const EnvironmentState& env) {
     if (!m_cfg.enabled) {
         return;
@@ -215,9 +227,12 @@ void ClientPrediction::reconcile(RenderSnapshot& snap, uint64_t /*tickIndex*/, u
         m_initialized = true;
     }
 
-    // Reset integrator to the server's authoritative state.
+    // Reset integrator to the server's authoritative state. The state we are resetting to IS the
+    // state at `tickIndex`, so the replayed inputs below are ticks tickIndex+1, +2, ... -- which is
+    // what lets the stall buffet (#816) be seeded with the same tick the server used.
     const FlightState serverState = entryToFlightState(*playerEntry, *m_model);
     m_integrator->reset(serverState);
+    m_predictedTick = tickIndex;
 
     // Replay the last estimatedDelayTicks inputs, oldest-first.
     const uint32_t replayCount = std::min(estimatedDelayTicks, m_histCount);

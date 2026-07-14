@@ -11,6 +11,22 @@ namespace fl {
 
 namespace {
 
+constexpr float kDegToRad = 0.0174532925f;
+constexpr float kG0 = 9.80665f; // standard gravity, for expressing load factor in g
+
+// [aero.limits] enforcement (#816). Exceeding the structural limit by more than kOverGMargin for
+// longer than kOverGSeconds damages the airframe. The margin exists because a momentary spike from
+// a gust or a single-tick control input is not what breaks an aeroplane — sustained overstress is.
+constexpr float kOverGMargin = 0.10f;  // 10% past the limit before it counts
+constexpr float kOverGSeconds = 0.50f; // ...held for this long before the airframe pays for it
+
+// The FBW limiter starts easing off aft stick slightly BELOW the structural limit, so the aircraft
+// settles at the limit instead of overshooting it and then being dragged back. A real flight computer
+// does the same thing; a limiter that only reacts once the wing is already overstressed is not a limiter.
+constexpr float kFbwGuardBand = 0.95f;
+constexpr float kFbwAoaKp = 0.60f; // elevator per degree of AoA error
+constexpr float kFbwAoaKd = 1.20f; // elevator per rad/s of pitch rate (damps the approach)
+
 // Quaternion: multiply q = (x,y,z,w)
 std::array<float, 4> quatMul(const float* a, const float* b) {
     return {
@@ -210,11 +226,90 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     if (eff_mass < 1.f)
         eff_mass = 1.f; // safety clamp
 
+    // 6b. Stall flag (#816). alpha_stall_deg is now load-bearing: it says where THIS aeroplane departs.
+    // Deliberately only a FLAG. The CL collapse past the stall belongs in the author's cl_table (and
+    // the validator now checks that the table's peak agrees with this angle); clamping CL here on top
+    // of an honest table would double-count the stall, and would reward an author who wrote a
+    // dishonest one. The consequences — buffet, HUD, audio — are the caller's, not the integrator's.
+    const float alpha_deg_now = alpha_rad / kDegToRad;
+    const float q_dyn_now = 0.5f * atmos.density_kg_m3 * spd * spd;
+    m_state.stalled = (alpha_deg_now > m_data->limits.alpha_stall_deg);
+
     // 7. Aerodynamic + propulsive forces and moments via the swappable force model (default
     // FixedWingForceModel). Gravity and turbulence are added below by the integrator core.
     const AeroInputs aero{alpha_rad, beta_rad, mach, spd, altitude_m};
-    const ForceMoment fm = m_forceModel->compute(m_state, ctrl, payload, *m_data, atmos, aero);
+    ControlInput eff_ctrl = ctrl;
+
+    // 7a. G-LIMITER (#816) — and this is the ONLY thing has_fbw should ever mean.
+    //
+    // A fly-by-wire aircraft's flight computer will not let the pilot overstress the airframe. A 1972
+    // airframe with cables and pushrods has no such opinion. Applying a limiter to both would erase
+    // the difference the content pack exists to express: an F-16 cannot be pulled past 9 g, and an
+    // F-5E absolutely can be pulled past 7.33 -- and then it breaks, which is the next block.
+    //
+    // It limits ANGLE OF ATTACK, not measured g -- which is what a real flight computer does, and it
+    // is the only version that works. Elevator does not change lift on the tick it is applied: it
+    // changes the pitch RATE, which changes AoA, which changes lift. A limiter that waits for the
+    // G-meter to read high is always a tick late, and on an agile airframe a tick is worth several g
+    // (a purely reactive version of this loop let a test model spike to 23 g on an 8 g airframe).
+    //
+    // So: find the AoA that would produce exactly max_g_structural at the current dynamic pressure,
+    // and hold the aircraft there with a proportional-derivative loop on AoA and pitch rate. The
+    // pilot's aft stick is honoured right up to that boundary and refused past it.
+    if (m_data->meta.has_fbw && ctrl.elevator > 0.f && m_data->limits.max_g_structural > 0.f && q_dyn_now > 1.f) {
+        const float S = m_data->geometry.wing_area_m2;
+        const float clLimit = (m_data->limits.max_g_structural * eff_mass * kG0) / (q_dyn_now * S);
+
+        // Invert the CL curve by bisection over [0, alpha_stall], where it is monotonic. If the wing
+        // cannot make clLimit at all, the aircraft is lift-limited rather than structure-limited and
+        // there is nothing for the limiter to do.
+        const float alphaStall = m_data->limits.alpha_stall_deg;
+        if (m_data->cl_table.lookup(alphaStall, mach) > clLimit) {
+            float lo = 0.f, hi = alphaStall;
+            for (int i = 0; i < 12; ++i) {
+                const float mid = 0.5f * (lo + hi);
+                if (m_data->cl_table.lookup(mid, mach) < clLimit)
+                    lo = mid;
+                else
+                    hi = mid;
+            }
+            const float alphaLimit = 0.5f * (lo + hi) * kFbwGuardBand;
+
+            // omega[2] is the pitch rate (about the body's right axis).
+            const float cmd = kFbwAoaKp * (alphaLimit - alpha_deg_now) - kFbwAoaKd * m_state.omega[2];
+            eff_ctrl.elevator = std::clamp(cmd, -1.f, ctrl.elevator); // never MORE than the pilot asked for
+        }
+    }
+
+    const ForceMoment fm = m_forceModel->compute(m_state, eff_ctrl, payload, *m_data, atmos, aero);
     auto forces = fm.force_body;
+
+    // 7b. LOAD FACTOR + OVER-G DAMAGE (#816).
+    //
+    // n is the AERODYNAMIC normal force over weight -- it excludes gravity, which is what a cockpit
+    // G-meter reads. Everything needed was already sitting here; nothing computed it.
+    //
+    // Exceeding the limit by more than kOverGMargin for longer than kOverGSeconds raises a one-shot
+    // damage flag. NOT a silent clamp: a limiter on an aeroplane that has none is a lie about the
+    // aircraft. An F-5E pilot CAN overstress the jet. The sim should let them, and then bill them.
+    m_state.load_factor = forces[1] / (eff_mass * kG0);
+
+    const float n = m_state.load_factor;
+    const float nMax = m_data->limits.max_g_structural;
+    const float nMin = m_data->limits.min_g_structural;
+    const bool overStressed =
+        (nMax > 0.f && n > nMax * (1.f + kOverGMargin)) || (nMin < 0.f && n < nMin * (1.f + kOverGMargin));
+
+    m_state.overg_damage = false; // one-shot: cleared every tick, raised only on the tick it fires
+    if (overStressed) {
+        m_state.overg_seconds += dt;
+        if (m_state.overg_seconds >= kOverGSeconds) {
+            m_state.overg_damage = true;
+            m_state.overg_seconds = 0.f; // re-arm, so a sustained overstress keeps costing the airframe
+        }
+    } else {
+        m_state.overg_seconds = 0.f;
+    }
 
     // 8. Gravity in body frame. World convention: x=forward, y=up, z=right.
     // Queried from the gravity field (default: uniform -world_y), transformed to body frame via the
@@ -255,14 +350,43 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     m_state.omega[1] = std::clamp(m_state.omega[1], -kMaxOmega, kMaxOmega);
     m_state.omega[2] = std::clamp(m_state.omega[2], -kMaxOmega, kMaxOmega);
 
-    // 12. Semi-implicit Euler: translational velocity
-    m_state.vel_body[0] += (forces[0] / eff_mass) * dt;
-    m_state.vel_body[1] += (forces[1] / eff_mass) * dt;
-    m_state.vel_body[2] += (forces[2] / eff_mass) * dt;
+    // 12. Semi-implicit Euler: translational velocity.
+    //
+    // THE TRANSPORT TERM (−ω × v) IS NOT OPTIONAL. The body-frame equation of motion is
+    //
+    //     v̇_body = F/m − ω × v_body
+    //
+    // and the second term was missing. Its absence meant the velocity vector rotated WITH the
+    // airframe: pitching the nose up simply carried the flight path along with it, so the aircraft
+    // developed no angle of attack, generated no extra lift, and could not pull g at all. A test
+    // model commanded to full aft stick span 400 deg/s of pitch rate and peaked at 0.6 g.
+    //
+    // Everything that reads AoA was quietly wrong because of it — turn rate, sustained g, stall
+    // entry, and the load factor #816 adds. It is fixed here rather than worked around, because no
+    // amount of enforcement on top of a flight model that cannot develop AoA would mean anything.
+    //
+    // omega is stored in body axes as {x=roll, y=yaw, z=pitch} (x=fwd, y=up, z=right), so this is a
+    // plain cross product in that basis.
+    const double wx = m_state.omega[0], wy = m_state.omega[1], wz = m_state.omega[2];
+    const double vx = m_state.vel_body[0], vy = m_state.vel_body[1], vz = m_state.vel_body[2];
+    const double cross_x = wy * vz - wz * vy;
+    const double cross_y = wz * vx - wx * vz;
+    const double cross_z = wx * vy - wy * vx;
 
-    // Clamp body-frame speed to Mach 3 equivalent: prevents quaternion overflow
-    // when position is NaN and aero forces produce unbounded acceleration.
-    constexpr double kMaxBodySpeed = 1030.0; // m/s ≈ Mach 3 at sea level
+    m_state.vel_body[0] += (forces[0] / eff_mass - cross_x) * dt;
+    m_state.vel_body[1] += (forces[1] / eff_mass - cross_y) * dt;
+    m_state.vel_body[2] += (forces[2] / eff_mass - cross_z) * dt;
+
+    // NUMERICAL GUARD, NOT FLIGHT PHYSICS (#816). This exists to stop a NaN position or an absurd
+    // aero force from overflowing the quaternion integration -- nothing more. It was doing double
+    // duty as a top-speed limiter because `max_mach` was dead and a cd_wave table clamps flat above
+    // its last breakpoint, so an over-thrusted model would simply accelerate into this wall.
+    //
+    // An aircraft's real top speed is set by its drag rising to meet its thrust. If a model can
+    // exceed its declared max_mach in level flight, the MODEL is wrong, and fm-trim (#817) fails it
+    // in CI. The engine does not paper over that with an artificial wall, so this is raised well
+    // clear of any flyable regime and left as the overflow backstop it always was.
+    constexpr double kMaxBodySpeed = 2000.0; // m/s ≈ Mach 6 at sea level — pure overflow backstop
     m_state.vel_body[0] = std::clamp(m_state.vel_body[0], -kMaxBodySpeed, kMaxBodySpeed);
     m_state.vel_body[1] = std::clamp(m_state.vel_body[1], -kMaxBodySpeed, kMaxBodySpeed);
     m_state.vel_body[2] = std::clamp(m_state.vel_body[2], -kMaxBodySpeed, kMaxBodySpeed);

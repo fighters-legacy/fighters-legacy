@@ -16,6 +16,7 @@
 #include "flight/BuiltinFlightModel.h"
 #include "flight/CentralGravityField.h"
 #include "flight/FlightIntegrator.h"
+#include "flight/StallBuffet.h"
 #include "job/JobSystem.h"
 #include "net/AckWindow.h"
 #include "net/BitStream.h"
@@ -142,6 +143,12 @@ RejectInfo rejectInfoFor(fl::ConnectRefusalCode code) {
 } // namespace
 
 namespace fl {
+
+// Over-G damage scale (#816): hit points per g beyond the structural limit, per damage event
+// (one event per 0.5 s of sustained overstress). Tuned so that yanking an 8 g airframe to 12 g and
+// holding it there costs real airframe life within a few seconds, without turning a brief excursion
+// into an instant kill -- the pilot should be able to break the aeroplane, but should have to work at it.
+constexpr float kOverGDamagePerG = 6.0f;
 
 // GameProtocol.h must stay stdlib-only (engine-protocol is zero-dep, enforced by fl_assert_zero_dep),
 // so it MIRRORS these two values rather than including the headers that define them. This is the one
@@ -720,6 +727,25 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         });
         m_tickProfiler.addPhaseSample(TickPhase::Integrate,
                                       std::chrono::duration<double, std::milli>(m_clock->now() - tIntStart).count());
+    }
+
+    // Over-G damage (#816), applied SERIALLY on the sim thread after the parallel integrate pass.
+    //
+    // The integrator only raises a one-shot flag; it does not damage the entity itself. It must not:
+    // EntityManager::applyDamage fires event handlers and can kill the entity, and the integrate pass
+    // above is data-parallel, so touching the entity manager from a worker would be a data race. This
+    // is the same discipline updateTerrainSteerCache follows for its cross-entity write.
+    for (const StepItem& it : m_stepItems) {
+        if (!it.ce->sim->state().overg_damage)
+            continue;
+        // Damage scales with how far past the limit the airframe was pulled. instigator = null: this
+        // is self-inflicted, and the pilot is the one who did it.
+        const float n = std::abs(it.ce->sim->state().load_factor);
+        const float limit = std::max(1.f, it.ce->sim->flightModel().limits.max_g_structural);
+        const float excess = std::max(0.f, n - limit);
+        const float damage = kOverGDamagePerG * excess;
+        if (damage > 0.f)
+            m_entityManager.applyDamage(it.ce->id, damage, EntityId::null());
     }
 
     // Cache the representative entity XZ for main-thread terrain streaming (single-player).
@@ -2033,6 +2059,17 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
         wind.turbulence_body[0] = turb * r;
         wind.turbulence_body[1] = turb * 0.3f * r;
         wind.turbulence_body[2] = turb * 0.5f * r;
+    }
+
+    // Stall buffet (#816). Folded in HERE rather than inside the integrator, and computed from a
+    // deterministic (entityIdx, tickIndex) seed, so ClientPrediction can reproduce it exactly --
+    // see StallBuffet.h. A buffet the client could not predict would tear prediction apart at
+    // precisely the moment the aircraft is hardest to fly.
+    if (fi.state().stalled) {
+        const auto buffet = stallBuffet(entityIdx, tickIndex);
+        wind.turbulence_body[0] += buffet[0];
+        wind.turbulence_body[1] += buffet[1];
+        wind.turbulence_body[2] += buffet[2];
     }
     const float groundElev =
         m_groundQuery

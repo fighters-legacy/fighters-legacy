@@ -1080,12 +1080,15 @@ TEST_CASE("FlightIntegrator: vel_body drives pos_world via double-precision rota
 }
 
 TEST_CASE("FlightIntegrator: vel_body clamped at double-precision kMaxBodySpeed", "[integrator]") {
-    // Verifies that constexpr double kMaxBodySpeed = 1030.0 clamps vel_body correctly.
+    // Verifies the kMaxBodySpeed overflow backstop clamps vel_body. It is a NUMERICAL guard, not a
+    // top-speed limiter (#816) -- it was raised to 2000 m/s so it sits well clear of any flyable
+    // regime. An aircraft's real top speed comes from drag rising to meet thrust, and fm-trim (#817)
+    // fails a model that can outrun its own declared max_mach.
     // No existing test exercises vel_body above the clamp threshold.
     auto data = makeData();
     fl::FlightIntegrator integ(data);
     fl::FlightState s{};
-    s.vel_body[0] = 5000.0; // far above kMaxBodySpeed (1030 m/s)
+    s.vel_body[0] = 5000.0; // far above kMaxBodySpeed
     s.pos_world[1] = 5000.0;
     s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
     s.fuel_kg = data->geometry.fuel_kg;
@@ -1096,6 +1099,152 @@ TEST_CASE("FlightIntegrator: vel_body clamped at double-precision kMaxBodySpeed"
     integ.step(1.f / 60.f, ctrl, px);
 
     // After one step the clamp reduces vel_body[0] to ≤ kMaxBodySpeed.
-    CHECK(integ.state().vel_body[0] <= 1030.0);
+    CHECK(integ.state().vel_body[0] <= 2000.0);
     CHECK(std::isfinite(integ.state().vel_body[0]));
+}
+
+// ---------------------------------------------------------------------------
+// [aero.limits] enforcement (#816)
+//
+// Until now alpha_stall_deg, max_g_structural and min_g_structural were parsed, REQUIRED, and read
+// by absolutely nothing. There was no G-limiter, no AoA limiter, no structural damage anywhere in
+// the engine. They were decoration.
+// ---------------------------------------------------------------------------
+
+// Flies the aircraft fast and level, then yanks the stick for N seconds and reports the peak load
+// factor and whether the airframe was damaged.
+struct PullResult {
+    float peakG{0.f};
+    bool damaged{false};
+    int damageEvents{0};
+};
+
+static PullResult hardPull(std::shared_ptr<FlightModelData> data, float seconds = 3.0f) {
+    FlightIntegrator integ(data);
+    FlightState s{};
+    // Low and fast: dynamic pressure high enough that the wing can make far more than the structural
+    // limit before it runs out of lift, so full aft stick genuinely overstresses the airframe rather
+    // than simply stalling it.
+    s.vel_body[0] = 350.0;
+    s.pos_world[1] = 1000.0;
+    s.quat[3] = 1.f;
+    s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+    s.fuel_kg = data->geometry.fuel_kg;
+    integ.reset(s);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    ctrl.elevator = 1.f; // full aft stick
+
+    PullResult out;
+    const int ticks = static_cast<int>(seconds * 60.f);
+    for (int i = 0; i < ticks; ++i) {
+        integ.step(1.f / 60.f, ctrl, {});
+        out.peakG = std::max(out.peakG, integ.state().load_factor);
+        if (integ.state().overg_damage) {
+            out.damaged = true;
+            ++out.damageEvents;
+        }
+    }
+    return out;
+}
+
+TEST_CASE("Integrator: load factor is computed and is ~1 g in level flight", "[integrator][limits]") {
+    auto data = makeData();
+    FlightIntegrator integ(data);
+    FlightState s{};
+    s.vel_body[0] = 200.0;
+    s.pos_world[1] = 5000.0;
+    s.quat[3] = 1.f;
+    s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+    s.fuel_kg = data->geometry.fuel_kg;
+    integ.reset(s);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 0.6f;
+    integ.step(1.f / 60.f, ctrl, {});
+
+    // Not asserting an exact 1.0 -- the aircraft is not trimmed -- only that the field is now live
+    // and finite rather than the constant it used to be.
+    CHECK(std::isfinite(integ.state().load_factor));
+    CHECK(integ.state().load_factor > -10.f);
+    CHECK(integ.state().load_factor < 30.f);
+}
+
+TEST_CASE("Integrator: pulling past the structural limit damages a non-FBW airframe", "[integrator][limits]") {
+    // An F-5E has no fly-by-wire. Its pilot CAN overstress the jet. The sim lets them -- and bills them.
+    auto data = makeData();
+    data->meta.has_fbw = false;
+    data->limits.max_g_structural = 8.f;
+
+    const PullResult r = hardPull(data);
+
+    CHECK(r.peakG > 8.f * 1.1f); // it really did go past the limit (no silent clamp)
+    CHECK(r.damaged);            // and it paid for it
+}
+
+TEST_CASE("Integrator: an FBW airframe is held at its structural limit and takes no damage", "[integrator][limits]") {
+    // The ONLY thing has_fbw should ever mean. A limiter on a 1972 airframe would be a lie about the
+    // aircraft; the absence of one on an F-16 would be a different lie.
+    auto data = makeData();
+    data->meta.has_fbw = true;
+    data->limits.max_g_structural = 8.f;
+
+    const PullResult r = hardPull(data);
+
+    CHECK(r.peakG <= 8.f * 1.10f); // held at the limit (within the same margin the damage rule uses)
+    CHECK_FALSE(r.damaged);
+}
+
+TEST_CASE("Integrator: a brief excursion past the limit does NOT damage the airframe", "[integrator][limits]") {
+    // A momentary spike from a gust or a single-tick input is not what breaks an aeroplane. Sustained
+    // overstress is -- hence the 0.5 s dwell before the airframe pays.
+    auto data = makeData();
+    data->meta.has_fbw = false;
+    data->limits.max_g_structural = 8.f;
+
+    const PullResult r = hardPull(data, 0.2f); // less than the 0.5 s dwell
+    CHECK_FALSE(r.damaged);
+}
+
+TEST_CASE("Integrator: overg_damage is a one-shot flag, not a level", "[integrator][limits]") {
+    // WorldBroadcaster reads this flag once per tick after the parallel integrate pass. If it latched
+    // high it would apply damage on every subsequent tick and disintegrate the aircraft instantly.
+    auto data = makeData();
+    data->meta.has_fbw = false;
+    data->limits.max_g_structural = 8.f;
+
+    const PullResult r = hardPull(data, 3.0f);
+    REQUIRE(r.damaged);
+    // 3 s of sustained overstress at a 0.5 s dwell => a handful of events, not ~180 (one per tick).
+    CHECK(r.damageEvents < 10);
+}
+
+TEST_CASE("Integrator: the stall flag sets past alpha_stall_deg and clears below", "[integrator][limits]") {
+    auto data = makeData();
+    data->limits.alpha_stall_deg = 18.f;
+
+    FlightIntegrator integ(data);
+    FlightState s{};
+    // Nose well above the flight path: a large positive alpha without needing to fly a whole approach.
+    s.vel_body[0] = 60.0;  // slow
+    s.vel_body[1] = -40.0; // descending relative to the nose => alpha = atan2(40, 60) ~ 34 deg
+    s.pos_world[1] = 5000.0;
+    s.quat[3] = 1.f;
+    s.mass_kg = data->geometry.mass_kg;
+    integ.reset(s);
+
+    ControlInput ctrl{};
+    integ.step(1.f / 60.f, ctrl, {});
+    CHECK(integ.state().stalled);
+
+    // Now fly it cleanly: alpha near zero.
+    FlightState fast{};
+    fast.vel_body[0] = 250.0;
+    fast.pos_world[1] = 5000.0;
+    fast.quat[3] = 1.f;
+    fast.mass_kg = data->geometry.mass_kg;
+    integ.reset(fast);
+    integ.step(1.f / 60.f, ctrl, {});
+    CHECK_FALSE(integ.state().stalled);
 }

@@ -490,3 +490,27 @@ TEST_CASE("a model with no cd_table still validates (the parabolic path is untou
     auto r = validateFlightModel(kValidFighter);
     CHECK(r.ok);
 }
+
+// ---------------------------------------------------------------------------
+// Stall consistency (#816) — the check that makes alpha_stall_deg load-bearing.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("a cl_table peaking away from alpha_stall_deg is an ERROR", "[flight-model-validator]") {
+    // The engine does not clamp CL at the stall -- the table IS the stall. A model whose lift peaks
+    // at 25 deg while declaring it departs at 18 is lying about itself, and the flag, the buffet, the
+    // HUD and #54's stall-speed gate all inherit the lie.
+    auto r = validateFlightModel(patch(kValidFighter, "alpha_stall_deg  = 18.0", "alpha_stall_deg  = 25.0"));
+    CHECK_FALSE(r.ok);
+    bool found = false;
+    for (const auto& e : r.errors)
+        if (e.find("alpha_stall_deg") != std::string::npos && e.find("peaks") != std::string::npos)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("a cl_table peaking within tolerance of alpha_stall_deg passes", "[flight-model-validator]") {
+    // The fixture's table peaks at 18 deg; 19 is inside the 2-degree tolerance (breakpoints are coarse).
+    auto r = validateFlightModel(patch(kValidFighter, "alpha_stall_deg  = 18.0", "alpha_stall_deg  = 19.0"));
+    INFO("errors: " << (r.errors.empty() ? std::string("none") : r.errors[0]));
+    CHECK(r.ok);
+}

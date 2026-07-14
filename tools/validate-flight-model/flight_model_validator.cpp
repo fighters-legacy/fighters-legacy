@@ -4,6 +4,7 @@
 #include <toml++/toml.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <set>
 #include <string>
@@ -17,6 +18,10 @@ static constexpr int kClTableAlphaMin = 4;
 static constexpr int kClTableMachMin = 2;
 static constexpr int kMilThrustMachMin = 2;
 static constexpr int kMilThrustAltMin = 2;
+
+// The alpha at which cl_table peaks must agree with aero.limits.alpha_stall_deg to within this many
+// degrees (#816). Breakpoints are coarse, so the tolerance is one typical table step, not zero.
+static constexpr double kStallPeakToleranceDeg = 2.0;
 
 // ── plausibility bands ────────────────────────────────────────────────────────
 //
@@ -238,6 +243,57 @@ static void validateClTable(const toml::table& tbl, FlightModelValidationResult&
                                " expected, got " + std::to_string(valLen));
             r.ok = false;
         }
+    }
+}
+
+// THE CHECK THAT MAKES alpha_stall_deg LOAD-BEARING (#816).
+//
+// The engine deliberately does NOT clamp CL at alpha_stall_deg -- the cl_table already carries the
+// post-stall collapse if the author wrote an honest one, and clamping on top would double-count the
+// stall and reward an author who did not. But that only works if the two agree. A model whose lift
+// peaks at 25 deg while declaring it stalls at 18 is lying about itself, and every consumer of the
+// flag -- buffet, HUD, AI, and #54's "stall speed matches design spec" gate -- inherits the lie.
+//
+// So: the alpha at which cl_table peaks must be within kStallPeakToleranceDeg of alpha_stall_deg.
+static void validateStallConsistency(const toml::table& tbl, FlightModelValidationResult& r) {
+    auto cl = tbl["aero"]["cl_table"];
+    auto stallNode = tbl["aero"]["limits"]["alpha_stall_deg"].value<double>();
+    if (!cl || !stallNode)
+        return; // missing sections are reported by their own validators
+
+    auto* alphaArr = cl["alpha"].as_array();
+    auto* valArr = cl["values"].as_array();
+    if (!alphaArr || !valArr || alphaArr->empty())
+        return;
+
+    const std::size_t alphaLen = alphaArr->size();
+    const std::size_t machLen = arrayLen(cl["mach"]);
+    if (machLen == 0 || valArr->size() != alphaLen * machLen)
+        return; // shape errors are reported by validateClTable
+
+    // Peak CL over the whole table: the highest lift the aircraft can make, at whichever alpha it
+    // happens at. Row-major, so row i (alpha i) spans [i*machLen, (i+1)*machLen).
+    double peakCl = -1e30;
+    double peakAlpha = 0.0;
+    for (std::size_t i = 0; i < alphaLen; ++i) {
+        for (std::size_t j = 0; j < machLen; ++j) {
+            auto v = valArr->get(i * machLen + j)->value<double>();
+            if (v && *v > peakCl) {
+                peakCl = *v;
+                auto a = alphaArr->get(i)->value<double>();
+                peakAlpha = a ? *a : 0.0;
+            }
+        }
+    }
+
+    const double declared = *stallNode;
+    if (std::abs(peakAlpha - declared) > kStallPeakToleranceDeg) {
+        r.errors.push_back("aero.cl_table peaks at alpha " + std::to_string(peakAlpha) +
+                           " deg but aero.limits.alpha_stall_deg declares " + std::to_string(declared) +
+                           " deg. The engine does not clamp CL at the stall -- the table IS the stall -- so the two "
+                           "must agree within " +
+                           std::to_string(kStallPeakToleranceDeg) + " deg or the model is lying about itself.");
+        r.ok = false;
     }
 }
 
@@ -722,6 +778,7 @@ FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
     validateAircraft(tbl, r, aircraftType);
     validateFlightModelGeometry(tbl, r, aircraftType);
     validateClTable(tbl, r);
+    validateStallConsistency(tbl, r);
     validateCdTable(tbl, r);
     validateDragPolar(tbl, r);
     validateMoments(tbl, r);

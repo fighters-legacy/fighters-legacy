@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **flight**: `[aero.limits]` is enforced — stall flag, load factor, FBW G-limiter, over-G damage (#816)
 - **flight**: `[aero.cd_table]` — tabulated total clean drag; the parabolic polar cannot represent a real fighter (#820)
 - **content**: Weapons are a real asset type — `WeaponRegistry` + a default loadout that costs the airframe mass and drag (#812)
 
@@ -18,6 +19,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **flight**: The body-frame velocity update was missing the ω × v transport term, so a pitching aircraft developed no angle of attack and could not pull g (#816)
 - **tools**: Flight-model plausibility bands excluded the entire light-fighter class (#815)
 - **netcode**: The client flew a different flight model from the server, silently and permanently (#811)
 - **content**: Def cross-references resolve by id, not filename — sensors reached the builtin eyeball on every pack aircraft (#810)
