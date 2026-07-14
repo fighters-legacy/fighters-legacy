@@ -97,28 +97,33 @@ void evaluateFire(FireState& fs, const WeaponRegistry& weapons, const ControlInp
         }
     }
 
-    // Store release: edge semantics, cooldown-spaced.
-    if (releaseEdge && tick >= fs.nextReleaseTick) {
-        StationState* st = fs.loadout.selectedStation();
-        if (st && st->weaponIndex != UINT32_MAX && st->rounds > 0) {
-            const WeaponDef* w = weapons.byIndex(st->weaponIndex);
-            if (w && w->type != WeaponType::Gun) {
-                fs.nextReleaseTick = tick + kReleaseCooldownTicks;
-                --st->rounds;
+    // Store release. Single stores (missiles, bombs) are edge-triggered — one press, one store.
+    // ROCKETS ripple (#629): level semantics spaced by kRocketRippleTicks while the button is
+    // held, because a rocket pod is a volume weapon and "one press, one rocket" would make a
+    // 19-round pod a chore. Mass and drag shed PER ROUND (the store's load divided by its
+    // magazine), so a half-empty pod costs half as much as a full one.
+    StationState* st = fs.loadout.selectedStation();
+    const WeaponDef* sw = (st && st->weaponIndex != UINT32_MAX) ? weapons.byIndex(st->weaponIndex) : nullptr;
+    const bool rocket = sw && sw->type == WeaponType::Rocket;
+    const bool wantsRelease = rocket ? in.release : releaseEdge;
+    if (wantsRelease && tick >= fs.nextReleaseTick) {
+        if (st && sw && st->rounds > 0 && sw->type != WeaponType::Gun) {
+            fs.nextReleaseTick = tick + (rocket ? kRocketRippleTicks : kReleaseCooldownTicks);
+            const float perRound = 1.f / static_cast<float>(std::max<uint16_t>(1u, sw->load.rounds));
+            --st->rounds;
 
-                // The store leaves the rails: its mass and drag leave the airframe with it. This
-                // is where the live loadout diverges from the per-type default (#812) — and why
-                // the own-entity snapshot record now carries the payload (#625).
-                fs.loadout.payloadMassKg = std::max(0.f, fs.loadout.payloadMassKg - w->load.massKg);
-                fs.loadout.payloadCd0 = std::max(0.f, fs.loadout.payloadCd0 - w->load.dragFactor);
+            // The store leaves the rails: its mass and drag leave the airframe with it. This
+            // is where the live loadout diverges from the per-type default (#812) — and why
+            // the own-entity snapshot record now carries the payload (#625).
+            fs.loadout.payloadMassKg = std::max(0.f, fs.loadout.payloadMassKg - sw->load.massKg * perRound);
+            fs.loadout.payloadCd0 = std::max(0.f, fs.loadout.payloadCd0 - sw->load.dragFactor * perRound);
 
-                FireRequest req;
-                req.kind = FireRequest::Kind::Spawn;
-                req.shooterIdx = shooterIdx;
-                req.weaponIndex = st->weaponIndex;
-                req.station = fs.loadout.selected;
-                out.push_back(req);
-            }
+            FireRequest req;
+            req.kind = FireRequest::Kind::Spawn;
+            req.shooterIdx = shooterIdx;
+            req.weaponIndex = st->weaponIndex;
+            req.station = fs.loadout.selected;
+            out.push_back(req);
         }
     }
 }

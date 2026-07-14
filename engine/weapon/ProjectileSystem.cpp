@@ -70,26 +70,48 @@ std::string projectileTypeId(const WeaponDef& def) {
 }
 
 EntityId ProjectileSystem::launch(EntityManager& em, uint32_t weaponIndex, const EntityState& shooterState,
-                                  uint32_t shooterPeerOwnerId, EntityId designatedTarget) {
+                                  uint32_t shooterPeerOwnerId, EntityId designatedTarget, uint64_t tickIndex) {
     if (!m_weapons)
         return EntityId::null();
     const WeaponDef* def = m_weapons->byIndex(weaponIndex);
     if (!def)
         return EntityId::null();
 
-    // Launch state: the shooter's position nudged clear of its own contact-fuze bubble along the
-    // nose, inheriting the shooter's velocity plus a separation push so the store never re-enters
-    // the launch aircraft's fuze radius on release.
+    // Launch state, per weapon class (#629). Missiles and rockets leave along the nose with a
+    // separation push clear of the shooter's own contact-fuze bubble; a BOMB is ejected DOWNWARD
+    // off the rack — the ejector feet push it away from the airframe, never ahead of it.
     const float* q = shooterState.transform.quat;
     const glm::quat rot{q[3], q[0], q[1], q[2]};
     const glm::vec3 nose = rot * glm::vec3{1.f, 0.f, 0.f};
+    const glm::vec3 bodyUp = rot * glm::vec3{0.f, 1.f, 0.f};
+    const bool isBomb = def->type == WeaponType::Bomb;
+    const glm::vec3 sepDir = isBomb ? -bodyUp : nose;
+    const float sepDistM = isBomb ? 4.f : 12.f;
+    const float sepPushMps = isBomb ? 4.f : 15.f;
 
     EntityTransform t{};
     for (int i = 0; i < 3; ++i)
-        t.pos[i] = shooterState.transform.pos[i] + static_cast<double>(nose[i]) * 12.0;
+        t.pos[i] = shooterState.transform.pos[i] + static_cast<double>(sepDir[i]) * sepDistM;
     const glm::vec3 shooterVel{shooterState.transform.vel[0], shooterState.transform.vel[1],
                                shooterState.transform.vel[2]};
-    const glm::vec3 v0 = shooterVel + nose * 15.f;
+    glm::vec3 v0 = shooterVel + sepDir * sepPushMps;
+
+    // Rocket launch dispersion (#629): two small angular offsets hashed from (shooter, tick,
+    // shooter-idx salt) — the gun-dispersion/turbulence idiom, so a replayed salvo fans out
+    // identically. The half-angle is the def's CEP over its max range: an authored CEP is the
+    // 50% radius AT max range, and a linear cone is the honest cheap model of that.
+    if (def->type == WeaponType::Rocket && def->performance.cepM > 0.f && def->performance.maxRangeM > 0.f) {
+        const float sigmaRad = def->performance.cepM / def->performance.maxRangeM;
+        const uint32_t h = shooterState.id.index * 0x9E3779B1u + static_cast<uint32_t>(tickIndex) * 0x85EBCA77u +
+                           static_cast<uint32_t>(m_projectiles.size()) * 0xC2B2AE35u + 0x27D4EB2Fu;
+        const float r1 = (static_cast<float>((h >> 8) & 0xFFFu) / 4096.f - 0.5f) * 2.f;
+        const float r2 = (static_cast<float>((h >> 20) & 0xFFFu) / 4096.f - 0.5f) * 2.f;
+        const glm::vec3 right = rot * glm::vec3{0.f, 0.f, 1.f};
+        const float speed0 = glm::length(v0);
+        if (speed0 > 0.1f)
+            v0 = glm::normalize(v0 / speed0 + bodyUp * (r1 * sigmaRad) + right * (r2 * sigmaRad)) * speed0;
+    }
+
     for (int i = 0; i < 3; ++i)
         t.vel[i] = v0[i];
     quatAlongVelocity(v0, t.quat);
@@ -295,7 +317,10 @@ void ProjectileSystem::step(EntityManager& em, const SpatialIndex& si, float dt,
             accel += (p.vel / speed) * p.thrustAccelMps2; // boost along the flight path
             p.motorRemainingS -= dt;
         } else if (speed > 0.01f) {
-            accel -= p.vel * kCoastDecayPerS; // simple coast decay; per-class drag arrives later
+            // Unpowered flight decays toward the AIR mass (#629): drag acts on the velocity
+            // relative to the wind, so a falling bomb drifts downwind by exactly what the drag
+            // model says — not by a bolted-on offset.
+            accel -= (p.vel - m_windMps) * kCoastDecayPerS;
         }
 
         // Proportional navigation (#627) at the seeker's LAST-KNOWN state — never ground truth. A

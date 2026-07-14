@@ -39,6 +39,8 @@ struct FireRequest {
 inline constexpr float kDefaultGunRpm = 1200.f;
 // Store releases are spaced even under a held release input from an AI that never lets go.
 inline constexpr uint64_t kReleaseCooldownTicks = 30; // 0.5 s at 60 Hz
+// Rockets ripple while the release is HELD (#629): a pod is a volume weapon.
+inline constexpr uint64_t kRocketRippleTicks = 6; // ~10 rockets/s at 60 Hz
 
 // Evaluate one entity's fire intent for this tick (#625). Applies, in order: the wingman
 // weapons-hold order (#610 — the flag that "has no teeth until weapons land"; these are the

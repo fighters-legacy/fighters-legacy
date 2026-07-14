@@ -681,6 +681,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         sensingEnv.fogStartDist = envState.fogStartDist;
         sensingEnv.timeOfDayH = envState.timeOfDay;
         sensingEnv.isNight = (envState.timeOfDay < 6.f || envState.timeOfDay >= 20.f);
+        // Unpowered stores drift on the same steady wind the airframes fly in (#629).
+        m_projectileSystem.setWind({envState.windX, 0.f, envState.windZ});
     }
     m_sensingEnv = sensingEnv; // the weapons pass reads the same conditions the sensing pass ran under (#627)
     // Unset difficulty = NO scaling: radar reaches its authored range and the AI reacts the moment it
@@ -1712,7 +1714,7 @@ void WorldBroadcaster::executeFireRequest(const FireRequest& req, uint64_t tickI
         designated = designateFor(*shooter, ownerPeer);
 
     const EntityId pid = m_projectileSystem.launch(m_entityManager, req.weaponIndex, *shooter,
-                                                   ownerPeer == kNoOwningPeer ? 0u : ownerPeer, designated);
+                                                   ownerPeer == kNoOwningPeer ? 0u : ownerPeer, designated, tickIndex);
     if (pid.valid())
         queueEffect(static_cast<uint8_t>(EffectType::MissileLaunch), static_cast<uint8_t>(def->type), req.shooterIdx,
                     0xFFFFFFFFu, shooter->transform.pos);

@@ -90,6 +90,11 @@ class ProjectileSystem {
     void setSupportQuery(SupportQuery fn) {
         m_supportQuery = std::move(fn); // WorldBroadcaster wires SensorSystem::contactsFor (#628)
     }
+    // Steady world-frame wind (#629). Unpowered flight decays toward the AIR mass, not the ground,
+    // so a bomb drifts downwind exactly as far as the drag model says it should.
+    void setWind(const glm::vec3& windMps) noexcept {
+        m_windMps = windMps;
+    }
 
     // Would `weaponIndex`'s seeker take `target` from `shooter`'s hands right now (#628)? The
     // launch gate as a question — a supported (SARH / pitbull-ARH) weapon asks whether the
@@ -108,8 +113,12 @@ class ProjectileSystem {
     // weapon starts locked only if the target is inside its acquisition lobe at release (the
     // pre-launch growl compressed to geometry — the PoD dice were paid during the shooter's own
     // acquisition); otherwise, or with no designation at all, the store flies dumb.
+    // Release ballistics per class (#629): a BOMB is ejected DOWNWARD off the rack (never pushed
+    // ahead of the aircraft); a ROCKET gets deterministic launch dispersion hashed from
+    // (shooter, tick, projectile) and scaled by the def's CEP — a salvo fans out the same way in
+    // every replay. `tickIndex` seeds that dispersion; 0 is fine for dispersion-free stores.
     EntityId launch(EntityManager& em, uint32_t weaponIndex, const EntityState& shooterState,
-                    uint32_t shooterPeerOwnerId, EntityId designatedTarget = EntityId::null());
+                    uint32_t shooterPeerOwnerId, EntityId designatedTarget = EntityId::null(), uint64_t tickIndex = 0);
 
     // Advance every projectile by dt: boost/coast point-mass flight (gravity from the field, a
     // simple speed-proportional coast decay, thrust along the velocity), seeker checks at the
@@ -145,6 +154,7 @@ class ProjectileSystem {
     SensorResolver m_sensorResolver;
     SeekerCountermeasureCheck m_cmCheck;
     SupportQuery m_supportQuery;
+    glm::vec3 m_windMps{0.f, 0.f, 0.f};
     std::vector<Projectile> m_projectiles;
 };
 

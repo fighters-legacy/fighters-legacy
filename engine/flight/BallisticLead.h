@@ -66,4 +66,41 @@ struct BallisticLeadResult {
     return r;
 }
 
+// Where an unpowered store released RIGHT NOW would land (#629).
+struct CcipResult {
+    glm::dvec3 impact{};
+    float timeOfFallS{0.f};
+    bool valid{false}; // false = never reached the ground inside maxFallTimeS
+};
+
+// Continuously-computed impact point (#629): forward-integrates the SAME point-mass model
+// ProjectileSystem flies — gravity, plus drag decaying the velocity toward the air mass
+// (`dragDecayPerS`, the ProjectileSystem::kCoastDecayPerS coefficient), at the sim's 60 Hz step —
+// so the predicted impact and the actual bomb cannot disagree by more than integration phase.
+//
+// `heightAboveGround` returns the store's height above the terrain at a world position (the caller
+// composes IGravityField::geodeticAltitude with its ground query); the fall ends when it reaches
+// zero. Pure and deterministic; consumed by AI air-to-ground employment and by tests — the HUD
+// pipper rendering rides the HUD-redesign work.
+template <typename HeightAboveGroundFn>
+[[nodiscard]] inline CcipResult
+computeCcip(const glm::dvec3& releasePos, const glm::vec3& releaseVel, const glm::vec3& windMps, float dragDecayPerS,
+            const glm::vec3& gravityAccel, HeightAboveGroundFn&& heightAboveGround, float maxFallTimeS = 120.f) {
+    CcipResult r;
+    constexpr float dt = 1.f / 60.f;
+    glm::dvec3 pos = releasePos;
+    glm::vec3 vel = releaseVel;
+    for (float t = 0.f; t < maxFallTimeS; t += dt) {
+        vel += (gravityAccel - (vel - windMps) * dragDecayPerS) * dt;
+        pos += glm::dvec3(vel) * static_cast<double>(dt);
+        if (heightAboveGround(pos) <= 0.0) {
+            r.impact = pos;
+            r.timeOfFallS = t + dt;
+            r.valid = true;
+            return r;
+        }
+    }
+    return r;
+}
+
 } // namespace fl

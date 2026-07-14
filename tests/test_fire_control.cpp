@@ -248,3 +248,42 @@ TEST_CASE("ProjectileSystem: launch inherits shooter velocity, boosts, and self-
     REQUIRE(em.get(pid) != nullptr); // slot reclaim happens in EntityManager::onTick, not here
     CHECK(em.get(pid)->dead);        // ...but the pooled entity was killed with the projectile
 }
+TEST_CASE("evaluateFire: rockets ripple while held; mass sheds per round", "[fire_control][rocket]") {
+    FireWorld w;
+    WeaponDef rocket;
+    rocket.id = "t:ffar";
+    rocket.name = "Rocket Pod";
+    rocket.type = WeaponType::Rocket;
+    rocket.category = WeaponCategory::AirToGround;
+    rocket.performance.maxRangeM = 3000.f;
+    rocket.performance.cepM = 30.f;
+    rocket.load.massKg = 190.f; // the whole pod
+    rocket.load.dragFactor = 0.019f;
+    rocket.load.rounds = 19;
+    const uint32_t podIdx = w.weapons.registerWeapon(rocket);
+
+    FireState fs;
+    StationState pod;
+    pod.weaponIndex = podIdx;
+    pod.rounds = 19;
+    fs.loadout.stations = {pod};
+    fs.loadout.selected = 0;
+    fs.loadout.payloadMassKg = 190.f;
+    fs.loadout.payloadCd0 = 0.019f;
+
+    ControlInput in{};
+    in.release = true; // HELD: rockets ripple, they do not need fresh edges
+
+    std::vector<FireRequest> out;
+    for (uint64_t t = 0; t < 60; ++t)
+        evaluateFire(fs, w.weapons, in, false, t, 7u, out);
+
+    // One second at kRocketRippleTicks (6) spacing = 10 rockets, all Spawn requests.
+    CHECK(out.size() == 10u);
+    CHECK(fs.loadout.stations[0].rounds == 9u);
+    for (const FireRequest& r : out)
+        CHECK(r.kind == FireRequest::Kind::Spawn);
+
+    // Mass sheds PER ROUND: 10 of 19 rockets gone = 10/19 of the pod's mass.
+    CHECK(fs.loadout.payloadMassKg == Catch::Approx(190.f * 9.f / 19.f).epsilon(0.01));
+}

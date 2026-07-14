@@ -76,6 +76,12 @@ target_link_libraries(test_seeker PRIVATE Catch2::Catch2WithMain engine-weapon e
     engine-sensor engine-spatial)
 catch_discover_tests(test_seeker)
 
+# Bombs/rockets release ballistics + CCIP (#629).
+add_executable(test_release_ballistics test_release_ballistics.cpp)
+target_link_libraries(test_release_ballistics PRIVATE Catch2::Catch2WithMain engine-weapon
+    engine-entity engine-spatial)
+catch_discover_tests(test_release_ballistics)
+
 # WeaponRegistry + defaultPayload (#812): a loadout that actually costs the airframe mass and drag.
 # fm-trim (#817): the tests LOCK the derived numbers, so they double as the engine's guard against
 # someone changing AeroForces.cpp and silently altering every aircraft's performance.
