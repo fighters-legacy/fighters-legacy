@@ -7,9 +7,29 @@
 namespace fl {
 
 // One flight condition to trim the aircraft at.
+//
+// PINNING A CONDITION IS THE WHOLE POINT (#826). Published flight-manual data is almost never quoted
+// as a speed-maximised value: every F-5E turn number in T.O. 1F-5E-1 is given AT A SPECIFIC MACH
+// (15 000 ft, M 0.60: sustained 3.3 g), and its specific-excess-power ladder is given at a specific
+// Mach AND a specific load factor (M 0.60, n = 4.0 → Ps = −225 ft/s). Those are not the same
+// quantities as "the best turn the aircraft can manage at any speed", so they cannot be compared
+// against a maximised number — and the Ps ladder is the richest drag constraint the aircraft has. It
+// is what [aero.cd_table] is fitted to (#820), and without a way to pin the condition, CI could not
+// check the model's single most important calibration.
 struct TrimPoint {
     float altitude_m{0.f};
     float mass_kg{0.f}; // empty + fuel + payload; the caller decides the loading
+
+    // 0 = evaluate the speed-maximised envelope (the default). Non-zero = evaluate AT this Mach, which
+    // is how the flight manual quotes it.
+    float mach{0.f};
+
+    // 0 = not applicable. Non-zero = the load factor to evaluate ps_mps at.
+    float load_factor{0.f};
+
+    // Thrust setting for the thrust-dependent metrics. The manual's turn and Ps numbers are quoted at
+    // "max thrust", so this defaults to on (and falls back to MIL for a model with no AB table).
+    bool afterburner{true};
 };
 
 // Derived performance at one TrimPoint.
@@ -35,6 +55,12 @@ struct TrimResult {
     float fuel_flow_mil_kg_s{0.f};
     float fuel_flow_ab_kg_s{0.f};
     float specific_range_m_per_kg{0.f}; // best cruise efficiency at this condition
+
+    // ── evaluated only when TrimPoint::mach is pinned (#826) ─────────────────────────────────────
+    // When a Mach is given, sustained_*/instant_* above describe THAT Mach rather than the best the
+    // aircraft can do at any speed, and these two become meaningful.
+    float max_lift_g{0.f}; // the lift-limited load factor at this Mach — what pins CL_max
+    float ps_mps{0.f};     // specific excess power, V·(T − D)/W, at this Mach and load_factor
 
     // FALSE MEANS "COULD NOT TRIM HERE", AND IT IS REPORTED, NOT GUESSED. An aircraft that cannot
     // hold level flight at 20 km has no max level Mach there, and inventing one would be worse than

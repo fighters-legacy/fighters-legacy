@@ -15,12 +15,25 @@ namespace fl {
 // what the aircraft can do.
 
 struct ExpectEntry {
-    std::string metric;      // e.g. "stall_speed_1g_mps"
-    float altitude_m{0.f};   // condition
-    float mass_kg{0.f};      // condition
-    float expected{0.f};     // published value
-    float tolerance{0.05f};  // fractional; 0.05 = +/- 5%
-    bool afterburner{false}; // for roc, which has two values
+    std::string metric;     // e.g. "stall_speed_1g_mps", "sustained_g", "ps_mps", "max_lift_g"
+    float altitude_m{0.f};  // condition
+    float mass_kg{0.f};     // condition
+    float expected{0.f};    // published value
+    float tolerance{0.05f}; // fractional; 0.05 = +/- 5%
+
+    // Pin the condition the number was published at (#826). The flight manual quotes turn and Ps
+    // figures AT a Mach, not maximised over speed, so without these the richest data an aircraft has
+    // simply cannot be expressed as a gate row.
+    float mach{0.f};        // 0 = maximise over speed (the old behaviour)
+    float load_factor{0.f}; // required by ps_mps
+    bool afterburner{true}; // the manual's turn/Ps numbers are at max thrust
+
+    // Per-row stores. The T.O. publishes max level Mach BOTH clean (1.63) and with wingtip missiles
+    // (1.57) at 36 000 ft, and that delta is the ONLY published check on the entire store-drag path
+    // (hardpoints -> WeaponLoad.drag_factor -> PayloadEffect). A single --payload CLI flag applied to
+    // every row cannot express two conditions in one file.
+    float payload_kg{0.f};
+    float payload_cd0{0.f};
 };
 
 struct ExpectFailure {

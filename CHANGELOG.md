@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **tools**: `fm-trim` gate rows can pin a Mach, a load factor and a payload — the Ps ladder is now checkable in CI (#826)
 - **flight**: `[aero.controls] max_elevator_neg_deg` — asymmetric pitch travel (#822)
 
 ### Fixed
