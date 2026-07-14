@@ -463,9 +463,27 @@ travel — an invisible assumption that produces wrong handling if guessed incor
 
 | Field | Meaning | Typical range |
 |---|---|---|
-| `max_elevator_deg` | ±max elevator or all-moving stabilator deflection from neutral | 20–30° (stabilator), 15–25° (elevator) |
+| `max_elevator_deg` | Nose-UP travel at full aft stick | 20–30° (stabilator), 15–25° (elevator) |
+| `max_elevator_neg_deg` | *Optional.* Nose-DOWN travel at full forward stick. Absent ⇒ symmetric (= `max_elevator_deg`) | F-5E: 5° against 17° nose-up |
 | `max_aileron_deg` | ±max aileron trailing-edge-down deflection | 15–25° |
 | `max_rudder_deg` | ±max rudder deflection | 25–35° |
+
+**Pitch travel is usually asymmetric, and the schema now says so (#822).** A fighter needs far more
+nose-up authority than nose-down: the F-5E's all-moving stabilator travels **17° up but only 5° down**
+(T.O. 1F-5E-1), a 3.4:1 ratio, and the F-16's and T-38's are asymmetric too. With one number you must
+choose — and choosing the nose-up figure (the one that governs pitch authority and reaching the G
+limit) models your aircraft's nose-down authority **3.4× too generous**, so a bunt or a negative-G
+push is far more effective than the real aeroplane's. Author both, and it is right.
+
+`max_elevator_neg_deg` is a **travel magnitude**: it is positive, and the sign is carried by the
+stick. The validator rejects a negative value, and warns if nose-down travel exceeds nose-up (possible
+on a canard; almost always a transcription slip on a conventional fighter).
+
+**Roll and yaw deliberately have no negative-side key.** Left and right are mirror images, so a
+sign-dependent travel would mean an aircraft that rolls harder one way than the other. An aileron
+quoted as "35° up / 25° down" is a per-*surface* differential, not a per-command asymmetry; and a
+gear-driven aileron spring stop (as on the F-5E) is a control-system behaviour — a soft stop the pilot
+can overpower at the cost of a structural limit — not a travel limit. Author the effective value.
 
 Sources: aircraft flight manuals, FAA/military type certificates, Jane's systems descriptions,
 DATCOM (which reports control authority in degrees).
