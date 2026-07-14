@@ -241,6 +241,64 @@ static void validateClTable(const toml::table& tbl, FlightModelValidationResult&
     }
 }
 
+// Optional tabulated total clean drag (#820). Same shape rules as cl_table.
+static void validateCdTable(const toml::table& tbl, FlightModelValidationResult& r) {
+    auto cd = tbl["aero"]["cd_table"];
+    if (!cd)
+        return; // optional -- the parabolic drag_polar remains the simple path
+
+    std::size_t alphaLen = arrayLen(cd["alpha"]);
+    std::size_t machLen = arrayLen(cd["mach"]);
+    if (static_cast<int>(alphaLen) < kClTableAlphaMin) {
+        r.errors.push_back("aero.cd_table.alpha must have at least " + std::to_string(kClTableAlphaMin) +
+                           " breakpoints (got " + std::to_string(alphaLen) + ")");
+        r.ok = false;
+    }
+    if (static_cast<int>(machLen) < kClTableMachMin) {
+        r.errors.push_back("aero.cd_table.mach must have at least " + std::to_string(kClTableMachMin) +
+                           " breakpoints (got " + std::to_string(machLen) + ")");
+        r.ok = false;
+    }
+
+    std::size_t valLen = arrayLen(cd["values"]);
+    if (alphaLen > 0 && machLen > 0) {
+        std::size_t expected = alphaLen * machLen;
+        if (valLen != expected) {
+            r.errors.push_back("aero.cd_table.values size mismatch: alpha=" + std::to_string(alphaLen) +
+                               " x mach=" + std::to_string(machLen) + " = " + std::to_string(expected) +
+                               " expected, got " + std::to_string(valLen));
+            r.ok = false;
+        }
+    }
+
+    // Drag is strictly positive. A zero or negative CD is a transcription error, and it would make
+    // the aircraft accelerate under its own drag.
+    if (auto* arr = cd["values"].as_array()) {
+        for (std::size_t i = 0; i < arr->size(); ++i) {
+            auto v = arr->get(i)->value<double>();
+            if (v && *v <= 0.0) {
+                r.errors.push_back("aero.cd_table.values[" + std::to_string(i) + "] must be > 0 (got " +
+                                   std::to_string(*v) + ")");
+                r.ok = false;
+                break;
+            }
+        }
+    }
+
+    // THE DOUBLE-COUNT GUARD. A cd_table is TOTAL clean drag -- it already includes the induced term.
+    // Authoring a non-zero drag_polar.k alongside it means the author believes one of the two is
+    // additive, and computeForces would silently apply roughly twice the drag they intended. That is
+    // exactly the class of bug a content author cannot debug from the outside, so it is an error, not
+    // a warning. Set k = 0.0 to say "the table owns the drag".
+    auto k = tbl["aero"]["drag_polar"]["k"].value<double>();
+    if (k && *k > 0.0) {
+        r.errors.push_back("aero.cd_table and a non-zero aero.drag_polar.k are both authored: the table is TOTAL "
+                           "clean drag and already includes induced drag, so k would double-count it. Set "
+                           "drag_polar.k = 0.0 when using cd_table.");
+        r.ok = false;
+    }
+}
+
 static void validateDragPolar(const toml::table& tbl, FlightModelValidationResult& r) {
     auto dp = tbl["aero"]["drag_polar"];
     if (!dp) {
@@ -269,7 +327,13 @@ static void validateDragPolar(const toml::table& tbl, FlightModelValidationResul
         }
     };
     checkPos("cd0");
-    checkPos("k");
+    // k must be positive on the parabolic path -- an aircraft with no induced drag is not an
+    // aircraft. But when a cd_table owns the drag (#820), k = 0.0 is exactly how the author declares
+    // that, and validateCdTable errors if it is anything else.
+    if (tbl["aero"]["cd_table"])
+        checkNonNeg("k");
+    else
+        checkPos("k");
     checkNonNeg("speedbrake_cd");
     checkNonNeg("gear_cd");
 }
@@ -658,6 +722,7 @@ FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
     validateAircraft(tbl, r, aircraftType);
     validateFlightModelGeometry(tbl, r, aircraftType);
     validateClTable(tbl, r);
+    validateCdTable(tbl, r);
     validateDragPolar(tbl, r);
     validateMoments(tbl, r);
     validateAeroLimits(tbl, r);

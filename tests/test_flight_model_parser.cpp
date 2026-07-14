@@ -124,6 +124,37 @@ TEST_CASE("Parser ignores a legacy aircraft.mesh / aircraft.cockpit", "[parser]"
     CHECK_NOTHROW(parseFlightModel(toml));
 }
 
+TEST_CASE("Parser: cd_table is absent by default and parses when present", "[parser]") {
+    // Optional by design (#820): the parabolic [aero.drag_polar] stays the simple path, which is what
+    // most community content will use. A cd_table is for aircraft with real tabulated data.
+    auto plain = parseFlightModel(kMinimalToml);
+    CHECK_FALSE(plain.cd_table.has_value());
+
+    std::string toml = kMinimalToml;
+    toml += "\n[aero.cd_table]\n"
+            "alpha  = [-10.0, 0.0, 10.0, 20.0]\n"
+            "mach   = [0.3, 0.9]\n"
+            "values = [0.10, 0.12,\n"
+            "          0.02, 0.03,\n"
+            "          0.08, 0.10,\n"
+            "          0.30, 0.34]\n";
+    auto d = parseFlightModel(toml);
+    REQUIRE(d.cd_table.has_value());
+    CHECK(d.cd_table->rows.size() == 4);
+    CHECK(d.cd_table->cols.size() == 2);
+    CHECK_THAT(d.cd_table->lookup(0.f, 0.3f), WithinAbs(0.02f, 1e-5f));
+    CHECK_THAT(d.cd_table->lookup(20.f, 0.9f), WithinAbs(0.34f, 1e-5f));
+}
+
+TEST_CASE("Parser rejects a cd_table with too few breakpoints", "[parser]") {
+    std::string toml = kMinimalToml;
+    toml += "\n[aero.cd_table]\n"
+            "alpha  = [-10.0, 0.0, 10.0]\n"
+            "mach   = [0.3, 0.9]\n"
+            "values = [0.10, 0.12, 0.02, 0.03, 0.08, 0.10]\n";
+    CHECK_THROWS_AS(parseFlightModel(toml), std::runtime_error);
+}
+
 TEST_CASE("Parser reads drag polar fields", "[parser]") {
     auto d = parseFlightModel(kMinimalToml);
     CHECK_THAT(d.drag_polar.cd0, WithinAbs(0.018f, 1e-5f));

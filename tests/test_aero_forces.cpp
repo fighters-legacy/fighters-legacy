@@ -213,3 +213,116 @@ TEST_CASE("AeroForces: lift is in the Y-up direction at positive alpha", "[aero]
     CHECK(f[1] > 0.f);  // upward aerodynamic force is positive Y
     CHECK(f[2] == 0.f); // no lateral force
 }
+
+// ---------------------------------------------------------------------------
+// [aero.cd_table] — tabulated total clean drag (#820)
+//
+// A strictly parabolic polar (cd0 + k*CL^2) forces specific excess power to be exactly quadratic in
+// load factor, which means the implied induced-drag coefficient must be CONSTANT across a Ps chart.
+// Real fighters do not behave that way -- against T.O. 1F-5E-1 the implied coefficient grows 3.5x
+// from the 1-2 g region to the 4-5 g region. There is no value of k that fits both cruise and the
+// hard-turn end, and NASA TP-1538's F-16 CD tables cannot be transcribed into a polar at all.
+// ---------------------------------------------------------------------------
+
+// kGenericToml with a cd_table appended and drag_polar.k zeroed (the table owns induced drag).
+// The table's values are EXACTLY parabolic (cd0 + k*CL^2 at the fixture's own cl_table), so the two
+// paths must agree at the breakpoints -- which is what makes the divergence test below meaningful.
+static std::string withCdTable(const char* values) {
+    std::string s = kGenericToml;
+    auto pos = s.find("k             = ");
+    REQUIRE(pos != std::string::npos);
+    auto end = s.find('\n', pos);
+    s.replace(pos, end - pos, "k             = 0.0");
+    s += std::string("\n[aero.cd_table]\n"
+                     "alpha  = [-10.0, 0.0, 10.0, 20.0]\n"
+                     "mach   = [0.3, 0.9]\n"
+                     "values = [\n") +
+         values + "\n]\n";
+    return s;
+}
+
+TEST_CASE("cd_table parses and is absent by default", "[aero][cd_table]") {
+    auto plain = makeData();
+    CHECK_FALSE(plain.cd_table.has_value()); // no regression: the parabolic path is untouched
+
+    auto tabled = parseFlightModel(withCdTable("0.10, 0.12,\n0.02, 0.03,\n0.08, 0.10,\n0.30, 0.34,"));
+    REQUIRE(tabled.cd_table.has_value());
+    CHECK(tabled.cd_table->rows.size() == 4);
+    CHECK(tabled.cd_table->cols.size() == 2);
+}
+
+TEST_CASE("cd_table REPLACES the parabolic polar rather than adding to it", "[aero][cd_table]") {
+    // Build a table whose value at (alpha=0, mach=0.3) is a known constant, then check the drag that
+    // comes out is that constant -- NOT that constant plus cd0 + k*CL^2. Summing them would be a
+    // silent ~2x drag bug that no content author could debug.
+    const float kCd = 0.05f;
+    auto data = parseFlightModel(withCdTable("0.05, 0.05,\n0.05, 0.05,\n0.05, 0.05,\n0.05, 0.05,"));
+    REQUIRE(data.cd_table.has_value());
+
+    auto atmos = computeAtmosphere(0.f);
+    ControlInput ctrl{}; // no speedbrake, gear up
+    PayloadEffect payload{};
+    const float mach = 0.3f;
+    const float spd = mach * atmos.speed_of_sound_m_s;
+    const float q = 0.5f * atmos.density_kg_m3 * spd * spd;
+    const float S = data.geometry.wing_area_m2;
+
+    // alpha = 0 so lift ~ 0 and the body-x force is (thrust=0) - drag*cos(0) + lift*sin(0) = -drag.
+    auto f = computeForces(0.f, 0.f, mach, spd, 0.f, 55.f, false, 0.f, ctrl, payload, data, atmos);
+
+    const float cl = data.cl_table.lookup(0.f, mach);
+    const float expectedDrag = q * S * kCd; // wave drag is 0 at Mach 0.3 in this fixture
+    const float parabolicWouldBe = q * S * (kCd + data.drag_polar.cd0 + 0.14f * cl * cl);
+
+    const float lift = q * S * cl;
+    const float actualDrag = -(f[0] - lift * std::sin(0.f));
+
+    CHECK_THAT(actualDrag, WithinAbs(expectedDrag, expectedDrag * 0.01f));
+    CHECK(actualDrag < parabolicWouldBe * 0.95f); // decisively NOT the summed version
+}
+
+TEST_CASE("a cd_table can express drag rising faster than CL^2", "[aero][cd_table]") {
+    // THE POINT OF THE FEATURE. Fit the table's low-alpha end to a parabola, then let the high-alpha
+    // end rise far above what any k could produce there. A parabolic polar cannot do this, which is
+    // why the F-5E out-turns the real aircraft by 18% when k is fitted to cruise.
+    auto data = parseFlightModel(withCdTable("0.05, 0.05,\n0.02, 0.02,\n0.09, 0.09,\n0.60, 0.60,"));
+    REQUIRE(data.cd_table.has_value());
+
+    const float mach = 0.3f;
+    const float cd_cruise = data.cd_table->lookup(0.f, mach);    // near-zero lift
+    const float cd_hardTurn = data.cd_table->lookup(20.f, mach); // at high AoA
+
+    const float cl_cruise = data.cl_table.lookup(0.f, mach);
+    const float cl_hardTurn = data.cl_table.lookup(20.f, mach);
+
+    // The implied k is NOT constant -- it grows sharply toward max lift, exactly as a real wing does.
+    const float k_cruise = (cd_cruise - 0.02f) / (cl_cruise * cl_cruise + 1e-6f);
+    const float k_hardTurn = (cd_hardTurn - 0.02f) / (cl_hardTurn * cl_hardTurn + 1e-6f);
+    CHECK(k_hardTurn > k_cruise * 2.f);
+}
+
+TEST_CASE("a model with no cd_table produces bit-identical forces", "[aero][cd_table]") {
+    // The regression guard: every existing aircraft, and most community content, uses the parabolic
+    // path and must be completely unaffected by this feature.
+    auto data = makeData();
+    auto atmos = computeAtmosphere(5000.f);
+    ControlInput ctrl{};
+    ctrl.speedbrake = 0.3f;
+    PayloadEffect payload{80.f, 0.002f};
+
+    auto f = computeForces(0.09f, 0.f, 0.7f, 220.f, 5000.f, 55.f, false, 0.6f, ctrl, payload, data, atmos);
+
+    // Recompute the pre-#820 expression by hand and require an exact match.
+    const float alpha_deg = 0.09f / (3.14159265358979f / 180.f);
+    const float cl = data.cl_table.lookup(alpha_deg, 0.7f);
+    const float q = 0.5f * atmos.density_kg_m3 * 220.f * 220.f;
+    const float cd0 = data.drag_polar.cd0 + payload.extra_cd0;
+    const float cd_wave = data.cd_wave ? data.cd_wave->lookup(0.7f) : 0.f;
+    const float cd_dev = 0.3f * data.drag_polar.speedbrake_cd;
+    const float cd = cd0 + data.drag_polar.k * cl * cl + cd_wave + cd_dev;
+    const float drag = q * data.geometry.wing_area_m2 * cd;
+    const float lift = q * data.geometry.wing_area_m2 * cl;
+
+    const float expected_y = lift * std::cos(0.09f) + drag * std::sin(0.09f);
+    CHECK_THAT(f[1], WithinAbs(expected_y, std::abs(expected_y) * 1e-4f));
+}

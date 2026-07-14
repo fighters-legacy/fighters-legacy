@@ -430,3 +430,63 @@ TEST_CASE("bomber type does not trigger fighter mass warning", "[flight-model-va
     CHECK(r.ok);
     CHECK(r.warnings.empty());
 }
+
+// ---------------------------------------------------------------------------
+// [aero.cd_table] (#820)
+// ---------------------------------------------------------------------------
+
+static std::string withCdTable(const char* extra, const char* kValue = "k             = 0.0") {
+    std::string s = patch(kValidFighter, "k             = 0.14", kValue);
+    s += std::string("\n[aero.cd_table]\n") + extra;
+    return s;
+}
+
+static constexpr const char* kGoodCdTable = "alpha  = [-10, 0, 10, 20]\n"
+                                            "mach   = [0.3, 0.9]\n"
+                                            "values = [0.10, 0.12, 0.02, 0.03, 0.08, 0.10, 0.30, 0.34]\n";
+
+TEST_CASE("a valid cd_table passes", "[flight-model-validator]") {
+    auto r = validateFlightModel(withCdTable(kGoodCdTable));
+    INFO("errors: " << (r.errors.empty() ? std::string("none") : r.errors[0]));
+    CHECK(r.ok);
+    CHECK(r.errors.empty());
+}
+
+TEST_CASE("cd_table with a non-zero drag_polar.k is an ERROR", "[flight-model-validator]") {
+    // The double-count guard: a cd_table is TOTAL clean drag and already includes induced drag, so
+    // a non-zero k would silently apply roughly twice the intended drag.
+    auto r = validateFlightModel(withCdTable(kGoodCdTable, "k             = 0.14"));
+    CHECK_FALSE(r.ok);
+    bool found = false;
+    for (const auto& e : r.errors)
+        if (e.find("double-count") != std::string::npos)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("cd_table with 3 alpha breakpoints fails", "[flight-model-validator]") {
+    auto r = validateFlightModel(withCdTable("alpha  = [-10, 0, 10]\n"
+                                             "mach   = [0.3, 0.9]\n"
+                                             "values = [0.1, 0.12, 0.02, 0.03, 0.08, 0.10]\n"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("cd_table values size mismatch fails", "[flight-model-validator]") {
+    auto r = validateFlightModel(withCdTable("alpha  = [-10, 0, 10, 20]\n"
+                                             "mach   = [0.3, 0.9]\n"
+                                             "values = [0.10, 0.12, 0.02, 0.03, 0.08]\n"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("cd_table with a non-positive CD fails", "[flight-model-validator]") {
+    // A zero or negative CD is a transcription error; the aircraft would accelerate under its drag.
+    auto r = validateFlightModel(withCdTable("alpha  = [-10, 0, 10, 20]\n"
+                                             "mach   = [0.3, 0.9]\n"
+                                             "values = [0.10, 0.12, 0.0, 0.03, 0.08, 0.10, 0.30, 0.34]\n"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("a model with no cd_table still validates (the parabolic path is untouched)", "[flight-model-validator]") {
+    auto r = validateFlightModel(kValidFighter);
+    CHECK(r.ok);
+}
