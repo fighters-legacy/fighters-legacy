@@ -437,6 +437,15 @@ int main(int argc, char** argv) {
         std::snprintf(buf, sizeof(buf), "content: %u pack entity type(s) registered", packTypes);
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
+    // Projectile entity types (#625): one per flyable weapon, registered NOW because
+    // MsgEntityTypeDef only travels in ConnectAck — a type registered after a client connects
+    // would reach it as an unresolvable typeIndex.
+    {
+        const uint32_t projTypes = registerProjectileEntityDefs(weaponRegistry, entityRegistry, *log);
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "content: %u projectile type(s) registered", projTypes);
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
     // Entities are spawned on-demand by WorldBroadcaster::onConnect; none pre-spawned here.
 
     // ---- Pre-cache peer spawn-point elevations (main-thread only, before gameLoop.start()) ----
@@ -533,6 +542,9 @@ int main(int argc, char** argv) {
         cfg.overrunMaxAiStride, cfg.overrunBudgetFloorBytes, cfg.overrunMinInterestFraction);
     wbConfig.gameplay = fl::DamageRules{cfg.friendlyFire, cfg.crashDamage};
     broadcaster.applyConfig(wbConfig);
+    // The fire path's vocabulary (#625). After applyConfig, before gameLoop.start(); the registry
+    // lives in main's scope and outlives the broadcaster.
+    broadcaster.setWeaponRegistry(&weaponRegistry);
     // The first production entity-event consumer (#626): kill attribution, the scoreboard, the
     // kill-feed broadcast, and DamageDef penalties all hang off entity events reaching the
     // broadcaster. Must be registered before gameLoop.start().

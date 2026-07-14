@@ -12,6 +12,7 @@ struct BufferedInput {
     float aileron{0.f};
     float rudder{0.f};
     uint8_t buttons{0};
+    uint8_t selectedStation{255}; // absolute station selection (#625); 255 = no change
 };
 
 // Fixed-depth ring buffer for per-peer MsgClientInput delivery.

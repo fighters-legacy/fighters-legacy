@@ -78,6 +78,19 @@ struct QuantEntity {
     uint8_t fuelPct{0};
     bool abEngaged{false};
     bool playerOwned{false};
+
+    // ── own-record extras (#625) — gated by the SAME hasOmega bit ───────────
+    // The receiving peer's own record carries its live loadout: selection, rounds on the selected
+    // station, seeker flags, and the payload the remaining stores cost the airframe RIGHT NOW.
+    // This is the GameProtocol.h:125 seam executed: once a store can leave the rails, the per-type
+    // static payload on MsgEntityTypeDef stops being the truth (it remains the pre-first-snapshot
+    // fallback), and ClientPrediction re-resolves from here so a released store changes the
+    // client-predicted physics too. No new flag bit: omega and the loadout are both own-record-only.
+    uint8_t selectedStation{255};
+    uint16_t stationRounds{0};
+    uint8_t weaponFlags{0};   // bit 0 = seeker locked (#628)
+    float payloadMassKg{0.f}; // quantized 1 kg steps, [0, 65535]
+    float payloadCd0{0.f};    // quantized 1e-5 steps, [0, 0.65535]
 };
 
 // Shared quantization origin grid (#725). Each entity is quantized relative to the origin of the

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ClientNetEventHandler.h"
+#include "ClientEffectRouter.h"
 #include "ServerNotice.h"
 
 #include "ILogger.h"
@@ -223,6 +224,13 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             re.abEngaged = qe.abEngaged;
             re.engineFailFlags = qe.engineFailFlags;
             re.omega = {qe.omega[0], qe.omega[1], qe.omega[2]};
+            // Own-record loadout block (#625) — travels with omega, own entity only.
+            re.hasLoadout = qe.hasOmega;
+            re.selectedStation = qe.selectedStation;
+            re.stationRounds = qe.stationRounds;
+            re.weaponFlags = qe.weaponFlags;
+            re.payloadMassKg = qe.payloadMassKg;
+            re.payloadCd0 = qe.payloadCd0;
             m_entityCache[qe.idx] = {re, hdr.tickIndex};
         }
 
@@ -261,6 +269,16 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             uint16_t delayTicks{};
             if (fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerDelayTicks), delayTicks))
                 m_estimatedDelayTicks = delayTicks;
+
+            // Cosmetic weapon effects (#625): variable-length record list, routed to particles
+            // (audio/haptics join via the same router in #631). Missing router = effects dropped.
+            if (effects) {
+                uint16_t fxLen = 0;
+                if (const uint8_t* fx =
+                        fl::findExt(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotEffects), fxLen);
+                    fx && fxLen > 0)
+                    routeEffectsTlv(*effects, fx, fxLen);
+            }
         }
 
         // Advance the selective-ack decoded-tick mask before moving the high-water mark (#566). This

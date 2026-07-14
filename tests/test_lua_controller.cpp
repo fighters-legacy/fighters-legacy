@@ -622,3 +622,32 @@ TEST_CASE("LuaController: state.faction lets a script tell friend from foe") {
     const fl::ControlInput ctrl = c->sample(self, 0, 1.0 / 60.0, ctx);
     CHECK(ctrl.throttle == Catch::Approx(0.6f).epsilon(0.001f)); // holds fire on its own side
 }
+
+// ---------------------------------------------------------------------------
+// Fire intent (#625)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("LuaController: trigger, release, and weapon_station reach ControlInput") {
+    auto c = makeCtrl("function compute_control(s,t,dt) return {trigger=true, release=true, weapon_station=2} end");
+    REQUIRE(c->isValid());
+    const fl::ControlInput ctrl = c->sample(makeState(), 0, 1.0 / 60.0);
+    CHECK(ctrl.trigger);
+    CHECK(ctrl.release);
+    CHECK(ctrl.station == 2u);
+}
+
+TEST_CASE("LuaController: absent fire fields default to no intent and keep the station") {
+    auto c = makeCtrl("function compute_control(s,t,dt) return {throttle=0.5} end");
+    REQUIRE(c->isValid());
+    const fl::ControlInput ctrl = c->sample(makeState(), 0, 1.0 / 60.0);
+    CHECK_FALSE(ctrl.trigger);
+    CHECK_FALSE(ctrl.release);
+    CHECK(ctrl.station == 255u); // "keep" — the wire sentinel, same as an untouched player selector
+}
+
+TEST_CASE("LuaController: an out-of-range weapon_station is ignored, not wrapped") {
+    auto c = makeCtrl("function compute_control(s,t,dt) return {weapon_station=999} end");
+    REQUIRE(c->isValid());
+    const fl::ControlInput ctrl = c->sample(makeState(), 0, 1.0 / 60.0);
+    CHECK(ctrl.station == 255u); // a nonsense selection must not become a real one
+}

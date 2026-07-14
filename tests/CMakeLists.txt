@@ -58,6 +58,13 @@ add_executable(test_weapon_def_parser test_weapon_def_parser.cpp)
 target_link_libraries(test_weapon_def_parser PRIVATE Catch2::Catch2WithMain engine-weapon)
 catch_discover_tests(test_weapon_def_parser)
 
+# FireControl + ProjectileSystem (#625): the pure fire-decision logic and the 3-DOF projectile pool.
+# engine-weapon's entity/spatial deps are PRIVATE, so the test links them explicitly.
+add_executable(test_fire_control test_fire_control.cpp)
+target_link_libraries(test_fire_control PRIVATE Catch2::Catch2WithMain engine-weapon engine-entity
+    engine-spatial)
+catch_discover_tests(test_fire_control)
+
 # WeaponRegistry + defaultPayload (#812): a loadout that actually costs the airframe mass and drag.
 # fm-trim (#817): the tests LOCK the derived numbers, so they double as the engine's guard against
 # someone changing AeroForces.cpp and silently altering every aircraft's performance.
@@ -667,6 +674,7 @@ target_include_directories(test_server_notice PRIVATE
 catch_discover_tests(test_server_notice)
 
 add_executable(test_client_net_event_handler test_client_net_event_handler.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     # ClientNetEventHandler dispatches MsgWingmanAck into the radio menu (#610).
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
@@ -742,6 +750,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PauseMenuScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/DebriefScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightScreen.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp"
@@ -785,3 +794,15 @@ target_include_directories(test_client_prediction PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_client_prediction)
+
+# ClientEffectRouter (#625): wire effect vocabulary -> particle presets, ttl lifecycle, TLV decode.
+add_executable(test_effect_router test_effect_router.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp")
+target_link_libraries(test_effect_router PRIVATE
+    Catch2::Catch2WithMain
+    engine-render
+    engine-protocol
+    platform-hal)
+target_include_directories(test_effect_router PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
+catch_discover_tests(test_effect_router)

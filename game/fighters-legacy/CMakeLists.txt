@@ -2,6 +2,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
     add_executable(fighters-legacy
         main.cpp
         Game.cpp
+        ClientEffectRouter.cpp
         ClientNetEventHandler.cpp
         ClientFlightModelResolver.cpp
         ManualOverlay.cpp

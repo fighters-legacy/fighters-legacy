@@ -9,6 +9,7 @@
 #include "entity/EntityTypeRegistry.h"
 #include "sensor/SensorDef.h"
 #include "sensor/SensorDefParser.h"
+#include "weapon/ProjectileSystem.h" // projectileTypeId (#625)
 #include "weapon/WeaponDef.h"
 #include "weapon/WeaponDefParser.h"
 #include "weapon/WeaponRegistry.h"
@@ -113,6 +114,37 @@ SensorDefResolver makeSensorDefResolver(AssetManager& assets, const ContentIndex
         (*cache)[id] = def; // cache misses too, so a bad id isn't re-reported on every spawn
         return def;
     };
+}
+
+uint32_t registerProjectileEntityDefs(const WeaponRegistry& weapons, EntityTypeRegistry& registry, ILogger& log) {
+    uint32_t registered = 0;
+    for (uint32_t i = 0;; ++i) {
+        const WeaponDef* w = weapons.byIndex(i);
+        if (!w)
+            break;
+        if (w->type == WeaponType::Gun || w->type == WeaponType::Pod)
+            continue; // hitscan / non-flying stores never become entities
+
+        EntityDef def;
+        def.id = projectileTypeId(*w);
+        def.name = w->name;
+        def.category = ObjectCategory::Projectile;
+        def.maxHp = 1.f;
+        def.mesh = w->mesh; // ASSET NAME; empty = the builtin placeholder
+        // A missile is a hard radar target to SEE: small RCS, hot IR while the motor burns (the
+        // static signature approximates the burn — per-phase signatures can come with #529).
+        def.signatures.rcs = 0.1f;
+        def.signatures.visual = 0.3f;
+        def.signatures.ir = 2.0f;
+
+        if (registry.registerType(std::move(def)) == std::numeric_limits<uint32_t>::max()) {
+            log.log(LogLevel::Warn, __FILE__, __LINE__,
+                    (std::string("projectile type for weapon '") + w->id + "' already registered; skipping").c_str());
+        } else {
+            ++registered;
+        }
+    }
+    return registered;
 }
 
 } // namespace fl

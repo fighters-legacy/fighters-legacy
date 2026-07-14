@@ -43,6 +43,30 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
         inp.buttons = input.isKeyDown(Key::Space) ? 1u : 0u;
         if (input.isKeyDown(Key::Tab))
             inp.buttons |= 0x02u;
+        // Fire the selected store (#625): mouse-right or the Enter key. Level on the wire — the
+        // server's FireControl edge-detects, so holding it is one shot. Gated while an overlay owns
+        // the discrete keys (the radio menu's picks are the digit keys the cycle uses, #610).
+        if (!uiFocused && (input.isMouseButtonDown(MouseButton::Right) || input.isKeyDown(Key::Enter)))
+            inp.buttons |= 0x04u;
+        // Weapon-station cycling (#625): local edge detection, ABSOLUTE selection on the wire (an
+        // absolute value converges on a lossy channel; a lost cycle-edge would not). Wraps within
+        // the station count Game.cpp provides from the entity def; 0 = unknown (selection off).
+        const bool nextDown = !uiFocused && input.isKeyDown(Key::Num1); // NextWeapon primary binding
+        const bool prevDown = !uiFocused && input.isKeyDown(Key::Num2); // PrevWeapon primary binding
+        if (m_stationCount > 0) {
+            const bool nextEdge = nextDown && !m_prevNextKey;
+            const bool prevEdge = prevDown && !m_prevPrevKey;
+            // 255 = "keep the server's default selection". Only a deliberate cycle replaces it —
+            // an untouched selector must never override what the server chose at spawn.
+            if ((nextEdge || prevEdge) && m_selectedStation == 255)
+                m_selectedStation = 0;
+            else if (nextEdge)
+                m_selectedStation = static_cast<uint8_t>((m_selectedStation + 1) % m_stationCount);
+            else if (prevEdge)
+                m_selectedStation = static_cast<uint8_t>((m_selectedStation + m_stationCount - 1) % m_stationCount);
+        }
+        m_prevNextKey = nextDown;
+        m_prevPrevKey = prevDown;
         m_weaponFired = (inp.buttons & 1u) != 0u;
 
         if (input.getGamepadCount() > 0) {
@@ -92,6 +116,24 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
                 }
                 if (readButton(fl::InputAction::Afterburner))
                     inp.buttons |= 0x02u;
+                if (readButton(fl::InputAction::FireMissile))
+                    inp.buttons |= 0x04u; // fire selected store (#625)
+                // Station cycling on the gamepad (D-pad by default), same edge/wrap logic as keys.
+                const bool padNext = readButton(fl::InputAction::NextWeapon);
+                const bool padPrev = readButton(fl::InputAction::PrevWeapon);
+                if (m_stationCount > 0) {
+                    const bool nextEdge = padNext && !m_prevPadNext;
+                    const bool prevEdge = padPrev && !m_prevPadPrev;
+                    if ((nextEdge || prevEdge) && m_selectedStation == 255)
+                        m_selectedStation = 0;
+                    else if (nextEdge)
+                        m_selectedStation = static_cast<uint8_t>((m_selectedStation + 1) % m_stationCount);
+                    else if (prevEdge)
+                        m_selectedStation =
+                            static_cast<uint8_t>((m_selectedStation + m_stationCount - 1) % m_stationCount);
+                }
+                m_prevPadNext = padNext;
+                m_prevPadPrev = padPrev;
             }
         }
 
@@ -134,6 +176,8 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
         inp.throttle = camInput.throttle();
     }
 
+    // Absolute station selection rides every packet (#625): idempotent under loss, converges.
+    inp.selectedStation = m_selectedStation;
     return inp;
 }
 

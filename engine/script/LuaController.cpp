@@ -507,6 +507,19 @@ fl::ControlInput LuaController::sample(const fl::EntityState& state, uint64_t ti
     ctrl.afterburner = readBoolField(L, resultIdx, "afterburner");
     ctrl.speedbrake = readFloatField(L, resultIdx, "speedbrake");
     ctrl.gear_down = readBoolField(L, resultIdx, "gear_down");
+    // Fire intent (#625) — the same seam players and C++ AI use. The value is an INTENT: the
+    // server's FireControl validates station/ammo/rate/weapons-hold exactly as it does for a
+    // player, so a hostile script holding the trigger forever gets what a trigger-holding player
+    // gets. weapon_station is absolute (matches the wire semantics); absent field = keep.
+    ctrl.trigger = readBoolField(L, resultIdx, "trigger");
+    ctrl.release = readBoolField(L, resultIdx, "release");
+    lua_getfield(L, resultIdx, "weapon_station");
+    if (lua_isnumber(L, -1)) {
+        const lua_Integer st = lua_tointeger(L, -1);
+        if (st >= 0 && st <= 254)
+            ctrl.station = static_cast<uint8_t>(st);
+    }
+    lua_pop(L, 1);
     lua_pop(L, 1);
 
     m_impl->currentCtx = nullptr;

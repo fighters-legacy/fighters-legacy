@@ -43,6 +43,16 @@ class FlightInputCollector {
         return m_weaponFired;
     }
 
+    // Weapon-station cycling (#625). Game.cpp sets the count from the player's entity def
+    // (hardpoints.size()) once the type is known; 0 = cycling off. Selection is client-local and
+    // sent ABSOLUTE on the wire; the server confirms via the own-entity snapshot record.
+    void setStationCount(uint8_t count) noexcept {
+        m_stationCount = count;
+    }
+    [[nodiscard]] uint8_t selectedStation() const noexcept {
+        return m_selectedStation;
+    }
+
     void setClock(const IClock& clock);
 
     // Apply a loaded InputBindings table so gamepad axis mapping is user-configurable.
@@ -55,6 +65,12 @@ class FlightInputCollector {
 
   private:
     uint32_t m_inputSeq{0};
+    uint8_t m_stationCount{0};      // stations on the player's aircraft; 0 = unknown
+    uint8_t m_selectedStation{255}; // 255 = none
+    bool m_prevNextKey{false};      // edge detectors for the cycle keys
+    bool m_prevPrevKey{false};
+    bool m_prevPadNext{false}; // and for the gamepad D-pad
+    bool m_prevPadPrev{false};
     const IClock* m_clock{&SystemClock::instance()};
     std::chrono::steady_clock::time_point m_lastInputTime{};
     bool m_weaponFired{false};

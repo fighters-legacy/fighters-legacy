@@ -5,6 +5,7 @@
 #include "flight/FlightModelData.h"
 
 #include <array>
+#include <cstdint>
 
 namespace fl {
 
@@ -19,6 +20,16 @@ struct ControlInput {
     float speedbrake{0.f}; // 0–1
     bool gear_down{false};
     float tvc_angle_deg{0.f}; // commanded nozzle deflection (pitch axis)
+
+    // ── fire intent (#625) ───────────────────────────────────────────────────
+    // ONE seam for players, C++ AI, and Lua: PeerController maps these from the wire, AI
+    // controllers set them directly, LuaController maps compute_control's return fields. The
+    // integrator IGNORES them — firing branches off into FireControl in the weapons pass, never
+    // through F=ma. `trigger` is level semantics (guns fire while held); `release` may be held
+    // too — FireControl edge-detects per entity, so a stale-repeated input cannot double-fire.
+    bool trigger{false};  // gun trigger
+    bool release{false};  // fire the selected store (missile/bomb/rocket)
+    uint8_t station{255}; // absolute selected station; 255 = keep the current selection
 };
 
 // Per-tick payload summary (computed from current weapon loadout).

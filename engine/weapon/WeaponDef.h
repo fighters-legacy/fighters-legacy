@@ -80,6 +80,8 @@ struct CountermeasureSusceptibility {
 struct WeaponLoad {
     float massKg{0.f};
     float dragFactor{0.f}; // added to the carrier's cd0 while the store is on the rail
+    uint16_t rounds{0};    // shots this load provides: a gun's magazine, a rail's missile count.
+                           // 0 = the engine default (guns 500, everything else 1)
 };
 
 // Immutable definition for one weapon, loaded from a content pack TOML file.

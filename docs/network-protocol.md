@@ -55,7 +55,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `Hello` | `0x00` | server→client | reliable | 4 bytes | Protocol version handshake; first message on every new connection |
 | `ConnectAck` | `0x01` | server→client | reliable | 16 + N×268 bytes | Handshake on connect; assigns entity slot and delivers type registry |
 | `WorldSnapshot` | `0x02` | server→client | unreliable | 24 + origin table + record stream + TLV | Per-tick entity state, unicast per peer; 24-byte header + shared-origin table + a byte-aligned stitched record stream (each record: origin index + a `full` bit) + TLV extension block — see *Quantized entity record* below |
-| `ClientInput` | `0x03` | client→server | unreliable | 48 bytes | Per-frame flight inputs |
+| `ClientInput` | `0x03` | client→server | unreliable | 56 bytes | Per-frame flight inputs + fire intents + selected weapon station |
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
 | `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
 | `AdminCommand` | `0x06` | client→server | reliable | 128 bytes | Operator-authenticated admin command. Additive ID — old servers silently discard. |
@@ -205,9 +205,9 @@ peer's stream. Full field semantics and the quantization constants are in
 `0x04` right-engine, `0x08` compressor stall, `0x10` flameout (last four Phase 6+). Orientation wire
 order is `[x, y, z, w]`; the GLM constructor is `(w, x, y, z)`.
 
-### MsgClientInput — 48 bytes
+### MsgClientInput — 56 bytes
 
-Sent by the client each render frame on the **unreliable channel (channel 1)**. Padded to 48 (a
+Sent by the client each render frame on the **unreliable channel (channel 1)**. Padded to 56 (a
 multiple of 8) for the 8-aligned `tickIndex`. For a continuous 60 Hz control stream, unreliable
 delivery is correct: a dropped packet is superseded by the next frame's input; retransmission would
 delay all subsequent inputs behind the ACK round-trip.
@@ -215,7 +215,7 @@ delay all subsequent inputs behind the ACK round-trip.
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
 | 0 | 1 | `msgId` | `uint8_t` | `0x03` |
-| 1 | 1 | `buttons` | `uint8_t` | Bit 0 = weaponTrigger, bit 1 = afterburner |
+| 1 | 1 | `buttons` | `uint8_t` | Bit 0 = gun trigger (level), bit 1 = afterburner, bit 2 = fire selected store. Fire bits are **intents**: the server's fire control validates station/ammo/rate/weapons-hold and edge-detects bit 2, so holding it is one shot |
 | 2 | 2 | `protocolVersion` | `uint16_t` | Client's `kProtocolVersion`; server discards packet and logs a warning on mismatch |
 | 4 | 4 | `seqNum` | `uint32_t` | Monotonically increasing per-client sequence counter; server applies a half-window comparison to discard out-of-order and duplicate packets |
 | 8 | 8 | `tickIndex` | `uint64_t` | Server `tickIndex` from the client's last received `MsgWorldSnapshot`. Server computes `estimatedDelayTicks = currentTick − tickIndex` for diagnostics, and also uses it as the **snapshot ack** high-water mark (clamped to the current tick), paired with `ackMask` below, that drives client-acked delta baselines — see *Scaling to 128+* |
@@ -225,16 +225,20 @@ delay all subsequent inputs behind the ACK round-trip.
 | 28 | 4 | `rudder` | `float` | `[-1.0, +1.0]` right-yaw positive |
 | 32 | 12 | `viewAxis[3]` | `float[3]` | Normalized camera look direction (world space) |
 | 44 | 4 | `ackMask` | `uint32_t` | Selective-ack bitmask of recently **decoded** snapshot ticks below `tickIndex`: bit `b` = tick `tickIndex − 1 − b` was decoded (`tickIndex` itself is implicitly decoded). Lets the server confirm the specific tick a full record was sent in rather than a high-water mark — see *Scaling to 128+* |
+| 48 | 1 | `selectedStation` | `uint8_t` | **Absolute** selected weapon station index; `255` = keep the current (server-default) selection. Absolute rather than cycle-edges so selection converges under loss on this unreliable channel; the client computes Next/Prev cycling locally and sends the result. Server clamps to the entity's station count |
+| 49 | 3 | `reservedB[3]` | `uint8_t[3]` | Zero |
+| 52 | 4 | `reservedC` | `uint32_t` | Zero (explicit tail padding keeping `sizeof` a multiple of `alignof(uint64_t)`) |
 
 The server clamps all control surface inputs to their valid ranges and normalises `viewAxis` to unit
-length. Packets smaller than 48 bytes are silently discarded. ENet's sequenced unreliable delivery
+length. Packets smaller than 56 bytes are silently discarded. ENet's sequenced unreliable delivery
 provides a first layer of ordering; the application-level `seqNum` guard adds defense-in-depth.
 
 After passing validation the server enqueues each accepted input into a per-peer ring buffer
 (`JitterBuffer`, depth ≤ `[world].jitter_buffer_depth`, default 4 ticks). The buffer is drained
 exactly once per sim tick before the flight integrator is stepped; when the buffer runs empty the
 last drained input is repeated (stale repeat) rather than zeroing controls, preventing coasting
-under transient packet loss. The initial buffer depth per peer is `min(estimatedDelayTicks, maxDepth)`
+under transient packet loss — with **bit 2 masked off** in the repeated copy, so a fire-store
+intent is never manufactured by the loss-concealment path. The initial buffer depth per peer is `min(estimatedDelayTicks, maxDepth)`
 seeded at first input. The depth is then continuously adjusted each tick: an EWMA of
 `estimatedDelayTicks` and an RFC 3550-style inter-arrival jitter estimate drive
 `target = ceil(ewma_delay + k × jitter)`, clamped to `[1, jitter_buffer_depth]`; resize fires only
@@ -637,6 +641,7 @@ Helpers: `fl::findExt`, `fl::readExtValue<T>`, `fl::appendExt<T>`, `fl::appendEx
 | `SnapshotPeerLatency` | `0x0101` | `uint16_t` | `MsgWorldSnapshot` | Receiving peer's estimated one-way latency in ms (`estimatedDelayTicks × 1000 / 60`), capped at 65535. Absent when `estimatedDelayTicks == 0` (e.g. single-player localhost). Stored by `ClientNetEventHandler::snapshotLatencyMs()`; displayed in `FlightHud` as a compact `"42 ms"` indicator. |
 | `SnapshotPeerDelayTicks` | `0x0102` | `uint16_t` | `MsgWorldSnapshot` | Raw `estimatedDelayTicks` (tick count, not ms). Companion to `SnapshotPeerLatency`; avoids the ms-rounding loss inherent in `ticks → ms → ticks` conversion. Used by `ClientPrediction` as the replay-depth signal for client-side prediction. Absent when `estimatedDelayTicks == 0`. |
 | `SnapshotDespawn` | `0x0103` | `uint32_t[]` | `MsgWorldSnapshot` | Indices of entities the receiving peer *knew* that were removed from the sim entirely (kills/despawns) — **not** entities that merely left the interest radius (those rely on the client retention timeout). Variable length = `4 × count`, little-endian; read **per element via `memcpy`** (the payload is unaligned). Omitted when empty. Repeated for `kDespawnRepeatTicks` (≈4) ticks for drop tolerance on the unreliable channel. The client (`ClientNetEventHandler`) applies despawns *before* upserting the same packet's records, so a kill-then-reuse-same-idx resolves to the new entity. Priority/budget scheduler (#516). |
+| `SnapshotEffects` | `0x0104` | packed records | `MsgWorldSnapshot` | Cosmetic weapon effects (#625): tracers, muzzle flashes, launches, impacts, detonations. `kEffectRecordBytes` (22) per record, unaligned little-endian: `type u8` (`EffectType`: 0=WeaponFired, 1=MissileLaunch, 2=Impact, 3=Detonation, 4=NuclearFlash) + `weaponClass u8` (`WeaponType` ordinal) + `srcIdx u32` + `tgtIdx u32` (`0xFFFFFFFF` = none) + `pos f32[3]` (float32 world position — particle precision, not sim precision). Interest-filtered per peer, capped at `kMaxEffectsPerSnapshot` (16) per snapshot. **Unreliable by design**: a dropped packet loses cosmetics, never state — anything that must arrive (kills, stats) travels on the reliable `MsgCombatEvent`. Unknown `type` values must be skipped, never rejected. Omitted when empty. |
 
 **Reserved ranges:**
 - `0x0000`: reserved

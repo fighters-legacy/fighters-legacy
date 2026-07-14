@@ -185,11 +185,15 @@ add_library(engine-weapon STATIC
     weapon/WeaponDefParser.cpp
     weapon/WeaponRegistry.cpp
     weapon/Loadout.cpp
+    weapon/FireControl.cpp
+    weapon/ProjectileSystem.cpp
 )
 target_include_directories(engine-weapon PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-weapon
     PUBLIC  engine-flight   # PayloadEffect is in the defaultPayload() signature
-    PRIVATE engine-entity   # EntityDef::hardpoints, read only
+            platform-hal    # GLM for the projectile point-mass math (#625)
+    PRIVATE engine-entity   # EntityDef::hardpoints, read only; the projectile pool mirrors entities
+            engine-spatial  # contact-fuze broadphase
             tomlplusplus::tomlplusplus
 )
 
@@ -304,6 +308,7 @@ target_link_libraries(engine-net
     PUBLIC  engine-protocol
             engine-compress
             engine-entity
+            engine-weapon    # the fire path: FireControl + ProjectileSystem (#625)
             engine-sensor
             engine-spatial
             engine-job

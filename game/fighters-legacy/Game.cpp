@@ -6,6 +6,7 @@
 #include "Game.h"
 
 #include "CameraInput.h"
+#include "ClientEffectRouter.h"
 #include "ClientNetEventHandler.h"
 #include "DebriefScreen.h"
 #include "FileLogger.h"
@@ -220,6 +221,11 @@ static void registerBuiltinParticlePresets(fl::ParticleSystem& ps) {
     ps.registerPreset("explosion", {200.0f, 1.5f, 15.0f, {1.0f, 0.6f, 0.1f}, {0.4f, 0.2f, 0.1f}, 0.3f, 3.0f, true});
     ps.registerPreset("fire", {120.0f, 2.0f, 8.0f, {1.0f, 0.4f, 0.05f}, {0.6f, 0.1f, 0.0f}, 0.2f, 1.5f, true});
     ps.registerPreset("smoke", {60.0f, 4.0f, 3.0f, {0.4f, 0.4f, 0.4f}, {0.15f, 0.15f, 0.15f}, 0.5f, 3.0f, false});
+    // Weapon effects (#625): short, bright, additive.
+    ps.registerPreset("muzzle_flash",
+                      {400.0f, 0.15f, 12.0f, {1.0f, 0.9f, 0.5f}, {1.0f, 0.5f, 0.1f}, 0.15f, 0.5f, true});
+    ps.registerPreset("impact_sparks", {300.0f, 0.4f, 20.0f, {1.0f, 0.8f, 0.4f}, {0.8f, 0.3f, 0.1f}, 0.1f, 0.3f, true});
+    ps.registerPreset("missile_smoke", {80.0f, 2.5f, 2.0f, {0.8f, 0.8f, 0.8f}, {0.4f, 0.4f, 0.4f}, 0.3f, 1.8f, false});
     ps.registerPreset(
         "rain",
         {100.0f, 1.5f, 40.0f, {0.5f, 0.6f, 0.8f}, {0.3f, 0.4f, 0.6f}, 0.05f, 0.05f, false, {0.0f, -1.0f, 0.0f}, 20.0f});
@@ -314,6 +320,8 @@ struct GameServices {
     bool showPing{false}; // toggled by the show_ping console command
     FlightInputCollector flightInput;
     PrecipitationController precipController;
+    ClientEffectRouter effectRouter;                 // cosmetic weapon effects (#625)
+    std::vector<ParticleEmitterState> frameEmitters; // per-frame scratch: precip + effects
 
     // Screen state machine
     std::unique_ptr<ScreenManager> screenMgr;
@@ -795,6 +803,8 @@ void Game::startGame() {
         d.session.clientHandler->notice = &d.services.serverNotice;
         d.session.clientHandler->wingman = &d.services.wingmanMenu; // check-ins, order acks, relayed calls
         d.session.clientHandler->console = &*d.services.gameConsole;
+        d.session.clientHandler->effects = &d.services.effectRouter; // weapon cosmetics (#625)
+        d.services.effectRouter.reset();                             // no stale effects across sessions
         d.session.clientHandler->motdDisplaySeconds = d.services.userConfig->client().motdDisplayS;
         d.session.clientHandler->sessionFailure = &d.session.sessionFailure;
         d.session.clientNet->setEventHandler(d.session.clientHandler.get());
@@ -1134,9 +1144,14 @@ void Game::run() {
             else
                 d.services.sceneRenderer->setHiddenEntity(0, 0);
 
-            d.services.sceneRenderer->renderFrame(
-                alpha, cam, d.services.env,
-                d.services.precipController.build(d.services.env, cam, d.services.particleSystem));
+            // Merge precipitation with this frame's weapon effects (#625) into one emitter list.
+            auto& emitters = d.services.frameEmitters;
+            emitters.clear();
+            const auto precip = d.services.precipController.build(d.services.env, cam, d.services.particleSystem);
+            emitters.insert(emitters.end(), precip.begin(), precip.end());
+            const auto fx = d.services.effectRouter.buildEmitters(d.services.particleSystem, 1.f / 60.f);
+            emitters.insert(emitters.end(), fx.begin(), fx.end());
+            d.services.sceneRenderer->renderFrame(alpha, cam, d.services.env, emitters);
         }
 
         // Console HUD: entity position widget (toggle_pos). Camera/entity debug now lives in

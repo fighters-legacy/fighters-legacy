@@ -19,6 +19,7 @@
 
 namespace fl {
 
+class ClientEffectRouter;
 class GameConsole;
 class ILogger;
 class ServerNotice;
@@ -52,11 +53,12 @@ struct ClientNetEventHandler : INetworkEventHandler {
     EntityTypeRegistry& registry;
     ILogger& logger;
     INetwork& net;
-    EnvironmentState& env;           // updated on MsgWeatherState
-    GameConsole* console{nullptr};   // optional: server notices are printed here
-    ServerNotice* notice{nullptr};   // optional: server notices shown as screen banner
-    WingmanMenu* wingman{nullptr};   // optional: flight check-in / order acks / relayed radio calls (#610)
-    uint32_t motdDisplaySeconds{15}; // user-configurable; 0 = persistent
+    EnvironmentState& env;                // updated on MsgWeatherState
+    GameConsole* console{nullptr};        // optional: server notices are printed here
+    ServerNotice* notice{nullptr};        // optional: server notices shown as screen banner
+    WingmanMenu* wingman{nullptr};        // optional: flight check-in / order acks / relayed radio calls (#610)
+    ClientEffectRouter* effects{nullptr}; // optional: cosmetic weapon effects (#625) — particles now, audio #631
+    uint32_t motdDisplaySeconds{15};      // user-configurable; 0 = persistent
 
     uint32_t assignedEntityIdx{0};
     uint32_t assignedEntityGen{0};

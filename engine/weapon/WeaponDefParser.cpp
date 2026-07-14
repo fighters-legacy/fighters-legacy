@@ -256,6 +256,13 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
     w.load.dragFactor = req_float(load["drag_factor"], "load.drag_factor");
     require_non_negative(w.load.dragFactor, "load.drag_factor");
 
+    const float rounds = opt_float(load["rounds"], 0.f);
+    if (rounds < 0.f || rounds > 65535.f)
+        throw std::runtime_error("load.rounds must be in [0, 65535]");
+    w.load.rounds = static_cast<uint16_t>(rounds);
+    if (w.load.rounds == 0)
+        w.load.rounds = (w.type == WeaponType::Gun) ? 500 : 1; // the engine default
+
     return w;
 }
 

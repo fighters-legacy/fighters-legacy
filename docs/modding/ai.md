@@ -123,6 +123,14 @@ will behave like it is reading the server's memory — because it is.
 | `afterburner` | boolean | —        | `true` = afterburner on            |
 | `speedbrake`  | number  | `[0,1]`  | `0` = retracted, `1` = fully deployed |
 | `gear_down`   | boolean | —        | `true` = landing gear extended     |
+| `trigger`     | boolean | —        | `true` = hold the gun trigger (level; the server rate-limits) |
+| `release`     | boolean | —        | `true` = fire the selected store (the server edge-detects: holding it is ONE shot) |
+| `weapon_station` | integer | `[0,254]` | Absolute station selection; absent or out-of-range = keep the current selection |
+
+The fire fields are **intents**, not actions: the server's fire control validates station, ammo,
+rate of fire, and any wingman weapons-hold order exactly as it does for a player. A script that
+holds `trigger` forever gets what a trigger-holding player gets — a rate-limited burst until the
+magazine is empty.
 
 ---
 

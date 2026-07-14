@@ -69,9 +69,14 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | Arrow Up / Down | Elevator (pitch) |
 | Arrow Left / Right | Aileron (roll) |
 | Z / X | Rudder left / right |
-| Space | Weapon trigger (bit 0) |
+| Space | Gun trigger (bit 0, level — hold to keep firing, rate-limited server-side) |
 | Tab | Afterburner command (bit 1) |
+| Enter / Right mouse | Fire selected store (bit 2 — edge-detected server-side; holding it is one shot) |
+| 1 / 2 | Cycle weapon station next / previous (local; the wire carries the absolute selection) |
 | C | Open the wingman radio menu (#610) |
+
+While the radio menu is open, Enter and the digit keys belong to the menu — the fire-store bit and
+station cycling are suppressed, the flight axes and gun trigger stay live.
 
 ## Wingman radio menu (C)
 
@@ -88,7 +93,7 @@ a fight. Only the discrete keys the menu consumes are taken; the axes stay live.
 | 2 | `engage_bandits` | Engages hostiles near **itself**, at will; returns to formation when the sky is clear. |
 | 3 | `rejoin` | Returns to formation on you. |
 | 4 | `cover_me` | Engages hostiles closing on **you**, then returns to your wing. (The difference from `engage_bandits` is *whose* threats it reacts to.) |
-| 5 | `hold_fire` | Breaks off and holds station. Sets a weapons-hold flag; an engage order clears it. **The flag has no teeth until weapons land (#583)** — today the flight behavior is the whole effect. |
+| 5 | `hold_fire` | Breaks off and holds station. Sets a weapons-hold flag the server's fire control enforces (#625): the held member's trigger and store releases are read and discarded until an engage order clears the flag. |
 | 6 | `return_to_base` | Disengages and orbits home. (There is no landing system yet.) |
 
 The wingman answers with a brevity call on the HUD. In **single-player you always have one** — the
@@ -114,7 +119,9 @@ deadzone. Deadzone, response curve, inversion, and axis mapping are configured i
 | Aileron (roll) | Right stick X |
 | Rudder (yaw) | Left stick X |
 
-Button bindings for `FireWeapon` and `Afterburner` are configured in the `[alt]` section of `config/bindings.toml` (see the **bindings.toml** section below).
+Button bindings for `FireWeapon`, `FireMissile` (fire selected store), `NextWeapon` / `PrevWeapon`
+(station cycling — D-pad right / left by default), and `Afterburner` are configured in the `[alt]`
+section of `config/bindings.toml` (see the **bindings.toml** section below).
 
 ## `config/bindings.toml`
 

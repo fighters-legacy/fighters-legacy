@@ -325,6 +325,7 @@ between a loadout and the flight model.
 |---|---|---|
 | `weight_lb` | float | Store mass; must be `> 0` |
 | `drag_factor` | float | Added to the carrier's `cd0` while the store is on the rail |
+| `rounds` | integer | Optional shots per station (default `1`; guns typically hundreds). A gun's magazine or a rail's missile count — the live loadout counts it down as the station fires |
 
 ```toml
 # weapons/aim120c.toml — Active-radar air-to-air missile

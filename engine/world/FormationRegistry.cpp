@@ -243,4 +243,18 @@ void FormationRegistry::clear() noexcept {
     m_nextId = 1;
 }
 
+bool FormationRegistry::weaponsHoldFor(EntityId entity) const noexcept {
+    const auto mit = m_memberIndex.find(entity.index);
+    if (mit == m_memberIndex.end())
+        return false;
+    const auto fit = m_formations.find(mit->second);
+    if (fit == m_formations.end())
+        return false;
+    for (const FormationMember& m : fit->second.members) {
+        if (m.id == entity)
+            return m.weaponsHold;
+    }
+    return false;
+}
+
 } // namespace fl

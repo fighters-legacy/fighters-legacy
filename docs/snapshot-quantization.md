@@ -44,12 +44,13 @@ origin-index varint into that table.
 | orientation | 2-bit dropped-component index + 3 × `kQuatBits` (10) — smallest-three |
 | velocity | 3 × `kVelBits` (18), range ± `kVelMaxMps` (2000) |
 | omega | 3 × `kOmegaBits` (12), range ± `kOmegaMaxRadS` (20), only if `omegaPresent` |
+| loadout block | 64 bits, only if `omegaPresent` (#625): `selectedStation`(8) + `stationRounds`(16) + `weaponFlags`(8, bit 0 = seeker locked) + `payloadMassKg`(16, 1 kg steps, clamped [0, 65535]) + `payloadCd0`(16, 1e-5 steps, clamped [0, 0.65535]) |
 | byte fields | `damageLevel`(3) + `engineFailFlags`(5) + `throttle`(7) + `fuelPct`(7) + `abEngaged`(1) + `playerOwned`(1) |
 | padding | zero bits to the next byte boundary (so the next record's `originIndex` starts on a byte) |
 
 Constants live in `engine/net/SnapshotCodec.h` and are tuned against the bot_swarm
 `downstream_kbs_per_client` metric. Representative blob sizes: a steady-state delta blob is
-**24 bytes**, a full own-entity blob (typeIndex + gen + omega) is **31 bytes**; the stitched record
+**24 bytes**, a full own-entity blob (typeIndex + gen + omega + loadout) is **39 bytes**; the stitched record
 adds the origin-index varint (1 byte for a small index). These blob sizes are locked by a golden-bytes
 test in `test_snapshot_codec`. The encode-once trade adds a small per-record overhead (origin index +
 byte alignment) plus the per-snapshot origin table in exchange for O(entities) encode instead of
@@ -73,6 +74,13 @@ O(peers × visible).
 - **Omega only for the own entity.** Body-frame angular rates are consumed solely by client-side
   prediction reconciliation, which only runs for the player's own entity. Every other record omits
   them.
+- **Loadout rides the same own-record bit (#625).** Selection, rounds, weapon flags, and the LIVE
+  payload (mass + drag of what is still on the rails) matter only to the owning client — the HUD
+  weapon line and `ClientPrediction`, which re-resolves its `PayloadEffect` from the record so a
+  released store changes client-predicted physics the same tick it changes the server's. Other
+  peers see stores as spawned projectile entities, not as loadout state. Reusing the `omegaPresent`
+  gate costs no new flag bit; the per-type static payload in `MsgEntityTypeDef` remains only as the
+  pre-first-snapshot fallback.
 - **Generation only when it changes.** In steady state an entity's generation never changes, so the
   16-bit field is replaced by a single `genPresent = 0` bit; the client reuses its cache. A
   generation change is, by construction, classified as a `full` record on the server.

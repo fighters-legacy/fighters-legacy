@@ -19,6 +19,8 @@
 #include "perf/TickProfiler.h"
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
+#include "weapon/FireControl.h"      // per-entity fire state + request emission (#625)
+#include "weapon/ProjectileSystem.h" // the projectile pool (#625)
 #include "world/FormationRegistry.h" // the formation / command tree (#610)
 
 #include <glm/vec3.hpp> // glm::dvec3 (ground-elevation query — radial floor #477)
@@ -73,9 +75,10 @@ struct PeerInputState {
     uint32_t lastSeqNum{0};          // seqNum of last accepted input
     uint32_t estimatedDelayTicks{0}; // one-way delay in sim ticks (derived from tickIndex)
     // 1-byte fields last.
-    uint8_t buttons{0};     // last drained value
-    bool hasSeq{false};     // false until first input received from this peer
-    bool ewmaSeeded{false}; // false until EWMA receives its first sample
+    uint8_t buttons{0};           // last drained value
+    uint8_t selectedStation{255}; // last drained absolute station selection (#625); 255 = none
+    bool hasSeq{false};           // false until first input received from this peer
+    bool ewmaSeeded{false};       // false until EWMA receives its first sample
     // Jitter buffer: initialized to depth 1; sized from estimatedDelayTicks on first input,
     // then continuously adjusted by the adaptive resize loop in WorldBroadcaster::onTick.
     JitterBuffer jitterBuffer{1};
@@ -122,7 +125,9 @@ struct ControlledEntity {
     bool decimatable{false};    // AI/scripted entity whose sample() may be skipped under overrun; players never
     ControlInput lastInput{};   // last sampled control input, reused on a decimated (skipped) AI tick
     bool lastInputValid{false}; // false until the first sample() — forces a sample on the entity's first tick
-    PayloadEffect payload{};    // what the default loadout costs this airframe (#812); resolved once at spawn
+    PayloadEffect payload{};    // what the CURRENT loadout costs this airframe; starts at the #812
+                                // default and shrinks as stores release (#625)
+    FireState fire{};           // stations, ammo, edge/rate state (#625); empty when no registry/hardpoints
 };
 
 // Pre-start scalar configuration. Bundles the init-time setters so callers configure rate limiting,
@@ -637,6 +642,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // reads (#625) — never a back door for controllers, which see the world through AiTickContext.
     [[nodiscard]] const FlightIntegrator* integratorFor(uint32_t entityIdx) const noexcept;
 
+    // The weapon vocabulary (#625). Main-thread, before gameLoop.start(); the registry outlives
+    // the broadcaster (fl-server main-scope, like the type registry). Null = the fire path is off:
+    // trigger intent is read and discarded, exactly the pre-#583 behavior. Also arms the
+    // projectile pool with the registry + the current gravity field.
+    void setWeaponRegistry(const WeaponRegistry* weapons) noexcept;
+
     // Detonate a warhead at a world position (#356): blast damage with linear falloff through
     // applyPointDamage (so the friendly-fire gate holds inside a blast), and — when nuclear — the
     // EMP ring wired to SensorSystem::setAvionicsFailed. Every warhead consumer (proximity fuzes,
@@ -736,6 +747,28 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // EntityId.index -> {sim, controller}. Replaces the old peerId-keyed flight-sim map: any control
     // source (peer, AI, script) registers here and is stepped uniformly in onTick.
     std::unordered_map<uint32_t, ControlledEntity> m_controlledEntities;
+
+    // ── the fire path (#625) — sim-thread only ──────────────────────────────
+    const WeaponRegistry* m_weaponRegistry{nullptr};
+    ProjectileSystem m_projectileSystem;
+    std::vector<FireRequest> m_fireRequests;     // scratch, cleared each tick
+    std::vector<ProjectileImpact> m_tickImpacts; // scratch, cleared each tick
+    uint8_t m_currentWeaponClass{0xFF};          // WeaponType ordinal for kill attribution while a
+                                                 // weapon damage call is on the stack
+    // Cosmetic effect events for this tick's snapshots (unreliable, interest-filtered per peer,
+    // capped). Filled by the weapons pass, read-only in the parallel peer pass, cleared next tick.
+    struct EffectRecord {
+        uint8_t type{0}; // EffectType (GameProtocol.h)
+        uint8_t weaponClass{0xFF};
+        uint32_t srcIdx{0xFFFFFFFFu};
+        uint32_t tgtIdx{0xFFFFFFFFu};
+        float pos[3]{};
+    };
+    std::vector<EffectRecord> m_tickEffects;
+    void runWeaponsPass(double simDt, uint64_t tickIndex);
+    void executeFireRequest(const FireRequest& req, uint64_t tickIndex);
+    void resolveHitscan(const FireRequest& req, const WeaponDef& def, uint64_t tickIndex);
+    void queueEffect(uint8_t type, uint8_t weaponClass, uint32_t srcIdx, uint32_t tgtIdx, const double pos[3]);
 
     // ── combat scoring + kill feed (#626) — sim-thread only ─────────────────
     struct PeerScore {

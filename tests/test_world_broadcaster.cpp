@@ -18,6 +18,9 @@
 #include "net/WireCodec.h"
 #include "net/WorldBroadcaster.h"
 #include "render/RenderSnapshot.h"
+#include "weapon/ProjectileSystem.h"
+#include "weapon/WeaponDefParser.h"
+#include "weapon/WeaponRegistry.h"
 #include "weather/WeatherController.h"
 
 #include "mock_network.h"
@@ -8016,4 +8019,212 @@ TEST_CASE("WorldBroadcaster: applyWarheadAt damages through the pipeline and EMP
     fl::BlastSpec he{100.f, 50.f, false};
     broadcaster.applyWarheadAt(close, he, fl::EntityId::null());
     CHECK(em.get(player)->hp < 100.f);
+}
+
+// ---------------------------------------------------------------------------
+// The fire path (#625): trigger bit -> weapons pass -> hitscan/projectile -> effects TLV
+// ---------------------------------------------------------------------------
+
+namespace {
+
+const char* kFpGunToml = R"toml(
+[weapon]
+id       = "fp:gun"
+name     = "FP Gun"
+type     = "gun"
+category = "air-to-air"
+[performance]
+max_range_nm     = 0.6
+rate_of_fire_rpm = 1200
+[warhead]
+blast_radius_ft = 3
+damage          = 8
+[load]
+weight_lb   = 300
+drag_factor = 0
+rounds      = 50
+)toml";
+
+const char* kFpMissileToml = R"toml(
+[weapon]
+id       = "fp:aim"
+name     = "FP Missile"
+type     = "missile"
+category = "air-to-air"
+[seeker]
+type            = "ir"
+sensor_id       = "fp:seeker"
+fire_and_forget = true
+[performance]
+max_range_nm      = 9
+min_range_nm      = 0.3
+max_speed_kts     = 1500
+motor_burn_time_s = 5
+max_g             = 20
+[warhead]
+blast_radius_ft = 30
+damage          = 60
+[load]
+weight_lb   = 190
+drag_factor = 0.001
+)toml";
+
+// The debug entity, armed: a gun on station 0 and one missile on station 1 (the C8 sandbox arming,
+// in miniature). Same type id, so onConnect's spawn picks it up.
+fl::EntityDef makeArmedDebugDef() {
+    fl::EntityDef def = makeDebugDef();
+    fl::Hardpoint gun;
+    gun.slot = 0;
+    gun.type = fl::HardpointType::Gun;
+    gun.allowed = {"fp:gun"};
+    gun.defaultWeapon = "fp:gun";
+    fl::Hardpoint rail;
+    rail.slot = 1;
+    rail.type = fl::HardpointType::Missile;
+    rail.allowed = {"fp:aim"};
+    rail.defaultWeapon = "fp:aim";
+    def.hardpoints = {gun, rail};
+    return def;
+}
+
+struct DecodedEffect {
+    uint8_t type{0};
+    uint8_t weaponClass{0};
+    uint32_t srcIdx{0};
+    uint32_t tgtIdx{0};
+    float pos[3]{};
+};
+
+// Read the SnapshotEffects TLV (packed 22-byte records, unaligned) from a snapshot packet.
+std::vector<DecodedEffect> decodeEffects(const std::vector<uint8_t>& pkt) {
+    std::vector<DecodedEffect> out;
+    fl::MsgWorldSnapshotHeader hdr = parseSnapshotHeader(pkt);
+    const std::size_t extOffset =
+        sizeof(hdr) + static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
+    if (pkt.size() <= extOffset)
+        return out;
+    uint16_t valueLen{};
+    const uint8_t* p = fl::findExt(pkt.data() + extOffset, pkt.size() - extOffset,
+                                   static_cast<uint16_t>(fl::ExtTag::SnapshotEffects), valueLen);
+    if (!p)
+        return out;
+    for (uint16_t i = 0; i + fl::kEffectRecordBytes <= valueLen; i += fl::kEffectRecordBytes) {
+        DecodedEffect e;
+        e.type = p[i + 0];
+        e.weaponClass = p[i + 1];
+        std::memcpy(&e.srcIdx, p + i + 2, 4u);
+        std::memcpy(&e.tgtIdx, p + i + 6, 4u);
+        std::memcpy(e.pos, p + i + 10, 12u);
+        out.push_back(e);
+    }
+    return out;
+}
+
+bool hasEffect(const std::vector<DecodedEffect>& fx, fl::EffectType t) {
+    return std::any_of(fx.begin(), fx.end(), [&](const DecodedEffect& e) { return e.type == static_cast<uint8_t>(t); });
+}
+
+} // namespace
+
+TEST_CASE("WorldBroadcaster: the trigger bit fires the gun -- damage lands and effects replicate",
+          "[world_broadcaster][firepath]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeArmedDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(fl::parseWeaponDef(kFpGunToml));
+    weapons.registerWeapon(fl::parseWeaponDef(kFpMissileToml));
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setWeaponRegistry(&weapons);
+    broadcaster.onConnect(0u); // spawns the armed peer, identity orientation: bore = +X
+    const auto ack = parseSendAck(net);
+    const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(shooter != nullptr);
+
+    // A victim dead ahead of wherever the peer actually spawned, well inside the gun's reach and
+    // its 8 m hit radius.
+    fl::EntityTransform vt{};
+    vt.pos[0] = shooter->transform.pos[0] + 100.0;
+    vt.pos[1] = shooter->transform.pos[1];
+    vt.pos[2] = shooter->transform.pos[2];
+    vt.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
+
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.buttons = 0x01u; // gun trigger
+    inp.selectedStation = 255u;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    const fl::EntityState* vs = em.get(victim);
+    REQUIRE(vs != nullptr);
+    CHECK(vs->hp == 92.f); // one 8-damage round connected
+
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto fx = decodeEffects(snapshotsFor(net, 0).back());
+    CHECK(hasEffect(fx, fl::EffectType::WeaponFired)); // tracer at the muzzle
+    CHECK(hasEffect(fx, fl::EffectType::Impact));      // and the hit itself
+}
+
+TEST_CASE("WorldBroadcaster: store release spawns ONE replicated projectile; stale repeat never re-fires",
+          "[world_broadcaster][firepath]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeArmedDebugDef());
+
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(fl::parseWeaponDef(kFpGunToml));
+    const uint32_t aimIdx = weapons.registerWeapon(fl::parseWeaponDef(kFpMissileToml));
+
+    // The projectile's pooled entity type, registered up front because MsgEntityTypeDef only travels
+    // in ConnectAck (the ContentBootstrap startup job, in miniature).
+    fl::EntityDef proj;
+    proj.id = fl::projectileTypeId(*weapons.byIndex(aimIdx));
+    proj.name = "proj";
+    proj.category = fl::ObjectCategory::Projectile;
+    proj.maxHp = 1.f;
+    const uint32_t projType = registry.registerType(proj);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setWeaponRegistry(&weapons);
+    broadcaster.onConnect(0u);
+
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.buttons = 0x04u;        // fire selected store
+    inp.selectedStation = 255u; // keep the default selection (the missile rail)
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    CHECK(em.liveCount() == 2u); // the peer and its missile
+    CHECK(hasEffect(decodeEffects(snapshotsFor(net, 0).back()), fl::EffectType::MissileLaunch));
+
+    // No further input arrives: the jitter buffer stale-repeats the last controls with the fire bit
+    // masked, and the edge detector never sees a new press. One press, one missile.
+    for (uint64_t t = 2; t <= 5; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+    CHECK(em.liveCount() == 2u);
+
+    // The projectile replicates like any entity: some snapshot after the spawn carries a FULL record
+    // with its type index.
+    bool sawProjectile = false;
+    for (const auto& pkt : snapshotsFor(net, 0)) {
+        for (const DecodedEntity& e : decodeEntities(pkt)) {
+            if (e.isFull && e.typeIndex == projType)
+                sawProjectile = true;
+        }
+    }
+    CHECK(sawProjectile);
 }

@@ -37,6 +37,15 @@ uint32_t registerPackEntityDefs(AssetManager& assets, EntityTypeRegistry& regist
 // Main thread, before GameLoop::start(). Returns the number of weapons registered.
 uint32_t registerPackWeaponDefs(AssetManager& assets, WeaponRegistry& registry, ILogger& log);
 
+// Registers a projectile ENTITY type ("projectile:<weapon id>", ObjectCategory::Projectile) for
+// every flyable weapon in the registry — missiles, rockets, bombs (#625). Guns are hitscan and get
+// none. This must happen at startup because MsgEntityTypeDef travels ONLY in ConnectAck: a type
+// registered after a client connects would reach it as an unresolvable typeIndex, and the client
+// would render nothing where a missile is. The projectile's mesh is the weapon's `mesh` asset name
+// (empty = builtin placeholder); its radar signature is small (a missile is a hard radar target to
+// SEE, not to hit). Main thread, before GameLoop::start(). Returns the number registered.
+uint32_t registerProjectileEntityDefs(const WeaponRegistry& weapons, EntityTypeRegistry& registry, ILogger& log);
+
 // Builds the resolver WorldBroadcaster calls on the spawn path to turn an EntityDef::sensorIds entry
 // into a parsed SensorDef (#685), routed through ContentIndex (#810).
 //

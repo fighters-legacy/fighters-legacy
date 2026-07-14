@@ -1035,3 +1035,147 @@ TEST_CASE("FlightInputCollector readButton None alt binding does not set fire bi
     CHECK((r->buttons & 1u) == 0u);
     CHECK_FALSE(fic.wasWeaponFired());
 }
+
+// ---------------------------------------------------------------------------
+// Fire-store bit + weapon-station selection (#625)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("FlightInputCollector Enter and MouseRight set the fire-store bit", "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    inp.held.insert(Key::Enter);
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+
+    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r.has_value());
+    CHECK((r->buttons & 0x04u) != 0u);
+    CHECK(r->selectedStation == 255u); // no station count set: selection stays "keep"
+
+    inp.held.clear();
+    inp.mouseDown.insert(MouseButton::Right);
+    t.advance(std::chrono::milliseconds(17));
+    auto r2 = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r2.has_value());
+    CHECK((r2->buttons & 0x04u) != 0u);
+}
+
+TEST_CASE("FlightInputCollector station cycling is edge-triggered, wraps, and is absolute on the wire",
+          "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+    fic.setStationCount(3);
+
+    // First Next press: 255 ("keep the server default") lands on station 0 — a deliberate cycle is
+    // the ONLY thing that replaces the sentinel.
+    inp.held.insert(Key::Num1);
+    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r.has_value());
+    CHECK(r->selectedStation == 0u);
+
+    // Held across the next poll: no new edge, no further cycling.
+    t.advance(std::chrono::milliseconds(17));
+    r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r.has_value());
+    CHECK(r->selectedStation == 0u);
+
+    // Release + press again: 0 -> 1, then 1 -> 2.
+    inp.held.clear();
+    t.advance(std::chrono::milliseconds(17));
+    fic.poll(bridge, cam, console, inp, nullptr, {});
+    inp.held.insert(Key::Num1);
+    t.advance(std::chrono::milliseconds(17));
+    r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    CHECK(r->selectedStation == 1u);
+    inp.held.clear();
+    t.advance(std::chrono::milliseconds(17));
+    fic.poll(bridge, cam, console, inp, nullptr, {});
+    inp.held.insert(Key::Num1);
+    t.advance(std::chrono::milliseconds(17));
+    r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    CHECK(r->selectedStation == 2u);
+
+    // Prev wraps: 2 -> 1 -> 0 -> 2 would take three presses; go straight around from 2 via Next.
+    inp.held.clear();
+    t.advance(std::chrono::milliseconds(17));
+    fic.poll(bridge, cam, console, inp, nullptr, {});
+    inp.held.insert(Key::Num1);
+    t.advance(std::chrono::milliseconds(17));
+    r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    CHECK(r->selectedStation == 0u); // Next wrapped 2 -> 0
+
+    // And Prev wraps the other way: 0 -> 2.
+    inp.held.clear();
+    t.advance(std::chrono::milliseconds(17));
+    fic.poll(bridge, cam, console, inp, nullptr, {});
+    inp.held.insert(Key::Num2);
+    t.advance(std::chrono::milliseconds(17));
+    r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    CHECK(r->selectedStation == 2u);
+}
+
+TEST_CASE("FlightInputCollector uiFocused gates the discrete weapon keys but leaves flight axes live",
+          "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    inp.held.insert(Key::Enter);
+    inp.held.insert(Key::Num1);
+    inp.held.insert(Key::ArrowUp);
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+    fic.setStationCount(3);
+
+    // The radio menu is open (#610): its picks are the digit keys, and a confirm-style key must not
+    // release a store. The aircraft still flies.
+    auto r = fic.poll(bridge, cam, console, inp, nullptr, {}, /*uiFocused=*/true);
+    REQUIRE(r.has_value());
+    CHECK((r->buttons & 0x04u) == 0u);
+    CHECK(r->selectedStation == 255u);
+    CHECK(r->elevator == -1.f);
+}
+
+TEST_CASE("FlightInputCollector gamepad FireMissile and D-pad cycling reach the wire", "[flight_input]") {
+    MockLogger log;
+    CommandRegistry reg;
+    GameConsole console(log, reg);
+    MockInput inp;
+    inp.gamepadCount = 1;
+    CameraInput cam;
+    fl::SimRenderBridge bridge;
+    FlightInputCollector fic;
+    fl::ManualClock t;
+    fic.setClock(t);
+    fic.setStationCount(2);
+
+    // Alt defaults (#625 fixed the collision): FireMissile, NextWeapon=DpadRight, PrevWeapon=DpadLeft.
+    fl::InputBindings b;
+    const fl::Binding fireB = b.get(fl::InputAction::FireMissile, /*alt=*/true);
+    const fl::Binding nextB = b.get(fl::InputAction::NextWeapon, /*alt=*/true);
+    REQUIRE(fireB.source == fl::BindingSource::GamepadButton);
+    REQUIRE(nextB.source == fl::BindingSource::GamepadButton);
+    CHECK(static_cast<GamepadButton>(nextB.id) == GamepadButton::DpadRight);
+
+    inp.gpDown.insert({0, static_cast<GamepadButton>(fireB.id)});
+    inp.gpDown.insert({0, static_cast<GamepadButton>(nextB.id)});
+    auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
+    REQUIRE(r.has_value());
+    CHECK((r->buttons & 0x04u) != 0u);
+    CHECK(r->selectedStation == 0u); // first deliberate cycle replaces the "keep" sentinel with 0
+}

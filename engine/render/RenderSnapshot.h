@@ -33,6 +33,14 @@ struct EntityRenderEntry {
     bool abEngaged{false};      // true when afterburner physically lit (FlightState::ab_engaged)
     uint8_t engineFailFlags{0}; // fl::kEngineFail* bitmask
     glm::vec3 omega{};          // body-frame angular rates p,q,r (rad/s); from wire; used by client-side prediction
+
+    // ── own-record loadout (#625) — meaningful only on the receiving peer's own entry ─────────
+    bool hasLoadout{false};       // true when the record carried the own-entity loadout block
+    uint8_t selectedStation{255}; // 255 = none; drives the HUD weapon line
+    uint16_t stationRounds{0};    // rounds on the selected station
+    uint8_t weaponFlags{0};       // bit 0 = seeker locked (#628)
+    float payloadMassKg{0.f};     // live store mass — ClientPrediction re-resolves from this
+    float payloadCd0{0.f};        // live store drag
 };
 
 // Full entity-world snapshot published by the sim thread once per tick.

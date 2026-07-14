@@ -600,10 +600,12 @@ void InputBindings::applyDefaults() {
                                                         static_cast<uint32_t>(GamepadButton::RightShoulder), false};
     m_alt[static_cast<int>(InputAction::FireMissile)] = {BindingSource::GamepadButton,
                                                          static_cast<uint32_t>(GamepadButton::LeftTrigger), false};
+    // D-pad, NOT the shoulders: RightShoulder is FireWeapon and LeftShoulder is Afterburner above,
+    // and a default that fires the gun every time you cycle weapons is a defect, not a binding (#625).
     m_alt[static_cast<int>(InputAction::NextWeapon)] = {BindingSource::GamepadButton,
-                                                        static_cast<uint32_t>(GamepadButton::RightShoulder), false};
+                                                        static_cast<uint32_t>(GamepadButton::DpadRight), false};
     m_alt[static_cast<int>(InputAction::PrevWeapon)] = {BindingSource::GamepadButton,
-                                                        static_cast<uint32_t>(GamepadButton::LeftShoulder), false};
+                                                        static_cast<uint32_t>(GamepadButton::DpadLeft), false};
     m_alt[static_cast<int>(InputAction::LandingGear)] = {BindingSource::GamepadButton,
                                                          static_cast<uint32_t>(GamepadButton::DpadDown), false};
     m_alt[static_cast<int>(InputAction::Airbrake)] = {BindingSource::GamepadButton,

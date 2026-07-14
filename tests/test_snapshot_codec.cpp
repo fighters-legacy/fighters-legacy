@@ -379,9 +379,9 @@ TEST_CASE("SnapshotCodec: deterministic encoding and locked blob sizes", "[snaps
     // Deterministic: identical bytes (locks the wire layout against accidental drift).
     CHECK(b1 == b2);
     // Locked blob size for this field set (absIdx=8b + flags=3 + gen=16 + type=8 + pos=66 + quat=32 +
-    // vel=54 + omega=36 + bytefields=24 = 247 bits => 31 bytes). The stitched record adds the origin
-    // index varint (1 byte for a small index).
-    CHECK(b1.size() == 31u);
+    // vel=54 + omega=36 + bytefields=24 + loadout=64 [#625: own-record block rides the omega bit]
+    // = 311 bits => 39 bytes). The stitched record adds the origin index varint (1 byte).
+    CHECK(b1.size() == 39u);
 
     fl::QuantEntity delta;
     delta.idx = 11;

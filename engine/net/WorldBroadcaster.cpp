@@ -62,6 +62,11 @@ class PeerController final : public fl::IEntityController {
         ctrl.aileron = m_input->aileron;
         ctrl.rudder = m_input->rudder;
         ctrl.afterburner = (m_input->buttons & 0x02u) != 0; // bit 1 per MsgClientInput::buttons
+        // Fire intent (#625): the bit that used to die right here. Level semantics both — the
+        // weapons pass (FireControl) owns edge detection and rate limiting per entity.
+        ctrl.trigger = (m_input->buttons & 0x01u) != 0;
+        ctrl.release = (m_input->buttons & 0x04u) != 0;
+        ctrl.station = m_input->selectedStation;
         return ctrl;
     }
 
@@ -315,6 +320,9 @@ void WorldBroadcaster::setAdminAuthParams(int maxFailures, int lockoutSeconds) {
 void WorldBroadcaster::setGravityField(const IGravityField& field, float planetRadiusKm) noexcept {
     m_gravity = &field;
     m_planetRadiusKm = planetRadiusKm;
+    // Projectiles fall in the same field as everything else (#625). Re-armed here so the
+    // setWeaponRegistry/setGravityField call order does not matter.
+    m_projectileSystem.configure(m_weaponRegistry, m_gravity);
 }
 
 void WorldBroadcaster::setGroundElevationQuery(std::function<float(glm::dvec3)> fn) {
@@ -522,6 +530,14 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             ps.aileron = bi.aileron;
             ps.rudder = bi.rudder;
             ps.buttons = bi.buttons;
+            ps.selectedStation = bi.selectedStation;
+        } else {
+            // Stale-repeat keeps the FLIGHT controls (prevents coasting under loss), but must not
+            // keep re-asserting the store-release bit: FireControl edge-detects, so a held bit is
+            // one shot — unless the buffer starves right after the release frame, when the repeat
+            // would look like a fresh press next time real input resumes. Masking it off makes a
+            // starved tick read as trigger-off, which is the safe reading of silence (#625).
+            ps.buttons &= static_cast<uint8_t>(~0x04u);
         }
     }
 
@@ -765,6 +781,18 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             applyPointDamage(m_entityManager, it.ce->id, damage, EntityId::null(), m_damageRules);
     }
 
+    // Weapons phase (#625): fire intents → hitscan/spawn, projectile flight, detonations. Serial
+    // by design (spawn/kill/applyDamage all fire handlers), after the integrate pass so shots
+    // originate from this tick's positions, before EntityManager::onTick so a same-tick kill reaps
+    // on schedule.
+    {
+        const auto tWeapStart = m_clock->now();
+        m_tickEffects.clear();
+        runWeaponsPass(simDt, tickIndex);
+        m_tickProfiler.addPhaseSample(TickPhase::Weapons,
+                                      std::chrono::duration<double, std::milli>(m_clock->now() - tWeapStart).count());
+    }
+
     // Cache the representative entity XZ for main-thread terrain streaming (single-player).
     updateTerrainSteerCache();
 
@@ -830,6 +858,12 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         uint8_t abEngaged;
         uint8_t engineFailFlags;
         float omega[3]; // body-frame angular rates p,q,r (rad/s)
+        // Own-record loadout extras (#625) — consumed only when this entity is the receiving peer's.
+        uint8_t selectedStation{255};
+        uint16_t stationRounds{0};
+        uint8_t weaponFlags{0};
+        float payloadMassKg{0.f};
+        float payloadCd0{0.f};
     };
     std::unordered_map<uint32_t, EntitySnap> snapMap;
     snapMap.reserve(m_spatialIndex.entityCount());
@@ -839,13 +873,22 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         if (static_cast<uint8_t>(state.damageLevel) >= 2u)
             efFlags |= fl::kEngineFailGeneric;
         const float* omegaPtr = (tit != entityTelemetry.end()) ? tit->second.omega : nullptr;
-        snapMap[state.id.index] = {
-            &state,
-            (tit != entityTelemetry.end()) ? tit->second.throttle : uint8_t{0},
-            (tit != entityTelemetry.end()) ? tit->second.fuelPct : uint8_t{0},
-            (tit != entityTelemetry.end()) ? tit->second.abEngaged : uint8_t{0},
-            efFlags,
-            {omegaPtr ? omegaPtr[0] : 0.f, omegaPtr ? omegaPtr[1] : 0.f, omegaPtr ? omegaPtr[2] : 0.f}};
+        EntitySnap snap{&state,
+                        (tit != entityTelemetry.end()) ? tit->second.throttle : uint8_t{0},
+                        (tit != entityTelemetry.end()) ? tit->second.fuelPct : uint8_t{0},
+                        (tit != entityTelemetry.end()) ? tit->second.abEngaged : uint8_t{0},
+                        efFlags,
+                        {omegaPtr ? omegaPtr[0] : 0.f, omegaPtr ? omegaPtr[1] : 0.f, omegaPtr ? omegaPtr[2] : 0.f}};
+        if (auto cit = m_controlledEntities.find(state.id.index);
+            cit != m_controlledEntities.end() && !cit->second.fire.loadout.empty()) {
+            const LoadoutState& lo = cit->second.fire.loadout;
+            snap.selectedStation = lo.selected;
+            if (lo.selected < lo.stations.size())
+                snap.stationRounds = lo.stations[lo.selected].rounds;
+            snap.payloadMassKg = lo.payloadMassKg;
+            snap.payloadCd0 = lo.payloadCd0;
+        }
+        snapMap[state.id.index] = snap;
     });
 
     // Encode-once (#725): quantize + bit-pack each live entity ONCE this tick, relative to its shared
@@ -1151,6 +1194,12 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                     qe.fuelPct = snap.fuelPct;
                     qe.abEngaged = snap.abEngaged != 0u;
                     qe.playerOwned = state.playerOwned;
+                    // Own-record loadout block (#625) — gated by the same hasOmega bit.
+                    qe.selectedStation = snap.selectedStation;
+                    qe.stationRounds = snap.stationRounds;
+                    qe.weaponFlags = snap.weaponFlags;
+                    qe.payloadMassKg = snap.payloadMassKg;
+                    qe.payloadCd0 = snap.payloadCd0;
                     originForPos(qe.pos, recOrigin);
                     ownBlob.clear();
                     encodeStandaloneRecord(ownBlob, qe, recOrigin, /*sendGen=*/isFull);
@@ -1214,6 +1263,36 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 }
                 appendExtRaw(buf, static_cast<uint16_t>(ExtTag::SnapshotDespawn), ids.data(),
                              static_cast<uint16_t>(ids.size() * sizeof(uint32_t)));
+            }
+            // Cosmetic weapon effects (#625): this tick's events within the peer's interest radius,
+            // capped. Read-only over the shared m_tickEffects (built serially in the weapons pass),
+            // packed byte-serially into the unaligned TLV payload — parallel-safe, worker owns buf.
+            if (!m_tickEffects.empty() && peerState && !peerState->dead) {
+                std::vector<uint8_t> fx;
+                fx.reserve(std::min(m_tickEffects.size(), kMaxEffectsPerSnapshot) * kEffectRecordBytes);
+                const double er2 = govInterestRadiusM * govInterestRadiusM;
+                std::size_t emitted = 0;
+                for (const EffectRecord& e : m_tickEffects) {
+                    if (emitted >= kMaxEffectsPerSnapshot)
+                        break;
+                    const double dx = static_cast<double>(e.pos[0]) - peerState->transform.pos[0];
+                    const double dy = static_cast<double>(e.pos[1]) - peerState->transform.pos[1];
+                    const double dz = static_cast<double>(e.pos[2]) - peerState->transform.pos[2];
+                    if (dx * dx + dy * dy + dz * dz > er2)
+                        continue;
+                    const std::size_t at = fx.size();
+                    fx.resize(at + kEffectRecordBytes);
+                    uint8_t* p = fx.data() + at;
+                    p[0] = e.type;
+                    p[1] = e.weaponClass;
+                    std::memcpy(p + 2, &e.srcIdx, 4);
+                    std::memcpy(p + 6, &e.tgtIdx, 4);
+                    std::memcpy(p + 10, e.pos, 12);
+                    ++emitted;
+                }
+                if (!fx.empty())
+                    appendExtRaw(buf, static_cast<uint16_t>(ExtTag::SnapshotEffects), fx.data(),
+                                 static_cast<uint16_t>(fx.size()));
             }
             // Snapshot payload compression (#775): zstd the fully-assembled payload (origin table +
             // record stream + TLV block) in place, still inside the parallel per-peer region — the
@@ -1486,6 +1565,153 @@ WarheadResult WorldBroadcaster::applyWarheadAt(const double pos[3], const BlastS
                         [this](EntityId victim) { m_sensorSystem.setAvionicsFailed(victim.index); });
 }
 
+void WorldBroadcaster::setWeaponRegistry(const WeaponRegistry* weapons) noexcept {
+    m_weaponRegistry = weapons;
+    m_projectileSystem.configure(weapons, m_gravity ? m_gravity : &CentralGravityField::earthInstance());
+}
+
+void WorldBroadcaster::queueEffect(uint8_t type, uint8_t weaponClass, uint32_t srcIdx, uint32_t tgtIdx,
+                                   const double pos[3]) {
+    EffectRecord e;
+    e.type = type;
+    e.weaponClass = weaponClass;
+    e.srcIdx = srcIdx;
+    e.tgtIdx = tgtIdx;
+    e.pos[0] = static_cast<float>(pos[0]);
+    e.pos[1] = static_cast<float>(pos[1]);
+    e.pos[2] = static_cast<float>(pos[2]);
+    m_tickEffects.push_back(e);
+}
+
+void WorldBroadcaster::resolveHitscan(const FireRequest& req, const WeaponDef& def, uint64_t tickIndex) {
+    const EntityState* shooter = m_entityManager.getByIndex(req.shooterIdx);
+    if (!shooter || shooter->dead)
+        return;
+
+    // Muzzle + bore line, with deterministic cone dispersion: two small angular offsets hashed from
+    // (shooter, tick) — the turbulence/detection idiom, so a replay reproduces every round.
+    const float* q = shooter->transform.quat;
+    const glm::quat rot{q[3], q[0], q[1], q[2]};
+    glm::vec3 bore = rot * glm::vec3{1.f, 0.f, 0.f};
+    constexpr float kGunDispersionRad = 0.012f; // ~0.7° cone half-angle
+    const uint32_t h = req.shooterIdx * 0x9E3779B1u + static_cast<uint32_t>(tickIndex) * 0x85EBCA77u + 0x6B43A9B5u;
+    const float r1 = (static_cast<float>((h >> 8) & 0xFFFu) / 4096.f - 0.5f) * 2.f;
+    const float r2 = (static_cast<float>((h >> 20) & 0xFFFu) / 4096.f - 0.5f) * 2.f;
+    const glm::vec3 up = rot * glm::vec3{0.f, 1.f, 0.f};
+    const glm::vec3 right = rot * glm::vec3{0.f, 0.f, 1.f};
+    bore = glm::normalize(bore + up * (r1 * kGunDispersionRad) + right * (r2 * kGunDispersionRad));
+
+    const double range = static_cast<double>(def.performance.maxRangeM);
+    const glm::dvec3 origin{shooter->transform.pos[0], shooter->transform.pos[1], shooter->transform.pos[2]};
+
+    // Nearest entity whose centre passes within the hit radius of the ray, ahead of the muzzle and
+    // inside the weapon's reach. A fixed target radius until #630 introduces per-entity extents.
+    constexpr double kTargetRadiusM = 8.0;
+    double bestT = range + 1.0;
+    EntityId hitId = EntityId::null();
+    glm::dvec3 hitPos{};
+    m_spatialIndex.queryRadius(shooter->transform.pos, range, [&](uint32_t idx, const double* ep) {
+        if (idx == req.shooterIdx)
+            return;
+        const glm::dvec3 rel{ep[0] - origin.x, ep[1] - origin.y, ep[2] - origin.z};
+        const double t = rel.x * bore.x + rel.y * bore.y + rel.z * bore.z; // along-ray distance
+        if (t < 0.0 || t > range || t >= bestT)
+            return;
+        const glm::dvec3 closest = rel - glm::dvec3(bore) * t;
+        if (glm::dot(closest, closest) > kTargetRadiusM * kTargetRadiusM)
+            return;
+        const EntityState* cand = m_entityManager.getByIndex(idx);
+        if (!cand || cand->dead)
+            return;
+        bestT = t;
+        hitId = cand->id;
+        hitPos = origin + glm::dvec3(bore) * t;
+    });
+
+    // Tracer effect from the muzzle every resolved round; impact effect + damage on a hit.
+    const double muzzle[3] = {origin.x, origin.y, origin.z};
+    queueEffect(static_cast<uint8_t>(EffectType::WeaponFired), static_cast<uint8_t>(def.type), req.shooterIdx,
+                0xFFFFFFFFu, muzzle);
+    if (hitId.valid()) {
+        const double at[3] = {hitPos.x, hitPos.y, hitPos.z};
+        m_currentWeaponClass = static_cast<uint8_t>(def.type);
+        const bool applied = applyPointDamage(m_entityManager, hitId, def.warhead.damage, shooter->id, m_damageRules);
+        m_currentWeaponClass = 0xFF;
+        if (applied)
+            queueEffect(static_cast<uint8_t>(EffectType::Impact), static_cast<uint8_t>(def.type), req.shooterIdx,
+                        hitId.index, at);
+    }
+}
+
+void WorldBroadcaster::executeFireRequest(const FireRequest& req, uint64_t tickIndex) {
+    if (!m_weaponRegistry)
+        return;
+    const WeaponDef* def = m_weaponRegistry->byIndex(req.weaponIndex);
+    if (!def)
+        return;
+
+    if (req.kind == FireRequest::Kind::Hitscan) {
+        resolveHitscan(req, *def, tickIndex);
+        return;
+    }
+
+    const EntityState* shooter = m_entityManager.getByIndex(req.shooterIdx);
+    if (!shooter || shooter->dead)
+        return;
+    const uint32_t ownerPeer = peerIdForEntity(shooter->id);
+    const EntityId pid = m_projectileSystem.launch(m_entityManager, req.weaponIndex, *shooter,
+                                                   ownerPeer == kNoOwningPeer ? 0u : ownerPeer);
+    if (pid.valid())
+        queueEffect(static_cast<uint8_t>(EffectType::MissileLaunch), static_cast<uint8_t>(def->type), req.shooterIdx,
+                    0xFFFFFFFFu, shooter->transform.pos);
+}
+
+void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
+    if (!m_weaponRegistry)
+        return; // no vocabulary, no fire path — trigger intent is read and discarded (pre-#583)
+
+    // 1. Fire intents → validated requests. Serial and cheap: FireControl is pure per-entity state.
+    m_fireRequests.clear();
+    for (auto& [idx, ce] : m_controlledEntities) {
+        if (!ce.lastInputValid || ce.fire.loadout.empty())
+            continue;
+        const EntityState* st = m_entityManager.get(ce.id);
+        if (!st || st->dead)
+            continue;
+        const bool hold = m_formations.weaponsHoldFor(ce.id); // #610's order, with teeth at last
+        evaluateFire(ce.fire, *m_weaponRegistry, ce.lastInput, hold, tickIndex, idx, m_fireRequests);
+        // The live loadout is the payload truth from here on (#625): releases shrink what the
+        // integrator carries next tick.
+        ce.payload.extra_mass_kg = ce.fire.loadout.payloadMassKg;
+        ce.payload.extra_cd0 = ce.fire.loadout.payloadCd0;
+    }
+    // Deterministic execution order regardless of map iteration: shooter idx, then station.
+    std::sort(m_fireRequests.begin(), m_fireRequests.end(), [](const FireRequest& a, const FireRequest& b) {
+        return a.shooterIdx != b.shooterIdx ? a.shooterIdx < b.shooterIdx : a.station < b.station;
+    });
+
+    // 2. Execute serially: hitscan resolves now, stores become pooled projectile entities.
+    for (const FireRequest& req : m_fireRequests)
+        executeFireRequest(req, tickIndex);
+
+    // 3. Projectile flight + endings. Detection inside step(), application here — the over-G
+    // discipline: applyWarheadAt fires event handlers and must never run inside a traversal.
+    m_tickImpacts.clear();
+    m_projectileSystem.step(m_entityManager, m_spatialIndex, static_cast<float>(simDt), m_groundQuery, m_tickImpacts);
+    for (const ProjectileImpact& imp : m_tickImpacts) {
+        const WeaponDef* def = m_weaponRegistry->byIndex(imp.weaponIndex);
+        if (!def)
+            continue;
+        m_currentWeaponClass = static_cast<uint8_t>(def->type);
+        BlastSpec blast{def->warhead.blastRadiusM, def->warhead.damage, def->warhead.nuclear};
+        applyWarheadAt(imp.pos, blast, imp.shooter);
+        m_currentWeaponClass = 0xFF;
+        queueEffect(static_cast<uint8_t>(def->warhead.nuclear ? EffectType::NuclearFlash : EffectType::Detonation),
+                    static_cast<uint8_t>(def->type), imp.shooter.index,
+                    imp.directHit.valid() ? imp.directHit.index : 0xFFFFFFFFu, imp.pos);
+    }
+}
+
 uint32_t WorldBroadcaster::peerIdForEntity(EntityId id) const noexcept {
     if (!id.valid())
         return kNoOwningPeer;
@@ -1509,7 +1735,7 @@ void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
 
         CombatEventRecord rec{};
         rec.type = static_cast<uint8_t>(CombatEventType::Kill);
-        rec.weaponClass = 0xFF; // no weapon vocabulary on this path yet; the fire path (#625) sets it
+        rec.weaponClass = m_currentWeaponClass; // set while a weapon damage call is on the stack (#625)
         rec.subjectIdx = event.subject.index;
         rec.subjectGen = static_cast<uint16_t>(event.subject.generation);
         rec.instigatorIdx = event.instigator.valid() ? event.instigator.index : 0xFFFFFFFFu;
@@ -1720,6 +1946,7 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         bi.aileron = ctl(msg.aileron, -1.f, 1.f);
         bi.rudder = ctl(msg.rudder, -1.f, 1.f);
         bi.buttons = msg.buttons;
+        bi.selectedStation = msg.selectedStation; // clamped against the entity's stations at consumption
         stored.jitterBuffer.push(bi);
 
         // Server-side input tracing (#560): append the accepted, sanitized control sample to this
@@ -2132,6 +2359,11 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     const EntityDef* spawnDef = m_registry.byIndex(st->typeIndex);
     if (m_payloadResolver && spawnDef)
         ce.payload = m_payloadResolver(*spawnDef);
+
+    // Live stations (#625). Born from the same default loadout the payload above describes; from
+    // here on the LOADOUT is the truth — a released store shrinks both, in evaluateFire.
+    if (m_weaponRegistry && spawnDef && !spawnDef->hardpoints.empty())
+        ce.fire.loadout = buildLoadout(*spawnDef, *m_weaponRegistry);
 
     m_controlledEntities[id.index] = std::move(ce);
 
