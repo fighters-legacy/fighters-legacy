@@ -91,6 +91,57 @@ fl::EntityId designateBoresightTarget(const fl::EntityManager& em, const fl::Ent
     return best.id; // default-constructed (invalid) when nothing qualified
 }
 
+fl::EntityId designateFromContacts(const fl::EntityState& lead, const float viewAxis[3],
+                                   const fl::sensor::ContactTable* contacts, float maxRangeM, float halfAngleRad) {
+    if (!contacts || contacts->empty())
+        return {}; // no sensing, or nothing seen — refuse rather than invent a target
+
+    const glm::vec3 axis(viewAxis[0], viewAxis[1], viewAxis[2]);
+    const float axisLen = glm::length(axis);
+    if (axisLen < 1e-4f)
+        return {};
+    const glm::vec3 look = axis / axisLen;
+
+    const glm::dvec3 leadPos(lead.transform.pos[0], lead.transform.pos[1], lead.transform.pos[2]);
+    const float cosLimit = std::cos(halfAngleRad);
+    const double maxRangeSq = static_cast<double>(maxRangeM) * static_cast<double>(maxRangeM);
+
+    fl::EntityId bestLocked{};
+    float bestLockedDot = -2.f;
+    fl::EntityId bestSeen{};
+    float bestSeenDot = -2.f;
+
+    for (const fl::sensor::Contact& c : *contacts) {
+        if (!fl::areFactionsHostile(lead.factionIndex, c.factionIndex))
+            continue;
+
+        // LAST-KNOWN position: what the lead actually knows, not where the target really is.
+        const glm::dvec3 tgt(c.lastKnownPos[0], c.lastKnownPos[1], c.lastKnownPos[2]);
+        const glm::dvec3 d = tgt - leadPos;
+        const double distSq = glm::dot(d, d);
+        if (distSq > maxRangeSq || distSq < 1e-6)
+            continue;
+
+        const glm::vec3 dir = glm::normalize(glm::vec3(d));
+        const float dot = glm::dot(dir, look);
+        if (dot < cosLimit)
+            continue; // outside the boresight cone
+
+        // A lock beats a bearing. Among equals, the one nearest the nose wins.
+        if (c.locked()) {
+            if (dot > bestLockedDot) {
+                bestLockedDot = dot;
+                bestLocked = c.id;
+            }
+        } else if (dot > bestSeenDot) {
+            bestSeenDot = dot;
+            bestSeen = c.id;
+        }
+    }
+
+    return bestLocked.valid() ? bestLocked : bestSeen;
+}
+
 fl::EntityId nearestHostileWithin(const fl::EntityManager& em, const fl::EntityState& anchor, uint16_t selfFaction,
                                   float rangeM, const fl::SpatialIndex* si) {
     if (selfFaction == 0 || rangeM <= 0.f) {

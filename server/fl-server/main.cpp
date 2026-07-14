@@ -698,17 +698,28 @@ int main(int argc, char** argv) {
             return true;
         });
 
-    // Boresight designation for attack_my_target — the provisional stand-in for a radar lock. The
-    // look axis is state the server already owns (PeerInputState::viewAxis, 60 Hz from
-    // MsgClientInput), not something newly trusted from the client. THIS LAMBDA IS THE SEAM: when the
-    // sensor framework lands (#677/#684), re-point it at the Contact track the player has locked and
-    // nothing else changes — not the grammar, not the wire, not the client.
+    // Target designation for attack_my_target. THIS LAMBDA WAS THE SEAM (#610), and the sensor core
+    // (#677/#684/#685) has now closed it: the lead designates from ITS OWN CONTACT TABLE — the things
+    // it has actually detected, preferring what it has LOCKED — instead of from ground truth.
+    //
+    // Exactly as promised when the seam was cut, nothing else changed: not the grammar, not the wire,
+    // not the client, not the radio menu. One lambda.
+    //
+    // The boresight-over-ground-truth path remains as the fallback for a server with no sensing
+    // evaluated (contactsFor returns null), so a headless/degenerate setup still designates something
+    // rather than silently refusing every order.
     {
         const auto designateRangeM = static_cast<float>(cfg.flight.designateRangeM);
         const auto halfAngleRad =
             static_cast<float>(cfg.flight.designateHalfAngleDeg * std::numbers::pi_v<double> / 180.0);
         broadcaster.setTargetDesignator([&broadcaster, &entityManager, designateRangeM, halfAngleRad](
                                             const fl::EntityState& commander, const float viewAxis[3]) -> fl::EntityId {
+            if (const fl::sensor::ContactTable* contacts = broadcaster.contactsFor(commander.id.index)) {
+                // The honest path: a lead cannot order an attack on something it has not seen. If it
+                // is pointing at empty sky, this returns an invalid id and the order is REFUSED
+                // ("Two, no joy") rather than quietly retargeted — which is the whole principle.
+                return fl::ai::designateFromContacts(commander, viewAxis, contacts, designateRangeM, halfAngleRad);
+            }
             return fl::ai::designateBoresightTarget(entityManager, commander, viewAxis, designateRangeM, halfAngleRad,
                                                     &broadcaster.spatialIndex());
         });

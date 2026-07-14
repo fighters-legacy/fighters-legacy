@@ -417,3 +417,132 @@ TEST_CASE("nearestHostileWithin picks the closest enemy and ignores its own side
     const EntityId got = fl::ai::nearestHostileWithin(em, *anchor, kOurs, 12000.f);
     CHECK(got == near);
 }
+
+// ---------------------------------------------------------------------------
+// Contact-based designation — the #610 seam, closed by the sensor core
+// ---------------------------------------------------------------------------
+
+namespace {
+
+fl::sensor::Contact mkContact(EntityId id, fl::sensor::ContactState state, double x, double y, double z,
+                              uint16_t faction) {
+    fl::sensor::Contact c{};
+    c.id = id;
+    c.state = state;
+    c.reacted = true;
+    c.factionIndex = faction;
+    c.lastKnownPos[0] = x;
+    c.lastKnownPos[1] = y;
+    c.lastKnownPos[2] = z;
+    return c;
+}
+
+} // namespace
+
+TEST_CASE("designateFromContacts: a lead cannot designate what it has not detected") {
+    // THE POINT OF CLOSING THE SEAM. The bandit is alive, hostile, and dead ahead — and the lead has
+    // not seen it, so it cannot order an attack on it. An invalid id means the order is REFUSED
+    // ("Two, no joy"), never quietly retargeted.
+    NullLogger log;
+    EntityTypeRegistry reg;
+    reg.registerType(makeDef());
+    EntityManager em(log, reg);
+
+    const EntityId leadId = spawnAt(em, 0, 600, 0, kOurs);
+    spawnAt(em, 5000, 600, 0, kEnemy); // right in front, and undetected
+
+    const EntityState* lead = em.get(leadId);
+    REQUIRE(lead != nullptr);
+
+    const fl::sensor::ContactTable empty; // sensors ran; nothing found
+    const float viewAxis[3] = {1.f, 0.f, 0.f};
+
+    const EntityId got =
+        fl::ai::designateFromContacts(*lead, viewAxis, &empty, 15000.f, 15.f * std::numbers::pi_v<float> / 180.f);
+    CHECK_FALSE(got.valid());
+}
+
+TEST_CASE("designateFromContacts: a LOCKED contact beats a merely detected one nearer the nose") {
+    // "My target" means the thing I have a firing-quality track on. A bearing is not a lock.
+    NullLogger log;
+    EntityTypeRegistry reg;
+    reg.registerType(makeDef());
+    EntityManager em(log, reg);
+
+    const EntityId leadId = spawnAt(em, 0, 600, 0, kOurs);
+    const EntityId lockedTgt = spawnAt(em, 5000, 600, 300, kEnemy); // slightly off the nose, LOCKED
+    const EntityId detectedTgt = spawnAt(em, 5000, 600, 0, kEnemy); // dead ahead, merely detected
+
+    const EntityState* lead = em.get(leadId);
+    REQUIRE(lead != nullptr);
+
+    fl::sensor::ContactTable contacts;
+    contacts.contacts.push_back(mkContact(lockedTgt, fl::sensor::ContactState::Locked, 5000, 600, 300, kEnemy));
+    contacts.contacts.push_back(mkContact(detectedTgt, fl::sensor::ContactState::Detected, 5000, 600, 0, kEnemy));
+
+    const float viewAxis[3] = {1.f, 0.f, 0.f};
+    const EntityId got =
+        fl::ai::designateFromContacts(*lead, viewAxis, &contacts, 15000.f, 20.f * std::numbers::pi_v<float> / 180.f);
+    CHECK(got == lockedTgt);
+}
+
+TEST_CASE("designateFromContacts: a COASTING contact is still designatable") {
+    // "The guy who just went into the cloud" is a perfectly sensible thing for a lead to point at.
+    // The wingman inherits the same last-known state the lead has — both are wrong in exactly the
+    // same way, which is what being wingmen means.
+    NullLogger log;
+    EntityTypeRegistry reg;
+    reg.registerType(makeDef());
+    EntityManager em(log, reg);
+
+    const EntityId leadId = spawnAt(em, 0, 600, 0, kOurs);
+    const EntityId ghost = spawnAt(em, 5000, 600, 0, kEnemy);
+
+    const EntityState* lead = em.get(leadId);
+    REQUIRE(lead != nullptr);
+
+    fl::sensor::ContactTable contacts;
+    contacts.contacts.push_back(mkContact(ghost, fl::sensor::ContactState::Coasting, 5000, 600, 0, kEnemy));
+
+    const float viewAxis[3] = {1.f, 0.f, 0.f};
+    const EntityId got =
+        fl::ai::designateFromContacts(*lead, viewAxis, &contacts, 15000.f, 15.f * std::numbers::pi_v<float> / 180.f);
+    CHECK(got == ghost);
+}
+
+TEST_CASE("designateFromContacts: friendlies and off-axis contacts are not designated") {
+    NullLogger log;
+    EntityTypeRegistry reg;
+    reg.registerType(makeDef());
+    EntityManager em(log, reg);
+
+    const EntityId leadId = spawnAt(em, 0, 600, 0, kOurs);
+    const EntityId friendly = spawnAt(em, 5000, 600, 0, kOurs);    // dead ahead, but ours
+    const EntityId offAxis = spawnAt(em, 1000, 600, 4000, kEnemy); // hostile, well off the nose
+
+    const EntityState* lead = em.get(leadId);
+    REQUIRE(lead != nullptr);
+
+    fl::sensor::ContactTable contacts;
+    contacts.contacts.push_back(mkContact(friendly, fl::sensor::ContactState::Locked, 5000, 600, 0, kOurs));
+    contacts.contacts.push_back(mkContact(offAxis, fl::sensor::ContactState::Locked, 1000, 600, 4000, kEnemy));
+
+    const float viewAxis[3] = {1.f, 0.f, 0.f};
+    const EntityId got =
+        fl::ai::designateFromContacts(*lead, viewAxis, &contacts, 15000.f, 15.f * std::numbers::pi_v<float> / 180.f);
+    CHECK_FALSE(got.valid()); // one is friendly, the other is not where he is looking
+}
+
+TEST_CASE("designateFromContacts: no contact table at all refuses rather than guesses") {
+    NullLogger log;
+    EntityTypeRegistry reg;
+    reg.registerType(makeDef());
+    EntityManager em(log, reg);
+
+    const EntityId leadId = spawnAt(em, 0, 600, 0, kOurs);
+    const EntityState* lead = em.get(leadId);
+    REQUIRE(lead != nullptr);
+
+    const float viewAxis[3] = {1.f, 0.f, 0.f};
+    CHECK_FALSE(fl::ai::designateFromContacts(*lead, viewAxis, nullptr, 15000.f, 0.3f).valid());
+}

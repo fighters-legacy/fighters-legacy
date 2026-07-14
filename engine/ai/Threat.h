@@ -2,6 +2,7 @@
 #pragma once
 
 #include "entity/EntityId.h"
+#include "sensor/SensorSystem.h"
 
 #include <glm/glm.hpp>
 
@@ -56,6 +57,30 @@ inline constexpr float kDefaultDesignateHalfAngleDeg = 15.f;
 [[nodiscard]] fl::EntityId designateBoresightTarget(const fl::EntityManager& em, const fl::EntityState& lead,
                                                     const float viewAxis[3], float maxRangeM, float halfAngleRad,
                                                     const fl::SpatialIndex* si = nullptr);
+
+// Designate the target the LEAD has actually detected and is pointing at — the #610 seam, closed.
+//
+// This is what designateBoresightTarget above was the stand-in FOR. The lead may only designate
+// something it can SEE: candidates come from its own contact table, not from the world. The
+// preference order is exactly what a pilot means by "my target":
+//
+//   1. a LOCKED contact inside the boresight cone — the thing he has a firing-quality track on;
+//   2. failing that, the merely DETECTED (or coasting) contact nearest his look axis.
+//
+// Returns an INVALID EntityId when nothing qualifies, and the caller MUST surface that as a refusal
+// ("Two, no joy") rather than substituting a target. An attack order that quietly picks its own
+// target is worse than one that declines — the principle the whole grammar is built on.
+//
+// A COASTING contact is still designatable, deliberately: "the guy who just went into the cloud" is
+// a perfectly sensible thing for a lead to point at, and the wingman inherits the same last-known
+// state the lead has. That is not designating a ghost; it is designating a memory, honestly, and both
+// aircraft are wrong in exactly the same way — which is what being wingmen means.
+//
+// Ranges and the cone are measured against LAST-KNOWN contact positions, because that is all the lead
+// is entitled to know.
+[[nodiscard]] fl::EntityId designateFromContacts(const fl::EntityState& lead, const float viewAxis[3],
+                                                 const fl::sensor::ContactTable* contacts, float maxRangeM,
+                                                 float halfAngleRad);
 
 // Nearest entity hostile to `selfFaction` within rangeM of `anchor`. Used by the engage/cover state
 // factories to pick a threat AT STATE ENTRY (StateMachineController factories take no arguments, so
