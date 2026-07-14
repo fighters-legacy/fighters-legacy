@@ -1063,6 +1063,7 @@ Lua AI script. Place entity definition files anywhere in the pack directory (typ
 | `flight_model`      | string | `""`    | Flight model TOML asset name; empty = builtin UFO model (server-side only) |
 | `ai_script`         | string | `""`    | Lua AI script name from the pack's `ai/` directory; auto-assigned when spawned without `--ai`; empty = no scripted AI (server-side only) |
 | `sensors`           | string[] | `[]`  | Sensor-def IDs this entity carries (see [Sensor Data](#sensor-data--toml)); empty = the builtin eyeball for AI-controlled entities |
+| `collision_radius_m`| float  | `0`     | Collision sphere radius for entity-entity collision (#630); `0` = category default (air/player 8 m, ground/naval 15 m). Set an explicit value for an oversized airframe (a blimp, a carrier). Projectiles never collide here — they use their own fuze path |
 
 **Example:**
 

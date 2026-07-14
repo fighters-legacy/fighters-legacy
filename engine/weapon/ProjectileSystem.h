@@ -19,7 +19,7 @@ namespace fl {
 class EntityManager;
 class EntityTypeRegistry;
 class SpatialIndex;
-class IGravityField;
+struct IGravityField;
 struct EntityState;
 
 namespace sensor {

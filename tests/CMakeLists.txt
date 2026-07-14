@@ -59,6 +59,11 @@ target_link_libraries(test_weapon_def_parser PRIVATE Catch2::Catch2WithMain engi
 catch_discover_tests(test_weapon_def_parser)
 
 # TransformHistory (#425): the lag-compensation rewind ring (header-only, engine-net).
+# Entity-entity collision geometry + damage helpers (#630).
+add_executable(test_collision test_collision.cpp)
+target_link_libraries(test_collision PRIVATE Catch2::Catch2WithMain engine-entity)
+catch_discover_tests(test_collision)
+
 add_executable(test_transform_history test_transform_history.cpp)
 target_link_libraries(test_transform_history PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_transform_history)

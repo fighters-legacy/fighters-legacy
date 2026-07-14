@@ -53,11 +53,11 @@ The same JSON shape is the standalone `--metrics-json` file and the embedded blo
 | `wire_out_kbs` / `wire_in_kbs` / `wire_out_pps` | socket-level egress/ingress rates from `INetwork::getWireStats()` — framing, compression, and encryption included; the sample kept is the one at the highest peer count seen (#772) |
 | `wire_peers` / `wire_out_kbs_per_client` | peer count the kept wire sample was taken at / egress wire KB/s divided by it — the number the **150 KB/s/client ceiling** gates (#772) |
 | `tick_ms` | total `onTick` wall-time stats `{min,mean,max,p95,p99}` (ms) |
-| `maintenance_ms` | rate-limit prune, idle timeout, admin drains, spatial rebuild, input drain, jitter resize |
+| `maintenance_ms` | rate-limit prune, idle timeout, admin drains, spatial rebuild, input drain, jitter resize, **and `EntityManager::onTick` housekeeping (damage-level events, pool reap)** — the latter re-attributed here in #630 |
 | `sensing_ms` | cone + probability checks and contact-table assembly (`SensorSystem`, #685); staggered at `[world] sensor_check_hz`, so a single tick carries only its share of the window |
 | `integrate_ms` | physics integration (`stepFlightSim`) summed across entities |
 | `ai_ms` | controller `sample()` summed across entities |
-| `collision_ms` | `EntityManager::onTick` (damage/collision/reap) |
+| `collision_ms` | entity-entity collision detection (#630): broadphase + sphere-sphere narrow phase + relative-speed damage. **Before #630 this timed `EntityManager::onTick` housekeeping** (a misnomer); that work moved to `maintenance_ms` and this phase now measures what its name says |
 | `serialize_ms` | telemetry + snapshot assembly/send + weather + shutdown notices |
 | `other_ms` | `tick_ms − Σ(phases)` (loop/function overhead), clamped ≥ 0 |
 

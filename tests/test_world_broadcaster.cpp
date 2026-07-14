@@ -8484,3 +8484,94 @@ TEST_CASE("WorldBroadcaster: the pre-launch LOCK cue reaches the own record's we
     }
     CHECK(sawLock);
 }
+
+// ---------------------------------------------------------------------------
+// Entity-entity collision phase (#630)
+// ---------------------------------------------------------------------------
+
+namespace {
+// Spawn two entities overlapping (both at ~the same point) with opposing velocities so the
+// relative speed is lethal, and step one tick. Returns the pair's post-collision HP.
+struct CollisionOutcome {
+    float hpA{-1.f};
+    float hpB{-1.f};
+};
+CollisionOutcome runCollisionCase(bool crashDamage, double separationM, float speedMps, fl::JobSystem* jobs) {
+    static MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef()); // AirVehicle, 100 hp, 8 m default collision radius
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    if (jobs)
+        broadcaster.setJobSystem(*jobs);
+    fl::DamageRules rules;
+    rules.crashDamage = crashDamage;
+    broadcaster.setDamageRules(rules);
+
+    fl::EntityTransform ta{};
+    ta.pos[1] = 5000.0;
+    ta.vel[0] = speedMps; // closing from the left
+    ta.quat[3] = 1.f;
+    const fl::EntityId a = em.spawn("builtin:debug-entity", ta);
+
+    fl::EntityTransform tb{};
+    tb.pos[0] = separationM;
+    tb.pos[1] = 5000.0;
+    tb.vel[0] = -speedMps; // closing from the right
+    tb.quat[3] = 1.f;
+    const fl::EntityId b = em.spawn("builtin:debug-entity", tb);
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CollisionOutcome out;
+    if (const fl::EntityState* sa = em.get(a))
+        out.hpA = sa->dead ? 0.f : sa->hp;
+    if (const fl::EntityState* sb = em.get(b))
+        out.hpB = sb->dead ? 0.f : sb->hp;
+    return out;
+}
+} // namespace
+
+TEST_CASE("WorldBroadcaster: two overlapping entities collide and BOTH take relative-speed damage",
+          "[world_broadcaster][collision]") {
+    // 10 m apart, radii 8 + 8 = 16 > 10: overlapping. 300 m/s each = 600 m/s closure — lethal.
+    const auto out = runCollisionCase(/*crashDamage=*/true, /*separation=*/10.0, /*speed=*/300.f, nullptr);
+    CHECK(out.hpA < 100.f);
+    CHECK(out.hpB < 100.f);
+    CHECK(out.hpA == out.hpB); // symmetric: a mid-air hurts both sides equally
+}
+
+TEST_CASE("WorldBroadcaster: a gentle brush below the threshold does no damage", "[world_broadcaster][collision]") {
+    const auto out = runCollisionCase(/*crashDamage=*/true, /*separation=*/10.0, /*speed=*/1.f, nullptr);
+    CHECK(out.hpA == 100.f); // 2 m/s closure is under the free-brush threshold
+    CHECK(out.hpB == 100.f);
+}
+
+TEST_CASE("WorldBroadcaster: entities clear of each other never collide", "[world_broadcaster][collision]") {
+    // 100 m apart, radii 8 + 8 = 16 < 100: no overlap, even at lethal closing speed.
+    const auto out = runCollisionCase(/*crashDamage=*/true, /*separation=*/100.0, /*speed=*/300.f, nullptr);
+    CHECK(out.hpA == 100.f);
+    CHECK(out.hpB == 100.f);
+}
+
+TEST_CASE("WorldBroadcaster: crashDamage=false gates entity collisions off", "[world_broadcaster][collision]") {
+    const auto out = runCollisionCase(/*crashDamage=*/false, /*separation=*/10.0, /*speed=*/300.f, nullptr);
+    CHECK(out.hpA == 100.f); // detected, but the difficulty gate suppresses the damage
+    CHECK(out.hpB == 100.f);
+}
+
+TEST_CASE("WorldBroadcaster: collision detection is serial-equivalent across worker counts",
+          "[world_broadcaster][collision]") {
+    CollisionOutcome ref;
+    for (uint32_t total : {1u, 2u, 8u}) {
+        fl::JobSystem jobs(total);
+        const auto out = runCollisionCase(/*crashDamage=*/true, /*separation=*/10.0, /*speed=*/300.f, &jobs);
+        if (total == 1u)
+            ref = out;
+        else {
+            REQUIRE(out.hpA == ref.hpA); // byte-identical damage regardless of worker count
+            REQUIRE(out.hpB == ref.hpB);
+        }
+    }
+}

@@ -844,10 +844,25 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         }
     }
 
-    const auto tCollisionStart = m_clock->now();
-    m_entityManager.onTick(simDt, tickIndex);
-    m_tickProfiler.addPhaseSample(TickPhase::Collision,
-                                  std::chrono::duration<double, std::milli>(m_clock->now() - tCollisionStart).count());
+    // Collision phase (#630): real entity-entity collision detection, timed under `collision_ms`
+    // — which until now measured EntityManager housekeeping and was a misnomer. The housekeeping
+    // moves to Maintenance below; the documented meaning of `collision_ms` is unchanged (it was
+    // always "the collision phase"), so the frozen schema (6) is untouched.
+    {
+        const auto tCollisionStart = m_clock->now();
+        runCollisionPass(tickIndex);
+        m_tickProfiler.addPhaseSample(
+            TickPhase::Collision, std::chrono::duration<double, std::milli>(m_clock->now() - tCollisionStart).count());
+    }
+
+    // Entity-manager housekeeping (pool GC, damage-level events, generation bumps): re-attributed
+    // to Maintenance (#630), where it belongs — it is not collision work.
+    {
+        const auto tMaintStart = m_clock->now();
+        m_entityManager.onTick(simDt, tickIndex);
+        m_tickProfiler.addPhaseSample(TickPhase::Maintenance,
+                                      std::chrono::duration<double, std::milli>(m_clock->now() - tMaintStart).count());
+    }
 
     // Serialize phase: telemetry, snapshot assembly + send, weather, and shutdown notices.
     const auto tSerializeStart = m_clock->now();
@@ -1842,6 +1857,100 @@ void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
                     static_cast<uint8_t>(def->type), imp.shooter.index,
                     imp.directHit.valid() ? imp.directHit.index : 0xFFFFFFFFu, imp.pos);
     }
+}
+
+void WorldBroadcaster::runCollisionPass(uint64_t tickIndex) {
+    // 1. Serial gather: every live entity with a non-zero collision radius (projectiles have their
+    // own fuze path and are excluded via a 0 category default). Post-integrate positions.
+    m_collisionCands.clear();
+    m_collisionIdxToSlot.clear();
+    m_entityManager.forEach([this](const EntityState& s) {
+        if (s.dead)
+            return;
+        const EntityDef* def = m_registry.byIndex(s.typeIndex);
+        float radius = def && def->collisionRadiusM > 0.f
+                           ? def->collisionRadiusM
+                           : defaultCollisionRadiusM(def ? def->category : ObjectCategory::AirVehicle);
+        if (radius <= 0.f)
+            return;
+        const uint32_t slot = static_cast<uint32_t>(m_collisionCands.size());
+        CollisionCand c;
+        c.id = s.id;
+        c.pos[0] = s.transform.pos[0];
+        c.pos[1] = s.transform.pos[1];
+        c.pos[2] = s.transform.pos[2];
+        c.vel[0] = s.transform.vel[0];
+        c.vel[1] = s.transform.vel[1];
+        c.vel[2] = s.transform.vel[2];
+        c.radius = radius;
+        m_collisionCands.push_back(c);
+        m_collisionIdxToSlot[s.id.index] = slot;
+    });
+    if (m_collisionCands.size() < 2)
+        return;
+
+    m_collisionScratch.resize(m_collisionCands.size());
+    for (auto& v : m_collisionScratch)
+        v.clear();
+
+    // The spatial index was built at start-of-tick (pre-integrate), so a candidate's stored bucket
+    // may lag its current position by up to a tick of travel. Inflate the broadphase query by that
+    // worst-case drift on BOTH entities plus twice the max radius, so no overlapping pair is missed.
+    constexpr double kMaxRadiusM = 15.0;
+    const double inflate = 2.0 * kMaxRadiusM + 2.0 * (kVelMaxMps / 60.0);
+
+    // 2. Parallel-detect: each candidate writes only its own scratch slot; reads the frozen spatial
+    // index + candidate list. Canonical pairs (lower index < higher index) so a pair is recorded
+    // once regardless of which side's broadphase finds it — which makes the result independent of
+    // worker count (serial-equivalent).
+    runEntityPass(m_collisionCands.size(), [this, inflate](std::size_t b, std::size_t e) {
+        for (std::size_t i = b; i < e; ++i) {
+            const CollisionCand& ci = m_collisionCands[i];
+            const double queryR = static_cast<double>(ci.radius) + inflate;
+            m_spatialIndex.queryRadius(ci.pos, queryR, [&](uint32_t otherIdx, const double* /*storedPos*/) {
+                const auto it = m_collisionIdxToSlot.find(otherIdx);
+                if (it == m_collisionIdxToSlot.end())
+                    return;
+                const CollisionCand& cj = m_collisionCands[it->second];
+                if (ci.id.index >= cj.id.index)
+                    return; // canonical: only the lower-index side records the pair
+                if (!spheresOverlap(ci.pos, ci.radius, cj.pos, cj.radius))
+                    return;
+                CollisionPair p;
+                p.a = ci.id;
+                p.b = cj.id;
+                p.relativeSpeedMps = relativeSpeedMps(ci.vel, cj.vel);
+                m_collisionScratch[i].push_back(p);
+            });
+        }
+    });
+
+    // 3. Serial dedup + apply: flatten, sort for a deterministic apply order, and damage BOTH
+    // entities of each pair. A mid-air is nobody's kill: instigator is null (environmental), which
+    // also always applies — a collision is physics, not friendly fire, so the FF gate must not
+    // suppress two wingmen who merged. Gated by the crashDamage difficulty toggle.
+    if (!m_damageRules.crashDamage)
+        return;
+    m_collisionPairs.clear();
+    for (auto& v : m_collisionScratch)
+        for (const CollisionPair& p : v)
+            m_collisionPairs.push_back(p);
+    std::sort(m_collisionPairs.begin(), m_collisionPairs.end(), [](const CollisionPair& x, const CollisionPair& y) {
+        return x.a.index != y.a.index ? x.a.index < y.a.index : x.b.index < y.b.index;
+    });
+    for (const CollisionPair& p : m_collisionPairs) {
+        const float dmg = collisionDamage(p.relativeSpeedMps);
+        if (dmg <= 0.f)
+            continue;
+        // Re-check liveness: an earlier pair this tick may have already killed one side.
+        const EntityState* sa = m_entityManager.get(p.a);
+        const EntityState* sb = m_entityManager.get(p.b);
+        if (sa && !sa->dead)
+            applyPointDamage(m_entityManager, p.a, dmg, EntityId::null(), m_damageRules);
+        if (sb && !sb->dead)
+            applyPointDamage(m_entityManager, p.b, dmg, EntityId::null(), m_damageRules);
+    }
+    (void)tickIndex;
 }
 
 uint32_t WorldBroadcaster::peerIdForEntity(EntityId id) const noexcept {

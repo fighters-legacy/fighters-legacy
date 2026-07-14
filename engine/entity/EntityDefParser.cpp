@@ -143,6 +143,7 @@ EntityDef parseEntityDef(std::string_view toml_src) {
     def.category = parse_category(cat_str);
 
     def.maxHp = req_float(entity["max_hp"], "entity.max_hp");
+    def.collisionRadiusM = opt_float(entity["collision_radius_m"], 0.f); // 0 = category default (#630)
     def.mesh = opt_string(entity["mesh"]);
     def.cockpitMesh = opt_string(entity["cockpit"]);           // optional; empty = no cockpit geometry (#813)
     def.manualAsset = opt_string(entity["manual"]);            // optional; empty = generated sections only (#821)

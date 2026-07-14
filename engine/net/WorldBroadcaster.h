@@ -11,6 +11,7 @@
 #include "TickGovernor.h"
 #include "TransformHistory.h"          // lag-compensation rewind ring (#425)
 #include "config/DifficultySettings.h" // AiScaling — sensing difficulty scaling (#685)
+#include "entity/Collision.h"          // CollisionPair — entity-entity collision (#630)
 #include "entity/DamageApplication.h"  // DamageRules — the gameplay damage gates (#626)
 #include "entity/EntityEvent.h"        // IEntityEventHandler — kill attribution + scoring (#626)
 #include "entity/EntityId.h"
@@ -814,6 +815,22 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     std::vector<ControlInput> m_stepInputs;
     std::atomic<double> m_entityX{0.0}; // last stepped entity world-X (sim writes; main reads)
     std::atomic<double> m_entityZ{0.0}; // last stepped entity world-Z
+
+    // Entity-entity collision detection (#630). Gathered serially post-integrate; the detect pass is
+    // data-parallel (each candidate writes only its own m_collisionScratch slot, reads the frozen
+    // spatial index + candidate list), and the damage apply is serial (applyPointDamage fires event
+    // handlers). Reused across ticks to avoid reallocation.
+    struct CollisionCand {
+        EntityId id;
+        double pos[3];
+        float vel[3];
+        float radius;
+    };
+    std::vector<CollisionCand> m_collisionCands;
+    std::unordered_map<uint32_t, uint32_t> m_collisionIdxToSlot; // entity index -> slot in m_collisionCands
+    std::vector<std::vector<CollisionPair>> m_collisionScratch;  // per-candidate detected pairs
+    std::vector<CollisionPair> m_collisionPairs;                 // flattened + sorted for serial apply
+    void runCollisionPass(uint64_t tickIndex);
 
     std::vector<std::array<double, 3>> m_spawnPoints; // pre-cached [x,y,z]; sim-thread read-only after start
     uint32_t m_nextSpawnIdx{0};                       // round-robin counter; sim-thread only
