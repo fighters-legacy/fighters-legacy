@@ -4,6 +4,7 @@
 #include "IFilesystem.h"
 #include "ILogger.h"
 
+#include "config/TomlNumeric.h"
 #include <toml++/toml.hpp>
 
 #include <algorithm>
@@ -703,7 +704,7 @@ bool UserConfig::load() {
     if (auto v = tbl["graphics"]["sky_quality"].value<std::string>())
         m_graphics.skyQuality = parseSkyQuality(v->c_str(), m_logger);
 
-    if (auto v = tbl["graphics"]["ui_scale"].value<int64_t>()) {
+    if (auto v = tomlInt(tbl["graphics"]["ui_scale"])) {
         UiScale parsed = parseUiScale(static_cast<int>(*v));
         if (uiScaleInt(parsed) != static_cast<int>(*v))
             m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
@@ -711,7 +712,7 @@ bool UserConfig::load() {
         m_graphics.uiScale = parsed;
     }
 
-    if (auto v = tbl["graphics"]["cockpit_fov"].value<int64_t>()) {
+    if (auto v = tomlInt(tbl["graphics"]["cockpit_fov"])) {
         if (*v < 60 || *v > 120)
             m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
                          "user config: cockpit_fov out of range [60, 120]; clamping");
@@ -790,7 +791,7 @@ bool UserConfig::load() {
     m_controls.hotasInvertThrottle = tbl["controls"]["hotas_invert_throttle"].value_or(false);
 
     // [debug]
-    if (auto v = tbl["debug"]["overlay_mode"].value<int64_t>()) {
+    if (auto v = tomlInt(tbl["debug"]["overlay_mode"])) {
         switch (*v) {
         case 1:
             m_debug.overlayMode = OverlayMode::Compact;
@@ -809,17 +810,17 @@ bool UserConfig::load() {
         m_pilot.profile.callsign = std::move(*v);
     if (auto v = tbl["pilot"]["guid"].value<std::string>())
         m_pilot.profile.guid = std::move(*v);
-    if (auto v = tbl["pilot"]["kills"].value<int64_t>())
+    if (auto v = tomlInt(tbl["pilot"]["kills"]))
         m_pilot.profile.kills = static_cast<int>(std::max(int64_t{0}, *v));
-    if (auto v = tbl["pilot"]["losses"].value<int64_t>())
+    if (auto v = tomlInt(tbl["pilot"]["losses"]))
         m_pilot.profile.losses = static_cast<int>(std::max(int64_t{0}, *v));
-    if (auto v = tbl["pilot"]["flight_time_s"].value<int64_t>())
+    if (auto v = tomlInt(tbl["pilot"]["flight_time_s"]))
         m_pilot.profile.flightTimeS = std::max(int64_t{0}, *v);
 
     // [pilot.campaign]
     if (auto v = tbl["pilot"]["campaign"]["active_campaign"].value<std::string>())
         m_pilot.campaign.activeCampaign = std::move(*v);
-    if (auto v = tbl["pilot"]["campaign"]["current_mission"].value<int64_t>())
+    if (auto v = tomlInt(tbl["pilot"]["campaign"]["current_mission"]))
         m_pilot.campaign.currentMission = static_cast<int>(std::max(int64_t{0}, *v));
     if (auto* arr = tbl["pilot"]["campaign"]["completed"].as_array()) {
         for (auto& elem : *arr)
@@ -828,12 +829,12 @@ bool UserConfig::load() {
     }
     if (auto* standings = tbl["pilot"]["campaign"]["faction_standings"].as_table()) {
         for (auto& [k, val] : *standings)
-            if (auto n = val.value<int64_t>())
+            if (auto n = tomlInt(val))
                 m_pilot.campaign.factionStandings[std::string(k)] = static_cast<int>(*n);
     }
 
     // [client]
-    if (auto v = tbl["client"]["motd_display_s"].value<int64_t>()) {
+    if (auto v = tomlInt(tbl["client"]["motd_display_s"])) {
         if (*v < 0 || *v > 3600)
             m_logger.log(LogLevel::Warn, __FILE__, __LINE__,
                          "user config: motd_display_s out of range [0, 3600]; clamping");

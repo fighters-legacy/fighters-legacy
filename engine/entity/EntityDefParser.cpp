@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "entity/EntityDefParser.h"
 
+#include "config/TomlNumeric.h"
 #include <toml++/toml.hpp>
 
 #include <algorithm>
@@ -180,7 +181,7 @@ EntityDef parseEntityDef(std::string_view toml_src) {
                 throw std::runtime_error("hardpoints must be an array of tables ([[hardpoints]])");
 
             Hardpoint hp;
-            auto slot = (*hp_tbl)["slot"].value<int64_t>();
+            auto slot = tomlInt((*hp_tbl)["slot"]);
             if (!slot)
                 throw std::runtime_error("missing required field: hardpoints.slot");
             if (*slot < 0)

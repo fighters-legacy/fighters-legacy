@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **engine**: Hardened every TOML integer read against a float→int UB bug in toml++ (#824)
+
 ### Added
 
 - **ui**: The in-game aircraft manual is generated from the flight model, not hand-written (#821)

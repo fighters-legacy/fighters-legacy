@@ -145,6 +145,12 @@ target_link_libraries(test_content_system PRIVATE Catch2::Catch2WithMain engine-
     engine-sensor)
 catch_discover_tests(test_content_system)
 
+# fl::tomlInt guards five parsers against a real UB bug in toml++ (#824).
+add_executable(test_toml_numeric test_toml_numeric.cpp)
+target_link_libraries(test_toml_numeric PRIVATE Catch2::Catch2WithMain tomlplusplus::tomlplusplus)
+target_include_directories(test_toml_numeric PRIVATE "${CMAKE_SOURCE_DIR}/engine")
+catch_discover_tests(test_toml_numeric)
+
 add_executable(test_content_index test_content_index.cpp)
 target_link_libraries(test_content_index PRIVATE Catch2::Catch2WithMain engine-content)
 target_include_directories(test_content_index PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

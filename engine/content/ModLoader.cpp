@@ -6,6 +6,7 @@
 #include "content/FolderContentPack.h"
 #include "content/IContentPackEventHandler.h"
 
+#include "config/TomlNumeric.h"
 #include <toml++/toml.hpp>
 
 #if defined(_WIN32)
@@ -126,7 +127,7 @@ std::optional<ModLoader::Manifest> ModLoader::parseManifest(const char* path) {
     auto id = mod["id"].value<std::string>();
     auto version = mod["version"].value<std::string>();
     auto engineApi = mod["engine-api"].value<std::string>();
-    auto priority = mod["priority"].value<int>();
+    auto priority = tomlIntNarrow(mod["priority"]);
 
     if (!name || !id || !version || !engineApi || !priority) {
         m_logger.log(LogLevel::Error, __FILE__, __LINE__,

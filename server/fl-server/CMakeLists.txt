@@ -5,7 +5,8 @@ endif()
 # Config parsing logic in its own library so tests/test_server_config can link it.
 add_library(fl-server-config STATIC server_config.cpp)
 target_link_libraries(fl-server-config PUBLIC platform-hal tomlplusplus::tomlplusplus)
-target_include_directories(fl-server-config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(fl-server-config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
+    PRIVATE "${CMAKE_SOURCE_DIR}/engine")  # config/TomlNumeric.h — header-only, no link needed
 
 add_executable(fl-server main.cpp ServerCommands.cpp IpListFile.cpp RconServer.cpp)
 # platform-net is the backend-selecting facade (enet6 always, GNS when FL_ENABLE_GNS); fl-server
