@@ -66,6 +66,12 @@ add_executable(test_sensor_detection test_sensor_detection.cpp)
 target_link_libraries(test_sensor_detection PRIVATE Catch2::Catch2WithMain engine-sensor)
 catch_discover_tests(test_sensor_detection)
 
+# #670 acceptance: honest sensing end-to-end through a real WorldBroadcaster tick.
+add_executable(test_honest_sensing test_honest_sensing.cpp)
+target_link_libraries(test_honest_sensing PRIVATE Catch2::Catch2WithMain engine-net engine-ai engine-sensor
+    engine-entity engine-spatial engine-weather engine-job)
+catch_discover_tests(test_honest_sensing)
+
 add_executable(test_sensor_system test_sensor_system.cpp)
 target_link_libraries(test_sensor_system PRIVATE Catch2::Catch2WithMain engine-sensor engine-entity engine-spatial)
 catch_discover_tests(test_sensor_system)
@@ -287,8 +293,7 @@ catch_discover_tests(test_formation_registry)
 
 # FormationController, boresight designation, and the six commands (#610).
 add_executable(test_wingman_behavior test_wingman_behavior.cpp)
-target_link_libraries(test_wingman_behavior PRIVATE engine-ai engine-entity engine-spatial engine-sensor
-    Catch2::Catch2WithMain)
+target_link_libraries(test_wingman_behavior PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
 catch_discover_tests(test_wingman_behavior)
 
 add_executable(test_guidance test_guidance.cpp)
