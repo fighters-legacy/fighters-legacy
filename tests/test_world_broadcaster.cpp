@@ -2,6 +2,7 @@
 #include "IClock.h"
 #include "ILogger.h"
 #include "INetwork.h"
+#include "content/ContentBootstrap.h"
 #include "entity/DamageDef.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityManager.h"
@@ -18,6 +19,7 @@
 #include "net/WireCodec.h"
 #include "net/WorldBroadcaster.h"
 #include "render/RenderSnapshot.h"
+#include "weapon/BuiltinWeapon.h"
 #include "weapon/ProjectileSystem.h"
 #include "weapon/WeaponDefParser.h"
 #include "weapon/WeaponRegistry.h"
@@ -8323,4 +8325,50 @@ TEST_CASE("WorldBroadcaster: with no delay the same jink is a clean miss -- no f
     const fl::EntityState* vs = em.get(victim);
     REQUIRE(vs != nullptr);
     CHECK(vs->hp == 100.f);
+}
+
+TEST_CASE("WorldBroadcaster: the zero-pack sandbox peer spawns ARMED and the cannon fires",
+          "[world_broadcaster][firepath][sandbox]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(fl::builtinDebugEntityDef()); // the REAL sandbox def (#440), not a fixture
+
+    fl::WeaponRegistry weapons;
+    REQUIRE(fl::registerBuiltinWeapons(weapons) == 3u);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setWeaponRegistry(&weapons);
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(shooter != nullptr);
+
+    fl::EntityTransform vt{};
+    vt.pos[0] = shooter->transform.pos[0] + 300.0; // well inside the cannon's 1200 m reach
+    vt.pos[1] = shooter->transform.pos[1];
+    vt.pos[2] = shooter->transform.pos[2];
+    vt.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
+
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.buttons = 0x01u; // gun trigger — station selection untouched: the gun needs none
+    inp.selectedStation = 255u;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    const fl::EntityState* vs = em.get(victim);
+    REQUIRE(vs != nullptr);
+    CHECK(vs->hp == 100.f - fl::BuiltinWeapon::cannon().warhead.damage);
+    CHECK(hasEffect(decodeEffects(snapshotsFor(net, 0).back()), fl::EffectType::WeaponFired));
+
+    // And the default selection is a rail, not the gun — "selected" means the stores.
+    const fl::LoadoutState ls = fl::buildLoadout(fl::builtinDebugEntityDef(), weapons);
+    CHECK(ls.stations.size() == 5u);
+    CHECK(ls.selected == 1u); // first IR rail
 }

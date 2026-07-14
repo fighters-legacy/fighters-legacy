@@ -233,9 +233,11 @@ EntityValidationResult validateEntityPack(const std::string& packDir) {
         checkAssetRef(*pack, file, "ai_script", def.aiScriptAsset, AssetType::AIScript, r);
         checkAssetRef(*pack, file, "manual", def.manualAsset, AssetType::Manual, r);
 
-        // Def-id references: resolved through the index, never the filesystem (#810).
+        // Def-id references: resolved through the index, never the filesystem (#810). Builtin ids
+        // ("builtin:eyeball", the #440 seeker heads) are compiled in, never pack files.
         for (const std::string& sid : def.sensorIds) {
-            if (sid == sensor::BuiltinSensors::eyeball().id)
+            if (sid == sensor::BuiltinSensors::eyeball().id || sid == sensor::BuiltinSensors::irSeeker().id ||
+                sid == sensor::BuiltinSensors::radarSeeker().id)
                 continue;
             if (index.assetNameFor(AssetType::SensorDef, sid) == nullptr) {
                 r.errors.push_back(file + ": sensors id \"" + sid +
@@ -247,7 +249,8 @@ EntityValidationResult validateEntityPack(const std::string& packDir) {
 
         for (const Hardpoint& hp : def.hardpoints) {
             auto checkWeaponId = [&](const char* field, const std::string& wid) {
-                if (wid.empty() || wid == BuiltinWeapon::get().id)
+                if (wid.empty() || wid == BuiltinWeapon::cannon().id || wid == BuiltinWeapon::irMissile().id ||
+                    wid == BuiltinWeapon::radarMissile().id)
                     return;
                 if (index.assetNameFor(AssetType::Weapon, wid) == nullptr) {
                     r.errors.push_back(file + ": hardpoint slot " + std::to_string(hp.slot) + " " + field +

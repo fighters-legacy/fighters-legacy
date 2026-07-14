@@ -411,9 +411,14 @@ int main(int argc, char** argv) {
     // Keyed by id, so that resolution never touches the filesystem.
     fl::WeaponRegistry weaponRegistry;
     {
+        // Builtins first (#440): the sandbox weapons exist in every configuration, pack or not,
+        // so the armed debug entity's hardpoints always resolve and the fire path is provable
+        // from a bare checkout. The "builtin:" namespace cannot collide with a pack id.
+        const uint32_t builtinWeapons = fl::registerBuiltinWeapons(weaponRegistry);
         const uint32_t packWeapons = registerPackWeaponDefs(assets, weaponRegistry, *log);
         char buf[96];
-        std::snprintf(buf, sizeof(buf), "content: %u pack weapon(s) registered", packWeapons);
+        std::snprintf(buf, sizeof(buf), "content: %u builtin + %u pack weapon(s) registered", builtinWeapons,
+                      packWeapons);
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
 
@@ -421,12 +426,8 @@ int main(int argc, char** argv) {
     fl::EntityTypeRegistry entityRegistry;
     fl::EntityManager entityManager(*log, entityRegistry);
 
-    fl::EntityDef debugDef;
-    debugDef.id = "builtin:debug-entity";
-    debugDef.name = "Debug Entity";
-    debugDef.category = fl::ObjectCategory::AirVehicle;
-    debugDef.maxHp = 100.0f;
-    entityRegistry.registerType(std::move(debugDef));
+    // The debug entity ships ARMED (#440) — the shared builder keeps server and client identical.
+    entityRegistry.registerType(fl::builtinDebugEntityDef());
 
     // Load content-pack entity definitions into the registry (#683) after the builtin type, so pack
     // types become spawnable via the `spawn` admin command and appear in `types`. MsgEntityTypeDef

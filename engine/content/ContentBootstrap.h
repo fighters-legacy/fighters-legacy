@@ -13,6 +13,7 @@ class ContentIndex;
 class EntityTypeRegistry;
 class ILogger;
 class WeaponRegistry;
+struct EntityDef;
 
 namespace sensor {
 struct SensorDef;
@@ -45,6 +46,18 @@ uint32_t registerPackWeaponDefs(AssetManager& assets, WeaponRegistry& registry, 
 // (empty = builtin placeholder); its radar signature is small (a missile is a hard radar target to
 // SEE, not to hit). Main thread, before GameLoop::start(). Returns the number registered.
 uint32_t registerProjectileEntityDefs(const WeaponRegistry& weapons, EntityTypeRegistry& registry, ILogger& log);
+
+// Registers the compiled-in sandbox weapons (#440) — BuiltinWeapon::cannon()/irMissile()/
+// radarMissile() — into `registry`. Always safe to call alongside pack weapons: the "builtin:"
+// namespace cannot collide with a pack id. Call BEFORE registerProjectileEntityDefs so the builtin
+// missiles get projectile entity types. Returns the number registered.
+uint32_t registerBuiltinWeapons(WeaponRegistry& registry);
+
+// The builtin debug entity, ARMED (#440): one cannon, two IR rails, two radar rails, all builtin
+// defaults. Shared by fl-server and the game client so the two can never drift — this is the type
+// WorldBroadcaster::onConnect spawns per peer, and the def whose hardpoints size the client's
+// weapon-station selector in the zero-pack sandbox.
+EntityDef builtinDebugEntityDef();
 
 // Builds the resolver WorldBroadcaster calls on the spawn path to turn an EntityDef::sensorIds entry
 // into a parsed SensorDef (#685), routed through ContentIndex (#810).

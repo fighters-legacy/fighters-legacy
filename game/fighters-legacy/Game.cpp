@@ -556,6 +556,9 @@ bool Game::initContent() {
         static constexpr fl::AssetType kIndexedTypes[] = {fl::AssetType::EntityDef, fl::AssetType::SensorDef,
                                                           fl::AssetType::Weapon};
         d.services.contentIndex.build(*d.services.assets, kIndexedTypes, *d.services.rawLogger);
+        // Builtins first (#440), mirroring fl-server: the sandbox debug entity's stores must
+        // resolve to NAMES for the HUD weapon line even with zero packs mounted.
+        fl::registerBuiltinWeapons(d.services.weapons);
         fl::registerPackWeaponDefs(*d.services.assets, d.services.weapons, *d.services.rawLogger);
     }
 
@@ -597,6 +600,27 @@ void Game::buildManualFor(uint32_t typeIndex) {
                     (std::string("manual: entity def '") + wireDef->id + "' failed to parse: " + e.what()).c_str());
             }
         }
+    }
+    // Zero-pack sandbox: the wire def has no hardpoints and there is no pack to resolve them from,
+    // but the debug entity IS armed (#440) — use the same builder the server spawned it from.
+    if (fullDef.hardpoints.empty() && wireDef->id == "builtin:debug-entity")
+        fullDef = fl::builtinDebugEntityDef();
+
+    // Weapon-station glue (#440): the selector needs the station count, the HUD weapon line needs
+    // names. Wired here — the one place the client resolves the full def of the aircraft it flies —
+    // and BEFORE the flight-model early-out below, so a joiner without the pack's flight model
+    // still gets a working selector. A client with no def (no pack, non-builtin type) gets
+    // stationCount 0: cycling is off and the HUD line stays blank, by design.
+    d.services.flightInput.setStationCount(static_cast<uint8_t>(std::min<std::size_t>(fullDef.hardpoints.size(), 254)));
+    {
+        std::vector<std::string> labels;
+        labels.reserve(fullDef.hardpoints.size());
+        for (const fl::Hardpoint& hpt : fullDef.hardpoints) {
+            const fl::WeaponDef* w =
+                hpt.defaultWeapon.empty() ? nullptr : d.services.weapons.findById(hpt.defaultWeapon.c_str());
+            labels.push_back(w ? w->name : hpt.defaultWeapon); // unresolved id shown verbatim; empty = empty
+        }
+        d.services.flightHud.setStationLabels(std::move(labels));
     }
 
     // The flight model: the same one prediction flies, resolved the same way.
@@ -736,15 +760,10 @@ void Game::startGame() {
     // before the render, and 3D rendering is skipped during the loading overlay), so no stale-state
     // reset is needed here.
 
-    // Register the builtin entity type for the no-pack sandbox path.
-    if (d.services.outcome == FirstRunOutcome::LaunchSandboxInspector) {
-        fl::EntityDef debugDef;
-        debugDef.id = "builtin:debug-entity";
-        debugDef.name = "Debug Entity";
-        debugDef.category = fl::ObjectCategory::AirVehicle;
-        debugDef.maxHp = 100.0f;
-        d.services.entityRegistry.registerType(std::move(debugDef));
-    }
+    // Register the builtin entity type for the no-pack sandbox path — ARMED (#440), via the same
+    // builder fl-server uses, so the client-side hardpoint count matches what the server spawned.
+    if (d.services.outcome == FirstRunOutcome::LaunchSandboxInspector)
+        d.services.entityRegistry.registerType(fl::builtinDebugEntityDef());
 
     const bool isMultiplayer = !d.services.connectHost.empty();
 

@@ -36,6 +36,72 @@ struct BuiltinSensors {
         }();
         return s;
     }
+
+    // The builtin IR seeker head (#440) — referenced by BuiltinWeapon::irMissile() via
+    // `sensor_id = "builtin:ir-seeker"`. A heat source against sky is conspicuous once inside the
+    // gimbal cone, so acquisition PoD is high and the track lobe is nearly certain; the constraint
+    // is the narrow cone and the modest range, not the dice. Passive — an IR seeker emits nothing.
+    [[nodiscard]] static const SensorDef& irSeeker() {
+        static const SensorDef s = [] {
+            SensorDef d;
+            d.id = "builtin:ir-seeker";
+            d.name = "IR Seeker";
+            d.type = SensorType::Ir;
+            d.omnidirectional = false;
+            d.emitter = false;
+
+            d.search.azHalfAngleDeg = 25.f; // the acquisition basket off boresight
+            d.search.elHalfAngleDeg = 25.f;
+            d.search.minRangeM = 0.f;
+            d.search.maxRangeM = 9260.f; // 5 nm against a baseline (ir 1.0) tailpipe
+            d.search.pod = 0.55f;
+
+            SensorLobe track;
+            track.azHalfAngleDeg = 35.f; // gimbal limit once locked
+            track.elHalfAngleDeg = 35.f;
+            track.minRangeM = 0.f;
+            track.maxRangeM = 11112.f; // 6 nm
+            track.pod = 0.9f;
+            d.track = track;
+            d.lockHoldS = 1.0f; // brief memory through a flare/occlusion blink
+
+            return d;
+        }();
+        return s;
+    }
+
+    // The builtin active-radar seeker head (#440) — BuiltinWeapon::radarMissile(),
+    // `sensor_id = "builtin:radar-seeker"`. An EMITTER: when the missile goes active at pitbull it
+    // starts announcing itself, which is the seam the RWR (#529) hangs off. Radar range scales by
+    // sqrt(rcs) like every radar in the one-vocabulary model.
+    [[nodiscard]] static const SensorDef& radarSeeker() {
+        static const SensorDef s = [] {
+            SensorDef d;
+            d.id = "builtin:radar-seeker";
+            d.name = "Active Radar Seeker";
+            d.type = SensorType::Radar;
+            d.omnidirectional = false;
+            d.emitter = true;
+
+            d.search.azHalfAngleDeg = 25.f;
+            d.search.elHalfAngleDeg = 25.f;
+            d.search.minRangeM = 300.f;   // a radar fuze blind zone, not a gun's
+            d.search.maxRangeM = 22224.f; // 12 nm against a baseline (rcs 1.0) fighter
+            d.search.pod = 0.4f;
+
+            SensorLobe track;
+            track.azHalfAngleDeg = 30.f;
+            track.elHalfAngleDeg = 30.f;
+            track.minRangeM = 150.f;
+            track.maxRangeM = 27780.f; // 15 nm
+            track.pod = 0.85f;
+            d.track = track;
+            d.lockHoldS = 2.0f; // coast through a notch before going dumb
+
+            return d;
+        }();
+        return s;
+    }
 };
 
 } // namespace fl::sensor

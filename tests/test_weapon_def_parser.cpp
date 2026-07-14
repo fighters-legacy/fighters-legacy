@@ -386,14 +386,32 @@ TEST_CASE("[seeker] and [guidance] are mutually exclusive", "[weapon]") {
     CHECK_THROWS_AS(parseWeaponDef(toml), std::runtime_error);
 }
 
-TEST_CASE("The builtin weapon is well-formed for the zero-pack sandbox", "[weapon]") {
-    const WeaponDef& w = BuiltinWeapon::get();
-    CHECK(w.id == "builtin:test-missile");
-    CHECK(w.type == WeaponType::Missile);
-    REQUIRE(w.seeker.has_value());
-    CHECK(w.seeker->type == SeekerType::Infrared);
-    CHECK(w.performance.maxRangeM > 0.f);
-    CHECK(w.load.massKg > 0.f);
+TEST_CASE("The builtin sandbox weapons are well-formed", "[weapon]") {
+    const WeaponDef& gun = BuiltinWeapon::cannon();
+    CHECK(gun.id == "builtin:cannon");
+    CHECK(gun.type == WeaponType::Gun);
+    CHECK_FALSE(gun.seeker.has_value());
+    CHECK(gun.performance.rateOfFireRpm > 0.f);
+    CHECK(gun.load.rounds > 1u); // a gun carries a magazine, not a single shot
+
+    const WeaponDef& ir = BuiltinWeapon::irMissile();
+    CHECK(ir.id == "builtin:ir-missile");
+    CHECK(ir.type == WeaponType::Missile);
+    REQUIRE(ir.seeker.has_value());
+    CHECK(ir.seeker->type == SeekerType::Infrared);
+    CHECK(ir.seeker->sensorId == "builtin:ir-seeker"); // the one-vocabulary reference, not a legacy lobe
+    CHECK_FALSE(ir.seeker->usesLegacyLobe());
+    CHECK(ir.load.rounds == 1u);
+
+    const WeaponDef& rdr = BuiltinWeapon::radarMissile();
+    CHECK(rdr.id == "builtin:radar-missile");
+    REQUIRE(rdr.seeker.has_value());
+    CHECK(rdr.seeker->type == SeekerType::ActiveRadar);
+    CHECK(rdr.seeker->sensorId == "builtin:radar-seeker");
+    CHECK(rdr.seeker->pitbullRangeM > 0.f); // ARH goes active on its own radar (#628)
+    CHECK(rdr.seeker->loftRangeM > 0.f);
+    CHECK(rdr.performance.maxRangeM > ir.performance.maxRangeM); // BVR outranges the heater
+
     // Same object every call (BuiltinFlightModel pattern).
-    CHECK(&BuiltinWeapon::get() == &w);
+    CHECK(&BuiltinWeapon::cannon() == &gun);
 }

@@ -243,3 +243,24 @@ TEST_CASE("the builtin eyeball exists with no content pack and is search-only") 
     // Same object every call — it is a compiled-in singleton, like BuiltinFlightModel.
     CHECK(&BuiltinSensors::eyeball() == &s);
 }
+
+TEST_CASE("the builtin seeker heads exist and follow the sensor vocabulary", "[sensor][builtin]") {
+    const SensorDef& ir = fl::sensor::BuiltinSensors::irSeeker();
+    CHECK(ir.id == "builtin:ir-seeker");
+    CHECK(ir.type == SensorType::Ir);
+    CHECK_FALSE(ir.emitter); // an IR seeker announces nothing
+    REQUIRE(ir.track.has_value());
+    CHECK(ir.track->azHalfAngleDeg >= ir.search.azHalfAngleDeg); // the gimbal holds wider than it acquires
+    CHECK(ir.track->pod > ir.search.pod);
+    CHECK(ir.lockHoldS > 0.f);
+
+    const SensorDef& rdr = fl::sensor::BuiltinSensors::radarSeeker();
+    CHECK(rdr.id == "builtin:radar-seeker");
+    CHECK(rdr.type == SensorType::Radar);
+    CHECK(rdr.emitter); // pitbull = the missile starts announcing itself (the #529 RWR seam)
+    REQUIRE(rdr.track.has_value());
+    CHECK(rdr.lockHoldS > 0.f);
+
+    // Same object every call (BuiltinFlightModel pattern).
+    CHECK(&fl::sensor::BuiltinSensors::irSeeker() == &ir);
+}

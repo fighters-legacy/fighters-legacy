@@ -569,7 +569,8 @@ target_include_directories(test_command_shell PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 catch_discover_tests(test_command_shell)
 
 add_executable(test_world_broadcaster test_world_broadcaster.cpp)
-target_link_libraries(test_world_broadcaster PRIVATE Catch2::Catch2WithMain engine-net engine-weather)
+target_link_libraries(test_world_broadcaster PRIVATE Catch2::Catch2WithMain engine-net engine-weather
+    engine-bootstrap) # builtinDebugEntityDef/registerBuiltinWeapons — the sandbox arming smoke (#440)
 catch_discover_tests(test_world_broadcaster)
 
 add_executable(test_weather test_weather.cpp)

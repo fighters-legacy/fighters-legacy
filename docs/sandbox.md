@@ -78,6 +78,12 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 While the radio menu is open, Enter and the digit keys belong to the menu — the fire-store bit and
 station cycling are suppressed, the flight axes and gun trigger stay live.
 
+**The sandbox aircraft is armed.** The builtin debug entity carries five stations: a 20 mm cannon
+(station 1), two IR missiles (2–3) and two radar missiles (4–5) — all compiled-in "builtin:"
+weapons, so the whole fire path works with zero content packs mounted. The HUD's right column
+shows the selection as `ARM <weapon> x<rounds>`; the default selection is the first IR rail
+("selected" means the stores — the gun has its own trigger).
+
 ## Wingman radio menu (C)
 
 Order your flight. `C` opens the menu, `1`–`6` pick a command (arrows + Enter also work), `Escape`

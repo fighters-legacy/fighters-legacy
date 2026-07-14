@@ -9,6 +9,7 @@
 #include "entity/EntityTypeRegistry.h"
 #include "sensor/SensorDef.h"
 #include "sensor/SensorDefParser.h"
+#include "weapon/BuiltinWeapon.h"    // the sandbox loadout (#440)
 #include "weapon/ProjectileSystem.h" // projectileTypeId (#625)
 #include "weapon/WeaponDef.h"
 #include "weapon/WeaponDefParser.h"
@@ -145,6 +146,42 @@ uint32_t registerProjectileEntityDefs(const WeaponRegistry& weapons, EntityTypeR
         }
     }
     return registered;
+}
+
+uint32_t registerBuiltinWeapons(WeaponRegistry& registry) {
+    uint32_t registered = 0;
+    for (const WeaponDef* w : {&BuiltinWeapon::cannon(), &BuiltinWeapon::irMissile(), &BuiltinWeapon::radarMissile()}) {
+        if (registry.registerWeapon(*w) != std::numeric_limits<uint32_t>::max())
+            ++registered;
+    }
+    return registered;
+}
+
+EntityDef builtinDebugEntityDef() {
+    EntityDef def;
+    def.id = "builtin:debug-entity";
+    def.name = "Debug Entity";
+    def.category = ObjectCategory::AirVehicle;
+    def.maxHp = 100.0f;
+
+    // Armed (#440): one cannon, two IR rails, two radar rails — every sandbox/debug peer spawns
+    // able to exercise the whole fire path with zero content mounted.
+    auto hp = [](int slot, HardpointType type, const char* weapon) {
+        Hardpoint h;
+        h.slot = slot;
+        h.type = type;
+        h.allowed = {weapon};
+        h.defaultWeapon = weapon;
+        return h;
+    };
+    def.hardpoints = {
+        hp(0, HardpointType::Gun, BuiltinWeapon::cannon().id.c_str()),
+        hp(1, HardpointType::Missile, BuiltinWeapon::irMissile().id.c_str()),
+        hp(2, HardpointType::Missile, BuiltinWeapon::irMissile().id.c_str()),
+        hp(3, HardpointType::Missile, BuiltinWeapon::radarMissile().id.c_str()),
+        hp(4, HardpointType::Missile, BuiltinWeapon::radarMissile().id.c_str()),
+    };
+    return def;
 }
 
 } // namespace fl

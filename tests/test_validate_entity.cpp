@@ -215,11 +215,10 @@ TEST_CASE("Pack mode: hardpoint weapon references resolve to real weapon defs", 
         CHECK(r.errors.empty());
     }
 
-    SECTION("the builtin weapon needs no pack") {
-        pack.write(
-            "entities/e.toml",
-            aircraftEntity("test:e", "wedge", "f5e/f5e",
-                           station + "allowed = [\"builtin:test-missile\"]\ndefault = \"builtin:test-missile\"\n"));
+    SECTION("the builtin weapons need no pack") {
+        pack.write("entities/e.toml",
+                   aircraftEntity("test:e", "wedge", "f5e/f5e",
+                                  station + "allowed = [\"builtin:ir-missile\"]\ndefault = \"builtin:ir-missile\"\n"));
         const auto r = validateEntityPack(pack.root.string());
         CHECK(r.ok);
     }

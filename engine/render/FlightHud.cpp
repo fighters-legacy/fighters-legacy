@@ -112,6 +112,19 @@ void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrai
     pushText(HudAlign::Left, 0.80f, 0.46f, kHudR, kHudG, kHudB, "THR %3d%%", static_cast<int>(e->throttle));
     pushText(HudAlign::Left, 0.80f, 0.50f, kHudR, kHudG, kHudB, "FUEL %3d%%", static_cast<int>(e->fuelPct));
 
+    // Selected weapon (#440), right column below THR/FUEL: "ARM <name> x<rounds>". The numbers are
+    // the server's own-record loadout block (#625); the name is a client-side label — "STA n" when
+    // the client has no def to name it from. No loadout block on the wire yet = no line.
+    if (e->hasLoadout && e->selectedStation != 255) {
+        const std::size_t sel = e->selectedStation;
+        if (sel < m_stationLabels.size() && !m_stationLabels[sel].empty())
+            pushText(HudAlign::Left, 0.80f, 0.58f, kHudR, kHudG, kHudB, "ARM %s x%u", m_stationLabels[sel].c_str(),
+                     static_cast<unsigned>(e->stationRounds));
+        else
+            pushText(HudAlign::Left, 0.80f, 0.58f, kHudR, kHudG, kHudB, "ARM STA%u x%u", static_cast<unsigned>(sel + 1),
+                     static_cast<unsigned>(e->stationRounds));
+    }
+
     // Damage warning in red (center screen)
     if (e->damageLevel > 0)
         pushText(HudAlign::Center, 0.5f, 0.48f, 1.f, 0.2f, 0.2f, "%s", "*** DAMAGE ***");
