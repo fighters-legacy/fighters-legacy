@@ -1481,6 +1481,11 @@ const FlightIntegrator* WorldBroadcaster::integratorFor(uint32_t entityIdx) cons
     return (it != m_controlledEntities.end() && it->second.sim) ? it->second.sim.get() : nullptr;
 }
 
+WarheadResult WorldBroadcaster::applyWarheadAt(const double pos[3], const BlastSpec& blast, EntityId instigator) {
+    return applyWarhead(m_entityManager, m_spatialIndex, pos, blast, instigator, m_damageRules,
+                        [this](EntityId victim) { m_sensorSystem.setAvionicsFailed(victim.index); });
+}
+
 uint32_t WorldBroadcaster::peerIdForEntity(EntityId id) const noexcept {
     if (!id.valid())
         return kNoOwningPeer;

@@ -3,6 +3,8 @@
 
 #include "entity/EntityId.h"
 
+#include <functional>
+
 namespace fl {
 
 class EntityManager;
@@ -31,5 +33,40 @@ struct DamageRules {
 //
 // Sim-thread only (it can fire event handlers and kill, like everything on EntityManager).
 bool applyPointDamage(EntityManager& em, EntityId target, float amount, EntityId instigator, const DamageRules& rules);
+
+class SpatialIndex;
+
+// What a detonation does, stripped of the weapon vocabulary. engine-entity deliberately does not
+// know about WeaponDef (the dependency runs the other way — see engine/CMakeLists.txt), so callers
+// map WeaponDef::warhead into this POD. The same reason SignatureDef is an entity-side POD.
+struct BlastSpec {
+    float radiusM{0.f};  // lethal radius; damage falls off linearly to zero here
+    float damage{0.f};   // applied at the centre
+    bool nuclear{false}; // adds the EMP ring at kEmpRadiusMultiple × radiusM
+};
+
+// Area-of-effect warhead detonation (#356) — the blast-radius damage query the per-entity damage
+// model never had. Broadphase through the spatial index (cell-conservative), exact 3D range check,
+// then LINEAR falloff: damage × (1 − d/R), full at the centre, zero at the edge. Every victim goes
+// through applyPointDamage, so the friendly-fire gate holds inside a blast exactly as it does for
+// a bullet — and self-damage applies, because your own blast radius does not care who armed it.
+//
+// Nuclear: entities within the EMP radius — kEmpRadiusMultiple × blast radius — take an avionics
+// kill via `empEffect` (the caller wires it to SensorSystem::setAvionicsFailed; null = no EMP
+// consumer in this context). The EMP applies to blast survivors and bystanders alike: electronics
+// do not care about shrapnel range. Flash and cloud are client-side cosmetics and ride the effects
+// channel, not this function.
+//
+// Deterministic: no dice anywhere — blast damage is geometry. Sim-thread only.
+inline constexpr float kEmpRadiusMultiple = 4.f;
+
+struct WarheadResult {
+    int damaged{0}; // entities that took blast damage (post-gates)
+    int emped{0};   // entities inside the EMP radius (nuclear only)
+};
+
+WarheadResult applyWarhead(EntityManager& em, const SpatialIndex& si, const double pos[3], const BlastSpec& blast,
+                           EntityId instigator, const DamageRules& rules,
+                           const std::function<void(EntityId)>& empEffect = {});
 
 } // namespace fl

@@ -253,6 +253,24 @@ void registerConsoleCommands(CommandRegistry& registry, CommandContext ctx) {
             return "weather preset queued: " + std::string(preset);
         });
 
+    // detonate (#356) — forwarded verbatim; the server owns parsing and the world.
+    registry.registerCommand("detonate",
+                             "detonate <x> <y> <z> <blast_radius_m> <damage> [--nuclear]  -- AoE warhead "
+                             "at a world position (server-side)",
+                             [ctx](std::span<std::string_view> args) -> std::string {
+                                 if (args.size() < 5)
+                                     return "usage: detonate <x> <y> <z> <blast_radius_m> <damage> [--nuclear]";
+                                 if (!ctx.serverCommand)
+                                     return "detonate: not available in this context";
+                                 std::string cmd = "detonate";
+                                 for (const auto& a : args) {
+                                     cmd += ' ';
+                                     cmd += a;
+                                 }
+                                 ctx.serverCommand(cmd);
+                                 return "detonation queued";
+                             });
+
     // ------------------------------------------------------------------
     // set_difficulty <level>  (stub)
     // ------------------------------------------------------------------

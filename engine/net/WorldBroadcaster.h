@@ -637,6 +637,15 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // reads (#625) — never a back door for controllers, which see the world through AiTickContext.
     [[nodiscard]] const FlightIntegrator* integratorFor(uint32_t entityIdx) const noexcept;
 
+    // Detonate a warhead at a world position (#356): blast damage with linear falloff through
+    // applyPointDamage (so the friendly-fire gate holds inside a blast), and — when nuclear — the
+    // EMP ring wired to SensorSystem::setAvionicsFailed. Every warhead consumer (proximity fuzes,
+    // bomb impacts, the `detonate` admin command) goes through here. Sim-thread only; call via
+    // enqueueSimCallback from anywhere else. Note the spatial index is rebuilt at the top of each
+    // onTick, so a detonation between ticks sees the previous tick's positions — one tick of
+    // staleness, the same view every other consumer of the index gets.
+    WarheadResult applyWarheadAt(const double pos[3], const BlastSpec& blast, EntityId instigator);
+
     void setCongestionParams(const CongestionParams& params) noexcept;
 
     // Set the graceful tick-overrun governor parameters (#514). Applied to the governor each tick, so

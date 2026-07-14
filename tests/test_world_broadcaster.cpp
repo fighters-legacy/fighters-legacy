@@ -7984,3 +7984,36 @@ TEST_CASE("WorldBroadcaster: DamageLevelChanged applies the DamageDef penalties 
     CHECK(fi->damageThrustFactor() == 0.1f);
     CHECK(fi->damageControlFactor() == 0.2f);
 }
+
+TEST_CASE("WorldBroadcaster: applyWarheadAt damages through the pipeline and EMPs on nuclear",
+          "[world_broadcaster][combat]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    em.addEventHandler(&broadcaster);
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u); // builds the spatial index the warhead queries
+
+    const auto ack = parseSendAck(net);
+    const fl::EntityId player{ack.assignedEntityIdx, ack.assignedEntityGen};
+    const fl::EntityState* ps = em.get(player);
+    REQUIRE(ps != nullptr);
+
+    // Detonate a nuclear warhead just outside blast range but inside the EMP ring.
+    double pos[3] = {ps->transform.pos[0] + 200.0, ps->transform.pos[1], ps->transform.pos[2]};
+    fl::BlastSpec nuke{100.f, 80.f, true};
+    const auto r = broadcaster.applyWarheadAt(pos, nuke, fl::EntityId::null());
+
+    CHECK(em.get(player)->hp == 100.f); // no shrapnel at 200 m
+    CHECK(r.emped >= 1);                // but the avionics are gone (SensorSystem wiring is live)
+
+    // And inside blast range it hurts.
+    double close[3] = {ps->transform.pos[0] + 10.0, ps->transform.pos[1], ps->transform.pos[2]};
+    fl::BlastSpec he{100.f, 50.f, false};
+    broadcaster.applyWarheadAt(close, he, fl::EntityId::null());
+    CHECK(em.get(player)->hp < 100.f);
+}

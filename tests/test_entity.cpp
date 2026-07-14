@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
@@ -15,7 +16,9 @@
 #include "entity/EntityTypeRegistry.h"
 #include "entity/ObjectCategory.h"
 #include "render/SimRenderBridge.h"
+#include "spatial/SpatialIndex.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <random>
@@ -1259,4 +1262,96 @@ TEST_CASE("applyPointDamage: instigator attribution flows through to the kill", 
     CHECK(collector.events[0].instigator == shooter);
     CHECK(collector.events[1].type == fl::EntityEventType::ScoreAwarded);
     CHECK(collector.events[1].instigator == shooter);
+}
+
+// ---------------------------------------------------------------------------
+// applyWarhead — area-of-effect detonation (#356)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct BlastWorld {
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em;
+    fl::SpatialIndex si;
+
+    BlastWorld() : em(logger, registry) {
+        registry.registerType(makeAirVehicleDef("blast:a"));
+    }
+
+    fl::EntityId spawnAt(double x, double y, double z) {
+        fl::EntityTransform t{};
+        t.pos[0] = x;
+        t.pos[1] = y;
+        t.pos[2] = z;
+        auto id = em.spawn("blast:a", t);
+        si.insert(id.index, t.pos);
+        return id;
+    }
+};
+
+} // namespace
+
+TEST_CASE("applyWarhead: linear falloff — full at the centre, zero at the edge, nothing outside", "[warhead]") {
+    BlastWorld w;
+    const auto centre = w.spawnAt(0, 0, 0);
+    const auto mid = w.spawnAt(50, 0, 0);      // half the radius: half the damage
+    const auto atEdge = w.spawnAt(100, 0, 0);  // exactly the radius: zero
+    const auto outside = w.spawnAt(150, 0, 0); // untouched
+
+    fl::BlastSpec blast{100.f, 80.f, false};
+    const double pos[3] = {0, 0, 0};
+    const auto r = fl::applyWarhead(w.em, w.si, pos, blast, fl::EntityId::null(), fl::DamageRules{});
+
+    CHECK(w.em.get(centre)->hp == Catch::Approx(20.f)); // 100 − 80
+    CHECK(w.em.get(mid)->hp == Catch::Approx(60.f));    // 100 − 40
+    CHECK(w.em.get(atEdge)->hp == Catch::Approx(100.f));
+    CHECK(w.em.get(outside)->hp == Catch::Approx(100.f));
+    CHECK(r.damaged == 2);
+}
+
+TEST_CASE("applyWarhead: the friendly-fire gate holds inside a blast", "[warhead]") {
+    BlastWorld w;
+    const auto shooter = w.spawnAt(500, 0, 0); // outside its own blast
+    const auto friendly = w.spawnAt(10, 0, 0);
+    const auto hostile = w.spawnAt(20, 0, 0);
+    w.em.get(shooter)->factionIndex = 1;
+    w.em.get(friendly)->factionIndex = 1;
+    w.em.get(hostile)->factionIndex = 2;
+
+    fl::BlastSpec blast{100.f, 50.f, false};
+    const double pos[3] = {0, 0, 0};
+    fl::applyWarhead(w.em, w.si, pos, blast, shooter, fl::DamageRules{}); // FF off by default
+
+    CHECK(w.em.get(friendly)->hp == 100.f);
+    CHECK(w.em.get(hostile)->hp < 100.f);
+}
+
+TEST_CASE("applyWarhead: a nuclear blast EMPs bystanders far beyond the shrapnel", "[warhead]") {
+    BlastWorld w;
+    const auto inBlast = w.spawnAt(50, 0, 0);
+    const auto bystander = w.spawnAt(300, 0, 0); // outside 100 m blast, inside the 400 m EMP ring
+    const auto farAway = w.spawnAt(500, 0, 0);
+
+    std::vector<uint32_t> emped;
+    fl::BlastSpec nuke{100.f, 80.f, true};
+    const double pos[3] = {0, 0, 0};
+    const auto r = fl::applyWarhead(w.em, w.si, pos, nuke, fl::EntityId::null(), fl::DamageRules{},
+                                    [&](fl::EntityId id) { emped.push_back(id.index); });
+
+    CHECK(w.em.get(inBlast)->hp < 100.f);
+    CHECK(w.em.get(bystander)->hp == 100.f); // no shrapnel out there...
+    CHECK(r.emped == 2);                     // ...but the electronics are gone
+    CHECK(std::find(emped.begin(), emped.end(), bystander.index) != emped.end());
+    CHECK(std::find(emped.begin(), emped.end(), farAway.index) == emped.end());
+}
+
+TEST_CASE("applyWarhead: a degenerate blast is a no-op", "[warhead]") {
+    BlastWorld w;
+    const auto e = w.spawnAt(0, 0, 0);
+    const double pos[3] = {0, 0, 0};
+    CHECK(fl::applyWarhead(w.em, w.si, pos, fl::BlastSpec{0.f, 100.f, false}, fl::EntityId::null(), fl::DamageRules{})
+              .damaged == 0);
+    CHECK(w.em.get(e)->hp == 100.f);
 }
