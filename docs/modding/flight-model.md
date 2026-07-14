@@ -72,11 +72,20 @@ All TOML derivative values follow **body-axis / stability-axis conventions** con
 NACA/NASA reporting standards. Authors can copy derivative values directly from technical reports
 without sign reversal.
 
-**Body-axis frame (right-hand rule):**
+**Body-axis frame (right-hand rule).** The engine's body frame is **X forward, Y up, Z right**
+(`AeroForces.cpp`, `IForceModel.h`) — a Y-up frame, matching the renderer and glTF. It is **not** the
+NACA Z-down frame, and this document used to claim it was.
 
 - X-axis: positive **forward** (out the nose)
-- Y-axis: positive **right** (starboard wing)
-- Z-axis: positive **down** (toward the ground in level flight)
+- Y-axis: positive **up**
+- Z-axis: positive **right** (starboard wing)
+
+**What this means for you: nothing.** The derivative *sign conventions* below are the NACA ones, and
+they are what you actually author — a negative `cm_alpha` is statically stable here exactly as it is
+in every textbook and every DATCOM table, because the engine returns its moment vector as
+`{roll, pitch, yaw}` rather than as components of a coordinate frame. **Transcribe published
+derivatives with their published signs.** The frame is stated only so that nobody trying to reason
+about the *forces* is misled.
 
 **Aerodynamic angles:**
 
@@ -231,7 +240,13 @@ implicitly — authors enter the actual CL value at each condition.
 
 - NACA technical notes and reports (ntrs.nasa.gov) — search the aircraft designation alongside
   "lift coefficient" or "stability derivatives"
-- NASA TP-1538 (F-15A), NASA TM-86694 (F/A-18C), NASA CR-2144 (F-16) are good starting points
+- **NASA TP-1538** — Nguyen et al., 1979, *Simulator Study of Stall/Post-Stall Characteristics of a
+  Fighter Airplane With Relaxed Longitudinal Static Stability*. This is the **F-16**, and it is the
+  only complete public-domain nonlinear aero database for any military jet — CL, CD and the moment
+  derivatives tabulated against alpha and Mach. It is the single most useful document on this list.
+- **NASA CR-2144** — Heffley & Jewell, 1972, *Aircraft Handling Qualities Data*. Dimensional
+  derivatives for the **F-104A, F-4C, X-15, NT-33, XB-70A** and five others. It is **not** the F-16.
+- NASA TM-86694 (F/A-18C) for a second modern-fighter cross-check.
 - X-Plane Airfoil Tools for cross-checking subsonic 2D section data
 - Jane's performance tables for cross-check: if stall speed V_stall and mass are known,
   CL_max = 2 × mass × g / (ρ × V_stall² × S)
@@ -271,6 +286,36 @@ accuracy.
 simultaneously and stack with wave drag and payload drag.
 
 ---
+
+## `[aero.cd_table]` — Tabulated drag (optional; replaces the parabolic polar)
+
+A `Table2D(alpha_deg, mach) -> CD`, structurally identical to `[aero.cl_table]`.
+
+**Why it exists.** A parabolic polar (`cd0 + k·CL²`) forces the implied induced-drag coefficient to be
+*constant* across a specific-excess-power chart. Real fighters do not behave that way — against the
+F-5E's flight manual the implied coefficient grows **3.5×** from the 1–2 g region to the 4–5 g region,
+because a real wing's drag rises far faster than CL² near max lift. Fit `k` to cruise and the aircraft
+out-turns the real thing by 18%; fit it to the hard-turn end and cruise drag is overstated, wrecking
+range and acceleration. **No single value of `k` gives both.** It is also the form real data arrives
+in: NASA TP-1538 publishes the F-16's CD as a table against alpha and Mach, which cannot be
+transcribed into a polar at all.
+
+```toml
+[aero.cd_table]
+alpha  = [-10, -5, 0, 5, 10, 15, 20, 25]   # >= 4 breakpoints
+mach   = [0.2, 0.6, 0.9, 1.2, 1.6]         # >= 2 breakpoints
+values = [ ... ]                            # row-major, len(alpha) x len(mach); all > 0
+```
+
+**When present it REPLACES `cd0 + k·CL²` entirely** — the table is *total clean drag* and already
+includes induced drag. `cd_wave`, `speedbrake_cd`, `gear_cd` and the payload's drag still add on top.
+
+**Set `drag_polar.k = 0.0` when you use it.** Authoring both a `cd_table` and a non-zero `k` is a
+validator **error**, because the induced term would be counted twice — a silent 2× drag bug you would
+have no way to debug from the outside.
+
+If you have no tabulated data, ignore this block: `[aero.drag_polar]` remains the simple path, and it
+is what most content will use.
 
 ## `[aero.cd_wave]` — Transonic wave drag
 
@@ -333,7 +378,7 @@ moment contributions to zero at near-zero speed.
 
 | Derivative | Sign | Range (fighters) | Source |
 |---|---|---|---|
-| `cm_alpha` | Negative = statically stable | −0.3 to −1.5 | NACA TR 711, NASA TP-1538 series |
+| `cm_alpha` | Negative = statically stable | −0.3 to −1.5 | NACA TR 711, NASA TP-1538 (F-16) |
 | `cm_q` | Always negative | −5 to −25 | NACA TN 2283 |
 | `cm_de` | Negative (trailing-edge-down = nose-up moment) | −0.5 to −2.5 | DATCOM, NACA reports |
 
@@ -355,7 +400,7 @@ Larger `cl_da` → snappier roll response.
 
 | Derivative | Sign | Range (fighters) | Source |
 |---|---|---|---|
-| `cn_beta` | Positive = weathercock stable | 0.05 to 0.25 | NASA TP-1538 |
+| `cn_beta` | Positive = weathercock stable | 0.05 to 0.25 | NASA TP-1538 (F-16) |
 | `cn_r` | Always negative | −0.05 to −0.25 | NACA TN 2235 |
 | `cn_dr` | Negative | −0.03 to −0.12 | DATCOM |
 
@@ -383,13 +428,16 @@ max_mach         =   1.8
 
 | Field | Meaning |
 |---|---|
-| `alpha_stall_deg` | AoA at which CL peaks in the table. Must match the CL table. Consumed by flight assists (AoA limiter intervention at 90% of this value). |
-| `max_g_structural` | Positive G limit before progressive damage begins. Range: 6.5g (heavy strikers) to 9g (dogfighters). Source: aircraft flight manual / Jane's. |
-| `min_g_structural` | Negative G limit. Typical: −2.5g to −3.5g. Sustained inverted flight beyond this triggers structural damage. |
-| `max_mach` | Vne (never-exceed Mach). Exceeding this triggers structural damage. Source: flight manual / Jane's. |
+| `alpha_stall_deg` | The AoA at which this aircraft departs. **`validate-flight-model` requires your `cl_table` to peak within 2° of it** — the engine does not clamp CL at the stall, because your table *is* the stall; if the two disagree, the model is lying about itself. Sets `FlightState::stalled`, which drives buffet, the HUD cue and AI. |
+| `max_g_structural` | Positive structural limit. Exceeding it by >10% for >0.5 s **damages the airframe**. Range: 6.5 g (heavy strikers) to 9 g (dogfighters). Source: flight manual / Jane's. |
+| `min_g_structural` | Negative structural limit. Typical −2.5 g to −3.5 g. Same damage rule. |
+| `max_mach` | Never-exceed Mach. **Not** enforced by an artificial drag wall: an aircraft's top speed comes from drag rising to meet thrust. `fm-trim` fails a model that can exceed this in level flight — if it can, the *model* is wrong, and you should fix `cd_wave` or the thrust deck. |
 
-**On FBW aircraft** (`has_fbw = true`), `max_g_structural` and `alpha_stall_deg` are enforced
-even with all assists off. On non-FBW aircraft, they are player-toggleable limits.
+**On FBW aircraft** (`has_fbw = true`) the flight computer will not let the pilot exceed
+`max_g_structural`: it limits AoA to whatever produces the limit at the current dynamic pressure.
+**On everything else there is no limiter at all** — and that is deliberate. An F-5E pilot *can*
+overstress the jet, and the sim lets them, and then bills them. `has_fbw` gates the limiter and
+nothing else.
 
 ---
 
@@ -633,6 +681,10 @@ management consequential: pushing AB in a merge doesn't deliver power immediatel
 
 ## `[carrier]` — Carrier operations (optional block)
 
+> **Parsed but not yet consumed.** The engine reads and stores this block; nothing acts on it
+> yet. Author it if you like — it will start working without a content change — but do not spend a
+> day tuning numbers that currently do nothing.
+
 Block presence indicates carrier-capable. Omit entirely for land-based aircraft.
 
 ```toml
@@ -665,6 +717,10 @@ Compare with `CL(approach_aoa_deg, approach_mach)` from the table.
 
 ## `[refueling]` — In-flight refueling reception (optional block)
 
+> **Parsed but not yet consumed.** The engine reads and stores this block; nothing acts on it
+> yet. Author it if you like — it will start working without a content change — but do not spend a
+> day tuning numbers that currently do nothing.
+
 Block presence indicates the aircraft can receive fuel. Omit if not capable.
 
 ```toml
@@ -687,6 +743,8 @@ have `type = "both"`). The engine checks compatibility before allowing contact.
 ---
 
 ## `[tanker]` — Fuel dispensing (optional block)
+
+> **Parsed but not yet consumed.** As above.
 
 Block presence indicates the aircraft can provide fuel. Omit for non-tanker aircraft. An
 aircraft can have both `[refueling]` (it can receive) and `[tanker]` (it can dispense) — for
@@ -734,10 +792,11 @@ realistic so aircraft feel correctly penalised for carrying heavy ordnance.
 
 ## Flight assists — what schema fields they consume
 
-| Assist | Fields consumed |
-|---|---|
-| G-limiter | `max_g_structural`, `min_g_structural` |
-| AoA limiter | `alpha_stall_deg` (intervenes at 90% of stall AoA) |
+| Assist | Fields consumed | Status |
+|---|---|---|
+| G-limiter (FBW only) | `max_g_structural`, `has_fbw` | **Implemented** — limits AoA to hold the structural limit |
+| Over-G damage (all aircraft) | `max_g_structural`, `min_g_structural` | **Implemented** |
+| Stall flag + buffet | `alpha_stall_deg` | **Implemented** |
 | Auto-leveling | `cm_q`, `cl_p` (via moment derivatives — no extra fields) |
 | Auto-throttle | `[engine]` tables, `fuel_flow_*`, `spool_time_s` |
 | Carrier auto-throttle | `approach_m_s`, `approach_aoa_deg` |
