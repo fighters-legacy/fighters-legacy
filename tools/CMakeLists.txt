@@ -204,3 +204,29 @@ endif()
 # Unconditional — no Vulkan or SDL3 dependency required.
 add_executable(terrain-chunk-io terrain-chunk-io/main.cpp)
 target_link_libraries(terrain-chunk-io PRIVATE engine-render)
+
+# ---------------------------------------------------------------------------
+# Install rules (#814)
+# ---------------------------------------------------------------------------
+#
+# release.yml used to carry a hand-maintained list of tool binaries PER PLATFORM, and the two lists
+# had already drifted: Linux shipped 5 tools, Windows shipped 6. Neither shipped validate-weapon or
+# validate-sensor -- exactly the two asset types the first aircraft introduces -- so fl-base-pack
+# could not gate on weapons or sensors at all. Delete the lists; let CMake own the set.
+#
+# COMPONENT IS NOT DECORATION. The FetchContent dependencies (SDL3, ktx, yaml-cpp, GameNetworkingSockets,
+# Catch2, ...) are not EXCLUDE_FROM_ALL, so they contribute their own install rules. A bare
+# `cmake --install` would dump their headers, static libraries and CMake config packages into the
+# release archive. Scoping to a component keeps the archive to what we actually ship.
+install(TARGETS
+    validate-flight-model
+    validate-weapon
+    validate-sensor
+    validate-mission
+    validate-mesh
+    validate-playlist
+    validate-licenses
+    tex-compress
+    fm-trim
+    RUNTIME DESTINATION .
+    COMPONENT tools)

@@ -25,3 +25,8 @@ endif()
 if(MSVC)
     target_compile_definitions(fl-server PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
+
+# fl-server ships in the release, and it is not optional: the game spawns it as a co-located
+# subprocess for single-player (LocalServer). It was in NEITHER platform's packaging list, which
+# means every published release has been unplayable offline. Found while doing #814.
+install(TARGETS fl-server RUNTIME DESTINATION . COMPONENT runtime)

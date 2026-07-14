@@ -70,3 +70,5 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         target_compile_definitions(fighters-legacy PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
 endif()
+
+install(TARGETS fighters-legacy RUNTIME DESTINATION . COMPONENT runtime)
