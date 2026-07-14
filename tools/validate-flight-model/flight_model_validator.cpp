@@ -488,6 +488,25 @@ static void validateAeroControls(const toml::table& tbl, FlightModelValidationRe
             r.ok = false;
         }
     }
+
+    // Optional asymmetric pitch travel (#822). It is a TRAVEL, so it is a positive magnitude — the
+    // sign is carried by the stick, not by the number. Authoring it negative would silently reverse
+    // the aircraft's nose-down response, which is the kind of bug that gets blamed on the sim.
+    if (auto neg = ctrl["max_elevator_neg_deg"]) {
+        auto v = neg.value<double>();
+        if (!v || *v <= 0.0) {
+            r.errors.push_back("aero.controls.max_elevator_neg_deg must be > 0 (it is a travel magnitude; "
+                               "nose-down is expressed by the stick, not by a negative number)");
+            r.ok = false;
+        } else if (auto pos = ctrl["max_elevator_deg"].value<double>(); pos && *v > *pos) {
+            // Not an error -- a canard or a tailless design could plausibly have more nose-down than
+            // nose-up travel -- but on a conventional fighter it is almost always a transcription
+            // slip, and it doubles the aircraft's bunt authority if it goes unnoticed.
+            r.warnings.push_back("aero.controls.max_elevator_neg_deg " + std::to_string(*v) +
+                                 " exceeds max_elevator_deg " + std::to_string(*pos) +
+                                 " — unusual: most aircraft have more nose-up authority than nose-down");
+        }
+    }
 }
 
 static void validateEngine(const toml::table& tbl, FlightModelValidationResult& r) {

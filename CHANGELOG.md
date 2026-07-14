@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **flight**: `[aero.controls] max_elevator_neg_deg` — asymmetric pitch travel (#822)
+
 ### Fixed
 
 - **engine**: Hardened every TOML integer read against a float→int UB bug in toml++ (#824)

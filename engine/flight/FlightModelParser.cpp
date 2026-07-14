@@ -235,6 +235,10 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.controls.max_elevator_deg = req_float(ctrl["max_elevator_deg"], "aero.controls.max_elevator_deg");
         d.controls.max_aileron_deg = req_float(ctrl["max_aileron_deg"], "aero.controls.max_aileron_deg");
         d.controls.max_rudder_deg = req_float(ctrl["max_rudder_deg"], "aero.controls.max_rudder_deg");
+
+        // Optional asymmetric pitch travel (#822). Absent ⇒ symmetric ⇒ bit-identical to before.
+        d.controls.max_elevator_neg_deg = static_cast<float>(
+            ctrl["max_elevator_neg_deg"].value<double>().value_or(static_cast<double>(d.controls.max_elevator_deg)));
     }
 
     // ── [aero.tvc] (optional) ─────────────────────────────────────────────────
