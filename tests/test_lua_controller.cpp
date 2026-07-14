@@ -545,6 +545,51 @@ TEST_CASE("LuaController: the detected_contacts() example from docs/modding/ai.m
     CHECK(engaged.aileron > 0.f); // banking right, toward the contact
 }
 
+TEST_CASE("LuaController: the Script-anatomy loiter example from docs/modding/ai.md runs as documented") {
+    // #830: the doc's own worked example called pitch_error_from_alt with the two-argument form the
+    // guide mis-documented, so anyone who copied it got a Lua error every tick and an AI that flew
+    // straight ahead forever. This is that example, verbatim from the guide (only the loiter centre
+    // constants matter to the assertions). If the binding signature and the doc drift again, this
+    // fails instead of the next content author's evening.
+    auto c = makeCtrl("local cx, cz, alt = 0, 0, 600\n"
+                      "local radius = 3000\n"
+                      "\n"
+                      "function compute_control(state, tick, dt)\n"
+                      "    local pos  = state.pos\n"
+                      "    local quat = state.quat\n"
+                      "    local nx   = cx - pos.x\n"
+                      "    local nz   = cz - pos.z\n"
+                      "    local dist = math.sqrt(nx * nx + nz * nz)\n"
+                      "    if dist < 1 then\n"
+                      "        return {throttle = 0.65}\n"
+                      "    end\n"
+                      "    nx, nz = nx / dist, nz / dist\n"
+                      "    local tx   = pos.x + nx * math.min(dist, 1000) + nz * 1000\n"
+                      "    local tz   = pos.z + nz * math.min(dist, 1000) - nx * 1000\n"
+                      "    local herr = guidance.heading_error(quat, pos, {x = tx, y = pos.y, z = tz})\n"
+                      "    local perr = guidance.pitch_error_from_alt(quat, pos, alt - pos.y)\n"
+                      "    return {\n"
+                      "        aileron  = guidance.bank_to_turn_aileron(herr),\n"
+                      "        rudder   = guidance.coordinated_rudder(guidance.bank_to_turn_aileron(herr)),\n"
+                      "        elevator = guidance.elevator_from_pitch_error(perr),\n"
+                      "        throttle = 0.65,\n"
+                      "    }\n"
+                      "end");
+    REQUIRE(c->isValid());
+
+    // Away from the loiter centre the full guidance path runs. A Lua error in any of the calls
+    // would surface as the neutral ControlInput (throttle 0) — asserting 0.65 IS the regression
+    // check for the mis-documented two-argument pitch_error_from_alt.
+    const fl::ControlInput steering = c->sample(makeState(5000.0, 600.0, 0.0), 0, 1.0 / 60.0, fl::AiTickContext{});
+    CHECK(steering.throttle == Catch::Approx(0.65f).epsilon(0.001f));
+    CHECK(steering.aileron != 0.f); // it is actually steering, not coasting through an error
+
+    // At the centre the early-out branch runs.
+    const fl::ControlInput centred = c->sample(makeState(0.0, 600.0, 0.0), 0, 1.0 / 60.0, fl::AiTickContext{});
+    CHECK(centred.throttle == Catch::Approx(0.65f).epsilon(0.001f));
+    CHECK(centred.aileron == 0.f);
+}
+
 TEST_CASE("LuaController: state.faction lets a script tell friend from foe") {
     // The gap the documented example exposed: `detected_contacts()` reports each contact's faction,
     // but a script had no way to learn its OWN — so `c.faction ~= state.faction` compared against nil,

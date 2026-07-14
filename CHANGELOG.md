@@ -15,6 +15,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **tools**: `validate-weapon --pack` now validates the pack's weapons (per-file schema + plausibility, duplicate ids); the hardpoint↔weapon cross-check moved to `validate-entity --pack`, where the referencing files live (#829)
 
+### Fixed
+
+- **docs**: `ai.md` documented `pitch_error_from_alt` with the wrong signature and its own worked example used the wrong form — copy it and the AI errors every tick while flying straight ahead; the example is now executed as a test so the docs and the bindings cannot drift silently again (#830)
+
 ### Added
 
 - **tools**: `fm-trim` gate rows can pin a Mach, a load factor and a payload — the Ps ladder is now checkable in CI (#826)
