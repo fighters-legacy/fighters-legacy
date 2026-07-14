@@ -205,8 +205,18 @@ EntityDef parseEntityDef(std::string_view toml_src) {
                 hp.allowed.push_back(std::move(*id));
             }
 
+            // AN EMPTY STATION IS A LEGITIMATE LOADOUT CHOICE, and `default = ""` is how content
+            // says so. Loadout::defaultPayload already treats it that way and says as much in its
+            // own comment -- but the parser used to throw on it, so the entity never survived to
+            // reach that code. The two halves of the engine disagreed, and the parser won.
+            //
+            // This is not a corner case: it is the NORMAL case. An F-5E's published performance is
+            // flown with its pylons CLEAN, and every aircraft that spawns without a full war load
+            // needs to express "this station exists, it can carry these things, and right now it is
+            // empty". Requiring a default store on every station makes that unsayable.
             hp.defaultWeapon = req_string((*hp_tbl)["default"], "hardpoints.default");
-            if (std::find(hp.allowed.begin(), hp.allowed.end(), hp.defaultWeapon) == hp.allowed.end())
+            if (!hp.defaultWeapon.empty() &&
+                std::find(hp.allowed.begin(), hp.allowed.end(), hp.defaultWeapon) == hp.allowed.end())
                 throw std::runtime_error("hardpoints.default \"" + hp.defaultWeapon +
                                          "\" is not listed in hardpoints.allowed");
 
