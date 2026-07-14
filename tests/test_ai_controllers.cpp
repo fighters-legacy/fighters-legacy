@@ -4,6 +4,7 @@
 #include "ai/BreakTurnController.h"
 #include "ai/EvadeController.h"
 #include "ai/Guidance.h"
+#include "ai/GunsEmploymentController.h"
 #include "ai/LoiterController.h"
 #include "ai/PursuitController.h"
 #include "ai/StateMachineController.h"
@@ -12,6 +13,7 @@
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
+#include "flight/BallisticLead.h"
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
 
@@ -2678,4 +2680,157 @@ TEST_CASE(
     const fl::ControlInput ctrl = pc.sample(self, 0, 1.0 / 60.0, ctx);
     CHECK(ctrl.throttle == Catch::Approx(0.9f));
     CHECK(ctrl.aileron > 0.f); // banking right, toward the last-known position — not straight ahead
+}
+
+// ---------------------------------------------------------------------------
+// Ballistic lead + guns employment (#462)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("BallisticLead: a stationary target in vacuum is aimed at directly") {
+    const auto r = fl::computeBallisticLead({0, 0, 0}, {0, 0, 0}, {1000, 0, 0}, {0, 0, 0},
+                                            /*muzzle=*/1000.f, /*gravity=*/{0, 0, 0});
+    REQUIRE(r.valid);
+    CHECK(r.aimPoint.x == Catch::Approx(1000.0));
+    CHECK(r.aimPoint.z == Catch::Approx(0.0));
+    CHECK(r.timeOfFlightS == Catch::Approx(1.0f).epsilon(0.001));
+}
+
+TEST_CASE("BallisticLead: a crossing target matches the closed-form intercept") {
+    // Shooter at rest, muzzle 1000 m/s; target at (1000, 0, 0) crossing +Z at 200 m/s, no gravity.
+    // Closed form: |(1000, 0, 200 t)| = 1000 t  =>  t = sqrt(1e6 / (1e6 - 4e4)) = 1.02062...
+    const auto r =
+        fl::computeBallisticLead({0, 0, 0}, {0, 0, 0}, {1000, 0, 0}, {0, 0, 200.f}, 1000.f, {0, 0, 0}, /*iters=*/4);
+    REQUIRE(r.valid);
+    const double tExact = std::sqrt(1.0e6 / (1.0e6 - 4.0e4));
+    CHECK(r.timeOfFlightS == Catch::Approx(tExact).epsilon(0.01));
+    CHECK(r.aimPoint.z == Catch::Approx(200.0 * tExact).epsilon(0.01));
+}
+
+TEST_CASE("BallisticLead: gravity raises the aim point by the drop") {
+    // 1000 m at 1000 m/s is one second of flight: the round drops ~4.9 m, so aim ~4.9 m high.
+    const auto r =
+        fl::computeBallisticLead({0, 0, 0}, {0, 0, 0}, {1000, 0, 0}, {0, 0, 0}, 1000.f, {0.f, -9.80665f, 0.f});
+    REQUIRE(r.valid);
+    CHECK(r.aimPoint.y == Catch::Approx(4.903).epsilon(0.02));
+}
+
+TEST_CASE("BallisticLead: shooter velocity carries into the round") {
+    // Tail chase at 300 m/s: the round flies 1300 m/s over the ground, so time of flight shrinks.
+    const auto still = fl::computeBallisticLead({0, 0, 0}, {0, 0, 0}, {1300, 0, 0}, {0, 0, 0}, 1000.f, {0, 0, 0});
+    const auto moving = fl::computeBallisticLead({0, 0, 0}, {300.f, 0, 0}, {1300, 0, 0}, {0, 0, 0}, 1000.f, {0, 0, 0});
+    REQUIRE(still.valid);
+    REQUIRE(moving.valid);
+    CHECK(moving.timeOfFlightS < still.timeOfFlightS);
+    CHECK(moving.timeOfFlightS == Catch::Approx(1.0f).epsilon(0.001)); // 1300 m at 1300 m/s
+}
+
+TEST_CASE("BallisticLead: a target opening faster than the round is unreachable") {
+    const auto r = fl::computeBallisticLead({0, 0, 0}, {0, 0, 0}, {1000, 0, 0}, {1200.f, 0, 0}, 1000.f, {0, 0, 0});
+    CHECK_FALSE(r.valid);
+}
+
+TEST_CASE("GunsEmploymentController: pulls lead on a crossing target and holds fire out of plane") {
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    reg.registerType(makeBasicDef());
+    fl::EntityManager em(log, reg);
+
+    fl::EntityTransform ta{};
+    ta.pos[1] = 3000.0;
+    ta.quat[3] = 1.f;
+    ta.vel[0] = 250.f;
+    const fl::EntityId shooterId = em.spawn("test:basic", ta);
+
+    fl::EntityTransform tt{};
+    tt.pos[0] = 600.0; // inside gun range, dead ahead
+    tt.pos[1] = 3000.0;
+    tt.quat[3] = 1.f;
+    tt.vel[2] = 150.f; // crossing right
+    const fl::EntityId targetId = em.spawn("test:basic", tt);
+
+    fl::ai::GunsEmploymentController ctrl(em, targetId);
+    const fl::EntityState* ss = em.get(shooterId);
+    REQUIRE(ss != nullptr);
+    const fl::ControlInput inp = ctrl.sample(*ss, 0, 1.0 / 60.0);
+
+    // The lead point is to the RIGHT of the target (it crosses +Z), so the controller banks right —
+    // and with the nose still pointing at the TARGET, the predicted miss is the whole lead distance:
+    // trigger discipline holds fire.
+    CHECK(inp.aileron > 0.f);
+    CHECK_FALSE(inp.trigger);
+}
+
+TEST_CASE("GunsEmploymentController: fires when the nose is on the lead point, in range") {
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    reg.registerType(makeBasicDef());
+    fl::EntityManager em(log, reg);
+
+    fl::EntityTransform ta{};
+    ta.pos[1] = 3000.0;
+    ta.quat[3] = 1.f; // nose +X
+    fl::EntityId shooterId = em.spawn("test:basic", ta);
+
+    // A stationary target dead ahead in vacuum terms: the lead point is (almost) the target — only
+    // the gravity-drop correction offsets it, well inside the 8 m lethal radius at 500 m.
+    fl::EntityTransform tt{};
+    tt.pos[0] = 500.0;
+    tt.pos[1] = 3000.0;
+    tt.quat[3] = 1.f;
+    const fl::EntityId targetId = em.spawn("test:basic", tt);
+
+    fl::ai::GunsEmploymentController ctrl(em, targetId);
+    const fl::ControlInput inp = ctrl.sample(*em.get(shooterId), 0, 1.0 / 60.0);
+    CHECK(inp.trigger);
+}
+
+TEST_CASE("GunsEmploymentController: holds fire beyond the gun's reach and on a dead target") {
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    reg.registerType(makeBasicDef());
+    fl::EntityManager em(log, reg);
+
+    fl::EntityTransform ta{};
+    ta.pos[1] = 3000.0;
+    ta.quat[3] = 1.f;
+    const fl::EntityId shooterId = em.spawn("test:basic", ta);
+
+    fl::EntityTransform tt{};
+    tt.pos[0] = 3000.0; // far beyond the 1200 m default reach, but dead ahead
+    tt.pos[1] = 3000.0;
+    tt.quat[3] = 1.f;
+    const fl::EntityId targetId = em.spawn("test:basic", tt);
+
+    fl::ai::GunsEmploymentController ctrl(em, targetId);
+    fl::ControlInput inp = ctrl.sample(*em.get(shooterId), 0, 1.0 / 60.0);
+    CHECK_FALSE(inp.trigger);
+    CHECK(inp.throttle > 0.f); // still maneuvering to close
+
+    em.kill(targetId);
+    inp = ctrl.sample(*em.get(shooterId), 0, 1.0 / 60.0);
+    CHECK(inp.throttle == 0.f); // neutral: never chase a corpse
+    CHECK_FALSE(inp.trigger);
+}
+
+TEST_CASE("AiControllerFactory: guns grammar parses and validates") {
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    reg.registerType(makeBasicDef());
+    fl::EntityManager em(log, reg);
+    fl::EntityTransform t{};
+    t.quat[3] = 1.f;
+    const fl::EntityId target = em.spawn("test:basic", t);
+
+    const std::string idxStr = std::to_string(target.index);
+    std::vector<std::string_view> args{idxStr};
+    CHECK(fl::ai::createController("guns", args, &em) != nullptr);
+
+    std::vector<std::string_view> withParams{idxStr, "900", "10"};
+    CHECK(fl::ai::createController("guns", withParams, &em) != nullptr);
+
+    std::vector<std::string_view> badVel{idxStr, "-5"};
+    CHECK(fl::ai::createController("guns", badVel, &em) == nullptr);
+
+    std::vector<std::string_view> noArgs{};
+    CHECK(fl::ai::createController("guns", noArgs, &em) == nullptr);
 }

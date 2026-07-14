@@ -11,6 +11,7 @@ add_library(engine-ai STATIC
     ImmelmannController.cpp
     SplitSController.cpp
     HighYoYoController.cpp
+    GunsEmploymentController.cpp
     LowYoYoController.cpp
     FormationController.cpp
     Threat.cpp
