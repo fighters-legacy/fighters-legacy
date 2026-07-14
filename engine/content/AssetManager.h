@@ -41,6 +41,7 @@ class AssetManager {
     std::shared_ptr<EntityDefData> loadEntityDef(const char* name);
     std::shared_ptr<SensorDefData> loadSensorDef(const char* name);
     std::shared_ptr<WeaponDefData> loadWeaponDef(const char* name);
+    std::shared_ptr<ManualProse> loadManualProse(const char* name);
 
     // Type-generic accessor for the def asset types (EntityDef / SensorDef / ...), returning the
     // same cached bytes the typed loader above would. ContentIndex uses it to shallow-parse an id

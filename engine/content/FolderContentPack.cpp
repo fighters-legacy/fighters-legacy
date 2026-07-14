@@ -108,6 +108,9 @@ std::optional<SensorDefData> FolderContentPack::loadSensorDef(const char* name) 
 std::optional<WeaponDefData> FolderContentPack::loadWeaponDef(const char* name) {
     return loadBytes<WeaponDefData>(name, AssetType::Weapon);
 }
+std::optional<ManualProse> FolderContentPack::loadManualProse(const char* name) {
+    return loadBytes<ManualProse>(name, AssetType::Manual);
+}
 
 std::optional<std::string> FolderContentPack::loadConfig(const char* name) const {
     std::string path = m_modDir + "/data/" + name;

@@ -3,7 +3,7 @@
 // Tests for registerPackEntityDefs (#683): loading content-pack entity definitions into the
 // server's EntityTypeRegistry. Uses a MockContentPack fixture (idiom from test_content_system.cpp).
 
-#include "ContentBootstrap.h"
+#include <content/ContentBootstrap.h>
 
 #include <ILogger.h>
 #include <content/AssetManager.h>

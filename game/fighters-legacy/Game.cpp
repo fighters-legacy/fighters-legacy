@@ -65,10 +65,16 @@
 #include "ClientFlightModelResolver.h"
 #include "ClientPrediction.h"
 #include "ConnectArgs.h"
+#include "ManualOverlay.h"
 #include "console/ConsoleCommands.h"
+#include "content/ContentBootstrap.h"
+#include "content/ContentIndex.h"
 #include "entity/EntityDefParser.h"
 #include "flight/BuiltinFlightModel.h"
 #include "flight/FlightModelParser.h"
+#include "manual/AircraftManual.h"
+#include "sensor/SensorDefParser.h"
+#include "weapon/WeaponRegistry.h"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -293,7 +299,10 @@ struct GameServices {
     fl::IHud* activeHud{nullptr};
     fl::WindshieldRain windshieldRain;
     ServerNotice serverNotice;
-    WingmanMenu wingmanMenu; // the radio menu for ordering your flight (#610)
+    WingmanMenu wingmanMenu;   // the radio menu for ordering your flight (#610)
+    ManualOverlay manual;      // the in-flight aircraft manual, generated from the flight model (#821)
+    WeaponRegistry weapons;    // the client's copy of the pack's stores, for the manual's loadout section
+    ContentIndex contentIndex; // id -> asset name, so the client can resolve def cross-references (#810)
 
     // Debug console
     CommandRegistry cmdRegistry;
@@ -334,6 +343,7 @@ struct SessionContext {
     // is gated on it — tiles bake the radius at generation time) and wires ClientPrediction
     // with the post-ack player idx/gen/radius (#755).
     bool connectAckApplied{false};
+    bool manualBuilt{false}; // the aircraft manual is generated once per session (#821)
 };
 
 struct GameImpl {
@@ -532,10 +542,98 @@ bool Game::initContent() {
     d.services.assets = std::make_unique<AssetManager>(std::move(packs), *d.services.rawLogger);
     d.services.assets->initialize(d.services.p.window.get());
 
+    // The client resolves def ids the same way the server does (#810) -- it needs to, because the
+    // in-flight manual (#821) reads the aircraft's stations and sensors out of the same content pack.
+    {
+        static constexpr fl::AssetType kIndexedTypes[] = {fl::AssetType::EntityDef, fl::AssetType::SensorDef,
+                                                          fl::AssetType::Weapon};
+        d.services.contentIndex.build(*d.services.assets, kIndexedTypes, *d.services.rawLogger);
+        fl::registerPackWeaponDefs(*d.services.assets, d.services.weapons, *d.services.rawLogger);
+    }
+
     FirstRun firstRun(*d.services.userConfig, *d.services.rawLogger);
     d.services.outcome = firstRun.check(hasPacks);
 
     return true;
+}
+
+// Generates the in-flight aircraft manual for the type we are flying (#821).
+//
+// THE CLIENT READS THE PACK HERE, AND THAT IS CORRECT. #811 deleted a disk re-load of the entity def
+// because it was WRONG -- it looked the def up by a namespaced id that was never a filename, missed,
+// and silently flew the builtin model. Reading the pack is not the sin; reading it by the wrong key
+// was. ContentIndex (#810) makes the id resolvable, and a manual is exactly the kind of thing the
+// client should build from its own content: it is a reference card, not physics, and the sim's
+// authority is untouched.
+//
+// A client that does not have the pack (a joiner without the content) simply gets the sections it can
+// build. Nothing here is load-bearing for flight.
+void Game::buildManualFor(uint32_t typeIndex) {
+    auto& d = *m_impl;
+
+    const fl::EntityDef* wireDef = d.services.entityRegistry.byIndex(typeIndex);
+    if (!wireDef || !d.services.assets)
+        return;
+
+    // The wire carries id, mesh, flight model and the payload floats -- not hardpoints, and not the
+    // sensor list (#811 deliberately did not over-deliver). Resolve the FULL def from the pack.
+    fl::EntityDef fullDef = *wireDef;
+    if (const std::string* asset = d.services.contentIndex.assetNameFor(fl::AssetType::EntityDef, wireDef->id)) {
+        if (auto raw = d.services.assets->loadEntityDef(asset->c_str()); raw && !raw->bytes.empty()) {
+            try {
+                fullDef = fl::parseEntityDef(
+                    std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size()));
+            } catch (const std::exception& e) {
+                d.services.rawLogger->log(
+                    fl::LogLevel::Warn, __FILE__, __LINE__,
+                    (std::string("manual: entity def '") + wireDef->id + "' failed to parse: " + e.what()).c_str());
+            }
+        }
+    }
+
+    // The flight model: the same one prediction flies, resolved the same way.
+    auto resolver = fl::makeFlightModelResolver(d.services.entityRegistry, *d.services.assets, *d.services.rawLogger);
+    std::shared_ptr<const fl::FlightModelData> model = resolver(typeIndex);
+    if (!model)
+        return;
+
+    // Sensors, by id, through the index (#810).
+    std::vector<std::shared_ptr<const fl::sensor::SensorDef>> owned;
+    fl::ManualSources src;
+    for (const std::string& id : fullDef.sensorIds) {
+        const std::string* asset = d.services.contentIndex.assetNameFor(fl::AssetType::SensorDef, id);
+        if (!asset)
+            continue;
+        auto raw = d.services.assets->loadSensorDef(asset->c_str());
+        if (!raw || raw->bytes.empty())
+            continue;
+        try {
+            owned.push_back(std::make_shared<const fl::sensor::SensorDef>(fl::sensor::parseSensorDef(
+                std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size()))));
+        } catch (const std::exception&) {
+            // A sensor that will not parse is reported by the server's resolver; the manual just
+            // leaves it out rather than duplicating the complaint.
+        }
+    }
+    for (const auto& s : owned)
+        src.sensors.push_back(s.get());
+
+    // The prose -- the ONLY hand-written part of the manual, and it contains no numbers.
+    std::string prose;
+    if (!fullDef.manualAsset.empty()) {
+        if (auto raw = d.services.assets->loadManualProse(fullDef.manualAsset.c_str()); raw && !raw->bytes.empty())
+            prose.assign(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size());
+    }
+
+    src.entity = &fullDef;
+    src.model = model.get();
+    src.weapons = &d.services.weapons;
+    // The payload the SERVER computed and sent (#812), not one the client re-derived -- so the manual
+    // quotes the loadout the aircraft is actually flying with.
+    src.payload = fl::PayloadEffect{wireDef->payloadMassKg, wireDef->payloadCd0};
+    src.prose = std::move(prose);
+
+    d.services.manual.setManual(fl::buildAircraftManual(src));
 }
 
 // Steps 17–17d: entity registry, scene renderer, particle system, terrain, audio systems, sandbox.
@@ -754,6 +852,7 @@ void Game::startGame() {
         fsd.inspector = d.session.inspector ? &*d.session.inspector : nullptr;
         fsd.prediction = &d.services.prediction;
         fsd.wingmanMenu = &d.services.wingmanMenu;
+        fsd.manual = &d.services.manual;
         fsd.assignedEntityIdx = &d.session.clientHandler->assignedEntityIdx;
         fsd.assignedEntityGen = &d.session.clientHandler->assignedEntityGen;
 
@@ -909,6 +1008,14 @@ void Game::run() {
             aspect = static_cast<float>(d.services.p.window->width()) /
                      static_cast<float>(d.services.p.window->height() > 0 ? d.services.p.window->height() : 1);
             d.services.camInput.setRenderAlpha(alpha);
+
+            // Generate the aircraft manual once, as soon as we know which aircraft we are flying
+            // (#821). buildAircraftManual trims the flight model, which is a root-finding loop --
+            // it belongs here, once, and never in the render path.
+            if (playerEntry && !d.session.manualBuilt) {
+                d.session.manualBuilt = true;
+                buildManualFor(playerEntry->typeIndex);
+            }
         }
 
         // Service terrain and async I/O every session frame, before the screen update,

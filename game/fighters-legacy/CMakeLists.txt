@@ -4,6 +4,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         Game.cpp
         ClientNetEventHandler.cpp
         ClientFlightModelResolver.cpp
+        ManualOverlay.cpp
         ClientPrediction.cpp
         CameraInput.cpp
         FlightInputCollector.cpp
@@ -35,6 +36,10 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         engine-weather
         engine-perf
         engine-console
+        engine-manual
+        engine-bootstrap
+        engine-weapon
+        engine-sensor
         platform-file-logger
         platform-subprocess
         platform-stdfs

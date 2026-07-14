@@ -9,6 +9,7 @@
 #include "IInput.h"
 #include "INetwork.h"
 #include "IWindow.h"
+#include "ManualOverlay.h"
 #include "config/ControlsSettings.h"
 #include "config/UserConfig.h"
 #include "console/GameConsole.h"
@@ -134,8 +135,27 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     if (d.hapticController)
         d.hapticController->update(m_playerEntry, m_weaponFired, terrainElev, 1.f / 60.f, radiusM);
 
-    // Escape closed the radio menu this frame; it must NOT also open the pause screen.
-    if (!menuWasOpen && !consoleWasOpen && !d.gameConsole->isOpen() && input.isKeyJustPressed(Key::Escape))
+    // The in-flight aircraft manual (#821). Non-modal, like the radio menu: the aircraft keeps flying
+    // while you read it, because a reference you must stop flying to consult is one you never open.
+    const bool manualWasOpen = d.manual && d.manual->isOpen();
+    if (d.manual && !d.gameConsole->isOpen() && !menuWasOpen) {
+        if (input.isKeyJustPressed(Key::M))
+            d.manual->toggle();
+        if (d.manual->isOpen()) {
+            if (input.isKeyJustPressed(Key::PageDown))
+                d.manual->scroll(+10);
+            if (input.isKeyJustPressed(Key::PageUp))
+                d.manual->scroll(-10);
+            if (input.isKeyJustPressed(Key::Escape))
+                d.manual->close();
+        }
+        d.manual->update();
+    }
+
+    // Escape closed the radio menu or the manual this frame; it must NOT also open the pause screen.
+    const bool manualClosedThisFrame = manualWasOpen && d.manual && !d.manual->isOpen();
+    if (!menuWasOpen && !manualClosedThisFrame && !consoleWasOpen && !d.gameConsole->isOpen() &&
+        input.isKeyJustPressed(Key::Escape))
         return Screen::Pause;
 
     return Screen::Flight;
@@ -158,6 +178,13 @@ std::span<const HudElement> FlightScreen::buildElements() {
     }
     if (m_deps.wingmanMenu) {
         for (const auto& e : m_deps.wingmanMenu->buildElements()) {
+            if (m_elementCount >= kMaxElements)
+                break;
+            m_elements[static_cast<std::size_t>(m_elementCount++)] = e;
+        }
+    }
+    if (m_deps.manual && m_deps.manual->isOpen()) {
+        for (const auto& e : m_deps.manual->elements()) {
             if (m_elementCount >= kMaxElements)
                 break;
             m_elements[static_cast<std::size_t>(m_elementCount++)] = e;

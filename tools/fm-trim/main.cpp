@@ -8,7 +8,9 @@
 // derived performance from a FlightModelData. The gate was unmeasurable, and a content author tuning
 // an aircraft had no feedback loop shorter than "build the game and fly it".
 
-#include "trim.h"
+#include "expect.h"
+
+#include "flight/Trim.h"
 
 #include "flight/FlightModelParser.h"
 

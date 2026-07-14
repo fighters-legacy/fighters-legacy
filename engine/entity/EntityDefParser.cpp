@@ -144,6 +144,7 @@ EntityDef parseEntityDef(std::string_view toml_src) {
     def.maxHp = req_float(entity["max_hp"], "entity.max_hp");
     def.mesh = opt_string(entity["mesh"]);
     def.cockpitMesh = opt_string(entity["cockpit"]);           // optional; empty = no cockpit geometry (#813)
+    def.manualAsset = opt_string(entity["manual"]);            // optional; empty = generated sections only (#821)
     def.flightModelAsset = opt_string(entity["flight_model"]); // optional; empty = builtin UFO model
     def.aiScriptAsset = opt_string(entity["ai_script"]);       // optional; empty = no scripted AI
 

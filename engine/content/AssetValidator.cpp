@@ -68,6 +68,12 @@ ValidationResult AssetValidator::validate(AssetType type, std::span<const uint8_
             return {false, "config: exceeds size limit"};
         break;
 
+    case AssetType::Manual:
+        // Markdown prose — plain text, no magic bytes; size check only
+        if (totalSize > m_limits.maxToml)
+            return {false, "manual: exceeds size limit"};
+        break;
+
     case AssetType::Mission:
         // YAML — plain text, no magic bytes; size check only
         if (totalSize > m_limits.maxYaml)

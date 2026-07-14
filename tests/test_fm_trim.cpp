@@ -7,7 +7,9 @@
 // aircraft ever authored. If the drag model moves, an aircraft's sustained turn moves, and this
 // notices.
 
-#include "trim.h"
+#include "expect.h"
+
+#include "flight/Trim.h"
 
 #include "flight/BuiltinFlightModel.h"
 #include "flight/FlightModelParser.h"

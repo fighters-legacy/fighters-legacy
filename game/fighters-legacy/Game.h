@@ -19,6 +19,7 @@ class Game {
     bool initWindowAndRenderer();
     bool initContent();
     void initGameSystems();
+    void buildManualFor(uint32_t typeIndex); // generate the in-flight aircraft manual (#821)
     void initScreenManager();
     void initGameConsole();
 

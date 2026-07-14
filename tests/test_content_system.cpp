@@ -414,6 +414,9 @@ static std::vector<std::unique_ptr<IContentPack>> makePacks(MockContentPack* pac
         std::optional<WeaponDefData> loadWeaponDef(const char* n) override {
             return p->loadWeaponDef(n);
         }
+        std::optional<ManualProse> loadManualProse(const char* n) override {
+            return p->loadManualProse(n);
+        }
         std::vector<std::string> listAssets(AssetType t) const override {
             return p->listAssets(t);
         }

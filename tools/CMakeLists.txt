@@ -121,8 +121,12 @@ target_link_libraries(validate-flight-model PRIVATE validate-flight-model-lib)
 # numbers its flight manual publishes. Links engine-flight and calls computeForces DIRECTLY -- trim is
 # a function of state, and routing it through FlightIntegrator would fold integration error into
 # numbers whose entire purpose is comparison against a published chart.
+# The trim MATH lives in engine-flight (Trim.h), not here: the in-game aircraft manual (#821) renders
+# the same numbers, and a second implementation is a second chance to disagree with the aircraft the
+# player is actually flying. This library is only the parts that are ABOUT a model rather than part of
+# one -- the expectation gate and the JSON report.
 add_library(fm-trim-lib STATIC
-    fm-trim/trim.cpp)
+    fm-trim/expect.cpp)
 target_link_libraries(fm-trim-lib
     PUBLIC engine-flight
     PRIVATE tomlplusplus::tomlplusplus)

@@ -15,7 +15,6 @@
 //
 // See docs/fl-server-config.md for the full operator configuration reference.
 // fl-lobby integration is tracked in issue #36.
-#include "ContentBootstrap.h"
 #include "IpListFile.h"
 #include "NetworkFactory.h"
 #include "RconServer.h"
@@ -25,6 +24,7 @@
 #include "net/DiscoveryBeacon.h"
 #include "sensor/SensorDefParser.h"
 #include "server_config.h"
+#include <content/ContentBootstrap.h>
 
 #include <ILogger.h>
 #include <Platform.h>

@@ -74,6 +74,9 @@ struct NullContentPack : IContentPack {
     std::optional<WeaponDefData> loadWeaponDef(const char*) override {
         return std::nullopt;
     }
+    std::optional<ManualProse> loadManualProse(const char*) override {
+        return std::nullopt;
+    }
     std::vector<std::string> listAssets(AssetType) const override {
         return {};
     }

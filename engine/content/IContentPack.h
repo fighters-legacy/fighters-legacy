@@ -65,6 +65,7 @@ class IContentPack {
     virtual std::optional<EntityDefData> loadEntityDef(const char* name) = 0;
     virtual std::optional<SensorDefData> loadSensorDef(const char* name) = 0;
     virtual std::optional<WeaponDefData> loadWeaponDef(const char* name) = 0;
+    virtual std::optional<ManualProse> loadManualProse(const char* name) = 0;
 
     virtual std::vector<std::string> listAssets(AssetType type) const = 0;
 

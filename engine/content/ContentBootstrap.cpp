@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "ContentBootstrap.h"
+#include "content/ContentBootstrap.h"
 
-#include <ILogger.h>
-#include <content/AssetManager.h>
-#include <content/ContentIndex.h>
-#include <entity/EntityDef.h>
-#include <entity/EntityDefParser.h>
-#include <entity/EntityTypeRegistry.h>
-#include <sensor/SensorDef.h>
-#include <sensor/SensorDefParser.h>
-#include <weapon/WeaponDef.h>
-#include <weapon/WeaponDefParser.h>
-#include <weapon/WeaponRegistry.h>
+#include "ILogger.h"
+#include "content/AssetManager.h"
+#include "content/ContentIndex.h"
+#include "entity/EntityDef.h"
+#include "entity/EntityDefParser.h"
+#include "entity/EntityTypeRegistry.h"
+#include "sensor/SensorDef.h"
+#include "sensor/SensorDefParser.h"
+#include "weapon/WeaponDef.h"
+#include "weapon/WeaponDefParser.h"
+#include "weapon/WeaponRegistry.h"
 
 #include <exception>
 #include <limits>

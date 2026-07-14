@@ -135,6 +135,10 @@ std::shared_ptr<WeaponDefData> AssetManager::loadWeaponDef(const char* name) {
     return loadAsset<WeaponDefData>(AssetType::Weapon, name, &IContentPack::loadWeaponDef);
 }
 
+std::shared_ptr<ManualProse> AssetManager::loadManualProse(const char* name) {
+    return loadAsset<ManualProse>(AssetType::Manual, name, &IContentPack::loadManualProse);
+}
+
 std::shared_ptr<AssetBase> AssetManager::loadDefBytes(AssetType type, const char* name) {
     switch (type) {
     case AssetType::EntityDef:
