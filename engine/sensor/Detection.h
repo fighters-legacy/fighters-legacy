@@ -25,9 +25,7 @@ namespace fl::sensor {
 // So: `stepContact` needs a roll only on the Lost→Detected and Detected→Locked edges.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Weather / time-of-day inputs to detection. The modifier curves are IDENTITY in v1 — this is the
-// seam, landed with the math so #209 (environmental PoD modifiers) has somewhere to attach without
-// re-cutting every signature in this header.
+// Weather / time-of-day inputs to detection (#209 fills the curves the seam was landed for).
 struct SensingEnvironment {
     float cloudCoverage{0.f}; // [0, 1]
     float fogDensity{0.f};    // [0, 1]
@@ -105,9 +103,34 @@ struct ContactTrack {
 // precisely the probability the sensor def states. That invariant is why the mapping is affine and
 // not, say, a curve through the origin.
 //
-// The result is clamped to (0, 1]. `env` currently applies an identity modifier (see the struct).
+// The result is clamped to (0, 1].
 [[nodiscard]] float effectivePod(float authoredPod, float skill, SensorType type,
                                  const SensingEnvironment& env) noexcept;
+
+// How much harder the weather and the dark make this KIND of sensor's job (#209). A multiplier on
+// probability of detection, in (0, 1] — 1.0 = the conditions cost nothing.
+//
+// A DEFAULT-CONSTRUCTED SensingEnvironment (clear, noon) RETURNS EXACTLY 1.0. That is load-bearing:
+// every authored `pod` is quoted against clear daylight, so fair weather must cost nothing at all
+// rather than "almost nothing" — otherwise every content pack's numbers would quietly mean something
+// slightly different than they say.
+//
+// The four channels degrade differently, because they are different physics and the point of having
+// four of them is that a pilot can reach for the one the weather has not taken away:
+//
+//   * VISUAL is hit hardest, and is the only one the DARK touches. Cloud and fog take it; night takes
+//     most of what is left. An eyeball in a storm at 2 a.m. is very nearly useless — which is why
+//     night attacks work, and why an IR-equipped aircraft owns that night.
+//   * IR is degraded by moisture (cloud, fog attenuate in the infrared) but NOT by darkness. It does
+//     not care what time it is: it is looking at heat, and a jet engine is exactly as hot at midnight.
+//   * RADAR barely notices any of it — a little rain clutter, nothing more. That indifference to
+//     weather is most of why it exists.
+//   * LASER tracks the visual channel through moisture (same line-of-sight problem) but, like IR,
+//     does not care about the dark.
+//
+// A floor keeps every channel from reaching exactly zero: even in the worst conditions a sensor has
+// SOME chance, so a target is never mathematically undetectable — it just may take a very long time.
+[[nodiscard]] float environmentPodScale(SensorType type, const SensingEnvironment& env) noexcept;
 
 // Deterministic acquisition die for one (observer, target, tick, sensor slot, lobe) check.
 //

@@ -367,3 +367,76 @@ TEST_CASE("stepContact: an unheld contact outside the cone stays Lost", "[sensor
     CHECK(c.state == ContactState::Lost);
     CHECK(c.coastRemainingS == 0.f);
 }
+
+// ── environment modifiers (#209) ─────────────────────────────────────────────
+
+TEST_CASE("environmentPodScale: clear daylight costs exactly nothing", "[sensor]") {
+    // LOAD-BEARING. Every authored `pod` is quoted against clear daylight, so fair weather must be
+    // the exact identity — not 0.99. Otherwise every content pack's numbers quietly mean something
+    // slightly different than they say, and #684's baselines all shift.
+    const SensingEnvironment clear;
+    for (auto t : {SensorType::Visual, SensorType::Ir, SensorType::Radar, SensorType::Laser})
+        CHECK(environmentPodScale(t, clear) == 1.f);
+
+    // And effectivePod is therefore unchanged from the pre-#209 value in fair weather.
+    CHECK_THAT(effectivePod(0.35f, 0.5f, SensorType::Visual, clear), WithinRel(0.35f, 1e-6f));
+}
+
+TEST_CASE("environmentPodScale: the dark is the visual channel's problem, and only its", "[sensor]") {
+    SensingEnvironment night;
+    night.isNight = true;
+    night.timeOfDayH = 2.f;
+
+    // An unaided eye loses most of its chance at night...
+    CHECK(environmentPodScale(SensorType::Visual, night) < 0.5f);
+
+    // ...while a jet engine is exactly as hot at midnight, radar does not care what time it is, and
+    // a laser is not looking for daylight either. This is why night attacks work and why an
+    // IR-equipped aircraft owns the night.
+    CHECK(environmentPodScale(SensorType::Ir, night) == 1.f);
+    CHECK(environmentPodScale(SensorType::Radar, night) == 1.f);
+    CHECK(environmentPodScale(SensorType::Laser, night) == 1.f);
+}
+
+TEST_CASE("environmentPodScale: weather hits the channels in the right order", "[sensor]") {
+    SensingEnvironment storm;
+    storm.cloudCoverage = 1.f;
+    storm.fogDensity = 0.8f;
+
+    const float vis = environmentPodScale(SensorType::Visual, storm);
+    const float ir = environmentPodScale(SensorType::Ir, storm);
+    const float radar = environmentPodScale(SensorType::Radar, storm);
+
+    // Radar barely notices; IR is hurt by the moisture; the eyeball suffers most. That ordering is
+    // the whole reason an aircraft carries more than one kind of sensor.
+    CHECK(vis < ir);
+    CHECK(ir < radar);
+    CHECK(radar > 0.75f); // rain clutter costs it ~20% in a FULL storm; the eyeball loses ~85%
+}
+
+TEST_CASE("environmentPodScale: no weather ever makes a target mathematically undetectable", "[sensor]") {
+    // A hard zero would be an invisibility cloak issued by the weather. The worst conditions leave a
+    // small chance — acquiring just takes a very long time.
+    SensingEnvironment worst;
+    worst.cloudCoverage = 1.f;
+    worst.fogDensity = 1.f;
+    worst.isNight = true;
+
+    for (auto t : {SensorType::Visual, SensorType::Ir, SensorType::Radar, SensorType::Laser}) {
+        const float s = environmentPodScale(t, worst);
+        CHECK(s > 0.f);
+        CHECK(s <= 1.f);
+    }
+    CHECK(effectivePod(0.35f, 0.5f, SensorType::Visual, worst) > 0.f);
+}
+
+TEST_CASE("environmentPodScale: degradation is monotonic in cloud cover", "[sensor]") {
+    float prev = 1.f;
+    for (float c : {0.f, 0.25f, 0.5f, 0.75f, 1.f}) {
+        SensingEnvironment env;
+        env.cloudCoverage = c;
+        const float s = environmentPodScale(SensorType::Visual, env);
+        CHECK(s <= prev); // thicker cloud never helps
+        prev = s;
+    }
+}
