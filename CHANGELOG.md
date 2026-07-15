@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **network**: Required-pack policy on the connect handshake — a server can declare required content packs (`[mods] required`, `id` or `id@version`) and choose what happens when a client is missing one via `[mods] required_policy`: `warn` (log + notify the admitted client), `refuse` (disconnect with the missing list), or `allow_placeholder` (silently serve placeholders). The client surfaces which packs it lacks instead of showing silent placeholders (#872)
+
 ## [0.3.2] - 2026-07-15
 
 ### Added

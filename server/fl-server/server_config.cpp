@@ -57,7 +57,8 @@ static const char* kDefaultToml =
     "\n"
     "[mods]\n"
     "stack = []\n"
-    "# required = [\"fl-base\"]           # content packs a client should have mounted; missing = warn (#872)\n"
+    "# required = [\"fl-base\", \"theater@1.2\"]  # packs a client must have (\"id\" or \"id@version\") (#872)\n"
+    "# required_policy = \"warn\"          # warn | refuse | allow_placeholder -- action on a missing pack\n"
     "\n"
     "[world]\n"
     "save_path = \"world.sav\"\n"
@@ -383,10 +384,19 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 if (auto s = elem.value<std::string>())
                     cfg.modStack.push_back(std::move(*s));
         }
-        if (auto* arr = tbl["mods"]["required"].as_array()) { // #872 warn-only required-pack ids
+        if (auto* arr = tbl["mods"]["required"].as_array()) { // #872 required-pack specs ("id" / "id@version")
             for (auto& elem : *arr)
                 if (auto s = elem.value<std::string>())
                     cfg.requiredPacks.push_back(std::move(*s));
+        }
+        if (auto v = tbl["mods"]["required_policy"].value<std::string>()) { // #872 warn / refuse / allow_placeholder
+            static const char* const kValidPolicy[] = {"warn", "refuse", "allow_placeholder"};
+            if (isOneOf(v->c_str(), kValidPolicy, 3)) {
+                cfg.requiredPackPolicy = std::move(*v);
+            } else {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "mods.required_policy must be \"warn\", \"refuse\", or \"allow_placeholder\"; using \"warn\"");
+            }
         }
 
         // [world]

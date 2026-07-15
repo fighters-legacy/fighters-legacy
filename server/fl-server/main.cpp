@@ -573,7 +573,11 @@ int main(int argc, char** argv) {
     wbConfig.operatorPassword = cfg.operatorPassword;
     wbConfig.playerEntityType = cfg.playerEntityType; // pilot spawn default when client requests none (#834)
     wbConfig.allowObservers = cfg.allowObservers;     // #857
-    wbConfig.requiredPacks = cfg.requiredPacks;       // #872 warn-only required-pack ids
+    wbConfig.requiredPacks.clear();                   // #872: parse "id" / "id@version" specs into RequiredPack
+    for (const auto& spec : cfg.requiredPacks)
+        wbConfig.requiredPacks.push_back(fl::parseRequiredPackSpec(spec));
+    wbConfig.requiredPackPolicy =
+        fl::parseRequiredPackPolicy(cfg.requiredPackPolicy).value_or(fl::RequiredPackPolicy::Warn);
     wbConfig.idleTimeoutS = cfg.idleTimeoutS;
     wbConfig.drawDistanceKm = static_cast<float>(cfg.drawDistanceKm);
     wbConfig.snapshotBudgetBytes = cfg.snapshotBudgetBytes;

@@ -73,6 +73,11 @@ add_executable(test_transform_history test_transform_history.cpp)
 target_link_libraries(test_transform_history PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_transform_history)
 
+# Required-pack policy (#872): the pure spec/policy parsing + missing-pack comparison (header-only).
+add_executable(test_required_pack_policy test_required_pack_policy.cpp)
+target_link_libraries(test_required_pack_policy PRIVATE Catch2::Catch2WithMain engine-net)
+catch_discover_tests(test_required_pack_policy)
+
 # FireControl + ProjectileSystem (#625): the pure fire-decision logic and the 3-DOF projectile pool.
 # engine-weapon's entity/spatial deps are PRIVATE, so the test links them explicitly.
 add_executable(test_fire_control test_fire_control.cpp)

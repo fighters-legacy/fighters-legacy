@@ -90,6 +90,16 @@ TEST_CASE("parseServerConfig: reads mods.required (#872)", "[server_config]") {
     REQUIRE(cfg.requiredPacks.size() == 2u);
     CHECK(cfg.requiredPacks[0] == "fl-base");
     CHECK(cfg.requiredPacks[1] == "theater");
+    CHECK(cfg.requiredPackPolicy == "warn"); // default
+}
+
+TEST_CASE("parseServerConfig: reads mods.required_policy (#872)", "[server_config]") {
+    MockLogger log;
+    CHECK(parseServerConfig("[mods]\nrequired_policy = \"refuse\"\n", &log).requiredPackPolicy == "refuse");
+    CHECK(parseServerConfig("[mods]\nrequired_policy = \"allow_placeholder\"\n", &log).requiredPackPolicy ==
+          "allow_placeholder");
+    // Invalid value warns and keeps the default.
+    CHECK(parseServerConfig("[mods]\nrequired_policy = \"bogus\"\n", &log).requiredPackPolicy == "warn");
 }
 
 TEST_CASE("parseServerConfig: reads world.sim_worker_threads", "[server_config]") {

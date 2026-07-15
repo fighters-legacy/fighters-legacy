@@ -2718,20 +2718,49 @@ TEST_CASE("WorldBroadcaster: empty requested type uses the [world] player_entity
 // ---------------------------------------------------------------------------
 
 namespace {
-// Admit a pilot whose MsgConnectRequest carries the given pack-id manifest.
-void connectPilotWithPacks(fl::WorldBroadcaster& b, uint32_t peerId, const std::vector<std::string>& packIds) {
+// Admit a pilot whose MsgConnectRequest carries the given pack manifest (id + optional version).
+void connectPilotWithPackVersions(fl::WorldBroadcaster& b, uint32_t peerId,
+                                  const std::vector<std::pair<std::string, std::string>>& packs) {
     b.onConnect(peerId);
     fl::MsgConnectRequest req{};
     req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
-    req.packCount = static_cast<uint16_t>(packIds.size());
+    req.packCount = static_cast<uint16_t>(packs.size());
     std::vector<uint8_t> buf;
     fl::appendMsg(buf, req);
-    for (const std::string& id : packIds) {
+    for (const auto& [id, version] : packs) {
         fl::PackManifestEntry pe{};
         std::snprintf(pe.id, sizeof(pe.id), "%s", id.c_str());
+        std::snprintf(pe.version, sizeof(pe.version), "%s", version.c_str());
         fl::appendMsg(buf, pe);
     }
     b.onReceive(peerId, buf.data(), buf.size());
+}
+
+// Admit a pilot whose MsgConnectRequest carries the given pack-id manifest (version unset).
+void connectPilotWithPacks(fl::WorldBroadcaster& b, uint32_t peerId, const std::vector<std::string>& packIds) {
+    std::vector<std::pair<std::string, std::string>> packs;
+    for (const std::string& id : packIds)
+        packs.emplace_back(id, std::string{});
+    connectPilotWithPackVersions(b, peerId, packs);
+}
+
+// Find the first sent packet whose leading msgId matches; returns it decoded, or fails the test.
+fl::MsgConnectRefusal findSentRefusal(const MockNetwork& net) {
+    for (const auto& pkt : net.sends)
+        if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectRefusal)) {
+            fl::MsgConnectRefusal ref{};
+            std::memcpy(&ref, pkt.data(), sizeof(ref));
+            return ref;
+        }
+    FAIL("no MsgConnectRefusal was sent");
+    return {};
+}
+
+bool anySentIs(const MockNetwork& net, fl::MsgId id) {
+    for (const auto& pkt : net.sends)
+        if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(id))
+            return true;
+    return false;
 }
 } // namespace
 
@@ -2778,6 +2807,110 @@ TEST_CASE("WorldBroadcaster: a client with the required pack is admitted with no
     CHECK(ack.assignedEntityGen != 0u);
     for (const std::string& w : logger.warnings)
         CHECK(w.find("missing required content pack") == std::string::npos);
+}
+
+TEST_CASE("WorldBroadcaster: warn policy notifies the admitted client of the missing packs (#872)",
+          "[world_broadcaster][handshake][packs]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::WorldBroadcasterConfig cfg;
+    cfg.requiredPacks = {"fl-base"};
+    cfg.requiredPackPolicy = fl::RequiredPackPolicy::Warn; // default, made explicit
+    broadcaster.applyConfig(cfg);
+
+    connectPilotWithPacks(broadcaster, 0u, {"other-pack"});
+
+    CHECK(parseSendAck(net).assignedEntityGen != 0u); // admitted
+    // A MsgServerNotice carrying the missing list reaches the client so the mismatch is visible.
+    bool notified = false;
+    for (const auto& pkt : net.sends) {
+        if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ServerNotice)) {
+            fl::MsgServerNotice sn{};
+            std::memcpy(&sn, pkt.data(), sizeof(sn));
+            if (std::string(sn.text).find("fl-base") != std::string::npos)
+                notified = true;
+        }
+    }
+    CHECK(notified);
+}
+
+TEST_CASE("WorldBroadcaster: refuse policy disconnects a client missing a required pack (#872)",
+          "[world_broadcaster][handshake][packs]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::WorldBroadcasterConfig cfg;
+    cfg.requiredPacks = {"fl-base"};
+    cfg.requiredPackPolicy = fl::RequiredPackPolicy::Refuse;
+    broadcaster.applyConfig(cfg);
+
+    connectPilotWithPacks(broadcaster, 0u, {"other-pack"});
+
+    auto ref = findSentRefusal(net);
+    CHECK(ref.code == static_cast<uint8_t>(fl::ConnectRefusalCode::MissingRequiredPack));
+    CHECK(std::string(ref.reason).find("fl-base") != std::string::npos); // reason names the missing pack
+    CHECK(!anySentIs(net, fl::MsgId::ConnectAck));                       // never admitted
+    CHECK(std::find(net.disconnectedPeers.begin(), net.disconnectedPeers.end(), 0u) != net.disconnectedPeers.end());
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    CHECK(em.liveCount() == 0u); // no entity spawned for a refused peer
+}
+
+TEST_CASE("WorldBroadcaster: refuse policy enforces a pinned pack version (#872)",
+          "[world_broadcaster][handshake][packs]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::WorldBroadcasterConfig cfg;
+    cfg.requiredPacks = {fl::RequiredPack{"fl-base", "1.2"}};
+    cfg.requiredPackPolicy = fl::RequiredPackPolicy::Refuse;
+    broadcaster.applyConfig(cfg);
+
+    // Right pack id, wrong version -> refused, reason names the required version.
+    connectPilotWithPackVersions(broadcaster, 0u, {{"fl-base", "1.1"}});
+    auto ref = findSentRefusal(net);
+    CHECK(ref.code == static_cast<uint8_t>(fl::ConnectRefusalCode::MissingRequiredPack));
+    CHECK(std::string(ref.reason).find("fl-base@1.2") != std::string::npos);
+
+    // A second peer on the matching version is admitted.
+    net.sends.clear();
+    connectPilotWithPackVersions(broadcaster, 1u, {{"fl-base", "1.2"}});
+    CHECK(anySentIs(net, fl::MsgId::ConnectAck));
+}
+
+TEST_CASE("WorldBroadcaster: allow-placeholder policy admits a client missing a pack without warning (#872)",
+          "[world_broadcaster][handshake][packs]") {
+    CapturingLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::WorldBroadcasterConfig cfg;
+    cfg.requiredPacks = {"fl-base"};
+    cfg.requiredPackPolicy = fl::RequiredPackPolicy::AllowPlaceholder;
+    broadcaster.applyConfig(cfg);
+
+    connectPilotWithPacks(broadcaster, 0u, {"other-pack"});
+
+    CHECK(parseSendAck(net).assignedEntityGen != 0u); // admitted
+    for (const std::string& w : logger.warnings)
+        CHECK(w.find("missing required content pack") == std::string::npos); // no Warn under allow-placeholder
+    CHECK(!anySentIs(net, fl::MsgId::ServerNotice));                         // and no client-facing notice
 }
 
 // ---------------------------------------------------------------------------

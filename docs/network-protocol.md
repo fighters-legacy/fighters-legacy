@@ -462,6 +462,7 @@ Reliable, server→client unicast. Sent immediately before `disconnectPeer()` on
 - **Rate-limit**: `"Connection rate limit exceeded. Try again later."`
 - **Per-IP connection limit**: `"Too many connections from your address."`
 - **Admin auth lockout**: `"Access denied."`
+- **Missing required pack** (#872, `required_policy = "refuse"`): `"Missing required pack(s): <list>"`
 
 ENet's graceful disconnect flushes all pending reliable packets before completing the
 disconnect sequence, so the client receives this packet before the ENet disconnect event fires.
@@ -471,7 +472,7 @@ CAS then fails to overwrite, surfacing the specific reason in the `LoadingScreen
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
 | 0 | 1 | `msgId` | `uint8_t` | `0x09` |
-| 1 | 1 | `code` | `uint8_t` | `ConnectRefusalCode`: 0=Generic, 1=Banned, 2=AccessDenied, 3=RateLimited, 4=TooManyConnections, 5=AdminLockout, 6=RoleDenied (#857), 7=MissingRequiredPack (#872, reserved), 8=EntitlementRequired (RFC #871, reserved) — machine-readable reason paired with the text below |
+| 1 | 1 | `code` | `uint8_t` | `ConnectRefusalCode`: 0=Generic, 1=Banned, 2=AccessDenied, 3=RateLimited, 4=TooManyConnections, 5=AdminLockout, 6=RoleDenied (#857), 7=MissingRequiredPack (#872 — `reason` names the missing pack(s)), 8=EntitlementRequired (RFC #871, reserved) — machine-readable reason paired with the text below |
 | 2 | 62 | `reason` | `char[62]` | Null-terminated UTF-8 rejection reason; 61 usable chars |
 
 `MsgId::ConnectRefusal = 0x09` is an additive message ID — old clients that do not recognize
