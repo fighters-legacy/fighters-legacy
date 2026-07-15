@@ -8,6 +8,39 @@
 
 namespace fl {
 
+namespace {
+
+// True when `store` is empty or an explicit "leave this station empty" sentinel.
+bool isEmptyStore(const std::string& store) noexcept {
+    return store.empty() || store == "~" || store == "-";
+}
+
+// Choose the default selection: the first mounted store that is NOT the gun ("select" means the thing
+// on the rails; the gun has its own trigger), else the first mounted station, else none. Shared by
+// buildLoadout and buildLoadoutOverride. The loop index is size_t (not uint8_t) so the comparison
+// against stations.size() is not a narrower-vs-wider one — a >255-station airframe would otherwise
+// loop forever; `selected` is uint8_t, so an index past 255 simply stays unselected.
+void pickDefaultSelection(LoadoutState& ls, const WeaponRegistry& weapons) {
+    for (std::size_t i = 0; i < ls.stations.size() && i <= 255; ++i) {
+        const StationState& st = ls.stations[i];
+        if (st.weaponIndex == UINT32_MAX)
+            continue;
+        const WeaponDef* w = weapons.byIndex(st.weaponIndex);
+        if (w && w->type != WeaponType::Gun) {
+            ls.selected = static_cast<uint8_t>(i);
+            return;
+        }
+    }
+    for (std::size_t i = 0; i < ls.stations.size() && i <= 255; ++i) {
+        if (ls.stations[i].weaponIndex != UINT32_MAX) {
+            ls.selected = static_cast<uint8_t>(i);
+            return;
+        }
+    }
+}
+
+} // namespace
+
 LoadoutState buildLoadout(const EntityDef& def, const WeaponRegistry& weapons) {
     LoadoutState ls;
     ls.stations.reserve(def.hardpoints.size());
@@ -31,56 +64,10 @@ LoadoutState buildLoadout(const EntityDef& def, const WeaponRegistry& weapons) {
         ls.stations.push_back(st);
     }
 
-    // Default selection: the first mounted store that is not the gun — "select" means the thing on
-    // the rails; the gun has its own trigger. Fall back to any mounted station (gun included).
-    for (uint8_t i = 0; i < ls.stations.size(); ++i) {
-        const StationState& st = ls.stations[i];
-        if (st.weaponIndex == UINT32_MAX)
-            continue;
-        const WeaponDef* w = weapons.byIndex(st.weaponIndex);
-        if (w && w->type != WeaponType::Gun) {
-            ls.selected = i;
-            return ls;
-        }
-    }
-    for (uint8_t i = 0; i < ls.stations.size(); ++i) {
-        if (ls.stations[i].weaponIndex != UINT32_MAX) {
-            ls.selected = i;
-            break;
-        }
-    }
+    // Default selection: the first mounted non-gun store, else any mounted station.
+    pickDefaultSelection(ls, weapons);
     return ls;
 }
-
-namespace {
-
-// True when `store` is empty or an explicit "leave this station empty" sentinel.
-bool isEmptyStore(const std::string& store) noexcept {
-    return store.empty() || store == "~" || store == "-";
-}
-
-// Choose the default selection (first non-gun mounted store, else first mounted, else none). Shared
-// by buildLoadout and buildLoadoutOverride.
-void pickDefaultSelection(LoadoutState& ls, const WeaponRegistry& weapons) {
-    for (uint8_t i = 0; i < ls.stations.size(); ++i) {
-        const StationState& st = ls.stations[i];
-        if (st.weaponIndex == UINT32_MAX)
-            continue;
-        const WeaponDef* w = weapons.byIndex(st.weaponIndex);
-        if (w && w->type != WeaponType::Gun) {
-            ls.selected = i;
-            return;
-        }
-    }
-    for (uint8_t i = 0; i < ls.stations.size(); ++i) {
-        if (ls.stations[i].weaponIndex != UINT32_MAX) {
-            ls.selected = i;
-            return;
-        }
-    }
-}
-
-} // namespace
 
 LoadoutState buildLoadoutOverride(const EntityDef& def, const WeaponRegistry& weapons,
                                   const std::vector<std::string>& stores, std::vector<std::string>& warnings) {
