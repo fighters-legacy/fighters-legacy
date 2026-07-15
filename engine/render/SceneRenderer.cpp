@@ -67,6 +67,7 @@ void SceneRenderer::ensureBuiltins() {
         return;
 
     m_builtinEntityMesh = m_renderer.createMesh({"builtin:entity", builtinTetrahedronGlb()});
+    m_builtinDamagedMesh = m_renderer.createMesh({"builtin:entity-damaged", builtinDamagedWedgeGlb()});
     m_builtinFloorMesh = m_renderer.createMesh({"builtin:floor", builtinFloorPlaneGlb()});
 
     // 6-color opaque palette: gives each entity a distinct look in the no-content sandbox.
@@ -192,7 +193,9 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
         if (useBuiltin) {
             if (!m_builtinEntityMesh.valid())
                 continue; // builtins not yet uploaded — skip
-            mesh = m_builtinEntityMesh;
+            // A damaged builtin swaps to the wreck-variant placeholder (#864) so the mesh-swap path
+            // runs zero-pack, exactly as a pack entity swaps to its classicDamageMesh.
+            mesh = (entry.damageLevel > 0 && m_builtinDamagedMesh.valid()) ? m_builtinDamagedMesh : m_builtinEntityMesh;
 #ifdef NDEBUG
             // Release: shaded grey so placeholder entities read as real geometry.
             mat = m_fallbackEntityMat;

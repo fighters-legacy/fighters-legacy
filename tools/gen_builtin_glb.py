@@ -91,7 +91,25 @@ def tetra_vertices():
     return BL, BR, BT, F
 
 
-def tetra_faces():
+def damaged_wedge_vertices():
+    """
+    The DAMAGED-variant placeholder (#864): a slumped, foreshortened wedge that reads as a wreck
+    next to the clean one, so the `damageLevel > 0` mesh swap has something distinct to show with no
+    content pack. Same topology (4 verts / 4 faces, flat bottom preserved so it still sits on the
+    ground), but a short collapsed nose, a low bent back-top, and an asymmetric tilt.
+    Returns (BL, BR, BT, F).
+    """
+    d = 2.5   # back face plane at x = -d (unchanged, so the footprint matches the clean wedge)
+    L = 3.5   # collapsed short nose (vs 7.5 clean)
+    w = 2.5   # half-width unchanged
+    BL = (-d, 0.0, -w)      # back-bottom-left  (on the ground)
+    BR = (-d, 0.0, w)       # back-bottom-right (on the ground)
+    BT = (-d + 0.8, 1.3, -0.7)  # back-top: slumped and bent to one side
+    F = (L, 0.0, 0.0)       # nose stub at ground level
+    return BL, BR, BT, F
+
+
+def tetra_faces(verts=None):
     """4 faces wound CCW-from-outside (outward normals). See tetra_vertices() for the shape.
 
     Outward normals are required by the engine's opaque pipeline (frontFace=CW after the Vulkan
@@ -99,7 +117,7 @@ def tetra_faces():
     forward shader's debug face-colouring keys off the face normal:
       0 bottom (-Y) = red, 1 back (-X) = green, 2 right (+Z) = blue, 3 left (-Z) = yellow.
     """
-    BL, BR, BT, F = tetra_vertices()
+    BL, BR, BT, F = verts if verts is not None else tetra_vertices()
     return [
         (BL, F, BR),   # 0 bottom -> outward normal -Y
         (BL, BR, BT),  # 1 back   -> outward normal -X
@@ -108,12 +126,13 @@ def tetra_faces():
     ]
 
 
-def build_tetrahedron() -> bytes:
+def build_tetrahedron(verts=None) -> bytes:
     """
     Directional wedge placeholder (see tetra_vertices/tetra_faces), ~10 m long, +X forward.
     4 faces × 3 vertices = 12 vertices, each with POSITION (vec3) + NORMAL (vec3).
     Vertex stride = 24 bytes. Total binary = 12 * 24 = 288 bytes.
     Per-face normals (flat shading): each triangle has its own 3 identical normals.
+    `verts` overrides the vertex set (used for the damaged variant); default is the clean wedge.
     """
     def norm(a, b, c):
         """Face normal from 3 vertices (a, b, c) — CCW winding."""
@@ -125,7 +144,7 @@ def build_tetrahedron() -> bytes:
         length = math.sqrt(nx*nx + ny*ny + nz*nz)
         return (nx/length, ny/length, nz/length)
 
-    faces = tetra_faces()
+    faces = tetra_faces(verts)
 
     pos_bin = b''
     norm_bin = b''
@@ -352,11 +371,13 @@ def main():
     args = parser.parse_args()
 
     tet = build_tetrahedron()
+    damaged = build_tetrahedron(damaged_wedge_vertices())
     floor = build_floor_plane()
 
     if args.export_dir:
         os.makedirs(args.export_dir, exist_ok=True)
-        for name, data in (("builtin_entity.glb", tet), ("builtin_floor.glb", floor)):
+        for name, data in (("builtin_entity.glb", tet), ("builtin_entity_damaged.glb", damaged),
+                           ("builtin_floor.glb", floor)):
             path = os.path.join(args.export_dir, name)
             with open(path, "wb") as f:
                 f.write(data)
@@ -368,6 +389,9 @@ def main():
 
     print(f'// kTetrahedronGlb: {len(tet)} bytes')
     print(bytes_to_cpp_array('kTetrahedronGlb', tet))
+    print()
+    print(f'// kDamagedWedgeGlb: {len(damaged)} bytes')
+    print(bytes_to_cpp_array('kDamagedWedgeGlb', damaged))
     print()
     print(f'// kFloorPlaneGlb: {len(floor)} bytes')
     print(bytes_to_cpp_array('kFloorPlaneGlb', floor))

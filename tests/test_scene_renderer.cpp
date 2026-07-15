@@ -210,10 +210,10 @@ TEST_CASE("SceneRenderer submits one RenderItem when entity has loadable mesh") 
     REQUIRE(renderer.setSceneCount == 1);
     REQUIRE(renderer.lastScene.renderItems.size() == 1);
     CHECK(renderer.lastScene.renderItems[0].mesh.valid());
-    // ensureBuiltins() uploads 2 meshes (entity + floor) + 8 materials (6 palette + 1 floor +
+    // ensureBuiltins() uploads 3 meshes (entity + damaged + floor) + 8 materials (6 palette + 1 floor +
     // 1 shaded-grey fallback); the content mesh adds 1 more createMesh but reuses the shared
     // fallback material (no new createMaterial).
-    CHECK(renderer.createMeshCount == 3);
+    CHECK(renderer.createMeshCount == 4);
     CHECK(renderer.createMaterialCount == 8);
 }
 
@@ -264,7 +264,7 @@ TEST_CASE("SceneRenderer falls back to builtin when mesh bytes are empty") {
     REQUIRE(renderer.lastScene.renderItems.size() == 1);
     CHECK(renderer.lastScene.renderItems[0].mesh.valid()); // builtin tetrahedron
     // createMesh was NOT called for the broken empty_mesh; only ensureBuiltins uploads.
-    CHECK(renderer.createMeshCount == 2); // builtin entity + builtin floor
+    CHECK(renderer.createMeshCount == 3); // builtin entity + damaged + floor
 }
 
 // ---------------------------------------------------------------------------
@@ -299,8 +299,8 @@ TEST_CASE("SceneRenderer uses classicDamageMesh when damageLevel is nonzero") {
     REQUIRE(renderer.setSceneCount == 1);
     REQUIRE(renderer.lastScene.renderItems.size() == 1);
     // Only f15c_damaged was needed for content (f15c was not loaded).
-    // ensureBuiltins adds 2 builtin meshes → 3 total.
-    CHECK(renderer.createMeshCount == 3);
+    // ensureBuiltins adds 3 builtin meshes → 4 total.
+    CHECK(renderer.createMeshCount == 4);
     CHECK((renderer.lastScene.renderItems[0].flags & kRenderFlagDamaged) != 0);
 }
 
@@ -329,7 +329,47 @@ TEST_CASE("SceneRenderer uses primary mesh when damageLevel is zero") {
 
     REQUIRE(renderer.lastScene.renderItems.size() == 1);
     CHECK((renderer.lastScene.renderItems[0].flags & kRenderFlagDamaged) == 0);
-    CHECK(renderer.createMeshCount == 3); // ensureBuiltins (2) + "f15c" (1)
+    CHECK(renderer.createMeshCount == 4); // ensureBuiltins (3) + "f15c" (1)
+}
+
+TEST_CASE("SceneRenderer swaps a damaged builtin entity to the wreck-variant placeholder (#864)") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, noTypes(), assets, renderer}; // no content mesh → builtin fallback
+
+    // Intact builtin: the clean placeholder.
+    {
+        RenderSnapshot snap = makeSnap(1);
+        EntityRenderEntry e = makeEntry(0);
+        e.damageLevel = 0;
+        snap.entries.push_back(e);
+        bridge.publish(std::move(snap));
+    }
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    REQUIRE(renderer.lastScene.renderItems.size() == 1);
+    const uint32_t intactMeshId = renderer.lastScene.renderItems[0].mesh.id;
+
+    // Damaged builtin: the wreck-variant placeholder — a DIFFERENT mesh, and the damaged flag set.
+    {
+        RenderSnapshot snap = makeSnap(2);
+        EntityRenderEntry e = makeEntry(0);
+        e.damageLevel = 2;
+        snap.entries.push_back(e);
+        bridge.publish(std::move(snap));
+    }
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    REQUIRE(renderer.lastScene.renderItems.size() == 1);
+    const uint32_t damagedMeshId = renderer.lastScene.renderItems[0].mesh.id;
+
+    CHECK(intactMeshId != 0u);
+    CHECK(damagedMeshId != 0u);
+    CHECK(intactMeshId != damagedMeshId); // the mesh swap ran with no content pack
+    CHECK((renderer.lastScene.renderItems[0].flags & kRenderFlagDamaged) != 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -365,9 +405,9 @@ TEST_CASE("SceneRenderer caches mesh handle: createMesh called once for repeated
         sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
     }
 
-    // ensureBuiltins on frame 1: 2 meshes + 8 materials (6 palette + floor + fallback). Content
+    // ensureBuiltins on frame 1: 3 meshes + 8 materials (6 palette + floor + fallback). Content
     // "f15c": +1 mesh, reuses the shared fallback material. Frame 2: fully cached.
-    CHECK(renderer.createMeshCount == 3);
+    CHECK(renderer.createMeshCount == 4);
     CHECK(renderer.createMaterialCount == 8);
     CHECK(renderer.setSceneCount == 2);
 }
@@ -403,7 +443,7 @@ TEST_CASE("SceneRenderer shares one fallback material across distinct loadable m
 
     // Two distinct content meshes uploaded, but no per-mesh material: still just the 8 builtins
     // (6 palette + floor + fallback). Both meshes share m_fallbackEntityMat.
-    CHECK(renderer.createMeshCount == 4); // 2 builtin + 2 content
+    CHECK(renderer.createMeshCount == 5); // 3 builtin + 2 content
     CHECK(renderer.createMaterialCount == 8);
     REQUIRE(renderer.lastScene.renderItems.size() == 2);
     CHECK(renderer.lastScene.renderItems[0].material.id == renderer.lastScene.renderItems[1].material.id);

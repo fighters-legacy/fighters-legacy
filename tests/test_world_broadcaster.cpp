@@ -9152,6 +9152,86 @@ TEST_CASE("WorldBroadcaster: a warhead that fails an engine subsystem shows on t
     CHECK((fi->engineFailFlags() & (fl::kEngineFailLeft | fl::kEngineFailRight)) != 0);
 }
 
+TEST_CASE("WorldBroadcaster: the builtin debug entity walks through damage levels + a subsystem failure (#864)",
+          "[world_broadcaster][subsystem][sandbox]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(fl::builtinDebugEntityDef()); // the REAL sandbox def, now with a damage model
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::EntityTransform t{};
+    t.pos[1] = 5000.0;
+    t.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", t);
+    broadcaster.registerController(victim, std::make_unique<ConstantController>()); // integrator + subsystems
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto levelOf = [&]() -> int {
+        const fl::EntityState* s = em.get(victim);
+        return s ? static_cast<int>(s->damageLevel) : static_cast<int>(fl::DamageLevel::Destroyed);
+    };
+    auto blastAtVictim = [&](float dmg, uint64_t tick) {
+        const fl::EntityState* s = em.get(victim);
+        REQUIRE(s != nullptr);
+        double pos[3] = {s->transform.pos[0], s->transform.pos[1], s->transform.pos[2]};
+        broadcaster.applyWarheadAt(pos, fl::BlastSpec{6.f, dmg, false}, fl::EntityId::null());
+        broadcaster.onTick(1.0 / 60.0, tick);
+    };
+
+    CHECK(levelOf() == static_cast<int>(fl::DamageLevel::Intact));
+
+    // maxHp = 100; each blast is full damage at the centre. Walk the thresholds (light 0.66 / heavy
+    // 0.33 / critical 0.12) before death.
+    blastAtVictim(40.f, 2u); // hp 60 -> Light
+    CHECK(levelOf() == static_cast<int>(fl::DamageLevel::Light));
+    blastAtVictim(30.f, 3u); // hp 30 -> Heavy
+    CHECK(levelOf() == static_cast<int>(fl::DamageLevel::Heavy));
+    blastAtVictim(20.f, 4u); // hp 10 -> Critical
+    CHECK(levelOf() == static_cast<int>(fl::DamageLevel::Critical));
+    blastAtVictim(20.f, 5u); // hp 0 -> dead
+    CHECK(em.get(victim) == nullptr);
+}
+
+TEST_CASE("WorldBroadcaster: directed hits on the builtin debug entity fail its subsystems (#864)",
+          "[world_broadcaster][subsystem][sandbox]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(fl::builtinDebugEntityDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::EntityTransform t{};
+    t.pos[1] = 5000.0;
+    t.quat[3] = 1.f; // nose +X, right +Z
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", t);
+    broadcaster.registerController(victim, std::make_unique<ConstantController>());
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    // Boost HP so the airframe survives a barrage — we are testing SUBSYSTEM failure, not death. Each
+    // blast lands from behind-and-right (the shrapnel travels forward → the directional-bias favors
+    // the engines, #675). The four non-engine pools exhaust and are removed from the pick, so within a
+    // handful of directed hits an engine has to be the one that fails.
+    if (fl::EntityState* s = em.get(victim)) {
+        s->maxHp = 100000.f;
+        s->hp = 100000.f;
+    }
+
+    bool engineFailed = false;
+    for (uint64_t k = 0; k < 16 && !engineFailed; ++k) {
+        const fl::EntityState* s = em.get(victim);
+        REQUIRE(s != nullptr);
+        double pos[3] = {s->transform.pos[0] - 3.0, s->transform.pos[1], s->transform.pos[2] + 1.0}; // behind-right
+        broadcaster.applyWarheadAt(pos, fl::BlastSpec{12.f, 200.f, false}, fl::EntityId::null());
+        broadcaster.onTick(1.0 / 60.0, 2u + k);
+        if (const fl::FlightIntegrator* fi = broadcaster.integratorFor(victim.index))
+            engineFailed = (fi->engineFailFlags() & (fl::kEngineFailLeft | fl::kEngineFailRight)) != 0;
+    }
+    CHECK(engineFailed); // a subsystem hit reached the engines and asymmetric thrust shows on the integrator
+}
+
 TEST_CASE("WorldBroadcaster: an entity without a subsystems table is unaffected by the router",
           "[world_broadcaster][subsystem]") {
     MockLogger logger;

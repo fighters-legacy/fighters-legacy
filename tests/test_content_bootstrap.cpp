@@ -389,6 +389,22 @@ TEST_CASE("registerBuiltinWeapons registers every sandbox store exactly once (#8
     CHECK(registerBuiltinWeapons(weapons) == 0u);
 }
 
+TEST_CASE("the builtin debug entity has a real damage model with the full subsystem table (#864)") {
+    const EntityDef def = builtinDebugEntityDef();
+    REQUIRE(def.damage.has_value());             // not binary death anymore
+    REQUIRE(def.damage->subsystems.has_value()); // + a subsystem table
+    CHECK(def.damage->subsystems->any());
+    // An aircraft models BOTH engines (asymmetric thrust on a single-engine loss) plus controls,
+    // avionics, hydraulics and fuel.
+    for (Subsystem s : {Subsystem::EngineLeft, Subsystem::EngineRight, Subsystem::Controls, Subsystem::Avionics,
+                        Subsystem::Hydraulics, Subsystem::Fuel})
+        CHECK(def.damage->subsystems->parts[static_cast<int>(s)].hp > 0.f);
+    // Progressive penalties: heavy/critical degrade thrust + control, critical kills avionics.
+    CHECK(def.damage->heavy.thrustFactor < 1.f);
+    CHECK(def.damage->critical.controlFactor < def.damage->heavy.controlFactor);
+    CHECK(def.damage->critical.avionicsFailure);
+}
+
 TEST_CASE("the builtin drop tank is a Fuel store — inert, mass/drag only (#862)") {
     const WeaponDef& tank = BuiltinWeapon::dropTank();
     CHECK(tank.type == WeaponType::Fuel);

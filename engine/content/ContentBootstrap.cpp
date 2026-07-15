@@ -182,6 +182,35 @@ EntityDef builtinDebugEntityDef() {
     def.category = ObjectCategory::AirVehicle;
     def.maxHp = 100.0f;
 
+    // A real 3-level damage model + the full aircraft subsystem table (#864), so progressive damage,
+    // asymmetric-thrust / control degradation, avionics loss and the damage-variant mesh swap all run
+    // with zero content mounted — the debug entity had binary death before. The `visualEffect` names
+    // resolve to the builtin particle presets (registered by the game client).
+    {
+        DamageDef d;
+        d.light.hpFraction = 0.66f;
+        d.light.visualEffect = "smoke";
+        d.heavy.hpFraction = 0.33f;
+        d.heavy.visualEffect = "fire";
+        d.heavy.thrustFactor = 0.7f;
+        d.heavy.controlFactor = 0.6f;
+        d.critical.hpFraction = 0.12f;
+        d.critical.visualEffect = "fire";
+        d.critical.thrustFactor = 0.4f;
+        d.critical.controlFactor = 0.3f;
+        d.critical.avionicsFailure = true;
+
+        SubsystemSet subs;
+        subs.parts[static_cast<int>(Subsystem::EngineLeft)] = {30.f, 1.0f}; // asymmetric thrust on loss
+        subs.parts[static_cast<int>(Subsystem::EngineRight)] = {30.f, 1.0f};
+        subs.parts[static_cast<int>(Subsystem::Controls)] = {40.f, 1.0f};
+        subs.parts[static_cast<int>(Subsystem::Avionics)] = {25.f, 0.8f};
+        subs.parts[static_cast<int>(Subsystem::Hydraulics)] = {30.f, 0.8f};
+        subs.parts[static_cast<int>(Subsystem::Fuel)] = {35.f, 1.0f};
+        d.subsystems = subs;
+        def.damage = d;
+    }
+
     // Armed (#440/#862): a cannon, IR + radar + SARH rails, a bomb, a rocket pod, a drop tank, and a
     // sensor pod — every sandbox/debug peer spawns able to exercise the WHOLE fire path (every
     // WeaponType and every HardpointType, incl. the inert Fuel/Pod stores) with zero content mounted.
