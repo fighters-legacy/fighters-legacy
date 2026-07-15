@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: Contributors to Fighters Legacy
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# ci_smoke -- the mission-test harness's own regression mission (#856). Deterministic by construction:
+# it spawns two builtin entities, dispatches one action at mission_start, and completes on a timer, so
+# a headless run always yields outcome=success, spawned_objects=2, triggers_fired=2.
+name: "CI Smoke"
+map: world
+layer: world_clear
+time: { hour: 12, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [blue, red]
+objects:
+  - { type: builtin:debug-entity, id: blue1, side: blue, pos: [0, 500, 0], heading: 0 }
+  - { type: builtin:debug-entity, id: red1, side: red, pos: [2000, 500, 0], heading: 180 }
+triggers:
+  - on: mission_start
+    do: spawn(marker,blue,0,500,100)
+  - on: timer(2)
+    do: mission_success

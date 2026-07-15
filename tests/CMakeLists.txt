@@ -234,6 +234,23 @@ target_link_libraries(test_settings PRIVATE Catch2::Catch2WithMain engine-config
 target_include_directories(test_settings PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_settings)
 
+# Missions-as-integration-tests harness (#856): run the ci-mission-pack smoke mission headless via
+# fl-server --mission-report and assert on its JSON outcome. Gated on fl-server (absent in the
+# lean/tools-only builds) and a Python 3 interpreter.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(TARGET fl-server AND Python3_Interpreter_FOUND)
+    add_test(NAME mission_harness_ci_smoke
+        COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_SOURCE_DIR}/tools/mission_test/mission_test.py"
+                --server $<TARGET_FILE:fl-server>
+                --assets "${CMAKE_SOURCE_DIR}/tests/fixtures/mission_root"
+                --mission ci_smoke
+                --expect-outcome success
+                --min-triggers 2
+                --min-spawned 2
+    )
+endif()
+
 # Integration: verify locale files are in sync with source key references
 if(TARGET locale-extract)
     add_test(NAME locale_lint

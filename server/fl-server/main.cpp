@@ -54,6 +54,7 @@
 #include <loop/GameLoop.h>
 #include <mission/Mission.h>
 #include <mission/MissionParser.h>
+#include <mission/MissionReport.h>
 #include <mission/MissionRuntime.h>
 #include <mission/MissionSetup.h>
 #include <net/GameProtocol.h>
@@ -154,14 +155,15 @@ static void applyCliAndEnvOverrides(fl::ServerConfig& cfg, int argc, char** argv
 int main(int argc, char** argv) {
     // Pre-pass: --help / --version / --persistent / --bind
     bool flagPersistent = false;
-    std::string flagBind;        // non-empty if --bind addr was given
-    std::string flagAdminToken;  // non-empty if --admin-token was given (internal single-player use)
-    std::string flagTransport;   // non-empty if --transport <gns|enet> was given (overrides [network])
-    std::string flagMetricsJson; // non-empty if --metrics-json path was given (overrides [metrics])
-    std::string flagAssets;      // non-empty if --assets <dir> was given (content root; single-player forwards it)
-    long flagSimWorkers = -1;    // >=0 if --sim-worker-threads was given (overrides [world])
-    long flagFlightSize = -1;    // >=0 if --flight-size was given (overrides [flight] size)
-    std::string flagMission;     // non-empty if --mission <name> was given (overrides [rotation])
+    std::string flagBind;          // non-empty if --bind addr was given
+    std::string flagAdminToken;    // non-empty if --admin-token was given (internal single-player use)
+    std::string flagTransport;     // non-empty if --transport <gns|enet> was given (overrides [network])
+    std::string flagMetricsJson;   // non-empty if --metrics-json path was given (overrides [metrics])
+    std::string flagAssets;        // non-empty if --assets <dir> was given (content root; single-player forwards it)
+    long flagSimWorkers = -1;      // >=0 if --sim-worker-threads was given (overrides [world])
+    long flagFlightSize = -1;      // >=0 if --flight-size was given (overrides [flight] size)
+    std::string flagMission;       // non-empty if --mission <name> was given (overrides [rotation])
+    std::string flagMissionReport; // non-empty: run the mission headless to completion, write JSON here (#856)
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
@@ -178,6 +180,7 @@ int main(int argc, char** argv) {
                 "  --sim-worker-threads <n>  Sim-tick CPU parallelism; 0=auto, 1=serial (overrides [world])\n"
                 "  --flight-size <n>         AI wingmen per player; 0=none (overrides [flight])\n"
                 "  --mission <name>          Load a mission at startup (overrides [rotation])\n"
+                "  --mission-report <path>   Run the mission headless to completion, write a JSON outcome, exit\n"
                 "\n"
                 "Admin console commands are available on stdin (type 'help' for a command list).\n"
                 "\n"
@@ -217,6 +220,8 @@ int main(int argc, char** argv) {
             flagAssets = argv[++i];
         if (std::strcmp(argv[i], "--mission") == 0 && i + 1 < argc)
             flagMission = argv[++i];
+        if (std::strcmp(argv[i], "--mission-report") == 0 && i + 1 < argc)
+            flagMissionReport = argv[++i];
         if (std::strcmp(argv[i], "--sim-worker-threads") == 0 && i + 1 < argc) {
             char* end = nullptr;
             long n = std::strtol(argv[++i], &end, 10);
@@ -825,6 +830,8 @@ int main(int argc, char** argv) {
     // The objective/trigger evaluator (#633). Constructed below when a mission loads; declared here so
     // it outlives gameLoop (the broadcaster's tick hook captures a pointer into it).
     std::unique_ptr<fl::MissionRuntime> missionRuntime;
+    std::string loadedMissionName; // for the #856 headless report
+    uint64_t loadedMissionSpawned = 0;
     if (!missionToLoad.empty()) {
         auto missionAsset = assets.loadMission(missionToLoad.c_str());
         if (!missionAsset) {
@@ -949,6 +956,8 @@ int main(int argc, char** argv) {
                     log->log(LogLevel::Info, __FILE__, __LINE__, m);
                 });
                 broadcaster.setMissionTickHook([rt = missionRuntime.get()](uint64_t t) { rt->step(t); });
+                loadedMissionName = parsed.mission.name;
+                loadedMissionSpawned = setup.spawned.size();
 
                 for (const std::string& w : setup.warnings)
                     log->log(LogLevel::Warn, __FILE__, __LINE__, w.c_str());
@@ -1193,6 +1202,46 @@ int main(int argc, char** argv) {
     std::signal(SIGTERM, onSignal);
 
     adminCtx.env.startTime = std::chrono::steady_clock::now();
+
+    // ---- Headless mission run-to-completion (#856) ----
+    // With --mission-report, step the sim in a deterministic fixed-step loop (no wall-clock, no sim
+    // thread, no networking wait) until the mission ends or a tick cap, write a JSON outcome, and exit.
+    // The overrun governor is pinned OFF so AI decimation (aiStride > 1) cannot make the outcome
+    // load-dependent — determinism is the entire point of a mission-as-test. Combined with pure Lua
+    // scripts (no wall-clock / unseeded RNG), a run is byte-reproducible.
+    if (!flagMissionReport.empty()) {
+        if (!missionRuntime) {
+            log->log(LogLevel::Error, __FILE__, __LINE__, "--mission-report requires a mission (use --mission <name>)");
+            return 2;
+        }
+        broadcaster.setGovernorParams(fl::makeTickGovernorParams(false, 0.9f, 0.6f, 15.f, 4, 400));
+        constexpr double kSimDt = 1.0 / 60.0;
+        constexpr uint64_t kMaxReportTicks = 36000; // 10 sim-minutes at 60 Hz; a stuck mission stops here
+        uint64_t ranTicks = 0;
+        for (uint64_t tick = 1; tick <= kMaxReportTicks; ++tick) {
+            broadcaster.onTick(kSimDt, tick);
+            ranTicks = tick;
+            if (missionRuntime->done())
+                break;
+        }
+        const fl::MissionOutcome& oc = missionRuntime->outcome();
+        fl::MissionReport rep;
+        rep.missionName = loadedMissionName;
+        rep.outcome = oc.state == fl::MissionState::Complete ? "success"
+                      : oc.state == fl::MissionState::Failed ? "failure"
+                                                             : "incomplete";
+        rep.elapsedSeconds = oc.elapsedSeconds;
+        rep.ticks = ranTicks;
+        rep.triggersFired = oc.triggersFired;
+        rep.liveEntities = entityManager.liveCount();
+        rep.spawnedObjects = loadedMissionSpawned;
+        fl::writeConfigFile(flagMissionReport, fl::toJson(rep) + "\n", *log);
+        char rbuf[256];
+        std::snprintf(rbuf, sizeof(rbuf), "mission report: %s after %.1f s / %llu tick(s) -> %s", rep.outcome.c_str(),
+                      rep.elapsedSeconds, static_cast<unsigned long long>(rep.ticks), flagMissionReport.c_str());
+        log->log(LogLevel::Info, __FILE__, __LINE__, rbuf);
+        return 0;
+    }
 
     // ---- Start sim loop ----
     // Emit the "listening on" line now that pre-loop setup (including primeSpawnHeight) is done.

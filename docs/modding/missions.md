@@ -275,3 +275,23 @@ schema described in this document is that parser — the two cannot drift.
 
 Schema source: this document. For format reference and additional asset types
 see [`docs/modding/formats.md`](formats.md).
+
+---
+
+## Running a mission as an automated test
+
+A mission can run headless to completion and report its outcome, so a scripted scenario doubles as an
+integration test:
+
+```
+fl-server --mission <name> --mission-report outcome.json
+```
+
+fl-server steps the mission in a deterministic fixed-step loop (no clients, no wall-clock, the overrun
+governor pinned off), writes a JSON outcome — `outcome` (`success`/`failure`/`incomplete`), plus
+`elapsed_seconds`, `ticks`, `triggers_fired`, `live_entities`, and `spawned_objects` — and exits. The
+`tools/mission_test/mission_test.py` wrapper runs this and asserts on the result; the
+`mission_harness_ci_smoke` ctest exercises it against the `ci-mission-pack` fixture mission.
+
+For a run to be reproducible, keep triggers to the built-in predicates/actions and Lua behaviors to
+pure functions of `(state, tick, dt, contacts)` — no wall-clock, no unseeded RNG.
