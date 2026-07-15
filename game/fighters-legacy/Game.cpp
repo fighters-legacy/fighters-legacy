@@ -1064,11 +1064,13 @@ void Game::handleTransition(Screen next) {
     auto& d = *m_impl;
     const Screen prev = d.services.screenMgr->current();
 
-    if (next == Screen::Loading && prev == Screen::MainMenu)
+    // Start a session on ANY entry into Loading, not just from MainMenu — the mission flow enters
+    // Loading from MissionBrief, which the old MainMenu-only guard missed, leaving the LoadingScreen
+    // null and crashing the next frame (#876).
+    if (entersSession(prev, next))
         startGame();
 
-    if (next == Screen::MainMenu &&
-        (prev == Screen::Flight || prev == Screen::Pause || prev == Screen::Debrief || prev == Screen::Loading))
+    if (exitsSession(prev, next))
         stopGame();
 
     if (next == Screen::Flight) {
