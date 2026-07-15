@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <string_view>
 
 namespace fl {
@@ -25,6 +26,11 @@ class LocalServer {
   public:
     explicit LocalServer(ILogger& log);
     ~LocalServer();
+
+    // Content root to forward to the spawned fl-server via --assets, so the embedded server resolves
+    // mods/ from the same directory the client did (#831). Empty (default) lets fl-server fall back
+    // to its own resolution (the current working directory). Call before start().
+    void setContentRoot(std::string root);
 
     enum class StartResult {
         Ok,          // fl-server started and is listening
@@ -59,6 +65,7 @@ class LocalServer {
 
   private:
     ILogger& m_log;
+    std::string m_contentRoot; // forwarded to fl-server via --assets; empty = server resolves its own
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };

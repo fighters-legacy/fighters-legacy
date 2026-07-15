@@ -150,6 +150,7 @@ int main(int argc, char** argv) {
     std::string flagAdminToken;  // non-empty if --admin-token was given (internal single-player use)
     std::string flagTransport;   // non-empty if --transport <gns|enet> was given (overrides [network])
     std::string flagMetricsJson; // non-empty if --metrics-json path was given (overrides [metrics])
+    std::string flagAssets;      // non-empty if --assets <dir> was given (content root; single-player forwards it)
     long flagSimWorkers = -1;    // >=0 if --sim-worker-threads was given (overrides [world])
     long flagFlightSize = -1;    // >=0 if --flight-size was given (overrides [flight] size)
 
@@ -163,6 +164,7 @@ int main(int argc, char** argv) {
                 "  --version          Print version and exit\n"
                 "  --persistent       Enable persistent world mode (Phase 2 -- not yet active)\n"
                 "  --bind <addr>      Bind address (overrides server.toml and FL_BIND_ADDRESS)\n"
+                "  --assets <dir>     Content root holding mods/ (overrides FL_ASSETS_ROOT and the CWD)\n"
                 "  --metrics-json <p> Write the per-phase tick-budget JSON to <p> (overrides [metrics])\n"
                 "  --sim-worker-threads <n>  Sim-tick CPU parallelism; 0=auto, 1=serial (overrides [world])\n"
                 "  --flight-size <n>         AI wingmen per player; 0=none (overrides [flight])\n"
@@ -173,6 +175,7 @@ int main(int argc, char** argv) {
                 "  FL_CONFIG              Path to server.toml (default: ./server.toml)\n"
                 "  FL_PORT                Bind port (default: 4778)\n"
                 "  FL_BIND_ADDRESS        Bind address (default: 0.0.0.0)\n"
+                "  FL_ASSETS_ROOT         Content root holding mods/ (default: current directory)\n"
                 "  FL_MAX_PEERS           Max simultaneous peers (default: 32)\n"
                 "  FL_NAME                Server name (default: \"Unnamed Server\")\n"
                 "  FL_PERSISTENT          \"true\" to enable persistent world, Phase 2\n"
@@ -200,6 +203,8 @@ int main(int argc, char** argv) {
             flagAdminToken = argv[++i];
         if (std::strcmp(argv[i], "--metrics-json") == 0 && i + 1 < argc)
             flagMetricsJson = argv[++i];
+        if (std::strcmp(argv[i], "--assets") == 0 && i + 1 < argc)
+            flagAssets = argv[++i];
         if (std::strcmp(argv[i], "--sim-worker-threads") == 0 && i + 1 < argc) {
             char* end = nullptr;
             long n = std::strtol(argv[++i], &end, 10);
@@ -348,9 +353,22 @@ int main(int argc, char** argv) {
     }
 
     // ---- Content system and headless terrain ----
+    // Content root resolution mirrors the client (#831) so a single-player pair agrees on where
+    // mods/ lives: --assets <dir> > FL_ASSETS_ROOT > the current working directory. LocalServer
+    // forwards the client's resolved root via --assets, so the two never disagree.
     namespace fs = std::filesystem;
     fs::path assetsRoot = fs::current_path();
+    if (!flagAssets.empty())
+        assetsRoot = fs::path(flagAssets);
+    else if (const char* ev = std::getenv("FL_ASSETS_ROOT"); ev && *ev)
+        assetsRoot = fs::path(ev);
     fs::path userDataRoot = fs::current_path();
+
+    {
+        char buf[256];
+        std::snprintf(buf, sizeof(buf), "content root: %s", assetsRoot.string().c_str());
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
 
     p.filesystem = std::make_unique<StdFilesystem>(assetsRoot, userDataRoot);
 

@@ -32,6 +32,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **game**: the game client looked for `mods/` beside the executable (`SDL_GetBasePath()`) while the dedicated server looked in the working directory, so a pack that loaded on the server was silently invisible to the client — every entity fell back to the builtin tetrahedron with nothing saying why. The client now resolves its content root the same way with an explicit override chain (`--assets <dir>` > `FL_ASSETS_ROOT` > the executable dir if it holds `mods/` > the working dir if it holds `mods/`), the same `--assets`/`FL_ASSETS_ROOT` override is added to `fl-server`, single-player forwards the client's resolved root to the embedded server, and the client now prints `content: N mod(s) loaded` on startup the way the server does (#831)
 - **docs**: `ai.md` documented `pitch_error_from_alt` with the wrong signature and its own worked example used the wrong form — copy it and the AI errors every tick while flying straight ahead; the example is now executed as a test so the docs and the bindings cannot drift silently again (#830)
 
 ### Added

@@ -98,6 +98,40 @@ namespace fl {
 // File-scope helpers
 // ---------------------------------------------------------------------------
 
+// Resolve where the client looks for content packs (the mods/ directory) and all other assets.
+// The dedicated server roots content at the current working directory; the client historically used
+// only the executable directory (SDL_GetBasePath), so a `mods/` staged in the CWD -- the normal dev
+// layout -- was invisible to the client while it loaded fine on the server (#831). Resolution order:
+//   1. --assets <dir>      explicit CLI override
+//   2. FL_ASSETS_ROOT env  explicit environment override
+//   3. <exe-dir>           if <exe-dir>/mods exists (release: packs staged beside the binary)
+//   4. <cwd>               if <cwd>/mods exists (dev: run from a directory containing mods/)
+//   5. <exe-dir>           default (no packs; the zero-content sandbox)
+static fs::path resolveAssetsRoot(const fs::path& exeDir, int argc, char** argv, ILogger& log) {
+    auto choose = [&](fs::path root, const char* why) {
+        log.log(LogLevel::Info, __FILE__, __LINE__,
+                (std::string("assets root: ") + root.string() + " (" + why + ")").c_str());
+        return root;
+    };
+
+    for (int i = 1; i < argc - 1; ++i)
+        if (std::strcmp(argv[i], "--assets") == 0)
+            return choose(fs::path(argv[i + 1]), "--assets");
+
+    if (const char* ev = SDL_getenv("FL_ASSETS_ROOT"); ev && *ev)
+        return choose(fs::path(ev), "FL_ASSETS_ROOT");
+
+    std::error_code ec;
+    if (fs::exists(exeDir / "mods", ec))
+        return choose(exeDir, "beside executable");
+
+    const fs::path cwd = fs::current_path(ec);
+    if (!ec && fs::exists(cwd / "mods", ec))
+        return choose(cwd, "current directory");
+
+    return choose(exeDir, "default; no mods/ directory found");
+}
+
 static std::function<void(std::string_view)> makeNetworkAdminSender(INetwork& net, std::string token) {
     return [&net, tok = std::move(token), nextReqId = uint16_t{1}](std::string_view cmd) mutable {
         fl::MsgAdminCommand msg{};
@@ -421,7 +455,8 @@ bool Game::initPlatform(int argc, char** argv) {
     d.services.p.logger = std::move(fileLogger);
 
     const char* baseRaw = SDL_GetBasePath();
-    d.services.assetsRoot = baseRaw ? fs::path(baseRaw) : fs::path(".");
+    const fs::path exeDir = baseRaw ? fs::path(baseRaw) : fs::path(".");
+    d.services.assetsRoot = resolveAssetsRoot(exeDir, argc, argv, *d.services.rawLogger);
     d.services.p.filesystem = std::make_unique<StdFilesystem>(d.services.assetsRoot, d.services.userDataDir);
 
     d.services.userConfig.emplace(*d.services.p.filesystem, *d.services.rawLogger);
@@ -531,6 +566,17 @@ bool Game::initContent() {
     ModLoader modLoader(*d.services.p.filesystem, *d.services.rawLogger, d.services.assetsRoot.string());
     auto packs = modLoader.load();
     const bool hasPacks = !packs.empty();
+
+    // Report the pack count on startup the way fl-server does (#831). The client logs to a file the
+    // developer has no reason to open, so also echo one line to stderr: a client drawing placeholder
+    // tetrahedra with "content: 0 mod(s) loaded" here is an assets-root problem, not a broken mesh.
+    {
+        char buf[192];
+        std::snprintf(buf, sizeof(buf), "content: %zu mod(s) loaded from %s", packs.size(),
+                      d.services.assetsRoot.string().c_str());
+        d.services.rawLogger->log(LogLevel::Info, __FILE__, __LINE__, buf);
+        std::fprintf(stderr, "%s\n", buf);
+    }
 
     CrashInfo::ModEntry modEntries[CrashInfo::kMaxMods];
     int modCount = 0;
@@ -786,6 +832,8 @@ void Game::startGame() {
     if (!isMultiplayer) {
         // Single-player: spawn fl-server subprocess in a background thread.
         d.session.localServer.emplace(*d.services.rawLogger);
+        // Forward the client's resolved content root so the embedded server loads the same packs (#831).
+        d.session.localServer->setContentRoot(d.services.assetsRoot.string());
         d.session.serverThread = std::thread([&d]() {
             auto result = d.session.localServer->start();
             if (result == LocalServer::StartResult::Ok) {
