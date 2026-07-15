@@ -59,6 +59,10 @@ void LocalServer::setContentRoot(std::string root) {
     m_contentRoot = std::move(root);
 }
 
+void LocalServer::setMission(std::string missionName) {
+    m_mission = std::move(missionName);
+}
+
 // Explicit destructor defined here so the compiler sees Impl as a complete type
 // when unique_ptr<Impl> is destroyed (pimpl pattern requirement).
 LocalServer::~LocalServer() {
@@ -111,6 +115,12 @@ LocalServer::StartResult LocalServer::start(const char* bindAddr, uint16_t port)
     if (!m_contentRoot.empty()) {
         args.emplace_back("--assets");
         args.emplace_back(m_contentRoot);
+    }
+
+    // Load the selected mission (#634). Empty = the sandbox, exactly as before this seam existed.
+    if (!m_mission.empty()) {
+        args.emplace_back("--mission");
+        args.emplace_back(m_mission);
     }
 
     // Spawn into a unique_ptr<Subprocess> to avoid Subprocess::Impl completion

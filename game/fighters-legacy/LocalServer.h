@@ -32,6 +32,10 @@ class LocalServer {
     // to its own resolution (the current working directory). Call before start().
     void setContentRoot(std::string root);
 
+    // Mission to load in the embedded server, forwarded via --mission (#634). Empty (default) starts
+    // the sandbox — the same behavior as before this seam existed. Call before start().
+    void setMission(std::string missionName);
+
     enum class StartResult {
         Ok,          // fl-server started and is listening
         SpawnFailed, // subprocess could not be created (binary not found)
@@ -66,6 +70,7 @@ class LocalServer {
   private:
     ILogger& m_log;
     std::string m_contentRoot; // forwarded to fl-server via --assets; empty = server resolves its own
+    std::string m_mission;     // forwarded to fl-server via --mission; empty = sandbox (#634)
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };
