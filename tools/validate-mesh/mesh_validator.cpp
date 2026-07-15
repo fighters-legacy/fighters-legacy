@@ -272,11 +272,31 @@ static void applyConventionChecks(const tinygltf::Model& model, const std::strin
     // Winding consistency (catch inside-out meshes — flipped normals).
     checkWindingConsistency(model, label, r);
 
+    // Texture URI convention (#833): the engine resolves an image URI to a Texture asset name under
+    // the pack's `textures/` directory, and only .ktx2 (preferred) / .png decode. The authored form
+    // is an external URI such as "../../textures/f5e_diffuse.ktx2"; flag any other extension so a URI
+    // that will never load is caught here rather than rendering as a silent grey placeholder.
+    for (const auto& img : model.images) {
+        if (img.uri.empty() || img.uri.rfind("data:", 0) == 0)
+            continue; // no URI, or an embedded data: URI (already flagged as embedded image data)
+        std::string ext;
+        if (auto dot = img.uri.find_last_of('.'); dot != std::string::npos)
+            ext = img.uri.substr(dot);
+        for (char& c : ext)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (ext != ".ktx2" && ext != ".png")
+            r.warnings.push_back(label + ": image URI \"" + img.uri +
+                                 "\" is not a .ktx2 or .png reference — the engine will not load it "
+                                 "(see docs/modding/textures.md)");
+    }
+
     // Unknown extensions at model level
     for (const auto& ext : model.extensionsUsed) {
-        // Known-harmless extensions (informational only)
+        // Known-harmless extensions (informational only). KHR_texture_basisu is REQUIRED to reference
+        // a KTX2/Basis texture the spec-conformant way, so a correctly authored textured mesh must be
+        // able to declare it without failing validation (#833).
         static const char* kKnownExts[] = {"KHR_materials_emissive_strength", "KHR_texture_transform",
-                                           "EXT_mesh_gpu_instancing"};
+                                           "KHR_texture_basisu", "EXT_mesh_gpu_instancing"};
         bool known = false;
         for (const char* k : kKnownExts)
             if (ext == k) {

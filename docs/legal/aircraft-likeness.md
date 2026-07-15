@@ -22,16 +22,44 @@ examples, and the first bundled aircraft is a Northrop F-5E Tiger II.
 What makes this defensible is not that the aircraft are fictional. It is **where the data comes
 from**, and the answer must be: the public record.
 
-## 2. Public-domain government sources only
+## 2. Public-domain and unencumbered sources only
 
-Permitted references:
+This section governs **both** the numbers (dimensions, masses, thrust, aerodynamic values) and the
+**pictures** (visual reference for shaping geometry and authoring textures). The rule for both is the
+same: the source must be public-domain or unencumbered, and what ships is the derived asset, never the
+reference.
+
+Permitted references — **numbers**:
 
 - Declassified 3-view drawings and general-arrangement diagrams.
-- USAF / US Navy / NASA photography (works of the US federal government, public domain).
 - Published **Standard Aircraft Characteristics** charts.
 - Declassified flight manuals and technical orders.
 - NASA and NACA technical reports (`ntrs.nasa.gov`).
 - Manufacturer marketing material *for dimensions only*, cross-checked against a government source.
+
+Permitted references — **visual reference for geometry and texture**:
+
+- **Public-domain photographs, regardless of who took them.** USAF / US Navy / NASA photography
+  (works of the US federal government) qualifies, but so does any other genuinely public-domain
+  photograph — including manufacturer factory and assembly-line photographs of bare, unpainted
+  airframes, which are the best panel-line reference there is and, being unmarked, raise no §4
+  livery question.
+- **CC0 imagery, regardless of author.** CC0 is a public-domain dedication with no attribution, no
+  share-alike, and no downstream obligation — e.g. museum walk-around photography released CC0.
+  `fl-base-pack` already carries `LICENSES/CC0-1.0.txt`.
+
+Using a photograph as visual reference means informing **proportions, panel lines and surface
+detail** from it. It does **not** mean reproducing what is painted on the aircraft: **§4 applies in
+full** — any national insignia, unit marking, nose art, or operator livery visible in a reference
+photograph is not carried onto the airframe.
+
+**Not accepted — attribution / share-alike imagery (CC BY, CC BY-SA):**
+
+Freely licensed is not the same as unencumbered. CC BY requires attribution and CC BY-SA additionally
+requires share-alike, and both obligations **propagate into any texture or mesh derived from the
+image** — a share-alike reference would infect the derived asset and conflict with the pack's blanket
+`CC-BY-4.0`, which `license-check` now enforces as a required gate. Use only public-domain and CC0
+imagery; the CC BY / CC BY-SA bucket is not needed and is not taken.
 
 **Forbidden, without exception:**
 
@@ -40,10 +68,22 @@ Permitted references:
   claimed, or how much it was modified afterwards. This restates the rule already in
   `fl-base-pack/CONTRIBUTING.md`, and makes explicit that it applies to the **airframe geometry**,
   not merely to the livery.
+- **No mesh traced from scale plans, multi-view line drawings, or cutaway illustrations** from
+  modelling magazines, books, or partworks — including cutaways that run in **Jane's** and Osprey
+  titles. These are protected creative works by identifiable artists, copyrighted **regardless of
+  where they are found and regardless of the absence of a visible licence notice**; a mesh traced
+  from one is a derivative work of the drawing. They are easy to mistake for neutral reference
+  because they look technical rather than artistic and carry no licence tag — they are neither
+  neutral nor free. Tracing a Jane's cutaway would breach in the *content* the very clean-room rule
+  `docs/architecture.md` already imposes on the *engine*.
 - **No aerodynamic or performance values lifted from another simulator's data files.** Not from
   DCS, not from BMS, not from a Flight Simulator add-on, not from a wiki that copied one of them.
 - No reference material marked export-controlled (ITAR/EAR), classified, or "distribution limited".
   If a document says you may not redistribute it, you may not derive from it either.
+
+**Reference imagery is not shipped.** It lives *outside* the pack repository; only the derived asset
+ships. Each file used as reference is recorded — licence, author, and source URL — so the provenance
+is auditable (see §5).
 
 ## 3. Aerodynamic values are derived, not copied
 
@@ -77,9 +117,13 @@ aspirational.
 Each aircraft directory contains a `SOURCES.md` in which **every geometric dimension, mass, thrust
 figure and aerodynamic value is cited to a specific public document**, with a URL where one exists.
 Values that were *derived* (DATCOM, curve fits, calibration against a chart) say so, and name the
-inputs they were derived from. The pull request that adds the aircraft links the sources.
+inputs they were derived from. **Any image used as visual reference** for geometry or texture is
+listed the same way — licence (public-domain or CC0), author, and source URL per file — even though
+the image itself is not committed to the repository. The pull request that adds the aircraft links
+the sources.
 
-If a number cannot be cited or derived, it does not ship.
+If a number cannot be cited or derived, it does not ship. If an image cannot be shown to be
+public-domain or CC0, it is not used as reference.
 
 ## 6. Trademarks
 

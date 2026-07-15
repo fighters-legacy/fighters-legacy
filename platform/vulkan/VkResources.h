@@ -41,6 +41,7 @@ struct GpuMesh {
     VkBuffer indexBuffer{VK_NULL_HANDLE};
     VmaAllocation indexAlloc{};
     uint32_t indexCount{0};
+    MaterialHandle material{}; // material parsed from the glb (#833); invalid = none
     bool alive{false};
 };
 
@@ -91,6 +92,9 @@ class VkResourceManager {
     const GpuMesh* getMesh(MeshHandle h) const;
     const GpuTexture* getTexture(TextureHandle h) const;
     const GpuMaterial* getMaterial(MaterialHandle h) const;
+
+    // Material createMesh built from the glb's own PBR material (#833); invalid when none.
+    MaterialHandle getMeshMaterial(MeshHandle h) const;
 
     // Default textures bound when a material omits a texture slot.
     TextureHandle defaultWhiteTexture() const {

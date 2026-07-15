@@ -168,6 +168,64 @@ TEST_CASE("material with known extension produces warning not error", "[validate
     CHECK(!r.warnings.empty());
 }
 
+// #833: a spec-conformant KTX2/Basis texture declares KHR_texture_basisu in extensionsUsed. The
+// validator must accept it, otherwise authoring the texture reference correctly makes CI fail.
+TEST_CASE("KHR_texture_basisu is an accepted extension", "[validate-mesh]") {
+    auto r = validateMeshFromJson(R"({
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"name": "fa18c", "mesh": 0}],
+        "meshes": [{"name": "fa18c", "primitives": [{"attributes": {"POSITION": 0}}]}],
+        "extensionsUsed": ["KHR_texture_basisu"],
+        "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "max": [1,1,1], "min": [0,0,0]}],
+        "bufferViews": [{"buffer": 0, "byteLength": 36}],
+        "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]
+    })");
+    CHECK(r.ok);
+    for (const auto& e : r.errors)
+        CHECK(e.find("KHR_texture_basisu") == std::string::npos);
+}
+
+// #833: a texture image URI whose extension is not .ktx2/.png will never load in the engine — warn.
+TEST_CASE("texture image URI with an unloadable extension warns", "[validate-mesh]") {
+    auto r = validateMeshFromJson(R"({
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"name": "fa18c", "mesh": 0}],
+        "meshes": [{"name": "fa18c", "primitives": [{"attributes": {"POSITION": 0}}]}],
+        "images": [{"uri": "../../textures/fa18c_diffuse.dds"}],
+        "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "max": [1,1,1], "min": [0,0,0]}],
+        "bufferViews": [{"buffer": 0, "byteLength": 36}],
+        "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]
+    })");
+    bool found = false;
+    for (const auto& w : r.warnings)
+        if (w.find(".dds") != std::string::npos || w.find("not a .ktx2 or .png") != std::string::npos) {
+            found = true;
+            break;
+        }
+    CHECK(found);
+}
+
+// #833: the authored convention ("../../textures/<name>.ktx2") raises no URI-extension warning.
+TEST_CASE("texture image URI ending in .ktx2 raises no extension warning", "[validate-mesh]") {
+    auto r = validateMeshFromJson(R"({
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"name": "fa18c", "mesh": 0}],
+        "meshes": [{"name": "fa18c", "primitives": [{"attributes": {"POSITION": 0}}]}],
+        "images": [{"uri": "../../textures/fa18c_diffuse.ktx2"}],
+        "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "max": [1,1,1], "min": [0,0,0]}],
+        "bufferViews": [{"buffer": 0, "byteLength": 36}],
+        "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]
+    })");
+    for (const auto& w : r.warnings)
+        CHECK(w.find("not a .ktx2 or .png") == std::string::npos);
+}
+
 // One triangle p0=(0,0,0) p1=(1,0,0) p2=(0,0,1): winding cross-product = -Y. With normals = -Y
 // (consistent / CCW-from-outside) the winding check passes; with normals = +Y the mesh is
 // inside-out and must be flagged. Buffer = 3 POSITION vec3 (36 B) + 3 NORMAL vec3 (36 B) = 72 B.

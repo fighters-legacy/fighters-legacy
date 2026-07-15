@@ -6,6 +6,7 @@
 #include <functional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -20,6 +21,13 @@ class TerrainStreamer;
 } // namespace fl
 
 namespace fl {
+
+// Map a glTF image URI to a Texture asset name (#833). The pack convention places textures under the
+// `textures/` asset directory, so a mesh references "../../textures/<name>.ktx2" (a bare
+// "<name>.ktx2" is also accepted); both yield asset name "<name>", which AssetManager::loadTexture
+// resolves back to textures/<name>.ktx2 (.png fallback). Takes the path after the last "textures/"
+// segment (or the bare basename) and strips the extension. Exposed for unit testing the convention.
+std::string textureAssetNameFromUri(std::string_view uri);
 
 // Converts the per-tick entity snapshot from SimRenderBridge into a FrameScene and submits
 // it to IRenderer::setScene each frame.

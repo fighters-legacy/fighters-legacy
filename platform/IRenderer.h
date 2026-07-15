@@ -58,6 +58,11 @@ class IRenderer {
     // Create a PBR material linking already-uploaded textures.
     virtual MaterialHandle createMaterial(const MaterialDesc& desc) = 0;
 
+    // The PBR material createMesh built from the mesh's own glTF material (base color / normal / ORM),
+    // when a MeshUploadDesc::textureResolver was supplied (#833). Invalid handle when the mesh had no
+    // material or no resolver — the caller then falls back to a flat colour.
+    virtual MaterialHandle getMeshMaterial(MeshHandle h) const = 0;
+
     // ── Resource destruction ───────────────────────────────────────────────
     virtual void destroyMesh(MeshHandle h) = 0;
     virtual void destroyTexture(TextureHandle h) = 0;
