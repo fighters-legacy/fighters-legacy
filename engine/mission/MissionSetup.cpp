@@ -85,6 +85,7 @@ MissionSetupResult applyMission(const Mission& mission, EntityManager& em, Facti
             slot.pos[1] = obj.alt ? static_cast<double>(*obj.alt) : obj.pos[1];
             slot.pos[2] = obj.pos[2];
             slot.headingDeg = obj.headingDeg;
+            yawHeadingToQuat(obj.headingDeg, slot.pos, planetRadiusM, slot.quat);
             result.playerSlots.push_back(std::move(slot));
             continue;
         }

@@ -48,6 +48,7 @@ class FlightIntegrator; // full definition in WorldBroadcaster.cpp
 class JobSystem;        // engine/job/JobSystem.h — full definition in WorldBroadcaster.cpp
 struct EntityDef;       // engine/entity/EntityDef.h — the PayloadResolver's argument
 struct EntityState;
+struct EntityTransform;   // engine/entity/EntityState.h — spawnPilotEntity's transform
 struct FlightModelData;   // engine/flight/FlightModelData.h
 struct IEntityController; // engine/entity/IEntityController.h
 class EntityTypeRegistry;
@@ -376,6 +377,24 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Empty list = legacy behaviour: spawn at origin with y = m_groundElevation + 500 m.
     // Call before gameLoop.start(); never mutated after that.
     void setSpawnPoints(std::vector<std::array<double, 3>> points) noexcept;
+
+    // A joinable mission player slot (#854): a mission object marked `player: true`. A POD so engine-net
+    // stays free of an engine-mission dependency — fl-server translates engine-mission's PlayerSlot into
+    // this. `factionIndex` indexes the FactionRegistry handed to setFactionRegistry; `quat` is the
+    // resolved spawn orientation (heading already placed on the local tangent frame at spawn time).
+    struct MissionSpawnSlot {
+        std::string entityType;
+        uint16_t factionIndex{0};
+        double pos[3]{};
+        float quat[4]{0.f, 0.f, 0.f, 1.f};
+    };
+
+    // Install the mission's player slots. When non-empty, a connecting pilot is assigned the next open
+    // slot (its type/faction/spawn) instead of the round-robin setSpawnPoints() + [world] player_faction
+    // path; the slot frees on disconnect. All slots occupied ⇒ the pilot falls back to the default path,
+    // so extra players still get an aircraft. Empty (the default) = pre-mission behavior. Resets slot
+    // occupancy; call before gameLoop.start().
+    void setMissionPlayerSlots(std::vector<MissionSpawnSlot> slots);
 
     // World-XZ position of the most recently stepped peer entity (sim thread writes;
     // main thread may read to steer terrain loading).
@@ -725,6 +744,15 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // its flight. Returns the assigned EntityId (invalid on spawn failure). Extracted from the old
     // onConnect. Sim-thread.
     EntityId admitPilot(uint32_t peerId, const std::string& entityType);
+    // Shared spawn core for a pilot peer: spawn `entityType` at `t`, record m_peerEntities, stamp
+    // `faction` (0 = leave neutral), resolve the flight model, and register the PeerController. Used by
+    // both admitPilot (round-robin path) and the mission-slot path. Sim-thread.
+    EntityId spawnPilotEntity(uint32_t peerId, const std::string& entityType, const EntityTransform& t,
+                              uint16_t faction);
+    // Claim the next open mission player slot for `peerId` (#854). Returns its index, or -1 when there
+    // are no slots or all are occupied. releaseMissionSlot frees it on despawn. Sim-thread.
+    int claimMissionSlot(uint32_t peerId);
+    void releaseMissionSlot(uint32_t peerId);
     // Resolve the entity type to spawn for a pilot (#834): a client-requested type wins iff it is a
     // REGISTERED type (server-clamped allowlist); otherwise the [world] player_entity_type default;
     // otherwise builtin:debug-entity. An unregistered request falls back with an Info log.
@@ -897,6 +925,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
 
     std::vector<std::array<double, 3>> m_spawnPoints; // pre-cached [x,y,z]; sim-thread read-only after start
     uint32_t m_nextSpawnIdx{0};                       // round-robin counter; sim-thread only
+
+    // Mission player slots (#854). m_slotOccupant[i] = the peer holding slot i, or kSlotFree. m_peerSlot
+    // maps a peer to its held slot for O(1) release on despawn. Sim-thread only.
+    static constexpr uint32_t kSlotFree = 0xFFFFFFFFu;
+    std::vector<MissionSpawnSlot> m_missionSlots;
+    std::vector<uint32_t> m_slotOccupant;
+    std::unordered_map<uint32_t, int> m_peerSlot;
 
     std::unordered_set<std::string> m_bannedAddresses; // in-memory ban list; sim-thread only
 

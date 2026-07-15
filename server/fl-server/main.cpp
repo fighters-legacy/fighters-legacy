@@ -50,6 +50,8 @@
 #include <flight/FlightModelParser.h>
 #include <job/JobSystem.h>
 #include <loop/GameLoop.h>
+#include <mission/MissionParser.h>
+#include <mission/MissionSetup.h>
 #include <net/GameProtocol.h>
 #include <net/WorldBroadcaster.h>
 #include <perf/ProcessStats.h>
@@ -61,6 +63,7 @@
 #include <weapon/Loadout.h>
 #include <weapon/WeaponRegistry.h>
 #include <weather/WeatherController.h>
+#include <world/FactionRegistry.h>
 
 #include <array>
 #include <chrono>
@@ -153,6 +156,7 @@ int main(int argc, char** argv) {
     std::string flagAssets;      // non-empty if --assets <dir> was given (content root; single-player forwards it)
     long flagSimWorkers = -1;    // >=0 if --sim-worker-threads was given (overrides [world])
     long flagFlightSize = -1;    // >=0 if --flight-size was given (overrides [flight] size)
+    std::string flagMission;     // non-empty if --mission <name> was given (overrides [rotation])
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
@@ -168,6 +172,7 @@ int main(int argc, char** argv) {
                 "  --metrics-json <p> Write the per-phase tick-budget JSON to <p> (overrides [metrics])\n"
                 "  --sim-worker-threads <n>  Sim-tick CPU parallelism; 0=auto, 1=serial (overrides [world])\n"
                 "  --flight-size <n>         AI wingmen per player; 0=none (overrides [flight])\n"
+                "  --mission <name>          Load a mission at startup (overrides [rotation])\n"
                 "\n"
                 "Admin console commands are available on stdin (type 'help' for a command list).\n"
                 "\n"
@@ -205,6 +210,8 @@ int main(int argc, char** argv) {
             flagMetricsJson = argv[++i];
         if (std::strcmp(argv[i], "--assets") == 0 && i + 1 < argc)
             flagAssets = argv[++i];
+        if (std::strcmp(argv[i], "--mission") == 0 && i + 1 < argc)
+            flagMission = argv[++i];
         if (std::strcmp(argv[i], "--sim-worker-threads") == 0 && i + 1 < argc) {
             char* end = nullptr;
             long n = std::strtol(argv[++i], &end, 10);
@@ -277,10 +284,18 @@ int main(int argc, char** argv) {
     // ---- Phase 2 stub logs ----
     if (cfg.persistent)
         log->log(LogLevel::Info, __FILE__, __LINE__, "persistent world requested (Phase 2 -- not yet active)");
-    if (!cfg.rotationItems.empty()) {
+
+    // Resolve the mission to load at startup (#854): --mission wins, else the first [rotation] item.
+    // Multi-item rotation *timing* (advancing to the next item over the running server) lands
+    // incrementally; the parse -> load -> sim-setup wiring is the deliverable here. The actual load
+    // happens below once the entity registry + weather controller exist (see "load startup mission").
+    std::string missionToLoad = flagMission;
+    if (missionToLoad.empty() && !cfg.rotationItems.empty())
+        missionToLoad = cfg.rotationItems.front();
+    if (!cfg.rotationItems.empty() && flagMission.empty()) {
         char buf[128];
-        std::snprintf(buf, sizeof(buf), "rotation: %zu item(s), order=%s (Phase 2 -- not yet active)",
-                      cfg.rotationItems.size(), cfg.rotationOrder.c_str());
+        std::snprintf(buf, sizeof(buf), "rotation: %zu item(s), order=%s (loading first: %s)", cfg.rotationItems.size(),
+                      cfg.rotationOrder.c_str(), cfg.rotationItems.front().c_str());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
     if (!cfg.modStack.empty()) {
@@ -781,6 +796,62 @@ int main(int argc, char** argv) {
     // Peer spawn positions are set separately via setSpawnPoints() above.
     primeSpawnHeight(0.0, 0.0); // no-op if already Ready (default-spawn path primed it above)
     broadcaster.setGroundElevation(static_cast<float>(terrainStreamer.heightAt(glm::dvec3{0.0, 0.0, 0.0})));
+
+    // ---- Load the startup mission (#854) ----
+    // Resolve the mission asset, hand its bytes to the engine-mission runtime parser (the same schema
+    // validate-mission checks), and set up the sim from it BEFORE gameLoop.start(): spawns + factions
+    // via applyMission, the coalition registry handed to the broadcaster, and the mission's `player:`
+    // objects registered as joinable slots. missionFactions outlives gameLoop (the broadcaster holds a
+    // pointer to it), so it is declared here in main's scope.
+    fl::FactionRegistry missionFactions;
+    if (!missionToLoad.empty()) {
+        auto missionAsset = assets.loadMission(missionToLoad.c_str());
+        if (!missionAsset) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "mission '%.96s' not found — starting empty", missionToLoad.c_str());
+            log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+        } else {
+            const std::string yaml(missionAsset->bytes.begin(), missionAsset->bytes.end());
+            fl::MissionParseResult parsed = fl::parseMission(yaml);
+            if (!parsed.ok) {
+                char buf[192];
+                std::snprintf(buf, sizeof(buf), "mission '%.80s' failed to parse (%zu error(s)) — starting empty",
+                              missionToLoad.c_str(), parsed.errors.size());
+                log->log(LogLevel::Error, __FILE__, __LINE__, buf);
+                for (const std::string& e : parsed.errors)
+                    log->log(LogLevel::Error, __FILE__, __LINE__, e.c_str());
+            } else {
+                fl::MissionSetupResult setup = fl::applyMission(parsed.mission, entityManager, missionFactions,
+                                                                &weatherController, cfg.planetRadiusM);
+                broadcaster.setFactionRegistry(&missionFactions);
+
+                std::vector<fl::WorldBroadcaster::MissionSpawnSlot> slots;
+                slots.reserve(setup.playerSlots.size());
+                for (const fl::PlayerSlot& ps : setup.playerSlots) {
+                    fl::WorldBroadcaster::MissionSpawnSlot s;
+                    s.entityType = ps.type;
+                    s.factionIndex = ps.factionIndex;
+                    s.pos[0] = ps.pos[0];
+                    s.pos[1] = ps.pos[1];
+                    s.pos[2] = ps.pos[2];
+                    for (int c = 0; c < 4; ++c)
+                        s.quat[c] = ps.quat[c];
+                    slots.push_back(std::move(s));
+                }
+                broadcaster.setMissionPlayerSlots(std::move(slots));
+
+                for (const std::string& w : setup.warnings)
+                    log->log(LogLevel::Warn, __FILE__, __LINE__, w.c_str());
+                char buf[224];
+                std::snprintf(buf, sizeof(buf),
+                              "mission '%.64s' loaded: %zu object(s) spawned, %zu player slot(s), %zu side(s)",
+                              parsed.mission.name.c_str(), setup.spawned.size(), setup.playerSlots.size(),
+                              parsed.mission.sides.size());
+                log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+            }
+        }
+    }
+
     if (!cfg.trace.inputTraceDir.empty()) {
         broadcaster.setInputTraceDir(cfg.trace.inputTraceDir);
         char buf[256];

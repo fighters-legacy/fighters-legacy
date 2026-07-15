@@ -8954,3 +8954,106 @@ TEST_CASE("WorldBroadcaster: an entity without a subsystems table is unaffected 
     REQUIRE(fi != nullptr);
     CHECK((fi->engineFailFlags() & (fl::kEngineFailLeft | fl::kEngineFailRight)) == 0);
 }
+
+// ---------------------------------------------------------------------------
+// Mission player slots (#854) — a connecting pilot binds to a slot
+// ---------------------------------------------------------------------------
+
+// The live entity owned by `peerId` (the pilot's aircraft), or nullptr.
+static const fl::EntityState* slotPeerEntity(const fl::EntityManager& em, uint32_t peerId) {
+    const fl::EntityState* found = nullptr;
+    em.forEach([&](const fl::EntityState& s) {
+        if (!s.dead && s.ownerId == peerId)
+            found = &s;
+    });
+    return found;
+}
+
+TEST_CASE("WorldBroadcaster: a pilot binds to a mission player slot (type/faction/spawn)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    registry.registerType(makeDebugDef("mission:fighter"));
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::WorldBroadcaster::MissionSpawnSlot slot;
+    slot.entityType = "mission:fighter";
+    slot.factionIndex = 3;
+    slot.pos[0] = 1000.0;
+    slot.pos[1] = 2000.0;
+    slot.pos[2] = 3000.0;
+    broadcaster.setMissionPlayerSlots({slot});
+
+    // A client requesting a DIFFERENT type is overridden by the slot (the slot pins what/where it flies).
+    connectPilotPeer(broadcaster, net, 0u, "builtin:debug-entity");
+
+    const fl::EntityState* e = slotPeerEntity(em, 0u);
+    REQUIRE(e != nullptr);
+    CHECK(e->typeIndex == registry.indexById("mission:fighter"));
+    CHECK(e->factionIndex == 3);
+    CHECK(e->transform.pos[0] == 1000.0);
+    CHECK(e->transform.pos[1] == 2000.0);
+    CHECK(e->transform.pos[2] == 3000.0);
+}
+
+TEST_CASE("WorldBroadcaster: a mission slot frees on disconnect and rebinds the next pilot", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    registry.registerType(makeDebugDef("mission:fighter"));
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    fl::WorldBroadcaster::MissionSpawnSlot slot;
+    slot.entityType = "mission:fighter";
+    slot.factionIndex = 2;
+    slot.pos[0] = 500.0;
+    slot.pos[1] = 750.0;
+    slot.pos[2] = -250.0;
+    broadcaster.setMissionPlayerSlots({slot});
+
+    connectPilotPeer(broadcaster, net, 0u);
+    REQUIRE(slotPeerEntity(em, 0u) != nullptr);
+    broadcaster.onTick(1.0 / 60.0, 1); // reap nothing; just advance
+    broadcaster.onDisconnect(0u);      // frees the slot
+
+    connectPilotPeer(broadcaster, net, 1u);
+    const fl::EntityState* e = slotPeerEntity(em, 1u);
+    REQUIRE(e != nullptr);
+    CHECK(e->factionIndex == 2); // rebound to the freed slot
+    CHECK(e->transform.pos[0] == 500.0);
+}
+
+TEST_CASE("WorldBroadcaster: a pilot beyond the slots falls back to the default spawn", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    registry.registerType(makeDebugDef("mission:fighter"));
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setPlayerFaction(7); // the default-path faction
+    broadcaster.setSpawnPoints({{9000.0, 100.0, 9000.0}});
+
+    fl::WorldBroadcaster::MissionSpawnSlot slot;
+    slot.entityType = "mission:fighter";
+    slot.factionIndex = 2;
+    slot.pos[0] = 500.0;
+    slot.pos[1] = 750.0;
+    slot.pos[2] = -250.0;
+    broadcaster.setMissionPlayerSlots({slot});
+
+    connectPilotPeer(broadcaster, net, 0u); // claims the only slot
+    connectPilotPeer(broadcaster, net, 1u); // slots full -> default spawn point + player faction
+
+    const fl::EntityState* second = slotPeerEntity(em, 1u);
+    REQUIRE(second != nullptr);
+    CHECK(second->factionIndex == 7);                                       // default-path faction, not the slot's 2
+    CHECK(second->transform.pos[0] == 9000.0);                              // default spawn point, not the slot's 500
+    CHECK(second->typeIndex == registry.indexById("builtin:debug-entity")); // default type, not mission:fighter
+}

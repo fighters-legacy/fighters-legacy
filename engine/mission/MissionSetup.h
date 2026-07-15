@@ -22,6 +22,7 @@ struct PlayerSlot {
     uint16_t factionIndex{0};
     double pos[3]{};
     float headingDeg{0.f};
+    float quat[4]{0.f, 0.f, 0.f, 1.f}; // resolved spawn orientation (heading on the local tangent frame)
 };
 
 struct MissionSetupResult {
