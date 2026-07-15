@@ -35,6 +35,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -94,6 +95,25 @@ static fl::MsgConnectRefusal parseSendRefusal(const MockNetwork& net) {
     fl::MsgConnectRefusal ref{};
     std::memcpy(&ref, net.sends[0].data(), sizeof(ref));
     return ref;
+}
+
+// Drive the #853 connect handshake for a PILOT peer: onConnect (which now only sends MsgHello) followed
+// by the client's MsgConnectRequest, which is what admits the peer (spawn + MsgConnectAck + MOTD +
+// flight check-in). This reproduces the exact net.sends sequence the pre-#853 auto-spawning onConnect
+// produced, so it is a drop-in replacement everywhere a test just needs a spawned pilot. If onConnect
+// REJECTED the peer (ban / allowlist / rate-limit / per-IP cap / lockout), the only send is a
+// MsgConnectRefusal and no request is injected — matching a rejected connection's old behavior exactly.
+static void connectPilotPeer(fl::WorldBroadcaster& b, MockNetwork& net, uint32_t peerId, const char* entityType = "") {
+    const std::size_t before = net.sends.size();
+    b.onConnect(peerId);
+    const bool rejected = net.sends.size() > before && !net.sends.back().empty() &&
+                          net.sends.back()[0] == static_cast<uint8_t>(fl::MsgId::ConnectRefusal);
+    if (rejected)
+        return;
+    fl::MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+    std::snprintf(req.requestedEntityType, sizeof(req.requestedEntityType), "%s", entityType);
+    b.onReceive(peerId, &req, sizeof(req));
 }
 
 // ---------------------------------------------------------------------------
@@ -269,7 +289,7 @@ TEST_CASE("WorldBroadcaster: onTick broadcasts WorldSnapshot for N entities", "[
     }
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u); // peer required for per-peer unicast snapshots
+    connectPilotPeer(broadcaster, net, 0u); // peer required for per-peer unicast snapshots
 
     // Drive one tick manually.
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -319,7 +339,7 @@ TEST_CASE("WorldBroadcaster: registerController steps a non-peer entity and seri
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
     // Connect a peer so snapshots are sent (per-peer unicast model requires at least one peer).
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Register an AI/scripted controller for the pre-spawned entity.
     auto controller = std::make_unique<ConstantController>();
@@ -386,7 +406,7 @@ std::vector<FinalState> runParallelScenario(fl::JobSystem* jobs) {
         gp.enabled = false;
         broadcaster.setGovernorParams(gp);
     }
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     std::vector<fl::EntityId> ids;
     for (int i = 0; i < 16; ++i) {
@@ -486,7 +506,7 @@ std::map<uint32_t, std::vector<std::vector<uint8_t>>> runSnapshotScenario(fl::Jo
         {{0.0, 1000.0, 0.0}, {40000.0, 1000.0, 0.0}, {0.0, 1000.0, 40000.0}, {40000.0, 1000.0, 40000.0}});
     const std::vector<uint32_t> peerIds{0u, 1u, 2u, 3u};
     for (uint32_t pid : peerIds)
-        broadcaster.onConnect(pid);
+        connectPilotPeer(broadcaster, net, pid);
 
     // 16 shared entities spread across the peers' interest region.
     std::vector<fl::EntityId> ids;
@@ -601,7 +621,7 @@ TEST_CASE("WorldBroadcaster: tiny snapshots are sent raw even with compression e
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setSnapshotCompression(true);
-    broadcaster.onConnect(0u); // own entity only -> payload well under kMinSnapshotCompressBytes
+    connectPilotPeer(broadcaster, net, 0u); // own entity only -> payload well under kMinSnapshotCompressBytes
     broadcaster.onTick(1.0 / 60.0, 1u);
     auto snaps = snapshotsFor(net, 0);
     REQUIRE(snaps.size() == 1u);
@@ -643,8 +663,8 @@ TEST_CASE("WorldBroadcaster: a congested peer is decimated while a healthy peer 
     registry.registerType(makeDebugDef());
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u); // healthy peer
-    broadcaster.onConnect(1u); // congested peer
+    connectPilotPeer(broadcaster, net, 0u); // healthy peer
+    connectPilotPeer(broadcaster, net, 1u); // congested peer
 
     // Report sustained high packet loss for peer 1 only; peer 0 (absent from the map) reads zeros.
     // Above the 0.02 loss threshold, the AIMD controller backs the throttle off, stretching peer 1's
@@ -712,7 +732,7 @@ DecimationResult runDecimationScenario(fl::JobSystem* jobs) {
     gp.evalIntervalTicks = 1u;
     gp.ewmaAlpha = 1.0f;
     broadcaster.setGovernorParams(gp);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     std::vector<fl::EntityId> ids;
     for (int i = 0; i < 16; ++i) {
@@ -766,7 +786,7 @@ TEST_CASE("WorldBroadcaster: overrun governor degrades under an over-budget cloc
     gp.evalIntervalTicks = 1u;
     gp.ewmaAlpha = 1.0f;
     broadcaster.setGovernorParams(gp);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     for (uint64_t tick = 1; tick <= 120; ++tick)
         broadcaster.onTick(1.0 / 60.0, tick);
@@ -833,7 +853,7 @@ TEST_CASE("WorldBroadcaster: overrun governor interest-radius lever shrinks the 
     gp.evalIntervalTicks = 1u;
     gp.ewmaAlpha = 1.0f;
     broadcaster.setGovernorParams(gp);
-    broadcaster.onConnect(0u); // peer spawns near origin (default), 200 km default draw distance
+    connectPilotPeer(broadcaster, net, 0u); // peer spawns near origin (default), 200 km default draw distance
 
     // Tick 1: the governor steps from the PREVIOUS tick's wall-time (none yet) -> healthy -> the
     // full radius, so the 150 km entity is visible.
@@ -903,7 +923,7 @@ InterestShedResult runInterestShedScenario(fl::JobSystem* jobs) {
     broadcaster.setSpawnPoints({{0.0, 1000.0, 0.0}, {40'000.0, 1000.0, 0.0}});
     const std::vector<uint32_t> peerIds{0u, 1u};
     for (uint32_t pid : peerIds)
-        broadcaster.onConnect(pid);
+        connectPilotPeer(broadcaster, net, pid);
 
     // Static entities from 10 km out to 150 km: all inside the full 200 km radius, the far ones
     // outside the floor-scaled 100 km radius of at least one peer.
@@ -967,7 +987,7 @@ TEST_CASE("WorldBroadcaster: getTickBudget records per-phase timing after onTick
     REQUIRE(id.valid());
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.registerController(id, std::make_unique<ConstantController>());
 
     // Before any tick, nothing is sampled.
@@ -1011,7 +1031,7 @@ TEST_CASE("WorldBroadcaster: flight model resolver is consulted for a flightMode
         return nullptr; // unknown id -> WorldBroadcaster falls back to the builtin model
     });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     CHECK(requestedId == "models/x"); // resolver consulted with the entity's flightModelAsset
@@ -1033,7 +1053,7 @@ TEST_CASE("WorldBroadcaster: flight model resolver is skipped when flightModelAs
         return nullptr;
     });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     CHECK_FALSE(called); // empty id -> resolver never invoked
@@ -1062,7 +1082,7 @@ TEST_CASE("WorldBroadcaster: onTick with connected peer and no extra entities se
     registry.registerType(makeDebugDef());
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 5u);
 
     REQUIRE(!snapshotsFor(net, 0).empty());
@@ -1094,7 +1114,7 @@ TEST_CASE("WorldBroadcaster: onConnect sends ConnectAck with registered types an
     registry.registerType(makeDebugDef("type:b"));
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     REQUIRE(net.sends.size() == 2u);
     CHECK(net.sendReliable);
@@ -1120,7 +1140,7 @@ TEST_CASE("WorldBroadcaster: peer entity spawns at terrain height plus 500 m AGL
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setGroundElevation(550.f);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     REQUIRE(!snapshotsFor(net, 0).empty());
@@ -1144,7 +1164,7 @@ TEST_CASE("WorldBroadcaster: peer entity spawns at 500 m AGL when ground elevati
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     // setGroundElevation not called — default m_groundElevation = 0.f
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     REQUIRE(!snapshotsFor(net, 0).empty());
@@ -1168,7 +1188,7 @@ TEST_CASE("WorldBroadcaster: peer entity spawns at configured spawn point XYZ", 
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setSpawnPoints({std::array<double, 3>{1000.0, 750.0, -500.0}});
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     REQUIRE(!snapshotsFor(net, 0).empty());
@@ -1197,8 +1217,8 @@ TEST_CASE("WorldBroadcaster: spawn points assigned round-robin to peers", "[worl
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setSpawnPoints({std::array<double, 3>{0.0, 200.0, 0.0}, std::array<double, 3>{1000.0, 300.0, 500.0}});
-    broadcaster.onConnect(0u); // → point 0 (X=0)
-    broadcaster.onConnect(1u); // → point 1 (X=1000)
+    connectPilotPeer(broadcaster, net, 0u); // → point 0 (X=0)
+    connectPilotPeer(broadcaster, net, 1u); // → point 1 (X=1000)
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     REQUIRE(!snapshotsFor(net, 0).empty());
@@ -1232,9 +1252,9 @@ TEST_CASE("WorldBroadcaster: spawn point index wraps round-robin with three peer
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setSpawnPoints({std::array<double, 3>{0.0, 200.0, 0.0}, std::array<double, 3>{1000.0, 300.0, 0.0}});
-    broadcaster.onConnect(0u); // → point 0 (X≈0)
-    broadcaster.onConnect(1u); // → point 1 (X≈1000)
-    broadcaster.onConnect(2u); // → point 0 again (wrap)
+    connectPilotPeer(broadcaster, net, 0u); // → point 0 (X≈0)
+    connectPilotPeer(broadcaster, net, 1u); // → point 1 (X≈1000)
+    connectPilotPeer(broadcaster, net, 2u); // → point 0 again (wrap)
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     REQUIRE(!snapshotsFor(net, 0).empty());
@@ -1263,7 +1283,7 @@ TEST_CASE("WorldBroadcaster: onConnect with empty registry sends typeCount=0 and
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     REQUIRE(net.sends.size() == 2u);
     fl::MsgConnectAck ack = parseSendAck(net);
@@ -1283,7 +1303,7 @@ TEST_CASE("WorldBroadcaster: onConnect without builtin type registered assigns n
     registry.registerType(makeDebugDef("other:type"));
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     fl::MsgConnectAck ack = parseSendAck(net);
     CHECK(ack.assignedEntityIdx == 0u); // "builtin:debug-entity" not found
@@ -1300,7 +1320,7 @@ TEST_CASE("WorldBroadcaster: onDisconnect after connect removes peer entity", "[
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     // liveCount() is updated by onTick — drive a tick to confirm the spawn landed.
     broadcaster.onTick(1.0 / 60.0, 0u);
     REQUIRE(em.liveCount() == 1u);
@@ -1346,7 +1366,7 @@ TEST_CASE("WorldBroadcaster: onReceive empty packet is discarded", "[world_broad
 
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     clearSnapshots(net);
     net.sends.clear();
 
@@ -1375,7 +1395,7 @@ TEST_CASE("WorldBroadcaster: onReceive valid ClientInput moves entity on next ti
 
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     fl::MsgClientInput inp{};
     inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
@@ -1407,7 +1427,7 @@ TEST_CASE("WorldBroadcaster: onReceive truncated ClientInput is discarded", "[wo
 
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     clearSnapshots(net);
 
     // Only 10 bytes — less than sizeof(MsgClientInput) = 44.
@@ -1436,7 +1456,7 @@ TEST_CASE("WorldBroadcaster: onReceive clamps out-of-range throttle", "[world_br
 
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     clearSnapshots(net);
 
     fl::MsgClientInput inp{};
@@ -1467,7 +1487,7 @@ TEST_CASE("WorldBroadcaster: onReceive zero viewAxis uses forward fallback", "[w
 
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     clearSnapshots(net);
 
     fl::MsgClientInput inp{};
@@ -1501,7 +1521,7 @@ TEST_CASE("WorldBroadcaster: onReceive after peer disconnects has no effect on t
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onDisconnect(0u); // entity killed; maps cleared
 
     // Client sends an input after disconnecting — server re-adds to m_peerInputs only.
@@ -1526,7 +1546,7 @@ TEST_CASE("WorldBroadcaster: onTick skips kinematics for dead entity", "[world_b
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     fl::MsgClientInput inp{};
     inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
@@ -1555,8 +1575,8 @@ TEST_CASE("WorldBroadcaster: two peers each control independent entities", "[wor
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    broadcaster.onConnect(0u);
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 0u);
+    connectPilotPeer(broadcaster, net, 1u);
 
     // Peer 0: full throttle forward; peer 1: no throttle.
     // Set inputs BEFORE the first tick. On tick 0 all entities are new to their peers, so they
@@ -1614,7 +1634,7 @@ TEST_CASE("WorldBroadcaster: onConnect sends MsgHello as first reliable packet",
 
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     REQUIRE(net.sends.size() == 2u);
 
@@ -1635,7 +1655,7 @@ TEST_CASE("WorldBroadcaster: onReceive discards MsgClientInput with mismatched p
 
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Send a full-throttle input with the wrong protocol version.
     fl::MsgClientInput inp{};
@@ -1667,7 +1687,7 @@ TEST_CASE("WorldBroadcaster: onTick snapshot carries correct protocolVersion", "
     registry.registerType(makeDebugDef());
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u); // peer required for per-peer unicast
+    connectPilotPeer(broadcaster, net, 0u); // peer required for per-peer unicast
 
     broadcaster.onTick(1.0 / 60.0, 1u);
 
@@ -1700,7 +1720,7 @@ TEST_CASE("WorldBroadcaster: getPeerCount tracks connect and disconnect", "[worl
 
     CHECK(broadcaster.getPeerCount() == 0);
 
-    broadcaster.onConnect(42);
+    connectPilotPeer(broadcaster, net, 42);
     CHECK(broadcaster.getPeerCount() == 1);
 
     broadcaster.onDisconnect(42);
@@ -1715,7 +1735,7 @@ TEST_CASE("WorldBroadcaster: onTick populates throttle in WorldSnapshot from Fli
 
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Send a client input with full throttle.
     fl::MsgClientInput inp{};
@@ -1753,7 +1773,7 @@ TEST_CASE("WorldBroadcaster: abEngaged is 0 in WorldSnapshot when model has no a
 
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     fl::MsgClientInput inp{};
     inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
@@ -1790,7 +1810,7 @@ TEST_CASE("WorldBroadcaster: engineFailFlags has kEngineFailGeneric when entity 
 
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     fl::MsgConnectAck ack = parseSendAck(net);
     fl::EntityId id;
@@ -1829,7 +1849,7 @@ TEST_CASE("WorldBroadcaster: onReceive discards duplicate seqNum", "[world_broad
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // First packet (seqNum=5, throttle=0) accepted.
     fl::MsgClientInput inp{};
@@ -1864,7 +1884,7 @@ TEST_CASE("WorldBroadcaster: onReceive discards stale seqNum (out-of-order)", "[
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // First packet: seqNum=5, throttle=1 accepted.
     fl::MsgClientInput inp{};
@@ -1900,7 +1920,7 @@ TEST_CASE("WorldBroadcaster: onReceive accepts seqNum wrap-around", "[world_broa
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     fl::MsgClientInput inp{};
     inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
@@ -1942,7 +1962,7 @@ TEST_CASE("WorldBroadcaster: onReceive computes estimatedDelayTicks from tickInd
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Advance to tick 10 so m_currentTick = 10.
     broadcaster.onTick(1.0 / 60.0, 10u);
@@ -1967,7 +1987,7 @@ TEST_CASE("WorldBroadcaster: onReceive future tickIndex does not update estimate
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Advance to tick 3 so m_currentTick = 3.
     broadcaster.onTick(1.0 / 60.0, 3u);
@@ -2047,7 +2067,7 @@ TEST_CASE("WorldBroadcaster: kickPeer calls disconnectPeer on network", "[world_
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
     net.peerAddresses[0] = "1.2.3.4:5000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.disconnectedPeers.clear();
 
     broadcaster.kickPeer(0u);
@@ -2065,7 +2085,7 @@ TEST_CASE("WorldBroadcaster: banAddress kicks connected peer with matching IPv4"
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
     net.peerAddresses[0] = "1.2.3.4:5000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.disconnectedPeers.clear();
 
     broadcaster.banAddress("1.2.3.4");
@@ -2094,7 +2114,7 @@ TEST_CASE("WorldBroadcaster: banAddress does not kick peer on different IP", "[w
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
     net.peerAddresses[0] = "5.5.5.5:5000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.disconnectedPeers.clear();
 
     broadcaster.banAddress("1.2.3.4"); // different IP — peer 0 must not be kicked
@@ -2112,7 +2132,7 @@ TEST_CASE("WorldBroadcaster: banned IPv4 peer is rejected on onConnect", "[world
 
     broadcaster.banAddress("1.2.3.4");
     net.peerAddresses[0] = "1.2.3.4:5000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Peer was rejected: MsgConnectRefusal sent, then disconnectPeer called.
     REQUIRE(net.disconnectedPeers.size() == 1u);
@@ -2132,7 +2152,7 @@ TEST_CASE("WorldBroadcaster: IPv4-mapped IPv6 peer is rejected when IPv4 is bann
 
     broadcaster.banAddress("1.2.3.4");
     net.peerAddresses[0] = "[::ffff:1.2.3.4]:5000"; // dual-stack mapped form
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     REQUIRE(net.disconnectedPeers.size() == 1u);
     auto ref = parseSendRefusal(net);
@@ -2150,7 +2170,7 @@ TEST_CASE("WorldBroadcaster: peer on non-banned IP is allowed on onConnect", "[w
 
     broadcaster.banAddress("9.9.9.9");
     net.peerAddresses[0] = "1.2.3.4:5000"; // different IP — must be allowed
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     CHECK(net.disconnectedPeers.empty());
     CHECK(net.sends.size() >= 2u); // MsgHello + ConnectAck
@@ -2168,7 +2188,7 @@ TEST_CASE("WorldBroadcaster: unbanAddress allows reconnect after ban", "[world_b
     broadcaster.unbanAddress("1.2.3.4");
 
     net.peerAddresses[0] = "1.2.3.4:5000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     CHECK(net.disconnectedPeers.empty());
     CHECK(net.sends.size() >= 2u);
@@ -2184,8 +2204,8 @@ TEST_CASE("WorldBroadcaster: forEachPeer calls fn for each connected peer", "[wo
 
     net.peerAddresses[0] = "1.2.3.4:5000";
     net.peerAddresses[1] = "5.6.7.8:6000";
-    broadcaster.onConnect(0u);
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 0u);
+    connectPilotPeer(broadcaster, net, 1u);
 
     int callCount = 0;
     broadcaster.forEachPeer([&](const fl::PeerInfo& pi) {
@@ -2236,13 +2256,13 @@ TEST_CASE("WorldBroadcaster: IP under rate limit is not disconnected", "[world_b
 
     net.peerAddresses[0] = "1.2.3.4:1000";
     for (int i = 0; i < 4; ++i) {
-        broadcaster.onConnect(0u);
+        connectPilotPeer(broadcaster, net, 0u);
         broadcaster.onDisconnect(0u);
         net.disconnectedPeers.clear();
         net.sends.clear();
     }
     // 5th connect (at limit, size == limit, not strictly over): should be allowed
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -2261,13 +2281,13 @@ TEST_CASE("WorldBroadcaster: IP exceeding rate limit is disconnected", "[world_b
     net.peerAddresses[0] = "1.2.3.4:1000";
     // 3 connects fill the window
     for (int i = 0; i < 3; ++i) {
-        broadcaster.onConnect(0u);
+        connectPilotPeer(broadcaster, net, 0u);
         broadcaster.onDisconnect(0u);
         net.disconnectedPeers.clear();
         net.sends.clear();
     }
     // 4th connect (over limit) must be rejected
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     REQUIRE(net.disconnectedPeers.size() == 1u);
     CHECK(net.disconnectedPeers[0] == 0u);
     auto ref = parseSendRefusal(net);
@@ -2289,11 +2309,11 @@ TEST_CASE("WorldBroadcaster: rate limit resets after window expires", "[world_br
 
     net.peerAddresses[0] = "1.2.3.4:1000";
     // Fill window: 2 connects
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onDisconnect(0u);
     net.disconnectedPeers.clear();
     net.sends.clear();
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onDisconnect(0u);
     net.disconnectedPeers.clear();
     net.sends.clear();
@@ -2302,7 +2322,7 @@ TEST_CASE("WorldBroadcaster: rate limit resets after window expires", "[world_br
     t.advance(std::chrono::seconds(6));
 
     // Should be allowed again
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -2320,21 +2340,21 @@ TEST_CASE("WorldBroadcaster: rate limit tracks different IPs independently", "[w
 
     // IP-A fills limit
     net.peerAddresses[0] = "1.1.1.1:1000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onDisconnect(0u);
     net.disconnectedPeers.clear();
     net.sends.clear();
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onDisconnect(0u);
     net.disconnectedPeers.clear();
     net.sends.clear();
-    broadcaster.onConnect(0u); // 3rd from IP-A: rejected
+    connectPilotPeer(broadcaster, net, 0u); // 3rd from IP-A: rejected
     REQUIRE(net.disconnectedPeers.size() == 1u);
     net.disconnectedPeers.clear();
 
     // IP-B (different IP) is unaffected
     net.peerAddresses[1] = "2.2.2.2:2000";
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 1u);
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -2348,7 +2368,7 @@ TEST_CASE("WorldBroadcaster: null getPeerAddress does not crash rate limit", "[w
     broadcaster.setRateLimitParams(2, 10, 3);
 
     // peer 0 has no address entry — getPeerAddress returns nullptr
-    broadcaster.onConnect(0u); // must not crash
+    connectPilotPeer(broadcaster, net, 0u); // must not crash
     // peer was not disconnected (unknown IP skips rate-limit and allowlist checks)
     CHECK(net.disconnectedPeers.empty());
 }
@@ -2366,7 +2386,7 @@ TEST_CASE("WorldBroadcaster: empty allowlist allows all IPs", "[world_broadcaste
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
     net.peerAddresses[0] = "9.9.9.9:1000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -2380,7 +2400,7 @@ TEST_CASE("WorldBroadcaster: IP on allowlist is permitted", "[world_broadcaster]
     broadcaster.setAllowedAddresses({"1.2.3.4"});
 
     net.peerAddresses[0] = "1.2.3.4:1000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -2394,7 +2414,7 @@ TEST_CASE("WorldBroadcaster: IP not on allowlist is rejected", "[world_broadcast
     broadcaster.setAllowedAddresses({"9.9.9.9"});
 
     net.peerAddresses[0] = "1.2.3.4:1000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     REQUIRE(net.disconnectedPeers.size() == 1u);
     CHECK(net.disconnectedPeers[0] == 0u);
     auto ref = parseSendRefusal(net);
@@ -2414,7 +2434,7 @@ TEST_CASE("WorldBroadcaster: setting empty allowlist re-enables all IPs", "[worl
     broadcaster.setAllowedAddresses({});
 
     net.peerAddresses[0] = "1.2.3.4:1000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -2429,7 +2449,7 @@ TEST_CASE("WorldBroadcaster: banned IP rejected even if on allowlist", "[world_b
     broadcaster.setAllowedAddresses({"1.2.3.4"});
 
     net.peerAddresses[0] = "1.2.3.4:1000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     REQUIRE(net.disconnectedPeers.size() == 1u);
 }
 
@@ -2449,9 +2469,9 @@ TEST_CASE("WorldBroadcaster: per-IP limit of zero allows unlimited connections",
     net.peerAddresses[0] = "1.2.3.4:1001";
     net.peerAddresses[1] = "1.2.3.4:1002";
     net.peerAddresses[2] = "1.2.3.4:1003";
-    broadcaster.onConnect(0u);
-    broadcaster.onConnect(1u);
-    broadcaster.onConnect(2u);
+    connectPilotPeer(broadcaster, net, 0u);
+    connectPilotPeer(broadcaster, net, 1u);
+    connectPilotPeer(broadcaster, net, 2u);
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -2466,10 +2486,10 @@ TEST_CASE("WorldBroadcaster: per-IP limit allows last connection at limit", "[wo
 
     net.peerAddresses[0] = "1.2.3.4:1001";
     net.peerAddresses[1] = "1.2.3.4:1002";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.disconnectedPeers.clear();
     net.sends.clear();
-    broadcaster.onConnect(1u); // count was 1, limit is 2 — allowed
+    connectPilotPeer(broadcaster, net, 1u); // count was 1, limit is 2 — allowed
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -2485,11 +2505,11 @@ TEST_CASE("WorldBroadcaster: per-IP limit rejects connection over limit", "[worl
     net.peerAddresses[0] = "1.2.3.4:1001";
     net.peerAddresses[1] = "1.2.3.4:1002";
     net.peerAddresses[2] = "1.2.3.4:1003";
-    broadcaster.onConnect(0u);
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 0u);
+    connectPilotPeer(broadcaster, net, 1u);
     net.disconnectedPeers.clear();
     net.sends.clear();
-    broadcaster.onConnect(2u); // count is 2, limit is 2 — rejected
+    connectPilotPeer(broadcaster, net, 2u); // count is 2, limit is 2 — rejected
     REQUIRE(net.disconnectedPeers.size() == 1u);
     CHECK(net.disconnectedPeers[0] == 2u);
     auto ref = parseSendRefusal(net);
@@ -2510,10 +2530,10 @@ TEST_CASE("WorldBroadcaster: per-IP limit counts only matching-IP peers", "[worl
     net.peerAddresses[1] = "1.2.3.4:1002";
     net.peerAddresses[2] = "5.5.5.5:1001";
     net.peerAddresses[3] = "5.5.5.5:1002";
-    broadcaster.onConnect(0u);
-    broadcaster.onConnect(1u);
-    broadcaster.onConnect(2u);
-    broadcaster.onConnect(3u);
+    connectPilotPeer(broadcaster, net, 0u);
+    connectPilotPeer(broadcaster, net, 1u);
+    connectPilotPeer(broadcaster, net, 2u);
+    connectPilotPeer(broadcaster, net, 3u);
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -2527,7 +2547,7 @@ TEST_CASE("WorldBroadcaster: null getPeerAddress does not crash per-IP limit che
     broadcaster.setMaxConnectionsPerIp(1);
 
     // peer 0 has no address entry → getPeerAddress returns nullptr
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -2543,11 +2563,11 @@ TEST_CASE("WorldBroadcaster: per-IP limit slot freed after disconnect allows rec
 
     net.peerAddresses[0] = "1.2.3.4:1001";
     net.peerAddresses[1] = "1.2.3.4:1002";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onDisconnect(0u); // frees the slot
     net.disconnectedPeers.clear();
     net.sends.clear();
-    broadcaster.onConnect(1u); // count is now 0 — should be allowed
+    connectPilotPeer(broadcaster, net, 1u); // count is now 0 — should be allowed
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -2562,15 +2582,67 @@ TEST_CASE("WorldBroadcaster: per-IP limit counts IPv4-mapped IPv6 as same addres
 
     net.peerAddresses[0] = "1.2.3.4:1001";
     net.peerAddresses[1] = "[::ffff:1.2.3.4]:1002"; // IPv4-mapped IPv6 — same host
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.disconnectedPeers.clear();
     net.sends.clear();
-    broadcaster.onConnect(1u); // normalizeIp maps ::ffff:1.2.3.4 → 1.2.3.4 → rejected
+    connectPilotPeer(broadcaster, net, 1u); // normalizeIp maps ::ffff:1.2.3.4 → 1.2.3.4 → rejected
     REQUIRE(net.disconnectedPeers.size() == 1u);
     CHECK(net.disconnectedPeers[0] == 1u);
     auto ref = parseSendRefusal(net);
     CHECK(ref.msgId == static_cast<uint8_t>(fl::MsgId::ConnectRefusal));
     CHECK(std::string_view(ref.reason) == "Too many connections from your address.");
+}
+
+// ---------------------------------------------------------------------------
+// Connect handshake (#853)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: onConnect sends only MsgHello; admission waits for MsgConnectRequest (#853)",
+          "[world_broadcaster][handshake]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    broadcaster.onConnect(0u);
+    // Only the version handshake so far — no spawn, no ConnectAck (the old flow acked here).
+    REQUIRE(net.sends.size() == 1u);
+    CHECK(parseSendHello(net).msgId == static_cast<uint8_t>(fl::MsgId::Hello));
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    CHECK(em.liveCount() == 0u); // not-yet-admitted peer has no entity
+
+    // The client's request admits it: spawn + ConnectAck(grantedRole=Pilot, assigned entity).
+    fl::MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+    broadcaster.onReceive(0u, &req, sizeof(req));
+    auto ack = parseSendAck(net);
+    CHECK(ack.msgId == static_cast<uint8_t>(fl::MsgId::ConnectAck));
+    CHECK(ack.grantedRole == static_cast<uint8_t>(fl::PeerRole::Pilot));
+    CHECK(ack.assignedEntityGen != 0u);
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    CHECK(em.liveCount() == 1u);
+}
+
+TEST_CASE("WorldBroadcaster: a duplicate MsgConnectRequest is ignored (no re-spawn) (#853)",
+          "[world_broadcaster][handshake]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    connectPilotPeer(broadcaster, net, 0u); // onConnect + first request -> admitted
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    REQUIRE(em.liveCount() == 1u);
+
+    fl::MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+    broadcaster.onReceive(0u, &req, sizeof(req)); // duplicate — must be ignored
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    CHECK(em.liveCount() == 1u); // no second entity spawned
 }
 
 // ---------------------------------------------------------------------------
@@ -2590,7 +2662,7 @@ TEST_CASE("WorldBroadcaster: peer within flood limit is not disconnected", "[wor
     broadcaster.setClock(t);
 
     net.peerAddresses[0] = "1.2.3.4:1000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     auto pkt = makeClientInputPacket();
     for (int i = 0; i < 120; ++i) // exactly at threshold: not over
@@ -2612,7 +2684,7 @@ TEST_CASE("WorldBroadcaster: peer exceeding flood limit is disconnected", "[worl
     broadcaster.setClock(t);
 
     net.peerAddresses[0] = "1.2.3.4:1000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     auto pkt = makeClientInputPacket();
     for (int i = 0; i < 121; ++i) // 121 > 120: over threshold
@@ -2635,7 +2707,7 @@ TEST_CASE("WorldBroadcaster: flood counter resets after 1s window", "[world_broa
     broadcaster.setClock(t);
 
     net.peerAddresses[0] = "1.2.3.4:1000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     auto pkt = makeClientInputPacket();
     // Send 120 (at limit)
@@ -2664,7 +2736,7 @@ TEST_CASE("WorldBroadcaster: non-ClientInput packets do not count toward flood",
     broadcaster.setClock(t);
 
     net.peerAddresses[0] = "1.2.3.4:1000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Send 500 packets with an unknown msgId — should not trigger flood
     uint8_t unknownMsg = 0xFF;
@@ -2687,7 +2759,7 @@ TEST_CASE("WorldBroadcaster: onDisconnect clears flood state", "[world_broadcast
     broadcaster.setClock(t);
 
     net.peerAddresses[0] = "1.2.3.4:1000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Fill flood state to 59 packets (just under threshold)
     auto pkt = makeClientInputPacket();
@@ -2697,7 +2769,7 @@ TEST_CASE("WorldBroadcaster: onDisconnect clears flood state", "[world_broadcast
     // Disconnect + reconnect — flood state should be cleared
     broadcaster.onDisconnect(0u);
     net.sends.clear();
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Should be able to send 60 packets in the new window without triggering flood
     for (int i = 0; i < 60; ++i)
@@ -2723,12 +2795,12 @@ TEST_CASE("WorldBroadcaster: setBannedAddresses replaces existing ban set", "[wo
 
     // Old ban is gone — 1.1.1.1 can connect
     net.peerAddresses[0] = "1.1.1.1:1000";
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     CHECK(net.disconnectedPeers.empty());
 
     // New ban is active — 2.2.2.2 is rejected
     net.peerAddresses[1] = "2.2.2.2:2000";
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 1u);
     REQUIRE(net.disconnectedPeers.size() == 1u);
 }
 
@@ -2765,7 +2837,7 @@ TEST_CASE("WorldBroadcaster: onConnect null getPeerAddress skips allowlist and r
     // peer 0 has no address — getPeerAddress returns nullptr
     // With a non-empty allowlist, a known IP would be rejected.
     // But empty IP bypasses both allowlist and rate limit — no disconnect.
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -2784,7 +2856,7 @@ TEST_CASE("WorldBroadcaster: rate limit prune preserves entries with unexpired t
 
     net.peerAddresses[0] = "1.2.3.4:1000";
     // One recent connect
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onDisconnect(0u);
     net.disconnectedPeers.clear();
     net.sends.clear();
@@ -2794,7 +2866,7 @@ TEST_CASE("WorldBroadcaster: rate limit prune preserves entries with unexpired t
         broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(i));
 
     // Entry was NOT pruned (timestamp still in window) — reconnect should increment counter
-    broadcaster.onConnect(0u); // 2nd connect — should succeed (limit is 10)
+    connectPilotPeer(broadcaster, net, 0u); // 2nd connect — should succeed (limit is 10)
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -2812,7 +2884,7 @@ TEST_CASE("WorldBroadcaster: rate limit prune removes fully expired entries", "[
 
     net.peerAddresses[0] = "1.2.3.4:1000";
     // One connect fills limit (limit=1)
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onDisconnect(0u);
     net.disconnectedPeers.clear();
     net.sends.clear();
@@ -2825,7 +2897,7 @@ TEST_CASE("WorldBroadcaster: rate limit prune removes fully expired entries", "[
         broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(i));
 
     // After prune, IP-A can connect again (counter reset by prune)
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -3307,7 +3379,7 @@ TEST_CASE("WorldBroadcaster: no MOTD sent by default", "[world_broadcaster][motd
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     // setMotd NOT called
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Hello + ConnectAck; no MOTD packet
     CHECK(net.sends.size() == 2u);
@@ -3325,7 +3397,7 @@ TEST_CASE("WorldBroadcaster: MOTD sent as third send when non-empty", "[world_br
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setMotd("Welcome!");
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     REQUIRE(net.sends.size() == 3u);
     CHECK(net.sends[2][0] == static_cast<uint8_t>(fl::MsgId::Motd));
@@ -3342,7 +3414,7 @@ TEST_CASE("WorldBroadcaster: oversized MOTD capped at kMaxMotdBytes", "[world_br
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setMotd(std::string(fl::kMaxMotdBytes + 500, 'A'));
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     REQUIRE(net.sends.size() == 3u);
     // sizeof(MsgMotdHeader) (4) + kMaxMotdBytes (text) + 1 (NUL)
@@ -3361,7 +3433,7 @@ TEST_CASE("WorldBroadcaster: setMotd with empty string suppresses MOTD send", "[
     broadcaster.setMotd("hello");
     broadcaster.setMotd(""); // cleared
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     CHECK(net.sends.size() == 2u);
     for (const auto& pkt : net.sends)
@@ -3378,7 +3450,7 @@ TEST_CASE("WorldBroadcaster: MOTD displaySeconds is 0 by default", "[world_broad
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setMotd("Welcome!");
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     REQUIRE(net.sends.size() == 3u);
     REQUIRE(net.sends[2].size() >= sizeof(fl::MsgMotdHeader));
@@ -3398,7 +3470,7 @@ TEST_CASE("WorldBroadcaster: MOTD packet displaySeconds matches setMotdDisplaySe
     broadcaster.setMotd("Welcome!");
     broadcaster.setMotdDisplaySeconds(45u);
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     REQUIRE(net.sends.size() == 3u);
     REQUIRE(net.sends[2].size() >= sizeof(fl::MsgMotdHeader));
@@ -3421,7 +3493,7 @@ TEST_CASE("WorldBroadcaster: applyConfig wires MOTD and display seconds in one c
     cfg.motdDisplaySeconds = 30u;
     broadcaster.applyConfig(cfg);
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     REQUIRE(net.sends.size() == 3u);
     CHECK(net.sends[2][0] == static_cast<uint8_t>(fl::MsgId::Motd));
@@ -3458,7 +3530,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded when no dispatcher set", 
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setOperatorPassword("secret"); // dispatcher NOT set
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto pkt = makeAdminCmd("secret", "status");
@@ -3478,7 +3550,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded when no password configur
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
     broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "pong"; }); // password NOT set
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto pkt = makeAdminCmd("", "status");
@@ -3498,7 +3570,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded on wrong token", "[world_
     broadcaster.setOperatorPassword("secret");
     broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "pong"; });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto pkt = makeAdminCmd("wrongpass", "status");
@@ -3523,7 +3595,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand dispatches on correct token and sen
         return "";
     });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto pkt = makeAdminCmd("secret", "ping");
@@ -3547,7 +3619,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand discarded if packet too small", "[w
     broadcaster.setOperatorPassword("secret");
     broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "pong"; });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     // Send only the msgId byte + 3 padding — well under sizeof(MsgAdminCommand).
@@ -3569,7 +3641,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand token without null terminator fails
     broadcaster.setOperatorPassword("secret");
     broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "pong"; });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     // Fill entire token field with 'x' (no null byte) — auth must fail, no crash.
@@ -3596,7 +3668,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand with empty command string is discar
     broadcaster.setOperatorPassword("secret");
     broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "should not be called"; });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     // Valid token, but command field is all zeros (empty after null-term).
@@ -3624,7 +3696,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand empty dispatcher result still sends
     // Dispatcher returns empty string (e.g. fire-and-forget command).
     broadcaster.setAdminDispatch([](std::string_view) -> std::string { return ""; });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto pkt = makeAdminCmd("secret", "spawn");
@@ -3649,7 +3721,7 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand result >123 chars streams as MsgAdm
     broadcaster.setOperatorPassword("secret");
     broadcaster.setAdminDispatch([](std::string_view) -> std::string { return std::string(200, 'x'); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto pkt = makeAdminCmd("secret", "peers");
@@ -3674,7 +3746,7 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse fast-path for result <=123 chars"
     broadcaster.setOperatorPassword("secret");
     broadcaster.setAdminDispatch([](std::string_view) -> std::string { return std::string(50, 'a'); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto pkt = makeAdminCmd("secret", "status");
@@ -3697,7 +3769,7 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse fast-path at exactly 123 chars", 
     broadcaster.setOperatorPassword("secret");
     broadcaster.setAdminDispatch([](std::string_view) -> std::string { return std::string(123, 'x'); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto pkt = makeAdminCmd("secret", "help");
@@ -3721,7 +3793,7 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse echoes reqId in MsgAdminResponse"
     broadcaster.setOperatorPassword("secret");
     broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "ok"; });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto pkt = makeAdminCmd("secret", "ping", 0xBEEFu);
@@ -3745,7 +3817,7 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse 124-char result sends one chunk w
     broadcaster.setOperatorPassword("secret");
     broadcaster.setAdminDispatch([](std::string_view) -> std::string { return std::string(124, 'y'); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto pkt = makeAdminCmd("secret", "help");
@@ -3772,7 +3844,7 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse >505 chars sends two chunks", "[w
     broadcaster.setOperatorPassword("secret");
     broadcaster.setAdminDispatch([&](std::string_view) -> std::string { return longResult; });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto pkt = makeAdminCmd("secret", "peers");
@@ -3808,7 +3880,7 @@ TEST_CASE("WorldBroadcaster: sendAdminResponse echoes reqId in every MsgAdminRes
     broadcaster.setOperatorPassword("secret");
     broadcaster.setAdminDispatch([&](std::string_view) -> std::string { return longResult; });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto pkt = makeAdminCmd("secret", "peers", 0x1111u);
@@ -3834,7 +3906,7 @@ static void setupAuthFixture(fl::WorldBroadcaster& broadcaster, MockNetwork& net
     broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "ok"; });
     broadcaster.setAdminAuthParams(3, 60);
     broadcaster.setClock(now);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
     net.disconnectedPeers.clear();
 }
@@ -3905,7 +3977,7 @@ TEST_CASE("WorldBroadcaster: admin auth onConnect refused while locked", "[world
     net.sends.clear();
 
     // Reconnect attempt from same IP — must be refused
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 1u);
     REQUIRE(net.disconnectedPeers.size() == 1u);
     CHECK(net.disconnectedPeers[0] == 1u);
     auto ref = parseSendRefusal(net);
@@ -3937,7 +4009,7 @@ TEST_CASE("WorldBroadcaster: admin auth lockout expires after TTL", "[world_broa
     now.advance(std::chrono::seconds(61));
 
     // Reconnect — should succeed (MsgHello sent, not in disconnectedPeers)
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 1u);
     CHECK(net.disconnectedPeers.empty());
     REQUIRE(!net.sends.empty());
     fl::MsgHello hello{};
@@ -3958,7 +4030,7 @@ TEST_CASE("WorldBroadcaster: admin auth per-IP isolation", "[world_broadcaster][
     setupAuthFixture(broadcaster, net, now);
 
     // Connect peer 1 from IP B
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 1u);
     net.sends.clear();
     net.disconnectedPeers.clear();
 
@@ -4006,7 +4078,7 @@ TEST_CASE("WorldBroadcaster: admin auth failure counter persists across disconne
     net.sends.clear();
 
     // Peer 1 reconnects from same IP; one more failure should trigger lockout (counter IP-keyed)
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 1u);
     net.sends.clear();
     net.disconnectedPeers.clear();
 
@@ -4061,7 +4133,7 @@ TEST_CASE("WorldBroadcaster: admin auth wrong tokens when operator_password unse
     broadcaster.setAdminAuthParams(3, 60);
     broadcaster.setClock(now);
     // Note: operator_password intentionally NOT set — admin channel disabled
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
     net.disconnectedPeers.clear();
 
@@ -4073,7 +4145,7 @@ TEST_CASE("WorldBroadcaster: admin auth wrong tokens when operator_password unse
     CHECK(net.disconnectedPeers.empty());
 
     // Reconnect from same IP — must not be blocked (no failures recorded)
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 1u);
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -4111,7 +4183,7 @@ TEST_CASE("WorldBroadcaster: admin auth pruneExpired fires after 600 onTick call
     net.perPeerSends.clear();
 
     // After prune + TTL expiry, reconnect from same IP must succeed
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 1u);
     CHECK(net.disconnectedPeers.empty());
     REQUIRE(!net.sends.empty());
     fl::MsgHello hello{};
@@ -4143,7 +4215,7 @@ TEST_CASE("WorldBroadcaster: admin_unlock clears lockout -- onConnect succeeds",
     CHECK(broadcaster.unlockAdminAuth("1.2.3.4"));
 
     // Reconnect from same IP must now succeed
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 1u);
     CHECK(net.disconnectedPeers.empty());
     REQUIRE(!net.sends.empty());
     fl::MsgHello hello{};
@@ -4167,7 +4239,7 @@ TEST_CASE("WorldBroadcaster: admin_unlock is a no-op when IP is not locked", "[w
     CHECK_FALSE(broadcaster.unlockAdminAuth("1.2.3.4"));
 
     // Connect peer 1 from same IP: must not be refused
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 1u);
     CHECK(net.disconnectedPeers.empty());
 }
 
@@ -4190,7 +4262,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain sends no follow-on when shell not
     broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "queued"; });
     // setAdminShell NOT called
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto cmd = makeAdminCmd("secret", "spawn");
@@ -4220,7 +4292,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain does not fire before wall-clock d
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto cmd = makeAdminCmd("secret", "spawn");
@@ -4251,7 +4323,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain fires after wall-clock deadline a
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto cmd = makeAdminCmd("secret", "spawn", 0x0001u);
@@ -4290,7 +4362,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain sends nothing when drain returns 
     ShellDrainMock shell; // lines stays empty
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto cmd = makeAdminCmd("secret", "set_weather");
@@ -4319,7 +4391,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain skips disconnected peer", "[world
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto cmd = makeAdminCmd("secret", "spawn");
@@ -4354,7 +4426,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain echoes correct reqId in follow-on
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto cmd = makeAdminCmd("secret", "spawn", 0xABCDu);
@@ -4390,7 +4462,7 @@ TEST_CASE("WorldBroadcaster: two admin commands queue independent drains with se
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto cmd1 = makeAdminCmd("secret", "spawn", 0x0001u);
@@ -4438,7 +4510,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain fires exactly once", "[world_broa
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto cmd = makeAdminCmd("secret", "spawn");
@@ -4477,7 +4549,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain with long output streams as MsgAd
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto cmd = makeAdminCmd("secret", "peers");
@@ -4517,7 +4589,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain joins multiple lines with newline
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto cmd = makeAdminCmd("secret", "peers");
@@ -4554,7 +4626,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain sends nothing when all drain line
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto cmd = makeAdminCmd("secret", "spawn");
@@ -4587,7 +4659,7 @@ TEST_CASE("WorldBroadcaster: admin shell drain fires at wall-clock deadline rega
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     auto cmd = makeAdminCmd("secret", "spawn");
@@ -4626,7 +4698,7 @@ TEST_CASE("WorldBroadcaster: two admin commands at staggered deadlines drain ind
     ShellDrainMock shell;
     broadcaster.setAdminShell([&shell]() { return shell.mark(); }, [&shell](int m) { return shell.drainSince(m); });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.sends.clear();
 
     // Command A at t=0 ms; its deadline is t=20 ms.
@@ -4677,7 +4749,7 @@ TEST_CASE("WorldBroadcaster: MsgConnectAck planetRadiusKm is Earth radius by def
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     fl::MsgConnectAck ack = parseSendAck(net);
     CHECK(ack.planetRadiusKm == Catch::Approx(6371.f).epsilon(1e-4f));
@@ -4693,7 +4765,7 @@ TEST_CASE("WorldBroadcaster: setGravityField propagates planetRadiusKm to MsgCon
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
 
     broadcaster.setGravityField(fl::CentralGravityField::earthInstance(), 6371.f);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     fl::MsgConnectAck ack = parseSendAck(net);
     CHECK(ack.planetRadiusKm == Catch::Approx(6371.f).epsilon(1e-4f));
@@ -4712,7 +4784,7 @@ TEST_CASE("WorldBroadcaster: spawn position preserves sub-mm precision at large 
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setSpawnPoints({std::array<double, 3>{1e5 + 1e-3, 500.0, 0.0}});
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     REQUIRE(!snapshotsFor(net, 0).empty());
@@ -4742,7 +4814,7 @@ TEST_CASE("WorldBroadcaster: MsgHeartbeat triggers MsgPeerDelay reply", "[world_
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 70u); // m_currentTick = 70
 
     const std::size_t sendsBefore = net.sends.size();
@@ -4769,7 +4841,7 @@ TEST_CASE("WorldBroadcaster: MsgHeartbeat with future tickIndex does not update 
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 50u); // m_currentTick = 50
 
     fl::MsgHeartbeat hb;
@@ -4791,7 +4863,7 @@ TEST_CASE("WorldBroadcaster: MsgHeartbeat caps delayTicks at uint16 max", "[worl
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     // Drive to a high tick so estimatedDelayTicks will exceed 65535
     broadcaster.onTick(1.0 / 60.0, 70000u);
 
@@ -4813,7 +4885,7 @@ TEST_CASE("WorldBroadcaster: truncated MsgHeartbeat is discarded", "[world_broad
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     const std::size_t sendsBefore = net.sends.size();
 
     uint8_t tiny[4] = {static_cast<uint8_t>(fl::MsgId::Heartbeat), 0, 0, 0};
@@ -4830,8 +4902,8 @@ TEST_CASE("WorldBroadcaster: two peers each receive their own MsgPeerDelay", "[w
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    broadcaster.onConnect(0u);
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 0u);
+    connectPilotPeer(broadcaster, net, 1u);
     broadcaster.onTick(1.0 / 60.0, 100u); // m_currentTick = 100
 
     // Peer 0: tickIndex=40 → delay = 60; peer 1: tickIndex=70 → delay = 30
@@ -4867,7 +4939,7 @@ TEST_CASE("WorldBroadcaster: idle timeout 0 never kicks", "[world_broadcaster]")
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setIdleTimeout(0); // disabled
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     for (uint64_t t = 1; t <= 600; ++t)
         broadcaster.onTick(1.0 / 60.0, t);
 
@@ -4883,7 +4955,7 @@ TEST_CASE("WorldBroadcaster: idle timeout disconnects peer after inactivity", "[
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setIdleTimeout(1); // 1 second = 60 ticks
 
-    broadcaster.onConnect(0u); // lastActivityTick = m_currentTick = 0
+    connectPilotPeer(broadcaster, net, 0u); // lastActivityTick = m_currentTick = 0
 
     // Run 59 ticks (delay 59 < 60): no kick
     for (uint64_t t = 1; t <= 59; ++t)
@@ -4904,7 +4976,7 @@ TEST_CASE("WorldBroadcaster: MsgHeartbeat resets idle timer", "[world_broadcaste
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setIdleTimeout(1); // 60 ticks
 
-    broadcaster.onConnect(0u); // lastActivityTick = 0
+    connectPilotPeer(broadcaster, net, 0u); // lastActivityTick = 0
 
     // Tick 55: still within window (55 < 60)
     for (uint64_t t = 1; t <= 55; ++t)
@@ -4935,7 +5007,7 @@ TEST_CASE("WorldBroadcaster: MsgClientInput resets idle timer", "[world_broadcas
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setIdleTimeout(1); // 60 ticks
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Tick 55: no kick yet
     for (uint64_t t = 1; t <= 55; ++t)
@@ -5077,7 +5149,7 @@ TEST_CASE("WorldBroadcaster: entity within draw distance appears in peer snapsho
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setDrawDistance(200.f); // 200 km — entity at origin is visible
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     auto snaps = snapshotsFor(net, 0);
@@ -5103,8 +5175,8 @@ TEST_CASE("WorldBroadcaster: entity beyond draw distance excluded from peer snap
     const uint32_t farIdx = farId.index;
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.setDrawDistance(1.f); // 1 km — far entity is outside
-    broadcaster.onConnect(0u);        // peer spawns near origin (default)
+    broadcaster.setDrawDistance(1.f);       // 1 km — far entity is outside
+    connectPilotPeer(broadcaster, net, 0u); // peer spawns near origin (default)
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     auto snaps = snapshotsFor(net, 0);
@@ -5139,7 +5211,7 @@ TEST_CASE("WorldBroadcaster: interest management correct at a non-default spatia
     broadcaster.applyConfig(cfg);
     CHECK(broadcaster.spatialIndex().cellSizeM() == Catch::Approx(2000.0));
 
-    broadcaster.onConnect(0u); // peer spawns near origin
+    connectPilotPeer(broadcaster, net, 0u); // peer spawns near origin
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     auto snaps = snapshotsFor(net, 0);
@@ -5167,7 +5239,7 @@ TEST_CASE("WorldBroadcaster: auto spatial cell size resolves from draw distance 
     broadcaster.applyConfig(cfg);
     CHECK(broadcaster.spatialIndex().cellSizeM() == Catch::Approx(6250.0));
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
     auto snaps = snapshotsFor(net, 0);
     REQUIRE(!snaps.empty());
@@ -5188,8 +5260,8 @@ TEST_CASE("WorldBroadcaster: two peers at different positions see disjoint entit
 
     // Peer 0 spawns near origin; peer 1 spawns 100 km away
     broadcaster.setSpawnPoints({std::array<double, 3>{0.0, 500.0, 0.0}, std::array<double, 3>{100'000.0, 500.0, 0.0}});
-    broadcaster.onConnect(0u);
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 0u);
+    connectPilotPeer(broadcaster, net, 1u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     auto snaps0 = snapshotsFor(net, 0);
@@ -5226,7 +5298,7 @@ TEST_CASE("WorldBroadcaster: 3D interest cull rejects an entity far in altitude 
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setDrawDistance(1.f); // 1 km interest sphere
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     auto snaps = snapshotsFor(net, 0);
@@ -5251,7 +5323,7 @@ TEST_CASE("WorldBroadcaster: setDrawDistance(0) produces empty snapshots", "[wor
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setDrawDistance(0.f); // radius 0 → no cells queried
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     auto snaps = snapshotsFor(net, 0);
@@ -5268,7 +5340,7 @@ TEST_CASE("WorldBroadcaster: dead peer entity results in empty snapshot", "[worl
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     // Retrieve peer's entity from ConnectAck
     fl::MsgConnectAck ack{};
     std::memcpy(&ack, net.sends[1].data(), sizeof(ack));
@@ -5302,7 +5374,7 @@ TEST_CASE("WorldBroadcaster: applyConfig propagates drawDistanceKm", "[world_bro
     fl::WorldBroadcasterConfig cfg;
     cfg.drawDistanceKm = 1.f; // 1 km — only queries cell at peer origin; 20 km entity is in a different cell
     broadcaster.applyConfig(cfg);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     auto snaps = snapshotsFor(net, 0);
@@ -5319,7 +5391,7 @@ TEST_CASE("WorldBroadcaster: first tick sends full entries, second tick sends up
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Tick 1: all entities new — must be full entries
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -5346,7 +5418,7 @@ TEST_CASE("WorldBroadcaster: entity stays full every tick until the client acks"
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // No ack: the peer's identity is unconfirmed, so the record is re-sent full every tick (loss
     // recovery — whatever snapshot the client first receives carries the full).
@@ -5385,7 +5457,7 @@ TEST_CASE("WorldBroadcaster: a fresh peer is sent full records for all entities 
     }
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // ackedTick == 0 (no ack yet): every visible entity bootstraps as a full record.
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -5414,7 +5486,7 @@ TEST_CASE("WorldBroadcaster: a heartbeat-only client still acks and downgrades t
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     broadcaster.onTick(1.0 / 60.0, 1u);
     REQUIRE(fullRecordCount(snapshotsFor(net, 0).back()) >= 1u);
@@ -5441,7 +5513,7 @@ TEST_CASE("WorldBroadcaster: a future-tick ack is clamped to the present and can
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Tick 1, then the client claims to have acked a far-future tick (9999). Clamped to the current
     // tick (1), it cannot pre-confirm an entity the server has not even sent yet.
@@ -5481,7 +5553,7 @@ TEST_CASE("WorldBroadcaster: a dropped full keeps re-sending full until a later 
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Ticks 1-3 sent but the client's acks stall at 0 (e.g. the full packets were lost): every tick
     // re-sends a full so the first packet the client does receive carries the identity.
@@ -5512,7 +5584,7 @@ TEST_CASE("WorldBroadcaster: acking a later tick does not confirm a full whose s
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Full sent every tick 1-3, streak frozen at tick 1 (contiguous run, no acks yet).
     for (uint64_t tick = 1; tick <= 3; ++tick) {
@@ -5547,7 +5619,7 @@ TEST_CASE("WorldBroadcaster: a heartbeat carries the selective-ack mask", "[worl
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     for (uint64_t tick = 1; tick <= 3; ++tick) {
         clearSnapshots(net);
@@ -5583,7 +5655,7 @@ TEST_CASE("WorldBroadcaster: a non-advancing ack does not clobber the stored mas
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     for (uint64_t tick = 1; tick <= 5; ++tick) {
         clearSnapshots(net);
@@ -5610,7 +5682,7 @@ TEST_CASE("WorldBroadcaster: a full streak older than the ack window converges t
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Full streak frozen at tick 1; run well past the 32-tick window with no acks.
     for (uint64_t tick = 1; tick <= 40; ++tick) {
@@ -5651,7 +5723,7 @@ TEST_CASE("WorldBroadcaster: a deferred entity acked-but-not-decoded stays full 
     // Budget must clear the fixed header+TLV overhead (~72 B) plus the peer's own record, leaving room
     // for exactly one of the two far records — so one far entity is deferred each tick.
     broadcaster.setSnapshotBudget(140u);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     auto farIdxIn = [&](const std::vector<uint8_t>& pkt) -> std::optional<uint32_t> {
         for (const auto& d : decodeEntities(pkt))
@@ -5706,7 +5778,7 @@ TEST_CASE("WorldBroadcaster: entity gen change forces a full entry", "[world_bro
     const uint32_t slotIdx = id1.index;
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Tick 1: entity appears as full entry, gen is cached
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -5742,7 +5814,7 @@ TEST_CASE("WorldBroadcaster: reconnect after disconnect starts with fresh known-
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Tick 1: entity known, cached; client acks it
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -5760,7 +5832,7 @@ TEST_CASE("WorldBroadcaster: reconnect after disconnect starts with fresh known-
 
     // Disconnect clears knownGens and ackedTick; reconnect gives fresh state
     broadcaster.onDisconnect(0u);
-    broadcaster.onConnect(0u); // new peer gets peerId=0 again (TrackingNetwork reuses it)
+    connectPilotPeer(broadcaster, net, 0u); // new peer gets peerId=0 again (TrackingNetwork reuses it)
 
     // Tick 3: fresh connection — all entities must be full entries again
     broadcaster.onTick(1.0 / 60.0, 3u);
@@ -5778,7 +5850,7 @@ TEST_CASE("WorldBroadcaster: totalEntityCount matches buffer content", "[world_b
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Tick 1 → full entries
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -5840,7 +5912,7 @@ TEST_CASE("WorldBroadcaster: SnapshotPeerLatency TLV present when estimatedDelay
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Tick 2: advance m_currentTick to 2, peer has no delay yet.
     broadcaster.onTick(1.0 / 60.0, 2u);
@@ -5883,7 +5955,7 @@ TEST_CASE("WorldBroadcaster: SnapshotPeerLatency TLV absent when estimatedDelayT
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // No heartbeat sent — estimatedDelayTicks stays 0.
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -5927,7 +5999,7 @@ TEST_CASE("WorldBroadcaster: snapshot entity record carries omega field without 
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // One tick is enough to verify the code path. omega starts at {0,0,0} and we just
     // check the field is accessible and finite in the serialized packet.
@@ -5967,7 +6039,7 @@ TEST_CASE("WorldBroadcaster: snapshot includes SnapshotPeerDelayTicks TLV when d
     fl::EntityManager em(logger, registry);
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 2u);
     clearSnapshots(net);
 
@@ -6155,7 +6227,7 @@ TEST_CASE("WorldBroadcaster: received input is buffered and not applied until ti
     registry.registerType(makeDebugDef());
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     auto inp = makeJitterInput(1u, 0.9f);
     broadcaster.onReceive(0u, &inp, sizeof(inp));
@@ -6174,7 +6246,7 @@ TEST_CASE("WorldBroadcaster: jitter buffer drains one per tick", "[world_broadca
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setJitterBufferDepth(8u);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Advance to tick 10 so the first input gets estimatedDelayTicks=10 → buffer depth=min(10,8)=8.
     broadcaster.onTick(1.0 / 60.0, 10u);
@@ -6204,7 +6276,7 @@ TEST_CASE("WorldBroadcaster: empty buffer tick uses stale repeat without crash",
     registry.registerType(makeDebugDef());
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     auto inp = makeJitterInput(1u, 0.5f);
     broadcaster.onReceive(0u, &inp, sizeof(inp));
@@ -6228,7 +6300,7 @@ TEST_CASE("WorldBroadcaster: forEachPeer reports queueDepth", "[world_broadcaste
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setJitterBufferDepth(8u);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Advance to tick 10 so the first input seeds buffer depth=min(10,8)=8.
     broadcaster.onTick(1.0 / 60.0, 10u);
@@ -6252,7 +6324,7 @@ TEST_CASE("WorldBroadcaster: jitter buffer depth seeded from estimatedDelayTicks
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setJitterBufferDepth(8u); // global max = 8
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Advance to tick 10 so delay = 10 - 5 = 5 ticks.
     broadcaster.onTick(1.0 / 60.0, 10u);
@@ -6281,7 +6353,7 @@ TEST_CASE("WorldBroadcaster: jitter buffer depth capped at jitterMaxDepth", "[wo
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setJitterBufferDepth(2u); // hard cap = 2
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Advance to tick 20 so delay = 20 - 0 = 20, which would give depth 20 uncapped.
     broadcaster.onTick(1.0 / 60.0, 20u);
@@ -6312,8 +6384,8 @@ TEST_CASE("WorldBroadcaster: jitter buffers are independent per peer", "[world_b
     broadcaster.setJitterBufferDepth(8u);
     net.peerAddresses[0] = "1.1.1.1:1000";
     net.peerAddresses[1] = "2.2.2.2:2000";
-    broadcaster.onConnect(0u);
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 0u);
+    connectPilotPeer(broadcaster, net, 1u);
 
     // Advance to tick 10 so first input from each peer gets depth=min(10,8)=8.
     broadcaster.onTick(1.0 / 60.0, 10u);
@@ -6349,7 +6421,7 @@ TEST_CASE("WorldBroadcaster: setJitterBufferDepth affects initial depth for new 
     clearSnapshots(net);
 
     // Peer 0 connects, sends input with tickIndex=0 (delay=10, cap=6 -> depth=6).
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     auto inp0 = makeJitterInput(1u, 0.5f, 0u);
     broadcaster.onReceive(0u, &inp0, sizeof(inp0));
 
@@ -6357,7 +6429,7 @@ TEST_CASE("WorldBroadcaster: setJitterBufferDepth affects initial depth for new 
     broadcaster.setJitterBufferDepth(3u);
 
     // Peer 1 connects after the change, sends input with tickIndex=0 (delay=10, cap=3 -> depth=3).
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 1u);
     auto inp1 = makeJitterInput(1u, 0.5f, 0u);
     broadcaster.onReceive(1u, &inp1, sizeof(inp1));
 
@@ -6394,7 +6466,7 @@ TEST_CASE("WorldBroadcaster: EWMA delay seeded from first estimatedDelayTicks", 
     broadcaster.setJitterAdaptWindow(2u); // alpha=0.5, fast convergence
     broadcaster.setJitterHysteresis(0u);  // resize on any diff
     broadcaster.setJitterMultiplier(0.f); // delay-only
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Advance to tick 6 so first input delay = 6 - 1 = 5.
     broadcaster.onTick(1.0 / 60.0, 6u);
@@ -6420,7 +6492,7 @@ TEST_CASE("WorldBroadcaster: EWMA delay converges toward new samples", "[world_b
     broadcaster.setJitterAdaptWindow(2u); // alpha=0.5
     broadcaster.setJitterHysteresis(0u);
     broadcaster.setJitterMultiplier(0.f);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Seed at delay=2 (tick=3, tickIndex=1).
     broadcaster.onTick(1.0 / 60.0, 3u);
@@ -6456,7 +6528,7 @@ TEST_CASE("WorldBroadcaster: adaptive resize grows buffer when EWMA delay increa
     broadcaster.setJitterAdaptWindow(2u); // alpha=0.5, 8 samples for ~99% convergence
     broadcaster.setJitterHysteresis(0u);
     broadcaster.setJitterMultiplier(0.f);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Seed at delay=2 (depth=2).
     broadcaster.onTick(1.0 / 60.0, 3u);
@@ -6497,7 +6569,7 @@ TEST_CASE("WorldBroadcaster: adaptive resize shrinks buffer when delay drops", "
     broadcaster.setJitterAdaptWindow(2u);
     broadcaster.setJitterHysteresis(0u);
     broadcaster.setJitterMultiplier(0.f);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Seed at delay=12 (depth=12).
     broadcaster.onTick(1.0 / 60.0, 13u);
@@ -6533,7 +6605,7 @@ TEST_CASE("WorldBroadcaster: hysteresis prevents resize for small EWMA drift", "
     broadcaster.setJitterAdaptWindow(2u);
     broadcaster.setJitterHysteresis(8u); // large dead-band
     broadcaster.setJitterMultiplier(0.f);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Seed at delay=5 (depth=5).
     broadcaster.onTick(1.0 / 60.0, 6u);
@@ -6568,7 +6640,7 @@ TEST_CASE("WorldBroadcaster: adaptive resize clamped at jitterMaxDepth", "[world
     broadcaster.setJitterAdaptWindow(2u);
     broadcaster.setJitterHysteresis(0u);
     broadcaster.setJitterMultiplier(0.f);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Seed at delay=30 — capped to 6 at seeding.
     broadcaster.onTick(1.0 / 60.0, 31u);
@@ -6600,7 +6672,7 @@ TEST_CASE("WorldBroadcaster: setJitterMultiplier 0 gives delay-only depth", "[wo
     broadcaster.setJitterAdaptWindow(2u);
     broadcaster.setJitterHysteresis(0u);
     broadcaster.setJitterMultiplier(0.f); // pure delay-only
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Seed at delay=4 (depth=4).
     broadcaster.onTick(1.0 / 60.0, 5u);
@@ -6641,7 +6713,7 @@ TEST_CASE("WorldBroadcaster: forEachPeer PeerInfo carries bufferMaxDepth after a
     broadcaster.setJitterAdaptWindow(2u);
     broadcaster.setJitterHysteresis(0u);
     broadcaster.setJitterMultiplier(0.f);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Seed at delay=2.
     broadcaster.onTick(1.0 / 60.0, 3u);
@@ -6672,7 +6744,7 @@ TEST_CASE("WorldBroadcaster: adaptive resize skips peer with no EWMA sample", "[
     broadcaster.setJitterAdaptWindow(2u);
     broadcaster.setJitterHysteresis(0u);
     broadcaster.setJitterMultiplier(0.f);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // onTick without any input from this peer — must not crash.
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -6696,7 +6768,7 @@ TEST_CASE("WorldBroadcaster: adaptive resize floors target at 1 with zero delay"
     broadcaster.setJitterAdaptWindow(2u);
     broadcaster.setJitterHysteresis(0u);
     broadcaster.setJitterMultiplier(0.f);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // First input at delay=0 (tickIndex == m_currentTick after onTick(1)).
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -6723,7 +6795,7 @@ TEST_CASE("WorldBroadcaster: jitter EWMA stays near zero for regular 1-tick-spac
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setJitterAdaptWindow(4u);
     broadcaster.setJitterMultiplier(1.f);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Send 20 inputs, each exactly 1 server tick apart.
     for (uint32_t seq = 1u; seq <= 20u; ++seq) {
@@ -6748,7 +6820,7 @@ TEST_CASE("WorldBroadcaster: jitter EWMA grows for irregular arrivals", "[world_
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setJitterAdaptWindow(4u); // alpha=0.25
     broadcaster.setJitterMultiplier(1.f);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Seed at tick 1.
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -6783,7 +6855,7 @@ TEST_CASE("WorldBroadcaster: adaptive resize shrinks buffer and drops excess fil
     broadcaster.setJitterAdaptWindow(2u); // alpha=0.5
     broadcaster.setJitterHysteresis(0u);
     broadcaster.setJitterMultiplier(0.f);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Seed at delay=10 (depth=10).
     broadcaster.onTick(1.0 / 60.0, 11u);
@@ -6841,7 +6913,7 @@ TEST_CASE("WorldBroadcaster: applyConfig wires jitterAdaptWindow hysteresis mult
     cfg.jitterMultiplier = 0.f; // delay-only
     broadcaster.applyConfig(cfg);
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Seed at delay=2, then drive to delay=10; adaptive resize should fire.
     broadcaster.onTick(1.0 / 60.0, 3u);
@@ -6905,7 +6977,7 @@ TEST_CASE("WorldBroadcaster: snapshot budget caps records and always includes ow
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setDrawDistance(200.f);
     broadcaster.setSnapshotBudget(200u); // tiny budget: only a handful of ~24-31 B records fit
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     auto snaps = snapshotsFor(net, 0);
@@ -6944,7 +7016,7 @@ TEST_CASE("WorldBroadcaster: budget==0 sends every visible entity (legacy path)"
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setDrawDistance(200.f); // budget defaults to 0 (unlimited)
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     auto snaps = snapshotsFor(net, 0);
@@ -6972,7 +7044,7 @@ TEST_CASE("WorldBroadcaster: starved entity eventually included under a tight bu
     disableOverrunGovernor(broadcaster); // #787: a slow host must not shed the snapshot we assert on
     broadcaster.setDrawDistance(200.f);
     broadcaster.setSnapshotBudget(160u); // only a few records per tick
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // The farthest entity (highest idx) starts low priority; over enough ticks its recency term must
     // lift it into a snapshot at least once.
@@ -7004,7 +7076,7 @@ TEST_CASE("WorldBroadcaster: killing a known entity emits a despawn TLV, interes
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setDrawDistance(200.f);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Tick 1: peer learns the victim.
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -7044,7 +7116,7 @@ TEST_CASE("WorldBroadcaster: entity flown out of interest is not despawned", "[w
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setDrawDistance(1.f); // 1 km
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u); // peer learns the mover
 
     // Move the entity far outside the interest sphere (still alive in the sim).
@@ -7077,7 +7149,7 @@ TEST_CASE("WorldBroadcaster: re-entry after retention gap forces a full record",
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setDrawDistance(200.f);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     // Tick 1: full record (first sight). After the client acks it, ticks where it stays known → deltas.
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -7129,8 +7201,8 @@ TEST_CASE("WorldBroadcaster: congested peer is decimated, healthy peer keeps ful
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setCongestionParams(testCongestion());
-    broadcaster.onConnect(0u); // congested peer
-    broadcaster.onConnect(1u); // healthy peer
+    connectPilotPeer(broadcaster, net, 0u); // congested peer
+    connectPilotPeer(broadcaster, net, 1u); // healthy peer
     net.peerLinkStats[0] = lossLink(0.5f);
     net.peerLinkStats[1] = lossLink(0.0f);
 
@@ -7154,7 +7226,7 @@ TEST_CASE("WorldBroadcaster: zero link stats leave every peer at the full per-ti
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setCongestionParams(testCongestion()); // enabled, but no link stats injected => zeros
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     for (uint64_t tick = 1; tick <= 30; ++tick)
         broadcaster.onTick(1.0 / 60.0, tick);
@@ -7182,8 +7254,8 @@ TEST_CASE("WorldBroadcaster: congestion shrinks the effective byte budget (fewer
     broadcaster.setDrawDistance(200.f);
     broadcaster.setSnapshotBudget(1200u);
     broadcaster.setCongestionParams(testCongestion());
-    broadcaster.onConnect(0u); // congested
-    broadcaster.onConnect(1u); // healthy (both spawn at the fallback origin => same visible set)
+    connectPilotPeer(broadcaster, net, 0u); // congested
+    connectPilotPeer(broadcaster, net, 1u); // healthy (both spawn at the fallback origin => same visible set)
     net.peerLinkStats[0] = lossLink(0.5f);
     net.peerLinkStats[1] = lossLink(0.0f);
 
@@ -7208,7 +7280,7 @@ TEST_CASE("WorldBroadcaster: peer returns to full rate after congestion clears",
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setCongestionParams(testCongestion());
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.peerLinkStats[0] = lossLink(0.5f);
     for (uint64_t tick = 1; tick <= 40; ++tick) // collapse to the floor
         broadcaster.onTick(1.0 / 60.0, tick);
@@ -7232,7 +7304,7 @@ TEST_CASE("WorldBroadcaster: congestion disabled never decimates under loss", "[
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setCongestionParams(testCongestion(/*enabled=*/false));
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.peerLinkStats[0] = lossLink(0.9f); // heavy loss, but the controller is off
 
     for (uint64_t tick = 1; tick <= 30; ++tick)
@@ -7251,7 +7323,7 @@ TEST_CASE("WorldBroadcaster: forEachPeer reports throttled send rate and packet 
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setCongestionParams(testCongestion());
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.peerLinkStats[0] = lossLink(0.5f);
     for (uint64_t tick = 1; tick <= 40; ++tick)
         broadcaster.onTick(1.0 / 60.0, tick);
@@ -7277,7 +7349,7 @@ TEST_CASE("WorldBroadcaster: NaN/Inf client input is sanitized, not propagated",
     registry.registerType(makeDebugDef());
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     fl::MsgClientInput inp{};
     inp.seqNum = 1;
@@ -7309,7 +7381,7 @@ TEST_CASE("WorldBroadcaster: input tracing records accepted inputs only", "[worl
     fs::remove_all(dir, ec);
 
     broadcaster.setInputTraceDir(dir.string());
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 5u); // establish m_currentTick = 5 for the recorded serverTick
 
     // Two accepted inputs bracket a stale (non-newer seq) and a version-mismatch input, both rejected
@@ -7381,7 +7453,7 @@ TEST_CASE("WorldBroadcaster: tracing disabled writes nothing", "[world_broadcast
     fs::remove_all(dir, ec);
 
     // Never call setInputTraceDir: tracing is off by default.
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     ackTick(broadcaster, 0u, 0u, 1u);
     broadcaster.onDisconnect(0u);
 
@@ -7400,7 +7472,7 @@ TEST_CASE("WorldBroadcaster: congestion telemetry watermarks record engage then 
     fl::EntityManager em(logger, registry);
     registry.registerType(makeDebugDef());
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     uint64_t tick = 1;
     auto runTicks = [&](int n) {
@@ -7491,7 +7563,7 @@ TEST_CASE("WorldBroadcaster: a player entity is stamped with the configured fact
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setPlayerFaction(7);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     bool found = false;
     em.forEach([&](const fl::EntityState& s) {
@@ -7513,7 +7585,7 @@ TEST_CASE("WorldBroadcaster: player faction 0 restores the legacy neutral behavi
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setPlayerFaction(0);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     em.forEach([&](const fl::EntityState& s) { CHECK(s.factionIndex == 0); });
 }
@@ -7537,7 +7609,7 @@ TEST_CASE("WorldBroadcaster: the flight check-in tells the client its flight id 
         broadcaster.formations().addMember(fid, m);
         return fid;
     });
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     const auto acks = acksFor(net, 0);
     REQUIRE(acks.size() == 1u);
@@ -7570,7 +7642,7 @@ TEST_CASE("WorldBroadcaster: an order retasks an AI member and is acknowledged",
         return true;
     });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.perPeerSends.clear();
 
     const auto order = makeOrder(kRejoin, theFlight);
@@ -7612,8 +7684,8 @@ TEST_CASE("WorldBroadcaster: a peer cannot order a flight it does not command", 
         return true;
     });
 
-    broadcaster.onConnect(0u);
-    broadcaster.onConnect(1u);
+    connectPilotPeer(broadcaster, net, 0u);
+    connectPilotPeer(broadcaster, net, 1u);
     net.perPeerSends.clear();
 
     // Peer 1 names peer 0's flight explicitly.
@@ -7650,7 +7722,7 @@ TEST_CASE("WorldBroadcaster: an unknown command ordinal is rejected without call
         return true;
     });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.perPeerSends.clear();
 
     const auto order = makeOrder(/*command=*/200, theFlight); // outside the grammar
@@ -7688,7 +7760,7 @@ TEST_CASE("WorldBroadcaster: attack_my_target refuses when nothing is in the bor
     // A designator that finds nothing — the same thing an empty sky produces.
     broadcaster.setTargetDesignator([](const fl::EntityState&, const float[3]) { return fl::EntityId{}; });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.perPeerSends.clear();
 
     const auto order = makeOrder(/*attack_my_target=*/0, theFlight);
@@ -7720,8 +7792,8 @@ TEST_CASE("WorldBroadcaster: an order to a HUMAN member is relayed, not applied"
         return true;
     });
 
-    broadcaster.onConnect(0u); // the commander
-    broadcaster.onConnect(1u); // the human wingman
+    connectPilotPeer(broadcaster, net, 0u); // the commander
+    connectPilotPeer(broadcaster, net, 1u); // the human wingman
 
     // Peer 0 leads a flight whose only member is peer 1's aircraft.
     fl::EntityId lead0, wing1;
@@ -7782,7 +7854,7 @@ TEST_CASE("WorldBroadcaster: the order rate limit acks once per window, not once
         [&](const fl::Formation&, const fl::FormationMember&, uint8_t, fl::EntityId) { return true; });
     broadcaster.setFlightCommandRateLimit(2);
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.perPeerSends.clear();
 
     for (uint32_t i = 0; i < 10; ++i) {
@@ -7812,7 +7884,7 @@ TEST_CASE("WorldBroadcaster: a truncated or mis-versioned order is discarded", "
         ++handlerCalls;
         return true;
     });
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     net.perPeerSends.clear();
 
     // Truncated: one byte of msgId and nothing else.
@@ -7845,7 +7917,7 @@ TEST_CASE("WorldBroadcaster: disconnect tears the peer's flight down", "[world_b
         return fid;
     });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     CHECK(broadcaster.formations().size() == 1u);
 
     broadcaster.onTick(1.0 / 60.0, 1u); // EntityManager::liveCount() only refreshes on tick
@@ -7918,7 +7990,7 @@ TEST_CASE("WorldBroadcaster: a kill broadcasts credit and unicasts the killer's 
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     em.addEventHandler(&broadcaster);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     const auto ack = parseSendAck(net);
     const fl::EntityId shooter{ack.assignedEntityIdx, ack.assignedEntityGen};
 
@@ -7949,7 +8021,7 @@ TEST_CASE("WorldBroadcaster: losing your aircraft is a loss on your stats", "[wo
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     em.addEventHandler(&broadcaster);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     const auto ack = parseSendAck(net);
 
     em.applyDamage({ack.assignedEntityIdx, ack.assignedEntityGen}, 200.f, fl::EntityId::null());
@@ -7983,7 +8055,7 @@ TEST_CASE("WorldBroadcaster: DamageLevelChanged applies the DamageDef penalties 
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     em.addEventHandler(&broadcaster);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     const auto ack = parseSendAck(net);
     const fl::EntityId player{ack.assignedEntityIdx, ack.assignedEntityGen};
 
@@ -8010,7 +8082,7 @@ TEST_CASE("WorldBroadcaster: applyWarheadAt damages through the pipeline and EMP
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     em.addEventHandler(&broadcaster);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     broadcaster.onTick(1.0 / 60.0, 1u); // builds the spatial index the warhead queries
 
     const auto ack = parseSendAck(net);
@@ -8152,7 +8224,7 @@ TEST_CASE("WorldBroadcaster: the trigger bit fires the gun -- damage lands and e
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setWeaponRegistry(&weapons);
-    broadcaster.onConnect(0u); // spawns the armed peer, identity orientation: bore = +X
+    connectPilotPeer(broadcaster, net, 0u); // spawns the armed peer, identity orientation: bore = +X
     const auto ack = parseSendAck(net);
     const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
     REQUIRE(shooter != nullptr);
@@ -8209,7 +8281,7 @@ TEST_CASE("WorldBroadcaster: store release spawns ONE replicated projectile; sta
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setWeaponRegistry(&weapons);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
 
     fl::MsgClientInput inp{};
     inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
@@ -8255,7 +8327,7 @@ TEST_CASE("WorldBroadcaster: a delayed player's gun hits where the target WAS --
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setWeaponRegistry(&weapons);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     const auto ack = parseSendAck(net);
     const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
     REQUIRE(shooter != nullptr);
@@ -8305,7 +8377,7 @@ TEST_CASE("WorldBroadcaster: with no delay the same jink is a clean miss -- no f
 
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setWeaponRegistry(&weapons);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     const auto ack = parseSendAck(net);
     const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
     REQUIRE(shooter != nullptr);
@@ -8350,7 +8422,7 @@ TEST_CASE("WorldBroadcaster: the zero-pack sandbox peer spawns ARMED and the can
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setWeaponRegistry(&weapons);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     const auto ack = parseSendAck(net);
     const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
     REQUIRE(shooter != nullptr);
@@ -8406,7 +8478,7 @@ TEST_CASE("WorldBroadcaster: a designated IR missile launch flies out and kills 
         return nullptr;
     });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     const auto ack = parseSendAck(net);
     const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
     REQUIRE(shooter != nullptr);
@@ -8457,7 +8529,7 @@ TEST_CASE("WorldBroadcaster: the pre-launch LOCK cue reaches the own record's we
         return nullptr;
     });
 
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     const auto ack = parseSendAck(net);
     const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
     REQUIRE(shooter != nullptr);
@@ -8635,7 +8707,7 @@ TEST_CASE("WorldBroadcaster: an entity without a subsystems table is unaffected 
 
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
-    broadcaster.onConnect(0u);
+    connectPilotPeer(broadcaster, net, 0u);
     const auto ack = parseSendAck(net);
     const fl::EntityId player{ack.assignedEntityIdx, ack.assignedEntityGen};
     broadcaster.onTick(1.0 / 60.0, 1u);

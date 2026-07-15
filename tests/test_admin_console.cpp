@@ -617,6 +617,15 @@ static fl::EntityDef makeWbEntityDef(const char* id = "builtin:debug-entity") {
     return def;
 }
 
+// Drive the #853 connect handshake for a pilot: onConnect + the client's MsgConnectRequest, which now
+// triggers the spawn + ConnectAck (the old flow spawned/acked directly in onConnect).
+static void connectPilotWb(fl::WorldBroadcaster& b, uint32_t peerId = 0u) {
+    b.onConnect(peerId);
+    fl::MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+    b.onReceive(peerId, &req, sizeof(req));
+}
+
 struct WbFixture {
     NullLogger2 log;
     MockNetworkWb net;
@@ -903,7 +912,7 @@ TEST_CASE("WorldBroadcaster: default MsgConnectAck carries Earth planet radius",
     fl::WorldBroadcaster broadcaster{em, registry, net, log};
     registry.registerType(makeWbEntityDef());
 
-    broadcaster.onConnect(0u);
+    connectPilotWb(broadcaster);
 
     bool found = false;
     for (const auto& pkt : net.sends) {
@@ -927,7 +936,7 @@ TEST_CASE("WorldBroadcaster: setGroundElevationQuery is called per entity during
         ++queryCalls;
         return 42.f;
     });
-    f.broadcaster.onConnect(0u);
+    connectPilotWb(f.broadcaster);
     f.broadcaster.onTick(1.0 / 60.0, 1u);
 
     CHECK(queryCalls > 0);

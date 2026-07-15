@@ -20,9 +20,11 @@
 #include "weather/WeatherController.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <glm/gtc/quaternion.hpp>
 #include <sstream>
+#include <vector>
 
 namespace fl {
 
@@ -41,6 +43,22 @@ static void printAdminLines(GameConsole* console, const std::string& text) {
 void ClientNetEventHandler::onConnect(uint32_t /*peerId*/) {
     m_connected = true;
     logger.log(LogLevel::Info, __FILE__, __LINE__, "connected to local fl-server");
+
+    // Unified connect handshake (#853): the client speaks first now. Send MsgConnectRequest with the
+    // requested role, aircraft, and mounted-pack manifest; the server replies MsgConnectAck (granted
+    // role + assigned entity) or MsgConnectRefusal. Followed by the pack manifest records; the ext
+    // block (RFC #871 entitlement token) is reserved and empty.
+    fl::MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(requestedRole);
+    req.packCount = static_cast<uint16_t>(std::min<std::size_t>(packManifest.size(), 0xFFFFu));
+    std::snprintf(req.requestedEntityType, sizeof(req.requestedEntityType), "%s", requestedEntityType.c_str());
+
+    std::vector<uint8_t> buf;
+    buf.reserve(sizeof(req) + packManifest.size() * sizeof(fl::PackManifestEntry));
+    fl::appendMsg(buf, req);
+    for (uint16_t i = 0; i < req.packCount; ++i)
+        fl::appendMsg(buf, packManifest[i]);
+    net.send(0, buf.data(), buf.size(), /*reliable=*/true);
 }
 
 void ClientNetEventHandler::signalFailure(SessionFailure f) {
@@ -53,8 +71,9 @@ void ClientNetEventHandler::signalFailure(SessionFailure f) {
 void ClientNetEventHandler::onDisconnect(uint32_t /*peerId*/) {
     logger.log(LogLevel::Info, __FILE__, __LINE__, "disconnected from local fl-server");
     // ENet-level rejection before MsgConnectAck — generic fallback (a specific reason set earlier by
-    // the MsgHello/MsgConnectRefusal handlers wins via signalFailure's first-writer-wins CAS).
-    if (m_connected && assignedEntityIdx == 0)
+    // the MsgHello/MsgConnectRefusal handlers wins via signalFailure's first-writer-wins CAS). Keyed on
+    // "no ConnectAck arrived", not assignedEntityIdx==0: an observer's valid ack carries idx 0 (#853/#857).
+    if (m_connected && !m_gotConnectAck)
         signalFailure(SessionFailure::ConnectionRefused);
 }
 
@@ -82,6 +101,9 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         assignedEntityIdx = ack.assignedEntityIdx;
         assignedEntityGen = ack.assignedEntityGen;
         m_planetRadiusKm = ack.planetRadiusKm;
+        m_grantedRole =
+            fl::isPeerRoleOrdinal(ack.grantedRole) ? static_cast<fl::PeerRole>(ack.grantedRole) : fl::PeerRole::Pilot;
+        m_gotConnectAck = true; // admitted — an observer's ack has idx 0, so this (not idx) marks success
         std::size_t off = sizeof(ack);
         for (uint16_t i = 0; i < ack.typeCount; ++i) {
             fl::MsgEntityTypeDef td;
@@ -388,6 +410,15 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             break;
         case fl::ConnectRefusalCode::TooManyConnections:
             f = SessionFailure::TooManyConnections;
+            break;
+        case fl::ConnectRefusalCode::RoleDenied:
+            f = SessionFailure::RoleDenied;
+            break;
+        case fl::ConnectRefusalCode::MissingRequiredPack:
+            f = SessionFailure::MissingRequiredPack;
+            break;
+        case fl::ConnectRefusalCode::EntitlementRequired:
+            f = SessionFailure::EntitlementRequired;
             break;
         case fl::ConnectRefusalCode::Generic:
             break; // ConnectionRefused

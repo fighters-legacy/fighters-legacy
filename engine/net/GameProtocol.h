@@ -64,15 +64,31 @@ enum class MsgId : uint8_t {
     WingmanAck = 0x0E,         // server->client, reliable: outcome of a wingman order, and the
                                // unsolicited flight check-in sent once after ConnectAck
     CombatEvent = 0x0F,        // server->client, reliable: kill feed + per-peer combat stats (#626).
-                               // This took the LAST free ENet id, which is WHY it is a multiplexed
-                               // record stream (CombatEventType) rather than one message per event:
-                               // every future gameplay event extends the record vocabulary, not the
-                               // id space. Extending past 0x10 is safe in practice (MsgLanBeacon is
-                               // raw UDP and never enters the ENet dispatch), but "0x10+ = non-ENet"
-                               // is a documented invariant and breaking it should be a choice, not
-                               // an accident.
-    LanBeacon = 0x10,          // raw UDP broadcast - NOT sent over ENet; 0x10+ reserved for non-ENet ids.
+                               // Multiplexed record stream (CombatEventType) rather than one message per
+                               // event: every future gameplay event extends the record vocabulary, not
+                               // the id space.
+    ConnectRequest = 0x11,     // client->server, reliable: FIRST packet the client sends on connect
+                               // (#853). Carries the role, requested entity type, and mounted-pack
+                               // manifest the client asks to join with; the server replies ConnectAck
+                               // (granted role) or ConnectRefusal. See MsgConnectRequest below.
+    LanBeacon = 0x20,          // raw UDP broadcast - NOT sent over ENet; 0x20+ reserved for non-ENet ids.
+                               // ENet message ids occupy 0x00-0x1F. The non-ENet boundary was raised
+                               // from 0x10 to 0x20 in #853 to free an ENet id for ConnectRequest -- a
+                               // deliberate, documented choice (the prior comment flagged that breaking
+                               // the "0x10+ = non-ENet" invariant should be a choice, not an accident).
 };
+
+// The role a peer joins as, chosen by the client in MsgConnectRequest and granted (possibly clamped) by
+// the server in MsgConnectAck. An observer has no entity, no FlightIntegrator, and no controller (#857).
+enum class PeerRole : uint8_t {
+    Pilot = 0,    // flies an aircraft entity
+    Observer = 1, // spectator/ghost camera; no entity spawned
+};
+
+// Validate an attacker-supplied role byte before casting to PeerRole (mirrors isWingmanCommandOrdinal).
+inline bool isPeerRoleOrdinal(uint8_t v) noexcept {
+    return v <= static_cast<uint8_t>(PeerRole::Observer);
+}
 
 // Machine-readable reason carried in MsgConnectRefusal::code, alongside the human-readable text.
 // Lets the client map a rejection to a localized string without parsing the English text.
@@ -83,6 +99,10 @@ enum class ConnectRefusalCode : uint8_t {
     RateLimited = 3,
     TooManyConnections = 4, // per-IP concurrent connection cap
     AdminLockout = 5,
+    RoleDenied = 6,          // requested a role the server does not allow (e.g. observer when disabled) (#857)
+    MissingRequiredPack = 7, // client lacks a server-required content pack (#872 refuse-mode; defined,
+                             // unused in Phase 4 warn-only policy)
+    EntitlementRequired = 8, // premium content requires an entitlement token (RFC #871; reserved)
 };
 
 // All structs below are deliberately UNPACKED and laid out for natural alignment (see compatibility
@@ -100,22 +120,31 @@ static_assert(sizeof(MsgHello) == 4u, "MsgHello wire size changed");
 static_assert(alignof(MsgHello) == 2u, "MsgHello alignment changed");
 static_assert(offsetof(MsgHello, protocolVersion) == 2u, "MsgHello::protocolVersion offset changed");
 
-// Reliable, sent once on connect (after MsgHello).
-// Followed by typeCount x MsgEntityTypeDef in the same packet.
+// Reliable, sent once on connect (after MsgHello) in reply to MsgConnectRequest, and again on a
+// mid-session role change (#857). Followed by typeCount x MsgEntityTypeDef in the same packet.
+//
+// grantedRole (#853/#857) is the role the server GRANTED, which may differ from the requested one. It
+// is load-bearing for the "rejected before ack" sentinel: an observer's valid ack carries
+// assignedEntityGen == 0 (no entity), which is indistinguishable from a pre-ack rejection by idx alone,
+// so the client keys its rejection detection on "did a ConnectAck arrive", not on idx == 0.
 struct MsgConnectAck {
     uint8_t msgId{static_cast<uint8_t>(MsgId::ConnectAck)};
     uint8_t tickRateHz{60};
     uint16_t typeCount{0};
-    uint32_t assignedEntityIdx{0}; // entity slot assigned to this peer
+    uint32_t assignedEntityIdx{0}; // entity slot assigned to this peer (0 = none, e.g. observer)
     uint32_t assignedEntityGen{0}; // entity generation (0 = none assigned)
     float planetRadiusKm{0.f};     // planet sphere radius (km); Earth default = 6371
-}; // 16 bytes, align 4 (multiple of alignof(MsgEntityTypeDef) so trailing records stay aligned)
-static_assert(sizeof(MsgConnectAck) == 16u, "MsgConnectAck wire size changed");
+    uint8_t grantedRole{0};        // PeerRole granted by the server (Pilot/Observer) (#857)
+    uint8_t reserved2[3]{};        // pad to 20 (multiple of alignof(MsgEntityTypeDef) so records stay aligned)
+}; // 20 bytes, align 4 (multiple of alignof(MsgEntityTypeDef) so trailing records stay aligned)
+static_assert(sizeof(MsgConnectAck) == 20u, "MsgConnectAck wire size changed");
 static_assert(alignof(MsgConnectAck) == 4u, "MsgConnectAck alignment changed");
+static_assert(sizeof(MsgConnectAck) % 4u == 0u, "MsgConnectAck not record-aligned (MsgEntityTypeDef is align 4)");
 static_assert(offsetof(MsgConnectAck, typeCount) == 2u, "MsgConnectAck::typeCount offset changed");
 static_assert(offsetof(MsgConnectAck, assignedEntityIdx) == 4u, "MsgConnectAck::assignedEntityIdx offset changed");
 static_assert(offsetof(MsgConnectAck, assignedEntityGen) == 8u, "MsgConnectAck::assignedEntityGen offset changed");
 static_assert(offsetof(MsgConnectAck, planetRadiusKm) == 12u, "MsgConnectAck::planetRadiusKm offset changed");
+static_assert(offsetof(MsgConnectAck, grantedRole) == 16u, "MsgConnectAck::grantedRole offset changed");
 
 // Entity type definition record appended after MsgConnectAck.
 //
@@ -146,6 +175,40 @@ static_assert(offsetof(MsgEntityTypeDef, dmgMesh) == 132u, "MsgEntityTypeDef::dm
 static_assert(offsetof(MsgEntityTypeDef, flightModel) == 196u, "MsgEntityTypeDef::flightModel offset changed");
 static_assert(offsetof(MsgEntityTypeDef, payloadMassKg) == 260u, "MsgEntityTypeDef::payloadMassKg offset changed");
 static_assert(offsetof(MsgEntityTypeDef, payloadCd0) == 264u, "MsgEntityTypeDef::payloadCd0 offset changed");
+
+// One mounted content pack, reported by the client in MsgConnectRequest's trailing manifest (#872 wire
+// half). The server compares it against its required-pack set (Phase 4: warn-only). contentHash is
+// reserved (zero-filled) until a pack-hashing pass lands, so adding hash enforcement is a no-wire-change
+// step. Fixed-size null-terminated char fields; parsed via fl::readRecordAt (WireCodec.h).
+struct PackManifestEntry {
+    char id[64]{};             // null-terminated pack id, e.g. "fl-base"
+    char version[32]{};        // null-terminated version string, e.g. "0.3.1"
+    uint8_t contentHash[32]{}; // reserved: SHA-256-sized pack content hash; all-zero = not computed
+}; // 128 bytes, align 1
+static_assert(sizeof(PackManifestEntry) == 128u, "PackManifestEntry wire size changed");
+static_assert(alignof(PackManifestEntry) == 1u, "PackManifestEntry alignment changed");
+static_assert(offsetof(PackManifestEntry, version) == 64u, "PackManifestEntry::version offset changed");
+static_assert(offsetof(PackManifestEntry, contentHash) == 96u, "PackManifestEntry::contentHash offset changed");
+
+// Reliable, client->server: the FIRST packet the client sends on connect (#853). Replaces the old
+// "client sends nothing; server unilaterally spawns" flow. The server replies MsgConnectAck (granting a
+// role + assigning an entity) or MsgConnectRefusal. Followed in the same packet by packCount x
+// PackManifestEntry records, then an optional TLV ext block (ExtTag 0x0500-0x05FF; reserved for the
+// RFC #871 entitlement token). Unpacked/naturally aligned; parse via fl::readMsg + fl::readRecordAt.
+struct MsgConnectRequest {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::ConnectRequest)};
+    uint8_t requestedRole{0}; // PeerRole the client asks to join as (server may clamp/deny)
+    uint16_t protocolVersion{kProtocolVersion};
+    uint16_t packCount{0};          // number of trailing PackManifestEntry records
+    uint16_t reserved{0};           // pad to 8; future join flags
+    char requestedEntityType[64]{}; // null-terminated type id to fly; empty = server default (#834)
+}; // 72 bytes, align 2 (multiple of alignof(PackManifestEntry)=1 so trailing records stay aligned)
+static_assert(sizeof(MsgConnectRequest) == 72u, "MsgConnectRequest wire size changed");
+static_assert(alignof(MsgConnectRequest) == 2u, "MsgConnectRequest alignment changed");
+static_assert(offsetof(MsgConnectRequest, protocolVersion) == 2u, "MsgConnectRequest::protocolVersion offset changed");
+static_assert(offsetof(MsgConnectRequest, packCount) == 4u, "MsgConnectRequest::packCount offset changed");
+static_assert(offsetof(MsgConnectRequest, requestedEntityType) == 8u,
+              "MsgConnectRequest::requestedEntityType offset changed");
 
 // Unreliable, unicast per-peer every sim tick.
 // Body layout after this 24-byte header (#725 shared-origin encode-once):
@@ -584,6 +647,7 @@ static constexpr uint8_t kGameModeSandbox = 0x04u;
 //   0x0200–0x02FF  MsgConnectAck extensions (reserved for future use)
 //   0x0300–0x03FF  MsgClientInput extensions (reserved for future use)
 //   0x0400–0x04FF  MsgWeatherState extensions (reserved for future use)
+//   0x0500–0x05FF  MsgConnectRequest extensions (reserved: RFC #871 entitlement token block)
 //   Values outside defined ranges are reserved and must not be sent.
 enum class ExtTag : uint16_t {
     SnapshotPeerCount = 0x0100,   // uint16_t: active connected peer count at snapshot time

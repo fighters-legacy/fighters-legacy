@@ -206,6 +206,15 @@ const std::vector<uint8_t>* findConnectAck(const TrackingNetwork& net) {
     return nullptr;
 }
 
+// Drive the #853 connect handshake for a pilot: onConnect (MsgHello) + the client's MsgConnectRequest,
+// which is what now triggers the spawn + ConnectAck the parity tests parse.
+void connectPilot(WorldBroadcaster& b, uint32_t peerId) {
+    b.onConnect(peerId);
+    MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(PeerRole::Pilot);
+    b.onReceive(peerId, &req, sizeof(req));
+}
+
 } // namespace
 
 TEST_CASE("MsgEntityTypeDef carries the flight model asset name to the client", "[prediction_parity]") {
@@ -218,7 +227,7 @@ TEST_CASE("MsgEntityTypeDef carries the flight model asset name to the client", 
     serverRegistry.registerType(def);
 
     WorldBroadcaster broadcaster(em, serverRegistry, net, log);
-    broadcaster.onConnect(0u);
+    connectPilot(broadcaster, 0u);
 
     const std::vector<uint8_t>* ack = findConnectAck(net);
     REQUIRE(ack != nullptr);
@@ -241,7 +250,7 @@ TEST_CASE("client and server resolve the same flight model for the same entity t
     auto assets = makeAssets(log);
 
     WorldBroadcaster broadcaster(em, serverRegistry, net, log);
-    broadcaster.onConnect(0u);
+    connectPilot(broadcaster, 0u);
     const std::vector<uint8_t>* ack = findConnectAck(net);
     REQUIRE(ack != nullptr);
 
@@ -285,7 +294,7 @@ TEST_CASE("client and server integrators do not diverge over 600 ticks", "[predi
     auto assets = makeAssets(log);
 
     WorldBroadcaster broadcaster(em, serverRegistry, net, log);
-    broadcaster.onConnect(0u);
+    connectPilot(broadcaster, 0u);
     const std::vector<uint8_t>* ack = findConnectAck(net);
     REQUIRE(ack != nullptr);
 
@@ -379,7 +388,7 @@ TEST_CASE("a non-zero payload reaches BOTH integrators and they still agree", "[
     WorldBroadcaster broadcaster(em, serverRegistry, net, log);
     broadcaster.setPayloadResolver(
         [&weapons, &log](const EntityDef& d) -> PayloadEffect { return defaultPayload(d, weapons, log); });
-    broadcaster.onConnect(0u);
+    connectPilot(broadcaster, 0u);
 
     const std::vector<uint8_t>* ack = findConnectAck(net);
     REQUIRE(ack != nullptr);

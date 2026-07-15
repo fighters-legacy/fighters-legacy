@@ -15,7 +15,9 @@
 
 TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game_protocol]") {
     CHECK(sizeof(fl::MsgHello) == 4u);
-    CHECK(sizeof(fl::MsgConnectAck) == 16u);          // extended: +assignedEntityIdx/Gen, +planetRadiusKm
+    CHECK(sizeof(fl::MsgConnectAck) == 20u);          // #853: +grantedRole @16 (still record-aligned)
+    CHECK(sizeof(fl::MsgConnectRequest) == 72u);      // #853: role + entity type + trailing pack manifest
+    CHECK(sizeof(fl::PackManifestEntry) == 128u);     // #872 wire half: id + version + reserved hash
     CHECK(sizeof(fl::MsgEntityTypeDef) == 268u);      // 4 + 64 + 64 + 64 + 64 + 4 + 4 (#811 tail-append)
     CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 24u); // #725: origin table + record stream follow the header
     CHECK(sizeof(fl::MsgClientInput) == 56u);         // #625: +selectedStation @48 + explicit reserve
@@ -25,6 +27,64 @@ TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game
     CHECK(sizeof(fl::MsgAdminResponseChunk) == 512u);
     CHECK(sizeof(fl::MsgMotdHeader) == 4u);
     CHECK(sizeof(fl::MsgConnectRefusal) == 64u);
+}
+
+TEST_CASE("GameProtocol: MsgId space reserves 0x00-0x1F for ENet, 0x20+ for raw UDP (#853)", "[game_protocol]") {
+    // The non-ENet boundary was raised from 0x10 to 0x20 to free an ENet id for ConnectRequest.
+    CHECK(static_cast<uint8_t>(fl::MsgId::ConnectRequest) == 0x11u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::LanBeacon) == 0x20u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::CombatEvent) < 0x20u);
+}
+
+TEST_CASE("GameProtocol: MsgConnectRequest field offsets + role validation (#853)", "[game_protocol]") {
+    CHECK(offsetof(fl::MsgConnectRequest, protocolVersion) == 2u);
+    CHECK(offsetof(fl::MsgConnectRequest, packCount) == 4u);
+    CHECK(offsetof(fl::MsgConnectRequest, requestedEntityType) == 8u);
+    CHECK(offsetof(fl::MsgConnectAck, grantedRole) == 16u);
+    CHECK(offsetof(fl::PackManifestEntry, version) == 64u);
+    CHECK(offsetof(fl::PackManifestEntry, contentHash) == 96u);
+
+    CHECK(fl::isPeerRoleOrdinal(static_cast<uint8_t>(fl::PeerRole::Pilot)));
+    CHECK(fl::isPeerRoleOrdinal(static_cast<uint8_t>(fl::PeerRole::Observer)));
+    CHECK_FALSE(fl::isPeerRoleOrdinal(2u)); // out-of-grammar byte from an untrusted client
+    CHECK_FALSE(fl::isPeerRoleOrdinal(255u));
+}
+
+TEST_CASE("GameProtocol: MsgConnectRequest round-trips role, entity type, and trailing manifest (#853/#872)",
+          "[game_protocol]") {
+    fl::MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Observer);
+    req.packCount = 2;
+    std::snprintf(req.requestedEntityType, sizeof(req.requestedEntityType), "fl-base:f5e");
+
+    fl::PackManifestEntry a{};
+    std::snprintf(a.id, sizeof(a.id), "fl-base");
+    std::snprintf(a.version, sizeof(a.version), "0.3.1");
+    fl::PackManifestEntry b{};
+    std::snprintf(b.id, sizeof(b.id), "theater-pack");
+    std::snprintf(b.version, sizeof(b.version), "1.0.0");
+
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, req);
+    fl::appendMsg(buf, a);
+    fl::appendMsg(buf, b);
+    REQUIRE(buf.size() == sizeof(req) + 2u * sizeof(fl::PackManifestEntry));
+
+    fl::MsgConnectRequest outReq{};
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), outReq));
+    CHECK(outReq.requestedRole == static_cast<uint8_t>(fl::PeerRole::Observer));
+    CHECK(outReq.packCount == 2u);
+    CHECK(std::string(outReq.requestedEntityType) == "fl-base:f5e");
+
+    std::size_t off = sizeof(req);
+    fl::PackManifestEntry outA{};
+    REQUIRE(fl::readRecordAt(buf.data(), buf.size(), off, outA));
+    CHECK(std::string(outA.id) == "fl-base");
+    CHECK(std::string(outA.version) == "0.3.1");
+    off += sizeof(fl::PackManifestEntry);
+    fl::PackManifestEntry outB{};
+    REQUIRE(fl::readRecordAt(buf.data(), buf.size(), off, outB));
+    CHECK(std::string(outB.id) == "theater-pack");
 }
 
 TEST_CASE("GameProtocol: MsgEntityTypeDef field offsets (#811 tail-append is additive)", "[game_protocol]") {

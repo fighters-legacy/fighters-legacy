@@ -6,6 +6,7 @@
 #include "RenderTypes.h"
 #include "SessionStatus.h"
 #include "WingmanMenu.h"
+#include "net/GameProtocol.h"      // PeerRole, PackManifestEntry (connect handshake #853)
 #include "render/RenderSnapshot.h" // EntityRenderEntry (stored by value in the retention cache)
 
 #include <algorithm>
@@ -62,6 +63,22 @@ struct ClientNetEventHandler : INetworkEventHandler {
 
     uint32_t assignedEntityIdx{0};
     uint32_t assignedEntityGen{0};
+
+    // Connect handshake inputs (#853). Set by Game::startGame() before net.connect(); sent as
+    // MsgConnectRequest from onConnect. Defaults: pilot, server-chosen aircraft, no mounted packs.
+    PeerRole requestedRole{PeerRole::Pilot};
+    std::string requestedEntityType;             // empty = let the server pick its default (#834)
+    std::vector<PackManifestEntry> packManifest; // client's mounted content packs (#872 wire half)
+
+    // Role the server GRANTED in MsgConnectAck (#857) — may differ from requestedRole. Pilot until the
+    // ack arrives. gotConnectAck() distinguishes an observer's valid (entity-less) ack from a pre-ack
+    // rejection, which the old assignedEntityIdx==0 sentinel could not.
+    PeerRole grantedRole() const noexcept {
+        return m_grantedRole;
+    }
+    bool gotConnectAck() const noexcept {
+        return m_gotConnectAck;
+    }
 
     ClientTickAlpha tickAlpha;
 
@@ -150,6 +167,8 @@ struct ClientNetEventHandler : INetworkEventHandler {
     void signalFailure(SessionFailure f);
 
     bool m_connected{false};
+    PeerRole m_grantedRole{PeerRole::Pilot}; // role granted by MsgConnectAck (#857)
+    bool m_gotConnectAck{false};             // true once a MsgConnectAck arrives; "was I admitted?" (#853)
     float m_planetRadiusKm{6371.f};
     SessionCombatStats m_sessionStats{};        // #626 — fed by CombatEvent Stats records
     uint16_t m_nextReqId{1};                    // next reqId to stamp on outgoing MsgAdminCommand

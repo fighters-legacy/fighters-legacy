@@ -141,6 +141,13 @@ RejectInfo rejectInfoFor(fl::ConnectRefusalCode code) {
         return {"Too many connections from your address.", "too many connections from this address", LogLevel::Info};
     case C::AdminLockout:
         return {"Access denied.", "admin auth lockout active", LogLevel::Warn};
+    case C::RoleDenied:
+        return {"The server denied the requested role.", "requested role not allowed", LogLevel::Info};
+    case C::MissingRequiredPack:
+        return {"You are missing a content pack this server requires.", "missing a required content pack",
+                LogLevel::Info};
+    case C::EntitlementRequired:
+        return {"This server requires premium content you do not own.", "entitlement required", LogLevel::Info};
     case C::Generic:
         break;
     }
@@ -1445,10 +1452,11 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         }
     }
 
-    // Per-IP concurrent connection limit.
+    // Per-IP concurrent connection limit. Count all connected peers (m_peerInputs), including observers
+    // and not-yet-admitted peers, not just spawned pilots (#853 defers the spawn past onConnect).
     if (m_maxConnectionsPerIp > 0 && !ip.empty()) {
         int count = 0;
-        for (const auto& [pid, eid] : m_peerEntities)
+        for (const auto& [pid, pin] : m_peerInputs)
             if (extractIp(m_net.getPeerAddress(pid)) == ip)
                 ++count;
         if (count >= m_maxConnectionsPerIp) {
@@ -1467,9 +1475,21 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     std::snprintf(msg, sizeof(msg), "peer %u connected", peerId);
     m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
 
+    // Version handshake. The client checks this and disconnects on mismatch.
     MsgHello hello;
     m_net.send(peerId, &hello, sizeof(hello), /*reliable=*/true);
 
+    // Create the peer's input slot now, BEFORE admission (#853). A peer that connects but never sends a
+    // MsgConnectRequest keeps this slot (so idle-timeout covers it) but has no entity, no role, and no
+    // snapshot delivery. Admission — spawn, ConnectAck, MOTD, flight — happens in handleConnectRequest
+    // when the request arrives, replacing the old "server unilaterally spawns on connect" flow.
+    m_peerInputs[peerId] = {};
+    m_peerInputs[peerId].lastActivityTick = m_currentTick;
+
+    m_activePeerCount.fetch_add(1, std::memory_order_relaxed);
+}
+
+EntityId WorldBroadcaster::admitPilot(uint32_t peerId, const std::string& entityType) {
     EntityTransform t{};
     t.quat[3] = 1.0f; // identity quaternion (w component; XYZW layout)
     if (!m_spawnPoints.empty()) {
@@ -1484,11 +1504,9 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         t.pos[2] = 60.0; // 60 m ahead of origin so peer doesn't overlap sandbox entity 0
         t.pos[1] = static_cast<double>(m_groundElevation.load(std::memory_order_relaxed)) + kSpawnAGL;
     }
-    EntityId id = m_entityManager.spawn("builtin:debug-entity", t, peerId);
+    EntityId id = m_entityManager.spawn(entityType.c_str(), t, peerId);
     if (id.valid()) {
         m_peerEntities[peerId] = id;
-        m_peerInputs[peerId] = {};
-        m_peerInputs[peerId].lastActivityTick = m_currentTick;
 
         // Stamp the player's faction. Without a non-zero faction the player is NEUTRAL, and
         // fl::areFactionsHostile gives a neutral entity no enemies at all — so nothing would be
@@ -1508,7 +1526,40 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         addControlledEntity(id, std::make_unique<PeerController>(&m_peerInputs[peerId]), std::move(model), 0.0f,
                             /*decimatable=*/false);
     }
-    sendConnectAck(peerId, id);
+    return id;
+}
+
+void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, std::size_t size) {
+    if (size < sizeof(MsgConnectRequest))
+        return; // truncated; ignore
+    MsgConnectRequest req;
+    std::memcpy(&req, data, sizeof(req));
+    req.requestedEntityType[sizeof(req.requestedEntityType) - 1] = '\0'; // untrusted char[]: force-terminate
+
+    if (req.protocolVersion != kProtocolVersion) {
+        // The client also checks MsgHello and disconnects; refuse here as a backstop.
+        rejectConnection(peerId, extractIp(m_net.getPeerAddress(peerId)), ConnectRefusalCode::Generic);
+        return;
+    }
+
+    PeerInputState& pin = m_peerInputs[peerId];
+    if (pin.handshakeComplete) {
+        // A peer sends exactly one request; ignore repeats so it can't re-spawn or churn its role.
+        m_logger.log(LogLevel::Warn, __FILE__, __LINE__, "duplicate MsgConnectRequest ignored");
+        return;
+    }
+
+    // Pilot-only in #853. Entity-type selection (#834), observer role (#857) and required-pack policy
+    // (#872) layer onto this handler in their own commits.
+    const PeerRole grantedRole = PeerRole::Pilot;
+    const EntityId assigned = admitPilot(peerId, "builtin:debug-entity");
+
+    pin.role = grantedRole;
+    pin.handshakeComplete = true;
+
+    sendConnectAck(peerId, assigned, grantedRole);
+
+    // MOTD, unicast once on admission (moved from onConnect).
     if (!m_motd.empty()) {
         const std::size_t textLen = std::min(m_motd.size(), kMaxMotdBytes);
         MsgMotdHeader mhdr{};
@@ -1524,8 +1575,8 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     // Form this peer's flight (#610). The spawner lives in fl-server (it needs engine-ai to build
     // controllers); with no spawner installed the peer simply flies alone, which is exactly the
     // pre-#610 behavior.
-    if (id.valid() && m_flightSpawner) {
-        const fl::FormationId fid = m_flightSpawner(peerId, id);
+    if (assigned.valid() && m_flightSpawner) {
+        const fl::FormationId fid = m_flightSpawner(peerId, assigned);
         if (const fl::Formation* f = m_formations.get(fid)) {
             // Unsolicited check-in: this is how the client learns it HAS a flight, how big it is, and
             // what id to address it by. MsgConnectAck cannot carry it — it is immediately followed by
@@ -1539,8 +1590,42 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
             m_net.send(peerId, &ack, sizeof(ack), /*reliable=*/true);
         }
     }
+}
 
-    m_activePeerCount.fetch_add(1, std::memory_order_relaxed);
+void WorldBroadcaster::despawnPeerEntity(uint32_t peerId) {
+    auto it = m_peerEntities.find(peerId);
+    if (it == m_peerEntities.end())
+        return; // observer or not-yet-admitted peer — nothing to tear down
+
+    // Tear down this peer's flight (#610) before its own entity goes away.
+    //
+    // The formation the peer ANCHORED (their own flight) is destroyed with its AI members: those
+    // aircraft exist to fly on that player, and leaving them holding station on a dead anchor
+    // would leak an entity and a controller per disconnect. Formations the peer merely COMMANDED
+    // from outside (an AWACS's AI flights) survive — the aircraft are still flying, and the game
+    // master can still order them; releasePeer just clears the command role.
+    const fl::FormationId owned = m_formations.formationAnchoredOn(it->second);
+    if (const fl::Formation* f = m_formations.get(owned)) {
+        const std::vector<fl::FormationMember> members = f->members;
+        for (const fl::FormationMember& m : members) {
+            if (m.isAi()) {
+                m_controlledEntities.erase(m.id.index);
+                m_sensorSystem.removeObserver(m.id.index);
+                m_entityManager.kill(m.id);
+            }
+        }
+        m_formations.destroy(owned);
+    }
+    // Remove the peer's own aircraft from any formation it was flying IN as a member (a human
+    // wingman in someone else's flight), and drop its command role everywhere.
+    m_formations.removeEntity(it->second);
+    m_formations.releasePeer(peerId);
+
+    // Tear down the controller (which points into m_peerInputs) before the caller may erase the input slot.
+    m_controlledEntities.erase(it->second.index);
+    m_sensorSystem.removeObserver(it->second.index);
+    m_entityManager.kill(it->second);
+    m_peerEntities.erase(it);
 }
 
 void WorldBroadcaster::onDisconnect(uint32_t peerId) {
@@ -1548,38 +1633,7 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     std::snprintf(msg, sizeof(msg), "peer %u disconnected", peerId);
     m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
 
-    auto it = m_peerEntities.find(peerId);
-    if (it != m_peerEntities.end()) {
-        // Tear down this peer's flight (#610) before its own entity goes away.
-        //
-        // The formation the peer ANCHORED (their own flight) is destroyed with its AI members: those
-        // aircraft exist to fly on that player, and leaving them holding station on a dead anchor
-        // would leak an entity and a controller per disconnect. Formations the peer merely COMMANDED
-        // from outside (an AWACS's AI flights) survive — the aircraft are still flying, and the game
-        // master can still order them; releasePeer just clears the command role.
-        const fl::FormationId owned = m_formations.formationAnchoredOn(it->second);
-        if (const fl::Formation* f = m_formations.get(owned)) {
-            const std::vector<fl::FormationMember> members = f->members;
-            for (const fl::FormationMember& m : members) {
-                if (m.isAi()) {
-                    m_controlledEntities.erase(m.id.index);
-                    m_sensorSystem.removeObserver(m.id.index);
-                    m_entityManager.kill(m.id);
-                }
-            }
-            m_formations.destroy(owned);
-        }
-        // Remove the peer's own aircraft from any formation it was flying IN as a member (a human
-        // wingman in someone else's flight), and drop its command role everywhere.
-        m_formations.removeEntity(it->second);
-        m_formations.releasePeer(peerId);
-
-        // Tear down the controller (which points into m_peerInputs) before erasing the input slot.
-        m_controlledEntities.erase(it->second.index);
-        m_sensorSystem.removeObserver(it->second.index);
-        m_entityManager.kill(it->second);
-        m_peerEntities.erase(it);
-    }
+    despawnPeerEntity(peerId); // no-op for an observer / not-yet-admitted peer
     m_peerInputs.erase(peerId);
     m_peerFloodState.erase(peerId);
     m_peerKnownGens.erase(peerId);
@@ -2166,6 +2220,11 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         return;
     uint8_t msgId;
     std::memcpy(&msgId, data, 1);
+
+    if (msgId == static_cast<uint8_t>(MsgId::ConnectRequest)) {
+        handleConnectRequest(peerId, data, size);
+        return;
+    }
 
     if (msgId == static_cast<uint8_t>(MsgId::ClientInput)) {
         if (size < sizeof(MsgClientInput))
@@ -2831,7 +2890,7 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
     std::memcpy(state.transform.quat, fs.quat, 4 * sizeof(float));
 }
 
-void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned) {
+void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRole grantedRole) {
     const uint32_t typeCount = m_registry.typeCount();
 
     std::vector<uint8_t> buf;
@@ -2844,6 +2903,7 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned) {
     ack.assignedEntityIdx = assigned.index;
     ack.assignedEntityGen = assigned.generation;
     ack.planetRadiusKm = m_planetRadiusKm;
+    ack.grantedRole = static_cast<uint8_t>(grantedRole);
     appendMsg(buf, ack);
 
     for (uint32_t i = 0; i < typeCount; ++i) {

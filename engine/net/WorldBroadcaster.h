@@ -98,6 +98,15 @@ struct PeerInputState {
     uint32_t lastWingmanSeq{0};                                    // dup/reorder guard
     bool hasWingmanSeq{false};         // false until the first order (a reconnect restarts the counter)
     bool wingmanRateLimitAcked{false}; // one RateLimited ack per window, never one per packet
+
+    // Connect handshake (#853/#857). Set when MsgConnectRequest is processed. Before that a connected
+    // peer has an input slot (so idle-timeout covers it) but no entity, no role, and no snapshot
+    // delivery -- it is not admitted until it sends a request.
+    PeerRole role{PeerRole::Pilot};
+    bool handshakeComplete{false}; // false until MsgConnectRequest processed; guards duplicate requests
+    // Interest center for an ENTITY-LESS observer (#857): a pilot centers interest on its aircraft, an
+    // observer on this point. Placeholder seam for #858 (camera-position interest); unused for pilots.
+    glm::dvec3 interestCenter{0.0, 0.0, 0.0};
 };
 
 // Snapshot of a connected peer's state, delivered by forEachPeer. The struct form makes future
@@ -685,7 +694,19 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     }
 
   private:
-    void sendConnectAck(uint32_t peerId, EntityId assigned);
+    // Handle MsgConnectRequest (#853): admit the peer (spawn its entity + form its flight), reply
+    // MsgConnectAck, and send the MOTD. Replaces the old "server spawns on connect" flow. Sim-thread
+    // only (called from onReceive).
+    void handleConnectRequest(uint32_t peerId, const void* data, std::size_t size);
+    // Spawn a pilot peer's entity of `entityType`, register its PeerController, stamp faction, and form
+    // its flight. Returns the assigned EntityId (invalid on spawn failure). Extracted from the old
+    // onConnect. Sim-thread.
+    EntityId admitPilot(uint32_t peerId, const std::string& entityType);
+    // Tear down a peer's entity: its owned formation + AI members, its controller, sensor observer, and
+    // the entity itself; erase from m_peerEntities. Does NOT touch m_peerInputs (the peer keeps its
+    // slot). Shared by onDisconnect (and setPeerRole once #857 lands). Sim-thread.
+    void despawnPeerEntity(uint32_t peerId);
+    void sendConnectAck(uint32_t peerId, EntityId assigned, PeerRole grantedRole);
     void sendConnectRefusal(uint32_t peerId, ConnectRefusalCode code, const char* reason);
     // Send a complete admin command result over ENet. Short results (<=kAdminResponseFastPathMax
     // chars) go as a single MsgAdminResponse; longer results are streamed as MsgAdminResponseChunk
