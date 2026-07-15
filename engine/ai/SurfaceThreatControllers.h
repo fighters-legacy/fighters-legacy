@@ -27,7 +27,9 @@ class SamEngagementController : public fl::IEntityController {
                             const fl::AiTickContext& ctx = {}) override;
 
   private:
-    const fl::EntityManager& m_entityManager;
+    // Held for symmetry with AaaFireController (and a future lead-the-target enhancement); the SAM
+    // itself engages purely off the contact table, so the reference is currently unused.
+    [[maybe_unused]] const fl::EntityManager& m_entityManager;
     float m_engageRangeM;
     float m_coneHalfRad;
     uint64_t m_fireIntervalTicks;
