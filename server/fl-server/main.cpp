@@ -63,6 +63,7 @@
 #include <perf/ServerTickReport.h>
 #include <render/BuiltinGeometry.h>
 #include <render/TerrainStreamer.h>
+#include <script/BuiltinAiScripts.h>
 #include <script/LuaController.h>
 #include <stdfs/StdAsyncFilesystem.h>
 #include <stdfs/StdFilesystem.h>
@@ -824,6 +825,14 @@ int main(int argc, char** argv) {
     // can resolve their scripts) and reused later by the ENet admin `spawn --ai lua` path. Safe to read
     // from any thread — it is never mutated after construction, before gameLoop.start().
     std::unordered_map<std::string, std::pair<std::string, std::string>> aiScriptCache;
+    // Builtin scripts first (#866): `--ai lua builtin:fighter` and an EntityDef aiScriptAsset =
+    // "builtin:fighter" resolve with no pack mounted. Root "" — a builtin uses no require().
+    for (std::string_view id : fl::builtinAiScriptIds()) {
+        const std::string_view src = fl::builtinAiScript(id);
+        if (!src.empty())
+            aiScriptCache.emplace(std::string(id),
+                                  std::pair<std::string, std::string>{std::string(src), std::string{}});
+    }
     for (const auto& name : assets.listAssets(AssetType::AIScript)) {
         auto script = assets.loadAIScript(name.c_str());
         if (!script || script->bytes.empty())

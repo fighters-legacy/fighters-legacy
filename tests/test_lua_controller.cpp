@@ -4,6 +4,7 @@
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
+#include "script/BuiltinAiScripts.h"
 #include "script/LuaController.h"
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
@@ -650,4 +651,51 @@ TEST_CASE("LuaController: an out-of-range weapon_station is ignored, not wrapped
     REQUIRE(c->isValid());
     const fl::ControlInput ctrl = c->sample(makeState(), 0, 1.0 / 60.0);
     CHECK(ctrl.station == 255u); // a nonsense selection must not become a real one
+}
+
+// --- builtin AI scripts (#866) -------------------------------------------------------------------
+
+TEST_CASE("builtinAiScript resolves builtin:fighter and rejects the unknown (#866)") {
+    CHECK_FALSE(fl::builtinAiScript("builtin:fighter").empty());
+    CHECK(fl::builtinAiScript("builtin:nope").empty());
+    // The id list is what a frontend seeds its AI-script cache from.
+    bool sawFighter = false;
+    for (std::string_view id : fl::builtinAiScriptIds())
+        if (id == "builtin:fighter")
+            sawFighter = true;
+    CHECK(sawFighter);
+}
+
+TEST_CASE("the builtin fighter script compiles and drives an entity (#866)") {
+    auto c = makeCtrl(std::string(fl::builtinAiScript("builtin:fighter")).c_str());
+    REQUIRE(c->isValid());
+    // No contacts: it patrols (a valid, non-crashing control), exercising the sandbox path zero-pack.
+    const auto ctrl = c->sample(makeState(0.0, 3000.0, 0.0), 100, 1.0 / 60.0, fl::AiTickContext{});
+    CHECK(ctrl.throttle > 0.f); // flying its orbit
+}
+
+TEST_CASE("the builtin fighter senses via detected_contacts and fires the gun in parameters (#866)") {
+    // A hostile (faction 2 vs the ownship's 0) 700 m dead ahead on the nose, reacted and fresh:
+    // inside gun range and cone, so the honest-sensing script takes the guns snapshot.
+    fl::sensor::Contact bandit{};
+    bandit.id = {42, 1};
+    bandit.factionIndex = 2;
+    bandit.state = fl::sensor::ContactState::Locked;
+    bandit.lastKnownPos[0] = 700.0;
+    bandit.lastKnownPos[1] = 3000.0;
+    bandit.lastKnownPos[2] = 0.0;
+    bandit.lastSeenTick = 100;
+    bandit.firstDetectedTick = 40;
+    bandit.reacted = true;
+    fl::sensor::ContactTable contacts;
+    contacts.contacts.push_back(bandit);
+
+    auto c = makeCtrl(std::string(fl::builtinAiScript("builtin:fighter")).c_str());
+    REQUIRE(c->isValid());
+
+    fl::AiTickContext ctx{};
+    ctx.contacts = &contacts;
+    const auto ctrl = c->sample(makeState(0.0, 3000.0, 0.0), 100, 1.0 / 60.0, ctx);
+    CHECK(ctrl.trigger);       // guns hot on a boresight target in range
+    CHECK(ctrl.station == 0u); // the cannon station (slot 0 of builtin:debug-entity)
 }
