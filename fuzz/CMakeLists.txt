@@ -80,12 +80,15 @@ target_include_directories(fuzz_server_msg PRIVATE "${CMAKE_SOURCE_DIR}/tests")
 # ClientNetEventHandler::onReceive — the widest untrusted-input surface on the client. The handler
 # lives in the SDL-gated game exe, so compile its .cpp directly (mirrors tests/test_client_net_event_handler).
 fl_add_fuzzer(fuzz_client_msg)
-# ClientNetEventHandler dispatches MsgWingmanAck into the radio menu (#610), so the menu comes with it.
+# ClientNetEventHandler dispatches MsgWingmanAck into the radio menu (#610), routes the effects TLV
+# through ClientEffectRouter (#625), and the router drives own-ship haptics (#631) — all come with it.
 target_sources(fuzz_client_msg PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp")
 target_link_libraries(fuzz_client_msg PRIVATE engine-net engine-render engine-entity engine-console engine-weather
-                                              platform-hal)
+                                              engine-audio engine-config platform-hal)
 target_include_directories(fuzz_client_msg PRIVATE "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
                                                    "${CMAKE_SOURCE_DIR}/tests")
 

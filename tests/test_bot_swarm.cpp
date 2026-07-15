@@ -782,3 +782,38 @@ TEST_CASE("the report records the transport actually spoken, normalizing the ene
     const SwarmReport enet = buildReport(cfg, clients, 1.0, {}, 1);
     CHECK(enet.transport == "enet");
 }
+
+TEST_CASE("weapons pattern duty-cycles fire and staggers across the swarm", "[bot_swarm][pattern]") {
+    WeaponsPattern p;
+
+    // Over a window, the gun bit is set roughly half the time (a 50% duty cycle) — not never, not
+    // always — and store releases fire in brief pulses.
+    int gunSet = 0, storeSet = 0, samples = 0;
+    for (int i = 0; i < 600; ++i) {
+        const double t = static_cast<double>(i) * 0.1; // 60 s at 10 Hz
+        const BotControl c = p.sample(t, 3u);
+        if (c.buttons & 0x01u)
+            ++gunSet;
+        if (c.buttons & 0x04u)
+            ++storeSet;
+        ++samples;
+        CHECK(c.throttle >= 0.f);
+        CHECK(c.throttle <= 1.f);
+    }
+    CHECK(gunSet > samples / 4);       // fires often...
+    CHECK(gunSet < (samples * 3) / 4); // ...but not constantly
+    CHECK(storeSet > 0);               // stores do release
+    CHECK(storeSet < samples / 5);     // ...only in brief pulses
+
+    // Staggered: two different clients do not fire their store on the same schedule.
+    bool differ = false;
+    for (int i = 0; i < 100 && !differ; ++i) {
+        const double t = static_cast<double>(i) * 0.05;
+        if ((p.sample(t, 0u).buttons & 0x04u) != (p.sample(t, 40u).buttons & 0x04u))
+            differ = true;
+    }
+    CHECK(differ);
+
+    // Deterministic: same (t, client) → same output.
+    CHECK(p.sample(1.23, 7u).buttons == p.sample(1.23, 7u).buttons);
+}
