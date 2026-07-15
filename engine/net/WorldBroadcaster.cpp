@@ -356,6 +356,7 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setOperatorPassword(cfg.operatorPassword);
     m_playerEntityType = cfg.playerEntityType; // pilot spawn default (#834); applyConfig runs pre-start
     m_allowObservers = cfg.allowObservers;     // #857; applyConfig runs pre-start
+    m_requiredPacks = cfg.requiredPacks;       // #872; applyConfig runs pre-start
     setIdleTimeout(cfg.idleTimeoutS);
     setDrawDistance(cfg.drawDistanceKm);
     setSpatialCellSize(cfg.spatialCellSizeM); // after setDrawDistance: auto mode reads m_drawDistanceM
@@ -1586,6 +1587,30 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         // A peer sends exactly one request; ignore repeats so it can't re-spawn or churn its role.
         m_logger.log(LogLevel::Warn, __FILE__, __LINE__, "duplicate MsgConnectRequest ignored");
         return;
+    }
+
+    // Required-pack policy (#872 wire half; WARN-ONLY in Phase 4). Build the set of client pack ids from
+    // the trailing manifest and warn for each required pack the client is missing. Refuse /
+    // allow-placeholder modes, version/hash matching, and the client "missing content" UX land with the
+    // full #872 policy (Phase 5); MsgConnectRefusal(MissingRequiredPack) is defined but unused here.
+    if (!m_requiredPacks.empty()) {
+        std::unordered_set<std::string> clientPacks;
+        std::size_t off = sizeof(MsgConnectRequest);
+        for (uint16_t i = 0; i < req.packCount; ++i) {
+            PackManifestEntry pe;
+            if (!readRecordAt(data, size, off, pe))
+                break; // truncated manifest — treat the rest as absent
+            off += sizeof(PackManifestEntry);
+            pe.id[sizeof(pe.id) - 1] = '\0'; // untrusted char[]: force-terminate
+            clientPacks.insert(pe.id);
+        }
+        for (const std::string& reqd : m_requiredPacks) {
+            if (clientPacks.find(reqd) == clientPacks.end()) {
+                char msg[128];
+                std::snprintf(msg, sizeof(msg), "peer is missing required content pack '%.48s'", reqd.c_str());
+                m_logger.log(LogLevel::Warn, __FILE__, __LINE__, msg);
+            }
+        }
     }
 
     // Grant a role (#857). An out-of-grammar role byte is refused; an observer is refused when the

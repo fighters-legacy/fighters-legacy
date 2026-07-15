@@ -57,6 +57,7 @@ static const char* kDefaultToml =
     "\n"
     "[mods]\n"
     "stack = []\n"
+    "# required = [\"fl-base\"]           # content packs a client should have mounted; missing = warn (#872)\n"
     "\n"
     "[world]\n"
     "save_path = \"world.sav\"\n"
@@ -381,6 +382,11 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             for (auto& elem : *arr)
                 if (auto s = elem.value<std::string>())
                     cfg.modStack.push_back(std::move(*s));
+        }
+        if (auto* arr = tbl["mods"]["required"].as_array()) { // #872 warn-only required-pack ids
+            for (auto& elem : *arr)
+                if (auto s = elem.value<std::string>())
+                    cfg.requiredPacks.push_back(std::move(*s));
         }
 
         // [world]

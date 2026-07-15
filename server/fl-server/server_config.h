@@ -31,6 +31,10 @@ struct ServerConfig {
 
     // [mods]  — Phase 2: parsed and logged; ModLoader integration pending
     std::vector<std::string> modStack;
+    // Content packs (by id) a connecting client is expected to have mounted (#872). Phase 4 policy is
+    // warn-only: a client missing one is logged, not refused. Version/hash matching + refuse/allow modes
+    // land with the full #872 policy issue.
+    std::vector<std::string> requiredPacks;
 
     // [world]  — Phase 2: active only with --persistent flag
     bool persistent = false;

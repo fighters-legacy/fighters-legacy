@@ -907,6 +907,17 @@ void Game::startGame() {
         d.session.clientHandler->requestedEntityType = d.services.requestedEntityType;
         d.session.clientHandler->requestedRole =
             d.services.requestObserver ? fl::PeerRole::Observer : fl::PeerRole::Pilot;
+        // Report the client's mounted content packs so the server can enforce its required-pack policy
+        // (#872 wire half). Warn-only server-side for now; content hashing is a later addition.
+        d.session.clientHandler->packManifest.clear();
+        if (d.services.assets) {
+            for (const auto& p : d.services.assets->packManifest()) {
+                fl::PackManifestEntry e{};
+                std::snprintf(e.id, sizeof(e.id), "%s", p.id.c_str());
+                std::snprintf(e.version, sizeof(e.version), "%s", p.version.c_str());
+                d.session.clientHandler->packManifest.push_back(e);
+            }
+        }
         d.session.clientNet->setEventHandler(d.session.clientHandler.get());
 
         if (!isMultiplayer) {

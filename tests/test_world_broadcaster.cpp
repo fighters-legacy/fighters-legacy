@@ -58,6 +58,17 @@ struct MockLogger : ILogger {
     void flush() override {}
 };
 
+// Records Warn-level messages so a test can assert the #872 required-pack warn-only policy fires.
+struct CapturingLogger : ILogger {
+    std::vector<std::string> warnings;
+    void log(LogLevel lvl, const char*, int, const char* msg) override {
+        if (lvl == LogLevel::Warn && msg)
+            warnings.emplace_back(msg);
+    }
+    void setMinLevel(LogLevel) override {}
+    void flush() override {}
+};
+
 // Records broadcasts/sends/disconnects + resolves configurable peer addresses (see mock_network.h).
 using MockNetwork = TrackingNetwork;
 
@@ -2700,6 +2711,73 @@ TEST_CASE("WorldBroadcaster: empty requested type uses the [world] player_entity
     const fl::EntityState* s = em.get(fl::EntityId{ack.assignedEntityIdx, ack.assignedEntityGen});
     REQUIRE(s != nullptr);
     CHECK(s->typeIndex == jetIdx);
+}
+
+// ---------------------------------------------------------------------------
+// Required-pack policy (#872 wire half, warn-only)
+// ---------------------------------------------------------------------------
+
+namespace {
+// Admit a pilot whose MsgConnectRequest carries the given pack-id manifest.
+void connectPilotWithPacks(fl::WorldBroadcaster& b, uint32_t peerId, const std::vector<std::string>& packIds) {
+    b.onConnect(peerId);
+    fl::MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+    req.packCount = static_cast<uint16_t>(packIds.size());
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, req);
+    for (const std::string& id : packIds) {
+        fl::PackManifestEntry pe{};
+        std::snprintf(pe.id, sizeof(pe.id), "%s", id.c_str());
+        fl::appendMsg(buf, pe);
+    }
+    b.onReceive(peerId, buf.data(), buf.size());
+}
+} // namespace
+
+TEST_CASE("WorldBroadcaster: a client missing a required pack is warned but still admitted (#872)",
+          "[world_broadcaster][handshake][packs]") {
+    CapturingLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::WorldBroadcasterConfig cfg;
+    cfg.requiredPacks = {"fl-base"};
+    broadcaster.applyConfig(cfg);
+
+    connectPilotWithPacks(broadcaster, 0u, {"other-pack"}); // does NOT have fl-base
+
+    auto ack = parseSendAck(net);
+    CHECK(ack.assignedEntityGen != 0u); // warn-only: still admitted
+    bool warned = false;
+    for (const std::string& w : logger.warnings)
+        if (w.find("fl-base") != std::string::npos)
+            warned = true;
+    CHECK(warned);
+}
+
+TEST_CASE("WorldBroadcaster: a client with the required pack is admitted with no missing-pack warning (#872)",
+          "[world_broadcaster][handshake][packs]") {
+    CapturingLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::WorldBroadcasterConfig cfg;
+    cfg.requiredPacks = {"fl-base"};
+    broadcaster.applyConfig(cfg);
+
+    connectPilotWithPacks(broadcaster, 0u, {"fl-base", "theater-pack"});
+
+    auto ack = parseSendAck(net);
+    CHECK(ack.assignedEntityGen != 0u);
+    for (const std::string& w : logger.warnings)
+        CHECK(w.find("missing required content pack") == std::string::npos);
 }
 
 // ---------------------------------------------------------------------------

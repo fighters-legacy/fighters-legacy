@@ -548,6 +548,7 @@ int main(int argc, char** argv) {
     wbConfig.operatorPassword = cfg.operatorPassword;
     wbConfig.playerEntityType = cfg.playerEntityType; // pilot spawn default when client requests none (#834)
     wbConfig.allowObservers = cfg.allowObservers;     // #857
+    wbConfig.requiredPacks = cfg.requiredPacks;       // #872 warn-only required-pack ids
     wbConfig.idleTimeoutS = cfg.idleTimeoutS;
     wbConfig.drawDistanceKm = static_cast<float>(cfg.drawDistanceKm);
     wbConfig.snapshotBudgetBytes = cfg.snapshotBudgetBytes;

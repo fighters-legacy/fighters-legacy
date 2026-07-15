@@ -161,6 +161,7 @@ struct WorldBroadcasterConfig {
     std::string operatorPassword;                         // empty = network admin channel disabled
     std::string playerEntityType{"builtin:debug-entity"}; // pilot spawn default when client requests none (#834)
     bool allowObservers{true};                            // #857: false = refuse observer connect requests
+    std::vector<std::string> requiredPacks;               // #872: pack ids a client should have; missing = warn
     int idleTimeoutS{0};                                  // 0 = disabled; seconds of peer inactivity before disconnect
     float drawDistanceKm{200.f};                          // per-peer interest radius; 0 = degenerate (empty snapshots)
     double spatialCellSizeM{10000.0}; // SpatialIndex cell size (m); 0 = auto from draw distance; restart-only
@@ -787,6 +788,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     uint16_t m_playerFaction{1};             // 0 restores the legacy neutral-player behavior
     std::string m_playerEntityType{"builtin:debug-entity"}; // pilot spawn default when client requests none (#834)
     bool m_allowObservers{true};                            // #857: false = refuse observer connect requests
+    std::vector<std::string> m_requiredPacks;               // #872: pack ids a client should have; missing = warn
     int m_flightCmdRateLimit{4};                            // orders per second per peer
     // EntityId.index -> {sim, controller}. Replaces the old peerId-keyed flight-sim map: any control
     // source (peer, AI, script) registers here and is stepped uniformly in onTick.

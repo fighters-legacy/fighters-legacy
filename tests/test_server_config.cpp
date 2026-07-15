@@ -78,6 +78,20 @@ TEST_CASE("parseServerConfig: reads world.player_entity_type (#834)", "[server_c
     CHECK(cfg.playerEntityType == "fl-base:f5e");
 }
 
+TEST_CASE("parseServerConfig: reads world.allow_observers (#857)", "[server_config]") {
+    MockLogger log;
+    CHECK(parseServerConfig("", &log).allowObservers == true); // default
+    CHECK(parseServerConfig("[world]\nallow_observers = false\n", &log).allowObservers == false);
+}
+
+TEST_CASE("parseServerConfig: reads mods.required (#872)", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[mods]\nrequired = [\"fl-base\", \"theater\"]\n", &log);
+    REQUIRE(cfg.requiredPacks.size() == 2u);
+    CHECK(cfg.requiredPacks[0] == "fl-base");
+    CHECK(cfg.requiredPacks[1] == "theater");
+}
+
 TEST_CASE("parseServerConfig: reads world.sim_worker_threads", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[world]\nsim_worker_threads = 8\n", &log);

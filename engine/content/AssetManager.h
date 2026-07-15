@@ -76,6 +76,16 @@ class AssetManager {
     // Returns the union of asset names of the given type across all active packs (first-wins dedup).
     std::vector<std::string> listAssets(AssetType type) const;
 
+    // One mounted pack's identity, reported to the server at connect for content-consistency negotiation
+    // (#872). Content hashing is a later addition (the wire reserves the field).
+    struct PackManifestInfo {
+        std::string id;
+        std::string version;
+    };
+    // The mounted content packs' {id, version}, in priority order. Used to build the client pack manifest
+    // in MsgConnectRequest (#853/#872).
+    std::vector<PackManifestInfo> packManifest() const;
+
     // Hot-reload support (sandbox/editor mode only). Pass the watcher from Platform.
     // Registers each pack's rootDirectory() with the watcher (recursive).
     // processHotReload() must be called once per frame from the game loop.
