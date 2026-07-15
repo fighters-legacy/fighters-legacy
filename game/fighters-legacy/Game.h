@@ -2,6 +2,7 @@
 #pragma once
 #include "IScreen.h"
 #include <memory>
+#include <string>
 
 namespace fl {
 
@@ -23,7 +24,7 @@ class Game {
     void initScreenManager();
     void initGameConsole();
 
-    void startGame();
+    void startGame(const std::string& mission = "");
     void stopGame();
     void handleTransition(Screen next);
 

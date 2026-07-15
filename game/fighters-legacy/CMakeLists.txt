@@ -39,6 +39,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         engine-console
         engine-manual
         engine-bootstrap
+        engine-mission
         engine-weapon
         engine-sensor
         platform-file-logger

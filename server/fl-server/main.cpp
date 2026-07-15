@@ -901,6 +901,26 @@ int main(int argc, char** argv) {
                                 log->log(LogLevel::Warn, __FILE__, __LINE__, m);
                             }
                         }
+                    } else {
+                        // No explicit ai/route: fall back to the entity type's OWN default AI script, so a
+                        // mission's stock aircraft fly themselves without every author restating
+                        // `ai: lua <script>` — the same auto-detect the `spawn` admin command does (#634).
+                        const fl::EntityDef* def = entityRegistry.findById(obj.type.c_str());
+                        if (def && !def->aiScriptAsset.empty()) {
+                            auto cacheIt = aiScriptCache.find(def->aiScriptAsset);
+                            if (cacheIt != aiScriptCache.end()) {
+                                auto lc = std::make_unique<fl::LuaController>(cacheIt->second.first,
+                                                                              cacheIt->second.second, &entityManager);
+                                if (lc->isValid())
+                                    ctrl = std::move(lc);
+                                else {
+                                    char m[224];
+                                    std::snprintf(m, sizeof(m), "mission ai: default lua script '%.48s' error: %.120s",
+                                                  def->aiScriptAsset.c_str(), lc->lastError().c_str());
+                                    log->log(LogLevel::Warn, __FILE__, __LINE__, m);
+                                }
+                            }
+                        }
                     }
                     if (ctrl)
                         broadcaster.registerController(id, std::move(ctrl));

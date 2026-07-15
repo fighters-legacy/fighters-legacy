@@ -15,6 +15,8 @@
 #include "HapticController.h"
 #include "IWindowEventHandler.h"
 #include "LocalServer.h"
+#include "MissionBriefScreen.h"
+#include "MissionSelectScreen.h"
 #include "NetworkFactory.h"
 #include "Platform.h"
 #include "PrecipitationController.h"
@@ -40,6 +42,7 @@
 #include "firstrun/FirstRun.h"
 #include "input/AxisConfig.h"
 #include "input/InputBindings.h"
+#include "mission/MissionParser.h"
 #include "net/DiscoveryListener.h"
 #include "net/GameProtocol.h"
 #include "openal/OALAudio.h"
@@ -392,6 +395,8 @@ struct SessionContext {
     // with the post-ack player idx/gen/radius (#755).
     bool connectAckApplied{false};
     bool manualBuilt{false}; // the aircraft manual is generated once per session (#821)
+    // Wall-clock start of this session; the delta at debrief accrues into PilotProfile::flightTimeS (#634).
+    std::chrono::steady_clock::time_point sessionStart{};
 };
 
 struct GameImpl {
@@ -817,7 +822,7 @@ void Game::initScreenManager() {
 // Session lifecycle — startGame / stopGame
 // ---------------------------------------------------------------------------
 
-void Game::startGame() {
+void Game::startGame(const std::string& mission) {
     auto& d = *m_impl;
 
     // Reset render bridge and entity registry from any prior session.
@@ -827,6 +832,7 @@ void Game::startGame() {
     d.services.env = EnvironmentState{};
     d.session.serverReady.store(false, std::memory_order_relaxed);
     d.session.sessionFailure.store(SessionFailure::None, std::memory_order_relaxed);
+    d.session.sessionStart = std::chrono::steady_clock::now(); // flight-time accrual at debrief (#634)
 
     // The camera pose is recomputed from the entity snapshot every Flight frame (CameraInput runs
     // before the render, and 3D rendering is skipped during the loading overlay), so no stale-state
@@ -844,6 +850,8 @@ void Game::startGame() {
         d.session.localServer.emplace(*d.services.rawLogger);
         // Forward the client's resolved content root so the embedded server loads the same packs (#831).
         d.session.localServer->setContentRoot(d.services.assetsRoot.string());
+        // Load the chosen mission (#634); empty = the sandbox, as before.
+        d.session.localServer->setMission(mission);
         d.session.serverThread = std::thread([&d]() {
             auto result = d.session.localServer->start();
             if (result == LocalServer::StartResult::Ok) {
@@ -1060,15 +1068,41 @@ void Game::stopGame() {
     d.services.p.input->setMouseCapture(false);
 }
 
+// The mission's display name (its `name:` field), for the brief screen. Loads and parses the mission
+// asset via the shared engine-mission parser — the same runtime the server loads it with (#634/#632),
+// so the brief and the flown mission cannot disagree. Falls back to the id when the mission is missing
+// or unparseable.
+static std::string missionDisplayName(AssetManager* assets, const std::string& id) {
+    if (!assets || id.empty())
+        return id;
+    auto data = assets->loadMission(id.c_str());
+    if (!data || data->bytes.empty())
+        return id;
+    const std::string yaml(data->bytes.begin(), data->bytes.end());
+    const MissionParseResult r = parseMission(yaml);
+    return (r.ok && !r.mission.name.empty()) ? r.mission.name : id;
+}
+
 void Game::handleTransition(Screen next) {
     auto& d = *m_impl;
     const Screen prev = d.services.screenMgr->current();
 
+    // Carry the chosen mission from the select screen into the brief so it renders the real mission
+    // (#634). The brief reads it back out when the player hits Fly.
+    if (next == Screen::MissionBrief && prev == Screen::MissionSelect) {
+        const std::string& id = d.services.screenMgr->missionSelect().selectedMission();
+        d.services.screenMgr->missionBrief().setMission(id, missionDisplayName(d.services.assets.get(), id));
+    }
+
     // Start a session on ANY entry into Loading, not just from MainMenu — the mission flow enters
     // Loading from MissionBrief, which the old MainMenu-only guard missed, leaving the LoadingScreen
-    // null and crashing the next frame (#876).
-    if (entersSession(prev, next))
-        startGame();
+    // null and crashing the next frame (#876). Entering from the brief loads the chosen mission;
+    // entering directly from the menu (the sandbox path) passes no mission.
+    if (entersSession(prev, next)) {
+        const std::string mission =
+            (prev == Screen::MissionBrief) ? d.services.screenMgr->missionSelect().selectedMission() : std::string{};
+        startGame(mission);
+    }
 
     if (exitsSession(prev, next))
         stopGame();
@@ -1089,11 +1123,15 @@ void Game::handleTransition(Screen next) {
             losses = d.session.clientHandler->sessionStats().losses;
         }
         d.services.screenMgr->debrief().setStats(static_cast<int>(kills), static_cast<int>(losses), true);
-        // The pilot's career log accumulates per session, exactly once, on the way into debrief.
-        if (d.services.userConfig && d.session.clientHandler && (kills > 0 || losses > 0)) {
+        // The pilot's career log accumulates per session, exactly once, on the way into debrief:
+        // kills/losses from the server's tallies plus this session's flight time (#634).
+        if (d.services.userConfig) {
+            const auto elapsed = std::chrono::steady_clock::now() - d.session.sessionStart;
+            const int64_t flightSecs = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
             PilotSettings ps = d.services.userConfig->pilot();
             ps.profile.kills += static_cast<int>(kills);
             ps.profile.losses += static_cast<int>(losses);
+            ps.profile.flightTimeS += flightSecs;
             d.services.userConfig->setPilot(ps);
         }
         d.services.musicManager.setState(GameState::Debrief);
