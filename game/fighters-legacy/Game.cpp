@@ -24,6 +24,7 @@
 #include "ServerNotice.h"
 #include "SessionStatus.h"
 #include "Version.h"
+#include "audio/MusicBuiltinTracks.h"
 #include "audio/MusicManager.h"
 #include "audio/PlaylistLoader.h"
 #include "audio/SfxManager.h"
@@ -785,8 +786,11 @@ void Game::initGameSystems() {
     d.services.sceneRenderer->setSubtitleQueue(&d.services.subtitleQueue);
 
     if (d.services.musicManager.init(d.services.p.audio.get(), d.services.assets.get(), d.services.rawLogger)) {
+        // A pack playlist.toml wins; with none, fall back to the builtin procedural playlist (#865) so
+        // menus and flight still have music with zero content mounted.
         auto playlistText = d.services.assets->loadConfig("playlist.toml");
-        PlaylistData playlist = parsePlaylist(playlistText.value_or(""), *d.services.rawLogger);
+        PlaylistData playlist =
+            playlistText ? parsePlaylist(*playlistText, *d.services.rawLogger) : builtinDefaultPlaylist();
         d.services.musicManager.loadPlaylist(playlist);
         d.services.musicManager.setState(GameState::Menu);
     }

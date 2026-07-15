@@ -53,6 +53,8 @@ class MusicManager {
         AudioBufferId bufs[kNumStreamBuffers]{};
         OggStreamPtr oggStream;        // streaming decoder handle (RAII)
         std::vector<uint8_t> oggBytes; // raw OGG bytes; kept alive for the stream's lifetime
+        std::vector<int16_t> pcmLoop;  // builtin procedural track (#865): looped instead of an OGG stream
+        std::size_t pcmPos{0};         // read cursor into pcmLoop, wrapping for a seamless loop
         float gain{0.0f};              // current gain envelope [0, 1]
         int sampleRate{0};
         int channels{0};

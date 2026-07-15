@@ -70,6 +70,7 @@ add_library(engine-audio STATIC
     audio/SubtitleQueue.cpp
     audio/PlaylistLoader.cpp
     audio/MusicManager.cpp
+    audio/MusicBuiltinTracks.cpp
     audio/VoiceCalloutManager.cpp
     audio/SfxBuiltinSounds.cpp
     audio/SfxManager.cpp
