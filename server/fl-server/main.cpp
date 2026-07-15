@@ -54,6 +54,7 @@
 #include <loop/GameLoop.h>
 #include <mission/Mission.h>
 #include <mission/MissionParser.h>
+#include <mission/MissionRuntime.h>
 #include <mission/MissionSetup.h>
 #include <net/GameProtocol.h>
 #include <net/WorldBroadcaster.h>
@@ -821,6 +822,9 @@ int main(int argc, char** argv) {
     // objects registered as joinable slots. missionFactions outlives gameLoop (the broadcaster holds a
     // pointer to it), so it is declared here in main's scope.
     fl::FactionRegistry missionFactions;
+    // The objective/trigger evaluator (#633). Constructed below when a mission loads; declared here so
+    // it outlives gameLoop (the broadcaster's tick hook captures a pointer into it).
+    std::unique_ptr<fl::MissionRuntime> missionRuntime;
     if (!missionToLoad.empty()) {
         auto missionAsset = assets.loadMission(missionToLoad.c_str());
         if (!missionAsset) {
@@ -925,6 +929,26 @@ int main(int argc, char** argv) {
                     slots.push_back(std::move(s));
                 }
                 broadcaster.setMissionPlayerSlots(std::move(slots));
+
+                // Objective / trigger evaluator (#633): runs at the end of each sim tick (second-scale
+                // cadence internally). mission_success / mission_failure drive the objective state
+                // machine; other `do` actions route through the injected dispatcher (a validated-command
+                // seam — logged for now until the mission action grammar is mapped onto the admin path).
+                missionRuntime = std::make_unique<fl::MissionRuntime>(
+                    parsed.mission, std::move(setup.objectEntities), entityManager, [log](std::string_view action) {
+                        char m[224];
+                        std::snprintf(m, sizeof(m), "mission action (seam; not yet routed): %.140s",
+                                      std::string(action).c_str());
+                        log->log(LogLevel::Info, __FILE__, __LINE__, m);
+                    });
+                missionRuntime->setOnEnd([log](const fl::MissionOutcome& o) {
+                    const char* s = o.state == fl::MissionState::Complete ? "SUCCESS" : "FAILURE";
+                    char m[128];
+                    std::snprintf(m, sizeof(m), "mission %s after %.1f s (%u trigger(s) fired)", s, o.elapsedSeconds,
+                                  o.triggersFired);
+                    log->log(LogLevel::Info, __FILE__, __LINE__, m);
+                });
+                broadcaster.setMissionTickHook([rt = missionRuntime.get()](uint64_t t) { rt->step(t); });
 
                 for (const std::string& w : setup.warnings)
                     log->log(LogLevel::Warn, __FILE__, __LINE__, w.c_str());

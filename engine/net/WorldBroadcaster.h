@@ -286,6 +286,15 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // per-store problems append to `warnings`. Sim-thread / pre-start.
     bool setEntityLoadout(EntityId id, const std::vector<std::string>& stores, std::vector<std::string>& warnings);
 
+    // Install a per-tick hook run at the END of onTick, after the world has stepped (#633). fl-server
+    // wires it to the mission objective/trigger evaluator (MissionRuntime::step), keeping engine-net
+    // free of an engine-mission dependency — GameLoop drives exactly one ISimUpdate, so this is the
+    // clean seam for a second sim-side consumer. Called with the current tick index; sim-thread only.
+    // Call before gameLoop.start().
+    void setMissionTickHook(std::function<void(uint64_t)> hook) {
+        m_missionTickHook = std::move(hook);
+    }
+
     // Peer management — all must be called from the sim thread (via GameLoop::enqueueSimCallback).
 
     // Gracefully disconnect one peer by ID.
@@ -824,6 +833,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     ILogger& m_logger;
     WeatherController* m_weather{nullptr};
     const FactionRegistry* m_factionRegistry{nullptr}; // coalition-aware hostility for AI (#632)
+    std::function<void(uint64_t)> m_missionTickHook;   // mission objective evaluator, end of onTick (#633)
 
     std::unordered_map<uint32_t, EntityId> m_peerEntities;
     std::unordered_map<uint32_t, PeerInputState> m_peerInputs;

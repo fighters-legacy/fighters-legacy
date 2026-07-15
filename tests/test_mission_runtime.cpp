@@ -5,6 +5,7 @@
 
 #include "mission/Mission.h"
 #include "mission/MissionParser.h"
+#include "mission/MissionRuntime.h"
 #include "mission/MissionSetup.h"
 
 #include "ILogger.h"
@@ -383,4 +384,111 @@ triggers: []
     REQUIRE(result.playerSlots.size() == 1);
     REQUIRE(hookAi.size() == 1);
     CHECK(hookAi[0] == "loiter");
+}
+
+// ---------------------------------------------------------------------------
+// MissionRuntime — objective / trigger evaluator (#633)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A mission with the given triggers and no objects/sides (the evaluator only reads triggers +
+// the object->entity map passed separately).
+Mission missionWith(std::vector<MissionTrigger> triggers) {
+    Mission m;
+    m.name = "T";
+    m.triggers = std::move(triggers);
+    return m;
+}
+
+} // namespace
+
+TEST_CASE("MissionRuntime: mission_start fires immediately and completes the objective", "[mission-runtime]") {
+    NullLogger log;
+    EntityTypeRegistry reg;
+    EntityManager em(log, reg);
+    Mission m = missionWith({{"mission_start", "mission_success"}});
+
+    bool ended = false;
+    MissionRuntime rt(m, {}, em);
+    rt.setOnEnd([&](const MissionOutcome&) { ended = true; });
+    rt.step(0);
+
+    CHECK(rt.done());
+    CHECK(rt.outcome().state == MissionState::Complete);
+    CHECK(rt.outcome().triggersFired == 1u);
+    CHECK(ended);
+}
+
+TEST_CASE("MissionRuntime: timer(n) fires after n seconds of elapsed sim time", "[mission-runtime]") {
+    NullLogger log;
+    EntityTypeRegistry reg;
+    EntityManager em(log, reg);
+    Mission m = missionWith({{"timer(2)", "mission_failure"}});
+
+    MissionRuntime rt(m, {}, em);
+    rt.setEvalIntervalTicks(1); // evaluate every tick so the boundary is exact
+    rt.setSimDt(1.0 / 60.0);
+
+    for (uint64_t t = 0; t < 120; ++t) {
+        rt.step(t);
+        CHECK(rt.outcome().state == MissionState::Active); // < 2.0 s
+    }
+    rt.step(120); // elapsed = 120/60 = 2.0 s
+    CHECK(rt.outcome().state == MissionState::Failed);
+}
+
+TEST_CASE("MissionRuntime: destroy(<id>) fires when the object's entity dies", "[mission-runtime]") {
+    NullLogger log;
+    EntityTypeRegistry reg;
+    reg.registerType(makeDef("test:fighter"));
+    EntityManager em(log, reg);
+
+    EntityTransform t{};
+    const EntityId bandit = em.spawn("test:fighter", t);
+    REQUIRE(bandit.valid());
+
+    Mission m = missionWith({{"destroy(bandit)", "mission_success"}});
+    MissionRuntime rt(m, {{"bandit", bandit}}, em);
+    rt.setEvalIntervalTicks(1);
+
+    rt.step(0);
+    CHECK(rt.outcome().state == MissionState::Active); // still alive
+
+    em.kill(bandit);
+    em.onTick(1.0 / 60.0, 1); // reap the killed entity
+    rt.step(1);
+    CHECK(rt.outcome().state == MissionState::Complete);
+}
+
+TEST_CASE("MissionRuntime: triggers fire in declaration order; non-terminal actions dispatch", "[mission-runtime]") {
+    NullLogger log;
+    EntityTypeRegistry reg;
+    EntityManager em(log, reg);
+    Mission m = missionWith({{"mission_start", "spawn(Su27,red,0,0,0)"}, {"mission_start", "mission_success"}});
+
+    std::vector<std::string> dispatched;
+    MissionRuntime rt(m, {}, em, [&](std::string_view a) { dispatched.emplace_back(a); });
+    rt.step(0);
+
+    REQUIRE(dispatched.size() == 1); // the spawn action routed through the dispatcher
+    CHECK(dispatched[0] == "spawn(Su27,red,0,0,0)");
+    CHECK(rt.outcome().state == MissionState::Complete); // the second trigger ended the mission
+    CHECK(rt.outcome().triggersFired == 2u);
+}
+
+TEST_CASE("MissionRuntime: a trigger fires exactly once (edge), not every tick", "[mission-runtime]") {
+    NullLogger log;
+    EntityTypeRegistry reg;
+    EntityManager em(log, reg);
+    Mission m = missionWith({{"mission_start", "spawn(x)"}}); // non-terminal: the mission stays Active
+
+    std::vector<std::string> dispatched;
+    MissionRuntime rt(m, {}, em, [&](std::string_view a) { dispatched.emplace_back(a); });
+    rt.setEvalIntervalTicks(1);
+    for (uint64_t t = 0; t < 10; ++t)
+        rt.step(t);
+
+    CHECK(dispatched.size() == 1u); // fired on the first evaluation and never again
+    CHECK(rt.outcome().state == MissionState::Active);
 }

@@ -1442,6 +1442,11 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     m_tickProfiler.addPhaseSample(TickPhase::Serialize,
                                   std::chrono::duration<double, std::milli>(m_clock->now() - tSerializeStart).count());
     m_tickProfiler.endTick();
+
+    // Mission objective/trigger evaluation (#633), after the world has fully stepped this tick. Runs at
+    // its own second-scale cadence internally; unset unless a mission is loaded.
+    if (m_missionTickHook)
+        m_missionTickHook(tickIndex);
 }
 
 void WorldBroadcaster::onConnect(uint32_t peerId) {

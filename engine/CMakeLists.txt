@@ -278,6 +278,7 @@ target_include_directories(engine-spatial PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_library(engine-mission STATIC
     mission/MissionParser.cpp
     mission/MissionSetup.cpp
+    mission/MissionRuntime.cpp
 )
 target_include_directories(engine-mission PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-mission

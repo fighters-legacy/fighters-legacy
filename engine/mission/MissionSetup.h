@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fl {
@@ -36,6 +37,9 @@ struct MissionSetupResult {
     std::vector<EntityId> spawned;       // world entities created (excludes player slots)
     std::vector<PlayerSlot> playerSlots; // joinable slots for the handshake (#854)
     std::vector<std::string> warnings;   // e.g. an object whose type failed to spawn
+    // Mission object id -> spawned EntityId, for the objective/trigger evaluator's destroy(<id>)
+    // predicate (#633). Only successfully-spawned non-player objects appear here.
+    std::vector<std::pair<std::string, EntityId>> objectEntities;
 };
 
 // Sets up the sim from a parsed mission: loads the coalition registry (index 0 reserved neutral, real

@@ -105,6 +105,7 @@ MissionSetupResult applyMission(const Mission& mission, EntityManager& em, Facti
         if (EntityState* st = em.get(id))
             st->factionIndex = fi;
         result.spawned.push_back(id);
+        result.objectEntities.emplace_back(obj.id, id); // for the #633 destroy(<id>) predicate
 
         // Hand the freshly spawned object to the caller so it can attach a controller (ai/route) and a
         // loadout override (#855) using seams engine-mission does not link.

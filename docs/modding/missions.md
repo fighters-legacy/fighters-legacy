@@ -174,7 +174,8 @@ station's `allowed` list (or is an unknown weapon id) is refused and the station
 ## `triggers` entries
 
 Triggers define events that fire during the mission. The engine evaluates the `on` predicate
-each simulation tick and executes the `do` action once when it first becomes true.
+server-side at a second-scale cadence (not every 60 Hz tick) and executes the `do` action once,
+the first time it becomes true. Triggers are evaluated in the order they appear in the file.
 
 ```yaml
 triggers:
