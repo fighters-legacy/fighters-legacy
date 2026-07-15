@@ -546,6 +546,7 @@ int main(int argc, char** argv) {
     wbConfig.motd = cfg.motd;
     wbConfig.motdDisplaySeconds = cfg.motdDisplayS;
     wbConfig.operatorPassword = cfg.operatorPassword;
+    wbConfig.playerEntityType = cfg.playerEntityType; // pilot spawn default when client requests none (#834)
     wbConfig.idleTimeoutS = cfg.idleTimeoutS;
     wbConfig.drawDistanceKm = static_cast<float>(cfg.drawDistanceKm);
     wbConfig.snapshotBudgetBytes = cfg.snapshotBudgetBytes;

@@ -335,6 +335,8 @@ struct GameServices {
     std::string connectHost;
     uint16_t connectPort{4778};
     std::string operatorPassword; // merged: CLI arg > FL_OPERATOR_PASSWORD > [client].operator_password
+    std::string
+        requestedEntityType; // --aircraft: aircraft to request in MsgConnectRequest; empty = server default (#834)
 
     // HUD / overlays
     EnvironmentState env;
@@ -483,6 +485,8 @@ bool Game::initPlatform(int argc, char** argv) {
             parseConnectArg(argv[i + 1], d.services.connectHost, d.services.connectPort);
         else if (std::strcmp(argv[i], "--operator-password") == 0)
             d.services.operatorPassword = argv[i + 1];
+        else if (std::strcmp(argv[i], "--aircraft") == 0)
+            d.services.requestedEntityType = argv[i + 1]; // request a specific type; server clamps (#834)
     }
 
     // Merge operator password: CLI arg > FL_OPERATOR_PASSWORD env var > [client].operator_password.
@@ -891,6 +895,9 @@ void Game::startGame() {
         d.services.effectRouter.reset();                             // no stale effects across sessions
         d.session.clientHandler->motdDisplaySeconds = d.services.userConfig->client().motdDisplayS;
         d.session.clientHandler->sessionFailure = &d.session.sessionFailure;
+        // Connect-handshake inputs (#853/#834): request a specific aircraft if --aircraft was given
+        // (empty = let the server pick its [world] player_entity_type default).
+        d.session.clientHandler->requestedEntityType = d.services.requestedEntityType;
         d.session.clientNet->setEventHandler(d.session.clientHandler.get());
 
         if (!isMultiplayer) {

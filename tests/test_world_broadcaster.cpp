@@ -2645,6 +2645,63 @@ TEST_CASE("WorldBroadcaster: a duplicate MsgConnectRequest is ignored (no re-spa
     CHECK(em.liveCount() == 1u); // no second entity spawned
 }
 
+TEST_CASE("WorldBroadcaster: pilot flies the requested registered type, clamped to the allowlist (#834)",
+          "[world_broadcaster][handshake]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    const uint32_t jetIdx = registry.registerType(makeDebugDef("fl-base:f5e"));
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    connectPilotPeer(broadcaster, net, 0u, "fl-base:f5e"); // request a registered type
+    auto ack = parseSendAck(net);
+    REQUIRE(ack.assignedEntityGen != 0u);
+    const fl::EntityState* s = em.get(fl::EntityId{ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(s != nullptr);
+    CHECK(s->typeIndex == jetIdx);
+}
+
+TEST_CASE("WorldBroadcaster: an unregistered requested type falls back to the server default (#834)",
+          "[world_broadcaster][handshake]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    const uint32_t debugIdx = registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    connectPilotPeer(broadcaster, net, 0u, "no-such:aircraft"); // not registered -> fall back
+    auto ack = parseSendAck(net);
+    REQUIRE(ack.assignedEntityGen != 0u);
+    const fl::EntityState* s = em.get(fl::EntityId{ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(s != nullptr);
+    CHECK(s->typeIndex == debugIdx); // builtin:debug-entity default
+}
+
+TEST_CASE("WorldBroadcaster: empty requested type uses the [world] player_entity_type default (#834)",
+          "[world_broadcaster][handshake]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    const uint32_t jetIdx = registry.registerType(makeDebugDef("fl-base:f5e"));
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::WorldBroadcasterConfig cfg;
+    cfg.playerEntityType = "fl-base:f5e";
+    broadcaster.applyConfig(cfg);
+
+    connectPilotPeer(broadcaster, net, 0u, ""); // empty request -> server default
+    auto ack = parseSendAck(net);
+    REQUIRE(ack.assignedEntityGen != 0u);
+    const fl::EntityState* s = em.get(fl::EntityId{ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(s != nullptr);
+    CHECK(s->typeIndex == jetIdx);
+}
+
 // ---------------------------------------------------------------------------
 // Security: flood detection
 // ---------------------------------------------------------------------------

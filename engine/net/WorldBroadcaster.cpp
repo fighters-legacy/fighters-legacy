@@ -354,6 +354,7 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setMotd(cfg.motd);
     setMotdDisplaySeconds(cfg.motdDisplaySeconds);
     setOperatorPassword(cfg.operatorPassword);
+    m_playerEntityType = cfg.playerEntityType; // pilot spawn default (#834); applyConfig runs pre-start
     setIdleTimeout(cfg.idleTimeoutS);
     setDrawDistance(cfg.drawDistanceKm);
     setSpatialCellSize(cfg.spatialCellSizeM); // after setDrawDistance: auto mode reads m_drawDistanceM
@@ -1529,6 +1530,23 @@ EntityId WorldBroadcaster::admitPilot(uint32_t peerId, const std::string& entity
     return id;
 }
 
+std::string WorldBroadcaster::resolvePlayerEntityType(const char* requested) const {
+    // A client-requested type wins only if it names a REGISTERED type (server-clamped allowlist — the
+    // client cannot conjure an arbitrary spawn). Otherwise fall back to the [world] default, then the
+    // builtin. An unregistered request is not an error; it is served the default (#834).
+    if (requested && requested[0] != '\0') {
+        if (m_registry.findById(requested))
+            return requested;
+        char msg[160];
+        std::snprintf(msg, sizeof(msg), "peer requested unregistered entity type '%.64s'; using server default",
+                      requested);
+        m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
+    }
+    if (!m_playerEntityType.empty() && m_registry.findById(m_playerEntityType.c_str()))
+        return m_playerEntityType;
+    return "builtin:debug-entity";
+}
+
 void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, std::size_t size) {
     if (size < sizeof(MsgConnectRequest))
         return; // truncated; ignore
@@ -1549,10 +1567,9 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         return;
     }
 
-    // Pilot-only in #853. Entity-type selection (#834), observer role (#857) and required-pack policy
-    // (#872) layer onto this handler in their own commits.
+    // Pilot-only until #857. Observer role and required-pack policy (#872) layer on in later commits.
     const PeerRole grantedRole = PeerRole::Pilot;
-    const EntityId assigned = admitPilot(peerId, "builtin:debug-entity");
+    const EntityId assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
 
     pin.role = grantedRole;
     pin.handshakeComplete = true;

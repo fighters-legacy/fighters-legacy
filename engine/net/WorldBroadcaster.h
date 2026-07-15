@@ -150,17 +150,18 @@ struct ControlledEntity {
 // instead of remembering six separate "call before gameLoop.start()" setters. The hot-reload setters
 // (setMotd, setBannedAddresses, setAllowedAddresses, ...) remain available for runtime changes.
 struct WorldBroadcasterConfig {
-    int connectRateLimit{5};          // max connects per window per IP
-    int connectRateWindowS{10};       // sliding-window length (seconds)
-    int floodMultiplier{3};           // MsgClientInput flood threshold multiplier
-    int maxConnectionsPerIp{0};       // simultaneous connections per IP; 0 = unlimited
-    int adminAuthMaxFailures{5};      // wrong operator passwords before per-IP lockout
-    int adminAuthLockoutSeconds{300}; // lockout duration (seconds)
-    std::string motd;                 // empty = no MOTD
-    uint16_t motdDisplaySeconds{0};   // 0 = client default
-    std::string operatorPassword;     // empty = network admin channel disabled
-    int idleTimeoutS{0};              // 0 = disabled; seconds of peer inactivity before disconnect
-    float drawDistanceKm{200.f};      // per-peer interest radius; 0 = degenerate (empty snapshots)
+    int connectRateLimit{5};                              // max connects per window per IP
+    int connectRateWindowS{10};                           // sliding-window length (seconds)
+    int floodMultiplier{3};                               // MsgClientInput flood threshold multiplier
+    int maxConnectionsPerIp{0};                           // simultaneous connections per IP; 0 = unlimited
+    int adminAuthMaxFailures{5};                          // wrong operator passwords before per-IP lockout
+    int adminAuthLockoutSeconds{300};                     // lockout duration (seconds)
+    std::string motd;                                     // empty = no MOTD
+    uint16_t motdDisplaySeconds{0};                       // 0 = client default
+    std::string operatorPassword;                         // empty = network admin channel disabled
+    std::string playerEntityType{"builtin:debug-entity"}; // pilot spawn default when client requests none (#834)
+    int idleTimeoutS{0};                                  // 0 = disabled; seconds of peer inactivity before disconnect
+    float drawDistanceKm{200.f};                          // per-peer interest radius; 0 = degenerate (empty snapshots)
     double spatialCellSizeM{10000.0}; // SpatialIndex cell size (m); 0 = auto from draw distance; restart-only
     uint32_t snapshotBudgetBytes{0};  // per-client snapshot byte budget; 0 = unlimited (#516)
     bool compressSnapshots{false};    // zstd snapshot payload compression (#775); internal default
@@ -702,6 +703,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // its flight. Returns the assigned EntityId (invalid on spawn failure). Extracted from the old
     // onConnect. Sim-thread.
     EntityId admitPilot(uint32_t peerId, const std::string& entityType);
+    // Resolve the entity type to spawn for a pilot (#834): a client-requested type wins iff it is a
+    // REGISTERED type (server-clamped allowlist); otherwise the [world] player_entity_type default;
+    // otherwise builtin:debug-entity. An unregistered request falls back with an Info log.
+    std::string resolvePlayerEntityType(const char* requested) const;
     // Tear down a peer's entity: its owned formation + AI members, its controller, sensor observer, and
     // the entity itself; erase from m_peerEntities. Does NOT touch m_peerInputs (the peer keeps its
     // slot). Shared by onDisconnect (and setPeerRole once #857 lands). Sim-thread.
@@ -770,7 +775,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     FlightOrderHandler m_flightOrderHandler; // null = the order channel is off; orders are discarded
     TargetDesignator m_targetDesignator;     // null = attack orders always refuse (never invent a target)
     uint16_t m_playerFaction{1};             // 0 restores the legacy neutral-player behavior
-    int m_flightCmdRateLimit{4};             // orders per second per peer
+    std::string m_playerEntityType{"builtin:debug-entity"}; // pilot spawn default when client requests none (#834)
+    int m_flightCmdRateLimit{4};                            // orders per second per peer
     // EntityId.index -> {sim, controller}. Replaces the old peerId-keyed flight-sim map: any control
     // source (peer, AI, script) registers here and is stepped uniformly in onTick.
     std::unordered_map<uint32_t, ControlledEntity> m_controlledEntities;
