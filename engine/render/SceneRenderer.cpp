@@ -142,10 +142,20 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
         if (nameIt == m_typeNameCache.end()) {
             std::string mesh, dmg;
             bool resolved = m_resolver(entry.typeIndex, mesh, dmg);
-            nameIt = m_typeNameCache.emplace(entry.typeIndex, std::make_pair(mesh, dmg)).first;
             if (!resolved) {
                 // Mark as unresolved by leaving names empty; fallback handled below.
-                nameIt->second = {"", ""};
+                mesh.clear();
+                dmg.clear();
+            }
+            nameIt = m_typeNameCache.emplace(entry.typeIndex, std::make_pair(mesh, dmg)).first;
+            // Explain the placeholder ONCE per type (#832). A mesh-less type renders as the builtin
+            // tetrahedron, which is otherwise indistinguishable from a broken or missing mesh — the
+            // silence cost a multi-hour debugging session on the F-5E.
+            if (m_logger && mesh.empty()) {
+                char buf[176];
+                std::snprintf(buf, sizeof(buf), "entity type index %u has no mesh (%s) — drawing placeholder",
+                              entry.typeIndex, resolved ? "the type declares none" : "type not found in registry");
+                m_logger->log(LogLevel::Warn, __FILE__, __LINE__, buf);
             }
         }
         const auto& [meshName, damageMeshName] = nameIt->second;
@@ -272,12 +282,28 @@ MeshHandle SceneRenderer::getOrUploadMesh(const std::string& name) {
 
     auto data = m_assets.loadMesh(name.c_str());
     if (!data || data->bytes.empty()) {
+        // Warn once per name (#832): the empty handle is cached, so this path runs only on the first
+        // miss. Distinguish this "no bytes" cause from an upload failure below.
+        if (m_logger) {
+            char buf[208];
+            std::snprintf(buf, sizeof(buf),
+                          "mesh '%s' not found in any content pack (missing, wrong asset name, or empty) "
+                          "— drawing placeholder",
+                          name.c_str());
+            m_logger->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+        }
         m_meshCache[name] = MeshHandle{};
         return MeshHandle{};
     }
 
     MeshUploadDesc desc{name, data->bytes};
     MeshHandle h = m_renderer.createMesh(desc);
+    if (!h.valid() && m_logger) {
+        char buf[176];
+        std::snprintf(buf, sizeof(buf),
+                      "mesh '%s' failed to upload (corrupt or unsupported .glb) — drawing placeholder", name.c_str());
+        m_logger->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+    }
     m_meshCache[name] = h;
     return h;
 }
