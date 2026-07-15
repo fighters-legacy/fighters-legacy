@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "render/BuiltinGeometry.h"
+#include "render/BuiltinTextures.h"
 #include "render/CameraController.h"
 #include "render/RenderSnapshot.h"
 #include "render/SceneRenderer.h"
@@ -898,4 +899,48 @@ TEST_CASE("textureAssetNameFromUri handles a .png fallback extension") {
 
 TEST_CASE("textureAssetNameFromUri handles a bare basename with a backslash path") {
     CHECK(fl::textureAssetNameFromUri("some\\dir\\f5e_normal.ktx2") == "f5e_normal");
+}
+
+// ---------------------------------------------------------------------------
+// Builtin PBR textures (#867)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("builtin PBR textures are deterministic RGBA with the expected shape (#867)") {
+    const BuiltinRgbaTexture base = builtinBaseColorTexture();
+    CHECK(base.width == kBuiltinTexSize);
+    CHECK(base.height == kBuiltinTexSize);
+    CHECK(base.pixels.size() == static_cast<std::size_t>(kBuiltinTexSize) * kBuiltinTexSize * 4u);
+    CHECK(base.pixels == builtinBaseColorTexture().pixels); // byte-stable
+
+    const BuiltinRgbaTexture norm = builtinNormalTexture();
+    CHECK(norm.pixels.at(2) == 255); // B channel points up (tangent-space +Z) on a flat texel
+
+    const BuiltinRgbaTexture orm = builtinOrmTexture();
+    CHECK(orm.pixels.at(0) == 255); // R = occlusion, full
+    CHECK(orm.pixels.at(2) == 0);   // B = metallic, zero
+}
+
+TEST_CASE("SceneRenderer textures the builtin material (albedo/normal/ORM) with no content pack (#867)") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, noTypes(), assets, renderer}; // builtin fallback entity
+
+    RenderSnapshot snap = makeSnap();
+    snap.entries.push_back(makeEntry(0));
+    bridge.publish(std::move(snap));
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    // The builtin base/normal/ORM maps upload zero-pack (the raw-RGBA path), and no content texture.
+    CHECK(renderer.createTextureCount == 3);
+    // At least one builtin material samples all three maps, not just PBR scalar factors.
+    bool textured = false;
+    for (const MaterialDesc& m : renderer.createdMaterials)
+        if (m.baseColorTexture.valid() && m.normalTexture.valid() && m.ormTexture.valid())
+            textured = true;
+    CHECK(textured);
 }

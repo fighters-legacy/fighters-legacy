@@ -461,6 +461,7 @@ struct MockRenderer : public IRenderer {
     uint32_t nextMaterialId{1};
     int createMeshCount{0};
     int createTextureCount{0};
+    std::vector<MaterialDesc> createdMaterials; // every MaterialDesc passed to createMaterial (#867)
     int createMaterialCount{0};
     int destroyMeshCount{0};
     int destroyTextureCount{0};
@@ -501,8 +502,9 @@ struct MockRenderer : public IRenderer {
         ++createTextureCount;
         return TextureHandle{nextTextureId++};
     }
-    MaterialHandle createMaterial(const MaterialDesc&) override {
+    MaterialHandle createMaterial(const MaterialDesc& desc) override {
         ++createMaterialCount;
+        createdMaterials.push_back(desc); // so tests can inspect texture bindings (#867)
         return MaterialHandle{nextMaterialId++};
     }
     MaterialHandle getMeshMaterial(MeshHandle) const override {

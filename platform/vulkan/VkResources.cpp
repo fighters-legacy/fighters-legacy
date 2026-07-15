@@ -708,6 +708,29 @@ TextureHandle VkResourceManager::createTexture(const TextureUploadDesc& desc) {
     GpuTexture tex{};
     bool ok = false;
 
+    // Raw RGBA8 upload (#867): no KTX2/PNG container, just width*height*4 bytes. The builtin
+    // procedural textures use this so the sampling path runs with no content pack.
+    if (desc.rawWidth > 0 && desc.rawHeight > 0) {
+        const std::size_t need = static_cast<std::size_t>(desc.rawWidth) * desc.rawHeight * 4u;
+        if (desc.bytes.size() < need)
+            return m_defaultWhite;
+        const VkFormat fmt = desc.srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+        ok = createGpuImage(desc.bytes.data(), desc.rawWidth, desc.rawHeight, 1, fmt, tex);
+        if (!ok)
+            return m_defaultWhite;
+        tex.alive = true;
+        uint32_t slot = 0;
+        if (!m_freeTextureSlots.empty()) {
+            slot = m_freeTextureSlots.back();
+            m_freeTextureSlots.pop_back();
+            m_textures[slot] = tex;
+        } else {
+            slot = static_cast<uint32_t>(m_textures.size());
+            m_textures.push_back(tex);
+        }
+        return TextureHandle{slot + 1};
+    }
+
     // KTX2 magic: 0xAB 0x4B 0x54 0x58 0x20 0x32 0x30 0xBB 0x0D 0x0A 0x1A 0x0A
     const bool isKtx2 = desc.bytes.size() >= 12 && desc.bytes[0] == 0xAB && desc.bytes[1] == 0x4B &&
                         desc.bytes[2] == 0x54 && desc.bytes[3] == 0x58 && desc.bytes[4] == 0x20 &&

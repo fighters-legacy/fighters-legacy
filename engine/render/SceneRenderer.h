@@ -128,7 +128,10 @@ class SceneRenderer {
     static constexpr int kPaletteSize = 6;
 
     MeshHandle m_builtinEntityMesh{};
-    MeshHandle m_builtinDamagedMesh{}; // damage-variant placeholder (#864); shown at damageLevel > 0
+    MeshHandle m_builtinDamagedMesh{};     // damage-variant placeholder (#864); shown at damageLevel > 0
+    TextureHandle m_builtinBaseColorTex{}; // builtin PBR texture set (#867), sampled by m_fallbackEntityMat
+    TextureHandle m_builtinNormalTex{};
+    TextureHandle m_builtinOrmTex{};
     MaterialHandle m_builtinPalette[kPaletteSize]{};
     MeshHandle m_builtinFloorMesh{};
     MaterialHandle m_builtinFloorMat{};

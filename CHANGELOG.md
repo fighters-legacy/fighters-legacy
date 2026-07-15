@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **renderer**: Builtin textured entity path — the builtin placeholder mesh now samples procedural base-color / normal / ORM maps (`BuiltinTextures`) instead of only PBR scalar factors, so the albedo/normal/ORM texture-sampling path runs with no content pack. Uploaded via a new raw-RGBA `TextureUploadDesc` fallback (no KTX2/PNG container). Deterministic, byte-stable generation (#867)
+
 ### Changed
 
 - **engine**: Builtin particle + weapon-SFX preset registration moved from the game client into the engine (`registerBuiltinParticlePresets` in engine-render, `registerBuiltinSfxPresets` in engine-audio), so any frontend that links the engine gets the named presets (`explosion`, `muzzle_flash`, `sfx.gunfire`, …) instead of re-registering them by hand. No behavior change (#869)
