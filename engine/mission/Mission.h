@@ -11,6 +11,7 @@
 
 #include "weather/WeatherTypes.h" // WeatherPreset
 
+#include <array>
 #include <optional>
 #include <string>
 #include <vector>
@@ -49,6 +50,17 @@ struct MissionObject {
     // `player: true` marks a JOINABLE player slot: applyMission does NOT spawn it as a world entity;
     // it becomes a PlayerSlot the connect handshake assigns a pilot to (#854).
     bool playerSlot{false};
+
+    // Scripted-bot fields (#855). The engine-mission parser validates their SHAPE; the caller
+    // (fl-server) turns them into controllers/loadouts via the applyMission onSpawned hook, since that
+    // needs engine-ai / engine-script / the weapon registry, which engine-mission does not link.
+    //   ai:      a controller spec, e.g. "lua fighter" or a C++ behavior + args like "pursuit 1"
+    //            (the same grammar as the `spawn --ai` admin command / AiControllerFactory).
+    //   route:   a waypoint list -> a WaypointController (takes precedence over `ai` when both given).
+    //   loadout: per-station store ids overriding the entity def's default payload ("~"/"-"/"" = empty).
+    std::string ai;
+    std::vector<std::array<double, 3>> route;
+    std::vector<std::string> loadout;
 };
 
 // A win/loss/event condition. `doAction` is the YAML `do:` field (a keyword in C++).

@@ -9057,3 +9057,41 @@ TEST_CASE("WorldBroadcaster: a pilot beyond the slots falls back to the default 
     CHECK(second->transform.pos[0] == 9000.0);                              // default spawn point, not the slot's 500
     CHECK(second->typeIndex == registry.indexById("builtin:debug-entity")); // default type, not mission:fighter
 }
+
+TEST_CASE("WorldBroadcaster: setEntityLoadout overrides a controlled entity's stores (#855)",
+          "[world_broadcaster][firepath]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeArmedDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(fl::parseWeaponDef(kFpGunToml));
+    weapons.registerWeapon(fl::parseWeaponDef(kFpMissileToml));
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setWeaponRegistry(&weapons);
+
+    fl::EntityTransform t{};
+    t.quat[3] = 1.f;
+    const fl::EntityId id = em.spawn("builtin:debug-entity", t); // makeArmedDebugDef shares this id
+    REQUIRE(id.valid());
+
+    std::vector<std::string> warn;
+    // No controller yet -> the entity has no ControlledEntity, so the override is refused.
+    CHECK_FALSE(broadcaster.setEntityLoadout(id, {"~", "~"}, warn));
+
+    broadcaster.registerController(id, std::make_unique<ConstantController>());
+
+    // A valid override (strip the missile rail, keep the gun) succeeds with no warnings.
+    warn.clear();
+    CHECK(broadcaster.setEntityLoadout(id, {"fp:gun", "~"}, warn));
+    CHECK(warn.empty());
+
+    // A store not allowed on that station: the call still finds the entity (returns true) but records a
+    // warning and leaves the station empty. fp:aim is a missile, not allowed on the gun station 0.
+    warn.clear();
+    CHECK(broadcaster.setEntityLoadout(id, {"fp:aim", "~"}, warn));
+    CHECK_FALSE(warn.empty());
+}

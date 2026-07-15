@@ -270,3 +270,117 @@ triggers: []
     REQUIRE(result.warnings.size() == 1);
     CHECK(result.warnings[0].find("ghost") != std::string::npos);
 }
+
+// ---------------------------------------------------------------------------
+// Scripted-bot schema (#855): ai / route / loadout
+// ---------------------------------------------------------------------------
+
+TEST_CASE("parseMission parses ai, route, and loadout into the model", "[mission-parser]") {
+    const char* yaml = R"yaml(
+name: x
+map: y
+layer: z
+time: { hour: 0, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [red]
+objects:
+  - type: SA10
+    id: bandit
+    side: red
+    pos: [0, 0, 0]
+    heading: 0
+    ai: "pursuit 3"
+    loadout: [aim9, aim9, "~"]
+    route:
+      - [100, 200, 300]
+      - [400, 500, 600]
+triggers: []
+)yaml";
+    auto r = parseMission(yaml);
+    REQUIRE(r.ok);
+    REQUIRE(r.mission.objects.size() == 1);
+    const MissionObject& o = r.mission.objects[0];
+    CHECK(o.ai == "pursuit 3");
+    REQUIRE(o.loadout.size() == 3);
+    CHECK(o.loadout[0] == "aim9");
+    CHECK(o.loadout[2] == "~");
+    REQUIRE(o.route.size() == 2);
+    CHECK(o.route[0][0] == 100.0);
+    CHECK(o.route[1][2] == 600.0);
+}
+
+TEST_CASE("parseMission rejects a malformed route waypoint", "[mission-parser]") {
+    const char* yaml = R"yaml(
+name: x
+map: y
+layer: z
+time: { hour: 0, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [red]
+objects:
+  - { type: SA10, id: b, side: red, pos: [0, 0, 0], heading: 0, route: [[1, 2]] }
+triggers: []
+)yaml";
+    auto r = parseMission(yaml);
+    CHECK_FALSE(r.ok);
+    bool found = false;
+    for (const auto& e : r.errors)
+        if (e.find("route") != std::string::npos)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("parseMission warns when a player slot also carries ai/route/loadout", "[mission-parser]") {
+    const char* yaml = R"yaml(
+name: x
+map: y
+layer: z
+time: { hour: 0, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [blue]
+objects:
+  - { type: F16, id: p, side: blue, pos: [0, 0, 0], heading: 0, player: true, ai: "loiter" }
+triggers: []
+)yaml";
+    auto r = parseMission(yaml);
+    CHECK(r.ok); // a warning, not an error
+    bool found = false;
+    for (const auto& w : r.warnings)
+        if (w.find("player slot") != std::string::npos)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("applyMission calls the onSpawned hook once per spawned world object", "[mission-setup]") {
+    const char* yaml = R"yaml(
+name: x
+map: y
+layer: z
+time: { hour: 0, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [red, blue]
+objects:
+  - { type: test:fighter, id: a, side: red, pos: [0, 0, 0], heading: 0, ai: "loiter" }
+  - { type: test:fighter, id: slot, side: blue, pos: [10, 0, 0], heading: 0, player: true }
+triggers: []
+)yaml";
+    auto parsed = parseMission(yaml);
+    REQUIRE(parsed.ok);
+
+    NullLogger log;
+    EntityTypeRegistry reg;
+    reg.registerType(makeDef("test:fighter"));
+    EntityManager em(log, reg);
+    FactionRegistry factions;
+
+    std::vector<std::string> hookAi;
+    auto hook = [&](EntityId, const MissionObject& obj) { hookAi.push_back(obj.ai); };
+    auto result = applyMission(parsed.mission, em, factions, nullptr, fl::kEarthRadiusM, hook);
+
+    // Only the non-player object is spawned -> the hook fires once, with its ai spec. The player slot
+    // is not spawned (it becomes a joinable slot), so the hook never sees it.
+    REQUIRE(result.spawned.size() == 1);
+    REQUIRE(result.playerSlots.size() == 1);
+    REQUIRE(hookAi.size() == 1);
+    CHECK(hookAi[0] == "loiter");
+}

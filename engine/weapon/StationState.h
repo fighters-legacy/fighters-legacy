@@ -5,6 +5,7 @@
 #include "weapon/WeaponRegistry.h"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace fl {
@@ -42,5 +43,14 @@ struct LoadoutState {
 // selection = the first non-empty non-gun station (the thing a pilot would call "selected"), else
 // the first non-empty station, else none.
 [[nodiscard]] LoadoutState buildLoadout(const EntityDef& def, const WeaponRegistry& weapons);
+
+// Build a live loadout from a MISSION override (#855): `stores[i]` replaces station i's default weapon
+// (an empty string, "~", or "-" leaves the station empty; a missing entry — fewer stores than stations
+// — keeps that station's default). Unlike buildLoadout, an override is authored per mission, so each
+// store is checked against the station's `allowed` list and its type; a disallowed / unknown / wrong-
+// kind store leaves the station empty and appends a human-readable note to `warnings` (never throws).
+[[nodiscard]] LoadoutState buildLoadoutOverride(const EntityDef& def, const WeaponRegistry& weapons,
+                                                const std::vector<std::string>& stores,
+                                                std::vector<std::string>& warnings);
 
 } // namespace fl

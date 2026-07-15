@@ -2952,6 +2952,27 @@ void WorldBroadcaster::registerController(EntityId id, std::unique_ptr<IEntityCo
     addControlledEntity(id, std::move(controller), std::move(model), 0.f, /*decimatable=*/true);
 }
 
+bool WorldBroadcaster::setEntityLoadout(EntityId id, const std::vector<std::string>& stores,
+                                        std::vector<std::string>& warnings) {
+    auto it = m_controlledEntities.find(id.index);
+    if (it == m_controlledEntities.end() || !m_weaponRegistry)
+        return false;
+    const EntityState* st = m_entityManager.get(id);
+    if (!st)
+        return false;
+    const EntityDef* def = m_registry.byIndex(st->typeIndex);
+    if (!def || def->hardpoints.empty())
+        return false;
+
+    it->second.fire.loadout = buildLoadoutOverride(*def, *m_weaponRegistry, stores, warnings);
+    // Re-cost the airframe: the payload the integrator adds each tick is the override's mass/drag now,
+    // not the #812 default (which addControlledEntity resolved). Keeping the loadout and payload in sync
+    // is the same invariant #625 maintains as stores leave the rails.
+    it->second.payload.extra_mass_kg = it->second.fire.loadout.payloadMassKg;
+    it->second.payload.extra_cd0 = it->second.fire.loadout.payloadCd0;
+    return true;
+}
+
 // Grain size for the per-entity parallel passes: enough indices per chunk to amortise the
 // dynamic-claim atomic without starving load balancing across workers.
 static constexpr std::size_t kEntityPassGrain = 16;

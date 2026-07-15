@@ -308,6 +308,58 @@ MissionParseResult parseMission(std::string_view yamlContent) {
             // player (optional) — a joinable slot rather than a spawned world entity
             if (hasKey(obj, "player"))
                 mo.playerSlot = obj["player"].as<bool>(false);
+
+            // ── scripted-bot fields (#855): ai / route / loadout ──────────────
+            if (hasKey(obj, "ai")) {
+                if (!obj["ai"].IsScalar()) {
+                    r.errors.push_back("objects[" + std::to_string(idx) + "].ai must be a string");
+                    r.ok = false;
+                } else {
+                    mo.ai = obj["ai"].as<std::string>("");
+                    if (mo.ai.empty())
+                        r.warnings.push_back("objects[" + std::to_string(idx) + "].ai is empty — ignored");
+                }
+            }
+            if (hasKey(obj, "route")) {
+                if (!obj["route"].IsSequence()) {
+                    r.errors.push_back("objects[" + std::to_string(idx) + "].route must be a sequence of waypoints");
+                    r.ok = false;
+                } else {
+                    std::size_t w = 0;
+                    for (const auto& wp : obj["route"]) {
+                        if (!wp.IsSequence() || static_cast<int>(wp.size()) != kPosComponents) {
+                            r.errors.push_back("objects[" + std::to_string(idx) + "].route[" + std::to_string(w) +
+                                               "] must have exactly " + std::to_string(kPosComponents) + " components");
+                            r.ok = false;
+                        } else {
+                            std::array<double, 3> pt{};
+                            for (int c = 0; c < kPosComponents; ++c)
+                                pt[static_cast<std::size_t>(c)] = wp[c].as<double>(0.0);
+                            mo.route.push_back(pt);
+                        }
+                        ++w;
+                    }
+                }
+            }
+            if (hasKey(obj, "loadout")) {
+                if (!obj["loadout"].IsSequence()) {
+                    r.errors.push_back("objects[" + std::to_string(idx) + "].loadout must be a sequence of weapon ids");
+                    r.ok = false;
+                } else {
+                    for (const auto& store : obj["loadout"])
+                        mo.loadout.push_back(store.as<std::string>(""));
+                }
+            }
+            // A player slot is flown by a human, so AI/route/loadout on it are contradictory — warn but
+            // do not reject (the slot simply ignores them).
+            if (mo.playerSlot && (!mo.ai.empty() || !mo.route.empty() || !mo.loadout.empty()))
+                r.warnings.push_back("objects[" + std::to_string(idx) +
+                                     "] is a player slot; its ai/route/loadout are ignored");
+            if (!mo.ai.empty() && !mo.route.empty())
+                r.warnings.push_back("objects[" + std::to_string(idx) +
+                                     "] has both ai and route; route takes "
+                                     "precedence");
+
             m.objects.push_back(std::move(mo));
             ++idx;
         }

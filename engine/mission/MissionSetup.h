@@ -4,15 +4,22 @@
 #include "entity/EntityId.h"
 #include "flight/Geodetic.h" // kEarthRadiusM
 
+#include <functional>
 #include <string>
 #include <vector>
 
 namespace fl {
 
 struct Mission;
+struct MissionObject;
 class EntityManager;
 class FactionRegistry;
 class WeatherController;
+
+// Called once per spawned (non-player) mission object, with its EntityId and the source object. The
+// caller (fl-server) uses it to attach a controller from `ai`/`route` and apply a `loadout:` override
+// (#855) — engine-mission does not link engine-ai / the weapon registry, so the seam lives here.
+using MissionSpawnHook = std::function<void(EntityId, const MissionObject&)>;
 
 // A joinable player slot: a mission object marked `player: true`. applyMission does NOT spawn it as a
 // world entity — the connect handshake assigns a pilot to an open slot (faction/spawn/type) at connect
@@ -43,6 +50,7 @@ struct MissionSetupResult {
 // `planetRadiusM` places headings on the local tangent frame at each spawn (correct anywhere on the
 // sphere); default Earth. Call before gameLoop.start() (spawn/registry setup is pre-start only).
 MissionSetupResult applyMission(const Mission& mission, EntityManager& em, FactionRegistry& factions,
-                                WeatherController* weather = nullptr, double planetRadiusM = kEarthRadiusM);
+                                WeatherController* weather = nullptr, double planetRadiusM = kEarthRadiusM,
+                                const MissionSpawnHook& onSpawned = {});
 
 } // namespace fl

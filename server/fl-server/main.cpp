@@ -28,11 +28,13 @@
 
 #include <ILogger.h>
 #include <Platform.h>
+#include <ai/AiControllerFactory.h>
 #include <ai/FormationController.h>
 #include <ai/LoiterController.h>
 #include <ai/PursuitController.h>
 #include <ai/StateMachineController.h>
 #include <ai/Threat.h>
+#include <ai/WaypointController.h>
 #include <ai/WingmanBehavior.h>
 #include <ai/WingmanCommand.h>
 #include <config/ConfigFile.h>
@@ -50,6 +52,7 @@
 #include <flight/FlightModelParser.h>
 #include <job/JobSystem.h>
 #include <loop/GameLoop.h>
+#include <mission/Mission.h>
 #include <mission/MissionParser.h>
 #include <mission/MissionSetup.h>
 #include <net/GameProtocol.h>
@@ -58,6 +61,7 @@
 #include <perf/ServerTickReport.h>
 #include <render/BuiltinGeometry.h>
 #include <render/TerrainStreamer.h>
+#include <script/LuaController.h>
 #include <stdfs/StdAsyncFilesystem.h>
 #include <stdfs/StdFilesystem.h>
 #include <weapon/Loadout.h>
@@ -797,7 +801,20 @@ int main(int argc, char** argv) {
     primeSpawnHeight(0.0, 0.0); // no-op if already Ready (default-spawn path primed it above)
     broadcaster.setGroundElevation(static_cast<float>(terrainStreamer.heightAt(glm::dvec3{0.0, 0.0, 0.0})));
 
-    // ---- Load the startup mission (#854) ----
+    // A read-only AI script cache, built before the mission load (so mission `ai: lua <name>` objects
+    // can resolve their scripts) and reused later by the ENet admin `spawn --ai lua` path. Safe to read
+    // from any thread — it is never mutated after construction, before gameLoop.start().
+    std::unordered_map<std::string, std::pair<std::string, std::string>> aiScriptCache;
+    for (const auto& name : assets.listAssets(AssetType::AIScript)) {
+        auto script = assets.loadAIScript(name.c_str());
+        if (!script || script->bytes.empty())
+            continue;
+        std::string src(script->bytes.begin(), script->bytes.end());
+        std::string root = assets.findPackRootForAsset(AssetType::AIScript, name.c_str());
+        aiScriptCache.emplace(name, std::pair<std::string, std::string>{std::move(src), std::move(root)});
+    }
+
+    // ---- Load the startup mission (#854/#855) ----
     // Resolve the mission asset, hand its bytes to the engine-mission runtime parser (the same schema
     // validate-mission checks), and set up the sim from it BEFORE gameLoop.start(): spawns + factions
     // via applyMission, the coalition registry handed to the broadcaster, and the mission's `player:`
@@ -821,8 +838,77 @@ int main(int argc, char** argv) {
                 for (const std::string& e : parsed.errors)
                     log->log(LogLevel::Error, __FILE__, __LINE__, e.c_str());
             } else {
+                // Per-object controller + loadout attachment (#855). engine-mission spawns the object and
+                // calls this back with (id, object); here — where engine-ai / engine-script / the weapon
+                // registry are available — we turn `route`/`ai` into a controller and `loadout` into an
+                // override. route takes precedence over ai when both are present.
+                auto onSpawned = [&](fl::EntityId id, const fl::MissionObject& obj) {
+                    std::unique_ptr<fl::IEntityController> ctrl;
+                    if (!obj.route.empty()) {
+                        std::vector<glm::dvec3> wps;
+                        wps.reserve(obj.route.size());
+                        for (const auto& p : obj.route)
+                            wps.emplace_back(p[0], p[1], p[2]);
+                        ctrl = std::make_unique<fl::ai::WaypointController>(std::move(wps));
+                    } else if (!obj.ai.empty()) {
+                        std::vector<std::string> toks;
+                        std::istringstream iss(obj.ai);
+                        for (std::string tk; iss >> tk;)
+                            toks.push_back(tk);
+                        if (!toks.empty() && toks[0] == "lua") {
+                            const std::string name = toks.size() > 1 ? toks[1] : "";
+                            auto cacheIt = aiScriptCache.find(name);
+                            if (name.empty() || cacheIt == aiScriptCache.end()) {
+                                char m[176];
+                                std::snprintf(m, sizeof(m),
+                                              "mission ai: lua script '%.72s' for object '%.40s' not found",
+                                              name.c_str(), obj.id.c_str());
+                                log->log(LogLevel::Warn, __FILE__, __LINE__, m);
+                            } else {
+                                auto lc = std::make_unique<fl::LuaController>(cacheIt->second.first,
+                                                                              cacheIt->second.second, &entityManager);
+                                if (lc->isValid()) {
+                                    ctrl = std::move(lc);
+                                } else {
+                                    char m[224];
+                                    std::snprintf(m, sizeof(m), "mission ai: lua script '%.56s' error: %.120s",
+                                                  name.c_str(), lc->lastError().c_str());
+                                    log->log(LogLevel::Warn, __FILE__, __LINE__, m);
+                                }
+                            }
+                        } else if (!toks.empty()) {
+                            std::vector<std::string_view> argViews;
+                            for (std::size_t k = 1; k < toks.size(); ++k)
+                                argViews.push_back(toks[k]);
+                            ctrl = fl::ai::createController(toks[0], std::span<std::string_view>(argViews),
+                                                            &entityManager);
+                            if (!ctrl) {
+                                char m[192];
+                                std::snprintf(m, sizeof(m),
+                                              "mission ai: unknown behavior or bad args '%.100s' (object '%.30s')",
+                                              obj.ai.c_str(), obj.id.c_str());
+                                log->log(LogLevel::Warn, __FILE__, __LINE__, m);
+                            }
+                        }
+                    }
+                    if (ctrl)
+                        broadcaster.registerController(id, std::move(ctrl));
+                    if (!obj.loadout.empty()) {
+                        std::vector<std::string> loWarn;
+                        if (!broadcaster.setEntityLoadout(id, obj.loadout, loWarn)) {
+                            char m[176];
+                            std::snprintf(m, sizeof(m),
+                                          "mission loadout: object '%.40s' has no controller/registry — ignored",
+                                          obj.id.c_str());
+                            log->log(LogLevel::Warn, __FILE__, __LINE__, m);
+                        }
+                        for (const std::string& w : loWarn)
+                            log->log(LogLevel::Warn, __FILE__, __LINE__, w.c_str());
+                    }
+                };
+
                 fl::MissionSetupResult setup = fl::applyMission(parsed.mission, entityManager, missionFactions,
-                                                                &weatherController, cfg.planetRadiusM);
+                                                                &weatherController, cfg.planetRadiusM, onSpawned);
                 broadcaster.setFactionRegistry(&missionFactions);
 
                 std::vector<fl::WorldBroadcaster::MissionSpawnSlot> slots;
@@ -882,17 +968,8 @@ int main(int argc, char** argv) {
     // Declared here so rconServer outlives gameLoop but is destroyed before adminRegistry.
     std::unique_ptr<fl::RconServer> rconServer;
 
-    // Build a read-only AI script cache before gameLoop.start() so it is safe to read
-    // from any thread (including the sim thread for ENet admin commands).
-    std::unordered_map<std::string, std::pair<std::string, std::string>> aiScriptCache;
-    for (const auto& name : assets.listAssets(AssetType::AIScript)) {
-        auto script = assets.loadAIScript(name.c_str());
-        if (!script || script->bytes.empty())
-            continue;
-        std::string src(script->bytes.begin(), script->bytes.end());
-        std::string root = assets.findPackRootForAsset(AssetType::AIScript, name.c_str());
-        aiScriptCache.emplace(name, std::pair<std::string, std::string>{std::move(src), std::move(root)});
-    }
+    // (The read-only AI script cache is built earlier, above the mission load, so the mission's
+    // scripted-bot `ai: lua <name>` objects can resolve their scripts — see aiScriptCache.)
 
     // Projectile-churn state (#580). Declared BEFORE gameLoop: the churn callback re-enqueues a
     // copy of itself each tick, and those queued copies capture this state by reference — it must

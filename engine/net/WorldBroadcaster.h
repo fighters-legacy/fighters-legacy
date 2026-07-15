@@ -278,6 +278,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     void registerController(EntityId id, std::unique_ptr<IEntityController> controller,
                             std::shared_ptr<const FlightModelData> model = nullptr);
 
+    // Override a controlled entity's loadout from a mission's per-object `loadout:` (#855). Rebuilds the
+    // live stations from `stores` (each replaces one station's default, respecting the station's allowed
+    // list; see buildLoadoutOverride) and re-costs the airframe's payload mass/drag. Must be called AFTER
+    // the entity has a controller (registerController / a mission slot), so its ControlledEntity exists.
+    // Returns false (with no change) when the entity has no controller or no weapon registry is set;
+    // per-store problems append to `warnings`. Sim-thread / pre-start.
+    bool setEntityLoadout(EntityId id, const std::vector<std::string>& stores, std::vector<std::string>& warnings);
+
     // Peer management — all must be called from the sim thread (via GameLoop::enqueueSimCallback).
 
     // Gracefully disconnect one peer by ID.
