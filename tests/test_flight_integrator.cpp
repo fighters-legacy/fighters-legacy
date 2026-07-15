@@ -1453,7 +1453,7 @@ TEST_CASE("Ballistic: boost accelerates until propellant depletion, then the mot
     CHECK(fi.state().vel_body[0] > 2000.0);
 }
 
-TEST_CASE("Ballistic: the speed guard is per-instance — aircraft keep the 2000 m/s backstop",
+TEST_CASE("Ballistic: the speed guard is per-instance - aircraft keep the 2000 m/s backstop",
           "[ballistic][integrator]") {
     auto data = std::make_shared<FlightModelData>(parseFlightModel(kBallisticToml));
 

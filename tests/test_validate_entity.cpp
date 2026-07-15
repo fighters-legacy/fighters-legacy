@@ -117,7 +117,7 @@ TEST_CASE("Pack mode: the fl-base-pack#24 flight_model defect is an error with a
     CHECK(hasSubstr(r.errors, "did you mean \"f5e/f5e\""));
 }
 
-TEST_CASE("Pack mode: the other wrong spelling — type directory pasted on — is also corrected", "[entity-validator]") {
+TEST_CASE("Pack mode: the other wrong spelling - type directory pasted on - is also corrected", "[entity-validator]") {
     TempPack pack;
     pack.write("aircraft/wedge.glb", "glTF-placeholder");
     pack.write("aircraft/f5e/f5e.toml", "# flight model placeholder\n");

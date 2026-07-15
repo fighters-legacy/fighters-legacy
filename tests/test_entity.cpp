@@ -1344,7 +1344,7 @@ struct BlastWorld {
 
 } // namespace
 
-TEST_CASE("applyWarhead: linear falloff — full at the centre, zero at the edge, nothing outside", "[warhead]") {
+TEST_CASE("applyWarhead: linear falloff - full at the centre, zero at the edge, nothing outside", "[warhead]") {
     BlastWorld w;
     const auto centre = w.spawnAt(0, 0, 0);
     const auto mid = w.spawnAt(50, 0, 0);      // half the radius: half the damage

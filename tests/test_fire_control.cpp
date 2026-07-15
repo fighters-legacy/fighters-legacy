@@ -164,7 +164,7 @@ TEST_CASE("evaluateFire: store release is edge-triggered and pays mass and drag"
     CHECK(out.size() == 1u);
 }
 
-TEST_CASE("evaluateFire: weapons hold reads intent and fires nothing — and banks no edge", "[fire_control]") {
+TEST_CASE("evaluateFire: weapons hold reads intent and fires nothing - and banks no edge", "[fire_control]") {
     FireWorld w;
     FireState fs;
     fs.loadout = buildLoadout(w.def, w.weapons);
