@@ -201,3 +201,31 @@ TEST_CASE("ScreenManager: init isMultiplayer=true propagates Join Server label")
     // Confirming index 0 still returns Screen::Loading.
     CHECK(f.mgr.mainMenu().confirm() == Screen::Loading);
 }
+
+// ---------------------------------------------------------------------------
+// Session-transition predicates (#876) — the guard that decides start/stopGame
+// ---------------------------------------------------------------------------
+
+TEST_CASE("entersSession: any entry into Loading starts a session") {
+    // Sandbox path (the one the old MainMenu-only guard covered).
+    CHECK(entersSession(Screen::MainMenu, Screen::Loading));
+    // Mission path (MissionSelect -> MissionBrief -> Loading): the brief-screen entry is what crashed
+    // when the guard only matched prev == MainMenu (#876).
+    CHECK(entersSession(Screen::MissionBrief, Screen::Loading));
+    CHECK(entersSession(Screen::MissionSelect, Screen::Loading));
+}
+
+TEST_CASE("entersSession: does not re-start when already in Loading, or when not entering Loading") {
+    CHECK_FALSE(entersSession(Screen::Loading, Screen::Loading));
+    CHECK_FALSE(entersSession(Screen::MainMenu, Screen::MissionSelect));
+    CHECK_FALSE(entersSession(Screen::MissionBrief, Screen::Flight));
+}
+
+TEST_CASE("exitsSession: returning to the main menu from an in-session screen ends the session") {
+    CHECK(exitsSession(Screen::Flight, Screen::MainMenu));
+    CHECK(exitsSession(Screen::Pause, Screen::MainMenu));
+    CHECK(exitsSession(Screen::Debrief, Screen::MainMenu));
+    CHECK(exitsSession(Screen::Loading, Screen::MainMenu));             // a failed/cancelled load returns to menu
+    CHECK_FALSE(exitsSession(Screen::MissionSelect, Screen::MainMenu)); // never started a session
+    CHECK_FALSE(exitsSession(Screen::Flight, Screen::Pause));           // not returning to the menu
+}
