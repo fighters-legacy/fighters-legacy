@@ -944,3 +944,75 @@ TEST_CASE("SceneRenderer textures the builtin material (albedo/normal/ORM) with 
             textured = true;
     CHECK(textured);
 }
+
+// ---------------------------------------------------------------------------
+// SceneRenderer — cockpit interior (#870)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SceneRenderer draws the cockpit interior locked to the hidden ownship in Cockpit view (#870)") {
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = {'{', 2, 3, 4};    // exterior mesh
+    pack->meshes["cockpit"] = {'{', 5, 6, 7}; // cockpit interior mesh
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, oneType(), assets, renderer};
+
+    RenderSnapshot snap = makeSnap();
+    EntityRenderEntry own = makeEntry(0);
+    own.entityIdx = 5;
+    own.entityGen = 1;
+    snap.entries.push_back(own);
+    bridge.publish(std::move(snap));
+
+    sr.setCockpitMesh("cockpit");
+    sr.setHiddenEntity(5, 1); // Cockpit view: the ownship is hidden (shadow-only)
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    // Two items: the shadow-only ownship body + the visible cockpit interior at the same transform.
+    REQUIRE(renderer.lastScene.renderItems.size() == 2);
+    bool sawShadowOnly = false, sawCockpit = false;
+    for (const RenderItem& it : renderer.lastScene.renderItems) {
+        if (it.flags & kRenderFlagShadowOnly)
+            sawShadowOnly = true;
+        else
+            sawCockpit = true; // the cockpit interior is a normal opaque, depth-composited item
+    }
+    CHECK(sawShadowOnly);
+    CHECK(sawCockpit);
+    CHECK(renderer.lastScene.renderItems[0].transform == renderer.lastScene.renderItems[1].transform);
+}
+
+TEST_CASE("SceneRenderer omits the cockpit interior in external views (#870)") {
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = {'{', 2, 3, 4};
+    pack->meshes["cockpit"] = {'{', 5, 6, 7};
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, oneType(), assets, renderer};
+
+    RenderSnapshot snap = makeSnap();
+    EntityRenderEntry own = makeEntry(0);
+    own.entityIdx = 5;
+    own.entityGen = 1;
+    snap.entries.push_back(own);
+    bridge.publish(std::move(snap));
+
+    sr.setCockpitMesh("cockpit");
+    sr.setHiddenEntity(0, 0); // external view: nothing hidden, no cockpit
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    REQUIRE(renderer.lastScene.renderItems.size() == 1); // just the exterior, no cockpit item
+    CHECK((renderer.lastScene.renderItems[0].flags & kRenderFlagShadowOnly) == 0);
+}

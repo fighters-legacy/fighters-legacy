@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **renderer**: Cockpit-interior mesh rendering — in Cockpit view the ownship's `EntityDef::cockpitMesh` (parsed since #813 but never rendered) is drawn locked to the airframe, camera-relative and depth-composited, so looking around turns the view inside a fixed cockpit. Entities without a `cockpitMesh` are unchanged (HUD-only) (#870)
 - **renderer**: Builtin textured entity path — the builtin placeholder mesh now samples procedural base-color / normal / ORM maps (`BuiltinTextures`) instead of only PBR scalar factors, so the albedo/normal/ORM texture-sampling path runs with no content pack. Uploaded via a new raw-RGBA `TextureUploadDesc` fallback (no KTX2/PNG container). Deterministic, byte-stable generation (#867)
 
 ### Changed

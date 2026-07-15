@@ -63,6 +63,10 @@ void SceneRenderer::setHiddenEntity(uint32_t entityIdx, uint32_t entityGen) noex
     m_hiddenEntityGen = entityGen;
 }
 
+void SceneRenderer::setCockpitMesh(const std::string& meshName) {
+    m_cockpitMesh = meshName;
+}
+
 void SceneRenderer::ensureBuiltins() {
     if (m_builtinEntityMesh.valid())
         return;
@@ -253,6 +257,25 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
             item.flags |= kRenderFlagDebugFaceColor; // distinct per-face colours on the placeholder
 #endif
         m_items.push_back(item);
+
+        // Cockpit interior (#870): in Cockpit view the ownship is the hidden (shadow-only) entity and
+        // the camera sits at its origin. If a cockpit mesh is set, draw it at the ownship's transform
+        // (camera-relative, so it surrounds the camera and turns with the airframe when the pilot
+        // looks around) as a normal opaque, depth-composited item — NOT shadow-only. Empty cockpit
+        // mesh keeps the HUD-only cockpit (today's behavior).
+        if (shadowOnly && !m_cockpitMesh.empty()) {
+            const MeshHandle cockpit = getOrUploadMesh(m_cockpitMesh);
+            if (cockpit.valid()) {
+                RenderItem ci{};
+                ci.mesh = cockpit;
+                ci.material = getOrUploadMaterial(m_cockpitMesh);
+                if (!ci.material.valid())
+                    ci.material = m_fallbackEntityMat;
+                ci.transform = model; // locked to the airframe, at the camera origin
+                ci.lod = 0;
+                m_items.push_back(ci);
+            }
+        }
     }
 
     // Emit per-entity damage particle effects (uses snapshot positions — thread-safe).

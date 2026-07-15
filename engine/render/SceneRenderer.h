@@ -93,6 +93,12 @@ class SceneRenderer {
     // Pass nullptr to disable (default). Logger must outlive SceneRenderer.
     void setLogger(ILogger* logger) noexcept;
 
+    // Cockpit interior mesh (#870): the ASSET NAME of the ownship's cockpit interior, drawn locked to
+    // the hidden (shadow-only) ownship's transform in Cockpit view. Set it each frame in Cockpit mode
+    // (with the ownship set via setHiddenEntity); pass "" in every other mode to keep the HUD-only
+    // cockpit. Consumes EntityDef::cockpitMesh (#813), which nothing rendered until now.
+    void setCockpitMesh(const std::string& meshName);
+
   private:
     MeshHandle getOrUploadMesh(const std::string& name);
     MaterialHandle getOrUploadMaterial(const std::string& meshName);
@@ -145,6 +151,9 @@ class SceneRenderer {
     // Entity to omit from rendering (player's own aircraft in cockpit view). gen == 0 = disabled.
     uint32_t m_hiddenEntityIdx{0};
     uint32_t m_hiddenEntityGen{0};
+
+    // Ownship cockpit interior asset name (#870); empty = HUD-only cockpit. Set per frame in Cockpit.
+    std::string m_cockpitMesh;
 };
 
 } // namespace fl

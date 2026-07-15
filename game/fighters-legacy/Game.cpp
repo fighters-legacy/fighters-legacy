@@ -1270,11 +1270,17 @@ void Game::run() {
             // shadow-only — you should not see your own aircraft from inside it, but its shadow
             // on the ground should remain. External views (Chase/Free) show it normally.
             const bool cockpit = d.services.cameraController.mode() == fl::CameraMode::Cockpit;
-            if (cockpit && playerEntry)
+            if (cockpit && playerEntry) {
                 d.services.sceneRenderer->setHiddenEntity(d.session.clientHandler->assignedEntityIdx,
                                                           d.session.clientHandler->assignedEntityGen);
-            else
+                // Cockpit interior (#870): render the ownship's cockpit mesh locked to the airframe.
+                // Empty (the builtin debug entity has none yet — #852 G7) keeps the HUD-only cockpit.
+                const fl::EntityDef* pdef = d.services.entityRegistry.byIndex(playerEntry->typeIndex);
+                d.services.sceneRenderer->setCockpitMesh(pdef ? pdef->cockpitMesh : std::string{});
+            } else {
                 d.services.sceneRenderer->setHiddenEntity(0, 0);
+                d.services.sceneRenderer->setCockpitMesh(""); // HUD-only in external views
+            }
 
             // Merge precipitation with this frame's weapon effects (#625) into one emitter list.
             auto& emitters = d.services.frameEmitters;
