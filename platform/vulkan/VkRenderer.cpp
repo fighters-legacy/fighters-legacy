@@ -791,6 +791,9 @@ TextureHandle VkRenderer::createTexture(const TextureUploadDesc& d) {
 MaterialHandle VkRenderer::createMaterial(const MaterialDesc& d) {
     return m_resources.createMaterial(d);
 }
+MaterialHandle VkRenderer::getMeshMaterial(MeshHandle h) const {
+    return m_resources.getMeshMaterial(h);
+}
 void VkRenderer::destroyMesh(MeshHandle h) {
     m_resources.destroyMesh(h);
 }

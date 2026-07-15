@@ -637,6 +637,53 @@ MeshHandle VkResourceManager::createMesh(const MeshUploadDesc& desc) {
     mesh.indexCount = static_cast<uint32_t>(indices.size());
     mesh.alive = true;
 
+    // ── Material (#833) ──────────────────────────────────────────────────
+    // The glb references its textures by external URI; only the engine layer can turn a URI into
+    // file bytes (it owns asset-name resolution), so it supplies a byte resolver. The renderer walks
+    // the primitive's PBR material, uploads each referenced texture, and builds one GPU material —
+    // retrievable via getMeshMaterial(). No resolver (builtin/terrain meshes) ⇒ no material.
+    if (desc.textureResolver && prim.material >= 0 && prim.material < static_cast<int>(model.materials.size())) {
+        // Turn a glTF texture index into a GPU texture via the engine-supplied byte resolver.
+        auto uploadTexture = [&](int texIndex, bool srgb) -> TextureHandle {
+            if (texIndex < 0 || texIndex >= static_cast<int>(model.textures.size()))
+                return {};
+            const int imgIndex = model.textures[texIndex].source;
+            if (imgIndex < 0 || imgIndex >= static_cast<int>(model.images.size()))
+                return {};
+            const std::string& uri = model.images[imgIndex].uri;
+            if (uri.empty())
+                return {};
+            std::vector<uint8_t> bytes = desc.textureResolver(uri);
+            if (bytes.empty()) {
+                std::fprintf(stderr, "[VkResources] texture URI unresolved (%.*s): %s — using default\n",
+                             static_cast<int>(desc.name.size()), desc.name.data(), uri.c_str());
+                return {}; // resolver miss — material falls back to the renderer's default texture
+            }
+            TextureUploadDesc td{};
+            td.name = uri;
+            td.bytes = bytes;
+            td.srgb = srgb;
+            return createTexture(td);
+        };
+
+        const tinygltf::Material& gm = model.materials[prim.material];
+        const tinygltf::PbrMetallicRoughness& pbr = gm.pbrMetallicRoughness;
+        MaterialDesc md{};
+        md.baseColorTexture = uploadTexture(pbr.baseColorTexture.index, /*srgb=*/true);
+        md.normalTexture = uploadTexture(gm.normalTexture.index, /*srgb=*/false);
+        // Engine ORM packs R=occlusion G=roughness B=metallic. glTF's metallicRoughness texture
+        // already carries G/B; a pack authoring a combined ORM references it here (occlusion in R).
+        md.ormTexture = uploadTexture(pbr.metallicRoughnessTexture.index, /*srgb=*/false);
+        md.baseColorFactor =
+            glm::vec4(static_cast<float>(pbr.baseColorFactor[0]), static_cast<float>(pbr.baseColorFactor[1]),
+                      static_cast<float>(pbr.baseColorFactor[2]), static_cast<float>(pbr.baseColorFactor[3]));
+        md.metallicFactor = static_cast<float>(pbr.metallicFactor);
+        md.roughnessFactor = static_cast<float>(pbr.roughnessFactor);
+        md.doubleSided = gm.doubleSided;
+        md.alphaBlend = (gm.alphaMode == "BLEND");
+        mesh.material = createMaterial(md);
+    }
+
     // ── Slot allocation ──────────────────────────────────────────────────
     uint32_t slot = 0;
     if (!m_freeMeshSlots.empty()) {
@@ -903,6 +950,11 @@ const GpuMaterial* VkResourceManager::getMaterial(MaterialHandle h) const {
         return nullptr;
     const GpuMaterial& m = m_materials[h.id - 1];
     return m.alive ? &m : nullptr;
+}
+
+MaterialHandle VkResourceManager::getMeshMaterial(MeshHandle h) const {
+    const GpuMesh* m = getMesh(h);
+    return m ? m->material : MaterialHandle{};
 }
 
 } // namespace fl

@@ -835,3 +835,27 @@ TEST_CASE("Builtin floor plane is wound front-face up") {
     const glm::vec3 storedNormal = readVec3(normBase);
     CHECK(storedNormal.y > 0.0f);
 }
+
+// ---------------------------------------------------------------------------
+// textureAssetNameFromUri — the #833 URI convention (settled here)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("textureAssetNameFromUri resolves the authored ../../textures/ form") {
+    CHECK(fl::textureAssetNameFromUri("../../textures/f5e_diffuse.ktx2") == "f5e_diffuse");
+}
+
+TEST_CASE("textureAssetNameFromUri accepts a bare basename") {
+    CHECK(fl::textureAssetNameFromUri("f5e_diffuse.ktx2") == "f5e_diffuse");
+}
+
+TEST_CASE("textureAssetNameFromUri preserves a subdirectory under textures/") {
+    CHECK(fl::textureAssetNameFromUri("../../textures/f5e/skin.ktx2") == "f5e/skin");
+}
+
+TEST_CASE("textureAssetNameFromUri handles a .png fallback extension") {
+    CHECK(fl::textureAssetNameFromUri("textures/f5e_orm.png") == "f5e_orm");
+}
+
+TEST_CASE("textureAssetNameFromUri handles a bare basename with a backslash path") {
+    CHECK(fl::textureAssetNameFromUri("some\\dir\\f5e_normal.ktx2") == "f5e_normal");
+}

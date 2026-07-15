@@ -155,6 +155,7 @@ class VkRenderer : public IRenderer {
     MeshHandle createMesh(const MeshUploadDesc& desc) override;
     TextureHandle createTexture(const TextureUploadDesc& desc) override;
     MaterialHandle createMaterial(const MaterialDesc& desc) override;
+    MaterialHandle getMeshMaterial(MeshHandle h) const override;
     void destroyMesh(MeshHandle h) override;
     void destroyTexture(TextureHandle h) override;
     void destroyMaterial(MaterialHandle h) override;

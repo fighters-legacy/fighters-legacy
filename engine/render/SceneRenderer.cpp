@@ -20,6 +20,20 @@
 
 namespace fl {
 
+// Map a glTF image URI to a Texture asset name (#833). See the declaration in SceneRenderer.h for the
+// convention; takes the path after the last "textures/" segment (or the bare basename), strips the
+// extension.
+std::string textureAssetNameFromUri(std::string_view uri) {
+    constexpr std::string_view kDir = "textures/";
+    if (auto pos = uri.rfind(kDir); pos != std::string_view::npos)
+        uri.remove_prefix(pos + kDir.size());
+    else if (auto slash = uri.find_last_of("/\\"); slash != std::string_view::npos)
+        uri.remove_prefix(slash + 1);
+    if (auto dot = uri.find_last_of('.'); dot != std::string_view::npos)
+        uri = uri.substr(0, dot);
+    return std::string(uri);
+}
+
 SceneRenderer::SceneRenderer(SimRenderBridge& bridge, MeshNameResolver resolver, AssetManager& assets,
                              IRenderer& renderer)
     : m_bridge(bridge), m_resolver(std::move(resolver)), m_assets(assets), m_renderer(renderer) {}
@@ -297,6 +311,16 @@ MeshHandle SceneRenderer::getOrUploadMesh(const std::string& name) {
     }
 
     MeshUploadDesc desc{name, data->bytes};
+    // Resolve the glb's external texture URIs to file bytes through the content system (#833). The
+    // renderer parses the PBR material and builds the GPU material; we only supply the bytes, because
+    // URI → asset-name → file mapping is a content-pack concern, not a GPU-backend one.
+    desc.textureResolver = [this](std::string_view uri) -> std::vector<uint8_t> {
+        const std::string assetName = textureAssetNameFromUri(uri);
+        auto tex = m_assets.loadTexture(assetName.c_str());
+        if (!tex || tex->bytes.empty())
+            return {};
+        return tex->bytes;
+    };
     MeshHandle h = m_renderer.createMesh(desc);
     if (!h.valid() && m_logger) {
         char buf[176];
@@ -313,11 +337,17 @@ MaterialHandle SceneRenderer::getOrUploadMaterial(const std::string& meshName) {
     if (it != m_materialCache.end())
         return it->second;
 
-    // Share the pre-created shaded-grey fallback across every mesh name that lacks explicit
-    // material data (ensureBuiltins() always runs before this method). Avoids creating one
-    // identical material per mesh name.
-    m_materialCache[meshName] = m_fallbackEntityMat;
-    return m_fallbackEntityMat;
+    // Prefer the material createMesh parsed from the mesh's own glb (#833). getOrUploadMesh runs
+    // first for this name (renderFrame calls it immediately before this), so the handle is cached.
+    // A mesh with no material — none authored, or the texture resolver missed — falls back to the
+    // shared shaded-grey material (ensureBuiltins() always runs before this method).
+    MaterialHandle mat = m_fallbackEntityMat;
+    if (auto mit = m_meshCache.find(meshName); mit != m_meshCache.end() && mit->second.valid()) {
+        if (MaterialHandle meshMat = m_renderer.getMeshMaterial(mit->second); meshMat.valid())
+            mat = meshMat;
+    }
+    m_materialCache[meshName] = mat;
+    return mat;
 }
 
 } // namespace fl

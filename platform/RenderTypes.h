@@ -2,10 +2,12 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <glm/glm.hpp>
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fl {
 
@@ -74,6 +76,14 @@ struct FrameStats {
 struct MeshUploadDesc {
     std::string_view name;          // asset name for debug labels / dedup
     std::span<const uint8_t> bytes; // .glb file contents
+
+    // Optional: resolve a glTF image URI (e.g. "../../textures/f5e_diffuse.ktx2") to raw KTX2/PNG
+    // texture-file bytes. The engine layer wires this to AssetManager::loadTexture, because URI →
+    // asset-name → file resolution belongs to the content system, not the GPU backend (#833). When
+    // set, createMesh consumes the primitive's PBR material and attaches a MaterialHandle retrievable
+    // via IRenderer::getMeshMaterial(); unset (builtin/terrain meshes) or an empty return leaves the
+    // mesh with the renderer's default textures. Returns {} on a miss.
+    std::function<std::vector<uint8_t>(std::string_view uri)> textureResolver{};
 };
 
 // Raw texture bytes: KTX2 (Basis Universal) preferred; PNG accepted as fallback.

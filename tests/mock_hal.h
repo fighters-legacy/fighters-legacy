@@ -505,6 +505,9 @@ struct MockRenderer : public IRenderer {
         ++createMaterialCount;
         return MaterialHandle{nextMaterialId++};
     }
+    MaterialHandle getMeshMaterial(MeshHandle) const override {
+        return MaterialHandle{}; // mock does not parse glb materials
+    }
     void destroyMesh(MeshHandle) override {
         ++destroyMeshCount;
     }

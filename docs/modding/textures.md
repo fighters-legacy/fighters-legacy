@@ -27,17 +27,42 @@ fa18c_orm.png           →  fa18c_orm.ktx2
 fa18c_emissive.png      →  fa18c_emissive.ktx2
 ```
 
-Place texture files alongside the mesh in the aircraft subdirectory:
+Place texture files in the pack's top-level `textures/` directory — **not** alongside the mesh.
+This is the asset directory the engine resolves `AssetType::Texture` to (`textures/<name>.ktx2`,
+with a `.png` fallback); a file placed beside the `.glb` will not be found.
 
 ```
-aircraft/fa18c/
-    fa18c.glb
-    fa18c.toml
+textures/
     fa18c_diffuse.ktx2
     fa18c_normal.ktx2
     fa18c_orm.ktx2
     fa18c_emissive.ktx2
+aircraft/fa18c/
+    fa18c.glb        (references ../../textures/fa18c_diffuse.ktx2)
+    fa18c.toml
 ```
+
+---
+
+## Texture URI convention
+
+The `.glb` references each texture by a **relative URI that resolves into `textures/`**. The engine
+maps that URI back to a texture asset name by taking the path after the last `textures/` segment and
+dropping the extension, then loads `textures/<name>.ktx2` (`.png` fallback):
+
+```
+../../textures/fa18c_diffuse.ktx2   →  asset "fa18c_diffuse"  →  textures/fa18c_diffuse.ktx2
+fa18c_diffuse.ktx2                  →  asset "fa18c_diffuse"   (bare basename also accepted)
+```
+
+Author the full `../../textures/<name>.ktx2` form — it is what the shipped meshes use and what
+`validate-mesh` expects. A URI whose extension is not `.ktx2` or `.png` will never load and is
+flagged by `validate-mesh`. To reference a KTX2/Basis texture the spec-conformant way the mesh
+declares `KHR_texture_basisu` in `extensionsUsed`; `validate-mesh` accepts it.
+
+Because `.ktx2` files are build artifacts (produced by `tex-compress`, not committed as sources),
+`validate-mesh` reports an unreachable texture URI as a **warning**, not an error — the mesh still
+validates when the compressed textures have not been built yet.
 
 ---
 
@@ -102,8 +127,8 @@ tex-compress --format bc1 fa18c_diffuse.png
 # Diffuse with alpha (canopy)
 tex-compress --type diffuse --format bc3 fa18c_canopy.png
 
-# Specify output path explicitly
-tex-compress --type diffuse fa18c_diffuse.png aircraft/fa18c/fa18c_diffuse.ktx2
+# Specify output path explicitly (textures live in the pack's textures/ directory)
+tex-compress --type diffuse fa18c_diffuse.png textures/fa18c_diffuse.ktx2
 
 # Disable mipmap generation (UI textures only)
 tex-compress --type diffuse --no-mipmaps ui_crosshair.png
@@ -151,9 +176,12 @@ directory is not in PATH.
 
 1. Author source art in Blender / Substance Painter
 2. Export each map as PNG (see channel layout table above)
-3. Run `tex-compress` to produce `.ktx2` files
-4. Commit `.ktx2` files to fl-base-pack
-5. Verify with `validate-mesh` that the `.glb` references `.ktx2` URIs (not embedded PNG data)
+3. Run `tex-compress` to produce `.ktx2` files into the pack's `textures/` directory
+4. Verify with `validate-mesh` that the `.glb` references `../../textures/<name>.ktx2` URIs (not
+   embedded PNG data)
+
+`.ktx2` files are build outputs of `tex-compress`, reproducible from the source art; treat them as
+you would any generated artifact.
 
 ---
 
