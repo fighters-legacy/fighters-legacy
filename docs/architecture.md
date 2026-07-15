@@ -218,6 +218,18 @@ revised by a dated decision record instead of a full RFC, provided the change is
 with its rationale. This keeps the velocity of pre-1.0 architecture work without leaving the
 locked table silently stale.
 
+**2026-07-15 — Unified connect handshake (#853).** The client now sends `MsgConnectRequest` first
+on connect (role, requested entity type, mounted-pack manifest, a reserved entitlement-token ext
+block) and the server replies `MsgConnectAck` (granted role + assigned entity) or
+`MsgConnectRefusal` — replacing the "server unilaterally spawns `builtin:debug-entity` on connect"
+flow. The join flow was designed **once** so the observer role (#857), player entity type (#834),
+required-pack policy (#872), and future premium entitlement (RFC #871) each consume one message
+instead of accreting independent TLVs onto `MsgConnectAck`. As part of it, the ENet `MsgId` space
+was split: `0x00–0x1F` for ENet messages, `0x20+` for raw-UDP/non-ENet ids (`MsgLanBeacon` moved
+`0x10 → 0x20`), freeing an id for `MsgConnectRequest` (`0x11`) — a deliberate raise of the boundary
+the prior code comment flagged as "a choice, not an accident". Wire detail in
+[network-protocol.md](network-protocol.md); both ends land together so `kProtocolVersion` stays 1.
+
 **2026-06-28 — Re-target to 128+ multiplayer.** A roadmap gap-analysis against the bar of a
 modern combat flight sim supporting 128+ simultaneous players found the architecture sized for
 ~32. The following decisions were revised (rows above updated accordingly):

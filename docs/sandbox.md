@@ -343,6 +343,8 @@ Pass `--connect` to join a remote `fl-server` instead of spawning a local single
 | Flag | Description |
 |---|---|
 | `--connect <host[:port]>` | Connect to a remote fl-server. Port defaults to `4778` if omitted. IPv6 literals must be bracketed: `--connect [::1]:4778`. |
+| `--aircraft <type-id>` | Request a specific aircraft in the connect handshake (#834), e.g. `--aircraft fl-base:f5e`. The server clamps to a registered type and falls back to its `[world] player_entity_type` default if the id is unknown. Omit to let the server choose. |
+| `--observer` | Join as an **observer** (spectator) with no aircraft (#857) — a free ghost camera (press **F4**). The server must have `[world] allow_observers = true` (default). |
 | `--operator-password <pw>` | Operator password for admin console commands on the remote server. Enables the in-game console commands (`spawn`, `kill`, `tp`, etc.) over the network. Takes precedence over the env var and user.toml. |
 
 To avoid exposing the password in the process listing, use the `FL_OPERATOR_PASSWORD` environment variable instead of the CLI flag. Merge precedence: `--operator-password` CLI arg > `FL_OPERATOR_PASSWORD` env var > `[client].operator_password` in user.toml.
@@ -358,5 +360,6 @@ The loading screen reports specific connection failures immediately rather than 
 | `Server startup timed out.` | `fl-server` started but never became ready | Main menu after 3 s |
 | `Server version mismatch.` | Server sent `MsgHello` with a different `protocolVersion` | Main menu after 3 s |
 | `Connection refused by server.` | Server dropped the ENet connection before accepting the client (ban, allowlist, rate limit) | Main menu after 3 s |
+| `The server denied the requested role.` | Requested `--observer` but the server has `allow_observers = false` (#857) | Main menu after 3 s |
 | `Connection timed out.` | No response from server within 10 s | Main menu after 3 s |
 | `Local server failed to start.` | `fl-server` process hung and never became ready within 10 s (fallback) | Main menu after 3 s |
