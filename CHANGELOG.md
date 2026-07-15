@@ -29,6 +29,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **docs**: the aircraft-likeness policy (`docs/legal/aircraft-likeness.md` §2) now governs reference *imagery*, not only performance numbers. §2 is retitled "Public-domain and unencumbered sources only" and adds visual reference for geometry and texture as a permitted use of public-domain and CC0 imagery *regardless of author* (with §4 restated — markings and liveries visible in a photo are not carried onto the airframe); it names the trap the old text missed — scale plans, multi-view line drawings, and magazine/book/partwork cutaway illustrations (e.g. Jane's/Osprey) are copyrighted creative works and may not be traced, regardless of the absence of a licence notice; and it states the CC BY / CC BY-SA position explicitly (not accepted — attribution and share-alike propagate into derived assets and conflict with the pack's `CC-BY-4.0`). Reference imagery lives outside the pack and is not shipped; only the derived asset ships, with per-file provenance in `SOURCES.md` (#835)
 - **tools**: `validate-weapon --pack` now validates the pack's weapons (per-file schema + plausibility, duplicate ids); the hardpoint↔weapon cross-check moved to `validate-entity --pack`, where the referencing files live (#829)
 
 ### Fixed
