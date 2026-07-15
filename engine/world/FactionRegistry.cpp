@@ -55,6 +55,13 @@ void FactionRegistry::setRelationship(uint16_t a, uint16_t b, FactionRelation re
     m_relations[static_cast<size_t>(b) * n + a] = rel; // symmetric
 }
 
+bool FactionRegistry::areHostile(uint16_t a, uint16_t b) const noexcept {
+    if (a == 0 || b == 0 || a == b) {
+        return false; // neutral index / self is never hostile
+    }
+    return relationship(a, b) == FactionRelation::Hostile;
+}
+
 AlertLevel FactionRegistry::alertLevel(uint16_t index) const noexcept {
     std::scoped_lock lock(m_alertMutex);
     return index < m_alertLevels.size() ? m_alertLevels[index] : AlertLevel::Peacetime;

@@ -746,7 +746,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                                   m_stepInputs[i] = it.ce->lastInput;
                               } else {
                                   const AiTickContext aiCtx{&m_spatialIndex, m_sensorSystem.contactsFor(it.idx),
-                                                            &sensingEnv, difficulty};
+                                                            &sensingEnv, difficulty, m_factionRegistry};
                                   m_stepInputs[i] = it.ce->controller->sample(*it.state, tickIndex, simDt, aiCtx);
                                   it.ce->lastInput = m_stepInputs[i];
                                   it.ce->lastInputValid = true;

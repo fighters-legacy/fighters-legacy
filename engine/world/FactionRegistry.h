@@ -43,6 +43,13 @@ class FactionRegistry {
     FactionRelation relationship(uint16_t a, uint16_t b) const noexcept; // Neutral if either OOB
     void setRelationship(uint16_t a, uint16_t b, FactionRelation rel);   // symmetric
 
+    // Coalition-aware hostility: true when a and b are enemies per the relationship matrix. Index 0
+    // is the reserved neutral faction (no enemies) and a faction is never hostile to itself — the
+    // same guards as the affiliation rule areFactionsHostile() (FactionDef.h). Missions populate the
+    // matrix so distinct non-allied sides are Hostile (MissionSetup.h); a Friendly (allied) or
+    // Neutral relationship is not hostile. Sim-thread-only (reads m_relations, like relationship()).
+    [[nodiscard]] bool areHostile(uint16_t a, uint16_t b) const noexcept;
+
     AlertLevel alertLevel(uint16_t index) const noexcept; // Peacetime if OOB
     void setAlertLevel(uint16_t index, AlertLevel level);
 
@@ -53,5 +60,14 @@ class FactionRegistry {
     std::vector<AlertLevel> m_alertLevels;
     mutable std::mutex m_alertMutex;
 };
+
+// Resolve hostility through a registry when one is available, else fall back to the affiliation rule
+// (areFactionsHostile). The nullable registry is the AiTickContext seam: null = "not evaluated" (the
+// pre-mission behavior — distinct non-zero factions are hostile), non-null = coalition-aware
+// relationships (a mission-loaded registry, #632). Header-only so engine-ai and engine-net share it
+// with no new link dependency.
+[[nodiscard]] inline bool hostile(const FactionRegistry* reg, uint16_t a, uint16_t b) noexcept {
+    return reg ? reg->areHostile(a, b) : areFactionsHostile(a, b);
+}
 
 } // namespace fl

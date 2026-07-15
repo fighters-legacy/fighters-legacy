@@ -52,6 +52,7 @@ struct FlightModelData;   // engine/flight/FlightModelData.h
 struct IEntityController; // engine/entity/IEntityController.h
 class EntityTypeRegistry;
 class WeatherController;
+class FactionRegistry; // engine/world/FactionRegistry.h — coalition-aware hostility (#632)
 } // namespace fl
 
 namespace fl {
@@ -688,6 +689,16 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // 6371 km; only call this for non-Earth planets. Call before gameLoop.start().
     void setGravityField(const IGravityField& field, float planetRadiusKm = 6371.f) noexcept;
 
+    // Inject the coalition registry that resolves hostility for AI controllers (#632). Passed into the
+    // AiTickContext each tick, so a scripted mission bot honors mission-declared alliances instead of
+    // the crude "distinct non-zero faction = hostile" affiliation rule. nullptr (the default) keeps
+    // that pre-mission affiliation behavior — the hostile() fallback (FactionRegistry.h). The registry
+    // is owned by the caller (fl-server, for the server lifetime; wired at mission load in #854) and
+    // must outlive this broadcaster. Call before gameLoop.start().
+    void setFactionRegistry(const FactionRegistry* registry) noexcept {
+        m_factionRegistry = registry;
+    }
+
     // Inject the data-parallel job system used to parallelise the per-entity AI + integrate passes
     // in onTick. nullptr (the default) runs both passes inline on the sim thread — keeps unit tests
     // thread-free and gives a serial-equivalent result. The JobSystem must outlive this broadcaster
@@ -776,6 +787,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     INetwork& m_net;
     ILogger& m_logger;
     WeatherController* m_weather{nullptr};
+    const FactionRegistry* m_factionRegistry{nullptr}; // coalition-aware hostility for AI (#632)
 
     std::unordered_map<uint32_t, EntityId> m_peerEntities;
     std::unordered_map<uint32_t, PeerInputState> m_peerInputs;

@@ -39,7 +39,7 @@ triggers:
 | `time.minute` | int | 0–59 | Local mission start minute |
 | `wind.heading` | int | 0–359 | Wind-from heading in degrees (0 = north, 90 = east) |
 | `wind.speed` | float | ≥ 0 | Steady-state wind speed in **m/s**. Gusts are added by the engine on top of this value. |
-| `sides` | sequence | ≥ 1 element | Coalition IDs active in this mission; must match entries in `factions/*.toml` |
+| `sides` | sequence | ≥ 1 element | Coalitions active in this mission — see Coalitions below. Each entry is a side id (string) or a mapping with an `id` and optional `allies` |
 | `objects` | sequence | ≥ 1 element | Unit and aircraft placements — see Objects section |
 | `triggers` | sequence | — | Win/loss/event conditions — see Triggers section |
 
@@ -56,6 +56,38 @@ weather:
   preset: partly_cloudy
 time_scale: 10.0   # omit to use server default
 ```
+
+---
+
+## Coalitions
+
+`sides` declares the coalitions in the mission. In the simplest form it is a flat list of ids, and
+every side is hostile to every other:
+
+```yaml
+sides: [nato, russia]
+```
+
+To make sides **allied**, give an entry as a mapping with an `allies` list. Allied sides are friendly
+to each other; any side not in your `allies` list is hostile. Alliances are symmetric — declaring
+`ukraine` as an ally of `nato` makes the pair friendly in both directions.
+
+```yaml
+sides:
+  - id: nato
+    allies: [ukraine]   # nato + ukraine are friendly; both are hostile to russia
+  - id: ukraine
+  - id: russia
+```
+
+| Field | Type | Required | Constraints | Description |
+|---|---|---|---|---|
+| `id` | string | yes (map form) | non-empty | Coalition id; referenced by each object's `side` |
+| `allies` | sequence | no | each must name another side in `sides` | Sides this coalition is friendly with |
+
+An ally that names an unknown side is a hard error; listing yourself as your own ally is ignored with
+a warning. The engine loads these into the faction registry so AI decides friend-from-foe by the
+coalition graph, not by a crude "different team = enemy" rule.
 
 ---
 
@@ -87,6 +119,7 @@ objects:
 | `pos` | sequence | yes | exactly 3 numbers: [x, y, z] in metres | World-space spawn position. Y is up; sea level ≈ 0 |
 | `heading` | float | yes | — | Initial heading in degrees (0 = north, clockwise) |
 | `alt` | float | no | — | Altitude above sea level in metres; overrides `pos[1]` if both given |
+| `player` | bool | no | default `false` | When `true`, this object is a **joinable player slot**: the engine does not spawn it as an AI/world entity — a connecting pilot is assigned to it and inherits its faction, spawn position, and aircraft type. Declare more than one for multiplayer. |
 
 Object IDs must be unique — the validator will reject duplicate IDs within a single file.
 
@@ -188,6 +221,10 @@ Run `validate-mission <file.yaml>` to check a mission file before committing it.
 reports all errors in a single pass so contributors see the full list at once.
 
 Exit codes: 0 = valid, 1 = validation failure, 2 = bad arguments.
+
+`validate-mission` and the engine share **one** schema: the linter delegates to the engine's own
+mission parser (`engine-mission`), so a mission the tool passes is a mission the engine loads. The
+schema described in this document is that parser — the two cannot drift.
 
 Schema source: this document. For format reference and additional asset types
 see [`docs/modding/formats.md`](formats.md).

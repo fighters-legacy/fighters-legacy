@@ -183,8 +183,11 @@ target_include_directories(validate-entity-lib PUBLIC
 add_executable(validate-entity validate-entity/main.cpp)
 target_link_libraries(validate-entity PRIVATE validate-entity-lib)
 
+# Same delegation rule as validate-weapon/-sensor/-entity: the mission schema lives in the engine's
+# own parser (engine-mission's parseMission), so the linter and the runtime cannot drift. engine-mission
+# owns yaml-cpp; this tool no longer links it directly.
 add_library(validate-mission-lib STATIC validate-mission/mission_validator.cpp)
-target_link_libraries(validate-mission-lib PUBLIC yaml-cpp::yaml-cpp)
+target_link_libraries(validate-mission-lib PRIVATE engine-mission)
 target_include_directories(validate-mission-lib PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/validate-mission")
 

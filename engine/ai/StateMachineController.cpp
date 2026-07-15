@@ -5,7 +5,7 @@
 #include "entity/EntityState.h"
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
-#include "world/FactionDef.h" // areFactionsHostile (header-only inline; no link dep)
+#include "world/FactionRegistry.h" // hostile()/areFactionsHostile — coalition-aware via ctx.factions (#632)
 
 #include <cstdio>
 #include <utility>
@@ -189,7 +189,7 @@ Condition AnyHostileEntityWithinRange(float rangeM) {
                 return;
             }
             const fl::EntityState* other = em.getByIndex(idx);
-            if (!other || !fl::areFactionsHostile(self.factionIndex, other->factionIndex)) {
+            if (!other || !fl::hostile(ctx.factions, self.factionIndex, other->factionIndex)) {
                 return;
             }
             const double dx = pos[0] - self.transform.pos[0];
@@ -223,7 +223,7 @@ Condition AnyHostileEntityWithinRangeOf(fl::EntityId anchorId, float rangeM) {
                 return;
             }
             const fl::EntityState* other = em.getByIndex(idx);
-            if (!other || other->dead || !fl::areFactionsHostile(self.factionIndex, other->factionIndex)) {
+            if (!other || other->dead || !fl::hostile(ctx.factions, self.factionIndex, other->factionIndex)) {
                 return;
             }
             const double dx = pos[0] - anchor->transform.pos[0];
@@ -265,7 +265,7 @@ Condition DetectedHostileWithinRange(float rangeM) {
         for (const fl::sensor::Contact& c : *ctx.contacts) {
             if (!c.reacted)
                 continue; // seen, but not yet noticed — the reaction delay is not a formality
-            if (!fl::areFactionsHostile(self.factionIndex, c.factionIndex))
+            if (!fl::hostile(ctx.factions, self.factionIndex, c.factionIndex))
                 continue;
             if (distSqToContact(self, c) <= rangeSq)
                 return true;

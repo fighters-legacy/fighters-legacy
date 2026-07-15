@@ -148,6 +148,44 @@ TEST_CASE("FactionRegistry: relationship out-of-range is guarded", "[faction_reg
 }
 
 // ---------------------------------------------------------------------------
+// areHostile — coalition-aware hostility (#632)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("FactionRegistry: areHostile guards neutral index and self", "[faction_registry]") {
+    FactionRegistry reg;
+    reg.load(threeFactionDefs());
+    reg.setRelationship(0, 1, FactionRelation::Hostile); // even an explicit hostile with index 0...
+    CHECK_FALSE(reg.areHostile(0, 1));                   // ...index 0 is reserved neutral: no enemies
+    CHECK_FALSE(reg.areHostile(1, 0));
+    CHECK_FALSE(reg.areHostile(1, 1)); // never hostile to itself
+}
+
+TEST_CASE("FactionRegistry: areHostile reads the relationship matrix", "[faction_registry]") {
+    FactionRegistry reg;
+    reg.load(threeFactionDefs());
+    CHECK_FALSE(reg.areHostile(1, 2)); // default off-diagonal is Neutral, not Hostile
+    reg.setRelationship(1, 2, FactionRelation::Hostile);
+    CHECK(reg.areHostile(1, 2));
+    CHECK(reg.areHostile(2, 1)); // symmetric
+    reg.setRelationship(1, 2, FactionRelation::Friendly);
+    CHECK_FALSE(reg.areHostile(1, 2)); // allies are not hostile
+}
+
+TEST_CASE("hostile() helper: null registry falls back to affiliation rule", "[faction_registry]") {
+    // Null = "not evaluated" (pre-mission): distinct non-zero factions are hostile, like areFactionsHostile.
+    CHECK(hostile(nullptr, 1, 2));
+    CHECK_FALSE(hostile(nullptr, 0, 1)); // faction 0 neutral
+    CHECK_FALSE(hostile(nullptr, 2, 2)); // self
+
+    // Non-null = coalition-aware: two sides are friendly until declared hostile.
+    FactionRegistry reg;
+    reg.load(threeFactionDefs());
+    CHECK_FALSE(hostile(&reg, 1, 2)); // registry present, relationship Neutral -> not hostile
+    reg.setRelationship(1, 2, FactionRelation::Hostile);
+    CHECK(hostile(&reg, 1, 2));
+}
+
+// ---------------------------------------------------------------------------
 // Enum / POD contract guards (lock the ordinals downstream wire/Lua code depends on)
 // ---------------------------------------------------------------------------
 

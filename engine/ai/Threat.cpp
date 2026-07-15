@@ -5,7 +5,7 @@
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "spatial/SpatialIndex.h"
-#include "world/FactionDef.h"
+#include "world/FactionRegistry.h" // hostile() — coalition-aware, nullptr = affiliation fallback (#632)
 
 #include <cmath>
 
@@ -28,17 +28,19 @@ struct Candidate {
 };
 
 // Shared per-candidate test for both queries. Returns false when `other` is not a live hostile.
-bool isLiveHostile(const fl::EntityState& observer, uint16_t observerFaction, const fl::EntityState* other) noexcept {
+bool isLiveHostile(const fl::EntityState& observer, uint16_t observerFaction, const fl::EntityState* other,
+                   const fl::FactionRegistry* factions) noexcept {
     if (!other || other->dead || other->id.index == observer.id.index) {
         return false;
     }
-    return fl::areFactionsHostile(observerFaction, other->factionIndex);
+    return fl::hostile(factions, observerFaction, other->factionIndex);
 }
 
 } // namespace
 
 fl::EntityId designateBoresightTarget(const fl::EntityManager& em, const fl::EntityState& lead, const float viewAxis[3],
-                                      float maxRangeM, float halfAngleRad, const fl::SpatialIndex* si) {
+                                      float maxRangeM, float halfAngleRad, const fl::SpatialIndex* si,
+                                      const fl::FactionRegistry* factions) {
     if (lead.factionIndex == 0 || maxRangeM <= 0.f) {
         return fl::EntityId{}; // a neutral entity has no enemies; nothing to designate
     }
@@ -76,13 +78,13 @@ fl::EntityId designateBoresightTarget(const fl::EntityManager& em, const fl::Ent
         // queryRadius is cell-level conservative — the exact range test lives in `consider`.
         si->queryRadius(lead.transform.pos, static_cast<double>(maxRangeM), [&](uint32_t idx, const double* /*pos*/) {
             const fl::EntityState* other = em.getByIndex(idx);
-            if (isLiveHostile(lead, lead.factionIndex, other)) {
+            if (isLiveHostile(lead, lead.factionIndex, other, factions)) {
                 consider(*other);
             }
         });
     } else {
         em.forEach([&](const fl::EntityState& other) {
-            if (isLiveHostile(lead, lead.factionIndex, &other)) {
+            if (isLiveHostile(lead, lead.factionIndex, &other, factions)) {
                 consider(other);
             }
         });
@@ -92,7 +94,8 @@ fl::EntityId designateBoresightTarget(const fl::EntityManager& em, const fl::Ent
 }
 
 fl::EntityId designateFromContacts(const fl::EntityState& lead, const float viewAxis[3],
-                                   const fl::sensor::ContactTable* contacts, float maxRangeM, float halfAngleRad) {
+                                   const fl::sensor::ContactTable* contacts, float maxRangeM, float halfAngleRad,
+                                   const fl::FactionRegistry* factions) {
     if (!contacts || contacts->empty())
         return {}; // no sensing, or nothing seen — refuse rather than invent a target
 
@@ -112,7 +115,7 @@ fl::EntityId designateFromContacts(const fl::EntityState& lead, const float view
     float bestSeenDot = -2.f;
 
     for (const fl::sensor::Contact& c : *contacts) {
-        if (!fl::areFactionsHostile(lead.factionIndex, c.factionIndex))
+        if (!fl::hostile(factions, lead.factionIndex, c.factionIndex))
             continue;
 
         // LAST-KNOWN position: what the lead actually knows, not where the target really is.
@@ -143,7 +146,7 @@ fl::EntityId designateFromContacts(const fl::EntityState& lead, const float view
 }
 
 fl::EntityId nearestHostileWithin(const fl::EntityManager& em, const fl::EntityState& anchor, uint16_t selfFaction,
-                                  float rangeM, const fl::SpatialIndex* si) {
+                                  float rangeM, const fl::SpatialIndex* si, const fl::FactionRegistry* factions) {
     if (selfFaction == 0 || rangeM <= 0.f) {
         return fl::EntityId{};
     }
@@ -167,13 +170,13 @@ fl::EntityId nearestHostileWithin(const fl::EntityManager& em, const fl::EntityS
     if (si) {
         si->queryRadius(anchor.transform.pos, static_cast<double>(rangeM), [&](uint32_t idx, const double* /*pos*/) {
             const fl::EntityState* other = em.getByIndex(idx);
-            if (isLiveHostile(anchor, selfFaction, other)) {
+            if (isLiveHostile(anchor, selfFaction, other, factions)) {
                 consider(*other);
             }
         });
     } else {
         em.forEach([&](const fl::EntityState& other) {
-            if (isLiveHostile(anchor, selfFaction, &other)) {
+            if (isLiveHostile(anchor, selfFaction, &other, factions)) {
                 consider(other);
             }
         });
