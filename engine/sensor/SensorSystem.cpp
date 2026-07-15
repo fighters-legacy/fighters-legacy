@@ -113,6 +113,27 @@ void SensorSystem::removeObserver(uint32_t entityIdx) {
     m_observers.erase(entityIdx);
 }
 
+void SensorSystem::setAvionicsFailed(uint32_t entityIdx) {
+    // Critical damage with avionics_failure (#626): the powered suite dies, the pilot's eyes do
+    // not. Non-visual sensors are removed (falling back to the builtin eyeball if nothing is
+    // left), emissions stop, and every held track is dropped — the eyes must re-acquire honestly
+    // rather than inheriting a radar lock the radar no longer holds.
+    auto it = m_observers.find(entityIdx);
+    if (it == m_observers.end())
+        return;
+
+    ObserverState& obs = it->second;
+    obs.emitting = false;
+    std::erase_if(obs.sensors,
+                  [](const std::shared_ptr<const SensorDef>& s) { return !s || s->type != SensorType::Visual; });
+    if (obs.sensors.empty()) {
+        static const auto kEyeball = std::make_shared<const SensorDef>(BuiltinSensors::eyeball());
+        obs.sensors.push_back(kEyeball);
+    }
+    obs.tracks.clear();
+    obs.contacts.contacts.clear();
+}
+
 void SensorSystem::setEmitting(uint32_t entityIdx, bool emitting) {
     if (auto it = m_observers.find(entityIdx); it != m_observers.end())
         it->second.emitting = emitting;

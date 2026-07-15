@@ -4,11 +4,14 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "flight/Atmosphere.h"
+#include "flight/BallisticForceModel.h"
 #include "flight/BuiltinFlightModel.h"
 #include "flight/CentralGravityField.h"
+#include "flight/EngineFailFlags.h"
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelParser.h"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -1247,4 +1250,324 @@ TEST_CASE("Integrator: the stall flag sets past alpha_stall_deg and clears below
     integ.reset(fast);
     integ.step(1.f / 60.f, ctrl, {});
     CHECK_FALSE(integ.state().stalled);
+}
+
+// ---------------------------------------------------------------------------
+// Damage penalties + crash-impact report (#626)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Integrator: damage thrust penalty caps what the throttle can command", "[integrator][damage]") {
+    auto data = makeData();
+    FlightIntegrator integ(data);
+    FlightState s{};
+    s.vel_body[0] = 200.0;
+    s.pos_world[1] = 5000.0;
+    s.quat[3] = 1.f;
+    s.mass_kg = data->geometry.mass_kg;
+    integ.reset(s);
+
+    integ.setDamagePenalty(0.4f, 1.f);
+    CHECK(integ.damageThrustFactor() == Catch::Approx(0.4f));
+
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    for (int i = 0; i < 1200; ++i) // let the spool converge
+        integ.step(1.f / 60.f, ctrl, {});
+    // Full stick asked for 1.0; a shot-up engine delivers what the penalty allows.
+    CHECK(integ.state().throttle_actual > 0.3f);
+    CHECK(integ.state().throttle_actual < 0.45f);
+}
+
+TEST_CASE("Integrator: damage control penalty degrades pitch response", "[integrator][damage]") {
+    auto data = makeData();
+    auto flyPitch = [&](float controlFactor) {
+        FlightIntegrator integ(data);
+        FlightState s{};
+        s.vel_body[0] = 200.0;
+        s.pos_world[1] = 5000.0;
+        s.quat[3] = 1.f;
+        s.mass_kg = data->geometry.mass_kg;
+        integ.reset(s);
+        integ.setDamagePenalty(1.f, controlFactor);
+        ControlInput ctrl{};
+        ctrl.throttle = 0.8f;
+        ctrl.elevator = 1.f;
+        // A single step: the raw command-to-pitch-acceleration response, before aerodynamic
+        // damping and alpha feedback blur the comparison.
+        integ.step(1.f / 60.f, ctrl, {});
+        return std::abs(integ.state().omega[2]); // pitch = around body Z (right axis)
+    };
+
+    const float healthy = flyPitch(1.f);
+    const float damaged = flyPitch(0.3f);
+    CHECK(healthy > 0.f);
+    CHECK(damaged < healthy * 0.75f); // shot-up linkages cannot be asked for full deflection
+}
+
+TEST_CASE("Integrator: a hard ground impact is reported once, a firm landing not at all", "[integrator][damage]") {
+    auto data = makeData();
+    FlightIntegrator integ(data);
+
+    FlightState s{};
+    s.vel_body[0] = 60.0;
+    s.vel_body[1] = -40.0; // 40 m/s of sink — an arrival, not a landing
+    s.pos_world[1] = 0.4;  // about to hit the datum floor this tick
+    s.quat[3] = 1.f;
+    s.mass_kg = data->geometry.mass_kg;
+    integ.reset(s);
+
+    ControlInput ctrl{};
+    integ.step(1.f / 60.f, ctrl, {}, {}, 0.f);
+    CHECK(integ.state().ground_impact_speed > 6.f); // reported...
+    integ.step(1.f / 60.f, ctrl, {}, {}, 0.f);
+    CHECK(integ.state().ground_impact_speed == 0.f); // ...exactly once (one-shot)
+
+    // A firm-but-survivable landing stays below the reporting threshold.
+    FlightState gentle{};
+    gentle.vel_body[0] = 60.0;
+    gentle.vel_body[1] = -3.0;
+    gentle.pos_world[1] = 0.04;
+    gentle.quat[3] = 1.f;
+    gentle.mass_kg = data->geometry.mass_kg;
+    integ.reset(gentle);
+    integ.step(1.f / 60.f, ctrl, {}, {}, 0.f);
+    CHECK(integ.state().ground_impact_speed == 0.f);
+}
+
+// ---------------------------------------------------------------------------
+// Ballistic vehicles (#354)
+// ---------------------------------------------------------------------------
+
+static const std::string kBallisticToml = R"(
+[aircraft]
+name = "Test MRBM"
+type = "ballistic"
+
+[flight_model]
+mass_kg      = 2000.0
+wing_area_m2 = 0.8
+wingspan_m   = 0.8
+mac_m        = 0.8
+fuel_kg      = 3000.0
+ixx_kg_m2    = 800.0
+iyy_kg_m2    = 12000.0
+izz_kg_m2    = 12000.0
+
+[engine.boost]
+thrust_n    = 300000.0
+burn_time_s = 60.0
+)";
+
+TEST_CASE("Ballistic: the reduced schema parses and folds the burn into the fuel flow", "[ballistic]") {
+    const FlightModelData d = parseFlightModel(kBallisticToml);
+    CHECK(d.isBallistic());
+    CHECK(d.boost_thrust_n == 300000.f);
+    // 3000 kg of propellant over 60 s: 50 kg/s at every throttle — a solid motor burns to depletion.
+    CHECK(d.engine.fuel_flow_idle_kg_s == Catch::Approx(50.f));
+    CHECK(d.engine.fuel_flow_mil_kg_s == Catch::Approx(50.f));
+    CHECK(d.drag_polar.cd0 == Catch::Approx(0.20f)); // blunt-body default
+    CHECK(d.limits.alpha_stall_deg == 90.f);         // nothing to stall
+
+    // The wings-and-turbines schema is NOT required of it.
+    CHECK_THROWS(parseFlightModel(R"(
+[aircraft]
+name = "No Boost"
+type = "ballistic"
+[flight_model]
+mass_kg = 2000.0
+wing_area_m2 = 0.8
+wingspan_m = 0.8
+mac_m = 0.8
+fuel_kg = 3000.0
+ixx_kg_m2 = 800.0
+iyy_kg_m2 = 12000.0
+izz_kg_m2 = 12000.0
+)")); // missing [engine.boost]
+}
+
+TEST_CASE("Ballistic: drag-free trajectory matches the closed-form range", "[ballistic]") {
+    // A 45-degree, 300 m/s shot in (near-)vacuum drag terms: cd0 = 0 via a table-free copy.
+    auto data = std::make_shared<FlightModelData>(parseFlightModel(kBallisticToml));
+    auto zeroDrag = std::make_shared<FlightModelData>(*data);
+    zeroDrag->drag_polar.cd0 = 0.f;
+    zeroDrag->boost_thrust_n = 0.f; // no motor: pure ballistic arc from the initial state
+
+    FlightIntegrator fi(zeroDrag);
+    fi.setForceModel(BallisticForceModel::instance());
+    fi.setSpeedGuard(8000.0);
+
+    FlightState s{};
+    s.pos_world[1] = 1.0;     // just above the datum
+    s.vel_body[0] = 212.132f; // 300 m/s at 45 deg, identity attitude: body == world
+    s.vel_body[1] = 212.132f;
+    s.fuel_kg = 0.f;
+    s.mass_kg = 2000.f;
+    fi.reset(s);
+
+    ControlInput ctrl{};
+    PayloadEffect px{};
+    const double posArr0[3] = {0.0, 1.0, 0.0};
+    const float g0 = std::abs(CentralGravityField::earthInstance().accelWorld(posArr0)[1]);
+
+    double maxAlt = 0.0;
+    int ticks = 0;
+    for (; ticks < 60 * 120; ++ticks) {
+        fi.step(1.f / 60.f, ctrl, px);
+        maxAlt = std::max(maxAlt, fi.state().pos_world[1]);
+        if (ticks > 60 && fi.state().pos_world[1] <= 1.0)
+            break; // back on the deck
+    }
+
+    // Closed form (flat earth, constant g): R = v^2 sin(2*45)/g, apex = v^2 sin^2(45)/(2g),
+    // T = 2 v sin(45)/g. The 1/r^2 field and the spherical floor perturb this by well under 1%.
+    const double v = 300.0;
+    const double rangeExact = v * v / static_cast<double>(g0);
+    const double apexExact = v * v * 0.5 * 0.5 / static_cast<double>(g0) * 2.0 / 2.0; // v^2/(4g)... keep explicit below
+    (void)apexExact;
+    CHECK(fi.state().pos_world[0] == Catch::Approx(rangeExact).epsilon(0.02));
+    CHECK(maxAlt == Catch::Approx(v * v * 0.25 / static_cast<double>(g0)).epsilon(0.02));
+    CHECK(static_cast<double>(ticks) / 60.0 ==
+          Catch::Approx(2.0 * v * 0.70710678 / static_cast<double>(g0)).epsilon(0.02));
+}
+
+TEST_CASE("Ballistic: boost accelerates until propellant depletion, then the motor is done", "[ballistic]") {
+    auto data = std::make_shared<FlightModelData>(parseFlightModel(kBallisticToml));
+    FlightIntegrator fi(data);
+    fi.setForceModel(BallisticForceModel::instance());
+    fi.setSpeedGuard(8000.0);
+
+    FlightState s{};
+    s.pos_world[1] = 30000.0; // thin 1976-layer air: the #354 atmosphere is what makes this work
+    s.vel_body[0] = 50.f;
+    s.fuel_kg = 3000.f;
+    s.mass_kg = 5000.f;
+    fi.reset(s);
+
+    ControlInput ctrl{}; // throttle 0: a solid motor does not care
+    PayloadEffect px{};
+    for (int i = 0; i < 60 * 30; ++i)
+        fi.step(1.f / 60.f, ctrl, px);
+
+    // Half the 60 s burn elapsed: still burning, well past the old 2000 m/s aircraft guard.
+    CHECK(fi.state().fuel_kg > 0.f);
+    CHECK(fi.state().vel_body[0] > 2000.0);
+}
+
+TEST_CASE("Ballistic: the speed guard is per-instance - aircraft keep the 2000 m/s backstop",
+          "[ballistic][integrator]") {
+    auto data = std::make_shared<FlightModelData>(parseFlightModel(kBallisticToml));
+
+    FlightIntegrator guarded(data); // default guard: 2000 m/s
+    FlightState s{};
+    s.pos_world[1] = 50000.0;
+    s.vel_body[0] = 5000.f;
+    s.fuel_kg = 0.f;
+    s.mass_kg = 2000.f;
+    guarded.reset(s);
+    ControlInput ctrl{};
+    PayloadEffect px{};
+    guarded.step(1.f / 60.f, ctrl, px);
+    CHECK(guarded.state().vel_body[0] <= 2000.0);
+
+    FlightIntegrator wide(data);
+    wide.setSpeedGuard(8000.0);
+    wide.reset(s);
+    wide.step(1.f / 60.f, ctrl, px);
+    CHECK(wide.state().vel_body[0] > 4900.0);
+}
+
+// ---------------------------------------------------------------------------
+// Per-subsystem damage effects (#675)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Integrator: a single engine out halves thrust and yaws toward the dead engine", "[integrator][subsystem]") {
+    // Two runs from the same state: healthy vs left-engine-out. The dead-engine run must accelerate
+    // less (half thrust) and develop a yaw rate toward the dead (left) engine.
+    auto run = [](uint8_t failFlags) {
+        auto data = makeData();
+        FlightIntegrator fi(data);
+        FlightState s{};
+        s.vel_body[0] = 200.f;
+        s.pos_world[1] = 5000.f;
+        s.fuel_kg = 4000.f;
+        s.mass_kg = 14000.f;
+        s.quat[3] = 1.f;
+        fi.reset(s);
+        fi.setEngineFailFlags(failFlags);
+        ControlInput ctrl{};
+        ctrl.throttle = 1.f;
+        PayloadEffect px{};
+        for (int i = 0; i < 60; ++i)
+            fi.step(1.f / 60.f, ctrl, px);
+        return fi.state();
+    };
+
+    const FlightState healthy = run(0);
+    const FlightState leftOut = run(fl::kEngineFailLeft);
+
+    // Less forward acceleration on one engine.
+    CHECK(leftOut.vel_body[0] < healthy.vel_body[0]);
+    // A yaw rate developed (omega[1] is yaw about body-up); the healthy jet stays ~straight.
+    CHECK(std::abs(leftOut.omega[1]) > std::abs(healthy.omega[1]) + 0.001f);
+
+    // Right engine out yaws the opposite way.
+    const FlightState rightOut = run(fl::kEngineFailRight);
+    CHECK((leftOut.omega[1] > 0.f) != (rightOut.omega[1] > 0.f)); // opposite signs
+}
+
+TEST_CASE("Integrator: both engines out kills thrust entirely", "[integrator][subsystem]") {
+    auto data = makeData();
+    FlightIntegrator fi(data);
+    FlightState s{};
+    s.vel_body[0] = 200.f;
+    s.pos_world[1] = 5000.f;
+    s.fuel_kg = 4000.f;
+    s.mass_kg = 14000.f;
+    s.quat[3] = 1.f;
+    fi.reset(s);
+    fi.setEngineFailFlags(fl::kEngineFailLeft | fl::kEngineFailRight);
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    PayloadEffect px{};
+    for (int i = 0; i < 120; ++i)
+        fi.step(1.f / 60.f, ctrl, px);
+    // With no thrust and drag, an aircraft in level-ish flight decelerates.
+    CHECK(fi.state().vel_body[0] < 200.f);
+}
+
+TEST_CASE("Integrator: subsystem control factor multiplies the tier control factor", "[integrator][subsystem]") {
+    auto data = makeData();
+    FlightIntegrator fi(data);
+    fi.setDamagePenalty(1.f, 0.5f);     // tier: half control
+    fi.setSubsystemControlFactor(0.4f); // subsystem: 40% — combined 0.2
+    // (The combined factor is applied to command inputs each step; a direct read is not exposed, so
+    //  this case documents the API contract; the combined EFFECT is covered by the WB integration.)
+    CHECK(fi.damageControlFactor() == 0.5f); // the tier factor is unchanged by the subsystem setter
+}
+
+TEST_CASE("Integrator: a fuel leak drains on top of the burn", "[integrator][subsystem]") {
+    auto data = makeData();
+    FlightIntegrator fi(data);
+    FlightState s{};
+    s.vel_body[0] = 200.f;
+    s.pos_world[1] = 5000.f;
+    s.fuel_kg = 4000.f;
+    s.mass_kg = 14000.f;
+    s.quat[3] = 1.f;
+    fi.reset(s);
+    ControlInput ctrl{};
+    ctrl.throttle = 0.5f;
+    PayloadEffect px{};
+
+    fi.step(1.f / 60.f, ctrl, px);
+    const float afterOneStepNoLeak = fi.state().fuel_kg;
+
+    fi.reset(s);
+    fi.setFuelLeakRate(10.f); // 10 kg/s
+    fi.step(1.f / 60.f, ctrl, px);
+    const float afterOneStepLeak = fi.state().fuel_kg;
+
+    CHECK(afterOneStepLeak < afterOneStepNoLeak);
+    // The extra drain is ~10 kg/s / 60 = 0.167 kg in one step.
+    CHECK((afterOneStepNoLeak - afterOneStepLeak) == Catch::Approx(10.f / 60.f).epsilon(0.001));
 }

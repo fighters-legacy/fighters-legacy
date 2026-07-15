@@ -1,19 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "weapon_validator.h"
 
+#include "ILogger.h"
+#include "content/AssetManager.h"
+#include "content/ContentIndex.h"
+#include "content/FolderContentPack.h"
+#include "sensor/BuiltinSensors.h"
+#include "sensor/SensorDef.h"
+#include "sensor/SensorDefParser.h"
 #include "weapon/WeaponDef.h"
 #include "weapon/WeaponDefParser.h"
 
-#include <toml++/toml.hpp>
+#include <stdfs/StdFilesystem.h>
 
-#include <algorithm>
+#include <array>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <string>
-#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -50,10 +57,18 @@ void checkPlausibility(const WeaponDef& w, WeaponValidationResult& r) {
         r.warnings.push_back("load.drag_factor is implausibly high (a single store draggier than a "
                              "clean airframe)");
 
+    // The pre-#583 ad-hoc seeker lobe still parses, but the seeker head is a sensor def now
+    // (2026-07-14 decision record) and the legacy form is removed after one release.
+    if (w.seeker && w.seeker->usesLegacyLobe())
+        r.warnings.push_back("seeker uses the deprecated fov_deg/acquisition_nm lobe — reference a "
+                             "sensor def with sensor_id");
+
     // A guided weapon that cannot see as far as it can shoot is usually a mistake: it can be
     // launched at a target it will never acquire. Legal, and occasionally intended (a shot taken on
-    // a datalink handoff), so it warns rather than fails.
-    if (w.seeker && w.seeker->acquisitionRangeM > 0.f && w.seeker->acquisitionRangeM < w.performance.maxRangeM * 0.25f)
+    // a datalink handoff), so it warns rather than fails. In sensor_id form the lobe lives on the
+    // sensor def, so the equivalent check runs in --pack mode where the def can be resolved.
+    if (w.seeker && w.seeker->usesLegacyLobe() && w.seeker->acquisitionRangeM > 0.f &&
+        w.seeker->acquisitionRangeM < w.performance.maxRangeM * 0.25f)
         r.warnings.push_back("seeker.acquisition_nm is far below the weapon's max range — shots "
                              "beyond acquisition range will never take a lock");
 
@@ -74,75 +89,6 @@ void checkPlausibility(const WeaponDef& w, WeaponValidationResult& r) {
     return ss.str();
 }
 
-// Collects the weapon ids a pack defines. Uses the real parser, so a malformed weapon is reported
-// as such rather than quietly contributing no id (which would then surface as a confusing
-// "unknown weapon" against every entity that references it).
-void collectWeaponIds(const fs::path& weaponsDir, std::set<std::string>& ids, WeaponValidationResult& r) {
-    if (!fs::is_directory(weaponsDir))
-        return;
-
-    for (const auto& entry : fs::directory_iterator(weaponsDir)) {
-        if (!entry.is_regular_file() || entry.path().extension() != ".toml")
-            continue;
-
-        const std::string src = readFile(entry.path());
-        try {
-            const WeaponDef w = parseWeaponDef(src);
-            if (!ids.insert(w.id).second) {
-                r.errors.push_back("duplicate weapon id \"" + w.id + "\" (" + entry.path().filename().string() + ")");
-                r.ok = false;
-            }
-        } catch (const std::exception& e) {
-            r.errors.push_back(entry.path().filename().string() + ": " + e.what());
-            r.ok = false;
-        }
-    }
-}
-
-// Pulls the weapon ids an entity's hardpoints reference. Deliberately reads only the id STRINGS via
-// toml++ rather than going through parseEntityDef: the hardpoint schema (slot uniqueness, default ∈
-// allowed, known type) is already the parser's job and is covered by its tests. Re-checking it here
-// would be exactly the duplicate-vocabulary drift this tool exists to prevent.
-void collectHardpointRefs(const fs::path& entitiesDir, std::vector<std::pair<std::string, std::string>>& refs,
-                          WeaponValidationResult& r) {
-    if (!fs::is_directory(entitiesDir))
-        return;
-
-    for (const auto& entry : fs::directory_iterator(entitiesDir)) {
-        if (!entry.is_regular_file() || entry.path().extension() != ".toml")
-            continue;
-
-        toml::table tbl;
-        try {
-            tbl = toml::parse(readFile(entry.path()));
-        } catch (const toml::parse_error& e) {
-            r.errors.push_back(entry.path().filename().string() +
-                               ": TOML parse error: " + std::string(e.description()));
-            r.ok = false;
-            continue;
-        }
-
-        auto* arr = tbl["hardpoints"].as_array();
-        if (!arr)
-            continue;
-
-        const std::string file = entry.path().filename().string();
-        for (auto& el : *arr) {
-            auto* hp = el.as_table();
-            if (!hp)
-                continue;
-            if (auto* allowed = (*hp)["allowed"].as_array()) {
-                for (auto& a : *allowed) {
-                    if (auto id = a.value<std::string>(); id && !id->empty())
-                        refs.emplace_back(file, *id);
-                }
-            }
-            if (auto def = (*hp)["default"].value<std::string>(); def && !def->empty())
-                refs.emplace_back(file, *def);
-        }
-    }
-}
-
 } // namespace
 
 WeaponValidationResult validateWeapon(std::string_view tomlContent) {
@@ -161,7 +107,19 @@ WeaponValidationResult validateWeapon(std::string_view tomlContent) {
     return r;
 }
 
-WeaponValidationResult validatePackLoadouts(const std::string& packDir) {
+namespace {
+
+// The content system's own log lines would duplicate the findings this tool reports itself.
+class SilentLoggerW final : public ILogger {
+  public:
+    void log(LogLevel, const char*, int, const char*) override {}
+    void setMinLevel(LogLevel) override {}
+    void flush() override {}
+};
+
+} // namespace
+
+WeaponValidationResult validatePackWeapons(const std::string& packDir) {
     WeaponValidationResult r;
 
     const fs::path root(packDir);
@@ -171,16 +129,78 @@ WeaponValidationResult validatePackLoadouts(const std::string& packDir) {
         return r;
     }
 
-    std::set<std::string> weaponIds;
-    collectWeaponIds(root / "weapons", weaponIds, r);
+    const fs::path weaponsDir = root / "weapons";
+    if (!fs::is_directory(weaponsDir))
+        return r; // a pack with no weapons has nothing to validate — not an error
 
-    std::vector<std::pair<std::string, std::string>> refs;
-    collectHardpointRefs(root / "entities", refs, r);
+    // A seeker's sensor_id is a def-id reference into the pack's sensors/ — resolved through the
+    // REAL id index (the same rule validate-entity follows: never a private copy of the path or
+    // id rules). The manifest is irrelevant to id resolution, so a synthesized one is fine.
+    static SilentLoggerW silent;
+    StdFilesystem stdfs(root, root);
+    FolderContentPack::Manifest manifest;
+    manifest.id = "pack-under-validation";
+    manifest.name = manifest.id;
+    manifest.namespaceId = manifest.id;
+    auto folderPack = std::make_unique<FolderContentPack>(stdfs, silent, ".", manifest);
+    FolderContentPack* pack = folderPack.get();
+    pack->init();
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(folderPack));
+    AssetManager assets(std::move(packs), silent);
+    ContentIndex index;
+    constexpr std::array<AssetType, 1> kDefTypes{AssetType::SensorDef};
+    index.build(assets, kDefTypes, silent);
 
-    for (const auto& [file, id] : refs) {
-        if (weaponIds.find(id) == weaponIds.end()) {
-            r.errors.push_back(file + ": hardpoint references unknown weapon id \"" + id + "\"");
+    std::set<std::string> ids;
+    for (const auto& entry : fs::directory_iterator(weaponsDir)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".toml")
+            continue;
+
+        const std::string file = entry.path().filename().string();
+        const std::string src = readFile(entry.path());
+
+        WeaponDef w;
+        try {
+            w = parseWeaponDef(src);
+        } catch (const std::exception& e) {
+            r.errors.push_back(file + ": " + e.what());
             r.ok = false;
+            continue;
+        }
+
+        if (!ids.insert(w.id).second) {
+            r.errors.push_back(file + ": duplicate weapon id \"" + w.id + "\"");
+            r.ok = false;
+        }
+
+        WeaponValidationResult one;
+        checkPlausibility(w, one);
+        for (auto& warning : one.warnings)
+            r.warnings.push_back(file + ": " + warning);
+
+        // Resolve the seeker head. Unresolvable is an ERROR for the same reason as an entity's
+        // flight_model: the runtime consequence is a missile that flies but never sees.
+        if (w.seeker && !w.seeker->sensorId.empty() && w.seeker->sensorId != sensor::BuiltinSensors::eyeball().id) {
+            const std::string* assetName = index.assetNameFor(AssetType::SensorDef, w.seeker->sensorId);
+            if (assetName == nullptr) {
+                r.errors.push_back(file + ": seeker.sensor_id \"" + w.seeker->sensorId +
+                                   "\" does not resolve to any sensor def in this pack");
+                r.ok = false;
+            } else if (auto raw = pack->loadSensorDef(assetName->c_str())) {
+                // The lobe now lives on the sensor def, so the "can it see as far as it shoots"
+                // plausibility check runs here, against the real lobe.
+                try {
+                    const sensor::SensorDef sd = sensor::parseSensorDef(
+                        std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size()));
+                    if (sd.search.maxRangeM > 0.f && sd.search.maxRangeM < w.performance.maxRangeM * 0.25f)
+                        r.warnings.push_back(file + ": the seeker's search lobe reaches far less than "
+                                                    "the weapon's max range — shots beyond it will "
+                                                    "never take a lock");
+                } catch (const std::exception&) {
+                    // A malformed sensor def is validate-sensor's finding, not this tool's.
+                }
+            }
         }
     }
 

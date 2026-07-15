@@ -104,6 +104,12 @@ struct ServerConfig {
     // Phase 2: parsed and stored; enforcement lands with the AI runtime.
     std::string aiDifficultyFloor = "recruit";
 
+    // [gameplay] — the damage gates (#626). SERVER-authoritative: the client difficulty screen's
+    // matching toggles configure single-player through this same path (the embedded fl-server),
+    // never the client directly. Hot-reloadable via reload_config.
+    bool friendlyFire = false; // same-faction weapon damage suppressed when false
+    bool crashDamage = true;   // ground impacts damage the airframe when true
+
     // [discovery]
     bool discoveryEnabled = true;
     int discoveryIntervalMs = 2000;

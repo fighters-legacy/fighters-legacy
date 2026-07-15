@@ -38,7 +38,7 @@ target_include_directories(test_particle_system PRIVATE ${CMAKE_CURRENT_SOURCE_D
 catch_discover_tests(test_particle_system)
 
 add_executable(test_entity test_entity.cpp)
-target_link_libraries(test_entity PRIVATE Catch2::Catch2WithMain engine-entity)
+target_link_libraries(test_entity PRIVATE Catch2::Catch2WithMain engine-entity engine-spatial)
 target_include_directories(test_entity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_entity)
 
@@ -57,6 +57,47 @@ catch_discover_tests(test_flight_model_parser)
 add_executable(test_weapon_def_parser test_weapon_def_parser.cpp)
 target_link_libraries(test_weapon_def_parser PRIVATE Catch2::Catch2WithMain engine-weapon)
 catch_discover_tests(test_weapon_def_parser)
+
+# TransformHistory (#425): the lag-compensation rewind ring (header-only, engine-net).
+# Entity-entity collision geometry + damage helpers (#630).
+add_executable(test_collision test_collision.cpp)
+target_link_libraries(test_collision PRIVATE Catch2::Catch2WithMain engine-entity)
+catch_discover_tests(test_collision)
+
+# Per-subsystem damage routing (#675) — the pure pick/apply logic.
+add_executable(test_subsystem_damage test_subsystem_damage.cpp)
+target_link_libraries(test_subsystem_damage PRIVATE Catch2::Catch2WithMain engine-entity)
+catch_discover_tests(test_subsystem_damage)
+
+add_executable(test_transform_history test_transform_history.cpp)
+target_link_libraries(test_transform_history PRIVATE Catch2::Catch2WithMain engine-net)
+catch_discover_tests(test_transform_history)
+
+# FireControl + ProjectileSystem (#625): the pure fire-decision logic and the 3-DOF projectile pool.
+# engine-weapon's entity/spatial deps are PRIVATE, so the test links them explicitly.
+add_executable(test_fire_control test_fire_control.cpp)
+target_link_libraries(test_fire_control PRIVATE Catch2::Catch2WithMain engine-weapon engine-entity
+    engine-spatial)
+catch_discover_tests(test_fire_control)
+
+# SeekerTrack + PN guidance (#627): the missile seeker over the shared Detection.h machine.
+add_executable(test_seeker test_seeker.cpp)
+target_link_libraries(test_seeker PRIVATE Catch2::Catch2WithMain engine-weapon engine-entity
+    engine-sensor engine-spatial)
+catch_discover_tests(test_seeker)
+
+# Bombs/rockets release ballistics + CCIP (#629).
+add_executable(test_release_ballistics test_release_ballistics.cpp)
+target_link_libraries(test_release_ballistics PRIVATE Catch2::Catch2WithMain engine-weapon
+    engine-entity engine-spatial)
+catch_discover_tests(test_release_ballistics)
+
+# Ballistic missile guidance + the MIRV controller-spawn seam (#355).
+add_executable(test_ballistic_guidance test_ballistic_guidance.cpp)
+target_link_libraries(test_ballistic_guidance PRIVATE Catch2::Catch2WithMain engine-ai engine-net
+    engine-entity engine-flight engine-bootstrap)
+target_include_directories(test_ballistic_guidance PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_ballistic_guidance)
 
 # WeaponRegistry + defaultPayload (#812): a loadout that actually costs the airframe mass and drag.
 # fm-trim (#817): the tests LOCK the derived numbers, so they double as the engine's guard against
@@ -455,6 +496,10 @@ add_executable(test_validate_sensor test_validate_sensor.cpp)
 target_link_libraries(test_validate_sensor PRIVATE Catch2::Catch2WithMain validate-sensor-lib)
 catch_discover_tests(test_validate_sensor)
 
+add_executable(test_validate_entity test_validate_entity.cpp)
+target_link_libraries(test_validate_entity PRIVATE Catch2::Catch2WithMain validate-entity-lib)
+catch_discover_tests(test_validate_entity)
+
 add_executable(test_validate_flight_model test_validate_flight_model.cpp)
 target_link_libraries(test_validate_flight_model
     PRIVATE Catch2::Catch2WithMain validate-flight-model-lib)
@@ -553,7 +598,8 @@ target_include_directories(test_command_shell PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 catch_discover_tests(test_command_shell)
 
 add_executable(test_world_broadcaster test_world_broadcaster.cpp)
-target_link_libraries(test_world_broadcaster PRIVATE Catch2::Catch2WithMain engine-net engine-weather)
+target_link_libraries(test_world_broadcaster PRIVATE Catch2::Catch2WithMain engine-net engine-weather
+    engine-bootstrap) # builtinDebugEntityDef/registerBuiltinWeapons — the sandbox arming smoke (#440)
 catch_discover_tests(test_world_broadcaster)
 
 add_executable(test_weather test_weather.cpp)
@@ -663,12 +709,15 @@ target_include_directories(test_server_notice PRIVATE
 catch_discover_tests(test_server_notice)
 
 add_executable(test_client_net_event_handler test_client_net_event_handler.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp" # ClientEffectRouter own-ship haptics (#631)
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     # ClientNetEventHandler dispatches MsgWingmanAck into the radio menu (#610).
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp")
 target_link_libraries(test_client_net_event_handler PRIVATE
-    Catch2::Catch2WithMain engine-net engine-render engine-entity engine-console engine-weather platform-hal)
+    Catch2::Catch2WithMain engine-net engine-render engine-entity engine-console engine-weather engine-audio
+    engine-config platform-hal)
 target_include_directories(test_client_net_event_handler PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
     "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -738,6 +787,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/PauseMenuScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/DebriefScreen.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightScreen.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp"
@@ -746,7 +796,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
 target_link_libraries(test_screen_manager PRIVATE
-    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual platform-sdl3 platform-hal SDL3::SDL3)
+    Catch2::Catch2WithMain engine-config engine-render engine-sandbox engine-content engine-console engine-input engine-net engine-entity engine-weather engine-flight engine-manual engine-audio platform-sdl3 platform-hal SDL3::SDL3)
 target_include_directories(test_screen_manager PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_screen_manager)
@@ -781,3 +831,24 @@ target_include_directories(test_client_prediction PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_client_prediction)
+
+# ClientEffectRouter (#625/#631): wire effect vocabulary -> particles + SFX + haptics.
+add_executable(test_effect_router test_effect_router.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")
+target_link_libraries(test_effect_router PRIVATE
+    Catch2::Catch2WithMain
+    engine-render
+    engine-protocol
+    engine-audio
+    engine-config
+    platform-hal)
+target_include_directories(test_effect_router PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
+catch_discover_tests(test_effect_router)
+
+# SfxBuiltinSounds byte-stability + SfxManager voice pool / camera-relative play (#631).
+add_executable(test_sfx test_sfx.cpp)
+target_link_libraries(test_sfx PRIVATE Catch2::Catch2WithMain engine-audio engine-config engine-content)
+target_include_directories(test_sfx PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_sfx)

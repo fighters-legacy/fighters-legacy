@@ -364,3 +364,47 @@ TEST_CASE("makeSensorDefResolver caches both hits and misses") {
     // A bad id is reported once, not once per spawn.
     CHECK(log.count(LogLevel::Error, "unknown sensor def id") == 1);
 }
+
+// ---------------------------------------------------------------------------
+// Builtin sandbox arming (#440)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("registerBuiltinWeapons registers the three sandbox weapons exactly once") {
+    WeaponRegistry weapons;
+    CHECK(registerBuiltinWeapons(weapons) == 3u);
+    CHECK(weapons.findById("builtin:cannon") != nullptr);
+    CHECK(weapons.findById("builtin:ir-missile") != nullptr);
+    CHECK(weapons.findById("builtin:radar-missile") != nullptr);
+
+    // Idempotent: a second call registers nothing and breaks nothing.
+    CHECK(registerBuiltinWeapons(weapons) == 0u);
+}
+
+TEST_CASE("builtinDebugEntityDef is armed and its stations resolve against the builtin registry") {
+    WeaponRegistry weapons;
+    registerBuiltinWeapons(weapons);
+
+    const EntityDef def = builtinDebugEntityDef();
+    CHECK(def.id == "builtin:debug-entity");
+    REQUIRE(def.hardpoints.size() == 5u); // 1 gun + 2 IR + 2 radar
+
+    for (const Hardpoint& hp : def.hardpoints) {
+        REQUIRE_FALSE(hp.defaultWeapon.empty());
+        CHECK(weapons.findById(hp.defaultWeapon.c_str()) != nullptr);
+        CHECK(hp.allowed.size() == 1u);
+    }
+    CHECK(def.hardpoints[0].type == HardpointType::Gun);
+}
+
+TEST_CASE("builtin missiles get projectile entity types like any pack weapon") {
+    WeaponRegistry weapons;
+    registerBuiltinWeapons(weapons);
+    EntityTypeRegistry registry;
+    NullLog log;
+
+    // Two missiles fly, the gun is hitscan: exactly 2 projectile types.
+    CHECK(registerProjectileEntityDefs(weapons, registry, log) == 2u);
+    CHECK(registry.findById("projectile:builtin:ir-missile") != nullptr);
+    CHECK(registry.findById("projectile:builtin:radar-missile") != nullptr);
+    CHECK(registry.findById("projectile:builtin:cannon") == nullptr);
+}

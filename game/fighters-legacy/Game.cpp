@@ -6,6 +6,7 @@
 #include "Game.h"
 
 #include "CameraInput.h"
+#include "ClientEffectRouter.h"
 #include "ClientNetEventHandler.h"
 #include "DebriefScreen.h"
 #include "FileLogger.h"
@@ -23,6 +24,7 @@
 #include "Version.h"
 #include "audio/MusicManager.h"
 #include "audio/PlaylistLoader.h"
+#include "audio/SfxManager.h"
 #include "audio/SubtitleQueue.h"
 #include "config/ConfigFile.h"
 #include "config/UserConfig.h"
@@ -220,6 +222,11 @@ static void registerBuiltinParticlePresets(fl::ParticleSystem& ps) {
     ps.registerPreset("explosion", {200.0f, 1.5f, 15.0f, {1.0f, 0.6f, 0.1f}, {0.4f, 0.2f, 0.1f}, 0.3f, 3.0f, true});
     ps.registerPreset("fire", {120.0f, 2.0f, 8.0f, {1.0f, 0.4f, 0.05f}, {0.6f, 0.1f, 0.0f}, 0.2f, 1.5f, true});
     ps.registerPreset("smoke", {60.0f, 4.0f, 3.0f, {0.4f, 0.4f, 0.4f}, {0.15f, 0.15f, 0.15f}, 0.5f, 3.0f, false});
+    // Weapon effects (#625): short, bright, additive.
+    ps.registerPreset("muzzle_flash",
+                      {400.0f, 0.15f, 12.0f, {1.0f, 0.9f, 0.5f}, {1.0f, 0.5f, 0.1f}, 0.15f, 0.5f, true});
+    ps.registerPreset("impact_sparks", {300.0f, 0.4f, 20.0f, {1.0f, 0.8f, 0.4f}, {0.8f, 0.3f, 0.1f}, 0.1f, 0.3f, true});
+    ps.registerPreset("missile_smoke", {80.0f, 2.5f, 2.0f, {0.8f, 0.8f, 0.8f}, {0.4f, 0.4f, 0.4f}, 0.3f, 1.8f, false});
     ps.registerPreset(
         "rain",
         {100.0f, 1.5f, 40.0f, {0.5f, 0.6f, 0.8f}, {0.3f, 0.4f, 0.6f}, 0.05f, 0.05f, false, {0.0f, -1.0f, 0.0f}, 20.0f});
@@ -286,6 +293,8 @@ struct GameServices {
     std::unique_ptr<fl::TerrainStreamer> terrainStreamer;
     SubtitleQueue subtitleQueue;
     MusicManager musicManager;
+    fl::SfxManager sfxManager;     // positional weapon SFX (#631)
+    AudioSettings audioSettings{}; // a stable copy the effect router points at; refreshed on apply
 
     // Multiplayer connection target (empty = single-player, spawn LocalServer).
     // Populated from --connect CLI arg in initPlatform().
@@ -314,6 +323,8 @@ struct GameServices {
     bool showPing{false}; // toggled by the show_ping console command
     FlightInputCollector flightInput;
     PrecipitationController precipController;
+    ClientEffectRouter effectRouter;                 // cosmetic weapon effects (#625)
+    std::vector<ParticleEmitterState> frameEmitters; // per-frame scratch: precip + effects
 
     // Screen state machine
     std::unique_ptr<ScreenManager> screenMgr;
@@ -365,6 +376,7 @@ Game::~Game() {
     if (d.session.serverThread.joinable() || d.session.clientNet || d.session.localServer)
         stopGame();
     d.services.musicManager.shutdown();
+    d.services.sfxManager.shutdown();
     d.services.p.cursor.reset();
     if (d.services.p.audio)
         d.services.p.audio->shutdown();
@@ -548,6 +560,9 @@ bool Game::initContent() {
         static constexpr fl::AssetType kIndexedTypes[] = {fl::AssetType::EntityDef, fl::AssetType::SensorDef,
                                                           fl::AssetType::Weapon};
         d.services.contentIndex.build(*d.services.assets, kIndexedTypes, *d.services.rawLogger);
+        // Builtins first (#440), mirroring fl-server: the sandbox debug entity's stores must
+        // resolve to NAMES for the HUD weapon line even with zero packs mounted.
+        fl::registerBuiltinWeapons(d.services.weapons);
         fl::registerPackWeaponDefs(*d.services.assets, d.services.weapons, *d.services.rawLogger);
     }
 
@@ -589,6 +604,27 @@ void Game::buildManualFor(uint32_t typeIndex) {
                     (std::string("manual: entity def '") + wireDef->id + "' failed to parse: " + e.what()).c_str());
             }
         }
+    }
+    // Zero-pack sandbox: the wire def has no hardpoints and there is no pack to resolve them from,
+    // but the debug entity IS armed (#440) — use the same builder the server spawned it from.
+    if (fullDef.hardpoints.empty() && wireDef->id == "builtin:debug-entity")
+        fullDef = fl::builtinDebugEntityDef();
+
+    // Weapon-station glue (#440): the selector needs the station count, the HUD weapon line needs
+    // names. Wired here — the one place the client resolves the full def of the aircraft it flies —
+    // and BEFORE the flight-model early-out below, so a joiner without the pack's flight model
+    // still gets a working selector. A client with no def (no pack, non-builtin type) gets
+    // stationCount 0: cycling is off and the HUD line stays blank, by design.
+    d.services.flightInput.setStationCount(static_cast<uint8_t>(std::min<std::size_t>(fullDef.hardpoints.size(), 254)));
+    {
+        std::vector<std::string> labels;
+        labels.reserve(fullDef.hardpoints.size());
+        for (const fl::Hardpoint& hpt : fullDef.hardpoints) {
+            const fl::WeaponDef* w =
+                hpt.defaultWeapon.empty() ? nullptr : d.services.weapons.findById(hpt.defaultWeapon.c_str());
+            labels.push_back(w ? w->name : hpt.defaultWeapon); // unresolved id shown verbatim; empty = empty
+        }
+        d.services.flightHud.setStationLabels(std::move(labels));
     }
 
     // The flight model: the same one prediction flies, resolved the same way.
@@ -693,6 +729,18 @@ void Game::initGameSystems() {
         d.services.musicManager.loadPlaylist(playlist);
         d.services.musicManager.setState(GameState::Menu);
     }
+
+    // Weapon SFX (#631): the fire path's audio. A null audio device (rare) is tolerated — the
+    // manager no-ops. Presets map the wire effect vocabulary to a pack asset (overridable) with a
+    // compiled-in procedural fallback, so the guns are audible with zero content mounted.
+    d.services.sfxManager.init(d.services.p.audio.get(), d.services.assets.get(), d.services.rawLogger);
+    d.services.sfxManager.registerPreset("sfx.gunfire", "sfx/gunfire", fl::SfxKind::Gunfire);
+    d.services.sfxManager.registerPreset("sfx.launch", "sfx/launch", fl::SfxKind::Launch);
+    d.services.sfxManager.registerPreset("sfx.release", "sfx/release", fl::SfxKind::Release);
+    d.services.sfxManager.registerPreset("sfx.impact", "sfx/impact", fl::SfxKind::Impact);
+    d.services.sfxManager.registerPreset("sfx.explosion", "sfx/explosion", fl::SfxKind::Explosion);
+    d.services.audioSettings = d.services.userConfig->audio();
+    d.services.effectRouter.setSfx(&d.services.sfxManager, &d.services.audioSettings);
 }
 
 // Steps 19–20: debug console — console widget only; server commands wired in startGame().
@@ -728,15 +776,10 @@ void Game::startGame() {
     // before the render, and 3D rendering is skipped during the loading overlay), so no stale-state
     // reset is needed here.
 
-    // Register the builtin entity type for the no-pack sandbox path.
-    if (d.services.outcome == FirstRunOutcome::LaunchSandboxInspector) {
-        fl::EntityDef debugDef;
-        debugDef.id = "builtin:debug-entity";
-        debugDef.name = "Debug Entity";
-        debugDef.category = fl::ObjectCategory::AirVehicle;
-        debugDef.maxHp = 100.0f;
-        d.services.entityRegistry.registerType(std::move(debugDef));
-    }
+    // Register the builtin entity type for the no-pack sandbox path — ARMED (#440), via the same
+    // builder fl-server uses, so the client-side hardpoint count matches what the server spawned.
+    if (d.services.outcome == FirstRunOutcome::LaunchSandboxInspector)
+        d.services.entityRegistry.registerType(fl::builtinDebugEntityDef());
 
     const bool isMultiplayer = !d.services.connectHost.empty();
 
@@ -779,6 +822,7 @@ void Game::startGame() {
     auto onConnect = [&d, isMultiplayer]() {
         d.services.activeHud = &d.services.flightHud;
         d.session.hapticController.emplace(*d.services.p.input);
+        d.services.effectRouter.setHaptics(&*d.session.hapticController); // own-ship launch/release feedback (#631)
 
         // Single-player uses enet6 to match the embedded LocalServer (spawned with --transport enet);
         // multiplayer joins a dedicated server over GNS (encrypted). Both via the HAL factory.
@@ -795,6 +839,8 @@ void Game::startGame() {
         d.session.clientHandler->notice = &d.services.serverNotice;
         d.session.clientHandler->wingman = &d.services.wingmanMenu; // check-ins, order acks, relayed calls
         d.session.clientHandler->console = &*d.services.gameConsole;
+        d.session.clientHandler->effects = &d.services.effectRouter; // weapon cosmetics (#625)
+        d.services.effectRouter.reset();                             // no stale effects across sessions
         d.session.clientHandler->motdDisplaySeconds = d.services.userConfig->client().motdDisplayS;
         d.session.clientHandler->sessionFailure = &d.session.sessionFailure;
         d.session.clientNet->setEventHandler(d.session.clientHandler.get());
@@ -951,7 +997,22 @@ void Game::handleTransition(Screen next) {
     } else if (next == Screen::MainMenu)
         d.services.musicManager.setState(GameState::Menu);
     else if (next == Screen::Debrief) {
-        d.services.screenMgr->debrief().setStats(0, 0, true);
+        // Real session stats (#626): the server's tallies, delivered on the CombatEvent channel.
+        // Success stays true until the mission runtime (#584) defines failure.
+        uint32_t kills = 0;
+        uint32_t losses = 0;
+        if (d.session.clientHandler) {
+            kills = d.session.clientHandler->sessionStats().kills;
+            losses = d.session.clientHandler->sessionStats().losses;
+        }
+        d.services.screenMgr->debrief().setStats(static_cast<int>(kills), static_cast<int>(losses), true);
+        // The pilot's career log accumulates per session, exactly once, on the way into debrief.
+        if (d.services.userConfig && d.session.clientHandler && (kills > 0 || losses > 0)) {
+            PilotSettings ps = d.services.userConfig->pilot();
+            ps.profile.kills += static_cast<int>(kills);
+            ps.profile.losses += static_cast<int>(losses);
+            d.services.userConfig->setPilot(ps);
+        }
         d.services.musicManager.setState(GameState::Debrief);
     }
 
@@ -1109,6 +1170,18 @@ void Game::run() {
             camOrigin = cam.worldOrigin;
             updateAudioListener(*d.services.p.audio, cam, playerEntry ? playerEntry->velocity : glm::vec3{});
 
+            // Weapon SFX (#631): the listener sits at the camera origin (sources are placed
+            // camera-relative), and the router needs the origin + the own entity index to
+            // spatialise effects and drive own-ship haptics. Set once per frame before the router
+            // processes any effect.
+            {
+                const glm::vec3 fwd = -glm::vec3(cam.view[2][0], cam.view[2][1], cam.view[2][2]);
+                const glm::vec3 up = glm::vec3(cam.view[1][0], cam.view[1][1], cam.view[1][2]);
+                d.services.sfxManager.updateListener(fwd, up);
+                d.services.effectRouter.setCameraOrigin(cam.worldOrigin);
+                d.services.effectRouter.setOwnEntity(d.session.clientHandler->assignedEntityIdx);
+            }
+
             // In cockpit view the camera sits at the player entity, so render that entity
             // shadow-only — you should not see your own aircraft from inside it, but its shadow
             // on the ground should remain. External views (Chase/Free) show it normally.
@@ -1119,9 +1192,14 @@ void Game::run() {
             else
                 d.services.sceneRenderer->setHiddenEntity(0, 0);
 
-            d.services.sceneRenderer->renderFrame(
-                alpha, cam, d.services.env,
-                d.services.precipController.build(d.services.env, cam, d.services.particleSystem));
+            // Merge precipitation with this frame's weapon effects (#625) into one emitter list.
+            auto& emitters = d.services.frameEmitters;
+            emitters.clear();
+            const auto precip = d.services.precipController.build(d.services.env, cam, d.services.particleSystem);
+            emitters.insert(emitters.end(), precip.begin(), precip.end());
+            const auto fx = d.services.effectRouter.buildEmitters(d.services.particleSystem, 1.f / 60.f);
+            emitters.insert(emitters.end(), fx.begin(), fx.end());
+            d.services.sceneRenderer->renderFrame(alpha, cam, d.services.env, emitters);
         }
 
         // Console HUD: entity position widget (toggle_pos). Camera/entity debug now lives in

@@ -1,21 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "flight/EngineFailFlags.h" // kEngineFail* — the shared vocabulary (#675)
+
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <vector>
 
 namespace fl {
-
-// Bitmask constants for EntityRenderEntry::engineFailFlags and MsgEntityEntry::engineFailFlags.
-// kEngineFailGeneric is derived from entity damage state (damageLevel >= 2) in WorldBroadcaster.
-// Remaining bits are populated by FlightIntegrator once per-engine failure is modelled (Phase 6+).
-constexpr uint8_t kEngineFailGeneric = 0x01; // generic thrust impairment (from damage)
-constexpr uint8_t kEngineFailLeft = 0x02;    // left-engine failure (Phase 6+)
-constexpr uint8_t kEngineFailRight = 0x04;   // right-engine failure (Phase 6+)
-constexpr uint8_t kEngineCompStall = 0x08;   // compressor stall (Phase 6+)
-constexpr uint8_t kEngineFlameout = 0x10;    // flameout (Phase 6+)
 
 // Per-entity data captured at the end of each sim tick and shipped to the render thread.
 // Uses primitive types only to avoid introducing a header dependency on engine-entity.
@@ -33,6 +26,14 @@ struct EntityRenderEntry {
     bool abEngaged{false};      // true when afterburner physically lit (FlightState::ab_engaged)
     uint8_t engineFailFlags{0}; // fl::kEngineFail* bitmask
     glm::vec3 omega{};          // body-frame angular rates p,q,r (rad/s); from wire; used by client-side prediction
+
+    // ── own-record loadout (#625) — meaningful only on the receiving peer's own entry ─────────
+    bool hasLoadout{false};       // true when the record carried the own-entity loadout block
+    uint8_t selectedStation{255}; // 255 = none; drives the HUD weapon line
+    uint16_t stationRounds{0};    // rounds on the selected station
+    uint8_t weaponFlags{0};       // bit 0 = seeker locked (#628)
+    float payloadMassKg{0.f};     // live store mass — ClientPrediction re-resolves from this
+    float payloadCd0{0.f};        // live store drag
 };
 
 // Full entity-world snapshot published by the sim thread once per tick.

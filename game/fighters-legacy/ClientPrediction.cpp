@@ -230,6 +230,14 @@ void ClientPrediction::reconcile(RenderSnapshot& snap, uint64_t tickIndex, uint3
     // Reset integrator to the server's authoritative state. The state we are resetting to IS the
     // state at `tickIndex`, so the replayed inputs below are ticks tickIndex+1, +2, ... -- which is
     // what lets the stall buffet (#816) be seeded with the same tick the server used.
+    // Live payload (#625): once a store can leave the rails, the per-type default resolved at init
+    // stops being the truth. The own-entity record carries what the remaining stores cost NOW; a
+    // release therefore changes the client-predicted physics on the same snapshot that reports it.
+    if (playerEntry->hasLoadout) {
+        m_payload.extra_mass_kg = playerEntry->payloadMassKg;
+        m_payload.extra_cd0 = playerEntry->payloadCd0;
+    }
+
     const FlightState serverState = entryToFlightState(*playerEntry, *m_model);
     m_integrator->reset(serverState);
     m_predictedTick = tickIndex;

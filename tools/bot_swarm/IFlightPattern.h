@@ -94,6 +94,37 @@ class IdlePattern : public IFlightPattern {
     }
 };
 
+// Weaving flight WITH weapons employment (#583): duty-cycled gun fire plus periodic store releases,
+// STAGGERED per client so a 128-swarm does not fire in lockstep on one tick. This is the scale-gate
+// "weapons" profile's synthetic load — it drives the fire path, hitscan, projectile spawns and the
+// SnapshotEffects TLV under the same physics/interest churn as the weave. Deterministic: the fire
+// schedule is a function of (t, clientIndex) only, no RNG.
+class WeaponsPattern : public IFlightPattern {
+  public:
+    BotControl sample(double t, uint32_t clientIndex) override {
+        const float ph = detail::phaseOf(clientIndex);
+        BotControl c;
+        c.throttle = 0.8f;
+        c.aileron = 0.3f * std::sin(static_cast<float>(t) * 0.5f + ph);
+        c.elevator = 0.1f * std::sin(static_cast<float>(t) * 0.3f + ph * 1.3f);
+
+        // Gun: a per-client-phased 50% duty cycle at ~1 Hz. The server rate-limits it, so this
+        // produces a steady stream of hitscan resolutions without a per-tick trigger storm.
+        const double gunPhase = t + static_cast<double>(clientIndex) * 0.11;
+        if (std::fmod(gunPhase, 2.0) < 1.0)
+            c.buttons |= 0x01u;
+
+        // Store release: a short rising-edge pulse every ~5 s, its phase spread across the swarm so
+        // the projectile spawns arrive smeared over the window rather than all at once. The server
+        // edge-detects bit 2, so holding it across the pulse is still one launch.
+        const double firePhase = t + static_cast<double>(clientIndex) * 0.037;
+        if (std::fmod(firePhase, 5.0) < 0.1)
+            c.buttons |= 0x04u;
+
+        return c;
+    }
+};
+
 // Seeded per-client random walk for heterogeneity. Stateful (the client owns the instance);
 // deterministic for a given seed + call sequence.
 class RandomPattern : public IFlightPattern {
@@ -116,7 +147,7 @@ class RandomPattern : public IFlightPattern {
 
 // Registry: the names a `--pattern` value may take, and the factory.
 inline std::vector<std::string> patternNames() {
-    return {"weave", "level", "aggressive", "idle", "random"};
+    return {"weave", "level", "aggressive", "idle", "random", "weapons"};
 }
 
 inline bool isKnownPattern(std::string_view name) {
@@ -139,6 +170,8 @@ inline std::unique_ptr<IFlightPattern> makePattern(std::string_view name, uint32
         return std::make_unique<IdlePattern>();
     if (name == "random")
         return std::make_unique<RandomPattern>(seed);
+    if (name == "weapons")
+        return std::make_unique<WeaponsPattern>();
     return nullptr;
 }
 

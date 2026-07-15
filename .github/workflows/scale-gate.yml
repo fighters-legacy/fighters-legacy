@@ -19,7 +19,7 @@ on:
       profile:
         description: 'Profile to run on the self-hosted reference runner'
         type: choice
-        options: [reference, reference-enet, nightly, soak, entity-scale, overrun, congestion, entity-churn]
+        options: [reference, reference-enet, nightly, soak, entity-scale, overrun, congestion, entity-churn, weapons]
         default: reference
 
 concurrency:

@@ -69,9 +69,20 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | Arrow Up / Down | Elevator (pitch) |
 | Arrow Left / Right | Aileron (roll) |
 | Z / X | Rudder left / right |
-| Space | Weapon trigger (bit 0) |
+| Space | Gun trigger (bit 0, level — hold to keep firing, rate-limited server-side) |
 | Tab | Afterburner command (bit 1) |
+| Enter / Right mouse | Fire selected store (bit 2 — edge-detected server-side; holding it is one shot) |
+| 1 / 2 | Cycle weapon station next / previous (local; the wire carries the absolute selection) |
 | C | Open the wingman radio menu (#610) |
+
+While the radio menu is open, Enter and the digit keys belong to the menu — the fire-store bit and
+station cycling are suppressed, the flight axes and gun trigger stay live.
+
+**The sandbox aircraft is armed.** The builtin debug entity carries five stations: a 20 mm cannon
+(station 1), two IR missiles (2–3) and two radar missiles (4–5) — all compiled-in "builtin:"
+weapons, so the whole fire path works with zero content packs mounted. The HUD's right column
+shows the selection as `ARM <weapon> x<rounds>`; the default selection is the first IR rail
+("selected" means the stores — the gun has its own trigger).
 
 ## Wingman radio menu (C)
 
@@ -88,7 +99,7 @@ a fight. Only the discrete keys the menu consumes are taken; the axes stay live.
 | 2 | `engage_bandits` | Engages hostiles near **itself**, at will; returns to formation when the sky is clear. |
 | 3 | `rejoin` | Returns to formation on you. |
 | 4 | `cover_me` | Engages hostiles closing on **you**, then returns to your wing. (The difference from `engage_bandits` is *whose* threats it reacts to.) |
-| 5 | `hold_fire` | Breaks off and holds station. Sets a weapons-hold flag; an engage order clears it. **The flag has no teeth until weapons land (#583)** — today the flight behavior is the whole effect. |
+| 5 | `hold_fire` | Breaks off and holds station. Sets a weapons-hold flag the server's fire control enforces (#625): the held member's trigger and store releases are read and discarded until an engage order clears the flag. |
 | 6 | `return_to_base` | Disengages and orbits home. (There is no landing system yet.) |
 
 The wingman answers with a brevity call on the HUD. In **single-player you always have one** — the
@@ -114,7 +125,9 @@ deadzone. Deadzone, response curve, inversion, and axis mapping are configured i
 | Aileron (roll) | Right stick X |
 | Rudder (yaw) | Left stick X |
 
-Button bindings for `FireWeapon` and `Afterburner` are configured in the `[alt]` section of `config/bindings.toml` (see the **bindings.toml** section below).
+Button bindings for `FireWeapon`, `FireMissile` (fire selected store), `NextWeapon` / `PrevWeapon`
+(station cycling — D-pad right / left by default), and `Afterburner` are configured in the `[alt]`
+section of `config/bindings.toml` (see the **bindings.toml** section below).
 
 ## `config/bindings.toml`
 
@@ -244,6 +257,7 @@ The console is a half-screen drop-down overlay. It is fully independent of the c
 | `toggle_pos` | Toggle entity world-position readout below the camera position display |
 | `show_ping` | Toggle "Ping: N ms" RTT overlay (visible even when F3 performance overlay is off) |
 | `set_weather <preset>` | Set weather instantly: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm`, `snow`, `blizzard`. Queued to sim thread; takes effect on next tick. |
+| `detonate <x> <y> <z> <radius_m> <damage> [--nuclear]` | AoE warhead at a world position (#356); `--nuclear` adds the EMP ring (avionics kill) at 4× the blast radius. Forwarded to the server. |
 | `set_difficulty <level>` | *(stub — Phase 2b)* |
 | `reload_content` | *(stub — see issue #152)* |
 
@@ -275,6 +289,8 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 | `split_s` | `[rollDur] [pullDur]` | Roll inverted + pull through to reverse heading; opposite energy trade to Immelmann (defaults: 1.5 s, 4.0 s) |
 | `high_yo_yo` | `<entityIdx> [climbDur] [reacquireDur]` | Overshoot correction: bank away from target, pull up to bleed speed, then reacquire (defaults: 2.5 s, 3.0 s) |
 | `low_yo_yo` | `<entityIdx> [diveDur] [pullDur]` | Dive-and-cut-corner to close on a turning target (defaults: 1.5 s, 2.5 s) |
+| `guns` | `<entityIdx> [muzzleVel] [lethalRadius]` | Guns employment (#462): steers onto the ballistic lead point (muzzle velocity, shooter-velocity carry, gravity drop) and fires only when the predicted miss is inside the lethal radius (defaults: 1030 m/s, 8 m) |
+| `ballistic` | `<tx> <ty> <tz> [mirvCount [spreadM]]` | Ballistic missile guidance (#355) for `type = "ballistic"` entities: boost-phase TVC steering to the impact point with a lofted pitch program, inertial after burnout; `mirvCount > 0` deploys child RVs past apogee (kills credit whoever launched the bus) |
 | `lua` | `<script_name>` | Load a Lua AI script from the content pack's `ai/` directory (e.g. `patrol`, `interceptor`). See `docs/modding/ai.md`. |
 | `patrol_attack` | `<entityIdx> [engageRangeM] [retreatHp]` | Three-state machine: loiter patrol → lead-pursuit engage when the target is **detected** within range → evade retreat when HP below threshold (defaults: engageRangeM=8000 m, retreatHp=0.25). **Sensing-gated (#690):** it engages what it has actually seen and reacted to, not whatever is within the radius |
 | `escort` | `<entityIdx> [standoffM]` | Two-state orbit protection: clockwise loiter at standoffM radius around the escorted entity's spawn position → Immelmann reversal when a **hostile** entity enters the inner defense zone (standoffM×0.5). Hostiles are classified by faction, so the escort and escortee should be spawned with the same non-neutral `--faction`; friendlies and neutrals are ignored. Best used for fixed or slow-moving assets. (default: standoffM=2000 m) |

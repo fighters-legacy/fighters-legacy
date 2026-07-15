@@ -19,6 +19,7 @@
 
 namespace fl {
 
+class ClientEffectRouter;
 class GameConsole;
 class ILogger;
 class ServerNotice;
@@ -52,11 +53,12 @@ struct ClientNetEventHandler : INetworkEventHandler {
     EntityTypeRegistry& registry;
     ILogger& logger;
     INetwork& net;
-    EnvironmentState& env;           // updated on MsgWeatherState
-    GameConsole* console{nullptr};   // optional: server notices are printed here
-    ServerNotice* notice{nullptr};   // optional: server notices shown as screen banner
-    WingmanMenu* wingman{nullptr};   // optional: flight check-in / order acks / relayed radio calls (#610)
-    uint32_t motdDisplaySeconds{15}; // user-configurable; 0 = persistent
+    EnvironmentState& env;                // updated on MsgWeatherState
+    GameConsole* console{nullptr};        // optional: server notices are printed here
+    ServerNotice* notice{nullptr};        // optional: server notices shown as screen banner
+    WingmanMenu* wingman{nullptr};        // optional: flight check-in / order acks / relayed radio calls (#610)
+    ClientEffectRouter* effects{nullptr}; // optional: cosmetic weapon effects (#625) — particles now, audio #631
+    uint32_t motdDisplaySeconds{15};      // user-configurable; 0 = persistent
 
     uint32_t assignedEntityIdx{0};
     uint32_t assignedEntityGen{0};
@@ -84,6 +86,19 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // (ExtTag::SnapshotPeerCount). Returns 0 if no extended snapshot has been received yet.
     uint16_t serverPeerCount() const noexcept {
         return m_serverPeerCount.load(std::memory_order_relaxed);
+    }
+
+    // This session's combat tallies, as the SERVER counts them (#626) — updated from the unicast
+    // Stats records on the CombatEvent channel. Zero until the first stat-changing event. Read on
+    // the main thread for the debrief screen and the pilot profile; reset per session because the
+    // handler is re-created per session (reinitFlight).
+    struct SessionCombatStats {
+        uint32_t kills{0};
+        uint32_t losses{0};
+        int32_t score{0};
+    };
+    const SessionCombatStats& sessionStats() const noexcept {
+        return m_sessionStats;
     }
 
     // Issue a monotonically incrementing request ID for the next MsgAdminCommand.
@@ -136,6 +151,7 @@ struct ClientNetEventHandler : INetworkEventHandler {
 
     bool m_connected{false};
     float m_planetRadiusKm{6371.f};
+    SessionCombatStats m_sessionStats{};        // #626 — fed by CombatEvent Stats records
     uint16_t m_nextReqId{1};                    // next reqId to stamp on outgoing MsgAdminCommand
     std::atomic<uint16_t> m_serverPeerCount{0}; // updated from SnapshotPeerCount TLV extension
 

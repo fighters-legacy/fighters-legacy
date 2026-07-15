@@ -9,14 +9,21 @@
 #include "JitterBuffer.h"
 #include "SnapshotScheduler.h"
 #include "TickGovernor.h"
+#include "TransformHistory.h"          // lag-compensation rewind ring (#425)
 #include "config/DifficultySettings.h" // AiScaling — sensing difficulty scaling (#685)
+#include "entity/Collision.h"          // CollisionPair — entity-entity collision (#630)
+#include "entity/DamageApplication.h"  // DamageRules — the gameplay damage gates (#626)
+#include "entity/EntityEvent.h"        // IEntityEventHandler — kill attribution + scoring (#626)
 #include "entity/EntityId.h"
+#include "entity/SubsystemDamage.h" // SubsystemStateSet — per-subsystem damage (#675)
 #include "flight/AeroForces.h"
 #include "flight/IGravityField.h"
 #include "loop/ISimUpdate.h"
 #include "perf/TickProfiler.h"
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
+#include "weapon/FireControl.h"      // per-entity fire state + request emission (#625)
+#include "weapon/ProjectileSystem.h" // the projectile pool (#625)
 #include "world/FormationRegistry.h" // the formation / command tree (#610)
 
 #include <glm/vec3.hpp> // glm::dvec3 (ground-elevation query — radial floor #477)
@@ -71,9 +78,10 @@ struct PeerInputState {
     uint32_t lastSeqNum{0};          // seqNum of last accepted input
     uint32_t estimatedDelayTicks{0}; // one-way delay in sim ticks (derived from tickIndex)
     // 1-byte fields last.
-    uint8_t buttons{0};     // last drained value
-    bool hasSeq{false};     // false until first input received from this peer
-    bool ewmaSeeded{false}; // false until EWMA receives its first sample
+    uint8_t buttons{0};           // last drained value
+    uint8_t selectedStation{255}; // last drained absolute station selection (#625); 255 = none
+    bool hasSeq{false};           // false until first input received from this peer
+    bool ewmaSeeded{false};       // false until EWMA receives its first sample
     // Jitter buffer: initialized to depth 1; sized from estimatedDelayTicks on first input,
     // then continuously adjusted by the adaptive resize loop in WorldBroadcaster::onTick.
     JitterBuffer jitterBuffer{1};
@@ -117,10 +125,15 @@ struct ControlledEntity {
     EntityId id;
     std::unique_ptr<FlightIntegrator> sim;
     std::unique_ptr<IEntityController> controller;
-    bool decimatable{false};    // AI/scripted entity whose sample() may be skipped under overrun; players never
-    ControlInput lastInput{};   // last sampled control input, reused on a decimated (skipped) AI tick
-    bool lastInputValid{false}; // false until the first sample() — forces a sample on the entity's first tick
-    PayloadEffect payload{};    // what the default loadout costs this airframe (#812); resolved once at spawn
+    bool decimatable{false};        // AI/scripted entity whose sample() may be skipped under overrun; players never
+    ControlInput lastInput{};       // last sampled control input, reused on a decimated (skipped) AI tick
+    bool lastInputValid{false};     // false until the first sample() — forces a sample on the entity's first tick
+    PayloadEffect payload{};        // what the CURRENT loadout costs this airframe; starts at the #812
+                                    // default and shrinks as stores release (#625)
+    FireState fire{};               // stations, ammo, edge/rate state (#625); empty when no registry/hardpoints
+    SubsystemStateSet subsystems{}; // per-subsystem damage pools (#675); hasSubsystems gates its use
+    bool hasSubsystems{false};      // true when the entity def declares [damage.subsystems]
+    float fuelLeakKgS{0.f};         // accumulated fuel-leak rate from failed fuel subsystem(s) (#675)
 };
 
 // Pre-start scalar configuration. Bundles the init-time setters so callers configure rate limiting,
@@ -149,6 +162,7 @@ struct WorldBroadcasterConfig {
     float jitterMultiplier{2.0f};     // k factor: depth = ceil(ewma_delay + k*jitter); [0.0, 8.0]
     CongestionParams congestion{};    // per-client adaptive send-rate / congestion response (#518)
     TickGovernorParams governor{};    // graceful tick-overrun governor (#514)
+    DamageRules gameplay{};           // friendly-fire / crash-damage gates (#626); hot-reloadable
 };
 
 // Snapshot of the overrun governor's current degradation state — read cross-thread (fl-server main
@@ -214,7 +228,7 @@ struct WireTelemetry {
 // Threading: all ISimUpdate and INetworkEventHandler methods are called from
 // the GameLoop sim thread. INetwork::setEventHandler(&broadcaster) must be
 // called before GameLoop::start().
-class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
+class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public IEntityEventHandler {
   public:
     // weather may be nullptr; when non-null it is ticked and broadcast each sim tick.
     WorldBroadcaster(EntityManager& entityManager, EntityTypeRegistry& registry, INetwork& net, ILogger& logger,
@@ -228,6 +242,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     void onConnect(uint32_t peerId) override;
     void onDisconnect(uint32_t peerId) override;
     void onReceive(uint32_t peerId, const void* data, std::size_t size) override;
+
+    // IEntityEventHandler (#626) — the first production consumer of entity events. fl-server
+    // registers the broadcaster with EntityManager::addEventHandler() before gameLoop.start().
+    // Died/ScoreAwarded feed the per-peer scoreboard and queue the reliable kill-feed broadcast;
+    // DamageLevelChanged applies the entity's DamageDef penalties to its flight integrator (this is
+    // where thrustFactor/controlFactor/avionicsFailure finally act). Fires on the sim thread, from
+    // inside EntityManager calls that already run serially in onTick.
+    void onEntityEvent(const EntityEvent& event) override;
 
     // Safe to call from any thread (main thread reads this for the LAN discovery beacon).
     int getPeerCount() const noexcept {
@@ -615,6 +637,32 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // peer's controller each tick, so this is hot-reloadable (reload_config). Disabled params pin all
     // peers to the full 60 Hz / full-budget behaviour. Call before gameLoop.start() or via
     // enqueueSimCallback.
+    // Gameplay damage gates (#626): friendly fire + crash damage. Sim-thread-only state — call
+    // before gameLoop.start(), or via enqueueSimCallback for reload_config hot-reload.
+    void setDamageRules(const DamageRules& rules) noexcept {
+        m_damageRules = rules;
+    }
+
+    // The flight integrator driving a controlled entity, or nullptr. Sim-thread only. Consumers:
+    // tests asserting damage penalties actually landed (#626) and the fire path's launch-state
+    // reads (#625) — never a back door for controllers, which see the world through AiTickContext.
+    [[nodiscard]] const FlightIntegrator* integratorFor(uint32_t entityIdx) const noexcept;
+
+    // The weapon vocabulary (#625). Main-thread, before gameLoop.start(); the registry outlives
+    // the broadcaster (fl-server main-scope, like the type registry). Null = the fire path is off:
+    // trigger intent is read and discarded, exactly the pre-#583 behavior. Also arms the
+    // projectile pool with the registry + the current gravity field.
+    void setWeaponRegistry(const WeaponRegistry* weapons) noexcept;
+
+    // Detonate a warhead at a world position (#356): blast damage with linear falloff through
+    // applyPointDamage (so the friendly-fire gate holds inside a blast), and — when nuclear — the
+    // EMP ring wired to SensorSystem::setAvionicsFailed. Every warhead consumer (proximity fuzes,
+    // bomb impacts, the `detonate` admin command) goes through here. Sim-thread only; call via
+    // enqueueSimCallback from anywhere else. Note the spatial index is rebuilt at the top of each
+    // onTick, so a detonation between ticks sees the previous tick's positions — one tick of
+    // staleness, the same view every other consumer of the index gets.
+    WarheadResult applyWarheadAt(const double pos[3], const BlastSpec& blast, EntityId instigator);
+
     void setCongestionParams(const CongestionParams& params) noexcept;
 
     // Set the graceful tick-overrun governor parameters (#514). Applied to the governor each tick, so
@@ -706,6 +754,52 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // source (peer, AI, script) registers here and is stepped uniformly in onTick.
     std::unordered_map<uint32_t, ControlledEntity> m_controlledEntities;
 
+    // ── the fire path (#625) — sim-thread only ──────────────────────────────
+    const WeaponRegistry* m_weaponRegistry{nullptr};
+    ProjectileSystem m_projectileSystem;
+    // The conditions the sensing pass ran under this tick; seeker checks (#627) read the same ones.
+    sensor::SensingEnvironment m_sensingEnv{};
+    // Rolling post-integrate position history (#425): player hitscan rewinds targets to the tick
+    // the shooter actually saw (currentTick − estimatedDelayTicks, clamped to the ring depth).
+    TransformHistory m_transformHistory;
+    std::vector<FireRequest> m_fireRequests;     // scratch, cleared each tick
+    std::vector<ProjectileImpact> m_tickImpacts; // scratch, cleared each tick
+    uint8_t m_currentWeaponClass{0xFF};          // WeaponType ordinal for kill attribution while a
+                                                 // weapon damage call is on the stack
+    // Cosmetic effect events for this tick's snapshots (unreliable, interest-filtered per peer,
+    // capped). Filled by the weapons pass, read-only in the parallel peer pass, cleared next tick.
+    struct EffectRecord {
+        uint8_t type{0}; // EffectType (GameProtocol.h)
+        uint8_t weaponClass{0xFF};
+        uint32_t srcIdx{0xFFFFFFFFu};
+        uint32_t tgtIdx{0xFFFFFFFFu};
+        float pos[3]{};
+    };
+    std::vector<EffectRecord> m_tickEffects;
+    void runWeaponsPass(double simDt, uint64_t tickIndex);
+    void executeFireRequest(const FireRequest& req, uint64_t tickIndex);
+    void resolveHitscan(const FireRequest& req, const WeaponDef& def, uint64_t tickIndex);
+    // The shooter's designated target through the #610 seam: peer viewAxis or AI nose (#627/#628).
+    EntityId designateFor(const EntityState& shooter, uint32_t ownerPeer) const;
+    void queueEffect(uint8_t type, uint8_t weaponClass, uint32_t srcIdx, uint32_t tgtIdx, const double pos[3]);
+
+    // ── combat scoring + kill feed (#626) — sim-thread only ─────────────────
+    struct PeerScore {
+        uint32_t kills{0};
+        uint32_t losses{0};
+        int32_t score{0};
+        bool dirty{false}; // a Stats record is owed to this peer in the next serialize
+    };
+    std::unordered_map<uint32_t, PeerScore> m_scores; // keyed by peerId; erased on disconnect
+    std::vector<CombatEventRecord> m_pendingKillEvents;
+    DamageRules m_damageRules{};
+
+    // The owning peer of an entity, or kNoOwningPeer. Resolved against the LIVE peer map, never
+    // against EntityState::ownerId — whose "0 = server/AI" convention collides with real peer 0
+    // (the #610 kNoPeer lesson).
+    [[nodiscard]] uint32_t peerIdForEntity(EntityId id) const noexcept;
+    void flushCombatEvents();
+
     std::atomic<int> m_activePeerCount{0};
     uint64_t m_weatherBroadcastTick{0};        // throttle weather broadcasts to ~6 Hz
     uint64_t m_idleTimeoutTicks{0};            // 0 = disabled; pre-computed from idleTimeoutS × 60
@@ -725,6 +819,29 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::vector<ControlInput> m_stepInputs;
     std::atomic<double> m_entityX{0.0}; // last stepped entity world-X (sim writes; main reads)
     std::atomic<double> m_entityZ{0.0}; // last stepped entity world-Z
+
+    // Entity-entity collision detection (#630). Gathered serially post-integrate; the detect pass is
+    // data-parallel (each candidate writes only its own m_collisionScratch slot, reads the frozen
+    // spatial index + candidate list), and the damage apply is serial (applyPointDamage fires event
+    // handlers). Reused across ticks to avoid reallocation.
+    struct CollisionCand {
+        EntityId id;
+        double pos[3];
+        float vel[3];
+        float radius;
+    };
+    std::vector<CollisionCand> m_collisionCands;
+    std::unordered_map<uint32_t, uint32_t> m_collisionIdxToSlot; // entity index -> slot in m_collisionCands
+    std::vector<std::vector<CollisionPair>> m_collisionScratch;  // per-candidate detected pairs
+    std::vector<CollisionPair> m_collisionPairs;                 // flattened + sorted for serial apply
+    void runCollisionPass(uint64_t tickIndex);
+
+    // Route damage that already landed on `target` (via applyPointDamage) into a subsystem (#675).
+    // `hitDirWorld` is the direction the damage travelled in WORLD space (rotated to body frame
+    // here); null = undirected (a weight-only pick, e.g. a crash). No-op unless the target is a
+    // controlled entity that declared [damage.subsystems]. Applies the failed subsystem's effect.
+    void routeSubsystemDamage(EntityId target, float amount, const float* hitDirWorld, uint64_t tickIndex);
+    void applySubsystemEffects(ControlledEntity& ce); // recompute integrator/sensor state from the mask
 
     std::vector<std::array<double, 3>> m_spawnPoints; // pre-cached [x,y,z]; sim-thread read-only after start
     uint32_t m_nextSpawnIdx{0};                       // round-robin counter; sim-thread only

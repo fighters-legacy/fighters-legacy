@@ -13,6 +13,7 @@ class ContentIndex;
 class EntityTypeRegistry;
 class ILogger;
 class WeaponRegistry;
+struct EntityDef;
 
 namespace sensor {
 struct SensorDef;
@@ -36,6 +37,27 @@ uint32_t registerPackEntityDefs(AssetManager& assets, EntityTypeRegistry& regist
 // Call BEFORE registerPackEntityDefs, so an entity's hardpoints have weapons to resolve against.
 // Main thread, before GameLoop::start(). Returns the number of weapons registered.
 uint32_t registerPackWeaponDefs(AssetManager& assets, WeaponRegistry& registry, ILogger& log);
+
+// Registers a projectile ENTITY type ("projectile:<weapon id>", ObjectCategory::Projectile) for
+// every flyable weapon in the registry — missiles, rockets, bombs (#625). Guns are hitscan and get
+// none. This must happen at startup because MsgEntityTypeDef travels ONLY in ConnectAck: a type
+// registered after a client connects would reach it as an unresolvable typeIndex, and the client
+// would render nothing where a missile is. The projectile's mesh is the weapon's `mesh` asset name
+// (empty = builtin placeholder); its radar signature is small (a missile is a hard radar target to
+// SEE, not to hit). Main thread, before GameLoop::start(). Returns the number registered.
+uint32_t registerProjectileEntityDefs(const WeaponRegistry& weapons, EntityTypeRegistry& registry, ILogger& log);
+
+// Registers the compiled-in sandbox weapons (#440) — BuiltinWeapon::cannon()/irMissile()/
+// radarMissile() — into `registry`. Always safe to call alongside pack weapons: the "builtin:"
+// namespace cannot collide with a pack id. Call BEFORE registerProjectileEntityDefs so the builtin
+// missiles get projectile entity types. Returns the number registered.
+uint32_t registerBuiltinWeapons(WeaponRegistry& registry);
+
+// The builtin debug entity, ARMED (#440): one cannon, two IR rails, two radar rails, all builtin
+// defaults. Shared by fl-server and the game client so the two can never drift — this is the type
+// WorldBroadcaster::onConnect spawns per peer, and the def whose hardpoints size the client's
+// weapon-station selector in the zero-pack sandbox.
+EntityDef builtinDebugEntityDef();
 
 // Builds the resolver WorldBroadcaster calls on the spawn path to turn an EntityDef::sensorIds entry
 // into a parsed SensorDef (#685), routed through ContentIndex (#810).

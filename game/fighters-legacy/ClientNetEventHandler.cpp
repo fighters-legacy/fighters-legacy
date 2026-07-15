@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ClientNetEventHandler.h"
+#include "ClientEffectRouter.h"
 #include "ServerNotice.h"
 
 #include "ILogger.h"
@@ -223,6 +224,13 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             re.abEngaged = qe.abEngaged;
             re.engineFailFlags = qe.engineFailFlags;
             re.omega = {qe.omega[0], qe.omega[1], qe.omega[2]};
+            // Own-record loadout block (#625) — travels with omega, own entity only.
+            re.hasLoadout = qe.hasOmega;
+            re.selectedStation = qe.selectedStation;
+            re.stationRounds = qe.stationRounds;
+            re.weaponFlags = qe.weaponFlags;
+            re.payloadMassKg = qe.payloadMassKg;
+            re.payloadCd0 = qe.payloadCd0;
             m_entityCache[qe.idx] = {re, hdr.tickIndex};
         }
 
@@ -261,6 +269,16 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             uint16_t delayTicks{};
             if (fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerDelayTicks), delayTicks))
                 m_estimatedDelayTicks = delayTicks;
+
+            // Cosmetic weapon effects (#625): variable-length record list, routed to particles
+            // (audio/haptics join via the same router in #631). Missing router = effects dropped.
+            if (effects) {
+                uint16_t fxLen = 0;
+                if (const uint8_t* fx =
+                        fl::findExt(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotEffects), fxLen);
+                    fx && fxLen > 0)
+                    routeEffectsTlv(*effects, fx, fxLen);
+            }
         }
 
         // Advance the selective-ack decoded-tick mask before moving the high-water mark (#566). This
@@ -391,6 +409,62 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             return;
         if (wingman)
             wingman->onAck(ack);
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::CombatEvent)) {
+        // Kill feed + own combat stats (#626). Reliable, so a kill credit is never lost the way a
+        // cosmetic effect can be.
+        fl::MsgCombatEventHeader hdr;
+        if (!fl::readMsg(data, size, hdr))
+            return;
+        for (uint8_t i = 0; i < hdr.count; ++i) {
+            fl::CombatEventRecord rec;
+            if (!fl::readRecordAt(data, size, sizeof(hdr) + std::size_t(i) * sizeof(rec), rec))
+                break; // truncated packet: fail closed on the remainder
+
+            if (rec.type == static_cast<uint8_t>(fl::CombatEventType::Stats)) {
+                m_sessionStats.kills = rec.a;
+                m_sessionStats.losses = rec.b;
+                m_sessionStats.score = rec.c;
+                continue;
+            }
+            if (rec.type != static_cast<uint8_t>(fl::CombatEventType::Kill))
+                continue; // unknown record types are skipped — the vocabulary grows without breaking us
+
+            const bool youDied = rec.subjectIdx == assignedEntityIdx && rec.subjectGen != 0 &&
+                                 rec.subjectGen == static_cast<uint16_t>(assignedEntityGen);
+            const bool youKilled = rec.instigatorIdx == assignedEntityIdx && rec.instigatorGen != 0 &&
+                                   rec.instigatorGen == static_cast<uint16_t>(assignedEntityGen);
+
+            // Names arrive with chat/scoreboard (Epic E); until then the feed speaks in entities.
+            char who[32];
+            char whom[32];
+            if (youKilled)
+                std::snprintf(who, sizeof(who), "you");
+            else if (rec.a != fl::kNoOwningPeer)
+                std::snprintf(who, sizeof(who), "peer %u", rec.a);
+            else if (rec.instigatorIdx == 0xFFFFFFFFu)
+                std::snprintf(who, sizeof(who), "the environment");
+            else
+                std::snprintf(who, sizeof(who), "entity %u", rec.instigatorIdx);
+            if (youDied)
+                std::snprintf(whom, sizeof(whom), "you");
+            else if (rec.b != fl::kNoOwningPeer)
+                std::snprintf(whom, sizeof(whom), "peer %u", rec.b);
+            else
+                std::snprintf(whom, sizeof(whom), "entity %u", rec.subjectIdx);
+
+            if (console) {
+                char line[96];
+                std::snprintf(line, sizeof(line), "[kill] %s destroyed %s", who, whom);
+                console->print(line);
+            }
+            if (notice && youDied)
+                notice->setNotice("YOU WERE DESTROYED", 0, 5);
+            else if (notice && youKilled) {
+                char banner[64];
+                std::snprintf(banner, sizeof(banner), "DESTROYED %s", whom);
+                notice->setNotice(banner, 0, 5);
+            }
+        }
     }
     // Unknown msgIds: silently discard
 }

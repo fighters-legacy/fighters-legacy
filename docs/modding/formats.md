@@ -40,6 +40,24 @@ For authoring tools and workflow guides, see the other files in this directory.
 - Content packs that use legacy audio formats handle their own conversion before providing OGG to the engine
 - Streaming sources (long music tracks) use OpenAL streaming buffers
 
+### Weapon SFX presets (#631)
+
+The fire path plays positional weapon SFX from a fixed preset vocabulary. Each preset resolves to a
+content-pack OGG **asset name** when one exists (so a theater pack retunes the guns), else to a
+compiled-in procedural fallback — so the sandbox has sound with zero content mounted. Ship the asset
+to override:
+
+| Preset | Asset name | Plays on |
+|---|---|---|
+| `sfx.gunfire` | `sfx/gunfire` | every gun round (own gunfire plays head-relative) |
+| `sfx.launch` | `sfx/launch` | a missile leaving the rails |
+| `sfx.release` | `sfx/release` | a store dropped |
+| `sfx.impact` | `sfx/impact` | a round connecting |
+| `sfx.explosion` | `sfx/explosion` | a warhead detonation |
+
+SFX are one-shot, 3D-spatialised (a 16-voice steal-oldest pool), and scaled by the master + SFX
+volume sliders. Keep them short (< 1 s) — long clips belong to the streaming/music path.
+
 ---
 
 ## Music Playlist — TOML
@@ -226,6 +244,40 @@ max_rate_kg_s = 3.0
 > so a pack learns why its stations vanished. The only coupling that remains is the physical one: a
 > loadout's mass and drag reach the flight model through `PayloadEffect`.
 
+### Ballistic vehicles — `type = "ballistic"`
+
+A boost/coast vehicle (SRBM/MRBM-class, #354) uses a much smaller schema: the CL tables, stability
+derivatives and turbine fuel flows of the winged schema are **not required** (and not read —
+`BallisticForceModel` flies thrust + drag only, with thrust-vector control authority during the
+burn and inertial flight after burnout). The atmosphere follows the US Standard Atmosphere 1976
+to 86 km and vacuum above, so reentry deceleration emerges from the same drag term.
+
+```toml
+[aircraft]
+name = "Example MRBM"
+type = "ballistic"          # engine_type not required
+
+[flight_model]              # same required masses/inertias as any model
+mass_kg      = 2000.0       # dry mass; fuel_kg below is the PROPELLANT
+wing_area_m2 = 0.8          # reference area for drag
+wingspan_m   = 0.8
+mac_m        = 0.8
+fuel_kg      = 3000.0
+ixx_kg_m2    = 800.0
+iyy_kg_m2    = 12000.0
+izz_kg_m2    = 12000.0
+
+[engine.boost]              # required for ballistic models
+thrust_n     = 300000.0     # constant motor thrust while propellant remains
+burn_time_s  = 60.0         # propellant burns to depletion over this time, throttle ignored
+
+[aero.drag_polar]           # optional; only cd0 is read
+cd0 = 0.20                  # default 0.20 — a blunt body
+```
+
+Ballistic entities are full entities (spawnable via the `spawn` admin command with a guidance
+controller, #355), **not** hardpoint stores — a missile a fighter carries is a weapon TOML.
+
 ---
 
 ## Weapon Data — TOML
@@ -241,13 +293,6 @@ and feet — what the source data uses — and the parser converts on the way in
 any error rather than clamping or defaulting: a weapon that is half-parsed is worse than one that is
 absent, because it flies.
 
-> **`[seeker]` is scheduled to change.** The 2026-07-12 sensor decision record
-> (`docs/architecture.md` → Decision Records) locks a **single `SensorDef` vocabulary** shared by
-> missile seekers, player avionics and AI detection. This block's ad-hoc fields (`fov_deg`,
-> `acquisition_nm`) will become a **reference to a sensor def** when the sensor core lands
-> (tracked under #583). The shape below is what the parser accepts today; authored content survives
-> the migration, these field names do not.
-
 ### `[weapon]` (required)
 
 | Field | Type | Description |
@@ -256,6 +301,7 @@ absent, because it flies.
 | `name` | string | Display name |
 | `type` | string | `missile`, `bomb`, `rocket`, `gun`, `pod` |
 | `category` | string | `air-to-air`, `air-to-ground`, `air-to-sea`, `anti-radiation` |
+| `mesh` | string | *Optional.* **Asset name** for the in-flight projectile visual (missiles/rockets/bombs — they fly as entities). Includes its own subdirectory like every mesh field; empty = the builtin placeholder. Guns are hitscan and never render one |
 
 ### `[seeker]` / `[guidance]` (optional, mutually exclusive)
 
@@ -264,13 +310,27 @@ externally guided (someone else looks). Both parse into the same struct. Omit bo
 store. Declaring both is an error — a weapon does not have two different ideas of how it finds a
 target.
 
+**The seeker head IS a sensor** (2026-07-14 decision record — one `SensorDef` vocabulary for
+player avionics, AI detection, and missile seekers). `sensor_id` references a sensor def in the
+pack's `sensors/`; its search/track lobes, ranges and per-check probability of detection are the
+seeker's, evaluated through the same detection math as every other observer in the game. What stays
+on the weapon is employment doctrine and trajectory shaping — things about the *shot*, not the
+sensor.
+
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `type` | string | — | `active-radar`, `semi-active-radar`, `ir`, `laser`, `gps`, `anti-radiation`, `unguided` |
-| `fov_deg` | float | `0` | Seeker gimbal half-angle, `[0, 180]`. `0` = no seeker lobe |
-| `acquisition_nm` | float | `0` | Range at which the seeker can take a lock |
+| `sensor_id` | string | — | **Def ID** of the seeker-head sensor, e.g. `fl-base:aim9p-seeker`. Cross-checked by `validate-weapon --pack` |
 | `fire_and_forget` | bool | `false` | `false` = the launch platform must keep supporting the shot |
 | `requires_designator` | bool | `false` | Laser/GPS: someone must hold the spot |
+| `pitbull_nm` | float | `0` | Active-radar only: range-to-go at which the missile's own radar goes active (and starts *emitting*). `0` = active off the rail |
+| `loft_bias_deg` | float | `0` | Climb bias flown while range-to-go > `loft_range_nm`; comes as a pair with it. `[0, 45]` |
+| `loft_range_nm` | float | `0` | Where the loft phase ends and the seeker flies pure proportional navigation |
+
+> **Deprecated (removed after one release):** the pre-#583 ad-hoc lobe — `fov_deg` +
+> `acquisition_nm` on the weapon itself. It still parses so existing packs load, and both the
+> engine and `validate-weapon` warn on it. It is mutually exclusive with `sensor_id`; migrate by
+> moving the lobe into a sensor def and referencing it.
 
 ### `[performance]` (required)
 
@@ -287,6 +347,7 @@ reach is meaningless); both is an error (which one is the range?).
 | `motor_burn_time_s` | float | `0` | `0` = unpowered |
 | `max_g` | float | `0` | `0` = unmanoeuvring |
 | `CEP_ft` | float | `0` | Circular error probable; `0` = unspecified |
+| `rate_of_fire_rpm` | float | `0` | Guns: rounds per minute. `0` = the engine default |
 
 ### `[warhead]` (required)
 
@@ -294,6 +355,8 @@ reach is meaningless); both is an error (which one is the range?).
 |---|---|---|
 | `blast_radius_ft` | float | Lethal radius |
 | `damage` | float | Damage applied at the centre of the blast |
+| `nuclear` | bool | *Optional.* Gates the nuclear effects path (EMP, flash, mushroom cloud). Requires `yield_kt` |
+| `yield_kt` | float | *Optional.* Yield in kilotons; the effect radii scale from it. Only legal with `nuclear = true` |
 
 ### `[countermeasures]` (optional)
 
@@ -314,6 +377,7 @@ between a loadout and the flight model.
 |---|---|---|
 | `weight_lb` | float | Store mass; must be `> 0` |
 | `drag_factor` | float | Added to the carrier's `cd0` while the store is on the rail |
+| `rounds` | integer | Optional shots per station (default `1`; guns typically hundreds). A gun's magazine or a rail's missile count — the live loadout counts it down as the station fires |
 
 ```toml
 # weapons/aim120c.toml — Active-radar air-to-air missile
@@ -322,12 +386,15 @@ id       = "aim120c"
 name     = "AIM-120C AMRAAM"
 type     = "missile"
 category = "air-to-air"
+mesh     = "aim120c"
 
 [seeker]
 type            = "active-radar"
-fov_deg         = 60
-acquisition_nm  = 20
+sensor_id       = "aim120c-seeker"   # the seeker head, defined in sensors/aim120c_seeker.toml
 fire_and_forget = true
+pitbull_nm      = 10                 # own radar goes active (and emitting) inside 10 nm to go
+loft_bias_deg   = 20                 # climb 20 deg while further out than...
+loft_range_nm   = 15                 # ...15 nm to go, then pure proportional navigation
 
 [performance]
 max_range_nm      = 30
@@ -521,6 +588,7 @@ Validate the whole pack before you fly it:
 ```
 validate-sensor sensors/*.toml
 validate-weapon --pack .
+validate-entity --pack .
 ```
 
 Validate with `validate-sensor sensors/*.toml`. It runs the engine's own parser (a sensor it passes
@@ -1013,6 +1081,7 @@ Lua AI script. Place entity definition files anywhere in the pack directory (typ
 | `flight_model`      | string | `""`    | Flight model TOML asset name; empty = builtin UFO model (server-side only) |
 | `ai_script`         | string | `""`    | Lua AI script name from the pack's `ai/` directory; auto-assigned when spawned without `--ai`; empty = no scripted AI (server-side only) |
 | `sensors`           | string[] | `[]`  | Sensor-def IDs this entity carries (see [Sensor Data](#sensor-data--toml)); empty = the builtin eyeball for AI-controlled entities |
+| `collision_radius_m`| float  | `0`     | Collision sphere radius for entity-entity collision (#630); `0` = category default (air/player 8 m, ground/naval 15 m). Set an explicit value for an oversized airframe (a blimp, a carrier). Projectiles never collide here — they use their own fuze path |
 
 **Example:**
 
@@ -1056,6 +1125,30 @@ thrust_factor    = 0.10
 control_factor   = 0.30
 avionics_failure = true
 
+# Optional per-subsystem granularity (#675). ABSENT = the 3-level model above is the whole story.
+# A CLOSED vocabulary — every subsystem maps onto machinery the sim already has, so a pack cannot
+# invent one the engine would not know how to fail. Each subsystem has its own HP pool (independent
+# of max_hp) and a `weight` biasing an undirected hit toward it; a directed hit (a bullet, shrapnel)
+# also biases by where it struck. Omit any subsystem to leave it unmodelled. Effects when a
+# subsystem's pool is exhausted: engine_left/right = asymmetric thrust + yaw (one engine out halves
+# thrust and yaws toward the dead engine); controls / hydraulics = lost control authority; avionics =
+# sensor suite stripped to the eyeball; fuel = a tank leak on top of the burn.
+[damage.subsystems.engine_left]
+hp     = 40
+weight = 2.0
+
+[damage.subsystems.engine_right]
+hp     = 40
+weight = 2.0
+
+[damage.subsystems.controls]
+hp     = 25
+weight = 1.5
+
+[damage.subsystems.avionics]
+hp     = 15
+weight = 1.0
+
 [classic]
 damage_mesh = "f15c_dmg"   # ASSET NAME -> aircraft/f15c_dmg.glb
 
@@ -1089,9 +1182,17 @@ Omit the array entirely for an entity that carries nothing.
 | `allowed` | string[] | Weapon IDs this station accepts; must be **non-empty** |
 | `default` | string | Pre-loaded weapon ID; must be a member of `allowed` |
 
+An empty `default` (`""`) is a legitimate loadout choice — the station exists, can carry the
+`allowed` stores, and starts empty (#828).
+
 Every `allowed` and `default` ID is cross-checked against the pack's real weapon files by
-`validate-weapon --pack <dir>` (#624) — a typo'd ID otherwise produces a station that silently
-carries nothing.
+`validate-entity --pack <dir>` (#829, moved there from `validate-weapon --pack` because the
+references live in entity files) — a typo'd ID otherwise produces a station that silently
+carries nothing. The same tool resolves every asset-name reference (`mesh`, `cockpit`,
+`flight_model`, `ai_script`, `classic.damage_mesh`, `manual`) against the pack the way the
+engine does, and every `sensors` ID through the def-id index: an unresolvable `flight_model`
+does not fail at runtime, it silently flies the builtin placeholder model, which is why the
+validator treats it as an error.
 
 ### `[signatures]` (optional) — what the entity looks like to a sensor
 

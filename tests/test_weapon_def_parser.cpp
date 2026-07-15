@@ -21,12 +21,15 @@ id       = "aim120c"
 name     = "AIM-120C AMRAAM"
 type     = "missile"
 category = "air-to-air"
+mesh     = "aim120c"
 
 [seeker]
 type            = "active-radar"
-fov_deg         = 60
-acquisition_nm  = 20
+sensor_id       = "aim120c-seeker"
 fire_and_forget = true
+pitbull_nm      = 10
+loft_bias_deg   = 20
+loft_range_nm   = 15
 
 [performance]
 max_range_nm      = 30
@@ -46,6 +49,33 @@ notch_susceptibility = 0.6
 [load]
 weight_lb   = 335
 drag_factor = 0.008
+)toml";
+
+// The pre-#583 seeker form: an ad-hoc lobe on the weapon instead of a sensor-def reference.
+// Deprecated (one release), still parsed — existing packs must keep loading.
+const std::string kLegacySeekerMissile = R"toml(
+[weapon]
+id       = "aim9l"
+name     = "AIM-9L Sidewinder"
+type     = "missile"
+category = "air-to-air"
+
+[seeker]
+type            = "ir"
+fov_deg         = 25
+acquisition_nm  = 5
+fire_and_forget = true
+
+[performance]
+max_range_nm = 9
+
+[warhead]
+blast_radius_ft = 30
+damage          = 60
+
+[load]
+weight_lb   = 190
+drag_factor = 0.001
 )toml";
 
 // The GBU-12 example from docs/modding/formats.md, verbatim.
@@ -83,11 +113,17 @@ TEST_CASE("Parses the documented missile example", "[weapon]") {
     CHECK(w.type == WeaponType::Missile);
     CHECK(w.category == WeaponCategory::AirToAir);
 
+    CHECK(w.mesh == "aim120c");
+
     REQUIRE(w.seeker.has_value());
     CHECK(w.seeker->type == SeekerType::ActiveRadar);
-    CHECK_THAT(w.seeker->fovDeg, WithinAbs(60.f, 1e-4f));
+    CHECK(w.seeker->sensorId == "aim120c-seeker");
+    CHECK_FALSE(w.seeker->usesLegacyLobe());
     CHECK(w.seeker->fireAndForget);
     CHECK_FALSE(w.seeker->requiresDesignator);
+    CHECK_THAT(w.seeker->pitbullRangeM, WithinRel(10.f * 1852.f, 1e-4f));
+    CHECK_THAT(w.seeker->loftBiasDeg, WithinAbs(20.f, 1e-4f));
+    CHECK_THAT(w.seeker->loftRangeM, WithinRel(15.f * 1852.f, 1e-4f));
 
     CHECK_THAT(w.performance.maxG, WithinAbs(30.f, 1e-4f));
     CHECK_THAT(w.performance.motorBurnTimeS, WithinAbs(4.5f, 1e-4f));
@@ -99,10 +135,12 @@ TEST_CASE("Parses the documented missile example", "[weapon]") {
 TEST_CASE("Authored aviation units are converted to SI", "[weapon]") {
     const WeaponDef w = parseWeaponDef(kMissile);
 
-    // 30 nm, 0.5 nm, 20 nm
+    // 30 nm, 0.5 nm, and the seeker's pitbull/loft nm
     CHECK_THAT(w.performance.maxRangeM, WithinRel(30.f * 1852.f, 1e-4f));
     CHECK_THAT(w.performance.minRangeM, WithinRel(0.5f * 1852.f, 1e-4f));
-    CHECK_THAT(w.seeker->acquisitionRangeM, WithinRel(20.f * 1852.f, 1e-4f));
+    CHECK_THAT(w.seeker->pitbullRangeM, WithinRel(10.f * 1852.f, 1e-4f));
+    // The legacy lobe's nm conversion still works while the deprecated form parses.
+    CHECK_THAT(parseWeaponDef(kLegacySeekerMissile).seeker->acquisitionRangeM, WithinRel(5.f * 1852.f, 1e-4f));
     // 2400 kts
     CHECK_THAT(w.performance.maxSpeedMps, WithinRel(2400.f * 0.514444f, 1e-4f));
     // 50 ft
@@ -269,6 +307,77 @@ TEST_CASE("A weapon states its range exactly once", "[weapon]") {
     CHECK_THROWS_AS(parseWeaponDef(rangeBlock("max_range_nm=10\nstandoff_range_ft=1000\n")), std::runtime_error);
 }
 
+TEST_CASE("The deprecated legacy seeker lobe still parses, and says so", "[weapon]") {
+    // One release of grace: packs authored against the pre-#583 schema keep loading. The parser
+    // cannot warn (it has no logger); usesLegacyLobe() is what the bootstrap and validate-weapon
+    // key their warnings on.
+    const WeaponDef w = parseWeaponDef(kLegacySeekerMissile);
+    REQUIRE(w.seeker.has_value());
+    CHECK(w.seeker->usesLegacyLobe());
+    CHECK(w.seeker->sensorId.empty());
+    CHECK_THAT(w.seeker->fovDeg, WithinAbs(25.f, 1e-4f));
+}
+
+TEST_CASE("sensor_id and the legacy lobe are mutually exclusive", "[weapon]") {
+    std::string s(kLegacySeekerMissile);
+    s.replace(s.find("type            = \"ir\""), std::string("type            = \"ir\"").size(),
+              "type            = \"ir\"\nsensor_id       = \"x:seeker\"");
+    CHECK_THROWS_AS(parseWeaponDef(s), std::runtime_error);
+}
+
+TEST_CASE("pitbull_nm only means something on an active-radar seeker", "[weapon]") {
+    std::string s(kLegacySeekerMissile);
+    s.replace(s.find("fire_and_forget = true"), std::string("fire_and_forget = true").size(),
+              "fire_and_forget = true\npitbull_nm      = 5");
+    CHECK_THROWS_AS(parseWeaponDef(s), std::runtime_error);
+}
+
+TEST_CASE("loft_bias_deg and loft_range_nm come as a pair", "[weapon]") {
+    std::string one(kMissile);
+    one.replace(one.find("loft_range_nm   = 15"), std::string("loft_range_nm   = 15").size(), "");
+    CHECK_THROWS_AS(parseWeaponDef(one), std::runtime_error);
+}
+
+TEST_CASE("A nuclear warhead needs a yield, and a yield needs to mean it", "[weapon]") {
+    auto withWarhead = [](const char* extra) {
+        std::string s(kBomb);
+        s.replace(s.find("damage          = 180"), std::string("damage          = 180").size(),
+                  "damage          = 180\n" + std::string(extra));
+        return s;
+    };
+    CHECK_THROWS_AS(parseWeaponDef(withWarhead("nuclear = true")), std::runtime_error);
+    CHECK_THROWS_AS(parseWeaponDef(withWarhead("yield_kt = 15")), std::runtime_error);
+
+    const WeaponDef w = parseWeaponDef(withWarhead("nuclear = true\nyield_kt = 15"));
+    CHECK(w.warhead.nuclear);
+    CHECK_THAT(w.warhead.yieldKt, WithinAbs(15.f, 1e-4f));
+}
+
+TEST_CASE("rate_of_fire_rpm parses for guns", "[weapon]") {
+    const std::string gun = R"toml(
+[weapon]
+id       = "m61"
+name     = "M61A1"
+type     = "gun"
+category = "air-to-air"
+
+[performance]
+max_range_nm     = 0.6
+rate_of_fire_rpm = 6000
+
+[warhead]
+blast_radius_ft = 3
+damage          = 8
+
+[load]
+weight_lb   = 250
+drag_factor = 0
+)toml";
+    const WeaponDef w = parseWeaponDef(gun);
+    CHECK_THAT(w.performance.rateOfFireRpm, WithinAbs(6000.f, 1e-3f));
+    CHECK(w.mesh.empty());
+}
+
 TEST_CASE("[seeker] and [guidance] are mutually exclusive", "[weapon]") {
     const std::string toml = "[weapon]\nid=\"x\"\nname=\"X\"\ntype=\"missile\"\ncategory=\"air-to-air\"\n"
                              "[seeker]\ntype=\"ir\"\n[guidance]\ntype=\"laser\"\n"
@@ -277,14 +386,32 @@ TEST_CASE("[seeker] and [guidance] are mutually exclusive", "[weapon]") {
     CHECK_THROWS_AS(parseWeaponDef(toml), std::runtime_error);
 }
 
-TEST_CASE("The builtin weapon is well-formed for the zero-pack sandbox", "[weapon]") {
-    const WeaponDef& w = BuiltinWeapon::get();
-    CHECK(w.id == "builtin:test-missile");
-    CHECK(w.type == WeaponType::Missile);
-    REQUIRE(w.seeker.has_value());
-    CHECK(w.seeker->type == SeekerType::Infrared);
-    CHECK(w.performance.maxRangeM > 0.f);
-    CHECK(w.load.massKg > 0.f);
+TEST_CASE("The builtin sandbox weapons are well-formed", "[weapon]") {
+    const WeaponDef& gun = BuiltinWeapon::cannon();
+    CHECK(gun.id == "builtin:cannon");
+    CHECK(gun.type == WeaponType::Gun);
+    CHECK_FALSE(gun.seeker.has_value());
+    CHECK(gun.performance.rateOfFireRpm > 0.f);
+    CHECK(gun.load.rounds > 1u); // a gun carries a magazine, not a single shot
+
+    const WeaponDef& ir = BuiltinWeapon::irMissile();
+    CHECK(ir.id == "builtin:ir-missile");
+    CHECK(ir.type == WeaponType::Missile);
+    REQUIRE(ir.seeker.has_value());
+    CHECK(ir.seeker->type == SeekerType::Infrared);
+    CHECK(ir.seeker->sensorId == "builtin:ir-seeker"); // the one-vocabulary reference, not a legacy lobe
+    CHECK_FALSE(ir.seeker->usesLegacyLobe());
+    CHECK(ir.load.rounds == 1u);
+
+    const WeaponDef& rdr = BuiltinWeapon::radarMissile();
+    CHECK(rdr.id == "builtin:radar-missile");
+    REQUIRE(rdr.seeker.has_value());
+    CHECK(rdr.seeker->type == SeekerType::ActiveRadar);
+    CHECK(rdr.seeker->sensorId == "builtin:radar-seeker");
+    CHECK(rdr.seeker->pitbullRangeM > 0.f); // ARH goes active on its own radar (#628)
+    CHECK(rdr.seeker->loftRangeM > 0.f);
+    CHECK(rdr.performance.maxRangeM > ir.performance.maxRangeM); // BVR outranges the heater
+
     // Same object every call (BuiltinFlightModel pattern).
-    CHECK(&BuiltinWeapon::get() == &w);
+    CHECK(&BuiltinWeapon::cannon() == &gun);
 }

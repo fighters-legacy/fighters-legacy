@@ -75,6 +75,8 @@ namespace {
         return AircraftRole::Transport;
     if (s == "trainer")
         return AircraftRole::Trainer;
+    if (s == "ballistic")
+        return AircraftRole::Ballistic;
     throw std::runtime_error(std::string("unknown aircraft type: ") + std::string(s));
 }
 
@@ -121,9 +123,10 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.meta.role = parse_role(*type_str);
 
         auto et_str = ac["engine_type"].value<std::string>();
-        if (!et_str)
+        if (!et_str && d.meta.role != AircraftRole::Ballistic)
             throw std::runtime_error("missing aircraft.engine_type");
-        d.meta.engine_type = parse_engine_type(*et_str);
+        if (et_str)
+            d.meta.engine_type = parse_engine_type(*et_str); // ballistic: a rocket is not a turbine
 
         d.meta.has_fbw = ac["has_fbw"].value<bool>().value_or(false);
         d.meta.cruise_alt_m = static_cast<float>(ac["cruise_alt_m"].value<double>().value_or(10000.0));
@@ -146,6 +149,44 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.geometry.ixx_kg_m2 = req_float(fm["ixx_kg_m2"], "flight_model.ixx_kg_m2");
         d.geometry.iyy_kg_m2 = req_float(fm["iyy_kg_m2"], "flight_model.iyy_kg_m2");
         d.geometry.izz_kg_m2 = req_float(fm["izz_kg_m2"], "flight_model.izz_kg_m2");
+    }
+
+    // ── ballistic vehicles (#354): a different, much smaller schema ───────────
+    // A boost/coast vehicle has no wings, so requiring CL tables, stability derivatives and turbine
+    // fuel flows of it would force authors to invent numbers nothing reads (BallisticForceModel
+    // flies thrust + drag only). Required: [engine.boost] thrust_n + burn_time_s; optional:
+    // [aero.drag_polar] cd0 (default 0.20 — a blunt body). fuel_kg is the PROPELLANT mass, and the
+    // burn time becomes a fuel flow so the integrator's existing fuel path ends the boost with no
+    // special case. Placeholder aero tables keep every downstream Table2D lookup valid.
+    if (d.meta.role == AircraftRole::Ballistic) {
+        auto boost = tbl["engine"]["boost"];
+        if (!boost)
+            throw std::runtime_error("ballistic model: missing [engine.boost] table");
+        d.boost_thrust_n = req_float(boost["thrust_n"], "engine.boost.thrust_n");
+        const float burnS = req_float(boost["burn_time_s"], "engine.boost.burn_time_s");
+        if (d.boost_thrust_n <= 0.f)
+            throw std::runtime_error("engine.boost.thrust_n must be > 0");
+        if (burnS <= 0.f)
+            throw std::runtime_error("engine.boost.burn_time_s must be > 0");
+        const float flow = d.geometry.fuel_kg / burnS;
+        d.engine.fuel_flow_idle_kg_s = flow; // a solid motor burns to depletion, throttle be damned
+        d.engine.fuel_flow_mil_kg_s = flow;
+
+        d.drag_polar.cd0 = static_cast<float>(tbl["aero"]["drag_polar"]["cd0"].value<double>().value_or(0.20));
+        d.drag_polar.k = 0.f;
+
+        d.cl_table.rows = {-90.f, -30.f, 30.f, 90.f};
+        d.cl_table.cols = {0.f, 30.f};
+        d.cl_table.values.assign(8, 0.f); // no wings, no lift
+        // A benign zero thrust table: BallisticForceModel never reads it, but a ballistic model
+        // accidentally stepped by the fixed-wing model must degrade to "no thrust", never assert.
+        d.engine.mil_thrust.rows = {0.f, 30.f};
+        d.engine.mil_thrust.cols = {0.f, 90.f};
+        d.engine.mil_thrust.values.assign(4, 0.f);
+        d.limits.alpha_stall_deg = 90.f; // nothing to stall
+        d.limits.max_g_structural = 100.f;
+        d.limits.min_g_structural = -100.f;
+        return d;
     }
 
     // ── [aero.cl_table] ───────────────────────────────────────────────────────

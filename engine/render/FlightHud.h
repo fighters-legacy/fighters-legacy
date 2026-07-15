@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace fl {
 
@@ -33,14 +34,23 @@ class FlightHud : public IHud {
     // Returns elements for IRenderer::submitOverlayElements(). Valid until next update().
     [[nodiscard]] std::span<const HudElement> elements() const override;
 
+    // Weapon-station labels (#440), indexed by station: what the ARM line shows next to the
+    // selected station's rounds. Set once when the client resolves the aircraft's def (Game.cpp
+    // buildManualFor); empty = no labels (the line shows "STA n" instead). FlightHud-specific,
+    // deliberately NOT on IHud — the label source is client content policy, not HUD contract.
+    void setStationLabels(std::vector<std::string> labels) {
+        m_stationLabels = std::move(labels);
+    }
+
   private:
-    static constexpr int kMaxElements = 20;
-    static constexpr int kMaxStrings = 12;
+    static constexpr int kMaxElements = 22;
+    static constexpr int kMaxStrings = 14;
 
     std::array<HudElement, kMaxElements> m_elements;
     std::array<std::string, kMaxStrings> m_strings;
     std::size_t m_elementCount{0};
     std::size_t m_stringCount{0};
+    std::vector<std::string> m_stationLabels;
 };
 
 } // namespace fl

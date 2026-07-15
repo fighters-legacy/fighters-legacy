@@ -55,6 +55,7 @@ autosave_interval_s = 300
 #                                  # now reacts to an approaching player, where before the
 #                                  # player was invisible to it. [0, 65535]
 # draw_distance_km = 200.0         # per-peer interest management radius (km); [1, 100000]
+# sensor_check_hz = 10.0           # sensor geometry checks/sec; the REFERENCE cadence every authored pod is tuned against; [1, 60]
 # spatial_cell_size_km = 10.0      # SpatialIndex cell size (km); 0 = auto from draw distance; [0, 1000]; restart
 # snapshot_budget_bytes = 1200     # per-client snapshot byte budget; 0 = unlimited; [0, 65535]
 # jitter_buffer_depth = 4          # per-peer input queue depth (ticks); global cap for adaptive sizing; [1, 32]
@@ -84,7 +85,13 @@ autosave_interval_s = 300
 # test_projectile_ttl_s = 3.0      # churned-entity lifetime (s); [0.05, 600] (#580)
 
 [ai]
+difficulty = "pilot"               # what the SERVER runs: scales AI radar range + reaction time; cadet|pilot|ace
 difficulty_floor = "recruit"
+
+[gameplay]
+# The damage gates (#626). Server-authoritative; hot-reloadable via reload_config.
+friendly_fire = false              # false = same-faction weapon damage is suppressed
+crash_damage = true                # false = ground impacts report but do not damage
 
 [discovery]
 # LAN server discovery beacon.

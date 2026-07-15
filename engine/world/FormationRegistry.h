@@ -35,6 +35,11 @@ class FormationRegistry {
     // Returns the formation it was removed from, or kNoFormation.
     FormationId removeEntity(EntityId entity);
 
+    // Is this entity under a wingman weapons-hold order (#610)? The flag was stored with "no teeth
+    // until weapons land (#583)" — the fire path (#625) is those teeth. False for entities in no
+    // formation. Sim-thread only, like everything here.
+    [[nodiscard]] bool weaponsHoldFor(EntityId entity) const noexcept;
+
     [[nodiscard]] const Formation* get(FormationId id) const noexcept;
     [[nodiscard]] Formation* get(FormationId id) noexcept;
 

@@ -80,6 +80,30 @@ struct EntityDef {
     // the units they care about; an elite interceptor and a conscript SAM crew can fly identical
     // hardware and still behave differently.
     std::optional<AiTuning> aiTuning;
+
+    // ── collision (#630) ─────────────────────────────────────────────────────
+    // The entity's collision sphere radius (metres) for entity-entity collision detection. 0 = use
+    // the category default (Air 8 m, Ground/Naval 15 m; Projectiles never collide here — they have
+    // their own fuze path). A blimp or a carrier wants an explicit value; a fighter does not.
+    float collisionRadiusM{0.f};
 };
+
+// Category default collision radius (#630) — used when EntityDef::collisionRadiusM is 0.
+// Projectiles return 0: they are excluded from the entity-entity phase entirely (the ProjectileSystem
+// fuze is their collision model), and an Effect has no physical presence.
+[[nodiscard]] inline float defaultCollisionRadiusM(ObjectCategory category) noexcept {
+    switch (category) {
+    case ObjectCategory::AirVehicle:
+    case ObjectCategory::Player:
+        return 8.f;
+    case ObjectCategory::GroundVehicle:
+    case ObjectCategory::NavalVehicle:
+        return 15.f;
+    case ObjectCategory::Projectile:
+    case ObjectCategory::Effect:
+        return 0.f;
+    }
+    return 0.f;
+}
 
 } // namespace fl

@@ -411,9 +411,14 @@ int main(int argc, char** argv) {
     // Keyed by id, so that resolution never touches the filesystem.
     fl::WeaponRegistry weaponRegistry;
     {
+        // Builtins first (#440): the sandbox weapons exist in every configuration, pack or not,
+        // so the armed debug entity's hardpoints always resolve and the fire path is provable
+        // from a bare checkout. The "builtin:" namespace cannot collide with a pack id.
+        const uint32_t builtinWeapons = fl::registerBuiltinWeapons(weaponRegistry);
         const uint32_t packWeapons = registerPackWeaponDefs(assets, weaponRegistry, *log);
         char buf[96];
-        std::snprintf(buf, sizeof(buf), "content: %u pack weapon(s) registered", packWeapons);
+        std::snprintf(buf, sizeof(buf), "content: %u builtin + %u pack weapon(s) registered", builtinWeapons,
+                      packWeapons);
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
 
@@ -421,12 +426,8 @@ int main(int argc, char** argv) {
     fl::EntityTypeRegistry entityRegistry;
     fl::EntityManager entityManager(*log, entityRegistry);
 
-    fl::EntityDef debugDef;
-    debugDef.id = "builtin:debug-entity";
-    debugDef.name = "Debug Entity";
-    debugDef.category = fl::ObjectCategory::AirVehicle;
-    debugDef.maxHp = 100.0f;
-    entityRegistry.registerType(std::move(debugDef));
+    // The debug entity ships ARMED (#440) — the shared builder keeps server and client identical.
+    entityRegistry.registerType(fl::builtinDebugEntityDef());
 
     // Load content-pack entity definitions into the registry (#683) after the builtin type, so pack
     // types become spawnable via the `spawn` admin command and appear in `types`. MsgEntityTypeDef
@@ -435,6 +436,15 @@ int main(int argc, char** argv) {
         const uint32_t packTypes = registerPackEntityDefs(assets, entityRegistry, *log);
         char buf[96];
         std::snprintf(buf, sizeof(buf), "content: %u pack entity type(s) registered", packTypes);
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
+    // Projectile entity types (#625): one per flyable weapon, registered NOW because
+    // MsgEntityTypeDef only travels in ConnectAck — a type registered after a client connects
+    // would reach it as an unresolvable typeIndex.
+    {
+        const uint32_t projTypes = registerProjectileEntityDefs(weaponRegistry, entityRegistry, *log);
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "content: %u projectile type(s) registered", projTypes);
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
     // Entities are spawned on-demand by WorldBroadcaster::onConnect; none pre-spawned here.
@@ -531,7 +541,15 @@ int main(int argc, char** argv) {
     wbConfig.governor = fl::makeTickGovernorParams(
         cfg.overrunGovernorEnabled, cfg.overrunHighWatermark, cfg.overrunLowWatermark, cfg.overrunMinSnapshotHz,
         cfg.overrunMaxAiStride, cfg.overrunBudgetFloorBytes, cfg.overrunMinInterestFraction);
+    wbConfig.gameplay = fl::DamageRules{cfg.friendlyFire, cfg.crashDamage};
     broadcaster.applyConfig(wbConfig);
+    // The fire path's vocabulary (#625). After applyConfig, before gameLoop.start(); the registry
+    // lives in main's scope and outlives the broadcaster.
+    broadcaster.setWeaponRegistry(&weaponRegistry);
+    // The first production entity-event consumer (#626): kill attribution, the scoreboard, the
+    // kill-feed broadcast, and DamageDef penalties all hang off entity events reaching the
+    // broadcaster. Must be registered before gameLoop.start().
+    entityManager.addEventHandler(&broadcaster);
     // Planet gravity (terrain curvature was applied to the streamer before the first update()).
     // Function-scope static so lifetime outlasts the broadcaster.
     static fl::CentralGravityField s_gravity{6'371'000.f};

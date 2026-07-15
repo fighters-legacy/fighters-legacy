@@ -776,6 +776,55 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             return std::string(tpBuf);
         });
 
+    // detonate (#356) — a warhead with no weapon: testing, ops, and scripted events.
+    registry.registerCommand(
+        "detonate",
+        "detonate <x> <y> <z> <blast_radius_m> <damage> [--nuclear]  -- AoE warhead at a world "
+        "position; --nuclear adds the EMP ring (avionics kill) at 4x the blast radius",
+        [ctx](std::span<std::string_view> args) -> std::string {
+            if (args.size() < 5)
+                return "usage: detonate <x> <y> <z> <blast_radius_m> <damage> [--nuclear]";
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                return "detonate: not available";
+            auto parseNum = [](std::string_view sv, double& out) -> bool {
+                if (sv.empty())
+                    return false;
+                std::string s(sv); // null-terminated for strtod (no float from_chars on Apple Clang)
+                char* end = nullptr;
+                out = std::strtod(s.c_str(), &end);
+                return end == s.c_str() + sv.size() && end != s.c_str();
+            };
+            double x{}, y{}, z{}, radius{}, damage{};
+            if (!parseNum(args[0], x) || !parseNum(args[1], y) || !parseNum(args[2], z) || !parseNum(args[3], radius) ||
+                !parseNum(args[4], damage))
+                return "detonate: invalid arguments";
+            if (radius <= 0.0 || damage <= 0.0)
+                return "detonate: blast_radius_m and damage must be > 0";
+            const bool nuclear = args.size() > 5 && args[5] == "--nuclear";
+
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, x, y, z, radius, damage, nuclear]() {
+                fl::BlastSpec blast;
+                blast.radiusM = static_cast<float>(radius);
+                blast.damage = static_cast<float>(damage);
+                blast.nuclear = nuclear;
+                const double pos[3] = {x, y, z};
+                const fl::WarheadResult r = ctx.sim.broadcaster->applyWarheadAt(pos, blast, fl::EntityId::null());
+                char m[160];
+                std::snprintf(m, sizeof(m),
+                              "[admin] detonated %.0f dmg / %.0f m%s at X:%+.1f Y:%+.1f Z:%+.1f — "
+                              "%d damaged, %d EMPed",
+                              damage, radius, nuclear ? " (nuclear)" : "", x, y, z, r.damaged, r.emped);
+                std::printf("%s\n", m);
+                if (ctx.rcon.shell)
+                    ctx.rcon.shell->print(m);
+                std::fflush(stdout);
+            });
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "detonate: queued %.0f dmg / %.0f m%s", damage, radius,
+                          nuclear ? " (nuclear)" : "");
+            return std::string(buf);
+        });
+
     // reload_config
     registry.registerCommand(
         "reload_config",
@@ -786,7 +835,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         " congestion_budget_floor_bytes, overrun_governor_enabled, overrun_high_watermark,"
         " overrun_low_watermark, overrun_min_snapshot_hz, overrun_max_ai_stride,"
         " overrun_budget_floor_bytes, overrun_min_interest_fraction, compress_snapshots,"
-        " sensor_check_hz, ai.difficulty (other"
+        " sensor_check_hz, gameplay.friendly_fire, gameplay.crash_damage, ai.difficulty (other"
         " fields, incl. max_catchup_ticks and gns_nagle_time_us, require restart)",
         [ctx](std::span<std::string_view>) -> std::string {
             if (!ctx.env.configPath || ctx.env.configPath->empty())
@@ -817,6 +866,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                     newCfg.overrunMinInterestFraction);
                 auto newCompress = newCfg.network.compressSnapshots;
                 auto newSensorHz = static_cast<float>(newCfg.sensorCheckHz);
+                auto newRules = fl::DamageRules{newCfg.friendlyFire, newCfg.crashDamage};
                 // Resolve the preset OFF the sim thread (it may read data/difficulty.toml through the
                 // AssetManager); only the resulting POD crosses into the callback. Null resolver ⇒
                 // nullopt ⇒ the running scaling is left alone rather than reset to a default.
@@ -825,7 +875,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                     newAiScaling = ctx.env.resolveAiScaling(newCfg.aiDifficulty);
                 ctx.sim.gameLoop->enqueueSimCallback([ctx, newMotd, newMotdDisplayS, newDraw, newSnapshotBudget,
                                                       newJitterDepth, newAdaptWindow, newHysteresis, newMultiplier,
-                                                      newCongestion, newGovernor, newCompress, newSensorHz,
+                                                      newCongestion, newGovernor, newCompress, newSensorHz, newRules,
                                                       newAiScaling]() mutable {
                     ctx.sim.broadcaster->setMotd(std::move(newMotd));
                     ctx.sim.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
@@ -839,6 +889,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                     ctx.sim.broadcaster->setCongestionParams(newCongestion);
                     ctx.sim.broadcaster->setGovernorParams(newGovernor);
                     ctx.sim.broadcaster->setSensorCheckHz(newSensorHz);
+                    ctx.sim.broadcaster->setDamageRules(newRules);
                     if (newAiScaling)
                         ctx.sim.broadcaster->setAiScaling(*newAiScaling);
                 });

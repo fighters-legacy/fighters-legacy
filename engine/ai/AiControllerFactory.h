@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "ai/BallisticGuidanceController.h"
 #include "ai/BreakTurnController.h"
 #include "ai/EvadeController.h"
 #include "ai/FormationController.h"
+#include "ai/GunsEmploymentController.h"
 #include "ai/HighYoYoController.h"
 #include "ai/ImmelmannController.h"
 #include "ai/LagPursuitController.h"
@@ -46,6 +48,8 @@ namespace fl::ai {
 //   split_s       [rollDurationS] [pullDurationS]
 //   high_yo_yo    <entityIdx> [climbDurationS] [reacquireDurationS]
 //   low_yo_yo     <entityIdx> [diveDurationS] [pullDurationS]
+//   guns          <entityIdx> [muzzleVelMps] [lethalRadiusM]
+//   ballistic     <tx> <ty> <tz> [mirvCount [spreadM]]  — boost-phase steering to an impact point
 //   formation     <anchorIdx> [slotIndex=0] [lateralM=150] [aftM=100]   — holds station on a MOVING
 //                 anchor (unlike `escort`, which orbits a point captured at creation)
 //
@@ -365,6 +369,66 @@ inline std::unique_ptr<fl::IEntityController> createController(std::string_view 
             pullDur = static_cast<float>(d);
         }
         return std::make_unique<LowYoYoController>(*entityManager, id, diveDur, pullDur);
+    }
+
+    // -----------------------------------------------------------------------
+    // ballistic  <tx> <ty> <tz> [mirvCount [spreadM]]  (#355)
+    // -----------------------------------------------------------------------
+    if (behavior == "ballistic") {
+        if (args.size() < 3)
+            return nullptr;
+        BallisticGuidanceController::Params p;
+        double d = 0.0;
+        if (!parseDouble(args[0], d))
+            return nullptr;
+        p.targetPos.x = d;
+        if (!parseDouble(args[1], d))
+            return nullptr;
+        p.targetPos.y = d;
+        if (!parseDouble(args[2], d))
+            return nullptr;
+        p.targetPos.z = d;
+        if (args.size() >= 4) {
+            uint32_t n{};
+            if (!parseUint32(args[3], n) || n > 64)
+                return nullptr;
+            p.mirvCount = static_cast<int>(n);
+        }
+        if (args.size() >= 5) {
+            if (!parseDouble(args[4], d) || d < 0.0)
+                return nullptr;
+            p.mirvSpreadM = d;
+        }
+        return std::make_unique<BallisticGuidanceController>(p);
+    }
+
+    // -----------------------------------------------------------------------
+    // guns  <entityIdx> [muzzleVelMps=1030] [lethalRadiusM=8]
+    // -----------------------------------------------------------------------
+    if (behavior == "guns") {
+        if (args.empty() || !entityManager)
+            return nullptr;
+        uint32_t idx{};
+        if (!parseUint32(args[0], idx))
+            return nullptr;
+        fl::EntityId id = findEntityById(idx);
+        if (!id.valid())
+            return nullptr;
+
+        float muzzleVel = 1030.f;
+        float lethalRadius = 8.f;
+        double d = 0.0;
+        if (args.size() >= 2) {
+            if (!parseDouble(args[1], d) || d <= 0.0)
+                return nullptr;
+            muzzleVel = static_cast<float>(d);
+        }
+        if (args.size() >= 3) {
+            if (!parseDouble(args[2], d) || d <= 0.0)
+                return nullptr;
+            lethalRadius = static_cast<float>(d);
+        }
+        return std::make_unique<GunsEmploymentController>(*entityManager, id, muzzleVel, lethalRadius);
     }
 
     // -----------------------------------------------------------------------

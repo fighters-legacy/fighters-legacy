@@ -53,11 +53,11 @@ The same JSON shape is the standalone `--metrics-json` file and the embedded blo
 | `wire_out_kbs` / `wire_in_kbs` / `wire_out_pps` | socket-level egress/ingress rates from `INetwork::getWireStats()` — framing, compression, and encryption included; the sample kept is the one at the highest peer count seen (#772) |
 | `wire_peers` / `wire_out_kbs_per_client` | peer count the kept wire sample was taken at / egress wire KB/s divided by it — the number the **150 KB/s/client ceiling** gates (#772) |
 | `tick_ms` | total `onTick` wall-time stats `{min,mean,max,p95,p99}` (ms) |
-| `maintenance_ms` | rate-limit prune, idle timeout, admin drains, spatial rebuild, input drain, jitter resize |
+| `maintenance_ms` | rate-limit prune, idle timeout, admin drains, spatial rebuild, input drain, jitter resize, **and `EntityManager::onTick` housekeeping (damage-level events, pool reap)** — the latter re-attributed here in #630 |
 | `sensing_ms` | cone + probability checks and contact-table assembly (`SensorSystem`, #685); staggered at `[world] sensor_check_hz`, so a single tick carries only its share of the window |
 | `integrate_ms` | physics integration (`stepFlightSim`) summed across entities |
 | `ai_ms` | controller `sample()` summed across entities |
-| `collision_ms` | `EntityManager::onTick` (damage/collision/reap) |
+| `collision_ms` | entity-entity collision detection (#630): broadphase + sphere-sphere narrow phase + relative-speed damage. **Before #630 this timed `EntityManager::onTick` housekeeping** (a misnomer); that work moved to `maintenance_ms` and this phase now measures what its name says |
 | `serialize_ms` | telemetry + snapshot assembly/send + weather + shutdown notices |
 | `other_ms` | `tick_ms − Σ(phases)` (loop/function overhead), clamped ≥ 0 |
 
@@ -254,7 +254,7 @@ snapshot-visible), `tick_ms` +11% — reference-environment numbers belong in
                              fl-server on --transport gns; it never falls back silently (#649)
       --ramp-ms MS           delay between successive connects (default 20)
       --threads N            worker threads (default auto = min(cores, ceil(clients/32)))
-      --pattern NAME         weave | level | aggressive | idle | random | trace:<file> (default weave)
+      --pattern NAME         weave | level | aggressive | idle | random | weapons | trace:<file> (default weave)
       --pattern-mix SPEC     weighted mix, e.g. "weave:80,aggressive:20" (supersedes --pattern)
       --json PATH            write a JSON report
       --server-metrics PATH  read fl-server --metrics-json file; embed authoritative server_tick block
@@ -284,6 +284,10 @@ different parts of the server:
 - **aggressive** — high-rate rolls/pulls + afterburner; max entity churn (physics + snapshot size).
 - **idle** — no input; pure connection + snapshot overhead.
 - **random** — seeded per-client walk; heterogeneity.
+- **weapons** — weave flight plus duty-cycled gun fire and staggered store releases (#583); drives
+  the fire path, hitscan, projectile pool and the `SnapshotEffects` TLV under the reference load.
+  The fire schedule is a function of `(t, clientIndex)` only, so a 128-swarm fires smeared across
+  the window rather than in lockstep, and the run is reproducible.
 - **trace:`<file>`** — replays a recorded real session (see [Trace replay](#trace-replay-560));
   reproduces real player behaviour at scale.
 
@@ -392,9 +396,16 @@ and the deterministic AIMD logic itself is covered by `test_congestion_controlle
 **GameNetworkingSockets is the default internet transport** ([#507]) — the one most players actually
 use — so since [#773] every headline and characterisation profile pins `transport: gns` and **the
 published numbers describe what ships**: `reference` (the primary 128-client profile), `soak`,
-`overrun`, `congestion`, `entity-scale`, and `entity-churn` all run GNS on both ends. enet6 keeps two
-regression legs: `pr` (every PR, hosted runner) and `reference-enet` (128 clients on the strict tier,
-mirroring `reference` so the transports stay directly comparable).
+`overrun`, `congestion`, `entity-scale`, `entity-churn`, and `weapons` all run GNS on both ends.
+enet6 keeps two regression legs: `pr` (every PR, hosted runner) and `reference-enet` (128 clients on
+the strict tier, mirroring `reference` so the transports stay directly comparable).
+
+The `weapons` profile (#583) is the "projectiles within budget at 128 clients" acceptance
+instrument: 128 clients flying the `weapons` pattern so the fire path, hitscan, projectile pool and
+the `SnapshotEffects` TLV run under the reference load. It hard-gates the collapse tripwires
+(tick-Hz ≥ 58, wire ≤ 150 KB/s/client) but is `baselined: false` — projectile traffic is bursty and
+store-dependent, so its KB/s never touches the committed bandwidth baseline. Reference tier
+(`workflow_dispatch`).
 
 `--transport gns` points both ends at GNS:
 

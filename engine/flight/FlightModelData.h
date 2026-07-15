@@ -22,7 +22,8 @@ enum class AircraftRole {
     Recon,
     Tanker,
     Transport,
-    Trainer
+    Trainer,
+    Ballistic // #354: an unwinged boost/coast vehicle — flown by BallisticForceModel, not wings
 };
 
 enum class PropRotation { CW, CCW, Contra };
@@ -203,6 +204,16 @@ struct FlightModelData {
     std::optional<CarrierData> carrier;
     std::optional<RefuelingData> refueling;
     std::optional<TankerData> tanker;
+
+    // Ballistic boost (#354): constant motor thrust while propellant (fuel_kg) remains. The burn
+    // TIME lives in the fuel flow — the parser sets fuel_flow_idle/mil = fuel_kg / burn_time_s, so
+    // a solid motor burns to depletion through the integrator's existing fuel path with no special
+    // case, throttle be damned. 0 = not a ballistic model.
+    float boost_thrust_n{0.f};
+
+    [[nodiscard]] bool isBallistic() const noexcept {
+        return meta.role == AircraftRole::Ballistic;
+    }
 };
 
 } // namespace fl

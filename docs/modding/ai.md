@@ -45,7 +45,7 @@ function compute_control(state, tick, dt)
     local tx   = pos.x + nx * math.min(dist, 1000) + nz * 1000
     local tz   = pos.z + nz * math.min(dist, 1000) - nx * 1000
     local herr = guidance.heading_error(quat, pos, {x = tx, y = pos.y, z = tz})
-    local perr = guidance.pitch_error_from_alt(quat, alt - pos.y)
+    local perr = guidance.pitch_error_from_alt(quat, pos, alt - pos.y)
     return {
         aileron  = guidance.bank_to_turn_aileron(herr),
         rudder   = guidance.coordinated_rudder(guidance.bank_to_turn_aileron(herr)),
@@ -123,6 +123,14 @@ will behave like it is reading the server's memory — because it is.
 | `afterburner` | boolean | —        | `true` = afterburner on            |
 | `speedbrake`  | number  | `[0,1]`  | `0` = retracted, `1` = fully deployed |
 | `gear_down`   | boolean | —        | `true` = landing gear extended     |
+| `trigger`     | boolean | —        | `true` = hold the gun trigger (level; the server rate-limits) |
+| `release`     | boolean | —        | `true` = fire the selected store (the server edge-detects: holding it is ONE shot) |
+| `weapon_station` | integer | `[0,254]` | Absolute station selection; absent or out-of-range = keep the current selection |
+
+The fire fields are **intents**, not actions: the server's fire control validates station, ammo,
+rate of fire, and any wingman weapons-hold order exactly as it does for a player. A script that
+holds `trigger` forever gets what a trigger-holding player gets — a rate-limited burst until the
+magazine is empty.
 
 ---
 
@@ -131,15 +139,25 @@ will behave like it is reading the server's memory — because it is.
 Thin wrappers over the engine's `Guidance.h` inline math. The quaternion parameter is always
 `{x,y,z,w}`; position parameters are `{x,y,z}` tables.
 
-### `guidance.heading_error(quat, own_pos, target_pos) → number`
+### `guidance.heading_error(quat, own_pos, target_pos, [radius_m]) → number`
 
-Signed horizontal angle in radians from the current heading to the bearing toward `target_pos`
-in the XZ plane. Positive = target is to the right. Returns `0` when horizontal distance < 0.1 m.
+Signed horizontal angle in radians from the current heading to the bearing toward `target_pos`,
+measured in the **local tangent plane at `own_pos`** — correct anywhere on the sphere, not just
+near the world origin. Positive = target is to the right. Returns `0` when the tangent-plane
+distance < 0.1 m. `radius_m` is the planet radius and defaults to Earth; scripts almost never
+pass it.
 
-### `guidance.pitch_error_from_alt(quat, alt_error_m) → number`
+### `guidance.pitch_error_from_alt(quat, own_pos, alt_error_m, [radius_m]) → number`
 
 Signed pitch error in radians needed to close an altitude gap of `alt_error_m` metres.
 Gain: 0.002 rad/m, clamped to ±30°.
+
+`own_pos` is **required, not redundant**: the world is a sphere, so "up" — and therefore what
+counts as pitch — is the geodetic radial direction *at your position*. The function cannot
+measure your pitch against the local horizon without knowing where that horizon is. (Omitting it
+does not degrade gracefully: the call raises a Lua error every tick and the controller returns
+neutral controls, so the aircraft flies straight ahead while the log fills.) `radius_m` defaults
+to Earth.
 
 ### `guidance.bank_to_turn_aileron(heading_error_rad) → number`
 

@@ -127,6 +127,21 @@
       "assert_congestion_engaged_hz": 30,
       "assert_congestion_recovered_hz": 55
     },
+    "weapons": {
+      "_comment": "Weapons-at-scale characterisation (#583): 128 clients flying the `weapons` pattern (duty-cycled gun fire + staggered store releases), so the fire path, hitscan, projectile pool and the SnapshotEffects TLV all run under the reference load. On GNS, the shipping transport. This is the 'projectiles within budget at 128 clients' acceptance instrument: it hard-gates the collapse tripwires (tick-Hz floor + wire KB/s ceiling) but is baselined=false — projectile traffic is bursty and store-dependent, so its KB/s must NEVER touch the committed bandwidth baseline. tick-ms is advisory (0): the extra serialize load from projectile entities + effects TLV is the characterisation, not a regression. Reference tier (workflow_dispatch / nightly), like the other 128-client legs.",
+      "clients": 128,
+      "duration_s": 60,
+      "patterns": [
+        "weapons"
+      ],
+      "transport": "gns",
+      "sim_worker_threads": 0,
+      "baselined": false,
+      "assert_max_kbs": 0,
+      "assert_min_tick_hz": 58,
+      "assert_max_tick_ms": 0,
+      "assert_max_wire_kbs": 150
+    },
     "entity-churn": {
       "_comment": "Heavier-AI-mix + projectile-churn characterisation (#580, extends the #573 entity-scale matrix which deliberately used cheap static loiterers), re-derived on GNS (#773). Pre-spawns entities with a representative controller mix (60% loiter / 25% pursuit [EntityManager::get on a moving target each tick] / 15% patrol [a StateMachineController whose AnyEntityWithinRange transitions run SpatialIndex::queryRadius EVERY tick — the expensive AI path the governor's AI stride decimates]) and runs the projectile-churn generator (120 spawn+reap/s, 3 s TTL => ~360 extra live entities at steady state; continuous EntityPool alloc/free + SnapshotDespawn TLV traffic). Compare ai_ms / collision_ms / maintenance_ms against the same entity_spawn_counts points in the entity-scale matrix (docs/entity-scale-characterization.md). Advisory only (baselined=false); assert_max_tick_ms deliberately 0, same reason as entity-scale (#773 — the collapsing cells are the data). Reference tier (workflow_dispatch on demand, like entity-scale).",
       "clients": 64,

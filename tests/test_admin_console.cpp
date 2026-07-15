@@ -952,3 +952,16 @@ TEST_CASE("AdminConsole: set_weather blizzard enqueues preset change", "[admin_c
     CHECK(out.find("blizzard") != std::string::npos);
     CHECK(out.find("not available") == std::string::npos);
 }
+
+TEST_CASE("Admin console: detonate validates and queues with a synchronous ack", "[admin_console]") {
+    AsyncAckFixture f;
+    auto reg = makeRegistry(f.ctx);
+
+    CHECK(reg.dispatch("detonate").find("usage:") != std::string::npos);
+    CHECK(reg.dispatch("detonate 0 0 0 abc 50").find("invalid") != std::string::npos);
+    CHECK(reg.dispatch("detonate 0 0 0 0 50").find("must be > 0") != std::string::npos);
+
+    const std::string ack = reg.dispatch("detonate 100 500 -200 120 200 --nuclear");
+    CHECK(ack.find("detonate: queued") != std::string::npos);
+    CHECK(ack.find("nuclear") != std::string::npos);
+}

@@ -4,6 +4,7 @@
 #include "net/BitStream.h"
 #include "net/Quantization.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace fl {
@@ -56,6 +57,17 @@ static void encodeBody(BitWriter& w, const QuantEntity& e, const double origin[3
     w.writeBits(e.fuelPct, kFuelBits);
     w.writeBits(e.abEngaged ? 1u : 0u, 1);
     w.writeBits(e.playerOwned ? 1u : 0u, 1);
+
+    // Own-record loadout block (#625), gated by the same own-record bit as omega.
+    if (e.hasOmega) {
+        w.writeBits(e.selectedStation, 8);
+        w.writeBits(e.stationRounds, 16);
+        w.writeBits(e.weaponFlags, 8);
+        const double massClamped = std::min(65535.0, std::max(0.0, static_cast<double>(e.payloadMassKg)));
+        w.writeBits(static_cast<uint32_t>(massClamped + 0.5), 16);
+        const double cd0Steps = std::min(65535.0, std::max(0.0, static_cast<double>(e.payloadCd0) * 1e5));
+        w.writeBits(static_cast<uint32_t>(cd0Steps + 0.5), 16);
+    }
 }
 
 void encodeStandaloneRecord(std::vector<uint8_t>& out, const QuantEntity& e, const double origin[3], bool sendGen) {
@@ -157,6 +169,19 @@ bool decodeStandaloneRecord(BitReader& r, QuantEntity& out, const double* origin
     out.abEngaged = (ab != 0u);
     out.playerOwned = (owned != 0u);
 
+    // Own-record loadout block (#625) — present exactly when omega is.
+    if (out.hasOmega) {
+        uint32_t station = 0, rounds = 0, wflags = 0, mass = 0, cd0 = 0;
+        if (!r.readBits(8, station) || !r.readBits(16, rounds) || !r.readBits(8, wflags) || !r.readBits(16, mass) ||
+            !r.readBits(16, cd0))
+            return false;
+        out.selectedStation = static_cast<uint8_t>(station);
+        out.stationRounds = static_cast<uint16_t>(rounds);
+        out.weaponFlags = static_cast<uint8_t>(wflags);
+        out.payloadMassKg = static_cast<float>(mass);
+        out.payloadCd0 = static_cast<float>(cd0) * 1e-5f;
+    }
+
     r.alignToByte(); // skip the blob's trailing padding to land on the next record boundary
     return true;
 }
@@ -186,7 +211,7 @@ uint32_t estimateRecordBytes(bool isFull, bool sendGen, bool hasOmega, uint32_t 
     bits += 2u + 3u * static_cast<uint32_t>(kQuatBits); // smallest-three: 2-bit index + 3 components
     bits += 3u * static_cast<uint32_t>(kVelBits);
     if (hasOmega)
-        bits += 3u * static_cast<uint32_t>(kOmegaBits);
+        bits += 3u * static_cast<uint32_t>(kOmegaBits) + 64u; // + the own-record loadout block (#625)
     bits += static_cast<uint32_t>(kDamageBits + kEngineFailBits + kThrottleBits + kFuelBits) + 2u; // +ab+owned
     return (bits + 7u) / 8u;
 }

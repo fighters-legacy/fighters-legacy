@@ -19,8 +19,9 @@ static void printHelp() {
                 "using the engine's own parser — a weapon this tool passes is a weapon the\n"
                 "engine loads. Also warns about values that are legal but implausible.\n"
                 "\n"
-                "With --pack, cross-checks a whole content pack: every weapon id referenced by\n"
-                "an entity's [[hardpoints]] must resolve to a real weapon in the pack.\n"
+                "With --pack, validates every weapons/*.toml in a content pack and rejects\n"
+                "duplicate weapon ids. The hardpoint-to-weapon cross-check lives in\n"
+                "validate-entity --pack (the references are in entity files).\n"
                 "\n"
                 "Exit codes:\n"
                 "  0  all files valid\n"
@@ -28,7 +29,7 @@ static void printHelp() {
                 "  2  bad arguments\n"
                 "\n"
                 "Options:\n"
-                "  --pack <dir>   Cross-check hardpoint weapon references in a content pack\n"
+                "  --pack <dir>   Validate every weapon definition in a content pack\n"
                 "  --help, -h     Show this help and exit\n"
                 "  --version, -v  Show version and exit\n");
 }
@@ -64,7 +65,7 @@ int main(int argc, char* argv[]) {
             std::fprintf(stderr, "error: --pack takes exactly one directory\n");
             return 2;
         }
-        report(validatePackLoadouts(argv[2]), argv[2], exitCode);
+        report(validatePackWeapons(argv[2]), argv[2], exitCode);
         return exitCode;
     }
 

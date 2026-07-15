@@ -2,12 +2,15 @@
 #include "IClock.h"
 #include "ILogger.h"
 #include "INetwork.h"
+#include "content/ContentBootstrap.h"
 #include "entity/DamageDef.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
 #include "entity/IEntityController.h"
 #include "flight/CentralGravityField.h"
+#include "flight/EngineFailFlags.h"
+#include "flight/FlightIntegrator.h"
 #include "job/JobSystem.h"
 #include "net/BitStream.h"
 #include "net/GameProtocol.h"
@@ -17,6 +20,11 @@
 #include "net/WireCodec.h"
 #include "net/WorldBroadcaster.h"
 #include "render/RenderSnapshot.h"
+#include "sensor/BuiltinSensors.h"
+#include "weapon/BuiltinWeapon.h"
+#include "weapon/ProjectileSystem.h"
+#include "weapon/WeaponDefParser.h"
+#include "weapon/WeaponRegistry.h"
 #include "weather/WeatherController.h"
 
 #include "mock_network.h"
@@ -134,6 +142,10 @@ struct DecodedEntity {
     float omega[3]{};
     bool isFull{false};
     bool genPresent{false};
+    bool hasLoadout{false};       // the own-record loadout block was on the wire (#625)
+    uint8_t selectedStation{255}; //
+    uint16_t stationRounds{0};    //
+    uint8_t weaponFlags{0};       // bit 0 = seeker LOCK cue (#628)
 };
 
 // Decode every quantized record in a snapshot packet (full + delta). Stateless: typeIndex/gen are
@@ -181,6 +193,10 @@ static std::vector<DecodedEntity> decodeEntities(const std::vector<uint8_t>& pkt
         d.omega[2] = qe.omega[2];
         d.isFull = qe.isFull;
         d.genPresent = gp;
+        d.hasLoadout = qe.hasOmega; // the loadout block rides the same own-record bit (#625)
+        d.selectedStation = qe.selectedStation;
+        d.stationRounds = qe.stationRounds;
+        d.weaponFlags = qe.weaponFlags;
         out.push_back(d);
     }
     return out;
@@ -7843,4 +7859,794 @@ TEST_CASE("WorldBroadcaster: disconnect tears the peer's flight down", "[world_b
     CHECK(broadcaster.formations().size() == 0u);
     broadcaster.onTick(1.0 / 60.0, 2u);
     CHECK(em.liveCount() == 0u); // both gone
+}
+
+// ---------------------------------------------------------------------------
+// Combat scoring, the kill feed, and damage penalties (#626)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// All MsgCombatEvent packets broadcast so far, decoded into records.
+std::vector<fl::CombatEventRecord> combatBroadcasts(const MockNetwork& net) {
+    std::vector<fl::CombatEventRecord> out;
+    for (const auto& pkt : net.broadcasts) {
+        if (pkt.empty() || pkt[0] != static_cast<uint8_t>(fl::MsgId::CombatEvent))
+            continue;
+        fl::MsgCombatEventHeader hdr;
+        REQUIRE(fl::readMsg(pkt.data(), pkt.size(), hdr));
+        for (uint8_t i = 0; i < hdr.count; ++i) {
+            fl::CombatEventRecord rec;
+            REQUIRE(fl::readRecordAt(pkt.data(), pkt.size(), sizeof(hdr) + std::size_t(i) * sizeof(rec), rec));
+            out.push_back(rec);
+        }
+    }
+    return out;
+}
+
+// The last Stats record unicast to `peerId`, if any.
+std::optional<fl::CombatEventRecord> lastStatsFor(const MockNetwork& net, uint32_t peerId) {
+    std::optional<fl::CombatEventRecord> out;
+    for (const auto& [pid, pkt] : net.perPeerSends) {
+        if (pid != peerId || pkt.empty() || pkt[0] != static_cast<uint8_t>(fl::MsgId::CombatEvent))
+            continue;
+        fl::MsgCombatEventHeader hdr;
+        if (!fl::readMsg(pkt.data(), pkt.size(), hdr))
+            continue;
+        for (uint8_t i = 0; i < hdr.count; ++i) {
+            fl::CombatEventRecord rec;
+            if (fl::readRecordAt(pkt.data(), pkt.size(), sizeof(hdr) + std::size_t(i) * sizeof(rec), rec) &&
+                rec.type == static_cast<uint8_t>(fl::CombatEventType::Stats))
+                out = rec;
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+TEST_CASE("WorldBroadcaster: a kill broadcasts credit and unicasts the killer's stats", "[world_broadcaster][combat]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::EntityTransform t{};
+    t.pos[1] = 500.0;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", t);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    em.addEventHandler(&broadcaster);
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityId shooter{ack.assignedEntityIdx, ack.assignedEntityGen};
+
+    em.applyDamage(victim, 200.f, shooter); // lethal, credited to peer 0's aircraft
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    const auto kills = combatBroadcasts(net);
+    REQUIRE(kills.size() == 1u);
+    CHECK(kills[0].type == static_cast<uint8_t>(fl::CombatEventType::Kill));
+    CHECK(kills[0].subjectIdx == victim.index);
+    CHECK(kills[0].instigatorIdx == shooter.index);
+    CHECK(kills[0].a == 0u);                // peer 0 gets the credit — a REAL peer id
+    CHECK(kills[0].b == fl::kNoOwningPeer); // the victim was AI/server-owned
+
+    const auto stats = lastStatsFor(net, 0u);
+    REQUIRE(stats.has_value());
+    CHECK(stats->a == 1u); // kills
+    CHECK(stats->b == 0u); // losses
+    CHECK(stats->c == 1);  // ScoreAwarded's default credit
+}
+
+TEST_CASE("WorldBroadcaster: losing your aircraft is a loss on your stats", "[world_broadcaster][combat]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    em.addEventHandler(&broadcaster);
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+
+    em.applyDamage({ack.assignedEntityIdx, ack.assignedEntityGen}, 200.f, fl::EntityId::null());
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    const auto stats = lastStatsFor(net, 0u);
+    REQUIRE(stats.has_value());
+    CHECK(stats->a == 0u);
+    CHECK(stats->b == 1u);
+}
+
+TEST_CASE("WorldBroadcaster: DamageLevelChanged applies the DamageDef penalties to the integrator",
+          "[world_broadcaster][combat]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+
+    fl::EntityDef def = makeDebugDef();
+    fl::DamageDef dmg;
+    dmg.light.hpFraction = 0.7f;
+    dmg.light.thrustFactor = 0.5f;
+    dmg.light.controlFactor = 0.6f;
+    dmg.heavy.hpFraction = 0.35f;
+    dmg.critical.hpFraction = 0.1f;
+    dmg.critical.thrustFactor = 0.1f;
+    dmg.critical.controlFactor = 0.2f;
+    dmg.critical.avionicsFailure = true;
+    def.damage = dmg;
+    registry.registerType(def);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    em.addEventHandler(&broadcaster);
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityId player{ack.assignedEntityIdx, ack.assignedEntityGen};
+
+    const fl::FlightIntegrator* fi = broadcaster.integratorFor(player.index);
+    REQUIRE(fi != nullptr);
+    CHECK(fi->damageThrustFactor() == 1.f);
+
+    em.applyDamage(player, 40.f, fl::EntityId::null()); // 60/100 -> Light
+    CHECK(fi->damageThrustFactor() == 0.5f);
+    CHECK(fi->damageControlFactor() == 0.6f);
+
+    em.applyDamage(player, 55.f, fl::EntityId::null()); // 5/100 -> Critical (avionics gone)
+    CHECK(fi->damageThrustFactor() == 0.1f);
+    CHECK(fi->damageControlFactor() == 0.2f);
+}
+
+TEST_CASE("WorldBroadcaster: applyWarheadAt damages through the pipeline and EMPs on nuclear",
+          "[world_broadcaster][combat]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    em.addEventHandler(&broadcaster);
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u); // builds the spatial index the warhead queries
+
+    const auto ack = parseSendAck(net);
+    const fl::EntityId player{ack.assignedEntityIdx, ack.assignedEntityGen};
+    const fl::EntityState* ps = em.get(player);
+    REQUIRE(ps != nullptr);
+
+    // Detonate a nuclear warhead just outside blast range but inside the EMP ring.
+    double pos[3] = {ps->transform.pos[0] + 200.0, ps->transform.pos[1], ps->transform.pos[2]};
+    fl::BlastSpec nuke{100.f, 80.f, true};
+    const auto r = broadcaster.applyWarheadAt(pos, nuke, fl::EntityId::null());
+
+    CHECK(em.get(player)->hp == 100.f); // no shrapnel at 200 m
+    CHECK(r.emped >= 1);                // but the avionics are gone (SensorSystem wiring is live)
+
+    // And inside blast range it hurts.
+    double close[3] = {ps->transform.pos[0] + 10.0, ps->transform.pos[1], ps->transform.pos[2]};
+    fl::BlastSpec he{100.f, 50.f, false};
+    broadcaster.applyWarheadAt(close, he, fl::EntityId::null());
+    CHECK(em.get(player)->hp < 100.f);
+}
+
+// ---------------------------------------------------------------------------
+// The fire path (#625): trigger bit -> weapons pass -> hitscan/projectile -> effects TLV
+// ---------------------------------------------------------------------------
+
+namespace {
+
+const char* kFpGunToml = R"toml(
+[weapon]
+id       = "fp:gun"
+name     = "FP Gun"
+type     = "gun"
+category = "air-to-air"
+[performance]
+max_range_nm     = 0.6
+rate_of_fire_rpm = 1200
+[warhead]
+blast_radius_ft = 3
+damage          = 8
+[load]
+weight_lb   = 300
+drag_factor = 0
+rounds      = 50
+)toml";
+
+const char* kFpMissileToml = R"toml(
+[weapon]
+id       = "fp:aim"
+name     = "FP Missile"
+type     = "missile"
+category = "air-to-air"
+[seeker]
+type            = "ir"
+sensor_id       = "fp:seeker"
+fire_and_forget = true
+[performance]
+max_range_nm      = 9
+min_range_nm      = 0.3
+max_speed_kts     = 1500
+motor_burn_time_s = 5
+max_g             = 20
+[warhead]
+blast_radius_ft = 30
+damage          = 60
+[load]
+weight_lb   = 190
+drag_factor = 0.001
+)toml";
+
+// The debug entity, armed: a gun on station 0 and one missile on station 1 (the C8 sandbox arming,
+// in miniature). Same type id, so onConnect's spawn picks it up.
+fl::EntityDef makeArmedDebugDef() {
+    fl::EntityDef def = makeDebugDef();
+    fl::Hardpoint gun;
+    gun.slot = 0;
+    gun.type = fl::HardpointType::Gun;
+    gun.allowed = {"fp:gun"};
+    gun.defaultWeapon = "fp:gun";
+    fl::Hardpoint rail;
+    rail.slot = 1;
+    rail.type = fl::HardpointType::Missile;
+    rail.allowed = {"fp:aim"};
+    rail.defaultWeapon = "fp:aim";
+    def.hardpoints = {gun, rail};
+    return def;
+}
+
+struct DecodedEffect {
+    uint8_t type{0};
+    uint8_t weaponClass{0};
+    uint32_t srcIdx{0};
+    uint32_t tgtIdx{0};
+    float pos[3]{};
+};
+
+// Read the SnapshotEffects TLV (packed 22-byte records, unaligned) from a snapshot packet.
+std::vector<DecodedEffect> decodeEffects(const std::vector<uint8_t>& pkt) {
+    std::vector<DecodedEffect> out;
+    fl::MsgWorldSnapshotHeader hdr = parseSnapshotHeader(pkt);
+    const std::size_t extOffset =
+        sizeof(hdr) + static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
+    if (pkt.size() <= extOffset)
+        return out;
+    uint16_t valueLen{};
+    const uint8_t* p = fl::findExt(pkt.data() + extOffset, pkt.size() - extOffset,
+                                   static_cast<uint16_t>(fl::ExtTag::SnapshotEffects), valueLen);
+    if (!p)
+        return out;
+    for (uint16_t i = 0; i + fl::kEffectRecordBytes <= valueLen; i += fl::kEffectRecordBytes) {
+        DecodedEffect e;
+        e.type = p[i + 0];
+        e.weaponClass = p[i + 1];
+        std::memcpy(&e.srcIdx, p + i + 2, 4u);
+        std::memcpy(&e.tgtIdx, p + i + 6, 4u);
+        std::memcpy(e.pos, p + i + 10, 12u);
+        out.push_back(e);
+    }
+    return out;
+}
+
+bool hasEffect(const std::vector<DecodedEffect>& fx, fl::EffectType t) {
+    return std::any_of(fx.begin(), fx.end(), [&](const DecodedEffect& e) { return e.type == static_cast<uint8_t>(t); });
+}
+
+} // namespace
+
+TEST_CASE("WorldBroadcaster: the trigger bit fires the gun -- damage lands and effects replicate",
+          "[world_broadcaster][firepath]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeArmedDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(fl::parseWeaponDef(kFpGunToml));
+    weapons.registerWeapon(fl::parseWeaponDef(kFpMissileToml));
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setWeaponRegistry(&weapons);
+    broadcaster.onConnect(0u); // spawns the armed peer, identity orientation: bore = +X
+    const auto ack = parseSendAck(net);
+    const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(shooter != nullptr);
+
+    // A victim dead ahead of wherever the peer actually spawned, well inside the gun's reach and
+    // its 8 m hit radius.
+    fl::EntityTransform vt{};
+    vt.pos[0] = shooter->transform.pos[0] + 100.0;
+    vt.pos[1] = shooter->transform.pos[1];
+    vt.pos[2] = shooter->transform.pos[2];
+    vt.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
+
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.buttons = 0x01u; // gun trigger
+    inp.selectedStation = 255u;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    const fl::EntityState* vs = em.get(victim);
+    REQUIRE(vs != nullptr);
+    CHECK(vs->hp == 92.f); // one 8-damage round connected
+
+    REQUIRE(!snapshotsFor(net, 0).empty());
+    const auto fx = decodeEffects(snapshotsFor(net, 0).back());
+    CHECK(hasEffect(fx, fl::EffectType::WeaponFired)); // tracer at the muzzle
+    CHECK(hasEffect(fx, fl::EffectType::Impact));      // and the hit itself
+}
+
+TEST_CASE("WorldBroadcaster: store release spawns ONE replicated projectile; stale repeat never re-fires",
+          "[world_broadcaster][firepath]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeArmedDebugDef());
+
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(fl::parseWeaponDef(kFpGunToml));
+    const uint32_t aimIdx = weapons.registerWeapon(fl::parseWeaponDef(kFpMissileToml));
+
+    // The projectile's pooled entity type, registered up front because MsgEntityTypeDef only travels
+    // in ConnectAck (the ContentBootstrap startup job, in miniature).
+    fl::EntityDef proj;
+    proj.id = fl::projectileTypeId(*weapons.byIndex(aimIdx));
+    proj.name = "proj";
+    proj.category = fl::ObjectCategory::Projectile;
+    proj.maxHp = 1.f;
+    const uint32_t projType = registry.registerType(proj);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setWeaponRegistry(&weapons);
+    broadcaster.onConnect(0u);
+
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.buttons = 0x04u;        // fire selected store
+    inp.selectedStation = 255u; // keep the default selection (the missile rail)
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    CHECK(em.liveCount() == 2u); // the peer and its missile
+    CHECK(hasEffect(decodeEffects(snapshotsFor(net, 0).back()), fl::EffectType::MissileLaunch));
+
+    // No further input arrives: the jitter buffer stale-repeats the last controls with the fire bit
+    // masked, and the edge detector never sees a new press. One press, one missile.
+    for (uint64_t t = 2; t <= 5; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+    CHECK(em.liveCount() == 2u);
+
+    // The projectile replicates like any entity: some snapshot after the spawn carries a FULL record
+    // with its type index.
+    bool sawProjectile = false;
+    for (const auto& pkt : snapshotsFor(net, 0)) {
+        for (const DecodedEntity& e : decodeEntities(pkt)) {
+            if (e.isFull && e.typeIndex == projType)
+                sawProjectile = true;
+        }
+    }
+    CHECK(sawProjectile);
+}
+
+TEST_CASE("WorldBroadcaster: a delayed player's gun hits where the target WAS -- lag compensation",
+          "[world_broadcaster][firepath][lagcomp]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeArmedDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(fl::parseWeaponDef(kFpGunToml));
+    weapons.registerWeapon(fl::parseWeaponDef(kFpMissileToml));
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setWeaponRegistry(&weapons);
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(shooter != nullptr);
+
+    // The victim sits dead ahead on the bore for ticks 1..10 -- that world is what the history
+    // ring records and what a 5-tick-delayed client is still SEEING.
+    fl::EntityTransform vt{};
+    vt.pos[0] = shooter->transform.pos[0] + 100.0;
+    vt.pos[1] = shooter->transform.pos[1];
+    vt.pos[2] = shooter->transform.pos[2];
+    vt.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
+
+    for (uint64_t t = 1; t <= 10; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+
+    // NOW the victim jinks 200 m off the bore. On the server it is nowhere near the ray.
+    em.get(victim)->transform.pos[2] += 200.0;
+
+    // The trigger packet echoes snapshot tick 5: estimatedDelayTicks = 10 - 5 = 5, so the hitscan
+    // at tick 11 rewinds to tick 6 -- where the victim was still on the bore.
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.buttons = 0x01u;
+    inp.selectedStation = 255u;
+    inp.tickIndex = 5u;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+    broadcaster.onTick(1.0 / 60.0, 11u);
+
+    const fl::EntityState* vs = em.get(victim);
+    REQUIRE(vs != nullptr);
+    CHECK(vs->hp == 92.f); // the shot landed at the rewound position; damage lands on the entity NOW
+}
+
+TEST_CASE("WorldBroadcaster: with no delay the same jink is a clean miss -- no free rewind",
+          "[world_broadcaster][firepath][lagcomp]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeArmedDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(fl::parseWeaponDef(kFpGunToml));
+    weapons.registerWeapon(fl::parseWeaponDef(kFpMissileToml));
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setWeaponRegistry(&weapons);
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(shooter != nullptr);
+
+    fl::EntityTransform vt{};
+    vt.pos[0] = shooter->transform.pos[0] + 100.0;
+    vt.pos[1] = shooter->transform.pos[1];
+    vt.pos[2] = shooter->transform.pos[2];
+    vt.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
+
+    for (uint64_t t = 1; t <= 10; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+    em.get(victim)->transform.pos[2] += 200.0;
+
+    // Same shot, but the packet echoes tick 10: estimatedDelayTicks = 0, rewind 0 -- the ray is
+    // tested against the CURRENT (jinked) position and misses.
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.buttons = 0x01u;
+    inp.selectedStation = 255u;
+    inp.tickIndex = 10u;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+    broadcaster.onTick(1.0 / 60.0, 11u);
+
+    const fl::EntityState* vs = em.get(victim);
+    REQUIRE(vs != nullptr);
+    CHECK(vs->hp == 100.f);
+}
+
+TEST_CASE("WorldBroadcaster: the zero-pack sandbox peer spawns ARMED and the cannon fires",
+          "[world_broadcaster][firepath][sandbox]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(fl::builtinDebugEntityDef()); // the REAL sandbox def (#440), not a fixture
+
+    fl::WeaponRegistry weapons;
+    REQUIRE(fl::registerBuiltinWeapons(weapons) == 3u);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setWeaponRegistry(&weapons);
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(shooter != nullptr);
+
+    fl::EntityTransform vt{};
+    vt.pos[0] = shooter->transform.pos[0] + 300.0; // well inside the cannon's 1200 m reach
+    vt.pos[1] = shooter->transform.pos[1];
+    vt.pos[2] = shooter->transform.pos[2];
+    vt.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
+
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.buttons = 0x01u; // gun trigger — station selection untouched: the gun needs none
+    inp.selectedStation = 255u;
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    const fl::EntityState* vs = em.get(victim);
+    REQUIRE(vs != nullptr);
+    CHECK(vs->hp == 100.f - fl::BuiltinWeapon::cannon().warhead.damage);
+    CHECK(hasEffect(decodeEffects(snapshotsFor(net, 0).back()), fl::EffectType::WeaponFired));
+
+    // And the default selection is a rail, not the gun — "selected" means the stores.
+    const fl::LoadoutState ls = fl::buildLoadout(fl::builtinDebugEntityDef(), weapons);
+    CHECK(ls.stations.size() == 5u);
+    CHECK(ls.selected == 1u); // first IR rail
+}
+
+TEST_CASE("WorldBroadcaster: a designated IR missile launch flies out and kills through the pipeline",
+          "[world_broadcaster][firepath][seeker]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(fl::builtinDebugEntityDef());
+
+    fl::WeaponRegistry weapons;
+    fl::registerBuiltinWeapons(weapons);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    em.addEventHandler(&broadcaster);
+    broadcaster.setWeaponRegistry(&weapons);
+    // Missiles get projectile entity types the same way the server registers them at startup.
+    fl::registerProjectileEntityDefs(weapons, registry, logger);
+    // Seeker heads resolve to the compiled-in defs (the fl-server resolver does the same, #440).
+    broadcaster.setSensorDefResolver([](const std::string& id) -> std::shared_ptr<const fl::sensor::SensorDef> {
+        if (id == "builtin:ir-seeker")
+            return {std::shared_ptr<const fl::sensor::SensorDef>{}, &fl::sensor::BuiltinSensors::irSeeker()};
+        return nullptr;
+    });
+
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(shooter != nullptr);
+
+    // A hostile 2 km dead ahead. The designator is the #610 seam: here a test lambda standing in
+    // for fl-server's contact-honest one.
+    fl::EntityTransform vt{};
+    vt.pos[0] = shooter->transform.pos[0] + 2000.0;
+    vt.pos[1] = shooter->transform.pos[1];
+    vt.pos[2] = shooter->transform.pos[2];
+    vt.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
+    broadcaster.setTargetDesignator([victim](const fl::EntityState&, const float*) -> fl::EntityId { return victim; });
+
+    fl::MsgClientInput inp{};
+    inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+    inp.protocolVersion = fl::kProtocolVersion;
+    inp.buttons = 0x04u;        // fire selected store
+    inp.selectedStation = 255u; // default selection = the first IR rail
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    // Fly the engagement out. 2 km at missile speeds is a few seconds; give it ten.
+    bool victimHit = false;
+    for (uint64_t t = 1; t <= 600 && !victimHit; ++t) {
+        broadcaster.onTick(1.0 / 60.0, t);
+        const fl::EntityState* vs = em.get(victim);
+        victimHit = !vs || vs->dead || vs->hp < 100.f;
+    }
+    CHECK(victimHit); // the warhead connected through the same damage pipeline as everything else
+}
+
+TEST_CASE("WorldBroadcaster: the pre-launch LOCK cue reaches the own record's weaponFlags",
+          "[world_broadcaster][firepath][seeker]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(fl::builtinDebugEntityDef());
+
+    fl::WeaponRegistry weapons;
+    fl::registerBuiltinWeapons(weapons);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setWeaponRegistry(&weapons);
+    broadcaster.setSensorDefResolver([](const std::string& id) -> std::shared_ptr<const fl::sensor::SensorDef> {
+        if (id == "builtin:ir-seeker")
+            return {std::shared_ptr<const fl::sensor::SensorDef>{}, &fl::sensor::BuiltinSensors::irSeeker()};
+        return nullptr;
+    });
+
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(shooter != nullptr);
+
+    // A target 2 km dead ahead, inside the IR head's acquisition envelope; the designator points
+    // at it. The default selection is the first IR rail, so the growl should come up.
+    fl::EntityTransform vt{};
+    vt.pos[0] = shooter->transform.pos[0] + 2000.0;
+    vt.pos[1] = shooter->transform.pos[1];
+    vt.pos[2] = shooter->transform.pos[2];
+    vt.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
+    broadcaster.setTargetDesignator([victim](const fl::EntityState&, const float*) -> fl::EntityId { return victim; });
+
+    // Run past a full cue cadence window (the cue is computed at ~10 Hz per peer).
+    for (uint64_t t = 1; t <= 12; ++t)
+        broadcaster.onTick(1.0 / 60.0, t);
+
+    bool sawLock = false;
+    for (const auto& pkt : snapshotsFor(net, 0)) {
+        for (const DecodedEntity& e : decodeEntities(pkt)) {
+            if (e.hasLoadout && (e.weaponFlags & 0x01u))
+                sawLock = true;
+        }
+    }
+    CHECK(sawLock);
+}
+
+// ---------------------------------------------------------------------------
+// Entity-entity collision phase (#630)
+// ---------------------------------------------------------------------------
+
+namespace {
+// Spawn two entities overlapping (both at ~the same point) with opposing velocities so the
+// relative speed is lethal, and step one tick. Returns the pair's post-collision HP.
+struct CollisionOutcome {
+    float hpA{-1.f};
+    float hpB{-1.f};
+};
+CollisionOutcome runCollisionCase(bool crashDamage, double separationM, float speedMps, fl::JobSystem* jobs) {
+    static MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef()); // AirVehicle, 100 hp, 8 m default collision radius
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    if (jobs)
+        broadcaster.setJobSystem(*jobs);
+    fl::DamageRules rules;
+    rules.crashDamage = crashDamage;
+    broadcaster.setDamageRules(rules);
+
+    fl::EntityTransform ta{};
+    ta.pos[1] = 5000.0;
+    ta.vel[0] = speedMps; // closing from the left
+    ta.quat[3] = 1.f;
+    const fl::EntityId a = em.spawn("builtin:debug-entity", ta);
+
+    fl::EntityTransform tb{};
+    tb.pos[0] = separationM;
+    tb.pos[1] = 5000.0;
+    tb.vel[0] = -speedMps; // closing from the right
+    tb.quat[3] = 1.f;
+    const fl::EntityId b = em.spawn("builtin:debug-entity", tb);
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CollisionOutcome out;
+    if (const fl::EntityState* sa = em.get(a))
+        out.hpA = sa->dead ? 0.f : sa->hp;
+    if (const fl::EntityState* sb = em.get(b))
+        out.hpB = sb->dead ? 0.f : sb->hp;
+    return out;
+}
+} // namespace
+
+TEST_CASE("WorldBroadcaster: two overlapping entities collide and BOTH take relative-speed damage",
+          "[world_broadcaster][collision]") {
+    // 10 m apart, radii 8 + 8 = 16 > 10: overlapping. 300 m/s each = 600 m/s closure — lethal.
+    const auto out = runCollisionCase(/*crashDamage=*/true, /*separation=*/10.0, /*speed=*/300.f, nullptr);
+    CHECK(out.hpA < 100.f);
+    CHECK(out.hpB < 100.f);
+    CHECK(out.hpA == out.hpB); // symmetric: a mid-air hurts both sides equally
+}
+
+TEST_CASE("WorldBroadcaster: a gentle brush below the threshold does no damage", "[world_broadcaster][collision]") {
+    const auto out = runCollisionCase(/*crashDamage=*/true, /*separation=*/10.0, /*speed=*/1.f, nullptr);
+    CHECK(out.hpA == 100.f); // 2 m/s closure is under the free-brush threshold
+    CHECK(out.hpB == 100.f);
+}
+
+TEST_CASE("WorldBroadcaster: entities clear of each other never collide", "[world_broadcaster][collision]") {
+    // 100 m apart, radii 8 + 8 = 16 < 100: no overlap, even at lethal closing speed.
+    const auto out = runCollisionCase(/*crashDamage=*/true, /*separation=*/100.0, /*speed=*/300.f, nullptr);
+    CHECK(out.hpA == 100.f);
+    CHECK(out.hpB == 100.f);
+}
+
+TEST_CASE("WorldBroadcaster: crashDamage=false gates entity collisions off", "[world_broadcaster][collision]") {
+    const auto out = runCollisionCase(/*crashDamage=*/false, /*separation=*/10.0, /*speed=*/300.f, nullptr);
+    CHECK(out.hpA == 100.f); // detected, but the difficulty gate suppresses the damage
+    CHECK(out.hpB == 100.f);
+}
+
+TEST_CASE("WorldBroadcaster: collision detection is serial-equivalent across worker counts",
+          "[world_broadcaster][collision]") {
+    CollisionOutcome ref;
+    for (uint32_t total : {1u, 2u, 8u}) {
+        fl::JobSystem jobs(total);
+        const auto out = runCollisionCase(/*crashDamage=*/true, /*separation=*/10.0, /*speed=*/300.f, &jobs);
+        if (total == 1u)
+            ref = out;
+        else {
+            REQUIRE(out.hpA == ref.hpA); // byte-identical damage regardless of worker count
+            REQUIRE(out.hpB == ref.hpB);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-subsystem damage (#675)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: a warhead that fails an engine subsystem shows on the wire flags",
+          "[world_broadcaster][subsystem]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+
+    // A twin whose ONLY subsystems are the two engines (low HP, so one blast fails one). The pick
+    // is therefore deterministically an engine, and its failure must reach the integrator's
+    // engineFailFlags (which the snapshot already replicates).
+    fl::EntityDef def = makeDebugDef("test:twin");
+    fl::DamageDef dmg;
+    dmg.light.hpFraction = 0.7f;
+    dmg.heavy.hpFraction = 0.35f;
+    dmg.critical.hpFraction = 0.1f;
+    fl::SubsystemSet subs;
+    subs.parts[static_cast<int>(fl::Subsystem::EngineLeft)] = {10.f, 1.f};
+    subs.parts[static_cast<int>(fl::Subsystem::EngineRight)] = {10.f, 1.f};
+    dmg.subsystems = subs;
+    def.damage = dmg;
+    def.maxHp = 1000.f; // survives the blast so we see the ENGINE failure, not death
+    registry.registerType(def);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::EntityTransform t{};
+    t.pos[1] = 5000.0;
+    t.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("test:twin", t);
+    broadcaster.registerController(victim,
+                                   std::make_unique<ConstantController>()); // gives it an integrator + subsystems
+
+    broadcaster.onTick(1.0 / 60.0, 1u); // build the spatial index + integrator
+
+    const fl::EntityState* vs = em.get(victim);
+    REQUIRE(vs != nullptr);
+    double pos[3] = {vs->transform.pos[0] + 3.0, vs->transform.pos[1], vs->transform.pos[2]};
+    fl::BlastSpec blast{20.f, 60.f, false}; // > the 10 hp engine pool
+    broadcaster.applyWarheadAt(pos, blast, fl::EntityId::null());
+
+    const fl::FlightIntegrator* fi = broadcaster.integratorFor(victim.index);
+    REQUIRE(fi != nullptr);
+    CHECK((fi->engineFailFlags() & (fl::kEngineFailLeft | fl::kEngineFailRight)) != 0);
+}
+
+TEST_CASE("WorldBroadcaster: an entity without a subsystems table is unaffected by the router",
+          "[world_broadcaster][subsystem]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef()); // no [damage.subsystems]
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.onConnect(0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityId player{ack.assignedEntityIdx, ack.assignedEntityGen};
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    const fl::EntityState* ps = em.get(player);
+    REQUIRE(ps != nullptr);
+    double pos[3] = {ps->transform.pos[0] + 3.0, ps->transform.pos[1], ps->transform.pos[2]};
+    broadcaster.applyWarheadAt(pos, fl::BlastSpec{20.f, 40.f, false}, fl::EntityId::null());
+
+    // No subsystem model → no engine-out flags, ever (the 3-level tier model is untouched).
+    const fl::FlightIntegrator* fi = broadcaster.integratorFor(player.index);
+    REQUIRE(fi != nullptr);
+    CHECK((fi->engineFailFlags() & (fl::kEngineFailLeft | fl::kEngineFailRight)) == 0);
 }

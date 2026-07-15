@@ -7,6 +7,7 @@
 #include "flight/FlightModelData.h"
 #include "flight/IGravityField.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 
@@ -24,7 +25,7 @@ struct FlightState {
     float throttle_actual{0.f};    // actual throttle after spool lag [0,1]
     float current_sweep_deg{55.f}; // current wing sweep angle (fixed-geometry: equals ref_sweep_deg)
     bool ab_engaged{false};
-    uint8_t engineFailFlags{0}; // fl::kEngineFail* bitmask; 0 until per-engine sim is modelled
+    uint8_t engineFailFlags{0}; // fl::kEngineFail* bitmask; drives asymmetric thrust (#675)
     float tvc_angle_deg{0.f};   // current TVC nozzle angle
 
     // ── [aero.limits] enforcement outputs (#816) ─────────────────────────────
@@ -49,6 +50,12 @@ struct FlightState {
     // handlers, and the integrate pass is data-parallel, so calling it from a worker would be a data
     // race. WorldBroadcaster latches this flag and applies the damage serially after the pass.
     bool overg_damage{false};
+
+    // ONE-SHOT (#626): the radial impact speed (m/s) of a hard ground contact this tick, 0 when
+    // none. Same discipline as overg_damage — the integrator only reports; WorldBroadcaster applies
+    // crash damage serially after the parallel pass, gated by the crashDamage difficulty toggle.
+    // Ordinary landings stay below the reporting threshold and never raise it.
+    float ground_impact_speed{0.f};
 };
 
 // Wind and turbulence injected each tick by WorldBroadcaster from WeatherController state.
@@ -97,11 +104,57 @@ class FlightIntegrator {
         m_forceModel = &model;
     }
 
+    // The NaN/overflow backstop on body velocity (#354) — NOT a top-speed limiter (max_mach is
+    // enforced by fm-trim in CI). Default 2000 m/s (≈ Mach 6 at sea level) suits every winged
+    // vehicle; ballistic entities set ~8000 because an MRBM legitimately flies faster than the
+    // guard built for aircraft.
+    void setSpeedGuard(double mps) noexcept {
+        if (mps > 0.0)
+            m_speedGuardMps = mps;
+    }
+
+    // Progressive damage penalties (#626) — this is where DamageDef's thrustFactor/controlFactor
+    // finally act on the physics. Applied to the COMMANDED inputs at the top of step(): thrust
+    // scales the throttle command, control scales surface deflection commands. Both clamped to
+    // [0, 1]; (1, 1) = undamaged. WorldBroadcaster sets them on DamageLevelChanged.
+    void setDamagePenalty(float thrustFactor, float controlFactor) noexcept {
+        m_damageThrust = std::clamp(thrustFactor, 0.f, 1.f);
+        m_damageControl = std::clamp(controlFactor, 0.f, 1.f);
+    }
+    [[nodiscard]] float damageThrustFactor() const noexcept {
+        return m_damageThrust;
+    }
+    [[nodiscard]] float damageControlFactor() const noexcept {
+        return m_damageControl;
+    }
+
+    // Per-subsystem damage effects (#675), independent of the tier penalties above so the two layer
+    // rather than overwrite. Engine-out flags drive the force model's asymmetric thrust; the
+    // subsystem control factor (controls + hydraulics losses) multiplies the tier control factor; a
+    // fuel leak drains on top of the burn.
+    void setEngineFailFlags(uint8_t flags) noexcept {
+        m_state.engineFailFlags = flags;
+    }
+    [[nodiscard]] uint8_t engineFailFlags() const noexcept {
+        return m_state.engineFailFlags;
+    }
+    void setSubsystemControlFactor(float factor) noexcept {
+        m_subsystemControl = std::clamp(factor, 0.f, 1.f);
+    }
+    void setFuelLeakRate(float kgPerS) noexcept {
+        m_fuelLeakKgS = std::max(0.f, kgPerS);
+    }
+
   private:
     std::shared_ptr<const FlightModelData> m_data;
     FlightState m_state;
+    double m_speedGuardMps{2000.0}; // see setSpeedGuard (#354)
     const IGravityField* m_gravity{&CentralGravityField::earthInstance()};
     const IForceModel* m_forceModel{&FixedWingForceModel::instance()};
+    float m_damageThrust{1.f};
+    float m_damageControl{1.f};
+    float m_subsystemControl{1.f}; // #675: controls/hydraulics loss, multiplies m_damageControl
+    float m_fuelLeakKgS{0.f};      // #675: ruptured-tank drain on top of the burn
 
     void advanceSpool(float dt, float commanded_throttle);
     void advanceSweep(float dt, float commanded_sweep_deg);

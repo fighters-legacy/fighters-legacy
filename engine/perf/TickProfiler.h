@@ -25,7 +25,7 @@
 
 namespace fl {
 
-enum class TickPhase : int { Maintenance = 0, Sensing, Integrate, Ai, Collision, Serialize, Count };
+enum class TickPhase : int { Maintenance = 0, Sensing, Integrate, Ai, Weapons, Collision, Serialize, Count };
 
 inline constexpr int kTickPhaseCount = static_cast<int>(TickPhase::Count);
 
@@ -39,6 +39,8 @@ inline const char* tickPhaseName(TickPhase p) {
         return "integrate";
     case TickPhase::Ai:
         return "ai";
+    case TickPhase::Weapons:
+        return "weapons"; // the fire path + projectile flight (#625); additive — schema stays 6
     case TickPhase::Collision:
         return "collision";
     case TickPhase::Serialize:

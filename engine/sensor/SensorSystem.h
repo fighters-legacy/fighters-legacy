@@ -142,6 +142,11 @@ class SensorSystem {
     void setEmitting(uint32_t entityIdx, bool emitting);
     [[nodiscard]] bool emitting(uint32_t entityIdx) const;
 
+    // Critical-damage avionics failure (#626): strips the observer to visual-only (builtin eyeball
+    // if nothing remains), stops emissions, and drops every held track — the eyes re-acquire
+    // honestly. Sim-thread only; idempotent; no-op for a non-observer.
+    void setAvionicsFailed(uint32_t entityIdx);
+
     // The consumer-facing accessor. Null when the entity has no sensors — which a controller must
     // read as "sensing was not evaluated for me", never as "I see nothing" (see AiTickContext).
     [[nodiscard]] const ContactTable* contactsFor(uint32_t entityIdx) const;

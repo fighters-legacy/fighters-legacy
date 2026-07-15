@@ -110,6 +110,11 @@ static const char* kDefaultToml =
     "cadet|pilot|ace\n"
     "difficulty_floor = \"recruit\"\n"
     "\n"
+    "[gameplay]\n"
+    "# The damage gates (#626). Server-authoritative; hot-reloadable via reload_config.\n"
+    "friendly_fire = false              # false = same-faction weapon damage is suppressed\n"
+    "crash_damage = true                # false = ground impacts report but do not damage\n"
+    "\n"
     "[discovery]\n"
     "# LAN server discovery beacon.\n"
     "enabled = true\n"
@@ -634,6 +639,12 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
             }
         }
+        // [gameplay] (#626)
+        if (auto v = tbl["gameplay"]["friendly_fire"].value<bool>())
+            cfg.friendlyFire = *v;
+        if (auto v = tbl["gameplay"]["crash_damage"].value<bool>())
+            cfg.crashDamage = *v;
+
         if (auto v = tbl["ai"]["difficulty_floor"].value<std::string>()) {
             if (isOneOf(v->c_str(), kValidDifficulties, 4)) {
                 cfg.aiDifficultyFloor = std::move(*v);

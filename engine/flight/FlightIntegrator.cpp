@@ -154,8 +154,26 @@ void FlightIntegrator::integrateRotation(float dt) {
     m_state.euler[2] = euler[2];
 }
 
-void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEffect& payload, const WindInfluence& wind,
-                            float groundElev) {
+void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadEffect& payload,
+                            const WindInfluence& wind, float groundElev) {
+    // Progressive damage penalties (#626): DamageDef's thrustFactor scales the throttle COMMAND and
+    // controlFactor scales the surface deflection COMMANDS, applied once here so every downstream
+    // consumer (spool, FBW reference, parking brake, force model) sees the degraded inputs. This is
+    // a command-authority model — a shot-up engine cannot be asked for full power, shot-up linkages
+    // cannot be asked for full deflection — which is the honest granularity for a 3-level global
+    // damage model; per-subsystem effects layer on top later (#675).
+    // The tier control factor (#626) and the per-subsystem control factor (#675 — controls +
+    // hydraulics losses) multiply: two independent ways to lose deflection authority.
+    const float controlFactor = m_damageControl * m_subsystemControl;
+    ControlInput ctrl = ctrlIn;
+    ctrl.throttle *= m_damageThrust;
+    ctrl.elevator *= controlFactor;
+    ctrl.aileron *= controlFactor;
+    ctrl.rudder *= controlFactor;
+
+    // Clear the previous tick's one-shot outputs.
+    m_state.ground_impact_speed = 0.f;
+
     // Ground contact (evaluated from the start-of-step position). While the gear carries the
     // aircraft, steady wind and turbulence do not blow it around (aero is computed from ground
     // velocity only — see steps 2/5/8b) and a parked/slow aircraft is held by static ground
@@ -386,10 +404,11 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     // exceed its declared max_mach in level flight, the MODEL is wrong, and fm-trim (#817) fails it
     // in CI. The engine does not paper over that with an artificial wall, so this is raised well
     // clear of any flyable regime and left as the overflow backstop it always was.
-    constexpr double kMaxBodySpeed = 2000.0; // m/s ≈ Mach 6 at sea level — pure overflow backstop
-    m_state.vel_body[0] = std::clamp(m_state.vel_body[0], -kMaxBodySpeed, kMaxBodySpeed);
-    m_state.vel_body[1] = std::clamp(m_state.vel_body[1], -kMaxBodySpeed, kMaxBodySpeed);
-    m_state.vel_body[2] = std::clamp(m_state.vel_body[2], -kMaxBodySpeed, kMaxBodySpeed);
+    // Per-instance since #354 (setSpeedGuard): ballistic vehicles legitimately pass Mach 6, so
+    // their guard sits at ~8000 m/s — still a NaN backstop, never a top-speed limiter.
+    m_state.vel_body[0] = std::clamp(m_state.vel_body[0], -m_speedGuardMps, m_speedGuardMps);
+    m_state.vel_body[1] = std::clamp(m_state.vel_body[1], -m_speedGuardMps, m_speedGuardMps);
+    m_state.vel_body[2] = std::clamp(m_state.vel_body[2], -m_speedGuardMps, m_speedGuardMps);
 
     // 13. Integrate rotation quaternion
     integrateRotation(dt);
@@ -421,6 +440,12 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
             constexpr float kSlideImpact = 0.80f; // hard-landing friction (≥10 m/s vertical)
             constexpr float kSlideRoll = 0.999f;  // ground-roll friction (near-zero vertical)
             const float impactSpd = std::abs(vUp);
+            // Crash-damage report (#626): a firm landing is ~3 m/s of sink; anything past this
+            // threshold is an arrival, not a landing. One-shot, consumed serially by the caller —
+            // same discipline as overg_damage.
+            constexpr float kCrashReportThresholdMps = 6.f;
+            if (impactSpd >= kCrashReportThresholdMps)
+                m_state.ground_impact_speed = impactSpd;
             // Scale friction by impact severity so gravity's ~0.16 m/s/frame floor-tickle
             // does not act as a continuous brake during ground roll.
             const float kSlide = kSlideRoll + (kSlideImpact - kSlideRoll) * std::min(impactSpd / 10.f, 1.f);
@@ -476,7 +501,8 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
         flow = m_data->engine.fuel_flow_idle_kg_s +
                m_state.throttle_actual * (m_data->engine.fuel_flow_mil_kg_s - m_data->engine.fuel_flow_idle_kg_s);
 
-    float burned = flow * dt;
+    // A ruptured fuel tank (#675) drains on top of the burn — a leak the pilot cannot throttle away.
+    float burned = flow * dt + m_fuelLeakKgS * dt;
     m_state.fuel_kg = std::max(0.f, m_state.fuel_kg - burned);
     m_state.mass_kg = m_data->geometry.mass_kg + m_state.fuel_kg;
 }

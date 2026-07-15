@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "ILogger.h"
 
+#include "entity/DamageApplication.h"
 #include "entity/DamageDef.h"
 #include "entity/EntityDefParser.h"
 #include "entity/EntityEvent.h"
@@ -14,7 +16,9 @@
 #include "entity/EntityTypeRegistry.h"
 #include "entity/ObjectCategory.h"
 #include "render/SimRenderBridge.h"
+#include "spatial/SpatialIndex.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <random>
@@ -515,6 +519,57 @@ TEST_CASE("EntityDefParser: full TOML with damage and classic sections", "[parse
     CHECK(def.damage->light.visualEffect == "smoke_light");
     CHECK(def.classicDamageMesh == "ground/tank_damaged");
     CHECK(def.flightModelAsset == "models/tank_drive");
+}
+
+TEST_CASE("EntityDefParser: no subsystems section leaves the 3-level model intact (#675)", "[parser]") {
+    // Regression guard: an entity that does not declare [damage.subsystems] behaves exactly as
+    // before — the optional stays empty.
+    fl::EntityDef def = fl::parseEntityDef(kFullEntityToml);
+    REQUIRE(def.damage.has_value());
+    CHECK_FALSE(def.damage->subsystems.has_value());
+}
+
+TEST_CASE("EntityDefParser: [damage.subsystems] parses the fixed vocabulary (#675)", "[parser]") {
+    const char* toml = R"(
+[entity]
+id = "test:twin"
+name = "Twin"
+category = "air_vehicle"
+max_hp = 100.0
+
+[damage.light]
+hp_fraction = 0.75
+
+[damage.heavy]
+hp_fraction = 0.4
+
+[damage.critical]
+hp_fraction = 0.15
+
+[damage.subsystems.engine_left]
+hp = 40
+weight = 2.0
+
+[damage.subsystems.engine_right]
+hp = 40
+weight = 2.0
+
+[damage.subsystems.avionics]
+hp = 15
+weight = 1.0
+)";
+    fl::EntityDef def = fl::parseEntityDef(toml);
+    REQUIRE(def.damage.has_value());
+    REQUIRE(def.damage->subsystems.has_value());
+    const fl::SubsystemSet& s = *def.damage->subsystems;
+    CHECK(s[fl::Subsystem::EngineLeft].hp == 40.f);
+    CHECK(s[fl::Subsystem::EngineLeft].weight == 2.f);
+    CHECK(s[fl::Subsystem::EngineRight].hp == 40.f);
+    CHECK(s[fl::Subsystem::Avionics].hp == 15.f);
+    // Omitted subsystems stay absent (hp 0 = not modelled).
+    CHECK(s[fl::Subsystem::Controls].hp == 0.f);
+    CHECK(s[fl::Subsystem::Fuel].hp == 0.f);
+    CHECK(s.any());
 }
 
 TEST_CASE("EntityDefParser: all category strings are accepted", "[parser]") {
@@ -1180,4 +1235,174 @@ TEST_CASE("EntityDefParser: an unknown sensor id is NOT a parse error", "[parser
     const fl::EntityDef def = fl::parseEntityDef(entityWith("sensors = [\"nosuchpack:nosuchsensor\"]\n"));
     REQUIRE(def.sensorIds.size() == 1);
     CHECK(def.sensorIds[0] == "nosuchpack:nosuchsensor");
+}
+
+// ---------------------------------------------------------------------------
+// applyPointDamage — the combat damage funnel (#626)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("applyPointDamage: the friendly-fire gate suppresses same-faction damage", "[damage-rules]") {
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeAirVehicleDef("ff:a"));
+    fl::EntityManager mgr(logger, registry);
+
+    fl::EntityTransform t{};
+    auto shooter = mgr.spawn("ff:a", t);
+    auto victim = mgr.spawn("ff:a", t);
+    mgr.get(shooter)->factionIndex = 2;
+    mgr.get(victim)->factionIndex = 2;
+
+    fl::DamageRules noFF{};
+    noFF.friendlyFire = false;
+
+    SECTION("teammate damage is suppressed and reported as such") {
+        CHECK_FALSE(fl::applyPointDamage(mgr, victim, 40.f, shooter, noFF));
+        CHECK(mgr.get(victim)->hp == 100.f);
+    }
+
+    SECTION("with friendly fire enabled the same shot lands") {
+        fl::DamageRules ff{};
+        ff.friendlyFire = true;
+        CHECK(fl::applyPointDamage(mgr, victim, 40.f, shooter, ff));
+        CHECK(mgr.get(victim)->hp == 60.f);
+    }
+
+    SECTION("neutral faction 0 is not a team") {
+        mgr.get(shooter)->factionIndex = 0;
+        mgr.get(victim)->factionIndex = 0;
+        CHECK(fl::applyPointDamage(mgr, victim, 40.f, shooter, noFF));
+        CHECK(mgr.get(victim)->hp == 60.f);
+    }
+
+    SECTION("self-damage always applies (your own blast radius is not friendly fire)") {
+        CHECK(fl::applyPointDamage(mgr, victim, 40.f, victim, noFF));
+        CHECK(mgr.get(victim)->hp == 60.f);
+    }
+
+    SECTION("environmental damage (null instigator) always applies") {
+        CHECK(fl::applyPointDamage(mgr, victim, 40.f, fl::EntityId::null(), noFF));
+        CHECK(mgr.get(victim)->hp == 60.f);
+    }
+}
+
+TEST_CASE("applyPointDamage: instigator attribution flows through to the kill", "[damage-rules]") {
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeAirVehicleDef("ff:b"));
+    fl::EntityManager mgr(logger, registry);
+
+    struct Collector : fl::IEntityEventHandler {
+        std::vector<fl::EntityEvent> events;
+        void onEntityEvent(const fl::EntityEvent& e) override {
+            events.push_back(e);
+        }
+    } collector;
+    mgr.addEventHandler(&collector);
+
+    fl::EntityTransform t{};
+    auto shooter = mgr.spawn("ff:b", t);
+    auto victim = mgr.spawn("ff:b", t);
+    mgr.get(shooter)->factionIndex = 1;
+    mgr.get(victim)->factionIndex = 2;
+
+    CHECK(fl::applyPointDamage(mgr, victim, 200.f, shooter, fl::DamageRules{}));
+
+    REQUIRE(collector.events.size() == 2); // Died + ScoreAwarded
+    CHECK(collector.events[0].type == fl::EntityEventType::Died);
+    CHECK(collector.events[0].instigator == shooter);
+    CHECK(collector.events[1].type == fl::EntityEventType::ScoreAwarded);
+    CHECK(collector.events[1].instigator == shooter);
+}
+
+// ---------------------------------------------------------------------------
+// applyWarhead — area-of-effect detonation (#356)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct BlastWorld {
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em;
+    fl::SpatialIndex si;
+
+    BlastWorld() : em(logger, registry) {
+        registry.registerType(makeAirVehicleDef("blast:a"));
+    }
+
+    fl::EntityId spawnAt(double x, double y, double z) {
+        fl::EntityTransform t{};
+        t.pos[0] = x;
+        t.pos[1] = y;
+        t.pos[2] = z;
+        auto id = em.spawn("blast:a", t);
+        si.insert(id.index, t.pos);
+        return id;
+    }
+};
+
+} // namespace
+
+TEST_CASE("applyWarhead: linear falloff - full at the centre, zero at the edge, nothing outside", "[warhead]") {
+    BlastWorld w;
+    const auto centre = w.spawnAt(0, 0, 0);
+    const auto mid = w.spawnAt(50, 0, 0);      // half the radius: half the damage
+    const auto atEdge = w.spawnAt(100, 0, 0);  // exactly the radius: zero
+    const auto outside = w.spawnAt(150, 0, 0); // untouched
+
+    fl::BlastSpec blast{100.f, 80.f, false};
+    const double pos[3] = {0, 0, 0};
+    const auto r = fl::applyWarhead(w.em, w.si, pos, blast, fl::EntityId::null(), fl::DamageRules{});
+
+    CHECK(w.em.get(centre)->hp == Catch::Approx(20.f)); // 100 − 80
+    CHECK(w.em.get(mid)->hp == Catch::Approx(60.f));    // 100 − 40
+    CHECK(w.em.get(atEdge)->hp == Catch::Approx(100.f));
+    CHECK(w.em.get(outside)->hp == Catch::Approx(100.f));
+    CHECK(r.damaged == 2);
+}
+
+TEST_CASE("applyWarhead: the friendly-fire gate holds inside a blast", "[warhead]") {
+    BlastWorld w;
+    const auto shooter = w.spawnAt(500, 0, 0); // outside its own blast
+    const auto friendly = w.spawnAt(10, 0, 0);
+    const auto hostile = w.spawnAt(20, 0, 0);
+    w.em.get(shooter)->factionIndex = 1;
+    w.em.get(friendly)->factionIndex = 1;
+    w.em.get(hostile)->factionIndex = 2;
+
+    fl::BlastSpec blast{100.f, 50.f, false};
+    const double pos[3] = {0, 0, 0};
+    fl::applyWarhead(w.em, w.si, pos, blast, shooter, fl::DamageRules{}); // FF off by default
+
+    CHECK(w.em.get(friendly)->hp == 100.f);
+    CHECK(w.em.get(hostile)->hp < 100.f);
+}
+
+TEST_CASE("applyWarhead: a nuclear blast EMPs bystanders far beyond the shrapnel", "[warhead]") {
+    BlastWorld w;
+    const auto inBlast = w.spawnAt(50, 0, 0);
+    const auto bystander = w.spawnAt(300, 0, 0); // outside 100 m blast, inside the 400 m EMP ring
+    const auto farAway = w.spawnAt(500, 0, 0);
+
+    std::vector<uint32_t> emped;
+    fl::BlastSpec nuke{100.f, 80.f, true};
+    const double pos[3] = {0, 0, 0};
+    const auto r = fl::applyWarhead(w.em, w.si, pos, nuke, fl::EntityId::null(), fl::DamageRules{},
+                                    [&](fl::EntityId id) { emped.push_back(id.index); });
+
+    CHECK(w.em.get(inBlast)->hp < 100.f);
+    CHECK(w.em.get(bystander)->hp == 100.f); // no shrapnel out there...
+    CHECK(r.emped == 2);                     // ...but the electronics are gone
+    CHECK(std::find(emped.begin(), emped.end(), bystander.index) != emped.end());
+    CHECK(std::find(emped.begin(), emped.end(), farAway.index) == emped.end());
+}
+
+TEST_CASE("applyWarhead: a degenerate blast is a no-op", "[warhead]") {
+    BlastWorld w;
+    const auto e = w.spawnAt(0, 0, 0);
+    const double pos[3] = {0, 0, 0};
+    CHECK(fl::applyWarhead(w.em, w.si, pos, fl::BlastSpec{0.f, 100.f, false}, fl::EntityId::null(), fl::DamageRules{})
+              .damaged == 0);
+    CHECK(w.em.get(e)->hp == 100.f);
 }

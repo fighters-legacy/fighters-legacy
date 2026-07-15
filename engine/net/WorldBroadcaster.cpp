@@ -13,6 +13,7 @@
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
 #include "entity/IEntityController.h"
+#include "flight/BallisticForceModel.h"
 #include "flight/BuiltinFlightModel.h"
 #include "flight/CentralGravityField.h"
 #include "flight/FlightIntegrator.h"
@@ -62,6 +63,11 @@ class PeerController final : public fl::IEntityController {
         ctrl.aileron = m_input->aileron;
         ctrl.rudder = m_input->rudder;
         ctrl.afterburner = (m_input->buttons & 0x02u) != 0; // bit 1 per MsgClientInput::buttons
+        // Fire intent (#625): the bit that used to die right here. Level semantics both — the
+        // weapons pass (FireControl) owns edge detection and rate limiting per entity.
+        ctrl.trigger = (m_input->buttons & 0x01u) != 0;
+        ctrl.release = (m_input->buttons & 0x04u) != 0;
+        ctrl.station = m_input->selectedStation;
         return ctrl;
     }
 
@@ -163,7 +169,14 @@ WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegis
                                    ILogger& logger, WeatherController* weather)
     : m_entityManager(entityManager), m_registry(registry), m_net(net), m_logger(logger), m_weather(weather),
       m_sensorSystem(entityManager, registry), m_gravity(&fl::CentralGravityField::earthInstance()),
-      m_planetRadiusKm(6371.f) {}
+      m_planetRadiusKm(6371.f) {
+    // Seeker target signatures come from the same type registry the sensor system reads (#627).
+    m_projectileSystem.setTypeRegistry(&registry);
+    // SARH / pre-pitbull ARH shots are supported by the SHOOTER's contact table (#628): the missile
+    // inherits the shooter's honest belief, never ground truth.
+    m_projectileSystem.setSupportQuery(
+        [this](uint32_t shooterIdx) -> const sensor::ContactTable* { return m_sensorSystem.contactsFor(shooterIdx); });
+}
 
 WorldBroadcaster::~WorldBroadcaster() = default;
 
@@ -274,6 +287,9 @@ void WorldBroadcaster::setPayloadResolver(PayloadResolver fn) {
 }
 
 void WorldBroadcaster::setSensorDefResolver(sensor::SensorSystem::SensorDefResolver fn) {
+    // Aircraft radars and missile seeker heads resolve through the SAME function (#627): one
+    // vocabulary, one resolution path, one cache.
+    m_projectileSystem.setSensorResolver(fn);
     m_sensorSystem.setResolver(std::move(fn));
 }
 
@@ -315,6 +331,9 @@ void WorldBroadcaster::setAdminAuthParams(int maxFailures, int lockoutSeconds) {
 void WorldBroadcaster::setGravityField(const IGravityField& field, float planetRadiusKm) noexcept {
     m_gravity = &field;
     m_planetRadiusKm = planetRadiusKm;
+    // Projectiles fall in the same field as everything else (#625). Re-armed here so the
+    // setWeaponRegistry/setGravityField call order does not matter.
+    m_projectileSystem.configure(m_weaponRegistry, m_gravity);
 }
 
 void WorldBroadcaster::setGroundElevationQuery(std::function<float(glm::dvec3)> fn) {
@@ -339,6 +358,7 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setJitterMultiplier(cfg.jitterMultiplier);
     setCongestionParams(cfg.congestion);
     setGovernorParams(cfg.governor);
+    setDamageRules(cfg.gameplay);
 }
 
 void WorldBroadcaster::setIdleTimeout(int timeoutSeconds) noexcept {
@@ -521,6 +541,14 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             ps.aileron = bi.aileron;
             ps.rudder = bi.rudder;
             ps.buttons = bi.buttons;
+            ps.selectedStation = bi.selectedStation;
+        } else {
+            // Stale-repeat keeps the FLIGHT controls (prevents coasting under loss), but must not
+            // keep re-asserting the store-release bit: FireControl edge-detects, so a held bit is
+            // one shot — unless the buffer starves right after the release frame, when the repeat
+            // would look like a fresh press next time real input resumes. Masking it off makes a
+            // starved tick read as trigger-off, which is the safe reading of silence (#625).
+            ps.buttons &= static_cast<uint8_t>(~0x04u);
         }
     }
 
@@ -654,7 +682,10 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         sensingEnv.fogStartDist = envState.fogStartDist;
         sensingEnv.timeOfDayH = envState.timeOfDay;
         sensingEnv.isNight = (envState.timeOfDay < 6.f || envState.timeOfDay >= 20.f);
+        // Unpowered stores drift on the same steady wind the airframes fly in (#629).
+        m_projectileSystem.setWind({envState.windX, 0.f, envState.windZ});
     }
+    m_sensingEnv = sensingEnv; // the weapons pass reads the same conditions the sensing pass ran under (#627)
     // Unset difficulty = NO scaling: radar reaches its authored range and the AI reacts the moment it
     // detects. See setAiScaling — defaulting to AiScaling{} would silently apply the Cadet preset.
     const float radarRangeFraction = m_aiScaling ? m_aiScaling->radarSensorRange : 1.f;
@@ -748,6 +779,42 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             m_entityManager.applyDamage(it.ce->id, damage, EntityId::null());
     }
 
+    // Crash damage (#626), same serial-apply discipline as over-G: the integrator reported a hard
+    // ground impact this tick (a one-shot, cleared on its next step); the damage is applied here on
+    // the sim thread, gated by the crashDamage difficulty toggle. Damage scales with how far past a
+    // survivable arrival the impact was — a firm landing reports nothing, a 26 m/s arrival is fatal
+    // to a 100 hp airframe.
+    for (const StepItem& it : m_stepItems) {
+        const float impact = it.ce->sim->state().ground_impact_speed;
+        if (impact <= 0.f || !m_damageRules.crashDamage)
+            continue;
+        constexpr float kCrashFreeImpactMps = 6.f; // matches the integrator's reporting threshold
+        constexpr float kCrashDamagePerMps = 5.f;
+        const float damage = kCrashDamagePerMps * std::max(0.f, impact - kCrashFreeImpactMps);
+        if (damage > 0.f)
+            applyPointDamage(m_entityManager, it.ce->id, damage, EntityId::null(), m_damageRules);
+    }
+
+    // Lag-compensation history (#425): record every live entity's post-integrate position BEFORE
+    // the weapons pass, so a rewind of 0 ticks and a live query see the same world. Dead entities
+    // are simply not recorded — despawn GC is the ring wrapping.
+    m_transformHistory.beginTick(tickIndex);
+    m_entityManager.forEach([this, tickIndex](const EntityState& s) {
+        m_transformHistory.add(tickIndex, s.id.index, static_cast<uint16_t>(s.id.generation), s.transform.pos);
+    });
+
+    // Weapons phase (#625): fire intents → hitscan/spawn, projectile flight, detonations. Serial
+    // by design (spawn/kill/applyDamage all fire handlers), after the integrate pass so shots
+    // originate from this tick's positions, before EntityManager::onTick so a same-tick kill reaps
+    // on schedule.
+    {
+        const auto tWeapStart = m_clock->now();
+        m_tickEffects.clear();
+        runWeaponsPass(simDt, tickIndex);
+        m_tickProfiler.addPhaseSample(TickPhase::Weapons,
+                                      std::chrono::duration<double, std::milli>(m_clock->now() - tWeapStart).count());
+    }
+
     // Cache the representative entity XZ for main-thread terrain streaming (single-player).
     updateTerrainSteerCache();
 
@@ -777,10 +844,25 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         }
     }
 
-    const auto tCollisionStart = m_clock->now();
-    m_entityManager.onTick(simDt, tickIndex);
-    m_tickProfiler.addPhaseSample(TickPhase::Collision,
-                                  std::chrono::duration<double, std::milli>(m_clock->now() - tCollisionStart).count());
+    // Collision phase (#630): real entity-entity collision detection, timed under `collision_ms`
+    // — which until now measured EntityManager housekeeping and was a misnomer. The housekeeping
+    // moves to Maintenance below; the documented meaning of `collision_ms` is unchanged (it was
+    // always "the collision phase"), so the frozen schema (6) is untouched.
+    {
+        const auto tCollisionStart = m_clock->now();
+        runCollisionPass(tickIndex);
+        m_tickProfiler.addPhaseSample(
+            TickPhase::Collision, std::chrono::duration<double, std::milli>(m_clock->now() - tCollisionStart).count());
+    }
+
+    // Entity-manager housekeeping (pool GC, damage-level events, generation bumps): re-attributed
+    // to Maintenance (#630), where it belongs — it is not collision work.
+    {
+        const auto tMaintStart = m_clock->now();
+        m_entityManager.onTick(simDt, tickIndex);
+        m_tickProfiler.addPhaseSample(TickPhase::Maintenance,
+                                      std::chrono::duration<double, std::milli>(m_clock->now() - tMaintStart).count());
+    }
 
     // Serialize phase: telemetry, snapshot assembly + send, weather, and shutdown notices.
     const auto tSerializeStart = m_clock->now();
@@ -813,6 +895,12 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         uint8_t abEngaged;
         uint8_t engineFailFlags;
         float omega[3]; // body-frame angular rates p,q,r (rad/s)
+        // Own-record loadout extras (#625) — consumed only when this entity is the receiving peer's.
+        uint8_t selectedStation{255};
+        uint16_t stationRounds{0};
+        uint8_t weaponFlags{0};
+        float payloadMassKg{0.f};
+        float payloadCd0{0.f};
     };
     std::unordered_map<uint32_t, EntitySnap> snapMap;
     snapMap.reserve(m_spatialIndex.entityCount());
@@ -822,13 +910,23 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         if (static_cast<uint8_t>(state.damageLevel) >= 2u)
             efFlags |= fl::kEngineFailGeneric;
         const float* omegaPtr = (tit != entityTelemetry.end()) ? tit->second.omega : nullptr;
-        snapMap[state.id.index] = {
-            &state,
-            (tit != entityTelemetry.end()) ? tit->second.throttle : uint8_t{0},
-            (tit != entityTelemetry.end()) ? tit->second.fuelPct : uint8_t{0},
-            (tit != entityTelemetry.end()) ? tit->second.abEngaged : uint8_t{0},
-            efFlags,
-            {omegaPtr ? omegaPtr[0] : 0.f, omegaPtr ? omegaPtr[1] : 0.f, omegaPtr ? omegaPtr[2] : 0.f}};
+        EntitySnap snap{&state,
+                        (tit != entityTelemetry.end()) ? tit->second.throttle : uint8_t{0},
+                        (tit != entityTelemetry.end()) ? tit->second.fuelPct : uint8_t{0},
+                        (tit != entityTelemetry.end()) ? tit->second.abEngaged : uint8_t{0},
+                        efFlags,
+                        {omegaPtr ? omegaPtr[0] : 0.f, omegaPtr ? omegaPtr[1] : 0.f, omegaPtr ? omegaPtr[2] : 0.f}};
+        if (auto cit = m_controlledEntities.find(state.id.index);
+            cit != m_controlledEntities.end() && !cit->second.fire.loadout.empty()) {
+            const LoadoutState& lo = cit->second.fire.loadout;
+            snap.selectedStation = lo.selected;
+            if (lo.selected < lo.stations.size())
+                snap.stationRounds = lo.stations[lo.selected].rounds;
+            snap.weaponFlags = cit->second.fire.seekerCue ? 0x01u : 0x00u; // HUD LOCK cue (#628)
+            snap.payloadMassKg = lo.payloadMassKg;
+            snap.payloadCd0 = lo.payloadCd0;
+        }
+        snapMap[state.id.index] = snap;
     });
 
     // Encode-once (#725): quantize + bit-pack each live entity ONCE this tick, relative to its shared
@@ -1134,6 +1232,12 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                     qe.fuelPct = snap.fuelPct;
                     qe.abEngaged = snap.abEngaged != 0u;
                     qe.playerOwned = state.playerOwned;
+                    // Own-record loadout block (#625) — gated by the same hasOmega bit.
+                    qe.selectedStation = snap.selectedStation;
+                    qe.stationRounds = snap.stationRounds;
+                    qe.weaponFlags = snap.weaponFlags;
+                    qe.payloadMassKg = snap.payloadMassKg;
+                    qe.payloadCd0 = snap.payloadCd0;
                     originForPos(qe.pos, recOrigin);
                     ownBlob.clear();
                     encodeStandaloneRecord(ownBlob, qe, recOrigin, /*sendGen=*/isFull);
@@ -1198,6 +1302,36 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 appendExtRaw(buf, static_cast<uint16_t>(ExtTag::SnapshotDespawn), ids.data(),
                              static_cast<uint16_t>(ids.size() * sizeof(uint32_t)));
             }
+            // Cosmetic weapon effects (#625): this tick's events within the peer's interest radius,
+            // capped. Read-only over the shared m_tickEffects (built serially in the weapons pass),
+            // packed byte-serially into the unaligned TLV payload — parallel-safe, worker owns buf.
+            if (!m_tickEffects.empty() && peerState && !peerState->dead) {
+                std::vector<uint8_t> fx;
+                fx.reserve(std::min(m_tickEffects.size(), kMaxEffectsPerSnapshot) * kEffectRecordBytes);
+                const double er2 = govInterestRadiusM * govInterestRadiusM;
+                std::size_t emitted = 0;
+                for (const EffectRecord& e : m_tickEffects) {
+                    if (emitted >= kMaxEffectsPerSnapshot)
+                        break;
+                    const double dx = static_cast<double>(e.pos[0]) - peerState->transform.pos[0];
+                    const double dy = static_cast<double>(e.pos[1]) - peerState->transform.pos[1];
+                    const double dz = static_cast<double>(e.pos[2]) - peerState->transform.pos[2];
+                    if (dx * dx + dy * dy + dz * dz > er2)
+                        continue;
+                    const std::size_t at = fx.size();
+                    fx.resize(at + kEffectRecordBytes);
+                    uint8_t* p = fx.data() + at;
+                    p[0] = e.type;
+                    p[1] = e.weaponClass;
+                    std::memcpy(p + 2, &e.srcIdx, 4);
+                    std::memcpy(p + 6, &e.tgtIdx, 4);
+                    std::memcpy(p + 10, e.pos, 12);
+                    ++emitted;
+                }
+                if (!fx.empty())
+                    appendExtRaw(buf, static_cast<uint16_t>(ExtTag::SnapshotEffects), fx.data(),
+                                 static_cast<uint16_t>(fx.size()));
+            }
             // Snapshot payload compression (#775): zstd the fully-assembled payload (origin table +
             // record stream + TLV block) in place, still inside the parallel per-peer region — the
             // codec is deterministic and this worker owns buf, so the #512 byte-identical-across-
@@ -1248,6 +1382,10 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             m_net.broadcast(&ws, sizeof(ws), /*reliable=*/false);
         }
     }
+
+    // Kill feed + per-peer combat stats (#626), reliable — after the snapshot sends so a kill's
+    // despawn and its credit arrive in the same tick's traffic.
+    flushCombatEvents();
 
     // Shutdown countdown: fire at each interval and at T=0.
     if (m_shuttingDown) {
@@ -1447,11 +1585,580 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     m_peerKnownGens.erase(peerId);
     m_peerPendingDespawn.erase(peerId);
     m_peerTraceWriters.erase(peerId); // close this peer's input trace (#560), if any
+    m_scores.erase(peerId);           // ENet reuses peer ids; a rejoiner must not inherit tallies (#626)
     m_activePeerCount.fetch_sub(1, std::memory_order_relaxed);
 
     m_pendingAdminDrains.erase(std::remove_if(m_pendingAdminDrains.begin(), m_pendingAdminDrains.end(),
                                               [peerId](const PendingAdminDrain& d) { return d.peerId == peerId; }),
                                m_pendingAdminDrains.end());
+}
+
+const FlightIntegrator* WorldBroadcaster::integratorFor(uint32_t entityIdx) const noexcept {
+    auto it = m_controlledEntities.find(entityIdx);
+    return (it != m_controlledEntities.end() && it->second.sim) ? it->second.sim.get() : nullptr;
+}
+
+WarheadResult WorldBroadcaster::applyWarheadAt(const double pos[3], const BlastSpec& blast, EntityId instigator) {
+    return applyWarhead(
+        m_entityManager, m_spatialIndex, pos, blast, instigator, m_damageRules,
+        [this](EntityId victim) { m_sensorSystem.setAvionicsFailed(victim.index); },
+        // Route blast damage to a subsystem (#675); direction = the shrapnel's travel (blast → victim).
+        [this](EntityId victim, float amount, const float hitDir[3]) {
+            routeSubsystemDamage(victim, amount, hitDir, m_currentTick);
+        });
+}
+
+void WorldBroadcaster::setWeaponRegistry(const WeaponRegistry* weapons) noexcept {
+    m_weaponRegistry = weapons;
+    m_projectileSystem.configure(weapons, m_gravity ? m_gravity : &CentralGravityField::earthInstance());
+}
+
+void WorldBroadcaster::queueEffect(uint8_t type, uint8_t weaponClass, uint32_t srcIdx, uint32_t tgtIdx,
+                                   const double pos[3]) {
+    EffectRecord e;
+    e.type = type;
+    e.weaponClass = weaponClass;
+    e.srcIdx = srcIdx;
+    e.tgtIdx = tgtIdx;
+    e.pos[0] = static_cast<float>(pos[0]);
+    e.pos[1] = static_cast<float>(pos[1]);
+    e.pos[2] = static_cast<float>(pos[2]);
+    m_tickEffects.push_back(e);
+}
+
+void WorldBroadcaster::resolveHitscan(const FireRequest& req, const WeaponDef& def, uint64_t tickIndex) {
+    const EntityState* shooter = m_entityManager.getByIndex(req.shooterIdx);
+    if (!shooter || shooter->dead)
+        return;
+
+    // Muzzle + bore line, with deterministic cone dispersion: two small angular offsets hashed from
+    // (shooter, tick) — the turbulence/detection idiom, so a replay reproduces every round.
+    const float* q = shooter->transform.quat;
+    const glm::quat rot{q[3], q[0], q[1], q[2]};
+    glm::vec3 bore = rot * glm::vec3{1.f, 0.f, 0.f};
+    constexpr float kGunDispersionRad = 0.012f; // ~0.7° cone half-angle
+    const uint32_t h = req.shooterIdx * 0x9E3779B1u + static_cast<uint32_t>(tickIndex) * 0x85EBCA77u + 0x6B43A9B5u;
+    const float r1 = (static_cast<float>((h >> 8) & 0xFFFu) / 4096.f - 0.5f) * 2.f;
+    const float r2 = (static_cast<float>((h >> 20) & 0xFFFu) / 4096.f - 0.5f) * 2.f;
+    const glm::vec3 up = rot * glm::vec3{0.f, 1.f, 0.f};
+    const glm::vec3 right = rot * glm::vec3{0.f, 0.f, 1.f};
+    bore = glm::normalize(bore + up * (r1 * kGunDispersionRad) + right * (r2 * kGunDispersionRad));
+
+    const double range = static_cast<double>(def.performance.maxRangeM);
+    const glm::dvec3 origin{shooter->transform.pos[0], shooter->transform.pos[1], shooter->transform.pos[2]};
+
+    // Lag compensation (#425): a PLAYER's gun tests targets where they were when the shooter saw
+    // them — `tickIndex − estimatedDelayTicks`, clamped to the history ring (≈533 ms; the bound on
+    // the "shot from around the corner" effect, see docs/network-protocol.md). AI shooters have no
+    // latency and rewind 0; projectiles fly real-time and never rewind — both deliberate.
+    uint64_t rewindTicks = 0;
+    if (const uint32_t peerId = peerIdForEntity(shooter->id); peerId != kNoOwningPeer) {
+        if (const auto pit = m_peerInputs.find(peerId); pit != m_peerInputs.end())
+            rewindTicks = std::min<uint64_t>(pit->second.estimatedDelayTicks, TransformHistory::kHistoryTicks - 1);
+    }
+    rewindTicks = std::min(rewindTicks, tickIndex);
+    const uint64_t rewTick = tickIndex - rewindTicks;
+
+    // Nearest entity whose centre passes within the hit radius of the ray, ahead of the muzzle and
+    // inside the weapon's reach. A fixed target radius until #630 introduces per-entity extents.
+    // The broadphase runs on CURRENT positions, so its radius is inflated by the farthest any
+    // entity can have moved since the rewound tick (the snapshot codec's velocity cap bounds it);
+    // the exact ray test then uses each candidate's REWOUND position.
+    constexpr double kTargetRadiusM = 8.0;
+    const double drift = static_cast<double>(rewindTicks) * (kVelMaxMps / 60.0);
+    double bestT = range + 1.0;
+    EntityId hitId = EntityId::null();
+    glm::dvec3 hitPos{};
+    m_spatialIndex.queryRadius(shooter->transform.pos, range + drift, [&](uint32_t idx, const double* ep) {
+        if (idx == req.shooterIdx)
+            return;
+        const EntityState* cand = m_entityManager.getByIndex(idx);
+        if (!cand || cand->dead)
+            return;
+        glm::dvec3 targetPos{ep[0], ep[1], ep[2]};
+        if (rewindTicks > 0) {
+            // The generation check means a recycled pool slot can never be hit through history.
+            // An entity that did not exist at the rewound tick is tested where it is NOW — the
+            // shooter could not have seen it, but it is physically in the bullet's path.
+            if (const auto past = m_transformHistory.queryAt(rewTick, idx, static_cast<uint16_t>(cand->id.generation)))
+                targetPos = *past;
+        }
+        const glm::dvec3 rel = targetPos - origin;
+        const double t = rel.x * bore.x + rel.y * bore.y + rel.z * bore.z; // along-ray distance
+        if (t < 0.0 || t > range || t >= bestT)
+            return;
+        const glm::dvec3 closest = rel - glm::dvec3(bore) * t;
+        if (glm::dot(closest, closest) > kTargetRadiusM * kTargetRadiusM)
+            return;
+        bestT = t;
+        hitId = cand->id;
+        hitPos = origin + glm::dvec3(bore) * t;
+    });
+
+    // Tracer effect from the muzzle every resolved round; impact effect + damage on a hit.
+    const double muzzle[3] = {origin.x, origin.y, origin.z};
+    queueEffect(static_cast<uint8_t>(EffectType::WeaponFired), static_cast<uint8_t>(def.type), req.shooterIdx,
+                0xFFFFFFFFu, muzzle);
+    if (hitId.valid()) {
+        const double at[3] = {hitPos.x, hitPos.y, hitPos.z};
+        m_currentWeaponClass = static_cast<uint8_t>(def.type);
+        const bool applied = applyPointDamage(m_entityManager, hitId, def.warhead.damage, shooter->id, m_damageRules);
+        m_currentWeaponClass = 0xFF;
+        if (applied) {
+            queueEffect(static_cast<uint8_t>(EffectType::Impact), static_cast<uint8_t>(def.type), req.shooterIdx,
+                        hitId.index, at);
+            // The round's travel direction routes the damage to a subsystem (#675).
+            const float hitDir[3] = {bore.x, bore.y, bore.z};
+            routeSubsystemDamage(hitId, def.warhead.damage, hitDir, tickIndex);
+        }
+    }
+}
+
+void WorldBroadcaster::executeFireRequest(const FireRequest& req, uint64_t tickIndex) {
+    if (!m_weaponRegistry)
+        return;
+    const WeaponDef* def = m_weaponRegistry->byIndex(req.weaponIndex);
+    if (!def)
+        return;
+
+    if (req.kind == FireRequest::Kind::Hitscan) {
+        resolveHitscan(req, *def, tickIndex);
+        return;
+    }
+
+    const EntityState* shooter = m_entityManager.getByIndex(req.shooterIdx);
+    if (!shooter || shooter->dead)
+        return;
+    const uint32_t ownerPeer = peerIdForEntity(shooter->id);
+
+    // Launch designation (#627): a seeker weapon is launched AT something the shooter designated —
+    // the missile never invents a target. No designator wired, or nothing designated ⇒ the store
+    // flies dumb, which is the honest outcome of firing blind.
+    EntityId designated = EntityId::null();
+    if (def->seeker && def->seeker->type != SeekerType::Unguided)
+        designated = designateFor(*shooter, ownerPeer);
+
+    const EntityId pid = m_projectileSystem.launch(m_entityManager, req.weaponIndex, *shooter,
+                                                   ownerPeer == kNoOwningPeer ? 0u : ownerPeer, designated, tickIndex);
+    if (pid.valid())
+        queueEffect(static_cast<uint8_t>(EffectType::MissileLaunch), static_cast<uint8_t>(def->type), req.shooterIdx,
+                    0xFFFFFFFFu, shooter->transform.pos);
+}
+
+EntityId WorldBroadcaster::designateFor(const EntityState& shooter, uint32_t ownerPeer) const {
+    // The designator is the #610 seam (fl-server wires the contact-honest lambda); the look axis
+    // is the peer's viewAxis for a player and the nose for an AI.
+    if (!m_targetDesignator)
+        return EntityId::null();
+    float axis[3];
+    bool haveAxis = false;
+    if (ownerPeer != kNoOwningPeer) {
+        if (const auto pit = m_peerInputs.find(ownerPeer); pit != m_peerInputs.end()) {
+            axis[0] = pit->second.viewAxis[0];
+            axis[1] = pit->second.viewAxis[1];
+            axis[2] = pit->second.viewAxis[2];
+            haveAxis = true;
+        }
+    }
+    if (!haveAxis) {
+        const float* q = shooter.transform.quat;
+        const glm::quat rot{q[3], q[0], q[1], q[2]};
+        const glm::vec3 nose = rot * glm::vec3{1.f, 0.f, 0.f};
+        axis[0] = nose.x;
+        axis[1] = nose.y;
+        axis[2] = nose.z;
+    }
+    return m_targetDesignator(shooter, axis);
+}
+
+void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
+    // Controller spawn intents (#355 — a MIRV bus deploying RVs) drain FIRST and unconditionally:
+    // the seam does not depend on the weapon vocabulary. Serial here, never in the parallel AI
+    // pass: spawn mutates the pool and registerController mutates the roster. The child inherits
+    // the REQUESTER's ownership (an RV kill credits whoever launched the bus) and, when the
+    // request names no type, the requester's own entity type.
+    {
+        std::vector<std::pair<SpawnRequest, EntityId>> spawnWork;
+        for (auto& [idx, ce] : m_controlledEntities) {
+            if (!ce.controller)
+                continue;
+            for (SpawnRequest& req : ce.controller->drainSpawnRequests())
+                spawnWork.emplace_back(std::move(req), ce.id);
+        }
+        for (auto& [req, requester] : spawnWork) {
+            if (!req.makeController)
+                continue; // a vehicle nobody integrates would hang in the air — refuse
+            const EntityState* parent = m_entityManager.get(requester);
+            if (!parent)
+                continue;
+            std::string typeId = req.typeId;
+            if (typeId.empty()) {
+                const EntityDef* parentDef = m_registry.byIndex(parent->typeIndex);
+                if (!parentDef)
+                    continue;
+                typeId = parentDef->id;
+            }
+            const uint32_t ownerId = parent->ownerId;
+            const EntityId child = m_entityManager.spawn(typeId.c_str(), req.transform, ownerId);
+            if (child.valid())
+                registerController(child, req.makeController(), nullptr);
+        }
+    }
+
+    if (!m_weaponRegistry)
+        return; // no vocabulary, no fire path — trigger intent is read and discarded (pre-#583)
+
+    // 1. Fire intents → validated requests. Serial and cheap: FireControl is pure per-entity state.
+    m_fireRequests.clear();
+    for (auto& [idx, ce] : m_controlledEntities) {
+        if (!ce.lastInputValid || ce.fire.loadout.empty())
+            continue;
+        const EntityState* st = m_entityManager.get(ce.id);
+        if (!st || st->dead)
+            continue;
+        const bool hold = m_formations.weaponsHoldFor(ce.id); // #610's order, with teeth at last
+        evaluateFire(ce.fire, *m_weaponRegistry, ce.lastInput, hold, tickIndex, idx, m_fireRequests);
+        // The live loadout is the payload truth from here on (#625): releases shrink what the
+        // integrator carries next tick.
+        ce.payload.extra_mass_kg = ce.fire.loadout.payloadMassKg;
+        ce.payload.extra_cd0 = ce.fire.loadout.payloadCd0;
+
+        // The pre-launch LOCK cue (#628), at the sensing cadence so it costs one lobe test per
+        // peer per 100 ms: would the SELECTED seeker take the designated target right now? Peers
+        // only — AI reads its contacts directly and needs no annunciator.
+        if (const uint32_t peer = peerIdForEntity(ce.id); peer != kNoOwningPeer && (tickIndex + idx) % 6 == 0) {
+            bool cue = false;
+            if (const StationState* sel = ce.fire.loadout.selectedStation();
+                sel && sel->weaponIndex != UINT32_MAX && sel->rounds > 0) {
+                const WeaponDef* w = m_weaponRegistry->byIndex(sel->weaponIndex);
+                if (w && w->seeker && w->seeker->type != SeekerType::Unguided) {
+                    const EntityId designated = designateFor(*st, peer);
+                    cue = designated.valid() &&
+                          m_projectileSystem.wouldAcquire(m_entityManager, sel->weaponIndex, *st, designated);
+                }
+            }
+            ce.fire.seekerCue = cue;
+        }
+    }
+    // Deterministic execution order regardless of map iteration: shooter idx, then station.
+    std::sort(m_fireRequests.begin(), m_fireRequests.end(), [](const FireRequest& a, const FireRequest& b) {
+        return a.shooterIdx != b.shooterIdx ? a.shooterIdx < b.shooterIdx : a.station < b.station;
+    });
+
+    // 2. Execute serially: hitscan resolves now, stores become pooled projectile entities.
+    for (const FireRequest& req : m_fireRequests)
+        executeFireRequest(req, tickIndex);
+
+    // 3. Projectile flight + endings. Detection inside step(), application here — the over-G
+    // discipline: applyWarheadAt fires event handlers and must never run inside a traversal.
+    m_tickImpacts.clear();
+    m_projectileSystem.step(m_entityManager, m_spatialIndex, static_cast<float>(simDt), m_groundQuery, tickIndex,
+                            m_sensingEnv, m_tickImpacts);
+    for (const ProjectileImpact& imp : m_tickImpacts) {
+        const WeaponDef* def = m_weaponRegistry->byIndex(imp.weaponIndex);
+        if (!def)
+            continue;
+        m_currentWeaponClass = static_cast<uint8_t>(def->type);
+        BlastSpec blast{def->warhead.blastRadiusM, def->warhead.damage, def->warhead.nuclear};
+        applyWarheadAt(imp.pos, blast, imp.shooter);
+        m_currentWeaponClass = 0xFF;
+        queueEffect(static_cast<uint8_t>(def->warhead.nuclear ? EffectType::NuclearFlash : EffectType::Detonation),
+                    static_cast<uint8_t>(def->type), imp.shooter.index,
+                    imp.directHit.valid() ? imp.directHit.index : 0xFFFFFFFFu, imp.pos);
+    }
+}
+
+void WorldBroadcaster::runCollisionPass(uint64_t tickIndex) {
+    // 1. Serial gather: every live entity with a non-zero collision radius (projectiles have their
+    // own fuze path and are excluded via a 0 category default). Post-integrate positions.
+    m_collisionCands.clear();
+    m_collisionIdxToSlot.clear();
+    m_entityManager.forEach([this](const EntityState& s) {
+        if (s.dead)
+            return;
+        const EntityDef* def = m_registry.byIndex(s.typeIndex);
+        float radius = def && def->collisionRadiusM > 0.f
+                           ? def->collisionRadiusM
+                           : defaultCollisionRadiusM(def ? def->category : ObjectCategory::AirVehicle);
+        if (radius <= 0.f)
+            return;
+        const uint32_t slot = static_cast<uint32_t>(m_collisionCands.size());
+        CollisionCand c;
+        c.id = s.id;
+        c.pos[0] = s.transform.pos[0];
+        c.pos[1] = s.transform.pos[1];
+        c.pos[2] = s.transform.pos[2];
+        c.vel[0] = s.transform.vel[0];
+        c.vel[1] = s.transform.vel[1];
+        c.vel[2] = s.transform.vel[2];
+        c.radius = radius;
+        m_collisionCands.push_back(c);
+        m_collisionIdxToSlot[s.id.index] = slot;
+    });
+    if (m_collisionCands.size() < 2)
+        return;
+
+    m_collisionScratch.resize(m_collisionCands.size());
+    for (auto& v : m_collisionScratch)
+        v.clear();
+
+    // The spatial index was built at start-of-tick (pre-integrate), so a candidate's stored bucket
+    // may lag its current position by up to a tick of travel. Inflate the broadphase query by that
+    // worst-case drift on BOTH entities plus twice the max radius, so no overlapping pair is missed.
+    constexpr double kMaxRadiusM = 15.0;
+    const double inflate = 2.0 * kMaxRadiusM + 2.0 * (kVelMaxMps / 60.0);
+
+    // 2. Parallel-detect: each candidate writes only its own scratch slot; reads the frozen spatial
+    // index + candidate list. Canonical pairs (lower index < higher index) so a pair is recorded
+    // once regardless of which side's broadphase finds it — which makes the result independent of
+    // worker count (serial-equivalent).
+    runEntityPass(m_collisionCands.size(), [this, inflate](std::size_t b, std::size_t e) {
+        for (std::size_t i = b; i < e; ++i) {
+            const CollisionCand& ci = m_collisionCands[i];
+            const double queryR = static_cast<double>(ci.radius) + inflate;
+            m_spatialIndex.queryRadius(ci.pos, queryR, [&](uint32_t otherIdx, const double* /*storedPos*/) {
+                const auto it = m_collisionIdxToSlot.find(otherIdx);
+                if (it == m_collisionIdxToSlot.end())
+                    return;
+                const CollisionCand& cj = m_collisionCands[it->second];
+                if (ci.id.index >= cj.id.index)
+                    return; // canonical: only the lower-index side records the pair
+                if (!spheresOverlap(ci.pos, ci.radius, cj.pos, cj.radius))
+                    return;
+                CollisionPair p;
+                p.a = ci.id;
+                p.b = cj.id;
+                p.relativeSpeedMps = relativeSpeedMps(ci.vel, cj.vel);
+                m_collisionScratch[i].push_back(p);
+            });
+        }
+    });
+
+    // 3. Serial dedup + apply: flatten, sort for a deterministic apply order, and damage BOTH
+    // entities of each pair. A mid-air is nobody's kill: instigator is null (environmental), which
+    // also always applies — a collision is physics, not friendly fire, so the FF gate must not
+    // suppress two wingmen who merged. Gated by the crashDamage difficulty toggle.
+    if (!m_damageRules.crashDamage)
+        return;
+    m_collisionPairs.clear();
+    for (auto& v : m_collisionScratch)
+        for (const CollisionPair& p : v)
+            m_collisionPairs.push_back(p);
+    std::sort(m_collisionPairs.begin(), m_collisionPairs.end(), [](const CollisionPair& x, const CollisionPair& y) {
+        return x.a.index != y.a.index ? x.a.index < y.a.index : x.b.index < y.b.index;
+    });
+    for (const CollisionPair& p : m_collisionPairs) {
+        const float dmg = collisionDamage(p.relativeSpeedMps);
+        if (dmg <= 0.f)
+            continue;
+        // Re-check liveness: an earlier pair this tick may have already killed one side.
+        const EntityState* sa = m_entityManager.get(p.a);
+        const EntityState* sb = m_entityManager.get(p.b);
+        if (sa && !sa->dead) {
+            applyPointDamage(m_entityManager, p.a, dmg, EntityId::null(), m_damageRules);
+            routeSubsystemDamage(p.a, dmg, nullptr, tickIndex); // undirected — a merge is everywhere at once
+        }
+        if (sb && !sb->dead) {
+            applyPointDamage(m_entityManager, p.b, dmg, EntityId::null(), m_damageRules);
+            routeSubsystemDamage(p.b, dmg, nullptr, tickIndex);
+        }
+    }
+}
+
+// Fuel-leak rate when the fuel subsystem fails (#675) — a ruptured tank the pilot cannot throttle
+// away. ~2 kg/s empties a typical 4000 kg internal load over ~30 minutes: a slow bleed that turns a
+// long egress into a coin flip, not an instant flame-out.
+static constexpr float kSubsystemFuelLeakKgS = 2.f;
+
+void WorldBroadcaster::routeSubsystemDamage(EntityId target, float amount, const float* hitDirWorld,
+                                            uint64_t tickIndex) {
+    if (amount <= 0.f)
+        return;
+    auto it = m_controlledEntities.find(target.index);
+    if (it == m_controlledEntities.end() || !it->second.hasSubsystems || it->second.id != target)
+        return;
+    ControlledEntity& ce = it->second;
+    const EntityState* state = m_entityManager.get(target);
+    const EntityDef* def = state ? m_registry.byIndex(state->typeIndex) : nullptr;
+    if (!state || !def || !def->damage || !def->damage->subsystems)
+        return;
+
+    // Rotate the world-frame hit direction into the target's body frame (x=fwd, y=up, z=right); a
+    // null direction stays zero = undirected (weight-only pick).
+    float hitDirBody[3] = {0.f, 0.f, 0.f};
+    if (hitDirWorld) {
+        const float* q = state->transform.quat;
+        const glm::quat rot{q[3], q[0], q[1], q[2]};
+        const glm::vec3 body = glm::conjugate(rot) * glm::vec3{hitDirWorld[0], hitDirWorld[1], hitDirWorld[2]};
+        hitDirBody[0] = body.x;
+        hitDirBody[1] = body.y;
+        hitDirBody[2] = body.z;
+    }
+
+    const uint32_t h = subsystemHash(target.index, tickIndex, 0x51A5u);
+    const Subsystem s = pickSubsystem(*def->damage->subsystems, ce.subsystems, hitDirBody, h);
+    if (s == Subsystem::Count)
+        return;
+    if (applySubsystemDamage(ce.subsystems, s, amount) != 0)
+        applySubsystemEffects(ce); // a subsystem newly failed — recompute the effects from the mask
+}
+
+void WorldBroadcaster::applySubsystemEffects(ControlledEntity& ce) {
+    if (!ce.sim)
+        return;
+
+    // Engine-out flags → the force model's asymmetric thrust. OR into whatever the tier model set
+    // (kEngineFailGeneric), so a shot-out left engine and a damage-tier generic impairment coexist.
+    uint8_t engineFlags = ce.sim->engineFailFlags();
+    if (ce.subsystems.failed(Subsystem::EngineLeft))
+        engineFlags |= kEngineFailLeft;
+    if (ce.subsystems.failed(Subsystem::EngineRight))
+        engineFlags |= kEngineFailRight;
+    ce.sim->setEngineFailFlags(engineFlags);
+
+    // Controls and hydraulics each strip control authority; both failed = near-total loss.
+    float control = 1.f;
+    if (ce.subsystems.failed(Subsystem::Controls))
+        control *= 0.4f;
+    if (ce.subsystems.failed(Subsystem::Hydraulics))
+        control *= 0.5f;
+    ce.sim->setSubsystemControlFactor(control);
+
+    // Avionics failure strips the sensor suite to eyes (honest — it changes what the AI can see).
+    if (ce.subsystems.failed(Subsystem::Avionics))
+        m_sensorSystem.setAvionicsFailed(ce.id.index);
+
+    // A ruptured fuel tank leaks; the rate scales with how much tank capacity was in that pool.
+    if (ce.subsystems.failed(Subsystem::Fuel)) {
+        ce.fuelLeakKgS = kSubsystemFuelLeakKgS;
+        ce.sim->setFuelLeakRate(ce.fuelLeakKgS);
+    }
+}
+
+uint32_t WorldBroadcaster::peerIdForEntity(EntityId id) const noexcept {
+    if (!id.valid())
+        return kNoOwningPeer;
+    for (const auto& [peerId, eid] : m_peerEntities) {
+        if (eid == id)
+            return peerId;
+    }
+    return kNoOwningPeer;
+}
+
+void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
+    switch (event.type) {
+    case EntityEventType::Died: {
+        const uint32_t victimPeer = peerIdForEntity(event.subject);
+        const uint32_t killerPeer = peerIdForEntity(event.instigator);
+        if (victimPeer != kNoOwningPeer) {
+            PeerScore& s = m_scores[victimPeer];
+            ++s.losses;
+            s.dirty = true;
+        }
+
+        CombatEventRecord rec{};
+        rec.type = static_cast<uint8_t>(CombatEventType::Kill);
+        rec.weaponClass = m_currentWeaponClass; // set while a weapon damage call is on the stack (#625)
+        rec.subjectIdx = event.subject.index;
+        rec.subjectGen = static_cast<uint16_t>(event.subject.generation);
+        rec.instigatorIdx = event.instigator.valid() ? event.instigator.index : 0xFFFFFFFFu;
+        rec.instigatorGen = static_cast<uint16_t>(event.instigator.generation);
+        rec.a = killerPeer;
+        rec.b = victimPeer;
+        m_pendingKillEvents.push_back(rec);
+        break;
+    }
+    case EntityEventType::ScoreAwarded: {
+        const uint32_t killerPeer = peerIdForEntity(event.instigator);
+        if (killerPeer != kNoOwningPeer) {
+            PeerScore& s = m_scores[killerPeer];
+            ++s.kills;
+            s.score += event.score;
+            s.dirty = true;
+        }
+        break;
+    }
+    case EntityEventType::DamageLevelChanged: {
+        // DamageDef's penalties finally act (#626): pick the tier the entity just entered and apply
+        // it to the flight integrator; avionics failure strips the sensor suite to eyes.
+        auto it = m_controlledEntities.find(event.subject.index);
+        if (it == m_controlledEntities.end() || !it->second.sim)
+            break;
+        const EntityState* state = m_entityManager.get(event.subject);
+        if (!state)
+            break;
+        const EntityDef* def = m_registry.byIndex(state->typeIndex);
+        if (!def || !def->damage)
+            break;
+
+        float thrust = 1.f;
+        float control = 1.f;
+        bool avionics = false;
+        switch (event.newDamageLevel) {
+        case DamageLevel::Intact:
+            break;
+        case DamageLevel::Light:
+            thrust = def->damage->light.thrustFactor;
+            control = def->damage->light.controlFactor;
+            avionics = def->damage->light.avionicsFailure;
+            break;
+        case DamageLevel::Heavy:
+            thrust = def->damage->heavy.thrustFactor;
+            control = def->damage->heavy.controlFactor;
+            avionics = def->damage->heavy.avionicsFailure;
+            break;
+        case DamageLevel::Critical:
+        case DamageLevel::Destroyed:
+            thrust = def->damage->critical.thrustFactor;
+            control = def->damage->critical.controlFactor;
+            avionics = def->damage->critical.avionicsFailure;
+            break;
+        }
+        it->second.sim->setDamagePenalty(thrust, control);
+        if (avionics)
+            m_sensorSystem.setAvionicsFailed(event.subject.index);
+        break;
+    }
+    }
+}
+
+void WorldBroadcaster::flushCombatEvents() {
+    // Kill records broadcast to everyone, chunked to stay inside a single unfragmented packet.
+    if (!m_pendingKillEvents.empty()) {
+        constexpr std::size_t kMaxRecordsPerPacket = 15; // 4 + 15*32 = 484 bytes
+        std::vector<uint8_t> buf;
+        for (std::size_t off = 0; off < m_pendingKillEvents.size(); off += kMaxRecordsPerPacket) {
+            const std::size_t n = std::min(kMaxRecordsPerPacket, m_pendingKillEvents.size() - off);
+            buf.clear();
+            MsgCombatEventHeader hdr;
+            hdr.count = static_cast<uint8_t>(n);
+            appendMsg(buf, hdr);
+            for (std::size_t i = 0; i < n; ++i)
+                appendMsg(buf, m_pendingKillEvents[off + i]);
+            m_net.broadcast(buf.data(), buf.size(), /*reliable=*/true);
+        }
+        m_pendingKillEvents.clear();
+    }
+
+    // Per-peer stats, unicast — each peer only ever sees its own tallies.
+    for (auto& [peerId, score] : m_scores) {
+        if (!score.dirty)
+            continue;
+        score.dirty = false;
+
+        std::vector<uint8_t> buf;
+        MsgCombatEventHeader hdr;
+        hdr.count = 1;
+        appendMsg(buf, hdr);
+        CombatEventRecord rec{};
+        rec.type = static_cast<uint8_t>(CombatEventType::Stats);
+        rec.weaponClass = 0xFF;
+        rec.a = score.kills;
+        rec.b = score.losses;
+        rec.c = score.score;
+        appendMsg(buf, rec);
+        m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/true);
+    }
 }
 
 void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t size) {
@@ -1562,6 +2269,7 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         bi.aileron = ctl(msg.aileron, -1.f, 1.f);
         bi.rudder = ctl(msg.rudder, -1.f, 1.f);
         bi.buttons = msg.buttons;
+        bi.selectedStation = msg.selectedStation; // clamped against the entity's stations at consumption
         stored.jitterBuffer.push(bi);
 
         // Server-side input tracing (#560): append the accepted, sanitized control sample to this
@@ -1959,6 +2667,12 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
 
     auto fi = std::make_unique<FlightIntegrator>(model);
     fi->setGravityField(*m_gravity);
+    // A ballistic vehicle (#354) flies the boost/coast force model and gets the wider NaN guard —
+    // an MRBM legitimately outruns the backstop built for aircraft. Same integrator core.
+    if (model->isBallistic()) {
+        fi->setForceModel(BallisticForceModel::instance());
+        fi->setSpeedGuard(8000.0);
+    }
     fi->reset(fs);
     // Give the controller the world's planet radius so its local-level (tangent-plane) guidance is
     // correct far from the origin. Every controller — peer or AI — enters through this single path.
@@ -1974,6 +2688,18 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     const EntityDef* spawnDef = m_registry.byIndex(st->typeIndex);
     if (m_payloadResolver && spawnDef)
         ce.payload = m_payloadResolver(*spawnDef);
+
+    // Live stations (#625). Born from the same default loadout the payload above describes; from
+    // here on the LOADOUT is the truth — a released store shrinks both, in evaluateFire.
+    if (m_weaponRegistry && spawnDef && !spawnDef->hardpoints.empty())
+        ce.fire.loadout = buildLoadout(*spawnDef, *m_weaponRegistry);
+
+    // Per-subsystem damage pools (#675), born from the def's [damage.subsystems]. Absent = the
+    // 3-level tier model is the whole story (hasSubsystems stays false, routing is a no-op).
+    if (spawnDef && spawnDef->damage && spawnDef->damage->subsystems) {
+        ce.subsystems.init(*spawnDef->damage->subsystems);
+        ce.hasSubsystems = true;
+    }
 
     m_controlledEntities[id.index] = std::move(ce);
 

@@ -63,11 +63,15 @@ enum class MsgId : uint8_t {
     WingmanCommand = 0x0D,     // client->server, reliable: order this peer's wingman(s) (#610)
     WingmanAck = 0x0E,         // server->client, reliable: outcome of a wingman order, and the
                                // unsolicited flight check-in sent once after ConnectAck
-    // 0x0F is the LAST free ENet id. The next message type after it needs a conscious band decision:
-    // extending past 0x10 is safe in practice (MsgLanBeacon is raw UDP and never enters the ENet
-    // dispatch), but "0x10+ = non-ENet" is a documented invariant and breaking it should be a choice,
-    // not an accident.
-    LanBeacon = 0x10, // raw UDP broadcast - NOT sent over ENet; 0x10+ reserved for non-ENet ids.
+    CombatEvent = 0x0F,        // server->client, reliable: kill feed + per-peer combat stats (#626).
+                               // This took the LAST free ENet id, which is WHY it is a multiplexed
+                               // record stream (CombatEventType) rather than one message per event:
+                               // every future gameplay event extends the record vocabulary, not the
+                               // id space. Extending past 0x10 is safe in practice (MsgLanBeacon is
+                               // raw UDP and never enters the ENet dispatch), but "0x10+ = non-ENet"
+                               // is a documented invariant and breaking it should be a choice, not
+                               // an accident.
+    LanBeacon = 0x10,          // raw UDP broadcast - NOT sent over ENet; 0x10+ reserved for non-ENet ids.
 };
 
 // Machine-readable reason carried in MsgConnectRefusal::code, alongside the human-readable text.
@@ -187,7 +191,7 @@ static_assert(offsetof(MsgWorldSnapshotHeader, uncompressedBytes) == 20u,
 // Unreliable, client->server, sent each render frame. Padded to 48 (multiple of 8 for tickIndex).
 struct MsgClientInput {
     uint8_t msgId{static_cast<uint8_t>(MsgId::ClientInput)};
-    uint8_t buttons{0}; // bit 0 = weaponTrigger, bit 1 = afterburner
+    uint8_t buttons{0}; // bit 0 = gun trigger (level), bit 1 = afterburner, bit 2 = fire selected store
     uint16_t protocolVersion{kProtocolVersion};
     uint32_t seqNum{0};    // monotonically increasing; server discards packets not newer than last accepted
     uint64_t tickIndex{0}; // server's tickIndex from last received WorldSnapshot; server uses delta for delay estimate
@@ -197,14 +201,22 @@ struct MsgClientInput {
     float rudder{0.f};     // [-1.0, +1.0] right-yaw positive
     float viewAxis[3]{};   // normalized look direction (world space)
     uint32_t ackMask{0};   // @44 selective-ack bitmask (#566): bit b = decoded snapshot tick tickIndex-1-b
-}; // 48 bytes, align 8
-static_assert(sizeof(MsgClientInput) == 48u, "MsgClientInput wire size changed");
+
+    // Weapon-station selection (#625). ABSOLUTE, not cycle-edges: the client computes cycling
+    // locally and sends the result, so selection converges on an unreliable channel where an edge
+    // can be lost. 255 = no station. Server clamps to the entity's station count.
+    uint8_t selectedStation{255};
+    uint8_t reservedB[3]{}; // explicit padding — the layout rule forbids implicit holes
+    uint32_t reservedC{0};  // pads to the struct's 8-byte alignment; future fire fields land here
+}; // 56 bytes, align 8
+static_assert(sizeof(MsgClientInput) == 56u, "MsgClientInput wire size changed");
 static_assert(alignof(MsgClientInput) == 8u, "MsgClientInput alignment changed");
 static_assert(offsetof(MsgClientInput, seqNum) == 4u, "MsgClientInput::seqNum offset changed");
 static_assert(offsetof(MsgClientInput, tickIndex) == 8u, "MsgClientInput::tickIndex offset changed");
 static_assert(offsetof(MsgClientInput, throttle) == 16u, "MsgClientInput::throttle offset changed");
 static_assert(offsetof(MsgClientInput, viewAxis) == 32u, "MsgClientInput::viewAxis offset changed");
 static_assert(offsetof(MsgClientInput, ackMask) == 44u, "MsgClientInput::ackMask offset changed");
+static_assert(offsetof(MsgClientInput, selectedStation) == 48u, "MsgClientInput::selectedStation offset changed");
 
 // Unreliable, server->client, broadcast every 10 sim ticks (~6 Hz at 60 Hz).
 // timeOfDayTenths: encode timeOfDay as uint16 (hours * 10) to keep it 2-aligned.
@@ -348,6 +360,69 @@ struct MsgPeerDelay {
 static_assert(sizeof(MsgPeerDelay) == 4u, "MsgPeerDelay wire size changed");
 static_assert(alignof(MsgPeerDelay) == 2u, "MsgPeerDelay alignment changed");
 static_assert(offsetof(MsgPeerDelay, delayTicks) == 2u, "MsgPeerDelay::delayTicks offset changed");
+
+// ---------------------------------------------------------------------------------------------
+// Combat event channel (#626)
+// ---------------------------------------------------------------------------------------------
+// The reliable gameplay-event stream: kill credit and per-peer combat stats. Cosmetic effects
+// (tracers, impacts, detonations) deliberately do NOT ride here — they are unreliable-by-design
+// snapshot TLVs (#625), because a lost muzzle flash is nothing and a lost kill credit is a bug.
+
+enum class CombatEventType : uint8_t {
+    Kill = 0,  // broadcast: subject was destroyed; instigator gets the credit
+    Stats = 1, // unicast: the receiving peer's own running tallies (kills/losses/score)
+};
+
+// Cosmetic weapon effects (#625), carried as SnapshotEffects TLV records on the UNRELIABLE
+// snapshot — a lost muzzle flash is nothing; anything that must arrive uses MsgCombatEvent.
+// Unknown values must be skipped by the client, never rejected.
+enum class EffectType : uint8_t {
+    WeaponFired = 0,   // gunfire: tracer/muzzle at pos, srcIdx = shooter
+    MissileLaunch = 1, // store left the rails: srcIdx = shooter
+    Impact = 2,        // a round connected: pos = hit, tgtIdx = struck entity
+    Detonation = 3,    // warhead burst at pos
+    NuclearFlash = 4,  // full-screen flash cue; pos = ground zero
+};
+
+// One packed SnapshotEffects TLV record. Written byte-serially (memcpy per field) into the TLV
+// payload — the TLV data area is unaligned by design.
+inline constexpr std::size_t kEffectRecordBytes = 22; // type u8 + weaponClass u8 + src u32 + tgt u32 + pos f32[3]
+inline constexpr std::size_t kMaxEffectsPerSnapshot = 16;
+
+struct MsgCombatEventHeader {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::CombatEvent)};
+    uint8_t count{0}; // CombatEventRecord entries following this header
+    uint16_t reserved{0};
+}; // 4 bytes, align 2
+static_assert(sizeof(MsgCombatEventHeader) == 4u, "MsgCombatEventHeader wire size changed");
+static_assert(offsetof(MsgCombatEventHeader, count) == 1u, "MsgCombatEventHeader::count offset changed");
+
+// One multiplexed combat event. Field meaning depends on `type`:
+//   Kill:  subject = the destroyed entity, instigator = the credited entity (null idx = environment);
+//          a = instigator's owning peer id (kNoOwningPeer = AI/server), b = subject's owning peer id.
+//   Stats: a = kills, b = losses, c = score — the RECEIVING peer's own tallies (unicast only).
+inline constexpr uint32_t kNoOwningPeer = 0xFFFFFFFFu; // peer id 0 is a real player (#610's kNoPeer rule)
+
+struct CombatEventRecord {
+    uint8_t type{0};        // CombatEventType
+    uint8_t weaponClass{0}; // WeaponType ordinal of the credited weapon; 0xFF = none/unknown
+    uint16_t reserved{0};
+    uint32_t subjectIdx{0};
+    uint16_t subjectGen{0};
+    uint16_t pad0{0};
+    uint32_t instigatorIdx{0};
+    uint16_t instigatorGen{0};
+    uint16_t pad1{0};
+    uint32_t a{0};
+    uint32_t b{0};
+    int32_t c{0};
+}; // 32 bytes, align 4
+static_assert(sizeof(CombatEventRecord) == 32u, "CombatEventRecord wire size changed");
+static_assert(alignof(CombatEventRecord) == 4u, "CombatEventRecord alignment changed");
+static_assert(offsetof(CombatEventRecord, subjectIdx) == 4u, "CombatEventRecord::subjectIdx offset changed");
+static_assert(offsetof(CombatEventRecord, instigatorIdx) == 12u, "CombatEventRecord::instigatorIdx offset changed");
+static_assert(offsetof(CombatEventRecord, a) == 20u, "CombatEventRecord::a offset changed");
+static_assert(offsetof(CombatEventRecord, c) == 28u, "CombatEventRecord::c offset changed");
 
 // ---------------------------------------------------------------------------------------------
 // Flight command channel (#610)
@@ -521,6 +596,10 @@ enum class ExtTag : uint16_t {
                               // (kills/despawns, not interest-out); priority/budget scheduler (#516). Variable length =
                               // 4*count; little-endian; read per-element via memcpy (payload is unaligned). Empty =
                               // omitted. Repeated for a few ticks on the unreliable channel for drop tolerance.
+    SnapshotEffects = 0x0104, // EffectType records (#625), kEffectRecordBytes each, little-endian, unaligned:
+                              // cosmetic weapon effects within the receiving peer's interest radius, capped at
+                              // kMaxEffectsPerSnapshot. Unreliable by design — a dropped packet loses cosmetics,
+                              // never state. pos is float32 world position (particles do not need 0.125 m).
 };
 
 } // namespace fl

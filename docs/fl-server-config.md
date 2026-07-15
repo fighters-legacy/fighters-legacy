@@ -730,6 +730,32 @@ Minimum AI difficulty enforced server-side, regardless of individual client pref
 
 ---
 
+## [gameplay] — The damage gates
+
+Server-authoritative (#626): single-player configures these through the same path via the embedded
+`fl-server`, never client-side. Both hot-reload via `reload_config`.
+
+### `friendly_fire`
+
+| Type | Default |
+|---|---|
+| bool | `false` |
+
+When `false`, weapon damage from an instigator sharing the target's **non-zero** faction is
+suppressed. Faction `0` is *neutral*, not a team — neutral-on-neutral damage always applies, as do
+self-damage (your own blast radius) and environmental damage.
+
+### `crash_damage`
+
+| Type | Default |
+|---|---|
+| bool | `true` |
+
+When `true`, a hard ground impact damages the airframe (scaling with impact speed past a
+survivable-arrival threshold). Ordinary landings are never affected.
+
+---
+
 ## [discovery] — LAN server discovery
 
 Configures the UDP broadcast beacon that lets players on the same LAN find this server
@@ -1315,8 +1341,9 @@ process.
 | `admin_unlock` | `<IP>` | Clear the admin auth and RCON auth lockouts for an IP address immediately; prints a warning if neither channel was locked (idempotent) |
 | `admin_auth_status` | — | Show per-IP lockout state for the MsgAdminCommand operator channel and (when RCON is enabled) the RCON TCP channel; both active lockouts and pending failure counts |
 | `set_weather` | `<preset>` | Change weather: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm`, `snow`, `blizzard` |
+| `detonate` | `<x> <y> <z> <radius_m> <damage> [--nuclear]` | AoE warhead at a world position (#356); `--nuclear` adds the EMP ring at 4× the blast radius |
 | `set_time` | `<0–24>` | Set in-game time of day (float, hours) |
-| `spawn` | `<type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn a registered entity type at the given world position; optionally attach an AI controller. C++ behaviors: `loiter [cx cy cz [radius_m [alt_m [throttle [cw\|ccw]]]]]`, `waypoint x y z [x y z ...] [--loop]`, `formation <anchorIdx> [slot] [lateralM] [aftM]` (holds station on a **moving** anchor — unlike `escort`, which orbits the point where the escortee stood when the order was given), `wingman <anchorIdx> <command> [slot]`, `pursuit <entityIdx>`, `evade <entityIdx>`, `break <entityIdx> [rollDuration]`, `lead <entityIdx> [navGain]`, `lag <entityIdx> [lagFraction]`, `immelmann [pullDur] [rollDur]`, `split_s [rollDur] [pullDur]`, `high_yo_yo <entityIdx> [climbDur] [reacquireDur]`, `low_yo_yo <entityIdx> [diveDur] [pullDur]`. Lua behavior: `lua <script_name>` (loads `ai/<script_name>.lua` from content packs; see `docs/modding/ai.md`). If the entity type's TOML sets `ai_script`, that script is attached automatically when `--ai` is omitted. |
+| `spawn` | `<type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn a registered entity type at the given world position; optionally attach an AI controller. C++ behaviors: `loiter [cx cy cz [radius_m [alt_m [throttle [cw\|ccw]]]]]`, `waypoint x y z [x y z ...] [--loop]`, `formation <anchorIdx> [slot] [lateralM] [aftM]` (holds station on a **moving** anchor — unlike `escort`, which orbits the point where the escortee stood when the order was given), `wingman <anchorIdx> <command> [slot]`, `pursuit <entityIdx>`, `evade <entityIdx>`, `break <entityIdx> [rollDuration]`, `lead <entityIdx> [navGain]`, `lag <entityIdx> [lagFraction]`, `immelmann [pullDur] [rollDur]`, `split_s [rollDur] [pullDur]`, `high_yo_yo <entityIdx> [climbDur] [reacquireDur]`, `low_yo_yo <entityIdx> [diveDur] [pullDur]`, `guns <entityIdx> [muzzleVel] [lethalRadius]` (ballistic-lead gunnery with trigger discipline), `ballistic <tx> <ty> <tz> [mirvCount [spreadM]]` (#355 — boost-phase steering to an impact point; MIRV past apogee). Lua behavior: `lua <script_name>` (loads `ai/<script_name>.lua` from content packs; see `docs/modding/ai.md`). If the entity type's TOML sets `ai_script`, that script is attached automatically when `--ai` is omitted. |
 | `flight` | `list \| create <anchorIdx> [--commander <peerId>] [--parent <id>] [--callsign <name>] \| add <id> <entityIdx> [slot] \| order <id> <command> [--member <idx>] [--cascade] \| disband <id>` | The formation / command-hierarchy surface (#610) — the **game-master and AWACS path**. Build formations (including all-AI flights and nested strike packages) and order them. `order` takes the six wingman commands (`attack_my_target`, `engage_bandits`, `rejoin`, `cover_me`, `hold_fire`, `return_to_base`); `--cascade` applies it to every sub-formation beneath the addressed one. Dispatches through the **same** code as the network order path, so a console order and a radio order cannot behave differently. `attack_my_target` is **refused** here — it needs a commander's boresight, which the console does not have; use `spawn --ai pursuit <idx>` to point an AI at a specific entity. |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
 | `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's game console to teleport the player entity |

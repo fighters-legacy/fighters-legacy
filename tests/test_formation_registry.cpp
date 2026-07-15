@@ -197,3 +197,19 @@ TEST_CASE("FormationMember isAi distinguishes a server aircraft from a person") 
     CHECK(aiMember(1).isAi());
     CHECK_FALSE(humanMember(2, /*peerId=*/7).isAi());
 }
+
+TEST_CASE("FormationRegistry weaponsHoldFor reads the member's hold flag, false outside any formation") {
+    FormationRegistry reg;
+    CHECK_FALSE(reg.weaponsHoldFor(ent(20))); // no formation at all
+
+    const FormationId id = reg.create("Viper", ent(10), 7);
+    REQUIRE(reg.addMember(id, aiMember(20)));
+    CHECK_FALSE(reg.weaponsHoldFor(ent(20))); // default: weapons free
+
+    reg.get(id)->members[0].weaponsHold = true; // the hold_fire order (#610)
+    CHECK(reg.weaponsHoldFor(ent(20)));
+    CHECK_FALSE(reg.weaponsHoldFor(ent(10))); // the ANCHOR is not a member; no hold applies
+
+    reg.removeEntity(ent(20));
+    CHECK_FALSE(reg.weaponsHoldFor(ent(20))); // death/disconnect clears it with the membership
+}

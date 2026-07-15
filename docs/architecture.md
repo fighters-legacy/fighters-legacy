@@ -205,6 +205,7 @@ development (pre-`kProtocolVersion` freeze), a dated **decision record** (see be
 | Weather and time of day | Server-authoritative `WeatherController` in `engine/weather/` | Autonomous cycle (Clear→PartlyCloudy→Overcast→Rain→Storm); `Snow` and `Blizzard` are operator-set presets that do not participate in the autonomous cycle; 10× time-scale default, wind/gust/turbulence model; synced via `MsgWeatherState` (0x04) at ~6 Hz |
 | Entity system | Dynamic pool, no hard caps | No fixed object count limit |
 | Sensing / detection | **One `SensorDef` vocabulary** (dual search/track lobes, per-check PoD at a 10 Hz reference cadence) in a new `engine/sensor/`; **`Contact` tracks are the only downstream representation** — avionics, AI, Lua and missile seekers never read ground truth. Signatures are unitless multipliers (radar range × `sqrt(sig)`; IR/visual linear); AI entities with no declared sensors get an implicit builtin eyeball. | One schema serves player avionics (#526), AI detection (#670) and seekers (#628/#676) instead of three drifting fragments. Routing every consumer through `Contact` makes "no omniscience" structural rather than a rule reviewers must remember — ground truth is not reachable from a consumer. (2026-07-12 decision record, Epic F #677/#678.) |
+| Missile endgame resolution | **Probabilistic seeker, deterministic endgame**: missiles fly kinematically to impact; ALL probability lives in the seeker (PoD-gated acquisition/track through `Detection.h`, deterministic seeded dice; countermeasures modulate track-break/reacquisition); impact = proximity-fuze **geometry** → warhead. No terminal probability-of-kill table. | Resolves RFC #676. The honest-sensing framework landed after the RFC was filed and dissolves its dilemma: countermeasures are non-binary through the seeker rather than a Pk table, notching/kinematic defeat work as real geometry, one resolution path to test, and replay determinism comes free from the seeded dice. (2026-07-14 decision record, #583.) |
 | License | GPL v3 | Engine modifications must stay open source; protects community investment |
 | Hosting | GitHub, public repository | Unlimited Actions CI on public repos; GitHub Free sufficient |
 | Async file I/O backend | Worker thread + `std::mutex` queue (`SDL3AsyncFilesystem`) | `SDL_AsyncIO` deferred; consistent cross-platform behaviour without conditional compilation in the interface |
@@ -522,6 +523,41 @@ Two corollaries follow, and both are load-bearing:
 - **A search-only sensor (`lock_hold_s = 0`, e.g. the builtin eyeball) drops the instant its target
   leaves the cone.** You have not "lost track" of something you were only ever looking at — you have
   simply stopped seeing it.
+
+**2026-07-14 — Missile endgame resolution and the seeker vocabulary (Epic #583; resolves RFC
+#676).** RFC #676 asked how a missile shot ends: full kinematic guidance-to-impact, a tabletop
+probability-of-kill roll, or the hybrid it proposed — kinematic flyout with a data-driven terminal
+Pk table. The RFC's motivations were cost at scale, netcode sensitivity, and countermeasures
+degenerating to a binary hit/miss. All three predate the honest-sensing framework (#670/#677–#685),
+which changes the answer:
+
+- **Missiles fly kinematically to impact, and ALL probability lives in the seeker.** A seeker is
+  the third consumer of the `SensorDef` vocabulary, evaluated through the same `Detection.h` math
+  as every observer: PoD-gated acquisition and lock, geometry-maintained tracks, coast and
+  geometric reacquisition — the 2026-07-13 "PoD gates acquisition" amendment binds seekers
+  explicitly. Chaff and flares (#529) will modulate track-break and reacquisition through a seam on
+  the seeker, which is where countermeasures stop being binary. The endgame itself is
+  **deterministic geometry**: proximity-fuze radius → warhead application. There is no terminal Pk
+  table — a missile that misses missed because of geometry the defender flew, not a die.
+- Why the RFC's drawbacks no longer bind: the #573/#580 load characterization showed the
+  integrate/AI phases stay cheap at 5000 entities (serialize is the cliff, and projectiles
+  interest-filter like any entity); the quantized snapshot path (#515–#518) carries short-lived
+  entities within budget; and the seeded-dice idiom (`detectionHash`) makes every roll reproducible
+  from `(ids, tick)` — the replay/reconciliation requirement the RFC worried about is free.
+  Probabilistic outcomes in PvP resolve to seeker dice a defender can influence (signature, aspect,
+  countermeasures), not a fate roll at terminal range.
+- **The weapon `[seeker]` migration named by the 2026-07-12 record is executed here**: `sensor_id`
+  references a sensor def; the ad-hoc `fov_deg`/`acquisition_nm` lobe is deprecated (parsed for one
+  release, warned on by the bootstrap and `validate-weapon`). What stays on the weapon is about the
+  *shot*, not the sensor: `fire_and_forget`, `requires_designator`, `pitbull_nm` (ARH goes-active
+  range — and the missile starts *emitting*, which is what RWR will see), and loft shaping
+  (`loft_bias_deg`/`loft_range_nm`).
+- **Deferred, named so they are not reinvented ad hoc:** a missile-launch/pitbull warning for the
+  *targeted* player is RWR semantics and lands with #529 — wiring it off the cosmetic effect
+  stream would be an omniscient warning (every launch in interest range, wallhack-grade). The
+  weapon-audio layer built under #631 is #583's *mechanism* (one-shot 3D SFX with procedural
+  fallbacks); the E-AUD epic (#586) owns everything continuous, looped or mix-managed and extends
+  that mechanism rather than replacing it.
 
 ## Content Pack Architecture
 

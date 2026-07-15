@@ -71,6 +71,8 @@ add_library(engine-audio STATIC
     audio/PlaylistLoader.cpp
     audio/MusicManager.cpp
     audio/VoiceCalloutManager.cpp
+    audio/SfxBuiltinSounds.cpp
+    audio/SfxManager.cpp
 )
 target_include_directories(engine-audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-audio
@@ -117,6 +119,7 @@ add_library(engine-entity STATIC
     entity/EntityTypeRegistry.cpp
     entity/EntityDefParser.cpp
     entity/EntityManager.cpp
+    entity/DamageApplication.cpp
 )
 
 target_include_directories(engine-entity PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -163,6 +166,7 @@ add_library(engine-flight STATIC
     flight/FlightModelParser.cpp
     flight/AeroForces.cpp
     flight/FlightIntegrator.cpp
+    flight/BallisticForceModel.cpp
     flight/FixedWingForceModel.cpp
     flight/Trim.cpp
 )
@@ -184,11 +188,17 @@ add_library(engine-weapon STATIC
     weapon/WeaponDefParser.cpp
     weapon/WeaponRegistry.cpp
     weapon/Loadout.cpp
+    weapon/FireControl.cpp
+    weapon/ProjectileSystem.cpp
+    weapon/Seeker.cpp
 )
 target_include_directories(engine-weapon PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-weapon
     PUBLIC  engine-flight   # PayloadEffect is in the defaultPayload() signature
-    PRIVATE engine-entity   # EntityDef::hardpoints, read only
+            platform-hal    # GLM for the projectile point-mass math (#625)
+    PRIVATE engine-entity   # EntityDef::hardpoints, read only; the projectile pool mirrors entities
+            engine-spatial  # contact-fuze broadphase
+            engine-sensor   # the seeker runs the shared Detection.h machine (#627)
             tomlplusplus::tomlplusplus
 )
 
@@ -303,6 +313,7 @@ target_link_libraries(engine-net
     PUBLIC  engine-protocol
             engine-compress
             engine-entity
+            engine-weapon    # the fire path: FireControl + ProjectileSystem (#625)
             engine-sensor
             engine-spatial
             engine-job

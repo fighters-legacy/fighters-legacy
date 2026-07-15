@@ -23,8 +23,7 @@ category = "air-to-air"
 
 [seeker]
 type            = "active-radar"
-fov_deg         = 60
-acquisition_nm  = 20
+sensor_id       = "aim120c-seeker"
 fire_and_forget = true
 
 [performance]
@@ -41,6 +40,27 @@ damage          = 100
 [load]
 weight_lb   = 335
 drag_factor = 0.008
+)toml";
+
+// A seeker sensor def that sees as far as the weapon shoots (30 nm max range above).
+const char* kSeekerSensor = R"toml(
+[sensor]
+id      = "aim120c-seeker"
+name    = "AMRAAM seeker head"
+type    = "radar"
+emitter = true
+
+[search]
+az_half_angle_deg = 60.0
+el_half_angle_deg = 60.0
+max_range_nm      = 16.0
+pod               = 0.5
+
+[track]
+az_half_angle_deg = 40.0
+el_half_angle_deg = 40.0
+max_range_nm      = 14.0
+pod               = 0.6
 )toml";
 
 bool hasSubstr(const std::vector<std::string>& v, const std::string& needle) {
@@ -66,16 +86,11 @@ struct TempPack {
     }
 
     void write(const fs::path& rel, const std::string& content) const {
+        fs::create_directories((root / rel).parent_path());
         std::ofstream f(root / rel);
         f << content;
     }
 };
-
-std::string entityWithHardpoint(const std::string& allowed, const std::string& def) {
-    return "[entity]\nid=\"test:f15\"\nname=\"F-15\"\ncategory=\"air_vehicle\"\nmax_hp=100.0\n\n"
-           "[[hardpoints]]\nslot=0\ntype=\"missile\"\nallowed=[" +
-           allowed + "]\ndefault=\"" + def + "\"\n";
-}
 
 } // namespace
 
@@ -122,66 +137,96 @@ TEST_CASE("Implausible-but-legal values warn without failing", "[weapon-validato
         CHECK(hasSubstr(r.warnings, "unpowered"));
     }
 
-    SECTION("a seeker that cannot see as far as the weapon shoots") {
+    SECTION("a legacy seeker that cannot see as far as the weapon shoots") {
         std::string s(kValidMissile);
-        s.replace(s.find("acquisition_nm  = 20"), std::string("acquisition_nm  = 20").size(), "acquisition_nm  = 2");
+        s.replace(s.find("sensor_id       = \"aim120c-seeker\""),
+                  std::string("sensor_id       = \"aim120c-seeker\"").size(),
+                  "fov_deg         = 60\nacquisition_nm  = 2");
         const auto r = validateWeapon(s);
         CHECK(r.ok);
         CHECK(hasSubstr(r.warnings, "acquisition_nm"));
     }
 }
 
-TEST_CASE("Pack cross-check resolves hardpoint weapon references", "[weapon-validator]") {
+TEST_CASE("The deprecated legacy seeker lobe warns", "[weapon-validator]") {
+    std::string s(kValidMissile);
+    s.replace(s.find("sensor_id       = \"aim120c-seeker\""),
+              std::string("sensor_id       = \"aim120c-seeker\"").size(), "fov_deg         = 60\nacquisition_nm  = 20");
+    const auto r = validateWeapon(s);
+    CHECK(r.ok); // one release of grace — a warning, not an error
+    CHECK(hasSubstr(r.warnings, "sensor_id"));
+}
+
+TEST_CASE("Pack mode validates every weapon file", "[weapon-validator]") {
+    // The hardpoint↔weapon cross-check moved to validate-entity --pack (#829) — the references
+    // live in entity files. This tool's pack mode owns the WEAPONS: per-file schema +
+    // plausibility, and duplicate-id detection across files.
     TempPack pack;
     pack.write("weapons/aim120c.toml", kValidMissile);
+    pack.write("sensors/aim120c_seeker.toml", kSeekerSensor);
 
-    SECTION("every referenced weapon exists") {
-        pack.write("entities/f15.toml", entityWithHardpoint("\"aim120c\"", "aim120c"));
-        const auto r = validatePackLoadouts(pack.root.string());
+    SECTION("a valid pack passes cleanly") {
+        const auto r = validatePackWeapons(pack.root.string());
         CHECK(r.ok);
         CHECK(r.errors.empty());
+        CHECK(r.warnings.empty());
     }
 
-    SECTION("a typo'd weapon id in allowed is caught") {
-        // This is the failure the tool exists for: today it produces an aircraft with a station
-        // that silently carries nothing.
-        pack.write("entities/f15.toml", entityWithHardpoint("\"aim120c\", \"aim9x\"", "aim120c"));
-        const auto r = validatePackLoadouts(pack.root.string());
+    SECTION("a seeker sensor_id that resolves to nothing is an error") {
+        std::string s(kValidMissile);
+        s.replace(s.find("id       = \"aim120c\""), std::string("id       = \"aim120c\"").size(),
+                  "id       = \"blind\"");
+        s.replace(s.find("aim120c-seeker"), std::string("aim120c-seeker").size(), "no-such-seeker");
+        pack.write("weapons/blind.toml", s);
+        const auto r = validatePackWeapons(pack.root.string());
         CHECK_FALSE(r.ok);
-        CHECK(hasSubstr(r.errors, "aim9x"));
+        CHECK(hasSubstr(r.errors, "no-such-seeker"));
     }
 
-    SECTION("a typo'd default is caught") {
-        pack.write("entities/f15.toml", entityWithHardpoint("\"aim120c\"", "aim120x"));
-        const auto r = validatePackLoadouts(pack.root.string());
-        CHECK_FALSE(r.ok);
-        CHECK(hasSubstr(r.errors, "aim120x"));
+    SECTION("a seeker whose resolved lobe is far shorter than the weapon's reach warns") {
+        std::string shortEyes(kSeekerSensor);
+        shortEyes.replace(shortEyes.find("max_range_nm      = 16.0"), std::string("max_range_nm      = 16.0").size(),
+                          "max_range_nm      = 2.0");
+        pack.write("sensors/aim120c_seeker.toml", shortEyes);
+        const auto r = validatePackWeapons(pack.root.string());
+        CHECK(r.ok);
+        CHECK(hasSubstr(r.warnings, "search lobe"));
     }
 
     SECTION("a malformed weapon file is reported, not silently skipped") {
         pack.write("weapons/broken.toml", "[weapon]\nid=\"broken\"\n");
-        pack.write("entities/f15.toml", entityWithHardpoint("\"aim120c\"", "aim120c"));
-        const auto r = validatePackLoadouts(pack.root.string());
+        const auto r = validatePackWeapons(pack.root.string());
         CHECK_FALSE(r.ok);
         CHECK(hasSubstr(r.errors, "broken.toml"));
     }
 
     SECTION("duplicate weapon ids across files are caught") {
         pack.write("weapons/copy.toml", kValidMissile); // same id
-        const auto r = validatePackLoadouts(pack.root.string());
+        const auto r = validatePackWeapons(pack.root.string());
         CHECK_FALSE(r.ok);
         CHECK(hasSubstr(r.errors, "duplicate weapon id"));
     }
+
+    SECTION("plausibility warnings carry the file name") {
+        std::string s(kValidMissile);
+        s.replace(s.find("id       = \"aim120c\""), std::string("id       = \"aim120c\"").size(),
+                  "id       = \"heavy\"");
+        s.replace(s.find("weight_lb   = 335"), std::string("weight_lb   = 335").size(), "weight_lb   = 90000");
+        pack.write("weapons/heavy.toml", s);
+        const auto r = validatePackWeapons(pack.root.string());
+        CHECK(r.ok); // implausible is legal
+        CHECK(hasSubstr(r.warnings, "heavy.toml"));
+    }
 }
 
-TEST_CASE("A pack with no entities or weapons has nothing to cross-check", "[weapon-validator]") {
+TEST_CASE("A pack with no weapons has nothing to validate", "[weapon-validator]") {
     TempPack pack;
-    const auto r = validatePackLoadouts(pack.root.string());
+    const auto r = validatePackWeapons(pack.root.string());
     CHECK(r.ok);
     CHECK(r.errors.empty());
 }
 
 TEST_CASE("A missing pack directory is an error", "[weapon-validator]") {
-    const auto r = validatePackLoadouts("/nonexistent/pack/dir");
+    const auto r = validatePackWeapons("/nonexistent/pack/dir");
     CHECK_FALSE(r.ok);
 }
