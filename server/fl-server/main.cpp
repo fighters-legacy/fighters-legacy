@@ -52,6 +52,7 @@
 #include <flight/FlightModelParser.h>
 #include <job/JobSystem.h>
 #include <loop/GameLoop.h>
+#include <mission/BuiltinMissions.h>
 #include <mission/Mission.h>
 #include <mission/MissionParser.h>
 #include <mission/MissionReport.h>
@@ -855,13 +856,22 @@ int main(int argc, char** argv) {
     std::string loadedMissionName; // for the #856 headless report
     uint64_t loadedMissionSpawned = 0;
     if (!missionToLoad.empty()) {
-        auto missionAsset = assets.loadMission(missionToLoad.c_str());
-        if (!missionAsset) {
+        // Builtin missions (#868) resolve FIRST, with no pack: `--mission builtin:sandbox` exercises the
+        // mission runtime + Instant Action zero-pack. Otherwise fall back to a pack mission asset.
+        std::string yaml;
+        bool missionFound = false;
+        if (std::string_view b = fl::builtinMissionYaml(missionToLoad); !b.empty()) {
+            yaml.assign(b);
+            missionFound = true;
+        } else if (auto missionAsset = assets.loadMission(missionToLoad.c_str())) {
+            yaml.assign(missionAsset->bytes.begin(), missionAsset->bytes.end());
+            missionFound = true;
+        }
+        if (!missionFound) {
             char buf[160];
             std::snprintf(buf, sizeof(buf), "mission '%.96s' not found — starting empty", missionToLoad.c_str());
             log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
         } else {
-            const std::string yaml(missionAsset->bytes.begin(), missionAsset->bytes.end());
             fl::MissionParseResult parsed = fl::parseMission(yaml);
             if (!parsed.ok) {
                 char buf[192];
