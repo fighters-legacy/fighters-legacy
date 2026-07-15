@@ -399,3 +399,12 @@ TEST_CASE("particle spawn accumulation: remainder stays non-negative and below 1
         }
     }
 }
+
+TEST_CASE("registerBuiltinParticlePresets registers the named engine presets (#869)") {
+    fl::ParticleSystem ps;
+    fl::registerBuiltinParticlePresets(ps);
+    for (const char* name : {"explosion", "fire", "smoke", "muzzle_flash", "impact_sparks", "missile_smoke", "rain",
+                             "storm_rain", "snow", "storm_snow"})
+        CHECK(ps.getPreset(name).has_value());
+    CHECK_FALSE(ps.getPreset("no_such_preset").has_value());
+}

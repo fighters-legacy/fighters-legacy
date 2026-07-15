@@ -201,3 +201,19 @@ TEST_CASE("SfxManager: 16 voices round-robin (steal-oldest)", "[sfx]") {
     CHECK(audio.plays == 40);
     CHECK(static_cast<int>(audio.srcState.size()) <= SfxManager::kMaxVoices);
 }
+
+TEST_CASE("registerBuiltinSfxPresets registers the named weapon SFX presets (#869)", "[sfx]") {
+    NullLoggerSfx log;
+    TrackingAudio audio;
+    SfxManager sfx;
+    sfx.init(&audio, nullptr, &log);
+    registerBuiltinSfxPresets(sfx); // the engine entry point the game client now calls
+
+    const AudioSettings settings;
+    for (const char* name : {"sfx.gunfire", "sfx.launch", "sfx.release", "sfx.impact", "sfx.explosion"})
+        sfx.play(name, {0, 0, 0}, {0, 0, 0}, settings);
+    CHECK(audio.plays == 5); // every named preset resolved to a builtin PCM and played
+
+    sfx.play("sfx.nope", {0, 0, 0}, {0, 0, 0}, settings);
+    CHECK(audio.plays == 5); // an unregistered name is still a silent no-op
+}

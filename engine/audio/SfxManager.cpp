@@ -126,4 +126,12 @@ void SfxManager::shutdown() {
     m_audio = nullptr;
 }
 
+void registerBuiltinSfxPresets(SfxManager& sfx) {
+    sfx.registerPreset("sfx.gunfire", "sfx/gunfire", SfxKind::Gunfire);
+    sfx.registerPreset("sfx.launch", "sfx/launch", SfxKind::Launch);
+    sfx.registerPreset("sfx.release", "sfx/release", SfxKind::Release);
+    sfx.registerPreset("sfx.impact", "sfx/impact", SfxKind::Impact);
+    sfx.registerPreset("sfx.explosion", "sfx/explosion", SfxKind::Explosion);
+}
+
 } // namespace fl

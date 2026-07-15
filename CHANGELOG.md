@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **engine**: Builtin particle + weapon-SFX preset registration moved from the game client into the engine (`registerBuiltinParticlePresets` in engine-render, `registerBuiltinSfxPresets` in engine-audio), so any frontend that links the engine gets the named presets (`explosion`, `muzzle_flash`, `sfx.gunfire`, …) instead of re-registering them by hand. No behavior change (#869)
+
 ### Added
 
 - **audio**: Procedural builtin music + default playlist — deterministic, byte-stable compiled-in loops (menu / patrol / combat, `generateBuiltinMusic`) and a builtin `PlaylistData` wiring them to game states, so `MusicManager`'s streaming / crossfade / state machine runs with no pack `playlist.toml` (it silently no-op'd before). A pack playlist still overrides it; a null `IAudio` stays a clean no-op — mirrors the `SfxBuiltinSounds` pattern (#865)
