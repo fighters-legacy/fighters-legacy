@@ -643,7 +643,7 @@ TEST_CASE("ClientNetEventHandler: version mismatch message not overwritten by on
     CHECK(failMsg.load() == SessionFailure::VersionMismatch);
 }
 
-TEST_CASE("ClientNetEventHandler: onDisconnect does not signal when assignedEntityIdx is nonzero",
+TEST_CASE("ClientNetEventHandler: onDisconnect does not signal after a successful ConnectAck (#853)",
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
@@ -654,11 +654,46 @@ TEST_CASE("ClientNetEventHandler: onDisconnect does not signal when assignedEnti
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
     handler.sessionFailure = &failMsg;
-    handler.assignedEntityIdx = 1u; // simulates mid-flight disconnect
 
     handler.onConnect(0u);
+    // A ConnectAck marks the connection as established. The rejection sentinel now keys on "did an ack
+    // arrive", not assignedEntityIdx==0, so a mid-flight disconnect is not reported as a rejection.
+    fl::MsgConnectAck ack{};
+    ack.assignedEntityIdx = 1u;
+    ack.assignedEntityGen = 1u;
+    ack.grantedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+    std::vector<uint8_t> pkt(sizeof(ack));
+    std::memcpy(pkt.data(), &ack, sizeof(ack));
+    handler.onReceive(0u, pkt.data(), pkt.size());
     handler.onDisconnect(0u);
 
+    CHECK(failMsg.load() == SessionFailure::None);
+}
+
+TEST_CASE("ClientNetEventHandler: an observer's entity-less ack is not a rejection (#857)",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    std::atomic<SessionFailure> failMsg{SessionFailure::None};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.sessionFailure = &failMsg;
+
+    handler.onConnect(0u);
+    // Observer ack: assignedEntityGen == 0 (no entity) but grantedRole == Observer. This must count as
+    // a successful connect — the old assignedEntityIdx==0 sentinel would have misread it as a rejection.
+    fl::MsgConnectAck ack{};
+    ack.assignedEntityIdx = 0u;
+    ack.assignedEntityGen = 0u;
+    ack.grantedRole = static_cast<uint8_t>(fl::PeerRole::Observer);
+    std::vector<uint8_t> pkt(sizeof(ack));
+    std::memcpy(pkt.data(), &ack, sizeof(ack));
+    handler.onReceive(0u, pkt.data(), pkt.size());
+    CHECK(handler.grantedRole() == fl::PeerRole::Observer);
+    handler.onDisconnect(0u);
     CHECK(failMsg.load() == SessionFailure::None);
 }
 

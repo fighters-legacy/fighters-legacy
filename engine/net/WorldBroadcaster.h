@@ -98,6 +98,15 @@ struct PeerInputState {
     uint32_t lastWingmanSeq{0};                                    // dup/reorder guard
     bool hasWingmanSeq{false};         // false until the first order (a reconnect restarts the counter)
     bool wingmanRateLimitAcked{false}; // one RateLimited ack per window, never one per packet
+
+    // Connect handshake (#853/#857). Set when MsgConnectRequest is processed. Before that a connected
+    // peer has an input slot (so idle-timeout covers it) but no entity, no role, and no snapshot
+    // delivery -- it is not admitted until it sends a request.
+    PeerRole role{PeerRole::Pilot};
+    bool handshakeComplete{false}; // false until MsgConnectRequest processed; guards duplicate requests
+    // Interest center for an ENTITY-LESS observer (#857): a pilot centers interest on its aircraft, an
+    // observer on this point. Placeholder seam for #858 (camera-position interest); unused for pilots.
+    glm::dvec3 interestCenter{0.0, 0.0, 0.0};
 };
 
 // Snapshot of a connected peer's state, delivered by forEachPeer. The struct form makes future
@@ -141,17 +150,20 @@ struct ControlledEntity {
 // instead of remembering six separate "call before gameLoop.start()" setters. The hot-reload setters
 // (setMotd, setBannedAddresses, setAllowedAddresses, ...) remain available for runtime changes.
 struct WorldBroadcasterConfig {
-    int connectRateLimit{5};          // max connects per window per IP
-    int connectRateWindowS{10};       // sliding-window length (seconds)
-    int floodMultiplier{3};           // MsgClientInput flood threshold multiplier
-    int maxConnectionsPerIp{0};       // simultaneous connections per IP; 0 = unlimited
-    int adminAuthMaxFailures{5};      // wrong operator passwords before per-IP lockout
-    int adminAuthLockoutSeconds{300}; // lockout duration (seconds)
-    std::string motd;                 // empty = no MOTD
-    uint16_t motdDisplaySeconds{0};   // 0 = client default
-    std::string operatorPassword;     // empty = network admin channel disabled
-    int idleTimeoutS{0};              // 0 = disabled; seconds of peer inactivity before disconnect
-    float drawDistanceKm{200.f};      // per-peer interest radius; 0 = degenerate (empty snapshots)
+    int connectRateLimit{5};                              // max connects per window per IP
+    int connectRateWindowS{10};                           // sliding-window length (seconds)
+    int floodMultiplier{3};                               // MsgClientInput flood threshold multiplier
+    int maxConnectionsPerIp{0};                           // simultaneous connections per IP; 0 = unlimited
+    int adminAuthMaxFailures{5};                          // wrong operator passwords before per-IP lockout
+    int adminAuthLockoutSeconds{300};                     // lockout duration (seconds)
+    std::string motd;                                     // empty = no MOTD
+    uint16_t motdDisplaySeconds{0};                       // 0 = client default
+    std::string operatorPassword;                         // empty = network admin channel disabled
+    std::string playerEntityType{"builtin:debug-entity"}; // pilot spawn default when client requests none (#834)
+    bool allowObservers{true};                            // #857: false = refuse observer connect requests
+    std::vector<std::string> requiredPacks;               // #872: pack ids a client should have; missing = warn
+    int idleTimeoutS{0};                                  // 0 = disabled; seconds of peer inactivity before disconnect
+    float drawDistanceKm{200.f};                          // per-peer interest radius; 0 = degenerate (empty snapshots)
     double spatialCellSizeM{10000.0}; // SpatialIndex cell size (m); 0 = auto from draw distance; restart-only
     uint32_t snapshotBudgetBytes{0};  // per-client snapshot byte budget; 0 = unlimited (#516)
     bool compressSnapshots{false};    // zstd snapshot payload compression (#775); internal default
@@ -684,8 +696,33 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         m_jobs = &jobs;
     }
 
+  public:
+    // Change a connected peer's role mid-session without a reconnect (#857). pilot->observer despawns
+    // the peer's entity; observer->pilot spawns one and re-sends MsgConnectAck so the client learns its
+    // new assigned entity + role. No-op if the peer is unknown, not yet admitted, or already in the
+    // target role. Sim-thread only (call via GameLoop::enqueueSimCallback from admin/gameplay code);
+    // shares the spawn/teardown mechanism with connect/disconnect — the same seam #648 (death ->
+    // spectator -> respawn) reuses.
+    void setPeerRole(uint32_t peerId, PeerRole role);
+
   private:
-    void sendConnectAck(uint32_t peerId, EntityId assigned);
+    // Handle MsgConnectRequest (#853): grant a role, admit the peer (pilot = spawn its entity + form its
+    // flight; observer = no entity), reply MsgConnectAck, and send the MOTD. Replaces the old "server
+    // spawns on connect" flow. Sim-thread only (called from onReceive).
+    void handleConnectRequest(uint32_t peerId, const void* data, std::size_t size);
+    // Spawn a pilot peer's entity of `entityType`, register its PeerController, stamp faction, and form
+    // its flight. Returns the assigned EntityId (invalid on spawn failure). Extracted from the old
+    // onConnect. Sim-thread.
+    EntityId admitPilot(uint32_t peerId, const std::string& entityType);
+    // Resolve the entity type to spawn for a pilot (#834): a client-requested type wins iff it is a
+    // REGISTERED type (server-clamped allowlist); otherwise the [world] player_entity_type default;
+    // otherwise builtin:debug-entity. An unregistered request falls back with an Info log.
+    std::string resolvePlayerEntityType(const char* requested) const;
+    // Tear down a peer's entity: its owned formation + AI members, its controller, sensor observer, and
+    // the entity itself; erase from m_peerEntities. Does NOT touch m_peerInputs (the peer keeps its
+    // slot). Shared by onDisconnect (and setPeerRole once #857 lands). Sim-thread.
+    void despawnPeerEntity(uint32_t peerId);
+    void sendConnectAck(uint32_t peerId, EntityId assigned, PeerRole grantedRole);
     void sendConnectRefusal(uint32_t peerId, ConnectRefusalCode code, const char* reason);
     // Send a complete admin command result over ENet. Short results (<=kAdminResponseFastPathMax
     // chars) go as a single MsgAdminResponse; longer results are streamed as MsgAdminResponseChunk
@@ -749,7 +786,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     FlightOrderHandler m_flightOrderHandler; // null = the order channel is off; orders are discarded
     TargetDesignator m_targetDesignator;     // null = attack orders always refuse (never invent a target)
     uint16_t m_playerFaction{1};             // 0 restores the legacy neutral-player behavior
-    int m_flightCmdRateLimit{4};             // orders per second per peer
+    std::string m_playerEntityType{"builtin:debug-entity"}; // pilot spawn default when client requests none (#834)
+    bool m_allowObservers{true};                            // #857: false = refuse observer connect requests
+    std::vector<std::string> m_requiredPacks;               // #872: pack ids a client should have; missing = warn
+    int m_flightCmdRateLimit{4};                            // orders per second per peer
     // EntityId.index -> {sim, controller}. Replaces the old peerId-keyed flight-sim map: any control
     // source (peer, AI, script) registers here and is stepped uniformly in onTick.
     std::unordered_map<uint32_t, ControlledEntity> m_controlledEntities;
@@ -1012,8 +1052,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // it points at. The sim thread then flushes buf via m_net.send. buf retains capacity across ticks.
     struct PeerSnapWork {
         uint32_t peerId{};
-        EntityId peerEid;
-        const EntityState* peerState{nullptr};
+        EntityId peerEid;                      // invalid for an observer (no entity) (#857)
+        const EntityState* peerState{nullptr}; // null for an observer
+        double center[3]{};                    // interest center: the pilot's entity, or the observer's point
+
         PeerInputState* pin{nullptr};
         std::unordered_map<uint32_t, PeerEntityRec>* knownGens{nullptr};
         std::unordered_map<uint32_t, uint8_t>* pending{nullptr};

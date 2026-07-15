@@ -57,10 +57,14 @@ static const char* kDefaultToml =
     "\n"
     "[mods]\n"
     "stack = []\n"
+    "# required = [\"fl-base\"]           # content packs a client should have mounted; missing = warn (#872)\n"
     "\n"
     "[world]\n"
     "save_path = \"world.sav\"\n"
     "autosave_interval_s = 300\n"
+    "# player_entity_type = \"builtin:debug-entity\"  # aircraft a connecting pilot flies when the\n"
+    "#                                  # client requests none; clamped to a registered type (#834).\n"
+    "# allow_observers = true           # false = refuse observer-role (spectator) connections (#857).\n"
     "# planet_radius_m = 6371000        # planet sphere radius (m); Earth default\n"
     "# player_faction = 1               # faction stamped on every player entity on connect (#610).\n"
     "#                                  # MUST be non-zero for combat: faction 0 is NEUTRAL, and a\n"
@@ -379,10 +383,19 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 if (auto s = elem.value<std::string>())
                     cfg.modStack.push_back(std::move(*s));
         }
+        if (auto* arr = tbl["mods"]["required"].as_array()) { // #872 warn-only required-pack ids
+            for (auto& elem : *arr)
+                if (auto s = elem.value<std::string>())
+                    cfg.requiredPacks.push_back(std::move(*s));
+        }
 
         // [world]
         if (auto v = tbl["world"]["save_path"].value<std::string>())
             cfg.worldSavePath = std::move(*v);
+        if (auto v = tbl["world"]["player_entity_type"].value<std::string>())
+            cfg.playerEntityType = std::move(*v); // clamped to a registered type at spawn (#834)
+        if (auto v = tbl["world"]["allow_observers"].value<bool>())
+            cfg.allowObservers = *v; // #857
         if (auto v = tomlInt(tbl["world"]["autosave_interval_s"]))
             cfg.worldAutosaveIntervalS = static_cast<int>(*v);
         if (auto v = tomlInt(tbl["world"]["entity_soft_cap"])) {

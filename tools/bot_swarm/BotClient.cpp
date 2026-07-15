@@ -72,6 +72,16 @@ void BotClient::onConnect(uint32_t /*peerId*/) {
     m_metrics.connected = true;
     m_metrics.connectMs = (m_now - m_connectStart) * 1000.0;
     m_activeStart = m_now;
+
+    // #853 unified connect handshake: the client speaks first. Send MsgConnectRequest so the server
+    // admits this bot as a PILOT (spawns its entity and delivers snapshots) — without it the server
+    // never admits the peer and no snapshots flow, so the scale gate would measure nothing. A synthetic
+    // bot mounts no packs and requests the server's default entity type (empty manifest + type).
+    if (m_net) {
+        MsgConnectRequest req{};
+        req.requestedRole = static_cast<uint8_t>(PeerRole::Pilot);
+        m_net->send(0, &req, sizeof(req), /*reliable=*/true);
+    }
 }
 
 void BotClient::onDisconnect(uint32_t /*peerId*/) {

@@ -61,9 +61,12 @@ visibility = "public"
 
 [mods]
 stack = []
+# required = ["fl-base"]              # content packs a connecting client should have mounted; missing = warn (#872)
 
 [world]
 player_faction = 1  # faction stamped on every player; MUST be non-zero for combat (see below)
+# player_entity_type = "builtin:debug-entity"  # aircraft a connecting pilot flies when the client requests none (#834)
+# allow_observers    = true          # false = refuse observer-role (spectator) connections (#857)
 save_path          = "world.sav"
 autosave_interval_s = 300
 time_scale         = 10.0        # game seconds per real second; 10 = full day/night ≈ 2.4 real hours
@@ -352,6 +355,25 @@ Example:
 stack = ["fl-base-pack", "my-theater-mod"]
 ```
 
+### `required`
+
+| Type | Default |
+|---|---|
+| array of strings | `[]` |
+
+Content pack ids a connecting client is expected to have mounted (#872). The connect handshake
+carries the client's mounted-pack manifest, and the server compares it against this list. **Phase 4
+policy is warn-only**: a client missing a required pack is logged (`peer is missing required content
+pack '…'`) but still admitted — replacing today's silent placeholder fallback with a visible signal.
+Version/content-hash matching, refuse / allow-placeholder modes, and the client-side "missing
+content" UX land with the full required-pack policy (Phase 5). IDs match the `[mod].id` field in each
+pack's `manifest.toml`.
+
+```toml
+[mods]
+required = ["fl-base"]
+```
+
 ---
 
 ## [world] — Persistent world settings
@@ -430,6 +452,30 @@ rather than a configuration.
 > (Epic E).
 
 Setting `0` restores the pre-#610 behaviour exactly.
+
+### `player_entity_type`
+
+| Type | Default | Range |
+|---|---|---|
+| string | `"builtin:debug-entity"` | any registered entity type id |
+
+The aircraft a connecting **pilot** flies when the client requests no specific type (#834). A client
+may request a specific type via `MsgConnectRequest` (game client flag `--aircraft <id>`); the server
+**clamps** the request to a *registered* type — an unregistered request falls back to this default
+(logged at Info), which itself falls back to `builtin:debug-entity` if unregistered. This makes "boot
+a server, connect, look at the aeroplane" a config change instead of an engine patch: point it at a
+pack aircraft (e.g. `player_entity_type = "fl-base:f5e"`) and every connecting pilot flies it.
+
+### `allow_observers`
+
+| Type | Default | Range |
+|---|---|---|
+| boolean | `true` | `true` / `false` |
+
+Whether the server accepts **observer-role** (spectator) connections (#857). An observer joins with
+no aircraft, `FlightIntegrator`, or controller and still receives world snapshots. When `false`, an
+observer connect request is refused with `ConnectRefusalCode::RoleDenied`. A peer's role is also
+switchable mid-session with the `set_role <peerId> <pilot|observer>` admin command.
 
 ### `draw_distance_km`
 

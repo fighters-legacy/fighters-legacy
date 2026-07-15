@@ -335,6 +335,9 @@ struct GameServices {
     std::string connectHost;
     uint16_t connectPort{4778};
     std::string operatorPassword; // merged: CLI arg > FL_OPERATOR_PASSWORD > [client].operator_password
+    std::string
+        requestedEntityType;     // --aircraft: aircraft to request in MsgConnectRequest; empty = server default (#834)
+    bool requestObserver{false}; // --observer: join as a spectator (no aircraft) (#857)
 
     // HUD / overlays
     EnvironmentState env;
@@ -483,7 +486,14 @@ bool Game::initPlatform(int argc, char** argv) {
             parseConnectArg(argv[i + 1], d.services.connectHost, d.services.connectPort);
         else if (std::strcmp(argv[i], "--operator-password") == 0)
             d.services.operatorPassword = argv[i + 1];
+        else if (std::strcmp(argv[i], "--aircraft") == 0)
+            d.services.requestedEntityType = argv[i + 1]; // request a specific type; server clamps (#834)
     }
+
+    // Value-less flags (scanned separately so they work as the final argument too).
+    for (int i = 1; i < argc; ++i)
+        if (std::strcmp(argv[i], "--observer") == 0)
+            d.services.requestObserver = true; // join as a spectator, no aircraft (#857)
 
     // Merge operator password: CLI arg > FL_OPERATOR_PASSWORD env var > [client].operator_password.
     // SDL_getenv is cross-platform (wraps GetEnvironmentVariableA on Windows).
@@ -891,6 +901,23 @@ void Game::startGame() {
         d.services.effectRouter.reset();                             // no stale effects across sessions
         d.session.clientHandler->motdDisplaySeconds = d.services.userConfig->client().motdDisplayS;
         d.session.clientHandler->sessionFailure = &d.session.sessionFailure;
+        // Connect-handshake inputs (#853/#834/#857): request a specific aircraft if --aircraft was given
+        // (empty = let the server pick its [world] player_entity_type default), and the observer role if
+        // --observer was given (a spectator with no aircraft).
+        d.session.clientHandler->requestedEntityType = d.services.requestedEntityType;
+        d.session.clientHandler->requestedRole =
+            d.services.requestObserver ? fl::PeerRole::Observer : fl::PeerRole::Pilot;
+        // Report the client's mounted content packs so the server can enforce its required-pack policy
+        // (#872 wire half). Warn-only server-side for now; content hashing is a later addition.
+        d.session.clientHandler->packManifest.clear();
+        if (d.services.assets) {
+            for (const auto& p : d.services.assets->packManifest()) {
+                fl::PackManifestEntry e{};
+                std::snprintf(e.id, sizeof(e.id), "%s", p.id.c_str());
+                std::snprintf(e.version, sizeof(e.version), "%s", p.version.c_str());
+                d.session.clientHandler->packManifest.push_back(e);
+            }
+        }
         d.session.clientNet->setEventHandler(d.session.clientHandler.get());
 
         if (!isMultiplayer) {
@@ -975,8 +1002,14 @@ void Game::startGame() {
         [&d]() -> bool {
             if (!d.services.renderBridge.hasSnapshot() || !d.session.clientHandler)
                 return false;
+            if (!d.session.clientHandler->gotConnectAck() || d.services.terrainStreamer->tileCount() == 0)
+                return false;
+            // Observer (#857): no ownship entity to wait for — a decoded ack + snapshot + terrain is
+            // enough. It free-flies a ghost camera; the full ghost UX is #859.
+            if (d.session.clientHandler->grantedRole() == fl::PeerRole::Observer)
+                return true;
             const uint32_t gen = d.session.clientHandler->assignedEntityGen;
-            if (gen == 0 || d.services.terrainStreamer->tileCount() == 0)
+            if (gen == 0)
                 return false;
             const uint32_t idx = d.session.clientHandler->assignedEntityIdx;
             for (const auto& e : d.services.renderBridge.current().entries)

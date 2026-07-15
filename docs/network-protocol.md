@@ -52,8 +52,9 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 
 | MsgId | Value | Direction | Channel | Size | Purpose |
 |-------|-------|-----------|---------|------|---------|
-| `Hello` | `0x00` | server→client | reliable | 4 bytes | Protocol version handshake; first message on every new connection |
-| `ConnectAck` | `0x01` | server→client | reliable | 16 + N×268 bytes | Handshake on connect; assigns entity slot and delivers type registry |
+| `Hello` | `0x00` | server→client | reliable | 4 bytes | Protocol version handshake; first message the **server** sends on every new connection |
+| `ConnectRequest` | `0x11` | client→server | reliable | 72 + N×128 bytes | The **client**'s join request (#853): role, requested entity type, and mounted-pack manifest. Sent first on connect; the server replies `ConnectAck` or `ConnectRefusal`. |
+| `ConnectAck` | `0x01` | server→client | reliable | 20 + N×268 bytes | Reply to `ConnectRequest`: granted role + assigned entity slot, then the type registry |
 | `WorldSnapshot` | `0x02` | server→client | unreliable | 24 + origin table + record stream + TLV | Per-tick entity state, unicast per peer; 24-byte header + shared-origin table + a byte-aligned stitched record stream (each record: origin index + a `full` bit) + TLV extension block — see *Quantized entity record* below |
 | `ClientInput` | `0x03` | client→server | unreliable | 56 bytes | Per-frame flight inputs + fire intents + selected weapon station |
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
@@ -68,7 +69,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `WingmanCommand` | `0x0D` | client→server | reliable | 16 bytes | Order a formation (#610). Authorized by **commanding the formation**, never by anything in the packet. Additive ID — old servers silently discard. |
 | `WingmanAck` | `0x0E` | server→client | reliable | 16 bytes | Outcome of an order, the on-connect flight check-in, or a radio call **relayed** to a human member of someone's flight. Carries a result **code**, never server-authored text. Additive ID. |
 | `CombatEvent` | `0x0F` | server→client | reliable | 4 + n×32 bytes | Kill feed (broadcast) + the receiving peer's own combat stats (unicast). A multiplexed record stream — this took the **last free ENet id**, so future gameplay events extend the record vocabulary, not the id space. Additive ID. |
-| `LanBeacon` | `0x10` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast |
+| `LanBeacon` | `0x20` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast. The ENet id space is `0x00–0x1F`; `0x20+` is reserved for raw-UDP/non-ENet ids (the boundary was raised from `0x10` in #853 to free an ENet id for `ConnectRequest`). |
 
 ## Struct Definitions
 
@@ -82,12 +83,19 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 > same-tree server in primary development. The version field only begins to bind at the Phase 7
 > (Platform Release) public-release freeze.
 
+### Connect handshake (#853)
+
+The join flow is a round trip. On connect the **server** runs its rejection gauntlet and sends
+`MsgHello`; the **client** sends `MsgConnectRequest` (role + requested entity type + mounted-pack
+manifest). The two cross on independent reliable streams — neither waits for the other. The server
+then admits the peer and replies `MsgConnectAck` (granting a role and, for a pilot, an entity), or
+`MsgConnectRefusal`. A peer that never sends a request is never admitted (no entity, no snapshots).
+
 ### MsgHello — 4 bytes
 
-Sent by the server on every new connection (reliable channel 0) **before** `MsgConnectAck`. The
-client must compare `protocolVersion` against its own compiled `kProtocolVersion` and call
-`disconnect()` immediately on mismatch. If `protocolVersion` matches, the client ignores this
-message and waits for `MsgConnectAck`.
+Sent by the server on every new connection (reliable channel 0). The client must compare
+`protocolVersion` against its own compiled `kProtocolVersion` and call `disconnect()` immediately on
+mismatch.
 
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
@@ -95,19 +103,51 @@ message and waits for `MsgConnectAck`.
 | 1 | 1 | `reserved` | `uint8_t` | Reserved, always 0 |
 | 2 | 2 | `protocolVersion` | `uint16_t` | Server's `kProtocolVersion`; client disconnects if this != its own `kProtocolVersion` |
 
-### MsgConnectAck — 16 bytes
+### MsgConnectRequest — 72 bytes (+ N×128-byte manifest records)
 
-Sent once per peer on connect (reliable channel 0), immediately followed by
-`typeCount` × `MsgEntityTypeDef` records.
+The client's first packet on connect (reliable channel 0). Followed by `packCount` ×
+`PackManifestEntry` records, then an optional TLV extension block (ExtTag `0x0500–0x05FF`, reserved
+for the RFC #871 entitlement token). `requestedEntityType` empty = let the server pick its
+`[world] player_entity_type` default (server-clamped to a registered type).
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x11` |
+| 1 | 1 | `requestedRole` | `uint8_t` | `PeerRole`: 0 = Pilot, 1 = Observer (server may clamp/deny) |
+| 2 | 2 | `protocolVersion` | `uint16_t` | Client's `kProtocolVersion` |
+| 4 | 2 | `packCount` | `uint16_t` | Number of trailing `PackManifestEntry` records |
+| 6 | 2 | `reserved` | `uint16_t` | Reserved, always 0 |
+| 8 | 64 | `requestedEntityType[64]` | `char[64]` | Null-terminated type id to fly; empty = server default |
+
+#### PackManifestEntry — 128 bytes
+
+One mounted content pack, reported for content-consistency negotiation (#872). `contentHash` is
+reserved (zero-filled) until a pack-hashing pass lands.
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 64 | `id[64]` | `char[64]` | Null-terminated pack id, e.g. `"fl-base"` |
+| 64 | 32 | `version[32]` | `char[32]` | Null-terminated version string |
+| 96 | 32 | `contentHash[32]` | `uint8_t[32]` | Reserved; all-zero = not computed |
+
+### MsgConnectAck — 20 bytes
+
+Reply to `MsgConnectRequest` (reliable channel 0), immediately followed by `typeCount` ×
+`MsgEntityTypeDef` records. Also re-sent on a mid-session role change (#857). `grantedRole` may
+differ from the requested role, and is load-bearing: an observer's valid ack carries
+`assignedEntityGen == 0` (no entity), so the client keys "rejected before ack" on **whether a
+ConnectAck arrived**, not on `assignedEntityIdx == 0`.
 
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
 | 0 | 1 | `msgId` | `uint8_t` | `0x01` |
 | 1 | 1 | `tickRateHz` | `uint8_t` | Server tick rate (60) |
 | 2 | 2 | `typeCount` | `uint16_t` | Number of `MsgEntityTypeDef` records that follow |
-| 4 | 4 | `assignedEntityIdx` | `uint32_t` | Pool slot of the entity assigned to this peer (0 if none) |
+| 4 | 4 | `assignedEntityIdx` | `uint32_t` | Pool slot of the entity assigned to this peer (0 = none, e.g. observer) |
 | 8 | 4 | `assignedEntityGen` | `uint32_t` | Entity generation; 0 = no entity assigned |
 | 12 | 4 | `planetRadiusKm` | `float32` | Planet sphere radius in km; Earth default = 6371.0 |
+| 16 | 1 | `grantedRole` | `uint8_t` | `PeerRole` granted by the server (0 = Pilot, 1 = Observer) |
+| 17 | 3 | `reserved2[3]` | `uint8_t[3]` | Padding to keep trailing records 4-aligned |
 
 ### MsgEntityTypeDef — 268 bytes
 
@@ -431,7 +471,7 @@ CAS then fails to overwrite, surfacing the specific reason in the `LoadingScreen
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
 | 0 | 1 | `msgId` | `uint8_t` | `0x09` |
-| 1 | 1 | `code` | `uint8_t` | `ConnectRefusalCode`: 0=Generic, 1=Banned, 2=AccessDenied, 3=RateLimited, 4=TooManyConnections, 5=AdminLockout — machine-readable reason paired with the text below |
+| 1 | 1 | `code` | `uint8_t` | `ConnectRefusalCode`: 0=Generic, 1=Banned, 2=AccessDenied, 3=RateLimited, 4=TooManyConnections, 5=AdminLockout, 6=RoleDenied (#857), 7=MissingRequiredPack (#872, reserved), 8=EntitlementRequired (RFC #871, reserved) — machine-readable reason paired with the text below |
 | 2 | 62 | `reason` | `char[62]` | Null-terminated UTF-8 rejection reason; 61 usable chars |
 
 `MsgId::ConnectRefusal = 0x09` is an additive message ID — old clients that do not recognize

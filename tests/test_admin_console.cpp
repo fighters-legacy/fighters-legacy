@@ -617,6 +617,15 @@ static fl::EntityDef makeWbEntityDef(const char* id = "builtin:debug-entity") {
     return def;
 }
 
+// Drive the #853 connect handshake for a pilot: onConnect + the client's MsgConnectRequest, which now
+// triggers the spawn + ConnectAck (the old flow spawned/acked directly in onConnect).
+static void connectPilotWb(fl::WorldBroadcaster& b, uint32_t peerId = 0u) {
+    b.onConnect(peerId);
+    fl::MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+    b.onReceive(peerId, &req, sizeof(req));
+}
+
 struct WbFixture {
     NullLogger2 log;
     MockNetworkWb net;
@@ -639,6 +648,18 @@ TEST_CASE("AdminConsole: peers with null broadcaster returns not available", "[a
     auto reg = makeRegistry(); // broadcaster == nullptr
     std::string out = reg.dispatch("peers");
     CHECK(out.find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole wb: set_role validates and queues with a synchronous ack (#857)", "[admin_console][wb]") {
+    WbFixture f;
+    auto reg = makeRegistry(f.ctx);
+    CHECK(reg.dispatch("set_role").find("usage") != std::string::npos);
+    CHECK(reg.dispatch("set_role 0").find("usage") != std::string::npos);
+    CHECK(reg.dispatch("set_role x observer").find("invalid peer ID") != std::string::npos);
+    CHECK(reg.dispatch("set_role 0 bogus").find("pilot") != std::string::npos);
+    std::string ok = reg.dispatch("set_role 3 observer");
+    CHECK(ok.find("queued peer 3") != std::string::npos);
+    CHECK(ok.find("observer") != std::string::npos);
 }
 
 TEST_CASE("AdminConsole wb: peers with null gameLoop returns not available", "[admin_console][wb]") {
@@ -903,7 +924,7 @@ TEST_CASE("WorldBroadcaster: default MsgConnectAck carries Earth planet radius",
     fl::WorldBroadcaster broadcaster{em, registry, net, log};
     registry.registerType(makeWbEntityDef());
 
-    broadcaster.onConnect(0u);
+    connectPilotWb(broadcaster);
 
     bool found = false;
     for (const auto& pkt : net.sends) {
@@ -927,7 +948,7 @@ TEST_CASE("WorldBroadcaster: setGroundElevationQuery is called per entity during
         ++queryCalls;
         return 42.f;
     });
-    f.broadcaster.onConnect(0u);
+    connectPilotWb(f.broadcaster);
     f.broadcaster.onTick(1.0 / 60.0, 1u);
 
     CHECK(queryCalls > 0);

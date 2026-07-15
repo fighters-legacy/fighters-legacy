@@ -26,6 +26,9 @@ enum class SessionFailure : uint8_t {
     TooManyConnections,
     ConnectionRefused, // generic ENet-level rejection before MsgConnectAck
     ConnectTimeout,
+    RoleDenied,          // requested role not allowed by the server (#857)
+    MissingRequiredPack, // client lacks a server-required content pack (#872)
+    EntitlementRequired, // premium content requires an entitlement token (RFC #871)
 };
 
 // English display text for a failure (empty for None). Single mapping point: wrap these in the
@@ -56,6 +59,12 @@ inline const char* sessionFailureMessage(SessionFailure f) {
         return "Connection refused by server.";
     case SessionFailure::ConnectTimeout:
         return "Connection timed out.";
+    case SessionFailure::RoleDenied:
+        return "The server denied the requested role.";
+    case SessionFailure::MissingRequiredPack:
+        return "You are missing a content pack this server requires.";
+    case SessionFailure::EntitlementRequired:
+        return "This server requires premium content you do not own.";
     }
     return "";
 }

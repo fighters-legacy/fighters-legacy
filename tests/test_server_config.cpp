@@ -33,6 +33,7 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.modStack.empty());
     CHECK_FALSE(cfg.persistent);
     CHECK(cfg.worldSavePath == "world.sav");
+    CHECK(cfg.playerEntityType == "builtin:debug-entity");
     CHECK(cfg.worldAutosaveIntervalS == 300);
     CHECK(cfg.aiDifficultyFloor == "recruit");
     CHECK(cfg.discoveryEnabled == true);
@@ -69,6 +70,26 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.overrunMinInterestFraction == Catch::Approx(0.5f));
     CHECK(cfg.maxCatchupTicks == 8);
     CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: reads world.player_entity_type (#834)", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nplayer_entity_type = \"fl-base:f5e\"\n", &log);
+    CHECK(cfg.playerEntityType == "fl-base:f5e");
+}
+
+TEST_CASE("parseServerConfig: reads world.allow_observers (#857)", "[server_config]") {
+    MockLogger log;
+    CHECK(parseServerConfig("", &log).allowObservers == true); // default
+    CHECK(parseServerConfig("[world]\nallow_observers = false\n", &log).allowObservers == false);
+}
+
+TEST_CASE("parseServerConfig: reads mods.required (#872)", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[mods]\nrequired = [\"fl-base\", \"theater\"]\n", &log);
+    REQUIRE(cfg.requiredPacks.size() == 2u);
+    CHECK(cfg.requiredPacks[0] == "fl-base");
+    CHECK(cfg.requiredPacks[1] == "theater");
 }
 
 TEST_CASE("parseServerConfig: reads world.sim_worker_threads", "[server_config]") {

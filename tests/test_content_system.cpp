@@ -439,6 +439,20 @@ static std::vector<std::unique_ptr<IContentPack>> makePacks(MockContentPack* pac
     return v;
 }
 
+TEST_CASE("AssetManager::packManifest reports each mounted pack's id and version (#872)") {
+    MockContentPack pack;
+    pack.packId = "fl-base";
+    pack.packVersion = "0.3.1";
+    MockLogger logger;
+    AssetManager am(makePacks(&pack), logger);
+    am.initialize(nullptr);
+
+    auto manifest = am.packManifest();
+    REQUIRE(manifest.size() == 1u);
+    CHECK(manifest[0].id == "fl-base");
+    CHECK(manifest[0].version == "0.3.1");
+}
+
 TEST_CASE("AssetManager::initialize keeps pack when init() returns Ready") {
     MockContentPack pack;
     MockLogger logger;

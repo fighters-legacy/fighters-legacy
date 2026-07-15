@@ -31,10 +31,20 @@ struct ServerConfig {
 
     // [mods]  — Phase 2: parsed and logged; ModLoader integration pending
     std::vector<std::string> modStack;
+    // Content packs (by id) a connecting client is expected to have mounted (#872). Phase 4 policy is
+    // warn-only: a client missing one is logged, not refused. Version/hash matching + refuse/allow modes
+    // land with the full #872 policy issue.
+    std::vector<std::string> requiredPacks;
 
     // [world]  — Phase 2: active only with --persistent flag
     bool persistent = false;
     std::string worldSavePath = "world.sav";
+    // Entity type spawned for a connecting pilot when the client requests none (#834). A client may
+    // request a specific type in MsgConnectRequest; the server clamps it to a REGISTERED type and falls
+    // back to this default, then to builtin:debug-entity. Lets "boot server, connect, look at the
+    // aeroplane" be a config change instead of an engine patch.
+    std::string playerEntityType = "builtin:debug-entity";
+    bool allowObservers = true; // #857: false = refuse observer-role connect requests
     int worldAutosaveIntervalS = 300;
     int entitySoftCap = 0;               // 0 = unlimited; server-enforced object count limit
     double timeScale = 10.0;             // game seconds per real second; 10 = full day/night ~2.4 real hrs

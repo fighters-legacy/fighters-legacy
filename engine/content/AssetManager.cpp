@@ -14,6 +14,14 @@ namespace fl {
 AssetManager::AssetManager(std::vector<std::unique_ptr<IContentPack>> packs, ILogger& logger)
     : m_packs(std::move(packs)), m_logger(logger) {}
 
+std::vector<AssetManager::PackManifestInfo> AssetManager::packManifest() const {
+    std::vector<PackManifestInfo> out;
+    out.reserve(m_packs.size());
+    for (const auto& pack : m_packs)
+        out.push_back({pack->id() ? pack->id() : "", pack->version() ? pack->version() : ""});
+    return out;
+}
+
 void AssetManager::initialize(IWindow* window) {
     std::vector<std::unique_ptr<IContentPack>> active;
     active.reserve(m_packs.size());
