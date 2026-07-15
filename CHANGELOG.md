@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **entity**: Builtin surface targets and threats — a ground vehicle, a naval vessel, and a static structure to attack, plus a SAM site (an emitting `builtin:sam-radar` + a SARH launcher) and an AAA emplacement that shoot back, all zero-pack. Each carries a signature, a 3-level damage model with a subsystem table, and a category collision radius. New `sam` / `aaa` AiControllerFactory behaviors auto-engage aircraft the emplacement honestly detects (#863)
 - **engine**: Complete builtin weapon vocabulary — the zero-pack sandbox now arms every store class: a bomb, a rocket pod, a SARH missile (+ passive `builtin:sarh-seeker`), a drop tank, and a sensor pod join the cannon/IR/radar builtins, so the whole strike/A2G fire path is provable from a bare checkout. Adds `WeaponType::Fuel` (drop tank) and makes Fuel/Pod inert stores that cost mass+drag but never fire; the `builtin:debug-entity` mounts one of every `HardpointType`. `type = "fuel"`/`"pod"` weapons need no `[performance]`/`[warhead]` (#862)
 - **network**: Required-pack policy on the connect handshake — a server can declare required content packs (`[mods] required`, `id` or `id@version`) and choose what happens when a client is missing one via `[mods] required_policy`: `warn` (log + notify the admitted client), `refuse` (disconnect with the missing list), or `allow_placeholder` (silently serve placeholders). The client surfaces which packs it lacks instead of showing silent placeholders (#872)
 

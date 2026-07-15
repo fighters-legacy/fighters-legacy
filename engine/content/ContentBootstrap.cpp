@@ -97,7 +97,8 @@ SensorDefResolver makeSensorDefResolver(AssetManager& assets, const ContentIndex
         // pointers via the aliasing constructor — the statics outlive everything.
         for (const sensor::SensorDef* builtin :
              {&sensor::BuiltinSensors::eyeball(), &sensor::BuiltinSensors::irSeeker(),
-              &sensor::BuiltinSensors::radarSeeker(), &sensor::BuiltinSensors::sarhSeeker()}) {
+              &sensor::BuiltinSensors::radarSeeker(), &sensor::BuiltinSensors::sarhSeeker(),
+              &sensor::BuiltinSensors::groundRadar()}) {
             if (id == builtin->id) {
                 std::shared_ptr<const sensor::SensorDef> def(std::shared_ptr<const sensor::SensorDef>{}, builtin);
                 (*cache)[id] = def;
@@ -203,6 +204,110 @@ EntityDef builtinDebugEntityDef() {
         hp(7, HardpointType::Pod, BuiltinWeapon::pod().id.c_str()),
     };
     return def;
+}
+
+namespace {
+
+// A shared 3-level DamageDef + subsystem table for the builtin surface entities (#863). The fixed
+// subsystem vocabulary (#675) is aircraft-shaped (engine_left/right, controls, ...), so for a surface
+// unit only the subsystems that MEAN something on the ground are modeled (hp > 0): avionics (the
+// sensor/fire-control gear), controls (the traverse/drive gear), and fuel (a fire/ammo cook-off
+// pool). The engine pools stay hp = 0 — a bunker has no left engine to shoot out.
+DamageDef builtinSurfaceDamageDef() {
+    DamageDef d;
+    d.light.hpFraction = 0.66f;
+    d.light.visualEffect = "smoke";
+    d.heavy.hpFraction = 0.33f;
+    d.heavy.visualEffect = "fire";
+    d.heavy.controlFactor = 0.5f;
+    d.critical.hpFraction = 0.12f;
+    d.critical.visualEffect = "fire";
+    d.critical.controlFactor = 0.2f;
+    d.critical.avionicsFailure = true;
+
+    SubsystemSet subs;
+    subs.parts[static_cast<int>(Subsystem::Avionics)] = {40.f, 1.5f}; // sensors / fire control
+    subs.parts[static_cast<int>(Subsystem::Controls)] = {40.f, 1.0f}; // traverse / drive gear
+    subs.parts[static_cast<int>(Subsystem::Fuel)] = {30.f, 1.0f};     // fuel / ammo cook-off
+    d.subsystems = subs;
+    return d;
+}
+
+// Fill the common fields every builtin surface unit shares: category, damage model, signature, and an
+// explicit collision radius. Passive targets stop here; the shooters add sensors + a hardpoint.
+EntityDef makeSurfaceDef(const char* id, const char* name, ObjectCategory cat, float maxHp, float rcs, float ir,
+                         float visual, float collisionRadiusM) {
+    EntityDef def;
+    def.id = id;
+    def.name = name;
+    def.category = cat;
+    def.maxHp = maxHp;
+    def.damage = builtinSurfaceDamageDef();
+    def.signatures.rcs = rcs;
+    def.signatures.ir = ir;
+    def.signatures.visual = visual;
+    def.collisionRadiusM = collisionRadiusM;
+    return def;
+}
+
+} // namespace
+
+EntityDef builtinGroundVehicleDef() {
+    // A passive ground target — bigger and easier to see than a fighter, but no threat of its own.
+    return makeSurfaceDef("builtin:ground-vehicle", "Ground Vehicle", ObjectCategory::GroundVehicle, 200.f,
+                          /*rcs=*/5.f, /*ir=*/3.f, /*visual=*/2.f, /*collision=*/8.f);
+}
+
+EntityDef builtinNavalVesselDef() {
+    // A passive naval target — a big radar and visual return, a lot of hull to chew through.
+    return makeSurfaceDef("builtin:naval-vessel", "Naval Vessel", ObjectCategory::NavalVehicle, 4000.f,
+                          /*rcs=*/60.f, /*ir=*/8.f, /*visual=*/12.f, /*collision=*/45.f);
+}
+
+EntityDef builtinStaticTargetDef() {
+    // A fixed structure — a bunker/hangar-class ground target for strike practice.
+    return makeSurfaceDef("builtin:static-target", "Static Structure", ObjectCategory::GroundVehicle, 800.f,
+                          /*rcs=*/15.f, /*ir=*/1.f, /*visual=*/6.f, /*collision=*/20.f);
+}
+
+EntityDef builtinSamSiteDef() {
+    // An emitting ground radar (builtin:sam-radar — the RWR seam) + a SARH launcher. Driven by the
+    // `sam` AiControllerFactory behavior, it acquires an aircraft on radar and launches.
+    EntityDef def = makeSurfaceDef("builtin:sam-site", "SAM Site", ObjectCategory::GroundVehicle, 150.f,
+                                   /*rcs=*/3.f, /*ir=*/2.f, /*visual=*/2.f, /*collision=*/10.f);
+    def.sensorIds = {"builtin:sam-radar"};
+    Hardpoint launcher;
+    launcher.slot = 0;
+    launcher.type = HardpointType::Missile;
+    launcher.allowed = {BuiltinWeapon::sarhMissile().id};
+    launcher.defaultWeapon = BuiltinWeapon::sarhMissile().id;
+    def.hardpoints = {launcher};
+    return def;
+}
+
+EntityDef builtinAaaDef() {
+    // A gun-based air-defense emplacement. Driven by the `aaa` behavior, it leads an aircraft with the
+    // ballistic solution and fires when the target crosses its engagement cone. Senses on the builtin
+    // eyeball (no declared sensors) — honest, short-legged optical tracking.
+    EntityDef def = makeSurfaceDef("builtin:aaa", "AAA Emplacement", ObjectCategory::GroundVehicle, 120.f,
+                                   /*rcs=*/2.f, /*ir=*/2.f, /*visual=*/2.f, /*collision=*/8.f);
+    Hardpoint gun;
+    gun.slot = 0;
+    gun.type = HardpointType::Gun;
+    gun.allowed = {BuiltinWeapon::cannon().id};
+    gun.defaultWeapon = BuiltinWeapon::cannon().id;
+    def.hardpoints = {gun};
+    return def;
+}
+
+uint32_t registerBuiltinSurfaceEntities(EntityTypeRegistry& registry) {
+    uint32_t registered = 0;
+    for (const EntityDef& def : {builtinGroundVehicleDef(), builtinNavalVesselDef(), builtinStaticTargetDef(),
+                                 builtinSamSiteDef(), builtinAaaDef()}) {
+        if (registry.registerType(EntityDef(def)) != std::numeric_limits<uint32_t>::max())
+            ++registered;
+    }
+    return registered;
 }
 
 } // namespace fl

@@ -59,6 +59,22 @@ uint32_t registerBuiltinWeapons(WeaponRegistry& registry);
 // weapon-station selector in the zero-pack sandbox.
 EntityDef builtinDebugEntityDef();
 
+// Builtin surface targets and threats (#863) — so the ground/naval/static categories and a
+// shoots-back air-defense threat exist zero-pack. Each carries a SignatureDef, a 3-level DamageDef
+// with a subsystem table, and a category collision radius. `builtin:ground-vehicle`,
+// `builtin:naval-vessel`, and `builtin:static-target` are passive; `builtin:sam-site` (an emitting
+// `builtin:sam-radar` + a SARH launcher) and `builtin:aaa` (a cannon) shoot back when driven by the
+// `sam` / `aaa` AiControllerFactory behaviors. Individual factories for tests/missions:
+EntityDef builtinGroundVehicleDef();
+EntityDef builtinNavalVesselDef();
+EntityDef builtinStaticTargetDef();
+EntityDef builtinSamSiteDef();
+EntityDef builtinAaaDef();
+
+// Registers all five builtin surface entities into `registry` (the "builtin:" namespace cannot
+// collide with a pack). Main thread, before GameLoop::start(). Returns the number registered.
+uint32_t registerBuiltinSurfaceEntities(EntityTypeRegistry& registry);
+
 // Builds the resolver WorldBroadcaster calls on the spawn path to turn an EntityDef::sensorIds entry
 // into a parsed SensorDef (#685), routed through ContentIndex (#810).
 //

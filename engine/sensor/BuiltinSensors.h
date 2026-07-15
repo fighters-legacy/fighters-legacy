@@ -136,6 +136,39 @@ struct BuiltinSensors {
         }();
         return s;
     }
+
+    // The builtin ground air-defense search radar (#863) — the SAM site's eyes, `sensor_id =
+    // "builtin:sam-radar"`. A long-range EMITTER (the RWR/EMCON seam #529 reads it as "a SAM is
+    // painting me"), omnidirectional in azimuth so a fixed emplacement covers the whole sky, not just
+    // a boresight cone. Radar range scales by sqrt(rcs) like every radar in the one-vocabulary model.
+    [[nodiscard]] static const SensorDef& groundRadar() {
+        static const SensorDef s = [] {
+            SensorDef d;
+            d.id = "builtin:sam-radar";
+            d.name = "SAM Search Radar";
+            d.type = SensorType::Radar;
+            d.omnidirectional = true; // a ground battery watches the whole hemisphere
+            d.emitter = true;
+
+            d.search.azHalfAngleDeg = 180.f; // omni: the lobe angles are nominal
+            d.search.elHalfAngleDeg = 85.f;
+            d.search.minRangeM = 500.f;
+            d.search.maxRangeM = 55560.f; // 30 nm against a baseline (rcs 1.0) fighter
+            d.search.pod = 0.5f;
+
+            SensorLobe track;
+            track.azHalfAngleDeg = 180.f;
+            track.elHalfAngleDeg = 85.f;
+            track.minRangeM = 300.f;
+            track.maxRangeM = 64820.f; // 35 nm
+            track.pod = 0.85f;
+            d.track = track;
+            d.lockHoldS = 3.0f;
+
+            return d;
+        }();
+        return s;
+    }
 };
 
 } // namespace fl::sensor

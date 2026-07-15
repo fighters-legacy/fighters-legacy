@@ -472,6 +472,15 @@ int main(int argc, char** argv) {
     // The debug entity ships ARMED (#440) — the shared builder keeps server and client identical.
     entityRegistry.registerType(fl::builtinDebugEntityDef());
 
+    // Builtin surface targets + threats (#863): ground/naval/static targets and a SAM site + AAA that
+    // shoot back, so the surface categories and air-defense threat exist with zero content mounted.
+    {
+        const uint32_t surfaceTypes = fl::registerBuiltinSurfaceEntities(entityRegistry);
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "content: %u builtin surface entity type(s) registered", surfaceTypes);
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
+
     // Load content-pack entity definitions into the registry (#683) after the builtin type, so pack
     // types become spawnable via the `spawn` admin command and appear in `types`. MsgEntityTypeDef
     // already ships the populated registry to clients on connect -- no protocol change.

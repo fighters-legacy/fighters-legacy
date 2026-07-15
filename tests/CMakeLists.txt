@@ -135,6 +135,13 @@ target_link_libraries(test_honest_sensing PRIVATE Catch2::Catch2WithMain engine-
     engine-entity engine-spatial engine-weather engine-job)
 catch_discover_tests(test_honest_sensing)
 
+# Builtin surface entities + SAM/AAA engagement controllers (#863): a WB-level engagement test, so it
+# links engine-ai (the controllers) + engine-bootstrap (the builtin surface entity defs).
+add_executable(test_surface_threats test_surface_threats.cpp)
+target_link_libraries(test_surface_threats PRIVATE Catch2::Catch2WithMain engine-net engine-ai engine-sensor
+    engine-bootstrap engine-entity engine-spatial engine-weather engine-job)
+catch_discover_tests(test_surface_threats)
+
 add_executable(test_sensor_system test_sensor_system.cpp)
 target_link_libraries(test_sensor_system PRIVATE Catch2::Catch2WithMain engine-sensor engine-entity engine-spatial)
 catch_discover_tests(test_sensor_system)

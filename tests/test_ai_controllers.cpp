@@ -2834,3 +2834,27 @@ TEST_CASE("AiControllerFactory: guns grammar parses and validates") {
     std::vector<std::string_view> noArgs{};
     CHECK(fl::ai::createController("guns", noArgs, &em) == nullptr);
 }
+
+TEST_CASE("AiControllerFactory: sam and aaa grammar parses and validates (#863)") {
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    reg.registerType(makeBasicDef());
+    fl::EntityManager em(log, reg);
+
+    // Both auto-engage — no target index — but need an EntityManager for TargetView.
+    std::vector<std::string_view> none{};
+    CHECK(fl::ai::createController("sam", none, &em) != nullptr);
+    CHECK(fl::ai::createController("aaa", none, &em) != nullptr);
+    CHECK(fl::ai::createController("sam", none, nullptr) == nullptr);
+    CHECK(fl::ai::createController("aaa", none, nullptr) == nullptr);
+
+    std::vector<std::string_view> samParams{"25000", "60", "3"};
+    CHECK(fl::ai::createController("sam", samParams, &em) != nullptr);
+    std::vector<std::string_view> aaaParams{"1500", "20", "1050", "12"};
+    CHECK(fl::ai::createController("aaa", aaaParams, &em) != nullptr);
+
+    // A non-positive numeric argument is a parse error, like every other behavior.
+    std::vector<std::string_view> bad{"-5"};
+    CHECK(fl::ai::createController("sam", bad, &em) == nullptr);
+    CHECK(fl::ai::createController("aaa", bad, &em) == nullptr);
+}
