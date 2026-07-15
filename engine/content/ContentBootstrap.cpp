@@ -97,7 +97,7 @@ SensorDefResolver makeSensorDefResolver(AssetManager& assets, const ContentIndex
         // pointers via the aliasing constructor — the statics outlive everything.
         for (const sensor::SensorDef* builtin :
              {&sensor::BuiltinSensors::eyeball(), &sensor::BuiltinSensors::irSeeker(),
-              &sensor::BuiltinSensors::radarSeeker()}) {
+              &sensor::BuiltinSensors::radarSeeker(), &sensor::BuiltinSensors::sarhSeeker()}) {
             if (id == builtin->id) {
                 std::shared_ptr<const sensor::SensorDef> def(std::shared_ptr<const sensor::SensorDef>{}, builtin);
                 (*cache)[id] = def;
@@ -138,8 +138,8 @@ uint32_t registerProjectileEntityDefs(const WeaponRegistry& weapons, EntityTypeR
         const WeaponDef* w = weapons.byIndex(i);
         if (!w)
             break;
-        if (w->type == WeaponType::Gun || w->type == WeaponType::Pod)
-            continue; // hitscan / non-flying stores never become entities
+        if (w->type == WeaponType::Gun || w->type == WeaponType::Pod || w->type == WeaponType::Fuel)
+            continue; // hitscan / non-flying / inert stores never become entities
 
         EntityDef def;
         def.id = projectileTypeId(*w);
@@ -165,7 +165,9 @@ uint32_t registerProjectileEntityDefs(const WeaponRegistry& weapons, EntityTypeR
 
 uint32_t registerBuiltinWeapons(WeaponRegistry& registry) {
     uint32_t registered = 0;
-    for (const WeaponDef* w : {&BuiltinWeapon::cannon(), &BuiltinWeapon::irMissile(), &BuiltinWeapon::radarMissile()}) {
+    for (const WeaponDef* w : {&BuiltinWeapon::cannon(), &BuiltinWeapon::irMissile(), &BuiltinWeapon::radarMissile(),
+                               &BuiltinWeapon::sarhMissile(), &BuiltinWeapon::bomb(), &BuiltinWeapon::rocketPod(),
+                               &BuiltinWeapon::dropTank(), &BuiltinWeapon::pod()}) {
         if (registry.registerWeapon(*w) != std::numeric_limits<uint32_t>::max())
             ++registered;
     }
@@ -179,8 +181,9 @@ EntityDef builtinDebugEntityDef() {
     def.category = ObjectCategory::AirVehicle;
     def.maxHp = 100.0f;
 
-    // Armed (#440): one cannon, two IR rails, two radar rails — every sandbox/debug peer spawns
-    // able to exercise the whole fire path with zero content mounted.
+    // Armed (#440/#862): a cannon, IR + radar + SARH rails, a bomb, a rocket pod, a drop tank, and a
+    // sensor pod — every sandbox/debug peer spawns able to exercise the WHOLE fire path (every
+    // WeaponType and every HardpointType, incl. the inert Fuel/Pod stores) with zero content mounted.
     auto hp = [](int slot, HardpointType type, const char* weapon) {
         Hardpoint h;
         h.slot = slot;
@@ -192,9 +195,12 @@ EntityDef builtinDebugEntityDef() {
     def.hardpoints = {
         hp(0, HardpointType::Gun, BuiltinWeapon::cannon().id.c_str()),
         hp(1, HardpointType::Missile, BuiltinWeapon::irMissile().id.c_str()),
-        hp(2, HardpointType::Missile, BuiltinWeapon::irMissile().id.c_str()),
-        hp(3, HardpointType::Missile, BuiltinWeapon::radarMissile().id.c_str()),
-        hp(4, HardpointType::Missile, BuiltinWeapon::radarMissile().id.c_str()),
+        hp(2, HardpointType::Missile, BuiltinWeapon::radarMissile().id.c_str()),
+        hp(3, HardpointType::Missile, BuiltinWeapon::sarhMissile().id.c_str()),
+        hp(4, HardpointType::Bomb, BuiltinWeapon::bomb().id.c_str()),
+        hp(5, HardpointType::Rocket, BuiltinWeapon::rocketPod().id.c_str()),
+        hp(6, HardpointType::Fuel, BuiltinWeapon::dropTank().id.c_str()),
+        hp(7, HardpointType::Pod, BuiltinWeapon::pod().id.c_str()),
     };
     return def;
 }

@@ -7,11 +7,18 @@
 
 namespace fl {
 
+struct WeaponDef;
+
 struct WeaponValidationResult {
     bool ok{true};
     std::vector<std::string> errors;
     std::vector<std::string> warnings;
 };
+
+// Runs the PLAUSIBILITY pass on an already-parsed weapon def (the same checks validateWeapon() applies
+// after parsing). Exposed so the compiled-in builtin stores (BuiltinWeapon) — which are C++ structs,
+// never TOML files — can be held to the exact validator bar the tool enforces on pack weapons.
+WeaponValidationResult checkWeaponPlausibility(const WeaponDef& w);
 
 // Validates one weapon TOML file.
 //

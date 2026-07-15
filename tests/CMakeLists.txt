@@ -511,7 +511,8 @@ endif()
 catch_discover_tests(test_input_hal DISCOVERY_MODE PRE_TEST)
 
 add_executable(test_validate_weapon test_validate_weapon.cpp)
-target_link_libraries(test_validate_weapon PRIVATE Catch2::Catch2WithMain validate-weapon-lib)
+# engine-weapon is PRIVATE to validate-weapon-lib, so link it here for BuiltinWeapon.h (#862).
+target_link_libraries(test_validate_weapon PRIVATE Catch2::Catch2WithMain validate-weapon-lib engine-weapon)
 catch_discover_tests(test_validate_weapon)
 
 add_executable(test_validate_sensor test_validate_sensor.cpp)

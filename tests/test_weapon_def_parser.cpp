@@ -194,6 +194,28 @@ drag_factor = 0.022
     CHECK_FALSE(w.seeker.has_value());
 }
 
+TEST_CASE("A fuel (drop-tank) store needs no performance or warhead — mass and drag only (#862)", "[weapon]") {
+    const std::string toml = R"toml(
+[weapon]
+id       = "fl-base:tank370"
+name     = "370 gal drop tank"
+type     = "fuel"
+category = "air-to-air"
+
+[load]
+weight_lb   = 2200
+drag_factor = 0.008
+)toml";
+
+    const WeaponDef w = parseWeaponDef(toml);
+    CHECK(w.type == WeaponType::Fuel);
+    CHECK_FALSE(w.seeker.has_value());
+    CHECK(w.performance.maxRangeM == 0.f); // no reach — it is not a weapon
+    CHECK(w.warhead.damage == 0.f);        // no warhead
+    CHECK(w.load.massKg > 0.f);            // but it does cost the airframe
+    CHECK(w.load.dragFactor > 0.f);
+}
+
 TEST_CASE("Missing required blocks and fields throw", "[weapon]") {
     CHECK_THROWS_AS(parseWeaponDef(""), std::runtime_error);
     CHECK_THROWS_AS(parseWeaponDef("this is not toml ["), std::runtime_error);

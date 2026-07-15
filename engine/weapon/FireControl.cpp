@@ -47,17 +47,22 @@ LoadoutState buildLoadout(const EntityDef& def, const WeaponRegistry& weapons) {
 
     for (const Hardpoint& hp : def.hardpoints) {
         StationState st;
-        if (!hp.defaultWeapon.empty() && hp.type != HardpointType::Fuel && hp.type != HardpointType::Pod) {
+        if (!hp.defaultWeapon.empty()) {
             const uint32_t idx = weapons.indexById(hp.defaultWeapon.c_str());
             if (idx != UINT32_MAX) {
                 const WeaponDef* w = weapons.byIndex(idx);
                 // Same acceptance rule as fl::defaultPayload: a wrong-kind or unknown store is a
                 // skip, not a spawn failure — and it was already Error-logged at payload time.
                 if (w) {
-                    st.weaponIndex = idx;
-                    st.rounds = w->load.rounds;
                     ls.payloadMassKg += w->load.massKg;
                     ls.payloadCd0 += w->load.dragFactor;
+                    // An INERT store — a Fuel drop tank or a Pod (#862) — costs mass/drag but is never
+                    // a firing station. Leave weaponIndex empty so it is never selected, fired, or
+                    // released; every real weapon mounts a live station.
+                    if (hp.type != HardpointType::Fuel && hp.type != HardpointType::Pod) {
+                        st.weaponIndex = idx;
+                        st.rounds = w->load.rounds;
+                    }
                 }
             }
         }
@@ -86,7 +91,20 @@ LoadoutState buildLoadoutOverride(const EntityDef& def, const WeaponRegistry& we
             ls.stations.push_back(st);
             continue;
         }
-        if (isEmptyStore(store) || hp.type == HardpointType::Fuel || hp.type == HardpointType::Pod) {
+        // An inert store — a Fuel drop tank or a Pod (#862) — counts its mass/drag (unless emptied
+        // above) but is never a firing station.
+        if (hp.type == HardpointType::Fuel || hp.type == HardpointType::Pod) {
+            if (!isEmptyStore(store)) {
+                const uint32_t idx = weapons.indexById(store.c_str());
+                if (const WeaponDef* w = (idx != UINT32_MAX) ? weapons.byIndex(idx) : nullptr) {
+                    ls.payloadMassKg += w->load.massKg;
+                    ls.payloadCd0 += w->load.dragFactor;
+                }
+            }
+            ls.stations.push_back(st);
+            continue;
+        }
+        if (isEmptyStore(store)) {
             ls.stations.push_back(st);
             continue;
         }

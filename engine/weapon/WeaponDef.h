@@ -7,7 +7,12 @@
 
 namespace fl {
 
-enum class WeaponType : uint8_t { Missile, Bomb, Rocket, Gun, Pod };
+// Fuel (#862) is the drop-tank store: it occupies a HardpointType::Fuel station and costs the
+// airframe mass + drag, but it is inert -- never fired, never a firing station, never a projectile.
+// It makes the two enums (WeaponType / HardpointType) fully parallel, so every hardpoint class has a
+// mountable store. FireControl skips it, registerProjectileEntityDefs skips it; only the loadout
+// mass/drag accounting reads it.
+enum class WeaponType : uint8_t { Missile, Bomb, Rocket, Gun, Pod, Fuel };
 
 enum class WeaponCategory : uint8_t { AirToAir, AirToGround, AirToSea, AntiRadiation };
 

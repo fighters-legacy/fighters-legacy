@@ -65,8 +65,10 @@ void require_fraction(float value, const char* field) {
         return WeaponType::Gun;
     if (s == "pod")
         return WeaponType::Pod;
+    if (s == "fuel")
+        return WeaponType::Fuel; // #862: drop-tank store — inert, mass/drag only
     throw std::runtime_error(std::string("unknown weapon.type: ") + std::string(s) +
-                             " (expected missile, bomb, rocket, gun, or pod)");
+                             " (expected missile, bomb, rocket, gun, pod, or fuel)");
 }
 
 [[nodiscard]] WeaponCategory parse_category(std::string_view s) {
@@ -178,62 +180,74 @@ WeaponDef parseWeaponDef(std::string_view toml_src) {
         w.seeker = s;
     }
 
-    // ── [performance] (required) ─────────────────────────────────────────────
+    // An inert store (#862) — a `fuel` drop tank or a `pod` (ECM/targeting/recon) — has no reach, no
+    // seeker, and no warhead, only mass and drag. So [performance] and [warhead] are OPTIONAL for it
+    // (and default to zero); for every real weapon they stay required.
+    const bool isInertStore = w.type == WeaponType::Fuel || w.type == WeaponType::Pod;
+
+    // ── [performance] (required, except for an inert store) ──────────────────
     auto perf = tbl["performance"];
-    if (!perf || !perf.as_table())
+    if (!isInertStore && (!perf || !perf.as_table()))
         throw std::runtime_error("weapon def parse error: missing [performance] table");
 
-    // A powered weapon states its own reach (max_range_nm); a dropped one states how far it glides
-    // from release (standoff_range_ft). Exactly one of them is the weapon's range.
-    const bool hasMaxRange = perf["max_range_nm"].value<double>().has_value();
-    const bool hasStandoff = perf["standoff_range_ft"].value<double>().has_value();
-    if (!hasMaxRange && !hasStandoff)
-        throw std::runtime_error("performance: one of max_range_nm or standoff_range_ft is required");
-    if (hasMaxRange && hasStandoff)
-        throw std::runtime_error("performance: max_range_nm and standoff_range_ft are mutually exclusive");
+    if (isInertStore && (!perf || !perf.as_table())) {
+        // No performance section: an inert tank stays all-zero. Skip the range requirement entirely.
+    } else {
+        // A powered weapon states its own reach (max_range_nm); a dropped one states how far it glides
+        // from release (standoff_range_ft). Exactly one of them is the weapon's range.
+        const bool hasMaxRange = perf["max_range_nm"].value<double>().has_value();
+        const bool hasStandoff = perf["standoff_range_ft"].value<double>().has_value();
+        if (!hasMaxRange && !hasStandoff)
+            throw std::runtime_error("performance: one of max_range_nm or standoff_range_ft is required");
+        if (hasMaxRange && hasStandoff)
+            throw std::runtime_error("performance: max_range_nm and standoff_range_ft are mutually exclusive");
 
-    w.performance.maxRangeM =
-        hasMaxRange ? req_float(perf["max_range_nm"], "performance.max_range_nm") * kMetresPerNauticalMile
-                    : req_float(perf["standoff_range_ft"], "performance.standoff_range_ft") * kMetresPerFoot;
-    require_non_negative(w.performance.maxRangeM, "performance range");
+        w.performance.maxRangeM =
+            hasMaxRange ? req_float(perf["max_range_nm"], "performance.max_range_nm") * kMetresPerNauticalMile
+                        : req_float(perf["standoff_range_ft"], "performance.standoff_range_ft") * kMetresPerFoot;
+        require_non_negative(w.performance.maxRangeM, "performance range");
 
-    w.performance.minRangeM = opt_float(perf["min_range_nm"], 0.f) * kMetresPerNauticalMile;
-    require_non_negative(w.performance.minRangeM, "performance.min_range_nm");
-    if (w.performance.minRangeM > w.performance.maxRangeM)
-        throw std::runtime_error("performance.min_range_nm must not exceed the weapon's max range");
+        w.performance.minRangeM = opt_float(perf["min_range_nm"], 0.f) * kMetresPerNauticalMile;
+        require_non_negative(w.performance.minRangeM, "performance.min_range_nm");
+        if (w.performance.minRangeM > w.performance.maxRangeM)
+            throw std::runtime_error("performance.min_range_nm must not exceed the weapon's max range");
 
-    w.performance.maxSpeedMps = opt_float(perf["max_speed_kts"], 0.f) * kMpsPerKnot;
-    require_non_negative(w.performance.maxSpeedMps, "performance.max_speed_kts");
+        w.performance.maxSpeedMps = opt_float(perf["max_speed_kts"], 0.f) * kMpsPerKnot;
+        require_non_negative(w.performance.maxSpeedMps, "performance.max_speed_kts");
 
-    w.performance.motorBurnTimeS = opt_float(perf["motor_burn_time_s"], 0.f);
-    require_non_negative(w.performance.motorBurnTimeS, "performance.motor_burn_time_s");
+        w.performance.motorBurnTimeS = opt_float(perf["motor_burn_time_s"], 0.f);
+        require_non_negative(w.performance.motorBurnTimeS, "performance.motor_burn_time_s");
 
-    w.performance.maxG = opt_float(perf["max_g"], 0.f);
-    require_non_negative(w.performance.maxG, "performance.max_g");
+        w.performance.maxG = opt_float(perf["max_g"], 0.f);
+        require_non_negative(w.performance.maxG, "performance.max_g");
 
-    w.performance.cepM = opt_float(perf["CEP_ft"], 0.f) * kMetresPerFoot;
-    require_non_negative(w.performance.cepM, "performance.CEP_ft");
+        w.performance.cepM = opt_float(perf["CEP_ft"], 0.f) * kMetresPerFoot;
+        require_non_negative(w.performance.cepM, "performance.CEP_ft");
 
-    w.performance.rateOfFireRpm = opt_float(perf["rate_of_fire_rpm"], 0.f);
-    require_non_negative(w.performance.rateOfFireRpm, "performance.rate_of_fire_rpm");
+        w.performance.rateOfFireRpm = opt_float(perf["rate_of_fire_rpm"], 0.f);
+        require_non_negative(w.performance.rateOfFireRpm, "performance.rate_of_fire_rpm");
+    } // end [performance]
 
-    // ── [warhead] (required) ─────────────────────────────────────────────────
+    // ── [warhead] (required, except for an inert store) ──────────────────────
     auto wh = tbl["warhead"];
-    if (!wh || !wh.as_table())
+    if (!isInertStore && (!wh || !wh.as_table()))
         throw std::runtime_error("weapon def parse error: missing [warhead] table");
 
-    w.warhead.blastRadiusM = req_float(wh["blast_radius_ft"], "warhead.blast_radius_ft") * kMetresPerFoot;
-    require_non_negative(w.warhead.blastRadiusM, "warhead.blast_radius_ft");
-    w.warhead.damage = req_float(wh["damage"], "warhead.damage");
-    require_non_negative(w.warhead.damage, "warhead.damage");
+    if (wh && wh.as_table()) {
+        w.warhead.blastRadiusM = req_float(wh["blast_radius_ft"], "warhead.blast_radius_ft") * kMetresPerFoot;
+        require_non_negative(w.warhead.blastRadiusM, "warhead.blast_radius_ft");
+        w.warhead.damage = req_float(wh["damage"], "warhead.damage");
+        require_non_negative(w.warhead.damage, "warhead.damage");
 
-    w.warhead.nuclear = opt_bool(wh["nuclear"], false);
-    w.warhead.yieldKt = opt_float(wh["yield_kt"], 0.f);
-    require_non_negative(w.warhead.yieldKt, "warhead.yield_kt");
-    if (w.warhead.nuclear && w.warhead.yieldKt <= 0.f)
-        throw std::runtime_error("warhead: nuclear = true requires a yield_kt > 0 — the effect radii scale from it");
-    if (!w.warhead.nuclear && w.warhead.yieldKt > 0.f)
-        throw std::runtime_error("warhead: yield_kt without nuclear = true — say what you mean");
+        w.warhead.nuclear = opt_bool(wh["nuclear"], false);
+        w.warhead.yieldKt = opt_float(wh["yield_kt"], 0.f);
+        require_non_negative(w.warhead.yieldKt, "warhead.yield_kt");
+        if (w.warhead.nuclear && w.warhead.yieldKt <= 0.f)
+            throw std::runtime_error(
+                "warhead: nuclear = true requires a yield_kt > 0 — the effect radii scale from it");
+        if (!w.warhead.nuclear && w.warhead.yieldKt > 0.f)
+            throw std::runtime_error("warhead: yield_kt without nuclear = true — say what you mean");
+    }
 
     // ── [countermeasures] (optional) ─────────────────────────────────────────
     if (auto cm = tbl["countermeasures"]; cm && cm.as_table()) {

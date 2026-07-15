@@ -102,6 +102,40 @@ struct BuiltinSensors {
         }();
         return s;
     }
+
+    // The builtin semi-active radar seeker head (#862) — BuiltinWeapon::sarhMissile(),
+    // `sensor_id = "builtin:sarh-seeker"`. Unlike the active-radar seeker it is a PASSIVE receiver
+    // (`emitter = false`): it homes on energy the SHOOTER's radar reflects off the target, so it never
+    // announces itself and never appears on an RWR the way an active seeker does. The shot depends on
+    // the launch platform holding its lock (the ProjectileSystem SupportQuery / illumination path).
+    [[nodiscard]] static const SensorDef& sarhSeeker() {
+        static const SensorDef s = [] {
+            SensorDef d;
+            d.id = "builtin:sarh-seeker";
+            d.name = "Semi-Active Radar Seeker";
+            d.type = SensorType::Radar;
+            d.omnidirectional = false;
+            d.emitter = false; // passive: rides the shooter's illumination, never radiates
+
+            d.search.azHalfAngleDeg = 20.f;
+            d.search.elHalfAngleDeg = 20.f;
+            d.search.minRangeM = 150.f;
+            d.search.maxRangeM = 24076.f; // 13 nm off a baseline (rcs 1.0) fighter under illumination
+            d.search.pod = 0.5f;
+
+            SensorLobe track;
+            track.azHalfAngleDeg = 25.f;
+            track.elHalfAngleDeg = 25.f;
+            track.minRangeM = 100.f;
+            track.maxRangeM = 29632.f; // 16 nm
+            track.pod = 0.85f;
+            d.track = track;
+            d.lockHoldS = 1.5f;
+
+            return d;
+        }();
+        return s;
+    }
 };
 
 } // namespace fl::sensor

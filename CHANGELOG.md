@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **engine**: Complete builtin weapon vocabulary — the zero-pack sandbox now arms every store class: a bomb, a rocket pod, a SARH missile (+ passive `builtin:sarh-seeker`), a drop tank, and a sensor pod join the cannon/IR/radar builtins, so the whole strike/A2G fire path is provable from a bare checkout. Adds `WeaponType::Fuel` (drop tank) and makes Fuel/Pod inert stores that cost mass+drag but never fire; the `builtin:debug-entity` mounts one of every `HardpointType`. `type = "fuel"`/`"pod"` weapons need no `[performance]`/`[warhead]` (#862)
 - **network**: Required-pack policy on the connect handshake — a server can declare required content packs (`[mods] required`, `id` or `id@version`) and choose what happens when a client is missing one via `[mods] required_policy`: `warn` (log + notify the admitted client), `refuse` (disconnect with the missing list), or `allow_placeholder` (silently serve placeholders). The client surfaces which packs it lacks instead of showing silent placeholders (#872)
 
 ## [0.3.2] - 2026-07-15

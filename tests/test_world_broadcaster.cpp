@@ -8782,7 +8782,7 @@ TEST_CASE("WorldBroadcaster: the zero-pack sandbox peer spawns ARMED and the can
     registry.registerType(fl::builtinDebugEntityDef()); // the REAL sandbox def (#440), not a fixture
 
     fl::WeaponRegistry weapons;
-    REQUIRE(fl::registerBuiltinWeapons(weapons) == 3u);
+    REQUIRE(fl::registerBuiltinWeapons(weapons) == 8u);
 
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -8816,8 +8816,10 @@ TEST_CASE("WorldBroadcaster: the zero-pack sandbox peer spawns ARMED and the can
 
     // And the default selection is a rail, not the gun — "selected" means the stores.
     const fl::LoadoutState ls = fl::buildLoadout(fl::builtinDebugEntityDef(), weapons);
-    CHECK(ls.stations.size() == 5u);
-    CHECK(ls.selected == 1u); // first IR rail
+    CHECK(ls.stations.size() == 8u);
+    CHECK(ls.selected == 1u);                        // first non-gun rail (IR)
+    CHECK(ls.stations[6].weaponIndex == UINT32_MAX); // the drop tank (Fuel) is inert — no firing station
+    CHECK(ls.stations[7].weaponIndex == UINT32_MAX); // the sensor pod (Pod) is inert too
 }
 
 TEST_CASE("WorldBroadcaster: a designated IR missile launch flies out and kills through the pipeline",
@@ -8873,6 +8875,93 @@ TEST_CASE("WorldBroadcaster: a designated IR missile launch flies out and kills 
         victimHit = !vs || vs->dead || vs->hp < 100.f;
     }
     CHECK(victimHit); // the warhead connected through the same damage pipeline as everything else
+}
+
+TEST_CASE("WorldBroadcaster: every builtin flying store releases from the zero-pack debug entity (#862)",
+          "[world_broadcaster][firepath][sandbox]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(fl::builtinDebugEntityDef());
+
+    fl::WeaponRegistry weapons;
+    fl::registerBuiltinWeapons(weapons);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    em.addEventHandler(&broadcaster);
+    broadcaster.setWeaponRegistry(&weapons);
+    fl::registerProjectileEntityDefs(weapons, registry, logger);
+    // Resolve every builtin seeker head like fl-server does at startup.
+    broadcaster.setSensorDefResolver([](const std::string& id) -> std::shared_ptr<const fl::sensor::SensorDef> {
+        if (id == "builtin:ir-seeker")
+            return {std::shared_ptr<const fl::sensor::SensorDef>{}, &fl::sensor::BuiltinSensors::irSeeker()};
+        if (id == "builtin:radar-seeker")
+            return {std::shared_ptr<const fl::sensor::SensorDef>{}, &fl::sensor::BuiltinSensors::radarSeeker()};
+        if (id == "builtin:sarh-seeker")
+            return {std::shared_ptr<const fl::sensor::SensorDef>{}, &fl::sensor::BuiltinSensors::sarhSeeker()};
+        return nullptr;
+    });
+
+    connectPilotPeer(broadcaster, net, 0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(shooter != nullptr);
+
+    // A target 2 km ahead so the designated shots (SARH) have something to support against.
+    fl::EntityTransform vt{};
+    vt.pos[0] = shooter->transform.pos[0] + 2000.0;
+    vt.pos[1] = shooter->transform.pos[1];
+    vt.pos[2] = shooter->transform.pos[2];
+    vt.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
+    broadcaster.setTargetDesignator([victim](const fl::EntityState&, const float*) -> fl::EntityId { return victim; });
+
+    // Count live entities of a given projectile type currently in the world.
+    auto projectileCount = [&](const char* id) {
+        const uint32_t typeIdx = registry.indexById(id);
+        int n = 0;
+        em.forEach([&](const fl::EntityState& e) {
+            if (!e.dead && e.typeIndex == typeIdx)
+                ++n;
+        });
+        return n;
+    };
+
+    // A real client feeds a fresh MsgClientInput every tick with a strictly increasing seqNum — a
+    // stale/duplicate seqNum is discarded by the staleness guard, so a single re-sent packet never
+    // fires twice. Drive the peer that way: one input per tick, seqNum climbing, station held.
+    uint16_t seq = 0;
+    uint64_t tick = 0;
+    auto tickInput = [&](uint8_t buttons, uint8_t station) {
+        fl::MsgClientInput inp{};
+        inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+        inp.protocolVersion = fl::kProtocolVersion;
+        inp.seqNum = ++seq;
+        inp.buttons = buttons;
+        inp.selectedStation = station;
+        broadcaster.onReceive(0u, &inp, sizeof(inp));
+        broadcaster.onTick(1.0 / 60.0, ++tick);
+    };
+
+    // Fire each flying store from its station in turn; return the PEAK count of `projId` seen while
+    // the trigger is held (before the round flies out of the world). Station indices follow
+    // builtinDebugEntityDef()'s order: 0 gun, 1 IR, 2 radar, 3 SARH, 4 bomb, 5 rocket, 6 drop tank.
+    auto fireStation = [&](uint8_t station, const char* projId) {
+        int peak = 0;
+        for (int k = 0; k < 12; ++k) { // hold: single stores fire on the edge, a rocket pod ripples
+            tickInput(0x04u, station);
+            peak = std::max(peak, projectileCount(projId));
+        }
+        // Release + run out kReleaseCooldownTicks (30) so the NEXT store sees a fresh, uncooled edge.
+        for (int k = 0; k < 31; ++k)
+            tickInput(0x00u, station);
+        return peak;
+    };
+
+    CHECK(fireStation(4u, "projectile:builtin:bomb") >= 1);         // bomb
+    CHECK(fireStation(5u, "projectile:builtin:rocket") >= 1);       // rocket pod (ripples)
+    CHECK(fireStation(3u, "projectile:builtin:sarh-missile") >= 1); // SARH missile
 }
 
 TEST_CASE("WorldBroadcaster: the pre-launch LOCK cue reaches the own record's weaponFlags",
