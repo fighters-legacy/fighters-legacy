@@ -337,6 +337,43 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                  }
                              });
 
+    // set_role <peerId> <pilot|observer>  -- switch a peer between pilot and spectator without a reconnect (#857)
+    registry.registerCommand(
+        "set_role", "set_role <peerId> <pilot|observer>  -- switch a peer's role without a reconnect",
+        [ctx](std::span<std::string_view> args) -> std::string {
+            if (args.size() < 2)
+                return "usage: set_role <peerId> <pilot|observer>";
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                return "set_role: not available";
+            std::string idArg(args[0]);
+            if (!isNumeric(idArg))
+                return "set_role: invalid peer ID";
+            uint32_t peerId = 0;
+            if (auto [ptr, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), peerId); ec != std::errc{})
+                return "set_role: invalid peer ID";
+            fl::PeerRole role;
+            if (args[1] == "pilot")
+                role = fl::PeerRole::Pilot;
+            else if (args[1] == "observer")
+                role = fl::PeerRole::Observer;
+            else
+                return "set_role: role must be 'pilot' or 'observer'";
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId, role]() {
+                ctx.sim.broadcaster->setPeerRole(peerId, role);
+                char m[80];
+                std::snprintf(m, sizeof(m), "[admin] set peer %u role to %s", peerId,
+                              role == fl::PeerRole::Observer ? "observer" : "pilot");
+                std::printf("%s\n", m);
+                if (ctx.rcon.shell)
+                    ctx.rcon.shell->print(m);
+                std::fflush(stdout);
+            });
+            char buf[80];
+            std::snprintf(buf, sizeof(buf), "set_role: queued peer %u -> %s", peerId,
+                          role == fl::PeerRole::Observer ? "observer" : "pilot");
+            return std::string(buf);
+        });
+
     // ban <peerId|IP>
     registry.registerCommand("ban", "ban <peerId|IP>  -- add IP to in-memory ban list and kick matching peers",
                              [ctx](std::span<std::string_view> args) -> std::string {

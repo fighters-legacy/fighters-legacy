@@ -650,6 +650,18 @@ TEST_CASE("AdminConsole: peers with null broadcaster returns not available", "[a
     CHECK(out.find("not available") != std::string::npos);
 }
 
+TEST_CASE("AdminConsole wb: set_role validates and queues with a synchronous ack (#857)", "[admin_console][wb]") {
+    WbFixture f;
+    auto reg = makeRegistry(f.ctx);
+    CHECK(reg.dispatch("set_role").find("usage") != std::string::npos);
+    CHECK(reg.dispatch("set_role 0").find("usage") != std::string::npos);
+    CHECK(reg.dispatch("set_role x observer").find("invalid peer ID") != std::string::npos);
+    CHECK(reg.dispatch("set_role 0 bogus").find("pilot") != std::string::npos);
+    std::string ok = reg.dispatch("set_role 3 observer");
+    CHECK(ok.find("queued peer 3") != std::string::npos);
+    CHECK(ok.find("observer") != std::string::npos);
+}
+
 TEST_CASE("AdminConsole wb: peers with null gameLoop returns not available", "[admin_console][wb]") {
     WbFixture f;
     f.ctx.sim.gameLoop = nullptr;

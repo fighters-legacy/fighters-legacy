@@ -40,6 +40,7 @@ struct ServerConfig {
     // back to this default, then to builtin:debug-entity. Lets "boot server, connect, look at the
     // aeroplane" be a config change instead of an engine patch.
     std::string playerEntityType = "builtin:debug-entity";
+    bool allowObservers = true; // #857: false = refuse observer-role connect requests
     int worldAutosaveIntervalS = 300;
     int entitySoftCap = 0;               // 0 = unlimited; server-enforced object count limit
     double timeScale = 10.0;             // game seconds per real second; 10 = full day/night ~2.4 real hrs

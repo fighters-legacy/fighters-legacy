@@ -670,6 +670,33 @@ TEST_CASE("ClientNetEventHandler: onDisconnect does not signal after a successfu
     CHECK(failMsg.load() == SessionFailure::None);
 }
 
+TEST_CASE("ClientNetEventHandler: an observer's entity-less ack is not a rejection (#857)",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    std::atomic<SessionFailure> failMsg{SessionFailure::None};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.sessionFailure = &failMsg;
+
+    handler.onConnect(0u);
+    // Observer ack: assignedEntityGen == 0 (no entity) but grantedRole == Observer. This must count as
+    // a successful connect — the old assignedEntityIdx==0 sentinel would have misread it as a rejection.
+    fl::MsgConnectAck ack{};
+    ack.assignedEntityIdx = 0u;
+    ack.assignedEntityGen = 0u;
+    ack.grantedRole = static_cast<uint8_t>(fl::PeerRole::Observer);
+    std::vector<uint8_t> pkt(sizeof(ack));
+    std::memcpy(pkt.data(), &ack, sizeof(ack));
+    handler.onReceive(0u, pkt.data(), pkt.size());
+    CHECK(handler.grantedRole() == fl::PeerRole::Observer);
+    handler.onDisconnect(0u);
+    CHECK(failMsg.load() == SessionFailure::None);
+}
+
 TEST_CASE("ClientNetEventHandler: null connectFailMsg does not crash on rejection", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;

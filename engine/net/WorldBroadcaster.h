@@ -160,6 +160,7 @@ struct WorldBroadcasterConfig {
     uint16_t motdDisplaySeconds{0};                       // 0 = client default
     std::string operatorPassword;                         // empty = network admin channel disabled
     std::string playerEntityType{"builtin:debug-entity"}; // pilot spawn default when client requests none (#834)
+    bool allowObservers{true};                            // #857: false = refuse observer connect requests
     int idleTimeoutS{0};                                  // 0 = disabled; seconds of peer inactivity before disconnect
     float drawDistanceKm{200.f};                          // per-peer interest radius; 0 = degenerate (empty snapshots)
     double spatialCellSizeM{10000.0}; // SpatialIndex cell size (m); 0 = auto from draw distance; restart-only
@@ -694,10 +695,19 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         m_jobs = &jobs;
     }
 
+  public:
+    // Change a connected peer's role mid-session without a reconnect (#857). pilot->observer despawns
+    // the peer's entity; observer->pilot spawns one and re-sends MsgConnectAck so the client learns its
+    // new assigned entity + role. No-op if the peer is unknown, not yet admitted, or already in the
+    // target role. Sim-thread only (call via GameLoop::enqueueSimCallback from admin/gameplay code);
+    // shares the spawn/teardown mechanism with connect/disconnect — the same seam #648 (death ->
+    // spectator -> respawn) reuses.
+    void setPeerRole(uint32_t peerId, PeerRole role);
+
   private:
-    // Handle MsgConnectRequest (#853): admit the peer (spawn its entity + form its flight), reply
-    // MsgConnectAck, and send the MOTD. Replaces the old "server spawns on connect" flow. Sim-thread
-    // only (called from onReceive).
+    // Handle MsgConnectRequest (#853): grant a role, admit the peer (pilot = spawn its entity + form its
+    // flight; observer = no entity), reply MsgConnectAck, and send the MOTD. Replaces the old "server
+    // spawns on connect" flow. Sim-thread only (called from onReceive).
     void handleConnectRequest(uint32_t peerId, const void* data, std::size_t size);
     // Spawn a pilot peer's entity of `entityType`, register its PeerController, stamp faction, and form
     // its flight. Returns the assigned EntityId (invalid on spawn failure). Extracted from the old
@@ -776,6 +786,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     TargetDesignator m_targetDesignator;     // null = attack orders always refuse (never invent a target)
     uint16_t m_playerFaction{1};             // 0 restores the legacy neutral-player behavior
     std::string m_playerEntityType{"builtin:debug-entity"}; // pilot spawn default when client requests none (#834)
+    bool m_allowObservers{true};                            // #857: false = refuse observer connect requests
     int m_flightCmdRateLimit{4};                            // orders per second per peer
     // EntityId.index -> {sim, controller}. Replaces the old peerId-keyed flight-sim map: any control
     // source (peer, AI, script) registers here and is stepped uniformly in onTick.
@@ -1039,8 +1050,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // it points at. The sim thread then flushes buf via m_net.send. buf retains capacity across ticks.
     struct PeerSnapWork {
         uint32_t peerId{};
-        EntityId peerEid;
-        const EntityState* peerState{nullptr};
+        EntityId peerEid;                      // invalid for an observer (no entity) (#857)
+        const EntityState* peerState{nullptr}; // null for an observer
+        double center[3]{};                    // interest center: the pilot's entity, or the observer's point
+
         PeerInputState* pin{nullptr};
         std::unordered_map<uint32_t, PeerEntityRec>* knownGens{nullptr};
         std::unordered_map<uint32_t, uint8_t>* pending{nullptr};

@@ -2703,6 +2703,103 @@ TEST_CASE("WorldBroadcaster: empty requested type uses the [world] player_entity
 }
 
 // ---------------------------------------------------------------------------
+// Observer role (#857)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: an observer connects with no entity and grantedRole=Observer (#857)",
+          "[world_broadcaster][handshake][observer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    broadcaster.onConnect(0u);
+    fl::MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Observer);
+    broadcaster.onReceive(0u, &req, sizeof(req));
+
+    auto ack = parseSendAck(net);
+    CHECK(ack.grantedRole == static_cast<uint8_t>(fl::PeerRole::Observer));
+    CHECK(ack.assignedEntityGen == 0u); // observer has no assigned entity
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    CHECK(em.liveCount() == 0u); // observer spawned nothing
+}
+
+TEST_CASE("WorldBroadcaster: an observer receives world snapshots (#857)", "[world_broadcaster][observer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    connectPilotPeer(broadcaster, net, 0u); // a pilot to look at (spawns near origin)
+    broadcaster.onConnect(1u);              // observer
+    fl::MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Observer);
+    broadcaster.onReceive(1u, &req, sizeof(req));
+
+    net.perPeerSends.clear();
+    broadcaster.onTick(1.0 / 60.0, 5u);
+
+    bool observerGotSnapshot = false;
+    for (const auto& [pid, pkt] : net.perPeerSends)
+        if (pid == 1u && !pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::WorldSnapshot))
+            observerGotSnapshot = true;
+    CHECK(observerGotSnapshot);
+}
+
+TEST_CASE("WorldBroadcaster: a peer transitions pilot<->observer without reconnecting (#857)",
+          "[world_broadcaster][observer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    connectPilotPeer(broadcaster, net, 0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    REQUIRE(em.liveCount() == 1u);
+
+    broadcaster.setPeerRole(0u, fl::PeerRole::Observer); // pilot -> observer despawns the entity
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    CHECK(em.liveCount() == 0u);
+
+    broadcaster.setPeerRole(0u, fl::PeerRole::Pilot); // observer -> pilot respawns
+    broadcaster.onTick(1.0 / 60.0, 3u);
+    CHECK(em.liveCount() == 1u);
+}
+
+TEST_CASE("WorldBroadcaster: an observer request is refused when observers are disabled (#857)",
+          "[world_broadcaster][observer]") {
+    MockLogger logger;
+    MockNetwork net;
+    net.peerAddresses[0u] = "1.2.3.4";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::WorldBroadcasterConfig cfg;
+    cfg.allowObservers = false;
+    broadcaster.applyConfig(cfg);
+
+    broadcaster.onConnect(0u);
+    net.sends.clear(); // drop the MsgHello so only the refusal remains
+    fl::MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Observer);
+    broadcaster.onReceive(0u, &req, sizeof(req));
+
+    REQUIRE_FALSE(net.disconnectedPeers.empty());
+    CHECK(net.disconnectedPeers.back() == 0u);
+    auto ref = parseSendRefusal(net);
+    CHECK(ref.code == static_cast<uint8_t>(fl::ConnectRefusalCode::RoleDenied));
+}
+
+// ---------------------------------------------------------------------------
 // Security: flood detection
 // ---------------------------------------------------------------------------
 

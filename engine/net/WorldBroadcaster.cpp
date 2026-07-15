@@ -355,6 +355,7 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setMotdDisplaySeconds(cfg.motdDisplaySeconds);
     setOperatorPassword(cfg.operatorPassword);
     m_playerEntityType = cfg.playerEntityType; // pilot spawn default (#834); applyConfig runs pre-start
+    m_allowObservers = cfg.allowObservers;     // #857; applyConfig runs pre-start
     setIdleTimeout(cfg.idleTimeoutS);
     setDrawDistance(cfg.drawDistanceKm);
     setSpatialCellSize(cfg.spatialCellSizeM); // after setDrawDistance: auto mode reads m_drawDistanceM
@@ -1032,16 +1033,32 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // levers, so every peer in this tick sees the same setting.
     const bool compressSnap = m_compressSnapshots.load(std::memory_order_relaxed);
     m_peerWork.clear();
-    for (auto& [peerId, peerEid] : m_peerEntities) {
-        PeerInputState& pin = m_peerInputs[peerId];
+    // Iterate all admitted peers (#857), not m_peerEntities: an OBSERVER has an input slot but no
+    // entity, and must still receive snapshots. A not-yet-admitted peer (connected but no
+    // MsgConnectRequest yet) is skipped until it has a role.
+    for (auto& [peerId, pin] : m_peerInputs) {
+        if (!pin.handshakeComplete)
+            continue;
         const uint32_t sendInterval = std::max(pin.congestion.sendIntervalTicks(), govSnapInterval);
         if (pin.sentSnapshot && tickIndex - pin.lastSnapshotSentTick < sendInterval)
             continue; // adaptive send-rate decimation: too few ticks since the last send
         PeerSnapWork w;
         w.peerId = peerId;
-        w.peerEid = peerEid;
+        // A pilot centers interest on its aircraft; an observer on its stored interest point (the #858
+        // camera-position seam). peerEid invalid + peerState null flag the entity-less case downstream.
+        const auto eit = m_peerEntities.find(peerId);
+        w.peerEid = (eit != m_peerEntities.end()) ? eit->second : EntityId{};
+        w.peerState = w.peerEid.valid() ? m_entityManager.get(w.peerEid) : nullptr;
+        if (w.peerState) {
+            w.center[0] = w.peerState->transform.pos[0];
+            w.center[1] = w.peerState->transform.pos[1];
+            w.center[2] = w.peerState->transform.pos[2];
+        } else {
+            w.center[0] = pin.interestCenter.x;
+            w.center[1] = pin.interestCenter.y;
+            w.center[2] = pin.interestCenter.z;
+        }
         w.pin = &pin;
-        w.peerState = m_entityManager.get(peerEid);
         w.knownGens = &m_peerKnownGens[peerId];
         w.pending = &m_peerPendingDespawn[peerId];
         m_peerWork.push_back(std::move(w));
@@ -1103,22 +1120,22 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // Collect visible entity indices via the spatial index (conservative XZ cells), then apply
             // an exact 3D (XYZ) distance gate (#402) and sort ascending so the bitstream's idx deltas
             // stay small. Both bounds use the governor-scaled interest radius (#726 — frozen before
-            // this parallel region). peerState null/dead → empty list → header-only empty snapshot.
+            // this parallel region). Interest is centered on w.center — the pilot's aircraft, or the
+            // observer's stored point (#857). A dead pilot → empty list → header-only empty snapshot; an
+            // observer (peerState null) still queries around its center.
+            const double* const center = w.center;
             std::vector<uint32_t> visible;
-            if (peerState && !peerState->dead && govInterestRadiusM > 0.0) {
+            if ((peerState == nullptr || !peerState->dead) && govInterestRadiusM > 0.0) {
                 const double r2 = govInterestRadiusM * govInterestRadiusM;
-                const double px = peerState->transform.pos[0];
-                const double py = peerState->transform.pos[1];
-                const double pz = peerState->transform.pos[2];
-                m_spatialIndex.queryRadius(peerState->transform.pos, govInterestRadiusM,
-                                           [&](uint32_t entityIdx, const double* pos) {
-                                               if (snapMap.find(entityIdx) == snapMap.end())
-                                                   return; // died this tick after the index was built
-                                               const double dx = pos[0] - px, dy = pos[1] - py, dz = pos[2] - pz;
-                                               if (dx * dx + dy * dy + dz * dz > r2)
-                                                   return; // 3D interest cull (#402)
-                                               visible.push_back(entityIdx);
-                                           });
+                const double px = center[0], py = center[1], pz = center[2];
+                m_spatialIndex.queryRadius(center, govInterestRadiusM, [&](uint32_t entityIdx, const double* pos) {
+                    if (snapMap.find(entityIdx) == snapMap.end())
+                        return; // died this tick after the index was built
+                    const double dx = pos[0] - px, dy = pos[1] - py, dz = pos[2] - pz;
+                    if (dx * dx + dy * dy + dz * dz > r2)
+                        return; // 3D interest cull (#402)
+                    visible.push_back(entityIdx);
+                });
                 std::sort(visible.begin(), visible.end());
             }
 
@@ -1139,9 +1156,11 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 // Reserve fixed overhead (header + TLV block) out of the budget for the record bitstream.
                 constexpr uint32_t kFixedOverhead = sizeof(MsgWorldSnapshotHeader) + 32u;
                 const uint32_t recordBudget = budget > kFixedOverhead ? budget - kFixedOverhead : 1u;
-                const double px = peerState->transform.pos[0];
-                const double py = peerState->transform.pos[1];
-                const double pz = peerState->transform.pos[2];
+                const double px = center[0], py = center[1], pz = center[2];
+                // Observer (peerState null) has no velocity — closing speed is relative to a still point.
+                const double pvx = peerState ? static_cast<double>(peerState->transform.vel[0]) : 0.0;
+                const double pvy = peerState ? static_cast<double>(peerState->transform.vel[1]) : 0.0;
+                const double pvz = peerState ? static_cast<double>(peerState->transform.vel[2]) : 0.0;
                 std::vector<SnapshotCandidate> cands;
                 cands.reserve(visible.size());
                 for (uint32_t idx : visible) {
@@ -1157,12 +1176,13 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                     const double dist = std::sqrt(c.distSq);
                     if (dist > 1e-3) {
                         const double rx = dx / dist, ry = dy / dist, rz = dz / dist;
-                        const double rvx = static_cast<double>(peerState->transform.vel[0]) - st.transform.vel[0];
-                        const double rvy = static_cast<double>(peerState->transform.vel[1]) - st.transform.vel[1];
-                        const double rvz = static_cast<double>(peerState->transform.vel[2]) - st.transform.vel[2];
+                        const double rvx = pvx - st.transform.vel[0];
+                        const double rvy = pvy - st.transform.vel[1];
+                        const double rvz = pvz - st.transform.vel[2];
                         c.closingSpeed = static_cast<float>(rvx * rx + rvy * ry + rvz * rz);
                     }
-                    c.isOwn = (st.id.index == peerEid.index && st.id.generation == peerEid.generation);
+                    c.isOwn =
+                        peerEid.valid() && (st.id.index == peerEid.index && st.id.generation == peerEid.generation);
                     c.playerOwned = st.playerOwned;
                     const uint16_t gen = static_cast<uint16_t>(st.id.generation);
                     auto kit = knownGens.find(idx);
@@ -1210,7 +1230,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 auto kit = knownGens.find(idx);
                 const PeerEntityRec* rec = (kit == knownGens.end()) ? nullptr : &kit->second;
                 const bool isFull = decideFull(rec, gen, peerAckedTick, peerAckMask, tickIndex);
-                const bool isOwn = (state.id.index == peerEid.index && state.id.generation == peerEid.generation);
+                const bool isOwn =
+                    peerEid.valid() && (state.id.index == peerEid.index && state.id.generation == peerEid.generation);
 
                 double recOrigin[3];
                 const std::vector<uint8_t>* blob = nullptr;
@@ -1567,9 +1588,28 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         return;
     }
 
-    // Pilot-only until #857. Observer role and required-pack policy (#872) layer on in later commits.
-    const PeerRole grantedRole = PeerRole::Pilot;
-    const EntityId assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
+    // Grant a role (#857). An out-of-grammar role byte is refused; an observer is refused when the
+    // server disallows the role. (Required-pack policy #872 layers on before this in a later commit.)
+    if (!isPeerRoleOrdinal(req.requestedRole)) {
+        rejectConnection(peerId, extractIp(m_net.getPeerAddress(peerId)), ConnectRefusalCode::Generic);
+        return;
+    }
+    const PeerRole grantedRole = static_cast<PeerRole>(req.requestedRole);
+    if (grantedRole == PeerRole::Observer && !m_allowObservers) {
+        rejectConnection(peerId, extractIp(m_net.getPeerAddress(peerId)), ConnectRefusalCode::RoleDenied);
+        return;
+    }
+
+    EntityId assigned{}; // invalid for an observer — it has no entity
+    if (grantedRole == PeerRole::Pilot) {
+        assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
+    } else {
+        // Observer (#857): no entity, no controller. Seed the interest center from the first spawn point
+        // (or origin) as a placeholder until #858 drives it from the client's camera eye.
+        pin.interestCenter = !m_spawnPoints.empty()
+                                 ? glm::dvec3(m_spawnPoints[0][0], m_spawnPoints[0][1], m_spawnPoints[0][2])
+                                 : glm::dvec3(0.0, 0.0, 0.0);
+    }
 
     pin.role = grantedRole;
     pin.handshakeComplete = true;
@@ -1607,6 +1647,34 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
             m_net.send(peerId, &ack, sizeof(ack), /*reliable=*/true);
         }
     }
+}
+
+void WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
+    auto pit = m_peerInputs.find(peerId);
+    if (pit == m_peerInputs.end() || !pit->second.handshakeComplete)
+        return; // unknown or not-yet-admitted peer
+    PeerInputState& pin = pit->second;
+    if (pin.role == role)
+        return; // already in the target role
+
+    EntityId assigned{};
+    if (role == PeerRole::Observer) {
+        // pilot -> observer: keep the last aircraft position as the interest center, then despawn.
+        if (const auto eit = m_peerEntities.find(peerId); eit != m_peerEntities.end()) {
+            if (const EntityState* s = m_entityManager.get(eit->second))
+                pin.interestCenter = glm::dvec3(s->transform.pos[0], s->transform.pos[1], s->transform.pos[2]);
+        }
+        despawnPeerEntity(peerId);
+    } else {
+        // observer -> pilot: spawn an aircraft (server default type; a lone pilot — no flight formed
+        // on a mid-session transition, which #648 owns).
+        assigned = admitPilot(peerId, resolvePlayerEntityType(""));
+    }
+    pin.role = role;
+
+    // The client learns its new assigned entity + role from a fresh MsgConnectAck (its handler applies
+    // both, idempotently re-registering already-known type defs). No new message type is needed.
+    sendConnectAck(peerId, assigned, role);
 }
 
 void WorldBroadcaster::despawnPeerEntity(uint32_t peerId) {
