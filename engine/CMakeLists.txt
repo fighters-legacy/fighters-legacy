@@ -269,6 +269,25 @@ add_library(engine-spatial STATIC
 target_include_directories(engine-spatial PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # No external deps — pure ISO C++20 stdlib.
 
+# Mission runtime: the mission YAML schema owner (parser + runtime model, MissionParser) and the
+# faction-aware sim-setup applier (MissionSetup). Lives in the ENGINE, not fl-server, because the game
+# client needs the same runtime for the single-player mission lifecycle (#634) and Instant Action
+# (#40); fl-server just wires it at startup (#854) -- the same promotion rationale as engine-bootstrap.
+# validate-mission delegates its schema to parseMission here, so the linter and the engine cannot
+# drift (the rule shared by validate-weapon/-sensor/-entity). Reaches no client backend.
+add_library(engine-mission STATIC
+    mission/MissionParser.cpp
+    mission/MissionSetup.cpp
+    mission/MissionRuntime.cpp
+)
+target_include_directories(engine-mission PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-mission
+    PUBLIC  engine-entity   # EntityManager/EntityState + GLM (its platform-hal edge); LocalFrame/Geodetic headers
+            engine-world    # FactionRegistry — coalition setup
+            engine-weather  # WeatherController + WeatherPreset (WeatherTypes.h is in Mission.h)
+    PRIVATE yaml-cpp::yaml-cpp
+)
+
 # Data-parallel task scheduler: persistent worker pool + blocking parallel_for. Declared before
 # engine-net so the broadcaster can link it for the parallel sim tick.
 add_library(engine-job STATIC

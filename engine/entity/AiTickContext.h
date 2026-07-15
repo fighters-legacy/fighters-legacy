@@ -3,8 +3,9 @@
 
 namespace fl {
 
-class SpatialIndex; // engine/spatial/SpatialIndex.h
-struct AiScaling;   // engine/config/DifficultySettings.h
+class SpatialIndex;    // engine/spatial/SpatialIndex.h
+struct AiScaling;      // engine/config/DifficultySettings.h
+class FactionRegistry; // engine/world/FactionRegistry.h (#632)
 
 namespace sensor {
 struct ContactTable;       // engine/sensor/SensorSystem.h (#685)
@@ -49,6 +50,13 @@ struct AiTickContext {
     // The active difficulty scaling (reaction time, aim error, radar range…). Null = not evaluated,
     // which every controller must read as "no scaling", not as "zero".
     const AiScaling* difficulty{nullptr};
+
+    // The coalition registry resolving hostility (#632). Null = not evaluated, which the hostile()
+    // helper (FactionRegistry.h) reads as the affiliation fallback (areFactionsHostile) — so a
+    // controller behaves exactly as before a mission is loaded. Non-null = coalition-aware
+    // relationships (allies are friendly, everyone else hostile). Forward-declared: engine-entity
+    // does NOT link engine-world — the observer's faction view is a pointer it is handed, not a dep.
+    const FactionRegistry* factions{nullptr};
 };
 
 } // namespace fl

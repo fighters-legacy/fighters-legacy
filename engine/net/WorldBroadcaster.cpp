@@ -746,7 +746,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                                   m_stepInputs[i] = it.ce->lastInput;
                               } else {
                                   const AiTickContext aiCtx{&m_spatialIndex, m_sensorSystem.contactsFor(it.idx),
-                                                            &sensingEnv, difficulty};
+                                                            &sensingEnv, difficulty, m_factionRegistry};
                                   m_stepInputs[i] = it.ce->controller->sample(*it.state, tickIndex, simDt, aiCtx);
                                   it.ce->lastInput = m_stepInputs[i];
                                   it.ce->lastInputValid = true;
@@ -1442,6 +1442,11 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     m_tickProfiler.addPhaseSample(TickPhase::Serialize,
                                   std::chrono::duration<double, std::milli>(m_clock->now() - tSerializeStart).count());
     m_tickProfiler.endTick();
+
+    // Mission objective/trigger evaluation (#633), after the world has fully stepped this tick. Runs at
+    // its own second-scale cadence internally; unset unless a mission is loaded.
+    if (m_missionTickHook)
+        m_missionTickHook(tickIndex);
 }
 
 void WorldBroadcaster::onConnect(uint32_t peerId) {
@@ -1512,6 +1517,33 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
     m_activePeerCount.fetch_add(1, std::memory_order_relaxed);
 }
 
+EntityId WorldBroadcaster::spawnPilotEntity(uint32_t peerId, const std::string& entityType, const EntityTransform& t,
+                                            uint16_t faction) {
+    EntityId id = m_entityManager.spawn(entityType.c_str(), t, peerId);
+    if (id.valid()) {
+        m_peerEntities[peerId] = id;
+
+        // Stamp the player's faction. Without a non-zero faction the player is NEUTRAL, and
+        // fl::areFactionsHostile gives a neutral entity no enemies at all — so nothing would be
+        // hostile to them, their wingman's engage/cover conditions could never fire, and boresight
+        // designation could never designate. Faction 0 leaves the entity neutral.
+        if (EntityState* s = m_entityManager.get(id); s && faction != 0) {
+            s->factionIndex = faction;
+        }
+
+        // Resolve the entity type's flight model (server-authoritative; never sent on the wire).
+        // Empty id, no resolver, or an unknown id falls back to the builtin UFO model.
+        std::shared_ptr<const FlightModelData> model = resolveFlightModel(id);
+
+        // PeerController reads the peer's stable input slot (pointer valid across rehash, slot torn
+        // down after the controller on disconnect). Start at throttle 0 so the entity is stationary.
+        // decimatable=false: a player's input must be sampled every tick for responsiveness (#514).
+        addControlledEntity(id, std::make_unique<PeerController>(&m_peerInputs[peerId]), std::move(model), 0.0f,
+                            /*decimatable=*/false);
+    }
+    return id;
+}
+
 EntityId WorldBroadcaster::admitPilot(uint32_t peerId, const std::string& entityType) {
     EntityTransform t{};
     t.quat[3] = 1.0f; // identity quaternion (w component; XYZW layout)
@@ -1527,29 +1559,34 @@ EntityId WorldBroadcaster::admitPilot(uint32_t peerId, const std::string& entity
         t.pos[2] = 60.0; // 60 m ahead of origin so peer doesn't overlap sandbox entity 0
         t.pos[1] = static_cast<double>(m_groundElevation.load(std::memory_order_relaxed)) + kSpawnAGL;
     }
-    EntityId id = m_entityManager.spawn(entityType.c_str(), t, peerId);
-    if (id.valid()) {
-        m_peerEntities[peerId] = id;
+    return spawnPilotEntity(peerId, entityType, t, m_playerFaction);
+}
 
-        // Stamp the player's faction. Without a non-zero faction the player is NEUTRAL, and
-        // fl::areFactionsHostile gives a neutral entity no enemies at all — so nothing would be
-        // hostile to them, their wingman's engage/cover conditions could never fire, and boresight
-        // designation could never designate. Setting this to 0 restores the pre-#610 behavior.
-        if (EntityState* s = m_entityManager.get(id); s && m_playerFaction != 0) {
-            s->factionIndex = m_playerFaction;
+void WorldBroadcaster::setMissionPlayerSlots(std::vector<MissionSpawnSlot> slots) {
+    m_missionSlots = std::move(slots);
+    m_slotOccupant.assign(m_missionSlots.size(), kSlotFree);
+    m_peerSlot.clear();
+}
+
+int WorldBroadcaster::claimMissionSlot(uint32_t peerId) {
+    for (std::size_t i = 0; i < m_slotOccupant.size(); ++i) {
+        if (m_slotOccupant[i] == kSlotFree) {
+            m_slotOccupant[i] = peerId;
+            m_peerSlot[peerId] = static_cast<int>(i);
+            return static_cast<int>(i);
         }
-
-        // Resolve the entity type's flight model (server-authoritative; never sent on the wire).
-        // Empty id, no resolver, or an unknown id falls back to the builtin UFO model.
-        std::shared_ptr<const FlightModelData> model = resolveFlightModel(id);
-
-        // PeerController reads the peer's stable input slot (pointer valid across rehash, slot torn
-        // down after the controller on disconnect). Start at throttle 0 so the entity is stationary.
-        // decimatable=false: a player's input must be sampled every tick for responsiveness (#514).
-        addControlledEntity(id, std::make_unique<PeerController>(&m_peerInputs[peerId]), std::move(model), 0.0f,
-                            /*decimatable=*/false);
     }
-    return id;
+    return -1; // no slots, or all occupied → caller falls back to the round-robin path
+}
+
+void WorldBroadcaster::releaseMissionSlot(uint32_t peerId) {
+    const auto it = m_peerSlot.find(peerId);
+    if (it == m_peerSlot.end())
+        return;
+    const int idx = it->second;
+    if (idx >= 0 && static_cast<std::size_t>(idx) < m_slotOccupant.size())
+        m_slotOccupant[idx] = kSlotFree;
+    m_peerSlot.erase(it);
 }
 
 std::string WorldBroadcaster::resolvePlayerEntityType(const char* requested) const {
@@ -1627,7 +1664,27 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
 
     EntityId assigned{}; // invalid for an observer — it has no entity
     if (grantedRole == PeerRole::Pilot) {
-        assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
+        // Mission player slots (#854): a loaded mission's `player: true` objects become joinable slots.
+        // Assign the next open one (its type/faction/spawn pins where and what the pilot flies, ignoring
+        // the client's requested type). No slots / all occupied / a slot type that won't spawn ⇒ fall
+        // back to the round-robin default so a pilot always gets an aircraft.
+        const int slotIdx = claimMissionSlot(peerId);
+        if (slotIdx >= 0) {
+            const MissionSpawnSlot& slot = m_missionSlots[static_cast<std::size_t>(slotIdx)];
+            EntityTransform t{};
+            t.pos[0] = slot.pos[0];
+            t.pos[1] = slot.pos[1];
+            t.pos[2] = slot.pos[2];
+            for (int c = 0; c < 4; ++c)
+                t.quat[c] = slot.quat[c];
+            assigned = spawnPilotEntity(peerId, slot.entityType, t, slot.factionIndex);
+            if (!assigned.valid()) {
+                releaseMissionSlot(peerId); // slot type unspawnable — free it and use the default path
+                assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
+            }
+        } else {
+            assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
+        }
     } else {
         // Observer (#857): no entity, no controller. Seed the interest center from the first spawn point
         // (or origin) as a placeholder until #858 drives it from the client's camera eye.
@@ -1736,6 +1793,8 @@ void WorldBroadcaster::despawnPeerEntity(uint32_t peerId) {
     m_sensorSystem.removeObserver(it->second.index);
     m_entityManager.kill(it->second);
     m_peerEntities.erase(it);
+
+    releaseMissionSlot(peerId); // free this peer's mission player slot for the next joiner (#854)
 }
 
 void WorldBroadcaster::onDisconnect(uint32_t peerId) {
@@ -2896,6 +2955,27 @@ void WorldBroadcaster::registerController(EntityId id, std::unique_ptr<IEntityCo
         model = resolveFlightModel(id); // logs and returns null if the id is unknown; builtin below
     // AI/scripted entities are decimatable — their sample() may be skipped under tick overrun (#514).
     addControlledEntity(id, std::move(controller), std::move(model), 0.f, /*decimatable=*/true);
+}
+
+bool WorldBroadcaster::setEntityLoadout(EntityId id, const std::vector<std::string>& stores,
+                                        std::vector<std::string>& warnings) {
+    auto it = m_controlledEntities.find(id.index);
+    if (it == m_controlledEntities.end() || !m_weaponRegistry)
+        return false;
+    const EntityState* st = m_entityManager.get(id);
+    if (!st)
+        return false;
+    const EntityDef* def = m_registry.byIndex(st->typeIndex);
+    if (!def || def->hardpoints.empty())
+        return false;
+
+    it->second.fire.loadout = buildLoadoutOverride(*def, *m_weaponRegistry, stores, warnings);
+    // Re-cost the airframe: the payload the integrator adds each tick is the override's mass/drag now,
+    // not the #812 default (which addControlledEntity resolved). Keeping the loadout and payload in sync
+    // is the same invariant #625 maintains as stores leave the rails.
+    it->second.payload.extra_mass_kg = it->second.fire.loadout.payloadMassKg;
+    it->second.payload.extra_cd0 = it->second.fire.loadout.payloadCd0;
+    return true;
 }
 
 // Grain size for the per-entity parallel passes: enough indices per chunk to amortise the

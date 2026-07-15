@@ -287,3 +287,50 @@ TEST_CASE("evaluateFire: rockets ripple while held; mass sheds per round", "[fir
     // Mass sheds PER ROUND: 10 of 19 rockets gone = 10/19 of the pod's mass.
     CHECK(fs.loadout.payloadMassKg == Catch::Approx(190.f * 9.f / 19.f).epsilon(0.01));
 }
+
+// ---------------------------------------------------------------------------
+// buildLoadoutOverride — mission per-object loadout (#855)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("buildLoadoutOverride: partial override keeps unnamed stations at default", "[fire_control]") {
+    FireWorld w;
+    std::vector<std::string> warnings;
+    // Only station 0 is named (emptied via "~"); stations 1 and 2 keep their defaults.
+    const LoadoutState ls = buildLoadoutOverride(w.def, w.weapons, {"~"}, warnings);
+    REQUIRE(ls.stations.size() == 3u);
+    CHECK(ls.stations[0].weaponIndex == UINT32_MAX); // emptied
+    CHECK(ls.stations[1].weaponIndex == w.aimIdx);   // default kept
+    CHECK(warnings.empty());
+    CHECK(ls.selected == 1u); // the missile rail is still the sane default selection
+}
+
+TEST_CASE("buildLoadoutOverride: a store not in the station's allowed list is refused", "[fire_control]") {
+    FireWorld w;
+    std::vector<std::string> warnings;
+    // Try to hang the gun on the missile rail (station 1) — not in that station's allowed list.
+    const LoadoutState ls = buildLoadoutOverride(w.def, w.weapons, {"t:gun", "t:gun"}, warnings);
+    CHECK(ls.stations[0].weaponIndex == w.gunIdx);   // station 0 allows the gun
+    CHECK(ls.stations[1].weaponIndex == UINT32_MAX); // station 1 does not -> left empty
+    REQUIRE(warnings.size() == 1u);
+    CHECK(warnings[0].find("t:gun") != std::string::npos);
+}
+
+TEST_CASE("buildLoadoutOverride: an allowed-but-unknown weapon id is refused", "[fire_control]") {
+    FireWorld w;
+    w.def.hardpoints[1].allowed.push_back("t:ghost"); // in the allowed list, but never registered
+    std::vector<std::string> warnings;
+    const LoadoutState ls = buildLoadoutOverride(w.def, w.weapons, {"~", "t:ghost"}, warnings);
+    CHECK(ls.stations[1].weaponIndex == UINT32_MAX); // unknown -> empty
+    REQUIRE(warnings.size() == 1u);
+    CHECK(warnings[0].find("t:ghost") != std::string::npos);
+}
+
+TEST_CASE("buildLoadoutOverride: payload re-costs from the actual mounted stores", "[fire_control]") {
+    FireWorld w;
+    std::vector<std::string> warnings;
+    // Strip everything: no stores mounted -> zero payload.
+    const LoadoutState empty = buildLoadoutOverride(w.def, w.weapons, {"~", "~", "~"}, warnings);
+    CHECK(empty.payloadMassKg == Catch::Approx(0.f));
+    CHECK(empty.selected == 255u); // nothing mounted -> nothing selected
+    CHECK(warnings.empty());
+}

@@ -52,6 +52,83 @@ LoadoutState buildLoadout(const EntityDef& def, const WeaponRegistry& weapons) {
     return ls;
 }
 
+namespace {
+
+// True when `store` is empty or an explicit "leave this station empty" sentinel.
+bool isEmptyStore(const std::string& store) noexcept {
+    return store.empty() || store == "~" || store == "-";
+}
+
+// Choose the default selection (first non-gun mounted store, else first mounted, else none). Shared
+// by buildLoadout and buildLoadoutOverride.
+void pickDefaultSelection(LoadoutState& ls, const WeaponRegistry& weapons) {
+    for (uint8_t i = 0; i < ls.stations.size(); ++i) {
+        const StationState& st = ls.stations[i];
+        if (st.weaponIndex == UINT32_MAX)
+            continue;
+        const WeaponDef* w = weapons.byIndex(st.weaponIndex);
+        if (w && w->type != WeaponType::Gun) {
+            ls.selected = i;
+            return;
+        }
+    }
+    for (uint8_t i = 0; i < ls.stations.size(); ++i) {
+        if (ls.stations[i].weaponIndex != UINT32_MAX) {
+            ls.selected = i;
+            return;
+        }
+    }
+}
+
+} // namespace
+
+LoadoutState buildLoadoutOverride(const EntityDef& def, const WeaponRegistry& weapons,
+                                  const std::vector<std::string>& stores, std::vector<std::string>& warnings) {
+    LoadoutState ls;
+    ls.stations.reserve(def.hardpoints.size());
+
+    for (std::size_t i = 0; i < def.hardpoints.size(); ++i) {
+        const Hardpoint& hp = def.hardpoints[i];
+        StationState st;
+
+        // Fewer overrides than stations -> keep this station's DEFAULT store (a partial override only
+        // touches the stations it names). An empty/"~"/"-" override empties the station deliberately.
+        const bool named = i < stores.size();
+        const std::string& store = named ? stores[i] : hp.defaultWeapon;
+        if (named && isEmptyStore(store)) {
+            ls.stations.push_back(st);
+            continue;
+        }
+        if (isEmptyStore(store) || hp.type == HardpointType::Fuel || hp.type == HardpointType::Pod) {
+            ls.stations.push_back(st);
+            continue;
+        }
+
+        const std::string where = "entity '" + def.id + "' station " + std::to_string(hp.slot);
+        // A mission may only hang a store the airframe accepts on that station.
+        if (std::find(hp.allowed.begin(), hp.allowed.end(), store) == hp.allowed.end()) {
+            warnings.push_back(where + ": store '" + store + "' is not in this station's allowed list; left empty");
+            ls.stations.push_back(st);
+            continue;
+        }
+        const uint32_t idx = weapons.indexById(store.c_str());
+        const WeaponDef* w = (idx != UINT32_MAX) ? weapons.byIndex(idx) : nullptr;
+        if (!w) {
+            warnings.push_back(where + ": store '" + store + "' is not a known weapon id; left empty");
+            ls.stations.push_back(st);
+            continue;
+        }
+        st.weaponIndex = idx;
+        st.rounds = w->load.rounds;
+        ls.payloadMassKg += w->load.massKg;
+        ls.payloadCd0 += w->load.dragFactor;
+        ls.stations.push_back(st);
+    }
+
+    pickDefaultSelection(ls, weapons);
+    return ls;
+}
+
 void evaluateFire(FireState& fs, const WeaponRegistry& weapons, const ControlInput& in, bool weaponsHold, uint64_t tick,
                   uint32_t shooterIdx, std::vector<FireRequest>& out) {
     // The edge detector runs UNCONDITIONALLY, before any gate: a press that arrives during a

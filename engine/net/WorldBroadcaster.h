@@ -48,10 +48,12 @@ class FlightIntegrator; // full definition in WorldBroadcaster.cpp
 class JobSystem;        // engine/job/JobSystem.h — full definition in WorldBroadcaster.cpp
 struct EntityDef;       // engine/entity/EntityDef.h — the PayloadResolver's argument
 struct EntityState;
+struct EntityTransform;   // engine/entity/EntityState.h — spawnPilotEntity's transform
 struct FlightModelData;   // engine/flight/FlightModelData.h
 struct IEntityController; // engine/entity/IEntityController.h
 class EntityTypeRegistry;
 class WeatherController;
+class FactionRegistry; // engine/world/FactionRegistry.h — coalition-aware hostility (#632)
 } // namespace fl
 
 namespace fl {
@@ -276,6 +278,23 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     void registerController(EntityId id, std::unique_ptr<IEntityController> controller,
                             std::shared_ptr<const FlightModelData> model = nullptr);
 
+    // Override a controlled entity's loadout from a mission's per-object `loadout:` (#855). Rebuilds the
+    // live stations from `stores` (each replaces one station's default, respecting the station's allowed
+    // list; see buildLoadoutOverride) and re-costs the airframe's payload mass/drag. Must be called AFTER
+    // the entity has a controller (registerController / a mission slot), so its ControlledEntity exists.
+    // Returns false (with no change) when the entity has no controller or no weapon registry is set;
+    // per-store problems append to `warnings`. Sim-thread / pre-start.
+    bool setEntityLoadout(EntityId id, const std::vector<std::string>& stores, std::vector<std::string>& warnings);
+
+    // Install a per-tick hook run at the END of onTick, after the world has stepped (#633). fl-server
+    // wires it to the mission objective/trigger evaluator (MissionRuntime::step), keeping engine-net
+    // free of an engine-mission dependency — GameLoop drives exactly one ISimUpdate, so this is the
+    // clean seam for a second sim-side consumer. Called with the current tick index; sim-thread only.
+    // Call before gameLoop.start().
+    void setMissionTickHook(std::function<void(uint64_t)> hook) {
+        m_missionTickHook = std::move(hook);
+    }
+
     // Peer management — all must be called from the sim thread (via GameLoop::enqueueSimCallback).
 
     // Gracefully disconnect one peer by ID.
@@ -375,6 +394,24 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Empty list = legacy behaviour: spawn at origin with y = m_groundElevation + 500 m.
     // Call before gameLoop.start(); never mutated after that.
     void setSpawnPoints(std::vector<std::array<double, 3>> points) noexcept;
+
+    // A joinable mission player slot (#854): a mission object marked `player: true`. A POD so engine-net
+    // stays free of an engine-mission dependency — fl-server translates engine-mission's PlayerSlot into
+    // this. `factionIndex` indexes the FactionRegistry handed to setFactionRegistry; `quat` is the
+    // resolved spawn orientation (heading already placed on the local tangent frame at spawn time).
+    struct MissionSpawnSlot {
+        std::string entityType;
+        uint16_t factionIndex{0};
+        double pos[3]{};
+        float quat[4]{0.f, 0.f, 0.f, 1.f};
+    };
+
+    // Install the mission's player slots. When non-empty, a connecting pilot is assigned the next open
+    // slot (its type/faction/spawn) instead of the round-robin setSpawnPoints() + [world] player_faction
+    // path; the slot frees on disconnect. All slots occupied ⇒ the pilot falls back to the default path,
+    // so extra players still get an aircraft. Empty (the default) = pre-mission behavior. Resets slot
+    // occupancy; call before gameLoop.start().
+    void setMissionPlayerSlots(std::vector<MissionSpawnSlot> slots);
 
     // World-XZ position of the most recently stepped peer entity (sim thread writes;
     // main thread may read to steer terrain loading).
@@ -688,6 +725,16 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // 6371 km; only call this for non-Earth planets. Call before gameLoop.start().
     void setGravityField(const IGravityField& field, float planetRadiusKm = 6371.f) noexcept;
 
+    // Inject the coalition registry that resolves hostility for AI controllers (#632). Passed into the
+    // AiTickContext each tick, so a scripted mission bot honors mission-declared alliances instead of
+    // the crude "distinct non-zero faction = hostile" affiliation rule. nullptr (the default) keeps
+    // that pre-mission affiliation behavior — the hostile() fallback (FactionRegistry.h). The registry
+    // is owned by the caller (fl-server, for the server lifetime; wired at mission load in #854) and
+    // must outlive this broadcaster. Call before gameLoop.start().
+    void setFactionRegistry(const FactionRegistry* registry) noexcept {
+        m_factionRegistry = registry;
+    }
+
     // Inject the data-parallel job system used to parallelise the per-entity AI + integrate passes
     // in onTick. nullptr (the default) runs both passes inline on the sim thread — keeps unit tests
     // thread-free and gives a serial-equivalent result. The JobSystem must outlive this broadcaster
@@ -714,6 +761,15 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // its flight. Returns the assigned EntityId (invalid on spawn failure). Extracted from the old
     // onConnect. Sim-thread.
     EntityId admitPilot(uint32_t peerId, const std::string& entityType);
+    // Shared spawn core for a pilot peer: spawn `entityType` at `t`, record m_peerEntities, stamp
+    // `faction` (0 = leave neutral), resolve the flight model, and register the PeerController. Used by
+    // both admitPilot (round-robin path) and the mission-slot path. Sim-thread.
+    EntityId spawnPilotEntity(uint32_t peerId, const std::string& entityType, const EntityTransform& t,
+                              uint16_t faction);
+    // Claim the next open mission player slot for `peerId` (#854). Returns its index, or -1 when there
+    // are no slots or all are occupied. releaseMissionSlot frees it on despawn. Sim-thread.
+    int claimMissionSlot(uint32_t peerId);
+    void releaseMissionSlot(uint32_t peerId);
     // Resolve the entity type to spawn for a pilot (#834): a client-requested type wins iff it is a
     // REGISTERED type (server-clamped allowlist); otherwise the [world] player_entity_type default;
     // otherwise builtin:debug-entity. An unregistered request falls back with an Info log.
@@ -776,6 +832,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     INetwork& m_net;
     ILogger& m_logger;
     WeatherController* m_weather{nullptr};
+    const FactionRegistry* m_factionRegistry{nullptr}; // coalition-aware hostility for AI (#632)
+    std::function<void(uint64_t)> m_missionTickHook;   // mission objective evaluator, end of onTick (#633)
 
     std::unordered_map<uint32_t, EntityId> m_peerEntities;
     std::unordered_map<uint32_t, PeerInputState> m_peerInputs;
@@ -885,6 +943,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
 
     std::vector<std::array<double, 3>> m_spawnPoints; // pre-cached [x,y,z]; sim-thread read-only after start
     uint32_t m_nextSpawnIdx{0};                       // round-robin counter; sim-thread only
+
+    // Mission player slots (#854). m_slotOccupant[i] = the peer holding slot i, or kSlotFree. m_peerSlot
+    // maps a peer to its held slot for O(1) release on despawn. Sim-thread only.
+    static constexpr uint32_t kSlotFree = 0xFFFFFFFFu;
+    std::vector<MissionSpawnSlot> m_missionSlots;
+    std::vector<uint32_t> m_slotOccupant;
+    std::unordered_map<uint32_t, int> m_peerSlot;
 
     std::unordered_set<std::string> m_bannedAddresses; // in-memory ban list; sim-thread only
 

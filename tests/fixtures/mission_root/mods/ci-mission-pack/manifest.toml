@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Contributors to Fighters Legacy
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Minimal content pack for the mission-test harness (#856). It ships one deterministic mission that
+# uses only builtin:debug-entity, so the harness runs with no real content mounted.
+[mod]
+name = "ci-mission-pack"
+id = "ci-mission-pack"
+namespace = "ci"
+version = "0.1.0"
+engine-api = "1.0"
+priority = 50
+depends = []

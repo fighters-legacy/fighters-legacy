@@ -32,6 +32,7 @@
 namespace fl {
 class EntityManager;
 class SpatialIndex;
+class FactionRegistry; // #632 — coalition-aware hostility (nullptr = affiliation fallback)
 struct EntityState;
 } // namespace fl
 
@@ -56,7 +57,8 @@ inline constexpr float kDefaultDesignateHalfAngleDeg = 15.f;
 // (a radio call), not every tick.
 [[nodiscard]] fl::EntityId designateBoresightTarget(const fl::EntityManager& em, const fl::EntityState& lead,
                                                     const float viewAxis[3], float maxRangeM, float halfAngleRad,
-                                                    const fl::SpatialIndex* si = nullptr);
+                                                    const fl::SpatialIndex* si = nullptr,
+                                                    const fl::FactionRegistry* factions = nullptr);
 
 // Designate the target the LEAD has actually detected and is pointing at — the #610 seam, closed.
 //
@@ -80,7 +82,7 @@ inline constexpr float kDefaultDesignateHalfAngleDeg = 15.f;
 // is entitled to know.
 [[nodiscard]] fl::EntityId designateFromContacts(const fl::EntityState& lead, const float viewAxis[3],
                                                  const fl::sensor::ContactTable* contacts, float maxRangeM,
-                                                 float halfAngleRad);
+                                                 float halfAngleRad, const fl::FactionRegistry* factions = nullptr);
 
 // Nearest entity hostile to `selfFaction` within rangeM of `anchor`. Used by the engage/cover state
 // factories to pick a threat AT STATE ENTRY (StateMachineController factories take no arguments, so
@@ -88,6 +90,7 @@ inline constexpr float kDefaultDesignateHalfAngleDeg = 15.f;
 // `engage` finds a fresh bandit rather than chasing a corpse).
 [[nodiscard]] fl::EntityId nearestHostileWithin(const fl::EntityManager& em, const fl::EntityState& anchor,
                                                 uint16_t selfFaction, float rangeM,
-                                                const fl::SpatialIndex* si = nullptr);
+                                                const fl::SpatialIndex* si = nullptr,
+                                                const fl::FactionRegistry* factions = nullptr);
 
 } // namespace fl::ai

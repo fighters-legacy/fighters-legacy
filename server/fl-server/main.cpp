@@ -28,11 +28,13 @@
 
 #include <ILogger.h>
 #include <Platform.h>
+#include <ai/AiControllerFactory.h>
 #include <ai/FormationController.h>
 #include <ai/LoiterController.h>
 #include <ai/PursuitController.h>
 #include <ai/StateMachineController.h>
 #include <ai/Threat.h>
+#include <ai/WaypointController.h>
 #include <ai/WingmanBehavior.h>
 #include <ai/WingmanCommand.h>
 #include <config/ConfigFile.h>
@@ -50,17 +52,24 @@
 #include <flight/FlightModelParser.h>
 #include <job/JobSystem.h>
 #include <loop/GameLoop.h>
+#include <mission/Mission.h>
+#include <mission/MissionParser.h>
+#include <mission/MissionReport.h>
+#include <mission/MissionRuntime.h>
+#include <mission/MissionSetup.h>
 #include <net/GameProtocol.h>
 #include <net/WorldBroadcaster.h>
 #include <perf/ProcessStats.h>
 #include <perf/ServerTickReport.h>
 #include <render/BuiltinGeometry.h>
 #include <render/TerrainStreamer.h>
+#include <script/LuaController.h>
 #include <stdfs/StdAsyncFilesystem.h>
 #include <stdfs/StdFilesystem.h>
 #include <weapon/Loadout.h>
 #include <weapon/WeaponRegistry.h>
 #include <weather/WeatherController.h>
+#include <world/FactionRegistry.h>
 
 #include <array>
 #include <chrono>
@@ -146,13 +155,15 @@ static void applyCliAndEnvOverrides(fl::ServerConfig& cfg, int argc, char** argv
 int main(int argc, char** argv) {
     // Pre-pass: --help / --version / --persistent / --bind
     bool flagPersistent = false;
-    std::string flagBind;        // non-empty if --bind addr was given
-    std::string flagAdminToken;  // non-empty if --admin-token was given (internal single-player use)
-    std::string flagTransport;   // non-empty if --transport <gns|enet> was given (overrides [network])
-    std::string flagMetricsJson; // non-empty if --metrics-json path was given (overrides [metrics])
-    std::string flagAssets;      // non-empty if --assets <dir> was given (content root; single-player forwards it)
-    long flagSimWorkers = -1;    // >=0 if --sim-worker-threads was given (overrides [world])
-    long flagFlightSize = -1;    // >=0 if --flight-size was given (overrides [flight] size)
+    std::string flagBind;          // non-empty if --bind addr was given
+    std::string flagAdminToken;    // non-empty if --admin-token was given (internal single-player use)
+    std::string flagTransport;     // non-empty if --transport <gns|enet> was given (overrides [network])
+    std::string flagMetricsJson;   // non-empty if --metrics-json path was given (overrides [metrics])
+    std::string flagAssets;        // non-empty if --assets <dir> was given (content root; single-player forwards it)
+    long flagSimWorkers = -1;      // >=0 if --sim-worker-threads was given (overrides [world])
+    long flagFlightSize = -1;      // >=0 if --flight-size was given (overrides [flight] size)
+    std::string flagMission;       // non-empty if --mission <name> was given (overrides [rotation])
+    std::string flagMissionReport; // non-empty: run the mission headless to completion, write JSON here (#856)
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
@@ -168,6 +179,8 @@ int main(int argc, char** argv) {
                 "  --metrics-json <p> Write the per-phase tick-budget JSON to <p> (overrides [metrics])\n"
                 "  --sim-worker-threads <n>  Sim-tick CPU parallelism; 0=auto, 1=serial (overrides [world])\n"
                 "  --flight-size <n>         AI wingmen per player; 0=none (overrides [flight])\n"
+                "  --mission <name>          Load a mission at startup (overrides [rotation])\n"
+                "  --mission-report <path>   Run the mission headless to completion, write a JSON outcome, exit\n"
                 "\n"
                 "Admin console commands are available on stdin (type 'help' for a command list).\n"
                 "\n"
@@ -205,6 +218,10 @@ int main(int argc, char** argv) {
             flagMetricsJson = argv[++i];
         if (std::strcmp(argv[i], "--assets") == 0 && i + 1 < argc)
             flagAssets = argv[++i];
+        if (std::strcmp(argv[i], "--mission") == 0 && i + 1 < argc)
+            flagMission = argv[++i];
+        if (std::strcmp(argv[i], "--mission-report") == 0 && i + 1 < argc)
+            flagMissionReport = argv[++i];
         if (std::strcmp(argv[i], "--sim-worker-threads") == 0 && i + 1 < argc) {
             char* end = nullptr;
             long n = std::strtol(argv[++i], &end, 10);
@@ -277,10 +294,18 @@ int main(int argc, char** argv) {
     // ---- Phase 2 stub logs ----
     if (cfg.persistent)
         log->log(LogLevel::Info, __FILE__, __LINE__, "persistent world requested (Phase 2 -- not yet active)");
-    if (!cfg.rotationItems.empty()) {
+
+    // Resolve the mission to load at startup (#854): --mission wins, else the first [rotation] item.
+    // Multi-item rotation *timing* (advancing to the next item over the running server) lands
+    // incrementally; the parse -> load -> sim-setup wiring is the deliverable here. The actual load
+    // happens below once the entity registry + weather controller exist (see "load startup mission").
+    std::string missionToLoad = flagMission;
+    if (missionToLoad.empty() && !cfg.rotationItems.empty())
+        missionToLoad = cfg.rotationItems.front();
+    if (!cfg.rotationItems.empty() && flagMission.empty()) {
         char buf[128];
-        std::snprintf(buf, sizeof(buf), "rotation: %zu item(s), order=%s (Phase 2 -- not yet active)",
-                      cfg.rotationItems.size(), cfg.rotationOrder.c_str());
+        std::snprintf(buf, sizeof(buf), "rotation: %zu item(s), order=%s (loading first: %s)", cfg.rotationItems.size(),
+                      cfg.rotationOrder.c_str(), cfg.rotationItems.front().c_str());
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
     if (!cfg.modStack.empty()) {
@@ -781,6 +806,171 @@ int main(int argc, char** argv) {
     // Peer spawn positions are set separately via setSpawnPoints() above.
     primeSpawnHeight(0.0, 0.0); // no-op if already Ready (default-spawn path primed it above)
     broadcaster.setGroundElevation(static_cast<float>(terrainStreamer.heightAt(glm::dvec3{0.0, 0.0, 0.0})));
+
+    // A read-only AI script cache, built before the mission load (so mission `ai: lua <name>` objects
+    // can resolve their scripts) and reused later by the ENet admin `spawn --ai lua` path. Safe to read
+    // from any thread — it is never mutated after construction, before gameLoop.start().
+    std::unordered_map<std::string, std::pair<std::string, std::string>> aiScriptCache;
+    for (const auto& name : assets.listAssets(AssetType::AIScript)) {
+        auto script = assets.loadAIScript(name.c_str());
+        if (!script || script->bytes.empty())
+            continue;
+        std::string src(script->bytes.begin(), script->bytes.end());
+        std::string root = assets.findPackRootForAsset(AssetType::AIScript, name.c_str());
+        aiScriptCache.emplace(name, std::pair<std::string, std::string>{std::move(src), std::move(root)});
+    }
+
+    // ---- Load the startup mission (#854/#855) ----
+    // Resolve the mission asset, hand its bytes to the engine-mission runtime parser (the same schema
+    // validate-mission checks), and set up the sim from it BEFORE gameLoop.start(): spawns + factions
+    // via applyMission, the coalition registry handed to the broadcaster, and the mission's `player:`
+    // objects registered as joinable slots. missionFactions outlives gameLoop (the broadcaster holds a
+    // pointer to it), so it is declared here in main's scope.
+    fl::FactionRegistry missionFactions;
+    // The objective/trigger evaluator (#633). Constructed below when a mission loads; declared here so
+    // it outlives gameLoop (the broadcaster's tick hook captures a pointer into it).
+    std::unique_ptr<fl::MissionRuntime> missionRuntime;
+    std::string loadedMissionName; // for the #856 headless report
+    uint64_t loadedMissionSpawned = 0;
+    if (!missionToLoad.empty()) {
+        auto missionAsset = assets.loadMission(missionToLoad.c_str());
+        if (!missionAsset) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "mission '%.96s' not found — starting empty", missionToLoad.c_str());
+            log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+        } else {
+            const std::string yaml(missionAsset->bytes.begin(), missionAsset->bytes.end());
+            fl::MissionParseResult parsed = fl::parseMission(yaml);
+            if (!parsed.ok) {
+                char buf[192];
+                std::snprintf(buf, sizeof(buf), "mission '%.80s' failed to parse (%zu error(s)) — starting empty",
+                              missionToLoad.c_str(), parsed.errors.size());
+                log->log(LogLevel::Error, __FILE__, __LINE__, buf);
+                for (const std::string& e : parsed.errors)
+                    log->log(LogLevel::Error, __FILE__, __LINE__, e.c_str());
+            } else {
+                // Per-object controller + loadout attachment (#855). engine-mission spawns the object and
+                // calls this back with (id, object); here — where engine-ai / engine-script / the weapon
+                // registry are available — we turn `route`/`ai` into a controller and `loadout` into an
+                // override. route takes precedence over ai when both are present.
+                auto onSpawned = [&](fl::EntityId id, const fl::MissionObject& obj) {
+                    std::unique_ptr<fl::IEntityController> ctrl;
+                    if (!obj.route.empty()) {
+                        std::vector<glm::dvec3> wps;
+                        wps.reserve(obj.route.size());
+                        for (const auto& p : obj.route)
+                            wps.emplace_back(p[0], p[1], p[2]);
+                        ctrl = std::make_unique<fl::ai::WaypointController>(std::move(wps));
+                    } else if (!obj.ai.empty()) {
+                        std::vector<std::string> toks;
+                        std::istringstream iss(obj.ai);
+                        for (std::string tk; iss >> tk;)
+                            toks.push_back(tk);
+                        if (!toks.empty() && toks[0] == "lua") {
+                            const std::string name = toks.size() > 1 ? toks[1] : "";
+                            auto cacheIt = aiScriptCache.find(name);
+                            if (name.empty() || cacheIt == aiScriptCache.end()) {
+                                char m[176];
+                                std::snprintf(m, sizeof(m),
+                                              "mission ai: lua script '%.72s' for object '%.40s' not found",
+                                              name.c_str(), obj.id.c_str());
+                                log->log(LogLevel::Warn, __FILE__, __LINE__, m);
+                            } else {
+                                auto lc = std::make_unique<fl::LuaController>(cacheIt->second.first,
+                                                                              cacheIt->second.second, &entityManager);
+                                if (lc->isValid()) {
+                                    ctrl = std::move(lc);
+                                } else {
+                                    char m[224];
+                                    std::snprintf(m, sizeof(m), "mission ai: lua script '%.56s' error: %.120s",
+                                                  name.c_str(), lc->lastError().c_str());
+                                    log->log(LogLevel::Warn, __FILE__, __LINE__, m);
+                                }
+                            }
+                        } else if (!toks.empty()) {
+                            std::vector<std::string_view> argViews;
+                            for (std::size_t k = 1; k < toks.size(); ++k)
+                                argViews.push_back(toks[k]);
+                            ctrl = fl::ai::createController(toks[0], std::span<std::string_view>(argViews),
+                                                            &entityManager);
+                            if (!ctrl) {
+                                char m[192];
+                                std::snprintf(m, sizeof(m),
+                                              "mission ai: unknown behavior or bad args '%.100s' (object '%.30s')",
+                                              obj.ai.c_str(), obj.id.c_str());
+                                log->log(LogLevel::Warn, __FILE__, __LINE__, m);
+                            }
+                        }
+                    }
+                    if (ctrl)
+                        broadcaster.registerController(id, std::move(ctrl));
+                    if (!obj.loadout.empty()) {
+                        std::vector<std::string> loWarn;
+                        if (!broadcaster.setEntityLoadout(id, obj.loadout, loWarn)) {
+                            char m[176];
+                            std::snprintf(m, sizeof(m),
+                                          "mission loadout: object '%.40s' has no controller/registry — ignored",
+                                          obj.id.c_str());
+                            log->log(LogLevel::Warn, __FILE__, __LINE__, m);
+                        }
+                        for (const std::string& w : loWarn)
+                            log->log(LogLevel::Warn, __FILE__, __LINE__, w.c_str());
+                    }
+                };
+
+                fl::MissionSetupResult setup = fl::applyMission(parsed.mission, entityManager, missionFactions,
+                                                                &weatherController, cfg.planetRadiusM, onSpawned);
+                broadcaster.setFactionRegistry(&missionFactions);
+
+                std::vector<fl::WorldBroadcaster::MissionSpawnSlot> slots;
+                slots.reserve(setup.playerSlots.size());
+                for (const fl::PlayerSlot& ps : setup.playerSlots) {
+                    fl::WorldBroadcaster::MissionSpawnSlot s;
+                    s.entityType = ps.type;
+                    s.factionIndex = ps.factionIndex;
+                    s.pos[0] = ps.pos[0];
+                    s.pos[1] = ps.pos[1];
+                    s.pos[2] = ps.pos[2];
+                    for (int c = 0; c < 4; ++c)
+                        s.quat[c] = ps.quat[c];
+                    slots.push_back(std::move(s));
+                }
+                broadcaster.setMissionPlayerSlots(std::move(slots));
+
+                // Objective / trigger evaluator (#633): runs at the end of each sim tick (second-scale
+                // cadence internally). mission_success / mission_failure drive the objective state
+                // machine; other `do` actions route through the injected dispatcher (a validated-command
+                // seam — logged for now until the mission action grammar is mapped onto the admin path).
+                missionRuntime = std::make_unique<fl::MissionRuntime>(
+                    parsed.mission, std::move(setup.objectEntities), entityManager, [log](std::string_view action) {
+                        char m[224];
+                        std::snprintf(m, sizeof(m), "mission action (seam; not yet routed): %.140s",
+                                      std::string(action).c_str());
+                        log->log(LogLevel::Info, __FILE__, __LINE__, m);
+                    });
+                missionRuntime->setOnEnd([log](const fl::MissionOutcome& o) {
+                    const char* s = o.state == fl::MissionState::Complete ? "SUCCESS" : "FAILURE";
+                    char m[128];
+                    std::snprintf(m, sizeof(m), "mission %s after %.1f s (%u trigger(s) fired)", s, o.elapsedSeconds,
+                                  o.triggersFired);
+                    log->log(LogLevel::Info, __FILE__, __LINE__, m);
+                });
+                broadcaster.setMissionTickHook([rt = missionRuntime.get()](uint64_t t) { rt->step(t); });
+                loadedMissionName = parsed.mission.name;
+                loadedMissionSpawned = setup.spawned.size();
+
+                for (const std::string& w : setup.warnings)
+                    log->log(LogLevel::Warn, __FILE__, __LINE__, w.c_str());
+                char buf[224];
+                std::snprintf(buf, sizeof(buf),
+                              "mission '%.64s' loaded: %zu object(s) spawned, %zu player slot(s), %zu side(s)",
+                              parsed.mission.name.c_str(), setup.spawned.size(), setup.playerSlots.size(),
+                              parsed.mission.sides.size());
+                log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+            }
+        }
+    }
+
     if (!cfg.trace.inputTraceDir.empty()) {
         broadcaster.setInputTraceDir(cfg.trace.inputTraceDir);
         char buf[256];
@@ -811,17 +1001,8 @@ int main(int argc, char** argv) {
     // Declared here so rconServer outlives gameLoop but is destroyed before adminRegistry.
     std::unique_ptr<fl::RconServer> rconServer;
 
-    // Build a read-only AI script cache before gameLoop.start() so it is safe to read
-    // from any thread (including the sim thread for ENet admin commands).
-    std::unordered_map<std::string, std::pair<std::string, std::string>> aiScriptCache;
-    for (const auto& name : assets.listAssets(AssetType::AIScript)) {
-        auto script = assets.loadAIScript(name.c_str());
-        if (!script || script->bytes.empty())
-            continue;
-        std::string src(script->bytes.begin(), script->bytes.end());
-        std::string root = assets.findPackRootForAsset(AssetType::AIScript, name.c_str());
-        aiScriptCache.emplace(name, std::pair<std::string, std::string>{std::move(src), std::move(root)});
-    }
+    // (The read-only AI script cache is built earlier, above the mission load, so the mission's
+    // scripted-bot `ai: lua <name>` objects can resolve their scripts — see aiScriptCache.)
 
     // Projectile-churn state (#580). Declared BEFORE gameLoop: the churn callback re-enqueues a
     // copy of itself each tick, and those queued copies capture this state by reference — it must
@@ -1021,6 +1202,46 @@ int main(int argc, char** argv) {
     std::signal(SIGTERM, onSignal);
 
     adminCtx.env.startTime = std::chrono::steady_clock::now();
+
+    // ---- Headless mission run-to-completion (#856) ----
+    // With --mission-report, step the sim in a deterministic fixed-step loop (no wall-clock, no sim
+    // thread, no networking wait) until the mission ends or a tick cap, write a JSON outcome, and exit.
+    // The overrun governor is pinned OFF so AI decimation (aiStride > 1) cannot make the outcome
+    // load-dependent — determinism is the entire point of a mission-as-test. Combined with pure Lua
+    // scripts (no wall-clock / unseeded RNG), a run is byte-reproducible.
+    if (!flagMissionReport.empty()) {
+        if (!missionRuntime) {
+            log->log(LogLevel::Error, __FILE__, __LINE__, "--mission-report requires a mission (use --mission <name>)");
+            return 2;
+        }
+        broadcaster.setGovernorParams(fl::makeTickGovernorParams(false, 0.9f, 0.6f, 15.f, 4, 400));
+        constexpr double kSimDt = 1.0 / 60.0;
+        constexpr uint64_t kMaxReportTicks = 36000; // 10 sim-minutes at 60 Hz; a stuck mission stops here
+        uint64_t ranTicks = 0;
+        for (uint64_t tick = 1; tick <= kMaxReportTicks; ++tick) {
+            broadcaster.onTick(kSimDt, tick);
+            ranTicks = tick;
+            if (missionRuntime->done())
+                break;
+        }
+        const fl::MissionOutcome& oc = missionRuntime->outcome();
+        fl::MissionReport rep;
+        rep.missionName = loadedMissionName;
+        rep.outcome = oc.state == fl::MissionState::Complete ? "success"
+                      : oc.state == fl::MissionState::Failed ? "failure"
+                                                             : "incomplete";
+        rep.elapsedSeconds = oc.elapsedSeconds;
+        rep.ticks = ranTicks;
+        rep.triggersFired = oc.triggersFired;
+        rep.liveEntities = entityManager.liveCount();
+        rep.spawnedObjects = loadedMissionSpawned;
+        fl::writeConfigFile(flagMissionReport, fl::toJson(rep) + "\n", *log);
+        char rbuf[256];
+        std::snprintf(rbuf, sizeof(rbuf), "mission report: %s after %.1f s / %llu tick(s) -> %s", rep.outcome.c_str(),
+                      rep.elapsedSeconds, static_cast<unsigned long long>(rep.ticks), flagMissionReport.c_str());
+        log->log(LogLevel::Info, __FILE__, __LINE__, rbuf);
+        return 0;
+    }
 
     // ---- Start sim loop ----
     // Emit the "listening on" line now that pre-loop setup (including primeSpawnHeight) is done.

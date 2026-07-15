@@ -29,6 +29,7 @@ multi-key sections). See [Environment variables](#environment-variables) for the
 | `--persistent` | — | Enable persistent world mode (Phase 2 — not yet active) |
 | `--bind <addr>` | IP or hostname | Override `server.bind_address` from the command line; takes precedence over `server.toml` and `FL_BIND_ADDRESS`. Used by the game client when spawning fl-server for single-player mode (`--bind 127.0.0.1`). |
 | `--metrics-json <path>` | file path | Write the per-phase tick-budget JSON to `<path>`; overrides `[metrics] tick_json_path`. See [metrics](#metrics--tick-budget-export). |
+| `--mission <name>` | mission asset name | Load a mission at startup; overrides `[rotation]`. See [rotation](#rotation--scenario-rotation). |
 
 CLI positional arguments (Tier 2): `fl-server [port] [maxPeers]`
 
@@ -259,8 +260,10 @@ is open to all.
 
 ## [rotation] — Scenario rotation
 
-> **Phase 2:** Rotation logic lands with the game server runtime. These keys are parsed
-> and stored; no automatic cycling occurs yet.
+> **Phase 4 (#854):** The server now **loads the first rotation item's mission** at startup
+> (parsed by the engine mission runtime, spawns/factions/weather set up before the first tick).
+> `--mission <name>` on the command line overrides this. Automatic cycling to later items over a
+> running server (rotation *timing*) lands incrementally; the first item is live today.
 
 ### `order`
 
