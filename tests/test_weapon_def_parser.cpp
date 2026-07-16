@@ -194,7 +194,7 @@ drag_factor = 0.022
     CHECK_FALSE(w.seeker.has_value());
 }
 
-TEST_CASE("A fuel (drop-tank) store needs no performance or warhead — mass and drag only (#862)", "[weapon]") {
+TEST_CASE("A fuel (drop-tank) store needs no performance or warhead -- mass and drag only (#862)", "[weapon]") {
     const std::string toml = R"toml(
 [weapon]
 id       = "fl-base:tank370"

@@ -405,7 +405,7 @@ TEST_CASE("the builtin debug entity has a real damage model with the full subsys
     CHECK(def.damage->critical.avionicsFailure);
 }
 
-TEST_CASE("the builtin drop tank is a Fuel store — inert, mass/drag only (#862)") {
+TEST_CASE("the builtin drop tank is a Fuel store -- inert, mass/drag only (#862)") {
     const WeaponDef& tank = BuiltinWeapon::dropTank();
     CHECK(tank.type == WeaponType::Fuel);
     CHECK_FALSE(tank.seeker.has_value()); // not a weapon: no seeker
