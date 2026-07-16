@@ -358,6 +358,12 @@ struct SessionContext {
     // is gated on it — tiles bake the radius at generation time) and wires ClientPrediction
     // with the post-ack player idx/gen/radius (#755).
     bool connectAckApplied{false};
+    // The entity gen + role the connect-ack setup last applied. A mid-session role switch (server
+    // set_role, #859/#648) re-sends MsgConnectAck with a different entity/role; when these change the
+    // setup re-runs so an observer→pilot switch wires prediction + the cockpit, and pilot→observer
+    // tears prediction down and drops back to the ghost camera.
+    uint32_t appliedEntityGen{0};
+    fl::PeerRole appliedRole{fl::PeerRole::Pilot};
     bool manualBuilt{false}; // the aircraft manual is generated once per session (#821)
     // Wall-clock start of this session; the delta at debrief accrues into PilotProfile::flightTimeS (#634).
     std::chrono::steady_clock::time_point sessionStart{};
@@ -1173,50 +1179,86 @@ void Game::run() {
         // Loading and immediately invalidate them on a non-Earth server.
         if (inSession) {
             d.services.p.asyncFilesystem->service();
-            if (d.session.clientHandler && d.session.clientHandler->assignedEntityGen != 0) {
-                if (!d.session.connectAckApplied) {
+            // A pilot is "ready" once its ConnectAck assigns an entity (gen != 0). An observer (#859)
+            // never gets an entity, so its readiness is just that the ConnectAck arrived — it still
+            // needs the planet radius applied and terrain streamed, only keyed on its ghost camera.
+            const bool observer =
+                d.session.clientHandler && d.session.clientHandler->grantedRole() == fl::PeerRole::Observer;
+            const bool ackReady = d.session.clientHandler && (d.session.clientHandler->assignedEntityGen != 0 ||
+                                                              (observer && d.session.clientHandler->gotConnectAck()));
+            if (ackReady) {
+                // Re-run the setup when a mid-session role switch (#859) re-sends MsgConnectAck with a
+                // different entity/role — otherwise the one-shot flag would strand a switched peer with
+                // stale prediction/camera state.
+                const uint32_t ackGen = d.session.clientHandler->assignedEntityGen;
+                const fl::PeerRole ackRole = d.session.clientHandler->grantedRole();
+                const bool ackChanged = d.session.connectAckApplied &&
+                                        (ackGen != d.session.appliedEntityGen || ackRole != d.session.appliedRole);
+                if (!d.session.connectAckApplied || ackChanged) {
                     const double radiusM = static_cast<double>(d.session.clientHandler->planetRadiusKm()) * 1000.0;
                     d.services.terrainStreamer->setPlanetRadius(radiusM);
                     // Camera "up" = radial direction on the planet, so the horizon stays
                     // level far from the origin.
                     d.services.camInput.setPlanetRadius(radiusM);
 
-                    // Wire client-side prediction now that MsgConnectAck has populated the
-                    // player's entity idx/gen and the server's planet radius. Doing this in
-                    // onConnect (before connect()) captured the pre-ack defaults (0/0/6371),
-                    // leaving reconcile() a permanent no-op (#755). The resolver captures only
-                    // &d (session-lived services), so building it here is equivalent.
-                    // The entity's flight model now arrives on MsgEntityTypeDef (#811), so the client
-                    // reads the field instead of re-deriving it from disk by an id that was never a
-                    // filename. Every fallback to the builtin model is logged at Error and names the id.
-                    auto flightModelResolver = fl::makeFlightModelResolver(d.services.entityRegistry,
-                                                                           *d.services.assets, *d.services.p.logger);
-                    // The default loadout's mass and drag, straight off MsgEntityTypeDef (#812) --
-                    // the client carries the same stores as the server without needing a weapon
-                    // registry to work out what they weigh.
-                    auto payloadResolver = [&d](uint32_t typeIndex) -> fl::PayloadEffect {
-                        const fl::EntityDef* def = d.services.entityRegistry.byIndex(typeIndex);
-                        if (!def)
-                            return {};
-                        return fl::PayloadEffect{def->payloadMassKg, def->payloadCd0};
-                    };
-                    auto heightQuery = [&d](glm::dvec3 pos) -> float {
-                        return d.services.terrainStreamer
-                                   ? static_cast<float>(d.services.terrainStreamer->heightAt(pos))
-                                   : 0.f;
-                    };
-                    d.services.prediction.init(
-                        d.services.userConfig->prediction(), std::move(flightModelResolver), std::move(payloadResolver),
-                        std::move(heightQuery), d.session.clientHandler->assignedEntityIdx,
-                        d.session.clientHandler->assignedEntityGen, d.session.clientHandler->planetRadiusKm());
+                    if (observer) {
+                        // Ghost camera (#859): there is no ownship to predict, so ClientPrediction is
+                        // torn down (a pilot→observer switch leaves a stale predictor otherwise). Force
+                        // the free-fly camera — Cockpit/Chase render nothing without a player entity —
+                        // and place the eye at an overview vantage above the origin; WASD flies it from
+                        // there, and the eye we send drives server-side interest (#858).
+                        d.services.prediction.reset();
+                        d.services.cameraController.setMode(fl::CameraMode::Free);
+                        d.services.camInput.setFlyEye(glm::dvec3{0.0, 3000.0, 0.0});
+                    } else {
+                        // Becoming a pilot mid-session (observer→pilot switch): drop the ghost's free
+                        // camera into the cockpit of the freshly assigned aircraft. Harmless on the
+                        // initial pilot connect, where the mode already defaults to Cockpit.
+                        if (ackChanged)
+                            d.services.cameraController.setMode(fl::CameraMode::Cockpit);
+                        // Wire client-side prediction now that MsgConnectAck has populated the
+                        // player's entity idx/gen and the server's planet radius. Doing this in
+                        // onConnect (before connect()) captured the pre-ack defaults (0/0/6371),
+                        // leaving reconcile() a permanent no-op (#755). The resolver captures only
+                        // &d (session-lived services), so building it here is equivalent. A re-init
+                        // (respawn / role switch) overwrites the prior predictor with the new idx/gen.
+                        // The entity's flight model now arrives on MsgEntityTypeDef (#811), so the client
+                        // reads the field instead of re-deriving it from disk by an id that was never a
+                        // filename. Every fallback to the builtin model is logged at Error and names the id.
+                        auto flightModelResolver = fl::makeFlightModelResolver(
+                            d.services.entityRegistry, *d.services.assets, *d.services.p.logger);
+                        // The default loadout's mass and drag, straight off MsgEntityTypeDef (#812) --
+                        // the client carries the same stores as the server without needing a weapon
+                        // registry to work out what they weigh.
+                        auto payloadResolver = [&d](uint32_t typeIndex) -> fl::PayloadEffect {
+                            const fl::EntityDef* def = d.services.entityRegistry.byIndex(typeIndex);
+                            if (!def)
+                                return {};
+                            return fl::PayloadEffect{def->payloadMassKg, def->payloadCd0};
+                        };
+                        auto heightQuery = [&d](glm::dvec3 pos) -> float {
+                            return d.services.terrainStreamer
+                                       ? static_cast<float>(d.services.terrainStreamer->heightAt(pos))
+                                       : 0.f;
+                        };
+                        d.services.prediction.init(d.services.userConfig->prediction(), std::move(flightModelResolver),
+                                                   std::move(payloadResolver), std::move(heightQuery),
+                                                   d.session.clientHandler->assignedEntityIdx,
+                                                   d.session.clientHandler->assignedEntityGen,
+                                                   d.session.clientHandler->planetRadiusKm());
+                    }
 
                     d.session.connectAckApplied = true;
+                    d.session.appliedEntityGen = ackGen;
+                    d.session.appliedRole = ackRole;
                 }
                 // Real screen height + FOV for the SSE refinement metric (window is resizable;
                 // fovY matches CameraController's 60 deg default).
                 d.services.terrainStreamer->setViewParams(static_cast<float>(d.services.p.window->height()),
                                                           glm::radians(60.0f));
-                const glm::dvec3 terrainPos = playerEntry ? playerEntry->position : glm::dvec3{};
+                // Stream terrain around the ownship (pilot) or the ghost camera eye (observer, #859).
+                const glm::dvec3 terrainPos =
+                    playerEntry ? playerEntry->position : (observer ? d.services.camInput.eyeWorld() : glm::dvec3{});
                 d.services.terrainStreamer->update(terrainPos);
             }
         }
