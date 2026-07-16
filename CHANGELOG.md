@@ -9,6 +9,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **renderer**: Per-category builtin placeholder meshes — a mesh-less entity now renders a distinct silhouette by category (winged aircraft, missile/bomb/rocket darts, boxy ground vehicle, naval hull, stepped structure) with slumped wreck variants for the persistent categories, replacing the single debug wedge; the tetrahedron is fully removed and a spiky "Unknown" error beacon renders only in bug states (unknown type, unmapped ordinal) (#886)
+- **network**: `MsgEntityTypeDef` carries the entity's `ObjectCategory` + `ProjectileKind` ordinals (332 → 336 bytes, additive tail-append) so the client knows a SAM site from a bomb from a bunker — the placeholder silhouettes, and future picker grouping/map icons, key on them (#886)
+- **entity**: New `ObjectCategory::Structure` (the builtin static target was mis-filed as a ground vehicle) and a `ProjectileKind` vocabulary with an optional `projectile_kind` entity TOML key (`missile`/`bomb`/`rocket`, projectile-only) (#886)
+
 - **game**: Instant Action — the main menu's first single-player entry now launches the builtin skirmish (a `builtin:fighter` wingman + two bandits + a SAM to destroy, zero-pack via #868) instead of dropping you into an empty world, so there's something to fight from a bare checkout. A new "Free Flight" entry keeps the empty practice world (HOTAS calibration, just flying). Multiplayer still shows a single "Join Server" (#40)
 - **mission**: Ground/ramp start — a mission object can now spawn parked on the ground with `start: ground` (default `air`): placed at the terrain elevation at its position, idle throttle, zero airspeed, and held stable by the integrator's parking hold until the pilot throttles up and rotates. Pairs with the airborne-spawn and destroy-at-0.0s fixes so a training/BFM sortie can begin on the runway instead of being dropped into the air (#885)
 

@@ -55,16 +55,19 @@ If you see red, recalculate normals in Edit Mode: **Mesh → Normals → Recalcu
 normals and reports a mesh that is wound inside-out (most faces wound opposite their normals) as an
 error, with the same "Recalculate Outside" hint. Run it on your exported `.glb` before shipping.
 
-### Reference mesh
+### Reference meshes
 
-The engine's built-in placeholder (a tetrahedron — +X forward, outward normals) is the canonical
-reference for this convention. Export it and import into Blender (File → Import → glTF 2.0) to
-compare orientation and winding against your own model:
+The engine's built-in placeholder shapes (#886 — one per category: aircraft, missile, bomb,
+rocket, ground vehicle, naval vessel, structure, plus the Unknown error beacon; all +X forward,
+outward normals) are the canonical reference for this convention. Export them and import into
+Blender (File → Import → glTF 2.0) to compare orientation and winding against your own model:
 
 ```bash
 python3 tools/gen_builtin_glb.py --export-dir /tmp/builtin
-# writes /tmp/builtin/builtin_entity.glb  (+X-forward tetrahedron, all-blue from outside)
-#        /tmp/builtin/builtin_floor.glb   (Y-up ground quad)
+# writes /tmp/builtin/builtin_aircraft.glb, builtin_missile.glb, builtin_bomb.glb,
+#        builtin_rocket.glb, builtin_ground_vehicle.glb, builtin_naval_vessel.glb,
+#        builtin_structure.glb, builtin_unknown.glb (+ *_damaged wreck variants,
+#        all-blue from outside) and builtin_floor.glb (Y-up ground quad)
 ```
 
 ---

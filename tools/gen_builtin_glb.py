@@ -4,8 +4,6 @@
 Generate minimal glTF 2.0 binary (.glb) byte arrays for BuiltinGeometry.cpp.
 
 Default: prints a C++ snippet with static const uint8_t[] definitions:
-  kTetrahedronGlb — legacy directional wedge (~10 m, +X forward); removed with the
-    SceneRenderer shape switch (#886) together with kDamagedWedgeGlb + the face glbs
   kFloorPlaneGlb  — flat 4 km x 4 km quad at Y=0, normal (0,1,0)
   the per-category placeholder shapes (#886), one per BuiltinShape:
     kUnknownGlb        — spiky 6-pointed jack/caltrop error beacon (bug states only)
@@ -86,150 +84,6 @@ def make_glb_full(bin_data: bytes, gltf_json: dict) -> bytes:
     bin_chunk_hdr = struct.pack('<II', bin_chunk_len, 0x004E4942)    # length, type BIN\0
 
     return header + json_chunk_hdr + json_bytes + bin_chunk_hdr + bin_data_padded
-
-
-def tetra_vertices():
-    """
-    Directional wedge/dart placeholder, ~10 m long, pointing in +X (direction of travel).
-    Topologically a tetrahedron (4 vertices, 4 faces) oriented so it reads like a vehicle:
-      - FLAT BOTTOM on the ground   (the BL/BR/F triangle, all at y=0)
-      - FLAT VERTICAL BACK at -X     (the BL/BR/BT triangle, all at x=-d)
-      - single NOSE vertex F at +X   (the "front" / direction of travel)
-      - top slopes from the back-top (BT) down to the nose
-    Origin is the ground-contact point (lowest verts at y=0), the standard vehicle convention
-    (origin at the gear line) so the physics floor clamps the origin straight to the terrain.
-    Returns (BL, BR, BT, F).
-    """
-    d = 2.5  # back face plane at x = -d
-    L = 7.5  # nose at x = +L  (total length d + L = 10 m)
-    w = 2.5  # half-width (5 m span)
-    h = 3.0  # back-top height
-    BL = (-d, 0.0, -w)  # back-bottom-left
-    BR = (-d, 0.0, w)   # back-bottom-right
-    BT = (-d, h, 0.0)   # back-top
-    F = (L, 0.0, 0.0)   # front nose (ground level)
-    return BL, BR, BT, F
-
-
-def damaged_wedge_vertices():
-    """
-    The DAMAGED-variant placeholder (#864): a slumped, foreshortened wedge that reads as a wreck
-    next to the clean one, so the `damageLevel > 0` mesh swap has something distinct to show with no
-    content pack. Same topology (4 verts / 4 faces, flat bottom preserved so it still sits on the
-    ground), but a short collapsed nose, a low bent back-top, and an asymmetric tilt.
-    Returns (BL, BR, BT, F).
-    """
-    d = 2.5   # back face plane at x = -d (unchanged, so the footprint matches the clean wedge)
-    L = 3.5   # collapsed short nose (vs 7.5 clean)
-    w = 2.5   # half-width unchanged
-    BL = (-d, 0.0, -w)      # back-bottom-left  (on the ground)
-    BR = (-d, 0.0, w)       # back-bottom-right (on the ground)
-    BT = (-d + 0.8, 1.3, -0.7)  # back-top: slumped and bent to one side
-    F = (L, 0.0, 0.0)       # nose stub at ground level
-    return BL, BR, BT, F
-
-
-def tetra_faces(verts=None):
-    """4 faces wound CCW-from-outside (outward normals). See tetra_vertices() for the shape.
-
-    Outward normals are required by the engine's opaque pipeline (frontFace=CW after the Vulkan
-    Y-flip + cull BACK): the outside renders, the inside is culled. Face order matters because the
-    forward shader's debug face-colouring keys off the face normal:
-      0 bottom (-Y) = red, 1 back (-X) = green, 2 right (+Z) = blue, 3 left (-Z) = yellow.
-    """
-    BL, BR, BT, F = verts if verts is not None else tetra_vertices()
-    return [
-        (BL, F, BR),   # 0 bottom -> outward normal -Y
-        (BL, BR, BT),  # 1 back   -> outward normal -X
-        (BR, F, BT),   # 2 right  -> outward normal +Z (up/forward)
-        (BL, BT, F),   # 3 left   -> outward normal -Z (up/forward)
-    ]
-
-
-def build_tetrahedron(verts=None) -> bytes:
-    """
-    Directional wedge placeholder (see tetra_vertices/tetra_faces), ~10 m long, +X forward.
-    4 faces × 3 vertices = 12 vertices, each with POSITION (vec3) + NORMAL (vec3).
-    Vertex stride = 24 bytes. Total binary = 12 * 24 = 288 bytes.
-    Per-face normals (flat shading): each triangle has its own 3 identical normals.
-    `verts` overrides the vertex set (used for the damaged variant); default is the clean wedge.
-    """
-    def norm(a, b, c):
-        """Face normal from 3 vertices (a, b, c) — CCW winding."""
-        ab = (b[0]-a[0], b[1]-a[1], b[2]-a[2])
-        ac = (c[0]-a[0], c[1]-a[1], c[2]-a[2])
-        nx = ab[1]*ac[2] - ab[2]*ac[1]
-        ny = ab[2]*ac[0] - ab[0]*ac[2]
-        nz = ab[0]*ac[1] - ab[1]*ac[0]
-        length = math.sqrt(nx*nx + ny*ny + nz*nz)
-        return (nx/length, ny/length, nz/length)
-
-    faces = tetra_faces(verts)
-
-    pos_bin = b''
-    norm_bin = b''
-    pos_min = [float('inf')] * 3
-    pos_max = [float('-inf')] * 3
-
-    # tetra_faces() lists each face CCW-from-outside (the glTF 2.0 standard, what Blender exports):
-    # norm(a,b,c) is the OUTWARD normal and the winding cross-product agrees with it. The engine's
-    # opaque pipeline front-faces standard CCW geometry (frontFace=CCW + the projection Y-flip), so
-    # this renders solid from outside.
-    for face in faces:
-        a, b, c = face
-        n = norm(a, b, c)  # outward normal (== winding cross-product direction)
-        for v in (a, b, c):
-            pos_bin += pack_vec3(*v)
-            norm_bin += pack_vec3(*n)
-            for i in range(3):
-                pos_min[i] = min(pos_min[i], v[i])
-                pos_max[i] = max(pos_max[i], v[i])
-
-    # Non-interleaved: [positions 144B][normals 144B] = 288 bytes.
-    # No byteStride — sequential layout avoids the stride×count byteLength issue.
-    bin_data = pos_bin + norm_bin
-    assert len(bin_data) == 12 * 24  # 12 verts × (vec3 pos + vec3 norm)
-
-    byte_len = len(bin_data)
-
-    gltf = {
-        "asset": {"version": "2.0"},
-        "scene": 0,
-        "scenes": [{"nodes": [0]}],
-        "nodes": [{"name": "builtin_entity", "mesh": 0}],
-        "meshes": [{
-            "name": "builtin_entity",
-            "primitives": [{
-                "attributes": {"POSITION": 0, "NORMAL": 1},
-                "mode": 4  # TRIANGLES
-            }]
-        }],
-        "accessors": [
-            {
-                "bufferView": 0,
-                "byteOffset": 0,
-                "componentType": 5126,  # FLOAT
-                "count": 12,
-                "type": "VEC3",
-                "min": [round(pos_min[i], 6) for i in range(3)],
-                "max": [round(pos_max[i], 6) for i in range(3)],
-            },
-            {
-                "bufferView": 1,
-                "byteOffset": 0,
-                "componentType": 5126,
-                "count": 12,
-                "type": "VEC3",
-            },
-        ],
-        "bufferViews": [
-            {"buffer": 0, "byteOffset": 0,   "byteLength": 144, "target": 34962},  # positions
-            {"buffer": 0, "byteOffset": 144, "byteLength": 144, "target": 34962},  # normals
-        ],
-        "buffers": [{"byteLength": byte_len}],
-    }
-
-    return make_glb_full(bin_data, gltf)
 
 
 def build_floor_plane() -> bytes:
@@ -613,53 +467,6 @@ def shape_glbs():
                    build_flat_glb(node_name + "_damaged", slump(tris)))
 
 
-def build_tetrahedron_face(vertices) -> bytes:
-    """Build a single triangle as a minimal .glb (one face of the tetrahedron)."""
-    a, b, c = vertices
-
-    def cross3(u, v):
-        return (u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0])
-
-    def norm3(n):
-        length = math.sqrt(sum(x*x for x in n))
-        return tuple(x/length for x in n)
-
-    ab = (b[0]-a[0], b[1]-a[1], b[2]-a[2])
-    ac = (c[0]-a[0], c[1]-a[1], c[2]-a[2])
-    n = norm3(cross3(ab, ac))  # outward normal (winding cross-product, standard CCW)
-
-    pos_bin = pack_vec3(*a) + pack_vec3(*b) + pack_vec3(*c)
-    norm_bin = pack_vec3(*n) * 3
-
-    pos_min = [min(v[i] for v in (a, b, c)) for i in range(3)]
-    pos_max = [max(v[i] for v in (a, b, c)) for i in range(3)]
-
-    bin_data = pos_bin + norm_bin
-    assert len(bin_data) == 3 * 24
-
-    gltf = {
-        "asset": {"version": "2.0"},
-        "scene": 0,
-        "scenes": [{"nodes": [0]}],
-        "nodes": [{"name": "builtin_entity_face", "mesh": 0}],
-        "meshes": [{"name": "builtin_entity_face",
-                    "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "mode": 4}]}],
-        "accessors": [
-            {"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 3,
-             "type": "VEC3",
-             "min": [round(pos_min[i], 6) for i in range(3)],
-             "max": [round(pos_max[i], 6) for i in range(3)]},
-            {"bufferView": 1, "byteOffset": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
-        ],
-        "bufferViews": [
-            {"buffer": 0, "byteOffset": 0,  "byteLength": 36, "target": 34962},
-            {"buffer": 0, "byteOffset": 36, "byteLength": 36, "target": 34962},
-        ],
-        "buffers": [{"byteLength": len(bin_data)}],
-    }
-    return make_glb_full(bin_data, gltf)
-
-
 def bytes_to_cpp_array(name: str, data: bytes) -> str:
     lines = []
     lines.append(f'static const uint8_t {name}[] = {{')
@@ -677,19 +484,16 @@ def main():
     parser.add_argument(
         "--export-dir",
         metavar="DIR",
-        help="Write builtin_entity.glb and builtin_floor.glb to DIR (for Blender import / "
-             "winding inspection) instead of printing the C++ arrays.")
+        help="Write the builtin_*.glb set to DIR (for Blender import / winding inspection / "
+             "the CI validate-mesh gate) instead of printing the C++ arrays.")
     args = parser.parse_args()
 
-    tet = build_tetrahedron()
-    damaged = build_tetrahedron(damaged_wedge_vertices())
     floor = build_floor_plane()
     shapes = list(shape_glbs())
 
     if args.export_dir:
         os.makedirs(args.export_dir, exist_ok=True)
-        exports = [("builtin_entity.glb", tet), ("builtin_entity_damaged.glb", damaged),
-                   ("builtin_floor.glb", floor)]
+        exports = [("builtin_floor.glb", floor)]
         exports += [(stem + ".glb", data) for stem, _, data in shapes]
         for name, data in exports:
             path = os.path.join(args.export_dir, name)
@@ -698,23 +502,9 @@ def main():
             print(f"wrote {path} ({len(data)} bytes)")
         return
 
-    # Compute the 4 faces (same geometry/winding as build_tetrahedron: origin at the flat bottom).
-    faces = tetra_faces()
-
-    print(f'// kTetrahedronGlb: {len(tet)} bytes')
-    print(bytes_to_cpp_array('kTetrahedronGlb', tet))
-    print()
-    print(f'// kDamagedWedgeGlb: {len(damaged)} bytes')
-    print(bytes_to_cpp_array('kDamagedWedgeGlb', damaged))
-    print()
     print(f'// kFloorPlaneGlb: {len(floor)} bytes')
     print(bytes_to_cpp_array('kFloorPlaneGlb', floor))
     print()
-    for i, face in enumerate(faces):
-        glb = build_tetrahedron_face(face)
-        print(f'// kTetrahedronFace{i}Glb: {len(glb)} bytes')
-        print(bytes_to_cpp_array(f'kTetrahedronFace{i}Glb', glb))
-        print()
     for _, array_name, data in shapes:
         print(f'// {array_name}: {len(data)} bytes')
         print(bytes_to_cpp_array(array_name, data))

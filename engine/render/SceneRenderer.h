@@ -2,6 +2,7 @@
 #pragma once
 
 #include "RenderTypes.h"
+#include "render/BuiltinShape.h"
 
 #include <functional>
 #include <span>
@@ -36,14 +37,24 @@ std::string textureAssetNameFromUri(std::string_view uri);
 //
 // Dependency injection:
 //   MeshNameResolver breaks the circular CMake dep between engine-render and engine-entity.
-//   Caller (main.cpp) provides a lambda that captures &EntityTypeRegistry and resolves
-//   typeIndex → (meshName, classicDamageMeshName). Returns false if the typeIndex is unknown.
+//   Caller (Game.cpp) provides a lambda that captures &EntityTypeRegistry and resolves
+//   typeIndex → ResolvedMesh (mesh names + the builtin placeholder shape, via
+//   fl::builtinShapeFor in engine/entity/BuiltinShapeMap.h). Returns false if the
+//   typeIndex is unknown — the entity then renders as the Unknown error beacon.
 class SceneRenderer {
   public:
-    // Given a typeIndex, fills meshName and classicDamageMeshName (empty if no damage variant).
-    // Returns true if the type is known; false to skip the entity entirely.
-    using MeshNameResolver =
-        std::function<bool(uint32_t typeIndex, std::string& meshName, std::string& damageMeshName)>;
+    // What a typeIndex resolves to for rendering (#886). An empty meshName means "draw the
+    // builtin placeholder for `shape`"; an empty damageMeshName means "no authored damage
+    // variant" (a builtin-rendered entity swaps to the shape's wreck instead).
+    struct ResolvedMesh {
+        std::string meshName;
+        std::string damageMeshName;
+        BuiltinShape shape{BuiltinShape::Unknown};
+    };
+
+    // Fills `out` for a typeIndex. Returns true if the type is known; false leaves the
+    // entity on the Unknown placeholder (and warns once per type, #832).
+    using MeshNameResolver = std::function<bool(uint32_t typeIndex, ResolvedMesh& out)>;
 
     // Given a typeIndex and damageLevel (uint8_t cast of DamageLevel), returns the visual
     // effect preset name, or empty string if none.  Used to emit particle effects from
@@ -116,8 +127,8 @@ class SceneRenderer {
     SubtitleQueue* m_subtitleQueue{nullptr};
     std::vector<SubtitleEntry> m_subtitleEntries; // backing storage for FrameScene::subtitles span
 
-    // Per-typeIndex resolved names, cached so the resolver is called at most once per type.
-    std::unordered_map<uint32_t, std::pair<std::string, std::string>> m_typeNameCache;
+    // Per-typeIndex resolution, cached so the resolver is called at most once per type.
+    std::unordered_map<uint32_t, ResolvedMesh> m_typeNameCache;
 
     std::unordered_map<std::string, MeshHandle> m_meshCache;
     std::unordered_map<std::string, MaterialHandle> m_materialCache;
@@ -129,12 +140,14 @@ class SceneRenderer {
     static constexpr float kTickDt = 1.0f / 60.0f;
 
     // Builtin fallback resources — uploaded once on first renderFrame call.
-    // Entity mesh: tetrahedron; palette cycles 6 colors by entityIdx (3 opaque, 3 glass).
+    // Entity meshes: one placeholder silhouette per BuiltinShape (#886) + a wreck variant per
+    // persistent category; palette cycles 6 colors by entityIdx (3 opaque, 3 glass).
     // Floor mesh: 4 km flat plane, olive-gray material.
     static constexpr int kPaletteSize = 6;
+    static constexpr size_t kShapeCount = static_cast<size_t>(BuiltinShape::Count);
 
-    MeshHandle m_builtinEntityMesh{};
-    MeshHandle m_builtinDamagedMesh{};     // damage-variant placeholder (#864); shown at damageLevel > 0
+    MeshHandle m_builtinShapeMeshes[kShapeCount]{};        // indexed by BuiltinShape ordinal
+    MeshHandle m_builtinDamagedShapeMeshes[kShapeCount]{}; // wreck variants; shown at damageLevel > 0
     TextureHandle m_builtinBaseColorTex{}; // builtin PBR texture set (#867), sampled by m_fallbackEntityMat
     TextureHandle m_builtinNormalTex{};
     TextureHandle m_builtinOrmTex{};

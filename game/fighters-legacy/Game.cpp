@@ -39,6 +39,7 @@
 #include "content/ModLoader.h"
 #include "crash/CrashInfo.h"
 #include "crash/CrashReporter.h"
+#include "entity/BuiltinShapeMap.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityTypeRegistry.h"
 #include "firstrun/FirstRun.h"
@@ -712,12 +713,15 @@ void Game::initGameSystems() {
 
     d.services.sceneRenderer = std::make_unique<fl::SceneRenderer>(
         d.services.renderBridge,
-        [&reg = d.services.entityRegistry](uint32_t idx, std::string& mesh, std::string& dmg) -> bool {
+        [&reg = d.services.entityRegistry](uint32_t idx, fl::SceneRenderer::ResolvedMesh& out) -> bool {
             const fl::EntityDef* def = reg.byIndex(idx);
             if (!def)
                 return false;
-            mesh = def->mesh;
-            dmg = def->classicDamageMesh;
+            out.meshName = def->mesh;
+            out.damageMeshName = def->classicDamageMesh;
+            // Category + projectile kind arrive on MsgEntityTypeDef (#886); a mesh-less type
+            // renders as its category's builtin placeholder silhouette.
+            out.shape = fl::builtinShapeFor(def->category, def->projectileKind);
             return true;
         },
         *d.services.assets, *d.services.p.renderer);

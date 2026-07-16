@@ -1071,7 +1071,7 @@ Lua AI script. Place entity definition files anywhere in the pack directory (typ
 |------------|--------|---------------------------------------------------------|
 | `id`       | string | Pack-scoped identifier, e.g. `fl-base:f15c`            |
 | `name`     | string | Human-readable display name                             |
-| `category` | string | `air_vehicle`, `ground_vehicle`, `naval_vehicle`, `projectile`, `effect`, `player` |
+| `category` | string | `air_vehicle`, `ground_vehicle`, `naval_vehicle`, `projectile`, `effect`, `player`, `structure` |
 | `max_hp`   | float  | Maximum hit points                                      |
 
 **Optional fields:**
@@ -1084,7 +1084,8 @@ Lua AI script. Place entity definition files anywhere in the pack directory (typ
 | `flight_model`      | string | `""`    | Flight model TOML asset name; empty = builtin UFO model (server-side only) |
 | `ai_script`         | string | `""`    | Lua AI script name from the pack's `ai/` directory; auto-assigned when spawned without `--ai`; empty = no scripted AI (server-side only) |
 | `sensors`           | string[] | `[]`  | Sensor-def IDs this entity carries (see [Sensor Data](#sensor-data--toml)); empty = the builtin eyeball for AI-controlled entities |
-| `collision_radius_m`| float  | `0`     | Collision sphere radius for entity-entity collision (#630); `0` = category default (air/player 8 m, ground/naval 15 m). Set an explicit value for an oversized airframe (a blimp, a carrier). Projectiles never collide here — they use their own fuze path |
+| `collision_radius_m`| float  | `0`     | Collision sphere radius for entity-entity collision (#630); `0` = category default (air/player 8 m, ground/naval/structure 15 m). Set an explicit value for an oversized airframe (a blimp, a carrier). Projectiles never collide here — they use their own fuze path |
+| `projectile_kind`   | string | `missile` | `category = "projectile"` only: `missile`, `bomb`, or `rocket` — selects the builtin placeholder silhouette when the def has no `mesh` (and future projectile-aware client UI). Setting it on any other category is a parse **error** |
 
 **Example:**
 
