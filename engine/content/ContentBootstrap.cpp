@@ -146,6 +146,24 @@ uint32_t registerProjectileEntityDefs(const WeaponRegistry& weapons, EntityTypeR
         def.id = projectileTypeId(*w);
         def.name = w->name;
         def.category = ObjectCategory::Projectile;
+        // Explicit switch, never an ordinal cast: WeaponType and ProjectileKind are parallel
+        // vocabularies with different ordinals (the same trap as WeaponType vs HardpointType,
+        // whose Pod/Fuel ordinals are swapped).
+        switch (w->type) {
+        case WeaponType::Missile:
+            def.projectileKind = ProjectileKind::Missile;
+            break;
+        case WeaponType::Bomb:
+            def.projectileKind = ProjectileKind::Bomb;
+            break;
+        case WeaponType::Rocket:
+            def.projectileKind = ProjectileKind::Rocket;
+            break;
+        case WeaponType::Gun:
+        case WeaponType::Pod:
+        case WeaponType::Fuel:
+            break; // unreachable — skipped above; listed so -Wswitch stays exhaustive
+        }
         def.maxHp = 1.f;
         def.mesh = w->mesh; // ASSET NAME; empty = the builtin placeholder
         // A missile is a hard radar target to SEE: small RCS, hot IR while the motor burns (the
@@ -295,7 +313,7 @@ EntityDef builtinNavalVesselDef() {
 
 EntityDef builtinStaticTargetDef() {
     // A fixed structure — a bunker/hangar-class ground target for strike practice.
-    return makeSurfaceDef("builtin:static-target", "Static Structure", ObjectCategory::GroundVehicle, 800.f,
+    return makeSurfaceDef("builtin:static-target", "Static Structure", ObjectCategory::Structure, 800.f,
                           /*rcs=*/15.f, /*ir=*/1.f, /*visual=*/6.f, /*collision=*/20.f);
 }
 

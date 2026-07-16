@@ -51,6 +51,7 @@ TEST_CASE("defaultCollisionRadiusM: category defaults, projectiles excluded", "[
     CHECK(defaultCollisionRadiusM(ObjectCategory::Player) == 8.f);
     CHECK(defaultCollisionRadiusM(ObjectCategory::GroundVehicle) == 15.f);
     CHECK(defaultCollisionRadiusM(ObjectCategory::NavalVehicle) == 15.f);
+    CHECK(defaultCollisionRadiusM(ObjectCategory::Structure) == 15.f);
     CHECK(defaultCollisionRadiusM(ObjectCategory::Projectile) == 0.f); // fuze path, not this phase
     CHECK(defaultCollisionRadiusM(ObjectCategory::Effect) == 0.f);
 }

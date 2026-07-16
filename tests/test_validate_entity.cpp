@@ -80,7 +80,7 @@ TEST_CASE("Single-file mode: silent fallbacks warn without failing", "[entity-va
     const auto r = validateEntity(aircraftEntity("test:bare", "", ""));
     CHECK(r.ok);
     CHECK(hasSubstr(r.warnings, "builtin placeholder model"));
-    CHECK(hasSubstr(r.warnings, "debug wedge"));
+    CHECK(hasSubstr(r.warnings, "builtin placeholder shape"));
 }
 
 TEST_CASE("Pack mode: a fully-resolvable aircraft validates clean", "[entity-validator]") {

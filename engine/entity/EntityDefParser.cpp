@@ -81,9 +81,26 @@ namespace {
         return ObjectCategory::Effect;
     if (s == "player")
         return ObjectCategory::Player;
+    if (s == "structure")
+        return ObjectCategory::Structure;
     throw std::runtime_error(std::string("unknown category: ") + std::string(s) +
                              " (expected air_vehicle, ground_vehicle, naval_vehicle, "
-                             "projectile, effect, or player)");
+                             "projectile, effect, player, or structure)");
+}
+
+// The optional `projectile_kind` key (#886) — only meaningful on category = "projectile" defs,
+// where it selects the builtin placeholder silhouette when the def has no mesh. Absent on a
+// projectile defaults to missile (the common case); setting it on any other category is an error
+// (the value would be silently dead, which is how content bugs hide).
+[[nodiscard]] ProjectileKind parse_projectile_kind(std::string_view s) {
+    if (s == "missile")
+        return ProjectileKind::Missile;
+    if (s == "bomb")
+        return ProjectileKind::Bomb;
+    if (s == "rocket")
+        return ProjectileKind::Rocket;
+    throw std::runtime_error(std::string("unknown projectile_kind: ") + std::string(s) +
+                             " (expected missile, bomb, or rocket)");
 }
 
 [[nodiscard]] HardpointType parse_hardpoint_type(std::string_view s) {
@@ -141,6 +158,16 @@ EntityDef parseEntityDef(std::string_view toml_src) {
 
     auto cat_str = req_string(entity["category"], "entity.category");
     def.category = parse_category(cat_str);
+
+    // projectile_kind (#886): optional, projectile-only; absent projectile = missile.
+    if (auto kind_str = opt_string(entity["projectile_kind"]); !kind_str.empty()) {
+        if (def.category != ObjectCategory::Projectile)
+            throw std::runtime_error("projectile_kind is only valid on category = \"projectile\" (got category = \"" +
+                                     cat_str + "\")");
+        def.projectileKind = parse_projectile_kind(kind_str);
+    } else if (def.category == ObjectCategory::Projectile) {
+        def.projectileKind = ProjectileKind::Missile;
+    }
 
     def.maxHp = req_float(entity["max_hp"], "entity.max_hp");
     def.collisionRadiusM = opt_float(entity["collision_radius_m"], 0.f); // 0 = category default (#630)

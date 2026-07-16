@@ -95,15 +95,15 @@ void checkAssetRef(const IContentPack& pack, const std::string& file, const char
 }
 
 // The fallbacks that bite silently. Neither is illegal — the zero-pack sandbox flies the builtin
-// model under the builtin wedge on purpose — but a PACK aircraft that does so is almost always a
-// mistake, and at runtime nobody is watching the log line that says so.
+// model under the builtin placeholder shapes on purpose — but a PACK aircraft that does so is
+// almost always a mistake, and at runtime nobody is watching the log line that says so.
 void checkSilentFallbacks(const EntityDef& def, const std::string& label, EntityValidationResult& r) {
     const bool vehicle = def.category == ObjectCategory::AirVehicle || def.category == ObjectCategory::GroundVehicle ||
-                         def.category == ObjectCategory::NavalVehicle;
+                         def.category == ObjectCategory::NavalVehicle || def.category == ObjectCategory::Structure;
     if (def.category == ObjectCategory::AirVehicle && def.flightModelAsset.empty())
         r.warnings.push_back(label + ": no flight_model — this aircraft will fly the builtin placeholder model");
     if (vehicle && def.mesh.empty())
-        r.warnings.push_back(label + ": no mesh — this vehicle will render as the builtin debug wedge");
+        r.warnings.push_back(label + ": no mesh — this entity will render as the builtin placeholder shape");
 }
 
 struct PackManifest {

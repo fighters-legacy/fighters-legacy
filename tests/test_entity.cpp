@@ -163,6 +163,18 @@ TEST_CASE("objectCategoryName returns stable ASCII names", "[object_category]") 
     CHECK(std::string(fl::objectCategoryName(fl::ObjectCategory::Projectile)) == "projectile");
     CHECK(std::string(fl::objectCategoryName(fl::ObjectCategory::Effect)) == "effect");
     CHECK(std::string(fl::objectCategoryName(fl::ObjectCategory::Player)) == "player");
+    CHECK(std::string(fl::objectCategoryName(fl::ObjectCategory::Structure)) == "structure");
+}
+
+TEST_CASE("ObjectCategory/ProjectileKind ordinal gates accept the range and nothing past it", "[object_category]") {
+    CHECK(fl::isObjectCategoryOrdinal(static_cast<uint8_t>(fl::ObjectCategory::AirVehicle)));
+    CHECK(fl::isObjectCategoryOrdinal(static_cast<uint8_t>(fl::ObjectCategory::Structure)));
+    CHECK_FALSE(fl::isObjectCategoryOrdinal(static_cast<uint8_t>(fl::ObjectCategory::Structure) + 1));
+    CHECK_FALSE(fl::isObjectCategoryOrdinal(0xFF));
+    CHECK(fl::isProjectileKindOrdinal(static_cast<uint8_t>(fl::ProjectileKind::None)));
+    CHECK(fl::isProjectileKindOrdinal(static_cast<uint8_t>(fl::ProjectileKind::Rocket)));
+    CHECK_FALSE(fl::isProjectileKindOrdinal(static_cast<uint8_t>(fl::ProjectileKind::Rocket) + 1));
+    CHECK_FALSE(fl::isProjectileKindOrdinal(0xFF));
 }
 
 // ---------------------------------------------------------------------------
@@ -573,11 +585,39 @@ weight = 1.0
 }
 
 TEST_CASE("EntityDefParser: all category strings are accepted", "[parser]") {
-    const char* categories[] = {"air_vehicle", "ground_vehicle", "naval_vehicle", "projectile", "effect", "player"};
+    const char* categories[] = {"air_vehicle", "ground_vehicle", "naval_vehicle", "projectile",
+                                "effect",      "player",         "structure"};
     for (const char* cat : categories) {
         std::string toml = std::string("[entity]\nid=\"x:x\"\nname=\"X\"\ncategory=\"") + cat + "\"\nmax_hp=1.0\n";
         REQUIRE_NOTHROW(fl::parseEntityDef(toml));
     }
+}
+
+TEST_CASE("EntityDefParser: projectile_kind parses, defaults, and rejects misuse", "[parser]") {
+    // Explicit kind on a projectile def.
+    fl::EntityDef bomb = fl::parseEntityDef("[entity]\nid=\"x:b\"\nname=\"B\"\ncategory=\"projectile\"\n"
+                                            "projectile_kind=\"bomb\"\nmax_hp=1.0\n");
+    CHECK(bomb.projectileKind == fl::ProjectileKind::Bomb);
+    fl::EntityDef rocket = fl::parseEntityDef("[entity]\nid=\"x:r\"\nname=\"R\"\ncategory=\"projectile\"\n"
+                                              "projectile_kind=\"rocket\"\nmax_hp=1.0\n");
+    CHECK(rocket.projectileKind == fl::ProjectileKind::Rocket);
+
+    // A projectile without the key defaults to missile (the common case).
+    fl::EntityDef dflt = fl::parseEntityDef("[entity]\nid=\"x:m\"\nname=\"M\"\ncategory=\"projectile\"\nmax_hp=1.0\n");
+    CHECK(dflt.projectileKind == fl::ProjectileKind::Missile);
+
+    // A non-projectile stays None.
+    fl::EntityDef air = fl::parseEntityDef("[entity]\nid=\"x:a\"\nname=\"A\"\ncategory=\"air_vehicle\"\nmax_hp=1.0\n");
+    CHECK(air.projectileKind == fl::ProjectileKind::None);
+
+    // The key on a non-projectile category is an error, not silently-dead data.
+    CHECK_THROWS_AS(fl::parseEntityDef("[entity]\nid=\"x:a\"\nname=\"A\"\ncategory=\"air_vehicle\"\n"
+                                       "projectile_kind=\"missile\"\nmax_hp=1.0\n"),
+                    std::runtime_error);
+    // An unknown kind value is an error.
+    CHECK_THROWS_AS(fl::parseEntityDef("[entity]\nid=\"x:p\"\nname=\"P\"\ncategory=\"projectile\"\n"
+                                       "projectile_kind=\"torpedo\"\nmax_hp=1.0\n"),
+                    std::runtime_error);
 }
 
 TEST_CASE("EntityDefParser: invalid category throws runtime_error", "[parser]") {
