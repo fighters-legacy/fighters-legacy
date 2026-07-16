@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: Instant Action — the main menu's first single-player entry now launches the builtin skirmish (a `builtin:fighter` wingman + two bandits + a SAM to destroy, zero-pack via #868) instead of dropping you into an empty world, so there's something to fight from a bare checkout. A new "Free Flight" entry keeps the empty practice world (HOTAS calibration, just flying). Multiplayer still shows a single "Join Server" (#40)
 - **mission**: Ground/ramp start — a mission object can now spawn parked on the ground with `start: ground` (default `air`): placed at the terrain elevation at its position, idle throttle, zero airspeed, and held stable by the integrator's parking hold until the pilot throttles up and rotates. Pairs with the airborne-spawn and destroy-at-0.0s fixes so a training/BFM sortie can begin on the runway instead of being dropped into the air (#885)
 
 ### Fixed

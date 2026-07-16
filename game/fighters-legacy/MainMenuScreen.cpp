@@ -11,11 +11,19 @@ static constexpr float kSpacing = 0.07f;
 static constexpr float kItemH = 0.05f;
 
 MainMenuScreen::MainMenuScreen(bool hasPacks, bool isMultiplayer) {
-    m_items.push_back({isMultiplayer ? "Join Server" : "Sandbox (Instant Action)", Screen::Loading});
+    if (isMultiplayer) {
+        m_items.push_back({"Join Server", Screen::Loading, ""});
+    } else {
+        // Instant Action (#40): jump straight into the builtin skirmish -- a wingman + bandits + a SAM
+        // to kill -- with no content pack. Free Flight is the empty practice world (HOTAS calibration,
+        // just flying).
+        m_items.push_back({"Instant Action", Screen::Loading, "builtin:sandbox"});
+        m_items.push_back({"Free Flight", Screen::Loading, ""});
+    }
     if (hasPacks)
-        m_items.push_back({"Select Mission", Screen::MissionSelect});
-    m_items.push_back({"Settings", Screen::Settings});
-    m_items.push_back({"Exit to Desktop", Screen::Quit});
+        m_items.push_back({"Select Mission", Screen::MissionSelect, ""});
+    m_items.push_back({"Settings", Screen::Settings, ""});
+    m_items.push_back({"Exit to Desktop", Screen::Quit, ""});
 }
 
 Screen MainMenuScreen::update(IInput& input, IWindow& window) {
@@ -61,8 +69,11 @@ Screen MainMenuScreen::update(IInput& input, IWindow& window) {
 }
 
 Screen MainMenuScreen::confirm() {
-    if (m_selectedIdx >= 0 && m_selectedIdx < static_cast<int>(m_items.size()))
-        return m_items[static_cast<std::size_t>(m_selectedIdx)].target;
+    if (m_selectedIdx >= 0 && m_selectedIdx < static_cast<int>(m_items.size())) {
+        const Item& item = m_items[static_cast<std::size_t>(m_selectedIdx)];
+        m_confirmedMission = item.mission; // Game reads this when entering a session (#40)
+        return item.target;
+    }
     return Screen::MainMenu;
 }
 

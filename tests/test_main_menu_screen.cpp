@@ -9,12 +9,12 @@ using namespace fl;
 
 TEST_CASE("MainMenuScreen: no packs - no Select Mission item") {
     MainMenuScreen s(/*hasPacks=*/false);
-    CHECK(s.itemCount() == 3); // Sandbox, Settings, Exit to Desktop
+    CHECK(s.itemCount() == 4); // Instant Action, Free Flight, Settings, Exit to Desktop
 }
 
 TEST_CASE("MainMenuScreen: with packs - includes Select Mission") {
     MainMenuScreen s(/*hasPacks=*/true);
-    CHECK(s.itemCount() == 4); // Sandbox, Select Mission, Settings, Exit to Desktop
+    CHECK(s.itemCount() == 5); // Instant Action, Free Flight, Select Mission, Settings, Exit to Desktop
 }
 
 TEST_CASE("MainMenuScreen: ArrowDown wraps navigation") {
@@ -32,11 +32,16 @@ TEST_CASE("MainMenuScreen: ArrowUp wraps upward") {
     CHECK(s.selectedIdx() == s.itemCount() - 1);
 }
 
-TEST_CASE("MainMenuScreen: confirm Sandbox returns Screen::Loading") {
+TEST_CASE("MainMenuScreen: Instant Action launches the builtin mission; Free Flight is empty (#40)") {
     MainMenuScreen s(false);
-    // First item is always Sandbox
+    // Item 0 = Instant Action -> Loading with the builtin skirmish; item 1 = Free Flight -> empty.
     CHECK(s.selectedIdx() == 0);
     CHECK(s.confirm() == Screen::Loading);
+    CHECK(s.confirmedMission() == "builtin:sandbox");
+
+    s.selectNext(); // Free Flight
+    CHECK(s.confirm() == Screen::Loading);
+    CHECK(s.confirmedMission().empty());
 }
 
 TEST_CASE("MainMenuScreen: confirm Exit to Desktop returns Screen::Quit") {
@@ -71,7 +76,7 @@ TEST_CASE("MainMenuScreen: Enter confirms selection") {
     MockWindow win;
     inp.justPressed.insert(Key::Enter);
     Screen next = s.update(inp, win);
-    CHECK(next == Screen::Loading); // first item = Sandbox
+    CHECK(next == Screen::Loading); // first item = Instant Action
 }
 
 TEST_CASE("MainMenuScreen: buildElements not empty") {
@@ -100,10 +105,12 @@ TEST_CASE("MainMenuScreen: multiplayer mode labels first item Join Server") {
     CHECK(found);
 }
 
-TEST_CASE("MainMenuScreen: multiplayer item count matches no-packs single-player count") {
+TEST_CASE("MainMenuScreen: multiplayer replaces Instant Action + Free Flight with a single Join Server") {
     MainMenuScreen sp(/*hasPacks=*/false, /*isMultiplayer=*/false);
     MainMenuScreen mp(/*hasPacks=*/false, /*isMultiplayer=*/true);
-    CHECK(mp.itemCount() == sp.itemCount());
+    // Single-player offers two launch entries (Instant Action, Free Flight); multiplayer offers one
+    // (Join Server), so it has exactly one fewer item.
+    CHECK(mp.itemCount() == sp.itemCount() - 1);
 }
 
 TEST_CASE("MainMenuScreen: title and items are center-aligned at x=0.5") {
