@@ -170,8 +170,12 @@ struct MsgEntityTypeDef {
     float payloadCd0{0.f};    // default-loadout parasite-drag delta; 0 = clean airframe
     // --- appended at the tail (#860); additive, prior offsets unchanged ---
     char name[64]{}; // friendly display name (EntityDef::name), e.g. "F-16C"; empty = fall back to id
-}; // 332 bytes, align 4
-static_assert(sizeof(MsgEntityTypeDef) == 332u, "MsgEntityTypeDef wire size changed");
+    // --- appended at the tail (#886); additive, prior offsets unchanged ---
+    uint8_t category{0};       // ObjectCategory ordinal; client gates via isObjectCategoryOrdinal before cast
+    uint8_t projectileKind{0}; // ProjectileKind ordinal (Projectile types only); 0 = None
+    uint8_t reservedCat[2]{};  // pad to 336 (multiple of align 4 so trailing records stay aligned)
+}; // 336 bytes, align 4
+static_assert(sizeof(MsgEntityTypeDef) == 336u, "MsgEntityTypeDef wire size changed");
 static_assert(alignof(MsgEntityTypeDef) == 4u, "MsgEntityTypeDef alignment changed");
 static_assert(sizeof(MsgEntityTypeDef) % alignof(MsgEntityTypeDef) == 0u, "MsgEntityTypeDef not record-aligned");
 static_assert(offsetof(MsgEntityTypeDef, id) == 4u, "MsgEntityTypeDef::id offset changed");
@@ -181,6 +185,8 @@ static_assert(offsetof(MsgEntityTypeDef, flightModel) == 196u, "MsgEntityTypeDef
 static_assert(offsetof(MsgEntityTypeDef, payloadMassKg) == 260u, "MsgEntityTypeDef::payloadMassKg offset changed");
 static_assert(offsetof(MsgEntityTypeDef, payloadCd0) == 264u, "MsgEntityTypeDef::payloadCd0 offset changed");
 static_assert(offsetof(MsgEntityTypeDef, name) == 268u, "MsgEntityTypeDef::name offset changed");
+static_assert(offsetof(MsgEntityTypeDef, category) == 332u, "MsgEntityTypeDef::category offset changed");
+static_assert(offsetof(MsgEntityTypeDef, projectileKind) == 333u, "MsgEntityTypeDef::projectileKind offset changed");
 
 // Faction index -> id/name, sent once after ConnectAck for every registered faction (#860). The
 // client maps a snapshot entity's factionIndex (carried on full records) to a display name for the

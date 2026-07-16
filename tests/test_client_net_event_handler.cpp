@@ -2153,6 +2153,55 @@ TEST_CASE("ClientNetEventHandler: non-terminated type-def fields do not over-rea
     CHECK(registry.typeCount() >= 1u);
 }
 
+// #886: MsgEntityTypeDef carries the ObjectCategory + ProjectileKind ordinals, so the client-side
+// registry can select per-category placeholder silhouettes. Invalid wire ordinals (a hostile or
+// newer server) are gated before the enum cast and fall back to the pre-#886 defaults.
+TEST_CASE("ClientNetEventHandler: type-def category and projectileKind parse with ordinal gating",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    std::vector<uint8_t> pkt;
+    fl::MsgConnectAck ack{};
+    ack.typeCount = 3;
+    fl::appendMsg(pkt, ack);
+
+    fl::MsgEntityTypeDef structureTd{};
+    structureTd.typeIndex = 0;
+    std::snprintf(structureTd.id, sizeof(structureTd.id), "builtin:static-target");
+    structureTd.category = static_cast<uint8_t>(fl::ObjectCategory::Structure);
+    fl::appendMsg(pkt, structureTd);
+
+    fl::MsgEntityTypeDef bombTd{};
+    bombTd.typeIndex = 1;
+    std::snprintf(bombTd.id, sizeof(bombTd.id), "projectile:builtin:bomb");
+    bombTd.category = static_cast<uint8_t>(fl::ObjectCategory::Projectile);
+    bombTd.projectileKind = static_cast<uint8_t>(fl::ProjectileKind::Bomb);
+    fl::appendMsg(pkt, bombTd);
+
+    fl::MsgEntityTypeDef hostileTd{}; // out-of-range ordinals from an untrusted server
+    hostileTd.typeIndex = 2;
+    std::snprintf(hostileTd.id, sizeof(hostileTd.id), "evil:type");
+    hostileTd.category = 0xEE;
+    hostileTd.projectileKind = 0xEE;
+    fl::appendMsg(pkt, hostileTd);
+
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(registry.typeCount() == 3u);
+    CHECK(registry.findById("builtin:static-target")->category == fl::ObjectCategory::Structure);
+    CHECK(registry.findById("builtin:static-target")->projectileKind == fl::ProjectileKind::None);
+    CHECK(registry.findById("projectile:builtin:bomb")->category == fl::ObjectCategory::Projectile);
+    CHECK(registry.findById("projectile:builtin:bomb")->projectileKind == fl::ProjectileKind::Bomb);
+    // Gated: invalid bytes fall back to the defaults rather than casting out-of-range enums.
+    CHECK(registry.findById("evil:type")->category == fl::ObjectCategory::AirVehicle);
+    CHECK(registry.findById("evil:type")->projectileKind == fl::ProjectileKind::None);
+}
+
 TEST_CASE("ClientNetEventHandler: CombatEvent feeds the kill feed and the session stats",
           "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;

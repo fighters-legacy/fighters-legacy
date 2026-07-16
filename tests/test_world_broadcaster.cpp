@@ -1210,6 +1210,40 @@ TEST_CASE("WorldBroadcaster: onConnect sends ConnectAck with registered types an
     CHECK(em.liveCount() == 1u);
 }
 
+TEST_CASE("WorldBroadcaster: ConnectAck type defs carry category and projectileKind ordinals (#886)",
+          "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+
+    registry.registerType(makeDebugDef()); // typeIndex 0: AirVehicle (peer spawn)
+    fl::EntityDef bunker = makeDebugDef("builtin:static-target");
+    bunker.category = fl::ObjectCategory::Structure;
+    registry.registerType(std::move(bunker)); // typeIndex 1
+    fl::EntityDef bombProjectile = makeDebugDef("projectile:builtin:bomb");
+    bombProjectile.category = fl::ObjectCategory::Projectile;
+    bombProjectile.projectileKind = fl::ProjectileKind::Bomb;
+    registry.registerType(std::move(bombProjectile)); // typeIndex 2
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    connectPilotPeer(broadcaster, net, 0u);
+
+    REQUIRE(parseSendAck(net).typeCount == 3u);
+    const auto& pkt = net.sends[1];
+    std::size_t off = sizeof(fl::MsgConnectAck);
+    fl::MsgEntityTypeDef tds[3];
+    for (auto& td : tds) {
+        REQUIRE(fl::readRecordAt(pkt.data(), pkt.size(), off, td));
+        off += sizeof(td);
+    }
+    CHECK(tds[0].category == static_cast<uint8_t>(fl::ObjectCategory::AirVehicle));
+    CHECK(tds[0].projectileKind == static_cast<uint8_t>(fl::ProjectileKind::None));
+    CHECK(tds[1].category == static_cast<uint8_t>(fl::ObjectCategory::Structure));
+    CHECK(tds[2].category == static_cast<uint8_t>(fl::ObjectCategory::Projectile));
+    CHECK(tds[2].projectileKind == static_cast<uint8_t>(fl::ProjectileKind::Bomb));
+}
+
 TEST_CASE("WorldBroadcaster: peer entity spawns at terrain height plus 500 m AGL", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;

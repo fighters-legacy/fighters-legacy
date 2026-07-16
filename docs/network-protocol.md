@@ -54,7 +54,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 |-------|-------|-----------|---------|------|---------|
 | `Hello` | `0x00` | server→client | reliable | 4 bytes | Protocol version handshake; first message the **server** sends on every new connection |
 | `ConnectRequest` | `0x11` | client→server | reliable | 72 + N×128 bytes | The **client**'s join request (#853): role, requested entity type, and mounted-pack manifest. Sent first on connect; the server replies `ConnectAck` or `ConnectRefusal`. |
-| `ConnectAck` | `0x01` | server→client | reliable | 20 + N×268 bytes | Reply to `ConnectRequest`: granted role + assigned entity slot, then the type registry |
+| `ConnectAck` | `0x01` | server→client | reliable | 20 + N×336 bytes | Reply to `ConnectRequest`: granted role + assigned entity slot, then the type registry |
 | `WorldSnapshot` | `0x02` | server→client | unreliable | 24 + origin table + record stream + TLV | Per-tick entity state, unicast per peer; 24-byte header + shared-origin table + a byte-aligned stitched record stream (each record: origin index + a `full` bit) + TLV extension block — see *Quantized entity record* below |
 | `ClientInput` | `0x03` | client→server | unreliable | 80 bytes | Per-frame flight inputs + fire intents + selected weapon station + camera eye (observer interest) |
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
@@ -150,7 +150,7 @@ ConnectAck arrived**, not on `assignedEntityIdx == 0`.
 | 16 | 1 | `grantedRole` | `uint8_t` | `PeerRole` granted by the server (0 = Pilot, 1 = Observer) |
 | 17 | 3 | `reserved2[3]` | `uint8_t[3]` | Padding to keep trailing records 4-aligned |
 
-### MsgEntityTypeDef — 332 bytes
+### MsgEntityTypeDef — 336 bytes
 
 Appended N times after `MsgConnectAck` (one per registered entity type).
 
@@ -158,20 +158,25 @@ Appended N times after `MsgConnectAck` (one per registered entity type).
 |--------|------|-------|------|-------|
 | 0 | 4 | `typeIndex` | `uint32_t` | Index into server-side `EntityTypeRegistry` |
 | 4 | 64 | `id[64]` | `char[64]` | Null-terminated type ID, e.g. `"builtin:debug-entity"` |
-| 68 | 64 | `mesh[64]` | `char[64]` | Null-terminated mesh asset name; empty = builtin tetrahedron |
+| 68 | 64 | `mesh[64]` | `char[64]` | Null-terminated mesh asset name; empty = builtin placeholder shape |
 | 132 | 64 | `dmgMesh[64]` | `char[64]` | Null-terminated damage mesh; empty = none |
 | 196 | 64 | `flightModel[64]` | `char[64]` | Null-terminated flight-model **asset name** (not a def id); empty = builtin model |
 | 260 | 4 | `payloadMassKg` | `float32` | Default-loadout store mass (kg); 0 = clean airframe |
 | 264 | 4 | `payloadCd0` | `float32` | Default-loadout parasite-drag delta; 0 = clean airframe |
 | 268 | 64 | `name[64]` | `char[64]` | Null-terminated friendly display name (`EntityDef::name`), e.g. `"F-16C"`; empty = client falls back to `id` (#860) |
+| 332 | 1 | `category` | `uint8_t` | `ObjectCategory` ordinal; client gates via `isObjectCategoryOrdinal` before the cast, invalid → AirVehicle (#886) |
+| 333 | 1 | `projectileKind` | `uint8_t` | `ProjectileKind` ordinal (Projectile types only); gated, invalid → None (#886) |
+| 334 | 2 | `reservedCat[2]` | `uint8_t[2]` | Padding to keep the record size a multiple of 4 |
 
 `flightModel` (#811) exists because the client must integrate the **same** aircraft the server does.
 Without it the client had no way to learn an entity type's flight model, silently fell back to the
 builtin model, and diverged from the server permanently. `payloadMassKg` / `payloadCd0` (#812) are the
 aggregate cost of the type's default loadout: the client has no hardpoints and no weapon registry, so
 it receives the two numbers rather than the data to derive them. `name` (#860) is the human-readable
-label the observer entity picker shows. All were **appended at the tail**, so every pre-existing field
-offset is unchanged and `kProtocolVersion` stays at 1.
+label the observer entity picker shows. `category` / `projectileKind` (#886) drive the per-category
+builtin placeholder silhouettes (and future picker grouping / map icons) — without them every
+client-side def read back as an AirVehicle. All were **appended at the tail**, so every pre-existing
+field offset is unchanged and `kProtocolVersion` stays at 1.
 
 ### MsgFactionDef — 132 bytes
 
