@@ -368,32 +368,49 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     m_state.omega[1] = std::clamp(m_state.omega[1], -kMaxOmega, kMaxOmega);
     m_state.omega[2] = std::clamp(m_state.omega[2], -kMaxOmega, kMaxOmega);
 
-    // 12. Semi-implicit Euler: translational velocity.
+    // 12. Semi-implicit Euler: translational velocity, split into the force term and the transport
+    // term of the body-frame equation of motion
     //
-    // THE TRANSPORT TERM (−ω × v) IS NOT OPTIONAL. The body-frame equation of motion is
+    //     v̇_body = F/m − ω × v_body.
     //
-    //     v̇_body = F/m − ω × v_body
-    //
-    // and the second term was missing. Its absence meant the velocity vector rotated WITH the
-    // airframe: pitching the nose up simply carried the flight path along with it, so the aircraft
-    // developed no angle of attack, generated no extra lift, and could not pull g at all. A test
-    // model commanded to full aft stick span 400 deg/s of pitch rate and peaked at 0.6 g.
-    //
-    // Everything that reads AoA was quietly wrong because of it — turn rate, sustained g, stall
-    // entry, and the load factor #816 adds. It is fixed here rather than worked around, because no
-    // amount of enforcement on top of a flight model that cannot develop AoA would mean anything.
-    //
-    // omega is stored in body axes as {x=roll, y=yaw, z=pitch} (x=fwd, y=up, z=right), so this is a
-    // plain cross product in that basis.
-    const double wx = m_state.omega[0], wy = m_state.omega[1], wz = m_state.omega[2];
-    const double vx = m_state.vel_body[0], vy = m_state.vel_body[1], vz = m_state.vel_body[2];
-    const double cross_x = wy * vz - wz * vy;
-    const double cross_y = wz * vx - wx * vz;
-    const double cross_z = wx * vy - wy * vx;
+    // 12a. FORCE TERM. Thrust, drag, lift, gravity and turbulence change the SPEED; this is the only
+    // part that adds or removes kinetic energy, and it is bounded by thrust-vs-drag physics.
+    m_state.vel_body[0] += (forces[0] / eff_mass) * dt;
+    m_state.vel_body[1] += (forces[1] / eff_mass) * dt;
+    m_state.vel_body[2] += (forces[2] / eff_mass) * dt;
 
-    m_state.vel_body[0] += (forces[0] / eff_mass - cross_x) * dt;
-    m_state.vel_body[1] += (forces[1] / eff_mass - cross_y) * dt;
-    m_state.vel_body[2] += (forces[2] / eff_mass - cross_z) * dt;
+    // 12b. TRANSPORT TERM (−ω × v), applied as an EXACT ROTATION rather than the explicit tangent.
+    //
+    // The transport term is NOT optional: without it the velocity vector rotates WITH the airframe,
+    // so pitching the nose develops no angle of attack, no extra lift, and cannot pull g at all (a
+    // test model at full aft stick spun up 400 deg/s of pitch rate and peaked at 0.6 g). Everything
+    // that reads AoA — turn rate, sustained g, stall entry, load factor (#816) — depends on it.
+    //
+    // But it must be INTEGRATED as a rotation, not as  v -= (ω × v)·dt. In the rotating body frame
+    // an inertially-fixed velocity obeys v̇ = −ω × v, whose exact solution for constant ω is a pure
+    // rotation of v by −ω·dt: |v| is conserved and the term does no work. The explicit tangent is
+    // the first-order Taylor term of that rotation and OVERSHOOTS it, lengthening v by a factor
+    // √(1 + (ω·dt)²) every tick. In cruise (ω ≈ 0) that is invisible, but under any sustained
+    // rotation — a departure or incipient spin building several rad/s — it compounds into an
+    // exponential airspeed runaway (creating energy at hundreds of times the thrust bound) until the
+    // aircraft is flung out of the world at the speed clamp. That was #891: a statically stable pack
+    // deck diverging from level flight, hands-off, in ~10 s, with the entity silently reaped.
+    //
+    // Rotating instead is exact for constant ω and unconditionally speed-conserving. The increment
+    // is the CONJUGATE of the +ω·dt attitude increment integrateRotation() applies below (the body
+    // axes turn by +ω·dt, so a fixed vector re-expressed in them turns by −ω·dt); using the same
+    // normalized {0.5·ω·dt, 1} quaternion keeps the velocity and attitude rotations identical, so a
+    // force-free rotation preserves alpha/beta exactly.
+    float dqTransport[4] = {0.5f * m_state.omega[0] * dt, 0.5f * m_state.omega[1] * dt, 0.5f * m_state.omega[2] * dt,
+                            1.f};
+    quatNorm(dqTransport);
+    dqTransport[0] = -dqTransport[0]; // conjugate → rotate v_body by −ω·dt
+    dqTransport[1] = -dqTransport[1];
+    dqTransport[2] = -dqTransport[2];
+    const auto vel_rot = quatRotateD(dqTransport, m_state.vel_body);
+    m_state.vel_body[0] = vel_rot[0];
+    m_state.vel_body[1] = vel_rot[1];
+    m_state.vel_body[2] = vel_rot[2];
 
     // NUMERICAL GUARD, NOT FLIGHT PHYSICS (#816). This exists to stop a NaN position or an absurd
     // aero force from overflowing the quaternion integration -- nothing more. It was doing double
@@ -406,6 +423,11 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     // clear of any flyable regime and left as the overflow backstop it always was.
     // Per-instance since #354 (setSpeedGuard): ballistic vehicles legitimately pass Mach 6, so
     // their guard sits at ~8000 m/s — still a NaN backstop, never a top-speed limiter.
+    // ONE-SHOT envelope-departure flag (#891): raised when the guard actually bites, so a divergence
+    // is logged serially by WorldBroadcaster rather than silently flung out of the world and reaped.
+    m_state.speed_guard_clamped = std::abs(m_state.vel_body[0]) > m_speedGuardMps ||
+                                  std::abs(m_state.vel_body[1]) > m_speedGuardMps ||
+                                  std::abs(m_state.vel_body[2]) > m_speedGuardMps;
     m_state.vel_body[0] = std::clamp(m_state.vel_body[0], -m_speedGuardMps, m_speedGuardMps);
     m_state.vel_body[1] = std::clamp(m_state.vel_body[1], -m_speedGuardMps, m_speedGuardMps);
     m_state.vel_body[2] = std::clamp(m_state.vel_body[2], -m_speedGuardMps, m_speedGuardMps);
