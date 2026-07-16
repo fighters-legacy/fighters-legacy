@@ -2752,7 +2752,7 @@ fl::MsgConnectRefusal findSentRefusal(const MockNetwork& net) {
             std::memcpy(&ref, pkt.data(), sizeof(ref));
             return ref;
         }
-    FAIL("no MsgConnectRefusal was sent");
+    FAIL_CHECK("no MsgConnectRefusal was sent"); // non-terminating: the return below stays reachable (MSVC C4702)
     return {};
 }
 

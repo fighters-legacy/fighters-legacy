@@ -26,8 +26,8 @@ void addNote(std::vector<float>& mix, double startS, double durS, float freqHz, 
     const int sr = kMusicSampleRate;
     const std::size_t s0 = static_cast<std::size_t>(startS * sr);
     const std::size_t n = static_cast<std::size_t>(durS * sr);
-    const float atk = 0.08f * n; // samples
-    const float rel = 0.35f * n;
+    const float atk = 0.08f * static_cast<float>(n); // samples
+    const float rel = 0.35f * static_cast<float>(n);
     for (std::size_t i = 0; i < n && (s0 + i) < mix.size(); ++i) {
         const float t = static_cast<float>(i) / static_cast<float>(sr);
         float env = 1.f;
