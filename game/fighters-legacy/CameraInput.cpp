@@ -186,6 +186,7 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
         const float cp = std::cos(pr);
         const glm::vec3 forward{-std::sin(yr) * cp, std::sin(pr), -std::cos(yr) * cp};
         // Up = radial direction from the planet centre so the horizon stays level far from origin.
+        m_lastEye = m_flyEye;
         ctrl.setPose(m_flyEye, forward, radialUp(m_flyEye, m_planetRadiusM));
         break;
     }
@@ -200,6 +201,7 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
             const double vert = static_cast<double>(m_chaseDistance) * std::sin(pr);
             const glm::dvec3 eye = target + behindHorizontal(fwd) * horiz + glm::dvec3{0.0, vert, 0.0};
             // Up = radial direction so the chase view keeps a level horizon planet-wide.
+            m_lastEye = eye;
             ctrl.setPose(eye, glm::vec3(target - eye), radialUp(eye, m_planetRadiusM));
         }
         break;

@@ -62,6 +62,22 @@ class CameraInput {
     // on the first frame of a new session. Call at the start of each session.
     void startSession() noexcept;
 
+    // The camera eye applied on the most recent update(), absolute world metres. The client sends
+    // this to the server each frame so interest management can center on an entity-less observer's
+    // viewpoint (#858). Retains its previous value on a frame where the pose was not recomputed
+    // (Chase/Cockpit with no player entity yet).
+    glm::dvec3 eyeWorld() const noexcept {
+        return m_lastEye;
+    }
+
+    // Seed the free-fly eye directly (used by the observer ghost flow, #859, where there is no
+    // player entity for initFlyFromPlayer to key off).
+    void setFlyEye(const glm::dvec3& eye) noexcept {
+        m_flyEye = eye;
+        m_lastEye = eye;
+        m_needsFlyInit = false;
+    }
+
   private:
     // Reset per-mode state when the user switches camera modes.
     void onModeSwitch(CameraMode newMode, const EntityRenderEntry* player);
@@ -71,6 +87,7 @@ class CameraInput {
 
     // Free-fly camera state (the base camera).
     glm::dvec3 m_flyEye{0.0, 2000.0, 0.0};
+    glm::dvec3 m_lastEye{0.0, 2000.0, 0.0}; // eye applied on the last update(); reported by eyeWorld() (#858)
     float m_flyYaw{0.f};
     float m_flyPitch{0.f};
     float m_flySpeed{30.f};    // metres per SECOND (frame-rate independent); adjustable with +/-

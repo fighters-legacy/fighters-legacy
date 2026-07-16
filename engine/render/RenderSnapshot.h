@@ -13,10 +13,11 @@ namespace fl {
 // Per-entity data captured at the end of each sim tick and shipped to the render thread.
 // Uses primitive types only to avoid introducing a header dependency on engine-entity.
 struct EntityRenderEntry {
-    uint32_t entityIdx{0};                                     // EntityId::index — pool slot number
-    uint32_t entityGen{0};                                     // EntityId::generation — stale-handle discriminator
-    uint32_t typeIndex{0};                                     // EntityState::typeIndex — index into EntityTypeRegistry
-    glm::dvec3 position{};                                     // world position (m) — double for planet-scale precision
+    uint32_t entityIdx{0};    // EntityId::index — pool slot number
+    uint32_t entityGen{0};    // EntityId::generation — stale-handle discriminator
+    uint32_t typeIndex{0};    // EntityState::typeIndex — index into EntityTypeRegistry
+    uint16_t factionIndex{0}; // EntityState::factionIndex — FactionRegistry index (#860)
+    glm::dvec3 position{};    // world position (m) — double for planet-scale precision
     glm::quat orientation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f); // world orientation (identity)
     glm::vec3 velocity{};                                      // world velocity (m/s) — used for sub-tick extrapolation
     uint8_t damageLevel{0};                                    // cast from DamageLevel; 0 = Intact

@@ -67,6 +67,9 @@ enum class MsgId : uint8_t {
                                // Multiplexed record stream (CombatEventType) rather than one message per
                                // event: every future gameplay event extends the record vocabulary, not
                                // the id space.
+    FactionDef = 0x10,         // server->client, reliable: faction index -> id/name table, sent once after
+                               // ConnectAck (#860). Lets the client label an entity's faction (from the
+                               // snapshot's per-entity factionIndex) and, later, colour friend/foe.
     ConnectRequest = 0x11,     // client->server, reliable: FIRST packet the client sends on connect
                                // (#853). Carries the role, requested entity type, and mounted-pack
                                // manifest the client asks to join with; the server replies ConnectAck
@@ -165,8 +168,10 @@ struct MsgEntityTypeDef {
     char flightModel[64]{};   // ASSET NAME, not a def id; empty = builtin (UFO) flight model
     float payloadMassKg{0.f}; // default-loadout store mass (kg); 0 = clean airframe
     float payloadCd0{0.f};    // default-loadout parasite-drag delta; 0 = clean airframe
-}; // 268 bytes, align 4
-static_assert(sizeof(MsgEntityTypeDef) == 268u, "MsgEntityTypeDef wire size changed");
+    // --- appended at the tail (#860); additive, prior offsets unchanged ---
+    char name[64]{}; // friendly display name (EntityDef::name), e.g. "F-16C"; empty = fall back to id
+}; // 332 bytes, align 4
+static_assert(sizeof(MsgEntityTypeDef) == 332u, "MsgEntityTypeDef wire size changed");
 static_assert(alignof(MsgEntityTypeDef) == 4u, "MsgEntityTypeDef alignment changed");
 static_assert(sizeof(MsgEntityTypeDef) % alignof(MsgEntityTypeDef) == 0u, "MsgEntityTypeDef not record-aligned");
 static_assert(offsetof(MsgEntityTypeDef, id) == 4u, "MsgEntityTypeDef::id offset changed");
@@ -175,6 +180,25 @@ static_assert(offsetof(MsgEntityTypeDef, dmgMesh) == 132u, "MsgEntityTypeDef::dm
 static_assert(offsetof(MsgEntityTypeDef, flightModel) == 196u, "MsgEntityTypeDef::flightModel offset changed");
 static_assert(offsetof(MsgEntityTypeDef, payloadMassKg) == 260u, "MsgEntityTypeDef::payloadMassKg offset changed");
 static_assert(offsetof(MsgEntityTypeDef, payloadCd0) == 264u, "MsgEntityTypeDef::payloadCd0 offset changed");
+static_assert(offsetof(MsgEntityTypeDef, name) == 268u, "MsgEntityTypeDef::name offset changed");
+
+// Faction index -> id/name, sent once after ConnectAck for every registered faction (#860). The
+// client maps a snapshot entity's factionIndex (carried on full records) to a display name for the
+// observer entity picker, and later to friend/foe HUD colouring. Records are concatenated into one
+// reliable packet whose leading msgId is FactionDef; the client reads size / sizeof(MsgFactionDef)
+// of them, each self-describing via factionIndex, so order is irrelevant. Parsed via fl::readMsg.
+struct MsgFactionDef {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::FactionDef)};
+    uint8_t reserved{0};
+    uint16_t factionIndex{0}; // FactionRegistry index this record describes
+    char id[64]{};            // null-terminated faction id, e.g. "blue"
+    char name[64]{};          // null-terminated display name, e.g. "Blue Coalition"; empty = fall back to id
+}; // 132 bytes, align 2
+static_assert(sizeof(MsgFactionDef) == 132u, "MsgFactionDef wire size changed");
+static_assert(alignof(MsgFactionDef) == 2u, "MsgFactionDef alignment changed");
+static_assert(offsetof(MsgFactionDef, factionIndex) == 2u, "MsgFactionDef::factionIndex offset changed");
+static_assert(offsetof(MsgFactionDef, id) == 4u, "MsgFactionDef::id offset changed");
+static_assert(offsetof(MsgFactionDef, name) == 68u, "MsgFactionDef::name offset changed");
 
 // One mounted content pack, reported by the client in MsgConnectRequest's trailing manifest (#872 wire
 // half). The server compares it against its required-pack set (Phase 4: warn-only). contentHash is
@@ -271,8 +295,16 @@ struct MsgClientInput {
     uint8_t selectedStation{255};
     uint8_t reservedB[3]{}; // explicit padding — the layout rule forbids implicit holes
     uint32_t reservedC{0};  // pads to the struct's 8-byte alignment; future fire fields land here
-}; // 56 bytes, align 8
-static_assert(sizeof(MsgClientInput) == 56u, "MsgClientInput wire size changed");
+
+    // Camera eye world-position (#858). The client sends where it is LOOKING FROM each frame so the
+    // server can center interest management on an entity-less peer (an observer ghost camera, or a
+    // dead peer awaiting respawn) — a peer with no aircraft has no transform to key interest on.
+    // Ignored for a pilot (its aircraft transform wins). Double, absolute world metres — matches the
+    // engine's double world positions; ~200 km interest radius makes sub-metre precision irrelevant,
+    // but keeping it double avoids a quantization origin the client does not know. @56, 8-aligned.
+    double cameraEye[3]{};
+}; // 80 bytes, align 8
+static_assert(sizeof(MsgClientInput) == 80u, "MsgClientInput wire size changed");
 static_assert(alignof(MsgClientInput) == 8u, "MsgClientInput alignment changed");
 static_assert(offsetof(MsgClientInput, seqNum) == 4u, "MsgClientInput::seqNum offset changed");
 static_assert(offsetof(MsgClientInput, tickIndex) == 8u, "MsgClientInput::tickIndex offset changed");
@@ -280,6 +312,7 @@ static_assert(offsetof(MsgClientInput, throttle) == 16u, "MsgClientInput::thrott
 static_assert(offsetof(MsgClientInput, viewAxis) == 32u, "MsgClientInput::viewAxis offset changed");
 static_assert(offsetof(MsgClientInput, ackMask) == 44u, "MsgClientInput::ackMask offset changed");
 static_assert(offsetof(MsgClientInput, selectedStation) == 48u, "MsgClientInput::selectedStation offset changed");
+static_assert(offsetof(MsgClientInput, cameraEye) == 56u, "MsgClientInput::cameraEye offset changed");
 
 // Unreliable, server->client, broadcast every 10 sim ticks (~6 Hz at 60 Hz).
 // timeOfDayTenths: encode timeOfDay as uint16 (hours * 10) to keep it 2-aligned.

@@ -200,6 +200,7 @@ TEST_CASE("SnapshotCodec: full record round-trips all fields", "[snapshot_codec]
     in.idx = 7;
     in.gen = 3;
     in.typeIndex = 42;
+    in.factionIndex = 5; // #860
     in.isFull = true;
     in.hasOmega = true;
     in.pos[0] = 1000.0 + 12.5;
@@ -230,6 +231,7 @@ TEST_CASE("SnapshotCodec: full record round-trips all fields", "[snapshot_codec]
     CHECK(out.gen == 3u);
     CHECK(out.isFull);
     CHECK(out.typeIndex == 42u);
+    CHECK(out.factionIndex == 5u); // #860: faction travels on full records
     CHECK(out.hasOmega);
     CHECK(out.pos[0] == Approx(in.pos[0]).margin(fl::kPosStepM));
     CHECK(out.pos[1] == Approx(in.pos[1]).margin(fl::kPosStepM));
@@ -378,10 +380,10 @@ TEST_CASE("SnapshotCodec: deterministic encoding and locked blob sizes", "[snaps
     fl::encodeStandaloneRecord(b2, full, origin, true);
     // Deterministic: identical bytes (locks the wire layout against accidental drift).
     CHECK(b1 == b2);
-    // Locked blob size for this field set (absIdx=8b + flags=3 + gen=16 + type=8 + pos=66 + quat=32 +
-    // vel=54 + omega=36 + bytefields=24 + loadout=64 [#625: own-record block rides the omega bit]
-    // = 311 bits => 39 bytes). The stitched record adds the origin index varint (1 byte).
-    CHECK(b1.size() == 39u);
+    // Locked blob size for this field set (absIdx=8b + flags=3 + gen=16 + type=8 + faction=16 [#860] +
+    // pos=66 + quat=32 + vel=54 + omega=36 + bytefields=24 + loadout=64 [#625: own-record block rides
+    // the omega bit] = 327 bits => 41 bytes). The stitched record adds the origin index varint (1 byte).
+    CHECK(b1.size() == 41u);
 
     fl::QuantEntity delta;
     delta.idx = 11;

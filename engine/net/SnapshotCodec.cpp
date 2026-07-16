@@ -25,8 +25,10 @@ static void encodeBody(BitWriter& w, const QuantEntity& e, const double origin[3
 
     if (sendGen)
         w.writeBits(e.gen & 0xFFFFu, 16);
-    if (e.isFull)
+    if (e.isFull) {
         w.writeVarint(e.typeIndex);
+        w.writeBits(e.factionIndex, 16); // #860: faction travels with the entity, client-cached like typeIndex
+    }
 
     // Position relative to the shared grid origin.
     for (int i = 0; i < 3; ++i) {
@@ -117,6 +119,10 @@ bool decodeStandaloneRecord(BitReader& r, QuantEntity& out, const double* origin
         if (!r.readVarint(t))
             return false;
         out.typeIndex = t;
+        uint32_t f = 0;
+        if (!r.readBits(16, f))
+            return false;
+        out.factionIndex = static_cast<uint16_t>(f);
     }
 
     // Position (relative to the shared grid origin).
@@ -206,7 +212,7 @@ uint32_t estimateRecordBytes(bool isFull, bool sendGen, bool hasOmega, uint32_t 
     if (sendGen)
         bits += 16; // gen
     if (isFull)
-        bits += varintBits(typeIndex); // typeIndex varint
+        bits += varintBits(typeIndex) + 16u; // typeIndex varint + factionIndex (16 bits, #860)
     bits += 3u * static_cast<uint32_t>(kPosBitsPerAxis);
     bits += 2u + 3u * static_cast<uint32_t>(kQuatBits); // smallest-three: 2-bit index + 3 components
     bits += 3u * static_cast<uint32_t>(kVelBits);

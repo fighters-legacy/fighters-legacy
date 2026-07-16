@@ -35,11 +35,12 @@ origin-index varint into that table.
 |---|---|
 | `originIndex` | unsigned varint into the origin table (written at stitch time, not baked into the blob) |
 | `idx` | unsigned varint of the **absolute** entityIdx (peer-independent → blobs stitch in any order) |
-| `full` | 1 bit — full record (carries typeIndex + gen) vs. delta |
+| `full` | 1 bit — full record (carries typeIndex + factionIndex + gen) vs. delta |
 | `genPresent` | 1 bit — generation is on the wire (else the client reuses its cache) |
 | `omegaPresent` | 1 bit — angular rates present (set only for the receiving peer's own entity) |
 | `gen` | 16 bits, only if `genPresent` |
 | `typeIndex` | varint, only if `full` |
+| `factionIndex` | 16 bits, only if `full` (#860) — `FactionRegistry` index, client-cached alongside `typeIndex` |
 | position | 3 × `kPosBitsPerAxis` (22), signed offset from the record's shared grid origin at `kPosStepM` (0.125 m) |
 | orientation | 2-bit dropped-component index + 3 × `kQuatBits` (10) — smallest-three |
 | velocity | 3 × `kVelBits` (18), range ± `kVelMaxMps` (2000) |
@@ -50,7 +51,7 @@ origin-index varint into that table.
 
 Constants live in `engine/net/SnapshotCodec.h` and are tuned against the bot_swarm
 `downstream_kbs_per_client` metric. Representative blob sizes: a steady-state delta blob is
-**24 bytes**, a full own-entity blob (typeIndex + gen + omega + loadout) is **39 bytes**; the stitched record
+**24 bytes**, a full own-entity blob (typeIndex + factionIndex + gen + omega + loadout) is **41 bytes**; the stitched record
 adds the origin-index varint (1 byte for a small index). These blob sizes are locked by a golden-bytes
 test in `test_snapshot_codec`. The encode-once trade adds a small per-record overhead (origin index +
 byte alignment) plus the per-snapshot origin table in exchange for O(entities) encode instead of

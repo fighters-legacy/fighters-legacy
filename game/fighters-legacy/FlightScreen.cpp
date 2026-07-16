@@ -13,8 +13,10 @@
 #include "config/ControlsSettings.h"
 #include "config/UserConfig.h"
 #include "console/GameConsole.h"
-#include "flight/Geodetic.h"   // kEarthRadiusM
-#include "flight/LocalFrame.h" // bankOf on the local-level frame
+#include "entity/EntityDef.h"          // EntityDef::name/id for the observer picker label (#860)
+#include "entity/EntityTypeRegistry.h" // byIndex
+#include "flight/Geodetic.h"           // kEarthRadiusM
+#include "flight/LocalFrame.h"         // bankOf on the local-level frame
 #include "render/CameraController.h"
 #include "render/FlightHud.h"
 #include "render/IHud.h"
@@ -24,7 +26,10 @@
 #include "sandbox/SandboxInspector.h"
 
 #include <cmath>
+#include <cstdio>
 #include <glm/glm.hpp>
+#include <span>
+#include <string>
 
 namespace fl {
 
@@ -68,8 +73,38 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     uint32_t gen = d.assignedEntityGen ? *d.assignedEntityGen : 0;
     m_playerEntry = findEntry(*d.renderBridge, idx, gen);
 
-    d.camInput->pollModeKeys(*d.cameraController, *d.gameConsole, input, m_playerEntry);
-    d.camInput->update(*d.cameraController, m_playerEntry, *d.gameConsole, *d.terrainStreamer);
+    // Observer entity picker (#860): a spectator has no ownship, so the camera views a SELECTED live
+    // entity. Num1/Num2 cycle the selection; the first pick jumps the free ghost camera into Chase so
+    // the choice is immediately visible. A pilot always views its own aircraft.
+    const bool observer = d.clientNetHandler && d.clientNetHandler->grantedRole() == fl::PeerRole::Observer;
+    const fl::EntityRenderEntry* viewEntry = m_playerEntry;
+    if (observer) {
+        const std::span<const fl::EntityRenderEntry> entries =
+            d.renderBridge->hasSnapshot() ? std::span<const fl::EntityRenderEntry>(d.renderBridge->current().entries)
+                                          : std::span<const fl::EntityRenderEntry>{};
+        if (!d.gameConsole->isOpen() && !(d.wingmanMenu && d.wingmanMenu->isOpen())) {
+            const bool nextDown = input.isKeyDown(Key::Num1);
+            const bool prevDown = input.isKeyDown(Key::Num2);
+            if ((nextDown && !m_prevNextTarget) || (prevDown && !m_prevPrevTarget)) {
+                if (nextDown && !m_prevNextTarget)
+                    m_selector.cycleNext(entries);
+                else
+                    m_selector.cyclePrev(entries);
+                if (d.cameraController->mode() == fl::CameraMode::Free)
+                    d.cameraController->setMode(fl::CameraMode::Chase);
+            }
+            m_prevNextTarget = nextDown;
+            m_prevPrevTarget = prevDown;
+        }
+        viewEntry = m_selector.resolve(entries);
+        // Graceful degrade: the picked entity is gone (destroyed / interest-out / pool-slot reuse), so
+        // drop back to the free ghost camera rather than freezing on an empty Chase/Cockpit.
+        if (!viewEntry && d.cameraController->mode() != fl::CameraMode::Free)
+            d.cameraController->setMode(fl::CameraMode::Free);
+    }
+
+    d.camInput->pollModeKeys(*d.cameraController, *d.gameConsole, input, viewEntry);
+    d.camInput->update(*d.cameraController, viewEntry, *d.gameConsole, *d.terrainStreamer);
 
     // Radio menu (#610). Non-modal: the aircraft keeps flying while it is open (see WingmanMenu.h),
     // so only the discrete keys it consumes are suppressed, via FlightInputCollector's uiFocused.
@@ -114,9 +149,25 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
 
     // Terrain elevation above the datum along the radial through the entity (heightAt(dvec3));
     // the HUD/haptics derive radial AGL from it against the geodetic altitude (#477).
-    const float terrainElev =
-        m_playerEntry ? static_cast<float>(d.terrainStreamer->heightAt(m_playerEntry->position)) : 0.f;
+    const float terrainElev = viewEntry ? static_cast<float>(d.terrainStreamer->heightAt(viewEntry->position)) : 0.f;
     const bool cockpit = (d.cameraController->mode() == fl::CameraMode::Cockpit);
+
+    // Observer picker label (#860): name + faction of the entity being viewed, shown top-centre. Built
+    // here where the registry (type name) and the net handler (faction name) are both reachable.
+    m_pickerLabel[0] = '\0';
+    if (observer && viewEntry) {
+        const char* typeName = "entity";
+        if (d.entityRegistry) {
+            if (const fl::EntityDef* def = d.entityRegistry->byIndex(viewEntry->typeIndex))
+                typeName = def->name.empty() ? def->id.c_str() : def->name.c_str();
+        }
+        const std::string faction =
+            d.clientNetHandler ? d.clientNetHandler->factionName(viewEntry->factionIndex) : std::string{};
+        if (!faction.empty())
+            std::snprintf(m_pickerLabel, sizeof(m_pickerLabel), "[ %s  |  %s ]", typeName, faction.c_str());
+        else
+            std::snprintf(m_pickerLabel, sizeof(m_pickerLabel), "[ %s ]", typeName);
+    }
 
     static constexpr uint32_t kMinLatencyDisplayMs = 5u;
     const uint32_t latencyMs = d.clientNetHandler ? d.clientNetHandler->snapshotLatencyMs() : 0u;
@@ -128,10 +179,10 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     const double radiusM =
         d.clientNetHandler ? static_cast<double>(d.clientNetHandler->planetRadiusKm()) * 1000.0 : fl::kEarthRadiusM;
 
-    (*d.activeHud)
-        ->update(cockpit ? m_playerEntry : nullptr, d.env->timeOfDay, terrainElev, latencyMs, showLat, radiusM);
+    (*d.activeHud)->update(cockpit ? viewEntry : nullptr, d.env->timeOfDay, terrainElev, latencyMs, showLat, radiusM);
     d.windshieldRain->update(cockpit ? (1.f / 60.f) : 0.f, cockpit ? *d.env : EnvironmentState{},
-                             cockpit ? rollAngleRad(m_playerEntry, radiusM) : 0.f);
+                             cockpit ? rollAngleRad(viewEntry, radiusM) : 0.f);
+    // Haptics only for a real ownship — an observer viewing another entity should not feel its hits.
     if (d.hapticController)
         d.hapticController->update(m_playerEntry, m_weaponFired, terrainElev, 1.f / 60.f, radiusM);
 
@@ -189,6 +240,21 @@ std::span<const HudElement> FlightScreen::buildElements() {
                 break;
             m_elements[static_cast<std::size_t>(m_elementCount++)] = e;
         }
+    }
+    // Observer picker label (#860): name + faction of the entity being viewed, top-centre.
+    if (m_pickerLabel[0] && m_elementCount < kMaxElements) {
+        HudElement& el = m_elements[static_cast<std::size_t>(m_elementCount++)];
+        el = {};
+        el.type = HudElement::Type::Text;
+        el.x = 0.5f;
+        el.y = 0.04f;
+        el.align = HudAlign::Center;
+        el.r = 0.6f;
+        el.g = 0.9f;
+        el.b = 1.0f;
+        el.a = 1.0f;
+        el.scale = 1.f;
+        el.text = m_pickerLabel;
     }
     return {m_elements.data(), static_cast<std::size_t>(m_elementCount)};
 }

@@ -56,7 +56,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `ConnectRequest` | `0x11` | client→server | reliable | 72 + N×128 bytes | The **client**'s join request (#853): role, requested entity type, and mounted-pack manifest. Sent first on connect; the server replies `ConnectAck` or `ConnectRefusal`. |
 | `ConnectAck` | `0x01` | server→client | reliable | 20 + N×268 bytes | Reply to `ConnectRequest`: granted role + assigned entity slot, then the type registry |
 | `WorldSnapshot` | `0x02` | server→client | unreliable | 24 + origin table + record stream + TLV | Per-tick entity state, unicast per peer; 24-byte header + shared-origin table + a byte-aligned stitched record stream (each record: origin index + a `full` bit) + TLV extension block — see *Quantized entity record* below |
-| `ClientInput` | `0x03` | client→server | unreliable | 56 bytes | Per-frame flight inputs + fire intents + selected weapon station |
+| `ClientInput` | `0x03` | client→server | unreliable | 80 bytes | Per-frame flight inputs + fire intents + selected weapon station + camera eye (observer interest) |
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
 | `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
 | `AdminCommand` | `0x06` | client→server | reliable | 128 bytes | Operator-authenticated admin command. Additive ID — old servers silently discard. |
@@ -69,6 +69,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `WingmanCommand` | `0x0D` | client→server | reliable | 16 bytes | Order a formation (#610). Authorized by **commanding the formation**, never by anything in the packet. Additive ID — old servers silently discard. |
 | `WingmanAck` | `0x0E` | server→client | reliable | 16 bytes | Outcome of an order, the on-connect flight check-in, or a radio call **relayed** to a human member of someone's flight. Carries a result **code**, never server-authored text. Additive ID. |
 | `CombatEvent` | `0x0F` | server→client | reliable | 4 + n×32 bytes | Kill feed (broadcast) + the receiving peer's own combat stats (unicast). A multiplexed record stream — this took the **last free ENet id**, so future gameplay events extend the record vocabulary, not the id space. Additive ID. |
+| `FactionDef` | `0x10` | server→client | reliable | n×132 bytes | Faction index→id/name table, sent once after `MsgConnectAck`. Lets the client name the faction behind each entity's snapshot `factionIndex` (observer picker; future friend/foe colouring). Additive ID. |
 | `LanBeacon` | `0x20` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast. The ENet id space is `0x00–0x1F`; `0x20+` is reserved for raw-UDP/non-ENet ids (the boundary was raised from `0x10` in #853 to free an ENet id for `ConnectRequest`). |
 
 ## Struct Definitions
@@ -149,7 +150,7 @@ ConnectAck arrived**, not on `assignedEntityIdx == 0`.
 | 16 | 1 | `grantedRole` | `uint8_t` | `PeerRole` granted by the server (0 = Pilot, 1 = Observer) |
 | 17 | 3 | `reserved2[3]` | `uint8_t[3]` | Padding to keep trailing records 4-aligned |
 
-### MsgEntityTypeDef — 268 bytes
+### MsgEntityTypeDef — 332 bytes
 
 Appended N times after `MsgConnectAck` (one per registered entity type).
 
@@ -162,13 +163,31 @@ Appended N times after `MsgConnectAck` (one per registered entity type).
 | 196 | 64 | `flightModel[64]` | `char[64]` | Null-terminated flight-model **asset name** (not a def id); empty = builtin model |
 | 260 | 4 | `payloadMassKg` | `float32` | Default-loadout store mass (kg); 0 = clean airframe |
 | 264 | 4 | `payloadCd0` | `float32` | Default-loadout parasite-drag delta; 0 = clean airframe |
+| 268 | 64 | `name[64]` | `char[64]` | Null-terminated friendly display name (`EntityDef::name`), e.g. `"F-16C"`; empty = client falls back to `id` (#860) |
 
 `flightModel` (#811) exists because the client must integrate the **same** aircraft the server does.
 Without it the client had no way to learn an entity type's flight model, silently fell back to the
 builtin model, and diverged from the server permanently. `payloadMassKg` / `payloadCd0` (#812) are the
 aggregate cost of the type's default loadout: the client has no hardpoints and no weapon registry, so
-it receives the two numbers rather than the data to derive them. All three were **appended at the
-tail**, so every pre-existing field offset is unchanged and `kProtocolVersion` stays at 1.
+it receives the two numbers rather than the data to derive them. `name` (#860) is the human-readable
+label the observer entity picker shows. All were **appended at the tail**, so every pre-existing field
+offset is unchanged and `kProtocolVersion` stays at 1.
+
+### MsgFactionDef — 132 bytes
+
+Concatenated one-per-faction into a single reliable packet (leading `msgId` = `FactionDef`) sent once
+after `MsgConnectAck`, when the server has a faction registry. The client reads `size / 132` records,
+each self-describing via `factionIndex`, and builds an index→name table so it can label the faction
+behind each entity's snapshot `factionIndex` (the observer picker; future friend/foe HUD colouring).
+Skipped entirely when the server has no faction registry — the client then shows the index alone.
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x10` |
+| 1 | 1 | `reserved` | `uint8_t` | Zero |
+| 2 | 2 | `factionIndex` | `uint16_t` | `FactionRegistry` index this record describes |
+| 4 | 64 | `id[64]` | `char[64]` | Null-terminated faction id, e.g. `"blue"` |
+| 68 | 64 | `name[64]` | `char[64]` | Null-terminated display name, e.g. `"Blue Coalition"`; empty = fall back to `id` |
 
 ### MsgWorldSnapshotHeader — 24 bytes
 
@@ -230,11 +249,12 @@ peer's stream. Full field semantics and the quantization constants are in
 |---|---|---|
 | `originIndex` | varint | index into the origin table (written at stitch time) |
 | `idx` | varint | **absolute** `entityIdx` (peer-independent; blobs stitch in any order) |
-| `full` | 1 | full record (carries typeIndex + gen) vs. delta |
+| `full` | 1 | full record (carries typeIndex + factionIndex + gen) vs. delta |
 | `genPresent` | 1 | generation on the wire; else client reuses its cache |
 | `omegaPresent` | 1 | angular rates present (set only for the receiving peer's own entity) |
 | `gen` | 16 | only if `genPresent`; truncated `EntityId::generation` |
 | `typeIndex` | varint | only if `full` |
+| `factionIndex` | 16 | only if `full`; `FactionRegistry` index, client-cached like `typeIndex` (#860) |
 | position | 3 × 22 | signed offset from the record's shared grid origin, 0.125 m resolution, ±262 km range |
 | orientation | 2 + 3 × 10 | smallest-three quaternion (dropped-component index + 3 components) |
 | velocity | 3 × 18 | ± 2000 m/s range |
@@ -245,10 +265,11 @@ peer's stream. Full field semantics and the quantization constants are in
 `0x04` right-engine, `0x08` compressor stall, `0x10` flameout (last four Phase 6+). Orientation wire
 order is `[x, y, z, w]`; the GLM constructor is `(w, x, y, z)`.
 
-### MsgClientInput — 56 bytes
+### MsgClientInput — 80 bytes
 
-Sent by the client each render frame on the **unreliable channel (channel 1)**. Padded to 56 (a
-multiple of 8) for the 8-aligned `tickIndex`. For a continuous 60 Hz control stream, unreliable
+Sent by the client each render frame on the **unreliable channel (channel 1)**. Padded to a
+multiple of 8 for the 8-aligned `tickIndex` and the trailing `cameraEye` doubles. For a continuous
+60 Hz control stream, unreliable
 delivery is correct: a dropped packet is superseded by the next frame's input; retransmission would
 delay all subsequent inputs behind the ACK round-trip.
 
@@ -267,10 +288,11 @@ delay all subsequent inputs behind the ACK round-trip.
 | 44 | 4 | `ackMask` | `uint32_t` | Selective-ack bitmask of recently **decoded** snapshot ticks below `tickIndex`: bit `b` = tick `tickIndex − 1 − b` was decoded (`tickIndex` itself is implicitly decoded). Lets the server confirm the specific tick a full record was sent in rather than a high-water mark — see *Scaling to 128+* |
 | 48 | 1 | `selectedStation` | `uint8_t` | **Absolute** selected weapon station index; `255` = keep the current (server-default) selection. Absolute rather than cycle-edges so selection converges under loss on this unreliable channel; the client computes Next/Prev cycling locally and sends the result. Server clamps to the entity's station count |
 | 49 | 3 | `reservedB[3]` | `uint8_t[3]` | Zero |
-| 52 | 4 | `reservedC` | `uint32_t` | Zero (explicit tail padding keeping `sizeof` a multiple of `alignof(uint64_t)`) |
+| 52 | 4 | `reservedC` | `uint32_t` | Zero (explicit padding keeping `cameraEye` 8-aligned) |
+| 56 | 24 | `cameraEye[3]` | `double[3]` | Camera eye world-position (absolute metres). The server centers interest management on this for an **entity-less peer** (an observer ghost camera, or a dead peer awaiting respawn) that has no aircraft transform to key interest on; ignored for a pilot, whose aircraft transform wins. Finite-guarded server-side |
 
 The server clamps all control surface inputs to their valid ranges and normalises `viewAxis` to unit
-length. Packets smaller than 56 bytes are silently discarded. ENet's sequenced unreliable delivery
+length. Packets smaller than 80 bytes are silently discarded. ENet's sequenced unreliable delivery
 provides a first layer of ordering; the application-level `seqNum` guard adds defense-in-depth.
 
 After passing validation the server enqueues each accepted input into a per-peer ring buffer

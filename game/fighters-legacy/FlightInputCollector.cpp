@@ -178,6 +178,14 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
 
     // Absolute station selection rides every packet (#625): idempotent under loss, converges.
     inp.selectedStation = m_selectedStation;
+
+    // Camera eye world-position (#858): where this client is looking FROM. The server keys interest
+    // management on it for an entity-less peer (an observer ghost camera, or a dead peer), and
+    // ignores it for a pilot (the aircraft transform wins). Sent every frame regardless of mode.
+    const glm::dvec3 eye = camInput.eyeWorld();
+    inp.cameraEye[0] = eye.x;
+    inp.cameraEye[1] = eye.y;
+    inp.cameraEye[2] = eye.z;
     return inp;
 }
 

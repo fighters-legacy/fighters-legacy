@@ -108,7 +108,9 @@ struct PeerInputState {
     PeerRole role{PeerRole::Pilot};
     bool handshakeComplete{false}; // false until MsgConnectRequest processed; guards duplicate requests
     // Interest center for an ENTITY-LESS observer (#857): a pilot centers interest on its aircraft, an
-    // observer on this point. Placeholder seam for #858 (camera-position interest); unused for pilots.
+    // observer (or a dead peer) on this point. Seeded at admit time from the spawn/last-aircraft
+    // position, then driven by the client's camera eye each frame (#858, set in onReceive from
+    // MsgClientInput::cameraEye). Unused for a pilot, whose aircraft transform wins in the gather.
     glm::dvec3 interestCenter{0.0, 0.0, 0.0};
 };
 

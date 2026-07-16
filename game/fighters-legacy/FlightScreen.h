@@ -4,6 +4,7 @@
 #include "IScreen.h"
 #include "RenderTypes.h"
 
+#include "EntitySelector.h" // observer entity picker (#860)
 #include "render/RenderSnapshot.h"
 
 #include <array>
@@ -13,6 +14,7 @@ namespace fl {
 
 class CameraInput;
 struct ClientNetEventHandler;
+class EntityTypeRegistry;
 class FlightInputCollector;
 class GameConsole;
 class HapticController;
@@ -48,6 +50,7 @@ struct FlightScreenDeps {
     EnvironmentState* env{nullptr};
     INetwork* clientNet{nullptr};
     ClientNetEventHandler* clientNetHandler{nullptr}; // for sendHeartbeatIfNeeded; may be null
+    EntityTypeRegistry* entityRegistry{nullptr};      // for the observer picker's type-name label (#860)
     IJoystick* joystick{nullptr};
     UserConfig* userConfig{nullptr};
     SandboxInspector* inspector{nullptr};  // null = no inspector
@@ -73,6 +76,12 @@ class FlightScreen : public IScreen {
     FlightScreenDeps m_deps;
     const EntityRenderEntry* m_playerEntry{nullptr};
     bool m_weaponFired{false};
+
+    // Observer entity picker (#860): which live entity a spectator views from, cycled with Num1/Num2.
+    EntitySelector m_selector;
+    bool m_prevNextTarget{false}; // Num1 edge detector (next entity)
+    bool m_prevPrevTarget{false}; // Num2 edge detector (previous entity)
+    char m_pickerLabel[96]{};     // "[ F-16C | Blue ]" built each frame; empty = not shown
 
     // HUD (max 16) + rain (max 48) + slack
     // HUD (<=16) + windshield rain (<=48) + the radio menu (<=10) + slack.

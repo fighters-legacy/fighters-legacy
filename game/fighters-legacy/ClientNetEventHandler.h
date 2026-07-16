@@ -80,6 +80,13 @@ struct ClientNetEventHandler : INetworkEventHandler {
         return m_gotConnectAck;
     }
 
+    // Display name for a faction index (#860), from the MsgFactionDef table. Empty string if the
+    // faction is unknown (no table received, or an out-of-range index).
+    std::string factionName(uint16_t factionIndex) const {
+        const auto it = m_factionNames.find(factionIndex);
+        return it != m_factionNames.end() ? it->second : std::string{};
+    }
+
     ClientTickAlpha tickAlpha;
 
     // Set by Game::startGame() after construction. When non-null, a typed failure is stored here
@@ -205,15 +212,20 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // client-side prediction replay depth. 0 until first non-zero TLV arrives.
     uint32_t m_estimatedDelayTicks{0};
 
-    // Delta-compression entity cache: entityIdx → {gen (uint16 truncated), typeIndex}.
-    // Populated from `full` quantized records; supplies typeIndex (and gen when omitted) for the
-    // compact delta records that follow. Cleared implicitly when the handler is re-created per
+    // Delta-compression entity cache: entityIdx → {gen (uint16 truncated), typeIndex, factionIndex}.
+    // Populated from `full` quantized records; supplies typeIndex/factionIndex (and gen when omitted)
+    // for the compact delta records that follow. Cleared implicitly when the handler is re-created per
     // session (reinitFlight).
     struct KnownEntityInfo {
         uint16_t gen;
         uint32_t typeIndex;
+        uint16_t factionIndex;
     };
     std::unordered_map<uint32_t, KnownEntityInfo> m_knownEntities;
+
+    // Faction index -> display name, from MsgFactionDef sent once after ConnectAck (#860). Used by the
+    // observer entity picker to label an entity's faction.
+    std::unordered_map<uint16_t, std::string> m_factionNames;
 
     // Entity retention cache (#516). The priority/budget scheduler omits low-priority entities from
     // some snapshots, so the rendered set must persist across packets rather than be rebuilt per
