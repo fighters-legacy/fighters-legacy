@@ -19,8 +19,10 @@
 
 #include "mission_validator.h" // validate-mission's façade — for the parity check
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <string>
 
 using namespace fl;
@@ -311,6 +313,124 @@ triggers: []
     CHECK(o.route[1][2] == 600.0);
 }
 
+TEST_CASE("parseMission parses an optional airborne speed and rejects a negative one (#883)", "[mission-parser]") {
+    const char* base = R"yaml(
+name: x
+map: y
+layer: z
+time: { hour: 0, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [red]
+objects:
+  - { type: SA10, id: bandit, side: red, pos: [0, 3000, 0], heading: 0, speed: %SPEED% }
+triggers: []
+)yaml";
+
+    {
+        std::string yaml = base;
+        yaml.replace(yaml.find("%SPEED%"), 7, "180");
+        auto r = parseMission(yaml);
+        REQUIRE(r.ok);
+        REQUIRE(r.mission.objects.size() == 1);
+        REQUIRE(r.mission.objects[0].speed.has_value());
+        CHECK(*r.mission.objects[0].speed == Catch::Approx(180.f));
+    }
+    {
+        std::string yaml = base;
+        yaml.replace(yaml.find("%SPEED%"), 7, "-5");
+        auto r = parseMission(yaml);
+        CHECK_FALSE(r.ok);
+        const bool flagged = std::any_of(r.errors.begin(), r.errors.end(), [](const std::string& e) {
+            return e.find("speed must be >= 0") != std::string::npos;
+        });
+        CHECK(flagged);
+    }
+    // Absent speed leaves the optional empty (the engine picks a cruise default at spawn).
+    {
+        std::string yaml = base;
+        yaml.replace(yaml.find(", speed: %SPEED%"), 16, "");
+        auto r = parseMission(yaml);
+        REQUIRE(r.ok);
+        CHECK_FALSE(r.mission.objects[0].speed.has_value());
+    }
+}
+
+TEST_CASE("parseMission parses start: ground|air and rejects other values (#885)", "[mission-parser]") {
+    const char* base = R"yaml(
+name: x
+map: y
+layer: z
+time: { hour: 0, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [red]
+objects:
+  - { type: SA10, id: a, side: red, pos: [0, 0, 0], heading: 0, start: %S% }
+triggers: []
+)yaml";
+    auto withStart = [&](const char* v) {
+        std::string y = base;
+        y.replace(y.find("%S%"), 3, v);
+        return parseMission(y);
+    };
+
+    auto g = withStart("ground");
+    REQUIRE(g.ok);
+    CHECK(g.mission.objects[0].groundStart);
+
+    auto a = withStart("air");
+    REQUIRE(a.ok);
+    CHECK_FALSE(a.mission.objects[0].groundStart);
+
+    auto bad = withStart("sideways");
+    CHECK_FALSE(bad.ok);
+
+    // Absent start defaults to air.
+    std::string plain = base;
+    plain.replace(plain.find(", start: %S%"), 12, "");
+    auto p = parseMission(plain);
+    REQUIRE(p.ok);
+    CHECK_FALSE(p.mission.objects[0].groundStart);
+}
+
+TEST_CASE("applyMission places a ground-start object on the terrain and parks the slot (#885)", "[mission-setup]") {
+    const char* yaml = R"yaml(
+name: x
+map: y
+layer: z
+time: { hour: 0, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [blue]
+objects:
+  - { type: test:fighter, id: parked, side: blue, pos: [100, 4000, 200], heading: 0, start: ground }
+  - { type: test:fighter, id: p1, side: blue, pos: [0, 4000, 0], heading: 0, start: ground, player: true }
+triggers: []
+)yaml";
+    auto parsed = parseMission(yaml);
+    REQUIRE(parsed.ok);
+
+    NullLogger log;
+    EntityTypeRegistry reg;
+    reg.registerType(makeDef("test:fighter"));
+    EntityManager em(log, reg);
+    FactionRegistry factions;
+
+    // Terrain sits at 550 m everywhere for this test.
+    auto result =
+        applyMission(parsed.mission, em, factions, nullptr, kEarthRadiusM, {}, [](double, double) { return 550.0; });
+
+    // The AI object is spawned sitting on the ground (550), not at its authored 4000 m alt.
+    REQUIRE(result.spawned.size() == 1);
+    const EntityState* s = em.get(result.spawned[0]);
+    REQUIRE(s != nullptr);
+    CHECK(s->transform.pos[1] == Catch::Approx(550.0));
+
+    // The player slot is likewise on the ground AND parked (0 airspeed).
+    REQUIRE(result.playerSlots.size() == 1);
+    CHECK(result.playerSlots[0].pos[1] == Catch::Approx(550.0));
+    REQUIRE(result.playerSlots[0].speed.has_value());
+    CHECK(*result.playerSlots[0].speed == Catch::Approx(0.f));
+}
+
 TEST_CASE("parseMission rejects a malformed route waypoint", "[mission-parser]") {
     const char* yaml = R"yaml(
 name: x
@@ -460,6 +580,42 @@ TEST_CASE("MissionRuntime: destroy(<id>) fires when the object's entity dies", "
     em.onTick(1.0 / 60.0, 1); // reap the killed entity
     rt.step(1);
     CHECK(rt.outcome().state == MissionState::Complete);
+}
+
+TEST_CASE("MissionRuntime: destroy(<player-slot>) tracks the bound pilot, not t=0 (#884)", "[mission-runtime]") {
+    NullLogger log;
+    EntityTypeRegistry reg;
+    reg.registerType(makeDef("test:fighter"));
+    EntityManager em(log, reg);
+
+    // A player slot is seeded with an INVALID entity (unoccupied). Before the fix, destroy(player1)
+    // read "never spawned -> destroyed" and failed the mission at 0.0 s, before anyone connected.
+    Mission m = missionWith({{"destroy(player1)", "mission_failure"}});
+    MissionRuntime rt(m, {{"player1", EntityId{}}}, em);
+    rt.setEvalIntervalTicks(1);
+
+    rt.step(0);
+    CHECK(rt.outcome().state == MissionState::Active); // unoccupied slot != destroyed
+
+    // A pilot claims the slot: bind its aircraft; destroy() stays false while it lives.
+    EntityTransform t{};
+    const EntityId pilot = em.spawn("test:fighter", t);
+    REQUIRE(pilot.valid());
+    rt.registerObjectEntity("player1", pilot);
+    rt.step(60);
+    CHECK(rt.outcome().state == MissionState::Active);
+
+    // The pilot disconnects: the slot is unbound and reads as unoccupied again (not destroyed).
+    rt.registerObjectEntity("player1", EntityId{});
+    rt.step(120);
+    CHECK(rt.outcome().state == MissionState::Active);
+
+    // A pilot re-occupies the slot and is then destroyed -> the failure fires.
+    rt.registerObjectEntity("player1", pilot);
+    em.kill(pilot);
+    em.onTick(1.0 / 60.0, 181);
+    rt.step(180);
+    CHECK(rt.outcome().state == MissionState::Failed);
 }
 
 TEST_CASE("MissionRuntime: triggers fire in declaration order; non-terminal actions dispatch", "[mission-runtime]") {

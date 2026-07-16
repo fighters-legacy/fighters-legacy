@@ -10,15 +10,22 @@
 
 namespace fl {
 
-// Main menu: Sandbox / Join Server (always), Select Mission (packs only), Settings, Exit to Desktop.
+// Main menu: Instant Action + Free Flight (single-player) or Join Server (multiplayer), Select Mission
+// (packs only), Settings, Exit to Desktop.
 class MainMenuScreen : public IScreen {
   public:
     // hasPacks controls whether "Select Mission" is shown.
-    // isMultiplayer relabels the first item from "Sandbox (Instant Action)" to "Join Server".
+    // isMultiplayer replaces the single-player Instant Action / Free Flight entries with "Join Server".
     explicit MainMenuScreen(bool hasPacks, bool isMultiplayer = false);
 
     Screen update(IInput& input, IWindow& window) override;
     std::span<const HudElement> buildElements() override;
+
+    // The mission to launch for the last confirmed item (#40): "builtin:sandbox" for Instant Action,
+    // empty for Free Flight / Join Server. Game reads it when a menu confirm enters a session.
+    const std::string& confirmedMission() const {
+        return m_confirmedMission;
+    }
 
     // Test helpers
     void selectNext();
@@ -36,10 +43,12 @@ class MainMenuScreen : public IScreen {
     struct Item {
         std::string label;
         Screen target;
+        std::string mission; // mission id to launch when this item enters a session (#40); empty = none
     };
 
     std::vector<Item> m_items;
     int m_selectedIdx{0};
+    std::string m_confirmedMission; // mission of the last confirm() (#40)
 
     static constexpr int kMaxElements = 16;
     std::array<HudElement, kMaxElements> m_elements{};

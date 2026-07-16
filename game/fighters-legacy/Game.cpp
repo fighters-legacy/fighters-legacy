@@ -15,6 +15,7 @@
 #include "HapticController.h"
 #include "IWindowEventHandler.h"
 #include "LocalServer.h"
+#include "MainMenuScreen.h"
 #include "MissionBriefScreen.h"
 #include "MissionSelectScreen.h"
 #include "NetworkFactory.h"
@@ -1066,11 +1067,13 @@ void Game::handleTransition(Screen next) {
 
     // Start a session on ANY entry into Loading, not just from MainMenu — the mission flow enters
     // Loading from MissionBrief, which the old MainMenu-only guard missed, leaving the LoadingScreen
-    // null and crashing the next frame (#876). Entering from the brief loads the chosen mission;
-    // entering directly from the menu (the sandbox path) passes no mission.
+    // null and crashing the next frame (#876). Entering from the brief loads the chosen pack mission;
+    // entering from the menu loads the item's mission — "builtin:sandbox" for Instant Action (#40), empty
+    // for Free Flight / Join Server.
     if (entersSession(prev, next)) {
-        const std::string mission =
-            (prev == Screen::MissionBrief) ? d.services.screenMgr->missionSelect().selectedMission() : std::string{};
+        const std::string mission = (prev == Screen::MissionBrief)
+                                        ? d.services.screenMgr->missionSelect().selectedMission()
+                                        : d.services.screenMgr->mainMenu().confirmedMission();
         startGame(mission);
     }
 

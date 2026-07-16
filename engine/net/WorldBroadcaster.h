@@ -59,6 +59,11 @@ class FactionRegistry; // engine/world/FactionRegistry.h — coalition-aware hos
 
 namespace fl {
 
+// Sentinel initial airspeed (#883): "no explicit speed given — pick a sane cruise default for an
+// airborne spawn." A concrete value (incl. 0 for a ground start, #885) is used verbatim. Any
+// negative value is treated as auto.
+inline constexpr float kAutoSpawnAirspeed = -1.f;
+
 // Parsed, validated client input stored per connected peer.
 struct PeerInputState {
     // 8-byte fields first to avoid padding.
@@ -280,7 +285,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // model) and reset to the entity's current transform. Replaces any existing controller for the
     // entity. Sim-thread only. This is the seam future AI/scripted controllers plug into.
     void registerController(EntityId id, std::unique_ptr<IEntityController> controller,
-                            std::shared_ptr<const FlightModelData> model = nullptr);
+                            std::shared_ptr<const FlightModelData> model = nullptr,
+                            float initialAirspeed = kAutoSpawnAirspeed);
 
     // Override a controlled entity's loadout from a mission's per-object `loadout:` (#855). Rebuilds the
     // live stations from `stores` (each replaces one station's default, respecting the station's allowed
@@ -404,11 +410,23 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // this. `factionIndex` indexes the FactionRegistry handed to setFactionRegistry; `quat` is the
     // resolved spawn orientation (heading already placed on the local tangent frame at spawn time).
     struct MissionSpawnSlot {
+        std::string missionObjectId; // the mission object id this slot came from (#884), reported to
+                                     // the mission-slot binder so destroy(<id>) tracks the pilot
         std::string entityType;
         uint16_t factionIndex{0};
         double pos[3]{};
         float quat[4]{0.f, 0.f, 0.f, 1.f};
+        float airspeed{kAutoSpawnAirspeed}; // initial airspeed for the joining pilot (#883); auto = cruise
     };
+
+    // Notified when a pilot claims/leaves a mission player slot (#884): (missionObjectId, entity). A
+    // VALID entity = the pilot's aircraft now occupies the slot; an INVALID one = the slot was freed
+    // (pilot disconnected). fl-server wires this to MissionRuntime::registerObjectEntity so the objective
+    // evaluator's destroy(<slot-id>) tracks the live aircraft instead of firing from t=0. Sim-thread.
+    using MissionSlotBinder = std::function<void(const std::string& missionObjectId, EntityId entity)>;
+    void setMissionSlotBinder(MissionSlotBinder fn) {
+        m_missionSlotBinder = std::move(fn);
+    }
 
     // Install the mission's player slots. When non-empty, a connecting pilot is assigned the next open
     // slot (its type/faction/spawn) instead of the round-robin setSpawnPoints() + [world] player_faction
@@ -769,7 +787,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // `faction` (0 = leave neutral), resolve the flight model, and register the PeerController. Used by
     // both admitPilot (round-robin path) and the mission-slot path. Sim-thread.
     EntityId spawnPilotEntity(uint32_t peerId, const std::string& entityType, const EntityTransform& t,
-                              uint16_t faction);
+                              uint16_t faction, float initialAirspeed = kAutoSpawnAirspeed);
     // Claim the next open mission player slot for `peerId` (#854). Returns its index, or -1 when there
     // are no slots or all are occupied. releaseMissionSlot frees it on despawn. Sim-thread.
     int claimMissionSlot(uint32_t peerId);
@@ -805,7 +823,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // transform, and register it with the controller under the entity's index. Shared by onConnect
     // (PeerController) and registerController (AI/scripted). Sim-thread only.
     void addControlledEntity(EntityId id, std::unique_ptr<IEntityController> controller,
-                             std::shared_ptr<const FlightModelData> model, float initialThrottle, bool decimatable);
+                             std::shared_ptr<const FlightModelData> model, float initialThrottle, bool decimatable,
+                             float initialAirspeed = kAutoSpawnAirspeed);
 
     // Resolve an entity type's EntityDef::flightModelAsset via the injected resolver. Returns null when
     // the id is empty, no resolver is set, or the id is unknown (logs Warn) — callers fall back to
@@ -955,6 +974,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     std::vector<MissionSpawnSlot> m_missionSlots;
     std::vector<uint32_t> m_slotOccupant;
     std::unordered_map<uint32_t, int> m_peerSlot;
+    MissionSlotBinder m_missionSlotBinder; // notified on slot claim/free for destroy(<id>) tracking (#884)
 
     std::unordered_set<std::string> m_bannedAddresses; // in-memory ban list; sim-thread only
 

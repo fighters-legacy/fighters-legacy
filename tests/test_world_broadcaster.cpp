@@ -360,6 +360,50 @@ struct ConstantController : fl::IEntityController {
     }
 };
 
+TEST_CASE("WorldBroadcaster: an airborne spawn flies along its heading at t=0 (#883)", "[world_broadcaster][mission]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    // Heading yawed 90 deg about world up: body-forward (+X) maps to world -Z. A 90-deg quaternion is
+    // {x, y, z, w} = {0, sin45, 0, cos45}.
+    fl::EntityTransform t{};
+    t.pos[1] = 3000.0;
+    t.quat[0] = 0.f;
+    t.quat[1] = 0.70710678f;
+    t.quat[2] = 0.f;
+    t.quat[3] = 0.70710678f;
+    const fl::EntityId id = em.spawn("builtin:debug-entity", t);
+    broadcaster.registerController(id, std::make_unique<ConstantController>(), nullptr, /*airspeed=*/100.f);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    const fl::EntityState* s = em.get(id);
+    REQUIRE(s != nullptr);
+    // Before #883 the integrator started at zero body velocity AND identity orientation, so the aircraft
+    // sat at ~0 airspeed pointing +X and tumbled. Now it is seeded with 100 m/s along its actual heading
+    // (world -Z), i.e. in stable forward flight at t=0.
+    CHECK(s->transform.vel[2] < -80.f); // moving along the heading (world -Z), ~100 m/s
+    CHECK(s->transform.vel[0] > -30.f); // not flung along +X (which identity orientation gave)
+    CHECK(s->transform.vel[0] < 30.f);
+
+    // A ground/sandbox spawn (airspeed 0) stays put — no phantom velocity.
+    fl::EntityTransform t2{};
+    t2.pos[1] = 3000.0;
+    t2.quat[3] = 1.f;
+    const fl::EntityId still = em.spawn("builtin:debug-entity", t2);
+    broadcaster.registerController(still, std::make_unique<ConstantController>(), nullptr, /*airspeed=*/0.f);
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    const fl::EntityState* s2 = em.get(still);
+    REQUIRE(s2 != nullptr);
+    CHECK(s2->transform.vel[0] > -20.f);
+    CHECK(s2->transform.vel[0] < 20.f);
+    CHECK(s2->transform.vel[2] > -20.f);
+    CHECK(s2->transform.vel[2] < 20.f);
+}
+
 TEST_CASE("WorldBroadcaster: registerController steps a non-peer entity and serializes it", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;
@@ -9233,7 +9277,10 @@ TEST_CASE("WorldBroadcaster: the builtin debug entity walks through damage level
     t.pos[1] = 5000.0;
     t.quat[3] = 1.f;
     const fl::EntityId victim = em.spawn("builtin:debug-entity", t);
-    broadcaster.registerController(victim, std::make_unique<ConstantController>()); // integrator + subsystems
+    // Spawn stationary (initialAirspeed 0, #883) so it stays put as a damage dummy — the walk below
+    // blasts at its position between manual onTick() calls, and a cruising victim would drift a tick
+    // ahead of the (once-per-tick) spatial index the warhead queries.
+    broadcaster.registerController(victim, std::make_unique<ConstantController>(), nullptr, /*airspeed=*/0.f);
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     auto levelOf = [&]() -> int {

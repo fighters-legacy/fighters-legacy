@@ -954,8 +954,14 @@ int main(int argc, char** argv) {
                             }
                         }
                     }
-                    if (ctrl)
-                        broadcaster.registerController(id, std::move(ctrl));
+                    if (ctrl) {
+                        // Initial airspeed (#883/#885): a ground start is parked (0); else the mission's
+                        // per-object `speed:` if given, else the engine's sane airborne cruise default — so
+                        // a mission bot placed in the air flies instead of tumbling from zero airspeed.
+                        const float airspeed =
+                            obj.groundStart ? 0.f : (obj.speed ? *obj.speed : fl::kAutoSpawnAirspeed);
+                        broadcaster.registerController(id, std::move(ctrl), nullptr, airspeed);
+                    }
                     if (!obj.loadout.empty()) {
                         std::vector<std::string> loWarn;
                         if (!broadcaster.setEntityLoadout(id, obj.loadout, loWarn)) {
@@ -970,14 +976,19 @@ int main(int argc, char** argv) {
                     }
                 };
 
-                fl::MissionSetupResult setup = fl::applyMission(parsed.mission, entityManager, missionFactions,
-                                                                &weatherController, cfg.planetRadiusM, onSpawned);
+                // Ground-height resolver for `start: ground` objects (#885): the world-Y of the near-side
+                // surface at (x, z), so a parked object sits on the terrain rather than at an altitude.
+                auto groundHeight = [&](double x, double z) -> double { return nearSideSurface(x, z, 0.0).y; };
+                fl::MissionSetupResult setup =
+                    fl::applyMission(parsed.mission, entityManager, missionFactions, &weatherController,
+                                     cfg.planetRadiusM, onSpawned, groundHeight);
                 broadcaster.setFactionRegistry(&missionFactions);
 
                 std::vector<fl::WorldBroadcaster::MissionSpawnSlot> slots;
                 slots.reserve(setup.playerSlots.size());
                 for (const fl::PlayerSlot& ps : setup.playerSlots) {
                     fl::WorldBroadcaster::MissionSpawnSlot s;
+                    s.missionObjectId = ps.id; // so destroy(<slot-id>) binds the pilot's aircraft (#884)
                     s.entityType = ps.type;
                     s.factionIndex = ps.factionIndex;
                     s.pos[0] = ps.pos[0];
@@ -985,6 +996,9 @@ int main(int argc, char** argv) {
                     s.pos[2] = ps.pos[2];
                     for (int c = 0; c < 4; ++c)
                         s.quat[c] = ps.quat[c];
+                    // Initial airspeed for the joining pilot (#883): the slot's `speed:` or the engine's
+                    // airborne cruise default, so a mission's airborne player is in stable flight at t=0.
+                    s.airspeed = ps.speed ? *ps.speed : fl::kAutoSpawnAirspeed;
                     slots.push_back(std::move(s));
                 }
                 broadcaster.setMissionPlayerSlots(std::move(slots));
@@ -993,8 +1007,15 @@ int main(int argc, char** argv) {
                 // cadence internally). mission_success / mission_failure drive the objective state
                 // machine; other `do` actions route through the injected dispatcher (a validated-command
                 // seam — logged for now until the mission action grammar is mapped onto the admin path).
+                // Seed the objective evaluator with the player slots too, mapped to an INVALID entity so
+                // an unoccupied slot reads as "not destroyed" until a pilot claims it (#884). The
+                // mission-slot binder below swaps in the pilot's real aircraft on connect.
+                std::vector<std::pair<std::string, fl::EntityId>> objectEntities = std::move(setup.objectEntities);
+                for (const fl::PlayerSlot& ps : setup.playerSlots)
+                    objectEntities.emplace_back(ps.id, fl::EntityId{});
+
                 missionRuntime = std::make_unique<fl::MissionRuntime>(
-                    parsed.mission, std::move(setup.objectEntities), entityManager, [log](std::string_view action) {
+                    parsed.mission, std::move(objectEntities), entityManager, [log](std::string_view action) {
                         char m[224];
                         std::snprintf(m, sizeof(m), "mission action (seam; not yet routed): %.140s",
                                       std::string(action).c_str());
@@ -1008,6 +1029,12 @@ int main(int argc, char** argv) {
                     log->log(LogLevel::Info, __FILE__, __LINE__, m);
                 });
                 broadcaster.setMissionTickHook([rt = missionRuntime.get()](uint64_t t) { rt->step(t); });
+                // Bind a pilot's aircraft to its player-slot id on connect (and unbind on disconnect), so
+                // destroy(<slot-id>) tracks the live aircraft instead of firing at t=0 (#884). Fired from
+                // the handshake on the sim thread — the same thread that steps the runtime.
+                broadcaster.setMissionSlotBinder([rt = missionRuntime.get()](const std::string& id, fl::EntityId eid) {
+                    rt->registerObjectEntity(id, eid);
+                });
                 loadedMissionName = parsed.mission.name;
                 loadedMissionSpawned = setup.spawned.size();
 

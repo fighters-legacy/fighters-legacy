@@ -7,6 +7,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **game**: Instant Action — the main menu's first single-player entry now launches the builtin skirmish (a `builtin:fighter` wingman + two bandits + a SAM to destroy, zero-pack via #868) instead of dropping you into an empty world, so there's something to fight from a bare checkout. A new "Free Flight" entry keeps the empty practice world (HOTAS calibration, just flying). Multiplayer still shows a single "Join Server" (#40)
+- **mission**: Ground/ramp start — a mission object can now spawn parked on the ground with `start: ground` (default `air`): placed at the terrain elevation at its position, idle throttle, zero airspeed, and held stable by the integrator's parking hold until the pilot throttles up and rotates. Pairs with the airborne-spawn and destroy-at-0.0s fixes so a training/BFM sortie can begin on the runway instead of being dropped into the air (#885)
+
+### Fixed
+
+- **mission**: A `destroy(<player-slot>)` failure trigger no longer fires at 0.0 s before the pilot connects — a `player: true` slot is not spawned as a world entity, so the objective evaluator read it as "never spawned → destroyed" from t=0. Player slots now seed the evaluator as *unoccupied* (not destroyed), and the connect handshake binds the joining pilot's aircraft to the slot's id (and unbinds it on disconnect) via a new `MissionRuntime::registerObjectEntity` seam, so `destroy(<slot>)` tracks the live aircraft (#884)
+- **mission**: Airborne mission spawns no longer depart controlled flight at t=0 — an aircraft placed in the air was dropped in at zero airspeed *and* identity orientation (the integrator ignored the spawn transform's velocity and heading), so it tumbled before the pilot could react. Spawns now seed the integrator with the spawn heading and a forward airspeed: a new optional per-object `speed:` (m/s), or a sane cruise default. AI objects and player slots both benefit; the bare no-mission sandbox pilot still spawns stationary (the builtin UFO is controllable at 0 kts) (#883)
+
 ## [0.3.3] - 2026-07-15
 
 ### Added
