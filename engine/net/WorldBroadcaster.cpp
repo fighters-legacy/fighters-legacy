@@ -3206,6 +3206,11 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
         typeDef.payloadCd0 = payload.extra_cd0;
         // Friendly display name for the observer entity picker (#860); empty falls back to id client-side.
         std::snprintf(typeDef.name, sizeof(typeDef.name), "%s", def->name.c_str());
+        // Category + projectile weapon class (#886): the client selects the builtin placeholder
+        // silhouette (and, later, picker grouping / map icons) on these; without them every
+        // client-side def read back as an AirVehicle.
+        typeDef.category = static_cast<uint8_t>(def->category);
+        typeDef.projectileKind = static_cast<uint8_t>(def->projectileKind);
 
         appendMsg(buf, typeDef);
     }

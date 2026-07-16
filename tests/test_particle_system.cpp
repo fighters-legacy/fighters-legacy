@@ -291,7 +291,7 @@ TEST_CASE("SceneRenderer: no particle system -- particleEmitters empty in scene"
     MockLogger logger;
     AssetManager assets(std::move(packs), logger);
 
-    SceneRenderer sr{bridge, [](uint32_t, std::string&, std::string&) { return false; }, assets, renderer};
+    SceneRenderer sr{bridge, [](uint32_t, fl::SceneRenderer::ResolvedMesh&) { return false; }, assets, renderer};
 
     // Publish a snapshot with one damaged entity.
     auto snap = makeSnap(1);
@@ -313,7 +313,7 @@ TEST_CASE("SceneRenderer: with particle system -- damaged entity emits effect") 
     MockLogger logger;
     AssetManager assets(std::move(packs), logger);
 
-    SceneRenderer sr{bridge, [](uint32_t, std::string&, std::string&) { return false; }, assets, renderer};
+    SceneRenderer sr{bridge, [](uint32_t, fl::SceneRenderer::ResolvedMesh&) { return false; }, assets, renderer};
 
     ParticleSystem ps;
     ParticlePreset preset{};
@@ -349,7 +349,7 @@ TEST_CASE("SceneRenderer: intact entity does not emit particle effect") {
     MockLogger logger;
     AssetManager assets(std::move(packs), logger);
 
-    SceneRenderer sr{bridge, [](uint32_t, std::string&, std::string&) { return false; }, assets, renderer};
+    SceneRenderer sr{bridge, [](uint32_t, fl::SceneRenderer::ResolvedMesh&) { return false; }, assets, renderer};
 
     ParticleSystem ps;
     ParticlePreset preset{};

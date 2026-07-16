@@ -455,4 +455,23 @@ TEST_CASE("flying builtin stores get projectile entity types; gun, drop tank, an
     CHECK(registry.findById("projectile:builtin:cannon") == nullptr);
     CHECK(registry.findById("projectile:builtin:drop-tank") == nullptr);
     CHECK(registry.findById("projectile:builtin:pod") == nullptr);
+
+    // Each projectile def records its weapon class (#886) — the per-class placeholder key.
+    CHECK(registry.findById("projectile:builtin:ir-missile")->projectileKind == ProjectileKind::Missile);
+    CHECK(registry.findById("projectile:builtin:radar-missile")->projectileKind == ProjectileKind::Missile);
+    CHECK(registry.findById("projectile:builtin:sarh-missile")->projectileKind == ProjectileKind::Missile);
+    CHECK(registry.findById("projectile:builtin:bomb")->projectileKind == ProjectileKind::Bomb);
+    CHECK(registry.findById("projectile:builtin:rocket")->projectileKind == ProjectileKind::Rocket);
+}
+
+TEST_CASE("builtin static target is a Structure; emplacements stay ground vehicles (#886)") {
+    // The bunker-class target is a fixed structure; the SAM/AAA emplacements remain
+    // GroundVehicle (they may gain mobility under #585).
+    CHECK(builtinStaticTargetDef().category == ObjectCategory::Structure);
+    CHECK(builtinSamSiteDef().category == ObjectCategory::GroundVehicle);
+    CHECK(builtinAaaDef().category == ObjectCategory::GroundVehicle);
+    CHECK(builtinGroundVehicleDef().category == ObjectCategory::GroundVehicle);
+    CHECK(builtinNavalVesselDef().category == ObjectCategory::NavalVehicle);
+    // Surface entities are not projectiles.
+    CHECK(builtinStaticTargetDef().projectileKind == ProjectileKind::None);
 }

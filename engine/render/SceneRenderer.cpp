@@ -68,11 +68,28 @@ void SceneRenderer::setCockpitMesh(const std::string& meshName) {
 }
 
 void SceneRenderer::ensureBuiltins() {
-    if (m_builtinEntityMesh.valid())
+    if (m_builtinShapeMeshes[0].valid())
         return;
 
-    m_builtinEntityMesh = m_renderer.createMesh({"builtin:entity", builtinTetrahedronGlb()});
-    m_builtinDamagedMesh = m_renderer.createMesh({"builtin:entity-damaged", builtinDamagedWedgeGlb()});
+    // One placeholder silhouette per BuiltinShape (#886), plus the slumped wreck variants. A
+    // shape with no wreck of its own shares the intact mesh handle (builtinDamagedShapeGlb
+    // returns the intact span, and the name-keyed createMesh call is idempotent per name).
+    static constexpr const char* kShapeNames[kShapeCount] = {
+        "builtin:shape-unknown",      "builtin:shape-aircraft",  "builtin:shape-missile",
+        "builtin:shape-bomb",         "builtin:shape-rocket",    "builtin:shape-ground-vehicle",
+        "builtin:shape-naval-vessel", "builtin:shape-structure",
+    };
+    for (size_t i = 0; i < kShapeCount; ++i) {
+        const auto shape = static_cast<BuiltinShape>(i);
+        m_builtinShapeMeshes[i] = m_renderer.createMesh({kShapeNames[i], builtinShapeGlb(shape)});
+        const auto damaged = builtinDamagedShapeGlb(shape);
+        if (damaged.data() == builtinShapeGlb(shape).data()) {
+            m_builtinDamagedShapeMeshes[i] = m_builtinShapeMeshes[i]; // no wreck — reuse intact
+        } else {
+            const std::string dmgName = std::string(kShapeNames[i]) + "-damaged";
+            m_builtinDamagedShapeMeshes[i] = m_renderer.createMesh({dmgName, damaged});
+        }
+    }
     m_builtinFloorMesh = m_renderer.createMesh({"builtin:floor", builtinFloorPlaneGlb()});
 
     // 6-color opaque palette: gives each entity a distinct look in the no-content sandbox.
@@ -177,31 +194,29 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
         const bool shadowOnly =
             m_hiddenEntityGen != 0 && entry.entityIdx == m_hiddenEntityIdx && entry.entityGen == m_hiddenEntityGen;
 
-        // Resolve typeIndex → mesh names (cached after first call per type).
+        // Resolve typeIndex → mesh names + placeholder shape (cached after first call per type).
         auto nameIt = m_typeNameCache.find(entry.typeIndex);
         if (nameIt == m_typeNameCache.end()) {
-            std::string mesh, dmg;
-            bool resolved = m_resolver(entry.typeIndex, mesh, dmg);
-            if (!resolved) {
-                // Mark as unresolved by leaving names empty; fallback handled below.
-                mesh.clear();
-                dmg.clear();
-            }
-            nameIt = m_typeNameCache.emplace(entry.typeIndex, std::make_pair(mesh, dmg)).first;
-            // Explain the placeholder ONCE per type (#832). A mesh-less type renders as the builtin
-            // tetrahedron, which is otherwise indistinguishable from a broken or missing mesh — the
-            // silence cost a multi-hour debugging session on the F-5E.
-            if (m_logger && mesh.empty()) {
+            ResolvedMesh resolvedMesh;
+            const bool resolved = m_resolver ? m_resolver(entry.typeIndex, resolvedMesh) : false;
+            if (!resolved)
+                resolvedMesh = ResolvedMesh{}; // unknown type: empty names + the Unknown error beacon
+            nameIt = m_typeNameCache.emplace(entry.typeIndex, std::move(resolvedMesh)).first;
+            // Explain the placeholder ONCE per type (#832). A mesh-less type renders as a builtin
+            // placeholder shape, which is otherwise indistinguishable from a broken or missing
+            // mesh — the silence cost a multi-hour debugging session on the F-5E.
+            if (m_logger && nameIt->second.meshName.empty()) {
                 char buf[176];
                 std::snprintf(buf, sizeof(buf), "entity type index %u has no mesh (%s) — drawing placeholder",
                               entry.typeIndex, resolved ? "the type declares none" : "type not found in registry");
                 m_logger->log(LogLevel::Warn, __FILE__, __LINE__, buf);
             }
         }
-        const auto& [meshName, damageMeshName] = nameIt->second;
+        const ResolvedMesh& resolved = nameIt->second;
 
         // Pick damage variant when entity is damaged and a variant mesh exists.
-        const std::string& activeMesh = (entry.damageLevel > 0 && !damageMeshName.empty()) ? damageMeshName : meshName;
+        const std::string& activeMesh =
+            (entry.damageLevel > 0 && !resolved.damageMeshName.empty()) ? resolved.damageMeshName : resolved.meshName;
 
         MeshHandle mesh{};
         MaterialHandle mat{};
@@ -212,15 +227,22 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
             if (mesh.valid())
                 mat = getOrUploadMaterial(activeMesh);
             else
-                useBuiltin = true;
+                useBuiltin = true; // failed pack mesh: fall back to the type's category shape (#832 warned)
         }
 
         if (useBuiltin) {
-            if (!m_builtinEntityMesh.valid())
+            if (!m_builtinShapeMeshes[0].valid())
                 continue; // builtins not yet uploaded — skip
-            // A damaged builtin swaps to the wreck-variant placeholder (#864) so the mesh-swap path
-            // runs zero-pack, exactly as a pack entity swaps to its classicDamageMesh.
-            mesh = (entry.damageLevel > 0 && m_builtinDamagedMesh.valid()) ? m_builtinDamagedMesh : m_builtinEntityMesh;
+            // Per-category placeholder silhouette (#886); the ordinal is defensive-clamped to
+            // Unknown. A damaged builtin swaps to the shape's wreck variant (#864) so the
+            // mesh-swap path runs zero-pack, exactly as a pack entity swaps to its
+            // classicDamageMesh (shapes without a wreck keep their intact mesh).
+            size_t shapeIdx = static_cast<size_t>(resolved.shape);
+            if (shapeIdx >= kShapeCount)
+                shapeIdx = static_cast<size_t>(BuiltinShape::Unknown);
+            mesh = (entry.damageLevel > 0 && m_builtinDamagedShapeMeshes[shapeIdx].valid())
+                       ? m_builtinDamagedShapeMeshes[shapeIdx]
+                       : m_builtinShapeMeshes[shapeIdx];
 #ifdef NDEBUG
             // Release: shaded grey so placeholder entities read as real geometry.
             mat = m_fallbackEntityMat;

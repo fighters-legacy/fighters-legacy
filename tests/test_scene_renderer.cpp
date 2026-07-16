@@ -16,6 +16,7 @@
 #include "mock_content.h"
 #include "mock_hal.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -63,16 +64,18 @@ struct MockContentPack : NullContentPack {
 
 // Build a simple always-false resolver (no types known).
 static SceneRenderer::MeshNameResolver noTypes() {
-    return [](uint32_t, std::string&, std::string&) { return false; };
+    return [](uint32_t, SceneRenderer::ResolvedMesh&) { return false; };
 }
 
-// Build a resolver that maps typeIndex 0 -> ("f15c", "").
-static SceneRenderer::MeshNameResolver oneType(const std::string& mesh = "f15c", const std::string& dmg = "") {
-    return [mesh, dmg](uint32_t idx, std::string& m, std::string& d) -> bool {
+// Build a resolver that maps typeIndex 0 -> ("f15c", "", shape).
+static SceneRenderer::MeshNameResolver oneType(const std::string& mesh = "f15c", const std::string& dmg = "",
+                                               BuiltinShape shape = BuiltinShape::AirVehicle) {
+    return [mesh, dmg, shape](uint32_t idx, SceneRenderer::ResolvedMesh& out) -> bool {
         if (idx != 0)
             return false;
-        m = mesh;
-        d = dmg;
+        out.meshName = mesh;
+        out.damageMeshName = dmg;
+        out.shape = shape;
         return true;
     };
 }
@@ -214,7 +217,7 @@ TEST_CASE("SceneRenderer submits one RenderItem when entity has loadable mesh") 
     // ensureBuiltins() uploads 3 meshes (entity + damaged + floor) + 8 materials (6 palette + 1 floor +
     // 1 shaded-grey fallback); the content mesh adds 1 more createMesh but reuses the shared
     // fallback material (no new createMaterial).
-    CHECK(renderer.createMeshCount == 4);
+    CHECK(renderer.createMeshCount == 14); // ensureBuiltins (13) + "f15c" (1)
     CHECK(renderer.createMaterialCount == 8);
 }
 
@@ -265,7 +268,7 @@ TEST_CASE("SceneRenderer falls back to builtin when mesh bytes are empty") {
     REQUIRE(renderer.lastScene.renderItems.size() == 1);
     CHECK(renderer.lastScene.renderItems[0].mesh.valid()); // builtin tetrahedron
     // createMesh was NOT called for the broken empty_mesh; only ensureBuiltins uploads.
-    CHECK(renderer.createMeshCount == 3); // builtin entity + damaged + floor
+    CHECK(renderer.createMeshCount == 13); // 8 builtin shapes + 4 wrecks + floor
 }
 
 // ---------------------------------------------------------------------------
@@ -301,7 +304,7 @@ TEST_CASE("SceneRenderer uses classicDamageMesh when damageLevel is nonzero") {
     REQUIRE(renderer.lastScene.renderItems.size() == 1);
     // Only f15c_damaged was needed for content (f15c was not loaded).
     // ensureBuiltins adds 3 builtin meshes → 4 total.
-    CHECK(renderer.createMeshCount == 4);
+    CHECK(renderer.createMeshCount == 14);
     CHECK((renderer.lastScene.renderItems[0].flags & kRenderFlagDamaged) != 0);
 }
 
@@ -330,7 +333,7 @@ TEST_CASE("SceneRenderer uses primary mesh when damageLevel is zero") {
 
     REQUIRE(renderer.lastScene.renderItems.size() == 1);
     CHECK((renderer.lastScene.renderItems[0].flags & kRenderFlagDamaged) == 0);
-    CHECK(renderer.createMeshCount == 4); // ensureBuiltins (3) + "f15c" (1)
+    CHECK(renderer.createMeshCount == 14); // ensureBuiltins (13) + "f15c" (1)
 }
 
 TEST_CASE("SceneRenderer swaps a damaged builtin entity to the wreck-variant placeholder (#864)") {
@@ -341,7 +344,8 @@ TEST_CASE("SceneRenderer swaps a damaged builtin entity to the wreck-variant pla
 
     MockRenderer renderer;
     SimRenderBridge bridge;
-    SceneRenderer sr{bridge, noTypes(), assets, renderer}; // no content mesh → builtin fallback
+    // No content mesh → the builtin ground-vehicle placeholder (a persistent category with a wreck).
+    SceneRenderer sr{bridge, oneType("", "", BuiltinShape::GroundVehicle), assets, renderer};
 
     // Intact builtin: the clean placeholder.
     {
@@ -370,6 +374,88 @@ TEST_CASE("SceneRenderer swaps a damaged builtin entity to the wreck-variant pla
     CHECK(intactMeshId != 0u);
     CHECK(damagedMeshId != 0u);
     CHECK(intactMeshId != damagedMeshId); // the mesh swap ran with no content pack
+    CHECK((renderer.lastScene.renderItems[0].flags & kRenderFlagDamaged) != 0);
+}
+
+TEST_CASE("SceneRenderer picks a distinct builtin placeholder per shape (#886)") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    // Resolver: typeIndex N -> mesh-less type with shape ordinal N (every BuiltinShape).
+    SceneRenderer sr{bridge,
+                     [](uint32_t typeIndex, SceneRenderer::ResolvedMesh& out) {
+                         out.shape = static_cast<BuiltinShape>(typeIndex);
+                         return true;
+                     },
+                     assets, renderer};
+
+    RenderSnapshot snap = makeSnap();
+    for (uint32_t i = 0; i < static_cast<uint32_t>(BuiltinShape::Count); ++i)
+        snap.entries.push_back(makeEntry(i, {10.0 * i, 0.0, 0.0}));
+    bridge.publish(std::move(snap));
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    const auto& items = renderer.lastScene.renderItems;
+    REQUIRE(items.size() == static_cast<size_t>(BuiltinShape::Count));
+    // Every entity got a valid mesh, and every shape resolved to a DISTINCT mesh handle —
+    // an aircraft, a missile, a ship, and a bunker are no longer the same wedge.
+    std::vector<uint32_t> ids;
+    for (const auto& item : items) {
+        CHECK(item.mesh.id != 0u);
+        ids.push_back(item.mesh.id);
+    }
+    std::sort(ids.begin(), ids.end());
+    CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
+}
+
+TEST_CASE("SceneRenderer: unknown type renders the Unknown beacon; damaged projectile keeps its dart (#886)") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    // typeIndex 0 = a missile projectile; anything else is unknown (resolver returns false).
+    SceneRenderer sr{bridge,
+                     [](uint32_t typeIndex, SceneRenderer::ResolvedMesh& out) {
+                         if (typeIndex != 0)
+                             return false;
+                         out.shape = BuiltinShape::Missile;
+                         return true;
+                     },
+                     assets, renderer};
+
+    // Frame 1: an intact missile + an unknown type.
+    {
+        RenderSnapshot snap = makeSnap(1);
+        snap.entries.push_back(makeEntry(0, {10.0, 0.0, 0.0}));
+        snap.entries.push_back(makeEntry(42, {20.0, 0.0, 0.0}));
+        bridge.publish(std::move(snap));
+    }
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    REQUIRE(renderer.lastScene.renderItems.size() == 2);
+    const uint32_t missileMeshId = renderer.lastScene.renderItems[0].mesh.id;
+    const uint32_t unknownMeshId = renderer.lastScene.renderItems[1].mesh.id;
+    CHECK(missileMeshId != 0u);
+    CHECK(unknownMeshId != 0u);
+    CHECK(missileMeshId != unknownMeshId); // a registry miss must NOT look like a plausible entity
+
+    // Frame 2: the missile takes damage — projectiles have no wreck, so the dart stays.
+    {
+        RenderSnapshot snap = makeSnap(2);
+        EntityRenderEntry e = makeEntry(0, {10.0, 0.0, 0.0});
+        e.damageLevel = 2;
+        snap.entries.push_back(e);
+        bridge.publish(std::move(snap));
+    }
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    REQUIRE(renderer.lastScene.renderItems.size() == 1);
+    CHECK(renderer.lastScene.renderItems[0].mesh.id == missileMeshId);
     CHECK((renderer.lastScene.renderItems[0].flags & kRenderFlagDamaged) != 0);
 }
 
@@ -408,7 +494,7 @@ TEST_CASE("SceneRenderer caches mesh handle: createMesh called once for repeated
 
     // ensureBuiltins on frame 1: 3 meshes + 8 materials (6 palette + floor + fallback). Content
     // "f15c": +1 mesh, reuses the shared fallback material. Frame 2: fully cached.
-    CHECK(renderer.createMeshCount == 4);
+    CHECK(renderer.createMeshCount == 14);
     CHECK(renderer.createMaterialCount == 8);
     CHECK(renderer.setSceneCount == 2);
 }
@@ -428,9 +514,8 @@ TEST_CASE("SceneRenderer shares one fallback material across distinct loadable m
     SimRenderBridge bridge;
     // Resolver maps typeIndex 0 -> f15c, 1 -> mig29.
     SceneRenderer sr{bridge,
-                     [](uint32_t typeIndex, std::string& mesh, std::string& dmg) {
-                         dmg.clear();
-                         mesh = (typeIndex == 0) ? "f15c" : "mig29";
+                     [](uint32_t typeIndex, SceneRenderer::ResolvedMesh& out) {
+                         out.meshName = (typeIndex == 0) ? "f15c" : "mig29";
                          return true;
                      },
                      assets, renderer};
@@ -444,7 +529,7 @@ TEST_CASE("SceneRenderer shares one fallback material across distinct loadable m
 
     // Two distinct content meshes uploaded, but no per-mesh material: still just the 8 builtins
     // (6 palette + floor + fallback). Both meshes share m_fallbackEntityMat.
-    CHECK(renderer.createMeshCount == 5); // 3 builtin + 2 content
+    CHECK(renderer.createMeshCount == 15); // 13 builtin + 2 content
     CHECK(renderer.createMaterialCount == 8);
     REQUIRE(renderer.lastScene.renderItems.size() == 2);
     CHECK(renderer.lastScene.renderItems[0].material.id == renderer.lastScene.renderItems[1].material.id);
@@ -768,67 +853,8 @@ TEST_CASE("SceneRenderer builtin floor camera-relative offset uses dvec3 worldOr
 }
 
 // ---------------------------------------------------------------------------
-// Builtin tetrahedron winding / normals
+// Builtin geometry winding / normals
 // ---------------------------------------------------------------------------
-
-// The builtin entity tetrahedron must have outward-facing normals (CCW winding when
-// viewed from outside). With inward normals the opaque pipeline (frontFace=CW after the
-// Vulkan Y-flip, cull BACK) renders the mesh inside-out: visible from every camera angle
-// and, critically, NOT culled in cockpit view where the camera sits at the centroid.
-// Regression guard for the inverted-winding bug.
-TEST_CASE("Builtin tetrahedron has outward-facing normals") {
-    const std::span<const uint8_t> glb = builtinTetrahedronGlb();
-    REQUIRE(glb.size() > 20u);
-
-    auto readU32 = [&](std::size_t off) {
-        uint32_t v = 0;
-        std::memcpy(&v, glb.data() + off, 4);
-        return v;
-    };
-    // GLB: 12-byte header, then JSON chunk (4-byte len + 4-byte type "JSON" + data),
-    // then BIN chunk (4-byte len + 4-byte type "BIN\0" + data).
-    const uint32_t jsonLen = readU32(12);
-    const std::size_t binStart = 12u + 8u + jsonLen + 8u;
-    REQUIRE(glb.size() >= binStart + 12u * 12u * 2u);
-
-    // Non-interleaved layout: 12 POSITION vec3 (144 B) then 12 NORMAL vec3 (144 B).
-    auto readVec3 = [&](std::size_t off) {
-        float x, y, z;
-        std::memcpy(&x, glb.data() + off + 0, 4);
-        std::memcpy(&y, glb.data() + off + 4, 4);
-        std::memcpy(&z, glb.data() + off + 8, 4);
-        return glm::vec3{x, y, z};
-    };
-
-    constexpr int kVerts = 12;
-    const std::size_t normBase = binStart + static_cast<std::size_t>(kVerts) * 12u;
-
-    // The mesh origin is the ground-contact point, not the centroid, so compute the centroid
-    // (mean of the 12 vertices) and check each normal points away from it (outward).
-    glm::vec3 centroid{0.f};
-    for (int i = 0; i < kVerts; ++i)
-        centroid += readVec3(binStart + static_cast<std::size_t>(i) * 12u);
-    centroid /= static_cast<float>(kVerts);
-
-    for (int i = 0; i < kVerts; ++i) {
-        const glm::vec3 pos = readVec3(binStart + static_cast<std::size_t>(i) * 12u);
-        const glm::vec3 nrm = readVec3(normBase + static_cast<std::size_t>(i) * 12u);
-        // An outward normal points away from the centroid: dot(normal, pos - centroid) > 0.
-        CHECK(glm::dot(nrm, pos - centroid) > 0.0f);
-    }
-
-    // Standard glTF winding (CCW-from-outside): each face's winding cross-product must AGREE with
-    // its outward stored normal (dot > 0). The engine front-faces this (frontFace=CCW). A negative
-    // dot means the mesh is wound inside-out (back faces shown, front faces culled).
-    for (int f = 0; f < kVerts / 3; ++f) {
-        const glm::vec3 v0 = readVec3(binStart + static_cast<std::size_t>(f * 3 + 0) * 12u);
-        const glm::vec3 v1 = readVec3(binStart + static_cast<std::size_t>(f * 3 + 1) * 12u);
-        const glm::vec3 v2 = readVec3(binStart + static_cast<std::size_t>(f * 3 + 2) * 12u);
-        const glm::vec3 storedNormal = readVec3(normBase + static_cast<std::size_t>(f * 3) * 12u);
-        const glm::vec3 windingCross = glm::cross(v1 - v0, v2 - v0);
-        CHECK(glm::dot(windingCross, storedNormal) > 0.0f);
-    }
-}
 
 // The builtin floor's triangles are wound CCW-from-above (standard glTF) so the winding
 // cross-product agrees with the +Y stored normal; the engine front-faces this (frontFace=CCW),
@@ -875,6 +901,72 @@ TEST_CASE("Builtin floor plane is wound front-face up") {
     const std::size_t normBase = binStart + static_cast<std::size_t>(kVerts) * 12u;
     const glm::vec3 storedNormal = readVec3(normBase);
     CHECK(storedNormal.y > 0.0f);
+}
+
+// Every per-category placeholder shape (#886) — intact and wreck variant — must be a valid
+// single-primitive GLB whose per-face winding agrees with its stored normals (the same
+// inside-out regression class as the tetrahedron test above; the composite shapes are
+// non-convex, so the centroid check does not apply — winding/normal agreement does).
+TEST_CASE("Builtin placeholder shapes are valid GLBs with winding-consistent normals") {
+    for (uint8_t s = 0; s < static_cast<uint8_t>(BuiltinShape::Count); ++s) {
+        const auto shape = static_cast<BuiltinShape>(s);
+        for (const std::span<const uint8_t> glb : {builtinShapeGlb(shape), builtinDamagedShapeGlb(shape)}) {
+            INFO("shape ordinal " << static_cast<int>(s));
+            REQUIRE(glb.size() > 20u);
+
+            auto readU32 = [&](std::size_t off) {
+                uint32_t v = 0;
+                std::memcpy(&v, glb.data() + off, 4);
+                return v;
+            };
+            auto readVec3 = [&](std::size_t off) {
+                float x, y, z;
+                std::memcpy(&x, glb.data() + off + 0, 4);
+                std::memcpy(&y, glb.data() + off + 4, 4);
+                std::memcpy(&z, glb.data() + off + 8, 4);
+                return glm::vec3{x, y, z};
+            };
+
+            CHECK(readU32(0) == 0x46546C67u); // "glTF" magic
+            CHECK(readU32(4) == 2u);          // glTF 2.0
+            const uint32_t jsonLen = readU32(12);
+            const std::size_t binLenOff = 12u + 8u + jsonLen;
+            REQUIRE(glb.size() >= binLenOff + 8u);
+            const uint32_t binLen = readU32(binLenOff);
+            const std::size_t binStart = binLenOff + 8u;
+            REQUIRE(glb.size() >= binStart + binLen);
+
+            // Non-interleaved, non-indexed: [positions][normals], 24 bytes per vertex,
+            // 3 vertices per face (build_flat_glb layout).
+            REQUIRE(binLen % 24u == 0u);
+            const std::size_t verts = binLen / 24u;
+            REQUIRE(verts % 3u == 0u);
+            const std::size_t normBase = binStart + verts * 12u;
+
+            for (std::size_t f = 0; f < verts / 3u; ++f) {
+                const glm::vec3 v0 = readVec3(binStart + (f * 3u + 0u) * 12u);
+                const glm::vec3 v1 = readVec3(binStart + (f * 3u + 1u) * 12u);
+                const glm::vec3 v2 = readVec3(binStart + (f * 3u + 2u) * 12u);
+                const glm::vec3 storedNormal = readVec3(normBase + (f * 3u) * 12u);
+                CHECK(glm::length(storedNormal) == Catch::Approx(1.0f).margin(1e-3f));
+                const glm::vec3 windingCross = glm::cross(v1 - v0, v2 - v0);
+                CHECK(glm::dot(windingCross, storedNormal) > 0.0f);
+            }
+        }
+    }
+}
+
+// Shapes without a wreck variant return their intact span from builtinDamagedShapeGlb —
+// projectiles despawn on death and the Unknown beacon is a bug marker; callers never branch.
+TEST_CASE("Builtin shapes without a wreck reuse the intact span; out-of-range maps to Unknown") {
+    for (BuiltinShape s : {BuiltinShape::Unknown, BuiltinShape::Missile, BuiltinShape::Bomb, BuiltinShape::Rocket})
+        CHECK(builtinDamagedShapeGlb(s).data() == builtinShapeGlb(s).data());
+    for (BuiltinShape s :
+         {BuiltinShape::AirVehicle, BuiltinShape::GroundVehicle, BuiltinShape::NavalVessel, BuiltinShape::Structure})
+        CHECK(builtinDamagedShapeGlb(s).data() != builtinShapeGlb(s).data());
+    // Defensive: a hostile/garbage ordinal resolves to the Unknown error beacon, never OOB.
+    CHECK(builtinShapeGlb(static_cast<BuiltinShape>(0xEE)).data() == builtinShapeGlb(BuiltinShape::Unknown).data());
+    CHECK(builtinShapeGlb(BuiltinShape::Count).data() == builtinShapeGlb(BuiltinShape::Unknown).data());
 }
 
 // ---------------------------------------------------------------------------

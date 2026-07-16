@@ -134,6 +134,14 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             def.flightModelAsset = td.flightModel;
             def.payloadMassKg = td.payloadMassKg;
             def.payloadCd0 = td.payloadCd0;
+            // Category + projectile weapon class (#886) select the builtin placeholder silhouette.
+            // Wire ordinals are gated before the enum cast (a malicious server may send any byte);
+            // invalid values fall back to the pre-#886 defaults (AirVehicle / None).
+            def.category = fl::isObjectCategoryOrdinal(td.category) ? static_cast<fl::ObjectCategory>(td.category)
+                                                                    : fl::ObjectCategory::AirVehicle;
+            def.projectileKind = fl::isProjectileKindOrdinal(td.projectileKind)
+                                     ? static_cast<fl::ProjectileKind>(td.projectileKind)
+                                     : fl::ProjectileKind::None;
             def.maxHp = 100.0f;
             registry.registerType(std::move(def));
         }

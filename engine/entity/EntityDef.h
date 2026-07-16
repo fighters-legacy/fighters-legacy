@@ -41,6 +41,11 @@ struct EntityDef {
     std::string id; // content-pack-scoped def ID, e.g. "fl-base:f15c"
     std::string name;
     ObjectCategory category{ObjectCategory::AirVehicle};
+    // Which weapon class a Projectile-category type flew off as (#886) — drives the per-class
+    // builtin placeholder silhouette. None for every other category. Set from WeaponDef::type by
+    // registerProjectileEntityDefs, or from the optional `projectile_kind` TOML key (default:
+    // missile) for hand-authored projectile defs. Sent to the client on MsgEntityTypeDef.
+    ProjectileKind projectileKind{ProjectileKind::None};
     float maxHp{100.f};
     std::optional<DamageDef> damage;   // absent = binary death (no progressive damage)
     std::string mesh;                  // ASSET NAME for primary geometry
@@ -83,7 +88,7 @@ struct EntityDef {
 
     // ── collision (#630) ─────────────────────────────────────────────────────
     // The entity's collision sphere radius (metres) for entity-entity collision detection. 0 = use
-    // the category default (Air 8 m, Ground/Naval 15 m; Projectiles never collide here — they have
+    // the category default (Air 8 m, Ground/Naval/Structure 15 m; Projectiles never collide here — they have
     // their own fuze path). A blimp or a carrier wants an explicit value; a fighter does not.
     float collisionRadiusM{0.f};
 };
@@ -98,6 +103,7 @@ struct EntityDef {
         return 8.f;
     case ObjectCategory::GroundVehicle:
     case ObjectCategory::NavalVehicle:
+    case ObjectCategory::Structure:
         return 15.f;
     case ObjectCategory::Projectile:
     case ObjectCategory::Effect:
