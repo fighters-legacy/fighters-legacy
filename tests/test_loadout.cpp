@@ -83,7 +83,8 @@ EntityDef f5e() {
 WeaponRegistry f5eWeapons() {
     WeaponRegistry reg;
     reg.registerWeapon(weapon("fl-base:aim9p", WeaponType::Missile, 85.5f, 0.0012f));
-    reg.registerWeapon(weapon("fl-base:m39a2", WeaponType::Gun, 102.0f, 0.f)); // internal: no drag
+    reg.registerWeapon(weapon("fl-base:m39a2", WeaponType::Gun, 102.0f, 0.f));       // internal: no drag
+    reg.registerWeapon(weapon("fl-base:tank150", WeaponType::Fuel, 320.0f, 0.003f)); // drop tank (#862)
     return reg;
 }
 
@@ -145,22 +146,22 @@ TEST_CASE("defaultPayload sums an F-5E default loadout", "[loadout]") {
 
     const PayloadEffect p = defaultPayload(f5e(), reg, log);
 
-    // 2 x AIM-9P (85.5 kg, 0.0012 cd0) + gun (102 kg, no drag). The fuel station carries a tank,
-    // which is not a weapon and is not counted here.
-    CHECK(p.extra_mass_kg == Approx(85.5f * 2 + 102.0f));
-    CHECK(p.extra_cd0 == Approx(0.0012f * 2));
+    // 2 x AIM-9P (85.5 kg, 0.0012 cd0) + gun (102 kg, no drag) + drop tank (320 kg, 0.003 cd0). The
+    // fuel station carries an inert tank store (#862) whose mass/drag DOES count against the airframe.
+    CHECK(p.extra_mass_kg == Approx(85.5f * 2 + 102.0f + 320.0f));
+    CHECK(p.extra_cd0 == Approx(0.0012f * 2 + 0.003f));
 
-    // A fuel station is a normal loadout, not a misconfiguration: no log line at all.
+    // Every store resolves: no log line at all.
     CHECK(log.count(LogLevel::Error) == 0);
     CHECK(log.count(LogLevel::Warn) == 0);
 }
 
-TEST_CASE("defaultPayload skips a Fuel hardpoint silently", "[loadout]") {
-    // HardpointType::Fuel has NO WeaponType counterpart -- the enums are parallel right up until
-    // Fuel, and a drop tank is not in the weapon registry and never will be. This is the case that
-    // would otherwise Error-log on every single spawn of every aircraft with a tank.
+TEST_CASE("defaultPayload counts a Fuel drop-tank store (#862)", "[loadout]") {
+    // A drop tank is a WeaponType::Fuel store now: inert (never fires) but it costs the airframe
+    // mass + drag like any other store, so a tanked jet flies heavier than a clean one.
     RecordingLog log;
     WeaponRegistry reg;
+    reg.registerWeapon(weapon("fl-base:tank150", WeaponType::Fuel, 320.0f, 0.003f));
 
     EntityDef def;
     def.id = "fl-base:jet";
@@ -168,8 +169,9 @@ TEST_CASE("defaultPayload skips a Fuel hardpoint silently", "[loadout]") {
 
     const PayloadEffect p = defaultPayload(def, reg, log);
 
-    CHECK(p.extra_mass_kg == Approx(0.f));
-    CHECK(log.count(LogLevel::Error) == 0); // silent, not just non-fatal
+    CHECK(p.extra_mass_kg == Approx(320.0f));
+    CHECK(p.extra_cd0 == Approx(0.003f));
+    CHECK(log.count(LogLevel::Error) == 0); // resolves cleanly
 }
 
 TEST_CASE("defaultPayload: an unknown store id yields a clean airframe and ONE Error", "[loadout]") {
@@ -215,6 +217,23 @@ TEST_CASE("defaultPayload rejects a store of the wrong kind for the station", "[
     EntityDef def;
     def.id = "fl-base:jet";
     def.hardpoints = {station(1, HardpointType::Missile, {"fl-base:mk82"}, "fl-base:mk82")};
+
+    const PayloadEffect p = defaultPayload(def, reg, log);
+
+    CHECK(p.extra_mass_kg == Approx(0.f));
+    CHECK(log.has(LogLevel::Error, "not that kind of weapon"));
+}
+
+TEST_CASE("defaultPayload rejects a non-tank store on a Fuel station (#862)", "[loadout]") {
+    // The Fuel<->Fuel mapping cuts both ways: a Missile is not a drop tank, so hanging one on a Fuel
+    // station is the same category slip as any other wrong-kind store.
+    RecordingLog log;
+    WeaponRegistry reg;
+    reg.registerWeapon(weapon("fl-base:aim9p", WeaponType::Missile, 85.5f, 0.0012f));
+
+    EntityDef def;
+    def.id = "fl-base:jet";
+    def.hardpoints = {station(1, HardpointType::Fuel, {"fl-base:aim9p"}, "fl-base:aim9p")};
 
     const PayloadEffect p = defaultPayload(def, reg, log);
 

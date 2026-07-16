@@ -73,6 +73,11 @@ add_executable(test_transform_history test_transform_history.cpp)
 target_link_libraries(test_transform_history PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_transform_history)
 
+# Required-pack policy (#872): the pure spec/policy parsing + missing-pack comparison (header-only).
+add_executable(test_required_pack_policy test_required_pack_policy.cpp)
+target_link_libraries(test_required_pack_policy PRIVATE Catch2::Catch2WithMain engine-net)
+catch_discover_tests(test_required_pack_policy)
+
 # FireControl + ProjectileSystem (#625): the pure fire-decision logic and the 3-DOF projectile pool.
 # engine-weapon's entity/spatial deps are PRIVATE, so the test links them explicitly.
 add_executable(test_fire_control test_fire_control.cpp)
@@ -129,6 +134,13 @@ add_executable(test_honest_sensing test_honest_sensing.cpp)
 target_link_libraries(test_honest_sensing PRIVATE Catch2::Catch2WithMain engine-net engine-ai engine-sensor
     engine-entity engine-spatial engine-weather engine-job)
 catch_discover_tests(test_honest_sensing)
+
+# Builtin surface entities + SAM/AAA engagement controllers (#863): a WB-level engagement test, so it
+# links engine-ai (the controllers) + engine-bootstrap (the builtin surface entity defs).
+add_executable(test_surface_threats test_surface_threats.cpp)
+target_link_libraries(test_surface_threats PRIVATE Catch2::Catch2WithMain engine-net engine-ai engine-sensor
+    engine-bootstrap engine-entity engine-spatial engine-weather engine-job)
+catch_discover_tests(test_surface_threats)
 
 add_executable(test_sensor_system test_sensor_system.cpp)
 target_link_libraries(test_sensor_system PRIVATE Catch2::Catch2WithMain engine-sensor engine-entity engine-spatial)
@@ -506,7 +518,8 @@ endif()
 catch_discover_tests(test_input_hal DISCOVERY_MODE PRE_TEST)
 
 add_executable(test_validate_weapon test_validate_weapon.cpp)
-target_link_libraries(test_validate_weapon PRIVATE Catch2::Catch2WithMain validate-weapon-lib)
+# engine-weapon is PRIVATE to validate-weapon-lib, so link it here for BuiltinWeapon.h (#862).
+target_link_libraries(test_validate_weapon PRIVATE Catch2::Catch2WithMain validate-weapon-lib engine-weapon)
 catch_discover_tests(test_validate_weapon)
 
 add_executable(test_validate_sensor test_validate_sensor.cpp)

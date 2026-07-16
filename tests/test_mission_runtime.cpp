@@ -3,6 +3,7 @@
 // engine-mission runtime tests (#632): the shared schema parser (parseMission), parser/linter parity
 // with validate-mission, and the faction-aware sim-setup applier (applyMission).
 
+#include "mission/BuiltinMissions.h"
 #include "mission/Mission.h"
 #include "mission/MissionParser.h"
 #include "mission/MissionRuntime.h"
@@ -491,4 +492,36 @@ TEST_CASE("MissionRuntime: a trigger fires exactly once (edge), not every tick",
 
     CHECK(dispatched.size() == 1u); // fired on the first evaluation and never again
     CHECK(rt.outcome().state == MissionState::Active);
+}
+
+// --- builtin sandbox mission (#868) --------------------------------------------------------------
+
+TEST_CASE("the builtin sandbox mission parses cleanly and references only builtin content (#868)", "[mission-parser]") {
+    const std::string_view yaml = fl::builtinMissionYaml("builtin:sandbox");
+    REQUIRE_FALSE(yaml.empty());
+    CHECK(fl::builtinMissionYaml("builtin:nope").empty()); // unknown id -> empty
+
+    auto r = parseMission(std::string(yaml));
+    REQUIRE(r.ok);
+    const Mission& m = r.mission;
+    CHECK(m.sides.size() == 2u); // blue vs red
+
+    bool hasPlayerSlot = false, hasSamSite = false, hasLuaBot = false, hasSamAi = false;
+    for (const MissionObject& o : m.objects) {
+        // Every object flies builtin content — the whole point is zero-pack.
+        CHECK(o.type.rfind("builtin:", 0) == 0u);
+        if (o.playerSlot)
+            hasPlayerSlot = true;
+        if (o.type == "builtin:sam-site")
+            hasSamSite = true;
+        if (o.ai == "lua builtin:fighter")
+            hasLuaBot = true;
+        if (o.ai == "sam")
+            hasSamAi = true;
+    }
+    CHECK(hasPlayerSlot);           // a joinable slot for Instant Action / a connecting pilot
+    CHECK(hasSamSite);              // something that shoots back
+    CHECK(hasLuaBot);               // a builtin:fighter scripted bot
+    CHECK(hasSamAi);                // the SAM auto-engages
+    CHECK(m.triggers.size() >= 2u); // an objective + a backstop
 }

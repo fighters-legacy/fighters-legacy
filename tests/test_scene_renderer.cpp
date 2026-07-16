@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "render/BuiltinGeometry.h"
+#include "render/BuiltinTextures.h"
 #include "render/CameraController.h"
 #include "render/RenderSnapshot.h"
 #include "render/SceneRenderer.h"
@@ -210,10 +211,10 @@ TEST_CASE("SceneRenderer submits one RenderItem when entity has loadable mesh") 
     REQUIRE(renderer.setSceneCount == 1);
     REQUIRE(renderer.lastScene.renderItems.size() == 1);
     CHECK(renderer.lastScene.renderItems[0].mesh.valid());
-    // ensureBuiltins() uploads 2 meshes (entity + floor) + 8 materials (6 palette + 1 floor +
+    // ensureBuiltins() uploads 3 meshes (entity + damaged + floor) + 8 materials (6 palette + 1 floor +
     // 1 shaded-grey fallback); the content mesh adds 1 more createMesh but reuses the shared
     // fallback material (no new createMaterial).
-    CHECK(renderer.createMeshCount == 3);
+    CHECK(renderer.createMeshCount == 4);
     CHECK(renderer.createMaterialCount == 8);
 }
 
@@ -264,7 +265,7 @@ TEST_CASE("SceneRenderer falls back to builtin when mesh bytes are empty") {
     REQUIRE(renderer.lastScene.renderItems.size() == 1);
     CHECK(renderer.lastScene.renderItems[0].mesh.valid()); // builtin tetrahedron
     // createMesh was NOT called for the broken empty_mesh; only ensureBuiltins uploads.
-    CHECK(renderer.createMeshCount == 2); // builtin entity + builtin floor
+    CHECK(renderer.createMeshCount == 3); // builtin entity + damaged + floor
 }
 
 // ---------------------------------------------------------------------------
@@ -299,8 +300,8 @@ TEST_CASE("SceneRenderer uses classicDamageMesh when damageLevel is nonzero") {
     REQUIRE(renderer.setSceneCount == 1);
     REQUIRE(renderer.lastScene.renderItems.size() == 1);
     // Only f15c_damaged was needed for content (f15c was not loaded).
-    // ensureBuiltins adds 2 builtin meshes → 3 total.
-    CHECK(renderer.createMeshCount == 3);
+    // ensureBuiltins adds 3 builtin meshes → 4 total.
+    CHECK(renderer.createMeshCount == 4);
     CHECK((renderer.lastScene.renderItems[0].flags & kRenderFlagDamaged) != 0);
 }
 
@@ -329,7 +330,47 @@ TEST_CASE("SceneRenderer uses primary mesh when damageLevel is zero") {
 
     REQUIRE(renderer.lastScene.renderItems.size() == 1);
     CHECK((renderer.lastScene.renderItems[0].flags & kRenderFlagDamaged) == 0);
-    CHECK(renderer.createMeshCount == 3); // ensureBuiltins (2) + "f15c" (1)
+    CHECK(renderer.createMeshCount == 4); // ensureBuiltins (3) + "f15c" (1)
+}
+
+TEST_CASE("SceneRenderer swaps a damaged builtin entity to the wreck-variant placeholder (#864)") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, noTypes(), assets, renderer}; // no content mesh → builtin fallback
+
+    // Intact builtin: the clean placeholder.
+    {
+        RenderSnapshot snap = makeSnap(1);
+        EntityRenderEntry e = makeEntry(0);
+        e.damageLevel = 0;
+        snap.entries.push_back(e);
+        bridge.publish(std::move(snap));
+    }
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    REQUIRE(renderer.lastScene.renderItems.size() == 1);
+    const uint32_t intactMeshId = renderer.lastScene.renderItems[0].mesh.id;
+
+    // Damaged builtin: the wreck-variant placeholder — a DIFFERENT mesh, and the damaged flag set.
+    {
+        RenderSnapshot snap = makeSnap(2);
+        EntityRenderEntry e = makeEntry(0);
+        e.damageLevel = 2;
+        snap.entries.push_back(e);
+        bridge.publish(std::move(snap));
+    }
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    REQUIRE(renderer.lastScene.renderItems.size() == 1);
+    const uint32_t damagedMeshId = renderer.lastScene.renderItems[0].mesh.id;
+
+    CHECK(intactMeshId != 0u);
+    CHECK(damagedMeshId != 0u);
+    CHECK(intactMeshId != damagedMeshId); // the mesh swap ran with no content pack
+    CHECK((renderer.lastScene.renderItems[0].flags & kRenderFlagDamaged) != 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -365,9 +406,9 @@ TEST_CASE("SceneRenderer caches mesh handle: createMesh called once for repeated
         sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
     }
 
-    // ensureBuiltins on frame 1: 2 meshes + 8 materials (6 palette + floor + fallback). Content
+    // ensureBuiltins on frame 1: 3 meshes + 8 materials (6 palette + floor + fallback). Content
     // "f15c": +1 mesh, reuses the shared fallback material. Frame 2: fully cached.
-    CHECK(renderer.createMeshCount == 3);
+    CHECK(renderer.createMeshCount == 4);
     CHECK(renderer.createMaterialCount == 8);
     CHECK(renderer.setSceneCount == 2);
 }
@@ -403,7 +444,7 @@ TEST_CASE("SceneRenderer shares one fallback material across distinct loadable m
 
     // Two distinct content meshes uploaded, but no per-mesh material: still just the 8 builtins
     // (6 palette + floor + fallback). Both meshes share m_fallbackEntityMat.
-    CHECK(renderer.createMeshCount == 4); // 2 builtin + 2 content
+    CHECK(renderer.createMeshCount == 5); // 3 builtin + 2 content
     CHECK(renderer.createMaterialCount == 8);
     REQUIRE(renderer.lastScene.renderItems.size() == 2);
     CHECK(renderer.lastScene.renderItems[0].material.id == renderer.lastScene.renderItems[1].material.id);
@@ -858,4 +899,120 @@ TEST_CASE("textureAssetNameFromUri handles a .png fallback extension") {
 
 TEST_CASE("textureAssetNameFromUri handles a bare basename with a backslash path") {
     CHECK(fl::textureAssetNameFromUri("some\\dir\\f5e_normal.ktx2") == "f5e_normal");
+}
+
+// ---------------------------------------------------------------------------
+// Builtin PBR textures (#867)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("builtin PBR textures are deterministic RGBA with the expected shape (#867)") {
+    const BuiltinRgbaTexture base = builtinBaseColorTexture();
+    CHECK(base.width == kBuiltinTexSize);
+    CHECK(base.height == kBuiltinTexSize);
+    CHECK(base.pixels.size() == static_cast<std::size_t>(kBuiltinTexSize) * kBuiltinTexSize * 4u);
+    CHECK(base.pixels == builtinBaseColorTexture().pixels); // byte-stable
+
+    const BuiltinRgbaTexture norm = builtinNormalTexture();
+    CHECK(norm.pixels.at(2) == 255); // B channel points up (tangent-space +Z) on a flat texel
+
+    const BuiltinRgbaTexture orm = builtinOrmTexture();
+    CHECK(orm.pixels.at(0) == 255); // R = occlusion, full
+    CHECK(orm.pixels.at(2) == 0);   // B = metallic, zero
+}
+
+TEST_CASE("SceneRenderer textures the builtin material (albedo/normal/ORM) with no content pack (#867)") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, noTypes(), assets, renderer}; // builtin fallback entity
+
+    RenderSnapshot snap = makeSnap();
+    snap.entries.push_back(makeEntry(0));
+    bridge.publish(std::move(snap));
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    // The builtin base/normal/ORM maps upload zero-pack (the raw-RGBA path), and no content texture.
+    CHECK(renderer.createTextureCount == 3);
+    // At least one builtin material samples all three maps, not just PBR scalar factors.
+    bool textured = false;
+    for (const MaterialDesc& m : renderer.createdMaterials)
+        if (m.baseColorTexture.valid() && m.normalTexture.valid() && m.ormTexture.valid())
+            textured = true;
+    CHECK(textured);
+}
+
+// ---------------------------------------------------------------------------
+// SceneRenderer — cockpit interior (#870)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SceneRenderer draws the cockpit interior locked to the hidden ownship in Cockpit view (#870)") {
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = {'{', 2, 3, 4};    // exterior mesh
+    pack->meshes["cockpit"] = {'{', 5, 6, 7}; // cockpit interior mesh
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, oneType(), assets, renderer};
+
+    RenderSnapshot snap = makeSnap();
+    EntityRenderEntry own = makeEntry(0);
+    own.entityIdx = 5;
+    own.entityGen = 1;
+    snap.entries.push_back(own);
+    bridge.publish(std::move(snap));
+
+    sr.setCockpitMesh("cockpit");
+    sr.setHiddenEntity(5, 1); // Cockpit view: the ownship is hidden (shadow-only)
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    // Two items: the shadow-only ownship body + the visible cockpit interior at the same transform.
+    REQUIRE(renderer.lastScene.renderItems.size() == 2);
+    bool sawShadowOnly = false, sawCockpit = false;
+    for (const RenderItem& it : renderer.lastScene.renderItems) {
+        if (it.flags & kRenderFlagShadowOnly)
+            sawShadowOnly = true;
+        else
+            sawCockpit = true; // the cockpit interior is a normal opaque, depth-composited item
+    }
+    CHECK(sawShadowOnly);
+    CHECK(sawCockpit);
+    CHECK(renderer.lastScene.renderItems[0].transform == renderer.lastScene.renderItems[1].transform);
+}
+
+TEST_CASE("SceneRenderer omits the cockpit interior in external views (#870)") {
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = {'{', 2, 3, 4};
+    pack->meshes["cockpit"] = {'{', 5, 6, 7};
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, oneType(), assets, renderer};
+
+    RenderSnapshot snap = makeSnap();
+    EntityRenderEntry own = makeEntry(0);
+    own.entityIdx = 5;
+    own.entityGen = 1;
+    snap.entries.push_back(own);
+    bridge.publish(std::move(snap));
+
+    sr.setCockpitMesh("cockpit");
+    sr.setHiddenEntity(0, 0); // external view: nothing hidden, no cockpit
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    REQUIRE(renderer.lastScene.renderItems.size() == 1); // just the exterior, no cockpit item
+    CHECK((renderer.lastScene.renderItems[0].flags & kRenderFlagShadowOnly) == 0);
 }

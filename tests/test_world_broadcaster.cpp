@@ -2718,20 +2718,49 @@ TEST_CASE("WorldBroadcaster: empty requested type uses the [world] player_entity
 // ---------------------------------------------------------------------------
 
 namespace {
-// Admit a pilot whose MsgConnectRequest carries the given pack-id manifest.
-void connectPilotWithPacks(fl::WorldBroadcaster& b, uint32_t peerId, const std::vector<std::string>& packIds) {
+// Admit a pilot whose MsgConnectRequest carries the given pack manifest (id + optional version).
+void connectPilotWithPackVersions(fl::WorldBroadcaster& b, uint32_t peerId,
+                                  const std::vector<std::pair<std::string, std::string>>& packs) {
     b.onConnect(peerId);
     fl::MsgConnectRequest req{};
     req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
-    req.packCount = static_cast<uint16_t>(packIds.size());
+    req.packCount = static_cast<uint16_t>(packs.size());
     std::vector<uint8_t> buf;
     fl::appendMsg(buf, req);
-    for (const std::string& id : packIds) {
+    for (const auto& [id, version] : packs) {
         fl::PackManifestEntry pe{};
         std::snprintf(pe.id, sizeof(pe.id), "%s", id.c_str());
+        std::snprintf(pe.version, sizeof(pe.version), "%s", version.c_str());
         fl::appendMsg(buf, pe);
     }
     b.onReceive(peerId, buf.data(), buf.size());
+}
+
+// Admit a pilot whose MsgConnectRequest carries the given pack-id manifest (version unset).
+void connectPilotWithPacks(fl::WorldBroadcaster& b, uint32_t peerId, const std::vector<std::string>& packIds) {
+    std::vector<std::pair<std::string, std::string>> packs;
+    for (const std::string& id : packIds)
+        packs.emplace_back(id, std::string{});
+    connectPilotWithPackVersions(b, peerId, packs);
+}
+
+// Find the first sent packet whose leading msgId matches; returns it decoded, or fails the test.
+fl::MsgConnectRefusal findSentRefusal(const MockNetwork& net) {
+    for (const auto& pkt : net.sends)
+        if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectRefusal)) {
+            fl::MsgConnectRefusal ref{};
+            std::memcpy(&ref, pkt.data(), sizeof(ref));
+            return ref;
+        }
+    FAIL_CHECK("no MsgConnectRefusal was sent"); // non-terminating: the return below stays reachable (MSVC C4702)
+    return {};
+}
+
+bool anySentIs(const MockNetwork& net, fl::MsgId id) {
+    for (const auto& pkt : net.sends)
+        if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(id))
+            return true;
+    return false;
 }
 } // namespace
 
@@ -2778,6 +2807,110 @@ TEST_CASE("WorldBroadcaster: a client with the required pack is admitted with no
     CHECK(ack.assignedEntityGen != 0u);
     for (const std::string& w : logger.warnings)
         CHECK(w.find("missing required content pack") == std::string::npos);
+}
+
+TEST_CASE("WorldBroadcaster: warn policy notifies the admitted client of the missing packs (#872)",
+          "[world_broadcaster][handshake][packs]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::WorldBroadcasterConfig cfg;
+    cfg.requiredPacks = {"fl-base"};
+    cfg.requiredPackPolicy = fl::RequiredPackPolicy::Warn; // default, made explicit
+    broadcaster.applyConfig(cfg);
+
+    connectPilotWithPacks(broadcaster, 0u, {"other-pack"});
+
+    CHECK(parseSendAck(net).assignedEntityGen != 0u); // admitted
+    // A MsgServerNotice carrying the missing list reaches the client so the mismatch is visible.
+    bool notified = false;
+    for (const auto& pkt : net.sends) {
+        if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ServerNotice)) {
+            fl::MsgServerNotice sn{};
+            std::memcpy(&sn, pkt.data(), sizeof(sn));
+            if (std::string(sn.text).find("fl-base") != std::string::npos)
+                notified = true;
+        }
+    }
+    CHECK(notified);
+}
+
+TEST_CASE("WorldBroadcaster: refuse policy disconnects a client missing a required pack (#872)",
+          "[world_broadcaster][handshake][packs]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::WorldBroadcasterConfig cfg;
+    cfg.requiredPacks = {"fl-base"};
+    cfg.requiredPackPolicy = fl::RequiredPackPolicy::Refuse;
+    broadcaster.applyConfig(cfg);
+
+    connectPilotWithPacks(broadcaster, 0u, {"other-pack"});
+
+    auto ref = findSentRefusal(net);
+    CHECK(ref.code == static_cast<uint8_t>(fl::ConnectRefusalCode::MissingRequiredPack));
+    CHECK(std::string(ref.reason).find("fl-base") != std::string::npos); // reason names the missing pack
+    CHECK(!anySentIs(net, fl::MsgId::ConnectAck));                       // never admitted
+    CHECK(std::find(net.disconnectedPeers.begin(), net.disconnectedPeers.end(), 0u) != net.disconnectedPeers.end());
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    CHECK(em.liveCount() == 0u); // no entity spawned for a refused peer
+}
+
+TEST_CASE("WorldBroadcaster: refuse policy enforces a pinned pack version (#872)",
+          "[world_broadcaster][handshake][packs]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::WorldBroadcasterConfig cfg;
+    cfg.requiredPacks = {fl::RequiredPack{"fl-base", "1.2"}};
+    cfg.requiredPackPolicy = fl::RequiredPackPolicy::Refuse;
+    broadcaster.applyConfig(cfg);
+
+    // Right pack id, wrong version -> refused, reason names the required version.
+    connectPilotWithPackVersions(broadcaster, 0u, {{"fl-base", "1.1"}});
+    auto ref = findSentRefusal(net);
+    CHECK(ref.code == static_cast<uint8_t>(fl::ConnectRefusalCode::MissingRequiredPack));
+    CHECK(std::string(ref.reason).find("fl-base@1.2") != std::string::npos);
+
+    // A second peer on the matching version is admitted.
+    net.sends.clear();
+    connectPilotWithPackVersions(broadcaster, 1u, {{"fl-base", "1.2"}});
+    CHECK(anySentIs(net, fl::MsgId::ConnectAck));
+}
+
+TEST_CASE("WorldBroadcaster: allow-placeholder policy admits a client missing a pack without warning (#872)",
+          "[world_broadcaster][handshake][packs]") {
+    CapturingLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::WorldBroadcasterConfig cfg;
+    cfg.requiredPacks = {"fl-base"};
+    cfg.requiredPackPolicy = fl::RequiredPackPolicy::AllowPlaceholder;
+    broadcaster.applyConfig(cfg);
+
+    connectPilotWithPacks(broadcaster, 0u, {"other-pack"});
+
+    CHECK(parseSendAck(net).assignedEntityGen != 0u); // admitted
+    for (const std::string& w : logger.warnings)
+        CHECK(w.find("missing required content pack") == std::string::npos); // no Warn under allow-placeholder
+    CHECK(!anySentIs(net, fl::MsgId::ServerNotice));                         // and no client-facing notice
 }
 
 // ---------------------------------------------------------------------------
@@ -8649,7 +8782,7 @@ TEST_CASE("WorldBroadcaster: the zero-pack sandbox peer spawns ARMED and the can
     registry.registerType(fl::builtinDebugEntityDef()); // the REAL sandbox def (#440), not a fixture
 
     fl::WeaponRegistry weapons;
-    REQUIRE(fl::registerBuiltinWeapons(weapons) == 3u);
+    REQUIRE(fl::registerBuiltinWeapons(weapons) == 8u);
 
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
@@ -8683,8 +8816,10 @@ TEST_CASE("WorldBroadcaster: the zero-pack sandbox peer spawns ARMED and the can
 
     // And the default selection is a rail, not the gun — "selected" means the stores.
     const fl::LoadoutState ls = fl::buildLoadout(fl::builtinDebugEntityDef(), weapons);
-    CHECK(ls.stations.size() == 5u);
-    CHECK(ls.selected == 1u); // first IR rail
+    CHECK(ls.stations.size() == 8u);
+    CHECK(ls.selected == 1u);                        // first non-gun rail (IR)
+    CHECK(ls.stations[6].weaponIndex == UINT32_MAX); // the drop tank (Fuel) is inert — no firing station
+    CHECK(ls.stations[7].weaponIndex == UINT32_MAX); // the sensor pod (Pod) is inert too
 }
 
 TEST_CASE("WorldBroadcaster: a designated IR missile launch flies out and kills through the pipeline",
@@ -8740,6 +8875,93 @@ TEST_CASE("WorldBroadcaster: a designated IR missile launch flies out and kills 
         victimHit = !vs || vs->dead || vs->hp < 100.f;
     }
     CHECK(victimHit); // the warhead connected through the same damage pipeline as everything else
+}
+
+TEST_CASE("WorldBroadcaster: every builtin flying store releases from the zero-pack debug entity (#862)",
+          "[world_broadcaster][firepath][sandbox]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(fl::builtinDebugEntityDef());
+
+    fl::WeaponRegistry weapons;
+    fl::registerBuiltinWeapons(weapons);
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    em.addEventHandler(&broadcaster);
+    broadcaster.setWeaponRegistry(&weapons);
+    fl::registerProjectileEntityDefs(weapons, registry, logger);
+    // Resolve every builtin seeker head like fl-server does at startup.
+    broadcaster.setSensorDefResolver([](const std::string& id) -> std::shared_ptr<const fl::sensor::SensorDef> {
+        if (id == "builtin:ir-seeker")
+            return {std::shared_ptr<const fl::sensor::SensorDef>{}, &fl::sensor::BuiltinSensors::irSeeker()};
+        if (id == "builtin:radar-seeker")
+            return {std::shared_ptr<const fl::sensor::SensorDef>{}, &fl::sensor::BuiltinSensors::radarSeeker()};
+        if (id == "builtin:sarh-seeker")
+            return {std::shared_ptr<const fl::sensor::SensorDef>{}, &fl::sensor::BuiltinSensors::sarhSeeker()};
+        return nullptr;
+    });
+
+    connectPilotPeer(broadcaster, net, 0u);
+    const auto ack = parseSendAck(net);
+    const fl::EntityState* shooter = em.get({ack.assignedEntityIdx, ack.assignedEntityGen});
+    REQUIRE(shooter != nullptr);
+
+    // A target 2 km ahead so the designated shots (SARH) have something to support against.
+    fl::EntityTransform vt{};
+    vt.pos[0] = shooter->transform.pos[0] + 2000.0;
+    vt.pos[1] = shooter->transform.pos[1];
+    vt.pos[2] = shooter->transform.pos[2];
+    vt.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", vt);
+    broadcaster.setTargetDesignator([victim](const fl::EntityState&, const float*) -> fl::EntityId { return victim; });
+
+    // Count live entities of a given projectile type currently in the world.
+    auto projectileCount = [&](const char* id) {
+        const uint32_t typeIdx = registry.indexById(id);
+        int n = 0;
+        em.forEach([&](const fl::EntityState& e) {
+            if (!e.dead && e.typeIndex == typeIdx)
+                ++n;
+        });
+        return n;
+    };
+
+    // A real client feeds a fresh MsgClientInput every tick with a strictly increasing seqNum — a
+    // stale/duplicate seqNum is discarded by the staleness guard, so a single re-sent packet never
+    // fires twice. Drive the peer that way: one input per tick, seqNum climbing, station held.
+    uint16_t seq = 0;
+    uint64_t tick = 0;
+    auto tickInput = [&](uint8_t buttons, uint8_t station) {
+        fl::MsgClientInput inp{};
+        inp.msgId = static_cast<uint8_t>(fl::MsgId::ClientInput);
+        inp.protocolVersion = fl::kProtocolVersion;
+        inp.seqNum = ++seq;
+        inp.buttons = buttons;
+        inp.selectedStation = station;
+        broadcaster.onReceive(0u, &inp, sizeof(inp));
+        broadcaster.onTick(1.0 / 60.0, ++tick);
+    };
+
+    // Fire each flying store from its station in turn; return the PEAK count of `projId` seen while
+    // the trigger is held (before the round flies out of the world). Station indices follow
+    // builtinDebugEntityDef()'s order: 0 gun, 1 IR, 2 radar, 3 SARH, 4 bomb, 5 rocket, 6 drop tank.
+    auto fireStation = [&](uint8_t station, const char* projId) {
+        int peak = 0;
+        for (int k = 0; k < 12; ++k) { // hold: single stores fire on the edge, a rocket pod ripples
+            tickInput(0x04u, station);
+            peak = std::max(peak, projectileCount(projId));
+        }
+        // Release + run out kReleaseCooldownTicks (30) so the NEXT store sees a fresh, uncooled edge.
+        for (int k = 0; k < 31; ++k)
+            tickInput(0x00u, station);
+        return peak;
+    };
+
+    CHECK(fireStation(4u, "projectile:builtin:bomb") >= 1);         // bomb
+    CHECK(fireStation(5u, "projectile:builtin:rocket") >= 1);       // rocket pod (ripples)
+    CHECK(fireStation(3u, "projectile:builtin:sarh-missile") >= 1); // SARH missile
 }
 
 TEST_CASE("WorldBroadcaster: the pre-launch LOCK cue reaches the own record's weaponFlags",
@@ -8928,6 +9150,86 @@ TEST_CASE("WorldBroadcaster: a warhead that fails an engine subsystem shows on t
     const fl::FlightIntegrator* fi = broadcaster.integratorFor(victim.index);
     REQUIRE(fi != nullptr);
     CHECK((fi->engineFailFlags() & (fl::kEngineFailLeft | fl::kEngineFailRight)) != 0);
+}
+
+TEST_CASE("WorldBroadcaster: the builtin debug entity walks through damage levels + a subsystem failure (#864)",
+          "[world_broadcaster][subsystem][sandbox]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(fl::builtinDebugEntityDef()); // the REAL sandbox def, now with a damage model
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::EntityTransform t{};
+    t.pos[1] = 5000.0;
+    t.quat[3] = 1.f;
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", t);
+    broadcaster.registerController(victim, std::make_unique<ConstantController>()); // integrator + subsystems
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto levelOf = [&]() -> int {
+        const fl::EntityState* s = em.get(victim);
+        return s ? static_cast<int>(s->damageLevel) : static_cast<int>(fl::DamageLevel::Destroyed);
+    };
+    auto blastAtVictim = [&](float dmg, uint64_t tick) {
+        const fl::EntityState* s = em.get(victim);
+        REQUIRE(s != nullptr);
+        double pos[3] = {s->transform.pos[0], s->transform.pos[1], s->transform.pos[2]};
+        broadcaster.applyWarheadAt(pos, fl::BlastSpec{6.f, dmg, false}, fl::EntityId::null());
+        broadcaster.onTick(1.0 / 60.0, tick);
+    };
+
+    CHECK(levelOf() == static_cast<int>(fl::DamageLevel::Intact));
+
+    // maxHp = 100; each blast is full damage at the centre. Walk the thresholds (light 0.66 / heavy
+    // 0.33 / critical 0.12) before death.
+    blastAtVictim(40.f, 2u); // hp 60 -> Light
+    CHECK(levelOf() == static_cast<int>(fl::DamageLevel::Light));
+    blastAtVictim(30.f, 3u); // hp 30 -> Heavy
+    CHECK(levelOf() == static_cast<int>(fl::DamageLevel::Heavy));
+    blastAtVictim(20.f, 4u); // hp 10 -> Critical
+    CHECK(levelOf() == static_cast<int>(fl::DamageLevel::Critical));
+    blastAtVictim(20.f, 5u); // hp 0 -> dead
+    CHECK(em.get(victim) == nullptr);
+}
+
+TEST_CASE("WorldBroadcaster: directed hits on the builtin debug entity fail its subsystems (#864)",
+          "[world_broadcaster][subsystem][sandbox]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(fl::builtinDebugEntityDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::EntityTransform t{};
+    t.pos[1] = 5000.0;
+    t.quat[3] = 1.f; // nose +X, right +Z
+    const fl::EntityId victim = em.spawn("builtin:debug-entity", t);
+    broadcaster.registerController(victim, std::make_unique<ConstantController>());
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    // Boost HP so the airframe survives a barrage — we are testing SUBSYSTEM failure, not death. Each
+    // blast lands from behind-and-right (the shrapnel travels forward → the directional-bias favors
+    // the engines, #675). The four non-engine pools exhaust and are removed from the pick, so within a
+    // handful of directed hits an engine has to be the one that fails.
+    if (fl::EntityState* s = em.get(victim)) {
+        s->maxHp = 100000.f;
+        s->hp = 100000.f;
+    }
+
+    bool engineFailed = false;
+    for (uint64_t k = 0; k < 16 && !engineFailed; ++k) {
+        const fl::EntityState* s = em.get(victim);
+        REQUIRE(s != nullptr);
+        double pos[3] = {s->transform.pos[0] - 3.0, s->transform.pos[1], s->transform.pos[2] + 1.0}; // behind-right
+        broadcaster.applyWarheadAt(pos, fl::BlastSpec{12.f, 200.f, false}, fl::EntityId::null());
+        broadcaster.onTick(1.0 / 60.0, 2u + k);
+        if (const fl::FlightIntegrator* fi = broadcaster.integratorFor(victim.index))
+            engineFailed = (fi->engineFailFlags() & (fl::kEngineFailLeft | fl::kEngineFailRight)) != 0;
+    }
+    CHECK(engineFailed); // a subsystem hit reached the engines and asymmetric thrust shows on the integrator
 }
 
 TEST_CASE("WorldBroadcaster: an entity without a subsystems table is unaffected by the router",

@@ -102,6 +102,73 @@ struct BuiltinSensors {
         }();
         return s;
     }
+
+    // The builtin semi-active radar seeker head (#862) — BuiltinWeapon::sarhMissile(),
+    // `sensor_id = "builtin:sarh-seeker"`. Unlike the active-radar seeker it is a PASSIVE receiver
+    // (`emitter = false`): it homes on energy the SHOOTER's radar reflects off the target, so it never
+    // announces itself and never appears on an RWR the way an active seeker does. The shot depends on
+    // the launch platform holding its lock (the ProjectileSystem SupportQuery / illumination path).
+    [[nodiscard]] static const SensorDef& sarhSeeker() {
+        static const SensorDef s = [] {
+            SensorDef d;
+            d.id = "builtin:sarh-seeker";
+            d.name = "Semi-Active Radar Seeker";
+            d.type = SensorType::Radar;
+            d.omnidirectional = false;
+            d.emitter = false; // passive: rides the shooter's illumination, never radiates
+
+            d.search.azHalfAngleDeg = 20.f;
+            d.search.elHalfAngleDeg = 20.f;
+            d.search.minRangeM = 150.f;
+            d.search.maxRangeM = 24076.f; // 13 nm off a baseline (rcs 1.0) fighter under illumination
+            d.search.pod = 0.5f;
+
+            SensorLobe track;
+            track.azHalfAngleDeg = 25.f;
+            track.elHalfAngleDeg = 25.f;
+            track.minRangeM = 100.f;
+            track.maxRangeM = 29632.f; // 16 nm
+            track.pod = 0.85f;
+            d.track = track;
+            d.lockHoldS = 1.5f;
+
+            return d;
+        }();
+        return s;
+    }
+
+    // The builtin ground air-defense search radar (#863) — the SAM site's eyes, `sensor_id =
+    // "builtin:sam-radar"`. A long-range EMITTER (the RWR/EMCON seam #529 reads it as "a SAM is
+    // painting me"), omnidirectional in azimuth so a fixed emplacement covers the whole sky, not just
+    // a boresight cone. Radar range scales by sqrt(rcs) like every radar in the one-vocabulary model.
+    [[nodiscard]] static const SensorDef& groundRadar() {
+        static const SensorDef s = [] {
+            SensorDef d;
+            d.id = "builtin:sam-radar";
+            d.name = "SAM Search Radar";
+            d.type = SensorType::Radar;
+            d.omnidirectional = true; // a ground battery watches the whole hemisphere
+            d.emitter = true;
+
+            d.search.azHalfAngleDeg = 180.f; // omni: the lobe angles are nominal
+            d.search.elHalfAngleDeg = 85.f;
+            d.search.minRangeM = 500.f;
+            d.search.maxRangeM = 55560.f; // 30 nm against a baseline (rcs 1.0) fighter
+            d.search.pod = 0.5f;
+
+            SensorLobe track;
+            track.azHalfAngleDeg = 180.f;
+            track.elHalfAngleDeg = 85.f;
+            track.minRangeM = 300.f;
+            track.maxRangeM = 64820.f; // 35 nm
+            track.pod = 0.85f;
+            d.track = track;
+            d.lockHoldS = 3.0f;
+
+            return d;
+        }();
+        return s;
+    }
 };
 
 } // namespace fl::sensor

@@ -100,8 +100,8 @@ enum class ConnectRefusalCode : uint8_t {
     TooManyConnections = 4, // per-IP concurrent connection cap
     AdminLockout = 5,
     RoleDenied = 6,          // requested a role the server does not allow (e.g. observer when disabled) (#857)
-    MissingRequiredPack = 7, // client lacks a server-required content pack (#872 refuse-mode; defined,
-                             // unused in Phase 4 warn-only policy)
+    MissingRequiredPack = 7, // client lacks a server-required content pack (#872 refuse policy; the
+                             // reason text carries the missing pack list)
     EntitlementRequired = 8, // premium content requires an entitlement token (RFC #871; reserved)
 };
 

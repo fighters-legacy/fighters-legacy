@@ -70,6 +70,7 @@ add_library(engine-audio STATIC
     audio/SubtitleQueue.cpp
     audio/PlaylistLoader.cpp
     audio/MusicManager.cpp
+    audio/MusicBuiltinTracks.cpp
     audio/VoiceCalloutManager.cpp
     audio/SfxBuiltinSounds.cpp
     audio/SfxManager.cpp
@@ -90,6 +91,7 @@ add_library(engine-render STATIC
     render/SceneRenderer.cpp
     render/ParticleSystem.cpp
     render/BuiltinGeometry.cpp
+    render/BuiltinTextures.cpp
     render/TerrainChunkIO.cpp
     render/ProceduralTerrainChunk.cpp
     render/TerrainMeshBuilder.cpp

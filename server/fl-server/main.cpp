@@ -52,6 +52,7 @@
 #include <flight/FlightModelParser.h>
 #include <job/JobSystem.h>
 #include <loop/GameLoop.h>
+#include <mission/BuiltinMissions.h>
 #include <mission/Mission.h>
 #include <mission/MissionParser.h>
 #include <mission/MissionReport.h>
@@ -63,6 +64,7 @@
 #include <perf/ServerTickReport.h>
 #include <render/BuiltinGeometry.h>
 #include <render/TerrainStreamer.h>
+#include <script/BuiltinAiScripts.h>
 #include <script/LuaController.h>
 #include <stdfs/StdAsyncFilesystem.h>
 #include <stdfs/StdFilesystem.h>
@@ -472,6 +474,15 @@ int main(int argc, char** argv) {
     // The debug entity ships ARMED (#440) — the shared builder keeps server and client identical.
     entityRegistry.registerType(fl::builtinDebugEntityDef());
 
+    // Builtin surface targets + threats (#863): ground/naval/static targets and a SAM site + AAA that
+    // shoot back, so the surface categories and air-defense threat exist with zero content mounted.
+    {
+        const uint32_t surfaceTypes = fl::registerBuiltinSurfaceEntities(entityRegistry);
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "content: %u builtin surface entity type(s) registered", surfaceTypes);
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
+
     // Load content-pack entity definitions into the registry (#683) after the builtin type, so pack
     // types become spawnable via the `spawn` admin command and appear in `types`. MsgEntityTypeDef
     // already ships the populated registry to clients on connect -- no protocol change.
@@ -573,7 +584,11 @@ int main(int argc, char** argv) {
     wbConfig.operatorPassword = cfg.operatorPassword;
     wbConfig.playerEntityType = cfg.playerEntityType; // pilot spawn default when client requests none (#834)
     wbConfig.allowObservers = cfg.allowObservers;     // #857
-    wbConfig.requiredPacks = cfg.requiredPacks;       // #872 warn-only required-pack ids
+    wbConfig.requiredPacks.clear();                   // #872: parse "id" / "id@version" specs into RequiredPack
+    for (const auto& spec : cfg.requiredPacks)
+        wbConfig.requiredPacks.push_back(fl::parseRequiredPackSpec(spec));
+    wbConfig.requiredPackPolicy =
+        fl::parseRequiredPackPolicy(cfg.requiredPackPolicy).value_or(fl::RequiredPackPolicy::Warn);
     wbConfig.idleTimeoutS = cfg.idleTimeoutS;
     wbConfig.drawDistanceKm = static_cast<float>(cfg.drawDistanceKm);
     wbConfig.snapshotBudgetBytes = cfg.snapshotBudgetBytes;
@@ -811,6 +826,14 @@ int main(int argc, char** argv) {
     // can resolve their scripts) and reused later by the ENet admin `spawn --ai lua` path. Safe to read
     // from any thread — it is never mutated after construction, before gameLoop.start().
     std::unordered_map<std::string, std::pair<std::string, std::string>> aiScriptCache;
+    // Builtin scripts first (#866): `--ai lua builtin:fighter` and an EntityDef aiScriptAsset =
+    // "builtin:fighter" resolve with no pack mounted. Root "" — a builtin uses no require().
+    for (std::string_view id : fl::builtinAiScriptIds()) {
+        const std::string_view src = fl::builtinAiScript(id);
+        if (!src.empty())
+            aiScriptCache.emplace(std::string(id),
+                                  std::pair<std::string, std::string>{std::string(src), std::string{}});
+    }
     for (const auto& name : assets.listAssets(AssetType::AIScript)) {
         auto script = assets.loadAIScript(name.c_str());
         if (!script || script->bytes.empty())
@@ -833,13 +856,22 @@ int main(int argc, char** argv) {
     std::string loadedMissionName; // for the #856 headless report
     uint64_t loadedMissionSpawned = 0;
     if (!missionToLoad.empty()) {
-        auto missionAsset = assets.loadMission(missionToLoad.c_str());
-        if (!missionAsset) {
+        // Builtin missions (#868) resolve FIRST, with no pack: `--mission builtin:sandbox` exercises the
+        // mission runtime + Instant Action zero-pack. Otherwise fall back to a pack mission asset.
+        std::string yaml;
+        bool missionFound = false;
+        if (std::string_view b = fl::builtinMissionYaml(missionToLoad); !b.empty()) {
+            yaml.assign(b);
+            missionFound = true;
+        } else if (auto missionAsset = assets.loadMission(missionToLoad.c_str())) {
+            yaml.assign(missionAsset->bytes.begin(), missionAsset->bytes.end());
+            missionFound = true;
+        }
+        if (!missionFound) {
             char buf[160];
             std::snprintf(buf, sizeof(buf), "mission '%.96s' not found — starting empty", missionToLoad.c_str());
             log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
         } else {
-            const std::string yaml(missionAsset->bytes.begin(), missionAsset->bytes.end());
             fl::MissionParseResult parsed = fl::parseMission(yaml);
             if (!parsed.ok) {
                 char buf[192];

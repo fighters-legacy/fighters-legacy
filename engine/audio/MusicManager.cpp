@@ -2,6 +2,7 @@
 #include "audio/MusicManager.h"
 
 #include "ILogger.h"
+#include "audio/MusicBuiltinTracks.h"
 #include "content/AssetManager.h"
 
 #include <algorithm>
@@ -74,8 +75,37 @@ static bool fillAndQueue(IAudio* audio, AudioSourceId src, AudioBufferId buf, Og
     return true;
 }
 
+// Fills one streaming buffer from a looping PCM buffer (a builtin procedural track) and queues it,
+// wrapping at the end so the loop is seamless. Never "ends" — a builtin track loops forever.
+static void fillAndQueuePcm(IAudio* audio, AudioSourceId src, AudioBufferId buf, const std::vector<int16_t>& loop,
+                            std::size_t& pos, int sampleRate, int channels) {
+    int16_t pcm[MusicManager::kDecodeChunkSamples];
+    const std::size_t want = static_cast<std::size_t>(MusicManager::kDecodeChunkSamples);
+    for (std::size_t i = 0; i < want; ++i) {
+        pcm[i] = loop[pos];
+        if (++pos >= loop.size())
+            pos = 0;
+    }
+    audio->queueBuffer(src, buf, pcm, want * sizeof(int16_t), sampleRate, channels);
+}
+
 void MusicManager::openSlot(StreamSlot& slot, const std::string& assetName) {
     stopSlot(slot);
+
+    // Builtin procedural track (#865): synthesised PCM, looped through the same streaming buffers as an
+    // OGG track (crossfade + gain machinery unchanged). Checked BEFORE AssetManager so it needs no pack.
+    if (DecodedPcm pcm = builtinMusicTrack(assetName); pcm.valid()) {
+        slot.pcmLoop = std::move(pcm.samples);
+        slot.sampleRate = pcm.sampleRate;
+        slot.channels = pcm.channels;
+        slot.pcmPos = 0;
+        for (int i = 0; i < kNumStreamBuffers; ++i)
+            fillAndQueuePcm(m_audio, slot.source, slot.bufs[i], slot.pcmLoop, slot.pcmPos, slot.sampleRate,
+                            slot.channels);
+        slot.active = true;
+        m_audio->resume(slot.source);
+        return;
+    }
 
     auto audioAsset = m_assets->loadAudio(assetName.c_str());
     if (!audioAsset || audioAsset->bytes.empty()) {
@@ -117,7 +147,8 @@ void MusicManager::openSlot(StreamSlot& slot, const std::string& assetName) {
 }
 
 void MusicManager::refillSlot(StreamSlot& slot) {
-    if (!slot.active || !slot.oggStream)
+    const bool builtin = !slot.pcmLoop.empty();
+    if (!slot.active || (!slot.oggStream && !builtin))
         return;
 
     int processed = m_audio->processedBufferCount(slot.source);
@@ -130,7 +161,11 @@ void MusicManager::refillSlot(StreamSlot& slot) {
     for (int i = 0; i < processed; ++i) {
         if (!unqueued[i])
             continue;
-        if (!fillAndQueue(m_audio, slot.source, unqueued[i], slot.oggStream.get(), slot.sampleRate, slot.channels)) {
+        if (builtin) {
+            fillAndQueuePcm(m_audio, slot.source, unqueued[i], slot.pcmLoop, slot.pcmPos, slot.sampleRate,
+                            slot.channels); // loops forever, never EOF
+        } else if (!fillAndQueue(m_audio, slot.source, unqueued[i], slot.oggStream.get(), slot.sampleRate,
+                                 slot.channels)) {
             // EOF — mark inactive; update() will advance track or loop.
             slot.active = false;
             return;
@@ -147,6 +182,8 @@ void MusicManager::stopSlot(StreamSlot& slot) {
         m_audio->detachBuffers(slot.source); // stops + detaches all queued AL buffers
     slot.oggStream.reset();
     slot.oggBytes.clear();
+    slot.pcmLoop.clear();
+    slot.pcmPos = 0;
     slot.active = false;
     slot.gain = 0.0f;
 }

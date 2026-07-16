@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ILogger.h"
+#include "audio/MusicBuiltinTracks.h"
 #include "audio/MusicManager.h"
 #include "audio/OggDecoder.h"
 #include "audio/PlaylistLoader.h"
@@ -834,4 +835,67 @@ TEST_CASE("VoiceCalloutManager subtitle push via Localization fallback", "[audio
     vcm.play(VoiceCallout{nullptr, "rwr.warning", 3.0f}, settings);
     REQUIRE(sq.current() == "rwr.warning");
     vcm.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Builtin procedural music (#865)
+// ---------------------------------------------------------------------------
+
+namespace {
+struct CapturingMusicLog : ILogger {
+    std::vector<std::string> warnings;
+    void log(LogLevel lvl, const char*, int, const char* msg) override {
+        if (lvl == LogLevel::Warn && msg)
+            warnings.emplace_back(msg);
+    }
+    void setMinLevel(LogLevel) override {}
+    void flush() override {}
+};
+} // namespace
+
+TEST_CASE("generateBuiltinMusic is deterministic and distinct per mood (#865)", "[audio][music]") {
+    const DecodedPcm menuA = generateBuiltinMusic(MusicMood::Menu);
+    const DecodedPcm menuB = generateBuiltinMusic(MusicMood::Menu);
+    CHECK(menuA.channels == 1);
+    CHECK(menuA.sampleRate == kMusicSampleRate);
+    REQUIRE_FALSE(menuA.samples.empty());
+    CHECK(menuA.samples == menuB.samples); // byte-stable: no rand()/time
+
+    const DecodedPcm patrol = generateBuiltinMusic(MusicMood::Patrol);
+    const DecodedPcm combat = generateBuiltinMusic(MusicMood::Combat);
+    CHECK(menuA.samples != patrol.samples); // each mood is a different loop
+    CHECK(patrol.samples != combat.samples);
+}
+
+TEST_CASE("builtin music tracks + the default playlist wire the game states (#865)", "[audio][music]") {
+    CHECK(builtinMusicTrack("builtin:music-menu").valid());
+    CHECK(builtinMusicTrack("builtin:music-patrol").valid());
+    CHECK(builtinMusicTrack("builtin:music-combat").valid());
+    CHECK_FALSE(builtinMusicTrack("fl-base:theme").valid()); // not a builtin id
+    CHECK(builtinMusicTrackNames().size() == 3u);
+
+    const PlaylistData pl = builtinDefaultPlaylist();
+    REQUIRE(pl.findState("Menu") != nullptr);
+    REQUIRE(pl.findState("FlightCombat") != nullptr);
+    CHECK(pl.findState("Menu")->tracks.at(0) == "builtin:music-menu");
+    CHECK(pl.findState("FlightCombat")->tracks.at(0) == "builtin:music-combat");
+}
+
+TEST_CASE("MusicManager plays the builtin default playlist with no content pack (#865)", "[audio][music]") {
+    NullAudio audio;
+    CapturingMusicLog log;
+    MusicManager mm;
+    // No AssetManager: the builtin tracks are resolved before AssetManager, so nullptr is fine.
+    REQUIRE(mm.init(&audio, /*assets=*/nullptr, &log));
+    mm.loadPlaylist(builtinDefaultPlaylist());
+
+    mm.setState(GameState::Menu); // opens builtin:music-menu (streams the looping PCM)
+    mm.update(1.0f / 60.0f, 0.8f, 0.7f);
+    mm.setState(GameState::FlightCombat); // crossfades to builtin:music-combat
+    mm.update(1.0f / 60.0f, 0.8f, 0.7f);
+
+    // The builtin tracks resolve, so the "track not found" warning never fires.
+    for (const std::string& w : log.warnings)
+        CHECK(w.find("not found") == std::string::npos);
+    mm.shutdown();
 }

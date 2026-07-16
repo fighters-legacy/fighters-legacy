@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render/SceneRenderer.h"
 #include "render/BuiltinGeometry.h"
+#include "render/BuiltinTextures.h"
 #include "render/ParticleSystem.h"
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
@@ -62,11 +63,16 @@ void SceneRenderer::setHiddenEntity(uint32_t entityIdx, uint32_t entityGen) noex
     m_hiddenEntityGen = entityGen;
 }
 
+void SceneRenderer::setCockpitMesh(const std::string& meshName) {
+    m_cockpitMesh = meshName;
+}
+
 void SceneRenderer::ensureBuiltins() {
     if (m_builtinEntityMesh.valid())
         return;
 
     m_builtinEntityMesh = m_renderer.createMesh({"builtin:entity", builtinTetrahedronGlb()});
+    m_builtinDamagedMesh = m_renderer.createMesh({"builtin:entity-damaged", builtinDamagedWedgeGlb()});
     m_builtinFloorMesh = m_renderer.createMesh({"builtin:floor", builtinFloorPlaneGlb()});
 
     // 6-color opaque palette: gives each entity a distinct look in the no-content sandbox.
@@ -97,10 +103,30 @@ void SceneRenderer::ensureBuiltins() {
     fmd.roughnessFactor = 0.95f;
     m_builtinFloorMat = m_renderer.createMaterial(fmd);
 
-    // Shaded grey fallback: used for resolved meshes lacking explicit material data, and (in
-    // release builds) for the builtin placeholder entity in place of the per-face debug colour.
+    // Builtin procedural PBR textures (#867): base color / normal / ORM, uploaded raw-RGBA so the
+    // albedo/normal/ORM SAMPLING path runs zero-pack (the builtin material otherwise used only PBR
+    // scalar factors). A helper uploads one BuiltinRgbaTexture via the raw-RGBA fallback.
+    auto uploadRaw = [this](const char* name, const BuiltinRgbaTexture& tex, bool srgb) -> TextureHandle {
+        TextureUploadDesc td{};
+        td.name = name;
+        td.bytes = tex.pixels;
+        td.srgb = srgb;
+        td.rawWidth = static_cast<uint32_t>(tex.width);
+        td.rawHeight = static_cast<uint32_t>(tex.height);
+        return m_renderer.createTexture(td);
+    };
+    m_builtinBaseColorTex = uploadRaw("builtin:base-color", builtinBaseColorTexture(), /*srgb=*/true);
+    m_builtinNormalTex = uploadRaw("builtin:normal", builtinNormalTexture(), /*srgb=*/false);
+    m_builtinOrmTex = uploadRaw("builtin:orm", builtinOrmTexture(), /*srgb=*/false);
+
+    // Shaded fallback: used for resolved meshes lacking explicit material data, and (in release
+    // builds) for the builtin placeholder entity. Now TEXTURED, so a builtin entity samples the
+    // albedo/normal/ORM maps rather than a flat factor (#867).
     MaterialDesc emd{};
-    emd.baseColorFactor = {0.60f, 0.60f, 0.62f, 1.0f}; // neutral grey
+    emd.baseColorTexture = m_builtinBaseColorTex;
+    emd.normalTexture = m_builtinNormalTex;
+    emd.ormTexture = m_builtinOrmTex;
+    emd.baseColorFactor = {0.60f, 0.60f, 0.62f, 1.0f}; // tints the base-color map
     emd.metallicFactor = 0.10f;
     emd.roughnessFactor = 0.60f;
     m_fallbackEntityMat = m_renderer.createMaterial(emd);
@@ -192,7 +218,9 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
         if (useBuiltin) {
             if (!m_builtinEntityMesh.valid())
                 continue; // builtins not yet uploaded — skip
-            mesh = m_builtinEntityMesh;
+            // A damaged builtin swaps to the wreck-variant placeholder (#864) so the mesh-swap path
+            // runs zero-pack, exactly as a pack entity swaps to its classicDamageMesh.
+            mesh = (entry.damageLevel > 0 && m_builtinDamagedMesh.valid()) ? m_builtinDamagedMesh : m_builtinEntityMesh;
 #ifdef NDEBUG
             // Release: shaded grey so placeholder entities read as real geometry.
             mat = m_fallbackEntityMat;
@@ -229,6 +257,25 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
             item.flags |= kRenderFlagDebugFaceColor; // distinct per-face colours on the placeholder
 #endif
         m_items.push_back(item);
+
+        // Cockpit interior (#870): in Cockpit view the ownship is the hidden (shadow-only) entity and
+        // the camera sits at its origin. If a cockpit mesh is set, draw it at the ownship's transform
+        // (camera-relative, so it surrounds the camera and turns with the airframe when the pilot
+        // looks around) as a normal opaque, depth-composited item — NOT shadow-only. Empty cockpit
+        // mesh keeps the HUD-only cockpit (today's behavior).
+        if (shadowOnly && !m_cockpitMesh.empty()) {
+            const MeshHandle cockpit = getOrUploadMesh(m_cockpitMesh);
+            if (cockpit.valid()) {
+                RenderItem ci{};
+                ci.mesh = cockpit;
+                ci.material = getOrUploadMaterial(m_cockpitMesh);
+                if (!ci.material.valid())
+                    ci.material = m_fallbackEntityMat;
+                ci.transform = model; // locked to the airframe, at the camera origin
+                ci.lod = 0;
+                m_items.push_back(ci);
+            }
+        }
     }
 
     // Emit per-entity damage particle effects (uses snapshot positions — thread-safe).

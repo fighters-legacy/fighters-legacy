@@ -61,4 +61,10 @@ class ParticleSystem {
     std::vector<ParticleEmitterState> m_emitters;
 };
 
+// Registers the named builtin particle presets (#869) — explosion / fire / smoke, the weapon effects
+// (muzzle_flash / impact_sparks / missile_smoke, #625), and the precipitation presets (rain / snow /
+// storm variants). Lives in the engine, not the game client, so any frontend that links engine-render
+// gets the named presets by calling this, rather than re-registering them by hand.
+void registerBuiltinParticlePresets(ParticleSystem& ps);
+
 } // namespace fl

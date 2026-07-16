@@ -91,6 +91,11 @@ struct TextureUploadDesc {
     std::string_view name;
     std::span<const uint8_t> bytes;
     bool srgb{true}; // true=color (sRGB view), false=linear (normal/ORM)
+    // Raw-RGBA8 upload (#867): when rawWidth > 0, `bytes` is uncompressed RGBA8 (rawWidth*rawHeight*4),
+    // uploaded directly with no KTX2/PNG decode. Used for the builtin procedural textures so the
+    // albedo/normal/ORM sampling path runs with no content pack. 0 = decode `bytes` as KTX2 or PNG.
+    uint32_t rawWidth{0};
+    uint32_t rawHeight{0};
 };
 
 // ---------------------------------------------------------------------------

@@ -354,9 +354,10 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setMotd(cfg.motd);
     setMotdDisplaySeconds(cfg.motdDisplaySeconds);
     setOperatorPassword(cfg.operatorPassword);
-    m_playerEntityType = cfg.playerEntityType; // pilot spawn default (#834); applyConfig runs pre-start
-    m_allowObservers = cfg.allowObservers;     // #857; applyConfig runs pre-start
-    m_requiredPacks = cfg.requiredPacks;       // #872; applyConfig runs pre-start
+    m_playerEntityType = cfg.playerEntityType;     // pilot spawn default (#834); applyConfig runs pre-start
+    m_allowObservers = cfg.allowObservers;         // #857; applyConfig runs pre-start
+    m_requiredPacks = cfg.requiredPacks;           // #872; applyConfig runs pre-start
+    m_requiredPackPolicy = cfg.requiredPackPolicy; // #872 warn / refuse / allow-placeholder
     setIdleTimeout(cfg.idleTimeoutS);
     setDrawDistance(cfg.drawDistanceKm);
     setSpatialCellSize(cfg.spatialCellSizeM); // after setDrawDistance: auto mode reads m_drawDistanceM
@@ -1626,32 +1627,67 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         return;
     }
 
-    // Required-pack policy (#872 wire half; WARN-ONLY in Phase 4). Build the set of client pack ids from
-    // the trailing manifest and warn for each required pack the client is missing. Refuse /
-    // allow-placeholder modes, version/hash matching, and the client "missing content" UX land with the
-    // full #872 policy (Phase 5); MsgConnectRefusal(MissingRequiredPack) is defined but unused here.
+    // Required-pack policy (#872). The connect handshake carries the client's mounted-pack manifest;
+    // compare it against the server's required set and apply the configured policy. `missingPackNotice`
+    // is filled under the WARN policy so the client is notified (via MsgServerNotice) AFTER admission.
+    std::string missingPackNotice;
     if (!m_requiredPacks.empty()) {
-        std::unordered_set<std::string> clientPacks;
+        std::vector<ClientPack> clientPacks;
         std::size_t off = sizeof(MsgConnectRequest);
         for (uint16_t i = 0; i < req.packCount; ++i) {
             PackManifestEntry pe;
             if (!readRecordAt(data, size, off, pe))
                 break; // truncated manifest — treat the rest as absent
             off += sizeof(PackManifestEntry);
-            pe.id[sizeof(pe.id) - 1] = '\0'; // untrusted char[]: force-terminate
-            clientPacks.insert(pe.id);
+            pe.id[sizeof(pe.id) - 1] = '\0';           // untrusted char[]: force-terminate
+            pe.version[sizeof(pe.version) - 1] = '\0'; // untrusted char[]: force-terminate
+            clientPacks.push_back({pe.id, pe.version});
         }
-        for (const std::string& reqd : m_requiredPacks) {
-            if (clientPacks.find(reqd) == clientPacks.end()) {
-                char msg[128];
-                std::snprintf(msg, sizeof(msg), "peer is missing required content pack '%.48s'", reqd.c_str());
-                m_logger.log(LogLevel::Warn, __FILE__, __LINE__, msg);
+        const std::vector<std::string> missing = missingRequiredPacks(m_requiredPacks, clientPacks);
+        if (!missing.empty()) {
+            std::string list;
+            for (const std::string& id : missing) {
+                if (!list.empty())
+                    list += ", ";
+                list += id;
+            }
+            const std::string ip = extractIp(m_net.getPeerAddress(peerId));
+            switch (m_requiredPackPolicy) {
+            case RequiredPackPolicy::Refuse: {
+                char logmsg[256];
+                std::snprintf(logmsg, sizeof(logmsg), "peer %u from %s refused: missing required pack(s): %.160s",
+                              peerId, ip.c_str(), list.c_str());
+                m_logger.log(LogLevel::Info, __FILE__, __LINE__, logmsg);
+                char reason[sizeof(MsgConnectRefusal::reason)];
+                std::snprintf(reason, sizeof(reason), "Missing required pack(s): %s", list.c_str());
+                sendConnectRefusal(peerId, ConnectRefusalCode::MissingRequiredPack, reason);
+                m_net.disconnectPeer(peerId);
+                return; // NOT admitted: handshakeComplete stays false, no entity spawned
+            }
+            case RequiredPackPolicy::Warn: {
+                for (const std::string& id : missing) {
+                    char msg[128];
+                    std::snprintf(msg, sizeof(msg), "peer %u is missing required content pack '%.80s'", peerId,
+                                  id.c_str());
+                    m_logger.log(LogLevel::Warn, __FILE__, __LINE__, msg);
+                }
+                missingPackNotice = list; // notify the client after admission
+                break;
+            }
+            case RequiredPackPolicy::AllowPlaceholder: {
+                char msg[192];
+                std::snprintf(msg, sizeof(msg),
+                              "peer %u admitted with %zu missing content pack(s) (allow-placeholder): %.120s", peerId,
+                              missing.size(), list.c_str());
+                m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
+                break;
+            }
             }
         }
     }
 
     // Grant a role (#857). An out-of-grammar role byte is refused; an observer is refused when the
-    // server disallows the role. (Required-pack policy #872 layers on before this in a later commit.)
+    // server disallows the role. (The required-pack policy #872 has already run above.)
     if (!isPeerRoleOrdinal(req.requestedRole)) {
         rejectConnection(peerId, extractIp(m_net.getPeerAddress(peerId)), ConnectRefusalCode::Generic);
         return;
@@ -1709,6 +1745,15 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         pkt.insert(pkt.end(), m_motd.c_str(), m_motd.c_str() + textLen);
         pkt.push_back(0u); // NUL terminator
         m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/true);
+    }
+
+    // Missing-content notice (#872 warn policy): tell the admitted client which required packs it lacks,
+    // so a content mismatch is visible instead of silent placeholders. Reuses the MsgServerNotice banner
+    // channel the client already surfaces (console + banner).
+    if (!missingPackNotice.empty()) {
+        MsgServerNotice notice;
+        std::snprintf(notice.text, sizeof(notice.text), "Missing content: %s", missingPackNotice.c_str());
+        m_net.send(peerId, &notice, sizeof(notice), /*reliable=*/true);
     }
 
     // Form this peer's flight (#610). The spawner lives in fl-server (it needs engine-ai to build

@@ -14,7 +14,8 @@
 #include "ai/LowYoYoController.h"
 #include "ai/PursuitController.h"
 #include "ai/SplitSController.h"
-#include "ai/StateMachineController.h" // exposes Condition helpers + StateMachineController
+#include "ai/StateMachineController.h"   // exposes Condition helpers + StateMachineController
+#include "ai/SurfaceThreatControllers.h" // sam / aaa emplacements (#863)
 #include "ai/WaypointController.h"
 #include "ai/WingmanBehavior.h" // makeWingmanController + WingmanParams
 #include "ai/WingmanCommand.h"  // the six-command grammar
@@ -49,6 +50,8 @@ namespace fl::ai {
 //   high_yo_yo    <entityIdx> [climbDurationS] [reacquireDurationS]
 //   low_yo_yo     <entityIdx> [diveDurationS] [pullDurationS]
 //   guns          <entityIdx> [muzzleVelMps] [lethalRadiusM]
+//   sam           [engageRangeM=30000] [coneHalfDeg=90] [fireIntervalS=4]  — static SAM launcher (#863)
+//   aaa           [engageRangeM=1200] [coneHalfDeg=25] [muzzleVelMps=1000] [lethalRadiusM=15]  — static AAA (#863)
 //   ballistic     <tx> <ty> <tz> [mirvCount [spreadM]]  — boost-phase steering to an impact point
 //   formation     <anchorIdx> [slotIndex=0] [lateralM=150] [aftM=100]   — holds station on a MOVING
 //                 anchor (unlike `escort`, which orbits a point captured at creation)
@@ -429,6 +432,65 @@ inline std::unique_ptr<fl::IEntityController> createController(std::string_view 
             lethalRadius = static_cast<float>(d);
         }
         return std::make_unique<GunsEmploymentController>(*entityManager, id, muzzleVel, lethalRadius);
+    }
+
+    // -----------------------------------------------------------------------
+    // sam  [engageRangeM=30000] [coneHalfDeg=90] [fireIntervalS=4]   (#863 — static SAM launcher;
+    //      auto-engages hostiles it detects on radar, no target index)
+    // -----------------------------------------------------------------------
+    if (behavior == "sam") {
+        if (!entityManager)
+            return nullptr;
+        float rangeM = 30000.f, coneHalfDeg = 90.f, fireIntervalS = 4.f;
+        double d = 0.0;
+        if (args.size() >= 1) {
+            if (!parseDouble(args[0], d) || d <= 0.0)
+                return nullptr;
+            rangeM = static_cast<float>(d);
+        }
+        if (args.size() >= 2) {
+            if (!parseDouble(args[1], d) || d <= 0.0)
+                return nullptr;
+            coneHalfDeg = static_cast<float>(d);
+        }
+        if (args.size() >= 3) {
+            if (!parseDouble(args[2], d) || d <= 0.0)
+                return nullptr;
+            fireIntervalS = static_cast<float>(d);
+        }
+        return std::make_unique<SamEngagementController>(*entityManager, rangeM, coneHalfDeg, fireIntervalS);
+    }
+
+    // -----------------------------------------------------------------------
+    // aaa  [engageRangeM=4000] [coneHalfDeg=25] [muzzleVelMps=1000] [lethalRadiusM=15]   (#863 — static
+    //      AAA gun; auto-leads and engages hostiles in its cone)
+    // -----------------------------------------------------------------------
+    if (behavior == "aaa") {
+        if (!entityManager)
+            return nullptr;
+        float rangeM = 1200.f, coneHalfDeg = 25.f, muzzleVel = 1000.f, lethalRadius = 15.f;
+        double d = 0.0;
+        if (args.size() >= 1) {
+            if (!parseDouble(args[0], d) || d <= 0.0)
+                return nullptr;
+            rangeM = static_cast<float>(d);
+        }
+        if (args.size() >= 2) {
+            if (!parseDouble(args[1], d) || d <= 0.0)
+                return nullptr;
+            coneHalfDeg = static_cast<float>(d);
+        }
+        if (args.size() >= 3) {
+            if (!parseDouble(args[2], d) || d <= 0.0)
+                return nullptr;
+            muzzleVel = static_cast<float>(d);
+        }
+        if (args.size() >= 4) {
+            if (!parseDouble(args[3], d) || d <= 0.0)
+                return nullptr;
+            lethalRadius = static_cast<float>(d);
+        }
+        return std::make_unique<AaaFireController>(*entityManager, rangeM, coneHalfDeg, muzzleVel, lethalRadius);
     }
 
     // -----------------------------------------------------------------------

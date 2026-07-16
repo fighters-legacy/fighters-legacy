@@ -210,7 +210,7 @@ jobs:
           # The builtin reference meshes (docs/modding/3d-models.md) must validate with zero
           # warnings or errors — clean validation prints nothing, so fail on any output.
           python3 tools/gen_builtin_glb.py --export-dir /tmp/builtin-meshes
-          mesh_out=$(./build/debug/tools/validate-mesh /tmp/builtin-meshes/builtin_entity.glb /tmp/builtin-meshes/builtin_floor.glb 2>&1)
+          mesh_out=$(./build/debug/tools/validate-mesh /tmp/builtin-meshes/builtin_entity.glb /tmp/builtin-meshes/builtin_entity_damaged.glb /tmp/builtin-meshes/builtin_floor.glb 2>&1)
           if [ -n "$mesh_out" ]; then echo "builtin reference meshes failed validation:"; echo "$mesh_out"; exit 1; fi
           ./build/debug/tools/tex-compress --version
           ./build/debug/tools/validate-licenses --version

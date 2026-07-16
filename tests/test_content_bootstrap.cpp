@@ -12,6 +12,8 @@
 #include <entity/EntityTypeRegistry.h>
 #include <mock_content.h>
 #include <sensor/SensorDef.h>
+#include <weapon/BuiltinWeapon.h>
+#include <weapon/WeaponDef.h>
 #include <weapon/WeaponRegistry.h>
 
 #include <catch2/catch_test_macros.hpp>
@@ -19,6 +21,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -369,42 +372,87 @@ TEST_CASE("makeSensorDefResolver caches both hits and misses") {
 // Builtin sandbox arming (#440)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("registerBuiltinWeapons registers the three sandbox weapons exactly once") {
+TEST_CASE("registerBuiltinWeapons registers every sandbox store exactly once (#862)") {
     WeaponRegistry weapons;
-    CHECK(registerBuiltinWeapons(weapons) == 3u);
+    // cannon, IR, radar, SARH, bomb, rocket, drop tank, sensor pod
+    CHECK(registerBuiltinWeapons(weapons) == 8u);
     CHECK(weapons.findById("builtin:cannon") != nullptr);
     CHECK(weapons.findById("builtin:ir-missile") != nullptr);
     CHECK(weapons.findById("builtin:radar-missile") != nullptr);
+    CHECK(weapons.findById("builtin:sarh-missile") != nullptr);
+    CHECK(weapons.findById("builtin:bomb") != nullptr);
+    CHECK(weapons.findById("builtin:rocket") != nullptr);
+    CHECK(weapons.findById("builtin:drop-tank") != nullptr);
+    CHECK(weapons.findById("builtin:pod") != nullptr);
 
     // Idempotent: a second call registers nothing and breaks nothing.
     CHECK(registerBuiltinWeapons(weapons) == 0u);
 }
 
-TEST_CASE("builtinDebugEntityDef is armed and its stations resolve against the builtin registry") {
+TEST_CASE("the builtin debug entity has a real damage model with the full subsystem table (#864)") {
+    const EntityDef def = builtinDebugEntityDef();
+    REQUIRE(def.damage.has_value());             // not binary death anymore
+    REQUIRE(def.damage->subsystems.has_value()); // + a subsystem table
+    CHECK(def.damage->subsystems->any());
+    // An aircraft models BOTH engines (asymmetric thrust on a single-engine loss) plus controls,
+    // avionics, hydraulics and fuel.
+    for (Subsystem s : {Subsystem::EngineLeft, Subsystem::EngineRight, Subsystem::Controls, Subsystem::Avionics,
+                        Subsystem::Hydraulics, Subsystem::Fuel})
+        CHECK(def.damage->subsystems->parts[static_cast<int>(s)].hp > 0.f);
+    // Progressive penalties: heavy/critical degrade thrust + control, critical kills avionics.
+    CHECK(def.damage->heavy.thrustFactor < 1.f);
+    CHECK(def.damage->critical.controlFactor < def.damage->heavy.controlFactor);
+    CHECK(def.damage->critical.avionicsFailure);
+}
+
+TEST_CASE("the builtin drop tank is a Fuel store -- inert, mass/drag only (#862)") {
+    const WeaponDef& tank = BuiltinWeapon::dropTank();
+    CHECK(tank.type == WeaponType::Fuel);
+    CHECK_FALSE(tank.seeker.has_value()); // not a weapon: no seeker
+    CHECK(tank.warhead.damage == 0.f);    // no warhead
+    CHECK(tank.load.massKg > 0.f);        // but it does cost the airframe
+    CHECK(tank.load.rounds == 0u);        // never fires
+}
+
+TEST_CASE("builtinDebugEntityDef is armed across every store class and resolves against the registry (#862)") {
     WeaponRegistry weapons;
     registerBuiltinWeapons(weapons);
 
     const EntityDef def = builtinDebugEntityDef();
     CHECK(def.id == "builtin:debug-entity");
-    REQUIRE(def.hardpoints.size() == 5u); // 1 gun + 2 IR + 2 radar
+    REQUIRE(def.hardpoints.size() == 8u); // gun, IR, radar, SARH, bomb, rocket, drop tank, pod
 
     for (const Hardpoint& hp : def.hardpoints) {
         REQUIRE_FALSE(hp.defaultWeapon.empty());
         CHECK(weapons.findById(hp.defaultWeapon.c_str()) != nullptr);
         CHECK(hp.allowed.size() == 1u);
     }
-    CHECK(def.hardpoints[0].type == HardpointType::Gun);
+    // EVERY HardpointType is represented — the whole fire path is provable zero-pack.
+    std::set<HardpointType> kinds;
+    for (const Hardpoint& hp : def.hardpoints)
+        kinds.insert(hp.type);
+    CHECK(kinds.count(HardpointType::Gun) == 1u);
+    CHECK(kinds.count(HardpointType::Missile) == 1u);
+    CHECK(kinds.count(HardpointType::Bomb) == 1u);
+    CHECK(kinds.count(HardpointType::Rocket) == 1u);
+    CHECK(kinds.count(HardpointType::Fuel) == 1u);
+    CHECK(kinds.count(HardpointType::Pod) == 1u);
 }
 
-TEST_CASE("builtin missiles get projectile entity types like any pack weapon") {
+TEST_CASE("flying builtin stores get projectile entity types; gun, drop tank, and pod do not (#862)") {
     WeaponRegistry weapons;
     registerBuiltinWeapons(weapons);
     EntityTypeRegistry registry;
     NullLog log;
 
-    // Two missiles fly, the gun is hitscan: exactly 2 projectile types.
-    CHECK(registerProjectileEntityDefs(weapons, registry, log) == 2u);
+    // IR / radar / SARH missiles + bomb + rocket fly; the gun is hitscan and the tank/pod are inert.
+    CHECK(registerProjectileEntityDefs(weapons, registry, log) == 5u);
     CHECK(registry.findById("projectile:builtin:ir-missile") != nullptr);
     CHECK(registry.findById("projectile:builtin:radar-missile") != nullptr);
+    CHECK(registry.findById("projectile:builtin:sarh-missile") != nullptr);
+    CHECK(registry.findById("projectile:builtin:bomb") != nullptr);
+    CHECK(registry.findById("projectile:builtin:rocket") != nullptr);
     CHECK(registry.findById("projectile:builtin:cannon") == nullptr);
+    CHECK(registry.findById("projectile:builtin:drop-tank") == nullptr);
+    CHECK(registry.findById("projectile:builtin:pod") == nullptr);
 }

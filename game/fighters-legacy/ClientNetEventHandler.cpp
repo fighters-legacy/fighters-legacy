@@ -416,6 +416,11 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             break;
         case fl::ConnectRefusalCode::MissingRequiredPack:
             f = SessionFailure::MissingRequiredPack;
+            // The refusal reason carries the specific missing-pack list (#872). Surface it to the console
+            // so the player sees which packs to install, not just the generic banner string.
+            ref.reason[sizeof(ref.reason) - 1] = '\0';
+            if (console && ref.reason[0] != '\0')
+                console->print(std::string("[server] ") + ref.reason);
             break;
         case fl::ConnectRefusalCode::EntitlementRequired:
             f = SessionFailure::EntitlementRequired;

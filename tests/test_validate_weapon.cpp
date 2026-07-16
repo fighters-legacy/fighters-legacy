@@ -5,6 +5,8 @@
 
 #include "weapon_validator.h"
 
+#include <weapon/BuiltinWeapon.h>
+
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -229,4 +231,19 @@ TEST_CASE("A pack with no weapons has nothing to validate", "[weapon-validator]"
 TEST_CASE("A missing pack directory is an error", "[weapon-validator]") {
     const auto r = validatePackWeapons("/nonexistent/pack/dir");
     CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("every builtin store passes the plausibility bar (#862)", "[weapon-validator]") {
+    // The compiled-in sandbox stores are C++ structs, not TOML, but they must clear the same
+    // plausibility bar the validator holds pack weapons to -- a zero-pack weapon nobody could author
+    // through validate-weapon would be a double standard.
+    for (const WeaponDef* w : {&BuiltinWeapon::cannon(), &BuiltinWeapon::irMissile(), &BuiltinWeapon::radarMissile(),
+                               &BuiltinWeapon::sarhMissile(), &BuiltinWeapon::bomb(), &BuiltinWeapon::rocketPod(),
+                               &BuiltinWeapon::dropTank(), &BuiltinWeapon::pod()}) {
+        INFO("builtin store: " << w->id);
+        const auto r = checkWeaponPlausibility(*w);
+        CHECK(r.ok);
+        CHECK(r.errors.empty());
+        CHECK(r.warnings.empty());
+    }
 }

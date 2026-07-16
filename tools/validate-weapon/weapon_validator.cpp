@@ -80,6 +80,16 @@ void checkPlausibility(const WeaponDef& w, WeaponValidationResult& r) {
                              "type be missile or rocket?");
 }
 
+} // namespace
+
+WeaponValidationResult checkWeaponPlausibility(const WeaponDef& w) {
+    WeaponValidationResult r;
+    checkPlausibility(w, r);
+    return r;
+}
+
+namespace {
+
 [[nodiscard]] std::string readFile(const fs::path& p) {
     std::ifstream f(p, std::ios::binary);
     if (!f)

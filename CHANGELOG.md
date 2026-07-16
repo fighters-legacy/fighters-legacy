@@ -7,6 +7,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **renderer**: Cockpit-interior mesh rendering — in Cockpit view the ownship's `EntityDef::cockpitMesh` (parsed since #813 but never rendered) is drawn locked to the airframe, camera-relative and depth-composited, so looking around turns the view inside a fixed cockpit. Entities without a `cockpitMesh` are unchanged (HUD-only) (#870)
+- **renderer**: Builtin textured entity path — the builtin placeholder mesh now samples procedural base-color / normal / ORM maps (`BuiltinTextures`) instead of only PBR scalar factors, so the albedo/normal/ORM texture-sampling path runs with no content pack. Uploaded via a new raw-RGBA `TextureUploadDesc` fallback (no KTX2/PNG container). Deterministic, byte-stable generation (#867)
+
+### Changed
+
+- **engine**: Builtin particle + weapon-SFX preset registration moved from the game client into the engine (`registerBuiltinParticlePresets` in engine-render, `registerBuiltinSfxPresets` in engine-audio), so any frontend that links the engine gets the named presets (`explosion`, `muzzle_flash`, `sfx.gunfire`, …) instead of re-registering them by hand. No behavior change (#869)
+
+### Added
+
+- **audio**: Procedural builtin music + default playlist — deterministic, byte-stable compiled-in loops (menu / patrol / combat, `generateBuiltinMusic`) and a builtin `PlaylistData` wiring them to game states, so `MusicManager`'s streaming / crossfade / state machine runs with no pack `playlist.toml` (it silently no-op'd before). A pack playlist still overrides it; a null `IAudio` stays a clean no-op — mirrors the `SfxBuiltinSounds` pattern (#865)
+- **mission**: Builtin sandbox mission — `--mission builtin:sandbox` (or a `[rotation]` entry) runs a compiled-in skirmish with no content pack: a joinable player slot + a `builtin:fighter` wingman versus two scripted bandits and a SAM site, with a destroy-the-SAM objective. Parsed by the same `parseMission()` as pack missions and resolved before the pack path, so the #632 mission runtime and Instant Action are exercisable from a bare checkout (#868)
+- **entity**: Builtin damage model — `builtin:debug-entity` now has a real 3-level `DamageDef` + the full aircraft subsystem table (engines/controls/avionics/hydraulics/fuel), so progressive damage, asymmetric-thrust / control degradation and directed subsystem failures all run zero-pack (it had binary death before). A damaged builtin entity swaps to a distinct wreck-variant placeholder mesh (`builtinDamagedWedgeGlb`) so the `damageLevel > 0` mesh-swap path also runs with no content pack (#864)
+- **script**: Embedded builtin Lua AI — `builtin:fighter` (patrol → intercept → engage, honest-sensing via `detected_contacts()`, and it fires) ships compiled into the engine, resolved through the same `loadAIScript` seam as pack scripts (checked first). `--ai lua builtin:fighter` and an `EntityDef aiScriptAsset = "builtin:fighter"` both work with no content pack, so scripted AI is exercisable from a bare checkout (#866)
+- **entity**: Builtin surface targets and threats — a ground vehicle, a naval vessel, and a static structure to attack, plus a SAM site (an emitting `builtin:sam-radar` + a SARH launcher) and an AAA emplacement that shoot back, all zero-pack. Each carries a signature, a 3-level damage model with a subsystem table, and a category collision radius. New `sam` / `aaa` AiControllerFactory behaviors auto-engage aircraft the emplacement honestly detects (#863)
+- **engine**: Complete builtin weapon vocabulary — the zero-pack sandbox now arms every store class: a bomb, a rocket pod, a SARH missile (+ passive `builtin:sarh-seeker`), a drop tank, and a sensor pod join the cannon/IR/radar builtins, so the whole strike/A2G fire path is provable from a bare checkout. Adds `WeaponType::Fuel` (drop tank) and makes Fuel/Pod inert stores that cost mass+drag but never fire; the `builtin:debug-entity` mounts one of every `HardpointType`. `type = "fuel"`/`"pod"` weapons need no `[performance]`/`[warhead]` (#862)
+- **network**: Required-pack policy on the connect handshake — a server can declare required content packs (`[mods] required`, `id` or `id@version`) and choose what happens when a client is missing one via `[mods] required_policy`: `warn` (log + notify the admitted client), `refuse` (disconnect with the missing list), or `allow_placeholder` (silently serve placeholders). The client surfaces which packs it lacks instead of showing silent placeholders (#872)
+
 ## [0.3.2] - 2026-07-15
 
 ### Added

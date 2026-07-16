@@ -27,7 +27,7 @@ bool hardpointAccepts(HardpointType station, WeaponType store) noexcept {
     case HardpointType::Pod:
         return store == WeaponType::Pod;
     case HardpointType::Fuel:
-        return false; // no WeaponType::Fuel exists -- a drop tank is not a weapon
+        return store == WeaponType::Fuel; // #862: the drop-tank store — inert, but it does mount here
     }
     return false;
 }
@@ -57,11 +57,6 @@ PayloadEffect defaultPayload(const EntityDef& def, const WeaponRegistry& weapons
 
     for (const Hardpoint& hp : def.hardpoints) {
         const std::string station = "entity '" + def.id + "' hardpoint " + std::to_string(hp.slot);
-
-        // A fuel station carries a drop tank, which is not a weapon and is not in the registry.
-        // Skipped silently -- this is the normal case, not a misconfiguration.
-        if (hp.type == HardpointType::Fuel)
-            continue;
 
         if (hp.defaultWeapon.empty())
             continue; // an empty station is a legitimate loadout choice

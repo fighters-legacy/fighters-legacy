@@ -17,10 +17,11 @@ class WeaponRegistry;
 //
 // TWO RULES WORTH KNOWING BEFORE YOU EDIT THIS:
 //
-//  1. HardpointType::Fuel has NO WeaponType counterpart. The two enums are deliberately parallel --
-//     Missile, Bomb, Rocket, Gun, Pod line up one-for-one -- and then HardpointType has Fuel, which
-//     is a store that occupies a station without being a weapon. A drop tank is not in the weapon
-//     registry and never will be. It is skipped explicitly, and silently: it is not an error.
+//  1. WeaponType::Fuel is the drop-tank store (#862). The two enums are now fully parallel --
+//     Missile, Bomb, Rocket, Gun, Pod, Fuel line up one-for-one -- so a Fuel station carries a Fuel
+//     store that costs the airframe mass + drag like any other. It is INERT: never fired, never a
+//     firing station (buildLoadout leaves its StationState empty), never a projectile. defaultPayload
+//     counts its mass/drag; FireControl never selects or releases it.
 //
 //  2. An unknown or not-`allowed` store id is an ERROR-LOGGED SKIP, not a spawn failure. The
 //     aircraft still flies -- it just flies clean, and the log says which pylon lied. Refusing to

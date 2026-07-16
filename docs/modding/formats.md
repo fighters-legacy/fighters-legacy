@@ -299,7 +299,7 @@ absent, because it flies.
 |---|---|---|
 | `id` | string | **Def ID** — namespaced, e.g. `fl-base:aim120c`. This is what an entity's hardpoints reference; it is not a filename |
 | `name` | string | Display name |
-| `type` | string | `missile`, `bomb`, `rocket`, `gun`, `pod` |
+| `type` | string | `missile`, `bomb`, `rocket`, `gun`, `pod`, `fuel`. `fuel` is the **drop-tank** store: it mounts on a `fuel` hardpoint and costs the airframe `[load]` mass + drag, but is inert — it never fires, is never selected, and needs no `[seeker]`/`[warhead]`/`[performance]` |
 | `category` | string | `air-to-air`, `air-to-ground`, `air-to-sea`, `anti-radiation` |
 | `mesh` | string | *Optional.* **Asset name** for the in-flight projectile visual (missiles/rockets/bombs — they fly as entities). Includes its own subdirectory like every mesh field; empty = the builtin placeholder. Guns are hitscan and never render one |
 
@@ -332,7 +332,10 @@ sensor.
 > engine and `validate-weapon` warn on it. It is mutually exclusive with `sensor_id`; migrate by
 > moving the lobe into a sensor def and referencing it.
 
-### `[performance]` (required)
+### `[performance]` (required, except inert stores)
+
+> **Inert stores** (`type = "fuel"` or `type = "pod"`) omit `[performance]` and `[warhead]` entirely —
+> they have no reach and no warhead, only `[load]` mass and drag. Everything below applies to real weapons.
 
 **Exactly one of `max_range_nm` or `standoff_range_ft` is required** — a powered weapon states its
 own reach, a dropped one states how far it glides from release. Neither is an error (a weapon with no

@@ -75,4 +75,9 @@ class SfxManager {
     int m_nextVoice{0}; // round-robin = steal-oldest for one-shots of similar length
 };
 
+// Registers the named builtin weapon SFX presets (#869) — sfx.gunfire / launch / release / impact /
+// explosion, each a `sfx/<name>` pack asset with a compiled-in procedural fallback (SfxKind). Engine-
+// side (not the game client) so any frontend linking engine-audio gets the named presets.
+void registerBuiltinSfxPresets(SfxManager& sfx);
+
 } // namespace fl

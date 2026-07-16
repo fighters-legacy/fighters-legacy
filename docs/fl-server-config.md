@@ -62,7 +62,8 @@ visibility = "public"
 
 [mods]
 stack = []
-# required = ["fl-base"]              # content packs a connecting client should have mounted; missing = warn (#872)
+# required = ["fl-base", "theater@1.2"]  # packs a client must have ("id" or "id@version") (#872)
+# required_policy = "warn"            # warn | refuse | allow_placeholder -- action on a missing pack (#872)
 
 [world]
 player_faction = 1  # faction stamped on every player; MUST be non-zero for combat (see below)
@@ -364,17 +365,40 @@ stack = ["fl-base-pack", "my-theater-mod"]
 |---|---|
 | array of strings | `[]` |
 
-Content pack ids a connecting client is expected to have mounted (#872). The connect handshake
-carries the client's mounted-pack manifest, and the server compares it against this list. **Phase 4
-policy is warn-only**: a client missing a required pack is logged (`peer is missing required content
-pack '…'`) but still admitted — replacing today's silent placeholder fallback with a visible signal.
-Version/content-hash matching, refuse / allow-placeholder modes, and the client-side "missing
-content" UX land with the full required-pack policy (Phase 5). IDs match the `[mod].id` field in each
-pack's `manifest.toml`.
+Content packs a connecting client must have mounted (#872). Each entry is `"id"` or `"id@version"`
+(an id-only entry accepts any version). The connect handshake carries the client's mounted-pack
+manifest, and the server compares it against this list. IDs match the `[mod].id` field in each pack's
+`manifest.toml`. **Restart-only.**
+
+```toml
+[mods]
+required = ["fl-base", "my-theater@1.2"]
+```
+
+### `required_policy`
+
+| Type | Default |
+|---|---|
+| string (`warn` \| `refuse` \| `allow_placeholder`) | `"warn"` |
+
+What the server does when a connecting client is missing one of the `required` packs:
+
+- **`warn`** — log the miss server-side (`peer N is missing required content pack '…'`) and send the
+  admitted client a notice listing what it lacks, so a content mismatch is visible instead of silent
+  placeholders. The client is **admitted**.
+- **`refuse`** — disconnect the client with a `MsgConnectRefusal` whose reason names the missing
+  pack(s). The client shows "You are missing a content pack this server requires." and prints the
+  specific list to its console.
+- **`allow_placeholder`** — admit silently and serve placeholders (today's implicit fallback, opted
+  into). No client-facing notice.
+
+An empty `required` list disables the policy entirely (no behavior change for existing servers).
+An unrecognized `required_policy` value logs a warning and falls back to `warn`. **Restart-only.**
 
 ```toml
 [mods]
 required = ["fl-base"]
+required_policy = "refuse"
 ```
 
 ---
