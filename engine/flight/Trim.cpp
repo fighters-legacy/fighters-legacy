@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numbers>
 
 namespace fl {
@@ -78,8 +79,16 @@ float alphaForLoad(const FlightModelData& d, const PayloadEffect& payload, const
                    float loadFactor) {
     const float needed = loadFactor * c.weight_n;
     const float alphaMax = d.limits.alpha_stall_deg;
+    // THE SENTINEL IS NaN, NOT -1. A cambered table (the F-16's LEF-scheduled deck carries
+    // CL = +0.10 at alpha 0) trims 1 g at a LEGITIMATELY NEGATIVE alpha once q is high enough --
+    // at sea level that crossing sits near M 0.65, squarely inside the envelope. The old -1
+    // sentinel made every caller read "trim alpha is -0.4 deg" as "the wing cannot hold it",
+    // and fm-trim reported an F-16 whose top speed FELL when fuel burned off. A symmetric
+    // table (every aircraft before the F-16A) never trims negative at 1 g, which is why this
+    // survived until published cambered data arrived -- fl-base-pack#19's inversion working
+    // exactly as intended.
     if (liftAt(d, payload, c, alphaMax, speed) < needed)
-        return -1.f; // even at max lift the wing cannot hold it
+        return std::numeric_limits<float>::quiet_NaN(); // even at max lift the wing cannot hold it
 
     float lo = -5.f, hi = alphaMax;
     for (int i = 0; i < 40; ++i) {
@@ -147,14 +156,15 @@ TrimResult trim(const FlightModelData& d, const TrimPoint& pt, const PayloadEffe
     // kilonewtons of excess thrust in the middle of its envelope. It read like a content bug and
     // would have sent the next author hunting through a drag table for a fault that was not there.
     //
-    // Scan the whole range instead. The `a < 0` break stays, and is a different thing entirely: if no
-    // alpha holds 1 g at this speed, the wing genuinely cannot carry the weight, and nothing faster
-    // changes that (CL_max only falls with Mach).
+    // Scan the whole range instead. The cannot-hold break stays, and is a different thing entirely:
+    // if no alpha holds 1 g at this speed, the wing genuinely cannot carry the weight, and nothing
+    // faster changes that (CL_max only falls with Mach). "Cannot hold" is NaN -- a negative trim
+    // alpha is a real flight condition on a cambered wing, not a failure (see alphaForLoad).
     float maxLevel = 0.f;
     float minLevel = 0.f;
     for (float v = r.stall_speed_1g_mps; v <= kSpeedMax; v += kSpeedStep) {
         const float a = alphaForLoad(d, payload, c, v, 1.f);
-        if (a < 0.f)
+        if (std::isnan(a))
             break;
         if (excessThrustAt(d, payload, c, a, v, hasAb) >= 0.f) {
             if (minLevel <= 0.f)
@@ -176,7 +186,7 @@ TrimResult trim(const FlightModelData& d, const TrimPoint& pt, const PayloadEffe
         float best = -1e30f;
         for (float v = r.stall_speed_1g_mps; v <= kSpeedMax; v += kSpeedStep) {
             const float a = alphaForLoad(d, payload, c, v, 1.f);
-            if (a < 0.f)
+            if (std::isnan(a))
                 continue;
             const float ps = excessThrustAt(d, payload, c, a, v, ab) * v / c.weight_n;
             best = std::max(best, ps);
@@ -215,12 +225,13 @@ TrimResult trim(const FlightModelData& d, const TrimPoint& pt, const PayloadEffe
         float lo = 1.f, hi = nAero;
         if (hi <= lo)
             continue;
-        if (excessThrustAt(d, payload, c, alphaForLoad(d, payload, c, v, lo), v, hasAb) < 0.f)
+        const float a1g = alphaForLoad(d, payload, c, v, lo);
+        if (std::isnan(a1g) || excessThrustAt(d, payload, c, a1g, v, hasAb) < 0.f)
             continue; // cannot even sustain 1 g here
         for (int i = 0; i < 30; ++i) {
             const float mid = 0.5f * (lo + hi);
             const float a = alphaForLoad(d, payload, c, v, mid);
-            if (a >= 0.f && excessThrustAt(d, payload, c, a, v, hasAb) >= 0.f)
+            if (!std::isnan(a) && excessThrustAt(d, payload, c, a, v, hasAb) >= 0.f)
                 lo = mid;
             else
                 hi = mid;
@@ -248,12 +259,13 @@ TrimResult trim(const FlightModelData& d, const TrimPoint& pt, const PayloadEffe
 
         // Sustained: the largest n whose drag the engine can still pay for AT THIS SPEED.
         const float nCeiling = std::min(r.max_lift_g, nStruct);
-        if (nCeiling > 1.f && excessThrustAt(d, payload, c, alphaForLoad(d, payload, c, v, 1.f), v, hasAb) >= 0.f) {
+        const float aPin = alphaForLoad(d, payload, c, v, 1.f);
+        if (nCeiling > 1.f && !std::isnan(aPin) && excessThrustAt(d, payload, c, aPin, v, hasAb) >= 0.f) {
             float lo = 1.f, hi = nCeiling;
             for (int i = 0; i < 30; ++i) {
                 const float mid = 0.5f * (lo + hi);
                 const float a = alphaForLoad(d, payload, c, v, mid);
-                if (a >= 0.f && excessThrustAt(d, payload, c, a, v, hasAb) >= 0.f)
+                if (!std::isnan(a) && excessThrustAt(d, payload, c, a, v, hasAb) >= 0.f)
                     lo = mid;
                 else
                     hi = mid;
@@ -274,7 +286,7 @@ TrimResult trim(const FlightModelData& d, const TrimPoint& pt, const PayloadEffe
         // drag table is fitted to, and it is plumbing, not new physics — every term already existed.
         if (pt.load_factor > 0.f) {
             const float a = alphaForLoad(d, payload, c, v, pt.load_factor);
-            if (a >= 0.f)
+            if (!std::isnan(a))
                 r.ps_mps = excessThrustAt(d, payload, c, a, v, hasAb) * v / c.weight_n;
             else
                 r.ps_mps = 0.f; // the wing cannot hold this n here: there is no such flight condition
@@ -285,7 +297,7 @@ TrimResult trim(const FlightModelData& d, const TrimPoint& pt, const PayloadEffe
     float bestSr = 0.f;
     for (float v = r.stall_speed_1g_mps; v <= kSpeedMax; v += kSpeedStep) {
         const float a = alphaForLoad(d, payload, c, v, 1.f);
-        if (a < 0.f)
+        if (std::isnan(a))
             continue;
         // Throttle needed to hold level flight = drag / available MIL thrust, both projected along
         // the flight path (see the wind-axes note above).
