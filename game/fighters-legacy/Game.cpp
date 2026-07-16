@@ -307,6 +307,11 @@ struct GameServices {
     std::string
         requestedEntityType;     // --aircraft: aircraft to request in MsgConnectRequest; empty = server default (#834)
     bool requestObserver{false}; // --observer: join as a spectator (no aircraft) (#857)
+    // Auto-start (menu bypass): skip the main menu and enter a session immediately, exactly
+    // as if the matching menu item had been confirmed. `--mission <id>` implies it (single-player
+    // with that mission); `--auto` alone enters Free Flight, or Join Server when --connect is set.
+    bool autoStart{false};
+    std::string autoStartMission; // mission id for --mission; empty = Free Flight / Join Server
 
     // HUD / overlays
     EnvironmentState env;
@@ -465,12 +470,21 @@ bool Game::initPlatform(int argc, char** argv) {
             d.services.operatorPassword = argv[i + 1];
         else if (std::strcmp(argv[i], "--aircraft") == 0)
             d.services.requestedEntityType = argv[i + 1]; // request a specific type; server clamps (#834)
+        else if (std::strcmp(argv[i], "--mission") == 0) {
+            // Launch straight into a single-player session with this mission — the id is
+            // forwarded to the embedded fl-server exactly as Instant Action passes builtin:sandbox.
+            d.services.autoStartMission = argv[i + 1];
+            d.services.autoStart = true;
+        }
     }
 
     // Value-less flags (scanned separately so they work as the final argument too).
-    for (int i = 1; i < argc; ++i)
+    for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--observer") == 0)
             d.services.requestObserver = true; // join as a spectator, no aircraft (#857)
+        else if (std::strcmp(argv[i], "--auto") == 0)
+            d.services.autoStart = true; // menu bypass: Free Flight, or Join Server with --connect
+    }
 
     // Merge operator password: CLI arg > FL_OPERATOR_PASSWORD env var > [client].operator_password.
     // SDL_getenv is cross-platform (wraps GetEnvironmentVariableA on Windows).
@@ -1125,6 +1139,14 @@ void Game::run() {
     auto& d = *m_impl;
     bool wasFocused = true;
     bool running = true;
+
+    // Auto-start (menu bypass): enter the session before the first frame through the exact path a
+    // menu confirm takes — set the confirmed mission and fire the enters-session transition — so
+    // LoadingScreen construction, server spawn, and connect wiring are identical to a human Enter.
+    if (d.services.autoStart) {
+        d.services.screenMgr->mainMenu().setConfirmedMission(d.services.autoStartMission);
+        handleTransition(Screen::Loading);
+    }
 
     while (running && !d.services.p.window->shouldClose()) {
         d.services.p.window->pollEvents();

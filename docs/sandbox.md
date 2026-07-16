@@ -362,10 +362,31 @@ Pass `--connect` to join a remote `fl-server` instead of spawning a local single
 | `--aircraft <type-id>` | Request a specific aircraft in the connect handshake (#834), e.g. `--aircraft fl-base:f5e`. The server clamps to a registered type and falls back to its `[world] player_entity_type` default if the id is unknown. Omit to let the server choose. |
 | `--observer` | Join as an **observer** (spectator) with no aircraft (#857) — a free ghost camera (press **F4**). The server must have `[world] allow_observers = true` (default). |
 | `--operator-password <pw>` | Operator password for admin console commands on the remote server. Enables the in-game console commands (`spawn`, `kill`, `tp`, etc.) over the network. Takes precedence over the env var and user.toml. |
+| `--mission <id>` | **Skip the menu** and launch straight into a single-player session with this mission — any builtin id (`builtin:sandbox`, `builtin:shape-gallery`) or pack mission stem. The id is forwarded to the embedded fl-server exactly as Instant Action forwards `builtin:sandbox`. |
+| `--auto` | **Skip the menu** and enter the session the other flags describe: Free Flight alone, Join Server with `--connect` (composes with `--observer`). |
 
 To avoid exposing the password in the process listing, use the `FL_OPERATOR_PASSWORD` environment variable instead of the CLI flag. Merge precedence: `--operator-password` CLI arg > `FL_OPERATOR_PASSWORD` env var > `[client].operator_password` in user.toml.
 
 When `--connect` is given the main menu shows **Join Server** instead of **Sandbox (Instant Action)**, and the loading screen displays "Connecting to remote server…".
+
+## Visual verification (`tools/visual_check.sh`)
+
+One command opens a window rendering the `builtin:shape-gallery` mission — a museum row with one
+entity of every category (ground vehicle, naval vessel, structure), floating ordnance exhibits
+(missile / bomb / rocket projectile types spawned as plain objects), an armed joinable player
+slot, and a live fight 9 km out (fighters + SAM + AAA) so missiles fly. No menu interaction:
+
+    tools/visual_check.sh            # observer mode: standalone server + ghost camera; wreck-
+                                     # staging detonations fire after ~25 s so you watch the
+                                     # intact -> wreck swap live (FL_VISUAL_STAGE_DELAY=0 disables)
+    tools/visual_check.sh --fly      # pilot mode: single-player into the armed player slot —
+                                     # fire bombs/rockets (stations 4/5), strafe the museum row
+    tools/visual_check.sh --build    # build the debug preset first
+
+In observer mode use **Num1/Num2** to cycle entities (labels show type + faction), **F2/F1** to
+frame the pick in Chase/Cockpit, **F4** to return to free-fly. Windows: `tools\visual_check.ps1`
+with `-Fly` / `-Build`. Any mission id works via `--mission <id>`, including a `.yaml` file path
+(fl-server resolves builtin id → file path → pack asset).
 
 The loading screen reports specific connection failures immediately rather than waiting for the 10-second timeout:
 

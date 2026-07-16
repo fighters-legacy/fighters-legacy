@@ -681,3 +681,47 @@ TEST_CASE("the builtin sandbox mission parses cleanly and references only builti
     CHECK(hasSamAi);                // the SAM auto-engages
     CHECK(m.triggers.size() >= 2u); // an objective + a backstop
 }
+
+TEST_CASE("the builtin shape-gallery mission parses cleanly and covers every placeholder category",
+          "[mission-parser]") {
+    const std::string_view yaml = fl::builtinMissionYaml("builtin:shape-gallery");
+    REQUIRE_FALSE(yaml.empty());
+
+    auto r = parseMission(std::string(yaml));
+    REQUIRE(r.ok);
+    const Mission& m = r.mission;
+
+    // The gallery is the visual-verification scene for the per-category builtin placeholder meshes
+    // (#886): every silhouette source must be present — the surface categories parked on the
+    // terrain, the ordnance exhibits (plain projectile-type objects, which spawn with no controller
+    // and hold position), an armed player slot, and live shooters for in-flight missiles.
+    auto hasObjectOfType = [&](std::string_view type) {
+        for (const MissionObject& o : m.objects)
+            if (o.type == type)
+                return true;
+        return false;
+    };
+    CHECK(hasObjectOfType("builtin:debug-entity"));          // AirVehicle
+    CHECK(hasObjectOfType("builtin:ground-vehicle"));        // GroundVehicle
+    CHECK(hasObjectOfType("builtin:naval-vessel"));          // NavalVehicle
+    CHECK(hasObjectOfType("builtin:static-target"));         // Structure
+    CHECK(hasObjectOfType("builtin:sam-site"));              // SARH shooter -> in-flight Missile
+    CHECK(hasObjectOfType("builtin:aaa"));                   // gun emplacement
+    CHECK(hasObjectOfType("projectile:builtin:ir-missile")); // Missile exhibit
+    CHECK(hasObjectOfType("projectile:builtin:bomb"));       // Bomb exhibit
+    CHECK(hasObjectOfType("projectile:builtin:rocket"));     // Rocket exhibit
+
+    bool hasPlayerSlot = false;
+    for (const MissionObject& o : m.objects)
+        hasPlayerSlot |= o.playerSlot;
+    CHECK(hasPlayerSlot); // the --fly seat for firing bombs/rockets and making wrecks
+
+    // Exhibit objects must be plain (no ai/route) so they spawn without a controller and float.
+    for (const MissionObject& o : m.objects) {
+        if (o.type.rfind("projectile:", 0) == 0u) {
+            CHECK(o.ai.empty());
+            CHECK(o.route.empty());
+        }
+    }
+    CHECK(m.triggers.size() >= 2u);
+}

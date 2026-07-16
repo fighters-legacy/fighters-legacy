@@ -16,6 +16,7 @@
 // See docs/fl-server-config.md for the full operator configuration reference.
 // fl-lobby integration is tracked in issue #36.
 #include "IpListFile.h"
+#include "MissionSource.h"
 #include "NetworkFactory.h"
 #include "RconServer.h"
 #include "ServerCommands.h"
@@ -856,15 +857,13 @@ int main(int argc, char** argv) {
     std::string loadedMissionName; // for the #856 headless report
     uint64_t loadedMissionSpawned = 0;
     if (!missionToLoad.empty()) {
-        // Builtin missions (#868) resolve FIRST, with no pack: `--mission builtin:sandbox` exercises the
-        // mission runtime + Instant Action zero-pack. Otherwise fall back to a pack mission asset.
+        // Resolution precedence (loadMissionYaml): builtin id (#868, zero-pack) -> a readable
+        // .yaml/.yml file path (the authoring loop — iterate a mission without mounting a pack) ->
+        // a pack Mission asset.
         std::string yaml;
         bool missionFound = false;
-        if (std::string_view b = fl::builtinMissionYaml(missionToLoad); !b.empty()) {
-            yaml.assign(b);
-            missionFound = true;
-        } else if (auto missionAsset = assets.loadMission(missionToLoad.c_str())) {
-            yaml.assign(missionAsset->bytes.begin(), missionAsset->bytes.end());
+        if (auto resolved = fl::loadMissionYaml(missionToLoad, &assets, *log)) {
+            yaml = std::move(*resolved);
             missionFound = true;
         }
         if (!missionFound) {

@@ -44,6 +44,18 @@ TEST_CASE("MainMenuScreen: Instant Action launches the builtin mission; Free Fli
     CHECK(s.confirmedMission().empty());
 }
 
+TEST_CASE("MainMenuScreen: setConfirmedMission injects the auto-start mission") {
+    // The --mission/--auto menu bypass sets the confirmed mission directly, then Game drives the
+    // same enters-session transition a confirm produces; the getter must echo the injection.
+    MainMenuScreen s(false);
+    CHECK(s.confirmedMission().empty());
+    s.setConfirmedMission("builtin:shape-gallery");
+    CHECK(s.confirmedMission() == "builtin:shape-gallery");
+    // A later human confirm overwrites it (Instant Action -> builtin:sandbox).
+    CHECK(s.confirm() == Screen::Loading);
+    CHECK(s.confirmedMission() == "builtin:sandbox");
+}
+
 TEST_CASE("MainMenuScreen: confirm Exit to Desktop returns Screen::Quit") {
     MainMenuScreen s(false);
     while (s.selectedIdx() != s.itemCount() - 1)

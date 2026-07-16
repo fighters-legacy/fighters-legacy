@@ -27,6 +27,13 @@ class MainMenuScreen : public IScreen {
         return m_confirmedMission;
     }
 
+    // Auto-start (menu bypass): Game injects the --mission / --auto session before the first frame
+    // by setting the confirmed mission here and driving the same enters-session transition a menu
+    // confirm produces, so the LoadingScreen wiring is identical to a human pressing Enter.
+    void setConfirmedMission(std::string mission) {
+        m_confirmedMission = std::move(mission);
+    }
+
     // Test helpers
     void selectNext();
     void selectPrev();

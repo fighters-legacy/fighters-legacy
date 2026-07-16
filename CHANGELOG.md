@@ -9,6 +9,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: Menu bypass — `--mission <id>` launches straight into a single-player session with that mission and `--auto` enters Free Flight / Join Server (composes with `--connect`/`--observer`), through the exact enters-session path a menu confirm takes
+- **mission**: `builtin:shape-gallery` — a compiled-in visual-verification scene for the per-category placeholder meshes (#886): a museum row of every surface category, floating ordnance exhibits (plain projectile-type objects hold their spawn transform), an armed joinable player slot, and a live fighters+SAM+AAA fight so missiles fly
+- **tools**: `tools/visual_check.sh` / `.ps1` — one-command visual verification: boots a standalone fl-server with the gallery, stages wreck variants by injecting `detonate` into the server's stdin, and opens the game window as an observer ghost with zero menu interaction (`--fly` for the armed pilot seat)
+- **network**: fl-server `--mission` now also accepts a `.yaml`/`.yml` file path (resolution: builtin id → file → pack asset via `MissionSource.h`) — iterate a mission from disk without mounting a pack
+
 - **renderer**: Per-category builtin placeholder meshes — a mesh-less entity now renders a distinct silhouette by category (winged aircraft, missile/bomb/rocket darts, boxy ground vehicle, naval hull, stepped structure) with slumped wreck variants for the persistent categories, replacing the single debug wedge; the tetrahedron is fully removed and a spiky "Unknown" error beacon renders only in bug states (unknown type, unmapped ordinal) (#886)
 - **network**: `MsgEntityTypeDef` carries the entity's `ObjectCategory` + `ProjectileKind` ordinals (332 → 336 bytes, additive tail-append) so the client knows a SAM site from a bomb from a bunker — the placeholder silhouettes, and future picker grouping/map icons, key on them (#886)
 - **entity**: New `ObjectCategory::Structure` (the builtin static target was mis-filed as a ground vehicle) and a `ProjectileKind` vocabulary with an optional `projectile_kind` entity TOML key (`missile`/`bomb`/`rocket`, projectile-only) (#886)
