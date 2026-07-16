@@ -877,6 +877,72 @@ TEST_CASE("Builtin floor plane is wound front-face up") {
     CHECK(storedNormal.y > 0.0f);
 }
 
+// Every per-category placeholder shape (#886) — intact and wreck variant — must be a valid
+// single-primitive GLB whose per-face winding agrees with its stored normals (the same
+// inside-out regression class as the tetrahedron test above; the composite shapes are
+// non-convex, so the centroid check does not apply — winding/normal agreement does).
+TEST_CASE("Builtin placeholder shapes are valid GLBs with winding-consistent normals") {
+    for (uint8_t s = 0; s < static_cast<uint8_t>(BuiltinShape::Count); ++s) {
+        const auto shape = static_cast<BuiltinShape>(s);
+        for (const std::span<const uint8_t> glb : {builtinShapeGlb(shape), builtinDamagedShapeGlb(shape)}) {
+            INFO("shape ordinal " << static_cast<int>(s));
+            REQUIRE(glb.size() > 20u);
+
+            auto readU32 = [&](std::size_t off) {
+                uint32_t v = 0;
+                std::memcpy(&v, glb.data() + off, 4);
+                return v;
+            };
+            auto readVec3 = [&](std::size_t off) {
+                float x, y, z;
+                std::memcpy(&x, glb.data() + off + 0, 4);
+                std::memcpy(&y, glb.data() + off + 4, 4);
+                std::memcpy(&z, glb.data() + off + 8, 4);
+                return glm::vec3{x, y, z};
+            };
+
+            CHECK(readU32(0) == 0x46546C67u); // "glTF" magic
+            CHECK(readU32(4) == 2u);          // glTF 2.0
+            const uint32_t jsonLen = readU32(12);
+            const std::size_t binLenOff = 12u + 8u + jsonLen;
+            REQUIRE(glb.size() >= binLenOff + 8u);
+            const uint32_t binLen = readU32(binLenOff);
+            const std::size_t binStart = binLenOff + 8u;
+            REQUIRE(glb.size() >= binStart + binLen);
+
+            // Non-interleaved, non-indexed: [positions][normals], 24 bytes per vertex,
+            // 3 vertices per face (build_flat_glb layout).
+            REQUIRE(binLen % 24u == 0u);
+            const std::size_t verts = binLen / 24u;
+            REQUIRE(verts % 3u == 0u);
+            const std::size_t normBase = binStart + verts * 12u;
+
+            for (std::size_t f = 0; f < verts / 3u; ++f) {
+                const glm::vec3 v0 = readVec3(binStart + (f * 3u + 0u) * 12u);
+                const glm::vec3 v1 = readVec3(binStart + (f * 3u + 1u) * 12u);
+                const glm::vec3 v2 = readVec3(binStart + (f * 3u + 2u) * 12u);
+                const glm::vec3 storedNormal = readVec3(normBase + (f * 3u) * 12u);
+                CHECK(glm::length(storedNormal) == Catch::Approx(1.0f).margin(1e-3f));
+                const glm::vec3 windingCross = glm::cross(v1 - v0, v2 - v0);
+                CHECK(glm::dot(windingCross, storedNormal) > 0.0f);
+            }
+        }
+    }
+}
+
+// Shapes without a wreck variant return their intact span from builtinDamagedShapeGlb —
+// projectiles despawn on death and the Unknown beacon is a bug marker; callers never branch.
+TEST_CASE("Builtin shapes without a wreck reuse the intact span; out-of-range maps to Unknown") {
+    for (BuiltinShape s : {BuiltinShape::Unknown, BuiltinShape::Missile, BuiltinShape::Bomb, BuiltinShape::Rocket})
+        CHECK(builtinDamagedShapeGlb(s).data() == builtinShapeGlb(s).data());
+    for (BuiltinShape s :
+         {BuiltinShape::AirVehicle, BuiltinShape::GroundVehicle, BuiltinShape::NavalVessel, BuiltinShape::Structure})
+        CHECK(builtinDamagedShapeGlb(s).data() != builtinShapeGlb(s).data());
+    // Defensive: a hostile/garbage ordinal resolves to the Unknown error beacon, never OOB.
+    CHECK(builtinShapeGlb(static_cast<BuiltinShape>(0xEE)).data() == builtinShapeGlb(BuiltinShape::Unknown).data());
+    CHECK(builtinShapeGlb(BuiltinShape::Count).data() == builtinShapeGlb(BuiltinShape::Unknown).data());
+}
+
 // ---------------------------------------------------------------------------
 // textureAssetNameFromUri — the #833 URI convention (settled here)
 // ---------------------------------------------------------------------------
