@@ -66,7 +66,8 @@ struct QuantEntity {
     uint32_t idx{0};
     uint32_t gen{0};
     uint32_t typeIndex{0};
-    bool isFull{false};                // full record: carries typeIndex (and gen)
+    uint16_t factionIndex{0};          // FactionRegistry index; carried on full records, client-cached (#860)
+    bool isFull{false};                // full record: carries typeIndex, factionIndex (and gen)
     bool hasOmega{false};              // carries omega (set only for the receiving peer's own entity)
     double pos[3]{};                   // absolute world position (m)
     float vel[3]{};                    // world-frame velocity (m/s)

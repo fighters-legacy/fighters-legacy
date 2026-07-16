@@ -55,6 +55,22 @@ When switching to Free camera while a player entity exists, the pivot snaps to t
 |---|---|
 | RMB drag | Look offset (yaw / pitch from forward) |
 
+### Observer / ghost camera (`--observer`)
+
+Joining with `--observer` (#851/#859) spawns no aircraft: you free-fly a ghost camera and oversee the
+world instead of flying it. Terrain streams around the camera, and the camera eye you move drives the
+server's interest management, so entities appear around wherever you look.
+
+| Key | Action |
+|---|---|
+| Num1 | Select / cycle to the **next** live entity (by index); the first pick jumps into Chase |
+| Num2 | Select / cycle to the **previous** live entity |
+| F1 / F2 | View the selected entity in Cockpit / Chase |
+| F4 | Return to the free ghost camera |
+
+The selected entity is labelled top-centre by type name and faction (e.g. `[ F-16C | Blue ]`). If the
+entity is destroyed or leaves view, the camera degrades gracefully back to free-fly.
+
 ---
 
 ## Flight controls

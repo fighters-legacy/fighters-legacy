@@ -27,6 +27,8 @@
 #include "net/SnapshotCompression.h"
 #include "net/WireCodec.h"
 #include "weather/WeatherController.h"
+#include "world/FactionDef.h"
+#include "world/FactionRegistry.h"
 
 #include <algorithm>
 #include <cassert>
@@ -961,7 +963,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         qe.idx = st.id.index;
         qe.gen = st.id.generation;
         qe.typeIndex = st.typeIndex;
-        qe.hasOmega = false; // the once-encoded blob never carries omega (own record re-encoded per peer)
+        qe.factionIndex = st.factionIndex; // #860: client-cached like typeIndex, drives the observer picker label
+        qe.hasOmega = false;               // the once-encoded blob never carries omega (own record re-encoded per peer)
         qe.pos[0] = st.transform.pos[0];
         qe.pos[1] = st.transform.pos[1];
         qe.pos[2] = st.transform.pos[2];
@@ -1242,6 +1245,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                     qe.idx = state.id.index;
                     qe.gen = state.id.generation;
                     qe.typeIndex = state.typeIndex;
+                    qe.factionIndex = state.factionIndex; // #860
                     qe.isFull = isFull;
                     qe.hasOmega = true; // the own record alone carries omega
                     qe.pos[0] = state.transform.pos[0];
@@ -3168,11 +3172,36 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
         const PayloadEffect payload = m_payloadResolver ? m_payloadResolver(*def) : PayloadEffect{};
         typeDef.payloadMassKg = payload.extra_mass_kg;
         typeDef.payloadCd0 = payload.extra_cd0;
+        // Friendly display name for the observer entity picker (#860); empty falls back to id client-side.
+        std::snprintf(typeDef.name, sizeof(typeDef.name), "%s", def->name.c_str());
 
         appendMsg(buf, typeDef);
     }
 
     m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/true);
+
+    // Faction id/name table (#860): one reliable packet of concatenated MsgFactionDef records, so the
+    // client can name the faction behind each entity's snapshot factionIndex. Skipped when no registry
+    // is configured (the client then shows the faction index alone).
+    if (m_factionRegistry) {
+        const uint16_t factionCount = m_factionRegistry->count();
+        if (factionCount > 0) {
+            std::vector<uint8_t> fbuf;
+            fbuf.reserve(static_cast<std::size_t>(factionCount) * sizeof(MsgFactionDef));
+            for (uint16_t fi = 0; fi < factionCount; ++fi) {
+                const FactionDef* fdef = m_factionRegistry->get(fi);
+                if (!fdef)
+                    continue;
+                MsgFactionDef fmsg{};
+                fmsg.factionIndex = fi;
+                std::snprintf(fmsg.id, sizeof(fmsg.id), "%s", fdef->id.c_str());
+                std::snprintf(fmsg.name, sizeof(fmsg.name), "%s", fdef->name.c_str());
+                appendMsg(fbuf, fmsg);
+            }
+            if (!fbuf.empty())
+                m_net.send(peerId, fbuf.data(), fbuf.size(), /*reliable=*/true);
+        }
+    }
 }
 
 void WorldBroadcaster::sendConnectRefusal(uint32_t peerId, ConnectRefusalCode code, const char* reason) {

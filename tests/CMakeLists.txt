@@ -845,6 +845,14 @@ target_include_directories(test_connect_args PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
 catch_discover_tests(test_connect_args)
 
+# Observer entity picker (#860): pure logic over EntityRenderEntry; engine-render supplies the header +
+# GLM include dirs (no SDL/rendering).
+add_executable(test_entity_selector test_entity_selector.cpp)
+target_link_libraries(test_entity_selector PRIVATE Catch2::Catch2WithMain engine-render)
+target_include_directories(test_entity_selector PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
+catch_discover_tests(test_entity_selector)
+
 # The client/server flight-model parity gate (#811): drives the real WorldBroadcaster connect path
 # and the real client-side resolver, and asserts the two integrate the same aeroplane.
 add_executable(test_prediction_parity test_prediction_parity.cpp

@@ -118,12 +118,16 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             td.mesh[sizeof(td.mesh) - 1] = '\0';
             td.dmgMesh[sizeof(td.dmgMesh) - 1] = '\0';
             td.flightModel[sizeof(td.flightModel) - 1] = '\0';
+            td.name[sizeof(td.name) - 1] = '\0';
             if (registry.findById(td.id))
                 continue; // already registered
             fl::EntityDef def;
             def.id = td.id;
             def.mesh = td.mesh;
             def.classicDamageMesh = td.dmgMesh;
+            // Friendly display name for the observer entity picker (#860); empty on the wire means the
+            // picker falls back to the id.
+            def.name = td.name[0] ? td.name : td.id;
             // Which aircraft to integrate, and what its default loadout costs (#811/#812). Both
             // arrive on the wire because the client must not re-derive them: when it did, it
             // derived them wrong and flew a different aeroplane from the server.
@@ -219,8 +223,8 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
 
             auto kit = m_knownEntities.find(qe.idx);
             if (qe.isFull) {
-                // Full record: typeIndex + gen on the wire; refresh the cache.
-                m_knownEntities[qe.idx] = {static_cast<uint16_t>(qe.gen), qe.typeIndex};
+                // Full record: typeIndex + factionIndex + gen on the wire; refresh the cache.
+                m_knownEntities[qe.idx] = {static_cast<uint16_t>(qe.gen), qe.typeIndex, qe.factionIndex};
             } else {
                 if (kit == m_knownEntities.end())
                     continue; // full record was dropped; entity reappears on the next baseline tick
@@ -229,12 +233,14 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
                 if (!genPresent)
                     qe.gen = kit->second.gen; // cached generation
                 qe.typeIndex = kit->second.typeIndex;
+                qe.factionIndex = kit->second.factionIndex; // #860: cached like typeIndex
             }
 
             fl::EntityRenderEntry re;
             re.entityIdx = qe.idx;
             re.entityGen = qe.gen;
             re.typeIndex = qe.typeIndex;
+            re.factionIndex = qe.factionIndex;
             re.position = {qe.pos[0], qe.pos[1], qe.pos[2]};
             re.velocity = {qe.vel[0], qe.vel[1], qe.vel[2]};
             // Wire quaternion order x,y,z,w — glm::quat constructor is (w,x,y,z).
@@ -500,6 +506,19 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
                 std::snprintf(banner, sizeof(banner), "DESTROYED %s", whom);
                 notice->setNotice(banner, 0, 5);
             }
+        }
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::FactionDef)) {
+        // Faction index -> name table (#860), one reliable packet of concatenated records. Store the
+        // display names so the observer entity picker can label an entity's faction from its snapshot
+        // factionIndex. Force-terminate the fixed char[] fields before treating them as C strings.
+        const std::size_t count = size / sizeof(fl::MsgFactionDef);
+        for (std::size_t i = 0; i < count; ++i) {
+            fl::MsgFactionDef fd;
+            if (!fl::readRecordAt(data, size, i * sizeof(fd), fd))
+                break;
+            fd.id[sizeof(fd.id) - 1] = '\0';
+            fd.name[sizeof(fd.name) - 1] = '\0';
+            m_factionNames[fd.factionIndex] = fd.name[0] ? fd.name : fd.id;
         }
     }
     // Unknown msgIds: silently discard

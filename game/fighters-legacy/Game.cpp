@@ -945,6 +945,7 @@ void Game::startGame(const std::string& mission) {
         fsd.env = &d.services.env;
         fsd.clientNet = d.session.clientNet.get();
         fsd.clientNetHandler = d.session.clientHandler.get();
+        fsd.entityRegistry = &d.services.entityRegistry;
         fsd.joystick = d.services.p.joystick.get();
         fsd.userConfig = &*d.services.userConfig;
         fsd.inspector = d.session.inspector ? &*d.session.inspector : nullptr;

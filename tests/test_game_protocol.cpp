@@ -15,10 +15,15 @@
 
 TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game_protocol]") {
     CHECK(sizeof(fl::MsgHello) == 4u);
-    CHECK(sizeof(fl::MsgConnectAck) == 20u);          // #853: +grantedRole @16 (still record-aligned)
-    CHECK(sizeof(fl::MsgConnectRequest) == 72u);      // #853: role + entity type + trailing pack manifest
-    CHECK(sizeof(fl::PackManifestEntry) == 128u);     // #872 wire half: id + version + reserved hash
-    CHECK(sizeof(fl::MsgEntityTypeDef) == 268u);      // 4 + 64 + 64 + 64 + 64 + 4 + 4 (#811 tail-append)
+    CHECK(sizeof(fl::MsgConnectAck) == 20u);      // #853: +grantedRole @16 (still record-aligned)
+    CHECK(sizeof(fl::MsgConnectRequest) == 72u);  // #853: role + entity type + trailing pack manifest
+    CHECK(sizeof(fl::PackManifestEntry) == 128u); // #872 wire half: id + version + reserved hash
+    CHECK(sizeof(fl::MsgEntityTypeDef) == 332u);  // #860 tail-appended name[64] (268 -> 332)
+    CHECK(sizeof(fl::MsgFactionDef) == 132u);     // #860: 1+1+2 + 64 + 64
+    CHECK(offsetof(fl::MsgEntityTypeDef, name) == 268u);
+    CHECK(offsetof(fl::MsgFactionDef, factionIndex) == 2u);
+    CHECK(offsetof(fl::MsgFactionDef, id) == 4u);
+    CHECK(offsetof(fl::MsgFactionDef, name) == 68u);
     CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 24u); // #725: origin table + record stream follow the header
     CHECK(sizeof(fl::MsgClientInput) == 80u);         // #858: +cameraEye[3] double @56 (observer interest)
     CHECK(sizeof(fl::MsgHeartbeat) == 16u);
