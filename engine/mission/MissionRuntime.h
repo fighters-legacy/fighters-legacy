@@ -53,6 +53,12 @@ class MissionRuntime {
     // every `evalIntervalTicks` (and on the first call), so predicate checks run at ~1 Hz, not 60 Hz.
     void step(uint64_t tickIndex);
 
+    // Bind a mission object id to a live entity, or unbind it with an invalid EntityId (#884). The
+    // caller (fl-server) wires this to the connect handshake so a pilot claiming a player slot registers
+    // its spawned aircraft under the slot's id, and destroy(<slot>) tracks the real aircraft instead of
+    // reading "never spawned -> destroyed" from t=0. Sim-thread only.
+    void registerObjectEntity(const std::string& objectId, EntityId eid);
+
     [[nodiscard]] const MissionOutcome& outcome() const noexcept {
         return m_outcome;
     }

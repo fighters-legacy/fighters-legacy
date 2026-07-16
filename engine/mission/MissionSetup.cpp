@@ -79,6 +79,7 @@ MissionSetupResult applyMission(const Mission& mission, EntityManager& em, Facti
 
         if (obj.playerSlot) {
             PlayerSlot slot;
+            slot.id = obj.id; // for the destroy(<id>) binding once a pilot claims the slot (#884)
             slot.type = obj.type;
             slot.factionIndex = fi;
             slot.pos[0] = obj.pos[0];

@@ -410,12 +410,23 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // this. `factionIndex` indexes the FactionRegistry handed to setFactionRegistry; `quat` is the
     // resolved spawn orientation (heading already placed on the local tangent frame at spawn time).
     struct MissionSpawnSlot {
+        std::string missionObjectId; // the mission object id this slot came from (#884), reported to
+                                     // the mission-slot binder so destroy(<id>) tracks the pilot
         std::string entityType;
         uint16_t factionIndex{0};
         double pos[3]{};
         float quat[4]{0.f, 0.f, 0.f, 1.f};
         float airspeed{kAutoSpawnAirspeed}; // initial airspeed for the joining pilot (#883); auto = cruise
     };
+
+    // Notified when a pilot claims/leaves a mission player slot (#884): (missionObjectId, entity). A
+    // VALID entity = the pilot's aircraft now occupies the slot; an INVALID one = the slot was freed
+    // (pilot disconnected). fl-server wires this to MissionRuntime::registerObjectEntity so the objective
+    // evaluator's destroy(<slot-id>) tracks the live aircraft instead of firing from t=0. Sim-thread.
+    using MissionSlotBinder = std::function<void(const std::string& missionObjectId, EntityId entity)>;
+    void setMissionSlotBinder(MissionSlotBinder fn) {
+        m_missionSlotBinder = std::move(fn);
+    }
 
     // Install the mission's player slots. When non-empty, a connecting pilot is assigned the next open
     // slot (its type/faction/spawn) instead of the round-robin setSpawnPoints() + [world] player_faction
@@ -963,6 +974,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     std::vector<MissionSpawnSlot> m_missionSlots;
     std::vector<uint32_t> m_slotOccupant;
     std::unordered_map<uint32_t, int> m_peerSlot;
+    MissionSlotBinder m_missionSlotBinder; // notified on slot claim/free for destroy(<id>) tracking (#884)
 
     std::unordered_set<std::string> m_bannedAddresses; // in-memory ban list; sim-thread only
 

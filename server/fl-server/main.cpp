@@ -983,6 +983,7 @@ int main(int argc, char** argv) {
                 slots.reserve(setup.playerSlots.size());
                 for (const fl::PlayerSlot& ps : setup.playerSlots) {
                     fl::WorldBroadcaster::MissionSpawnSlot s;
+                    s.missionObjectId = ps.id; // so destroy(<slot-id>) binds the pilot's aircraft (#884)
                     s.entityType = ps.type;
                     s.factionIndex = ps.factionIndex;
                     s.pos[0] = ps.pos[0];
@@ -1001,8 +1002,15 @@ int main(int argc, char** argv) {
                 // cadence internally). mission_success / mission_failure drive the objective state
                 // machine; other `do` actions route through the injected dispatcher (a validated-command
                 // seam — logged for now until the mission action grammar is mapped onto the admin path).
+                // Seed the objective evaluator with the player slots too, mapped to an INVALID entity so
+                // an unoccupied slot reads as "not destroyed" until a pilot claims it (#884). The
+                // mission-slot binder below swaps in the pilot's real aircraft on connect.
+                std::vector<std::pair<std::string, fl::EntityId>> objectEntities = std::move(setup.objectEntities);
+                for (const fl::PlayerSlot& ps : setup.playerSlots)
+                    objectEntities.emplace_back(ps.id, fl::EntityId{});
+
                 missionRuntime = std::make_unique<fl::MissionRuntime>(
-                    parsed.mission, std::move(setup.objectEntities), entityManager, [log](std::string_view action) {
+                    parsed.mission, std::move(objectEntities), entityManager, [log](std::string_view action) {
                         char m[224];
                         std::snprintf(m, sizeof(m), "mission action (seam; not yet routed): %.140s",
                                       std::string(action).c_str());
@@ -1016,6 +1024,12 @@ int main(int argc, char** argv) {
                     log->log(LogLevel::Info, __FILE__, __LINE__, m);
                 });
                 broadcaster.setMissionTickHook([rt = missionRuntime.get()](uint64_t t) { rt->step(t); });
+                // Bind a pilot's aircraft to its player-slot id on connect (and unbind on disconnect), so
+                // destroy(<slot-id>) tracks the live aircraft instead of firing at t=0 (#884). Fired from
+                // the handshake on the sim thread — the same thread that steps the runtime.
+                broadcaster.setMissionSlotBinder([rt = missionRuntime.get()](const std::string& id, fl::EntityId eid) {
+                    rt->registerObjectEntity(id, eid);
+                });
                 loadedMissionName = parsed.mission.name;
                 loadedMissionSpawned = setup.spawned.size();
 

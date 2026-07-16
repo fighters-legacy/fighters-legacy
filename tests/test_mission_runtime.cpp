@@ -506,6 +506,42 @@ TEST_CASE("MissionRuntime: destroy(<id>) fires when the object's entity dies", "
     CHECK(rt.outcome().state == MissionState::Complete);
 }
 
+TEST_CASE("MissionRuntime: destroy(<player-slot>) tracks the bound pilot, not t=0 (#884)", "[mission-runtime]") {
+    NullLogger log;
+    EntityTypeRegistry reg;
+    reg.registerType(makeDef("test:fighter"));
+    EntityManager em(log, reg);
+
+    // A player slot is seeded with an INVALID entity (unoccupied). Before the fix, destroy(player1)
+    // read "never spawned -> destroyed" and failed the mission at 0.0 s, before anyone connected.
+    Mission m = missionWith({{"destroy(player1)", "mission_failure"}});
+    MissionRuntime rt(m, {{"player1", EntityId{}}}, em);
+    rt.setEvalIntervalTicks(1);
+
+    rt.step(0);
+    CHECK(rt.outcome().state == MissionState::Active); // unoccupied slot != destroyed
+
+    // A pilot claims the slot: bind its aircraft; destroy() stays false while it lives.
+    EntityTransform t{};
+    const EntityId pilot = em.spawn("test:fighter", t);
+    REQUIRE(pilot.valid());
+    rt.registerObjectEntity("player1", pilot);
+    rt.step(60);
+    CHECK(rt.outcome().state == MissionState::Active);
+
+    // The pilot disconnects: the slot is unbound and reads as unoccupied again (not destroyed).
+    rt.registerObjectEntity("player1", EntityId{});
+    rt.step(120);
+    CHECK(rt.outcome().state == MissionState::Active);
+
+    // A pilot re-occupies the slot and is then destroyed -> the failure fires.
+    rt.registerObjectEntity("player1", pilot);
+    em.kill(pilot);
+    em.onTick(1.0 / 60.0, 181);
+    rt.step(180);
+    CHECK(rt.outcome().state == MissionState::Failed);
+}
+
 TEST_CASE("MissionRuntime: triggers fire in declaration order; non-terminal actions dispatch", "[mission-runtime]") {
     NullLogger log;
     EntityTypeRegistry reg;

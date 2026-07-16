@@ -1599,8 +1599,14 @@ void WorldBroadcaster::releaseMissionSlot(uint32_t peerId) {
     if (it == m_peerSlot.end())
         return;
     const int idx = it->second;
-    if (idx >= 0 && static_cast<std::size_t>(idx) < m_slotOccupant.size())
+    if (idx >= 0 && static_cast<std::size_t>(idx) < m_slotOccupant.size()) {
         m_slotOccupant[idx] = kSlotFree;
+        // Unbind the mission object id (#884): the slot is open again, so destroy(<id>) must report the
+        // slot as unoccupied (not destroyed) rather than tracking the just-despawned aircraft.
+        const MissionSpawnSlot& slot = m_missionSlots[static_cast<std::size_t>(idx)];
+        if (m_missionSlotBinder && !slot.missionObjectId.empty())
+            m_missionSlotBinder(slot.missionObjectId, EntityId{});
+    }
     m_peerSlot.erase(it);
 }
 
@@ -1731,6 +1737,10 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
             if (!assigned.valid()) {
                 releaseMissionSlot(peerId); // slot type unspawnable — free it and use the default path
                 assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
+            } else if (m_missionSlotBinder && !slot.missionObjectId.empty()) {
+                // Register the pilot's aircraft under the slot's mission object id so destroy(<id>) tracks
+                // it (#884). slot is a reference into m_missionSlots; read its id before any further work.
+                m_missionSlotBinder(slot.missionObjectId, assigned);
             }
         } else {
             assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));

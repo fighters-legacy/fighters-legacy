@@ -30,10 +30,29 @@ bool MissionRuntime::isObjectDestroyed(const std::string& objectId) const {
     for (const auto& [id, eid] : m_objectEntities) {
         if (id != objectId)
             continue;
+        // A player slot registered with an invalid EntityId is UNOCCUPIED (waiting for a pilot), which is
+        // NOT destroyed -- otherwise destroy(<player-slot>) is true from t=0, before anyone connects, and
+        // the mission fails at 0.0 s (#884). A valid id resolves to the live aircraft.
+        if (!eid.valid())
+            return false;
         const EntityState* s = m_em.get(eid);
         return !s || s->dead; // gone or dead
     }
     return true; // never spawned (unknown id / spawn failed) -> treat as destroyed
+}
+
+void MissionRuntime::registerObjectEntity(const std::string& objectId, EntityId eid) {
+    // Bind (or, with an invalid eid, unbind) a mission object id to a live entity. Used when the connect
+    // handshake assigns a pilot to a player slot (#884): the slot's id starts mapped to an invalid entity
+    // and is updated here to the pilot's spawned aircraft so destroy(<slot>) tracks it. Sim-thread only
+    // (the spawn seam and step() run on the same thread).
+    for (auto& [id, e] : m_objectEntities) {
+        if (id == objectId) {
+            e = eid;
+            return;
+        }
+    }
+    m_objectEntities.emplace_back(objectId, eid);
 }
 
 bool MissionRuntime::evaluatePredicate(const std::string& on) const {

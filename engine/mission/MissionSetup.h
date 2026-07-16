@@ -27,6 +27,8 @@ using MissionSpawnHook = std::function<void(EntityId, const MissionObject&)>;
 // world entity — the connect handshake assigns a pilot to an open slot (faction/spawn/type) at connect
 // time (#854). Faction 0 = neutral (side not resolvable).
 struct PlayerSlot {
+    std::string id;   // the mission object id (#884), so the objective evaluator can bind the pilot's
+                      // spawned aircraft to destroy(<id>) once a peer claims the slot
     std::string type; // aircraft type id the pilot spawns as
     uint16_t factionIndex{0};
     double pos[3]{};
