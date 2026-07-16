@@ -427,16 +427,18 @@ TEST_CASE("builtinDebugEntityDef is armed across every store class and resolves 
         CHECK(weapons.findById(hp.defaultWeapon.c_str()) != nullptr);
         CHECK(hp.allowed.size() == 1u);
     }
-    // EVERY HardpointType is represented — the whole fire path is provable zero-pack.
-    std::set<HardpointType> kinds;
+    // EVERY WeaponType is mounted somewhere — the whole fire path is provable zero-pack. The
+    // station itself has no kind; what matters is the KINDS OF STORE the loadout carries.
+    std::set<WeaponType> kinds;
     for (const Hardpoint& hp : def.hardpoints)
-        kinds.insert(hp.type);
-    CHECK(kinds.count(HardpointType::Gun) == 1u);
-    CHECK(kinds.count(HardpointType::Missile) == 1u);
-    CHECK(kinds.count(HardpointType::Bomb) == 1u);
-    CHECK(kinds.count(HardpointType::Rocket) == 1u);
-    CHECK(kinds.count(HardpointType::Fuel) == 1u);
-    CHECK(kinds.count(HardpointType::Pod) == 1u);
+        if (const WeaponDef* w = weapons.findById(hp.defaultWeapon.c_str()))
+            kinds.insert(w->type);
+    CHECK(kinds.count(WeaponType::Gun) == 1u);
+    CHECK(kinds.count(WeaponType::Missile) == 1u);
+    CHECK(kinds.count(WeaponType::Bomb) == 1u);
+    CHECK(kinds.count(WeaponType::Rocket) == 1u);
+    CHECK(kinds.count(WeaponType::Fuel) == 1u);
+    CHECK(kinds.count(WeaponType::Pod) == 1u);
 }
 
 TEST_CASE("flying builtin stores get projectile entity types; gun, drop tank, and pod do not (#862)") {

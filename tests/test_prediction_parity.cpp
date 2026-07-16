@@ -367,7 +367,6 @@ TEST_CASE("a non-zero payload reaches BOTH integrators and they still agree", "[
     EntityDef armed = parseEntityDef(entityToml());
     Hardpoint hp;
     hp.slot = 1;
-    hp.type = HardpointType::Missile;
     hp.allowed = {"fl-base:aim9p"};
     hp.defaultWeapon = "fl-base:aim9p";
     armed.hardpoints = {hp, hp};

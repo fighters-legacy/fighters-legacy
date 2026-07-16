@@ -8670,12 +8670,10 @@ fl::EntityDef makeArmedDebugDef() {
     fl::EntityDef def = makeDebugDef();
     fl::Hardpoint gun;
     gun.slot = 0;
-    gun.type = fl::HardpointType::Gun;
     gun.allowed = {"fp:gun"};
     gun.defaultWeapon = "fp:gun";
     fl::Hardpoint rail;
     rail.slot = 1;
-    rail.type = fl::HardpointType::Missile;
     rail.allowed = {"fp:aim"};
     rail.defaultWeapon = "fp:aim";
     def.hardpoints = {gun, rail};

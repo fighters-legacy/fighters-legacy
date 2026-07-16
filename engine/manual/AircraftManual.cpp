@@ -32,22 +32,44 @@ std::string speedStr(float mps) {
     return fmt("%.0f kt", mps * kMpsToKt) + fmt(" (%.0f m/s)", mps);
 }
 
-const char* hardpointTypeName(HardpointType t) {
+const char* weaponTypeName(WeaponType t) {
     switch (t) {
-    case HardpointType::Missile:
+    case WeaponType::Missile:
         return "missile";
-    case HardpointType::Bomb:
+    case WeaponType::Bomb:
         return "bomb";
-    case HardpointType::Rocket:
+    case WeaponType::Rocket:
         return "rocket";
-    case HardpointType::Gun:
+    case WeaponType::Gun:
         return "gun";
-    case HardpointType::Fuel:
+    case WeaponType::Fuel:
         return "fuel";
-    case HardpointType::Pod:
+    case WeaponType::Pod:
         return "pod";
     }
     return "?";
+}
+
+// A station's kind is whatever its allowed stores are: one kind -> that name, several -> "multi-role".
+// Stations have no type of their own; the allowed list is the whole compatibility contract.
+std::string stationKind(const Hardpoint& hp, const WeaponRegistry* weapons) {
+    if (!weapons)
+        return {};
+    std::string kind;
+    bool mixed = false;
+    for (const std::string& id : hp.allowed) {
+        const WeaponDef* w = weapons->findById(id);
+        if (!w)
+            continue;
+        const char* name = weaponTypeName(w->type);
+        if (kind.empty())
+            kind = name;
+        else if (kind != name)
+            mixed = true;
+    }
+    if (kind.empty())
+        return {};
+    return mixed ? "multi-role" : kind;
 }
 
 const char* sensorTypeName(sensor::SensorType t) {
@@ -171,7 +193,9 @@ AircraftManual buildAircraftManual(const ManualSources& src) {
         sec.title = "Stations";
         for (const Hardpoint& hp : def.hardpoints) {
             std::ostringstream label;
-            label << "station " << hp.slot << " (" << hardpointTypeName(hp.type) << ")";
+            label << "station " << hp.slot;
+            if (const std::string kind = stationKind(hp, src.weapons); !kind.empty())
+                label << " (" << kind << ")";
 
             std::ostringstream value;
             if (hp.defaultWeapon.empty()) {

@@ -147,8 +147,7 @@ uint32_t registerProjectileEntityDefs(const WeaponRegistry& weapons, EntityTypeR
         def.name = w->name;
         def.category = ObjectCategory::Projectile;
         // Explicit switch, never an ordinal cast: WeaponType and ProjectileKind are parallel
-        // vocabularies with different ordinals (the same trap as WeaponType vs HardpointType,
-        // whose Pod/Fuel ordinals are swapped).
+        // vocabularies with different ordinals -- an ordinal cast is a silent kind-swap trap.
         switch (w->type) {
         case WeaponType::Missile:
             def.projectileKind = ProjectileKind::Missile;
@@ -231,24 +230,20 @@ EntityDef builtinDebugEntityDef() {
 
     // Armed (#440/#862): a cannon, IR + radar + SARH rails, a bomb, a rocket pod, a drop tank, and a
     // sensor pod — every sandbox/debug peer spawns able to exercise the WHOLE fire path (every
-    // WeaponType and every HardpointType, incl. the inert Fuel/Pod stores) with zero content mounted.
-    auto hp = [](int slot, HardpointType type, const char* weapon) {
+    // WeaponType, incl. the inert Fuel/Pod stores) with zero content mounted. Stations have no
+    // kind of their own; each one's allowed list is its whole compatibility contract.
+    auto hp = [](int slot, const char* weapon) {
         Hardpoint h;
         h.slot = slot;
-        h.type = type;
         h.allowed = {weapon};
         h.defaultWeapon = weapon;
         return h;
     };
     def.hardpoints = {
-        hp(0, HardpointType::Gun, BuiltinWeapon::cannon().id.c_str()),
-        hp(1, HardpointType::Missile, BuiltinWeapon::irMissile().id.c_str()),
-        hp(2, HardpointType::Missile, BuiltinWeapon::radarMissile().id.c_str()),
-        hp(3, HardpointType::Missile, BuiltinWeapon::sarhMissile().id.c_str()),
-        hp(4, HardpointType::Bomb, BuiltinWeapon::bomb().id.c_str()),
-        hp(5, HardpointType::Rocket, BuiltinWeapon::rocketPod().id.c_str()),
-        hp(6, HardpointType::Fuel, BuiltinWeapon::dropTank().id.c_str()),
-        hp(7, HardpointType::Pod, BuiltinWeapon::pod().id.c_str()),
+        hp(0, BuiltinWeapon::cannon().id.c_str()),       hp(1, BuiltinWeapon::irMissile().id.c_str()),
+        hp(2, BuiltinWeapon::radarMissile().id.c_str()), hp(3, BuiltinWeapon::sarhMissile().id.c_str()),
+        hp(4, BuiltinWeapon::bomb().id.c_str()),         hp(5, BuiltinWeapon::rocketPod().id.c_str()),
+        hp(6, BuiltinWeapon::dropTank().id.c_str()),     hp(7, BuiltinWeapon::pod().id.c_str()),
     };
     return def;
 }
@@ -325,7 +320,6 @@ EntityDef builtinSamSiteDef() {
     def.sensorIds = {"builtin:sam-radar"};
     Hardpoint launcher;
     launcher.slot = 0;
-    launcher.type = HardpointType::Missile;
     launcher.allowed = {BuiltinWeapon::sarhMissile().id};
     launcher.defaultWeapon = BuiltinWeapon::sarhMissile().id;
     def.hardpoints = {launcher};
@@ -340,7 +334,6 @@ EntityDef builtinAaaDef() {
                                    /*rcs=*/2.f, /*ir=*/2.f, /*visual=*/2.f, /*collision=*/8.f);
     Hardpoint gun;
     gun.slot = 0;
-    gun.type = HardpointType::Gun;
     gun.allowed = {BuiltinWeapon::cannon().id};
     gun.defaultWeapon = BuiltinWeapon::cannon().id;
     def.hardpoints = {gun};

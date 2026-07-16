@@ -57,10 +57,9 @@ WeaponDef weapon(const std::string& id, WeaponType type, float massKg, float dra
     return w;
 }
 
-Hardpoint station(int slot, HardpointType type, std::vector<std::string> allowed, std::string def) {
+Hardpoint station(int slot, std::vector<std::string> allowed, std::string def) {
     Hardpoint hp;
     hp.slot = slot;
-    hp.type = type;
     hp.allowed = std::move(allowed);
     hp.defaultWeapon = std::move(def);
     return hp;
@@ -72,10 +71,10 @@ EntityDef f5e() {
     def.id = "fl-base:f5e";
     def.name = "F-5E Tiger II";
     def.hardpoints = {
-        station(1, HardpointType::Missile, {"fl-base:aim9p"}, "fl-base:aim9p"),
-        station(2, HardpointType::Missile, {"fl-base:aim9p"}, "fl-base:aim9p"),
-        station(3, HardpointType::Fuel, {"fl-base:tank150"}, "fl-base:tank150"),
-        station(4, HardpointType::Gun, {"fl-base:m39a2"}, "fl-base:m39a2"),
+        station(1, {"fl-base:aim9p"}, "fl-base:aim9p"),
+        station(2, {"fl-base:aim9p"}, "fl-base:aim9p"),
+        station(3, {"fl-base:tank150"}, "fl-base:tank150"),
+        station(4, {"fl-base:m39a2"}, "fl-base:m39a2"),
     };
     return def;
 }
@@ -165,7 +164,7 @@ TEST_CASE("defaultPayload counts a Fuel drop-tank store (#862)", "[loadout]") {
 
     EntityDef def;
     def.id = "fl-base:jet";
-    def.hardpoints = {station(1, HardpointType::Fuel, {"fl-base:tank150"}, "fl-base:tank150")};
+    def.hardpoints = {station(1, {"fl-base:tank150"}, "fl-base:tank150")};
 
     const PayloadEffect p = defaultPayload(def, reg, log);
 
@@ -180,7 +179,7 @@ TEST_CASE("defaultPayload: an unknown store id yields a clean airframe and ONE E
 
     EntityDef def;
     def.id = "fl-base:jet";
-    def.hardpoints = {station(1, HardpointType::Missile, {"fl-base:typo"}, "fl-base:typo")};
+    def.hardpoints = {station(1, {"fl-base:typo"}, "fl-base:typo")};
 
     const PayloadEffect p = defaultPayload(def, reg, log);
 
@@ -201,7 +200,7 @@ TEST_CASE("defaultPayload rejects a default that is not in the station's allowed
     def.id = "fl-base:jet";
     // The store exists, but this airframe does not clear it -- honouring it silently would let a
     // content bug arm an aircraft with something it cannot carry.
-    def.hardpoints = {station(1, HardpointType::Missile, {"fl-base:aim9p"}, "fl-base:aim120")};
+    def.hardpoints = {station(1, {"fl-base:aim9p"}, "fl-base:aim120")};
 
     const PayloadEffect p = defaultPayload(def, reg, log);
 
@@ -209,36 +208,25 @@ TEST_CASE("defaultPayload rejects a default that is not in the station's allowed
     CHECK(log.has(LogLevel::Error, "allowed list"));
 }
 
-TEST_CASE("defaultPayload rejects a store of the wrong kind for the station", "[loadout]") {
+TEST_CASE("defaultPayload: a multi-role station carries any allowed kind", "[loadout]") {
+    // Stations have no kind of their own -- the allowed list is the whole compatibility contract.
+    // A wet pylon that clears a bomb AND a drop tank is a real airframe (an F-16's stations 4/6),
+    // and whichever allowed store is the default, its mass and drag count the same way.
     RecordingLog log;
     WeaponRegistry reg;
     reg.registerWeapon(weapon("fl-base:mk82", WeaponType::Bomb, 227.f, 0.004f));
+    reg.registerWeapon(weapon("fl-base:tank370", WeaponType::Fuel, 1160.f, 0.006f));
 
     EntityDef def;
     def.id = "fl-base:jet";
-    def.hardpoints = {station(1, HardpointType::Missile, {"fl-base:mk82"}, "fl-base:mk82")};
+    def.hardpoints = {station(1, {"fl-base:mk82", "fl-base:tank370"}, "fl-base:mk82"),
+                      station(2, {"fl-base:mk82", "fl-base:tank370"}, "fl-base:tank370")};
 
     const PayloadEffect p = defaultPayload(def, reg, log);
 
-    CHECK(p.extra_mass_kg == Approx(0.f));
-    CHECK(log.has(LogLevel::Error, "not that kind of weapon"));
-}
-
-TEST_CASE("defaultPayload rejects a non-tank store on a Fuel station (#862)", "[loadout]") {
-    // The Fuel<->Fuel mapping cuts both ways: a Missile is not a drop tank, so hanging one on a Fuel
-    // station is the same category slip as any other wrong-kind store.
-    RecordingLog log;
-    WeaponRegistry reg;
-    reg.registerWeapon(weapon("fl-base:aim9p", WeaponType::Missile, 85.5f, 0.0012f));
-
-    EntityDef def;
-    def.id = "fl-base:jet";
-    def.hardpoints = {station(1, HardpointType::Fuel, {"fl-base:aim9p"}, "fl-base:aim9p")};
-
-    const PayloadEffect p = defaultPayload(def, reg, log);
-
-    CHECK(p.extra_mass_kg == Approx(0.f));
-    CHECK(log.has(LogLevel::Error, "not that kind of weapon"));
+    CHECK(p.extra_mass_kg == Approx(227.f + 1160.f));
+    CHECK(p.extra_cd0 == Approx(0.004f + 0.006f));
+    CHECK(log.count(LogLevel::Error) == 0);
 }
 
 TEST_CASE("defaultPayload: an empty station is a legitimate loadout", "[loadout]") {
@@ -247,7 +235,7 @@ TEST_CASE("defaultPayload: an empty station is a legitimate loadout", "[loadout]
 
     EntityDef def;
     def.id = "fl-base:jet";
-    def.hardpoints = {station(1, HardpointType::Missile, {"fl-base:aim9p"}, "")};
+    def.hardpoints = {station(1, {"fl-base:aim9p"}, "")};
 
     const PayloadEffect p = defaultPayload(def, reg, log);
 

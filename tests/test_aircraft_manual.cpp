@@ -111,13 +111,11 @@ EntityDef makeEntity() {
 
     Hardpoint tip;
     tip.slot = 1;
-    tip.type = HardpointType::Missile;
     tip.allowed = {"fl-base:aim9p"};
     tip.defaultWeapon = "fl-base:aim9p";
 
     Hardpoint gun;
     gun.slot = 2;
-    gun.type = HardpointType::Gun;
     gun.allowed = {"fl-base:m39a2"};
     gun.defaultWeapon = "fl-base:m39a2";
 

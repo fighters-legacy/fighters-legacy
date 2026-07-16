@@ -1158,15 +1158,13 @@ damage_mesh = "f15c_dmg"   # ASSET NAME -> aircraft/f15c_dmg.glb
 
 [[hardpoints]]
 slot    = 0
-type    = "missile"
 allowed = ["fl-base:aim120c", "fl-base:aim9x"]   # DEF IDS, resolved through the pack index
 default = "fl-base:aim120c"
 
 [[hardpoints]]
-slot    = 4
-type    = "bomb"
-allowed = ["fl-base:gbu12", "fl-base:mk82"]
-default = "fl-base:gbu12"
+slot    = 4                                       # a wet multi-role station: bombs OR a drop tank
+allowed = ["fl-base:gbu12", "fl-base:mk82", "fl-base:tank_600gal"]
+default = ""
 ```
 
 ### `[[hardpoints]]` (optional) — weapon stations
@@ -1182,9 +1180,14 @@ Omit the array entirely for an entity that carries nothing.
 | Field | Type | Description |
 |---|---|---|
 | `slot` | int | Station number, `>= 0`, **unique** within the entity |
-| `type` | string | `missile`, `bomb`, `rocket`, `gun`, `fuel`, `pod` (`fuel`/`pod` occupy a station without being a weapon) |
-| `allowed` | string[] | Weapon IDs this station accepts; must be **non-empty** |
+| `allowed` | string[] | Weapon IDs this station accepts; must be **non-empty**. **This list IS the station's kind**: it may freely mix weapon types, because real multi-role pylons do (a wet wing station carries bombs *or* a rocket pod *or* a drop tank) |
 | `default` | string | Pre-loaded weapon ID; must be a member of `allowed` |
+
+A station has no `type` of its own. The old single-kind `type` key is **accepted and ignored**
+(the same migration convention as the flight model's dead `mesh` key): whether a mounted store
+fires or is inert ballast (a `fuel` tank, a `pod`) is decided by the *weapon's* `type`, per
+mount, so one station can honestly offer both. Kind-typed stations could not describe any real
+multi-role airframe and duplicated what `allowed` already said.
 
 An empty `default` (`""`) is a legitimate loadout choice — the station exists, can carry the
 `allowed` stores, and starts empty (#828).
