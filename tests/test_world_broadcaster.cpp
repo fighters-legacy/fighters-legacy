@@ -127,6 +127,31 @@ static void connectPilotPeer(fl::WorldBroadcaster& b, MockNetwork& net, uint32_t
     b.onReceive(peerId, &req, sizeof(req));
 }
 
+// Drive the #853 handshake for an OBSERVER peer (#857): admitted with a role but NO entity/controller.
+// It still receives snapshots (interest centered on its camera eye, #858), so this is the fixture for
+// observer interest tests. Returns without injecting a request if onConnect rejected the peer.
+static void connectObserverPeer(fl::WorldBroadcaster& b, MockNetwork& net, uint32_t peerId) {
+    const std::size_t before = net.sends.size();
+    b.onConnect(peerId);
+    const bool rejected = net.sends.size() > before && !net.sends.back().empty() &&
+                          net.sends.back()[0] == static_cast<uint8_t>(fl::MsgId::ConnectRefusal);
+    if (rejected)
+        return;
+    fl::MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Observer);
+    b.onReceive(peerId, &req, sizeof(req));
+}
+
+// Build a MsgClientInput carrying only a camera eye world-position (#858) — the observer's viewpoint.
+static fl::MsgClientInput cameraInput(uint32_t seq, double ex, double ey, double ez) {
+    fl::MsgClientInput inp{};
+    inp.seqNum = seq;
+    inp.cameraEye[0] = ex;
+    inp.cameraEye[1] = ey;
+    inp.cameraEye[2] = ez;
+    return inp;
+}
+
 // ---------------------------------------------------------------------------
 // Interest-management snapshot helpers
 // ---------------------------------------------------------------------------
@@ -1441,7 +1466,7 @@ TEST_CASE("WorldBroadcaster: onReceive truncated ClientInput is discarded", "[wo
     connectPilotPeer(broadcaster, net, 0u);
     clearSnapshots(net);
 
-    // Only 10 bytes — less than sizeof(MsgClientInput) = 44.
+    // Only 10 bytes — less than sizeof(MsgClientInput), so it must be discarded as truncated.
     const uint8_t tiny[] = {static_cast<uint8_t>(fl::MsgId::ClientInput), 0, 0, 0, 0, 0, 0, 0, 0, 0};
     broadcaster.onReceive(0u, tiny, sizeof(tiny));
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -5549,6 +5574,49 @@ TEST_CASE("WorldBroadcaster: entity beyond draw distance excluded from peer snap
     // Verify far entity does NOT appear in the full entries
     for (const auto& e : parseFullEntries(snaps[0]))
         CHECK(e.entityIdx != farIdx);
+}
+
+TEST_CASE("WorldBroadcaster: observer interest follows its camera eye (#858)", "[world_broadcaster][interest]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    // One entity 100 km out in +X — outside a 50 km radius around the origin, but a camera parked on
+    // top of it is 0 m away.
+    fl::EntityTransform t{};
+    t.pos[0] = 100'000.0;
+    t.pos[1] = 500.0;
+    const auto id = em.spawn("builtin:debug-entity", t);
+    REQUIRE(id.valid());
+    const uint32_t idx = id.index;
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setDrawDistance(50.f); // 50 km — the entity is out of range of the origin
+    connectObserverPeer(broadcaster, net, 0u);
+
+    auto seesEntity = [&](std::vector<std::vector<uint8_t>> snaps) {
+        REQUIRE(!snaps.empty());
+        for (const auto& e : parseFullEntries(snaps.back()))
+            if (e.entityIdx == idx)
+                return true;
+        return false;
+    };
+
+    // Before any camera input the observer's interest center sits near the origin (the admit-time
+    // seed), so the 100 km entity is interest-out.
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    CHECK_FALSE(seesEntity(snapshotsFor(net, 0)));
+
+    // Move the ghost camera onto the entity: the next snapshot centers interest on the camera eye and
+    // the entity comes into view — the observer sees the world where it is LOOKING, not where it spawned.
+    const fl::MsgClientInput look = cameraInput(1u, 100'000.0, 500.0, 0.0);
+    broadcaster.onReceive(0u, &look, sizeof(look));
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    CHECK(seesEntity(snapshotsFor(net, 0)));
 }
 
 TEST_CASE("WorldBroadcaster: interest management correct at a non-default spatial cell size (#573)",

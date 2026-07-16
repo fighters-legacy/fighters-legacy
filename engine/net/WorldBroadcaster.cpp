@@ -2529,6 +2529,17 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         stored.hasSeq = true;
         stored.lastActivityTick = m_currentTick;
 
+        // Camera-position interest (#858): an entity-less peer (an observer ghost camera, or a dead
+        // peer awaiting respawn) has no aircraft transform to key interest on, so it sends its camera
+        // eye each frame and the snapshot gather centers queryRadius on this point (the entity-less
+        // branch there reads interestCenter). Applied immediately, not jitter-buffered — it drives
+        // culling, not physics, and only needs to be frozen before the parallel peer pass, which this
+        // sim-thread onReceive (which runs before the tick's parallel region) already guarantees.
+        // Ignored for a pilot, whose aircraft transform wins in the gather. Finite-guarded so a
+        // hostile NaN/Inf can't poison the exact-distance / spatial-hash math and blank the world.
+        if (std::isfinite(msg.cameraEye[0]) && std::isfinite(msg.cameraEye[1]) && std::isfinite(msg.cameraEye[2]))
+            stored.interestCenter = glm::dvec3(msg.cameraEye[0], msg.cameraEye[1], msg.cameraEye[2]);
+
         // Clamp and enqueue into the jitter buffer. Control fields (throttle etc.) are
         // written to stored in onTick when the buffer is drained — not here.
         // Sanitize control floats from an untrusted client: reject NaN/Inf FIRST (std::clamp passes

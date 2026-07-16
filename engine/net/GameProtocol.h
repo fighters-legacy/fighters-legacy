@@ -271,8 +271,16 @@ struct MsgClientInput {
     uint8_t selectedStation{255};
     uint8_t reservedB[3]{}; // explicit padding — the layout rule forbids implicit holes
     uint32_t reservedC{0};  // pads to the struct's 8-byte alignment; future fire fields land here
-}; // 56 bytes, align 8
-static_assert(sizeof(MsgClientInput) == 56u, "MsgClientInput wire size changed");
+
+    // Camera eye world-position (#858). The client sends where it is LOOKING FROM each frame so the
+    // server can center interest management on an entity-less peer (an observer ghost camera, or a
+    // dead peer awaiting respawn) — a peer with no aircraft has no transform to key interest on.
+    // Ignored for a pilot (its aircraft transform wins). Double, absolute world metres — matches the
+    // engine's double world positions; ~200 km interest radius makes sub-metre precision irrelevant,
+    // but keeping it double avoids a quantization origin the client does not know. @56, 8-aligned.
+    double cameraEye[3]{};
+}; // 80 bytes, align 8
+static_assert(sizeof(MsgClientInput) == 80u, "MsgClientInput wire size changed");
 static_assert(alignof(MsgClientInput) == 8u, "MsgClientInput alignment changed");
 static_assert(offsetof(MsgClientInput, seqNum) == 4u, "MsgClientInput::seqNum offset changed");
 static_assert(offsetof(MsgClientInput, tickIndex) == 8u, "MsgClientInput::tickIndex offset changed");
@@ -280,6 +288,7 @@ static_assert(offsetof(MsgClientInput, throttle) == 16u, "MsgClientInput::thrott
 static_assert(offsetof(MsgClientInput, viewAxis) == 32u, "MsgClientInput::viewAxis offset changed");
 static_assert(offsetof(MsgClientInput, ackMask) == 44u, "MsgClientInput::ackMask offset changed");
 static_assert(offsetof(MsgClientInput, selectedStation) == 48u, "MsgClientInput::selectedStation offset changed");
+static_assert(offsetof(MsgClientInput, cameraEye) == 56u, "MsgClientInput::cameraEye offset changed");
 
 // Unreliable, server->client, broadcast every 10 sim ticks (~6 Hz at 60 Hz).
 // timeOfDayTenths: encode timeOfDay as uint16 (hours * 10) to keep it 2-aligned.
