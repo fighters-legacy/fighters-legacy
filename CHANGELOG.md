@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **mission**: Airborne mission spawns no longer depart controlled flight at t=0 — an aircraft placed in the air was dropped in at zero airspeed *and* identity orientation (the integrator ignored the spawn transform's velocity and heading), so it tumbled before the pilot could react. Spawns now seed the integrator with the spawn heading and a forward airspeed: a new optional per-object `speed:` (m/s), or a sane cruise default. AI objects and player slots both benefit; the bare no-mission sandbox pilot still spawns stationary (the builtin UFO is controllable at 0 kts) (#883)
+
 ## [0.3.3] - 2026-07-15
 
 ### Added

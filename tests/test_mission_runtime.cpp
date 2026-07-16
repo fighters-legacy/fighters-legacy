@@ -19,8 +19,10 @@
 
 #include "mission_validator.h" // validate-mission's façade — for the parity check
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <string>
 
 using namespace fl;
@@ -309,6 +311,48 @@ triggers: []
     REQUIRE(o.route.size() == 2);
     CHECK(o.route[0][0] == 100.0);
     CHECK(o.route[1][2] == 600.0);
+}
+
+TEST_CASE("parseMission parses an optional airborne speed and rejects a negative one (#883)", "[mission-parser]") {
+    const char* base = R"yaml(
+name: x
+map: y
+layer: z
+time: { hour: 0, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [red]
+objects:
+  - { type: SA10, id: bandit, side: red, pos: [0, 3000, 0], heading: 0, speed: %SPEED% }
+triggers: []
+)yaml";
+
+    {
+        std::string yaml = base;
+        yaml.replace(yaml.find("%SPEED%"), 7, "180");
+        auto r = parseMission(yaml);
+        REQUIRE(r.ok);
+        REQUIRE(r.mission.objects.size() == 1);
+        REQUIRE(r.mission.objects[0].speed.has_value());
+        CHECK(*r.mission.objects[0].speed == Catch::Approx(180.f));
+    }
+    {
+        std::string yaml = base;
+        yaml.replace(yaml.find("%SPEED%"), 7, "-5");
+        auto r = parseMission(yaml);
+        CHECK_FALSE(r.ok);
+        const bool flagged = std::any_of(r.errors.begin(), r.errors.end(), [](const std::string& e) {
+            return e.find("speed must be >= 0") != std::string::npos;
+        });
+        CHECK(flagged);
+    }
+    // Absent speed leaves the optional empty (the engine picks a cruise default at spawn).
+    {
+        std::string yaml = base;
+        yaml.replace(yaml.find(", speed: %SPEED%"), 16, "");
+        auto r = parseMission(yaml);
+        REQUIRE(r.ok);
+        CHECK_FALSE(r.mission.objects[0].speed.has_value());
+    }
 }
 
 TEST_CASE("parseMission rejects a malformed route waypoint", "[mission-parser]") {

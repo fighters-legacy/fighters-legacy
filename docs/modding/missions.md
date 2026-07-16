@@ -119,6 +119,7 @@ objects:
 | `pos` | sequence | yes | exactly 3 numbers: [x, y, z] in metres | World-space spawn position. Y is up; sea level ≈ 0 |
 | `heading` | float | yes | — | Initial heading in degrees (0 = north, clockwise) |
 | `alt` | float | no | — | Altitude above sea level in metres; overrides `pos[1]` if both given |
+| `speed` | float | no | ≥ 0 | Initial airspeed in **m/s** along the object's heading. Absent = a sane cruise default so an airborne object is in stable flight at spawn (an aircraft dropped in at 0 airspeed departs controlled flight); set `0` for a stationary start. Applies to AI objects and player slots alike. |
 | `player` | bool | no | default `false` | When `true`, this object is a **joinable player slot**: the engine does not spawn it as an AI/world entity — a connecting pilot is assigned to it and inherits its faction, spawn position, and aircraft type. Declare more than one for multiplayer. |
 | `ai` | string | no | — | Attach an AI controller (ignored on a player slot). See Scripted bots below. |
 | `route` | sequence | no | each entry is `[x, y, z]` | A waypoint list the object flies. Takes precedence over `ai` when both are given. |

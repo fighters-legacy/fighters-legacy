@@ -165,6 +165,13 @@ namespace fl {
 // into an instant kill -- the pilot should be able to break the aeroplane, but should have to work at it.
 constexpr float kOverGDamagePerG = 6.0f;
 
+// Default airspeed for an airborne spawn that does not ask for a specific one (#883). A gentle cruise
+// (~230 kts) that is comfortably above the stall for the fighters this targets and flyable for the
+// no-stall builtin UFO, so a freshly spawned aircraft — pilot, AI, or mission object — is in stable
+// controlled flight at t=0 rather than dropped in at zero airspeed. A mission tunes it per object with
+// `speed:`; a ground start (#885) passes 0 instead.
+constexpr float kDefaultSpawnAirspeedMps = 120.0f;
+
 // GameProtocol.h must stay stdlib-only (engine-protocol is zero-dep, enforced by fl_assert_zero_dep),
 // so it MIRRORS these two values rather than including the headers that define them. This is the one
 // TU that sees both sides, so this is where the mirrors are checked. If either fires, the wire and
@@ -1523,7 +1530,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
 }
 
 EntityId WorldBroadcaster::spawnPilotEntity(uint32_t peerId, const std::string& entityType, const EntityTransform& t,
-                                            uint16_t faction) {
+                                            uint16_t faction, float initialAirspeed) {
     EntityId id = m_entityManager.spawn(entityType.c_str(), t, peerId);
     if (id.valid()) {
         m_peerEntities[peerId] = id;
@@ -1544,7 +1551,7 @@ EntityId WorldBroadcaster::spawnPilotEntity(uint32_t peerId, const std::string& 
         // down after the controller on disconnect). Start at throttle 0 so the entity is stationary.
         // decimatable=false: a player's input must be sampled every tick for responsiveness (#514).
         addControlledEntity(id, std::make_unique<PeerController>(&m_peerInputs[peerId]), std::move(model), 0.0f,
-                            /*decimatable=*/false);
+                            /*decimatable=*/false, initialAirspeed);
     }
     return id;
 }
@@ -1564,7 +1571,10 @@ EntityId WorldBroadcaster::admitPilot(uint32_t peerId, const std::string& entity
         t.pos[2] = 60.0; // 60 m ahead of origin so peer doesn't overlap sandbox entity 0
         t.pos[1] = static_cast<double>(m_groundElevation.load(std::memory_order_relaxed)) + kSpawnAGL;
     }
-    return spawnPilotEntity(peerId, entityType, t, m_playerFaction);
+    // Sandbox / round-robin fallback path: spawn stationary. The bare no-mission player flies the
+    // builtin UFO, which is controllable at zero airspeed; a mission's airborne player comes through the
+    // slot path below with a real cruise speed (#883).
+    return spawnPilotEntity(peerId, entityType, t, m_playerFaction, /*initialAirspeed=*/0.f);
 }
 
 void WorldBroadcaster::setMissionPlayerSlots(std::vector<MissionSpawnSlot> slots) {
@@ -1717,7 +1727,7 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
             t.pos[2] = slot.pos[2];
             for (int c = 0; c < 4; ++c)
                 t.quat[c] = slot.quat[c];
-            assigned = spawnPilotEntity(peerId, slot.entityType, t, slot.factionIndex);
+            assigned = spawnPilotEntity(peerId, slot.entityType, t, slot.factionIndex, slot.airspeed);
             if (!assigned.valid()) {
                 releaseMissionSlot(peerId); // slot type unspawnable — free it and use the default path
                 assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
@@ -2938,7 +2948,7 @@ std::shared_ptr<const FlightModelData> WorldBroadcaster::resolveFlightModel(Enti
 
 void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityController> controller,
                                            std::shared_ptr<const FlightModelData> model, float initialThrottle,
-                                           bool decimatable) {
+                                           bool decimatable, float initialAirspeed) {
     const EntityState* st = m_entityManager.get(id);
     if (!st)
         return;
@@ -2949,6 +2959,18 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     fs.pos_world[0] = st->transform.pos[0];
     fs.pos_world[1] = st->transform.pos[1];
     fs.pos_world[2] = st->transform.pos[2];
+    // Seed the integrator orientation from the spawn transform. It was left at identity, so the mission
+    // heading baked into the transform quaternion was dropped on the first tick (#883) — an airborne
+    // spawn faced the wrong way AND, with zero body velocity below, tumbled out of controlled flight.
+    fs.quat[0] = st->transform.quat[0];
+    fs.quat[1] = st->transform.quat[1];
+    fs.quat[2] = st->transform.quat[2];
+    fs.quat[3] = st->transform.quat[3];
+    // Initial airspeed along body-forward (+X), so an airborne spawn is in stable, controllable flight
+    // at t=0 (#883). kAutoSpawnAirspeed picks a sane cruise default; a ground start passes 0 (parked,
+    // held static by the integrator's parking hold). Purely body-forward, so it needs no world->body
+    // rotation — the heading rides on fs.quat above.
+    fs.vel_body[0] = (initialAirspeed < 0.f) ? kDefaultSpawnAirspeedMps : initialAirspeed;
     fs.fuel_kg = model->geometry.fuel_kg;
     fs.mass_kg = model->geometry.mass_kg + fs.fuel_kg;
     fs.throttle_actual = initialThrottle;
@@ -3006,7 +3028,7 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
 }
 
 void WorldBroadcaster::registerController(EntityId id, std::unique_ptr<IEntityController> controller,
-                                          std::shared_ptr<const FlightModelData> model) {
+                                          std::shared_ptr<const FlightModelData> model, float initialAirspeed) {
     // An AI aircraft flies ITS OWN aeroplane. When the caller does not hand us a model, resolve the
     // entity type's own flightModelAsset rather than silently defaulting to the builtin UFO -- which
     // is what every `spawn <type> --ai <behavior>` did, so an AI F-5E flew a UFO with an F-5E's mesh
@@ -3014,7 +3036,7 @@ void WorldBroadcaster::registerController(EntityId id, std::unique_ptr<IEntityCo
     if (!model)
         model = resolveFlightModel(id); // logs and returns null if the id is unknown; builtin below
     // AI/scripted entities are decimatable — their sample() may be skipped under tick overrun (#514).
-    addControlledEntity(id, std::move(controller), std::move(model), 0.f, /*decimatable=*/true);
+    addControlledEntity(id, std::move(controller), std::move(model), 0.f, /*decimatable=*/true, initialAirspeed);
 }
 
 bool WorldBroadcaster::setEntityLoadout(EntityId id, const std::vector<std::string>& stores,

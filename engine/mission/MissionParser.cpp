@@ -305,6 +305,16 @@ MissionParseResult parseMission(std::string_view yamlContent) {
             // alt (optional) — overrides pos[1] at spawn
             if (hasKey(obj, "alt"))
                 mo.alt = obj["alt"].as<float>(0.f);
+            // speed (optional) — initial airspeed (m/s) along heading; must be >= 0 (#883)
+            if (hasKey(obj, "speed")) {
+                float sp = obj["speed"].as<float>(-1.f);
+                mo.speed = sp;
+                if (sp < 0.f) {
+                    r.errors.push_back("objects[" + std::to_string(idx) + "].speed must be >= 0 (got " +
+                                       std::to_string(sp) + ")");
+                    r.ok = false;
+                }
+            }
             // player (optional) — a joinable slot rather than a spawned world entity
             if (hasKey(obj, "player"))
                 mo.playerSlot = obj["player"].as<bool>(false);

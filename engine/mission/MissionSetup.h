@@ -5,6 +5,7 @@
 #include "flight/Geodetic.h" // kEarthRadiusM
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -31,6 +32,7 @@ struct PlayerSlot {
     double pos[3]{};
     float headingDeg{0.f};
     float quat[4]{0.f, 0.f, 0.f, 1.f}; // resolved spawn orientation (heading on the local tangent frame)
+    std::optional<float> speed;        // initial airspeed (m/s); absent = a cruise default for the pilot (#883)
 };
 
 struct MissionSetupResult {

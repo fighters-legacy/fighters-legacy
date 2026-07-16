@@ -954,8 +954,13 @@ int main(int argc, char** argv) {
                             }
                         }
                     }
-                    if (ctrl)
-                        broadcaster.registerController(id, std::move(ctrl));
+                    if (ctrl) {
+                        // Initial airspeed (#883): the mission's per-object `speed:` if given, else the
+                        // engine's sane airborne cruise default (kAutoSpawnAirspeed) — so a mission bot
+                        // placed in the air flies instead of tumbling from zero airspeed.
+                        const float airspeed = obj.speed ? *obj.speed : fl::kAutoSpawnAirspeed;
+                        broadcaster.registerController(id, std::move(ctrl), nullptr, airspeed);
+                    }
                     if (!obj.loadout.empty()) {
                         std::vector<std::string> loWarn;
                         if (!broadcaster.setEntityLoadout(id, obj.loadout, loWarn)) {
@@ -985,6 +990,9 @@ int main(int argc, char** argv) {
                     s.pos[2] = ps.pos[2];
                     for (int c = 0; c < 4; ++c)
                         s.quat[c] = ps.quat[c];
+                    // Initial airspeed for the joining pilot (#883): the slot's `speed:` or the engine's
+                    // airborne cruise default, so a mission's airborne player is in stable flight at t=0.
+                    s.airspeed = ps.speed ? *ps.speed : fl::kAutoSpawnAirspeed;
                     slots.push_back(std::move(s));
                 }
                 broadcaster.setMissionPlayerSlots(std::move(slots));

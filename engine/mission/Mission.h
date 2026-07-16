@@ -46,7 +46,9 @@ struct MissionObject {
     std::string side; // must appear in the sides list
     double pos[3]{};  // world-space [x, y, z] metres, Y up
     float headingDeg{0.f};
-    std::optional<float> alt; // MSL altitude (m); overrides pos[1] when present
+    std::optional<float> alt;   // MSL altitude (m); overrides pos[1] when present
+    std::optional<float> speed; // initial airspeed (m/s) along heading; absent = a sane cruise default
+                                // for an airborne start, or 0 for a ground start (#883/#885)
     // `player: true` marks a JOINABLE player slot: applyMission does NOT spawn it as a world entity;
     // it becomes a PlayerSlot the connect handshake assigns a pilot to (#854).
     bool playerSlot{false};
