@@ -181,6 +181,47 @@ TEST_CASE("fm-trim: a payload measurably degrades performance", "[fm_trim]") {
     CHECK(armed.sustained_turn_deg_s < clean.sustained_turn_deg_s);
 }
 
+TEST_CASE("fm-trim: a cambered wing's negative trim alpha is a flight condition, not a failure", "[fm_trim]") {
+    // A LEF-scheduled or cambered deck carries positive CL at alpha 0 (the F-16A's is +0.10),
+    // so above a modest speed the 1 g trim alpha is NEGATIVE. alphaForLoad's old -1 sentinel
+    // made every caller read that as "the wing cannot hold it": the max-level scan broke at
+    // the alpha = 0 crossing (M ~0.4 here, ~0.65 for the real F-16A at sea level) and reported
+    // a top speed that FELL as fuel burned off. The sentinel is NaN now; a negative alpha is
+    // an answer. Every aircraft authored before the F-16A had a symmetric table, which is why
+    // published cambered data had to arrive before this could be seen.
+    std::string cambered{kLightFighter};
+    const auto tbl = cambered.find("[aero.cl_table]");
+    const auto val = cambered.find("values = [", tbl);
+    const auto end = cambered.find("]", val);
+    cambered.replace(val, end - val + 1,
+                     "values = [\n"
+                     "     0.00, 0.00,-0.02, 0.02,\n"
+                     "     0.30, 0.30, 0.32, 0.26,\n"
+                     "     0.65, 0.68, 0.73, 0.58,\n"
+                     "     1.03, 1.09, 1.17, 0.88,\n"
+                     "     1.35, 1.43, 1.53, 1.14,\n"
+                     "     1.49, 1.57, 1.67, 1.24,\n"
+                     "     1.40, 1.47, 1.55, 1.16,\n"
+                     "     1.20, 1.25, 1.33, 1.00,\n"
+                     "]");
+    const FlightModelData d = parseFlightModel(cambered);
+
+    // Sea level, full gross: the alpha = 0 crossing sits near M 0.41. The aircraft has thrust
+    // for far more than that; the scan must sail through the crossing, not break on it.
+    TrimPoint p = at(0.f, 6349.f);
+    const TrimResult r = trim(d, p, {});
+    REQUIRE(r.converged);
+    CHECK(r.max_level_mach > 0.6f);
+
+    // The pinned-Mach path takes the same sentinel: Ps at 1 g above the crossing must be a
+    // real number, not the "no such flight condition" zero.
+    p.mach = 0.55f;
+    p.load_factor = 1.f;
+    const TrimResult rp = trim(d, p, {});
+    REQUIRE(rp.converged);
+    CHECK(rp.ps_mps > 0.f);
+}
+
 TEST_CASE("fm-trim: an aircraft that cannot fly at an altitude reports it rather than guessing", "[fm_trim]") {
     // Heavy, in the stratosphere: there is no speed at which the engine can pay for the drag, so the
     // aircraft genuinely has no performance here. Reporting `converged = false` is the honest answer;
