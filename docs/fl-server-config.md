@@ -29,7 +29,7 @@ multi-key sections). See [Environment variables](#environment-variables) for the
 | `--persistent` | — | Enable persistent world mode (Phase 2 — not yet active) |
 | `--bind <addr>` | IP or hostname | Override `server.bind_address` from the command line; takes precedence over `server.toml` and `FL_BIND_ADDRESS`. Used by the game client when spawning fl-server for single-player mode (`--bind 127.0.0.1`). |
 | `--metrics-json <path>` | file path | Write the per-phase tick-budget JSON to `<path>`; overrides `[metrics] tick_json_path`. See [metrics](#metrics--tick-budget-export). |
-| `--mission <name>` | mission asset name | Load a mission at startup; overrides `[rotation]`. See [rotation](#rotation--scenario-rotation). |
+| `--mission <name>` | mission name | Load a mission at startup; overrides `[rotation]`. Resolution order: a builtin id (`builtin:sandbox`, `builtin:shape-gallery`) → a readable `.yaml`/`.yml` **file path** (the authoring loop — iterate a mission without mounting a pack; lint it with `validate-mission` first) → a pack Mission asset stem. See [rotation](#rotation--scenario-rotation). |
 
 CLI positional arguments (Tier 2): `fl-server [port] [maxPeers]`
 
