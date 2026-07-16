@@ -57,9 +57,9 @@ LoadoutState buildLoadout(const EntityDef& def, const WeaponRegistry& weapons) {
                     ls.payloadMassKg += w->load.massKg;
                     ls.payloadCd0 += w->load.dragFactor;
                     // An INERT store — a Fuel drop tank or a Pod (#862) — costs mass/drag but is never
-                    // a firing station. Leave weaponIndex empty so it is never selected, fired, or
-                    // released; every real weapon mounts a live station.
-                    if (hp.type != HardpointType::Fuel && hp.type != HardpointType::Pod) {
+                    // a firing station. Inert-ness is the WEAPON's kind, not the station's: the same
+                    // wet pylon can offer a bomb or a tank, and only the mounted store decides.
+                    if (w->type != WeaponType::Fuel && w->type != WeaponType::Pod) {
                         st.weaponIndex = idx;
                         st.rounds = w->load.rounds;
                     }
@@ -84,33 +84,20 @@ LoadoutState buildLoadoutOverride(const EntityDef& def, const WeaponRegistry& we
         StationState st;
 
         // Fewer overrides than stations -> keep this station's DEFAULT store (a partial override only
-        // touches the stations it names). An empty/"~"/"-" override empties the station deliberately.
+        // touches the stations it names). An empty/"~"/"-" override empties the station deliberately,
+        // and an empty default is an empty station.
         const bool named = i < stores.size();
         const std::string& store = named ? stores[i] : hp.defaultWeapon;
-        if (named && isEmptyStore(store)) {
-            ls.stations.push_back(st);
-            continue;
-        }
-        // An inert store — a Fuel drop tank or a Pod (#862) — counts its mass/drag (unless emptied
-        // above) but is never a firing station.
-        if (hp.type == HardpointType::Fuel || hp.type == HardpointType::Pod) {
-            if (!isEmptyStore(store)) {
-                const uint32_t idx = weapons.indexById(store.c_str());
-                if (const WeaponDef* w = (idx != UINT32_MAX) ? weapons.byIndex(idx) : nullptr) {
-                    ls.payloadMassKg += w->load.massKg;
-                    ls.payloadCd0 += w->load.dragFactor;
-                }
-            }
-            ls.stations.push_back(st);
-            continue;
-        }
         if (isEmptyStore(store)) {
             ls.stations.push_back(st);
             continue;
         }
 
         const std::string where = "entity '" + def.id + "' station " + std::to_string(hp.slot);
-        // A mission may only hang a store the airframe accepts on that station.
+        // A mission may only hang a store the airframe accepts on that station. This check used to
+        // be SKIPPED for stations typed fuel/pod (the inert branch ran first), so a mission could
+        // hang any tank on any station unchecked; inert-ness is now the mounted weapon's kind, and
+        // every store passes the same acceptance gate.
         if (std::find(hp.allowed.begin(), hp.allowed.end(), store) == hp.allowed.end()) {
             warnings.push_back(where + ": store '" + store + "' is not in this station's allowed list; left empty");
             ls.stations.push_back(st);
@@ -123,10 +110,14 @@ LoadoutState buildLoadoutOverride(const EntityDef& def, const WeaponRegistry& we
             ls.stations.push_back(st);
             continue;
         }
-        st.weaponIndex = idx;
-        st.rounds = w->load.rounds;
         ls.payloadMassKg += w->load.massKg;
         ls.payloadCd0 += w->load.dragFactor;
+        // An inert store — a Fuel drop tank or a Pod (#862) — counts its mass/drag but is never a
+        // firing station.
+        if (w->type != WeaponType::Fuel && w->type != WeaponType::Pod) {
+            st.weaponIndex = idx;
+            st.rounds = w->load.rounds;
+        }
         ls.stations.push_back(st);
     }
 

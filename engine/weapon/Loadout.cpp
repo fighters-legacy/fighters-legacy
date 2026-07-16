@@ -10,47 +10,7 @@
 #include <string>
 
 namespace fl {
-namespace {
-
-// The two enums are parallel by design -- except for Fuel, which has no weapon counterpart at all
-// (see Loadout.h). Returns false for Fuel; callers must have skipped it already.
-bool hardpointAccepts(HardpointType station, WeaponType store) noexcept {
-    switch (station) {
-    case HardpointType::Missile:
-        return store == WeaponType::Missile;
-    case HardpointType::Bomb:
-        return store == WeaponType::Bomb;
-    case HardpointType::Rocket:
-        return store == WeaponType::Rocket;
-    case HardpointType::Gun:
-        return store == WeaponType::Gun;
-    case HardpointType::Pod:
-        return store == WeaponType::Pod;
-    case HardpointType::Fuel:
-        return store == WeaponType::Fuel; // #862: the drop-tank store — inert, but it does mount here
-    }
-    return false;
-}
-
-const char* hardpointTypeName(HardpointType t) noexcept {
-    switch (t) {
-    case HardpointType::Missile:
-        return "missile";
-    case HardpointType::Bomb:
-        return "bomb";
-    case HardpointType::Rocket:
-        return "rocket";
-    case HardpointType::Gun:
-        return "gun";
-    case HardpointType::Fuel:
-        return "fuel";
-    case HardpointType::Pod:
-        return "pod";
-    }
-    return "?";
-}
-
-} // namespace
+namespace {} // namespace
 
 PayloadEffect defaultPayload(const EntityDef& def, const WeaponRegistry& weapons, ILogger& log) {
     PayloadEffect payload{};
@@ -76,14 +36,6 @@ PayloadEffect defaultPayload(const EntityDef& def, const WeaponRegistry& weapons
             log.log(LogLevel::Error, __FILE__, __LINE__,
                     (station + ": default store '" + hp.defaultWeapon +
                      "' is not in this station's allowed list; the station will be empty")
-                        .c_str());
-            continue;
-        }
-
-        if (!hardpointAccepts(hp.type, store->type)) {
-            log.log(LogLevel::Error, __FILE__, __LINE__,
-                    (station + " is a '" + hardpointTypeName(hp.type) + "' station but its default store '" +
-                     hp.defaultWeapon + "' is not that kind of weapon; the station will be empty")
                         .c_str());
             continue;
         }

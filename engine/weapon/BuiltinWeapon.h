@@ -194,7 +194,7 @@ struct BuiltinWeapon {
         return w;
     }
 
-    // A drop tank (#862) — the inert Fuel store. It occupies a HardpointType::Fuel station and costs
+    // A drop tank (#862) — the inert Fuel store. It mounts like any other store and costs
     // the airframe mass + drag; it is never fired, selected, or released (see Loadout.h / FireControl).
     // No seeker, no warhead, no performance — a tank is not a weapon, it is ballast that used to hold
     // fuel. WeaponType::Fuel makes it mountable in the same registry as everything else.
@@ -215,7 +215,7 @@ struct BuiltinWeapon {
     }
 
     // A targeting/ECM pod (#862) — the inert Pod store, so every WeaponType has a mounting builtin. It
-    // occupies a HardpointType::Pod station and costs mass + drag, but like the drop tank it never
+    // mounts like any other store and costs mass + drag, but like the drop tank it never
     // fires (a pod carries sensors or jammers, not ordnance). No seeker, no warhead, no performance.
     [[nodiscard]] static const WeaponDef& pod() {
         static const WeaponDef w = [] {

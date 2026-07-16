@@ -683,27 +683,27 @@ default = "gbu12"
     REQUIRE(def.hardpoints.size() == 2);
 
     CHECK(def.hardpoints[0].slot == 0);
-    CHECK(def.hardpoints[0].type == fl::HardpointType::Missile);
     CHECK(def.hardpoints[0].allowed == std::vector<std::string>{"aim120c", "aim9x"});
     CHECK(def.hardpoints[0].defaultWeapon == "aim120c");
 
     CHECK(def.hardpoints[1].slot == 4);
-    CHECK(def.hardpoints[1].type == fl::HardpointType::Bomb);
     CHECK(def.hardpoints[1].defaultWeapon == "gbu12");
 }
 
-TEST_CASE("EntityDefParser: every hardpoint type string is accepted", "[parser]") {
-    for (const char* type : {"missile", "bomb", "rocket", "gun", "fuel", "pod"}) {
+TEST_CASE("EntityDefParser: the legacy hardpoint type key is accepted and ignored", "[parser]") {
+    // Stations no longer have a kind of their own -- allowed IS the compatibility contract -- but
+    // pre-existing content declares `type`, so the key must keep parsing. ANY string is fine,
+    // including ones the old enum rejected: the field is dead, not validated.
+    for (const char* type : {"missile", "bomb", "rocket", "gun", "fuel", "pod", "railgun"}) {
         const std::string toml = entityWithHardpoints(
             (std::string("[[hardpoints]]\nslot=0\ntype=\"") + type + "\"\nallowed=[\"w\"]\ndefault=\"w\"\n").c_str());
         REQUIRE_NOTHROW(fl::parseEntityDef(toml));
     }
 }
 
-TEST_CASE("EntityDefParser: unknown hardpoint type throws runtime_error", "[parser]") {
-    const std::string toml =
-        entityWithHardpoints("[[hardpoints]]\nslot=0\ntype=\"railgun\"\nallowed=[\"w\"]\ndefault=\"w\"\n");
-    CHECK_THROWS_AS(fl::parseEntityDef(toml), std::runtime_error);
+TEST_CASE("EntityDefParser: a hardpoint with no type key parses", "[parser]") {
+    const std::string toml = entityWithHardpoints("[[hardpoints]]\nslot=0\nallowed=[\"w\"]\ndefault=\"w\"\n");
+    REQUIRE_NOTHROW(fl::parseEntityDef(toml));
 }
 
 TEST_CASE("EntityDefParser: duplicate hardpoint slot throws runtime_error", "[parser]") {

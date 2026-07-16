@@ -82,17 +82,14 @@ struct FireWorld {
         def.category = ObjectCategory::AirVehicle;
         Hardpoint gun;
         gun.slot = 0;
-        gun.type = HardpointType::Gun;
         gun.allowed = {"t:gun"};
         gun.defaultWeapon = "t:gun";
         Hardpoint rail;
         rail.slot = 1;
-        rail.type = HardpointType::Missile;
         rail.allowed = {"t:aim"};
         rail.defaultWeapon = "t:aim";
         Hardpoint empty;
         empty.slot = 2;
-        empty.type = HardpointType::Bomb;
         empty.allowed = {"t:aim"};
         empty.defaultWeapon = ""; // an empty station is a legitimate loadout (#828)
         def.hardpoints = {gun, rail, empty};

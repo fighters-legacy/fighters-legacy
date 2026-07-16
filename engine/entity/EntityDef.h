@@ -12,17 +12,18 @@
 
 namespace fl {
 
-// What a hardpoint can carry. Matches the `type` field of a weapon def, plus the non-weapon
-// stores (fuel tanks, pods) that occupy a station without being one.
-enum class HardpointType : uint8_t { Missile, Bomb, Rocket, Gun, Fuel, Pod };
-
 // One weapon station on an airframe. Hardpoints are a property of the ENTITY, not of its flight
 // model: the flight model is aerodynamics, and what the aircraft is allowed to carry is not. The
 // physics consequence of a loadout reaches the flight model through PayloadEffect
 // (engine/flight/AeroForces.h), which is the only coupling that should exist.
+//
+// A station has NO kind of its own. `allowed` IS the compatibility contract: real multi-role
+// stations carry bombs OR rocket pods OR drop tanks (an F-16's wet wing stations do exactly
+// that), and the old single `type` enum could not say so -- it was redundant with `allowed`
+// where it agreed and a lie where it did not. Whether a mounted store fires or is inert
+// (Fuel/Pod) is a property of the WEAPON (WeaponDef::type), resolved per mount.
 struct Hardpoint {
-    int slot{0}; // station number; unique within an entity
-    HardpointType type{HardpointType::Missile};
+    int slot{0};                      // station number; unique within an entity
     std::vector<std::string> allowed; // weapon ids this station accepts; never empty
     std::string defaultWeapon;        // pre-loaded weapon id; must be a member of `allowed`
 };

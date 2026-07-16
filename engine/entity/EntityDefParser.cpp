@@ -103,23 +103,6 @@ namespace {
                              " (expected missile, bomb, or rocket)");
 }
 
-[[nodiscard]] HardpointType parse_hardpoint_type(std::string_view s) {
-    if (s == "missile")
-        return HardpointType::Missile;
-    if (s == "bomb")
-        return HardpointType::Bomb;
-    if (s == "rocket")
-        return HardpointType::Rocket;
-    if (s == "gun")
-        return HardpointType::Gun;
-    if (s == "fuel")
-        return HardpointType::Fuel;
-    if (s == "pod")
-        return HardpointType::Pod;
-    throw std::runtime_error(std::string("unknown hardpoint type: ") + std::string(s) +
-                             " (expected missile, bomb, rocket, gun, fuel, or pod)");
-}
-
 [[nodiscard]] DamagePenalty parse_penalty(toml::node_view<toml::node> node, const char* name) {
     auto* tbl = node.as_table();
     if (!tbl)
@@ -218,7 +201,6 @@ EntityDef parseEntityDef(std::string_view toml_src) {
     // Optional weapon stations. Authored as an array-of-tables:
     //     [[hardpoints]]
     //     slot = 0
-    //     type = "missile"
     //     allowed = ["aim120c", "aim9x"]
     //     default = "aim120c"
     if (auto hp_node = tbl["hardpoints"]; hp_node) {
@@ -244,7 +226,11 @@ EntityDef parseEntityDef(std::string_view toml_src) {
                     throw std::runtime_error("duplicate hardpoints.slot: " + std::to_string(hp.slot));
             }
 
-            hp.type = parse_hardpoint_type(req_string((*hp_tbl)["type"], "hardpoints.type"));
+            // `type` is ACCEPTED AND IGNORED. Stations used to declare a single kind, which no
+            // real multi-role pylon satisfies (bombs OR rockets OR a drop tank on the same wet
+            // station); `allowed` already IS the compatibility list, and inert-vs-firing is the
+            // mounted WEAPON's kind. The key parses so pre-existing content keeps loading -- the
+            // same migration convention as [aircraft].mesh (#813).
 
             auto* allowed = (*hp_tbl)["allowed"].as_array();
             if (!allowed || allowed->empty())
