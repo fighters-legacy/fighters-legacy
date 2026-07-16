@@ -377,6 +377,15 @@ if(TARGET platform-enet)
     catch_discover_tests(test_rcon_server)
 endif()
 
+# Mission-source resolution (server/fl-server/MissionSource.h, header-only): builtin id -> .yaml
+# file path -> pack Mission asset. Needs engine-content for AssetManager only; no networking.
+add_executable(test_mission_source test_mission_source.cpp)
+target_link_libraries(test_mission_source PRIVATE Catch2::Catch2WithMain engine-content)
+target_include_directories(test_mission_source PRIVATE
+    "${CMAKE_SOURCE_DIR}/server/fl-server"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_mission_source)
+
 add_executable(test_ai_controllers test_ai_controllers.cpp)
 target_link_libraries(test_ai_controllers PRIVATE engine-ai engine-entity engine-spatial engine-sensor
     Catch2::Catch2WithMain)
