@@ -41,8 +41,17 @@ void yawHeadingToQuat(float headingDeg, const double pos[3], double R, float out
 } // namespace
 
 MissionSetupResult applyMission(const Mission& mission, EntityManager& em, FactionRegistry& factions,
-                                WeatherController* weather, double planetRadiusM, const MissionSpawnHook& onSpawned) {
+                                WeatherController* weather, double planetRadiusM, const MissionSpawnHook& onSpawned,
+                                const GroundHeightFn& groundHeight) {
     MissionSetupResult result;
+
+    // Resolve an object's spawn altitude: a ground start (#885) sits on the terrain (queried via
+    // groundHeight, when supplied), else the authored `alt` overrides pos[1], else pos[1].
+    auto spawnAlt = [&](const MissionObject& obj) -> double {
+        if (obj.groundStart && groundHeight)
+            return groundHeight(obj.pos[0], obj.pos[2]);
+        return obj.alt ? static_cast<double>(*obj.alt) : obj.pos[1];
+    };
 
     // ── coalition registry ──────────────────────────────────────────────────────
     // Index 0 is reserved neutral (EntityState::factionIndex==0 means neutral, and areFactionsHostile
@@ -83,10 +92,12 @@ MissionSetupResult applyMission(const Mission& mission, EntityManager& em, Facti
             slot.type = obj.type;
             slot.factionIndex = fi;
             slot.pos[0] = obj.pos[0];
-            slot.pos[1] = obj.alt ? static_cast<double>(*obj.alt) : obj.pos[1];
+            slot.pos[1] = spawnAlt(obj); // ground start sits on the terrain (#885)
             slot.pos[2] = obj.pos[2];
             slot.headingDeg = obj.headingDeg;
-            slot.speed = obj.speed; // initial airspeed for the joining pilot (#883); absent = cruise default
+            // Initial airspeed for the joining pilot (#883): a ground start is parked (0); else the
+            // authored `speed:` or a cruise default (#885).
+            slot.speed = obj.groundStart ? std::optional<float>{0.f} : obj.speed;
             yawHeadingToQuat(obj.headingDeg, slot.pos, planetRadiusM, slot.quat);
             result.playerSlots.push_back(std::move(slot));
             continue;
@@ -94,7 +105,7 @@ MissionSetupResult applyMission(const Mission& mission, EntityManager& em, Facti
 
         EntityTransform t{};
         t.pos[0] = obj.pos[0];
-        t.pos[1] = obj.alt ? static_cast<double>(*obj.alt) : obj.pos[1];
+        t.pos[1] = spawnAlt(obj); // ground start sits on the terrain (#885)
         t.pos[2] = obj.pos[2];
         yawHeadingToQuat(obj.headingDeg, t.pos, planetRadiusM, t.quat);
 

@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **mission**: Ground/ramp start — a mission object can now spawn parked on the ground with `start: ground` (default `air`): placed at the terrain elevation at its position, idle throttle, zero airspeed, and held stable by the integrator's parking hold until the pilot throttles up and rotates. Pairs with the airborne-spawn and destroy-at-0.0s fixes so a training/BFM sortie can begin on the runway instead of being dropped into the air (#885)
+
 ### Fixed
 
 - **mission**: A `destroy(<player-slot>)` failure trigger no longer fires at 0.0 s before the pilot connects — a `player: true` slot is not spawned as a world entity, so the objective evaluator read it as "never spawned → destroyed" from t=0. Player slots now seed the evaluator as *unoccupied* (not destroyed), and the connect handshake binds the joining pilot's aircraft to the slot's id (and unbinds it on disconnect) via a new `MissionRuntime::registerObjectEntity` seam, so `destroy(<slot>)` tracks the live aircraft (#884)

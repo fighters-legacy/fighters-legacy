@@ -955,10 +955,11 @@ int main(int argc, char** argv) {
                         }
                     }
                     if (ctrl) {
-                        // Initial airspeed (#883): the mission's per-object `speed:` if given, else the
-                        // engine's sane airborne cruise default (kAutoSpawnAirspeed) — so a mission bot
-                        // placed in the air flies instead of tumbling from zero airspeed.
-                        const float airspeed = obj.speed ? *obj.speed : fl::kAutoSpawnAirspeed;
+                        // Initial airspeed (#883/#885): a ground start is parked (0); else the mission's
+                        // per-object `speed:` if given, else the engine's sane airborne cruise default — so
+                        // a mission bot placed in the air flies instead of tumbling from zero airspeed.
+                        const float airspeed =
+                            obj.groundStart ? 0.f : (obj.speed ? *obj.speed : fl::kAutoSpawnAirspeed);
                         broadcaster.registerController(id, std::move(ctrl), nullptr, airspeed);
                     }
                     if (!obj.loadout.empty()) {
@@ -975,8 +976,12 @@ int main(int argc, char** argv) {
                     }
                 };
 
-                fl::MissionSetupResult setup = fl::applyMission(parsed.mission, entityManager, missionFactions,
-                                                                &weatherController, cfg.planetRadiusM, onSpawned);
+                // Ground-height resolver for `start: ground` objects (#885): the world-Y of the near-side
+                // surface at (x, z), so a parked object sits on the terrain rather than at an altitude.
+                auto groundHeight = [&](double x, double z) -> double { return nearSideSurface(x, z, 0.0).y; };
+                fl::MissionSetupResult setup =
+                    fl::applyMission(parsed.mission, entityManager, missionFactions, &weatherController,
+                                     cfg.planetRadiusM, onSpawned, groundHeight);
                 broadcaster.setFactionRegistry(&missionFactions);
 
                 std::vector<fl::WorldBroadcaster::MissionSpawnSlot> slots;

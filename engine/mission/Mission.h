@@ -49,6 +49,9 @@ struct MissionObject {
     std::optional<float> alt;   // MSL altitude (m); overrides pos[1] when present
     std::optional<float> speed; // initial airspeed (m/s) along heading; absent = a sane cruise default
                                 // for an airborne start, or 0 for a ground start (#883/#885)
+    bool groundStart{false};    // `start: ground` (#885): spawn parked on the ground, gear down, idle
+                                // throttle, zero airspeed, held stable until the pilot rotates. Default
+                                // `start: air` = dropped in at altitude with a cruise airspeed.
     // `player: true` marks a JOINABLE player slot: applyMission does NOT spawn it as a world entity;
     // it becomes a PlayerSlot the connect handshake assigns a pilot to (#854).
     bool playerSlot{false};

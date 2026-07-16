@@ -23,6 +23,12 @@ class WeatherController;
 // (#855) — engine-mission does not link engine-ai / the weapon registry, so the seam lives here.
 using MissionSpawnHook = std::function<void(EntityId, const MissionObject&)>;
 
+// Resolves the terrain/ground elevation (MSL metres) at a world (x, z) for a `start: ground` object
+// (#885), so it spawns sitting ON the ground rather than at an authored altitude. The caller
+// (fl-server) supplies the terrain heightAt; engine-mission has no terrain of its own. Empty = ground
+// starts fall back to their authored pos/alt (used by unit tests with no terrain).
+using GroundHeightFn = std::function<double(double x, double z)>;
+
 // A joinable player slot: a mission object marked `player: true`. applyMission does NOT spawn it as a
 // world entity — the connect handshake assigns a pilot to an open slot (faction/spawn/type) at connect
 // time (#854). Faction 0 = neutral (side not resolvable).
@@ -59,6 +65,6 @@ struct MissionSetupResult {
 // sphere); default Earth. Call before gameLoop.start() (spawn/registry setup is pre-start only).
 MissionSetupResult applyMission(const Mission& mission, EntityManager& em, FactionRegistry& factions,
                                 WeatherController* weather = nullptr, double planetRadiusM = kEarthRadiusM,
-                                const MissionSpawnHook& onSpawned = {});
+                                const MissionSpawnHook& onSpawned = {}, const GroundHeightFn& groundHeight = {});
 
 } // namespace fl

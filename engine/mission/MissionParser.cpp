@@ -315,6 +315,21 @@ MissionParseResult parseMission(std::string_view yamlContent) {
                     r.ok = false;
                 }
             }
+            // start (optional) — `ground` (parked on the runway) or `air` (default, dropped in) (#885)
+            if (hasKey(obj, "start")) {
+                const std::string st = obj["start"].as<std::string>("");
+                if (st == "ground") {
+                    mo.groundStart = true;
+                } else if (st != "air") {
+                    r.errors.push_back("objects[" + std::to_string(idx) +
+                                       "].start must be \"air\" or \"ground\" (got \"" + st + "\")");
+                    r.ok = false;
+                }
+            }
+            // A ground start is parked, so an explicit airborne `speed:` on it is contradictory — warn.
+            if (mo.groundStart && mo.speed && *mo.speed > 0.f)
+                r.warnings.push_back("objects[" + std::to_string(idx) +
+                                     "] has start: ground with a non-zero speed; the speed is ignored (parked)");
             // player (optional) — a joinable slot rather than a spawned world entity
             if (hasKey(obj, "player"))
                 mo.playerSlot = obj["player"].as<bool>(false);

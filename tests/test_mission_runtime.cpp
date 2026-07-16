@@ -355,6 +355,82 @@ triggers: []
     }
 }
 
+TEST_CASE("parseMission parses start: ground|air and rejects other values (#885)", "[mission-parser]") {
+    const char* base = R"yaml(
+name: x
+map: y
+layer: z
+time: { hour: 0, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [red]
+objects:
+  - { type: SA10, id: a, side: red, pos: [0, 0, 0], heading: 0, start: %S% }
+triggers: []
+)yaml";
+    auto withStart = [&](const char* v) {
+        std::string y = base;
+        y.replace(y.find("%S%"), 3, v);
+        return parseMission(y);
+    };
+
+    auto g = withStart("ground");
+    REQUIRE(g.ok);
+    CHECK(g.mission.objects[0].groundStart);
+
+    auto a = withStart("air");
+    REQUIRE(a.ok);
+    CHECK_FALSE(a.mission.objects[0].groundStart);
+
+    auto bad = withStart("sideways");
+    CHECK_FALSE(bad.ok);
+
+    // Absent start defaults to air.
+    std::string plain = base;
+    plain.replace(plain.find(", start: %S%"), 12, "");
+    auto p = parseMission(plain);
+    REQUIRE(p.ok);
+    CHECK_FALSE(p.mission.objects[0].groundStart);
+}
+
+TEST_CASE("applyMission places a ground-start object on the terrain and parks the slot (#885)", "[mission-setup]") {
+    const char* yaml = R"yaml(
+name: x
+map: y
+layer: z
+time: { hour: 0, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [blue]
+objects:
+  - { type: test:fighter, id: parked, side: blue, pos: [100, 4000, 200], heading: 0, start: ground }
+  - { type: test:fighter, id: p1, side: blue, pos: [0, 4000, 0], heading: 0, start: ground, player: true }
+triggers: []
+)yaml";
+    auto parsed = parseMission(yaml);
+    REQUIRE(parsed.ok);
+
+    NullLogger log;
+    EntityTypeRegistry reg;
+    reg.registerType(makeDef("test:fighter"));
+    EntityManager em(log, reg);
+    FactionRegistry factions;
+
+    // Terrain sits at 550 m everywhere for this test.
+    auto result =
+        applyMission(parsed.mission, em, factions, nullptr, kEarthRadiusM, {}, [](double, double) { return 550.0; });
+
+    // The AI object is spawned sitting on the ground (550), not at its authored 4000 m alt.
+    REQUIRE(result.spawned.size() == 1);
+    const EntityState* s = em.get(result.spawned[0]);
+    REQUIRE(s != nullptr);
+    CHECK(s->transform.pos[1] == Catch::Approx(550.0));
+
+    // The player slot is likewise on the ground AND parked (0 airspeed).
+    REQUIRE(result.playerSlots.size() == 1);
+    CHECK(result.playerSlots[0].pos[1] == Catch::Approx(550.0));
+    REQUIRE(result.playerSlots[0].speed.has_value());
+    CHECK(*result.playerSlots[0].speed == Catch::Approx(0.f));
+}
+
 TEST_CASE("parseMission rejects a malformed route waypoint", "[mission-parser]") {
     const char* yaml = R"yaml(
 name: x
