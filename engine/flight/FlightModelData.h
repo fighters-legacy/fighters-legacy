@@ -114,6 +114,12 @@ struct AeroLimits {
     float max_g_structural{8.f};
     float min_g_structural{-3.f};
     float max_mach{1.6f};
+
+    // Optional FLCS angle-of-attack cap (#900), distinct from alpha_stall_deg (the AERODYNAMIC table
+    // peak). A fly-by-wire jet's computer holds alpha below a limit its aero can exceed — the F-16's
+    // FLCS holds 25.5° while the wing stalls at ~35°. When set (>0) and has_fbw, the limiter also
+    // holds |alpha| ≤ this cap, tighter than the g-limit at low q. 0 = unset (structural-g only).
+    float alpha_limit_deg{0.f};
 };
 
 // Control-surface travel, in degrees of deflection at full stick.

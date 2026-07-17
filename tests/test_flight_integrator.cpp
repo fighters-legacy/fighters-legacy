@@ -1745,3 +1745,106 @@ TEST_CASE("Integrator: engine angular momentum yaws the nose when pitching", "[i
     CHECK_THAT(yawNoGyro, WithinAbs(0.f, 1e-4f));
     CHECK(std::abs(yawGyro) > 1e-3f);
 }
+
+// ---------------------------------------------------------------------------
+// FBW AoA cap and negative-g protection (#900)
+// ---------------------------------------------------------------------------
+
+namespace {
+// Current angle of attack in degrees from a flight state (nose above the flight path = +alpha).
+float alphaDegOf(const FlightState& s) {
+    const double spd =
+        std::sqrt(s.vel_body[0] * s.vel_body[0] + s.vel_body[1] * s.vel_body[1] + s.vel_body[2] * s.vel_body[2]);
+    if (spd <= 0.0)
+        return 0.f;
+    return static_cast<float>(std::atan2(-s.vel_body[1], s.vel_body[0]) * 180.0 / std::numbers::pi);
+}
+
+// Flies fast+level, then holds the given elevator for `seconds`, returning peak/min load factor,
+// peak |alpha|, and whether the airframe was over-g damaged.
+struct EnvResult {
+    float peakG{-1e9f};
+    float minG{1e9f};
+    float maxAbsAlpha{0.f};
+    bool damaged{false};
+};
+EnvResult holdStick(std::shared_ptr<FlightModelData> data, float elevator, float seconds = 2.0f) {
+    FlightIntegrator integ(data);
+    FlightState s{};
+    s.vel_body[0] = 350.0;
+    s.pos_world[1] = 1000.0;
+    s.quat[3] = 1.f;
+    s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+    s.fuel_kg = data->geometry.fuel_kg;
+    integ.reset(s);
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    ctrl.elevator = elevator;
+    EnvResult out;
+    const int ticks = static_cast<int>(seconds * 60.f);
+    for (int i = 0; i < ticks; ++i) {
+        integ.step(1.f / 60.f, ctrl, {});
+        const auto& st = integ.state();
+        out.peakG = std::max(out.peakG, st.load_factor);
+        out.minG = std::min(out.minG, st.load_factor);
+        out.maxAbsAlpha = std::max(out.maxAbsAlpha, std::abs(alphaDegOf(st)));
+        if (st.overg_damage)
+            out.damaged = true;
+    }
+    return out;
+}
+} // namespace
+
+TEST_CASE("Integrator: FBW negative-g protection holds an inverted pull off the min limit",
+          "[integrator][limits][fbw900]") {
+    // #900: forward stick is now limited against min_g_structural just as aft stick is against max_g.
+    auto data = makeData();
+    data->limits.min_g_structural = -3.f;
+
+    data->meta.has_fbw = false;
+    const EnvResult unprotected = holdStick(data, -1.f);
+    data->meta.has_fbw = true;
+    const EnvResult protectedRun = holdStick(data, -1.f);
+
+    CHECK(unprotected.minG < -3.f * 1.10f); // a cable-and-pushrod jet blows through the negative limit
+    CHECK(unprotected.damaged);
+    CHECK(protectedRun.minG >= -3.f * 1.10f); // the FBW jet is held at it
+    CHECK_FALSE(protectedRun.damaged);
+}
+
+TEST_CASE("Integrator: the FBW AoA cap holds alpha below the aerodynamic stall", "[integrator][limits][fbw900]") {
+    // alpha_limit_deg is the FLCS cap, distinct from alpha_stall_deg (the aero peak). With the g-limit
+    // set out of reach (max_g the wing cannot make), the cap is what holds the jet — without it the
+    // aircraft rides right up toward the stall.
+    auto capped = makeData();
+    capped->meta.has_fbw = true;
+    capped->limits.alpha_stall_deg = 35.f;
+    capped->limits.max_g_structural = 25.f; // wing cannot make this -> g-limiter is lift-limited
+    capped->limits.alpha_limit_deg = 15.f;
+
+    auto uncapped = std::make_shared<FlightModelData>(*capped);
+    uncapped->limits.alpha_limit_deg = 0.f; // no FLCS cap
+
+    const EnvResult withCap = holdStick(capped, 1.f);
+    const EnvResult noCap = holdStick(uncapped, 1.f);
+
+    CHECK(withCap.maxAbsAlpha < 17.f);              // held near the 15 deg cap (guard band + PD overshoot)
+    CHECK(withCap.maxAbsAlpha < noCap.maxAbsAlpha); // and clearly tighter than the uncapped jet
+}
+
+TEST_CASE("Integrator: alpha_limit_deg unset leaves the positive-g path byte-identical",
+          "[integrator][limits][fbw900]") {
+    // The additive guarantee for #900: an FBW model that adds no alpha cap behaves exactly as it did
+    // under #816 for aft stick.
+    auto a = makeData();
+    a->meta.has_fbw = true;
+    a->limits.max_g_structural = 8.f;
+    a->limits.alpha_limit_deg = 0.f;
+    auto b = std::make_shared<FlightModelData>(*a);
+
+    const EnvResult ra = holdStick(a, 1.f);
+    const EnvResult rb = holdStick(b, 1.f);
+    CHECK(ra.peakG == rb.peakG);
+    CHECK(ra.peakG <= 8.f * 1.10f); // still held at the structural limit
+    CHECK_FALSE(ra.damaged);
+}

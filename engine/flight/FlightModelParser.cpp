@@ -299,6 +299,9 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.limits.max_g_structural = req_float(lim["max_g_structural"], "aero.limits.max_g_structural");
         d.limits.min_g_structural = req_float(lim["min_g_structural"], "aero.limits.min_g_structural");
         d.limits.max_mach = req_float(lim["max_mach"], "aero.limits.max_mach");
+
+        // Optional FLCS AoA cap (#900); 0 = unset = structural-g limiting only, as before.
+        d.limits.alpha_limit_deg = static_cast<float>(lim["alpha_limit_deg"].value<double>().value_or(0.0));
     }
 
     // ── [aero.controls] ───────────────────────────────────────────────────────

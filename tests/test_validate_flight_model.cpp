@@ -137,6 +137,24 @@ TEST_CASE("#899: a malformed alpha-damper table fails", "[flight-model-validator
     CHECK(found);
 }
 
+TEST_CASE("#900: a plausible alpha_limit_deg below the stall passes", "[flight-model-validator]") {
+    auto r = validateFlightModel(
+        patch(kValidFighter, "max_mach         =  1.6", "max_mach         =  1.6\nalpha_limit_deg  = 15.0"));
+    CHECK(r.ok);
+}
+
+TEST_CASE("#900: alpha_limit_deg >= alpha_stall_deg warns", "[flight-model-validator]") {
+    // Cap at/above the aero stall never binds — almost certainly a mix-up of the two.
+    auto r = validateFlightModel(patch(kValidFighter, "max_mach         =  1.6",
+                                       "max_mach         =  1.6\nalpha_limit_deg  = 25.0")); // stall is 18
+    CHECK(r.ok);
+    bool warned = false;
+    for (const auto& w : r.warnings)
+        if (w.find("alpha_limit_deg") != std::string::npos)
+            warned = true;
+    CHECK(warned);
+}
+
 TEST_CASE("a flight model with no mesh and no cockpit validates clean", "[flight-model-validator]") {
     // kValidFighter declares neither (#813): asset wiring belongs to the entity def, so the
     // validator has no business demanding it of an aerodynamic model.

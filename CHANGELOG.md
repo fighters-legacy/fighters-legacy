@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **flight**: `has_fbw` now means full FBW envelope protection, not just the positive-g cap (#900) — the limiter also holds forward stick against `min_g_structural` (negative-g protection) and, via an optional `[aero.limits] alpha_limit_deg`, holds `|alpha|` below the FLCS AoA cap (distinct from the aerodynamic `alpha_stall_deg`). Non-FBW aircraft are untouched; an FBW model that adds no alpha cap keeps its pre-#900 positive-g behaviour
 - **flight**: Optional flight-model schema gaps from published aero decks (#899) — α-tabulated dynamic dampers (`cm_q_table`/`cl_p_table`/`cn_r_table`), `ixz_kg_m2` product-of-inertia roll↔yaw coupling, `engine_ang_momentum` (He) gyroscopic pitch↔yaw coupling, adverse-yaw `cn_da` and rudder-roll `cl_dr` cross terms, `cm0` zero-α pitching moment, and speed-brake pitch/lift increments (`cm_speedbrake`/`speedbrake_cl`). All additive/optional; a model that sets none is byte-identical to before
 - **flight**: Optional `[engine.idle_thrust]` deck — a `(mach, alt_km)` table (kN, same shape as `mil_thrust`) that the engine blends `idle → mil` across throttle instead of `0 → mil`, so part-throttle behaviour (descents, approach, energy management) is modelled; idle may be negative (ram drag > idle gross thrust). Absent, the linear path is byte-identical to before (#898)
 

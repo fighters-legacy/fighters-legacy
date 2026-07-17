@@ -396,6 +396,19 @@ TEST_CASE("Parser: #899 optional fields parse when present", "[parser]") {
     CHECK(d.moments.cm_q_table->lookup(30.0f) == Catch::Approx(-6.8f));
 }
 
+TEST_CASE("Parser: alpha_limit_deg is 0 by default and parses when present (#900)", "[parser]") {
+    auto plain = parseFlightModel(kMinimalToml);
+    CHECK(plain.limits.alpha_limit_deg == 0.f);
+
+    std::string toml = kMinimalToml;
+    auto pos = toml.find("max_mach");
+    REQUIRE(pos != std::string::npos);
+    auto eol = toml.find('\n', pos);
+    toml.insert(eol + 1, "alpha_limit_deg  = 25.5\n");
+    auto d = parseFlightModel(toml);
+    CHECK(d.limits.alpha_limit_deg == Catch::Approx(25.5f));
+}
+
 TEST_CASE("Parser rejects an unequal-length alpha-damper table", "[parser]") {
     std::string toml = kMinimalToml + "\n[aero.moments.cl_p_table]\nalpha = [0.0, 15.0]\nvalues = [-0.4]\n";
     CHECK_THROWS_AS(parseFlightModel(toml), std::runtime_error);

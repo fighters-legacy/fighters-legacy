@@ -153,10 +153,19 @@ Drives visual effects (jet exhaust vs. spinning props) and audio selection:
 
 ### `has_fbw` — Fly-by-wire
 
-When `true`, the engine enforces `max_g_structural` and `alpha_stall_deg` limits even when the
-player has all flight assists disabled. FBW aircraft cannot depart controlled flight in normal
-operation. When `false` (F-15A, MiG-29 early variants), limits are purely player-toggleable
-assists — expert players can fly raw and risk departure.
+When `true`, the flight computer holds the aircraft inside its envelope even when the player has all
+flight assists disabled — FBW aircraft cannot depart controlled flight in normal operation. The
+limiter holds **angle of attack** (not measured g — elevator changes pitch rate, so a reactive
+G-meter loop is always a tick late), and covers three limits (#816, #900):
+
+- **positive structural g** — aft stick is held at the AoA that makes `max_g_structural`;
+- **negative structural g** — forward stick is held against `min_g_structural`, just as firmly;
+- **FLCS AoA cap** — the optional `alpha_limit_deg` (`[aero.limits]`) holds `|alpha|` below a limit
+  the wing can aerodynamically exceed (the F-16 holds 25.5° while the wing stalls near 35°). At low
+  dynamic pressure the wing cannot reach the structural g, and this cap is what holds the jet.
+
+When `false` (F-15A, MiG-29 early variants), limits are purely player-toggleable assists — expert
+players can fly raw and risk departure.
 
 ### `cruise_alt_m` — AI cruise altitude
 
@@ -457,20 +466,23 @@ alpha_stall_deg  =  18.0
 max_g_structural =   9.0
 min_g_structural =  -3.0
 max_mach         =   1.8
+alpha_limit_deg  =  25.5   # optional (#900): FBW FLCS AoA cap, below the aero stall
 ```
 
 | Field | Meaning |
 |---|---|
 | `alpha_stall_deg` | The AoA at which this aircraft departs. **`validate-flight-model` requires your `cl_table` to peak within 2° of it** — the engine does not clamp CL at the stall, because your table *is* the stall; if the two disagree, the model is lying about itself. Sets `FlightState::stalled`, which drives buffet, the HUD cue and AI. |
 | `max_g_structural` | Positive structural limit. Exceeding it by >10% for >0.5 s **damages the airframe**. Range: 6.5 g (heavy strikers) to 9 g (dogfighters). Source: flight manual / Jane's. |
-| `min_g_structural` | Negative structural limit. Typical −2.5 g to −3.5 g. Same damage rule. |
+| `min_g_structural` | Negative structural limit. Typical −2.5 g to −3.5 g. Same damage rule; on an FBW aircraft the limiter now holds forward stick off it (#900). |
 | `max_mach` | Never-exceed Mach. **Not** enforced by an artificial drag wall: an aircraft's top speed comes from drag rising to meet thrust. `fm-trim` fails a model that can exceed this in level flight — if it can, the *model* is wrong, and you should fix `cd_wave` or the thrust deck. |
+| `alpha_limit_deg` | *Optional (#900).* The FBW flight computer's AoA cap, **distinct from `alpha_stall_deg`** (the aero peak). When set (>0) and `has_fbw`, the limiter also holds `|alpha|` below this — the F-16's FLCS holds 25.5° while its wing stalls near 35°. Must sit below `alpha_stall_deg` or it never binds (the validator warns). 0 / omitted = structural-g limiting only, as before. |
 
-**On FBW aircraft** (`has_fbw = true`) the flight computer will not let the pilot exceed
-`max_g_structural`: it limits AoA to whatever produces the limit at the current dynamic pressure.
-**On everything else there is no limiter at all** — and that is deliberate. An F-5E pilot *can*
-overstress the jet, and the sim lets them, and then bills them. `has_fbw` gates the limiter and
-nothing else.
+**On FBW aircraft** (`has_fbw = true`) the flight computer keeps the pilot inside the envelope by
+limiting AoA to whatever produces the applicable limit at the current dynamic pressure: aft stick
+against `max_g_structural`, forward stick against `min_g_structural` (#900), and — if set — `|alpha|`
+against `alpha_limit_deg`. **On everything else there is no limiter at all** — and that is deliberate.
+An F-5E pilot *can* overstress the jet, and the sim lets them, and then bills them. `has_fbw` gates
+the limiter and nothing else.
 
 ---
 

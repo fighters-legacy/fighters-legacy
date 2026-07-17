@@ -501,6 +501,20 @@ static void validateAeroLimits(const toml::table& tbl, FlightModelValidationResu
         r.errors.push_back("aero.limits.min_g_structural must be < 0 (got " + std::to_string(*minG) + ")");
         r.ok = false;
     }
+
+    // Optional FLCS AoA cap (#900). It must be a positive angle, and it is a CAP below the aerodynamic
+    // stall — a cap at or above alpha_stall_deg can never bind and almost certainly means the two were
+    // confused (the whole point is that the FLCS holds the jet short of the aero peak).
+    if (auto cap = lim["alpha_limit_deg"].value<double>()) {
+        if (*cap <= 0.0) {
+            r.errors.push_back("aero.limits.alpha_limit_deg must be > 0 (got " + std::to_string(*cap) + ")");
+            r.ok = false;
+        } else if (auto stall = lim["alpha_stall_deg"].value<double>(); stall && *cap >= *stall) {
+            r.warnings.push_back("aero.limits.alpha_limit_deg " + std::to_string(*cap) + " is >= alpha_stall_deg " +
+                                 std::to_string(*stall) +
+                                 "; the FLCS cap should sit below the aerodynamic stall or it never binds");
+        }
+    }
 }
 
 static void validateAeroControls(const toml::table& tbl, FlightModelValidationResult& r) {

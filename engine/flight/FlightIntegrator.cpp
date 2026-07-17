@@ -258,44 +258,85 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     const AeroInputs aero{alpha_rad, beta_rad, mach, spd, altitude_m};
     ControlInput eff_ctrl = ctrl;
 
-    // 7a. G-LIMITER (#816) — and this is the ONLY thing has_fbw should ever mean.
+    // 7a. FLY-BY-WIRE ENVELOPE PROTECTION (#816, extended #900).
     //
-    // A fly-by-wire aircraft's flight computer will not let the pilot overstress the airframe. A 1972
-    // airframe with cables and pushrods has no such opinion. Applying a limiter to both would erase
-    // the difference the content pack exists to express: an F-16 cannot be pulled past 9 g, and an
-    // F-5E absolutely can be pulled past 7.33 -- and then it breaks, which is the next block.
+    // has_fbw means the flight computer will not let the pilot leave the structural/AoA envelope. A
+    // 1972 airframe with cables and pushrods has no such opinion, so this whole block is gated on
+    // has_fbw and NOTHING here touches a non-FBW aircraft. An F-16 cannot be pulled past 9 g; an F-5E
+    // absolutely can be pulled past 7.33 -- and then it breaks, which is the next block.
     //
     // It limits ANGLE OF ATTACK, not measured g -- which is what a real flight computer does, and it
     // is the only version that works. Elevator does not change lift on the tick it is applied: it
     // changes the pitch RATE, which changes AoA, which changes lift. A limiter that waits for the
-    // G-meter to read high is always a tick late, and on an agile airframe a tick is worth several g
-    // (a purely reactive version of this loop let a test model spike to 23 g on an 8 g airframe).
+    // G-meter to read high is always a tick late (a purely reactive version let a test model spike to
+    // 23 g on an 8 g airframe). So: find the AoA that would produce the g limit at the current dynamic
+    // pressure and hold the aircraft there with a PD loop on AoA and pitch rate.
     //
-    // So: find the AoA that would produce exactly max_g_structural at the current dynamic pressure,
-    // and hold the aircraft there with a proportional-derivative loop on AoA and pitch rate. The
-    // pilot's aft stick is honoured right up to that boundary and refused past it.
-    if (m_data->meta.has_fbw && ctrl.elevator > 0.f && m_data->limits.max_g_structural > 0.f && q_dyn_now > 1.f) {
+    // #900 broadens the envelope beyond the positive-g cap #816 shipped:
+    //   * negative-g protection — forward stick is limited against min_g_structural, just as firmly as
+    //     aft stick is against max_g_structural (the F-16's FLCS limits to −3 g as well as +9);
+    //   * an optional FLCS AoA cap, alpha_limit_deg, tighter than the aerodynamic stall — at low q the
+    //     wing cannot reach the structural g and the AoA cap is what holds the jet.
+    // When alpha_limit_deg is unset the positive path is byte-identical to #816.
+    if (m_data->meta.has_fbw && q_dyn_now > 1.f && (ctrl.elevator > 0.f || ctrl.elevator < 0.f)) {
         const float S = m_data->geometry.wing_area_m2;
-        const float clLimit = (m_data->limits.max_g_structural * eff_mass * kG0) / (q_dyn_now * S);
-
-        // Invert the CL curve by bisection over [0, alpha_stall], where it is monotonic. If the wing
-        // cannot make clLimit at all, the aircraft is lift-limited rather than structure-limited and
-        // there is nothing for the limiter to do.
         const float alphaStall = m_data->limits.alpha_stall_deg;
-        if (m_data->cl_table.lookup(alphaStall, mach) > clLimit) {
-            float lo = 0.f, hi = alphaStall;
+        const float alphaCap = m_data->limits.alpha_limit_deg; // 0 = unset
+        const float denom = q_dyn_now * S;
+
+        // CL(alpha) is monotonic increasing across [-alpha_stall, +alpha_stall]; bisect for the alpha
+        // that makes a target CL (signed) over an interval where it is increasing.
+        auto invertCl = [&](float target, float aLo, float aHi) {
+            float lo = aLo, hi = aHi;
             for (int i = 0; i < 12; ++i) {
                 const float mid = 0.5f * (lo + hi);
-                if (m_data->cl_table.lookup(mid, mach) < clLimit)
+                if (m_data->cl_table.lookup(mid, mach) < target)
                     lo = mid;
                 else
                     hi = mid;
             }
-            const float alphaLimit = 0.5f * (lo + hi) * kFbwGuardBand;
+            return 0.5f * (lo + hi);
+        };
 
-            // omega[2] is the pitch rate (about the body's right axis).
+        // Resolve the applicable alpha limit for the commanded direction, then hold it with the PD loop.
+        // omega[2] is the pitch rate (about the body's right axis).
+        bool haveLimit = false;
+        float alphaLimit = 0.f;
+        if (ctrl.elevator > 0.f) {
+            float posLimit = alphaStall;
+            if (m_data->limits.max_g_structural > 0.f) {
+                const float clLimit = (m_data->limits.max_g_structural * eff_mass * kG0) / denom;
+                if (m_data->cl_table.lookup(alphaStall, mach) > clLimit) { // else lift-limited, nothing to do
+                    posLimit = invertCl(clLimit, 0.f, alphaStall);
+                    haveLimit = true;
+                }
+            }
+            if (alphaCap > 0.f) {
+                posLimit = haveLimit ? std::min(posLimit, alphaCap) : alphaCap;
+                haveLimit = true;
+            }
+            alphaLimit = posLimit * kFbwGuardBand;
+        } else { // forward stick — negative-g / negative-AoA protection (#900)
+            float negLimit = -alphaStall;
+            if (m_data->limits.min_g_structural < 0.f) {
+                const float clLimit = (m_data->limits.min_g_structural * eff_mass * kG0) / denom; // negative
+                if (m_data->cl_table.lookup(-alphaStall, mach) < clLimit) {                       // else lift-limited
+                    negLimit = invertCl(clLimit, -alphaStall, 0.f);
+                    haveLimit = true;
+                }
+            }
+            if (alphaCap > 0.f) {
+                negLimit = haveLimit ? std::max(negLimit, -alphaCap) : -alphaCap;
+                haveLimit = true;
+            }
+            alphaLimit = negLimit * kFbwGuardBand; // negative; *0.95 moves toward 0 (more conservative)
+        }
+
+        if (haveLimit) {
             const float cmd = kFbwAoaKp * (alphaLimit - alpha_deg_now) - kFbwAoaKd * m_state.omega[2];
-            eff_ctrl.elevator = std::clamp(cmd, -1.f, ctrl.elevator); // never MORE than the pilot asked for
+            // Never MORE than the pilot asked for, in whichever direction the stick is deflected.
+            eff_ctrl.elevator =
+                (ctrl.elevator > 0.f) ? std::clamp(cmd, -1.f, ctrl.elevator) : std::clamp(cmd, ctrl.elevator, 1.f);
         }
     }
 
