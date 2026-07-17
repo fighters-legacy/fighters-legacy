@@ -380,6 +380,10 @@ MeshHandle SceneRenderer::getOrUploadMesh(const std::string& name) {
     }
 
     MeshUploadDesc desc{name, data->bytes};
+    // Pack-authored meshes are in the standard glTF/Blender content convention (nose +Z); the loader
+    // rotates them into the engine body frame (nose +X) on upload (#906). The builtin placeholders and
+    // terrain are engine-generated in the body/world frame and keep contentForward false.
+    desc.contentForward = true;
     // Resolve the glb's external texture URIs to file bytes through the content system (#833). The
     // renderer parses the PBR material and builds the GPU material; we only supply the bytes, because
     // URI → asset-name → file mapping is a content-pack concern, not a GPU-backend one.
