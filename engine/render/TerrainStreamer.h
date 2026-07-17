@@ -4,6 +4,7 @@
 #include "IAsyncFilesystem.h"
 #include "RenderTypes.h"
 #include "render/CubeSphere.h"
+#include "render/SurfaceType.h"
 #include "render/TerrainManifest.h"
 
 #include <cstddef>
@@ -90,6 +91,13 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // Nearest-neighbour land-cover class from the deepest Ready tile carrying a
     // land-cover layer; 0 when none. Thread-safe.
     uint8_t surfaceAt(glm::dvec3 worldPos) const noexcept;
+
+    // The typed surface classification at worldPos (#475): surfaceAt() mapped through the ESA
+    // WorldCover → SurfaceType table. SurfaceType::Unknown where no land-cover layer covers the point.
+    // Thread-safe. This is what gameplay/physics should query (e.g. gear-down on Water vs. Grass).
+    [[nodiscard]] SurfaceType surfaceTypeAt(glm::dvec3 worldPos) const noexcept {
+        return surfaceTypeFromWorldCover(surfaceAt(worldPos));
+    }
 
     // Total resident tile entries (all states). Exposed for tests.
     std::size_t tileCount() const noexcept;
