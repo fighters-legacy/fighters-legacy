@@ -7,18 +7,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-07-17
+
 ### Added
 
-- **entity**: Centreline single-engine subsystem — `[damage.subsystems.engine]` and a `kEngineFailCenter` flag model a single-engine airframe: a kill is total thrust loss and NO yaw (unlike the twin-engine `engine_left`/`engine_right` asymmetric case). The snapshot codec's engineFail field grows 5→6 bits to carry it (#901)
-- **render**: Content meshes are authored in the standard glTF/Blender convention (nose along +Z) and rotated into the engine body frame (+X) on import (#906) — a pack-authored aircraft/unit/cockpit/damage mesh no longer has to be built "wrong" or hand-corrected. Engine-generated meshes (terrain, builtin placeholders, floor) are unaffected; the flight model's body axes are untouched
-- **flight**: `has_fbw` now means full FBW envelope protection, not just the positive-g cap (#900) — the limiter also holds forward stick against `min_g_structural` (negative-g protection) and, via an optional `[aero.limits] alpha_limit_deg`, holds `|alpha|` below the FLCS AoA cap (distinct from the aerodynamic `alpha_stall_deg`). Non-FBW aircraft are untouched; an FBW model that adds no alpha cap keeps its pre-#900 positive-g behaviour
-- **flight**: Optional flight-model schema gaps from published aero decks (#899) — α-tabulated dynamic dampers (`cm_q_table`/`cl_p_table`/`cn_r_table`), `ixz_kg_m2` product-of-inertia roll↔yaw coupling, `engine_ang_momentum` (He) gyroscopic pitch↔yaw coupling, adverse-yaw `cn_da` and rudder-roll `cl_dr` cross terms, `cm0` zero-α pitching moment, and speed-brake pitch/lift increments (`cm_speedbrake`/`speedbrake_cl`). All additive/optional; a model that sets none is byte-identical to before
-- **flight**: Optional `[engine.idle_thrust]` deck — a `(mach, alt_km)` table (kN, same shape as `mil_thrust`) that the engine blends `idle → mil` across throttle instead of `0 → mil`, so part-throttle behaviour (descents, approach, energy management) is modelled; idle may be negative (ram drag > idle gross thrust). Absent, the linear path is byte-identical to before (#898)
+- **flight**: Optional `[engine.idle_thrust]` deck — blends `idle → mil` across throttle instead of `0 → mil`; idle may be negative (ram drag). Additive, byte-identical when absent (#898)
+- **flight**: Optional published-aero schema gaps from NASA TP-1538 — α-tabulated dampers (`cm_q_table`/`cl_p_table`/`cn_r_table`), `ixz_kg_m2` roll↔yaw coupling, `engine_ang_momentum` (He) gyroscopic term, `cn_da`/`cl_dr` cross terms, `cm0`, and speed-brake pitch/lift increments; all additive (#899)
+- **flight**: `has_fbw` extends to full envelope protection — negative-g limiting against `min_g_structural` and an optional `[aero.limits] alpha_limit_deg` FLCS AoA cap (distinct from `alpha_stall_deg`), not just the positive-g limiter (#900)
+- **entity**: Centreline single-engine subsystem — `[damage.subsystems.engine]` + `kEngineFailCenter` (total thrust loss, no yaw); snapshot engineFail field 5→6 bits (#901)
+- **render**: Content meshes are authored in the standard glTF/Blender +Z-forward convention and rotated into the engine body frame (+X) on import (#906)
 
 ### Fixed
 
-- **build**: The released Linux `fl-server` no longer dynamically links `libprotobuf.so.NN` and so runs on a clean machine (#905) — `Protobuf_USE_STATIC_LIBS` is now set *before* the seeding `find_package(Protobuf)` (it was a no-op after it), so the GNS chain links the static archive. CI and the release job gate on `ldd fl-server` showing no unresolved deps and no dynamic protobuf
-- **render**: `test_scene_renderer` palette-material test no longer fails in a release build — the per-entityIdx placeholder palette is a Debug-only aid, so the test now asserts the config-dependent contract (distinct palette slots in Debug, one shared shaded-grey fallback in Release) instead of the Debug-only one (#897)
+- **build**: The released Linux `fl-server` is statically linked against protobuf, so it runs on a clean machine (no `libprotobuf.so` dependency); CI + release gate on `ldd` self-containment (#905)
+- **render**: `test_scene_renderer` palette-material test no longer fails in a release build — asserts the config-dependent placeholder-material contract instead of the Debug-only one (#897)
 
 ## [0.3.4] - 2026-07-16
 
