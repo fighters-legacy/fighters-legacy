@@ -7,25 +7,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-07-16
+
 ### Added
 
-- **game**: Menu bypass — `--mission <id>` launches straight into a single-player session with that mission and `--auto` enters Free Flight / Join Server (composes with `--connect`/`--observer`), through the exact enters-session path a menu confirm takes
-- **mission**: `builtin:shape-gallery` — a compiled-in visual-verification scene for the per-category placeholder meshes (#886): a museum row of every surface category, floating ordnance exhibits (plain projectile-type objects hold their spawn transform), an armed joinable player slot, and a live fighters+SAM+AAA fight so missiles fly
-- **tools**: `tools/visual_check.sh` / `.ps1` — one-command visual verification: boots a standalone fl-server with the gallery, stages wreck variants by injecting `detonate` into the server's stdin, and opens the game window as an observer ghost with zero menu interaction (`--fly` for the armed pilot seat)
-- **network**: fl-server `--mission` now also accepts a `.yaml`/`.yml` file path (resolution: builtin id → file → pack asset via `MissionSource.h`) — iterate a mission from disk without mounting a pack
-
-- **renderer**: Per-category builtin placeholder meshes — a mesh-less entity now renders a distinct silhouette by category (winged aircraft, missile/bomb/rocket darts, boxy ground vehicle, naval hull, stepped structure) with slumped wreck variants for the persistent categories, replacing the single debug wedge; the tetrahedron is fully removed and a spiky "Unknown" error beacon renders only in bug states (unknown type, unmapped ordinal) (#886)
-- **network**: `MsgEntityTypeDef` carries the entity's `ObjectCategory` + `ProjectileKind` ordinals (332 → 336 bytes, additive tail-append) so the client knows a SAM site from a bomb from a bunker — the placeholder silhouettes, and future picker grouping/map icons, key on them (#886)
-- **entity**: New `ObjectCategory::Structure` (the builtin static target was mis-filed as a ground vehicle) and a `ProjectileKind` vocabulary with an optional `projectile_kind` entity TOML key (`missile`/`bomb`/`rocket`, projectile-only) (#886)
-
-- **game**: Instant Action — the main menu's first single-player entry now launches the builtin skirmish (a `builtin:fighter` wingman + two bandits + a SAM to destroy, zero-pack via #868) instead of dropping you into an empty world, so there's something to fight from a bare checkout. A new "Free Flight" entry keeps the empty practice world (HOTAS calibration, just flying). Multiplayer still shows a single "Join Server" (#40)
-- **mission**: Ground/ramp start — a mission object can now spawn parked on the ground with `start: ground` (default `air`): placed at the terrain elevation at its position, idle throttle, zero airspeed, and held stable by the integrator's parking hold until the pilot throttles up and rotates. Pairs with the airborne-spawn and destroy-at-0.0s fixes so a training/BFM sortie can begin on the runway instead of being dropped into the air (#885)
+- **game**: Instant Action + Free Flight main-menu entries — the first single-player slot launches the builtin skirmish (`builtin:sandbox`); Free Flight keeps the empty practice world (#40)
+- **game**: Menu bypass — `--mission <id>` enters a single-player session directly and `--auto` enters Free Flight / Join Server, composing with `--connect`/`--observer` (#894)
+- **mission**: `builtin:shape-gallery` — a compiled-in visual-verification scene for the per-category placeholder meshes (#886)
+- **tools**: `tools/visual_check.sh` / `.ps1` — one-command visual verification: boots fl-server with the gallery, stages wreck variants via stdin `detonate`, and opens the game as an observer ghost (`--fly` for the armed pilot seat) (#894)
+- **network**: fl-server `--mission` now also accepts a `.yaml`/`.yml` file path (builtin id → file → pack asset) (#894)
+- **renderer**: Per-category builtin placeholder meshes with slumped wreck variants; the tetrahedron is removed and a spiky "Unknown" error beacon renders only in bug states (#886)
+- **network**: `MsgEntityTypeDef` carries the entity's `ObjectCategory` + `ProjectileKind` ordinals (332 → 336 bytes, additive tail-append) (#886)
+- **entity**: New `ObjectCategory::Structure` and a `ProjectileKind` vocabulary with an optional `projectile_kind` entity TOML key (#886)
+- **entity**: Allowed-driven hardpoint compatibility — a station's `allowed` list drives store compatibility, so one pylon can mount mixed store types (#895)
+- **mission**: Ground/ramp start — a mission object can spawn parked with `start: ground`, held by the parking hold until the pilot rotates (#885)
 
 ### Fixed
 
-- **flight**: Flight integration no longer diverges for real aero decks — two bugs made every flight-integrated pack aircraft (e.g. the fl-base-pack F-5E) depart from level flight within seconds and get silently reaped. (1) The body-frame transport term `−ω×v` was integrated as an explicit tangent step (`v -= (ω×v)·dt`), which lengthens `v` by `√(1+(ω·dt)²)` every tick — a numerical energy pump that, under any sustained rotation, ran airspeed up exponentially to the NaN guard; it is now applied as an exact, speed-conserving rotation. (2) The yaw moment was integrated with the wrong sign: the engine's yaw axis is +Y=up (a positive rate is nose-*left*) while `computeMoments` emits the standard aero nose-right convention, so the weathercock was anti-restoring and the aircraft departed on any sideslip perturbation — fixed at the aero→engine seam (`FixedWingForceModel`). A diverged flight entity now logs a one-shot envelope-departure line instead of vanishing without a trace (#891)
-- **mission**: A `destroy(<player-slot>)` failure trigger no longer fires at 0.0 s before the pilot connects — a `player: true` slot is not spawned as a world entity, so the objective evaluator read it as "never spawned → destroyed" from t=0. Player slots now seed the evaluator as *unoccupied* (not destroyed), and the connect handshake binds the joining pilot's aircraft to the slot's id (and unbinds it on disconnect) via a new `MissionRuntime::registerObjectEntity` seam, so `destroy(<slot>)` tracks the live aircraft (#884)
-- **mission**: Airborne mission spawns no longer depart controlled flight at t=0 — an aircraft placed in the air was dropped in at zero airspeed *and* identity orientation (the integrator ignored the spawn transform's velocity and heading), so it tumbled before the pilot could react. Spawns now seed the integrator with the spawn heading and a forward airspeed: a new optional per-object `speed:` (m/s), or a sane cruise default. AI objects and player slots both benefit; the bare no-mission sandbox pilot still spawns stationary (the builtin UFO is controllable at 0 kts) (#883)
+- **flight**: Flight integration no longer diverges for real aero decks — an energy-pumping transport term (explicit `−ω×v` tangent) and an inverted yaw moment sign made every flight-integrated pack aircraft depart from level flight and get silently reaped; the transport term is now an exact rotation, the yaw sign is corrected at the aero→engine seam, and a diverged entity logs an envelope-departure line (#891)
+- **mission**: A `destroy(<player-slot>)` failure trigger no longer fires at 0.0 s before the pilot connects — player slots seed the evaluator as unoccupied and bind on the connect handshake (#884)
+- **mission**: Airborne mission spawns no longer tumble at t=0 — the integrator is seeded with the spawn heading and a forward airspeed (optional `speed:`) (#883)
+- **flight**: A cambered wing's negative trim alpha is no longer reported as a trim failure by fm-trim (#896)
 
 ## [0.3.3] - 2026-07-15
 
