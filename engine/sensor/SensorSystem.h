@@ -4,8 +4,10 @@
 #include "entity/EntityId.h"
 #include "entity/SignatureDef.h"
 #include "sensor/Detection.h"
+#include "sensor/Iff.h"
 #include "sensor/RadarMode.h"
 #include "sensor/SensorDef.h"
+#include "world/FactionDef.h" // FactionRelation (IFF resolver signature)
 
 #include <cstdint>
 #include <functional>
@@ -38,7 +40,8 @@ inline constexpr std::size_t kMaxContactsPerObserver = 32;
 struct Contact {
     EntityId id{};            // the target
     uint32_t typeIndex{0};    // its entity type (what the observer believes it is looking at)
-    uint16_t factionIndex{0}; //
+    uint16_t factionIndex{0}; // the target's ACTUAL faction (ground truth) — see `ident` for what the
+                              // observer has actually IDENTIFIED, which is the honest, display-safe fact
     ContactState state{ContactState::Lost};
     double lastKnownPos[3]{};      // where it was when last actually seen — NOT where it is now
     float lastKnownVel[3]{};       //
@@ -62,6 +65,13 @@ struct Contact {
     // shot needs, and a hostile RWR reads a TWS lock as a scan, not a lock tone. A lock held by a
     // non-radar sensor (IRST, eyeball) leaves this false: only the radar has an STT mode.
     bool firingQuality{false};
+
+    // What the observer has IDENTIFIED this contact as (#527): Friend (it squawked), Foe (hostile AND
+    // positively identified — VID or a firing-quality lock), or Unknown (detected but not yet ID'd).
+    // THIS, not `factionIndex`, is the display-safe fact — handing a bare radar blip's true faction to
+    // a pilot would be an identification wallhack. Computed each check from the observer's coalition
+    // relationship to the target and how the contact is held. See classifyIff (Iff.h).
+    Identification ident{Identification::Unknown};
 
     [[nodiscard]] bool held() const noexcept {
         return state != ContactState::Lost;
@@ -206,9 +216,16 @@ class SensorSystem {
     // entity's suite rather than refusing to spawn it.
     using SensorDefResolver = std::function<std::shared_ptr<const SensorDef>(const std::string& id)>;
 
+    // Resolves the observer→target coalition relationship for IFF (#527). Injected as a std::function
+    // for the same reason as SensorDefResolver: engine-sensor must not link engine-world, so the
+    // caller (which owns the FactionRegistry) hands the relationship in. Null = the affiliation-rule
+    // fallback (affiliationRelation), matching fl::hostile()'s pre-mission behavior.
+    using IffResolver = std::function<FactionRelation(uint16_t observerFaction, uint16_t targetFaction)>;
+
     SensorSystem(const EntityManager& em, const EntityTypeRegistry& registry);
 
     void setResolver(SensorDefResolver fn);
+    void setIffResolver(IffResolver fn);
 
     // Registers an observer for a spawned entity. `sensorIds` empty (and `aiControlled`) ⇒ the
     // builtin eyeball, per the decision record: honest sensing is the default, not an opt-in, so an
@@ -288,6 +305,7 @@ class SensorSystem {
     const EntityManager& m_entityManager;
     const EntityTypeRegistry& m_registry;
     SensorDefResolver m_resolver;
+    IffResolver m_iffResolver; // null = affiliation-rule fallback (see setIffResolver)
 
     std::unordered_map<uint32_t, ObserverState> m_observers;
     std::vector<ObserverWork> m_work; // reused across ticks; no per-tick allocation

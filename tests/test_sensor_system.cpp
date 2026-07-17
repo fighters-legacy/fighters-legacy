@@ -474,3 +474,88 @@ TEST_CASE("SensorSystem: avionics failure strips the suite to eyes and drops eve
     f.sys.setAvionicsFailed(observer.index);
     f.sys.setAvionicsFailed(9999u);
 }
+
+// ── IFF / identification (#527) ──────────────────────────────────────────────
+
+TEST_CASE("SensorSystem: a same-faction contact is identified as a Friend", "[sensor_system][iff]") {
+    Fixture f;
+    const EntityId observer = f.spawn(0, 0, 0);
+    const EntityId wingman = f.spawn(10.0 * kMPerNm, 0, 0);
+    f.em.get(observer)->factionIndex = 1;
+    f.em.get(wingman)->factionIndex = 1; // same team
+
+    f.sys.addObserver(observer.index, {"t:radar"}, 0.5f, 0.5f);
+    f.check(1);
+
+    const Contact* c = f.sys.contactsFor(observer.index)->find(wingman);
+    REQUIRE(c != nullptr);
+    CHECK(c->ident == Identification::Friend); // it squawked friendly, even on a bare radar contact
+}
+
+TEST_CASE("SensorSystem: a hostile radar blip is Unknown until it is locked", "[sensor_system][iff]") {
+    // No coalition registry ⇒ the affiliation fallback: distinct non-zero factions are hostile. But a
+    // soft (TWS) radar contact is not a positive ID, so it stays Unknown — the ROE-critical state.
+    Fixture f;
+    const EntityId observer = f.spawn(0, 0, 0);
+    const EntityId bandit = f.spawn(10.0 * kMPerNm, 0, 0);
+    f.em.get(observer)->factionIndex = 1;
+    f.em.get(bandit)->factionIndex = 2;
+
+    f.sys.addObserver(observer.index, {"t:radar"}, 0.5f, 0.5f); // default TWS
+    f.check(1);
+
+    const Contact* blip = f.sys.contactsFor(observer.index)->find(bandit);
+    REQUIRE(blip != nullptr);
+    CHECK(blip->state == ContactState::Locked);    // TWS reaches Locked...
+    CHECK_FALSE(blip->firingQuality);              // ...but it is a soft lock...
+    CHECK(blip->ident == Identification::Unknown); // ...so not a positive ID
+
+    // Commit an STT lock: a firing-quality track positively identifies the hostile as a Foe.
+    f.sys.setRadarMode(observer.index, RadarMode::Stt);
+    f.sys.setDesignatedTarget(observer.index, bandit);
+    f.check(2);
+    const Contact* locked = f.sys.contactsFor(observer.index)->find(bandit);
+    REQUIRE(locked != nullptr);
+    CHECK(locked->firingQuality);
+    CHECK(locked->ident == Identification::Foe);
+}
+
+TEST_CASE("SensorSystem: a neutral (faction 0) contact is Unknown, never Foe", "[sensor_system][iff]") {
+    Fixture f;
+    const EntityId observer = f.spawn(0, 0, 0);
+    const EntityId neutral = f.spawn(10.0 * kMPerNm, 0, 0);
+    f.em.get(observer)->factionIndex = 1;
+    // neutral stays faction 0
+
+    f.sys.addObserver(observer.index, {"t:radar"}, 0.5f, 0.5f);
+    f.sys.setRadarMode(observer.index, RadarMode::Stt); // even a hard lock on a neutral is not a foe
+    f.sys.setDesignatedTarget(observer.index, neutral);
+    f.check(1);
+
+    const Contact* c = f.sys.contactsFor(observer.index)->find(neutral);
+    REQUIRE(c != nullptr);
+    CHECK(c->ident == Identification::Unknown);
+}
+
+TEST_CASE("SensorSystem: a coalition resolver makes an allied faction a Friend", "[sensor_system][iff]") {
+    // With a registry, factions 1 and 2 can be ALLIES (Friendly) even though they are distinct — the
+    // affiliation fallback would call them hostile. The injected resolver decides.
+    Fixture f;
+    f.sys.setIffResolver([](uint16_t a, uint16_t b) {
+        if (a == b || (a == 1 && b == 2) || (a == 2 && b == 1))
+            return FactionRelation::Friendly; // 1 and 2 are coalition partners
+        return FactionRelation::Hostile;
+    });
+
+    const EntityId observer = f.spawn(0, 0, 0);
+    const EntityId ally = f.spawn(10.0 * kMPerNm, 0, 0);
+    f.em.get(observer)->factionIndex = 1;
+    f.em.get(ally)->factionIndex = 2;
+
+    f.sys.addObserver(observer.index, {"t:radar"}, 0.5f, 0.5f);
+    f.check(1);
+
+    const Contact* c = f.sys.contactsFor(observer.index)->find(ally);
+    REQUIRE(c != nullptr);
+    CHECK(c->ident == Identification::Friend); // allied, so it squawks friendly
+}

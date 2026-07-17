@@ -63,6 +63,10 @@ void SensorSystem::setResolver(SensorDefResolver fn) {
     m_resolver = std::move(fn);
 }
 
+void SensorSystem::setIffResolver(IffResolver fn) {
+    m_iffResolver = std::move(fn);
+}
+
 std::shared_ptr<const SensorDef> SensorSystem::resolve(const std::string& id) const {
     if (!m_resolver || id.empty())
         return nullptr;
@@ -367,6 +371,14 @@ void SensorSystem::evaluateObserver(const ObserverWork& work, const SpatialIndex
         c.state = best;
         c.sensorTypeMask = typeMask;
         c.firingQuality = firingQuality;
+
+        // IFF (#527): classify the contact from the observer's coalition relationship to it and how it
+        // is held. Friend if it squawks; Foe only if hostile AND positively identified (VID or lock);
+        // Unknown otherwise. This — not the raw factionIndex — is the honest, display-safe fact.
+        const FactionRelation rel = m_iffResolver ? m_iffResolver(self.factionIndex, tgt.factionIndex)
+                                                  : affiliationRelation(self.factionIndex, tgt.factionIndex);
+        c.ident = classifyIff(rel, typeMask, firingQuality);
+
         c.firstDetectedTick = firstDetected;
         c.lastSeenTick = lastSeen;
 

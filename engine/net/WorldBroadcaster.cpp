@@ -193,6 +193,14 @@ WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegis
     // inherits the shooter's honest belief, never ground truth.
     m_projectileSystem.setSupportQuery(
         [this](uint32_t shooterIdx) -> const sensor::ContactTable* { return m_sensorSystem.contactsFor(shooterIdx); });
+
+    // IFF (#527): resolve the observer→target coalition relationship through the faction registry when
+    // one is loaded, else the affiliation-rule fallback — the SAME semantics as fl::hostile() (a
+    // mission's relationship matrix wins; before a mission loads, distinct non-zero factions are
+    // hostile). Read `m_factionRegistry` dynamically so a registry set after construction is picked up.
+    m_sensorSystem.setIffResolver([this](uint16_t obs, uint16_t tgt) -> FactionRelation {
+        return m_factionRegistry ? m_factionRegistry->relationship(obs, tgt) : sensor::affiliationRelation(obs, tgt);
+    });
 }
 
 WorldBroadcaster::~WorldBroadcaster() = default;

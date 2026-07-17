@@ -4,6 +4,7 @@
 
 #include "sensor/BuiltinSensors.h"
 #include "sensor/Detection.h"
+#include "sensor/Iff.h"
 
 #include <cmath>
 #include <numbers>
@@ -455,4 +456,40 @@ TEST_CASE("environmentPodScale: degradation is monotonic in cloud cover", "[sens
         CHECK(s <= prev); // thicker cloud never helps
         prev = s;
     }
+}
+
+// ── IFF classification (#527) ────────────────────────────────────────────────
+
+TEST_CASE("classifyIff: a friend squawks and is known at any range", "[sensor][iff]") {
+    // A friendly relationship is Friend regardless of how it is held — no VID needed. This is the
+    // safe direction: the engine never mislabels a friend.
+    CHECK(classifyIff(FactionRelation::Friendly, /*mask=*/0u, /*firing=*/false) == Identification::Friend);
+    const uint8_t radarOnly = 1u << static_cast<int>(SensorType::Radar);
+    CHECK(classifyIff(FactionRelation::Friendly, radarOnly, false) == Identification::Friend);
+}
+
+TEST_CASE("classifyIff: a neutral is Unknown", "[sensor][iff]") {
+    const uint8_t visual = 1u << static_cast<int>(SensorType::Visual);
+    CHECK(classifyIff(FactionRelation::Neutral, visual, true) == Identification::Unknown);
+}
+
+TEST_CASE("classifyIff: a hostile is Unknown until positively identified", "[sensor][iff]") {
+    const uint8_t radar = 1u << static_cast<int>(SensorType::Radar);
+    const uint8_t visual = 1u << static_cast<int>(SensorType::Visual);
+
+    // A bare radar blip on a hostile is NOT a foe — it is unknown. This is the ROE-critical case: a
+    // careless BVR shot at an unknown can be a friendly-fire kill.
+    CHECK(classifyIff(FactionRelation::Hostile, radar, /*firing=*/false) == Identification::Unknown);
+
+    // Eyes on it (VID) makes it a foe...
+    CHECK(classifyIff(FactionRelation::Hostile, visual, false) == Identification::Foe);
+    // ...as does a committed firing-quality (STT) lock.
+    CHECK(classifyIff(FactionRelation::Hostile, radar, /*firing=*/true) == Identification::Foe);
+}
+
+TEST_CASE("affiliationRelation: faction 0 is neutral, distinct non-zero are hostile", "[sensor][iff]") {
+    CHECK(affiliationRelation(0, 5) == FactionRelation::Neutral);
+    CHECK(affiliationRelation(5, 0) == FactionRelation::Neutral);
+    CHECK(affiliationRelation(3, 3) == FactionRelation::Friendly);
+    CHECK(affiliationRelation(1, 2) == FactionRelation::Hostile);
 }
