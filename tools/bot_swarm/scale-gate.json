@@ -47,7 +47,7 @@
       "assert_max_wire_kbs": 150
     },
     "soak": {
-      "_comment": "2 h soak-stability run on the shipping transport (GNS, #773). Same strict thresholds as `reference`; the server self-reports RSS in the tick metrics (#707) and the leak gate hard-fails if growth exceeds assert_max_rss_growth_kb (~256 MiB over 2 h).",
+      "_comment": "2 h soak-stability run on the shipping transport (GNS, #773). Same strict thresholds as `reference`; the server self-reports RSS in the tick metrics (#707). The leak gate hard-fails if endpoint growth exceeds assert_max_rss_growth_kb (~256 MiB over 2 h) OR if the RSS growth TREND fitted over the run's tail exceeds assert_max_rss_slope_kb_per_min (#789) — the trend catches a slow leak that stayed under the endpoint bound. bot_swarm samples RSS every 30 s (240 points over 2 h) and fits the final half.",
       "clients": 128,
       "duration_s": 7200,
       "patterns": [
@@ -59,6 +59,7 @@
       "assert_min_tick_hz": 58,
       "assert_max_tick_ms": 16.6,
       "assert_max_rss_growth_kb": 262144,
+      "assert_max_rss_slope_kb_per_min": 128,
       "assert_max_wire_kbs": 150
     },
     "entity-scale": {

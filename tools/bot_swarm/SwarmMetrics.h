@@ -12,7 +12,9 @@
 // --metrics-json file via --server-metrics; the client-side "observed_server_tick_hz" proxy
 // is retained for comparison (extend, don't replace). schema_version = 3 adds "transport"
 // (#649) — the backend the swarm ACTUALLY spoke, so a GNS gate can prove it measured GNS
-// rather than an enet6 fallback.
+// rather than an enet6 fallback. schema_version = 4 adds "rss_series" (a periodic RSS time
+// series) + the slope-based leak assert (#789) — one end-of-run RSS sample cannot tell a
+// 128-client working set held flat from a slow leak that stayed under the bound; the trend can.
 
 #include "NetStats.h"
 #include "SwarmConfig.h"
@@ -25,7 +27,51 @@
 
 namespace fl {
 
-constexpr int kSwarmReportSchemaVersion = 3;
+constexpr int kSwarmReportSchemaVersion = 4;
+
+// One periodic RSS reading over the run: wall-seconds from measurement start + server RSS in KB.
+struct RssSample {
+    double tS{0.0};
+    int64_t rssKb{0};
+};
+
+// Fraction of the run (measured by time, from the tail) the leak slope is fitted over. The head of
+// the run is the connect ramp + working-set fill, where RSS legitimately climbs to its 128-client
+// plateau; only the tail is the "still growing?" signal. Default: the final half.
+constexpr double kRssSlopeTailFraction = 0.5;
+
+// Least-squares RSS growth rate (KB/min) over the final `tailFraction` of the series. Returns
+// nullopt when the tail has fewer than two distinct-time points (cannot fit a line) — the caller
+// treats that as "not evaluable", distinct from a genuine flat (0 KB/min) fit. Positive = growing.
+inline std::optional<double> rssSlopeKbPerMin(const std::vector<RssSample>& series, double tailFraction) {
+    if (series.size() < 2)
+        return std::nullopt;
+    const double firstT = series.front().tS;
+    const double lastT = series.back().tS;
+    if (lastT <= firstT)
+        return std::nullopt;
+    const double tailStart = lastT - (lastT - firstT) * tailFraction;
+
+    double n = 0.0, sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
+    for (const auto& s : series) {
+        if (s.tS < tailStart)
+            continue;
+        const double x = s.tS;
+        const double y = static_cast<double>(s.rssKb);
+        n += 1.0;
+        sx += x;
+        sy += y;
+        sxx += x * x;
+        sxy += x * y;
+    }
+    if (n < 2.0)
+        return std::nullopt;
+    const double denom = n * sxx - sx * sx;
+    if (denom == 0.0)
+        return std::nullopt;                                // all tail samples share one timestamp
+    const double slopePerSec = (n * sxy - sx * sy) / denom; // KB/s
+    return slopePerSec * 60.0;                              // KB/min
+}
 
 // Written by one worker thread; read after the run.
 struct ClientMetrics {
@@ -82,10 +128,16 @@ struct SwarmReport {
     double assertMaxTickMs{0.0};
     int assertMinEntities{0};
     int64_t assertMaxRssGrowthKb{0};
+    double assertMaxRssSlopeKbPerMin{0.0};   // 0 = disabled (#789)
     double assertMaxLoadFactor{-1.0};        // <0 = disabled (#574)
     int64_t assertMaxDroppedTicks{-1};       // <0 = disabled (#574)
     double assertCongestionEngagedHz{0.0};   // 0 = disabled (#714)
     double assertCongestionRecoveredHz{0.0}; // 0 = disabled (#714)
+
+    // Periodic RSS trend (#789): the sampled series and the fitted tail slope (KB/min). The slope is
+    // present only when the tail had enough points to fit; nullopt = not evaluable (too few samples).
+    std::vector<RssSample> rssSeries;
+    std::optional<double> rssSlopeKbPerMin;
 
     // Authoritative server-side tick budget (from fl-server --metrics-json), when available.
     bool hasServer{false};
@@ -97,7 +149,8 @@ struct SwarmReport {
 // vectors (computeStats sorts) — callers pass throwaway copies.
 inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientMetrics>& clients, double elapsedS,
                                std::vector<double> workerDtMs, int threadsUsed,
-                               std::optional<ServerTickReport> server = std::nullopt) {
+                               std::optional<ServerTickReport> server = std::nullopt,
+                               std::vector<RssSample> rssSeries = {}) {
     SwarmReport r;
     r.host = cfg.host;
     r.port = cfg.port;
@@ -114,6 +167,7 @@ inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientM
     r.assertMaxTickMs = cfg.assertMaxTickMs;
     r.assertMinEntities = cfg.assertMinEntities;
     r.assertMaxRssGrowthKb = cfg.assertMaxRssGrowthKb;
+    r.assertMaxRssSlopeKbPerMin = cfg.assertMaxRssSlopeKbPerMin;
     r.assertMaxLoadFactor = cfg.assertMaxLoadFactor;
     r.assertMaxDroppedTicks = cfg.assertMaxDroppedTicks;
     r.assertCongestionEngagedHz = cfg.assertCongestionEngagedHz;
@@ -122,6 +176,8 @@ inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientM
         r.hasServer = true;
         r.server = *server;
     }
+    r.rssSeries = std::move(rssSeries);
+    r.rssSlopeKbPerMin = rssSlopeKbPerMin(r.rssSeries, kRssSlopeTailFraction);
 
     std::vector<double> kbs, rtt, connect, tick;
     uint64_t totalSnapshotBytes = 0;
@@ -177,6 +233,13 @@ inline SwarmReport buildReport(const SwarmConfig& cfg, const std::vector<ClientM
         (!r.hasServer || (static_cast<int64_t>(r.server.rssKb) - static_cast<int64_t>(r.server.rssStartupKb)) >
                              cfg.assertMaxRssGrowthKb))
         pass = false;
+    // Soak leak TREND gate (#789 hook): fit RSS over the tail of the run and fail if the sustained
+    // growth rate exceeds the cap. A flat tail is the real "no leak" signal — the endpoint bound
+    // above stays as the coarse backstop. Not evaluable (too few samples) while the assert is enabled
+    // is a failure, like the other server gates: the gate could not be checked, so do not pass it.
+    if (cfg.assertMaxRssSlopeKbPerMin > 0.0 &&
+        (!r.rssSlopeKbPerMin.has_value() || *r.rssSlopeKbPerMin > cfg.assertMaxRssSlopeKbPerMin))
+        pass = false;
     // Overrun-governor gate (#574 hook). load_factor: the governor shed under load iff it dropped below
     // the threshold (< 1) — so this fails when the governor never engaged (load_factor stays 1.0).
     // dropped_ticks: the graceful-not-spiral property (the governor should keep GameLoop drops at ~0).
@@ -225,9 +288,13 @@ inline void printReport(const SwarmReport& r) {
     if (r.hasServer && (r.assertCongestionEngagedHz > 0.0 || r.assertCongestionRecoveredHz > 0.0))
         std::printf("congestion: min send %.1f Hz, recovered to %.1f Hz, max loss %.3f\n", r.server.congestionMinSendHz,
                     r.server.congestionRecoveredSendHz, r.server.congestionMaxLoss);
+    if (!r.rssSeries.empty())
+        std::printf("RSS series: %zu samples, tail slope %s KB/min (final %.0f%% of run)\n", r.rssSeries.size(),
+                    r.rssSlopeKbPerMin ? std::to_string(*r.rssSlopeKbPerMin).c_str() : "n/a",
+                    kRssSlopeTailFraction * 100.0);
     if (r.assertMinTickHz > 0.0 || r.assertMaxKbs > 0.0 || r.assertMaxTickMs > 0.0 || r.assertMinEntities > 0 ||
-        r.assertMaxRssGrowthKb > 0 || r.assertMaxLoadFactor >= 0.0 || r.assertMaxDroppedTicks >= 0 ||
-        r.assertCongestionEngagedHz > 0.0 || r.assertCongestionRecoveredHz > 0.0)
+        r.assertMaxRssGrowthKb > 0 || r.assertMaxRssSlopeKbPerMin > 0.0 || r.assertMaxLoadFactor >= 0.0 ||
+        r.assertMaxDroppedTicks >= 0 || r.assertCongestionEngagedHz > 0.0 || r.assertCongestionRecoveredHz > 0.0)
         std::printf("asserts: %s\n", r.assertsPassed ? "PASS" : "FAIL");
     std::printf("---\n");
 }
@@ -267,17 +334,36 @@ inline std::string reportToJson(const SwarmReport& r) {
         const std::string sj = toJson(r.server, 2);
         out += "  \"server_tick\": " + sj.substr(2) + ",\n";
     }
-    char tail[896];
+    // RSS trend (#789): the sampled series + the fitted tail slope, so a soak can plot growth and
+    // gate on the trend, not just the endpoint.
+    if (!r.rssSeries.empty()) {
+        out += "  \"rss_series\": [";
+        for (std::size_t i = 0; i < r.rssSeries.size(); ++i) {
+            char b[96];
+            std::snprintf(b, sizeof(b), "%s{ \"t_s\": %.1f, \"rss_kb\": %lld }", i ? ", " : "", r.rssSeries[i].tS,
+                          static_cast<long long>(r.rssSeries[i].rssKb));
+            out += b;
+        }
+        out += "],\n";
+        char sb[128];
+        if (r.rssSlopeKbPerMin)
+            std::snprintf(sb, sizeof(sb), "  \"rss_slope_kb_per_min\": %.3f,\n", *r.rssSlopeKbPerMin);
+        else
+            std::snprintf(sb, sizeof(sb), "  \"rss_slope_kb_per_min\": null,\n");
+        out += sb;
+    }
+    char tail[1024];
     std::snprintf(tail, sizeof(tail),
                   "  \"aggregate_downstream_mbs\": %.3f, \"max_snapshot_gap_ms\": %.3f,\n"
                   "  \"asserts\": { \"min_tick_hz\": %.3f, \"max_kbs\": %.3f, \"max_tick_ms\": %.3f, "
-                  "\"min_entities\": %d, \"max_rss_growth_kb\": %lld, \"max_load_factor\": %.3f, "
+                  "\"min_entities\": %d, \"max_rss_growth_kb\": %lld, \"max_rss_slope_kb_per_min\": %.3f, "
+                  "\"max_load_factor\": %.3f, "
                   "\"max_dropped_ticks\": %lld, \"congestion_engaged_hz\": %.3f, "
                   "\"congestion_recovered_hz\": %.3f, \"passed\": %s }\n"
                   "}\n",
                   r.aggregateDownstreamMbs, r.maxSnapshotGapMs, r.assertMinTickHz, r.assertMaxKbs, r.assertMaxTickMs,
-                  r.assertMinEntities, static_cast<long long>(r.assertMaxRssGrowthKb), r.assertMaxLoadFactor,
-                  static_cast<long long>(r.assertMaxDroppedTicks), r.assertCongestionEngagedHz,
+                  r.assertMinEntities, static_cast<long long>(r.assertMaxRssGrowthKb), r.assertMaxRssSlopeKbPerMin,
+                  r.assertMaxLoadFactor, static_cast<long long>(r.assertMaxDroppedTicks), r.assertCongestionEngagedHz,
                   r.assertCongestionRecoveredHz, r.assertsPassed ? "true" : "false");
     out += tail;
     return out;

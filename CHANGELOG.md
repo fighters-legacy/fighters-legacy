@@ -13,6 +13,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **sensor**: Optional `[sensor] role` (`aircraft`/`seeker`, default `aircraft`); tooling-only. A `seeker` head is exempt from the non-emitting-track-lobe warning (#902)
 - **ai**: `DynamicLoiterController` orbits a **moving** entity — re-centers the loiter circle on the target's live position each tick and matches its altitude; exposed as the `dynamic_loiter` AI behavior, and the `escort` template now tracks the moving escortee instead of its spawn point (#464)
 - **engine**: `IWindow::showFolderDialog(title, defaultLocation)` — native folder picker for content-pack `configure()` UIs; non-pure with a nullopt default (implementors/mocks keep compiling), SDL3 backend via `SDL_ShowFileDialogWithProperties`. Adds a virtual to the `IWindow` vtable — rebuild native plugins against this header revision (#665)
+- **tools**: `bot_swarm` samples server RSS periodically into an `rss_series` (report `schema_version` 4) and gates on the growth **trend** — `--assert-max-rss-slope-kb-per-min` fits the run's tail and fails a slow leak that stayed under the endpoint bound; wired into the `soak` scale-gate profile (#789)
 
 ### Fixed
 

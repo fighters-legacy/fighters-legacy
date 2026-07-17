@@ -79,6 +79,24 @@ The scale gate ([CI scale gate](#ci-scale-gate)) asserts on `server_tick.tick_ms
 (`rss_kb − rss_startup_kb`) via `--assert-max-rss-growth-kb` — a portable, hard-gated memory-leak
 signal that replaces the shell `ps` sampler (#707).
 
+### RSS trend, not just the endpoint (#789)
+
+One end-of-run RSS sample cannot distinguish a 128-client working set that filled at connect and
+held flat (healthy) from a slow leak that grew all run but stayed under the endpoint bound — both
+land on the same final number. So `bot_swarm` also samples the server's RSS **periodically** (every
+`--rss-sample-interval-s`, default 30 s → 240 points over a 2 h soak) into a `rss_series` array in
+the report (schema_version `4`), and fits a least-squares line over the run's **tail** (the final
+half, past the connect ramp + working-set fill where RSS legitimately climbs to its plateau). The
+fitted growth rate is reported as `rss_slope_kb_per_min`.
+
+`--assert-max-rss-slope-kb-per-min X` fails the run if that sustained tail growth exceeds `X` KB/min.
+A flat tail is the real "no leak" signal; the endpoint bound (`--assert-max-rss-growth-kb`) stays as
+the coarse backstop. Both need `--server-metrics`. The `soak` profile sets
+`assert_max_rss_slope_kb_per_min` so the gate fails a slow-leak server while passing the real one —
+the plateau is now a falsifiable claim, not just "it ended under the bound". A series too short to
+fit reports `rss_slope_kb_per_min: null` and, if the assert is enabled, fails (an unevaluable gate is
+not a passed gate).
+
 ## Scale-gate targets
 
 128 clients @ 60 Hz with sim tick **≤ 16.6 ms p99** (observed tick-Hz ≈ 60) on a reference
