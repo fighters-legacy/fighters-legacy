@@ -15,7 +15,9 @@ These are the non-negotiable design values that resolve every ambiguous feature 
   Players can be effective with a keyboard; HOTAS rewards precision without being required.
 - **Approachable by default**: New players should be in the air and shooting within minutes
   of first launch. Every simulation-leaning feature has a difficulty toggle that makes it
-  optional.
+  optional. Approachability includes **accessibility**: colorblind-safe presentation
+  (friend/foe and team colours distinguishable under CVD), subtitles for all radio traffic
+  (human and synthetic alike), and scalable UI are baseline courtesies, not backlog extras.
 - **Single-player first, multiplayer co-equal**: A rich solo experience (campaign, instant
   action, training) is a first-class foundation — *and* large-scale multiplayer is a co-equal
   product pillar, not a secondary extension. PvP (squadron/team battles), co-op PvE (shared

@@ -185,6 +185,27 @@ classical ancestor and a modern contrast:
   dynamic-campaign engines (Falcon 4's campaign). The initiative's bet is that **local-first,
   degradation-safe** agentic AI is the first genuinely new axis in this genre in two decades.
 
+### Voice & AI-comms prior art
+
+The proven shipping pattern for AI in games (mid-2026) is **small local models out of the hot loop,
+behind validated interfaces** — voice synthesis is solved; reliable agentic decision-making is not.
+This validates the initiative's out-of-tick, validated-paths posture and points at voice as the
+highest-value, lowest-risk near-term AI feature.
+
+- **DCS-SimpleRadio-Standalone (SRS)** — the community's radio-modeled voice layer (voice tied to
+  in-cockpit radios, LOS/distance realism, PTT). It is the *de facto* bar; the players who want it
+  bolt it on. Native, open, server-configurable radio-net voice (Epic J / #499) is the differentiator.
+- **BeyondATC (MSFS)** — AI-voice ATC with real phraseology and a local on-device voice path. The
+  community verdict — voices praised, AI *vectoring/decision logic* the weak point — is exactly the
+  split we design around: deterministic ATC logic (#673), AI *voice* on top (Epic O TTS).
+- **WhisperAttack / Wingman AI (community, DCS/MSFS)** — offline Whisper STT → command/LLM pipelines,
+  runnable fully local (Ollama/LM Studio). Proof that a CPU-viable STT voice-command tier is real and
+  wanted; we ship it natively (deterministic phrase-match onto the wingman grammar) rather than as a
+  third-party bolt-on.
+- **NVIDIA ACE (inZOI, PUBG Ally, NARAKA)** — the visible large deployment; architecturally it runs a
+  *small* local model (≈8B) + local STT/TTS, never a giant cloud LLM in the loop. Same shape as our
+  9B floor + out-of-tick guarantee.
+
 ---
 
 ## Flight Model Prior Art

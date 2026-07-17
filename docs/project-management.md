@@ -91,8 +91,9 @@ type wins. (See [Lessons & Rev 2](#lessons--rev-2).)
 
 ## Milestones
 
-**One milestone per phase** — Phase 3 (active) through Phase 9. The milestone answers *when*
-a piece of work is scheduled; phase gating (a phase depends on prior phases) is described in
+**One milestone per phase** — Phase 4 (active) through Phase 9; Phases 1–3 are closed
+(Phase 3 gated at `v0.3.0`, 2026-07-10). The milestone answers *when* a piece of work is
+scheduled; phase gating (a phase depends on prior phases) is described in
 [roadmap.md](roadmap.md). Assign every issue to its phase milestone at triage. Items with no
 scheduled phase get the `backlog` label instead.
 
@@ -100,7 +101,18 @@ scheduled phase get the `backlog` label instead.
 sub-issue. Epics span phases (their sub-issues keep their own per-phase milestones), so an
 epic whose decomposition extends into a later phase is re-homed forward rather than left
 blocking an earlier milestone or closed with open subs (convention set 2026-07-01 with
-#494/#496, applied to #588–#592).
+#494/#496, applied to #588–#592). The re-home is applied *both ways*: when an epic's last
+open sub is pulled *earlier* (e.g. the observer/GM epic #851 finishing inside Phase 4), the
+epic re-homes back to that phase. The phase-gate close checklist ([roadmap.md](roadmap.md))
+runs this sweep at every gate.
+
+**Epic decomposition — decompose at phase entry, not at filing.** A newly-created epic is a
+*skeleton* (≤ 3 marker sub-issues capturing the known shape); it is fully decomposed into
+Feature/Task sub-issues only when its start phase becomes active and it reaches the top of
+the Order queue. Decomposing every epic up front is guaranteed rework — scope shifts under
+epics that are phases away (the 2026-07-17 review reshaped several before they were ever
+picked up). #468 (24 subs) was decomposed because it was next; a Phase 8 epic stays a
+skeleton until Phase 8.
 
 **Due dates** are set only on the active phase's milestone and on externally anchored gates
 (Phase 4 carries the fl-base-pack readiness date). Later phases are sequentially gated, not
@@ -123,22 +135,29 @@ board is the complete picture without manual curation.
 **Fields:**
 
 - **Status** — `Todo` → `In Progress` → `Done`. The kanban columns.
-- **Effort** — single-select size estimate (see [Lessons & Rev 2](#lessons--rev-2)).
+- **Effort** — *retired 2026-07 (unused).* Options were never defined, no consumer for
+  sizing/velocity data ever emerged, and planning runs on release cadence + issue counts.
+  Hidden from all three views; not backfilled. (The "define it day one" advice survives in
+  the [adoption checklist](#adopting-this-in-a-new-project) for *new* projects — an empty
+  field is worse than no field.)
 - **Order** — the explicit implementation-order ranking (number field), two layers
-  (convention set 2026-07-01):
+  (convention set 2026-07-01, amended 2026-07-17):
   - **Epics: `1–N`** — one unified initiative sequence across all open epics, in planned
     implementation-start order. Derived from the roadmap's dependency records (e.g. the
     scaling spine finishes first; mission runtime → weapons; M precedes N/O/P; H→C→D with
     G alongside and K last). Epics sort to the top of an Order-sorted view as initiative
-    headers.
-  - **Work items: phase bands** — the thousands digit encodes the phase sequence: the
-    active phase uses small numbers (`10+`, step 10), then Phase 4 = `1000s` (step 5,
-    largest band), Phase 5 = `2000s`, Phase 6 = `3000s`, Phase 7 = `4000s`,
-    Phase 8 = `5000s`, Phase 9 = `6000s` (step 10). An item's band always matches its own
-    milestone. Within a band, items group into blocks following the epic sequence, and
-    within a block follow the epic's curated sub-issue order; standalones are slotted by
-    dependency. Gaps allow insertion without renumbering; re-band items when they change
-    milestone.
+    headers. **Closed epics vacate their number** — leave the gap; new epics slot into gaps
+    at their dependency position. Never renumber.
+  - **Work items: phase bands** — the thousands digit encodes the phase sequence, and the
+    bands are **permanent**: Phase 4 = `1000s`, Phase 5 = `2000s`, Phase 6 = `3000s`,
+    Phase 7 = `4000s`, Phase 8 = `5000s`, Phase 9 = `6000s` (step 10). The **active band is
+    simply the lowest band that still has open items** — the original "active phase uses
+    small numbers `10+`" rule applied only to the founding phase and retired with the Phase 3
+    close, so there is **no renumbering at a phase roll, ever**. An item's band always
+    matches its own milestone. Within a band, items group into blocks following the epic
+    sequence, and within a block follow the epic's curated sub-issue order; standalones are
+    slotted by dependency. Gaps allow insertion without renumbering; re-band items when they
+    change milestone.
 - **Start Date** / **Target Date** — drive the Roadmap timeline.
 - **Parent issue** / **Sub-issues progress** — epic decomposition and rollup.
 - **Milestone**, **Labels**, **Assignees** — mirrored from the issue.
@@ -151,7 +170,10 @@ When opening or grooming an issue, set all of:
 - [ ] **Milestone** — the phase it belongs to (or `backlog` label if unscheduled).
 - [ ] **`component:` label(s)** — the subsystem(s) it touches.
 - [ ] **Project** — confirm it's on the board (auto-add handles new issues).
-- [ ] **Parent** — link it under its Epic if it's part of one.
+- [ ] **Parent** — link it under its Epic if it's part of one. *Cross-repo:* every new
+      `fl-base-pack` issue is parented under engine epic **#54** (initial content) at triage
+      until #54 closes at the Phase 4 gate, so the engine board's rollup stays an honest
+      content-readiness gauge.
 - [ ] **Status** — `Todo` until picked up.
 
 ## Decision records and RFCs
@@ -214,9 +236,15 @@ What worked, and what we would change starting from scratch:
 
 **Change on day one next time:**
 
-- **Define the `Effort` options at project creation.** The field exists here but was never
-  given options, so sizing/velocity tracking never happened. Pick a scale (T-shirt `XS`–`XL`
-  or Fibonacci) up front and apply it going forward.
+- **Define the `Effort` options at project creation — or delete the field.** The field
+  existed here but was never given options, so sizing/velocity tracking never happened; it
+  was retired unused on 2026-07 rather than retro-sized across 246 issues. Pick a scale
+  (T-shirt `XS`–`XL` or Fibonacci) up front and apply it going forward, or don't create the
+  field — an empty field is worse than no field.
+- **Decompose epics at phase entry, not at filing.** Epics filed far ahead of their phase
+  were reshaped before pickup (the 2026-07-17 review), so any up-front decomposition would
+  have been rework. Keep far-off epics as ≤ 3-marker skeletons; decompose when the phase
+  activates and the epic tops the Order queue.
 - **Adopt issue types before filing issues.** Types were enabled mid-project, leaving a tail
   of untyped issues to backfill. Enable them first.
 - **Decide the type-vs-label policy explicitly.** Enabling types after the `enhancement` /

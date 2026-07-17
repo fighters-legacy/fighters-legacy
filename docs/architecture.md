@@ -218,6 +218,19 @@ revised by a dated decision record instead of a full RFC, provided the change is
 with its rationale. This keeps the velocity of pre-1.0 architecture work without leaving the
 locked table silently stale.
 
+**2026-07-17 — VR (OpenXR) deferred to Phase 8, not rejected.** A mid-2026 gap analysis against the
+genre bar noted that VR is a celebrated feature of the closest comparable title (Project Wingman)
+and a real differentiator for this niche — but it is a renderer-architecture concern (stereo
+swapchains, per-eye passes, reprojection timing, cockpit-scale world-space UI) that belongs with
+Phase 8's "Rendering & Alternative Backends", not earlier. It is therefore **deferred to a Phase 8
+epic, not dropped**. The one obligation this places on Phases 4–7: **no new render pass or HUD/UI
+layer may bake in a single mono eye/camera assumption** — HUD/cockpit layers keep a
+world-space-renderable path in mind, so VR is an additive backend rather than a rewrite when it
+lands. Only **OpenXR** (Khronos, Apache-2.0, vendor-neutral) is acceptable — never a vendor SDK.
+Head tracking (opentrack UDP, a trivial 6-DoF localhost stream) and force feedback are the cheaper
+adjacent items and are scheduled independently (P6 view family / P8). Revisit at Phase 8 planning
+with market data.
+
 **2026-07-15 — Unified connect handshake (#853).** The client now sends `MsgConnectRequest` first
 on connect (role, requested entity type, mounted-pack manifest, a reserved entitlement-token ext
 block) and the server replies `MsgConnectAck` (granted role + assigned entity) or
@@ -338,6 +351,12 @@ anticipated (encryption is backend-internal; the identity token travels in-band)
 closing the `Game.cpp` direct-`ENetNetwork` HAL leak), #508 (encryption/DTLS + LAN-beacon/RCON
 reconciliation), and #509 (FetchContent GNS + Protobuf + libsodium + CI). Full evaluation in
 [docs/transport-selection.md](transport-selection.md).
+> **[2026-07 implementation annotation]** The crypto and protobuf choices in this record were
+> **reversed during #507–#509**: crypto backend = **OpenSSL** (GNS rejects libsodium AES on ARM)
+> and protobuf is **system-preferred with a FetchContent fallback** (CMake blocks the pure-
+> FetchContent protobuf handoff). The [Locked Architectural Decisions](#locked-architectural-decisions)
+> table row and the [transport-selection.md](transport-selection.md) banner carry the corrected decision;
+> this dated record is left intact as history.
 
 **2026-07-01 — Dynamic World & Agentic AI initiative: pluggable local-first inference (Epics M–P,
 #589/#590/#591/#592).** A strategic re-plan found the roadmap covered no ML/LLM/agentic patterns at
