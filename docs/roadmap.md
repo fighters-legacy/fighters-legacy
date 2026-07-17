@@ -12,7 +12,7 @@ drifted from reality during Phase 2. Ordering constraints are listed instead.
 |---|---|---|
 | 1 — Engine Foundation ✓ | HAL, content system, CI/CD | — |
 | 2 — Modern-Particles Engine ✓ | Game loop, flight model, networking, renderer, spherical Earth | Phase 1 complete |
-| 3 — Engine Systems | Spatial partitioning, AI framework, interest management, bindings, quality settings, **scaling seams** (transport replacement, sim job system, wire quantization, load harness) | Phase 2 complete |
+| 3 — Engine Systems ✓ | Spatial partitioning, AI framework, interest management, bindings, quality settings, **scaling seams** (transport replacement, sim job system, wire quantization, load harness) | Phase 2 complete |
 | 4 — Content & Gameplay | fl-base-pack content, weapons/ballistics + sensor framework, mission & campaign runtime, **MP gameplay framework**, avionics/HUD, gameplay audio, advanced vehicle models, replay, agentic-AI substrate + campaign director (Epics M–O start) | Phase 3 complete + fl-base-pack substantially ready |
 | 5 — Multiplayer at Scale & Live Services | Server-side identity/auth, anti-cheat, persistence, ops/observability, k8s/OpenShift operator | Phase 4 complete |
 | 6 — UI Layer & Tooling | IGui HAL + Dear ImGui, in-game mission editor, welcome screen | Phase 5 complete |
@@ -25,13 +25,18 @@ drifted from reality during Phase 2. Ordering constraints are listed instead.
 > a conscious choice). Scaling seams were folded into Phases 3–4. See the
 > [decision record](architecture.md#decision-records) and the cross-cutting initiative below.
 
+> **Phase 3 gated at `v0.3.0` (2026-07-10); milestone closed 0 open / 143 closed.** Phase 4 is
+> the active milestone. The scaling spine (Epics A/B/I/L) landed in Phase 3; the `v0.3.x` series
+> ships interim patches while Phase 4 content is in development.
+
 ## Releases
 
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html), pre-1.0.
 **`v0.N.0` tags the Phase N gate** — cut when the phase's milestone closes with its
 [acceptance criteria](#verification--acceptance-criteria) verified. Interim patch releases
 (`v0.N.x`) ship fixes and increments while the next phase is in development, as
-v0.2.1–v0.2.6 did during Phase 3.
+v0.2.1–v0.2.6 did during Phase 3 and v0.3.1–v0.3.5 are doing during Phase 4. **`v0.4.0` is
+the Phase 4 gate**, tracked by release Task #729.
 
 Each phase gate is tracked by a `release`-labeled Task in the phase's milestone. It sits at
 milestone level rather than under an epic — a phase-gate release serves every epic in the
@@ -42,6 +47,12 @@ cannot close before its release ships.
 CMake version bump) → the release PR merges → `./scripts/tag-release.sh vX.Y.Z` → the tag
 push runs `release.yml` (Windows/Linux/macOS artifacts) → verify the attached artifacts →
 close the milestone.
+
+**Phase-gate close checklist** (so the docs never lag a gate again, as they did between the
+2026-07-10 Phase 3 close and this revision): tag `v0.N.0` → close the milestone → mark the
+Schedule-table row and the acceptance heading ✓ in this file → run an epic re-home sweep
+(re-home any epic whose last open sub changed phase) → prune landed items from the Critical
+Path.
 
 **v1.0.0** follows the Phase 9 gate (v0.9.x is the last pre-1.0 series) and adds the
 maintenance-mode policy to README/CONTRIBUTING.
@@ -58,7 +69,7 @@ by dependency, not by phase boundary:
 | A | Server simulation scalability (data-parallel job system, tick budget) | 3→4 |
 | B | Network bandwidth & snapshot scaling (quantization ✓ #515, 3D interest ✓ #402, priority/budget ✓ #516, acked baselines ✓ #517, selective-ack precision ✓ #566, congestion ✓ #518) | 3→4 |
 | I | Load-testing / bot-swarm harness + 128-client scale gate | 3→4 |
-| L | Network transport replacement — **GameNetworkingSockets landed behind `INetwork`** ([#507](https://github.com/fighters-legacy/fighters-legacy/issues/507)/#508/#509; selected [#506](https://github.com/fighters-legacy/fighters-legacy/issues/506)), enet6 retained as the LAN/low-count backend via `createNetwork()`. Remaining: GNS-native 128-client scale validation ([#649](https://github.com/fighters-legacy/fighters-legacy/issues/649), under Epic I) + Windows/macOS GNS CI legs ([#653](https://github.com/fighters-legacy/fighters-legacy/issues/653)) + enet6-retirement decision ([#652](https://github.com/fighters-legacy/fighters-legacy/issues/652)). | 3→4 (transport optimization) |
+| L | Network transport replacement — **GameNetworkingSockets landed behind `INetwork`** ([#507](https://github.com/fighters-legacy/fighters-legacy/issues/507)/#508/#509; selected [#506](https://github.com/fighters-legacy/fighters-legacy/issues/506)), enet6 retained as the LAN/low-count backend via `createNetwork()`. GNS-native 128-client scale validation ([#649](https://github.com/fighters-legacy/fighters-legacy/issues/649)) ✓ and Windows/macOS GNS CI legs ([#653](https://github.com/fighters-legacy/fighters-legacy/issues/653)) ✓ landed. Remaining: the enet6-retirement decision ([#652](https://github.com/fighters-legacy/fighters-legacy/issues/652), now Phase 5 — see Deferred Levers). | 3→4 (transport optimization) |
 | E | Multiplayer gameplay framework (game modes, teams, scoring, reconnect, spectator) | 4 |
 | F | Combat sensors, datalink & EW (radar modes, IFF, shared track picture). Built on one shared sensor core ([#677](https://github.com/fighters-legacy/fighters-legacy/issues/677)) whose vocabulary is locked by the 2026-07-12 decision record — a single `SensorDef` schema and `Contact` track model serving avionics, AI detection ([#670](https://github.com/fighters-legacy/fighters-legacy/issues/670)) and missile seekers alike. | 4 |
 | J | Voice comms (positional + team; moved earlier from Phase 7) | 4/6 |
@@ -107,7 +118,7 @@ model is configured.
 | Epic | Theme | Phase |
 |---|---|---|
 | M | Agentic AI substrate: provider seam, world-state API, MCP surface ([#589](https://github.com/fighters-legacy/fighters-legacy/issues/589)) | 4→5 |
-| N | Dynamic campaign director — `fl-director` ([#590](https://github.com/fighters-legacy/fighters-legacy/issues/590)) | 4→5 |
+| N | Dynamic campaign director — `fl-director`, between-session theater evolution, war-diary chronicle, GM conjure-mission ([#590](https://github.com/fighters-legacy/fighters-legacy/issues/590)) | 4→5 |
 | O | Conversational crew & command — wingman NL, GCI/AWACS, radio chatter ([#591](https://github.com/fighters-legacy/fighters-legacy/issues/591)) | 4→6 |
 | P | Agentic server operations — `fl-ops` ([#592](https://github.com/fighters-legacy/fighters-legacy/issues/592)) | 5→6 |
 
@@ -154,64 +165,72 @@ recorded in `docs/ai-architecture.md` §9. The **director's 60 s** figure is a b
 timescale, not a synchronous call: it is missed on CPU at exactly the model sizes worth using, so
 `fl-director` generates mission *N+1* while *N* is flown.
 
+Between the scripted menu and the GPU-only LLM intent tier sits a **deterministic voice-command
+tier** — push-to-talk whisper.cpp STT fuzzy-matched onto the six-command `WingmanCommand.h`
+grammar. It runs no LLM, is CPU-viable, is **independent of the #769 GPU decision**, and lets
+*every* server offer "talk to your wingman" with the scripted fallback intact; the LLM intent
+tier is the GPU upgrade layered on top. Both STT (whisper.cpp) and TTS (Piper, for GCI/ATC/
+wingman replies and radio chatter) are CPU-real-time and outside the 9B/GPU model floor.
+
 ---
 
 ## Critical Path
 
-1. **Spatial partitioning (#360) → interest management (#346) → multiplayer at scale (Phase 4)**
-   Broadphase index enables range queries needed for interest management; both must be in
-   before Phase 4 multiplayer acceptance testing with real clients.
+**Landed (Phase 3 gate, `v0.3.0`):** spatial partitioning (#360) → interest management (#346);
+the load harness (Epic I) + data-parallel sim tick (Epic A: #510–#514) + wire quantization
+(Epic B: #515/#402/#516/#517/#566/#518) that proved the 128-client tick/bandwidth budget on the
+8-core reference env ([#505](https://github.com/fighters-legacy/fighters-legacy/issues/505));
+GameNetworkingSockets behind `INetwork` (Epic L: #506–#509, GNS 128-client gate #649); the
+LuaSandbox → `IEntityController` seam (#359); the server-side AI framework (#352) and the
+scripted wingman command grammar (#610). These are history — the chains below are what remains
+open toward `v0.4.0` and beyond.
 
-2. **Load harness (Epic I ✓) → sim parallelism (Epic A) + wire quantization (Epic B) →
-   128-player acceptance.** The bot-swarm harness ([#519](https://github.com/fighters-legacy/fighters-legacy/issues/519))
-   measured the 8-core ceiling ([#505](https://github.com/fighters-legacy/fighters-legacy/issues/505)):
-   it is gated by the single-threaded sim (A) and per-client snapshot bandwidth (B), **not** the
-   transport. A and B proceed on the current `enet6` (B's quantization is transport-agnostic).
-   Transport replacement (Epic L) is decoupled to a later optimisation (encryption/congestion/
-   connection-count headroom); its selection spike ([#506](https://github.com/fighters-legacy/fighters-legacy/issues/506))
-   chose **GameNetworkingSockets** behind `INetwork` (enet6 retained as the LAN/low-count backend),
-   with implementation to follow once A/B raise the sim ceiling.
-   **Epic A progress:** the design spike ([#510](https://github.com/fighters-legacy/fighters-legacy/issues/510))
-   chose a data-parallel single tick (not spatial sharding); the `engine-job` worker pool +
-   parallel AI/integrate passes ([#511](https://github.com/fighters-legacy/fighters-legacy/issues/511)),
-   per-peer snapshot-assembly parallelism (#512), tick-budget instrumentation (#513), and graceful
-   tick-overrun handling (#514) have all landed. The spatial-sharding contingency spike
-   ([#572](https://github.com/fighters-legacy/fighters-legacy/issues/572)) resolved **defer with an
-   explicit trigger criterion** — on one box sharding is dominated by the data-parallel tick; a
-   pre-sharding ladder (shared snapshot encode, governor interest-radius lever) attacks the
-   serialize bottleneck first, and multi-machine sharding is a Phase 5+ product decision. See
-   [server-job-system-design.md](server-job-system-design.md) +
-   [spatial-sharding-design.md](spatial-sharding-design.md).
+1. **Spherical-Earth world (#468, 9/24) ∥ fl-base-pack terrain (#2/#9) → Phase 4 acceptance.**
+   The single biggest Phase 4 risk: engine cube-sphere terrain streaming and the content pack's
+   real-Earth terrain build gate each other (a mission needs both a world to fly over and the
+   engine to stream it). Sequence them together, not in series.
 
-3. **LuaSandbox wired (#359 ✓) → fl-base-pack AI scripts → mission runtime Lua surface (#584)**
-   fl-base-pack Lua behaviour scripts can now target the `compute_control` API shipped in #359;
-   the `world.*` mission-scripting surface (#413/#412) lands under the mission & campaign
-   runtime epic (#584). *(#33 closed as superseded.)*
+2. **Sensor core (#677 ✓) → sensors/EW (Epic F #498: #526 → #527/#528/#529/#642/#641) →
+   avionics/HUD (#587) → padlock/targeting view family (#671, #687–#698).** The shared
+   `SensorDef`/`Contact` model is landed; the avionics and view work consume it.
 
-4. **Server-side AI framework (#352 ✓) → wingman command grammar (#610, Epic O) →
-   sensor/weapons integration (Epics F #498 + weapons #583)**
-   The flight-controller framework is the substrate; the wingman command layer and the
-   radar/weapons integration build on top of it in Phase 4. *(#42 closed as superseded.)*
+3. **Mission runtime remainder (#584: `world.*` Lua surface #413/#412) → campaign director
+   (Epic N #590).** The kill chain (#583) and the deterministic mission/campaign machinery
+   shipped; what remains under #584 is the Lua mission-scripting surface. The agentic substrate
+   (Epic M #589) precedes N/O/P; the deterministic campaign engine (#635) is the system of record
+   the director drives and cannot precede.
 
-5. **fl-base-pack #1–#6 (aircraft, terrain, missions, audio, AI) → Phase 4 acceptance testing**
-   fl-base-pack content work can start in parallel with Phase 3. Phase 4 acceptance is gated
-   on fl-base-pack being substantially complete.
+4. **MP gameplay framework (Epic E #497: #646/#647/#648) + internet server browser (#143) →
+   128-client Phase 4 multiplayer acceptance.** Match lifecycle, chat/kill-feed/scoreboard/
+   respawn, and discovery over the proven A/B/I/L scaling spine.
 
-6. **IGui HAL (#156) → in-game mission editor (#49), subtitle rendering (#165), crash overlay (#236)**
-   All Phase 6 features depend on the IGui interface being stable.
+5. **fl-base-pack content rollup (#54: aircraft roster, terrain, audio, missions) → Phase 4
+   gate (#729) → `v0.4.0`.** Phase 4 acceptance is gated on the content pack being substantially
+   complete; #54 is the cross-repo readiness gauge.
 
-7. **Persistence (Epic H) → identity (Epic C) → anti-cheat (Epic D) + operator (Epic K)**
-   Anti-cheat verdicts and per-account ranking key on identity, which keys on the persistence
-   store; the operator packages and deploys the live-services tier last in Phase 5.
+**Later phases:** IGui HAL (#156) → in-game mission editor (#49) + subtitles (#165) + crash
+overlay (#236) [P6]; persistence (Epic H) → identity (Epic C) → anti-cheat (Epic D) + operator
+(Epic K) [P5]; platform packaging [P7] → OpenGL + headless renderer [P8]. New gameplay/AI epics
+from the 2026-07-17 review slot after chains 2–3's heads; ops/agentic-cluster additions land in
+Phase 5 after Epics G/K.
 
-8. **Platform packaging (Phase 7) → OpenGL renderer (Phase 8)**
-   OpenGL is an optional compatibility layer; it should not block the primary release.
-   The headless/software renderer (Phase 8) enables GPU-free CI visual regression tests.
+---
 
-9. **Mission & campaign runtime (#584) → weapons/damage (#583) → Phase 4 acceptance**
-   The deterministic mission/campaign machinery and the kill chain gate Phase 4. The campaign
-   director (Epic N, #590) drives the same runtime through the same interfaces and cannot
-   precede it; the agentic substrate (Epic M, #589) precedes N/O/P.
+## Deferred Levers (armed triggers)
+
+Some scaling and optimisation work is **designed and trigger-gated but deliberately not built** —
+each is dominated by simpler work today and only pays off under a measurable condition. They live
+here, in a single registry, rather than as perpetually-open issues that would rot on the board.
+**Check this section whenever an Epic I scale gate fails.**
+
+| Lever | Spike | Trigger | Design |
+|---|---|---|---|
+| Reduced-rate ("LOD") physics for distant AI | [#575](https://github.com/fighters-legacy/fighters-legacy/issues/575) | Integrate-bound: `load_factor` at floor + rising `dropped_ticks` + `integrate_ms.mean > 0.5 × tick_ms.mean` on the reference env under product workload | [physics-lod-design.md](physics-lod-design.md) |
+| Spatial sharding + pre-sharding ladder (shared snapshot encode, governor interest-radius lever #726) | [#572](https://github.com/fighters-legacy/fighters-legacy/issues/572) | Sustained `load_factor` at floor + rising `dropped_ticks` + serialize-dominant tick at max workers on the 8-core reference env (multi-machine is a Phase 5+ product decision) | [spatial-sharding-design.md](spatial-sharding-design.md) + the 2026-07-10 [decision record](architecture.md#decision-records) |
+| enet6 retirement (drop the LAN/low-count backend) | [#652](https://github.com/fighters-legacy/fighters-legacy/issues/652) | GNS parity across LAN/single-player/low-count + Windows/macOS GNS CI legs stable (Phase 5) | [transport-selection.md](transport-selection.md) |
+
+Design-complete deferred levers are registered here, not as open issues; when a trigger fires,
+the lever's spike is re-opened into an implementation epic.
 
 ---
 
@@ -242,9 +261,11 @@ Phase 2 acceptance is the **standalone playable sandbox** — no content pack re
 - Spherical-Earth world model functional; `CentralGravityField` and `TerrainStreamer` curvature correction active.
 - CI green on all three platforms (debug, debug-msvc, macOS).
 
-### Phase 3 — Engine Systems
+### Phase 3 — Engine Systems ✓
 
 Phase 3 acceptance is a **complete engine layer** — all features testable with zero content packs.
+**Verified at the `v0.3.0` gate (2026-07-10).** *(moved)* items were re-scoped forward on
+2026-07-01 and are re-validated in their new phase.
 
 > **2026-07-01 Phase 3 close-out re-scope** (see the
 > [decision record](architecture.md#decision-records)): the spherical-Earth epic (#468) and its
@@ -291,7 +312,9 @@ Phase 4 acceptance requires a content pack (fl-base-pack) and is gated on Phase 
 - AI system: wingman follows player and responds to all six commands.
 - Dynamic campaign: frontline advances after objective completion; story mission injects at trigger.
 - Instant Action / Quick Play: reachable without manual mission YAML setup.
-- Replay: mission records and plays back from cockpit and free-camera views.
+- Replay core (#588): a mission records to `.flrep` (quantized snapshot stream) and plays back
+  from cockpit and free-camera views, with the determinism gate (#644) landing alongside the
+  campaign engine. *(ACMI/Tacview export and killcam ride Phase 5.)*
 - Multiplayer: two clients on fl-server complete a cooperative strike mission.
 - MP gameplay framework (Epic E): a data-driven game mode (e.g. team deathmatch) runs a full
   match lifecycle (warmup → active → end → rotation) with team assignment, scoring, spectator,

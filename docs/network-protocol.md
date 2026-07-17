@@ -3,6 +3,21 @@
 This document describes the binary message format used between `fl-server` and game clients
 over ENet UDP. All structs are defined in `engine/net/GameProtocol.h`.
 
+## Why you can trust the netcode (for players)
+
+`fl-server` is **authoritative**: it owns the simulation, and a client sends only *inputs*, never
+positions or hits. The server integrates every aircraft, resolves every weapon, and validates state
+in-tick — an input that would imply an impossible speed, position, or fire rate is rejected, not
+trusted. The client *predicts* your own aircraft locally (so controls feel instant on a ~100 ms
+connection) and *reconciles* to the server's truth; other players are interpolated from the
+authoritative snapshot stream, and hit detection is lag-compensated on the server. On the 128+
+dedicated backend the whole stream is **encrypted** (curve25519 + AES-GCM, on by default). What this
+buys you: a cheating *client* cannot teleport, shoot through walls of the rules, or fabricate kills —
+the server simply won't accept it. What it does not buy (and no self-hosted open game can): kernel-
+level attestation of the machine on the other end; competitive integrity on a community server rests
+on server-authoritative validation, offline statistical review, and community trust/reputation, not
+a spyware driver. The remainder of this document is the implementor's reference.
+
 ## Transport
 
 The wire protocol rides on a UDP transport behind the `platform/INetwork.h` HAL, so the message

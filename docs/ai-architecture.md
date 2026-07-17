@@ -80,16 +80,25 @@ A structured, read-only, out-of-band surface:
 
 ## 4. MCP surface (Epic M, #601)
 
-`fl-server` exposes a **Model Context Protocol** server so any agent runtime can operate it — the
-same surface serves the campaign director, the ops agent, and interactive operator tooling.
+`fl-server` exposes a **Model Context Protocol** server — a **first-class operator and modding
+surface**, not merely the agent door. It is the single command/read path behind the campaign
+director, the ops agent, the game-master overview map (#861), the Epic G web admin (#550), the
+fl-lobby listing (#143), and community spectator tooling (Sneaker-style web GCI falls out of the
+same world-state resource). MCP standardised sharply after this design was first written (donated
+to the Linux Foundation, Dec 2025); the surface below tracks the current spec.
 
 - **Tool catalog:** `world_state` (snapshot read), `events` (stream tail), `admin_command`
   (allowlisted subset of the existing console command set — the #233 REST substrate; MCP and the
   Epic G web admin are two frontends over one command path), `submit_mission` (YAML → runs
   `validate-mission` server-side before acceptance).
+- **Spec conformance:** pin a dated MCP protocol revision; **Streamable HTTP** transport (SSE-only
+  is deprecated); **structured tool-output schemas** (the world-state snapshot already carries a
+  golden-JSON schema — expose it as the tool's output schema); expose **world-state as an MCP
+  resource with subscriptions** and the event stream as notifications (rather than only a polled
+  tool); per-token **read-only default tier** + rate limiting.
 - **Authz:** token-authenticated (reuses the operator-password/AuthTracker patterns); per-token
-  autonomy tier; per-token command allowlist. Every invocation is audit-logged and mirrored into
-  the event stream/replay.
+  autonomy tier (read-only default); per-token command allowlist. Every invocation is audit-logged
+  and mirrored into the event stream/replay.
 - **Config:** `[ai.mcp]` — `enabled` (default false), `bind`/`port`, `autonomy`
   (`observe|recommend|act`), `allowlist` (command names).
 - Threat model coordinates with the Epic D anti-cheat threat model (#545). Sockets follow the
@@ -220,6 +229,16 @@ served by a CPU-only provider — the director simply has to generate ahead (§9
 | STT/TTS (Epic O voice) | whisper.cpp (CPU/CUDA); capture via WASAPI (SDL3) | whisper.cpp (Metal); CoreAudio | whisper.cpp (CPU/CUDA/ROCm); PipeWire |
 | Intent inference host | Server-side (#609) — a **GPU-backed** provider; CPU-only servers ship the scripted wingman (#769) | same | same |
 | MCP/world-state sockets | WSAPoll, no SIGPIPE concern | poll + `SO_NOSIGPIPE` | poll + `MSG_NOSIGNAL` |
+
+**STT and TTS are CPU-real-time and sit outside the 9B/GPU model floor** (which governs *LLM*
+inference only). This matters for the voice feature ladder: between the scripted radio menu and the
+GPU-only LLM intent tier is a **deterministic voice-command tier** — push-to-talk whisper.cpp STT
+fuzzy-matched onto the six-command `WingmanCommand.h` grammar, no LLM at all — that runs on *every*
+server and is what the community bolts on manually (WhisperAttack). Piper TTS likewise voices
+wingman acks, GCI, ATC clearances (deterministic template text — no LLM in ATC logic) and radio
+chatter on CPU, preferring recorded content-pack lines where they exist and always with a subtitle
+fallback. Only the *LLM intent tier* (#611) and *LLM-generated text* (director, narrative) are
+gated by the 9B floor and the #769 GPU decision.
 
 Client-local intent inference — the original assumption — is **not** the plan (#609), which is why
 this table no longer carries a per-OS row for it. The one question that row implied and never
