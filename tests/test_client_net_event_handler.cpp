@@ -1824,7 +1824,7 @@ TEST_CASE("ClientNetEventHandler: SnapshotPeerDelayTicks TLV updates m_estimated
     fl::appendExt(pkt, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerDelayTicks), uint16_t{5u});
 
     uint32_t capturedDelayTicks{0};
-    handler.snapshotCallback = [&](fl::RenderSnapshot&, uint64_t, uint32_t delayTicks) {
+    handler.snapshotCallback = [&](fl::RenderSnapshot&, uint64_t, uint32_t delayTicks, uint32_t) {
         capturedDelayTicks = delayTicks;
     };
 
@@ -1844,7 +1844,7 @@ TEST_CASE("ClientNetEventHandler: snapshotCallback called before publishExternal
 
     int callbackOrder{0};
     int callbackFired{0};
-    handler.snapshotCallback = [&](fl::RenderSnapshot&, uint64_t, uint32_t) {
+    handler.snapshotCallback = [&](fl::RenderSnapshot&, uint64_t, uint32_t, uint32_t) {
         // At callback time, bridge should NOT yet have the snapshot (publishExternal not called).
         callbackFired = ++callbackOrder;
         CHECK(!bridge.hasSnapshot());
