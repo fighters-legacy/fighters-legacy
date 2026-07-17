@@ -295,6 +295,7 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 | Behavior | Args | Description |
 |---|---|---|
 | `loiter` | `[cx cy cz] [radius_m] [alt_m] [throttle] [cw\|ccw]` | Orbit a fixed center point; `cw` = clockwise (default), `ccw` = counterclockwise |
+| `dynamic_loiter` | `<entityIdx> [radius_m] [throttle] [cw\|ccw]` | Orbit a **moving** entity (#464): re-centers the loiter circle on the target's live position each tick and matches its altitude; returns neutral when the target is dead or invalid |
 | `waypoint` | `x1 y1 z1 [x2 y2 z2 ...] [--loop]` | Fly a sequence of 3D waypoints; `--loop` restarts from the first when complete |
 | `pursuit` | `<entityIdx>` | Pursue an entity by pool index; returns neutral when target is dead or invalid |
 | `evade` | `<entityIdx>` | Flee a threat entity by inverting the pursuit heading error |
@@ -309,7 +310,7 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 | `ballistic` | `<tx> <ty> <tz> [mirvCount [spreadM]]` | Ballistic missile guidance (#355) for `type = "ballistic"` entities: boost-phase TVC steering to the impact point with a lofted pitch program, inertial after burnout; `mirvCount > 0` deploys child RVs past apogee (kills credit whoever launched the bus) |
 | `lua` | `<script_name>` | Load a Lua AI script from the content pack's `ai/` directory (e.g. `patrol`, `interceptor`). See `docs/modding/ai.md`. |
 | `patrol_attack` | `<entityIdx> [engageRangeM] [retreatHp]` | Three-state machine: loiter patrol → lead-pursuit engage when the target is **detected** within range → evade retreat when HP below threshold (defaults: engageRangeM=8000 m, retreatHp=0.25). **Sensing-gated (#690):** it engages what it has actually seen and reacted to, not whatever is within the radius |
-| `escort` | `<entityIdx> [standoffM]` | Two-state orbit protection: clockwise loiter at standoffM radius around the escorted entity's spawn position → Immelmann reversal when a **hostile** entity enters the inner defense zone (standoffM×0.5). Hostiles are classified by faction, so the escort and escortee should be spawned with the same non-neutral `--faction`; friendlies and neutrals are ignored. Best used for fixed or slow-moving assets. (default: standoffM=2000 m) |
+| `escort` | `<entityIdx> [standoffM]` | Two-state orbit protection: clockwise loiter at standoffM radius around the escorted entity, **tracking it as it moves** (#464) → Immelmann reversal when a **hostile** entity enters the inner defense zone (standoffM×0.5). Hostiles are classified by faction, so the escort and escortee should be spawned with the same non-neutral `--faction`; friendlies and neutrals are ignored. (default: standoffM=2000 m) |
 
 **Weather presets:**
 

@@ -11,6 +11,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **docs**: Authoritative "Content Pack Linking Exception" text in `GOVERNANCE.md` — defines the Vendorable Interface Set (`IContentPack.h`, `AssetTypes.h`, `TrustLevel.h`), what "link against" permits, and what remains GPL; `IContentPack.h`'s header pointer now resolves (#663)
 - **sensor**: Optional `[sensor] role` (`aircraft`/`seeker`, default `aircraft`); tooling-only. A `seeker` head is exempt from the non-emitting-track-lobe warning (#902)
+- **ai**: `DynamicLoiterController` orbits a **moving** entity — re-centers the loiter circle on the target's live position each tick and matches its altitude; exposed as the `dynamic_loiter` AI behavior, and the `escort` template now tracks the moving escortee instead of its spawn point (#464)
 
 ### Fixed
 

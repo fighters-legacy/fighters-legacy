@@ -3,6 +3,7 @@
 
 #include "ai/BallisticGuidanceController.h"
 #include "ai/BreakTurnController.h"
+#include "ai/DynamicLoiterController.h"
 #include "ai/EvadeController.h"
 #include "ai/FormationController.h"
 #include "ai/GunsEmploymentController.h"
@@ -39,6 +40,7 @@ namespace fl::ai {
 //
 // Single-state behaviors:
 //   loiter        [cx cy cz [radius_m [alt_m [throttle [cw|ccw]]]]]
+//   dynamic_loiter <entityIdx> [radius_m [throttle [cw|ccw]]]  — orbits a MOVING entity (#464)
 //   waypoint      x1 y1 z1 [x2 y2 z2 ...] [--loop]
 //   pursuit       <entityIdx>
 //   evade         <entityIdx>
@@ -54,7 +56,7 @@ namespace fl::ai {
 //   aaa           [engageRangeM=1200] [coneHalfDeg=25] [muzzleVelMps=1000] [lethalRadiusM=15]  — static AAA (#863)
 //   ballistic     <tx> <ty> <tz> [mirvCount [spreadM]]  — boost-phase steering to an impact point
 //   formation     <anchorIdx> [slotIndex=0] [lateralM=150] [aftM=100]   — holds station on a MOVING
-//                 anchor (unlike `escort`, which orbits a point captured at creation)
+//                 anchor (tight formation flying; `escort` orbits the moving asset at standoff)
 //
 // StateMachineController templates (internally compose multiple states):
 //   patrol_attack <entityIdx> [engageRangeM=8000] [retreatHp=0.25]
@@ -144,6 +146,45 @@ inline std::unique_ptr<fl::IEntityController> createController(std::string_view 
                 return nullptr;
         }
         return std::make_unique<LoiterController>(center, radius, alt, thr, dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // dynamic_loiter  <entityIdx> [radius_m [throttle [cw|ccw]]]
+    // Orbits a MOVING entity (re-centers each tick), unlike the fixed-center loiter above.
+    // -----------------------------------------------------------------------
+    if (behavior == "dynamic_loiter") {
+        if (args.empty() || !entityManager)
+            return nullptr;
+        uint32_t idx{};
+        if (!parseUint32(args[0], idx))
+            return nullptr;
+        fl::EntityId id = findEntityById(idx);
+        if (!id.valid())
+            return nullptr;
+
+        float radius = 3000.f;
+        float thr = 0.65f;
+        LoiterDir dir = LoiterDir::Clockwise;
+        double d = 0.0;
+        if (args.size() >= 2) {
+            if (!parseDouble(args[1], d))
+                return nullptr;
+            radius = static_cast<float>(d);
+        }
+        if (args.size() >= 3) {
+            if (!parseDouble(args[2], d))
+                return nullptr;
+            thr = static_cast<float>(d);
+        }
+        if (args.size() >= 4) {
+            if (args[3] == "ccw")
+                dir = LoiterDir::CounterClockwise;
+            else if (args[3] == "cw")
+                dir = LoiterDir::Clockwise;
+            else
+                return nullptr;
+        }
+        return std::make_unique<DynamicLoiterController>(*entityManager, id, radius, thr, dir);
     }
 
     // -----------------------------------------------------------------------
@@ -570,21 +611,18 @@ inline std::unique_ptr<fl::IEntityController> createController(std::string_view 
             standoffM = static_cast<float>(d);
         }
 
-        // Orbit center: escortee's position at factory-creation time (fixed). The escort loiters
-        // at standoffM radius. The break transition uses AnyHostileEntityWithinRange, which ignores
-        // the escortee by faction (same faction as the escort) rather than by geometry (#465) — so
-        // the escort and escortee must be spawned with the same non-neutral faction, and only a
-        // hostile intruder trips the break. For a proper moving-escort, a DynamicLoiterController is
-        // needed (tracked as a follow-on issue).
-        const fl::EntityState* es = entityManager->get(escortedId);
-        glm::dvec3 orbitCenter = es ? glm::dvec3(es->transform.pos[0], es->transform.pos[1], es->transform.pos[2])
-                                    : glm::dvec3{0.0, 600.0, 0.0};
+        // The escort orbits the escortee at standoffM radius, tracking it as it MOVES (#464): the
+        // follow state is a DynamicLoiterController re-centred each tick on the escortee's live
+        // position, not the fixed point it occupied when the order was given. The break transition
+        // uses DetectedHostileWithinRange, which ignores the escortee by faction (same faction as the
+        // escort) rather than by geometry (#465) — so the escort and escortee must be spawned with
+        // the same non-neutral faction, and only a hostile intruder trips the break.
         const float innerRange = standoffM * 0.5f;
 
         auto sm = std::make_unique<StateMachineController>(*entityManager);
-        sm->addState("follow", [orbitCenter, standoffM]() {
-            return std::make_unique<LoiterController>(orbitCenter, standoffM, static_cast<float>(orbitCenter.y), 0.65f,
-                                                      LoiterDir::Clockwise);
+        const fl::EntityManager* em = entityManager;
+        sm->addState("follow", [em, escortedId, standoffM]() {
+            return std::make_unique<DynamicLoiterController>(*em, escortedId, standoffM, 0.65f, LoiterDir::Clockwise);
         });
         sm->addState("break", []() { return std::make_unique<ImmelmannController>(); });
         // The escort breaks on a hostile it has actually SEEN (#690) — not on one it could not
