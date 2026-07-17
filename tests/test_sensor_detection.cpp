@@ -213,17 +213,33 @@ TEST_CASE("evaluateSensor: a target ahead and close is in both lobes", "[sensor]
     CHECK(ev.trackRollPass);
 }
 
-TEST_CASE("evaluateSensor: emitting = false blocks a radar TRACK lobe but not its search", "[sensor]") {
-    // The emissions kernel: you cannot hold a lock with a transmitter you have switched off.
+TEST_CASE("evaluateSensor: emitting = false blinds a radar entirely, search and track alike", "[sensor]") {
+    // The EMCON gate (#526): a radar sees nothing it does not first illuminate. Switch the
+    // transmitter off and BOTH lobes go dark — there is no passive-radar search free lunch.
     const SensorDef s = radar();
     const double obs[3] = {0, 0, 0};
     const SensingEnvironment env;
 
     const SensorEvaluation ev = evaluateSensor(s, /*emitting=*/false, obs, kIdentityQuat, ahead(20.0 * kMPerNm).data(),
                                                kBaseline, 0.5f, env, 1.f, 1, 2, 60, 0);
-    CHECK(ev.searchInLobe);
+    CHECK_FALSE(ev.searchInLobe);
+    CHECK_FALSE(ev.searchRollPass);
     CHECK_FALSE(ev.trackInLobe);
     CHECK_FALSE(ev.trackRollPass);
+}
+
+TEST_CASE("evaluateSensor: allowTrack = false suppresses the lock (radar Search mode)", "[sensor]") {
+    // Radar Search mode (#526): report a bearing without ever offering a firing solution. The search
+    // lobe works; the track lobe is held off regardless of geometry.
+    const SensorDef s = radar();
+    const double obs[3] = {0, 0, 0};
+    const SensingEnvironment env;
+
+    const SensorEvaluation ev = evaluateSensor(s, /*emitting=*/true, obs, kIdentityQuat, ahead(20.0 * kMPerNm).data(),
+                                               kBaseline, 0.5f, env, 1.f, 1, 2, 60, 0, /*allowTrack=*/false);
+    CHECK(ev.searchInLobe);
+    CHECK(ev.searchRollPass);
+    CHECK_FALSE(ev.trackInLobe); // no lock in Search
 }
 
 TEST_CASE("evaluateSensor: a passive sensor ignores the emitting flag", "[sensor]") {

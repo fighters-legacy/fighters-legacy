@@ -78,13 +78,15 @@ struct Fixture {
         em.forEach([this](const EntityState& s) { si.insert(s.id.index, s.transform.pos); });
     }
 
-    // Runs one sensing check for every observer (stride 1 = every tick is a check tick).
+    // Runs one sensing check for every observer (stride 1 = every tick is a check tick), then the RWR
+    // inversion pass — the exact order WorldBroadcaster::onTick runs them in.
     void check(uint64_t tick) {
         rebuildIndex();
         auto& work = sys.gatherDue(tick, 1u, kSimDt);
         for (const auto& w : work)
             sys.evaluateObserver(w, si, tick, SensingEnvironment{}, 1.f, 0.f);
         sys.updateReactions(tick, kSimDt, 0.f);
+        sys.buildThreatWarnings(tick);
     }
 };
 
@@ -221,20 +223,144 @@ TEST_CASE("SensorSystem: the reaction delay gates `reacted`, not detection itsel
     CHECK(f.sys.contactsFor(observer.index)->find(target)->reacted);
 }
 
-TEST_CASE("SensorSystem: a non-emitting radar can search but cannot lock", "[sensor_system]") {
-    // The emissions kernel — the seam EMCON/RWR (#526/#529) hangs off.
+TEST_CASE("SensorSystem: a radar in EMCON (not emitting) is blind, search and track alike", "[sensor_system]") {
+    // The EMCON fix (#526): a radar sees NOTHING it does not first illuminate. Before #526 a
+    // non-emitting radar's search lobe still detected — a passive-radar free lunch that never made
+    // sense. Silence is silence: no strobes, no locks, nothing.
     Fixture f;
     const EntityId observer = f.spawn(0, 0, 0);
     const EntityId target = f.spawn(10.0 * kMPerNm, 0, 0);
 
     f.sys.addObserver(observer.index, {"t:radar"}, 0.5f, 0.5f);
-    f.sys.setEmitting(observer.index, false);
+    f.sys.setEmitting(observer.index, false); // == radar Silent mode
+    f.check(1);
+
+    CHECK(f.sys.contactsFor(observer.index)->find(target) == nullptr);
+    CHECK(f.sys.radarMode(observer.index) == RadarMode::Silent); // setEmitting(false) is Silent
+}
+
+TEST_CASE("SensorSystem: radar Search mode reports a bearing but never a lock", "[sensor_system]") {
+    // Search sweeps and finds; it does not hold a firing-quality track. A target found in Search must
+    // be locked (STT) before a radar missile has a solution.
+    Fixture f;
+    const EntityId observer = f.spawn(0, 0, 0);
+    const EntityId target = f.spawn(10.0 * kMPerNm, 0, 0); // inside both lobes, pod = 1
+
+    f.sys.addObserver(observer.index, {"t:radar"}, 0.5f, 0.5f);
+    f.sys.setRadarMode(observer.index, RadarMode::Search);
     f.check(1);
 
     const Contact* c = f.sys.contactsFor(observer.index)->find(target);
     REQUIRE(c != nullptr);
     CHECK(c->held());
-    CHECK_FALSE(c->locked()); // the track lobe needs a transmitter that is switched on
+    CHECK(c->state == ContactState::Detected);
+    CHECK_FALSE(c->locked());      // Search offers no firing solution...
+    CHECK_FALSE(c->firingQuality); // ...and certainly not a firing-quality one
+}
+
+TEST_CASE("SensorSystem: radar TWS locks but the lock is not firing-quality", "[sensor_system]") {
+    // Track-while-scan reaches Locked but spreads its energy: a hostile RWR reads it as a scan, and a
+    // SARH shot cannot ride it. Only STT is firing-quality.
+    Fixture f;
+    const EntityId observer = f.spawn(0, 0, 0);
+    const EntityId target = f.spawn(10.0 * kMPerNm, 0, 0);
+
+    f.sys.addObserver(observer.index, {"t:radar"}, 0.5f, 0.5f);
+    f.sys.setRadarMode(observer.index, RadarMode::Tws);
+    f.check(1);
+
+    const Contact* c = f.sys.contactsFor(observer.index)->find(target);
+    REQUIRE(c != nullptr);
+    CHECK(c->locked());
+    CHECK_FALSE(c->firingQuality); // TWS: a soft lock
+}
+
+TEST_CASE("SensorSystem: radar STT holds a firing-quality lock on one target and ignores the rest", "[sensor_system]") {
+    Fixture f;
+    const EntityId observer = f.spawn(0, 0, 0);
+    const EntityId a = f.spawn(8.0 * kMPerNm, 0, 0);      // dead ahead
+    const EntityId b = f.spawn(9.0 * kMPerNm, 0, 1000.0); // also in the cone, slightly off
+
+    f.sys.addObserver(observer.index, {"t:radar"}, 0.5f, 0.5f);
+    f.sys.setRadarMode(observer.index, RadarMode::Stt);
+    f.sys.setDesignatedTarget(observer.index, a);
+    f.check(1);
+
+    const ContactTable* tbl = f.sys.contactsFor(observer.index);
+    const Contact* ca = tbl->find(a);
+    REQUIRE(ca != nullptr);
+    CHECK(ca->firingQuality); // the beam is dedicated to A
+    CHECK(ca->locked());
+
+    // The radar is dedicated to A, so it does not hold B on radar at all (B could still be seen by a
+    // passive sensor, but this observer has only the radar).
+    CHECK(tbl->find(b) == nullptr);
+}
+
+TEST_CASE("SensorSystem: STT with a stale designation auto-picks the nearest target", "[sensor_system]") {
+    Fixture f;
+    const EntityId observer = f.spawn(0, 0, 0);
+    const EntityId near = f.spawn(5.0 * kMPerNm, 0, 0);
+    const EntityId far = f.spawn(12.0 * kMPerNm, 0, 500.0);
+
+    f.sys.addObserver(observer.index, {"t:radar"}, 0.5f, 0.5f);
+    f.sys.setRadarMode(observer.index, RadarMode::Stt);
+    // No designation set — a bare STT must not be silently dead; it grabs the nearest thing.
+    f.check(1);
+
+    const ContactTable* tbl = f.sys.contactsFor(observer.index);
+    const Contact* cn = tbl->find(near);
+    REQUIRE(cn != nullptr);
+    CHECK(cn->firingQuality);
+    CHECK(tbl->find(far) == nullptr); // the beam went to the nearest
+}
+
+TEST_CASE("SensorSystem: RWR hears an emitter that is painting you, and not one that is not", "[sensor_system]") {
+    // The RWR is the inverse of a contact: A holds B on radar (its beam is on B), so B's receiver
+    // lights up naming A. B is not emitting, so A's RWR stays quiet.
+    Fixture f;
+    // A at origin looking +X (default quat), B ahead looking back at A (-X).
+    const float faceMinusX[4] = {0.f, 1.f, 0.f, 0.f}; // 180° about Y: nose along -X
+    const EntityId a = f.spawn(0, 0, 0);
+    const EntityId b = f.spawn(10.0 * kMPerNm, 0, 0, faceMinusX);
+
+    f.sys.addObserver(a.index, {"t:radar"}, 0.5f, 0.5f);
+    f.sys.addObserver(b.index, {"t:radar"}, 0.5f, 0.5f);
+    f.sys.setRadarMode(a.index, RadarMode::Stt); // A hard-locks B
+    f.sys.setDesignatedTarget(a.index, b);
+    f.sys.setRadarMode(b.index, RadarMode::Silent); // B is dark
+    f.check(1);
+
+    const ThreatWarningSet* bThreats = f.sys.threatsFor(b.index);
+    REQUIRE(bThreats != nullptr);
+    REQUIRE(bThreats->size() == 1u);
+    CHECK(bThreats->threats[0].emitterId.index == a.index);
+    CHECK(bThreats->threats[0].level == ThreatLevel::Lock); // STT == a lock tone
+    CHECK(bThreats->anyLock());
+
+    // A is silent, so nothing is painting it: an empty receiver is a real fact, not "not evaluated".
+    const ThreatWarningSet* aThreats = f.sys.threatsFor(a.index);
+    REQUIRE(aThreats != nullptr);
+    CHECK(aThreats->empty());
+}
+
+TEST_CASE("SensorSystem: a searching radar raises a strobe, not a lock, on the target's RWR", "[sensor_system]") {
+    Fixture f;
+    const float faceMinusX[4] = {0.f, 1.f, 0.f, 0.f};
+    const EntityId a = f.spawn(0, 0, 0);
+    const EntityId b = f.spawn(10.0 * kMPerNm, 0, 0, faceMinusX);
+
+    f.sys.addObserver(a.index, {"t:radar"}, 0.5f, 0.5f);
+    f.sys.addObserver(b.index, {"t:radar"}, 0.5f, 0.5f);
+    f.sys.setRadarMode(a.index, RadarMode::Search); // scanning, not locked
+    f.sys.setRadarMode(b.index, RadarMode::Silent);
+    f.check(1);
+
+    const ThreatWarningSet* bThreats = f.sys.threatsFor(b.index);
+    REQUIRE(bThreats != nullptr);
+    REQUIRE(bThreats->size() == 1u);
+    CHECK(bThreats->threats[0].level == ThreatLevel::Search); // a strobe, not a lock
+    CHECK_FALSE(bThreats->anyLock());
 }
 
 TEST_CASE("SensorSystem: contacts are identical regardless of evaluation order", "[sensor_system]") {

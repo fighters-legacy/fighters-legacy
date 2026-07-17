@@ -299,7 +299,13 @@ struct MsgClientInput {
     // locally and sends the result, so selection converges on an unreliable channel where an edge
     // can be lost. 255 = no station. Server clamps to the entity's station count.
     uint8_t selectedStation{255};
-    uint8_t reservedB[3]{}; // explicit padding — the layout rule forbids implicit holes
+
+    // Radar operating mode (#526). ABSOLUTE, same rationale as selectedStation: the client sends the
+    // mode it wants (Silent/Search/TWS/STT = 0..3), so it converges on the unreliable channel. 255 =
+    // keep the current server-side mode (the default from an unaware client, so old clients and the
+    // load bots leave the radar in its spawned Search mode). @49.
+    uint8_t radarMode{255};
+    uint8_t reservedB[2]{}; // explicit padding — the layout rule forbids implicit holes
     uint32_t reservedC{0};  // pads to the struct's 8-byte alignment; future fire fields land here
 
     // Camera eye world-position (#858). The client sends where it is LOOKING FROM each frame so the
@@ -318,6 +324,7 @@ static_assert(offsetof(MsgClientInput, throttle) == 16u, "MsgClientInput::thrott
 static_assert(offsetof(MsgClientInput, viewAxis) == 32u, "MsgClientInput::viewAxis offset changed");
 static_assert(offsetof(MsgClientInput, ackMask) == 44u, "MsgClientInput::ackMask offset changed");
 static_assert(offsetof(MsgClientInput, selectedStation) == 48u, "MsgClientInput::selectedStation offset changed");
+static_assert(offsetof(MsgClientInput, radarMode) == 49u, "MsgClientInput::radarMode offset changed");
 static_assert(offsetof(MsgClientInput, cameraEye) == 56u, "MsgClientInput::cameraEye offset changed");
 
 // Unreliable, server->client, broadcast every 10 sim ticks (~6 Hz at 60 Hz).

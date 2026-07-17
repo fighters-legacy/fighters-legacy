@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace fl::sensor {
 
@@ -124,6 +125,9 @@ void SensorSystem::setAvionicsFailed(uint32_t entityIdx) {
 
     ObserverState& obs = it->second;
     obs.emitting = false;
+    obs.radarMode = RadarMode::Silent; // the radar is dead, not merely quiet
+    obs.designatedTarget = EntityId{};
+    obs.threats.threats.clear();
     std::erase_if(obs.sensors,
                   [](const std::shared_ptr<const SensorDef>& s) { return !s || s->type != SensorType::Visual; });
     if (obs.sensors.empty()) {
@@ -135,8 +139,15 @@ void SensorSystem::setAvionicsFailed(uint32_t entityIdx) {
 }
 
 void SensorSystem::setEmitting(uint32_t entityIdx, bool emitting) {
-    if (auto it = m_observers.find(entityIdx); it != m_observers.end())
+    if (auto it = m_observers.find(entityIdx); it != m_observers.end()) {
         it->second.emitting = emitting;
+        // Keep the mode consistent: forcing emissions off is EMCON, i.e. radar Silent. Forcing them
+        // back on with no explicit mode returns to plain Search (the neutral radiating mode).
+        if (!emitting)
+            it->second.radarMode = RadarMode::Silent;
+        else if (it->second.radarMode == RadarMode::Silent)
+            it->second.radarMode = RadarMode::Search;
+    }
 }
 
 bool SensorSystem::emitting(uint32_t entityIdx) const {
@@ -144,9 +155,36 @@ bool SensorSystem::emitting(uint32_t entityIdx) const {
     return it != m_observers.end() ? it->second.emitting : false;
 }
 
+void SensorSystem::setRadarMode(uint32_t entityIdx, RadarMode mode) {
+    if (auto it = m_observers.find(entityIdx); it != m_observers.end()) {
+        it->second.radarMode = mode;
+        it->second.emitting = radarModeEmits(mode); // one source of truth for the pure detection gate
+    }
+}
+
+RadarMode SensorSystem::radarMode(uint32_t entityIdx) const {
+    auto it = m_observers.find(entityIdx);
+    return it != m_observers.end() ? it->second.radarMode : RadarMode::Silent;
+}
+
+void SensorSystem::setDesignatedTarget(uint32_t entityIdx, EntityId target) {
+    if (auto it = m_observers.find(entityIdx); it != m_observers.end())
+        it->second.designatedTarget = target;
+}
+
+EntityId SensorSystem::designatedTarget(uint32_t entityIdx) const {
+    auto it = m_observers.find(entityIdx);
+    return it != m_observers.end() ? it->second.designatedTarget : EntityId{};
+}
+
 const ContactTable* SensorSystem::contactsFor(uint32_t entityIdx) const {
     auto it = m_observers.find(entityIdx);
     return it != m_observers.end() ? &it->second.contacts : nullptr;
+}
+
+const ThreatWarningSet* SensorSystem::threatsFor(uint32_t entityIdx) const {
+    auto it = m_observers.find(entityIdx);
+    return it != m_observers.end() ? &it->second.threats : nullptr;
 }
 
 std::vector<SensorSystem::ObserverWork>& SensorSystem::gatherDue(uint64_t tickIndex, uint32_t strideTicks,
@@ -215,6 +253,35 @@ void SensorSystem::evaluateObserver(const ObserverWork& work, const SpatialIndex
     std::sort(candidates.begin(), candidates.end(),
               [](const Candidate& a, const Candidate& b) { return a.idx < b.idx; });
 
+    // Resolve the STT designation for this check (#526). The radar dedicates to one target; if the
+    // designation is stale (despawned, out of the query radius entirely) or unset, auto-pick the
+    // nearest candidate so a bare STT is not silently dead. #527 refines the auto-pick to the nearest
+    // HOSTILE once the faction registry is threaded through — for now the nearest thing gets the beam.
+    constexpr uint32_t kNoDesignation = std::numeric_limits<uint32_t>::max();
+    uint32_t sttTargetIdx = kNoDesignation;
+    if (obs.radarMode == RadarMode::Stt) {
+        // Prefer the live designation (still a candidate, same generation)...
+        if (obs.designatedTarget.generation != 0) {
+            for (const Candidate& c : candidates) {
+                if (c.idx == obs.designatedTarget.index && c.st->id.generation == obs.designatedTarget.generation) {
+                    sttTargetIdx = c.idx;
+                    break;
+                }
+            }
+        }
+        // ...else auto-pick the nearest candidate so a bare STT is not silently dead.
+        if (sttTargetIdx == kNoDesignation) {
+            double bestD2 = std::numeric_limits<double>::max();
+            for (const Candidate& c : candidates) {
+                const double d2 = dist2(self.transform.pos, c.st->transform.pos);
+                if (d2 < bestD2) {
+                    bestD2 = d2;
+                    sttTargetIdx = c.idx;
+                }
+            }
+        }
+    }
+
     std::vector<Contact> found;
     found.reserve(candidates.size());
 
@@ -230,13 +297,40 @@ void SensorSystem::evaluateObserver(const ObserverWork& work, const SpatialIndex
         uint64_t firstDetected = 0;
         uint64_t lastSeen = 0;
         uint8_t typeMask = 0;
+        bool firingQuality = false;
 
         for (uint32_t slot = 0; slot < obs.sensors.size(); ++slot) {
             const SensorDef& def = *obs.sensors[slot];
 
-            const SensorEvaluation ev =
-                evaluateSensor(def, obs.emitting, self.transform.pos, self.transform.quat, tgt.transform.pos, sig,
-                               obs.skill, env, radarRangeFraction, self.id.index, cand.idx, tickIndex, slot);
+            // Radar mode governs radar-typed sensors ONLY (#526): IRST, eyeball and laser are passive
+            // channels the pilot never switches off. Silent kills the radar (emitting already false);
+            // Search reports bearing without a lock (no track lobe); TWS scans + soft-tracks; STT
+            // dedicates the radar to ONE target and holds a firing-quality lock on it alone.
+            bool sensorEmitting = obs.emitting;
+            bool allowTrack = true;
+            bool sttDedicatedHere = false;
+            if (def.type == SensorType::Radar) {
+                switch (obs.radarMode) {
+                case RadarMode::Silent:
+                    sensorEmitting = false; // radar off — nothing, search or track
+                    break;
+                case RadarMode::Search:
+                    allowTrack = false; // bearing only, never a firing solution
+                    break;
+                case RadarMode::Tws:
+                    break; // search + track, but the lock stays non-firing-quality (see below)
+                case RadarMode::Stt:
+                    if (cand.idx == sttTargetIdx)
+                        sttDedicatedHere = true; // the one target the beam is on
+                    else
+                        sensorEmitting = false; // radar is looking elsewhere
+                    break;
+                }
+            }
+
+            const SensorEvaluation ev = evaluateSensor(def, sensorEmitting, self.transform.pos, self.transform.quat,
+                                                       tgt.transform.pos, sig, obs.skill, env, radarRangeFraction,
+                                                       self.id.index, cand.idx, tickIndex, slot, allowTrack);
 
             const uint64_t key = trackKey(cand.idx, slot);
             ContactTrack prev{};
@@ -254,6 +348,10 @@ void SensorSystem::evaluateObserver(const ObserverWork& work, const SpatialIndex
                 typeMask |= static_cast<uint8_t>(1u << static_cast<int>(def.type));
             if (stateRank(next.state) > stateRank(best))
                 best = next.state;
+            // Only an STT radar lock is firing-quality: TWS reaches Locked but its energy is spread,
+            // so it cannot illuminate for a SARH shot and reads as a scan on a hostile RWR.
+            if (sttDedicatedHere && next.state == ContactState::Locked)
+                firingQuality = true;
             if (next.firstDetectedTick != 0 && (firstDetected == 0 || next.firstDetectedTick < firstDetected))
                 firstDetected = next.firstDetectedTick;
             lastSeen = std::max(lastSeen, next.lastSeenTick);
@@ -268,6 +366,7 @@ void SensorSystem::evaluateObserver(const ObserverWork& work, const SpatialIndex
         c.factionIndex = tgt.factionIndex;
         c.state = best;
         c.sensorTypeMask = typeMask;
+        c.firingQuality = firingQuality;
         c.firstDetectedTick = firstDetected;
         c.lastSeenTick = lastSeen;
 
@@ -348,6 +447,79 @@ void SensorSystem::updateReactions(uint64_t tickIndex, double simDt, float react
             if (tickIndex >= c.firstDetectedTick + delayTicks)
                 c.reacted = true;
         }
+    }
+}
+
+void SensorSystem::buildThreatWarnings(uint64_t /*tickIndex*/) {
+    // Wipe last tick's picture. An RWR reports what is painting you NOW; a strobe does not linger of
+    // its own accord (a lock warner may add a hold time later — for now the sensing cadence provides
+    // enough persistence, since a beam that swept you last check swept you this one too).
+    for (auto& [idx, obs] : m_observers)
+        obs.threats.threats.clear();
+
+    // Invert every emitter's contacts into its targets' RWR. An emitter announces itself only on the
+    // active channels (radar, laser); a target it holds only on a passive sensor (IRST, eyeball) hears
+    // nothing, which is the whole point of those sensors.
+    for (auto& [emitterIdx, emitter] : m_observers) {
+        if (!emitter.emitting || emitter.radarMode == RadarMode::Silent)
+            continue;
+        const EntityState* emState = m_entityManager.getByIndex(emitterIdx);
+        if (!emState || emState->dead)
+            continue;
+
+        for (const Contact& c : emitter.contacts.contacts) {
+            const bool onRadar = holdsSensorType(c.sensorTypeMask, SensorType::Radar);
+            const bool onLaser = holdsSensorType(c.sensorTypeMask, SensorType::Laser);
+            if (!onRadar && !onLaser)
+                continue; // a passive-only contact does not light a warning receiver
+
+            // Only warn an entity that can actually carry an RWR — i.e. one we are observing. The
+            // generation guard rejects a pool slot reused since the contact was formed this tick.
+            const uint32_t targetIdx = c.id.index;
+            auto tIt = m_observers.find(targetIdx);
+            if (tIt == m_observers.end())
+                continue;
+            const EntityState* tgtState = m_entityManager.getByIndex(targetIdx);
+            if (!tgtState || tgtState->dead || tgtState->id.generation != c.id.generation)
+                continue;
+
+            ThreatWarning w;
+            w.emitterId = emState->id;
+            w.emitterTypeIndex = emState->typeIndex;
+            w.emitterFactionIndex = emState->factionIndex;
+            w.channel = onRadar ? SensorType::Radar : SensorType::Laser;
+            // A firing-quality (STT) lock is a lock tone; a scan/soft-track is a strobe.
+            w.level = c.firingQuality ? ThreatLevel::Lock : ThreatLevel::Search;
+            w.emitterPos[0] = emState->transform.pos[0];
+            w.emitterPos[1] = emState->transform.pos[1];
+            w.emitterPos[2] = emState->transform.pos[2];
+            tIt->second.threats.threats.push_back(w);
+        }
+    }
+
+    // Cap and order each observer's picture: locks first, then nearer emitters, ties on emitter index
+    // — deterministic, like the contact cap. Then restore emitter-index order for stable iteration.
+    for (auto& [idx, obs] : m_observers) {
+        auto& v = obs.threats.threats;
+        if (v.empty())
+            continue;
+        const EntityState* self = m_entityManager.getByIndex(idx);
+        const double selfPos[3] = {self ? self->transform.pos[0] : 0.0, self ? self->transform.pos[1] : 0.0,
+                                   self ? self->transform.pos[2] : 0.0};
+        if (v.size() > kMaxThreatsPerObserver) {
+            std::sort(v.begin(), v.end(), [&](const ThreatWarning& a, const ThreatWarning& b) {
+                if (a.level != b.level)
+                    return static_cast<int>(a.level) > static_cast<int>(b.level);
+                const double da = dist2(a.emitterPos, selfPos);
+                const double db = dist2(b.emitterPos, selfPos);
+                if (da != db)
+                    return da < db;
+                return a.emitterId.index < b.emitterId.index;
+            });
+            v.resize(kMaxThreatsPerObserver);
+        }
+        std::sort(v.begin(), v.end(),
+                  [](const ThreatWarning& a, const ThreatWarning& b) { return a.emitterId.index < b.emitterId.index; });
     }
 }
 

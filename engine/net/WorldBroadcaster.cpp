@@ -318,8 +318,20 @@ void WorldBroadcaster::setEmitting(uint32_t entityIdx, bool emitting) {
     m_sensorSystem.setEmitting(entityIdx, emitting);
 }
 
+void WorldBroadcaster::setRadarMode(uint32_t entityIdx, sensor::RadarMode mode) {
+    m_sensorSystem.setRadarMode(entityIdx, mode);
+}
+
+void WorldBroadcaster::setDesignatedTarget(uint32_t entityIdx, EntityId target) {
+    m_sensorSystem.setDesignatedTarget(entityIdx, target);
+}
+
 const sensor::ContactTable* WorldBroadcaster::contactsFor(uint32_t entityIdx) const {
     return m_sensorSystem.contactsFor(entityIdx);
+}
+
+const sensor::ThreatWarningSet* WorldBroadcaster::threatsFor(uint32_t entityIdx) const {
+    return m_sensorSystem.threatsFor(entityIdx);
 }
 
 void WorldBroadcaster::setAiScaling(const AiScaling& scaling) noexcept {
@@ -563,6 +575,15 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             ps.rudder = bi.rudder;
             ps.buttons = bi.buttons;
             ps.selectedStation = bi.selectedStation;
+            ps.radarMode = bi.radarMode;
+            // Apply the player's radar mode (#526) to their own aircraft's sensor observer. Absolute +
+            // idempotent, so a repeated value costs nothing; 255 = keep whatever the server holds (an
+            // unaware client / load bot leaves the spawned Search mode alone). Runs before the sensing
+            // pass this tick, so a mode change takes effect immediately.
+            if (sensor::isRadarModeOrdinal(ps.radarMode)) {
+                if (auto eit = m_peerEntities.find(peerId); eit != m_peerEntities.end())
+                    m_sensorSystem.setRadarMode(eit->second.index, static_cast<sensor::RadarMode>(ps.radarMode));
+            }
             // Record the seqNum whose control fields now drive the sim (#427). A stale-repeat tick
             // (empty buffer) keeps the previous value: the same input is still what the snapshot
             // reflects, so the client should still treat newer seqNums as un-acked.
@@ -736,6 +757,12 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         // enough to run every tick for every observer on the sim thread.
         m_sensorSystem.updateReactions(tickIndex, simDt, reactionTimeS);
 
+        // RWR pass (#526): invert the just-computed contact tables into each observer's threat
+        // warnings. Serial — an emitter writes into its TARGETS' state, not its own — but it reads
+        // only data the parallel pass produced, so it stays serial-equivalent. Runs before the AI
+        // pass so a defender can react to a lock this same tick.
+        m_sensorSystem.buildThreatWarnings(tickIndex);
+
         m_tickProfiler.addPhaseSample(
             TickPhase::Sensing, std::chrono::duration<double, std::milli>(m_clock->now() - tSensingStart).count());
     }
@@ -762,7 +789,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                                   m_stepInputs[i] = it.ce->lastInput;
                               } else {
                                   const AiTickContext aiCtx{&m_spatialIndex, m_sensorSystem.contactsFor(it.idx),
-                                                            &sensingEnv, difficulty, m_factionRegistry};
+                                                            &sensingEnv,     m_sensorSystem.threatsFor(it.idx),
+                                                            difficulty,      m_factionRegistry};
                                   m_stepInputs[i] = it.ce->controller->sample(*it.state, tickIndex, simDt, aiCtx);
                                   it.ce->lastInput = m_stepInputs[i];
                                   it.ce->lastInputValid = true;
@@ -2605,6 +2633,7 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         bi.rudder = ctl(msg.rudder, -1.f, 1.f);
         bi.buttons = msg.buttons;
         bi.selectedStation = msg.selectedStation; // clamped against the entity's stations at consumption
+        bi.radarMode = msg.radarMode;             // absolute radar mode (#526); validated at consumption
         bi.seqNum = msg.seqNum;                   // carried through so the applied seqNum can be acked (#427)
         stored.jitterBuffer.push(bi);
 

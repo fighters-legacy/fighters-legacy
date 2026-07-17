@@ -307,7 +307,8 @@ delay all subsequent inputs behind the ACK round-trip.
 | 32 | 12 | `viewAxis[3]` | `float[3]` | Normalized camera look direction (world space) |
 | 44 | 4 | `ackMask` | `uint32_t` | Selective-ack bitmask of recently **decoded** snapshot ticks below `tickIndex`: bit `b` = tick `tickIndex − 1 − b` was decoded (`tickIndex` itself is implicitly decoded). Lets the server confirm the specific tick a full record was sent in rather than a high-water mark — see *Scaling to 128+* |
 | 48 | 1 | `selectedStation` | `uint8_t` | **Absolute** selected weapon station index; `255` = keep the current (server-default) selection. Absolute rather than cycle-edges so selection converges under loss on this unreliable channel; the client computes Next/Prev cycling locally and sends the result. Server clamps to the entity's station count |
-| 49 | 3 | `reservedB[3]` | `uint8_t[3]` | Zero |
+| 49 | 1 | `radarMode` | `uint8_t` | **Absolute** radar operating mode (#526): `0` Silent (EMCON), `1` Search (bearing only), `2` TWS (soft multi-track), `3` STT (one firing-quality lock); `255` = keep the current server-side mode (unaware clients / load bots leave the spawned TWS mode). Absolute for the same reason as `selectedStation` — it converges under loss. Applied to the peer's own aircraft observer before the sensing pass each tick |
+| 50 | 2 | `reservedB[2]` | `uint8_t[2]` | Zero |
 | 52 | 4 | `reservedC` | `uint32_t` | Zero (explicit padding keeping `cameraEye` 8-aligned) |
 | 56 | 24 | `cameraEye[3]` | `double[3]` | Camera eye world-position (absolute metres). The server centers interest management on this for an **entity-less peer** (an observer ghost camera, or a dead peer awaiting respawn) that has no aircraft transform to key interest on; ignored for a pilot, whose aircraft transform wins. Finite-guarded server-side |
 

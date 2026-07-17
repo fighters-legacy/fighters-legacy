@@ -89,6 +89,7 @@ struct PeerInputState {
     // 1-byte fields last.
     uint8_t buttons{0};           // last drained value
     uint8_t selectedStation{255}; // last drained absolute station selection (#625); 255 = none
+    uint8_t radarMode{255};       // last drained absolute radar mode (#526); 255 = keep server-side mode
     bool hasSeq{false};           // false until first input received from this peer
     bool hasAppliedSeq{false};    // false until the first input is drained + applied (#427 TLV gate)
     bool ewmaSeeded{false};       // false until EWMA receives its first sample
@@ -532,13 +533,23 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // silently renormalized. [1, 60]; atomic, hot-reloadable.
     void setSensorCheckHz(float hz) noexcept;
 
-    // The EMCON / RWR seam: a non-emitting observer cannot hold a radar or laser TRACK lobe. Nothing
-    // flips it yet (#526/#529 do); sim-thread only.
+    // The EMCON seam: a non-emitting observer's radar is dark (radar Silent mode). Keeps radar mode
+    // consistent. Sim-thread only. The player-driven path is MsgClientInput::radarMode (#526).
     void setEmitting(uint32_t entityIdx, bool emitting);
+
+    // Radar operating mode + STT designation (#526). Sim-thread only; a no-op for a non-observer. The
+    // player drives these through MsgClientInput; these forwards exist for admin commands, missions,
+    // and AI (a SAM going Silent, a scripted STT lock).
+    void setRadarMode(uint32_t entityIdx, sensor::RadarMode mode);
+    void setDesignatedTarget(uint32_t entityIdx, EntityId target);
 
     // What this entity has honestly detected. Null = it has no sensors (or sensing has not run for
     // it yet) — which a consumer must read as "not evaluated", never as "sees nothing".
     [[nodiscard]] const sensor::ContactTable* contactsFor(uint32_t entityIdx) const;
+
+    // The RWR picture: who is painting this entity (#526). Null = not an observer. Empty is a real
+    // fact (a receiver that hears nothing), unlike a null contact table.
+    [[nodiscard]] const sensor::ThreatWarningSet* threatsFor(uint32_t entityIdx) const;
 
     // Difficulty scaling for sensing (radar range fraction, reaction time). Unset = NO scaling:
     // radar reaches its authored range and the AI reacts the moment it detects. Deliberately not
