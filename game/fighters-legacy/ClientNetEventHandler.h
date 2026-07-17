@@ -165,9 +165,12 @@ struct ClientNetEventHandler : INetworkEventHandler {
     }
 
     // Optional: called after snapshot assembly, before publishExternal().
-    // Args: (RenderSnapshot& snap, uint64_t tickIndex, uint32_t estimatedDelayTicks)
+    // Args: (RenderSnapshot& snap, uint64_t tickIndex, uint32_t estimatedDelayTicks, uint32_t ackedSeqNum)
+    // ackedSeqNum is the exact seqNum the server last applied for this peer (SnapshotLastAckedSeqNum
+    // TLV, #427), or kNoAckedSeqNum when the server did not report one (fall back to delay-ticks).
     // Wire ClientPrediction::reconcile() here from FlightScreen.
-    std::function<void(RenderSnapshot&, uint64_t, uint32_t)> snapshotCallback;
+    static constexpr uint32_t kNoAckedSeqNum = 0xFFFFFFFFu;
+    std::function<void(RenderSnapshot&, uint64_t, uint32_t, uint32_t)> snapshotCallback;
 
   private:
     // Store f into *sessionFailure if it is still None (first-writer-wins via CAS); no-op if unset.

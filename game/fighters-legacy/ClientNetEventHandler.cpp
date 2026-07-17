@@ -291,6 +291,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             snap.entries.push_back(cached.re);
 
         // Remaining TLVs (order-independent).
+        uint32_t ackedSeqNum = kNoAckedSeqNum; // #427: overwritten below if the server reported one
         if (ext) {
             uint16_t pc{};
             if (fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), pc))
@@ -305,6 +306,12 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             uint16_t delayTicks{};
             if (fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerDelayTicks), delayTicks))
                 m_estimatedDelayTicks = delayTicks;
+
+            // Exact acked seqNum (#427): the seqNum the server last applied for us. Present only once
+            // the server has applied one of our inputs; absent → prediction falls back to delay ticks.
+            uint32_t acked{};
+            if (fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotLastAckedSeqNum), acked))
+                ackedSeqNum = acked;
 
             // Cosmetic weapon effects (#625): variable-length record list, routed to particles
             // (audio/haptics join via the same router in #631). Missing router = effects dropped.
@@ -330,7 +337,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
                       hdr.bitstreamBytes, snap.entries.size());
         logger.log(LogLevel::Trace, __FILE__, __LINE__, traceBuf);
         if (snapshotCallback)
-            snapshotCallback(snap, snap.tickIndex, m_estimatedDelayTicks);
+            snapshotCallback(snap, snap.tickIndex, m_estimatedDelayTicks, ackedSeqNum);
         bridge.publishExternal(std::move(snap));
         tickAlpha.markNewTick();
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::WeatherState)) {
@@ -344,6 +351,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         fl::WeatherController::applyPresetToEnv(static_cast<fl::WeatherPreset>(ws.preset), tod, env);
         env.windX = ws.windX;
         env.windZ = ws.windZ;
+        env.turbulenceAmp = ws.turbulenceAmp; // #426: fed to weatherTurbulence() in ClientPrediction
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::ServerNotice)) {
         fl::MsgServerNotice sn;
         if (!fl::readMsg(data, size, sn))

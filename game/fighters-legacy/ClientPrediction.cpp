@@ -7,6 +7,7 @@
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelData.h"
 #include "flight/StallBuffet.h"
+#include "weather/Turbulence.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -148,12 +149,20 @@ void ClientPrediction::stepIntegrator(const BufferedInput& bi, const Environment
     ctrl.rudder = bi.rudder;
     ctrl.afterburner = (bi.buttons & 0x02u) != 0;
 
-    // Steady wind only — turbulence is stochastic on the server and cannot be replicated
-    // without a shared seed. Excluding it prevents compound prediction divergence.
     WindInfluence wind;
     wind.wind_world[0] = env.windX;
     wind.wind_world[1] = 0.f;
     wind.wind_world[2] = env.windZ;
+
+    // Weather turbulence (#426): reproduced EXACTLY from the amplitude the server broadcasts in
+    // MsgWeatherState. The server's turbulence was always a deterministic function of
+    // (entityIdx, tickIndex) + amplitude, so once the amplitude reaches the client the SAME shared
+    // weatherTurbulence() yields the identical perturbation — no shared-PRNG state needed. Before
+    // this the client predicted zero turbulence and diverged by the full amplitude every gusty tick.
+    const auto turb = weatherTurbulence(m_playerIdx, m_predictedTick, env.turbulenceAmp);
+    wind.turbulence_body[0] = turb[0];
+    wind.turbulence_body[1] = turb[1];
+    wind.turbulence_body[2] = turb[2];
 
     // Stall buffet (#816). The server folds the SAME deterministic (entityIdx, tickIndex) buffet into
     // its turbulence, so unlike weather turbulence this one CAN be predicted -- and must be, or the
@@ -191,7 +200,7 @@ void ClientPrediction::onInput(const MsgClientInput& msg, const EnvironmentState
 }
 
 void ClientPrediction::reconcile(RenderSnapshot& snap, uint64_t tickIndex, uint32_t estimatedDelayTicks,
-                                 const EnvironmentState& env) {
+                                 uint32_t ackedSeqNum, const EnvironmentState& env) {
     if (!m_cfg.enabled) {
         return;
     }
@@ -242,10 +251,21 @@ void ClientPrediction::reconcile(RenderSnapshot& snap, uint64_t tickIndex, uint3
     m_integrator->reset(serverState);
     m_predictedTick = tickIndex;
 
-    // Replay the last estimatedDelayTicks inputs, oldest-first.
-    const uint32_t replayCount = std::min(estimatedDelayTicks, m_histCount);
-    if (replayCount > 0) {
-        HistoryEntry replayBuf[kHistorySize];
+    // Replay the inputs the server has not yet reflected, oldest-first.
+    HistoryEntry replayBuf[kHistorySize];
+    if (ackedSeqNum != kNoAckedSeqNum) {
+        // Exact window (#427): the server told us the last seqNum it applied, so replay precisely the
+        // stored inputs newer than it — no over- or under-replay from a delay estimate under jitter.
+        // seqNum is client-monotonic and cannot wrap within a session, so a plain > compare is safe.
+        const uint32_t got = tailHistory(m_histCount, replayBuf);
+        for (uint32_t i = 0; i < got; ++i) {
+            if (replayBuf[i].seqNum > ackedSeqNum)
+                stepIntegrator(replayBuf[i].input, env);
+        }
+    } else {
+        // Fallback: approximate the replay depth from estimatedDelayTicks (the pre-#427 behaviour,
+        // used until the server has applied one of our inputs, or against an older server).
+        const uint32_t replayCount = std::min(estimatedDelayTicks, m_histCount);
         const uint32_t got = tailHistory(replayCount, replayBuf);
         for (uint32_t i = 0; i < got; ++i) {
             stepIntegrator(replayBuf[i].input, env);

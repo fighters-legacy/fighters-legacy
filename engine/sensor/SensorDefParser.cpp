@@ -115,6 +115,14 @@ SensorDef parseSensorDef(std::string_view toml_src) {
     s.type = parse_type(req_string(sen["type"], "sensor.type"));
     s.omnidirectional = opt_bool(sen["omnidirectional"], false);
     s.emitter = opt_bool(sen["emitter"], false);
+    if (auto role = sen["role"].value<std::string>()) {
+        if (*role == "aircraft")
+            s.role = SensorRole::Aircraft;
+        else if (*role == "seeker")
+            s.role = SensorRole::Seeker;
+        else
+            throw std::runtime_error("unknown sensor.role: " + *role + " (expected aircraft or seeker)");
+    }
 
     // ── [search] (required) ──────────────────────────────────────────────────
     auto search = tbl["search"];

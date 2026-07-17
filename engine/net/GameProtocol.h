@@ -328,10 +328,15 @@ struct MsgWeatherState {
     uint16_t timeOfDayTenths{0}; // hours * 10; decode: / 10.f; range [0, 239]
     float fogDensity{0.f};
     float fogStartDist{5000.f};
-    float windX{0.f}; // world-frame wind x (m/s), includes gust component
-    float windZ{0.f}; // world-frame wind z (m/s), includes gust component
-}; // 20 bytes, align 4
-static_assert(sizeof(MsgWeatherState) == 20u, "MsgWeatherState wire size changed");
+    float windX{0.f};         // world-frame wind x (m/s), includes gust component
+    float windZ{0.f};         // world-frame wind z (m/s), includes gust component
+    float turbulenceAmp{0.f}; // #426: turbulence amplitude (m/s). The client feeds it to the SAME
+                              // deterministic weatherTurbulence(entityIdx, tickIndex, amp) the server
+                              // uses, so prediction reproduces per-tick turbulence exactly instead of
+                              // predicting zero and jittering. Tail-append, additive; no version bump.
+}; // 24 bytes, align 4
+static_assert(sizeof(MsgWeatherState) == 24u, "MsgWeatherState wire size changed");
+static_assert(offsetof(MsgWeatherState, turbulenceAmp) == 20u, "MsgWeatherState::turbulenceAmp offset changed");
 static_assert(alignof(MsgWeatherState) == 4u, "MsgWeatherState alignment changed");
 static_assert(offsetof(MsgWeatherState, timeOfDayTenths) == 2u, "MsgWeatherState::timeOfDayTenths offset changed");
 static_assert(offsetof(MsgWeatherState, fogDensity) == 4u, "MsgWeatherState::fogDensity offset changed");
@@ -703,6 +708,11 @@ enum class ExtTag : uint16_t {
                               // cosmetic weapon effects within the receiving peer's interest radius, capped at
                               // kMaxEffectsPerSnapshot. Unreliable by design — a dropped packet loses cosmetics,
                               // never state. pos is float32 world position (particles do not need 0.125 m).
+    SnapshotLastAckedSeqNum =
+        0x0105, // uint32_t: seqNum of the last MsgClientInput the server drained + APPLIED for the receiving
+                // peer (#427). Lets client prediction replay EXACTLY the inputs the server has not yet
+                // reflected (history seqNum > this), instead of approximating the replay depth from
+                // estimatedDelayTicks. Omitted until the first input is applied (a peer's first snapshots).
 };
 
 } // namespace fl

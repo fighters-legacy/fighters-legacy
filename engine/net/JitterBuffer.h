@@ -13,6 +13,7 @@ struct BufferedInput {
     float rudder{0.f};
     uint8_t buttons{0};
     uint8_t selectedStation{255}; // absolute station selection (#625); 255 = no change
+    uint32_t seqNum{0};           // MsgClientInput::seqNum this input came from (#427 acked-seqNum tracking)
 };
 
 // Fixed-depth ring buffer for per-peer MsgClientInput delivery.

@@ -33,6 +33,20 @@ For authoring tools and workflow guides, see the other files in this directory.
 
 ---
 
+## Liveries — TOML
+
+A **livery** (`liveries/<id>.toml`) re-skins an aircraft by swapping textures per material slot, with
+per-map fallback to the base aircraft's textures — it never touches geometry, nodes, or UVs. `aircraft`
+is a **def id** (`fl-base:f5e`); the `[textures]` values are texture **asset names** keyed by
+`<slot>.<map>` (map ∈ diffuse/normal/orm). A livery pack ships only a `.toml` and its `.ktx2` skins,
+no mesh. Validate with `validate-livery` (single-file schema, or `--pack` to resolve texture files +
+the aircraft def id).
+
+> Full format, resolution/fallback rules, and a worked example:
+> [`docs/modding/liveries.md`](liveries.md).
+
+---
+
 ## Audio — OGG Vorbis / Opus
 
 - Sound effects: OGG at 44.1 kHz stereo or mono
@@ -477,6 +491,7 @@ silently fell back to defaults would be an aircraft whose radar quietly became a
 | `type` | string | — | `radar`, `ir` (or `infrared`), `visual`, `laser` |
 | `omnidirectional` | bool | `false` | No cone to point (an RWR). Lobe half-angles may then be omitted; they default to a full sphere |
 | `emitter` | bool | `false` | The sensor announces itself when it looks. **Radar and laser `[track]` lobes require it** — this is the seam RWR, EMCON and SAM radar shutdown hang off |
+| `role` | string | `aircraft` | `aircraft` or `seeker`. Only tooling reads it. A `seeker` head is exempt from the "a non-emitting radar/laser `[track]` lobe can never lock" warning, because a passive semi-active seeker rides the shooter's illumination and legitimately holds a lock while `emitter = false` (e.g. `builtin:sarh-seeker`) |
 
 ### `[search]` (required) and `[track]` (optional)
 

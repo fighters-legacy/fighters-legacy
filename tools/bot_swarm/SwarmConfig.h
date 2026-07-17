@@ -36,6 +36,12 @@ struct SwarmConfig {
     double assertMaxTickMs{0.0};     // 0 = disabled; fails if server tick_ms.p99 > this (#520 gate hook)
     int assertMinEntities{0};        // 0 = disabled; fails if server_tick.entities < this (#573 gate hook)
     int64_t assertMaxRssGrowthKb{0}; // 0 = disabled; fails if server_tick.rss_kb - rss_startup_kb > this (#707)
+    // Soak leak TREND gate (#789): sample server RSS every rssSampleIntervalS into a series, then fail
+    // if the least-squares growth rate over the run's tail exceeds assertMaxRssSlopeKbPerMin. The
+    // endpoint bound (#707) stays as the coarse backstop; the slope catches a SLOW leak that stayed
+    // under the bound. 0 = disabled. Sampling only happens when --server-metrics is set.
+    double assertMaxRssSlopeKbPerMin{0.0}; // 0 = disabled
+    double rssSampleIntervalS{30.0};       // RSS sampling cadence in seconds; >= 1
     // Overrun-governor gate (#574). Both use a NEGATIVE-disabled sentinel because 0 is a real value
     // for each (load_factor 0 = fully shed; dropped_ticks 0 = no drops, the healthy target).
     double assertMaxLoadFactor{-1.0}; // <0 = disabled; fails if server_tick.load_factor > this (governor engaged?)
@@ -152,6 +158,14 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
             r.cfg.assertMaxRssGrowthKb = std::strtoll(argv[++i], nullptr, 10);
+        } else if (std::strcmp(a, "--assert-max-rss-slope-kb-per-min") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.assertMaxRssSlopeKbPerMin = std::strtod(argv[++i], nullptr);
+        } else if (std::strcmp(a, "--rss-sample-interval-s") == 0) {
+            if (!detail::needValue(i, argc, a, r))
+                return r;
+            r.cfg.rssSampleIntervalS = std::strtod(argv[++i], nullptr);
         } else if (std::strcmp(a, "--assert-max-load-factor") == 0) {
             if (!detail::needValue(i, argc, a, r))
                 return r;
@@ -238,6 +252,10 @@ inline SwarmParseResult parseSwarmArgs(int argc, char** argv) {
         fail("--assert-min-entities must be >= 0");
     else if (r.cfg.assertMaxRssGrowthKb < 0)
         fail("--assert-max-rss-growth-kb must be >= 0");
+    else if (r.cfg.assertMaxRssSlopeKbPerMin < 0.0)
+        fail("--assert-max-rss-slope-kb-per-min must be >= 0");
+    else if (r.cfg.rssSampleIntervalS < 1.0)
+        fail("--rss-sample-interval-s must be >= 1");
     else if (r.cfg.degradeStartS < 0.0)
         fail("--degrade-start must be >= 0");
     else if (r.cfg.degradeDurationS < 0.0)

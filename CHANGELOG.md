@@ -7,6 +7,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **docs**: Authoritative "Content Pack Linking Exception" text in `GOVERNANCE.md` — defines the Vendorable Interface Set (`IContentPack.h`, `AssetTypes.h`, `TrustLevel.h`), what "link against" permits, and what remains GPL; `IContentPack.h`'s header pointer now resolves (#663)
+- **sensor**: Optional `[sensor] role` (`aircraft`/`seeker`, default `aircraft`); tooling-only. A `seeker` head is exempt from the non-emitting-track-lobe warning (#902)
+- **ai**: `DynamicLoiterController` orbits a **moving** entity — re-centers the loiter circle on the target's live position each tick and matches its altitude; exposed as the `dynamic_loiter` AI behavior, and the `escort` template now tracks the moving escortee instead of its spawn point (#464)
+- **engine**: `IWindow::showFolderDialog(title, defaultLocation)` — native folder picker for content-pack `configure()` UIs; non-pure with a nullopt default (implementors/mocks keep compiling), SDL3 backend via `SDL_ShowFileDialogWithProperties`. Adds a virtual to the `IWindow` vtable — rebuild native plugins against this header revision (#665)
+- **tools**: `bot_swarm` samples server RSS periodically into an `rss_series` (report `schema_version` 4) and gates on the growth **trend** — `--assert-max-rss-slope-kb-per-min` fits the run's tail and fails a slow leak that stayed under the endpoint bound; wired into the `soak` scale-gate profile (#789)
+- **network**: `SnapshotLastAckedSeqNum` snapshot TLV (`0x0105`) carries the exact `seqNum` the server last applied for a peer, so client-side prediction replays precisely the un-reflected inputs instead of approximating the window from `estimatedDelayTicks` — exact under high delay variance; additive, falls back to the delay-ticks estimate when absent (#427)
+- **flight**: `MsgWeatherState` broadcasts the turbulence amplitude (grew 20→24 bytes, additive) so client-side prediction reproduces the server's per-tick turbulence **exactly** via the shared deterministic `weatherTurbulence(entityIdx, tickIndex, amp)`; prediction previously predicted zero turbulence and jittered on every gusty reconciliation (#426)
+- **render/content**: Livery system — texture-set indirection by material slot (`liveries/<id>.toml`, new `AssetType::Livery`). A livery re-skins an aircraft via `<slot>.<map>` texture overrides with per-map fallback to the base scheme, never touching geometry/nodes/UVs (so user skins are multiplayer-safe); a missing/broken livery degrades to base. Wired through `SceneRenderer::setLiveryResolver`; `validate-livery` (single-file + `--pack`) resolves texture asset names and the aircraft def id; documented in `docs/modding/liveries.md` (#845)
+
+### Changed
+
+- **ai**: Expanded the `intent` eval suite to 111 utterances against the shipped six-command wingman grammar (16 per command + 13 out-of-grammar `unknown` + 5 prompt-injection cases); noted in `docs/ai-provider-evaluation.md` that the shipped grammar is the same size as the placeholder (so the #769 "shorter grammar" latency lever did not materialize) and that re-measurement on the expanded suite is pending a model + reference hardware (#781)
+
+### Fixed
+
+- **tools**: `validate-sensor` no longer warns "this sensor can never hold a lock" for a correctly-authored SARH seeker head (radar, `emitter = false`, track lobe, `role = "seeker"`); an aircraft radar with the same shape still warns (#902)
+
 ## [0.3.5] - 2026-07-17
 
 ### Added

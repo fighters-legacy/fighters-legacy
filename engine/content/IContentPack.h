@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Linking exception: content pack implementors (mods, plugins) may link against
-// this header without being required to license their work under GPL v3.
-// See GOVERNANCE.md for the full exception text.
+// this header — part of the Vendorable Interface Set, together with AssetTypes.h
+// and TrustLevel.h — without being required to license their work under GPL v3.
+// See the "Content Pack Linking Exception" section of GOVERNANCE.md for the full,
+// authoritative exception text (scope, what "link against" permits, what remains GPL).
 #pragma once
 
 #include "content/AssetTypes.h"
@@ -66,6 +68,15 @@ class IContentPack {
     virtual std::optional<SensorDefData> loadSensorDef(const char* name) = 0;
     virtual std::optional<WeaponDefData> loadWeaponDef(const char* name) = 0;
     virtual std::optional<ManualProse> loadManualProse(const char* name) = 0;
+
+    // Livery TOML (#845), texture-set indirection by material slot. NON-pure with a nullopt default
+    // so existing IContentPack implementors (including out-of-tree packs) keep compiling without
+    // change — a pack that ships no liveries simply inherits "no livery", the same degrade-to-base
+    // path a missing livery already takes. FolderContentPack overrides it to serve liveries/<name>.toml.
+    virtual std::optional<LiveryData> loadLivery(const char* name) {
+        (void)name;
+        return std::nullopt;
+    }
 
     virtual std::vector<std::string> listAssets(AssetType type) const = 0;
 

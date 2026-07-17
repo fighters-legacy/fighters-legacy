@@ -115,6 +115,57 @@ lock_hold_s       = 4.0
     CHECK(warns(r, "never hold a lock"));
 }
 
+TEST_CASE("validate-sensor does not warn about a SARH seeker head (role = seeker)") {
+    // A semi-active radar seeker is correctly type = "radar", emitter = false, with a [track] lobe:
+    // it rides the shooter's illumination and holds a lock while transmitting nothing. The emitter
+    // rule is written for aircraft/SAM radars and must not fire here (#902).
+    const auto r = validateSensor(R"toml(
+[sensor]
+id      = "fl-base:aim7m-seeker"
+name    = "AIM-7M SARH seeker"
+type    = "radar"
+emitter = false
+role    = "seeker"
+
+[search]
+az_half_angle_deg = 25.0
+el_half_angle_deg = 25.0
+max_range_nm      = 13.0
+pod               = 0.5
+
+[track]
+az_half_angle_deg = 20.0
+el_half_angle_deg = 20.0
+max_range_nm      = 12.0
+pod               = 0.85
+lock_hold_s       = 1.5
+)toml");
+
+    CHECK(r.ok);
+    CHECK_FALSE(warns(r, "never hold a lock"));
+    CHECK(r.warnings.empty());
+}
+
+TEST_CASE("validate-sensor rejects an unknown sensor role") {
+    const auto r = validateSensor(R"toml(
+[sensor]
+id   = "t:x"
+name = "X"
+type = "radar"
+role = "bogus"
+
+[search]
+az_half_angle_deg = 60.0
+el_half_angle_deg = 30.0
+max_range_nm      = 40.0
+pod               = 0.35
+)toml");
+
+    REQUIRE_FALSE(r.ok);
+    REQUIRE(r.errors.size() == 1);
+    CHECK(r.errors[0].find("role") != std::string::npos);
+}
+
 TEST_CASE("validate-sensor warns when the track lobe outreaches the search lobe that feeds it") {
     const auto r = validateSensor(R"toml(
 [sensor]

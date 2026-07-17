@@ -2,6 +2,7 @@
 #pragma once
 #include "IWindow.h"
 #include "SDL3EventSink.h"
+#include <optional>
 #include <string>
 
 struct SDL_Window;
@@ -24,6 +25,7 @@ class SDL3Window : public IWindow {
     int showMessageBox(MessageBoxType type, const char* title, const char* message, const MessageBoxButton* buttons,
                        int numButtons) override;
     void openURL(const char* url) override;
+    std::optional<std::string> showFolderDialog(const char* title, const char* defaultLocation) override;
     void setTitle(const char* title) override;
     bool setSize(int width, int height) override;
     bool setFullscreen(bool fullscreen) override;

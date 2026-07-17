@@ -183,6 +183,21 @@ target_include_directories(validate-entity-lib PUBLIC
 add_executable(validate-entity validate-entity/main.cpp)
 target_link_libraries(validate-entity PRIVATE validate-entity-lib)
 
+# The livery validator (#845). Same delegation rule — the schema is parseLiveryDef's — plus a --pack
+# cross-check that resolves each texture asset name (a file the livery pack must ship) and the
+# aircraft def id (through ContentIndex) against the REAL content system.
+add_library(validate-livery-lib STATIC
+    validate-livery/livery_validator.cpp)
+target_link_libraries(validate-livery-lib
+    PRIVATE engine-content
+            platform-stdfs
+            tomlplusplus::tomlplusplus)
+target_include_directories(validate-livery-lib PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/validate-livery")
+
+add_executable(validate-livery validate-livery/main.cpp)
+target_link_libraries(validate-livery PRIVATE validate-livery-lib)
+
 # Same delegation rule as validate-weapon/-sensor/-entity: the mission schema lives in the engine's
 # own parser (engine-mission's parseMission), so the linter and the runtime cannot drift. engine-mission
 # owns yaml-cpp; this tool no longer links it directly.
@@ -252,6 +267,7 @@ install(TARGETS
     validate-mesh
     validate-playlist
     validate-licenses
+    validate-livery
     tex-compress
     fm-trim
     RUNTIME DESTINATION .

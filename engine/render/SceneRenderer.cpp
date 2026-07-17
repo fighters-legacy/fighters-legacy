@@ -35,6 +35,23 @@ std::string textureAssetNameFromUri(std::string_view uri) {
     return std::string(uri);
 }
 
+namespace {
+// Map a base Texture asset name (`<slot>_<map>`) to a livery slot-map key (`<slot>.<map>`), or empty
+// when the name carries no recognised map suffix (#845). The map vocabulary matches the livery TOML:
+// diffuse (baseColor), orm, normal.
+std::string liveryKeyFromBaseAsset(std::string_view baseAsset) {
+    static constexpr std::string_view kMaps[] = {"diffuse", "orm", "normal"};
+    for (std::string_view m : kMaps) {
+        if (baseAsset.size() > m.size() + 1 && baseAsset.substr(baseAsset.size() - m.size()) == m &&
+            baseAsset[baseAsset.size() - m.size() - 1] == '_') {
+            const std::string_view slot = baseAsset.substr(0, baseAsset.size() - m.size() - 1);
+            return std::string(slot) + "." + std::string(m);
+        }
+    }
+    return {};
+}
+} // namespace
+
 SceneRenderer::SceneRenderer(SimRenderBridge& bridge, MeshNameResolver resolver, AssetManager& assets,
                              IRenderer& renderer)
     : m_bridge(bridge), m_resolver(std::move(resolver)), m_assets(assets), m_renderer(renderer) {}
@@ -223,9 +240,13 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
         bool useBuiltin = activeMesh.empty();
 
         if (!useBuiltin) {
-            mesh = getOrUploadMesh(activeMesh);
+            // Livery (#845): swaps textures per material slot, never geometry. The cache key folds in
+            // the livery id so two liveries of the same mesh get distinct GPU materials.
+            const LiveryTextureSet* livery = resolveLivery(entry.typeIndex);
+            const std::string cacheKey = livery ? (activeMesh + "@@" + livery->id) : activeMesh;
+            mesh = getOrUploadMesh(activeMesh, cacheKey, livery ? livery->overrides : m_noOverrides);
             if (mesh.valid())
-                mat = getOrUploadMaterial(activeMesh);
+                mat = getOrUploadMaterial(cacheKey);
             else
                 useBuiltin = true; // failed pack mesh: fall back to the type's category shape (#832 warned)
         }
@@ -359,27 +380,32 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
 }
 
 MeshHandle SceneRenderer::getOrUploadMesh(const std::string& name) {
-    auto it = m_meshCache.find(name);
+    return getOrUploadMesh(name, name, m_noOverrides);
+}
+
+MeshHandle SceneRenderer::getOrUploadMesh(const std::string& meshAssetName, const std::string& cacheKey,
+                                          const std::unordered_map<std::string, std::string>& liveryOverrides) {
+    auto it = m_meshCache.find(cacheKey);
     if (it != m_meshCache.end())
         return it->second;
 
-    auto data = m_assets.loadMesh(name.c_str());
+    auto data = m_assets.loadMesh(meshAssetName.c_str());
     if (!data || data->bytes.empty()) {
-        // Warn once per name (#832): the empty handle is cached, so this path runs only on the first
+        // Warn once per key (#832): the empty handle is cached, so this path runs only on the first
         // miss. Distinguish this "no bytes" cause from an upload failure below.
         if (m_logger) {
             char buf[208];
             std::snprintf(buf, sizeof(buf),
                           "mesh '%s' not found in any content pack (missing, wrong asset name, or empty) "
                           "— drawing placeholder",
-                          name.c_str());
+                          meshAssetName.c_str());
             m_logger->log(LogLevel::Warn, __FILE__, __LINE__, buf);
         }
-        m_meshCache[name] = MeshHandle{};
+        m_meshCache[cacheKey] = MeshHandle{};
         return MeshHandle{};
     }
 
-    MeshUploadDesc desc{name, data->bytes};
+    MeshUploadDesc desc{meshAssetName, data->bytes};
     // Pack-authored meshes are in the standard glTF/Blender content convention (nose +Z); the loader
     // rotates them into the engine body frame (nose +X) on upload (#906). The builtin placeholders and
     // terrain are engine-generated in the body/world frame and keep contentForward false.
@@ -387,9 +413,26 @@ MeshHandle SceneRenderer::getOrUploadMesh(const std::string& name) {
     // Resolve the glb's external texture URIs to file bytes through the content system (#833). The
     // renderer parses the PBR material and builds the GPU material; we only supply the bytes, because
     // URI → asset-name → file mapping is a content-pack concern, not a GPU-backend one.
-    desc.textureResolver = [this](std::string_view uri) -> std::vector<uint8_t> {
-        const std::string assetName = textureAssetNameFromUri(uri);
-        auto tex = m_assets.loadTexture(assetName.c_str());
+    //
+    // Livery override (#845): a re-skin swaps the TEXTURE the material's map resolves to, never the
+    // geometry/UVs. We derive the base texture's "<slot>.<map>" key and, if the livery re-skins it,
+    // load the replacement asset. A missing key OR a broken override both fall back to the base
+    // texture (per-map fallback to base) — so a partial or broken livery degrades, never fails.
+    // `liveryOverrides` outlives this call (owned by the caller / m_liveryCache) and the resolver is
+    // invoked synchronously inside createMesh below, so capturing by reference is safe.
+    desc.textureResolver = [this, &liveryOverrides](std::string_view uri) -> std::vector<uint8_t> {
+        const std::string baseAsset = textureAssetNameFromUri(uri);
+        std::string chosen = baseAsset;
+        if (!liveryOverrides.empty()) {
+            const std::string key = liveryKeyFromBaseAsset(baseAsset);
+            if (!key.empty()) {
+                if (auto ov = liveryOverrides.find(key); ov != liveryOverrides.end())
+                    chosen = ov->second;
+            }
+        }
+        auto tex = m_assets.loadTexture(chosen.c_str());
+        if ((!tex || tex->bytes.empty()) && chosen != baseAsset)
+            tex = m_assets.loadTexture(baseAsset.c_str()); // livery override missing/broken → base
         if (!tex || tex->bytes.empty())
             return {};
         return tex->bytes;
@@ -398,29 +441,48 @@ MeshHandle SceneRenderer::getOrUploadMesh(const std::string& name) {
     if (!h.valid() && m_logger) {
         char buf[176];
         std::snprintf(buf, sizeof(buf),
-                      "mesh '%s' failed to upload (corrupt or unsupported .glb) — drawing placeholder", name.c_str());
+                      "mesh '%s' failed to upload (corrupt or unsupported .glb) — drawing placeholder",
+                      meshAssetName.c_str());
         m_logger->log(LogLevel::Warn, __FILE__, __LINE__, buf);
     }
-    m_meshCache[name] = h;
+    m_meshCache[cacheKey] = h;
     return h;
 }
 
-MaterialHandle SceneRenderer::getOrUploadMaterial(const std::string& meshName) {
-    auto it = m_materialCache.find(meshName);
+MaterialHandle SceneRenderer::getOrUploadMaterial(const std::string& cacheKey) {
+    auto it = m_materialCache.find(cacheKey);
     if (it != m_materialCache.end())
         return it->second;
 
     // Prefer the material createMesh parsed from the mesh's own glb (#833). getOrUploadMesh runs
-    // first for this name (renderFrame calls it immediately before this), so the handle is cached.
+    // first for this key (renderFrame calls it immediately before this), so the handle is cached.
     // A mesh with no material — none authored, or the texture resolver missed — falls back to the
     // shared shaded-grey material (ensureBuiltins() always runs before this method).
     MaterialHandle mat = m_fallbackEntityMat;
-    if (auto mit = m_meshCache.find(meshName); mit != m_meshCache.end() && mit->second.valid()) {
+    if (auto mit = m_meshCache.find(cacheKey); mit != m_meshCache.end() && mit->second.valid()) {
         if (MaterialHandle meshMat = m_renderer.getMeshMaterial(mit->second); meshMat.valid())
             mat = meshMat;
     }
-    m_materialCache[meshName] = mat;
+    m_materialCache[cacheKey] = mat;
     return mat;
+}
+
+const SceneRenderer::LiveryTextureSet* SceneRenderer::resolveLivery(uint32_t typeIndex) {
+    if (!m_liveryResolver)
+        return nullptr;
+    auto it = m_liveryCache.find(typeIndex);
+    if (it == m_liveryCache.end()) {
+        LiveryTextureSet set;
+        if (!m_liveryResolver(typeIndex, set))
+            set = LiveryTextureSet{}; // resolved: no livery (empty id) — cache the negative result too
+        it = m_liveryCache.emplace(typeIndex, std::move(set)).first;
+    }
+    return it->second.id.empty() ? nullptr : &it->second;
+}
+
+void SceneRenderer::setLiveryResolver(LiveryResolver resolver) noexcept {
+    m_liveryResolver = std::move(resolver);
+    m_liveryCache.clear(); // a new resolver may re-skin already-seen types
 }
 
 } // namespace fl

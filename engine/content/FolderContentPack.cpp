@@ -28,6 +28,7 @@ static constexpr std::array<AssetPathInfo, static_cast<size_t>(AssetType::Count)
     {"sensors", ".toml", ""},      // SensorDef
     {"weapons", ".toml", ""},      // Weapon
     {"manual", ".md", ""},         // Manual (prose only — the numbers are generated, never authored)
+    {"liveries", ".toml", ""},     // Livery (#845 — texture-set indirection by material slot)
 }};
 
 // THE SIZE ASSERT BELOW IS TAUTOLOGICAL AND CANNOT FAIL. The array's length is *defined* as
@@ -133,6 +134,9 @@ std::optional<WeaponDefData> FolderContentPack::loadWeaponDef(const char* name) 
 }
 std::optional<ManualProse> FolderContentPack::loadManualProse(const char* name) {
     return loadBytes<ManualProse>(name, AssetType::Manual);
+}
+std::optional<LiveryData> FolderContentPack::loadLivery(const char* name) {
+    return loadBytes<LiveryData>(name, AssetType::Livery);
 }
 
 std::optional<std::string> FolderContentPack::loadConfig(const char* name) const {

@@ -49,6 +49,7 @@ struct BuiltinSensors {
             d.type = SensorType::Ir;
             d.omnidirectional = false;
             d.emitter = false;
+            d.role = SensorRole::Seeker;
 
             d.search.azHalfAngleDeg = 25.f; // the acquisition basket off boresight
             d.search.elHalfAngleDeg = 25.f;
@@ -82,6 +83,7 @@ struct BuiltinSensors {
             d.type = SensorType::Radar;
             d.omnidirectional = false;
             d.emitter = true;
+            d.role = SensorRole::Seeker;
 
             d.search.azHalfAngleDeg = 25.f;
             d.search.elHalfAngleDeg = 25.f;
@@ -116,6 +118,7 @@ struct BuiltinSensors {
             d.type = SensorType::Radar;
             d.omnidirectional = false;
             d.emitter = false; // passive: rides the shooter's illumination, never radiates
+            d.role = SensorRole::Seeker;
 
             d.search.azHalfAngleDeg = 20.f;
             d.search.elHalfAngleDeg = 20.f;

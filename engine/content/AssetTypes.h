@@ -19,6 +19,7 @@ enum class AssetType : uint8_t {
     SensorDef,
     Weapon,
     Manual, // hand-written aircraft prose (#821); the NUMBERS are generated, never authored
+    Livery, // texture-set indirection by material slot (#845); re-skins an aircraft without a mesh
     Count
 };
 
@@ -41,5 +42,6 @@ struct EntityDefData : AssetBase {};
 struct SensorDefData : AssetBase {};
 struct WeaponDefData : AssetBase {};
 struct ManualProse : AssetBase {};
+struct LiveryData : AssetBase {};
 
 } // namespace fl

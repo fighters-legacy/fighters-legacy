@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include "weather/Turbulence.h"
 #include "weather/WeatherController.h"
 
 #include <algorithm>
@@ -434,4 +435,37 @@ TEST_CASE("WeatherController::applyPresetToEnv clamps an out-of-range preset", "
     // Clamped to Clear: cloudCoverage 0, no precipitation.
     CHECK(env.cloudCoverage == 0.0f);
     CHECK_FALSE(env.isSnowPrecipitation);
+}
+
+TEST_CASE("weatherTurbulence is deterministic and scales with amplitude (#426)", "[weather][turbulence]") {
+    // The perturbation is a pure function of (entityIdx, tickIndex, amplitude): the same inputs give
+    // byte-identical output (what lets the client reproduce the server exactly), and different
+    // (entityIdx, tickIndex) give a different perturbation.
+    const auto a = weatherTurbulence(7u, 100u, 4.0f);
+    const auto b = weatherTurbulence(7u, 100u, 4.0f);
+    CHECK(a[0] == b[0]);
+    CHECK(a[1] == b[1]);
+    CHECK(a[2] == b[2]);
+
+    CHECK(weatherTurbulence(7u, 101u, 4.0f)[0] != a[0]); // next tick differs
+    CHECK(weatherTurbulence(8u, 100u, 4.0f)[0] != a[0]); // different entity differs
+
+    // Zero amplitude → no turbulence (clear weather, and the client's default before any MsgWeatherState).
+    const auto z = weatherTurbulence(7u, 100u, 0.0f);
+    CHECK(z[0] == 0.0f);
+    CHECK(z[1] == 0.0f);
+    CHECK(z[2] == 0.0f);
+
+    // The y/z axes are fixed fractions of the x perturbation (0.3, 0.5), so amplitude scales linearly.
+    CHECK_THAT(a[1], WithinRel(a[0] * 0.3f, 1e-5f));
+    CHECK_THAT(a[2], WithinRel(a[0] * 0.5f, 1e-5f));
+    CHECK_THAT(weatherTurbulence(7u, 100u, 8.0f)[0], WithinRel(a[0] * 2.0f, 1e-5f));
+}
+
+TEST_CASE("WeatherController::computeEnvironment carries the turbulence amplitude (#426)", "[weather]") {
+    WeatherController wc;
+    wc.setPreset(WeatherPreset::Storm); // a preset with non-zero turbulence
+    const EnvironmentState env = wc.computeEnvironment();
+    CHECK(env.turbulenceAmp == wc.turbulenceAmplitude());
+    CHECK(env.turbulenceAmp > 0.0f);
 }

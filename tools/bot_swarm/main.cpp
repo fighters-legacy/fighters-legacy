@@ -19,6 +19,7 @@
 #include "SwarmConfig.h"
 #include "SwarmMetrics.h"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -61,6 +62,29 @@ std::vector<ClientMetrics> g_metrics;
 std::vector<std::vector<double>> g_loopDt;
 std::vector<double> g_windowS;
 
+// RSS trend sampling (#789). g_rssSeries is written ONLY by the sampler thread and read by main
+// after it is joined — single writer + join barrier, no lock needed.
+std::vector<RssSample> g_rssSeries;
+std::atomic<bool> g_samplerStop{false};
+
+// Samples the fl-server --metrics-json RSS on an interval into g_rssSeries, so the soak can gate on
+// the growth TREND, not just the endpoint. Only run when --server-metrics is set.
+void runRssSampler(std::string path, double intervalS) {
+    double nextAt = 0.0; // sample once at start, then every intervalS
+    while (!g_samplerStop.load(std::memory_order_relaxed)) {
+        const double n = nowS();
+        if (n >= nextAt) {
+            if (auto m = loadServerMetrics(path))
+                g_rssSeries.push_back(RssSample{n, static_cast<int64_t>(m->rssKb)});
+            nextAt = n + intervalS;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    // One final sample so the tail carries the end-of-run value even between interval ticks.
+    if (auto m = loadServerMetrics(path))
+        g_rssSeries.push_back(RssSample{nowS(), static_cast<int64_t>(m->rssKb)});
+}
+
 void printHelp() {
     std::printf("Usage: bot_swarm [host] [port] [options]\n"
                 "\n"
@@ -87,6 +111,9 @@ void printHelp() {
                 "  --assert-max-tick-ms X Exit nonzero if authoritative server tick p99 (ms) > X\n"
                 "  --assert-min-entities N Exit nonzero if authoritative server_tick.entities < N\n"
                 "  --assert-max-rss-growth-kb N  Exit nonzero if server RSS growth (rss_kb - rss_startup_kb) > N\n"
+                "  --assert-max-rss-slope-kb-per-min X  Exit nonzero if the RSS growth TREND over the run's\n"
+                "                         tail exceeds X KB/min (the slow-leak gate; needs --server-metrics)\n"
+                "  --rss-sample-interval-s S  RSS sampling cadence for the trend series (default: 30)\n"
                 "  --assert-max-load-factor X  Exit nonzero if server_tick.load_factor > X (governor engaged? <0=off)\n"
                 "  --assert-max-dropped-ticks N  Exit nonzero if server_tick.dropped_ticks > N (<0=off)\n"
                 "  --degrade-duration S   Lossy-proxy degraded window length; enables the proxy (default: 0 = off)\n"
@@ -364,8 +391,19 @@ int main(int argc, char** argv) {
         next += count;
         workers.emplace_back(runWorker, t, startIdx, count, cfg, connectHost, connectPort, plan);
     }
+
+    // Periodic RSS sampler (#789) — only when the authoritative server metrics file is available.
+    std::thread rssSampler;
+    if (!cfg.serverMetricsPath.empty())
+        rssSampler = std::thread(runRssSampler, cfg.serverMetricsPath, cfg.rssSampleIntervalS);
+
     for (auto& w : workers)
         w.join();
+
+    if (rssSampler.joinable()) {
+        g_samplerStop.store(true, std::memory_order_relaxed);
+        rssSampler.join();
+    }
 
     if (cfg.degradeDurationS > 0.0) {
         proxy.stop();
@@ -401,7 +439,8 @@ int main(int argc, char** argv) {
             std::printf("[WARN ] could not read server metrics from %s\n", cfg.serverMetricsPath.c_str());
     }
 
-    const SwarmReport report = buildReport(cfg, g_metrics, elapsed, std::move(allDt), threads, serverMetrics);
+    const SwarmReport report =
+        buildReport(cfg, g_metrics, elapsed, std::move(allDt), threads, serverMetrics, std::move(g_rssSeries));
     printReport(report);
 
     if (!cfg.jsonPath.empty()) {

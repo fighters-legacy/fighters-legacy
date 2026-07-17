@@ -54,6 +54,9 @@ PROFILE_DEFAULTS = {
     "assert_max_tick_ms": 0.0,
     # Soak leak gate (#707): max allowed RSS growth over the run (rss_kb - rss_startup_kb). 0 = disabled.
     "assert_max_rss_growth_kb": 0,
+    # Soak leak TREND gate (#789): max allowed RSS growth rate (KB/min) fitted over the run's tail.
+    # Catches a SLOW leak that stayed under the endpoint bound above. 0 = disabled.
+    "assert_max_rss_slope_kb_per_min": 0.0,
     # Overrun-governor gate (#574). Both use a NEGATIVE-disabled sentinel (0 is a real value for each).
     # governor=true flips FL_LOADTEST_GOVERNOR=1 so the run exercises the governor ON.
     "assert_max_load_factor": -1.0,
@@ -126,6 +129,8 @@ def assert_flags(profile, strict):
         flags += ["--assert-max-tick-ms", _num(profile["assert_max_tick_ms"])]
     if profile["assert_max_rss_growth_kb"] > 0:
         flags += ["--assert-max-rss-growth-kb", _num(profile["assert_max_rss_growth_kb"])]
+    if profile["assert_max_rss_slope_kb_per_min"] > 0:
+        flags += ["--assert-max-rss-slope-kb-per-min", _num(profile["assert_max_rss_slope_kb_per_min"])]
     # Overrun-governor gate (#574): negative-disabled, so >= 0 enables the flag (0 is a real value).
     if profile["assert_max_load_factor"] >= 0:
         flags += ["--assert-max-load-factor", _num(profile["assert_max_load_factor"])]
@@ -260,6 +265,24 @@ def evaluate_report(report, profile, strict):
             detail = f"{growth} <= {profile['assert_max_rss_growth_kb']} KiB growth"
         checks.append({
             "name": "server_tick.rss_growth_kb",
+            "ok": ok,
+            "detail": detail,
+            "advisory": False,
+        })
+
+    # Soak leak TREND gate (#789): the fitted tail slope catches a slow leak the endpoint bound above
+    # cannot. rss_slope_kb_per_min is null/absent when the series was too short to fit -> cannot
+    # evaluate -> fail (do not pass an unchecked gate), same rule as the other server gates.
+    if profile["assert_max_rss_slope_kb_per_min"] > 0:
+        slope = report.get("rss_slope_kb_per_min")
+        if slope is None:
+            ok = False
+            detail = "no rss_slope (series too short to fit)"
+        else:
+            ok = slope <= profile["assert_max_rss_slope_kb_per_min"]
+            detail = f"{slope:.2f} <= {profile['assert_max_rss_slope_kb_per_min']:.2f} KB/min tail slope"
+        checks.append({
+            "name": "rss_slope_kb_per_min",
             "ok": ok,
             "detail": detail,
             "advisory": False,

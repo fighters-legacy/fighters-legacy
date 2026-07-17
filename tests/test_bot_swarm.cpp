@@ -385,6 +385,45 @@ TEST_CASE("parseSwarmArgs parses --assert-max-rss-growth-kb (#707)", "[bot_swarm
     CHECK(bad.status == ParseStatus::Error);
 }
 
+TEST_CASE("parseSwarmArgs parses the RSS slope gate flags (#789)", "[bot_swarm][config]") {
+    const SwarmParseResult r = parse({"--assert-max-rss-slope-kb-per-min", "25.5", "--rss-sample-interval-s", "10"});
+    REQUIRE(r.status == ParseStatus::Ok);
+    CHECK(r.cfg.assertMaxRssSlopeKbPerMin == Catch::Approx(25.5));
+    CHECK(r.cfg.rssSampleIntervalS == Catch::Approx(10.0));
+
+    CHECK(parse({"--assert-max-rss-slope-kb-per-min", "-1"}).status == ParseStatus::Error);
+    CHECK(parse({"--rss-sample-interval-s", "0"}).status == ParseStatus::Error);
+
+    // Defaults: gate disabled, 30 s cadence.
+    const SwarmParseResult d = parse({});
+    CHECK(d.cfg.assertMaxRssSlopeKbPerMin == Catch::Approx(0.0));
+    CHECK(d.cfg.rssSampleIntervalS == Catch::Approx(30.0));
+}
+
+TEST_CASE("rssSlopeKbPerMin fits the tail and flags a slow leak (#789)", "[bot_swarm][metrics]") {
+    // Realistic shape: RSS climbs to a 128-client plateau in the first 60 s, then flat for the rest.
+    std::vector<RssSample> flatTail;
+    for (int t = 0; t <= 600; t += 30) {
+        const int64_t rss = t < 60 ? 16000 + static_cast<int64_t>(t) * 550 : 49000; // fill, then plateau
+        flatTail.push_back({static_cast<double>(t), rss});
+    }
+    const auto flatSlope = fl::rssSlopeKbPerMin(flatTail, fl::kRssSlopeTailFraction);
+    REQUIRE(flatSlope.has_value());
+    CHECK(std::abs(*flatSlope) < 1.0); // essentially flat over the tail half
+
+    // A slow leak: still climbing at ~100 KB/min through the whole run.
+    std::vector<RssSample> leak;
+    for (int t = 0; t <= 600; t += 30)
+        leak.push_back({static_cast<double>(t), 16000 + static_cast<int64_t>(t) * 100 / 60}); // 100 KB/min
+    const auto leakSlope = fl::rssSlopeKbPerMin(leak, fl::kRssSlopeTailFraction);
+    REQUIRE(leakSlope.has_value());
+    CHECK(*leakSlope == Catch::Approx(100.0).margin(2.0));
+
+    // Too few points to fit → not evaluable.
+    CHECK_FALSE(fl::rssSlopeKbPerMin({}, 0.5).has_value());
+    CHECK_FALSE(fl::rssSlopeKbPerMin({{0.0, 16000}}, 0.5).has_value());
+}
+
 TEST_CASE("parseSwarmArgs parses the governor asserts with negative-disabled sentinels (#574)", "[bot_swarm][config]") {
     // Defaults are disabled (negative), since 0 is a real value for both.
     const SwarmParseResult d = parse({});
@@ -447,6 +486,45 @@ static ClientMetrics makeClient(uint64_t bytes, uint64_t firstTick, uint64_t las
     return m;
 }
 
+TEST_CASE("buildReport's slope gate fails a slow leak and passes a plateau (#789)", "[bot_swarm][metrics]") {
+    SwarmConfig cfg;
+    cfg.clients = 1;
+    cfg.durationS = 600;
+    cfg.assertMaxRssSlopeKbPerMin = 20.0; // fail sustained growth above 20 KB/min
+    std::vector<ClientMetrics> clients;
+    clients.push_back(makeClient(40000, 0, 600, 0.0, 600.0));
+
+    std::vector<RssSample> plateau, leak;
+    for (int t = 0; t <= 600; t += 30) {
+        plateau.push_back({static_cast<double>(t), t < 60 ? 16000 + static_cast<int64_t>(t) * 550 : 49000});
+        leak.push_back({static_cast<double>(t), 16000 + static_cast<int64_t>(t) * 100 / 60}); // ~100 KB/min
+    }
+
+    CHECK(buildReport(cfg, clients, 600.0, {}, 1, std::nullopt, plateau).assertsPassed);
+    CHECK_FALSE(buildReport(cfg, clients, 600.0, {}, 1, std::nullopt, leak).assertsPassed);
+
+    // No series while the gate is enabled → not evaluable → fail (cannot pass an unchecked gate).
+    CHECK_FALSE(buildReport(cfg, clients, 600.0, {}, 1, std::nullopt, {}).assertsPassed);
+
+    // Gate disabled → passes regardless.
+    cfg.assertMaxRssSlopeKbPerMin = 0.0;
+    CHECK(buildReport(cfg, clients, 600.0, {}, 1, std::nullopt, leak).assertsPassed);
+}
+
+TEST_CASE("reportToJson emits the rss_series and slope (#789)", "[bot_swarm][metrics]") {
+    SwarmConfig cfg;
+    cfg.clients = 1;
+    std::vector<ClientMetrics> clients;
+    clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
+    std::vector<RssSample> series = {{0.0, 16000}, {30.0, 20000}, {60.0, 20100}};
+    const std::string json = reportToJson(buildReport(cfg, clients, 10.0, {16.6}, 1, std::nullopt, series));
+
+    CHECK(json.find("\"rss_series\"") != std::string::npos);
+    CHECK(json.find("\"rss_kb\": 16000") != std::string::npos);
+    CHECK(json.find("\"rss_slope_kb_per_min\"") != std::string::npos);
+    CHECK(json.find("\"max_rss_slope_kb_per_min\"") != std::string::npos);
+}
+
 TEST_CASE("buildReport aggregates connected clients and computes tick-Hz + bandwidth", "[bot_swarm][metrics]") {
     SwarmConfig cfg;
     cfg.clients = 2;
@@ -502,7 +580,7 @@ TEST_CASE("reportToJson emits the versioned schema and key fields", "[bot_swarm]
     clients.push_back(makeClient(40000, 0, 600, 0.0, 10.0));
     const std::string json = reportToJson(buildReport(cfg, clients, 10.0, {16.6}, 1));
 
-    CHECK(json.find("\"schema_version\": 3") != std::string::npos); // v3 adds "transport" (#649)
+    CHECK(json.find("\"schema_version\": 4") != std::string::npos); // v4 adds "rss_series" (#789)
     CHECK(json.find("\"observed_server_tick_hz\"") != std::string::npos);
     CHECK(json.find("\"downstream_kbs_per_client\"") != std::string::npos);
     CHECK(json.find("\"clients_connected\": 1") != std::string::npos);

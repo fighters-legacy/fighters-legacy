@@ -85,7 +85,7 @@ def test_assert_flags_tick_ms_only_when_strict():
 def _report(kbs_max=66.0, tick_hz_min=60.0, tick_p99=10.0, connected=64, requested=64,
             disconnected=0, with_server=True, rss_kb=200000, rss_startup_kb=200000,
             load_factor=1.0, dropped_ticks=0, congestion_min_hz=60.0, congestion_recovered_hz=60.0,
-            sensing=None):
+            sensing=None, rss_slope="omit"):
     r = {
         "clients_requested": requested,
         "clients_connected": connected,
@@ -93,6 +93,10 @@ def _report(kbs_max=66.0, tick_hz_min=60.0, tick_p99=10.0, connected=64, request
         "downstream_kbs_per_client": {"max": kbs_max, "mean": kbs_max},
         "observed_server_tick_hz": {"min": tick_hz_min},
     }
+    # rss_slope: "omit" leaves the key absent (no series); None emits null (series too short); a
+    # number emits the fitted tail slope (#789).
+    if rss_slope != "omit":
+        r["rss_slope_kb_per_min"] = rss_slope
     if with_server:
         r["server_tick"] = {"tick_ms": {"p99": tick_p99}, "rss_kb": rss_kb, "rss_startup_kb": rss_startup_kb,
                             "load_factor": load_factor, "dropped_ticks": dropped_ticks,
@@ -175,6 +179,33 @@ def test_evaluate_missing_server_block_when_rss_enabled():
     assert not ev["passed"]
     check = next(c for c in ev["checks"] if c["name"] == "server_tick.rss_growth_kb")
     assert not check["ok"]
+
+
+# ---- soak RSS leak TREND gate (#789) -------------------------------------------------------------
+def test_assert_flags_emits_rss_slope_when_set():
+    prof = dict(sg.PROFILE_DEFAULTS)
+    prof.update(assert_max_rss_slope_kb_per_min=128)
+    assert sg.assert_flags(prof, strict=False) == ["--assert-max-rss-slope-kb-per-min", "128"]
+
+
+def test_evaluate_pass_on_flat_rss_slope():
+    prof = _profile(assert_max_rss_slope_kb_per_min=128)
+    assert sg.evaluate_report(_report(rss_slope=3.0), prof, strict=True)["passed"]  # plateau
+
+
+def test_evaluate_fail_on_rss_slope_over_cap():
+    prof = _profile(assert_max_rss_slope_kb_per_min=128)
+    ev = sg.evaluate_report(_report(rss_slope=250.0), prof, strict=True)  # slow leak
+    assert not ev["passed"]
+    check = next(c for c in ev["checks"] if c["name"] == "rss_slope_kb_per_min")
+    assert not check["ok"]
+
+
+def test_evaluate_fail_on_missing_rss_slope_when_enabled():
+    prof = _profile(assert_max_rss_slope_kb_per_min=128)
+    # null slope (series too short) and an absent key both fail — cannot pass an unchecked gate.
+    assert not sg.evaluate_report(_report(rss_slope=None), prof, strict=True)["passed"]
+    assert not sg.evaluate_report(_report(rss_slope="omit"), prof, strict=True)["passed"]
 
 
 # ---- compare_baseline ----------------------------------------------------------------------------

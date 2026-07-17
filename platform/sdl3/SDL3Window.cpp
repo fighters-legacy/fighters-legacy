@@ -8,6 +8,9 @@
 #include "IWindowEventHandler.h"
 #include <SDL3/SDL.h>
 #include <cmath>
+#include <mutex>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace fl {
@@ -135,6 +138,65 @@ int SDL3Window::showMessageBox(MessageBoxType type, const char* title, const cha
 
 void SDL3Window::openURL(const char* url) {
     SDL_OpenURL(url);
+}
+
+namespace {
+// Shared state between showFolderDialog and its SDL callback. SDL may invoke the callback from a
+// different thread than the one pumping events (the platform portal backends do), so every field
+// touched by the callback is guarded by the mutex; the callback makes no other SDL calls.
+struct FolderPickState {
+    std::mutex mutex;
+    bool done{false};
+    bool haveResult{false};
+    std::string path;
+};
+
+void SDLCALL folderPickCallback(void* userdata, const char* const* filelist, int /*filter*/) {
+    auto* st = static_cast<FolderPickState*>(userdata);
+    std::lock_guard<std::mutex> lock(st->mutex);
+    // filelist == nullptr → error; filelist[0] == nullptr → user cancelled. Either leaves
+    // haveResult false, which the caller maps to nullopt.
+    if (filelist && filelist[0]) {
+        st->path = filelist[0];
+        st->haveResult = true;
+    }
+    st->done = true;
+}
+} // namespace
+
+std::optional<std::string> SDL3Window::showFolderDialog(const char* title, const char* defaultLocation) {
+    FolderPickState st;
+
+    SDL_PropertiesID props = SDL_CreateProperties();
+    if (props == 0) {
+        m_lastError = SDL_GetError();
+        return std::nullopt;
+    }
+    if (title)
+        SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, title);
+    if (defaultLocation)
+        SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_LOCATION_STRING, defaultLocation);
+    if (m_window)
+        SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_WINDOW_POINTER, m_window);
+
+    SDL_ShowFileDialogWithProperties(SDL_FILEDIALOG_OPENFOLDER, folderPickCallback, &st, props);
+    SDL_DestroyProperties(props);
+
+    // Block until the callback fires, pumping OS events so the dialog stays responsive.
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(st.mutex);
+            if (st.done)
+                break;
+        }
+        SDL_PumpEvents();
+        SDL_Delay(10);
+    }
+
+    std::lock_guard<std::mutex> lock(st.mutex);
+    if (st.haveResult)
+        return st.path;
+    return std::nullopt;
 }
 
 void SDL3Window::setTitle(const char* title) {

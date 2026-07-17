@@ -770,6 +770,23 @@ void Game::initGameSystems() {
             return pen ? pen->visualEffect : std::string{};
         });
 
+    // Livery indirection (#845): re-skin an aircraft by material slot without touching its geometry.
+    // Resolve the highest-priority installed livery targeting the entity's aircraft DEF ID; the
+    // SceneRenderer caches the result per type and applies the "<slot>.<map>" texture overrides with
+    // per-map fallback to the base scheme. No livery installed -> the aircraft flies its base textures.
+    d.services.sceneRenderer->setLiveryResolver([&reg = d.services.entityRegistry, assets = d.services.assets.get()](
+                                                    uint32_t idx, fl::SceneRenderer::LiveryTextureSet& out) -> bool {
+        const fl::EntityDef* def = reg.byIndex(idx);
+        if (!def)
+            return false;
+        auto livery = assets->liveryForAircraft(def->id.c_str());
+        if (!livery)
+            return false;
+        out.id = livery->id;
+        out.overrides = std::move(livery->textures);
+        return true;
+    });
+
     d.services.subtitleQueue.setEnabled(d.services.userConfig->accessibility().subtitlesEnabled);
     d.services.sceneRenderer->setSubtitleQueue(&d.services.subtitleQueue);
 

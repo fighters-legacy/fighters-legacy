@@ -57,7 +57,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `ConnectAck` | `0x01` | server→client | reliable | 20 + N×336 bytes | Reply to `ConnectRequest`: granted role + assigned entity slot, then the type registry |
 | `WorldSnapshot` | `0x02` | server→client | unreliable | 24 + origin table + record stream + TLV | Per-tick entity state, unicast per peer; 24-byte header + shared-origin table + a byte-aligned stitched record stream (each record: origin index + a `full` bit) + TLV extension block — see *Quantized entity record* below |
 | `ClientInput` | `0x03` | client→server | unreliable | 80 bytes | Per-frame flight inputs + fire intents + selected weapon station + camera eye (observer interest) |
-| `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
+| `WeatherState` | `0x04` | server→client | unreliable | 24 bytes | Weather and time-of-day (+ turbulence amplitude, #426); broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
 | `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
 | `AdminCommand` | `0x06` | client→server | reliable | 128 bytes | Operator-authenticated admin command. Additive ID — old servers silently discard. |
 | `AdminResponse` | `0x07` | server→client | reliable | 128 bytes | Fast-path command result (≤ 123 chars), unicast to the requesting peer. Additive ID — old clients silently discard. |
@@ -312,7 +312,7 @@ seeded at first input. The depth is then continuously adjusted each tick: an EWM
 when `|target − current| > hysteresis`. Configurable via `[world].jitter_buffer_adapt_window`,
 `jitter_buffer_hysteresis`, and `jitter_buffer_jitter_multiplier`.
 
-### MsgWeatherState — 20 bytes
+### MsgWeatherState — 24 bytes
 
 Unreliable, server→client. Broadcast every 10 sim ticks (~6 Hz at 60 Hz sim) after the `MsgWorldSnapshot`.
 `MsgId::WeatherState = 0x04` is an additive message ID — clients that do not recognize it silently
@@ -330,8 +330,16 @@ at offset 2 (ARM64 alignment constraint). Decode: `timeOfDay = timeOfDayTenths /
 | 8 | 4 | `fogStartDist` | `float` | fog start distance (metres) |
 | 12 | 4 | `windX` | `float` | world-frame wind x component (m/s), includes gust |
 | 16 | 4 | `windZ` | `float` | world-frame wind z component (m/s), includes gust |
+| 20 | 4 | `turbulenceAmp` | `float` | turbulence amplitude (m/s), #426. The client feeds it to the same deterministic `weatherTurbulence(entityIdx, tickIndex, amp)` the server uses, so client-side prediction reproduces the per-tick turbulence exactly. Tail-append (grew 20→24); additive, no version bump. |
 
 Wind convention: `windX` and `windZ` are the **blowing-toward** direction. A westerly wind (FROM 270°) has `windX > 0`.
+
+Turbulence (#426): the server's per-tick turbulence perturbation is a pure function of
+`(entityIdx, tickIndex, turbulenceAmp)` — no shared PRNG state — so broadcasting only the scalar
+amplitude lets `ClientPrediction` reproduce it **exactly** for the player's own entity (the same
+one-function-two-callers discipline as the stall buffet), rather than approximating per-tick vectors.
+Previously prediction excluded turbulence entirely and diverged by the full amplitude every gusty
+tick, leaving visible reconciliation jitter.
 `windY` is always zero (horizontal wind only).
 
 ### MsgServerNotice — 64 bytes
@@ -710,6 +718,7 @@ Helpers: `fl::findExt`, `fl::readExtValue<T>`, `fl::appendExt<T>`, `fl::appendEx
 | `SnapshotPeerDelayTicks` | `0x0102` | `uint16_t` | `MsgWorldSnapshot` | Raw `estimatedDelayTicks` (tick count, not ms). Companion to `SnapshotPeerLatency`; avoids the ms-rounding loss inherent in `ticks → ms → ticks` conversion. Used by `ClientPrediction` as the replay-depth signal for client-side prediction. Absent when `estimatedDelayTicks == 0`. |
 | `SnapshotDespawn` | `0x0103` | `uint32_t[]` | `MsgWorldSnapshot` | Indices of entities the receiving peer *knew* that were removed from the sim entirely (kills/despawns) — **not** entities that merely left the interest radius (those rely on the client retention timeout). Variable length = `4 × count`, little-endian; read **per element via `memcpy`** (the payload is unaligned). Omitted when empty. Repeated for `kDespawnRepeatTicks` (≈4) ticks for drop tolerance on the unreliable channel. The client (`ClientNetEventHandler`) applies despawns *before* upserting the same packet's records, so a kill-then-reuse-same-idx resolves to the new entity. Priority/budget scheduler (#516). |
 | `SnapshotEffects` | `0x0104` | packed records | `MsgWorldSnapshot` | Cosmetic weapon effects (#625): tracers, muzzle flashes, launches, impacts, detonations. `kEffectRecordBytes` (22) per record, unaligned little-endian: `type u8` (`EffectType`: 0=WeaponFired, 1=MissileLaunch, 2=Impact, 3=Detonation, 4=NuclearFlash) + `weaponClass u8` (`WeaponType` ordinal) + `srcIdx u32` + `tgtIdx u32` (`0xFFFFFFFF` = none) + `pos f32[3]` (float32 world position — particle precision, not sim precision). Interest-filtered per peer, capped at `kMaxEffectsPerSnapshot` (16) per snapshot. **Unreliable by design**: a dropped packet loses cosmetics, never state — anything that must arrive (kills, stats) travels on the reliable `MsgCombatEvent`. Unknown `type` values must be skipped, never rejected. Omitted when empty. |
+| `SnapshotLastAckedSeqNum` | `0x0105` | `uint32_t` | `MsgWorldSnapshot` | The `seqNum` of the last `MsgClientInput` the server **drained from the jitter buffer and applied** for the receiving peer (#427). Lets `ClientPrediction` replay *exactly* the inputs the server has not yet reflected (history `seqNum > this`), rather than approximating the replay window from `SnapshotPeerDelayTicks` — exact under high delay variance, where the tick count over- or under-replays. Absent until the server has applied one of the peer's inputs (its first snapshots); the client falls back to the delay-ticks approximation when absent. |
 
 **Reserved ranges:**
 - `0x0000`: reserved
@@ -960,16 +969,21 @@ Client-side prediction (`ClientPrediction`, `game/fighters-legacy/`) reduces per
 latency by running a local `FlightIntegrator` that mirrors the server's physics:
 
 1. **On each sent `MsgClientInput`**: the input is pushed into a 128-slot history ring and
-   the local integrator is stepped one tick (steady wind from `MsgWeatherState` only —
-   turbulence is stochastic server-side and excluded to prevent compound divergence).
+   the local integrator is stepped one tick — with steady wind AND the deterministic weather
+   turbulence reproduced from the broadcast `turbulenceAmp` (#426), plus the stall buffet (#816).
+   The turbulence is a pure `(entityIdx, tickIndex, amp)` function shared with the server, so it
+   matches exactly rather than diverging.
 
 2. **On each received `MsgWorldSnapshot`**: the snapshot callback (`ClientNetEventHandler::
    snapshotCallback`) is invoked before `publishExternal()`. The integrator is reset to the
    server's authoritative `FlightState` (reconstructed from the player's `EntityRenderEntry`
-   including the new `omega` field), then the last `estimatedDelayTicks` history inputs are
-   replayed forward. The `SnapshotPeerDelayTicks` TLV (0x0102) carries the raw tick count as
-   the replay depth signal; `SnapshotPeerLatency` (0x0101, ms) continues to serve the HUD
-   indicator.
+   including the new `omega` field), then the un-reflected history inputs are replayed forward.
+   When the `SnapshotLastAckedSeqNum` TLV (0x0105) is present, the client replays *exactly* the
+   history inputs whose `seqNum` is newer than the acked value — the precise window, robust to
+   delay variance (#427). Absent (a peer's first snapshots, or an older server), it falls back to
+   replaying the last `estimatedDelayTicks` inputs, whose raw tick count arrives in the
+   `SnapshotPeerDelayTicks` TLV (0x0102). `SnapshotPeerLatency` (0x0101, ms) continues to serve
+   the HUD indicator.
 
 3. **The player's `EntityRenderEntry` is mutated in-place** with the predicted position,
    velocity, orientation, and angular rates before the snapshot is published to

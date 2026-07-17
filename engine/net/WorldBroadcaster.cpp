@@ -26,6 +26,7 @@
 #include "net/SnapshotCodec.h"
 #include "net/SnapshotCompression.h"
 #include "net/WireCodec.h"
+#include "weather/Turbulence.h"
 #include "weather/WeatherController.h"
 #include "world/FactionDef.h"
 #include "world/FactionRegistry.h"
@@ -562,6 +563,11 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             ps.rudder = bi.rudder;
             ps.buttons = bi.buttons;
             ps.selectedStation = bi.selectedStation;
+            // Record the seqNum whose control fields now drive the sim (#427). A stale-repeat tick
+            // (empty buffer) keeps the previous value: the same input is still what the snapshot
+            // reflects, so the client should still treat newer seqNums as un-acked.
+            ps.lastAppliedSeqNum = bi.seqNum;
+            ps.hasAppliedSeq = true;
         } else {
             // Stale-repeat keeps the FLIGHT controls (prevents coasting under loss), but must not
             // keep re-asserting the store-release bit: FireControl edge-detects, so a held bit is
@@ -1341,6 +1347,11 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 const auto delayTicks = static_cast<uint16_t>(std::min(pin.estimatedDelayTicks, uint32_t{65535u}));
                 appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerDelayTicks), delayTicks);
             }
+            // Exact acked-seqNum (#427): the seqNum of the last input the server applied for this peer.
+            // The client replays inputs newer than this rather than approximating from delay ticks.
+            // Omitted until the first input is applied (a peer's very first snapshots).
+            if (pin.hasAppliedSeq)
+                appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotLastAckedSeqNum), pin.lastAppliedSeqNum);
             // Explicit despawn TLV (#516): indices the peer knew that left the sim. Repeated for a few
             // ticks (drop tolerance on the unreliable channel), decrementing each entry's remaining count.
             if (auto& pendingDespawn = *w.pending; !pendingDespawn.empty()) {
@@ -1433,6 +1444,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             ws.fogStartDist = env.fogStartDist;
             ws.windX = env.windX;
             ws.windZ = env.windZ;
+            ws.turbulenceAmp = env.turbulenceAmp; // #426
             m_net.broadcast(&ws, sizeof(ws), /*reliable=*/false);
         }
     }
@@ -2592,6 +2604,7 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         bi.rudder = ctl(msg.rudder, -1.f, 1.f);
         bi.buttons = msg.buttons;
         bi.selectedStation = msg.selectedStation; // clamped against the entity's stations at consumption
+        bi.seqNum = msg.seqNum;                   // carried through so the applied seqNum can be acked (#427)
         stored.jitterBuffer.push(bi);
 
         // Server-side input tracing (#560): append the accepted, sanitized control sample to this
@@ -3135,17 +3148,14 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
     if (m_weather) {
         wind.wind_world[0] = m_weather->windX();
         wind.wind_world[2] = m_weather->windZ();
-        float turb = m_weather->turbulenceAmplitude();
-        // Per-entity deterministic turbulence: seed an LCG from (entityIdx, tickIndex) so the
-        // perturbation is independent of evaluation order and identical across worker counts and
-        // platforms (no shared RNG state mutated across entities — this is the parallel-safe form).
-        uint32_t rng = entityIdx * 0x9E3779B1u + static_cast<uint32_t>(tickIndex) * 0x85EBCA77u +
-                       static_cast<uint32_t>(tickIndex >> 32) * 0xC2B2AE3Du;
-        rng = rng * 1664525u + 1013904223u;
-        float r = static_cast<float>((rng >> 16) & 0xFFu) / 128.f - 1.f;
-        wind.turbulence_body[0] = turb * r;
-        wind.turbulence_body[1] = turb * 0.3f * r;
-        wind.turbulence_body[2] = turb * 0.5f * r;
+        // Per-entity deterministic turbulence: a pure function of (entityIdx, tickIndex) + amplitude,
+        // so the perturbation is independent of evaluation order, identical across worker counts and
+        // platforms, and — since #426 broadcasts the amplitude in MsgWeatherState — reproducible on
+        // the client for prediction (weatherTurbulence(), shared with ClientPrediction).
+        const auto turb = weatherTurbulence(entityIdx, tickIndex, m_weather->turbulenceAmplitude());
+        wind.turbulence_body[0] = turb[0];
+        wind.turbulence_body[1] = turb[1];
+        wind.turbulence_body[2] = turb[2];
     }
 
     // Stall buffet (#816). Folded in HERE rather than inside the integrator, and computed from a

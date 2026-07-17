@@ -2,6 +2,7 @@
 #include "ILogger.h"
 #include "ai/AiControllerFactory.h"
 #include "ai/BreakTurnController.h"
+#include "ai/DynamicLoiterController.h"
 #include "ai/EvadeController.h"
 #include "ai/Guidance.h"
 #include "ai/GunsEmploymentController.h"
@@ -165,6 +166,106 @@ TEST_CASE("LoiterController: entity at center returns neutral with throttle set"
     CHECK(inp.throttle > 0.f);
     CHECK(inp.aileron == Catch::Approx(0.f).margin(1e-5f));
     CHECK(inp.elevator == Catch::Approx(0.f).margin(1e-5f));
+}
+
+// ---------------------------------------------------------------------------
+// DynamicLoiterController (#464)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("DynamicLoiterController: banks like a loiter around the escortee's live position") {
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    reg.registerType(makeBasicDef());
+    fl::EntityManager em(log, reg);
+
+    // Escortee at the origin, escort 3 km east facing +X — the same geometry as the LoiterController
+    // right-of-centre case, so a clockwise orbit banks right (+aileron).
+    fl::EntityTransform tgt{};
+    tgt.pos[1] = 600.0;
+    tgt.quat[3] = 1.f;
+    fl::EntityId targetId = em.spawn("test:basic", tgt);
+
+    fl::EntityTransform esc{};
+    esc.pos[0] = 3000.0;
+    esc.pos[1] = 600.0;
+    esc.quat[3] = 1.f;
+    fl::EntityId escortId = em.spawn("test:basic", esc);
+
+    fl::ai::DynamicLoiterController ctrl(em, targetId, 3000.f);
+    const fl::EntityState* es = em.get(escortId);
+    REQUIRE(es != nullptr);
+    fl::ControlInput inp = ctrl.sample(*es, 0, 1.0 / 60.0);
+
+    CHECK(inp.throttle > 0.f);
+    CHECK(inp.aileron > 0.f);
+}
+
+TEST_CASE("DynamicLoiterController: re-centers on a moving escortee") {
+    // The whole point vs the fixed-centre LoiterController: move the escortee to the far side of the
+    // escort and the orbit sense flips, because the centre follows the target's live position.
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    reg.registerType(makeBasicDef());
+    fl::EntityManager em(log, reg);
+
+    fl::EntityTransform tgt{};
+    tgt.pos[1] = 600.0;
+    tgt.quat[3] = 1.f;
+    fl::EntityId targetId = em.spawn("test:basic", tgt);
+
+    fl::EntityTransform esc{};
+    esc.pos[0] = 3000.0;
+    esc.pos[1] = 600.0;
+    esc.quat[3] = 1.f;
+    fl::EntityId escortId = em.spawn("test:basic", esc);
+
+    fl::ai::DynamicLoiterController ctrl(em, targetId, 3000.f);
+    const fl::EntityState* es = em.get(escortId);
+    REQUIRE(es != nullptr);
+
+    // Escortee at the origin (west of the escort): banks right.
+    float aileronBefore = ctrl.sample(*es, 0, 1.0 / 60.0).aileron;
+
+    // Move the escortee east of the escort — the orbit must now turn the other way.
+    fl::EntityState* ts = em.get(targetId);
+    REQUIRE(ts != nullptr);
+    ts->transform.pos[0] = 6000.0;
+    float aileronAfter = ctrl.sample(*es, 1, 1.0 / 60.0).aileron;
+
+    CHECK(aileronBefore > 0.f);
+    CHECK(aileronAfter < 0.f);
+}
+
+TEST_CASE("DynamicLoiterController: neutral when the escortee is invalid or dead") {
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    reg.registerType(makeBasicDef());
+    fl::EntityManager em(log, reg);
+
+    fl::EntityTransform esc{};
+    esc.pos[0] = 3000.0;
+    esc.pos[1] = 600.0;
+    esc.quat[3] = 1.f;
+    fl::EntityId escortId = em.spawn("test:basic", esc);
+    const fl::EntityState* es = em.get(escortId);
+    REQUIRE(es != nullptr);
+
+    // An id that was never spawned → em.get returns nullptr → neutral (throttle 0).
+    fl::ai::DynamicLoiterController invalid(em, fl::EntityId{9999, 42}, 3000.f);
+    fl::ControlInput ii = invalid.sample(*es, 0, 1.0 / 60.0);
+    CHECK(ii.throttle == Catch::Approx(0.f).margin(1e-6f));
+    CHECK(ii.aileron == Catch::Approx(0.f).margin(1e-6f));
+
+    // A spawned-then-dead escortee → also neutral.
+    fl::EntityTransform tgt{};
+    tgt.pos[1] = 600.0;
+    tgt.quat[3] = 1.f;
+    fl::EntityId targetId = em.spawn("test:basic", tgt);
+    em.get(targetId)->dead = true;
+    fl::ai::DynamicLoiterController dead(em, targetId, 3000.f);
+    fl::ControlInput di = dead.sample(*es, 0, 1.0 / 60.0);
+    CHECK(di.throttle == Catch::Approx(0.f).margin(1e-6f));
+    CHECK(di.aileron == Catch::Approx(0.f).margin(1e-6f));
 }
 
 // ---------------------------------------------------------------------------
@@ -559,6 +660,23 @@ TEST_CASE("AiControllerFactory: pursuit with nonexistent entity index returns nu
     std::vector<std::string_view> args = {"9999"};
     auto ctrl = fl::ai::createController("pursuit", std::span{args}, &f.em);
     CHECK(ctrl == nullptr);
+}
+
+TEST_CASE("AiControllerFactory: dynamic_loiter from string args") {
+    FactoryFixture f;
+    std::string idxStr = std::to_string(f.entityId.index);
+    std::vector<std::string_view> args = {idxStr, "2500", "0.7", "ccw"};
+    auto ctrl = fl::ai::createController("dynamic_loiter", std::span{args}, &f.em);
+    CHECK(ctrl != nullptr);
+}
+
+TEST_CASE("AiControllerFactory: dynamic_loiter needs an entity manager and a live target") {
+    FactoryFixture f;
+    std::vector<std::string_view> idxArgs = {"9999"};
+    CHECK(fl::ai::createController("dynamic_loiter", std::span{idxArgs}, &f.em) == nullptr);
+    std::string idxStr = std::to_string(f.entityId.index);
+    std::vector<std::string_view> args = {idxStr};
+    CHECK(fl::ai::createController("dynamic_loiter", std::span{args}, nullptr) == nullptr);
 }
 
 TEST_CASE("AiControllerFactory: evade from string args") {

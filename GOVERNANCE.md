@@ -66,6 +66,63 @@ velocity without leaving the locked-decisions table silently stale. Once the pro
 the full RFC process is required for the same classes of change. The 2026-06-28 re-target to
 128+ multiplayer is the first such record.
 
+## Content Pack Linking Exception
+
+Fighters Legacy is licensed under the GNU General Public License, version 3 or later
+(GPL-3.0-or-later). The following exception grants additional permission for the narrow purpose of
+implementing content packs, so that mods and plugins — including proprietary or paid content — can
+link against the engine's stable content-pack interface without being required to be GPL-licensed
+themselves. This is the exception the `IContentPack.h` header refers to, and it is a hard
+prerequisite for the premium-content distribution mechanism.
+
+### Grant of additional permission
+
+As an exception to the terms of the GPL-3.0-or-later, the copyright holders of Fighters Legacy give
+you permission to combine Fighters Legacy with a work (the "Content Pack") that implements the
+Fighters Legacy content-pack interface, and to convey the resulting combined work, under terms of
+your choice for the Content Pack, provided that:
+
+1. The only Fighters Legacy source you incorporate into the Content Pack is limited to the
+   **Vendorable Interface Set** (defined below), used solely to implement the content-pack
+   interface; and
+2. You comply with the GPL-3.0-or-later for Fighters Legacy itself in all other respects — in
+   particular, any modification you make to Fighters Legacy outside the Vendorable Interface Set,
+   and any conveyance of Fighters Legacy itself, remains governed by the GPL-3.0-or-later; and
+3. The Content Pack does not require, and is not distributed together in a single combined binary
+   with, GPL-licensed Fighters Legacy object code except as the GPL already permits.
+
+### The Vendorable Interface Set
+
+The exception covers linking against, including, and vendoring **only** the following headers, which
+together define the stable interface a content pack implements:
+
+- `engine/content/IContentPack.h`
+- `engine/content/AssetTypes.h`
+- `engine/content/TrustLevel.h`
+
+These headers are pure interface (abstract classes, POD types, and enumerations) and carry no
+engine implementation. A downstream project may copy or vendor them (as fa-bridge does via its
+`extern/fl-headers` pin) to build an out-of-tree content pack.
+
+### What "link against" permits, and what remains GPL
+
+- **Permitted for the Content Pack under its own terms:** implementing the interfaces declared in
+  the Vendorable Interface Set; including/vendoring those headers; and distributing the resulting
+  content pack (loaded at runtime by the engine as a plugin or data pack) under any license,
+  including a proprietary or paid one.
+- **Still governed by the GPL-3.0-or-later:** the Fighters Legacy engine, game client, server,
+  tools, and every other header and source file **not** listed in the Vendorable Interface Set.
+  Modifying the engine, statically linking any GPL engine code beyond the Vendorable Interface Set
+  into a proprietary binary, or conveying the engine itself, all remain subject to the GPL.
+
+### Withdrawal and versioning
+
+This exception applies to the versions of the Vendorable Interface Set headers distributed with the
+Fighters Legacy releases that carry it. If a future release changes the Vendorable Interface Set,
+the exception text distributed with that release governs it. The Project Lead may add headers to the
+Vendorable Interface Set (an interface addition is not a withdrawal); narrowing the set is a license
+change and follows the Explicit Approval process above.
+
 ## Code of Conduct Enforcement
 
 Enforcement is handled by the Project Lead. Appeals may be sent to **fighters-legacy@mkz.io**. The enforcement ladder follows the [Code of Conduct](https://github.com/fighters-legacy/.github/blob/main/CODE_OF_CONDUCT.md):
