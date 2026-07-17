@@ -1444,7 +1444,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             ws.fogStartDist = env.fogStartDist;
             ws.windX = env.windX;
             ws.windZ = env.windZ;
-            ws.turbulenceAmp = env.turbulenceAmp; // #426
+            ws.turbulenceAmp = env.turbulenceAmp;        // #426
+            ws.utcJulianDay = m_weather->utcJulianDay(); // #481: shared UTC clock for the geographic sun
             m_net.broadcast(&ws, sizeof(ws), /*reliable=*/false);
         }
     }

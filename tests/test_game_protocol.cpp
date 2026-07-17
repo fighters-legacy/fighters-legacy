@@ -319,6 +319,7 @@ TEST_CASE("GameProtocol: MsgWeatherState round-trip preserves all fields", "[gam
     src.windX = 5.5f;
     src.windZ = -2.1f;
     src.turbulenceAmp = 3.25f;
+    src.utcJulianDay = 2460847.75; // #481
 
     std::vector<uint8_t> buf(sizeof(src));
     std::memcpy(buf.data(), &src, sizeof(src));
@@ -334,7 +335,8 @@ TEST_CASE("GameProtocol: MsgWeatherState round-trip preserves all fields", "[gam
     CHECK(parsed.windX == 5.5f);
     CHECK(parsed.windZ == -2.1f);
     CHECK(parsed.turbulenceAmp == 3.25f);
-    CHECK(sizeof(fl::MsgWeatherState) == 24u); // grew 20 -> 24 for turbulenceAmp (#426)
+    CHECK(parsed.utcJulianDay == 2460847.75);  // #481
+    CHECK(sizeof(fl::MsgWeatherState) == 32u); // grew 24 -> 32 for utcJulianDay (#481)
 }
 
 TEST_CASE("GameProtocol: MsgWeatherState round-trip preserves Snow preset value", "[game_protocol][weather]") {

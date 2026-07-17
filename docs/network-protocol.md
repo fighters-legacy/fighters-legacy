@@ -72,7 +72,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `ConnectAck` | `0x01` | server→client | reliable | 20 + N×336 bytes | Reply to `ConnectRequest`: granted role + assigned entity slot, then the type registry |
 | `WorldSnapshot` | `0x02` | server→client | unreliable | 24 + origin table + record stream + TLV | Per-tick entity state, unicast per peer; 24-byte header + shared-origin table + a byte-aligned stitched record stream (each record: origin index + a `full` bit) + TLV extension block — see *Quantized entity record* below |
 | `ClientInput` | `0x03` | client→server | unreliable | 80 bytes | Per-frame flight inputs + fire intents + selected weapon station + camera eye (observer interest) |
-| `WeatherState` | `0x04` | server→client | unreliable | 24 bytes | Weather and time-of-day (+ turbulence amplitude, #426); broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
+| `WeatherState` | `0x04` | server→client | unreliable | 32 bytes | Weather and time-of-day (+ turbulence amplitude #426, + UTC Julian Day for the geographic sun #481); broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
 | `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
 | `AdminCommand` | `0x06` | client→server | reliable | 128 bytes | Operator-authenticated admin command. Additive ID — old servers silently discard. |
 | `AdminResponse` | `0x07` | server→client | reliable | 128 bytes | Fast-path command result (≤ 123 chars), unicast to the requesting peer. Additive ID — old clients silently discard. |
@@ -327,7 +327,7 @@ seeded at first input. The depth is then continuously adjusted each tick: an EWM
 when `|target − current| > hysteresis`. Configurable via `[world].jitter_buffer_adapt_window`,
 `jitter_buffer_hysteresis`, and `jitter_buffer_jitter_multiplier`.
 
-### MsgWeatherState — 24 bytes
+### MsgWeatherState — 32 bytes
 
 Unreliable, server→client. Broadcast every 10 sim ticks (~6 Hz at 60 Hz sim) after the `MsgWorldSnapshot`.
 `MsgId::WeatherState = 0x04` is an additive message ID — clients that do not recognize it silently
@@ -346,6 +346,7 @@ at offset 2 (ARM64 alignment constraint). Decode: `timeOfDay = timeOfDayTenths /
 | 12 | 4 | `windX` | `float` | world-frame wind x component (m/s), includes gust |
 | 16 | 4 | `windZ` | `float` | world-frame wind z component (m/s), includes gust |
 | 20 | 4 | `turbulenceAmp` | `float` | turbulence amplitude (m/s), #426. The client feeds it to the same deterministic `weatherTurbulence(entityIdx, tickIndex, amp)` the server uses, so client-side prediction reproduces the per-tick turbulence exactly. Tail-append (grew 20→24); additive, no version bump. |
+| 24 | 8 | `utcJulianDay` | `double` | shared UTC clock (calendar date + fractional time-of-day) as a Julian Day, #481. The client combines it with its own camera latitude/longitude (`worldToGeodetic` of the eye) to compute the **geographic** sun each frame — so the day/night terminator tracks longitude and two players far apart see different local suns. `timeOfDayTenths` remains the coarse HUD clock. Tail-append (grew 24→32, alignment 4→8); additive, no version bump. |
 
 Wind convention: `windX` and `windZ` are the **blowing-toward** direction. A westerly wind (FROM 270°) has `windX > 0`.
 

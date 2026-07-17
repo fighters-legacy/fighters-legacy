@@ -106,6 +106,13 @@ struct ClientNetEventHandler : INetworkEventHandler {
         return m_planetRadiusKm;
     }
 
+    // Shared UTC clock (Julian Day) from the last MsgWeatherState (#481). Combined with the camera's
+    // latitude/longitude to compute the per-observer geographic sun each frame. 0 until the first
+    // weather packet. Main-thread only (client onReceive and the render loop are both main-thread).
+    double utcJulianDay() const noexcept {
+        return m_utcJulianDay;
+    }
+
     // Active connected peer count from the last received MsgWorldSnapshot TLV extension block
     // (ExtTag::SnapshotPeerCount). Returns 0 if no extended snapshot has been received yet.
     uint16_t serverPeerCount() const noexcept {
@@ -214,6 +221,9 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // Raw tick count from SnapshotPeerDelayTicks TLV (0x0102); passed to snapshotCallback for
     // client-side prediction replay depth. 0 until first non-zero TLV arrives.
     uint32_t m_estimatedDelayTicks{0};
+
+    // #481: shared UTC clock (Julian Day) from MsgWeatherState; 0 until the first weather packet.
+    double m_utcJulianDay{0.0};
 
     // Delta-compression entity cache: entityIdx → {gen (uint16 truncated), typeIndex, factionIndex}.
     // Populated from `full` quantized records; supplies typeIndex/factionIndex (and gen when omitted)

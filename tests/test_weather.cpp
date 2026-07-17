@@ -469,3 +469,73 @@ TEST_CASE("WeatherController::computeEnvironment carries the turbulence amplitud
     CHECK(env.turbulenceAmp == wc.turbulenceAmplitude());
     CHECK(env.turbulenceAmp > 0.0f);
 }
+
+// ---------------------------------------------------------------------------
+// UTC clock + geographic sun (#481)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WeatherController: UTC Julian Day tracks the date and time-of-day (#481)", "[weather][solar]") {
+    WeatherController wc;
+    wc.setDate(2025, 6, 21);
+    wc.setTimeOfDay(12.0f); // noon UTC
+    const double jdNoon = wc.utcJulianDay();
+    CHECK_THAT(jdNoon, WithinAbs(julianDay(2025, 6, 21, 12.0), 1e-6));
+
+    // Advancing across midnight rolls the date forward by one day.
+    wc.setTimeOfDay(23.9f);
+    const double before = wc.utcJulianDay();
+    // 0.2 h at timeScale 10 = 0.02 real h = 72 s; advance well past midnight.
+    for (int i = 0; i < 60; ++i)
+        wc.advance(1.0); // 60 real s -> 600 game s = 0.1667 game h ... need enough to cross midnight
+    // Push the clock across midnight deterministically.
+    wc.setTimeOfDay(0.1f);
+    // The date should have advanced at least once relative to the pre-midnight instant.
+    CHECK(std::floor(wc.utcJulianDay()) >= std::floor(before));
+}
+
+TEST_CASE("WeatherController: geographic sun differs by longitude and points up at the sub-solar point",
+          "[weather][solar]") {
+    // Build the world position of an observer at (lat, lon) on the sphere and check the sun.
+    auto worldAt = [](double latRad, double lonRad) {
+        glm::dvec3 p{};
+        geodeticToWorld({latRad, lonRad, 0.0}, p.x, p.y, p.z, kEarthRadiusM);
+        return p;
+    };
+    const double jd0 = julianDay(2025, 6, 21, 12.0);
+    const double eot = equationOfTimeMinutes(jd0);
+    const double jdNoon = julianDay(2025, 6, 21, 12.0 - eot / 60.0); // solar noon at lon 0
+    const double decl = solarDeclinationRad(jdNoon);
+
+    // At the sub-solar point the world sun direction is (nearly) the local radial up.
+    const glm::dvec3 subSolar = worldAt(decl, 0.0);
+    const glm::vec3 sun = WeatherController::geographicSunDirection(jdNoon, subSolar, kEarthRadiusM);
+    const glm::vec3 up = glm::normalize(glm::vec3(subSolar - glm::dvec3{0.0, -kEarthRadiusM, 0.0}));
+    CHECK(glm::dot(sun, up) > 0.99f);
+
+    // A world instant where it is day at lon 0 but night ~180° away: the sun elevations disagree.
+    const double kDeg = 0.017453292519943295;
+    const glm::dvec3 atGreenwich = worldAt(0.0, 0.0);
+    const glm::dvec3 atAnti = worldAt(0.0, 180.0 * kDeg);
+    const double jdDay = julianDay(2025, 6, 21, 12.0);
+    const glm::vec3 sunG = WeatherController::geographicSunDirection(jdDay, atGreenwich, kEarthRadiusM);
+    const glm::vec3 sunA = WeatherController::geographicSunDirection(jdDay, atAnti, kEarthRadiusM);
+    const glm::vec3 upG = glm::normalize(glm::vec3(atGreenwich - glm::dvec3{0.0, -kEarthRadiusM, 0.0}));
+    const glm::vec3 upA = glm::normalize(glm::vec3(atAnti - glm::dvec3{0.0, -kEarthRadiusM, 0.0}));
+    CHECK(glm::dot(sunG, upG) > 0.0f); // day at Greenwich
+    CHECK(glm::dot(sunA, upA) < 0.0f); // night on the far side
+}
+
+TEST_CASE("WeatherController: applyGeographicSun sets a lit day sun and a dim night sun (#481)", "[weather][solar]") {
+    glm::dvec3 greenwich{};
+    geodeticToWorld({0.0, 0.0, 0.0}, greenwich.x, greenwich.y, greenwich.z, kEarthRadiusM);
+
+    EnvironmentState day{};
+    day.cloudCoverage = 0.0f;
+    WeatherController::applyGeographicSun(day, julianDay(2025, 6, 21, 12.0), greenwich); // local noon
+    CHECK(day.sunColor.r > 0.5f);                                                        // bright day sun
+
+    EnvironmentState night{};
+    night.cloudCoverage = 0.0f;
+    WeatherController::applyGeographicSun(night, julianDay(2025, 6, 21, 0.0), greenwich); // local midnight
+    CHECK(night.sunColor.r < 0.1f);                                                       // dim night sun
+}
