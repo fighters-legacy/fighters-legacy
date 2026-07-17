@@ -334,10 +334,16 @@ struct MsgWeatherState {
                               // deterministic weatherTurbulence(entityIdx, tickIndex, amp) the server
                               // uses, so prediction reproduces per-tick turbulence exactly instead of
                               // predicting zero and jittering. Tail-append, additive; no version bump.
-}; // 24 bytes, align 4
-static_assert(sizeof(MsgWeatherState) == 24u, "MsgWeatherState wire size changed");
+    double utcJulianDay{0.0}; // #481: the shared UTC clock (date + fractional time-of-day) as a Julian
+                              // Day. The client combines it with its own camera latitude/longitude to
+                              // compute the geographic sun, so the terminator moves across longitudes
+                              // and two players far apart see different local suns. timeOfDayTenths
+                              // remains the coarse HUD clock. Tail-append, additive; no version bump.
+}; // 32 bytes, align 8
+static_assert(sizeof(MsgWeatherState) == 32u, "MsgWeatherState wire size changed");
 static_assert(offsetof(MsgWeatherState, turbulenceAmp) == 20u, "MsgWeatherState::turbulenceAmp offset changed");
-static_assert(alignof(MsgWeatherState) == 4u, "MsgWeatherState alignment changed");
+static_assert(offsetof(MsgWeatherState, utcJulianDay) == 24u, "MsgWeatherState::utcJulianDay offset changed");
+static_assert(alignof(MsgWeatherState) == 8u, "MsgWeatherState alignment changed");
 static_assert(offsetof(MsgWeatherState, timeOfDayTenths) == 2u, "MsgWeatherState::timeOfDayTenths offset changed");
 static_assert(offsetof(MsgWeatherState, fogDensity) == 4u, "MsgWeatherState::fogDensity offset changed");
 static_assert(offsetof(MsgWeatherState, windX) == 12u, "MsgWeatherState::windX offset changed");

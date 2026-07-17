@@ -1,0 +1,16 @@
+Public Domain
+
+This file is not covered by copyright and is in the public domain.
+
+Works of the U.S. Government are not subject to copyright protection in the
+United States (17 U.S.C. § 105) and are placed in the public domain. The World
+Magnetic Model (WMM) coefficients bundled here (data/WMM.COF) are such a work,
+produced by the U.S. National Oceanic and Atmospheric Administration (NOAA)
+National Centers for Environmental Information (NCEI) and the National
+Geospatial-Intelligence Agency (NGA), and are free to use without restriction.
+
+See https://www.ncei.noaa.gov/products/world-magnetic-model for the model and
+its documentation.
+
+SPDX-License-Identifier reference id: LicenseRef-scancode-public-domain
+(as used by the ScanCode license database for public-domain content.)

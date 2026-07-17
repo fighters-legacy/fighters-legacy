@@ -67,6 +67,7 @@ static const char* kDefaultToml =
     "#                                  # client requests none; clamped to a registered type (#834).\n"
     "# allow_observers = true           # false = refuse observer-role (spectator) connections (#857).\n"
     "# planet_radius_m = 6371000        # planet sphere radius (m); Earth default\n"
+    "# earth_rotation = true            # Coriolis + centrifugal in the Earth-fixed world frame (#482)\n"
     "# player_faction = 1               # faction stamped on every player entity on connect (#610).\n"
     "#                                  # MUST be non-zero for combat: faction 0 is NEUTRAL, and a\n"
     "#                                  # neutral entity has NO ENEMIES — nothing is hostile to a\n"
@@ -437,6 +438,9 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             } else {
                 cfg.planetRadiusM = *v;
             }
+        }
+        if (auto v = tbl["world"]["earth_rotation"].value<bool>()) {
+            cfg.earthRotation = *v;
         }
         if (auto v = tbl["world"]["draw_distance_km"].value<double>()) {
             if (*v < 1.0 || *v > 100'000.0) {

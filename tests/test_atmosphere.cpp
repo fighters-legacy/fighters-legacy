@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 
+using Catch::Matchers::WithinAbs;
 using Catch::Matchers::WithinRel;
 using namespace fl;
 
@@ -125,4 +126,67 @@ TEST_CASE("atmosphere: sane reference values in the new layers, vacuum above 86 
     CHECK(vac.density_kg_m3 == 0.f);
     CHECK(vac.pressure_pa == 0.f);
     CHECK(vac.speed_of_sound_m_s > 0.f); // Mach stays finite (and meaningless, which is honest)
+}
+
+// ── Airspeed distinctions (#480) ─────────────────────────────────────────────
+
+TEST_CASE("airspeed: Mach and dynamic pressure basics", "[atmosphere][airspeed]") {
+    const auto sl = computeAtmosphere(0.f);
+    // Mach = TAS / a. At sea level a ~= 340.29 m/s.
+    CHECK_THAT(machNumber(340.294f, sl.speed_of_sound_m_s), WithinRel(1.0f, 0.001f));
+    CHECK(machNumber(100.f, 0.f) == 0.f); // vacuum guard: no speed of sound, no Mach
+    // Dynamic pressure q = 1/2 rho V^2.
+    CHECK_THAT(dynamicPressurePa(1.225f, 100.f), WithinRel(6125.f, 1e-4f));
+}
+
+TEST_CASE("airspeed: EAS equals TAS at sea level and is less aloft", "[atmosphere][airspeed]") {
+    const auto sl = computeAtmosphere(0.f);
+    const auto hi = computeAtmosphere(11000.f);
+    CHECK_THAT(equivalentAirspeed(200.f, sl.density_kg_m3), WithinRel(200.f, 0.01f));
+    // At 11 km density ~= 0.365 kg/m^3, so EAS ~= TAS * sqrt(0.365/1.225) ~= 0.546 * TAS.
+    const float eas = equivalentAirspeed(200.f, hi.density_kg_m3);
+    CHECK(eas < 200.f);
+    CHECK_THAT(eas, WithinRel(200.f * std::sqrt(hi.density_kg_m3 / 1.225f), 0.001f));
+}
+
+TEST_CASE("airspeed: CAS equals TAS at sea level, drops with altitude", "[atmosphere][airspeed]") {
+    const auto sl = computeAtmosphere(0.f);
+    // At sea level in still air, calibrated airspeed == true airspeed.
+    CHECK_THAT(calibratedAirspeed(150.f, sl), WithinRel(150.f, 0.005f));
+
+    // Same TAS aloft reads a much lower IAS/CAS (the whole point of the readout).
+    const auto hi = computeAtmosphere(10000.f);
+    const float casHi = calibratedAirspeed(250.f, hi);
+    CHECK(casHi < 250.f);
+    CHECK(casHi > 100.f);
+    // CAS lies between EAS and TAS (compressibility raises CAS above EAS).
+    const float eas = equivalentAirspeed(250.f, hi.density_kg_m3);
+    CHECK(casHi >= eas - 1.f);
+
+    // Degenerate inputs return 0 (vacuum, zero speed).
+    CHECK(calibratedAirspeed(0.f, sl) == 0.f);
+    CHECK(calibratedAirspeed(200.f, computeAtmosphere(100000.f)) == 0.f);
+}
+
+TEST_CASE("airspeed: supersonic CAS is finite and ordered", "[atmosphere][airspeed]") {
+    const auto sl = computeAtmosphere(0.f);
+    // A supersonic TAS at sea level: CAS should be near TAS (still air, sea level) and finite.
+    const float casSL = calibratedAirspeed(500.f, sl); // ~M1.47
+    CHECK(std::isfinite(casSL));
+    CHECK_THAT(casSL, WithinRel(500.f, 0.02f));
+    // At altitude the same supersonic TAS reads lower CAS but stays finite/monotone.
+    const auto hi = computeAtmosphere(12000.f);
+    const float casHi = calibratedAirspeed(500.f, hi);
+    CHECK(std::isfinite(casHi));
+    CHECK(casHi < casSL);
+}
+
+TEST_CASE("airspeed: pressure altitude inverts the ISA profile", "[atmosphere][airspeed]") {
+    CHECK_THAT(pressureAltitudeM(101325.f), WithinAbs(0.f, 1.0f));
+    for (float h : {1000.f, 5000.f, 11000.f, 16000.f}) {
+        const auto s = computeAtmosphere(h);
+        CHECK_THAT(pressureAltitudeM(s.pressure_pa), WithinAbs(h, 5.0f));
+    }
+    // Above sea-level pressure clamps to 0.
+    CHECK(pressureAltitudeM(110000.f) == 0.f);
 }

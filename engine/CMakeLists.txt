@@ -115,6 +115,8 @@ target_link_libraries(engine-render
     PUBLIC  platform-hal
     PRIVATE engine-content
             engine-audio
+            engine-flight   # FlightHud derives IAS/Mach from the atmosphere model (#480)
+            engine-nav      # FlightHud magnetic heading from the WMM2025 model (#483)
 )
 
 add_library(engine-entity STATIC
@@ -271,6 +273,13 @@ add_library(engine-spatial STATIC
 )
 target_include_directories(engine-spatial PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # No external deps — pure ISO C++20 stdlib.
+
+# World Magnetic Model (WMM2025) — magnetic declination + geomagnetic field (#483).
+add_library(engine-nav STATIC
+    nav/MagneticModel.cpp
+)
+target_include_directories(engine-nav PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# No external deps — pure ISO C++20 stdlib (coefficients are compiled in).
 
 # Mission runtime: the mission YAML schema owner (parser + runtime model, MissionParser) and the
 # faction-aware sim-setup applier (MissionSetup). Lives in the ENGINE, not fl-server, because the game

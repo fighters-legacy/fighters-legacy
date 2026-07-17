@@ -673,6 +673,14 @@ add_executable(test_weather test_weather.cpp)
 target_link_libraries(test_weather PRIVATE Catch2::Catch2WithMain engine-weather)
 catch_discover_tests(test_weather)
 
+add_executable(test_solar_position test_solar_position.cpp)
+target_link_libraries(test_solar_position PRIVATE Catch2::Catch2WithMain engine-weather)
+catch_discover_tests(test_solar_position)
+
+add_executable(test_magnetic_model test_magnetic_model.cpp)
+target_link_libraries(test_magnetic_model PRIVATE Catch2::Catch2WithMain engine-nav)
+catch_discover_tests(test_magnetic_model)
+
 add_executable(test_terrain_chunk_io test_terrain_chunk_io.cpp)
 target_link_libraries(test_terrain_chunk_io PRIVATE Catch2::Catch2WithMain engine-render)
 target_include_directories(test_terrain_chunk_io PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

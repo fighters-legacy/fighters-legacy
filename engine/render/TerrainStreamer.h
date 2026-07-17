@@ -4,6 +4,7 @@
 #include "IAsyncFilesystem.h"
 #include "RenderTypes.h"
 #include "render/CubeSphere.h"
+#include "render/SurfaceType.h"
 #include "render/TerrainManifest.h"
 
 #include <cstddef>
@@ -90,6 +91,30 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // Nearest-neighbour land-cover class from the deepest Ready tile carrying a
     // land-cover layer; 0 when none. Thread-safe.
     uint8_t surfaceAt(glm::dvec3 worldPos) const noexcept;
+
+    // The typed surface classification at worldPos (#475): surfaceAt() mapped through the ESA
+    // WorldCover → SurfaceType table. SurfaceType::Unknown where no land-cover layer covers the point.
+    // Thread-safe. This is what gameplay/physics should query (e.g. gear-down on Water vs. Grass).
+    [[nodiscard]] SurfaceType surfaceTypeAt(glm::dvec3 worldPos) const noexcept {
+        return surfaceTypeFromWorldCover(surfaceAt(worldPos));
+    }
+
+    // Ocean depth (metres, positive DOWN) below the sphere datum (mean sea level) at worldPos (#476).
+    // When bathymetry is present in the elevation source, `heightAt` returns real negative elevation
+    // over ocean; this reports its magnitude, and 0 over land or where the tile is not yet loaded.
+    // Thread-safe (delegates to heightAt).
+    [[nodiscard]] float oceanDepthAt(glm::dvec3 worldPos) const noexcept {
+        const double h = heightAt(worldPos);
+        return h < 0.0 ? static_cast<float>(-h) : 0.f;
+    }
+
+    // Coarse deep/shallow classification for physics + surface typing (#476): shallow water (a
+    // survivable gear-up ditching, continental-shelf depths) vs. deep ocean. `shallowMaxM` is the
+    // depth boundary (default ≈ continental-shelf edge). False on land (depth 0).
+    [[nodiscard]] bool isShallowWater(glm::dvec3 worldPos, float shallowMaxM = 200.f) const noexcept {
+        const float d = oceanDepthAt(worldPos);
+        return d > 0.f && d <= shallowMaxM;
+    }
 
     // Total resident tile entries (all states). Exposed for tests.
     std::size_t tileCount() const noexcept;

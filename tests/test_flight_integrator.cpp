@@ -10,6 +10,7 @@
 #include "flight/EngineFailFlags.h"
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelParser.h"
+#include "flight/Geodetic.h" // kEarthRotationRate (#482)
 
 #include <algorithm>
 #include <cmath>
@@ -1882,4 +1883,52 @@ TEST_CASE("Integrator: alpha_limit_deg unset leaves the positive-g path byte-ide
     CHECK(ra.peakG == rb.peakG);
     CHECK(ra.peakG <= 8.f * 1.10f); // still held at the structural limit
     CHECK_FALSE(ra.damaged);
+}
+
+// ── Earth rotation: Coriolis + centrifugal (#482) ────────────────────────────
+
+TEST_CASE("Integrator: Earth rotation is opt-in, defaults to an inertial frame (#482)", "[integrator][earth]") {
+    FlightIntegrator integ(makeData());
+    CHECK(integ.earthRotationRate() == 0.0); // default = inertial (bit-identical to pre-#482)
+    integ.setEarthRotationRate(fl::kEarthRotationRate);
+    CHECK(integ.earthRotationRate() == fl::kEarthRotationRate);
+    integ.setEarthRotationRate(-5.0); // negatives clamp to 0 (disabled)
+    CHECK(integ.earthRotationRate() == 0.0);
+}
+
+TEST_CASE("Integrator: Coriolis deflects a moving aircraft with the correct sign (#482)", "[integrator][earth]") {
+    // Differential test: identical initial state + inputs, rotation OFF vs ON. Common-mode aero and
+    // gravity cancel, isolating the fictitious acceleration. Body +X = world +X (identity attitude),
+    // so world velocity is +X. With omega = (0, Omega, 0) the Coriolis term is
+    //   a = (-2*Omega*v_z, 0, +2*Omega*v_x),
+    // hence +X motion deflects toward +Z. Near the world origin (x=z=0) centrifugal is ~0.
+    auto fly = [](double rate) {
+        FlightIntegrator integ(makeData());
+        integ.setEarthRotationRate(rate);
+        FlightState s{};
+        s.pos_world[1] = 10000.f;
+        s.vel_body[0] = 250.f;
+        s.mass_kg = 14000.f;
+        s.fuel_kg = 4000.f;
+        integ.reset(s);
+        ControlInput ctrl{};
+        ctrl.throttle = 0.6f;
+        PayloadEffect px{};
+        for (int i = 0; i < 600; ++i) // 10 s
+            integ.step(1.f / 60.f, ctrl, px);
+        return integ.state();
+    };
+
+    const FlightState off = fly(0.0);
+    const FlightState on = fly(fl::kEarthRotationRate);
+
+    CHECK(std::isfinite(on.pos_world[2]));
+    // Rotation ON deflects the trajectory toward +Z relative to the inertial run — the correct sign.
+    const double dz = on.pos_world[2] - off.pos_world[2];
+    CHECK(dz > 0.1);   // measurable
+    CHECK(dz < 100.0); // physically bounded (~metres over 10 s, not a runaway)
+
+    // The X-track difference is far smaller than the lateral deflection (no first-order along-track
+    // Coriolis for +X motion), confirming the deflection is lateral, not a speed change.
+    CHECK(std::abs(on.pos_world[0] - off.pos_world[0]) < dz + 5.0);
 }

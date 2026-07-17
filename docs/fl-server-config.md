@@ -73,6 +73,7 @@ save_path          = "world.sav"
 autosave_interval_s = 300
 time_scale         = 10.0        # game seconds per real second; 10 = full day/night ≈ 2.4 real hours
 # planet_radius_m         = 6371000  # planet sphere radius (m); Earth default
+# earth_rotation          = true     # Coriolis + centrifugal in the Earth-fixed world frame (#482)
 # draw_distance_km        = 200.0    # per-peer interest management radius (km); [1, 100000]
 # sensor_check_hz         = 10.0     # sensor geometry checks/sec; the reference cadence pods are tuned to; [1, 60]
 # spatial_cell_size_km    = 10.0     # SpatialIndex cell size (km); 0 = auto from draw distance; [0, 1000]; restart
@@ -451,6 +452,14 @@ lighting changes (e.g. afternoon → golden hour). Per-mission overrides are ava
 | float | `6371000.0` (Earth radius in metres) | `[1000, 1e9]` |
 
 Planet sphere radius in metres. The engine always uses spherical-Earth physics and terrain curvature; this field sets the radius for non-Earth planets. `MsgConnectAck.planetRadiusKm` is set to `planet_radius_m / 1000` so clients match server physics. Out-of-range values are rejected with a warning and the default is used.
+
+### `earth_rotation`
+
+| Type | Default | Range |
+|---|---|---|
+| bool | `true` | — |
+
+Whether the world frame is Earth-fixed **rotating** — adds the Coriolis (`−2ω×v`) and centrifugal (`−ω×(ω×r)`) accelerations to every flight integrator, with the spin axis along world +Y (the polar axis; north pole = origin) at Ω = 7.292×10⁻⁵ rad/s. `false` uses an inertial (non-rotating) frame. Client-side prediction always models the same terms, so with the default (on) prediction stays in exact parity; a server that disables it leaves only a small persistent bias the client's reconciliation blend absorbs. Requires restart to change.
 
 ### `player_faction`
 
@@ -1448,7 +1457,7 @@ Most `[world]` fields are also hot-reloaded on the next sim tick — `draw_dista
 
 Fields that **require a restart** to take effect: `port`, `bind_address`, `max_peers`,
 `game_modes`, `password`, `discovery.*`, `mods.stack`, `rotation.*`, `world.sim_worker_threads`,
-`world.max_catchup_ticks`, `world.planet_radius_m`, `world.spatial_cell_size_km`,
+`world.max_catchup_ticks`, `world.planet_radius_m`, `world.earth_rotation`, `world.spatial_cell_size_km`,
 `world.test_spawn_ai_count`, `world.test_spawn_spread_km`, `world.test_spawn_agl_m`, `ai.*`,
 `security.connect_rate_limit_*`,
 `security.packet_flood_multiplier`, `security.*_bandwidth_bps`,

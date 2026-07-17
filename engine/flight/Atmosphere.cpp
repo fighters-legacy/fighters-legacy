@@ -106,4 +106,80 @@ AtmosphereState computeAtmosphere(float altitude_m) {
     return state;
 }
 
+// ── Airspeed distinctions (#480) ─────────────────────────────────────────────
+
+float machNumber(float tas_m_s, float speedOfSound_m_s) noexcept {
+    return speedOfSound_m_s > 0.f ? tas_m_s / speedOfSound_m_s : 0.f;
+}
+
+float dynamicPressurePa(float density_kg_m3, float tas_m_s) noexcept {
+    return 0.5f * density_kg_m3 * tas_m_s * tas_m_s;
+}
+
+float equivalentAirspeed(float tas_m_s, float density_kg_m3) noexcept {
+    if (density_kg_m3 <= 0.f)
+        return 0.f;
+    return tas_m_s * std::sqrt(density_kg_m3 / kSeaLevelDensity);
+}
+
+float calibratedAirspeed(float tas_m_s, const AtmosphereState& local) noexcept {
+    // Above the atmosphere (vacuum) or a degenerate state: no impact pressure, no reading.
+    if (local.pressure_pa <= 0.f || local.speed_of_sound_m_s <= 0.f || tas_m_s <= 0.f)
+        return 0.f;
+
+    // Local Mach selects the compressible impact-pressure (qc) relation. γ = 1.4:
+    //   subsonic:   qc = P·[(1 + 0.2·M²)^3.5 − 1]
+    //   supersonic: qc = P·[166.9215801·M⁷ / (7·M² − 1)^2.5 − 1]   (Rayleigh pitot)
+    const float M = tas_m_s / local.speed_of_sound_m_s;
+    float qc;
+    if (M <= 1.f) {
+        qc = local.pressure_pa * (std::pow(1.f + 0.2f * M * M, 3.5f) - 1.f);
+    } else {
+        const float m2 = M * M;
+        qc = local.pressure_pa * (166.9215801f * std::pow(M, 7.f) / std::pow(7.f * m2 - 1.f, 2.5f) - 1.f);
+    }
+
+    // Invert qc to a speed at the sea-level datum (P0, a0). The subsonic inversion holds while the
+    // result is itself subsonic (CAS ≤ a0); beyond that the datum is also supersonic, so Newton-solve
+    // the Rayleigh relation for the calibrated Mach mc.
+    const float subsonicCas =
+        kSeaLevelSpeedOfSound * std::sqrt(5.f * (std::pow(qc / kSeaLevelPressurePa + 1.f, 2.f / 7.f) - 1.f));
+    if (subsonicCas <= kSeaLevelSpeedOfSound)
+        return subsonicCas;
+
+    // Supersonic datum: solve qc/P0 + 1 = 166.9215801·mc⁷ / (7·mc² − 1)^2.5 for mc ≥ 1.
+    const float rhs = qc / kSeaLevelPressurePa + 1.f;
+    float mc = M; // local Mach is a good seed
+    for (int i = 0; i < 12; ++i) {
+        const float mc2 = mc * mc;
+        const float denom = std::pow(7.f * mc2 - 1.f, 2.5f);
+        const float f = 166.9215801f * std::pow(mc, 7.f) / denom - rhs;
+        // f'(mc) = 166.9215801·mc⁶·(7·mc² − 7) / (7·mc² − 1)^3.5  (quotient rule, simplified)
+        const float fp = 166.9215801f * std::pow(mc, 6.f) * (7.f * mc2 - 7.f) / std::pow(7.f * mc2 - 1.f, 3.5f);
+        if (fp == 0.f)
+            break;
+        const float step = f / fp;
+        mc -= step;
+        if (mc < 1.f)
+            mc = 1.f;
+        if (std::fabs(step) < 1e-6f)
+            break;
+    }
+    return mc * kSeaLevelSpeedOfSound;
+}
+
+float pressureAltitudeM(float pressure_pa) noexcept {
+    if (pressure_pa >= kP0)
+        return 0.f;
+    // Pressure at the tropopause on the ISA profile.
+    const float Ptrop = kP0 * std::pow(kTtrop / kT0, kExponent);
+    if (pressure_pa >= Ptrop) {
+        // Troposphere: P = P0·(1 − L·h/T0)^(g/(L·R))  ⇒  h = (T0/L)·(1 − (P/P0)^(L·R/g)).
+        return (kT0 / kLapseRate) * (1.f - std::pow(pressure_pa / kP0, (kLapseRate * kR) / kG));
+    }
+    // Isothermal lower stratosphere (11–20 km): P = Ptrop·exp(−g·(h−11000)/(R·Ttrop)).
+    const float h = kTropopause + (kR * kTtrop / kG) * std::log(Ptrop / pressure_pa);
+    return std::min(h, 20000.f); // saturate at the modelled ceiling
+}
+
 } // namespace fl

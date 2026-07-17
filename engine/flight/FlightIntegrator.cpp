@@ -205,7 +205,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
         float rel1 = vel[1] - wind_body2[1];
         float rel2 = vel[2] - wind_body2[2];
         float spd = std::sqrt(rel0 * rel0 + rel1 * rel1 + rel2 * rel2);
-        float mach = (atmos2.speed_of_sound_m_s > 0.f) ? spd / atmos2.speed_of_sound_m_s : 0.f;
+        float mach = machNumber(spd, atmos2.speed_of_sound_m_s);
         float sched_sweep = m_data->wing_sweep->schedule.lookup(mach);
         advanceSweep(dt, sched_sweep);
     }
@@ -231,7 +231,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     float rel1 = vel[1] - wind_body[1];
     float rel2 = vel[2] - wind_body[2];
     float spd = std::sqrt(rel0 * rel0 + rel1 * rel1 + rel2 * rel2);
-    float mach = (atmos.speed_of_sound_m_s > 0.f) ? spd / atmos.speed_of_sound_m_s : 0.f;
+    float mach = machNumber(spd, atmos.speed_of_sound_m_s);
 
     // Body frame: x=forward, y=up, z=right.
     // Pitched up → velocity dips below body nose → negative body-y component → positive alpha.
@@ -379,6 +379,28 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     forces[0] += eff_mass * grav_body[0];
     forces[1] += eff_mass * grav_body[1];
     forces[2] += eff_mass * grav_body[2];
+
+    // 8a. Earth rotation (#482): the world frame is Earth-fixed rotating about world +Y (the polar
+    // axis; north pole = origin) at Ω = m_earthRotationRate. Add the two fictitious accelerations,
+    // Coriolis −2ω×v and centrifugal −ω×(ω×r). With ω = (0,Ω,0) both reduce to the axis-perpendicular
+    // world components only:
+    //     a_coriolis   = (−2Ω·v_z,      0,  +2Ω·v_x)
+    //     a_centrifugal = (+Ω²·x,        0,   +Ω²·z)      (r_perp = (x,0,z) from the world Y spin axis)
+    // so they vanish EXACTLY at the world origin (x=z=0, on the axis) and stay negligible near it,
+    // sharing the radial-floor near-origin regression gate. Default Ω=0 ⇒ this block is skipped and
+    // the integrator is bit-identical to the inertial-frame version; WorldBroadcaster/ClientPrediction
+    // enable it. Deterministic (no RNG), so server and client-prediction integrators match exactly.
+    if (m_earthRotationRate != 0.0) {
+        const double O = m_earthRotationRate;
+        const auto vw = quatRotateD(m_state.quat, m_state.vel_body); // world velocity for Coriolis
+        const std::array<float, 3> aFict_world = {static_cast<float>(-2.0 * O * vw[2] + O * O * m_state.pos_world[0]),
+                                                  0.f,
+                                                  static_cast<float>(2.0 * O * vw[0] + O * O * m_state.pos_world[2])};
+        const auto aFict_body = quatRotate(q_conj, aFict_world.data());
+        forces[0] += eff_mass * aFict_body[0];
+        forces[1] += eff_mass * aFict_body[1];
+        forces[2] += eff_mass * aFict_body[2];
+    }
 
     // 8b. Turbulence: stochastic body-frame impulse (F = m*a, treating as acceleration).
     // Steady wind is already accounted for via relative airspeed in step 5. Skipped while in

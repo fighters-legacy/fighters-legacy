@@ -620,6 +620,8 @@ int main(int argc, char** argv) {
         s_gravity = fl::CentralGravityField(R_m);
         broadcaster.setGravityField(s_gravity, R_m / 1000.f);
     }
+    // Earth-fixed rotating world frame: Coriolis + centrifugal on every integrator (#482).
+    broadcaster.setEarthRotationRate(cfg.earthRotation ? fl::kEarthRotationRate : 0.0);
     // Per-entity terrain height query: sim thread calls heightAt() (thread-safe via shared_mutex).
     // The entity origin is the mesh's ground-contact point, so the floor clamps it directly to the
     // terrain — the mesh then rests ON the ground.

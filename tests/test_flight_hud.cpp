@@ -42,16 +42,44 @@ TEST_CASE("FlightHud produces elements for valid entry") {
     CHECK(hud.elements().size() > 0);
 }
 
-TEST_CASE("FlightHud includes airspeed text") {
+TEST_CASE("FlightHud shows calibrated IAS, not raw groundspeed (#480)") {
+    // At sea level in still air, IAS == TAS, so 100 m/s reads ~194 kts.
     fl::FlightHud hud;
     auto e = makeEntry();
-    e.velocity = {0.f, 0.f, 100.f}; // 100 m/s ~ 194 kts
+    e.position = {0.0, 0.0, 0.0}; // sea level
+    e.velocity = {0.f, 0.f, 100.f};
     hud.update(&e);
-    bool found = false;
+    bool foundIas = false;
     for (const auto& el : hud.elements())
-        if (el.type == HudElement::Type::Text && el.text.find("194") != std::string_view::npos)
-            found = true;
-    CHECK(found);
+        if (el.type == HudElement::Type::Text && el.text.find("IAS") != std::string_view::npos &&
+            el.text.find("194") != std::string_view::npos)
+            foundIas = true;
+    CHECK(foundIas);
+}
+
+TEST_CASE("FlightHud IAS falls below groundspeed at altitude; shows Mach (#480)") {
+    // Same 100 m/s TAS at 10 km reads a much lower IAS (density lapse) — the whole point of the
+    // distinction the old raw-magnitude "IAS" hid — and a Mach readout appears.
+    fl::FlightHud hud;
+    auto e = makeEntry();
+    e.position = {0.0, 10000.0, 0.0};
+    e.velocity = {0.f, 0.f, 100.f}; // ~194 kts groundspeed
+    hud.update(&e);
+    bool foundLowIas = false, foundMach = false;
+    for (const auto& el : hud.elements()) {
+        if (el.type != HudElement::Type::Text)
+            continue;
+        if (el.text.find("IAS") != std::string_view::npos) {
+            // Parse the kts value out of "IAS   NNNkts".
+            int kts = std::atoi(el.text.data() + el.text.find("IAS") + 3);
+            if (kts > 0 && kts < 194)
+                foundLowIas = true;
+        }
+        if (el.text.find("M ") != std::string_view::npos && el.text.find("0.") != std::string_view::npos)
+            foundMach = true;
+    }
+    CHECK(foundLowIas);
+    CHECK(foundMach);
 }
 
 TEST_CASE("FlightHud includes altitude text") {

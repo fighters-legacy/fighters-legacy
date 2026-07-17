@@ -352,6 +352,9 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         env.windX = ws.windX;
         env.windZ = ws.windZ;
         env.turbulenceAmp = ws.turbulenceAmp; // #426: fed to weatherTurbulence() in ClientPrediction
+        // #481: store the shared UTC clock; Game.cpp computes the per-camera geographic sun each frame
+        // (the direction depends on the camera lat/lon, which moves faster than these ~6 Hz packets).
+        m_utcJulianDay = ws.utcJulianDay;
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::ServerNotice)) {
         fl::MsgServerNotice sn;
         if (!fl::readMsg(data, size, sn))

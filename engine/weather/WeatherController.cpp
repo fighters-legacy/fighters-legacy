@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "weather/WeatherController.h"
 
+#include "flight/LocalFrame.h" // enuBasis for the geographic sun (#481)
+
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
 
@@ -56,6 +58,42 @@ inline float wrapHours(float h) {
     return h;
 }
 
+// Sun colour + ambient from the solar elevation, expressed as `elev` = sin(elevation angle) ∈ [−1,1]
+// (so +1 = zenith, 0 = horizon, negative = below). Reads env.cloudCoverage; sets env.sunColor and
+// env.ambientColor. Shared by the legacy planar path (applyPresetToEnv) and the geographic sun
+// (applyGeographicSun) so both light the scene identically for a given elevation (#481).
+void applySunLighting(EnvironmentState& env, float elev) {
+    if (elev > 0.f) {
+        float t = glm::clamp(elev, 0.f, 1.f);
+        // Low elevation → warm orange; high elevation → near white
+        glm::vec3 sunLow{1.0f, 0.55f, 0.20f};
+        glm::vec3 sunHigh{1.0f, 0.97f, 0.88f};
+        glm::vec3 sunColor = glm::mix(sunLow, sunHigh, t);
+        float cloudDim = 1.f - env.cloudCoverage * 0.7f;
+        env.sunColor = sunColor * cloudDim;
+    } else {
+        // Night: very dim blue tint
+        env.sunColor = glm::vec3{0.02f, 0.02f, 0.08f};
+    }
+
+    // Ambient: overcast lifts ambient (diffuse sky fill), storm darkens it
+    float nightFactor = glm::clamp(1.f - elev * 2.f, 0.f, 1.f); // 0=day, 1=night
+    glm::vec3 ambientDay{0.10f, 0.12f, 0.15f};
+    glm::vec3 ambientOvercast{0.22f, 0.22f, 0.24f};
+    glm::vec3 ambientStorm{0.06f, 0.07f, 0.09f};
+    glm::vec3 ambientNight{0.02f, 0.02f, 0.05f};
+
+    glm::vec3 ambient;
+    if (env.cloudCoverage < 0.5f) {
+        ambient = glm::mix(ambientDay, ambientNight, nightFactor);
+    } else if (env.cloudCoverage < 0.85f) {
+        ambient = glm::mix(ambientOvercast, ambientNight, nightFactor * 0.5f);
+    } else {
+        ambient = glm::mix(ambientStorm, ambientNight, nightFactor * 0.5f);
+    }
+    env.ambientColor = ambient;
+}
+
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -106,8 +144,14 @@ void WeatherController::setWind(float headingDeg, float speedMs) {
 void WeatherController::advance(double simDt) {
     const float dt = static_cast<float>(simDt);
 
-    // Game clock — scaled
-    m_timeOfDay = wrapHours(m_timeOfDay + static_cast<float>(simDt * m_params.timeScaleRatio / 3600.0));
+    // Game clock — scaled. Track whole-day rollovers so the UTC date (and thus the solar declination
+    // feeding the geographic sun, #481) advances across midnight.
+    const float rawTod = m_timeOfDay + static_cast<float>(simDt * m_params.timeScaleRatio / 3600.0);
+    if (rawTod >= 24.f)
+        m_utcDayStartJd += std::floor(rawTod / 24.f);
+    else if (rawTod < 0.f)
+        m_utcDayStartJd += std::floor(rawTod / 24.f); // supports a reversed clock, if ever set
+    m_timeOfDay = wrapHours(rawTod);
 
     // Gust oscillator — real time (unscaled)
     m_gustPhase = std::fmod(m_gustPhase + dt * m_gustFrequency, glm::two_pi<float>());
@@ -172,41 +216,11 @@ void WeatherController::applyPresetToEnv(WeatherPreset p, float timeOfDay, Envir
     env.fogStartDist = d.fogStartDist;
     env.cloudCoverage = d.cloudCoverage;
 
-    // Sun direction from time
+    // Legacy planar sun direction from time-of-day (the server/nominal path). The CLIENT overwrites
+    // this with the geographic sun (applyGeographicSun) once it knows its camera lat/lon (#481).
     env.sunDirection = sunDirectionFromTime(timeOfDay);
-
-    // Sun color: warm orange at dawn/dusk, white at noon, dark at night
-    float elevation = env.sunDirection.y;
-    if (elevation > 0.f) {
-        float t = glm::clamp(elevation, 0.f, 1.f);
-        // Low elevation → warm orange; high elevation → near white
-        glm::vec3 sunLow{1.0f, 0.55f, 0.20f};
-        glm::vec3 sunHigh{1.0f, 0.97f, 0.88f};
-        glm::vec3 sunColor = glm::mix(sunLow, sunHigh, t);
-        // Under heavy cloud cover, dim the sun
-        float cloudDim = 1.f - d.cloudCoverage * 0.7f;
-        env.sunColor = sunColor * cloudDim;
-    } else {
-        // Night: very dim blue tint
-        env.sunColor = glm::vec3{0.02f, 0.02f, 0.08f};
-    }
-
-    // Ambient: overcast lifts ambient (diffuse sky fill), storm darkens it
-    float nightFactor = glm::clamp(1.f - elevation * 2.f, 0.f, 1.f); // 0=day, 1=night
-    glm::vec3 ambientDay{0.10f, 0.12f, 0.15f};
-    glm::vec3 ambientOvercast{0.22f, 0.22f, 0.24f};
-    glm::vec3 ambientStorm{0.06f, 0.07f, 0.09f};
-    glm::vec3 ambientNight{0.02f, 0.02f, 0.05f};
-
-    glm::vec3 ambient;
-    if (d.cloudCoverage < 0.5f) {
-        ambient = glm::mix(ambientDay, ambientNight, nightFactor);
-    } else if (d.cloudCoverage < 0.85f) {
-        ambient = glm::mix(ambientOvercast, ambientNight, nightFactor * 0.5f);
-    } else {
-        ambient = glm::mix(ambientStorm, ambientNight, nightFactor * 0.5f);
-    }
-    env.ambientColor = ambient;
+    // Colour + ambient from the planar sun's elevation scalar (its world-Y = sin(elevation) here).
+    applySunLighting(env, env.sunDirection.y);
     env.timeOfDay = timeOfDay;
     env.isSnowPrecipitation = (p == WeatherPreset::Snow || p == WeatherPreset::Blizzard);
 }
@@ -222,6 +236,34 @@ EnvironmentState WeatherController::computeEnvironment() const {
     env.windZ = windZ();
     env.turbulenceAmp = m_turbulenceAmp; // #426: broadcast so the client reproduces turbulence exactly
     return env;
+}
+
+// ---------------------------------------------------------------------------
+// UTC clock + geographic sun (#481)
+// ---------------------------------------------------------------------------
+
+void WeatherController::setDate(int year, int month, int day) {
+    m_utcDayStartJd = julianDay(year, month, day, 0.0);
+}
+
+double WeatherController::utcJulianDay() const noexcept {
+    return m_utcDayStartJd + static_cast<double>(m_timeOfDay) / 24.0;
+}
+
+glm::vec3 WeatherController::geographicSunDirection(double jd, glm::dvec3 observerPos, double R) {
+    const LatLonAlt lla = worldToGeodetic(observerPos.x, observerPos.y, observerPos.z, R);
+    const SolarAngles a = solarAngles(lla.lat_rad, lla.lon_rad, jd);
+    const glm::mat3 basis = enuBasis(observerPos, R); // columns East, North, Up
+    return glm::normalize(basis * sunDirectionEnu(a));
+}
+
+void WeatherController::applyGeographicSun(EnvironmentState& env, double jd, glm::dvec3 observerPos, double R) {
+    const LatLonAlt lla = worldToGeodetic(observerPos.x, observerPos.y, observerPos.z, R);
+    const SolarAngles a = solarAngles(lla.lat_rad, lla.lon_rad, jd);
+    const glm::mat3 basis = enuBasis(observerPos, R);
+    env.sunDirection = glm::normalize(basis * sunDirectionEnu(a));
+    // Light the scene from the TRUE local solar elevation, not the planar world-Y proxy.
+    applySunLighting(env, static_cast<float>(std::sin(a.elevationRad)));
 }
 
 } // namespace fl

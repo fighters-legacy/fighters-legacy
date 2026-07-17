@@ -1444,7 +1444,8 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             ws.fogStartDist = env.fogStartDist;
             ws.windX = env.windX;
             ws.windZ = env.windZ;
-            ws.turbulenceAmp = env.turbulenceAmp; // #426
+            ws.turbulenceAmp = env.turbulenceAmp;        // #426
+            ws.utcJulianDay = m_weather->utcJulianDay(); // #481: shared UTC clock for the geographic sun
             m_net.broadcast(&ws, sizeof(ws), /*reliable=*/false);
         }
     }
@@ -3014,6 +3015,7 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
 
     auto fi = std::make_unique<FlightIntegrator>(model);
     fi->setGravityField(*m_gravity);
+    fi->setEarthRotationRate(m_earthRotationRate); // Coriolis/centrifugal in the Earth-fixed frame (#482)
     // A ballistic vehicle (#354) flies the boost/coast force model and gets the wider NaN guard —
     // an MRBM legitimately outruns the backstop built for aircraft. Same integrator core.
     if (model->isBallistic()) {

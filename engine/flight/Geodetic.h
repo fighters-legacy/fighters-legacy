@@ -15,6 +15,11 @@ struct LatLonAlt {
 constexpr double kEarthRadiusM = 6'371'000.0;
 constexpr double kEarthGM = 3.986004418e14;
 
+// Earth's sidereal rotation rate (rad/s). The world frame is Earth-fixed rotating about world +Y
+// (the polar axis; north pole = origin), so ω_world = (0, kEarthRotationRate, 0) — used by the
+// Coriolis/centrifugal terms (#482) and the geographic sun (#481).
+constexpr double kEarthRotationRate = 7.2921150e-5;
+
 // World XYZ → geodetic (spherical model).  Planet centre at {0, -R, 0}.
 // World +X ≈ east, +Z ≈ north at the origin (lat=0, lon=0).
 inline LatLonAlt worldToGeodetic(double x, double y, double z, double R = kEarthRadiusM) {

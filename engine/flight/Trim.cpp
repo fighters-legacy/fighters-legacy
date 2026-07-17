@@ -32,7 +32,7 @@ std::array<float, 3> forcesAt(const FlightModelData& d, const PayloadEffect& pay
     ControlInput ctrl{};
     ctrl.throttle = throttle;
     ctrl.afterburner = ab;
-    const float mach = (c.atmos.speed_of_sound_m_s > 0.f) ? speed / c.atmos.speed_of_sound_m_s : 0.f;
+    const float mach = machNumber(speed, c.atmos.speed_of_sound_m_s);
     const float sweep = d.wing_sweep ? d.wing_sweep->ref_sweep_deg : 0.f;
     return computeForces(alpha_deg * kDegToRad, 0.f, mach, speed, c.altitude_m, sweep, ab, throttle, ctrl, payload, d,
                          c.atmos);
@@ -172,7 +172,7 @@ TrimResult trim(const FlightModelData& d, const TrimPoint& pt, const PayloadEffe
             maxLevel = v;     // keep going — drag is U-shaped, not monotonic
         }
     }
-    r.max_level_mach = (c.atmos.speed_of_sound_m_s > 0.f) ? maxLevel / c.atmos.speed_of_sound_m_s : 0.f;
+    r.max_level_mach = machNumber(maxLevel, c.atmos.speed_of_sound_m_s);
 
     // The honest answer to "how slow can this thing actually go". Above the stall it is genuinely a
     // different number: on the back side of the curve the wing can still carry the weight, but the

@@ -51,6 +51,7 @@ struct ServerConfig {
     int entitySoftCap = 0;               // 0 = unlimited; server-enforced object count limit
     double timeScale = 10.0;             // game seconds per real second; 10 = full day/night ~2.4 real hrs
     double planetRadiusM = 6'371'000.0;  // sphere radius (m); Earth default
+    bool earthRotation = true;           // #482: Coriolis + centrifugal in the Earth-fixed world frame
     double drawDistanceKm = 200.0;       // per-peer interest radius (km); [1, 100000]
     double spatialCellSizeKm = 10.0;     // SpatialIndex cell size (km); 0 = auto from draw distance; [0, 1000]; restart
     uint32_t snapshotBudgetBytes = 1200; // per-client snapshot byte budget; 0 = unlimited; [0, 65535] (#516)

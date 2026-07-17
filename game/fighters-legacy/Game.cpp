@@ -69,6 +69,7 @@
 #include "stdfs/StdAsyncFilesystem.h"
 #include "stdfs/StdFilesystem.h"
 #include "vulkan/VkRendererFactory.h"
+#include "weather/WeatherController.h" // applyGeographicSun — per-observer sun (#481)
 
 #include "ClientFlightModelResolver.h"
 #include "ClientPrediction.h"
@@ -1341,6 +1342,18 @@ void Game::run() {
         if (inSession && cur != Screen::Loading && d.session.clientHandler && d.services.renderBridge.hasSnapshot()) {
             cam = d.services.cameraController.view(aspect);
             camOrigin = cam.worldOrigin;
+
+            // Geographic sun (#481): the sun direction is PER-OBSERVER — derived from this camera's
+            // own latitude/longitude (worldToGeodetic of the eye) and the shared UTC clock, so the
+            // day/night terminator tracks longitude and two players far apart see different local
+            // suns. This overwrites the legacy planar sun the weather packet seeded, and is recomputed
+            // every frame because it depends on the (moving) camera position. Skipped until the first
+            // weather packet supplies the UTC Julian Day.
+            if (const double utcJd = d.session.clientHandler->utcJulianDay(); utcJd > 0.0) {
+                const double planetR = static_cast<double>(d.session.clientHandler->planetRadiusKm()) * 1000.0;
+                fl::WeatherController::applyGeographicSun(d.services.env, utcJd, cam.worldOrigin, planetR);
+            }
+
             updateAudioListener(*d.services.p.audio, cam, playerEntry ? playerEntry->velocity : glm::vec3{});
 
             // Weapon SFX (#631): the listener sits at the camera origin (sources are placed
