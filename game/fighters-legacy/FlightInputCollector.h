@@ -74,6 +74,9 @@ class FlightInputCollector {
     uint8_t m_radarMode{2}; // fl::sensor::RadarMode::Tws ordinal
     bool m_radarModeTouched{false};
     bool m_prevRadarKey{false};
+    // Electronic warfare (#529): E dispenses (level bit, server edge-detects), J toggles the jammer.
+    bool m_ecmOn{false};
+    bool m_prevEcmKey{false};
     bool m_prevPadNext{false}; // and for the gamepad D-pad
     bool m_prevPadPrev{false};
     const IClock* m_clock{&SystemClock::instance()};

@@ -634,3 +634,58 @@ TEST_CASE("TrackFuser: a Foe from any contributor wins over Unknown, order-indep
     CHECK(f1.tracks()[0].ident == Identification::Foe);
     CHECK(f2.tracks()[0].ident == Identification::Foe); // fusion is commutative
 }
+
+// ── ECM / ECCM burn-through (#529) ───────────────────────────────────────────
+
+TEST_CASE("SensorSystem: a jamming target denies a radar lock beyond burn-through", "[sensor_system][ecm]") {
+    // Noise jamming denies RANGE: the radar still gets a bearing strobe (Detected), but no
+    // firing-quality lock until you close inside burn-through (20% of the 30 nm track range = 6 nm
+    // with zero ECCM). This is the whole reason to know you are jammed.
+    Fixture f;
+    const EntityId observer = f.spawn(0, 0, 0);
+    const EntityId bandit = f.spawn(10.0 * kMPerNm, 0, 0); // 10 nm — beyond the 6 nm burn-through
+    f.em.get(bandit)->ecmActive = true;
+
+    f.sys.addObserver(observer.index, {"t:radar"}, 0.5f, 0.5f); // default TWS (would normally lock)
+    f.check(1);
+
+    const Contact* c = f.sys.contactsFor(observer.index)->find(bandit);
+    REQUIRE(c != nullptr);
+    CHECK(c->held());
+    CHECK(c->state == ContactState::Detected); // a strobe...
+    CHECK_FALSE(c->locked());                  // ...but no lock through the noise
+
+    // Close inside burn-through (4 nm): the skin return beats the jamming and the lock comes.
+    f.em.get(bandit)->transform.pos[0] = 4.0 * kMPerNm;
+    f.check(2);
+    const Contact* close = f.sys.contactsFor(observer.index)->find(bandit);
+    REQUIRE(close != nullptr);
+    CHECK(close->locked());
+}
+
+TEST_CASE("SensorSystem: ECCM extends the burn-through range", "[sensor_system][ecm]") {
+    // Same jamming target at 10 nm, but a high-ECCM radar (eccm 0.5 -> burn-through 70% of 30 nm =
+    // 21 nm) burns through and locks where the eccm-0 radar could not.
+    Fixture f;
+    f.sys.setResolver([](const std::string&) {
+        SensorDef s;
+        s.id = "t:radar-eccm";
+        s.type = SensorType::Radar;
+        s.emitter = true;
+        s.search = SensorLobe{60.f, 30.f, 0.f, 40.f * kMPerNm, 1.f};
+        s.track = SensorLobe{30.f, 20.f, 0.f, 30.f * kMPerNm, 1.f};
+        s.lockHoldS = 4.f;
+        s.eccm = 0.5f;
+        return std::make_shared<const SensorDef>(s);
+    });
+    const EntityId observer = f.spawn(0, 0, 0);
+    const EntityId bandit = f.spawn(10.0 * kMPerNm, 0, 0);
+    f.em.get(bandit)->ecmActive = true;
+
+    f.sys.addObserver(observer.index, {"t:radar-eccm"}, 0.5f, 0.5f);
+    f.check(1);
+
+    const Contact* c = f.sys.contactsFor(observer.index)->find(bandit);
+    REQUIRE(c != nullptr);
+    CHECK(c->locked()); // the good radar burns through the jamming at this range
+}

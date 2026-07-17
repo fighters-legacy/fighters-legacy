@@ -72,6 +72,10 @@ class PeerController final : public fl::IEntityController {
         ctrl.trigger = (m_input->buttons & 0x01u) != 0;
         ctrl.release = (m_input->buttons & 0x04u) != 0;
         ctrl.station = m_input->selectedStation;
+        // Electronic warfare intent (#529): bit 3 = dispense chaff/flare (edge-detected in the weapons
+        // pass), bit 4 = ECM jammer on (level).
+        ctrl.dispenseCm = (m_input->buttons & 0x08u) != 0;
+        ctrl.ecm = (m_input->buttons & 0x10u) != 0;
         return ctrl;
     }
 
@@ -201,6 +205,15 @@ WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegis
     // hostile). Read `m_factionRegistry` dynamically so a registry set after construction is picked up.
     m_sensorSystem.setIffResolver([this](uint16_t obs, uint16_t tgt) -> FactionRelation {
         return m_factionRegistry ? m_factionRegistry->relationship(obs, tgt) : sensor::affiliationRelation(obs, tgt);
+    });
+
+    // Countermeasure seduction (#529): a missile seeker asks the CountermeasureSystem whether a
+    // chaff/flare decoy has broken its lock this check. All the physics (which decoy, proximity, the
+    // deterministic die vs the head's susceptibility) lives behind the seam.
+    m_projectileSystem.setCountermeasureCheck([this](uint32_t missileIdx, const glm::dvec3& targetPos,
+                                                     sensor::SensorType channel,
+                                                     const CountermeasureSusceptibility& susc, uint64_t tick) -> bool {
+        return m_countermeasures.seduces(missileIdx, targetPos, channel, susc, tick);
     });
 }
 
@@ -1914,6 +1927,7 @@ void WorldBroadcaster::despawnPeerEntity(uint32_t peerId) {
             if (m.isAi()) {
                 m_controlledEntities.erase(m.id.index);
                 m_sensorSystem.removeObserver(m.id.index);
+                m_countermeasures.removeDispenser(m.id.index);
                 m_entityManager.kill(m.id);
             }
         }
@@ -1927,6 +1941,7 @@ void WorldBroadcaster::despawnPeerEntity(uint32_t peerId) {
     // Tear down the controller (which points into m_peerInputs) before the caller may erase the input slot.
     m_controlledEntities.erase(it->second.index);
     m_sensorSystem.removeObserver(it->second.index);
+    m_countermeasures.removeDispenser(it->second.index);
     m_entityManager.kill(it->second);
     m_peerEntities.erase(it);
 
@@ -2163,6 +2178,29 @@ void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
                 registerController(child, req.makeController(), nullptr);
         }
     }
+
+    // Electronic warfare (#529), independent of the weapon vocabulary — a jammer needs no missiles.
+    // ECM state is applied to the entity for the NEXT tick's sensing (a jammer toggle, one-tick
+    // pipeline); a countermeasure dispense (edge-detected) drops decoys NOW so this same tick's seeker
+    // checks in m_projectileSystem.step already see them. Then the decoy pool ages once.
+    for (auto& [idx, ce] : m_controlledEntities) {
+        if (!ce.lastInputValid)
+            continue;
+        EntityState* st = m_entityManager.get(ce.id);
+        if (!st || st->dead)
+            continue;
+        st->ecmActive = ce.lastInput.ecm;
+        const bool dispenseNow = ce.lastInput.dispenseCm && !ce.prevDispenseCm;
+        ce.prevDispenseCm = ce.lastInput.dispenseCm;
+        if (dispenseNow) {
+            const glm::dvec3 pos(st->transform.pos[0], st->transform.pos[1], st->transform.pos[2]);
+            const glm::vec3 vel(st->transform.vel[0], st->transform.vel[1], st->transform.vel[2]);
+            if (m_countermeasures.dispense(idx, pos, vel, tickIndex))
+                queueEffect(static_cast<uint8_t>(EffectType::CountermeasureRelease), 0xFF, idx, UINT32_MAX,
+                            st->transform.pos);
+        }
+    }
+    m_countermeasures.step(tickIndex, static_cast<float>(simDt));
 
     if (!m_weaponRegistry)
         return; // no vocabulary, no fire path — trigger intent is read and discarded (pre-#583)
@@ -3236,6 +3274,11 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     const std::vector<std::string> sensorIds = def ? def->sensorIds : std::vector<std::string>{};
     const AiTuning tuning = (def && def->aiTuning) ? *def->aiTuning : AiTuning{};
     m_sensorSystem.addObserver(id.index, sensorIds, tuning.skill, tuning.reaction);
+
+    // Countermeasure magazines (#529): register the dispenser from the def's chaff/flare counts (0 =
+    // no dispenser of that kind, which is the default — most entities carry none).
+    if (def && (def->chaffCount > 0 || def->flareCount > 0))
+        m_countermeasures.registerDispenser(id.index, def->chaffCount, def->flareCount);
 
     // The candidate query is widened by the loudest signature in the registry, which can only change
     // as types are registered. Recomputing here is cheap (types are registered at startup) and keeps

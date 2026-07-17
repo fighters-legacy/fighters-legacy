@@ -92,6 +92,14 @@ struct EntityDef {
     // the category default (Air 8 m, Ground/Naval/Structure 15 m; Projectiles never collide here — they have
     // their own fuze path). A blimp or a carrier wants an explicit value; a fighter does not.
     float collisionRadiusM{0.f};
+
+    // ── electronic warfare (#529) ────────────────────────────────────────────
+    // Expendable countermeasure magazines: chaff (defeats radar seekers) and flare (defeats IR). 0 =
+    // no dispenser of that kind. A fighter carries dozens; a transport or a ground unit none. ECM
+    // (noise jamming) is a runtime toggle (EntityState::ecmActive), not a magazine — an aircraft with
+    // a jammer switches it on and off; there is nothing to run out of.
+    uint16_t chaffCount{0};
+    uint16_t flareCount{0};
 };
 
 // Category default collision radius (#630) — used when EntityDef::collisionRadiusM is 0.

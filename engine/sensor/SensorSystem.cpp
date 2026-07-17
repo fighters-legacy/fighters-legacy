@@ -46,6 +46,10 @@ namespace {
     return dx * dx + dy * dy + dz * dz;
 }
 
+// Burn-through baseline (#529): with zero ECCM a jammed radar can lock a jamming target only inside
+// 20% of its track range; a radar's `eccm` adds to this, up to a full-range burn-through at eccm ≥ 0.8.
+constexpr float kEcmBaseBurnThrough = 0.2f;
+
 } // namespace
 
 const Contact* ContactTable::find(EntityId id) const noexcept {
@@ -338,6 +342,18 @@ void SensorSystem::evaluateObserver(const ObserverWork& work, const SpatialIndex
                     else
                         sensorEmitting = false; // radar is looking elsewhere
                     break;
+                }
+
+                // ECM burn-through (#529): a jamming target denies this radar a LOCK beyond its
+                // burn-through range — you still get a bearing strobe (search), just no firing
+                // solution until you close inside where the skin return beats the noise. ECCM extends
+                // the burn-through range. Search-only radars (no track lobe) are unaffected.
+                if (allowTrack && def.track && tgt.ecmActive) {
+                    const float frac = std::clamp(kEcmBaseBurnThrough + def.eccm, 0.f, 1.f);
+                    const float effTrackRange = effectiveMaxRangeM(*def.track, def.type, sig, radarRangeFraction);
+                    const double burnThrough = static_cast<double>(effTrackRange) * static_cast<double>(frac);
+                    if (dist2(self.transform.pos, tgt.transform.pos) > burnThrough * burnThrough)
+                        allowTrack = false;
                 }
             }
 

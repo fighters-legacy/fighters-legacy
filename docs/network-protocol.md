@@ -347,7 +347,7 @@ delay all subsequent inputs behind the ACK round-trip.
 | Offset | Size | Field | Type | Notes |
 |--------|------|-------|------|-------|
 | 0 | 1 | `msgId` | `uint8_t` | `0x03` |
-| 1 | 1 | `buttons` | `uint8_t` | Bit 0 = gun trigger (level), bit 1 = afterburner, bit 2 = fire selected store. Fire bits are **intents**: the server's fire control validates station/ammo/rate/weapons-hold and edge-detects bit 2, so holding it is one shot |
+| 1 | 1 | `buttons` | `uint8_t` | Bit 0 = gun trigger (level), bit 1 = afterburner, bit 2 = fire selected store, **bit 3 = dispense chaff/flare** (level; server edge-detects — holding it is one pop, #529), **bit 4 = ECM jammer on** (level). Fire/EW bits are **intents**: the server validates station/ammo/rate/weapons-hold, edge-detects the store-release and dispense bits, and applies ECM to the entity |
 | 2 | 2 | `protocolVersion` | `uint16_t` | Client's `kProtocolVersion`; server discards packet and logs a warning on mismatch |
 | 4 | 4 | `seqNum` | `uint32_t` | Monotonically increasing per-client sequence counter; server applies a half-window comparison to discard out-of-order and duplicate packets |
 | 8 | 8 | `tickIndex` | `uint64_t` | Server `tickIndex` from the client's last received `MsgWorldSnapshot`. Server computes `estimatedDelayTicks = currentTick − tickIndex` for diagnostics, and also uses it as the **snapshot ack** high-water mark (clamped to the current tick), paired with `ackMask` below, that drives client-acked delta baselines — see *Scaling to 128+* |

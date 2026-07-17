@@ -501,11 +501,12 @@ enum class CombatEventType : uint8_t {
 // snapshot — a lost muzzle flash is nothing; anything that must arrive uses MsgCombatEvent.
 // Unknown values must be skipped by the client, never rejected.
 enum class EffectType : uint8_t {
-    WeaponFired = 0,   // gunfire: tracer/muzzle at pos, srcIdx = shooter
-    MissileLaunch = 1, // store left the rails: srcIdx = shooter
-    Impact = 2,        // a round connected: pos = hit, tgtIdx = struck entity
-    Detonation = 3,    // warhead burst at pos
-    NuclearFlash = 4,  // full-screen flash cue; pos = ground zero
+    WeaponFired = 0,           // gunfire: tracer/muzzle at pos, srcIdx = shooter
+    MissileLaunch = 1,         // store left the rails: srcIdx = shooter
+    Impact = 2,                // a round connected: pos = hit, tgtIdx = struck entity
+    Detonation = 3,            // warhead burst at pos
+    NuclearFlash = 4,          // full-screen flash cue; pos = ground zero
+    CountermeasureRelease = 5, // chaff/flare dispensed (#529): srcIdx = dispensing aircraft, pos = its position
 };
 
 // One packed SnapshotEffects TLV record. Written byte-serially (memcpy per field) into the TLV

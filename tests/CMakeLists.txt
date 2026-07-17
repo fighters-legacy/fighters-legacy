@@ -96,6 +96,12 @@ target_link_libraries(test_seeker PRIVATE Catch2::Catch2WithMain engine-weapon e
     engine-sensor engine-spatial)
 catch_discover_tests(test_seeker)
 
+# Chaff/flare countermeasure decoys + seeker seduction (#529).
+add_executable(test_countermeasure_system test_countermeasure_system.cpp)
+target_link_libraries(test_countermeasure_system PRIVATE Catch2::Catch2WithMain engine-weapon
+    engine-entity engine-sensor engine-spatial)
+catch_discover_tests(test_countermeasure_system)
+
 # Bombs/rockets release ballistics + CCIP (#629).
 add_executable(test_release_ballistics test_release_ballistics.cpp)
 target_link_libraries(test_release_ballistics PRIVATE Catch2::Catch2WithMain engine-weapon

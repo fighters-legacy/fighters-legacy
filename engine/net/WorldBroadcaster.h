@@ -23,9 +23,10 @@
 #include "perf/TickProfiler.h"
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
-#include "weapon/FireControl.h"      // per-entity fire state + request emission (#625)
-#include "weapon/ProjectileSystem.h" // the projectile pool (#625)
-#include "world/FormationRegistry.h" // the formation / command tree (#610)
+#include "weapon/CountermeasureSystem.h" // chaff/flare decoys + seeker seduction (#529)
+#include "weapon/FireControl.h"          // per-entity fire state + request emission (#625)
+#include "weapon/ProjectileSystem.h"     // the projectile pool (#625)
+#include "world/FormationRegistry.h"     // the formation / command tree (#610)
 
 #include <glm/vec3.hpp> // glm::dvec3 (ground-elevation query — radial floor #477)
 
@@ -156,6 +157,7 @@ struct ControlledEntity {
     SubsystemStateSet subsystems{}; // per-subsystem damage pools (#675); hasSubsystems gates its use
     bool hasSubsystems{false};      // true when the entity def declares [damage.subsystems]
     float fuelLeakKgS{0.f};         // accumulated fuel-leak rate from failed fuel subsystem(s) (#675)
+    bool prevDispenseCm{false};     // countermeasure-dispense edge detector (#529): a held input is one pop
 };
 
 // Pre-start scalar configuration. Bundles the init-time setters so callers configure rate limiting,
@@ -901,6 +903,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // ── the fire path (#625) — sim-thread only ──────────────────────────────
     const WeaponRegistry* m_weaponRegistry{nullptr};
     ProjectileSystem m_projectileSystem;
+    CountermeasureSystem m_countermeasures; // chaff/flare decoys + seeker seduction (#529)
     // The conditions the sensing pass ran under this tick; seeker checks (#627) read the same ones.
     sensor::SensingEnvironment m_sensingEnv{};
     // Rolling post-integrate position history (#425): player hitscan rewinds targets to the tick
