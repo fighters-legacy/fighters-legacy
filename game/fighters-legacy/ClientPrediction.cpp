@@ -6,6 +6,7 @@
 #include "flight/BuiltinFlightModel.h"
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelData.h"
+#include "flight/Geodetic.h" // kEarthRotationRate (#482)
 #include "flight/StallBuffet.h"
 #include "weather/Turbulence.h"
 
@@ -233,6 +234,11 @@ void ClientPrediction::reconcile(RenderSnapshot& snap, uint64_t tickIndex, uint3
             m_customGravity.emplace(m_planetRadiusKm * 1000.f);
             m_integrator->setGravityField(*m_customGravity);
         }
+        // Match the server's Earth-fixed rotating frame (#482). The Coriolis/centrifugal terms are
+        // deterministic (pos/vel only, no RNG), so predicting with the same rate the default server
+        // uses keeps reconciliation exact; a server that disabled earth_rotation leaves only a tiny
+        // persistent bias the blend absorbs.
+        m_integrator->setEarthRotationRate(kEarthRotationRate);
         m_initialized = true;
     }
 

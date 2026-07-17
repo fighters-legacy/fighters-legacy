@@ -749,6 +749,15 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // 6371 km; only call this for non-Earth planets. Call before gameLoop.start().
     void setGravityField(const IGravityField& field, float planetRadiusKm = 6371.f) noexcept;
 
+    // Earth-rotation rate Ω (rad/s) applied to every FlightIntegrator spawned here (current and
+    // future) — the Coriolis + centrifugal terms of an Earth-fixed rotating world frame (#482).
+    // Default 0 = an inertial frame (all existing WB tests stay bit-identical); fl-server sets
+    // kEarthRotationRate from `[world] earth_rotation`. Call before gameLoop.start(); the value is
+    // read at each addControlledEntity, so it must be set before peers spawn.
+    void setEarthRotationRate(double omega_rad_s) noexcept {
+        m_earthRotationRate = (omega_rad_s > 0.0) ? omega_rad_s : 0.0;
+    }
+
     // Inject the coalition registry that resolves hostility for AI controllers (#632). Passed into the
     // AiTickContext each tick, so a scripted mission bot honors mission-declared alliances instead of
     // the crude "distinct non-zero faction = hostile" affiliation rule. nullptr (the default) keeps
@@ -1030,7 +1039,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Gravity field applied to all spawned integrators. Initialized to CentralGravityField::earthInstance()
     // in the constructor; override with setGravityField() for non-Earth servers.
     const IGravityField* m_gravity{nullptr};
-    float m_planetRadiusKm{0.f}; // sent in MsgConnectAck (km); initialized to 6371 in constructor
+    float m_planetRadiusKm{0.f};     // sent in MsgConnectAck (km); initialized to 6371 in constructor
+    double m_earthRotationRate{0.0}; // #482: Ω for integrator Coriolis/centrifugal; 0 = inertial frame
 
     // Per-entity terrain height query (sim-thread only). When set, called each tick per entity instead
     // of the global m_groundElevation scalar.

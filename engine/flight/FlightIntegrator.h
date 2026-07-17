@@ -158,6 +158,18 @@ class FlightIntegrator {
         m_fuelLeakKgS = std::max(0.f, kgPerS);
     }
 
+    // Earth-rotation rate Ω (rad/s) for the world frame's Coriolis and centrifugal terms (#482).
+    // Default 0 = an inertial (non-rotating) frame, so every existing near-origin test stays
+    // bit-identical and the radial-floor regression gate is untouched; WorldBroadcaster and
+    // ClientPrediction set kEarthRotationRate in production. The terms are deterministic (no RNG), so
+    // server and client-prediction integrators stay in exact parity when both enable it. ω = (0,Ω,0).
+    void setEarthRotationRate(double omega_rad_s) noexcept {
+        m_earthRotationRate = std::max(0.0, omega_rad_s);
+    }
+    [[nodiscard]] double earthRotationRate() const noexcept {
+        return m_earthRotationRate;
+    }
+
   private:
     std::shared_ptr<const FlightModelData> m_data;
     FlightState m_state;
@@ -166,8 +178,9 @@ class FlightIntegrator {
     const IForceModel* m_forceModel{&FixedWingForceModel::instance()};
     float m_damageThrust{1.f};
     float m_damageControl{1.f};
-    float m_subsystemControl{1.f}; // #675: controls/hydraulics loss, multiplies m_damageControl
-    float m_fuelLeakKgS{0.f};      // #675: ruptured-tank drain on top of the burn
+    float m_subsystemControl{1.f};   // #675: controls/hydraulics loss, multiplies m_damageControl
+    float m_fuelLeakKgS{0.f};        // #675: ruptured-tank drain on top of the burn
+    double m_earthRotationRate{0.0}; // #482: Ω for Coriolis/centrifugal; 0 = inertial frame (default)
 
     void advanceSpool(float dt, float commanded_throttle);
     void advanceSweep(float dt, float commanded_sweep_deg);

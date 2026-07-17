@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **flight**: Earth-fixed rotating world frame — `FlightIntegrator` adds the Coriolis (`−2ω×v`) and centrifugal (`−ω×(ω×r)`) accelerations, spin axis along world +Y at Ω = 7.292×10⁻⁵ rad/s (`kEarthRotationRate`), so long-range gunnery/ballistics and navigation deflect correctly. Per-instance `setEarthRotationRate` defaults to 0 (inertial frame) so every existing near-origin test is bit-identical; fl-server enables it from `[world] earth_rotation` (default `true`) and client-side prediction models the same deterministic terms, keeping reconciliation in exact parity. Both terms depend only on the axis-perpendicular `(x, z)`, so they vanish exactly at the world origin/north pole (#482)
 - **flight**: Airspeed distinctions in `engine/flight/Atmosphere.h` — `machNumber`, `dynamicPressurePa`, `equivalentAirspeed`, `calibratedAirspeed` (compressible impact pressure, subsonic + supersonic Rayleigh branch), and `pressureAltitudeM` (ISA inversion). The flight HUD's "IAS" now reads true calibrated airspeed (was raw world-velocity magnitude mislabeled "IAS", reading a whole density-lapse high at altitude) and adds a Mach readout; the ~4 duplicate inline `spd / speed_of_sound` Mach sites in the integrator and trim now call the shared `machNumber` (bit-identical). Part of the spherical-Earth epic; the USSA-76 density model to 86 km already landed via #354 (#480)
 
 ### Changed

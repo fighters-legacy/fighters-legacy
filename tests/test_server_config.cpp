@@ -84,6 +84,12 @@ TEST_CASE("parseServerConfig: reads world.allow_observers (#857)", "[server_conf
     CHECK(parseServerConfig("[world]\nallow_observers = false\n", &log).allowObservers == false);
 }
 
+TEST_CASE("parseServerConfig: reads world.earth_rotation (#482)", "[server_config]") {
+    MockLogger log;
+    CHECK(parseServerConfig("", &log).earthRotation == true); // default: Earth-fixed rotating frame
+    CHECK(parseServerConfig("[world]\nearth_rotation = false\n", &log).earthRotation == false);
+}
+
 TEST_CASE("parseServerConfig: reads mods.required (#872)", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig("[mods]\nrequired = [\"fl-base\", \"theater\"]\n", &log);
