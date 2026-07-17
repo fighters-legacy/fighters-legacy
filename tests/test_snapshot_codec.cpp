@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "flight/EngineFailFlags.h" // kEngineFail* constants (header-only)
 #include "net/BitStream.h"
 #include "net/Quantization.h"
 #include "net/SnapshotCodec.h"
@@ -245,6 +246,18 @@ TEST_CASE("SnapshotCodec: full record round-trips all fields", "[snapshot_codec]
     CHECK(out.fuelPct == 47u);
     CHECK(out.abEngaged);
     CHECK(out.playerOwned);
+}
+
+TEST_CASE("SnapshotCodec: the 6-bit engineFail field carries the centreline flag (#901)", "[snapshot_codec]") {
+    // kEngineFailCenter = 0x20 needs a 6th bit; a full failure mask must survive the round-trip.
+    const double origin[3] = {0.0, 0.0, 0.0};
+    fl::QuantEntity in;
+    in.idx = 1;
+    in.isFull = true;
+    in.engineFailFlags = fl::kEngineFailCenter | fl::kEngineCompStall; // 0x20 | 0x08
+    bool genPresent = false;
+    fl::QuantEntity out = roundTrip(in, origin, /*sendGen=*/false, genPresent);
+    CHECK(out.engineFailFlags == static_cast<uint8_t>(fl::kEngineFailCenter | fl::kEngineCompStall));
 }
 
 TEST_CASE("SnapshotCodec: delta record omits gen/type/omega", "[snapshot_codec]") {

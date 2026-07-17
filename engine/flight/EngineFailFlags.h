@@ -14,5 +14,9 @@ constexpr uint8_t kEngineFailLeft = 0x02;    // left-engine failure (asymmetric 
 constexpr uint8_t kEngineFailRight = 0x04;   // right-engine failure (asymmetric thrust, #675)
 constexpr uint8_t kEngineCompStall = 0x08;   // compressor stall
 constexpr uint8_t kEngineFlameout = 0x10;    // flameout (total thrust loss)
+constexpr uint8_t kEngineFailCenter = 0x20;  // centreline single-engine kill (#901): TOTAL thrust
+                                             // loss and NO yaw — a single-engine airframe has no dead
+                                             // side to swing toward. Distinct from Left/Right (which
+                                             // are the twin-engine asymmetric case).
 
 } // namespace fl

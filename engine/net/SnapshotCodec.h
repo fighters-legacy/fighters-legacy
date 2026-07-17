@@ -56,7 +56,7 @@ inline constexpr double kVelMaxMps = 2000.0;  // velocity clamp range (m/s)
 inline constexpr int kOmegaBits = 12;         // per angular-rate axis
 inline constexpr double kOmegaMaxRadS = 20.0; // angular-rate clamp range (rad/s)
 inline constexpr int kDamageBits = 3;         // damageLevel 0..7
-inline constexpr int kEngineFailBits = 5;     // kEngineFail* bitmask (up to 0x10)
+inline constexpr int kEngineFailBits = 6;     // kEngineFail* bitmask (up to 0x20, #901)
 inline constexpr int kThrottleBits = 7;       // 0..100
 inline constexpr int kFuelBits = 7;           // 0..100
 

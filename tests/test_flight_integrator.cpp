@@ -1536,6 +1536,41 @@ TEST_CASE("Integrator: both engines out kills thrust entirely", "[integrator][su
     CHECK(fi.state().vel_body[0] < 200.f);
 }
 
+TEST_CASE("Integrator: a centreline engine kill is total thrust loss with NO yaw", "[integrator][subsystem]") {
+    // #901: kEngineFailCenter models a single-engine airframe — a kill is total thrust loss (like both
+    // twin engines out) and produces no asymmetry, because there is no dead side to swing toward.
+    auto run = [](uint8_t failFlags) {
+        auto data = makeData();
+        FlightIntegrator fi(data);
+        FlightState s{};
+        s.vel_body[0] = 200.f;
+        s.pos_world[1] = 5000.f;
+        s.fuel_kg = 4000.f;
+        s.mass_kg = 14000.f;
+        s.quat[3] = 1.f;
+        fi.reset(s);
+        fi.setEngineFailFlags(failFlags);
+        ControlInput ctrl{};
+        ctrl.throttle = 1.f;
+        PayloadEffect px{};
+        for (int i = 0; i < 60; ++i)
+            fi.step(1.f / 60.f, ctrl, px);
+        return fi.state();
+    };
+
+    const FlightState healthy = run(0);
+    const FlightState centreOut = run(fl::kEngineFailCenter);
+    const FlightState bothOut = run(fl::kEngineFailLeft | fl::kEngineFailRight);
+    const FlightState leftOut = run(fl::kEngineFailLeft);
+
+    // Total thrust loss: identical airspeed to both-engines-out, and slower than the healthy jet.
+    CHECK(centreOut.vel_body[0] < healthy.vel_body[0]);
+    CHECK(centreOut.vel_body[0] == Catch::Approx(bothOut.vel_body[0]).epsilon(1e-4));
+    // NO yaw asymmetry — unlike a single twin engine out, which develops a yaw rate.
+    CHECK(std::abs(centreOut.omega[1]) < 1e-4f);
+    CHECK(std::abs(leftOut.omega[1]) > 1e-3f);
+}
+
 TEST_CASE("Integrator: subsystem control factor multiplies the tier control factor", "[integrator][subsystem]") {
     auto data = makeData();
     FlightIntegrator fi(data);

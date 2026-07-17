@@ -2318,6 +2318,8 @@ void WorldBroadcaster::applySubsystemEffects(ControlledEntity& ce) {
         engineFlags |= kEngineFailLeft;
     if (ce.subsystems.failed(Subsystem::EngineRight))
         engineFlags |= kEngineFailRight;
+    if (ce.subsystems.failed(Subsystem::Engine)) // #901: centreline single engine — total loss, no yaw
+        engineFlags |= kEngineFailCenter;
     ce.sim->setEngineFailFlags(engineFlags);
 
     // Controls and hydraulics each strip control authority; both failed = near-total loss.

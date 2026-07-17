@@ -51,6 +51,8 @@ struct SubsystemStateSet {
         return (fwd > 0.f ? 2.f : 0.6f) * (right < 0.f ? 1.5f : 0.6f); // rear-left
     case Subsystem::EngineRight:
         return (fwd > 0.f ? 2.f : 0.6f) * (right > 0.f ? 1.5f : 0.6f); // rear-right
+    case Subsystem::Engine:
+        return fwd > 0.f ? 2.f : 0.6f; // centreline engine — rear-struck, no left/right bias (#901)
     case Subsystem::Avionics:
         return fwd < 0.f ? 2.5f : 0.5f; // nose (struck from the front → round flying aft → fwd<0)
     case Subsystem::Fuel:

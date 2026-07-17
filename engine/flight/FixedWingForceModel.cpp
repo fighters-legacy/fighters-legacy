@@ -40,7 +40,10 @@ ForceMoment FixedWingForceModel::compute(const FlightState& s, const ControlInpu
     const uint8_t fail = s.engineFailFlags;
     const bool leftOut = (fail & kEngineFailLeft) != 0;
     const bool rightOut = (fail & kEngineFailRight) != 0;
-    const bool totalLoss = (fail & (kEngineFailGeneric | kEngineFlameout)) != 0 || (leftOut && rightOut);
+    // A centreline single-engine kill (#901) is a TOTAL loss with NO yaw — grouped with the generic
+    // and flameout total-loss cases, not the L/R asymmetric ones.
+    const bool totalLoss =
+        (fail & (kEngineFailGeneric | kEngineFlameout | kEngineFailCenter)) != 0 || (leftOut && rightOut);
     if (totalLoss) {
         forces[0] -= thrust_n; // computeForces already added the full thrust to body-x; remove it
     } else if (leftOut || rightOut) {
