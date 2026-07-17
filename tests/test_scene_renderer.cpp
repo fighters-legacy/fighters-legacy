@@ -58,6 +58,30 @@ struct MockContentPack : NullContentPack {
     }
 };
 
+// Models VkResources #833: for a content mesh whose .glb carries a baseColor material, createMesh
+// (given a textureResolver) parses it and getMeshMaterial returns a real, per-mesh MaterialHandle.
+// Builtins/terrain (no textureResolver, or no baseColor) get no material and fall back to grey — the
+// same path an untextured mesh takes today. Used to verify #658's material routing without a GPU.
+struct TexturedMockRenderer : MockRenderer {
+    std::string texturedMeshName;       // the content mesh whose glb has a baseColor material
+    bool sawResolverForTextured{false}; // did SceneRenderer supply the #833 URI resolver?
+    MeshHandle texturedMesh{};
+    MaterialHandle texturedMat{};
+
+    MeshHandle createMesh(const MeshUploadDesc& d) override {
+        MeshHandle h = MockRenderer::createMesh(d);
+        if (!texturedMeshName.empty() && d.name == texturedMeshName) {
+            sawResolverForTextured = static_cast<bool>(d.textureResolver);
+            texturedMesh = h;
+            texturedMat = createMaterial(MaterialDesc{}); // the material parsed from the glb's baseColor
+        }
+        return h;
+    }
+    MaterialHandle getMeshMaterial(MeshHandle h) const override {
+        return (texturedMesh.valid() && h.id == texturedMesh.id) ? texturedMat : MaterialHandle{};
+    }
+};
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -533,6 +557,36 @@ TEST_CASE("SceneRenderer shares one fallback material across distinct loadable m
     CHECK(renderer.createMaterialCount == 8);
     REQUIRE(renderer.lastScene.renderItems.size() == 2);
     CHECK(renderer.lastScene.renderItems[0].material.id == renderer.lastScene.renderItems[1].material.id);
+}
+
+TEST_CASE("SceneRenderer renders a textured content mesh with its own material, not grey (#658)") {
+    // Acceptance for #658 (satisfied by #833's createMesh material consumption): a content-pack .glb
+    // that carries a baseColor material renders textured via the content-pack mesh path — SceneRenderer
+    // routes the renderer's parsed material to the RenderItem instead of the shared grey fallback.
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = {'{', 2, 3}; // valid glTF-JSON first byte; renderer parses its baseColor material
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    TexturedMockRenderer renderer;
+    renderer.texturedMeshName = "f15c";
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, oneType(), assets, renderer};
+
+    RenderSnapshot snap = makeSnap();
+    snap.entries.push_back(makeEntry(0, {10.0, 0.0, 0.0}));
+    bridge.publish(std::move(snap));
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    REQUIRE(renderer.lastScene.renderItems.size() == 1);
+    // The parsed material from the glb's baseColor — a real material, not the shared grey fallback.
+    CHECK(renderer.texturedMat.valid());
+    CHECK(renderer.lastScene.renderItems[0].material.id == renderer.texturedMat.id);
+    // The #833 URI plumbing reached the HAL: SceneRenderer supplied a textureResolver for the content mesh.
+    CHECK(renderer.sawResolverForTextured);
 }
 
 // ---------------------------------------------------------------------------
