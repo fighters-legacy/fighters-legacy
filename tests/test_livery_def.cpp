@@ -40,7 +40,7 @@ diffuse = "f16_ferris_diffuse"
     CHECK(def.textureFor("f16_skin.diffuse") == "f16_ferris_diffuse");
 }
 
-TEST_CASE("parseLiveryDef allows an empty (no-op) livery — degrades to base, not an error", "[livery]") {
+TEST_CASE("parseLiveryDef allows an empty (no-op) livery -- degrades to base, not an error", "[livery]") {
     const LiveryDef def = parseLiveryDef(R"toml(
 [livery]
 name     = "Factory Fresh"
