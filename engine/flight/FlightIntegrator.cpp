@@ -205,7 +205,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
         float rel1 = vel[1] - wind_body2[1];
         float rel2 = vel[2] - wind_body2[2];
         float spd = std::sqrt(rel0 * rel0 + rel1 * rel1 + rel2 * rel2);
-        float mach = (atmos2.speed_of_sound_m_s > 0.f) ? spd / atmos2.speed_of_sound_m_s : 0.f;
+        float mach = machNumber(spd, atmos2.speed_of_sound_m_s);
         float sched_sweep = m_data->wing_sweep->schedule.lookup(mach);
         advanceSweep(dt, sched_sweep);
     }
@@ -231,7 +231,7 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     float rel1 = vel[1] - wind_body[1];
     float rel2 = vel[2] - wind_body[2];
     float spd = std::sqrt(rel0 * rel0 + rel1 * rel1 + rel2 * rel2);
-    float mach = (atmos.speed_of_sound_m_s > 0.f) ? spd / atmos.speed_of_sound_m_s : 0.f;
+    float mach = machNumber(spd, atmos.speed_of_sound_m_s);
 
     // Body frame: x=forward, y=up, z=right.
     // Pitched up → velocity dips below body nose → negative body-y component → positive alpha.

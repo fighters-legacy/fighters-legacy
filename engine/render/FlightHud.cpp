@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render/FlightHud.h"
 
+#include "flight/Atmosphere.h" // calibratedAirspeed / machNumber for IAS vs Mach (#480)
 #include "flight/LocalFrame.h" // headingOf / pitchOf / bankOf on the local-level frame
 
 #include <algorithm>
@@ -60,21 +61,32 @@ void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrai
         m_elements[m_elementCount++] = el;
     };
 
-    // Airspeed (left side, vertically centered) — 1 m/s = 1.94384 kts
-    float speedKts =
-        std::sqrt(e->velocity.x * e->velocity.x + e->velocity.y * e->velocity.y + e->velocity.z * e->velocity.z) *
-        1.94384f;
-    pushText(HudAlign::Left, 0.03f, 0.46f, kHudR, kHudG, kHudB, "IAS %5.0fkts", speedKts);
+    // Airspeed (left side, vertically centered). Three distinct speeds diverge with altitude (#480):
+    // the wire carries only world-frame velocity, so |velocity| is groundspeed and — absent wind on
+    // the wire — the best available estimate of true airspeed (TAS). From TAS + the local atmosphere
+    // we derive the two readouts a pilot actually flies: IAS (calibrated/indicated, dynamic-pressure)
+    // and Mach (TAS ÷ local speed of sound). The old code labelled raw groundspeed "IAS", which read
+    // high by the whole density lapse at altitude. 1 m/s = 1.94384 kts.
+    const float altMsl =
+        static_cast<float>(geodeticAltitude(e->position.x, e->position.y, e->position.z, planetRadiusM));
+    const AtmosphereState atmos = computeAtmosphere(altMsl);
+    const float tasMps =
+        std::sqrt(e->velocity.x * e->velocity.x + e->velocity.y * e->velocity.y + e->velocity.z * e->velocity.z);
+    const float iasKts = calibratedAirspeed(tasMps, atmos) * 1.94384f;
+    const float mach = machNumber(tasMps, atmos.speed_of_sound_m_s);
+    pushText(HudAlign::Left, 0.03f, 0.46f, kHudR, kHudG, kHudB, "IAS %5.0fkts", iasKts);
 
     // Altitude MSL and AGL (left side, below airspeed). Both radial: ALT is the geodetic (MSL)
     // altitude above the datum and AGL subtracts the terrain radial elevation — correct planet-wide,
     // not just where world-Y aliases altitude near the origin (#477). terrainElevation is the terrain
     // radial elevation (heightAt(dvec3)) supplied by the caller.
-    const float altMsl =
-        static_cast<float>(geodeticAltitude(e->position.x, e->position.y, e->position.z, planetRadiusM));
     pushText(HudAlign::Left, 0.03f, 0.50f, kHudR, kHudG, kHudB, "ALT %5.0fm", altMsl);
     const float agl = altMsl - terrainElevation;
     pushText(HudAlign::Left, 0.03f, 0.54f, kHudR, kHudG, kHudB, "AGL %5.0fm", agl);
+
+    // Mach number (left column, below AGL) — reads increasingly higher than IAS-implied Mach as the
+    // aircraft climbs, the key high-altitude distinction the flat "IAS" readout hid.
+    pushText(HudAlign::Left, 0.03f, 0.58f, kHudR, kHudG, kHudB, "M %4.2f", mach);
 
     // Attitude on the LOCAL-LEVEL frame at the entity position (radial up on a spherical planet).
     // These reduce to the world-frame values near the origin but stay correct planet-wide (#479).

@@ -115,6 +115,7 @@ target_link_libraries(engine-render
     PUBLIC  platform-hal
     PRIVATE engine-content
             engine-audio
+            engine-flight   # FlightHud derives IAS/Mach from the atmosphere model (#480)
 )
 
 add_library(engine-entity STATIC
