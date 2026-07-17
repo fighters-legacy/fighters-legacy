@@ -24,6 +24,7 @@ face_uv_to_direction = _mod.face_uv_to_direction
 direction_to_latlon = _mod.direction_to_latlon
 tile_latlon_grid = _mod.tile_latlon_grid
 encode_heights = _mod.encode_heights
+merge_bathymetry = _mod.merge_bathymetry
 tile_rel_path = _mod.tile_rel_path
 enumerate_tiles = _mod.enumerate_tiles
 _parse_faces = _mod._parse_faces
@@ -201,3 +202,44 @@ class TestTerrainIdRegex:
     @pytest.mark.parametrize("tid", ["World", "1world", "-world", "wörld", ""])
     def test_rejects_invalid(self, tid):
         assert not TERRAIN_ID_RE.match(tid)
+
+
+class TestMergeBathymetry:
+    """merge_bathymetry fills a land DEM's ocean/nodata gaps with GEBCO depth (#476)."""
+
+    def test_ocean_gaps_filled_with_bathymetry(self):
+        nan = float("nan")
+        dem = np.array([[100.0, nan], [nan, 50.0]])       # land DEM, nodata over water
+        bathy = np.array([[-5.0, -1200.0], [-30.0, -8.0]]) # GEBCO everywhere
+        out = merge_bathymetry(dem, bathy)
+        # Land cells keep the DEM; ocean/nodata cells take the (negative) bathymetry.
+        assert out[0, 0] == 100.0
+        assert out[1, 1] == 50.0
+        assert out[0, 1] == -1200.0
+        assert out[1, 0] == -30.0
+
+    def test_land_is_never_overwritten(self):
+        dem = np.array([[10.0, 20.0]])
+        bathy = np.array([[-99.0, -99.0]])
+        out = merge_bathymetry(dem, bathy)
+        assert list(out[0]) == [10.0, 20.0]
+
+    def test_gap_without_bathymetry_stays_nan(self):
+        nan = float("nan")
+        dem = np.array([[nan]])
+        bathy = np.array([[nan]])
+        out = merge_bathymetry(dem, bathy)
+        assert math.isnan(out[0, 0])  # still nodata -> encode_heights maps to sea level
+
+    def test_does_not_mutate_input(self):
+        dem = np.array([[float("nan")]])
+        bathy = np.array([[-42.0]])
+        merge_bathymetry(dem, bathy)
+        assert math.isnan(dem[0, 0])  # original DEM untouched
+
+    def test_merged_ocean_encodes_below_datum(self):
+        # End-to-end with encode_heights: a −1000 m ocean cell encodes below the 32768 datum.
+        nan = float("nan")
+        merged = merge_bathymetry(np.array([[nan]]), np.array([[-1000.0]]))
+        enc = encode_heights(merged, 1.0, 32768.0)
+        assert int(enc[0, 0]) == 31768

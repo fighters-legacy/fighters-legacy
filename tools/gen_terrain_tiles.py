@@ -126,12 +126,31 @@ def tile_latlon_grid(face: int, level: int, i: int, j: int,
 
 def encode_heights(elev_m: "np.ndarray", height_scale: float,
                    height_offset: float) -> "np.ndarray":
-    """uint16 = clamp(elev_m * scale + offset, 0, 65535); NaN -> sea level before encode."""
+    """uint16 = clamp(elev_m * scale + offset, 0, 65535); NaN -> sea level before encode.
+
+    With a bathymetry source merged in (merge_bathymetry, #476), ocean cells carry real NEGATIVE
+    elevation here, so they encode below the datum (offset) instead of flattening to sea level.
+    """
     arr = np.array(elev_m, dtype=np.float64, copy=True)
     arr[np.isnan(arr)] = 0.0
     arr = arr * height_scale + height_offset
     np.clip(arr, 0, 65535, out=arr)
     return arr.astype(np.uint16)
+
+
+def merge_bathymetry(dem_elev: "np.ndarray", bathy_elev: "np.ndarray") -> "np.ndarray":
+    """Fill ocean / nodata gaps in a land DEM with GEBCO bathymetry (#476).
+
+    Land DEMs (e.g. Copernicus GLO-30) are nodata over water, so ocean samples arrive as NaN and
+    would otherwise flatten to sea level (encode_heights). Where the DEM is NaN and the bathymetry
+    grid has a value, take the bathymetry elevation (real sea-floor depth, typically negative); land
+    always keeps the DEM. Pure numpy — unit-tested without GDAL. Returns a new array.
+    """
+    dem = np.array(dem_elev, dtype=np.float64, copy=True)
+    bathy = np.asarray(bathy_elev, dtype=np.float64)
+    fill = np.isnan(dem) & ~np.isnan(bathy)
+    dem[fill] = bathy[fill]
+    return dem
 
 
 def tile_rel_path(terrain_id: str, face: int, level: int, i: int, j: int,
@@ -158,6 +177,7 @@ def enumerate_tiles(faces, min_level: int, max_level: int):
 # Per-worker globals (avoid pickling gdal.Dataset).
 _g_dem = None
 _g_lc = None
+_g_bathy = None
 _g_common = None
 
 
@@ -209,11 +229,12 @@ def _write_png_u16(path: Path, data_u16: "np.ndarray") -> None:
     mem = None
 
 
-def _worker_init(dem_path: str, lc_path, common: tuple) -> None:
-    global _g_dem, _g_lc, _g_common
+def _worker_init(dem_path: str, lc_path, bathy_path, common: tuple) -> None:
+    global _g_dem, _g_lc, _g_bathy, _g_common
     gdal.UseExceptions()
     _g_dem = gdal.Open(dem_path, gdal.GA_ReadOnly)
     _g_lc = gdal.Open(lc_path, gdal.GA_ReadOnly) if lc_path else None
+    _g_bathy = gdal.Open(bathy_path, gdal.GA_ReadOnly) if bathy_path else None
     _g_common = common
 
 
@@ -231,6 +252,12 @@ def _worker_tile(key: tuple) -> tuple:
         dem_nodata = dem_band.GetNoDataValue()
         elev = _sample_raster(dem_band, _g_dem.GetGeoTransform(), _g_dem.RasterXSize,
                               _g_dem.RasterYSize, dem_nodata, lat, lon, nearest=False)
+        # Bathymetry (#476): fill the land DEM's ocean/nodata gaps with GEBCO sea-floor depth.
+        if _g_bathy is not None:
+            b_band = _g_bathy.GetRasterBand(1)
+            bathy = _sample_raster(b_band, _g_bathy.GetGeoTransform(), _g_bathy.RasterXSize,
+                                   _g_bathy.RasterYSize, b_band.GetNoDataValue(), lat, lon, nearest=False)
+            elev = merge_bathymetry(elev, bathy)
         height_path.parent.mkdir(parents=True, exist_ok=True)
         _write_png_u16(height_path, encode_heights(elev, height_scale, height_offset))
 
@@ -291,6 +318,9 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    help="Highest quadtree level to generate (2^level tiles per face axis)")
     p.add_argument("--landcover-source", default=None, metavar="PATH",
                    help="Optional global land-cover source; also emits _lc.png tiles")
+    p.add_argument("--bathymetry-source", default=None, metavar="PATH",
+                   help="Optional global bathymetry source (e.g. GEBCO); fills the DEM's ocean/nodata "
+                        "gaps with real negative sea-floor depth (#476)")
     p.add_argument("--height-scale", type=float, default=1.0, metavar="FLOAT",
                    help="Multiply elevation before uint16 encode (default: 1.0)")
     p.add_argument("--height-offset", type=float, default=32768.0, metavar="FLOAT",
@@ -311,6 +341,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         sys.exit(f"Error: input file not found: {args.input}")
     if args.landcover_source and not Path(args.landcover_source).exists():
         sys.exit(f"Error: land-cover source not found: {args.landcover_source}")
+    if args.bathymetry_source and not Path(args.bathymetry_source).exists():
+        sys.exit(f"Error: bathymetry source not found: {args.bathymetry_source}")
     if args.min_level < 0 or args.max_level < args.min_level:
         sys.exit("Error: require 0 <= --min-level <= --max-level")
     if args.max_level > 20:
@@ -342,18 +374,19 @@ def main(argv=None) -> None:
     workers = args.workers if args.workers is not None else os.cpu_count()
     dem_path = str(Path(args.input).resolve())
     lc_path = str(Path(args.landcover_source).resolve()) if args.landcover_source else None
+    bathy_path = str(Path(args.bathymetry_source).resolve()) if args.bathymetry_source else None
     common = (str(args.output_dir), args.terrain_id, args.tile_pixels,
               args.height_scale, args.height_offset, args.skip_existing)
 
     print(f"[1/2] Generating {total} tile(s) across faces {faces}, "
           f"levels {args.min_level}..{args.max_level} ({workers} worker(s))"
-          f"{' + land cover' if lc_path else ''}")
+          f"{' + land cover' if lc_path else ''}{' + bathymetry' if bathy_path else ''}")
 
     done = 0
     failures = 0
     report_every = max(1, total // 200)
     with ProcessPoolExecutor(max_workers=workers, initializer=_worker_init,
-                             initargs=(dem_path, lc_path, common)) as pool:
+                             initargs=(dem_path, lc_path, bathy_path, common)) as pool:
         chunksize = max(1, total // (workers * 10))
         for _key, ok in pool.map(_worker_tile, tiles, chunksize=chunksize):
             done += 1

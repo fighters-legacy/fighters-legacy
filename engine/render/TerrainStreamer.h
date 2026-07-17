@@ -99,6 +99,23 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
         return surfaceTypeFromWorldCover(surfaceAt(worldPos));
     }
 
+    // Ocean depth (metres, positive DOWN) below the sphere datum (mean sea level) at worldPos (#476).
+    // When bathymetry is present in the elevation source, `heightAt` returns real negative elevation
+    // over ocean; this reports its magnitude, and 0 over land or where the tile is not yet loaded.
+    // Thread-safe (delegates to heightAt).
+    [[nodiscard]] float oceanDepthAt(glm::dvec3 worldPos) const noexcept {
+        const double h = heightAt(worldPos);
+        return h < 0.0 ? static_cast<float>(-h) : 0.f;
+    }
+
+    // Coarse deep/shallow classification for physics + surface typing (#476): shallow water (a
+    // survivable gear-up ditching, continental-shelf depths) vs. deep ocean. `shallowMaxM` is the
+    // depth boundary (default ≈ continental-shelf edge). False on land (depth 0).
+    [[nodiscard]] bool isShallowWater(glm::dvec3 worldPos, float shallowMaxM = 200.f) const noexcept {
+        const float d = oceanDepthAt(worldPos);
+        return d > 0.f && d <= shallowMaxM;
+    }
+
     // Total resident tile entries (all states). Exposed for tests.
     std::size_t tileCount() const noexcept;
 

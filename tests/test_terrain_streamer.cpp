@@ -467,6 +467,33 @@ TEST_CASE("SurfaceType: ESA WorldCover class codes map to the engine vocabulary 
     CHECK(fl::surfaceTypeFromWorldCover(200) == SurfaceType::Unknown); // out-of-range
 }
 
+TEST_CASE("TerrainStreamer oceanDepthAt reports depth below the datum (#476)") {
+    auto pack = std::make_unique<MockTerrainPack>();
+    const std::string heightPath = "terrain/world/f2/l0/tile_0_0.png";
+    pack->tilePaths["world:2:0:0:0:0"] = heightPath;
+
+    StreamerFixture fx(std::move(pack));
+    // Encode elevation −1000 m (below the sphere datum): stored uint16 = elev + 32768 = 31768.
+    fx.asyncFs.addFile(heightPath, makeFlatPng16(kTileHeightmapSize, kTileHeightmapSize, 31768));
+
+    fl::TerrainStreamer ts{worldManifest(0), *fx.assets, fx.asyncFs, nullptr};
+    pump(ts, fx.asyncFs, kPoleCam, 5);
+
+    CHECK(ts.heightAt(kPoleProbe) == Catch::Approx(-1000.0).margin(0.5));
+    CHECK(ts.oceanDepthAt(kPoleProbe) == Catch::Approx(1000.f).margin(0.5f));
+    CHECK(ts.isShallowWater(kPoleProbe, 200.f) == false); // 1000 m deep → not shallow
+    CHECK(ts.isShallowWater(kPoleProbe, 2000.f) == true); // within a 2000 m shallow band
+}
+
+TEST_CASE("TerrainStreamer oceanDepthAt is zero over land (#476)") {
+    StreamerFixture fx;
+    fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, nullptr};
+    pump(ts, fx.asyncFs, kPoleCam, 30);
+    // Procedural land base is ~550 m above the datum → no ocean.
+    CHECK(ts.oceanDepthAt(kPoleProbe) == 0.f);
+    CHECK(ts.isShallowWater(kPoleProbe) == false);
+}
+
 TEST_CASE("TerrainStreamer surfaceTypeAt maps a WorldCover water tile to Water (#475)") {
     auto pack = std::make_unique<MockTerrainPack>();
     const std::string heightPath = "terrain/world/f2/l0/tile_0_0.png";
