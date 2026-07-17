@@ -14,6 +14,7 @@
 
 #include <cstring>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -546,6 +547,14 @@ struct MockWindow : public IWindow {
     int setSizeCount{0};
     int setFullscreenCount{0};
 
+    // Scripted folder-dialog result + observation (#665). `folderDialogResult` is what
+    // showFolderDialog returns; leave it nullopt to simulate cancel/error. `folderDialogCalls`
+    // counts invocations; `lastFolderDialogTitle`/`Location` capture the args.
+    std::optional<std::string> folderDialogResult{};
+    int folderDialogCalls{0};
+    std::string lastFolderDialogTitle{};
+    std::string lastFolderDialogLocation{};
+
     bool init(const char*, int w, int h) override {
         logW = w;
         logH = h;
@@ -581,6 +590,12 @@ struct MockWindow : public IWindow {
         return 0;
     }
     void openURL(const char*) override {}
+    std::optional<std::string> showFolderDialog(const char* title, const char* defaultLocation) override {
+        ++folderDialogCalls;
+        lastFolderDialogTitle = title ? title : "";
+        lastFolderDialogLocation = defaultLocation ? defaultLocation : "";
+        return folderDialogResult;
+    }
     void setTitle(const char*) override {}
     bool setSize(int w, int h) override {
         ++setSizeCount;

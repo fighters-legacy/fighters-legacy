@@ -4,6 +4,9 @@
 #include "IDisplay.h"
 #include "IWindowEventHandler.h"
 
+#include <optional>
+#include <string>
+
 namespace fl {
 
 // Threading: all methods must be called from the main thread.
@@ -55,6 +58,20 @@ class IWindow {
 
     // Opens a URL or file:// URI in the OS default handler.
     virtual void openURL(const char* url) = 0;
+
+    // Blocks until the user picks a folder or cancels, then returns the absolute path of the chosen
+    // folder, or nullopt on cancel or error. Main thread only; call after init(). `defaultLocation`
+    // may be nullptr (backend default). The default implementation returns nullopt so backends and
+    // test doubles without a native picker keep compiling — callers must already handle nullopt
+    // (cancel), so "no picker available" degrades to the same path. (#665)
+    //
+    // ABI note: this virtual is part of the IWindow vtable — the engine and any native plugin must
+    // be rebuilt against the same header revision.
+    virtual std::optional<std::string> showFolderDialog(const char* title, const char* defaultLocation) {
+        (void)title;
+        (void)defaultLocation;
+        return std::nullopt;
+    }
 
     // Updates the window title bar.
     virtual void setTitle(const char* title) = 0;

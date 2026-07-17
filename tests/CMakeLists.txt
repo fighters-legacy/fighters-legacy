@@ -12,6 +12,11 @@ target_link_libraries(test_renderer PRIVATE Catch2::Catch2WithMain platform-hal)
 target_include_directories(test_renderer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_renderer)
 
+add_executable(test_window test_window.cpp)
+target_link_libraries(test_window PRIVATE Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_window PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_window)
+
 add_executable(test_bridge test_bridge.cpp)
 target_link_libraries(test_bridge PRIVATE Catch2::Catch2WithMain engine-render)
 target_include_directories(test_bridge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
