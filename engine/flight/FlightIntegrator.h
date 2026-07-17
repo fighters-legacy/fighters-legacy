@@ -15,10 +15,16 @@ namespace fl {
 
 // Aircraft state vector — flat/POD for network serialisation.
 struct FlightState {
-    double pos_world[3]{};         // world-frame position (m) — double for planet-scale precision
-    double vel_body[3]{};          // body-frame velocity (m/s) — double for ICBM-range precision
-    float euler[3]{};              // roll, pitch, yaw (rad) — derived from quaternion
-    float omega[3]{};              // body-frame angular rates: p, q, r (rad/s)
+    double pos_world[3]{}; // world-frame position (m) — double for planet-scale precision
+    double vel_body[3]{};  // body-frame velocity (m/s) — double for ICBM-range precision
+    float euler[3]{};      // roll, pitch, yaw (rad) — derived from quaternion
+    // Body-frame angular velocity components about the body axes (x=fwd, y=up, z=right):
+    //   omega[0] = roll rate  (about +X, positive = right wing down)
+    //   omega[1] = yaw rate   (about +Y=up, positive = nose LEFT — the aero-frame sign is flipped)
+    //   omega[2] = pitch rate (about +Z=right, positive = nose up)
+    // NOT the aero {p,q,r} order: computeMoments works in the standard aero frame (x-fwd/y-right/
+    // z-down), so FixedWingForceModel remaps rates in and moments out (see #891).
+    float omega[3]{};
     float quat[4]{0, 0, 0, 1};     // body↔world quaternion [x,y,z,w]
     float mass_kg{10000.f};        // current total mass (decreases as fuel burns)
     float fuel_kg{4000.f};         // remaining fuel
@@ -56,6 +62,13 @@ struct FlightState {
     // crash damage serially after the parallel pass, gated by the crashDamage difficulty toggle.
     // Ordinary landings stay below the reporting threshold and never raise it.
     float ground_impact_speed{0.f};
+
+    // ONE-SHOT (#891): true on any tick the NaN-backstop speed guard actually clamped a body-velocity
+    // component — i.e. the flight state left the physical envelope (a divergence, not honest flight,
+    // which thrust-vs-drag keeps well below the guard). The integrator has no logger and runs on
+    // worker threads, so it only raises the flag; WorldBroadcaster logs it serially, once per entity,
+    // so a diverged aircraft names itself instead of vanishing without a line.
+    bool speed_guard_clamped{false};
 };
 
 // Wind and turbulence injected each tick by WorldBroadcaster from WeatherController state.

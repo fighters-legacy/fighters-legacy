@@ -853,6 +853,18 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 fs.pos_world[0], fs.pos_world[1], fs.pos_world[2], fs.vel_body[0], fs.vel_body[1], fs.vel_body[2]);
             m_logger.log(LogLevel::Error, __FILE__, __LINE__, msg);
         }
+        // Flight-envelope departure (#891): the integrator's NaN-backstop speed guard bit, meaning
+        // this entity's state diverged from anything thrust-vs-drag physics can produce. Log it once,
+        // with the entity id and its state, so a diverged aircraft names itself instead of being
+        // silently reaped (which made a self-resolving mission cost most of a day to trace).
+        if (fs.speed_guard_clamped && m_envelopeWarned.insert(it.idx).second) {
+            char msg[256];
+            std::snprintf(msg, sizeof(msg),
+                          "[flight entity=%u] flight state left the physical envelope (speed guard "
+                          "clamped) — vel_body=(%.1f,%.1f,%.1f) alt=%.0f; check the flight model / AI",
+                          it.idx, fs.vel_body[0], fs.vel_body[1], fs.vel_body[2], fs.pos_world[1]);
+            m_logger.log(LogLevel::Error, __FILE__, __LINE__, msg);
+        }
         // Periodic state trace: once per second (60 Hz sim) for trajectory diagnostics.
         if (tickIndex % 60 == 0) {
             char msg[256];

@@ -25,8 +25,14 @@ ForceMoment FixedWingForceModel::compute(const FlightState& s, const ControlInpu
     else
         thrust_n = s.throttle_actual * mil_kn * 1000.f;
 
-    // omega[0]=roll(X), omega[1]=yaw(Y=up), omega[2]=pitch(Z=right); computeMoments wants (p,q,r).
-    auto moments = computeMoments(aero.alpha_rad, aero.beta_rad, s.omega[0], s.omega[2], s.omega[1], aero.speed_m_s,
+    // omega[0]=roll(X), omega[1]=yaw(Y=up), omega[2]=pitch(Z=right); computeMoments wants (p,q,r) in
+    // the STANDARD aero body frame (x=fwd, y=right, z=down), where yaw rate r is positive nose-RIGHT.
+    // The engine's yaw axis is +Y=UP, and a positive rate about +Y is nose-LEFT (the two frames
+    // differ by a 180° roll: aero_z=down = −engine_y=up). So the yaw rate handed to computeMoments
+    // must be −omega[1] (roll and pitch axes coincide and pass straight through). See the matching
+    // moment flip below — together they were #891's directional divergence: a sideslip fed the
+    // weathercock moment back with the wrong sign and the aircraft departed on any perturbation.
+    auto moments = computeMoments(aero.alpha_rad, aero.beta_rad, s.omega[0], s.omega[2], -s.omega[1], aero.speed_m_s,
                                   thrust_n, s.tvc_angle_deg * kDegToRad, ctrl, data, atmos);
 
     // Engine-out asymmetry (#675). engineFailFlags is set by per-subsystem damage; until now it was
@@ -48,8 +54,16 @@ ForceMoment FixedWingForceModel::compute(const FlightState& s, const ControlInpu
         // integrator maps computeMoments' index [2] (yaw) onto omega[1].
         const float arm = 0.15f * data.geometry.wingspan_m;
         const float yaw = lost * arm;
-        moments[2] += leftOut ? -yaw : yaw; // left-out yaws nose left (−yaw about +Y)
+        moments[2] += leftOut ? -yaw : yaw; // aero convention (nose-right positive), like computeMoments
     }
+
+    // #891: convert the yaw moment from the standard aero convention (positive N = nose right, about
+    // aero +Z=down) that computeMoments and the engine-out term above both use, into the engine body
+    // frame's yaw axis (+Y=up, positive = nose left). The integrator maps moments[2] straight onto
+    // omega[1] (omega[1] += moments[2]/Izz), and BallisticForceModel already emits its yaw moment in
+    // that +Y convention, so the flip belongs here, at the aero→engine seam — not in the integrator.
+    // Roll (moments[0]) and pitch (moments[1]) need no flip: their axes coincide in both frames.
+    moments[2] = -moments[2];
 
     return {forces, moments};
 }

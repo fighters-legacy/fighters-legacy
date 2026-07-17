@@ -939,6 +939,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     };
     std::vector<StepItem> m_stepItems;
     std::vector<ControlInput> m_stepInputs;
+    // Entity indices already warned about a flight-envelope departure (#891 speed_guard_clamped), so
+    // the diagnostic logs once per entity instead of every tick a diverged entity stays pinned.
+    std::unordered_set<uint32_t> m_envelopeWarned;
     std::atomic<double> m_entityX{0.0}; // last stepped entity world-X (sim writes; main reads)
     std::atomic<double> m_entityZ{0.0}; // last stepped entity world-Z
 

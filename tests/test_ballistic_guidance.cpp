@@ -108,12 +108,18 @@ double flyShot(double rangeM) {
 } // namespace
 
 TEST_CASE("BallisticGuidance: hits near the commanded impact point at several ranges", "[ballistic_guidance]") {
-    // Honest tolerances: a fixed-impulse solid motor with a simple lofted pitch program delivers
-    // ~15-25% of range — a Scud, not a JDAM. The meaningful claim is that guidance beats the
-    // UNGUIDED alternative by a wide margin: a 45-degree max-range shot from this booster lands
-    // near 45-50 km, so the unguided miss on a 20 km target would be ~25+ km. Terminal accuracy
-    // work (energy management, a real Lambert solver) is future refinement, not this issue.
-    CHECK(flyShot(20000.0) < 6500.0);
+    // Honest tolerances: a fixed-impulse solid motor with a simple lofted pitch program is a Scud,
+    // not a JDAM. It undershoots targets set well inside its max range (the loft is optimal near max
+    // range and too steep for a short shot) and lands close near the top of the envelope — ~40% miss
+    // at 20 km, but only ~4% at 32 km. The meaningful claim is that guidance beats the UNGUIDED
+    // alternative by a wide margin: a 45-degree max-range shot from this booster lands near 45-50 km,
+    // so the unguided miss on a 20 km target would be ~25+ km — several times the guided miss below.
+    // Terminal accuracy (energy management, a real Lambert solver) is #355's future refinement.
+    //
+    // #891: these misses widened slightly when the integrator's transport term was corrected to
+    // conserve energy — the old explicit-tangent term spuriously ADDED energy during the boost/loft
+    // rotation, flattering the short-range shot. The bound reflects the corrected physics.
+    CHECK(flyShot(20000.0) < 9000.0);
     CHECK(flyShot(32000.0) < 7000.0);
 }
 

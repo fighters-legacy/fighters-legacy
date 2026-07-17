@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <numbers>
 #include <string>
 
 using Catch::Matchers::WithinAbs;
@@ -1570,4 +1571,91 @@ TEST_CASE("Integrator: a fuel leak drains on top of the burn", "[integrator][sub
     CHECK(afterOneStepLeak < afterOneStepNoLeak);
     // The extra drain is ~10 kg/s / 60 = 0.167 kg in one step.
     CHECK((afterOneStepNoLeak - afterOneStepLeak) == Catch::Approx(10.f / 60.f).epsilon(0.001));
+}
+
+// ── #891 regression: flight integration must not diverge ──────────────────────────────────────
+// Two independent bugs made every real aero deck depart from level flight within seconds and get
+// silently reaped (a self-resolving mission). Both are guarded here against the statically stable
+// kBaseToml fixture, which behaves like the fl-base-pack F-5E that exposed them.
+
+TEST_CASE("Integrator: a sideslip perturbation converges (#891 directional stability)", "[integrator][891]") {
+    // A directionally stable airframe (cn_beta > 0, cn_r < 0) must DAMP a sideslip, not amplify it.
+    // Before #891 the yaw moment was integrated with the wrong sign — the engine's yaw axis is
+    // +Y=up, where a positive rate is nose-LEFT, while computeMoments emits the aero nose-right
+    // convention — so the weathercock was anti-restoring and the aircraft departed on any kick.
+    FlightIntegrator integ(makeData());
+    FlightState s{};
+    s.pos_world[1] = 5000.0;
+    s.vel_body[0] = 200.0; // forward
+    s.vel_body[2] = 12.0;  // ~3.4 deg of initial sideslip
+    s.quat[3] = 1.f;
+    s.mass_kg = 14000.f;
+    s.fuel_kg = 4000.f;
+    integ.reset(s);
+    ControlInput ctrl{}; // hands-off: no lateral input, so only the airframe's own stability acts
+    ctrl.throttle = 0.6f;
+    PayloadEffect px{};
+
+    auto betaDeg = [](const FlightState& st) {
+        double v = std::sqrt(st.vel_body[0] * st.vel_body[0] + st.vel_body[1] * st.vel_body[1] +
+                             st.vel_body[2] * st.vel_body[2]);
+        return std::asin(std::clamp(st.vel_body[2] / std::max(1.0, v), -1.0, 1.0)) * 180.0 / std::numbers::pi;
+    };
+    const double beta0 = std::abs(betaDeg(integ.state()));
+    double betaMax = beta0;
+    for (int i = 0; i < 60 * 6; ++i) { // 6 s
+        integ.step(1.f / 60.f, ctrl, px);
+        betaMax = std::max(betaMax, std::abs(betaDeg(integ.state())));
+        REQUIRE(std::isfinite(integ.state().vel_body[2]));
+    }
+    // Damped dutch roll stays near the perturbation; the bug ran it past 30 deg into a departure.
+    CHECK(betaMax < 12.0);
+    // ...and it is decaying: smaller at the end than where it started.
+    CHECK(std::abs(betaDeg(integ.state())) < beta0);
+}
+
+namespace {
+// A force field that returns zero everywhere, to isolate the transport term from gravity.
+struct ZeroGravity : fl::IGravityField {
+    std::array<float, 3> accelWorld(const double[3]) const override {
+        return {0.f, 0.f, 0.f};
+    }
+};
+} // namespace
+
+TEST_CASE("Integrator: sustained rotation does not create energy (#891 transport term)", "[integrator][891]") {
+    // The body-frame transport term (-omega x v) is a pure rotation of the velocity and must CONSERVE
+    // speed — it does no work. Integrated as the explicit tangent  v -= (omega x v)*dt  it instead
+    // lengthens v by sqrt(1 + (omega*dt)^2) every tick, a numerical energy pump that under a sustained
+    // departure rotation ran airspeed up exponentially to the NaN guard (#891). Here the term is
+    // isolated: no gravity, thin air (aero negligible), no thrust, a large seeded pitch rate — so the
+    // ONLY thing that can change |v| is the transport term, which must leave it essentially unchanged.
+    static const ZeroGravity zg;
+    FlightIntegrator integ(makeData());
+    integ.setGravityField(zg);
+    FlightState s{};
+    s.pos_world[1] = 20000.0; // top of the ISA model → minimal density → negligible aero
+    s.vel_body[0] = 200.0;
+    s.omega[2] = 8.0f; // large pitch rate: the departure-like rotation that fed the pump
+    s.quat[3] = 1.f;
+    s.mass_kg = 14000.f;
+    s.fuel_kg = 4000.f;
+    integ.reset(s);
+    ControlInput ctrl{}; // throttle 0 → no thrust
+    PayloadEffect px{};
+
+    const double v0 = 200.0;
+    double speedMax = v0;
+    for (int i = 0; i < 30; ++i) { // 0.5 s — long enough for the tangent bug to grow |v| ~30%
+        integ.step(1.f / 60.f, ctrl, px);
+        const auto& st = integ.state();
+        double v = std::sqrt(st.vel_body[0] * st.vel_body[0] + st.vel_body[1] * st.vel_body[1] +
+                             st.vel_body[2] * st.vel_body[2]);
+        speedMax = std::max(speedMax, v);
+        REQUIRE(std::isfinite(v));
+        CHECK_FALSE(st.speed_guard_clamped);
+    }
+    // Rotation conserves speed; only faint high-altitude drag may shave it. The tangent bug pumped it
+    // well past this bound. Guard tightly so the pump cannot creep back.
+    CHECK(speedMax < 1.05 * v0);
 }
