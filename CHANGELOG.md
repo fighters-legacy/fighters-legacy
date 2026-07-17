@@ -16,6 +16,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **build**: The released Linux `fl-server` no longer dynamically links `libprotobuf.so.NN` and so runs on a clean machine (#905) — `Protobuf_USE_STATIC_LIBS` is now set *before* the seeding `find_package(Protobuf)` (it was a no-op after it), so the GNS chain links the static archive. CI and the release job gate on `ldd fl-server` showing no unresolved deps and no dynamic protobuf
 - **render**: `test_scene_renderer` palette-material test no longer fails in a release build — the per-entityIdx placeholder palette is a Debug-only aid, so the test now asserts the config-dependent contract (distinct palette slots in Debug, one shared shaded-grey fallback in Release) instead of the Debug-only one (#897)
 
 ## [0.3.4] - 2026-07-16

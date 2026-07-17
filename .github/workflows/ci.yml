@@ -250,17 +250,21 @@ jobs:
       - name: Verify static linking (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          # Guards our bundled libs (statically linked). GNS's libssl/libcrypto/libprotobuf are
-          # intentionally dynamic system deps (like libc) and are not in the reject set.
-          # vorbis|ogg guards the FetchContent-pinned decoder (#723) against a system pickup.
+          # Guards our bundled libs (statically linked). GNS's libssl/libcrypto stay dynamic system
+          # deps (like libc); protobuf is now STATIC (#905 — the released fl-server must not depend on
+          # a private libprotobuf.so). vorbis|ogg guards the FetchContent-pinned decoder (#723).
           bad=$(ldd build/debug/game/fighters-legacy/fighters-legacy \
                 | grep -Ei "sdl3|openal|ktx|vorbis|ogg" || true)
           [ -z "$bad" ] || (echo "Unexpected dynamic deps: $bad" && exit 1)
           # fl-server is headless: no client backend may reach it (#711 dropped SDL3; #713
-          # guards the full set — the binary-level backstop for cmake/layering.cmake).
+          # guards the full set — the binary-level backstop for cmake/layering.cmake). protobuf is
+          # rejected too (#905): a dynamic libprotobuf.so.NN makes the release binary non-portable.
           bad_srv=$(ldd build/debug/server/fl-server/fl-server \
-                    | grep -Ei "sdl3|vulkan|openal" || true)
-          [ -z "$bad_srv" ] || (echo "fl-server links a client backend: $bad_srv" && exit 1)
+                    | grep -Ei "sdl3|vulkan|openal|protobuf" || true)
+          [ -z "$bad_srv" ] || (echo "fl-server links a client backend or dynamic protobuf: $bad_srv" && exit 1)
+          # And nothing may be unresolved — a self-contained server runs on a clean machine (#905).
+          missing_srv=$(ldd build/debug/server/fl-server/fl-server | grep "not found" || true)
+          [ -z "$missing_srv" ] || (echo "fl-server has unresolved shared deps: $missing_srv" && exit 1)
 
       - name: Configure OpenAL Soft null backend
         if: matrix.os == 'ubuntu-latest'

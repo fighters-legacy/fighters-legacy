@@ -107,8 +107,15 @@ FetchContent_Declare(enet6
 # No WebRTC/ICE (dedicated-server) ⇒ no abseil.
 # ---------------------------------------------------------------------------
 if(FL_ENABLE_GNS)
+    # Prefer the STATIC protobuf archive. FindProtobuf reads this at FIND time (it toggles
+    # CMAKE_FIND_LIBRARY_SUFFIXES to prefer libprotobuf.a), so it MUST be set before the seeding
+    # find_package below — GNS's own later find_package(Protobuf) short-circuits to the cached
+    # Protobuf_LIBRARY, so if this seed caches the shared .so the whole chain links it. Getting this
+    # wrong shipped a release fl-server dynamically linked against libprotobuf.so.32, which will not
+    # load on a machine without that exact private build (#905).
+    set(Protobuf_USE_STATIC_LIBS ON)
     find_package(OpenSSL 1.1.1 QUIET) # 1.1.1+ for GNS's EVP_PKEY 25519 raw-key API
-    find_package(Protobuf QUIET)      # module mode; seeds Protobuf_* cache for GNS's find_package
+    find_package(Protobuf QUIET)      # module mode; seeds Protobuf_* cache for GNS's find_package (static)
     if(OpenSSL_FOUND AND Protobuf_FOUND)
         message(STATUS "GameNetworkingSockets: enabled (OpenSSL ${OPENSSL_VERSION}, "
                        "system protobuf ${Protobuf_VERSION})")
@@ -131,7 +138,8 @@ if(FL_ENABLE_GNS)
     set(USE_STEAMWEBRTC     OFF CACHE BOOL "" FORCE) # ⇒ no webrtc/abseil submodules
     set(USE_CRYPTO          "OpenSSL" CACHE STRING "" FORCE)
     set(USE_CRYPTO25519     "OpenSSL" CACHE STRING "" FORCE)
-    set(Protobuf_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
+    # Protobuf_USE_STATIC_LIBS was set (as a normal var, before the seeding find_package) in the block
+    # above — setting it here would be too late to affect the already-cached Protobuf_LIBRARY (#905).
     FetchContent_Declare(GameNetworkingSockets
         GIT_REPOSITORY https://github.com/ValveSoftware/GameNetworkingSockets.git
         GIT_TAG        v1.6.0
