@@ -193,6 +193,20 @@ struct EngineData {
     float fuel_flow_mil_kg_s{1.f};
     float fuel_flow_ab_kg_s{3.f};
     float spool_time_s{5.f};
+
+    // Number of independent engines (#308). Drives the engine-out asymmetry: losing ONE of
+    // `engine_count` engines (a kEngineFailLeft/Right event) removes 1/engine_count of total thrust
+    // and yaws the nose toward the dead side. Defaults to 2 — bit-identical to the previous hardcoded
+    // "one engine out = half thrust", which silently assumed a twin. A four-holer now sheds a quarter,
+    // not a half. A single-engine airframe (engine_count 1) fails via the centreline path
+    // (kEngineFailCenter = total loss, no yaw), so this fraction never applies to it.
+    int engine_count{2};
+
+    // Fraction of the wingspan used as the moment arm for the engine-out yaw (#308). Defaults to 0.15
+    // — bit-identical to the previous hardcoded arm — because true engine lateral offsets are not
+    // modelled; an author who knows the real spacing can widen it (podded, wing-mounted engines yaw
+    // harder than fuselage-packed ones).
+    float engine_yaw_arm_frac{0.15f};
 };
 
 struct CarrierData {

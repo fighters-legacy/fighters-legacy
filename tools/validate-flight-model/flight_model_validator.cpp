@@ -587,6 +587,18 @@ static void validateEngine(const toml::table& tbl, FlightModelValidationResult& 
     checkPos("fuel_flow_ab_kg_s");
     checkNonNeg("spool_time_s");
 
+    // Optional engine-out asymmetry params (#308): only checked when present.
+    if (auto n = eng["engine_count"]) {
+        if (!n.is_integer() || n.as_integer()->get() < 1) {
+            r.errors.push_back("engine.engine_count must be an integer >= 1");
+            r.ok = false;
+        }
+    }
+    if (auto a = eng["engine_yaw_arm_frac"].value<double>(); a && *a < 0.0) {
+        r.errors.push_back("engine.engine_yaw_arm_frac must be >= 0");
+        r.ok = false;
+    }
+
     auto mil = tbl["engine"]["mil_thrust"];
     if (!mil) {
         r.errors.push_back("missing [engine.mil_thrust] table");

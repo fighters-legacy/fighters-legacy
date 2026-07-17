@@ -4,6 +4,7 @@
 
 #include "flight/Atmosphere.h"
 #include "flight/BuiltinFlightModel.h"
+#include "flight/EngineFailFlags.h"
 #include "flight/FixedWingForceModel.h"
 #include "flight/FlightIntegrator.h"
 #include "flight/IForceModel.h"
@@ -38,6 +39,73 @@ TEST_CASE("FixedWingForceModel produces forward thrust at full throttle", "[forc
     ForceMoment fm = FixedWingForceModel::instance().compute(s, ctrl, {}, *data, atmos, aero);
     CHECK(fm.force_body[0] > 0.f);           // thrust dominates drag along +X
     CHECK(std::isfinite(fm.moment_body[1])); // moments are well-defined
+}
+
+// #308: a single engine out removes 1/engine_count of the thrust (not a hardcoded half) and yaws
+// toward the dead engine; the lost thrust and the yaw both scale with the engine count.
+TEST_CASE("engine-out asymmetry scales with engine_count", "[force_model]") {
+    FlightModelData twin = *BuiltinFlightModel::get();
+    twin.engine.engine_count = 2; // the default; explicit for clarity
+    FlightModelData quad = twin;
+    quad.engine.engine_count = 4;
+
+    AtmosphereState atmos = computeAtmosphere(500.f);
+    FlightState base{};
+    base.quat[3] = 1.f;
+    base.vel_body[0] = 200.f;
+    base.throttle_actual = 1.0f;
+    ControlInput ctrl{};
+    ctrl.throttle = 1.0f;
+    AeroInputs aero{};
+    aero.speed_m_s = 200.f;
+    aero.mach = 200.f / 340.f;
+
+    const auto& model = FixedWingForceModel::instance();
+    const ForceMoment ok = model.compute(base, ctrl, {}, twin, atmos, aero);
+
+    FlightState fail = base;
+    fail.engineFailFlags = kEngineFailLeft; // one engine out
+    const ForceMoment ft = model.compute(fail, ctrl, {}, twin, atmos, aero);
+    const ForceMoment fq = model.compute(fail, ctrl, {}, quad, atmos, aero);
+
+    const float lostTwin = ok.force_body[0] - ft.force_body[0];
+    const float lostQuad = ok.force_body[0] - fq.force_body[0];
+    CHECK(lostTwin > 0.f);                                  // a twin sheds half its thrust
+    CHECK(lostQuad > 0.f);                                  // a quad sheds a quarter
+    CHECK_THAT(lostQuad, WithinAbs(0.5f * lostTwin, 0.5f)); // 1/4 is exactly half of 1/2
+
+    // The yaw moment toward the dead engine scales with the lost thrust (same arm fraction).
+    // Engine-out yaw is emitted on the aero yaw axis, moment_body[2].
+    const float yawTwin = ft.moment_body[2] - ok.moment_body[2];
+    const float yawQuad = fq.moment_body[2] - ok.moment_body[2];
+    CHECK(std::abs(yawTwin) > 0.f);
+    CHECK_THAT(yawQuad, WithinAbs(0.5f * yawTwin, 1.0f));
+}
+
+// #308: a wider engine_yaw_arm_frac produces a larger engine-out yaw for the same lost thrust.
+TEST_CASE("engine_yaw_arm_frac scales the engine-out yaw moment", "[force_model]") {
+    FlightModelData narrow = *BuiltinFlightModel::get();
+    narrow.engine.engine_yaw_arm_frac = 0.15f;
+    FlightModelData wide = narrow;
+    wide.engine.engine_yaw_arm_frac = 0.30f;
+
+    AtmosphereState atmos = computeAtmosphere(500.f);
+    FlightState s{};
+    s.quat[3] = 1.f;
+    s.vel_body[0] = 200.f;
+    s.throttle_actual = 1.0f;
+    s.engineFailFlags = kEngineFailRight;
+    ControlInput ctrl{};
+    ctrl.throttle = 1.0f;
+    AeroInputs aero{};
+    aero.speed_m_s = 200.f;
+    aero.mach = 200.f / 340.f;
+
+    const auto& model = FixedWingForceModel::instance();
+    const float yawNarrow = model.compute(s, ctrl, {}, narrow, atmos, aero).moment_body[2];
+    const float yawWide = model.compute(s, ctrl, {}, wide, atmos, aero).moment_body[2];
+    // Doubling the arm doubles the yaw contribution (same thrust removed).
+    CHECK(std::abs(yawWide) > std::abs(yawNarrow));
 }
 
 // ---------------------------------------------------------------------------
