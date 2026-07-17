@@ -207,6 +207,15 @@ struct EngineData {
     // modelled; an author who knows the real spacing can widen it (podded, wing-mounted engines yaw
     // harder than fuselage-packed ones).
     float engine_yaw_arm_frac{0.15f};
+
+    // Afterburner envelope (#309), both optional with permissive defaults so a model that omits them
+    // is bit-identical to before. AB lights only inside the window; outside it (below the ram-limit
+    // Mach, or above the altitude ceiling) the augmentor extinguishes even with the throttle in zone.
+    // An absent limit is simply not applied — so a model with neither field behaves exactly as before
+    // (AB available whenever commanded and an ab_thrust deck exists). Gated in FlightIntegrator::step
+    // with a small hysteresis band so a model riding the boundary does not chatter.
+    std::optional<float> ab_min_mach;   // AB unavailable below this Mach (too little ram to sustain it)
+    std::optional<float> ab_max_alt_km; // AB extinguishes above this altitude in km (too little oxygen)
 };
 
 struct CarrierData {

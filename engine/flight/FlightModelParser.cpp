@@ -402,6 +402,12 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         if (auto arm = eng["engine_yaw_arm_frac"].value<double>())
             d.engine.engine_yaw_arm_frac = static_cast<float>(*arm);
 
+        // Afterburner envelope (#309): optional limits, absent = the gate is not applied.
+        if (auto m = eng["ab_min_mach"].value<double>())
+            d.engine.ab_min_mach = static_cast<float>(*m);
+        if (auto a = eng["ab_max_alt_km"].value<double>())
+            d.engine.ab_max_alt_km = static_cast<float>(*a);
+
         auto mil = tbl["engine"]["mil_thrust"];
         if (!mil || !mil.as_table())
             throw std::runtime_error("missing [engine.mil_thrust] table");

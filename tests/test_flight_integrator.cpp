@@ -284,6 +284,44 @@ TEST_CASE("Integrator: ab_engaged false when afterburner commanded but no ab_thr
     CHECK(fi.state().ab_engaged == false);
 }
 
+TEST_CASE("Integrator: afterburner envelope extinguishes AB outside the window", "[integrator]") {
+    // #309: ab_min_mach / ab_max_alt_km gate the augmentor. Set them on a model that has an AB deck.
+    auto data = makeData(R"(
+[engine.ab_thrust]
+mach   = [0.0, 1.0]
+alt_km = [0.0, 20.0]
+values = [100.0, 80.0, 150.0, 120.0]
+)");
+    data->engine.ab_min_mach = 0.5f;    // ~170 m/s at sea level
+    data->engine.ab_max_alt_km = 12.0f; // ceiling
+
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    ctrl.afterburner = true;
+    PayloadEffect px{};
+
+    auto litAt = [&](float speed, float altM) {
+        FlightIntegrator fi(data);
+        FlightState s{};
+        s.vel_body[0] = speed;
+        s.pos_world[1] = altM;
+        s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+        s.fuel_kg = data->geometry.fuel_kg;
+        fi.reset(s);
+        fi.step(1.f / 60.f, ctrl, px);
+        return fi.state().ab_engaged;
+    };
+
+    CHECK(litAt(300.f, 1000.f) == true);   // well inside the window: AB lights
+    CHECK(litAt(50.f, 1000.f) == false);   // below ab_min_mach: too little ram, stays out
+    CHECK(litAt(300.f, 13000.f) == false); // above the ceiling: extinguishes
+
+    // With no envelope set, AB lights at the same slow/high points (bit-identical to pre-#309).
+    data->engine.ab_min_mach.reset();
+    data->engine.ab_max_alt_km.reset();
+    CHECK(litAt(50.f, 13000.f) == true);
+}
+
 TEST_CASE("Integrator: no NaN propagation at zero airspeed", "[integrator]") {
     auto data = makeData();
     FlightIntegrator integ(data);
