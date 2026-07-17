@@ -944,6 +944,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     [[nodiscard]] uint32_t peerIdForEntity(EntityId id) const noexcept;
     void flushCombatEvents();
 
+    // Datalink / shared team track picture (#528). Fuses each pilot peer's own contacts with every
+    // same-faction teammate's, and sends the peer a MsgDatalink (unreliable) with its team picture +
+    // RWR. Sim-thread only; called from onTick every kDatalinkIntervalTicks.
+    void broadcastDatalink(uint64_t tickIndex);
+    static constexpr uint64_t kDatalinkIntervalTicks = 10; // ~6 Hz at 60 Hz sim
+
     std::atomic<int> m_activePeerCount{0};
     uint64_t m_weatherBroadcastTick{0};        // throttle weather broadcasts to ~6 Hz
     uint64_t m_idleTimeoutTicks{0};            // 0 = disabled; pre-computed from idleTimeoutS × 60

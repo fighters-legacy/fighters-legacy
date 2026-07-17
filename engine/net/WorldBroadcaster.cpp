@@ -26,6 +26,7 @@
 #include "net/SnapshotCodec.h"
 #include "net/SnapshotCompression.h"
 #include "net/WireCodec.h"
+#include "sensor/TrackPicture.h"
 #include "weather/Turbulence.h"
 #include "weather/WeatherController.h"
 #include "world/FactionDef.h"
@@ -1465,6 +1466,11 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         w.pin->sentSnapshot = true;
     }
 
+    // Datalink / shared team track picture (#528), per-peer unreliable at ~6 Hz — its own lower
+    // cadence, decoupled from the snapshot rate. Fuses each pilot's team into one picture.
+    if (tickIndex % kDatalinkIntervalTicks == 0)
+        broadcastDatalink(tickIndex);
+
     // Tick weather and broadcast MsgWeatherState every 10 ticks (~6 Hz at 60 Hz sim).
     if (m_weather) {
         m_weather->advance(simDt);
@@ -2513,6 +2519,140 @@ void WorldBroadcaster::flushCombatEvents() {
         rec.c = score.score;
         appendMsg(buf, rec);
         m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/true);
+    }
+}
+
+void WorldBroadcaster::broadcastDatalink(uint64_t tickIndex) {
+    if (m_peerEntities.empty())
+        return;
+
+    // Group observers by faction ONCE this tick, so fusing a team is a lookup, not a scan-per-peer.
+    // A faction-0 (neutral) entity is not on anyone's team and forms no datalink net (below).
+    std::unordered_map<uint16_t, std::vector<uint32_t>> factionObservers;
+    for (uint32_t idx : m_sensorSystem.observerIndices()) {
+        const EntityState* st = m_entityManager.getByIndex(idx);
+        if (!st || st->dead)
+            continue;
+        factionObservers[st->factionIndex].push_back(idx);
+    }
+
+    // Priority for the track cap: a firing-quality lock, then a positively-identified foe, then state
+    // rank, then proximity. A datalink that dropped the bandit locked on your leader to keep a distant
+    // friendly would be worse than useless.
+    auto stateRankOf = [](sensor::ContactState s) {
+        switch (s) {
+        case sensor::ContactState::Locked:
+            return 3;
+        case sensor::ContactState::Detected:
+            return 2;
+        case sensor::ContactState::Coasting:
+            return 1;
+        case sensor::ContactState::Lost:
+            return 0;
+        }
+        return 0;
+    };
+    auto d2 = [](const double a[3], const double b[3]) {
+        const double dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+        return dx * dx + dy * dy + dz * dz;
+    };
+
+    std::vector<uint8_t> buf;
+    for (const auto& [peerId, eid] : m_peerEntities) {
+        const EntityState* self = m_entityManager.get(eid);
+        if (!self || self->dead)
+            continue;
+        const uint16_t faction = self->factionIndex;
+
+        // Fuse the peer's own contacts (marked ownSensor) with every same-faction teammate's. Faction
+        // 0 is neutral: it fuses with no one, so a lone neutral still sees its own picture but shares
+        // nothing — there is no "team" to share with.
+        sensor::TrackFuser fuser;
+        if (const sensor::ContactTable* own = m_sensorSystem.contactsFor(eid.index))
+            fuser.add(*own, /*ownSensor=*/true);
+        if (faction != 0) {
+            if (auto it = factionObservers.find(faction); it != factionObservers.end()) {
+                for (uint32_t obsIdx : it->second) {
+                    if (obsIdx == eid.index)
+                        continue; // own table already added
+                    if (const sensor::ContactTable* t = m_sensorSystem.contactsFor(obsIdx))
+                        fuser.add(*t, /*ownSensor=*/false);
+                }
+            }
+        }
+
+        std::vector<sensor::FusedTrack> tracks = fuser.tracks();
+        if (tracks.size() > kMaxDatalinkTracks) {
+            std::sort(tracks.begin(), tracks.end(), [&](const sensor::FusedTrack& a, const sensor::FusedTrack& b) {
+                const int pa =
+                    (a.firingQuality ? 8 : 0) + (a.ident == sensor::Identification::Foe ? 4 : 0) + stateRankOf(a.state);
+                const int pb =
+                    (b.firingQuality ? 8 : 0) + (b.ident == sensor::Identification::Foe ? 4 : 0) + stateRankOf(b.state);
+                if (pa != pb)
+                    return pa > pb;
+                const double da = d2(a.lastKnownPos, self->transform.pos);
+                const double db = d2(b.lastKnownPos, self->transform.pos);
+                if (da != db)
+                    return da < db;
+                return a.id.index < b.id.index;
+            });
+            tracks.resize(kMaxDatalinkTracks);
+        }
+
+        const sensor::ThreatWarningSet* threats = m_sensorSystem.threatsFor(eid.index);
+        const std::size_t threatCount = threats ? std::min(threats->size(), kMaxDatalinkThreats) : 0;
+
+        buf.clear();
+        MsgDatalinkHeader hdr;
+        hdr.trackCount = static_cast<uint16_t>(tracks.size());
+        hdr.threatCount = static_cast<uint16_t>(threatCount);
+        hdr.tickIndex = tickIndex;
+        hdr.origin[0] = self->transform.pos[0];
+        hdr.origin[1] = self->transform.pos[1];
+        hdr.origin[2] = self->transform.pos[2];
+        appendMsg(buf, hdr);
+
+        for (const sensor::FusedTrack& t : tracks) {
+            DatalinkTrack r{};
+            r.targetIdx = t.id.index;
+            r.targetGen = t.id.generation;
+            r.typeIndex = t.typeIndex;
+            r.factionIndex = t.factionIndex;
+            r.state = static_cast<uint8_t>(t.state);
+            r.ident = static_cast<uint8_t>(t.ident);
+            r.sensorTypeMask = t.sensorTypeMask;
+            r.flags = static_cast<uint8_t>((t.firingQuality ? kDatalinkFlagFiringQuality : 0u) |
+                                           (t.ownSensor ? kDatalinkFlagOwnSensor : 0u));
+            r.relPos[0] = static_cast<float>(t.lastKnownPos[0] - self->transform.pos[0]);
+            r.relPos[1] = static_cast<float>(t.lastKnownPos[1] - self->transform.pos[1]);
+            r.relPos[2] = static_cast<float>(t.lastKnownPos[2] - self->transform.pos[2]);
+            r.relVel[0] = t.lastKnownVel[0];
+            r.relVel[1] = t.lastKnownVel[1];
+            r.relVel[2] = t.lastKnownVel[2];
+            appendMsg(buf, r);
+        }
+
+        for (std::size_t i = 0; i < threatCount; ++i) {
+            const sensor::ThreatWarning& w = threats->threats[i];
+            DatalinkThreat r{};
+            r.emitterIdx = w.emitterId.index;
+            r.emitterGen = w.emitterId.generation;
+            r.emitterTypeIndex = w.emitterTypeIndex;
+            r.emitterFactionIndex = w.emitterFactionIndex;
+            r.channel = static_cast<uint8_t>(w.channel);
+            r.level = static_cast<uint8_t>(w.level);
+            // Correlate the emitter with IFF so a friendly emitter reads as benign on the display.
+            r.ident = static_cast<uint8_t>(sensor::classifyIff(
+                m_factionRegistry ? m_factionRegistry->relationship(faction, w.emitterFactionIndex)
+                                  : sensor::affiliationRelation(faction, w.emitterFactionIndex),
+                static_cast<uint8_t>(1u << static_cast<int>(w.channel)), w.level == sensor::ThreatLevel::Lock));
+            r.relPos[0] = static_cast<float>(w.emitterPos[0] - self->transform.pos[0]);
+            r.relPos[1] = static_cast<float>(w.emitterPos[1] - self->transform.pos[1]);
+            r.relPos[2] = static_cast<float>(w.emitterPos[2] - self->transform.pos[2]);
+            appendMsg(buf, r);
+        }
+
+        m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/false);
     }
 }
 

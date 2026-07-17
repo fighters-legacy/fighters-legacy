@@ -559,3 +559,78 @@ TEST_CASE("SensorSystem: a coalition resolver makes an allied faction a Friend",
     REQUIRE(c != nullptr);
     CHECK(c->ident == Identification::Friend); // allied, so it squawks friendly
 }
+
+// ── team track fusion (#528 datalink) ────────────────────────────────────────
+
+#include "sensor/TrackPicture.h"
+
+namespace {
+Contact makeContact(uint32_t idx, uint16_t gen, ContactState state, Identification ident, uint8_t mask, bool firing,
+                    uint64_t lastSeen, double x) {
+    Contact c;
+    c.id = EntityId{idx, gen};
+    c.typeIndex = 7;
+    c.factionIndex = 2;
+    c.state = state;
+    c.ident = ident;
+    c.sensorTypeMask = mask;
+    c.firingQuality = firing;
+    c.lastSeenTick = lastSeen;
+    c.lastKnownPos[0] = x;
+    return c;
+}
+} // namespace
+
+TEST_CASE("TrackFuser: two observers seeing different targets produce both", "[track_fuser]") {
+    ContactTable a, b;
+    a.contacts.push_back(makeContact(10, 1, ContactState::Detected, Identification::Unknown, 0x4, false, 5, 100.0));
+    b.contacts.push_back(makeContact(20, 1, ContactState::Locked, Identification::Foe, 0x4, false, 6, 200.0));
+
+    TrackFuser f;
+    f.add(a, /*ownSensor=*/true);
+    f.add(b, /*ownSensor=*/false);
+    const auto tracks = f.tracks();
+    REQUIRE(tracks.size() == 2u);
+    CHECK(tracks[0].id.index == 10u); // sorted by index
+    CHECK(tracks[0].ownSensor);       // came from the own table
+    CHECK(tracks[1].id.index == 20u);
+    CHECK_FALSE(tracks[1].ownSensor); // datalink-only
+}
+
+TEST_CASE("TrackFuser: the same target from two observers merges to the best state", "[track_fuser]") {
+    // A teammate holds a firing-quality lock the requester only has as a soft detect: the fused track
+    // is the LOCK, marked own-sensor (the requester sees it too) — this is the whole point of a
+    // datalink, you inherit your wingman's better track.
+    ContactTable own, mate;
+    own.contacts.push_back(makeContact(30, 1, ContactState::Detected, Identification::Unknown, 0x4, false, 5, 100.0));
+    mate.contacts.push_back(makeContact(30, 1, ContactState::Locked, Identification::Foe, 0x1, true, 9, 150.0));
+
+    TrackFuser f;
+    f.add(own, true);
+    f.add(mate, false);
+    const auto tracks = f.tracks();
+    REQUIRE(tracks.size() == 1u);
+    CHECK(tracks[0].state == ContactState::Locked); // freshest / best
+    CHECK(tracks[0].ident == Identification::Foe);  // a Foe anywhere makes it a Foe
+    CHECK(tracks[0].firingQuality);                 // OR of contributors
+    CHECK(tracks[0].ownSensor);                     // the requester holds it too
+    CHECK((tracks[0].sensorTypeMask & 0x5) == 0x5); // OR of masks (0x4 | 0x1)
+    CHECK(tracks[0].lastKnownPos[0] == 150.0);      // position from the freshest contributor
+}
+
+TEST_CASE("TrackFuser: a Foe from any contributor wins over Unknown, order-independently", "[track_fuser]") {
+    ContactTable a, b;
+    a.contacts.push_back(makeContact(40, 1, ContactState::Locked, Identification::Foe, 0x4, true, 9, 10.0));
+    b.contacts.push_back(makeContact(40, 1, ContactState::Detected, Identification::Unknown, 0x4, false, 3, 20.0));
+
+    TrackFuser f1;
+    f1.add(a, false);
+    f1.add(b, false);
+    TrackFuser f2;
+    f2.add(b, false); // reverse add order
+    f2.add(a, false);
+    REQUIRE(f1.tracks().size() == 1u);
+    REQUIRE(f2.tracks().size() == 1u);
+    CHECK(f1.tracks()[0].ident == Identification::Foe);
+    CHECK(f2.tracks()[0].ident == Identification::Foe); // fusion is commutative
+}

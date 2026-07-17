@@ -191,6 +191,15 @@ const ThreatWarningSet* SensorSystem::threatsFor(uint32_t entityIdx) const {
     return it != m_observers.end() ? &it->second.threats : nullptr;
 }
 
+std::vector<uint32_t> SensorSystem::observerIndices() const {
+    std::vector<uint32_t> out;
+    out.reserve(m_observers.size());
+    for (const auto& [idx, obs] : m_observers)
+        out.push_back(idx);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 std::vector<SensorSystem::ObserverWork>& SensorSystem::gatherDue(uint64_t tickIndex, uint32_t strideTicks,
                                                                  double simDt) {
     m_work.clear();

@@ -2,7 +2,8 @@
 #pragma once
 
 #include "RenderTypes.h"
-#include "flight/Geodetic.h" // kEarthRadiusM (default planet radius)
+#include "flight/Geodetic.h"  // kEarthRadiusM (default planet radius)
+#include "render/RadarView.h" // RadarView (datalink scope + RWR, #528)
 #include "render/RenderSnapshot.h"
 
 #include <span>
@@ -26,8 +27,11 @@ class IHud {
     // planetRadiusM: planet sphere radius in metres (from MsgConnectAck). Attitude (pitch/heading/bank)
     // and the artificial horizon are computed on the local-level frame at the entity position, so they
     // stay correct far from the world origin. Defaults to Earth radius.
+    // radar: the datalink track picture + RWR (#528) — the fused team scope drawn in Cockpit mode.
+    // Defaults to an empty (invalid) view so a HUD with no datalink draws no scope.
     virtual void update(const EntityRenderEntry* playerEntry, float timeOfDay = 12.0f, float terrainElevation = 0.0f,
-                        uint32_t latencyMs = 0, bool showLatency = false, double planetRadiusM = kEarthRadiusM) = 0;
+                        uint32_t latencyMs = 0, bool showLatency = false, double planetRadiusM = kEarthRadiusM,
+                        const RadarView& radar = {}) = 0;
 
     // Returns overlay elements. Valid until the next call to update().
     [[nodiscard]] virtual std::span<const HudElement> elements() const = 0;

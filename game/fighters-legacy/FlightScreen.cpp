@@ -180,7 +180,11 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     const double radiusM =
         d.clientNetHandler ? static_cast<double>(d.clientNetHandler->planetRadiusKm()) * 1000.0 : fl::kEarthRadiusM;
 
-    (*d.activeHud)->update(cockpit ? viewEntry : nullptr, d.env->timeOfDay, terrainElev, latencyMs, showLat, radiusM);
+    // Datalink track picture + RWR (#528) for the HUD radar scope — only when this peer flies its own
+    // aircraft (a spectator following another entity has no datalink of its own to draw).
+    const fl::RadarView radar = (cockpit && d.clientNetHandler) ? d.clientNetHandler->radarView() : fl::RadarView{};
+    (*d.activeHud)
+        ->update(cockpit ? viewEntry : nullptr, d.env->timeOfDay, terrainElev, latencyMs, showLat, radiusM, radar);
     d.windshieldRain->update(cockpit ? (1.f / 60.f) : 0.f, cockpit ? *d.env : EnvironmentState{},
                              cockpit ? rollAngleRad(viewEntry, radiusM) : 0.f);
     // Haptics only for a real ownship — an observer viewing another entity should not feel its hits.

@@ -263,6 +263,10 @@ class SensorSystem {
         return m_observers.size();
     }
 
+    // Every observer's entity index, ascending (#528). The datalink builder groups these by faction to
+    // fuse a team's shared picture; sorted so the grouping — and therefore the wire — is deterministic.
+    [[nodiscard]] std::vector<uint32_t> observerIndices() const;
+
     // Gathers the observers due a geometry check on this tick into a stable, indexable range.
     // Checks are STAGGERED — an observer is due when `(tick + entityIdx) % stride == 0` — so the
     // per-tick cost is spread evenly instead of every sensor in the world firing on the same tick

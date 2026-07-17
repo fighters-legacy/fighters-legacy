@@ -74,6 +74,10 @@ enum class MsgId : uint8_t {
                                // (#853). Carries the role, requested entity type, and mounted-pack
                                // manifest the client asks to join with; the server replies ConnectAck
                                // (granted role) or ConnectRefusal. See MsgConnectRequest below.
+    Datalink = 0x12,           // server->client, unreliable: the peer's fused team track picture + RWR
+                               // (#528), sent per-peer at ~6 Hz. Loss-tolerant (refreshed every send);
+                               // carries what THIS peer's team can see, positions relative to a header
+                               // origin. See MsgDatalinkHeader / DatalinkTrack / DatalinkThreat below.
     LanBeacon = 0x20,          // raw UDP broadcast - NOT sent over ENet; 0x20+ reserved for non-ENet ids.
                                // ENet message ids occupy 0x00-0x1F. The non-ENet boundary was raised
                                // from 0x10 to 0x20 in #853 to free an ENet id for ConnectRequest -- a
@@ -543,6 +547,81 @@ static_assert(offsetof(CombatEventRecord, subjectIdx) == 4u, "CombatEventRecord:
 static_assert(offsetof(CombatEventRecord, instigatorIdx) == 12u, "CombatEventRecord::instigatorIdx offset changed");
 static_assert(offsetof(CombatEventRecord, a) == 20u, "CombatEventRecord::a offset changed");
 static_assert(offsetof(CombatEventRecord, c) == 28u, "CombatEventRecord::c offset changed");
+
+// ---------------------------------------------------------------------------------------------
+// Datalink / shared team track picture (#528)
+// ---------------------------------------------------------------------------------------------
+// The fused picture a peer's TEAM can see: the peer's own sensor contacts PLUS every same-faction
+// teammate's contacts, merged by target. This is what a coordinated battle turns on — you see the
+// bandit your wingman locked even if your own radar never found it. Sent per-peer, UNRELIABLE, at
+// ~6 Hz (a dropped frame just means one stale refresh). Positions are float, relative to the header
+// `origin` (the peer's aircraft, or an observer's camera), so the whole picture stays float-precise
+// at any world scale and an observer with no aircraft still has a frame of reference.
+//
+// The client already has entity positions from the snapshot, but a datalink track may be a target
+// its OWN sensors never saw and that interest management culled from its snapshot entirely — so the
+// datalink carries position itself rather than assuming the client can look it up.
+
+inline constexpr std::size_t kMaxDatalinkTracks = 48;  // bounds the per-peer wire cost at scale
+inline constexpr std::size_t kMaxDatalinkThreats = 16; // one RWR does not show a hundred strobes
+
+inline constexpr uint8_t kDatalinkFlagFiringQuality = 0x01u; // a firing-quality (STT) lock is on it
+inline constexpr uint8_t kDatalinkFlagOwnSensor = 0x02u;     // THIS peer's own sensors hold it (not only datalink)
+
+struct MsgDatalinkHeader {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::Datalink)};
+    uint8_t flags{0};
+    uint16_t trackCount{0};  // DatalinkTrack records following the header
+    uint16_t threatCount{0}; // DatalinkThreat records following the tracks
+    uint16_t reserved{0};
+    uint64_t tickIndex{0};
+    double origin[3]{}; // world position the relative track/threat positions are measured from
+}; // 40 bytes, align 8
+static_assert(sizeof(MsgDatalinkHeader) == 40u, "MsgDatalinkHeader wire size changed");
+static_assert(alignof(MsgDatalinkHeader) == 8u, "MsgDatalinkHeader alignment changed");
+static_assert(offsetof(MsgDatalinkHeader, trackCount) == 2u, "MsgDatalinkHeader::trackCount offset changed");
+static_assert(offsetof(MsgDatalinkHeader, threatCount) == 4u, "MsgDatalinkHeader::threatCount offset changed");
+static_assert(offsetof(MsgDatalinkHeader, tickIndex) == 8u, "MsgDatalinkHeader::tickIndex offset changed");
+static_assert(offsetof(MsgDatalinkHeader, origin) == 16u, "MsgDatalinkHeader::origin offset changed");
+
+// One fused track. `state` = ContactState, `ident` = Identification, `sensorTypeMask` = which kinds
+// of sensor hold it across the team. Position/velocity are relative to MsgDatalinkHeader::origin.
+struct DatalinkTrack {
+    uint32_t targetIdx{0};
+    uint32_t typeIndex{0};
+    uint16_t targetGen{0};
+    uint16_t factionIndex{0}; // the target's actual faction (the client colours by `ident`, not this)
+    uint8_t state{0};         // ContactState ordinal
+    uint8_t ident{0};         // Identification ordinal (Friend/Foe/Unknown) — the display-safe fact
+    uint8_t sensorTypeMask{0};
+    uint8_t flags{0}; // kDatalinkFlag*
+    float relPos[3]{};
+    float relVel[3]{};
+}; // 40 bytes, align 4
+static_assert(sizeof(DatalinkTrack) == 40u, "DatalinkTrack wire size changed");
+static_assert(alignof(DatalinkTrack) == 4u, "DatalinkTrack alignment changed");
+static_assert(offsetof(DatalinkTrack, targetGen) == 8u, "DatalinkTrack::targetGen offset changed");
+static_assert(offsetof(DatalinkTrack, state) == 12u, "DatalinkTrack::state offset changed");
+static_assert(offsetof(DatalinkTrack, relPos) == 16u, "DatalinkTrack::relPos offset changed");
+static_assert(offsetof(DatalinkTrack, relVel) == 28u, "DatalinkTrack::relVel offset changed");
+
+// One RWR threat: an emitter painting this peer. Position is relative to MsgDatalinkHeader::origin.
+struct DatalinkThreat {
+    uint32_t emitterIdx{0};
+    uint32_t emitterTypeIndex{0};
+    uint16_t emitterGen{0};
+    uint16_t emitterFactionIndex{0};
+    uint8_t channel{0}; // SensorType ordinal (radar / laser)
+    uint8_t level{0};   // ThreatLevel ordinal (search strobe / lock tone)
+    uint8_t ident{0};   // Identification of the emitter (#527 correlation): friendly emitters are benign
+    uint8_t flags{0};
+    float relPos[3]{};
+}; // 28 bytes, align 4
+static_assert(sizeof(DatalinkThreat) == 28u, "DatalinkThreat wire size changed");
+static_assert(alignof(DatalinkThreat) == 4u, "DatalinkThreat alignment changed");
+static_assert(offsetof(DatalinkThreat, emitterGen) == 8u, "DatalinkThreat::emitterGen offset changed");
+static_assert(offsetof(DatalinkThreat, channel) == 12u, "DatalinkThreat::channel offset changed");
+static_assert(offsetof(DatalinkThreat, relPos) == 16u, "DatalinkThreat::relPos offset changed");
 
 // ---------------------------------------------------------------------------------------------
 // Flight command channel (#610)

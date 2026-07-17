@@ -85,6 +85,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `WingmanAck` | `0x0E` | server→client | reliable | 16 bytes | Outcome of an order, the on-connect flight check-in, or a radio call **relayed** to a human member of someone's flight. Carries a result **code**, never server-authored text. Additive ID. |
 | `CombatEvent` | `0x0F` | server→client | reliable | 4 + n×32 bytes | Kill feed (broadcast) + the receiving peer's own combat stats (unicast). A multiplexed record stream — this took the **last free ENet id**, so future gameplay events extend the record vocabulary, not the id space. Additive ID. |
 | `FactionDef` | `0x10` | server→client | reliable | n×132 bytes | Faction index→id/name table, sent once after `MsgConnectAck`. Lets the client name the faction behind each entity's snapshot `factionIndex` (observer picker; future friend/foe colouring). Additive ID. |
+| `Datalink` | `0x12` | server→client | unreliable | 40 + t×40 + s×28 bytes | The peer's **fused team track picture + RWR** (#528), sent per-peer at ~6 Hz. Fuses the peer's own sensor contacts with every same-faction teammate's, deduplicated by target; carries each track's `Identification` (the display-safe IFF fact, not the raw faction) and RWR strobes. Positions are float, relative to a header origin. Loss-tolerant — refreshed every send. Additive ID. |
 | `LanBeacon` | `0x20` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast. The ENet id space is `0x00–0x1F`; `0x20+` is reserved for raw-UDP/non-ENet ids (the boundary was raised from `0x10` in #853 to free an ENet id for `ConnectRequest`). |
 
 ## Struct Definitions
@@ -208,6 +209,56 @@ Skipped entirely when the server has no faction registry — the client then sho
 | 2 | 2 | `factionIndex` | `uint16_t` | `FactionRegistry` index this record describes |
 | 4 | 64 | `id[64]` | `char[64]` | Null-terminated faction id, e.g. `"blue"` |
 | 68 | 64 | `name[64]` | `char[64]` | Null-terminated display name, e.g. `"Blue Coalition"`; empty = fall back to `id` |
+
+### MsgDatalink — 40 + trackCount×40 + threatCount×28 bytes
+
+The fused **team track picture + RWR** (#528), sent per-peer unreliably at ~6 Hz (`kDatalinkIntervalTicks`).
+The server fuses the peer's own sensor contacts with every same-faction teammate's, deduplicated by
+target — so you see the bandit your wingman locked even if your own radar never found it. Track/threat
+positions are `float`, **relative to `origin`** (the peer's aircraft), so the picture stays float-precise
+at any world scale; the client reconstructs absolute world positions as `origin + relPos`. A faction-0
+(neutral) peer forms no team and receives only its own contacts. Each track carries the display-safe
+`Identification` (Friend/Foe/Unknown — see [IFF, #527]), never the raw faction. Loss-tolerant: a dropped
+packet is one stale refresh. `MsgDatalinkHeader`:
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x12` |
+| 1 | 1 | `flags` | `uint8_t` | Reserved |
+| 2 | 2 | `trackCount` | `uint16_t` | `DatalinkTrack` records following the header (≤ `kMaxDatalinkTracks` = 48) |
+| 4 | 2 | `threatCount` | `uint16_t` | `DatalinkThreat` records following the tracks (≤ `kMaxDatalinkThreats` = 16) |
+| 6 | 2 | `reserved` | `uint16_t` | Zero |
+| 8 | 8 | `tickIndex` | `uint64_t` | Server tick the picture was built on |
+| 16 | 24 | `origin[3]` | `double[3]` | World position the relative track/threat positions are measured from |
+
+`DatalinkTrack` (40 bytes, one per fused target):
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 4 | `targetIdx` | `uint32_t` | Target entity index |
+| 4 | 4 | `typeIndex` | `uint32_t` | Target entity type |
+| 8 | 2 | `targetGen` | `uint16_t` | Target entity generation |
+| 10 | 2 | `factionIndex` | `uint16_t` | Target's actual faction (the client colours by `ident`, not this) |
+| 12 | 1 | `state` | `uint8_t` | `ContactState` (Lost/Detected/Locked/Coasting) |
+| 13 | 1 | `ident` | `uint8_t` | `Identification` (Unknown/Friend/Foe) — the display-safe fact |
+| 14 | 1 | `sensorTypeMask` | `uint8_t` | `1<<SensorType` — which kinds of sensor hold it across the team |
+| 15 | 1 | `flags` | `uint8_t` | bit 0 = firing-quality (STT) lock; bit 1 = this peer's own sensors hold it |
+| 16 | 12 | `relPos[3]` | `float[3]` | Position relative to `origin` |
+| 28 | 12 | `relVel[3]` | `float[3]` | Velocity (world frame) |
+
+`DatalinkThreat` (28 bytes, one per RWR strobe):
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 4 | `emitterIdx` | `uint32_t` | Emitter entity index |
+| 4 | 4 | `emitterTypeIndex` | `uint32_t` | Emitter entity type |
+| 8 | 2 | `emitterGen` | `uint16_t` | Emitter entity generation |
+| 10 | 2 | `emitterFactionIndex` | `uint16_t` | Emitter's faction |
+| 12 | 1 | `channel` | `uint8_t` | `SensorType` (radar / laser) |
+| 13 | 1 | `level` | `uint8_t` | `ThreatLevel` — 0 search strobe, 1 lock tone |
+| 14 | 1 | `ident` | `uint8_t` | `Identification` of the emitter (a friendly emitter reads benign) |
+| 15 | 1 | `flags` | `uint8_t` | Reserved |
+| 16 | 12 | `relPos[3]` | `float[3]` | Emitter position relative to `origin` |
 
 ### MsgWorldSnapshotHeader — 24 bytes
 
