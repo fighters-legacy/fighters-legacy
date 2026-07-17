@@ -2653,7 +2653,7 @@ void WorldBroadcaster::broadcastDatalink(uint64_t tickIndex) {
         for (const sensor::FusedTrack& t : tracks) {
             DatalinkTrack r{};
             r.targetIdx = t.id.index;
-            r.targetGen = t.id.generation;
+            r.targetGen = static_cast<uint16_t>(t.id.generation);
             r.typeIndex = t.typeIndex;
             r.factionIndex = t.factionIndex;
             r.state = static_cast<uint8_t>(t.state);
@@ -2674,7 +2674,7 @@ void WorldBroadcaster::broadcastDatalink(uint64_t tickIndex) {
             const sensor::ThreatWarning& w = threats->threats[i];
             DatalinkThreat r{};
             r.emitterIdx = w.emitterId.index;
-            r.emitterGen = w.emitterId.generation;
+            r.emitterGen = static_cast<uint16_t>(w.emitterId.generation);
             r.emitterTypeIndex = w.emitterTypeIndex;
             r.emitterFactionIndex = w.emitterFactionIndex;
             r.channel = static_cast<uint8_t>(w.channel);
