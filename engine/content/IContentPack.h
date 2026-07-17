@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Linking exception: content pack implementors (mods, plugins) may link against
-// this header without being required to license their work under GPL v3.
-// See GOVERNANCE.md for the full exception text.
+// this header — part of the Vendorable Interface Set, together with AssetTypes.h
+// and TrustLevel.h — without being required to license their work under GPL v3.
+// See the "Content Pack Linking Exception" section of GOVERNANCE.md for the full,
+// authoritative exception text (scope, what "link against" permits, what remains GPL).
 #pragma once
 
 #include "content/AssetTypes.h"
