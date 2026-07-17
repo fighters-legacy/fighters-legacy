@@ -258,44 +258,85 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     const AeroInputs aero{alpha_rad, beta_rad, mach, spd, altitude_m};
     ControlInput eff_ctrl = ctrl;
 
-    // 7a. G-LIMITER (#816) — and this is the ONLY thing has_fbw should ever mean.
+    // 7a. FLY-BY-WIRE ENVELOPE PROTECTION (#816, extended #900).
     //
-    // A fly-by-wire aircraft's flight computer will not let the pilot overstress the airframe. A 1972
-    // airframe with cables and pushrods has no such opinion. Applying a limiter to both would erase
-    // the difference the content pack exists to express: an F-16 cannot be pulled past 9 g, and an
-    // F-5E absolutely can be pulled past 7.33 -- and then it breaks, which is the next block.
+    // has_fbw means the flight computer will not let the pilot leave the structural/AoA envelope. A
+    // 1972 airframe with cables and pushrods has no such opinion, so this whole block is gated on
+    // has_fbw and NOTHING here touches a non-FBW aircraft. An F-16 cannot be pulled past 9 g; an F-5E
+    // absolutely can be pulled past 7.33 -- and then it breaks, which is the next block.
     //
     // It limits ANGLE OF ATTACK, not measured g -- which is what a real flight computer does, and it
     // is the only version that works. Elevator does not change lift on the tick it is applied: it
     // changes the pitch RATE, which changes AoA, which changes lift. A limiter that waits for the
-    // G-meter to read high is always a tick late, and on an agile airframe a tick is worth several g
-    // (a purely reactive version of this loop let a test model spike to 23 g on an 8 g airframe).
+    // G-meter to read high is always a tick late (a purely reactive version let a test model spike to
+    // 23 g on an 8 g airframe). So: find the AoA that would produce the g limit at the current dynamic
+    // pressure and hold the aircraft there with a PD loop on AoA and pitch rate.
     //
-    // So: find the AoA that would produce exactly max_g_structural at the current dynamic pressure,
-    // and hold the aircraft there with a proportional-derivative loop on AoA and pitch rate. The
-    // pilot's aft stick is honoured right up to that boundary and refused past it.
-    if (m_data->meta.has_fbw && ctrl.elevator > 0.f && m_data->limits.max_g_structural > 0.f && q_dyn_now > 1.f) {
+    // #900 broadens the envelope beyond the positive-g cap #816 shipped:
+    //   * negative-g protection — forward stick is limited against min_g_structural, just as firmly as
+    //     aft stick is against max_g_structural (the F-16's FLCS limits to −3 g as well as +9);
+    //   * an optional FLCS AoA cap, alpha_limit_deg, tighter than the aerodynamic stall — at low q the
+    //     wing cannot reach the structural g and the AoA cap is what holds the jet.
+    // When alpha_limit_deg is unset the positive path is byte-identical to #816.
+    if (m_data->meta.has_fbw && q_dyn_now > 1.f && (ctrl.elevator > 0.f || ctrl.elevator < 0.f)) {
         const float S = m_data->geometry.wing_area_m2;
-        const float clLimit = (m_data->limits.max_g_structural * eff_mass * kG0) / (q_dyn_now * S);
-
-        // Invert the CL curve by bisection over [0, alpha_stall], where it is monotonic. If the wing
-        // cannot make clLimit at all, the aircraft is lift-limited rather than structure-limited and
-        // there is nothing for the limiter to do.
         const float alphaStall = m_data->limits.alpha_stall_deg;
-        if (m_data->cl_table.lookup(alphaStall, mach) > clLimit) {
-            float lo = 0.f, hi = alphaStall;
+        const float alphaCap = m_data->limits.alpha_limit_deg; // 0 = unset
+        const float denom = q_dyn_now * S;
+
+        // CL(alpha) is monotonic increasing across [-alpha_stall, +alpha_stall]; bisect for the alpha
+        // that makes a target CL (signed) over an interval where it is increasing.
+        auto invertCl = [&](float target, float aLo, float aHi) {
+            float lo = aLo, hi = aHi;
             for (int i = 0; i < 12; ++i) {
                 const float mid = 0.5f * (lo + hi);
-                if (m_data->cl_table.lookup(mid, mach) < clLimit)
+                if (m_data->cl_table.lookup(mid, mach) < target)
                     lo = mid;
                 else
                     hi = mid;
             }
-            const float alphaLimit = 0.5f * (lo + hi) * kFbwGuardBand;
+            return 0.5f * (lo + hi);
+        };
 
-            // omega[2] is the pitch rate (about the body's right axis).
+        // Resolve the applicable alpha limit for the commanded direction, then hold it with the PD loop.
+        // omega[2] is the pitch rate (about the body's right axis).
+        bool haveLimit = false;
+        float alphaLimit = 0.f;
+        if (ctrl.elevator > 0.f) {
+            float posLimit = alphaStall;
+            if (m_data->limits.max_g_structural > 0.f) {
+                const float clLimit = (m_data->limits.max_g_structural * eff_mass * kG0) / denom;
+                if (m_data->cl_table.lookup(alphaStall, mach) > clLimit) { // else lift-limited, nothing to do
+                    posLimit = invertCl(clLimit, 0.f, alphaStall);
+                    haveLimit = true;
+                }
+            }
+            if (alphaCap > 0.f) {
+                posLimit = haveLimit ? std::min(posLimit, alphaCap) : alphaCap;
+                haveLimit = true;
+            }
+            alphaLimit = posLimit * kFbwGuardBand;
+        } else { // forward stick — negative-g / negative-AoA protection (#900)
+            float negLimit = -alphaStall;
+            if (m_data->limits.min_g_structural < 0.f) {
+                const float clLimit = (m_data->limits.min_g_structural * eff_mass * kG0) / denom; // negative
+                if (m_data->cl_table.lookup(-alphaStall, mach) < clLimit) {                       // else lift-limited
+                    negLimit = invertCl(clLimit, -alphaStall, 0.f);
+                    haveLimit = true;
+                }
+            }
+            if (alphaCap > 0.f) {
+                negLimit = haveLimit ? std::max(negLimit, -alphaCap) : -alphaCap;
+                haveLimit = true;
+            }
+            alphaLimit = negLimit * kFbwGuardBand; // negative; *0.95 moves toward 0 (more conservative)
+        }
+
+        if (haveLimit) {
             const float cmd = kFbwAoaKp * (alphaLimit - alpha_deg_now) - kFbwAoaKd * m_state.omega[2];
-            eff_ctrl.elevator = std::clamp(cmd, -1.f, ctrl.elevator); // never MORE than the pilot asked for
+            // Never MORE than the pilot asked for, in whichever direction the stick is deflected.
+            eff_ctrl.elevator =
+                (ctrl.elevator > 0.f) ? std::clamp(cmd, -1.f, ctrl.elevator) : std::clamp(cmd, ctrl.elevator, 1.f);
         }
     }
 
@@ -352,13 +393,46 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     const auto& moments = fm.moment_body;
 
     // 11. Semi-implicit Euler: angular velocity.
-    // moments = {roll, pitch, yaw}; omega = {roll(X), yaw(Y), pitch(Z)}.
-    float Ixx = m_data->geometry.ixx_kg_m2;
-    float Iyy = m_data->geometry.iyy_kg_m2;
-    float Izz = m_data->geometry.izz_kg_m2;
-    m_state.omega[0] += (moments[0] / Ixx) * dt; // roll  (omega[0] = around X=fwd)
-    m_state.omega[2] += (moments[1] / Iyy) * dt; // pitch (omega[2] = around Z=right)
-    m_state.omega[1] += (moments[2] / Izz) * dt; // yaw   (omega[1] = around Y=up)
+    // moments = {roll, pitch, yaw}; omega = {roll(X), yaw(Y), pitch(Z)}. Inertia names are
+    // aero-convention: ixx=roll, iyy=pitch, izz=yaw.
+    const float Ixx = m_data->geometry.ixx_kg_m2;
+    const float Iyy = m_data->geometry.iyy_kg_m2;
+    const float Izz = m_data->geometry.izz_kg_m2;
+
+    // Applied moments about the body axes, before the inertial solve. L=roll(about X),
+    // M=pitch(about Z=right), N=yaw(about Y=up, engine convention).
+    float L = moments[0];
+    float M = moments[1];
+    float N = moments[2];
+
+    // Engine angular momentum He (#899): a spinning rotor about +X is a gyroscope, so M_gyro = −ω×H
+    // with H=(He,0,0). In the engine frame (ω_x=omega[0], ω_y=omega[1]=yaw, ω_z=omega[2]=pitch) that
+    // is a pitch moment +He·(yaw rate) and a yaw moment −He·(pitch rate); no roll term. He=0 ⇒ no
+    // change. (The [prop] block keeps its own prop-specific gyro model — this is the general term.)
+    const float He = m_data->geometry.engine_ang_momentum;
+    if (He != 0.f) {
+        M += He * m_state.omega[1]; // pitch (about Z) from yaw rate
+        N -= He * m_state.omega[2]; // yaw   (about Y) from pitch rate
+    }
+
+    m_state.omega[2] += (M / Iyy) * dt; // pitch (omega[2] = around Z=right) — uncoupled by Ixz
+
+    // Ixz roll↔yaw coupling (#899). With a product of inertia between the roll (x) and yaw (z) axes,
+    // a roll moment produces a yaw acceleration and vice versa. Solving the coupled pair
+    //   Ixx·ṗ − Ixz·ṙ = L,  −Ixz·ṗ + Izz·ṙ = N   (aero convention; ṙ_engine = −ṙ_aero, N_engine = −N)
+    // gives, in the engine's yaw sign: ṗ = (Izz·L − Ixz·N)/det, ṙ = (Ixx·N − Ixz·L)/det. At Ixz=0 this
+    // reduces to the decoupled L/Ixx, N/Izz — byte-identical to every pre-#899 model. Only the Ixz
+    // İ·ω̇ coupling is added, not the ω×H rate-product Euler terms (they are non-zero at Ixz=0 and
+    // would change all existing content); the term the issue calls out as "matter most" is this one.
+    const float Ixz = m_data->geometry.ixz_kg_m2;
+    const float det = Ixx * Izz - Ixz * Ixz;
+    if (Ixz != 0.f && det > 0.f) {
+        m_state.omega[0] += ((Izz * L - Ixz * N) / det) * dt; // roll (about X)
+        m_state.omega[1] += ((Ixx * N - Ixz * L) / det) * dt; // yaw  (about Y=up)
+    } else {
+        m_state.omega[0] += (L / Ixx) * dt; // roll  (omega[0] = around X=fwd)
+        m_state.omega[1] += (N / Izz) * dt; // yaw   (omega[1] = around Y=up)
+    }
 
     // Clamp angular rates: prevents float overflow when aerodynamic moments are
     // extreme (e.g. 90° AoA freefall).  50 rad/s ≈ 2865°/s — well above any

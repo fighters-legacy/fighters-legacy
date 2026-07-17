@@ -330,6 +330,142 @@ TEST_CASE("a model with no cd_table produces bit-identical forces", "[aero][cd_t
 }
 
 // ---------------------------------------------------------------------------
+// Idle-thrust deck (#898)
+//
+// Below MIL the engine used to model thrust as a straight throttle x mil line with no idle deck. Real
+// turbofan idle thrust is neither zero nor linear: at altitude and speed it goes NEGATIVE (ram drag >
+// idle gross thrust). An optional [engine.idle_thrust] table blends idle -> mil across throttle.
+// ---------------------------------------------------------------------------
+
+// kGenericToml with an idle deck on the same (mach, alt_km) grid as mil_thrust. Static idle is a small
+// positive; at M 0.9 it is strongly negative, the ram-drag regime this feature exists to model.
+static std::string withIdleThrust() {
+    return kGenericToml + R"(
+[engine.idle_thrust]
+mach   = [0.0, 0.3, 0.9]
+alt_km = [0.0, 12.0]
+values = [2.8, 1.0, 1.0, -2.0, -16.0, -10.0]
+)";
+}
+
+TEST_CASE("engineThrustN without an idle deck is the linear throttle x mil line", "[aero][idle_thrust]") {
+    auto d = makeData(); // no idle_thrust
+    CHECK(!d.engine.idle_thrust.has_value());
+    const float mil = d.engine.mil_thrust.lookup(0.f, 0.f); // 60 kN
+    CHECK_THAT(engineThrustN(d.engine, 0.f, 0.f, false, 0.f), WithinAbs(0.f, 1e-3f));
+    CHECK_THAT(engineThrustN(d.engine, 0.f, 0.f, false, 0.6f), WithinRel(0.6f * mil * 1000.f, 1e-5f));
+    CHECK_THAT(engineThrustN(d.engine, 0.f, 0.f, false, 1.f), WithinRel(mil * 1000.f, 1e-5f));
+}
+
+TEST_CASE("engineThrustN blends the idle deck to MIL across throttle", "[aero][idle_thrust]") {
+    auto d = parseFlightModel(withIdleThrust());
+    REQUIRE(d.engine.idle_thrust.has_value());
+    const float mil = d.engine.mil_thrust.lookup(0.f, 0.f);    // 60 kN at M0 SL
+    const float idle = d.engine.idle_thrust->lookup(0.f, 0.f); // 2.8 kN at M0 SL
+    REQUIRE(idle == Catch::Approx(2.8f));
+
+    // Throttle 0 -> the published static idle, not zero.
+    CHECK_THAT(engineThrustN(d.engine, 0.f, 0.f, false, 0.f), WithinRel(idle * 1000.f, 1e-5f));
+    // Throttle 1 -> MIL, exactly as without the deck.
+    CHECK_THAT(engineThrustN(d.engine, 0.f, 0.f, false, 1.f), WithinRel(mil * 1000.f, 1e-5f));
+    // Half throttle -> the linear blend.
+    CHECK_THAT(engineThrustN(d.engine, 0.f, 0.f, false, 0.5f), WithinRel((idle + 0.5f * (mil - idle)) * 1000.f, 1e-5f));
+}
+
+TEST_CASE("idle thrust goes negative in the ram-drag regime", "[aero][idle_thrust]") {
+    auto d = parseFlightModel(withIdleThrust());
+    // At M 0.9 sea level the deck is -16 kN: throttle 0 produces negative net thrust.
+    CHECK(engineThrustN(d.engine, 0.9f, 0.f, false, 0.f) < 0.f);
+    CHECK_THAT(engineThrustN(d.engine, 0.9f, 0.f, false, 0.f), WithinRel(-16.f * 1000.f, 1e-5f));
+}
+
+// ---------------------------------------------------------------------------
+// Flight-model schema gaps from TP-1538 (#899): cm0, cross terms, speed-brake
+// pitch/lift increments, and alpha-dependent dynamic dampers. All additive and
+// optional — a model that sets none is byte-identical to before.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("moments: cm0 adds a constant zero-alpha pitching moment", "[aero][gaps899]") {
+    auto d = makeData();
+    auto atmos = computeAtmosphere(0.f);
+    const float spd = 0.3f * atmos.speed_of_sound_m_s;
+    ControlInput ctrl{};
+    // alpha=0, all rates 0, no elevator/speedbrake -> the only pitch term is cm0.
+    auto base = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    d.moments.cm0 = 0.05f;
+    auto with_cm0 = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    const float q = 0.5f * atmos.density_kg_m3 * spd * spd;
+    const float expected = q * d.geometry.wing_area_m2 * d.geometry.mac_m * 0.05f;
+    CHECK_THAT(with_cm0[1] - base[1], WithinRel(expected, 1e-4f));
+}
+
+TEST_CASE("moments: cn_da yaws against the commanded roll (adverse yaw)", "[aero][gaps899]") {
+    auto d = makeData();
+    auto atmos = computeAtmosphere(0.f);
+    const float spd = 0.3f * atmos.speed_of_sound_m_s;
+    ControlInput ctrl{};
+    ctrl.aileron = 1.f; // roll right
+    auto base = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    CHECK_THAT(base[2], WithinAbs(0.f, 1e-3f)); // no adverse yaw by default
+    d.moments.cn_da = -0.02f;                   // negative = yaw opposes the roll
+    auto with = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    CHECK(with[2] < base[2]); // right roll now yaws left
+}
+
+TEST_CASE("moments: cl_dr rolls the aircraft with rudder", "[aero][gaps899]") {
+    auto d = makeData();
+    auto atmos = computeAtmosphere(0.f);
+    const float spd = 0.3f * atmos.speed_of_sound_m_s;
+    ControlInput ctrl{};
+    ctrl.rudder = 1.f;
+    auto base = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    d.moments.cl_dr = 0.03f;
+    auto with = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    CHECK(with[0] != Catch::Approx(base[0])); // rudder now induces a roll moment
+}
+
+TEST_CASE("moments: alpha-damper table replaces the scalar cm_q", "[aero][gaps899]") {
+    auto d = makeData();
+    auto atmos = computeAtmosphere(0.f);
+    const float spd = 0.3f * atmos.speed_of_sound_m_s;
+    ControlInput ctrl{};
+    const float q_rate = 1.0f; // rad/s pitch rate exercises the damper
+    const float alpha = 10.f * 3.14159265f / 180.f;
+    auto scalar = computeMoments(alpha, 0.f, 0.f, q_rate, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    // A constant table at half the scalar damping -> a distinctly different pitch moment.
+    Table1D t;
+    t.keys = {0.f, 20.f};
+    t.values = {-5.f, -5.f}; // scalar cm_q is -10
+    d.moments.cm_q_table = t;
+    auto tabled = computeMoments(alpha, 0.f, 0.f, q_rate, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+    CHECK(scalar[1] != Catch::Approx(tabled[1]));
+}
+
+TEST_CASE("forces + moments: speed-brake lift and pitch increments", "[aero][gaps899]") {
+    auto d = makeData();
+    auto atmos = computeAtmosphere(0.f);
+    const float spd = 0.3f * atmos.speed_of_sound_m_s;
+    const float q = 0.5f * atmos.density_kg_m3 * spd * spd;
+    ControlInput ctrl{};
+    ctrl.speedbrake = 1.f;
+    PayloadEffect payload{};
+
+    auto f_base = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, ctrl, payload, d, atmos);
+    auto m_base = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+
+    d.drag_polar.speedbrake_cl = -0.10f; // airbrake dumps some lift
+    d.moments.cm_speedbrake = 0.04f;     // and pitches the nose
+
+    auto f_with = computeForces(0.f, 0.f, 0.3f, spd, 0.f, 55.f, false, 0.f, ctrl, payload, d, atmos);
+    auto m_with = computeMoments(0.f, 0.f, 0.f, 0.f, 0.f, spd, 0.f, 0.f, ctrl, d, atmos);
+
+    // Lift (body-y at alpha 0) drops by q*S*|dCZ|.
+    CHECK_THAT(f_with[1] - f_base[1], WithinRel(q * d.geometry.wing_area_m2 * -0.10f, 1e-4f));
+    // Pitch moment gains q*S*mac*dCm.
+    CHECK_THAT(m_with[1] - m_base[1], WithinRel(q * d.geometry.wing_area_m2 * d.geometry.mac_m * 0.04f, 1e-4f));
+}
+
+// ---------------------------------------------------------------------------
 // Asymmetric control travel (#822)
 //
 // [aero.controls] gave one scalar per axis, and real stabilators are not symmetric: the F-5E's

@@ -105,6 +105,56 @@ TEST_CASE("valid generic fighter TOML passes", "[flight-model-validator]") {
     CHECK(r.errors.empty());
 }
 
+TEST_CASE("#899: a valid Ixz passes", "[flight-model-validator]") {
+    // ixx=10000, izz=78000 -> Ixz^2 < 7.8e8, so 5000 is comfortably valid.
+    auto r = validateFlightModel(
+        patch(kValidFighter, "izz_kg_m2    = 78000.0", "izz_kg_m2    = 78000.0\nixz_kg_m2    = 5000.0"));
+    CHECK(r.ok);
+    CHECK(r.errors.empty());
+}
+
+TEST_CASE("#899: an Ixz too large for the inertia tensor fails", "[flight-model-validator]") {
+    // 30000^2 = 9e8 > Ixx*Izz = 7.8e8 -> non-positive coupled-solve determinant.
+    auto r = validateFlightModel(
+        patch(kValidFighter, "izz_kg_m2    = 78000.0", "izz_kg_m2    = 78000.0\nixz_kg_m2    = 30000.0"));
+    CHECK_FALSE(r.ok);
+    bool found = false;
+    for (const auto& e : r.errors)
+        if (e.find("ixz_kg_m2") != std::string::npos)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("#899: a malformed alpha-damper table fails", "[flight-model-validator]") {
+    std::string toml =
+        std::string(kValidFighter) + "\n[aero.moments.cm_q_table]\nalpha = [0.0, 15.0]\nvalues = [-3.4]\n";
+    auto r = validateFlightModel(toml);
+    CHECK_FALSE(r.ok);
+    bool found = false;
+    for (const auto& e : r.errors)
+        if (e.find("cm_q_table") != std::string::npos)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("#900: a plausible alpha_limit_deg below the stall passes", "[flight-model-validator]") {
+    auto r = validateFlightModel(
+        patch(kValidFighter, "max_mach         =  1.6", "max_mach         =  1.6\nalpha_limit_deg  = 15.0"));
+    CHECK(r.ok);
+}
+
+TEST_CASE("#900: alpha_limit_deg >= alpha_stall_deg warns", "[flight-model-validator]") {
+    // Cap at/above the aero stall never binds — almost certainly a mix-up of the two.
+    auto r = validateFlightModel(patch(kValidFighter, "max_mach         =  1.6",
+                                       "max_mach         =  1.6\nalpha_limit_deg  = 25.0")); // stall is 18
+    CHECK(r.ok);
+    bool warned = false;
+    for (const auto& w : r.warnings)
+        if (w.find("alpha_limit_deg") != std::string::npos)
+            warned = true;
+    CHECK(warned);
+}
+
 TEST_CASE("a flight model with no mesh and no cockpit validates clean", "[flight-model-validator]") {
     // kValidFighter declares neither (#813): asset wiring belongs to the entity def, so the
     // validator has no business demanding it of an aerodynamic model.

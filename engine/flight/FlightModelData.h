@@ -52,6 +52,20 @@ struct FlightModelGeometry {
     float ixx_kg_m2{10000.f};
     float iyy_kg_m2{70000.f};
     float izz_kg_m2{78000.f};
+
+    // Optional product of inertia between the roll (x) and yaw (z) body axes (#899). A real fighter's
+    // mass is not symmetric about its principal planes, so a rolling moment produces a yawing
+    // acceleration and vice versa — the inertial roll/yaw coupling TP-1538's own EOM carries (F-16 =
+    // 1,331 kg·m²). 0 = the symmetric, decoupled rotational update every existing model uses; a
+    // non-zero value opts the airframe into the Ixz-coupled solve (byte-identical at 0). See
+    // FlightIntegrator's rotational update.
+    float ixz_kg_m2{0.f};
+
+    // Optional engine rotor angular momentum He about +X forward, N·m·s (#899). A spinning spool/rotor
+    // is a gyroscope: pitching the airframe yaws it and yawing it pitches it (F-16 = 216.9 kg·m²/s).
+    // Signed — the sign follows the rotor's spin direction. 0 = no gyroscopic reaction (the default;
+    // the [prop] block carries a separate, prop-specific gyro model for piston/turboprop types).
+    float engine_ang_momentum{0.f};
 };
 
 struct AeroDragPolar {
@@ -59,21 +73,40 @@ struct AeroDragPolar {
     float k{0.14f};
     float speedbrake_cd{0.07f};
     float gear_cd{0.03f};
+
+    // Optional speed-brake normal-force (lift) increment per unit deployment (#899, ΔCZ,sb). A real
+    // airbrake changes lift as well as drag; TP-1538 publishes both. Added as q·S·(cl · speedbrake) to
+    // the lift when the brake is out. 0 = drag only (the default; every existing model).
+    float speedbrake_cl{0.f};
 };
 
 struct AeroMoments {
     // Pitch (reference length: mac_m)
+    float cm0{0.f}; // zero-alpha pitching moment (#899): a cambered wing's Cm at alpha=0 is non-zero,
+                    // which sets the zero-elevator trim-alpha offset (≈ −3.3° for the F-16A). 0 =
+                    // symmetric section, trim alpha at 0 — every pre-#899 model.
     float cm_alpha{-0.7f};
     float cm_q{-10.f};
     float cm_de{-1.f};
+    float cm_speedbrake{0.f}; // pitch increment per unit speed-brake deployment (#899, ΔCm,sb)
     // Roll (reference length: wingspan_m)
     float cl_beta{-0.08f};
     float cl_p{-0.40f};
     float cl_da{0.07f};
+    float cl_dr{0.f}; // rudder-induced roll (#899): rudder deflection rolls the aircraft. 0 = none.
     // Yaw (reference length: wingspan_m)
     float cn_beta{0.10f};
     float cn_r{-0.12f};
     float cn_dr{-0.05f};
+    float cn_da{0.f}; // adverse yaw (#899): aileron deflection yaws AGAINST the roll. 0 = none.
+
+    // Optional alpha-dependent dynamic dampers (#899). TP-1538 publishes cm_q/cl_p/cn_r as tables over
+    // alpha (Cmq ranges −3.4 to −6.8 across the sweep), and the post-stall damping story is exactly
+    // what a deep-stall study is about. When present, the table REPLACES the scalar in computeMoments
+    // (lookup over alpha_deg); absent, the scalar above is used — bit-identical to before.
+    std::optional<Table1D> cm_q_table;
+    std::optional<Table1D> cl_p_table;
+    std::optional<Table1D> cn_r_table;
 };
 
 struct AeroLimits {
@@ -81,6 +114,12 @@ struct AeroLimits {
     float max_g_structural{8.f};
     float min_g_structural{-3.f};
     float max_mach{1.6f};
+
+    // Optional FLCS angle-of-attack cap (#900), distinct from alpha_stall_deg (the AERODYNAMIC table
+    // peak). A fly-by-wire jet's computer holds alpha below a limit its aero can exceed — the F-16's
+    // FLCS holds 25.5° while the wing stalls at ~35°. When set (>0) and has_fbw, the limiter also
+    // holds |alpha| ≤ this cap, tighter than the g-limit at low q. 0 = unset (structural-g only).
+    float alpha_limit_deg{0.f};
 };
 
 // Control-surface travel, in degrees of deflection at full stick.
@@ -140,6 +179,16 @@ struct EngineData {
     EngineType type{EngineType::Turbofan};
     Table2D mil_thrust; // (Mach, alt_km) -> kN
     std::optional<Table2D> ab_thrust;
+
+    // Optional idle deck (#898): (Mach, alt_km) -> kN, same shape as mil_thrust. Real turbofan idle
+    // thrust is neither zero nor a linear scaling of MIL: at altitude and speed it goes NEGATIVE
+    // because ram drag exceeds idle gross thrust (NASA TP-1538 Table VI gives the F-16 +2.824 kN
+    // static but −16.013 kN at M 1.0). When present, computeForces blends idle → mil across throttle
+    // [0, 1] instead of 0 → mil, so part-throttle behaviour (descents, approach, energy management)
+    // is modelled. Absent, the straight throttle × mil line stays the default — bit-identical to
+    // before. Values are kN like mil_thrust, so a deck published in newtons is /1000 on authoring.
+    std::optional<Table2D> idle_thrust;
+
     float fuel_flow_idle_kg_s{0.1f};
     float fuel_flow_mil_kg_s{1.f};
     float fuel_flow_ab_kg_s{3.f};

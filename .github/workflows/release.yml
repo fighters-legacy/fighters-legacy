@@ -73,6 +73,19 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
+      # A release binary must be self-contained: it has to run on any target-triple-compatible
+      # machine, not only where a private libprotobuf.so happens to be on the loader path (#905).
+      # The Linux release links GNS (protobuf); assert nothing is unresolved and protobuf is static.
+      - name: Verify fl-server is self-contained (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          srv=build/${{ matrix.preset }}/server/fl-server/fl-server
+          missing=$(ldd "$srv" | grep "not found" || true)
+          [ -z "$missing" ] || (echo "fl-server has unresolved shared deps: $missing" && exit 1)
+          dynpb=$(ldd "$srv" | grep -i protobuf || true)
+          [ -z "$dynpb" ] || (echo "fl-server still dynamically links protobuf: $dynpb" && exit 1)
+          echo "fl-server is self-contained:"; ldd "$srv"
+
       # ONE code path, both platforms, no hand-maintained list (#814). The two `cp` lists this
       # replaces had already drifted from each other, and neither shipped validate-weapon,
       # validate-sensor, or fl-server -- which the game spawns for single-player, so every release

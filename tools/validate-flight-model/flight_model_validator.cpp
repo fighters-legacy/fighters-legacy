@@ -166,9 +166,19 @@ static void validateFlightModelGeometry(const toml::table& tbl, FlightModelValid
     auto span = checkPos("wingspan_m");
     checkPos("mac_m");
     checkNonNeg("fuel_kg");
-    checkPos("ixx_kg_m2");
+    auto ixx = checkPos("ixx_kg_m2");
     checkPos("iyy_kg_m2");
-    checkPos("izz_kg_m2");
+    auto izz = checkPos("izz_kg_m2");
+
+    // Optional product of inertia (#899). A physically valid inertia tensor needs Ixz² < Ixx·Izz
+    // (else the coupled roll/yaw solve has a non-positive determinant); flag a transcription error.
+    if (auto ixz = fm["ixz_kg_m2"].value<double>(); ixz && ixx && izz && *ixx > 0.0 && *izz > 0.0) {
+        if ((*ixz) * (*ixz) >= (*ixx) * (*izz)) {
+            r.errors.push_back("flight_model.ixz_kg_m2 " + std::to_string(*ixz) +
+                               " is too large: Ixz^2 must be < Ixx*Izz for a valid inertia tensor");
+            r.ok = false;
+        }
+    }
 
     // `interceptor` and `attacker` are the same class of aeroplane for this purpose.
     const bool isFighterClass =
@@ -439,6 +449,28 @@ static void validateMoments(const toml::table& tbl, FlightModelValidationResult&
     checkPos("cn_beta");
     checkNeg("cn_r");
     checkPresent("cn_dr");
+
+    // Optional alpha-dependent dampers (#899): a Table1D over alpha. When present it replaces the
+    // scalar, so the arrays must be equal-length with at least 2 breakpoints.
+    auto checkDamperTable = [&](const char* key) {
+        auto sub = m[key];
+        if (!sub || !sub.as_table())
+            return;
+        std::size_t nAlpha = arrayLen(sub["alpha"]);
+        std::size_t nVal = arrayLen(sub["values"]);
+        if (nAlpha < 2) {
+            r.errors.push_back(std::string("aero.moments.") + key + ".alpha must have at least 2 breakpoints");
+            r.ok = false;
+        }
+        if (nAlpha != nVal) {
+            r.errors.push_back(std::string("aero.moments.") + key + ".alpha (" + std::to_string(nAlpha) +
+                               ") and values (" + std::to_string(nVal) + ") must be equal length");
+            r.ok = false;
+        }
+    };
+    checkDamperTable("cm_q_table");
+    checkDamperTable("cl_p_table");
+    checkDamperTable("cn_r_table");
 }
 
 static void validateAeroLimits(const toml::table& tbl, FlightModelValidationResult& r) {
@@ -468,6 +500,20 @@ static void validateAeroLimits(const toml::table& tbl, FlightModelValidationResu
     } else if (*minG >= 0.0) {
         r.errors.push_back("aero.limits.min_g_structural must be < 0 (got " + std::to_string(*minG) + ")");
         r.ok = false;
+    }
+
+    // Optional FLCS AoA cap (#900). It must be a positive angle, and it is a CAP below the aerodynamic
+    // stall — a cap at or above alpha_stall_deg can never bind and almost certainly means the two were
+    // confused (the whole point is that the FLCS holds the jet short of the aero peak).
+    if (auto cap = lim["alpha_limit_deg"].value<double>()) {
+        if (*cap <= 0.0) {
+            r.errors.push_back("aero.limits.alpha_limit_deg must be > 0 (got " + std::to_string(*cap) + ")");
+            r.ok = false;
+        } else if (auto stall = lim["alpha_stall_deg"].value<double>(); stall && *cap >= *stall) {
+            r.warnings.push_back("aero.limits.alpha_limit_deg " + std::to_string(*cap) + " is >= alpha_stall_deg " +
+                                 std::to_string(*stall) +
+                                 "; the FLCS cap should sit below the aerodynamic stall or it never binds");
+        }
     }
 }
 
@@ -597,28 +643,29 @@ static void validateCdWave(const toml::table& tbl, FlightModelValidationResult& 
     }
 }
 
-static void validateAbThrust(const toml::table& tbl, FlightModelValidationResult& r) {
-    auto ab = tbl["engine"]["ab_thrust"];
-    if (!ab)
+// Shared shape check for the optional (mach, alt_km) thrust decks — ab_thrust and idle_thrust (#898)
+// have identical structure, so one helper keeps their rules from drifting.
+static void validateOptionalThrustTable(const toml::table& tbl, const char* key, FlightModelValidationResult& r) {
+    auto t = tbl["engine"][key];
+    if (!t)
         return;
-    std::size_t machLen = arrayLen(ab["mach"]);
-    std::size_t altLen = arrayLen(ab["alt_km"]);
+    const std::string prefix = std::string("engine.") + key;
+    std::size_t machLen = arrayLen(t["mach"]);
+    std::size_t altLen = arrayLen(t["alt_km"]);
     if (machLen < static_cast<std::size_t>(kMilThrustMachMin)) {
-        r.errors.push_back("engine.ab_thrust.mach must have at least " + std::to_string(kMilThrustMachMin) +
-                           " breakpoints");
+        r.errors.push_back(prefix + ".mach must have at least " + std::to_string(kMilThrustMachMin) + " breakpoints");
         r.ok = false;
     }
     if (altLen < static_cast<std::size_t>(kMilThrustAltMin)) {
-        r.errors.push_back("engine.ab_thrust.alt_km must have at least " + std::to_string(kMilThrustAltMin) +
-                           " breakpoints");
+        r.errors.push_back(prefix + ".alt_km must have at least " + std::to_string(kMilThrustAltMin) + " breakpoints");
         r.ok = false;
     }
     if (machLen >= static_cast<std::size_t>(kMilThrustMachMin) &&
         altLen >= static_cast<std::size_t>(kMilThrustAltMin)) {
-        std::size_t valLen = arrayLen(ab["values"]);
+        std::size_t valLen = arrayLen(t["values"]);
         std::size_t expected = machLen * altLen;
         if (valLen != expected) {
-            r.errors.push_back("engine.ab_thrust.values size mismatch: expected " + std::to_string(expected) + " got " +
+            r.errors.push_back(prefix + ".values size mismatch: expected " + std::to_string(expected) + " got " +
                                std::to_string(valLen));
             r.ok = false;
         }
@@ -835,7 +882,8 @@ FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
     validateAeroControls(tbl, r);
     validateEngine(tbl, r);
     validateCdWave(tbl, r);
-    validateAbThrust(tbl, r);
+    validateOptionalThrustTable(tbl, "ab_thrust", r);
+    validateOptionalThrustTable(tbl, "idle_thrust", r);
     validateTvc(tbl, r);
     validateWingSweep(tbl, r);
     validateProp(tbl, r);

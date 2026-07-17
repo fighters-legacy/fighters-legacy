@@ -153,10 +153,19 @@ Drives visual effects (jet exhaust vs. spinning props) and audio selection:
 
 ### `has_fbw` — Fly-by-wire
 
-When `true`, the engine enforces `max_g_structural` and `alpha_stall_deg` limits even when the
-player has all flight assists disabled. FBW aircraft cannot depart controlled flight in normal
-operation. When `false` (F-15A, MiG-29 early variants), limits are purely player-toggleable
-assists — expert players can fly raw and risk departure.
+When `true`, the flight computer holds the aircraft inside its envelope even when the player has all
+flight assists disabled — FBW aircraft cannot depart controlled flight in normal operation. The
+limiter holds **angle of attack** (not measured g — elevator changes pitch rate, so a reactive
+G-meter loop is always a tick late), and covers three limits (#816, #900):
+
+- **positive structural g** — aft stick is held at the AoA that makes `max_g_structural`;
+- **negative structural g** — forward stick is held against `min_g_structural`, just as firmly;
+- **FLCS AoA cap** — the optional `alpha_limit_deg` (`[aero.limits]`) holds `|alpha|` below a limit
+  the wing can aerodynamically exceed (the F-16 holds 25.5° while the wing stalls near 35°). At low
+  dynamic pressure the wing cannot reach the structural g, and this cap is what holds the jet.
+
+When `false` (F-15A, MiG-29 early variants), limits are purely player-toggleable assists — expert
+players can fly raw and risk departure.
 
 ### `cruise_alt_m` — AI cruise altitude
 
@@ -191,6 +200,8 @@ izz_kg_m2    = 110000.0
 | `ixx_kg_m2` | Roll moment of inertia. Smaller → snappier rolls. | NACA/NASA TRs, DATCOM | 5 000–40 000 kg·m² |
 | `iyy_kg_m2` | Pitch moment of inertia. Smaller → faster pitch response. | NACA/NASA TRs | 50 000–200 000 kg·m² |
 | `izz_kg_m2` | Yaw moment of inertia. Usually ≥ Iyy. | NACA/NASA TRs | 60 000–220 000 kg·m² |
+| `ixz_kg_m2` | *Optional (#899).* Roll↔yaw product of inertia; opts into the coupled solve. `Ixz² < Ixx·Izz`. | NACA/NASA TRs | 0 (default); F-16 ≈ 1 331 |
+| `engine_ang_momentum` | *Optional (#899).* Engine rotor angular momentum He (N·m·s, signed) — gyroscopic pitch↔yaw coupling. | NASA TP-1538 | 0 (default); F-16 ≈ 216.9 |
 
 **Sources for inertia data:** NACA/NASA Technical Reports Server (ntrs.nasa.gov). Search for
 the aircraft type number or name alongside "stability derivatives" or "moments of inertia". USAF
@@ -363,13 +374,13 @@ cn_dr    = -0.06
 All derivatives are non-dimensional and follow NACA sign conventions (see coordinate system
 section above). Values can be copied directly from NACA/NASA technical reports.
 
-The moment applied by each derivative:
+The moment applied by each derivative (optional #899 terms shown in brackets — all default 0):
 - **Pitch moment** (about Y-axis, reference length mac_m):
-  `Cm = cm_alpha×α + cm_q×(q_rate×mac/(2V)) + cm_de×(elevator_input×max_elevator_rad)`
+  `Cm = [cm0] + cm_alpha×α + cm_q×(q_rate×mac/(2V)) + cm_de×(elevator×max_elevator_rad) [+ cm_speedbrake×speedbrake]`
 - **Roll moment** (about X-axis, reference length wingspan_m):
-  `Cl = cl_beta×β + cl_p×(p_rate×span/(2V)) + cl_da×(aileron_input×max_aileron_rad)`
+  `Cl = cl_beta×β + cl_p×(p_rate×span/(2V)) + cl_da×(aileron×max_aileron_rad) [+ cl_dr×(rudder×max_rudder_rad)]`
 - **Yaw moment** (about Z-axis, reference length wingspan_m):
-  `Cn = cn_beta×β + cn_r×(r_rate×span/(2V)) + cn_dr×(rudder_input×max_rudder_rad)`
+  `Cn = cn_beta×β + cn_r×(r_rate×span/(2V)) + cn_dr×(rudder×max_rudder_rad) [+ cn_da×(aileron×max_aileron_rad)]`
 
 **Note:** Rate terms divide by velocity V. The integrator guards V < 1 m/s and sets rate
 moment contributions to zero at near-zero speed.
@@ -404,6 +415,37 @@ Larger `cl_da` → snappier roll response.
 | `cn_r` | Always negative | −0.05 to −0.25 | NACA TN 2235 |
 | `cn_dr` | Negative | −0.03 to −0.12 | DATCOM |
 
+### Optional advanced terms (#899)
+
+Published aerodynamic databases (e.g. NASA TP-1538 for the F-16) carry several quantities the base
+schema has no slot for. All are **optional and additive** — a model that omits them is byte-identical
+to before. Add them to `[aero.moments]` (or `[flight_model]` / `[aero.drag_polar]` where noted).
+
+| Field | Section | Meaning | Default |
+|---|---|---|---|
+| `cm0` | `[aero.moments]` | Zero-α pitching moment. A cambered wing trims at a non-zero α with neutral elevator (≈ −3.3° for the F-16A); `cm0 ≠ 0` is what produces that offset. | 0 |
+| `cn_da` | `[aero.moments]` | Adverse yaw — aileron deflection yaws *against* the commanded roll. | 0 |
+| `cl_dr` | `[aero.moments]` | Rudder-induced roll — rudder deflection also rolls the aircraft. | 0 |
+| `cm_speedbrake` | `[aero.moments]` | Pitch increment per unit speed-brake deployment (ΔCm,sb). | 0 |
+| `speedbrake_cl` | `[aero.drag_polar]` | Speed-brake lift/normal-force increment per unit deployment (ΔCZ,sb) — an airbrake changes lift as well as drag. | 0 |
+| `ixz_kg_m2` | `[flight_model]` | Product of inertia between the roll (x) and yaw (z) axes. A non-zero value opts the airframe into the Ixz-coupled roll/yaw solve — a roll moment then produces a yaw acceleration and vice versa (F-16 = 1,331). Must satisfy `Ixz² < Ixx·Izz`. | 0 |
+| `engine_ang_momentum` | `[flight_model]` | Engine rotor angular momentum He (N·m·s) about +X. A spinning spool is a gyroscope: pitching yaws it and yawing pitches it. Signed by spin direction (F-16 = 216.9). | 0 |
+
+**Alpha-dependent dynamic dampers.** `cm_q`, `cl_p` and `cn_r` may each be supplied as a `Table1D`
+over α (`cm_q_table`, `cl_p_table`, `cn_r_table`) — TP-1538 publishes them that way (Cmq runs −3.4 to
+−6.8 across the sweep), which matters for a high-α or deep-stall airframe. When present, the table
+**replaces** the corresponding scalar; the scalar stays required as the fallback.
+
+```toml
+[aero.moments.cm_q_table]   # optional — replaces the cm_q scalar; lookup over alpha (deg)
+alpha  = [0.0, 15.0, 25.0, 35.0]
+values = [-3.4, -5.0, -6.4, -6.8]
+```
+
+**A note on Ixz scope.** Declaring `ixz_kg_m2` adds only the Ixz İ·ω̇ cross-coupling; the general
+`ω×H` rate-product Euler terms (which are non-zero even at Ixz = 0) remain omitted so existing content
+is untouched. The cross-coupling is the term that matters most for a real fighter's roll/yaw handling.
+
 ### Tuning guide
 
 | Symptom | Fix |
@@ -424,20 +466,23 @@ alpha_stall_deg  =  18.0
 max_g_structural =   9.0
 min_g_structural =  -3.0
 max_mach         =   1.8
+alpha_limit_deg  =  25.5   # optional (#900): FBW FLCS AoA cap, below the aero stall
 ```
 
 | Field | Meaning |
 |---|---|
 | `alpha_stall_deg` | The AoA at which this aircraft departs. **`validate-flight-model` requires your `cl_table` to peak within 2° of it** — the engine does not clamp CL at the stall, because your table *is* the stall; if the two disagree, the model is lying about itself. Sets `FlightState::stalled`, which drives buffet, the HUD cue and AI. |
 | `max_g_structural` | Positive structural limit. Exceeding it by >10% for >0.5 s **damages the airframe**. Range: 6.5 g (heavy strikers) to 9 g (dogfighters). Source: flight manual / Jane's. |
-| `min_g_structural` | Negative structural limit. Typical −2.5 g to −3.5 g. Same damage rule. |
+| `min_g_structural` | Negative structural limit. Typical −2.5 g to −3.5 g. Same damage rule; on an FBW aircraft the limiter now holds forward stick off it (#900). |
 | `max_mach` | Never-exceed Mach. **Not** enforced by an artificial drag wall: an aircraft's top speed comes from drag rising to meet thrust. `fm-trim` fails a model that can exceed this in level flight — if it can, the *model* is wrong, and you should fix `cd_wave` or the thrust deck. |
+| `alpha_limit_deg` | *Optional (#900).* The FBW flight computer's AoA cap, **distinct from `alpha_stall_deg`** (the aero peak). When set (>0) and `has_fbw`, the limiter also holds `|alpha|` below this — the F-16's FLCS holds 25.5° while its wing stalls near 35°. Must sit below `alpha_stall_deg` or it never binds (the validator warns). 0 / omitted = structural-g limiting only, as before. |
 
-**On FBW aircraft** (`has_fbw = true`) the flight computer will not let the pilot exceed
-`max_g_structural`: it limits AoA to whatever produces the limit at the current dynamic pressure.
-**On everything else there is no limiter at all** — and that is deliberate. An F-5E pilot *can*
-overstress the jet, and the sim lets them, and then bills them. `has_fbw` gates the limiter and
-nothing else.
+**On FBW aircraft** (`has_fbw = true`) the flight computer keeps the pilot inside the envelope by
+limiting AoA to whatever produces the applicable limit at the current dynamic pressure: aft stick
+against `max_g_structural`, forward stick against `min_g_structural` (#900), and — if set — `|alpha|`
+against `alpha_limit_deg`. **On everything else there is no limiter at all** — and that is deliberate.
+An F-5E pilot *can* overstress the jet, and the sim lets them, and then bills them. `has_fbw` gates
+the limiter and nothing else.
 
 ---
 
@@ -673,6 +718,32 @@ that Mach/altitude cell.
 
 **Tuning:** If the aircraft can't reach its published max speed, increase the thrust value at
 the corresponding Mach/altitude cell. If it accelerates too fast, reduce it.
+
+### Idle-thrust deck (optional)
+
+By default, thrust below MIL is a straight line: `throttle × mil`, i.e. `0 → mil` as the throttle
+moves `0 → 1`. That treats idle as *zero* thrust, which is wrong. Real turbofan idle thrust is
+non-zero and non-linear — a small positive figure static, but at altitude and speed it goes
+**negative**, because ram drag through the engine exceeds the idle gross thrust.
+
+Add an optional `[engine.idle_thrust]` table — the **same `(mach, alt_km)` grid** and **kN units**
+as `mil_thrust` — and the engine blends `idle → mil` across throttle `[0, 1]` instead of `0 → mil`.
+Absent, behaviour is unchanged (the straight line stays the default, which is fine for most
+content). Values may be negative; a deck published in newtons is divided by 1000 on authoring.
+
+```toml
+[engine.idle_thrust]   # optional — model part-throttle idle deck (descents, approach)
+mach   = [0.0, 0.9]
+alt_km = [0, 12]
+values = [
+           2.8,   1.0,    # M0.0: +2.8 kN static SL, +1.0 kN at 12 km
+         -16.0, -10.0,    # M0.9: net drag — ram drag exceeds idle gross thrust
+]   # values in kN
+```
+
+**Source:** engine idle-thrust decks are published alongside MIL/max in NASA reports (e.g. TP-1538
+Table VI gives the F-16's `T_idle` from +2,824 N static to −16,013 N at M 1.0). Only the AB branch
+ignores the deck; when the afterburner is lit, `[engine.ab_thrust]` is used outright.
 
 ### Fuel burn model
 

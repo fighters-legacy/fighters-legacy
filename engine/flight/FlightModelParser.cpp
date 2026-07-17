@@ -149,6 +149,11 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.geometry.ixx_kg_m2 = req_float(fm["ixx_kg_m2"], "flight_model.ixx_kg_m2");
         d.geometry.iyy_kg_m2 = req_float(fm["iyy_kg_m2"], "flight_model.iyy_kg_m2");
         d.geometry.izz_kg_m2 = req_float(fm["izz_kg_m2"], "flight_model.izz_kg_m2");
+
+        // Optional product of inertia and engine angular momentum (#899); default 0 = the symmetric,
+        // decoupled, gyro-free rotational update every existing model uses.
+        d.geometry.ixz_kg_m2 = static_cast<float>(fm["ixz_kg_m2"].value<double>().value_or(0.0));
+        d.geometry.engine_ang_momentum = static_cast<float>(fm["engine_ang_momentum"].value<double>().value_or(0.0));
     }
 
     // ── ballistic vehicles (#354): a different, much smaller schema ───────────
@@ -213,6 +218,9 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.drag_polar.k = req_float(dp["k"], "aero.drag_polar.k");
         d.drag_polar.speedbrake_cd = req_float(dp["speedbrake_cd"], "aero.drag_polar.speedbrake_cd");
         d.drag_polar.gear_cd = req_float(dp["gear_cd"], "aero.drag_polar.gear_cd");
+
+        // Optional speed-brake lift increment (#899); 0 = drag only, the pre-#899 behaviour.
+        d.drag_polar.speedbrake_cl = static_cast<float>(dp["speedbrake_cl"].value<double>().value_or(0.0));
     }
 
     // ── [aero.cd_table] (optional) ────────────────────────────────────────────
@@ -253,6 +261,32 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.moments.cn_beta = req_float(m["cn_beta"], "aero.moments.cn_beta");
         d.moments.cn_r = req_float(m["cn_r"], "aero.moments.cn_r");
         d.moments.cn_dr = req_float(m["cn_dr"], "aero.moments.cn_dr");
+
+        // Optional cross/constant/speed-brake moment terms (#899). All default 0 ⇒ pre-#899 behaviour.
+        d.moments.cm0 = static_cast<float>(m["cm0"].value<double>().value_or(0.0));
+        d.moments.cm_speedbrake = static_cast<float>(m["cm_speedbrake"].value<double>().value_or(0.0));
+        d.moments.cl_dr = static_cast<float>(m["cl_dr"].value<double>().value_or(0.0));
+        d.moments.cn_da = static_cast<float>(m["cn_da"].value<double>().value_or(0.0));
+
+        // Optional alpha-dependent dampers (#899): a Table1D over alpha_deg. When present, it replaces
+        // the corresponding scalar in computeMoments. Same {alpha, values} shape as cd_wave's Table1D.
+        auto parse_damper_table = [&](const char* key) -> std::optional<Table1D> {
+            auto sub = m[key];
+            if (!sub || !sub.as_table())
+                return std::nullopt;
+            Table1D t;
+            t.keys = req_float_array(sub["alpha"], (std::string("aero.moments.") + key + ".alpha").c_str());
+            t.values = req_float_array(sub["values"], (std::string("aero.moments.") + key + ".values").c_str());
+            if (t.keys.size() != t.values.size())
+                throw std::runtime_error(std::string("aero.moments.") + key +
+                                         ": alpha and values arrays must have equal length");
+            if (t.keys.size() < 2)
+                throw std::runtime_error(std::string("aero.moments.") + key + ": needs at least 2 alpha breakpoints");
+            return t;
+        };
+        d.moments.cm_q_table = parse_damper_table("cm_q_table");
+        d.moments.cl_p_table = parse_damper_table("cl_p_table");
+        d.moments.cn_r_table = parse_damper_table("cn_r_table");
     }
 
     // ── [aero.limits] ─────────────────────────────────────────────────────────
@@ -265,6 +299,9 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.limits.max_g_structural = req_float(lim["max_g_structural"], "aero.limits.max_g_structural");
         d.limits.min_g_structural = req_float(lim["min_g_structural"], "aero.limits.min_g_structural");
         d.limits.max_mach = req_float(lim["max_mach"], "aero.limits.max_mach");
+
+        // Optional FLCS AoA cap (#900); 0 = unset = structural-g limiting only, as before.
+        d.limits.alpha_limit_deg = static_cast<float>(lim["alpha_limit_deg"].value<double>().value_or(0.0));
     }
 
     // ── [aero.controls] ───────────────────────────────────────────────────────
@@ -374,6 +411,17 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
             if (abt.cols.size() < 2)
                 throw std::runtime_error("engine.ab_thrust: alt_km must have at least 2 breakpoints");
             d.engine.ab_thrust = std::move(abt);
+        }
+
+        // Optional idle deck (#898): same (mach, alt_km) shape as mil_thrust. Blends idle → mil
+        // across throttle when present; absent leaves the linear throttle × mil path unchanged.
+        if (auto idle = tbl["engine"]["idle_thrust"]; idle && idle.as_table()) {
+            auto idt = parse_table2d(*idle.as_table(), "mach", "alt_km");
+            if (idt.rows.size() < 2)
+                throw std::runtime_error("engine.idle_thrust: mach must have at least 2 breakpoints");
+            if (idt.cols.size() < 2)
+                throw std::runtime_error("engine.idle_thrust: alt_km must have at least 2 breakpoints");
+            d.engine.idle_thrust = std::move(idt);
         }
     }
 

@@ -77,6 +77,13 @@ struct MeshUploadDesc {
     std::string_view name;          // asset name for debug labels / dedup
     std::span<const uint8_t> bytes; // .glb file contents
 
+    // The .glb is authored in the standard glTF/Blender CONTENT convention (nose along +Z); rotate it
+    // into the engine body frame (nose along +X) on upload — see platform/MeshOrient.h (#906). Set by
+    // the entity-mesh loader for pack-authored aircraft/unit/cockpit/damage meshes. Engine-generated
+    // meshes (terrain tiles, the builtin placeholders and floor) are already in the body/world frame
+    // and leave this false.
+    bool contentForward{false};
+
     // Optional: resolve a glTF image URI (e.g. "../../textures/f5e_diffuse.ktx2") to raw KTX2/PNG
     // texture-file bytes. The engine layer wires this to AssetManager::loadTexture, because URI →
     // asset-name → file resolution belongs to the content system, not the GPU backend (#833). When

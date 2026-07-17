@@ -30,6 +30,7 @@
 // ---------------------------------------------------------------------------
 #include <ktx.h>
 
+#include "MeshOrient.h"
 #include "RenderTypes.h"
 #include "VkResources.h"
 #include <algorithm>
@@ -581,6 +582,16 @@ MeshHandle VkResourceManager::createMesh(const MeshUploadDesc& desc) {
         vertices[i].normal = nrmPtr ? stridedVec3(nrmPtr, nrmIdx, i) : glm::vec3(0, 1, 0);
         vertices[i].tangent = tanPtr ? stridedVec4(tanPtr, tanIdx, i) : glm::vec4(1, 0, 0, 1);
         vertices[i].uv = uvPtr ? stridedVec2(uvPtr, uvIdx, i) : glm::vec2(0, 0);
+
+        // Rotate content-convention geometry (nose +Z) into the engine body frame (nose +X) — #906.
+        // A proper rotation, so winding is preserved; positions, normals and the tangent direction all
+        // take the same map.
+        if (desc.contentForward) {
+            vertices[i].position = contentForwardToBody(vertices[i].position);
+            vertices[i].normal = contentForwardToBody(vertices[i].normal);
+            const glm::vec3 t = contentForwardToBody(glm::vec3(vertices[i].tangent));
+            vertices[i].tangent = glm::vec4(t, vertices[i].tangent.w);
+        }
     }
 
     // ── Extract index data ───────────────────────────────────────────────

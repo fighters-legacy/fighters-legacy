@@ -33,11 +33,20 @@ model's longitudinal axis).
 | **+Y** | Up |
 | **+Z** | Starboard (right); −Z = port (left) |
 
-Blender's glTF exporter writes Y-up by default (its *+Y Up* option), so no manual up-axis
-rotation is needed. For forward: the exporter maps Blender **+X → glTF +X**, so model your
-aircraft with the **nose pointing along Blender +X** and it lands on the engine's +X-forward
-axis. (The exporter has no "forward axis" dropdown — orientation is whatever you build in
-Blender.) Verify against the reference mesh below.
+The table above is the engine's internal **body frame** — what the flight model and the sim use.
+It is **not** the frame you author in, and you do not have to build "wrong" to satisfy it (#906).
+
+**Authoring orientation — build the natural way.** Model your aircraft with the **nose pointing
+along the DCC's natural forward**, and export with Blender's default glTF settings. Blender's
+exporter writes Y-up (its *+Y Up* option) and puts the model's nose along the glTF content-forward
+axis **+Z**. The engine detects that a mesh came from a content pack and rotates it **+Z → +X** into
+the body frame on import (a fixed +90° about +Y — see `platform/MeshOrient.h`). So:
+
+- **Nose** along glTF **+Z** (Blender's natural forward on a default export).
+- **Up** along **+Y**.
+- No manual yaw, no "forward axis" gymnastics, no hand-correction on export.
+
+The rotation is applied on load; the flight model's own +X-forward body axes are untouched.
 
 **Winding and normals.** Triangles must be wound **counter-clockwise when viewed from outside**
 (the glTF 2.0 convention), so face normals point **outward**. Blender produces this by default.
@@ -58,9 +67,12 @@ error, with the same "Recalculate Outside" hint. Run it on your exported `.glb` 
 ### Reference meshes
 
 The engine's built-in placeholder shapes (#886 — one per category: aircraft, missile, bomb,
-rocket, ground vehicle, naval vessel, structure, plus the Unknown error beacon; all +X forward,
-outward normals) are the canonical reference for this convention. Export them and import into
-Blender (File → Import → glTF 2.0) to compare orientation and winding against your own model:
+rocket, ground vehicle, naval vessel, structure, plus the Unknown error beacon; outward normals)
+are the canonical reference for **winding, scale and proportion**. They are engine-internal meshes
+in the **body frame (+X forward)** — they bypass the content-import rotation — so when you import
+them into Blender they will appear **90° rotated** from your own +Z-forward content. That is
+expected; the loader applies the +Z → +X mapping to your mesh, not to theirs. Use them to check
+that your faces are all-blue (outward) and your scale is right, not to copy the forward axis.
 
 ```bash
 python3 tools/gen_builtin_glb.py --export-dir /tmp/builtin

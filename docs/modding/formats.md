@@ -216,6 +216,11 @@ values = [
     126.0, 108.0,  91.0,  73.0,  53.0,  33.0,
 ]
 
+[engine.idle_thrust]           # optional — idle deck (kN, same grid as mil_thrust); blends
+mach   = [0.0, 0.9]            #   idle → mil across throttle. Values may be negative (ram
+alt_km = [0, 12]               #   drag > idle gross thrust at speed). See flight-model.md.
+values = [ 2.8, 1.0, -16.0, -10.0]
+
 [engine.ab_thrust]             # optional — omit for non-afterburning aircraft
 mach   = [0.0, 0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.0, 2.25]
 alt_km = [0, 3, 6, 9, 12, 15]
@@ -1135,8 +1140,11 @@ avionics_failure = true
 # of max_hp) and a `weight` biasing an undirected hit toward it; a directed hit (a bullet, shrapnel)
 # also biases by where it struck. Omit any subsystem to leave it unmodelled. Effects when a
 # subsystem's pool is exhausted: engine_left/right = asymmetric thrust + yaw (one engine out halves
-# thrust and yaws toward the dead engine); controls / hydraulics = lost control authority; avionics =
-# sensor suite stripped to the eyeball; fuel = a tank leak on top of the burn.
+# thrust and yaws toward the dead engine); engine = a CENTRELINE single engine (#901) — total thrust
+# loss and NO yaw (a single-engine airframe has no dead side to swing toward); controls / hydraulics =
+# lost control authority; avionics = sensor suite stripped to the eyeball; fuel = a tank leak on top
+# of the burn. Use engine_left/engine_right for twin-engine types and engine for single-engine types;
+# do not mix them on one airframe.
 [damage.subsystems.engine_left]
 hp     = 40
 weight = 2.0
@@ -1144,6 +1152,11 @@ weight = 2.0
 [damage.subsystems.engine_right]
 hp     = 40
 weight = 2.0
+
+# ...or, for a single-engine airframe (F-16, MiG-21), the centreline pool instead of the L/R pair:
+# [damage.subsystems.engine]
+# hp     = 60
+# weight = 2.5
 
 [damage.subsystems.controls]
 hp     = 25

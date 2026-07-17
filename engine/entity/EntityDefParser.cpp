@@ -183,6 +183,7 @@ EntityDef parseEntityDef(std::string_view toml_src) {
             };
             parse_subsystem("engine_left", Subsystem::EngineLeft);
             parse_subsystem("engine_right", Subsystem::EngineRight);
+            parse_subsystem("engine", Subsystem::Engine); // #901: centreline single engine
             parse_subsystem("controls", Subsystem::Controls);
             parse_subsystem("avionics", Subsystem::Avionics);
             parse_subsystem("hydraulics", Subsystem::Hydraulics);

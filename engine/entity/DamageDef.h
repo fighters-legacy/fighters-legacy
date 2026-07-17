@@ -13,7 +13,11 @@ enum class DamageLevel : uint8_t { Intact = 0, Light, Heavy, Critical, Destroyed
 // The fixed subsystem vocabulary (#675). A closed set, not free-form: every effect maps onto
 // machinery the sim already has (asymmetric-thrust engine flags, control authority, avionics
 // failure, fuel leak), so a pack cannot invent a subsystem the engine would not know how to fail.
-enum class Subsystem : uint8_t { EngineLeft = 0, EngineRight, Controls, Avionics, Hydraulics, Fuel, Count };
+// EngineLeft/EngineRight are the TWIN-engine asymmetric case (a kill halves thrust and yaws toward
+// the dead side); Engine (#901) is the CENTRELINE single-engine case (a kill is total thrust loss and
+// no yaw — there is no dead side to swing toward). Single-engine content declares [damage.subsystems]
+// .engine; twin content declares .engine_left / .engine_right.
+enum class Subsystem : uint8_t { EngineLeft = 0, EngineRight, Controls, Avionics, Hydraulics, Fuel, Engine, Count };
 inline constexpr int kSubsystemCount = static_cast<int>(Subsystem::Count);
 
 // One subsystem's authored parameters. hp = 0 means "this entity does not model this subsystem"

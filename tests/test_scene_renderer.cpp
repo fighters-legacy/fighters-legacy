@@ -781,8 +781,19 @@ TEST_CASE("SceneRenderer assigns distinct palette materials by entityIdx") {
     const auto& items = renderer.lastScene.renderItems;
     CHECK(items[0].material.valid());
     CHECK(items[1].material.valid());
-    // entityIdx 0 and 1 map to different palette slots.
+    // The per-entityIdx palette is a DEBUG-only aid (#437/#442): distinct palette slots colour the
+    // placeholders so orientation and identity read at a glance. A release build deliberately gives
+    // every builtin placeholder the same shaded-grey fallback material so they read as real geometry
+    // (#886), so the contract is config-dependent — this test asserts both halves rather than the
+    // Debug-only one it used to (#897, which was a live Release-build failure on main, not a #892
+    // regression: #892 reworked the placeholder MESH, never the material path).
+#ifndef NDEBUG
+    // Debug: entityIdx 0 and 1 map to different palette slots.
     CHECK(items[0].material.id != items[1].material.id);
+#else
+    // Release: all builtin placeholders share the shaded-grey fallback material.
+    CHECK(items[0].material.id == items[1].material.id);
+#endif
 }
 
 // ---------------------------------------------------------------------------

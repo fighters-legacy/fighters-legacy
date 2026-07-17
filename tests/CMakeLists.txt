@@ -634,6 +634,11 @@ add_executable(test_hud_align test_hud_align.cpp)
 target_link_libraries(test_hud_align PRIVATE Catch2::Catch2WithMain platform-hal)
 catch_discover_tests(test_hud_align)
 
+# Content → body mesh orientation mapping (#906); header-only, glm via platform-hal.
+add_executable(test_mesh_orient test_mesh_orient.cpp)
+target_link_libraries(test_mesh_orient PRIVATE Catch2::Catch2WithMain platform-hal)
+catch_discover_tests(test_mesh_orient)
+
 add_executable(test_game_console test_game_console.cpp)
 target_link_libraries(test_game_console PRIVATE Catch2::Catch2WithMain engine-console engine-entity engine-weather)
 target_include_directories(test_game_console PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

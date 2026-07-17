@@ -581,7 +581,40 @@ weight = 1.0
     // Omitted subsystems stay absent (hp 0 = not modelled).
     CHECK(s[fl::Subsystem::Controls].hp == 0.f);
     CHECK(s[fl::Subsystem::Fuel].hp == 0.f);
+    CHECK(s[fl::Subsystem::Engine].hp == 0.f); // twin content does not use the centreline pool
     CHECK(s.any());
+}
+
+TEST_CASE("EntityDefParser: [damage.subsystems.engine] parses the centreline pool (#901)", "[parser]") {
+    const char* toml = R"(
+[entity]
+id = "test:single"
+name = "Single"
+category = "air_vehicle"
+max_hp = 100.0
+
+[damage.light]
+hp_fraction = 0.75
+
+[damage.heavy]
+hp_fraction = 0.4
+
+[damage.critical]
+hp_fraction = 0.15
+
+[damage.subsystems.engine]
+hp = 60
+weight = 2.5
+)";
+    fl::EntityDef def = fl::parseEntityDef(toml);
+    REQUIRE(def.damage.has_value());
+    REQUIRE(def.damage->subsystems.has_value());
+    const fl::SubsystemSet& s = *def.damage->subsystems;
+    CHECK(s[fl::Subsystem::Engine].hp == 60.f);
+    CHECK(s[fl::Subsystem::Engine].weight == 2.5f);
+    // A single-engine airframe uses the centreline pool, not the twin L/R pools.
+    CHECK(s[fl::Subsystem::EngineLeft].hp == 0.f);
+    CHECK(s[fl::Subsystem::EngineRight].hp == 0.f);
 }
 
 TEST_CASE("EntityDefParser: all category strings are accepted", "[parser]") {

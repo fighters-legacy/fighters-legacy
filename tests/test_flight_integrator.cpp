@@ -1536,6 +1536,41 @@ TEST_CASE("Integrator: both engines out kills thrust entirely", "[integrator][su
     CHECK(fi.state().vel_body[0] < 200.f);
 }
 
+TEST_CASE("Integrator: a centreline engine kill is total thrust loss with NO yaw", "[integrator][subsystem]") {
+    // #901: kEngineFailCenter models a single-engine airframe — a kill is total thrust loss (like both
+    // twin engines out) and produces no asymmetry, because there is no dead side to swing toward.
+    auto run = [](uint8_t failFlags) {
+        auto data = makeData();
+        FlightIntegrator fi(data);
+        FlightState s{};
+        s.vel_body[0] = 200.f;
+        s.pos_world[1] = 5000.f;
+        s.fuel_kg = 4000.f;
+        s.mass_kg = 14000.f;
+        s.quat[3] = 1.f;
+        fi.reset(s);
+        fi.setEngineFailFlags(failFlags);
+        ControlInput ctrl{};
+        ctrl.throttle = 1.f;
+        PayloadEffect px{};
+        for (int i = 0; i < 60; ++i)
+            fi.step(1.f / 60.f, ctrl, px);
+        return fi.state();
+    };
+
+    const FlightState healthy = run(0);
+    const FlightState centreOut = run(fl::kEngineFailCenter);
+    const FlightState bothOut = run(fl::kEngineFailLeft | fl::kEngineFailRight);
+    const FlightState leftOut = run(fl::kEngineFailLeft);
+
+    // Total thrust loss: identical airspeed to both-engines-out, and slower than the healthy jet.
+    CHECK(centreOut.vel_body[0] < healthy.vel_body[0]);
+    CHECK(centreOut.vel_body[0] == Catch::Approx(bothOut.vel_body[0]).epsilon(1e-4));
+    // NO yaw asymmetry — unlike a single twin engine out, which develops a yaw rate.
+    CHECK(std::abs(centreOut.omega[1]) < 1e-4f);
+    CHECK(std::abs(leftOut.omega[1]) > 1e-3f);
+}
+
 TEST_CASE("Integrator: subsystem control factor multiplies the tier control factor", "[integrator][subsystem]") {
     auto data = makeData();
     FlightIntegrator fi(data);
@@ -1658,4 +1693,193 @@ TEST_CASE("Integrator: sustained rotation does not create energy (#891 transport
     // Rotation conserves speed; only faint high-altitude drag may shave it. The tangent bug pumped it
     // well past this bound. Guard tightly so the pump cannot creep back.
     CHECK(speedMax < 1.05 * v0);
+}
+
+// ---------------------------------------------------------------------------
+// Ixz product-of-inertia coupling and engine gyroscopic moment (#899)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Integrator: Ixz couples a yaw input into a roll rate", "[integrator][gaps899]") {
+    // A rudder input produces a yaw moment. With Ixz = 0 the roll axis is uncoupled from it, so after
+    // one step (before any sideslip builds) the roll rate stays ~0. With Ixz > 0 the yaw moment
+    // couples into a roll acceleration — the inertial roll/yaw coupling a real fighter has.
+    ControlInput ctrl{};
+    ctrl.rudder = 1.f;
+    PayloadEffect px{};
+
+    auto mk = [&](float ixz) {
+        auto data = makeData();
+        data->geometry.ixz_kg_m2 = ixz;
+        FlightIntegrator fi(data);
+        FlightState s{};
+        s.vel_body[0] = 200.f;
+        s.pos_world[1] = 3000.f;
+        s.mass_kg = data->geometry.mass_kg;
+        fi.reset(s);
+        fi.step(1.f / 60.f, ctrl, px);
+        return fi.state().omega[0]; // roll rate
+    };
+
+    const float rollNoCoupling = mk(0.f);
+    const float rollCoupled = mk(5000.f);
+    CHECK_THAT(rollNoCoupling, WithinAbs(0.f, 1e-4f));
+    CHECK(std::abs(rollCoupled) > 1e-3f); // Ixz turned the yaw moment into a roll acceleration
+}
+
+TEST_CASE("Integrator: Ixz = 0 is byte-identical to the decoupled update", "[integrator][gaps899]") {
+    // The additive guarantee: a model that never mentions Ixz behaves exactly as before. Two
+    // identical models — one leaving ixz at its 0 default — must produce bit-identical omega.
+    ControlInput ctrl{};
+    ctrl.aileron = 0.5f;
+    ctrl.rudder = -0.3f;
+    ctrl.elevator = 0.4f;
+    PayloadEffect px{};
+
+    auto run = [&]() {
+        auto data = makeData(); // ixz defaults to 0
+        FlightIntegrator fi(data);
+        FlightState s{};
+        s.vel_body[0] = 220.f;
+        s.pos_world[1] = 4000.f;
+        s.mass_kg = data->geometry.mass_kg;
+        fi.reset(s);
+        for (int i = 0; i < 20; ++i)
+            fi.step(1.f / 60.f, ctrl, px);
+        return fi.state();
+    };
+    const auto a = run();
+    const auto b = run();
+    CHECK(a.omega[0] == b.omega[0]);
+    CHECK(a.omega[1] == b.omega[1]);
+    CHECK(a.omega[2] == b.omega[2]);
+}
+
+TEST_CASE("Integrator: engine angular momentum yaws the nose when pitching", "[integrator][gaps899]") {
+    // A spinning rotor (He != 0) is a gyroscope: a pitch RATE produces a yaw moment. Seed a pitch rate
+    // and step once. With He = 0 there is no pitch->yaw path (no prop, no Ixz), so the yaw rate stays
+    // ~0; with He != 0 it becomes non-zero.
+    ControlInput ctrl{};
+    PayloadEffect px{};
+
+    auto mk = [&](float he) {
+        auto data = makeData();
+        data->geometry.engine_ang_momentum = he;
+        FlightIntegrator fi(data);
+        FlightState s{};
+        s.vel_body[0] = 200.f;
+        s.pos_world[1] = 3000.f;
+        s.mass_kg = data->geometry.mass_kg;
+        s.omega[2] = 2.0f; // pitch rate (about Z=right)
+        fi.reset(s);
+        fi.step(1.f / 60.f, ctrl, px);
+        return fi.state().omega[1]; // yaw rate (about Y=up)
+    };
+
+    const float yawNoGyro = mk(0.f);
+    const float yawGyro = mk(60000.f);
+    CHECK_THAT(yawNoGyro, WithinAbs(0.f, 1e-4f));
+    CHECK(std::abs(yawGyro) > 1e-3f);
+}
+
+// ---------------------------------------------------------------------------
+// FBW AoA cap and negative-g protection (#900)
+// ---------------------------------------------------------------------------
+
+namespace {
+// Current angle of attack in degrees from a flight state (nose above the flight path = +alpha).
+float alphaDegOf(const FlightState& s) {
+    const double spd =
+        std::sqrt(s.vel_body[0] * s.vel_body[0] + s.vel_body[1] * s.vel_body[1] + s.vel_body[2] * s.vel_body[2]);
+    if (spd <= 0.0)
+        return 0.f;
+    return static_cast<float>(std::atan2(-s.vel_body[1], s.vel_body[0]) * 180.0 / std::numbers::pi);
+}
+
+// Flies fast+level, then holds the given elevator for `seconds`, returning peak/min load factor,
+// peak |alpha|, and whether the airframe was over-g damaged.
+struct EnvResult {
+    float peakG{-1e9f};
+    float minG{1e9f};
+    float maxAbsAlpha{0.f};
+    bool damaged{false};
+};
+EnvResult holdStick(std::shared_ptr<FlightModelData> data, float elevator, float seconds = 2.0f) {
+    FlightIntegrator integ(data);
+    FlightState s{};
+    s.vel_body[0] = 350.0;
+    s.pos_world[1] = 1000.0;
+    s.quat[3] = 1.f;
+    s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+    s.fuel_kg = data->geometry.fuel_kg;
+    integ.reset(s);
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    ctrl.elevator = elevator;
+    EnvResult out;
+    const int ticks = static_cast<int>(seconds * 60.f);
+    for (int i = 0; i < ticks; ++i) {
+        integ.step(1.f / 60.f, ctrl, {});
+        const auto& st = integ.state();
+        out.peakG = std::max(out.peakG, st.load_factor);
+        out.minG = std::min(out.minG, st.load_factor);
+        out.maxAbsAlpha = std::max(out.maxAbsAlpha, std::abs(alphaDegOf(st)));
+        if (st.overg_damage)
+            out.damaged = true;
+    }
+    return out;
+}
+} // namespace
+
+TEST_CASE("Integrator: FBW negative-g protection holds an inverted pull off the min limit",
+          "[integrator][limits][fbw900]") {
+    // #900: forward stick is now limited against min_g_structural just as aft stick is against max_g.
+    auto data = makeData();
+    data->limits.min_g_structural = -3.f;
+
+    data->meta.has_fbw = false;
+    const EnvResult unprotected = holdStick(data, -1.f);
+    data->meta.has_fbw = true;
+    const EnvResult protectedRun = holdStick(data, -1.f);
+
+    CHECK(unprotected.minG < -3.f * 1.10f); // a cable-and-pushrod jet blows through the negative limit
+    CHECK(unprotected.damaged);
+    CHECK(protectedRun.minG >= -3.f * 1.10f); // the FBW jet is held at it
+    CHECK_FALSE(protectedRun.damaged);
+}
+
+TEST_CASE("Integrator: the FBW AoA cap holds alpha below the aerodynamic stall", "[integrator][limits][fbw900]") {
+    // alpha_limit_deg is the FLCS cap, distinct from alpha_stall_deg (the aero peak). With the g-limit
+    // set out of reach (max_g the wing cannot make), the cap is what holds the jet — without it the
+    // aircraft rides right up toward the stall.
+    auto capped = makeData();
+    capped->meta.has_fbw = true;
+    capped->limits.alpha_stall_deg = 35.f;
+    capped->limits.max_g_structural = 25.f; // wing cannot make this -> g-limiter is lift-limited
+    capped->limits.alpha_limit_deg = 15.f;
+
+    auto uncapped = std::make_shared<FlightModelData>(*capped);
+    uncapped->limits.alpha_limit_deg = 0.f; // no FLCS cap
+
+    const EnvResult withCap = holdStick(capped, 1.f);
+    const EnvResult noCap = holdStick(uncapped, 1.f);
+
+    CHECK(withCap.maxAbsAlpha < 17.f);              // held near the 15 deg cap (guard band + PD overshoot)
+    CHECK(withCap.maxAbsAlpha < noCap.maxAbsAlpha); // and clearly tighter than the uncapped jet
+}
+
+TEST_CASE("Integrator: alpha_limit_deg unset leaves the positive-g path byte-identical",
+          "[integrator][limits][fbw900]") {
+    // The additive guarantee for #900: an FBW model that adds no alpha cap behaves exactly as it did
+    // under #816 for aft stick.
+    auto a = makeData();
+    a->meta.has_fbw = true;
+    a->limits.max_g_structural = 8.f;
+    a->limits.alpha_limit_deg = 0.f;
+    auto b = std::make_shared<FlightModelData>(*a);
+
+    const EnvResult ra = holdStick(a, 1.f);
+    const EnvResult rb = holdStick(b, 1.f);
+    CHECK(ra.peakG == rb.peakG);
+    CHECK(ra.peakG <= 8.f * 1.10f); // still held at the structural limit
+    CHECK_FALSE(ra.damaged);
 }
