@@ -74,6 +74,19 @@ class ClientPrediction {
         return m_initialized;
     }
 
+    // Read-only view of the predicted own-ship FlightState, or nullptr until init() + the first
+    // snapshot with the player's entry has seeded the local integrator. Own-ship HUD/audio cues
+    // (e.g. the stall/overspeed warning tones, #957) read stall/load-factor/velocity from here — the
+    // honest local prediction, since the snapshot does not carry stalled/Mach.
+    [[nodiscard]] const FlightState* predictedState() const noexcept {
+        return (m_initialized && m_integrator) ? &m_integrator->state() : nullptr;
+    }
+
+    // The own model's never-exceed Mach (limits.max_mach), or 0 when no model is resolved yet.
+    [[nodiscard]] float predictedMaxMach() const noexcept {
+        return m_model ? m_model->limits.max_mach : 0.f;
+    }
+
   private:
     static constexpr uint32_t kHistorySize = 128u;
 
