@@ -97,6 +97,13 @@ scheduled; phase gating (a phase depends on prior phases) is described in
 [roadmap.md](roadmap.md). Assign every issue to its phase milestone at triage. Items with no
 scheduled phase get the `backlog` label instead.
 
+**Name milestones by THEME, not by a bare number or letter.** A milestone name carries a
+descriptive phrase (`Content & Gameplay`, `Multiplayer at Scale & Live Services`), and the phase
+digit is secondary context, never the whole name. A pure `Phase 6` / `Epic C` label reads as
+*priority* to anyone who joins later — higher number looks more important — when it only means
+*later in the sequence*, and the digits stop mapping to anything once epics are re-homed across
+phases (below) or the sequence is re-scoped. The theme is what stays true; lead with it.
+
 **Epics carry the milestone of their *finish* phase** — the phase of their last open
 sub-issue. Epics span phases (their sub-issues keep their own per-phase milestones), so an
 epic whose decomposition extends into a later phase is re-homed forward rather than left
@@ -199,8 +206,27 @@ The delivery loop, in brief (full rules in [CONTRIBUTING.md](../CONTRIBUTING.md)
    (enforced by `pr-title-lint`), sign-off is enforced by `dco`, and the
    `component:` labels are applied automatically by `labeler`.
 4. **CHANGELOG** — add an entry under `[Unreleased]` (`### Added` / `### Fixed` /
-   `### Changed`) in [CHANGELOG.md](../CHANGELOG.md). Required for every PR.
+   `### Changed`) in [CHANGELOG.md](../CHANGELOG.md). Required for every PR. **A PR that closes
+   several issues gets one entry *per issue* (tagged `(#NNN)`), not a single lumped PR/epic line** —
+   each shipped capability stays independently discoverable and rolls up cleanly at release.
 5. **Merge** once CI is green on all three platforms.
+
+## Cutting a release
+
+Releases are `chore(release): vX.Y.Z` PRs, then a tag on the merge commit (the `release.yml` workflow
+builds the cross-platform artifacts and publishes the GitHub Release):
+
+1. **Roll the CHANGELOG** — rename `[Unreleased]` to the dated `[X.Y.Z] - YYYY-MM-DD` heading and add
+   a fresh empty `[Unreleased]` above it. **Bump the CMake `project(... VERSION X.Y.Z ...)`.** Open
+   the release PR; tag the merge commit `vX.Y.Z` (annotated).
+2. **Write the release notes as prose, not just a list.** `release.yml` auto-generates notes from
+   conventional commits via git-cliff, but a squash-merged multi-issue PR collapses to a *single*
+   line — so **hand-author the GitHub Release body**: lead with a **one-to-two paragraph thematic
+   summary** naming the release's major theme(s) and the "why", then the categorized per-issue detail
+   (paste the `[X.Y.Z]` CHANGELOG section). Set it with `gh release edit vX.Y.Z --notes-file …`. The
+   sibling `fighters-codex` releases are the house style to match.
+3. **Verify the artifacts** — confirm the GitHub Release is published (not draft) with the Linux /
+   macOS / Windows archives attached before considering the release done.
 
 ## Adopting this in a new project
 
