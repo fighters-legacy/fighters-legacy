@@ -54,10 +54,11 @@ static float rollAngleRad(const fl::EntityRenderEntry* p, double planetRadiusM) 
 FlightScreen::FlightScreen(FlightScreenDeps deps) : m_deps(std::move(deps)) {
     auto& d = m_deps;
     if (d.clientNetHandler && d.prediction && d.env) {
-        d.clientNetHandler->snapshotCallback =
-            [pred = d.prediction, env = d.env](RenderSnapshot& snap, uint64_t tickIndex, uint32_t delayTicks) {
-                pred->reconcile(snap, tickIndex, delayTicks, *env);
-            };
+        d.clientNetHandler->snapshotCallback = [pred = d.prediction,
+                                                env = d.env](RenderSnapshot& snap, uint64_t tickIndex,
+                                                             uint32_t delayTicks, uint32_t ackedSeqNum) {
+            pred->reconcile(snap, tickIndex, delayTicks, ackedSeqNum, *env);
+        };
     }
 }
 

@@ -84,11 +84,13 @@ struct PeerInputState {
     float ewmaDelayTicks{0.f};       // EWMA of one-way delay in ticks (alpha = 1/jitterAdaptWindow)
     float ewmaJitterTicks{0.f};      // EWMA of inter-arrival jitter in ticks (RFC 3550 style)
     uint32_t lastSeqNum{0};          // seqNum of last accepted input
+    uint32_t lastAppliedSeqNum{0};   // seqNum of the last input DRAINED from jitterBuffer + applied (#427)
     uint32_t estimatedDelayTicks{0}; // one-way delay in sim ticks (derived from tickIndex)
     // 1-byte fields last.
     uint8_t buttons{0};           // last drained value
     uint8_t selectedStation{255}; // last drained absolute station selection (#625); 255 = none
     bool hasSeq{false};           // false until first input received from this peer
+    bool hasAppliedSeq{false};    // false until the first input is drained + applied (#427 TLV gate)
     bool ewmaSeeded{false};       // false until EWMA receives its first sample
     // Jitter buffer: initialized to depth 1; sized from estimatedDelayTicks on first input,
     // then continuously adjusted by the adaptive resize loop in WorldBroadcaster::onTick.

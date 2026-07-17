@@ -710,6 +710,7 @@ Helpers: `fl::findExt`, `fl::readExtValue<T>`, `fl::appendExt<T>`, `fl::appendEx
 | `SnapshotPeerDelayTicks` | `0x0102` | `uint16_t` | `MsgWorldSnapshot` | Raw `estimatedDelayTicks` (tick count, not ms). Companion to `SnapshotPeerLatency`; avoids the ms-rounding loss inherent in `ticks → ms → ticks` conversion. Used by `ClientPrediction` as the replay-depth signal for client-side prediction. Absent when `estimatedDelayTicks == 0`. |
 | `SnapshotDespawn` | `0x0103` | `uint32_t[]` | `MsgWorldSnapshot` | Indices of entities the receiving peer *knew* that were removed from the sim entirely (kills/despawns) — **not** entities that merely left the interest radius (those rely on the client retention timeout). Variable length = `4 × count`, little-endian; read **per element via `memcpy`** (the payload is unaligned). Omitted when empty. Repeated for `kDespawnRepeatTicks` (≈4) ticks for drop tolerance on the unreliable channel. The client (`ClientNetEventHandler`) applies despawns *before* upserting the same packet's records, so a kill-then-reuse-same-idx resolves to the new entity. Priority/budget scheduler (#516). |
 | `SnapshotEffects` | `0x0104` | packed records | `MsgWorldSnapshot` | Cosmetic weapon effects (#625): tracers, muzzle flashes, launches, impacts, detonations. `kEffectRecordBytes` (22) per record, unaligned little-endian: `type u8` (`EffectType`: 0=WeaponFired, 1=MissileLaunch, 2=Impact, 3=Detonation, 4=NuclearFlash) + `weaponClass u8` (`WeaponType` ordinal) + `srcIdx u32` + `tgtIdx u32` (`0xFFFFFFFF` = none) + `pos f32[3]` (float32 world position — particle precision, not sim precision). Interest-filtered per peer, capped at `kMaxEffectsPerSnapshot` (16) per snapshot. **Unreliable by design**: a dropped packet loses cosmetics, never state — anything that must arrive (kills, stats) travels on the reliable `MsgCombatEvent`. Unknown `type` values must be skipped, never rejected. Omitted when empty. |
+| `SnapshotLastAckedSeqNum` | `0x0105` | `uint32_t` | `MsgWorldSnapshot` | The `seqNum` of the last `MsgClientInput` the server **drained from the jitter buffer and applied** for the receiving peer (#427). Lets `ClientPrediction` replay *exactly* the inputs the server has not yet reflected (history `seqNum > this`), rather than approximating the replay window from `SnapshotPeerDelayTicks` — exact under high delay variance, where the tick count over- or under-replays. Absent until the server has applied one of the peer's inputs (its first snapshots); the client falls back to the delay-ticks approximation when absent. |
 
 **Reserved ranges:**
 - `0x0000`: reserved
@@ -966,10 +967,13 @@ latency by running a local `FlightIntegrator` that mirrors the server's physics:
 2. **On each received `MsgWorldSnapshot`**: the snapshot callback (`ClientNetEventHandler::
    snapshotCallback`) is invoked before `publishExternal()`. The integrator is reset to the
    server's authoritative `FlightState` (reconstructed from the player's `EntityRenderEntry`
-   including the new `omega` field), then the last `estimatedDelayTicks` history inputs are
-   replayed forward. The `SnapshotPeerDelayTicks` TLV (0x0102) carries the raw tick count as
-   the replay depth signal; `SnapshotPeerLatency` (0x0101, ms) continues to serve the HUD
-   indicator.
+   including the new `omega` field), then the un-reflected history inputs are replayed forward.
+   When the `SnapshotLastAckedSeqNum` TLV (0x0105) is present, the client replays *exactly* the
+   history inputs whose `seqNum` is newer than the acked value — the precise window, robust to
+   delay variance (#427). Absent (a peer's first snapshots, or an older server), it falls back to
+   replaying the last `estimatedDelayTicks` inputs, whose raw tick count arrives in the
+   `SnapshotPeerDelayTicks` TLV (0x0102). `SnapshotPeerLatency` (0x0101, ms) continues to serve
+   the HUD indicator.
 
 3. **The player's `EntityRenderEntry` is mutated in-place** with the predicted position,
    velocity, orientation, and angular rates before the snapshot is published to

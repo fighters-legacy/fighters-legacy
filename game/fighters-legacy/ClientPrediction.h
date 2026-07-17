@@ -55,10 +55,17 @@ class ClientPrediction {
     // ring and steps the local integrator one tick (if initialized).
     void onInput(const MsgClientInput& msg, const EnvironmentState& env);
 
+    // Sentinel for reconcile()'s ackedSeqNum when the server did not report one (mirrors
+    // ClientNetEventHandler::kNoAckedSeqNum) — replay then falls back to estimatedDelayTicks.
+    static constexpr uint32_t kNoAckedSeqNum = 0xFFFFFFFFu;
+
     // Called from ClientNetEventHandler::snapshotCallback after snapshot assembly,
     // before publishExternal(). Mutates the player's EntityRenderEntry with the
     // predicted state. No-op until init() + first snapshot with the player's entry.
-    void reconcile(RenderSnapshot& snap, uint64_t tickIndex, uint32_t estimatedDelayTicks, const EnvironmentState& env);
+    // ackedSeqNum (#427): the exact seqNum the server last applied for this peer — replay the inputs
+    // NEWER than it. kNoAckedSeqNum → approximate the replay depth from estimatedDelayTicks instead.
+    void reconcile(RenderSnapshot& snap, uint64_t tickIndex, uint32_t estimatedDelayTicks, uint32_t ackedSeqNum,
+                   const EnvironmentState& env);
 
     // Clear all prediction state (session end / disconnect). Safe to call multiple times.
     void reset();

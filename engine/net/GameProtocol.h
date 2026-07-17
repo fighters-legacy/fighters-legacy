@@ -703,6 +703,11 @@ enum class ExtTag : uint16_t {
                               // cosmetic weapon effects within the receiving peer's interest radius, capped at
                               // kMaxEffectsPerSnapshot. Unreliable by design — a dropped packet loses cosmetics,
                               // never state. pos is float32 world position (particles do not need 0.125 m).
+    SnapshotLastAckedSeqNum =
+        0x0105, // uint32_t: seqNum of the last MsgClientInput the server drained + APPLIED for the receiving
+                // peer (#427). Lets client prediction replay EXACTLY the inputs the server has not yet
+                // reflected (history seqNum > this), instead of approximating the replay depth from
+                // estimatedDelayTicks. Omitted until the first input is applied (a peer's first snapshots).
 };
 
 } // namespace fl

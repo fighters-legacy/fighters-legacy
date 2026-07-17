@@ -191,7 +191,7 @@ void ClientPrediction::onInput(const MsgClientInput& msg, const EnvironmentState
 }
 
 void ClientPrediction::reconcile(RenderSnapshot& snap, uint64_t tickIndex, uint32_t estimatedDelayTicks,
-                                 const EnvironmentState& env) {
+                                 uint32_t ackedSeqNum, const EnvironmentState& env) {
     if (!m_cfg.enabled) {
         return;
     }
@@ -242,10 +242,21 @@ void ClientPrediction::reconcile(RenderSnapshot& snap, uint64_t tickIndex, uint3
     m_integrator->reset(serverState);
     m_predictedTick = tickIndex;
 
-    // Replay the last estimatedDelayTicks inputs, oldest-first.
-    const uint32_t replayCount = std::min(estimatedDelayTicks, m_histCount);
-    if (replayCount > 0) {
-        HistoryEntry replayBuf[kHistorySize];
+    // Replay the inputs the server has not yet reflected, oldest-first.
+    HistoryEntry replayBuf[kHistorySize];
+    if (ackedSeqNum != kNoAckedSeqNum) {
+        // Exact window (#427): the server told us the last seqNum it applied, so replay precisely the
+        // stored inputs newer than it — no over- or under-replay from a delay estimate under jitter.
+        // seqNum is client-monotonic and cannot wrap within a session, so a plain > compare is safe.
+        const uint32_t got = tailHistory(m_histCount, replayBuf);
+        for (uint32_t i = 0; i < got; ++i) {
+            if (replayBuf[i].seqNum > ackedSeqNum)
+                stepIntegrator(replayBuf[i].input, env);
+        }
+    } else {
+        // Fallback: approximate the replay depth from estimatedDelayTicks (the pre-#427 behaviour,
+        // used until the server has applied one of our inputs, or against an older server).
+        const uint32_t replayCount = std::min(estimatedDelayTicks, m_histCount);
         const uint32_t got = tailHistory(replayCount, replayBuf);
         for (uint32_t i = 0; i < got; ++i) {
             stepIntegrator(replayBuf[i].input, env);
