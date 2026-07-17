@@ -12,6 +12,7 @@ namespace fl {
 namespace {
 
 using sensor::SensorDef;
+using sensor::SensorRole;
 using sensor::SensorType;
 
 constexpr float kMetresPerNauticalMile = 1852.f;
@@ -35,8 +36,13 @@ void checkPlausibility(const SensorDef& s, SensorValidationResult& r) {
                              "not radiate, and this will light up an RWR that should stay quiet");
 
     // Radar and laser TRACK lobes require the observer to be emitting (the emissions kernel). A
-    // non-emitting radar with a track lobe carries a lobe it can never use.
-    if (!s.emitter && s.track && (s.type == SensorType::Radar || s.type == SensorType::Laser))
+    // non-emitting radar with a track lobe carries a lobe it can never use — UNLESS it is a weapon
+    // SEEKER head (role = "seeker"), where a passive semi-active seeker legitimately rides the
+    // shooter's illumination and holds a lock while transmitting nothing (builtin:sarh-seeker). The
+    // rule is written for aircraft/SAM radars; exempt seekers so a correctly-authored SARH def is
+    // clean while an aircraft radar with the same shape still warns (#902).
+    if (!s.emitter && s.track && s.role != SensorRole::Seeker &&
+        (s.type == SensorType::Radar || s.type == SensorType::Laser))
         r.warnings.push_back("a radar/laser [track] lobe requires emitter = true — as authored, "
                              "this sensor can never hold a lock");
 

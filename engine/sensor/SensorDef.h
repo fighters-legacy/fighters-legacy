@@ -15,6 +15,14 @@ namespace fl::sensor {
 // the emissions kernel applies: radar and laser TRACK lobes require the observer to be emitting.
 enum class SensorType : uint8_t { Visual, Ir, Radar, Laser };
 
+// How a sensor is CONSUMED, not how it works — the detection math treats both identically. It exists
+// so tooling can apply the right emitter rule: an aircraft (or SAM) radar must EMIT to hold a lock,
+// so a non-emitting radar/laser track lobe is an authoring mistake. A weapon SEEKER head can be a
+// passive receiver — a semi-active radar seeker rides the SHOOTER's illumination and holds a lock
+// while transmitting nothing (builtin:sarh-seeker), so the same "emitter = false + track lobe"
+// shape is correct there. Defaults to Aircraft; a pack marks a seeker head `role = "seeker"`.
+enum class SensorRole : uint8_t { Aircraft, Seeker };
+
 // One detection lobe. A sensor has a SEARCH lobe (wide, low probability — how a target is found)
 // and optionally a TRACK lobe (narrow, high probability — how it is held).
 //
@@ -56,6 +64,11 @@ struct SensorDef {
     // lobes require the observer to be emitting. This is the seam RWR, EMCON and SAM radar shutdown
     // hang off (#526/#529); nothing consumes it yet, and landing it now costs one bool.
     bool emitter{false};
+
+    // Consumer role (see SensorRole). Only tooling reads it — a Seeker head is exempt from the
+    // "a non-emitting radar/laser track lobe can never lock" plausibility warning, because a passive
+    // SARH seeker legitimately has exactly that shape.
+    SensorRole role{SensorRole::Aircraft};
 
     SensorLobe search;               // required: how a target is found
     std::optional<SensorLobe> track; // absent = search-only (an eyeball cannot hold a lock)

@@ -10,6 +10,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **docs**: Authoritative "Content Pack Linking Exception" text in `GOVERNANCE.md` — defines the Vendorable Interface Set (`IContentPack.h`, `AssetTypes.h`, `TrustLevel.h`), what "link against" permits, and what remains GPL; `IContentPack.h`'s header pointer now resolves (#663)
+- **sensor**: Optional `[sensor] role` (`aircraft`/`seeker`, default `aircraft`); tooling-only. A `seeker` head is exempt from the non-emitting-track-lobe warning (#902)
+
+### Fixed
+
+- **tools**: `validate-sensor` no longer warns "this sensor can never hold a lock" for a correctly-authored SARH seeker head (radar, `emitter = false`, track lobe, `role = "seeker"`); an aircraft radar with the same shape still warns (#902)
 
 ## [0.3.5] - 2026-07-17
 

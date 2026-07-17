@@ -89,9 +89,28 @@ TEST_CASE("parseSensorDef defaults the optional fields") {
 
     CHECK_FALSE(s.omnidirectional);                       // default false
     CHECK_FALSE(s.emitter);                               // default false
+    CHECK(s.role == SensorRole::Aircraft);                // default Aircraft
     CHECK_THAT(s.search.minRangeM, WithinAbs(0.0, 1e-6)); // no dead zone
     CHECK_FALSE(s.track.has_value());                     // absent [track] = search-only
     CHECK_THAT(s.lockHoldS, WithinAbs(0.0, 1e-6));
+}
+
+TEST_CASE("parseSensorDef reads the optional seeker role") {
+    const std::string src = R"toml(
+[sensor]
+id   = "fl-base:aim7m-seeker"
+name = "AIM-7M SARH seeker"
+type = "radar"
+role = "seeker"
+
+[search]
+az_half_angle_deg = 20.0
+el_half_angle_deg = 20.0
+max_range_nm      = 13.0
+pod               = 0.5
+)toml";
+    const SensorDef s = parseSensorDef(src);
+    CHECK(s.role == SensorRole::Seeker);
 }
 
 TEST_CASE("parseSensorDef accepts both spellings of the infrared type") {
