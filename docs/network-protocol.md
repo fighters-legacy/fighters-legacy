@@ -57,7 +57,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `ConnectAck` | `0x01` | server→client | reliable | 20 + N×336 bytes | Reply to `ConnectRequest`: granted role + assigned entity slot, then the type registry |
 | `WorldSnapshot` | `0x02` | server→client | unreliable | 24 + origin table + record stream + TLV | Per-tick entity state, unicast per peer; 24-byte header + shared-origin table + a byte-aligned stitched record stream (each record: origin index + a `full` bit) + TLV extension block — see *Quantized entity record* below |
 | `ClientInput` | `0x03` | client→server | unreliable | 80 bytes | Per-frame flight inputs + fire intents + selected weapon station + camera eye (observer interest) |
-| `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
+| `WeatherState` | `0x04` | server→client | unreliable | 24 bytes | Weather and time-of-day (+ turbulence amplitude, #426); broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
 | `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
 | `AdminCommand` | `0x06` | client→server | reliable | 128 bytes | Operator-authenticated admin command. Additive ID — old servers silently discard. |
 | `AdminResponse` | `0x07` | server→client | reliable | 128 bytes | Fast-path command result (≤ 123 chars), unicast to the requesting peer. Additive ID — old clients silently discard. |
@@ -312,7 +312,7 @@ seeded at first input. The depth is then continuously adjusted each tick: an EWM
 when `|target − current| > hysteresis`. Configurable via `[world].jitter_buffer_adapt_window`,
 `jitter_buffer_hysteresis`, and `jitter_buffer_jitter_multiplier`.
 
-### MsgWeatherState — 20 bytes
+### MsgWeatherState — 24 bytes
 
 Unreliable, server→client. Broadcast every 10 sim ticks (~6 Hz at 60 Hz sim) after the `MsgWorldSnapshot`.
 `MsgId::WeatherState = 0x04` is an additive message ID — clients that do not recognize it silently
@@ -330,8 +330,16 @@ at offset 2 (ARM64 alignment constraint). Decode: `timeOfDay = timeOfDayTenths /
 | 8 | 4 | `fogStartDist` | `float` | fog start distance (metres) |
 | 12 | 4 | `windX` | `float` | world-frame wind x component (m/s), includes gust |
 | 16 | 4 | `windZ` | `float` | world-frame wind z component (m/s), includes gust |
+| 20 | 4 | `turbulenceAmp` | `float` | turbulence amplitude (m/s), #426. The client feeds it to the same deterministic `weatherTurbulence(entityIdx, tickIndex, amp)` the server uses, so client-side prediction reproduces the per-tick turbulence exactly. Tail-append (grew 20→24); additive, no version bump. |
 
 Wind convention: `windX` and `windZ` are the **blowing-toward** direction. A westerly wind (FROM 270°) has `windX > 0`.
+
+Turbulence (#426): the server's per-tick turbulence perturbation is a pure function of
+`(entityIdx, tickIndex, turbulenceAmp)` — no shared PRNG state — so broadcasting only the scalar
+amplitude lets `ClientPrediction` reproduce it **exactly** for the player's own entity (the same
+one-function-two-callers discipline as the stall buffet), rather than approximating per-tick vectors.
+Previously prediction excluded turbulence entirely and diverged by the full amplitude every gusty
+tick, leaving visible reconciliation jitter.
 `windY` is always zero (horizontal wind only).
 
 ### MsgServerNotice — 64 bytes
@@ -961,8 +969,10 @@ Client-side prediction (`ClientPrediction`, `game/fighters-legacy/`) reduces per
 latency by running a local `FlightIntegrator` that mirrors the server's physics:
 
 1. **On each sent `MsgClientInput`**: the input is pushed into a 128-slot history ring and
-   the local integrator is stepped one tick (steady wind from `MsgWeatherState` only —
-   turbulence is stochastic server-side and excluded to prevent compound divergence).
+   the local integrator is stepped one tick — with steady wind AND the deterministic weather
+   turbulence reproduced from the broadcast `turbulenceAmp` (#426), plus the stall buffet (#816).
+   The turbulence is a pure `(entityIdx, tickIndex, amp)` function shared with the server, so it
+   matches exactly rather than diverging.
 
 2. **On each received `MsgWorldSnapshot`**: the snapshot callback (`ClientNetEventHandler::
    snapshotCallback`) is invoked before `publishExternal()`. The integrator is reset to the

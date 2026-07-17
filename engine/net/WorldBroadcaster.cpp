@@ -26,6 +26,7 @@
 #include "net/SnapshotCodec.h"
 #include "net/SnapshotCompression.h"
 #include "net/WireCodec.h"
+#include "weather/Turbulence.h"
 #include "weather/WeatherController.h"
 #include "world/FactionDef.h"
 #include "world/FactionRegistry.h"
@@ -1443,6 +1444,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             ws.fogStartDist = env.fogStartDist;
             ws.windX = env.windX;
             ws.windZ = env.windZ;
+            ws.turbulenceAmp = env.turbulenceAmp; // #426
             m_net.broadcast(&ws, sizeof(ws), /*reliable=*/false);
         }
     }
@@ -3146,17 +3148,14 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
     if (m_weather) {
         wind.wind_world[0] = m_weather->windX();
         wind.wind_world[2] = m_weather->windZ();
-        float turb = m_weather->turbulenceAmplitude();
-        // Per-entity deterministic turbulence: seed an LCG from (entityIdx, tickIndex) so the
-        // perturbation is independent of evaluation order and identical across worker counts and
-        // platforms (no shared RNG state mutated across entities — this is the parallel-safe form).
-        uint32_t rng = entityIdx * 0x9E3779B1u + static_cast<uint32_t>(tickIndex) * 0x85EBCA77u +
-                       static_cast<uint32_t>(tickIndex >> 32) * 0xC2B2AE3Du;
-        rng = rng * 1664525u + 1013904223u;
-        float r = static_cast<float>((rng >> 16) & 0xFFu) / 128.f - 1.f;
-        wind.turbulence_body[0] = turb * r;
-        wind.turbulence_body[1] = turb * 0.3f * r;
-        wind.turbulence_body[2] = turb * 0.5f * r;
+        // Per-entity deterministic turbulence: a pure function of (entityIdx, tickIndex) + amplitude,
+        // so the perturbation is independent of evaluation order, identical across worker counts and
+        // platforms, and — since #426 broadcasts the amplitude in MsgWeatherState — reproducible on
+        // the client for prediction (weatherTurbulence(), shared with ClientPrediction).
+        const auto turb = weatherTurbulence(entityIdx, tickIndex, m_weather->turbulenceAmplitude());
+        wind.turbulence_body[0] = turb[0];
+        wind.turbulence_body[1] = turb[1];
+        wind.turbulence_body[2] = turb[2];
     }
 
     // Stall buffet (#816). Folded in HERE rather than inside the integrator, and computed from a

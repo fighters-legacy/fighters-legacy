@@ -220,6 +220,7 @@ EnvironmentState WeatherController::computeEnvironment() const {
     applyPresetToEnv(m_preset, m_timeOfDay, env);
     env.windX = windX();
     env.windZ = windZ();
+    env.turbulenceAmp = m_turbulenceAmp; // #426: broadcast so the client reproduces turbulence exactly
     return env;
 }
 

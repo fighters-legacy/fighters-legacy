@@ -36,6 +36,12 @@ static EnvironmentState makeEnv() {
     return {};
 }
 
+static EnvironmentState makeEnv(float turbulenceAmp) {
+    EnvironmentState env{};
+    env.turbulenceAmp = turbulenceAmp;
+    return env;
+}
+
 // Build a minimal RenderSnapshot with one player entry at the origin.
 static RenderSnapshot makeSnap(uint32_t idx, uint32_t gen, glm::dvec3 pos = {0, 1, 0}) {
     RenderSnapshot snap;
@@ -192,6 +198,37 @@ TEST_CASE("ClientPrediction / exact acked-seqNum replays exactly the inputs newe
     tickPred.reconcile(sd, 2u, 0u, ClientPrediction::kNoAckedSeqNum, makeEnv());
     CHECK(sc.entries[0].position.x == Catch::Approx(sd.entries[0].position.x));
     CHECK(sc.entries[0].position.y == Catch::Approx(sd.entries[0].position.y));
+}
+
+TEST_CASE("ClientPrediction / applies broadcast weather turbulence during replay (#426)", "[client_prediction]") {
+    // With a non-zero turbulence amplitude, replay now injects the deterministic per-tick
+    // perturbation instead of predicting zero turbulence — so the replayed position differs from a
+    // calm-air replay of the identical inputs. This is the divergence #426 removes from the
+    // reconciliation jitter.
+    ClientPrediction calm, gusty;
+    calm.init(PredictionSettings{}, builtinResolver(), noPayload(), flatGround(), 1u, 1u);
+    gusty.init(PredictionSettings{}, builtinResolver(), noPayload(), flatGround(), 1u, 1u);
+
+    auto c0 = makeSnap(1u, 1u, glm::dvec3{0, 500, 0});
+    calm.reconcile(c0, 1u, 0u, ClientPrediction::kNoAckedSeqNum, makeEnv());
+    auto g0 = makeSnap(1u, 1u, glm::dvec3{0, 500, 0});
+    gusty.reconcile(g0, 1u, 0u, ClientPrediction::kNoAckedSeqNum, makeEnv());
+
+    for (uint32_t i = 1u; i <= 8u; ++i) {
+        calm.onInput(makeInput(i, 0.5f), makeEnv(0.0f));
+        gusty.onInput(makeInput(i, 0.5f), makeEnv(12.0f)); // strong turbulence
+    }
+
+    auto cs = makeSnap(1u, 1u, glm::dvec3{0, 500, 0});
+    calm.reconcile(cs, 2u, 8u, ClientPrediction::kNoAckedSeqNum, makeEnv(0.0f));
+    auto gs = makeSnap(1u, 1u, glm::dvec3{0, 500, 0});
+    gusty.reconcile(gs, 2u, 8u, ClientPrediction::kNoAckedSeqNum, makeEnv(12.0f));
+
+    const glm::dvec3 calmPos = cs.entries[0].position;
+    const glm::dvec3 gustyPos = gs.entries[0].position;
+    const double d = glm::length(gustyPos - calmPos);
+    CHECK(std::isfinite(d));
+    CHECK(d > 0.0); // turbulence moved the predicted position
 }
 
 TEST_CASE("ClientPrediction / hard snap on large divergence", "[client_prediction]") {

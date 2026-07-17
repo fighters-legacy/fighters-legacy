@@ -351,6 +351,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         fl::WeatherController::applyPresetToEnv(static_cast<fl::WeatherPreset>(ws.preset), tod, env);
         env.windX = ws.windX;
         env.windZ = ws.windZ;
+        env.turbulenceAmp = ws.turbulenceAmp; // #426: fed to weatherTurbulence() in ClientPrediction
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::ServerNotice)) {
         fl::MsgServerNotice sn;
         if (!fl::readMsg(data, size, sn))

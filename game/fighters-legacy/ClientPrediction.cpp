@@ -7,6 +7,7 @@
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelData.h"
 #include "flight/StallBuffet.h"
+#include "weather/Turbulence.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -148,12 +149,20 @@ void ClientPrediction::stepIntegrator(const BufferedInput& bi, const Environment
     ctrl.rudder = bi.rudder;
     ctrl.afterburner = (bi.buttons & 0x02u) != 0;
 
-    // Steady wind only — turbulence is stochastic on the server and cannot be replicated
-    // without a shared seed. Excluding it prevents compound prediction divergence.
     WindInfluence wind;
     wind.wind_world[0] = env.windX;
     wind.wind_world[1] = 0.f;
     wind.wind_world[2] = env.windZ;
+
+    // Weather turbulence (#426): reproduced EXACTLY from the amplitude the server broadcasts in
+    // MsgWeatherState. The server's turbulence was always a deterministic function of
+    // (entityIdx, tickIndex) + amplitude, so once the amplitude reaches the client the SAME shared
+    // weatherTurbulence() yields the identical perturbation — no shared-PRNG state needed. Before
+    // this the client predicted zero turbulence and diverged by the full amplitude every gusty tick.
+    const auto turb = weatherTurbulence(m_playerIdx, m_predictedTick, env.turbulenceAmp);
+    wind.turbulence_body[0] = turb[0];
+    wind.turbulence_body[1] = turb[1];
+    wind.turbulence_body[2] = turb[2];
 
     // Stall buffet (#816). The server folds the SAME deterministic (entityIdx, tickIndex) buffet into
     // its turbulence, so unlike weather turbulence this one CAN be predicted -- and must be, or the
