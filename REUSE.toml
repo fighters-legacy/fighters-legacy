@@ -56,3 +56,10 @@ SPDX-License-Identifier = "LicenseRef-scancode-public-domain"
 path = ["platform/vulkan/UnifontBitmap.h", "platform/vulkan/UnifontBitmap.cpp"]
 SPDX-FileCopyrightText = "Roman Czyborra, Paul Hardy, and GNU Unifont contributors"
 SPDX-License-Identifier = "GPL-2.0-or-later"
+
+# World Magnetic Model 2025 Gauss coefficients (#483). Public-domain U.S. Government work produced by
+# NOAA NCEI and NGA. The .COF format cannot carry an inline SPDX header (line 1 is the model epoch).
+[[annotations]]
+path = "data/WMM.COF"
+SPDX-FileCopyrightText = "NOAA National Centers for Environmental Information (NCEI) / NGA"
+SPDX-License-Identifier = "LicenseRef-scancode-public-domain"

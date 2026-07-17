@@ -3,6 +3,7 @@
 
 #include "flight/Atmosphere.h" // calibratedAirspeed / machNumber for IAS vs Mach (#480)
 #include "flight/LocalFrame.h" // headingOf / pitchOf / bankOf on the local-level frame
+#include "nav/MagneticModel.h" // WMM2025 declination for magnetic heading (#483)
 
 #include <algorithm>
 #include <cmath>
@@ -97,10 +98,22 @@ void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrai
     // Pitch readout (left column, above airspeed)
     pushText(HudAlign::Left, 0.03f, 0.42f, kHudR, kHudG, kHudB, "PTCH %+03.0f", glm::degrees(pitchRad));
 
-    // Heading (bottom-center) — compass bearing of the nose in the local tangent plane (0 = N, 90 = E).
+    // Heading (bottom-center) — TRUE compass bearing of the nose in the local tangent plane
+    // (0 = N, 90 = E). Kept as the primary readout because it is stable everywhere, including near
+    // the world origin (the geographic north pole), where magnetic heading is intrinsically ill-defined.
     const float hdgRad = headingOf(q, e->position, planetRadiusM);
     float hdg = std::fmod(glm::degrees(hdgRad) + 360.f, 360.f);
     pushText(HudAlign::Center, 0.5f, 0.94f, kHudR, kHudG, kHudB, "HDG %3.0f", hdg);
+
+    // Magnetic heading (#483): TRUE − declination (east declination positive), from the WMM2025 model
+    // at this position. Declination changes ~0.1°/yr, so evaluating at the model epoch is plenty for a
+    // compass. Shown alongside the true heading — real avionics fly magnetic.
+    {
+        const LatLonAlt lla = worldToGeodetic(e->position.x, e->position.y, e->position.z, planetRadiusM);
+        const double decl = MagneticModel::wmm2025().declinationDeg(lla, MagneticModel::wmm2025().epochYear());
+        const float mag = std::fmod(static_cast<float>(glm::degrees(hdgRad) - decl) + 720.f, 360.f);
+        pushText(HudAlign::Left, 0.03f, 0.62f, kHudR, kHudG, kHudB, "MAG %3.0f", mag);
+    }
 
     // Heading tape underline
     pushLine(0.35f, 0.97f, 0.65f, 0.97f, 1.f, kHudR, kHudG, kHudB);
