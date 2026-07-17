@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **render**: `test_scene_renderer` palette-material test no longer fails in a release build — the per-entityIdx placeholder palette is a Debug-only aid, so the test now asserts the config-dependent contract (distinct palette slots in Debug, one shared shaded-grey fallback in Release) instead of the Debug-only one (#897)
+
 ## [0.3.4] - 2026-07-16
 
 ### Added
