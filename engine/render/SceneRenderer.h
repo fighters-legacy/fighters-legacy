@@ -61,6 +61,18 @@ class SceneRenderer {
     // damaged entities without introducing a CMake dep on engine-entity.
     using EffectResolver = std::function<std::string(uint32_t typeIndex, uint8_t damageLevel)>;
 
+    // A resolved livery for one aircraft type (#845): the livery id (used only to key the mesh/material
+    // cache) plus the "<slot>.<map>" -> replacement Texture asset-name overrides. Empty id + empty
+    // overrides = no livery (the mesh keeps its base textures). Built by the game from an engine-content
+    // LiveryDef and passed in here, so SceneRenderer.h stays free of engine-content types.
+    struct LiveryTextureSet {
+        std::string id;
+        std::unordered_map<std::string, std::string> overrides;
+    };
+    // Given an entity type index, fills `out` with the livery to apply and returns true, or returns
+    // false for no livery. Called at most once per type index (cached). Pass nullptr to disable.
+    using LiveryResolver = std::function<bool(uint32_t typeIndex, LiveryTextureSet& out)>;
+
     SceneRenderer(SimRenderBridge& bridge, MeshNameResolver resolver, AssetManager& assets, IRenderer& renderer);
     ~SceneRenderer();
 
@@ -68,6 +80,11 @@ class SceneRenderer {
     // effectResolver is called for each entity with damageLevel > 0; the returned preset
     // name is forwarded to ParticleSystem::emit(). Pass nullptr/empty to disable.
     void setParticleSystem(ParticleSystem* ps, EffectResolver effectResolver) noexcept;
+
+    // Optional: wire a livery resolver (#845). When set, each content-mesh entity's textures are
+    // resolved through the livery's "<slot>.<map>" overrides (per-map fallback to the base texture),
+    // never its geometry. Pass nullptr to disable (default = every aircraft flies its base scheme).
+    void setLiveryResolver(LiveryResolver resolver) noexcept;
 
     // Optional: wire a SubtitleQueue so renderFrame() populates FrameScene::subtitles.
     // Pass nullptr to disable. Rendering is deferred to Phase 4 IGui;
@@ -111,8 +128,17 @@ class SceneRenderer {
     void setCockpitMesh(const std::string& meshName);
 
   private:
+    // No-livery form: caches under the mesh asset name, no texture overrides.
     MeshHandle getOrUploadMesh(const std::string& name);
-    MaterialHandle getOrUploadMaterial(const std::string& meshName);
+    // Livery-aware form (#845): loads bytes from `meshAssetName`, caches under `cacheKey` (mesh name
+    // plus livery id so two liveries of one mesh do not collide), and applies `liveryOverrides` in the
+    // texture resolver. `cacheKey` also keys the material.
+    MeshHandle getOrUploadMesh(const std::string& meshAssetName, const std::string& cacheKey,
+                               const std::unordered_map<std::string, std::string>& liveryOverrides);
+    MaterialHandle getOrUploadMaterial(const std::string& cacheKey);
+
+    // Resolve (and cache) the livery for an entity type index; nullptr = no livery.
+    const LiveryTextureSet* resolveLivery(uint32_t typeIndex);
 
     // Upload builtin meshes and materials on first call; no-op thereafter.
     void ensureBuiltins();
@@ -124,6 +150,11 @@ class SceneRenderer {
 
     ParticleSystem* m_particleSystem{nullptr};
     EffectResolver m_effectResolver;
+    LiveryResolver m_liveryResolver;
+    // Per-typeIndex resolved livery, cached so the resolver runs at most once per type. A cached entry
+    // with empty id = "resolved, no livery" (distinct from "not yet resolved" = absent key).
+    std::unordered_map<uint32_t, LiveryTextureSet> m_liveryCache;
+    const std::unordered_map<std::string, std::string> m_noOverrides{}; // the empty-override sentinel
     SubtitleQueue* m_subtitleQueue{nullptr};
     std::vector<SubtitleEntry> m_subtitleEntries; // backing storage for FrameScene::subtitles span
 

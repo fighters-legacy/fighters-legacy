@@ -7,7 +7,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <exception>
 #include <span>
+#include <string_view>
 
 namespace fl {
 
@@ -145,6 +147,34 @@ std::shared_ptr<WeaponDefData> AssetManager::loadWeaponDef(const char* name) {
 
 std::shared_ptr<ManualProse> AssetManager::loadManualProse(const char* name) {
     return loadAsset<ManualProse>(AssetType::Manual, name, &IContentPack::loadManualProse);
+}
+
+std::shared_ptr<LiveryData> AssetManager::loadLivery(const char* name) {
+    return loadAsset<LiveryData>(AssetType::Livery, name, &IContentPack::loadLivery);
+}
+
+std::optional<LiveryDef> AssetManager::liveryForAircraft(const char* aircraftDefId) {
+    if (!aircraftDefId || !*aircraftDefId)
+        return std::nullopt;
+    // listAssets is priority-ordered (first-wins), so the first livery whose aircraft matches is the
+    // highest-priority one for this aircraft — the "two peers see their own installed livery" rule.
+    for (const auto& name : listAssets(AssetType::Livery)) {
+        auto data = loadLivery(name.c_str());
+        if (!data || data->bytes.empty())
+            continue;
+        LiveryDef def;
+        try {
+            def =
+                parseLiveryDef(std::string_view(reinterpret_cast<const char*>(data->bytes.data()), data->bytes.size()));
+        } catch (const std::exception&) {
+            continue; // a broken livery degrades to the base scheme, it never fails the aircraft
+        }
+        if (def.aircraft == aircraftDefId) {
+            def.id = name; // the parser cannot know the asset name; fill it from the file stem
+            return def;
+        }
+    }
+    return std::nullopt;
 }
 
 std::shared_ptr<AssetBase> AssetManager::loadDefBytes(AssetType type, const char* name) {

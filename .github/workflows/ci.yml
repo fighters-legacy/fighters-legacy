@@ -181,7 +181,7 @@ jobs:
           missing=0
           for f in fighters-legacy fl-server validate-flight-model validate-weapon validate-sensor \
                    validate-entity validate-mission validate-mesh validate-playlist validate-licenses \
-                   tex-compress fm-trim; do
+                   validate-livery tex-compress fm-trim; do
             if [ ! -f "/tmp/dist/$f" ]; then echo "MISSING from the release archive: $f"; missing=1; fi
           done
           # fl-base-pack's CI downloads its validators from a fighters-legacy release; a missing one
@@ -205,6 +205,7 @@ jobs:
           ./build/debug/tools/validate-weapon --version
           ./build/debug/tools/validate-sensor --version
           ./build/debug/tools/validate-entity --version
+          ./build/debug/tools/validate-livery --version
           ./build/debug/tools/validate-mesh --version
           ./build/debug/tools/fm-trim --version
           # The builtin reference meshes (docs/modding/3d-models.md) must validate with zero
@@ -240,6 +241,7 @@ jobs:
           .\build\debug-msvc\tools\validate-weapon.exe --version
           .\build\debug-msvc\tools\validate-sensor.exe --version
           .\build\debug-msvc\tools\validate-entity.exe --version
+          .\build\debug-msvc\tools\validate-livery.exe --version
           .\build\debug-msvc\tools\validate-mesh.exe --version
           .\build\debug-msvc\tools\tex-compress.exe --version
           .\build\debug-msvc\tools\validate-licenses.exe --version

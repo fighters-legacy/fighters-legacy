@@ -69,6 +69,15 @@ class IContentPack {
     virtual std::optional<WeaponDefData> loadWeaponDef(const char* name) = 0;
     virtual std::optional<ManualProse> loadManualProse(const char* name) = 0;
 
+    // Livery TOML (#845), texture-set indirection by material slot. NON-pure with a nullopt default
+    // so existing IContentPack implementors (including out-of-tree packs) keep compiling without
+    // change — a pack that ships no liveries simply inherits "no livery", the same degrade-to-base
+    // path a missing livery already takes. FolderContentPack overrides it to serve liveries/<name>.toml.
+    virtual std::optional<LiveryData> loadLivery(const char* name) {
+        (void)name;
+        return std::nullopt;
+    }
+
     virtual std::vector<std::string> listAssets(AssetType type) const = 0;
 
     // Returns the raw text of "<modDir>/data/<name>", or nullopt if not present.

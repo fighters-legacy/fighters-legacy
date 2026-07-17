@@ -212,6 +212,11 @@ catch_discover_tests(test_toml_numeric)
 add_executable(test_content_index test_content_index.cpp)
 target_link_libraries(test_content_index PRIVATE Catch2::Catch2WithMain engine-content)
 target_include_directories(test_content_index PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_executable(test_livery_def test_livery_def.cpp)
+target_link_libraries(test_livery_def PRIVATE Catch2::Catch2WithMain engine-content)
+target_include_directories(test_livery_def PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_livery_def)
 catch_discover_tests(test_content_index)
 
 add_executable(test_difficulty test_difficulty.cpp)
@@ -543,6 +548,11 @@ catch_discover_tests(test_validate_sensor)
 add_executable(test_validate_entity test_validate_entity.cpp)
 target_link_libraries(test_validate_entity PRIVATE Catch2::Catch2WithMain validate-entity-lib)
 catch_discover_tests(test_validate_entity)
+
+add_executable(test_validate_livery test_validate_livery.cpp)
+target_link_libraries(test_validate_livery PRIVATE Catch2::Catch2WithMain validate-livery-lib)
+target_include_directories(test_validate_livery PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_validate_livery)
 
 add_executable(test_validate_flight_model test_validate_flight_model.cpp)
 target_link_libraries(test_validate_flight_model

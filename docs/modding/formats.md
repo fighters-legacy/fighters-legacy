@@ -33,6 +33,20 @@ For authoring tools and workflow guides, see the other files in this directory.
 
 ---
 
+## Liveries — TOML
+
+A **livery** (`liveries/<id>.toml`) re-skins an aircraft by swapping textures per material slot, with
+per-map fallback to the base aircraft's textures — it never touches geometry, nodes, or UVs. `aircraft`
+is a **def id** (`fl-base:f5e`); the `[textures]` values are texture **asset names** keyed by
+`<slot>.<map>` (map ∈ diffuse/normal/orm). A livery pack ships only a `.toml` and its `.ktx2` skins,
+no mesh. Validate with `validate-livery` (single-file schema, or `--pack` to resolve texture files +
+the aircraft def id).
+
+> Full format, resolution/fallback rules, and a worked example:
+> [`docs/modding/liveries.md`](liveries.md).
+
+---
+
 ## Audio — OGG Vorbis / Opus
 
 - Sound effects: OGG at 44.1 kHz stereo or mono
