@@ -31,6 +31,20 @@ SweepCorrection sweepCorrection(float current_sweep_deg, const WingSweepData& ws
 
 } // namespace
 
+float engineThrustN(const EngineData& engine, float mach, float alt_km, bool ab_engaged, float throttle_actual) {
+    if (ab_engaged && engine.ab_thrust)
+        return engine.ab_thrust->lookup(mach, alt_km) * 1000.f;
+
+    const float mil_kn = engine.mil_thrust.lookup(mach, alt_km);
+    if (engine.idle_thrust) {
+        // Blend idle → mil across throttle [0, 1] (#898). idle_kn may be negative (ram drag > idle
+        // gross thrust). At throttle 0 the aircraft feels the published idle deck; at 1, MIL.
+        const float idle_kn = engine.idle_thrust->lookup(mach, alt_km);
+        return (idle_kn + throttle_actual * (mil_kn - idle_kn)) * 1000.f;
+    }
+    return throttle_actual * mil_kn * 1000.f;
+}
+
 std::array<float, 3> computeForces(float alpha_rad, float beta_rad, float mach, float speed_m_s, float altitude_m,
                                    float current_sweep_deg, bool ab_engaged, float throttle_actual,
                                    const ControlInput& ctrl, const PayloadEffect& payload, const FlightModelData& data,
@@ -92,16 +106,10 @@ std::array<float, 3> computeForces(float alpha_rad, float beta_rad, float mach, 
     float drag = q_dyn * S * cd_total; // N, opposing velocity
 
     // ── Thrust ────────────────────────────────────────────────────────────────
+    // Shared helper so the body-x thrust here and the moment-arm thrust in FixedWingForceModel cannot
+    // diverge; also carries the optional idle deck (#898).
     float alt_km = altitude_m / 1000.f;
-    float mil_kn = data.engine.mil_thrust.lookup(mach, alt_km);
-    float thrust_n = 0.f;
-
-    if (ab_engaged && data.engine.ab_thrust) {
-        float ab_kn = data.engine.ab_thrust->lookup(mach, alt_km);
-        thrust_n = ab_kn * 1000.f;
-    } else {
-        thrust_n = throttle_actual * mil_kn * 1000.f;
-    }
+    float thrust_n = engineThrustN(data.engine, mach, alt_km, ab_engaged, throttle_actual);
 
     // ── Body-frame assembly ───────────────────────────────────────────────────
     // Body frame: x=forward, y=up, z=right. Gravity added by integrator.

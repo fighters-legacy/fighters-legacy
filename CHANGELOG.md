@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **flight**: Optional `[engine.idle_thrust]` deck — a `(mach, alt_km)` table (kN, same shape as `mil_thrust`) that the engine blends `idle → mil` across throttle instead of `0 → mil`, so part-throttle behaviour (descents, approach, energy management) is modelled; idle may be negative (ram drag > idle gross thrust). Absent, the linear path is byte-identical to before (#898)
+
 ### Fixed
 
 - **render**: `test_scene_renderer` palette-material test no longer fails in a release build — the per-entityIdx placeholder palette is a Debug-only aid, so the test now asserts the config-dependent contract (distinct palette slots in Debug, one shared shaded-grey fallback in Release) instead of the Debug-only one (#897)

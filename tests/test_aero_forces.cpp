@@ -330,6 +330,56 @@ TEST_CASE("a model with no cd_table produces bit-identical forces", "[aero][cd_t
 }
 
 // ---------------------------------------------------------------------------
+// Idle-thrust deck (#898)
+//
+// Below MIL the engine used to model thrust as a straight throttle x mil line with no idle deck. Real
+// turbofan idle thrust is neither zero nor linear: at altitude and speed it goes NEGATIVE (ram drag >
+// idle gross thrust). An optional [engine.idle_thrust] table blends idle -> mil across throttle.
+// ---------------------------------------------------------------------------
+
+// kGenericToml with an idle deck on the same (mach, alt_km) grid as mil_thrust. Static idle is a small
+// positive; at M 0.9 it is strongly negative, the ram-drag regime this feature exists to model.
+static std::string withIdleThrust() {
+    return kGenericToml + R"(
+[engine.idle_thrust]
+mach   = [0.0, 0.3, 0.9]
+alt_km = [0.0, 12.0]
+values = [2.8, 1.0, 1.0, -2.0, -16.0, -10.0]
+)";
+}
+
+TEST_CASE("engineThrustN without an idle deck is the linear throttle x mil line", "[aero][idle_thrust]") {
+    auto d = makeData(); // no idle_thrust
+    CHECK(!d.engine.idle_thrust.has_value());
+    const float mil = d.engine.mil_thrust.lookup(0.f, 0.f); // 60 kN
+    CHECK_THAT(engineThrustN(d.engine, 0.f, 0.f, false, 0.f), WithinAbs(0.f, 1e-3f));
+    CHECK_THAT(engineThrustN(d.engine, 0.f, 0.f, false, 0.6f), WithinRel(0.6f * mil * 1000.f, 1e-5f));
+    CHECK_THAT(engineThrustN(d.engine, 0.f, 0.f, false, 1.f), WithinRel(mil * 1000.f, 1e-5f));
+}
+
+TEST_CASE("engineThrustN blends the idle deck to MIL across throttle", "[aero][idle_thrust]") {
+    auto d = parseFlightModel(withIdleThrust());
+    REQUIRE(d.engine.idle_thrust.has_value());
+    const float mil = d.engine.mil_thrust.lookup(0.f, 0.f);    // 60 kN at M0 SL
+    const float idle = d.engine.idle_thrust->lookup(0.f, 0.f); // 2.8 kN at M0 SL
+    REQUIRE(idle == Catch::Approx(2.8f));
+
+    // Throttle 0 -> the published static idle, not zero.
+    CHECK_THAT(engineThrustN(d.engine, 0.f, 0.f, false, 0.f), WithinRel(idle * 1000.f, 1e-5f));
+    // Throttle 1 -> MIL, exactly as without the deck.
+    CHECK_THAT(engineThrustN(d.engine, 0.f, 0.f, false, 1.f), WithinRel(mil * 1000.f, 1e-5f));
+    // Half throttle -> the linear blend.
+    CHECK_THAT(engineThrustN(d.engine, 0.f, 0.f, false, 0.5f), WithinRel((idle + 0.5f * (mil - idle)) * 1000.f, 1e-5f));
+}
+
+TEST_CASE("idle thrust goes negative in the ram-drag regime", "[aero][idle_thrust]") {
+    auto d = parseFlightModel(withIdleThrust());
+    // At M 0.9 sea level the deck is -16 kN: throttle 0 produces negative net thrust.
+    CHECK(engineThrustN(d.engine, 0.9f, 0.f, false, 0.f) < 0.f);
+    CHECK_THAT(engineThrustN(d.engine, 0.9f, 0.f, false, 0.f), WithinRel(-16.f * 1000.f, 1e-5f));
+}
+
+// ---------------------------------------------------------------------------
 // Asymmetric control travel (#822)
 //
 // [aero.controls] gave one scalar per axis, and real stabilators are not symmetric: the F-5E's

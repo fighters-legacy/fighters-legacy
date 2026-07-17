@@ -375,6 +375,17 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
                 throw std::runtime_error("engine.ab_thrust: alt_km must have at least 2 breakpoints");
             d.engine.ab_thrust = std::move(abt);
         }
+
+        // Optional idle deck (#898): same (mach, alt_km) shape as mil_thrust. Blends idle → mil
+        // across throttle when present; absent leaves the linear throttle × mil path unchanged.
+        if (auto idle = tbl["engine"]["idle_thrust"]; idle && idle.as_table()) {
+            auto idt = parse_table2d(*idle.as_table(), "mach", "alt_km");
+            if (idt.rows.size() < 2)
+                throw std::runtime_error("engine.idle_thrust: mach must have at least 2 breakpoints");
+            if (idt.cols.size() < 2)
+                throw std::runtime_error("engine.idle_thrust: alt_km must have at least 2 breakpoints");
+            d.engine.idle_thrust = std::move(idt);
+        }
     }
 
     // ── [carrier] (optional) ──────────────────────────────────────────────────

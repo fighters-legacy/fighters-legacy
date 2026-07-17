@@ -140,6 +140,16 @@ struct EngineData {
     EngineType type{EngineType::Turbofan};
     Table2D mil_thrust; // (Mach, alt_km) -> kN
     std::optional<Table2D> ab_thrust;
+
+    // Optional idle deck (#898): (Mach, alt_km) -> kN, same shape as mil_thrust. Real turbofan idle
+    // thrust is neither zero nor a linear scaling of MIL: at altitude and speed it goes NEGATIVE
+    // because ram drag exceeds idle gross thrust (NASA TP-1538 Table VI gives the F-16 +2.824 kN
+    // static but −16.013 kN at M 1.0). When present, computeForces blends idle → mil across throttle
+    // [0, 1] instead of 0 → mil, so part-throttle behaviour (descents, approach, energy management)
+    // is modelled. Absent, the straight throttle × mil line stays the default — bit-identical to
+    // before. Values are kN like mil_thrust, so a deck published in newtons is /1000 on authoring.
+    std::optional<Table2D> idle_thrust;
+
     float fuel_flow_idle_kg_s{0.1f};
     float fuel_flow_mil_kg_s{1.f};
     float fuel_flow_ab_kg_s{3.f};

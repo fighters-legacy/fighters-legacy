@@ -16,14 +16,10 @@ ForceMoment FixedWingForceModel::compute(const FlightState& s, const ControlInpu
     auto forces = computeForces(aero.alpha_rad, aero.beta_rad, aero.mach, aero.speed_m_s, aero.altitude_m,
                                 s.current_sweep_deg, s.ab_engaged, s.throttle_actual, ctrl, payload, data, atmos);
 
-    // Thrust magnitude (for the TVC moment and prop effects inside computeMoments).
+    // Thrust magnitude (for the TVC moment and prop effects inside computeMoments). Same helper
+    // computeForces uses, so the two thrust figures — and the idle deck (#898) — cannot drift.
     const float alt_km = aero.altitude_m / 1000.f;
-    const float mil_kn = data.engine.mil_thrust.lookup(aero.mach, alt_km);
-    float thrust_n;
-    if (s.ab_engaged && data.engine.ab_thrust)
-        thrust_n = data.engine.ab_thrust->lookup(aero.mach, alt_km) * 1000.f;
-    else
-        thrust_n = s.throttle_actual * mil_kn * 1000.f;
+    const float thrust_n = engineThrustN(data.engine, aero.mach, alt_km, s.ab_engaged, s.throttle_actual);
 
     // omega[0]=roll(X), omega[1]=yaw(Y=up), omega[2]=pitch(Z=right); computeMoments wants (p,q,r) in
     // the STANDARD aero body frame (x=fwd, y=right, z=down), where yaw rate r is positive nose-RIGHT.

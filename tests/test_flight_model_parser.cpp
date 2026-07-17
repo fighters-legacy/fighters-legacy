@@ -327,6 +327,35 @@ values = [100.0, 50.0,
     REQUIRE(d.engine.ab_thrust.has_value());
 }
 
+TEST_CASE("Parser accepts [engine.idle_thrust] optional block", "[parser]") {
+    // #898: absent by default; present it parses on the same (mach, alt_km) grid as mil_thrust,
+    // idle values may be negative (ram drag exceeds idle gross thrust at speed/altitude).
+    auto plain = parseFlightModel(kMinimalToml);
+    CHECK_FALSE(plain.engine.idle_thrust.has_value());
+
+    std::string toml = kMinimalToml + R"(
+[engine.idle_thrust]
+mach   = [0.0, 0.9]
+alt_km = [0.0, 12.0]
+values = [ 2.8,  1.0,
+         -16.0, -10.0]
+)";
+    auto d = parseFlightModel(toml);
+    REQUIRE(d.engine.idle_thrust.has_value());
+    CHECK_THAT(d.engine.idle_thrust->lookup(0.0f, 0.0f), WithinAbs(2.8f, 1e-5f));
+    CHECK(d.engine.idle_thrust->lookup(0.9f, 0.0f) < 0.f);
+}
+
+TEST_CASE("Parser rejects [engine.idle_thrust] with too few breakpoints", "[parser]") {
+    std::string toml = kMinimalToml + R"(
+[engine.idle_thrust]
+mach   = [0.0]
+alt_km = [0.0, 12.0]
+values = [2.8, 1.0]
+)";
+    CHECK_THROWS_AS(parseFlightModel(toml), std::runtime_error);
+}
+
 TEST_CASE("Parser rejects unknown engine_type", "[parser]") {
     std::string toml = kMinimalToml;
     auto pos = toml.find("\"turbofan\"");

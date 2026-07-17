@@ -597,28 +597,29 @@ static void validateCdWave(const toml::table& tbl, FlightModelValidationResult& 
     }
 }
 
-static void validateAbThrust(const toml::table& tbl, FlightModelValidationResult& r) {
-    auto ab = tbl["engine"]["ab_thrust"];
-    if (!ab)
+// Shared shape check for the optional (mach, alt_km) thrust decks — ab_thrust and idle_thrust (#898)
+// have identical structure, so one helper keeps their rules from drifting.
+static void validateOptionalThrustTable(const toml::table& tbl, const char* key, FlightModelValidationResult& r) {
+    auto t = tbl["engine"][key];
+    if (!t)
         return;
-    std::size_t machLen = arrayLen(ab["mach"]);
-    std::size_t altLen = arrayLen(ab["alt_km"]);
+    const std::string prefix = std::string("engine.") + key;
+    std::size_t machLen = arrayLen(t["mach"]);
+    std::size_t altLen = arrayLen(t["alt_km"]);
     if (machLen < static_cast<std::size_t>(kMilThrustMachMin)) {
-        r.errors.push_back("engine.ab_thrust.mach must have at least " + std::to_string(kMilThrustMachMin) +
-                           " breakpoints");
+        r.errors.push_back(prefix + ".mach must have at least " + std::to_string(kMilThrustMachMin) + " breakpoints");
         r.ok = false;
     }
     if (altLen < static_cast<std::size_t>(kMilThrustAltMin)) {
-        r.errors.push_back("engine.ab_thrust.alt_km must have at least " + std::to_string(kMilThrustAltMin) +
-                           " breakpoints");
+        r.errors.push_back(prefix + ".alt_km must have at least " + std::to_string(kMilThrustAltMin) + " breakpoints");
         r.ok = false;
     }
     if (machLen >= static_cast<std::size_t>(kMilThrustMachMin) &&
         altLen >= static_cast<std::size_t>(kMilThrustAltMin)) {
-        std::size_t valLen = arrayLen(ab["values"]);
+        std::size_t valLen = arrayLen(t["values"]);
         std::size_t expected = machLen * altLen;
         if (valLen != expected) {
-            r.errors.push_back("engine.ab_thrust.values size mismatch: expected " + std::to_string(expected) + " got " +
+            r.errors.push_back(prefix + ".values size mismatch: expected " + std::to_string(expected) + " got " +
                                std::to_string(valLen));
             r.ok = false;
         }
@@ -835,7 +836,8 @@ FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
     validateAeroControls(tbl, r);
     validateEngine(tbl, r);
     validateCdWave(tbl, r);
-    validateAbThrust(tbl, r);
+    validateOptionalThrustTable(tbl, "ab_thrust", r);
+    validateOptionalThrustTable(tbl, "idle_thrust", r);
     validateTvc(tbl, r);
     validateWingSweep(tbl, r);
     validateProp(tbl, r);

@@ -674,6 +674,32 @@ that Mach/altitude cell.
 **Tuning:** If the aircraft can't reach its published max speed, increase the thrust value at
 the corresponding Mach/altitude cell. If it accelerates too fast, reduce it.
 
+### Idle-thrust deck (optional)
+
+By default, thrust below MIL is a straight line: `throttle × mil`, i.e. `0 → mil` as the throttle
+moves `0 → 1`. That treats idle as *zero* thrust, which is wrong. Real turbofan idle thrust is
+non-zero and non-linear — a small positive figure static, but at altitude and speed it goes
+**negative**, because ram drag through the engine exceeds the idle gross thrust.
+
+Add an optional `[engine.idle_thrust]` table — the **same `(mach, alt_km)` grid** and **kN units**
+as `mil_thrust` — and the engine blends `idle → mil` across throttle `[0, 1]` instead of `0 → mil`.
+Absent, behaviour is unchanged (the straight line stays the default, which is fine for most
+content). Values may be negative; a deck published in newtons is divided by 1000 on authoring.
+
+```toml
+[engine.idle_thrust]   # optional — model part-throttle idle deck (descents, approach)
+mach   = [0.0, 0.9]
+alt_km = [0, 12]
+values = [
+           2.8,   1.0,    # M0.0: +2.8 kN static SL, +1.0 kN at 12 km
+         -16.0, -10.0,    # M0.9: net drag — ram drag exceeds idle gross thrust
+]   # values in kN
+```
+
+**Source:** engine idle-thrust decks are published alongside MIL/max in NASA reports (e.g. TP-1538
+Table VI gives the F-16's `T_idle` from +2,824 N static to −16,013 N at M 1.0). Only the AB branch
+ignores the deck; when the afterburner is lit, `[engine.ab_thrust]` is used outright.
+
 ### Fuel burn model
 
 Piecewise linear: throttle 0 → 1 maps `fuel_flow_idle_kg_s` → `fuel_flow_mil_kg_s`. When AB

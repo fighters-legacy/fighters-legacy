@@ -38,6 +38,14 @@ struct PayloadEffect {
     float extra_cd0{0.f};
 };
 
+// Net propulsive thrust (N) for the current throttle/AB state — the single source of truth shared by
+// computeForces (body-x thrust) and FixedWingForceModel (the TVC/prop/engine-out moment arms), so the
+// two cannot drift. AB uses the ab_thrust table outright. Otherwise, when an [engine.idle_thrust] deck
+// is present the result is a linear blend idle → mil across throttle [0, 1] (idle may be negative from
+// ram drag, #898); without it, the straight throttle × mil line. mach and alt_km index the tables.
+[[nodiscard]] float engineThrustN(const EngineData& engine, float mach, float alt_km, bool ab_engaged,
+                                  float throttle_actual);
+
 // Forces in body frame [x=forward, y=up, z=right] (N).
 std::array<float, 3> computeForces(float alpha_rad, float beta_rad, float mach, float speed_m_s, float altitude_m,
                                    float current_sweep_deg, bool ab_engaged, float throttle_actual,

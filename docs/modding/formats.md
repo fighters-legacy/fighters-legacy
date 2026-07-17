@@ -216,6 +216,11 @@ values = [
     126.0, 108.0,  91.0,  73.0,  53.0,  33.0,
 ]
 
+[engine.idle_thrust]           # optional — idle deck (kN, same grid as mil_thrust); blends
+mach   = [0.0, 0.9]            #   idle → mil across throttle. Values may be negative (ram
+alt_km = [0, 12]               #   drag > idle gross thrust at speed). See flight-model.md.
+values = [ 2.8, 1.0, -16.0, -10.0]
+
 [engine.ab_thrust]             # optional — omit for non-afterburning aircraft
 mach   = [0.0, 0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.0, 2.25]
 alt_km = [0, 3, 6, 9, 12, 15]
