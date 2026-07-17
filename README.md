@@ -41,6 +41,7 @@ for clustered fleets.
 | [docs/references.md](docs/references.md) | Technology reference index: upstream docs for every engine dependency and tool |
 | [docs/project-management.md](docs/project-management.md) | How work is managed: issue types, epics/sub-issues, labels, milestones, the Project board |
 | [GOVERNANCE.md](GOVERNANCE.md) | Decision-making, RFC process, and decision records |
+| [NOTICE](NOTICE) | Third-party data sources and attribution (WMM, and the planned geospatial datasets) |
 
 ### Related repositories
 

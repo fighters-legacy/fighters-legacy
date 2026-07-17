@@ -1,0 +1,62 @@
+Fighters Legacy — Third-Party Data & Attribution NOTICE
+=======================================================
+
+Fighters Legacy is licensed under the GNU General Public License v3.0 or later
+(see LICENSE / LICENSES/GPL-3.0-or-later.txt). This NOTICE lists the third-party
+data sources bundled with, or intended for, the engine and the attribution and
+license terms that apply to them. It complements the machine-readable REUSE/SPDX
+metadata in REUSE.toml.
+
+--------------------------------------------------------------------------------
+Bundled now
+--------------------------------------------------------------------------------
+
+World Magnetic Model 2025 (WMM2025) — magnetic declination coefficients
+  Files:    data/WMM.COF (also compiled into engine/nav/MagneticModel.cpp)
+  Source:   NOAA National Centers for Environmental Information (NCEI) and the
+            U.S. National Geospatial-Intelligence Agency (NGA).
+  License:  Public domain (a work of the U.S. Government, 17 U.S.C. § 105).
+  URL:      https://www.ncei.noaa.gov/products/world-magnetic-model
+  Notes:    Used for magnetic heading / declination (#483). No attribution is
+            legally required for public-domain works; it is provided here as a
+            courtesy and to document provenance.
+
+--------------------------------------------------------------------------------
+Planned data sources (attribution recorded ahead of bundling)
+--------------------------------------------------------------------------------
+
+The spherical-Earth epic (#468) integrates several open geospatial datasets. Each
+carries its own attribution obligation, recorded here so the requirement is in
+place BEFORE the data is bundled. When the corresponding data is added to a
+release, its attribution must also be surfaced to players in-game.
+
+ESA WorldCover — land-cover classification (terrain biomes, #475)
+  Source:   © ESA WorldCover project / Contains modified Copernicus data.
+  License:  Creative Commons Attribution 4.0 International (CC BY 4.0).
+            *** Attribution is REQUIRED when this data is distributed. ***
+  URL:      https://esa-worldcover.org/
+
+Copernicus Sentinel-2 — high-resolution satellite terrain textures (#488)
+  Source:   Contains modified Copernicus Sentinel data.
+  License:  Copernicus data terms (free, full, open access; attribution required).
+  URL:      https://sentinel.esa.int/
+
+GEBCO — global ocean bathymetry (#476)
+  Source:   GEBCO Compilation Group.
+  License:  GEBCO Grid terms (freely available; attribution requested).
+  URL:      https://www.gebco.net/
+
+OurAirports — airport / runway registry (#486)
+  Source:   OurAirports (David Megginson and contributors).
+  License:  Public domain.
+  URL:      https://ourairports.com/data/
+
+--------------------------------------------------------------------------------
+In-game credits
+--------------------------------------------------------------------------------
+
+Every bundled data source that requires attribution (notably the CC BY 4.0 ESA
+WorldCover data) must be credited on a player-reachable credits surface in the
+game before that data ships in a release. The only data bundled today (WMM2025)
+is public domain and imposes no such requirement; the in-game credits surface is
+added together with the first attribution-bearing dataset it must display.
