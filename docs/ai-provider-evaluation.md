@@ -26,6 +26,22 @@ the follow-on epics. Re-running it is one command; every number below is reprodu
 
 ## Results
 
+> **Suite provenance (2026-07-17, #781).** The numbers in this document were measured on the
+> **26-case provisional** `intent` suite. The suite has since been re-pointed at the **shipped**
+> six-command wingman grammar (`fl::ai::WingmanCommand`, #610 — `tests/test_ai_eval.py` asserts the
+> two match) and grown to **111 utterances** (16 per command, 13 out-of-grammar `unknown` cases, and
+> 5 prompt-injection cases that must all answer `unknown`). **Re-measurement on the expanded suite is
+> pending** — it needs a running model on a GPU *and* on the 8-core reference VM (CI never requires a
+> model), neither reachable from the change that expanded the data. The tables below therefore stand
+> as the last measured values, not the current ones; treat them as directional until re-run.
+>
+> One conclusion is already available *without* re-measuring, and it settles the open question #781
+> raised for the Epic O latency wall (#769): the shipped grammar is **the same six commands** as the
+> placeholder, not shorter. So option (3) below — "cut the prompt via a smaller grammar" — did **not**
+> materialize as a free win from #610; the ~190-token grammar the CPU latency is dominated by is
+> essentially unchanged, and the CPU intent budget is expected to stay over on the reference box.
+> The remaining levers (few-shot, constrained decoding) are unaffected.
+
 Endpoint: LiteLLM → Ollama. Host: RTX 5080 (16 GB), 24-core Linux. One pass per case (`--repeat 1`),
 temperature 0.
 
@@ -128,10 +144,11 @@ record is `docs/ai-architecture.md` §9; in short:
 - **Bringing it back to CPU is a small-model-accuracy problem, not a big-model-speed problem** —
   3B is the only size inside the budget (0.7 s) and it is 81 %. The levers act on the model and the
   prompt, not the host: a shorter grammar, few-shot examples, and constrained/grammar-guided
-  decoding. **That work is folded into #610**, because the first lever *is* #610 — latency is
-  prompt-eval bound, so the shipped grammar moves it directly, and re-measuring the provisional
-  placeholder would produce a number that changes the moment the real vocabulary lands. The `intent`
-  suite is the regression test.
+  decoding. The first lever was expected to be #610 (latency is prompt-eval bound), but **#610 shipped
+  the same six commands** as the provisional placeholder (#781) — the grammar did *not* shrink, so
+  that free win did not materialize and the CPU intent budget is expected to stay over. The remaining
+  levers (few-shot, constrained decoding) are unexhausted. The `intent` suite (now 111 utterances
+  against the shipped grammar) is the regression test.
 
 The four options that were on the table, and why the fork resolved the way it did:
 

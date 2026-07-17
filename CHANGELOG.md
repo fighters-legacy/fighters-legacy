@@ -18,6 +18,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **flight**: `MsgWeatherState` broadcasts the turbulence amplitude (grew 20→24 bytes, additive) so client-side prediction reproduces the server's per-tick turbulence **exactly** via the shared deterministic `weatherTurbulence(entityIdx, tickIndex, amp)`; prediction previously predicted zero turbulence and jittered on every gusty reconciliation (#426)
 - **render/content**: Livery system — texture-set indirection by material slot (`liveries/<id>.toml`, new `AssetType::Livery`). A livery re-skins an aircraft via `<slot>.<map>` texture overrides with per-map fallback to the base scheme, never touching geometry/nodes/UVs (so user skins are multiplayer-safe); a missing/broken livery degrades to base. Wired through `SceneRenderer::setLiveryResolver`; `validate-livery` (single-file + `--pack`) resolves texture asset names and the aircraft def id; documented in `docs/modding/liveries.md` (#845)
 
+### Changed
+
+- **ai**: Expanded the `intent` eval suite to 111 utterances against the shipped six-command wingman grammar (16 per command + 13 out-of-grammar `unknown` + 5 prompt-injection cases); noted in `docs/ai-provider-evaluation.md` that the shipped grammar is the same size as the placeholder (so the #769 "shorter grammar" latency lever did not materialize) and that re-measurement on the expanded suite is pending a model + reference hardware (#781)
+
 ### Fixed
 
 - **tools**: `validate-sensor` no longer warns "this sensor can never hold a lock" for a correctly-authored SARH seeker head (radar, `emitter = false`, track lobe, `role = "seeker"`); an aircraft radar with the same shape still warns (#902)
