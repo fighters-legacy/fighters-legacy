@@ -352,13 +352,46 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     const auto& moments = fm.moment_body;
 
     // 11. Semi-implicit Euler: angular velocity.
-    // moments = {roll, pitch, yaw}; omega = {roll(X), yaw(Y), pitch(Z)}.
-    float Ixx = m_data->geometry.ixx_kg_m2;
-    float Iyy = m_data->geometry.iyy_kg_m2;
-    float Izz = m_data->geometry.izz_kg_m2;
-    m_state.omega[0] += (moments[0] / Ixx) * dt; // roll  (omega[0] = around X=fwd)
-    m_state.omega[2] += (moments[1] / Iyy) * dt; // pitch (omega[2] = around Z=right)
-    m_state.omega[1] += (moments[2] / Izz) * dt; // yaw   (omega[1] = around Y=up)
+    // moments = {roll, pitch, yaw}; omega = {roll(X), yaw(Y), pitch(Z)}. Inertia names are
+    // aero-convention: ixx=roll, iyy=pitch, izz=yaw.
+    const float Ixx = m_data->geometry.ixx_kg_m2;
+    const float Iyy = m_data->geometry.iyy_kg_m2;
+    const float Izz = m_data->geometry.izz_kg_m2;
+
+    // Applied moments about the body axes, before the inertial solve. L=roll(about X),
+    // M=pitch(about Z=right), N=yaw(about Y=up, engine convention).
+    float L = moments[0];
+    float M = moments[1];
+    float N = moments[2];
+
+    // Engine angular momentum He (#899): a spinning rotor about +X is a gyroscope, so M_gyro = −ω×H
+    // with H=(He,0,0). In the engine frame (ω_x=omega[0], ω_y=omega[1]=yaw, ω_z=omega[2]=pitch) that
+    // is a pitch moment +He·(yaw rate) and a yaw moment −He·(pitch rate); no roll term. He=0 ⇒ no
+    // change. (The [prop] block keeps its own prop-specific gyro model — this is the general term.)
+    const float He = m_data->geometry.engine_ang_momentum;
+    if (He != 0.f) {
+        M += He * m_state.omega[1]; // pitch (about Z) from yaw rate
+        N -= He * m_state.omega[2]; // yaw   (about Y) from pitch rate
+    }
+
+    m_state.omega[2] += (M / Iyy) * dt; // pitch (omega[2] = around Z=right) — uncoupled by Ixz
+
+    // Ixz roll↔yaw coupling (#899). With a product of inertia between the roll (x) and yaw (z) axes,
+    // a roll moment produces a yaw acceleration and vice versa. Solving the coupled pair
+    //   Ixx·ṗ − Ixz·ṙ = L,  −Ixz·ṗ + Izz·ṙ = N   (aero convention; ṙ_engine = −ṙ_aero, N_engine = −N)
+    // gives, in the engine's yaw sign: ṗ = (Izz·L − Ixz·N)/det, ṙ = (Ixx·N − Ixz·L)/det. At Ixz=0 this
+    // reduces to the decoupled L/Ixx, N/Izz — byte-identical to every pre-#899 model. Only the Ixz
+    // İ·ω̇ coupling is added, not the ω×H rate-product Euler terms (they are non-zero at Ixz=0 and
+    // would change all existing content); the term the issue calls out as "matter most" is this one.
+    const float Ixz = m_data->geometry.ixz_kg_m2;
+    const float det = Ixx * Izz - Ixz * Ixz;
+    if (Ixz != 0.f && det > 0.f) {
+        m_state.omega[0] += ((Izz * L - Ixz * N) / det) * dt; // roll (about X)
+        m_state.omega[1] += ((Ixx * N - Ixz * L) / det) * dt; // yaw  (about Y=up)
+    } else {
+        m_state.omega[0] += (L / Ixx) * dt; // roll  (omega[0] = around X=fwd)
+        m_state.omega[1] += (N / Izz) * dt; // yaw   (omega[1] = around Y=up)
+    }
 
     // Clamp angular rates: prevents float overflow when aerodynamic moments are
     // extreme (e.g. 90° AoA freefall).  50 rad/s ≈ 2865°/s — well above any

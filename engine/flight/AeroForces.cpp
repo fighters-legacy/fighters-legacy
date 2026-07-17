@@ -64,6 +64,11 @@ std::array<float, 3> computeForces(float alpha_rad, float beta_rad, float mach, 
 
     float lift = q_dyn * S * cl; // N, perpendicular to velocity vector
 
+    // Speed-brake normal-force (lift) increment (#899, ΔCZ,sb). A real airbrake changes lift as well
+    // as drag; added straight to the lift force so it does NOT feed the induced-drag term (that is the
+    // speed-brake's own speedbrake_cd's job). 0 by default, so most content is unaffected.
+    lift += q_dyn * S * (data.drag_polar.speedbrake_cl * ctrl.speedbrake);
+
     // ── Drag ──────────────────────────────────────────────────────────────────
     float cd0 = data.drag_polar.cd0 + payload.extra_cd0;
     float k_eff = data.drag_polar.k;
@@ -156,18 +161,29 @@ std::array<float, 3> computeMoments(float alpha_rad, float beta_rad, float p_rad
     const float ail_rad = ctrl.aileron * data.controls.max_aileron_deg * kDegToRad;
     const float rudder_rad = -ctrl.rudder * data.controls.max_rudder_deg * kDegToRad;
 
-    // Pitch moment (positive = nose up)
-    float cm = data.moments.cm_alpha * alpha_rad + data.moments.cm_q * (q_rad_s * mac * inv_2v) +
-               data.moments.cm_de * elev_rad;
+    // Alpha-dependent dynamic dampers (#899): the table replaces the scalar when present, else the
+    // scalar. A high-alpha airframe's pitch/roll/yaw damping changes across the alpha sweep, and a
+    // deep-stall model needs the post-stall values a single scalar cannot carry.
+    const float alpha_deg = alpha_rad / kDegToRad;
+    const float cm_q_eff = data.moments.cm_q_table ? data.moments.cm_q_table->lookup(alpha_deg) : data.moments.cm_q;
+    const float cl_p_eff = data.moments.cl_p_table ? data.moments.cl_p_table->lookup(alpha_deg) : data.moments.cl_p;
+    const float cn_r_eff = data.moments.cn_r_table ? data.moments.cn_r_table->lookup(alpha_deg) : data.moments.cn_r;
+
+    // Pitch moment (positive = nose up). cm0 (#899) is the zero-alpha pitching moment — a cambered
+    // wing trims at a non-zero alpha with zero elevator. cm_speedbrake adds the airbrake's pitch
+    // increment when deployed. Both default 0.
+    float cm = data.moments.cm0 + data.moments.cm_alpha * alpha_rad + cm_q_eff * (q_rad_s * mac * inv_2v) +
+               data.moments.cm_de * elev_rad + data.moments.cm_speedbrake * ctrl.speedbrake;
     float pitch_moment = q_dyn * S * mac * cm;
 
     // TVC pitch contribution: moment arm from CG assumed ≈ 0 (moment = thrust × sin(tvc))
     if (data.tvc)
         pitch_moment += thrust_n * std::sin(tvc_angle_rad);
 
-    // Roll moment (positive = right wing down)
-    float cl_coeff =
-        data.moments.cl_beta * beta_rad + data.moments.cl_p * (p_rad_s * span * inv_2v) + data.moments.cl_da * ail_rad;
+    // Roll moment (positive = right wing down). cl_dr (#899) is rudder-induced roll — rudder
+    // deflection rolls the aircraft; 0 by default.
+    float cl_coeff = data.moments.cl_beta * beta_rad + cl_p_eff * (p_rad_s * span * inv_2v) +
+                     data.moments.cl_da * ail_rad + data.moments.cl_dr * rudder_rad;
     float roll_moment = q_dyn * S * span * cl_coeff;
 
     // Prop torque and gyroscopic effects
@@ -177,9 +193,10 @@ std::array<float, 3> computeMoments(float alpha_rad, float beta_rad, float p_rad
         // Gyroscopic: pitching generates yaw (handled in yaw moment below)
     }
 
-    // Yaw moment (positive = nose right)
-    float cn_coeff = data.moments.cn_beta * beta_rad + data.moments.cn_r * (r_rad_s * span * inv_2v) +
-                     data.moments.cn_dr * rudder_rad;
+    // Yaw moment (positive = nose right). cn_da (#899) is adverse yaw — aileron deflection yaws
+    // against the commanded roll; 0 by default.
+    float cn_coeff = data.moments.cn_beta * beta_rad + cn_r_eff * (r_rad_s * span * inv_2v) +
+                     data.moments.cn_dr * rudder_rad + data.moments.cn_da * ail_rad;
     float yaw_moment = q_dyn * S * span * cn_coeff;
 
     // Prop gyroscopic: pitching nose-up (positive q) creates right yaw for CW prop

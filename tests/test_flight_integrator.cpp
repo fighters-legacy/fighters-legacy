@@ -1659,3 +1659,89 @@ TEST_CASE("Integrator: sustained rotation does not create energy (#891 transport
     // well past this bound. Guard tightly so the pump cannot creep back.
     CHECK(speedMax < 1.05 * v0);
 }
+
+// ---------------------------------------------------------------------------
+// Ixz product-of-inertia coupling and engine gyroscopic moment (#899)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Integrator: Ixz couples a yaw input into a roll rate", "[integrator][gaps899]") {
+    // A rudder input produces a yaw moment. With Ixz = 0 the roll axis is uncoupled from it, so after
+    // one step (before any sideslip builds) the roll rate stays ~0. With Ixz > 0 the yaw moment
+    // couples into a roll acceleration — the inertial roll/yaw coupling a real fighter has.
+    ControlInput ctrl{};
+    ctrl.rudder = 1.f;
+    PayloadEffect px{};
+
+    auto mk = [&](float ixz) {
+        auto data = makeData();
+        data->geometry.ixz_kg_m2 = ixz;
+        FlightIntegrator fi(data);
+        FlightState s{};
+        s.vel_body[0] = 200.f;
+        s.pos_world[1] = 3000.f;
+        s.mass_kg = data->geometry.mass_kg;
+        fi.reset(s);
+        fi.step(1.f / 60.f, ctrl, px);
+        return fi.state().omega[0]; // roll rate
+    };
+
+    const float rollNoCoupling = mk(0.f);
+    const float rollCoupled = mk(5000.f);
+    CHECK_THAT(rollNoCoupling, WithinAbs(0.f, 1e-4f));
+    CHECK(std::abs(rollCoupled) > 1e-3f); // Ixz turned the yaw moment into a roll acceleration
+}
+
+TEST_CASE("Integrator: Ixz = 0 is byte-identical to the decoupled update", "[integrator][gaps899]") {
+    // The additive guarantee: a model that never mentions Ixz behaves exactly as before. Two
+    // identical models — one leaving ixz at its 0 default — must produce bit-identical omega.
+    ControlInput ctrl{};
+    ctrl.aileron = 0.5f;
+    ctrl.rudder = -0.3f;
+    ctrl.elevator = 0.4f;
+    PayloadEffect px{};
+
+    auto run = [&]() {
+        auto data = makeData(); // ixz defaults to 0
+        FlightIntegrator fi(data);
+        FlightState s{};
+        s.vel_body[0] = 220.f;
+        s.pos_world[1] = 4000.f;
+        s.mass_kg = data->geometry.mass_kg;
+        fi.reset(s);
+        for (int i = 0; i < 20; ++i)
+            fi.step(1.f / 60.f, ctrl, px);
+        return fi.state();
+    };
+    const auto a = run();
+    const auto b = run();
+    CHECK(a.omega[0] == b.omega[0]);
+    CHECK(a.omega[1] == b.omega[1]);
+    CHECK(a.omega[2] == b.omega[2]);
+}
+
+TEST_CASE("Integrator: engine angular momentum yaws the nose when pitching", "[integrator][gaps899]") {
+    // A spinning rotor (He != 0) is a gyroscope: a pitch RATE produces a yaw moment. Seed a pitch rate
+    // and step once. With He = 0 there is no pitch->yaw path (no prop, no Ixz), so the yaw rate stays
+    // ~0; with He != 0 it becomes non-zero.
+    ControlInput ctrl{};
+    PayloadEffect px{};
+
+    auto mk = [&](float he) {
+        auto data = makeData();
+        data->geometry.engine_ang_momentum = he;
+        FlightIntegrator fi(data);
+        FlightState s{};
+        s.vel_body[0] = 200.f;
+        s.pos_world[1] = 3000.f;
+        s.mass_kg = data->geometry.mass_kg;
+        s.omega[2] = 2.0f; // pitch rate (about Z=right)
+        fi.reset(s);
+        fi.step(1.f / 60.f, ctrl, px);
+        return fi.state().omega[1]; // yaw rate (about Y=up)
+    };
+
+    const float yawNoGyro = mk(0.f);
+    const float yawGyro = mk(60000.f);
+    CHECK_THAT(yawNoGyro, WithinAbs(0.f, 1e-4f));
+    CHECK(std::abs(yawGyro) > 1e-3f);
+}

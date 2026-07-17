@@ -191,6 +191,8 @@ izz_kg_m2    = 110000.0
 | `ixx_kg_m2` | Roll moment of inertia. Smaller → snappier rolls. | NACA/NASA TRs, DATCOM | 5 000–40 000 kg·m² |
 | `iyy_kg_m2` | Pitch moment of inertia. Smaller → faster pitch response. | NACA/NASA TRs | 50 000–200 000 kg·m² |
 | `izz_kg_m2` | Yaw moment of inertia. Usually ≥ Iyy. | NACA/NASA TRs | 60 000–220 000 kg·m² |
+| `ixz_kg_m2` | *Optional (#899).* Roll↔yaw product of inertia; opts into the coupled solve. `Ixz² < Ixx·Izz`. | NACA/NASA TRs | 0 (default); F-16 ≈ 1 331 |
+| `engine_ang_momentum` | *Optional (#899).* Engine rotor angular momentum He (N·m·s, signed) — gyroscopic pitch↔yaw coupling. | NASA TP-1538 | 0 (default); F-16 ≈ 216.9 |
 
 **Sources for inertia data:** NACA/NASA Technical Reports Server (ntrs.nasa.gov). Search for
 the aircraft type number or name alongside "stability derivatives" or "moments of inertia". USAF
@@ -363,13 +365,13 @@ cn_dr    = -0.06
 All derivatives are non-dimensional and follow NACA sign conventions (see coordinate system
 section above). Values can be copied directly from NACA/NASA technical reports.
 
-The moment applied by each derivative:
+The moment applied by each derivative (optional #899 terms shown in brackets — all default 0):
 - **Pitch moment** (about Y-axis, reference length mac_m):
-  `Cm = cm_alpha×α + cm_q×(q_rate×mac/(2V)) + cm_de×(elevator_input×max_elevator_rad)`
+  `Cm = [cm0] + cm_alpha×α + cm_q×(q_rate×mac/(2V)) + cm_de×(elevator×max_elevator_rad) [+ cm_speedbrake×speedbrake]`
 - **Roll moment** (about X-axis, reference length wingspan_m):
-  `Cl = cl_beta×β + cl_p×(p_rate×span/(2V)) + cl_da×(aileron_input×max_aileron_rad)`
+  `Cl = cl_beta×β + cl_p×(p_rate×span/(2V)) + cl_da×(aileron×max_aileron_rad) [+ cl_dr×(rudder×max_rudder_rad)]`
 - **Yaw moment** (about Z-axis, reference length wingspan_m):
-  `Cn = cn_beta×β + cn_r×(r_rate×span/(2V)) + cn_dr×(rudder_input×max_rudder_rad)`
+  `Cn = cn_beta×β + cn_r×(r_rate×span/(2V)) + cn_dr×(rudder×max_rudder_rad) [+ cn_da×(aileron×max_aileron_rad)]`
 
 **Note:** Rate terms divide by velocity V. The integrator guards V < 1 m/s and sets rate
 moment contributions to zero at near-zero speed.
@@ -403,6 +405,37 @@ Larger `cl_da` → snappier roll response.
 | `cn_beta` | Positive = weathercock stable | 0.05 to 0.25 | NASA TP-1538 (F-16) |
 | `cn_r` | Always negative | −0.05 to −0.25 | NACA TN 2235 |
 | `cn_dr` | Negative | −0.03 to −0.12 | DATCOM |
+
+### Optional advanced terms (#899)
+
+Published aerodynamic databases (e.g. NASA TP-1538 for the F-16) carry several quantities the base
+schema has no slot for. All are **optional and additive** — a model that omits them is byte-identical
+to before. Add them to `[aero.moments]` (or `[flight_model]` / `[aero.drag_polar]` where noted).
+
+| Field | Section | Meaning | Default |
+|---|---|---|---|
+| `cm0` | `[aero.moments]` | Zero-α pitching moment. A cambered wing trims at a non-zero α with neutral elevator (≈ −3.3° for the F-16A); `cm0 ≠ 0` is what produces that offset. | 0 |
+| `cn_da` | `[aero.moments]` | Adverse yaw — aileron deflection yaws *against* the commanded roll. | 0 |
+| `cl_dr` | `[aero.moments]` | Rudder-induced roll — rudder deflection also rolls the aircraft. | 0 |
+| `cm_speedbrake` | `[aero.moments]` | Pitch increment per unit speed-brake deployment (ΔCm,sb). | 0 |
+| `speedbrake_cl` | `[aero.drag_polar]` | Speed-brake lift/normal-force increment per unit deployment (ΔCZ,sb) — an airbrake changes lift as well as drag. | 0 |
+| `ixz_kg_m2` | `[flight_model]` | Product of inertia between the roll (x) and yaw (z) axes. A non-zero value opts the airframe into the Ixz-coupled roll/yaw solve — a roll moment then produces a yaw acceleration and vice versa (F-16 = 1,331). Must satisfy `Ixz² < Ixx·Izz`. | 0 |
+| `engine_ang_momentum` | `[flight_model]` | Engine rotor angular momentum He (N·m·s) about +X. A spinning spool is a gyroscope: pitching yaws it and yawing pitches it. Signed by spin direction (F-16 = 216.9). | 0 |
+
+**Alpha-dependent dynamic dampers.** `cm_q`, `cl_p` and `cn_r` may each be supplied as a `Table1D`
+over α (`cm_q_table`, `cl_p_table`, `cn_r_table`) — TP-1538 publishes them that way (Cmq runs −3.4 to
+−6.8 across the sweep), which matters for a high-α or deep-stall airframe. When present, the table
+**replaces** the corresponding scalar; the scalar stays required as the fallback.
+
+```toml
+[aero.moments.cm_q_table]   # optional — replaces the cm_q scalar; lookup over alpha (deg)
+alpha  = [0.0, 15.0, 25.0, 35.0]
+values = [-3.4, -5.0, -6.4, -6.8]
+```
+
+**A note on Ixz scope.** Declaring `ixz_kg_m2` adds only the Ixz İ·ω̇ cross-coupling; the general
+`ω×H` rate-product Euler terms (which are non-zero even at Ixz = 0) remain omitted so existing content
+is untouched. The cross-coupling is the term that matters most for a real fighter's roll/yaw handling.
 
 ### Tuning guide
 

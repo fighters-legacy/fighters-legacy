@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
@@ -353,6 +354,50 @@ mach   = [0.0]
 alt_km = [0.0, 12.0]
 values = [2.8, 1.0]
 )";
+    CHECK_THROWS_AS(parseFlightModel(toml), std::runtime_error);
+}
+
+TEST_CASE("Parser: #899 schema-gap fields are absent/zero by default", "[parser]") {
+    auto d = parseFlightModel(kMinimalToml);
+    CHECK(d.geometry.ixz_kg_m2 == 0.f);
+    CHECK(d.geometry.engine_ang_momentum == 0.f);
+    CHECK(d.drag_polar.speedbrake_cl == 0.f);
+    CHECK(d.moments.cm0 == 0.f);
+    CHECK(d.moments.cm_speedbrake == 0.f);
+    CHECK(d.moments.cl_dr == 0.f);
+    CHECK(d.moments.cn_da == 0.f);
+    CHECK_FALSE(d.moments.cm_q_table.has_value());
+    CHECK_FALSE(d.moments.cl_p_table.has_value());
+    CHECK_FALSE(d.moments.cn_r_table.has_value());
+}
+
+TEST_CASE("Parser: #899 optional fields parse when present", "[parser]") {
+    std::string toml = kMinimalToml;
+    // Inject ixz + He into [flight_model] (before the next table header).
+    auto fmPos = toml.find("izz_kg_m2");
+    REQUIRE(fmPos != std::string::npos);
+    auto eol = toml.find('\n', fmPos);
+    toml.insert(eol + 1, "ixz_kg_m2 = 1331.0\nengine_ang_momentum = 216.9\n");
+
+    // Cross/constant/speed-brake terms + one alpha-damper table appended to [aero.moments].
+    auto mPos = toml.find("cn_dr");
+    REQUIRE(mPos != std::string::npos);
+    auto mEol = toml.find('\n', mPos);
+    toml.insert(mEol + 1, "cm0 = -0.02\ncn_da = -0.027\ncl_dr = 0.027\ncm_speedbrake = 0.03\n"
+                          "[aero.moments.cm_q_table]\nalpha = [0.0, 15.0, 30.0]\nvalues = [-3.4, -5.0, -6.8]\n");
+
+    auto d = parseFlightModel(toml);
+    CHECK(d.geometry.ixz_kg_m2 == Catch::Approx(1331.0f));
+    CHECK(d.geometry.engine_ang_momentum == Catch::Approx(216.9f));
+    CHECK(d.moments.cm0 == Catch::Approx(-0.02f));
+    CHECK(d.moments.cn_da == Catch::Approx(-0.027f));
+    CHECK(d.moments.cl_dr == Catch::Approx(0.027f));
+    REQUIRE(d.moments.cm_q_table.has_value());
+    CHECK(d.moments.cm_q_table->lookup(30.0f) == Catch::Approx(-6.8f));
+}
+
+TEST_CASE("Parser rejects an unequal-length alpha-damper table", "[parser]") {
+    std::string toml = kMinimalToml + "\n[aero.moments.cl_p_table]\nalpha = [0.0, 15.0]\nvalues = [-0.4]\n";
     CHECK_THROWS_AS(parseFlightModel(toml), std::runtime_error);
 }
 

@@ -166,9 +166,19 @@ static void validateFlightModelGeometry(const toml::table& tbl, FlightModelValid
     auto span = checkPos("wingspan_m");
     checkPos("mac_m");
     checkNonNeg("fuel_kg");
-    checkPos("ixx_kg_m2");
+    auto ixx = checkPos("ixx_kg_m2");
     checkPos("iyy_kg_m2");
-    checkPos("izz_kg_m2");
+    auto izz = checkPos("izz_kg_m2");
+
+    // Optional product of inertia (#899). A physically valid inertia tensor needs Ixz² < Ixx·Izz
+    // (else the coupled roll/yaw solve has a non-positive determinant); flag a transcription error.
+    if (auto ixz = fm["ixz_kg_m2"].value<double>(); ixz && ixx && izz && *ixx > 0.0 && *izz > 0.0) {
+        if ((*ixz) * (*ixz) >= (*ixx) * (*izz)) {
+            r.errors.push_back("flight_model.ixz_kg_m2 " + std::to_string(*ixz) +
+                               " is too large: Ixz^2 must be < Ixx*Izz for a valid inertia tensor");
+            r.ok = false;
+        }
+    }
 
     // `interceptor` and `attacker` are the same class of aeroplane for this purpose.
     const bool isFighterClass =
@@ -439,6 +449,28 @@ static void validateMoments(const toml::table& tbl, FlightModelValidationResult&
     checkPos("cn_beta");
     checkNeg("cn_r");
     checkPresent("cn_dr");
+
+    // Optional alpha-dependent dampers (#899): a Table1D over alpha. When present it replaces the
+    // scalar, so the arrays must be equal-length with at least 2 breakpoints.
+    auto checkDamperTable = [&](const char* key) {
+        auto sub = m[key];
+        if (!sub || !sub.as_table())
+            return;
+        std::size_t nAlpha = arrayLen(sub["alpha"]);
+        std::size_t nVal = arrayLen(sub["values"]);
+        if (nAlpha < 2) {
+            r.errors.push_back(std::string("aero.moments.") + key + ".alpha must have at least 2 breakpoints");
+            r.ok = false;
+        }
+        if (nAlpha != nVal) {
+            r.errors.push_back(std::string("aero.moments.") + key + ".alpha (" + std::to_string(nAlpha) +
+                               ") and values (" + std::to_string(nVal) + ") must be equal length");
+            r.ok = false;
+        }
+    };
+    checkDamperTable("cm_q_table");
+    checkDamperTable("cl_p_table");
+    checkDamperTable("cn_r_table");
 }
 
 static void validateAeroLimits(const toml::table& tbl, FlightModelValidationResult& r) {
