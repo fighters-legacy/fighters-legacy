@@ -27,6 +27,12 @@ constexpr float kFbwGuardBand = 0.95f;
 constexpr float kFbwAoaKp = 0.60f; // elevator per degree of AoA error
 constexpr float kFbwAoaKd = 1.20f; // elevator per rad/s of pitch rate (damps the approach)
 
+// Afterburner-envelope hysteresis (#309): once lit, AB tolerates crossing this far past the Mach /
+// altitude limit before it drops; once out, it must be this far inside before it relights. Prevents
+// chatter for a model flying the boundary.
+constexpr float kAbMachHysteresis = 0.02f;
+constexpr float kAbAltHysteresisKm = 0.3f;
+
 // Quaternion: multiply q = (x,y,z,w)
 std::array<float, 4> quatMul(const float* a, const float* b) {
     return {
@@ -189,6 +195,9 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
 
     // 1. Spool and optional gear/control surfaces
     advanceSpool(dt, ctrl.throttle);
+    // AB is COMMANDED here; the envelope gate (#309) below can only turn it off, once Mach/altitude
+    // are known. Capture the prior tick's state so that gate's hysteresis has a reference.
+    const bool abEngagedPrev = m_state.ab_engaged;
     m_state.ab_engaged = ctrl.afterburner && m_data->engine.ab_thrust.has_value();
 
     // 2. Wing sweep: follow auto-schedule based on current Mach, or manual override.
@@ -232,6 +241,25 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     float rel2 = vel[2] - wind_body[2];
     float spd = std::sqrt(rel0 * rel0 + rel1 * rel1 + rel2 * rel2);
     float mach = machNumber(spd, atmos.speed_of_sound_m_s);
+
+    // Afterburner envelope (#309): outside the light-off window the augmentor extinguishes. Applied
+    // here, after Mach/altitude are known, so it can only turn a COMMANDED AB off (set in step 1).
+    // Each limit is optional — absent means that gate is skipped, so a model without envelope data is
+    // bit-identical. The hysteresis is keyed off abEngagedPrev: a lit AB tolerates a margin past the
+    // limit before dropping; an unlit one must be clearly inside before relighting.
+    if (m_state.ab_engaged) {
+        const EngineData& eng = m_data->engine;
+        if (eng.ab_min_mach) {
+            const float gate = *eng.ab_min_mach + (abEngagedPrev ? -kAbMachHysteresis : kAbMachHysteresis);
+            if (mach < gate)
+                m_state.ab_engaged = false;
+        }
+        if (m_state.ab_engaged && eng.ab_max_alt_km) {
+            const float gate = *eng.ab_max_alt_km + (abEngagedPrev ? kAbAltHysteresisKm : -kAbAltHysteresisKm);
+            if (altitude_m / 1000.f > gate)
+                m_state.ab_engaged = false;
+        }
+    }
 
     // Body frame: x=forward, y=up, z=right.
     // Pitched up → velocity dips below body nose → negative body-y component → positive alpha.

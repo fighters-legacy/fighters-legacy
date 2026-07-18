@@ -587,6 +587,40 @@ static void validateEngine(const toml::table& tbl, FlightModelValidationResult& 
     checkPos("fuel_flow_ab_kg_s");
     checkNonNeg("spool_time_s");
 
+    // Optional engine-out asymmetry params (#308): only checked when present.
+    if (auto n = eng["engine_count"]) {
+        if (!n.is_integer() || n.as_integer()->get() < 1) {
+            r.errors.push_back("engine.engine_count must be an integer >= 1");
+            r.ok = false;
+        }
+    }
+    if (auto a = eng["engine_yaw_arm_frac"].value<double>(); a && *a < 0.0) {
+        r.errors.push_back("engine.engine_yaw_arm_frac must be >= 0");
+        r.ok = false;
+    }
+
+    // Optional afterburner envelope (#309): range-check when present; warn if set without an AB deck
+    // (the limit would never apply).
+    const bool hasAbDeck = static_cast<bool>(tbl["engine"]["ab_thrust"].as_table());
+    if (auto m = eng["ab_min_mach"].value<double>()) {
+        if (*m < 0.0) {
+            r.errors.push_back("engine.ab_min_mach must be >= 0");
+            r.ok = false;
+        } else if (!hasAbDeck) {
+            r.warnings.push_back("engine.ab_min_mach is set but there is no [engine.ab_thrust] deck; "
+                                 "the afterburner limit will never apply");
+        }
+    }
+    if (auto a = eng["ab_max_alt_km"].value<double>()) {
+        if (*a <= 0.0) {
+            r.errors.push_back("engine.ab_max_alt_km must be > 0");
+            r.ok = false;
+        } else if (!hasAbDeck) {
+            r.warnings.push_back("engine.ab_max_alt_km is set but there is no [engine.ab_thrust] deck; "
+                                 "the afterburner limit will never apply");
+        }
+    }
+
     auto mil = tbl["engine"]["mil_thrust"];
     if (!mil) {
         r.errors.push_back("missing [engine.mil_thrust] table");

@@ -395,6 +395,19 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.engine.fuel_flow_ab_kg_s = req_float(eng["fuel_flow_ab_kg_s"], "engine.fuel_flow_ab_kg_s");
         d.engine.spool_time_s = req_float(eng["spool_time_s"], "engine.spool_time_s");
 
+        // Engine-out asymmetry parameters (#308), both optional with the twin-engine defaults so a
+        // model that omits them is bit-identical to before. tomlInt guards the toml++ float->int UB.
+        if (auto n = tomlInt(eng["engine_count"]))
+            d.engine.engine_count = static_cast<int>(*n);
+        if (auto arm = eng["engine_yaw_arm_frac"].value<double>())
+            d.engine.engine_yaw_arm_frac = static_cast<float>(*arm);
+
+        // Afterburner envelope (#309): optional limits, absent = the gate is not applied.
+        if (auto m = eng["ab_min_mach"].value<double>())
+            d.engine.ab_min_mach = static_cast<float>(*m);
+        if (auto a = eng["ab_max_alt_km"].value<double>())
+            d.engine.ab_max_alt_km = static_cast<float>(*a);
+
         auto mil = tbl["engine"]["mil_thrust"];
         if (!mil || !mil.as_table())
             throw std::runtime_error("missing [engine.mil_thrust] table");

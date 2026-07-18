@@ -214,6 +214,15 @@ fuel_flow_idle_kg_s = 0.18
 fuel_flow_mil_kg_s  = 1.60
 fuel_flow_ab_kg_s   = 4.80
 spool_time_s        = 4.0
+engine_count        = 2      # optional (default 2) — number of independent engines. Losing one
+                             #   (battle damage) removes 1/engine_count of thrust and yaws toward
+                             #   the dead side; a single-engine jet (1) loses all thrust, no yaw.
+engine_yaw_arm_frac = 0.15   # optional (default 0.15) — engine-out yaw moment arm as a fraction of
+                             #   the wingspan; widen for podded/wing-mounted engines.
+ab_min_mach         = 0.0    # optional — afterburner will not light/relight below this Mach (ram
+                             #   limit); omit for no low-speed limit.
+ab_max_alt_km       = 100.0  # optional — afterburner extinguishes above this altitude in km; omit
+                             #   for no ceiling. Both apply only if [engine.ab_thrust] is present.
 
 [engine.mil_thrust]
 mach   = [0.0, 0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.0, 2.25]
