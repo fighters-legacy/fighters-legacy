@@ -218,6 +218,64 @@ revised by a dated decision record instead of a full RFC, provided the change is
 with its rationale. This keeps the velocity of pre-1.0 architecture work without leaving the
 locked table silently stale.
 
+**2026-07-18 — Multi-crew aircraft: seats unified into `ControlledEntity` (Epic #966).** Aircraft
+gain 2+ crew positions ("seats") alongside the single-pilot model — a bomber with a pilot and
+defensive gunners, spawned with every seat bot-filled, any non-human seat human-joinable. The core
+decision: **crew seats are a `CrewState` (vector of `CrewSeat`) on `ControlledEntity`, not child
+entities and not a controller facade.** `seats[0]` is the pilot and *is* today's controller path —
+a plain fighter is the implicit 1-seat case with the single-seat path byte-for-byte unchanged.
+Two alternatives were pressure-tested and rejected: (a) crew positions as child entities breaks the
+edge-free data-parallel tick contract and forces "not-an-aircraft" filters across ~7 world systems
+(spatial, sensing, collision, interest, scheduler, formations, kill-feed) while *still* needing a
+composition seam to ferry pilot output to the parent integrator; (b) a `CrewController :
+IEntityController` facade cannot express per-seat fire, because `sample()` returns a single
+`ControlInput` and the weapons pass reads only `ce.lastInput`.
+
+- **Capability partition, not a role enum.** A seat's role is a display string (`"pilot"`,
+  `"tail-gunner"`); the engine and wire see a `CrewCapabilityMask` (uint16): `Fly`, `Fire` (+ a
+  bound hardpoint-station list), `Radar`, `Countermeasures`, `Command` (the #591 seam). Mirrors the
+  #944 roles-as-data decision and the "`allowed` IS the contract" hardpoint precedent.
+  `validate-entity` enforces **one owner per control channel** (exactly one `Fly` seat; each
+  hardpoint fired by at most one seat; `Radar`/`Countermeasures` at most one seat) — merge conflicts
+  are impossible by construction.
+- **Server-authoritative turrets with a directional launch vector.** A weapon station gains an
+  aiming direction independent of the airframe nose: a `TurretState` slewed by a pure, rate-limited
+  `stepTurret()` (unit-testable, reused verbatim as the client turret predictor), and a `FireRequest`
+  world-space launch direction that `ProjectileSystem`/hitscan fire along. This **is** the ground-SAM
+  launcher-elevation gap documented as owed to #585 — a static emplacement mounts its launcher as a
+  turret and slews it via this servo.
+- **Tick composition** is a masked merge, no aggregator: the AI pass iterates seats in fixed order
+  inside the entity's worker slice (writes stay disjoint per entity) — a human seat reads its peer's
+  drained input slice, a bot seat samples an `ISeatController` (narrower than `IEntityController` — a
+  seat bot doesn't fly), an empty seat contributes nothing; the effective `ControlInput` takes each
+  channel from its owning seat. The integrate pass steps turrets. The serial weapons pass loops
+  seats; `FireState` splits into a shared per-entity `LoadoutState` (physical stations/ammo truth)
+  plus a per-seat `FireChannel`, and `FireRequest`'s sort key becomes `(shooterIdx, seat, station)`.
+  Seat-bot dice hash `(entityIdx, seatIdx, tick)` so the pass stays serial-equivalent (TSan-gated).
+- **Wire** (additive, `kProtocolVersion` stays 1): `MsgCrewRoster` (0x13, reliable, on connect and
+  on occupancy change); `MsgSeatRequest`/`MsgSeatResult` (0x14/0x15); a ConnectRequest seat-claim TLV
+  (reserved 0x0500 range) for join-at-connect; `MsgConnectAck` gains a seat/role field. Crew peers
+  send the unmodified 80-byte `MsgClientInput`; the server routes by the `{entity, seat}` binding and
+  **masks channels by the seat's capabilities server-side** (a gunner's elevator is ignored, never
+  trusted). Gunner aim reuses `viewAxis` (latest-wins, unbuffered — the turret servo is the low-pass
+  filter). Snapshot: `isOwn` generalizes to "occupies a seat in this entity" so every human crew
+  member gets the omega + loadout own record; an optional crew block (occupancy + quantized turret
+  az/el) is gated like `hasOmega` and emitted only when `seats.size() > 1`, so single-seat byte-shape
+  tests stay bit-identical.
+- **Three-state occupancy** `{Bot | Human(peerId) | Empty}` with `kNoPeer = 0xFFFFFFFF` (the
+  `Formation.h` "never use 0" rule); unmanned human-joinable seats are legal from day one. **Seat
+  state lives on the seat, not the controller**, so vacate/disconnect reverts the seat to its authored
+  default by a pointer flip — a parked bot pilot resumes mid-maneuver with intact `FireChannel`/ammo/
+  turret pose. Humans never displace humans; the airframe dies only when the owning pilot leaves an
+  otherwise human-free, peer-spawned aircraft (never yank an airframe out from under a live gunner).
+- **Per-instance skill** — the first per-instance skill in the engine (today `AiTuning` is type-level
+  and sensing-only). Rolled per seat from a mission `[min, max]` with a deterministic seed (mission
+  seed ⊕ object id ⊕ seat index, the `detectionHash` integer-RNG idiom); it plumbs to sensing (the
+  `Radar` seat's rolled skill) and finally gives `AiScaling::aimErrorDeg` a consumer in the gunner/AAA
+  fire path. Provable zero-pack via a compiled-in `builtin:bomber` (pilot + tail turret) in the armed
+  sandbox. Full decomposition on Epic #966; wire tables land with the netcode wave in
+  [network-protocol.md](network-protocol.md).
+
 **2026-07-17 — VR (OpenXR) deferred to Phase 8, not rejected.** A mid-2026 gap analysis against the
 genre bar noted that VR is a celebrated feature of the closest comparable title (Project Wingman)
 and a real differentiator for this niche — but it is a renderer-architecture concern (stereo
