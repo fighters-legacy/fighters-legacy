@@ -302,6 +302,70 @@ TEST_CASE("manual: an unresolvable store is reported, not hidden", "[manual]") {
     CHECK(anyValueContains(*stations, "unknown store"));
 }
 
+TEST_CASE("manual: a crewed aircraft gets a generated Crew section (#977)", "[manual]") {
+    const FlightModelData fm = parseFlightModel(kJet);
+
+    // A two-seat bomber: a Fly+Fire pilot, and a Fire tail-gunner aiming a rear turret.
+    EntityDef def;
+    def.id = "test:bomber";
+    def.name = "Bomber";
+    Hardpoint bombBay;
+    bombBay.slot = 0;
+    bombBay.allowed = {"x"};
+    bombBay.defaultWeapon = "";
+    Hardpoint tailGun;
+    tailGun.slot = 1;
+    tailGun.allowed = {"x"};
+    tailGun.defaultWeapon = "";
+    def.hardpoints = {bombBay, tailGun};
+
+    TurretDef tail;
+    tail.id = "tail";
+    tail.azMinDeg = -80.f;
+    tail.azMaxDeg = 80.f;
+    tail.elMinDeg = -10.f;
+    tail.elMaxDeg = 80.f;
+    tail.stations = {1};
+    def.turrets = {tail};
+
+    SeatDef pilot;
+    pilot.role = "pilot";
+    pilot.capabilities =
+        withCapability(withCapability(CrewCapabilityMask{0}, CrewCapability::Fly), CrewCapability::Fire);
+    pilot.stations = {0};
+    SeatDef gunner;
+    gunner.role = "tail-gunner";
+    gunner.capabilities = withCapability(CrewCapabilityMask{0}, CrewCapability::Fire);
+    gunner.turret = "tail";
+    def.crew = {pilot, gunner};
+
+    ManualSources src;
+    src.entity = &def;
+    src.model = &fm;
+
+    const AircraftManual m = buildAircraftManual(src);
+    const ManualSection* crew = findSection(m, "Crew");
+    REQUIRE(crew != nullptr);
+    REQUIRE(crew->rows.size() == 2u);
+    CHECK(valueOf(*crew, "pilot").find("fly") != std::string::npos);
+    CHECK(valueOf(*crew, "pilot").find("fire") != std::string::npos);
+    // The gunner row names its turret arc (generated from the TurretDef).
+    const std::string gunnerRow = valueOf(*crew, "tail-gunner");
+    CHECK(gunnerRow.find("fire") != std::string::npos);
+    CHECK(gunnerRow.find("turret \"tail\"") != std::string::npos);
+    CHECK(gunnerRow.find("az") != std::string::npos);
+}
+
+TEST_CASE("manual: a single-seat aircraft has no Crew section (#977)", "[manual]") {
+    const FlightModelData fm = parseFlightModel(kJet);
+    const EntityDef def = makeEntity(); // no [[crew]] -> implicit single pilot
+    ManualSources src;
+    src.entity = &def;
+    src.model = &fm;
+    const AircraftManual m = buildAircraftManual(src);
+    CHECK(findSection(m, "Crew") == nullptr);
+}
+
 TEST_CASE("manual: the sensor section is built from resolved sensor defs", "[manual]") {
     const FlightModelData fm = parseFlightModel(kJet);
     const EntityDef def = makeEntity();

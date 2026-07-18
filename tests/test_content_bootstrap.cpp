@@ -441,6 +441,49 @@ TEST_CASE("builtinDebugEntityDef is armed across every store class and resolves 
     CHECK(kinds.count(WeaponType::Pod) == 1u);
 }
 
+TEST_CASE("builtinBomberDef is a valid crewed aircraft: a pilot + a bot tail-gunner turret (#977)") {
+    WeaponRegistry weapons;
+    registerBuiltinWeapons(weapons);
+
+    const EntityDef def = builtinBomberDef();
+    CHECK(def.id == "builtin:bomber");
+    CHECK(def.category == ObjectCategory::AirVehicle);
+
+    // Two seats: exactly one Fly seat (the pilot) + a Fire tail-gunner aiming the turret.
+    REQUIRE(def.crew.size() == 2u);
+    REQUIRE(def.turrets.size() == 1u);
+    int flySeats = 0;
+    const SeatDef* gunner = nullptr;
+    for (const SeatDef& s : def.crew) {
+        if (hasCapability(s.capabilities, CrewCapability::Fly))
+            ++flySeats;
+        if (!s.turret.empty())
+            gunner = &s;
+    }
+    CHECK(flySeats == 1);
+    REQUIRE(gunner != nullptr);
+    CHECK(hasCapability(gunner->capabilities, CrewCapability::Fire));
+    CHECK(gunner->turret == "tail");
+    CHECK(gunner->botSpec == "builtin:gunner"); // resolves to the TurretGunnerController via makeSeatController
+
+    // The turret mounts a real cannon on station 1, and the tail gun resolves against the registry.
+    const TurretDef& tail = def.turrets[0];
+    REQUIRE(tail.stations == std::vector<int>{1});
+    CHECK(tail.slewRateDegS > 0.f);
+    CHECK(tail.azMinDeg < tail.azMaxDeg);
+    bool tailGunResolves = false;
+    for (const Hardpoint& hp : def.hardpoints)
+        if (hp.slot == 1)
+            tailGunResolves = weapons.findById(hp.defaultWeapon.c_str()) != nullptr;
+    CHECK(tailGunResolves);
+
+    // The authored partition is legal (the same invariant the parser enforces).
+    std::vector<int> slots;
+    for (const Hardpoint& hp : def.hardpoints)
+        slots.push_back(hp.slot);
+    CHECK(validateCrewPartition(def.crew, def.turrets, slots).empty());
+}
+
 TEST_CASE("flying builtin stores get projectile entity types; gun, drop tank, and pod do not (#862)") {
     WeaponRegistry weapons;
     registerBuiltinWeapons(weapons);

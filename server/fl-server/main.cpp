@@ -479,6 +479,9 @@ int main(int argc, char** argv) {
 
     // The debug entity ships ARMED (#440) — the shared builder keeps server and client identical.
     entityRegistry.registerType(fl::builtinDebugEntityDef());
+    // The builtin multi-crew bomber (#966/#977): a pilot + a bot tail-gunner turret, so the whole
+    // crew/turret fire path is provable zero-pack (the crewed counterpart to the debug entity).
+    entityRegistry.registerType(fl::builtinBomberDef());
 
     // Builtin surface targets + threats (#863): ground/naval/static targets and a SAM site + AAA that
     // shoot back, so the surface categories and air-defense threat exist with zero content mounted.

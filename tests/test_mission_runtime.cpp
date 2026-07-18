@@ -78,6 +78,20 @@ EntityDef makeDef(const char* id) {
 // parseMission — model population
 // ---------------------------------------------------------------------------
 
+TEST_CASE("the builtin sandbox parses and includes the crewed bomber (#977)", "[mission-parser]") {
+    // Guards the sandbox YAML against a bad edit AND proves the builtin:bomber object is well-formed
+    // mission content — the crewed aircraft is spawnable zero-pack from Instant Action.
+    const std::string_view yaml = fl::builtinMissionYaml("builtin:sandbox");
+    REQUIRE_FALSE(yaml.empty());
+    const auto r = parseMission(std::string(yaml));
+    REQUIRE(r.ok);
+    bool hasBomber = false;
+    for (const auto& obj : r.mission.objects)
+        if (obj.type == "builtin:bomber")
+            hasBomber = true;
+    CHECK(hasBomber);
+}
+
 TEST_CASE("parseMission populates the runtime model", "[mission-parser]") {
     auto r = parseMission(kValidMission);
     REQUIRE(r.ok);
