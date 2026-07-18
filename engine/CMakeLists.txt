@@ -8,6 +8,7 @@ add_library(engine-content STATIC
     content/AssetValidator.cpp
     content/BundledBaseTerrain.cpp
     content/ContentIndex.cpp
+    content/ContentDownloader.cpp
     content/LiveryDef.cpp
 )
 
@@ -16,6 +17,7 @@ target_include_directories(engine-content PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-content
     PUBLIC  platform-hal
     PRIVATE tomlplusplus::tomlplusplus
+            engine-crypto      # SHA-256 for ContentDownloader verification (#490)
             ${CMAKE_DL_LIBS}   # dlopen on Linux; empty on Windows/macOS (auto-linked)
 )
 
@@ -285,6 +287,13 @@ add_library(engine-nav STATIC
 )
 target_include_directories(engine-nav PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # No external deps — pure ISO C++20 stdlib (coefficients are compiled in).
+
+# Clean-room SHA-256 (FIPS 180-4) for content/pack hashing (#490) — NOT OpenSSL (GNS-gated).
+add_library(engine-crypto STATIC
+    crypto/Sha256.cpp
+)
+target_include_directories(engine-crypto PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# No external deps — pure ISO C++20 stdlib.
 
 # Mission runtime: the mission YAML schema owner (parser + runtime model, MissionParser) and the
 # faction-aware sim-setup applier (MissionSetup). Lives in the ENGINE, not fl-server, because the game

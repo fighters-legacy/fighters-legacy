@@ -179,7 +179,7 @@ function(fl_assert_layering)
 
     # Rule 1 — engine isolation: no engine-* target reaches a client/transport backend.
     set(_client_transport_deny
-        "^(platform-sdl3|platform-vulkan|platform-openal|platform-enet|platform-gns|platform-net)$|^SDL3::|^Vulkan::|^OpenAL::|^enet6$|^GameNetworkingSockets::")
+        "^(platform-sdl3|platform-vulkan|platform-openal|platform-enet|platform-gns|platform-net|platform-http)$|^SDL3::|^Vulkan::|^OpenAL::|^enet6$|^GameNetworkingSockets::|^CURL::")
     _fl_all_targets(_all "${CMAKE_SOURCE_DIR}")
     list(REMOVE_DUPLICATES _all)
     list(SORT _all)

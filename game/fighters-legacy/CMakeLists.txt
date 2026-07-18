@@ -50,6 +50,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         platform-vulkan
         platform-openal
         platform-net
+        platform-http
         platform-hal
         Vulkan::Vulkan
         SDL3::SDL3

@@ -46,6 +46,7 @@
 #include "firstrun/FirstRun.h"
 #include "flight/Atmosphere.h"
 #include "flight/Geodetic.h"
+#include "http/CurlHttpClientFactory.h" // createHttpClient (#490)
 #include "input/AxisConfig.h"
 #include "input/InputBindings.h"
 #include "mission/MissionParser.h"
@@ -571,6 +572,14 @@ bool Game::initWindowAndRenderer() {
         return false;
     }
     d.services.p.asyncFilesystem = std::move(asyncFs);
+
+    // HTTP client (#490) for content downloads — null when built without libcurl (lean/dev builds);
+    // service()d each frame beside the async filesystem. The first-run content flow consumes it.
+    d.services.p.httpClient = createHttpClient(d.services.rawLogger);
+    if (d.services.p.httpClient && !d.services.p.httpClient->init()) {
+        d.services.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__, "HTTP client init failed; downloads disabled");
+        d.services.p.httpClient.reset();
+    }
 
     d.services.resizeHandler.r = d.services.p.renderer.get();
     d.services.p.window->setEventHandler(&d.services.resizeHandler);
@@ -1251,6 +1260,11 @@ void Game::run() {
         // MsgConnectAck (assignedEntityGen != 0): tiles bake the planet radius at
         // generation time, so updating earlier would bake Earth-radius tiles during
         // Loading and immediately invalidate them on a non-Earth server.
+        // Drain HTTP completions every frame (content downloads run at the menu too, not just
+        // in-session). Null when built without libcurl (#490).
+        if (d.services.p.httpClient)
+            d.services.p.httpClient->service();
+
         if (inSession) {
             d.services.p.asyncFilesystem->service();
             // A pilot is "ready" once its ConnectAck assigns an entity (gen != 0). An observer (#859)
