@@ -221,6 +221,40 @@ AircraftManual buildAircraftManual(const ManualSources& src) {
         out.sections.push_back(std::move(sec));
     }
 
+    // ── Crew: from the entity's authored seats + turret mounts (#966/#977). Generated, like every
+    // other section — the role names and turret arcs come straight from the def, the capabilities from
+    // the mask. A single-seat aircraft declares no [[crew]] and gets no page (it is an implicit pilot).
+    if (!def.crew.empty()) {
+        ManualSection sec;
+        sec.title = "Crew";
+        auto turretById = [&](const std::string& id) -> const TurretDef* {
+            for (const TurretDef& t : def.turrets)
+                if (t.id == id)
+                    return &t;
+            return nullptr;
+        };
+        for (const SeatDef& seat : def.crew) {
+            std::ostringstream value;
+            bool first = true;
+            for (CrewCapability cap : allCrewCapabilities()) {
+                if (!hasCapability(seat.capabilities, cap))
+                    continue;
+                if (!first)
+                    value << ", ";
+                value << crewCapabilityName(cap);
+                first = false;
+            }
+            if (!seat.turret.empty()) {
+                if (const TurretDef* t = turretById(seat.turret))
+                    value << " — turret \"" << seat.turret << "\" (" << fmt("%.0f", t->azMinDeg) << " to "
+                          << fmt("%.0f", t->azMaxDeg) << " deg az, " << fmt("%.0f", t->elMinDeg) << " to "
+                          << fmt("%.0f", t->elMaxDeg) << " deg el)";
+            }
+            sec.rows.push_back({seat.role, value.str()});
+        }
+        out.sections.push_back(std::move(sec));
+    }
+
     // ── Sensors: from the entity's sensor ids, resolved by the caller (#810). ────────────────────
     if (!src.sensors.empty()) {
         ManualSection sec;

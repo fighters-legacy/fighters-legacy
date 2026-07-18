@@ -33,6 +33,18 @@ struct FireRequest {
     uint32_t shooterIdx{0};
     uint32_t weaponIndex{UINT32_MAX};
     uint8_t station{255};
+    // ── crew seat (#969) ──
+    // Which crew seat fired this request. 0 for the single-seat / pilot path, so the sort key
+    // (shooterIdx, seat, station) is identical to the old (shooterIdx, station) for a plain fighter.
+    // The crewed weapons pass stamps it; evaluateFire leaves it 0.
+    uint8_t seat{0};
+    // ── turret launch direction (#970) ──
+    // World-space bore the shot leaves along, when the firing station is turret-mounted. Default
+    // (hasAimDir == false) = the airframe nose, so a nose-fired shot is bit-identical to before.
+    // evaluateFire leaves this default; the caller (the crewed weapons pass, #969) fills it from the
+    // seat's turret pose via turretWorldDir. FireRequest's sort key gains seat when crew lands.
+    bool hasAimDir{false};
+    float aimDir[3]{0.f, 0.f, 0.f};
 };
 
 // The gun default when a weapon def does not say (rate_of_fire_rpm == 0).
@@ -42,14 +54,37 @@ inline constexpr uint64_t kReleaseCooldownTicks = 30; // 0.5 s at 60 Hz
 // Rockets ripple while the release is HELD (#629): a pod is a volume weapon.
 inline constexpr uint64_t kRocketRippleTicks = 6; // ~10 rockets/s at 60 Hz
 
-// Evaluate one entity's fire intent for this tick (#625). Applies, in order: the wingman
+// The fire slice evaluateFire reads (#969): the trigger/release/selected-station triple. Both a
+// pilot's ControlInput and a seat bot's SeatCommand project onto it, so one fire evaluator serves
+// the single-seat path and each crew seat's channel.
+struct WeaponControls {
+    bool trigger{false};
+    bool release{false};
+    uint8_t station{255}; // absolute; 255 = keep the current selection
+};
+
+// Project a full flight ControlInput onto its fire slice.
+[[nodiscard]] inline WeaponControls weaponControlsOf(const ControlInput& in) noexcept {
+    return WeaponControls{in.trigger, in.release, in.station};
+}
+
+// Evaluate one fire channel's intent for this tick (#625). Applies, in order: the wingman
 // weapons-hold order (#610 — the flag that "has no teeth until weapons land"; these are the
 // teeth), station selection (absolute, clamped; 255 = keep), the store-release EDGE (a held or
 // stale-repeated input is one shot), the gun rate limit, ammo. Decrements rounds and the live
 // payload (mass + drag leave the airframe with the store) and appends the validated requests.
 //
 // Deterministic and side-effect-free beyond `fs` — no dice, no world access. Sim-thread only.
-void evaluateFire(FireState& fs, const WeaponRegistry& weapons, const ControlInput& in, bool weaponsHold, uint64_t tick,
-                  uint32_t shooterIdx, std::vector<FireRequest>& out);
+// The crewed weapons pass calls this once per Fire seat over that seat's disjoint loadout partition
+// (the one-owner invariant makes ammo per-seat, so no station mask is needed); it stamps the seat
+// index and turret aim direction onto the requests it appended. The single-seat path calls the
+// ControlInput overload with the whole loadout — byte-identical to before.
+void evaluateFire(FireState& fs, const WeaponRegistry& weapons, const WeaponControls& wc, bool weaponsHold,
+                  uint64_t tick, uint32_t shooterIdx, std::vector<FireRequest>& out);
+
+inline void evaluateFire(FireState& fs, const WeaponRegistry& weapons, const ControlInput& in, bool weaponsHold,
+                         uint64_t tick, uint32_t shooterIdx, std::vector<FireRequest>& out) {
+    evaluateFire(fs, weapons, weaponControlsOf(in), weaponsHold, tick, shooterIdx, out);
+}
 
 } // namespace fl

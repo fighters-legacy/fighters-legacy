@@ -120,8 +120,12 @@ class ProjectileSystem {
     // ahead of the aircraft); a ROCKET gets deterministic launch dispersion hashed from
     // (shooter, tick, projectile) and scaled by the def's CEP — a salvo fans out the same way in
     // every replay. `tickIndex` seeds that dispersion; 0 is fine for dispersion-free stores.
+    // `aimDirWorld` (#970): when non-null, the store leaves along this world-space direction — the
+    // turret bore (turretWorldDir) instead of the airframe nose. Null = the nose, bit-identical to
+    // before. A bomb still ejects downward off the rack regardless (an ejector, not an aim).
     EntityId launch(EntityManager& em, uint32_t weaponIndex, const EntityState& shooterState,
-                    uint32_t shooterPeerOwnerId, EntityId designatedTarget = EntityId::null(), uint64_t tickIndex = 0);
+                    uint32_t shooterPeerOwnerId, EntityId designatedTarget = EntityId::null(), uint64_t tickIndex = 0,
+                    const glm::vec3* aimDirWorld = nullptr);
 
     // Advance every projectile by dt: boost/coast point-mass flight (gravity from the field, a
     // simple speed-proportional coast decay, thrust along the velocity), seeker checks at the

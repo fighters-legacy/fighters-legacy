@@ -103,6 +103,40 @@ namespace {
                              " (expected missile, bomb, or rocket)");
 }
 
+// Fixed-length float array (body-frame vectors, quats). Absent = keep the defaults already in
+// `out`. Present but not an N-element numeric array is an error.
+void parse_float_array(toml::node_view<toml::node> node, float* out, size_t n, const char* field) {
+    if (!node)
+        return;
+    auto* arr = node.as_array();
+    if (!arr || arr->size() != n)
+        throw std::runtime_error(std::string(field) + " must be an array of " + std::to_string(n) + " numbers");
+    size_t i = 0;
+    for (auto& el : *arr) {
+        auto v = el.value<double>();
+        if (!v)
+            throw std::runtime_error(std::string(field) + " entries must be numbers");
+        out[i++] = static_cast<float>(*v);
+    }
+}
+
+// Array of non-negative integer station slots. Absent = empty (already the default).
+void parse_slot_array(toml::node_view<toml::node> node, std::vector<int>& out, const char* field) {
+    if (!node)
+        return;
+    auto* arr = node.as_array();
+    if (!arr)
+        throw std::runtime_error(std::string(field) + " must be an array of station slots");
+    for (auto& el : *arr) {
+        auto v = tomlInt(el);
+        if (!v)
+            throw std::runtime_error(std::string(field) + " entries must be integer station slots");
+        if (*v < 0)
+            throw std::runtime_error(std::string(field) + " station slots must be >= 0");
+        out.push_back(static_cast<int>(*v));
+    }
+}
+
 [[nodiscard]] DamagePenalty parse_penalty(toml::node_view<toml::node> node, const char* name) {
     auto* tbl = node.as_table();
     if (!tbl)
@@ -267,6 +301,110 @@ EntityDef parseEntityDef(std::string_view toml_src) {
 
             def.hardpoints.push_back(std::move(hp));
         }
+    }
+
+    // Optional turret mounts (#966/#970). A turret gives a weapon station an aiming frame
+    // independent of the airframe nose:
+    //     [[turrets]]
+    //     id           = "tail"
+    //     mount_pos    = [0.0, 0.5, -6.0]
+    //     az_min_deg   = -60.0
+    //     az_max_deg   =  60.0
+    //     el_min_deg   = -10.0
+    //     el_max_deg   =  80.0
+    //     slew_rate_deg_s = 45.0
+    //     stations     = [3]
+    // Parsed BEFORE crew so a seat can reference a turret and the partition check sees both.
+    if (auto turrets_node = tbl["turrets"]; turrets_node) {
+        auto* arr = turrets_node.as_array();
+        if (!arr)
+            throw std::runtime_error("turrets must be an array of tables ([[turrets]])");
+        for (auto& el : *arr) {
+            auto* tt = el.as_table();
+            if (!tt)
+                throw std::runtime_error("turrets must be an array of tables ([[turrets]])");
+            TurretDef turret;
+            turret.id = req_string((*tt)["id"], "turrets.id");
+            parse_float_array((*tt)["mount_pos"], turret.mountPos, 3, "turrets.mount_pos");
+            parse_float_array((*tt)["mount_orient"], turret.mountOrient, 4, "turrets.mount_orient");
+            turret.azMinDeg = opt_float((*tt)["az_min_deg"], turret.azMinDeg);
+            turret.azMaxDeg = opt_float((*tt)["az_max_deg"], turret.azMaxDeg);
+            turret.elMinDeg = opt_float((*tt)["el_min_deg"], turret.elMinDeg);
+            turret.elMaxDeg = opt_float((*tt)["el_max_deg"], turret.elMaxDeg);
+            turret.slewRateDegS = opt_float((*tt)["slew_rate_deg_s"], turret.slewRateDegS);
+            parse_slot_array((*tt)["stations"], turret.stations, "turrets.stations");
+            def.turrets.push_back(std::move(turret));
+        }
+    }
+
+    // Optional crew seats (#966/#968). Authored as an array-of-tables; ABSENT = an implicit single
+    // pilot seat (the runtime crew frame synthesizes it), so an existing def is unchanged:
+    //     [[crew]]
+    //     role         = "pilot"
+    //     capabilities = ["fly", "radar", "countermeasures"]
+    //     [[crew]]
+    //     role         = "tail-gunner"
+    //     capabilities = ["fire"]
+    //     turret       = "tail"
+    //     bot          = "gunner"
+    //     skill        = 0.6
+    // Roles are display strings; the engine sees only the capability mask (roles-as-data, #944).
+    if (auto crew_node = tbl["crew"]; crew_node) {
+        auto* arr = crew_node.as_array();
+        if (!arr)
+            throw std::runtime_error("crew must be an array of tables ([[crew]])");
+        for (auto& el : *arr) {
+            auto* ct = el.as_table();
+            if (!ct)
+                throw std::runtime_error("crew must be an array of tables ([[crew]])");
+            SeatDef seat;
+            seat.role = req_string((*ct)["role"], "crew.role");
+
+            auto* caps = (*ct)["capabilities"].as_array();
+            if (!caps || caps->empty())
+                throw std::runtime_error("crew.capabilities must be a non-empty array (seat \"" + seat.role + "\")");
+            for (auto& c : *caps) {
+                auto tok = c.value<std::string>();
+                if (!tok || tok->empty())
+                    throw std::runtime_error("crew.capabilities entries must be non-empty strings");
+                auto cap = parseCrewCapability(*tok);
+                if (!cap)
+                    throw std::runtime_error("unknown crew capability \"" + *tok +
+                                             "\" (expected fly, fire, radar, countermeasures, command)");
+                seat.capabilities = withCapability(seat.capabilities, *cap);
+            }
+
+            parse_slot_array((*ct)["stations"], seat.stations, "crew.stations");
+            seat.turret = opt_string((*ct)["turret"]);
+            parse_float_array((*ct)["seat_pos"], seat.eyepoint, 3, "crew.seat_pos");
+
+            // Default occupancy: `bot = "<spec>"` OR `empty = true`. Human is a runtime state.
+            auto botSpec = opt_string((*ct)["bot"]);
+            const bool emptyFlag = opt_bool((*ct)["empty"], false);
+            if (emptyFlag && !botSpec.empty())
+                throw std::runtime_error("crew seat \"" + seat.role + "\" declares both bot and empty");
+            if (emptyFlag) {
+                seat.defaultOccupancy = SeatOccupancyDefault::Empty;
+            } else {
+                seat.defaultOccupancy = SeatOccupancyDefault::Bot;
+                seat.botSpec = std::move(botSpec);
+            }
+            seat.defaultSkill = parse_unit_fraction((*ct)["skill"], "crew.skill", seat.defaultSkill);
+
+            def.crew.push_back(std::move(seat));
+        }
+    }
+
+    // One-owner-per-channel invariant (#966): exactly one Fly seat, each hardpoint/turret/Radar/
+    // Countermeasures/Command owned by at most one seat. A single-file structural check, so it
+    // lives in the shared parser (the engine enforces it, and validate-entity surfaces the throw).
+    {
+        std::vector<int> hardpointSlots;
+        hardpointSlots.reserve(def.hardpoints.size());
+        for (const auto& hp : def.hardpoints)
+            hardpointSlots.push_back(hp.slot);
+        if (std::string err = validateCrewPartition(def.crew, def.turrets, hardpointSlots); !err.empty())
+            throw std::runtime_error("crew partition invalid: " + err);
     }
 
     // Optional sensor suite: sensor-def ids the entity carries.

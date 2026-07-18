@@ -1311,6 +1311,171 @@ TEST_CASE("EntityDefParser: an unknown sensor id is NOT a parse error", "[parser
 }
 
 // ---------------------------------------------------------------------------
+// Crew seats & turret mounts (#966/#968)
+// ---------------------------------------------------------------------------
+
+namespace {
+std::string crewEntity(const char* body) {
+    return std::string("[entity]\nid=\"x:crewed\"\nname=\"Crewed\"\ncategory=\"air_vehicle\"\nmax_hp=300.0\n") + body;
+}
+} // namespace
+
+TEST_CASE("EntityDefParser: absent [[crew]] leaves crew empty (implicit single pilot)", "[parser][crew]") {
+    // The load-bearing back-compat case: every existing def is a valid 1-seat crewed aircraft with
+    // zero content changes.
+    const fl::EntityDef def = fl::parseEntityDef(kMinimalEntityToml);
+    CHECK(def.crew.empty());
+    CHECK(def.turrets.empty());
+}
+
+TEST_CASE("EntityDefParser: capability tokens round-trip through the mask", "[parser][crew]") {
+    for (fl::CrewCapability cap : fl::allCrewCapabilities()) {
+        auto parsed = fl::parseCrewCapability(fl::crewCapabilityName(cap));
+        REQUIRE(parsed.has_value());
+        CHECK(*parsed == cap);
+    }
+    CHECK_FALSE(fl::parseCrewCapability("wingman").has_value());
+}
+
+TEST_CASE("EntityDefParser: parses a crewed bomber with a tail turret", "[parser][crew]") {
+    const fl::EntityDef def = fl::parseEntityDef(crewEntity(R"(
+[[hardpoints]]
+slot    = 0
+allowed = ["gbu12"]
+default = "gbu12"
+
+[[hardpoints]]
+slot    = 3
+allowed = ["m61"]
+default = "m61"
+
+[[turrets]]
+id              = "tail"
+mount_pos       = [0.0, 0.5, -6.0]
+az_min_deg      = -60.0
+az_max_deg      =  60.0
+el_min_deg      = -10.0
+el_max_deg      =  80.0
+slew_rate_deg_s = 45.0
+stations        = [3]
+
+[[crew]]
+role         = "pilot"
+capabilities = ["fly", "fire", "radar", "countermeasures"]
+stations     = [0]
+seat_pos     = [0.0, 1.2, 3.0]
+
+[[crew]]
+role         = "tail-gunner"
+capabilities = ["fire"]
+turret       = "tail"
+bot          = "gunner"
+skill        = 0.6
+seat_pos     = [0.0, 0.5, -6.0]
+)"));
+
+    REQUIRE(def.crew.size() == 2);
+    REQUIRE(def.turrets.size() == 1);
+
+    const fl::SeatDef& pilot = def.crew[0];
+    CHECK(pilot.role == "pilot");
+    CHECK(fl::hasCapability(pilot.capabilities, fl::CrewCapability::Fly));
+    CHECK(fl::hasCapability(pilot.capabilities, fl::CrewCapability::Radar));
+    CHECK(fl::hasCapability(pilot.capabilities, fl::CrewCapability::Countermeasures));
+    CHECK(fl::hasCapability(pilot.capabilities, fl::CrewCapability::Fire));
+    REQUIRE(pilot.stations == std::vector<int>{0});
+    CHECK(pilot.defaultOccupancy == fl::SeatOccupancyDefault::Bot);
+
+    const fl::SeatDef& gunner = def.crew[1];
+    CHECK(gunner.role == "tail-gunner");
+    CHECK(fl::hasCapability(gunner.capabilities, fl::CrewCapability::Fire));
+    CHECK(gunner.turret == "tail");
+    CHECK(gunner.botSpec == "gunner");
+    CHECK_THAT(gunner.defaultSkill, WithinAbs(0.6f, 1e-4f));
+
+    const fl::TurretDef& t = def.turrets[0];
+    CHECK(t.id == "tail");
+    CHECK_THAT(t.azMinDeg, WithinAbs(-60.f, 1e-4f));
+    CHECK_THAT(t.slewRateDegS, WithinAbs(45.f, 1e-4f));
+    REQUIRE(t.stations == std::vector<int>{3});
+    CHECK_THAT(t.mountPos[2], WithinAbs(-6.f, 1e-4f));
+}
+
+TEST_CASE("EntityDefParser: an empty seat is authored with empty = true", "[parser][crew]") {
+    const fl::EntityDef def = fl::parseEntityDef(crewEntity(R"(
+[[crew]]
+role         = "pilot"
+capabilities = ["fly"]
+
+[[crew]]
+role         = "observer"
+capabilities = ["radar"]
+empty        = true
+)"));
+    REQUIRE(def.crew.size() == 2);
+    CHECK(def.crew[1].defaultOccupancy == fl::SeatOccupancyDefault::Empty);
+    CHECK(def.crew[1].botSpec.empty());
+}
+
+TEST_CASE("EntityDefParser: the one-owner-per-channel invariant is enforced", "[parser][crew]") {
+    // Zero Fly seats.
+    CHECK_THROWS_AS(fl::parseEntityDef(crewEntity("[[crew]]\nrole=\"g\"\ncapabilities=[\"radar\"]\n")),
+                    std::runtime_error);
+    // Two Fly seats.
+    CHECK_THROWS_AS(
+        fl::parseEntityDef(
+            crewEntity("[[crew]]\nrole=\"a\"\ncapabilities=[\"fly\"]\n[[crew]]\nrole=\"b\"\ncapabilities=[\"fly\"]\n")),
+        std::runtime_error);
+    // Radar on two seats.
+    CHECK_THROWS_AS(fl::parseEntityDef(crewEntity("[[crew]]\nrole=\"a\"\ncapabilities=[\"fly\",\"radar\"]\n"
+                                                  "[[crew]]\nrole=\"b\"\ncapabilities=[\"radar\"]\n")),
+                    std::runtime_error);
+    // A hardpoint fired by two seats.
+    CHECK_THROWS_AS(
+        fl::parseEntityDef(crewEntity("[[hardpoints]]\nslot=0\nallowed=[\"m61\"]\ndefault=\"m61\"\n"
+                                      "[[crew]]\nrole=\"a\"\ncapabilities=[\"fly\",\"fire\"]\nstations=[0]\n"
+                                      "[[crew]]\nrole=\"b\"\ncapabilities=[\"fire\"]\nstations=[0]\n")),
+        std::runtime_error);
+    // A seat binding stations without the Fire capability.
+    CHECK_THROWS_AS(fl::parseEntityDef(crewEntity("[[hardpoints]]\nslot=0\nallowed=[\"m61\"]\ndefault=\"m61\"\n"
+                                                  "[[crew]]\nrole=\"a\"\ncapabilities=[\"fly\"]\nstations=[0]\n")),
+                    std::runtime_error);
+    // A seat referencing an unknown turret.
+    CHECK_THROWS_AS(
+        fl::parseEntityDef(crewEntity("[[crew]]\nrole=\"a\"\ncapabilities=[\"fly\",\"fire\"]\nturret=\"nope\"\n")),
+        std::runtime_error);
+    // A turret mounting an unknown hardpoint slot.
+    CHECK_THROWS_AS(fl::parseEntityDef(crewEntity("[[turrets]]\nid=\"t\"\nstations=[9]\n"
+                                                  "[[crew]]\nrole=\"a\"\ncapabilities=[\"fly\"]\n")),
+                    std::runtime_error);
+    // A Fire seat that fires nothing.
+    CHECK_THROWS_AS(fl::parseEntityDef(crewEntity("[[crew]]\nrole=\"a\"\ncapabilities=[\"fly\",\"fire\"]\n")),
+                    std::runtime_error);
+    // A single valid Fly seat is fine.
+    CHECK_NOTHROW(fl::parseEntityDef(crewEntity("[[crew]]\nrole=\"p\"\ncapabilities=[\"fly\"]\n")));
+}
+
+TEST_CASE("EntityDefParser: malformed crew/turret tables throw", "[parser][crew]") {
+    // capabilities must be a non-empty array.
+    CHECK_THROWS_AS(fl::parseEntityDef(crewEntity("[[crew]]\nrole=\"p\"\ncapabilities=[]\n")), std::runtime_error);
+    // an unknown capability token.
+    CHECK_THROWS_AS(fl::parseEntityDef(crewEntity("[[crew]]\nrole=\"p\"\ncapabilities=[\"navigate\"]\n")),
+                    std::runtime_error);
+    // seat_pos must have 3 entries.
+    CHECK_THROWS_AS(
+        fl::parseEntityDef(crewEntity("[[crew]]\nrole=\"p\"\ncapabilities=[\"fly\"]\nseat_pos=[0.0,1.0]\n")),
+        std::runtime_error);
+    // declaring both bot and empty.
+    CHECK_THROWS_AS(
+        fl::parseEntityDef(crewEntity("[[crew]]\nrole=\"p\"\ncapabilities=[\"fly\"]\nbot=\"gunner\"\nempty=true\n")),
+        std::runtime_error);
+    // a turret with slew_rate <= 0.
+    CHECK_THROWS_AS(fl::parseEntityDef(crewEntity("[[turrets]]\nid=\"t\"\nslew_rate_deg_s=0.0\n"
+                                                  "[[crew]]\nrole=\"p\"\ncapabilities=[\"fly\"]\n")),
+                    std::runtime_error);
+}
+
+// ---------------------------------------------------------------------------
 // applyPointDamage — the combat damage funnel (#626)
 // ---------------------------------------------------------------------------
 

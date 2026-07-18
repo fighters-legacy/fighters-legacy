@@ -684,9 +684,11 @@ void Game::buildManualFor(uint32_t typeIndex) {
         }
     }
     // Zero-pack sandbox: the wire def has no hardpoints and there is no pack to resolve them from,
-    // but the debug entity IS armed (#440) — use the same builder the server spawned it from.
+    // but the builtin aircraft ARE armed (#440/#977) — use the same builders the server spawned from.
     if (fullDef.hardpoints.empty() && wireDef->id == "builtin:debug-entity")
         fullDef = fl::builtinDebugEntityDef();
+    else if (fullDef.crew.empty() && wireDef->id == "builtin:bomber")
+        fullDef = fl::builtinBomberDef(); // rebuild the crewed def so the manual can render its crew page
 
     // Weapon-station glue (#440): the selector needs the station count, the HUD weapon line needs
     // names. Wired here — the one place the client resolves the full def of the aircraft it flies —
@@ -881,8 +883,10 @@ void Game::startGame(const std::string& mission) {
 
     // Register the builtin entity type for the no-pack sandbox path — ARMED (#440), via the same
     // builder fl-server uses, so the client-side hardpoint count matches what the server spawned.
-    if (d.services.outcome == FirstRunOutcome::LaunchSandboxInspector)
+    if (d.services.outcome == FirstRunOutcome::LaunchSandboxInspector) {
         d.services.entityRegistry.registerType(fl::builtinDebugEntityDef());
+        d.services.entityRegistry.registerType(fl::builtinBomberDef()); // the crewed bomber (#977)
+    }
 
     const bool isMultiplayer = !d.services.connectHost.empty();
 

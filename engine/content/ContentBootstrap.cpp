@@ -272,6 +272,101 @@ EntityDef builtinDebugEntityDef() {
     return def;
 }
 
+EntityDef builtinBomberDef() {
+    // The compiled-in MULTI-CREW aircraft (#966/#977): a Fly+Fire+Radar+Countermeasures pilot dropping
+    // bombs off station 0, and a defensive TAIL-GUNNER seat aiming a rear-facing cannon turret on
+    // station 1, filled by the builtin turret gunner (#971). It makes the whole crew → seat-sampling →
+    // turret-slew → directional-fire path provable with ZERO content packs, per the armed-sandbox
+    // doctrine — the crewed counterpart to builtin:debug-entity.
+    EntityDef def;
+    def.id = "builtin:bomber";
+    def.name = "Heavy Bomber";
+    def.category = ObjectCategory::AirVehicle;
+    def.maxHp = 600.0f; // a bomber soaks damage; also gives the tail gun something to defend
+    def.collisionRadiusM = 14.f;
+    def.signatures.rcs = 4.f; // big and slow: easy to see, easy to lock — the tail gun is its answer
+    def.signatures.ir = 2.f;
+    def.signatures.visual = 2.f;
+
+    {
+        DamageDef d;
+        d.light.hpFraction = 0.66f;
+        d.light.visualEffect = "smoke";
+        d.heavy.hpFraction = 0.33f;
+        d.heavy.visualEffect = "fire";
+        d.heavy.thrustFactor = 0.75f;
+        d.heavy.controlFactor = 0.7f;
+        d.critical.hpFraction = 0.12f;
+        d.critical.visualEffect = "fire";
+        d.critical.thrustFactor = 0.4f;
+        d.critical.controlFactor = 0.35f;
+        d.critical.avionicsFailure = true;
+
+        SubsystemSet subs;
+        subs.parts[static_cast<int>(Subsystem::EngineLeft)] = {40.f, 1.0f};
+        subs.parts[static_cast<int>(Subsystem::EngineRight)] = {40.f, 1.0f};
+        subs.parts[static_cast<int>(Subsystem::Controls)] = {50.f, 1.0f};
+        subs.parts[static_cast<int>(Subsystem::Avionics)] = {30.f, 0.8f};
+        subs.parts[static_cast<int>(Subsystem::Fuel)] = {45.f, 1.0f};
+        d.subsystems = subs;
+        def.damage = d;
+    }
+
+    auto hp = [](int slot, const char* weapon) {
+        Hardpoint h;
+        h.slot = slot;
+        h.allowed = {weapon};
+        h.defaultWeapon = weapon;
+        return h;
+    };
+    def.hardpoints = {
+        hp(0, BuiltinWeapon::bomb().id.c_str()),   // the pilot's bomb bay
+        hp(1, BuiltinWeapon::cannon().id.c_str()), // the tail gun, mounted on the turret below
+    };
+
+    // The defensive tail turret: mounted facing AFT (a 180-deg yaw about +Y maps the bore to -X), with
+    // a realistic rear-quarter traverse envelope and a modest slew rate. Its station (1) is fired by
+    // the gunner seat.
+    TurretDef tail;
+    tail.id = "tail";
+    tail.mountPos[0] = 0.f;
+    tail.mountPos[1] = 0.6f;
+    tail.mountPos[2] = -8.f;
+    tail.mountOrient[0] = 0.f; // quat (x,y,z,w) for a 180-deg rotation about +Y = (0,1,0,0)
+    tail.mountOrient[1] = 1.f;
+    tail.mountOrient[2] = 0.f;
+    tail.mountOrient[3] = 0.f;
+    tail.azMinDeg = -80.f;
+    tail.azMaxDeg = 80.f;
+    tail.elMinDeg = -10.f;
+    tail.elMaxDeg = 80.f;
+    tail.slewRateDegS = 70.f;
+    tail.stations = {1};
+    def.turrets = {tail};
+
+    SeatDef pilot;
+    pilot.role = "pilot";
+    pilot.capabilities = withCapability(
+        withCapability(withCapability(withCapability(CrewCapabilityMask{0}, CrewCapability::Fly), CrewCapability::Fire),
+                       CrewCapability::Radar),
+        CrewCapability::Countermeasures);
+    pilot.stations = {0};
+    pilot.eyepoint[1] = 1.4f;
+    pilot.eyepoint[2] = 6.0f;
+
+    SeatDef gunner;
+    gunner.role = "tail-gunner";
+    gunner.capabilities = withCapability(CrewCapabilityMask{0}, CrewCapability::Fire);
+    gunner.turret = "tail";
+    gunner.botSpec = "builtin:gunner";
+    gunner.defaultSkill = 0.6f;
+    gunner.eyepoint[1] = 0.6f;
+    gunner.eyepoint[2] = -8.0f;
+
+    def.crew = {pilot, gunner};
+    return def;
+}
+
 namespace {
 
 // A shared 3-level DamageDef + subsystem table for the builtin surface entities (#863). The fixed

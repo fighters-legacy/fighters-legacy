@@ -279,6 +279,28 @@ loop from a handful of numbers.
 
 ---
 
+## Turret mounts vs hardpoint stations (#966/#970)
+
+A **hardpoint station** says *what an airframe carries* (`[[hardpoints]]`, above). A **turret mount**
+gives one or more of those stations an *aiming direction independent of the airframe nose* — a
+defensive gun that tracks a chaser, or a static SAM launcher that elevates. Turrets are authored on
+the entity as `[[turrets]]` and bound to a crew seat via the seat's `turret =` field (see the
+[`[[crew]]` and `[[turrets]]` section in formats.md](formats.md#crew-and-turrets-optional--multi-crew-seats-and-turret-mounts)).
+
+Two facts about how a turret fires:
+
+- **The slew is server-authoritative.** The server slews the turret toward its commanded direction at
+  the mount's `slew_rate_deg_s`, clamped to the `az_*`/`el_*` limits — there is no instant aim,
+  regardless of what a client reports. The same pure `stepTurret` servo runs on the client purely as a
+  smoothing predictor; the server pose is the truth.
+- **The shot leaves along the turret bore**, not the airframe nose — a gun burst or a store released
+  from a turret-mounted station fires along the current turret orientation. A nose-mounted station is
+  unchanged (bit-identical to a single-seat fighter).
+
+This is also the mechanism that gives a **static air-defense emplacement launcher elevation** (the
+gap documented as owed to #585): mount the launcher as a turret and the SAM/AAA controller slews it
+onto the lead point instead of firing along a fixed nose.
+
 ## See also
 
 - [formats.md](formats.md) — the exhaustive per-field TOML tables for sensors, weapons, and entities.

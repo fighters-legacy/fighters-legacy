@@ -264,6 +264,22 @@ EntityValidationResult validateEntityPack(const std::string& packDir) {
             checkWeaponId("default", hp.defaultWeapon);
         }
 
+        // Crew seats (#966/#968): the one-owner-per-channel invariant and every slot/turret/
+        // capability reference are single-file and already enforced by parseEntityDef above (a
+        // violation surfaced as a parse error). The one crew reference that needs PACK resolution
+        // is a `lua:<script>` bot spec — a Lua seat bot loaded from the pack's ai/ directory.
+        // A `builtin:*` spec or a bare C++ factory behavior (gunner, guns, ...) is compiled in.
+        for (const SeatDef& seat : def.crew) {
+            if (seat.defaultOccupancy != SeatOccupancyDefault::Bot)
+                continue;
+            constexpr std::string_view kLua = "lua:";
+            if (seat.botSpec.size() > kLua.size() && seat.botSpec.compare(0, kLua.size(), kLua) == 0) {
+                const std::string script = seat.botSpec.substr(kLua.size());
+                checkAssetRef(*pack, file, ("crew seat \"" + seat.role + "\" bot lua script").c_str(), script,
+                              AssetType::AIScript, r);
+            }
+        }
+
         checkSilentFallbacks(def, file, r);
     }
 
