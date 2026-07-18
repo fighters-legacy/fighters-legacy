@@ -7,6 +7,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-07-17
+
 ### Added
 
 - **flight**: Afterburner envelope limits — new optional `[engine] ab_min_mach` and `ab_max_alt_km` on the flight model gate `FlightState::ab_engaged` in `FlightIntegrator::step`, so the augmentor no longer lights at 0 kt on the runway or at 30 km. AB extinguishes below the ram-limit Mach or above the altitude ceiling even with the throttle in zone, with a small hysteresis band so a model riding the boundary does not chatter. Both limits are optional with permissive defaults (a model omitting them is bit-identical to before); parsed via the runtime `parseFlightModel`, range-checked by `validate-flight-model` (which also warns when set without an `ab_thrust` deck), documented in `docs/modding/formats.md`. Closes #309. Part of #585
