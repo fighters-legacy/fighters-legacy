@@ -7,6 +7,7 @@
 #include "SessionStatus.h"
 #include "WingmanMenu.h"
 #include "net/GameProtocol.h"      // PeerRole, PackManifestEntry (connect handshake #853)
+#include "render/RadarView.h"      // RadarView / RadarTrack / RwrStrobe (datalink picture #528)
 #include "render/RenderSnapshot.h" // EntityRenderEntry (stored by value in the retention cache)
 
 #include <algorithm>
@@ -117,6 +118,17 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // (ExtTag::SnapshotPeerCount). Returns 0 if no extended snapshot has been received yet.
     uint16_t serverPeerCount() const noexcept {
         return m_serverPeerCount.load(std::memory_order_relaxed);
+    }
+
+    // The datalink track picture + RWR from the last MsgDatalink (#528), for the HUD radar scope.
+    // `valid` is false until the first datalink arrives. Main-thread only (built in onReceive, read in
+    // the render loop, both main-thread). The spans stay valid until the next MsgDatalink.
+    RadarView radarView() const noexcept {
+        RadarView v;
+        v.tracks = std::span<const RadarTrack>(m_radarTracks.data(), m_radarTracks.size());
+        v.strobes = std::span<const RwrStrobe>(m_rwrStrobes.data(), m_rwrStrobes.size());
+        v.valid = m_haveDatalink;
+        return v;
     }
 
     // This session's combat tallies, as the SERVER counts them (#626) — updated from the unicast
@@ -250,6 +262,15 @@ struct ClientNetEventHandler : INetworkEventHandler {
         uint64_t lastSeenTick{0};
     };
     std::unordered_map<uint32_t, CachedEntity> m_entityCache;
+
+    // Datalink track picture + RWR (#528), rebuilt from each MsgDatalink. Positions are reconstructed
+    // to ABSOLUTE world metres (header origin + relative payload) so the HUD needs no origin of its
+    // own. Held in vectors the radarView() spans point into; replaced wholesale each message.
+    std::vector<RadarTrack> m_radarTracks;
+    std::vector<RwrStrobe> m_rwrStrobes;
+    bool m_haveDatalink{false};
+
+    void handleDatalink(const void* data, std::size_t size);
 };
 
 } // namespace fl

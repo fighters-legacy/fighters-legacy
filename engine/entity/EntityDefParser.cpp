@@ -154,6 +154,12 @@ EntityDef parseEntityDef(std::string_view toml_src) {
 
     def.maxHp = req_float(entity["max_hp"], "entity.max_hp");
     def.collisionRadiusM = opt_float(entity["collision_radius_m"], 0.f); // 0 = category default (#630)
+
+    // Countermeasure magazines (#529): chaff/flare rounds this entity carries. 0 = none (the default).
+    if (auto n = tomlInt(entity["chaff_count"]))
+        def.chaffCount = static_cast<uint16_t>(std::clamp<int64_t>(*n, 0, 65535));
+    if (auto n = tomlInt(entity["flare_count"]))
+        def.flareCount = static_cast<uint16_t>(std::clamp<int64_t>(*n, 0, 65535));
     def.mesh = opt_string(entity["mesh"]);
     def.cockpitMesh = opt_string(entity["cockpit"]);           // optional; empty = no cockpit geometry (#813)
     def.manualAsset = opt_string(entity["manual"]);            // optional; empty = generated sections only (#821)

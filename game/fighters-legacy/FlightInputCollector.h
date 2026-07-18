@@ -69,6 +69,14 @@ class FlightInputCollector {
     uint8_t m_selectedStation{255}; // 255 = none
     bool m_prevNextKey{false};      // edge detectors for the cycle keys
     bool m_prevPrevKey{false};
+    // Radar mode (#526/#528), cycled with R: Silent/Search/TWS/STT. Starts at TWS (the server spawn
+    // default) and sends 255 (keep) until the player first touches it, so the spawn mode is respected.
+    uint8_t m_radarMode{2}; // fl::sensor::RadarMode::Tws ordinal
+    bool m_radarModeTouched{false};
+    bool m_prevRadarKey{false};
+    // Electronic warfare (#529): E dispenses (level bit, server edge-detects), J toggles the jammer.
+    bool m_ecmOn{false};
+    bool m_prevEcmKey{false};
     bool m_prevPadNext{false}; // and for the gamepad D-pad
     bool m_prevPadPrev{false};
     const IClock* m_clock{&SystemClock::instance()};

@@ -26,6 +26,8 @@ struct EntityState {
     DamageLevel damageLevel{DamageLevel::Intact};
     bool dead{false};
     bool playerOwned{false};
+    bool ecmActive{false};    // ECM/noise jamming on (#529): denies a hostile radar LOCK beyond its
+                              // burn-through range. Runtime state, toggled by input / AI / admin.
     uint32_t ownerId{0};      // peer ID; 0 = server / AI
     uint16_t factionIndex{0}; // 0 = no faction/neutral; indexes FactionRegistry (engine-world)
 };

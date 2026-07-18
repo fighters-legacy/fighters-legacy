@@ -23,9 +23,10 @@
 #include "perf/TickProfiler.h"
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
-#include "weapon/FireControl.h"      // per-entity fire state + request emission (#625)
-#include "weapon/ProjectileSystem.h" // the projectile pool (#625)
-#include "world/FormationRegistry.h" // the formation / command tree (#610)
+#include "weapon/CountermeasureSystem.h" // chaff/flare decoys + seeker seduction (#529)
+#include "weapon/FireControl.h"          // per-entity fire state + request emission (#625)
+#include "weapon/ProjectileSystem.h"     // the projectile pool (#625)
+#include "world/FormationRegistry.h"     // the formation / command tree (#610)
 
 #include <glm/vec3.hpp> // glm::dvec3 (ground-elevation query — radial floor #477)
 
@@ -89,6 +90,7 @@ struct PeerInputState {
     // 1-byte fields last.
     uint8_t buttons{0};           // last drained value
     uint8_t selectedStation{255}; // last drained absolute station selection (#625); 255 = none
+    uint8_t radarMode{255};       // last drained absolute radar mode (#526); 255 = keep server-side mode
     bool hasSeq{false};           // false until first input received from this peer
     bool hasAppliedSeq{false};    // false until the first input is drained + applied (#427 TLV gate)
     bool ewmaSeeded{false};       // false until EWMA receives its first sample
@@ -155,6 +157,7 @@ struct ControlledEntity {
     SubsystemStateSet subsystems{}; // per-subsystem damage pools (#675); hasSubsystems gates its use
     bool hasSubsystems{false};      // true when the entity def declares [damage.subsystems]
     float fuelLeakKgS{0.f};         // accumulated fuel-leak rate from failed fuel subsystem(s) (#675)
+    bool prevDispenseCm{false};     // countermeasure-dispense edge detector (#529): a held input is one pop
 };
 
 // Pre-start scalar configuration. Bundles the init-time setters so callers configure rate limiting,
@@ -532,13 +535,23 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // silently renormalized. [1, 60]; atomic, hot-reloadable.
     void setSensorCheckHz(float hz) noexcept;
 
-    // The EMCON / RWR seam: a non-emitting observer cannot hold a radar or laser TRACK lobe. Nothing
-    // flips it yet (#526/#529 do); sim-thread only.
+    // The EMCON seam: a non-emitting observer's radar is dark (radar Silent mode). Keeps radar mode
+    // consistent. Sim-thread only. The player-driven path is MsgClientInput::radarMode (#526).
     void setEmitting(uint32_t entityIdx, bool emitting);
+
+    // Radar operating mode + STT designation (#526). Sim-thread only; a no-op for a non-observer. The
+    // player drives these through MsgClientInput; these forwards exist for admin commands, missions,
+    // and AI (a SAM going Silent, a scripted STT lock).
+    void setRadarMode(uint32_t entityIdx, sensor::RadarMode mode);
+    void setDesignatedTarget(uint32_t entityIdx, EntityId target);
 
     // What this entity has honestly detected. Null = it has no sensors (or sensing has not run for
     // it yet) — which a consumer must read as "not evaluated", never as "sees nothing".
     [[nodiscard]] const sensor::ContactTable* contactsFor(uint32_t entityIdx) const;
+
+    // The RWR picture: who is painting this entity (#526). Null = not an observer. Empty is a real
+    // fact (a receiver that hears nothing), unlike a null contact table.
+    [[nodiscard]] const sensor::ThreatWarningSet* threatsFor(uint32_t entityIdx) const;
 
     // Difficulty scaling for sensing (radar range fraction, reaction time). Unset = NO scaling:
     // radar reaches its authored range and the AI reacts the moment it detects. Deliberately not
@@ -890,6 +903,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // ── the fire path (#625) — sim-thread only ──────────────────────────────
     const WeaponRegistry* m_weaponRegistry{nullptr};
     ProjectileSystem m_projectileSystem;
+    CountermeasureSystem m_countermeasures; // chaff/flare decoys + seeker seduction (#529)
     // The conditions the sensing pass ran under this tick; seeker checks (#627) read the same ones.
     sensor::SensingEnvironment m_sensingEnv{};
     // Rolling post-integrate position history (#425): player hitscan rewinds targets to the tick
@@ -932,6 +946,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // (the #610 kNoPeer lesson).
     [[nodiscard]] uint32_t peerIdForEntity(EntityId id) const noexcept;
     void flushCombatEvents();
+
+    // Datalink / shared team track picture (#528). Fuses each pilot peer's own contacts with every
+    // same-faction teammate's, and sends the peer a MsgDatalink (unreliable) with its team picture +
+    // RWR. Sim-thread only; called from onTick every kDatalinkIntervalTicks.
+    void broadcastDatalink(uint64_t tickIndex);
+    static constexpr uint64_t kDatalinkIntervalTicks = 10; // ~6 Hz at 60 Hz sim
 
     std::atomic<int> m_activePeerCount{0};
     uint64_t m_weatherBroadcastTick{0};        // throttle weather broadcasts to ~6 Hz

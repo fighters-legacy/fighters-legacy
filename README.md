@@ -25,6 +25,7 @@ for clustered fleets.
 | [docs/architecture.md](docs/architecture.md) | Layered model, locked decisions, content pack architecture |
 | [docs/design.md](docs/design.md) | Gameplay design pillars, lifted FA constraints |
 | [docs/modding/formats.md](docs/modding/formats.md) | Native asset format specs (glTF, TOML, YAML, Lua) |
+| [docs/modding/weapons-sensors.md](docs/modding/weapons-sensors.md) | Combat systems: sensors, signatures, radar modes/RWR, IFF, datalink, weapon seekers, chaff/flare & ECM/ECCM |
 | [docs/legal/aircraft-likeness.md](docs/legal/aircraft-likeness.md) | Modelling real aircraft: permitted references, forbidden sources, markings, the `SOURCES.md` requirement, trademarks |
 | [docs/modding/localization.md](docs/modding/localization.md) | Translator guide: key scheme, TOML layout, plural forms, mod locale |
 | [docs/network-protocol.md](docs/network-protocol.md) | Wire protocol: fl-server ↔ client message format, channel assignments, scalability notes |

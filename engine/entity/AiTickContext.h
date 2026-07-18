@@ -9,6 +9,7 @@ class FactionRegistry; // engine/world/FactionRegistry.h (#632)
 
 namespace sensor {
 struct ContactTable;       // engine/sensor/SensorSystem.h (#685)
+struct ThreatWarningSet;   // engine/sensor/SensorSystem.h (#526 RWR)
 struct SensingEnvironment; // engine/sensor/Detection.h
 } // namespace sensor
 
@@ -46,6 +47,13 @@ struct AiTickContext {
 
     // Weather / time-of-day as the sensors see it. Null = not evaluated.
     const sensor::SensingEnvironment* env{nullptr};
+
+    // THIS ENTITY'S RADAR-WARNING PICTURE (#526): who is painting it, built by inverting every
+    // emitter's contacts. Null = not evaluated (preserves pre-RWR behavior). Unlike contacts, an
+    // EMPTY set is meaningful — a passive receiver that hears nothing knows it is not being tracked,
+    // which is exactly the fact a defender acts on. Lets an evade/SAM controller react to a lock
+    // without a wallhack: it learns it is threatened only when a beam is actually on it.
+    const sensor::ThreatWarningSet* threats{nullptr};
 
     // The active difficulty scaling (reaction time, aim error, radar range…). Null = not evaluated,
     // which every controller must read as "no scaling", not as "zero".

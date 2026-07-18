@@ -30,6 +30,13 @@ struct ControlInput {
     bool trigger{false};  // gun trigger
     bool release{false};  // fire the selected store (missile/bomb/rocket)
     uint8_t station{255}; // absolute selected station; 255 = keep the current selection
+
+    // ── electronic warfare intent (#529) ─────────────────────────────────────
+    // Same one-seam pattern as fire intent. `dispenseCm` pops chaff + flare (edge-detected per entity
+    // in the weapons pass — a held input is one release). `ecm` is level: the jammer is on while set.
+    // The integrator ignores both; EW branches off in the weapons pass, never through F=ma.
+    bool dispenseCm{false};
+    bool ecm{false};
 };
 
 // Per-tick payload summary (computed from current weapon loadout).

@@ -33,8 +33,13 @@ struct SeekerTrack {
 // Countermeasure seam (#529). Called once per seeker CHECK; returning true means an expendable
 // seduced the seeker for this check — the target is treated as outside every lobe, so the track
 // starts coasting (and reacquires by geometry when the seduction ends, per the central rule).
-// Default null = no expendables in the world, which is exactly today's truth.
-using SeekerCountermeasureCheck = std::function<bool(EntityId missile, EntityId target, uint64_t tickIndex)>;
+// Default null = no expendables in the world. The seeker supplies what the decision needs: its own
+// index (for the deterministic die), the target position a decoy must be near, the seeker CHANNEL
+// (Radar ⇒ chaff, Ir ⇒ flare), and this head's per-channel susceptibility — so the whole physics
+// (which decoy, how likely) lives in the CountermeasureSystem behind the seam, not in the projectile.
+using SeekerCountermeasureCheck =
+    std::function<bool(uint32_t missileIdx, const glm::dvec3& targetPos, sensor::SensorType channel,
+                       const CountermeasureSusceptibility& susc, uint64_t tickIndex)>;
 
 // The sensor channel a seeker type observes — used by the legacy-lobe synthesizer and by callers
 // mapping SeekerType onto the one sensor vocabulary.
