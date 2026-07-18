@@ -30,6 +30,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **docs**: Holistic program review (2026-07-17) — roadmap catch-up (Phase 3 marked complete/gated at v0.3.0; Epic L GNS validation #649/#653 done; critical path rewritten to the five live chains toward v0.4.0; new "Deferred Levers" registry for the trigger-gated #575/#572/#652 levers); Phase 4 marked the active milestone; new decision records (VR/OpenXR deferred to Phase 8, not rejected; the 2026-07-01 transport record annotated for the OpenSSL/system-protobuf reversal); MCP reframed as a first-class operator/modding surface; the deterministic CPU-viable STT voice-command tier and Piper TTS noted as outside the 9B/GPU floor; a player-facing netcode-trust preamble; accessibility folded into the "approachable" design pillar; voice/AI-comms prior art; project-management conventions (decompose-at-phase-entry, Effort field retired, permanent Order bands, cross-repo triage parenting)
+- **docs**: Release-note prose convention + theme-first naming — `docs/project-management.md`'s "Cutting a release" gains an explicit step to **hand-author the GitHub Release body as prose** (a one-to-two paragraph thematic summary + the per-issue CHANGELOG detail), because git-cliff collapses a squash-merged multi-issue PR to a single line; and milestones/epics are named by a theme phrase rather than a bare number/letter so ordering never reads as priority (#954)
 
 ## [0.3.6] - 2026-07-17
 
