@@ -75,6 +75,7 @@ add_library(engine-audio STATIC
     audio/VoiceCalloutManager.cpp
     audio/SfxBuiltinSounds.cpp
     audio/SfxManager.cpp
+    audio/WarningToneManager.cpp
 )
 target_include_directories(engine-audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-audio
@@ -196,6 +197,7 @@ add_library(engine-weapon STATIC
     weapon/FireControl.cpp
     weapon/ProjectileSystem.cpp
     weapon/Seeker.cpp
+    weapon/CountermeasureSystem.cpp
 )
 target_include_directories(engine-weapon PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-weapon

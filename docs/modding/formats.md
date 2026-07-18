@@ -476,6 +476,10 @@ drag_factor = 0.020
 
 ## Sensor Data — TOML
 
+> For how sensors, signatures, radar modes/RWR, IFF, the datalink, weapon seekers and EW
+> (chaff/flare, ECM/ECCM) fit together — with worked examples — see the
+> [Weapons & Sensors Authoring Guide](weapons-sensors.md). This section is the field-level reference.
+
 Each sensor is a standalone TOML file in `sensors/*.toml`, parsed by `fl::sensor::parseSensorDef`
 (`engine/sensor/`) and loaded through the content-pack priority stack like any other asset — a
 theater pack can re-tune an aircraft's radar without forking the aircraft.

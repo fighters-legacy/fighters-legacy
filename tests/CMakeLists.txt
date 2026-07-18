@@ -96,6 +96,12 @@ target_link_libraries(test_seeker PRIVATE Catch2::Catch2WithMain engine-weapon e
     engine-sensor engine-spatial)
 catch_discover_tests(test_seeker)
 
+# Chaff/flare countermeasure decoys + seeker seduction (#529).
+add_executable(test_countermeasure_system test_countermeasure_system.cpp)
+target_link_libraries(test_countermeasure_system PRIVATE Catch2::Catch2WithMain engine-weapon
+    engine-entity engine-sensor engine-spatial)
+catch_discover_tests(test_countermeasure_system)
+
 # Bombs/rockets release ballistics + CCIP (#629).
 add_executable(test_release_ballistics test_release_ballistics.cpp)
 target_link_libraries(test_release_ballistics PRIVATE Catch2::Catch2WithMain engine-weapon
@@ -935,3 +941,8 @@ add_executable(test_sfx test_sfx.cpp)
 target_link_libraries(test_sfx PRIVATE Catch2::Catch2WithMain engine-audio engine-config engine-content)
 target_include_directories(test_sfx PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_sfx)
+
+add_executable(test_warning_tones test_warning_tones.cpp)
+target_link_libraries(test_warning_tones PRIVATE Catch2::Catch2WithMain engine-audio engine-config engine-content)
+target_include_directories(test_warning_tones PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_warning_tones)

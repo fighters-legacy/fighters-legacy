@@ -30,6 +30,8 @@ const char* sfxPresetFor(uint8_t type) {
     case EffectType::Detonation:
     case EffectType::NuclearFlash:
         return "sfx.explosion";
+    case EffectType::CountermeasureRelease:
+        return "sfx.gunfire"; // a short pop; a dedicated dispense sound is content policy
     }
     return nullptr;
 }
@@ -41,6 +43,9 @@ const EffectRow* rowFor(uint8_t type) {
     static constexpr EffectRow kDetonation{"explosion", 0.5f, 1.f};
     static constexpr EffectRow kNuclearFlash{"explosion", 2.5f,
                                              8.f}; // the full-screen flash joins with #631's cue pass
+    // Chaff/flare pop (#529): a short bright burst at the dispensing aircraft. Reuses the muzzle-flash
+    // preset until a dedicated chaff/flare particle lands (content policy).
+    static constexpr EffectRow kCountermeasure{"muzzle_flash", 0.4f, 1.2f};
     switch (static_cast<EffectType>(type)) {
     case EffectType::WeaponFired:
         return &kWeaponFired;
@@ -52,6 +57,8 @@ const EffectRow* rowFor(uint8_t type) {
         return &kDetonation;
     case EffectType::NuclearFlash:
         return &kNuclearFlash;
+    case EffectType::CountermeasureRelease:
+        return &kCountermeasure;
     }
     return nullptr; // unknown types are no-ops — the vocabulary grows without breaking old clients
 }

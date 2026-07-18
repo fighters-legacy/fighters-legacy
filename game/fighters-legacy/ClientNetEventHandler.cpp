@@ -539,8 +539,69 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             fd.name[sizeof(fd.name) - 1] = '\0';
             m_factionNames[fd.factionIndex] = fd.name[0] ? fd.name : fd.id;
         }
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::Datalink)) {
+        handleDatalink(data, size);
     }
     // Unknown msgIds: silently discard
+}
+
+void ClientNetEventHandler::handleDatalink(const void* data, std::size_t size) {
+    // The fused team track picture + RWR (#528). Reconstruct absolute world positions from the header
+    // origin + each record's relative offset, so the HUD needs no coordinate frame of its own. A
+    // malformed / truncated packet leaves the previous picture in place rather than clearing it.
+    fl::MsgDatalinkHeader hdr;
+    if (!fl::readMsg(data, size, hdr))
+        return;
+
+    const std::size_t trackBytes = static_cast<std::size_t>(hdr.trackCount) * sizeof(fl::DatalinkTrack);
+    const std::size_t threatBytes = static_cast<std::size_t>(hdr.threatCount) * sizeof(fl::DatalinkThreat);
+    if (size < sizeof(hdr) + trackBytes + threatBytes)
+        return; // short packet — do not partially apply
+
+    std::vector<RadarTrack> tracks;
+    tracks.reserve(hdr.trackCount);
+    for (uint16_t i = 0; i < hdr.trackCount; ++i) {
+        fl::DatalinkTrack r;
+        if (!fl::readRecordAt(data, size, sizeof(hdr) + std::size_t(i) * sizeof(r), r))
+            break;
+        RadarTrack t;
+        t.pos[0] = hdr.origin[0] + static_cast<double>(r.relPos[0]);
+        t.pos[1] = hdr.origin[1] + static_cast<double>(r.relPos[1]);
+        t.pos[2] = hdr.origin[2] + static_cast<double>(r.relPos[2]);
+        t.vel[0] = r.relVel[0];
+        t.vel[1] = r.relVel[1];
+        t.vel[2] = r.relVel[2];
+        t.entityIdx = r.targetIdx;
+        t.entityGen = r.targetGen;
+        t.state = r.state;
+        t.ident = r.ident;
+        t.sensorTypeMask = r.sensorTypeMask;
+        t.firingQuality = (r.flags & fl::kDatalinkFlagFiringQuality) != 0;
+        t.ownSensor = (r.flags & fl::kDatalinkFlagOwnSensor) != 0;
+        tracks.push_back(t);
+    }
+
+    std::vector<RwrStrobe> strobes;
+    strobes.reserve(hdr.threatCount);
+    const std::size_t threatBase = sizeof(hdr) + trackBytes;
+    for (uint16_t i = 0; i < hdr.threatCount; ++i) {
+        fl::DatalinkThreat r;
+        if (!fl::readRecordAt(data, size, threatBase + std::size_t(i) * sizeof(r), r))
+            break;
+        RwrStrobe s;
+        s.emitterPos[0] = hdr.origin[0] + static_cast<double>(r.relPos[0]);
+        s.emitterPos[1] = hdr.origin[1] + static_cast<double>(r.relPos[1]);
+        s.emitterPos[2] = hdr.origin[2] + static_cast<double>(r.relPos[2]);
+        s.emitterIdx = r.emitterIdx;
+        s.channel = r.channel;
+        s.level = r.level;
+        s.ident = r.ident;
+        strobes.push_back(s);
+    }
+
+    m_radarTracks = std::move(tracks);
+    m_rwrStrobes = std::move(strobes);
+    m_haveDatalink = true;
 }
 
 void ClientNetEventHandler::sendHeartbeatIfNeeded() {

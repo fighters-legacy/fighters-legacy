@@ -46,6 +46,9 @@ struct Projectile {
     std::shared_ptr<const sensor::SensorDef> seekerDef;
     bool emitting{false}; // the seeker head is radiating (ARH pitbull turns this on, #628)
     bool pitbull{false};  // ARH only: the missile's own radar has taken over from the datalink (#628)
+    // How defeatable this head is by chaff/flare (#529): copied from the WeaponDef at launch so the
+    // seduction seam has it without a registry lookup mid-flight.
+    CountermeasureSusceptibility cmSusc{};
 };
 
 // Where and why a projectile stopped flying. The system only DETECTS — warhead application,

@@ -89,6 +89,9 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | Tab | Afterburner command (bit 1) |
 | Enter / Right mouse | Fire selected store (bit 2 — edge-detected server-side; holding it is one shot) |
 | 1 / 2 | Cycle weapon station next / previous (local; the wire carries the absolute selection) |
+| R | Cycle radar mode: Silent → Search → TWS → STT (#526; absolute on the wire). Drives the datalink scope + RWR |
+| E | Dispense chaff + flare (#529; server edge-detects — a held key is one pop). Needs a dispenser with rounds |
+| J | Toggle the ECM jammer (#529; denies a hostile radar a lock beyond its burn-through range) |
 | C | Open the wingman radio menu (#610) |
 
 While the radio menu is open, Enter and the digit keys belong to the menu — the fire-store bit and

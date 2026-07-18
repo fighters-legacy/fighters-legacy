@@ -29,7 +29,8 @@ class FlightHud : public IHud {
     // terrainElevation: ground height in metres at the player XZ position (from
     // TerrainStreamer::heightAt). Falls back to 0.0 (AGL == MSL) when not loaded.
     void update(const EntityRenderEntry* playerEntry, float timeOfDay = 12.0f, float terrainElevation = 0.0f,
-                uint32_t latencyMs = 0, bool showLatency = false, double planetRadiusM = kEarthRadiusM) override;
+                uint32_t latencyMs = 0, bool showLatency = false, double planetRadiusM = kEarthRadiusM,
+                const RadarView& radar = {}) override;
 
     // Returns elements for IRenderer::submitOverlayElements(). Valid until next update().
     [[nodiscard]] std::span<const HudElement> elements() const override;
@@ -43,8 +44,11 @@ class FlightHud : public IHud {
     }
 
   private:
-    static constexpr int kMaxElements = 22;
-    static constexpr int kMaxStrings = 14;
+    // Bumped for the datalink radar scope + RWR (#528): the base HUD uses ~15, the scope adds a frame,
+    // up to kScopeMaxTracks contact marks, and up to kMaxDatalinkThreats RWR strobes.
+    static constexpr int kScopeMaxTracks = 40;
+    static constexpr int kMaxElements = 96;
+    static constexpr int kMaxStrings = 16;
 
     std::array<HudElement, kMaxElements> m_elements;
     std::array<std::string, kMaxStrings> m_strings;

@@ -140,6 +140,12 @@ SensorDef parseSensorDef(std::string_view toml_src) {
             throw std::runtime_error("track.lock_hold_s must be in [0, 60]");
     }
 
+    // ── ECCM (#529, optional) ────────────────────────────────────────────────
+    // Resistance to noise jamming, [0, 1]. Extends the burn-through range against a jamming target.
+    s.eccm = opt_float(tbl["eccm"], 0.f);
+    if (s.eccm < 0.f || s.eccm > 1.f)
+        throw std::runtime_error("sensor eccm must be in [0, 1]");
+
     return s;
 }
 

@@ -73,6 +73,13 @@ struct SensorDef {
     SensorLobe search;               // required: how a target is found
     std::optional<SensorLobe> track; // absent = search-only (an eyeball cannot hold a lock)
     float lockHoldS{0.f};            // track coast time after the target leaves the cone/fails PoD
+
+    // ECCM — resistance to ECM/noise jamming (#529), [0, 1], 0 = none. A jamming target denies this
+    // radar a LOCK beyond a burn-through range = track.maxRange × (kEcmBaseBurnThrough + eccm),
+    // clamped to 1. A high-ECCM radar burns through farther out; a poor one must close right in. Only
+    // meaningful for a radar with a track lobe — a passive sensor is not jammed by noise on the radar
+    // band. Authored `[sensor] eccm`.
+    float eccm{0.f};
 };
 
 } // namespace fl::sensor

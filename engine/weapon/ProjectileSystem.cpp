@@ -125,6 +125,7 @@ EntityId ProjectileSystem::launch(EntityManager& em, uint32_t weaponIndex, const
     p.entityId = id;
     p.weaponIndex = weaponIndex;
     p.shooter = shooterState.id;
+    p.cmSusc = def->countermeasures; // how defeatable this head is by chaff/flare (#529)
     p.pos = {t.pos[0], t.pos[1], t.pos[2]};
     p.vel = v0;
     p.launchPos = p.pos;
@@ -276,6 +277,17 @@ void ProjectileSystem::step(EntityManager& em, const SpatialIndex& si, float dt,
         if (p.seekerDef && p.seeker.targetId.valid() && (tickIndex + p.entityId.index) % kSeekerCheckTicks == 0) {
             const float checkDtS = p.seeker.everChecked ? static_cast<float>(tickIndex - p.seeker.lastCheckTick) * dt
                                                         : static_cast<float>(kSeekerCheckTicks) * dt;
+            // Countermeasure seduction (#529) is decided ONCE and applies to both the supported
+            // (SARH/pre-pitbull) and self-contained tracking paths: a flare that breaks the lock
+            // breaks it however the missile is being guided. The seeker's CHANNEL (from its head's
+            // sensor type) picks chaff vs flare; its per-head susceptibility gates the roll.
+            const EntityState* target = em.get(p.seeker.targetId); // gen-checked: a reused slot is null
+            bool seduced = false;
+            if (m_cmCheck && target && p.seekerDef) {
+                const glm::dvec3 tpos(target->transform.pos[0], target->transform.pos[1], target->transform.pos[2]);
+                seduced = m_cmCheck(p.entityId.index, tpos, p.seekerDef->type, p.cmSusc, tickIndex);
+            }
+
             if (supported && (!p.pitbull || def->seeker->type == SeekerType::SemiActiveRadar)) {
                 // Supported flight (#628): the missile's picture IS the shooter's. Held while the
                 // shooter is alive and its contact table holds the target LOCKED; a support drop
@@ -285,7 +297,9 @@ void ProjectileSystem::step(EntityManager& em, const SpatialIndex& si, float dt,
                 const sensor::ContactTable* table =
                     (shooterNow && !shooterNow->dead && m_supportQuery) ? m_supportQuery(p.shooter.index) : nullptr;
                 const sensor::Contact* contact = table ? table->find(p.seeker.targetId) : nullptr;
-                const bool held = contact && contact->state == sensor::ContactState::Locked;
+                // Seduction (chaff) treats the target as unheld this check — the shot coasts, exactly
+                // like a support drop, and reacquires by geometry once the decoy has left the target.
+                const bool held = contact && contact->state == sensor::ContactState::Locked && !seduced;
                 sensor::SensorEvaluation eval{};
                 eval.searchInLobe = eval.trackInLobe = held;
                 eval.searchRollPass = eval.trackRollPass = held; // datalink re-established = re-acquired
@@ -299,8 +313,6 @@ void ProjectileSystem::step(EntityManager& em, const SpatialIndex& si, float dt,
                                              contact->lastKnownVel[2]};
                 }
             } else {
-                const EntityState* target = em.get(p.seeker.targetId); // gen-checked: a reused slot is null
-                const bool seduced = m_cmCheck && target && m_cmCheck(p.entityId, p.seeker.targetId, tickIndex);
                 const SignatureDef sig = target ? signatureFor(m_registry, *target) : SignatureDef{};
                 stepSeekerCheck(p.seeker, *p.seekerDef, p.emitting, p.pos, es->transform.quat, target, sig, env,
                                 p.entityId.index, tickIndex, checkDtS, seduced);

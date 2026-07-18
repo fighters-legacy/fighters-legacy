@@ -200,22 +200,29 @@ bool rollPasses(uint32_t hash, float pod) noexcept {
 SensorEvaluation evaluateSensor(const SensorDef& sensor, bool emitting, const double observerPos[3],
                                 const float observerQuat[4], const double targetPos[3], const SignatureDef& targetSig,
                                 float skill, const SensingEnvironment& env, float radarRangeFraction,
-                                uint32_t observerIdx, uint32_t targetIdx, uint64_t tickIndex,
-                                uint32_t sensorSlot) noexcept {
+                                uint32_t observerIdx, uint32_t targetIdx, uint64_t tickIndex, uint32_t sensorSlot,
+                                bool allowTrack) noexcept {
     SensorEvaluation ev;
 
-    const float searchRange = effectiveMaxRangeM(sensor.search, sensor.type, targetSig, radarRangeFraction);
-    ev.searchInLobe = inLobe(observerPos, observerQuat, targetPos, sensor.search, sensor.omnidirectional, searchRange);
-    if (ev.searchInLobe) {
-        const float pod = effectivePod(sensor.search.pod, skill, sensor.type, env);
-        ev.searchRollPass = rollPasses(detectionHash(observerIdx, targetIdx, tickIndex, sensorSlot, 0u), pod);
+    // A radar or laser detects nothing it does not first illuminate: BOTH lobes require the emitter
+    // to be radiating. A passive sensor (IR, visual) receives and ignores the flag. This is the EMCON
+    // gate (#526): a radar in Silent mode is blind, not passively omniscient.
+    const bool activeType = (sensor.type == SensorType::Radar || sensor.type == SensorType::Laser);
+    const bool canReceive = emitting || !activeType;
+
+    if (canReceive) {
+        const float searchRange = effectiveMaxRangeM(sensor.search, sensor.type, targetSig, radarRangeFraction);
+        ev.searchInLobe =
+            inLobe(observerPos, observerQuat, targetPos, sensor.search, sensor.omnidirectional, searchRange);
+        if (ev.searchInLobe) {
+            const float pod = effectivePod(sensor.search.pod, skill, sensor.type, env);
+            ev.searchRollPass = rollPasses(detectionHash(observerIdx, targetIdx, tickIndex, sensorSlot, 0u), pod);
+        }
     }
 
-    // A radar or laser TRACK lobe requires the observer to be radiating: you cannot hold a lock with
-    // a transmitter you have switched off. This is the emissions kernel — the seam EMCON, RWR and
-    // SAM radar shutdown hang off (#526/#529). Passive sensors ignore it.
-    const bool activeType = (sensor.type == SensorType::Radar || sensor.type == SensorType::Laser);
-    if (sensor.track && (emitting || !activeType)) {
+    // The track lobe additionally requires `allowTrack` — false is how radar Search mode reports a
+    // bearing without ever offering a firing solution (#526).
+    if (sensor.track && canReceive && allowTrack) {
         const float trackRange = effectiveMaxRangeM(*sensor.track, sensor.type, targetSig, radarRangeFraction);
         ev.trackInLobe =
             inLobe(observerPos, observerQuat, targetPos, *sensor.track, sensor.omnidirectional, trackRange);

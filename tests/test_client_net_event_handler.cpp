@@ -2275,3 +2275,93 @@ TEST_CASE("ClientNetEventHandler: a truncated CombatEvent packet fails closed", 
     handler.onReceive(0u, pkt.data(), pkt.size()); // must not read past the buffer or crash
     CHECK(handler.sessionStats().kills == 0u);
 }
+
+// ── datalink track picture (#528) ────────────────────────────────────────────
+
+TEST_CASE("ClientNetEventHandler: MsgDatalink round-trips tracks and RWR to absolute positions",
+          "[client_net_event_handler][datalink]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // Before any datalink, the view is invalid — the HUD draws nothing rather than an empty scope.
+    CHECK_FALSE(handler.radarView().valid);
+
+    // Build a server-side MsgDatalink: one foe track (own-sensor, firing-quality) + one lock strobe,
+    // positions RELATIVE to an origin far from the world origin (proves the reconstruction).
+    std::vector<uint8_t> buf;
+    fl::MsgDatalinkHeader hdr;
+    hdr.trackCount = 1;
+    hdr.threatCount = 1;
+    hdr.tickIndex = 1234;
+    hdr.origin[0] = 1'000'000.0;
+    hdr.origin[1] = 500.0;
+    hdr.origin[2] = -2'000'000.0;
+    fl::appendMsg(buf, hdr);
+
+    fl::DatalinkTrack tr{};
+    tr.targetIdx = 42;
+    tr.targetGen = 3;
+    tr.typeIndex = 7;
+    tr.factionIndex = 2;
+    tr.state = fl::kTrackLocked;
+    tr.ident = fl::kIffFoe;
+    tr.sensorTypeMask = 0x4;
+    tr.flags = fl::kDatalinkFlagFiringQuality | fl::kDatalinkFlagOwnSensor;
+    tr.relPos[0] = 3000.f;
+    tr.relPos[1] = 10.f;
+    tr.relPos[2] = -500.f;
+    tr.relVel[0] = 250.f;
+    fl::appendMsg(buf, tr);
+
+    fl::DatalinkThreat th{};
+    th.emitterIdx = 99;
+    th.emitterGen = 1;
+    th.channel = 2; // radar
+    th.level = fl::kThreatLock;
+    th.ident = fl::kIffFoe;
+    th.relPos[0] = -1000.f;
+    fl::appendMsg(buf, th);
+
+    handler.onReceive(0u, buf.data(), buf.size());
+
+    const fl::RadarView v = handler.radarView();
+    REQUIRE(v.valid);
+    REQUIRE(v.tracks.size() == 1u);
+    const fl::RadarTrack& t = v.tracks[0];
+    CHECK(t.entityIdx == 42u);
+    CHECK(t.ident == fl::kIffFoe);
+    CHECK(t.firingQuality);
+    CHECK(t.ownSensor);
+    // Absolute position = header origin + relative payload.
+    CHECK(t.pos[0] == Catch::Approx(1'003'000.0));
+    CHECK(t.pos[2] == Catch::Approx(-2'000'500.0));
+
+    REQUIRE(v.strobes.size() == 1u);
+    CHECK(v.strobes[0].emitterIdx == 99u);
+    CHECK(v.strobes[0].level == fl::kThreatLock);
+    CHECK(v.strobes[0].emitterPos[0] == Catch::Approx(999'000.0));
+}
+
+TEST_CASE("ClientNetEventHandler: a truncated MsgDatalink leaves the prior picture intact",
+          "[client_net_event_handler][datalink]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // A header claiming two tracks but with no record bytes: must be rejected, not partially applied.
+    std::vector<uint8_t> buf;
+    fl::MsgDatalinkHeader hdr;
+    hdr.trackCount = 2;
+    hdr.threatCount = 0;
+    fl::appendMsg(buf, hdr);
+    handler.onReceive(0u, buf.data(), buf.size());
+    CHECK_FALSE(handler.radarView().valid); // short packet ignored
+}

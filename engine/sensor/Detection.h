@@ -153,15 +153,21 @@ struct ContactTrack {
 
 // Evaluates both lobes of one sensor against one target: geometry and dice, no state.
 //
-// `emitting` is the observer's emissions flag. A radar or laser TRACK lobe requires it — you cannot
-// hold a lock with a transmitter you have switched off — while the SEARCH lobe is unaffected here
-// (a passive search on a radar-typed sensor is a matter for #526's EMCON work, not this function).
-// Passive sensors ignore the flag entirely.
+// `emitting` is the observer's emissions flag for THIS sensor. Both lobes of a radar or laser require
+// it — a radar sees nothing it does not first illuminate, so an emitter switched off (EMCON / radar
+// Silent mode, #526) detects NOTHING, search and track alike. Passive sensors (IR, visual) ignore the
+// flag entirely: they receive, they do not radiate. (This is the EMCON gate the emissions kernel was
+// landed for — before #526 the search lobe of a non-emitting radar still detected, a passive-radar
+// free lunch that never made sense.)
+//
+// `allowTrack` gates the TRACK lobe on top of everything else: false suppresses locking regardless of
+// geometry, which is how radar Search mode reports bearing without ever offering a firing solution
+// (#526). The default is true so seekers and passive sensors are unaffected.
 [[nodiscard]] SensorEvaluation evaluateSensor(const SensorDef& sensor, bool emitting, const double observerPos[3],
                                               const float observerQuat[4], const double targetPos[3],
                                               const SignatureDef& targetSig, float skill, const SensingEnvironment& env,
                                               float radarRangeFraction, uint32_t observerIdx, uint32_t targetIdx,
-                                              uint64_t tickIndex, uint32_t sensorSlot) noexcept;
+                                              uint64_t tickIndex, uint32_t sensorSlot, bool allowTrack = true) noexcept;
 
 // ── the contact state machine ────────────────────────────────────────────────
 

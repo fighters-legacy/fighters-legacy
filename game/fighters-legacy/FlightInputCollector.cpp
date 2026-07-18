@@ -67,6 +67,29 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
         }
         m_prevNextKey = nextDown;
         m_prevPrevKey = prevDown;
+
+        // Radar mode cycle (#526/#528): R steps Silent -> Search -> TWS -> STT -> Silent. Absolute on
+        // the wire (converges on the unreliable channel); 255 = keep the server default until the
+        // player first presses it, so a fresh spawn stays in its TWS mode.
+        const bool radarKey = !uiFocused && input.isKeyDown(Key::R);
+        if (radarKey && !m_prevRadarKey) {
+            m_radarMode = static_cast<uint8_t>((m_radarMode + 1) % 4);
+            m_radarModeTouched = true;
+        }
+        m_prevRadarKey = radarKey;
+        inp.radarMode = m_radarModeTouched ? m_radarMode : 255u;
+
+        // Electronic warfare (#529). E dispenses chaff+flare (bit 3, level on the wire — the server
+        // edge-detects, so holding E is one pop); J toggles the ECM jammer (bit 4, level).
+        if (!uiFocused && input.isKeyDown(Key::E))
+            inp.buttons |= 0x08u;
+        const bool ecmKey = !uiFocused && input.isKeyDown(Key::J);
+        if (ecmKey && !m_prevEcmKey)
+            m_ecmOn = !m_ecmOn;
+        m_prevEcmKey = ecmKey;
+        if (m_ecmOn)
+            inp.buttons |= 0x10u;
+
         m_weaponFired = (inp.buttons & 1u) != 0u;
 
         if (input.getGamepadCount() > 0) {
