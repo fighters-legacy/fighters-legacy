@@ -195,15 +195,18 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     };
 
     enum class TileState : uint8_t { Loading, Ready };
-    enum class TileLayer : uint8_t { Height, LandCover };
+    enum class TileLayer : uint8_t { Height, LandCover, Satellite };
 
     struct Tile {
         TileState state{TileState::Loading};
         AsyncReadId pendingHeightRead{0};
         AsyncReadId pendingCoverRead{0};
+        AsyncReadId pendingSatRead{0};   // #488 satellite _sat.ktx2 (client-only)
         std::vector<uint16_t> heightmap; // kTileHeightmapSize^2 when present
         std::vector<uint8_t> landCover;  // same dims; empty = no land-cover layer
         MeshHandle mesh{};
+        TextureHandle satTex{};  // #488: satellite albedo texture, invalid = none
+        MaterialHandle satMat{}; // #488: per-tile material binding satTex, invalid = use m_terrainMat
         uint64_t lastDesiredFrame{0};
     };
 
@@ -221,6 +224,7 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     void balanceLeaves(TileSet& leaves) const;
     void loadTile(const TileKey& key, int& proceduralCount);
     void loadTileProcedural(const TileKey& key);
+    void queueSatelliteRead(const TileKey& key); // #488 — client-only; runs for pack AND procedural tiles
     void finalizeTile(const TileKey& key);
     void evictTile(const TileKey& key);
 

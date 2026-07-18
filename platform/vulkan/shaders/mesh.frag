@@ -43,7 +43,7 @@ layout(push_constant) uniform PushConstants {
     vec4  baseColorFactor;
     float metallicFactor;
     float roughnessFactor;
-    float shadingMode; // 0 = normal PBR, 1 = terrain elevation/slope, 2 = debug face colour, 3 = runway markings
+    float shadingMode; // 0 = PBR, 1 = terrain biomes, 2 = debug face colour, 3 = runway, 4 = terrain satellite (#488)
 } push;
 
 // Debug per-face colour for the builtin placeholder wedge, keyed off the (flat) face normal so
@@ -216,8 +216,9 @@ void main() {
 
     // Debug face colour (builtin placeholder) takes priority; otherwise terrain (land-cover biomes,
     // #475), or runway markings (#487). Terrain/debug/runway use the geometric (flat) normal.
-    bool isTerrain = (push.shadingMode > 0.5 && push.shadingMode < 1.5);
-    bool isRunway  = (push.shadingMode > 2.5);
+    bool isTerrain   = (push.shadingMode > 0.5 && push.shadingMode < 1.5);
+    bool isRunway    = (push.shadingMode > 2.5 && push.shadingMode < 3.5);
+    bool isSatellite = (push.shadingMode > 3.5); // #488: albedo from the satellite texture
 
     // Packed terrain data (#475): the spherical-valid detail coordinate replaces the old
     // fragWorldPos.xz + worldOrigin.xz, which cancelled to metre-precision garbage at Earth radius.
@@ -269,9 +270,11 @@ void main() {
     // slightly with the same field, fading out with distance to avoid shimmer. Keyed on the
     // spherical-valid detail coordinate (#475), not the float-cancelling absolute world XZ. Open
     // water is left smooth + glossy instead (a specular sheen, no bump).
-    if (isTerrain) {
-        float water = worldCoverWaterness(terrainClass);
-        float detailFade = (1.0 - smoothstep(150.0, 900.0, length(fragWorldPos))) * (1.0 - water);
+    if (isTerrain || isSatellite) {
+        // Satellite imagery already carries visual detail, so use only a gentle bump there.
+        float water = isSatellite ? 0.0 : worldCoverWaterness(terrainClass);
+        float detailScale = isSatellite ? 0.4 : 1.0;
+        float detailFade = (1.0 - smoothstep(150.0, 900.0, length(fragWorldPos))) * (1.0 - water) * detailScale;
         if (detailFade > 0.001) {
             const float eps = 0.5; // metres
             float h0 = noiseT(terrainDetail / 6.0);

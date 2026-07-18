@@ -486,6 +486,46 @@ TEST_CASE("TerrainStreamer land-cover layer feeds surfaceAt") {
     CHECK(ts.surfaceAt(kPoleProbe) == 7);
 }
 
+TEST_CASE("TerrainStreamer loads a satellite tile and flags its render item (#488)") {
+    auto pack = std::make_unique<MockTerrainPack>();
+    const std::string heightPath = "terrain/world/f2/l0/tile_0_0.png";
+    const std::string satPath = "terrain/world/f2/l0/tile_0_0_sat.ktx2";
+    pack->tilePaths["world:2:0:0:0:0"] = heightPath; // Height layer
+    pack->tilePaths["world:2:0:0:0:2"] = satPath;    // Satellite layer (index 2)
+
+    StreamerFixture fx(std::move(pack));
+    fx.asyncFs.addFile(heightPath, makeFlatPng16(kTileHeightmapSize, kTileHeightmapSize, 33318));
+    fx.asyncFs.addFile(satPath, std::string(64, '\x01')); // dummy bytes; MockRenderer uploads any
+
+    MockRenderer renderer;
+    fl::TerrainStreamer ts{worldManifest(0), *fx.assets, fx.asyncFs, &renderer};
+    pump(ts, fx.asyncFs, kPoleCam, 10);
+
+    auto items = ts.getRenderItems(kPoleCam);
+    REQUIRE(!items.empty());
+    bool anySatellite = false;
+    for (const auto& it : items)
+        if (it.flags & fl::kRenderFlagTerrainSatellite)
+            anySatellite = true;
+    CHECK(anySatellite);
+    CHECK(renderer.createTextureCount >= 1);  // satellite texture uploaded
+    CHECK(renderer.createMaterialCount >= 1); // per-tile satellite material created
+}
+
+TEST_CASE("TerrainStreamer null renderer never queues a satellite read (#488)") {
+    // A headless server (null renderer) has no texture path — satellite is client-only.
+    auto pack = std::make_unique<MockTerrainPack>();
+    const std::string heightPath = "terrain/world/f2/l0/tile_0_0.png";
+    pack->tilePaths["world:2:0:0:0:0"] = heightPath;
+    pack->tilePaths["world:2:0:0:0:2"] = "terrain/world/f2/l0/tile_0_0_sat.ktx2";
+    StreamerFixture fx(std::move(pack));
+    fx.asyncFs.addFile(heightPath, makeFlatPng16(kTileHeightmapSize, kTileHeightmapSize, 33318));
+
+    fl::TerrainStreamer ts{worldManifest(0), *fx.assets, fx.asyncFs, nullptr};
+    pump(ts, fx.asyncFs, kPoleCam, 8);
+    CHECK(ts.heightAt(kPoleProbe) == Catch::Approx(550.0).margin(0.5)); // still loads height, no crash
+}
+
 TEST_CASE("TerrainStreamer surfaceAt returns zero without a land-cover layer") {
     StreamerFixture fx;
     fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, nullptr};

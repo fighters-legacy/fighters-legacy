@@ -322,6 +322,10 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_gen_wind_profile.py -v
 
+      - name: Unit test gen_terrain_color.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_gen_terrain_color.py -v
+
       - name: Unit test gen_unifont_header.py (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_gen_unifont_header.py -v

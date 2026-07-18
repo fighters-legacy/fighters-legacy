@@ -183,6 +183,8 @@ static constexpr uint32_t kRenderFlagShadowOnly = 1u << 1;     // depth pass onl
 static constexpr uint32_t kRenderFlagTerrain = 1u << 2;        // apply elevation/slope shading in the forward pass
 static constexpr uint32_t kRenderFlagDebugFaceColor = 1u << 3; // per-face debug colour (builtin placeholder mesh)
 static constexpr uint32_t kRenderFlagRunway = 1u << 4; // paved runway: procedural markings in the forward pass (#487)
+static constexpr uint32_t kRenderFlagTerrainSatellite =
+    1u << 5; // terrain tile with a satellite albedo texture (#488): sample baseColorTex, not the biomes
 
 // ---------------------------------------------------------------------------
 // A single draw call submitted to the renderer each frame.

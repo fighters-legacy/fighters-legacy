@@ -103,7 +103,9 @@ bool VkResourceManager::init(VkDevice device, VkPhysicalDevice physDevice, VkIns
 
     // Descriptor pool for per-material descriptor sets.
     // 3 combined image samplers per material (base color, normal, ORM).
-    constexpr uint32_t kMaxMaterials = 256;
+    // 2048 headroom (#488): satellite terrain creates one material per resident tile, and the
+    // streamer's residency cap is ~1024 tiles — plus entity/runway materials.
+    constexpr uint32_t kMaxMaterials = 2048;
     VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxMaterials * 3};
     VkDescriptorPoolCreateInfo poolCI{};
     poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;

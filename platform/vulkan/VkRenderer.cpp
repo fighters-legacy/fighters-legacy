@@ -4017,10 +4017,11 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             pc.baseColorFactor = mat ? mat->baseColorFactor : glm::vec4(1.0f);
             pc.metallicFactor = mat ? mat->metallicFactor : 0.0f;
             pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
-            pc.shadingMode = (item.flags & kRenderFlagTerrain)          ? 1.0f
-                             : (item.flags & kRenderFlagDebugFaceColor) ? 2.0f
-                             : (item.flags & kRenderFlagRunway)         ? 3.0f
-                                                                        : 0.0f;
+            pc.shadingMode = (item.flags & kRenderFlagTerrain)            ? 1.0f
+                             : (item.flags & kRenderFlagDebugFaceColor)   ? 2.0f
+                             : (item.flags & kRenderFlagRunway)           ? 3.0f
+                             : (item.flags & kRenderFlagTerrainSatellite) ? 4.0f
+                                                                          : 0.0f;
             vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                sizeof(pc), &pc);
 
@@ -4154,10 +4155,11 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
                 pc.baseColorFactor = mat ? mat->baseColorFactor : glm::vec4(1.0f);
                 pc.metallicFactor = mat ? mat->metallicFactor : 0.0f;
                 pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
-                pc.shadingMode = (item.flags & kRenderFlagTerrain)          ? 1.0f
-                                 : (item.flags & kRenderFlagDebugFaceColor) ? 2.0f
-                                 : (item.flags & kRenderFlagRunway)         ? 3.0f
-                                                                            : 0.0f;
+                pc.shadingMode = (item.flags & kRenderFlagTerrain)            ? 1.0f
+                                 : (item.flags & kRenderFlagDebugFaceColor)   ? 2.0f
+                                 : (item.flags & kRenderFlagRunway)           ? 3.0f
+                                 : (item.flags & kRenderFlagTerrainSatellite) ? 4.0f
+                                                                              : 0.0f;
                 vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                    sizeof(pc), &pc);
                 const VkDeviceSize offset = 0;

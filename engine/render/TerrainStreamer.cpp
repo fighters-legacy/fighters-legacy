@@ -99,6 +99,10 @@ TerrainStreamer::~TerrainStreamer() {
         for (auto& [key, tile] : m_tiles) {
             if (tile.mesh.valid())
                 m_renderer->destroyMesh(tile.mesh);
+            if (tile.satMat.valid())
+                m_renderer->destroyMaterial(tile.satMat); // #488
+            if (tile.satTex.valid())
+                m_renderer->destroyTexture(tile.satTex);
         }
         if (m_terrainMat.valid())
             m_renderer->destroyMaterial(m_terrainMat);
@@ -313,6 +317,28 @@ void TerrainStreamer::loadTile(const TileKey& key, int& proceduralCount) {
             m_pendingByReadId[cid] = PendingRead{key, TileLayer::LandCover};
         }
     }
+
+    queueSatelliteRead(key);
+}
+
+// Optional satellite albedo (terrain/<id>/f<face>/l<level>/tile_<i>_<j>_sat.ktx2). CLIENT-ONLY (a
+// headless server has a null renderer and no texture path). Runs for BOTH pack-height and procedural
+// tiles (#488) — satellite imagery drapes over procedural terrain too, not just pack DEM tiles.
+void TerrainStreamer::queueSatelliteRead(const TileKey& key) {
+    if (!m_renderer || !m_assets.hasPacks())
+        return;
+    auto satPath = m_assets.resolveTilePath(m_manifest.terrainId.c_str(), key.face, key.level, key.i, key.j,
+                                            fl::TileLayer::Satellite);
+    if (!satPath)
+        return;
+    const AsyncReadId sid = m_asyncFs.readFileAsync(PathDomain::Assets, satPath->c_str());
+    if (sid == 0)
+        return;
+    {
+        std::unique_lock lock(m_tileMutex);
+        m_tiles[key].pendingSatRead = sid;
+    }
+    m_pendingByReadId[sid] = PendingRead{key, TileLayer::Satellite};
 }
 
 void TerrainStreamer::loadTileProcedural(const TileKey& key) {
@@ -324,6 +350,7 @@ void TerrainStreamer::loadTileProcedural(const TileKey& key) {
         tile.lastDesiredFrame = m_frame;
     }
     finalizeTile(key);
+    queueSatelliteRead(key); // #488 — satellite imagery drapes over procedural terrain too
 }
 
 // ---------------------------------------------------------------------------
@@ -377,6 +404,38 @@ void TerrainStreamer::onReadComplete(AsyncReadId id, AsyncReadStatus status, con
             m_tiles.erase(tileIt);
         }
         loadTileProcedural(pending.key);
+        return;
+    }
+
+    // Satellite layer (#488): optional, client-only. Decode the KTX2 into a texture + a per-tile
+    // material; on failure the tile just renders with the shared biome material. Create the GPU
+    // resources OUTSIDE the tile mutex, then store the handles under it.
+    if (pending.layer == TileLayer::Satellite) {
+        TextureHandle tex{};
+        MaterialHandle mat{};
+        if (status == AsyncReadStatus::Success && data != nullptr && bytesRead > 0 && m_renderer) {
+            TextureUploadDesc td{};
+            td.name = "satellite";
+            td.bytes = std::span<const uint8_t>(static_cast<const uint8_t*>(data), bytesRead);
+            td.srgb = true; // orthophoto colour
+            tex = m_renderer->createTexture(td);
+            if (tex.valid()) {
+                MaterialDesc md{};
+                md.baseColorTexture = tex;
+                md.roughnessFactor = 0.95f;
+                md.metallicFactor = 0.0f;
+                mat = m_renderer->createMaterial(md);
+            }
+        }
+        std::unique_lock lock(m_tileMutex);
+        Tile& tile = tileIt->second;
+        tile.pendingSatRead = 0;
+        if (mat.valid()) {
+            tile.satTex = tex;
+            tile.satMat = mat;
+        } else if (tex.valid() && m_renderer) {
+            m_renderer->destroyTexture(tex); // material creation failed — don't leak the texture
+        }
         return;
     }
 
@@ -498,8 +557,16 @@ void TerrainStreamer::evictTile(const TileKey& key) {
         m_asyncFs.cancelRead(tile.pendingCoverRead);
         m_pendingByReadId.erase(tile.pendingCoverRead);
     }
+    if (tile.pendingSatRead != 0) {
+        m_asyncFs.cancelRead(tile.pendingSatRead);
+        m_pendingByReadId.erase(tile.pendingSatRead);
+    }
     if (m_renderer && tile.mesh.valid())
         m_renderer->destroyMesh(tile.mesh);
+    if (m_renderer && tile.satMat.valid())
+        m_renderer->destroyMaterial(tile.satMat);
+    if (m_renderer && tile.satTex.valid())
+        m_renderer->destroyTexture(tile.satTex);
     m_tiles.erase(it);
 }
 
@@ -559,9 +626,15 @@ std::vector<RenderItem> TerrainStreamer::getRenderItems(glm::dvec3 worldOrigin) 
 
         RenderItem item;
         item.mesh = tiles[t]->mesh;
-        item.material = m_terrainMat;
         item.transform = glm::translate(glm::mat4(1.0f), relOrigin);
-        item.flags = kRenderFlagTerrain; // forward pass applies elevation/slope shading
+        if (tiles[t]->satMat.valid()) {
+            // Satellite imagery available (#488): sample its albedo instead of the biomes.
+            item.material = tiles[t]->satMat;
+            item.flags = kRenderFlagTerrainSatellite;
+        } else {
+            item.material = m_terrainMat;
+            item.flags = kRenderFlagTerrain; // forward pass applies elevation/slope + biome shading
+        }
         items.push_back(item);
     }
     return items;
