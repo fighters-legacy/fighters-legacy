@@ -5,6 +5,7 @@
 #include "render/BuiltinShape.h"
 
 #include <functional>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -19,6 +20,8 @@ class ParticleSystem;
 class SimRenderBridge;
 class SubtitleQueue;
 class TerrainStreamer;
+class AirportRegistry;
+class AirportRenderer;
 } // namespace fl
 
 namespace fl {
@@ -110,6 +113,10 @@ class SceneRenderer {
     // frame. Pass nullptr to disable (default). Streamer must outlive SceneRenderer.
     void setTerrainStreamer(TerrainStreamer* ts) noexcept;
 
+    // Optional: wire an AirportRegistry to draw runways each frame (#487) via an owned AirportRenderer
+    // (created lazily). Pass nullptr to disable. The registry must outlive SceneRenderer.
+    void setAirportRegistry(const AirportRegistry* reg);
+
     // Render one entity shadow-only (kRenderFlagShadowOnly): it still casts a shadow but is not
     // drawn in the color pass. Used for the player's own aircraft in cockpit view, where the
     // camera sits at the entity origin and the mesh would otherwise fill the view, yet its
@@ -190,6 +197,8 @@ class SceneRenderer {
     MaterialHandle m_fallbackEntityMat{};
     bool m_showBuiltinFloor{false};
     TerrainStreamer* m_terrainStreamer{nullptr};
+    const AirportRegistry* m_airportRegistry{nullptr};
+    std::unique_ptr<AirportRenderer> m_airportRenderer; // lazily created when a registry is set (#487)
     ILogger* m_logger{nullptr};
 
     // Entity to omit from rendering (player's own aircraft in cockpit view). gen == 0 = disabled.

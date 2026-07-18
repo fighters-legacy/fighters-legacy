@@ -445,6 +445,22 @@ add_executable(test_faction_registry test_faction_registry.cpp)
 target_link_libraries(test_faction_registry PRIVATE Catch2::Catch2WithMain engine-world)
 catch_discover_tests(test_faction_registry)
 
+add_executable(test_airport_registry test_airport_registry.cpp)
+target_link_libraries(test_airport_registry PRIVATE Catch2::Catch2WithMain engine-world)
+catch_discover_tests(test_airport_registry)
+
+add_executable(test_airport_renderer test_airport_renderer.cpp)
+target_link_libraries(test_airport_renderer PRIVATE Catch2::Catch2WithMain engine-render engine-world)
+catch_discover_tests(test_airport_renderer)
+
+add_executable(test_builtin_biomes test_builtin_biomes.cpp)
+target_link_libraries(test_builtin_biomes PRIVATE Catch2::Catch2WithMain engine-render)
+catch_discover_tests(test_builtin_biomes)
+
+add_executable(test_biome_weights test_biome_weights.cpp)
+target_link_libraries(test_biome_weights PRIVATE Catch2::Catch2WithMain engine-render)
+catch_discover_tests(test_biome_weights)
+
 add_executable(test_audio test_audio.cpp)
 target_link_libraries(test_audio PRIVATE Catch2::Catch2WithMain platform-openal OpenAL::OpenAL)
 target_include_directories(test_audio PRIVATE "${CMAKE_SOURCE_DIR}/platform/openal")
@@ -677,6 +693,10 @@ catch_discover_tests(test_world_broadcaster)
 
 add_executable(test_weather test_weather.cpp)
 target_link_libraries(test_weather PRIVATE Catch2::Catch2WithMain engine-weather)
+
+add_executable(test_celestial test_celestial.cpp)
+target_link_libraries(test_celestial PRIVATE Catch2::Catch2WithMain engine-weather engine-flight)
+catch_discover_tests(test_celestial)
 catch_discover_tests(test_weather)
 
 add_executable(test_solar_position test_solar_position.cpp)
@@ -946,3 +966,16 @@ add_executable(test_warning_tones test_warning_tones.cpp)
 target_link_libraries(test_warning_tones PRIVATE Catch2::Catch2WithMain engine-audio engine-config engine-content)
 target_include_directories(test_warning_tones PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_warning_tones)
+
+add_executable(test_sha256 test_sha256.cpp)
+target_link_libraries(test_sha256 PRIVATE Catch2::Catch2WithMain engine-crypto)
+catch_discover_tests(test_sha256)
+
+add_executable(test_content_downloader test_content_downloader.cpp)
+target_link_libraries(test_content_downloader PRIVATE Catch2::Catch2WithMain engine-content engine-crypto)
+target_include_directories(test_content_downloader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_content_downloader)
+
+add_executable(test_wind_profile test_wind_profile.cpp)
+target_link_libraries(test_wind_profile PRIVATE Catch2::Catch2WithMain engine-weather engine-flight)
+catch_discover_tests(test_wind_profile)

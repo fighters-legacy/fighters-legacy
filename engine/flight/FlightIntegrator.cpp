@@ -161,7 +161,7 @@ void FlightIntegrator::integrateRotation(float dt) {
 }
 
 void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadEffect& payload,
-                            const WindInfluence& wind, float groundElev) {
+                            const WindInfluence& wind, float groundElev, const GroundFriction& ground) {
     // Progressive damage penalties (#626): DamageDef's thrustFactor scales the throttle COMMAND and
     // controlFactor scales the surface deflection COMMANDS, applied once here so every downstream
     // consumer (spool, FBW reference, parking brake, force model) sees the degraded inputs. This is
@@ -617,6 +617,17 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
             m_state.vel_body[1] = vb[1];
             m_state.vel_body[2] = vb[2];
         }
+    }
+
+    // 14b-surface. Per-surface rolling resistance (#487). During ground contact, an unpaved surface
+    // (grass, gravel) sheds horizontal ground speed faster than a hard runway, so the rollout differs
+    // by surface. A hard paved surface (the default GroundFriction{}) adds nothing on top of the
+    // baseline ground roll above — bit-identical to before this feature.
+    if (ground.extraRollingPerSec > 0.f &&
+        (m_gravity->geodeticAltitude(m_state.pos_world) - static_cast<double>(groundElev)) <= kGroundContactMarginM) {
+        const float decay = std::max(0.f, 1.f - ground.extraRollingPerSec * dt);
+        m_state.vel_body[0] *= decay; // forward
+        m_state.vel_body[2] *= decay; // right (vertical vel_body[1] is the impact clamp's)
     }
 
     // 14c. Static ground friction (parking brake). A stationary aircraft on the ground is held

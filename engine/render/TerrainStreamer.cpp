@@ -3,6 +3,7 @@
 
 #include "IRenderer.h"
 #include "content/AssetManager.h"
+#include "render/BuiltinBiomes.h"
 #include "render/ProceduralTerrainChunk.h"
 #include "render/TerrainChunkIO.h"
 #include "render/TerrainMeshBuilder.h"
@@ -46,6 +47,45 @@ TerrainStreamer::TerrainStreamer(fl::TerrainManifest manifest, AssetManager& ass
                                  IRenderer* renderer)
     : m_manifest(std::move(manifest)), m_assets(assets), m_asyncFs(asyncFs), m_renderer(renderer) {
     m_asyncFs.setEventHandler(this);
+    uploadBiomeTextures();
+}
+
+// Terrain biome texture arrays (#446): a pack's biome_basecolor/biome_normalorm array KTX2 if
+// present, else the compiled-in procedural biome set (so the sandbox has textured terrain zero-pack).
+// Null renderer (fl-server headless) = no-op.
+void TerrainStreamer::uploadBiomeTextures() {
+    if (!m_renderer)
+        return;
+    auto uploadPackOrBuiltin = [&](const char* assetName, bool srgb,
+                                   const std::array<BuiltinRgbaTexture, kBiomeLayerCount>& builtin) -> TextureHandle {
+        // A pack-provided KTX2 array wins.
+        if (auto tex = m_assets.loadTexture(assetName); tex && !tex->bytes.empty()) {
+            TextureUploadDesc td{};
+            td.name = assetName;
+            td.bytes = tex->bytes;
+            td.srgb = srgb;
+            const TextureHandle h = m_renderer->createTextureArray(td);
+            if (h.valid())
+                return h;
+        }
+        // Builtin fallback: concatenate the layer-major RGBA8 and upload as a raw array.
+        std::vector<uint8_t> raw;
+        raw.reserve(static_cast<std::size_t>(kBuiltinTexSize) * kBuiltinTexSize * 4u * builtin.size());
+        for (const auto& layer : builtin)
+            raw.insert(raw.end(), layer.pixels.begin(), layer.pixels.end());
+        TextureUploadDesc td{};
+        td.name = assetName;
+        td.bytes = raw;
+        td.srgb = srgb;
+        td.rawWidth = kBuiltinTexSize;
+        td.rawHeight = kBuiltinTexSize;
+        td.rawLayers = static_cast<uint32_t>(builtin.size());
+        return m_renderer->createTextureArray(td);
+    };
+
+    m_biomeColorTex = uploadPackOrBuiltin("biome_basecolor", /*srgb=*/true, builtinBiomeBaseColorLayers());
+    m_biomeNormalOrmTex = uploadPackOrBuiltin("biome_normalorm", /*srgb=*/false, builtinBiomeNormalOrmLayers());
+    m_renderer->setTerrainBiomeTextures(m_biomeColorTex, m_biomeNormalOrmTex, kBiomeLayerCount);
 }
 
 TerrainStreamer::~TerrainStreamer() {
@@ -59,6 +99,10 @@ TerrainStreamer::~TerrainStreamer() {
         for (auto& [key, tile] : m_tiles) {
             if (tile.mesh.valid())
                 m_renderer->destroyMesh(tile.mesh);
+            if (tile.satMat.valid())
+                m_renderer->destroyMaterial(tile.satMat); // #488
+            if (tile.satTex.valid())
+                m_renderer->destroyTexture(tile.satTex);
         }
         if (m_terrainMat.valid())
             m_renderer->destroyMaterial(m_terrainMat);
@@ -273,6 +317,28 @@ void TerrainStreamer::loadTile(const TileKey& key, int& proceduralCount) {
             m_pendingByReadId[cid] = PendingRead{key, TileLayer::LandCover};
         }
     }
+
+    queueSatelliteRead(key);
+}
+
+// Optional satellite albedo (terrain/<id>/f<face>/l<level>/tile_<i>_<j>_sat.ktx2). CLIENT-ONLY (a
+// headless server has a null renderer and no texture path). Runs for BOTH pack-height and procedural
+// tiles (#488) — satellite imagery drapes over procedural terrain too, not just pack DEM tiles.
+void TerrainStreamer::queueSatelliteRead(const TileKey& key) {
+    if (!m_renderer || !m_assets.hasPacks())
+        return;
+    auto satPath = m_assets.resolveTilePath(m_manifest.terrainId.c_str(), key.face, key.level, key.i, key.j,
+                                            fl::TileLayer::Satellite);
+    if (!satPath)
+        return;
+    const AsyncReadId sid = m_asyncFs.readFileAsync(PathDomain::Assets, satPath->c_str());
+    if (sid == 0)
+        return;
+    {
+        std::unique_lock lock(m_tileMutex);
+        m_tiles[key].pendingSatRead = sid;
+    }
+    m_pendingByReadId[sid] = PendingRead{key, TileLayer::Satellite};
 }
 
 void TerrainStreamer::loadTileProcedural(const TileKey& key) {
@@ -284,6 +350,7 @@ void TerrainStreamer::loadTileProcedural(const TileKey& key) {
         tile.lastDesiredFrame = m_frame;
     }
     finalizeTile(key);
+    queueSatelliteRead(key); // #488 — satellite imagery drapes over procedural terrain too
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +407,38 @@ void TerrainStreamer::onReadComplete(AsyncReadId id, AsyncReadStatus status, con
         return;
     }
 
+    // Satellite layer (#488): optional, client-only. Decode the KTX2 into a texture + a per-tile
+    // material; on failure the tile just renders with the shared biome material. Create the GPU
+    // resources OUTSIDE the tile mutex, then store the handles under it.
+    if (pending.layer == TileLayer::Satellite) {
+        TextureHandle tex{};
+        MaterialHandle mat{};
+        if (status == AsyncReadStatus::Success && data != nullptr && bytesRead > 0 && m_renderer) {
+            TextureUploadDesc td{};
+            td.name = "satellite";
+            td.bytes = std::span<const uint8_t>(static_cast<const uint8_t*>(data), bytesRead);
+            td.srgb = true; // orthophoto colour
+            tex = m_renderer->createTexture(td);
+            if (tex.valid()) {
+                MaterialDesc md{};
+                md.baseColorTexture = tex;
+                md.roughnessFactor = 0.95f;
+                md.metallicFactor = 0.0f;
+                mat = m_renderer->createMaterial(md);
+            }
+        }
+        std::unique_lock lock(m_tileMutex);
+        Tile& tile = tileIt->second;
+        tile.pendingSatRead = 0;
+        if (mat.valid()) {
+            tile.satTex = tex;
+            tile.satMat = mat;
+        } else if (tex.valid() && m_renderer) {
+            m_renderer->destroyTexture(tex); // material creation failed — don't leak the texture
+        }
+        return;
+    }
+
     // LandCover layer: optional — attach on success, proceed without on failure.
     {
         std::unique_lock lock(m_tileMutex);
@@ -391,8 +490,37 @@ void TerrainStreamer::finalizeTile(const TileKey& key) {
         }
 
         const glm::dvec3 origin = tileToWorld(key, 0.5, 0.5, 0.0, m_planetRadiusM);
+
+        // Runway flattening (#486): when a height modifier is installed and this tile's bounding
+        // sphere could hold a runway footprint, flatten a COPY of the heightmap so the mesh vertices
+        // match the modified heightAt(). The stored heightmap stays raw (heightAt re-applies the
+        // modifier — never double-counted); the per-tile region test keeps this off tiles no airport
+        // touches, and with no modifier the output is byte-identical to before.
+        const std::vector<uint16_t>* heights = &tile.heightmap;
+        std::vector<uint16_t> flattened;
+        if (m_heightModifier) {
+            const glm::dvec3 corner = tileToWorld(key, 0.0, 0.0, 0.0, m_planetRadiusM);
+            const double radius = glm::length(corner - origin);
+            if (!m_heightModifierRegion || m_heightModifierRegion(origin, radius)) {
+                const int S = kTileHeightmapSize;
+                flattened = tile.heightmap;
+                for (int row = 0; row < S; ++row) {
+                    const double t = static_cast<double>(row) / static_cast<double>(S - 1);
+                    for (int col = 0; col < S; ++col) {
+                        const double sCoord = static_cast<double>(col) / static_cast<double>(S - 1);
+                        const std::size_t idx = static_cast<std::size_t>(row) * S + col;
+                        const double raw = static_cast<double>(tile.heightmap[idx]) - 32768.0;
+                        const glm::dvec3 wp = tileToWorld(key, sCoord, t, raw, m_planetRadiusM);
+                        const double v = std::clamp(m_heightModifier(wp, raw) + 32768.0, 0.0, 65535.0);
+                        flattened[idx] = static_cast<uint16_t>(v + 0.5);
+                    }
+                }
+                heights = &flattened;
+            }
+        }
+
         auto glb =
-            buildTileMeshGlb(tile.heightmap, kTileHeightmapSize, kTileMeshGrid, key, m_planetRadiusM, origin,
+            buildTileMeshGlb(*heights, kTileHeightmapSize, kTileMeshGrid, key, m_planetRadiusM, origin,
                              tile.landCover.empty() ? nullptr : tile.landCover.data(), true, skirtDepthFor(key.level));
         if (!glb.empty()) {
             const std::string meshName = "tile:" + m_manifest.terrainId + ":f" + std::to_string(key.face) + ":L" +
@@ -429,8 +557,16 @@ void TerrainStreamer::evictTile(const TileKey& key) {
         m_asyncFs.cancelRead(tile.pendingCoverRead);
         m_pendingByReadId.erase(tile.pendingCoverRead);
     }
+    if (tile.pendingSatRead != 0) {
+        m_asyncFs.cancelRead(tile.pendingSatRead);
+        m_pendingByReadId.erase(tile.pendingSatRead);
+    }
     if (m_renderer && tile.mesh.valid())
         m_renderer->destroyMesh(tile.mesh);
+    if (m_renderer && tile.satMat.valid())
+        m_renderer->destroyMaterial(tile.satMat);
+    if (m_renderer && tile.satTex.valid())
+        m_renderer->destroyTexture(tile.satTex);
     m_tiles.erase(it);
 }
 
@@ -490,9 +626,15 @@ std::vector<RenderItem> TerrainStreamer::getRenderItems(glm::dvec3 worldOrigin) 
 
         RenderItem item;
         item.mesh = tiles[t]->mesh;
-        item.material = m_terrainMat;
         item.transform = glm::translate(glm::mat4(1.0f), relOrigin);
-        item.flags = kRenderFlagTerrain; // forward pass applies elevation/slope shading
+        if (tiles[t]->satMat.valid()) {
+            // Satellite imagery available (#488): sample its albedo instead of the biomes.
+            item.material = tiles[t]->satMat;
+            item.flags = kRenderFlagTerrainSatellite;
+        } else {
+            item.material = m_terrainMat;
+            item.flags = kRenderFlagTerrain; // forward pass applies elevation/slope + biome shading
+        }
         items.push_back(item);
     }
     return items;
@@ -551,7 +693,12 @@ double TerrainStreamer::heightAt(glm::dvec3 worldPos) const noexcept {
         return static_cast<double>(tile->heightmap[static_cast<std::size_t>(row) * s + col]) - 32768.0;
     };
 
-    return glm::mix(glm::mix(h(ix, iz), h(ix + 1, iz), fx), glm::mix(h(ix, iz + 1), h(ix + 1, iz + 1), fx), fz);
+    const double raw =
+        glm::mix(glm::mix(h(ix, iz), h(ix + 1, iz), fx), glm::mix(h(ix, iz + 1), h(ix + 1, iz + 1), fx), fz);
+    // Runway flattening (#486): the modifier overrides the sampled terrain inside a runway footprint
+    // (returning `raw` untouched elsewhere). The same function flattens the tile mesh, so the physics
+    // floor and the visible terrain agree. Cheap when no airport is near (the modifier early-outs).
+    return m_heightModifier ? m_heightModifier(worldPos, raw) : raw;
 }
 
 bool TerrainStreamer::heightReadyAt(glm::dvec3 worldPos) const noexcept {
@@ -619,6 +766,27 @@ void TerrainStreamer::setPlanetRadius(double radius_m) {
     m_desiredLeaves.clear();
     m_desiredAll.clear();
     m_planetRadiusM = radius_m;
+}
+
+void TerrainStreamer::setHeightModifier(HeightModifier pointFn, HeightModifierRegion regionFn) {
+    // Drop every resident tile + in-flight read so the next update() re-generates meshes with the
+    // flatten applied — mirrors setPlanetRadius, so wiring the modifier at any time can never leave a
+    // stale un-flattened mesh (or a flattened one after the modifier is cleared) resident.
+    std::unique_lock lock(m_tileMutex);
+    for (auto& [id, pending] : m_pendingByReadId)
+        m_asyncFs.cancelRead(id);
+    m_pendingByReadId.clear();
+    if (m_renderer) {
+        for (auto& [key, tile] : m_tiles) {
+            if (tile.mesh.valid())
+                m_renderer->destroyMesh(tile.mesh);
+        }
+    }
+    m_tiles.clear();
+    m_desiredLeaves.clear();
+    m_desiredAll.clear();
+    m_heightModifier = std::move(pointFn);
+    m_heightModifierRegion = std::move(regionFn);
 }
 
 void TerrainStreamer::setViewParams(float screenHeightPx, float fovYRad) noexcept {

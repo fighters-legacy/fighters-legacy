@@ -5,9 +5,11 @@
 #include <glm/geometric.hpp> // cross, normalize, dot, length
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <numbers>
 #include <string>
 #include <vector>
 
@@ -66,14 +68,28 @@ std::vector<uint8_t> buildTileMeshGlb(const std::vector<uint16_t>& heights, int 
         return tileToWorld(key, s, t, h, R);
     };
 
+    // The packed terrain "tangent" (VEC4 f32) rides with TEXCOORD_0 — terrain does not use a real
+    // tangent (it shades from the geometric normal + screen-space derivatives), so this attribute
+    // carries the per-vertex biome/detail data instead (#475): .x = WorldCover class (0..11, or 255 =
+    // "no land-cover, use elevation/slope fallback"), .y = normalized elevation ((h+1000)/10000
+    // clamped, for the snow line), .zw = spherical-valid detail coordinate in metres — the global
+    // face-UV arc length reduced modulo kDetailPeriod. Because coincident vertices on adjacent tiles
+    // (and across LOD levels) share the exact same face-UV, the coordinate is continuous by
+    // construction; kDetailPeriod is a common multiple of the shader's fine (4 m) and coarse (30 m)
+    // detail tiling, so the modulo wrap is seamless too. Only the 8 cube-face seams differ (accepted).
+    const bool emitTerrainTangent = emitTexcoord;
+    const double kFaceArc = R * (std::numbers::pi / 2.0); // ~1 face edge arc length (90 deg)
+    const double kDetailPeriod = 3000.0;                  // = 4 m x 750 = 30 m x 100 (seamless wrap)
+    const double nLevel = static_cast<double>(uint64_t{1} << key.level);
+
     std::vector<float> positions(static_cast<std::size_t>(vertCount) * 3);
     std::vector<float> normals(static_cast<std::size_t>(vertCount) * 3);
     std::vector<float> texcoords; // VEC2
-    std::vector<uint8_t> colors;  // VEC4 u8
+    std::vector<float> tangents;  // VEC4 f32 (packed terrain data, #475)
     if (emitTexcoord)
         texcoords.resize(static_cast<std::size_t>(vertCount) * 2);
-    if (landCover)
-        colors.resize(static_cast<std::size_t>(vertCount) * 4);
+    if (emitTerrainTangent)
+        tangents.resize(static_cast<std::size_t>(vertCount) * 4);
 
     glm::vec3 relMin(std::numeric_limits<float>::max());
     glm::vec3 relMax(-std::numeric_limits<float>::max());
@@ -113,14 +129,22 @@ std::vector<uint8_t> buildTileMeshGlb(const std::vector<uint16_t>& heights, int 
                 texcoords[vi * 2 + 0] = static_cast<float>(col) / static_cast<float>(meshGrid);
                 texcoords[vi * 2 + 1] = static_cast<float>(row) / static_cast<float>(meshGrid);
             }
-            if (landCover) {
-                const int pc = std::clamp(col * stride, 0, heightmapSize - 1);
-                const int pr = std::clamp(row * stride, 0, heightmapSize - 1);
-                const uint8_t cls = landCover[static_cast<std::size_t>(pr) * heightmapSize + pc];
-                colors[vi * 4 + 0] = cls; // WorldCover class in .r (normalized u8)
-                colors[vi * 4 + 1] = 0;
-                colors[vi * 4 + 2] = 0;
-                colors[vi * 4 + 3] = 255;
+            if (emitTerrainTangent) {
+                // WorldCover class (255 = none -> shader falls back to elevation/slope selection).
+                float cls = 255.0f;
+                if (landCover) {
+                    const int pc = std::clamp(col * stride, 0, heightmapSize - 1);
+                    const int pr = std::clamp(row * stride, 0, heightmapSize - 1);
+                    cls = static_cast<float>(landCover[static_cast<std::size_t>(pr) * heightmapSize + pc]);
+                }
+                const double h = hAt(col * stride, row * stride);
+                const float normElev = static_cast<float>(std::clamp((h + 1000.0) / 10000.0, 0.0, 1.0));
+                const double faceU = (static_cast<double>(key.i) + static_cast<double>(col) / n) / nLevel;
+                const double faceV = (static_cast<double>(key.j) + static_cast<double>(row) / n) / nLevel;
+                tangents[vi * 4 + 0] = cls;
+                tangents[vi * 4 + 1] = normElev;
+                tangents[vi * 4 + 2] = static_cast<float>(std::fmod(faceU * kFaceArc, kDetailPeriod));
+                tangents[vi * 4 + 3] = static_cast<float>(std::fmod(faceV * kFaceArc, kDetailPeriod));
             }
         }
     }
@@ -182,9 +206,9 @@ std::vector<uint8_t> buildTileMeshGlb(const std::vector<uint16_t>& heights, int 
                     texcoords[dst * 2 + 0] = texcoords[src * 2 + 0];
                     texcoords[dst * 2 + 1] = texcoords[src * 2 + 1];
                 }
-                if (landCover) {
+                if (emitTerrainTangent) {
                     for (int c = 0; c < 4; ++c)
-                        colors[dst * 4 + c] = colors[src * 4 + c];
+                        tangents[dst * 4 + c] = tangents[src * 4 + c];
                 }
             }
 
@@ -225,52 +249,53 @@ std::vector<uint8_t> buildTileMeshGlb(const std::vector<uint16_t>& heights, int 
     }
 
     // ---------------------------------------------------------------------------
-    // Assemble BIN buffer (non-interleaved): POSITION, NORMAL, [TEXCOORD_0], [COLOR_0], INDICES.
-    // All attribute blocks are multiples of 4 bytes, so bufferView offsets stay 4-aligned.
+    // Assemble BIN buffer (non-interleaved): POSITION, NORMAL, [TEXCOORD_0], [TANGENT], INDICES.
+    // TANGENT (VEC4 f32) carries the packed terrain data (#475), not a real tangent — see the fill
+    // loop. All attribute blocks are multiples of 4 bytes, so bufferView offsets stay 4-aligned.
     // ---------------------------------------------------------------------------
     const std::size_t posBytes = static_cast<std::size_t>(vertCount) * 3 * sizeof(float);
     const std::size_t nrmBytes = posBytes;
     const std::size_t texBytes = emitTexcoord ? static_cast<std::size_t>(vertCount) * 2 * sizeof(float) : 0;
-    const std::size_t colBytes = landCover ? static_cast<std::size_t>(vertCount) * 4 : 0;
+    const std::size_t tanBytes = emitTerrainTangent ? static_cast<std::size_t>(vertCount) * 4 * sizeof(float) : 0;
     const std::size_t idxBytes = static_cast<std::size_t>(indexCount) * sizeof(uint16_t);
-    const std::size_t binBytes = posBytes + nrmBytes + texBytes + colBytes + idxBytes;
+    const std::size_t binBytes = posBytes + nrmBytes + texBytes + tanBytes + idxBytes;
     const std::size_t binPadded = (binBytes + 3u) & ~std::size_t{3u};
 
     const std::size_t posOff = 0;
     const std::size_t nrmOff = posOff + posBytes;
     const std::size_t texOff = nrmOff + nrmBytes;
-    const std::size_t colOff = texOff + texBytes;
-    const std::size_t idxOff = colOff + colBytes;
+    const std::size_t tanOff = texOff + texBytes;
+    const std::size_t idxOff = tanOff + tanBytes;
 
     std::vector<uint8_t> bin(binPadded, 0);
     std::memcpy(bin.data() + posOff, positions.data(), posBytes);
     std::memcpy(bin.data() + nrmOff, normals.data(), nrmBytes);
     if (texBytes)
         std::memcpy(bin.data() + texOff, texcoords.data(), texBytes);
-    if (colBytes)
-        std::memcpy(bin.data() + colOff, colors.data(), colBytes);
+    if (tanBytes)
+        std::memcpy(bin.data() + tanOff, tangents.data(), tanBytes);
     std::memcpy(bin.data() + idxOff, indices.data(), idxBytes);
 
     // ---------------------------------------------------------------------------
     // Build JSON (glTF 2.0) with dynamically ordered accessors / bufferViews.
-    // Accessor order: 0=POSITION, 1=NORMAL, [TEXCOORD_0], [COLOR_0], last=INDICES.
+    // Accessor order: 0=POSITION, 1=NORMAL, [TEXCOORD_0], [TANGENT], last=INDICES.
     // ---------------------------------------------------------------------------
     int accPos = 0, accNrm = 1, accNext = 2;
-    int accTex = -1, accCol = -1;
+    int accTex = -1, accTan = -1;
     if (emitTexcoord)
         accTex = accNext++;
-    if (landCover)
-        accCol = accNext++;
+    if (emitTerrainTangent)
+        accTan = accNext++;
     const int accIdx = accNext;
     const int bvTex = emitTexcoord ? 2 : -1;
-    const int bvCol = landCover ? (emitTexcoord ? 3 : 2) : -1;
+    const int bvTan = emitTerrainTangent ? (emitTexcoord ? 3 : 2) : -1;
     const int bvIdx = accIdx;
 
     std::string attrs = "\"POSITION\":" + std::to_string(accPos) + ",\"NORMAL\":" + std::to_string(accNrm);
     if (emitTexcoord)
         attrs += ",\"TEXCOORD_0\":" + std::to_string(accTex);
-    if (landCover)
-        attrs += ",\"COLOR_0\":" + std::to_string(accCol);
+    if (emitTerrainTangent)
+        attrs += ",\"TANGENT\":" + std::to_string(accTan);
 
     std::string json = "{";
     json += R"("asset":{"version":"2.0"},)";
@@ -292,9 +317,9 @@ std::vector<uint8_t> buildTileMeshGlb(const std::vector<uint16_t>& heights, int 
         json += ",{\"bufferView\":" + std::to_string(bvTex) +
                 ",\"byteOffset\":0,\"componentType\":5126,\"count\":" + std::to_string(vertCount) +
                 ",\"type\":\"VEC2\"}";
-    if (landCover)
-        json += ",{\"bufferView\":" + std::to_string(bvCol) +
-                ",\"byteOffset\":0,\"componentType\":5121,\"normalized\":true,\"count\":" + std::to_string(vertCount) +
+    if (emitTerrainTangent)
+        json += ",{\"bufferView\":" + std::to_string(bvTan) +
+                ",\"byteOffset\":0,\"componentType\":5126,\"count\":" + std::to_string(vertCount) +
                 ",\"type\":\"VEC4\"}";
     json += ",{\"bufferView\":" + std::to_string(bvIdx) +
             ",\"byteOffset\":0,\"componentType\":5123,\"count\":" + std::to_string(indexCount) +
@@ -310,9 +335,9 @@ std::vector<uint8_t> buildTileMeshGlb(const std::vector<uint16_t>& heights, int 
     if (emitTexcoord)
         json += ",{\"buffer\":0,\"byteOffset\":" + std::to_string(texOff) +
                 ",\"byteLength\":" + std::to_string(texBytes) + ",\"target\":34962}";
-    if (landCover)
-        json += ",{\"buffer\":0,\"byteOffset\":" + std::to_string(colOff) +
-                ",\"byteLength\":" + std::to_string(colBytes) + ",\"target\":34962}";
+    if (emitTerrainTangent)
+        json += ",{\"buffer\":0,\"byteOffset\":" + std::to_string(tanOff) +
+                ",\"byteLength\":" + std::to_string(tanBytes) + ",\"target\":34962}";
     json += ",{\"buffer\":0,\"byteOffset\":" + std::to_string(idxOff) + ",\"byteLength\":" + std::to_string(idxBytes) +
             ",\"target\":34963}],";
 

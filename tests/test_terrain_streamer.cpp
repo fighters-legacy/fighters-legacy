@@ -9,6 +9,7 @@
 #include "content/AssetManager.h"
 #include "content/AssetTypes.h"
 #include "content/IContentPack.h"
+#include "render/BuiltinBiomes.h"
 #include "render/CubeSphere.h"
 #include "render/ProceduralTerrainChunk.h"
 #include "render/TerrainStreamer.h"
@@ -248,11 +249,51 @@ TEST_CASE("TerrainStreamer procedural tiles produce render items and plausible h
     CHECK(h < 900.0);
 }
 
+TEST_CASE("TerrainStreamer setHeightModifier flattens heightAt (#486)") {
+    StreamerFixture fx;
+    fl::TerrainStreamer ts{worldManifest(4), *fx.assets, fx.asyncFs, nullptr};
+    pumpUntilReady(ts, fx.asyncFs, kPoleCam, kPoleProbe);
+    const double raw = ts.heightAt(kPoleProbe);
+    CHECK(raw > 300.0); // procedural FBM base
+
+    // Install a modifier that pins the height to a fixed pad value within ~200 m of the pole probe
+    // (the runway-flatten shape), and returns the raw height elsewhere. The region predicate reports a
+    // hit only near the probe. setHeightModifier drops resident tiles, so re-pump before querying.
+    constexpr double kPad = 1234.0;
+    ts.setHeightModifier(
+        [&](glm::dvec3 pos, double rawH) { return glm::length(pos - kPoleProbe) < 200.0 ? kPad : rawH; },
+        [&](glm::dvec3 centre, double radiusM) { return glm::length(centre - kPoleProbe) < radiusM + 200.0; });
+    pumpUntilReady(ts, fx.asyncFs, kPoleCam, kPoleProbe);
+
+    // At the probe the height is now the pad value; far away it is the unmodified terrain.
+    CHECK(ts.heightAt(kPoleProbe) == Catch::Approx(kPad));
+    const glm::dvec3 farProbe{2000.0, 0.0, 0.0};
+    CHECK(ts.heightAt(farProbe) != Catch::Approx(kPad));
+}
+
 TEST_CASE("TerrainStreamer getRenderItems is empty before the first update") {
     StreamerFixture fx;
     MockRenderer renderer;
     fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, &renderer};
     CHECK(ts.getRenderItems(kPoleCam).empty());
+}
+
+TEST_CASE("TerrainStreamer uploads the builtin biome arrays at construction (#446)") {
+    StreamerFixture fx;
+    MockRenderer renderer;
+    fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, &renderer};
+    // No pack provides biome_basecolor/biome_normalorm, so the builtin raw-RGBA arrays upload:
+    // two arrays (base color + normal/ORM) and one bind, all at kBiomeLayerCount layers.
+    CHECK(renderer.createTextureArrayCount == 2);
+    CHECK(renderer.setTerrainBiomeTexturesCount == 1);
+    CHECK(renderer.lastTextureArrayLayers == static_cast<uint32_t>(fl::kBiomeLayerCount));
+}
+
+TEST_CASE("TerrainStreamer null renderer uploads no biome arrays (#446)") {
+    StreamerFixture fx;
+    fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, nullptr};
+    // headless (fl-server) never touches the renderer — no crash, no upload.
+    CHECK(ts.heightAt(kPoleProbe) >= 0.0);
 }
 
 TEST_CASE("TerrainStreamer null renderer returns empty render items but height works") {
@@ -443,6 +484,46 @@ TEST_CASE("TerrainStreamer land-cover layer feeds surfaceAt") {
 
     CHECK(ts.heightAt(kPoleProbe) == Catch::Approx(550.0).margin(0.5));
     CHECK(ts.surfaceAt(kPoleProbe) == 7);
+}
+
+TEST_CASE("TerrainStreamer loads a satellite tile and flags its render item (#488)") {
+    auto pack = std::make_unique<MockTerrainPack>();
+    const std::string heightPath = "terrain/world/f2/l0/tile_0_0.png";
+    const std::string satPath = "terrain/world/f2/l0/tile_0_0_sat.ktx2";
+    pack->tilePaths["world:2:0:0:0:0"] = heightPath; // Height layer
+    pack->tilePaths["world:2:0:0:0:2"] = satPath;    // Satellite layer (index 2)
+
+    StreamerFixture fx(std::move(pack));
+    fx.asyncFs.addFile(heightPath, makeFlatPng16(kTileHeightmapSize, kTileHeightmapSize, 33318));
+    fx.asyncFs.addFile(satPath, std::string(64, '\x01')); // dummy bytes; MockRenderer uploads any
+
+    MockRenderer renderer;
+    fl::TerrainStreamer ts{worldManifest(0), *fx.assets, fx.asyncFs, &renderer};
+    pump(ts, fx.asyncFs, kPoleCam, 10);
+
+    auto items = ts.getRenderItems(kPoleCam);
+    REQUIRE(!items.empty());
+    bool anySatellite = false;
+    for (const auto& it : items)
+        if (it.flags & fl::kRenderFlagTerrainSatellite)
+            anySatellite = true;
+    CHECK(anySatellite);
+    CHECK(renderer.createTextureCount >= 1);  // satellite texture uploaded
+    CHECK(renderer.createMaterialCount >= 1); // per-tile satellite material created
+}
+
+TEST_CASE("TerrainStreamer null renderer never queues a satellite read (#488)") {
+    // A headless server (null renderer) has no texture path — satellite is client-only.
+    auto pack = std::make_unique<MockTerrainPack>();
+    const std::string heightPath = "terrain/world/f2/l0/tile_0_0.png";
+    pack->tilePaths["world:2:0:0:0:0"] = heightPath;
+    pack->tilePaths["world:2:0:0:0:2"] = "terrain/world/f2/l0/tile_0_0_sat.ktx2";
+    StreamerFixture fx(std::move(pack));
+    fx.asyncFs.addFile(heightPath, makeFlatPng16(kTileHeightmapSize, kTileHeightmapSize, 33318));
+
+    fl::TerrainStreamer ts{worldManifest(0), *fx.assets, fx.asyncFs, nullptr};
+    pump(ts, fx.asyncFs, kPoleCam, 8);
+    CHECK(ts.heightAt(kPoleProbe) == Catch::Approx(550.0).margin(0.5)); // still loads height, no crash
 }
 
 TEST_CASE("TerrainStreamer surfaceAt returns zero without a land-cover layer") {

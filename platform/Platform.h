@@ -9,6 +9,7 @@
 #include "IDisplay.h"
 #include "IFilesystem.h"
 #include "IFilesystemWatcher.h"
+#include "IHttpClient.h"
 #include "IInput.h"
 #include "IJoystick.h"
 #include "ILogger.h"
@@ -58,6 +59,7 @@ struct Platform {
     std::unique_ptr<IInput> input;
     std::unique_ptr<IJoystick> joystick; // null in headless/test mode; flush() each frame
     std::unique_ptr<INetwork> network;
+    std::unique_ptr<IHttpClient> httpClient; // #490; null when built without libcurl; service() each frame
 };
 
 } // namespace fl

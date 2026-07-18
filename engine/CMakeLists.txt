@@ -8,6 +8,7 @@ add_library(engine-content STATIC
     content/AssetValidator.cpp
     content/BundledBaseTerrain.cpp
     content/ContentIndex.cpp
+    content/ContentDownloader.cpp
     content/LiveryDef.cpp
 )
 
@@ -16,6 +17,7 @@ target_include_directories(engine-content PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-content
     PUBLIC  platform-hal
     PRIVATE tomlplusplus::tomlplusplus
+            engine-crypto      # SHA-256 for ContentDownloader verification (#490)
             ${CMAKE_DL_LIBS}   # dlopen on Linux; empty on Windows/macOS (auto-linked)
 )
 
@@ -94,10 +96,12 @@ add_library(engine-render STATIC
     render/ParticleSystem.cpp
     render/BuiltinGeometry.cpp
     render/BuiltinTextures.cpp
+    render/BuiltinBiomes.cpp
     render/TerrainChunkIO.cpp
     render/ProceduralTerrainChunk.cpp
     render/TerrainMeshBuilder.cpp
     render/TerrainStreamer.cpp
+    render/AirportRenderer.cpp
     render/FlightHud.cpp
     render/WindshieldRain.cpp
 )
@@ -118,6 +122,7 @@ target_link_libraries(engine-render
             engine-audio
             engine-flight   # FlightHud derives IAS/Mach from the atmosphere model (#480)
             engine-nav      # FlightHud magnetic heading from the WMM2025 model (#483)
+            engine-world    # AirportRenderer draws runways from the AirportRegistry (#487)
 )
 
 add_library(engine-entity STATIC
@@ -219,7 +224,7 @@ add_library(engine-bootstrap STATIC
 target_include_directories(engine-bootstrap PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-bootstrap
     PUBLIC  engine-content
-    PRIVATE engine-entity engine-weapon engine-sensor
+    PRIVATE engine-entity engine-weapon engine-sensor engine-world
 )
 
 # The in-game aircraft manual (#821). It is a CONSUMER of the same sources of truth as the sim --
@@ -282,6 +287,13 @@ add_library(engine-nav STATIC
 )
 target_include_directories(engine-nav PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # No external deps — pure ISO C++20 stdlib (coefficients are compiled in).
+
+# Clean-room SHA-256 (FIPS 180-4) for content/pack hashing (#490) — NOT OpenSSL (GNS-gated).
+add_library(engine-crypto STATIC
+    crypto/Sha256.cpp
+)
+target_include_directories(engine-crypto PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# No external deps — pure ISO C++20 stdlib.
 
 # Mission runtime: the mission YAML schema owner (parser + runtime model, MissionParser) and the
 # faction-aware sim-setup applier (MissionSetup). Lives in the ENGINE, not fl-server, because the game

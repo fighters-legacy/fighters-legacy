@@ -153,6 +153,10 @@ std::shared_ptr<LiveryData> AssetManager::loadLivery(const char* name) {
     return loadAsset<LiveryData>(AssetType::Livery, name, &IContentPack::loadLivery);
 }
 
+std::shared_ptr<AirportDefData> AssetManager::loadAirportDef(const char* name) {
+    return loadAsset<AirportDefData>(AssetType::Airport, name, &IContentPack::loadAirportDef);
+}
+
 std::optional<LiveryDef> AssetManager::liveryForAircraft(const char* aircraftDefId) {
     if (!aircraftDefId || !*aircraftDefId)
         return std::nullopt;

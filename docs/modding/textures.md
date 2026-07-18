@@ -149,9 +149,43 @@ tex-compress --toktx "C:\VulkanSDK\1.3.290.0\Bin\toktx.exe" --type diffuse fa18c
 | `--type diffuse\|normal\|orm\|emissive` | — | Selects compression preset (see table above) |
 | `--format bc1\|bc3\|bc7` | BC7 | Override format explicitly, ignoring `--type` default |
 | `--no-mipmaps` | off | Skip mipmap generation (use only for UI textures that must not blur) |
+| `--layers <in…>` | — | 2D-**array** mode: pack N layer-major PNGs into one array KTX2 (see below) |
+| `-o, --output <path>` | — | Output KTX2 path (required in `--layers` mode; optional otherwise) |
 | `--toktx <path>` | `toktx` | Path to the `toktx` binary; defaults to `toktx` in PATH |
 
 Exit codes: 0 = success, 1 = conversion failure, 2 = bad arguments.
+
+## Texture arrays (biome terrain layers)
+
+The terrain renderer samples its detail textures from a **2D array** — one array for base colour,
+one for combined normal+roughness ("normalORM") — where the **array layer index IS the biome id**.
+`tex-compress --layers` packs N same-size PNGs (layer-major, requires ≥ 2) into a single array KTX2:
+
+```bash
+# Base colour array (sRGB): layer 0 grass, 1 dirt, 2 rock, 3 snow.
+tex-compress --type diffuse --format bc7 --layers grass_c.png dirt_c.png rock_c.png snow_c.png \
+             -o textures/biome_basecolor.ktx2
+
+# Normal+roughness array (linear): RG = tangent-space normal xy, B = roughness, A = occlusion.
+tex-compress --type orm --layers grass_n.png dirt_n.png rock_n.png snow_n.png \
+             -o textures/biome_normalorm.ktx2
+```
+
+**Layer-order convention (load-bearing — this ordering is ABI):**
+
+| Layer | Biome |
+|---|---|
+| 0 | grass |
+| 1 | dirt  |
+| 2 | rock  |
+| 3 | snow  |
+
+Place the two arrays at `textures/biome_basecolor.ktx2` and `textures/biome_normalorm.ktx2` in the
+pack (they load by texture asset name — `biome_basecolor`/`biome_normalorm` — so they live under the
+pack's `textures/` directory like any other texture). When a pack omits them the engine falls back to
+a compiled-in procedural biome set, so custom arrays are optional — but if provided they must follow
+the layer order above (the shader indexes by biome id, not by name). `--layers` needs `toktx` v4.3 or
+newer.
 
 ---
 

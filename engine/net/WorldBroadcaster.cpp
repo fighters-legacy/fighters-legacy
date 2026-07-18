@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "net/WorldBroadcaster.h"
 #include "render/RenderSnapshot.h"
+#include "render/SurfaceType.h" // groundFrictionFor (#487)
 
 #include "ILogger.h"
 #include "INetwork.h"
@@ -29,6 +30,7 @@
 #include "sensor/TrackPicture.h"
 #include "weather/Turbulence.h"
 #include "weather/WeatherController.h"
+#include "weather/WindProfile.h" // altitude wind interp (#489)
 #include "world/FactionDef.h"
 #include "world/FactionRegistry.h"
 
@@ -389,6 +391,10 @@ void WorldBroadcaster::setGravityField(const IGravityField& field, float planetR
 
 void WorldBroadcaster::setGroundElevationQuery(std::function<float(glm::dvec3)> fn) {
     m_groundQuery = std::move(fn);
+}
+
+void WorldBroadcaster::setGroundSurfaceQuery(std::function<SurfaceType(glm::dvec3)> fn) {
+    m_groundSurfaceQuery = std::move(fn);
 }
 
 void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
@@ -1501,7 +1507,29 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             ws.windZ = env.windZ;
             ws.turbulenceAmp = env.turbulenceAmp;        // #426
             ws.utcJulianDay = m_weather->utcJulianDay(); // #481: shared UTC clock for the geographic sun
-            m_net.broadcast(&ws, sizeof(ws), /*reliable=*/false);
+            if (env.windProfileCount == 0) {
+                // No profile: byte-identical to the legacy 32-byte packet.
+                m_net.broadcast(&ws, sizeof(ws), /*reliable=*/false);
+            } else {
+                // Append the altitude wind profile as a TLV (#489); old clients ignore the tail.
+                std::vector<uint8_t> buf(reinterpret_cast<const uint8_t*>(&ws),
+                                         reinterpret_cast<const uint8_t*>(&ws) + sizeof(ws));
+                std::vector<uint8_t> payload;
+                payload.push_back(env.windProfileCount);
+                auto pushF = [&](float f) {
+                    uint8_t b[4];
+                    std::memcpy(b, &f, 4);
+                    payload.insert(payload.end(), b, b + 4);
+                };
+                for (int i = 0; i < env.windProfileCount; ++i) {
+                    pushF(env.windProfile[i].altM);
+                    pushF(env.windProfile[i].windX);
+                    pushF(env.windProfile[i].windZ);
+                }
+                appendExtRaw(buf, static_cast<uint16_t>(ExtTag::WeatherWindProfile), payload.data(),
+                             static_cast<uint16_t>(payload.size()));
+                m_net.broadcast(buf.data(), buf.size(), /*reliable=*/false);
+            }
         }
     }
 
@@ -3368,8 +3396,19 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
                                      uint64_t tickIndex) {
     WindInfluence wind{};
     if (m_weather) {
-        wind.wind_world[0] = m_weather->windX();
-        wind.wind_world[2] = m_weather->windZ();
+        if (m_weather->hasWindProfile()) {
+            // Altitude wind (#489): a high-flying entity feels the wind at ITS altitude, not the
+            // surface scalar. Matches the client's ClientPrediction interp on the broadcast profile.
+            const auto& p = fi.state().pos_world;
+            const float altM = static_cast<float>(
+                windAltitudeM(glm::dvec3(p[0], p[1], p[2]), static_cast<double>(m_planetRadiusKm) * 1000.0));
+            const glm::vec2 w = m_weather->windAtAltitude(altM);
+            wind.wind_world[0] = w.x;
+            wind.wind_world[2] = w.y;
+        } else {
+            wind.wind_world[0] = m_weather->windX();
+            wind.wind_world[2] = m_weather->windZ();
+        }
         // Per-entity deterministic turbulence: a pure function of (entityIdx, tickIndex) + amplitude,
         // so the perturbation is independent of evaluation order, identical across worker counts and
         // platforms, and — since #426 broadcasts the amplitude in MsgWeatherState — reproducible on
@@ -3390,11 +3429,15 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
         wind.turbulence_body[1] += buffet[1];
         wind.turbulence_body[2] += buffet[2];
     }
+    const glm::dvec3 groundPos{fi.state().pos_world[0], fi.state().pos_world[1], fi.state().pos_world[2]};
     const float groundElev =
-        m_groundQuery
-            ? m_groundQuery(glm::dvec3{fi.state().pos_world[0], fi.state().pos_world[1], fi.state().pos_world[2]})
-            : m_groundElevation.load(std::memory_order_relaxed);
-    fi.step(static_cast<float>(simDt), ctrl, payload, wind, groundElev);
+        m_groundQuery ? m_groundQuery(groundPos) : m_groundElevation.load(std::memory_order_relaxed);
+    // Per-surface ground handling (#487): grass/gravel/water differ from a paved runway in the rollout.
+    // groundFrictionFor is pure table math, shared with ClientPrediction, so the server and the client
+    // shed ground speed identically. No query set ⇒ default (paved) ⇒ bit-identical to before.
+    const fl::GroundFriction ground =
+        m_groundSurfaceQuery ? groundFrictionFor(m_groundSurfaceQuery(groundPos)) : fl::GroundFriction{};
+    fi.step(static_cast<float>(simDt), ctrl, payload, wind, groundElev, ground);
 
     const FlightState& fs = fi.state();
     // (Terrain-steer XZ cache moved to updateTerrainSteerCache(), run once after the integrate pass

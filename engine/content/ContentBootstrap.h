@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace fl {
 
@@ -13,6 +14,7 @@ class ContentIndex;
 class EntityTypeRegistry;
 class ILogger;
 class WeaponRegistry;
+struct AirportDef;
 struct EntityDef;
 
 namespace sensor {
@@ -27,6 +29,14 @@ struct SensorDef;
 // caller. Must run on the main thread before GameLoop::start() (the registry is read-only during
 // simulation). Returns the number of pack types successfully registered.
 uint32_t registerPackEntityDefs(AssetManager& assets, EntityTypeRegistry& registry, ILogger& log);
+
+// Loads every content-pack airport definition (#699) and APPENDS the parsed AirportDefs to `out`
+// (it collects rather than registers, because AirportRegistry::load is load-once and the caller
+// merges the builtin airfield + pack airports + the OurAirports CSV [#486] into one load()). Same
+// warn-and-skip-on-failure shape as registerPackEntityDefs. First-id-wins is enforced by the
+// registry; a pack that ships airports/*.toml is enumerated via listAssets(AssetType::Airport).
+// Main thread, before GameLoop::start(). Returns the number of airports appended.
+uint32_t registerPackAirportDefs(AssetManager& assets, std::vector<AirportDef>& out, ILogger& log);
 
 // Loads every content-pack weapon definition into `registry` (#812), the same shape as
 // registerPackEntityDefs above. Enumerates AssetManager::listAssets(AssetType::Weapon), parses each

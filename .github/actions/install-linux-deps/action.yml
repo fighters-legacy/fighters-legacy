@@ -40,7 +40,8 @@ runs:
       shell: bash
       run: |
         # libzstd-dev: engine-compress (#775) is in every build; system-preferred saves the FetchContent build.
-        pkgs="ninja-build cmake libzstd-dev libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev libxss-dev libxfixes-dev libxrender-dev libxinerama-dev libxxf86vm-dev libxkbcommon-dev libxtst-dev"
+        # libcurl4-openssl-dev: platform-http libcurl backend (#490); without it the HTTP backend is disabled.
+        pkgs="ninja-build cmake libzstd-dev libcurl4-openssl-dev libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev libxss-dev libxfixes-dev libxrender-dev libxinerama-dev libxxf86vm-dev libxkbcommon-dev libxtst-dev"
         if [ "${{ inputs.vulkan }}" = "true" ]; then
           pkgs="$pkgs libvulkan-dev glslang-tools"
         fi
@@ -54,7 +55,7 @@ runs:
           pkgs="$pkgs clang-format-22"
         fi
         if [ "${{ inputs.python_tools }}" = "true" ]; then
-          pkgs="$pkgs python3-gdal python3-numpy python3-pytest"
+          pkgs="$pkgs python3-gdal python3-numpy python3-netcdf4 python3-pytest"
         fi
         if [ "${{ inputs.lcov }}" = "true" ]; then
           pkgs="$pkgs lcov"

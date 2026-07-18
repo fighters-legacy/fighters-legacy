@@ -48,7 +48,7 @@ namespace fl {
 static void imageBarrierSimple(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
                                VkAccessFlags srcAccess, VkAccessFlags dstAccess, VkPipelineStageFlags srcStage,
                                VkPipelineStageFlags dstStage, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT,
-                               uint32_t mipLevels = 1) {
+                               uint32_t mipLevels = 1, uint32_t layerCount = 1) {
     VkImageMemoryBarrier b{};
     b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     b.oldLayout = oldLayout;
@@ -56,7 +56,7 @@ static void imageBarrierSimple(VkCommandBuffer cmd, VkImage image, VkImageLayout
     b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     b.image = image;
-    b.subresourceRange = {aspect, 0, mipLevels, 0, 1};
+    b.subresourceRange = {aspect, 0, mipLevels, 0, layerCount};
     b.srcAccessMask = srcAccess;
     b.dstAccessMask = dstAccess;
     vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &b);
@@ -103,7 +103,9 @@ bool VkResourceManager::init(VkDevice device, VkPhysicalDevice physDevice, VkIns
 
     // Descriptor pool for per-material descriptor sets.
     // 3 combined image samplers per material (base color, normal, ORM).
-    constexpr uint32_t kMaxMaterials = 256;
+    // 2048 headroom (#488): satellite terrain creates one material per resident tile, and the
+    // streamer's residency cap is ~1024 tiles — plus entity/runway materials.
+    constexpr uint32_t kMaxMaterials = 2048;
     VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxMaterials * 3};
     VkDescriptorPoolCreateInfo poolCI{};
     poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -288,8 +290,12 @@ bool VkResourceManager::uploadBuffer(VkBuffer dst, const void* src, VkDeviceSize
 }
 
 bool VkResourceManager::createGpuImage(const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t mipLevels,
-                                       VkFormat format, GpuTexture& tex) {
-    const VkDeviceSize size = static_cast<VkDeviceSize>(width) * height * 4;
+                                       VkFormat format, GpuTexture& tex, uint32_t arrayLayers) {
+    if (arrayLayers == 0)
+        arrayLayers = 1;
+    // Layer-major RGBA8: `pixels` holds arrayLayers consecutive width*height*4 blocks.
+    const VkDeviceSize size = static_cast<VkDeviceSize>(width) * height * 4 * arrayLayers;
+    tex.layerCount = arrayLayers;
 
     VkBuffer staging = VK_NULL_HANDLE;
     VmaAllocation stagingAlloc{};
@@ -306,7 +312,7 @@ bool VkResourceManager::createGpuImage(const uint8_t* pixels, uint32_t width, ui
     imageCI.imageType = VK_IMAGE_TYPE_2D;
     imageCI.extent = {width, height, 1};
     imageCI.mipLevels = mipLevels;
-    imageCI.arrayLayers = 1;
+    imageCI.arrayLayers = arrayLayers;
     imageCI.format = format;
     imageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -328,19 +334,22 @@ bool VkResourceManager::createGpuImage(const uint8_t* pixels, uint32_t width, ui
 
     imageBarrierSimple(cmd, tex.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
                        VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
+                       VK_IMAGE_ASPECT_COLOR_BIT, mipLevels, arrayLayers);
 
+    // One region covering all layers: the buffer is layer-major tightly packed, so a single copy
+    // with layerCount = arrayLayers uploads every layer (mip 0 only; array mip generation is not used
+    // by the builtin biomes, which are single-mip).
     VkBufferImageCopy region{};
     region.bufferOffset = 0;
     region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     region.imageSubresource.mipLevel = 0;
-    region.imageSubresource.layerCount = 1;
+    region.imageSubresource.layerCount = arrayLayers;
     region.imageExtent = {width, height, 1};
     vkCmdCopyBufferToImage(cmd, staging, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
     imageBarrierSimple(cmd, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
+                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels, arrayLayers);
 
     endOneShot(cmd);
     vmaDestroyBuffer(m_allocator, staging, stagingAlloc);
@@ -348,11 +357,11 @@ bool VkResourceManager::createGpuImage(const uint8_t* pixels, uint32_t width, ui
     VkImageViewCreateInfo viewCI{};
     viewCI.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewCI.image = tex.image;
-    viewCI.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewCI.viewType = arrayLayers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
     viewCI.format = format;
     viewCI.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewCI.subresourceRange.levelCount = mipLevels;
-    viewCI.subresourceRange.layerCount = 1;
+    viewCI.subresourceRange.layerCount = arrayLayers;
     if (vkCreateImageView(m_device, &viewCI, nullptr, &tex.view) != VK_SUCCESS)
         return false;
 
@@ -824,6 +833,71 @@ TextureHandle VkResourceManager::createTexture(const TextureUploadDesc& desc) {
 
     tex.alive = true;
 
+    uint32_t slot = 0;
+    if (!m_freeTextureSlots.empty()) {
+        slot = m_freeTextureSlots.back();
+        m_freeTextureSlots.pop_back();
+        m_textures[slot] = tex;
+    } else {
+        slot = static_cast<uint32_t>(m_textures.size());
+        m_textures.push_back(tex);
+    }
+    return TextureHandle{slot + 1};
+}
+
+// ---------------------------------------------------------------------------
+// createTextureArray — 2D texture array (#446). Raw-RGBA (rawLayers) or a KTX2 whose numLayers > 1,
+// transcoded to RGBA32 and uploaded layer-major (uncompressed keeps the array-upload path simple;
+// biome arrays are small). Returns m_defaultWhite on any failure.
+// ---------------------------------------------------------------------------
+TextureHandle VkResourceManager::createTextureArray(const TextureUploadDesc& desc) {
+    GpuTexture tex{};
+    uint32_t width = 0, height = 0, layers = 0;
+    std::vector<uint8_t> rgba; // layer-major RGBA8
+    const uint8_t* pixels = nullptr;
+
+    if (desc.rawLayers > 1 && desc.rawWidth > 0 && desc.rawHeight > 0) {
+        width = desc.rawWidth;
+        height = desc.rawHeight;
+        layers = desc.rawLayers;
+        const std::size_t need = static_cast<std::size_t>(width) * height * 4u * layers;
+        if (desc.bytes.size() < need)
+            return m_defaultWhite;
+        pixels = desc.bytes.data();
+    } else {
+        // KTX2 array: transcode to RGBA32, assemble the layers contiguously.
+        ktxTexture2* ktx = nullptr;
+        if (ktxTexture2_CreateFromMemory(desc.bytes.data(), desc.bytes.size(), KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,
+                                         &ktx) != KTX_SUCCESS)
+            return m_defaultWhite;
+        if (ktxTexture2_NeedsTranscoding(ktx) && ktxTexture2_TranscodeBasis(ktx, KTX_TTF_RGBA32, 0) != KTX_SUCCESS) {
+            ktxTexture_Destroy(ktxTexture(ktx));
+            return m_defaultWhite;
+        }
+        width = ktx->baseWidth;
+        height = ktx->baseHeight;
+        layers = ktx->numLayers > 0 ? ktx->numLayers : 1;
+        rgba.resize(static_cast<std::size_t>(width) * height * 4u * layers);
+        bool ok = true;
+        for (uint32_t l = 0; l < layers && ok; ++l) {
+            ktx_size_t off = 0;
+            if (ktxTexture_GetImageOffset(ktxTexture(ktx), 0, l, 0, &off) != KTX_SUCCESS) {
+                ok = false;
+                break;
+            }
+            std::memcpy(rgba.data() + static_cast<std::size_t>(l) * width * height * 4u,
+                        ktxTexture_GetData(ktxTexture(ktx)) + off, static_cast<std::size_t>(width) * height * 4u);
+        }
+        ktxTexture_Destroy(ktxTexture(ktx));
+        if (!ok || layers < 2)
+            return m_defaultWhite;
+        pixels = rgba.data();
+    }
+
+    const VkFormat fmt = desc.srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+    if (!createGpuImage(pixels, width, height, 1, fmt, tex, layers))
+        return m_defaultWhite;
+    tex.alive = true;
     uint32_t slot = 0;
     if (!m_freeTextureSlots.empty()) {
         slot = m_freeTextureSlots.back();

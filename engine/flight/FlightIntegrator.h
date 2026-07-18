@@ -5,6 +5,7 @@
 #include "flight/CentralGravityField.h"
 #include "flight/FixedWingForceModel.h"
 #include "flight/FlightModelData.h"
+#include "flight/GroundSurface.h"
 #include "flight/IGravityField.h"
 
 #include <algorithm>
@@ -92,8 +93,11 @@ class FlightIntegrator {
     //             i.e. TerrainStreamer::heightAt(dvec3). Ground contact compares it against the
     //             geodetic (MSL) altitude and snaps along the local radial up, so collision is
     //             correct anywhere on the planet (#477); 0 = sea-level (datum) floor.
+    // ground:     per-surface ground handling (#487) applied during ground contact. Default = a hard
+    //             paved surface (no extra rolling resistance), so a call omitting it is bit-identical
+    //             to before. Grass/gravel add rolling drag, so the rollout differs by surface.
     void step(float dt, const ControlInput& ctrl, const PayloadEffect& payload, const WindInfluence& wind = {},
-              float groundElev = 0.f);
+              float groundElev = 0.f, const GroundFriction& ground = {});
 
     [[nodiscard]] const FlightState& state() const {
         return m_state;

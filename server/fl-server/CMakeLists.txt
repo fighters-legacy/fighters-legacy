@@ -31,3 +31,12 @@ endif()
 # subprocess for single-player (LocalServer). It was in NEITHER platform's packaging list, which
 # means every published release has been unplayable offline. Found while doing #814.
 install(TARGETS fl-server RUNTIME DESTINATION . COMPONENT runtime)
+
+# Runtime data files read from PathDomain::Assets at startup (co-located with the binaries via
+# SDL_GetBasePath). This directory was NEVER installed, so every release shipped without it: the
+# OurAirports airport database (#486) would not load, and the bundled WMM.COF reference copy (#483)
+# was missing. Found while doing #486. Both fl-server and the game read `data/`, so it installs once
+# here (fl-server always configures, unlike the SDL/Vulkan-gated game target). COMPONENT-scoped so it
+# rides the same runtime archive and no FetchContent dep's data/ leaks in.
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/data/ DESTINATION data COMPONENT runtime
+        FILES_MATCHING PATTERN "*.csv" PATTERN "*.COF")

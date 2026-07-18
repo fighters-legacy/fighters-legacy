@@ -462,6 +462,9 @@ struct MockRenderer : public IRenderer {
     uint32_t nextMaterialId{1};
     int createMeshCount{0};
     int createTextureCount{0};
+    int createTextureArrayCount{0};             // #446 biome array uploads
+    uint32_t lastTextureArrayLayers{0};         // layerCount of the last array upload
+    int setTerrainBiomeTexturesCount{0};        // #446 set-2 biome binding
     std::vector<MaterialDesc> createdMaterials; // every MaterialDesc passed to createMaterial (#867)
     int createMaterialCount{0};
     int destroyMeshCount{0};
@@ -502,6 +505,15 @@ struct MockRenderer : public IRenderer {
     TextureHandle createTexture(const TextureUploadDesc&) override {
         ++createTextureCount;
         return TextureHandle{nextTextureId++};
+    }
+    TextureHandle createTextureArray(const TextureUploadDesc& desc) override {
+        ++createTextureArrayCount;
+        lastTextureArrayLayers = desc.rawLayers;
+        return TextureHandle{nextTextureId++};
+    }
+    void setTerrainBiomeTextures(TextureHandle, TextureHandle, uint32_t layerCount) override {
+        ++setTerrainBiomeTexturesCount;
+        lastTextureArrayLayers = layerCount;
     }
     MaterialHandle createMaterial(const MaterialDesc& desc) override {
         ++createMaterialCount;

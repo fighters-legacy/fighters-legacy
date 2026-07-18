@@ -22,6 +22,11 @@
 #include <string_view>
 #include <vector>
 
+// stb_image_write's PNG writer is compiled (STB_IMAGE_WRITE_IMPLEMENTATION) in VkResources.cpp's TU;
+// forward-declare the one symbol the screenshot readback uses so we don't pull the header (or a
+// second implementation) into this TU. stb_image_write.h wraps its API in extern "C", so match that.
+extern "C" int stbi_write_png(char const* filename, int w, int h, int comp, const void* data, int stride_in_bytes);
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
@@ -432,6 +437,8 @@ bool VkRenderer::init(IWindow* window) {
         return false;
     if (!m_resources.init(m_device, m_physicalDevice, m_instance, m_commandPool, m_graphicsQueue, m_matSetLayout))
         return false;
+    if (!createTerrainBiomeResources()) // set 2 of the forward layout (#446) — needs m_resources
+        return false;
     if (!createTonemapDescriptors())
         return false;
     if (!createBloomDescriptors())
@@ -611,6 +618,10 @@ void VkRenderer::writeFrameUBOs(const FrameScene& scene) {
     cam.view = scene.camera.view;
     cam.proj = scene.camera.proj;
     cam.worldOrigin = glm::vec4(glm::vec3(scene.camera.worldOrigin), 0.0f);
+    // Planet centre rebased into camera-relative space (CPU double, #475): the terrain shader's
+    // radial "up" is normalize(fragWorldPos - planetCenter). At Earth radius the difference is ~6.4e6 m
+    // so a float32 direction is precise to ~1e-7 — good enough for a normalized slope reference.
+    cam.planetCenter = glm::vec4(glm::vec3(scene.camera.planetCenter - scene.camera.worldOrigin), 0.0f);
     std::memcpy(pf.cameraMapped, &cam, sizeof(cam));
 
     LightUBO light{};
@@ -650,6 +661,15 @@ void VkRenderer::writeFrameUBOs(const FrameScene& scene) {
         sky.fogParams = glm::vec4(env.fogDensity, env.fogStartDist / 1000.0f, env.timeOfDay, camAltKm);
     }
     sky.qualityMode = (m_settings.skyQuality == RendererSkyQuality::LUT) ? 1u : 0u;
+    {
+        // Night sky (#484): Moon disc + geographically-oriented star field. nightFactor ramps in as
+        // the sun drops below the horizon; celestialValid gates the whole thing (0 = legacy day sky).
+        const auto& env = scene.environment;
+        sky.moonDirection = glm::vec4(env.moonDirection, env.moonAngularRadius);
+        const float nightFactor = glm::clamp((-env.sunDirection.y + 0.10f) / 0.18f, 0.0f, 1.0f);
+        sky.moonParams = glm::vec4(env.moonIllumination, nightFactor, env.celestialValid ? 1.0f : 0.0f, 0.0f);
+        sky.worldToCelestial = glm::mat4(env.worldToCelestial);
+    }
     std::memcpy(pf.skyMapped, &sky, sizeof(sky));
 }
 
@@ -774,9 +794,122 @@ void VkRenderer::endFrame() {
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
         m_framebufferResized = true;
 
+    // Screenshot readback (#909 groundwork): the swapchain image for this frame is now presented.
+    // Drain the device, copy it to a host-visible buffer, and write the PNG. Not a hot path — a stall
+    // is fine for a dev/verification capture.
+    if (!m_pendingScreenshotPath.empty()) {
+        const std::string path = std::move(m_pendingScreenshotPath);
+        m_pendingScreenshotPath.clear();
+        writeSwapchainPng(path);
+    }
+
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     ++m_framesRendered;
     ++m_totalFrames;
+}
+
+bool VkRenderer::captureScreenshot(const char* path) {
+    if (!path || !*path)
+        return false;
+    m_pendingScreenshotPath = path;
+    return true;
+}
+
+void VkRenderer::writeSwapchainPng(const std::string& path) {
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    const uint32_t w = m_swapchainExtent.width;
+    const uint32_t h = m_swapchainExtent.height;
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
+    VkImage srcImage = m_swapchainImages[m_currentImageIndex];
+
+    // Host-visible destination buffer.
+    VkBuffer buf = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = bytes;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &buf) != VK_SUCCESS)
+        return;
+    VkMemoryRequirements memReq{};
+    vkGetBufferMemoryRequirements(m_device, buf, &memReq);
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = memReq.size;
+    mai.memoryTypeIndex = findMemoryType(m_physicalDevice, memReq.memoryTypeBits,
+                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &mai, nullptr, &mem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, buf, nullptr);
+        return;
+    }
+    vkBindBufferMemory(m_device, buf, mem, 0);
+
+    // One-shot command buffer: PRESENT_SRC -> TRANSFER_SRC, copy, TRANSFER_SRC -> PRESENT_SRC.
+    VkCommandBufferAllocateInfo cbai{};
+    cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbai.commandPool = m_commandPool;
+    cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbai.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    vkAllocateCommandBuffers(m_device, &cbai, &cmd);
+    VkCommandBufferBeginInfo cbbi{};
+    cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &cbbi);
+
+    auto barrier = [&](VkImageLayout from, VkImageLayout to, VkAccessFlags srcA, VkAccessFlags dstA) {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = from;
+        b.newLayout = to;
+        b.srcAccessMask = srcA;
+        b.dstAccessMask = dstA;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = srcImage;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &b);
+    };
+    barrier(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, VK_ACCESS_TRANSFER_READ_BIT);
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {w, h, 1};
+    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &region);
+    barrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_READ_BIT, 0);
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+
+    // Map, swizzle B8G8R8A8 -> R8G8B8A8 (opaque alpha), write PNG.
+    void* mapped = nullptr;
+    if (vkMapMemory(m_device, mem, 0, bytes, 0, &mapped) == VK_SUCCESS) {
+        std::vector<uint8_t> rgba(static_cast<std::size_t>(bytes));
+        const auto* src = static_cast<const uint8_t*>(mapped);
+        const bool bgra =
+            (m_swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB || m_swapchainFormat == VK_FORMAT_B8G8R8A8_UNORM);
+        for (std::size_t i = 0; i < rgba.size(); i += 4) {
+            rgba[i + 0] = bgra ? src[i + 2] : src[i + 0];
+            rgba[i + 1] = src[i + 1];
+            rgba[i + 2] = bgra ? src[i + 0] : src[i + 2];
+            rgba[i + 3] = 255;
+        }
+        vkUnmapMemory(m_device, mem);
+        if (stbi_write_png(path.c_str(), static_cast<int>(w), static_cast<int>(h), 4, rgba.data(),
+                           static_cast<int>(w) * 4) == 0)
+            m_lastError = "screenshot: stbi_write_png failed for " + path;
+    }
+
+    vkDestroyBuffer(m_device, buf, nullptr);
+    vkFreeMemory(m_device, mem, nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -787,6 +920,18 @@ MeshHandle VkRenderer::createMesh(const MeshUploadDesc& d) {
 }
 TextureHandle VkRenderer::createTexture(const TextureUploadDesc& d) {
     return m_resources.createTexture(d);
+}
+TextureHandle VkRenderer::createTextureArray(const TextureUploadDesc& d) {
+    return m_resources.createTextureArray(d);
+}
+void VkRenderer::setTerrainBiomeTextures(TextureHandle colorArray, TextureHandle normalOrmArray, uint32_t layerCount) {
+    (void)layerCount; // the array's own layerCount is authoritative; this is advisory
+    m_biomeColorTex = colorArray;
+    m_biomeNormalOrmTex = normalOrmArray;
+    // Set once at streamer construction, but a session restart can re-upload while frames are live —
+    // drain before rewriting the single descriptor set (not a hot path).
+    vkDeviceWaitIdle(m_device);
+    writeTerrainBiomeSet();
 }
 MaterialHandle VkRenderer::createMaterial(const MaterialDesc& d) {
     return m_resources.createMaterial(d);
@@ -860,6 +1005,14 @@ void VkRenderer::shutdown() {
     }
     destroySkyResources();
     destroyGtaoResources();
+    if (m_terrainBiomePool != VK_NULL_HANDLE) { // #446
+        vkDestroyDescriptorPool(m_device, m_terrainBiomePool, nullptr);
+        m_terrainBiomePool = VK_NULL_HANDLE;
+    }
+    if (m_terrainBiomeSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_device, m_terrainBiomeSetLayout, nullptr);
+        m_terrainBiomeSetLayout = VK_NULL_HANDLE;
+    }
     if (m_perFrameSetLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(m_device, m_perFrameSetLayout, nullptr);
         m_perFrameSetLayout = VK_NULL_HANDLE;
@@ -930,6 +1083,7 @@ void VkRenderer::shutdown() {
         m_skyLayout = VK_NULL_HANDLE;
     }
     if (m_pipelineCache != VK_NULL_HANDLE) {
+        savePipelineCache(); // #446 rider: persist for faster repeat launches
         vkDestroyPipelineCache(m_device, m_pipelineCache, nullptr);
         m_pipelineCache = VK_NULL_HANDLE;
     }
@@ -1287,7 +1441,8 @@ bool VkRenderer::createSwapchain(int width, int height) {
     ci.imageColorSpace = chosen.colorSpace;
     ci.imageExtent = m_swapchainExtent;
     ci.imageArrayLayers = 1;
-    ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    // TRANSFER_SRC so the screenshot readback (#487/#909) can copy the presented image to a buffer.
+    ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     ci.preTransform = caps.currentTransform;
     ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     ci.presentMode = presentMode;
@@ -1601,6 +1756,87 @@ bool VkRenderer::createMaterialDescriptorLayout() {
         return false;
     }
     return true;
+}
+
+// Set 2: the terrain biome arrays (#446) — two sampler2DArrays (basecolor, normalORM), fragment.
+bool VkRenderer::createTerrainBiomeResources() {
+    const std::array<VkDescriptorSetLayoutBinding, 2> bindings{{
+        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+    }};
+    VkDescriptorSetLayoutCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    ci.bindingCount = static_cast<uint32_t>(bindings.size());
+    ci.pBindings = bindings.data();
+    if (vkCreateDescriptorSetLayout(m_device, &ci, nullptr, &m_terrainBiomeSetLayout) != VK_SUCCESS) {
+        m_lastError = "vkCreateDescriptorSetLayout (terrain biome) failed";
+        return false;
+    }
+
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    VkDescriptorPoolCreateInfo poolCI{};
+    poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolCI.maxSets = 1;
+    poolCI.poolSizeCount = 1;
+    poolCI.pPoolSizes = &poolSize;
+    if (vkCreateDescriptorPool(m_device, &poolCI, nullptr, &m_terrainBiomePool) != VK_SUCCESS) {
+        m_lastError = "vkCreateDescriptorPool (terrain biome) failed";
+        return false;
+    }
+    VkDescriptorSetAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = m_terrainBiomePool;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &m_terrainBiomeSetLayout;
+    if (vkAllocateDescriptorSets(m_device, &ai, &m_terrainBiomeSet) != VK_SUCCESS) {
+        m_lastError = "vkAllocateDescriptorSets (terrain biome) failed";
+        return false;
+    }
+
+    // 4-layer flat dummy arrays so the set is always valid (kBiomeLayerCount layers so the shader's
+    // vec3(uv, biomeId) sample is in range before real biome textures upload / when headless).
+    constexpr uint32_t kW = 4, kLayers = 4;
+    std::vector<uint8_t> grey(static_cast<std::size_t>(kW) * kW * 4u * kLayers, 128);
+    std::vector<uint8_t> flatN(static_cast<std::size_t>(kW) * kW * 4u * kLayers, 128); // (128,128,rough,occ)
+    for (std::size_t p = 2; p < flatN.size(); p += 4)
+        flatN[p] = 180; // roughness
+    auto rawArray = [&](const std::vector<uint8_t>& px, bool srgb) {
+        TextureUploadDesc td{};
+        td.bytes = px;
+        td.srgb = srgb;
+        td.rawWidth = kW;
+        td.rawHeight = kW;
+        td.rawLayers = kLayers;
+        return m_resources.createTextureArray(td);
+    };
+    m_biomeDummyColor = rawArray(grey, /*srgb=*/true);
+    m_biomeDummyNormalOrm = rawArray(flatN, /*srgb=*/false);
+    writeTerrainBiomeSet();
+    return true;
+}
+
+void VkRenderer::writeTerrainBiomeSet() {
+    if (m_terrainBiomeSet == VK_NULL_HANDLE)
+        return;
+    const GpuTexture* color = m_resources.getTexture(m_biomeColorTex.valid() ? m_biomeColorTex : m_biomeDummyColor);
+    const GpuTexture* norm =
+        m_resources.getTexture(m_biomeNormalOrmTex.valid() ? m_biomeNormalOrmTex : m_biomeDummyNormalOrm);
+    if (!color || !norm)
+        return;
+    const std::array<VkDescriptorImageInfo, 2> imgs{{
+        {color->sampler, color->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {norm->sampler, norm->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+    }};
+    std::array<VkWriteDescriptorSet, 2> writes{};
+    for (int i = 0; i < 2; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = m_terrainBiomeSet;
+        writes[i].dstBinding = static_cast<uint32_t>(i);
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &imgs[static_cast<std::size_t>(i)];
+    }
+    vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -1975,14 +2211,56 @@ bool VkRenderer::createPerFrameDescriptors() {
 // ---------------------------------------------------------------------------
 // Pipeline cache
 // ---------------------------------------------------------------------------
+// Per-user pipeline-cache file path (#446 rider). SDL_GetPrefPath is the same writable dir the game
+// uses for config/logs; the cache is validated by the driver, so a stale blob (driver/GPU change) is
+// safely ignored, not a correctness risk.
+static std::string pipelineCacheFilePath() {
+    char* pref = SDL_GetPrefPath("mkzsystems", "fighters-legacy");
+    std::string path = pref ? std::string(pref) + "pipeline_cache.bin" : std::string{};
+    if (pref)
+        SDL_free(pref);
+    return path;
+}
+
 bool VkRenderer::createPipelineCache() {
+    // Seed from the on-disk cache when present so repeat launches skip pipeline recompilation.
+    std::vector<uint8_t> initial;
+    if (const std::string path = pipelineCacheFilePath(); !path.empty()) {
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        if (f) {
+            const auto sz = f.tellg();
+            if (sz > 0) {
+                initial.resize(static_cast<std::size_t>(sz));
+                f.seekg(0);
+                f.read(reinterpret_cast<char*>(initial.data()), sz);
+            }
+        }
+    }
     VkPipelineCacheCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    ci.initialDataSize = initial.size();
+    ci.pInitialData = initial.empty() ? nullptr : initial.data();
     if (vkCreatePipelineCache(m_device, &ci, nullptr, &m_pipelineCache) != VK_SUCCESS) {
         m_lastError = "vkCreatePipelineCache failed";
         return false;
     }
     return true;
+}
+
+void VkRenderer::savePipelineCache() {
+    if (m_pipelineCache == VK_NULL_HANDLE)
+        return;
+    std::size_t size = 0;
+    if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, nullptr) != VK_SUCCESS || size == 0)
+        return;
+    std::vector<uint8_t> data(size);
+    if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, data.data()) != VK_SUCCESS)
+        return;
+    if (const std::string path = pipelineCacheFilePath(); !path.empty()) {
+        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+        if (f)
+            f.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(size));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2079,7 +2357,8 @@ bool VkRenderer::createForwardPipeline() {
     pushRange.size = sizeof(ForwardPushConstants);
 
     // Descriptor set layouts: set 0 = per-frame, set 1 = per-material.
-    const std::array<VkDescriptorSetLayout, 2> setLayouts{m_perFrameSetLayout, m_matSetLayout};
+    // set 0 = per-frame (camera/light/shadow), set 1 = material, set 2 = terrain biome arrays (#446).
+    const std::array<VkDescriptorSetLayout, 3> setLayouts{m_perFrameSetLayout, m_matSetLayout, m_terrainBiomeSetLayout};
 
     VkPipelineLayoutCreateInfo layoutCI{};
     layoutCI.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -3710,6 +3989,10 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         // Bind per-frame descriptor set (set 0: camera + light UBOs).
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 0, 1,
                                 &m_perFrame[m_currentFrame].descriptorSet, 0, nullptr);
+        // Set 2: terrain biome arrays (#446) — bound once for the whole opaque pass; only the terrain
+        // path in mesh.frag samples it.
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 2, 1, &m_terrainBiomeSet, 0,
+                                nullptr);
 
         // Draw each submitted RenderItem.
         for (const auto& item : m_pendingScene.renderItems) {
@@ -3734,9 +4017,11 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             pc.baseColorFactor = mat ? mat->baseColorFactor : glm::vec4(1.0f);
             pc.metallicFactor = mat ? mat->metallicFactor : 0.0f;
             pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
-            pc.shadingMode = (item.flags & kRenderFlagTerrain)          ? 1.0f
-                             : (item.flags & kRenderFlagDebugFaceColor) ? 2.0f
-                                                                        : 0.0f;
+            pc.shadingMode = (item.flags & kRenderFlagTerrain)            ? 1.0f
+                             : (item.flags & kRenderFlagDebugFaceColor)   ? 2.0f
+                             : (item.flags & kRenderFlagRunway)           ? 3.0f
+                             : (item.flags & kRenderFlagTerrainSatellite) ? 4.0f
+                                                                          : 0.0f;
             vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                sizeof(pc), &pc);
 
@@ -3853,6 +4138,8 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 0, 1,
                                     &m_perFrame[m_currentFrame].descriptorSet, 0, nullptr);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 2, 1, &m_terrainBiomeSet, 0,
+                                    nullptr); // set 2: terrain biome arrays (#446)
 
             for (uint32_t idx : transIndices) {
                 const RenderItem& item = items[idx];
@@ -3868,9 +4155,11 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
                 pc.baseColorFactor = mat ? mat->baseColorFactor : glm::vec4(1.0f);
                 pc.metallicFactor = mat ? mat->metallicFactor : 0.0f;
                 pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
-                pc.shadingMode = (item.flags & kRenderFlagTerrain)          ? 1.0f
-                                 : (item.flags & kRenderFlagDebugFaceColor) ? 2.0f
-                                                                            : 0.0f;
+                pc.shadingMode = (item.flags & kRenderFlagTerrain)            ? 1.0f
+                                 : (item.flags & kRenderFlagDebugFaceColor)   ? 2.0f
+                                 : (item.flags & kRenderFlagRunway)           ? 3.0f
+                                 : (item.flags & kRenderFlagTerrainSatellite) ? 4.0f
+                                                                              : 0.0f;
                 vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                    sizeof(pc), &pc);
                 const VkDeviceSize offset = 0;

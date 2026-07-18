@@ -32,7 +32,8 @@ static constexpr VkFormat kHdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 struct CameraUBO {
     glm::mat4 view{1.0f};
     glm::mat4 proj{1.0f};
-    glm::vec4 worldOrigin{0.0f}; // xyz = origin, w = unused
+    glm::vec4 worldOrigin{0.0f};  // xyz = origin, w = unused
+    glm::vec4 planetCenter{0.0f}; // xyz = planet centre, camera-relative (#475); w = unused
 };
 
 // GPU-side light UBO layout — matches set 0, binding 1 in mesh.frag.
@@ -49,7 +50,7 @@ struct ForwardPushConstants {
     glm::vec4 baseColorFactor{1.0f}; // 16 bytes
     float metallicFactor{0.0f};
     float roughnessFactor{1.0f};
-    float shadingMode{0.0f}; // 0 = normal PBR albedo, 1 = terrain elevation/slope, 2 = debug face colour
+    float shadingMode{0.0f}; // 0 = PBR, 1 = terrain elev/slope, 2 = debug face colour, 3 = runway markings (#487)
     float _pad{};            // total = 96
 };
 static_assert(sizeof(ForwardPushConstants) <= 128);
@@ -81,10 +82,13 @@ struct SkyUBO {
     glm::vec4 sunColor{};                           // 16 bytes  xyz = color, w = intensity
     glm::vec4 skyParams{0.40f, 0.55f, 0.75f, 0.0f}; // 16 bytes  xyz=horizonColor, w=cloudCoverage[0,1]
     glm::vec4 fogParams{0.0f, 5.0f, 12.0f, 0.0f};   // 16 bytes  x=density, y=startDist(km), z=timeOfDay(h), w=camAltKm
-    uint32_t qualityMode{0};                        // 0 = procedural, 1 = LUT
-    float _pad[3]{};                                // pad to 16-byte alignment → 144 bytes
+    glm::vec4 moonDirection{0.0f, 1.0f, 0.0f, 0.0045f}; // 16 bytes  xyz = dir toward Moon, w = angular radius (#484)
+    glm::vec4 moonParams{1.0f, 0.0f, 0.0f, 0.0f};       // 16 bytes  x=illumination, y=nightFactor, z=celestialValid
+    glm::mat4 worldToCelestial{1.0f};                   // 64 bytes  mat3 (padded) rotating a world ray -> star frame
+    uint32_t qualityMode{0};                            // 0 = procedural, 1 = LUT
+    float _pad[3]{};                                    // pad to 16-byte alignment → 240 bytes
 };
-static_assert(sizeof(SkyUBO) == 144u);
+static_assert(sizeof(SkyUBO) == 240u);
 
 // Push constants for the tonemap + FXAA + bloom + AO composite pass.
 struct TonemapPush {
@@ -154,6 +158,8 @@ class VkRenderer : public IRenderer {
     // ── Resource methods ───────────────────────────────────────────────────
     MeshHandle createMesh(const MeshUploadDesc& desc) override;
     TextureHandle createTexture(const TextureUploadDesc& desc) override;
+    TextureHandle createTextureArray(const TextureUploadDesc& desc) override;
+    void setTerrainBiomeTextures(TextureHandle colorArray, TextureHandle normalOrmArray, uint32_t layerCount) override;
     MaterialHandle createMaterial(const MaterialDesc& desc) override;
     MaterialHandle getMeshMaterial(MeshHandle h) const override;
     void destroyMesh(MeshHandle h) override;
@@ -173,6 +179,7 @@ class VkRenderer : public IRenderer {
     void setOverlayLines(std::span<const std::string_view> lines) override;
     void submitOverlayElements(std::span<const HudElement> elements) override;
     void setConsoleElements(std::span<const HudElement> elements) override;
+    bool captureScreenshot(const char* path) override;
 
   private:
     // ── Core Vulkan objects ────────────────────────────────────────────────
@@ -215,6 +222,9 @@ class VkRenderer : public IRenderer {
     bool createPerFrameDescriptorLayout();
     bool createShadowDescriptorLayout();
     bool createMaterialDescriptorLayout();
+    bool createTerrainBiomeResources(); // set 2: biome basecolor + normalORM arrays (#446)
+    void writeTerrainBiomeSet();        // (re)writes m_terrainBiomeSet from the current biome handles
+    void savePipelineCache();           // #446 rider: persist the pipeline cache to the pref dir
     bool createPerFrameDescriptors();
 
     // Write camera + light + shadow UBO data for the current frame.
@@ -349,6 +359,16 @@ class VkRenderer : public IRenderer {
 
     // ── Per-material descriptor set layout (set 1: base color + normal + ORM) ──
     VkDescriptorSetLayout m_matSetLayout{VK_NULL_HANDLE};
+    // Terrain biome arrays (#446): set 2 of the forward layout — two sampler2DArrays (basecolor,
+    // normalORM). Bound for every forward draw; only the terrain path in mesh.frag samples it. A
+    // 4-layer dummy keeps the set valid before real biome textures upload (headless never uploads).
+    VkDescriptorSetLayout m_terrainBiomeSetLayout{VK_NULL_HANDLE};
+    VkDescriptorPool m_terrainBiomePool{VK_NULL_HANDLE};
+    VkDescriptorSet m_terrainBiomeSet{VK_NULL_HANDLE};
+    TextureHandle m_biomeColorTex{};
+    TextureHandle m_biomeNormalOrmTex{};
+    TextureHandle m_biomeDummyColor{};
+    TextureHandle m_biomeDummyNormalOrm{};
 
     // ── Per-frame UBO buffers + descriptor sets ───────────────────────────
     // Uses raw Vulkan memory (not VMA): small host-visible buffers that change
@@ -494,6 +514,8 @@ class VkRenderer : public IRenderer {
     IWindow* m_iWindow{nullptr};
     std::string m_shaderDir;
     mutable std::string m_lastError;
+    std::string m_pendingScreenshotPath;             // #909: capture the next presented frame to this PNG when set
+    void writeSwapchainPng(const std::string& path); // reads the just-presented swapchain image → PNG
     std::string m_gpuInfo;
 
     // ── Per-frame stats ───────────────────────────────────────────────────

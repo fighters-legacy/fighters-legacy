@@ -26,6 +26,10 @@ layout(location = 1) out vec3  fragWorldNormal;
 layout(location = 2) out vec3  fragWorldTangent;
 layout(location = 3) out float fragTangentHandedness;
 layout(location = 4) out vec2  fragUV;
+// Raw (untransformed) tangent — for terrain (#475) this attribute is not a tangent but packed data:
+// .x = WorldCover class, .y = normalized elevation, .zw = spherical detail coordinate (metres). It
+// must reach the fragment shader unmodified (no model rotation, no normalize), so pass it raw here.
+layout(location = 5) out vec4  fragRawTangent;
 
 void main() {
     // Camera-relative rendering: push.model already encodes the camera-relative transform
@@ -42,4 +46,5 @@ void main() {
     fragWorldTangent      = normalize(mat3(push.model) * inTangent.xyz);
     fragTangentHandedness = inTangent.w;
     fragUV                = inUV;
+    fragRawTangent        = inTangent;
 }

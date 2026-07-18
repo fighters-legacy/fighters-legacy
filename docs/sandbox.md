@@ -368,6 +368,8 @@ Pass `--connect` to join a remote `fl-server` instead of spawning a local single
 | `--operator-password <pw>` | Operator password for admin console commands on the remote server. Enables the in-game console commands (`spawn`, `kill`, `tp`, etc.) over the network. Takes precedence over the env var and user.toml. |
 | `--mission <id>` | **Skip the menu** and launch straight into a single-player session with this mission — any builtin id (`builtin:sandbox`, `builtin:shape-gallery`) or pack mission stem. The id is forwarded to the embedded fl-server exactly as Instant Action forwards `builtin:sandbox`. |
 | `--auto` | **Skip the menu** and enter the session the other flags describe: Free Flight alone, Join Server with `--connect` (composes with `--observer`). |
+| `--screenshot <path>` | Write one PNG to `<path>` a few seconds into the Flight session, then exit — the in-engine capture (#909; no external screenshot tool needed). Pair with `--auto`/`--mission` for an unattended shot. |
+| `--screenshot-frames <N>` | Frames after Flight starts before the `--screenshot` capture fires (default 600 ≈ 10 s at 60 fps) — raise it to let terrain/airports stream in first. |
 
 To avoid exposing the password in the process listing, use the `FL_OPERATOR_PASSWORD` environment variable instead of the CLI flag. Merge precedence: `--operator-password` CLI arg > `FL_OPERATOR_PASSWORD` env var > `[client].operator_password` in user.toml.
 

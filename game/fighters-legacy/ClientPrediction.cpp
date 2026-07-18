@@ -8,7 +8,9 @@
 #include "flight/FlightModelData.h"
 #include "flight/Geodetic.h" // kEarthRotationRate (#482)
 #include "flight/StallBuffet.h"
+#include "render/SurfaceType.h" // groundFrictionFor (#487)
 #include "weather/Turbulence.h"
+#include "weather/WindProfile.h" // altitude wind interp (#489)
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -150,10 +152,17 @@ void ClientPrediction::stepIntegrator(const BufferedInput& bi, const Environment
     ctrl.rudder = bi.rudder;
     ctrl.afterburner = (bi.buttons & 0x02u) != 0;
 
+    // Altitude wind (#489): interpolate the broadcast profile at the predicted entity's altitude with
+    // the SAME shared code the server runs, so a high-flying aircraft is predicted in the wind it
+    // actually flies in. Falls back to the datum scalar when no profile is present (byte-identical).
+    const auto& predPos = m_integrator->state().pos_world;
+    const float altM = static_cast<float>(
+        windAltitudeM(glm::dvec3(predPos[0], predPos[1], predPos[2]), static_cast<double>(m_planetRadiusKm) * 1000.0));
+    const glm::vec2 wprof = windAtAltitude(env, altM);
     WindInfluence wind;
-    wind.wind_world[0] = env.windX;
+    wind.wind_world[0] = wprof.x;
     wind.wind_world[1] = 0.f;
-    wind.wind_world[2] = env.windZ;
+    wind.wind_world[2] = wprof.y;
 
     // Weather turbulence (#426): reproduced EXACTLY from the amplitude the server broadcasts in
     // MsgWeatherState. The server's turbulence was always a deterministic function of
@@ -175,11 +184,14 @@ void ClientPrediction::stepIntegrator(const BufferedInput& bi, const Environment
         wind.turbulence_body[2] += buffet[2];
     }
 
-    const float groundElev =
-        m_heightQuery ? m_heightQuery(glm::dvec3{m_integrator->state().pos_world[0], m_integrator->state().pos_world[1],
-                                                 m_integrator->state().pos_world[2]})
-                      : 0.f;
-    m_integrator->step(kPredTickDt, ctrl, m_payload, wind, groundElev);
+    const glm::dvec3 groundPos{m_integrator->state().pos_world[0], m_integrator->state().pos_world[1],
+                               m_integrator->state().pos_world[2]};
+    const float groundElev = m_heightQuery ? m_heightQuery(groundPos) : 0.f;
+    // Per-surface rolling resistance (#487), the same groundFrictionFor table the server applies, so
+    // the predicted rollout matches. Paved default when no surface query is wired.
+    const fl::GroundFriction ground =
+        m_surfaceQuery ? groundFrictionFor(m_surfaceQuery(groundPos)) : fl::GroundFriction{};
+    m_integrator->step(kPredTickDt, ctrl, m_payload, wind, groundElev, ground);
 }
 
 void ClientPrediction::onInput(const MsgClientInput& msg, const EnvironmentState& env) {

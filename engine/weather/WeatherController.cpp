@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "weather/WeatherController.h"
 
-#include "flight/LocalFrame.h" // enuBasis for the geographic sun (#481)
+#include "flight/LocalFrame.h"      // enuBasis for the geographic sun (#481)
+#include "weather/CelestialFrame.h" // sidereal time + equatorial->world (#484)
+#include "weather/LunarPosition.h"  // Moon ephemeris (#484)
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace fl {
 
@@ -139,6 +143,61 @@ void WeatherController::setWind(float headingDeg, float speedMs) {
         m_windHeadingDeg += 360.f;
     m_windSpeedMs = speedMs;
     m_windMissionSet = true;
+    clearWindProfile(); // a flat mission wind overrides any altitude profile
+}
+
+void WeatherController::clearWindProfile() {
+    m_windProfileCount = 0;
+}
+
+void WeatherController::setWindProfile(const std::vector<WindProfileMetKnot>& knots) {
+    // Convert each met knot (FROM heading) to a steady world-frame vector once, sort by altitude,
+    // and cap at the wire/POD limit. Empty -> clear.
+    std::vector<WindProfileStored> tmp;
+    tmp.reserve(knots.size());
+    for (const auto& k : knots) {
+        const float rad = glm::radians(k.headingDeg);
+        // Blowing direction = negated FROM direction (matches windX()/windZ()).
+        tmp.push_back({k.altM, -std::sin(rad) * k.speedMs, -std::cos(rad) * k.speedMs});
+    }
+    std::sort(tmp.begin(), tmp.end(),
+              [](const WindProfileStored& a, const WindProfileStored& b) { return a.altM < b.altM; });
+    m_windProfileCount = static_cast<int>(std::min<std::size_t>(tmp.size(), EnvironmentState::kWindProfileMaxKnots));
+    for (int i = 0; i < m_windProfileCount; ++i)
+        m_windProfile[i] = tmp[static_cast<std::size_t>(i)];
+    if (m_windProfileCount > 0)
+        m_windMissionSet = true; // like setWind: preset changes don't clobber a set profile
+}
+
+glm::vec2 WeatherController::windAtAltitude(float altM) const noexcept {
+    if (m_windProfileCount <= 0)
+        return glm::vec2(windX(), windZ());
+    // Gust magnitude (m/s) added along each knot's own wind direction — the same oscillator the datum
+    // scalar folds in, so the surface knot tracks windX()/windZ() when authored to match.
+    const float gust = m_gustAmplitude * std::sin(m_gustPhase);
+    auto fold = [&](const WindProfileStored& k) -> glm::vec2 {
+        const float mag = std::sqrt(k.windX * k.windX + k.windZ * k.windZ);
+        if (mag < 1e-4f)
+            return glm::vec2(k.windX, k.windZ);
+        const float ux = k.windX / mag, uz = k.windZ / mag;
+        return glm::vec2(k.windX + gust * ux, k.windZ + gust * uz);
+    };
+    if (altM <= m_windProfile[0].altM)
+        return fold(m_windProfile[0]);
+    const int last = m_windProfileCount - 1;
+    if (altM >= m_windProfile[last].altM)
+        return fold(m_windProfile[last]);
+    for (int i = 0; i < last; ++i) {
+        const auto& a = m_windProfile[i];
+        const auto& b = m_windProfile[i + 1];
+        if (altM >= a.altM && altM <= b.altM) {
+            const float span = b.altM - a.altM;
+            const float t = (span > 1e-6f) ? (altM - a.altM) / span : 0.0f;
+            const glm::vec2 fa = fold(a), fb = fold(b);
+            return fa + (fb - fa) * t;
+        }
+    }
+    return fold(m_windProfile[last]);
 }
 
 void WeatherController::advance(double simDt) {
@@ -235,6 +294,19 @@ EnvironmentState WeatherController::computeEnvironment() const {
     env.windX = windX();
     env.windZ = windZ();
     env.turbulenceAmp = m_turbulenceAmp; // #426: broadcast so the client reproduces turbulence exactly
+    // Altitude wind profile (#489): fill the gust-folded per-knot vectors so the client interpolates
+    // the same wind by altitude. The surface knot also becomes the datum windX/windZ (what an old
+    // client without the TLV sees), so the two representations agree at ground level.
+    env.windProfileCount = static_cast<uint8_t>(m_windProfileCount);
+    for (int i = 0; i < m_windProfileCount; ++i) {
+        const glm::vec2 w = windAtAltitude(m_windProfile[i].altM);
+        env.windProfile[i] = {m_windProfile[i].altM, w.x, w.y};
+    }
+    if (m_windProfileCount > 0) {
+        const glm::vec2 surface = windAtAltitude(m_windProfile[0].altM);
+        env.windX = surface.x;
+        env.windZ = surface.y;
+    }
     return env;
 }
 
@@ -264,6 +336,18 @@ void WeatherController::applyGeographicSun(EnvironmentState& env, double jd, glm
     env.sunDirection = glm::normalize(basis * sunDirectionEnu(a));
     // Light the scene from the TRUE local solar elevation, not the planar world-Y proxy.
     applySunLighting(env, static_cast<float>(std::sin(a.elevationRad)));
+}
+
+void WeatherController::applyGeographicCelestial(EnvironmentState& env, double jd, glm::dvec3 observerPos, double R) {
+    const LatLonAlt lla = worldToGeodetic(observerPos.x, observerPos.y, observerPos.z, R);
+    const double lst = localSiderealTimeRad(jd, lla.lon_rad);
+
+    const MoonEquatorial moon = moonEquatorial(jd);
+    env.moonDirection = equatorialToWorld(moon.raRad, moon.decRad, lla.lat_rad, lst, observerPos, R);
+    env.moonAngularRadius = static_cast<float>(moonAngularRadiusRad(moon.distanceKm));
+    env.moonIllumination = static_cast<float>(moon.illuminatedFraction);
+    env.worldToCelestial = worldToCelestial(lla.lat_rad, lst, observerPos, R);
+    env.celestialValid = true;
 }
 
 } // namespace fl

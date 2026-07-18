@@ -103,6 +103,11 @@ struct TextureUploadDesc {
     // albedo/normal/ORM sampling path runs with no content pack. 0 = decode `bytes` as KTX2 or PNG.
     uint32_t rawWidth{0};
     uint32_t rawHeight{0};
+    // 2D texture-ARRAY upload (#446): when rawLayers > 1, the raw-RGBA path treats `bytes` as
+    // rawLayers concatenated rawWidth*rawHeight*4 layers (layer-major) and builds a VK_IMAGE_VIEW_TYPE
+    // _2D_ARRAY. 0/1 = a plain 2D texture. Used by the biome terrain arrays' builtin fallback; a KTX2
+    // array (numLayers > 1) is detected from the container, so this field is for the raw path.
+    uint32_t rawLayers{0};
 };
 
 // ---------------------------------------------------------------------------
@@ -155,6 +160,10 @@ struct CameraView {
     glm::mat4 view{1.0f};
     glm::mat4 proj{1.0f};
     glm::dvec3 worldOrigin{};
+    // World-space planet centre ({0,-R,0} for the spherical Earth), for the terrain shader's radial
+    // "up" (#475). Set by SceneRenderer from the terrain streamer's baked radius; {0,0,0} default is
+    // harmless when no terrain sphere is present (terrain shading is the only consumer).
+    glm::dvec3 planetCenter{};
 };
 
 // ---------------------------------------------------------------------------
@@ -173,6 +182,9 @@ static constexpr uint32_t kRenderFlagDamaged = 1u << 0;        // use _b damage-
 static constexpr uint32_t kRenderFlagShadowOnly = 1u << 1;     // depth pass only
 static constexpr uint32_t kRenderFlagTerrain = 1u << 2;        // apply elevation/slope shading in the forward pass
 static constexpr uint32_t kRenderFlagDebugFaceColor = 1u << 3; // per-face debug colour (builtin placeholder mesh)
+static constexpr uint32_t kRenderFlagRunway = 1u << 4; // paved runway: procedural markings in the forward pass (#487)
+static constexpr uint32_t kRenderFlagTerrainSatellite =
+    1u << 5; // terrain tile with a satellite albedo texture (#488): sample baseColorTex, not the biomes
 
 // ---------------------------------------------------------------------------
 // A single draw call submitted to the renderer each frame.
@@ -204,6 +216,28 @@ struct EnvironmentState {
                                // feeds it to weatherTurbulence() to reproduce the server's per-tick turbulence
     bool isSnowPrecipitation{
         false}; // true when server preset is Snow or Blizzard; set by WeatherController::applyPresetToEnv
+
+    // Altitude wind profile (#489): world-frame wind (m/s) at up to kWindProfileMaxKnots altitudes,
+    // ascending. count == 0 means "no profile" — use the datum-level windX/windZ scalar above. Set on
+    // the server from the mission/theater profile and mirrored to the client via the MsgWeatherState
+    // TLV; both sides interpolate with the SAME pure code (WindProfile.h) so prediction stays in parity.
+    static constexpr int kWindProfileMaxKnots = 8;
+    struct WindKnot {
+        float altM{0.0f};
+        float windX{0.0f};
+        float windZ{0.0f};
+    };
+    uint8_t windProfileCount{0};
+    WindKnot windProfile[kWindProfileMaxKnots]{};
+
+    // Night sky (#484), all set by WeatherController::applyGeographicCelestial (client-side, from the
+    // shared UTC clock + the camera's lat/lon). Consumed by the sky shader for the Moon disc + the
+    // geographically-oriented star field. celestialValid == false leaves the legacy day sky untouched.
+    glm::vec3 moonDirection{0.0f, 1.0f, 0.0f}; // world-space, points toward the Moon
+    float moonAngularRadius{0.0045f};          // radians (~0.26 deg)
+    float moonIllumination{1.0f};              // [0,1]; 0 = new, 1 = full (disc phase is geometric)
+    glm::mat3 worldToCelestial{1.0f};          // rotates a world ray into the fixed star frame
+    bool celestialValid{false};
 };
 
 // ---------------------------------------------------------------------------

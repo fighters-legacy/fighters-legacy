@@ -6,12 +6,15 @@
 // only colours pixels where no geometry was drawn.
 
 layout(set = 0, binding = 0) uniform SkyUBO {
-    mat4 invViewProj;   // inverse of (proj * view), for ray reconstruction
-    vec4 sunDirection;  // xyz = world-space direction toward sun
-    vec4 sunColor;      // xyz = color, w = intensity
-    vec4 skyParams;     // xyz = horizonColor, w = cloudCoverage [0=clear .. 1=full storm]
-    vec4 fogParams;     // x = density, y = startDist(km), z = timeOfDay(h), w = cameraAltKm
-    uint qualityMode;   // 0 = procedural, 1 = atmospheric (richer Rayleigh/Mie)
+    mat4 invViewProj;     // inverse of (proj * view), for ray reconstruction
+    vec4 sunDirection;    // xyz = world-space direction toward sun
+    vec4 sunColor;        // xyz = color, w = intensity
+    vec4 skyParams;       // xyz = horizonColor, w = cloudCoverage [0=clear .. 1=full storm]
+    vec4 fogParams;       // x = density, y = startDist(km), z = timeOfDay(h), w = cameraAltKm
+    vec4 moonDirection;   // xyz = world dir toward Moon, w = angular radius (#484)
+    vec4 moonParams;      // x = illumination, y = nightFactor, z = celestialValid (0/1)
+    mat4 worldToCelestial;// rotates a world ray into the fixed star frame (#484)
+    uint qualityMode;     // 0 = procedural, 1 = atmospheric (richer Rayleigh/Mie)
 } push;
 
 layout(location = 0) in vec2 texCoord; // from tonemap.vert: NDC xy remapped to [0,1]
@@ -45,6 +48,64 @@ float fbm(vec2 p) {
         a *= 0.5;
     }
     return v;
+}
+
+// ---------------------------------------------------------------------------
+// Night sky (#484): a procedural star field fixed on the celestial sphere, and the Moon disc with a
+// geometric phase. The stars are procedural (not a real catalogue) but their ORIENTATION is real —
+// they are looked up in the celestial frame (worldToCelestial), so the whole field turns about the
+// pole through the night and the pole sits at an altitude equal to the observer's latitude.
+// ---------------------------------------------------------------------------
+vec3 hash33(vec3 p) {
+    p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
+             dot(p, vec3(269.5, 183.3, 246.1)),
+             dot(p, vec3(113.5, 271.9, 124.6)));
+    return fract(sin(p) * 43758.5453);
+}
+
+// One star layer: cells of size 1/scale on the unit celestial sphere; `density` of them hold a star.
+float starLayer(vec3 dir, float scale, float density, float size) {
+    vec3 g = dir * scale;
+    vec3 id = floor(g);
+    vec3 rnd = hash33(id);
+    if (rnd.z >= density) return 0.0;
+    vec3 center = id + 0.5 + (rnd - 0.5) * 0.7;
+    float d = length(g - center);
+    float s = smoothstep(size, 0.0, d);
+    return s * (0.35 + 0.65 * rnd.x); // brightness variety
+}
+
+// Moon disc lit by the Sun. viewDir + moonDir are world-space unit vectors; the phase falls out of
+// the geometry (the lit limb faces the Sun), so no phase scalar is needed for the shape.
+vec3 moonDisc(vec3 viewDir) {
+    vec3 moonDir = normalize(push.moonDirection.xyz);
+    float angRad = max(push.moonDirection.w, 1e-4);
+    float cosSep = dot(viewDir, moonDir);
+    if (cosSep < cos(angRad * 1.3)) return vec3(0.0);
+
+    // Local disc basis at the Moon direction.
+    vec3 right = cross(vec3(0.0, 1.0, 0.0), moonDir);
+    if (dot(right, right) < 1e-6) right = vec3(1.0, 0.0, 0.0);
+    right = normalize(right);
+    vec3 up = cross(moonDir, right);
+
+    // Disc coordinates in [-1,1] (small-angle projection).
+    vec3 off = viewDir - moonDir * cosSep;
+    float u = dot(off, right) / angRad;
+    float v = dot(off, up) / angRad;
+    float r2 = u * u + v * v;
+    if (r2 > 1.0) return vec3(0.0);
+
+    // Reconstruct the sphere surface normal at this point (near hemisphere faces the viewer).
+    float z = sqrt(max(0.0, 1.0 - r2));
+    vec3 normal = normalize(right * u + up * v - moonDir * z);
+    float lambert = max(0.0, dot(normal, normalize(push.sunDirection.xyz)));
+
+    vec3 albedo = vec3(0.86, 0.86, 0.82);
+    float lit = pow(lambert, 0.85);
+    float edge = smoothstep(1.0, 0.92, r2); // soft limb
+    // Faint earthshine so the unlit disc is a dim circle, not a hole.
+    return albedo * (lit + 0.015) * edge;
 }
 
 void main() {
@@ -121,6 +182,11 @@ void main() {
         0.0, 1.0);
     sky = mix(sky, horizon, clamp(baseHaze + fogFactor * 0.45, 0.0, 1.0));
 
+    // Night darkening (#484): fade the daylit sky toward a dark night sky as the sun sets, so stars
+    // and the Moon have a dark backdrop. Above ~3.5° sun elevation this is a no-op (dayFactor == 1).
+    float dayFactor = smoothstep(-0.12, 0.06, push.sunDirection.y);
+    sky *= mix(0.02, 1.0, dayFactor);
+
     // Sun disc + two-tier corona — attenuated through cloud cover.
     // smoothstep(0.9997, 1.0) ≈ 1.4° half-angle — a sharp disc rather than a wide blob.
     float sunDot   = dot(viewDir, normalize(push.sunDirection.xyz));
@@ -128,6 +194,23 @@ void main() {
     float sunGlow1 = pow(max(0.0, sunDot), 16.0) * 0.20 * (1.0 - cloudCoverage * 0.90); // tight corona
     float sunGlow2 = pow(max(0.0, sunDot), 3.0) * 0.015 * (1.0 - cloudCoverage * 0.70); // wide scatter
     sky += push.sunColor.xyz * push.sunColor.w * (sunDisc + sunGlow1 + sunGlow2);
+
+    // Stars + Moon (#484) — only when the celestial frame is valid and the sun is low. Stars fade
+    // with cloud cover and near/below the horizon; the Moon is drawn at its true position/phase.
+    float nightFactor  = push.moonParams.y;
+    if (push.moonParams.z > 0.5 && nightFactor > 0.001) {
+        float clear = 1.0 - cloudCoverage;
+        if (upDot > -0.05) {
+            vec3 celDir = mat3(push.worldToCelestial) * viewDir;
+            float stars = starLayer(celDir, 130.0, 0.07, 0.55) * 0.8
+                        + starLayer(celDir, 210.0, 0.05, 0.45) * 0.6
+                        + starLayer(celDir, 320.0, 0.03, 0.40) * 0.4;
+            stars *= clear * nightFactor * smoothstep(-0.02, 0.14, upDot);
+            sky += vec3(stars) * vec3(0.9, 0.92, 1.0);
+        }
+        // The Moon disc is added regardless of horizon test (it may sit low); its own disc math clips.
+        sky += moonDisc(viewDir) * (0.35 + 0.65 * nightFactor) * (1.0 - cloudCoverage * 0.9);
+    }
 
     outColor = vec4(sky, 1.0);
 }

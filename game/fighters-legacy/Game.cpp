@@ -46,6 +46,7 @@
 #include "firstrun/FirstRun.h"
 #include "flight/Atmosphere.h"
 #include "flight/Geodetic.h"
+#include "http/CurlHttpClientFactory.h" // createHttpClient (#490)
 #include "input/AxisConfig.h"
 #include "input/InputBindings.h"
 #include "mission/MissionParser.h"
@@ -85,8 +86,12 @@
 #include "flight/BuiltinFlightModel.h"
 #include "flight/FlightModelParser.h"
 #include "manual/AircraftManual.h"
+#include "render/RunwaySurfaceMap.h"
 #include "sensor/SensorDefParser.h"
 #include "weapon/WeaponRegistry.h"
+#include "world/AirportBootstrap.h"
+#include "world/AirportRegistry.h"
+#include "world/BuiltinAirport.h"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -298,6 +303,10 @@ struct GameServices {
     fl::CameraController cameraController;
     std::unique_ptr<fl::SceneRenderer> sceneRenderer;
     std::unique_ptr<fl::TerrainStreamer> terrainStreamer;
+    // Runway airports (#486): loaded from the same bundled data as the server so the runway
+    // terrain-flatten agrees on both ends. Held via unique_ptr because AirportRegistry is
+    // non-copyable/non-movable; rebuilt on each session's MsgConnectAck.
+    std::unique_ptr<fl::AirportRegistry> airportRegistry;
     SubtitleQueue subtitleQueue;
     MusicManager musicManager;
     fl::SfxManager sfxManager;           // positional weapon SFX (#631)
@@ -317,6 +326,10 @@ struct GameServices {
     // with that mission); `--auto` alone enters Free Flight, or Join Server when --connect is set.
     bool autoStart{false};
     std::string autoStartMission; // mission id for --mission; empty = Free Flight / Join Server
+    // Automated frame capture (#909 groundwork): --screenshot <path> writes one PNG this many frames
+    // after the Flight session starts, then quits — the reliable in-engine visual-verification path.
+    std::string screenshotPath;
+    int screenshotFrames{600}; // ~10 s at 60 fps: enough for terrain + airports to stream in
 
     // HUD / overlays
     EnvironmentState env;
@@ -476,6 +489,10 @@ bool Game::initPlatform(int argc, char** argv) {
             d.services.operatorPassword = argv[i + 1];
         else if (std::strcmp(argv[i], "--aircraft") == 0)
             d.services.requestedEntityType = argv[i + 1]; // request a specific type; server clamps (#834)
+        else if (std::strcmp(argv[i], "--screenshot") == 0)
+            d.services.screenshotPath = argv[i + 1];
+        else if (std::strcmp(argv[i], "--screenshot-frames") == 0)
+            d.services.screenshotFrames = std::atoi(argv[i + 1]);
         else if (std::strcmp(argv[i], "--mission") == 0) {
             // Launch straight into a single-player session with this mission — the id is
             // forwarded to the embedded fl-server exactly as Instant Action passes builtin:sandbox.
@@ -555,6 +572,14 @@ bool Game::initWindowAndRenderer() {
         return false;
     }
     d.services.p.asyncFilesystem = std::move(asyncFs);
+
+    // HTTP client (#490) for content downloads — null when built without libcurl (lean/dev builds);
+    // service()d each frame beside the async filesystem. The first-run content flow consumes it.
+    d.services.p.httpClient = createHttpClient(d.services.rawLogger);
+    if (d.services.p.httpClient && !d.services.p.httpClient->init()) {
+        d.services.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__, "HTTP client init failed; downloads disabled");
+        d.services.p.httpClient.reset();
+    }
 
     d.services.resizeHandler.r = d.services.p.renderer.get();
     d.services.p.window->setEventHandler(&d.services.resizeHandler);
@@ -752,6 +777,9 @@ void Game::initGameSystems() {
         std::make_unique<fl::TerrainStreamer>(fl::builtinWorldTerrainManifest(), *d.services.assets,
                                               *d.services.p.asyncFilesystem, d.services.p.renderer.get());
     d.services.sceneRenderer->setTerrainStreamer(d.services.terrainStreamer.get());
+    // Drop last session's airport registry so the next MsgConnectAck rebuilds it against the fresh
+    // terrain streamer + this session's planet radius (#486; the height modifier is re-wired there).
+    d.services.airportRegistry.reset();
 
     d.services.sceneRenderer->setParticleSystem(
         &d.services.particleSystem,
@@ -1232,6 +1260,11 @@ void Game::run() {
         // MsgConnectAck (assignedEntityGen != 0): tiles bake the planet radius at
         // generation time, so updating earlier would bake Earth-radius tiles during
         // Loading and immediately invalidate them on a non-Earth server.
+        // Drain HTTP completions every frame (content downloads run at the menu too, not just
+        // in-session). Null when built without libcurl (#490).
+        if (d.services.p.httpClient)
+            d.services.p.httpClient->service();
+
         if (inSession) {
             d.services.p.asyncFilesystem->service();
             // A pilot is "ready" once its ConnectAck assigns an entity (gen != 0). An observer (#859)
@@ -1255,6 +1288,37 @@ void Game::run() {
                     // Camera "up" = radial direction on the planet, so the horizon stays
                     // level far from the origin.
                     d.services.camInput.setPlanetRadius(radiusM);
+
+                    // Airport registry + runway terrain flattening (#486). Built once per session from
+                    // the SAME bundled data the server used (builtin airfield + pack airports + the
+                    // OurAirports CSV), at the server's planet radius, so heightAt() flattens
+                    // identically on both ends — the physics floor the client predicts and the terrain
+                    // it renders both match the server's. All CSV airports carry explicit elevations
+                    // and the builtin airfield is fixed, so no terrain priming is needed at load.
+                    if (!d.services.airportRegistry) {
+                        d.services.airportRegistry = std::make_unique<fl::AirportRegistry>();
+                        std::vector<fl::AirportDef> airportDefs;
+                        airportDefs.push_back(fl::builtinAirfield());
+                        fl::registerPackAirportDefs(*d.services.assets, airportDefs, *d.services.p.logger);
+                        for (auto& ad : fl::loadOrImportAirports(*d.services.p.filesystem, *d.services.p.logger))
+                            airportDefs.push_back(std::move(ad));
+                        auto* terrain = d.services.terrainStreamer.get();
+                        d.services.airportRegistry->load(std::move(airportDefs), radiusM,
+                                                         [terrain](glm::dvec3 pos) { return terrain->heightAt(pos); });
+                        fl::AirportRegistry* reg = d.services.airportRegistry.get();
+                        d.services.terrainStreamer->setHeightModifier(
+                            [reg](glm::dvec3 pos, double rawH) { return reg->flattenedHeight(pos, rawH); },
+                            [reg](glm::dvec3 centre, double radM) { return reg->regionHasRunway(centre, radM); });
+                        // Runway surface typing (#487): the same override the server uses, so the
+                        // rendered runway and the predicted rollout agree on the surface.
+                        d.services.terrainStreamer->setSurfaceOverride(
+                            [reg](glm::dvec3 pos) -> std::optional<fl::SurfaceType> {
+                                const auto s = reg->runwaySurfaceAt(pos);
+                                return s ? std::optional<fl::SurfaceType>(fl::surfaceTypeForRunway(*s)) : std::nullopt;
+                            });
+                        // Wire the airport registry into the scene renderer so it draws the runways.
+                        d.services.sceneRenderer->setAirportRegistry(reg);
+                    }
 
                     if (observer) {
                         // Ghost camera (#859): there is no ownship to predict, so ClientPrediction is
@@ -1301,6 +1365,13 @@ void Game::run() {
                                                    d.session.clientHandler->assignedEntityIdx,
                                                    d.session.clientHandler->assignedEntityGen,
                                                    d.session.clientHandler->planetRadiusKm());
+                        // Per-surface rolling resistance in prediction (#487): the same
+                        // TerrainStreamer surfaceTypeAt (with the runway override) the server reads,
+                        // so a rollout on grass vs concrete predicts in parity.
+                        d.services.prediction.setSurfaceQuery([&d](glm::dvec3 pos) {
+                            return d.services.terrainStreamer ? d.services.terrainStreamer->surfaceTypeAt(pos)
+                                                              : fl::SurfaceType::Unknown;
+                        });
                     }
 
                     d.session.connectAckApplied = true;
@@ -1379,6 +1450,9 @@ void Game::run() {
             if (const double utcJd = d.session.clientHandler->utcJulianDay(); utcJd > 0.0) {
                 const double planetR = static_cast<double>(d.session.clientHandler->planetRadiusKm()) * 1000.0;
                 fl::WeatherController::applyGeographicSun(d.services.env, utcJd, cam.worldOrigin, planetR);
+                // Night sky (#484): Moon + geographically-oriented stars for this observer. Must
+                // follow the sun call (the night factor keys off env.sunDirection).
+                fl::WeatherController::applyGeographicCelestial(d.services.env, utcJd, cam.worldOrigin, planetR);
             }
 
             updateAudioListener(*d.services.p.audio, cam, playerEntry ? playerEntry->velocity : glm::vec3{});
@@ -1437,6 +1511,17 @@ void Game::run() {
         updatePerfOverlay(*d.services.gameConsole, *d.services.p.renderer, d.services.perfOverlay,
                           d.services.renderBridge, *d.services.userConfig, cur == Screen::Flight,
                           d.services.cameraController.mode(), cam, playerEntry, d.services.terrainStreamer.get());
+
+        // Automated frame capture (#909 groundwork): once the Flight session has streamed in, write one
+        // PNG and quit — the reliable in-engine path for visual verification (no external screenshot tool).
+        if (!d.services.screenshotPath.empty() && cur == Screen::Flight) {
+            static int flightFrames = 0;
+            ++flightFrames;
+            if (flightFrames == d.services.screenshotFrames)
+                d.services.p.renderer->captureScreenshot(d.services.screenshotPath.c_str());
+            else if (flightFrames >= d.services.screenshotFrames + 2)
+                running = false; // the PNG was written in endFrame; exit cleanly
+        }
 
         d.services.p.renderer->endFrame();
         d.services.p.input->flush();

@@ -44,6 +44,7 @@ class AssetManager {
     std::shared_ptr<WeaponDefData> loadWeaponDef(const char* name);
     std::shared_ptr<ManualProse> loadManualProse(const char* name);
     std::shared_ptr<LiveryData> loadLivery(const char* name);
+    std::shared_ptr<AirportDefData> loadAirportDef(const char* name);
 
     // The highest-priority livery (#845) targeting the given aircraft DEF ID (e.g. "fl-base:f5e"),
     // or nullopt if none is installed. Walks the installed liveries in priority order and returns the

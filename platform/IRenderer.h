@@ -55,6 +55,24 @@ class IRenderer {
     // Upload a texture (KTX2 with Basis Universal transcode, or PNG fallback).
     virtual TextureHandle createTexture(const TextureUploadDesc& desc) = 0;
 
+    // 2D texture-ARRAY upload (#446) — a KTX2 with numLayers > 1, or the raw-RGBA path when
+    // TextureUploadDesc::rawLayers > 1 (layer-major). Used by the terrain biome arrays. Non-pure with
+    // an invalid-handle default so a backend/mock without array support (and every test mock) needs no
+    // change; VkRenderer overrides it.
+    virtual TextureHandle createTextureArray(const TextureUploadDesc& desc) {
+        (void)desc;
+        return {};
+    }
+
+    // Bind the terrain biome texture arrays (#446): base color + combined normal/roughness, both 2D
+    // arrays with `layerCount` layers (layer index = biome id). Invalid handles unbind (fall back to
+    // the builtin). Non-pure no-op default (mocks/headless need no change).
+    virtual void setTerrainBiomeTextures(TextureHandle colorArray, TextureHandle normalOrmArray, uint32_t layerCount) {
+        (void)colorArray;
+        (void)normalOrmArray;
+        (void)layerCount;
+    }
+
     // Create a PBR material linking already-uploaded textures.
     virtual MaterialHandle createMaterial(const MaterialDesc& desc) = 0;
 
@@ -103,6 +121,14 @@ class IRenderer {
     // Non-owning view; the span must remain valid until endFrame returns.
     // Cleared by endFrame.
     virtual void setConsoleElements(std::span<const HudElement> elements) = 0;
+
+    // Capture the next presented frame to a PNG at `path` (#909 groundwork). Returns true if the
+    // request was accepted (the write happens at the end of the current/next frame). Non-pure with a
+    // false default so a backend/mock without capture support (and every test mock) needs no change.
+    virtual bool captureScreenshot(const char* path) {
+        (void)path;
+        return false;
+    }
 };
 
 } // namespace fl

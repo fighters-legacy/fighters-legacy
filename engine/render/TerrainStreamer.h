@@ -9,6 +9,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -96,7 +98,24 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // WorldCover → SurfaceType table. SurfaceType::Unknown where no land-cover layer covers the point.
     // Thread-safe. This is what gameplay/physics should query (e.g. gear-down on Water vs. Grass).
     [[nodiscard]] SurfaceType surfaceTypeAt(glm::dvec3 worldPos) const noexcept {
+        // Runway-surface override (#487) wins over the land-cover class inside a runway footprint.
+        // Set once before queries (main thread, before the sim runs), so this read needs no lock —
+        // and must not take m_tileMutex here anyway (surfaceAt() below takes the shared lock, and
+        // std::shared_mutex is not recursive).
+        if (m_surfaceOverride) {
+            if (const std::optional<SurfaceType> s = m_surfaceOverride(worldPos))
+                return *s;
+        }
         return surfaceTypeFromWorldCover(surfaceAt(worldPos));
+    }
+
+    // Runway-surface override (#487): a function reporting the runway SurfaceType at a world position
+    // (AirportRegistry::runwaySurfaceAt mapped through surfaceTypeForRunway), or nullopt off a runway.
+    // surfaceTypeAt() consults it first, so ground physics reads Concrete/Asphalt/Grass on a runway
+    // instead of the underlying land cover. Raw surfaceAt() stays pure land cover. Main-thread,
+    // set-once before queries. std::function seam so engine-render keeps no engine-world dep.
+    void setSurfaceOverride(std::function<std::optional<SurfaceType>(glm::dvec3)> fn) {
+        m_surfaceOverride = std::move(fn);
     }
 
     // Ocean depth (metres, positive DOWN) below the sphere datum (mean sea level) at worldPos (#476).
@@ -135,6 +154,20 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // ignored. Main-thread only (like update()).
     void setPlanetRadius(double radius_m);
 
+    // Runway terrain flattening seam (#486). `pointFn(worldPos, rawHeight)` returns the possibly
+    // flattened terrain height above the datum; it is applied to BOTH heightAt() (the physics floor,
+    // spawn priming, client prediction) AND every tile-mesh vertex, so the visible terrain and the
+    // authoritative floor agree by construction. `regionFn(tileCentreWorld, tileRadiusM)` is the
+    // per-tile early-out — false means "no modification can occur within this tile", so the per-vertex
+    // flatten pass is skipped for the vast majority of tiles no airport touches (null = never skip).
+    // Both callables come from the AirportRegistry (AirportRegistry::flattenedHeight / a bounding
+    // test); routing them through std::function keeps engine-render free of an engine-world dep.
+    // Setting a modifier drops every resident tile + cancels in-flight reads (setPlanetRadius
+    // semantics), so no stale un-flattened mesh survives. Main-thread only.
+    using HeightModifier = std::function<double(glm::dvec3 worldPos, double rawHeight)>;
+    using HeightModifierRegion = std::function<bool(glm::dvec3 tileCentreWorld, double tileRadiusM)>;
+    void setHeightModifier(HeightModifier pointFn, HeightModifierRegion regionFn = nullptr);
+
     // Current planet radius (m) the resident tiles were baked at. Used by callers that need to
     // convert world positions to radial (geodetic) altitude — e.g. the AGL overlay/HUD readouts.
     [[nodiscard]] double planetRadiusM() const noexcept {
@@ -162,15 +195,18 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     };
 
     enum class TileState : uint8_t { Loading, Ready };
-    enum class TileLayer : uint8_t { Height, LandCover };
+    enum class TileLayer : uint8_t { Height, LandCover, Satellite };
 
     struct Tile {
         TileState state{TileState::Loading};
         AsyncReadId pendingHeightRead{0};
         AsyncReadId pendingCoverRead{0};
+        AsyncReadId pendingSatRead{0};   // #488 satellite _sat.ktx2 (client-only)
         std::vector<uint16_t> heightmap; // kTileHeightmapSize^2 when present
         std::vector<uint8_t> landCover;  // same dims; empty = no land-cover layer
         MeshHandle mesh{};
+        TextureHandle satTex{};  // #488: satellite albedo texture, invalid = none
+        MaterialHandle satMat{}; // #488: per-tile material binding satTex, invalid = use m_terrainMat
         uint64_t lastDesiredFrame{0};
     };
 
@@ -188,6 +224,7 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     void balanceLeaves(TileSet& leaves) const;
     void loadTile(const TileKey& key, int& proceduralCount);
     void loadTileProcedural(const TileKey& key);
+    void queueSatelliteRead(const TileKey& key); // #488 — client-only; runs for pack AND procedural tiles
     void finalizeTile(const TileKey& key);
     void evictTile(const TileKey& key);
 
@@ -223,6 +260,21 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     float m_fovYRad{1.047197551f}; // 60 deg
     uint64_t m_frame{0};
     bool m_updated{false};
+
+    // Runway terrain-flattening seam (#486). Guarded by m_tileMutex like the tile data: heightAt()
+    // (any thread, shared lock) reads m_heightModifier, and setHeightModifier() (main thread) writes
+    // it under the unique lock while dropping resident tiles.
+    HeightModifier m_heightModifier;
+    HeightModifierRegion m_heightModifierRegion;
+    // Runway-surface override (#487), set-once before queries; read lock-free in surfaceTypeAt().
+    std::function<std::optional<SurfaceType>(glm::dvec3)> m_surfaceOverride;
+
+    // Terrain biome texture arrays (#446): uploaded once at construction (pack KTX2 arrays or the
+    // builtin procedural fallback) and bound via IRenderer::setTerrainBiomeTextures. Null renderer =
+    // not uploaded (fl-server headless).
+    void uploadBiomeTextures();
+    TextureHandle m_biomeColorTex{};
+    TextureHandle m_biomeNormalOrmTex{};
 
     // Protects m_tiles for concurrent reads (height queries, sim thread) vs writes
     // (update/finalize/evict, main thread).

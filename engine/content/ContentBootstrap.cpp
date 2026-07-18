@@ -15,6 +15,8 @@
 #include "weapon/WeaponDef.h"
 #include "weapon/WeaponDefParser.h"
 #include "weapon/WeaponRegistry.h"
+#include "world/AirportDef.h"
+#include "world/AirportDefParser.h"
 
 #include <exception>
 #include <limits>
@@ -48,6 +50,28 @@ uint32_t registerPackEntityDefs(AssetManager& assets, EntityTypeRegistry& regist
         }
     }
     return registered;
+}
+
+uint32_t registerPackAirportDefs(AssetManager& assets, std::vector<AirportDef>& out, ILogger& log) {
+    uint32_t appended = 0;
+    for (const auto& name : assets.listAssets(AssetType::Airport)) {
+        auto raw = assets.loadAirportDef(name.c_str());
+        if (!raw || raw->bytes.empty()) {
+            log.log(LogLevel::Warn, __FILE__, __LINE__,
+                    (std::string("airport def '") + name + "' could not be loaded; skipping").c_str());
+            continue;
+        }
+        try {
+            AirportDef def =
+                parseAirportDef(std::string_view(reinterpret_cast<const char*>(raw->bytes.data()), raw->bytes.size()));
+            out.push_back(std::move(def));
+            ++appended;
+        } catch (const std::exception& e) {
+            log.log(LogLevel::Warn, __FILE__, __LINE__,
+                    (std::string("airport def '") + name + "' parse error: " + e.what() + "; skipping").c_str());
+        }
+    }
+    return appended;
 }
 
 uint32_t registerPackWeaponDefs(AssetManager& assets, WeaponRegistry& registry, ILogger& log) {

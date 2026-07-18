@@ -64,6 +64,7 @@
 #include <perf/ProcessStats.h>
 #include <perf/ServerTickReport.h>
 #include <render/BuiltinGeometry.h>
+#include <render/RunwaySurfaceMap.h> // surfaceTypeForRunway (#487)
 #include <render/TerrainStreamer.h>
 #include <script/BuiltinAiScripts.h>
 #include <script/LuaController.h>
@@ -72,6 +73,9 @@
 #include <weapon/Loadout.h>
 #include <weapon/WeaponRegistry.h>
 #include <weather/WeatherController.h>
+#include <world/AirportBootstrap.h>
+#include <world/AirportRegistry.h>
+#include <world/BuiltinAirport.h>
 #include <world/FactionRegistry.h>
 
 #include <array>
@@ -568,10 +572,72 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ---- Airport registry (#699/#486): builtin airfield + pack airports + OurAirports database ----
+    // Placed on the sphere before gameLoop.start() and immutable thereafter. Merge order is builtin ->
+    // packs -> CSV (first-id-wins, so a pack airport shadows a bundled one of the same id). Near-origin
+    // (world-XZ) fields are primed here so their terrain-resolved elevation is accurate. The resolved
+    // registry drives runway terrain-flattening via setHeightModifier: the SAME AirportRegistry the
+    // client loads (from the same bundled data), so the physics floor, spawn priming, and the tile
+    // mesh all flatten identically on both ends.
+    fl::AirportRegistry airportRegistry;
+    {
+        std::vector<fl::AirportDef> airportDefs;
+        airportDefs.push_back(fl::builtinAirfield());
+        const uint32_t packAirports = fl::registerPackAirportDefs(assets, airportDefs, *log);
+        fl::AirportLoadStats csvStats;
+        std::vector<fl::AirportDef> csvDefs = fl::loadOrImportAirports(*p.filesystem, *log, &csvStats);
+        for (auto& d : csvDefs)
+            airportDefs.push_back(std::move(d));
+        for (const auto& def : airportDefs) {
+            if (def.elevationM < 0.0 && def.useWorldXZ)
+                primeSpawnHeight(def.worldX, def.worldZ);
+        }
+        airportRegistry.load(std::move(airportDefs), planetR,
+                             [&terrainStreamer](glm::dvec3 pos) { return terrainStreamer.heightAt(pos); });
+        // Runway terrain flattening: gear touches at the authoritative field elevation, and the tile
+        // mesh matches the physics floor (both route through TerrainStreamer::heightAt). Set BEFORE any
+        // further terrain priming so spawn elevations are taken from already-flattened terrain.
+        terrainStreamer.setHeightModifier(
+            [&airportRegistry](glm::dvec3 pos, double rawH) { return airportRegistry.flattenedHeight(pos, rawH); },
+            [&airportRegistry](glm::dvec3 centre, double radiusM) {
+                return airportRegistry.regionHasRunway(centre, radiusM);
+            });
+        // Runway surface typing (#487): surfaceTypeAt reports the runway surface inside a footprint, so
+        // ground physics differentiates a paved runway from the grass beside it.
+        terrainStreamer.setSurfaceOverride([&airportRegistry](glm::dvec3 pos) -> std::optional<fl::SurfaceType> {
+            const auto s = airportRegistry.runwaySurfaceAt(pos);
+            return s ? std::optional<fl::SurfaceType>(fl::surfaceTypeForRunway(*s)) : std::nullopt;
+        });
+        char buf[144];
+        std::snprintf(buf, sizeof(buf), "content: %zu airport(s) loaded (builtin + %u pack + %zu CSV%s)",
+                      airportRegistry.count(), packAirports, csvStats.airports,
+                      csvStats.csvPresent ? (csvStats.cacheHit ? ", cached" : ", imported") : ", no CSV");
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
+
     // ---- WorldBroadcaster wires the sim loop to ENet ----
     fl::WeatherControllerParams wparams;
     wparams.timeScaleRatio = static_cast<float>(cfg.timeScale);
     fl::WeatherController weatherController(wparams);
+    // Altitude wind profile (#489): load the [wind] profile_path (relative to the config dir) and
+    // apply it, so aircraft feel altitude-dependent wind the client predicts in parity.
+    if (!cfg.wind.profilePath.empty()) {
+        const fs::path profPath = fs::path(configPath).parent_path() / cfg.wind.profilePath;
+        std::ifstream pf(profPath, std::ios::binary);
+        if (pf) {
+            std::string content((std::istreambuf_iterator<char>(pf)), std::istreambuf_iterator<char>());
+            const auto defs = fl::parseWindProfile(content, log);
+            std::vector<fl::WeatherController::WindProfileMetKnot> knots;
+            for (const auto& d : defs)
+                knots.push_back({d.altM, d.speedMs, d.headingDeg});
+            if (!knots.empty()) {
+                weatherController.setWindProfile(knots);
+                log->log(fl::LogLevel::Info, __FILE__, __LINE__, "loaded altitude wind profile");
+            }
+        } else {
+            log->log(fl::LogLevel::Warn, __FILE__, __LINE__, "wind profile_path not found; ignoring");
+        }
+    }
     fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *net, *log, &weatherController);
     fl::WorldBroadcasterConfig wbConfig;
     wbConfig.connectRateLimit = cfg.connectRateLimitCount;
@@ -627,6 +693,10 @@ int main(int argc, char** argv) {
     // terrain — the mesh then rests ON the ground.
     broadcaster.setGroundElevationQuery(
         [&terrainStreamer](glm::dvec3 pos) { return static_cast<float>(terrainStreamer.heightAt(pos)); });
+    // Per-entity ground surface (#487): the runway-surface override + land cover, so the rollout
+    // differs by surface. surfaceTypeAt is thread-safe (shared_mutex); the client mirrors it.
+    broadcaster.setGroundSurfaceQuery(
+        [&terrainStreamer](glm::dvec3 pos) { return terrainStreamer.surfaceTypeAt(pos); });
     // Resolve EntityDef::flightModelAsset -> parsed FlightModelData on the spawn path. Loads the raw
     // TOML asset via AssetManager, parses it with engine-flight's parseFlightModel, and caches the
     // result by id (sim-thread-only access). Empty/unknown ids fall back to the builtin model in

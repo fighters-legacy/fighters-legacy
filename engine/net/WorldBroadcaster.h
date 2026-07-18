@@ -55,7 +55,8 @@ struct FlightModelData;   // engine/flight/FlightModelData.h
 struct IEntityController; // engine/entity/IEntityController.h
 class EntityTypeRegistry;
 class WeatherController;
-class FactionRegistry; // engine/world/FactionRegistry.h — coalition-aware hostility (#632)
+class FactionRegistry;            // engine/world/FactionRegistry.h — coalition-aware hostility (#632)
+enum class SurfaceType : uint8_t; // engine/render/SurfaceType.h — ground-surface handling (#487)
 } // namespace fl
 
 namespace fl {
@@ -402,6 +403,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Requires TerrainStreamer::heightAt() to be thread-safe (shared_mutex). Call before
     // gameLoop.start().
     void setGroundElevationQuery(std::function<float(glm::dvec3)> fn);
+
+    // Per-entity ground SURFACE query (#487) — the terrain SurfaceType at a world position (the
+    // runway-surface override on top of the land-cover class; TerrainStreamer::surfaceTypeAt). When
+    // set, each FlightIntegrator::step() gets the surface's rolling resistance, so a rollout on grass
+    // is shorter than on concrete. The client mirrors this via the same groundFrictionFor table, so
+    // prediction stays in parity. Not set ⇒ paved default. Call before gameLoop.start().
+    void setGroundSurfaceQuery(std::function<SurfaceType(glm::dvec3)> fn);
 
     // Set pre-cached peer spawn positions [x, y, z] in world space.
     // y must already include the terrain height + AGL offset, computed on the main thread
@@ -1065,6 +1073,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Per-entity terrain height query (sim-thread only). When set, called each tick per entity instead
     // of the global m_groundElevation scalar.
     std::function<float(glm::dvec3)> m_groundQuery;
+    std::function<SurfaceType(glm::dvec3)> m_groundSurfaceQuery; // #487 per-surface rolling resistance
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword;                               // empty = admin channel disabled

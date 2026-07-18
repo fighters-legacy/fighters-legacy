@@ -233,6 +233,39 @@ jobs:
           # connects. A nonzero exit (clients refused/dropped) fails the step under set -e.
           bash tools/bot_swarm/run_loadtest.sh build/debug 8 3 weave
 
+      - name: Smoke test tex-compress array KTX2 (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          # Real encode gate (#447): install toktx from the KTX-Software release (not reliably an
+          # apt package), pack 4 layer PNGs into an array KTX2, and assert layerCount == 4 — so this
+          # gate actually runs the encode, not just --version.
+          set -e
+          KTXVER=4.4.2
+          curl -sSL -o /tmp/ktx.tar.bz2 \
+            "https://github.com/KhronosGroup/KTX-Software/releases/download/v${KTXVER}/KTX-Software-${KTXVER}-Linux-x86_64.tar.bz2"
+          mkdir -p /tmp/ktx && tar xjf /tmp/ktx.tar.bz2 -C /tmp/ktx --strip-components=1
+          export LD_LIBRARY_PATH="/tmp/ktx/lib:$LD_LIBRARY_PATH"
+          python3 - <<'PY'
+          import struct, zlib
+          def png(path, r, g, b, w=8, h=8):
+              def chunk(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+              raw = b"".join(b"\x00" + bytes([r, g, b]) * w for _ in range(h))
+              ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+              open(path, "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+          for n, c in [("grass", (60,120,40)), ("dirt", (120,90,50)), ("rock", (110,105,100)), ("snow", (230,235,240))]:
+              png(f"/tmp/{n}.png", *c)
+          PY
+          ./build/debug/tools/tex-compress --type diffuse --layers /tmp/grass.png /tmp/dirt.png /tmp/rock.png /tmp/snow.png \
+            -o /tmp/biome.ktx2 --toktx /tmp/ktx/bin/toktx
+          # KTX2 header: layerCount is a uint32 LE at byte offset 32.
+          python3 - <<'PY'
+          import struct, sys
+          data = open("/tmp/biome.ktx2", "rb").read()
+          layers = struct.unpack_from("<I", data, 32)[0]
+          print("array KTX2 layerCount =", layers)
+          sys.exit(0 if layers == 4 else 1)
+          PY
+
       - name: Smoke test asset pipeline tools (Windows)
         if: matrix.os == 'windows-latest'
         run: |
@@ -284,6 +317,14 @@ jobs:
       - name: Unit test gen_terrain_tiles.py (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_gen_terrain_tiles.py -v
+
+      - name: Unit test gen_wind_profile.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_gen_wind_profile.py -v
+
+      - name: Unit test gen_terrain_color.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_gen_terrain_color.py -v
 
       - name: Unit test gen_unifont_header.py (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
