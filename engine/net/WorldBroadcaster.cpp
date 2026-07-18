@@ -2034,16 +2034,28 @@ void WorldBroadcaster::resolveHitscan(const FireRequest& req, const WeaponDef& d
         return;
 
     // Muzzle + bore line, with deterministic cone dispersion: two small angular offsets hashed from
-    // (shooter, tick) — the turbulence/detection idiom, so a replay reproduces every round.
+    // (shooter, tick) — the turbulence/detection idiom, so a replay reproduces every round. A
+    // turret-mounted gun (#970) fires along its bore (req.aimDir) instead of the airframe nose, with
+    // an orthonormal dispersion basis built around that bore; a nose gun is bit-identical to before.
     const float* q = shooter->transform.quat;
     const glm::quat rot{q[3], q[0], q[1], q[2]};
-    glm::vec3 bore = rot * glm::vec3{1.f, 0.f, 0.f};
+    glm::vec3 bore;
+    glm::vec3 up;
+    glm::vec3 right;
+    if (req.hasAimDir) {
+        bore = glm::normalize(glm::vec3{req.aimDir[0], req.aimDir[1], req.aimDir[2]});
+        const glm::vec3 ref = std::abs(bore.y) < 0.99f ? glm::vec3{0.f, 1.f, 0.f} : glm::vec3{1.f, 0.f, 0.f};
+        right = glm::normalize(glm::cross(bore, ref));
+        up = glm::cross(right, bore);
+    } else {
+        bore = rot * glm::vec3{1.f, 0.f, 0.f};
+        up = rot * glm::vec3{0.f, 1.f, 0.f};
+        right = rot * glm::vec3{0.f, 0.f, 1.f};
+    }
     constexpr float kGunDispersionRad = 0.012f; // ~0.7° cone half-angle
     const uint32_t h = req.shooterIdx * 0x9E3779B1u + static_cast<uint32_t>(tickIndex) * 0x85EBCA77u + 0x6B43A9B5u;
     const float r1 = (static_cast<float>((h >> 8) & 0xFFFu) / 4096.f - 0.5f) * 2.f;
     const float r2 = (static_cast<float>((h >> 20) & 0xFFFu) / 4096.f - 0.5f) * 2.f;
-    const glm::vec3 up = rot * glm::vec3{0.f, 1.f, 0.f};
-    const glm::vec3 right = rot * glm::vec3{0.f, 0.f, 1.f};
     bore = glm::normalize(bore + up * (r1 * kGunDispersionRad) + right * (r2 * kGunDispersionRad));
 
     const double range = static_cast<double>(def.performance.maxRangeM);
@@ -2140,8 +2152,11 @@ void WorldBroadcaster::executeFireRequest(const FireRequest& req, uint64_t tickI
     if (def->seeker && def->seeker->type != SeekerType::Unguided)
         designated = designateFor(*shooter, ownerPeer);
 
+    // A turret-mounted store leaves along the turret bore (#970); a nose store passes null.
+    const glm::vec3 aimDir{req.aimDir[0], req.aimDir[1], req.aimDir[2]};
     const EntityId pid = m_projectileSystem.launch(m_entityManager, req.weaponIndex, *shooter,
-                                                   ownerPeer == kNoOwningPeer ? 0u : ownerPeer, designated, tickIndex);
+                                                   ownerPeer == kNoOwningPeer ? 0u : ownerPeer, designated, tickIndex,
+                                                   req.hasAimDir ? &aimDir : nullptr);
     if (pid.valid())
         queueEffect(static_cast<uint8_t>(EffectType::MissileLaunch), static_cast<uint8_t>(def->type), req.shooterIdx,
                     0xFFFFFFFFu, shooter->transform.pos);

@@ -13,6 +13,12 @@ namespace fl::ai {
 // (designateFromContacts), so a SAM that a jammer has blinded engages nothing, exactly like a player.
 // A null contact table (a caller that did not run sensing) means "no engagement" — an emplacement
 // cannot ground-truth its way to a shot.
+//
+// LAUNCHER ELEVATION (#585 → #966/#970): these emplacements still fire along their FIXED nose. The
+// primitive that closes the "a ground SAM needs launcher elevation" gap now exists — a turret mount
+// with a slew servo (`engine/weapon/Turret.h`) and a directional launch vector (FireRequest::aimDir).
+// An emplacement gets elevation by mounting its launcher as a turret and slewing it via that servo;
+// wiring the SAM/AAA controllers onto a turret seat is the crewed-control follow-on (#969/#971).
 
 // Acquire an aircraft on radar and launch a SARH at it. The launcher is fixed, so it engages targets
 // within a forward cone of its facing (where the missile can turn to intercept); the emitting

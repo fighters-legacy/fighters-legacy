@@ -90,6 +90,11 @@ target_link_libraries(test_fire_control PRIVATE Catch2::Catch2WithMain engine-we
     engine-spatial)
 catch_discover_tests(test_fire_control)
 
+# Turret mounts (#970): the pure slew-servo + pose math (stepTurret, turretWorldDir).
+add_executable(test_turret test_turret.cpp)
+target_link_libraries(test_turret PRIVATE Catch2::Catch2WithMain engine-weapon)
+catch_discover_tests(test_turret)
+
 # SeekerTrack + PN guidance (#627): the missile seeker over the shared Detection.h machine.
 add_executable(test_seeker test_seeker.cpp)
 target_link_libraries(test_seeker PRIVATE Catch2::Catch2WithMain engine-weapon engine-entity

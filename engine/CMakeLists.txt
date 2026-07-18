@@ -202,6 +202,7 @@ add_library(engine-weapon STATIC
     weapon/Loadout.cpp
     weapon/FireControl.cpp
     weapon/ProjectileSystem.cpp
+    weapon/Turret.cpp
     weapon/Seeker.cpp
     weapon/CountermeasureSystem.cpp
 )

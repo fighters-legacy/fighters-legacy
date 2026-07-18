@@ -33,6 +33,13 @@ struct FireRequest {
     uint32_t shooterIdx{0};
     uint32_t weaponIndex{UINT32_MAX};
     uint8_t station{255};
+    // ── turret launch direction (#970) ──
+    // World-space bore the shot leaves along, when the firing station is turret-mounted. Default
+    // (hasAimDir == false) = the airframe nose, so a nose-fired shot is bit-identical to before.
+    // evaluateFire leaves this default; the caller (the crewed weapons pass, #969) fills it from the
+    // seat's turret pose via turretWorldDir. FireRequest's sort key gains seat when crew lands.
+    bool hasAimDir{false};
+    float aimDir[3]{0.f, 0.f, 0.f};
 };
 
 // The gun default when a weapon def does not say (rate_of_fire_rpm == 0).
