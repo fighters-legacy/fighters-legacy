@@ -391,8 +391,37 @@ void TerrainStreamer::finalizeTile(const TileKey& key) {
         }
 
         const glm::dvec3 origin = tileToWorld(key, 0.5, 0.5, 0.0, m_planetRadiusM);
+
+        // Runway flattening (#486): when a height modifier is installed and this tile's bounding
+        // sphere could hold a runway footprint, flatten a COPY of the heightmap so the mesh vertices
+        // match the modified heightAt(). The stored heightmap stays raw (heightAt re-applies the
+        // modifier — never double-counted); the per-tile region test keeps this off tiles no airport
+        // touches, and with no modifier the output is byte-identical to before.
+        const std::vector<uint16_t>* heights = &tile.heightmap;
+        std::vector<uint16_t> flattened;
+        if (m_heightModifier) {
+            const glm::dvec3 corner = tileToWorld(key, 0.0, 0.0, 0.0, m_planetRadiusM);
+            const double radius = glm::length(corner - origin);
+            if (!m_heightModifierRegion || m_heightModifierRegion(origin, radius)) {
+                const int S = kTileHeightmapSize;
+                flattened = tile.heightmap;
+                for (int row = 0; row < S; ++row) {
+                    const double t = static_cast<double>(row) / static_cast<double>(S - 1);
+                    for (int col = 0; col < S; ++col) {
+                        const double sCoord = static_cast<double>(col) / static_cast<double>(S - 1);
+                        const std::size_t idx = static_cast<std::size_t>(row) * S + col;
+                        const double raw = static_cast<double>(tile.heightmap[idx]) - 32768.0;
+                        const glm::dvec3 wp = tileToWorld(key, sCoord, t, raw, m_planetRadiusM);
+                        const double v = std::clamp(m_heightModifier(wp, raw) + 32768.0, 0.0, 65535.0);
+                        flattened[idx] = static_cast<uint16_t>(v + 0.5);
+                    }
+                }
+                heights = &flattened;
+            }
+        }
+
         auto glb =
-            buildTileMeshGlb(tile.heightmap, kTileHeightmapSize, kTileMeshGrid, key, m_planetRadiusM, origin,
+            buildTileMeshGlb(*heights, kTileHeightmapSize, kTileMeshGrid, key, m_planetRadiusM, origin,
                              tile.landCover.empty() ? nullptr : tile.landCover.data(), true, skirtDepthFor(key.level));
         if (!glb.empty()) {
             const std::string meshName = "tile:" + m_manifest.terrainId + ":f" + std::to_string(key.face) + ":L" +
@@ -551,7 +580,12 @@ double TerrainStreamer::heightAt(glm::dvec3 worldPos) const noexcept {
         return static_cast<double>(tile->heightmap[static_cast<std::size_t>(row) * s + col]) - 32768.0;
     };
 
-    return glm::mix(glm::mix(h(ix, iz), h(ix + 1, iz), fx), glm::mix(h(ix, iz + 1), h(ix + 1, iz + 1), fx), fz);
+    const double raw =
+        glm::mix(glm::mix(h(ix, iz), h(ix + 1, iz), fx), glm::mix(h(ix, iz + 1), h(ix + 1, iz + 1), fx), fz);
+    // Runway flattening (#486): the modifier overrides the sampled terrain inside a runway footprint
+    // (returning `raw` untouched elsewhere). The same function flattens the tile mesh, so the physics
+    // floor and the visible terrain agree. Cheap when no airport is near (the modifier early-outs).
+    return m_heightModifier ? m_heightModifier(worldPos, raw) : raw;
 }
 
 bool TerrainStreamer::heightReadyAt(glm::dvec3 worldPos) const noexcept {
@@ -619,6 +653,27 @@ void TerrainStreamer::setPlanetRadius(double radius_m) {
     m_desiredLeaves.clear();
     m_desiredAll.clear();
     m_planetRadiusM = radius_m;
+}
+
+void TerrainStreamer::setHeightModifier(HeightModifier pointFn, HeightModifierRegion regionFn) {
+    // Drop every resident tile + in-flight read so the next update() re-generates meshes with the
+    // flatten applied — mirrors setPlanetRadius, so wiring the modifier at any time can never leave a
+    // stale un-flattened mesh (or a flattened one after the modifier is cleared) resident.
+    std::unique_lock lock(m_tileMutex);
+    for (auto& [id, pending] : m_pendingByReadId)
+        m_asyncFs.cancelRead(id);
+    m_pendingByReadId.clear();
+    if (m_renderer) {
+        for (auto& [key, tile] : m_tiles) {
+            if (tile.mesh.valid())
+                m_renderer->destroyMesh(tile.mesh);
+        }
+    }
+    m_tiles.clear();
+    m_desiredLeaves.clear();
+    m_desiredAll.clear();
+    m_heightModifier = std::move(pointFn);
+    m_heightModifierRegion = std::move(regionFn);
 }
 
 void TerrainStreamer::setViewParams(float screenHeightPx, float fovYRad) noexcept {

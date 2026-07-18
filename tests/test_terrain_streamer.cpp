@@ -248,6 +248,28 @@ TEST_CASE("TerrainStreamer procedural tiles produce render items and plausible h
     CHECK(h < 900.0);
 }
 
+TEST_CASE("TerrainStreamer setHeightModifier flattens heightAt (#486)") {
+    StreamerFixture fx;
+    fl::TerrainStreamer ts{worldManifest(4), *fx.assets, fx.asyncFs, nullptr};
+    pumpUntilReady(ts, fx.asyncFs, kPoleCam, kPoleProbe);
+    const double raw = ts.heightAt(kPoleProbe);
+    CHECK(raw > 300.0); // procedural FBM base
+
+    // Install a modifier that pins the height to a fixed pad value within ~200 m of the pole probe
+    // (the runway-flatten shape), and returns the raw height elsewhere. The region predicate reports a
+    // hit only near the probe. setHeightModifier drops resident tiles, so re-pump before querying.
+    constexpr double kPad = 1234.0;
+    ts.setHeightModifier(
+        [&](glm::dvec3 pos, double rawH) { return glm::length(pos - kPoleProbe) < 200.0 ? kPad : rawH; },
+        [&](glm::dvec3 centre, double radiusM) { return glm::length(centre - kPoleProbe) < radiusM + 200.0; });
+    pumpUntilReady(ts, fx.asyncFs, kPoleCam, kPoleProbe);
+
+    // At the probe the height is now the pad value; far away it is the unmodified terrain.
+    CHECK(ts.heightAt(kPoleProbe) == Catch::Approx(kPad));
+    const glm::dvec3 farProbe{2000.0, 0.0, 0.0};
+    CHECK(ts.heightAt(farProbe) != Catch::Approx(kPad));
+}
+
 TEST_CASE("TerrainStreamer getRenderItems is empty before the first update") {
     StreamerFixture fx;
     MockRenderer renderer;

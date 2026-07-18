@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -135,6 +136,20 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // ignored. Main-thread only (like update()).
     void setPlanetRadius(double radius_m);
 
+    // Runway terrain flattening seam (#486). `pointFn(worldPos, rawHeight)` returns the possibly
+    // flattened terrain height above the datum; it is applied to BOTH heightAt() (the physics floor,
+    // spawn priming, client prediction) AND every tile-mesh vertex, so the visible terrain and the
+    // authoritative floor agree by construction. `regionFn(tileCentreWorld, tileRadiusM)` is the
+    // per-tile early-out — false means "no modification can occur within this tile", so the per-vertex
+    // flatten pass is skipped for the vast majority of tiles no airport touches (null = never skip).
+    // Both callables come from the AirportRegistry (AirportRegistry::flattenedHeight / a bounding
+    // test); routing them through std::function keeps engine-render free of an engine-world dep.
+    // Setting a modifier drops every resident tile + cancels in-flight reads (setPlanetRadius
+    // semantics), so no stale un-flattened mesh survives. Main-thread only.
+    using HeightModifier = std::function<double(glm::dvec3 worldPos, double rawHeight)>;
+    using HeightModifierRegion = std::function<bool(glm::dvec3 tileCentreWorld, double tileRadiusM)>;
+    void setHeightModifier(HeightModifier pointFn, HeightModifierRegion regionFn = nullptr);
+
     // Current planet radius (m) the resident tiles were baked at. Used by callers that need to
     // convert world positions to radial (geodetic) altitude — e.g. the AGL overlay/HUD readouts.
     [[nodiscard]] double planetRadiusM() const noexcept {
@@ -223,6 +238,12 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     float m_fovYRad{1.047197551f}; // 60 deg
     uint64_t m_frame{0};
     bool m_updated{false};
+
+    // Runway terrain-flattening seam (#486). Guarded by m_tileMutex like the tile data: heightAt()
+    // (any thread, shared lock) reads m_heightModifier, and setHeightModifier() (main thread) writes
+    // it under the unique lock while dropping resident tiles.
+    HeightModifier m_heightModifier;
+    HeightModifierRegion m_heightModifierRegion;
 
     // Protects m_tiles for concurrent reads (height queries, sim thread) vs writes
     // (update/finalize/evict, main thread).

@@ -42,6 +42,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         engine-mission
         engine-weapon
         engine-sensor
+        engine-world     # AirportRegistry + runway terrain flattening (#486)
         platform-file-logger
         platform-subprocess
         platform-stdfs

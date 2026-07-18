@@ -1336,6 +1336,12 @@ A malformed def (missing `id`/`name`, neither or both placement forms, a non-pos
 dimension, or an unknown `surface`) is a load-time **warning** and the field is skipped — it never
 aborts loading the rest of the pack.
 
+**Load order and precedence:** the engine merges the builtin airfield, then pack airports, then the
+bundled OurAirports database (~72k real airports keyed by ICAO), **first-id-wins** — so a pack
+airport with the same `id` as a bundled one shadows it. A runway's footprint flattens the terrain to
+its field elevation (a flat pad plus a smooth blend to the surrounding terrain), so aircraft touch
+down at the authoritative elevation even where the base terrain is coarse.
+
 A **carrier or flight deck** is modelled as an ordinary entity that carries `accepts_landings = true`
 (under `[entity]`), so naval recovery reuses the same landing path as a land airfield — the same
 "this surface accepts landings" data property, whether it is a runway or a deck.

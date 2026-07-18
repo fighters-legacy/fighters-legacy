@@ -63,3 +63,10 @@ SPDX-License-Identifier = "GPL-2.0-or-later"
 path = "data/WMM.COF"
 SPDX-FileCopyrightText = "NOAA National Centers for Environmental Information (NCEI) / NGA"
 SPDX-License-Identifier = "LicenseRef-scancode-public-domain"
+
+# OurAirports global airport + runway database (#486). Released into the public domain by OurAirports
+# (David Megginson and contributors). CSV cannot carry an inline SPDX header (row 1 is the schema).
+[[annotations]]
+path = ["data/airports.csv", "data/runways.csv"]
+SPDX-FileCopyrightText = "OurAirports contributors (ourairports.com) / David Megginson"
+SPDX-License-Identifier = "LicenseRef-scancode-public-domain"

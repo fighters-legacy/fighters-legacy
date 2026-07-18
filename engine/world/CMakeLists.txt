@@ -6,6 +6,9 @@ add_library(engine-world STATIC
     FormationRegistry.cpp
     AirportRegistry.cpp
     AirportDefParser.cpp
+    AirportCsvImport.cpp
+    AirportIndexFile.cpp
+    AirportBootstrap.cpp
 )
 
 # Expose engine/ as the public include root so consumers use #include "world/AlertLevel.h".

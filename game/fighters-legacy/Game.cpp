@@ -87,6 +87,9 @@
 #include "manual/AircraftManual.h"
 #include "sensor/SensorDefParser.h"
 #include "weapon/WeaponRegistry.h"
+#include "world/AirportBootstrap.h"
+#include "world/AirportRegistry.h"
+#include "world/BuiltinAirport.h"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -298,6 +301,10 @@ struct GameServices {
     fl::CameraController cameraController;
     std::unique_ptr<fl::SceneRenderer> sceneRenderer;
     std::unique_ptr<fl::TerrainStreamer> terrainStreamer;
+    // Runway airports (#486): loaded from the same bundled data as the server so the runway
+    // terrain-flatten agrees on both ends. Held via unique_ptr because AirportRegistry is
+    // non-copyable/non-movable; rebuilt on each session's MsgConnectAck.
+    std::unique_ptr<fl::AirportRegistry> airportRegistry;
     SubtitleQueue subtitleQueue;
     MusicManager musicManager;
     fl::SfxManager sfxManager;           // positional weapon SFX (#631)
@@ -752,6 +759,9 @@ void Game::initGameSystems() {
         std::make_unique<fl::TerrainStreamer>(fl::builtinWorldTerrainManifest(), *d.services.assets,
                                               *d.services.p.asyncFilesystem, d.services.p.renderer.get());
     d.services.sceneRenderer->setTerrainStreamer(d.services.terrainStreamer.get());
+    // Drop last session's airport registry so the next MsgConnectAck rebuilds it against the fresh
+    // terrain streamer + this session's planet radius (#486; the height modifier is re-wired there).
+    d.services.airportRegistry.reset();
 
     d.services.sceneRenderer->setParticleSystem(
         &d.services.particleSystem,
@@ -1255,6 +1265,28 @@ void Game::run() {
                     // Camera "up" = radial direction on the planet, so the horizon stays
                     // level far from the origin.
                     d.services.camInput.setPlanetRadius(radiusM);
+
+                    // Airport registry + runway terrain flattening (#486). Built once per session from
+                    // the SAME bundled data the server used (builtin airfield + pack airports + the
+                    // OurAirports CSV), at the server's planet radius, so heightAt() flattens
+                    // identically on both ends — the physics floor the client predicts and the terrain
+                    // it renders both match the server's. All CSV airports carry explicit elevations
+                    // and the builtin airfield is fixed, so no terrain priming is needed at load.
+                    if (!d.services.airportRegistry) {
+                        d.services.airportRegistry = std::make_unique<fl::AirportRegistry>();
+                        std::vector<fl::AirportDef> airportDefs;
+                        airportDefs.push_back(fl::builtinAirfield());
+                        fl::registerPackAirportDefs(*d.services.assets, airportDefs, *d.services.p.logger);
+                        for (auto& ad : fl::loadOrImportAirports(*d.services.p.filesystem, *d.services.p.logger))
+                            airportDefs.push_back(std::move(ad));
+                        auto* terrain = d.services.terrainStreamer.get();
+                        d.services.airportRegistry->load(std::move(airportDefs), radiusM,
+                                                         [terrain](glm::dvec3 pos) { return terrain->heightAt(pos); });
+                        fl::AirportRegistry* reg = d.services.airportRegistry.get();
+                        d.services.terrainStreamer->setHeightModifier(
+                            [reg](glm::dvec3 pos, double rawH) { return reg->flattenedHeight(pos, rawH); },
+                            [reg](glm::dvec3 centre, double radM) { return reg->regionHasRunway(centre, radM); });
+                    }
 
                     if (observer) {
                         // Ghost camera (#859): there is no ownship to predict, so ClientPrediction is

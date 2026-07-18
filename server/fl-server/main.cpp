@@ -72,6 +72,7 @@
 #include <weapon/Loadout.h>
 #include <weapon/WeaponRegistry.h>
 #include <weather/WeatherController.h>
+#include <world/AirportBootstrap.h>
 #include <world/AirportRegistry.h>
 #include <world/BuiltinAirport.h>
 #include <world/FactionRegistry.h>
@@ -570,25 +571,40 @@ int main(int argc, char** argv) {
         }
     }
 
-    // ---- Airport registry (#699): the builtin sandbox airfield + content-pack airports ----
-    // Placed on the sphere before gameLoop.start() and immutable thereafter. Terrain-resolved field
-    // elevations (elevation_m absent) are read from the primed streamer; near-origin (world-XZ) fields
-    // are primed here so their elevation is accurate. #699 has no runtime consumer beyond the count
-    // log — #486 layers runway terrain-flattening onto this seam, #487 renders the runways.
+    // ---- Airport registry (#699/#486): builtin airfield + pack airports + OurAirports database ----
+    // Placed on the sphere before gameLoop.start() and immutable thereafter. Merge order is builtin ->
+    // packs -> CSV (first-id-wins, so a pack airport shadows a bundled one of the same id). Near-origin
+    // (world-XZ) fields are primed here so their terrain-resolved elevation is accurate. The resolved
+    // registry drives runway terrain-flattening via setHeightModifier: the SAME AirportRegistry the
+    // client loads (from the same bundled data), so the physics floor, spawn priming, and the tile
+    // mesh all flatten identically on both ends.
     fl::AirportRegistry airportRegistry;
     {
         std::vector<fl::AirportDef> airportDefs;
         airportDefs.push_back(fl::builtinAirfield());
         const uint32_t packAirports = fl::registerPackAirportDefs(assets, airportDefs, *log);
+        fl::AirportLoadStats csvStats;
+        std::vector<fl::AirportDef> csvDefs = fl::loadOrImportAirports(*p.filesystem, *log, &csvStats);
+        for (auto& d : csvDefs)
+            airportDefs.push_back(std::move(d));
         for (const auto& def : airportDefs) {
             if (def.elevationM < 0.0 && def.useWorldXZ)
                 primeSpawnHeight(def.worldX, def.worldZ);
         }
         airportRegistry.load(std::move(airportDefs), planetR,
                              [&terrainStreamer](glm::dvec3 pos) { return terrainStreamer.heightAt(pos); });
-        char buf[112];
-        std::snprintf(buf, sizeof(buf), "content: %zu airport(s) loaded (%u from packs, builtin airfield included)",
-                      airportRegistry.count(), packAirports);
+        // Runway terrain flattening: gear touches at the authoritative field elevation, and the tile
+        // mesh matches the physics floor (both route through TerrainStreamer::heightAt). Set BEFORE any
+        // further terrain priming so spawn elevations are taken from already-flattened terrain.
+        terrainStreamer.setHeightModifier(
+            [&airportRegistry](glm::dvec3 pos, double rawH) { return airportRegistry.flattenedHeight(pos, rawH); },
+            [&airportRegistry](glm::dvec3 centre, double radiusM) {
+                return airportRegistry.regionHasRunway(centre, radiusM);
+            });
+        char buf[144];
+        std::snprintf(buf, sizeof(buf), "content: %zu airport(s) loaded (builtin + %u pack + %zu CSV%s)",
+                      airportRegistry.count(), packAirports, csvStats.airports,
+                      csvStats.csvPresent ? (csvStats.cacheHit ? ", cached" : ", imported") : ", no CSV");
         log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
 
