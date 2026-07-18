@@ -1436,6 +1436,9 @@ void Game::run() {
             if (const double utcJd = d.session.clientHandler->utcJulianDay(); utcJd > 0.0) {
                 const double planetR = static_cast<double>(d.session.clientHandler->planetRadiusKm()) * 1000.0;
                 fl::WeatherController::applyGeographicSun(d.services.env, utcJd, cam.worldOrigin, planetR);
+                // Night sky (#484): Moon + geographically-oriented stars for this observer. Must
+                // follow the sun call (the night factor keys off env.sunDirection).
+                fl::WeatherController::applyGeographicCelestial(d.services.env, utcJd, cam.worldOrigin, planetR);
             }
 
             updateAudioListener(*d.services.p.audio, cam, playerEntry ? playerEntry->velocity : glm::vec3{});

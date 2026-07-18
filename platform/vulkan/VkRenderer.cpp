@@ -661,6 +661,15 @@ void VkRenderer::writeFrameUBOs(const FrameScene& scene) {
         sky.fogParams = glm::vec4(env.fogDensity, env.fogStartDist / 1000.0f, env.timeOfDay, camAltKm);
     }
     sky.qualityMode = (m_settings.skyQuality == RendererSkyQuality::LUT) ? 1u : 0u;
+    {
+        // Night sky (#484): Moon disc + geographically-oriented star field. nightFactor ramps in as
+        // the sun drops below the horizon; celestialValid gates the whole thing (0 = legacy day sky).
+        const auto& env = scene.environment;
+        sky.moonDirection = glm::vec4(env.moonDirection, env.moonAngularRadius);
+        const float nightFactor = glm::clamp((-env.sunDirection.y + 0.10f) / 0.18f, 0.0f, 1.0f);
+        sky.moonParams = glm::vec4(env.moonIllumination, nightFactor, env.celestialValid ? 1.0f : 0.0f, 0.0f);
+        sky.worldToCelestial = glm::mat4(env.worldToCelestial);
+    }
     std::memcpy(pf.skyMapped, &sky, sizeof(sky));
 }
 

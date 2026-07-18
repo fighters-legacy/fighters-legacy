@@ -214,6 +214,15 @@ struct EnvironmentState {
                                // feeds it to weatherTurbulence() to reproduce the server's per-tick turbulence
     bool isSnowPrecipitation{
         false}; // true when server preset is Snow or Blizzard; set by WeatherController::applyPresetToEnv
+
+    // Night sky (#484), all set by WeatherController::applyGeographicCelestial (client-side, from the
+    // shared UTC clock + the camera's lat/lon). Consumed by the sky shader for the Moon disc + the
+    // geographically-oriented star field. celestialValid == false leaves the legacy day sky untouched.
+    glm::vec3 moonDirection{0.0f, 1.0f, 0.0f}; // world-space, points toward the Moon
+    float moonAngularRadius{0.0045f};          // radians (~0.26 deg)
+    float moonIllumination{1.0f};              // [0,1]; 0 = new, 1 = full (disc phase is geometric)
+    glm::mat3 worldToCelestial{1.0f};          // rotates a world ray into the fixed star frame
+    bool celestialValid{false};
 };
 
 // ---------------------------------------------------------------------------

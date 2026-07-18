@@ -693,6 +693,10 @@ catch_discover_tests(test_world_broadcaster)
 
 add_executable(test_weather test_weather.cpp)
 target_link_libraries(test_weather PRIVATE Catch2::Catch2WithMain engine-weather)
+
+add_executable(test_celestial test_celestial.cpp)
+target_link_libraries(test_celestial PRIVATE Catch2::Catch2WithMain engine-weather engine-flight)
+catch_discover_tests(test_celestial)
 catch_discover_tests(test_weather)
 
 add_executable(test_solar_position test_solar_position.cpp)

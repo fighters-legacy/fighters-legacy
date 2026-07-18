@@ -79,6 +79,13 @@ class WeatherController {
     static void applyGeographicSun(EnvironmentState& env, double julianDay, glm::dvec3 observerPos,
                                    double R = kEarthRadiusM);
 
+    // Geographic night sky (#484): fills `env`'s Moon direction/phase and the world->celestial star
+    // rotation for an observer at `observerPos` and the shared UTC `julianDay`, via LunarPosition.h +
+    // CelestialFrame.h. Client-side and per-observer, like applyGeographicSun (which must be called
+    // first — the star/Moon night factor keys off env.sunDirection). Sets env.celestialValid = true.
+    static void applyGeographicCelestial(EnvironmentState& env, double julianDay, glm::dvec3 observerPos,
+                                         double R = kEarthRadiusM);
+
   private:
     WeatherControllerParams m_params{};
 

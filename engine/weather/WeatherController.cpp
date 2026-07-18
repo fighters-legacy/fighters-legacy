@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "weather/WeatherController.h"
 
-#include "flight/LocalFrame.h" // enuBasis for the geographic sun (#481)
+#include "flight/LocalFrame.h"      // enuBasis for the geographic sun (#481)
+#include "weather/CelestialFrame.h" // sidereal time + equatorial->world (#484)
+#include "weather/LunarPosition.h"  // Moon ephemeris (#484)
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
@@ -264,6 +266,18 @@ void WeatherController::applyGeographicSun(EnvironmentState& env, double jd, glm
     env.sunDirection = glm::normalize(basis * sunDirectionEnu(a));
     // Light the scene from the TRUE local solar elevation, not the planar world-Y proxy.
     applySunLighting(env, static_cast<float>(std::sin(a.elevationRad)));
+}
+
+void WeatherController::applyGeographicCelestial(EnvironmentState& env, double jd, glm::dvec3 observerPos, double R) {
+    const LatLonAlt lla = worldToGeodetic(observerPos.x, observerPos.y, observerPos.z, R);
+    const double lst = localSiderealTimeRad(jd, lla.lon_rad);
+
+    const MoonEquatorial moon = moonEquatorial(jd);
+    env.moonDirection = equatorialToWorld(moon.raRad, moon.decRad, lla.lat_rad, lst, observerPos, R);
+    env.moonAngularRadius = static_cast<float>(moonAngularRadiusRad(moon.distanceKm));
+    env.moonIllumination = static_cast<float>(moon.illuminatedFraction);
+    env.worldToCelestial = worldToCelestial(lla.lat_rad, lst, observerPos, R);
+    env.celestialValid = true;
 }
 
 } // namespace fl

@@ -82,10 +82,13 @@ struct SkyUBO {
     glm::vec4 sunColor{};                           // 16 bytes  xyz = color, w = intensity
     glm::vec4 skyParams{0.40f, 0.55f, 0.75f, 0.0f}; // 16 bytes  xyz=horizonColor, w=cloudCoverage[0,1]
     glm::vec4 fogParams{0.0f, 5.0f, 12.0f, 0.0f};   // 16 bytes  x=density, y=startDist(km), z=timeOfDay(h), w=camAltKm
-    uint32_t qualityMode{0};                        // 0 = procedural, 1 = LUT
-    float _pad[3]{};                                // pad to 16-byte alignment → 144 bytes
+    glm::vec4 moonDirection{0.0f, 1.0f, 0.0f, 0.0045f}; // 16 bytes  xyz = dir toward Moon, w = angular radius (#484)
+    glm::vec4 moonParams{1.0f, 0.0f, 0.0f, 0.0f};       // 16 bytes  x=illumination, y=nightFactor, z=celestialValid
+    glm::mat4 worldToCelestial{1.0f};                   // 64 bytes  mat3 (padded) rotating a world ray -> star frame
+    uint32_t qualityMode{0};                            // 0 = procedural, 1 = LUT
+    float _pad[3]{};                                    // pad to 16-byte alignment → 240 bytes
 };
-static_assert(sizeof(SkyUBO) == 144u);
+static_assert(sizeof(SkyUBO) == 240u);
 
 // Push constants for the tonemap + FXAA + bloom + AO composite pass.
 struct TonemapPush {
