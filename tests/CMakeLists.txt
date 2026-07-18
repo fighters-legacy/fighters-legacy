@@ -95,6 +95,13 @@ add_executable(test_turret test_turret.cpp)
 target_link_libraries(test_turret PRIVATE Catch2::Catch2WithMain engine-weapon)
 catch_discover_tests(test_turret)
 
+# Crewed control frame (#969): per-seat sampling + turret slew + per-seat fire through a real WB tick.
+add_executable(test_crew_frame test_crew_frame.cpp)
+target_link_libraries(test_crew_frame PRIVATE Catch2::Catch2WithMain engine-net engine-entity engine-weapon
+    engine-spatial engine-weather engine-job)
+target_include_directories(test_crew_frame PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_crew_frame)
+
 # SeekerTrack + PN guidance (#627): the missile seeker over the shared Detection.h machine.
 add_executable(test_seeker test_seeker.cpp)
 target_link_libraries(test_seeker PRIVATE Catch2::Catch2WithMain engine-weapon engine-entity

@@ -74,6 +74,30 @@ LoadoutState buildLoadout(const EntityDef& def, const WeaponRegistry& weapons) {
     return ls;
 }
 
+LoadoutState buildSeatLoadout(const EntityDef& def, const WeaponRegistry& weapons, const std::vector<int>& seatSlots) {
+    LoadoutState ls;
+    for (const Hardpoint& hp : def.hardpoints) {
+        if (std::find(seatSlots.begin(), seatSlots.end(), hp.slot) == seatSlots.end())
+            continue; // not this seat's station
+        StationState st;
+        if (!hp.defaultWeapon.empty()) {
+            const uint32_t idx = weapons.indexById(hp.defaultWeapon.c_str());
+            const WeaponDef* w = (idx != UINT32_MAX) ? weapons.byIndex(idx) : nullptr;
+            if (w) {
+                ls.payloadMassKg += w->load.massKg;
+                ls.payloadCd0 += w->load.dragFactor;
+                if (w->type != WeaponType::Fuel && w->type != WeaponType::Pod) {
+                    st.weaponIndex = idx;
+                    st.rounds = w->load.rounds;
+                }
+            }
+        }
+        ls.stations.push_back(st);
+    }
+    pickDefaultSelection(ls, weapons);
+    return ls;
+}
+
 LoadoutState buildLoadoutOverride(const EntityDef& def, const WeaponRegistry& weapons,
                                   const std::vector<std::string>& stores, std::vector<std::string>& warnings) {
     LoadoutState ls;
@@ -125,27 +149,27 @@ LoadoutState buildLoadoutOverride(const EntityDef& def, const WeaponRegistry& we
     return ls;
 }
 
-void evaluateFire(FireState& fs, const WeaponRegistry& weapons, const ControlInput& in, bool weaponsHold, uint64_t tick,
-                  uint32_t shooterIdx, std::vector<FireRequest>& out) {
+void evaluateFire(FireState& fs, const WeaponRegistry& weapons, const WeaponControls& wc, bool weaponsHold,
+                  uint64_t tick, uint32_t shooterIdx, std::vector<FireRequest>& out) {
     // The edge detector runs UNCONDITIONALLY, before any gate: a press that arrives during a
     // weapons hold must not be banked and fired the instant the hold lifts.
-    const bool releaseEdge = in.release && !fs.prevRelease;
-    fs.prevRelease = in.release;
+    const bool releaseEdge = wc.release && !fs.prevRelease;
+    fs.prevRelease = wc.release;
 
     if (fs.loadout.empty())
         return;
 
     // Absolute station selection (255 = keep). Clamp rather than reject: a client racing a
     // rearm/config change should land on a real station, not have its selection dropped.
-    if (in.station != 255 && !fs.loadout.stations.empty())
-        fs.loadout.selected = std::min<uint8_t>(in.station, static_cast<uint8_t>(fs.loadout.stations.size() - 1));
+    if (wc.station != 255 && !fs.loadout.stations.empty())
+        fs.loadout.selected = std::min<uint8_t>(wc.station, static_cast<uint8_t>(fs.loadout.stations.size() - 1));
 
     if (weaponsHold)
         return; // #610's order, finally with teeth: intent is read, nothing leaves the aircraft
 
     // Gun trigger: level semantics, rate-limited. Fires the FIRST gun station with rounds — an
     // aircraft with two gun stations (rare) empties them in slot order.
-    if (in.trigger && tick >= fs.nextGunTick) {
+    if (wc.trigger && tick >= fs.nextGunTick) {
         for (uint8_t i = 0; i < fs.loadout.stations.size(); ++i) {
             StationState& st = fs.loadout.stations[i];
             if (st.weaponIndex == UINT32_MAX || st.rounds == 0)
@@ -178,7 +202,7 @@ void evaluateFire(FireState& fs, const WeaponRegistry& weapons, const ControlInp
     StationState* st = fs.loadout.selectedStation();
     const WeaponDef* sw = (st && st->weaponIndex != UINT32_MAX) ? weapons.byIndex(st->weaponIndex) : nullptr;
     const bool rocket = sw && sw->type == WeaponType::Rocket;
-    const bool wantsRelease = rocket ? in.release : releaseEdge;
+    const bool wantsRelease = rocket ? wc.release : releaseEdge;
     if (wantsRelease && tick >= fs.nextReleaseTick) {
         if (st && sw && st->rounds > 0 && sw->type != WeaponType::Gun) {
             fs.nextReleaseTick = tick + (rocket ? kRocketRippleTicks : kReleaseCooldownTicks);
