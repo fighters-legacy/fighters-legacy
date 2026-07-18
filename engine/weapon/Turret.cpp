@@ -30,23 +30,6 @@ constexpr float kTwoPi = 2.f * kPi;
 
 } // namespace
 
-glm::vec3 turretBoreMount(float azRad, float elRad) noexcept {
-    const float ce = std::cos(elRad);
-    return glm::vec3{ce * std::cos(azRad), std::sin(elRad), -ce * std::sin(azRad)};
-}
-
-void turretAimToAzEl(const glm::vec3& aimDirMount, float& outAzRad, float& outElRad) noexcept {
-    const float len = glm::length(aimDirMount);
-    if (len < 1e-6f) {
-        outAzRad = 0.f;
-        outElRad = 0.f;
-        return;
-    }
-    const glm::vec3 d = aimDirMount / len;
-    outElRad = std::asin(std::clamp(d.y, -1.f, 1.f));
-    outAzRad = std::atan2(-d.z, d.x);
-}
-
 void commandTurretMount(TurretState& t, const TurretLimits& lim, const glm::vec3& aimDirMount) noexcept {
     float az = 0.f;
     float el = 0.f;

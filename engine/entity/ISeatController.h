@@ -34,6 +34,9 @@ struct SeatTurretView {
     float azMaxRad{3.14159265f};
     float elMinRad{-0.0872665f};
     float elMaxRad{1.4835299f};
+    // The turret's CURRENT world-space bore this tick (from the previous slew) — so a bot can hold
+    // fire until the servo has actually pointed the gun at its target, not while it is still slewing.
+    glm::vec3 boreWorld{1.f, 0.f, 0.f};
 };
 
 // The per-seat view handed to an ISeatController each tick.

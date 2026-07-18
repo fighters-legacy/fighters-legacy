@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <glm/geometric.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/vec3.hpp>
+
+#include <algorithm>
+#include <cmath>
 
 namespace fl {
 
@@ -45,12 +49,27 @@ struct TurretState {
     float cmdElRad{0.f};
 };
 
-// The bore unit vector in the MOUNT rest frame for a given (az, el).
-[[nodiscard]] glm::vec3 turretBoreMount(float azRad, float elRad) noexcept;
+// The bore unit vector in the MOUNT rest frame for a given (az, el). Header-inline (pure trig) so a
+// consumer — e.g. a seat bot checking whether a target is reachable within the turret arc — can use
+// it and turretAimToAzEl without linking engine-weapon.
+[[nodiscard]] inline glm::vec3 turretBoreMount(float azRad, float elRad) noexcept {
+    const float ce = std::cos(elRad);
+    return glm::vec3{ce * std::cos(azRad), std::sin(elRad), -ce * std::sin(azRad)};
+}
 
 // Decompose a mount-frame aim direction into (az, el). el is clamped to [-pi/2, pi/2] by asin; az is
 // the atan2 in (-pi, pi]. A near-zero direction yields (0, 0).
-void turretAimToAzEl(const glm::vec3& aimDirMount, float& outAzRad, float& outElRad) noexcept;
+inline void turretAimToAzEl(const glm::vec3& aimDirMount, float& outAzRad, float& outElRad) noexcept {
+    const float len = glm::length(aimDirMount);
+    if (len < 1e-6f) {
+        outAzRad = 0.f;
+        outElRad = 0.f;
+        return;
+    }
+    const glm::vec3 d = aimDirMount / len;
+    outElRad = std::asin(std::clamp(d.y, -1.f, 1.f));
+    outAzRad = std::atan2(-d.z, d.x);
+}
 
 // Set the commanded target from a mount-frame aim direction, clamped to the traverse limits.
 void commandTurretMount(TurretState& t, const TurretLimits& lim, const glm::vec3& aimDirMount) noexcept;

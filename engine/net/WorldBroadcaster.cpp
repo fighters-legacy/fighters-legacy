@@ -3453,6 +3453,7 @@ void WorldBroadcaster::sampleCrewSeats(ControlledEntity& ce, const EntityState& 
             view.turret.azMaxRad = tr.limits.azMaxRad;
             view.turret.elMinRad = tr.limits.elMinRad;
             view.turret.elMaxRad = tr.limits.elMaxRad;
+            view.turret.boreWorld = turretWorldDir(tr.state, tr.mountRest, airQ); // current aim (from last slew)
         }
         const SeatCommand cmd = seat.seatBot->sample(st, view, tick, dt, ctx);
         seat.lastCommand = cmd;

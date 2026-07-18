@@ -341,6 +341,34 @@ to load. Rename any such variables before shipping a pack targeting this engine 
 
 ---
 
+## Crew seat bots — the turret gunner (#966/#971)
+
+A multi-crew aircraft (see the [`[[crew]]`/`[[turrets]]` schema](formats.md#crew-and-turrets-optional--multi-crew-seats-and-turret-mounts))
+fills its non-flying seats with **seat bots**, which are a different (narrower) thing than the flying
+AI above: a seat bot produces only a *seat command* (where to aim its turret and whether to fire), not
+a full flight `ControlInput`. The engine ships one: the **turret gunner**.
+
+Author it on a seat with `bot = "gunner"` (or `"builtin:gunner"`); a `fire` seat that aims a turret
+also defaults to the gunner when its `bot` is left empty. The gunner:
+
+- **Acquires honestly** off the aircraft's own contact table — a jammed or blind aircraft's gunner
+  engages nothing, exactly like a pilot. It picks the nearest detected hostile within its turret's
+  coverage arc.
+- **Leads** the target with the shared ballistic solver, **slews** the turret onto the lead point
+  (the server servo rate-limits and clamps it to the turret's traverse limits), and **holds fire**
+  until the gun is actually pointed at the target and the predicted miss is inside the lethal cone.
+- Fires along the **turret bore**, independent of the airframe nose.
+
+**Per-instance skill** — the first in the engine. Each gunner rolls a skill in a range with a
+deterministic seed (mission seed ⊕ object id ⊕ seat index), so two bombers from the same mission are
+not equally deadly, and a replay is identical. A higher rolled skill **tightens the aim** (a smaller
+error cone, scaled off the difficulty `aim_error_deg`) and **shortens the reaction** before the gunner
+opens fire. The per-seat skill *range* is a mission-authored setting (mission & campaign runtime, #976);
+until then the seat's authored `skill` is used as a fixed point.
+
+Per-instance skill is not gunner-specific — plain mission AI can roll it too (the same
+`rollPerInstanceSkill` seed helper), so a flight of interceptors need not fly at one uniform skill.
+
 ## Coming in Phase 4 (mission & campaign runtime epic, #584)
 
 The mission & campaign runtime epic ([#584](https://github.com/fighters-legacy/fighters-legacy/issues/584);
