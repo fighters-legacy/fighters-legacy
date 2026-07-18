@@ -806,6 +806,11 @@ enum class ExtTag : uint16_t {
                 // peer (#427). Lets client prediction replay EXACTLY the inputs the server has not yet
                 // reflected (history seqNum > this), instead of approximating the replay depth from
                 // estimatedDelayTicks. Omitted until the first input is applied (a peer's first snapshots).
+
+    WeatherWindProfile = 0x0400, // #489: altitude wind profile appended to MsgWeatherState. Payload =
+                                 // uint8 count + count x {float altM, float windX, float windZ} (12 B each,
+                                 // little-endian, unaligned). Ascending altitude. Old clients ignore it and
+                                 // keep the datum-level windX/windZ scalar; omitted when no profile is set.
 };
 
 } // namespace fl

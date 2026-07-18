@@ -355,6 +355,30 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         // #481: store the shared UTC clock; Game.cpp computes the per-camera geographic sun each frame
         // (the direction depends on the camera lat/lon, which moves faster than these ~6 Hz packets).
         m_utcJulianDay = ws.utcJulianDay;
+
+        // Altitude wind profile TLV (#489): parse the tail after the fixed struct into env.windProfile.
+        // Absent (old server / no profile) leaves count 0 -> ClientPrediction uses the datum scalar.
+        env.windProfileCount = 0;
+        if (size > sizeof(fl::MsgWeatherState)) {
+            const uint8_t* ext = static_cast<const uint8_t*>(data) + sizeof(fl::MsgWeatherState);
+            const std::size_t extSize = size - sizeof(fl::MsgWeatherState);
+            uint16_t valueLen = 0;
+            const uint8_t* p =
+                fl::findExt(ext, extSize, static_cast<uint16_t>(fl::ExtTag::WeatherWindProfile), valueLen);
+            if (p && valueLen >= 1) {
+                const uint8_t count = p[0];
+                const std::size_t need = 1u + static_cast<std::size_t>(count) * 12u;
+                if (count <= fl::EnvironmentState::kWindProfileMaxKnots && valueLen >= need) {
+                    for (int i = 0; i < count; ++i) {
+                        const uint8_t* rec = p + 1 + static_cast<std::size_t>(i) * 12u;
+                        std::memcpy(&env.windProfile[i].altM, rec, 4);
+                        std::memcpy(&env.windProfile[i].windX, rec + 4, 4);
+                        std::memcpy(&env.windProfile[i].windZ, rec + 8, 4);
+                    }
+                    env.windProfileCount = count;
+                }
+            }
+        }
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::ServerNotice)) {
         fl::MsgServerNotice sn;
         if (!fl::readMsg(data, size, sn))

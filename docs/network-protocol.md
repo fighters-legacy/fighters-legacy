@@ -788,12 +788,14 @@ Helpers: `fl::findExt`, `fl::readExtValue<T>`, `fl::appendExt<T>`, `fl::appendEx
 | `SnapshotEffects` | `0x0104` | packed records | `MsgWorldSnapshot` | Cosmetic weapon effects (#625): tracers, muzzle flashes, launches, impacts, detonations. `kEffectRecordBytes` (22) per record, unaligned little-endian: `type u8` (`EffectType`: 0=WeaponFired, 1=MissileLaunch, 2=Impact, 3=Detonation, 4=NuclearFlash) + `weaponClass u8` (`WeaponType` ordinal) + `srcIdx u32` + `tgtIdx u32` (`0xFFFFFFFF` = none) + `pos f32[3]` (float32 world position — particle precision, not sim precision). Interest-filtered per peer, capped at `kMaxEffectsPerSnapshot` (16) per snapshot. **Unreliable by design**: a dropped packet loses cosmetics, never state — anything that must arrive (kills, stats) travels on the reliable `MsgCombatEvent`. Unknown `type` values must be skipped, never rejected. Omitted when empty. |
 | `SnapshotLastAckedSeqNum` | `0x0105` | `uint32_t` | `MsgWorldSnapshot` | The `seqNum` of the last `MsgClientInput` the server **drained from the jitter buffer and applied** for the receiving peer (#427). Lets `ClientPrediction` replay *exactly* the inputs the server has not yet reflected (history `seqNum > this`), rather than approximating the replay window from `SnapshotPeerDelayTicks` — exact under high delay variance, where the tick count over- or under-replays. Absent until the server has applied one of the peer's inputs (its first snapshots); the client falls back to the delay-ticks approximation when absent. |
 
+| `WeatherWindProfile` | `0x0400` | `uint8 count` + `count × {f32 altM, f32 windX, f32 windZ}` (12 B each) | `MsgWeatherState` | Altitude wind profile (#489), appended after the 32-byte fixed struct. Knots ascending by altitude, absolute world-frame wind (m/s) at each. The client interpolates it by altitude (`WindProfile.h`) in parity with the server's per-entity wind. Omitted when no profile is set; old clients read the 32-byte struct and ignore the tail, keeping the datum-level `windX/windZ`. Little-endian, unaligned; read per-record via memcpy. |
+
 **Reserved ranges:**
 - `0x0000`: reserved
 - `0x0100–0x01FF`: `MsgWorldSnapshot` extensions
 - `0x0200–0x02FF`: `MsgConnectAck` extensions (reserved for future use)
-- `0x0300–0x03FF`: `MsgClientInput` extensions (reserved for future use)
-- `0x0400–0x04FF`: `MsgWeatherState` extensions (reserved for future use)
+- `0x0300–0x03FF`: `MsgClientInput` extensions (`0x0400` used by `WeatherWindProfile`)
+- `0x0400–0x04FF`: `MsgWeatherState` extensions (`0x0400` = `WeatherWindProfile`)
 - All other values: reserved; must not be sent
 
 ---

@@ -30,6 +30,7 @@
 #include "sensor/TrackPicture.h"
 #include "weather/Turbulence.h"
 #include "weather/WeatherController.h"
+#include "weather/WindProfile.h" // altitude wind interp (#489)
 #include "world/FactionDef.h"
 #include "world/FactionRegistry.h"
 
@@ -1506,7 +1507,29 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             ws.windZ = env.windZ;
             ws.turbulenceAmp = env.turbulenceAmp;        // #426
             ws.utcJulianDay = m_weather->utcJulianDay(); // #481: shared UTC clock for the geographic sun
-            m_net.broadcast(&ws, sizeof(ws), /*reliable=*/false);
+            if (env.windProfileCount == 0) {
+                // No profile: byte-identical to the legacy 32-byte packet.
+                m_net.broadcast(&ws, sizeof(ws), /*reliable=*/false);
+            } else {
+                // Append the altitude wind profile as a TLV (#489); old clients ignore the tail.
+                std::vector<uint8_t> buf(reinterpret_cast<const uint8_t*>(&ws),
+                                         reinterpret_cast<const uint8_t*>(&ws) + sizeof(ws));
+                std::vector<uint8_t> payload;
+                payload.push_back(env.windProfileCount);
+                auto pushF = [&](float f) {
+                    uint8_t b[4];
+                    std::memcpy(b, &f, 4);
+                    payload.insert(payload.end(), b, b + 4);
+                };
+                for (int i = 0; i < env.windProfileCount; ++i) {
+                    pushF(env.windProfile[i].altM);
+                    pushF(env.windProfile[i].windX);
+                    pushF(env.windProfile[i].windZ);
+                }
+                appendExtRaw(buf, static_cast<uint16_t>(ExtTag::WeatherWindProfile), payload.data(),
+                             static_cast<uint16_t>(payload.size()));
+                m_net.broadcast(buf.data(), buf.size(), /*reliable=*/false);
+            }
         }
     }
 
@@ -3373,8 +3396,19 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
                                      uint64_t tickIndex) {
     WindInfluence wind{};
     if (m_weather) {
-        wind.wind_world[0] = m_weather->windX();
-        wind.wind_world[2] = m_weather->windZ();
+        if (m_weather->hasWindProfile()) {
+            // Altitude wind (#489): a high-flying entity feels the wind at ITS altitude, not the
+            // surface scalar. Matches the client's ClientPrediction interp on the broadcast profile.
+            const auto& p = fi.state().pos_world;
+            const float altM = static_cast<float>(
+                windAltitudeM(glm::dvec3(p[0], p[1], p[2]), static_cast<double>(m_planetRadiusKm) * 1000.0));
+            const glm::vec2 w = m_weather->windAtAltitude(altM);
+            wind.wind_world[0] = w.x;
+            wind.wind_world[2] = w.y;
+        } else {
+            wind.wind_world[0] = m_weather->windX();
+            wind.wind_world[2] = m_weather->windZ();
+        }
         // Per-entity deterministic turbulence: a pure function of (entityIdx, tickIndex) + amplitude,
         // so the perturbation is independent of evaluation order, identical across worker counts and
         // platforms, and — since #426 broadcasts the amplitude in MsgWeatherState — reproducible on

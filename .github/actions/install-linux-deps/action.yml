@@ -55,7 +55,7 @@ runs:
           pkgs="$pkgs clang-format-22"
         fi
         if [ "${{ inputs.python_tools }}" = "true" ]; then
-          pkgs="$pkgs python3-gdal python3-numpy python3-pytest"
+          pkgs="$pkgs python3-gdal python3-numpy python3-netcdf4 python3-pytest"
         fi
         if [ "${{ inputs.lcov }}" = "true" ]; then
           pkgs="$pkgs lcov"

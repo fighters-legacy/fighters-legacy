@@ -1379,3 +1379,29 @@ TEST_CASE("parseServerConfig: a fractional value for an integer field is refused
     auto cfg = parseServerConfig("[server]\nport = 4778.7\n", &log);
     CHECK(cfg.port == 4778); // the default, not a truncation — the field was never applied
 }
+
+TEST_CASE("parseServerConfig: [wind] profile_path is parsed", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[wind]\nprofile_path = \"theaters/nevada.toml\"\n", &log);
+    CHECK(cfg.wind.profilePath == "theaters/nevada.toml");
+}
+
+TEST_CASE("parseWindProfile: reads knots and skips out-of-range/malformed", "[server_config][wind]") {
+    MockLogger log;
+    const char* toml = "[[wind.profile]]\naltitude_m = 0\nspeed_ms = 10\nheading_deg = 270\n"
+                       "[[wind.profile]]\naltitude_m = 5000\nspeed_ms = 40\nheading_deg = 260\n"
+                       "[[wind.profile]]\naltitude_m = 99999\nspeed_ms = 40\nheading_deg = 260\n" // alt out of range
+                       "[[wind.profile]]\naltitude_m = 3000\nspeed_ms = 20\n";                    // missing heading
+    auto knots = fl::parseWindProfile(toml, &log);
+    REQUIRE(knots.size() == 2);
+    CHECK(knots[0].altM == 0.0f);
+    CHECK(knots[0].speedMs == 10.0f);
+    CHECK(knots[0].headingDeg == 270.0f);
+    CHECK(knots[1].altM == 5000.0f);
+}
+
+TEST_CASE("parseWindProfile: empty/no-profile input yields no knots", "[server_config][wind]") {
+    MockLogger log;
+    CHECK(fl::parseWindProfile("[server]\nport = 4778\n", &log).empty());
+    CHECK(fl::parseWindProfile("", &log).empty());
+}

@@ -34,8 +34,27 @@ class WeatherController {
     // Instant overrides — call via GameLoop::enqueueSimCallback() from non-sim threads.
     void setPreset(WeatherPreset p);
     void setTimeOfDay(float hours);                // [0, 24); wraps if out of range
-    void setWind(float headingDeg, float speedMs); // meteorological: FROM direction
+    void setWind(float headingDeg, float speedMs); // meteorological: FROM direction; clears any profile
     void setDate(int year, int month, int day);    // UTC calendar date for the geographic sun (#481)
+
+    // Altitude wind profile (#489). A knot is authored meteorologically: altitude (m MSL), speed (m/s),
+    // and the heading the wind blows FROM (deg). setWindProfile converts each to a world-frame vector
+    // ONCE here (no per-frame libm; the client interpolates the vectors), sorts by altitude, and caps
+    // at EnvironmentState::kWindProfileMaxKnots. An empty span clears it (== clearWindProfile). Both
+    // setWind() and setWindProfile() are mutually exclusive — the last one called wins.
+    struct WindProfileMetKnot {
+        float altM{0.0f};
+        float speedMs{0.0f};
+        float headingDeg{0.0f}; // FROM direction
+    };
+    void setWindProfile(const std::vector<WindProfileMetKnot>& knots);
+    void clearWindProfile();
+    [[nodiscard]] bool hasWindProfile() const noexcept {
+        return m_windProfileCount > 0;
+    }
+    // World-frame wind (m/s) at altitude altM, gust folded — the SAME value computed via WindProfile.h
+    // windAtAltitude on env-filled state (used by the server per-entity). Falls back to windX/windZ.
+    [[nodiscard]] glm::vec2 windAtAltitude(float altM) const noexcept;
 
     [[nodiscard]] WeatherPreset preset() const noexcept {
         return m_preset;
@@ -108,6 +127,16 @@ class WeatherController {
 
     // Turbulence amplitude (m/s) — set from preset, used by WorldBroadcaster
     float m_turbulenceAmp{0.0f};
+
+    // Altitude wind profile (#489) — steady world-frame vectors per knot, ascending by altitude, gust
+    // added at read time. count 0 = no profile (fall back to the m_windHeading/Speed datum scalar).
+    struct WindProfileStored {
+        float altM{0.0f};
+        float windX{0.0f};
+        float windZ{0.0f};
+    };
+    WindProfileStored m_windProfile[EnvironmentState::kWindProfileMaxKnots]{};
+    int m_windProfileCount{0};
 
     uint32_t m_rng{0xDEADBEEF}; // LCG state for transition randomisation
     uint32_t lcg() noexcept;    // returns next LCG value and advances m_rng

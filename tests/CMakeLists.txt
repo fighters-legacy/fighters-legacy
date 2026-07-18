@@ -975,3 +975,7 @@ add_executable(test_content_downloader test_content_downloader.cpp)
 target_link_libraries(test_content_downloader PRIVATE Catch2::Catch2WithMain engine-content engine-crypto)
 target_include_directories(test_content_downloader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_content_downloader)
+
+add_executable(test_wind_profile test_wind_profile.cpp)
+target_link_libraries(test_wind_profile PRIVATE Catch2::Catch2WithMain engine-weather engine-flight)
+catch_discover_tests(test_wind_profile)

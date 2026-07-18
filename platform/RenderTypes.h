@@ -215,6 +215,19 @@ struct EnvironmentState {
     bool isSnowPrecipitation{
         false}; // true when server preset is Snow or Blizzard; set by WeatherController::applyPresetToEnv
 
+    // Altitude wind profile (#489): world-frame wind (m/s) at up to kWindProfileMaxKnots altitudes,
+    // ascending. count == 0 means "no profile" — use the datum-level windX/windZ scalar above. Set on
+    // the server from the mission/theater profile and mirrored to the client via the MsgWeatherState
+    // TLV; both sides interpolate with the SAME pure code (WindProfile.h) so prediction stays in parity.
+    static constexpr int kWindProfileMaxKnots = 8;
+    struct WindKnot {
+        float altM{0.0f};
+        float windX{0.0f};
+        float windZ{0.0f};
+    };
+    uint8_t windProfileCount{0};
+    WindKnot windProfile[kWindProfileMaxKnots]{};
+
     // Night sky (#484), all set by WeatherController::applyGeographicCelestial (client-side, from the
     // shared UTC clock + the camera's lat/lon). Consumed by the sky shader for the Moon disc + the
     // geographically-oriented star field. celestialValid == false leaves the legacy day sky untouched.

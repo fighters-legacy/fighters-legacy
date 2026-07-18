@@ -165,6 +165,14 @@ struct ServerConfig {
     };
     MetricsConfig metrics;
 
+    // [wind]  — altitude wind profile (#489)
+    struct WindConfig {
+        std::string profilePath; // empty = disabled; path (relative to the config dir) to a wind
+                                 // profile TOML (see tools/gen_wind_profile.py). Loaded once at
+                                 // startup and applied via WeatherController::setWindProfile.
+    };
+    WindConfig wind;
+
     // [trace]  — server-side input tracing (#560)
     struct TraceConfig {
         std::string inputTraceDir; // empty = disabled; per-peer FLIT traces written here
@@ -219,6 +227,18 @@ struct ServerConfig {
 
 // Returns the embedded default server.toml content written on first run.
 std::string_view defaultServerConfigToml();
+
+// A wind-profile knot as authored (#489): altitude (m MSL), speed (m/s), heading the wind blows FROM
+// (deg). Mirrors WeatherController::WindProfileMetKnot without coupling this header to engine-weather.
+struct WindProfileKnotDef {
+    float altM = 0.0f;
+    float speedMs = 0.0f;
+    float headingDeg = 0.0f;
+};
+
+// Parse a wind-profile TOML ([[wind.profile]] entries; see tools/gen_wind_profile.py) into knots.
+// Malformed/out-of-range knots are skipped with a Warn; returns the valid knots (possibly empty).
+std::vector<WindProfileKnotDef> parseWindProfile(std::string_view content, ILogger* log);
 
 // Parse server configuration from a TOML string.
 // On parse error, logs a Warn and returns a default-constructed ServerConfig.

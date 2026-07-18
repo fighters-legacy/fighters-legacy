@@ -619,6 +619,25 @@ int main(int argc, char** argv) {
     fl::WeatherControllerParams wparams;
     wparams.timeScaleRatio = static_cast<float>(cfg.timeScale);
     fl::WeatherController weatherController(wparams);
+    // Altitude wind profile (#489): load the [wind] profile_path (relative to the config dir) and
+    // apply it, so aircraft feel altitude-dependent wind the client predicts in parity.
+    if (!cfg.wind.profilePath.empty()) {
+        const fs::path profPath = fs::path(configPath).parent_path() / cfg.wind.profilePath;
+        std::ifstream pf(profPath, std::ios::binary);
+        if (pf) {
+            std::string content((std::istreambuf_iterator<char>(pf)), std::istreambuf_iterator<char>());
+            const auto defs = fl::parseWindProfile(content, log);
+            std::vector<fl::WeatherController::WindProfileMetKnot> knots;
+            for (const auto& d : defs)
+                knots.push_back({d.altM, d.speedMs, d.headingDeg});
+            if (!knots.empty()) {
+                weatherController.setWindProfile(knots);
+                log->log(fl::LogLevel::Info, __FILE__, __LINE__, "loaded altitude wind profile");
+            }
+        } else {
+            log->log(fl::LogLevel::Warn, __FILE__, __LINE__, "wind profile_path not found; ignoring");
+        }
+    }
     fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *net, *log, &weatherController);
     fl::WorldBroadcasterConfig wbConfig;
     wbConfig.connectRateLimit = cfg.connectRateLimitCount;
