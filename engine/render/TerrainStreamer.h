@@ -265,6 +265,13 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // Runway-surface override (#487), set-once before queries; read lock-free in surfaceTypeAt().
     std::function<std::optional<SurfaceType>(glm::dvec3)> m_surfaceOverride;
 
+    // Terrain biome texture arrays (#446): uploaded once at construction (pack KTX2 arrays or the
+    // builtin procedural fallback) and bound via IRenderer::setTerrainBiomeTextures. Null renderer =
+    // not uploaded (fl-server headless).
+    void uploadBiomeTextures();
+    TextureHandle m_biomeColorTex{};
+    TextureHandle m_biomeNormalOrmTex{};
+
     // Protects m_tiles for concurrent reads (height queries, sim thread) vs writes
     // (update/finalize/evict, main thread).
     mutable std::shared_mutex m_tileMutex;

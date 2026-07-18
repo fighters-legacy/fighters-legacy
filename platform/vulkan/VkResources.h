@@ -50,6 +50,7 @@ struct GpuTexture {
     VmaAllocation alloc{};
     VkImageView view{VK_NULL_HANDLE};
     VkSampler sampler{VK_NULL_HANDLE};
+    uint32_t layerCount{1}; // > 1 = a 2D array (VK_IMAGE_VIEW_TYPE_2D_ARRAY), #446
     bool alive{false};
 };
 
@@ -83,6 +84,7 @@ class VkResourceManager {
 
     MeshHandle createMesh(const MeshUploadDesc& desc);
     TextureHandle createTexture(const TextureUploadDesc& desc);
+    TextureHandle createTextureArray(const TextureUploadDesc& desc); // 2D array (#446)
     MaterialHandle createMaterial(const MaterialDesc& desc);
 
     void destroyMesh(MeshHandle h);
@@ -121,7 +123,7 @@ class VkResourceManager {
                       VmaAllocation& alloc);
     bool uploadBuffer(VkBuffer dst, const void* src, VkDeviceSize size);
     bool createGpuImage(const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t mipLevels, VkFormat format,
-                        GpuTexture& tex);
+                        GpuTexture& tex, uint32_t arrayLayers = 1);
     bool createDefaultSampler(VkSampler& out);
     bool createDefaultWhiteTexture();
     bool createDefaultFlatNormalTexture();

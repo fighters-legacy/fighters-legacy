@@ -437,6 +437,8 @@ bool VkRenderer::init(IWindow* window) {
         return false;
     if (!m_resources.init(m_device, m_physicalDevice, m_instance, m_commandPool, m_graphicsQueue, m_matSetLayout))
         return false;
+    if (!createTerrainBiomeResources()) // set 2 of the forward layout (#446) — needs m_resources
+        return false;
     if (!createTonemapDescriptors())
         return false;
     if (!createBloomDescriptors())
@@ -906,6 +908,18 @@ MeshHandle VkRenderer::createMesh(const MeshUploadDesc& d) {
 TextureHandle VkRenderer::createTexture(const TextureUploadDesc& d) {
     return m_resources.createTexture(d);
 }
+TextureHandle VkRenderer::createTextureArray(const TextureUploadDesc& d) {
+    return m_resources.createTextureArray(d);
+}
+void VkRenderer::setTerrainBiomeTextures(TextureHandle colorArray, TextureHandle normalOrmArray, uint32_t layerCount) {
+    (void)layerCount; // the array's own layerCount is authoritative; this is advisory
+    m_biomeColorTex = colorArray;
+    m_biomeNormalOrmTex = normalOrmArray;
+    // Set once at streamer construction, but a session restart can re-upload while frames are live —
+    // drain before rewriting the single descriptor set (not a hot path).
+    vkDeviceWaitIdle(m_device);
+    writeTerrainBiomeSet();
+}
 MaterialHandle VkRenderer::createMaterial(const MaterialDesc& d) {
     return m_resources.createMaterial(d);
 }
@@ -978,6 +992,14 @@ void VkRenderer::shutdown() {
     }
     destroySkyResources();
     destroyGtaoResources();
+    if (m_terrainBiomePool != VK_NULL_HANDLE) { // #446
+        vkDestroyDescriptorPool(m_device, m_terrainBiomePool, nullptr);
+        m_terrainBiomePool = VK_NULL_HANDLE;
+    }
+    if (m_terrainBiomeSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_device, m_terrainBiomeSetLayout, nullptr);
+        m_terrainBiomeSetLayout = VK_NULL_HANDLE;
+    }
     if (m_perFrameSetLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(m_device, m_perFrameSetLayout, nullptr);
         m_perFrameSetLayout = VK_NULL_HANDLE;
@@ -1048,6 +1070,7 @@ void VkRenderer::shutdown() {
         m_skyLayout = VK_NULL_HANDLE;
     }
     if (m_pipelineCache != VK_NULL_HANDLE) {
+        savePipelineCache(); // #446 rider: persist for faster repeat launches
         vkDestroyPipelineCache(m_device, m_pipelineCache, nullptr);
         m_pipelineCache = VK_NULL_HANDLE;
     }
@@ -1405,7 +1428,8 @@ bool VkRenderer::createSwapchain(int width, int height) {
     ci.imageColorSpace = chosen.colorSpace;
     ci.imageExtent = m_swapchainExtent;
     ci.imageArrayLayers = 1;
-    ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    // TRANSFER_SRC so the screenshot readback (#487/#909) can copy the presented image to a buffer.
+    ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     ci.preTransform = caps.currentTransform;
     ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     ci.presentMode = presentMode;
@@ -1719,6 +1743,87 @@ bool VkRenderer::createMaterialDescriptorLayout() {
         return false;
     }
     return true;
+}
+
+// Set 2: the terrain biome arrays (#446) — two sampler2DArrays (basecolor, normalORM), fragment.
+bool VkRenderer::createTerrainBiomeResources() {
+    const std::array<VkDescriptorSetLayoutBinding, 2> bindings{{
+        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+    }};
+    VkDescriptorSetLayoutCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    ci.bindingCount = static_cast<uint32_t>(bindings.size());
+    ci.pBindings = bindings.data();
+    if (vkCreateDescriptorSetLayout(m_device, &ci, nullptr, &m_terrainBiomeSetLayout) != VK_SUCCESS) {
+        m_lastError = "vkCreateDescriptorSetLayout (terrain biome) failed";
+        return false;
+    }
+
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    VkDescriptorPoolCreateInfo poolCI{};
+    poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolCI.maxSets = 1;
+    poolCI.poolSizeCount = 1;
+    poolCI.pPoolSizes = &poolSize;
+    if (vkCreateDescriptorPool(m_device, &poolCI, nullptr, &m_terrainBiomePool) != VK_SUCCESS) {
+        m_lastError = "vkCreateDescriptorPool (terrain biome) failed";
+        return false;
+    }
+    VkDescriptorSetAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = m_terrainBiomePool;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &m_terrainBiomeSetLayout;
+    if (vkAllocateDescriptorSets(m_device, &ai, &m_terrainBiomeSet) != VK_SUCCESS) {
+        m_lastError = "vkAllocateDescriptorSets (terrain biome) failed";
+        return false;
+    }
+
+    // 4-layer flat dummy arrays so the set is always valid (kBiomeLayerCount layers so the shader's
+    // vec3(uv, biomeId) sample is in range before real biome textures upload / when headless).
+    constexpr uint32_t kW = 4, kLayers = 4;
+    std::vector<uint8_t> grey(static_cast<std::size_t>(kW) * kW * 4u * kLayers, 128);
+    std::vector<uint8_t> flatN(static_cast<std::size_t>(kW) * kW * 4u * kLayers, 128); // (128,128,rough,occ)
+    for (std::size_t p = 2; p < flatN.size(); p += 4)
+        flatN[p] = 180; // roughness
+    auto rawArray = [&](const std::vector<uint8_t>& px, bool srgb) {
+        TextureUploadDesc td{};
+        td.bytes = px;
+        td.srgb = srgb;
+        td.rawWidth = kW;
+        td.rawHeight = kW;
+        td.rawLayers = kLayers;
+        return m_resources.createTextureArray(td);
+    };
+    m_biomeDummyColor = rawArray(grey, /*srgb=*/true);
+    m_biomeDummyNormalOrm = rawArray(flatN, /*srgb=*/false);
+    writeTerrainBiomeSet();
+    return true;
+}
+
+void VkRenderer::writeTerrainBiomeSet() {
+    if (m_terrainBiomeSet == VK_NULL_HANDLE)
+        return;
+    const GpuTexture* color = m_resources.getTexture(m_biomeColorTex.valid() ? m_biomeColorTex : m_biomeDummyColor);
+    const GpuTexture* norm =
+        m_resources.getTexture(m_biomeNormalOrmTex.valid() ? m_biomeNormalOrmTex : m_biomeDummyNormalOrm);
+    if (!color || !norm)
+        return;
+    const std::array<VkDescriptorImageInfo, 2> imgs{{
+        {color->sampler, color->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {norm->sampler, norm->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+    }};
+    std::array<VkWriteDescriptorSet, 2> writes{};
+    for (int i = 0; i < 2; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = m_terrainBiomeSet;
+        writes[i].dstBinding = static_cast<uint32_t>(i);
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &imgs[static_cast<std::size_t>(i)];
+    }
+    vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -2093,14 +2198,56 @@ bool VkRenderer::createPerFrameDescriptors() {
 // ---------------------------------------------------------------------------
 // Pipeline cache
 // ---------------------------------------------------------------------------
+// Per-user pipeline-cache file path (#446 rider). SDL_GetPrefPath is the same writable dir the game
+// uses for config/logs; the cache is validated by the driver, so a stale blob (driver/GPU change) is
+// safely ignored, not a correctness risk.
+static std::string pipelineCacheFilePath() {
+    char* pref = SDL_GetPrefPath("mkzsystems", "fighters-legacy");
+    std::string path = pref ? std::string(pref) + "pipeline_cache.bin" : std::string{};
+    if (pref)
+        SDL_free(pref);
+    return path;
+}
+
 bool VkRenderer::createPipelineCache() {
+    // Seed from the on-disk cache when present so repeat launches skip pipeline recompilation.
+    std::vector<uint8_t> initial;
+    if (const std::string path = pipelineCacheFilePath(); !path.empty()) {
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        if (f) {
+            const auto sz = f.tellg();
+            if (sz > 0) {
+                initial.resize(static_cast<std::size_t>(sz));
+                f.seekg(0);
+                f.read(reinterpret_cast<char*>(initial.data()), sz);
+            }
+        }
+    }
     VkPipelineCacheCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    ci.initialDataSize = initial.size();
+    ci.pInitialData = initial.empty() ? nullptr : initial.data();
     if (vkCreatePipelineCache(m_device, &ci, nullptr, &m_pipelineCache) != VK_SUCCESS) {
         m_lastError = "vkCreatePipelineCache failed";
         return false;
     }
     return true;
+}
+
+void VkRenderer::savePipelineCache() {
+    if (m_pipelineCache == VK_NULL_HANDLE)
+        return;
+    std::size_t size = 0;
+    if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, nullptr) != VK_SUCCESS || size == 0)
+        return;
+    std::vector<uint8_t> data(size);
+    if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, data.data()) != VK_SUCCESS)
+        return;
+    if (const std::string path = pipelineCacheFilePath(); !path.empty()) {
+        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+        if (f)
+            f.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(size));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2197,7 +2344,8 @@ bool VkRenderer::createForwardPipeline() {
     pushRange.size = sizeof(ForwardPushConstants);
 
     // Descriptor set layouts: set 0 = per-frame, set 1 = per-material.
-    const std::array<VkDescriptorSetLayout, 2> setLayouts{m_perFrameSetLayout, m_matSetLayout};
+    // set 0 = per-frame (camera/light/shadow), set 1 = material, set 2 = terrain biome arrays (#446).
+    const std::array<VkDescriptorSetLayout, 3> setLayouts{m_perFrameSetLayout, m_matSetLayout, m_terrainBiomeSetLayout};
 
     VkPipelineLayoutCreateInfo layoutCI{};
     layoutCI.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -3828,6 +3976,10 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         // Bind per-frame descriptor set (set 0: camera + light UBOs).
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 0, 1,
                                 &m_perFrame[m_currentFrame].descriptorSet, 0, nullptr);
+        // Set 2: terrain biome arrays (#446) — bound once for the whole opaque pass; only the terrain
+        // path in mesh.frag samples it.
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 2, 1, &m_terrainBiomeSet, 0,
+                                nullptr);
 
         // Draw each submitted RenderItem.
         for (const auto& item : m_pendingScene.renderItems) {
@@ -3972,6 +4124,8 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 0, 1,
                                     &m_perFrame[m_currentFrame].descriptorSet, 0, nullptr);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 2, 1, &m_terrainBiomeSet, 0,
+                                    nullptr); // set 2: terrain biome arrays (#446)
 
             for (uint32_t idx : transIndices) {
                 const RenderItem& item = items[idx];

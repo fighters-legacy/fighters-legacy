@@ -103,6 +103,11 @@ struct TextureUploadDesc {
     // albedo/normal/ORM sampling path runs with no content pack. 0 = decode `bytes` as KTX2 or PNG.
     uint32_t rawWidth{0};
     uint32_t rawHeight{0};
+    // 2D texture-ARRAY upload (#446): when rawLayers > 1, the raw-RGBA path treats `bytes` as
+    // rawLayers concatenated rawWidth*rawHeight*4 layers (layer-major) and builds a VK_IMAGE_VIEW_TYPE
+    // _2D_ARRAY. 0/1 = a plain 2D texture. Used by the biome terrain arrays' builtin fallback; a KTX2
+    // array (numLayers > 1) is detected from the container, so this field is for the raw path.
+    uint32_t rawLayers{0};
 };
 
 // ---------------------------------------------------------------------------

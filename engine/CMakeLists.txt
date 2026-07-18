@@ -94,6 +94,7 @@ add_library(engine-render STATIC
     render/ParticleSystem.cpp
     render/BuiltinGeometry.cpp
     render/BuiltinTextures.cpp
+    render/BuiltinBiomes.cpp
     render/TerrainChunkIO.cpp
     render/ProceduralTerrainChunk.cpp
     render/TerrainMeshBuilder.cpp

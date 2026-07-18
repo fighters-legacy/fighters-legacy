@@ -164,11 +164,11 @@ one for combined normal+roughness ("normalORM") — where the **array layer inde
 ```bash
 # Base colour array (sRGB): layer 0 grass, 1 dirt, 2 rock, 3 snow.
 tex-compress --type diffuse --format bc7 --layers grass_c.png dirt_c.png rock_c.png snow_c.png \
-             -o textures/terrain/biome_basecolor.ktx2
+             -o textures/biome_basecolor.ktx2
 
 # Normal+roughness array (linear): RG = tangent-space normal xy, B = roughness, A = occlusion.
 tex-compress --type orm --layers grass_n.png dirt_n.png rock_n.png snow_n.png \
-             -o textures/terrain/biome_normalorm.ktx2
+             -o textures/biome_normalorm.ktx2
 ```
 
 **Layer-order convention (load-bearing — this ordering is ABI):**
@@ -180,10 +180,12 @@ tex-compress --type orm --layers grass_n.png dirt_n.png rock_n.png snow_n.png \
 | 2 | rock  |
 | 3 | snow  |
 
-Place the two arrays at `terrain/biome_basecolor.ktx2` and `terrain/biome_normalorm.ktx2` in the
-pack. When a pack omits them the engine falls back to a compiled-in procedural biome set, so custom
-arrays are optional — but if provided they must follow the layer order above (the shader indexes by
-biome id, not by name). `--layers` needs `toktx` v4.3 or newer.
+Place the two arrays at `textures/biome_basecolor.ktx2` and `textures/biome_normalorm.ktx2` in the
+pack (they load by texture asset name — `biome_basecolor`/`biome_normalorm` — so they live under the
+pack's `textures/` directory like any other texture). When a pack omits them the engine falls back to
+a compiled-in procedural biome set, so custom arrays are optional — but if provided they must follow
+the layer order above (the shader indexes by biome id, not by name). `--layers` needs `toktx` v4.3 or
+newer.
 
 ---
 

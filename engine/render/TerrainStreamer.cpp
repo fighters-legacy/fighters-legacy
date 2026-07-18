@@ -3,6 +3,7 @@
 
 #include "IRenderer.h"
 #include "content/AssetManager.h"
+#include "render/BuiltinBiomes.h"
 #include "render/ProceduralTerrainChunk.h"
 #include "render/TerrainChunkIO.h"
 #include "render/TerrainMeshBuilder.h"
@@ -46,6 +47,45 @@ TerrainStreamer::TerrainStreamer(fl::TerrainManifest manifest, AssetManager& ass
                                  IRenderer* renderer)
     : m_manifest(std::move(manifest)), m_assets(assets), m_asyncFs(asyncFs), m_renderer(renderer) {
     m_asyncFs.setEventHandler(this);
+    uploadBiomeTextures();
+}
+
+// Terrain biome texture arrays (#446): a pack's biome_basecolor/biome_normalorm array KTX2 if
+// present, else the compiled-in procedural biome set (so the sandbox has textured terrain zero-pack).
+// Null renderer (fl-server headless) = no-op.
+void TerrainStreamer::uploadBiomeTextures() {
+    if (!m_renderer)
+        return;
+    auto uploadPackOrBuiltin = [&](const char* assetName, bool srgb,
+                                   const std::array<BuiltinRgbaTexture, kBiomeLayerCount>& builtin) -> TextureHandle {
+        // A pack-provided KTX2 array wins.
+        if (auto tex = m_assets.loadTexture(assetName); tex && !tex->bytes.empty()) {
+            TextureUploadDesc td{};
+            td.name = assetName;
+            td.bytes = tex->bytes;
+            td.srgb = srgb;
+            const TextureHandle h = m_renderer->createTextureArray(td);
+            if (h.valid())
+                return h;
+        }
+        // Builtin fallback: concatenate the layer-major RGBA8 and upload as a raw array.
+        std::vector<uint8_t> raw;
+        raw.reserve(static_cast<std::size_t>(kBuiltinTexSize) * kBuiltinTexSize * 4u * builtin.size());
+        for (const auto& layer : builtin)
+            raw.insert(raw.end(), layer.pixels.begin(), layer.pixels.end());
+        TextureUploadDesc td{};
+        td.name = assetName;
+        td.bytes = raw;
+        td.srgb = srgb;
+        td.rawWidth = kBuiltinTexSize;
+        td.rawHeight = kBuiltinTexSize;
+        td.rawLayers = static_cast<uint32_t>(builtin.size());
+        return m_renderer->createTextureArray(td);
+    };
+
+    m_biomeColorTex = uploadPackOrBuiltin("biome_basecolor", /*srgb=*/true, builtinBiomeBaseColorLayers());
+    m_biomeNormalOrmTex = uploadPackOrBuiltin("biome_normalorm", /*srgb=*/false, builtinBiomeNormalOrmLayers());
+    m_renderer->setTerrainBiomeTextures(m_biomeColorTex, m_biomeNormalOrmTex, kBiomeLayerCount);
 }
 
 TerrainStreamer::~TerrainStreamer() {

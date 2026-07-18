@@ -453,6 +453,10 @@ add_executable(test_airport_renderer test_airport_renderer.cpp)
 target_link_libraries(test_airport_renderer PRIVATE Catch2::Catch2WithMain engine-render engine-world)
 catch_discover_tests(test_airport_renderer)
 
+add_executable(test_builtin_biomes test_builtin_biomes.cpp)
+target_link_libraries(test_builtin_biomes PRIVATE Catch2::Catch2WithMain engine-render)
+catch_discover_tests(test_builtin_biomes)
+
 add_executable(test_audio test_audio.cpp)
 target_link_libraries(test_audio PRIVATE Catch2::Catch2WithMain platform-openal OpenAL::OpenAL)
 target_include_directories(test_audio PRIVATE "${CMAKE_SOURCE_DIR}/platform/openal")

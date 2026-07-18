@@ -31,6 +31,10 @@ layout(set = 1, binding = 0) uniform sampler2D baseColorTex;
 layout(set = 1, binding = 1) uniform sampler2D normalTex;  // tangent-space normal map
 layout(set = 1, binding = 2) uniform sampler2D ormTex;     // R=occlusion G=roughness B=metallic
 
+// Terrain biome arrays (#446): set 2, layer index = biome id (0 grass, 1 dirt, 2 rock, 3 snow).
+layout(set = 2, binding = 0) uniform sampler2DArray biomeColorArray;
+layout(set = 2, binding = 1) uniform sampler2DArray biomeNormalOrmArray; // RG=normal.xy B=roughness A=occlusion
+
 // ── Push constants ───────────────────────────────────────────────────────────
 
 layout(push_constant) uniform PushConstants {
@@ -75,18 +79,21 @@ vec4 biomeWeights(float elevationM, float slopeFlat) {
     return w / (dot(w, vec4(1.0)) + 1e-4);
 }
 
-// Biome-blended terrain albedo with world-space detail-noise variation. worldXZ is absolute world
-// metres so detail tiles seamlessly across chunk boundaries.
+// Biome-blended terrain albedo sampled from the biome texture ARRAYS (#446), weighted by the same
+// elevation/slope biome weights. worldXZ is absolute world metres so the detail tiling is seamless
+// across chunk boundaries (4 m fine / 30 m coarse). #475 will replace the elevation/slope selection
+// with the land-cover COLOR_0 class and fix the spherical-invalid absolute-XZ coordinate.
 vec3 terrainAlbedo(float elevationM, vec3 geoNormal, vec2 worldXZ) {
-    const vec3 grassCol = vec3(0.23, 0.42, 0.15);
-    const vec3 dirtCol  = vec3(0.46, 0.37, 0.22);
-    const vec3 rockCol  = vec3(0.42, 0.40, 0.38);
-    const vec3 snowCol  = vec3(0.90, 0.92, 0.95);
     vec4 w = biomeWeights(elevationM, clamp(geoNormal.y, 0.0, 1.0));
-    vec3 col = grassCol * w.x + dirtCol * w.y + rockCol * w.z + snowCol * w.w;
-    // Detail: blend coarse (30 m) and fine (6 m) noise to break up flat shading.
-    float d = noiseT(worldXZ / 30.0) * 0.7 + noiseT(worldXZ / 6.0) * 0.3;
-    col *= 0.8 + 0.4 * d;
+    vec2 fineUV = worldXZ / 4.0;   // 4 m fine tiling
+    vec2 coarseUV = worldXZ / 30.0; // 30 m coarse tiling
+    vec3 col = vec3(0.0);
+    for (int i = 0; i < 4; ++i) {
+        // Blend a fine + coarse array sample per layer to break up obvious repetition.
+        vec3 c = mix(texture(biomeColorArray, vec3(fineUV, float(i))).rgb,
+                     texture(biomeColorArray, vec3(coarseUV, float(i))).rgb, 0.35);
+        col += c * w[i];
+    }
     return col;
 }
 

@@ -9,6 +9,7 @@
 #include "content/AssetManager.h"
 #include "content/AssetTypes.h"
 #include "content/IContentPack.h"
+#include "render/BuiltinBiomes.h"
 #include "render/CubeSphere.h"
 #include "render/ProceduralTerrainChunk.h"
 #include "render/TerrainStreamer.h"
@@ -275,6 +276,24 @@ TEST_CASE("TerrainStreamer getRenderItems is empty before the first update") {
     MockRenderer renderer;
     fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, &renderer};
     CHECK(ts.getRenderItems(kPoleCam).empty());
+}
+
+TEST_CASE("TerrainStreamer uploads the builtin biome arrays at construction (#446)") {
+    StreamerFixture fx;
+    MockRenderer renderer;
+    fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, &renderer};
+    // No pack provides biome_basecolor/biome_normalorm, so the builtin raw-RGBA arrays upload:
+    // two arrays (base color + normal/ORM) and one bind, all at kBiomeLayerCount layers.
+    CHECK(renderer.createTextureArrayCount == 2);
+    CHECK(renderer.setTerrainBiomeTexturesCount == 1);
+    CHECK(renderer.lastTextureArrayLayers == static_cast<uint32_t>(fl::kBiomeLayerCount));
+}
+
+TEST_CASE("TerrainStreamer null renderer uploads no biome arrays (#446)") {
+    StreamerFixture fx;
+    fl::TerrainStreamer ts{worldManifest(2), *fx.assets, fx.asyncFs, nullptr};
+    // headless (fl-server) never touches the renderer — no crash, no upload.
+    CHECK(ts.heightAt(kPoleProbe) >= 0.0);
 }
 
 TEST_CASE("TerrainStreamer null renderer returns empty render items but height works") {

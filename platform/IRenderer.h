@@ -55,6 +55,24 @@ class IRenderer {
     // Upload a texture (KTX2 with Basis Universal transcode, or PNG fallback).
     virtual TextureHandle createTexture(const TextureUploadDesc& desc) = 0;
 
+    // 2D texture-ARRAY upload (#446) — a KTX2 with numLayers > 1, or the raw-RGBA path when
+    // TextureUploadDesc::rawLayers > 1 (layer-major). Used by the terrain biome arrays. Non-pure with
+    // an invalid-handle default so a backend/mock without array support (and every test mock) needs no
+    // change; VkRenderer overrides it.
+    virtual TextureHandle createTextureArray(const TextureUploadDesc& desc) {
+        (void)desc;
+        return {};
+    }
+
+    // Bind the terrain biome texture arrays (#446): base color + combined normal/roughness, both 2D
+    // arrays with `layerCount` layers (layer index = biome id). Invalid handles unbind (fall back to
+    // the builtin). Non-pure no-op default (mocks/headless need no change).
+    virtual void setTerrainBiomeTextures(TextureHandle colorArray, TextureHandle normalOrmArray, uint32_t layerCount) {
+        (void)colorArray;
+        (void)normalOrmArray;
+        (void)layerCount;
+    }
+
     // Create a PBR material linking already-uploaded textures.
     virtual MaterialHandle createMaterial(const MaterialDesc& desc) = 0;
 

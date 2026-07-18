@@ -154,6 +154,8 @@ class VkRenderer : public IRenderer {
     // ── Resource methods ───────────────────────────────────────────────────
     MeshHandle createMesh(const MeshUploadDesc& desc) override;
     TextureHandle createTexture(const TextureUploadDesc& desc) override;
+    TextureHandle createTextureArray(const TextureUploadDesc& desc) override;
+    void setTerrainBiomeTextures(TextureHandle colorArray, TextureHandle normalOrmArray, uint32_t layerCount) override;
     MaterialHandle createMaterial(const MaterialDesc& desc) override;
     MaterialHandle getMeshMaterial(MeshHandle h) const override;
     void destroyMesh(MeshHandle h) override;
@@ -216,6 +218,9 @@ class VkRenderer : public IRenderer {
     bool createPerFrameDescriptorLayout();
     bool createShadowDescriptorLayout();
     bool createMaterialDescriptorLayout();
+    bool createTerrainBiomeResources(); // set 2: biome basecolor + normalORM arrays (#446)
+    void writeTerrainBiomeSet();        // (re)writes m_terrainBiomeSet from the current biome handles
+    void savePipelineCache();           // #446 rider: persist the pipeline cache to the pref dir
     bool createPerFrameDescriptors();
 
     // Write camera + light + shadow UBO data for the current frame.
@@ -350,6 +355,16 @@ class VkRenderer : public IRenderer {
 
     // ── Per-material descriptor set layout (set 1: base color + normal + ORM) ──
     VkDescriptorSetLayout m_matSetLayout{VK_NULL_HANDLE};
+    // Terrain biome arrays (#446): set 2 of the forward layout — two sampler2DArrays (basecolor,
+    // normalORM). Bound for every forward draw; only the terrain path in mesh.frag samples it. A
+    // 4-layer dummy keeps the set valid before real biome textures upload (headless never uploads).
+    VkDescriptorSetLayout m_terrainBiomeSetLayout{VK_NULL_HANDLE};
+    VkDescriptorPool m_terrainBiomePool{VK_NULL_HANDLE};
+    VkDescriptorSet m_terrainBiomeSet{VK_NULL_HANDLE};
+    TextureHandle m_biomeColorTex{};
+    TextureHandle m_biomeNormalOrmTex{};
+    TextureHandle m_biomeDummyColor{};
+    TextureHandle m_biomeDummyNormalOrm{};
 
     // ── Per-frame UBO buffers + descriptor sets ───────────────────────────
     // Uses raw Vulkan memory (not VMA): small host-visible buffers that change
