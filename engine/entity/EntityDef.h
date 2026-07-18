@@ -100,6 +100,13 @@ struct EntityDef {
     // a jammer switches it on and off; there is nothing to run out of.
     uint16_t chaffCount{0};
     uint16_t flareCount{0};
+
+    // ── carrier / flight-deck seam (#699) ────────────────────────────────────
+    // Whether an aircraft may recover onto this entity's surface — the FA design lesson that made
+    // "this surface accepts landings" a data property so a carrier reuses the airfield landing path
+    // (AirportDef carries the same flag for land airfields). Default false: an ordinary vehicle is
+    // not a runway. Data-only until the carrier consumes it (#38).
+    bool acceptsLandings{false};
 };
 
 // Category default collision radius (#630) — used when EntityDef::collisionRadiusM is 0.

@@ -72,6 +72,8 @@
 #include <weapon/Loadout.h>
 #include <weapon/WeaponRegistry.h>
 #include <weather/WeatherController.h>
+#include <world/AirportRegistry.h>
+#include <world/BuiltinAirport.h>
 #include <world/FactionRegistry.h>
 
 #include <array>
@@ -566,6 +568,28 @@ int main(int argc, char** argv) {
                 cachedSpawns.push_back(std::array<double, 3>{s.x, s.y, s.z});
             }
         }
+    }
+
+    // ---- Airport registry (#699): the builtin sandbox airfield + content-pack airports ----
+    // Placed on the sphere before gameLoop.start() and immutable thereafter. Terrain-resolved field
+    // elevations (elevation_m absent) are read from the primed streamer; near-origin (world-XZ) fields
+    // are primed here so their elevation is accurate. #699 has no runtime consumer beyond the count
+    // log — #486 layers runway terrain-flattening onto this seam, #487 renders the runways.
+    fl::AirportRegistry airportRegistry;
+    {
+        std::vector<fl::AirportDef> airportDefs;
+        airportDefs.push_back(fl::builtinAirfield());
+        const uint32_t packAirports = fl::registerPackAirportDefs(assets, airportDefs, *log);
+        for (const auto& def : airportDefs) {
+            if (def.elevationM < 0.0 && def.useWorldXZ)
+                primeSpawnHeight(def.worldX, def.worldZ);
+        }
+        airportRegistry.load(std::move(airportDefs), planetR,
+                             [&terrainStreamer](glm::dvec3 pos) { return terrainStreamer.heightAt(pos); });
+        char buf[112];
+        std::snprintf(buf, sizeof(buf), "content: %zu airport(s) loaded (%u from packs, builtin airfield included)",
+                      airportRegistry.count(), packAirports);
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
     }
 
     // ---- WorldBroadcaster wires the sim loop to ENet ----

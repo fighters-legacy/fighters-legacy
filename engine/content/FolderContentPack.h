@@ -70,6 +70,7 @@ class FolderContentPack final : public IContentPack {
     std::optional<WeaponDefData> loadWeaponDef(const char* name) override;
     std::optional<ManualProse> loadManualProse(const char* name) override;
     std::optional<LiveryData> loadLivery(const char* name) override;
+    std::optional<AirportDefData> loadAirportDef(const char* name) override;
 
     std::vector<std::string> listAssets(AssetType type) const override;
 

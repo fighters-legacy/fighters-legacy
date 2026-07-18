@@ -7,6 +7,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **world**: Airport and runway definitions — new `engine/world/AirportDef.h` (`AirportDef`/`RunwayDef` + a `RunwaySurface` authoring enum, deliberately distinct from the WorldCover land-cover `SurfaceType`) and a load-once, lock-free `AirportRegistry` (the `FactionRegistry` pattern) that resolves each field's world position and per-runway geometry on the sphere via `geodeticToWorld`/`enuBasis`, taking terrain-resolved field elevations from an injected height function. Airports are a content-pack asset (`airports/<name>.toml` → `AssetType::Airport`, wired end to end through `IContentPack`/`AssetManager`/`ContentBootstrap::registerPackAirportDefs`), placed EITHER geodetically (lat/lon) OR in world-XZ (near the origin/pole where lat/lon is singular). Ships a compiled-in `builtin:airfield` — a 2500×45 m asphalt strip a few km east of the sandbox spawn — so a runway exists zero-pack, and adds an `EntityDef::accepts_landings` carrier/flight-deck seam (data-only until #38). fl-server loads the registry (builtin + pack airports) before the sim starts. Closes #699. Part of #468
+
 ## [0.3.7] - 2026-07-17
 
 ### Added

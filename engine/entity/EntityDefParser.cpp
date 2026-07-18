@@ -154,6 +154,7 @@ EntityDef parseEntityDef(std::string_view toml_src) {
 
     def.maxHp = req_float(entity["max_hp"], "entity.max_hp");
     def.collisionRadiusM = opt_float(entity["collision_radius_m"], 0.f); // 0 = category default (#630)
+    def.acceptsLandings = opt_bool(entity["accepts_landings"], false);   // carrier/flight-deck seam (#699)
 
     // Countermeasure magazines (#529): chaff/flare rounds this entity carries. 0 = none (the default).
     if (auto n = tomlInt(entity["chaff_count"]))

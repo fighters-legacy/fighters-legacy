@@ -1294,6 +1294,54 @@ and one missing sensor should not stop an aircraft from loading with the rest of
 
 ---
 
+## Airports — `airports/<name>.toml`
+
+An airport definition places a runway (or a group of runways) on the spherical Earth. The engine
+resolves each field's world position and per-runway geometry once at load, from a pack asset in the
+pack's `airports/` directory (`AssetType::Airport`). The bundled real-world airport database
+(OurAirports, #486) populates the same registry alongside pack airports; a pack airport whose `id`
+matches a bundled one **wins** (load order is builtin airfield → packs → bundled CSV, first-id-wins).
+
+**File location:** `airports/<name>.toml` inside the content pack directory.
+
+    [airport]
+    id   = "fl-base:homeplate"   # required — namespaced def id (like an entity/sensor id)
+    name = "Homeplate AFB"       # required — human-readable
+
+    # Placement: EITHER geodetic (lat/lon in DEGREES) OR direct world-XZ (metres). Not both.
+    lat  = 36.23                 # geodetic latitude,  degrees (+N)
+    lon  = -115.03               # geodetic longitude, degrees (+E)
+    # world_x = 4000.0           # near-origin alternative (the world origin is the north pole,
+    # world_z = 0.0              #   where lat/lon is singular — use world-XZ for sandbox fields)
+
+    elevation_m      = 569.0     # optional — authoritative field elevation; omit to resolve from terrain
+    accepts_landings = true      # optional — default true; false = fly-over-only (or a wrecked field)
+    faction          = "usa"     # optional — owning faction id; empty = neutral
+
+    [[runway]]
+    heading_deg = 90.0           # required — TRUE bearing of the centerline (threshold → far end)
+    length_m    = 2500           # required — > 0
+    width_m     = 45             # required — > 0
+    surface     = "asphalt"      # optional — concrete | asphalt | grass | gravel | water | deck
+                                 #            (default asphalt); this is what the runway is PAVED with,
+                                 #            distinct from the terrain land-cover surface
+
+    [[runway]]                   # a field may list several runways
+    heading_deg = 180.0
+    length_m    = 3000
+    width_m     = 60
+    surface     = "concrete"
+
+A malformed def (missing `id`/`name`, neither or both placement forms, a non-positive runway
+dimension, or an unknown `surface`) is a load-time **warning** and the field is skipped — it never
+aborts loading the rest of the pack.
+
+A **carrier or flight deck** is modelled as an ordinary entity that carries `accepts_landings = true`
+(under `[entity]`), so naval recovery reuses the same landing path as a land airfield — the same
+"this surface accepts landings" data property, whether it is a runway or a deck.
+
+---
+
 ## AI Scripts — Lua 5.5
 
 AI scripts are Lua 5.5 source files placed in the pack's `ai/` directory. The engine calls

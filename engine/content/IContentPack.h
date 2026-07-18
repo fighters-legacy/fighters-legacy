@@ -78,6 +78,15 @@ class IContentPack {
         return std::nullopt;
     }
 
+    // Airport/runway TOML (#699). NON-pure with a nullopt default for the same reason as loadLivery:
+    // existing IContentPack implementors (including out-of-tree packs) keep compiling, and a pack
+    // that ships no airports simply provides none. FolderContentPack overrides it to serve
+    // airports/<name>.toml.
+    virtual std::optional<AirportDefData> loadAirportDef(const char* name) {
+        (void)name;
+        return std::nullopt;
+    }
+
     virtual std::vector<std::string> listAssets(AssetType type) const = 0;
 
     // Returns the raw text of "<modDir>/data/<name>", or nullopt if not present.

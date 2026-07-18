@@ -219,7 +219,7 @@ add_library(engine-bootstrap STATIC
 target_include_directories(engine-bootstrap PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-bootstrap
     PUBLIC  engine-content
-    PRIVATE engine-entity engine-weapon engine-sensor
+    PRIVATE engine-entity engine-weapon engine-sensor engine-world
 )
 
 # The in-game aircraft manual (#821). It is a CONSUMER of the same sources of truth as the sim --
