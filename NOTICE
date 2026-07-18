@@ -42,9 +42,14 @@ Copernicus Sentinel-2 — high-resolution satellite terrain textures (#488)
   URL:      https://sentinel.esa.int/
 
 GEBCO — global ocean bathymetry (#476)
-  Source:   GEBCO Compilation Group.
+  Source:   GEBCO Compilation Group (2024) GEBCO 2024 Grid.
+  Citation: doi:10.5285/1c44ce99-0a0d-5f4f-e063-7086abc0ea0f
   License:  GEBCO Grid terms (freely available; attribution requested).
   URL:      https://www.gebco.net/
+  Note:     Used only as an input to build the bundled coarse base terrain
+            (tools/build_global_base.sh --bathymetry); the GEBCO grid itself is
+            not redistributed. The derived base-terrain bundle, when shipped,
+            carries this attribution on the player-reachable credits surface.
 
 OurAirports — airport / runway registry (#486)
   Source:   OurAirports (David Megginson and contributors).
