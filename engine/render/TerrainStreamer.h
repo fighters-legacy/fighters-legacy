@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -97,7 +98,24 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // WorldCover → SurfaceType table. SurfaceType::Unknown where no land-cover layer covers the point.
     // Thread-safe. This is what gameplay/physics should query (e.g. gear-down on Water vs. Grass).
     [[nodiscard]] SurfaceType surfaceTypeAt(glm::dvec3 worldPos) const noexcept {
+        // Runway-surface override (#487) wins over the land-cover class inside a runway footprint.
+        // Set once before queries (main thread, before the sim runs), so this read needs no lock —
+        // and must not take m_tileMutex here anyway (surfaceAt() below takes the shared lock, and
+        // std::shared_mutex is not recursive).
+        if (m_surfaceOverride) {
+            if (const std::optional<SurfaceType> s = m_surfaceOverride(worldPos))
+                return *s;
+        }
         return surfaceTypeFromWorldCover(surfaceAt(worldPos));
+    }
+
+    // Runway-surface override (#487): a function reporting the runway SurfaceType at a world position
+    // (AirportRegistry::runwaySurfaceAt mapped through surfaceTypeForRunway), or nullopt off a runway.
+    // surfaceTypeAt() consults it first, so ground physics reads Concrete/Asphalt/Grass on a runway
+    // instead of the underlying land cover. Raw surfaceAt() stays pure land cover. Main-thread,
+    // set-once before queries. std::function seam so engine-render keeps no engine-world dep.
+    void setSurfaceOverride(std::function<std::optional<SurfaceType>(glm::dvec3)> fn) {
+        m_surfaceOverride = std::move(fn);
     }
 
     // Ocean depth (metres, positive DOWN) below the sphere datum (mean sea level) at worldPos (#476).
@@ -244,6 +262,8 @@ class TerrainStreamer : public IAsyncFilesystemHandler {
     // it under the unique lock while dropping resident tiles.
     HeightModifier m_heightModifier;
     HeightModifierRegion m_heightModifierRegion;
+    // Runway-surface override (#487), set-once before queries; read lock-free in surfaceTypeAt().
+    std::function<std::optional<SurfaceType>(glm::dvec3)> m_surfaceOverride;
 
     // Protects m_tiles for concurrent reads (height queries, sim thread) vs writes
     // (update/finalize/evict, main thread).

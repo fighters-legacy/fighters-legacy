@@ -22,6 +22,11 @@
 #include <string_view>
 #include <vector>
 
+// stb_image_write's PNG writer is compiled (STB_IMAGE_WRITE_IMPLEMENTATION) in VkResources.cpp's TU;
+// forward-declare the one symbol the screenshot readback uses so we don't pull the header (or a
+// second implementation) into this TU. stb_image_write.h wraps its API in extern "C", so match that.
+extern "C" int stbi_write_png(char const* filename, int w, int h, int comp, const void* data, int stride_in_bytes);
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
@@ -774,9 +779,122 @@ void VkRenderer::endFrame() {
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
         m_framebufferResized = true;
 
+    // Screenshot readback (#909 groundwork): the swapchain image for this frame is now presented.
+    // Drain the device, copy it to a host-visible buffer, and write the PNG. Not a hot path — a stall
+    // is fine for a dev/verification capture.
+    if (!m_pendingScreenshotPath.empty()) {
+        const std::string path = std::move(m_pendingScreenshotPath);
+        m_pendingScreenshotPath.clear();
+        writeSwapchainPng(path);
+    }
+
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     ++m_framesRendered;
     ++m_totalFrames;
+}
+
+bool VkRenderer::captureScreenshot(const char* path) {
+    if (!path || !*path)
+        return false;
+    m_pendingScreenshotPath = path;
+    return true;
+}
+
+void VkRenderer::writeSwapchainPng(const std::string& path) {
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    const uint32_t w = m_swapchainExtent.width;
+    const uint32_t h = m_swapchainExtent.height;
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
+    VkImage srcImage = m_swapchainImages[m_currentImageIndex];
+
+    // Host-visible destination buffer.
+    VkBuffer buf = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = bytes;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &buf) != VK_SUCCESS)
+        return;
+    VkMemoryRequirements memReq{};
+    vkGetBufferMemoryRequirements(m_device, buf, &memReq);
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = memReq.size;
+    mai.memoryTypeIndex = findMemoryType(m_physicalDevice, memReq.memoryTypeBits,
+                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &mai, nullptr, &mem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, buf, nullptr);
+        return;
+    }
+    vkBindBufferMemory(m_device, buf, mem, 0);
+
+    // One-shot command buffer: PRESENT_SRC -> TRANSFER_SRC, copy, TRANSFER_SRC -> PRESENT_SRC.
+    VkCommandBufferAllocateInfo cbai{};
+    cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbai.commandPool = m_commandPool;
+    cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbai.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    vkAllocateCommandBuffers(m_device, &cbai, &cmd);
+    VkCommandBufferBeginInfo cbbi{};
+    cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &cbbi);
+
+    auto barrier = [&](VkImageLayout from, VkImageLayout to, VkAccessFlags srcA, VkAccessFlags dstA) {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = from;
+        b.newLayout = to;
+        b.srcAccessMask = srcA;
+        b.dstAccessMask = dstA;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = srcImage;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &b);
+    };
+    barrier(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, VK_ACCESS_TRANSFER_READ_BIT);
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {w, h, 1};
+    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &region);
+    barrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_READ_BIT, 0);
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+
+    // Map, swizzle B8G8R8A8 -> R8G8B8A8 (opaque alpha), write PNG.
+    void* mapped = nullptr;
+    if (vkMapMemory(m_device, mem, 0, bytes, 0, &mapped) == VK_SUCCESS) {
+        std::vector<uint8_t> rgba(static_cast<std::size_t>(bytes));
+        const auto* src = static_cast<const uint8_t*>(mapped);
+        const bool bgra =
+            (m_swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB || m_swapchainFormat == VK_FORMAT_B8G8R8A8_UNORM);
+        for (std::size_t i = 0; i < rgba.size(); i += 4) {
+            rgba[i + 0] = bgra ? src[i + 2] : src[i + 0];
+            rgba[i + 1] = src[i + 1];
+            rgba[i + 2] = bgra ? src[i + 0] : src[i + 2];
+            rgba[i + 3] = 255;
+        }
+        vkUnmapMemory(m_device, mem);
+        if (stbi_write_png(path.c_str(), static_cast<int>(w), static_cast<int>(h), 4, rgba.data(),
+                           static_cast<int>(w) * 4) == 0)
+            m_lastError = "screenshot: stbi_write_png failed for " + path;
+    }
+
+    vkDestroyBuffer(m_device, buf, nullptr);
+    vkFreeMemory(m_device, mem, nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -3736,6 +3854,7 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
             pc.shadingMode = (item.flags & kRenderFlagTerrain)          ? 1.0f
                              : (item.flags & kRenderFlagDebugFaceColor) ? 2.0f
+                             : (item.flags & kRenderFlagRunway)         ? 3.0f
                                                                         : 0.0f;
             vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                sizeof(pc), &pc);
@@ -3870,6 +3989,7 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
                 pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
                 pc.shadingMode = (item.flags & kRenderFlagTerrain)          ? 1.0f
                                  : (item.flags & kRenderFlagDebugFaceColor) ? 2.0f
+                                 : (item.flags & kRenderFlagRunway)         ? 3.0f
                                                                             : 0.0f;
                 vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                    sizeof(pc), &pc);

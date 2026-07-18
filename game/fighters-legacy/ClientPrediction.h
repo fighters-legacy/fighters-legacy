@@ -15,6 +15,7 @@
 namespace fl {
 
 struct EnvironmentState;
+enum class SurfaceType : uint8_t; // engine/render/SurfaceType.h — ground-surface handling (#487)
 
 // Client-side prediction for the player's own entity.
 //
@@ -41,9 +42,19 @@ class ClientPrediction {
     // worldPos → terrain elevation (m) above the datum along the radial (TerrainStreamer::heightAt(dvec3)).
     // FlightIntegrator compares it against the geodetic altitude for radial ground contact (#477).
     using HeightQuery = std::function<float(glm::dvec3 worldPos)>;
+    // worldPos → terrain SurfaceType (TerrainStreamer::surfaceTypeAt, incl. the runway override) for
+    // per-surface rolling resistance (#487). The server applies the identical groundFrictionFor table,
+    // so the predicted rollout stays in parity. Optional (unset ⇒ paved default).
+    using SurfaceQuery = std::function<SurfaceType(glm::dvec3 worldPos)>;
 
     ClientPrediction() = default;
     ~ClientPrediction();
+
+    // Wire the ground-surface query (#487). Optional; call after init() when a terrain streamer with
+    // the runway-surface override exists. Unset leaves the rollout on the paved default.
+    void setSurfaceQuery(SurfaceQuery q) {
+        m_surfaceQuery = std::move(q);
+    }
 
     // Must be called before the first reconcile(). Resolver is invoked lazily on
     // first snapshot that contains the player's entry.
@@ -106,6 +117,7 @@ class ClientPrediction {
     FlightModelResolver m_resolver;
     PayloadResolver m_payloadResolver;
     HeightQuery m_heightQuery;
+    SurfaceQuery m_surfaceQuery; // #487 per-surface rolling resistance (paved default when unset)
     uint32_t m_playerIdx{0};
     uint32_t m_playerGen{0};
     float m_planetRadiusKm{6371.f};

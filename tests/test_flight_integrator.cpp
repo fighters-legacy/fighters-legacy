@@ -10,7 +10,8 @@
 #include "flight/EngineFailFlags.h"
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelParser.h"
-#include "flight/Geodetic.h" // kEarthRotationRate (#482)
+#include "flight/Geodetic.h"    // kEarthRotationRate (#482)
+#include "render/SurfaceType.h" // groundFrictionFor (#487, header-only)
 
 #include <algorithm>
 #include <cmath>
@@ -1969,4 +1970,33 @@ TEST_CASE("Integrator: Coriolis deflects a moving aircraft with the correct sign
     // The X-track difference is far smaller than the lateral deflection (no first-order along-track
     // Coriolis for +X motion), confirming the deflection is lateral, not a speed change.
     CHECK(std::abs(on.pos_world[0] - off.pos_world[0]) < dz + 5.0);
+}
+
+TEST_CASE("Integrator: unpaved surface shortens the ground rollout (#487)", "[integrator]") {
+    // Two identical aircraft rolling on the ground at idle throttle; grass adds rolling resistance,
+    // so it ends slower (and has rolled less far) than concrete. Ground contact at the datum floor.
+    auto roll = [](const fl::GroundFriction& ground) {
+        FlightIntegrator fi(makeData());
+        FlightState s{};
+        s.vel_body[0] = 25.f;  // rolling forward
+        s.pos_world[1] = 0.2f; // within the ground-contact margin of groundElev = 0
+        s.mass_kg = 14000.f;
+        s.fuel_kg = 4000.f;
+        fi.reset(s);
+        ControlInput ctrl{};
+        ctrl.throttle = 0.f; // idle (but above the parking-hold speed, so it keeps rolling)
+        PayloadEffect px{};
+        for (int i = 0; i < 180; ++i) // 3 s
+            fi.step(1.f / 60.f, ctrl, px, {}, /*groundElev=*/0.f, ground);
+        return fi.state();
+    };
+
+    const FlightState concrete = roll(groundFrictionFor(fl::SurfaceType::Concrete)); // extraRolling 0
+    const FlightState grass = roll(groundFrictionFor(fl::SurfaceType::Grass));       // extraRolling > 0
+
+    // Both decelerated from the baseline roll + drag; grass shed MORE forward speed.
+    CHECK(grass.vel_body[0] < concrete.vel_body[0]);
+    CHECK(grass.vel_body[0] >= 0.f);
+    // And rolled less far.
+    CHECK(std::abs(grass.pos_world[0]) < std::abs(concrete.pos_world[0]));
 }

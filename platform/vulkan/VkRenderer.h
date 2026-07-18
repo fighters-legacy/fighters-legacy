@@ -49,7 +49,7 @@ struct ForwardPushConstants {
     glm::vec4 baseColorFactor{1.0f}; // 16 bytes
     float metallicFactor{0.0f};
     float roughnessFactor{1.0f};
-    float shadingMode{0.0f}; // 0 = normal PBR albedo, 1 = terrain elevation/slope, 2 = debug face colour
+    float shadingMode{0.0f}; // 0 = PBR, 1 = terrain elev/slope, 2 = debug face colour, 3 = runway markings (#487)
     float _pad{};            // total = 96
 };
 static_assert(sizeof(ForwardPushConstants) <= 128);
@@ -173,6 +173,7 @@ class VkRenderer : public IRenderer {
     void setOverlayLines(std::span<const std::string_view> lines) override;
     void submitOverlayElements(std::span<const HudElement> elements) override;
     void setConsoleElements(std::span<const HudElement> elements) override;
+    bool captureScreenshot(const char* path) override;
 
   private:
     // ── Core Vulkan objects ────────────────────────────────────────────────
@@ -494,6 +495,8 @@ class VkRenderer : public IRenderer {
     IWindow* m_iWindow{nullptr};
     std::string m_shaderDir;
     mutable std::string m_lastError;
+    std::string m_pendingScreenshotPath;             // #909: capture the next presented frame to this PNG when set
+    void writeSwapchainPng(const std::string& path); // reads the just-presented swapchain image → PNG
     std::string m_gpuInfo;
 
     // ── Per-frame stats ───────────────────────────────────────────────────

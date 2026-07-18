@@ -38,7 +38,7 @@ layout(push_constant) uniform PushConstants {
     vec4  baseColorFactor;
     float metallicFactor;
     float roughnessFactor;
-    float shadingMode; // 0 = normal PBR, 1 = terrain elevation/slope, 2 = debug face colour
+    float shadingMode; // 0 = normal PBR, 1 = terrain elevation/slope, 2 = debug face colour, 3 = runway markings
 } push;
 
 // Debug per-face colour for the builtin placeholder wedge, keyed off the (flat) face normal so
@@ -168,20 +168,38 @@ float sampleShadow(vec3 camRelWorldPos, float viewDepth) {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
+// Procedural runway markings (#487) from the slab's runway-local UV (u = along the runway [0,1],
+// v = across [0,1]). Overlays white centerline dashes, edge lines, and threshold "piano keys" onto
+// the paved base colour — no texture, no content dependency.
+vec3 runwayMarkings(vec2 uv, vec3 base) {
+    const vec3 paint = vec3(0.85);
+    float mark = 0.0;
+    // Edge lines: a thin white stripe just inside each long edge.
+    if ((uv.y > 0.03 && uv.y < 0.06) || (uv.y > 0.94 && uv.y < 0.97)) mark = 1.0;
+    // Centerline: dashed down the middle, away from the thresholds.
+    if (abs(uv.y - 0.5) < 0.015 && uv.x > 0.10 && uv.x < 0.90 && fract(uv.x * 40.0) < 0.6) mark = 1.0;
+    // Threshold "piano keys": longitudinal bars across each end.
+    if ((uv.x < 0.05 || uv.x > 0.95) && fract(uv.y * 8.0) < 0.6) mark = 1.0;
+    return mix(base, paint, mark);
+}
+
 void main() {
     // Base color
     vec4 baseColor = texture(baseColorTex, fragUV) * push.baseColorFactor;
 
     // Debug face colour (builtin placeholder) takes priority; otherwise terrain elevation/slope
-    // shading. fragWorldPos is camera-relative, so add the camera world Y to recover absolute
-    // elevation. Both use the geometric (flat) normal.
+    // shading, or runway markings (#487). fragWorldPos is camera-relative, so add the camera world Y
+    // to recover absolute elevation. Terrain/debug/runway use the geometric (flat) normal.
     bool isTerrain = (push.shadingMode > 0.5 && push.shadingMode < 1.5);
+    bool isRunway  = (push.shadingMode > 2.5);
     vec2 terrainXZ = fragWorldPos.xz + camera.worldOrigin.xz; // absolute world XZ (seamless tiling)
-    if (push.shadingMode > 1.5) {
+    if (push.shadingMode > 1.5 && push.shadingMode < 2.5) {
         baseColor.rgb = faceColor(normalize(fragWorldNormal));
     } else if (isTerrain) {
         float elevationM = fragWorldPos.y + camera.worldOrigin.y;
         baseColor.rgb = terrainAlbedo(elevationM, normalize(fragWorldNormal), terrainXZ);
+    } else if (isRunway) {
+        baseColor.rgb = runwayMarkings(fragUV, baseColor.rgb);
     }
 
     // ORM: R=occlusion, G=roughness, B=metallic

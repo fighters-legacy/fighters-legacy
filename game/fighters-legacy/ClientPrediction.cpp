@@ -8,6 +8,7 @@
 #include "flight/FlightModelData.h"
 #include "flight/Geodetic.h" // kEarthRotationRate (#482)
 #include "flight/StallBuffet.h"
+#include "render/SurfaceType.h" // groundFrictionFor (#487)
 #include "weather/Turbulence.h"
 
 #include <glm/glm.hpp>
@@ -175,11 +176,14 @@ void ClientPrediction::stepIntegrator(const BufferedInput& bi, const Environment
         wind.turbulence_body[2] += buffet[2];
     }
 
-    const float groundElev =
-        m_heightQuery ? m_heightQuery(glm::dvec3{m_integrator->state().pos_world[0], m_integrator->state().pos_world[1],
-                                                 m_integrator->state().pos_world[2]})
-                      : 0.f;
-    m_integrator->step(kPredTickDt, ctrl, m_payload, wind, groundElev);
+    const glm::dvec3 groundPos{m_integrator->state().pos_world[0], m_integrator->state().pos_world[1],
+                               m_integrator->state().pos_world[2]};
+    const float groundElev = m_heightQuery ? m_heightQuery(groundPos) : 0.f;
+    // Per-surface rolling resistance (#487), the same groundFrictionFor table the server applies, so
+    // the predicted rollout matches. Paved default when no surface query is wired.
+    const fl::GroundFriction ground =
+        m_surfaceQuery ? groundFrictionFor(m_surfaceQuery(groundPos)) : fl::GroundFriction{};
+    m_integrator->step(kPredTickDt, ctrl, m_payload, wind, groundElev, ground);
 }
 
 void ClientPrediction::onInput(const MsgClientInput& msg, const EnvironmentState& env) {

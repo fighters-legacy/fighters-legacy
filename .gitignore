@@ -111,3 +111,7 @@ tools/ai_eval/results/
 # Bundled coarse global base terrain (#474) — large generated tiles, produced out-of-band
 # by tools/build_global_base.sh; staged into the release but never committed.
 base-terrain/
+
+# OurAirports binary cache (#486) — imported from data/*.csv at first run into the per-user
+# data dir; a dev run started from the repo root writes it here. Generated, never committed.
+cache/

@@ -98,6 +98,7 @@ add_library(engine-render STATIC
     render/ProceduralTerrainChunk.cpp
     render/TerrainMeshBuilder.cpp
     render/TerrainStreamer.cpp
+    render/AirportRenderer.cpp
     render/FlightHud.cpp
     render/WindshieldRain.cpp
 )
@@ -118,6 +119,7 @@ target_link_libraries(engine-render
             engine-audio
             engine-flight   # FlightHud derives IAS/Mach from the atmosphere model (#480)
             engine-nav      # FlightHud magnetic heading from the WMM2025 model (#483)
+            engine-world    # AirportRenderer draws runways from the AirportRegistry (#487)
 )
 
 add_library(engine-entity STATIC

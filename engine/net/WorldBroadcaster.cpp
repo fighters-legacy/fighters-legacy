@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "net/WorldBroadcaster.h"
 #include "render/RenderSnapshot.h"
+#include "render/SurfaceType.h" // groundFrictionFor (#487)
 
 #include "ILogger.h"
 #include "INetwork.h"
@@ -389,6 +390,10 @@ void WorldBroadcaster::setGravityField(const IGravityField& field, float planetR
 
 void WorldBroadcaster::setGroundElevationQuery(std::function<float(glm::dvec3)> fn) {
     m_groundQuery = std::move(fn);
+}
+
+void WorldBroadcaster::setGroundSurfaceQuery(std::function<SurfaceType(glm::dvec3)> fn) {
+    m_groundSurfaceQuery = std::move(fn);
 }
 
 void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
@@ -3390,11 +3395,15 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
         wind.turbulence_body[1] += buffet[1];
         wind.turbulence_body[2] += buffet[2];
     }
+    const glm::dvec3 groundPos{fi.state().pos_world[0], fi.state().pos_world[1], fi.state().pos_world[2]};
     const float groundElev =
-        m_groundQuery
-            ? m_groundQuery(glm::dvec3{fi.state().pos_world[0], fi.state().pos_world[1], fi.state().pos_world[2]})
-            : m_groundElevation.load(std::memory_order_relaxed);
-    fi.step(static_cast<float>(simDt), ctrl, payload, wind, groundElev);
+        m_groundQuery ? m_groundQuery(groundPos) : m_groundElevation.load(std::memory_order_relaxed);
+    // Per-surface ground handling (#487): grass/gravel/water differ from a paved runway in the rollout.
+    // groundFrictionFor is pure table math, shared with ClientPrediction, so the server and the client
+    // shed ground speed identically. No query set ⇒ default (paved) ⇒ bit-identical to before.
+    const fl::GroundFriction ground =
+        m_groundSurfaceQuery ? groundFrictionFor(m_groundSurfaceQuery(groundPos)) : fl::GroundFriction{};
+    fi.step(static_cast<float>(simDt), ctrl, payload, wind, groundElev, ground);
 
     const FlightState& fs = fi.state();
     // (Terrain-steer XZ cache moved to updateTerrainSteerCache(), run once after the integrate pass

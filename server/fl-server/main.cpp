@@ -64,6 +64,7 @@
 #include <perf/ProcessStats.h>
 #include <perf/ServerTickReport.h>
 #include <render/BuiltinGeometry.h>
+#include <render/RunwaySurfaceMap.h> // surfaceTypeForRunway (#487)
 #include <render/TerrainStreamer.h>
 #include <script/BuiltinAiScripts.h>
 #include <script/LuaController.h>
@@ -601,6 +602,12 @@ int main(int argc, char** argv) {
             [&airportRegistry](glm::dvec3 centre, double radiusM) {
                 return airportRegistry.regionHasRunway(centre, radiusM);
             });
+        // Runway surface typing (#487): surfaceTypeAt reports the runway surface inside a footprint, so
+        // ground physics differentiates a paved runway from the grass beside it.
+        terrainStreamer.setSurfaceOverride([&airportRegistry](glm::dvec3 pos) -> std::optional<fl::SurfaceType> {
+            const auto s = airportRegistry.runwaySurfaceAt(pos);
+            return s ? std::optional<fl::SurfaceType>(fl::surfaceTypeForRunway(*s)) : std::nullopt;
+        });
         char buf[144];
         std::snprintf(buf, sizeof(buf), "content: %zu airport(s) loaded (builtin + %u pack + %zu CSV%s)",
                       airportRegistry.count(), packAirports, csvStats.airports,
@@ -667,6 +674,10 @@ int main(int argc, char** argv) {
     // terrain — the mesh then rests ON the ground.
     broadcaster.setGroundElevationQuery(
         [&terrainStreamer](glm::dvec3 pos) { return static_cast<float>(terrainStreamer.heightAt(pos)); });
+    // Per-entity ground surface (#487): the runway-surface override + land cover, so the rollout
+    // differs by surface. surfaceTypeAt is thread-safe (shared_mutex); the client mirrors it.
+    broadcaster.setGroundSurfaceQuery(
+        [&terrainStreamer](glm::dvec3 pos) { return terrainStreamer.surfaceTypeAt(pos); });
     // Resolve EntityDef::flightModelAsset -> parsed FlightModelData on the spawn path. Loads the raw
     // TOML asset via AssetManager, parses it with engine-flight's parseFlightModel, and caches the
     // result by id (sim-thread-only access). Empty/unknown ids fall back to the builtin model in

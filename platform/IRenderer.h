@@ -103,6 +103,14 @@ class IRenderer {
     // Non-owning view; the span must remain valid until endFrame returns.
     // Cleared by endFrame.
     virtual void setConsoleElements(std::span<const HudElement> elements) = 0;
+
+    // Capture the next presented frame to a PNG at `path` (#909 groundwork). Returns true if the
+    // request was accepted (the write happens at the end of the current/next frame). Non-pure with a
+    // false default so a backend/mock without capture support (and every test mock) needs no change.
+    virtual bool captureScreenshot(const char* path) {
+        (void)path;
+        return false;
+    }
 };
 
 } // namespace fl

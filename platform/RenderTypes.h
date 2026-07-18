@@ -173,6 +173,7 @@ static constexpr uint32_t kRenderFlagDamaged = 1u << 0;        // use _b damage-
 static constexpr uint32_t kRenderFlagShadowOnly = 1u << 1;     // depth pass only
 static constexpr uint32_t kRenderFlagTerrain = 1u << 2;        // apply elevation/slope shading in the forward pass
 static constexpr uint32_t kRenderFlagDebugFaceColor = 1u << 3; // per-face debug colour (builtin placeholder mesh)
+static constexpr uint32_t kRenderFlagRunway = 1u << 4; // paved runway: procedural markings in the forward pass (#487)
 
 // ---------------------------------------------------------------------------
 // A single draw call submitted to the renderer each frame.
