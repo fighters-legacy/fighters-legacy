@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 using namespace fl;
 
@@ -22,12 +23,19 @@ static void printHelp() {
                 "                         diffuse -> bc1, normal/orm/emissive -> bc7\n"
                 "                         Overridden by --format if both given\n"
                 "  --no-mipmaps           Skip mipmap generation\n"
+                "  --layers <in1> <in2>...  2D-ARRAY mode: pack N layer-major PNGs into one array\n"
+                "                         KTX2. Requires -o/--output. The array index IS the layer id\n"
+                "                         (biome arrays: 0 grass, 1 dirt, 2 rock, 3 snow). Example:\n"
+                "                         tex-compress --type orm --layers grass.png dirt.png rock.png\n"
+                "                                      snow.png -o biome_normalorm.ktx2\n"
+                "  -o, --output <path>    Output KTX2 path (required in --layers mode)\n"
                 "  --toktx <path>         Path to toktx binary (default: toktx in PATH)\n"
                 "                         On Windows with spaces in path: use quotes\n"
                 "  --help, -h             Show this help and exit\n"
                 "  --version, -v          Show version and exit\n"
                 "\n"
-                "If output path is omitted, it defaults to the input path with .ktx2 extension.\n"
+                "In single-input mode, if the output path is omitted it defaults to the input path\n"
+                "with a .ktx2 extension.\n"
                 "\n"
                 "Exit codes:\n"
                 "  0  success\n"
@@ -58,10 +66,20 @@ int main(int argc, char* argv[]) {
     TexCompressOptions opts;
     std::string inputPng;
     std::string outputKtx2;
+    std::vector<std::string> layerInputs;
+    bool layersMode = false;
     bool formatSet = false;
 
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--format") == 0) {
+        if (std::strcmp(argv[i], "--layers") == 0) {
+            layersMode = true; // subsequent positionals are layer inputs
+        } else if (std::strcmp(argv[i], "-o") == 0 || std::strcmp(argv[i], "--output") == 0) {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "error: %s requires an argument\n", argv[i]);
+                return 2;
+            }
+            outputKtx2 = argv[++i];
+        } else if (std::strcmp(argv[i], "--format") == 0) {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "error: --format requires an argument\n");
                 return 2;
@@ -110,6 +128,8 @@ int main(int argc, char* argv[]) {
         } else if (argv[i][0] == '-') {
             std::fprintf(stderr, "error: unknown option %s\n", argv[i]);
             return 2;
+        } else if (layersMode) {
+            layerInputs.emplace_back(argv[i]); // every positional after --layers is a layer input
         } else if (inputPng.empty()) {
             inputPng = argv[i];
         } else if (outputKtx2.empty()) {
@@ -120,14 +140,27 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (inputPng.empty()) {
-        std::fprintf(stderr, "error: no input file specified\n");
-        return 2;
+    TexCompressResult result;
+    if (layersMode) {
+        if (layerInputs.size() < 2) {
+            std::fprintf(stderr, "error: --layers mode needs at least 2 input PNGs\n");
+            return 2;
+        }
+        if (outputKtx2.empty()) {
+            std::fprintf(stderr, "error: --layers mode requires -o/--output\n");
+            return 2;
+        }
+        result = compressTextureLayers(layerInputs, outputKtx2, opts);
+    } else {
+        if (inputPng.empty()) {
+            std::fprintf(stderr, "error: no input file specified\n");
+            return 2;
+        }
+        if (outputKtx2.empty())
+            outputKtx2 = defaultOutputPath(inputPng);
+        result = compressTexture(inputPng, outputKtx2, opts);
     }
-    if (outputKtx2.empty())
-        outputKtx2 = defaultOutputPath(inputPng);
 
-    auto result = compressTexture(inputPng, outputKtx2, opts);
     for (const auto& e : result.errors)
         std::fprintf(stderr, "ERROR %s\n", e.c_str());
 
