@@ -200,9 +200,15 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
             m_subtitleEntries.push_back({r.text, 1.0f});
     }
 
+    // Planet centre for the terrain shader's radial "up" (#475): {0,-R,0} from the streamer's baked
+    // radius (Earth default when there is no terrain streamer). Terrain shading is the only consumer.
+    const double planetR = m_terrainStreamer ? m_terrainStreamer->planetRadiusM() : 6371000.0;
+    const glm::dvec3 planetCenterWorld{0.0, -planetR, 0.0};
+
     if (!m_bridge.hasSnapshot()) {
         FrameScene scene{};
         scene.camera = camera;
+        scene.camera.planetCenter = planetCenterWorld;
         scene.environment = env;
         scene.particleEmitters = extraEmitters;
         scene.subtitles = m_subtitleEntries;
@@ -385,6 +391,7 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
 
     FrameScene scene{};
     scene.camera = camera;
+    scene.camera.planetCenter = planetCenterWorld;
     scene.renderItems = m_items;
     scene.environment = env;
     scene.particleEmitters = emitters;

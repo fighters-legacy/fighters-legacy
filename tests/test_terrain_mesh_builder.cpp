@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Tests for buildTileMeshGlb (#471): curved cube-sphere tile meshes with true world positions,
-// curvature-correct normals, and optional COLOR_0 / TEXCOORD_0 attributes.
+// curvature-correct normals, and optional TEXCOORD_0 + packed-terrain TANGENT attributes (#475).
 
 #include "render/CubeSphere.h"
 #include "render/TerrainMeshBuilder.h"
@@ -11,6 +11,7 @@
 #include <glm/geometric.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
 
 #include <cstdint>
 #include <cstring>
@@ -22,7 +23,7 @@ using namespace fl;
 namespace {
 
 // GLB layout produced by buildTileMeshGlb is deterministic non-interleaved:
-// POSITION, NORMAL, [TEXCOORD_0], [COLOR_0], INDICES.
+// POSITION, NORMAL, [TEXCOORD_0], [TANGENT], INDICES.
 struct GlbView {
     std::string json;
     const uint8_t* bin{nullptr};
@@ -51,6 +52,12 @@ glm::vec3 readVec3(const uint8_t* base, std::size_t byteOff, int idx) {
 glm::vec2 readVec2(const uint8_t* base, std::size_t byteOff, int idx) {
     glm::vec2 out;
     std::memcpy(&out, base + byteOff + static_cast<std::size_t>(idx) * 8u, 8u);
+    return out;
+}
+
+glm::vec4 readVec4(const uint8_t* base, std::size_t byteOff, int idx) {
+    glm::vec4 out;
+    std::memcpy(&out, base + byteOff + static_cast<std::size_t>(idx) * 16u, 16u);
     return out;
 }
 
@@ -174,9 +181,9 @@ TEST_CASE("buildTileMeshGlb winding is CCW-from-outside", "[terrain][tile-mesh]"
     const int gridPts = meshGrid + 1;
     const int vertCount = gridPts * gridPts;
     const int indexCount = meshGrid * meshGrid * 6;
-    // POSITION | NORMAL | TEXCOORD_0 (default emit) | INDICES  (no COLOR_0 -> landCover null)
-    const std::size_t idxOff =
-        static_cast<std::size_t>(vertCount) * 12u * 2u + static_cast<std::size_t>(vertCount) * 8u;
+    // POSITION(12) | NORMAL(12) | TEXCOORD_0(8) | TANGENT(16, packed terrain data #475) | INDICES.
+    // The packed TANGENT rides with TEXCOORD_0 (emitTexcoord default true), even with null landCover.
+    const std::size_t idxOff = static_cast<std::size_t>(vertCount) * (12u + 12u + 8u + 16u);
 
     // Every triangle must front-face outward: cross(p1-p0, p2-p0) . outward > 0.
     for (int tri = 0; tri < indexCount / 3; tri += 37) {
@@ -229,54 +236,96 @@ TEST_CASE("buildTileMeshGlb skirt appends border ring and side quads", "[terrain
     CHECK(srcRad - skirtRad == Catch::Approx(skirt).margin(0.01));
 }
 
-TEST_CASE("buildTileMeshGlb emits TEXCOORD_0 and COLOR_0 per flags", "[terrain][tile-mesh]") {
+// The packed-terrain TANGENT (#475) rides with TEXCOORD_0: bin layout is
+// POSITION | NORMAL | TEXCOORD_0 | TANGENT | INDICES.
+TEST_CASE("buildTileMeshGlb emits TEXCOORD_0 and the packed-terrain TANGENT per flags", "[terrain][tile-mesh]") {
     const int size = 129;
     const int meshGrid = 32;
     const int stride = (size - 1) / meshGrid;
     const int gridPts = meshGrid + 1;
+    const int vertCount = gridPts * gridPts;
     std::vector<uint16_t> heights(static_cast<std::size_t>(size) * size, 32768);
     std::vector<uint8_t> landCover(static_cast<std::size_t>(size) * size, 0);
     // Tag one heightmap pixel that maps to a mesh vertex (col=16, row=16 -> pixel 16*stride).
     const int pc = 16 * stride, pr = 16 * stride;
-    landCover[static_cast<std::size_t>(pr) * size + pc] = 7;
+    landCover[static_cast<std::size_t>(pr) * size + pc] = 30; // ESA WorldCover grassland
 
     const TileKey key{4, 5, 16, 16};
     const double R = 6371000.0;
     const glm::dvec3 origin = tileToWorld(key, 0.5, 0.5, 0.0, R);
+    // TANGENT block begins after POSITION(12) + NORMAL(12) + TEXCOORD_0(8) per vertex.
+    const std::size_t texOff = static_cast<std::size_t>(vertCount) * 24u;
+    const std::size_t tanOff = texOff + static_cast<std::size_t>(vertCount) * 8u;
 
-    SECTION("both attributes present") {
+    SECTION("both attributes present; TANGENT carries class/elev/detail") {
         auto glb = buildTileMeshGlb(heights, size, meshGrid, key, R, origin, landCover.data(), /*emitTexcoord=*/true);
         auto view = parseGlb(glb);
         CHECK(view.json.find("TEXCOORD_0") != std::string::npos);
-        CHECK(view.json.find("COLOR_0") != std::string::npos);
+        CHECK(view.json.find("TANGENT") != std::string::npos);
+        CHECK(view.json.find("COLOR_0") == std::string::npos); // replaced by the packed TANGENT
 
-        const int vertCount = gridPts * gridPts;
-        // TEXCOORD_0 = (s, t) at vertex (16,16) -> (0.5, 0.5).
-        const std::size_t texOff = static_cast<std::size_t>(vertCount) * 12u * 2u;
         const int vi = 16 * gridPts + 16;
         const glm::vec2 st = readVec2(view.bin, texOff, vi);
         CHECK(st.x == Catch::Approx(0.5f));
         CHECK(st.y == Catch::Approx(0.5f));
 
-        // COLOR_0.r carries the WorldCover class (7) as a normalized u8.
-        const std::size_t colOff = texOff + static_cast<std::size_t>(vertCount) * 8u;
-        const uint8_t r = view.bin[colOff + static_cast<std::size_t>(vi) * 4u + 0u];
-        const uint8_t a = view.bin[colOff + static_cast<std::size_t>(vi) * 4u + 3u];
-        CHECK(r == 7u);
-        CHECK(a == 255u);
+        const glm::vec4 tan = readVec4(view.bin, tanOff, vi);
+        CHECK(tan.x == Catch::Approx(30.0f));                       // WorldCover class
+        CHECK(tan.y == Catch::Approx((0.0f + 1000.0f) / 10000.0f)); // normalized elev at h = 0
+        // Detail coordinate is a metre value reduced modulo 3000 (seamless-wrap period).
+        CHECK(tan.z >= 0.0f);
+        CHECK(tan.z < 3000.0f);
+        CHECK(tan.w >= 0.0f);
+        CHECK(tan.w < 3000.0f);
     }
 
-    SECTION("no COLOR_0 when landCover is null") {
+    SECTION("class 255 sentinel when landCover is null (fallback selection)") {
         auto glb = buildTileMeshGlb(heights, size, meshGrid, key, R, origin, nullptr, /*emitTexcoord=*/true);
         auto view = parseGlb(glb);
-        CHECK(view.json.find("TEXCOORD_0") != std::string::npos);
-        CHECK(view.json.find("COLOR_0") == std::string::npos);
+        CHECK(view.json.find("TANGENT") != std::string::npos);
+        const glm::vec4 tan = readVec4(view.bin, tanOff, 0);
+        CHECK(tan.x == Catch::Approx(255.0f));
     }
 
-    SECTION("no TEXCOORD_0 when disabled") {
+    SECTION("no TEXCOORD_0 and no TANGENT when disabled") {
         auto glb = buildTileMeshGlb(heights, size, meshGrid, key, R, origin, nullptr, /*emitTexcoord=*/false);
         auto view = parseGlb(glb);
         CHECK(view.json.find("TEXCOORD_0") == std::string::npos);
-        CHECK(view.json.find("COLOR_0") == std::string::npos);
+        CHECK(view.json.find("TANGENT") == std::string::npos);
+    }
+}
+
+// The detail coordinate must be continuous across a shared tile edge (#475) — the same physical
+// point on two adjacent tiles maps to the same global face-UV, hence the same detail metres.
+TEST_CASE("buildTileMeshGlb detail coordinate is continuous across a shared tile edge", "[terrain][tile-mesh]") {
+    const int size = 129;
+    const int meshGrid = 32;
+    const int gridPts = meshGrid + 1;
+    const int vertCount = gridPts * gridPts;
+    std::vector<uint16_t> heights(static_cast<std::size_t>(size) * size, 32768);
+    const double R = 6371000.0;
+    const std::size_t tanOff = static_cast<std::size_t>(vertCount) * 32u; // pos+nrm+tex per vertex
+
+    // Two horizontally-adjacent tiles on the same face (i, i+1). The +U edge of the left tile
+    // coincides with the -U edge of the right tile.
+    const TileKey left{2, 6, 20, 24};
+    const TileKey right{2, 6, 21, 24};
+    const glm::dvec3 oL = tileToWorld(left, 0.5, 0.5, 0.0, R);
+    const glm::dvec3 oR = tileToWorld(right, 0.5, 0.5, 0.0, R);
+    // Keep the GLB vectors alive — parseGlb stores a pointer into them.
+    const std::vector<uint8_t> glbL = buildTileMeshGlb(heights, size, meshGrid, left, R, oL, nullptr, true);
+    const std::vector<uint8_t> glbR = buildTileMeshGlb(heights, size, meshGrid, right, R, oR, nullptr, true);
+    auto gL = parseGlb(glbL);
+    auto gR = parseGlb(glbR);
+
+    // For each row, the left tile's last column (col=meshGrid) and the right tile's first column
+    // (col=0) are the same world point -> identical detail metres.
+    for (int row = 0; row <= meshGrid; ++row) {
+        const int viL = row * gridPts + meshGrid;
+        const int viR = row * gridPts + 0;
+        const glm::vec4 tL = readVec4(gL.bin, tanOff, viL);
+        const glm::vec4 tR = readVec4(gR.bin, tanOff, viR);
+        CHECK(tL.z == Catch::Approx(tR.z).margin(1e-3));
+        CHECK(tL.w == Catch::Approx(tR.w).margin(1e-3));
     }
 }

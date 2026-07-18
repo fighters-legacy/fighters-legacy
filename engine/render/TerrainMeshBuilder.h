@@ -26,18 +26,22 @@ namespace fl {
 //                   sea level). Vertices are emitted RELATIVE to this (small float32 offsets); the
 //                   single rebase lives in the model matrix, so mesh.vert is unchanged. See the
 //                   camera-relative rebase invariant in CLAUDE.md / #468.
-// landCover     — optional row-major uint8 WorldCover class per heightmap pixel (heightmapSize^2). When
-//                 non-null, a COLOR_0 accessor (VEC4 u8 normalized) is emitted with the class in .r.
-// emitTexcoord  — when true (default), a TEXCOORD_0 accessor (VEC2 f32 = tile-local (s, t)) is emitted.
+// landCover     — optional row-major uint8 WorldCover class per heightmap pixel (heightmapSize^2). Feeds
+//                 the packed-terrain TANGENT's .x (class; 255 = "no land-cover" when null → the shader
+//                 falls back to elevation/slope selection).
+// emitTexcoord  — when true (default), a TEXCOORD_0 accessor (VEC2 f32 = tile-local (s, t)) AND the
+//                 packed-terrain TANGENT accessor are emitted (they ride together — see below).
 // skirtDepthM   — when > 0, appends a skirt (#472): the outer edge ring is duplicated and pushed
 //                 toward the planet centre by this many metres, with side quads sealing the tile
 //                 border. Hides the hairline cracks at quadtree LOD boundaries; skirt vertices copy
 //                 their source vertex's normal/texcoord/color so the flap shades like the surface.
 //                 0 (default) emits no skirt — output is byte-identical to the pre-skirt builder.
 //
-// Output GLB has POSITION + NORMAL (VEC3 f32), optional TEXCOORD_0 (VEC2 f32) / COLOR_0 (VEC4 u8
-// normalized), UNSIGNED_SHORT indices, non-interleaved bufferViews. Winding is CCW-from-outside
-// (validate-mesh clean): the (s->U, t->V) tile basis is right-handed with the outward normal U x V.
+// Output GLB has POSITION + NORMAL (VEC3 f32), optional TEXCOORD_0 (VEC2 f32) and a packed-terrain
+// TANGENT (VEC4 f32, #475) — NOT a real tangent: .x = WorldCover class, .y = normalized elevation,
+// .zw = spherical-valid detail coordinate in metres (global face-UV arc length mod 3000 m, seamless
+// across tiles and LOD). UNSIGNED_SHORT indices, non-interleaved bufferViews. Winding is
+// CCW-from-outside (validate-mesh clean): the (s->U, t->V) tile basis is right-handed, outward U x V.
 //
 // Returns an empty vector on invalid input (empty heights, meshGrid <= 0, heightmapSize < 2,
 // heightmapSize < meshGrid + 1, heights too small, or a vertex count exceeding uint16 indices).

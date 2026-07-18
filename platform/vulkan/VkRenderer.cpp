@@ -618,6 +618,10 @@ void VkRenderer::writeFrameUBOs(const FrameScene& scene) {
     cam.view = scene.camera.view;
     cam.proj = scene.camera.proj;
     cam.worldOrigin = glm::vec4(glm::vec3(scene.camera.worldOrigin), 0.0f);
+    // Planet centre rebased into camera-relative space (CPU double, #475): the terrain shader's
+    // radial "up" is normalize(fragWorldPos - planetCenter). At Earth radius the difference is ~6.4e6 m
+    // so a float32 direction is precise to ~1e-7 — good enough for a normalized slope reference.
+    cam.planetCenter = glm::vec4(glm::vec3(scene.camera.planetCenter - scene.camera.worldOrigin), 0.0f);
     std::memcpy(pf.cameraMapped, &cam, sizeof(cam));
 
     LightUBO light{};

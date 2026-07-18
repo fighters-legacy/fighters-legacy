@@ -160,6 +160,10 @@ struct CameraView {
     glm::mat4 view{1.0f};
     glm::mat4 proj{1.0f};
     glm::dvec3 worldOrigin{};
+    // World-space planet centre ({0,-R,0} for the spherical Earth), for the terrain shader's radial
+    // "up" (#475). Set by SceneRenderer from the terrain streamer's baked radius; {0,0,0} default is
+    // harmless when no terrain sphere is present (terrain shading is the only consumer).
+    glm::dvec3 planetCenter{};
 };
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,8 @@ const float PI = 3.14159265358979;
 layout(set = 0, binding = 0) uniform CameraUBO {
     mat4 view;
     mat4 proj;
-    vec4 worldOrigin; // xyz = camera world position
+    vec4 worldOrigin;  // xyz = camera world position
+    vec4 planetCenter; // xyz = planet centre, CAMERA-RELATIVE (CPU double-rebased), #475 radial up
 } camera;
 
 layout(set = 0, binding = 1) uniform LightUBO {
@@ -69,27 +70,43 @@ float noiseT(vec2 p) {
     return mix(mix(hashT(i), hashT(i + vec2(1, 0)), f.x), mix(hashT(i + vec2(0, 1)), hashT(i + vec2(1, 1)), f.x), f.y);
 }
 
-// 4-biome weights from elevation + slope flatness (grass, dirt, rock, snow), normalised.
-vec4 biomeWeights(float elevationM, float slopeFlat) {
+// Biome weights (x grass, y dirt, z rock, w snow — biome array layer order) from an ESA WorldCover
+// class. MIRROR of engine/render/BiomeWeights.h biomeWeightsForWorldCover — keep in sync (pinned by
+// test_biome_weights). 255 / unmapped returns all-zero: the caller uses the elevation/slope fallback.
+vec4 biomeWeightsForWorldCover(int cls) {
+    if (cls == 10 || cls == 20 || cls == 30 || cls == 40 || cls == 100) return vec4(1.0, 0.0, 0.0, 0.0);
+    if (cls == 90 || cls == 95) return vec4(0.7, 0.3, 0.0, 0.0);
+    if (cls == 50) return vec4(0.0, 0.6, 0.4, 0.0);
+    if (cls == 60) return vec4(0.0, 0.45, 0.55, 0.0);
+    if (cls == 70) return vec4(0.0, 0.0, 0.0, 1.0);
+    if (cls == 80) return vec4(0.0, 0.5, 0.5, 0.0);
+    return vec4(0.0);
+}
+float worldCoverWaterness(int cls) {
+    if (cls == 80) return 1.0;
+    if (cls == 90 || cls == 95) return 0.5;
+    return 0.0;
+}
+
+// Elevation/slope fallback (pre-#475) — used for tiles with no land-cover layer (class 255).
+// normElev is (h + 1000) / 10000 (the packed value), so elevationM = normElev*10000 - 1000.
+vec4 biomeWeightsElevSlope(float normElev, float slopeFlat) {
+    float elevationM = normElev * 10000.0 - 1000.0;
     float grass = smoothstep(450.0, 300.0, elevationM) * smoothstep(0.65, 0.85, slopeFlat);
     float snow  = smoothstep(700.0, 820.0, elevationM);
     float rock  = (1.0 - smoothstep(0.55, 0.80, slopeFlat)) + smoothstep(520.0, 660.0, elevationM) * (1.0 - snow);
     float dirt  = max(0.0, 1.0 - grass - rock - snow);
-    vec4 w = vec4(grass, dirt, rock, snow);
-    return w / (dot(w, vec4(1.0)) + 1e-4);
+    return vec4(grass, dirt, rock, snow);
 }
 
-// Biome-blended terrain albedo sampled from the biome texture ARRAYS (#446), weighted by the same
-// elevation/slope biome weights. worldXZ is absolute world metres so the detail tiling is seamless
-// across chunk boundaries (4 m fine / 30 m coarse). #475 will replace the elevation/slope selection
-// with the land-cover COLOR_0 class and fix the spherical-invalid absolute-XZ coordinate.
-vec3 terrainAlbedo(float elevationM, vec3 geoNormal, vec2 worldXZ) {
-    vec4 w = biomeWeights(elevationM, clamp(geoNormal.y, 0.0, 1.0));
-    vec2 fineUV = worldXZ / 4.0;   // 4 m fine tiling
-    vec2 coarseUV = worldXZ / 30.0; // 30 m coarse tiling
+// Biome-blended terrain albedo sampled from the biome texture ARRAYS (#446), weighted by `w`.
+// detailUV is the spherical-valid per-vertex detail coordinate in metres (#475) — seamless across
+// tiles and LOD levels, so the tiling no longer relies on the float-cancelling absolute world XZ.
+vec3 sampleBiomeAlbedo(vec4 w, vec2 detailUV) {
+    vec2 fineUV = detailUV / 4.0;    // 4 m fine tiling
+    vec2 coarseUV = detailUV / 30.0; // 30 m coarse tiling
     vec3 col = vec3(0.0);
     for (int i = 0; i < 4; ++i) {
-        // Blend a fine + coarse array sample per layer to break up obvious repetition.
         vec3 c = mix(texture(biomeColorArray, vec3(fineUV, float(i))).rgb,
                      texture(biomeColorArray, vec3(coarseUV, float(i))).rgb, 0.35);
         col += c * w[i];
@@ -104,6 +121,9 @@ layout(location = 1) in vec3  fragWorldNormal;
 layout(location = 2) in vec3  fragWorldTangent;
 layout(location = 3) in float fragTangentHandedness;
 layout(location = 4) in vec2  fragUV;
+// Packed terrain data (#475): .x = WorldCover class (255 = none), .y = normalized elevation,
+// .zw = spherical-valid detail coordinate in metres. For non-terrain meshes this is the real tangent.
+layout(location = 5) in vec4  fragRawTangent;
 
 layout(location = 0) out vec4 outColor;
 // G-buffer world-space normal (octahedral-encoded into RG). Written only when the forward-opaque
@@ -194,17 +214,37 @@ void main() {
     // Base color
     vec4 baseColor = texture(baseColorTex, fragUV) * push.baseColorFactor;
 
-    // Debug face colour (builtin placeholder) takes priority; otherwise terrain elevation/slope
-    // shading, or runway markings (#487). fragWorldPos is camera-relative, so add the camera world Y
-    // to recover absolute elevation. Terrain/debug/runway use the geometric (flat) normal.
+    // Debug face colour (builtin placeholder) takes priority; otherwise terrain (land-cover biomes,
+    // #475), or runway markings (#487). Terrain/debug/runway use the geometric (flat) normal.
     bool isTerrain = (push.shadingMode > 0.5 && push.shadingMode < 1.5);
     bool isRunway  = (push.shadingMode > 2.5);
-    vec2 terrainXZ = fragWorldPos.xz + camera.worldOrigin.xz; // absolute world XZ (seamless tiling)
+
+    // Packed terrain data (#475): the spherical-valid detail coordinate replaces the old
+    // fragWorldPos.xz + worldOrigin.xz, which cancelled to metre-precision garbage at Earth radius.
+    int   terrainClass   = int(fragRawTangent.x + 0.5);
+    float terrainElev    = fragRawTangent.y;   // normalized (h + 1000) / 10000
+    vec2  terrainDetail  = fragRawTangent.zw;  // metres, seamless across tiles/LOD
     if (push.shadingMode > 1.5 && push.shadingMode < 2.5) {
         baseColor.rgb = faceColor(normalize(fragWorldNormal));
     } else if (isTerrain) {
-        float elevationM = fragWorldPos.y + camera.worldOrigin.y;
-        baseColor.rgb = terrainAlbedo(elevationM, normalize(fragWorldNormal), terrainXZ);
+        // Slope from the RADIAL up (planet-centre relative) — correct anywhere on the sphere.
+        vec3 radialUp = normalize(fragWorldPos - camera.planetCenter.xyz);
+        float slopeFlat = clamp(dot(normalize(fragWorldNormal), radialUp), 0.0, 1.0);
+        vec4 w;
+        if (terrainClass >= 254) {
+            w = biomeWeightsElevSlope(terrainElev, slopeFlat); // no land-cover -> fallback
+        } else {
+            w = biomeWeightsForWorldCover(terrainClass);
+            // Steep ground reads as rock regardless of land class; high ground gets snow-capped.
+            float steep = 1.0 - smoothstep(0.55, 0.80, slopeFlat);
+            w = mix(w, vec4(0.0, 0.0, 1.0, 0.0), steep * 0.6 * (1.0 - worldCoverWaterness(terrainClass)));
+            float snow = smoothstep(0.26, 0.32, terrainElev) * (1.0 - worldCoverWaterness(terrainClass));
+            w = mix(w, vec4(0.0, 0.0, 0.0, 1.0), snow);
+        }
+        w /= (dot(w, vec4(1.0)) + 1e-4);
+        vec3 albedo = sampleBiomeAlbedo(w, terrainDetail);
+        float water = worldCoverWaterness(terrainClass);
+        baseColor.rgb = mix(albedo, vec3(0.015, 0.045, 0.07), water); // open water: dark
     } else if (isRunway) {
         baseColor.rgb = runwayMarkings(fragUV, baseColor.rgb);
     }
@@ -225,18 +265,22 @@ void main() {
     vec3 normalSample = texture(normalTex, fragUV).rgb * 2.0 - 1.0;
     N = normalize(TBN * normalSample);
 
-    // Terrain micro-surface: perturb the normal with finite-differenced detail noise (world XZ),
-    // and roughen slightly with the same field, fading out with distance to avoid shimmer.
+    // Terrain micro-surface: perturb the normal with finite-differenced detail noise, and roughen
+    // slightly with the same field, fading out with distance to avoid shimmer. Keyed on the
+    // spherical-valid detail coordinate (#475), not the float-cancelling absolute world XZ. Open
+    // water is left smooth + glossy instead (a specular sheen, no bump).
     if (isTerrain) {
-        float detailFade = 1.0 - smoothstep(150.0, 900.0, length(fragWorldPos));
+        float water = worldCoverWaterness(terrainClass);
+        float detailFade = (1.0 - smoothstep(150.0, 900.0, length(fragWorldPos))) * (1.0 - water);
         if (detailFade > 0.001) {
             const float eps = 0.5; // metres
-            float h0 = noiseT(terrainXZ / 6.0);
-            float hx = noiseT((terrainXZ + vec2(eps, 0.0)) / 6.0) - h0;
-            float hz = noiseT((terrainXZ + vec2(0.0, eps)) / 6.0) - h0;
+            float h0 = noiseT(terrainDetail / 6.0);
+            float hx = noiseT((terrainDetail + vec2(eps, 0.0)) / 6.0) - h0;
+            float hz = noiseT((terrainDetail + vec2(0.0, eps)) / 6.0) - h0;
             N = normalize(N + vec3(hx, 0.0, hz) * 2.2 * detailFade);
             roughness = clamp(roughness + (h0 - 0.5) * 0.15 * detailFade, 0.5, 1.0);
         }
+        roughness = mix(roughness, 0.12, water); // glossy water
     }
 
     // View and half vectors (camera-relative: camera is at origin)

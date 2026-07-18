@@ -32,7 +32,8 @@ static constexpr VkFormat kHdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 struct CameraUBO {
     glm::mat4 view{1.0f};
     glm::mat4 proj{1.0f};
-    glm::vec4 worldOrigin{0.0f}; // xyz = origin, w = unused
+    glm::vec4 worldOrigin{0.0f};  // xyz = origin, w = unused
+    glm::vec4 planetCenter{0.0f}; // xyz = planet centre, camera-relative (#475); w = unused
 };
 
 // GPU-side light UBO layout — matches set 0, binding 1 in mesh.frag.
