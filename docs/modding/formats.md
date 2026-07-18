@@ -1242,6 +1242,89 @@ engine does, and every `sensors` ID through the def-id index: an unresolvable `f
 does not fail at runtime, it silently flies the builtin placeholder model, which is why the
 validator treats it as an error.
 
+### `[[crew]]` and `[[turrets]]` (optional) — multi-crew seats and turret mounts
+
+An aircraft is a set of crew **seats**. **Omit `[[crew]]` entirely and the entity is an implicit
+single pilot** — every existing def is a valid one-seat crewed aircraft with no changes. Author
+`[[crew]]` when an airframe carries more than one crewman (a bomber with a pilot and defensive
+gunners): each seat spawns with a bot by default, and a human may join any seat not held by another
+human.
+
+A seat's `role` is a **display string** (`"pilot"`, `"tail-gunner"`) — the engine never branches on
+it. What the engine and the wire see is the seat's **capability set**: `fly`, `fire`, `radar`,
+`countermeasures`, `command`. This is the same roles-as-data principle as weapon stations, where
+`allowed` — not a `type` enum — is the contract. The load-bearing rule is **one owner per control
+channel**, checked by `validate-entity`:
+
+- exactly **one** `fly` seat (it owns the flight controls);
+- each hardpoint slot is fired by **at most one** seat (directly or via a turret it aims);
+- `radar` / `countermeasures` / `command` are each on **at most one** seat.
+
+So a masked merge of all the seats' inputs can never conflict — a gunner's stick does nothing to the
+airframe, and the pilot's trigger never fires the tail gun.
+
+`[[crew]]` fields (per seat):
+
+| Field | Type | Description |
+|---|---|---|
+| `role` | string | Display name, e.g. `"pilot"`. Non-empty; localizable client-side |
+| `capabilities` | string[] | Non-empty subset of `fly` / `fire` / `radar` / `countermeasures` / `command` |
+| `stations` | int[] | Hardpoint `slot`s this seat fires directly (requires `fire`); default `[]` |
+| `turret` | string | A `[[turrets]]` `id` this seat aims (its stations are fired too; requires `fire`); default none |
+| `seat_pos` | float[3] | Seat/eyepoint position in body frame (metres) — the per-seat cockpit camera |
+| `bot` | string | Bot spec filling the seat by default: a factory behavior (`"gunner"`), a compiled-in bot (`"builtin:gunner"`), or a pack Lua script (`"lua:<script>"`). Empty = an engine-default bot for the seat's capabilities |
+| `empty` | bool | `true` = the seat spawns unoccupied (human-joinable only). Mutually exclusive with `bot` |
+| `skill` | float | `[0, 1]` per-instance skill baseline for the bot; a mission `crew:` range may override |
+
+`[[turrets]]` gives a weapon station an aiming direction independent of the airframe nose (a
+defensive gun that tracks a chaser; a static SAM launcher that elevates). Fields:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `id` | string | — | Unique within the entity; referenced by a seat's `turret` |
+| `mount_pos` | float[3] | `[0,0,0]` | Mount origin, body frame (metres) |
+| `mount_orient` | float[4] | `[0,0,0,1]` | Rest orientation, body-frame quat `(x,y,z,w)`; default = points along the nose |
+| `az_min_deg` / `az_max_deg` | float | `-180` / `180` | Traverse limits about the mount's up axis |
+| `el_min_deg` / `el_max_deg` | float | `-5` / `85` | Elevation limits |
+| `slew_rate_deg_s` | float | `60` | Servo slew rate; must be `> 0`. The server slews the turret at this rate — no instant aim, regardless of the client |
+| `stations` | int[] | `[]` | Hardpoint `slot`s physically mounted on this turret |
+
+```toml
+[[hardpoints]]
+slot    = 0
+allowed = ["fl-base:mk82"]   # forward bomb bay, fired by the pilot
+default = "fl-base:mk82"
+
+[[hardpoints]]
+slot    = 3
+allowed = ["fl-base:m3_50cal"]   # the tail gun
+default = "fl-base:m3_50cal"
+
+[[turrets]]
+id              = "tail"
+mount_pos       = [0.0, 0.6, -8.0]
+az_min_deg      = -60.0
+az_max_deg      =  60.0
+el_min_deg      = -10.0
+el_max_deg      =  80.0
+slew_rate_deg_s = 45.0
+stations        = [3]
+
+[[crew]]
+role         = "pilot"
+capabilities = ["fly", "fire", "radar", "countermeasures"]
+stations     = [0]
+seat_pos     = [0.0, 1.2, 4.0]
+
+[[crew]]
+role         = "tail-gunner"
+capabilities = ["fire"]
+turret       = "tail"
+bot          = "gunner"
+skill        = 0.6
+seat_pos     = [0.0, 0.5, -8.0]
+```
+
 ### `[signatures]` (optional) — what the entity looks like to a sensor
 
 The **target** side of detection, where a sensor def is the observer side. Values are **unitless

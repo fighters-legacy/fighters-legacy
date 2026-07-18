@@ -332,6 +332,15 @@ Phase 4 acceptance requires a content pack (fl-base-pack) and is gated on Phase 
   behaviour — the CI-tested path).
 - Server discovery posture: the LAN browser + fl-lobby internet listing (#143) is the
   deliberate matchmaking model — no skill-based matchmaking service (self-host posture).
+- Multi-crew aircraft (Epic #966): a crewed airframe spawns with every authored seat bot-filled
+  (or empty per authoring); a human joins any non-human seat at connect or in-session and drives
+  only that seat's capabilities; on vacate/disconnect the seat reverts to its authored default with
+  no visible discontinuity (a bot pilot resumes mid-maneuver); humans never displace humans and the
+  airframe is never destroyed out from under a remaining human occupant; a defensive turret aims and
+  fires independently of the airframe nose within its traverse limits and a gunner's kill credits the
+  gunner; single-seat aircraft stay byte-identical on the wire. The turret servo delivers the
+  ground-SAM **launcher-elevation gap** documented as owed to #585 (a static emplacement mounts its
+  launcher as a turret). Provable zero-pack via `builtin:bomber` in the armed sandbox.
 - Helicopter and multirotor force models functional with appropriate fl-base-pack aircraft types.
 - Per-engine failure simulation: L/R bits produce asymmetric thrust effects in cockpit.
 - Afterburner envelope limits enforced per aircraft TOML definition.

@@ -3,6 +3,7 @@
 
 #include "AuthTracker.h"
 #include "CongestionController.h"
+#include "CrewState.h" // per-seat crew control frame (#966/#969)
 #include "GameProtocol.h"
 #include "INetwork.h"
 #include "InputTraceWriter.h"
@@ -159,6 +160,7 @@ struct ControlledEntity {
     bool hasSubsystems{false};      // true when the entity def declares [damage.subsystems]
     float fuelLeakKgS{0.f};         // accumulated fuel-leak rate from failed fuel subsystem(s) (#675)
     bool prevDispenseCm{false};     // countermeasure-dispense edge detector (#529): a held input is one pop
+    CrewState crew{};               // per-seat control frame (#969); EMPTY = single-seat fast path (above)
 };
 
 // Pre-start scalar configuration. Bundles the init-time setters so callers configure rate limiting,
@@ -528,6 +530,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // is exactly the pre-#812 behaviour.
     using PayloadResolver = std::function<PayloadEffect(const EntityDef& def)>;
     void setPayloadResolver(PayloadResolver fn);
+
+    // Builds a NON-fly crew seat's bot from its authored SeatDef (#969/#971). The same std::function
+    // injection as the resolvers above — the concrete seat bots (the turret gunner) live in engine-ai,
+    // which engine-net must not link. Unset ⇒ a crewed aircraft spawns with its non-fly seats empty
+    // (they contribute no fire); the Fly seat always flies via its IEntityController regardless. A
+    // crewed aircraft is built only when the entity def declares [[crew]]; see addControlledEntity.
+    using SeatControllerFactory = std::function<std::unique_ptr<ISeatController>(const SeatDef& seat, uint8_t seatIdx)>;
+    void setSeatControllerFactory(SeatControllerFactory fn);
 
     // ---------------------------------------------------------------------------------------------
     // Sensing (#685)
@@ -934,6 +944,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     void runWeaponsPass(double simDt, uint64_t tickIndex);
     void executeFireRequest(const FireRequest& req, uint64_t tickIndex);
     void resolveHitscan(const FireRequest& req, const WeaponDef& def, uint64_t tickIndex);
+    // Crewed control frame (#969). buildCrew turns an entity def's [[crew]]/[[turrets]] into the
+    // ControlledEntity's CrewState at spawn; sampleCrewSeats samples each non-fly bot seat in the AI
+    // pass and commands its turret; runCrewedFire evaluates each seat's fire in the serial weapons
+    // pass. All three are no-ops / never called for a single-seat entity (crew.seats empty).
+    void buildCrew(ControlledEntity& ce, const EntityDef& def);
+    void sampleCrewSeats(ControlledEntity& ce, const EntityState& st, uint64_t tick, double dt,
+                         const AiTickContext& ctx);
+    void runCrewedFire(ControlledEntity& ce, uint32_t idx, uint64_t tick);
     // The shooter's designated target through the #610 seam: peer viewAxis or AI nose (#627/#628).
     EntityId designateFor(const EntityState& shooter, uint32_t ownerPeer) const;
     void queueEffect(uint8_t type, uint8_t weaponClass, uint32_t srcIdx, uint32_t tgtIdx, const double pos[3]);
@@ -1051,6 +1069,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Resolves EntityDef::flightModelAsset -> FlightModelData at spawn (null = always builtin model).
     FlightModelResolver m_flightModelResolver;
     PayloadResolver m_payloadResolver;
+    SeatControllerFactory m_seatControllerFactory; // builds non-fly crew seat bots (#969); unset = empty seats
 
     // Sensing (#685). The system owns the observer side-storage; EntityState stays a flat POD that
     // knows nothing about being observed.

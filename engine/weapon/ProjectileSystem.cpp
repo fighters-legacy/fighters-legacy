@@ -70,7 +70,8 @@ std::string projectileTypeId(const WeaponDef& def) {
 }
 
 EntityId ProjectileSystem::launch(EntityManager& em, uint32_t weaponIndex, const EntityState& shooterState,
-                                  uint32_t shooterPeerOwnerId, EntityId designatedTarget, uint64_t tickIndex) {
+                                  uint32_t shooterPeerOwnerId, EntityId designatedTarget, uint64_t tickIndex,
+                                  const glm::vec3* aimDirWorld) {
     if (!m_weapons)
         return EntityId::null();
     const WeaponDef* def = m_weapons->byIndex(weaponIndex);
@@ -80,9 +81,12 @@ EntityId ProjectileSystem::launch(EntityManager& em, uint32_t weaponIndex, const
     // Launch state, per weapon class (#629). Missiles and rockets leave along the nose with a
     // separation push clear of the shooter's own contact-fuze bubble; a BOMB is ejected DOWNWARD
     // off the rack — the ejector feet push it away from the airframe, never ahead of it.
+    // A turret-mounted store (#970) leaves along the turret bore instead of the nose (aimDirWorld).
     const float* q = shooterState.transform.quat;
     const glm::quat rot{q[3], q[0], q[1], q[2]};
-    const glm::vec3 nose = rot * glm::vec3{1.f, 0.f, 0.f};
+    const glm::vec3 airframeNose = rot * glm::vec3{1.f, 0.f, 0.f};
+    const glm::vec3 nose =
+        (aimDirWorld && glm::length(*aimDirWorld) > 1e-6f) ? glm::normalize(*aimDirWorld) : airframeNose;
     const glm::vec3 bodyUp = rot * glm::vec3{0.f, 1.f, 0.f};
     const bool isBomb = def->type == WeaponType::Bomb;
     const glm::vec3 sepDir = isBomb ? -bodyUp : nose;

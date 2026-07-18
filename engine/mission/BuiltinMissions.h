@@ -15,8 +15,9 @@ namespace fl {
 namespace detail {
 
 // builtin:sandbox -- a small skirmish: a joinable blue player slot flanked by a builtin-fighter
-// wingman, versus two builtin-fighter bandits and a SAM site defending a point. Win by destroying the
-// SAM; a generous timer backstop fails the mission so a headless harness run always terminates.
+// wingman, versus two builtin-fighter bandits, a crewed builtin:bomber (its bot tail-gunner turret
+// auto-defends -- the #977 zero-pack crew/turret proof), and a SAM site defending a point. Win by
+// destroying the SAM; a generous timer backstop fails the mission so a headless harness always ends.
 inline constexpr std::string_view kBuiltinSandboxYaml = R"yaml(
 name: "Sandbox Skirmish"
 map: world
@@ -29,6 +30,9 @@ objects:
   - { type: builtin:debug-entity, id: blue1, side: blue, pos: [-600, 1500, 200], heading: 90, ai: "lua builtin:fighter" }
   - { type: builtin:debug-entity, id: red1, side: red, pos: [9000, 2500, 0], heading: 270, ai: "lua builtin:fighter" }
   - { type: builtin:debug-entity, id: red2, side: red, pos: [9000, 2500, 900], heading: 270, ai: "lua builtin:fighter" }
+  # A crewed bomber (#977): its AI pilot flies, and its bot tail-gunner turret auto-defends against
+  # anyone who slides into its rear quarter -- the whole crew/turret fire path, zero-pack.
+  - { type: builtin:bomber, id: redbomber, side: red, pos: [9500, 3000, -400], heading: 270, ai: "lua builtin:fighter" }
   - { type: builtin:sam-site, id: redsam, side: red, pos: [9500, 0, 0], heading: 90, ai: "sam" }
 triggers:
   - on: destroy(redsam)

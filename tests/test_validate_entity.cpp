@@ -156,6 +156,45 @@ TEST_CASE("Pack mode: every asset-name reference is resolved", "[entity-validato
     }
 }
 
+TEST_CASE("Pack mode: a crew seat's lua bot spec resolves to a pack ai script (#966)", "[entity-validator]") {
+    TempPack pack;
+    pack.write("aircraft/wedge.glb", "x");
+    pack.write("aircraft/f5e/f5e.toml", "# fm\n");
+    const std::string crew = "[[crew]]\nrole = \"pilot\"\ncapabilities = [\"fly\"]\n"
+                             "[[crew]]\nrole = \"gunner\"\ncapabilities = [\"radar\"]\n";
+
+    SECTION("an unresolvable lua bot spec is an error") {
+        pack.write("entities/e.toml",
+                   aircraftEntity("test:e", "wedge", "f5e/f5e", crew + "bot = \"lua:nosuchgunner\"\n"));
+        const auto r = validateEntityPack(pack.root.string());
+        CHECK_FALSE(r.ok);
+        CHECK(hasSubstr(r.errors, "nosuchgunner"));
+    }
+
+    SECTION("a resolvable lua bot spec passes") {
+        pack.write("ai/gunner.lua", "-- lua\n");
+        pack.write("entities/e.toml", aircraftEntity("test:e", "wedge", "f5e/f5e", crew + "bot = \"lua:gunner\"\n"));
+        const auto r = validateEntityPack(pack.root.string());
+        CHECK(r.ok);
+    }
+
+    SECTION("a builtin bot spec needs no pack file") {
+        pack.write("entities/e.toml",
+                   aircraftEntity("test:e", "wedge", "f5e/f5e", crew + "bot = \"builtin:gunner\"\n"));
+        const auto r = validateEntityPack(pack.root.string());
+        CHECK(r.ok);
+    }
+
+    SECTION("the one-owner invariant surfaces as a parse error with the file name") {
+        pack.write("entities/e.toml", aircraftEntity("test:e", "wedge", "f5e/f5e",
+                                                     "[[crew]]\nrole = \"a\"\ncapabilities = [\"fly\"]\n"
+                                                     "[[crew]]\nrole = \"b\"\ncapabilities = [\"fly\"]\n"));
+        const auto r = validateEntityPack(pack.root.string());
+        CHECK_FALSE(r.ok);
+        CHECK(hasSubstr(r.errors, "Fly seat"));
+    }
+}
+
 TEST_CASE("Pack mode: sensor ids resolve through the id index, not the filesystem", "[entity-validator]") {
     TempPack pack;
     pack.write("aircraft/wedge.glb", "x");

@@ -133,6 +133,15 @@ the expensive way to do it — server-side also keeps the grammar allowlist on t
 enforces it, and keeps the LLM off the client's frame budget. On a CPU-only server the chat path is
 not offered and Epic O ships its scripted half (#610), which stands on its own.
 
+**Crew seats are Epic O's embodiment surface.** The multi-crew system (Epic #966) gives each
+`ControlledEntity` a `CrewState` of capability-partitioned seats, one of which carries the `Command`
+capability. That seat + the replicated crew roster are the structural hook Epic O binds to: a
+conversational crewman (an AI-occupied `Command`/`Radar` seat, or NL orders issued *from* a
+`Command` seat) is a seat bot whose `SeatCommand` output is produced by the provider-mapped intent
+rather than a scripted controller — the same masked-merge tick composition, no new authority path.
+The `Command` capability is reserved by #966 for exactly this and has no runtime consumer until
+Epic O lands.
+
 #### The scripted wingman (#610) — shipped, and the zero-AI path
 
 The deterministic half of Epic O is built and is what a server runs with no provider configured. Its

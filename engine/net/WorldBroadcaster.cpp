@@ -28,11 +28,15 @@
 #include "net/SnapshotCompression.h"
 #include "net/WireCodec.h"
 #include "sensor/TrackPicture.h"
+#include "weapon/Turret.h" // crew turret slew servo + world-bore (#970/#969)
 #include "weather/Turbulence.h"
 #include "weather/WeatherController.h"
 #include "weather/WindProfile.h" // altitude wind interp (#489)
 #include "world/FactionDef.h"
 #include "world/FactionRegistry.h"
+
+#include <glm/gtc/quaternion.hpp>
+#include <glm/trigonometric.hpp> // glm::radians for turret limit conversion (#969)
 
 #include <algorithm>
 #include <cassert>
@@ -325,6 +329,10 @@ void WorldBroadcaster::setFlightModelResolver(FlightModelResolver fn) {
 
 void WorldBroadcaster::setPayloadResolver(PayloadResolver fn) {
     m_payloadResolver = std::move(fn);
+}
+
+void WorldBroadcaster::setSeatControllerFactory(SeatControllerFactory fn) {
+    m_seatControllerFactory = std::move(fn);
 }
 
 void WorldBroadcaster::setSensorDefResolver(sensor::SensorSystem::SensorDefResolver fn) {
@@ -822,6 +830,11 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                                   m_stepInputs[i] = it.ce->controller->sample(*it.state, tickIndex, simDt, aiCtx);
                                   it.ce->lastInput = m_stepInputs[i];
                                   it.ce->lastInputValid = true;
+                                  // Crewed (#969): the Fly seat's flight is the ControlInput above; each
+                                  // non-fly bot seat is sampled here and commands its turret. Per-entity
+                                  // own writes stay inside this worker slice (serial-equivalent).
+                                  if (it.ce->crew.crewed())
+                                      sampleCrewSeats(*it.ce, *it.state, tickIndex, simDt, aiCtx);
                               }
                           }
                       });
@@ -836,6 +849,10 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             for (size_t i = b; i < e; ++i) {
                 const StepItem& it = m_stepItems[i];
                 stepFlightSim(*it.ce->sim, *it.state, m_stepInputs[i], it.ce->payload, simDt, it.idx, tickIndex);
+                // Slew each crew turret toward its commanded direction (#969/#970). Per-entity own
+                // write, so it stays disjoint in the parallel integrate pass (serial-equivalent).
+                for (CrewTurret& tr : it.ce->crew.turrets)
+                    stepTurret(tr.state, tr.limits, static_cast<float>(simDt));
             }
         });
         m_tickProfiler.addPhaseSample(TickPhase::Integrate,
@@ -2034,16 +2051,28 @@ void WorldBroadcaster::resolveHitscan(const FireRequest& req, const WeaponDef& d
         return;
 
     // Muzzle + bore line, with deterministic cone dispersion: two small angular offsets hashed from
-    // (shooter, tick) — the turbulence/detection idiom, so a replay reproduces every round.
+    // (shooter, tick) — the turbulence/detection idiom, so a replay reproduces every round. A
+    // turret-mounted gun (#970) fires along its bore (req.aimDir) instead of the airframe nose, with
+    // an orthonormal dispersion basis built around that bore; a nose gun is bit-identical to before.
     const float* q = shooter->transform.quat;
     const glm::quat rot{q[3], q[0], q[1], q[2]};
-    glm::vec3 bore = rot * glm::vec3{1.f, 0.f, 0.f};
+    glm::vec3 bore;
+    glm::vec3 up;
+    glm::vec3 right;
+    if (req.hasAimDir) {
+        bore = glm::normalize(glm::vec3{req.aimDir[0], req.aimDir[1], req.aimDir[2]});
+        const glm::vec3 ref = std::abs(bore.y) < 0.99f ? glm::vec3{0.f, 1.f, 0.f} : glm::vec3{1.f, 0.f, 0.f};
+        right = glm::normalize(glm::cross(bore, ref));
+        up = glm::cross(right, bore);
+    } else {
+        bore = rot * glm::vec3{1.f, 0.f, 0.f};
+        up = rot * glm::vec3{0.f, 1.f, 0.f};
+        right = rot * glm::vec3{0.f, 0.f, 1.f};
+    }
     constexpr float kGunDispersionRad = 0.012f; // ~0.7° cone half-angle
     const uint32_t h = req.shooterIdx * 0x9E3779B1u + static_cast<uint32_t>(tickIndex) * 0x85EBCA77u + 0x6B43A9B5u;
     const float r1 = (static_cast<float>((h >> 8) & 0xFFFu) / 4096.f - 0.5f) * 2.f;
     const float r2 = (static_cast<float>((h >> 20) & 0xFFFu) / 4096.f - 0.5f) * 2.f;
-    const glm::vec3 up = rot * glm::vec3{0.f, 1.f, 0.f};
-    const glm::vec3 right = rot * glm::vec3{0.f, 0.f, 1.f};
     bore = glm::normalize(bore + up * (r1 * kGunDispersionRad) + right * (r2 * kGunDispersionRad));
 
     const double range = static_cast<double>(def.performance.maxRangeM);
@@ -2140,8 +2169,11 @@ void WorldBroadcaster::executeFireRequest(const FireRequest& req, uint64_t tickI
     if (def->seeker && def->seeker->type != SeekerType::Unguided)
         designated = designateFor(*shooter, ownerPeer);
 
+    // A turret-mounted store leaves along the turret bore (#970); a nose store passes null.
+    const glm::vec3 aimDir{req.aimDir[0], req.aimDir[1], req.aimDir[2]};
     const EntityId pid = m_projectileSystem.launch(m_entityManager, req.weaponIndex, *shooter,
-                                                   ownerPeer == kNoOwningPeer ? 0u : ownerPeer, designated, tickIndex);
+                                                   ownerPeer == kNoOwningPeer ? 0u : ownerPeer, designated, tickIndex,
+                                                   req.hasAimDir ? &aimDir : nullptr);
     if (pid.valid())
         queueEffect(static_cast<uint8_t>(EffectType::MissileLaunch), static_cast<uint8_t>(def->type), req.shooterIdx,
                     0xFFFFFFFFu, shooter->transform.pos);
@@ -2236,6 +2268,12 @@ void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
     // 1. Fire intents → validated requests. Serial and cheap: FireControl is pure per-entity state.
     m_fireRequests.clear();
     for (auto& [idx, ce] : m_controlledEntities) {
+        // A crewed aircraft (#969) evaluates fire per seat over each seat's disjoint loadout
+        // partition; the single-seat path below is untouched (byte-identical) for a plain fighter.
+        if (ce.crew.crewed()) {
+            runCrewedFire(ce, idx, tickIndex);
+            continue;
+        }
         if (!ce.lastInputValid || ce.fire.loadout.empty())
             continue;
         const EntityState* st = m_entityManager.get(ce.id);
@@ -2265,9 +2303,15 @@ void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
             ce.fire.seekerCue = cue;
         }
     }
-    // Deterministic execution order regardless of map iteration: shooter idx, then station.
+    // Deterministic execution order regardless of map iteration: shooter idx, then seat (#969),
+    // then station. For a single-seat entity seat is always 0, so this is identical to the old
+    // (shooterIdx, station) ordering.
     std::sort(m_fireRequests.begin(), m_fireRequests.end(), [](const FireRequest& a, const FireRequest& b) {
-        return a.shooterIdx != b.shooterIdx ? a.shooterIdx < b.shooterIdx : a.station < b.station;
+        if (a.shooterIdx != b.shooterIdx)
+            return a.shooterIdx < b.shooterIdx;
+        if (a.seat != b.seat)
+            return a.seat < b.seat;
+        return a.station < b.station;
     });
 
     // 2. Execute serially: hitscan resolves now, stores become pooled projectile entities.
@@ -3283,7 +3327,13 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
 
     // Live stations (#625). Born from the same default loadout the payload above describes; from
     // here on the LOADOUT is the truth — a released store shrinks both, in evaluateFire.
-    if (m_weaponRegistry && spawnDef && !spawnDef->hardpoints.empty())
+    //
+    // A CREWED aircraft (#969) instead partitions the loadout across its seats (buildCrew): each
+    // seat owns its stations' ammo exclusively (the one-owner invariant), so ce.fire stays empty and
+    // the crewed weapons pass drives per-seat fire. A plain fighter takes the single-seat path.
+    if (m_weaponRegistry && spawnDef && !spawnDef->crew.empty())
+        buildCrew(ce, *spawnDef);
+    else if (m_weaponRegistry && spawnDef && !spawnDef->hardpoints.empty())
         ce.fire.loadout = buildLoadout(*spawnDef, *m_weaponRegistry);
 
     // Per-subsystem damage pools (#675), born from the def's [damage.subsystems]. Absent = the
@@ -3312,6 +3362,163 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     // as types are registered. Recomputing here is cheap (types are registered at startup) and keeps
     // it correct without a callback into the registry.
     m_sensorSystem.recomputeSignatureScale();
+}
+
+void WorldBroadcaster::buildCrew(ControlledEntity& ce, const EntityDef& def) {
+    ce.crew.seats.clear();
+    ce.crew.turrets.clear();
+
+    // Turrets first so a seat can index them; convert the authored degrees/quat to the servo's radians.
+    for (const TurretDef& td : def.turrets) {
+        CrewTurret t;
+        t.limits.azMinRad = glm::radians(td.azMinDeg);
+        t.limits.azMaxRad = glm::radians(td.azMaxDeg);
+        t.limits.elMinRad = glm::radians(td.elMinDeg);
+        t.limits.elMaxRad = glm::radians(td.elMaxDeg);
+        t.limits.slewRateRadS = glm::radians(td.slewRateDegS);
+        t.mountRest = glm::quat{td.mountOrient[3], td.mountOrient[0], td.mountOrient[1], td.mountOrient[2]};
+        t.stations.assign(td.stations.begin(), td.stations.end());
+        ce.crew.turrets.push_back(std::move(t));
+    }
+    auto turretIndexById = [&](const std::string& id) -> int {
+        for (std::size_t i = 0; i < def.turrets.size(); ++i)
+            if (def.turrets[i].id == id)
+                return static_cast<int>(i);
+        return -1;
+    };
+
+    const double planetRadiusM = static_cast<double>(m_planetRadiusKm) * 1000.0;
+    float seatMassSum = 0.f;
+    float seatCd0Sum = 0.f;
+    for (std::size_t s = 0; s < def.crew.size(); ++s) {
+        const SeatDef& sd = def.crew[s];
+        CrewSeat seat;
+        seat.capabilities = sd.capabilities;
+        seat.isFlySeat = hasCapability(sd.capabilities, CrewCapability::Fly);
+        seat.skill = sd.defaultSkill;
+        seat.reaction = def.aiTuning ? def.aiTuning->reaction : 0.5f; // per-instance reaction refined in #971
+        seat.turretIndex = sd.turret.empty() ? -1 : turretIndexById(sd.turret);
+        seat.botOccupied = (sd.defaultOccupancy == SeatOccupancyDefault::Bot);
+
+        // Fire seats get a loadout PARTITION — their own stations plus, if they aim a turret, the
+        // turret's mounted stations. Disjoint across seats by the one-owner invariant.
+        if (m_weaponRegistry && hasCapability(sd.capabilities, CrewCapability::Fire)) {
+            std::vector<int> slots = sd.stations;
+            if (seat.turretIndex >= 0) {
+                const auto& ts = def.turrets[static_cast<std::size_t>(seat.turretIndex)].stations;
+                slots.insert(slots.end(), ts.begin(), ts.end());
+            }
+            seat.fire.loadout = buildSeatLoadout(def, *m_weaponRegistry, slots);
+            seatMassSum += seat.fire.loadout.payloadMassKg;
+            seatCd0Sum += seat.fire.loadout.payloadCd0;
+        }
+
+        // A non-fly bot seat gets its ISeatController from the injected factory (#971 supplies the
+        // gunner). The Fly seat flies via ce.controller and never gets a seatBot.
+        if (!seat.isFlySeat && seat.botOccupied && m_seatControllerFactory) {
+            seat.seatBot = m_seatControllerFactory(sd, static_cast<uint8_t>(s));
+            if (seat.seatBot)
+                seat.seatBot->setPlanetRadius(planetRadiusM);
+        }
+        ce.crew.seats.push_back(std::move(seat));
+    }
+
+    // Payload of hardpoints owned by NO seat (inert drop tanks a pilot never fires): the airframe
+    // total = base + sum over seats. ce.payload was resolved to the full default just above.
+    ce.crew.baseMassKg = std::max(0.f, ce.payload.extra_mass_kg - seatMassSum);
+    ce.crew.baseCd0 = std::max(0.f, ce.payload.extra_cd0 - seatCd0Sum);
+}
+
+void WorldBroadcaster::sampleCrewSeats(ControlledEntity& ce, const EntityState& st, uint64_t tick, double dt,
+                                       const AiTickContext& ctx) {
+    const glm::quat airQ{st.transform.quat[3], st.transform.quat[0], st.transform.quat[1], st.transform.quat[2]};
+    for (std::size_t s = 0; s < ce.crew.seats.size(); ++s) {
+        CrewSeat& seat = ce.crew.seats[s];
+        if (seat.isFlySeat)
+            continue; // flight is the airframe controller's job
+        if (!seat.botOccupied || !seat.seatBot) {
+            seat.lastCommandValid = false;
+            continue;
+        }
+        SeatView view;
+        view.seatIndex = static_cast<uint8_t>(s);
+        view.capabilities = seat.capabilities;
+        view.skill = seat.skill;
+        view.reaction = seat.reaction;
+        if (seat.turretIndex >= 0) {
+            const CrewTurret& tr = ce.crew.turrets[static_cast<std::size_t>(seat.turretIndex)];
+            view.turret.present = true;
+            view.turret.mountRest = tr.mountRest;
+            view.turret.azMinRad = tr.limits.azMinRad;
+            view.turret.azMaxRad = tr.limits.azMaxRad;
+            view.turret.elMinRad = tr.limits.elMinRad;
+            view.turret.elMaxRad = tr.limits.elMaxRad;
+            view.turret.boreWorld = turretWorldDir(tr.state, tr.mountRest, airQ); // current aim (from last slew)
+        }
+        const SeatCommand cmd = seat.seatBot->sample(st, view, tick, dt, ctx);
+        seat.lastCommand = cmd;
+        seat.lastCommandValid = true;
+        if (seat.turretIndex >= 0 && cmd.hasAim) {
+            CrewTurret& tr = ce.crew.turrets[static_cast<std::size_t>(seat.turretIndex)];
+            commandTurretWorld(tr.state, tr.limits, tr.mountRest, airQ, cmd.aimDirWorld);
+        }
+    }
+}
+
+void WorldBroadcaster::runCrewedFire(ControlledEntity& ce, uint32_t idx, uint64_t tick) {
+    const EntityState* st = m_entityManager.get(ce.id);
+    if (!st || st->dead)
+        return;
+    const bool hold = m_formations.weaponsHoldFor(ce.id); // #610's order, with teeth
+    const glm::quat airQ{st->transform.quat[3], st->transform.quat[0], st->transform.quat[1], st->transform.quat[2]};
+
+    float massSum = 0.f;
+    float cd0Sum = 0.f;
+    for (std::size_t s = 0; s < ce.crew.seats.size(); ++s) {
+        CrewSeat& seat = ce.crew.seats[s];
+        massSum += seat.fire.loadout.payloadMassKg;
+        cd0Sum += seat.fire.loadout.payloadCd0;
+        if (!hasCapability(seat.capabilities, CrewCapability::Fire) || seat.fire.loadout.empty())
+            continue;
+
+        // The fire input: the Fly seat fires from the pilot's ControlInput; a gunner from its bot's
+        // last SeatCommand. Both project onto WeaponControls.
+        WeaponControls wc;
+        bool active = false;
+        if (seat.isFlySeat) {
+            wc = weaponControlsOf(ce.lastInput);
+            active = ce.lastInputValid;
+        } else if (seat.botOccupied && seat.lastCommandValid) {
+            wc = WeaponControls{seat.lastCommand.trigger, seat.lastCommand.release, seat.lastCommand.station};
+            active = true;
+        }
+        if (!active)
+            continue;
+
+        const std::size_t before = m_fireRequests.size();
+        evaluateFire(seat.fire, *m_weaponRegistry, wc, hold, tick, idx, m_fireRequests);
+
+        // Stamp the seat index (for the deterministic sort) and, for a turret seat, the world-space
+        // bore the shot leaves along (#970) onto the requests this seat just appended.
+        glm::vec3 aim{0.f};
+        bool hasAim = false;
+        if (seat.turretIndex >= 0) {
+            const CrewTurret& tr = ce.crew.turrets[static_cast<std::size_t>(seat.turretIndex)];
+            aim = turretWorldDir(tr.state, tr.mountRest, airQ);
+            hasAim = true;
+        }
+        for (std::size_t r = before; r < m_fireRequests.size(); ++r) {
+            m_fireRequests[r].seat = static_cast<uint8_t>(s);
+            if (hasAim) {
+                m_fireRequests[r].hasAimDir = true;
+                m_fireRequests[r].aimDir[0] = aim.x;
+                m_fireRequests[r].aimDir[1] = aim.y;
+                m_fireRequests[r].aimDir[2] = aim.z;
+            }
+        }
+    }
+    ce.payload.extra_mass_kg = ce.crew.baseMassKg + massSum;
+    ce.payload.extra_cd0 = ce.crew.baseCd0 + cd0Sum;
 }
 
 void WorldBroadcaster::registerController(EntityId id, std::unique_ptr<IEntityController> controller,

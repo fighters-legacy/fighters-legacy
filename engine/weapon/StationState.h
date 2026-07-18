@@ -53,4 +53,13 @@ struct LoadoutState {
                                                 const std::vector<std::string>& stores,
                                                 std::vector<std::string>& warnings);
 
+// Build a crew seat's loadout PARTITION (#969): the same as buildLoadout but including only the
+// hardpoints whose `slot` is in `seatSlots`. The one-owner-per-channel invariant guarantees these
+// slot sets are disjoint across a crewed aircraft's seats, so each seat owns its stations' ammo
+// exclusively — no shared-mutable loadout. The payload it reports is this seat's share; the airframe
+// cost is the sum over seats. Station indices in the returned loadout are partition-local (0..M-1),
+// which is fine — FireRequest carries the seat index, and hitscan/spawn resolve by weaponIndex.
+[[nodiscard]] LoadoutState buildSeatLoadout(const EntityDef& def, const WeaponRegistry& weapons,
+                                            const std::vector<int>& seatSlots);
+
 } // namespace fl

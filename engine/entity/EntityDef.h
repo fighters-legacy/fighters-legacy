@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "entity/CrewDef.h"
 #include "entity/DamageDef.h"
 #include "entity/ObjectCategory.h"
 #include "entity/SignatureDef.h"
@@ -56,6 +57,15 @@ struct EntityDef {
     std::string flightModelAsset;      // ASSET NAME: flight-model TOML; empty = builtin UFO model
     std::string aiScriptAsset;         // ASSET NAME: Lua AI script; empty = no scripted AI (server-side)
     std::vector<Hardpoint> hardpoints; // weapon stations; empty = carries nothing
+
+    // ── crew seats & turret mounts (#966) ────────────────────────────────────
+    // Authored crew positions and turret mounts. EMPTY IS MEANINGFUL: an entity with no `crew` is
+    // the implicit 1-seat case — a plain fighter, seats[0] being the pilot / today's single
+    // controller path — so every existing def is a valid crewed aircraft with zero churn. When
+    // non-empty the partition obeys the one-owner-per-channel invariant (validateCrewPartition,
+    // enforced by parseEntityDef). See entity/CrewDef.h.
+    std::vector<SeatDef> crew;
+    std::vector<TurretDef> turrets;
 
     // ── resolved default loadout (#812) ──────────────────────────────────────
     // What the DEFAULT loadout costs the airframe, summed over `hardpoints` once at load time and

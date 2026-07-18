@@ -69,6 +69,12 @@ uint32_t registerBuiltinWeapons(WeaponRegistry& registry);
 // weapon-station selector in the zero-pack sandbox.
 EntityDef builtinDebugEntityDef();
 
+// The builtin MULTI-CREW aircraft (#966/#977): a Fly+Fire+Radar+Countermeasures pilot dropping bombs
+// off station 0, plus a defensive tail-gunner seat aiming a rear-facing cannon turret (station 1),
+// filled by the builtin turret gunner (#971). The crewed counterpart to builtin:debug-entity — it
+// makes the whole crew → seat-sampling → turret-slew → directional-fire path provable zero-pack.
+EntityDef builtinBomberDef();
+
 // Builtin surface targets and threats (#863) — so the ground/naval/static categories and a
 // shoots-back air-defense threat exist zero-pack. Each carries a SignatureDef, a 3-level DamageDef
 // with a subsystem table, and a category collision radius. `builtin:ground-vehicle`,

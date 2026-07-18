@@ -186,6 +186,25 @@ TEST_CASE("Rockets: a salvo fans out deterministically from the authored CEP", "
         REQUIRE(a[i] == b[i]);
 }
 
+TEST_CASE("Turret launch: a store leaves along the aim direction, not the nose (#970)", "[release][turret]") {
+    ReleaseWorld w;
+    // A stationary shooter facing +X (identity quat), so the airframe nose is +X.
+    const EntityId shooter = w.spawnShooter(3000.0, 0.f);
+
+    // Nose fire (no aim override): the rocket leaves along +X, bit-identical to before.
+    REQUIRE(w.ps.launch(*w.em, w.rocketIdx, *w.em->get(shooter), 0u).valid());
+    const glm::vec3 noseVel = w.ps.projectiles().back().vel;
+    CHECK(noseVel.x > 10.f);
+    CHECK(std::abs(noseVel.z) < 1.f);
+
+    // Turret fire aimed +Z (90 deg off the nose): the rocket leaves along +Z instead.
+    const glm::vec3 aim{0.f, 0.f, 1.f};
+    REQUIRE(w.ps.launch(*w.em, w.rocketIdx, *w.em->get(shooter), 0u, EntityId::null(), 0u, &aim).valid());
+    const glm::vec3 turretVel = w.ps.projectiles().back().vel;
+    CHECK(turretVel.z > 10.f);
+    CHECK(std::abs(turretVel.x) < 1.f);
+}
+
 TEST_CASE("CCIP predicts where the bomb actually lands", "[release][ccip]") {
     ReleaseWorld w;
     const EntityId shooter = w.spawnShooter(500.0, 200.f);

@@ -33,6 +33,7 @@
 #include <ai/FormationController.h>
 #include <ai/LoiterController.h>
 #include <ai/PursuitController.h>
+#include <ai/SeatControllers.h> // makeSeatController — crewed-aircraft seat bots (#971)
 #include <ai/StateMachineController.h>
 #include <ai/Threat.h>
 #include <ai/WaypointController.h>
@@ -478,6 +479,9 @@ int main(int argc, char** argv) {
 
     // The debug entity ships ARMED (#440) — the shared builder keeps server and client identical.
     entityRegistry.registerType(fl::builtinDebugEntityDef());
+    // The builtin multi-crew bomber (#966/#977): a pilot + a bot tail-gunner turret, so the whole
+    // crew/turret fire path is provable zero-pack (the crewed counterpart to the debug entity).
+    entityRegistry.registerType(fl::builtinBomberDef());
 
     // Builtin surface targets + threats (#863): ground/naval/static targets and a SAM site + AAA that
     // shoot back, so the surface categories and air-defense threat exist with zero content mounted.
@@ -720,6 +724,14 @@ int main(int argc, char** argv) {
     broadcaster.setPayloadResolver([&weaponRegistry, log](const fl::EntityDef& def) -> fl::PayloadEffect {
         return fl::defaultPayload(def, weaponRegistry, *log);
     });
+
+    // Build a crewed aircraft's non-fly seat bots (#971). engine-net does not link engine-ai
+    // (cmake/layering.cmake), so the concrete seat bots — the turret gunner — reach the broadcaster
+    // through this std::function seam, exactly like the flight-order / target-designator hooks below.
+    broadcaster.setSeatControllerFactory(
+        [&entityManager](const fl::SeatDef& seat, uint8_t seatIdx) -> std::unique_ptr<fl::ISeatController> {
+            return fl::ai::makeSeatController(seat, seatIdx, entityManager);
+        });
 
     // Resolve EntityDef::sensorIds -> parsed SensorDef on the spawn path (#685). A sensor reference
     // is an ID, not an asset name, so it goes through ContentIndex (#810) -- see makeSensorDefResolver.

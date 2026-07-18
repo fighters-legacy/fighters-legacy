@@ -17,6 +17,7 @@ add_library(engine-ai STATIC
     LowYoYoController.cpp
     FormationController.cpp
     SurfaceThreatControllers.cpp
+    TurretGunnerController.cpp
     Threat.cpp
     WingmanBehavior.cpp
 )
