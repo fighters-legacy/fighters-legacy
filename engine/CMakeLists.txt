@@ -131,6 +131,7 @@ add_library(engine-entity STATIC
     entity/EntityDefParser.cpp
     entity/EntityManager.cpp
     entity/DamageApplication.cpp
+    entity/CrewDef.cpp
 )
 
 target_include_directories(engine-entity PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
