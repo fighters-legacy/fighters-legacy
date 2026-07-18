@@ -30,6 +30,7 @@
 #include "audio/PlaylistLoader.h"
 #include "audio/SfxManager.h"
 #include "audio/SubtitleQueue.h"
+#include "audio/WarningToneManager.h"
 #include "config/ConfigFile.h"
 #include "config/UserConfig.h"
 #include "console/CommandRegistry.h"
@@ -43,6 +44,8 @@
 #include "entity/EntityDef.h"
 #include "entity/EntityTypeRegistry.h"
 #include "firstrun/FirstRun.h"
+#include "flight/Atmosphere.h"
+#include "flight/Geodetic.h"
 #include "input/AxisConfig.h"
 #include "input/InputBindings.h"
 #include "mission/MissionParser.h"
@@ -297,8 +300,9 @@ struct GameServices {
     std::unique_ptr<fl::TerrainStreamer> terrainStreamer;
     SubtitleQueue subtitleQueue;
     MusicManager musicManager;
-    fl::SfxManager sfxManager;     // positional weapon SFX (#631)
-    AudioSettings audioSettings{}; // a stable copy the effect router points at; refreshed on apply
+    fl::SfxManager sfxManager;           // positional weapon SFX (#631)
+    fl::WarningToneManager warningTones; // stall / overspeed cockpit tones (#957)
+    AudioSettings audioSettings{};       // a stable copy the effect router points at; refreshed on apply
 
     // Multiplayer connection target (empty = single-player, spawn LocalServer).
     // Populated from --connect CLI arg in initPlatform().
@@ -397,6 +401,7 @@ Game::~Game() {
         stopGame();
     d.services.musicManager.shutdown();
     d.services.sfxManager.shutdown();
+    d.services.warningTones.shutdown();
     d.services.p.cursor.reset();
     if (d.services.p.audio)
         d.services.p.audio->shutdown();
@@ -806,6 +811,8 @@ void Game::initGameSystems() {
     // compiled-in procedural fallback, so the guns are audible with zero content mounted.
     d.services.sfxManager.init(d.services.p.audio.get(), d.services.assets.get(), d.services.rawLogger);
     fl::registerBuiltinSfxPresets(d.services.sfxManager);
+    // Warning tones (#957): stall / overspeed cockpit cues. Null audio device tolerated (no-op).
+    d.services.warningTones.init(d.services.p.audio.get(), d.services.rawLogger);
     d.services.audioSettings = d.services.userConfig->audio();
     d.services.effectRouter.setSfx(&d.services.sfxManager, &d.services.audioSettings);
 }
@@ -1316,6 +1323,26 @@ void Game::run() {
             const AudioSettings& aud = d.services.userConfig->audio();
             d.services.subtitleQueue.update(1.0f / 60.0f);
             d.services.musicManager.update(1.0f / 60.0f, aud.masterVolume, aud.musicVolume);
+
+            // Warning tones (#957): drive stall/overspeed cues from the OWN aircraft's predicted
+            // FlightState (the snapshot carries neither stalled nor Mach). predictedState() is null
+            // off-session / for an observer, so inFlight stays false and the tones stay silent.
+            fl::WarningToneInputs wt{};
+            if (const fl::FlightState* st = d.services.prediction.predictedState()) {
+                wt.inFlight = true;
+                wt.stall = st->stalled;
+                const double planetR =
+                    static_cast<double>(d.session.clientHandler ? d.session.clientHandler->planetRadiusKm() : 6371.f) *
+                    1000.0;
+                const double altM = fl::geodeticAltitude(st->pos_world[0], st->pos_world[1], st->pos_world[2], planetR);
+                const fl::AtmosphereState atmos = fl::computeAtmosphere(static_cast<float>(altM));
+                const double spd = std::sqrt(st->vel_body[0] * st->vel_body[0] + st->vel_body[1] * st->vel_body[1] +
+                                             st->vel_body[2] * st->vel_body[2]);
+                const float maxMach = d.services.prediction.predictedMaxMach();
+                wt.overspeed =
+                    maxMach > 0.f && atmos.speed_of_sound_m_s > 0.f && (spd / atmos.speed_of_sound_m_s) > maxMach;
+            }
+            d.services.warningTones.update(wt, aud, 1.0f / 60.0f);
         }
 
         // Screen update — runs BEFORE camera computation so FlightScreen::update() →
