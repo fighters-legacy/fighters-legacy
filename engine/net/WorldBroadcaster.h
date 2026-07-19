@@ -163,6 +163,7 @@ struct ControlledEntity {
     float fuelLeakKgS{0.f};         // accumulated fuel-leak rate from failed fuel subsystem(s) (#675)
     bool prevDispenseCm{false};     // countermeasure-dispense edge detector (#529): a held input is one pop
     CrewState crew{};               // per-seat control frame (#969); EMPTY = single-seat fast path (above)
+    bool ejected{false};            // #672 AI auto-eject guard: an AI pilot punches out once, not every tick
 };
 
 // Pre-start scalar configuration. Bundles the init-time setters so callers configure rate limiting,
@@ -309,6 +310,21 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // is spawned (the aircraft is still destroyed). fl-server sets "builtin:parachute". Sim-thread only.
     void setParachuteType(std::string typeId) {
         m_parachuteType = std::move(typeId);
+    }
+
+    // Resolve the territory a pilot's parachute comes down over, from the landing world position and the
+    // pilot's faction (#672). A campaign wires this to its frontline (territoryAtWorld); unset =
+    // TerritoryControl::Neutral, so a plain server resolves every survivor to MIA. Sim-thread only.
+    using TerritoryQuery = std::function<TerritoryControl(glm::dvec3 pos, uint16_t factionIndex)>;
+    void setTerritoryQuery(TerritoryQuery fn) {
+        m_territoryQuery = std::move(fn);
+    }
+
+    // Enable AI auto-eject (#672): an AI/scripted pilot punches out (spawns a chute + loses the airframe)
+    // when its HP falls to the critical fraction, instead of riding a doomed aircraft down. Off by
+    // default so unit damage tests see the plain damage progression; fl-server enables it. Sim-thread only.
+    void setAiAutoEject(bool on) noexcept {
+        m_aiAutoEject = on;
     }
 
     // Override a controlled entity's loadout from a mission's per-object `loadout:` (#855). Rebuilds the
@@ -1224,6 +1240,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     std::function<float(glm::dvec3)> m_groundQuery;
     std::function<SurfaceType(glm::dvec3)> m_groundSurfaceQuery; // #487 per-surface rolling resistance
     std::string m_parachuteType;                                 // #672 entity type spawned on ejection ("" = none)
+    std::function<TerritoryControl(glm::dvec3, uint16_t)> m_territoryQuery; // #672 landing-zone control (unset = MIA)
+    bool m_aiAutoEject{false}; // #672 AI pilots auto-eject when critically hit; off by default
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword;                               // empty = admin channel disabled

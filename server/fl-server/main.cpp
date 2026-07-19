@@ -649,6 +649,7 @@ int main(int argc, char** argv) {
     }
     fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *net, *log, &weatherController);
     broadcaster.setParachuteType("builtin:parachute"); // spawn a chute on pilot ejection (#672)
+    broadcaster.setAiAutoEject(true);                  // AI pilots punch out when critically hit (#672)
     fl::WorldBroadcasterConfig wbConfig;
     wbConfig.connectRateLimit = cfg.connectRateLimitCount;
     wbConfig.connectRateWindowS = cfg.connectRateLimitWindowS;

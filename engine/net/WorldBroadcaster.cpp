@@ -202,6 +202,10 @@ namespace fl {
 // into an instant kill -- the pilot should be able to break the aeroplane, but should have to work at it.
 constexpr float kOverGDamagePerG = 6.0f;
 
+// HP fraction at or below which an AI/scripted pilot auto-ejects (#672). A future skill model can scale
+// this per pilot (a nervous rookie punches out earlier than an ace); 15% is a reasonable baseline.
+constexpr float kAiEjectHpFraction = 0.15f;
+
 // Default airspeed for an airborne spawn that does not ask for a specific one (#883). A gentle cruise
 // (~230 kts) that is comfortably above the stall for the fighters this targets and flyable for the
 // no-stall builtin UFO, so a freshly spawned aircraft — pilot, AI, or mission object — is in stable
@@ -311,11 +315,13 @@ EjectionOutcome WorldBroadcaster::ejectPilot(EntityId eid) {
             pst->factionIndex = st->factionIndex;
     }
 
+    const uint16_t faction = st->factionIndex;
     m_entityManager.kill(eid); // the airframe is lost regardless of whether the pilot made it
 
-    // A plain server has no frontline, so a survivor is MIA; a campaign resolves territory to
-    // rescued/captured via the frontline control under the landing point (engine-campaign).
-    const EjectionOutcome outcome = pilotOutcome(survived, TerritoryControl::Neutral);
+    // Resolve the landing territory: a campaign wires m_territoryQuery to its frontline (rescued over
+    // friendly ground, captured over hostile); a plain server leaves it unset, so a survivor is MIA.
+    const TerritoryControl territory = m_territoryQuery ? m_territoryQuery(posv, faction) : TerritoryControl::Neutral;
+    const EjectionOutcome outcome = pilotOutcome(survived, territory);
     char m[144];
     std::snprintf(m, sizeof(m), "ejection: entity %u -> pilot %s (%.0f m AGL, %.0f m/s)", eid.index,
                   ejectionOutcomeName(outcome), static_cast<double>(env.altitudeAglM),
@@ -733,6 +739,24 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         }
         ps.ejectHeld = ejectNow;
     }
+
+    // AI auto-eject (#672): a scripted/AI pilot punches out when its airframe is critically hit rather
+    // than riding a doomed aircraft into the ground — the visible ejection the acceptance criteria want.
+    // Players never auto-eject (they own the End key); only decimatable (AI/scripted) controlled entities
+    // do. ejectPilot spawns a replicating chute + kills the airframe; the ejected guard fires it once.
+    if (m_aiAutoEject)
+        for (auto& [idx, ce] : m_controlledEntities) {
+            (void)idx;
+            if (!ce.decimatable || ce.ejected)
+                continue;
+            const EntityState* st = m_entityManager.get(ce.id);
+            if (!st || st->dead || st->maxHp <= 0.f)
+                continue;
+            if (st->hp / st->maxHp <= kAiEjectHpFraction) {
+                ejectPilot(ce.id);
+                ce.ejected = true;
+            }
+        }
 
     // Adaptive jitter buffer resize: for each peer with a seeded EWMA, compute the target depth
     // from the delay EWMA and inter-arrival jitter EWMA, then resize if outside the hysteresis band.

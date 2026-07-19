@@ -98,6 +98,23 @@ TEST_CASE("Frontline: geo <-> cell mapping and world control query", "[campaign]
     CHECK_FALSE(f.geoToCell(2.0, 0.5, col, row));
 }
 
+TEST_CASE("Frontline::territoryAtWorld maps control to the ejection landing zone (#672)", "[campaign][frontline]") {
+    // West column side A, east column side B, over a small equatorial box.
+    GeoBounds bounds{0.0, 0.0, 0.2, 0.2};
+    Frontline f(2, 1, bounds);
+    REQUIRE(f.setPixels({60, 200})); // col 0 = A, col 1 = B
+    // A world position over the western (side-A) cell.
+    double wx = 0.0, wy = 0.0, wz = 0.0;
+    double latW = 0.0, lonW = 0.0;
+    f.cellCenterLatLon(0, 0, latW, lonW);
+    geodeticToWorld(LatLonAlt{latW, lonW, 0.0}, wx, wy, wz, kEarthRadiusM);
+    // Pilot side A (index 0): over its own ground -> friendly (Rescued); the enemy pilot -> hostile.
+    CHECK(f.territoryAtWorld(wx, wy, wz, /*pilotSideIndex=*/0) == TerritoryControl::Friendly);
+    CHECK(f.territoryAtWorld(wx, wy, wz, /*pilotSideIndex=*/1) == TerritoryControl::Hostile);
+    // Off-map -> neutral (MIA).
+    CHECK(f.territoryAtWorld(1e12, 0.0, 0.0, 0) == TerritoryControl::Neutral);
+}
+
 // ---------------------------------------------------------------------------
 // Campaign parser
 // ---------------------------------------------------------------------------

@@ -113,6 +113,18 @@ float Frontline::sideFraction(int side) const noexcept {
     return static_cast<float>(static_cast<double>(held) / static_cast<double>(claimed));
 }
 
+TerritoryControl Frontline::territoryAtWorld(double x, double y, double z, int pilotSideIndex,
+                                             double planetRadiusM) const noexcept {
+    const FrontlineControl fc = controlAtWorld(x, y, z, planetRadiusM);
+    const FrontlineControl friendly = (pilotSideIndex == 0) ? FrontlineControl::SideA : FrontlineControl::SideB;
+    const FrontlineControl hostile = (pilotSideIndex == 0) ? FrontlineControl::SideB : FrontlineControl::SideA;
+    if (fc == friendly)
+        return TerritoryControl::Friendly;
+    if (fc == hostile)
+        return TerritoryControl::Hostile;
+    return TerritoryControl::Neutral; // unclaimed / contested / off-map
+}
+
 void Frontline::counts(int& unclaimed, int& sideA, int& sideB, int& contested) const noexcept {
     unclaimed = sideA = sideB = contested = 0;
     for (uint8_t v : m_pixels) {

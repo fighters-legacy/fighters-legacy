@@ -12,6 +12,7 @@
 // (fl-server decodes via stb_image; tests build rasters from raw bytes), so engine-campaign needs no
 // image library and stays trivially unit-testable.
 
+#include "entity/Ejection.h" // TerritoryControl — the ejection landing-zone consequence (#672)
 #include "flight/Geodetic.h" // LatLonAlt, worldToGeodetic, kEarthRadiusM
 
 #include <cstdint>
@@ -78,6 +79,14 @@ class Frontline {
 
     // Count of cells in each control class, for tests / telemetry.
     void counts(int& unclaimed, int& sideA, int& sideB, int& contested) const noexcept;
+
+    // Resolve the ejection territory (#672) for a pilot of `pilotSideIndex` (0 = side A, 1 = side B)
+    // whose parachute lands at a world position: friendly when the pilot's side controls the ground
+    // there, hostile when the enemy does, neutral over unclaimed/contested/off-map. This is what
+    // WorldBroadcaster's territory-query seam wires to, turning a survived ejection into Rescued /
+    // Captured / MIA.
+    [[nodiscard]] TerritoryControl territoryAtWorld(double x, double y, double z, int pilotSideIndex,
+                                                    double planetRadiusM = kEarthRadiusM) const noexcept;
 
   private:
     int m_cols{0};
