@@ -92,6 +92,7 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | R | Cycle radar mode: Silent → Search → TWS → STT (#526; absolute on the wire). Drives the datalink scope + RWR |
 | E | Dispense chaff + flare (#529; server edge-detects — a held key is one pop). Needs a dispenser with rounds |
 | J | Toggle the ECM jammer (#529; denies a hostile radar a lock beyond its burn-through range) |
+| End | Eject (#672; server edge-detects — a held key is one ejection). Spawns a parachute and destroys the aircraft; within the seat envelope the pilot survives |
 | C | Open the wingman radio menu (#610) |
 | K | Crew seat picker (#975): open / cycle the joinable non-fly seats across every crewed aircraft the client knows |
 | L | Join the selected crew seat (a gunner on that airframe; the bot parks) |

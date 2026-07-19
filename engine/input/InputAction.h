@@ -44,6 +44,9 @@ enum class InputAction : uint32_t {
     // Comms — opens the radio menu for ordering your flight (#610)
     WingmanMenu,
 
+    // Emergency egress — command the ejection seat (#672)
+    Eject,
+
     Count
 };
 

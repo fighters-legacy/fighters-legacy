@@ -15,6 +15,7 @@
 #include "config/DifficultySettings.h" // AiScaling — sensing difficulty scaling (#685)
 #include "entity/Collision.h"          // CollisionPair — entity-entity collision (#630)
 #include "entity/DamageApplication.h"  // DamageRules — the gameplay damage gates (#626)
+#include "entity/Ejection.h"           // EjectionOutcome — pilot survival on ejection (#672)
 #include "entity/EntityEvent.h"        // IEntityEventHandler — kill attribution + scoring (#626)
 #include "entity/EntityId.h"
 #include "entity/SubsystemDamage.h" // SubsystemStateSet — per-subsystem damage (#675)
@@ -96,6 +97,7 @@ struct PeerInputState {
     bool hasSeq{false};           // false until first input received from this peer
     bool hasAppliedSeq{false};    // false until the first input is drained + applied (#427 TLV gate)
     bool ewmaSeeded{false};       // false until EWMA receives its first sample
+    bool ejectHeld{false};        // last-tick eject bit, for rising-edge detection (#672)
     // Jitter buffer: initialized to depth 1; sized from estimatedDelayTicks on first input,
     // then continuously adjusted by the adaptive resize loop in WorldBroadcaster::onTick.
     JitterBuffer jitterBuffer{1};
@@ -295,6 +297,19 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     void registerController(EntityId id, std::unique_ptr<IEntityController> controller,
                             std::shared_ptr<const FlightModelData> model = nullptr,
                             float initialAirspeed = kAutoSpawnAirspeed);
+
+    // Eject the pilot flying `eid` (#672): evaluate the seat envelope from the aircraft's live flight
+    // state, spawn a replicating parachute at its position (if the parachute entity type is registered),
+    // and destroy the aircraft. Returns the outcome (KIA when the seat envelope was not survivable; a
+    // plain server with no frontline resolves a survivor to MIA). No-op on an invalid/dead entity. Used
+    // by the pilot eject-input edge and the AI auto-eject rule. Sim-thread only.
+    EjectionOutcome ejectPilot(EntityId eid);
+
+    // Register the entity type spawned as a parachute on ejection (#672). Empty (default) = no parachute
+    // is spawned (the aircraft is still destroyed). fl-server sets "builtin:parachute". Sim-thread only.
+    void setParachuteType(std::string typeId) {
+        m_parachuteType = std::move(typeId);
+    }
 
     // Override a controlled entity's loadout from a mission's per-object `loadout:` (#855). Rebuilds the
     // live stations from `stores` (each replaces one station's default, respecting the station's allowed
@@ -1208,6 +1223,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // of the global m_groundElevation scalar.
     std::function<float(glm::dvec3)> m_groundQuery;
     std::function<SurfaceType(glm::dvec3)> m_groundSurfaceQuery; // #487 per-surface rolling resistance
+    std::string m_parachuteType;                                 // #672 entity type spawned on ejection ("" = none)
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword;                               // empty = admin channel disabled

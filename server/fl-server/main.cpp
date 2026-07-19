@@ -484,6 +484,9 @@ int main(int argc, char** argv) {
     // The builtin multi-crew bomber (#966/#977): a pilot + a bot tail-gunner turret, so the whole
     // crew/turret fire path is provable zero-pack (the crewed counterpart to the debug entity).
     entityRegistry.registerType(fl::builtinBomberDef());
+    // The ejection parachute (#672): a replicating Effect entity spawned when a pilot ejects. The
+    // broadcaster is pointed at it after construction (setParachuteType), below.
+    entityRegistry.registerType(fl::builtinParachuteDef());
 
     // Builtin surface targets + threats (#863): ground/naval/static targets and a SAM site + AAA that
     // shoot back, so the surface categories and air-defense threat exist with zero content mounted.
@@ -645,6 +648,7 @@ int main(int argc, char** argv) {
         }
     }
     fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *net, *log, &weatherController);
+    broadcaster.setParachuteType("builtin:parachute"); // spawn a chute on pilot ejection (#672)
     fl::WorldBroadcasterConfig wbConfig;
     wbConfig.connectRateLimit = cfg.connectRateLimitCount;
     wbConfig.connectRateWindowS = cfg.connectRateLimitWindowS;

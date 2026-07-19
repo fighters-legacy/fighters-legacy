@@ -279,6 +279,51 @@ void WorldBroadcaster::broadcastHaptic(uint8_t kind, float a, float b, uint16_t 
     }
 }
 
+EjectionOutcome WorldBroadcaster::ejectPilot(EntityId eid) {
+    EntityState* st = m_entityManager.get(eid);
+    if (!st || st->dead)
+        return EjectionOutcome::KIA; // nothing (or nobody) left to eject
+
+    // Seat envelope from the live flight state: AGL, speed, and the radial sink rate.
+    const double pos[3] = {st->transform.pos[0], st->transform.pos[1], st->transform.pos[2]};
+    const glm::dvec3 posv(pos[0], pos[1], pos[2]);
+    const float terrainElev = m_groundQuery ? m_groundQuery(posv) : m_groundElevation.load(std::memory_order_relaxed);
+    const double geoAlt = m_gravity ? m_gravity->geodeticAltitude(pos) : pos[1];
+    const std::array<float, 3> up = m_gravity ? m_gravity->geodeticUp(pos) : std::array<float, 3>{0.f, 1.f, 0.f};
+
+    EjectionEnvelope env;
+    env.altitudeAglM = static_cast<float>(geoAlt - static_cast<double>(terrainElev));
+    const float vx = st->transform.vel[0];
+    const float vy = st->transform.vel[1];
+    const float vz = st->transform.vel[2];
+    env.speedMs = std::sqrt(vx * vx + vy * vy + vz * vz);
+    env.sinkRateMs = -(vx * up[0] + vy * up[1] + vz * up[2]); // positive = descending
+    const bool survived = ejectionSurvivable(env);
+
+    // A replicating parachute at the aircraft position (if a type is configured + registered); it is a
+    // plain entity, so it rides the normal snapshot path to every client. Zero velocity — a drift model
+    // is a follow-on; the point is a visible, networked chute where the pilot got out.
+    if (!m_parachuteType.empty()) {
+        EntityTransform pt = st->transform;
+        pt.vel[0] = pt.vel[1] = pt.vel[2] = 0.f;
+        const EntityId pid = m_entityManager.spawn(m_parachuteType.c_str(), pt);
+        if (EntityState* pst = m_entityManager.get(pid))
+            pst->factionIndex = st->factionIndex;
+    }
+
+    m_entityManager.kill(eid); // the airframe is lost regardless of whether the pilot made it
+
+    // A plain server has no frontline, so a survivor is MIA; a campaign resolves territory to
+    // rescued/captured via the frontline control under the landing point (engine-campaign).
+    const EjectionOutcome outcome = pilotOutcome(survived, TerritoryControl::Neutral);
+    char m[144];
+    std::snprintf(m, sizeof(m), "ejection: entity %u -> pilot %s (%.0f m AGL, %.0f m/s)", eid.index,
+                  ejectionOutcomeName(outcome), static_cast<double>(env.altitudeAglM),
+                  static_cast<double>(env.speedMs));
+    m_logger.log(LogLevel::Info, __FILE__, __LINE__, m);
+    return outcome;
+}
+
 void WorldBroadcaster::banAddress(std::string ip) {
     ip = fl::normalizeIp(ip);
     m_bannedAddresses.insert(ip);
@@ -679,6 +724,14 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // starved tick read as trigger-off, which is the safe reading of silence (#625).
             ps.buttons &= static_cast<uint8_t>(~0x04u);
         }
+        // Ejection (#672): fire on the RISING edge of the eject bit so a held key is one ejection.
+        // kill()/spawn() queue for end-of-tick, so mutating here while iterating m_peerInputs is safe.
+        const bool ejectNow = (ps.buttons & kInputButtonEject) != 0;
+        if (ejectNow && !ps.ejectHeld) {
+            if (auto eit = m_peerEntities.find(peerId); eit != m_peerEntities.end())
+                ejectPilot(eit->second);
+        }
+        ps.ejectHeld = ejectNow;
     }
 
     // Adaptive jitter buffer resize: for each peer with a seeded EWMA, compute the target depth

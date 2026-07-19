@@ -401,9 +401,18 @@ static_assert(offsetof(MsgWorldSnapshotHeader, uncompressedBytes) == 20u,
               "MsgWorldSnapshotHeader::uncompressedBytes offset changed");
 
 // Unreliable, client->server, sent each render frame. Padded to 48 (multiple of 8 for tickIndex).
+// MsgClientInput::buttons bit assignments.
+inline constexpr uint8_t kInputButtonGun = 0x01;         // bit 0 = gun trigger (level)
+inline constexpr uint8_t kInputButtonAfterburner = 0x02; // bit 1 = afterburner
+inline constexpr uint8_t kInputButtonFireStore = 0x04;   // bit 2 = fire selected store (edge)
+inline constexpr uint8_t kInputButtonChaffFlare = 0x08;  // bit 3 = chaff/flare dispense (edge, #529)
+inline constexpr uint8_t kInputButtonEcm = 0x10;         // bit 4 = ECM jammer (level, #529)
+inline constexpr uint8_t kInputButtonEject = 0x20;       // bit 5 = eject (edge, #672)
+
 struct MsgClientInput {
     uint8_t msgId{static_cast<uint8_t>(MsgId::ClientInput)};
-    uint8_t buttons{0}; // bit 0 = gun trigger (level), bit 1 = afterburner, bit 2 = fire selected store
+    uint8_t buttons{0}; // bit 0 gun, bit 1 afterburner, bit 2 fire store, bit 3 chaff/flare, bit 4 ECM,
+                        // bit 5 = eject (server edge-detects; a held key is one ejection, #672)
     uint16_t protocolVersion{kProtocolVersion};
     uint32_t seqNum{0};    // monotonically increasing; server discards packets not newer than last accepted
     uint64_t tickIndex{0}; // server's tickIndex from last received WorldSnapshot; server uses delta for delay estimate

@@ -404,6 +404,63 @@ TEST_CASE("WorldBroadcaster: an airborne spawn flies along its heading at t=0 (#
     CHECK(s2->transform.vel[2] < 20.f);
 }
 
+TEST_CASE("WorldBroadcaster::ejectPilot spawns a parachute and resolves the pilot outcome (#672)",
+          "[world_broadcaster][ejection]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    registry.registerType(fl::builtinParachuteDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setParachuteType("builtin:parachute");
+
+    const uint32_t chuteType = registry.indexById("builtin:parachute");
+    auto countParachutes = [&]() {
+        int n = 0;
+        em.forEach([&](const fl::EntityState& s) {
+            if (!s.dead && s.typeIndex == chuteType)
+                ++n;
+        });
+        return n;
+    };
+
+    SECTION("high and slow: the seat saves the pilot (MIA on a plain server) and a chute replicates") {
+        fl::EntityTransform t{};
+        t.pos[1] = 3000.0;
+        t.quat[3] = 1.f;
+        const fl::EntityId id = em.spawn("builtin:debug-entity", t);
+        const fl::EjectionOutcome outcome = broadcaster.ejectPilot(id);
+        CHECK(outcome == fl::EjectionOutcome::MIA); // survived, no frontline -> MIA
+        const fl::EntityState* air = em.get(id);
+        CHECK((air == nullptr || air->dead)); // the airframe is lost
+        CHECK(countParachutes() == 1);        // a replicating chute was spawned
+    }
+
+    SECTION("low and diving: the seat cannot save the pilot (KIA), the airframe is still lost") {
+        fl::EntityTransform t{};
+        t.pos[1] = 15.0; // 15 m AGL
+        t.quat[3] = 1.f;
+        const fl::EntityId id = em.spawn("builtin:debug-entity", t);
+        if (fl::EntityState* st = em.get(id))
+            st->transform.vel[1] = -60.f; // diving at 60 m/s: the chute cannot deploy in 15 m
+        const fl::EjectionOutcome outcome = broadcaster.ejectPilot(id);
+        CHECK(outcome == fl::EjectionOutcome::KIA);
+        const fl::EntityState* air = em.get(id);
+        CHECK((air == nullptr || air->dead));
+    }
+
+    SECTION("ejecting an already-dead entity is a no-op KIA") {
+        fl::EntityTransform t{};
+        t.pos[1] = 3000.0;
+        t.quat[3] = 1.f;
+        const fl::EntityId id = em.spawn("builtin:debug-entity", t);
+        em.kill(id);
+        CHECK(broadcaster.ejectPilot(id) == fl::EjectionOutcome::KIA);
+        CHECK(countParachutes() == 0); // no chute for a corpse
+    }
+}
+
 TEST_CASE("WorldBroadcaster: registerController steps a non-peer entity and serializes it", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;

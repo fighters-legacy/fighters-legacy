@@ -90,6 +90,11 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
         if (m_ecmOn)
             inp.buttons |= 0x10u;
 
+        // Ejection (#672): End commands the seat, level on the wire — the server edge-detects, so
+        // holding it is one ejection. Gated while an overlay owns the keys, like the other discretes.
+        if (!uiFocused && input.isKeyDown(Key::End))
+            inp.buttons |= fl::kInputButtonEject;
+
         m_weaponFired = (inp.buttons & 1u) != 0u;
 
         if (input.getGamepadCount() > 0) {
