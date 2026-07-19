@@ -574,6 +574,19 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         handleDatalink(data, size);
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::CrewRoster)) {
         handleCrewRoster(data, size);
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::SeatResult)) {
+        fl::MsgSeatResult res;
+        if (fl::readMsg(data, size, res)) {
+            m_lastSeatResult.valid = true;
+            m_lastSeatResult.fresh = true;
+            m_lastSeatResult.code = res.code;
+            m_lastSeatResult.seatIndex = res.seatIndex;
+            m_lastSeatResult.entityIdx = res.entityIdx;
+            // A granted JOIN (entityIdx set) means "I occupy a non-fly seat" — the join protocol never
+            // grants the Fly seat. A granted LEAVE (entityIdx 0) sends the peer to observer. #975.
+            if (res.code == static_cast<uint8_t>(fl::SeatResultCode::Granted))
+                m_inCrewSeat = (res.entityIdx != 0u);
+        }
     }
     // Unknown msgIds: silently discard
 }
@@ -719,6 +732,20 @@ void ClientNetEventHandler::sendHeartbeatIfNeeded() {
     fl::MsgHeartbeat hb;
     stampAck(hb);
     net.send(0, &hb, sizeof(hb), /*reliable=*/false);
+}
+
+void ClientNetEventHandler::sendSeatRequest(uint32_t entityIdx, uint32_t entityGen, uint8_t seat) {
+    fl::MsgSeatRequest req;
+    req.seatIndex = seat;
+    req.entityIdx = entityIdx;
+    req.entityGen = entityGen;
+    net.send(0, &req, sizeof(req), /*reliable=*/true);
+}
+
+void ClientNetEventHandler::sendSeatLeave() {
+    fl::MsgSeatRequest req;
+    req.flags = fl::kSeatRequestFlagLeave;
+    net.send(0, &req, sizeof(req), /*reliable=*/true);
 }
 
 void ClientNetEventHandler::stampAck(fl::MsgClientInput& in) const noexcept {

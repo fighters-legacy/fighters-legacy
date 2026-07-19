@@ -93,9 +93,18 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | E | Dispense chaff + flare (#529; server edge-detects — a held key is one pop). Needs a dispenser with rounds |
 | J | Toggle the ECM jammer (#529; denies a hostile radar a lock beyond its burn-through range) |
 | C | Open the wingman radio menu (#610) |
+| K | Crew seat picker (#975): open / cycle the joinable non-fly seats across every crewed aircraft the client knows |
+| L | Join the selected crew seat (a gunner on that airframe; the bot parks) |
+| U | Leave the current crew seat (become an observer) |
 
 While the radio menu is open, Enter and the digit keys belong to the menu — the fire-store bit and
 station cycling are suppressed, the flight axes and gun trigger stay live.
+
+The crew seat picker (`K` / `L` / `U`) is **non-modal** like the radio menu — the aircraft keeps flying
+while it is up. Only the `Fly` seat runs flight prediction and shows attitude; a gunner seat views the
+host airframe without predicting its flight. A join that is denied (the seat is taken by another player,
+or you named the pilot seat) is surfaced as a one-line message. Seat join/leave and the operator
+`seats` / `set_seat` commands are the multi-crew surface for Epic #966.
 
 **The sandbox aircraft is armed.** The builtin debug entity carries five stations: a 20 mm cannon
 (station 1), two IR missiles (2–3) and two radar missiles (4–5) — all compiled-in "builtin:"

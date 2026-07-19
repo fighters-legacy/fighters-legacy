@@ -120,6 +120,60 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
         }
     }
 
+    // Crew seat picker (#975), non-modal like the radio menu. K cycles joinable seats across every
+    // crewed aircraft the client knows; L joins the selected seat; U leaves the current seat. These keys
+    // are NOT flight controls (avoiding J = ECM etc.), so no input is suppressed. Suppressed only while
+    // the console/radio menu is up (they own the keyboard then).
+    if (d.clientNetHandler && !d.gameConsole->isOpen() && !(d.wingmanMenu && d.wingmanMenu->isOpen())) {
+        const bool kNow = input.isKeyDown(Key::K), lNow = input.isKeyDown(Key::L), uNow = input.isKeyDown(Key::U);
+        if (kNow && !m_prevSeatCycle) {
+            m_seatPicker.rebuild(d.clientNetHandler->crewRosters());
+            if (!m_seatPickerActive)
+                m_seatPickerActive = true; // first press opens the overlay
+            else
+                m_seatPicker.next();
+        }
+        if (lNow && !m_prevSeatJoin && m_seatPickerActive) {
+            if (const fl::SeatTarget* t = m_seatPicker.selected())
+                d.clientNetHandler->sendSeatRequest(t->entityIdx, t->entityGen, t->seatIndex);
+        }
+        if (uNow && !m_prevSeatLeave)
+            d.clientNetHandler->sendSeatLeave();
+        m_prevSeatCycle = kNow;
+        m_prevSeatJoin = lNow;
+        m_prevSeatLeave = uNow;
+
+        // Surface the last MsgSeatResult as a one-line label (client-side strings, localizable).
+        if (const auto res = d.clientNetHandler->takeSeatResult(); res.fresh) {
+            const char* msg = "seat: ?";
+            switch (static_cast<fl::SeatResultCode>(res.code)) {
+            case fl::SeatResultCode::Granted:
+                msg = res.entityIdx ? "seat: joined" : "seat: left";
+                m_seatPickerActive = false;
+                break;
+            case fl::SeatResultCode::SeatOccupiedByHuman:
+                msg = "seat: taken by another player";
+                break;
+            case fl::SeatResultCode::FlySeatNotJoinable:
+                msg = "seat: pilot seat not joinable";
+                break;
+            case fl::SeatResultCode::NotCrewed:
+                msg = "seat: not a crewed aircraft";
+                break;
+            case fl::SeatResultCode::NoSuchSeat:
+                msg = "seat: no such seat";
+                break;
+            case fl::SeatResultCode::NoSuchEntity:
+                msg = "seat: aircraft gone";
+                break;
+            case fl::SeatResultCode::NotInSeat:
+                msg = "seat: you hold no seat";
+                break;
+            }
+            std::snprintf(m_seatResultLine, sizeof(m_seatResultLine), "%s", msg);
+        }
+    }
+
     const bool consoleWasOpen = d.gameConsole->isOpen();
     if (consoleWasOpen) {
         if (d.gameConsole->tick(input))
@@ -261,6 +315,33 @@ std::span<const HudElement> FlightScreen::buildElements() {
         el.scale = 1.f;
         el.text = m_pickerLabel;
     }
+    // Crew seat picker overlay (#975): the current selection + a hint, bottom-left. Rebuilt each frame
+    // into a member buffer (HudElement::text is non-owning).
+    auto addLine = [&](const char* txt, float y, float g) {
+        if (!txt[0] || m_elementCount >= kMaxElements)
+            return;
+        HudElement& el = m_elements[static_cast<std::size_t>(m_elementCount++)];
+        el = {};
+        el.type = HudElement::Type::Text;
+        el.x = 0.02f;
+        el.y = y;
+        el.align = HudAlign::Left;
+        el.r = 0.7f;
+        el.g = g;
+        el.b = 0.5f;
+        el.a = 1.0f;
+        el.scale = 1.f;
+        el.text = txt;
+    };
+    if (m_seatPickerActive) {
+        if (const fl::SeatTarget* t = m_seatPicker.selected())
+            std::snprintf(m_seatPickerLine, sizeof(m_seatPickerLine), "SEAT: %s @%u  [K next  L join  U leave]",
+                          t->role.c_str(), t->entityIdx);
+        else
+            std::snprintf(m_seatPickerLine, sizeof(m_seatPickerLine), "SEAT: no free crew seats");
+        addLine(m_seatPickerLine, 0.86f, 0.9f);
+    }
+    addLine(m_seatResultLine, 0.90f, 0.9f);
     return {m_elements.data(), static_cast<std::size_t>(m_elementCount)};
 }
 

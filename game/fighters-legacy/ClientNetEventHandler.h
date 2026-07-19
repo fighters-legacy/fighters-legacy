@@ -105,6 +105,43 @@ struct ClientNetEventHandler : INetworkEventHandler {
                                              : std::span<const CrewTurretPose>{};
     }
 
+    // Every crewed aircraft roster the client knows (#975). The seat picker iterates these.
+    const std::unordered_map<uint32_t, CrewRosterInfo>& crewRosters() const noexcept {
+        return m_crewRosters;
+    }
+
+    // ── Seat join/leave protocol (#974/#975), client half ────────────────────────────────────────
+    // Send a MsgSeatRequest to claim `seat` of the crewed aircraft {entityIdx, entityGen}, or to leave
+    // the current seat. Reliable. The outcome arrives as MsgSeatResult (see takeSeatResult()).
+    void sendSeatRequest(uint32_t entityIdx, uint32_t entityGen, uint8_t seat);
+    void sendSeatLeave();
+
+    // The outcome of the last MsgSeatRequest (#975), for the seat-picker UI to surface. `valid` is
+    // false until the first result arrives; `fresh` marks a result not yet consumed by the UI.
+    struct SeatResultView {
+        bool valid{false};
+        bool fresh{false};
+        uint8_t code{0}; // fl::SeatResultCode
+        uint8_t seatIndex{0};
+        uint32_t entityIdx{0};
+    };
+    SeatResultView takeSeatResult() noexcept {
+        SeatResultView v = m_lastSeatResult;
+        m_lastSeatResult.fresh = false;
+        return v;
+    }
+    const SeatResultView& lastSeatResult() const noexcept {
+        return m_lastSeatResult;
+    }
+
+    // #975: true after this client successfully JOINED a non-fly crew seat (a gunner on someone else's
+    // airframe) — the seat join protocol only ever grants NON-fly seats, so any granted join means "I
+    // do not fly this aircraft." The pilot flight-prediction path is gated off it (a gunner does not
+    // predict flight). A leave (→ observer) or a fresh connect clears it.
+    [[nodiscard]] bool inCrewSeat() const noexcept {
+        return m_inCrewSeat;
+    }
+
     ClientTickAlpha tickAlpha;
 
     // Set by Game::startGame() after construction. When non-null, a typed failure is stored here
@@ -292,6 +329,8 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // decoded from each snapshot's SnapshotCrew TLV. Both main-thread only.
     std::unordered_map<uint32_t, CrewRosterInfo> m_crewRosters;
     std::unordered_map<uint32_t, std::vector<CrewTurretPose>> m_crewTurretPoses;
+    SeatResultView m_lastSeatResult; // #975: the last MsgSeatResult, for the seat-picker UI
+    bool m_inCrewSeat{false};        // #975: this client occupies a non-fly crew seat (a gunner)
 
     void handleDatalink(const void* data, std::size_t size);
     void handleCrewRoster(const void* data, std::size_t size);

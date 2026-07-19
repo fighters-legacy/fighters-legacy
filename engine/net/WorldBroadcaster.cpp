@@ -2913,10 +2913,12 @@ void WorldBroadcaster::handleSeatRequest(uint32_t peerId, const MsgSeatRequest& 
         despawnPeerEntity(peerId);
     setSeatOccupant(target, req.seatIndex, peerId); // binds + re-broadcasts the roster
     pin.role = PeerRole::Pilot;                     // a seat occupant is a Pilot-role peer (it has an entity to view)
-    // Re-send ConnectAck so the client centers interest/camera on the host aircraft (the proven
-    // mid-session re-setup path; sendConnectAck also re-sends the current crew rosters).
-    sendConnectAck(peerId, target, PeerRole::Pilot);
+    // Reply with the result FIRST, then re-send ConnectAck: the client learns which seat it now holds
+    // (so it can gate flight prediction off a non-fly seat, #975) before the ConnectAck re-setup runs.
+    // Both are reliable, so ENet preserves this order. ConnectAck centers interest/camera on the host
+    // aircraft (the proven mid-session re-setup path; it also re-sends the current crew rosters).
     reply(SeatResultCode::Granted, target, req.seatIndex);
+    sendConnectAck(peerId, target, PeerRole::Pilot);
 }
 
 std::string WorldBroadcaster::crewRosterText(uint32_t entityIdx) const {

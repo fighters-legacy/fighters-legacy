@@ -2466,3 +2466,56 @@ TEST_CASE("ClientNetEventHandler: SnapshotCrew TLV decodes live turret pose (#97
     // An entity with no crew TLV entry has no poses.
     CHECK(handler.crewTurretPoses(999u).empty());
 }
+
+TEST_CASE("ClientNetEventHandler: seat request/result plumbing (#975)", "[client_net_event_handler][crew]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // sendSeatRequest emits a MsgSeatRequest join.
+    handler.sendSeatRequest(42u, 3u, /*seat=*/1);
+    REQUIRE(!net.sends.empty());
+    fl::MsgSeatRequest req{};
+    std::memcpy(&req, net.sends.back().data(), sizeof(req));
+    CHECK(req.msgId == static_cast<uint8_t>(fl::MsgId::SeatRequest));
+    CHECK(req.entityIdx == 42u);
+    CHECK(req.seatIndex == 1);
+    CHECK((req.flags & fl::kSeatRequestFlagLeave) == 0u);
+
+    // sendSeatLeave sets the leave flag.
+    handler.sendSeatLeave();
+    std::memcpy(&req, net.sends.back().data(), sizeof(req));
+    CHECK((req.flags & fl::kSeatRequestFlagLeave) != 0u);
+
+    // A granted JOIN result marks the client as in a (non-fly) crew seat and is surfaced once.
+    CHECK_FALSE(handler.inCrewSeat());
+    fl::MsgSeatResult res{};
+    res.code = static_cast<uint8_t>(fl::SeatResultCode::Granted);
+    res.entityIdx = 42u;
+    res.seatIndex = 1;
+    handler.onReceive(0u, &res, sizeof(res));
+    CHECK(handler.inCrewSeat());
+    auto view = handler.takeSeatResult();
+    CHECK(view.valid);
+    CHECK(view.fresh);
+    CHECK(view.code == static_cast<uint8_t>(fl::SeatResultCode::Granted));
+    CHECK(handler.takeSeatResult().fresh == false); // consumed
+
+    // A granted LEAVE (entityIdx 0) clears the crew-seat flag.
+    fl::MsgSeatResult leave{};
+    leave.code = static_cast<uint8_t>(fl::SeatResultCode::Granted);
+    leave.entityIdx = 0u;
+    handler.onReceive(0u, &leave, sizeof(leave));
+    CHECK_FALSE(handler.inCrewSeat());
+
+    // A denial does not change the crew-seat flag.
+    fl::MsgSeatResult deny{};
+    deny.code = static_cast<uint8_t>(fl::SeatResultCode::SeatOccupiedByHuman);
+    deny.entityIdx = 42u;
+    handler.onReceive(0u, &deny, sizeof(deny));
+    CHECK_FALSE(handler.inCrewSeat());
+    CHECK(handler.lastSeatResult().code == static_cast<uint8_t>(fl::SeatResultCode::SeatOccupiedByHuman));
+}
