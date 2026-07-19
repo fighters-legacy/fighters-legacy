@@ -517,3 +517,73 @@ TEST_CASE("UserConfig: [prediction] round-trip save+load", "[userconfig]") {
     CHECK(config2.prediction().snapThresholdM == 10.f);
     CHECK(config2.prediction().blendRate == 0.2f);
 }
+
+// ---------------------------------------------------------------------------
+// Pilot logbook (#674)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("PilotLogbook: accumulate API tallies kills, weapons, and career counters", "[userconfig][logbook]") {
+    PilotLogbook lb;
+    lb.recordKill(0); // air
+    lb.recordKill(0);
+    lb.recordKill(1); // ground
+    CHECK(lb.totalKills() == 3u);
+    CHECK(lb.killsByClass[0] == 2u);
+    CHECK(lb.killsByClass[1] == 1u);
+    lb.recordKill(999); // out of range -> ignored
+    CHECK(lb.totalKills() == 3u);
+
+    lb.recordShot(WeaponLogClass::AirMissile, 4);
+    lb.recordHit(WeaponLogClass::AirMissile, 2);
+    lb.recordWeaponKill(WeaponLogClass::AirMissile);
+    CHECK(lb.weapons[static_cast<int>(WeaponLogClass::AirMissile)].shots == 4u);
+    CHECK(lb.weapons[static_cast<int>(WeaponLogClass::AirMissile)].hitRate() == Catch::Approx(0.5f));
+
+    lb.recordMission(true);
+    lb.recordMission(false);
+    lb.recordEjection();
+    lb.recordLanding(0.7f);
+    lb.recordLanding(0.4f); // best keeps the higher score
+    CHECK(lb.missionsFlown == 2u);
+    CHECK(lb.missionsFailed == 1u);
+    CHECK(lb.ejections == 1u);
+    CHECK(lb.bestLandingScore == Catch::Approx(0.7f));
+    CHECK(lb.lastLandingScore == Catch::Approx(0.4f));
+}
+
+TEST_CASE("UserConfig: pilot logbook survives save + reload (#674)", "[userconfig][logbook]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    UserConfig config(fs, logger);
+
+    PilotSettings ps = config.pilot();
+    ps.profile.callsign = "Viper";
+    ps.profile.logbook.recordKill(0);
+    ps.profile.logbook.recordKill(1);
+    ps.profile.logbook.recordKill(1);
+    ps.profile.logbook.recordShot(WeaponLogClass::AirGun, 100);
+    ps.profile.logbook.recordHit(WeaponLogClass::AirGun, 37);
+    ps.profile.logbook.recordWeaponKill(WeaponLogClass::AirGun);
+    ps.profile.logbook.recordMission(true);
+    ps.profile.logbook.recordMission(false);
+    ps.profile.logbook.recordEjection();
+    ps.profile.logbook.recordLanding(0.9f);
+    config.setPilot(ps);
+    config.save();
+
+    MockLogger logger2;
+    UserConfig config2(fs, logger2);
+    config2.load();
+    const PilotLogbook& lb = config2.pilot().profile.logbook;
+    CHECK(config2.pilot().profile.callsign == "Viper");
+    CHECK(lb.killsByClass[0] == 1u);
+    CHECK(lb.killsByClass[1] == 2u);
+    CHECK(lb.totalKills() == 3u);
+    CHECK(lb.weapons[static_cast<int>(WeaponLogClass::AirGun)].shots == 100u);
+    CHECK(lb.weapons[static_cast<int>(WeaponLogClass::AirGun)].hits == 37u);
+    CHECK(lb.weapons[static_cast<int>(WeaponLogClass::AirGun)].kills == 1u);
+    CHECK(lb.missionsFlown == 2u);
+    CHECK(lb.missionsFailed == 1u);
+    CHECK(lb.ejections == 1u);
+    CHECK(lb.bestLandingScore == Catch::Approx(0.9f));
+}

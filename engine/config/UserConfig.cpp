@@ -817,6 +817,47 @@ bool UserConfig::load() {
     if (auto v = tomlInt(tbl["pilot"]["flight_time_s"]))
         m_pilot.profile.flightTimeS = std::max(int64_t{0}, *v);
 
+    // [pilot.logbook] (#674) — the career record. Arrays are read positionally; missing entries keep 0.
+    {
+        PilotLogbook& lb = m_pilot.profile.logbook;
+        if (auto* arr = tbl["pilot"]["logbook"]["kills_by_class"].as_array()) {
+            int i = 0;
+            for (auto& e : *arr) {
+                if (i >= PilotLogbook::kKillClassCount)
+                    break;
+                if (auto n = tomlInt(e))
+                    lb.killsByClass[i] = static_cast<uint32_t>(std::max(int64_t{0}, *n));
+                ++i;
+            }
+        }
+        constexpr int kWc = static_cast<int>(WeaponLogClass::Count);
+        auto readWeaponArr = [&](const char* key, uint32_t WeaponAccuracy::* field) {
+            if (auto* arr = tbl["pilot"]["logbook"][key].as_array()) {
+                int i = 0;
+                for (auto& e : *arr) {
+                    if (i >= kWc)
+                        break;
+                    if (auto n = tomlInt(e))
+                        lb.weapons[i].*field = static_cast<uint32_t>(std::max(int64_t{0}, *n));
+                    ++i;
+                }
+            }
+        };
+        readWeaponArr("weapon_shots", &WeaponAccuracy::shots);
+        readWeaponArr("weapon_hits", &WeaponAccuracy::hits);
+        readWeaponArr("weapon_kills", &WeaponAccuracy::kills);
+        if (auto v = tomlInt(tbl["pilot"]["logbook"]["missions_flown"]))
+            lb.missionsFlown = static_cast<uint32_t>(std::max(int64_t{0}, *v));
+        if (auto v = tomlInt(tbl["pilot"]["logbook"]["missions_failed"]))
+            lb.missionsFailed = static_cast<uint32_t>(std::max(int64_t{0}, *v));
+        if (auto v = tomlInt(tbl["pilot"]["logbook"]["ejections"]))
+            lb.ejections = static_cast<uint32_t>(std::max(int64_t{0}, *v));
+        if (auto v = tbl["pilot"]["logbook"]["best_landing"].value<double>())
+            lb.bestLandingScore = static_cast<float>(*v);
+        if (auto v = tbl["pilot"]["logbook"]["last_landing"].value<double>())
+            lb.lastLandingScore = static_cast<float>(*v);
+    }
+
     // [pilot.campaign]
     if (auto v = tbl["pilot"]["campaign"]["active_campaign"].value<std::string>())
         m_pilot.campaign.activeCampaign = std::move(*v);
@@ -959,12 +1000,37 @@ bool UserConfig::save() {
         factions.insert_or_assign(k, static_cast<int64_t>(v));
     pilotCampaign.insert_or_assign("faction_standings", std::move(factions));
 
+    // [pilot.logbook] (#674)
+    const PilotLogbook& lb = m_pilot.profile.logbook;
+    toml::table logbook;
+    {
+        toml::array killsByClass;
+        for (uint32_t k : lb.killsByClass)
+            killsByClass.push_back(static_cast<int64_t>(k));
+        logbook.insert_or_assign("kills_by_class", std::move(killsByClass));
+        toml::array shots, hits, wkills;
+        for (const WeaponAccuracy& wa : lb.weapons) {
+            shots.push_back(static_cast<int64_t>(wa.shots));
+            hits.push_back(static_cast<int64_t>(wa.hits));
+            wkills.push_back(static_cast<int64_t>(wa.kills));
+        }
+        logbook.insert_or_assign("weapon_shots", std::move(shots));
+        logbook.insert_or_assign("weapon_hits", std::move(hits));
+        logbook.insert_or_assign("weapon_kills", std::move(wkills));
+        logbook.insert_or_assign("missions_flown", static_cast<int64_t>(lb.missionsFlown));
+        logbook.insert_or_assign("missions_failed", static_cast<int64_t>(lb.missionsFailed));
+        logbook.insert_or_assign("ejections", static_cast<int64_t>(lb.ejections));
+        logbook.insert_or_assign("best_landing", static_cast<double>(lb.bestLandingScore));
+        logbook.insert_or_assign("last_landing", static_cast<double>(lb.lastLandingScore));
+    }
+
     toml::table pilot;
     pilot.insert_or_assign("callsign", m_pilot.profile.callsign);
     pilot.insert_or_assign("guid", m_pilot.profile.guid);
     pilot.insert_or_assign("kills", static_cast<int64_t>(m_pilot.profile.kills));
     pilot.insert_or_assign("losses", static_cast<int64_t>(m_pilot.profile.losses));
     pilot.insert_or_assign("flight_time_s", m_pilot.profile.flightTimeS);
+    pilot.insert_or_assign("logbook", std::move(logbook));
     pilot.insert_or_assign("campaign", std::move(pilotCampaign));
 
     // Insertion order determines TOML section order

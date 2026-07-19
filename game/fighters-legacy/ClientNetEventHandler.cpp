@@ -541,6 +541,18 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             const bool youKilled = rec.instigatorIdx == assignedEntityIdx && rec.instigatorGen != 0 &&
                                    rec.instigatorGen == static_cast<uint16_t>(assignedEntityGen);
 
+            // Per-class kill tally for the pilot logbook (#674): classify the victim by its entity
+            // category (via the cached typeIndex + type registry) when this peer scored the kill.
+            if (youKilled) {
+                int cls = 0; // ObjectCategory::AirVehicle default when the victim type is unknown
+                if (auto kit = m_knownEntities.find(rec.subjectIdx); kit != m_knownEntities.end()) {
+                    if (const fl::EntityDef* vd = registry.byIndex(kit->second.typeIndex))
+                        cls = static_cast<int>(vd->category);
+                }
+                if (cls >= 0 && cls < 8)
+                    ++m_sessionStats.killsByClass[cls];
+            }
+
             // Names arrive with chat/scoreboard (Epic E); until then the feed speaks in entities.
             char who[32];
             char whom[32];

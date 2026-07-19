@@ -1201,6 +1201,23 @@ void Game::handleTransition(Screen next) {
             ps.profile.kills += static_cast<int>(kills);
             ps.profile.losses += static_cast<int>(losses);
             ps.profile.flightTimeS += flightSecs;
+            // Pilot logbook (#674): the career record accrues the same debrief deltas. Per-class kills
+            // come from the classified kill feed; a mission flown (success for now — #634 owns failure)
+            // and any losses count toward the career. Ejections (#672) are recorded on their own path.
+            if (d.session.clientHandler) {
+                const auto& s = d.session.clientHandler->sessionStats();
+                uint32_t classified = 0;
+                for (int c = 0; c < 8; ++c) {
+                    for (uint32_t i = 0; i < s.killsByClass[c]; ++i)
+                        ps.profile.logbook.recordKill(c);
+                    classified += s.killsByClass[c];
+                }
+                // Any kills the feed could not classify still count (as the default air class), so the
+                // logbook's total matches the debrief's kill delta exactly.
+                for (uint32_t i = classified; i < kills; ++i)
+                    ps.profile.logbook.recordKill(0);
+            }
+            ps.profile.logbook.recordMission(true);
             d.services.userConfig->setPilot(ps);
         }
         d.services.musicManager.setState(GameState::Debrief);

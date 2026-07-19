@@ -193,6 +193,11 @@ struct ClientNetEventHandler : INetworkEventHandler {
         uint32_t kills{0};
         uint32_t losses{0};
         int32_t score{0};
+        // Per-target-class kills THIS peer scored, indexed by ObjectCategory ordinal (#674). Fed from
+        // the Kill records (victim classified via the type registry) so the debrief can write the
+        // pilot logbook's per-class tally. Sums to at most `kills` (a kill with an unknown victim
+        // type is still counted in `kills` but may miss a class here).
+        uint32_t killsByClass[8]{};
     };
     const SessionCombatStats& sessionStats() const noexcept {
         return m_sessionStats;
