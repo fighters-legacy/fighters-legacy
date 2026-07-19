@@ -1255,6 +1255,10 @@ int main(int argc, char** argv) {
                 mix.clear();
         }
 
+        // #980: the load AI's entity type (default the single-seat debug entity; builtin:bomber runs
+        // CREWED AI, exercising the per-seat passes + turret replication under scale-gate load).
+        const std::string loadType =
+            cfg.testSpawnEntityType.empty() ? std::string("builtin:debug-entity") : cfg.testSpawnEntityType;
         uint32_t spawned = 0;
         fl::EntityId prevId; // pursuit/patrol target: the previously spawned load entity
         for (const auto& pos : positions) {
@@ -1262,7 +1266,7 @@ int main(int argc, char** argv) {
             t.pos[0] = pos[0];
             t.pos[1] = pos[1];
             t.pos[2] = pos[2];
-            const fl::EntityId id = entityManager.spawn("builtin:debug-entity", t);
+            const fl::EntityId id = entityManager.spawn(loadType.c_str(), t);
             if (!id.valid())
                 break; // soft cap or unregistered type — stop cleanly
 

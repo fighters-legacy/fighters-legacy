@@ -9906,3 +9906,50 @@ TEST_CASE("WorldBroadcaster: seats/set_seat operator surface reads and forces oc
     // An out-of-range seat is rejected.
     CHECK_FALSE(wb.adminSetSeat(bomber.index, 9, fl::SeatOccupancy::Bot, 0).empty());
 }
+
+TEST_CASE("WorldBroadcaster: two humans on one crewed airframe each get an own record (#972/#980)",
+          "[world_broadcaster][crew]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    registry.registerType(makeCrewBomberDef());
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(makeRktWeapon());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    wb.setWeaponRegistry(&weapons);
+    wb.setGroundElevation(0.f);
+    wb.setSeatControllerFactory(
+        [](const fl::SeatDef&, uint8_t,
+           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
+
+    // Peer 1 owns a crewed bomber; peer 2 joins its gunner seat. Both now occupy a seat in the SAME
+    // airframe, so each must receive that airframe as its OWN record (omega + loadout block) — the
+    // "isOwn generalizes to occupies-a-seat-here" property.
+    connectPilotPeer(wb, net, 1u, "test:crewbomber");
+    fl::MsgConnectAck ack{};
+    for (const auto& pkt : net.sends)
+        if (pkt.size() >= sizeof(fl::MsgConnectAck) && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectAck))
+            std::memcpy(&ack, pkt.data(), sizeof(ack));
+    const fl::EntityId bomber{ack.assignedEntityIdx, ack.assignedEntityGen};
+    REQUIRE(bomber.valid());
+
+    connectPilotPeer(wb, net, 2u);
+    const fl::MsgSeatRequest r = joinReq(bomber, 1);
+    wb.onReceive(2u, &r, sizeof(r));
+    REQUIRE(wb.occupantPeerFor(bomber, 1) == 2u);
+
+    clearSnapshots(net);
+    wb.onTick(1.0 / 60.0, 1u);
+
+    auto ownRecordFor = [&](uint32_t peerId) -> bool {
+        for (const auto& pkt : snapshotsFor(net, peerId))
+            for (const auto& e : decodeEntities(pkt))
+                if (e.entityIdx == bomber.index && e.hasLoadout)
+                    return true; // an own record (omega/loadout block present)
+        return false;
+    };
+    CHECK(ownRecordFor(1u)); // the pilot gets the bomber as its own record
+    CHECK(ownRecordFor(2u)); // the gunner ALSO gets the bomber as its own record
+}

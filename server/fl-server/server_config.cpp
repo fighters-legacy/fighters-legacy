@@ -107,6 +107,8 @@ static const char* kDefaultToml =
     "# test_spawn_agl_m = 500.0         # spawn/loiter altitude above origin ground elevation (m); [0, 50000]\n"
     "# test_spawn_ai_mix = \"\"           # weighted controller mix, e.g. \"loiter:70,pursuit:20,patrol:10\"; empty = "
     "all loiter (#580)\n"
+    "# test_spawn_entity_type = \"\"       # load AI type; empty = builtin:debug-entity; builtin:bomber = crewed AI "
+    "(#980)\n"
     "# test_projectile_rate = 0.0       # short-lived entities spawned per second (churn); 0 = disabled; [0, 100000] "
     "(#580)\n"
     "# test_projectile_ttl_s = 3.0      # churned-entity lifetime (s); [0.05, 600] (#580)\n"
@@ -584,6 +586,8 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                          ("world.test_spawn_ai_mix invalid (" + mixErr + "); using all-loiter default").c_str());
             }
         }
+        if (auto v = tbl["world"]["test_spawn_entity_type"].value<std::string>())
+            cfg.testSpawnEntityType = std::move(*v); // #980: e.g. builtin:bomber for crewed-AI load
         if (auto v = tbl["world"]["test_projectile_rate"].value<double>()) {
             if (*v < 0.0 || *v > 100'000.0) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
