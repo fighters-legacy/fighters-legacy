@@ -148,11 +148,13 @@ struct CrewFixture {
         wb = std::make_unique<WorldBroadcaster>(*em, registry, net, logger);
         wb->setWeaponRegistry(&weapons);
         wb->setGroundElevation(0.f);
-        wb->setSeatControllerFactory([gunnerFireAfter](const SeatDef&, uint8_t) -> std::unique_ptr<ISeatController> {
-            auto g = std::make_unique<StubGunner>();
-            g->fireAfter = gunnerFireAfter;
-            return g;
-        });
+        wb->setSeatControllerFactory(
+            [gunnerFireAfter](const SeatDef&, uint8_t,
+                              const WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<ISeatController> {
+                auto g = std::make_unique<StubGunner>();
+                g->fireAfter = gunnerFireAfter;
+                return g;
+            });
     }
 
     EntityId spawnBomber(double x) {
@@ -327,6 +329,24 @@ TEST_CASE("Crewed frame: vacating a human seat resumes its bot (#972)", "[crew]"
     fx.tick(120);                          // the bot (StubGunner) slews then fires again after tick 90
 
     CHECK(!fx.projectileVels().empty()); // the bot resumed and fired
+}
+
+TEST_CASE("Crewed frame: a mission crew config can empty a bot seat, silencing its fire (#976)", "[crew]") {
+    // The default bomber has a bot gunner that fires. A mission crew: block override that spawns seat 1
+    // empty must silence it — no projectiles ever leave.
+    CrewFixture fx(/*gunnerFireAfter=*/90);
+    const EntityId bomber = fx.spawnBomber(0.0);
+
+    WorldBroadcaster::CrewSpawnConfig cfg;
+    cfg.missionSeed = 12345u;
+    WorldBroadcaster::CrewSeatSpawnOverride ov;
+    ov.seatIndex = 1;
+    ov.empty = true;
+    cfg.seats.push_back(ov);
+    fx.wb->applyCrewSpawnConfig(bomber, cfg);
+
+    fx.tick(120);
+    CHECK(fx.projectileVels().empty()); // the emptied seat contributes no fire (bot resume is covered by #972)
 }
 
 TEST_CASE("Crewed frame: the per-seat pass is serial-equivalent across worker counts (#969)", "[crew][tsan]") {

@@ -536,8 +536,41 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // which engine-net must not link. Unset ⇒ a crewed aircraft spawns with its non-fly seats empty
     // (they contribute no fire); the Fly seat always flies via its IEntityController regardless. A
     // crewed aircraft is built only when the entity def declares [[crew]]; see addControlledEntity.
-    using SeatControllerFactory = std::function<std::unique_ptr<ISeatController>(const SeatDef& seat, uint8_t seatIdx)>;
+    // Per-bot spawn context (#976): the skill range the seat's bot rolls within and the mission seed
+    // feeding the deterministic per-instance skill roll. buildCrew passes the seat's authored defaults;
+    // a mission `crew:` block overrides them via applyCrewSpawnConfig.
+    struct SeatBotContext {
+        float skillMin{0.5f};
+        float skillMax{0.5f};
+        uint64_t missionSeed{0};
+    };
+    using SeatControllerFactory = std::function<std::unique_ptr<ISeatController>(const SeatDef& seat, uint8_t seatIdx,
+                                                                                 const SeatBotContext& ctx)>;
     void setSeatControllerFactory(SeatControllerFactory fn);
+
+    // ── Mission crew configuration (#976) ────────────────────────────────────────────────────────
+    // A per-seat override applied at spawn: bot spec, skill range, and occupancy. seatIndex names the
+    // authored seat (already resolved from a role by the mission parser/validator).
+    struct CrewSeatSpawnOverride {
+        uint8_t seatIndex{0};
+        std::optional<std::string> botSpec;
+        std::optional<float> skillMin;
+        std::optional<float> skillMax;
+        std::optional<bool> empty; // true = spawn empty, false = spawn its bot
+    };
+    // The crew config for one spawned aircraft: the mission seed (seeds the per-instance skill roll),
+    // an aircraft-level skill range applied to every bot seat, and per-seat overrides.
+    struct CrewSpawnConfig {
+        uint64_t missionSeed{0};
+        std::optional<float> skillMin;
+        std::optional<float> skillMax;
+        std::vector<CrewSeatSpawnOverride> seats;
+    };
+    // Apply `cfg` to a spawned crewed aircraft's CrewState: set each seat's effective skill range /
+    // occupancy and rebuild its bot with the mission seed, so the per-instance skill (#971) is
+    // deterministic per mission. A no-op for a single-seat / unknown entity. Sim-thread; called from
+    // fl-server's mission onSpawned hook.
+    void applyCrewSpawnConfig(EntityId id, const CrewSpawnConfig& cfg);
 
     // ── Seat occupancy (#972) — the mechanism the #974 join protocol drives ──────────────────────
     // Bind human peer `peerId` to NON-fly seat `seat` of the crewed aircraft `id`: mark the seat's

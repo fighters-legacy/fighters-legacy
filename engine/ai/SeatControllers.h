@@ -16,19 +16,19 @@ namespace fl::ai {
 //
 // A `gunner` / `builtin:gunner` spec — or, by default, any Fire seat that aims a turret — becomes a
 // TurretGunnerController. An unrecognised spec returns nullptr (the seat spawns empty, contributing no
-// fire; the Fly seat always flies via its IEntityController regardless). `missionSeed` seeds the
-// per-instance skill roll (0 until the mission runtime provides one, #976).
-[[nodiscard]] inline std::unique_ptr<ISeatController>
-makeSeatController(const SeatDef& seat, uint8_t /*seatIdx*/, const EntityManager& em, uint64_t missionSeed = 0) {
+// fire; the Fly seat always flies via its IEntityController regardless). The bot rolls its per-instance
+// skill within [skillMin, skillMax] from `missionSeed` (#971/#976): buildCrew passes the seat's authored
+// default (fixed skill, seed 0); a mission `crew:` block passes the configured range + the mission seed.
+[[nodiscard]] inline std::unique_ptr<ISeatController> makeSeatController(const SeatDef& seat, uint8_t /*seatIdx*/,
+                                                                         const EntityManager& em, float skillMin,
+                                                                         float skillMax, uint64_t missionSeed) {
     const std::string& spec = seat.botSpec;
     const bool wantsGunner =
         spec == "gunner" || spec == "builtin:gunner" ||
         (spec.empty() && hasCapability(seat.capabilities, CrewCapability::Fire) && !seat.turret.empty());
-    if (wantsGunner) {
-        const float skill = seat.defaultSkill; // a mission range overrides this in #976
-        return std::make_unique<TurretGunnerController>(em, skill, skill, /*engageRangeM=*/1500.f,
+    if (wantsGunner)
+        return std::make_unique<TurretGunnerController>(em, skillMin, skillMax, /*engageRangeM=*/1500.f,
                                                         /*muzzleVelMps=*/1000.f, /*lethalRadiusM=*/12.f, missionSeed);
-    }
     return nullptr;
 }
 

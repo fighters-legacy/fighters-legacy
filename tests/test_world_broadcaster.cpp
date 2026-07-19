@@ -9614,9 +9614,11 @@ TEST_CASE("WorldBroadcaster: crewed aircraft replicate roster on connect; single
     fl::WorldBroadcaster wb(em, registry, net, logger);
     wb.setWeaponRegistry(&weapons);
     wb.setGroundElevation(0.f);
-    wb.setSeatControllerFactory([](const fl::SeatDef&, uint8_t) -> std::unique_ptr<fl::ISeatController> {
-        return nullptr; // no gunner bot: the turret rests at az=el=0, which still replicates
-    });
+    wb.setSeatControllerFactory(
+        [](const fl::SeatDef&, uint8_t,
+           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> {
+            return nullptr; // no gunner bot: the turret rests at az=el=0, which still replicates
+        });
 
     // Spawn an AI crewed bomber near the origin so an observer sees it.
     fl::EntityTransform t{};
@@ -9743,7 +9745,8 @@ TEST_CASE("WorldBroadcaster: a human joins a gunner seat; a second human is deni
     wb.setWeaponRegistry(&weapons);
     wb.setGroundElevation(0.f);
     wb.setSeatControllerFactory(
-        [](const fl::SeatDef&, uint8_t) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
+        [](const fl::SeatDef&, uint8_t,
+           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
 
     fl::EntityTransform t{};
     t.pos[1] = 800.0;
@@ -9796,7 +9799,8 @@ TEST_CASE("WorldBroadcaster: a peer-spawned crewed airframe persists while a hum
     wb.setWeaponRegistry(&weapons);
     wb.setGroundElevation(0.f);
     wb.setSeatControllerFactory(
-        [](const fl::SeatDef&, uint8_t) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
+        [](const fl::SeatDef&, uint8_t,
+           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
 
     // Peer 1 spawns and OWNS a crewed bomber (requests that type).
     connectPilotPeer(wb, net, 1u, "test:crewbomber");
@@ -9868,7 +9872,8 @@ TEST_CASE("WorldBroadcaster: seats/set_seat operator surface reads and forces oc
     wb.setWeaponRegistry(&weapons);
     wb.setGroundElevation(0.f);
     wb.setSeatControllerFactory(
-        [](const fl::SeatDef&, uint8_t) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
+        [](const fl::SeatDef&, uint8_t,
+           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
 
     fl::EntityTransform t{};
     t.pos[1] = 800.0;

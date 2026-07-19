@@ -3849,9 +3849,12 @@ void WorldBroadcaster::buildCrew(ControlledEntity& ce, const EntityDef& def) {
         }
 
         // A non-fly bot seat gets its ISeatController from the injected factory (#971 supplies the
-        // gunner). The Fly seat flies via ce.controller and never gets a seatBot.
+        // gunner). The Fly seat flies via ce.controller and never gets a seatBot. The bot context (#976)
+        // starts at the seat's authored skill (mission seed 0); a mission crew: block overrides it in
+        // applyCrewSpawnConfig.
         if (!seat.isFlySeat && seat.botOccupied && m_seatControllerFactory) {
-            seat.seatBot = m_seatControllerFactory(sd, static_cast<uint8_t>(s));
+            const SeatBotContext botCtx{sd.defaultSkill, sd.defaultSkill, 0};
+            seat.seatBot = m_seatControllerFactory(sd, static_cast<uint8_t>(s), botCtx);
             if (seat.seatBot)
                 seat.seatBot->setPlanetRadius(planetRadiusM);
         }
@@ -3862,6 +3865,61 @@ void WorldBroadcaster::buildCrew(ControlledEntity& ce, const EntityDef& def) {
     // total = base + sum over seats. ce.payload was resolved to the full default just above.
     ce.crew.baseMassKg = std::max(0.f, ce.payload.extra_mass_kg - seatMassSum);
     ce.crew.baseCd0 = std::max(0.f, ce.payload.extra_cd0 - seatCd0Sum);
+}
+
+void WorldBroadcaster::applyCrewSpawnConfig(EntityId id, const CrewSpawnConfig& cfg) {
+    auto cit = m_controlledEntities.find(id.index);
+    if (cit == m_controlledEntities.end() || cit->second.id != id || !cit->second.crew.crewed())
+        return;
+    ControlledEntity& ce = cit->second;
+    const EntityState* st = m_entityManager.get(id);
+    const EntityDef* def = st ? m_registry.byIndex(st->typeIndex) : nullptr;
+    if (!def)
+        return;
+    const double planetRadiusM = static_cast<double>(m_planetRadiusKm) * 1000.0;
+
+    for (std::size_t s = 0; s < ce.crew.seats.size() && s < def->crew.size(); ++s) {
+        CrewSeat& seat = ce.crew.seats[s];
+        if (seat.isFlySeat || seat.occupantPeer != kNoSeatPeer)
+            continue; // the Fly seat is not a bot seat; a human occupant is not overridden by mission config
+
+        // Effective skill: a per-seat override wins, else the aircraft-level range, else the authored
+        // default. Effective occupancy + bot spec: a per-seat override wins.
+        float skillMin = seat.skill, skillMax = seat.skill;
+        if (cfg.skillMin && cfg.skillMax) {
+            skillMin = *cfg.skillMin;
+            skillMax = *cfg.skillMax;
+        }
+        SeatDef effDef = def->crew[s]; // a copy we may override before re-building the bot
+        bool wantBot = seat.botOccupied;
+
+        for (const CrewSeatSpawnOverride& ov : cfg.seats) {
+            if (ov.seatIndex != static_cast<uint8_t>(s))
+                continue;
+            if (ov.skillMin && ov.skillMax) {
+                skillMin = *ov.skillMin;
+                skillMax = *ov.skillMax;
+            }
+            if (ov.botSpec)
+                effDef.botSpec = *ov.botSpec;
+            if (ov.empty)
+                wantBot = !*ov.empty;
+            break;
+        }
+
+        seat.skill = skillMin; // the roll refines within [min,max]; store the floor as the seat's baseline
+        seat.botOccupied = wantBot;
+        if (wantBot && m_seatControllerFactory) {
+            const SeatBotContext botCtx{skillMin, skillMax, cfg.missionSeed};
+            seat.seatBot = m_seatControllerFactory(effDef, static_cast<uint8_t>(s), botCtx);
+            if (seat.seatBot)
+                seat.seatBot->setPlanetRadius(planetRadiusM);
+        } else {
+            seat.seatBot.reset(); // empty seat: no bot, no fire
+        }
+        seat.lastCommandValid = false;
+    }
+    broadcastCrewRoster(id); // occupancy/roles may have changed
 }
 
 void WorldBroadcaster::sampleCrewSeats(ControlledEntity& ce, const EntityState& st, uint64_t tick, double dt,
