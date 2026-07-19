@@ -1687,7 +1687,7 @@ TEST_CASE("applyWarhead: a degenerate blast is a no-op", "[warhead]") {
     CHECK(w.em.get(e)->hp == 100.f);
 }
 
-TEST_CASE("EntityDefParser: [deck] parses a flight deck; a deck without accepts_landings fails (#38)", "[parser]") {
+TEST_CASE("EntityDefParser: [deck] parses a flight deck and requires accepts_landings (#38)", "[parser]") {
     const std::string base = "[entity]\n"
                              "id = \"test:cv\"\n"
                              "name = \"Carrier\"\n"

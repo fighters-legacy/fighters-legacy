@@ -312,7 +312,9 @@ TEST_CASE("Carrier: a parked aircraft is carried by the steaming ship", "[carrie
     CHECK(std::abs(st->transform.pos[0] - (ship->transform.pos[0] - 50.0)) < 40.0);
 }
 
-TEST_CASE("Carrier: the catapult throws a gutless aircraft to flying speed; off the stroke it stays parked",
+// NOTE: no semicolons in TEST_CASE names — Catch2's CMake discovery script expands the test listing
+// unquoted, so a ';' in a name splits the JSON as a CMake list and fails the build at discovery.
+TEST_CASE("Carrier: the catapult throws a gutless aircraft to flying speed (parked off the stroke it stays put)",
           "[carrier][wb]") {
     // ON the stroke (local x 30..130), military power: the catapult does the work.
     {
