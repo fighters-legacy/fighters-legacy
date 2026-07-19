@@ -456,6 +456,30 @@ EntityDef parseEntityDef(std::string_view toml_src) {
         def.aiTuning = tuning;
     }
 
+    // Optional flight deck (#38): footprint + catapult + arrest-wire geometry, ship-local metres.
+    // Meaningful only with accepts_landings — a deck nothing may land on is a modelling error worth
+    // failing loudly rather than silently ignoring.
+    if (auto deck_node = tbl["deck"]; deck_node && deck_node.as_table()) {
+        if (!def.acceptsLandings)
+            throw std::runtime_error("[deck] requires accepts_landings = true (a deck nothing may land on)");
+        DeckDef deck;
+        deck.lengthM = req_float(deck_node["length_m"], "deck.length_m");
+        deck.widthM = req_float(deck_node["width_m"], "deck.width_m");
+        deck.heightM = req_float(deck_node["height_m"], "deck.height_m");
+        if (deck.lengthM <= 0.f || deck.widthM <= 0.f || deck.heightM < 0.f)
+            throw std::runtime_error("[deck] length_m/width_m must be > 0 and height_m >= 0");
+        deck.catStartXM = opt_float(deck_node["cat_start_x_m"], deck.catStartXM);
+        deck.catStrokeM = opt_float(deck_node["cat_stroke_m"], deck.catStrokeM);
+        deck.catEndSpeedMps = opt_float(deck_node["cat_end_speed_mps"], deck.catEndSpeedMps);
+        deck.wireXM = opt_float(deck_node["wire_x_m"], deck.wireXM);
+        deck.wireZoneM = opt_float(deck_node["wire_zone_m"], deck.wireZoneM);
+        deck.maxTrapSpeedMps = opt_float(deck_node["max_trap_speed_mps"], deck.maxTrapSpeedMps);
+        if (deck.catStrokeM <= 0.f || deck.catEndSpeedMps <= 0.f || deck.wireZoneM <= 0.f ||
+            deck.maxTrapSpeedMps <= 0.f)
+            throw std::runtime_error("[deck] catapult/wire parameters must be > 0");
+        def.deck = deck;
+    }
+
     return def;
 }
 

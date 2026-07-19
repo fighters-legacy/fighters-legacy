@@ -203,9 +203,17 @@ struct MsgEntityTypeDef {
     // --- appended at the tail (#886); additive, prior offsets unchanged ---
     uint8_t category{0};       // ObjectCategory ordinal; client gates via isObjectCategoryOrdinal before cast
     uint8_t projectileKind{0}; // ProjectileKind ordinal (Projectile types only); 0 = None
-    uint8_t reservedCat[2]{};  // pad to 336 (multiple of align 4 so trailing records stay aligned)
-}; // 336 bytes, align 4
-static_assert(sizeof(MsgEntityTypeDef) == 336u, "MsgEntityTypeDef wire size changed");
+    uint8_t reservedCat[2]{};  // pad (kept so the #886 offsets stay frozen)
+    // --- appended at the tail (#38); additive, prior offsets unchanged ---
+    // Flight-deck footprint for a type that accepts landings (EntityDef::deck). 0 = no deck. The
+    // client composes its prediction ground floor as max(terrain, moving deck) from these, exactly
+    // as the server does — without them a carrier landing predicts through the deck and snaps.
+    // Catapult/arrest parameters deliberately do NOT travel: those events are server-authoritative.
+    float deckLengthM{0.f};
+    float deckWidthM{0.f};
+    float deckHeightM{0.f};
+}; // 348 bytes, align 4
+static_assert(sizeof(MsgEntityTypeDef) == 348u, "MsgEntityTypeDef wire size changed");
 static_assert(alignof(MsgEntityTypeDef) == 4u, "MsgEntityTypeDef alignment changed");
 static_assert(sizeof(MsgEntityTypeDef) % alignof(MsgEntityTypeDef) == 0u, "MsgEntityTypeDef not record-aligned");
 static_assert(offsetof(MsgEntityTypeDef, id) == 4u, "MsgEntityTypeDef::id offset changed");
@@ -217,6 +225,8 @@ static_assert(offsetof(MsgEntityTypeDef, payloadCd0) == 264u, "MsgEntityTypeDef:
 static_assert(offsetof(MsgEntityTypeDef, name) == 268u, "MsgEntityTypeDef::name offset changed");
 static_assert(offsetof(MsgEntityTypeDef, category) == 332u, "MsgEntityTypeDef::category offset changed");
 static_assert(offsetof(MsgEntityTypeDef, projectileKind) == 333u, "MsgEntityTypeDef::projectileKind offset changed");
+static_assert(offsetof(MsgEntityTypeDef, deckLengthM) == 336u, "MsgEntityTypeDef::deckLengthM offset changed");
+static_assert(offsetof(MsgEntityTypeDef, deckHeightM) == 344u, "MsgEntityTypeDef::deckHeightM offset changed");
 
 // Faction index -> id/name, sent once after ConnectAck for every registered faction (#860). The
 // client maps a snapshot entity's factionIndex (carried on full records) to a display name for the

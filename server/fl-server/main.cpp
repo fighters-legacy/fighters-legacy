@@ -54,6 +54,7 @@
 #include <entity/EntityDef.h>
 #include <entity/EntityManager.h>
 #include <entity/EntityTypeRegistry.h>
+#include <flight/BuiltinFlightModel.h> // BuiltinCarrierVesselModel — the builtin carrier's hull (#38)
 #include <flight/CentralGravityField.h>
 #include <flight/FlightModelParser.h>
 #include <flight/LocalFrame.h> // enuBasis — orient an ATC scramble along the runway heading (#706)
@@ -726,6 +727,10 @@ int main(int argc, char** argv) {
     auto fmCache = std::make_shared<std::unordered_map<std::string, std::shared_ptr<const fl::FlightModelData>>>();
     broadcaster.setFlightModelResolver(
         [&assets, fmCache](const std::string& id) -> std::shared_ptr<const fl::FlightModelData> {
+            // The compiled-in carrier's vessel model (#38): a "builtin:" name never touches the
+            // filesystem, same rule as every other builtin asset.
+            if (id == "builtin:carrier-vessel")
+                return fl::BuiltinCarrierVesselModel::get();
             if (auto it = fmCache->find(id); it != fmCache->end())
                 return it->second;
             std::shared_ptr<const fl::FlightModelData> model;

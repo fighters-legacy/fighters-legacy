@@ -193,6 +193,11 @@ add_executable(test_rotor_force_models test_rotor_force_models.cpp)
 target_link_libraries(test_rotor_force_models PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_rotor_force_models)
 
+add_executable(test_carrier_deck test_carrier_deck.cpp)
+target_link_libraries(test_carrier_deck PRIVATE Catch2::Catch2WithMain engine-net engine-entity engine-flight
+                                                engine-bootstrap)
+catch_discover_tests(test_carrier_deck)
+
 add_executable(test_central_gravity test_central_gravity.cpp)
 target_link_libraries(test_central_gravity PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_central_gravity)

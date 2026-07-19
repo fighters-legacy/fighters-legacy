@@ -81,6 +81,8 @@ namespace {
         return AircraftRole::Multirotor;
     if (s == "helicopter")
         return AircraftRole::Helicopter;
+    if (s == "vessel")
+        return AircraftRole::Vessel;
     throw std::runtime_error(std::string("unknown aircraft type: ") + std::string(s));
 }
 
@@ -129,7 +131,8 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         auto et_str = ac["engine_type"].value<std::string>();
         const bool turbineOptional = d.meta.role == AircraftRole::Ballistic ||  // a rocket is not a turbine
                                      d.meta.role == AircraftRole::Multirotor || // electric motors (#349)
-                                     d.meta.role == AircraftRole::Helicopter;   // turboshaft (#350)
+                                     d.meta.role == AircraftRole::Helicopter || // turboshaft (#350)
+                                     d.meta.role == AircraftRole::Vessel;       // marine plant (#38)
         if (!et_str && !turbineOptional)
             throw std::runtime_error("missing aircraft.engine_type");
         if (et_str)
@@ -150,11 +153,13 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
 
         d.geometry.mass_kg = req_float(fm["mass_kg"], "flight_model.mass_kg");
 
-        // A rotorcraft (#349/#350) has no wing, so demanding wing geometry of it would force authors
-        // to invent numbers nothing reads (the rotor models carry their own reference areas). The
-        // fields stay accepted (a compound helicopter may legitimately declare a wing later); they
-        // default to benign 1.0 so any accidental fixed-wing lookup degrades, never divides by zero.
-        const bool rotorcraft = (d.meta.role == AircraftRole::Multirotor || d.meta.role == AircraftRole::Helicopter);
+        // A rotorcraft (#349/#350) or a ship (#38) has no wing, so demanding wing geometry of it
+        // would force authors to invent numbers nothing reads (those models carry their own
+        // reference areas). The fields stay accepted (a compound helicopter may legitimately
+        // declare a wing later); they default to benign 1.0 so any accidental fixed-wing lookup
+        // degrades, never divides by zero.
+        const bool rotorcraft = (d.meta.role == AircraftRole::Multirotor || d.meta.role == AircraftRole::Helicopter ||
+                                 d.meta.role == AircraftRole::Vessel);
         if (rotorcraft) {
             d.geometry.wing_area_m2 = static_cast<float>(fm["wing_area_m2"].value<double>().value_or(1.0));
             d.geometry.wingspan_m = static_cast<float>(fm["wingspan_m"].value<double>().value_or(1.0));
@@ -328,6 +333,51 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.engine.mil_thrust.cols = {0.f, 90.f};
         d.engine.mil_thrust.values.assign(4, 0.f);
         d.limits.alpha_stall_deg = 90.f; // the disc does not stall like a wing
+        d.limits.max_g_structural = 100.f;
+        d.limits.min_g_structural = -100.f;
+        return d;
+    }
+
+    // ── surface vessels (#38): the ship-shaped reduced schema ─────────────────
+    // A ship is propulsion + water drag + a rudder ([vessel], flown by VesselForceModel); wings,
+    // stability derivatives and thrust decks would all be invented numbers. The marine plant burns
+    // fuel through the normal idle→mil path (both flows optional — a ship's endurance rarely
+    // matters at sortie scale, but a carrier group on a long campaign leg is fair game).
+    if (d.meta.role == AircraftRole::Vessel) {
+        auto vNode = tbl["vessel"];
+        if (!vNode || !vNode.as_table())
+            throw std::runtime_error("vessel model: missing [vessel] table");
+        VesselData v;
+        v.max_thrust_n = req_float(vNode["max_thrust_n"], "vessel.max_thrust_n");
+        v.max_speed_mps = req_float(vNode["max_speed_mps"], "vessel.max_speed_mps");
+        if (v.max_thrust_n <= 0.f || v.max_speed_mps <= 0.f)
+            throw std::runtime_error("vessel.max_thrust_n and vessel.max_speed_mps must be > 0");
+        v.turn_rate_deg_s = static_cast<float>(vNode["turn_rate_deg_s"].value<double>().value_or(1.5));
+        v.steerage_mps = static_cast<float>(vNode["steerage_mps"].value<double>().value_or(2.0));
+        d.vessel = v;
+
+        if (auto eng = tbl["engine"]; eng && eng.as_table()) {
+            d.engine.fuel_flow_idle_kg_s = static_cast<float>(eng["fuel_flow_idle_kg_s"].value<double>().value_or(0.0));
+            d.engine.fuel_flow_mil_kg_s = static_cast<float>(eng["fuel_flow_mil_kg_s"].value<double>().value_or(0.0));
+            d.engine.spool_time_s = static_cast<float>(eng["spool_time_s"].value<double>().value_or(10.0));
+            if (auto n = tomlInt(eng["engine_count"]))
+                d.engine.engine_count = static_cast<int>(*n);
+        } else {
+            d.engine.fuel_flow_idle_kg_s = 0.f; // endurance not modelled unless the author asks
+            d.engine.fuel_flow_mil_kg_s = 0.f;
+            d.engine.spool_time_s = 10.f; // a marine plant answers the telegraph slowly
+        }
+
+        // Benign placeholder aero (the ballistic/rotorcraft discipline).
+        d.drag_polar.cd0 = 1.0f;
+        d.drag_polar.k = 0.f;
+        d.cl_table.rows = {-90.f, -30.f, 30.f, 90.f};
+        d.cl_table.cols = {0.f, 30.f};
+        d.cl_table.values.assign(8, 0.f);
+        d.engine.mil_thrust.rows = {0.f, 30.f};
+        d.engine.mil_thrust.cols = {0.f, 90.f};
+        d.engine.mil_thrust.values.assign(4, 0.f);
+        d.limits.alpha_stall_deg = 90.f;
         d.limits.max_g_structural = 100.f;
         d.limits.min_g_structural = -100.f;
         return d;

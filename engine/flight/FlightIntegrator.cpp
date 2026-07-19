@@ -316,8 +316,9 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
         // Flameout: fuel starvation (an engine with nothing to burn makes no thrust — until #308
         // an empty tank changed the mass and nothing else), or climbing past the optional
         // combustion ceiling. Relight is a windmill start: fuel available, clearly back below the
-        // ceiling, and enough airspeed to spin the spool.
-        const bool fuelOut = m_state.fuel_kg <= 0.f;
+        // ceiling, and enough airspeed to spin the spool. An engine whose model burns NO fuel
+        // (zero mil flow — e.g. a vessel whose endurance is not modelled, #38) cannot starve.
+        const bool fuelOut = m_state.fuel_kg <= 0.f && eng.fuel_flow_mil_kg_s > 0.f;
         const bool aboveCeiling = eng.flameout_alt_km && (altitude_m / 1000.f > *eng.flameout_alt_km);
         if (fuelOut || aboveCeiling) {
             ef |= kEngineFlameout;
@@ -691,8 +692,11 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
             if (impactSpd >= kCrashReportThresholdMps)
                 m_state.ground_impact_speed = impactSpd;
             // Scale friction by impact severity so gravity's ~0.16 m/s/frame floor-tickle
-            // does not act as a continuous brake during ground roll.
-            const float kSlide = kSlideRoll + (kSlideImpact - kSlideRoll) * std::min(impactSpd / 10.f, 1.f);
+            // does not act as a continuous brake during ground roll. A VESSEL (#38) rides this
+            // floor as buoyancy, not wheels-on-dirt: its hull drag lives in VesselForceModel, so
+            // the contact response must not skim speed off it every tick.
+            const float kSlide =
+                m_data->isVessel() ? 1.f : kSlideRoll + (kSlideImpact - kSlideRoll) * std::min(impactSpd / 10.f, 1.f);
             const float newVUp = (impactSpd < 2.f) ? 0.f : -vUp * kCoR;
             std::array<float, 3> vw = {float(vel_world[0]), float(vel_world[1]), float(vel_world[2])};
             // Decompose into radial (vertical) + horizontal, reflect/stop the radial part, apply
@@ -704,10 +708,14 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
             vw[0] = horiz[0] + newVUp * up[0];
             vw[1] = horiz[1] + newVUp * up[1];
             vw[2] = horiz[2] + newVUp * up[2];
-            // Attenuate angular rates on impact to prevent post-contact spinning.
-            m_state.omega[0] *= 0.5f;
-            m_state.omega[1] *= 0.5f;
-            m_state.omega[2] *= 0.5f;
+            // Attenuate angular rates on impact to prevent post-contact spinning. Not for a
+            // VESSEL (#38): a ship is permanently settling onto its water floor, and halving its
+            // yaw rate every tick would crush the turn its rudder is commanding.
+            if (!m_data->isVessel()) {
+                m_state.omega[0] *= 0.5f;
+                m_state.omega[1] *= 0.5f;
+                m_state.omega[2] *= 0.5f;
+            }
             // Rotate corrected world velocity back to body frame.
             float q_c[4] = {-m_state.quat[0], -m_state.quat[1], -m_state.quat[2], m_state.quat[3]};
             auto vb = quatRotate(q_c, vw.data());
@@ -736,7 +744,10 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     // rudder into a yaw RATE with authority that fades from full at taxi speed to nil by ~50 m/s, so
     // the aero rudder owns yaw during the takeoff roll and this never fights it. Placed before the
     // static parking hold (14c) so a truly stopped, near-idle aircraft still latches fully static.
-    if ((m_gravity->geodeticAltitude(m_state.pos_world) - static_cast<double>(groundElev)) <= kGroundContactMarginM) {
+    // A VESSEL (#38) is permanently "in contact" with its water floor and has neither wheels nor a
+    // nosewheel — its drag and steering live in VesselForceModel, so this whole block is skipped.
+    if (!m_data->isVessel() &&
+        (m_gravity->geodeticAltitude(m_state.pos_world) - static_cast<double>(groundElev)) <= kGroundContactMarginM) {
         constexpr float kRollingResistG = 0.02f; // baseline tyre rolling resistance
         constexpr float kBrakeMaxG = 0.35f;      // full-pedal wheel-brake deceleration
         const float decel = (kRollingResistG + kBrakeMaxG * std::clamp(ctrl.wheelBrake, 0.f, 1.f)) * kG0;

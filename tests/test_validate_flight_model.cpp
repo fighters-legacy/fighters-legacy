@@ -781,3 +781,43 @@ TEST_CASE("#351: inverted airspeed band fails", "[flight-model-validator]") {
                                  "\n[drone_limits]\nmin_airspeed_mps = 60.0\nmax_airspeed_mps = 30.0\n");
     CHECK_FALSE(r.ok);
 }
+
+// ── vessels (#38) ────────────────────────────────────────────────────────────
+
+static constexpr const char* kValidShip = R"toml(
+[aircraft]
+name = "Test Ship"
+type = "vessel"
+
+[flight_model]
+mass_kg   = 1000000.0
+fuel_kg   = 0.0
+ixx_kg_m2 = 1.0e9
+iyy_kg_m2 = 1.0e10
+izz_kg_m2 = 1.0e10
+
+[vessel]
+max_thrust_n  = 2000000.0
+max_speed_mps = 15.0
+)toml";
+
+TEST_CASE("#38: a valid vessel validates against the reduced schema", "[flight-model-validator]") {
+    auto r = validateFlightModel(kValidShip);
+    CHECK(r.ok);
+    CHECK(r.errors.empty());
+}
+
+TEST_CASE("#38: a vessel top speed in knots is warned", "[flight-model-validator]") {
+    auto r = validateFlightModel(patch(kValidShip, "max_speed_mps = 15.0", "max_speed_mps = 31.0"));
+    bool warned = false;
+    for (const auto& w : r.warnings)
+        warned = warned || w.find("max_speed_mps") != std::string::npos;
+    CHECK(warned);
+}
+
+TEST_CASE("#38: a vessel without [vessel] fails", "[flight-model-validator]") {
+    std::string s(kValidShip);
+    auto pos = s.find("[vessel]");
+    REQUIRE(pos != std::string::npos);
+    CHECK_FALSE(validateFlightModel(s.substr(0, pos)).ok);
+}

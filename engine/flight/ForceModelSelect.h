@@ -5,6 +5,7 @@
 #include "flight/FlightIntegrator.h"
 #include "flight/HelicopterForceModel.h"
 #include "flight/MultirotorForceModel.h"
+#include "flight/VesselForceModel.h"
 
 namespace fl {
 
@@ -22,6 +23,8 @@ inline void applyForceModelFor(FlightIntegrator& fi, const FlightModelData& d) {
         fi.setForceModel(MultirotorForceModel::instance());
     } else if (d.isHelicopter()) {
         fi.setForceModel(HelicopterForceModel::instance());
+    } else if (d.isVessel()) {
+        fi.setForceModel(VesselForceModel::instance());
     }
     // Anything else keeps the FixedWingForceModel default bound by the integrator itself.
 }

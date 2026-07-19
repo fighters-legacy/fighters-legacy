@@ -711,6 +711,10 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     m_spatialIndex.clear();
     m_entityManager.forEach([this](const EntityState& s) { m_spatialIndex.insert(s.id.index, s.transform.pos); });
 
+    // Rebuild the flight-deck records (#38) beside the spatial index — serial, then read-only for
+    // the parallel integrate pass's ground-floor composition.
+    rebuildDeckRecords();
+
     // Drain one buffered input per peer before stepping. When the buffer is empty the existing
     // control fields are retained (stale repeat) — the entity continues on its last known inputs
     // rather than coasting to zero. viewAxis is not buffered (camera only, not flight control).
@@ -1033,6 +1037,10 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         m_tickProfiler.addPhaseSample(TickPhase::Integrate,
                                       std::chrono::duration<double, std::milli>(m_clock->now() - tIntStart).count());
     }
+
+    // Carrier deck operations (#38): deck carry, catapult strokes, arrest wires, LSO — SERIAL, right
+    // after the integrate pass (mutates FlightIntegrator state and sends packets, neither worker-safe).
+    runDeckOperations(simDt, tickIndex);
 
     // Over-G damage (#816), applied SERIALLY on the sim thread after the parallel integrate pass.
     //
@@ -2742,6 +2750,25 @@ void WorldBroadcaster::runCollisionPass(uint64_t tickIndex) {
                     return; // canonical: only the lower-index side records the pair
                 if (!spheresOverlap(ci.pos, ci.radius, cj.pos, cj.radius))
                     return;
+                // Deck exemption (#38): an aircraft AT OR ABOVE a landing ship's deck plane lives
+                // inside its collision sphere by design — parked, trapping, on short final, or
+                // fresh off the catapult. That is the landing/launch path, not a mid-air; flying
+                // into the hull BELOW deck level still collides. Deliberately not limited to the
+                // footprint: a cat shot crosses the sphere boundary beyond the bow at deck height,
+                // and killing it there would make every launch fatal. m_decks is frozen for the
+                // tick — read-only here on workers.
+                for (const DeckRec& rec : m_decks) {
+                    const CollisionCand* other = nullptr;
+                    if (rec.entityIdx == ci.id.index)
+                        other = &cj;
+                    else if (rec.entityIdx == cj.id.index)
+                        other = &ci;
+                    else
+                        continue;
+                    const DeckLocalPoint lp = deckLocalPoint(other->pos, rec.pos, rec.quat, *rec.deck);
+                    if (lp.y >= rec.deck->heightM - 5.f)
+                        return;
+                }
                 CollisionPair p;
                 p.a = ci.id;
                 p.b = cj.id;
@@ -3715,6 +3742,252 @@ MsgRadioTransmission buildRadioWire(const fl::atc::RadioTransmission& tx) {
 }
 } // namespace
 
+void WorldBroadcaster::sendHapticTo(uint32_t peerId, uint8_t kind, float a, float b, uint16_t durationMs) {
+    MsgHaptic msg;
+    msg.kind = kind;
+    msg.a = a;
+    msg.b = b;
+    msg.durationMs = durationMs;
+    m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
+}
+
+void WorldBroadcaster::rebuildDeckRecords() {
+    m_decks.clear();
+    m_entityManager.forEach([this](const EntityState& s) {
+        const EntityDef* def = m_registry.byIndex(s.typeIndex);
+        if (!def || !def->deck || !def->acceptsLandings)
+            return;
+        DeckRec rec;
+        rec.entityIdx = s.id.index;
+        rec.pos[0] = s.transform.pos[0];
+        rec.pos[1] = s.transform.pos[1];
+        rec.pos[2] = s.transform.pos[2];
+        for (int i = 0; i < 4; ++i)
+            rec.quat[i] = s.transform.quat[i];
+        for (int i = 0; i < 3; ++i)
+            rec.vel[i] = s.transform.vel[i];
+        rec.floorElevM = m_gravity->geodeticAltitude(rec.pos) + static_cast<double>(def->deck->heightM);
+        rec.deck = &*def->deck;
+        rec.shipDef = def;
+        m_decks.push_back(rec);
+    });
+}
+
+void WorldBroadcaster::runDeckOperations(double simDt, uint64_t tickIndex) {
+    if (m_decks.empty())
+        return;
+
+    // LSO phrase codes (repeat-suppressed per aircraft; 255 = none yet).
+    enum LsoPhrase : uint8_t { kOnGlideslope = 0, kHigh, kLow, kFast, kSlow, kWaveOff };
+    static constexpr const char* kLsoText[] = {
+        "Paddles: on glideslope, on speed.", "Paddles: you're HIGH.",
+        "Paddles: you're LOW. Power!",       "Paddles: you're fast.",
+        "Paddles: you're slow. Power!",      "Paddles: WAVE OFF, WAVE OFF!",
+    };
+    constexpr double kLsoRangeM = 5556.0; // 3 nm
+    constexpr float kGlideslopeDeg = 3.5f;
+
+    for (const StepItem& it : m_stepItems) {
+        ControlledEntity& ce = *it.ce;
+        if (ce.sim->flightModel().isVessel())
+            continue; // a ship does not land on itself (or on its escorts)
+        const FlightState& fs = ce.sim->state();
+        const double ownAlt = m_gravity->geodeticAltitude(fs.pos_world);
+
+        // Find the deck this aircraft is over (footprint + at deck level), if any.
+        const DeckRec* over = nullptr;
+        DeckLocalPoint local{};
+        for (const DeckRec& rec : m_decks) {
+            if (rec.entityIdx == it.idx)
+                continue;
+            const DeckLocalPoint lp = deckLocalPoint(fs.pos_world, rec.pos, rec.quat, *rec.deck);
+            if (lp.inFootprint) {
+                over = &rec;
+                local = lp;
+                break;
+            }
+        }
+
+        const bool onDeck = over && deckFloorApplies(local, *over->deck) && (ownAlt - over->floorElevM) <= 0.6;
+        if (onDeck) {
+            const DeckDef& deck = *over->deck;
+            FlightState ns = fs;
+
+            // World-frame velocity of the aircraft (for speeds and the catapult delta-v).
+            float velBodyF[3] = {float(ns.vel_body[0]), float(ns.vel_body[1]), float(ns.vel_body[2])};
+            float velWorld[3];
+            quatRotate(ns.quat, velBodyF, velWorld);
+            // Ground speed RELATIVE TO THE DECK — a spot on a 15 m/s ship is stationary deck-wise.
+            const float relVel[3] = {velWorld[0] - over->vel[0], velWorld[1] - over->vel[1],
+                                     velWorld[2] - over->vel[2]};
+            const float relSpd = std::sqrt(relVel[0] * relVel[0] + relVel[2] * relVel[2]);
+
+            // ── Deck carry: whatever sits on the deck travels with the ship. ──────────────────
+            ns.pos_world[0] += static_cast<double>(over->vel[0]) * simDt;
+            ns.pos_world[1] += static_cast<double>(over->vel[1]) * simDt;
+            ns.pos_world[2] += static_cast<double>(over->vel[2]) * simDt;
+
+            // ── Arrest wires: armed by the TOUCHDOWN EDGE inside the wire zone at trap speed. ──
+            if (!ce.arrestEngaged && !ce.wasOnDeck && std::abs(local.x - deck.wireXM) <= deck.wireZoneM * 0.5f &&
+                relSpd > 5.f && relSpd <= deck.maxTrapSpeedMps) {
+                ce.arrestEngaged = true;
+                constexpr float kWireRunoutM = 90.f;
+                ce.arrestDecelMps2 = (relSpd * relSpd) / (2.f * kWireRunoutM);
+                for (const auto& [pid, eid] : m_peerEntities) {
+                    if (eid == ce.id) {
+                        sendHapticTo(pid, static_cast<uint8_t>(HapticKind::Triggers), 0.9f, 0.9f, 300);
+                        fl::atc::RadioTransmission tx;
+                        tx.target = ce.id;
+                        tx.speaker = "Paddles";
+                        tx.text = "Paddles: good trap!";
+                        tx.displaySeconds = 4;
+                        sendRadioTransmission(tx);
+                        break;
+                    }
+                }
+            }
+            if (ce.arrestEngaged) {
+                const float horiz =
+                    std::sqrt(float(ns.vel_body[0] * ns.vel_body[0]) + float(ns.vel_body[2] * ns.vel_body[2]));
+                if (horiz <= 0.5f || relSpd <= 0.5f) {
+                    ce.arrestEngaged = false; // stopped in the wires
+                } else {
+                    const float newSpd = std::max(0.f, horiz - ce.arrestDecelMps2 * static_cast<float>(simDt));
+                    const float scale = (horiz > 1e-4f) ? newSpd / horiz : 0.f;
+                    ns.vel_body[0] *= scale;
+                    ns.vel_body[2] *= scale;
+                }
+            }
+
+            // ── Catapult: stopped on the stroke at military power = hooked up and shot. ────────
+            const bool onStroke = local.x >= deck.catStartXM - 5.f && local.x <= deck.catStartXM + deck.catStrokeM &&
+                                  std::abs(local.z) <= 15.f;
+            if (!ce.catapultEngaged && !ce.arrestEngaged && onStroke && relSpd < 10.f && ce.lastInput.throttle > 0.9f) {
+                ce.catapultEngaged = true;
+                ce.catapultRunM = 0.f;
+            }
+            if (ce.catapultEngaged) {
+                // End speed honours the aircraft's own minimum (CarrierData::cat_min_m_s, #38).
+                float vEnd = deck.catEndSpeedMps;
+                if (const auto& carrier = ce.sim->flightModel().carrier)
+                    vEnd = std::max(vEnd, carrier->cat_min_m_s);
+                const float accel = (vEnd * vEnd) / (2.f * deck.catStrokeM);
+                const float dv = accel * static_cast<float>(simDt);
+                // Shove along the SHIP's forward axis (the stroke direction), in the world frame.
+                float fwdBody[3] = {1.f, 0.f, 0.f};
+                float fwdWorld[3];
+                quatRotate(over->quat, fwdBody, fwdWorld);
+                float nvWorld[3] = {velWorld[0] + fwdWorld[0] * dv, velWorld[1] + fwdWorld[1] * dv,
+                                    velWorld[2] + fwdWorld[2] * dv};
+                // Back into the aircraft body frame.
+                const float qc[4] = {-ns.quat[0], -ns.quat[1], -ns.quat[2], ns.quat[3]};
+                float nvBody[3];
+                quatRotate(qc, nvWorld, nvBody);
+                ns.vel_body[0] = nvBody[0];
+                ns.vel_body[1] = nvBody[1];
+                ns.vel_body[2] = nvBody[2];
+                ce.catapultRunM += (relSpd + dv * 0.5f) * static_cast<float>(simDt);
+                if (ce.catapultRunM >= deck.catStrokeM || relSpd >= vEnd) {
+                    ce.catapultEngaged = false; // released — flying speed off the bow
+                    for (const auto& [pid, eid] : m_peerEntities) {
+                        if (eid == ce.id) {
+                            sendHapticTo(pid, static_cast<uint8_t>(HapticKind::Rumble), 1.f, 0.6f, 400);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Write the adjusted state back to the integrator AND the replicated transform.
+            ce.sim->reset(ns);
+            it.state->transform.pos[0] = ns.pos_world[0];
+            it.state->transform.pos[1] = ns.pos_world[1];
+            it.state->transform.pos[2] = ns.pos_world[2];
+            float nvb[3] = {float(ns.vel_body[0]), float(ns.vel_body[1]), float(ns.vel_body[2])};
+            float nvw[3];
+            quatRotate(ns.quat, nvb, nvw);
+            it.state->transform.vel[0] = nvw[0];
+            it.state->transform.vel[1] = nvw[1];
+            it.state->transform.vel[2] = nvw[2];
+            ce.wasOnDeck = true;
+        } else {
+            ce.wasOnDeck = false;
+            ce.catapultEngaged = false; // off the stroke = off the shuttle
+            ce.arrestEngaged = false;   // airborne again (a bolter) drops the wire state
+        }
+
+        // ── LSO (#38): glideslope calls inside 3 nm on approach to a deck, ~4 s cadence, only to
+        // aircraft a peer is flying (an AI wingman does not need Paddles in its ear). ────────────
+        if (onDeck || tickIndex < ce.lsoNextTick)
+            continue;
+        bool isPeerAircraft = false;
+        uint32_t ownerPeer = 0;
+        for (const auto& [pid, eid] : m_peerEntities) {
+            if (eid == ce.id) {
+                isPeerAircraft = true;
+                ownerPeer = pid;
+                break;
+            }
+        }
+        (void)ownerPeer;
+        if (!isPeerAircraft)
+            continue;
+        for (const DeckRec& rec : m_decks) {
+            // The wire-zone touchdown point in world space is the LSO's aim reference.
+            const DeckDef& deck = *rec.deck;
+            float wireLocal[3] = {deck.wireXM, deck.heightM, 0.f};
+            float wireOff[3];
+            quatRotate(rec.quat, wireLocal, wireOff);
+            const double wire[3] = {rec.pos[0] + wireOff[0], rec.pos[1] + wireOff[1], rec.pos[2] + wireOff[2]};
+            const double dx = wire[0] - fs.pos_world[0];
+            const double dy = wire[1] - fs.pos_world[1];
+            const double dz = wire[2] - fs.pos_world[2];
+            const double range = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (range > kLsoRangeM || range < 200.0)
+                continue;
+            // Approaching? Closing speed along the line to the wires.
+            const float closure = static_cast<float>(
+                (it.state->transform.vel[0] * dx + it.state->transform.vel[1] * dy + it.state->transform.vel[2] * dz) /
+                std::max(range, 1.0));
+            if (closure < 20.f)
+                continue;
+            const double horiz = std::max(1.0, std::sqrt(dx * dx + dz * dz));
+            const float pathDeg =
+                static_cast<float>(std::atan2(ownAlt - rec.floorElevM, horiz)) * 180.f / std::numbers::pi_v<float>;
+            const float gsErr = pathDeg - kGlideslopeDeg;
+            const DeckLocalPoint lp = deckLocalPoint(fs.pos_world, rec.pos, rec.quat, deck);
+            uint8_t phrase;
+            if (range < 1200.0 && (gsErr > 3.f || std::abs(lp.z) > 40.f)) {
+                phrase = kWaveOff;
+            } else if (gsErr > 1.2f) {
+                phrase = kHigh;
+            } else if (gsErr < -1.0f) {
+                phrase = kLow;
+            } else if (const auto& carrier = ce.sim->flightModel().carrier) {
+                const float spd =
+                    std::sqrt(float(fs.vel_body[0] * fs.vel_body[0]) + float(fs.vel_body[1] * fs.vel_body[1]) +
+                              float(fs.vel_body[2] * fs.vel_body[2]));
+                phrase = (spd > carrier->approach_m_s + 8.f)   ? kFast
+                         : (spd < carrier->approach_m_s - 8.f) ? kSlow
+                                                               : kOnGlideslope;
+            } else {
+                phrase = kOnGlideslope;
+            }
+            if (phrase != ce.lsoLastPhrase || phrase == kWaveOff) {
+                fl::atc::RadioTransmission tx;
+                tx.target = ce.id;
+                tx.speaker = "Paddles";
+                tx.text = kLsoText[phrase];
+                tx.displaySeconds = 4;
+                sendRadioTransmission(tx);
+                ce.lsoLastPhrase = phrase;
+            }
+            ce.lsoNextTick = tickIndex + 240; // ~4 s between looks
+            break;
+        }
+    }
+}
+
 void WorldBroadcaster::sendRadioTransmission(const fl::atc::RadioTransmission& tx) {
     const MsgRadioTransmission w = buildRadioWire(tx);
     if (tx.target.valid()) {
@@ -4535,13 +4808,32 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
         wind.turbulence_body[2] += buffet[2];
     }
     const glm::dvec3 groundPos{fi.state().pos_world[0], fi.state().pos_world[1], fi.state().pos_world[2]};
-    const float groundElev =
-        m_groundQuery ? m_groundQuery(groundPos) : m_groundElevation.load(std::memory_order_relaxed);
+    float groundElev = m_groundQuery ? m_groundQuery(groundPos) : m_groundElevation.load(std::memory_order_relaxed);
     // Per-surface ground handling (#487): grass/gravel/water differ from a paved runway in the rollout.
     // groundFrictionFor is pure table math, shared with ClientPrediction, so the server and the client
     // shed ground speed identically. No query set ⇒ default (paved) ⇒ bit-identical to before.
-    const fl::GroundFriction ground =
+    fl::GroundFriction ground =
         m_groundSurfaceQuery ? groundFrictionFor(m_groundSurfaceQuery(groundPos)) : fl::GroundFriction{};
+
+    const bool isVessel = fi.flightModel().isVessel();
+    if (isVessel) {
+        // A ship (#38) floats: its floor is the SEA SURFACE, never the seabed the bathymetry query
+        // returns, and water "rolling resistance" is meaningless for a hull whose drag lives in
+        // VesselForceModel.
+        groundElev = std::max(groundElev, 0.f);
+        ground = fl::GroundFriction{};
+    } else {
+        // Carrier decks (#38): the floor under an aircraft is the HIGHER of the terrain and any
+        // deck plane it is over. m_decks is rebuilt serially at tick start and read-only during
+        // this parallel pass; deckFloorApplies keeps a pass under the bow from being teleported up.
+        for (const DeckRec& rec : m_decks) {
+            if (rec.entityIdx == entityIdx)
+                continue;
+            const DeckLocalPoint local = deckLocalPoint(fi.state().pos_world, rec.pos, rec.quat, *rec.deck);
+            if (deckFloorApplies(local, *rec.deck))
+                groundElev = std::max(groundElev, static_cast<float>(rec.floorElevM));
+        }
+    }
     fi.step(static_cast<float>(simDt), ctrl, payload, wind, groundElev, ground);
 
     const FlightState& fs = fi.state();
@@ -4605,6 +4897,13 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
         // client-side def read back as an AirVehicle.
         typeDef.category = static_cast<uint8_t>(def->category);
         typeDef.projectileKind = static_cast<uint8_t>(def->projectileKind);
+        // Flight-deck footprint (#38): the client composes its prediction floor as
+        // max(terrain, moving deck) from these three; 0 = no deck.
+        if (def->deck && def->acceptsLandings) {
+            typeDef.deckLengthM = def->deck->lengthM;
+            typeDef.deckWidthM = def->deck->widthM;
+            typeDef.deckHeightM = def->deck->heightM;
+        }
 
         appendMsg(buf, typeDef);
     }

@@ -1078,6 +1078,36 @@ static void validateHelicopter(const toml::table& tbl, FlightModelValidationResu
     }
 }
 
+// [vessel] (#38): required propulsion fields positive, plus a top-speed plausibility band — a
+// displacement hull past 25 m/s (~50 kt) is a units mistake, not a warship.
+static void validateVessel(const toml::table& tbl, FlightModelValidationResult& r) {
+    auto v = tbl["vessel"];
+    if (!v) {
+        r.errors.push_back("vessel model: missing [vessel] table");
+        r.ok = false;
+        return;
+    }
+    auto checkPos = [&](const char* key) {
+        auto val = v[key].value<double>();
+        if (!val) {
+            r.errors.push_back(std::string("missing vessel.") + key);
+            r.ok = false;
+        } else if (*val <= 0.0) {
+            r.errors.push_back(std::string("vessel.") + key + " must be > 0");
+            r.ok = false;
+        }
+        return val;
+    };
+    checkPos("max_thrust_n");
+    if (auto spd = checkPos("max_speed_mps"); spd && *spd > 25.0)
+        r.warnings.push_back("vessel.max_speed_mps over 25 (~50 kt) is implausible for a displacement hull; "
+                             "check units (m/s, not knots)");
+    if (auto tr = v["turn_rate_deg_s"].value<double>(); tr && (*tr <= 0.0 || *tr > 10.0)) {
+        r.errors.push_back("vessel.turn_rate_deg_s must be in (0, 10]");
+        r.ok = false;
+    }
+}
+
 FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
     FlightModelValidationResult r;
 
@@ -1133,6 +1163,13 @@ FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
     if (const auto typeStr = tbl["aircraft"]["type"].value<std::string>(); typeStr && *typeStr == "helicopter") {
         validateRotorcraftCore(tbl, r);
         validateHelicopter(tbl, r);
+        return r;
+    }
+
+    // Surface vessels (#38): the ship-shaped reduced schema.
+    if (const auto typeStr = tbl["aircraft"]["type"].value<std::string>(); typeStr && *typeStr == "vessel") {
+        validateRotorcraftCore(tbl, r); // masses + inertias; wing geometry not required — same as rotorcraft
+        validateVessel(tbl, r);
         return r;
     }
 

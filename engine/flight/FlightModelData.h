@@ -25,7 +25,8 @@ enum class AircraftRole {
     Trainer,
     Ballistic,  // #354: an unwinged boost/coast vehicle — flown by BallisticForceModel, not wings
     Multirotor, // #349: a quad/hex/octo rotor frame — flown by MultirotorForceModel (thrust mixing)
-    Helicopter  // #350: a single-main-rotor helicopter — flown by HelicopterForceModel (rotor disc)
+    Helicopter, // #350: a single-main-rotor helicopter — flown by HelicopterForceModel (rotor disc)
+    Vessel      // #38: a surface ship (carrier, escort) — flown by VesselForceModel on the water floor
 };
 
 enum class PropRotation { CW, CCW, Contra };
@@ -303,6 +304,20 @@ struct HelicopterData {
     float autorotation_cd{1.2f};           // axial disc drag coefficient (the autorotation term)
 };
 
+// ── [vessel] (#38) ───────────────────────────────────────────────────────────
+// A surface ship as a controlled entity: propulsion along the keel, quadratic water drag sized so
+// the declared top speed is where thrust and drag meet, a rate-commanded rudder that needs
+// steerage way, and hard damping of everything a displacement hull does not do (roll, pitch,
+// sideslip). The ship rides the integrator's radial floor clamped to sea level — a moving carrier
+// is an ordinary ControlledEntity that replicates, takes damage, and is steered by any
+// IEntityController (a WaypointController drives a patrol track), not a bespoke platform system.
+struct VesselData {
+    float max_thrust_n{2.0e6f};  // propulsion at full ahead
+    float max_speed_mps{15.f};   // top speed; sizes the water drag (thrust = drag here)
+    float turn_rate_deg_s{1.5f}; // steady turn rate at full rudder and steerage way
+    float steerage_mps{2.f};     // below this speed the rudder has nothing to bite
+};
+
 struct CarrierData {
     float approach_m_s{69.f};
     float approach_aoa_deg{8.f};
@@ -361,6 +376,7 @@ struct FlightModelData {
     std::optional<DroneLimits> drone_limits;  // #351: fixed-wing UAV autopilot command envelope
     std::optional<MultirotorData> multirotor; // #349: present iff type = "multirotor"
     std::optional<HelicopterData> helicopter; // #350: present iff type = "helicopter"
+    std::optional<VesselData> vessel;         // #38: present iff type = "vessel"
     std::optional<CarrierData> carrier;
     std::optional<RefuelingData> refueling;
     std::optional<TankerData> tanker;
@@ -385,8 +401,11 @@ struct FlightModelData {
     [[nodiscard]] bool isRotorcraft() const noexcept {
         return isMultirotor() || isHelicopter();
     }
+    [[nodiscard]] bool isVessel() const noexcept {
+        return meta.role == AircraftRole::Vessel;
+    }
     [[nodiscard]] bool isFixedWing() const noexcept {
-        return !isBallistic() && !isRotorcraft();
+        return !isBallistic() && !isRotorcraft() && !isVessel();
     }
 };
 

@@ -19,11 +19,13 @@ TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game
     CHECK(sizeof(fl::MsgConnectAck) == 20u);      // #853: +grantedRole @16 (still record-aligned)
     CHECK(sizeof(fl::MsgConnectRequest) == 72u);  // #853: role + entity type + trailing pack manifest
     CHECK(sizeof(fl::PackManifestEntry) == 128u); // #872 wire half: id + version + reserved hash
-    CHECK(sizeof(fl::MsgEntityTypeDef) == 336u);  // #886 tail-appended category/projectileKind (332 -> 336)
+    CHECK(sizeof(fl::MsgEntityTypeDef) == 348u);  // #38 tail-appended deck footprint (336 -> 348)
     CHECK(sizeof(fl::MsgFactionDef) == 132u);     // #860: 1+1+2 + 64 + 64
     CHECK(offsetof(fl::MsgEntityTypeDef, name) == 268u);
     CHECK(offsetof(fl::MsgEntityTypeDef, category) == 332u);
     CHECK(offsetof(fl::MsgEntityTypeDef, projectileKind) == 333u);
+    CHECK(offsetof(fl::MsgEntityTypeDef, deckLengthM) == 336u); // #38: deck footprint tail-append
+    CHECK(offsetof(fl::MsgEntityTypeDef, deckHeightM) == 344u);
     CHECK(offsetof(fl::MsgFactionDef, factionIndex) == 2u);
     CHECK(offsetof(fl::MsgFactionDef, id) == 4u);
     CHECK(offsetof(fl::MsgFactionDef, name) == 68u);

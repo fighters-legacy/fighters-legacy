@@ -93,4 +93,53 @@ struct BuiltinFlightModel {
     }
 };
 
+// Compiled-in carrier vessel model (#38): what "builtin:carrier" sails with, so the whole
+// launch/recovery cycle is provable with zero content packs (the armed-sandbox doctrine). A
+// Nimitz-class silhouette in round numbers: ~100 kt displacement, 30+ kt flank speed, a slow
+// tactical-diameter turn. Resolved by fl-server's flight-model resolver when an EntityDef names
+// the asset "builtin:carrier-vessel".
+struct BuiltinCarrierVesselModel {
+    static std::shared_ptr<const FlightModelData> get() {
+        static std::shared_ptr<const FlightModelData> kInstance = [] {
+            auto d = std::make_shared<FlightModelData>();
+            d->meta.name = "builtin:carrier-vessel";
+            d->meta.role = AircraftRole::Vessel;
+
+            d->geometry.mass_kg = 9.0e7f; // ~100 000 t displacement, less fuel below
+            d->geometry.fuel_kg = 1.0e6f;
+            d->geometry.ixx_kg_m2 = 5.0e10f;
+            d->geometry.iyy_kg_m2 = 5.0e11f;
+            d->geometry.izz_kg_m2 = 5.0e11f;
+
+            VesselData v;
+            v.max_thrust_n = 8.0e6f; // meets the quadratic water drag at flank speed
+            v.max_speed_mps = 16.f;  // ~31 kt
+            v.turn_rate_deg_s = 1.0f;
+            v.steerage_mps = 2.f;
+            d->vessel = v;
+
+            // Endurance not modelled: a zero mil flow cannot starve (#308's fuel gate).
+            d->engine.fuel_flow_idle_kg_s = 0.f;
+            d->engine.fuel_flow_mil_kg_s = 0.f;
+            d->engine.fuel_flow_ab_kg_s = 0.f;
+            d->engine.spool_time_s = 10.f; // the telegraph answers slowly
+
+            // Benign placeholder aero (the reduced-schema discipline).
+            d->drag_polar.cd0 = 1.0f;
+            d->drag_polar.k = 0.f;
+            d->cl_table.rows = {-90.f, -30.f, 30.f, 90.f};
+            d->cl_table.cols = {0.f, 30.f};
+            d->cl_table.values.assign(8, 0.f);
+            d->engine.mil_thrust.rows = {0.f, 30.f};
+            d->engine.mil_thrust.cols = {0.f, 90.f};
+            d->engine.mil_thrust.values.assign(4, 0.f);
+            d->limits.alpha_stall_deg = 90.f;
+            d->limits.max_g_structural = 100.f;
+            d->limits.min_g_structural = -100.f;
+            return d;
+        }();
+        return kInstance;
+    }
+};
+
 } // namespace fl

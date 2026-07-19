@@ -424,6 +424,34 @@ Every field is optional and `0` disables that gate; the whole block absent is bi
 manned aircraft. `validate-flight-model` cross-checks the band and warns when `max_g` is at or
 above `max_g_structural` (the limit would never bind — the airframe breaks first).
 
+### Surface vessels — `type = "vessel"`
+
+A ship (#38) — a carrier, an escort — is an ordinary controlled entity flown by
+`VesselForceModel`: propulsion along the keel, quadratic water drag sized so the declared top speed
+is where thrust meets drag, a rate-commanded rudder that needs steerage way, and hard damping of
+everything a displacement hull does not do (roll, pitch, sideslip). It rides the radial ground
+floor clamped to **sea level** (never the seabed), replicates, takes damage, and is steered by any
+AI behavior (`--ai waypoint ...` drives a patrol track).
+
+```toml
+[aircraft]
+name = "Example Carrier"
+type = "vessel"               # engine_type not required
+
+[flight_model]                # masses + inertias required; wing fields not required
+mass_kg   = 90000000.0
+fuel_kg   = 0.0               # 0 with no [engine] flows = endurance not modelled (cannot starve)
+ixx_kg_m2 = 5.0e10
+iyy_kg_m2 = 5.0e11
+izz_kg_m2 = 5.0e11
+
+[vessel]                      # required for vessel models
+max_thrust_n    = 8000000.0   # full-ahead propulsion
+max_speed_mps   = 16.0        # top speed (thrust = drag here); ~31 kt
+turn_rate_deg_s = 1.0         # optional (default 1.5) — full-rudder steady turn rate
+steerage_mps    = 2.0         # optional (default 2) — below this the rudder has nothing to bite
+```
+
 ---
 
 ## Weapon Data — TOML
@@ -1562,9 +1590,39 @@ airport with the same `id` as a bundled one shadows it. A runway's footprint fla
 its field elevation (a flat pad plus a smooth blend to the surrounding terrain), so aircraft touch
 down at the authoritative elevation even where the base terrain is coarse.
 
-A **carrier or flight deck** is modelled as an ordinary entity that carries `accepts_landings = true`
-(under `[entity]`), so naval recovery reuses the same landing path as a land airfield — the same
-"this surface accepts landings" data property, whether it is a runway or a deck.
+A **carrier or flight deck** (#38) is an ordinary entity with `accepts_landings = true` (under
+`[entity]`), a `type = "vessel"` flight model so it moves, and a `[deck]` block describing the
+flight deck in **ship-local metres** (x forward along the keel, y up, z starboard, origin at the
+waterline). The deck plane becomes part of the ground floor under any aircraft over it — landing,
+parking, and the takeoff roll on a moving ship reuse the exact runway ground-handling path, aircraft
+parked on deck travel with the ship, and the collision system exempts aircraft at deck level (the
+landing path is not a mid-air). An aircraft stopped on the catapult stroke at military power is
+hooked up and shot to `cat_end_speed_mps` (or its own `[carrier] cat_min_m_s`, whichever is
+higher); a touchdown in the wire zone at or below `max_trap_speed_mps` catches a wire and is
+dragged to a stop (faster is a bolter); an LSO calls glideslope inside 3 nm on approach. The
+builtin `builtin:carrier` ships all of this with zero packs.
+
+```toml
+[entity]
+id = "my-pack:cvn"
+name = "Carrier"
+category = "naval_vehicle"
+max_hp = 8000.0
+collision_radius_m = 170.0
+accepts_landings = true
+flight_model = "cvn_vessel"     # a type = "vessel" flight model
+
+[deck]
+length_m = 330.0                # footprint along the keel (required)
+width_m  = 75.0                 # footprint abeam (required)
+height_m = 20.0                 # deck plane above the waterline origin (required)
+cat_start_x_m      = 30.0       # optional — catapult stroke start (runs forward)
+cat_stroke_m       = 100.0      # optional
+cat_end_speed_mps  = 75.0       # optional
+wire_x_m           = -110.0     # optional — arrest wire zone centre
+wire_zone_m        = 40.0       # optional — zone span along the keel
+max_trap_speed_mps = 80.0       # optional
+```
 
 ---
 

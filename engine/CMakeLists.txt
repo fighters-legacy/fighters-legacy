@@ -182,6 +182,7 @@ add_library(engine-flight STATIC
     flight/FixedWingForceModel.cpp
     flight/HelicopterForceModel.cpp
     flight/MultirotorForceModel.cpp
+    flight/VesselForceModel.cpp
     flight/Trim.cpp
 )
 target_include_directories(engine-flight PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
