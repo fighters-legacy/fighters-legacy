@@ -15,6 +15,8 @@ add_library(engine-ai STATIC
     BallisticGuidanceController.cpp
     GunsEmploymentController.cpp
     LowYoYoController.cpp
+    TakeoffController.cpp
+    LandingController.cpp
     FormationController.cpp
     SurfaceThreatControllers.cpp
     TurretGunnerController.cpp

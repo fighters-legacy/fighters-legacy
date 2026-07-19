@@ -431,6 +431,15 @@ target_link_libraries(test_ai_controllers PRIVATE engine-ai engine-entity engine
     Catch2::Catch2WithMain)
 catch_discover_tests(test_ai_controllers)
 
+# Takeoff / landing ground-and-pattern controllers (#701, ATC epic #673).
+add_executable(test_takeoff_controller test_takeoff_controller.cpp)
+target_link_libraries(test_takeoff_controller PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
+catch_discover_tests(test_takeoff_controller)
+
+add_executable(test_landing_controller test_landing_controller.cpp)
+target_link_libraries(test_landing_controller PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
+catch_discover_tests(test_landing_controller)
+
 # The scripted wingman grammar + its two wire messages (#610). Header-only + engine-protocol only.
 add_executable(test_wingman_command test_wingman_command.cpp)
 target_link_libraries(test_wingman_command PRIVATE engine-protocol engine-world engine-ai Catch2::Catch2WithMain)

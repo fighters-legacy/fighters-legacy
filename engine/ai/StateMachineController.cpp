@@ -3,6 +3,7 @@
 
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
+#include "flight/LocalFrame.h" // localAltitude / radialUp for the flight-regime conditions (#701)
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
 #include "world/FactionRegistry.h" // hostile()/areFactionsHostile — coalition-aware via ctx.factions (#632)
@@ -323,6 +324,23 @@ Condition NoContacts() {
         if (!ctx.contacts)
             return false; // an entity with no sensing must not conclude "all clear"
         return ctx.contacts->empty();
+    };
+}
+
+Condition AboveAltitude(float altM) {
+    return [altM](const fl::EntityState& self, const fl::EntityManager&, const fl::AiTickContext&) -> bool {
+        const glm::dvec3 pos(self.transform.pos[0], self.transform.pos[1], self.transform.pos[2]);
+        return fl::localAltitude(pos, fl::kEarthRadiusM) > static_cast<double>(altM);
+    };
+}
+
+Condition GroundSpeedBelow(float speedMps) {
+    return [speedMps](const fl::EntityState& self, const fl::EntityManager&, const fl::AiTickContext&) -> bool {
+        const glm::dvec3 pos(self.transform.pos[0], self.transform.pos[1], self.transform.pos[2]);
+        const glm::vec3 up = fl::radialUp(pos, fl::kEarthRadiusM);
+        const glm::vec3 v(self.transform.vel[0], self.transform.vel[1], self.transform.vel[2]);
+        const glm::vec3 horiz = v - glm::dot(v, up) * up;
+        return glm::length(horiz) < speedMps;
     };
 }
 

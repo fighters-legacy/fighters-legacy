@@ -188,6 +188,19 @@ Condition HasLockedContact();
 // Returns false when sensing was not evaluated (an AI with no sensors must not conclude "all clear").
 Condition NoContacts();
 
+// ── Flight-regime conditions (#701, for the ATC ground/pattern compositions) ─────────────────
+// Both measure against the local-level frame (radial altitude / tangent-plane ground speed) at Earth
+// radius, so they read correctly near the world origin; an airfield anywhere on the sphere resolves
+// through the same math the controllers use.
+
+// True when self's local (MSL) altitude exceeds altM. The climb-out gate for a departure: pass
+// runwayElev + climboutAgl to fire once the aircraft is safely airborne.
+Condition AboveAltitude(float altM);
+
+// True when self's horizontal ground speed is below speedMps. The "stopped on the runway" gate for
+// an arrival rollout, and the "cleared to taxi" gate for a departure at the hold-short line.
+Condition GroundSpeedBelow(float speedMps);
+
 // Always returns true. Useful as a final fallback transition.
 Condition Always();
 
