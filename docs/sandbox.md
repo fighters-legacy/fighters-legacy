@@ -329,6 +329,8 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 | `lua` | `<script_name>` | Load a Lua AI script from the content pack's `ai/` directory (e.g. `patrol`, `interceptor`). See `docs/modding/ai.md`. |
 | `patrol_attack` | `<entityIdx> [engageRangeM] [retreatHp]` | Three-state machine: loiter patrol → lead-pursuit engage when the target is **detected** within range → evade retreat when HP below threshold (defaults: engageRangeM=8000 m, retreatHp=0.25). **Sensing-gated (#690):** it engages what it has actually seen and reacted to, not whatever is within the radius |
 | `escort` | `<entityIdx> [standoffM]` | Two-state orbit protection: clockwise loiter at standoffM radius around the escorted entity, **tracking it as it moves** (#464) → Immelmann reversal when a **hostile** entity enters the inner defense zone (standoffM×0.5). Hostiles are classified by faction, so the escort and escortee should be spawned with the same non-neutral `--faction`; friendlies and neutrals are ignored. (default: standoffM=2000 m) |
+| `swarm` | `<cx> <cy> <cz> [neighborRadiusM] [separationRadiusM] [cruiseThrottle]` | Boids swarm member (#353): separation / alignment / cohesion with **same-type, same-faction** flockmates found through the spatial index, migrating toward the point. Spawn N identical entities with this behavior and they flock — there is no swarm object, so losing members degrades the flock, never breaks it. (defaults: 600 m, 120 m, 0.75) |
+| `swarm_follow` | `<entityIdx> [neighborRadiusM] [separationRadiusM] [cruiseThrottle]` | The same boids member, migrating after a **moving** anchor entity (e.g. a strike lead the swarm escorts) |
 
 **Weather presets:**
 

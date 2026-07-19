@@ -2976,3 +2976,134 @@ TEST_CASE("AiControllerFactory: sam and aaa grammar parses and validates (#863)"
     CHECK(fl::ai::createController("sam", bad, &em) == nullptr);
     CHECK(fl::ai::createController("aaa", bad, &em) == nullptr);
 }
+
+// ---------------------------------------------------------------------------
+// SwarmController (#353) — boids: separation / alignment / cohesion / migration
+// ---------------------------------------------------------------------------
+
+namespace {
+struct SwarmFixture {
+    NullLogger log;
+    fl::EntityTypeRegistry reg;
+    fl::EntityManager em;
+
+    SwarmFixture() : em(log, reg) {
+        reg.registerType(makeBasicDef());             // "test:basic"
+        reg.registerType(makeBasicDef("test:other")); // a different type: NOT a flockmate
+    }
+
+    fl::EntityId spawnAt(const char* type, double x, double y, double z, float vx = 0.f, float vy = 0.f,
+                         float vz = 0.f) {
+        fl::EntityTransform t{};
+        t.quat[3] = 1.f;
+        t.pos[0] = x;
+        t.pos[1] = y;
+        t.pos[2] = z;
+        t.vel[0] = vx;
+        t.vel[1] = vy;
+        t.vel[2] = vz;
+        return em.spawn(type, t);
+    }
+};
+} // namespace
+
+TEST_CASE("Swarm: separation steers away from a too-close flockmate", "[swarm]") {
+    SwarmFixture f;
+    auto self = f.spawnAt("test:basic", 0, 1000, 0);
+    f.spawnAt("test:basic", 0, 1000, 50); // 50 m to the RIGHT (+Z), inside separation radius
+
+    // Goal at own position → no migration pull; the boids terms decide alone.
+    fl::ai::SwarmController c(f.em, glm::dvec3{0, 1000, 0});
+    const auto ctrl = c.sample(*f.em.get(self), 0, 1.0 / 60.0);
+    CHECK(ctrl.aileron < 0.f); // separation (away, -Z) outweighs cohesion (toward, +Z): turn LEFT
+}
+
+TEST_CASE("Swarm: cohesion steers toward a distant flockmate", "[swarm]") {
+    SwarmFixture f;
+    auto self = f.spawnAt("test:basic", 0, 1000, 0);
+    f.spawnAt("test:basic", 0, 1000, 400); // to the right, outside the separation radius
+
+    fl::ai::SwarmController c(f.em, glm::dvec3{0, 1000, 0});
+    const auto ctrl = c.sample(*f.em.get(self), 0, 1.0 / 60.0);
+    CHECK(ctrl.aileron > 0.f); // turn RIGHT toward the flock centre
+}
+
+TEST_CASE("Swarm: speed matching nudges throttle toward the flock's pace", "[swarm]") {
+    SwarmFixture f;
+    auto self = f.spawnAt("test:basic", 0, 1000, 0, 50.f, 0.f, 0.f);
+    f.spawnAt("test:basic", 0, 1000, 300, 120.f, 0.f, 0.f); // flockmate going much faster
+
+    fl::ai::SwarmController c(f.em, glm::dvec3{0, 1000, 0});
+    const auto ctrl = c.sample(*f.em.get(self), 0, 1.0 / 60.0);
+    CHECK(ctrl.throttle > 0.75f); // above cruise: catch up
+}
+
+TEST_CASE("Swarm: a different entity type is not a flockmate", "[swarm]") {
+    SwarmFixture f;
+    auto self = f.spawnAt("test:basic", 0, 1000, 0);
+    f.spawnAt("test:other", 0, 1000, 50); // close, but a different type
+
+    fl::ai::SwarmController c(f.em, fl::EntityId{}); // no goal either
+    const auto ctrl = c.sample(*f.em.get(self), 0, 1.0 / 60.0);
+    CHECK(ctrl.aileron == 0.f); // nothing to flock with, nothing to fly to
+    CHECK(ctrl.throttle == Catch::Approx(0.75f));
+}
+
+TEST_CASE("Swarm: migration pulls toward the goal point when alone", "[swarm]") {
+    SwarmFixture f;
+    auto self = f.spawnAt("test:basic", 0, 1000, 0);
+
+    fl::ai::SwarmController c(f.em, glm::dvec3{0, 1000, 4000}); // goal to the right
+    const auto ctrl = c.sample(*f.em.get(self), 0, 1.0 / 60.0);
+    CHECK(ctrl.aileron > 0.f);
+}
+
+TEST_CASE("Swarm: swarm_follow migrates after a moving anchor entity", "[swarm]") {
+    SwarmFixture f;
+    auto self = f.spawnAt("test:basic", 0, 1000, 0);
+    auto anchor = f.spawnAt("test:other", 0, 1000, 3000);
+
+    fl::ai::SwarmController c(f.em, anchor);
+    CHECK(c.sample(*f.em.get(self), 0, 1.0 / 60.0).aileron > 0.f);
+
+    // Anchor moves to the LEFT: the pull follows it.
+    f.em.get(anchor)->transform.pos[2] = -3000;
+    CHECK(c.sample(*f.em.get(self), 0, 1.0 / 60.0).aileron < 0.f);
+}
+
+TEST_CASE("Swarm: the spatial-index path finds the same flockmates", "[swarm]") {
+    SwarmFixture f;
+    auto self = f.spawnAt("test:basic", 0, 1000, 0);
+    auto mate = f.spawnAt("test:basic", 0, 1000, 400);
+
+    fl::SpatialIndex si;
+    f.em.forEach([&](const fl::EntityState& s) { si.insert(s.id.index, s.transform.pos); });
+    (void)mate;
+
+    fl::ai::SwarmController c(f.em, glm::dvec3{0, 1000, 0});
+    fl::AiTickContext ctx{};
+    ctx.si = &si;
+    const auto ctrl = c.sample(*f.em.get(self), 0, 1.0 / 60.0, ctx);
+    CHECK(ctrl.aileron > 0.f); // cohesion toward the flockmate, exactly as the scan path found
+}
+
+TEST_CASE("AiControllerFactory: swarm and swarm_follow from string args", "[swarm]") {
+    SwarmFixture f;
+    auto anchor = f.spawnAt("test:basic", 0, 1000, 0);
+
+    std::vector<std::string_view> point = {"0", "1000", "0"};
+    CHECK(fl::ai::createController("swarm", std::span{point}, &f.em) != nullptr);
+
+    std::vector<std::string_view> tuned = {"0", "1000", "0", "800", "150", "0.8"};
+    CHECK(fl::ai::createController("swarm", std::span{tuned}, &f.em) != nullptr);
+
+    std::vector<std::string_view> tooFew = {"0", "1000"};
+    CHECK(fl::ai::createController("swarm", std::span{tooFew}, &f.em) == nullptr);
+
+    std::string idxStr = std::to_string(anchor.index);
+    std::vector<std::string_view> follow = {idxStr};
+    CHECK(fl::ai::createController("swarm_follow", std::span{follow}, &f.em) != nullptr);
+
+    std::vector<std::string_view> ghost = {"9999"};
+    CHECK(fl::ai::createController("swarm_follow", std::span{ghost}, &f.em) == nullptr);
+}
