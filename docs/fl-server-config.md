@@ -30,6 +30,7 @@ multi-key sections). See [Environment variables](#environment-variables) for the
 | `--bind <addr>` | IP or hostname | Override `server.bind_address` from the command line; takes precedence over `server.toml` and `FL_BIND_ADDRESS`. Used by the game client when spawning fl-server for single-player mode (`--bind 127.0.0.1`). |
 | `--metrics-json <path>` | file path | Write the per-phase tick-budget JSON to `<path>`; overrides `[metrics] tick_json_path`. See [metrics](#metrics--tick-budget-export). |
 | `--mission <name>` | mission name | Load a mission at startup; overrides `[rotation]`. Resolution order: a builtin id (`builtin:sandbox`, `builtin:shape-gallery`) → a readable `.yaml`/`.yml` **file path** (the authoring loop — iterate a mission without mounting a pack; lint it with `validate-mission` first) → a pack Mission asset stem. See [rotation](#rotation--scenario-rotation). |
+| `--campaign <file>` | campaign YAML | Run a **dynamic campaign** (#584): fly the campaign engine's current sortie — a story mission at its trigger, or a generated dynamic template with its `${...}` fills resolved. On the objective outcome the campaign advances and its state is saved to `cache/campaign_<name>.flsave`, so a restart continues the persistent war. Composes with `--mission-report` for headless campaign testing. Campaign schema: [docs/modding/formats.md](modding/formats.md). |
 
 CLI positional arguments (Tier 2): `fl-server [port] [maxPeers]`
 
