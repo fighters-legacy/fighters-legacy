@@ -316,6 +316,23 @@ target_link_libraries(engine-mission
     PRIVATE yaml-cpp::yaml-cpp
 )
 
+# Deterministic dynamic-campaign runtime (#635): the theater-graph + frontline state machine that the
+# campaign director (#590) later drives. parseCampaign owns the campaign schema (validate-campaign #784
+# delegates to it). Frontline holds decoded pixels only — no image library — so it stays unit-testable.
+# Reaches no client backend.
+add_library(engine-campaign STATIC
+    campaign/Frontline.cpp
+    campaign/CampaignParser.cpp
+    campaign/CampaignEngine.cpp
+    campaign/MissionTemplate.cpp
+    campaign/CampaignRunner.cpp
+)
+target_include_directories(engine-campaign PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-campaign
+    PUBLIC  engine-entity   # GLM + engine/ include dir; flight/Geodetic.h (world<->geodetic mapping)
+    PRIVATE yaml-cpp::yaml-cpp
+)
+
 # Data-parallel task scheduler: persistent worker pool + blocking parallel_for. Declared before
 # engine-net so the broadcaster can link it for the parallel sim tick.
 add_library(engine-job STATIC

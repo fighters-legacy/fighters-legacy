@@ -741,9 +741,10 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                             std::unique_ptr<fl::IEntityController> ctrl;
 
                             if (!luaScriptSrc.empty()) {
-                                // Lua AI controller — constructed on sim thread.
-                                auto luaCtrl =
-                                    std::make_unique<LuaController>(luaScriptSrc, luaScriptRoot, ctx.sim.entityManager);
+                                // Lua AI controller — constructed on sim thread; the world.* seam (#413)
+                                // lets an admin-spawned script reach spawn/faction/mission/music too.
+                                auto luaCtrl = std::make_unique<LuaController>(luaScriptSrc, luaScriptRoot,
+                                                                               ctx.sim.entityManager, ctx.sim.worldApi);
                                 if (luaCtrl->isValid()) {
                                     ctrl = std::move(luaCtrl);
                                 } else {

@@ -37,6 +37,14 @@ class WeatherController {
     void setWind(float headingDeg, float speedMs); // meteorological: FROM direction; clears any profile
     void setDate(int year, int month, int day);    // UTC calendar date for the geographic sun (#481)
 
+    // Per-mission time scale (#207): game seconds per real second for the day/night clock. The mission
+    // loader applies the mission's `time_scale` here (applyMission), overriding the server-config default.
+    // Non-positive values are ignored (a frozen clock is a bug, not a feature). Sim-thread only.
+    void setTimeScaleRatio(float ratio) noexcept;
+    [[nodiscard]] float timeScaleRatio() const noexcept {
+        return m_params.timeScaleRatio;
+    }
+
     // Altitude wind profile (#489). A knot is authored meteorologically: altitude (m MSL), speed (m/s),
     // and the heading the wind blows FROM (deg). setWindProfile converts each to a world-frame vector
     // ONCE here (no per-frame libm; the client interpolates the vectors), sorts by altitude, and caps

@@ -193,9 +193,20 @@ struct ClientNetEventHandler : INetworkEventHandler {
         uint32_t kills{0};
         uint32_t losses{0};
         int32_t score{0};
+        // Per-target-class kills THIS peer scored, indexed by ObjectCategory ordinal (#674). Fed from
+        // the Kill records (victim classified via the type registry) so the debrief can write the
+        // pilot logbook's per-class tally. Sums to at most `kills` (a kill with an unknown victim
+        // type is still counted in `kills` but may miss a class here).
+        uint32_t killsByClass[8]{};
     };
     const SessionCombatStats& sessionStats() const noexcept {
         return m_sessionStats;
+    }
+
+    // The mission's terminal outcome (#584), from MsgMissionOutcome. Incomplete until the objective
+    // evaluator ends the mission; the debrief reads it so it stops hardcoding success. Main-thread only.
+    [[nodiscard]] fl::MissionResultCode missionOutcome() const noexcept {
+        return m_missionOutcome;
     }
 
     // Issue a monotonically incrementing request ID for the next MsgAdminCommand.
@@ -245,6 +256,15 @@ struct ClientNetEventHandler : INetworkEventHandler {
     static constexpr uint32_t kNoAckedSeqNum = 0xFFFFFFFFu;
     std::function<void(RenderSnapshot&, uint64_t, uint32_t, uint32_t)> snapshotCallback;
 
+    // Optional: called when the server sends a MsgMusicState (#413/#166), with the GameState ordinal.
+    // Game.cpp wires it to MusicManager::setState so a mission/AI script's world.set_music_state()
+    // drives the client's music. Null = ignored. Main-thread only (onReceive runs on the main thread).
+    std::function<void(uint8_t)> musicStateCallback;
+
+    // Optional: called on a MsgHaptic (#128) with (HapticKind ordinal, a, b, durationMs). Game.cpp wires
+    // it to the local gamepad via IInput. Null = ignored. Main-thread only.
+    std::function<void(uint8_t, float, float, uint16_t)> hapticCallback;
+
   private:
     // Store f into *sessionFailure if it is still None (first-writer-wins via CAS); no-op if unset.
     void signalFailure(SessionFailure f);
@@ -253,7 +273,8 @@ struct ClientNetEventHandler : INetworkEventHandler {
     PeerRole m_grantedRole{PeerRole::Pilot}; // role granted by MsgConnectAck (#857)
     bool m_gotConnectAck{false};             // true once a MsgConnectAck arrives; "was I admitted?" (#853)
     float m_planetRadiusKm{6371.f};
-    SessionCombatStats m_sessionStats{};        // #626 — fed by CombatEvent Stats records
+    SessionCombatStats m_sessionStats{}; // #626 — fed by CombatEvent Stats records
+    fl::MissionResultCode m_missionOutcome{fl::MissionResultCode::Incomplete}; // #584 — from MsgMissionOutcome
     uint16_t m_nextReqId{1};                    // next reqId to stamp on outgoing MsgAdminCommand
     std::atomic<uint16_t> m_serverPeerCount{0}; // updated from SnapshotPeerCount TLV extension
 

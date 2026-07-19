@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "config/PilotLogbook.h"
+
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -13,6 +15,7 @@ struct PilotProfile {
     int kills = 0;
     int losses = 0;
     int64_t flightTimeS = 0; // total accumulated seconds
+    PilotLogbook logbook{};  // career record: kill tallies, weapon accuracy, missions/ejections (#674)
 };
 
 struct PilotCampaignState {

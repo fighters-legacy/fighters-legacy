@@ -47,6 +47,11 @@ target_link_libraries(test_entity PRIVATE Catch2::Catch2WithMain engine-entity e
 target_include_directories(test_entity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_entity)
 
+# Ejection / pilot survival model (#672): pure envelope + territory -> outcome logic (header-only).
+add_executable(test_ejection test_ejection.cpp)
+target_link_libraries(test_ejection PRIVATE Catch2::Catch2WithMain engine-entity)
+catch_discover_tests(test_ejection)
+
 add_executable(test_atmosphere test_atmosphere.cpp)
 target_link_libraries(test_atmosphere PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_atmosphere)
@@ -612,6 +617,13 @@ add_executable(test_mission_runtime test_mission_runtime.cpp)
 target_link_libraries(test_mission_runtime
     PRIVATE Catch2::Catch2WithMain engine-mission validate-mission-lib)
 catch_discover_tests(test_mission_runtime)
+
+# engine-campaign (#635): the deterministic dynamic-campaign runtime — frontline raster, campaign
+# schema parser, and the theater-graph state machine (story injection, dynamic selection, save/restore).
+add_executable(test_campaign test_campaign.cpp)
+target_link_libraries(test_campaign
+    PRIVATE Catch2::Catch2WithMain engine-campaign engine-mission) # engine-mission: a generated sortie must parse
+catch_discover_tests(test_campaign)
 
 add_executable(test_validate_licenses test_validate_licenses.cpp)
 target_link_libraries(test_validate_licenses

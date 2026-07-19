@@ -258,9 +258,59 @@ TEST_CASE("applyMission spawns world objects with faction, separates player slot
     CHECK(sam->factionIndex == factions.indexOf("russia"));
     CHECK(sam->transform.pos[0] == 15000.0);
 
-    // Weather / time / wind applied to the controller.
+    // Weather / time / wind / time-scale applied to the controller.
     CHECK(weather.preset() == WeatherPreset::Rain);
-    CHECK(weather.timeOfDay() == 14.5f); // 14:30
+    CHECK(weather.timeOfDay() == 14.5f);      // 14:30
+    CHECK(weather.timeScaleRatio() == 20.0f); // #207: mission time_scale overrides the default (10)
+}
+
+TEST_CASE("WeatherController::setTimeScaleRatio ignores non-positive ratios (#207)", "[weather]") {
+    WeatherController wc;
+    const float base = wc.timeScaleRatio();
+    wc.setTimeScaleRatio(30.f);
+    CHECK(wc.timeScaleRatio() == 30.f);
+    wc.setTimeScaleRatio(0.f); // frozen clock is a content bug -> ignored
+    CHECK(wc.timeScaleRatio() == 30.f);
+    wc.setTimeScaleRatio(-5.f); // reversed clock -> ignored
+    CHECK(wc.timeScaleRatio() == 30.f);
+    (void)base;
+}
+
+TEST_CASE("applyMission leaves the time scale untouched when the mission omits it (#207)", "[mission-setup]") {
+    // A mission without a `time_scale:` field must not reset the host-configured rate.
+    const char* noScale = R"yaml(
+name: NoScale
+map: world
+layer: world_clear
+time: { hour: 12, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [nato, russia]
+objects:
+  - type: SA10
+    id: sam1
+    side: russia
+    pos: [0, 0, 0]
+    heading: 0
+triggers:
+  - on: timer(1)
+    do: mission_success
+)yaml";
+    auto parsed = parseMission(noScale);
+    for (const auto& e : parsed.errors)
+        UNSCOPED_INFO("parse error: " << e);
+    REQUIRE(parsed.ok);
+    CHECK_FALSE(parsed.mission.timeScale.has_value());
+
+    NullLogger log;
+    EntityTypeRegistry reg;
+    reg.registerType(makeDef("SA10"));
+    EntityManager em(log, reg);
+    FactionRegistry factions;
+    WeatherControllerParams p;
+    p.timeScaleRatio = 42.f; // host-configured default
+    WeatherController weather(p);
+    applyMission(parsed.mission, em, factions, &weather);
+    CHECK(weather.timeScaleRatio() == 42.f); // preserved
 }
 
 TEST_CASE("applyMission warns (does not crash) on an unregistered object type", "[mission-setup]") {
@@ -646,6 +696,56 @@ TEST_CASE("MissionRuntime: triggers fire in declaration order; non-terminal acti
     CHECK(dispatched[0] == "spawn(Su27,red,0,0,0)");
     CHECK(rt.outcome().state == MissionState::Complete); // the second trigger ended the mission
     CHECK(rt.outcome().triggersFired == 2u);
+}
+
+TEST_CASE("MissionRuntime: a weather trigger action is dispatched verbatim for the admin path (#212)",
+          "[mission-runtime]") {
+    // A `do: set_weather storm` trigger routes the whole action string to the injected dispatcher, which
+    // fl-server points at the validated admin command path (set_weather storm). The mission stays Active
+    // (weather is non-terminal); a later trigger ends it.
+    NullLogger log;
+    EntityTypeRegistry reg;
+    EntityManager em(log, reg);
+    Mission m = missionWith({{"mission_start", "set_weather storm"}, {"timer(5)", "mission_success"}});
+
+    std::vector<std::string> dispatched;
+    MissionRuntime rt(m, {}, em, [&](std::string_view a) { dispatched.emplace_back(a); });
+    rt.step(0);
+    REQUIRE(dispatched.size() == 1u);
+    CHECK(dispatched[0] == "set_weather storm"); // verbatim → adminRegistry.dispatch tokenizes it
+    CHECK(rt.outcome().state == MissionState::Active);
+
+    rt.step(60 * 6); // past timer(5)
+    CHECK(rt.outcome().state == MissionState::Complete);
+}
+
+TEST_CASE("MissionRuntime::forceOutcome ends the mission from outside the trigger table (#413)", "[mission-runtime]") {
+    // world.mission_success()/mission_failure() route here through the WorldApi seam. First outcome
+    // wins; the end hook fires exactly once.
+    NullLogger log;
+    EntityTypeRegistry reg;
+    EntityManager em(log, reg);
+    Mission m = missionWith({{"timer(999)", "mission_success"}}); // would not fire for a long time
+
+    int ends = 0;
+    MissionOutcome captured;
+    MissionRuntime rt(m, {}, em);
+    rt.setOnEnd([&](const MissionOutcome& o) {
+        ++ends;
+        captured = o;
+    });
+    rt.step(0);
+    CHECK(rt.outcome().state == MissionState::Active);
+
+    rt.forceOutcome(false); // a Lua script calls world.mission_failure()
+    CHECK(rt.done());
+    CHECK(rt.outcome().state == MissionState::Failed);
+    CHECK(ends == 1);
+    CHECK(captured.state == MissionState::Failed);
+
+    rt.forceOutcome(true); // ignored — first terminal outcome wins
+    CHECK(rt.outcome().state == MissionState::Failed);
+    CHECK(ends == 1);
 }
 
 TEST_CASE("MissionRuntime: a trigger fires exactly once (edge), not every tick", "[mission-runtime]") {

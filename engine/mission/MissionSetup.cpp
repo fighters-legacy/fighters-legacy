@@ -126,8 +126,12 @@ MissionSetupResult applyMission(const Mission& mission, EntityManager& em, Facti
             onSpawned(id, obj);
     }
 
-    // ── weather / time / wind ─────────────────────────────────────────────────────
+    // ── weather / time / wind / time-scale ────────────────────────────────────────
     if (weather) {
+        // Per-mission time scale (#207): applied first so the mission's declared day/night rate is in
+        // effect from tick 0. Absent = keep whatever the host constructed the controller with.
+        if (mission.timeScale)
+            weather->setTimeScaleRatio(*mission.timeScale);
         if (mission.weatherPreset)
             weather->setPreset(*mission.weatherPreset);
         weather->setTimeOfDay(static_cast<float>(mission.time.hour) + static_cast<float>(mission.time.minute) / 60.f);

@@ -24,6 +24,7 @@ class EntityManager;
 class EntityTypeRegistry;
 class WeatherController;
 class WorldBroadcaster;
+struct WorldApi;
 
 // Context injected into server admin commands, grouped by concern. All pointers may be nullptr;
 // commands check for their required pointers and return an error string if unavailable.
@@ -34,7 +35,8 @@ struct ServerCommandContext {
         EntityManager* entityManager{nullptr};
         EntityTypeRegistry* typeRegistry{nullptr};
         WeatherController* weatherController{nullptr};
-        GameLoop* gameLoop{nullptr}; // for enqueueSimCallback
+        GameLoop* gameLoop{nullptr};       // for enqueueSimCallback
+        const WorldApi* worldApi{nullptr}; // world.* host seam for spawned Lua controllers (#413)
     } sim;
 
     // Process/runtime environment.
