@@ -1143,6 +1143,11 @@ post-integrate position of every live entity for the last 32 ticks (≈533 ms at
 - **Players only.** AI shooters have no latency and rewind 0 ticks. Missiles, rockets, and
   bombs fly in real time and never rewind — a projectile is a physical object in the current
   world, not an instantaneous ray. Both are deliberate.
+- **Keyed off the shooting SEAT's occupant (#979).** A turret gunner's gun rewinds by the
+  *gunner's* latency, not the pilot's — the rewind reads `occupantPeerFor(airframe, seat)`, which
+  resolves to the gunner for a crew seat and the pilot for the Fly seat; the airframe-owner
+  fallback keeps the single-seat case unchanged. The turret slew stays server-authoritative, so a
+  gunner cannot claim a bore its physical turret could not have reached within its slew/arc limits.
 - **Generation-checked.** Each history entry stores the entity generation; a recycled pool slot
   can never be hit through history. An entity that did not exist at the rewound tick is tested
   at its current position instead (the shooter could not have seen it, but it is physically in

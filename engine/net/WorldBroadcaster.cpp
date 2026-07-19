@@ -2281,13 +2281,21 @@ void WorldBroadcaster::resolveHitscan(const FireRequest& req, const WeaponDef& d
     const double range = static_cast<double>(def.performance.maxRangeM);
     const glm::dvec3 origin{shooter->transform.pos[0], shooter->transform.pos[1], shooter->transform.pos[2]};
 
-    // Lag compensation (#425): a PLAYER's gun tests targets where they were when the shooter saw
+    // Lag compensation (#425/#979): a PLAYER's gun tests targets where they were when the shooter saw
     // them — `tickIndex − estimatedDelayTicks`, clamped to the history ring (≈533 ms; the bound on
     // the "shot from around the corner" effect, see docs/network-protocol.md). AI shooters have no
     // latency and rewind 0; projectiles fly real-time and never rewind — both deliberate.
+    //
+    // The rewind is keyed off the SHOOTING SEAT'S occupant (#979): a turret gunner's shot must
+    // compensate by the GUNNER's latency, not the pilot's — occupantPeerFor(airframe, seat) returns
+    // the gunner for a crew seat and the pilot for the Fly seat (whose m_peerSeat binding is the fly
+    // seat), so this covers both. The airframe-owner fallback preserves the single-seat / no-seat case.
+    uint32_t shootingPeer = occupantPeerFor(shooter->id, req.seat);
+    if (shootingPeer == kNoOwningPeer)
+        shootingPeer = peerIdForEntity(shooter->id);
     uint64_t rewindTicks = 0;
-    if (const uint32_t peerId = peerIdForEntity(shooter->id); peerId != kNoOwningPeer) {
-        if (const auto pit = m_peerInputs.find(peerId); pit != m_peerInputs.end())
+    if (shootingPeer != kNoOwningPeer) {
+        if (const auto pit = m_peerInputs.find(shootingPeer); pit != m_peerInputs.end())
             rewindTicks = std::min<uint64_t>(pit->second.estimatedDelayTicks, TransformHistory::kHistoryTicks - 1);
     }
     rewindTicks = std::min(rewindTicks, tickIndex);

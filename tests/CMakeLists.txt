@@ -943,6 +943,14 @@ target_include_directories(test_crew_seat_menu PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
 catch_discover_tests(test_crew_seat_menu)
 
+# Client turret pose predictor (#979): the pure stepTurret-reuse predictor (no SDL). engine-weapon owns
+# the shared servo (stepTurret/turretWorldDir).
+add_executable(test_turret_predictor test_turret_predictor.cpp)
+target_link_libraries(test_turret_predictor PRIVATE Catch2::Catch2WithMain engine-weapon)
+target_include_directories(test_turret_predictor PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
+catch_discover_tests(test_turret_predictor)
+
 # The client/server flight-model parity gate (#811): drives the real WorldBroadcaster connect path
 # and the real client-side resolver, and asserts the two integrate the same aeroplane.
 add_executable(test_prediction_parity test_prediction_parity.cpp
