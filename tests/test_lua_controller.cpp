@@ -949,3 +949,71 @@ TEST_CASE("world.* bindings are present even without a host and world.get_elapse
     auto ctrl = c->sample(makeState(), 1, 0.5); // +0.5 s
     CHECK(ctrl.throttle > 0.5f);                // elapsed accumulated across ticks
 }
+
+// ---------------------------------------------------------------------------
+// Haptics (#128)
+// ---------------------------------------------------------------------------
+
+namespace {
+struct RecordingHaptics {
+    fl::WorldApi api;
+    std::vector<std::string> rumbles;  // "low,high,dur"
+    std::vector<std::string> triggers; // "left,right,dur"
+    int stops{0};
+    RecordingHaptics() {
+        api.rumble = [this](float low, float high, uint32_t dur) {
+            char b[64];
+            std::snprintf(b, sizeof(b), "%.2f,%.2f,%u", low, high, dur);
+            rumbles.emplace_back(b);
+        };
+        api.rumbleTriggers = [this](float l, float r, uint32_t dur) {
+            char b[64];
+            std::snprintf(b, sizeof(b), "%.2f,%.2f,%u", l, r, dur);
+            triggers.emplace_back(b);
+        };
+        api.stopRumble = [this]() { ++stops; };
+    }
+};
+} // namespace
+
+TEST_CASE("rumble / rumble_triggers / stop_rumble route to the host seam (#128)") {
+    RecordingHaptics h;
+    auto c = std::make_unique<LuaController>("function compute_control(s,t,dt)\n"
+                                             "  rumble(0.5, 0.8, 200)\n"
+                                             "  rumble_triggers(0.1, 0.2, 100)\n"
+                                             "  stop_rumble()\n"
+                                             "  return {}\n"
+                                             "end",
+                                             "", nullptr, &h.api);
+    REQUIRE(c->isValid());
+    c->sample(makeState(), 0, 1.0 / 60.0);
+    REQUIRE(h.rumbles.size() == 1u);
+    CHECK(h.rumbles[0] == "0.50,0.80,200");
+    REQUIRE(h.triggers.size() == 1u);
+    CHECK(h.triggers[0] == "0.10,0.20,100");
+    CHECK(h.stops == 1);
+}
+
+TEST_CASE("rumble clamps intensity to [0,1] and duration to the cap (#128)") {
+    RecordingHaptics h;
+    // A mod cannot lock rumble on: intensities clamp to 1.0, duration to 5000 ms.
+    auto c = std::make_unique<LuaController>("function compute_control(s,t,dt)\n"
+                                             "  rumble(9.0, -3.0, 999999)\n"
+                                             "  return {}\n"
+                                             "end",
+                                             "", nullptr, &h.api);
+    REQUIRE(c->isValid());
+    c->sample(makeState(), 0, 1.0 / 60.0);
+    REQUIRE(h.rumbles.size() == 1u);
+    CHECK(h.rumbles[0] == "1.00,0.00,5000"); // clamped
+}
+
+TEST_CASE("haptic bindings are present and safe no-ops without a host (#128)") {
+    auto c = makeCtrl("function compute_control(s,t,dt)\n"
+                      "  rumble(1,1,100); stop_rumble()\n"
+                      "  return {throttle=0.3}\n"
+                      "end");
+    REQUIRE(c->isValid());
+    auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0); // no WorldApi -> no crash
+    CHECK(ctrl.throttle == Catch::Approx(0.3f));
+}

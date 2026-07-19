@@ -957,6 +957,22 @@ void Game::startGame(const std::string& mission) {
             if (fl::isGameStateOrdinal(state))
                 d.services.musicManager.setState(static_cast<fl::GameState>(state));
         };
+        // Scripted haptics (#128): a Lua rumble()/rumble_triggers()/stop_rumble() plays on the local
+        // (current-player) gamepad 0. Args are already clamped server-side by the engine binding.
+        d.session.clientHandler->hapticCallback = [&d](uint8_t kind, float a, float b, uint16_t durMs) {
+            fl::IInput& in = *d.services.p.input;
+            switch (static_cast<fl::HapticKind>(kind)) {
+            case fl::HapticKind::Rumble:
+                in.rumble(0, a, b, durMs);
+                break;
+            case fl::HapticKind::Triggers:
+                in.rumbleTriggers(0, a, b, durMs);
+                break;
+            case fl::HapticKind::Stop:
+                in.stopRumble(0);
+                break;
+            }
+        };
         d.session.clientHandler->motdDisplaySeconds = d.services.userConfig->client().motdDisplayS;
         d.session.clientHandler->sessionFailure = &d.session.sessionFailure;
         // Connect-handshake inputs (#853/#834/#857): request a specific aircraft if --aircraft was given

@@ -14,6 +14,7 @@
 // (a music broadcast queued for the network flush). None of these hooks may block.
 
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <string>
 
@@ -43,6 +44,15 @@ struct WorldApi {
     // End the current mission with success (true) or failure (false). The host drives the objective
     // state machine to the terminal state (as if a mission_success/mission_failure trigger fired).
     std::function<void(bool success)> setMissionOutcome;
+
+    // Haptic feedback (#128). A script never touches the IInput HAL directly; these route to the host,
+    // which resolves "the current player's gamepad" (never a gamepad id from the script) and, on a
+    // dedicated server, broadcasts the event to clients to play on their local pad. The engine binding
+    // clamps the arguments before calling these (freqs [0,1], duration capped), so an untrusted mod
+    // cannot lock rumble on. All three are no-ops when unset.
+    std::function<void(float lowFreq, float highFreq, uint32_t durationMs)> rumble;
+    std::function<void(float leftTrigger, float rightTrigger, uint32_t durationMs)> rumbleTriggers;
+    std::function<void()> stopRumble;
 };
 
 } // namespace fl

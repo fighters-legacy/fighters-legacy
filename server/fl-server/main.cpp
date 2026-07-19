@@ -1022,6 +1022,19 @@ int main(int argc, char** argv) {
         if (missionRuntime)
             missionRuntime->forceOutcome(success);
     };
+    // Haptics (#128): a script's rumble()/rumble_triggers()/stop_rumble() reaches every client, which
+    // plays it on its local gamepad. Args are already clamped by the engine binding.
+    worldApi.rumble = [&](float low, float high, uint32_t durMs) {
+        broadcaster.broadcastHaptic(static_cast<uint8_t>(fl::HapticKind::Rumble), low, high,
+                                    static_cast<uint16_t>(durMs));
+    };
+    worldApi.rumbleTriggers = [&](float left, float right, uint32_t durMs) {
+        broadcaster.broadcastHaptic(static_cast<uint8_t>(fl::HapticKind::Triggers), left, right,
+                                    static_cast<uint16_t>(durMs));
+    };
+    worldApi.stopRumble = [&]() {
+        broadcaster.broadcastHaptic(static_cast<uint8_t>(fl::HapticKind::Stop), 0.f, 0.f, 0);
+    };
 
     if (!missionToLoad.empty()) {
         // Resolution precedence (loadMissionYaml): builtin id (#868, zero-pack) -> a readable

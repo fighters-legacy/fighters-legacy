@@ -250,6 +250,10 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // drives the client's music. Null = ignored. Main-thread only (onReceive runs on the main thread).
     std::function<void(uint8_t)> musicStateCallback;
 
+    // Optional: called on a MsgHaptic (#128) with (HapticKind ordinal, a, b, durationMs). Game.cpp wires
+    // it to the local gamepad via IInput. Null = ignored. Main-thread only.
+    std::function<void(uint8_t, float, float, uint16_t)> hapticCallback;
+
   private:
     // Store f into *sessionFailure if it is still None (first-writer-wins via CAS); no-op if unset.
     void signalFailure(SessionFailure f);

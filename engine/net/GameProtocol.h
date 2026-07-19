@@ -89,6 +89,9 @@ enum class MsgId : uint8_t {
     MusicState = 0x16,         // server->client, reliable: request a client music-state transition (#413/
                                // #166). Broadcast when a Lua/mission script calls world.set_music_state();
                                // carries a GameState ordinal. Additive id, old clients discard.
+    Haptic = 0x17,             // server->client, reliable: a scripted rumble/trigger-rumble/stop request
+                               // (#128) from a Lua script's rumble()/rumble_triggers()/stop_rumble().
+                               // Each client plays it on its local (current-player) gamepad. Additive id.
     LanBeacon = 0x20,          // raw UDP broadcast - NOT sent over ENet; 0x20+ reserved for non-ENet ids.
                                // ENet message ids occupy 0x00-0x1F. The non-ENet boundary was raised
                                // from 0x10 to 0x20 in #853 to free an ENet id for ConnectRequest -- a
@@ -476,6 +479,22 @@ struct MsgMusicState {
     uint16_t reserved{0};
 }; // 4 bytes, align 2
 static_assert(sizeof(MsgMusicState) == 4u, "MsgMusicState wire size changed");
+
+// Scripted haptic feedback (#128): a Lua script's rumble()/rumble_triggers()/stop_rumble() reaches the
+// client as this message; the client plays it on its local gamepad (id 0 = the current player). The
+// engine binding clamps a/b to [0,1] and durationMs to [0, 5000] before it is sent.
+enum class HapticKind : uint8_t { Rumble = 0, Triggers = 1, Stop = 2 };
+[[nodiscard]] inline bool isHapticKindOrdinal(uint8_t v) noexcept {
+    return v <= static_cast<uint8_t>(HapticKind::Stop);
+}
+struct MsgHaptic {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::Haptic)};
+    uint8_t kind{0};        // HapticKind
+    uint16_t durationMs{0}; // clamped to [0, 5000]
+    float a{0.f};           // Rumble: low-freq motor; Triggers: left trigger; Stop: unused
+    float b{0.f};           // Rumble: high-freq motor; Triggers: right trigger; Stop: unused
+}; // 12 bytes, align 4
+static_assert(sizeof(MsgHaptic) == 12u, "MsgHaptic wire size changed");
 static_assert(offsetof(MsgWeatherState, utcJulianDay) == 24u, "MsgWeatherState::utcJulianDay offset changed");
 static_assert(alignof(MsgWeatherState) == 8u, "MsgWeatherState alignment changed");
 static_assert(offsetof(MsgWeatherState, timeOfDayTenths) == 2u, "MsgWeatherState::timeOfDayTenths offset changed");

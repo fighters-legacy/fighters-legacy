@@ -509,6 +509,62 @@ static int luaWorldTimer(lua_State* L) {
 }
 
 // ---------------------------------------------------------------------------
+// Haptics (#128) — bare globals rumble / rumble_triggers / stop_rumble, routed through the WorldApi
+// seam. Sandbox guards live HERE (not in the host): a script never names a gamepad, the intensities are
+// clamped to [0,1], and the duration is capped so an untrusted mod cannot lock rumble on indefinitely.
+// ---------------------------------------------------------------------------
+
+// The longest single rumble a script can request. A mod would have to actively re-issue to sustain it,
+// and stop_rumble is always available — so rumble cannot be latched on and forgotten.
+static constexpr uint32_t kMaxRumbleMs = 5000;
+
+static float clamp01(double v) {
+    if (v < 0.0)
+        return 0.f;
+    if (v > 1.0)
+        return 1.f;
+    return static_cast<float>(v);
+}
+
+static uint32_t clampRumbleMs(double v) {
+    if (v < 0.0)
+        return 0u;
+    if (v > static_cast<double>(kMaxRumbleMs))
+        return kMaxRumbleMs;
+    return static_cast<uint32_t>(v);
+}
+
+// rumble(low_freq, high_freq, duration_ms)
+static int luaRumble(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    const float low = clamp01(luaL_checknumber(L, 1));
+    const float high = clamp01(luaL_checknumber(L, 2));
+    const uint32_t dur = clampRumbleMs(luaL_checknumber(L, 3));
+    if (impl->worldApi && impl->worldApi->rumble)
+        impl->worldApi->rumble(low, high, dur);
+    return 0;
+}
+
+// rumble_triggers(left, right, duration_ms)
+static int luaRumbleTriggers(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    const float left = clamp01(luaL_checknumber(L, 1));
+    const float right = clamp01(luaL_checknumber(L, 2));
+    const uint32_t dur = clampRumbleMs(luaL_checknumber(L, 3));
+    if (impl->worldApi && impl->worldApi->rumbleTriggers)
+        impl->worldApi->rumbleTriggers(left, right, dur);
+    return 0;
+}
+
+// stop_rumble()
+static int luaStopRumble(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    if (impl->worldApi && impl->worldApi->stopRumble)
+        impl->worldApi->stopRumble();
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // API registration
 // ---------------------------------------------------------------------------
 
@@ -533,6 +589,19 @@ static void registerWorldModule(lua_State* L, LuaController::Impl* impl) {
         lua_setfield(L, -2, r->name);
     }
     lua_setglobal(L, "world");
+
+    // Haptics (#128) are bare globals (no gamepad id exposed to scripts), not under world.*.
+    static const luaL_Reg kHaptics[] = {
+        {"rumble", luaRumble},
+        {"rumble_triggers", luaRumbleTriggers},
+        {"stop_rumble", luaStopRumble},
+        {nullptr, nullptr},
+    };
+    for (const luaL_Reg* r = kHaptics; r->name; ++r) {
+        lua_pushlightuserdata(L, impl);
+        lua_pushcclosure(L, r->func, 1);
+        lua_setglobal(L, r->name);
+    }
 }
 
 static void registerGuidanceModule(lua_State* L) {

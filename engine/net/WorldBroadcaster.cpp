@@ -267,6 +267,18 @@ void WorldBroadcaster::broadcastMusicState(uint8_t state) {
     }
 }
 
+void WorldBroadcaster::broadcastHaptic(uint8_t kind, float a, float b, uint16_t durationMs) {
+    MsgHaptic msg;
+    msg.kind = kind;
+    msg.a = a;
+    msg.b = b;
+    msg.durationMs = durationMs;
+    for (const auto& [peerId, pin] : m_peerInputs) {
+        (void)pin;
+        m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
+    }
+}
+
 void WorldBroadcaster::banAddress(std::string ip) {
     ip = fl::normalizeIp(ip);
     m_bannedAddresses.insert(ip);

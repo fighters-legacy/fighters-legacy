@@ -320,6 +320,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Lua WorldApi hook calls it during the tick).
     void broadcastMusicState(uint8_t state);
 
+    // Broadcast a scripted haptic event to every connected peer (#128). `kind` is a HapticKind ordinal;
+    // a/b/durationMs are already clamped by the engine binding. Each client plays it on its local
+    // gamepad. Reliable. Sim-thread only.
+    void broadcastHaptic(uint8_t kind, float a, float b, uint16_t durationMs);
+
     // Gracefully disconnect one peer by ID.
     void kickPeer(uint32_t peerId);
 

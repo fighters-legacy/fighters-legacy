@@ -394,6 +394,13 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             return;
         if (musicStateCallback)
             musicStateCallback(ms.state);
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::Haptic)) {
+        // Scripted rumble (#128): a Lua script's rumble()/stop_rumble() plays on the local gamepad.
+        fl::MsgHaptic hp;
+        if (!fl::readMsg(data, size, hp))
+            return;
+        if (hapticCallback && fl::isHapticKindOrdinal(hp.kind))
+            hapticCallback(hp.kind, hp.a, hp.b, hp.durationMs);
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::ServerNotice)) {
         fl::MsgServerNotice sn;
         if (!fl::readMsg(data, size, sn))
