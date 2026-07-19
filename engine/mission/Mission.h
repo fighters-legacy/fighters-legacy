@@ -99,6 +99,58 @@ struct MissionTrigger {
     std::string doAction;
 };
 
+// ── Cinematic cameras (#910) ──────────────────────────────────────────────────────────────────
+// The mission's optional `cameras:` block is PRESENTATION-ONLY: the server parses and ignores it
+// (applyMission never reads shots), the recording client's ShotDirector (#911) consumes it. It lives
+// in the engine model so validate-mission covers the schema for free (single schema owner). No
+// yaml-cpp types leak into this header — the parser owns yaml-cpp PRIVATE.
+
+enum class ShotType { Static, Orbit, Chase, Move };
+
+// Eye-position easing for a `move` shot; Smooth interpolates Catmull-Rom when > 2 keyframes.
+enum class ShotEase { Linear, Smooth };
+
+// One keyframe of a `move` shot: a world-space eye position at `timeSec` relative to the shot start.
+struct ShotKeyframe {
+    double timeSec{0.0};
+    double pos[3]{};
+};
+
+// A single camera shot. A variant-free flat struct: ShotDirector switches on `type` and reads only
+// the fields relevant to it. Times are sim-seconds from mission start; shots are non-overlapping and
+// in ascending `startSec` order (enforced by the parser).
+struct MissionShot {
+    ShotType type{ShotType::Static};
+    double startSec{0.0};
+    double durationSec{0.0};
+    float fovYDeg{60.f}; // default 60, clamped [20, 120]
+
+    // static: fixed eye anchor (world metres, Y up; an `alt` override folds into pos[1]).
+    double pos[3]{};
+
+    // look-at: either a mission object id (lookAtId non-empty) OR a fixed world point (lookAtPointSet).
+    // For orbit/chase, both empty/unset means "look at target".
+    std::string lookAtId;
+    double lookAtPoint[3]{};
+    bool lookAtPointSet{false};
+
+    // orbit / chase: the tracked mission object id.
+    std::string targetId;
+
+    // orbit params
+    double orbitRadiusM{300.0};
+    double orbitHeightM{50.0};
+    double orbitPeriodSec{30.0}; // seconds per revolution; negative = clockwise
+
+    // chase params: offset in the target's body frame [aft, up, right].
+    double chaseOffset[3]{-60.0, 15.0, 0.0};
+    double chaseStiffness{0.0}; // 1/s exponential eye smoothing; 0 = rigid
+
+    // move params
+    std::vector<ShotKeyframe> keyframes;
+    ShotEase ease{ShotEase::Linear};
+};
+
 // The whole mission.
 struct Mission {
     std::string name;
@@ -111,6 +163,7 @@ struct Mission {
     std::vector<MissionSide> sides;
     std::vector<MissionObject> objects;
     std::vector<MissionTrigger> triggers;
+    std::vector<MissionShot> shots; // optional `cameras:` block (#910); empty = no scripted cameras
 };
 
 } // namespace fl

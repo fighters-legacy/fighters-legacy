@@ -636,7 +636,7 @@ catch_discover_tests(test_validate_flight_model)
 
 add_executable(test_validate_mission test_validate_mission.cpp)
 target_link_libraries(test_validate_mission
-    PRIVATE Catch2::Catch2WithMain validate-mission-lib)
+    PRIVATE Catch2::Catch2WithMain validate-mission-lib engine-mission) # engine-mission: parseMission for cameras: (#910)
 catch_discover_tests(test_validate_mission)
 
 # engine-mission runtime (#632): parser model population, parser/linter parity, and the sim-setup

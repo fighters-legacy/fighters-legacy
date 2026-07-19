@@ -21,6 +21,9 @@ static constexpr int kWindHeadingMax = 359;
 static constexpr int kPosComponents = 3;
 static constexpr int kSidesMinCount = 1;
 static constexpr int kObjectsMinCount = 1;
+static constexpr float kShotFovMin = 20.f;
+static constexpr float kShotFovMax = 120.f;
+static constexpr int kMoveKeyframesMinCount = 2;
 
 // ── helpers ────────────────────────────────────────────────────────────────────────────────────
 
@@ -516,6 +519,251 @@ MissionParseResult parseMission(std::string_view yamlContent) {
             }
             m.triggers.push_back(std::move(mt));
             ++idx;
+        }
+    }
+
+    // ── cameras (optional #910) ─────────────────────────────────────────────────
+    // Presentation-only scripted camera shots consumed by the recording client's ShotDirector.
+    // The server parses + ignores them. Entity-id cross-refs against `objects` are checked only when
+    // object ids are known — an empty knownIds means a cameras-only sidecar doc (--shot-track), which
+    // carries no objects; this mirrors the "check refs only when the set is non-empty" sides idiom.
+    if (hasKey(doc, "cameras")) {
+        const YAML::Node& cams = doc["cameras"];
+        if (!cams.IsMap() || !hasKey(cams, "shots")) {
+            r.errors.push_back("cameras must be a mapping with a `shots` sequence");
+            r.ok = false;
+        } else if (!cams["shots"].IsSequence()) {
+            r.errors.push_back("cameras.shots must be a sequence");
+            r.ok = false;
+        } else {
+            // Parse a 3-vector node into out[3]; records an error + returns false on a bad shape.
+            auto parseVec3 = [&](const YAML::Node& node, const std::string& where, double out[3]) -> bool {
+                if (!node.IsSequence() || static_cast<int>(node.size()) != kPosComponents) {
+                    r.errors.push_back(where + " must have exactly " + std::to_string(kPosComponents) + " components");
+                    r.ok = false;
+                    return false;
+                }
+                for (int c = 0; c < kPosComponents; ++c)
+                    out[c] = node[c].as<double>(0.0);
+                return true;
+            };
+            // Cross-check an entity-id ref against objects (skipped for a sidecar with no objects).
+            auto checkRef = [&](const std::string& refId, const std::string& where) {
+                if (!knownIds.empty() && knownIds.find(refId) == knownIds.end()) {
+                    r.errors.push_back(where + " references unknown object id \"" + refId + "\"");
+                    r.ok = false;
+                }
+            };
+
+            std::size_t sidx = 0;
+            double prevEnd = 0.0;
+            bool havePrev = false;
+            for (const auto& sn : cams["shots"]) {
+                const std::string sp = "cameras.shots[" + std::to_string(sidx) + "]";
+                if (!sn.IsMap()) {
+                    r.errors.push_back(sp + " must be a mapping");
+                    r.ok = false;
+                    ++sidx;
+                    continue;
+                }
+                MissionShot shot;
+
+                // type (required)
+                if (!hasKey(sn, "type")) {
+                    r.errors.push_back(sp + " missing required field: type");
+                    r.ok = false;
+                } else {
+                    const std::string t = sn["type"].as<std::string>("");
+                    if (t == "static")
+                        shot.type = ShotType::Static;
+                    else if (t == "orbit")
+                        shot.type = ShotType::Orbit;
+                    else if (t == "chase")
+                        shot.type = ShotType::Chase;
+                    else if (t == "move")
+                        shot.type = ShotType::Move;
+                    else {
+                        r.errors.push_back(sp + ".type must be static|orbit|chase|move (got \"" + t + "\")");
+                        r.ok = false;
+                    }
+                }
+
+                // start / duration (required)
+                bool startValid = false, durationValid = false;
+                if (!hasKey(sn, "start")) {
+                    r.errors.push_back(sp + " missing required field: start");
+                    r.ok = false;
+                } else {
+                    shot.startSec = sn["start"].as<double>(-1.0);
+                    if (shot.startSec < 0.0) {
+                        r.errors.push_back(sp + ".start must be >= 0 (got " + std::to_string(shot.startSec) + ")");
+                        r.ok = false;
+                    } else {
+                        startValid = true;
+                    }
+                }
+                if (!hasKey(sn, "duration")) {
+                    r.errors.push_back(sp + " missing required field: duration");
+                    r.ok = false;
+                } else {
+                    shot.durationSec = sn["duration"].as<double>(-1.0);
+                    if (shot.durationSec <= 0.0) {
+                        r.errors.push_back(sp + ".duration must be > 0 (got " + std::to_string(shot.durationSec) + ")");
+                        r.ok = false;
+                    } else {
+                        durationValid = true;
+                    }
+                }
+
+                // fov (optional; default 60, must be in [20, 120])
+                if (hasKey(sn, "fov")) {
+                    const float fov = sn["fov"].as<float>(60.f);
+                    if (fov < kShotFovMin || fov > kShotFovMax) {
+                        r.errors.push_back(sp + ".fov must be in [" + std::to_string(static_cast<int>(kShotFovMin)) +
+                                           ", " + std::to_string(static_cast<int>(kShotFovMax)) + "] (got " +
+                                           std::to_string(fov) + ")");
+                        r.ok = false;
+                    }
+                    shot.fovYDeg = fov;
+                }
+
+                // look_at: entity id or fixed [x,y,z]. Required for static/move; optional (default =
+                // target) for orbit/chase.
+                bool haveLookAt = false;
+                if (hasKey(sn, "look_at")) {
+                    const YAML::Node& la = sn["look_at"];
+                    if (la.IsScalar()) {
+                        shot.lookAtId = la.as<std::string>("");
+                        checkRef(shot.lookAtId, sp + ".look_at");
+                        haveLookAt = true;
+                    } else if (la.IsSequence()) {
+                        if (parseVec3(la, sp + ".look_at", shot.lookAtPoint)) {
+                            shot.lookAtPointSet = true;
+                            haveLookAt = true;
+                        }
+                    } else {
+                        r.errors.push_back(sp + ".look_at must be an object id or a [x, y, z] point");
+                        r.ok = false;
+                    }
+                }
+
+                // per-type fields
+                switch (shot.type) {
+                case ShotType::Static: {
+                    if (!hasKey(sn, "pos")) {
+                        r.errors.push_back(sp + " (static) missing required field: pos");
+                        r.ok = false;
+                    } else {
+                        parseVec3(sn["pos"], sp + ".pos", shot.pos);
+                    }
+                    if (hasKey(sn, "alt"))
+                        shot.pos[1] = sn["alt"].as<double>(shot.pos[1]); // MSL override of pos[1]
+                    if (!haveLookAt) {
+                        r.errors.push_back(sp + " (static) missing required field: look_at");
+                        r.ok = false;
+                    }
+                    break;
+                }
+                case ShotType::Move: {
+                    if (!hasKey(sn, "keyframes") || !sn["keyframes"].IsSequence()) {
+                        r.errors.push_back(sp + " (move) missing required field: keyframes (a sequence)");
+                        r.ok = false;
+                    } else {
+                        const YAML::Node& kfs = sn["keyframes"];
+                        if (static_cast<int>(kfs.size()) < kMoveKeyframesMinCount) {
+                            r.errors.push_back(sp + ".keyframes must have at least " +
+                                               std::to_string(kMoveKeyframesMinCount) + " entries");
+                            r.ok = false;
+                        }
+                        std::size_t k = 0;
+                        for (const auto& kf : kfs) {
+                            const std::string kp = sp + ".keyframes[" + std::to_string(k) + "]";
+                            if (!kf.IsMap() || !hasKey(kf, "time") || !hasKey(kf, "pos")) {
+                                r.errors.push_back(kp + " must be a mapping with `time` and `pos`");
+                                r.ok = false;
+                            } else {
+                                ShotKeyframe skf;
+                                skf.timeSec = kf["time"].as<double>(0.0);
+                                if (parseVec3(kf["pos"], kp + ".pos", skf.pos))
+                                    shot.keyframes.push_back(skf);
+                            }
+                            ++k;
+                        }
+                    }
+                    if (hasKey(sn, "ease")) {
+                        const std::string e = sn["ease"].as<std::string>("");
+                        if (e == "linear")
+                            shot.ease = ShotEase::Linear;
+                        else if (e == "smooth")
+                            shot.ease = ShotEase::Smooth;
+                        else {
+                            r.errors.push_back(sp + ".ease must be linear|smooth (got \"" + e + "\")");
+                            r.ok = false;
+                        }
+                    }
+                    if (!haveLookAt) {
+                        r.errors.push_back(sp + " (move) missing required field: look_at");
+                        r.ok = false;
+                    }
+                    break;
+                }
+                case ShotType::Orbit: {
+                    if (!hasKey(sn, "target")) {
+                        r.errors.push_back(sp + " (orbit) missing required field: target");
+                        r.ok = false;
+                    } else {
+                        shot.targetId = sn["target"].as<std::string>("");
+                        checkRef(shot.targetId, sp + ".target");
+                    }
+                    if (hasKey(sn, "radius"))
+                        shot.orbitRadiusM = sn["radius"].as<double>(shot.orbitRadiusM);
+                    if (hasKey(sn, "height"))
+                        shot.orbitHeightM = sn["height"].as<double>(shot.orbitHeightM);
+                    if (hasKey(sn, "period")) {
+                        shot.orbitPeriodSec = sn["period"].as<double>(shot.orbitPeriodSec);
+                        if (shot.orbitPeriodSec == 0.0) {
+                            r.errors.push_back(sp + ".period must be non-zero (negative = clockwise)");
+                            r.ok = false;
+                        }
+                    }
+                    break;
+                }
+                case ShotType::Chase: {
+                    if (!hasKey(sn, "target")) {
+                        r.errors.push_back(sp + " (chase) missing required field: target");
+                        r.ok = false;
+                    } else {
+                        shot.targetId = sn["target"].as<std::string>("");
+                        checkRef(shot.targetId, sp + ".target");
+                    }
+                    if (hasKey(sn, "offset"))
+                        parseVec3(sn["offset"], sp + ".offset", shot.chaseOffset);
+                    if (hasKey(sn, "stiffness")) {
+                        shot.chaseStiffness = sn["stiffness"].as<double>(shot.chaseStiffness);
+                        if (shot.chaseStiffness < 0.0) {
+                            r.errors.push_back(sp + ".stiffness must be >= 0 (0 = rigid)");
+                            r.ok = false;
+                        }
+                    }
+                    break;
+                }
+                }
+
+                // Non-overlap / ascending-order check (in file order — ShotDirector expects sorted).
+                if (startValid && durationValid) {
+                    if (havePrev && shot.startSec < prevEnd) {
+                        r.errors.push_back(sp + ".start (" + std::to_string(shot.startSec) +
+                                           ") overlaps or precedes the previous shot's end (" +
+                                           std::to_string(prevEnd) + "); shots must be sorted and non-overlapping");
+                        r.ok = false;
+                    }
+                    prevEnd = shot.startSec + shot.durationSec;
+                    havePrev = true;
+                }
+
+                m.shots.push_back(std::move(shot));
+                ++sidx;
+            }
         }
     }
 

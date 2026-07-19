@@ -265,6 +265,54 @@ exactly what an operator could, and nothing more. Unknown action strings are log
 
 ---
 
+## `cameras` — cinematic shots (optional)
+
+The optional `cameras:` block scripts camera shots for the **cinematic demo-recording pipeline**
+(`docs/demo-recording.md`). It is **presentation-only**: the server parses and ignores it, and the
+recording client's `ShotDirector` consumes it to drive the camera while recording. A normal
+single-player or multiplayer session ignores it entirely.
+
+Shot times are in **sim-seconds from mission start**. Shots must be listed in ascending `start`
+order and must not overlap (a shot occupies `[start, start + duration)`); a gap between shots holds
+the previous shot's final pose. There are four shot types:
+
+```yaml
+cameras:
+  shots:
+    - { type: static, start: 0,  duration: 8,  pos: [1200, 250, -300], look_at: player1, fov: 60 }
+    - { type: orbit,  start: 8,  duration: 12, target: bandit1, radius: 400, height: 60, period: 30 }
+    - { type: chase,  start: 20, duration: 15, target: player1, offset: [-60, 15, 0],
+        stiffness: 4.0, look_at: bandit1 }          # offset is in the target's body frame [aft, up, right]
+    - { type: move,   start: 35, duration: 7,  look_at: player1, ease: smooth,
+        keyframes: [ { time: 0, pos: [800, 300, -100] }, { time: 7, pos: [-200, 280, 150] } ] }
+```
+
+| Field | Type | Applies to | Required | Default | Description |
+|---|---|---|---|---|---|
+| `type` | string | all | yes | — | `static` \| `orbit` \| `chase` \| `move` |
+| `start` | number | all | yes | — | Sim-seconds from mission start (≥ 0) |
+| `duration` | number | all | yes | — | Shot length in seconds (> 0) |
+| `fov` | number | all | no | 60 | Vertical FOV in degrees, in [20, 120] |
+| `look_at` | id or `[x,y,z]` | all | static/move: yes; orbit/chase: no | target | An object id **or** a fixed world point |
+| `pos` | `[x,y,z]` | static | yes | — | Fixed eye position, world metres, Y up |
+| `alt` | number | static | no | — | MSL altitude override of `pos[1]` |
+| `target` | id | orbit, chase | yes | — | The tracked object id (cross-checked against `objects`) |
+| `radius` | number | orbit | no | 300 | Orbit radius in metres |
+| `height` | number | orbit | no | 50 | Orbit height above the target in metres |
+| `period` | number | orbit | no | 30 | Seconds per revolution; **negative = clockwise** |
+| `offset` | `[aft,up,right]` | chase | no | `[-60, 15, 0]` | Eye offset in the target's body frame |
+| `stiffness` | number | chase | no | 0 | Exponential eye-smoothing rate (1/s); 0 = rigid |
+| `keyframes` | sequence | move | yes | — | ≥ 2 `{ time, pos }` entries; `time` is relative to the shot start |
+| `ease` | string | move | no | linear | `linear` or `smooth` (Catmull-Rom when > 2 keyframes) |
+
+`target` and any `look_at` that names an object id are cross-checked against `objects` (an unknown id
+is a hard error, the same rule as `destroy(<id>)` triggers). A **cameras-only sidecar document** (a
+YAML doc containing just a `cameras:` block, used with the recorder's `--shot-track` override) parses
+through the same entry point; because it declares no `objects`, its id cross-references are not
+checked. All camera errors accumulate like the rest of the schema.
+
+---
+
 ## Cross-references between triggers and objects
 
 If a trigger's `on` predicate references an object by ID (e.g. `destroy(sam1)`), the
