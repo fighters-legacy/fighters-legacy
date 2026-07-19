@@ -892,6 +892,40 @@ static void validateHardpoints(const toml::table& tbl, FlightModelValidationResu
 
 // ── public entry point ────────────────────────────────────────────────────────
 
+// [drone_limits] (#351): the UAV autopilot command envelope. Range checks, the min<max airspeed
+// cross-check, and the "your autopilot limit is looser than the airframe" warning (a max_g above
+// max_g_structural never binds — the airframe breaks first).
+static void validateDroneLimits(const toml::table& tbl, FlightModelValidationResult& r) {
+    auto dl = tbl["drone_limits"];
+    if (!dl)
+        return;
+    auto nonNeg = [&](const char* key) {
+        auto v = dl[key].value<double>();
+        if (v && *v < 0.0) {
+            r.errors.push_back(std::string("drone_limits.") + key + " must be >= 0 (0 = that gate off)");
+            r.ok = false;
+        }
+        return v;
+    };
+    if (auto bank = nonNeg("max_bank_deg"); bank && *bank > 89.0) {
+        r.errors.push_back("drone_limits.max_bank_deg must be <= 89");
+        r.ok = false;
+    }
+    const auto g = nonNeg("max_g");
+    const auto vmin = nonNeg("min_airspeed_mps");
+    const auto vmax = nonNeg("max_airspeed_mps");
+    if (vmin && vmax && *vmin > 0.0 && *vmax > 0.0 && *vmin >= *vmax) {
+        r.errors.push_back("drone_limits.min_airspeed_mps must be below max_airspeed_mps");
+        r.ok = false;
+    }
+    if (g && *g > 0.0) {
+        if (auto structural = tbl["aero"]["limits"]["max_g_structural"].value<double>();
+            structural && *g >= *structural)
+            r.warnings.push_back("drone_limits.max_g is at or above max_g_structural; the autopilot limit "
+                                 "never binds — the airframe breaks first");
+    }
+}
+
 // Rotorcraft core (#349/#350): mass, fuel and inertias are required; wing geometry is NOT (a rotor
 // model carries its own reference areas), so this deliberately does not reuse
 // validateFlightModelGeometry, whose wing fields are hard requirements.
@@ -1122,6 +1156,7 @@ FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
     validateRefueling(tbl, r);
     validateTanker(tbl, r);
     validateHardpoints(tbl, r);
+    validateDroneLimits(tbl, r);
 
     return r;
 }

@@ -399,6 +399,31 @@ fuel_flow_mil_kg_s  = 0.30
 spool_time_s        = 1.0     # optional (default 1.0)
 ```
 
+### Fixed-wing drones — `[drone_limits]`
+
+A fixed-wing UAV (#351) is an ordinary fixed-wing flight model — same `[aero.*]`/`[engine]`
+schema — plus an optional `[drone_limits]` block describing the **onboard autopilot's command
+envelope**. This is distinct from `[aero.limits]` (what the airframe survives) and from `has_fbw`
+(a manned jet's FLCS): a Predator-class airframe can aerodynamically exceed everything its
+autopilot will ever command. The engine enforces these limits by shaping the *commands* (the FBW
+discipline — never a silent physics clamp): `max_g` runs the same AoA-limiting loop as FBW even on
+a non-FBW airframe, `max_bank_deg` shapes the aileron, and the airspeed band shapes the throttle
+(overspeed sheds power, underspeed firewalls it). Endurance needs no new field — it is `fuel_kg`
+and the `[engine]` fuel flows, as for any aircraft.
+
+```toml
+# A MALE-surveillance-class profile: docile, slow, long-winged.
+[drone_limits]
+max_bank_deg     = 45.0   # autopilot bank limit; 0/omit = off
+max_g            = 2.5    # autopilot load-factor limit (the airframe may be stressed for more)
+min_airspeed_mps = 30.0   # stall protection: throttle firewalls below this; 0/omit = off
+max_airspeed_mps = 60.0   # overspeed protection: throttle sheds above this; 0/omit = off
+```
+
+Every field is optional and `0` disables that gate; the whole block absent is bit-identical to a
+manned aircraft. `validate-flight-model` cross-checks the band and warns when `max_g` is at or
+above `max_g_structural` (the limit would never bind — the airframe breaks first).
+
 ---
 
 ## Weapon Data — TOML

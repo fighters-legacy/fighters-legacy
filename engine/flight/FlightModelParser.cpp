@@ -587,6 +587,24 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         }
     }
 
+    // ── [drone_limits] (optional, #351) ───────────────────────────────────────
+    // The onboard autopilot's command envelope for a fixed-wing UAV. Every field optional; a field
+    // at 0 (or absent) leaves that gate off, and the whole block absent is bit-identical to before.
+    if (auto dl = tbl["drone_limits"]; dl && dl.as_table()) {
+        DroneLimits limits;
+        limits.max_bank_deg = static_cast<float>(dl["max_bank_deg"].value<double>().value_or(0.0));
+        limits.max_g = static_cast<float>(dl["max_g"].value<double>().value_or(0.0));
+        limits.min_airspeed_mps = static_cast<float>(dl["min_airspeed_mps"].value<double>().value_or(0.0));
+        limits.max_airspeed_mps = static_cast<float>(dl["max_airspeed_mps"].value<double>().value_or(0.0));
+        if (limits.max_bank_deg < 0.f || limits.max_g < 0.f || limits.min_airspeed_mps < 0.f ||
+            limits.max_airspeed_mps < 0.f)
+            throw std::runtime_error("[drone_limits] fields must be >= 0 (0 = that gate off)");
+        if (limits.min_airspeed_mps > 0.f && limits.max_airspeed_mps > 0.f &&
+            limits.min_airspeed_mps >= limits.max_airspeed_mps)
+            throw std::runtime_error("drone_limits.min_airspeed_mps must be below max_airspeed_mps");
+        d.drone_limits = limits;
+    }
+
     // ── [carrier] (optional) ──────────────────────────────────────────────────
     if (auto c = tbl["carrier"]; c && c.as_table()) {
         CarrierData cd;

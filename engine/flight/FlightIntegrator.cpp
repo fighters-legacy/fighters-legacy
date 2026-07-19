@@ -186,6 +186,19 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     ctrl.aileron *= controlFactor;
     ctrl.rudder *= controlFactor;
 
+    // Drone autopilot airspeed protection (#351): shapes the THROTTLE COMMAND from the previous
+    // tick's measured airspeed — an autopilot reacts to its sensors, and one tick of latency is
+    // more honest than clairvoyance. Overspeed sheds power; underspeed firewalls it (through the
+    // damage-limited authority, like any command). The spool provides the smoothing.
+    if (const auto& dl = m_data->drone_limits) {
+        const double pvx = m_state.vel_body[0], pvy = m_state.vel_body[1], pvz = m_state.vel_body[2];
+        const float prevSpd = static_cast<float>(std::sqrt(pvx * pvx + pvy * pvy + pvz * pvz));
+        if (dl->max_airspeed_mps > 0.f && prevSpd > dl->max_airspeed_mps)
+            ctrl.throttle = 0.f;
+        else if (dl->min_airspeed_mps > 0.f && prevSpd < dl->min_airspeed_mps)
+            ctrl.throttle = m_damageThrust;
+    }
+
     // Clear the previous tick's one-shot outputs.
     m_state.ground_impact_speed = 0.f;
 
@@ -334,6 +347,24 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
         m_state.engineFailFlags = ef;
     }
 
+    // 6d. Drone autopilot bank-angle limit (#351): command shaping on the AILERON, mirroring the
+    // FBW discipline below — never more than the controller asked for, never a silent clamp on the
+    // physics. Bank is read from gravity in the body frame (atan2 of its lateral component), which
+    // is planet-correct everywhere with no new plumbing.
+    if (const auto& dl = m_data->drone_limits; dl && dl->max_bank_deg > 0.f) {
+        const std::array<float, 3> gw = m_gravity->accelWorld(m_state.pos_world);
+        const auto gb = quatRotate(q_conj, gw.data());
+        const float bankRad = std::atan2(gb[2], -gb[1]); // + = right wing down
+        const float maxBank = dl->max_bank_deg * kDegToRad;
+        constexpr float kBankKp = 2.0f; // aileron per rad of bank error
+        constexpr float kBankKd = 0.8f; // aileron per rad/s of roll rate (damps the approach)
+        if (ctrl.aileron > 0.f && bankRad > maxBank * kFbwGuardBand) {
+            ctrl.aileron = std::clamp(kBankKp * (maxBank - bankRad) - kBankKd * m_state.omega[0], -1.f, ctrl.aileron);
+        } else if (ctrl.aileron < 0.f && bankRad < -maxBank * kFbwGuardBand) {
+            ctrl.aileron = std::clamp(kBankKp * (-maxBank - bankRad) - kBankKd * m_state.omega[0], ctrl.aileron, 1.f);
+        }
+    }
+
     // 7. Aerodynamic + propulsive forces and moments via the swappable force model (default
     // FixedWingForceModel). Gravity and turbulence are added below by the integrator core.
     // agl_m: rotor ground effect (#350) reads height above terrain; fixed-wing ignores it.
@@ -361,11 +392,23 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     //   * an optional FLCS AoA cap, alpha_limit_deg, tighter than the aerodynamic stall — at low q the
     //     wing cannot reach the structural g and the AoA cap is what holds the jet.
     // When alpha_limit_deg is unset the positive path is byte-identical to #816.
-    if (m_data->meta.has_fbw && q_dyn_now > 1.f && (ctrl.elevator > 0.f || ctrl.elevator < 0.f)) {
+    //
+    // #351: a drone autopilot's max_g runs the SAME AoA-limiting loop — a UAV without FBW still has
+    // a computer refusing to bend the airframe, and a second hand-rolled g-limiter would be a second
+    // chance to be a tick late. The effective limit is the tighter of structural and autopilot.
+    const bool droneGLimited = m_data->drone_limits && m_data->drone_limits->max_g > 0.f;
+    if ((m_data->meta.has_fbw || droneGLimited) && q_dyn_now > 1.f && (ctrl.elevator > 0.f || ctrl.elevator < 0.f)) {
         const float S = m_data->geometry.wing_area_m2;
         const float alphaStall = m_data->limits.alpha_stall_deg;
         const float alphaCap = m_data->limits.alpha_limit_deg; // 0 = unset
         const float denom = q_dyn_now * S;
+        float nMaxLim = m_data->limits.max_g_structural;
+        float nMinLim = m_data->limits.min_g_structural;
+        if (droneGLimited) {
+            const float g = m_data->drone_limits->max_g;
+            nMaxLim = (nMaxLim > 0.f) ? std::min(nMaxLim, g) : g;
+            nMinLim = (nMinLim < 0.f) ? std::max(nMinLim, -g) : -g;
+        }
 
         // CL(alpha) is monotonic increasing across [-alpha_stall, +alpha_stall]; bisect for the alpha
         // that makes a target CL (signed) over an interval where it is increasing.
@@ -387,8 +430,8 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
         float alphaLimit = 0.f;
         if (ctrl.elevator > 0.f) {
             float posLimit = alphaStall;
-            if (m_data->limits.max_g_structural > 0.f) {
-                const float clLimit = (m_data->limits.max_g_structural * eff_mass * kG0) / denom;
+            if (nMaxLim > 0.f) {
+                const float clLimit = (nMaxLim * eff_mass * kG0) / denom;
                 if (m_data->cl_table.lookup(alphaStall, mach) > clLimit) { // else lift-limited, nothing to do
                     posLimit = invertCl(clLimit, 0.f, alphaStall);
                     haveLimit = true;
@@ -401,9 +444,9 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
             alphaLimit = posLimit * kFbwGuardBand;
         } else { // forward stick — negative-g / negative-AoA protection (#900)
             float negLimit = -alphaStall;
-            if (m_data->limits.min_g_structural < 0.f) {
-                const float clLimit = (m_data->limits.min_g_structural * eff_mass * kG0) / denom; // negative
-                if (m_data->cl_table.lookup(-alphaStall, mach) < clLimit) {                       // else lift-limited
+            if (nMinLim < 0.f) {
+                const float clLimit = (nMinLim * eff_mass * kG0) / denom;   // negative
+                if (m_data->cl_table.lookup(-alphaStall, mach) < clLimit) { // else lift-limited
                     negLimit = invertCl(clLimit, -alphaStall, 0.f);
                     haveLimit = true;
                 }

@@ -245,6 +245,22 @@ struct EngineData {
     float surge_alpha_margin_deg{5.f};
 };
 
+// ── [drone_limits] (#351) ────────────────────────────────────────────────────
+// The ONBOARD AUTOPILOT's command envelope for a fixed-wing UAV — distinct from [aero.limits]
+// (what the airframe can survive) and from has_fbw (a manned jet's FLCS). A Predator-class
+// airframe is aerodynamically capable of far more than its autopilot will ever command: the
+// autopilot holds bank shallow, load factor low, and airspeed inside a narrow band, and that
+// command shaping — not the structure — is what defines how the vehicle flies. Enforced by
+// FlightIntegrator on the COMMANDS (never a silent physics clamp), reusing the FBW AoA-limiting
+// path for g so the two limiters cannot drift. Each field 0 = that gate off; the block absent =
+// bit-identical to before.
+struct DroneLimits {
+    float max_bank_deg{0.f};     // autopilot bank-angle limit (aileron command shaping); 0 = off
+    float max_g{0.f};            // autopilot load-factor limit, tighter than structural; 0 = off
+    float min_airspeed_mps{0.f}; // stall protection: throttle floors up below this; 0 = off
+    float max_airspeed_mps{0.f}; // overspeed protection: throttle shed above this; 0 = off
+};
+
 // ── [multirotor] (#349) ──────────────────────────────────────────────────────
 // A multirotor is thrust mixing, not wings: total rotor thrust along body +Y (up), attitude control
 // from differential per-rotor thrust, yaw from differential rotor torque. The flight-control inner
@@ -342,6 +358,7 @@ struct FlightModelData {
     std::optional<WingSweepData> wing_sweep;
     std::optional<PropData> prop;
     EngineData engine;
+    std::optional<DroneLimits> drone_limits;  // #351: fixed-wing UAV autopilot command envelope
     std::optional<MultirotorData> multirotor; // #349: present iff type = "multirotor"
     std::optional<HelicopterData> helicopter; // #350: present iff type = "helicopter"
     std::optional<CarrierData> carrier;

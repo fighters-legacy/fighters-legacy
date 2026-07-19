@@ -2223,3 +2223,97 @@ TEST_CASE("Integrator: damage-owned engine-fail bits survive the dynamics pass",
     CHECK((fi.state().engineFailFlags & kEngineFailLeft) != 0);
     CHECK((fi.state().engineFailFlags & kEngineFlameout) == 0);
 }
+
+// ── drone autopilot command envelope (#351) ──────────────────────────────────
+
+TEST_CASE("Drone limits: autopilot max_g binds on a non-FBW airframe", "[integrator][drone]") {
+    // The airframe is stressed for 8 g and has no FBW; the autopilot refuses to command past 2.5.
+    auto data = makeData(R"(
+[drone_limits]
+max_g = 2.5
+)");
+    REQUIRE(data->drone_limits.has_value());
+    FlightIntegrator fi(data);
+    FlightState s{};
+    s.vel_body[0] = 200.f;
+    s.pos_world[1] = 2000.f;
+    s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+    s.fuel_kg = data->geometry.fuel_kg;
+    fi.reset(s);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    ctrl.elevator = 1.f; // full aft stick
+    float maxG = 0.f;
+    for (int i = 0; i < 180; ++i) {
+        fi.step(1.f / 60.f, ctrl, {});
+        maxG = std::max(maxG, fi.state().load_factor);
+    }
+    CHECK(maxG < 3.2f); // held near the 2.5 g autopilot limit, nowhere near the 9+ g the wing can pull
+    CHECK(maxG > 1.2f); // ...but it IS manoeuvring
+}
+
+TEST_CASE("Drone limits: autopilot bank limit shapes the aileron command", "[integrator][drone]") {
+    auto data = makeData(R"(
+[drone_limits]
+max_bank_deg = 30.0
+)");
+    FlightIntegrator fi(data);
+    FlightState s{};
+    s.vel_body[0] = 150.f;
+    s.pos_world[1] = 2000.f;
+    s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+    s.fuel_kg = data->geometry.fuel_kg;
+    fi.reset(s);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 0.8f;
+    ctrl.aileron = 1.f; // full right stick, held
+    for (int i = 0; i < 300; ++i)
+        fi.step(1.f / 60.f, ctrl, {});
+    // Near the origin euler[0] is the bank angle. Held near 30 deg, not rolled inverted.
+    CHECK(fi.state().euler[0] < 0.9f);  // < ~51 deg
+    CHECK(fi.state().euler[0] > 0.25f); // > ~14 deg — it did bank toward the limit
+}
+
+TEST_CASE("Drone limits: overspeed protection sheds throttle, underspeed firewalls it", "[integrator][drone]") {
+    auto data = makeData(R"(
+[drone_limits]
+min_airspeed_mps = 80.0
+max_airspeed_mps = 120.0
+)");
+    SECTION("overspeed: commanded full throttle is shed") {
+        FlightIntegrator fi(data);
+        FlightState s{};
+        s.vel_body[0] = 150.f; // past max_airspeed
+        s.pos_world[1] = 2000.f;
+        s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+        s.fuel_kg = data->geometry.fuel_kg;
+        s.throttle_actual = 1.f;
+        fi.reset(s);
+        ControlInput ctrl{};
+        ctrl.throttle = 1.f;
+        for (int i = 0; i < 240; ++i)
+            fi.step(1.f / 60.f, ctrl, {});
+        CHECK(fi.state().throttle_actual < 0.5f);
+    }
+    SECTION("underspeed: commanded idle is firewalled") {
+        FlightIntegrator fi(data);
+        FlightState s{};
+        s.vel_body[0] = 50.f; // below min_airspeed
+        s.pos_world[1] = 2000.f;
+        s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+        s.fuel_kg = data->geometry.fuel_kg;
+        fi.reset(s);
+        ControlInput ctrl{};
+        ctrl.throttle = 0.f;
+        for (int i = 0; i < 240; ++i)
+            fi.step(1.f / 60.f, ctrl, {});
+        CHECK(fi.state().throttle_actual > 0.5f);
+    }
+}
+
+TEST_CASE("Drone limits: absent block leaves everything untouched", "[integrator][drone]") {
+    auto d = makeData();
+    CHECK_FALSE(d->drone_limits.has_value());
+}

@@ -757,3 +757,27 @@ TEST_CASE("#350: a helicopter without [engine] fuel flows fails", "[flight-model
     auto r = validateFlightModel(s.substr(0, pos));
     CHECK_FALSE(r.ok);
 }
+
+// ── drone limits (#351) ──────────────────────────────────────────────────────
+
+TEST_CASE("#351: valid [drone_limits] passes", "[flight-model-validator]") {
+    auto r = validateFlightModel(std::string(kValidFighter) + "\n[drone_limits]\nmax_bank_deg = 45.0\nmax_g = 2.5\n"
+                                                              "min_airspeed_mps = 30.0\nmax_airspeed_mps = 60.0\n");
+    CHECK(r.ok);
+    CHECK(r.errors.empty());
+}
+
+TEST_CASE("#351: drone max_g above the structural limit warns (never binds)", "[flight-model-validator]") {
+    auto r = validateFlightModel(std::string(kValidFighter) + "\n[drone_limits]\nmax_g = 9.5\n"); // structural is 8
+    CHECK(r.ok);
+    bool warned = false;
+    for (const auto& w : r.warnings)
+        warned = warned || w.find("max_g") != std::string::npos;
+    CHECK(warned);
+}
+
+TEST_CASE("#351: inverted airspeed band fails", "[flight-model-validator]") {
+    auto r = validateFlightModel(std::string(kValidFighter) +
+                                 "\n[drone_limits]\nmin_airspeed_mps = 60.0\nmax_airspeed_mps = 30.0\n");
+    CHECK_FALSE(r.ok);
+}
