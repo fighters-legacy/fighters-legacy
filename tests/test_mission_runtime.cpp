@@ -258,9 +258,59 @@ TEST_CASE("applyMission spawns world objects with faction, separates player slot
     CHECK(sam->factionIndex == factions.indexOf("russia"));
     CHECK(sam->transform.pos[0] == 15000.0);
 
-    // Weather / time / wind applied to the controller.
+    // Weather / time / wind / time-scale applied to the controller.
     CHECK(weather.preset() == WeatherPreset::Rain);
-    CHECK(weather.timeOfDay() == 14.5f); // 14:30
+    CHECK(weather.timeOfDay() == 14.5f);      // 14:30
+    CHECK(weather.timeScaleRatio() == 20.0f); // #207: mission time_scale overrides the default (10)
+}
+
+TEST_CASE("WeatherController::setTimeScaleRatio ignores non-positive ratios (#207)", "[weather]") {
+    WeatherController wc;
+    const float base = wc.timeScaleRatio();
+    wc.setTimeScaleRatio(30.f);
+    CHECK(wc.timeScaleRatio() == 30.f);
+    wc.setTimeScaleRatio(0.f); // frozen clock is a content bug -> ignored
+    CHECK(wc.timeScaleRatio() == 30.f);
+    wc.setTimeScaleRatio(-5.f); // reversed clock -> ignored
+    CHECK(wc.timeScaleRatio() == 30.f);
+    (void)base;
+}
+
+TEST_CASE("applyMission leaves the time scale untouched when the mission omits it (#207)", "[mission-setup]") {
+    // A mission without a `time_scale:` field must not reset the host-configured rate.
+    const char* noScale = R"yaml(
+name: NoScale
+map: world
+layer: world_clear
+time: { hour: 12, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [nato, russia]
+objects:
+  - type: SA10
+    id: sam1
+    side: russia
+    pos: [0, 0, 0]
+    heading: 0
+triggers:
+  - on: timer(1)
+    do: mission_success
+)yaml";
+    auto parsed = parseMission(noScale);
+    for (const auto& e : parsed.errors)
+        UNSCOPED_INFO("parse error: " << e);
+    REQUIRE(parsed.ok);
+    CHECK_FALSE(parsed.mission.timeScale.has_value());
+
+    NullLogger log;
+    EntityTypeRegistry reg;
+    reg.registerType(makeDef("SA10"));
+    EntityManager em(log, reg);
+    FactionRegistry factions;
+    WeatherControllerParams p;
+    p.timeScaleRatio = 42.f; // host-configured default
+    WeatherController weather(p);
+    applyMission(parsed.mission, em, factions, &weather);
+    CHECK(weather.timeScaleRatio() == 42.f); // preserved
 }
 
 TEST_CASE("applyMission warns (does not crash) on an unregistered object type", "[mission-setup]") {
