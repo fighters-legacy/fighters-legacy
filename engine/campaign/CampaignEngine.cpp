@@ -4,6 +4,7 @@
 #include "flight/Geodetic.h" // geodeticToWorld
 
 #include <charconv>
+#include <cstdio>
 #include <sstream>
 
 namespace fl {
@@ -287,6 +288,34 @@ void CampaignEngine::buildDynamicSortie(const CampaignTheater& th, NextMission& 
         for (const auto& [unit, count] : sideIt->second)
             opfor += (count > 0 ? count : 0);
     out.opforCount = opfor;
+
+    // Structured fills for template materialization (materializeMissionTemplate substitutes ${...}).
+    auto posStr = [](const double p[3]) {
+        char b[96];
+        std::snprintf(b, sizeof(b), "[%.1f, %.1f, %.1f]", p[0], p[1], p[2]);
+        return std::string(b);
+    };
+    auto numStr = [](double v) {
+        char b[32];
+        std::snprintf(b, sizeof(b), "%.1f", v);
+        return std::string(b);
+    };
+    auto& target = out.fills["target_area"];
+    target["x"] = numStr(out.targetWorld[0]);
+    target["y"] = numStr(out.targetWorld[1]);
+    target["z"] = numStr(out.targetWorld[2]);
+    target["pos"] = posStr(out.targetWorld);
+    target["name"] = th.id + " sector";
+    auto& ingress = out.fills["ingress"];
+    ingress["x"] = numStr(out.ingressWorld[0]);
+    ingress["y"] = numStr(out.ingressWorld[1]);
+    ingress["z"] = numStr(out.ingressWorld[2]);
+    ingress["pos"] = posStr(out.ingressWorld);
+    out.fills["opfor"]["count"] = std::to_string(out.opforCount);
+    out.fills["theater"]["id"] = th.id;
+    // Player flight size: default 2, or a deterministic pick in [1,4] from the sortie counter so a
+    // template's ${player_flight.size} resolves without a range parser here.
+    out.fills["player_flight"]["size"] = std::to_string(2 + static_cast<int>(m_dynamicCounter % 3));
 }
 
 void CampaignEngine::recordOutcome(const std::string& missionId, bool success) {

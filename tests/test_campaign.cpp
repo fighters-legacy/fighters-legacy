@@ -6,6 +6,8 @@
 #include "campaign/CampaignEngine.h"
 #include "campaign/CampaignParser.h"
 #include "campaign/Frontline.h"
+#include "campaign/MissionTemplate.h"
+#include "mission/MissionParser.h" // a generated sortie must round-trip through the real mission parser
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -289,4 +291,99 @@ TEST_CASE("CampaignEngine: save/restore round-trips the runtime state (#635)", "
     CHECK(b.frontlineFraction("ukraine", 0) == Catch::Approx(a.frontlineFraction("ukraine", 0)));
     // The next mission after restore matches (deterministic continuation).
     CHECK(b.nextMission().kind == a.nextMission().kind);
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic-sortie template materialization (#635)
+// ---------------------------------------------------------------------------
+
+// A template mission YAML with a `template:` header and ${...} placeholders in a valid mission body.
+const char* kTemplateYaml = R"yaml(
+template:
+  role: strike
+  fills:
+    - target_area: { from: frontline, side: enemy, prefer: contested }
+    - ingress:      { from: frontline, side: friendly }
+    - opfor:        { from: ground_units, side: enemy }
+name: "Strike -- ${target_area.name}"
+map: ${theater.id}
+layer: world_clear
+time: { hour: 12, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [nato, russia]
+objects:
+  - type: SA10
+    id: sam1
+    side: russia
+    pos: ${target_area.pos}
+    heading: 0
+  - type: F22
+    id: player1
+    side: nato
+    pos: ${ingress.pos}
+    heading: 90
+    player: true
+triggers:
+  - on: destroy(sam1)
+    do: mission_success
+)yaml";
+
+TEST_CASE("materializeMissionTemplate strips the header and substitutes placeholders (#635)", "[campaign][template]") {
+    fl::TemplateFills fills;
+    fills["target_area"] = {{"name", "ukraine sector"}, {"pos", "[15000.0, 0.0, 9000.0]"}};
+    fills["ingress"] = {{"pos", "[12000.0, 0.0, 8000.0]"}};
+    fills["theater"] = {{"id", "ukraine"}};
+
+    std::vector<std::string> warnings;
+    const std::string out = fl::materializeMissionTemplate(kTemplateYaml, fills, &warnings);
+
+    CHECK(warnings.empty());
+    CHECK(out.find("template:") == std::string::npos);      // header stripped
+    CHECK(out.find("fills:") == std::string::npos);         // ...and its children
+    CHECK(out.find("${") == std::string::npos);             // every placeholder resolved
+    CHECK(out.find("ukraine sector") != std::string::npos); // name substituted
+    CHECK(out.find("[15000.0, 0.0, 9000.0]") != std::string::npos);
+
+    // The materialized text is a plain, valid mission file.
+    auto parsed = parseMission(out);
+    for (const auto& e : parsed.errors)
+        UNSCOPED_INFO("parse error: " << e);
+    REQUIRE(parsed.ok);
+    CHECK(parsed.mission.name == "Strike -- ukraine sector");
+    CHECK(parsed.mission.map == "ukraine");
+    REQUIRE(parsed.mission.objects.size() == 2);
+    CHECK(parsed.mission.objects[0].pos[0] == 15000.0);
+    CHECK(parsed.mission.objects[1].playerSlot);
+}
+
+TEST_CASE("materializeMissionTemplate leaves an unknown placeholder and warns (#635)", "[campaign][template]") {
+    fl::TemplateFills fills; // empty
+    std::vector<std::string> warnings;
+    const std::string out = fl::materializeMissionTemplate("name: ${missing.field}\n", fills, &warnings);
+    CHECK(out.find("${missing.field}") != std::string::npos); // left verbatim
+    REQUIRE(warnings.size() == 1);
+}
+
+TEST_CASE("CampaignEngine: a generated dynamic sortie materializes into a parseable mission (#635)",
+          "[campaign][engine][template]") {
+    auto parsed = parseCampaign(kCampaignYaml);
+    REQUIRE(parsed.ok);
+    CampaignEngine eng(parsed.campaign, 7, syntheticLoader());
+    eng.recordOutcome("u01_storm", true); // unlock the theater so a dynamic sortie generates
+
+    NextMission nm = eng.nextMission();
+    REQUIRE(nm.kind == NextMission::Kind::Dynamic);
+    // The engine populated structured fills alongside the scalar target/ingress/opfor.
+    REQUIRE(nm.fills.count("target_area") == 1);
+    CHECK(nm.fills.at("opfor").at("count") == "59"); // russia armor 55 + sam 4
+    CHECK(nm.fills.at("theater").at("id") == "ukraine");
+
+    // Materialize a template with the engine's fills and confirm it parses.
+    const std::string out = fl::materializeMissionTemplate(kTemplateYaml, nm.fills);
+    CHECK(out.find("${") == std::string::npos);
+    auto mission = parseMission(out);
+    for (const auto& e : mission.errors)
+        UNSCOPED_INFO("parse error: " << e);
+    REQUIRE(mission.ok);
+    CHECK(mission.mission.map == "ukraine");
 }

@@ -622,7 +622,7 @@ catch_discover_tests(test_mission_runtime)
 # schema parser, and the theater-graph state machine (story injection, dynamic selection, save/restore).
 add_executable(test_campaign test_campaign.cpp)
 target_link_libraries(test_campaign
-    PRIVATE Catch2::Catch2WithMain engine-campaign)
+    PRIVATE Catch2::Catch2WithMain engine-campaign engine-mission) # engine-mission: a generated sortie must parse
 catch_discover_tests(test_campaign)
 
 add_executable(test_validate_licenses test_validate_licenses.cpp)

@@ -39,6 +39,10 @@ struct NextMission {
     double targetWorld[3]{};  // an enemy/contested cell centre (the sortie's objective area)
     double ingressWorld[3]{}; // a friendly cell centre (the ingress point)
     int opforCount{0};        // scaled enemy force count
+    // Structured fills for template materialization (materializeMissionTemplate): fill name -> field ->
+    // value string. Populated alongside the scalar fields above (target_area/ingress carry x/y/z + pos,
+    // opfor carries count, player_flight carries size). Empty for a story mission.
+    std::map<std::string, std::map<std::string, std::string>> fills;
 };
 
 class CampaignEngine {

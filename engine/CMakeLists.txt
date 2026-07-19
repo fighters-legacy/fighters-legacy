@@ -324,6 +324,7 @@ add_library(engine-campaign STATIC
     campaign/Frontline.cpp
     campaign/CampaignParser.cpp
     campaign/CampaignEngine.cpp
+    campaign/MissionTemplate.cpp
 )
 target_include_directories(engine-campaign PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-campaign
