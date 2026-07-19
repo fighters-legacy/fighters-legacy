@@ -647,6 +647,13 @@ target_link_libraries(test_mission_runtime
     PRIVATE Catch2::Catch2WithMain engine-mission validate-mission-lib)
 catch_discover_tests(test_mission_runtime)
 
+# ShotDirector camera-pose evaluator (#911): pure GLM+stdlib, no HAL — orbit/chase/move geometry,
+# cut/gap/before-first/after-last handling, dead-target fallback, fov clamp.
+add_executable(test_shot_director test_shot_director.cpp)
+target_link_libraries(test_shot_director
+    PRIVATE Catch2::Catch2WithMain engine-mission)
+catch_discover_tests(test_shot_director)
+
 # engine-campaign (#635): the deterministic dynamic-campaign runtime — frontline raster, campaign
 # schema parser, and the theater-graph state machine (story injection, dynamic selection, save/restore).
 add_executable(test_campaign test_campaign.cpp)

@@ -313,6 +313,7 @@ add_library(engine-mission STATIC
     mission/MissionParser.cpp
     mission/MissionSetup.cpp
     mission/MissionRuntime.cpp
+    mission/ShotDirector.cpp
 )
 target_include_directories(engine-mission PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-mission

@@ -9,6 +9,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **mission**: `ShotDirector` camera-pose evaluator (#911). A pure GLM+stdlib evaluator (engine-mission,
+  no HAL) that turns a mission's `cameras:` shots (#910) + a live entity-pose callback into a camera
+  pose at a given sim time. Implements all four shot types — `static`, `orbit` (radius/height/period,
+  negative period = clockwise), `chase` (body-frame offset + deterministic exponential eye smoothing
+  keyed on the fixed capture step), and `move` (linear or Catmull-Rom keyframe interpolation). Hard
+  cuts between shots, gaps hold the previous shot's final pose, before-first holds the first shot's
+  start pose, and a dead/unresolvable target holds the last valid pose (never a snap-to-origin). FOV
+  is clamped [20, 120]. Fully unit-tested in `test_shot_director`.
 - **mission**: optional `cameras:` shot schema in mission YAML (#910). A mission may now carry a
   presentation-only `cameras.shots` list — `static`, `orbit`, `chase`, and `move` shots with a fixed
   or entity-relative look target — parsed by the single schema owner (`parseMission`), so
