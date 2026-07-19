@@ -8,6 +8,7 @@
 #include "CameraInput.h"
 #include "ClientEffectRouter.h"
 #include "ClientNetEventHandler.h"
+#include "CommsMenu.h"
 #include "DebriefScreen.h"
 #include "FileLogger.h"
 #include "FlightInputCollector.h"
@@ -24,12 +25,15 @@
 #include "ScreenManager.h"
 #include "ServerNotice.h"
 #include "SessionStatus.h"
+#include "SubtitleOverlay.h"
 #include "Version.h"
+#include "WingmanMenu.h"
 #include "audio/MusicBuiltinTracks.h"
 #include "audio/MusicManager.h"
 #include "audio/PlaylistLoader.h"
 #include "audio/SfxManager.h"
 #include "audio/SubtitleQueue.h"
+#include "audio/VoiceCalloutManager.h"
 #include "audio/WarningToneManager.h"
 #include "config/ConfigFile.h"
 #include "config/UserConfig.h"
@@ -337,10 +341,13 @@ struct GameServices {
     fl::IHud* activeHud{nullptr};
     fl::WindshieldRain windshieldRain;
     ServerNotice serverNotice;
-    WingmanMenu wingmanMenu;   // the radio menu for ordering your flight (#610)
-    ManualOverlay manual;      // the in-flight aircraft manual, generated from the flight model (#821)
-    WeaponRegistry weapons;    // the client's copy of the pack's stores, for the manual's loadout section
-    ContentIndex contentIndex; // id -> asset name, so the client can resolve def cross-references (#810)
+    WingmanMenu wingmanMenu;           // the radio menu for ordering your flight (#610)
+    CommsMenu commsMenu;               // the ATC comms menu (#704)
+    VoiceCalloutManager voiceCallouts; // resolved-text radio callouts -> subtitle + optional voice (#704)
+    SubtitleOverlay subtitleOverlay;   // renders the subtitle queue as a HUD overlay layer (#704)
+    ManualOverlay manual;              // the in-flight aircraft manual, generated from the flight model (#821)
+    WeaponRegistry weapons;            // the client's copy of the pack's stores, for the manual's loadout section
+    ContentIndex contentIndex;         // id -> asset name, so the client can resolve def cross-references (#810)
 
     // Debug console
     CommandRegistry cmdRegistry;
@@ -843,6 +850,11 @@ void Game::initGameSystems() {
     fl::registerBuiltinSfxPresets(d.services.sfxManager);
     // Warning tones (#957): stall / overspeed cockpit cues. Null audio device tolerated (no-op).
     d.services.warningTones.init(d.services.p.audio.get(), d.services.rawLogger);
+    // Radio voice callouts (#704): the server sends resolved subtitle TEXT (not a key), so no
+    // Localization/synth is wired — playText pushes the subtitle and plays a pack OGG if one exists,
+    // else it degrades to a text-only subtitle. Null audio device tolerated.
+    d.services.voiceCallouts.init(d.services.p.audio.get(), d.services.assets.get(), &d.services.subtitleQueue,
+                                  /*i18n=*/nullptr, d.services.rawLogger, /*synth=*/nullptr);
     d.services.audioSettings = d.services.userConfig->audio();
     d.services.effectRouter.setSfx(&d.services.sfxManager, &d.services.audioSettings);
 }
@@ -952,6 +964,19 @@ void Game::startGame(const std::string& mission) {
         d.session.clientHandler->console = &*d.services.gameConsole;
         d.session.clientHandler->effects = &d.services.effectRouter; // weapon cosmetics (#625)
         d.services.effectRouter.reset();                             // no stale effects across sessions
+        // ATC/radio callouts (#704): render each transmission as a subtitle (+ a pack OGG at
+        // radio/<voiceKey> if one exists, else text-only). The console already logged the raw line.
+        d.session.clientHandler->radioCallback = [&d](const char* speaker, const char* text, const char* voiceKey,
+                                                      uint16_t seconds) {
+            std::string line =
+                (speaker && speaker[0] != '\0') ? std::string(speaker) + ": " + (text ? text : "") : (text ? text : "");
+            std::string asset;
+            if (voiceKey && voiceKey[0] != '\0')
+                asset = std::string("radio/") + voiceKey;
+            d.services.voiceCallouts.playText(line, asset.empty() ? nullptr : asset.c_str(),
+                                              seconds > 0 ? static_cast<float>(seconds) : 4.f,
+                                              d.services.audioSettings);
+        };
         // Server-driven music (#413/#166): a mission/AI world.set_music_state() reaches MusicManager here.
         d.session.clientHandler->musicStateCallback = [&d](uint8_t state) {
             if (fl::isGameStateOrdinal(state))
@@ -1048,6 +1073,7 @@ void Game::startGame(const std::string& mission) {
         fsd.inspector = d.session.inspector ? &*d.session.inspector : nullptr;
         fsd.prediction = &d.services.prediction;
         fsd.wingmanMenu = &d.services.wingmanMenu;
+        fsd.commsMenu = &d.services.commsMenu;
         fsd.manual = &d.services.manual;
         fsd.assignedEntityIdx = &d.session.clientHandler->assignedEntityIdx;
         fsd.assignedEntityGen = &d.session.clientHandler->assignedEntityGen;
@@ -1552,9 +1578,11 @@ void Game::run() {
         // the F3 performance overlay.
         d.services.gameConsole->buildHud(playerEntry ? &playerEntry->position : nullptr);
 
-        // Overlay layers: screen content + server notice + console.
+        // Overlay layers: screen content + server notice + radio subtitles + console.
         d.services.p.renderer->submitOverlayElements(d.services.screenMgr->active().buildElements());
         d.services.p.renderer->submitOverlayElements(d.services.serverNotice.buildElements());
+        d.services.p.renderer->submitOverlayElements(
+            d.services.subtitleOverlay.build(d.services.subtitleQueue)); // radio/ATC callouts (#704)
         d.services.p.renderer->setConsoleElements(d.services.gameConsole->elements());
 
         {

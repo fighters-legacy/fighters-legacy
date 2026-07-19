@@ -4,6 +4,7 @@
 #include "CameraInput.h"
 #include "ClientNetEventHandler.h"
 #include "ClientPrediction.h"
+#include "CommsMenu.h"
 #include "FlightInputCollector.h"
 #include "HapticController.h"
 #include "IInput.h"
@@ -110,12 +111,26 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     // Radio menu (#610). Non-modal: the aircraft keeps flying while it is open (see WingmanMenu.h),
     // so only the discrete keys it consumes are suppressed, via FlightInputCollector's uiFocused.
     const bool menuWasOpen = d.wingmanMenu && d.wingmanMenu->isOpen();
-    if (d.wingmanMenu && !d.gameConsole->isOpen()) {
+    const bool commsMenuWasOpen = d.commsMenu && d.commsMenu->isOpen();
+    if (d.wingmanMenu && !d.gameConsole->isOpen() && !commsMenuWasOpen) {
         if (!menuWasOpen && input.isKeyJustPressed(Key::C)) {
             d.wingmanMenu->toggle();
         } else if (menuWasOpen) {
             if (auto order = d.wingmanMenu->update(input); order && d.clientNet) {
                 d.clientNet->send(fl::kNetChReliable, &*order, sizeof(*order), /*reliable=*/true);
+            }
+        }
+    }
+
+    // ATC comms menu (#704). Same non-modal contract as the wingman menu — the aircraft keeps flying;
+    // only the discrete keys it consumes are suppressed via uiFocused. T toggles it. Mutually exclusive
+    // with the wingman menu so their digit keys never collide.
+    if (d.commsMenu && !d.gameConsole->isOpen() && !menuWasOpen) {
+        if (!commsMenuWasOpen && input.isKeyJustPressed(Key::T)) {
+            d.commsMenu->toggle();
+        } else if (commsMenuWasOpen) {
+            if (auto cmd = d.commsMenu->update(input); cmd && d.clientNet) {
+                d.clientNet->send(fl::kNetChReliable, &*cmd, sizeof(*cmd), /*reliable=*/true);
             }
         }
     }
@@ -187,7 +202,7 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
         return Screen::MainMenu;
 
     const ControlsSettings cs = d.userConfig->controls();
-    const bool uiFocused = d.wingmanMenu && d.wingmanMenu->isOpen();
+    const bool uiFocused = (d.wingmanMenu && d.wingmanMenu->isOpen()) || (d.commsMenu && d.commsMenu->isOpen());
     if (auto msg =
             d.flightInput->poll(*d.renderBridge, *d.camInput, *d.gameConsole, input, d.joystick, cs, uiFocused)) {
         // Stamp the snapshot ack (tickIndex + selective-ack mask, #566) from the net handler — the single
@@ -264,7 +279,7 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
 
     // Escape closed the radio menu or the manual this frame; it must NOT also open the pause screen.
     const bool manualClosedThisFrame = manualWasOpen && d.manual && !d.manual->isOpen();
-    if (!menuWasOpen && !manualClosedThisFrame && !consoleWasOpen && !d.gameConsole->isOpen() &&
+    if (!menuWasOpen && !commsMenuWasOpen && !manualClosedThisFrame && !consoleWasOpen && !d.gameConsole->isOpen() &&
         input.isKeyJustPressed(Key::Escape))
         return Screen::Pause;
 
@@ -288,6 +303,13 @@ std::span<const HudElement> FlightScreen::buildElements() {
     }
     if (m_deps.wingmanMenu) {
         for (const auto& e : m_deps.wingmanMenu->buildElements()) {
+            if (m_elementCount >= kMaxElements)
+                break;
+            m_elements[static_cast<std::size_t>(m_elementCount++)] = e;
+        }
+    }
+    if (m_deps.commsMenu) {
+        for (const auto& e : m_deps.commsMenu->buildElements()) {
             if (m_elementCount >= kMaxElements)
                 break;
             m_elements[static_cast<std::size_t>(m_elementCount++)] = e;

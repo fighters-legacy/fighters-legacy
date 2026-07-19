@@ -95,6 +95,7 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | J | Toggle the ECM jammer (#529; denies a hostile radar a lock beyond its burn-through range) |
 | End | Eject (#672; server edge-detects — a held key is one ejection). Spawns a parachute and destroys the aircraft; within the seat envelope the pilot survives |
 | C | Open the wingman radio menu (#610) |
+| T | Open the ATC comms menu (#704). Non-modal like the wingman menu (the aircraft keeps flying). Digits `1`–`9` pick an item; `Escape` backs out a page, then closes. Root: `1` ATC. ATC page: request takeoff / landing / declare inbound / cancel. The tower's reply appears as a subtitle (and a voice line when a pack provides `radio/` audio). |
 | K | Crew seat picker (#975): open / cycle the joinable non-fly seats across every crewed aircraft the client knows |
 | L | Join the selected crew seat (a gunner on that airframe; the bot parks) |
 | U | Leave the current crew seat (become an observer) |
