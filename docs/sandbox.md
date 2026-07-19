@@ -387,6 +387,7 @@ Pass `--connect` to join a remote `fl-server` instead of spawning a local single
 | `--auto` | **Skip the menu** and enter the session the other flags describe: Free Flight alone, Join Server with `--connect` (composes with `--observer`). |
 | `--screenshot <path>` | Write one PNG to `<path>` a few seconds into the Flight session, then exit — the in-engine capture (#909; no external screenshot tool needed). Pair with `--auto`/`--mission` for an unattended shot. |
 | `--screenshot-frames <N>` | Frames after Flight starts before the `--screenshot` capture fires (default 600 ≈ 10 s at 60 fps) — raise it to let terrain/airports stream in first. |
+| `--headless` | Run with **no window and no display** (#913): a swapchain-free renderer draws into owned images instead of presenting. Paired with a software Vulkan ICD (lavapipe) it renders with **no GPU** — the recorder's foundation. Combine with `--auto`/`--observer`/`--connect` and `--screenshot`/`--record`. Example: `DISPLAY= VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json fighters-legacy --headless --mission builtin:sandbox --auto --screenshot out.png`. |
 
 To avoid exposing the password in the process listing, use the `FL_OPERATOR_PASSWORD` environment variable instead of the CLI flag. Merge precedence: `--operator-password` CLI arg > `FL_OPERATOR_PASSWORD` env var > `[client].operator_password` in user.toml.
 

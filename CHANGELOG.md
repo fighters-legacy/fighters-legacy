@@ -9,6 +9,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **renderer/game**: swapchain-free headless init + `--headless` client mode (#913). `VkRenderer` gains
+  `initHeadless(w, h)` — a WSI-free path that renders into owned present-target images (no surface, no
+  swapchain, no present) so, paired with a software Vulkan ICD (lavapipe), the client renders with **no
+  display and no GPU**. The game's `--headless` flag swaps in a no-op window/display, skips input/cursor
+  backends, and drives the renderer's headless path; it rides the existing observer/auto no-menu flow.
+  Verified end-to-end on lavapipe: `DISPLAY= VK_ICD_FILENAMES=…lvp_icd… fighters-legacy --headless
+  --mission builtin:sandbox --auto --screenshot out.png` produces a correct 1280×720 PNG.
 - **renderer**: `IRenderer` frame-capture sink + `VkRenderer` swapchain readback (#912). New
   `IRenderer::setCaptureSink(std::function<void(const CaptureFrame&)>)` (non-pure, false default — mocks
   unchanged) delivers every rendered frame's tightly-packed RGBA8 pixels to a sink at the end of

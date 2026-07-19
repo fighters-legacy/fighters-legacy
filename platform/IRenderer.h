@@ -28,6 +28,16 @@ class IRenderer {
     // IWindow::init.
     virtual bool init(IWindow* window) = 0;
 
+    // Swapchain-free headless init (#913): render into owned present-target images at `width`×`height`
+    // with NO window, NO surface, and NO present — paired with a software Vulkan ICD (lavapipe) this
+    // renders with no display and no GPU. Frames are consumed via setCaptureSink (#912). Non-pure with a
+    // false default so backends/mocks without a headless path (and every test mock) need no change.
+    virtual bool initHeadless(uint32_t width, uint32_t height) {
+        (void)width;
+        (void)height;
+        return false;
+    }
+
     // Must be called when the window framebuffer changes size so the renderer
     // can tear down and rebuild the swapchain.
     virtual void onResize(int width, int height) = 0;

@@ -14,6 +14,7 @@
 #include "FlightInputCollector.h"
 #include "FlightScreen.h"
 #include "HapticController.h"
+#include "HeadlessHal.h"
 #include "IWindowEventHandler.h"
 #include "LocalServer.h"
 #include "MainMenuScreen.h"
@@ -335,6 +336,12 @@ struct GameServices {
     std::string screenshotPath;
     int screenshotFrames{600}; // ~10 s at 60 fps: enough for terrain + airports to stream in
 
+    // Headless client (#913): no window, no display, swapchain-free renderer (pair with a software
+    // Vulkan ICD like lavapipe for no-GPU rendering). The camera is driven by the recorder, not input.
+    bool headless{false};
+    int headlessW{1280};
+    int headlessH{720};
+
     // HUD / overlays
     EnvironmentState env;
     fl::FlightHud flightHud;
@@ -514,6 +521,8 @@ bool Game::initPlatform(int argc, char** argv) {
             d.services.requestObserver = true; // join as a spectator, no aircraft (#857)
         else if (std::strcmp(argv[i], "--auto") == 0)
             d.services.autoStart = true; // menu bypass: Free Flight, or Join Server with --connect
+        else if (std::strcmp(argv[i], "--headless") == 0)
+            d.services.headless = true; // no window/display; swapchain-free renderer (#913)
     }
 
     // Merge operator password: CLI arg > FL_OPERATOR_PASSWORD env var > [client].operator_password.
@@ -541,6 +550,34 @@ bool Game::initPlatform(int argc, char** argv) {
 // Steps 8–14: window, crash reporter, renderer, async filesystem, graphics settings.
 bool Game::initWindowAndRenderer() {
     auto& d = *m_impl;
+
+    if (d.services.headless) {
+        // Headless client (#913): no OS window, no input sink, no display/cursor backends. The renderer
+        // presents to owned images (initHeadless) instead of a swapchain; paired with a software Vulkan
+        // ICD (lavapipe) it renders with no display and no GPU. The camera is driven by the recorder.
+        const int hw = d.services.headlessW, hh = d.services.headlessH;
+        d.services.p.window = std::make_unique<HeadlessWindow>(hw, hh);
+        d.services.p.window->init("Fighters Legacy", hw, hh);
+        d.services.p.display = std::make_unique<HeadlessDisplay>();
+        // p.cursor stays null (never dereferenced headless — Settings is unreachable).
+
+        d.services.p.renderer = createVulkanRenderer();
+        if (!d.services.p.renderer->initHeadless(static_cast<uint32_t>(hw), static_cast<uint32_t>(hh))) {
+            d.services.rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "headless renderer init failed");
+            return false;
+        }
+        d.services.crashReporter.setGpuInfo(d.services.p.renderer->gpuInfo());
+        d.services.rendererSettings = buildRendererSettings(d.services.userConfig->graphics());
+        d.services.p.renderer->applySettings(d.services.rendererSettings);
+
+        auto asyncFsH = std::make_unique<StdAsyncFilesystem>(d.services.assetsRoot, d.services.userDataDir);
+        if (!asyncFsH->init()) {
+            d.services.rawLogger->log(LogLevel::Error, __FILE__, __LINE__, asyncFsH->getLastError());
+            return false;
+        }
+        d.services.p.asyncFilesystem = std::move(asyncFsH);
+        return true;
+    }
 
     d.services.p.window = std::make_unique<SDL3Window>();
 
