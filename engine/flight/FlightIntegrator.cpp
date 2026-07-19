@@ -2,6 +2,7 @@
 #include "flight/FlightIntegrator.h"
 
 #include "flight/Atmosphere.h"
+#include "flight/EngineFailFlags.h" // kEngineFlameout / kEngineCompStall — the #308 transient bits
 
 #include <algorithm>
 #include <cmath>
@@ -32,6 +33,14 @@ constexpr float kFbwAoaKd = 1.20f; // elevator per rad/s of pitch rate (damps th
 // chatter for a model flying the boundary.
 constexpr float kAbMachHysteresis = 0.02f;
 constexpr float kAbAltHysteresisKm = 0.3f;
+
+// Engine failure dynamics (#308). A flameout above the combustion ceiling must descend this far
+// back below it before a relight is attempted (prevents chatter riding the ceiling); a compressor
+// surge holds kEngineCompStall for this long after the disturbed-flow condition clears (a surge is
+// a violent, seconds-scale event, not a single-tick blip).
+constexpr float kRelightAltMarginKm = 0.5f;
+constexpr float kCompStallRecoverySeconds = 2.0f;
+constexpr float kSurgeMinThrottle = 0.5f; // a windmilling/idle compressor does not surge
 
 // Quaternion: multiply q = (x,y,z,w)
 std::array<float, 4> quatMul(const float* a, const float* b) {
@@ -280,6 +289,50 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     const float alpha_deg_now = alpha_rad / kDegToRad;
     const float q_dyn_now = 0.5f * atmos.density_kg_m3 * spd * spd;
     m_state.stalled = (alpha_deg_now > m_data->limits.alpha_stall_deg);
+
+    // 6c. ENGINE FAILURE DYNAMICS (#308). The integrator raises and clears the two TRANSIENT
+    // engine-fail bits it owns; the damage path owns Generic/Left/Right/Center and is never touched
+    // here. Both effects are derived deterministically from the flight state, so the server
+    // integrator and the client-prediction replay compute identical flags with nothing new on the
+    // wire. Gated off for ballistic vehicles — a solid motor neither flames out nor surges; its
+    // burn ends through the fuel path.
+    if (!m_data->isBallistic()) {
+        const EngineData& eng = m_data->engine;
+        uint8_t ef = m_state.engineFailFlags;
+
+        // Flameout: fuel starvation (an engine with nothing to burn makes no thrust — until #308
+        // an empty tank changed the mass and nothing else), or climbing past the optional
+        // combustion ceiling. Relight is a windmill start: fuel available, clearly back below the
+        // ceiling, and enough airspeed to spin the spool.
+        const bool fuelOut = m_state.fuel_kg <= 0.f;
+        const bool aboveCeiling = eng.flameout_alt_km && (altitude_m / 1000.f > *eng.flameout_alt_km);
+        if (fuelOut || aboveCeiling) {
+            ef |= kEngineFlameout;
+        } else if (ef & kEngineFlameout) {
+            const bool altOk =
+                !eng.flameout_alt_km || (altitude_m / 1000.f < *eng.flameout_alt_km - kRelightAltMarginKm);
+            if (altOk && spd >= eng.relight_min_mps)
+                ef &= ~kEngineFlameout;
+        }
+
+        // Compressor surge (opt-in): deep past the stall alpha with the compressor working hard,
+        // the intake blanks and the engine surges. Holds for a fixed recovery time after the
+        // disturbed-flow condition ends — a surge is a seconds-scale event.
+        if (eng.compressor_stall) {
+            const bool surging = alpha_deg_now > m_data->limits.alpha_stall_deg + eng.surge_alpha_margin_deg &&
+                                 m_state.throttle_actual > kSurgeMinThrottle;
+            if (surging) {
+                ef |= kEngineCompStall;
+                m_state.comp_stall_seconds = kCompStallRecoverySeconds;
+            } else if (ef & kEngineCompStall) {
+                m_state.comp_stall_seconds = std::max(0.f, m_state.comp_stall_seconds - dt);
+                if (m_state.comp_stall_seconds <= 0.f)
+                    ef &= ~kEngineCompStall;
+            }
+        }
+
+        m_state.engineFailFlags = ef;
+    }
 
     // 7. Aerodynamic + propulsive forces and moments via the swappable force model (default
     // FixedWingForceModel). Gravity and turbulence are added below by the integrator core.

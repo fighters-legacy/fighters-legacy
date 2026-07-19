@@ -216,6 +216,31 @@ struct EngineData {
     // with a small hysteresis band so a model riding the boundary does not chatter.
     std::optional<float> ab_min_mach;   // AB unavailable below this Mach (too little ram to sustain it)
     std::optional<float> ab_max_alt_km; // AB extinguishes above this altitude in km (too little oxygen)
+
+    // ── engine failure dynamics (#308) ───────────────────────────────────────
+    // The integrator RAISES kEngineFlameout / kEngineCompStall from these; until #308 those bits were
+    // defined, carried on the wire, and consumed by haptics — but never set by anything.
+
+    // Optional combustion ceiling in km: above it the burner cannot sustain light-off and the engine
+    // flames out (kEngineFlameout = total thrust loss) until a windmill relight — back below the
+    // ceiling with airspeed >= relight_min_mps. Absent = no altitude flameout (bit-identical to
+    // before). Distinct from ab_max_alt_km, which only extinguishes the augmentor.
+    std::optional<float> flameout_alt_km;
+
+    // Minimum airspeed for a windmill relight after a flameout (m/s). Only read while recovering
+    // from a flameout, so the default costs a model that never flames out nothing. Fuel-starvation
+    // flameouts also relight through this gate once fuel is available again (tanker/base ops).
+    float relight_min_mps{60.f};
+
+    // Opt-in compressor-surge model: at high alpha the intake blanks and a hard-working compressor
+    // surges — a transient total thrust loss (kEngineCompStall) that clears a fixed recovery time
+    // after the disturbed flow condition ends. Default off, so existing content is bit-identical;
+    // a deep-stall-honest model turns it on.
+    bool compressor_stall{false};
+
+    // Alpha margin PAST alpha_stall_deg where surge risk begins (deg), at high commanded power.
+    // Only read when compressor_stall is on.
+    float surge_alpha_margin_deg{5.f};
 };
 
 struct CarrierData {

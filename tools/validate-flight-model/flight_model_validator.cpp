@@ -621,6 +621,36 @@ static void validateEngine(const toml::table& tbl, FlightModelValidationResult& 
         }
     }
 
+    // Optional engine failure dynamics (#308): range-check when present, plus the cross-field
+    // sanity that the combustion ceiling sits ABOVE the afterburner ceiling — an engine that quits
+    // entirely below the altitude where its augmentor still lights is a units mistake.
+    if (auto f = eng["flameout_alt_km"].value<double>()) {
+        if (*f <= 0.0) {
+            r.errors.push_back("engine.flameout_alt_km must be > 0");
+            r.ok = false;
+        } else {
+            if (*f < 5.0 || *f > 40.0)
+                r.warnings.push_back("engine.flameout_alt_km outside the plausible 5-40 km band; "
+                                     "check units (kilometres, not metres or feet)");
+            if (auto a = eng["ab_max_alt_km"].value<double>(); a && *f <= *a)
+                r.warnings.push_back("engine.flameout_alt_km is at or below engine.ab_max_alt_km; the whole "
+                                     "engine would flame out before the afterburner envelope limit applies");
+        }
+    }
+    if (auto rl = eng["relight_min_mps"].value<double>(); rl && (*rl < 0.0 || *rl > 300.0)) {
+        r.errors.push_back("engine.relight_min_mps must be in [0, 300]");
+        r.ok = false;
+    }
+    if (auto sm = eng["surge_alpha_margin_deg"].value<double>()) {
+        if (*sm < 0.0 || *sm > 45.0) {
+            r.errors.push_back("engine.surge_alpha_margin_deg must be in [0, 45]");
+            r.ok = false;
+        }
+        if (!eng["compressor_stall"].value<bool>().value_or(false))
+            r.warnings.push_back("engine.surge_alpha_margin_deg is set but engine.compressor_stall is not "
+                                 "enabled; the surge model will never run");
+    }
+
     auto mil = tbl["engine"]["mil_thrust"];
     if (!mil) {
         r.errors.push_back("missing [engine.mil_thrust] table");

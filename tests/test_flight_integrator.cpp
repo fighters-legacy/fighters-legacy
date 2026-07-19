@@ -2089,3 +2089,137 @@ TEST_CASE("Integrator: unpaved surface shortens the ground rollout (#487)", "[in
     // And rolled less far.
     CHECK(std::abs(grass.pos_world[0]) < std::abs(concrete.pos_world[0]));
 }
+
+// ── engine failure dynamics (#308) ───────────────────────────────────────────
+
+TEST_CASE("Integrator: fuel starvation raises kEngineFlameout and kills thrust", "[integrator][engine_fail]") {
+    auto data = makeData();
+    FlightIntegrator fi(data);
+    FlightState s{};
+    s.vel_body[0] = 150.f;
+    s.pos_world[1] = 2000.f;
+    s.mass_kg = data->geometry.mass_kg;
+    s.fuel_kg = 0.f; // tanks dry
+    s.throttle_actual = 1.f;
+    fi.reset(s);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    PayloadEffect px{};
+    fi.step(1.f / 60.f, ctrl, px);
+
+    CHECK((fi.state().engineFailFlags & kEngineFlameout) != 0);
+    // Full throttle with no fuel: drag only, so the aircraft decelerates.
+    CHECK(fi.state().vel_body[0] < 150.f);
+}
+
+TEST_CASE("Integrator: flameout above the combustion ceiling, windmill relight below it", "[integrator][engine_fail]") {
+    auto data = makeData();
+    data->engine.flameout_alt_km = 12.f;
+    data->engine.relight_min_mps = 60.f;
+
+    auto stepAt = [&](float altM, float spd, uint8_t initialFlags) {
+        FlightIntegrator fi(data);
+        FlightState s{};
+        s.vel_body[0] = spd;
+        s.pos_world[1] = altM;
+        s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+        s.fuel_kg = data->geometry.fuel_kg;
+        s.engineFailFlags = initialFlags;
+        fi.reset(s);
+        ControlInput ctrl{};
+        ctrl.throttle = 1.f;
+        PayloadEffect px{};
+        fi.step(1.f / 60.f, ctrl, px);
+        return fi.state().engineFailFlags;
+    };
+
+    // Above the ceiling: flames out.
+    CHECK((stepAt(13000.f, 200.f, 0) & kEngineFlameout) != 0);
+    // Flamed out, back below the ceiling (past the relight margin) with airspeed: relights.
+    CHECK((stepAt(10000.f, 200.f, kEngineFlameout) & kEngineFlameout) == 0);
+    // Flamed out, below the ceiling but too slow to windmill the spool: stays out.
+    CHECK((stepAt(10000.f, 30.f, kEngineFlameout) & kEngineFlameout) != 0);
+    // No ceiling configured: high altitude alone never flames out (bit-identical to pre-#308).
+    data->engine.flameout_alt_km.reset();
+    CHECK((stepAt(19000.f, 200.f, 0) & kEngineFlameout) == 0);
+}
+
+TEST_CASE("Integrator: compressor surge past stall alpha at high power, with timed recovery",
+          "[integrator][engine_fail]") {
+    auto data = makeData();
+    data->engine.compressor_stall = true;
+    data->engine.surge_alpha_margin_deg = 5.f; // surge past 18 + 5 = 23 deg alpha
+
+    FlightIntegrator fi(data);
+    FlightState s{};
+    // alpha = atan2(-vel_y, vel_x): {90, -50} is ~29 deg — deep past the surge threshold.
+    s.vel_body[0] = 90.f;
+    s.vel_body[1] = -50.f;
+    s.pos_world[1] = 3000.f;
+    s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+    s.fuel_kg = data->geometry.fuel_kg;
+    s.throttle_actual = 1.f; // compressor working hard
+    fi.reset(s);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    PayloadEffect px{};
+    fi.step(1.f / 60.f, ctrl, px);
+    CHECK((fi.state().engineFailFlags & kEngineCompStall) != 0);
+
+    // Restore benign flow (level, wings-level state) and hold: the surge clears only after the
+    // recovery time, not on the first benign tick.
+    FlightState benign = fi.state();
+    benign.vel_body[0] = 150.f;
+    benign.vel_body[1] = 0.f;
+    benign.vel_body[2] = 0.f;
+    benign.omega[0] = benign.omega[1] = benign.omega[2] = 0.f;
+    fi.reset(benign);
+    fi.step(1.f / 60.f, ctrl, px);
+    CHECK((fi.state().engineFailFlags & kEngineCompStall) != 0); // still recovering
+    for (int i = 0; i < 150; ++i)                                // > kCompStallRecoverySeconds
+        fi.step(1.f / 60.f, ctrl, px);
+    CHECK((fi.state().engineFailFlags & kEngineCompStall) == 0);
+}
+
+TEST_CASE("Integrator: compressor surge model is off by default", "[integrator][engine_fail]") {
+    auto data = makeData(); // compressor_stall not set
+    FlightIntegrator fi(data);
+    FlightState s{};
+    s.vel_body[0] = 90.f;
+    s.vel_body[1] = -50.f; // ~29 deg alpha
+    s.pos_world[1] = 3000.f;
+    s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+    s.fuel_kg = data->geometry.fuel_kg;
+    s.throttle_actual = 1.f;
+    fi.reset(s);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    PayloadEffect px{};
+    fi.step(1.f / 60.f, ctrl, px);
+    CHECK((fi.state().engineFailFlags & kEngineCompStall) == 0);
+}
+
+TEST_CASE("Integrator: damage-owned engine-fail bits survive the dynamics pass", "[integrator][engine_fail]") {
+    // The #308 block owns only the transient bits; a latched kEngineFailLeft from subsystem damage
+    // must pass through untouched.
+    auto data = makeData();
+    FlightIntegrator fi(data);
+    FlightState s{};
+    s.vel_body[0] = 150.f;
+    s.pos_world[1] = 2000.f;
+    s.mass_kg = data->geometry.mass_kg + data->geometry.fuel_kg;
+    s.fuel_kg = data->geometry.fuel_kg;
+    fi.reset(s);
+    fi.setEngineFailFlags(kEngineFailLeft);
+
+    ControlInput ctrl{};
+    ctrl.throttle = 1.f;
+    PayloadEffect px{};
+    for (int i = 0; i < 60; ++i)
+        fi.step(1.f / 60.f, ctrl, px);
+    CHECK((fi.state().engineFailFlags & kEngineFailLeft) != 0);
+    CHECK((fi.state().engineFailFlags & kEngineFlameout) == 0);
+}

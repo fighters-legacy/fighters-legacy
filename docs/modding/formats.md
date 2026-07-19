@@ -223,6 +223,18 @@ ab_min_mach         = 0.0    # optional — afterburner will not light/relight b
                              #   limit); omit for no low-speed limit.
 ab_max_alt_km       = 100.0  # optional — afterburner extinguishes above this altitude in km; omit
                              #   for no ceiling. Both apply only if [engine.ab_thrust] is present.
+flameout_alt_km     = 16.0   # optional — the WHOLE engine flames out above this altitude (total
+                             #   thrust loss) until a windmill relight: back below the ceiling with
+                             #   airspeed >= relight_min_mps. Omit for no altitude flameout. Fuel
+                             #   starvation always flames the engine out, ceiling or not.
+relight_min_mps     = 60.0   # optional (default 60) — minimum airspeed for a windmill relight
+                             #   after any flameout (altitude or fuel starvation).
+compressor_stall    = false  # optional (default false) — opt-in compressor-surge model: deep past
+                             #   the stall alpha at high commanded power, the intake blanks and the
+                             #   engine surges (transient total thrust loss, ~2 s recovery after
+                             #   the flow condition clears).
+surge_alpha_margin_deg = 5.0 # optional (default 5) — alpha margin past alpha_stall_deg where the
+                             #   surge risk begins; only read when compressor_stall is enabled.
 
 [engine.mil_thrust]
 mach   = [0.0, 0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.0, 2.25]

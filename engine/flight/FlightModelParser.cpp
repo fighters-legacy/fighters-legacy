@@ -408,6 +408,16 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         if (auto a = eng["ab_max_alt_km"].value<double>())
             d.engine.ab_max_alt_km = static_cast<float>(*a);
 
+        // Engine failure dynamics (#308): optional combustion ceiling + windmill-relight speed, and
+        // the opt-in compressor-surge model. All absent = bit-identical to before.
+        if (auto f = eng["flameout_alt_km"].value<double>())
+            d.engine.flameout_alt_km = static_cast<float>(*f);
+        if (auto r = eng["relight_min_mps"].value<double>())
+            d.engine.relight_min_mps = static_cast<float>(*r);
+        d.engine.compressor_stall = eng["compressor_stall"].value<bool>().value_or(false);
+        if (auto sm = eng["surge_alpha_margin_deg"].value<double>())
+            d.engine.surge_alpha_margin_deg = static_cast<float>(*sm);
+
         auto mil = tbl["engine"]["mil_thrust"];
         if (!mil || !mil.as_table())
             throw std::runtime_error("missing [engine.mil_thrust] table");

@@ -624,3 +624,36 @@ burn_time_s = 0.0
 )";
     CHECK_FALSE(fl::validateFlightModel(badBurn).ok);
 }
+
+TEST_CASE("#308: valid engine failure dynamics fields pass", "[flight-model-validator]") {
+    auto r = validateFlightModel(patch(kValidFighter, "spool_time_s        = 5.0",
+                                       "spool_time_s        = 5.0\nflameout_alt_km = 16.0\n"
+                                       "relight_min_mps = 80.0\ncompressor_stall = true\n"
+                                       "surge_alpha_margin_deg = 6.0"));
+    CHECK(r.ok);
+    CHECK(r.errors.empty());
+}
+
+TEST_CASE("#308: flameout_alt_km in metres is caught by the plausibility band", "[flight-model-validator]") {
+    auto r = validateFlightModel(
+        patch(kValidFighter, "spool_time_s        = 5.0", "spool_time_s        = 5.0\nflameout_alt_km = 15000.0"));
+    bool found = false;
+    for (const auto& w : r.warnings)
+        found = found || w.find("flameout_alt_km") != std::string::npos;
+    CHECK(found);
+}
+
+TEST_CASE("#308: surge margin without compressor_stall warns", "[flight-model-validator]") {
+    auto r = validateFlightModel(
+        patch(kValidFighter, "spool_time_s        = 5.0", "spool_time_s        = 5.0\nsurge_alpha_margin_deg = 6.0"));
+    bool found = false;
+    for (const auto& w : r.warnings)
+        found = found || w.find("surge_alpha_margin_deg") != std::string::npos;
+    CHECK(found);
+}
+
+TEST_CASE("#308: out-of-range relight_min_mps fails", "[flight-model-validator]") {
+    auto r = validateFlightModel(
+        patch(kValidFighter, "spool_time_s        = 5.0", "spool_time_s        = 5.0\nrelight_min_mps = 900.0"));
+    CHECK_FALSE(r.ok);
+}
