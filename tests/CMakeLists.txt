@@ -389,7 +389,7 @@ if(TARGET platform-enet)
     target_link_libraries(test_admin_console PRIVATE
         Catch2::Catch2WithMain
         fl-server-config engine-console engine-net engine-entity engine-weather engine-loop
-        engine-ai engine-script)
+        engine-ai engine-atc engine-world engine-script)
     target_include_directories(test_admin_console PRIVATE
         "${CMAKE_SOURCE_DIR}/server/fl-server"
         "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -430,6 +430,21 @@ add_executable(test_ai_controllers test_ai_controllers.cpp)
 target_link_libraries(test_ai_controllers PRIVATE engine-ai engine-entity engine-spatial engine-sensor
     Catch2::Catch2WithMain)
 catch_discover_tests(test_ai_controllers)
+
+# Takeoff / landing ground-and-pattern controllers (#701, ATC epic #673).
+add_executable(test_takeoff_controller test_takeoff_controller.cpp)
+target_link_libraries(test_takeoff_controller PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
+catch_discover_tests(test_takeoff_controller)
+
+add_executable(test_landing_controller test_landing_controller.cpp)
+target_link_libraries(test_landing_controller PRIVATE engine-ai engine-entity engine-spatial Catch2::Catch2WithMain)
+catch_discover_tests(test_landing_controller)
+
+# ATC service core — facilities, runway sequencing, clearances (#702, ATC epic #673).
+add_executable(test_atc_service test_atc_service.cpp)
+target_link_libraries(test_atc_service PRIVATE engine-atc engine-world engine-entity engine-spatial
+    Catch2::Catch2WithMain)
+catch_discover_tests(test_atc_service)
 
 # The scripted wingman grammar + its two wire messages (#610). Header-only + engine-protocol only.
 add_executable(test_wingman_command test_wingman_command.cpp)
@@ -922,6 +937,7 @@ add_executable(test_screen_manager test_screen_manager.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CommsMenu.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ManualOverlay.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientPrediction.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CameraInput.cpp"
@@ -946,6 +962,15 @@ target_link_libraries(test_entity_selector PRIVATE Catch2::Catch2WithMain engine
 target_include_directories(test_entity_selector PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
 catch_discover_tests(test_entity_selector)
+
+# The in-flight comms menu (#704, ATC epic #673): pure page-navigation/command-emission logic over
+# IInput; compiles the game source directly, no SDL/rendering.
+add_executable(test_comms_menu test_comms_menu.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CommsMenu.cpp")
+target_link_libraries(test_comms_menu PRIVATE Catch2::Catch2WithMain engine-protocol platform-hal)
+target_include_directories(test_comms_menu PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
+catch_discover_tests(test_comms_menu)
 
 # Crew seat picker (#975): pure roster-driven seat selection (no SDL). engine-entity for CrewCapability,
 # engine-protocol for SeatOccupancy (GameProtocol.h).

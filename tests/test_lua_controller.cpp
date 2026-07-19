@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ILogger.h"
+#include "atc/AtcService.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
@@ -9,6 +10,8 @@
 #include "script/WorldApi.h"
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
+#include "world/AirportRegistry.h"
+#include "world/BuiltinAirport.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -1016,4 +1019,92 @@ TEST_CASE("haptic bindings are present and safe no-ops without a host (#128)") {
     REQUIRE(c->isValid());
     auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0); // no WorldApi -> no crash
     CHECK(ctrl.throttle == Catch::Approx(0.3f));
+}
+
+// ---------------------------------------------------------------------------
+// atc.* module (#705)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("LuaController: atc.scramble triggers the spawn handler (#705)", "[lua][atc]") {
+    // #673 criterion 3: a Lua AI script launches a flight from a named airport.
+    NullLoggerL log;
+    fl::EntityTypeRegistry reg;
+    fl::EntityDef d;
+    d.id = "test:basic";
+    d.name = "B";
+    d.category = fl::ObjectCategory::AirVehicle;
+    d.maxHp = 100.f;
+    reg.registerType(d);
+    fl::EntityManager em(log, reg);
+
+    fl::AirportRegistry airports;
+    airports.load({fl::builtinAirfield()}, fl::kEarthRadiusM, nullptr);
+    fl::atc::AtcService atc(em, airports, fl::kEarthRadiusM);
+    int spawns = 0;
+    atc.setSpawnHandler([&](const fl::atc::AtcService::DepartureSpawn& s) {
+        ++spawns;
+        CHECK(s.facilityId == "builtin:airfield");
+        CHECK(s.typeId == "test:basic");
+    });
+
+    const char* src = "function compute_control(state, tick, dt)\n"
+                      "  if tick == 0 then atc.scramble('builtin:airfield', 'test:basic', 2) end\n"
+                      "  return {}\n"
+                      "end";
+    fl::LuaController ctrl(src, "", &em, nullptr, &atc);
+    REQUIRE(ctrl.isValid());
+    ctrl.sample(makeState(), 0, 1.0 / 60.0);
+    CHECK(spawns == 2);
+}
+
+TEST_CASE("LuaController: atc.* is nil-safe with no ATC service (#705)", "[lua][atc]") {
+    // request_takeoff() returns false and clearance() returns "none" when no service is wired; the
+    // script maps those to control fields so we can observe them through the ControlInput return.
+    const char* src = "function compute_control(state, tick, dt)\n"
+                      "  local ok = atc.request_takeoff()\n"
+                      "  local none = (atc.clearance() == 'none')\n"
+                      "  return { throttle = (ok and 1.0 or 0.25), aileron = (none and 0.5 or 0.0) }\n"
+                      "end";
+    auto c = makeCtrl(src); // no atc service
+    REQUIRE(c->isValid());
+    auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0);
+    CHECK(ctrl.throttle == Catch::Approx(0.25f)); // request refused
+    CHECK(ctrl.aileron == Catch::Approx(0.5f));   // clearance == "none"
+}
+
+TEST_CASE("LuaController: atc.request_takeoff sequences the entity when a service is wired (#705)", "[lua][atc]") {
+    NullLoggerL log;
+    fl::EntityTypeRegistry reg;
+    fl::EntityDef d;
+    d.id = "test:basic";
+    d.name = "B";
+    d.category = fl::ObjectCategory::AirVehicle;
+    d.maxHp = 100.f;
+    reg.registerType(d);
+    fl::EntityManager em(log, reg);
+    fl::AirportRegistry airports;
+    airports.load({fl::builtinAirfield()}, fl::kEarthRadiusM, nullptr);
+    fl::atc::AtcService atc(em, airports, fl::kEarthRadiusM);
+
+    // Spawn the controlled entity near the field so nearest-airport resolution finds it.
+    const fl::ResolvedAirport* field = airports.byId("builtin:airfield");
+    REQUIRE(field != nullptr);
+    fl::EntityTransform t{};
+    t.pos[0] = field->worldPos.x;
+    t.pos[2] = field->worldPos.z;
+    t.quat[3] = 1.f;
+    fl::EntityId id = em.spawn("test:basic", t);
+
+    const char* src = "function compute_control(state, tick, dt)\n"
+                      "  if tick == 0 then atc.request_takeoff() end\n"
+                      "  return { throttle = (atc.clearance() == 'hold_short') and 1.0 or 0.0 }\n"
+                      "end";
+    fl::LuaController ctrl(src, "", &em, nullptr, &atc);
+    REQUIRE(ctrl.isValid());
+    fl::EntityState* s = em.get(id);
+    REQUIRE(s != nullptr);
+    auto out = ctrl.sample(*s, 0, 1.0 / 60.0);
+    // After request_takeoff on tick 0 the entity is holding short, which the script reports as throttle 1.
+    CHECK(out.throttle == Catch::Approx(1.0f));
+    CHECK(atc.clearanceState(id) == fl::atc::ClearanceState::HoldShort);
 }

@@ -420,6 +420,20 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             console->print(std::string(noticeBuf));
         if (notice)
             notice->setNotice(noticeBuf, sn.secondsRemaining);
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::RadioTransmission)) {
+        fl::MsgRadioTransmission rt;
+        if (!fl::readMsg(data, size, rt))
+            return;
+        rt.speaker[sizeof(rt.speaker) - 1] = '\0';
+        rt.voiceKey[sizeof(rt.voiceKey) - 1] = '\0';
+        rt.text[sizeof(rt.text) - 1] = '\0';
+        if (console) {
+            char line[224];
+            std::snprintf(line, sizeof(line), "[radio] %s: %s", rt.speaker, rt.text);
+            console->print(std::string(line));
+        }
+        if (radioCallback)
+            radioCallback(rt.speaker, rt.text, rt.voiceKey, rt.displaySeconds);
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::AdminResponse)) {
         fl::MsgAdminResponse resp;
         if (!fl::readMsg(data, size, resp))

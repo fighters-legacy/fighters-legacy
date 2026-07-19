@@ -254,7 +254,13 @@ static const char* kDefaultToml =
     "# cover_range_m = 6000.0           # cover_me trigger radius about the LEAD; [500, 200000]\n"
     "# designate_range_m = 15000.0      # attack_my_target boresight range; [500, 200000]\n"
     "# designate_half_angle_deg = 15.0  # boresight cone half-angle; [1, 90]\n"
-    "# command_rate_limit_per_s = 4     # wingman orders per second per player; [1, 60]\n";
+    "# command_rate_limit_per_s = 4     # wingman orders per second per player; [1, 60]\n"
+    "\n"
+    "[atc]\n"
+    "# Air-traffic control (#673): runway sequencing, clearances, and a player comms menu.\n"
+    "# Disable to boot with no facilities — radio commands then answer \"no ATC available\".\n"
+    "enabled = true\n"
+    "# scramble_entity_type = \"builtin:debug-entity\"  # default type for atc_scramble / atc.scramble\n";
 
 std::string_view defaultServerConfigToml() {
     return kDefaultToml;
@@ -937,6 +943,12 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "flight.command_rate_limit_per_s out of range [1, 60]; using default 4");
         }
+
+        // [atc]  — air-traffic control (#706)
+        if (auto v = tbl["atc"]["enabled"].value<bool>())
+            cfg.atc.enabled = *v;
+        if (auto v = tbl["atc"]["scramble_entity_type"].value<std::string>())
+            cfg.atc.scrambleEntityType = *v;
 
     } catch (const toml::parse_error& e) {
         char buf[256];

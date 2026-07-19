@@ -21,6 +21,14 @@ struct ControlInput {
     bool gear_down{false};
     float tvc_angle_deg{0.f}; // commanded nozzle deflection (pitch axis)
 
+    // ── ground handling (#700) ───────────────────────────────────────────────
+    // Wheel brakes, applied by FlightIntegrator ONLY while in ground contact. 0 = off, 1 = full
+    // pedal. The integrator adds a brake deceleration (~0.35 g at wheelBrake=1) on top of the
+    // baseline rolling resistance to the horizontal body velocity, so a lander can actually stop on
+    // the runway. Ignored in the air (no wheels on the ground = no braking). Nosewheel steering is
+    // driven off `rudder` inside the integrator, fading out with ground speed — no separate field.
+    float wheelBrake{0.f};
+
     // ── fire intent (#625) ───────────────────────────────────────────────────
     // ONE seam for players, C++ AI, and Lua: PeerController maps these from the wire, AI
     // controllers set them directly, LuaController maps compute_control's return fields. The

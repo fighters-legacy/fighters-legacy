@@ -6,6 +6,7 @@
 #include "config/AudioSettings.h"
 
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace fl {
@@ -34,6 +35,11 @@ class VoiceCalloutManager {
               IAudioSynthesizer* synth = nullptr);
 
     void play(const VoiceCallout& callout, const AudioSettings& settings);
+
+    // Play a callout whose subtitle text is ALREADY resolved (#704) — the server sends the rendered
+    // line, not a localization key. audioAsset may be null/empty (subtitle only — the no-pack-audio
+    // degradation path in docs/ai-architecture.md). Safe to call before init()/without an audio device.
+    void playText(std::string_view text, const char* audioAsset, float subtitleDuration, const AudioSettings& settings);
 
     void shutdown();
 

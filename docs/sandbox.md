@@ -85,6 +85,7 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | Arrow Up / Down | Elevator (pitch) |
 | Arrow Left / Right | Aileron (roll) |
 | Z / X | Rudder left / right |
+| B | Wheel brakes (bit 6, level; #700). Only bites in ground contact — hold it to stop the rollout after touchdown. Rudder also steers the nosewheel at taxi speed, fading out by ~50 m/s |
 | Space | Gun trigger (bit 0, level — hold to keep firing, rate-limited server-side) |
 | Tab | Afterburner command (bit 1) |
 | Enter / Right mouse | Fire selected store (bit 2 — edge-detected server-side; holding it is one shot) |
@@ -94,6 +95,7 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | J | Toggle the ECM jammer (#529; denies a hostile radar a lock beyond its burn-through range) |
 | End | Eject (#672; server edge-detects — a held key is one ejection). Spawns a parachute and destroys the aircraft; within the seat envelope the pilot survives |
 | C | Open the wingman radio menu (#610) |
+| T | Open the ATC comms menu (#704). Non-modal like the wingman menu (the aircraft keeps flying). Digits `1`–`9` pick an item; `Escape` backs out a page, then closes. Root: `1` ATC. ATC page: request takeoff / landing / declare inbound / cancel. The tower's reply appears as a subtitle (and a voice line when a pack provides `radio/` audio). |
 | K | Crew seat picker (#975): open / cycle the joinable non-fly seats across every crewed aircraft the client knows |
 | L | Join the selected crew seat (a gunner on that airframe; the bot parks) |
 | U | Leave the current crew seat (become an observer) |
@@ -286,6 +288,9 @@ The console is a half-screen drop-down overlay. It is fully independent of the c
 | `toggle_pos` | Toggle entity world-position readout below the camera position display |
 | `show_ping` | Toggle "Ping: N ms" RTT overlay (visible even when F3 performance overlay is off) |
 | `set_weather <preset>` | Set weather instantly: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm`, `snow`, `blizzard`. Queued to sim thread; takes effect on next tick. |
+| `atc_status [airport]` | Show ATC facility queues + runway occupancy (#705). Synchronous read of the ATC service; `[airport]` filters to one field. |
+| `atc_scramble <airport> <type> [count]` | Launch `count` AI departures from a named airport (#705, default 1). They spawn hold-short, get sequenced onto the runway, and take off in order. Queued to the sim thread. |
+| `atc_hold <airport> <on\|off>` | Freeze or release that airport's departure queue (#705). Queued to the sim thread. |
 | `detonate <x> <y> <z> <radius_m> <damage> [--nuclear]` | AoE warhead at a world position (#356); `--nuclear` adds the EMP ring (avionics kill) at 4× the blast radius. Forwarded to the server. |
 | `set_difficulty <level>` | *(stub — Phase 2b)* |
 | `reload_content` | *(stub — see issue #152)* |

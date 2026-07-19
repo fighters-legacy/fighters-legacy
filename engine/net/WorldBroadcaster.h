@@ -61,6 +61,11 @@ class FactionRegistry;            // engine/world/FactionRegistry.h — coalitio
 enum class SurfaceType : uint8_t; // engine/render/SurfaceType.h — ground-surface handling (#487)
 } // namespace fl
 
+namespace fl::atc {
+class AtcService;         // engine/atc/AtcService.h — the deterministic ATC FSM (#702)
+struct RadioTransmission; // engine/atc/AtcTypes.h — one ATC radio line
+} // namespace fl::atc
+
 namespace fl {
 
 // Sentinel initial airspeed (#883): "no explicit speed given — pick a sane cruise default for an
@@ -114,6 +119,10 @@ struct PeerInputState {
     uint32_t lastWingmanSeq{0};                                    // dup/reorder guard
     bool hasWingmanSeq{false};         // false until the first order (a reconnect restarts the counter)
     bool wingmanRateLimitAcked{false}; // one RateLimited ack per window, never one per packet
+
+    // Player radio channel (#703 — ATC now). Same per-peer 1 s rate-limit window pattern as wingman.
+    std::chrono::steady_clock::time_point radioCmdWindowStart{};
+    uint32_t radioCmdCount{0};
 
     // Connect handshake (#853/#857). Set when MsgConnectRequest is processed. Before that a connected
     // peer has an input slot (so idle-timeout covers it) but no entity, no role, and no snapshot
@@ -290,6 +299,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         return m_activePeerCount.load(std::memory_order_relaxed);
     }
 
+    // Number of registered controllers (peers + AI/scripted). Sim-thread only; test/telemetry — used
+    // to verify the orphan reap (#702) drops a controller once its entity is gone.
+    [[nodiscard]] std::size_t controlledEntityCount() const noexcept {
+        return m_controlledEntities.size();
+    }
+
     // Register a server-side controller (AI, scripted, ...) for an already-spawned entity. The entity
     // is then stepped every onTick exactly like a connected peer and serialized into MsgWorldSnapshot
     // for free — no peer required. The flight integrator is built from `model` (null = builtin UFO
@@ -342,6 +357,18 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Call before gameLoop.start().
     void setMissionTickHook(std::function<void(uint64_t)> hook) {
         m_missionTickHook = std::move(hook);
+    }
+
+    // Air-traffic control (#702). Injected pre-start; the broadcaster ticks the deterministic ATC FSM
+    // at 1 Hz in the serial Maintenance phase (before the AI pass) and drains its radio transmissions.
+    // Null = no ATC (the [atc] enabled=false path). The service must outlive the broadcaster.
+    void setAtcService(fl::atc::AtcService* svc) noexcept {
+        m_atcService = svc;
+    }
+    // Routes each ATC RadioTransmission somewhere (the #703 wire message; nullptr = log it). Set
+    // before gameLoop.start().
+    void setAtcTransmissionSink(std::function<void(const fl::atc::RadioTransmission&)> sink) {
+        m_atcTransmissionSink = std::move(sink);
     }
 
     // Peer management — all must be called from the sim thread (via GameLoop::enqueueSimCallback).
@@ -978,6 +1005,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
                                     EntityId designatedTarget, uint32_t callerPeerId, uint32_t callerEntityIdx);
     void sendWingmanAck(uint32_t peerId, uint8_t command, WingmanResult result, uint16_t flightId, uint8_t flightSize,
                         uint32_t memberIdx, uint32_t targetIdx);
+
+    // Player radio channel (#703). Sim-thread only (called from onReceive). Parses the verb, rate-
+    // limits per peer, dispatches to the ATC service, and sends an immediate acknowledgement.
+    void handleRadioCommand(uint32_t peerId, const void* data, std::size_t size);
+    // Convert an ATC RadioTransmission to the wire message and send it: unicast to the peer owning the
+    // target entity if one does, else broadcast to every peer (so nearby players hear an AI's clearance).
+    void sendRadioTransmission(const fl::atc::RadioTransmission& tx);
     // Log, send a MsgConnectRefusal with the reason text for `code`, and disconnect the peer.
     // Centralizes the five onConnect rejection paths.
     void rejectConnection(uint32_t peerId, const std::string& ip, ConnectRefusalCode code);
@@ -1019,6 +1053,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     WeatherController* m_weather{nullptr};
     const FactionRegistry* m_factionRegistry{nullptr}; // coalition-aware hostility for AI (#632)
     std::function<void(uint64_t)> m_missionTickHook;   // mission objective evaluator, end of onTick (#633)
+    fl::atc::AtcService* m_atcService{nullptr};        // deterministic ATC FSM, ticked at 1 Hz (#702)
+    std::function<void(const fl::atc::RadioTransmission&)> m_atcTransmissionSink; // null = log (#702/#703)
 
     std::unordered_map<uint32_t, EntityId> m_peerEntities; // the aircraft a peer OWNS (Fly-seat pilots)
     std::unordered_map<uint32_t, PeerInputState> m_peerInputs;

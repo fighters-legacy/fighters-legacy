@@ -18,6 +18,11 @@ bool VoiceCalloutManager::init(IAudio* audio, AssetManager* assets, SubtitleQueu
     m_logger = logger;
     m_synth = synth;
 
+    // Null audio device (headless / no device): keep the subtitle path live but create no sources.
+    // playText/play then push subtitles and skip audio (docs/ai-architecture.md degradation).
+    if (!audio)
+        return false;
+
     for (int i = 0; i < kMaxSfxSources; ++i) {
         m_sources[i] = audio->createSource();
         if (!m_sources[i]) {
@@ -96,6 +101,36 @@ void VoiceCalloutManager::play(const VoiceCallout& callout, const AudioSettings&
     // Push subtitle regardless of whether audio played.
     if (!subtitleText.empty() && m_subtitles && m_subtitles->enabled())
         m_subtitles->push(std::move(subtitleText), callout.subtitleDuration);
+}
+
+void VoiceCalloutManager::playText(std::string_view text, const char* audioAsset, float subtitleDuration,
+                                   const AudioSettings& settings) {
+    std::string subtitleText(text);
+
+    // Audio (TTS > OGG asset), only if an audio device is up. A null/empty asset with no synth = a
+    // text-only line, which is the correct degradation with no content pack.
+    AudioBufferId bufId = 0;
+    if (m_audio) {
+        if (!subtitleText.empty() && m_synth) {
+            SynthesisedAudio synth;
+            if (m_synth->synthesise(subtitleText, synth) && synth.valid())
+                bufId = m_audio->uploadBuffer(synth.samples.data(), synth.samples.size() * sizeof(int16_t),
+                                              synth.sampleRate, synth.channels);
+        }
+        if (!bufId && audioAsset && audioAsset[0] != '\0' && m_assets)
+            bufId = getOrUploadBuffer(audioAsset);
+        if (bufId) {
+            AudioSourceId src = m_sources[m_nextSource % kMaxSfxSources];
+            m_nextSource = (m_nextSource + 1) % kMaxSfxSources;
+            if (src) {
+                m_audio->setGain(src, settings.masterVolume * settings.voiceChatVolume);
+                m_audio->play(src, bufId);
+            }
+        }
+    }
+
+    if (!subtitleText.empty() && m_subtitles && m_subtitles->enabled())
+        m_subtitles->push(std::move(subtitleText), subtitleDuration);
 }
 
 void VoiceCalloutManager::shutdown() {

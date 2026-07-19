@@ -33,6 +33,7 @@ class SimRenderBridge;
 class TerrainStreamer;
 class WindshieldRain;
 class WingmanMenu;
+class CommsMenu;
 class ManualOverlay;
 
 struct EnvironmentState;
@@ -57,6 +58,7 @@ struct FlightScreenDeps {
     SandboxInspector* inspector{nullptr};  // null = no inspector
     ClientPrediction* prediction{nullptr}; // null = no prediction
     WingmanMenu* wingmanMenu{nullptr};     // null = no radio menu (#610)
+    CommsMenu* commsMenu{nullptr};         // null = no ATC comms menu (#704)
     ManualOverlay* manual{nullptr};        // null = no in-flight aircraft manual (#821)
     uint32_t* assignedEntityIdx{nullptr};
     uint32_t* assignedEntityGen{nullptr};

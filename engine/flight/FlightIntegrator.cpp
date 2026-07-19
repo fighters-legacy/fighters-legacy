@@ -630,6 +630,49 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
         m_state.vel_body[2] *= decay; // right (vertical vel_body[1] is the impact clamp's)
     }
 
+    // 14b-brake. Wheel brakes, baseline rolling resistance, and nosewheel steering (#700). Only while
+    // in ground contact — wheels down on the surface. Rolling resistance (~0.02 g) is always present so
+    // a rollout decays instead of coasting forever; the pilot's wheelBrake adds up to ~0.35 g on top,
+    // which is what lets a lander stop on the runway rather than run off the far end. Both act on the
+    // HORIZONTAL body velocity only, capped so they can never reverse it. Nosewheel steering turns
+    // rudder into a yaw RATE with authority that fades from full at taxi speed to nil by ~50 m/s, so
+    // the aero rudder owns yaw during the takeoff roll and this never fights it. Placed before the
+    // static parking hold (14c) so a truly stopped, near-idle aircraft still latches fully static.
+    if ((m_gravity->geodeticAltitude(m_state.pos_world) - static_cast<double>(groundElev)) <= kGroundContactMarginM) {
+        constexpr float kRollingResistG = 0.02f; // baseline tyre rolling resistance
+        constexpr float kBrakeMaxG = 0.35f;      // full-pedal wheel-brake deceleration
+        const float decel = (kRollingResistG + kBrakeMaxG * std::clamp(ctrl.wheelBrake, 0.f, 1.f)) * kG0;
+        const float horizSpd =
+            float(std::sqrt(m_state.vel_body[0] * m_state.vel_body[0] + m_state.vel_body[2] * m_state.vel_body[2]));
+        if (horizSpd > 1e-4f) {
+            const float newSpd = std::max(0.f, horizSpd - decel * dt);
+            const float scale = newSpd / horizSpd;
+            m_state.vel_body[0] *= scale; // forward
+            m_state.vel_body[2] *= scale; // right (vertical vel_body[1] belongs to the impact clamp)
+        }
+
+        // Tire cornering grip: the wheels resist sliding sideways, so the ground velocity tracks the
+        // heading. This is what turns the velocity vector when the nosewheel yaws the airframe below —
+        // without it the transport term (12b) keeps the world velocity inertially fixed and the nose
+        // just crabs off the direction of travel instead of the aircraft actually turning.
+        constexpr float kTireGripPerSec = 4.f; // lateral (body-z) skid decay rate on the ground
+        m_state.vel_body[2] *= std::max(0.f, 1.f - kTireGripPerSec * dt);
+
+        // Nosewheel steering: omega[1] is yaw about +Y with positive = nose LEFT, and rudder +1 = right
+        // yaw, so the full-authority target is -rudder * kSteerRate. Blend the current yaw rate toward
+        // it with weight = authority: at taxi speed the nosewheel owns yaw entirely (rudder turns the
+        // aircraft), by kSteerFadeMax it contributes nothing and the aero rudder is untouched.
+        constexpr float kSteerFadeMinMps = 15.f; // full nosewheel authority at/below this ground speed
+        constexpr float kSteerFadeMaxMps = 50.f; // no nosewheel authority at/above this ground speed
+        constexpr float kSteerRateRadS = 0.35f;  // yaw rate at full rudder + full authority (~20 deg/s)
+        const float authority =
+            std::clamp((kSteerFadeMaxMps - horizSpd) / (kSteerFadeMaxMps - kSteerFadeMinMps), 0.f, 1.f);
+        if (authority > 0.f) {
+            const float targetYaw = -ctrl.rudder * kSteerRateRadS;
+            m_state.omega[1] += authority * (targetYaw - m_state.omega[1]);
+        }
+    }
+
     // 14c. Static ground friction (parking brake). A stationary aircraft on the ground is held
     // by its gear/brakes and must not creep under residual forcing (gravity tickle, numerical
     // drift, a gust the instant before contact). Engages only at very low ground speed and
