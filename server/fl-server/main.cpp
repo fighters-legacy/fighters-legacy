@@ -39,6 +39,8 @@
 #include <ai/WaypointController.h>
 #include <ai/WingmanBehavior.h>
 #include <ai/WingmanCommand.h>
+#include <campaign/CampaignParser.h>
+#include <campaign/CampaignRunner.h>
 #include <config/ConfigFile.h>
 #include <console/CommandRegistry.h>
 #include <console/CommandShell.h>
@@ -82,6 +84,7 @@
 #include <world/FactionRegistry.h>
 
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -89,11 +92,13 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <numbers>
+#include <optional>
 #include <queue>
 #include <string>
 #include <thread>
@@ -174,6 +179,7 @@ int main(int argc, char** argv) {
     long flagFlightSize = -1;      // >=0 if --flight-size was given (overrides [flight] size)
     std::string flagMission;       // non-empty if --mission <name> was given (overrides [rotation])
     std::string flagMissionReport; // non-empty: run the mission headless to completion, write JSON here (#856)
+    std::string flagCampaign;      // non-empty if --campaign <file> was given: run the campaign's next sortie (#584)
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
@@ -232,6 +238,8 @@ int main(int argc, char** argv) {
             flagMission = argv[++i];
         if (std::strcmp(argv[i], "--mission-report") == 0 && i + 1 < argc)
             flagMissionReport = argv[++i];
+        if (std::strcmp(argv[i], "--campaign") == 0 && i + 1 < argc)
+            flagCampaign = argv[++i];
         if (std::strcmp(argv[i], "--sim-worker-threads") == 0 && i + 1 < argc) {
             char* end = nullptr;
             long n = std::strtol(argv[++i], &end, 10);
@@ -1041,13 +1049,75 @@ int main(int argc, char** argv) {
         broadcaster.broadcastHaptic(static_cast<uint8_t>(fl::HapticKind::Stop), 0.f, 0.f, 0);
     };
 
+    // Campaign mode (#584/#635): resolve the NEXT sortie from the deterministic campaign engine instead
+    // of a single fixed mission. The runner ties CampaignEngine to the mission content (loadMissionYaml)
+    // and persistence; each server run flies one sortie and, on its outcome, advances the campaign and
+    // saves state, so a restart continues the persistent war. The frontline loader is left unset here
+    // (raster PNG decoding is content-gated); the campaign still progresses via story injection, dynamic
+    // selection, attrition, and set_frontline path tracking.
+    std::unique_ptr<fl::CampaignRunner> campaignRunner;
+    std::string campaignMissionId;
+    std::string campaignSavePath;
+    std::optional<std::string> campaignYaml;
+    if (!flagCampaign.empty()) {
+        if (auto campBytes = fl::loadMissionYaml(flagCampaign, &assets, *log)) {
+            fl::CampaignParseResult cp = fl::parseCampaign(*campBytes);
+            if (!cp.ok) {
+                char buf[160];
+                std::snprintf(buf, sizeof(buf), "campaign '%.80s' failed to parse (%zu error(s))", flagCampaign.c_str(),
+                              cp.errors.size());
+                log->log(LogLevel::Error, __FILE__, __LINE__, buf);
+                for (const std::string& e : cp.errors)
+                    log->log(LogLevel::Error, __FILE__, __LINE__, e.c_str());
+            } else {
+                // Per-mission/template content resolves through the same loader single missions use.
+                auto content = [&assets, log](const std::string& path) -> std::optional<std::string> {
+                    return fl::loadMissionYaml(path, &assets, *log);
+                };
+                uint64_t seed = 1469598103934665603ull; // FNV-1a of the campaign name — stable, replayable
+                for (unsigned char ch : cp.campaign.name)
+                    seed = (seed ^ ch) * 1099511628211ull;
+                std::string sanitized;
+                for (char ch : cp.campaign.name)
+                    sanitized += (std::isalnum(static_cast<unsigned char>(ch)) ? ch : '_');
+                std::error_code ec;
+                std::filesystem::create_directories("cache", ec); // the save dir must exist before writeConfigFile
+                campaignSavePath = "cache/campaign_" + sanitized + ".flsave";
+                campaignRunner = std::make_unique<fl::CampaignRunner>(std::move(cp.campaign), seed, content);
+                if (std::ifstream in{campaignSavePath, std::ios::binary}) {
+                    std::string blob((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                    if (campaignRunner->restore(blob))
+                        log->log(LogLevel::Info, __FILE__, __LINE__, "campaign: restored saved state");
+                }
+                campaignYaml = campaignRunner->nextMissionYaml(campaignMissionId);
+                if (campaignYaml) {
+                    missionToLoad = campaignMissionId.empty() ? std::string("campaign") : campaignMissionId;
+                    char buf[192];
+                    std::snprintf(buf, sizeof(buf), "campaign '%.64s': flying sortie '%.80s'",
+                                  campaignRunner->name().c_str(), campaignMissionId.c_str());
+                    log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+                } else {
+                    log->log(LogLevel::Info, __FILE__, __LINE__,
+                             "campaign: no next mission (complete or missing content) — starting empty");
+                }
+            }
+        } else {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "campaign file '%.96s' not found", flagCampaign.c_str());
+            log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+        }
+    }
+
     if (!missionToLoad.empty()) {
         // Resolution precedence (loadMissionYaml): builtin id (#868, zero-pack) -> a readable
         // .yaml/.yml file path (the authoring loop — iterate a mission without mounting a pack) ->
-        // a pack Mission asset.
+        // a pack Mission asset. In campaign mode the sortie YAML is already resolved (campaignYaml).
         std::string yaml;
         bool missionFound = false;
-        if (auto resolved = fl::loadMissionYaml(missionToLoad, &assets, *log)) {
+        if (campaignYaml) {
+            yaml = std::move(*campaignYaml);
+            missionFound = true;
+        } else if (auto resolved = fl::loadMissionYaml(missionToLoad, &assets, *log)) {
             yaml = std::move(*resolved);
             missionFound = true;
         }
@@ -1257,12 +1327,30 @@ int main(int argc, char** argv) {
                             log->log(LogLevel::Info, __FILE__, __LINE__, m);
                         }
                     });
-                missionRuntime->setOnEnd([log](const fl::MissionOutcome& o) {
-                    const char* s = o.state == fl::MissionState::Complete ? "SUCCESS" : "FAILURE";
+                missionRuntime->setOnEnd([log, &broadcaster, &campaignRunner, campaignMissionId,
+                                          campaignSavePath](const fl::MissionOutcome& o) {
+                    const bool success = o.state == fl::MissionState::Complete;
+                    const char* s = success ? "SUCCESS" : "FAILURE";
                     char m[128];
                     std::snprintf(m, sizeof(m), "mission %s after %.1f s (%u trigger(s) fired)", s, o.elapsedSeconds,
                                   o.triggersFired);
                     log->log(LogLevel::Info, __FILE__, __LINE__, m);
+                    // Tell clients the real outcome so the debrief stops hardcoding success (#584).
+                    broadcaster.broadcastMissionOutcome(
+                        static_cast<uint8_t>(success ? fl::MissionResultCode::Success : fl::MissionResultCode::Failure),
+                        static_cast<float>(o.elapsedSeconds), static_cast<uint16_t>(o.triggersFired));
+                    // Campaign mode (#584/#635): record the sortie's outcome (advancing the frontline /
+                    // arming the next story mission) and persist state so a restart flies the next sortie.
+                    if (campaignRunner) {
+                        campaignRunner->recordOutcome(campaignMissionId, success);
+                        fl::writeConfigFile(campaignSavePath, campaignRunner->save(), *log);
+                        std::string nextId;
+                        const bool more = campaignRunner->nextMissionYaml(nextId).has_value();
+                        char cm[176];
+                        std::snprintf(cm, sizeof(cm), "campaign: recorded '%.72s' (%s); %s", campaignMissionId.c_str(),
+                                      s, more ? "next sortie on restart" : "campaign complete");
+                        log->log(LogLevel::Info, __FILE__, __LINE__, cm);
+                    }
                 });
                 broadcaster.setMissionTickHook([rt = missionRuntime.get()](uint64_t t) { rt->step(t); });
                 // Bind a pilot's aircraft to its player-slot id on connect (and unbind on disconnect), so

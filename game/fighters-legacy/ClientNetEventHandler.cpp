@@ -401,6 +401,14 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             return;
         if (hapticCallback && fl::isHapticKindOrdinal(hp.kind))
             hapticCallback(hp.kind, hp.a, hp.b, hp.durationMs);
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::MissionOutcome)) {
+        // The objective evaluator ended the mission (#584): record the real result so the debrief
+        // reports success/failure instead of a hardcoded success.
+        fl::MsgMissionOutcome mo;
+        if (!fl::readMsg(data, size, mo))
+            return;
+        if (fl::isMissionResultOrdinal(mo.outcome))
+            m_missionOutcome = static_cast<fl::MissionResultCode>(mo.outcome);
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::ServerNotice)) {
         fl::MsgServerNotice sn;
         if (!fl::readMsg(data, size, sn))

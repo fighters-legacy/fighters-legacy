@@ -203,6 +203,12 @@ struct ClientNetEventHandler : INetworkEventHandler {
         return m_sessionStats;
     }
 
+    // The mission's terminal outcome (#584), from MsgMissionOutcome. Incomplete until the objective
+    // evaluator ends the mission; the debrief reads it so it stops hardcoding success. Main-thread only.
+    [[nodiscard]] fl::MissionResultCode missionOutcome() const noexcept {
+        return m_missionOutcome;
+    }
+
     // Issue a monotonically incrementing request ID for the next MsgAdminCommand.
     // Each call increments the counter; wraps at uint16_t max (harmless — ENet ordering prevents
     // interleaving and the client does not enforce reqId matching in chunk reassembly).
@@ -267,7 +273,8 @@ struct ClientNetEventHandler : INetworkEventHandler {
     PeerRole m_grantedRole{PeerRole::Pilot}; // role granted by MsgConnectAck (#857)
     bool m_gotConnectAck{false};             // true once a MsgConnectAck arrives; "was I admitted?" (#853)
     float m_planetRadiusKm{6371.f};
-    SessionCombatStats m_sessionStats{};        // #626 — fed by CombatEvent Stats records
+    SessionCombatStats m_sessionStats{}; // #626 — fed by CombatEvent Stats records
+    fl::MissionResultCode m_missionOutcome{fl::MissionResultCode::Incomplete}; // #584 — from MsgMissionOutcome
     uint16_t m_nextReqId{1};                    // next reqId to stamp on outgoing MsgAdminCommand
     std::atomic<uint16_t> m_serverPeerCount{0}; // updated from SnapshotPeerCount TLV extension
 

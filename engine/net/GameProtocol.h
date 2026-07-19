@@ -92,6 +92,9 @@ enum class MsgId : uint8_t {
     Haptic = 0x17,             // server->client, reliable: a scripted rumble/trigger-rumble/stop request
                                // (#128) from a Lua script's rumble()/rumble_triggers()/stop_rumble().
                                // Each client plays it on its local (current-player) gamepad. Additive id.
+    MissionOutcome = 0x18,     // server->client, reliable: the objective evaluator ended the mission
+                               // (#584). Carries success/failure + elapsed/triggers so the debrief shows
+                               // the real outcome instead of a hardcoded success. Additive id.
     LanBeacon = 0x20,          // raw UDP broadcast - NOT sent over ENet; 0x20+ reserved for non-ENet ids.
                                // ENet message ids occupy 0x00-0x1F. The non-ENet boundary was raised
                                // from 0x10 to 0x20 in #853 to free an ENet id for ConnectRequest -- a
@@ -504,6 +507,21 @@ struct MsgHaptic {
     float b{0.f};           // Rumble: high-freq motor; Triggers: right trigger; Stop: unused
 }; // 12 bytes, align 4
 static_assert(sizeof(MsgHaptic) == 12u, "MsgHaptic wire size changed");
+
+// The mission's terminal outcome (#584): broadcast once when the objective evaluator drives the
+// mission to Complete/Failed, so the client debrief reports the real result instead of a hardcoded
+// success. `outcome` is a MissionResultCode.
+enum class MissionResultCode : uint8_t { Incomplete = 0, Success = 1, Failure = 2 };
+[[nodiscard]] inline bool isMissionResultOrdinal(uint8_t v) noexcept {
+    return v <= static_cast<uint8_t>(MissionResultCode::Failure);
+}
+struct MsgMissionOutcome {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::MissionOutcome)};
+    uint8_t outcome{0}; // MissionResultCode
+    uint16_t triggersFired{0};
+    float elapsedSeconds{0.f};
+}; // 8 bytes, align 4
+static_assert(sizeof(MsgMissionOutcome) == 8u, "MsgMissionOutcome wire size changed");
 static_assert(offsetof(MsgWeatherState, utcJulianDay) == 24u, "MsgWeatherState::utcJulianDay offset changed");
 static_assert(alignof(MsgWeatherState) == 8u, "MsgWeatherState alignment changed");
 static_assert(offsetof(MsgWeatherState, timeOfDayTenths) == 2u, "MsgWeatherState::timeOfDayTenths offset changed");

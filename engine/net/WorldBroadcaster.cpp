@@ -283,6 +283,17 @@ void WorldBroadcaster::broadcastHaptic(uint8_t kind, float a, float b, uint16_t 
     }
 }
 
+void WorldBroadcaster::broadcastMissionOutcome(uint8_t outcome, float elapsedSeconds, uint16_t triggersFired) {
+    MsgMissionOutcome msg;
+    msg.outcome = outcome;
+    msg.elapsedSeconds = elapsedSeconds;
+    msg.triggersFired = triggersFired;
+    for (const auto& [peerId, pin] : m_peerInputs) {
+        (void)pin;
+        m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
+    }
+}
+
 EjectionOutcome WorldBroadcaster::ejectPilot(EntityId eid) {
     EntityState* st = m_entityManager.get(eid);
     if (!st || st->dead)

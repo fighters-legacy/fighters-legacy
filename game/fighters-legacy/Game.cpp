@@ -1184,14 +1184,17 @@ void Game::handleTransition(Screen next) {
         d.services.musicManager.setState(GameState::Menu);
     else if (next == Screen::Debrief) {
         // Real session stats (#626): the server's tallies, delivered on the CombatEvent channel.
-        // Success stays true until the mission runtime (#584) defines failure.
         uint32_t kills = 0;
         uint32_t losses = 0;
         if (d.session.clientHandler) {
             kills = d.session.clientHandler->sessionStats().kills;
             losses = d.session.clientHandler->sessionStats().losses;
         }
-        d.services.screenMgr->debrief().setStats(static_cast<int>(kills), static_cast<int>(losses), true);
+        // Real mission outcome (#584): the objective evaluator's result, delivered on MsgMissionOutcome.
+        // A session with no mission (Free Flight) never sends one, so the default reads as success.
+        const bool missionSuccess =
+            !d.session.clientHandler || d.session.clientHandler->missionOutcome() != fl::MissionResultCode::Failure;
+        d.services.screenMgr->debrief().setStats(static_cast<int>(kills), static_cast<int>(losses), missionSuccess);
         // The pilot's career log accumulates per session, exactly once, on the way into debrief:
         // kills/losses from the server's tallies plus this session's flight time (#634).
         if (d.services.userConfig) {
@@ -1202,8 +1205,8 @@ void Game::handleTransition(Screen next) {
             ps.profile.losses += static_cast<int>(losses);
             ps.profile.flightTimeS += flightSecs;
             // Pilot logbook (#674): the career record accrues the same debrief deltas. Per-class kills
-            // come from the classified kill feed; a mission flown (success for now — #634 owns failure)
-            // and any losses count toward the career. Ejections (#672) are recorded on their own path.
+            // come from the classified kill feed; the mission counts as flown (and failed when the
+            // objective evaluator said so, #584). Ejections (#672) are recorded on their own path.
             if (d.session.clientHandler) {
                 const auto& s = d.session.clientHandler->sessionStats();
                 uint32_t classified = 0;
@@ -1217,7 +1220,7 @@ void Game::handleTransition(Screen next) {
                 for (uint32_t i = classified; i < kills; ++i)
                     ps.profile.logbook.recordKill(0);
             }
-            ps.profile.logbook.recordMission(true);
+            ps.profile.logbook.recordMission(missionSuccess);
             d.services.userConfig->setPilot(ps);
         }
         d.services.musicManager.setState(GameState::Debrief);

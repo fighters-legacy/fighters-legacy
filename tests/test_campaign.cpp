@@ -5,6 +5,7 @@
 
 #include "campaign/CampaignEngine.h"
 #include "campaign/CampaignParser.h"
+#include "campaign/CampaignRunner.h"
 #include "campaign/Frontline.h"
 #include "campaign/MissionTemplate.h"
 #include "mission/MissionParser.h" // a generated sortie must round-trip through the real mission parser
@@ -403,4 +404,92 @@ TEST_CASE("CampaignEngine: a generated dynamic sortie materializes into a parsea
         UNSCOPED_INFO("parse error: " << e);
     REQUIRE(mission.ok);
     CHECK(mission.mission.map == "ukraine");
+}
+
+// ---------------------------------------------------------------------------
+// CampaignRunner — the end-to-end runnable campaign loop (#635/#584)
+// ---------------------------------------------------------------------------
+
+namespace {
+// A content loader that serves the story mission files + the dynamic template by path.
+CampaignRunner::ContentLoader campaignContent() {
+    return [](const std::string& path) -> std::optional<std::string> {
+        if (path == "missions/u01.yaml" || path == "missions/u02.yaml") {
+            return std::string("name: Story " + path +
+                               "\nmap: world\nlayer: world_clear\ntime: { hour: 12, minute: 0 }\n"
+                               "wind: { heading: 0, speed: 0 }\nsides: [nato, russia]\n"
+                               "objects:\n  - { type: SA10, id: sam1, side: russia, pos: [0,0,0], heading: 0 }\n"
+                               "triggers:\n  - on: destroy(sam1)\n    do: mission_success\n");
+        }
+        if (path == "templates/intercept.yaml" || path == "templates/sead.yaml") {
+            return std::string("template:\n  role: strike\n  fills:\n    - target_area: {}\n"
+                               "name: Sortie ${theater.id}\nmap: ${theater.id}\nlayer: world_clear\n"
+                               "time: { hour: 12, minute: 0 }\nwind: { heading: 0, speed: 0 }\n"
+                               "sides: [nato, russia]\n"
+                               "objects:\n  - { type: SA10, id: sam1, side: russia, pos: ${target_area.pos}, "
+                               "heading: 0 }\ntriggers:\n  - on: destroy(sam1)\n    do: mission_success\n");
+        }
+        return std::nullopt;
+    };
+}
+} // namespace
+
+TEST_CASE("CampaignRunner: drives a campaign story -> dynamic -> next, each mission parses (#584/#635)",
+          "[campaign][runner]") {
+    auto parsed = parseCampaign(kCampaignYaml);
+    REQUIRE(parsed.ok);
+    CampaignRunner runner(parsed.campaign, 3, campaignContent(), syntheticLoader());
+
+    // 1) The campaign opens on the campaign_start story mission, and it is a plain parseable mission.
+    std::string id;
+    auto m0 = runner.nextMissionYaml(id);
+    REQUIRE(m0.has_value());
+    CHECK(id == "u01_storm");
+    REQUIRE(parseMission(*m0).ok);
+
+    // Fly it successfully -> unlocks the theater, arms u02 after 3 sorties.
+    runner.recordOutcome(id, true);
+    CHECK(runner.engine().theaterUnlocked("ukraine"));
+
+    // 2) Now the runner materializes dynamic sorties from the template; each is a concrete mission.
+    for (int i = 0; i < 3; ++i) {
+        auto md = runner.nextMissionYaml(id);
+        REQUIRE(md.has_value());
+        CHECK(md->find("${") == std::string::npos); // fills substituted
+        auto mp = parseMission(*md);
+        for (const auto& e : mp.errors)
+            UNSCOPED_INFO("parse error: " << e);
+        REQUIRE(mp.ok);
+        runner.recordOutcome(id, true);
+    }
+    CHECK(runner.engine().sortiesFlown() == 3);
+
+    // 3) After three sorties, the next mission injected is the u02 story beat.
+    auto m2 = runner.nextMissionYaml(id);
+    REQUIRE(m2.has_value());
+    CHECK(id == "u02_iron");
+}
+
+TEST_CASE("CampaignRunner: save/restore continues the campaign across a simulated restart (#584/#635)",
+          "[campaign][runner]") {
+    auto parsed = parseCampaign(kCampaignYaml);
+    REQUIRE(parsed.ok);
+
+    CampaignRunner a(parsed.campaign, 9, campaignContent(), syntheticLoader());
+    std::string id;
+    (void)a.nextMissionYaml(id);
+    a.recordOutcome(id, true); // fly the story
+    (void)a.nextMissionYaml(id);
+    a.recordOutcome(id, true); // one dynamic sortie
+    const std::string blob = a.save();
+
+    // A fresh process restores the state and continues from where it left off.
+    CampaignRunner b(parsed.campaign, 9, campaignContent(), syntheticLoader());
+    REQUIRE(b.restore(blob));
+    CHECK(b.engine().sortiesFlown() == a.engine().sortiesFlown());
+    CHECK(b.engine().theaterUnlocked("ukraine"));
+    std::string idB;
+    auto next = b.nextMissionYaml(idB);
+    REQUIRE(next.has_value());
+    REQUIRE(parseMission(*next).ok); // the continuation mission still resolves + parses
 }

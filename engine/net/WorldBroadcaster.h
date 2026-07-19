@@ -356,6 +356,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // gamepad. Reliable. Sim-thread only.
     void broadcastHaptic(uint8_t kind, float a, float b, uint16_t durationMs);
 
+    // Broadcast the mission's terminal outcome to every connected peer (#584), so the client debrief
+    // shows the real success/failure. `outcome` is a MissionResultCode. Reliable. Sim-thread only
+    // (fl-server calls it from the MissionRuntime end hook).
+    void broadcastMissionOutcome(uint8_t outcome, float elapsedSeconds, uint16_t triggersFired);
+
     // Gracefully disconnect one peer by ID.
     void kickPeer(uint32_t peerId);
 
