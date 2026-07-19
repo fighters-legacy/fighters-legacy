@@ -74,6 +74,12 @@ void AtcService::declareInbound(fl::EntityId flight, const std::string& facility
         f->declareInbound(flight, m_outbox);
 }
 
+void AtcService::cancel(fl::EntityId flight) {
+    std::lock_guard<std::mutex> lk(m_mutex);
+    for (auto& [id, f] : m_facilities)
+        f->removeFlight(flight);
+}
+
 void AtcService::holdDepartures(const std::string& facilityId, bool hold) {
     std::lock_guard<std::mutex> lk(m_mutex);
     if (AtcFacility* f = getOrCreateFacility(facilityId))

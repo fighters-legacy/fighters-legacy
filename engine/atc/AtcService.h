@@ -54,6 +54,8 @@ class AtcService {
     void requestTakeoff(fl::EntityId flight, const std::string& facilityId = {});
     void requestLanding(fl::EntityId flight, const std::string& facilityId = {});
     void declareInbound(fl::EntityId flight, const std::string& facilityId = {});
+    // Drop a flight from every facility's queues (a pilot cancelling a request).
+    void cancel(fl::EntityId flight);
     void holdDepartures(const std::string& facilityId, bool hold);
 
     // Spawn `count` departures from `facilityId`, placed hold-short. Returns false if the airport is

@@ -120,6 +120,10 @@ struct PeerInputState {
     bool hasWingmanSeq{false};         // false until the first order (a reconnect restarts the counter)
     bool wingmanRateLimitAcked{false}; // one RateLimited ack per window, never one per packet
 
+    // Player radio channel (#703 — ATC now). Same per-peer 1 s rate-limit window pattern as wingman.
+    std::chrono::steady_clock::time_point radioCmdWindowStart{};
+    uint32_t radioCmdCount{0};
+
     // Connect handshake (#853/#857). Set when MsgConnectRequest is processed. Before that a connected
     // peer has an input slot (so idle-timeout covers it) but no entity, no role, and no snapshot
     // delivery -- it is not admitted until it sends a request.
@@ -1001,6 +1005,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
                                     EntityId designatedTarget, uint32_t callerPeerId, uint32_t callerEntityIdx);
     void sendWingmanAck(uint32_t peerId, uint8_t command, WingmanResult result, uint16_t flightId, uint8_t flightSize,
                         uint32_t memberIdx, uint32_t targetIdx);
+
+    // Player radio channel (#703). Sim-thread only (called from onReceive). Parses the verb, rate-
+    // limits per peer, dispatches to the ATC service, and sends an immediate acknowledgement.
+    void handleRadioCommand(uint32_t peerId, const void* data, std::size_t size);
+    // Convert an ATC RadioTransmission to the wire message and send it: unicast to the peer owning the
+    // target entity if one does, else broadcast to every peer (so nearby players hear an AI's clearance).
+    void sendRadioTransmission(const fl::atc::RadioTransmission& tx);
     // Log, send a MsgConnectRefusal with the reason text for `code`, and disconnect the peer.
     // Centralizes the five onConnect rejection paths.
     void rejectConnection(uint32_t peerId, const std::string& ip, ConnectRefusalCode code);

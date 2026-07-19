@@ -46,7 +46,8 @@ enum class AtcPhrase : uint8_t {
     ClearedToLand,   // "cleared to land"
     GoAround,        // "go around, runway occupied"
     ContactApproach, // "radar contact, continue inbound" (inbound acknowledgement)
-    Unable,          // "unable" (request refused — no runway / not sequenced)
+    Roger,           // "roger" (generic acknowledgement — request received / cancelled)
+    Unable,          // "unable" (request refused — no runway / not sequenced / no ATC)
 };
 
 [[nodiscard]] const char* atcPhraseVoiceKey(AtcPhrase p) noexcept;

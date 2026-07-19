@@ -95,6 +95,15 @@ enum class MsgId : uint8_t {
     MissionOutcome = 0x18,     // server->client, reliable: the objective evaluator ended the mission
                                // (#584). Carries success/failure + elapsed/triggers so the debrief shows
                                // the real outcome instead of a hardcoded success. Additive id.
+    RadioCommand = 0x19,       // client->server, reliable: a player radio command (#703). Verb-routed
+                               // ("atc request_takeoff|request_landing|inbound|cancel [facility]"); the
+                               // `wing` verb namespace is reserved for #610. The server dispatches to the
+                               // ATC service and replies with MsgRadioTransmission(s). NOTE: 0x0D/0x0E
+                               // (the id #703 originally reserved) were taken by the wingman channel, so
+                               // the radio channel took the next free ENet ids 0x19/0x1A.
+    RadioTransmission = 0x1A,  // server->client, reliable: one spoken radio line (#703) — speaker,
+                               // localizable text, a stable voiceKey (TTS/pack OGG), and a subtitle
+                               // dwell. Unicast (directed) or broadcast. Additive id, old clients discard.
     LanBeacon = 0x20,          // raw UDP broadcast - NOT sent over ENet; 0x20+ reserved for non-ENet ids.
                                // ENet message ids occupy 0x00-0x1F. The non-ENet boundary was raised
                                // from 0x10 to 0x20 in #853 to free an ENet id for ConnectRequest -- a
@@ -918,6 +927,38 @@ static_assert(offsetof(MsgWingmanAck, flightSize) == 3u, "MsgWingmanAck::flightS
 static_assert(offsetof(MsgWingmanAck, memberIdx) == 4u, "MsgWingmanAck::memberIdx offset changed");
 static_assert(offsetof(MsgWingmanAck, targetIdx) == 8u, "MsgWingmanAck::targetIdx offset changed");
 static_assert(offsetof(MsgWingmanAck, flightId) == 12u, "MsgWingmanAck::flightId offset changed");
+
+// One generic player radio command (#703), client->server reliable. Shared by ATC now and reusable by
+// other radio grammars later. Verb-routed like the admin channel — no direct state mutation. The
+// server dispatches the verb to the ATC service and replies with MsgRadioTransmission(s).
+struct MsgRadioCommand {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::RadioCommand)};
+    uint8_t reserved{0};
+    uint16_t reqId{0};  // client-generated correlation id (diagnostic; echoing is optional)
+    char command[60]{}; // null-terminated verb string, e.g. "atc request_landing khjo"; 59 usable
+}; // 64 bytes, align 2
+static_assert(sizeof(MsgRadioCommand) == 64u, "MsgRadioCommand wire size changed");
+static_assert(alignof(MsgRadioCommand) == 2u, "MsgRadioCommand alignment changed");
+static_assert(offsetof(MsgRadioCommand, reqId) == 2u, "MsgRadioCommand::reqId offset changed");
+static_assert(offsetof(MsgRadioCommand, command) == 4u, "MsgRadioCommand::command offset changed");
+
+// One spoken radio line (#703), server->client reliable, unicast (directed) or broadcast. The text is
+// server-rendered + localizable; voiceKey is a stable key for TTS / a content-pack OGG (empty = no
+// audio, subtitle only — the docs/ai-architecture.md degradation path).
+struct MsgRadioTransmission {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::RadioTransmission)};
+    uint8_t reserved{0};
+    uint16_t displaySeconds{6}; // subtitle dwell
+    char speaker[28]{};         // e.g. "Riverside Tower"; 27 usable
+    char voiceKey[32]{};        // stable TTS / OGG key; 31 usable; empty = subtitle only
+    char text[160]{};           // rendered line; 159 usable
+}; // 224 bytes, align 2
+static_assert(sizeof(MsgRadioTransmission) == 224u, "MsgRadioTransmission wire size changed");
+static_assert(alignof(MsgRadioTransmission) == 2u, "MsgRadioTransmission alignment changed");
+static_assert(offsetof(MsgRadioTransmission, displaySeconds) == 2u, "MsgRadioTransmission::displaySeconds offset");
+static_assert(offsetof(MsgRadioTransmission, speaker) == 4u, "MsgRadioTransmission::speaker offset changed");
+static_assert(offsetof(MsgRadioTransmission, voiceKey) == 32u, "MsgRadioTransmission::voiceKey offset changed");
+static_assert(offsetof(MsgRadioTransmission, text) == 64u, "MsgRadioTransmission::text offset changed");
 
 // Raw UDP presence broadcast sent by fl-server on 255.255.255.255:<port> (IPv4 broadcast) and
 // [ff02::1]:<port> (IPv6 link-local multicast) every discoveryIntervalMs milliseconds.

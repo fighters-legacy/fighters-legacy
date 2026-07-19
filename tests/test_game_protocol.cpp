@@ -736,3 +736,46 @@ TEST_CASE("GameProtocol: epic #584 messages have stable sizes and round-trip", "
     CHECK(moOut.elapsedSeconds == 42.5f);
     CHECK(moOut.triggersFired == 3);
 }
+
+TEST_CASE("GameProtocol: radio channel messages (#703) sizes, offsets, round-trip", "[game_protocol]") {
+    // 0x0D/0x0E were taken by the wingman channel; the radio channel uses 0x19/0x1A.
+    CHECK(static_cast<uint8_t>(fl::MsgId::RadioCommand) == 0x19u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::RadioTransmission) == 0x1Au);
+
+    CHECK(sizeof(fl::MsgRadioCommand) == 64u);
+    CHECK(offsetof(fl::MsgRadioCommand, reqId) == 2u);
+    CHECK(offsetof(fl::MsgRadioCommand, command) == 4u);
+
+    CHECK(sizeof(fl::MsgRadioTransmission) == 224u);
+    CHECK(offsetof(fl::MsgRadioTransmission, displaySeconds) == 2u);
+    CHECK(offsetof(fl::MsgRadioTransmission, speaker) == 4u);
+    CHECK(offsetof(fl::MsgRadioTransmission, voiceKey) == 32u);
+    CHECK(offsetof(fl::MsgRadioTransmission, text) == 64u);
+
+    fl::MsgRadioCommand cmd{};
+    cmd.reqId = 7;
+    std::snprintf(cmd.command, sizeof(cmd.command), "atc request_landing khjo");
+    fl::MsgRadioCommand cmdOut{};
+    {
+        std::vector<uint8_t> buf(sizeof(cmd));
+        std::memcpy(buf.data(), &cmd, sizeof(cmd));
+        REQUIRE(fl::readMsg(buf.data(), buf.size(), cmdOut));
+    }
+    CHECK(cmdOut.reqId == 7);
+    CHECK(std::string(cmdOut.command) == "atc request_landing khjo");
+
+    fl::MsgRadioTransmission tx{};
+    tx.displaySeconds = 6;
+    std::snprintf(tx.speaker, sizeof(tx.speaker), "Riverside Tower");
+    std::snprintf(tx.voiceKey, sizeof(tx.voiceKey), "atc.cleared_to_land");
+    std::snprintf(tx.text, sizeof(tx.text), "cleared to land");
+    fl::MsgRadioTransmission txOut{};
+    {
+        std::vector<uint8_t> buf(sizeof(tx));
+        std::memcpy(buf.data(), &tx, sizeof(tx));
+        REQUIRE(fl::readMsg(buf.data(), buf.size(), txOut));
+    }
+    CHECK(std::string(txOut.speaker) == "Riverside Tower");
+    CHECK(std::string(txOut.voiceKey) == "atc.cleared_to_land");
+    CHECK(std::string(txOut.text) == "cleared to land");
+}

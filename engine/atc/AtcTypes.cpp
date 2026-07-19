@@ -39,6 +39,8 @@ const char* atcPhraseVoiceKey(AtcPhrase p) noexcept {
         return "atc.go_around";
     case AtcPhrase::ContactApproach:
         return "atc.contact_approach";
+    case AtcPhrase::Roger:
+        return "atc.roger";
     case AtcPhrase::Unable:
         return "atc.unable";
     }
@@ -58,6 +60,8 @@ const char* phraseText(AtcPhrase p) noexcept {
         return "go around, runway occupied";
     case AtcPhrase::ContactApproach:
         return "radar contact, continue inbound";
+    case AtcPhrase::Roger:
+        return "roger";
     case AtcPhrase::Unable:
         return "unable";
     }
