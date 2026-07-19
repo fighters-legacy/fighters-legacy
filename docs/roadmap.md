@@ -46,13 +46,21 @@ cannot close before its release ships.
 **Runbook:** `./scripts/cut-release.sh vX.Y.Z` (release branch + git-cliff changelog +
 CMake version bump) → the release PR merges → `./scripts/tag-release.sh vX.Y.Z` → the tag
 push runs `release.yml` (Windows/Linux/macOS artifacts) → verify the attached artifacts →
-close the milestone.
+**at a phase gate (`v0.N.0`), record + review the phase's demo videos and attach them to the
+Release** → close the milestone.
+
+**Demo videos (phase gates, epic #909):** record the phase's demo set headless — locally via
+`tools/record_demo/record_demo.py --all --headless`, or from the Actions tab via the opt-in
+`demo-videos` workflow (`workflow_dispatch`, `release_tag` = the gate tag to upload the mp4s).
+**Watch the footage** before attaching (software rendering is slow and never a required CI gate),
+then attach it to the GitHub Release. The always-on gate is only `validate-mission
+missions/demos/*.yaml` (no GPU). Reference: [demo-recording.md](demo-recording.md).
 
 **Phase-gate close checklist** (so the docs never lag a gate again, as they did between the
-2026-07-10 Phase 3 close and this revision): tag `v0.N.0` → close the milestone → mark the
-Schedule-table row and the acceptance heading ✓ in this file → run an epic re-home sweep
-(re-home any epic whose last open sub changed phase) → prune landed items from the Critical
-Path.
+2026-07-10 Phase 3 close and this revision): tag `v0.N.0` → **record, review, and attach the
+phase demo videos (#909)** → close the milestone → mark the Schedule-table row and the acceptance
+heading ✓ in this file → run an epic re-home sweep (re-home any epic whose last open sub changed
+phase) → prune landed items from the Critical Path.
 
 **v1.0.0** follows the Phase 9 gate (v0.9.x is the last pre-1.0 series) and adds the
 maintenance-mode policy to README/CONTRIBUTING.
@@ -345,6 +353,9 @@ Phase 4 acceptance requires a content pack (fl-base-pack) and is gated on Phase 
 - Per-engine failure simulation: L/R bits produce asymmetric thrust effects in cockpit.
 - Afterburner envelope limits enforced per aircraft TOML definition.
 - Lua scripting API documented (`docs/modding/ai.md`).
+- **Demo videos (#909):** the v0.4.0 cinematic demo set (`missions/demos/`) records headless and is
+  reviewed + attached to the `v0.4.0` Release. Every subsequent phase gate satisfies the same line
+  with its own demo set (the pipeline is reused; only new missions/shots are authored per gate).
 - CI green on all three platforms.
 
 ### Phase 5 — Multiplayer at Scale & Live Services

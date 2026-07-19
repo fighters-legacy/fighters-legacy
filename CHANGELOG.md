@@ -9,6 +9,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **ci/docs**: `demo-videos` workflow + release-runbook step (#918). A `workflow_dispatch`-only CI job
+  (`.github/workflows/demo-videos.yml`) records the demo set headless on lavapipe and optionally uploads
+  the mp4s to a GitHub Release (`release_tag` input) — never a required PR gate (software rendering is
+  slow; gate videos deserve a human watch). The release runbook and every phase's acceptance checklist
+  in `docs/roadmap.md` gain a "record + review + attach the phase demo videos" step; `docs/roadmap.md`
+  and `docs/demo-recording.md` document the flow. The only always-on CI addition remains
+  `validate-mission missions/demos/*.yaml` (no GPU) — "CI never requires a GPU" is preserved.
 - **tools/mission**: `record_demo.py` driver + the v0.4.0 demo mission set (#917). `missions/demos/`
   adds five zero-content-pack scripted demos with `cameras:` shots — `demo-dogfight`, `demo-sam-strike`,
   `demo-formation-tour`, `demo-sensors-intercept`, and `demo-gallery-flyover` — plus a `demos.json`
