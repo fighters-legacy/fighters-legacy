@@ -34,6 +34,17 @@ struct LuaController::Impl {
     bool valid{false};
     std::string lastError;
     uint64_t nextErrorLogTick{0}; // rate-limit: log at most once per 60 ticks
+
+    // Coroutine control-flow mode (#412). When the script defines `ai_main` we drive it as a Lua
+    // coroutine resumed once per tick, instead of calling `compute_control`. The two are mutually
+    // exclusive per LuaController; ai_main wins if both are present. `coroutine` is a thread created
+    // from the sandbox state and kept alive via a registry ref (else it is GC'd between ticks); it is
+    // owned by the sandbox's lua_State and closed when the sandbox is destroyed.
+    bool useCoroutine{false};
+    lua_State* coroutine{nullptr};
+    int coroutineRef{-2}; // LUA_NOREF; set once the thread is created
+    bool coroutineStarted{false};
+    bool coroutineDead{false}; // ai_main returned (or errored): all further ticks are neutral
 };
 
 // ---------------------------------------------------------------------------
@@ -435,6 +446,21 @@ LuaController::LuaController(std::string_view scriptSource, std::string packRoot
         return;
     }
 
+    // Coroutine control-flow (#412): if the script defines `ai_main`, drive it as a coroutine resumed
+    // once per tick rather than calling compute_control. Create the thread now and keep it alive with a
+    // registry ref; the initial resume (which starts ai_main) happens on the first sample(). A coroutine
+    // shares the sandbox's global environment, so guidance.* / nearby_entities / detected_contacts and
+    // the deny-list all apply inside ai_main exactly as they do inside compute_control.
+    lua_getglobal(L, "ai_main");
+    const bool hasAiMain = lua_isfunction(L, -1);
+    lua_pop(L, 1);
+    if (hasAiMain) {
+        lua_State* co = lua_newthread(L);                      // pushes the new thread
+        m_impl->coroutineRef = luaL_ref(L, LUA_REGISTRYINDEX); // pops it, anchors against GC
+        m_impl->coroutine = co;
+        m_impl->useCoroutine = true;
+    }
+
     m_impl->valid = true;
 }
 
@@ -448,15 +474,107 @@ const std::string& LuaController::lastError() const {
     return m_impl->lastError;
 }
 
+// Map the control table at stack index `idx` (on state `L`) onto a ControlInput. Shared by the
+// compute_control return value and the coroutine's yielded value so the two entry points cannot drift.
+// A non-table `idx` yields neutral. Leaves the stack unchanged (only lua_getfield + pop internally).
+static fl::ControlInput readControlTable(lua_State* L, int idx) {
+    fl::ControlInput ctrl{};
+    if (!lua_istable(L, idx))
+        return ctrl;
+    ctrl.elevator = readFloatField(L, idx, "elevator");
+    ctrl.aileron = readFloatField(L, idx, "aileron");
+    ctrl.rudder = readFloatField(L, idx, "rudder");
+    ctrl.throttle = readFloatField(L, idx, "throttle");
+    ctrl.afterburner = readBoolField(L, idx, "afterburner");
+    ctrl.speedbrake = readFloatField(L, idx, "speedbrake");
+    ctrl.gear_down = readBoolField(L, idx, "gear_down");
+    // Fire intent (#625) — the same seam players and C++ AI use. The value is an INTENT: the
+    // server's FireControl validates station/ammo/rate/weapons-hold exactly as it does for a
+    // player, so a hostile script holding the trigger forever gets what a trigger-holding player
+    // gets. weapon_station is absolute (matches the wire semantics); absent field = keep.
+    ctrl.trigger = readBoolField(L, idx, "trigger");
+    ctrl.release = readBoolField(L, idx, "release");
+    lua_getfield(L, idx, "weapon_station");
+    if (lua_isnumber(L, -1)) {
+        const lua_Integer st = lua_tointeger(L, -1);
+        if (st >= 0 && st <= 254)
+            ctrl.station = static_cast<uint8_t>(st);
+    }
+    lua_pop(L, 1);
+    return ctrl;
+}
+
+// Coroutine control flow (#412): resume `ai_main` once, passing (state, tick, dt); its first yielded
+// value is this tick's control table. A finished (or errored) coroutine leaves coroutineDead set and
+// every subsequent tick is neutral — the same fail-safe as a compute_control error.
+fl::ControlInput LuaController::sampleCoroutine(const fl::EntityState& state, uint64_t tick, double dt) {
+    Impl& im = *m_impl;
+    if (im.coroutineDead)
+        return {};
+
+    lua_State* co = im.coroutine;
+    lua_State* main = im.sandbox->luaState();
+
+    // Fresh thread: push ai_main so the first resume starts it below its args.
+    if (!im.coroutineStarted) {
+        lua_getglobal(co, "ai_main");
+        im.coroutineStarted = true;
+    }
+
+    // Args become the initial ai_main() args on the first resume, and the return values of the
+    // coroutine.yield(...) that suspended it on every later resume.
+    pushEntityState(co, state);
+    lua_pushnumber(co, static_cast<lua_Number>(tick));
+    lua_pushnumber(co, dt);
+
+    int nresults = 0;
+    const int status = lua_resume(co, main, 3, &nresults);
+
+    if (status == LUA_YIELD) {
+        // Yielded values sit on co's stack; the first is the control table.
+        fl::ControlInput ctrl{};
+        if (nresults >= 1)
+            ctrl = readControlTable(co, lua_gettop(co) - nresults + 1);
+        lua_settop(co, 0); // discard the yielded values; the next resume repushes args
+        return ctrl;
+    }
+
+    if (status == LUA_OK) {
+        // ai_main returned: the behavior is finished. Neutral from here on.
+        im.coroutineDead = true;
+        lua_settop(co, 0);
+        return {};
+    }
+
+    // Runtime error inside the coroutine — fail safe (neutral) and stop resuming it.
+    const char* err = lua_tostring(co, -1);
+    if (tick >= im.nextErrorLogTick) {
+        std::fprintf(stderr, "[LUA WARN] ai_main error: %s\n", err ? err : "(unknown)");
+        im.nextErrorLogTick = tick + 60;
+    }
+    im.coroutineDead = true;
+    lua_settop(co, 0);
+    return {};
+}
+
 fl::ControlInput LuaController::sample(const fl::EntityState& state, uint64_t tick, double dt,
                                        const fl::AiTickContext& ctx) {
     if (!m_impl->valid)
         return {};
 
-    lua_State* L = m_impl->sandbox->luaState();
+    // Stash the world view for the C bindings (guidance.*/nearby_entities/detected_contacts) for the
+    // duration of this tick's Lua execution, cleared on every exit path (coroutine path included).
     m_impl->currentCtx = &ctx;
     m_impl->currentTick = tick;
     m_impl->currentDt = dt;
+
+    if (m_impl->useCoroutine) {
+        fl::ControlInput ctrl = sampleCoroutine(state, tick, dt);
+        m_impl->currentCtx = nullptr;
+        return ctrl;
+    }
+
+    lua_State* L = m_impl->sandbox->luaState();
 
     // Push compute_control function.
     lua_getglobal(L, "compute_control");
@@ -498,29 +616,8 @@ fl::ControlInput LuaController::sample(const fl::EntityState& state, uint64_t ti
         return {};
     }
 
-    int resultIdx = lua_gettop(L);
-    fl::ControlInput ctrl{};
-    ctrl.elevator = readFloatField(L, resultIdx, "elevator");
-    ctrl.aileron = readFloatField(L, resultIdx, "aileron");
-    ctrl.rudder = readFloatField(L, resultIdx, "rudder");
-    ctrl.throttle = readFloatField(L, resultIdx, "throttle");
-    ctrl.afterburner = readBoolField(L, resultIdx, "afterburner");
-    ctrl.speedbrake = readFloatField(L, resultIdx, "speedbrake");
-    ctrl.gear_down = readBoolField(L, resultIdx, "gear_down");
-    // Fire intent (#625) — the same seam players and C++ AI use. The value is an INTENT: the
-    // server's FireControl validates station/ammo/rate/weapons-hold exactly as it does for a
-    // player, so a hostile script holding the trigger forever gets what a trigger-holding player
-    // gets. weapon_station is absolute (matches the wire semantics); absent field = keep.
-    ctrl.trigger = readBoolField(L, resultIdx, "trigger");
-    ctrl.release = readBoolField(L, resultIdx, "release");
-    lua_getfield(L, resultIdx, "weapon_station");
-    if (lua_isnumber(L, -1)) {
-        const lua_Integer st = lua_tointeger(L, -1);
-        if (st >= 0 && st <= 254)
-            ctrl.station = static_cast<uint8_t>(st);
-    }
-    lua_pop(L, 1);
-    lua_pop(L, 1);
+    const fl::ControlInput ctrl = readControlTable(L, lua_gettop(L));
+    lua_pop(L, 1); // the result table
 
     m_impl->currentCtx = nullptr;
     return ctrl;

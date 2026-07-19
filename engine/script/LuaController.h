@@ -13,13 +13,21 @@ class EntityManager;
 
 // IEntityController backed by a sandboxed Lua 5.5 script.
 //
-// The script must define:
-//   function compute_control(state, tick, dt) → table
+// The script defines ONE of two control-flow entry points:
+//   function compute_control(state, tick, dt) → table         (the function-call model)
+//   function ai_main()                                        (the coroutine model, #412)
 //
-// The engine calls compute_control() each sim tick (60 Hz) and maps the
-// returned table fields to ControlInput. Missing or non-numeric fields default
-// to 0/false. If the function is missing or throws, a neutral ControlInput{}
-// is returned and the error is logged to stderr at most once per 60 ticks.
+// Function-call model: the engine calls compute_control() each sim tick (60 Hz) and maps the
+// returned table fields to ControlInput. Missing or non-numeric fields default to 0/false. If the
+// function is missing or throws, a neutral ControlInput{} is returned and the error is logged to
+// stderr at most once per 60 ticks.
+//
+// Coroutine model (#412): if the script defines `ai_main`, it is driven as a Lua coroutine resumed
+// once per tick, so authors can write sequential state machines. The engine resumes ai_main with
+// (state, tick, dt); the coroutine returns a control table for the tick via `coroutine.yield(ctrl)`,
+// which also suspends it until the next tick (yield's return values are the next (state, tick, dt)).
+// A yield with no value → neutral that tick. When ai_main returns (or errors), the behavior is
+// finished and every subsequent tick is neutral. ai_main takes precedence if both are defined.
 //
 // Globals registered before loadScript() completes:
 //   guidance.heading_error(quat, own_pos, target_pos)   → number (radians)
@@ -52,6 +60,10 @@ class LuaController : public IEntityController {
     struct Impl;
 
   private:
+    // Coroutine (#412) tick driver: resume ai_main, returning its yielded control table. Assumes the
+    // ctx/tick/dt have already been stashed on Impl for the C bindings (sample() does this).
+    ControlInput sampleCoroutine(const EntityState& state, uint64_t tick, double dt);
+
     std::unique_ptr<Impl> m_impl;
 };
 
