@@ -53,6 +53,16 @@ struct CrewSeat {
     float reaction{0.5f};
     SeatCommand lastCommand{}; // last sampled command (reused on a decimated tick)
     bool lastCommandValid{false};
+
+    // Crew-seat damage (#978). A seat with maxHp > 0 is a damageable HP pool; when it is exhausted the
+    // seat is KNOCKED OUT and goes silent (its channels stop). maxHp == 0 = a non-damageable seat.
+    float hp{0.f};
+    float maxHp{0.f};
+    float hitWeight{1.f};
+    bool knockedOut{false};
+    [[nodiscard]] bool damageable() const noexcept {
+        return maxHp > 0.f;
+    }
 };
 
 // The crew of one aircraft. Empty seats vector = the single-seat fast path.
@@ -67,6 +77,24 @@ struct CrewState {
 
     [[nodiscard]] bool crewed() const noexcept {
         return !seats.empty();
+    }
+
+    // #978: the Fly seat has been knocked out — the airframe has no pilot input and glides uncontrolled
+    // (unless another seat has Fly, which the one-owner invariant forbids). False for a healthy or
+    // non-crewed aircraft.
+    [[nodiscard]] bool flySeatDown() const noexcept {
+        for (const CrewSeat& s : seats)
+            if (s.isFlySeat)
+                return s.knockedOut;
+        return false;
+    }
+
+    // #978: any seat is a damageable HP pool (so the combined damage router should include seats).
+    [[nodiscard]] bool anyDamageableSeat() const noexcept {
+        for (const CrewSeat& s : seats)
+            if (s.damageable() && !s.knockedOut && s.hp > 0.f)
+                return true;
+        return false;
     }
 };
 

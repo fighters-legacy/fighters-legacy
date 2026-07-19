@@ -729,8 +729,10 @@ int main(int argc, char** argv) {
     // (cmake/layering.cmake), so the concrete seat bots — the turret gunner — reach the broadcaster
     // through this std::function seam, exactly like the flight-order / target-designator hooks below.
     broadcaster.setSeatControllerFactory(
-        [&entityManager](const fl::SeatDef& seat, uint8_t seatIdx) -> std::unique_ptr<fl::ISeatController> {
-            return fl::ai::makeSeatController(seat, seatIdx, entityManager);
+        [&entityManager](const fl::SeatDef& seat, uint8_t seatIdx,
+                         const fl::WorldBroadcaster::SeatBotContext& ctx) -> std::unique_ptr<fl::ISeatController> {
+            return fl::ai::makeSeatController(seat, seatIdx, entityManager, ctx.skillMin, ctx.skillMax,
+                                              ctx.missionSeed);
         });
 
     // Resolve EntityDef::sensorIds -> parsed SensorDef on the spawn path (#685). A sensor reference
@@ -964,11 +966,18 @@ int main(int argc, char** argv) {
                 for (const std::string& e : parsed.errors)
                     log->log(LogLevel::Error, __FILE__, __LINE__, e.c_str());
             } else {
+                // Mission seed (#976): a stable per-mission seed feeding the deterministic per-instance
+                // crew skill roll (#971), derived from the mission name so a replay is byte-identical and
+                // two missions differ. FNV-1a over the name (0 for an empty name is fine — still stable).
+                uint64_t missionSeed = 1469598103934665603ull;
+                for (unsigned char ch : parsed.mission.name)
+                    missionSeed = (missionSeed ^ ch) * 1099511628211ull;
+
                 // Per-object controller + loadout attachment (#855). engine-mission spawns the object and
                 // calls this back with (id, object); here — where engine-ai / engine-script / the weapon
                 // registry are available — we turn `route`/`ai` into a controller and `loadout` into an
                 // override. route takes precedence over ai when both are present.
-                auto onSpawned = [&](fl::EntityId id, const fl::MissionObject& obj) {
+                auto onSpawned = [&, missionSeed](fl::EntityId id, const fl::MissionObject& obj) {
                     std::unique_ptr<fl::IEntityController> ctrl;
                     if (!obj.route.empty()) {
                         std::vector<glm::dvec3> wps;
@@ -1037,6 +1046,7 @@ int main(int argc, char** argv) {
                             }
                         }
                     }
+                    bool registered = false;
                     if (ctrl) {
                         // Initial airspeed (#883/#885): a ground start is parked (0); else the mission's
                         // per-object `speed:` if given, else the engine's sane airborne cruise default — so
@@ -1044,6 +1054,41 @@ int main(int argc, char** argv) {
                         const float airspeed =
                             obj.groundStart ? 0.f : (obj.speed ? *obj.speed : fl::kAutoSpawnAirspeed);
                         broadcaster.registerController(id, std::move(ctrl), nullptr, airspeed);
+                        registered = true;
+                    }
+
+                    // Crew configuration (#976): apply the mission seed + any `crew:` overrides to a
+                    // crewed aircraft's seats, so its bot gunners roll per-instance skill within the
+                    // configured range. A no-op for a single-seat entity or one with no controller (not a
+                    // ControlledEntity). Player slots are handled on the connect path, not here.
+                    if (registered && !obj.playerSlot) {
+                        fl::WorldBroadcaster::CrewSpawnConfig cc;
+                        cc.missionSeed = missionSeed;
+                        if (obj.crew) {
+                            cc.skillMin = obj.crew->skillMin;
+                            cc.skillMax = obj.crew->skillMax;
+                            const fl::EntityDef* cdef = entityRegistry.findById(obj.type.c_str());
+                            for (const fl::MissionCrewSeat& ms : obj.crew->seats) {
+                                int resolved = ms.seatIndex;
+                                if (resolved < 0 && cdef) { // name-by-role: resolve to an index
+                                    for (std::size_t s = 0; s < cdef->crew.size(); ++s)
+                                        if (cdef->crew[s].role == ms.role) {
+                                            resolved = static_cast<int>(s);
+                                            break;
+                                        }
+                                }
+                                if (resolved < 0 || resolved > 255)
+                                    continue; // unresolvable seat/role — validate-mission reports it
+                                fl::WorldBroadcaster::CrewSeatSpawnOverride ov;
+                                ov.seatIndex = static_cast<uint8_t>(resolved);
+                                ov.botSpec = ms.botSpec;
+                                ov.skillMin = ms.skillMin;
+                                ov.skillMax = ms.skillMax;
+                                ov.empty = ms.empty;
+                                cc.seats.push_back(std::move(ov));
+                            }
+                        }
+                        broadcaster.applyCrewSpawnConfig(id, cc);
                     }
                     if (!obj.loadout.empty()) {
                         std::vector<std::string> loWarn;
@@ -1210,6 +1255,10 @@ int main(int argc, char** argv) {
                 mix.clear();
         }
 
+        // #980: the load AI's entity type (default the single-seat debug entity; builtin:bomber runs
+        // CREWED AI, exercising the per-seat passes + turret replication under scale-gate load).
+        const std::string loadType =
+            cfg.testSpawnEntityType.empty() ? std::string("builtin:debug-entity") : cfg.testSpawnEntityType;
         uint32_t spawned = 0;
         fl::EntityId prevId; // pursuit/patrol target: the previously spawned load entity
         for (const auto& pos : positions) {
@@ -1217,7 +1266,7 @@ int main(int argc, char** argv) {
             t.pos[0] = pos[0];
             t.pos[1] = pos[1];
             t.pos[2] = pos[2];
-            const fl::EntityId id = entityManager.spawn("builtin:debug-entity", t);
+            const fl::EntityId id = entityManager.spawn(loadType.c_str(), t);
             if (!id.valid())
                 break; // soft cap or unregistered type — stop cleanly
 

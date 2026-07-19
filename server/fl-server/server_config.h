@@ -93,6 +93,11 @@ struct ServerConfig {
     // (deterministic per-index assignment; behaviors: loiter | pursuit | patrol). Empty = all loiter
     // (the #573 baseline). Invalid specs log Warn and fall back to all loiter. Restart-only.
     std::string testSpawnAiMix;
+    // #966/#980: the entity type the load AI spawns. Default builtin:debug-entity (the #573 baseline);
+    // set to builtin:bomber to run CREWED AI aircraft (a bot tail-gunner per airframe), exercising the
+    // per-seat sample/slew/fire passes + turret pose replication under 128-client scale-gate load. An
+    // unregistered type stops the spawn cleanly. Restart-only.
+    std::string testSpawnEntityType;
     // #580: projectile-churn generator — spawn testProjectileRate short-lived entities per second,
     // each killed after testProjectileTtlS, to stress the pool free-list, O(liveCount) forEach under
     // fragmentation, and the SnapshotDespawn TLV path. 0 = disabled. Restart-only.

@@ -159,7 +159,20 @@ test_spawn_agl_m = 1200.0
     CHECK(cfg.testSpawnAiCount == 5000u);
     CHECK(cfg.testSpawnSpreadKm == 80.0);
     CHECK(cfg.testSpawnAglM == 1200.0);
+    CHECK(cfg.testSpawnEntityType.empty()); // default = builtin:debug-entity
     CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: world.test_spawn_entity_type selects the load AI type (#980)", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig(R"(
+[world]
+test_spawn_ai_count = 128
+test_spawn_entity_type = "builtin:bomber"
+)",
+                                 &log);
+    CHECK(cfg.testSpawnAiCount == 128u);
+    CHECK(cfg.testSpawnEntityType == "builtin:bomber"); // crewed-AI load
 }
 
 TEST_CASE("parseServerConfig: world.test_spawn_* out of range warns and keeps defaults", "[server_config]") {

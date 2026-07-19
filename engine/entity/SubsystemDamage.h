@@ -4,6 +4,7 @@
 #include "entity/DamageDef.h"
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 
 namespace fl {
@@ -89,6 +90,19 @@ struct SubsystemStateSet {
             return static_cast<Subsystem>(i);
     }
     return static_cast<Subsystem>(kSubsystemCount - 1); // float-rounding backstop
+}
+
+// The directional bias for a CREW SEAT (#978) given its body-frame position `seatPos` (metres,
+// x=fwd, y=up, z=right) and the hit travel direction `hitDirBody`. A round travelling forward
+// (hitDirBody.x > 0) entered from the REAR, so it favours rear seats; a seat on the entry side of the
+// airframe is more likely struck. A zero hit direction = no location ⇒ bias 1 (pure weight pick),
+// matching subsystemDirectionalBias. Bounded to (0.2, 1.8) so no seat is ever un-hittable or certain.
+[[nodiscard]] inline float crewSeatDamageBias(const float seatPos[3], const float hitDirBody[3]) noexcept {
+    if (hitDirBody[0] == 0.f && hitDirBody[1] == 0.f && hitDirBody[2] == 0.f)
+        return 1.f; // no location
+    // A seat on the entry side has a positive dot with the INCOMING direction (−hitDir).
+    const float d = -(seatPos[0] * hitDirBody[0] + seatPos[1] * hitDirBody[1] + seatPos[2] * hitDirBody[2]);
+    return 1.f + 0.8f * std::tanh(d * 0.5f);
 }
 
 // Apply `amount` to a subsystem's pool. Returns the bit that NEWLY failed (0 if it survived or was

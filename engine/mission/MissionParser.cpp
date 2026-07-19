@@ -375,6 +375,91 @@ MissionParseResult parseMission(std::string_view yamlContent) {
                         mo.loadout.push_back(store.as<std::string>(""));
                 }
             }
+            // ── crew configuration (#976): skill ranges + per-seat overrides ──
+            if (hasKey(obj, "crew")) {
+                const YAML::Node& crew = obj["crew"];
+                if (!crew.IsMap()) {
+                    r.errors.push_back("objects[" + std::to_string(idx) + "].crew must be a mapping");
+                    r.ok = false;
+                } else {
+                    MissionCrew mc;
+                    const std::string prefix = "objects[" + std::to_string(idx) + "].crew";
+                    // A skill value is a single float (fixed) or a [min, max] sequence (range). Fills the
+                    // referenced min/max optionals; reports a range error under `where`.
+                    auto parseSkill = [&](const YAML::Node& node, const std::string& where,
+                                          std::optional<float>& outMin, std::optional<float>& outMax) {
+                        if (node.IsSequence()) {
+                            if (node.size() != 2u) {
+                                r.errors.push_back(where + " range must be [min, max]");
+                                r.ok = false;
+                                return;
+                            }
+                            const float lo = node[0].as<float>(-1.f), hi = node[1].as<float>(-1.f);
+                            if (lo < 0.f || lo > 1.f || hi < 0.f || hi > 1.f || hi < lo) {
+                                r.errors.push_back(where + " must be a [min, max] within [0, 1] with max >= min");
+                                r.ok = false;
+                                return;
+                            }
+                            outMin = lo;
+                            outMax = hi;
+                        } else if (node.IsScalar()) {
+                            const float v = node.as<float>(-1.f);
+                            if (v < 0.f || v > 1.f) {
+                                r.errors.push_back(where + " must be within [0, 1]");
+                                r.ok = false;
+                                return;
+                            }
+                            outMin = v;
+                            outMax = v;
+                        } else {
+                            r.errors.push_back(where + " must be a number or a [min, max] range");
+                            r.ok = false;
+                        }
+                    };
+                    if (hasKey(crew, "skill"))
+                        parseSkill(crew["skill"], prefix + ".skill", mc.skillMin, mc.skillMax);
+                    if (hasKey(crew, "seats")) {
+                        if (!crew["seats"].IsSequence()) {
+                            r.errors.push_back(prefix + ".seats must be a sequence");
+                            r.ok = false;
+                        } else {
+                            std::size_t si = 0;
+                            for (const auto& sn : crew["seats"]) {
+                                const std::string sp = prefix + ".seats[" + std::to_string(si) + "]";
+                                if (!sn.IsMap()) {
+                                    r.errors.push_back(sp + " must be a mapping");
+                                    r.ok = false;
+                                    ++si;
+                                    continue;
+                                }
+                                MissionCrewSeat mcs;
+                                const bool hasSeat = hasKey(sn, "seat");
+                                const bool hasRole = hasKey(sn, "role");
+                                if (hasSeat == hasRole) {
+                                    r.errors.push_back(sp + " must set exactly one of `seat` or `role`");
+                                    r.ok = false;
+                                }
+                                if (hasSeat)
+                                    mcs.seatIndex = sn["seat"].as<int>(-1);
+                                if (hasRole)
+                                    mcs.role = sn["role"].as<std::string>("");
+                                if (hasKey(sn, "bot"))
+                                    mcs.botSpec = sn["bot"].as<std::string>("");
+                                if (hasKey(sn, "skill"))
+                                    parseSkill(sn["skill"], sp + ".skill", mcs.skillMin, mcs.skillMax);
+                                if (hasKey(sn, "empty"))
+                                    mcs.empty = sn["empty"].as<bool>(false);
+                                mc.seats.push_back(std::move(mcs));
+                                ++si;
+                            }
+                        }
+                    }
+                    mo.crew = std::move(mc);
+                    if (mo.playerSlot)
+                        r.warnings.push_back(prefix + " on a player slot is ignored (a human flies it)");
+                }
+            }
+
             // A player slot is flown by a human, so AI/route/loadout on it are contradictory — warn but
             // do not reject (the slot simply ignores them).
             if (mo.playerSlot && (!mo.ai.empty() || !mo.route.empty() || !mo.loadout.empty()))

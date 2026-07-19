@@ -12,10 +12,14 @@ using namespace fl;
 static constexpr const char* kVersion = "0.0.1";
 
 static void printHelp() {
-    std::printf("Usage: validate-mission <file.yaml> [file2.yaml ...]\n"
+    std::printf("Usage: validate-mission [--pack <dir>] <file.yaml> [file2.yaml ...]\n"
                 "\n"
                 "Validates YAML mission files against the schema in docs/modding/missions.md.\n"
                 "All errors are reported in a single pass.\n"
+                "\n"
+                "With --pack, each object's crew: block is cross-checked against the referenced\n"
+                "entity type's declared [[crew]] seats in the pack (a seat/role the entity does\n"
+                "not declare is an error).\n"
                 "\n"
                 "Exit codes:\n"
                 "  0  all files valid\n"
@@ -23,6 +27,7 @@ static void printHelp() {
                 "  2  bad arguments\n"
                 "\n"
                 "Options:\n"
+                "  --pack <dir>   Cross-check crew: blocks against the pack's entities/*.toml\n"
                 "  --help, -h     Show this help and exit\n"
                 "  --version, -v  Show version and exit\n");
 }
@@ -43,7 +48,16 @@ int main(int argc, char* argv[]) {
     }
 
     int exitCode = 0;
+    std::string packDir;
     for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--pack") == 0) {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "error: --pack takes a directory\n");
+                return 2;
+            }
+            packDir = argv[++i];
+            continue;
+        }
         if (argv[i][0] == '-') {
             std::fprintf(stderr, "error: unknown option %s\n", argv[i]);
             return 2;
@@ -56,7 +70,7 @@ int main(int argc, char* argv[]) {
         }
         std::ostringstream ss;
         ss << f.rdbuf();
-        auto result = validateMission(ss.str());
+        auto result = packDir.empty() ? validateMission(ss.str()) : validateMission(ss.str(), packDir);
         for (const auto& w : result.warnings)
             std::fprintf(stderr, "WARN  [%s] %s\n", argv[i], w.c_str());
         for (const auto& e : result.errors)

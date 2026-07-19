@@ -42,7 +42,7 @@ jobs:
       # parallel-tick test. These do NOT link SDL3/OpenAL/ENet/Vulkan, so the TSan run stays
       # focused on our parallel code rather than third-party (uninstrumented) library threads.
       - name: Build TSan targets
-        run: cmake --build --preset tsan --target test_job_system test_world_broadcaster test_honest_sensing
+        run: cmake --build --preset tsan --target test_job_system test_world_broadcaster test_honest_sensing test_crew_frame test_turret_gunner
 
       - name: Run job-system tests under TSan
         run: ./build/tsan/tests/test_job_system
@@ -51,6 +51,15 @@ jobs:
 
       - name: Run WorldBroadcaster parallel-tick tests under TSan
         run: ./build/tsan/tests/test_world_broadcaster
+
+      # Crewed control frame (#966): the per-seat sample/slew/fire passes run inside the same
+      # data-parallel tick, so their serial-equivalence needs the same race audit as the broadcaster.
+      - name: Run crew-frame + turret-gunner tests under TSan
+        run: |
+          ./build/tsan/tests/test_crew_frame
+          ./build/tsan/tests/test_turret_gunner
+        env:
+          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:suppressions=${{ github.workspace }}/tools/tsan.supp
 
       # The sensing pass runs data-parallel over observers (#685). Its serial-equivalence guarantee is
       # only worth as much as the absence of a race underneath it.

@@ -606,3 +606,91 @@ TEST_CASE("GameProtocol: CombatEventRecord round-trip through WireCodec", "[game
     CHECK(out.a == 0u);
     CHECK(out.b == fl::kNoOwningPeer);
 }
+
+TEST_CASE("GameProtocol: MsgCrewRoster header + seat records round-trip (#972)", "[game_protocol]") {
+    std::vector<uint8_t> buf;
+    fl::MsgCrewRosterHeader hdr{};
+    hdr.seatCount = 2;
+    hdr.turretCount = 1;
+    hdr.entityIdx = 41;
+    hdr.entityGen = 3;
+    fl::appendMsg(buf, hdr);
+
+    fl::CrewRosterSeat pilot{};
+    pilot.seatIndex = 0;
+    pilot.occupancy = static_cast<uint8_t>(fl::SeatOccupancy::Human);
+    pilot.capabilities = 0x03; // Fly | Fire
+    pilot.occupantPeerId = 5;
+    pilot.skillPct = 50;
+    pilot.turretIndex = 255;
+    std::snprintf(pilot.role, sizeof(pilot.role), "pilot");
+    fl::appendMsg(buf, pilot);
+
+    fl::CrewRosterSeat gunner{};
+    gunner.seatIndex = 1;
+    gunner.occupancy = static_cast<uint8_t>(fl::SeatOccupancy::Bot);
+    gunner.capabilities = 0x02; // Fire
+    gunner.occupantPeerId = fl::kNoOwningPeer;
+    gunner.skillPct = 70;
+    gunner.turretIndex = 0;
+    gunner.knockedOut = 1; // #978
+    std::snprintf(gunner.role, sizeof(gunner.role), "tail-gunner");
+    fl::appendMsg(buf, gunner);
+
+    REQUIRE(buf.size() == sizeof(fl::MsgCrewRosterHeader) + 2u * sizeof(fl::CrewRosterSeat));
+
+    fl::MsgCrewRosterHeader outHdr;
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), outHdr));
+    CHECK(outHdr.seatCount == 2);
+    CHECK(outHdr.turretCount == 1);
+    CHECK(outHdr.entityIdx == 41u);
+    CHECK(outHdr.entityGen == 3u);
+
+    fl::CrewRosterSeat s0, s1;
+    REQUIRE(fl::readRecordAt(buf.data(), buf.size(), sizeof(outHdr), s0));
+    REQUIRE(fl::readRecordAt(buf.data(), buf.size(), sizeof(outHdr) + sizeof(s0), s1));
+    CHECK(s0.occupancy == static_cast<uint8_t>(fl::SeatOccupancy::Human));
+    CHECK(s0.capabilities == 0x03);
+    CHECK(s0.occupantPeerId == 5u);
+    CHECK(std::string(s0.role) == "pilot");
+    CHECK(s1.occupancy == static_cast<uint8_t>(fl::SeatOccupancy::Bot));
+    CHECK(s1.turretIndex == 0);
+    CHECK(s1.knockedOut == 1); // #978
+    CHECK(s0.knockedOut == 0);
+    CHECK(std::string(s1.role) == "tail-gunner");
+
+    // Ordinal guard rejects an out-of-grammar occupancy byte.
+    CHECK(fl::isSeatOccupancyOrdinal(2));
+    CHECK_FALSE(fl::isSeatOccupancyOrdinal(3));
+}
+
+TEST_CASE("GameProtocol: MsgSeatRequest / MsgSeatResult round-trip (#974)", "[game_protocol]") {
+    fl::MsgSeatRequest req{};
+    req.seatIndex = 1;
+    req.entityIdx = 42;
+    req.entityGen = 3;
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, req);
+    fl::MsgSeatRequest outReq;
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), outReq));
+    CHECK(outReq.msgId == static_cast<uint8_t>(fl::MsgId::SeatRequest));
+    CHECK(outReq.seatIndex == 1);
+    CHECK(outReq.entityIdx == 42u);
+    CHECK(outReq.entityGen == 3u);
+    CHECK((outReq.flags & fl::kSeatRequestFlagLeave) == 0u);
+
+    fl::MsgSeatResult res{};
+    res.code = static_cast<uint8_t>(fl::SeatResultCode::SeatOccupiedByHuman);
+    res.seatIndex = 1;
+    res.entityIdx = 42;
+    buf.clear();
+    fl::appendMsg(buf, res);
+    fl::MsgSeatResult outRes;
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), outRes));
+    CHECK(outRes.msgId == static_cast<uint8_t>(fl::MsgId::SeatResult));
+    CHECK(outRes.code == static_cast<uint8_t>(fl::SeatResultCode::SeatOccupiedByHuman));
+    CHECK(outRes.entityIdx == 42u);
+
+    CHECK(fl::isSeatResultOrdinal(6));
+    CHECK_FALSE(fl::isSeatResultOrdinal(7));
+}

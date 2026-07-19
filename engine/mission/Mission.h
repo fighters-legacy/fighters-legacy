@@ -39,6 +39,26 @@ struct MissionSide {
     std::vector<std::string> allies;
 };
 
+// A per-seat override within a mission object's `crew:` block (#976). A seat is named by `seatIndex`
+// OR `role` (the parser resolves a role to its index against the entity's declared [[crew]]; exactly
+// one must be set). Any unset optional keeps the seat's authored default.
+struct MissionCrewSeat {
+    int seatIndex{-1};                  // authored seat index, or -1 = name the seat by role instead
+    std::string role;                   // alternative to seatIndex; resolved to an index at validate time
+    std::optional<std::string> botSpec; // override the seat's bot spec ("gunner" / "builtin:gunner" / …)
+    std::optional<float> skillMin;      // per-seat skill override (fixed skill = min == max)
+    std::optional<float> skillMax;
+    std::optional<bool> empty; // occupancy override: true = spawn the seat empty; false = spawn its bot
+};
+
+// A mission object's `crew:` block (#976): an aircraft-level skill range that all bot seats roll within
+// (seeding the deterministic per-instance skill roll, #971), plus per-seat overrides.
+struct MissionCrew {
+    std::optional<float> skillMin; // aircraft-level skill range [min, max]; absent = seat defaults
+    std::optional<float> skillMax;
+    std::vector<MissionCrewSeat> seats; // per-seat overrides
+};
+
 // One entity placement at mission start.
 struct MissionObject {
     std::string type; // aircraft/unit type id — resolved against the EntityTypeRegistry at spawn
@@ -66,6 +86,11 @@ struct MissionObject {
     std::string ai;
     std::vector<std::array<double, 3>> route;
     std::vector<std::string> loadout;
+
+    // Crew configuration (#976): bot skill ranges + per-seat overrides for a multi-crew aircraft. The
+    // engine-mission parser validates its SHAPE; the caller (fl-server onSpawned) applies it at spawn,
+    // and validate-mission --pack cross-checks seats/roles against the entity's declared [[crew]].
+    std::optional<MissionCrew> crew;
 };
 
 // A win/loss/event condition. `doAction` is the YAML `do:` field (a keyword in C++).

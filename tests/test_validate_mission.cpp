@@ -3,6 +3,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 using namespace fl;
@@ -290,4 +292,119 @@ TEST_CASE("time_scale zero or negative fails", "[mission-validator][weather]") {
     auto r = validateMission(replace_first(kValidMission, "wind: { heading: 270, speed: 12 }",
                                            "wind: { heading: 270, speed: 12 }\ntime_scale: 0.0"));
     CHECK_FALSE(r.ok);
+}
+
+// ── crew: block (#976) ──────────────────────────────────────────────────────
+
+static const char* kCrewMission = R"yaml(
+name: "Crew Test"
+map: ukraine
+layer: ukraine_clear
+time: { hour: 14, minute: 0 }
+wind: { heading: 270, speed: 12 }
+sides: [nato, russia]
+objects:
+  - type: "test:bomber"
+    id: b1
+    side: russia
+    pos: [15000, 2000, 9000]
+    heading: 0
+    ai: "loiter 15000 2000 9000"
+    crew:
+      skill: [0.3, 0.8]
+      seats:
+        - role: tail-gunner
+          skill: 0.9
+triggers:
+  - on: timer(600)
+    do: mission_failure
+)yaml";
+
+TEST_CASE("crew: skill range parses (schema-only)", "[mission-validator][crew]") {
+    auto r = validateMission(kCrewMission);
+    CHECK(r.ok);
+}
+
+TEST_CASE("crew: skill out of [0,1] fails", "[mission-validator][crew]") {
+    auto r = validateMission(replace_first(kCrewMission, "skill: [0.3, 0.8]", "skill: [0.3, 1.4]"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("crew: a seat with neither seat nor role fails", "[mission-validator][crew]") {
+    auto r = validateMission(replace_first(kCrewMission, "- role: tail-gunner", "- skill: 0.9\n        - role: extra"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("crew: --pack cross-check accepts a real seat/role and rejects a bad one", "[mission-validator][crew]") {
+    namespace fs = std::filesystem;
+    const fs::path pack = fs::temp_directory_path() / "fl_crew_pack_test";
+    fs::remove_all(pack);
+    fs::create_directories(pack / "entities");
+    {
+        std::ofstream f(pack / "entities" / "bomber.toml");
+        f << R"toml(
+[entity]
+id = "test:bomber"
+name = "Bomber"
+category = "air_vehicle"
+max_hp = 300
+
+[[hardpoints]]
+slot = 0
+allowed = ["test:rkt"]
+default = "test:rkt"
+[[hardpoints]]
+slot = 1
+allowed = ["test:rkt"]
+default = "test:rkt"
+
+[[turrets]]
+id = "tail"
+stations = [1]
+
+[[crew]]
+role = "pilot"
+capabilities = ["fly", "fire"]
+stations = [0]
+[[crew]]
+role = "tail-gunner"
+capabilities = ["fire"]
+turret = "tail"
+bot = "gunner"
+)toml";
+    }
+    {
+        std::ofstream f(pack / "entities" / "fighter.toml");
+        f << R"toml(
+[entity]
+id = "test:fighter"
+name = "Fighter"
+category = "air_vehicle"
+max_hp = 100
+)toml";
+    }
+
+    // A valid role (tail-gunner) passes the cross-check.
+    CHECK(validateMission(kCrewMission, pack.string()).ok);
+
+    // A role the entity does not declare is an ERROR.
+    {
+        auto r = validateMission(replace_first(kCrewMission, "role: tail-gunner", "role: bombardier"), pack.string());
+        CHECK_FALSE(r.ok);
+    }
+
+    // A seat index out of range is an ERROR.
+    {
+        auto r = validateMission(replace_first(kCrewMission, "role: tail-gunner", "seat: 9"), pack.string());
+        CHECK_FALSE(r.ok);
+    }
+
+    // A crew: block on a single-seat entity (no [[crew]]) is an ERROR.
+    {
+        auto r = validateMission(replace_first(kCrewMission, "type: \"test:bomber\"", "type: \"test:fighter\""),
+                                 pack.string());
+        CHECK_FALSE(r.ok);
+    }
+
+    fs::remove_all(pack);
 }
