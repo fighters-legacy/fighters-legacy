@@ -9,6 +9,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **renderer**: `IRenderer` frame-capture sink + `VkRenderer` swapchain readback (#912). New
+  `IRenderer::setCaptureSink(std::function<void(const CaptureFrame&)>)` (non-pure, false default — mocks
+  unchanged) delivers every rendered frame's tightly-packed RGBA8 pixels to a sink at the end of
+  `endFrame()`. `VkRenderer` implements it via a shared `vkCmdCopyImageToBuffer` readback (the existing
+  `--screenshot` PNG path was refactored onto the same helper), swizzling BGRA swapchains to RGBA. The
+  readback is synchronous — correctness over a zero-stall ring, since the recorder runs offline at a
+  reduced time-rate. The GPU-independent swizzle core (`captureSwizzleToRgba`) is pure and unit-tested.
 - **netcode**: `MsgMissionRoster` (`0x1B`) entity→mission-object-id table (#914). Sent reliably after
   `MsgConnectAck` (plus single-record deltas as player slots bind), it maps each spawned mission
   object's entity idx/gen to its mission object id, so the cinematic recorder can resolve an

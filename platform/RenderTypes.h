@@ -64,6 +64,40 @@ struct FrameStats {
 };
 
 // ---------------------------------------------------------------------------
+// Frame capture (#912) — the pixel readback delivered to IRenderer::setCaptureSink,
+// used by the cinematic recorder (#909) to pipe frames to video.
+// ---------------------------------------------------------------------------
+
+enum class CapturePixelFormat : uint8_t {
+    RGBA8, // 8-bit R,G,B,A byte order (what the readback delivers; ffmpeg -pix_fmt rgba)
+    BGRA8, // 8-bit B,G,R,A byte order (some swapchains; the consumer swizzles if it sees this)
+};
+
+// A single captured frame. `pixels` points into a renderer-owned buffer valid ONLY for the duration of
+// the sink callback (copy what you keep). Tightly packed, `width*height*4` bytes, top row first.
+struct CaptureFrame {
+    uint32_t width{0};
+    uint32_t height{0};
+    CapturePixelFormat fmt{CapturePixelFormat::RGBA8};
+    const uint8_t* pixels{nullptr};
+    uint64_t frameIndex{0}; // monotonically increasing per delivered frame
+};
+
+// Convert a mapped swapchain readback (`pixelCount` RGBA/BGRA quads in `src`) to tightly packed RGBA8
+// with an opaque alpha, into `dst` (>= pixelCount*4 bytes). When `bgra` is true the R and B channels are
+// swapped (common swapchain byte order). Pure — the GPU-independent core of the capture readback, so it
+// can be unit-tested without a device (#912).
+inline void captureSwizzleToRgba(const uint8_t* src, uint32_t pixelCount, bool bgra, uint8_t* dst) {
+    for (uint32_t p = 0; p < pixelCount; ++p) {
+        const uint32_t i = p * 4u;
+        dst[i + 0] = bgra ? src[i + 2] : src[i + 0];
+        dst[i + 1] = src[i + 1];
+        dst[i + 2] = bgra ? src[i + 0] : src[i + 2];
+        dst[i + 3] = 255;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Resource upload descriptors.
 //
 // These are byte-blob views into data produced by IContentPack (engine/content/

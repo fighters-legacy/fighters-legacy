@@ -734,6 +734,11 @@ add_executable(test_utf8_decode test_utf8_decode.cpp)
 target_link_libraries(test_utf8_decode PRIVATE Catch2::Catch2WithMain platform-hal)
 catch_discover_tests(test_utf8_decode)
 
+# Frame-capture swizzle helper (#912): the pure GPU-independent core of the capture readback.
+add_executable(test_capture_frame test_capture_frame.cpp)
+target_link_libraries(test_capture_frame PRIVATE Catch2::Catch2WithMain platform-hal)
+catch_discover_tests(test_capture_frame)
+
 add_executable(test_hud_align test_hud_align.cpp)
 target_link_libraries(test_hud_align PRIVATE Catch2::Catch2WithMain platform-hal)
 catch_discover_tests(test_hud_align)

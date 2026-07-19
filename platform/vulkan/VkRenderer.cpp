@@ -803,6 +803,23 @@ void VkRenderer::endFrame() {
         writeSwapchainPng(path);
     }
 
+    // Per-frame capture sink (#912): deliver this frame's RGBA pixels to the recorder. Synchronous
+    // readback — see readbackImageRgba. The presented swapchain image is in PRESENT_SRC_KHR windowed.
+    if (m_captureSink) {
+        uint32_t w = 0, h = 0;
+        const VkImageLayout layout =
+            m_headless ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        if (readbackImageRgba(m_swapchainImages[m_currentImageIndex], layout, layout, m_captureBuf, w, h)) {
+            CaptureFrame cf{};
+            cf.width = w;
+            cf.height = h;
+            cf.fmt = CapturePixelFormat::RGBA8; // readbackImageRgba always delivers RGBA8
+            cf.pixels = m_captureBuf.data();
+            cf.frameIndex = m_totalFrames;
+            m_captureSink(cf);
+        }
+    }
+
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     ++m_framesRendered;
     ++m_totalFrames;
@@ -815,13 +832,24 @@ bool VkRenderer::captureScreenshot(const char* path) {
     return true;
 }
 
-void VkRenderer::writeSwapchainPng(const std::string& path) {
+bool VkRenderer::setCaptureSink(std::function<void(const CaptureFrame&)> sink) {
+    m_captureSink = std::move(sink);
+    return true;
+}
+
+// Copy `srcImage` (in `srcLayout`) into a host-visible buffer and swizzle to tightly packed RGBA8
+// (opaque alpha) in `outRgba`, restoring the image to `restoreLayout`. This is the single readback path
+// behind both --screenshot (PNG) and the per-frame capture sink (#912), and is reused headless (#913)
+// with the owned present-target image + its layout. Synchronous (a full queue wait) — the recorder runs
+// offline at a reduced time-rate, so the per-frame stall is irrelevant and buys correctness + simplicity
+// over a zero-stall readback ring that cannot be verified without a GPU.
+bool VkRenderer::readbackImageRgba(VkImage srcImage, VkImageLayout srcLayout, VkImageLayout restoreLayout,
+                                   std::vector<uint8_t>& outRgba, uint32_t& outW, uint32_t& outH) {
     vkQueueWaitIdle(m_graphicsQueue);
 
     const uint32_t w = m_swapchainExtent.width;
     const uint32_t h = m_swapchainExtent.height;
     const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
-    VkImage srcImage = m_swapchainImages[m_currentImageIndex];
 
     // Host-visible destination buffer.
     VkBuffer buf = VK_NULL_HANDLE;
@@ -832,7 +860,7 @@ void VkRenderer::writeSwapchainPng(const std::string& path) {
     bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     if (vkCreateBuffer(m_device, &bci, nullptr, &buf) != VK_SUCCESS)
-        return;
+        return false;
     VkMemoryRequirements memReq{};
     vkGetBufferMemoryRequirements(m_device, buf, &memReq);
     VkMemoryAllocateInfo mai{};
@@ -842,11 +870,11 @@ void VkRenderer::writeSwapchainPng(const std::string& path) {
                                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     if (vkAllocateMemory(m_device, &mai, nullptr, &mem) != VK_SUCCESS) {
         vkDestroyBuffer(m_device, buf, nullptr);
-        return;
+        return false;
     }
     vkBindBufferMemory(m_device, buf, mem, 0);
 
-    // One-shot command buffer: PRESENT_SRC -> TRANSFER_SRC, copy, TRANSFER_SRC -> PRESENT_SRC.
+    // One-shot command buffer: srcLayout -> TRANSFER_SRC, copy, TRANSFER_SRC -> restoreLayout.
     VkCommandBufferAllocateInfo cbai{};
     cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     cbai.commandPool = m_commandPool;
@@ -873,12 +901,12 @@ void VkRenderer::writeSwapchainPng(const std::string& path) {
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                              nullptr, 1, &b);
     };
-    barrier(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, VK_ACCESS_TRANSFER_READ_BIT);
+    barrier(srcLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, VK_ACCESS_TRANSFER_READ_BIT);
     VkBufferImageCopy region{};
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.imageExtent = {w, h, 1};
     vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &region);
-    barrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_READ_BIT, 0);
+    barrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, restoreLayout, VK_ACCESS_TRANSFER_READ_BIT, 0);
     vkEndCommandBuffer(cmd);
 
     VkSubmitInfo si{};
@@ -889,27 +917,37 @@ void VkRenderer::writeSwapchainPng(const std::string& path) {
     vkQueueWaitIdle(m_graphicsQueue);
     vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
 
-    // Map, swizzle B8G8R8A8 -> R8G8B8A8 (opaque alpha), write PNG.
+    bool ok = false;
     void* mapped = nullptr;
     if (vkMapMemory(m_device, mem, 0, bytes, 0, &mapped) == VK_SUCCESS) {
-        std::vector<uint8_t> rgba(static_cast<std::size_t>(bytes));
+        outRgba.resize(static_cast<std::size_t>(bytes));
         const auto* src = static_cast<const uint8_t*>(mapped);
         const bool bgra =
             (m_swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB || m_swapchainFormat == VK_FORMAT_B8G8R8A8_UNORM);
-        for (std::size_t i = 0; i < rgba.size(); i += 4) {
-            rgba[i + 0] = bgra ? src[i + 2] : src[i + 0];
-            rgba[i + 1] = src[i + 1];
-            rgba[i + 2] = bgra ? src[i + 0] : src[i + 2];
-            rgba[i + 3] = 255;
-        }
+        captureSwizzleToRgba(src, w * h, bgra, outRgba.data());
         vkUnmapMemory(m_device, mem);
-        if (stbi_write_png(path.c_str(), static_cast<int>(w), static_cast<int>(h), 4, rgba.data(),
-                           static_cast<int>(w) * 4) == 0)
-            m_lastError = "screenshot: stbi_write_png failed for " + path;
+        outW = w;
+        outH = h;
+        ok = true;
     }
 
     vkDestroyBuffer(m_device, buf, nullptr);
     vkFreeMemory(m_device, mem, nullptr);
+    return ok;
+}
+
+void VkRenderer::writeSwapchainPng(const std::string& path) {
+    uint32_t w = 0, h = 0;
+    // The presented swapchain image is in PRESENT_SRC_KHR (windowed); headless owns its image (#913).
+    const VkImageLayout layout = m_headless ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    std::vector<uint8_t> rgba;
+    if (!readbackImageRgba(m_swapchainImages[m_currentImageIndex], layout, layout, rgba, w, h)) {
+        m_lastError = "screenshot: image readback failed for " + path;
+        return;
+    }
+    if (stbi_write_png(path.c_str(), static_cast<int>(w), static_cast<int>(h), 4, rgba.data(),
+                       static_cast<int>(w) * 4) == 0)
+        m_lastError = "screenshot: stbi_write_png failed for " + path;
 }
 
 // ---------------------------------------------------------------------------

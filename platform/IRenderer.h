@@ -129,6 +129,17 @@ class IRenderer {
         (void)path;
         return false;
     }
+
+    // ── Frame capture sink (#912) ─────────────────────────────────────────────
+    // A per-frame pixel sink for the cinematic recorder (#909). When set, the renderer delivers every
+    // rendered frame's pixels to `sink` at the end of endFrame(). The CaptureFrame::pixels buffer is
+    // owned by the renderer and valid only for the duration of the callback (copy what you keep).
+    // Returns true if capture is supported + enabled; a false default means a backend/mock without
+    // capture (and every test mock) needs no change. Pass an empty std::function to stop capturing.
+    virtual bool setCaptureSink(std::function<void(const CaptureFrame&)> sink) {
+        (void)sink;
+        return false;
+    }
 };
 
 } // namespace fl

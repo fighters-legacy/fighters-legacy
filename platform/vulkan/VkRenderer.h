@@ -180,6 +180,7 @@ class VkRenderer : public IRenderer {
     void submitOverlayElements(std::span<const HudElement> elements) override;
     void setConsoleElements(std::span<const HudElement> elements) override;
     bool captureScreenshot(const char* path) override;
+    bool setCaptureSink(std::function<void(const CaptureFrame&)> sink) override;
 
   private:
     // ── Core Vulkan objects ────────────────────────────────────────────────
@@ -512,10 +513,20 @@ class VkRenderer : public IRenderer {
 
     SDL_Window* m_sdlWindow{nullptr};
     IWindow* m_iWindow{nullptr};
+    bool m_headless{false}; // #913: swapchain-free init (no window, no present); set by initHeadless()
     std::string m_shaderDir;
     mutable std::string m_lastError;
     std::string m_pendingScreenshotPath;             // #909: capture the next presented frame to this PNG when set
     void writeSwapchainPng(const std::string& path); // reads the just-presented swapchain image → PNG
+    // Per-frame capture sink (#912): when set, every rendered frame's RGBA pixels are delivered here at
+    // the end of endFrame(). Reused headless (#913). Synchronous readback — correctness over the
+    // zero-stall ring, since the recorder runs offline at a reduced time-rate (see VkRenderer.cpp).
+    std::function<void(const CaptureFrame&)> m_captureSink;
+    std::vector<uint8_t> m_captureBuf; // reused RGBA scratch for the sink (avoids per-frame realloc)
+    // Copy `srcImage` (currently in `srcLayout`) into a host buffer and swizzle to tightly packed RGBA8
+    // (opaque alpha) in `outRgba`; restores the image to `restoreLayout`. Returns false on failure.
+    bool readbackImageRgba(VkImage srcImage, VkImageLayout srcLayout, VkImageLayout restoreLayout,
+                           std::vector<uint8_t>& outRgba, uint32_t& outW, uint32_t& outH);
     std::string m_gpuInfo;
 
     // ── Per-frame stats ───────────────────────────────────────────────────
