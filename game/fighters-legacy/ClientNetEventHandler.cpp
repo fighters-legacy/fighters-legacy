@@ -142,6 +142,17 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             def.projectileKind = fl::isProjectileKindOrdinal(td.projectileKind)
                                      ? static_cast<fl::ProjectileKind>(td.projectileKind)
                                      : fl::ProjectileKind::None;
+            // Flight-deck footprint (#38): non-zero length = this type carries a deck the client's
+            // prediction floor must compose (max(terrain, moving deck), same as the server). Only
+            // the footprint travels; catapult/arrest are server-authoritative and stay there.
+            if (td.deckLengthM > 0.f && td.deckWidthM > 0.f) {
+                fl::DeckDef deck;
+                deck.lengthM = td.deckLengthM;
+                deck.widthM = td.deckWidthM;
+                deck.heightM = td.deckHeightM;
+                def.deck = deck;
+                def.acceptsLandings = true;
+            }
             def.maxHp = 100.0f;
             registry.registerType(std::move(def));
         }

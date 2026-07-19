@@ -1434,10 +1434,35 @@ void Game::run() {
                                 return {};
                             return fl::PayloadEffect{def->payloadMassKg, def->payloadCd0};
                         };
+                        // The prediction ground floor composes terrain with any MOVING flight deck
+                        // (#38), exactly as the server does — without this a carrier landing
+                        // predicts straight through the deck and hard-snaps on reconcile. Deck
+                        // footprints arrive on MsgEntityTypeDef; ship poses come from the latest
+                        // render snapshot (main thread, same thread reconcile runs on).
                         auto heightQuery = [&d](glm::dvec3 pos) -> float {
-                            return d.services.terrainStreamer
-                                       ? static_cast<float>(d.services.terrainStreamer->heightAt(pos))
-                                       : 0.f;
+                            float floorElev = d.services.terrainStreamer
+                                                  ? static_cast<float>(d.services.terrainStreamer->heightAt(pos))
+                                                  : 0.f;
+                            const double posArr[3] = {pos.x, pos.y, pos.z};
+                            const double planetR = d.session.clientHandler
+                                                       ? double(d.session.clientHandler->planetRadiusKm()) * 1000.0
+                                                       : fl::kEarthRadiusM;
+                            const fl::RenderSnapshot& snap = d.services.renderBridge.current();
+                            for (const fl::EntityRenderEntry& e : snap.entries) {
+                                const fl::EntityDef* def = d.services.entityRegistry.byIndex(e.typeIndex);
+                                if (!def || !def->deck)
+                                    continue;
+                                const double shipPos[3] = {e.position.x, e.position.y, e.position.z};
+                                const float shipQuat[4] = {e.orientation.x, e.orientation.y, e.orientation.z,
+                                                           e.orientation.w};
+                                const fl::DeckLocalPoint lp = fl::deckLocalPoint(posArr, shipPos, shipQuat, *def->deck);
+                                if (!fl::deckFloorApplies(lp, *def->deck))
+                                    continue;
+                                const double shipAlt =
+                                    fl::geodeticAltitude(shipPos[0], shipPos[1], shipPos[2], planetR);
+                                floorElev = std::max(floorElev, static_cast<float>(shipAlt + def->deck->heightM));
+                            }
+                            return floorElev;
                         };
                         d.services.prediction.init(d.services.userConfig->prediction(), std::move(flightModelResolver),
                                                    std::move(payloadResolver), std::move(heightQuery),

@@ -2,6 +2,7 @@
 #include "flight/FlightIntegrator.h"
 
 #include "flight/Atmosphere.h"
+#include "flight/EngineFailFlags.h" // kEngineFlameout / kEngineCompStall — the #308 transient bits
 
 #include <algorithm>
 #include <cmath>
@@ -32,6 +33,14 @@ constexpr float kFbwAoaKd = 1.20f; // elevator per rad/s of pitch rate (damps th
 // chatter for a model flying the boundary.
 constexpr float kAbMachHysteresis = 0.02f;
 constexpr float kAbAltHysteresisKm = 0.3f;
+
+// Engine failure dynamics (#308). A flameout above the combustion ceiling must descend this far
+// back below it before a relight is attempted (prevents chatter riding the ceiling); a compressor
+// surge holds kEngineCompStall for this long after the disturbed-flow condition clears (a surge is
+// a violent, seconds-scale event, not a single-tick blip).
+constexpr float kRelightAltMarginKm = 0.5f;
+constexpr float kCompStallRecoverySeconds = 2.0f;
+constexpr float kSurgeMinThrottle = 0.5f; // a windmilling/idle compressor does not surge
 
 // Quaternion: multiply q = (x,y,z,w)
 std::array<float, 4> quatMul(const float* a, const float* b) {
@@ -177,6 +186,19 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     ctrl.aileron *= controlFactor;
     ctrl.rudder *= controlFactor;
 
+    // Drone autopilot airspeed protection (#351): shapes the THROTTLE COMMAND from the previous
+    // tick's measured airspeed — an autopilot reacts to its sensors, and one tick of latency is
+    // more honest than clairvoyance. Overspeed sheds power; underspeed firewalls it (through the
+    // damage-limited authority, like any command). The spool provides the smoothing.
+    if (const auto& dl = m_data->drone_limits) {
+        const double pvx = m_state.vel_body[0], pvy = m_state.vel_body[1], pvz = m_state.vel_body[2];
+        const float prevSpd = static_cast<float>(std::sqrt(pvx * pvx + pvy * pvy + pvz * pvz));
+        if (dl->max_airspeed_mps > 0.f && prevSpd > dl->max_airspeed_mps)
+            ctrl.throttle = 0.f;
+        else if (dl->min_airspeed_mps > 0.f && prevSpd < dl->min_airspeed_mps)
+            ctrl.throttle = m_damageThrust;
+    }
+
     // Clear the previous tick's one-shot outputs.
     m_state.ground_impact_speed = 0.f;
 
@@ -281,9 +303,74 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     const float q_dyn_now = 0.5f * atmos.density_kg_m3 * spd * spd;
     m_state.stalled = (alpha_deg_now > m_data->limits.alpha_stall_deg);
 
+    // 6c. ENGINE FAILURE DYNAMICS (#308). The integrator raises and clears the two TRANSIENT
+    // engine-fail bits it owns; the damage path owns Generic/Left/Right/Center and is never touched
+    // here. Both effects are derived deterministically from the flight state, so the server
+    // integrator and the client-prediction replay compute identical flags with nothing new on the
+    // wire. Gated off for ballistic vehicles — a solid motor neither flames out nor surges; its
+    // burn ends through the fuel path.
+    if (!m_data->isBallistic()) {
+        const EngineData& eng = m_data->engine;
+        uint8_t ef = m_state.engineFailFlags;
+
+        // Flameout: fuel starvation (an engine with nothing to burn makes no thrust — until #308
+        // an empty tank changed the mass and nothing else), or climbing past the optional
+        // combustion ceiling. Relight is a windmill start: fuel available, clearly back below the
+        // ceiling, and enough airspeed to spin the spool. An engine whose model burns NO fuel
+        // (zero mil flow — e.g. a vessel whose endurance is not modelled, #38) cannot starve.
+        const bool fuelOut = m_state.fuel_kg <= 0.f && eng.fuel_flow_mil_kg_s > 0.f;
+        const bool aboveCeiling = eng.flameout_alt_km && (altitude_m / 1000.f > *eng.flameout_alt_km);
+        if (fuelOut || aboveCeiling) {
+            ef |= kEngineFlameout;
+        } else if (ef & kEngineFlameout) {
+            const bool altOk =
+                !eng.flameout_alt_km || (altitude_m / 1000.f < *eng.flameout_alt_km - kRelightAltMarginKm);
+            if (altOk && spd >= eng.relight_min_mps)
+                ef &= ~kEngineFlameout;
+        }
+
+        // Compressor surge (opt-in): deep past the stall alpha with the compressor working hard,
+        // the intake blanks and the engine surges. Holds for a fixed recovery time after the
+        // disturbed-flow condition ends — a surge is a seconds-scale event.
+        if (eng.compressor_stall) {
+            const bool surging = alpha_deg_now > m_data->limits.alpha_stall_deg + eng.surge_alpha_margin_deg &&
+                                 m_state.throttle_actual > kSurgeMinThrottle;
+            if (surging) {
+                ef |= kEngineCompStall;
+                m_state.comp_stall_seconds = kCompStallRecoverySeconds;
+            } else if (ef & kEngineCompStall) {
+                m_state.comp_stall_seconds = std::max(0.f, m_state.comp_stall_seconds - dt);
+                if (m_state.comp_stall_seconds <= 0.f)
+                    ef &= ~kEngineCompStall;
+            }
+        }
+
+        m_state.engineFailFlags = ef;
+    }
+
+    // 6d. Drone autopilot bank-angle limit (#351): command shaping on the AILERON, mirroring the
+    // FBW discipline below — never more than the controller asked for, never a silent clamp on the
+    // physics. Bank is read from gravity in the body frame (atan2 of its lateral component), which
+    // is planet-correct everywhere with no new plumbing.
+    if (const auto& dl = m_data->drone_limits; dl && dl->max_bank_deg > 0.f) {
+        const std::array<float, 3> gw = m_gravity->accelWorld(m_state.pos_world);
+        const auto gb = quatRotate(q_conj, gw.data());
+        const float bankRad = std::atan2(gb[2], -gb[1]); // + = right wing down
+        const float maxBank = dl->max_bank_deg * kDegToRad;
+        constexpr float kBankKp = 2.0f; // aileron per rad of bank error
+        constexpr float kBankKd = 0.8f; // aileron per rad/s of roll rate (damps the approach)
+        if (ctrl.aileron > 0.f && bankRad > maxBank * kFbwGuardBand) {
+            ctrl.aileron = std::clamp(kBankKp * (maxBank - bankRad) - kBankKd * m_state.omega[0], -1.f, ctrl.aileron);
+        } else if (ctrl.aileron < 0.f && bankRad < -maxBank * kFbwGuardBand) {
+            ctrl.aileron = std::clamp(kBankKp * (-maxBank - bankRad) - kBankKd * m_state.omega[0], ctrl.aileron, 1.f);
+        }
+    }
+
     // 7. Aerodynamic + propulsive forces and moments via the swappable force model (default
     // FixedWingForceModel). Gravity and turbulence are added below by the integrator core.
-    const AeroInputs aero{alpha_rad, beta_rad, mach, spd, altitude_m};
+    // agl_m: rotor ground effect (#350) reads height above terrain; fixed-wing ignores it.
+    const AeroInputs aero{alpha_rad, beta_rad,   mach,
+                          spd,       altitude_m, static_cast<float>(startAlt - static_cast<double>(groundElev))};
     ControlInput eff_ctrl = ctrl;
 
     // 7a. FLY-BY-WIRE ENVELOPE PROTECTION (#816, extended #900).
@@ -306,11 +393,23 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     //   * an optional FLCS AoA cap, alpha_limit_deg, tighter than the aerodynamic stall — at low q the
     //     wing cannot reach the structural g and the AoA cap is what holds the jet.
     // When alpha_limit_deg is unset the positive path is byte-identical to #816.
-    if (m_data->meta.has_fbw && q_dyn_now > 1.f && (ctrl.elevator > 0.f || ctrl.elevator < 0.f)) {
+    //
+    // #351: a drone autopilot's max_g runs the SAME AoA-limiting loop — a UAV without FBW still has
+    // a computer refusing to bend the airframe, and a second hand-rolled g-limiter would be a second
+    // chance to be a tick late. The effective limit is the tighter of structural and autopilot.
+    const bool droneGLimited = m_data->drone_limits && m_data->drone_limits->max_g > 0.f;
+    if ((m_data->meta.has_fbw || droneGLimited) && q_dyn_now > 1.f && (ctrl.elevator > 0.f || ctrl.elevator < 0.f)) {
         const float S = m_data->geometry.wing_area_m2;
         const float alphaStall = m_data->limits.alpha_stall_deg;
         const float alphaCap = m_data->limits.alpha_limit_deg; // 0 = unset
         const float denom = q_dyn_now * S;
+        float nMaxLim = m_data->limits.max_g_structural;
+        float nMinLim = m_data->limits.min_g_structural;
+        if (droneGLimited) {
+            const float g = m_data->drone_limits->max_g;
+            nMaxLim = (nMaxLim > 0.f) ? std::min(nMaxLim, g) : g;
+            nMinLim = (nMinLim < 0.f) ? std::max(nMinLim, -g) : -g;
+        }
 
         // CL(alpha) is monotonic increasing across [-alpha_stall, +alpha_stall]; bisect for the alpha
         // that makes a target CL (signed) over an interval where it is increasing.
@@ -332,8 +431,8 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
         float alphaLimit = 0.f;
         if (ctrl.elevator > 0.f) {
             float posLimit = alphaStall;
-            if (m_data->limits.max_g_structural > 0.f) {
-                const float clLimit = (m_data->limits.max_g_structural * eff_mass * kG0) / denom;
+            if (nMaxLim > 0.f) {
+                const float clLimit = (nMaxLim * eff_mass * kG0) / denom;
                 if (m_data->cl_table.lookup(alphaStall, mach) > clLimit) { // else lift-limited, nothing to do
                     posLimit = invertCl(clLimit, 0.f, alphaStall);
                     haveLimit = true;
@@ -346,9 +445,9 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
             alphaLimit = posLimit * kFbwGuardBand;
         } else { // forward stick — negative-g / negative-AoA protection (#900)
             float negLimit = -alphaStall;
-            if (m_data->limits.min_g_structural < 0.f) {
-                const float clLimit = (m_data->limits.min_g_structural * eff_mass * kG0) / denom; // negative
-                if (m_data->cl_table.lookup(-alphaStall, mach) < clLimit) {                       // else lift-limited
+            if (nMinLim < 0.f) {
+                const float clLimit = (nMinLim * eff_mass * kG0) / denom;   // negative
+                if (m_data->cl_table.lookup(-alphaStall, mach) < clLimit) { // else lift-limited
                     negLimit = invertCl(clLimit, -alphaStall, 0.f);
                     haveLimit = true;
                 }
@@ -593,8 +692,11 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
             if (impactSpd >= kCrashReportThresholdMps)
                 m_state.ground_impact_speed = impactSpd;
             // Scale friction by impact severity so gravity's ~0.16 m/s/frame floor-tickle
-            // does not act as a continuous brake during ground roll.
-            const float kSlide = kSlideRoll + (kSlideImpact - kSlideRoll) * std::min(impactSpd / 10.f, 1.f);
+            // does not act as a continuous brake during ground roll. A VESSEL (#38) rides this
+            // floor as buoyancy, not wheels-on-dirt: its hull drag lives in VesselForceModel, so
+            // the contact response must not skim speed off it every tick.
+            const float kSlide =
+                m_data->isVessel() ? 1.f : kSlideRoll + (kSlideImpact - kSlideRoll) * std::min(impactSpd / 10.f, 1.f);
             const float newVUp = (impactSpd < 2.f) ? 0.f : -vUp * kCoR;
             std::array<float, 3> vw = {float(vel_world[0]), float(vel_world[1]), float(vel_world[2])};
             // Decompose into radial (vertical) + horizontal, reflect/stop the radial part, apply
@@ -606,10 +708,14 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
             vw[0] = horiz[0] + newVUp * up[0];
             vw[1] = horiz[1] + newVUp * up[1];
             vw[2] = horiz[2] + newVUp * up[2];
-            // Attenuate angular rates on impact to prevent post-contact spinning.
-            m_state.omega[0] *= 0.5f;
-            m_state.omega[1] *= 0.5f;
-            m_state.omega[2] *= 0.5f;
+            // Attenuate angular rates on impact to prevent post-contact spinning. Not for a
+            // VESSEL (#38): a ship is permanently settling onto its water floor, and halving its
+            // yaw rate every tick would crush the turn its rudder is commanding.
+            if (!m_data->isVessel()) {
+                m_state.omega[0] *= 0.5f;
+                m_state.omega[1] *= 0.5f;
+                m_state.omega[2] *= 0.5f;
+            }
             // Rotate corrected world velocity back to body frame.
             float q_c[4] = {-m_state.quat[0], -m_state.quat[1], -m_state.quat[2], m_state.quat[3]};
             auto vb = quatRotate(q_c, vw.data());
@@ -638,7 +744,10 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
     // rudder into a yaw RATE with authority that fades from full at taxi speed to nil by ~50 m/s, so
     // the aero rudder owns yaw during the takeoff roll and this never fights it. Placed before the
     // static parking hold (14c) so a truly stopped, near-idle aircraft still latches fully static.
-    if ((m_gravity->geodeticAltitude(m_state.pos_world) - static_cast<double>(groundElev)) <= kGroundContactMarginM) {
+    // A VESSEL (#38) is permanently "in contact" with its water floor and has neither wheels nor a
+    // nosewheel — its drag and steering live in VesselForceModel, so this whole block is skipped.
+    if (!m_data->isVessel() &&
+        (m_gravity->geodeticAltitude(m_state.pos_world) - static_cast<double>(groundElev)) <= kGroundContactMarginM) {
         constexpr float kRollingResistG = 0.02f; // baseline tyre rolling resistance
         constexpr float kBrakeMaxG = 0.35f;      // full-pedal wheel-brake deceleration
         const float decel = (kRollingResistG + kBrakeMaxG * std::clamp(ctrl.wheelBrake, 0.f, 1.f)) * kG0;

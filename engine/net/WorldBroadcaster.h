@@ -15,6 +15,7 @@
 #include "config/DifficultySettings.h" // AiScaling — sensing difficulty scaling (#685)
 #include "entity/Collision.h"          // CollisionPair — entity-entity collision (#630)
 #include "entity/DamageApplication.h"  // DamageRules — the gameplay damage gates (#626)
+#include "entity/DeckDef.h"            // DeckDef + deckLocalPoint — carrier flight decks (#38)
 #include "entity/Ejection.h"           // EjectionOutcome — pilot survival on ejection (#672)
 #include "entity/EntityEvent.h"        // IEntityEventHandler — kill attribution + scoring (#626)
 #include "entity/EntityId.h"
@@ -173,6 +174,15 @@ struct ControlledEntity {
     bool prevDispenseCm{false};     // countermeasure-dispense edge detector (#529): a held input is one pop
     CrewState crew{};               // per-seat control frame (#969); EMPTY = single-seat fast path (above)
     bool ejected{false};            // #672 AI auto-eject guard: an AI pilot punches out once, not every tick
+
+    // ── carrier ops (#38), all sim-thread, serial deck pass only ─────────────
+    bool wasOnDeck{false};       // deck-contact state last tick; the touchdown EDGE arms the arrest check
+    bool catapultEngaged{false}; // hooked up and in the stroke
+    float catapultRunM{0.f};     // distance travelled along the stroke
+    bool arrestEngaged{false};   // wire caught; decelerating
+    float arrestDecelMps2{0.f};  // wire deceleration, sized at the trap from touchdown speed
+    uint64_t lsoNextTick{0};     // next tick the LSO may speak to this aircraft
+    uint8_t lsoLastPhrase{255};  // last LSO phrase code, so an unchanged call is not repeated
 };
 
 // Pre-start scalar configuration. Bundles the init-time setters so callers configure rate limiting,
@@ -485,6 +495,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // is shorter than on concrete. The client mirrors this via the same groundFrictionFor table, so
     // prediction stays in parity. Not set ⇒ paved default. Call before gameLoop.start().
     void setGroundSurfaceQuery(std::function<SurfaceType(glm::dvec3)> fn);
+
+    // Base-proximity query for the #55 base-operations verbs: is `worldPos` at a serviced base
+    // (fl-server wires "within a few km of an airport")? Unset = any on-ground spot counts, which
+    // keeps the zero-pack sandbox serviceable. A carrier deck always counts, query or not. Call
+    // before gameLoop.start().
+    void setBaseProximityQuery(std::function<bool(glm::dvec3)> fn) {
+        m_baseProximityQuery = std::move(fn);
+    }
 
     // Set pre-cached peer spawn positions [x, y, z] in world space.
     // y must already include the terrain height + AGL offset, computed on the main thread
@@ -1179,6 +1197,33 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         EntityState* state;
     };
     std::vector<StepItem> m_stepItems;
+
+    // ── carrier flight decks (#38) ───────────────────────────────────────────
+    // One record per live deck-carrying entity, rebuilt serially at tick start (beside the spatial
+    // index) and READ-ONLY during the parallel integrate pass — stepFlightSim composes each
+    // aircraft's ground floor as max(terrain, deck plane) from it on worker threads. The serial
+    // deck pass (runDeckOperations) then applies deck carry, catapult strokes, and arrest wires.
+    struct DeckRec {
+        uint32_t entityIdx{0}; // the ship — excluded from its own deck floor
+        double pos[3]{};       // ship world position this tick
+        float quat[4]{0, 0, 0, 1};
+        float vel[3]{};               // ship world velocity (the deck-carry term)
+        double floorElevM{0.0};       // deck plane elevation above the datum (ship geodetic alt + heightM)
+        const DeckDef* deck{nullptr}; // borrowed from the immutable EntityTypeRegistry def
+        const EntityDef* shipDef{nullptr};
+    };
+    std::vector<DeckRec> m_decks;
+    void rebuildDeckRecords();
+    // Deck carry + catapult + arrest + LSO, run SERIALLY after the integrate pass (mutates
+    // FlightIntegrator state and sends packets — neither is worker-safe).
+    void runDeckOperations(double simDt, uint64_t tickIndex);
+    // Unicast haptic (#38 trap/catapult): the pilot who caught the wire feels it; nobody else does.
+    void sendHapticTo(uint32_t peerId, uint8_t kind, float a, float b, uint16_t durationMs);
+
+    // Base operations (#55): the "base refuel|rearm|repair" radio verbs — server-authoritative
+    // ground-crew services for an aircraft shut down at a base (airfield ramp or carrier deck).
+    void handleBaseOpsCommand(uint32_t peerId, EntityId flight, std::string_view op);
+    std::function<bool(glm::dvec3)> m_baseProximityQuery; // null = any ground counts (zero-pack sandbox)
     std::vector<ControlInput> m_stepInputs;
     // Entity indices already warned about a flight-envelope departure (#891 speed_guard_clamped), so
     // the diagnostic logs once per entity instead of every tick a diverged entity stays pinned.

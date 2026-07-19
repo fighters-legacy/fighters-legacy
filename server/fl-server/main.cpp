@@ -54,6 +54,7 @@
 #include <entity/EntityDef.h>
 #include <entity/EntityManager.h>
 #include <entity/EntityTypeRegistry.h>
+#include <flight/BuiltinFlightModel.h> // BuiltinCarrierVesselModel — the builtin carrier's hull (#38)
 #include <flight/CentralGravityField.h>
 #include <flight/FlightModelParser.h>
 #include <flight/LocalFrame.h> // enuBasis — orient an ATC scramble along the runway heading (#706)
@@ -719,6 +720,13 @@ int main(int argc, char** argv) {
     // differs by surface. surfaceTypeAt is thread-safe (shared_mutex); the client mirrors it.
     broadcaster.setGroundSurfaceQuery(
         [&terrainStreamer](glm::dvec3 pos) { return terrainStreamer.surfaceTypeAt(pos); });
+    // Base operations (#55): the crew chief services an aircraft shut down within a few km of an
+    // airport (or on a carrier deck, which WorldBroadcaster checks itself). AirportRegistry is
+    // load-once/lock-free, safe to query from the sim thread.
+    broadcaster.setBaseProximityQuery([&airportRegistry](glm::dvec3 pos) {
+        constexpr double kBaseServiceRangeM = 5000.0;
+        return airportRegistry.nearestTo(pos.x, pos.z, kBaseServiceRangeM) != nullptr;
+    });
     // Resolve EntityDef::flightModelAsset -> parsed FlightModelData on the spawn path. Loads the raw
     // TOML asset via AssetManager, parses it with engine-flight's parseFlightModel, and caches the
     // result by id (sim-thread-only access). Empty/unknown ids fall back to the builtin model in
@@ -726,6 +734,10 @@ int main(int argc, char** argv) {
     auto fmCache = std::make_shared<std::unordered_map<std::string, std::shared_ptr<const fl::FlightModelData>>>();
     broadcaster.setFlightModelResolver(
         [&assets, fmCache](const std::string& id) -> std::shared_ptr<const fl::FlightModelData> {
+            // The compiled-in carrier's vessel model (#38): a "builtin:" name never touches the
+            // filesystem, same rule as every other builtin asset.
+            if (id == "builtin:carrier-vessel")
+                return fl::BuiltinCarrierVesselModel::get();
             if (auto it = fmCache->find(id); it != fmCache->end())
                 return it->second;
             std::shared_ptr<const fl::FlightModelData> model;

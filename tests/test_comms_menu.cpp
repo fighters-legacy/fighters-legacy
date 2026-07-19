@@ -84,11 +84,30 @@ TEST_CASE("CommsMenu: the Flight placeholder emits nothing and keeps the menu op
     CommsMenu menu;
     menu.toggle();
     MockInput in;
-    in.justPressed.insert(Key::Num2); // "Flight (coming soon)" on the root page
+    in.justPressed.insert(Key::Num3); // "Flight (coming soon)" on the root page (slot 3 since #55)
     auto cmd = menu.update(in);
     CHECK_FALSE(cmd.has_value());
     CHECK(menu.isOpen());
     CHECK(menu.page() == 0);
+}
+
+TEST_CASE("CommsMenu: the Ground crew page emits the base-ops radio verbs (#55)", "[comms_menu]") {
+    CommsMenu menu;
+    menu.toggle();
+    {
+        MockInput in;
+        in.justPressed.insert(Key::Num2); // root -> Ground crew
+        CHECK_FALSE(menu.update(in).has_value());
+        CHECK(menu.page() == 2);
+    }
+    {
+        MockInput in;
+        in.justPressed.insert(Key::Num1); // Refuel
+        auto cmd = menu.update(in);
+        REQUIRE(cmd.has_value());
+        CHECK(std::string(cmd->command) == "base refuel");
+        CHECK_FALSE(menu.isOpen()); // a sent command closes the menu
+    }
 }
 
 TEST_CASE("CommsMenu: arrow navigation + Enter selects the highlighted item", "[comms_menu]") {

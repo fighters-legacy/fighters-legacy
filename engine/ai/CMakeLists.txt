@@ -18,6 +18,7 @@ add_library(engine-ai STATIC
     TakeoffController.cpp
     LandingController.cpp
     FormationController.cpp
+    SwarmController.cpp
     SurfaceThreatControllers.cpp
     TurretGunnerController.cpp
     Threat.cpp

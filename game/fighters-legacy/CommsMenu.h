@@ -51,7 +51,7 @@ class CommsMenu {
     }
 
   private:
-    enum class Page : uint8_t { Root, Atc };
+    enum class Page : uint8_t { Root, Atc, Base };
     enum class Kind : uint8_t { Submenu, Command, Placeholder };
     struct Item {
         std::string_view label;

@@ -17,6 +17,10 @@ struct AeroInputs {
     float mach{0.f};
     float speed_m_s{0.f}; // relative airspeed magnitude
     float altitude_m{0.f};
+    // Height above the terrain along the local radial (m), from the integrator's groundElev input
+    // (#350). Rotor models read it for ground effect; the fixed-wing model ignores it. Defaults
+    // far-from-ground so a caller that never sets it gets no ground-proximity behaviour.
+    float agl_m{1.0e9f};
 };
 
 // Aerodynamic + propulsive forces and moments in the body frame [x=forward, y=up, z=right],

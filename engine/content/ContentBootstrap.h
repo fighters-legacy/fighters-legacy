@@ -83,6 +83,9 @@ EntityDef builtinBomberDef();
 // `sam` / `aaa` AiControllerFactory behaviors. Individual factories for tests/missions:
 EntityDef builtinGroundVehicleDef();
 EntityDef builtinNavalVesselDef();
+// The compiled-in aircraft carrier (#38): a moving vessel with a flight deck (catapult, wires,
+// LSO), sailing BuiltinCarrierVesselModel — the zero-pack proof of the launch/recovery cycle.
+EntityDef builtinCarrierDef();
 EntityDef builtinStaticTargetDef();
 EntityDef builtinSamSiteDef();
 EntityDef builtinAaaDef();

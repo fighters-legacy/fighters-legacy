@@ -80,6 +80,15 @@ class FlightScreen : public IScreen {
     const EntityRenderEntry* m_playerEntry{nullptr};
     bool m_weaponFired{false};
 
+    // Ground-crew scene (#55): landed-and-stopped detection on the OWN aircraft. The airborne→landed
+    // edge records a landing score into the logbook (the #674 sink that had no producer); holding
+    // landed-and-stopped for a couple of seconds blends the Chase camera into a slow ramp orbit,
+    // which clears on the takeoff roll, a manual camera-mode change, or the scene timeout.
+    bool m_wasAirborne{false};
+    float m_prevVertSpeedMps{0.f}; // last frame's vertical speed — the touchdown sink rate
+    double m_landedStillS{0.0};    // consecutive seconds landed and stopped
+    bool m_groundSceneOn{false};
+
     // Observer entity picker (#860): which live entity a spectator views from, cycled with Num1/Num2.
     EntitySelector m_selector;
     bool m_prevNextTarget{false}; // Num1 edge detector (next entity)
