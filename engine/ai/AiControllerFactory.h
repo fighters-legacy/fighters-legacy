@@ -17,6 +17,7 @@
 #include "ai/SplitSController.h"
 #include "ai/StateMachineController.h"   // exposes Condition helpers + StateMachineController
 #include "ai/SurfaceThreatControllers.h" // sam / aaa emplacements (#863)
+#include "ai/SwarmController.h"          // boids swarm member (#353)
 #include "ai/WaypointController.h"
 #include "ai/WingmanBehavior.h" // makeWingmanController + WingmanParams
 #include "ai/WingmanCommand.h"  // the six-command grammar
@@ -57,6 +58,11 @@ namespace fl::ai {
 //   ballistic     <tx> <ty> <tz> [mirvCount [spreadM]]  — boost-phase steering to an impact point
 //   formation     <anchorIdx> [slotIndex=0] [lateralM=150] [aftM=100]   — holds station on a MOVING
 //                 anchor (tight formation flying; `escort` orbits the moving asset at standoff)
+//   swarm         <cx> <cy> <cz> [neighborRadiusM=600] [separationRadiusM=120] [cruiseThrottle=0.75]
+//                 — boids member (#353): separation/alignment/cohesion with same-type same-faction
+//                 flockmates, migrating toward the point
+//   swarm_follow  <anchorIdx> [neighborRadiusM=600] [separationRadiusM=120] [cruiseThrottle=0.75]
+//                 — same boids member, migrating after a MOVING anchor entity
 //
 // StateMachineController templates (internally compose multiple states):
 //   patrol_attack <entityIdx> [engageRangeM=8000] [retreatHp=0.25]
@@ -666,6 +672,61 @@ inline std::unique_ptr<fl::IEntityController> createController(std::string_view 
             fp.aftM = static_cast<float>(d);
         }
         return std::make_unique<FormationController>(*entityManager, anchorId, slotIndex, fp);
+    }
+
+    // -----------------------------------------------------------------------
+    // swarm <cx> <cy> <cz> [...] / swarm_follow <anchorIdx> [...]  (#353)
+    //
+    // One boids member. Spawn N entities of the same type and faction with this behavior and they
+    // flock: separation/alignment/cohesion over the shared spatial index, migrating toward the
+    // point (or after the anchor). Each member is independent — there is no swarm object to manage,
+    // and losing members degrades the flock, never breaks it.
+    // -----------------------------------------------------------------------
+    if (behavior == "swarm" || behavior == "swarm_follow") {
+        if (!entityManager)
+            return nullptr;
+        SwarmParams sp{};
+        std::size_t tail = 0; // index of the first optional arg
+        glm::dvec3 point{};
+        fl::EntityId anchorId{};
+        if (behavior == "swarm") {
+            if (args.size() < 3)
+                return nullptr;
+            double x = 0.0, y = 0.0, z = 0.0;
+            if (!parseDouble(args[0], x) || !parseDouble(args[1], y) || !parseDouble(args[2], z))
+                return nullptr;
+            point = {x, y, z};
+            tail = 3;
+        } else {
+            if (args.empty())
+                return nullptr;
+            uint32_t idx{};
+            if (!parseUint32(args[0], idx))
+                return nullptr;
+            anchorId = findEntityById(idx);
+            if (!anchorId.valid())
+                return nullptr;
+            tail = 1;
+        }
+        double d = 0.0;
+        if (args.size() >= tail + 1) {
+            if (!parseDouble(args[tail], d))
+                return nullptr;
+            sp.neighborRadiusM = static_cast<float>(d);
+        }
+        if (args.size() >= tail + 2) {
+            if (!parseDouble(args[tail + 1], d))
+                return nullptr;
+            sp.separationRadiusM = static_cast<float>(d);
+        }
+        if (args.size() >= tail + 3) {
+            if (!parseDouble(args[tail + 2], d))
+                return nullptr;
+            sp.cruiseThrottle = static_cast<float>(d);
+        }
+        if (behavior == "swarm")
+            return std::make_unique<SwarmController>(*entityManager, point, sp);
+        return std::make_unique<SwarmController>(*entityManager, anchorId, sp);
     }
 
     // -----------------------------------------------------------------------

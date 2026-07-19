@@ -95,7 +95,7 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | J | Toggle the ECM jammer (#529; denies a hostile radar a lock beyond its burn-through range) |
 | End | Eject (#672; server edge-detects — a held key is one ejection). Spawns a parachute and destroys the aircraft; within the seat envelope the pilot survives |
 | C | Open the wingman radio menu (#610) |
-| T | Open the ATC comms menu (#704). Non-modal like the wingman menu (the aircraft keeps flying). Digits `1`–`9` pick an item; `Escape` backs out a page, then closes. Root: `1` ATC. ATC page: request takeoff / landing / declare inbound / cancel. The tower's reply appears as a subtitle (and a voice line when a pack provides `radio/` audio). |
+| T | Open the comms menu (#704). Non-modal like the wingman menu (the aircraft keeps flying). Digits `1`–`9` pick an item; `Escape` backs out a page, then closes. Root: `1` ATC, `2` Ground crew (#55). ATC page: request takeoff / landing / declare inbound / cancel. Ground crew page: **Refuel / Rearm / Repair** — server-authoritative, honoured only when the aircraft is shut down (stopped, on the ground) at a base: within a few km of an airport, or on a carrier deck. The reply appears as a subtitle (and a voice line when a pack provides `radio/` audio); an ineligible request gets a crew-chief refusal with the reason. After landing and stopping for a couple of seconds in the Chase view, the camera blends into a slow **ramp orbit** around the parked aircraft (the ground-crew scene); it clears on the takeoff roll, a camera-mode change, or after 60 s. |
 | K | Crew seat picker (#975): open / cycle the joinable non-fly seats across every crewed aircraft the client knows |
 | L | Join the selected crew seat (a gunner on that airframe; the bot parks) |
 | U | Leave the current crew seat (become an observer) |
@@ -329,6 +329,8 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 | `lua` | `<script_name>` | Load a Lua AI script from the content pack's `ai/` directory (e.g. `patrol`, `interceptor`). See `docs/modding/ai.md`. |
 | `patrol_attack` | `<entityIdx> [engageRangeM] [retreatHp]` | Three-state machine: loiter patrol → lead-pursuit engage when the target is **detected** within range → evade retreat when HP below threshold (defaults: engageRangeM=8000 m, retreatHp=0.25). **Sensing-gated (#690):** it engages what it has actually seen and reacted to, not whatever is within the radius |
 | `escort` | `<entityIdx> [standoffM]` | Two-state orbit protection: clockwise loiter at standoffM radius around the escorted entity, **tracking it as it moves** (#464) → Immelmann reversal when a **hostile** entity enters the inner defense zone (standoffM×0.5). Hostiles are classified by faction, so the escort and escortee should be spawned with the same non-neutral `--faction`; friendlies and neutrals are ignored. (default: standoffM=2000 m) |
+| `swarm` | `<cx> <cy> <cz> [neighborRadiusM] [separationRadiusM] [cruiseThrottle]` | Boids swarm member (#353): separation / alignment / cohesion with **same-type, same-faction** flockmates found through the spatial index, migrating toward the point. Spawn N identical entities with this behavior and they flock — there is no swarm object, so losing members degrades the flock, never breaks it. (defaults: 600 m, 120 m, 0.75) |
+| `swarm_follow` | `<entityIdx> [neighborRadiusM] [separationRadiusM] [cruiseThrottle]` | The same boids member, migrating after a **moving** anchor entity (e.g. a strike lead the swarm escorts) |
 
 **Weather presets:**
 

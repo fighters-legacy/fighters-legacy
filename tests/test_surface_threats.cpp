@@ -108,11 +108,11 @@ struct ThreatFixture {
 
 } // namespace
 
-TEST_CASE("registerBuiltinSurfaceEntities registers all five surface types (#863)", "[surface_threats]") {
+TEST_CASE("registerBuiltinSurfaceEntities registers all six surface types (#863, +carrier #38)", "[surface_threats]") {
     EntityTypeRegistry registry;
-    CHECK(registerBuiltinSurfaceEntities(registry) == 5u);
+    CHECK(registerBuiltinSurfaceEntities(registry) == 6u); // five #863 types + builtin:carrier (#38)
     for (const char* id : {"builtin:ground-vehicle", "builtin:naval-vessel", "builtin:static-target",
-                           "builtin:sam-site", "builtin:aaa"}) {
+                           "builtin:sam-site", "builtin:aaa", "builtin:carrier"}) {
         const EntityDef* def = registry.findById(id);
         REQUIRE(def != nullptr);
         CHECK(def->damage.has_value());             // a real damage model, not binary death

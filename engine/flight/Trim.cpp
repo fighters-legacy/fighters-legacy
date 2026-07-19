@@ -117,6 +117,14 @@ constexpr float kSpeedStep = 2.f;
 TrimResult trim(const FlightModelData& d, const TrimPoint& pt, const PayloadEffect& payload) {
     TrimResult r;
 
+    // Trim is a WING calculation — every number below comes from driving CL·q·S against weight. A
+    // rotorcraft's lift comes from a rotor disc and a ballistic vehicle has none at all (#349/#350);
+    // running them through the wing scan would "work" (the placeholder tables are benign) and return
+    // a non-converged result the slow way, so return it honestly and immediately instead. Rotorcraft
+    // hover performance is derived separately (AircraftManual's hover section).
+    if (!d.isFixedWing())
+        return r; // converged = false
+
     Condition c;
     c.atmos = computeAtmosphere(pt.altitude_m);
     c.altitude_m = pt.altitude_m;

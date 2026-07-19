@@ -43,9 +43,11 @@ ForceMoment FixedWingForceModel::compute(const FlightState& s, const ControlInpu
     const bool leftOut = (fail & kEngineFailLeft) != 0;
     const bool rightOut = (fail & kEngineFailRight) != 0;
     // A centreline single-engine kill (#901) is a TOTAL loss with NO yaw — grouped with the generic
-    // and flameout total-loss cases, not the L/R asymmetric ones.
+    // and flameout total-loss cases, not the L/R asymmetric ones. A compressor surge (#308) is also
+    // a total (if transient) thrust loss while it lasts — the integrator clears the bit on recovery.
     const bool totalLoss =
-        (fail & (kEngineFailGeneric | kEngineFlameout | kEngineFailCenter)) != 0 || (leftOut && rightOut);
+        (fail & (kEngineFailGeneric | kEngineFlameout | kEngineFailCenter | kEngineCompStall)) != 0 ||
+        (leftOut && rightOut);
     if (totalLoss) {
         forces[0] -= thrust_n; // computeForces already added the full thrust to body-x; remove it
     } else if (leftOut || rightOut) {

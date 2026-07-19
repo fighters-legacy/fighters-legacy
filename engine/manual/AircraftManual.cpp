@@ -2,6 +2,7 @@
 #include "manual/AircraftManual.h"
 
 #include "entity/EntityDef.h"
+#include "flight/Atmosphere.h" // computeAtmosphere — the hover-ceiling scan (#349)
 #include "flight/FlightModelData.h"
 #include "flight/Trim.h"
 #include "sensor/SensorDef.h"
@@ -135,6 +136,48 @@ void addPerformance(AircraftManual& out, const ManualSources& src, float mass, c
     out.sections.push_back(std::move(sec));
 }
 
+// Rotorcraft (#349/#350): hover is their performance chart, and it is DERIVED, same doctrine as
+// trim() — thrust-to-weight and hover throttle from the rotor data, the hover ceiling by driving
+// the density-scaled max thrust against weight through the SAME computeAtmosphere the integrator
+// flies, endurance from the fuel path. A hand-written number here would drift the moment someone
+// retunes the rotor.
+void addHoverPerformance(AircraftManual& out, const ManualSources& src, float mass) {
+    const FlightModelData& fm = *src.model;
+    float thrustSL = 0.f;
+    if (fm.multirotor)
+        thrustSL = static_cast<float>(fm.multirotor->rotor_count) * fm.multirotor->rotor_thrust_max_n;
+    else if (fm.helicopter)
+        thrustSL = fm.helicopter->main_rotor_max_thrust_n;
+    if (thrustSL <= 0.f)
+        return;
+
+    const float weight = (mass + src.payload.extra_mass_kg) * 9.80665f;
+    const float rho0 = computeAtmosphere(0.f).density_kg_m3;
+
+    ManualSection sec;
+    sec.title = "Hover performance";
+    sec.rows.push_back({"thrust-to-weight (sea level)", fmt("%.2f", thrustSL / weight)});
+    if (thrustSL > weight) {
+        sec.rows.push_back({"hover throttle (sea level)", fmt("%.0f %%", 100.f * weight / thrustSL)});
+        // Hover ceiling: the highest altitude where density-scaled max thrust still carries the
+        // weight. 100 m scan, the resolution of the chart, not of the physics.
+        float ceiling = 0.f;
+        for (float alt = 0.f; alt <= 20000.f; alt += 100.f) {
+            if (thrustSL * computeAtmosphere(alt).density_kg_m3 / rho0 < weight)
+                break;
+            ceiling = alt;
+        }
+        sec.rows.push_back({"hover ceiling", fmt("%.0f m", ceiling) + fmt(" (%.0f ft)", ceiling * kMToFt)});
+    } else {
+        sec.rows.push_back({"hover", "CANNOT HOVER at this weight"});
+    }
+    if (fm.engine.fuel_flow_mil_kg_s > 0.f && fm.geometry.fuel_kg > 0.f) {
+        sec.rows.push_back({"endurance (full charge/fuel)",
+                            fmt("%.0f min", fm.geometry.fuel_kg / fm.engine.fuel_flow_mil_kg_s / 60.f)});
+    }
+    out.sections.push_back(std::move(sec));
+}
+
 } // namespace
 
 AircraftManual buildAircraftManual(const ManualSources& src) {
@@ -154,11 +197,15 @@ AircraftManual buildAircraftManual(const ManualSources& src) {
         sec.rows.push_back(
             {"empty mass", fmt("%.0f kg", fm.geometry.mass_kg) + fmt(" (%.0f lb)", fm.geometry.mass_kg * kKgToLb)});
         sec.rows.push_back({"internal fuel", fmt("%.0f kg", fm.geometry.fuel_kg)});
-        sec.rows.push_back({"wing area", fmt("%.2f m2", fm.geometry.wing_area_m2)});
-        sec.rows.push_back({"wingspan", fmt("%.2f m", fm.geometry.wingspan_m)});
-        if (fm.geometry.wing_area_m2 > 0.f) {
-            const float wingLoading = (fm.geometry.mass_kg + fm.geometry.fuel_kg) / fm.geometry.wing_area_m2;
-            sec.rows.push_back({"wing loading (full fuel)", fmt("%.0f kg/m2", wingLoading)});
+        // A rotorcraft's wing fields are benign placeholders (#349) — printing them would be
+        // presenting invented numbers as data, the exact thing this manual exists to prevent.
+        if (fm.isFixedWing()) {
+            sec.rows.push_back({"wing area", fmt("%.2f m2", fm.geometry.wing_area_m2)});
+            sec.rows.push_back({"wingspan", fmt("%.2f m", fm.geometry.wingspan_m)});
+            if (fm.geometry.wing_area_m2 > 0.f) {
+                const float wingLoading = (fm.geometry.mass_kg + fm.geometry.fuel_kg) / fm.geometry.wing_area_m2;
+                sec.rows.push_back({"wing loading (full fuel)", fmt("%.0f kg/m2", wingLoading)});
+            }
         }
         out.sections.push_back(std::move(sec));
     }
@@ -178,13 +225,18 @@ AircraftManual buildAircraftManual(const ManualSources& src) {
         out.sections.push_back(std::move(sec));
     }
 
-    // ── Performance, clean and combat. ───────────────────────────────────────
+    // ── Performance, clean and combat. Rotorcraft (#349/#350) get the hover chart instead — the
+    // level-flight trim scan is a wing calculation and has nothing honest to say about them. ─────
     const float cleanMass = fm.geometry.mass_kg + fm.geometry.fuel_kg;
-    addPerformance(out, src, cleanMass, "clean");
-    if (src.payload.extra_mass_kg > 0.f || src.payload.extra_cd0 > 0.f) {
-        // The combat pass carries the default loadout, so the numbers are what the aircraft will
-        // actually do when you take off in it -- not what it would do empty.
-        addPerformance(out, src, cleanMass, "with default loadout");
+    if (fm.isRotorcraft()) {
+        addHoverPerformance(out, src, cleanMass);
+    } else {
+        addPerformance(out, src, cleanMass, "clean");
+        if (src.payload.extra_mass_kg > 0.f || src.payload.extra_cd0 > 0.f) {
+            // The combat pass carries the default loadout, so the numbers are what the aircraft will
+            // actually do when you take off in it -- not what it would do empty.
+            addPerformance(out, src, cleanMass, "with default loadout");
+        }
     }
 
     // ── Loadout: from the entity's stations and the weapon registry (#812). ──────────────────────

@@ -174,7 +174,7 @@ ConnectAck arrived**, not on `assignedEntityIdx == 0`.
 | 16 | 1 | `grantedRole` | `uint8_t` | `PeerRole` granted by the server (0 = Pilot, 1 = Observer) |
 | 17 | 3 | `reserved2[3]` | `uint8_t[3]` | Padding to keep trailing records 4-aligned |
 
-### MsgEntityTypeDef — 336 bytes
+### MsgEntityTypeDef — 348 bytes
 
 Appended N times after `MsgConnectAck` (one per registered entity type).
 
@@ -190,7 +190,10 @@ Appended N times after `MsgConnectAck` (one per registered entity type).
 | 268 | 64 | `name[64]` | `char[64]` | Null-terminated friendly display name (`EntityDef::name`), e.g. `"F-16C"`; empty = client falls back to `id` (#860) |
 | 332 | 1 | `category` | `uint8_t` | `ObjectCategory` ordinal; client gates via `isObjectCategoryOrdinal` before the cast, invalid → AirVehicle (#886) |
 | 333 | 1 | `projectileKind` | `uint8_t` | `ProjectileKind` ordinal (Projectile types only); gated, invalid → None (#886) |
-| 334 | 2 | `reservedCat[2]` | `uint8_t[2]` | Padding to keep the record size a multiple of 4 |
+| 334 | 2 | `reservedCat[2]` | `uint8_t[2]` | Padding (kept so the #886 offsets stay frozen) |
+| 336 | 4 | `deckLengthM` | `float32` | Flight-deck footprint along the keel (m); 0 = the type has no deck (#38) |
+| 340 | 4 | `deckWidthM` | `float32` | Flight-deck footprint abeam (m) |
+| 344 | 4 | `deckHeightM` | `float32` | Deck plane height above the ship origin (m) |
 
 `flightModel` (#811) exists because the client must integrate the **same** aircraft the server does.
 Without it the client had no way to learn an entity type's flight model, silently fell back to the
@@ -199,8 +202,11 @@ aggregate cost of the type's default loadout: the client has no hardpoints and n
 it receives the two numbers rather than the data to derive them. `name` (#860) is the human-readable
 label the observer entity picker shows. `category` / `projectileKind` (#886) drive the per-category
 builtin placeholder silhouettes (and future picker grouping / map icons) — without them every
-client-side def read back as an AirVehicle. All were **appended at the tail**, so every pre-existing
-field offset is unchanged and `kProtocolVersion` stays at 1.
+client-side def read back as an AirVehicle. `deckLengthM/WidthM/HeightM` (#38) carry a carrier's
+flight-deck footprint so client prediction composes its ground floor as max(terrain, moving deck)
+exactly as the server does; the catapult/arrest parameters stay server-side (server-authoritative
+events). All were **appended at the tail**, so every pre-existing field offset is unchanged and
+`kProtocolVersion` stays at 1.
 
 ### MsgFactionDef — 132 bytes
 

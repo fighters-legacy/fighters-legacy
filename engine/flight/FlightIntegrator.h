@@ -32,8 +32,18 @@ struct FlightState {
     float throttle_actual{0.f};    // actual throttle after spool lag [0,1]
     float current_sweep_deg{55.f}; // current wing sweep angle (fixed-geometry: equals ref_sweep_deg)
     bool ab_engaged{false};
-    uint8_t engineFailFlags{0}; // fl::kEngineFail* bitmask; drives asymmetric thrust (#675)
-    float tvc_angle_deg{0.f};   // current TVC nozzle angle
+    // fl::kEngineFail* bitmask; drives asymmetric thrust (#675). OWNERSHIP IS SPLIT BY BIT (#308):
+    // the damage path (WorldBroadcaster subsystem effects) latches Generic/Left/Right/Center; the
+    // integrator itself raises and clears the TRANSIENT bits — kEngineFlameout (fuel starvation or
+    // above flameout_alt_km, cleared by a windmill relight) and kEngineCompStall (surge, cleared a
+    // fixed time after the disturbed-flow condition ends). step() recomputes only its own bits and
+    // never touches the damage-owned ones, so the two writers cannot fight.
+    uint8_t engineFailFlags{0};
+
+    // Remaining compressor-surge recovery time (s), #308. Counts down once the surge condition
+    // clears; kEngineCompStall drops when it reaches zero. 0 = no surge in progress.
+    float comp_stall_seconds{0.f};
+    float tvc_angle_deg{0.f}; // current TVC nozzle angle
 
     // ── [aero.limits] enforcement outputs (#816) ─────────────────────────────
     // These are OUTPUTS of step(), not inputs. Until now alpha_stall_deg, max_g_structural and

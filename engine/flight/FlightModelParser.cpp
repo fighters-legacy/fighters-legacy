@@ -77,6 +77,12 @@ namespace {
         return AircraftRole::Trainer;
     if (s == "ballistic")
         return AircraftRole::Ballistic;
+    if (s == "multirotor")
+        return AircraftRole::Multirotor;
+    if (s == "helicopter")
+        return AircraftRole::Helicopter;
+    if (s == "vessel")
+        return AircraftRole::Vessel;
     throw std::runtime_error(std::string("unknown aircraft type: ") + std::string(s));
 }
 
@@ -123,10 +129,14 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.meta.role = parse_role(*type_str);
 
         auto et_str = ac["engine_type"].value<std::string>();
-        if (!et_str && d.meta.role != AircraftRole::Ballistic)
+        const bool turbineOptional = d.meta.role == AircraftRole::Ballistic ||  // a rocket is not a turbine
+                                     d.meta.role == AircraftRole::Multirotor || // electric motors (#349)
+                                     d.meta.role == AircraftRole::Helicopter || // turboshaft (#350)
+                                     d.meta.role == AircraftRole::Vessel;       // marine plant (#38)
+        if (!et_str && !turbineOptional)
             throw std::runtime_error("missing aircraft.engine_type");
         if (et_str)
-            d.meta.engine_type = parse_engine_type(*et_str); // ballistic: a rocket is not a turbine
+            d.meta.engine_type = parse_engine_type(*et_str);
 
         d.meta.has_fbw = ac["has_fbw"].value<bool>().value_or(false);
         d.meta.cruise_alt_m = static_cast<float>(ac["cruise_alt_m"].value<double>().value_or(10000.0));
@@ -142,9 +152,23 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
             throw std::runtime_error("missing [flight_model] table");
 
         d.geometry.mass_kg = req_float(fm["mass_kg"], "flight_model.mass_kg");
-        d.geometry.wing_area_m2 = req_float(fm["wing_area_m2"], "flight_model.wing_area_m2");
-        d.geometry.wingspan_m = req_float(fm["wingspan_m"], "flight_model.wingspan_m");
-        d.geometry.mac_m = req_float(fm["mac_m"], "flight_model.mac_m");
+
+        // A rotorcraft (#349/#350) or a ship (#38) has no wing, so demanding wing geometry of it
+        // would force authors to invent numbers nothing reads (those models carry their own
+        // reference areas). The fields stay accepted (a compound helicopter may legitimately
+        // declare a wing later); they default to benign 1.0 so any accidental fixed-wing lookup
+        // degrades, never divides by zero.
+        const bool rotorcraft = (d.meta.role == AircraftRole::Multirotor || d.meta.role == AircraftRole::Helicopter ||
+                                 d.meta.role == AircraftRole::Vessel);
+        if (rotorcraft) {
+            d.geometry.wing_area_m2 = static_cast<float>(fm["wing_area_m2"].value<double>().value_or(1.0));
+            d.geometry.wingspan_m = static_cast<float>(fm["wingspan_m"].value<double>().value_or(1.0));
+            d.geometry.mac_m = static_cast<float>(fm["mac_m"].value<double>().value_or(1.0));
+        } else {
+            d.geometry.wing_area_m2 = req_float(fm["wing_area_m2"], "flight_model.wing_area_m2");
+            d.geometry.wingspan_m = req_float(fm["wingspan_m"], "flight_model.wingspan_m");
+            d.geometry.mac_m = req_float(fm["mac_m"], "flight_model.mac_m");
+        }
         d.geometry.fuel_kg = req_float(fm["fuel_kg"], "flight_model.fuel_kg");
         d.geometry.ixx_kg_m2 = req_float(fm["ixx_kg_m2"], "flight_model.ixx_kg_m2");
         d.geometry.iyy_kg_m2 = req_float(fm["iyy_kg_m2"], "flight_model.iyy_kg_m2");
@@ -189,6 +213,171 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.engine.mil_thrust.cols = {0.f, 90.f};
         d.engine.mil_thrust.values.assign(4, 0.f);
         d.limits.alpha_stall_deg = 90.f; // nothing to stall
+        d.limits.max_g_structural = 100.f;
+        d.limits.min_g_structural = -100.f;
+        return d;
+    }
+
+    // ── multirotor vehicles (#349): a reduced, rotor-shaped schema ────────────
+    // A multirotor is thrust mixing, not wings — CL tables, stability derivatives and turbine
+    // thrust decks would all be invented numbers nothing reads (MultirotorForceModel flies
+    // [multirotor] alone). Required: [multirotor] rotor_count / rotor_thrust_max_n / rotor_arm_m /
+    // yaw_torque_nm. Endurance rides the integrator's existing fuel path: optional flight_time_min
+    // (default 20) becomes a constant drain of fuel_kg — battery or gas, the tank runs dry and the
+    // #308 fuel-starvation flameout stops the motors. Placeholder aero tables keep an accidental
+    // fixed-wing step degrading to drag-only, never asserting (the ballistic-model discipline).
+    if (d.meta.role == AircraftRole::Multirotor) {
+        auto mrNode = tbl["multirotor"];
+        if (!mrNode || !mrNode.as_table())
+            throw std::runtime_error("multirotor model: missing [multirotor] table");
+        MultirotorData mr;
+        auto count = tomlInt(mrNode["rotor_count"]);
+        if (!count)
+            throw std::runtime_error("missing multirotor.rotor_count");
+        mr.rotor_count = static_cast<int>(*count);
+        if (mr.rotor_count < 3 || mr.rotor_count > 16)
+            throw std::runtime_error("multirotor.rotor_count must be in [3, 16]");
+        mr.rotor_thrust_max_n = req_float(mrNode["rotor_thrust_max_n"], "multirotor.rotor_thrust_max_n");
+        mr.rotor_arm_m = req_float(mrNode["rotor_arm_m"], "multirotor.rotor_arm_m");
+        mr.yaw_torque_nm = req_float(mrNode["yaw_torque_nm"], "multirotor.yaw_torque_nm");
+        if (mr.rotor_thrust_max_n <= 0.f || mr.rotor_arm_m <= 0.f || mr.yaw_torque_nm <= 0.f)
+            throw std::runtime_error("multirotor rotor_thrust_max_n / rotor_arm_m / yaw_torque_nm must be > 0");
+        mr.frame_cd = static_cast<float>(mrNode["frame_cd"].value<double>().value_or(1.0));
+        mr.frame_area_m2 = static_cast<float>(mrNode["frame_area_m2"].value<double>().value_or(0.1));
+        mr.attitude_authority = static_cast<float>(mrNode["attitude_authority"].value<double>().value_or(0.3));
+        mr.rate_damping_s = static_cast<float>(mrNode["rate_damping_s"].value<double>().value_or(1.0));
+        d.multirotor = mr;
+
+        // Endurance → fuel flow (constant drain; the hover throttle band is narrow enough that a
+        // throttle-shaped burn would be false precision).
+        const float flightMin = static_cast<float>(mrNode["flight_time_min"].value<double>().value_or(20.0));
+        if (flightMin <= 0.f)
+            throw std::runtime_error("multirotor.flight_time_min must be > 0");
+        const float flow = d.geometry.fuel_kg / (flightMin * 60.f);
+        d.engine.fuel_flow_idle_kg_s = flow;
+        d.engine.fuel_flow_mil_kg_s = flow;
+
+        // Electric-motor response: near-instant next to a turbine spool.
+        d.engine.spool_time_s = static_cast<float>(mrNode["motor_response_s"].value<double>().value_or(0.2));
+
+        // Benign placeholder aero so an accidental FixedWingForceModel step degrades cleanly: the
+        // frame's own flat plate as the polar, zero lift, zero turbine thrust.
+        d.geometry.wing_area_m2 = mr.frame_area_m2;
+        d.drag_polar.cd0 = mr.frame_cd;
+        d.drag_polar.k = 0.f;
+        d.cl_table.rows = {-90.f, -30.f, 30.f, 90.f};
+        d.cl_table.cols = {0.f, 30.f};
+        d.cl_table.values.assign(8, 0.f);
+        d.engine.mil_thrust.rows = {0.f, 30.f};
+        d.engine.mil_thrust.cols = {0.f, 90.f};
+        d.engine.mil_thrust.values.assign(4, 0.f);
+        d.limits.alpha_stall_deg = 90.f; // a rotor frame has no wing to stall
+        d.limits.max_g_structural = 100.f;
+        d.limits.min_g_structural = -100.f;
+        return d;
+    }
+
+    // ── helicopters (#350): the rotor-disc reduced schema ─────────────────────
+    // A helicopter's lift is a rotor disc, not a wing — [helicopter] carries the disc, cyclic,
+    // tail-rotor and autorotation parameters HelicopterForceModel flies. The turboshaft burns fuel
+    // through the integrator's normal throttle-shaped path, so [engine] fuel flows are required
+    // (unlike the multirotor's endurance shortcut); thrust decks are not. Same benign-placeholder
+    // discipline as ballistic/multirotor for the aero tables.
+    if (d.meta.role == AircraftRole::Helicopter) {
+        auto hNode = tbl["helicopter"];
+        if (!hNode || !hNode.as_table())
+            throw std::runtime_error("helicopter model: missing [helicopter] table");
+        HelicopterData h;
+        h.main_rotor_radius_m = req_float(hNode["main_rotor_radius_m"], "helicopter.main_rotor_radius_m");
+        h.main_rotor_max_thrust_n = req_float(hNode["main_rotor_max_thrust_n"], "helicopter.main_rotor_max_thrust_n");
+        h.yaw_moment_max_nm = req_float(hNode["yaw_moment_max_nm"], "helicopter.yaw_moment_max_nm");
+        h.cyclic_moment_nm = req_float(hNode["cyclic_moment_nm"], "helicopter.cyclic_moment_nm");
+        if (h.main_rotor_radius_m <= 0.f || h.main_rotor_max_thrust_n <= 0.f || h.yaw_moment_max_nm <= 0.f ||
+            h.cyclic_moment_nm <= 0.f)
+            throw std::runtime_error("helicopter: rotor radius/thrust and control moments must be > 0");
+        h.rate_damping_s = static_cast<float>(hNode["rate_damping_s"].value<double>().value_or(1.5));
+        h.flapback_nm_per_mps = static_cast<float>(hNode["flapback_nm_per_mps"].value<double>().value_or(0.0));
+        h.torque_factor = static_cast<float>(hNode["torque_factor"].value<double>().value_or(0.0));
+        h.frame_cd = static_cast<float>(hNode["frame_cd"].value<double>().value_or(0.8));
+        h.frame_area_m2 = static_cast<float>(hNode["frame_area_m2"].value<double>().value_or(2.0));
+        h.ground_effect_frac = static_cast<float>(hNode["ground_effect_frac"].value<double>().value_or(0.15));
+        h.translational_lift_frac = static_cast<float>(hNode["translational_lift_frac"].value<double>().value_or(0.12));
+        h.translational_lift_mps = static_cast<float>(hNode["translational_lift_mps"].value<double>().value_or(25.0));
+        h.autorotation_cd = static_cast<float>(hNode["autorotation_cd"].value<double>().value_or(1.2));
+        d.helicopter = h;
+
+        // Turboshaft fuel: idle → mil across collective, the integrator's existing burn path.
+        auto eng = tbl["engine"];
+        if (!eng)
+            throw std::runtime_error("helicopter model: missing [engine] table (turboshaft fuel flows)");
+        d.engine.fuel_flow_idle_kg_s = req_float(eng["fuel_flow_idle_kg_s"], "engine.fuel_flow_idle_kg_s");
+        d.engine.fuel_flow_mil_kg_s = req_float(eng["fuel_flow_mil_kg_s"], "engine.fuel_flow_mil_kg_s");
+        d.engine.fuel_flow_ab_kg_s = d.engine.fuel_flow_mil_kg_s; // no augmentor on a turboshaft
+        d.engine.spool_time_s = static_cast<float>(eng["spool_time_s"].value<double>().value_or(1.0));
+        if (auto n = tomlInt(eng["engine_count"]))
+            d.engine.engine_count = static_cast<int>(*n);
+        // #308 engine failure dynamics apply to a turboshaft too.
+        if (auto f = eng["flameout_alt_km"].value<double>())
+            d.engine.flameout_alt_km = static_cast<float>(*f);
+        if (auto rl = eng["relight_min_mps"].value<double>())
+            d.engine.relight_min_mps = static_cast<float>(*rl);
+
+        // Benign placeholder aero (the ballistic/multirotor discipline).
+        d.geometry.wing_area_m2 = h.frame_area_m2;
+        d.drag_polar.cd0 = h.frame_cd;
+        d.drag_polar.k = 0.f;
+        d.cl_table.rows = {-90.f, -30.f, 30.f, 90.f};
+        d.cl_table.cols = {0.f, 30.f};
+        d.cl_table.values.assign(8, 0.f);
+        d.engine.mil_thrust.rows = {0.f, 30.f};
+        d.engine.mil_thrust.cols = {0.f, 90.f};
+        d.engine.mil_thrust.values.assign(4, 0.f);
+        d.limits.alpha_stall_deg = 90.f; // the disc does not stall like a wing
+        d.limits.max_g_structural = 100.f;
+        d.limits.min_g_structural = -100.f;
+        return d;
+    }
+
+    // ── surface vessels (#38): the ship-shaped reduced schema ─────────────────
+    // A ship is propulsion + water drag + a rudder ([vessel], flown by VesselForceModel); wings,
+    // stability derivatives and thrust decks would all be invented numbers. The marine plant burns
+    // fuel through the normal idle→mil path (both flows optional — a ship's endurance rarely
+    // matters at sortie scale, but a carrier group on a long campaign leg is fair game).
+    if (d.meta.role == AircraftRole::Vessel) {
+        auto vNode = tbl["vessel"];
+        if (!vNode || !vNode.as_table())
+            throw std::runtime_error("vessel model: missing [vessel] table");
+        VesselData v;
+        v.max_thrust_n = req_float(vNode["max_thrust_n"], "vessel.max_thrust_n");
+        v.max_speed_mps = req_float(vNode["max_speed_mps"], "vessel.max_speed_mps");
+        if (v.max_thrust_n <= 0.f || v.max_speed_mps <= 0.f)
+            throw std::runtime_error("vessel.max_thrust_n and vessel.max_speed_mps must be > 0");
+        v.turn_rate_deg_s = static_cast<float>(vNode["turn_rate_deg_s"].value<double>().value_or(1.5));
+        v.steerage_mps = static_cast<float>(vNode["steerage_mps"].value<double>().value_or(2.0));
+        d.vessel = v;
+
+        if (auto eng = tbl["engine"]; eng && eng.as_table()) {
+            d.engine.fuel_flow_idle_kg_s = static_cast<float>(eng["fuel_flow_idle_kg_s"].value<double>().value_or(0.0));
+            d.engine.fuel_flow_mil_kg_s = static_cast<float>(eng["fuel_flow_mil_kg_s"].value<double>().value_or(0.0));
+            d.engine.spool_time_s = static_cast<float>(eng["spool_time_s"].value<double>().value_or(10.0));
+            if (auto n = tomlInt(eng["engine_count"]))
+                d.engine.engine_count = static_cast<int>(*n);
+        } else {
+            d.engine.fuel_flow_idle_kg_s = 0.f; // endurance not modelled unless the author asks
+            d.engine.fuel_flow_mil_kg_s = 0.f;
+            d.engine.spool_time_s = 10.f; // a marine plant answers the telegraph slowly
+        }
+
+        // Benign placeholder aero (the ballistic/rotorcraft discipline).
+        d.drag_polar.cd0 = 1.0f;
+        d.drag_polar.k = 0.f;
+        d.cl_table.rows = {-90.f, -30.f, 30.f, 90.f};
+        d.cl_table.cols = {0.f, 30.f};
+        d.cl_table.values.assign(8, 0.f);
+        d.engine.mil_thrust.rows = {0.f, 30.f};
+        d.engine.mil_thrust.cols = {0.f, 90.f};
+        d.engine.mil_thrust.values.assign(4, 0.f);
+        d.limits.alpha_stall_deg = 90.f;
         d.limits.max_g_structural = 100.f;
         d.limits.min_g_structural = -100.f;
         return d;
@@ -408,6 +597,16 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         if (auto a = eng["ab_max_alt_km"].value<double>())
             d.engine.ab_max_alt_km = static_cast<float>(*a);
 
+        // Engine failure dynamics (#308): optional combustion ceiling + windmill-relight speed, and
+        // the opt-in compressor-surge model. All absent = bit-identical to before.
+        if (auto f = eng["flameout_alt_km"].value<double>())
+            d.engine.flameout_alt_km = static_cast<float>(*f);
+        if (auto r = eng["relight_min_mps"].value<double>())
+            d.engine.relight_min_mps = static_cast<float>(*r);
+        d.engine.compressor_stall = eng["compressor_stall"].value<bool>().value_or(false);
+        if (auto sm = eng["surge_alpha_margin_deg"].value<double>())
+            d.engine.surge_alpha_margin_deg = static_cast<float>(*sm);
+
         auto mil = tbl["engine"]["mil_thrust"];
         if (!mil || !mil.as_table())
             throw std::runtime_error("missing [engine.mil_thrust] table");
@@ -436,6 +635,24 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
                 throw std::runtime_error("engine.idle_thrust: alt_km must have at least 2 breakpoints");
             d.engine.idle_thrust = std::move(idt);
         }
+    }
+
+    // ── [drone_limits] (optional, #351) ───────────────────────────────────────
+    // The onboard autopilot's command envelope for a fixed-wing UAV. Every field optional; a field
+    // at 0 (or absent) leaves that gate off, and the whole block absent is bit-identical to before.
+    if (auto dl = tbl["drone_limits"]; dl && dl.as_table()) {
+        DroneLimits limits;
+        limits.max_bank_deg = static_cast<float>(dl["max_bank_deg"].value<double>().value_or(0.0));
+        limits.max_g = static_cast<float>(dl["max_g"].value<double>().value_or(0.0));
+        limits.min_airspeed_mps = static_cast<float>(dl["min_airspeed_mps"].value<double>().value_or(0.0));
+        limits.max_airspeed_mps = static_cast<float>(dl["max_airspeed_mps"].value<double>().value_or(0.0));
+        if (limits.max_bank_deg < 0.f || limits.max_g < 0.f || limits.min_airspeed_mps < 0.f ||
+            limits.max_airspeed_mps < 0.f)
+            throw std::runtime_error("[drone_limits] fields must be >= 0 (0 = that gate off)");
+        if (limits.min_airspeed_mps > 0.f && limits.max_airspeed_mps > 0.f &&
+            limits.min_airspeed_mps >= limits.max_airspeed_mps)
+            throw std::runtime_error("drone_limits.min_airspeed_mps must be below max_airspeed_mps");
+        d.drone_limits = limits;
     }
 
     // ── [carrier] (optional) ──────────────────────────────────────────────────

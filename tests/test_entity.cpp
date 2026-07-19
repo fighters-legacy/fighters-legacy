@@ -1686,3 +1686,29 @@ TEST_CASE("applyWarhead: a degenerate blast is a no-op", "[warhead]") {
               .damaged == 0);
     CHECK(w.em.get(e)->hp == 100.f);
 }
+
+TEST_CASE("EntityDefParser: [deck] parses a flight deck and requires accepts_landings (#38)", "[parser]") {
+    const std::string base = "[entity]\n"
+                             "id = \"test:cv\"\n"
+                             "name = \"Carrier\"\n"
+                             "category = \"naval_vehicle\"\n"
+                             "max_hp = 8000.0\n";
+    const std::string deck = "[deck]\n"
+                             "length_m = 300.0\n"
+                             "width_m = 70.0\n"
+                             "height_m = 18.0\n"
+                             "cat_end_speed_mps = 72.0\n"
+                             "wire_x_m = -100.0\n";
+
+    fl::EntityDef def = fl::parseEntityDef(base + "accepts_landings = true\n" + deck);
+    REQUIRE(def.deck.has_value());
+    CHECK(def.acceptsLandings);
+    CHECK_THAT(def.deck->lengthM, WithinAbs(300.f, 1e-4f));
+    CHECK_THAT(def.deck->heightM, WithinAbs(18.f, 1e-4f));
+    CHECK_THAT(def.deck->catEndSpeedMps, WithinAbs(72.f, 1e-4f));
+    CHECK_THAT(def.deck->wireXM, WithinAbs(-100.f, 1e-4f));
+    CHECK_THAT(def.deck->catStrokeM, WithinAbs(100.f, 1e-4f)); // engine default kept
+
+    // A deck nothing may land on is a modelling error, not a warning.
+    CHECK_THROWS(fl::parseEntityDef(base + deck));
+}

@@ -23,7 +23,10 @@ enum class AircraftRole {
     Tanker,
     Transport,
     Trainer,
-    Ballistic // #354: an unwinged boost/coast vehicle — flown by BallisticForceModel, not wings
+    Ballistic,  // #354: an unwinged boost/coast vehicle — flown by BallisticForceModel, not wings
+    Multirotor, // #349: a quad/hex/octo rotor frame — flown by MultirotorForceModel (thrust mixing)
+    Helicopter, // #350: a single-main-rotor helicopter — flown by HelicopterForceModel (rotor disc)
+    Vessel      // #38: a surface ship (carrier, escort) — flown by VesselForceModel on the water floor
 };
 
 enum class PropRotation { CW, CCW, Contra };
@@ -216,6 +219,103 @@ struct EngineData {
     // with a small hysteresis band so a model riding the boundary does not chatter.
     std::optional<float> ab_min_mach;   // AB unavailable below this Mach (too little ram to sustain it)
     std::optional<float> ab_max_alt_km; // AB extinguishes above this altitude in km (too little oxygen)
+
+    // ── engine failure dynamics (#308) ───────────────────────────────────────
+    // The integrator RAISES kEngineFlameout / kEngineCompStall from these; until #308 those bits were
+    // defined, carried on the wire, and consumed by haptics — but never set by anything.
+
+    // Optional combustion ceiling in km: above it the burner cannot sustain light-off and the engine
+    // flames out (kEngineFlameout = total thrust loss) until a windmill relight — back below the
+    // ceiling with airspeed >= relight_min_mps. Absent = no altitude flameout (bit-identical to
+    // before). Distinct from ab_max_alt_km, which only extinguishes the augmentor.
+    std::optional<float> flameout_alt_km;
+
+    // Minimum airspeed for a windmill relight after a flameout (m/s). Only read while recovering
+    // from a flameout, so the default costs a model that never flames out nothing. Fuel-starvation
+    // flameouts also relight through this gate once fuel is available again (tanker/base ops).
+    float relight_min_mps{60.f};
+
+    // Opt-in compressor-surge model: at high alpha the intake blanks and a hard-working compressor
+    // surges — a transient total thrust loss (kEngineCompStall) that clears a fixed recovery time
+    // after the disturbed flow condition ends. Default off, so existing content is bit-identical;
+    // a deep-stall-honest model turns it on.
+    bool compressor_stall{false};
+
+    // Alpha margin PAST alpha_stall_deg where surge risk begins (deg), at high commanded power.
+    // Only read when compressor_stall is on.
+    float surge_alpha_margin_deg{5.f};
+};
+
+// ── [drone_limits] (#351) ────────────────────────────────────────────────────
+// The ONBOARD AUTOPILOT's command envelope for a fixed-wing UAV — distinct from [aero.limits]
+// (what the airframe can survive) and from has_fbw (a manned jet's FLCS). A Predator-class
+// airframe is aerodynamically capable of far more than its autopilot will ever command: the
+// autopilot holds bank shallow, load factor low, and airspeed inside a narrow band, and that
+// command shaping — not the structure — is what defines how the vehicle flies. Enforced by
+// FlightIntegrator on the COMMANDS (never a silent physics clamp), reusing the FBW AoA-limiting
+// path for g so the two limiters cannot drift. Each field 0 = that gate off; the block absent =
+// bit-identical to before.
+struct DroneLimits {
+    float max_bank_deg{0.f};     // autopilot bank-angle limit (aileron command shaping); 0 = off
+    float max_g{0.f};            // autopilot load-factor limit, tighter than structural; 0 = off
+    float min_airspeed_mps{0.f}; // stall protection: throttle floors up below this; 0 = off
+    float max_airspeed_mps{0.f}; // overspeed protection: throttle shed above this; 0 = off
+};
+
+// ── [multirotor] (#349) ──────────────────────────────────────────────────────
+// A multirotor is thrust mixing, not wings: total rotor thrust along body +Y (up), attitude control
+// from differential per-rotor thrust, yaw from differential rotor torque. The flight-control inner
+// loop (rate feedback) lives IN the force model, because a real multirotor is unflyable without its
+// FC and the model without one would be an aerobatics problem, not an aircraft. Authored in the
+// reduced `type = "multirotor"` schema — no CL tables, no stability derivatives.
+struct MultirotorData {
+    int rotor_count{4};             // number of rotors (drives per-rotor loss on an engine-out)
+    float rotor_thrust_max_n{60.f}; // max thrust PER ROTOR at sea-level density
+    float rotor_arm_m{0.35f};       // CG-to-rotor moment arm
+    float yaw_torque_nm{8.f};       // max yaw moment from differential rotor torque at full pedal
+    float frame_cd{1.0f};           // flat-plate frame drag coefficient (all axes)
+    float frame_area_m2{0.1f};      // frame reference area for the drag term
+    float attitude_authority{0.3f}; // fraction of per-rotor max thrust available for pitch/roll mixing
+    float rate_damping_s{1.0f};     // FC inner-loop rate feedback (s/rad); sets full-stick rate ≈ 1/k
+};
+
+// ── [helicopter] (#350) ──────────────────────────────────────────────────────
+// A single-main-rotor helicopter as a rotor DISC, not blade elements: collective drives
+// density-scaled disc thrust along body-up (ground effect and translational lift scale it), cyclic
+// tilts the disc (pitch/roll moments with rotor-follow rate damping), pedals command the tail
+// rotor against the optional main-rotor torque reaction, and an unpowered disc autorotates —
+// axial momentum drag through the disc caps the sink rate at a survivable figure, which is the
+// gameplay truth of autorotation without carrying rotor-RPM state. Blade flapping appears as the
+// classic flapback speed-stability moment (nose rises with forward speed).
+struct HelicopterData {
+    float main_rotor_radius_m{7.3f};       // disc geometry: ground effect + autorotation drag area
+    float main_rotor_max_thrust_n{130e3f}; // max collective thrust at sea-level density
+    float yaw_moment_max_nm{40e3f};        // tail-rotor yaw moment at full pedal
+    float cyclic_moment_nm{60e3f};         // pitch/roll moment at full cyclic
+    float rate_damping_s{1.5f};            // rotor-follow rate feedback (s/rad)
+    float flapback_nm_per_mps{0.f};        // nose-up moment per m/s of forward speed (0 = off)
+    float torque_factor{0.f};              // main-rotor torque reaction as a fraction of T·R that the
+                                           // pedals must hold against (0 = auto-trimmed hover)
+    float frame_cd{0.8f};                  // parasite flat-plate drag coefficient
+    float frame_area_m2{2.0f};             // parasite reference area
+    float ground_effect_frac{0.15f};       // max thrust bonus, fading out by one rotor diameter AGL
+    float translational_lift_frac{0.12f};  // max thrust bonus from effective translational lift
+    float translational_lift_mps{25.f};    // forward speed where the ETL bonus saturates
+    float autorotation_cd{1.2f};           // axial disc drag coefficient (the autorotation term)
+};
+
+// ── [vessel] (#38) ───────────────────────────────────────────────────────────
+// A surface ship as a controlled entity: propulsion along the keel, quadratic water drag sized so
+// the declared top speed is where thrust and drag meet, a rate-commanded rudder that needs
+// steerage way, and hard damping of everything a displacement hull does not do (roll, pitch,
+// sideslip). The ship rides the integrator's radial floor clamped to sea level — a moving carrier
+// is an ordinary ControlledEntity that replicates, takes damage, and is steered by any
+// IEntityController (a WaypointController drives a patrol track), not a bespoke platform system.
+struct VesselData {
+    float max_thrust_n{2.0e6f};  // propulsion at full ahead
+    float max_speed_mps{15.f};   // top speed; sizes the water drag (thrust = drag here)
+    float turn_rate_deg_s{1.5f}; // steady turn rate at full rudder and steerage way
+    float steerage_mps{2.f};     // below this speed the rudder has nothing to bite
 };
 
 struct CarrierData {
@@ -273,6 +373,10 @@ struct FlightModelData {
     std::optional<WingSweepData> wing_sweep;
     std::optional<PropData> prop;
     EngineData engine;
+    std::optional<DroneLimits> drone_limits;  // #351: fixed-wing UAV autopilot command envelope
+    std::optional<MultirotorData> multirotor; // #349: present iff type = "multirotor"
+    std::optional<HelicopterData> helicopter; // #350: present iff type = "helicopter"
+    std::optional<VesselData> vessel;         // #38: present iff type = "vessel"
     std::optional<CarrierData> carrier;
     std::optional<RefuelingData> refueling;
     std::optional<TankerData> tanker;
@@ -285,6 +389,23 @@ struct FlightModelData {
 
     [[nodiscard]] bool isBallistic() const noexcept {
         return meta.role == AircraftRole::Ballistic;
+    }
+    [[nodiscard]] bool isMultirotor() const noexcept {
+        return meta.role == AircraftRole::Multirotor;
+    }
+    [[nodiscard]] bool isHelicopter() const noexcept {
+        return meta.role == AircraftRole::Helicopter;
+    }
+    // Rotorcraft (#349/#350) hover; fixed-wing performance derivation (fl::trim, the manual, fm-trim)
+    // is meaningless for them and gates on this.
+    [[nodiscard]] bool isRotorcraft() const noexcept {
+        return isMultirotor() || isHelicopter();
+    }
+    [[nodiscard]] bool isVessel() const noexcept {
+        return meta.role == AircraftRole::Vessel;
+    }
+    [[nodiscard]] bool isFixedWing() const noexcept {
+        return !isBallistic() && !isRotorcraft() && !isVessel();
     }
 };
 

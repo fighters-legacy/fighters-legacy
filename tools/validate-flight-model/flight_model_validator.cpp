@@ -621,6 +621,36 @@ static void validateEngine(const toml::table& tbl, FlightModelValidationResult& 
         }
     }
 
+    // Optional engine failure dynamics (#308): range-check when present, plus the cross-field
+    // sanity that the combustion ceiling sits ABOVE the afterburner ceiling — an engine that quits
+    // entirely below the altitude where its augmentor still lights is a units mistake.
+    if (auto f = eng["flameout_alt_km"].value<double>()) {
+        if (*f <= 0.0) {
+            r.errors.push_back("engine.flameout_alt_km must be > 0");
+            r.ok = false;
+        } else {
+            if (*f < 5.0 || *f > 40.0)
+                r.warnings.push_back("engine.flameout_alt_km outside the plausible 5-40 km band; "
+                                     "check units (kilometres, not metres or feet)");
+            if (auto a = eng["ab_max_alt_km"].value<double>(); a && *f <= *a)
+                r.warnings.push_back("engine.flameout_alt_km is at or below engine.ab_max_alt_km; the whole "
+                                     "engine would flame out before the afterburner envelope limit applies");
+        }
+    }
+    if (auto rl = eng["relight_min_mps"].value<double>(); rl && (*rl < 0.0 || *rl > 300.0)) {
+        r.errors.push_back("engine.relight_min_mps must be in [0, 300]");
+        r.ok = false;
+    }
+    if (auto sm = eng["surge_alpha_margin_deg"].value<double>()) {
+        if (*sm < 0.0 || *sm > 45.0) {
+            r.errors.push_back("engine.surge_alpha_margin_deg must be in [0, 45]");
+            r.ok = false;
+        }
+        if (!eng["compressor_stall"].value<bool>().value_or(false))
+            r.warnings.push_back("engine.surge_alpha_margin_deg is set but engine.compressor_stall is not "
+                                 "enabled; the surge model will never run");
+    }
+
     auto mil = tbl["engine"]["mil_thrust"];
     if (!mil) {
         r.errors.push_back("missing [engine.mil_thrust] table");
@@ -862,6 +892,222 @@ static void validateHardpoints(const toml::table& tbl, FlightModelValidationResu
 
 // ── public entry point ────────────────────────────────────────────────────────
 
+// [drone_limits] (#351): the UAV autopilot command envelope. Range checks, the min<max airspeed
+// cross-check, and the "your autopilot limit is looser than the airframe" warning (a max_g above
+// max_g_structural never binds — the airframe breaks first).
+static void validateDroneLimits(const toml::table& tbl, FlightModelValidationResult& r) {
+    auto dl = tbl["drone_limits"];
+    if (!dl)
+        return;
+    auto nonNeg = [&](const char* key) {
+        auto v = dl[key].value<double>();
+        if (v && *v < 0.0) {
+            r.errors.push_back(std::string("drone_limits.") + key + " must be >= 0 (0 = that gate off)");
+            r.ok = false;
+        }
+        return v;
+    };
+    if (auto bank = nonNeg("max_bank_deg"); bank && *bank > 89.0) {
+        r.errors.push_back("drone_limits.max_bank_deg must be <= 89");
+        r.ok = false;
+    }
+    const auto g = nonNeg("max_g");
+    const auto vmin = nonNeg("min_airspeed_mps");
+    const auto vmax = nonNeg("max_airspeed_mps");
+    if (vmin && vmax && *vmin > 0.0 && *vmax > 0.0 && *vmin >= *vmax) {
+        r.errors.push_back("drone_limits.min_airspeed_mps must be below max_airspeed_mps");
+        r.ok = false;
+    }
+    if (g && *g > 0.0) {
+        if (auto structural = tbl["aero"]["limits"]["max_g_structural"].value<double>();
+            structural && *g >= *structural)
+            r.warnings.push_back("drone_limits.max_g is at or above max_g_structural; the autopilot limit "
+                                 "never binds — the airframe breaks first");
+    }
+}
+
+// Rotorcraft core (#349/#350): mass, fuel and inertias are required; wing geometry is NOT (a rotor
+// model carries its own reference areas), so this deliberately does not reuse
+// validateFlightModelGeometry, whose wing fields are hard requirements.
+static void validateRotorcraftCore(const toml::table& tbl, FlightModelValidationResult& r) {
+    if (!tbl["aircraft"]["name"].value<std::string>()) {
+        r.errors.push_back("missing aircraft.name");
+        r.ok = false;
+    }
+    auto fm = tbl["flight_model"];
+    if (!fm) {
+        r.errors.push_back("missing [flight_model] table");
+        r.ok = false;
+        return;
+    }
+    auto checkPos = [&](const char* key) {
+        auto v = fm[key].value<double>();
+        if (!v) {
+            r.errors.push_back(std::string("missing flight_model.") + key);
+            r.ok = false;
+        } else if (*v <= 0.0) {
+            r.errors.push_back(std::string("flight_model.") + key + " must be > 0 (got " + std::to_string(*v) + ")");
+            r.ok = false;
+        }
+        return v;
+    };
+    checkPos("mass_kg");
+    checkPos("ixx_kg_m2");
+    checkPos("iyy_kg_m2");
+    checkPos("izz_kg_m2");
+    if (auto fuel = fm["fuel_kg"].value<double>(); !fuel) {
+        r.errors.push_back("missing flight_model.fuel_kg");
+        r.ok = false;
+    } else if (*fuel < 0.0) {
+        r.errors.push_back("flight_model.fuel_kg must be >= 0");
+        r.ok = false;
+    }
+}
+
+// [multirotor] (#349): required rotor fields positive, plus the check that actually matters — a
+// frame whose total max thrust cannot lift its own weight can never hover, which is a units error
+// nine times out of ten.
+static void validateMultirotor(const toml::table& tbl, FlightModelValidationResult& r) {
+    auto mr = tbl["multirotor"];
+    if (!mr) {
+        r.errors.push_back("multirotor model: missing [multirotor] table");
+        r.ok = false;
+        return;
+    }
+    const auto count = mr["rotor_count"];
+    if (!count.is_integer() || count.as_integer()->get() < 3 || count.as_integer()->get() > 16) {
+        r.errors.push_back("multirotor.rotor_count must be an integer in [3, 16]");
+        r.ok = false;
+    }
+    auto checkPos = [&](const char* key) {
+        auto v = mr[key].value<double>();
+        if (!v) {
+            r.errors.push_back(std::string("missing multirotor.") + key);
+            r.ok = false;
+        } else if (*v <= 0.0) {
+            r.errors.push_back(std::string("multirotor.") + key + " must be > 0");
+            r.ok = false;
+        }
+        return v;
+    };
+    const auto thrust = checkPos("rotor_thrust_max_n");
+    checkPos("rotor_arm_m");
+    checkPos("yaw_torque_nm");
+    if (auto ft = mr["flight_time_min"].value<double>(); ft && *ft <= 0.0) {
+        r.errors.push_back("multirotor.flight_time_min must be > 0");
+        r.ok = false;
+    }
+
+    // Hover check: N * T_max must clear the all-up weight with margin, or the vehicle cannot hover
+    // (let alone climb or hold attitude, which spends part of the same thrust budget).
+    const auto mass = tbl["flight_model"]["mass_kg"].value<double>();
+    const auto fuel = tbl["flight_model"]["fuel_kg"].value<double>();
+    if (thrust && mass && count.is_integer()) {
+        const double totalThrust = static_cast<double>(count.as_integer()->get()) * *thrust;
+        const double weight = (*mass + fuel.value_or(0.0)) * 9.80665;
+        if (totalThrust <= weight) {
+            r.errors.push_back("multirotor cannot hover: rotor_count * rotor_thrust_max_n (" +
+                               std::to_string(totalThrust) + " N) does not exceed the all-up weight (" +
+                               std::to_string(weight) + " N)");
+            r.ok = false;
+        } else if (totalThrust < 1.3 * weight) {
+            r.warnings.push_back("multirotor thrust-to-weight is under 1.3; expect sluggish climb and "
+                                 "attitude authority");
+        }
+    }
+}
+
+// [helicopter] (#350): required disc/control fields positive, the cannot-hover error, and a disc
+// loading plausibility band — real helicopters run roughly 100–900 N/m^2 of disc; far outside that
+// is a units mistake (radius in feet, thrust in kgf...).
+static void validateHelicopter(const toml::table& tbl, FlightModelValidationResult& r) {
+    auto h = tbl["helicopter"];
+    if (!h) {
+        r.errors.push_back("helicopter model: missing [helicopter] table");
+        r.ok = false;
+        return;
+    }
+    auto checkPos = [&](const char* key) {
+        auto v = h[key].value<double>();
+        if (!v) {
+            r.errors.push_back(std::string("missing helicopter.") + key);
+            r.ok = false;
+        } else if (*v <= 0.0) {
+            r.errors.push_back(std::string("helicopter.") + key + " must be > 0");
+            r.ok = false;
+        }
+        return v;
+    };
+    const auto radius = checkPos("main_rotor_radius_m");
+    const auto thrust = checkPos("main_rotor_max_thrust_n");
+    checkPos("yaw_moment_max_nm");
+    checkPos("cyclic_moment_nm");
+
+    // Turboshaft fuel flows are required (the runtime parser requires them too).
+    auto eng = tbl["engine"];
+    if (!eng) {
+        r.errors.push_back("helicopter model: missing [engine] table (turboshaft fuel flows)");
+        r.ok = false;
+    } else {
+        for (const char* key : {"fuel_flow_idle_kg_s", "fuel_flow_mil_kg_s"}) {
+            if (!eng[key].value<double>()) {
+                r.errors.push_back(std::string("missing engine.") + key);
+                r.ok = false;
+            }
+        }
+    }
+
+    const auto mass = tbl["flight_model"]["mass_kg"].value<double>();
+    const auto fuel = tbl["flight_model"]["fuel_kg"].value<double>();
+    if (thrust && mass) {
+        const double weight = (*mass + fuel.value_or(0.0)) * 9.80665;
+        if (*thrust <= weight) {
+            r.errors.push_back("helicopter cannot hover: main_rotor_max_thrust_n (" + std::to_string(*thrust) +
+                               " N) does not exceed the all-up weight (" + std::to_string(weight) + " N)");
+            r.ok = false;
+        } else if (*thrust < 1.15 * weight) {
+            r.warnings.push_back("helicopter thrust-to-weight is under 1.15; expect a marginal hover with no "
+                                 "climb reserve");
+        }
+    }
+    if (thrust && radius && *radius > 0.0) {
+        const double discLoading = *thrust / (3.14159265358979 * *radius * *radius);
+        if (discLoading < 100.0 || discLoading > 900.0)
+            r.warnings.push_back("helicopter disc loading " + std::to_string(discLoading) +
+                                 " N/m^2 is outside the plausible 100-900 band; check units");
+    }
+}
+
+// [vessel] (#38): required propulsion fields positive, plus a top-speed plausibility band — a
+// displacement hull past 25 m/s (~50 kt) is a units mistake, not a warship.
+static void validateVessel(const toml::table& tbl, FlightModelValidationResult& r) {
+    auto v = tbl["vessel"];
+    if (!v) {
+        r.errors.push_back("vessel model: missing [vessel] table");
+        r.ok = false;
+        return;
+    }
+    auto checkPos = [&](const char* key) {
+        auto val = v[key].value<double>();
+        if (!val) {
+            r.errors.push_back(std::string("missing vessel.") + key);
+            r.ok = false;
+        } else if (*val <= 0.0) {
+            r.errors.push_back(std::string("vessel.") + key + " must be > 0");
+            r.ok = false;
+        }
+        return val;
+    };
+    checkPos("max_thrust_n");
+    if (auto spd = checkPos("max_speed_mps"); spd && *spd > 25.0)
+        r.warnings.push_back("vessel.max_speed_mps over 25 (~50 kt) is implausible for a displacement hull; "
+                             "check units (m/s, not knots)");
+    if (auto tr = v["turn_rate_deg_s"].value<double>(); tr && (*tr <= 0.0 || *tr > 10.0)) {
+        r.errors.push_back("vessel.turn_rate_deg_s must be in (0, 10]");
+        r.ok = false;
+    }
+}
+
 FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
     FlightModelValidationResult r;
 
@@ -905,6 +1151,28 @@ FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
         return r;
     }
 
+    // Multirotors (#349) validate against the reduced rotor schema the runtime parser accepts —
+    // same rationale as ballistic: CL tables and turbine decks would be invented numbers.
+    if (const auto typeStr = tbl["aircraft"]["type"].value<std::string>(); typeStr && *typeStr == "multirotor") {
+        validateRotorcraftCore(tbl, r);
+        validateMultirotor(tbl, r);
+        return r;
+    }
+
+    // Helicopters (#350): the rotor-disc reduced schema.
+    if (const auto typeStr = tbl["aircraft"]["type"].value<std::string>(); typeStr && *typeStr == "helicopter") {
+        validateRotorcraftCore(tbl, r);
+        validateHelicopter(tbl, r);
+        return r;
+    }
+
+    // Surface vessels (#38): the ship-shaped reduced schema.
+    if (const auto typeStr = tbl["aircraft"]["type"].value<std::string>(); typeStr && *typeStr == "vessel") {
+        validateRotorcraftCore(tbl, r); // masses + inertias; wing geometry not required — same as rotorcraft
+        validateVessel(tbl, r);
+        return r;
+    }
+
     validateAircraft(tbl, r, aircraftType);
     validateFlightModelGeometry(tbl, r, aircraftType);
     validateClTable(tbl, r);
@@ -925,6 +1193,7 @@ FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
     validateRefueling(tbl, r);
     validateTanker(tbl, r);
     validateHardpoints(tbl, r);
+    validateDroneLimits(tbl, r);
 
     return r;
 }

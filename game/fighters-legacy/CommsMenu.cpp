@@ -18,7 +18,8 @@ std::span<const CommsMenu::Item> CommsMenu::items() const noexcept {
     // nested types.
     static constexpr Item kRootItems[] = {
         {"1  ATC", Kind::Submenu, Page::Atc, {}},
-        {"2  Flight (coming soon)", Kind::Placeholder, Page::Root, {}},
+        {"2  Ground crew", Kind::Submenu, Page::Base, {}},
+        {"3  Flight (coming soon)", Kind::Placeholder, Page::Root, {}},
     };
     static constexpr Item kAtcItems[] = {
         {"1  Request takeoff", Kind::Command, Page::Atc, "atc request_takeoff"},
@@ -26,9 +27,19 @@ std::span<const CommsMenu::Item> CommsMenu::items() const noexcept {
         {"3  Declare inbound", Kind::Command, Page::Atc, "atc inbound"},
         {"4  Cancel request", Kind::Command, Page::Atc, "atc cancel"},
     };
+    // Base operations (#55): server-authoritative ground-crew services. The verbs match the server's
+    // "base <subverb>" radio grammar; the crew chief answers over the same radio/subtitle path as
+    // ATC, and refuses (with a reason) when the aircraft is not shut down at a base.
+    static constexpr Item kBaseItems[] = {
+        {"1  Refuel", Kind::Command, Page::Base, "base refuel"},
+        {"2  Rearm", Kind::Command, Page::Base, "base rearm"},
+        {"3  Repair", Kind::Command, Page::Base, "base repair"},
+    };
     switch (m_page) {
     case Page::Atc:
         return {kAtcItems, std::size(kAtcItems)};
+    case Page::Base:
+        return {kBaseItems, std::size(kBaseItems)};
     case Page::Root:
     default:
         return {kRootItems, std::size(kRootItems)};
@@ -129,7 +140,7 @@ std::span<const HudElement> CommsMenu::buildElements() {
     title.g = 0.9f;
     title.b = 1.f;
     title.a = 1.f;
-    title.text = (m_page == Page::Atc) ? "COMMS - ATC" : "COMMS";
+    title.text = (m_page == Page::Atc) ? "COMMS - ATC" : (m_page == Page::Base) ? "COMMS - GROUND CREW" : "COMMS";
     m_elements[n++] = title;
 
     const auto its = items();

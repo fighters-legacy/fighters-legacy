@@ -223,6 +223,18 @@ ab_min_mach         = 0.0    # optional — afterburner will not light/relight b
                              #   limit); omit for no low-speed limit.
 ab_max_alt_km       = 100.0  # optional — afterburner extinguishes above this altitude in km; omit
                              #   for no ceiling. Both apply only if [engine.ab_thrust] is present.
+flameout_alt_km     = 16.0   # optional — the WHOLE engine flames out above this altitude (total
+                             #   thrust loss) until a windmill relight: back below the ceiling with
+                             #   airspeed >= relight_min_mps. Omit for no altitude flameout. Fuel
+                             #   starvation always flames the engine out, ceiling or not.
+relight_min_mps     = 60.0   # optional (default 60) — minimum airspeed for a windmill relight
+                             #   after any flameout (altitude or fuel starvation).
+compressor_stall    = false  # optional (default false) — opt-in compressor-surge model: deep past
+                             #   the stall alpha at high commanded power, the intake blanks and the
+                             #   engine surges (transient total thrust loss, ~2 s recovery after
+                             #   the flow condition clears).
+surge_alpha_margin_deg = 5.0 # optional (default 5) — alpha margin past alpha_stall_deg where the
+                             #   surge risk begins; only read when compressor_stall is enabled.
 
 [engine.mil_thrust]
 mach   = [0.0, 0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.0, 2.25]
@@ -305,6 +317,140 @@ cd0 = 0.20                  # default 0.20 — a blunt body
 
 Ballistic entities are full entities (spawnable via the `spawn` admin command with a guidance
 controller, #355), **not** hardpoint stores — a missile a fighter carries is a weapon TOML.
+
+### Multirotors — `type = "multirotor"`
+
+A quad/hex/octo rotor frame (#349) uses its own reduced schema — no CL tables, stability
+derivatives or turbine decks (`MultirotorForceModel` flies `[multirotor]` alone: density-scaled
+rotor thrust along body-up, rate-mode attitude mixing with the flight-control inner loop in the
+model, differential-torque yaw, flat-plate frame drag). Endurance rides the normal fuel path:
+`flight_time_min` becomes a constant drain of `fuel_kg`, and an empty battery/tank is a
+fuel-starvation flameout (#308) — the motors stop.
+
+```toml
+[aircraft]
+name = "Example Quad"
+type = "multirotor"         # engine_type not required (electric)
+
+[flight_model]              # masses + inertias required; wing fields not required
+mass_kg   = 12.0
+fuel_kg   = 2.0             # battery/fuel reserve consumed over flight_time_min
+ixx_kg_m2 = 0.6
+iyy_kg_m2 = 0.6
+izz_kg_m2 = 1.0
+
+[multirotor]                # required for multirotor models
+rotor_count        = 4      # 3–16
+rotor_thrust_max_n = 60.0   # max thrust PER ROTOR at sea level; must out-lift the all-up weight
+rotor_arm_m        = 0.35   # CG-to-rotor moment arm
+yaw_torque_nm      = 8.0    # yaw moment from differential rotor torque at full pedal
+frame_cd           = 1.1    # optional (default 1.0) — flat-plate drag coefficient
+frame_area_m2      = 0.12   # optional (default 0.1) — frame reference area
+attitude_authority = 0.3    # optional (default 0.3) — per-rotor thrust fraction for pitch/roll mixing
+rate_damping_s     = 1.0    # optional (default 1.0) — FC rate feedback; full stick ~1/this rad/s
+flight_time_min    = 25.0   # optional (default 20) — endurance; drives the fuel drain
+motor_response_s   = 0.2    # optional (default 0.2) — motor spool response
+```
+
+The in-game manual derives a **hover chart** for rotorcraft (thrust-to-weight, hover throttle,
+hover ceiling, endurance) instead of the fixed-wing trim table.
+
+### Helicopters — `type = "helicopter"`
+
+A single-main-rotor helicopter (#350) is modelled as a rotor **disc**: collective (the throttle
+axis) drives density-scaled disc thrust, scaled up by ground effect near the surface and by
+effective translational lift with forward speed; cyclic (pitch/roll stick) tilts the disc; pedals
+command the tail rotor against the optional main-rotor torque reaction; an unpowered disc
+**autorotates** — axial momentum drag through the disc caps the sink rate at a survivable figure
+(terminal sink ≈ `sqrt(2·W / (ρ·π·R²·autorotation_cd))`). Blade flapping appears as the classic
+flapback speed-stability moment. The turboshaft burns fuel through the normal idle→mil path, and
+the #308 engine-failure dynamics (fuel starvation, `flameout_alt_km`) apply.
+
+```toml
+[aircraft]
+name = "Example Utility Helicopter"
+type = "helicopter"           # engine_type not required (turboshaft)
+
+[flight_model]                # masses + inertias required; wing fields not required
+mass_kg   = 5000.0
+fuel_kg   = 1000.0
+ixx_kg_m2 = 6000.0
+iyy_kg_m2 = 40000.0
+izz_kg_m2 = 40000.0
+
+[helicopter]                  # required for helicopter models
+main_rotor_radius_m     = 8.2      # disc geometry: ground effect + autorotation drag area
+main_rotor_max_thrust_n = 90000.0  # max collective thrust at sea level; must out-lift the weight
+yaw_moment_max_nm       = 40000.0  # tail-rotor yaw moment at full pedal
+cyclic_moment_nm        = 60000.0  # pitch/roll moment at full cyclic
+rate_damping_s          = 1.5      # optional — rotor-follow rate feedback
+flapback_nm_per_mps     = 0.0      # optional — nose-up moment per m/s forward (speed stability)
+torque_factor           = 0.0      # optional — torque reaction the pedals must hold (0 = auto-trim)
+frame_cd                = 0.8      # optional — parasite flat-plate drag coefficient
+frame_area_m2           = 2.0      # optional — parasite reference area
+ground_effect_frac      = 0.15     # optional — thrust bonus on the deck, gone by one diameter AGL
+translational_lift_frac = 0.12     # optional — ETL thrust bonus, saturating at the speed below
+translational_lift_mps  = 25.0     # optional
+autorotation_cd         = 1.2      # optional — axial disc drag (the autorotation term)
+
+[engine]                      # turboshaft fuel flows required; no thrust decks
+fuel_flow_idle_kg_s = 0.05
+fuel_flow_mil_kg_s  = 0.30
+spool_time_s        = 1.0     # optional (default 1.0)
+```
+
+### Fixed-wing drones — `[drone_limits]`
+
+A fixed-wing UAV (#351) is an ordinary fixed-wing flight model — same `[aero.*]`/`[engine]`
+schema — plus an optional `[drone_limits]` block describing the **onboard autopilot's command
+envelope**. This is distinct from `[aero.limits]` (what the airframe survives) and from `has_fbw`
+(a manned jet's FLCS): a Predator-class airframe can aerodynamically exceed everything its
+autopilot will ever command. The engine enforces these limits by shaping the *commands* (the FBW
+discipline — never a silent physics clamp): `max_g` runs the same AoA-limiting loop as FBW even on
+a non-FBW airframe, `max_bank_deg` shapes the aileron, and the airspeed band shapes the throttle
+(overspeed sheds power, underspeed firewalls it). Endurance needs no new field — it is `fuel_kg`
+and the `[engine]` fuel flows, as for any aircraft.
+
+```toml
+# A MALE-surveillance-class profile: docile, slow, long-winged.
+[drone_limits]
+max_bank_deg     = 45.0   # autopilot bank limit; 0/omit = off
+max_g            = 2.5    # autopilot load-factor limit (the airframe may be stressed for more)
+min_airspeed_mps = 30.0   # stall protection: throttle firewalls below this; 0/omit = off
+max_airspeed_mps = 60.0   # overspeed protection: throttle sheds above this; 0/omit = off
+```
+
+Every field is optional and `0` disables that gate; the whole block absent is bit-identical to a
+manned aircraft. `validate-flight-model` cross-checks the band and warns when `max_g` is at or
+above `max_g_structural` (the limit would never bind — the airframe breaks first).
+
+### Surface vessels — `type = "vessel"`
+
+A ship (#38) — a carrier, an escort — is an ordinary controlled entity flown by
+`VesselForceModel`: propulsion along the keel, quadratic water drag sized so the declared top speed
+is where thrust meets drag, a rate-commanded rudder that needs steerage way, and hard damping of
+everything a displacement hull does not do (roll, pitch, sideslip). It rides the radial ground
+floor clamped to **sea level** (never the seabed), replicates, takes damage, and is steered by any
+AI behavior (`--ai waypoint ...` drives a patrol track).
+
+```toml
+[aircraft]
+name = "Example Carrier"
+type = "vessel"               # engine_type not required
+
+[flight_model]                # masses + inertias required; wing fields not required
+mass_kg   = 90000000.0
+fuel_kg   = 0.0               # 0 with no [engine] flows = endurance not modelled (cannot starve)
+ixx_kg_m2 = 5.0e10
+iyy_kg_m2 = 5.0e11
+izz_kg_m2 = 5.0e11
+
+[vessel]                      # required for vessel models
+max_thrust_n    = 8000000.0   # full-ahead propulsion
+max_speed_mps   = 16.0        # top speed (thrust = drag here); ~31 kt
+turn_rate_deg_s = 1.0         # optional (default 1.5) — full-rudder steady turn rate
+steerage_mps    = 2.0         # optional (default 2) — below this the rudder has nothing to bite
+```
 
 ---
 
@@ -1444,9 +1590,39 @@ airport with the same `id` as a bundled one shadows it. A runway's footprint fla
 its field elevation (a flat pad plus a smooth blend to the surrounding terrain), so aircraft touch
 down at the authoritative elevation even where the base terrain is coarse.
 
-A **carrier or flight deck** is modelled as an ordinary entity that carries `accepts_landings = true`
-(under `[entity]`), so naval recovery reuses the same landing path as a land airfield — the same
-"this surface accepts landings" data property, whether it is a runway or a deck.
+A **carrier or flight deck** (#38) is an ordinary entity with `accepts_landings = true` (under
+`[entity]`), a `type = "vessel"` flight model so it moves, and a `[deck]` block describing the
+flight deck in **ship-local metres** (x forward along the keel, y up, z starboard, origin at the
+waterline). The deck plane becomes part of the ground floor under any aircraft over it — landing,
+parking, and the takeoff roll on a moving ship reuse the exact runway ground-handling path, aircraft
+parked on deck travel with the ship, and the collision system exempts aircraft at deck level (the
+landing path is not a mid-air). An aircraft stopped on the catapult stroke at military power is
+hooked up and shot to `cat_end_speed_mps` (or its own `[carrier] cat_min_m_s`, whichever is
+higher); a touchdown in the wire zone at or below `max_trap_speed_mps` catches a wire and is
+dragged to a stop (faster is a bolter); an LSO calls glideslope inside 3 nm on approach. The
+builtin `builtin:carrier` ships all of this with zero packs.
+
+```toml
+[entity]
+id = "my-pack:cvn"
+name = "Carrier"
+category = "naval_vehicle"
+max_hp = 8000.0
+collision_radius_m = 170.0
+accepts_landings = true
+flight_model = "cvn_vessel"     # a type = "vessel" flight model
+
+[deck]
+length_m = 330.0                # footprint along the keel (required)
+width_m  = 75.0                 # footprint abeam (required)
+height_m = 20.0                 # deck plane above the waterline origin (required)
+cat_start_x_m      = 30.0       # optional — catapult stroke start (runs forward)
+cat_stroke_m       = 100.0      # optional
+cat_end_speed_mps  = 75.0       # optional
+wire_x_m           = -110.0     # optional — arrest wire zone centre
+wire_zone_m        = 40.0       # optional — zone span along the keel
+max_trap_speed_mps = 80.0       # optional
+```
 
 ---
 

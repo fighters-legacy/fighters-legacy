@@ -181,7 +181,8 @@ TEST_CASE("missing [aircraft] table fails", "[flight-model-validator]") {
 }
 
 TEST_CASE("invalid aircraft.type fails", "[flight-model-validator]") {
-    auto r = validateFlightModel(patch(kValidFighter, "type         = \"fighter\"", "type         = \"helicopter\""));
+    // "helicopter" was the invalid-type example until #350 made it real; a zeppelin still is not.
+    auto r = validateFlightModel(patch(kValidFighter, "type         = \"fighter\"", "type         = \"zeppelin\""));
     CHECK_FALSE(r.ok);
     bool found = false;
     for (const auto& e : r.errors)
@@ -623,4 +624,200 @@ thrust_n = 300000.0
 burn_time_s = 0.0
 )";
     CHECK_FALSE(fl::validateFlightModel(badBurn).ok);
+}
+
+TEST_CASE("#308: valid engine failure dynamics fields pass", "[flight-model-validator]") {
+    auto r = validateFlightModel(patch(kValidFighter, "spool_time_s        = 5.0",
+                                       "spool_time_s        = 5.0\nflameout_alt_km = 16.0\n"
+                                       "relight_min_mps = 80.0\ncompressor_stall = true\n"
+                                       "surge_alpha_margin_deg = 6.0"));
+    CHECK(r.ok);
+    CHECK(r.errors.empty());
+}
+
+TEST_CASE("#308: flameout_alt_km in metres is caught by the plausibility band", "[flight-model-validator]") {
+    auto r = validateFlightModel(
+        patch(kValidFighter, "spool_time_s        = 5.0", "spool_time_s        = 5.0\nflameout_alt_km = 15000.0"));
+    bool found = false;
+    for (const auto& w : r.warnings)
+        found = found || w.find("flameout_alt_km") != std::string::npos;
+    CHECK(found);
+}
+
+TEST_CASE("#308: surge margin without compressor_stall warns", "[flight-model-validator]") {
+    auto r = validateFlightModel(
+        patch(kValidFighter, "spool_time_s        = 5.0", "spool_time_s        = 5.0\nsurge_alpha_margin_deg = 6.0"));
+    bool found = false;
+    for (const auto& w : r.warnings)
+        found = found || w.find("surge_alpha_margin_deg") != std::string::npos;
+    CHECK(found);
+}
+
+TEST_CASE("#308: out-of-range relight_min_mps fails", "[flight-model-validator]") {
+    auto r = validateFlightModel(
+        patch(kValidFighter, "spool_time_s        = 5.0", "spool_time_s        = 5.0\nrelight_min_mps = 900.0"));
+    CHECK_FALSE(r.ok);
+}
+
+// ── multirotor (#349) ────────────────────────────────────────────────────────
+
+static constexpr const char* kValidQuad = R"toml(
+[aircraft]
+name = "Test Quad"
+type = "multirotor"
+
+[flight_model]
+mass_kg   = 12.0
+fuel_kg   = 2.0
+ixx_kg_m2 = 0.6
+iyy_kg_m2 = 0.6
+izz_kg_m2 = 1.0
+
+[multirotor]
+rotor_count        = 4
+rotor_thrust_max_n = 60.0
+rotor_arm_m        = 0.35
+yaw_torque_nm      = 8.0
+)toml";
+
+TEST_CASE("#349: a valid multirotor validates against the reduced schema", "[flight-model-validator]") {
+    auto r = validateFlightModel(kValidQuad);
+    CHECK(r.ok);
+    CHECK(r.errors.empty());
+}
+
+TEST_CASE("#349: a multirotor that cannot hover fails", "[flight-model-validator]") {
+    auto r = validateFlightModel(patch(kValidQuad, "rotor_thrust_max_n = 60.0", "rotor_thrust_max_n = 20.0"));
+    CHECK_FALSE(r.ok); // 4 x 20 N = 80 N < 137 N all-up weight
+}
+
+TEST_CASE("#349: a multirotor without [multirotor] fails", "[flight-model-validator]") {
+    std::string s(kValidQuad);
+    auto pos = s.find("[multirotor]");
+    REQUIRE(pos != std::string::npos);
+    auto r = validateFlightModel(s.substr(0, pos));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("#349: an implausible rotor_count fails", "[flight-model-validator]") {
+    auto r = validateFlightModel(patch(kValidQuad, "rotor_count        = 4", "rotor_count        = 2"));
+    CHECK_FALSE(r.ok);
+}
+
+// ── helicopter (#350) ────────────────────────────────────────────────────────
+
+static constexpr const char* kValidHelo = R"toml(
+[aircraft]
+name = "Test Helo"
+type = "helicopter"
+
+[flight_model]
+mass_kg   = 5000.0
+fuel_kg   = 1000.0
+ixx_kg_m2 = 6000.0
+iyy_kg_m2 = 40000.0
+izz_kg_m2 = 40000.0
+
+[helicopter]
+main_rotor_radius_m     = 8.2
+main_rotor_max_thrust_n = 90000.0
+yaw_moment_max_nm       = 40000.0
+cyclic_moment_nm        = 60000.0
+
+[engine]
+fuel_flow_idle_kg_s = 0.05
+fuel_flow_mil_kg_s  = 0.30
+)toml";
+
+TEST_CASE("#350: a valid helicopter validates against the reduced schema", "[flight-model-validator]") {
+    auto r = validateFlightModel(kValidHelo);
+    CHECK(r.ok);
+    CHECK(r.errors.empty());
+}
+
+TEST_CASE("#350: a helicopter that cannot hover fails", "[flight-model-validator]") {
+    auto r = validateFlightModel(
+        patch(kValidHelo, "main_rotor_max_thrust_n = 90000.0", "main_rotor_max_thrust_n = 40000.0"));
+    CHECK_FALSE(r.ok); // 40 kN < 58.8 kN all-up weight
+}
+
+TEST_CASE("#350: implausible disc loading warns", "[flight-model-validator]") {
+    // Radius entered in feet (26.9) triples the disc loading past the band.
+    auto r = validateFlightModel(patch(kValidHelo, "main_rotor_radius_m     = 8.2", "main_rotor_radius_m     = 3.0"));
+    bool found = false;
+    for (const auto& w : r.warnings)
+        found = found || w.find("disc loading") != std::string::npos;
+    CHECK(found);
+}
+
+TEST_CASE("#350: a helicopter without [engine] fuel flows fails", "[flight-model-validator]") {
+    std::string s(kValidHelo);
+    auto pos = s.find("[engine]");
+    REQUIRE(pos != std::string::npos);
+    auto r = validateFlightModel(s.substr(0, pos));
+    CHECK_FALSE(r.ok);
+}
+
+// ── drone limits (#351) ──────────────────────────────────────────────────────
+
+TEST_CASE("#351: valid [drone_limits] passes", "[flight-model-validator]") {
+    auto r = validateFlightModel(std::string(kValidFighter) + "\n[drone_limits]\nmax_bank_deg = 45.0\nmax_g = 2.5\n"
+                                                              "min_airspeed_mps = 30.0\nmax_airspeed_mps = 60.0\n");
+    CHECK(r.ok);
+    CHECK(r.errors.empty());
+}
+
+TEST_CASE("#351: drone max_g above the structural limit warns (never binds)", "[flight-model-validator]") {
+    auto r = validateFlightModel(std::string(kValidFighter) + "\n[drone_limits]\nmax_g = 9.5\n"); // structural is 8
+    CHECK(r.ok);
+    bool warned = false;
+    for (const auto& w : r.warnings)
+        warned = warned || w.find("max_g") != std::string::npos;
+    CHECK(warned);
+}
+
+TEST_CASE("#351: inverted airspeed band fails", "[flight-model-validator]") {
+    auto r = validateFlightModel(std::string(kValidFighter) +
+                                 "\n[drone_limits]\nmin_airspeed_mps = 60.0\nmax_airspeed_mps = 30.0\n");
+    CHECK_FALSE(r.ok);
+}
+
+// ── vessels (#38) ────────────────────────────────────────────────────────────
+
+static constexpr const char* kValidShip = R"toml(
+[aircraft]
+name = "Test Ship"
+type = "vessel"
+
+[flight_model]
+mass_kg   = 1000000.0
+fuel_kg   = 0.0
+ixx_kg_m2 = 1.0e9
+iyy_kg_m2 = 1.0e10
+izz_kg_m2 = 1.0e10
+
+[vessel]
+max_thrust_n  = 2000000.0
+max_speed_mps = 15.0
+)toml";
+
+TEST_CASE("#38: a valid vessel validates against the reduced schema", "[flight-model-validator]") {
+    auto r = validateFlightModel(kValidShip);
+    CHECK(r.ok);
+    CHECK(r.errors.empty());
+}
+
+TEST_CASE("#38: a vessel top speed in knots is warned", "[flight-model-validator]") {
+    auto r = validateFlightModel(patch(kValidShip, "max_speed_mps = 15.0", "max_speed_mps = 31.0"));
+    bool warned = false;
+    for (const auto& w : r.warnings)
+        warned = warned || w.find("max_speed_mps") != std::string::npos;
+    CHECK(warned);
+}
+
+TEST_CASE("#38: a vessel without [vessel] fails", "[flight-model-validator]") {
+    std::string s(kValidShip);
+    auto pos = s.find("[vessel]");
+    REQUIRE(pos != std::string::npos);
+    CHECK_FALSE(validateFlightModel(s.substr(0, pos)).ok);
 }

@@ -424,6 +424,28 @@ EntityDef builtinNavalVesselDef() {
     return makeSurfaceDef("builtin:naval-vessel", "Naval Vessel", ObjectCategory::NavalVehicle, 4000.f,
                           /*rcs=*/60.f, /*ir=*/8.f, /*visual=*/12.f, /*collision=*/45.f);
 }
+EntityDef builtinCarrierDef() {
+    // The compiled-in aircraft carrier (#38): a MOVING vessel with a flight deck, so the whole
+    // launch/recovery cycle — waypoint steaming, deck landings, catapult shots, arrested traps,
+    // LSO calls — is provable with ZERO content packs (the armed-sandbox doctrine). Sails on
+    // BuiltinCarrierVesselModel via the flightModelAsset name below.
+    EntityDef def = makeSurfaceDef("builtin:carrier", "Aircraft Carrier", ObjectCategory::NavalVehicle, 8000.f,
+                                   /*rcs=*/200.f, /*ir=*/15.f, /*visual=*/30.f, /*collision=*/170.f);
+    def.flightModelAsset = "builtin:carrier-vessel"; // resolved by fl-server's flight-model resolver
+    def.acceptsLandings = true;                      // the #699 seam, finally consumed
+    DeckDef deck;                                    // Nimitz-ish numbers, engine defaults
+    deck.lengthM = 330.f;
+    deck.widthM = 75.f;
+    deck.heightM = 20.f;
+    deck.catStartXM = 30.f;
+    deck.catStrokeM = 100.f;
+    deck.catEndSpeedMps = 75.f;
+    deck.wireXM = -110.f;
+    deck.wireZoneM = 40.f;
+    deck.maxTrapSpeedMps = 80.f;
+    def.deck = deck;
+    return def;
+}
 
 EntityDef builtinStaticTargetDef() {
     // A fixed structure — a bunker/hangar-class ground target for strike practice.
@@ -478,7 +500,7 @@ EntityDef builtinParachuteDef() {
 uint32_t registerBuiltinSurfaceEntities(EntityTypeRegistry& registry) {
     uint32_t registered = 0;
     for (const EntityDef& def : {builtinGroundVehicleDef(), builtinNavalVesselDef(), builtinStaticTargetDef(),
-                                 builtinSamSiteDef(), builtinAaaDef()}) {
+                                 builtinSamSiteDef(), builtinAaaDef(), builtinCarrierDef()}) {
         if (registry.registerType(EntityDef(def)) != std::numeric_limits<uint32_t>::max())
             ++registered;
     }

@@ -420,3 +420,24 @@ TEST_CASE("Parser rejects unknown engine_type", "[parser]") {
     toml.replace(pos, 10, "\"warpdriv\"");
     CHECK_THROWS_AS(parseFlightModel(toml), std::runtime_error);
 }
+
+TEST_CASE("Parser: #308 engine failure dynamics fields default off and parse when present", "[parser]") {
+    auto plain = parseFlightModel(kMinimalToml);
+    CHECK_FALSE(plain.engine.flameout_alt_km.has_value());
+    CHECK(plain.engine.relight_min_mps == Catch::Approx(60.0f));
+    CHECK(plain.engine.compressor_stall == false);
+    CHECK(plain.engine.surge_alpha_margin_deg == Catch::Approx(5.0f));
+
+    std::string toml = kMinimalToml;
+    auto pos = toml.find("spool_time_s");
+    REQUIRE(pos != std::string::npos);
+    auto eol = toml.find('\n', pos);
+    toml.insert(eol + 1, "flameout_alt_km = 15.0\nrelight_min_mps = 80.0\n"
+                         "compressor_stall = true\nsurge_alpha_margin_deg = 7.0\n");
+    auto d = parseFlightModel(toml);
+    REQUIRE(d.engine.flameout_alt_km.has_value());
+    CHECK(*d.engine.flameout_alt_km == Catch::Approx(15.0f));
+    CHECK(d.engine.relight_min_mps == Catch::Approx(80.0f));
+    CHECK(d.engine.compressor_stall == true);
+    CHECK(d.engine.surge_alpha_margin_deg == Catch::Approx(7.0f));
+}
