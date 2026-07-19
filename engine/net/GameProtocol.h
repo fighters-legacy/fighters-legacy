@@ -242,7 +242,8 @@ struct CrewRosterSeat {
     uint32_t occupantPeerId{0xFFFFFFFFu}; // @4 human peer id when occupancy==Human, else kNoSeatPeer sentinel
     uint8_t skillPct{50};                 // @8 round(per-instance skill * 100), [0,100]
     uint8_t turretIndex{255};             // @9 turret this seat aims (index into the aircraft's turrets); 255 = none
-    uint8_t reserved[2]{};                // @10 pad to 12 (role stays 4-aligned)
+    uint8_t knockedOut{0};                // @10 #978: 1 = the seat is knocked out (silent); orthogonal to occupancy
+    uint8_t reserved{0};                  // @11 pad to 12 (role stays 4-aligned)
     char role[32]{};                      // @12 null-terminated display string, e.g. "pilot" / "tail-gunner"
 }; // 44 bytes, align 4
 static_assert(sizeof(CrewRosterSeat) == 44u, "CrewRosterSeat wire size changed");

@@ -633,6 +633,7 @@ TEST_CASE("GameProtocol: MsgCrewRoster header + seat records round-trip (#972)",
     gunner.occupantPeerId = fl::kNoOwningPeer;
     gunner.skillPct = 70;
     gunner.turretIndex = 0;
+    gunner.knockedOut = 1; // #978
     std::snprintf(gunner.role, sizeof(gunner.role), "tail-gunner");
     fl::appendMsg(buf, gunner);
 
@@ -654,6 +655,8 @@ TEST_CASE("GameProtocol: MsgCrewRoster header + seat records round-trip (#972)",
     CHECK(std::string(s0.role) == "pilot");
     CHECK(s1.occupancy == static_cast<uint8_t>(fl::SeatOccupancy::Bot));
     CHECK(s1.turretIndex == 0);
+    CHECK(s1.knockedOut == 1); // #978
+    CHECK(s0.knockedOut == 0);
     CHECK(std::string(s1.role) == "tail-gunner");
 
     // Ordinal guard rejects an out-of-grammar occupancy byte.

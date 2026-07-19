@@ -864,8 +864,15 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                                   // Crewed (#969): the Fly seat's flight is the ControlInput above; each
                                   // non-fly bot seat is sampled here and commands its turret. Per-entity
                                   // own writes stay inside this worker slice (serial-equivalent).
-                                  if (it.ce->crew.crewed())
+                                  if (it.ce->crew.crewed()) {
                                       sampleCrewSeats(*it.ce, *it.state, tickIndex, simDt, aiCtx);
+                                      // #978: a knocked-out Fly seat leaves the airframe uncontrolled — no
+                                      // pilot input reaches the integrator and its guns fall silent.
+                                      if (it.ce->crew.flySeatDown()) {
+                                          m_stepInputs[i] = ControlInput{};
+                                          it.ce->lastInput = ControlInput{};
+                                      }
+                                  }
                               }
                           }
                       });
@@ -2640,12 +2647,20 @@ void WorldBroadcaster::routeSubsystemDamage(EntityId target, float amount, const
     if (amount <= 0.f)
         return;
     auto it = m_controlledEntities.find(target.index);
-    if (it == m_controlledEntities.end() || !it->second.hasSubsystems || it->second.id != target)
+    if (it == m_controlledEntities.end() || it->second.id != target)
         return;
     ControlledEntity& ce = it->second;
+    // The router runs when the entity has a fixed subsystem table (#675) OR damageable crew seats
+    // (#978). Absent both, nothing to route (the #675 fallback / no crew-seat table = unchanged).
+    const bool seatDmg = ce.crew.anyDamageableSeat();
+    if (!ce.hasSubsystems && !seatDmg)
+        return;
     const EntityState* state = m_entityManager.get(target);
     const EntityDef* def = state ? m_registry.byIndex(state->typeIndex) : nullptr;
-    if (!state || !def || !def->damage || !def->damage->subsystems)
+    if (!state || !def)
+        return;
+    const bool haveFixed = ce.hasSubsystems && def->damage && def->damage->subsystems;
+    if (!haveFixed && !seatDmg)
         return;
 
     // Rotate the world-frame hit direction into the target's body frame (x=fwd, y=up, z=right); a
@@ -2660,12 +2675,79 @@ void WorldBroadcaster::routeSubsystemDamage(EntityId target, float amount, const
         hitDirBody[2] = body.z;
     }
 
-    const uint32_t h = subsystemHash(target.index, tickIndex, 0x51A5u);
-    const Subsystem s = pickSubsystem(*def->damage->subsystems, ce.subsystems, hitDirBody, h);
-    if (s == Subsystem::Count)
+    // One combined weighted draw (#978) over the eligible fixed subsystems AND crew seats, so a hit is
+    // routed by the SAME weighted/quadrant pick — a hit damages one target, not both domains.
+    float subWeights[kSubsystemCount] = {};
+    float total = 0.f;
+    if (haveFixed) {
+        const SubsystemSet& sd = *def->damage->subsystems;
+        for (int i = 0; i < kSubsystemCount; ++i) {
+            const Subsystem s = static_cast<Subsystem>(i);
+            const bool eligible = sd.parts[i].hp > 0.f && !ce.subsystems.failed(s);
+            subWeights[i] = eligible ? sd.parts[i].weight * subsystemDirectionalBias(s, hitDirBody) : 0.f;
+            total += subWeights[i];
+        }
+    }
+    // Eligible crew seats, parallel arrays (a crewed aircraft has at most a handful of seats).
+    std::vector<std::size_t> seatIdx;
+    std::vector<float> seatWeight;
+    for (std::size_t s = 0; s < ce.crew.seats.size(); ++s) {
+        const CrewSeat& seat = ce.crew.seats[s];
+        if (!seat.damageable() || seat.knockedOut || seat.hp <= 0.f)
+            continue;
+        const float* eye = (s < def->crew.size()) ? def->crew[s].eyepoint : nullptr;
+        const float bias = eye ? crewSeatDamageBias(eye, hitDirBody) : 1.f;
+        const float w = seat.hitWeight * bias;
+        seatIdx.push_back(s);
+        seatWeight.push_back(w);
+        total += w;
+    }
+    if (total <= 0.f)
         return;
-    if (applySubsystemDamage(ce.subsystems, s, amount) != 0)
-        applySubsystemEffects(ce); // a subsystem newly failed — recompute the effects from the mask
+
+    const uint32_t h = subsystemHash(target.index, tickIndex, 0x51A5u);
+    const float r = (static_cast<float>(h) / static_cast<float>(0x01000000)) * total;
+    float cum = 0.f;
+    if (haveFixed) {
+        for (int i = 0; i < kSubsystemCount; ++i) {
+            cum += subWeights[i];
+            if (subWeights[i] > 0.f && r < cum) {
+                if (applySubsystemDamage(ce.subsystems, static_cast<Subsystem>(i), amount) != 0)
+                    applySubsystemEffects(ce);
+                return;
+            }
+        }
+    }
+    for (std::size_t k = 0; k < seatIdx.size(); ++k) {
+        cum += seatWeight[k];
+        if (r < cum) {
+            applySeatDamage(ce, seatIdx[k], amount);
+            return;
+        }
+    }
+    // Float-rounding backstop: apply to the last eligible seat (or, if none, the last fixed subsystem).
+    if (!seatIdx.empty())
+        applySeatDamage(ce, seatIdx.back(), amount);
+}
+
+void WorldBroadcaster::applySeatDamage(ControlledEntity& ce, std::size_t seatIdx, float amount) {
+    if (seatIdx >= ce.crew.seats.size())
+        return;
+    CrewSeat& seat = ce.crew.seats[seatIdx];
+    if (!seat.damageable() || seat.knockedOut)
+        return;
+    seat.hp -= amount;
+    if (seat.hp > 0.f)
+        return;
+    // The seat is KNOCKED OUT: it goes silent. A non-fly bot's controller stops (turret holds its last
+    // pose); a human occupant's masked input is ignored (applyHumanCrewInput skips it); the Fly seat
+    // being down leaves the airframe uncontrolled (the AI pass zeroes its input). Broadcast the roster
+    // so every viewer — and the occupant — sees the killed-seat state.
+    seat.hp = 0.f;
+    seat.knockedOut = true;
+    seat.lastCommandValid = false;
+    seat.seatBot.reset();
+    broadcastCrewRoster(ce.id);
 }
 
 void WorldBroadcaster::applySubsystemEffects(ControlledEntity& ce) {
@@ -2923,6 +3005,8 @@ bool WorldBroadcaster::buildCrewRosterPacket(EntityId id, std::vector<uint8_t>& 
         rec.occupantPeerId = seat.occupantPeer;
         rec.skillPct = static_cast<uint8_t>(std::clamp(std::lround(seat.skill * 100.f), 0L, 100L));
         rec.turretIndex = seat.turretIndex >= 0 ? static_cast<uint8_t>(seat.turretIndex) : 255u;
+        rec.knockedOut = seat.knockedOut ? 1u : 0u; // #978
+
         // Role display string from the authored def (roles-as-data, #944). Empty if the def is gone.
         if (def && s < def->crew.size())
             std::snprintf(rec.role, sizeof(rec.role), "%s", def->crew[s].role.c_str());
@@ -3834,6 +3918,9 @@ void WorldBroadcaster::buildCrew(ControlledEntity& ce, const EntityDef& def) {
         seat.reaction = def.aiTuning ? def.aiTuning->reaction : 0.5f; // per-instance reaction refined in #971
         seat.turretIndex = sd.turret.empty() ? -1 : turretIndexById(sd.turret);
         seat.botOccupied = (sd.defaultOccupancy == SeatOccupancyDefault::Bot);
+        seat.maxHp = sd.damageHp; // #978: 0 = non-damageable seat
+        seat.hp = sd.damageHp;
+        seat.hitWeight = sd.hitWeight;
 
         // Fire seats get a loadout PARTITION — their own stations plus, if they aim a turret, the
         // turret's mounted stations. Disjoint across seats by the one-owner invariant.
@@ -3929,6 +4016,10 @@ void WorldBroadcaster::sampleCrewSeats(ControlledEntity& ce, const EntityState& 
         CrewSeat& seat = ce.crew.seats[s];
         if (seat.isFlySeat)
             continue; // flight is the airframe controller's job
+        if (seat.knockedOut) {
+            seat.lastCommandValid = false; // a knocked-out seat goes silent — no command, turret holds (#978)
+            continue;
+        }
 
         SeatCommand cmd;
         bool haveCmd = false;
@@ -3985,8 +4076,8 @@ void WorldBroadcaster::applyHumanCrewInput(uint64_t tick) {
                              st->transform.quat[2]};
         for (std::size_t s = 0; s < ce.crew.seats.size(); ++s) {
             CrewSeat& seat = ce.crew.seats[s];
-            if (seat.isFlySeat || seat.occupantPeer == kNoSeatPeer)
-                continue; // the Fly seat flies via the controller; only human NON-fly seats route here
+            if (seat.isFlySeat || seat.occupantPeer == kNoSeatPeer || seat.knockedOut)
+                continue; // the Fly seat flies via the controller; only LIVE human NON-fly seats route here
             const auto pit = m_peerInputs.find(seat.occupantPeer);
             if (pit == m_peerInputs.end()) {
                 seat.lastCommandValid = false;
@@ -4030,8 +4121,10 @@ void WorldBroadcaster::runCrewedFire(ControlledEntity& ce, uint32_t idx, uint64_
     float cd0Sum = 0.f;
     for (std::size_t s = 0; s < ce.crew.seats.size(); ++s) {
         CrewSeat& seat = ce.crew.seats[s];
-        massSum += seat.fire.loadout.payloadMassKg;
+        massSum += seat.fire.loadout.payloadMassKg; // a knocked-out seat's stores still weigh on the airframe
         cd0Sum += seat.fire.loadout.payloadCd0;
+        if (seat.knockedOut) // #978: a knocked-out seat fires nothing (its channel is silent)
+            continue;
         if (!hasCapability(seat.capabilities, CrewCapability::Fire) || seat.fire.loadout.empty())
             continue;
 

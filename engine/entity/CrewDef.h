@@ -71,6 +71,14 @@ struct SeatDef {
     SeatOccupancyDefault defaultOccupancy{SeatOccupancyDefault::Bot};
     std::string botSpec;      // bot behavior spec (factory behavior / "builtin:*" / "lua:*"); empty = engine default
     float defaultSkill{0.5f}; // [0,1] per-instance skill baseline (a mission range may override)
+
+    // Crew-seat damage (#978, builds on #675). A seat with damageHp > 0 is an independent damage pool
+    // routed by the subsystem weighted/quadrant pick; when its pool is exhausted the seat is KNOCKED
+    // OUT and goes silent (its channels stop — a dead Fly seat = no pilot input; a dead gunner = the
+    // turret stops), bot or human alike. damageHp == 0 (the default) = a non-damageable seat, which
+    // preserves the #675 fallback (no crew-seat entries ⇒ behavior unchanged).
+    float damageHp{0.f};  // seat HP pool; 0 = not damageable
+    float hitWeight{1.f}; // relative hit-bias weight in the subsystem pick (> 0)
 };
 
 // One authored turret mount — a weapon station's aiming frame, independent of the airframe nose.

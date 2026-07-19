@@ -121,6 +121,7 @@ EntityDef makeBomberDef() {
     gunner.turret = "tail";
     gunner.defaultOccupancy = SeatOccupancyDefault::Bot;
     gunner.botSpec = "stub";
+    gunner.damageHp = 50.f; // #978: the gunner seat is a damageable HP pool
     d.crew = {pilot, gunner};
     return d;
 }
@@ -329,6 +330,110 @@ TEST_CASE("Crewed frame: vacating a human seat resumes its bot (#972)", "[crew]"
     fx.tick(120);                          // the bot (StubGunner) slews then fires again after tick 90
 
     CHECK(!fx.projectileVels().empty()); // the bot resumed and fired
+}
+
+TEST_CASE("Crewed frame: a hit that knocks out the gunner seat silences its fire (#978)", "[crew]") {
+    // The bomber's tail-gunner seat is a 50 hp damageable pool and is the ONLY damageable target (no
+    // fixed [damage.subsystems]), so a warhead deterministically routes to it. A blast > 50 hp knocks
+    // it out — the gunner must stop firing while the airframe (300 hp) survives.
+    CrewFixture fx(/*gunnerFireAfter=*/90);
+    const EntityId bomber = fx.spawnBomber(0.0);
+    fx.tick(120); // the gunner slews + fires
+    REQUIRE(!fx.projectileVels().empty());
+
+    // Detonate a blast right on the bomber, past the 50 hp seat pool.
+    const EntityState* st = fx.em->get(bomber);
+    REQUIRE(st != nullptr);
+    double blastPos[3] = {st->transform.pos[0], st->transform.pos[1] + 1.0, st->transform.pos[2]};
+    BlastSpec blast{15.f, 80.f, false}; // 80 dmg > the 50 hp seat pool
+    fx.wb->applyWarheadAt(blastPos, blast, EntityId::null());
+
+    REQUIRE(fx.em->get(bomber) != nullptr); // the airframe survives (300 hp)
+
+    // Clear the field and confirm the gunner fires no more (its seat is knocked out).
+    fx.em->forEach([&](const EntityState& e) {
+        if (!e.dead && e.typeIndex == fx.registry.indexById(projectileTypeId(*fx.weapons.byIndex(0)).c_str()))
+            fx.em->kill(e.id);
+    });
+    fx.tick(120);
+    CHECK(fx.projectileVels().empty()); // the knocked-out seat is silent
+}
+
+TEST_CASE("Crewed frame: knocking out the Fly seat silences the pilot's guns (#978)", "[crew]") {
+    // A bomber whose PILOT (Fly+Fire) seat is a damageable pool and fires station 0 forward. Flown by a
+    // controller that holds the trigger; spawned high so the nose-fired rockets survive. Knocking out
+    // the Fly seat must zero the pilot input — the guns fall silent.
+    NullLog logger;
+    TrackingNetwork net;
+    EntityTypeRegistry registry;
+    WeaponRegistry weapons;
+    weapons.registerWeapon(makeRocket());
+
+    EntityDef d = makeBomberDef();
+    d.crew[0].damageHp = 40.f; // the pilot (Fly+Fire) seat is damageable
+    d.crew[1].damageHp = 0.f;  // the gunner seat is NOT, so the blast deterministically hits the pilot
+    // Rebuild the registry with this modified def.
+    registry.registerType(d);
+    EntityDef proj;
+    proj.id = projectileTypeId(*weapons.byIndex(0));
+    proj.name = "p";
+    proj.category = ObjectCategory::Projectile;
+    proj.maxHp = 1.f;
+    registry.registerType(proj);
+
+    EntityManager em(logger, registry);
+    WorldBroadcaster wb(em, registry, net, logger);
+    wb.setWeaponRegistry(&weapons);
+    wb.setGroundElevation(0.f);
+    // No gunner bot — only the pilot's fire matters here.
+    wb.setSeatControllerFactory(
+        [](const SeatDef&, uint8_t, const WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<ISeatController> {
+            return nullptr;
+        });
+
+    struct FiringPilot : IEntityController {
+        ControlInput sample(const EntityState&, uint64_t, double, const AiTickContext&) override {
+            ControlInput c;
+            c.release = true; // ripple the station-0 rockets forward
+            return c;
+        }
+    };
+
+    EntityTransform t{};
+    t.pos[1] = 3000.0; // high, so nose-fired rockets fly free instead of hitting the ground
+    t.quat[3] = 1.f;
+    const EntityId bomber = em.spawn("test:bomber", t);
+    wb.registerController(bomber, std::make_unique<FiringPilot>(), nullptr, 0.f);
+
+    const uint32_t projType = registry.indexById(projectileTypeId(*weapons.byIndex(0)).c_str());
+    auto liveProjectiles = [&]() {
+        int n = 0;
+        em.forEach([&](const EntityState& e) {
+            if (!e.dead && e.typeIndex == projType)
+                ++n;
+        });
+        return n;
+    };
+
+    uint64_t tick = 0;
+    for (int i = 0; i < 30; ++i)
+        wb.onTick(1.0 / 60.0, ++tick);
+    REQUIRE(liveProjectiles() > 0); // the pilot is firing
+
+    // Knock out the pilot (Fly) seat.
+    const EntityState* st = em.get(bomber);
+    double blastPos[3] = {st->transform.pos[0], st->transform.pos[1], st->transform.pos[2]};
+    BlastSpec blast{15.f, 60.f, false};
+    wb.applyWarheadAt(blastPos, blast, EntityId::null());
+
+    // Clear the field; the silenced pilot fires no more.
+    em.forEach([&](const EntityState& e) {
+        if (!e.dead && e.typeIndex == projType)
+            em.kill(e.id);
+    });
+    for (int i = 0; i < 60; ++i)
+        wb.onTick(1.0 / 60.0, ++tick);
+    CHECK(liveProjectiles() == 0); // the Fly seat is down — no pilot input, no guns
 }
 
 TEST_CASE("Crewed frame: a mission crew config can empty a bot seat, silencing its fire (#976)", "[crew]") {

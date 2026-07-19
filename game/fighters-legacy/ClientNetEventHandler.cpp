@@ -606,6 +606,7 @@ void ClientNetEventHandler::handleCrewRoster(const void* data, std::size_t size)
         si.occupantPeerId = rec.occupantPeerId;
         si.skillPct = rec.skillPct;
         si.turretIndex = rec.turretIndex;
+        si.knockedOut = rec.knockedOut != 0; // #978
         si.role = rec.role;
         info.seats.push_back(std::move(si));
     }

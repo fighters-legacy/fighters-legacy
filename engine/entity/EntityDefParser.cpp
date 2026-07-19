@@ -391,6 +391,15 @@ EntityDef parseEntityDef(std::string_view toml_src) {
             }
             seat.defaultSkill = parse_unit_fraction((*ct)["skill"], "crew.skill", seat.defaultSkill);
 
+            // Crew-seat damage (#978): an optional independent HP pool + hit-bias weight. Absent = a
+            // non-damageable seat (damageHp 0), preserving the #675 fallback.
+            seat.damageHp = opt_float((*ct)["damage_hp"], 0.f);
+            if (seat.damageHp < 0.f)
+                throw std::runtime_error("crew.damage_hp must be >= 0 (seat \"" + seat.role + "\")");
+            seat.hitWeight = opt_float((*ct)["hit_weight"], 1.f);
+            if (seat.hitWeight <= 0.f)
+                throw std::runtime_error("crew.hit_weight must be > 0 (seat \"" + seat.role + "\")");
+
             def.crew.push_back(std::move(seat));
         }
     }

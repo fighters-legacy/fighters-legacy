@@ -288,7 +288,8 @@ Then `seatCount` × `CrewRosterSeat` (44 bytes each, align 4):
 | 4 | 4 | `occupantPeerId` | `uint32_t` | Human peer id when `occupancy == Human`, else `kNoSeatPeer` (`0xFFFFFFFF`) |
 | 8 | 1 | `skillPct` | `uint8_t` | Per-instance skill × 100, `[0,100]` |
 | 9 | 1 | `turretIndex` | `uint8_t` | Turret this seat aims; `255` = none |
-| 10 | 2 | `reserved[2]` | `uint8_t[2]` | Pad (keeps `role` 4-aligned) |
+| 10 | 1 | `knockedOut` | `uint8_t` | `1` = the seat is knocked out (silent, #978); orthogonal to occupancy |
+| 11 | 1 | `reserved` | `uint8_t` | Pad (keeps `role` 4-aligned) |
 | 12 | 32 | `role` | `char[32]` | Null-terminated display string (roles-as-data, #944) |
 
 ### MsgSeatRequest — 12 bytes

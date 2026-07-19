@@ -23,6 +23,7 @@ struct CrewSeatInfo {
     uint32_t occupantPeerId{0xFFFFFFFFu}; // human peer id when occupancy == Human, else the kNoSeatPeer sentinel
     uint8_t skillPct{50};
     uint8_t turretIndex{255}; // turret this seat aims (index into turretPoses); 255 = none
+    bool knockedOut{false};   // #978: the seat is knocked out (silent) — the HUD surfaces this
     std::string role;
 };
 

@@ -1126,6 +1126,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // controlled entity that declared [damage.subsystems]. Applies the failed subsystem's effect.
     void routeSubsystemDamage(EntityId target, float amount, const float* hitDirWorld, uint64_t tickIndex);
     void applySubsystemEffects(ControlledEntity& ce); // recompute integrator/sensor state from the mask
+    // #978: apply damage to a crew seat's HP pool; on exhaustion the seat is knocked out (goes silent)
+    // and the roster is re-broadcast. Called from routeSubsystemDamage on a seat pick.
+    void applySeatDamage(ControlledEntity& ce, std::size_t seatIdx, float amount);
 
     std::vector<std::array<double, 3>> m_spawnPoints; // pre-cached [x,y,z]; sim-thread read-only after start
     uint32_t m_nextSpawnIdx{0};                       // round-robin counter; sim-thread only

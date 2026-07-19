@@ -1275,6 +1275,12 @@ airframe, and the pilot's trigger never fires the tail gun.
 | `bot` | string | Bot spec filling the seat by default: a factory behavior (`"gunner"`), a compiled-in bot (`"builtin:gunner"`), or a pack Lua script (`"lua:<script>"`). Empty = an engine-default bot for the seat's capabilities |
 | `empty` | bool | `true` = the seat spawns unoccupied (human-joinable only). Mutually exclusive with `bot` |
 | `skill` | float | `[0, 1]` per-instance skill baseline for the bot; a mission `crew:` range may override |
+| `damage_hp` | float | `> 0` makes the seat a **damageable HP pool** (#978): a hit can knock it out, silencing whoever occupies it (bot or human). Default `0` = a non-damageable seat (unchanged behavior). A knocked-out `fly` seat leaves the airframe uncontrolled; a knocked-out gunner stops its turret |
+| `hit_weight` | float | `> 0` relative hit-bias weight in the subsystem damage pick (default `1.0`); combined with a directional bias from `seat_pos` (a hit from the rear favors a rear seat) |
+
+A `damage_hp` seat is routed by the **same** weighted/quadrant pick as the `[damage.subsystems]` model
+(below) — a hit damages one target, a fixed subsystem *or* a seat. Absent any `damage_hp` seat, crew-seat
+damage is off and behavior is exactly the pre-#978 fallback.
 
 `[[turrets]]` gives a weapon station an aiming direction independent of the airframe nose (a
 defensive gun that tracks a chaser; a static SAM launcher that elevates). Fields:

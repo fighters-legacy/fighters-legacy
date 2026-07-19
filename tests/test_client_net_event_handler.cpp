@@ -2395,6 +2395,7 @@ TEST_CASE("ClientNetEventHandler: MsgCrewRoster stored and queryable by entity (
     s1.occupancy = static_cast<uint8_t>(fl::SeatOccupancy::Bot);
     s1.capabilities = 0x02;
     s1.turretIndex = 0;
+    s1.knockedOut = 1; // #978
     std::snprintf(s1.role, sizeof(s1.role), "tail-gunner");
     fl::appendMsg(buf, s1);
 
@@ -2410,6 +2411,8 @@ TEST_CASE("ClientNetEventHandler: MsgCrewRoster stored and queryable by entity (
     CHECK(roster->seats[0].role == "pilot");
     CHECK(roster->seats[1].occupancy == static_cast<uint8_t>(fl::SeatOccupancy::Bot));
     CHECK(roster->seats[1].turretIndex == 0);
+    CHECK(roster->seats[1].knockedOut); // #978
+    CHECK_FALSE(roster->seats[0].knockedOut);
 
     // An unknown entity has no roster.
     CHECK(handler.crewRoster(999u) == nullptr);
