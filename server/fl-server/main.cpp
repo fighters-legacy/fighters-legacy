@@ -184,6 +184,7 @@ int main(int argc, char** argv) {
     std::string flagMission;       // non-empty if --mission <name> was given (overrides [rotation])
     std::string flagMissionReport; // non-empty: run the mission headless to completion, write JSON here (#856)
     std::string flagCampaign;      // non-empty if --campaign <file> was given: run the campaign's next sortie (#584)
+    std::string flagTimeRate;      // non-empty if --time-rate <name> was given: reduced wall-rate for recording (#915)
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
@@ -201,6 +202,8 @@ int main(int argc, char** argv) {
                 "  --flight-size <n>         AI wingmen per player; 0=none (overrides [flight])\n"
                 "  --mission <name>          Load a mission at startup (overrides [rotation])\n"
                 "  --mission-report <path>   Run the mission headless to completion, write a JSON outcome, exit\n"
+                "  --time-rate <name>        Sim wall-clock rate: paused|eighth|quarter|half|normal|double|quad|octa\n"
+                "                            (sim dt stays 1/60; slows serving for a slow recording client, #915)\n"
                 "\n"
                 "Admin console commands are available on stdin (type 'help' for a command list).\n"
                 "\n"
@@ -244,6 +247,8 @@ int main(int argc, char** argv) {
             flagMissionReport = argv[++i];
         if (std::strcmp(argv[i], "--campaign") == 0 && i + 1 < argc)
             flagCampaign = argv[++i];
+        if (std::strcmp(argv[i], "--time-rate") == 0 && i + 1 < argc)
+            flagTimeRate = argv[++i];
         if (std::strcmp(argv[i], "--sim-worker-threads") == 0 && i + 1 < argc) {
             char* end = nullptr;
             long n = std::strtol(argv[++i], &end, 10);
@@ -1739,6 +1744,44 @@ int main(int argc, char** argv) {
     // the client attempts its first connection.
     log->log(LogLevel::Info, __FILE__, __LINE__, listeningMsg);
     gameLoop.start();
+
+    // ---- Reduced wall-clock rate for cinematic recording (#915) ----
+    // sim dt stays 1/60 — content is byte-identical; ticks just arrive slower, so a slow (software-
+    // rendered, lavapipe) recording client never misses a capture boundary. Applied after start()
+    // because setRate is a main-thread control (see GameLoop).
+    if (!flagTimeRate.empty()) {
+        auto parseTimeRate = [](const std::string& s, TimeRate& out) -> bool {
+            if (s == "paused")
+                out = TimeRate::Paused;
+            else if (s == "eighth")
+                out = TimeRate::Eighth;
+            else if (s == "quarter")
+                out = TimeRate::Quarter;
+            else if (s == "half")
+                out = TimeRate::Half;
+            else if (s == "normal")
+                out = TimeRate::Normal;
+            else if (s == "double")
+                out = TimeRate::Double;
+            else if (s == "quad")
+                out = TimeRate::Quad;
+            else if (s == "octa")
+                out = TimeRate::Octa;
+            else
+                return false;
+            return true;
+        };
+        TimeRate tr = TimeRate::Normal;
+        if (parseTimeRate(flagTimeRate, tr)) {
+            gameLoop.setRate(tr);
+            log->log(LogLevel::Info, __FILE__, __LINE__, ("time-rate set to " + flagTimeRate).c_str());
+        } else {
+            log->log(LogLevel::Warn, __FILE__, __LINE__,
+                     ("--time-rate: unknown rate \"" + flagTimeRate +
+                      "\" (paused|eighth|quarter|half|normal|double|quad|octa); using normal")
+                         .c_str());
+        }
+    }
 
     // ---- RCON server (optional TCP remote admin channel) ----
     if (cfg.rcon.enabled) {

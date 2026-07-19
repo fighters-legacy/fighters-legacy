@@ -9,6 +9,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **server**: `--time-rate` flag + `TimeRate::Quarter`/`Eighth` (#915). fl-server can now run its sim at
+  a reduced wall-clock rate (`--time-rate quarter|eighth|…`) applied after startup. The sim step stays
+  1/60 s — content is byte-identical; ticks simply arrive slower in real time, so a slow (software-
+  rendered, lavapipe) recording client receives every snapshot and never misses a capture boundary.
+  The compensation lever behind the cinematic recorder's "one frame per boundary, fail loud on drops"
+  timing model.
 - **mission**: `ShotDirector` camera-pose evaluator (#911). A pure GLM+stdlib evaluator (engine-mission,
   no HAL) that turns a mission's `cameras:` shots (#910) + a live entity-pose callback into a camera
   pose at a given sim time. Implements all four shot types — `static`, `orbit` (radius/height/period,
