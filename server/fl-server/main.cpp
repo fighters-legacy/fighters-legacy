@@ -940,6 +940,11 @@ int main(int argc, char** argv) {
     // The objective/trigger evaluator (#633). Constructed below when a mission loads; declared here so
     // it outlives gameLoop (the broadcaster's tick hook captures a pointer into it).
     std::unique_ptr<fl::MissionRuntime> missionRuntime;
+    // Mission non-terminal `do:` action sink (#212). The evaluator routes actions like `set_weather storm`
+    // here; we point it at the admin command dispatch AFTER the registry is built (below), so a mission
+    // can do exactly what an operator could and no more. Set on the sim thread; read on the sim thread
+    // (the evaluator steps there). Empty until wired = actions are logged-and-skipped.
+    std::function<void(std::string_view)> missionActionSink;
     std::string loadedMissionName; // for the #856 headless report
     uint64_t loadedMissionSpawned = 0;
     if (!missionToLoad.empty()) {
@@ -1143,11 +1148,20 @@ int main(int argc, char** argv) {
                     objectEntities.emplace_back(ps.id, fl::EntityId{});
 
                 missionRuntime = std::make_unique<fl::MissionRuntime>(
-                    parsed.mission, std::move(objectEntities), entityManager, [log](std::string_view action) {
-                        char m[224];
-                        std::snprintf(m, sizeof(m), "mission action (seam; not yet routed): %.140s",
-                                      std::string(action).c_str());
-                        log->log(LogLevel::Info, __FILE__, __LINE__, m);
+                    parsed.mission, std::move(objectEntities), entityManager,
+                    [log, &missionActionSink](std::string_view action) {
+                        // Route non-terminal `do:` actions (set_weather / set_time / …) through the same
+                        // validated command path the admin console uses (#212). The sink is wired to
+                        // adminRegistry.dispatch after the registry is built; before that (or with no
+                        // operator surface) the action is logged and skipped.
+                        if (missionActionSink) {
+                            missionActionSink(action);
+                        } else {
+                            char m[224];
+                            std::snprintf(m, sizeof(m), "mission action (no dispatch wired): %.140s",
+                                          std::string(action).c_str());
+                            log->log(LogLevel::Info, __FILE__, __LINE__, m);
+                        }
                     });
                 missionRuntime->setOnEnd([log](const fl::MissionOutcome& o) {
                     const char* s = o.state == fl::MissionState::Complete ? "SUCCESS" : "FAILURE";
@@ -1395,6 +1409,17 @@ int main(int argc, char** argv) {
 
     broadcaster.setShutdownCallback([&]() { g_quit = 1; });
     fl::registerServerCommands(adminRegistry, adminCtx);
+
+    // Route mission `do:` actions through the validated admin command path (#212), e.g. a trigger
+    // `do: set_weather storm` runs the same set_weather command an operator would. dispatch() is const +
+    // thread-safe; mutating commands (set_weather/set_time) enqueue onto the sim callback queue, so this
+    // is safe to call from the mission evaluator on the sim thread. The result string is logged.
+    missionActionSink = [&adminRegistry, log](std::string_view action) {
+        const std::string result = adminRegistry.dispatch(std::string(action));
+        char m[288];
+        std::snprintf(m, sizeof(m), "mission action '%.120s' -> %.140s", std::string(action).c_str(), result.c_str());
+        log->log(LogLevel::Info, __FILE__, __LINE__, m);
+    };
 
     // MOTD and operator password were applied via applyConfig() above; the admin dispatcher needs
     // adminRegistry (built just above) so it is wired here.

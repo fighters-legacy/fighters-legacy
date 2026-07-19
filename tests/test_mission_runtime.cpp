@@ -698,6 +698,27 @@ TEST_CASE("MissionRuntime: triggers fire in declaration order; non-terminal acti
     CHECK(rt.outcome().triggersFired == 2u);
 }
 
+TEST_CASE("MissionRuntime: a weather trigger action is dispatched verbatim for the admin path (#212)",
+          "[mission-runtime]") {
+    // A `do: set_weather storm` trigger routes the whole action string to the injected dispatcher, which
+    // fl-server points at the validated admin command path (set_weather storm). The mission stays Active
+    // (weather is non-terminal); a later trigger ends it.
+    NullLogger log;
+    EntityTypeRegistry reg;
+    EntityManager em(log, reg);
+    Mission m = missionWith({{"mission_start", "set_weather storm"}, {"timer(5)", "mission_success"}});
+
+    std::vector<std::string> dispatched;
+    MissionRuntime rt(m, {}, em, [&](std::string_view a) { dispatched.emplace_back(a); });
+    rt.step(0);
+    REQUIRE(dispatched.size() == 1u);
+    CHECK(dispatched[0] == "set_weather storm"); // verbatim → adminRegistry.dispatch tokenizes it
+    CHECK(rt.outcome().state == MissionState::Active);
+
+    rt.step(60 * 6); // past timer(5)
+    CHECK(rt.outcome().state == MissionState::Complete);
+}
+
 TEST_CASE("MissionRuntime: a trigger fires exactly once (edge), not every tick", "[mission-runtime]") {
     NullLogger log;
     EntityTypeRegistry reg;
