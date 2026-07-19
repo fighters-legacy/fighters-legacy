@@ -389,7 +389,7 @@ if(TARGET platform-enet)
     target_link_libraries(test_admin_console PRIVATE
         Catch2::Catch2WithMain
         fl-server-config engine-console engine-net engine-entity engine-weather engine-loop
-        engine-ai engine-script)
+        engine-ai engine-atc engine-world engine-script)
     target_include_directories(test_admin_console PRIVATE
         "${CMAKE_SOURCE_DIR}/server/fl-server"
         "${CMAKE_CURRENT_SOURCE_DIR}")

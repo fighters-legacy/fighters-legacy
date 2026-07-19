@@ -25,6 +25,9 @@ class EntityTypeRegistry;
 class WeatherController;
 class WorldBroadcaster;
 struct WorldApi;
+namespace atc {
+class AtcService; // engine/atc/AtcService.h — atc_status/atc_scramble/atc_hold (#705)
+} // namespace atc
 
 // Context injected into server admin commands, grouped by concern. All pointers may be nullptr;
 // commands check for their required pointers and return an error string if unavailable.
@@ -37,6 +40,7 @@ struct ServerCommandContext {
         WeatherController* weatherController{nullptr};
         GameLoop* gameLoop{nullptr};       // for enqueueSimCallback
         const WorldApi* worldApi{nullptr}; // world.* host seam for spawned Lua controllers (#413)
+        fl::atc::AtcService* atc{nullptr}; // ATC service for atc_status/atc_scramble/atc_hold (#705)
     } sim;
 
     // Process/runtime environment.

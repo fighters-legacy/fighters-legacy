@@ -2,6 +2,7 @@
 #include "ServerCommands.h"
 
 #include "ai/AiControllerFactory.h"
+#include "atc/AtcService.h" // atc_status/atc_scramble/atc_hold (#705)
 #include "entity/EntityTypeRegistry.h"
 #include "script/LuaController.h"
 #include "server_config.h"
@@ -626,6 +627,61 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                  return buf;
                              });
 
+    // ── Air-traffic control (#705) ───────────────────────────────────────────
+    registry.registerCommand("atc_status", "atc_status [airport]  -- show ATC facility queues and runway occupancy",
+                             [ctx](std::span<std::string_view> args) -> std::string {
+                                 if (!ctx.sim.atc)
+                                     return "atc_status: ATC not available";
+                                 const std::string filter = args.empty() ? std::string{} : std::string(args[0]);
+                                 return ctx.sim.atc->statusText(filter);
+                             });
+
+    registry.registerCommand(
+        "atc_scramble", "atc_scramble <airport> <type> [count]  -- launch AI departures from a named airport",
+        [ctx](std::span<std::string_view> args) -> std::string {
+            if (args.size() < 2)
+                return "usage: atc_scramble <airport> <type> [count]";
+            if (!ctx.sim.atc || !ctx.sim.gameLoop)
+                return "atc_scramble: ATC not available";
+            std::string airport(args[0]);
+            std::string type(args[1]);
+            int count = 1;
+            if (args.size() >= 3) {
+                std::string c(args[2]);
+                char* end = nullptr;
+                long v = std::strtol(c.c_str(), &end, 10);
+                if (end == c.c_str() || *end != '\0' || v < 1 || v > 64)
+                    return "atc_scramble: count must be in [1, 64]";
+                count = static_cast<int>(v);
+            }
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, airport, type, count]() {
+                const bool ok = ctx.sim.atc->scramble(airport, type, count);
+                printAdmin(ctx, ok ? "[atc] scramble launched" : "[atc] scramble failed (unknown airport?)");
+            });
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "atc_scramble: queued %d from %s", count, airport.c_str());
+            return std::string(buf);
+        });
+
+    registry.registerCommand("atc_hold", "atc_hold <airport> <on|off>  -- freeze or release departures at an airport",
+                             [ctx](std::span<std::string_view> args) -> std::string {
+                                 if (args.size() < 2)
+                                     return "usage: atc_hold <airport> <on|off>";
+                                 if (!ctx.sim.atc || !ctx.sim.gameLoop)
+                                     return "atc_hold: ATC not available";
+                                 bool hold;
+                                 if (args[1] == "on")
+                                     hold = true;
+                                 else if (args[1] == "off")
+                                     hold = false;
+                                 else
+                                     return "atc_hold: second argument must be on|off";
+                                 std::string airport(args[0]);
+                                 ctx.sim.gameLoop->enqueueSimCallback(
+                                     [ctx, airport, hold]() { ctx.sim.atc->holdDepartures(airport, hold); });
+                                 return std::string("atc_hold: ") + (hold ? "holding " : "releasing ") + airport;
+                             });
+
     // spawn <type> <x> <y> <z> [--faction <n>] [--ai <behavior> [behavior-args...]]
     registry.registerCommand(
         "spawn",
@@ -743,8 +799,8 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                             if (!luaScriptSrc.empty()) {
                                 // Lua AI controller — constructed on sim thread; the world.* seam (#413)
                                 // lets an admin-spawned script reach spawn/faction/mission/music too.
-                                auto luaCtrl = std::make_unique<LuaController>(luaScriptSrc, luaScriptRoot,
-                                                                               ctx.sim.entityManager, ctx.sim.worldApi);
+                                auto luaCtrl = std::make_unique<LuaController>(
+                                    luaScriptSrc, luaScriptRoot, ctx.sim.entityManager, ctx.sim.worldApi, ctx.sim.atc);
                                 if (luaCtrl->isValid()) {
                                     ctrl = std::move(luaCtrl);
                                 } else {

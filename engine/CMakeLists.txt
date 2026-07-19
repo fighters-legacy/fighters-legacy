@@ -432,4 +432,5 @@ target_link_libraries(engine-script
     PRIVATE lua::lua
             engine-ai          # Guidance.h math for LuaController bindings
             engine-sensor      # detected_contacts() reads AiTickContext::contacts (#691)
+            engine-atc         # atc.* Lua module -> AtcService (#705)
 )

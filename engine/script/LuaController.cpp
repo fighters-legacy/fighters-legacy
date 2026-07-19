@@ -9,6 +9,7 @@ extern "C" {
 }
 
 #include "ai/Guidance.h"
+#include "atc/AtcService.h" // atc.* Lua module (#705)
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "sensor/SensorSystem.h"
@@ -17,6 +18,7 @@ extern "C" {
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 namespace fl {
@@ -34,6 +36,11 @@ struct LuaController::Impl {
     const fl::AiTickContext* currentCtx{nullptr};
     uint64_t currentTick{0}; // for contact age_s (ticks since last seen × dt)
     double currentDt{0.0};
+    // The entity this controller is flying, for the atc.* self-service bindings (#705). Set at the top
+    // of each sample() before the Lua pcall — valid only while a script is executing.
+    fl::EntityId currentSelfId{};
+    // atc.* module (#705). Thread-safe (AtcService locks internally); null = every atc.* call is nil/false.
+    fl::atc::AtcService* atcService{nullptr};
     bool valid{false};
     std::string lastError;
     uint64_t nextErrorLogTick{0}; // rate-limit: log at most once per 60 ticks
@@ -564,9 +571,113 @@ static int luaStopRumble(lua_State* L) {
     return 0;
 }
 
+// ── atc.* module (#705) ──────────────────────────────────────────────────────
+// Self-service bindings for the entity this controller flies (clearance/request_*/inbound) plus the
+// airport-addressed scramble/hold. All nil/false when no AtcService is wired. The service is
+// thread-safe, so these are safe to call from the parallel AI pass.
+
+// Optional trailing airport-id argument (arg `n`), or "" (nearest).
+static std::string atcFacilityArg(lua_State* L, int n) {
+    if (lua_isstring(L, n))
+        return lua_tostring(L, n);
+    return {};
+}
+
+// atc.clearance() -> clearance-state string ("none" when unknown / no service)
+static int luaAtcClearance(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    fl::atc::ClearanceState s = fl::atc::ClearanceState::None;
+    if (impl->atcService)
+        s = impl->atcService->clearanceState(impl->currentSelfId);
+    lua_pushstring(L, fl::atc::clearanceStateName(s));
+    return 1;
+}
+
+// atc.request_takeoff([airport_id]) -> bool
+static int luaAtcRequestTakeoff(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    if (!impl->atcService) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    impl->atcService->requestTakeoff(impl->currentSelfId, atcFacilityArg(L, 1));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// atc.request_landing([airport_id]) -> bool
+static int luaAtcRequestLanding(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    if (!impl->atcService) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    impl->atcService->requestLanding(impl->currentSelfId, atcFacilityArg(L, 1));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// atc.inbound([airport_id]) -> bool
+static int luaAtcInbound(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    if (!impl->atcService) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    impl->atcService->declareInbound(impl->currentSelfId, atcFacilityArg(L, 1));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// atc.scramble(airport_id, type_id, count) -> bool
+static int luaAtcScramble(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    const char* airport = luaL_checkstring(L, 1);
+    const char* type = luaL_checkstring(L, 2);
+    const int count = static_cast<int>(luaL_optinteger(L, 3, 1));
+    bool ok = false;
+    if (impl->atcService)
+        ok = impl->atcService->scramble(airport, type, count);
+    lua_pushboolean(L, ok ? 1 : 0);
+    return 1;
+}
+
+// atc.hold(airport_id, on) -> bool
+static int luaAtcHold(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    const char* airport = luaL_checkstring(L, 1);
+    const bool hold = lua_toboolean(L, 2) != 0;
+    if (!impl->atcService) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    impl->atcService->holdDepartures(airport, hold);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 // ---------------------------------------------------------------------------
 // API registration
 // ---------------------------------------------------------------------------
+
+static void registerAtcModule(lua_State* L, LuaController::Impl* impl) {
+    static const luaL_Reg kFuncs[] = {
+        {"clearance", luaAtcClearance},
+        {"request_takeoff", luaAtcRequestTakeoff},
+        {"request_landing", luaAtcRequestLanding},
+        {"inbound", luaAtcInbound},
+        {"scramble", luaAtcScramble},
+        {"hold", luaAtcHold},
+        {nullptr, nullptr},
+    };
+    lua_newtable(L);
+    for (const luaL_Reg* r = kFuncs; r->name; ++r) {
+        lua_pushlightuserdata(L, impl);
+        lua_pushcclosure(L, r->func, 1);
+        lua_setfield(L, -2, r->name);
+    }
+    lua_setglobal(L, "atc");
+}
 
 static void registerWorldModule(lua_State* L, LuaController::Impl* impl) {
     static const luaL_Reg kFuncs[] = {
@@ -638,10 +749,12 @@ static void registerSpatialFuncs(lua_State* L, LuaController::Impl* impl) {
 // ---------------------------------------------------------------------------
 
 LuaController::LuaController(std::string_view scriptSource, std::string packRootDir,
-                             const fl::EntityManager* entityManager, const fl::WorldApi* worldApi)
+                             const fl::EntityManager* entityManager, const fl::WorldApi* worldApi,
+                             fl::atc::AtcService* atcService)
     : m_impl(std::make_unique<Impl>()) {
     m_impl->entityManager = entityManager;
     m_impl->worldApi = worldApi;
+    m_impl->atcService = atcService;
 
     m_impl->sandbox = LuaSandbox::create(std::move(packRootDir));
     if (!m_impl->sandbox) {
@@ -653,6 +766,7 @@ LuaController::LuaController(std::string_view scriptSource, std::string packRoot
     registerGuidanceModule(L);
     registerSpatialFuncs(L, m_impl.get());
     registerWorldModule(L, m_impl.get());
+    registerAtcModule(L, m_impl.get());
 
     if (!m_impl->sandbox->loadScript(scriptSource)) {
         m_impl->lastError = m_impl->sandbox->lastError();
@@ -845,6 +959,7 @@ fl::ControlInput LuaController::sample(const fl::EntityState& state, uint64_t ti
     m_impl->currentCtx = &ctx;
     m_impl->currentTick = tick;
     m_impl->currentDt = dt;
+    m_impl->currentSelfId = state.id; // for the atc.* self-service bindings (#705)
     m_impl->elapsedS += dt;
 
     // Fire due world.timer / world.on_trigger callbacks before computing control this tick (#413).

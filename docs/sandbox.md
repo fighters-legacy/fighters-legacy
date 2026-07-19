@@ -287,6 +287,9 @@ The console is a half-screen drop-down overlay. It is fully independent of the c
 | `toggle_pos` | Toggle entity world-position readout below the camera position display |
 | `show_ping` | Toggle "Ping: N ms" RTT overlay (visible even when F3 performance overlay is off) |
 | `set_weather <preset>` | Set weather instantly: `clear`, `partly_cloudy`, `overcast`, `rain`, `storm`, `snow`, `blizzard`. Queued to sim thread; takes effect on next tick. |
+| `atc_status [airport]` | Show ATC facility queues + runway occupancy (#705). Synchronous read of the ATC service; `[airport]` filters to one field. |
+| `atc_scramble <airport> <type> [count]` | Launch `count` AI departures from a named airport (#705, default 1). They spawn hold-short, get sequenced onto the runway, and take off in order. Queued to the sim thread. |
+| `atc_hold <airport> <on\|off>` | Freeze or release that airport's departure queue (#705). Queued to the sim thread. |
 | `detonate <x> <y> <z> <radius_m> <damage> [--nuclear]` | AoE warhead at a world position (#356); `--nuclear` adds the EMP ring (avionics kill) at 4× the blast radius. Forwarded to the server. |
 | `set_difficulty <level>` | *(stub — Phase 2b)* |
 | `reload_content` | *(stub — see issue #152)* |
