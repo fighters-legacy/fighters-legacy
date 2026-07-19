@@ -1,0 +1,28 @@
+name: "Demo: Gallery Flyover"
+map: world
+layer: world_clear
+time: { hour: 12, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [blue, red]
+# A museum row of the builtin placeholder silhouettes, one per surface category (#886), plus a bomber
+# and a SAM structure. Each object has no ai/route, so it never gets a controller/integrator and holds
+# its spawn transform — a static exhibit. A slow move camera tours the row; an orbit lingers on one.
+# The zero-pack asset catalog: the same intent as `--mission builtin:shape-gallery`, in a shot-track file.
+objects:
+  - { type: builtin:debug-entity, id: air, side: blue, pos: [0, 300, 0], heading: 90 }
+  - { type: builtin:bomber, id: bomber, side: blue, pos: [140, 300, 0], heading: 90 }
+  - { type: builtin:ground-vehicle, id: ground, side: blue, pos: [280, 300, 0], heading: 90 }
+  - { type: builtin:naval-vessel, id: naval, side: blue, pos: [420, 300, 0], heading: 90 }
+  - { type: builtin:sam-site, id: structure, side: red, pos: [560, 300, 0], heading: 90 }
+triggers:
+  - on: timer(40)
+    do: mission_success
+cameras:
+  shots:
+    # A slow museum pass down the row, looking at the middle exhibit.
+    - { type: move, start: 0, duration: 16, look_at: ground, ease: smooth,
+        keyframes: [ { time: 0, pos: [-160, 320, -120] }, { time: 8, pos: [280, 330, -140] }, { time: 16, pos: [720, 320, -120] } ] }
+    # Orbit the bomber silhouette.
+    - { type: orbit, start: 16, duration: 12, target: bomber, radius: 90, height: 30, period: 24 }
+    # A low static three-quarter view across the whole row.
+    - { type: static, start: 28, duration: 10, pos: [-120, 320, -160], look_at: naval, fov: 55 }

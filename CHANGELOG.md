@@ -9,6 +9,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **tools/mission**: `record_demo.py` driver + the v0.4.0 demo mission set (#917). `missions/demos/`
+  adds five zero-content-pack scripted demos with `cameras:` shots — `demo-dogfight`, `demo-sam-strike`,
+  `demo-formation-tour`, `demo-sensors-intercept`, and `demo-gallery-flyover` — plus a `demos.json`
+  manifest. `tools/record_demo/record_demo.py` orchestrates each: launch `fl-server --time-rate`, connect
+  a headless observer recorder, and `ffprobe` the output as a smoke check (`--all` records the set,
+  `--headless` sets the lavapipe env, `--png` skips ffmpeg). CI validates every demo mission on each PR
+  (`validate-mission missions/demos/*.yaml`, no GPU) and unit-tests the driver's pure helpers. Reference:
+  `docs/demo-recording.md`.
 - **game**: cinematic recorder client mode (#916). New `--record <out.mp4>` (+ `--record-fps`,
   `--record-res`, `--record-png-dir`, `--shot-track`, `--exit-on-mission-end`, `--record-max-sec`,
   `--record-max-dup`) drives the camera from a mission's `cameras:` shots via `ShotDirector` — resolving
