@@ -173,3 +173,160 @@ TEST_CASE("Multirotor: trim() declines honestly (non-converged)", "[multirotor]"
     const TrimResult r = trim(*d, pt, {});
     CHECK_FALSE(r.converged);
 }
+
+// ── helicopter (#350) ────────────────────────────────────────────────────────
+
+static const std::string kHeloToml = R"(
+[aircraft]
+name = "Test Helo"
+type = "helicopter"
+
+[flight_model]
+mass_kg   = 5000.0
+fuel_kg   = 1000.0
+ixx_kg_m2 = 6000.0
+iyy_kg_m2 = 40000.0
+izz_kg_m2 = 40000.0
+
+[helicopter]
+main_rotor_radius_m     = 8.2
+main_rotor_max_thrust_n = 90000.0
+yaw_moment_max_nm       = 40000.0
+cyclic_moment_nm        = 60000.0
+
+[engine]
+fuel_flow_idle_kg_s = 0.05
+fuel_flow_mil_kg_s  = 0.30
+)";
+
+static std::shared_ptr<FlightModelData> makeHelo(const std::string& toml = kHeloToml) {
+    return std::make_shared<FlightModelData>(parseFlightModel(toml));
+}
+
+static FlightIntegrator makeHeloAt(std::shared_ptr<FlightModelData> data, float collective, float altM) {
+    FlightIntegrator fi(std::move(data));
+    applyForceModelFor(fi, fi.flightModel());
+    FlightState s{};
+    s.pos_world[1] = altM;
+    s.mass_kg = fi.flightModel().geometry.mass_kg + fi.flightModel().geometry.fuel_kg;
+    s.fuel_kg = fi.flightModel().geometry.fuel_kg;
+    s.throttle_actual = collective;
+    fi.reset(s);
+    return fi;
+}
+
+TEST_CASE("Helicopter: [helicopter] parses into the reduced schema", "[helicopter]") {
+    auto d = makeHelo();
+    REQUIRE(d->helicopter.has_value());
+    CHECK(d->isHelicopter());
+    CHECK(d->isRotorcraft());
+    CHECK(d->helicopter->main_rotor_radius_m == Catch::Approx(8.2f));
+    CHECK(d->engine.fuel_flow_mil_kg_s == Catch::Approx(0.30f));
+    CHECK(d->engine.spool_time_s == Catch::Approx(1.0f)); // turboshaft default
+}
+
+TEST_CASE("Helicopter: missing [helicopter] table is rejected", "[helicopter]") {
+    std::string s = kHeloToml;
+    auto pos = s.find("[helicopter]");
+    auto end = s.find("[engine]");
+    REQUIRE(pos != std::string::npos);
+    s.erase(pos, end - pos);
+    CHECK_THROWS(parseFlightModel(s));
+}
+
+TEST_CASE("Helicopter: full collective climbs, low collective sinks", "[helicopter]") {
+    ControlInput full{};
+    full.throttle = 1.f;
+    auto climb = makeHeloAt(makeHelo(), 1.f, 500.f);
+    for (int i = 0; i < 60; ++i)
+        climb.step(1.f / 60.f, full, {});
+    CHECK(climb.state().vel_body[1] > 1.0);
+
+    ControlInput low{};
+    low.throttle = 0.2f;
+    auto sink = makeHeloAt(makeHelo(), 0.2f, 500.f);
+    for (int i = 0; i < 60; ++i)
+        sink.step(1.f / 60.f, low, {});
+    CHECK(sink.state().vel_body[1] < -1.0);
+}
+
+TEST_CASE("Helicopter: ground effect adds lift near the surface", "[helicopter]") {
+    // Same collective, one disc height off the deck vs well clear of it: the low machine sees the
+    // ground-effect thrust bonus and ends the second with more upward velocity.
+    auto run = [](float altM) {
+        ControlInput ctrl{};
+        ctrl.throttle = 0.65f;
+        auto fi = makeHeloAt(makeHelo(), 0.65f, altM);
+        for (int i = 0; i < 30; ++i)
+            fi.step(1.f / 60.f, ctrl, {});
+        return fi.state().vel_body[1];
+    };
+    CHECK(run(5.f) > run(500.f) + 0.05);
+}
+
+TEST_CASE("Helicopter: an unpowered disc autorotates to a survivable sink rate", "[helicopter]") {
+    // Engine out (fuel starvation flameout, #308): the machine descends, but the axial disc drag
+    // caps the sink far below free fall — terminal ~ sqrt(2W / (rho * A * cd)) ~= 19 m/s here.
+    auto fi = makeHeloAt(makeHelo(), 0.f, 2000.f);
+    FlightState s = fi.state();
+    s.fuel_kg = 0.f;
+    s.mass_kg = 5000.f;
+    fi.reset(s);
+    ControlInput ctrl{};
+    for (int i = 0; i < 600; ++i) // 10 s
+        fi.step(1.f / 60.f, ctrl, {});
+    CHECK((fi.state().engineFailFlags & kEngineFlameout) != 0);
+    CHECK(fi.state().vel_body[1] < -8.0);  // it IS descending
+    CHECK(fi.state().vel_body[1] > -30.0); // ...but nothing like free fall (~98 m/s by now)
+}
+
+TEST_CASE("Helicopter: cyclic and pedals command body rates with the right signs", "[helicopter]") {
+    ControlInput ctrl{};
+    ctrl.throttle = 0.6f;
+    SECTION("aft cyclic pitches up") {
+        auto fi = makeHeloAt(makeHelo(), 0.6f, 500.f);
+        ctrl.elevator = 1.f;
+        for (int i = 0; i < 30; ++i)
+            fi.step(1.f / 60.f, ctrl, {});
+        CHECK(fi.state().omega[2] > 0.05f);
+    }
+    SECTION("right cyclic rolls right") {
+        auto fi = makeHeloAt(makeHelo(), 0.6f, 500.f);
+        ctrl.aileron = 1.f;
+        for (int i = 0; i < 30; ++i)
+            fi.step(1.f / 60.f, ctrl, {});
+        CHECK(fi.state().omega[0] > 0.05f);
+    }
+    SECTION("right pedal yaws nose right") {
+        auto fi = makeHeloAt(makeHelo(), 0.6f, 500.f);
+        ctrl.rudder = 1.f;
+        for (int i = 0; i < 30; ++i)
+            fi.step(1.f / 60.f, ctrl, {});
+        CHECK(fi.state().omega[1] < -0.05f);
+    }
+}
+
+TEST_CASE("Helicopter: main-rotor torque reaction yaws the nose without pedal input", "[helicopter]") {
+    auto d = makeHelo();
+    d->helicopter->torque_factor = 0.05f;
+    auto fi = makeHeloAt(d, 0.7f, 500.f);
+    ControlInput ctrl{};
+    ctrl.throttle = 0.7f;
+    for (int i = 0; i < 30; ++i)
+        fi.step(1.f / 60.f, ctrl, {});
+    CHECK(fi.state().omega[1] < -0.01f); // nose right against the CCW main rotor
+}
+
+TEST_CASE("Helicopter: flapback pitches the nose up with forward speed", "[helicopter]") {
+    auto d = makeHelo();
+    d->helicopter->flapback_nm_per_mps = 400.f;
+    auto fi = makeHeloAt(d, 0.6f, 500.f);
+    FlightState s = fi.state();
+    s.vel_body[0] = 50.0; // fast forward flight
+    fi.reset(s);
+    ControlInput ctrl{};
+    ctrl.throttle = 0.6f;
+    for (int i = 0; i < 30; ++i)
+        fi.step(1.f / 60.f, ctrl, {});
+    CHECK(fi.state().omega[2] > 0.01f);
+}

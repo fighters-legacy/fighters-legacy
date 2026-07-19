@@ -262,6 +262,31 @@ struct MultirotorData {
     float rate_damping_s{1.0f};     // FC inner-loop rate feedback (s/rad); sets full-stick rate ≈ 1/k
 };
 
+// ── [helicopter] (#350) ──────────────────────────────────────────────────────
+// A single-main-rotor helicopter as a rotor DISC, not blade elements: collective drives
+// density-scaled disc thrust along body-up (ground effect and translational lift scale it), cyclic
+// tilts the disc (pitch/roll moments with rotor-follow rate damping), pedals command the tail
+// rotor against the optional main-rotor torque reaction, and an unpowered disc autorotates —
+// axial momentum drag through the disc caps the sink rate at a survivable figure, which is the
+// gameplay truth of autorotation without carrying rotor-RPM state. Blade flapping appears as the
+// classic flapback speed-stability moment (nose rises with forward speed).
+struct HelicopterData {
+    float main_rotor_radius_m{7.3f};       // disc geometry: ground effect + autorotation drag area
+    float main_rotor_max_thrust_n{130e3f}; // max collective thrust at sea-level density
+    float yaw_moment_max_nm{40e3f};        // tail-rotor yaw moment at full pedal
+    float cyclic_moment_nm{60e3f};         // pitch/roll moment at full cyclic
+    float rate_damping_s{1.5f};            // rotor-follow rate feedback (s/rad)
+    float flapback_nm_per_mps{0.f};        // nose-up moment per m/s of forward speed (0 = off)
+    float torque_factor{0.f};              // main-rotor torque reaction as a fraction of T·R that the
+                                           // pedals must hold against (0 = auto-trimmed hover)
+    float frame_cd{0.8f};                  // parasite flat-plate drag coefficient
+    float frame_area_m2{2.0f};             // parasite reference area
+    float ground_effect_frac{0.15f};       // max thrust bonus, fading out by one rotor diameter AGL
+    float translational_lift_frac{0.12f};  // max thrust bonus from effective translational lift
+    float translational_lift_mps{25.f};    // forward speed where the ETL bonus saturates
+    float autorotation_cd{1.2f};           // axial disc drag coefficient (the autorotation term)
+};
+
 struct CarrierData {
     float approach_m_s{69.f};
     float approach_aoa_deg{8.f};
@@ -318,6 +343,7 @@ struct FlightModelData {
     std::optional<PropData> prop;
     EngineData engine;
     std::optional<MultirotorData> multirotor; // #349: present iff type = "multirotor"
+    std::optional<HelicopterData> helicopter; // #350: present iff type = "helicopter"
     std::optional<CarrierData> carrier;
     std::optional<RefuelingData> refueling;
     std::optional<TankerData> tanker;

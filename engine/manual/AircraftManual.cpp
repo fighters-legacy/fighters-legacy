@@ -146,6 +146,8 @@ void addHoverPerformance(AircraftManual& out, const ManualSources& src, float ma
     float thrustSL = 0.f;
     if (fm.multirotor)
         thrustSL = static_cast<float>(fm.multirotor->rotor_count) * fm.multirotor->rotor_thrust_max_n;
+    else if (fm.helicopter)
+        thrustSL = fm.helicopter->main_rotor_max_thrust_n;
     if (thrustSL <= 0.f)
         return;
 

@@ -181,7 +181,8 @@ TEST_CASE("missing [aircraft] table fails", "[flight-model-validator]") {
 }
 
 TEST_CASE("invalid aircraft.type fails", "[flight-model-validator]") {
-    auto r = validateFlightModel(patch(kValidFighter, "type         = \"fighter\"", "type         = \"helicopter\""));
+    // "helicopter" was the invalid-type example until #350 made it real; a zeppelin still is not.
+    auto r = validateFlightModel(patch(kValidFighter, "type         = \"fighter\"", "type         = \"zeppelin\""));
     CHECK_FALSE(r.ok);
     bool found = false;
     for (const auto& e : r.errors)
@@ -700,5 +701,59 @@ TEST_CASE("#349: a multirotor without [multirotor] fails", "[flight-model-valida
 
 TEST_CASE("#349: an implausible rotor_count fails", "[flight-model-validator]") {
     auto r = validateFlightModel(patch(kValidQuad, "rotor_count        = 4", "rotor_count        = 2"));
+    CHECK_FALSE(r.ok);
+}
+
+// ── helicopter (#350) ────────────────────────────────────────────────────────
+
+static constexpr const char* kValidHelo = R"toml(
+[aircraft]
+name = "Test Helo"
+type = "helicopter"
+
+[flight_model]
+mass_kg   = 5000.0
+fuel_kg   = 1000.0
+ixx_kg_m2 = 6000.0
+iyy_kg_m2 = 40000.0
+izz_kg_m2 = 40000.0
+
+[helicopter]
+main_rotor_radius_m     = 8.2
+main_rotor_max_thrust_n = 90000.0
+yaw_moment_max_nm       = 40000.0
+cyclic_moment_nm        = 60000.0
+
+[engine]
+fuel_flow_idle_kg_s = 0.05
+fuel_flow_mil_kg_s  = 0.30
+)toml";
+
+TEST_CASE("#350: a valid helicopter validates against the reduced schema", "[flight-model-validator]") {
+    auto r = validateFlightModel(kValidHelo);
+    CHECK(r.ok);
+    CHECK(r.errors.empty());
+}
+
+TEST_CASE("#350: a helicopter that cannot hover fails", "[flight-model-validator]") {
+    auto r = validateFlightModel(
+        patch(kValidHelo, "main_rotor_max_thrust_n = 90000.0", "main_rotor_max_thrust_n = 40000.0"));
+    CHECK_FALSE(r.ok); // 40 kN < 58.8 kN all-up weight
+}
+
+TEST_CASE("#350: implausible disc loading warns", "[flight-model-validator]") {
+    // Radius entered in feet (26.9) triples the disc loading past the band.
+    auto r = validateFlightModel(patch(kValidHelo, "main_rotor_radius_m     = 8.2", "main_rotor_radius_m     = 3.0"));
+    bool found = false;
+    for (const auto& w : r.warnings)
+        found = found || w.find("disc loading") != std::string::npos;
+    CHECK(found);
+}
+
+TEST_CASE("#350: a helicopter without [engine] fuel flows fails", "[flight-model-validator]") {
+    std::string s(kValidHelo);
+    auto pos = s.find("[engine]");
+    REQUIRE(pos != std::string::npos);
+    auto r = validateFlightModel(s.substr(0, pos));
     CHECK_FALSE(r.ok);
 }

@@ -355,6 +355,50 @@ motor_response_s   = 0.2    # optional (default 0.2) — motor spool response
 The in-game manual derives a **hover chart** for rotorcraft (thrust-to-weight, hover throttle,
 hover ceiling, endurance) instead of the fixed-wing trim table.
 
+### Helicopters — `type = "helicopter"`
+
+A single-main-rotor helicopter (#350) is modelled as a rotor **disc**: collective (the throttle
+axis) drives density-scaled disc thrust, scaled up by ground effect near the surface and by
+effective translational lift with forward speed; cyclic (pitch/roll stick) tilts the disc; pedals
+command the tail rotor against the optional main-rotor torque reaction; an unpowered disc
+**autorotates** — axial momentum drag through the disc caps the sink rate at a survivable figure
+(terminal sink ≈ `sqrt(2·W / (ρ·π·R²·autorotation_cd))`). Blade flapping appears as the classic
+flapback speed-stability moment. The turboshaft burns fuel through the normal idle→mil path, and
+the #308 engine-failure dynamics (fuel starvation, `flameout_alt_km`) apply.
+
+```toml
+[aircraft]
+name = "Example Utility Helicopter"
+type = "helicopter"           # engine_type not required (turboshaft)
+
+[flight_model]                # masses + inertias required; wing fields not required
+mass_kg   = 5000.0
+fuel_kg   = 1000.0
+ixx_kg_m2 = 6000.0
+iyy_kg_m2 = 40000.0
+izz_kg_m2 = 40000.0
+
+[helicopter]                  # required for helicopter models
+main_rotor_radius_m     = 8.2      # disc geometry: ground effect + autorotation drag area
+main_rotor_max_thrust_n = 90000.0  # max collective thrust at sea level; must out-lift the weight
+yaw_moment_max_nm       = 40000.0  # tail-rotor yaw moment at full pedal
+cyclic_moment_nm        = 60000.0  # pitch/roll moment at full cyclic
+rate_damping_s          = 1.5      # optional — rotor-follow rate feedback
+flapback_nm_per_mps     = 0.0      # optional — nose-up moment per m/s forward (speed stability)
+torque_factor           = 0.0      # optional — torque reaction the pedals must hold (0 = auto-trim)
+frame_cd                = 0.8      # optional — parasite flat-plate drag coefficient
+frame_area_m2           = 2.0      # optional — parasite reference area
+ground_effect_frac      = 0.15     # optional — thrust bonus on the deck, gone by one diameter AGL
+translational_lift_frac = 0.12     # optional — ETL thrust bonus, saturating at the speed below
+translational_lift_mps  = 25.0     # optional
+autorotation_cd         = 1.2      # optional — axial disc drag (the autorotation term)
+
+[engine]                      # turboshaft fuel flows required; no thrust decks
+fuel_flow_idle_kg_s = 0.05
+fuel_flow_mil_kg_s  = 0.30
+spool_time_s        = 1.0     # optional (default 1.0)
+```
+
 ---
 
 ## Weapon Data — TOML

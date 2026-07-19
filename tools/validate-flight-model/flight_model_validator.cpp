@@ -983,6 +983,67 @@ static void validateMultirotor(const toml::table& tbl, FlightModelValidationResu
     }
 }
 
+// [helicopter] (#350): required disc/control fields positive, the cannot-hover error, and a disc
+// loading plausibility band — real helicopters run roughly 100–900 N/m^2 of disc; far outside that
+// is a units mistake (radius in feet, thrust in kgf...).
+static void validateHelicopter(const toml::table& tbl, FlightModelValidationResult& r) {
+    auto h = tbl["helicopter"];
+    if (!h) {
+        r.errors.push_back("helicopter model: missing [helicopter] table");
+        r.ok = false;
+        return;
+    }
+    auto checkPos = [&](const char* key) {
+        auto v = h[key].value<double>();
+        if (!v) {
+            r.errors.push_back(std::string("missing helicopter.") + key);
+            r.ok = false;
+        } else if (*v <= 0.0) {
+            r.errors.push_back(std::string("helicopter.") + key + " must be > 0");
+            r.ok = false;
+        }
+        return v;
+    };
+    const auto radius = checkPos("main_rotor_radius_m");
+    const auto thrust = checkPos("main_rotor_max_thrust_n");
+    checkPos("yaw_moment_max_nm");
+    checkPos("cyclic_moment_nm");
+
+    // Turboshaft fuel flows are required (the runtime parser requires them too).
+    auto eng = tbl["engine"];
+    if (!eng) {
+        r.errors.push_back("helicopter model: missing [engine] table (turboshaft fuel flows)");
+        r.ok = false;
+    } else {
+        for (const char* key : {"fuel_flow_idle_kg_s", "fuel_flow_mil_kg_s"}) {
+            if (!eng[key].value<double>()) {
+                r.errors.push_back(std::string("missing engine.") + key);
+                r.ok = false;
+            }
+        }
+    }
+
+    const auto mass = tbl["flight_model"]["mass_kg"].value<double>();
+    const auto fuel = tbl["flight_model"]["fuel_kg"].value<double>();
+    if (thrust && mass) {
+        const double weight = (*mass + fuel.value_or(0.0)) * 9.80665;
+        if (*thrust <= weight) {
+            r.errors.push_back("helicopter cannot hover: main_rotor_max_thrust_n (" + std::to_string(*thrust) +
+                               " N) does not exceed the all-up weight (" + std::to_string(weight) + " N)");
+            r.ok = false;
+        } else if (*thrust < 1.15 * weight) {
+            r.warnings.push_back("helicopter thrust-to-weight is under 1.15; expect a marginal hover with no "
+                                 "climb reserve");
+        }
+    }
+    if (thrust && radius && *radius > 0.0) {
+        const double discLoading = *thrust / (3.14159265358979 * *radius * *radius);
+        if (discLoading < 100.0 || discLoading > 900.0)
+            r.warnings.push_back("helicopter disc loading " + std::to_string(discLoading) +
+                                 " N/m^2 is outside the plausible 100-900 band; check units");
+    }
+}
+
 FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
     FlightModelValidationResult r;
 
@@ -1031,6 +1092,13 @@ FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
     if (const auto typeStr = tbl["aircraft"]["type"].value<std::string>(); typeStr && *typeStr == "multirotor") {
         validateRotorcraftCore(tbl, r);
         validateMultirotor(tbl, r);
+        return r;
+    }
+
+    // Helicopters (#350): the rotor-disc reduced schema.
+    if (const auto typeStr = tbl["aircraft"]["type"].value<std::string>(); typeStr && *typeStr == "helicopter") {
+        validateRotorcraftCore(tbl, r);
+        validateHelicopter(tbl, r);
         return r;
     }
 

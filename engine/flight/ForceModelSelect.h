@@ -3,6 +3,7 @@
 
 #include "flight/BallisticForceModel.h"
 #include "flight/FlightIntegrator.h"
+#include "flight/HelicopterForceModel.h"
 #include "flight/MultirotorForceModel.h"
 
 namespace fl {
@@ -19,6 +20,8 @@ inline void applyForceModelFor(FlightIntegrator& fi, const FlightModelData& d) {
         fi.setSpeedGuard(8000.0); // an MRBM legitimately outruns the NaN backstop built for aircraft
     } else if (d.isMultirotor()) {
         fi.setForceModel(MultirotorForceModel::instance());
+    } else if (d.isHelicopter()) {
+        fi.setForceModel(HelicopterForceModel::instance());
     }
     // Anything else keeps the FixedWingForceModel default bound by the integrator itself.
 }

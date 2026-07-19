@@ -336,7 +336,9 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrlIn, const PayloadE
 
     // 7. Aerodynamic + propulsive forces and moments via the swappable force model (default
     // FixedWingForceModel). Gravity and turbulence are added below by the integrator core.
-    const AeroInputs aero{alpha_rad, beta_rad, mach, spd, altitude_m};
+    // agl_m: rotor ground effect (#350) reads height above terrain; fixed-wing ignores it.
+    const AeroInputs aero{alpha_rad, beta_rad,   mach,
+                          spd,       altitude_m, static_cast<float>(startAlt - static_cast<double>(groundElev))};
     ControlInput eff_ctrl = ctrl;
 
     // 7a. FLY-BY-WIRE ENVELOPE PROTECTION (#816, extended #900).

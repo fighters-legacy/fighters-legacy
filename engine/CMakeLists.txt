@@ -180,6 +180,7 @@ add_library(engine-flight STATIC
     flight/FlightIntegrator.cpp
     flight/BallisticForceModel.cpp
     flight/FixedWingForceModel.cpp
+    flight/HelicopterForceModel.cpp
     flight/MultirotorForceModel.cpp
     flight/Trim.cpp
 )

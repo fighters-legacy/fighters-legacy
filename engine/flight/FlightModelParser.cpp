@@ -272,6 +272,67 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         return d;
     }
 
+    // ── helicopters (#350): the rotor-disc reduced schema ─────────────────────
+    // A helicopter's lift is a rotor disc, not a wing — [helicopter] carries the disc, cyclic,
+    // tail-rotor and autorotation parameters HelicopterForceModel flies. The turboshaft burns fuel
+    // through the integrator's normal throttle-shaped path, so [engine] fuel flows are required
+    // (unlike the multirotor's endurance shortcut); thrust decks are not. Same benign-placeholder
+    // discipline as ballistic/multirotor for the aero tables.
+    if (d.meta.role == AircraftRole::Helicopter) {
+        auto hNode = tbl["helicopter"];
+        if (!hNode || !hNode.as_table())
+            throw std::runtime_error("helicopter model: missing [helicopter] table");
+        HelicopterData h;
+        h.main_rotor_radius_m = req_float(hNode["main_rotor_radius_m"], "helicopter.main_rotor_radius_m");
+        h.main_rotor_max_thrust_n = req_float(hNode["main_rotor_max_thrust_n"], "helicopter.main_rotor_max_thrust_n");
+        h.yaw_moment_max_nm = req_float(hNode["yaw_moment_max_nm"], "helicopter.yaw_moment_max_nm");
+        h.cyclic_moment_nm = req_float(hNode["cyclic_moment_nm"], "helicopter.cyclic_moment_nm");
+        if (h.main_rotor_radius_m <= 0.f || h.main_rotor_max_thrust_n <= 0.f || h.yaw_moment_max_nm <= 0.f ||
+            h.cyclic_moment_nm <= 0.f)
+            throw std::runtime_error("helicopter: rotor radius/thrust and control moments must be > 0");
+        h.rate_damping_s = static_cast<float>(hNode["rate_damping_s"].value<double>().value_or(1.5));
+        h.flapback_nm_per_mps = static_cast<float>(hNode["flapback_nm_per_mps"].value<double>().value_or(0.0));
+        h.torque_factor = static_cast<float>(hNode["torque_factor"].value<double>().value_or(0.0));
+        h.frame_cd = static_cast<float>(hNode["frame_cd"].value<double>().value_or(0.8));
+        h.frame_area_m2 = static_cast<float>(hNode["frame_area_m2"].value<double>().value_or(2.0));
+        h.ground_effect_frac = static_cast<float>(hNode["ground_effect_frac"].value<double>().value_or(0.15));
+        h.translational_lift_frac = static_cast<float>(hNode["translational_lift_frac"].value<double>().value_or(0.12));
+        h.translational_lift_mps = static_cast<float>(hNode["translational_lift_mps"].value<double>().value_or(25.0));
+        h.autorotation_cd = static_cast<float>(hNode["autorotation_cd"].value<double>().value_or(1.2));
+        d.helicopter = h;
+
+        // Turboshaft fuel: idle → mil across collective, the integrator's existing burn path.
+        auto eng = tbl["engine"];
+        if (!eng)
+            throw std::runtime_error("helicopter model: missing [engine] table (turboshaft fuel flows)");
+        d.engine.fuel_flow_idle_kg_s = req_float(eng["fuel_flow_idle_kg_s"], "engine.fuel_flow_idle_kg_s");
+        d.engine.fuel_flow_mil_kg_s = req_float(eng["fuel_flow_mil_kg_s"], "engine.fuel_flow_mil_kg_s");
+        d.engine.fuel_flow_ab_kg_s = d.engine.fuel_flow_mil_kg_s; // no augmentor on a turboshaft
+        d.engine.spool_time_s = static_cast<float>(eng["spool_time_s"].value<double>().value_or(1.0));
+        if (auto n = tomlInt(eng["engine_count"]))
+            d.engine.engine_count = static_cast<int>(*n);
+        // #308 engine failure dynamics apply to a turboshaft too.
+        if (auto f = eng["flameout_alt_km"].value<double>())
+            d.engine.flameout_alt_km = static_cast<float>(*f);
+        if (auto rl = eng["relight_min_mps"].value<double>())
+            d.engine.relight_min_mps = static_cast<float>(*rl);
+
+        // Benign placeholder aero (the ballistic/multirotor discipline).
+        d.geometry.wing_area_m2 = h.frame_area_m2;
+        d.drag_polar.cd0 = h.frame_cd;
+        d.drag_polar.k = 0.f;
+        d.cl_table.rows = {-90.f, -30.f, 30.f, 90.f};
+        d.cl_table.cols = {0.f, 30.f};
+        d.cl_table.values.assign(8, 0.f);
+        d.engine.mil_thrust.rows = {0.f, 30.f};
+        d.engine.mil_thrust.cols = {0.f, 90.f};
+        d.engine.mil_thrust.values.assign(4, 0.f);
+        d.limits.alpha_stall_deg = 90.f; // the disc does not stall like a wing
+        d.limits.max_g_structural = 100.f;
+        d.limits.min_g_structural = -100.f;
+        return d;
+    }
+
     // ── [aero.cl_table] ───────────────────────────────────────────────────────
     {
         auto cl = tbl["aero"]["cl_table"];
