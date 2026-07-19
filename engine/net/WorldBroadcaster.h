@@ -541,6 +541,19 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // occupancy; call before gameLoop.start().
     void setMissionPlayerSlots(std::vector<MissionSpawnSlot> slots);
 
+    // Install the mission roster (#914): the (mission-object-id -> entity) map sent to a connecting peer
+    // as MsgMissionRoster after ConnectAck, so the cinematic recorder can resolve an entity-relative
+    // camera shot's target to a live network entity. Call before gameLoop.start() (sim-thread). Entries
+    // with an invalid EntityId (e.g. an unbound player slot) are held until updateMissionRoster binds them.
+    void setMissionRoster(std::vector<std::pair<std::string, EntityId>> roster) {
+        m_missionRoster = std::move(roster);
+    }
+
+    // Update one mission-object -> entity binding at runtime and broadcast the delta to all peers
+    // (sim-thread). Called when a pilot claims/frees a player slot so a late-bound aircraft still appears
+    // in every recorder's roster. A no-op when the object id is not part of the mission roster.
+    void updateMissionRoster(const std::string& missionObjectId, EntityId entity);
+
     // World-XZ position of the most recently stepped peer entity (sim thread writes;
     // main thread may read to steer terrain loading).
     double cachedEntityX() const noexcept {
@@ -1267,6 +1280,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     std::vector<uint32_t> m_slotOccupant;
     std::unordered_map<uint32_t, int> m_peerSlot;
     MissionSlotBinder m_missionSlotBinder; // notified on slot claim/free for destroy(<id>) tracking (#884)
+
+    // Mission roster (#914): mission-object-id -> entity, sent as MsgMissionRoster after ConnectAck so
+    // the cinematic recorder can resolve entity-relative camera shots. Sim-thread only.
+    std::vector<std::pair<std::string, EntityId>> m_missionRoster;
 
     std::unordered_set<std::string> m_bannedAddresses; // in-memory ban list; sim-thread only
 

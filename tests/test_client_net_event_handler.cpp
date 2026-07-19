@@ -211,6 +211,54 @@ TEST_CASE("ClientNetEventHandler: MsgMotd packet too small does not set notice",
     CHECK(notice.buildElements().empty());
 }
 
+TEST_CASE("ClientNetEventHandler: MsgMissionRoster populates the object-id -> entity map (#914)",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // Build a two-record roster packet the way WorldBroadcaster sends it.
+    std::vector<uint8_t> pkt;
+    fl::MsgMissionRoster a{};
+    a.entityIdx = 11;
+    a.entityGen = 2;
+    std::snprintf(a.objectId, sizeof(a.objectId), "%s", "bandit1");
+    fl::MsgMissionRoster b{};
+    b.entityIdx = 5;
+    b.entityGen = 9;
+    std::snprintf(b.objectId, sizeof(b.objectId), "%s", "player1");
+    fl::appendMsg(pkt, a);
+    fl::appendMsg(pkt, b);
+
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    uint32_t idx = 0;
+    uint16_t gen = 0;
+    REQUIRE(handler.missionEntity("bandit1", idx, gen));
+    CHECK(idx == 11u);
+    CHECK(gen == 2u);
+    REQUIRE(handler.missionEntity("player1", idx, gen));
+    CHECK(idx == 5u);
+    CHECK(gen == 9u);
+    CHECK_FALSE(handler.missionEntity("ghost", idx, gen));
+
+    // A single-record delta (late player-slot bind) updates the mapping in place.
+    std::vector<uint8_t> delta;
+    fl::MsgMissionRoster upd{};
+    upd.entityIdx = 77;
+    upd.entityGen = 4;
+    std::snprintf(upd.objectId, sizeof(upd.objectId), "%s", "player1");
+    fl::appendMsg(delta, upd);
+    handler.onReceive(0u, delta.data(), delta.size());
+    REQUIRE(handler.missionEntity("player1", idx, gen));
+    CHECK(idx == 77u);
+    CHECK(gen == 4u);
+}
+
 TEST_CASE("ClientNetEventHandler: unknown msgId discarded, no notice", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;

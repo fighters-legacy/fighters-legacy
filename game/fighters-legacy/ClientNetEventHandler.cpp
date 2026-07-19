@@ -630,6 +630,19 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             fd.name[sizeof(fd.name) - 1] = '\0';
             m_factionNames[fd.factionIndex] = fd.name[0] ? fd.name : fd.id;
         }
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::MissionRoster)) {
+        // Mission object id -> entity idx/gen (#914), one reliable packet of concatenated records (sent
+        // after ConnectAck, plus single-record deltas as player slots bind). Lets the cinematic recorder
+        // resolve an entity-relative camera shot's target to a network entity. Force-terminate the id.
+        const std::size_t count = size / sizeof(fl::MsgMissionRoster);
+        for (std::size_t i = 0; i < count; ++i) {
+            fl::MsgMissionRoster mr;
+            if (!fl::readRecordAt(data, size, i * sizeof(mr), mr))
+                break;
+            mr.objectId[sizeof(mr.objectId) - 1] = '\0';
+            if (mr.objectId[0])
+                m_missionRoster[mr.objectId] = {mr.entityIdx, mr.entityGen};
+        }
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::Datalink)) {
         handleDatalink(data, size);
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::CrewRoster)) {

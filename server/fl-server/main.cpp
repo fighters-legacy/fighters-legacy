@@ -1331,6 +1331,11 @@ int main(int argc, char** argv) {
                 for (const fl::PlayerSlot& ps : setup.playerSlots)
                     objectEntities.emplace_back(ps.id, fl::EntityId{});
 
+                // Publish the object-id -> entity map to the broadcaster (#914): it is sent as
+                // MsgMissionRoster after ConnectAck so a cinematic recorder can resolve entity-relative
+                // camera shots. Copy before the map is moved into the MissionRuntime below.
+                broadcaster.setMissionRoster(objectEntities);
+
                 missionRuntime = std::make_unique<fl::MissionRuntime>(
                     parsed.mission, std::move(objectEntities), entityManager,
                     [log, &missionActionSink](std::string_view action) {
@@ -1376,9 +1381,12 @@ int main(int argc, char** argv) {
                 // Bind a pilot's aircraft to its player-slot id on connect (and unbind on disconnect), so
                 // destroy(<slot-id>) tracks the live aircraft instead of firing at t=0 (#884). Fired from
                 // the handshake on the sim thread — the same thread that steps the runtime.
-                broadcaster.setMissionSlotBinder([rt = missionRuntime.get()](const std::string& id, fl::EntityId eid) {
-                    rt->registerObjectEntity(id, eid);
-                });
+                broadcaster.setMissionSlotBinder(
+                    [rt = missionRuntime.get(), &broadcaster](const std::string& id, fl::EntityId eid) {
+                        rt->registerObjectEntity(id, eid);
+                        // Advertise the late slot<->aircraft bind so a recorder's mission roster stays current (#914).
+                        broadcaster.updateMissionRoster(id, eid);
+                    });
                 loadedMissionName = parsed.mission.name;
                 loadedMissionSpawned = setup.spawned.size();
 

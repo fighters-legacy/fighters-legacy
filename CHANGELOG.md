@@ -9,6 +9,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **netcode**: `MsgMissionRoster` (`0x1B`) entity→mission-object-id table (#914). Sent reliably after
+  `MsgConnectAck` (plus single-record deltas as player slots bind), it maps each spawned mission
+  object's entity idx/gen to its mission object id, so the cinematic recorder can resolve an
+  entity-relative camera shot's `target`/`look_at` ("orbit bandit1") to a live network entity.
+  Self-describing concatenated records modelled on `MsgFactionDef`; additive, `kProtocolVersion`
+  unchanged. **Mission-end** for the recorder's `--exit-on-mission-end` reuses the existing
+  `MsgMissionOutcome` (`0x18`, #584) — which already broadcasts the terminal outcome from the same
+  `MissionRuntime::setOnEnd` hook — rather than adding a redundant `CombatEventType::MissionEnd` with
+  no distinct payload (the "clients never learn mission end" gap the epic cited was closed by #584).
 - **server**: `--time-rate` flag + `TimeRate::Quarter`/`Eighth` (#915). fl-server can now run its sim at
   a reduced wall-clock rate (`--time-rate quarter|eighth|…`) applied after startup. The sim step stays
   1/60 s — content is byte-identical; ticks simply arrive slower in real time, so a slow (software-

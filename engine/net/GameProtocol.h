@@ -104,6 +104,12 @@ enum class MsgId : uint8_t {
     RadioTransmission = 0x1A,  // server->client, reliable: one spoken radio line (#703) — speaker,
                                // localizable text, a stable voiceKey (TTS/pack OGG), and a subtitle
                                // dwell. Unicast (directed) or broadcast. Additive id, old clients discard.
+    MissionRoster = 0x1B,      // server->client, reliable: entity index/gen -> mission object id table
+                               // (#914). Sent after ConnectAck (beside FactionDef) with the current
+                               // spawned mission objects + bound player slots, so the cinematic recorder
+                               // (#909) can resolve entity-relative camera shots ("orbit bandit1") to
+                               // network entities. Self-describing concatenated records; additive id, old
+                               // clients discard. See MsgMissionRoster below. (0x1C-0x1F remain free.)
     LanBeacon = 0x20,          // raw UDP broadcast - NOT sent over ENet; 0x20+ reserved for non-ENet ids.
                                // ENet message ids occupy 0x00-0x1F. The non-ENet boundary was raised
                                // from 0x10 to 0x20 in #853 to free an ENet id for ConnectRequest -- a
@@ -245,6 +251,24 @@ static_assert(alignof(MsgFactionDef) == 2u, "MsgFactionDef alignment changed");
 static_assert(offsetof(MsgFactionDef, factionIndex) == 2u, "MsgFactionDef::factionIndex offset changed");
 static_assert(offsetof(MsgFactionDef, id) == 4u, "MsgFactionDef::id offset changed");
 static_assert(offsetof(MsgFactionDef, name) == 68u, "MsgFactionDef::name offset changed");
+
+// One entity <-> mission-object-id mapping (#914). Self-describing concatenated records (no header),
+// exactly like MsgFactionDef: the client reads size / sizeof(MsgMissionRoster) of them. Sent reliably
+// after ConnectAck with the current spawned mission objects + bound player slots, so the cinematic
+// recorder's ShotDirector can resolve an entity-relative shot's target/look_at (a mission object id)
+// to a live network entity. entityGen is carried so a pool-slot reuse never resolves to an impostor.
+struct MsgMissionRoster {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::MissionRoster)};
+    uint8_t reserved{0};
+    uint16_t entityGen{0}; // EntityId generation of the mapped entity
+    uint32_t entityIdx{0}; // EntityId pool index of the mapped entity
+    char objectId[64]{};   // null-terminated mission object id, e.g. "bandit1"
+}; // 72 bytes, align 4
+static_assert(sizeof(MsgMissionRoster) == 72u, "MsgMissionRoster wire size changed");
+static_assert(alignof(MsgMissionRoster) == 4u, "MsgMissionRoster alignment changed");
+static_assert(offsetof(MsgMissionRoster, entityGen) == 2u, "MsgMissionRoster::entityGen offset changed");
+static_assert(offsetof(MsgMissionRoster, entityIdx) == 4u, "MsgMissionRoster::entityIdx offset changed");
+static_assert(offsetof(MsgMissionRoster, objectId) == 8u, "MsgMissionRoster::objectId offset changed");
 
 // Runtime occupancy of a crew seat (#972). Authoring is two-state (Bot|Empty, SeatOccupancyDefault);
 // a human claiming a seat (#974) is a RUNTIME state, so the WIRE occupancy is three-state. Validate an
