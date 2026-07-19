@@ -539,6 +539,19 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     using SeatControllerFactory = std::function<std::unique_ptr<ISeatController>(const SeatDef& seat, uint8_t seatIdx)>;
     void setSeatControllerFactory(SeatControllerFactory fn);
 
+    // ── Seat occupancy (#972) — the mechanism the #974 join protocol drives ──────────────────────
+    // Bind human peer `peerId` to NON-fly seat `seat` of the crewed aircraft `id`: mark the seat's
+    // occupant (its authored bot goes dormant — sampleCrewSeats prefers the human), record the
+    // peer→{aircraft,seat} binding so its masked MsgClientInput drives that seat's channels, and
+    // re-broadcast the roster. Returns false for an unknown / non-crewed aircraft, an out-of-range
+    // seat, or the Fly seat (that seat belongs to the aircraft's owning pilot, not a joinable seat).
+    // Sim-thread only. Does NOT spawn/despawn an entity — a gunner occupies an airframe it does not own.
+    bool setSeatOccupant(EntityId id, uint8_t seat, uint32_t peerId);
+    // Vacate `peerId`'s non-fly seat (if any): clear its occupant so the authored bot resumes, drop the
+    // binding, and re-broadcast the roster. A no-op for a Fly-seat pilot (its aircraft's despawn owns
+    // that teardown). Sim-thread only; called on a gunner's disconnect and the #974 leave path.
+    void clearSeatOccupant(uint32_t peerId);
+
     // ---------------------------------------------------------------------------------------------
     // Sensing (#685)
     // ---------------------------------------------------------------------------------------------
@@ -900,8 +913,19 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     const FactionRegistry* m_factionRegistry{nullptr}; // coalition-aware hostility for AI (#632)
     std::function<void(uint64_t)> m_missionTickHook;   // mission objective evaluator, end of onTick (#633)
 
-    std::unordered_map<uint32_t, EntityId> m_peerEntities;
+    std::unordered_map<uint32_t, EntityId> m_peerEntities; // the aircraft a peer OWNS (Fly-seat pilots)
     std::unordered_map<uint32_t, PeerInputState> m_peerInputs;
+
+    // Seat occupancy binding (#972): which SEAT of which aircraft a human peer occupies. Generalizes
+    // m_peerEntities (peer→aircraft) to peer→{aircraft, seat}: a pilot occupies its own aircraft's Fly
+    // seat; a gunner (#974) occupies a NON-fly seat of an aircraft it does not own (so it has a
+    // m_peerSeat entry but no m_peerEntities entry). Drives the snapshot own-record (a seat occupant
+    // gets omega + loadout) and the seat-scoped input routing. Sim-thread only.
+    struct PeerSeatBinding {
+        EntityId entity{};
+        uint8_t seatIndex{0};
+    };
+    std::unordered_map<uint32_t, PeerSeatBinding> m_peerSeat;
 
     // Formations and the wingman order path (#610). Sim-thread only, like every other roster here.
     fl::FormationRegistry m_formations;
@@ -952,6 +976,23 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     void sampleCrewSeats(ControlledEntity& ce, const EntityState& st, uint64_t tick, double dt,
                          const AiTickContext& ctx);
     void runCrewedFire(ControlledEntity& ce, uint32_t idx, uint64_t tick);
+    // Seat-scoped human input (#972): serial pre-pass before the AI pass. For every crewed entity's
+    // NON-fly seat held by a human peer, mask that peer's raw MsgClientInput by the seat's capabilities
+    // and store the resulting SeatCommand on the seat (turret aim from viewAxis, fire from buttons,
+    // station clamped to the seat's partition). Serial so the m_peerInputs reads are race-free; the
+    // parallel AI pass then only reads the seat's own cached command. No-op when no human occupies a
+    // non-fly seat (the only case reachable until the #974 join protocol lands).
+    void applyHumanCrewInput(uint64_t tick);
+    // The peer occupying seat `seat` of `id`, or kNoOwningPeer. Generalizes peerIdForEntity to a
+    // specific seat (#972); pilotPeerFor is peerIdForEntity (the aircraft's owner / Fly seat).
+    [[nodiscard]] uint32_t occupantPeerFor(EntityId id, uint8_t seat) const noexcept;
+    // Build + send one crewed aircraft's seat roster (MsgCrewRoster, reliable) to a peer, or broadcast
+    // it to every admitted peer. No-op for a single-seat / non-crewed entity (#972).
+    void sendCrewRoster(uint32_t peerId, EntityId id);
+    void broadcastCrewRoster(EntityId id);
+    // Serialize one crewed aircraft's roster (MsgCrewRosterHeader + CrewRosterSeat[]) into `out`.
+    // Returns false (leaving `out` untouched) for a single-seat / non-crewed / unknown entity.
+    [[nodiscard]] bool buildCrewRosterPacket(EntityId id, std::vector<uint8_t>& out) const;
     // The shooter's designated target through the #610 seam: peer viewAxis or AI nose (#627/#628).
     EntityId designateFor(const EntityState& shooter, uint32_t ownerPeer) const;
     void queueEffect(uint8_t type, uint8_t weaponClass, uint32_t srcIdx, uint32_t tgtIdx, const double pos[3]);

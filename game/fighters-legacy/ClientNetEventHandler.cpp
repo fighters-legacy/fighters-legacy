@@ -322,6 +322,13 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
                     fx && fxLen > 0)
                     routeEffectsTlv(*effects, fx, fxLen);
             }
+
+            // Live crew turret pose (#972): decode each crewed entity's mount-frame az/el for the
+            // gunner station / turret rendering (#975/#979). Absent for a single-seat-only interest set.
+            uint16_t crewLen = 0;
+            if (const uint8_t* cp = fl::findExt(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotCrew), crewLen);
+                cp && crewLen > 0)
+                applyCrewTurretTlv(cp, crewLen);
         }
 
         // Advance the selective-ack decoded-tick mask before moving the high-water mark (#566). This
@@ -565,8 +572,78 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         }
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::Datalink)) {
         handleDatalink(data, size);
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::CrewRoster)) {
+        handleCrewRoster(data, size);
     }
     // Unknown msgIds: silently discard
+}
+
+void ClientNetEventHandler::handleCrewRoster(const void* data, std::size_t size) {
+    // One crewed aircraft's seat roster (#972). Header + seatCount CrewRosterSeat records. Force-
+    // terminate the fixed role field before treating it as a C string; a short/malformed packet leaves
+    // the previous roster in place rather than replacing it with a partial one.
+    fl::MsgCrewRosterHeader hdr;
+    if (!fl::readMsg(data, size, hdr))
+        return;
+    const std::size_t need = sizeof(hdr) + static_cast<std::size_t>(hdr.seatCount) * sizeof(fl::CrewRosterSeat);
+    if (size < need)
+        return;
+
+    CrewRosterInfo info;
+    info.entityIdx = hdr.entityIdx;
+    info.entityGen = hdr.entityGen;
+    info.turretCount = hdr.turretCount;
+    info.seats.reserve(hdr.seatCount);
+    for (uint8_t s = 0; s < hdr.seatCount; ++s) {
+        fl::CrewRosterSeat rec;
+        if (!fl::readRecordAt(data, size, sizeof(hdr) + std::size_t(s) * sizeof(rec), rec))
+            return;
+        rec.role[sizeof(rec.role) - 1] = '\0';
+        CrewSeatInfo si;
+        si.seatIndex = rec.seatIndex;
+        si.occupancy = rec.occupancy;
+        si.capabilities = rec.capabilities;
+        si.occupantPeerId = rec.occupantPeerId;
+        si.skillPct = rec.skillPct;
+        si.turretIndex = rec.turretIndex;
+        si.role = rec.role;
+        info.seats.push_back(std::move(si));
+    }
+    m_crewRosters[hdr.entityIdx] = std::move(info);
+}
+
+void ClientNetEventHandler::applyCrewTurretTlv(const uint8_t* payload, std::size_t len) {
+    // Payload: uint8 entryCount, then entryCount x { uint32 entityIdx (LE), uint8 turretCount,
+    // turretCount x { int16 azQ, int16 elQ } }. Bounds-checked; a truncated tail stops the scan. The
+    // wire quant is symmetric: az over [-pi,pi], el over [-pi/2,pi/2], both to int16.
+    constexpr float kPi = 3.14159265358979323846f;
+    if (len < 1)
+        return;
+    const uint8_t entryCount = payload[0];
+    std::size_t off = 1;
+    for (uint8_t e = 0; e < entryCount; ++e) {
+        if (off + 5 > len)
+            return;
+        uint32_t idx = 0;
+        std::memcpy(&idx, payload + off, 4);
+        const uint8_t tc = payload[off + 4];
+        off += 5;
+        if (off + static_cast<std::size_t>(tc) * 4u > len)
+            return;
+        std::vector<CrewTurretPose> poses;
+        poses.reserve(tc);
+        for (uint8_t t = 0; t < tc; ++t) {
+            int16_t azQ = 0, elQ = 0;
+            std::memcpy(&azQ, payload + off, 2);
+            std::memcpy(&elQ, payload + off + 2, 2);
+            off += 4;
+            CrewTurretPose p;
+            p.azRad = static_cast<float>(azQ) / 32767.f * kPi;
+            p.elRad = static_cast<float>(elQ) / 32767.f * (kPi * 0.5f);
+            poses.push_back(p);
+        }
+        m_crewTurretPoses[idx] = std::move(poses);
+    }
 }
 
 void ClientNetEventHandler::handleDatalink(const void* data, std::size_t size) {

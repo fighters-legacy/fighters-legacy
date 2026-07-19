@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "CrewClientState.h" // client crew roster + turret pose (#972)
 #include "IClock.h"
 #include "INetwork.h"
 #include "RenderTypes.h"
@@ -15,6 +16,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -86,6 +88,21 @@ struct ClientNetEventHandler : INetworkEventHandler {
     std::string factionName(uint16_t factionIndex) const {
         const auto it = m_factionNames.find(factionIndex);
         return it != m_factionNames.end() ? it->second : std::string{};
+    }
+
+    // The seat roster of a crewed aircraft (#972), or nullptr when the entity is single-seat / unknown.
+    // Keyed by entity index; the stored gen guards against a pool-slot reuse applying a stale roster.
+    const CrewRosterInfo* crewRoster(uint32_t entityIdx) const {
+        const auto it = m_crewRosters.find(entityIdx);
+        return it != m_crewRosters.end() ? &it->second : nullptr;
+    }
+
+    // Live mount-frame turret poses of a crewed aircraft from the last SnapshotCrew TLV (#972). Empty
+    // when the entity is not crewed / not in the last snapshot's interest set. Main-thread only.
+    std::span<const CrewTurretPose> crewTurretPoses(uint32_t entityIdx) const {
+        const auto it = m_crewTurretPoses.find(entityIdx);
+        return it != m_crewTurretPoses.end() ? std::span<const CrewTurretPose>(it->second.data(), it->second.size())
+                                             : std::span<const CrewTurretPose>{};
     }
 
     ClientTickAlpha tickAlpha;
@@ -270,7 +287,16 @@ struct ClientNetEventHandler : INetworkEventHandler {
     std::vector<RwrStrobe> m_rwrStrobes;
     bool m_haveDatalink{false};
 
+    // Crew roster + live turret pose (#972). m_crewRosters is the reliable per-entity seat roster from
+    // MsgCrewRoster (keyed by entity index); m_crewTurretPoses is the per-tick mount-frame turret pose
+    // decoded from each snapshot's SnapshotCrew TLV. Both main-thread only.
+    std::unordered_map<uint32_t, CrewRosterInfo> m_crewRosters;
+    std::unordered_map<uint32_t, std::vector<CrewTurretPose>> m_crewTurretPoses;
+
     void handleDatalink(const void* data, std::size_t size);
+    void handleCrewRoster(const void* data, std::size_t size);
+    // Decode a SnapshotCrew TLV payload into m_crewTurretPoses (called from the WorldSnapshot handler).
+    void applyCrewTurretTlv(const uint8_t* payload, std::size_t len);
 };
 
 } // namespace fl

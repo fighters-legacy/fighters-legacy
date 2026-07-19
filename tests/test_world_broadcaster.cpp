@@ -9544,3 +9544,154 @@ TEST_CASE("WorldBroadcaster: setEntityLoadout overrides a controlled entity's st
     CHECK(broadcaster.setEntityLoadout(id, {"fp:aim", "~"}, warn));
     CHECK_FALSE(warn.empty());
 }
+
+// --- Crew roster + turret pose replication (#972) --------------------------------------------------
+
+namespace {
+// A minimal crewed bomber def for the replication tests: a Fly+Fire pilot on station 0 and a Fire
+// tail-gunner aiming a turret that mounts station 1. Valid one-owner partition.
+static fl::EntityDef makeCrewBomberDef() {
+    fl::EntityDef d;
+    d.id = "test:crewbomber";
+    d.name = "CrewBomber";
+    d.category = fl::ObjectCategory::AirVehicle;
+    d.maxHp = 300.f;
+    fl::Hardpoint hp0;
+    hp0.slot = 0;
+    hp0.allowed = {"test:rkt"};
+    hp0.defaultWeapon = "test:rkt";
+    fl::Hardpoint hp1;
+    hp1.slot = 1;
+    hp1.allowed = {"test:rkt"};
+    hp1.defaultWeapon = "test:rkt";
+    d.hardpoints = {hp0, hp1};
+    fl::TurretDef t;
+    t.id = "tail";
+    t.stations = {1};
+    d.turrets = {t};
+    fl::SeatDef pilot;
+    pilot.role = "pilot";
+    pilot.capabilities = fl::withCapability(fl::withCapability(fl::CrewCapabilityMask{0}, fl::CrewCapability::Fly),
+                                            fl::CrewCapability::Fire);
+    pilot.stations = {0};
+    fl::SeatDef gunner;
+    gunner.role = "tail-gunner";
+    gunner.capabilities = fl::withCapability(fl::CrewCapabilityMask{0}, fl::CrewCapability::Fire);
+    gunner.turret = "tail";
+    d.crew = {pilot, gunner};
+    return d;
+}
+static fl::WeaponDef makeRktWeapon() {
+    fl::WeaponDef w;
+    w.id = "test:rkt";
+    w.name = "Rkt";
+    w.type = fl::WeaponType::Rocket;
+    w.category = fl::WeaponCategory::AirToGround;
+    w.performance.maxRangeM = 4000.f;
+    w.performance.maxSpeedMps = 500.f;
+    w.load.massKg = 20.f;
+    w.load.rounds = 40;
+    return w;
+}
+struct StillCtl : fl::IEntityController {
+    fl::ControlInput sample(const fl::EntityState&, uint64_t, double, const fl::AiTickContext&) override {
+        return fl::ControlInput{};
+    }
+};
+} // namespace
+
+TEST_CASE("WorldBroadcaster: crewed aircraft replicate roster on connect; single-seat do not (#972)",
+          "[world_broadcaster][crew]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef()); // a single-seat entity
+    registry.registerType(makeCrewBomberDef());
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(makeRktWeapon());
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    wb.setWeaponRegistry(&weapons);
+    wb.setGroundElevation(0.f);
+    wb.setSeatControllerFactory([](const fl::SeatDef&, uint8_t) -> std::unique_ptr<fl::ISeatController> {
+        return nullptr; // no gunner bot: the turret rests at az=el=0, which still replicates
+    });
+
+    // Spawn an AI crewed bomber near the origin so an observer sees it.
+    fl::EntityTransform t{};
+    t.pos[1] = 800.0;
+    t.quat[3] = 1.f;
+    const fl::EntityId bomber = em.spawn("test:crewbomber", t);
+    wb.registerController(bomber, std::make_unique<StillCtl>(), nullptr, 0.f);
+
+    // An observer connecting must receive the bomber's MsgCrewRoster (crewed) among its ConnectAck-time
+    // reliable sends.
+    connectObserverPeer(wb, net, 1u);
+    bool sawRoster = false;
+    fl::MsgCrewRosterHeader rhdr{};
+    for (const auto& pkt : net.sends) {
+        if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::CrewRoster)) {
+            REQUIRE(fl::readMsg(pkt.data(), pkt.size(), rhdr));
+            if (rhdr.entityIdx == bomber.index) {
+                sawRoster = true;
+                CHECK(rhdr.seatCount == 2);
+                CHECK(rhdr.turretCount == 1);
+                fl::CrewRosterSeat s0{};
+                REQUIRE(fl::readRecordAt(pkt.data(), pkt.size(), sizeof(rhdr), s0));
+                s0.role[sizeof(s0.role) - 1] = '\0';
+                CHECK(std::string(s0.role) == "pilot");
+            }
+        }
+    }
+    CHECK(sawRoster);
+
+    // Tick once and confirm the observer's snapshot carries a SnapshotCrew TLV naming the bomber, and
+    // that the single-seat debug entity (if present) never appears in it.
+    clearSnapshots(net);
+    wb.onTick(1.0 / 60.0, 1u);
+    auto snaps = snapshotsFor(net, 1u);
+    REQUIRE(!snaps.empty());
+    const auto& pkt = snaps.back();
+    const auto hdr = parseSnapshotHeader(pkt);
+    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) +
+                                  static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
+    REQUIRE(pkt.size() >= extOffset);
+    const auto* ext = pkt.data() + extOffset;
+    const auto extSz = pkt.size() - extOffset;
+    uint16_t crewLen = 0;
+    const uint8_t* cp = fl::findExt(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotCrew), crewLen);
+    REQUIRE(cp != nullptr);
+    REQUIRE(crewLen >= 6u);
+    CHECK(cp[0] == 1u); // exactly one crewed entity in the TLV
+    uint32_t crewIdx = 0;
+    std::memcpy(&crewIdx, cp + 1, 4);
+    CHECK(crewIdx == bomber.index);
+    CHECK(cp[5] == 1u); // one turret
+}
+
+TEST_CASE("WorldBroadcaster: a single-seat-only world emits no SnapshotCrew TLV (#972)", "[world_broadcaster][crew]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    wb.setGroundElevation(0.f);
+
+    connectPilotPeer(wb, net, 0u); // a single-seat pilot aircraft
+    clearSnapshots(net);
+    wb.onTick(1.0 / 60.0, 1u);
+    auto snaps = snapshotsFor(net, 0u);
+    REQUIRE(!snaps.empty());
+    const auto& pkt = snaps.back();
+    const auto hdr = parseSnapshotHeader(pkt);
+    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) +
+                                  static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
+    if (pkt.size() > extOffset) {
+        uint16_t crewLen = 0;
+        const uint8_t* cp = fl::findExt(pkt.data() + extOffset, pkt.size() - extOffset,
+                                        static_cast<uint16_t>(fl::ExtTag::SnapshotCrew), crewLen);
+        CHECK(cp == nullptr); // no crewed entity -> no crew block (single-seat snapshots unchanged)
+    }
+}

@@ -78,6 +78,10 @@ enum class MsgId : uint8_t {
                                // (#528), sent per-peer at ~6 Hz. Loss-tolerant (refreshed every send);
                                // carries what THIS peer's team can see, positions relative to a header
                                // origin. See MsgDatalinkHeader / DatalinkTrack / DatalinkThreat below.
+    CrewRoster = 0x13,         // server->client, reliable: one crewed aircraft's full seat roster (#972).
+                               // Sent after MsgConnectAck for the peer's own crewed aircraft, and on any
+                               // seat occupancy change (#974). Single-seat aircraft never send one (the
+                               // implicit-single-pilot fast path). See MsgCrewRosterHeader / CrewRosterSeat.
     LanBeacon = 0x20,          // raw UDP broadcast - NOT sent over ENet; 0x20+ reserved for non-ENet ids.
                                // ENet message ids occupy 0x00-0x1F. The non-ENet boundary was raised
                                // from 0x10 to 0x20 in #853 to free an ENet id for ConnectRequest -- a
@@ -209,6 +213,57 @@ static_assert(alignof(MsgFactionDef) == 2u, "MsgFactionDef alignment changed");
 static_assert(offsetof(MsgFactionDef, factionIndex) == 2u, "MsgFactionDef::factionIndex offset changed");
 static_assert(offsetof(MsgFactionDef, id) == 4u, "MsgFactionDef::id offset changed");
 static_assert(offsetof(MsgFactionDef, name) == 68u, "MsgFactionDef::name offset changed");
+
+// Runtime occupancy of a crew seat (#972). Authoring is two-state (Bot|Empty, SeatOccupancyDefault);
+// a human claiming a seat (#974) is a RUNTIME state, so the WIRE occupancy is three-state. Validate an
+// attacker-supplied byte with isSeatOccupancyOrdinal before casting.
+enum class SeatOccupancy : uint8_t {
+    Empty = 0, // nobody in the seat (a Fire/turret channel it owns goes silent)
+    Bot = 1,   // an AI seat controller drives it (the authored default)
+    Human = 2, // a peer occupies it (occupantPeerId names the peer)
+};
+
+inline bool isSeatOccupancyOrdinal(uint8_t v) noexcept {
+    return v <= static_cast<uint8_t>(SeatOccupancy::Human);
+}
+
+// One seat in a crewed aircraft's roster (#972). Concatenated after MsgCrewRosterHeader. Reliable, so
+// the client always has a consistent occupancy picture for the seat-selection UI (#975) and to label a
+// gunner station (#979). Capabilities are the machine contract (CrewCapabilityMask); role is the
+// display string (#944 roles-as-data). Parsed via fl::readRecordAt.
+struct CrewRosterSeat {
+    uint8_t seatIndex{0};                 // @0 seat ordinal within the aircraft
+    uint8_t occupancy{0};                 // @1 SeatOccupancy ordinal
+    uint16_t capabilities{0};             // @2 CrewCapabilityMask (Fly/Fire/Radar/Countermeasures/Command)
+    uint32_t occupantPeerId{0xFFFFFFFFu}; // @4 human peer id when occupancy==Human, else kNoSeatPeer sentinel
+    uint8_t skillPct{50};                 // @8 round(per-instance skill * 100), [0,100]
+    uint8_t turretIndex{255};             // @9 turret this seat aims (index into the aircraft's turrets); 255 = none
+    uint8_t reserved[2]{};                // @10 pad to 12 (role stays 4-aligned)
+    char role[32]{};                      // @12 null-terminated display string, e.g. "pilot" / "tail-gunner"
+}; // 44 bytes, align 4
+static_assert(sizeof(CrewRosterSeat) == 44u, "CrewRosterSeat wire size changed");
+static_assert(alignof(CrewRosterSeat) == 4u, "CrewRosterSeat alignment changed");
+static_assert(offsetof(CrewRosterSeat, capabilities) == 2u, "CrewRosterSeat::capabilities offset changed");
+static_assert(offsetof(CrewRosterSeat, occupantPeerId) == 4u, "CrewRosterSeat::occupantPeerId offset changed");
+static_assert(offsetof(CrewRosterSeat, skillPct) == 8u, "CrewRosterSeat::skillPct offset changed");
+static_assert(offsetof(CrewRosterSeat, role) == 12u, "CrewRosterSeat::role offset changed");
+
+// Header of a crewed aircraft's seat roster (#972). Followed by seatCount CrewRosterSeat records. The
+// client keys the roster by (entityIdx, entityGen) so a pool-slot reuse never applies a stale roster.
+// turretCount lets the client size its turret-orientation arrays before the SnapshotCrew TLV arrives.
+struct MsgCrewRosterHeader {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::CrewRoster)}; // @0
+    uint8_t seatCount{0};                                   // @1 number of trailing CrewRosterSeat records
+    uint8_t turretCount{0};                                 // @2 number of turret mounts on the aircraft
+    uint8_t reserved{0};                                    // @3 pad
+    uint32_t entityIdx{0};                                  // @4 aircraft entity index
+    uint32_t entityGen{0};                                  // @8 aircraft entity generation
+}; // 12 bytes, align 4 (multiple of alignof(CrewRosterSeat) so trailing records stay aligned)
+static_assert(sizeof(MsgCrewRosterHeader) == 12u, "MsgCrewRosterHeader wire size changed");
+static_assert(alignof(MsgCrewRosterHeader) == 4u, "MsgCrewRosterHeader alignment changed");
+static_assert(sizeof(MsgCrewRosterHeader) % alignof(CrewRosterSeat) == 0u, "MsgCrewRosterHeader not record-aligned");
+static_assert(offsetof(MsgCrewRosterHeader, entityIdx) == 4u, "MsgCrewRosterHeader::entityIdx offset changed");
+static_assert(offsetof(MsgCrewRosterHeader, entityGen) == 8u, "MsgCrewRosterHeader::entityGen offset changed");
 
 // One mounted content pack, reported by the client in MsgConnectRequest's trailing manifest (#872 wire
 // half). The server compares it against its required-pack set (Phase 4: warn-only). contentHash is
@@ -802,10 +857,17 @@ enum class ExtTag : uint16_t {
                               // kMaxEffectsPerSnapshot. Unreliable by design — a dropped packet loses cosmetics,
                               // never state. pos is float32 world position (particles do not need 0.125 m).
     SnapshotLastAckedSeqNum =
-        0x0105, // uint32_t: seqNum of the last MsgClientInput the server drained + APPLIED for the receiving
-                // peer (#427). Lets client prediction replay EXACTLY the inputs the server has not yet
-                // reflected (history seqNum > this), instead of approximating the replay depth from
-                // estimatedDelayTicks. Omitted until the first input is applied (a peer's first snapshots).
+        0x0105,            // uint32_t: seqNum of the last MsgClientInput the server drained + APPLIED for the receiving
+                           // peer (#427). Lets client prediction replay EXACTLY the inputs the server has not yet
+                           // reflected (history seqNum > this), instead of approximating the replay depth from
+                           // estimatedDelayTicks. Omitted until the first input is applied (a peer's first snapshots).
+    SnapshotCrew = 0x0106, // #972: live turret orientation for CREWED aircraft in the peer's interest set.
+                           // Payload: uint8 entryCount, then entryCount x { uint32 entityIdx (LE), uint8
+                           // turretCount, turretCount x { int16 azQ (LE), int16 elQ (LE) } }. az quantized
+                           // over [-pi,pi], el over [-pi/2,pi/2] to int16. Single-seat aircraft NEVER appear
+                           // (occupancy lives in the reliable MsgCrewRoster), so a world of only single-seat
+                           // entities emits no SnapshotCrew TLV and its snapshot is byte-identical to pre-#972.
+                           // Unreliable/interest-filtered: a dropped packet loses one tick of turret aim.
 
     WeatherWindProfile = 0x0400, // #489: altitude wind profile appended to MsgWeatherState. Payload =
                                  // uint8 count + count x {float altM, float windX, float windZ} (12 B each,

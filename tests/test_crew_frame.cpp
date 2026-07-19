@@ -12,6 +12,8 @@
 #include "entity/IEntityController.h"
 #include "entity/ISeatController.h"
 #include "job/JobSystem.h"
+#include "net/GameProtocol.h" // MsgClientInput (seat-scoped input #972)
+#include "net/SeatInput.h"    // seatInputRouting / clampSeatStation (#972)
 #include "net/WorldBroadcaster.h"
 #include "weapon/ProjectileSystem.h" // projectileTypeId
 #include "weapon/WeaponRegistry.h"
@@ -242,6 +244,89 @@ TEST_CASE("Crewed frame: an empty seat with no factory contributes no fire (#969
             ++projCount;
     });
     CHECK(projCount == 0);
+}
+
+TEST_CASE("Seat input routing: capability mask decides which channels a seat drives (#972)", "[crew]") {
+    using C = CrewCapability;
+    const CrewCapabilityMask pilotCaps = withCapability(withCapability(CrewCapabilityMask{0}, C::Fly), C::Fire);
+    const CrewCapabilityMask gunnerCaps = withCapability(CrewCapabilityMask{0}, C::Fire);
+
+    // A Fly+Fire pilot drives flight and fire; without a turret, viewAxis is a look direction, not aim.
+    const SeatInputRouting pilot = seatInputRouting(pilotCaps, /*aimsTurret=*/false);
+    CHECK(pilot.driveFlight);
+    CHECK(pilot.driveFire);
+    CHECK_FALSE(pilot.aimTurret);
+
+    // A Fire-only gunner NEVER drives flight — its elevator/throttle are masked off server-side. With a
+    // turret, viewAxis becomes the turret aim command.
+    const SeatInputRouting gunner = seatInputRouting(gunnerCaps, /*aimsTurret=*/true);
+    CHECK_FALSE(gunner.driveFlight);
+    CHECK(gunner.driveFire);
+    CHECK(gunner.aimTurret);
+
+    // A Fire seat with no turret does not treat viewAxis as an aim command.
+    CHECK_FALSE(seatInputRouting(gunnerCaps, /*aimsTurret=*/false).aimTurret);
+
+    // Station selection clamps to the seat's own partition — a gunner can't select the pilot's stores.
+    CHECK(clampSeatStation(255, 2) == 255); // "keep" always passes
+    CHECK(clampSeatStation(0, 2) == 0);
+    CHECK(clampSeatStation(1, 2) == 1);
+    CHECK(clampSeatStation(2, 2) == 255); // out of range -> keep
+    CHECK(clampSeatStation(0, 0) == 255); // a seat with no stations rejects every selection
+}
+
+TEST_CASE("Crewed frame: a human gunner fires from its masked input, along its own aim (#972)", "[crew]") {
+    // Bind a human peer to the NON-fly gunner seat, feed it a MsgClientInput that looks straight up and
+    // holds fire (with flight fields set, which MUST be ignored), and verify the turret fires along the
+    // human's aim — the seat-scoped input routing end to end.
+    CrewFixture fx(/*gunnerFireAfter=*/90);
+    const EntityId bomber = fx.spawnBomber(0.0);
+
+    constexpr uint32_t kGunnerPeer = 7;
+    REQUIRE(fx.wb->setSeatOccupant(bomber, /*seat=*/1, kGunnerPeer));
+
+    // Phase 1: look straight up (+Y), hold fire, with flight fields set (which MUST be masked off since
+    // the gunner has no Fly capability). Let the turret slew fully onto +Y before opening fire.
+    fl::MsgClientInput aim{};
+    aim.seqNum = 1;
+    aim.viewAxis[0] = 0.f;
+    aim.viewAxis[1] = 1.f; // +Y: unmistakably not the airframe nose (+X)
+    aim.viewAxis[2] = 0.f;
+    aim.throttle = 1.0f; // flight fields — ignored server-side (a gunner does not fly the aircraft)
+    aim.elevator = 1.0f; //
+    fx.wb->onReceive(kGunnerPeer, &aim, sizeof(aim));
+    fx.tick(90); // slew the turret onto +Y
+
+    // Phase 2: hold fire (bit 2) — the store ripples along the now-slewed turret bore.
+    fl::MsgClientInput fire = aim;
+    fire.seqNum = 2;
+    fire.buttons = 0x04;        // fire selected store
+    fire.selectedStation = 255; // keep the seat's default station
+    fx.wb->onReceive(kGunnerPeer, &fire, sizeof(fire));
+    fx.tick(30);
+
+    const auto vels = fx.projectileVels();
+    REQUIRE(!vels.empty()); // the HUMAN gunner fired (its masked input reached the seat's fire channel)
+    for (const glm::vec3& v : vels) {
+        const float len = glm::length(v);
+        REQUIRE(len > 1.f);
+        CHECK(v.y / len > 0.9f);           // along the gunner's +Y aim (the turret bore)
+        CHECK(std::abs(v.x) / len < 0.2f); // not the airframe nose
+    }
+}
+
+TEST_CASE("Crewed frame: vacating a human seat resumes its bot (#972)", "[crew]") {
+    // A human takes the gunner seat, then leaves; the authored bot must resume so the seat is not
+    // silently disarmed. Fire the bot before and after the human tenancy.
+    CrewFixture fx(/*gunnerFireAfter=*/90);
+    const EntityId bomber = fx.spawnBomber(0.0);
+    constexpr uint32_t kGunnerPeer = 9;
+
+    REQUIRE(fx.wb->setSeatOccupant(bomber, 1, kGunnerPeer));
+    fx.wb->clearSeatOccupant(kGunnerPeer); // human leaves immediately
+    fx.tick(120);                          // the bot (StubGunner) slews then fires again after tick 90
+
+    CHECK(!fx.projectileVels().empty()); // the bot resumed and fired
 }
 
 TEST_CASE("Crewed frame: the per-seat pass is serial-equivalent across worker counts (#969)", "[crew][tsan]") {

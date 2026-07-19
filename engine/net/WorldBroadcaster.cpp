@@ -24,6 +24,7 @@
 #include "net/BitStream.h"
 #include "net/GameProtocol.h"
 #include "net/NetworkUtils.h"
+#include "net/SeatInput.h" // seat-scoped input routing (#972)
 #include "net/SnapshotCodec.h"
 #include "net/SnapshotCompression.h"
 #include "net/WireCodec.h"
@@ -44,8 +45,10 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <numbers>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 static_assert(std::atomic<double>::is_always_lock_free,
@@ -803,6 +806,12 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             TickPhase::Sensing, std::chrono::duration<double, std::milli>(m_clock->now() - tSensingStart).count());
     }
 
+    // Seat-scoped human input (#972), serial pre-pass: resolve each crewed entity's human NON-fly seat
+    // input into that seat's cached SeatCommand BEFORE the parallel AI pass, so the pass reads only the
+    // seat's own fields (the m_peerInputs cross-peer reads happen here, on the sim thread). A no-op
+    // until a human occupies a non-fly seat (the #974 join protocol).
+    applyHumanCrewInput(tickIndex);
+
     // AI pass: sample each controller. Read-only on shared world state (EntityState, SpatialIndex,
     // EntityManager); each controller's own mutable state is per-entity / disjoint.
     //
@@ -1089,6 +1098,32 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         encoded.emplace(encIdx, std::move(rec));
     }
 
+    // Crew turret-pose table (#972): for each CREWED entity that has turrets, the quantized mount-frame
+    // az/el of every turret this tick. Built serially here (crew state is stable after the integrate
+    // pass) so the parallel peer pass reads it lock-free and emits a per-peer SnapshotCrew TLV over the
+    // entities in that peer's interest set. Single-seat/turretless entities are ABSENT, so a world of
+    // only single-seat aircraft builds an empty table, emits no TLV, and is byte-identical to pre-#972.
+    struct CrewSnap {
+        std::vector<std::pair<int16_t, int16_t>> turrets; // (azQ, elQ) per turret, mount frame
+    };
+    auto quantAngle = [](float a, float range) -> int16_t {
+        const float clamped = std::clamp(a, -range, range);
+        return static_cast<int16_t>(std::lround(clamped / range * 32767.f));
+    };
+    std::unordered_map<uint32_t, CrewSnap> crewSnap;
+    for (const auto& [cidx, ce] : m_controlledEntities) {
+        if (!ce.crew.crewed() || ce.crew.turrets.empty())
+            continue;
+        if (snapMap.find(cidx) == snapMap.end())
+            continue; // not live this tick
+        CrewSnap cs;
+        cs.turrets.reserve(ce.crew.turrets.size());
+        for (const CrewTurret& tr : ce.crew.turrets)
+            cs.turrets.emplace_back(quantAngle(tr.state.azRad, std::numbers::pi_v<float>),
+                                    quantAngle(tr.state.elRad, std::numbers::pi_v<float> * 0.5f));
+        crewSnap.emplace(cidx, std::move(cs));
+    }
+
     const auto activePeers =
         static_cast<uint16_t>(std::max(0, std::min(m_activePeerCount.load(std::memory_order_relaxed), 65535)));
 
@@ -1149,8 +1184,11 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         w.peerId = peerId;
         // A pilot centers interest on its aircraft; an observer on its stored interest point (the #858
         // camera-position seam). peerEid invalid + peerState null flag the entity-less case downstream.
-        const auto eit = m_peerEntities.find(peerId);
-        w.peerEid = (eit != m_peerEntities.end()) ? eit->second : EntityId{};
+        // #972: peerEid is the entity the peer OCCUPIES A SEAT IN (m_peerSeat) — a Fly-seat pilot's own
+        // aircraft, or a gunner's host aircraft (#974) — so every seat occupant, not just the owner,
+        // centers interest on that airframe and receives its omega-carrying own record.
+        const auto sit = m_peerSeat.find(peerId);
+        w.peerEid = (sit != m_peerSeat.end()) ? sit->second.entity : EntityId{};
         w.peerState = w.peerEid.valid() ? m_entityManager.get(w.peerEid) : nullptr;
         if (w.peerState) {
             w.center[0] = w.peerState->transform.pos[0];
@@ -1470,6 +1508,42 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                     appendExtRaw(buf, static_cast<uint16_t>(ExtTag::SnapshotEffects), fx.data(),
                                  static_cast<uint16_t>(fx.size()));
             }
+            // Crew turret pose (#972): live mount-frame az/el of each turret on the CREWED entities in
+            // this peer's interest set (`selected`, already interest-filtered). Read-only over the
+            // serially-built crewSnap — worker owns buf, so byte-identical across worker counts (#512).
+            // Absent for a single-seat-only interest set → no TLV → byte-identical to pre-#972.
+            if (!crewSnap.empty()) {
+                std::vector<uint8_t> cb;
+                uint8_t count = 0;
+                for (uint32_t idx : selected) {
+                    if (count == 255u)
+                        break;
+                    const auto csit = crewSnap.find(idx);
+                    if (csit == crewSnap.end())
+                        continue;
+                    const auto& turrets = csit->second.turrets;
+                    const auto tc = static_cast<uint8_t>(std::min<std::size_t>(turrets.size(), 255));
+                    const std::size_t at = cb.size();
+                    cb.resize(at + 5u + static_cast<std::size_t>(tc) * 4u);
+                    uint8_t* p = cb.data() + at;
+                    std::memcpy(p, &idx, 4);
+                    p[4] = tc;
+                    for (uint8_t t = 0; t < tc; ++t) {
+                        const int16_t azQ = turrets[t].first, elQ = turrets[t].second;
+                        std::memcpy(p + 5 + t * 4, &azQ, 2);
+                        std::memcpy(p + 5 + t * 4 + 2, &elQ, 2);
+                    }
+                    ++count;
+                }
+                if (count > 0u) {
+                    std::vector<uint8_t> payload;
+                    payload.reserve(cb.size() + 1u);
+                    payload.push_back(count);
+                    payload.insert(payload.end(), cb.begin(), cb.end());
+                    appendExtRaw(buf, static_cast<uint16_t>(ExtTag::SnapshotCrew), payload.data(),
+                                 static_cast<uint16_t>(payload.size()));
+                }
+            }
             // Snapshot payload compression (#775): zstd the fully-assembled payload (origin table +
             // record stream + TLV block) in place, still inside the parallel per-peer region — the
             // codec is deterministic and this worker owns buf, so the #512 byte-identical-across-
@@ -1677,6 +1751,23 @@ EntityId WorldBroadcaster::spawnPilotEntity(uint32_t peerId, const std::string& 
         // decimatable=false: a player's input must be sampled every tick for responsiveness (#514).
         addControlledEntity(id, std::make_unique<PeerController>(&m_peerInputs[peerId]), std::move(model), 0.0f,
                             /*decimatable=*/false, initialAirspeed);
+
+        // Seat binding (#972): a pilot occupies its aircraft's Fly seat. For a crewed aircraft, stamp
+        // that seat's occupant so the roster reports the pilot as Human; a single-seat aircraft has no
+        // CrewState, so the binding is the conceptual seat 0 used only for the snapshot own-record.
+        uint8_t flySeat = 0;
+        if (auto cit = m_controlledEntities.find(id.index); cit != m_controlledEntities.end()) {
+            CrewState& crew = cit->second.crew;
+            for (std::size_t s = 0; s < crew.seats.size(); ++s) {
+                if (crew.seats[s].isFlySeat) {
+                    flySeat = static_cast<uint8_t>(s);
+                    crew.seats[s].occupantPeer = peerId;
+                    crew.seats[s].botOccupied = false;
+                    break;
+                }
+            }
+        }
+        m_peerSeat[peerId] = PeerSeatBinding{id, flySeat};
     }
     return id;
 }
@@ -1923,6 +2014,11 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
             m_net.send(peerId, &ack, sizeof(ack), /*reliable=*/true);
         }
     }
+
+    // A crewed pilot aircraft just spawned — its Fly seat is now Human. Tell existing peers so their
+    // seat rosters stay current (the joiner already received all rosters via sendConnectAck). #972.
+    if (assigned.valid())
+        broadcastCrewRoster(assigned);
 }
 
 void WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
@@ -1954,6 +2050,7 @@ void WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
 }
 
 void WorldBroadcaster::despawnPeerEntity(uint32_t peerId) {
+    m_peerSeat.erase(peerId); // this peer no longer occupies its aircraft's Fly seat (#972)
     auto it = m_peerEntities.find(peerId);
     if (it == m_peerEntities.end())
         return; // observer or not-yet-admitted peer — nothing to tear down
@@ -1998,7 +2095,8 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     std::snprintf(msg, sizeof(msg), "peer %u disconnected", peerId);
     m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
 
-    despawnPeerEntity(peerId); // no-op for an observer / not-yet-admitted peer
+    clearSeatOccupant(peerId); // a gunner (#974) reverts its non-fly seat to its bot + re-broadcasts
+    despawnPeerEntity(peerId); // a pilot's own aircraft is torn down (no-op for observer/gunner)
     m_peerInputs.erase(peerId);
     m_peerFloodState.erase(peerId);
     m_peerKnownGens.erase(peerId);
@@ -2514,6 +2612,111 @@ uint32_t WorldBroadcaster::peerIdForEntity(EntityId id) const noexcept {
             return peerId;
     }
     return kNoOwningPeer;
+}
+
+uint32_t WorldBroadcaster::occupantPeerFor(EntityId id, uint8_t seat) const noexcept {
+    if (!id.valid())
+        return kNoOwningPeer;
+    for (const auto& [peerId, bind] : m_peerSeat) {
+        if (bind.entity == id && bind.seatIndex == seat)
+            return peerId;
+    }
+    return kNoOwningPeer;
+}
+
+bool WorldBroadcaster::setSeatOccupant(EntityId id, uint8_t seat, uint32_t peerId) {
+    auto cit = m_controlledEntities.find(id.index);
+    if (cit == m_controlledEntities.end() || cit->second.id != id)
+        return false;
+    CrewState& crew = cit->second.crew;
+    if (seat >= crew.seats.size())
+        return false;
+    CrewSeat& cs = crew.seats[seat];
+    if (cs.isFlySeat)
+        return false; // the Fly seat belongs to the owning pilot; it is not a joinable seat
+
+    // Vacate whatever seat this peer already held (a peer occupies at most one seat), then bind here.
+    // The authored bot (if any) stays on the seat but goes dormant: sampleCrewSeats prefers the human
+    // while occupantPeer is set, and clearSeatOccupant resumes it on vacate.
+    clearSeatOccupant(peerId);
+    m_peerInputs[peerId]; // ensure the input slot exists so the masked-input pre-pass can read it
+    cs.occupantPeer = peerId;
+    cs.lastCommandValid = false; // no stale bot command carries into the first human tick
+    m_peerSeat[peerId] = PeerSeatBinding{id, seat};
+    broadcastCrewRoster(id);
+    return true;
+}
+
+void WorldBroadcaster::clearSeatOccupant(uint32_t peerId) {
+    const auto sit = m_peerSeat.find(peerId);
+    if (sit == m_peerSeat.end())
+        return;
+    const EntityId id = sit->second.entity;
+    const uint8_t seat = sit->second.seatIndex;
+    auto cit = m_controlledEntities.find(id.index);
+    if (cit != m_controlledEntities.end() && cit->second.id == id && seat < cit->second.crew.seats.size()) {
+        CrewSeat& cs = cit->second.crew.seats[seat];
+        if (cs.isFlySeat)
+            return; // a Fly-seat pilot's teardown is despawnPeerEntity's job, not a seat vacate
+        cs.occupantPeer = kNoSeatPeer;
+        cs.lastCommandValid = false; // its bot resumes next AI pass (botOccupied/seatBot preserved)
+        m_peerSeat.erase(sit);
+        broadcastCrewRoster(id);
+    } else {
+        m_peerSeat.erase(sit); // aircraft gone — just drop the dangling binding
+    }
+}
+
+bool WorldBroadcaster::buildCrewRosterPacket(EntityId id, std::vector<uint8_t>& out) const {
+    const auto cit = m_controlledEntities.find(id.index);
+    if (cit == m_controlledEntities.end() || cit->second.id != id)
+        return false;
+    const CrewState& crew = cit->second.crew;
+    if (crew.seats.size() <= 1u)
+        return false; // single-seat / non-crewed: the implicit-single-pilot fast path sends no roster
+    const EntityState* st = m_entityManager.get(id);
+    const EntityDef* def = st ? m_registry.byIndex(st->typeIndex) : nullptr;
+
+    MsgCrewRosterHeader hdr{};
+    hdr.seatCount = static_cast<uint8_t>(std::min<std::size_t>(crew.seats.size(), 255));
+    hdr.turretCount = static_cast<uint8_t>(std::min<std::size_t>(crew.turrets.size(), 255));
+    hdr.entityIdx = id.index;
+    hdr.entityGen = id.generation;
+    appendMsg(out, hdr);
+
+    for (std::size_t s = 0; s < crew.seats.size() && s < 255u; ++s) {
+        const CrewSeat& seat = crew.seats[s];
+        CrewRosterSeat rec{};
+        rec.seatIndex = static_cast<uint8_t>(s);
+        rec.occupancy = static_cast<uint8_t>(seat.occupantPeer != kNoSeatPeer ? SeatOccupancy::Human
+                                             : seat.botOccupied               ? SeatOccupancy::Bot
+                                                                              : SeatOccupancy::Empty);
+        rec.capabilities = seat.capabilities;
+        rec.occupantPeerId = seat.occupantPeer;
+        rec.skillPct = static_cast<uint8_t>(std::clamp(std::lround(seat.skill * 100.f), 0L, 100L));
+        rec.turretIndex = seat.turretIndex >= 0 ? static_cast<uint8_t>(seat.turretIndex) : 255u;
+        // Role display string from the authored def (roles-as-data, #944). Empty if the def is gone.
+        if (def && s < def->crew.size())
+            std::snprintf(rec.role, sizeof(rec.role), "%s", def->crew[s].role.c_str());
+        appendMsg(out, rec);
+    }
+    return true;
+}
+
+void WorldBroadcaster::sendCrewRoster(uint32_t peerId, EntityId id) {
+    std::vector<uint8_t> buf;
+    if (!buildCrewRosterPacket(id, buf))
+        return;
+    m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/true);
+}
+
+void WorldBroadcaster::broadcastCrewRoster(EntityId id) {
+    std::vector<uint8_t> buf;
+    if (!buildCrewRosterPacket(id, buf))
+        return;
+    for (const auto& [peerId, pin] : m_peerInputs)
+        if (pin.handshakeComplete)
+            m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/true);
 }
 
 void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
@@ -3436,31 +3639,92 @@ void WorldBroadcaster::sampleCrewSeats(ControlledEntity& ce, const EntityState& 
         CrewSeat& seat = ce.crew.seats[s];
         if (seat.isFlySeat)
             continue; // flight is the airframe controller's job
-        if (!seat.botOccupied || !seat.seatBot) {
-            seat.lastCommandValid = false;
-            continue;
+
+        SeatCommand cmd;
+        bool haveCmd = false;
+        if (seat.occupantPeer != kNoSeatPeer) {
+            // Human seat (#972): the command was resolved from the peer's masked MsgClientInput in the
+            // serial applyHumanCrewInput pre-pass. Reuse it here (this parallel pass reads no m_peerInputs).
+            if (seat.lastCommandValid) {
+                cmd = seat.lastCommand;
+                haveCmd = true;
+            }
+        } else if (seat.botOccupied && seat.seatBot) {
+            // Bot seat (#969): sample its ISeatController with the seat's honest view.
+            SeatView view;
+            view.seatIndex = static_cast<uint8_t>(s);
+            view.capabilities = seat.capabilities;
+            view.skill = seat.skill;
+            view.reaction = seat.reaction;
+            if (seat.turretIndex >= 0) {
+                const CrewTurret& tr = ce.crew.turrets[static_cast<std::size_t>(seat.turretIndex)];
+                view.turret.present = true;
+                view.turret.mountRest = tr.mountRest;
+                view.turret.azMinRad = tr.limits.azMinRad;
+                view.turret.azMaxRad = tr.limits.azMaxRad;
+                view.turret.elMinRad = tr.limits.elMinRad;
+                view.turret.elMaxRad = tr.limits.elMaxRad;
+                view.turret.boreWorld = turretWorldDir(tr.state, tr.mountRest, airQ); // current aim (from last slew)
+            }
+            cmd = seat.seatBot->sample(st, view, tick, dt, ctx);
+            seat.lastCommand = cmd;
+            seat.lastCommandValid = true;
+            haveCmd = true;
+        } else {
+            seat.lastCommandValid = false; // empty seat (no bot, no human): its channels stay silent
         }
-        SeatView view;
-        view.seatIndex = static_cast<uint8_t>(s);
-        view.capabilities = seat.capabilities;
-        view.skill = seat.skill;
-        view.reaction = seat.reaction;
-        if (seat.turretIndex >= 0) {
-            const CrewTurret& tr = ce.crew.turrets[static_cast<std::size_t>(seat.turretIndex)];
-            view.turret.present = true;
-            view.turret.mountRest = tr.mountRest;
-            view.turret.azMinRad = tr.limits.azMinRad;
-            view.turret.azMaxRad = tr.limits.azMaxRad;
-            view.turret.elMinRad = tr.limits.elMinRad;
-            view.turret.elMaxRad = tr.limits.elMaxRad;
-            view.turret.boreWorld = turretWorldDir(tr.state, tr.mountRest, airQ); // current aim (from last slew)
-        }
-        const SeatCommand cmd = seat.seatBot->sample(st, view, tick, dt, ctx);
-        seat.lastCommand = cmd;
-        seat.lastCommandValid = true;
-        if (seat.turretIndex >= 0 && cmd.hasAim) {
+
+        // Command the turret servo toward the (bot or human) seat's aim. The servo clamps + slews in
+        // the integrate pass; this only sets the target. Per-entity write, disjoint in the parallel pass.
+        if (haveCmd && seat.turretIndex >= 0 && cmd.hasAim) {
             CrewTurret& tr = ce.crew.turrets[static_cast<std::size_t>(seat.turretIndex)];
             commandTurretWorld(tr.state, tr.limits, tr.mountRest, airQ, cmd.aimDirWorld);
+        }
+    }
+}
+
+void WorldBroadcaster::applyHumanCrewInput(uint64_t tick) {
+    (void)tick;
+    for (auto& [idx, ce] : m_controlledEntities) {
+        if (!ce.crew.crewed())
+            continue;
+        const EntityState* st = m_entityManager.get(ce.id);
+        if (!st || st->dead)
+            continue;
+        const glm::quat airQ{st->transform.quat[3], st->transform.quat[0], st->transform.quat[1],
+                             st->transform.quat[2]};
+        for (std::size_t s = 0; s < ce.crew.seats.size(); ++s) {
+            CrewSeat& seat = ce.crew.seats[s];
+            if (seat.isFlySeat || seat.occupantPeer == kNoSeatPeer)
+                continue; // the Fly seat flies via the controller; only human NON-fly seats route here
+            const auto pit = m_peerInputs.find(seat.occupantPeer);
+            if (pit == m_peerInputs.end()) {
+                seat.lastCommandValid = false;
+                continue;
+            }
+            const PeerInputState& in = pit->second;
+            const bool aimsTurret = seat.turretIndex >= 0;
+            const SeatInputRouting route = seatInputRouting(seat.capabilities, aimsTurret);
+
+            SeatCommand cmd;
+            if (route.aimTurret) {
+                // viewAxis is the gunner's world-space look direction; the servo slews the turret toward
+                // it (clamped to the seat's arc). A degenerate zero vector leaves the last aim.
+                const glm::vec3 aim{in.viewAxis[0], in.viewAxis[1], in.viewAxis[2]};
+                if (glm::dot(aim, aim) > 1e-6f) {
+                    cmd.hasAim = true;
+                    cmd.aimDirWorld = aim;
+                }
+            }
+            if (route.driveFire) {
+                cmd.trigger = (in.buttons & 0x01u) != 0u;          // gun trigger (level)
+                cmd.release = (in.buttons & 0x04u) != 0u;          // fire selected store (edge downstream)
+                cmd.station = clampSeatStation(in.selectedStation, // clamp to the seat's own partition
+                                               seat.fire.loadout.stations.size());
+            }
+            seat.lastCommand = cmd;
+            seat.lastCommandValid = true;
+            (void)airQ;
         }
     }
 }
@@ -3488,7 +3752,8 @@ void WorldBroadcaster::runCrewedFire(ControlledEntity& ce, uint32_t idx, uint64_
         if (seat.isFlySeat) {
             wc = weaponControlsOf(ce.lastInput);
             active = ce.lastInputValid;
-        } else if (seat.botOccupied && seat.lastCommandValid) {
+        } else if (seat.lastCommandValid) {
+            // A non-fly seat: bot (sampled in the AI pass) OR human (masked input, applyHumanCrewInput).
             wc = WeaponControls{seat.lastCommand.trigger, seat.lastCommand.release, seat.lastCommand.station};
             active = true;
         }
@@ -3734,6 +3999,16 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
             if (!fbuf.empty())
                 m_net.send(peerId, fbuf.data(), fbuf.size(), /*reliable=*/true);
         }
+    }
+
+    // Crew rosters (#972): after the faction table, send this peer the seat roster of EVERY crewed
+    // aircraft in the world — its own (so it learns which seat it occupies and who its bots are) and any
+    // other crewed airframe (so the seat-selection UI #975 and spectate can label it). Single-seat
+    // aircraft send nothing (buildCrewRosterPacket returns false). Occupancy changes re-broadcast later.
+    for (const auto& [entityIdx, ce] : m_controlledEntities) {
+        (void)entityIdx;
+        if (ce.crew.crewed())
+            sendCrewRoster(peerId, ce.id);
     }
 }
 
