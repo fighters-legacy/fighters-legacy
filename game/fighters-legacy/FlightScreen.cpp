@@ -84,7 +84,8 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
         const std::span<const fl::EntityRenderEntry> entries =
             d.renderBridge->hasSnapshot() ? std::span<const fl::EntityRenderEntry>(d.renderBridge->current().entries)
                                           : std::span<const fl::EntityRenderEntry>{};
-        if (!d.gameConsole->isOpen() && !(d.wingmanMenu && d.wingmanMenu->isOpen())) {
+        if (!d.gameConsole->isOpen() && !(d.wingmanMenu && d.wingmanMenu->isOpen()) &&
+            !(d.commsMenu && d.commsMenu->isOpen())) {
             const bool nextDown = input.isKeyDown(Key::Num1);
             const bool prevDown = input.isKeyDown(Key::Num2);
             if ((nextDown && !m_prevNextTarget) || (prevDown && !m_prevPrevTarget)) {
@@ -139,7 +140,8 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     // crewed aircraft the client knows; L joins the selected seat; U leaves the current seat. These keys
     // are NOT flight controls (avoiding J = ECM etc.), so no input is suppressed. Suppressed only while
     // the console/radio menu is up (they own the keyboard then).
-    if (d.clientNetHandler && !d.gameConsole->isOpen() && !(d.wingmanMenu && d.wingmanMenu->isOpen())) {
+    if (d.clientNetHandler && !d.gameConsole->isOpen() && !(d.wingmanMenu && d.wingmanMenu->isOpen()) &&
+        !(d.commsMenu && d.commsMenu->isOpen())) {
         const bool kNow = input.isKeyDown(Key::K), lNow = input.isKeyDown(Key::L), uNow = input.isKeyDown(Key::U);
         if (kNow && !m_prevSeatCycle) {
             m_seatPicker.rebuild(d.clientNetHandler->crewRosters());

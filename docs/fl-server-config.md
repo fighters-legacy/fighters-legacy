@@ -135,6 +135,10 @@ agl_offset = 500.0  # metres AGL above terrain for all spawn points
 [flight]
 size = 0  # AI wingmen spawned per connecting player; 0 = players fly alone
 
+[atc]
+enabled = true                            # air-traffic control: runway sequencing, clearances, comms menu
+# scramble_entity_type = "builtin:debug-entity"  # default type for atc_scramble / atc.scramble
+
 [network]
 transport          = "gns"  # "gns" (GameNetworkingSockets, default) or "enet" (enet6)
 allow_insecure     = true   # GNS only: accept unauthenticated peers (no Steam PKI)
@@ -927,6 +931,25 @@ flight is built at runtime with the **`flight` admin command** (see
 
 An order to a **human** member is *relayed* to them as a radio call, never applied — the server
 cannot fly a person's aircraft for them.
+
+## [atc] — Air-traffic control
+
+The deterministic ATC service (#673): it sequences AI departures and arrivals onto airport runways
+(from the airport registry), answers a player's comms-menu radio calls with clearances, and exposes
+`atc_scramble` / `atc_hold` / `atc_status` admin commands plus the `atc.*` Lua module. A pure FSM —
+no model involvement anywhere.
+
+### `enabled`
+
+Default `true`. When `false`, no facilities are built: radio commands answer *"no ATC available"*, and
+`atc_scramble` / `atc_hold` report the service as unavailable. The server still boots cleanly with
+zero content packs (the compiled-in `builtin:airfield` is always available when enabled).
+
+### `scramble_entity_type`
+
+Default `"builtin:debug-entity"`. The entity type spawned by `atc_scramble` / `atc.scramble` when a
+caller does not name one. Scrambled aircraft spawn hold-short of the runway, are sequenced onto it by
+the tower, take off in order, and hand off to a loiter over the field.
 
 ## [network] — Transport backend
 

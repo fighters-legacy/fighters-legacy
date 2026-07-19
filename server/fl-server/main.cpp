@@ -39,6 +39,8 @@
 #include <ai/WaypointController.h>
 #include <ai/WingmanBehavior.h>
 #include <ai/WingmanCommand.h>
+#include <atc/AtcBehaviors.h> // makeAtcDepartureController — the ATC departure composition (#706)
+#include <atc/AtcService.h>   // the deterministic ATC service (#706)
 #include <campaign/CampaignParser.h>
 #include <campaign/CampaignRunner.h>
 #include <config/ConfigFile.h>
@@ -54,6 +56,7 @@
 #include <entity/EntityTypeRegistry.h>
 #include <flight/CentralGravityField.h>
 #include <flight/FlightModelParser.h>
+#include <flight/LocalFrame.h> // enuBasis — orient an ATC scramble along the runway heading (#706)
 #include <job/JobSystem.h>
 #include <loop/GameLoop.h>
 #include <loop/GameState.h>
@@ -1418,6 +1421,10 @@ int main(int argc, char** argv) {
     } churnState;
     std::function<void()> churnTick;
 
+    // Declared before gameLoop so it is destroyed AFTER the loop's sim thread has stopped (the
+    // broadcaster holds a raw pointer to it). Constructed + wired below, after gameLoop exists.
+    std::unique_ptr<fl::atc::AtcService> atcService;
+
     GameLoop gameLoop(broadcaster, *log, 60.0, cfg.maxCatchupTicks);
 
     // Data-parallel sim tick: the worker pool that parallelises the per-entity AI + integrate
@@ -1430,6 +1437,57 @@ int main(int argc, char** argv) {
         std::snprintf(wbuf, sizeof(wbuf), "sim worker pool: %u background worker(s) (sim_worker_threads=%u)",
                       jobSystem.workerCount(), cfg.simWorkerThreads);
         log->log(LogLevel::Info, __FILE__, __LINE__, wbuf);
+    }
+
+    // ---- Air-traffic control (#706) ----
+    // Build the ATC service from the airport registry and wire the scramble spawn path. The spawn
+    // handler ENQUEUES onto the sim thread (a scramble may originate from a Lua worker thread), spawns
+    // a hold-short aircraft oriented down the runway, registers a departure composition that takes off
+    // when ATC clears it, and files a takeoff request. Disabled ([atc] enabled=false) = no facilities,
+    // and radio commands answer "no ATC available".
+    if (cfg.atc.enabled) {
+        atcService = std::make_unique<fl::atc::AtcService>(entityManager, airportRegistry, planetR);
+        atcService->setSpawnHandler([&](const fl::atc::AtcService::DepartureSpawn& spawn) {
+            gameLoop.enqueueSimCallback([&, spawn]() {
+                // Orient the airframe along the runway heading at the hold-short point.
+                const glm::dvec3 pos = spawn.holdShort.origin;
+                const glm::mat3 enu = fl::enuBasis(pos, planetR);
+                const double h = static_cast<double>(spawn.holdShort.headingDeg) * std::numbers::pi_v<double> / 180.0;
+                const glm::vec3 fwd =
+                    glm::vec3(glm::normalize(glm::dvec3(enu[0]) * std::sin(h) + glm::dvec3(enu[1]) * std::cos(h)));
+                const glm::vec3 up = glm::vec3(enu[2]);
+                const glm::vec3 right = glm::normalize(glm::cross(fwd, up));
+                const glm::quat q(glm::mat3(fwd, glm::cross(right, fwd), right));
+                fl::EntityTransform t{};
+                t.pos[0] = pos.x;
+                t.pos[1] = pos.y;
+                t.pos[2] = pos.z;
+                t.quat[0] = q.x;
+                t.quat[1] = q.y;
+                t.quat[2] = q.z;
+                t.quat[3] = q.w;
+                const fl::EntityId id = entityManager.spawn(spawn.typeId.c_str(), t);
+                if (!id.valid()) {
+                    log->log(LogLevel::Warn, __FILE__, __LINE__, "atc scramble: spawn failed (unknown type?)");
+                    return;
+                }
+                fl::atc::AtcRunwaySpec spec;
+                spec.threshold = spawn.runway.threshold;
+                spec.fieldCenter = 0.5 * (spawn.runway.threshold + spawn.runway.oppositeEnd);
+                spec.headingDeg = spawn.runway.headingDeg;
+                spec.runwayElevM = static_cast<float>(spawn.runway.elevationM);
+                spec.patternAltM = static_cast<float>(spawn.runway.elevationM) + 600.f;
+                fl::ai::ControllerFactory next = [center = spec.fieldCenter, alt = spec.patternAltM]() {
+                    return std::make_unique<fl::ai::LoiterController>(center, 4000.f, alt, 0.6f);
+                };
+                broadcaster.registerController(
+                    id, fl::atc::makeAtcDepartureController(*atcService, id, entityManager, spec, std::move(next)),
+                    nullptr, /*initialAirspeed=*/0.f); // spawn stationary, holding short
+                atcService->requestTakeoff(id, spawn.facilityId);
+            });
+        });
+        broadcaster.setAtcService(atcService.get());
+        log->log(LogLevel::Info, __FILE__, __LINE__, "ATC service enabled");
     }
 
     // ---- Load-test affordance (#573): pre-spawn N server-side AI entities to stress the entity pool
@@ -1560,7 +1618,8 @@ int main(int argc, char** argv) {
     adminCtx.sim.entityManager = &entityManager;
     adminCtx.sim.typeRegistry = &entityRegistry;
     adminCtx.sim.weatherController = &weatherController;
-    adminCtx.sim.worldApi = &worldApi; // world.* seam for admin-spawned Lua controllers (#413)
+    adminCtx.sim.worldApi = &worldApi;   // world.* seam for admin-spawned Lua controllers (#413)
+    adminCtx.sim.atc = atcService.get(); // atc_status/atc_scramble/atc_hold (#706); null if disabled
     adminCtx.env.beacon = beacon.get();
     adminCtx.sim.gameLoop = &gameLoop;
     adminCtx.env.logger = log;
