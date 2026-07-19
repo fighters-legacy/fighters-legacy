@@ -10,6 +10,7 @@
 // controller is engine-ai's job and reaches this file only through the FlightOrderHandler hook.
 // Including it here rather than hardcoding ordinals keeps one source of truth for the vocabulary.
 #include "ai/WingmanCommand.h"
+#include "atc/AtcService.h" // the deterministic ATC FSM ticked at 1 Hz (#702)
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
@@ -869,6 +870,20 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     m_overrunAiStride.store(govAiStride, std::memory_order_relaxed);
     m_overrunInterestScale.store(govInterestScale, std::memory_order_relaxed);
 
+    // Air-traffic control (#702): step the deterministic ATC FSM at 1 Hz on the serial sim thread,
+    // BEFORE the AI pass, so a departure/arrival composition samples a clearance the service already
+    // decided this tick. Drain its radio transmissions and route them through the injected sink (the
+    // wire message in #703; logged until then).
+    if (m_atcService && (tickIndex % fl::atc::AtcService::kIntervalTicks == 0)) {
+        m_atcService->tick(m_entityManager, tickIndex);
+        for (const fl::atc::RadioTransmission& tx : m_atcService->drainTransmissions()) {
+            if (m_atcTransmissionSink)
+                m_atcTransmissionSink(tx);
+            else
+                m_logger.log(LogLevel::Info, __FILE__, __LINE__, (tx.speaker + ": " + tx.text).c_str());
+        }
+    }
+
     m_tickProfiler.addPhaseSample(
         TickPhase::Maintenance, std::chrono::duration<double, std::milli>(m_clock->now() - tMaintenanceStart).count());
 
@@ -879,12 +894,22 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // timed as one wall-clock phase.
 
     // Gather the live controlled entities into a contiguous, indexable range.
+    // Reap orphaned controllers whose entity no longer exists (#702): an entity killed outside
+    // onDisconnect (combat, AI arrival despawn, a Lua despawn) used to leave its controller lingering
+    // in m_controlledEntities until its pool index was reused, so the AI/ATC passes churned a dead
+    // lifecycle. get()==nullptr means the slot was freed/recycled — erase the stale entry. A present-
+    // but-dead entity is left to EntityManager::onTick to reap; its controller is skipped this tick.
     m_stepItems.clear();
-    for (auto& [entityIdx, ce] : m_controlledEntities) {
+    for (auto it = m_controlledEntities.begin(); it != m_controlledEntities.end();) {
+        auto& ce = it->second;
         EntityState* state = m_entityManager.get(ce.id);
-        if (!state || state->dead)
+        if (!state) {
+            it = m_controlledEntities.erase(it);
             continue;
-        m_stepItems.push_back({entityIdx, &ce, state});
+        }
+        if (!state->dead)
+            m_stepItems.push_back({it->first, &ce, state});
+        ++it;
     }
     m_stepInputs.resize(m_stepItems.size());
 

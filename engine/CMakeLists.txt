@@ -270,6 +270,9 @@ add_subdirectory(ai)
 # World-systems foundation types (faction registry, alert levels, airspace zones).
 add_subdirectory(world)
 
+# Air-traffic-control service — facilities, runway sequencing, clearances (#702, ATC epic #673).
+add_subdirectory(atc)
+
 # Server-authoritative weather state machine, time-of-day, and wind/gust model.
 add_library(engine-weather STATIC
     weather/WeatherController.cpp
@@ -385,6 +388,7 @@ target_link_libraries(engine-net
             platform-hal
     PRIVATE engine-flight
             engine-weather
+            engine-atc       # the deterministic ATC FSM ticked in onTick (#702)
 )
 if(WIN32)
     target_link_libraries(engine-net PRIVATE ws2_32)

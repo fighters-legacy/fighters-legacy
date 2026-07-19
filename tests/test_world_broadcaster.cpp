@@ -562,6 +562,32 @@ TEST_CASE("WorldBroadcaster: registerController steps a non-peer entity and seri
     CHECK(foundAiEntity);
 }
 
+TEST_CASE("WorldBroadcaster: reaps an orphaned controller when its entity is destroyed (#702)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::EntityTransform t{};
+    t.pos[1] = 1000.0;
+    fl::EntityId id = em.spawn("builtin:debug-entity", t);
+    REQUIRE(id.valid());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.registerController(id, std::make_unique<ConstantController>());
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    CHECK(broadcaster.controlledEntityCount() == 1);
+
+    // Kill the entity outside onDisconnect (combat / AI arrival despawn / a Lua despawn). Once the
+    // EntityManager reaps the dead slot, the next gather must drop the now-orphaned controller instead
+    // of leaving it to churn until the pool index is reused.
+    em.kill(id);
+    for (uint64_t tick = 2; tick <= 4; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+    CHECK(broadcaster.controlledEntityCount() == 0);
+}
+
 // Run a fixed multi-entity scenario and capture final entity state. When `jobs` is non-null the
 // per-entity AI + integrate passes run data-parallel; otherwise they run inline. Used to prove the
 // parallel path is serial-equivalent.
