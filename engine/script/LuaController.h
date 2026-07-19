@@ -10,6 +10,7 @@
 namespace fl {
 
 class EntityManager;
+struct WorldApi;
 
 // IEntityController backed by a sandboxed Lua 5.5 script.
 //
@@ -46,7 +47,11 @@ class LuaController : public IEntityController {
     // scriptSource: Lua source text (never bytecode — rejected by LuaSandbox)
     // packRootDir: passed to LuaSandbox to restrict require() to ai/<module>.lua
     // entityManager: optional; enables get_entity() Lua binding (sim-thread-only)
-    LuaController(std::string_view scriptSource, std::string packRootDir, const EntityManager* entityManager = nullptr);
+    // worldApi: optional host seam for the world.* module (#413); null = world.* engine-integration
+    //   calls (spawn/despawn/set_relationship/set_music_state/mission_*) are safe no-ops. The pointee
+    //   must outlive the controller (the host owns one WorldApi for the sim's lifetime).
+    LuaController(std::string_view scriptSource, std::string packRootDir, const EntityManager* entityManager = nullptr,
+                  const WorldApi* worldApi = nullptr);
     ~LuaController();
 
     ControlInput sample(const EntityState& state, uint64_t tick, double dt, const AiTickContext& ctx = {}) override;

@@ -315,6 +315,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
 
     // Peer management — all must be called from the sim thread (via GameLoop::enqueueSimCallback).
 
+    // Broadcast a music-state transition to every connected peer (#413/#166). `state` is a GameState
+    // ordinal; the client maps it back and drives MusicManager. Reliable. Sim-thread only (the mission
+    // Lua WorldApi hook calls it during the tick).
+    void broadcastMusicState(uint8_t state);
+
     // Gracefully disconnect one peer by ID.
     void kickPeer(uint32_t peerId);
 

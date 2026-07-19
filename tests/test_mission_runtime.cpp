@@ -719,6 +719,35 @@ TEST_CASE("MissionRuntime: a weather trigger action is dispatched verbatim for t
     CHECK(rt.outcome().state == MissionState::Complete);
 }
 
+TEST_CASE("MissionRuntime::forceOutcome ends the mission from outside the trigger table (#413)", "[mission-runtime]") {
+    // world.mission_success()/mission_failure() route here through the WorldApi seam. First outcome
+    // wins; the end hook fires exactly once.
+    NullLogger log;
+    EntityTypeRegistry reg;
+    EntityManager em(log, reg);
+    Mission m = missionWith({{"timer(999)", "mission_success"}}); // would not fire for a long time
+
+    int ends = 0;
+    MissionOutcome captured;
+    MissionRuntime rt(m, {}, em);
+    rt.setOnEnd([&](const MissionOutcome& o) {
+        ++ends;
+        captured = o;
+    });
+    rt.step(0);
+    CHECK(rt.outcome().state == MissionState::Active);
+
+    rt.forceOutcome(false); // a Lua script calls world.mission_failure()
+    CHECK(rt.done());
+    CHECK(rt.outcome().state == MissionState::Failed);
+    CHECK(ends == 1);
+    CHECK(captured.state == MissionState::Failed);
+
+    rt.forceOutcome(true); // ignored — first terminal outcome wins
+    CHECK(rt.outcome().state == MissionState::Failed);
+    CHECK(ends == 1);
+}
+
 TEST_CASE("MissionRuntime: a trigger fires exactly once (edge), not every tick", "[mission-runtime]") {
     NullLogger log;
     EntityTypeRegistry reg;

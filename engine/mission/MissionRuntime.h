@@ -59,6 +59,11 @@ class MissionRuntime {
     // reading "never spawned -> destroyed" from t=0. Sim-thread only.
     void registerObjectEntity(const std::string& objectId, EntityId eid);
 
+    // Force the objective to a terminal outcome from outside the trigger table (#413): a Lua script's
+    // world.mission_success()/mission_failure() routes here through the WorldApi seam. No-op once the
+    // mission has already ended (first outcome wins). Fires the end hook exactly once. Sim-thread only.
+    void forceOutcome(bool success);
+
     [[nodiscard]] const MissionOutcome& outcome() const noexcept {
         return m_outcome;
     }

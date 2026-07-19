@@ -86,6 +86,9 @@ enum class MsgId : uint8_t {
                                // seat (#974). {entityId, seatIndex} or the leave flag. The server replies
                                // MsgSeatResult and, on a grant, re-sends MsgConnectAck + the roster delta.
     SeatResult = 0x15,         // server->client, reliable: outcome of a MsgSeatRequest (SeatResultCode).
+    MusicState = 0x16,         // server->client, reliable: request a client music-state transition (#413/
+                               // #166). Broadcast when a Lua/mission script calls world.set_music_state();
+                               // carries a GameState ordinal. Additive id, old clients discard.
     LanBeacon = 0x20,          // raw UDP broadcast - NOT sent over ENet; 0x20+ reserved for non-ENet ids.
                                // ENet message ids occupy 0x00-0x1F. The non-ENet boundary was raised
                                // from 0x10 to 0x20 in #853 to free an ENet id for ConnectRequest -- a
@@ -462,6 +465,17 @@ struct MsgWeatherState {
 }; // 32 bytes, align 8
 static_assert(sizeof(MsgWeatherState) == 32u, "MsgWeatherState wire size changed");
 static_assert(offsetof(MsgWeatherState, turbulenceAmp) == 20u, "MsgWeatherState::turbulenceAmp offset changed");
+
+// Music-state transition request (#413/#166): the server broadcasts this when a Lua/mission script
+// calls world.set_music_state(). `state` is a GameState ordinal (Menu/FlightPatrol/FlightCombat/
+// MissionSuccess/Debrief); the client maps it back and drives MusicManager::setState. Reliable so the
+// transition is not lost. Additive id, old clients discard.
+struct MsgMusicState {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::MusicState)};
+    uint8_t state{0}; // GameState ordinal
+    uint16_t reserved{0};
+}; // 4 bytes, align 2
+static_assert(sizeof(MsgMusicState) == 4u, "MsgMusicState wire size changed");
 static_assert(offsetof(MsgWeatherState, utcJulianDay) == 24u, "MsgWeatherState::utcJulianDay offset changed");
 static_assert(alignof(MsgWeatherState) == 8u, "MsgWeatherState alignment changed");
 static_assert(offsetof(MsgWeatherState, timeOfDayTenths) == 2u, "MsgWeatherState::timeOfDayTenths offset changed");

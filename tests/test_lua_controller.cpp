@@ -6,6 +6,7 @@
 #include "entity/EntityTypeRegistry.h"
 #include "script/BuiltinAiScripts.h"
 #include "script/LuaController.h"
+#include "script/WorldApi.h"
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
 
@@ -814,4 +815,137 @@ TEST_CASE("LuaController: ai_main takes precedence when both entry points are de
     REQUIRE(c->isValid());
     auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0);
     CHECK(ctrl.throttle == Catch::Approx(0.9f)); // the coroutine, not compute_control
+}
+
+// ---------------------------------------------------------------------------
+// world.* module (#413)
+// ---------------------------------------------------------------------------
+
+namespace {
+// A WorldApi that records every call, for asserting the bindings reach the host seam.
+struct RecordingWorld {
+    fl::WorldApi api;
+    std::vector<std::string> spawns; // "type|x,y,z|heading|side"
+    std::vector<int> despawns;
+    std::vector<std::string> relations; // "a|b|rel"
+    std::vector<std::string> music;
+    std::vector<bool> outcomes;
+    int nextIdx{100};
+
+    RecordingWorld() {
+        api.spawn = [this](const std::string& t, const std::array<double, 3>& p, float h, const std::string& side) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "%s|%.0f,%.0f,%.0f|%.0f|%s", t.c_str(), p[0], p[1], p[2],
+                          static_cast<double>(h), side.c_str());
+            spawns.emplace_back(buf);
+            return nextIdx++;
+        };
+        api.despawn = [this](int idx) { despawns.push_back(idx); };
+        api.setRelationship = [this](const std::string& a, const std::string& b, const std::string& r) {
+            relations.push_back(a + "|" + b + "|" + r);
+        };
+        api.setMusicState = [this](const std::string& s) { music.push_back(s); };
+        api.setMissionOutcome = [this](bool ok) { outcomes.push_back(ok); };
+    }
+};
+
+std::unique_ptr<LuaController> makeWorldCtrl(const char* src, const fl::WorldApi* api) {
+    return std::make_unique<LuaController>(src, "", nullptr, api);
+}
+} // namespace
+
+TEST_CASE("world.spawn routes to the host and returns the new entity index (#413)") {
+    RecordingWorld w;
+    auto c = makeWorldCtrl("function compute_control(s,t,dt)\n"
+                           "  if t == 0 then\n"
+                           "    spawned = world.spawn('Su27', {x=100, y=0, z=200}, 90, 'russia')\n"
+                           "  end\n"
+                           "  return {throttle = (spawned == 100) and 1.0 or 0.0}\n"
+                           "end",
+                           &w.api);
+    REQUIRE(c->isValid());
+    auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0);
+    REQUIRE(w.spawns.size() == 1u);
+    CHECK(w.spawns[0] == "Su27|100,0,200|90|russia");
+    CHECK(ctrl.throttle == Catch::Approx(1.0f)); // saw the returned idx 100
+}
+
+TEST_CASE("world.spawn defaults side to neutral and returns -1 with no host (#413)") {
+    auto c = makeWorldCtrl("function compute_control(s,t,dt)\n"
+                           "  return {throttle = world.spawn('X', {x=0,y=0,z=0}, 0) < 0 and 0.5 or 0.0}\n"
+                           "end",
+                           nullptr); // no WorldApi
+    REQUIRE(c->isValid());
+    auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0);
+    CHECK(ctrl.throttle == Catch::Approx(0.5f)); // -1 => no host
+}
+
+TEST_CASE("world.despawn / set_relationship / set_music_state / mission outcome reach the host (#413)") {
+    RecordingWorld w;
+    auto c = makeWorldCtrl("function compute_control(s,t,dt)\n"
+                           "  world.despawn(42)\n"
+                           "  world.set_relationship('nato', 'russia', 'hostile')\n"
+                           "  world.set_music_state('combat')\n"
+                           "  world.mission_success()\n"
+                           "  return {}\n"
+                           "end",
+                           &w.api);
+    REQUIRE(c->isValid());
+    c->sample(makeState(), 0, 1.0 / 60.0);
+    REQUIRE(w.despawns.size() == 1u);
+    CHECK(w.despawns[0] == 42);
+    REQUIRE(w.relations.size() == 1u);
+    CHECK(w.relations[0] == "nato|russia|hostile");
+    REQUIRE(w.music.size() == 1u);
+    CHECK(w.music[0] == "combat");
+    REQUIRE(w.outcomes.size() == 1u);
+    CHECK(w.outcomes[0] == true);
+}
+
+TEST_CASE("world.timer fires its callback once after N sim-seconds (#413)") {
+    RecordingWorld w;
+    auto c = makeWorldCtrl("fired = 0\n"
+                           "function compute_control(s,t,dt)\n"
+                           "  if t == 0 then world.timer(1.0, function() fired = fired + 1 end) end\n"
+                           "  return {throttle = fired}\n"
+                           "end",
+                           &w.api);
+    REQUIRE(c->isValid());
+    // 60 ticks at 1/60 s = 1.0 s. Timer should fire exactly once at/after the deadline.
+    float last = 0.f;
+    for (uint64_t t = 0; t < 120; ++t)
+        last = c->sample(makeState(), t, 1.0 / 60.0).throttle;
+    CHECK(last == Catch::Approx(1.0f)); // fired exactly once, never re-fires
+}
+
+TEST_CASE("world.on_trigger fires once when its predicate first returns true (#413)") {
+    RecordingWorld w;
+    // Predicate becomes true at elapsed >= 0.5 s (30 ticks). Callback ends the mission.
+    auto c = makeWorldCtrl("function compute_control(s,t,dt)\n"
+                           "  if t == 0 then\n"
+                           "    world.on_trigger(function() return world.get_elapsed_time() >= 0.5 end,\n"
+                           "                     function() world.mission_failure() end)\n"
+                           "  end\n"
+                           "  return {}\n"
+                           "end",
+                           &w.api);
+    REQUIRE(c->isValid());
+    for (uint64_t t = 0; t < 20; ++t)
+        c->sample(makeState(), t, 1.0 / 60.0);
+    CHECK(w.outcomes.empty()); // not yet — under 0.5 s
+    for (uint64_t t = 20; t < 60; ++t)
+        c->sample(makeState(), t, 1.0 / 60.0);
+    REQUIRE(w.outcomes.size() == 1u); // fired exactly once
+    CHECK(w.outcomes[0] == false);
+}
+
+TEST_CASE("world.* bindings are present even without a host and world.get_elapsed_time advances (#413)") {
+    auto c = makeWorldCtrl("function compute_control(s,t,dt)\n"
+                           "  return {throttle = world.get_elapsed_time()}\n"
+                           "end",
+                           nullptr);
+    REQUIRE(c->isValid());
+    c->sample(makeState(), 0, 1.0 / 60.0);
+    auto ctrl = c->sample(makeState(), 1, 0.5); // +0.5 s
+    CHECK(ctrl.throttle > 0.5f);                // elapsed accumulated across ticks
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "script/LuaController.h"
 #include "script/LuaSandbox.h"
+#include "script/WorldApi.h"
 
 extern "C" {
 #include <lauxlib.h>
@@ -13,8 +14,10 @@ extern "C" {
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
+#include <vector>
 
 namespace fl {
 
@@ -45,6 +48,23 @@ struct LuaController::Impl {
     int coroutineRef{-2}; // LUA_NOREF; set once the thread is created
     bool coroutineStarted{false};
     bool coroutineDead{false}; // ai_main returned (or errored): all further ticks are neutral
+
+    // world.* module (#413). worldApi is the host seam for engine integration (spawn/faction/music/
+    // mission); null = those calls are safe no-ops. elapsedS accumulates sim-dt each tick for
+    // world.get_elapsed_time and the world.timer countdown. on_trigger/timer are pure Lua: predicate
+    // and callback functions are anchored in the registry and evaluated each tick.
+    const fl::WorldApi* worldApi{nullptr};
+    double elapsedS{0.0};
+    struct TriggerReg {
+        int predRef{-2};
+        int cbRef{-2};
+    };
+    struct TimerReg {
+        double fireAt{0.0};
+        int cbRef{-2};
+    };
+    std::vector<TriggerReg> triggers;
+    std::vector<TimerReg> timers;
 };
 
 // ---------------------------------------------------------------------------
@@ -390,8 +410,130 @@ static int luaDetectedContacts(lua_State* L) {
 }
 
 // ---------------------------------------------------------------------------
+// world.* module (#413) — engine integration routed through the host WorldApi seam.
+// Upvalue 1: LuaController::Impl* (lightuserdata). An unset hook is a safe no-op.
+// ---------------------------------------------------------------------------
+
+static LuaController::Impl* worldImpl(lua_State* L) {
+    return static_cast<LuaController::Impl*>(lua_touserdata(L, lua_upvalueindex(1)));
+}
+
+// world.spawn(type_id, pos, heading, [side]) -> entity idx (or -1 on failure / no host)
+static int luaWorldSpawn(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    const char* typeId = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE); // pos {x,y,z}
+    double pos[3];
+    readVec3(L, 2, pos);
+    const float heading = static_cast<float>(luaL_checknumber(L, 3));
+    const char* side = luaL_optstring(L, 4, "");
+    int idx = -1;
+    if (impl->worldApi && impl->worldApi->spawn)
+        idx = impl->worldApi->spawn(typeId, {pos[0], pos[1], pos[2]}, heading, side);
+    lua_pushinteger(L, idx);
+    return 1;
+}
+
+// world.despawn(entity_idx)
+static int luaWorldDespawn(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    const lua_Integer idx = luaL_checkinteger(L, 1);
+    if (impl->worldApi && impl->worldApi->despawn)
+        impl->worldApi->despawn(static_cast<int>(idx));
+    return 0;
+}
+
+// world.set_relationship(faction_a, faction_b, rel)  rel = friendly|neutral|hostile
+static int luaWorldSetRelationship(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    const char* a = luaL_checkstring(L, 1);
+    const char* b = luaL_checkstring(L, 2);
+    const char* rel = luaL_checkstring(L, 3);
+    if (impl->worldApi && impl->worldApi->setRelationship)
+        impl->worldApi->setRelationship(a, b, rel);
+    return 0;
+}
+
+// world.set_music_state(state)  state = menu|patrol|combat|success|debrief
+static int luaWorldSetMusicState(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    const char* state = luaL_checkstring(L, 1);
+    if (impl->worldApi && impl->worldApi->setMusicState)
+        impl->worldApi->setMusicState(state);
+    return 0;
+}
+
+static int luaWorldMissionSuccess(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    if (impl->worldApi && impl->worldApi->setMissionOutcome)
+        impl->worldApi->setMissionOutcome(true);
+    return 0;
+}
+
+static int luaWorldMissionFailure(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    if (impl->worldApi && impl->worldApi->setMissionOutcome)
+        impl->worldApi->setMissionOutcome(false);
+    return 0;
+}
+
+// world.get_elapsed_time() -> seconds since this controller started
+static int luaWorldGetElapsedTime(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    lua_pushnumber(L, impl->elapsedS);
+    return 1;
+}
+
+// world.on_trigger(predicate_fn, callback_fn) -- fires callback once, the first tick predicate is true
+static int luaWorldOnTrigger(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    luaL_checktype(L, 1, LUA_TFUNCTION);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    lua_pushvalue(L, 2);
+    const int cbRef = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_pushvalue(L, 1);
+    const int predRef = luaL_ref(L, LUA_REGISTRYINDEX);
+    impl->triggers.push_back({predRef, cbRef});
+    return 0;
+}
+
+// world.timer(seconds, callback_fn) -- fires callback once after N sim-seconds
+static int luaWorldTimer(lua_State* L) {
+    LuaController::Impl* impl = worldImpl(L);
+    const double seconds = luaL_checknumber(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    lua_pushvalue(L, 2);
+    const int cbRef = luaL_ref(L, LUA_REGISTRYINDEX);
+    impl->timers.push_back({impl->elapsedS + seconds, cbRef});
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // API registration
 // ---------------------------------------------------------------------------
+
+static void registerWorldModule(lua_State* L, LuaController::Impl* impl) {
+    static const luaL_Reg kFuncs[] = {
+        {"spawn", luaWorldSpawn},
+        {"despawn", luaWorldDespawn},
+        {"set_relationship", luaWorldSetRelationship},
+        {"set_music_state", luaWorldSetMusicState},
+        {"mission_success", luaWorldMissionSuccess},
+        {"mission_failure", luaWorldMissionFailure},
+        {"get_elapsed_time", luaWorldGetElapsedTime},
+        {"on_trigger", luaWorldOnTrigger},
+        {"timer", luaWorldTimer},
+        {nullptr, nullptr},
+    };
+    lua_newtable(L);
+    // Each function is a closure over the Impl* (lightuserdata upvalue), like the spatial funcs.
+    for (const luaL_Reg* r = kFuncs; r->name; ++r) {
+        lua_pushlightuserdata(L, impl);
+        lua_pushcclosure(L, r->func, 1);
+        lua_setfield(L, -2, r->name);
+    }
+    lua_setglobal(L, "world");
+}
 
 static void registerGuidanceModule(lua_State* L) {
     static const luaL_Reg kFuncs[] = {
@@ -427,9 +569,10 @@ static void registerSpatialFuncs(lua_State* L, LuaController::Impl* impl) {
 // ---------------------------------------------------------------------------
 
 LuaController::LuaController(std::string_view scriptSource, std::string packRootDir,
-                             const fl::EntityManager* entityManager)
+                             const fl::EntityManager* entityManager, const fl::WorldApi* worldApi)
     : m_impl(std::make_unique<Impl>()) {
     m_impl->entityManager = entityManager;
+    m_impl->worldApi = worldApi;
 
     m_impl->sandbox = LuaSandbox::create(std::move(packRootDir));
     if (!m_impl->sandbox) {
@@ -440,6 +583,7 @@ LuaController::LuaController(std::string_view scriptSource, std::string packRoot
     lua_State* L = m_impl->sandbox->luaState();
     registerGuidanceModule(L);
     registerSpatialFuncs(L, m_impl.get());
+    registerWorldModule(L, m_impl.get());
 
     if (!m_impl->sandbox->loadScript(scriptSource)) {
         m_impl->lastError = m_impl->sandbox->lastError();
@@ -557,6 +701,71 @@ fl::ControlInput LuaController::sampleCoroutine(const fl::EntityState& state, ui
     return {};
 }
 
+// Evaluate the world.timer / world.on_trigger registrations (#413) once this tick, firing each
+// callback at most once and removing it. Runs on the sandbox's main state with the world view already
+// stashed, so a callback may itself call world.* / guidance.* etc. A predicate/callback error is
+// logged (rate-limited) and the registration dropped — a broken trigger never wedges the tick.
+static void evaluateWorldTriggers(LuaController::Impl& im, uint64_t tick) {
+    if (im.timers.empty() && im.triggers.empty())
+        return;
+    lua_State* L = im.sandbox->luaState();
+
+    // Timers: fire and drop any whose deadline has passed.
+    for (std::size_t i = 0; i < im.timers.size();) {
+        if (im.elapsedS + 1e-9 >= im.timers[i].fireAt) {
+            const int cbRef = im.timers[i].cbRef;
+            im.timers.erase(im.timers.begin() + static_cast<std::ptrdiff_t>(i));
+            lua_rawgeti(L, LUA_REGISTRYINDEX, cbRef);
+            if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+                if (tick >= im.nextErrorLogTick) {
+                    std::fprintf(stderr, "[LUA WARN] world.timer callback error: %s\n",
+                                 lua_tostring(L, -1) ? lua_tostring(L, -1) : "(unknown)");
+                    im.nextErrorLogTick = tick + 60;
+                }
+                lua_pop(L, 1);
+            }
+            luaL_unref(L, LUA_REGISTRYINDEX, cbRef);
+        } else {
+            ++i;
+        }
+    }
+
+    // Triggers: evaluate each predicate; on the first truthy result fire the callback and drop it.
+    for (std::size_t i = 0; i < im.triggers.size();) {
+        const LuaController::Impl::TriggerReg reg = im.triggers[i];
+        lua_rawgeti(L, LUA_REGISTRYINDEX, reg.predRef);
+        bool fired = false;
+        if (lua_pcall(L, 0, 1, 0) != LUA_OK) {
+            if (tick >= im.nextErrorLogTick) {
+                std::fprintf(stderr, "[LUA WARN] world.on_trigger predicate error: %s\n",
+                             lua_tostring(L, -1) ? lua_tostring(L, -1) : "(unknown)");
+                im.nextErrorLogTick = tick + 60;
+            }
+            lua_pop(L, 1);
+            fired = true; // drop a broken predicate rather than re-evaluate it forever
+        } else {
+            fired = (lua_toboolean(L, -1) != 0);
+            lua_pop(L, 1);
+        }
+        if (!fired) {
+            ++i;
+            continue;
+        }
+        im.triggers.erase(im.triggers.begin() + static_cast<std::ptrdiff_t>(i));
+        lua_rawgeti(L, LUA_REGISTRYINDEX, reg.cbRef);
+        if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+            if (tick >= im.nextErrorLogTick) {
+                std::fprintf(stderr, "[LUA WARN] world.on_trigger callback error: %s\n",
+                             lua_tostring(L, -1) ? lua_tostring(L, -1) : "(unknown)");
+                im.nextErrorLogTick = tick + 60;
+            }
+            lua_pop(L, 1);
+        }
+        luaL_unref(L, LUA_REGISTRYINDEX, reg.predRef);
+        luaL_unref(L, LUA_REGISTRYINDEX, reg.cbRef);
+    }
+}
+
 fl::ControlInput LuaController::sample(const fl::EntityState& state, uint64_t tick, double dt,
                                        const fl::AiTickContext& ctx) {
     if (!m_impl->valid)
@@ -567,6 +776,10 @@ fl::ControlInput LuaController::sample(const fl::EntityState& state, uint64_t ti
     m_impl->currentCtx = &ctx;
     m_impl->currentTick = tick;
     m_impl->currentDt = dt;
+    m_impl->elapsedS += dt;
+
+    // Fire due world.timer / world.on_trigger callbacks before computing control this tick (#413).
+    evaluateWorldTriggers(*m_impl, tick);
 
     if (m_impl->useCoroutine) {
         fl::ControlInput ctrl = sampleCoroutine(state, tick, dt);

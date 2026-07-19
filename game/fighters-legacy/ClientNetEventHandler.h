@@ -245,6 +245,11 @@ struct ClientNetEventHandler : INetworkEventHandler {
     static constexpr uint32_t kNoAckedSeqNum = 0xFFFFFFFFu;
     std::function<void(RenderSnapshot&, uint64_t, uint32_t, uint32_t)> snapshotCallback;
 
+    // Optional: called when the server sends a MsgMusicState (#413/#166), with the GameState ordinal.
+    // Game.cpp wires it to MusicManager::setState so a mission/AI script's world.set_music_state()
+    // drives the client's music. Null = ignored. Main-thread only (onReceive runs on the main thread).
+    std::function<void(uint8_t)> musicStateCallback;
+
   private:
     // Store f into *sessionFailure if it is still None (first-writer-wins via CAS); no-op if unset.
     void signalFailure(SessionFailure f);

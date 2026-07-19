@@ -258,6 +258,15 @@ void WorldBroadcaster::kickPeer(uint32_t peerId) {
     m_net.disconnectPeer(peerId);
 }
 
+void WorldBroadcaster::broadcastMusicState(uint8_t state) {
+    MsgMusicState msg;
+    msg.state = state;
+    for (const auto& [peerId, pin] : m_peerInputs) {
+        (void)pin;
+        m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
+    }
+}
+
 void WorldBroadcaster::banAddress(std::string ip) {
     ip = fl::normalizeIp(ip);
     m_bannedAddresses.insert(ip);

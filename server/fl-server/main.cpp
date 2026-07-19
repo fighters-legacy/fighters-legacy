@@ -54,6 +54,7 @@
 #include <flight/FlightModelParser.h>
 #include <job/JobSystem.h>
 #include <loop/GameLoop.h>
+#include <loop/GameState.h>
 #include <mission/BuiltinMissions.h>
 #include <mission/Mission.h>
 #include <mission/MissionParser.h>
@@ -69,6 +70,7 @@
 #include <render/TerrainStreamer.h>
 #include <script/BuiltinAiScripts.h>
 #include <script/LuaController.h>
+#include <script/WorldApi.h>
 #include <stdfs/StdAsyncFilesystem.h>
 #include <stdfs/StdFilesystem.h>
 #include <weapon/Loadout.h>
@@ -947,6 +949,80 @@ int main(int argc, char** argv) {
     std::function<void(std::string_view)> missionActionSink;
     std::string loadedMissionName; // for the #856 headless report
     uint64_t loadedMissionSpawned = 0;
+
+    // The world.* host seam (#413): the engine integration a Lua AI/mission script reaches through
+    // world.spawn/despawn/set_relationship/set_music_state/mission_success/mission_failure. Declared
+    // before the mission load so its LuaControllers can bind it; the hooks run on the sim thread (from
+    // the controller's sample()), where direct EntityManager/FactionRegistry mutation + a music
+    // broadcast are all safe. Lifetime spans gameLoop, so it outlives every LuaController.
+    fl::WorldApi worldApi;
+    worldApi.spawn = [&](const std::string& type, const std::array<double, 3>& pos, float /*heading*/,
+                         const std::string& side) -> int {
+        fl::EntityTransform t{};
+        t.pos[0] = pos[0];
+        t.pos[1] = pos[1];
+        t.pos[2] = pos[2];
+        t.quat[3] = 1.f; // identity; the default LoiterController steers heading from here
+        const fl::EntityId id = entityManager.spawn(type.c_str(), t);
+        if (!id.valid())
+            return -1;
+        uint16_t fi = side.empty() ? 0 : missionFactions.indexOf(side);
+        if (fi == UINT16_MAX)
+            fi = 0;
+        if (fl::EntityState* st = entityManager.get(id))
+            st->factionIndex = fi;
+        // A default loiter keeps a spawned aircraft flying (a bare entity would freeze); a ground unit
+        // simply holds. Scripts that want a specific behavior can despawn + respawn with mission bots.
+        auto ctrl = std::make_unique<fl::ai::LoiterController>(glm::dvec3(pos[0], pos[1], pos[2]));
+        broadcaster.registerController(id, std::move(ctrl), nullptr, fl::kAutoSpawnAirspeed);
+        return static_cast<int>(id.index);
+    };
+    worldApi.despawn = [&](int entityIdx) {
+        fl::EntityId target{};
+        entityManager.forEach([&](const fl::EntityState& s) {
+            if (!s.dead && s.id.index == static_cast<uint32_t>(entityIdx))
+                target = s.id;
+        });
+        if (target.valid())
+            entityManager.kill(target);
+    };
+    worldApi.setRelationship = [&](const std::string& a, const std::string& b, const std::string& rel) {
+        const uint16_t ia = missionFactions.indexOf(a);
+        const uint16_t ib = missionFactions.indexOf(b);
+        if (ia == UINT16_MAX || ib == UINT16_MAX || ia == 0 || ib == 0 || ia == ib)
+            return; // unknown/neutral/self — nothing to set
+        fl::FactionRelation fr;
+        if (rel == "friendly")
+            fr = fl::FactionRelation::Friendly;
+        else if (rel == "hostile")
+            fr = fl::FactionRelation::Hostile;
+        else if (rel == "neutral")
+            fr = fl::FactionRelation::Neutral;
+        else
+            return; // unrecognised relation string
+        missionFactions.setRelationship(ia, ib, fr);
+    };
+    worldApi.setMusicState = [&](const std::string& s) {
+        fl::GameState gs;
+        if (s == "menu")
+            gs = fl::GameState::Menu;
+        else if (s == "patrol")
+            gs = fl::GameState::FlightPatrol;
+        else if (s == "combat")
+            gs = fl::GameState::FlightCombat;
+        else if (s == "success")
+            gs = fl::GameState::MissionSuccess;
+        else if (s == "debrief")
+            gs = fl::GameState::Debrief;
+        else
+            return; // unknown state name
+        broadcaster.broadcastMusicState(static_cast<uint8_t>(gs));
+    };
+    worldApi.setMissionOutcome = [&](bool success) {
+        if (missionRuntime)
+            missionRuntime->forceOutcome(success);
+    };
+
     if (!missionToLoad.empty()) {
         // Resolution precedence (loadMissionYaml): builtin id (#868, zero-pack) -> a readable
         // .yaml/.yml file path (the authoring loop — iterate a mission without mounting a pack) ->
@@ -1005,8 +1081,8 @@ int main(int argc, char** argv) {
                                               name.c_str(), obj.id.c_str());
                                 log->log(LogLevel::Warn, __FILE__, __LINE__, m);
                             } else {
-                                auto lc = std::make_unique<fl::LuaController>(cacheIt->second.first,
-                                                                              cacheIt->second.second, &entityManager);
+                                auto lc = std::make_unique<fl::LuaController>(
+                                    cacheIt->second.first, cacheIt->second.second, &entityManager, &worldApi);
                                 if (lc->isValid()) {
                                     ctrl = std::move(lc);
                                 } else {
@@ -1038,8 +1114,8 @@ int main(int argc, char** argv) {
                         if (def && !def->aiScriptAsset.empty()) {
                             auto cacheIt = aiScriptCache.find(def->aiScriptAsset);
                             if (cacheIt != aiScriptCache.end()) {
-                                auto lc = std::make_unique<fl::LuaController>(cacheIt->second.first,
-                                                                              cacheIt->second.second, &entityManager);
+                                auto lc = std::make_unique<fl::LuaController>(
+                                    cacheIt->second.first, cacheIt->second.second, &entityManager, &worldApi);
                                 if (lc->isValid())
                                     ctrl = std::move(lc);
                                 else {
@@ -1378,6 +1454,7 @@ int main(int argc, char** argv) {
     adminCtx.sim.entityManager = &entityManager;
     adminCtx.sim.typeRegistry = &entityRegistry;
     adminCtx.sim.weatherController = &weatherController;
+    adminCtx.sim.worldApi = &worldApi; // world.* seam for admin-spawned Lua controllers (#413)
     adminCtx.env.beacon = beacon.get();
     adminCtx.sim.gameLoop = &gameLoop;
     adminCtx.env.logger = log;

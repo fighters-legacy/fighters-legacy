@@ -952,6 +952,11 @@ void Game::startGame(const std::string& mission) {
         d.session.clientHandler->console = &*d.services.gameConsole;
         d.session.clientHandler->effects = &d.services.effectRouter; // weapon cosmetics (#625)
         d.services.effectRouter.reset();                             // no stale effects across sessions
+        // Server-driven music (#413/#166): a mission/AI world.set_music_state() reaches MusicManager here.
+        d.session.clientHandler->musicStateCallback = [&d](uint8_t state) {
+            if (fl::isGameStateOrdinal(state))
+                d.services.musicManager.setState(static_cast<fl::GameState>(state));
+        };
         d.session.clientHandler->motdDisplaySeconds = d.services.userConfig->client().motdDisplayS;
         d.session.clientHandler->sessionFailure = &d.session.sessionFailure;
         // Connect-handshake inputs (#853/#834/#857): request a specific aircraft if --aircraft was given

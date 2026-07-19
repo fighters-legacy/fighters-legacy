@@ -386,6 +386,14 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
                 }
             }
         }
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::MusicState)) {
+        // Server-driven music transition (#413/#166): a Lua/mission script called world.set_music_state.
+        // Hand the GameState ordinal to the game, which drives MusicManager on the main thread.
+        fl::MsgMusicState ms;
+        if (!fl::readMsg(data, size, ms))
+            return;
+        if (musicStateCallback)
+            musicStateCallback(ms.state);
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::ServerNotice)) {
         fl::MsgServerNotice sn;
         if (!fl::readMsg(data, size, sn))
