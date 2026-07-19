@@ -13,7 +13,7 @@ static constexpr const char* kActionNames[] = {
     "PitchAxis",  "RollAxis",    "YawAxis",    "ThrottleAxis", "PitchUp",      "PitchDown",   "RollLeft",
     "RollRight",  "YawLeft",     "YawRight",   "ThrottleUp",   "ThrottleDown", "Airbrake",    "Afterburner",
     "FireWeapon", "FireMissile", "NextWeapon", "PrevWeapon",   "ViewUp",       "ViewDown",    "ViewLeft",
-    "ViewRight",  "LandingGear", "Flaps",      "Pause",        "Menu",         "WingmanMenu",
+    "ViewRight",  "LandingGear", "Flaps",      "Pause",        "Menu",         "WingmanMenu", "Eject",
 };
 static_assert(std::size(kActionNames) == static_cast<size_t>(InputAction::Count),
               "kActionNames must have one entry per InputAction");
@@ -586,6 +586,9 @@ void InputBindings::applyDefaults() {
     // Radio menu (#610). C is free today; the menu is non-modal, so this does not steal flight input.
     m_primary[static_cast<int>(InputAction::WingmanMenu)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::C),
                                                              false};
+    // Ejection (#672). Bound to End — deliberate and out of the way, so it is never hit by accident on
+    // the flight-control cluster. The server edge-detects it; a held key is one ejection, not many.
+    m_primary[static_cast<int>(InputAction::Eject)] = {BindingSource::Keyboard, static_cast<uint32_t>(Key::End), false};
 
     // Gamepad alt defaults
     m_alt[static_cast<int>(InputAction::PitchAxis)] = {BindingSource::GamepadAxis,

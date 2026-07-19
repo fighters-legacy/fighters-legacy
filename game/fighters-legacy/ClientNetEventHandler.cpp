@@ -386,6 +386,29 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
                 }
             }
         }
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::MusicState)) {
+        // Server-driven music transition (#413/#166): a Lua/mission script called world.set_music_state.
+        // Hand the GameState ordinal to the game, which drives MusicManager on the main thread.
+        fl::MsgMusicState ms;
+        if (!fl::readMsg(data, size, ms))
+            return;
+        if (musicStateCallback)
+            musicStateCallback(ms.state);
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::Haptic)) {
+        // Scripted rumble (#128): a Lua script's rumble()/stop_rumble() plays on the local gamepad.
+        fl::MsgHaptic hp;
+        if (!fl::readMsg(data, size, hp))
+            return;
+        if (hapticCallback && fl::isHapticKindOrdinal(hp.kind))
+            hapticCallback(hp.kind, hp.a, hp.b, hp.durationMs);
+    } else if (msgId == static_cast<uint8_t>(fl::MsgId::MissionOutcome)) {
+        // The objective evaluator ended the mission (#584): record the real result so the debrief
+        // reports success/failure instead of a hardcoded success.
+        fl::MsgMissionOutcome mo;
+        if (!fl::readMsg(data, size, mo))
+            return;
+        if (fl::isMissionResultOrdinal(mo.outcome))
+            m_missionOutcome = static_cast<fl::MissionResultCode>(mo.outcome);
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::ServerNotice)) {
         fl::MsgServerNotice sn;
         if (!fl::readMsg(data, size, sn))
@@ -525,6 +548,18 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
                                  rec.subjectGen == static_cast<uint16_t>(assignedEntityGen);
             const bool youKilled = rec.instigatorIdx == assignedEntityIdx && rec.instigatorGen != 0 &&
                                    rec.instigatorGen == static_cast<uint16_t>(assignedEntityGen);
+
+            // Per-class kill tally for the pilot logbook (#674): classify the victim by its entity
+            // category (via the cached typeIndex + type registry) when this peer scored the kill.
+            if (youKilled) {
+                int cls = 0; // ObjectCategory::AirVehicle default when the victim type is unknown
+                if (auto kit = m_knownEntities.find(rec.subjectIdx); kit != m_knownEntities.end()) {
+                    if (const fl::EntityDef* vd = registry.byIndex(kit->second.typeIndex))
+                        cls = static_cast<int>(vd->category);
+                }
+                if (cls >= 0 && cls < 8)
+                    ++m_sessionStats.killsByClass[cls];
+            }
 
             // Names arrive with chat/scoreboard (Epic E); until then the feed speaks in entities.
             char who[32];

@@ -15,6 +15,7 @@
 #include "config/DifficultySettings.h" // AiScaling — sensing difficulty scaling (#685)
 #include "entity/Collision.h"          // CollisionPair — entity-entity collision (#630)
 #include "entity/DamageApplication.h"  // DamageRules — the gameplay damage gates (#626)
+#include "entity/Ejection.h"           // EjectionOutcome — pilot survival on ejection (#672)
 #include "entity/EntityEvent.h"        // IEntityEventHandler — kill attribution + scoring (#626)
 #include "entity/EntityId.h"
 #include "entity/SubsystemDamage.h" // SubsystemStateSet — per-subsystem damage (#675)
@@ -96,6 +97,7 @@ struct PeerInputState {
     bool hasSeq{false};           // false until first input received from this peer
     bool hasAppliedSeq{false};    // false until the first input is drained + applied (#427 TLV gate)
     bool ewmaSeeded{false};       // false until EWMA receives its first sample
+    bool ejectHeld{false};        // last-tick eject bit, for rising-edge detection (#672)
     // Jitter buffer: initialized to depth 1; sized from estimatedDelayTicks on first input,
     // then continuously adjusted by the adaptive resize loop in WorldBroadcaster::onTick.
     JitterBuffer jitterBuffer{1};
@@ -161,6 +163,7 @@ struct ControlledEntity {
     float fuelLeakKgS{0.f};         // accumulated fuel-leak rate from failed fuel subsystem(s) (#675)
     bool prevDispenseCm{false};     // countermeasure-dispense edge detector (#529): a held input is one pop
     CrewState crew{};               // per-seat control frame (#969); EMPTY = single-seat fast path (above)
+    bool ejected{false};            // #672 AI auto-eject guard: an AI pilot punches out once, not every tick
 };
 
 // Pre-start scalar configuration. Bundles the init-time setters so callers configure rate limiting,
@@ -296,6 +299,34 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
                             std::shared_ptr<const FlightModelData> model = nullptr,
                             float initialAirspeed = kAutoSpawnAirspeed);
 
+    // Eject the pilot flying `eid` (#672): evaluate the seat envelope from the aircraft's live flight
+    // state, spawn a replicating parachute at its position (if the parachute entity type is registered),
+    // and destroy the aircraft. Returns the outcome (KIA when the seat envelope was not survivable; a
+    // plain server with no frontline resolves a survivor to MIA). No-op on an invalid/dead entity. Used
+    // by the pilot eject-input edge and the AI auto-eject rule. Sim-thread only.
+    EjectionOutcome ejectPilot(EntityId eid);
+
+    // Register the entity type spawned as a parachute on ejection (#672). Empty (default) = no parachute
+    // is spawned (the aircraft is still destroyed). fl-server sets "builtin:parachute". Sim-thread only.
+    void setParachuteType(std::string typeId) {
+        m_parachuteType = std::move(typeId);
+    }
+
+    // Resolve the territory a pilot's parachute comes down over, from the landing world position and the
+    // pilot's faction (#672). A campaign wires this to its frontline (territoryAtWorld); unset =
+    // TerritoryControl::Neutral, so a plain server resolves every survivor to MIA. Sim-thread only.
+    using TerritoryQuery = std::function<TerritoryControl(glm::dvec3 pos, uint16_t factionIndex)>;
+    void setTerritoryQuery(TerritoryQuery fn) {
+        m_territoryQuery = std::move(fn);
+    }
+
+    // Enable AI auto-eject (#672): an AI/scripted pilot punches out (spawns a chute + loses the airframe)
+    // when its HP falls to the critical fraction, instead of riding a doomed aircraft down. Off by
+    // default so unit damage tests see the plain damage progression; fl-server enables it. Sim-thread only.
+    void setAiAutoEject(bool on) noexcept {
+        m_aiAutoEject = on;
+    }
+
     // Override a controlled entity's loadout from a mission's per-object `loadout:` (#855). Rebuilds the
     // live stations from `stores` (each replaces one station's default, respecting the station's allowed
     // list; see buildLoadoutOverride) and re-costs the airframe's payload mass/drag. Must be called AFTER
@@ -314,6 +345,21 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     }
 
     // Peer management — all must be called from the sim thread (via GameLoop::enqueueSimCallback).
+
+    // Broadcast a music-state transition to every connected peer (#413/#166). `state` is a GameState
+    // ordinal; the client maps it back and drives MusicManager. Reliable. Sim-thread only (the mission
+    // Lua WorldApi hook calls it during the tick).
+    void broadcastMusicState(uint8_t state);
+
+    // Broadcast a scripted haptic event to every connected peer (#128). `kind` is a HapticKind ordinal;
+    // a/b/durationMs are already clamped by the engine binding. Each client plays it on its local
+    // gamepad. Reliable. Sim-thread only.
+    void broadcastHaptic(uint8_t kind, float a, float b, uint16_t durationMs);
+
+    // Broadcast the mission's terminal outcome to every connected peer (#584), so the client debrief
+    // shows the real success/failure. `outcome` is a MissionResultCode. Reliable. Sim-thread only
+    // (fl-server calls it from the MissionRuntime end hook).
+    void broadcastMissionOutcome(uint8_t outcome, float elapsedSeconds, uint16_t triggersFired);
 
     // Gracefully disconnect one peer by ID.
     void kickPeer(uint32_t peerId);
@@ -1198,6 +1244,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // of the global m_groundElevation scalar.
     std::function<float(glm::dvec3)> m_groundQuery;
     std::function<SurfaceType(glm::dvec3)> m_groundSurfaceQuery; // #487 per-surface rolling resistance
+    std::string m_parachuteType;                                 // #672 entity type spawned on ejection ("" = none)
+    std::function<TerritoryControl(glm::dvec3, uint16_t)> m_territoryQuery; // #672 landing-zone control (unset = MIA)
+    bool m_aiAutoEject{false}; // #672 AI pilots auto-eject when critically hit; off by default
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword;                               // empty = admin channel disabled

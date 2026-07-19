@@ -952,6 +952,27 @@ void Game::startGame(const std::string& mission) {
         d.session.clientHandler->console = &*d.services.gameConsole;
         d.session.clientHandler->effects = &d.services.effectRouter; // weapon cosmetics (#625)
         d.services.effectRouter.reset();                             // no stale effects across sessions
+        // Server-driven music (#413/#166): a mission/AI world.set_music_state() reaches MusicManager here.
+        d.session.clientHandler->musicStateCallback = [&d](uint8_t state) {
+            if (fl::isGameStateOrdinal(state))
+                d.services.musicManager.setState(static_cast<fl::GameState>(state));
+        };
+        // Scripted haptics (#128): a Lua rumble()/rumble_triggers()/stop_rumble() plays on the local
+        // (current-player) gamepad 0. Args are already clamped server-side by the engine binding.
+        d.session.clientHandler->hapticCallback = [&d](uint8_t kind, float a, float b, uint16_t durMs) {
+            fl::IInput& in = *d.services.p.input;
+            switch (static_cast<fl::HapticKind>(kind)) {
+            case fl::HapticKind::Rumble:
+                in.rumble(0, a, b, durMs);
+                break;
+            case fl::HapticKind::Triggers:
+                in.rumbleTriggers(0, a, b, durMs);
+                break;
+            case fl::HapticKind::Stop:
+                in.stopRumble(0);
+                break;
+            }
+        };
         d.session.clientHandler->motdDisplaySeconds = d.services.userConfig->client().motdDisplayS;
         d.session.clientHandler->sessionFailure = &d.session.sessionFailure;
         // Connect-handshake inputs (#853/#834/#857): request a specific aircraft if --aircraft was given
@@ -1163,14 +1184,17 @@ void Game::handleTransition(Screen next) {
         d.services.musicManager.setState(GameState::Menu);
     else if (next == Screen::Debrief) {
         // Real session stats (#626): the server's tallies, delivered on the CombatEvent channel.
-        // Success stays true until the mission runtime (#584) defines failure.
         uint32_t kills = 0;
         uint32_t losses = 0;
         if (d.session.clientHandler) {
             kills = d.session.clientHandler->sessionStats().kills;
             losses = d.session.clientHandler->sessionStats().losses;
         }
-        d.services.screenMgr->debrief().setStats(static_cast<int>(kills), static_cast<int>(losses), true);
+        // Real mission outcome (#584): the objective evaluator's result, delivered on MsgMissionOutcome.
+        // A session with no mission (Free Flight) never sends one, so the default reads as success.
+        const bool missionSuccess =
+            !d.session.clientHandler || d.session.clientHandler->missionOutcome() != fl::MissionResultCode::Failure;
+        d.services.screenMgr->debrief().setStats(static_cast<int>(kills), static_cast<int>(losses), missionSuccess);
         // The pilot's career log accumulates per session, exactly once, on the way into debrief:
         // kills/losses from the server's tallies plus this session's flight time (#634).
         if (d.services.userConfig) {
@@ -1180,6 +1204,23 @@ void Game::handleTransition(Screen next) {
             ps.profile.kills += static_cast<int>(kills);
             ps.profile.losses += static_cast<int>(losses);
             ps.profile.flightTimeS += flightSecs;
+            // Pilot logbook (#674): the career record accrues the same debrief deltas. Per-class kills
+            // come from the classified kill feed; the mission counts as flown (and failed when the
+            // objective evaluator said so, #584). Ejections (#672) are recorded on their own path.
+            if (d.session.clientHandler) {
+                const auto& s = d.session.clientHandler->sessionStats();
+                uint32_t classified = 0;
+                for (int c = 0; c < 8; ++c) {
+                    for (uint32_t i = 0; i < s.killsByClass[c]; ++i)
+                        ps.profile.logbook.recordKill(c);
+                    classified += s.killsByClass[c];
+                }
+                // Any kills the feed could not classify still count (as the default air class), so the
+                // logbook's total matches the debrief's kill delta exactly.
+                for (uint32_t i = classified; i < kills; ++i)
+                    ps.profile.logbook.recordKill(0);
+            }
+            ps.profile.logbook.recordMission(missionSuccess);
             d.services.userConfig->setPilot(ps);
         }
         d.services.musicManager.setState(GameState::Debrief);

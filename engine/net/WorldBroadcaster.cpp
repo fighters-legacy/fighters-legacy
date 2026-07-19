@@ -202,6 +202,10 @@ namespace fl {
 // into an instant kill -- the pilot should be able to break the aeroplane, but should have to work at it.
 constexpr float kOverGDamagePerG = 6.0f;
 
+// HP fraction at or below which an AI/scripted pilot auto-ejects (#672). A future skill model can scale
+// this per pilot (a nervous rookie punches out earlier than an ace); 15% is a reasonable baseline.
+constexpr float kAiEjectHpFraction = 0.15f;
+
 // Default airspeed for an airborne spawn that does not ask for a specific one (#883). A gentle cruise
 // (~230 kts) that is comfortably above the stall for the fighters this targets and flyable for the
 // no-stall builtin UFO, so a freshly spawned aircraft — pilot, AI, or mission object — is in stable
@@ -256,6 +260,85 @@ WorldBroadcaster::~WorldBroadcaster() = default;
 
 void WorldBroadcaster::kickPeer(uint32_t peerId) {
     m_net.disconnectPeer(peerId);
+}
+
+void WorldBroadcaster::broadcastMusicState(uint8_t state) {
+    MsgMusicState msg;
+    msg.state = state;
+    for (const auto& [peerId, pin] : m_peerInputs) {
+        (void)pin;
+        m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
+    }
+}
+
+void WorldBroadcaster::broadcastHaptic(uint8_t kind, float a, float b, uint16_t durationMs) {
+    MsgHaptic msg;
+    msg.kind = kind;
+    msg.a = a;
+    msg.b = b;
+    msg.durationMs = durationMs;
+    for (const auto& [peerId, pin] : m_peerInputs) {
+        (void)pin;
+        m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
+    }
+}
+
+void WorldBroadcaster::broadcastMissionOutcome(uint8_t outcome, float elapsedSeconds, uint16_t triggersFired) {
+    MsgMissionOutcome msg;
+    msg.outcome = outcome;
+    msg.elapsedSeconds = elapsedSeconds;
+    msg.triggersFired = triggersFired;
+    for (const auto& [peerId, pin] : m_peerInputs) {
+        (void)pin;
+        m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
+    }
+}
+
+EjectionOutcome WorldBroadcaster::ejectPilot(EntityId eid) {
+    EntityState* st = m_entityManager.get(eid);
+    if (!st || st->dead)
+        return EjectionOutcome::KIA; // nothing (or nobody) left to eject
+
+    // Seat envelope from the live flight state: AGL, speed, and the radial sink rate.
+    const double pos[3] = {st->transform.pos[0], st->transform.pos[1], st->transform.pos[2]};
+    const glm::dvec3 posv(pos[0], pos[1], pos[2]);
+    const float terrainElev = m_groundQuery ? m_groundQuery(posv) : m_groundElevation.load(std::memory_order_relaxed);
+    const double geoAlt = m_gravity ? m_gravity->geodeticAltitude(pos) : pos[1];
+    const std::array<float, 3> up = m_gravity ? m_gravity->geodeticUp(pos) : std::array<float, 3>{0.f, 1.f, 0.f};
+
+    EjectionEnvelope env;
+    env.altitudeAglM = static_cast<float>(geoAlt - static_cast<double>(terrainElev));
+    const float vx = st->transform.vel[0];
+    const float vy = st->transform.vel[1];
+    const float vz = st->transform.vel[2];
+    env.speedMs = std::sqrt(vx * vx + vy * vy + vz * vz);
+    env.sinkRateMs = -(vx * up[0] + vy * up[1] + vz * up[2]); // positive = descending
+    const bool survived = ejectionSurvivable(env);
+
+    // A replicating parachute at the aircraft position (if a type is configured + registered); it is a
+    // plain entity, so it rides the normal snapshot path to every client. Zero velocity — a drift model
+    // is a follow-on; the point is a visible, networked chute where the pilot got out.
+    if (!m_parachuteType.empty()) {
+        EntityTransform pt = st->transform;
+        pt.vel[0] = pt.vel[1] = pt.vel[2] = 0.f;
+        const EntityId pid = m_entityManager.spawn(m_parachuteType.c_str(), pt);
+        if (EntityState* pst = m_entityManager.get(pid))
+            pst->factionIndex = st->factionIndex;
+    }
+
+    const uint16_t faction = st->factionIndex;
+    m_entityManager.kill(eid); // the airframe is lost regardless of whether the pilot made it
+
+    // Resolve the landing territory: a campaign wires m_territoryQuery to its frontline (rescued over
+    // friendly ground, captured over hostile); a plain server leaves it unset, so a survivor is MIA.
+    const TerritoryControl territory = m_territoryQuery ? m_territoryQuery(posv, faction) : TerritoryControl::Neutral;
+    const EjectionOutcome outcome = pilotOutcome(survived, territory);
+    char m[144];
+    std::snprintf(m, sizeof(m), "ejection: entity %u -> pilot %s (%.0f m AGL, %.0f m/s)", eid.index,
+                  ejectionOutcomeName(outcome), static_cast<double>(env.altitudeAglM),
+                  static_cast<double>(env.speedMs));
+    m_logger.log(LogLevel::Info, __FILE__, __LINE__, m);
+    return outcome;
 }
 
 void WorldBroadcaster::banAddress(std::string ip) {
@@ -658,7 +741,33 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // starved tick read as trigger-off, which is the safe reading of silence (#625).
             ps.buttons &= static_cast<uint8_t>(~0x04u);
         }
+        // Ejection (#672): fire on the RISING edge of the eject bit so a held key is one ejection.
+        // kill()/spawn() queue for end-of-tick, so mutating here while iterating m_peerInputs is safe.
+        const bool ejectNow = (ps.buttons & kInputButtonEject) != 0;
+        if (ejectNow && !ps.ejectHeld) {
+            if (auto eit = m_peerEntities.find(peerId); eit != m_peerEntities.end())
+                ejectPilot(eit->second);
+        }
+        ps.ejectHeld = ejectNow;
     }
+
+    // AI auto-eject (#672): a scripted/AI pilot punches out when its airframe is critically hit rather
+    // than riding a doomed aircraft into the ground — the visible ejection the acceptance criteria want.
+    // Players never auto-eject (they own the End key); only decimatable (AI/scripted) controlled entities
+    // do. ejectPilot spawns a replicating chute + kills the airframe; the ejected guard fires it once.
+    if (m_aiAutoEject)
+        for (auto& [idx, ce] : m_controlledEntities) {
+            (void)idx;
+            if (!ce.decimatable || ce.ejected)
+                continue;
+            const EntityState* st = m_entityManager.get(ce.id);
+            if (!st || st->dead || st->maxHp <= 0.f)
+                continue;
+            if (st->hp / st->maxHp <= kAiEjectHpFraction) {
+                ejectPilot(ce.id);
+                ce.ejected = true;
+            }
+        }
 
     // Adaptive jitter buffer resize: for each peer with a seeded EWMA, compute the target depth
     // from the delay EWMA and inter-arrival jitter EWMA, then resize if outside the hysteresis band.

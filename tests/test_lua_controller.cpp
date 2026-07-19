@@ -6,6 +6,7 @@
 #include "entity/EntityTypeRegistry.h"
 #include "script/BuiltinAiScripts.h"
 #include "script/LuaController.h"
+#include "script/WorldApi.h"
 #include "sensor/SensorSystem.h"
 #include "spatial/SpatialIndex.h"
 
@@ -698,4 +699,321 @@ TEST_CASE("the builtin fighter senses via detected_contacts and fires the gun in
     const auto ctrl = c->sample(makeState(0.0, 3000.0, 0.0), 100, 1.0 / 60.0, ctx);
     CHECK(ctrl.trigger);       // guns hot on a boresight target in range
     CHECK(ctrl.station == 0u); // the cannon station (slot 0 of builtin:debug-entity)
+}
+
+// ---------------------------------------------------------------------------
+// Coroutine control flow (#412)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("LuaController: an ai_main coroutine yields a control table each tick (#412)") {
+    // A sequential state machine: full throttle on the first two ticks, then afterburner forever.
+    auto c = makeCtrl("function ai_main()\n"
+                      "  coroutine.yield({throttle=1.0})\n"
+                      "  coroutine.yield({throttle=1.0})\n"
+                      "  while true do\n"
+                      "    coroutine.yield({throttle=1.0, afterburner=true})\n"
+                      "  end\n"
+                      "end\n");
+    REQUIRE(c->isValid());
+
+    auto t0 = c->sample(makeState(), 0, 1.0 / 60.0);
+    CHECK(t0.throttle == Catch::Approx(1.0f));
+    CHECK_FALSE(t0.afterburner);
+
+    auto t1 = c->sample(makeState(), 1, 1.0 / 60.0);
+    CHECK(t1.throttle == Catch::Approx(1.0f));
+    CHECK_FALSE(t1.afterburner);
+
+    auto t2 = c->sample(makeState(), 2, 1.0 / 60.0);
+    CHECK(t2.throttle == Catch::Approx(1.0f));
+    CHECK(t2.afterburner); // reached the loop
+
+    auto t3 = c->sample(makeState(), 3, 1.0 / 60.0);
+    CHECK(t3.afterburner); // stays in the loop
+}
+
+TEST_CASE("LuaController: ai_main sees the resumed state and can branch on it (#412)") {
+    // yield's return value is the next (state, tick, dt): the script reads hp and evades when hurt.
+    auto c = makeCtrl("function ai_main()\n"
+                      "  local state = coroutine.yield({throttle=0.5})\n"
+                      "  while true do\n"
+                      "    if state.hp < state.max_hp * 0.5 then\n"
+                      "      state = coroutine.yield({throttle=1.0, afterburner=true})\n"
+                      "    else\n"
+                      "      state = coroutine.yield({throttle=0.5})\n"
+                      "    end\n"
+                      "  end\n"
+                      "end\n");
+    REQUIRE(c->isValid());
+
+    c->sample(makeState(0, 600, 0, 100.f, 100.f), 0, 1.0 / 60.0); // primes ai_main
+    auto healthy = c->sample(makeState(0, 600, 0, 100.f, 100.f), 1, 1.0 / 60.0);
+    CHECK_FALSE(healthy.afterburner);
+    auto hurt = c->sample(makeState(0, 600, 0, 20.f, 100.f), 2, 1.0 / 60.0);
+    CHECK(hurt.afterburner); // hp below half -> evade branch
+}
+
+TEST_CASE("LuaController: a finished ai_main coroutine goes neutral forever (#412)") {
+    auto c = makeCtrl("function ai_main()\n"
+                      "  coroutine.yield({throttle=1.0})\n"
+                      "  -- returns here: behavior finished\n"
+                      "end\n");
+    REQUIRE(c->isValid());
+
+    auto t0 = c->sample(makeState(), 0, 1.0 / 60.0);
+    CHECK(t0.throttle == Catch::Approx(1.0f));
+    auto t1 = c->sample(makeState(), 1, 1.0 / 60.0); // ai_main returns -> neutral
+    CHECK(t1.throttle == Catch::Approx(0.f));
+    auto t2 = c->sample(makeState(), 2, 1.0 / 60.0); // stays neutral
+    CHECK(t2.throttle == Catch::Approx(0.f));
+}
+
+TEST_CASE("LuaController: a coroutine yielding nothing produces neutral control (#412)") {
+    auto c = makeCtrl("function ai_main()\n"
+                      "  while true do coroutine.yield() end\n"
+                      "end\n");
+    REQUIRE(c->isValid());
+    auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0);
+    CHECK(ctrl.throttle == Catch::Approx(0.f));
+    CHECK_FALSE(ctrl.afterburner);
+}
+
+TEST_CASE("LuaController: an ai_main coroutine can call guidance and detected_contacts (#412)") {
+    // The coroutine shares globals with the sandbox, so the honest-sensing bindings work inside it.
+    auto c = makeCtrl("function ai_main()\n"
+                      "  while true do\n"
+                      "    local n = #detected_contacts()\n"
+                      "    coroutine.yield({throttle = (n > 0) and 1.0 or 0.2})\n"
+                      "  end\n"
+                      "end\n");
+    REQUIRE(c->isValid());
+
+    fl::sensor::Contact bandit{};
+    bandit.id = {42, 1};
+    bandit.factionIndex = 2;
+    bandit.state = fl::sensor::ContactState::Locked;
+    bandit.lastKnownPos[0] = 700.0;
+    bandit.lastSeenTick = 10;
+    bandit.reacted = true;
+    fl::sensor::ContactTable contacts;
+    contacts.contacts.push_back(bandit);
+
+    auto empty = c->sample(makeState(), 0, 1.0 / 60.0);
+    CHECK(empty.throttle == Catch::Approx(0.2f)); // no contacts (null table)
+
+    fl::AiTickContext ctx{};
+    ctx.contacts = &contacts;
+    auto seen = c->sample(makeState(), 1, 1.0 / 60.0, ctx);
+    CHECK(seen.throttle == Catch::Approx(1.0f)); // one detected contact
+}
+
+TEST_CASE("LuaController: ai_main takes precedence when both entry points are defined (#412)") {
+    auto c = makeCtrl("function compute_control(s,t,dt) return {throttle=0.1} end\n"
+                      "function ai_main()\n"
+                      "  while true do coroutine.yield({throttle=0.9}) end\n"
+                      "end\n");
+    REQUIRE(c->isValid());
+    auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0);
+    CHECK(ctrl.throttle == Catch::Approx(0.9f)); // the coroutine, not compute_control
+}
+
+// ---------------------------------------------------------------------------
+// world.* module (#413)
+// ---------------------------------------------------------------------------
+
+namespace {
+// A WorldApi that records every call, for asserting the bindings reach the host seam.
+struct RecordingWorld {
+    fl::WorldApi api;
+    std::vector<std::string> spawns; // "type|x,y,z|heading|side"
+    std::vector<int> despawns;
+    std::vector<std::string> relations; // "a|b|rel"
+    std::vector<std::string> music;
+    std::vector<bool> outcomes;
+    int nextIdx{100};
+
+    RecordingWorld() {
+        api.spawn = [this](const std::string& t, const std::array<double, 3>& p, float h, const std::string& side) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "%s|%.0f,%.0f,%.0f|%.0f|%s", t.c_str(), p[0], p[1], p[2],
+                          static_cast<double>(h), side.c_str());
+            spawns.emplace_back(buf);
+            return nextIdx++;
+        };
+        api.despawn = [this](int idx) { despawns.push_back(idx); };
+        api.setRelationship = [this](const std::string& a, const std::string& b, const std::string& r) {
+            relations.push_back(a + "|" + b + "|" + r);
+        };
+        api.setMusicState = [this](const std::string& s) { music.push_back(s); };
+        api.setMissionOutcome = [this](bool ok) { outcomes.push_back(ok); };
+    }
+};
+
+std::unique_ptr<LuaController> makeWorldCtrl(const char* src, const fl::WorldApi* api) {
+    return std::make_unique<LuaController>(src, "", nullptr, api);
+}
+} // namespace
+
+TEST_CASE("world.spawn routes to the host and returns the new entity index (#413)") {
+    RecordingWorld w;
+    auto c = makeWorldCtrl("function compute_control(s,t,dt)\n"
+                           "  if t == 0 then\n"
+                           "    spawned = world.spawn('Su27', {x=100, y=0, z=200}, 90, 'russia')\n"
+                           "  end\n"
+                           "  return {throttle = (spawned == 100) and 1.0 or 0.0}\n"
+                           "end",
+                           &w.api);
+    REQUIRE(c->isValid());
+    auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0);
+    REQUIRE(w.spawns.size() == 1u);
+    CHECK(w.spawns[0] == "Su27|100,0,200|90|russia");
+    CHECK(ctrl.throttle == Catch::Approx(1.0f)); // saw the returned idx 100
+}
+
+TEST_CASE("world.spawn defaults side to neutral and returns -1 with no host (#413)") {
+    auto c = makeWorldCtrl("function compute_control(s,t,dt)\n"
+                           "  return {throttle = world.spawn('X', {x=0,y=0,z=0}, 0) < 0 and 0.5 or 0.0}\n"
+                           "end",
+                           nullptr); // no WorldApi
+    REQUIRE(c->isValid());
+    auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0);
+    CHECK(ctrl.throttle == Catch::Approx(0.5f)); // -1 => no host
+}
+
+TEST_CASE("world.despawn / set_relationship / set_music_state / mission outcome reach the host (#413)") {
+    RecordingWorld w;
+    auto c = makeWorldCtrl("function compute_control(s,t,dt)\n"
+                           "  world.despawn(42)\n"
+                           "  world.set_relationship('nato', 'russia', 'hostile')\n"
+                           "  world.set_music_state('combat')\n"
+                           "  world.mission_success()\n"
+                           "  return {}\n"
+                           "end",
+                           &w.api);
+    REQUIRE(c->isValid());
+    c->sample(makeState(), 0, 1.0 / 60.0);
+    REQUIRE(w.despawns.size() == 1u);
+    CHECK(w.despawns[0] == 42);
+    REQUIRE(w.relations.size() == 1u);
+    CHECK(w.relations[0] == "nato|russia|hostile");
+    REQUIRE(w.music.size() == 1u);
+    CHECK(w.music[0] == "combat");
+    REQUIRE(w.outcomes.size() == 1u);
+    CHECK(w.outcomes[0] == true);
+}
+
+TEST_CASE("world.timer fires its callback once after N sim-seconds (#413)") {
+    RecordingWorld w;
+    auto c = makeWorldCtrl("fired = 0\n"
+                           "function compute_control(s,t,dt)\n"
+                           "  if t == 0 then world.timer(1.0, function() fired = fired + 1 end) end\n"
+                           "  return {throttle = fired}\n"
+                           "end",
+                           &w.api);
+    REQUIRE(c->isValid());
+    // 60 ticks at 1/60 s = 1.0 s. Timer should fire exactly once at/after the deadline.
+    float last = 0.f;
+    for (uint64_t t = 0; t < 120; ++t)
+        last = c->sample(makeState(), t, 1.0 / 60.0).throttle;
+    CHECK(last == Catch::Approx(1.0f)); // fired exactly once, never re-fires
+}
+
+TEST_CASE("world.on_trigger fires once when its predicate first returns true (#413)") {
+    RecordingWorld w;
+    // Predicate becomes true at elapsed >= 0.5 s (30 ticks). Callback ends the mission.
+    auto c = makeWorldCtrl("function compute_control(s,t,dt)\n"
+                           "  if t == 0 then\n"
+                           "    world.on_trigger(function() return world.get_elapsed_time() >= 0.5 end,\n"
+                           "                     function() world.mission_failure() end)\n"
+                           "  end\n"
+                           "  return {}\n"
+                           "end",
+                           &w.api);
+    REQUIRE(c->isValid());
+    for (uint64_t t = 0; t < 20; ++t)
+        c->sample(makeState(), t, 1.0 / 60.0);
+    CHECK(w.outcomes.empty()); // not yet — under 0.5 s
+    for (uint64_t t = 20; t < 60; ++t)
+        c->sample(makeState(), t, 1.0 / 60.0);
+    REQUIRE(w.outcomes.size() == 1u); // fired exactly once
+    CHECK(w.outcomes[0] == false);
+}
+
+TEST_CASE("world.* bindings are present even without a host and world.get_elapsed_time advances (#413)") {
+    auto c = makeWorldCtrl("function compute_control(s,t,dt)\n"
+                           "  return {throttle = world.get_elapsed_time()}\n"
+                           "end",
+                           nullptr);
+    REQUIRE(c->isValid());
+    c->sample(makeState(), 0, 1.0 / 60.0);
+    auto ctrl = c->sample(makeState(), 1, 0.5); // +0.5 s
+    CHECK(ctrl.throttle > 0.5f);                // elapsed accumulated across ticks
+}
+
+// ---------------------------------------------------------------------------
+// Haptics (#128)
+// ---------------------------------------------------------------------------
+
+namespace {
+struct RecordingHaptics {
+    fl::WorldApi api;
+    std::vector<std::string> rumbles;  // "low,high,dur"
+    std::vector<std::string> triggers; // "left,right,dur"
+    int stops{0};
+    RecordingHaptics() {
+        api.rumble = [this](float low, float high, uint32_t dur) {
+            char b[64];
+            std::snprintf(b, sizeof(b), "%.2f,%.2f,%u", low, high, dur);
+            rumbles.emplace_back(b);
+        };
+        api.rumbleTriggers = [this](float l, float r, uint32_t dur) {
+            char b[64];
+            std::snprintf(b, sizeof(b), "%.2f,%.2f,%u", l, r, dur);
+            triggers.emplace_back(b);
+        };
+        api.stopRumble = [this]() { ++stops; };
+    }
+};
+} // namespace
+
+TEST_CASE("rumble / rumble_triggers / stop_rumble route to the host seam (#128)") {
+    RecordingHaptics h;
+    auto c = std::make_unique<LuaController>("function compute_control(s,t,dt)\n"
+                                             "  rumble(0.5, 0.8, 200)\n"
+                                             "  rumble_triggers(0.1, 0.2, 100)\n"
+                                             "  stop_rumble()\n"
+                                             "  return {}\n"
+                                             "end",
+                                             "", nullptr, &h.api);
+    REQUIRE(c->isValid());
+    c->sample(makeState(), 0, 1.0 / 60.0);
+    REQUIRE(h.rumbles.size() == 1u);
+    CHECK(h.rumbles[0] == "0.50,0.80,200");
+    REQUIRE(h.triggers.size() == 1u);
+    CHECK(h.triggers[0] == "0.10,0.20,100");
+    CHECK(h.stops == 1);
+}
+
+TEST_CASE("rumble clamps intensity to [0,1] and duration to the cap (#128)") {
+    RecordingHaptics h;
+    // A mod cannot lock rumble on: intensities clamp to 1.0, duration to 5000 ms.
+    auto c = std::make_unique<LuaController>("function compute_control(s,t,dt)\n"
+                                             "  rumble(9.0, -3.0, 999999)\n"
+                                             "  return {}\n"
+                                             "end",
+                                             "", nullptr, &h.api);
+    REQUIRE(c->isValid());
+    c->sample(makeState(), 0, 1.0 / 60.0);
+    REQUIRE(h.rumbles.size() == 1u);
+    CHECK(h.rumbles[0] == "1.00,0.00,5000"); // clamped
+}
+
+TEST_CASE("haptic bindings are present and safe no-ops without a host (#128)") {
+    auto c = makeCtrl("function compute_control(s,t,dt)\n"
+                      "  rumble(1,1,100); stop_rumble()\n"
+                      "  return {throttle=0.3}\n"
+                      "end");
+    REQUIRE(c->isValid());
+    auto ctrl = c->sample(makeState(), 0, 1.0 / 60.0); // no WorldApi -> no crash
+    CHECK(ctrl.throttle == Catch::Approx(0.3f));
 }

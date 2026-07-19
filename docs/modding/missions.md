@@ -252,11 +252,16 @@ only checks the forms listed above; unknown predicate strings are passed through
 
 | Form | Description |
 |---|---|
-| `mission_success` | Ends the mission as a success. |
-| `mission_failure` | Ends the mission as a failure. |
+| `mission_success` | Ends the mission as a success (a terminal objective action). |
+| `mission_failure` | Ends the mission as a failure (a terminal objective action). |
+| `set_weather <preset>` | Transitions the weather to `<preset>` (`clear`/`partly_cloudy`/`overcast`/`rain`/`storm`/`snow`/`blizzard`). Example: `do: set_weather storm` on an objective-destroy trigger. |
+| `set_time <hours>` | Sets the in-game time of day (0–24, float). Example: `do: set_time 20.5`. |
 | `spawn(<type>,<side>,<pos>)` | Spawns a new unit of `type` for coalition `side` at world position `pos` (x,y,z comma-separated, no spaces). Example: `spawn(Su27,russia,15500,0,9200)` |
 
-Unknown action strings are passed through to Lua scripts without error.
+Non-terminal actions (everything except `mission_success`/`mission_failure`) are routed
+server-side through the **same validated command path the admin console uses** — a mission can do
+exactly what an operator could, and nothing more. Unknown action strings are logged and skipped
+(or handled by a Lua script's `world.on_trigger()`), never a hard error.
 
 ---
 

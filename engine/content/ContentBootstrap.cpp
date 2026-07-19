@@ -459,6 +459,22 @@ EntityDef builtinAaaDef() {
     return def;
 }
 
+EntityDef builtinParachuteDef() {
+    // The ejection parachute (#672): an Effect-category entity — a small, cosmetic, low-signature object
+    // that rides the snapshot path so every client sees a chute where a pilot got out. Not a threat and
+    // not a strike target; it renders the builtin Effect placeholder.
+    EntityDef def;
+    def.id = "builtin:parachute";
+    def.name = "Parachute";
+    def.category = ObjectCategory::Effect;
+    def.maxHp = 1.f;
+    def.signatures.rcs = 0.2f;
+    def.signatures.ir = 0.2f;
+    def.signatures.visual = 3.f;
+    def.collisionRadiusM = 2.f;
+    return def;
+}
+
 uint32_t registerBuiltinSurfaceEntities(EntityTypeRegistry& registry) {
     uint32_t registered = 0;
     for (const EntityDef& def : {builtinGroundVehicleDef(), builtinNavalVesselDef(), builtinStaticTargetDef(),

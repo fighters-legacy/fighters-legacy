@@ -39,6 +39,8 @@
 #include <ai/WaypointController.h>
 #include <ai/WingmanBehavior.h>
 #include <ai/WingmanCommand.h>
+#include <campaign/CampaignParser.h>
+#include <campaign/CampaignRunner.h>
 #include <config/ConfigFile.h>
 #include <console/CommandRegistry.h>
 #include <console/CommandShell.h>
@@ -54,6 +56,7 @@
 #include <flight/FlightModelParser.h>
 #include <job/JobSystem.h>
 #include <loop/GameLoop.h>
+#include <loop/GameState.h>
 #include <mission/BuiltinMissions.h>
 #include <mission/Mission.h>
 #include <mission/MissionParser.h>
@@ -69,6 +72,7 @@
 #include <render/TerrainStreamer.h>
 #include <script/BuiltinAiScripts.h>
 #include <script/LuaController.h>
+#include <script/WorldApi.h>
 #include <stdfs/StdAsyncFilesystem.h>
 #include <stdfs/StdFilesystem.h>
 #include <weapon/Loadout.h>
@@ -80,6 +84,7 @@
 #include <world/FactionRegistry.h>
 
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -87,11 +92,13 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <numbers>
+#include <optional>
 #include <queue>
 #include <string>
 #include <thread>
@@ -172,6 +179,7 @@ int main(int argc, char** argv) {
     long flagFlightSize = -1;      // >=0 if --flight-size was given (overrides [flight] size)
     std::string flagMission;       // non-empty if --mission <name> was given (overrides [rotation])
     std::string flagMissionReport; // non-empty: run the mission headless to completion, write JSON here (#856)
+    std::string flagCampaign;      // non-empty if --campaign <file> was given: run the campaign's next sortie (#584)
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
@@ -230,6 +238,8 @@ int main(int argc, char** argv) {
             flagMission = argv[++i];
         if (std::strcmp(argv[i], "--mission-report") == 0 && i + 1 < argc)
             flagMissionReport = argv[++i];
+        if (std::strcmp(argv[i], "--campaign") == 0 && i + 1 < argc)
+            flagCampaign = argv[++i];
         if (std::strcmp(argv[i], "--sim-worker-threads") == 0 && i + 1 < argc) {
             char* end = nullptr;
             long n = std::strtol(argv[++i], &end, 10);
@@ -482,6 +492,9 @@ int main(int argc, char** argv) {
     // The builtin multi-crew bomber (#966/#977): a pilot + a bot tail-gunner turret, so the whole
     // crew/turret fire path is provable zero-pack (the crewed counterpart to the debug entity).
     entityRegistry.registerType(fl::builtinBomberDef());
+    // The ejection parachute (#672): a replicating Effect entity spawned when a pilot ejects. The
+    // broadcaster is pointed at it after construction (setParachuteType), below.
+    entityRegistry.registerType(fl::builtinParachuteDef());
 
     // Builtin surface targets + threats (#863): ground/naval/static targets and a SAM site + AAA that
     // shoot back, so the surface categories and air-defense threat exist with zero content mounted.
@@ -643,6 +656,8 @@ int main(int argc, char** argv) {
         }
     }
     fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *net, *log, &weatherController);
+    broadcaster.setParachuteType("builtin:parachute"); // spawn a chute on pilot ejection (#672)
+    broadcaster.setAiAutoEject(true);                  // AI pilots punch out when critically hit (#672)
     fl::WorldBroadcasterConfig wbConfig;
     wbConfig.connectRateLimit = cfg.connectRateLimitCount;
     wbConfig.connectRateWindowS = cfg.connectRateLimitWindowS;
@@ -940,15 +955,169 @@ int main(int argc, char** argv) {
     // The objective/trigger evaluator (#633). Constructed below when a mission loads; declared here so
     // it outlives gameLoop (the broadcaster's tick hook captures a pointer into it).
     std::unique_ptr<fl::MissionRuntime> missionRuntime;
+    // Mission non-terminal `do:` action sink (#212). The evaluator routes actions like `set_weather storm`
+    // here; we point it at the admin command dispatch AFTER the registry is built (below), so a mission
+    // can do exactly what an operator could and no more. Set on the sim thread; read on the sim thread
+    // (the evaluator steps there). Empty until wired = actions are logged-and-skipped.
+    std::function<void(std::string_view)> missionActionSink;
     std::string loadedMissionName; // for the #856 headless report
     uint64_t loadedMissionSpawned = 0;
+
+    // The world.* host seam (#413): the engine integration a Lua AI/mission script reaches through
+    // world.spawn/despawn/set_relationship/set_music_state/mission_success/mission_failure. Declared
+    // before the mission load so its LuaControllers can bind it; the hooks run on the sim thread (from
+    // the controller's sample()), where direct EntityManager/FactionRegistry mutation + a music
+    // broadcast are all safe. Lifetime spans gameLoop, so it outlives every LuaController.
+    fl::WorldApi worldApi;
+    worldApi.spawn = [&](const std::string& type, const std::array<double, 3>& pos, float /*heading*/,
+                         const std::string& side) -> int {
+        fl::EntityTransform t{};
+        t.pos[0] = pos[0];
+        t.pos[1] = pos[1];
+        t.pos[2] = pos[2];
+        t.quat[3] = 1.f; // identity; the default LoiterController steers heading from here
+        const fl::EntityId id = entityManager.spawn(type.c_str(), t);
+        if (!id.valid())
+            return -1;
+        uint16_t fi = side.empty() ? 0 : missionFactions.indexOf(side);
+        if (fi == UINT16_MAX)
+            fi = 0;
+        if (fl::EntityState* st = entityManager.get(id))
+            st->factionIndex = fi;
+        // A default loiter keeps a spawned aircraft flying (a bare entity would freeze); a ground unit
+        // simply holds. Scripts that want a specific behavior can despawn + respawn with mission bots.
+        auto ctrl = std::make_unique<fl::ai::LoiterController>(glm::dvec3(pos[0], pos[1], pos[2]));
+        broadcaster.registerController(id, std::move(ctrl), nullptr, fl::kAutoSpawnAirspeed);
+        return static_cast<int>(id.index);
+    };
+    worldApi.despawn = [&](int entityIdx) {
+        fl::EntityId target{};
+        entityManager.forEach([&](const fl::EntityState& s) {
+            if (!s.dead && s.id.index == static_cast<uint32_t>(entityIdx))
+                target = s.id;
+        });
+        if (target.valid())
+            entityManager.kill(target);
+    };
+    worldApi.setRelationship = [&](const std::string& a, const std::string& b, const std::string& rel) {
+        const uint16_t ia = missionFactions.indexOf(a);
+        const uint16_t ib = missionFactions.indexOf(b);
+        if (ia == UINT16_MAX || ib == UINT16_MAX || ia == 0 || ib == 0 || ia == ib)
+            return; // unknown/neutral/self — nothing to set
+        fl::FactionRelation fr;
+        if (rel == "friendly")
+            fr = fl::FactionRelation::Friendly;
+        else if (rel == "hostile")
+            fr = fl::FactionRelation::Hostile;
+        else if (rel == "neutral")
+            fr = fl::FactionRelation::Neutral;
+        else
+            return; // unrecognised relation string
+        missionFactions.setRelationship(ia, ib, fr);
+    };
+    worldApi.setMusicState = [&](const std::string& s) {
+        fl::GameState gs;
+        if (s == "menu")
+            gs = fl::GameState::Menu;
+        else if (s == "patrol")
+            gs = fl::GameState::FlightPatrol;
+        else if (s == "combat")
+            gs = fl::GameState::FlightCombat;
+        else if (s == "success")
+            gs = fl::GameState::MissionSuccess;
+        else if (s == "debrief")
+            gs = fl::GameState::Debrief;
+        else
+            return; // unknown state name
+        broadcaster.broadcastMusicState(static_cast<uint8_t>(gs));
+    };
+    worldApi.setMissionOutcome = [&](bool success) {
+        if (missionRuntime)
+            missionRuntime->forceOutcome(success);
+    };
+    // Haptics (#128): a script's rumble()/rumble_triggers()/stop_rumble() reaches every client, which
+    // plays it on its local gamepad. Args are already clamped by the engine binding.
+    worldApi.rumble = [&](float low, float high, uint32_t durMs) {
+        broadcaster.broadcastHaptic(static_cast<uint8_t>(fl::HapticKind::Rumble), low, high,
+                                    static_cast<uint16_t>(durMs));
+    };
+    worldApi.rumbleTriggers = [&](float left, float right, uint32_t durMs) {
+        broadcaster.broadcastHaptic(static_cast<uint8_t>(fl::HapticKind::Triggers), left, right,
+                                    static_cast<uint16_t>(durMs));
+    };
+    worldApi.stopRumble = [&]() {
+        broadcaster.broadcastHaptic(static_cast<uint8_t>(fl::HapticKind::Stop), 0.f, 0.f, 0);
+    };
+
+    // Campaign mode (#584/#635): resolve the NEXT sortie from the deterministic campaign engine instead
+    // of a single fixed mission. The runner ties CampaignEngine to the mission content (loadMissionYaml)
+    // and persistence; each server run flies one sortie and, on its outcome, advances the campaign and
+    // saves state, so a restart continues the persistent war. The frontline loader is left unset here
+    // (raster PNG decoding is content-gated); the campaign still progresses via story injection, dynamic
+    // selection, attrition, and set_frontline path tracking.
+    std::unique_ptr<fl::CampaignRunner> campaignRunner;
+    std::string campaignMissionId;
+    std::string campaignSavePath;
+    std::optional<std::string> campaignYaml;
+    if (!flagCampaign.empty()) {
+        if (auto campBytes = fl::loadMissionYaml(flagCampaign, &assets, *log)) {
+            fl::CampaignParseResult cp = fl::parseCampaign(*campBytes);
+            if (!cp.ok) {
+                char buf[160];
+                std::snprintf(buf, sizeof(buf), "campaign '%.80s' failed to parse (%zu error(s))", flagCampaign.c_str(),
+                              cp.errors.size());
+                log->log(LogLevel::Error, __FILE__, __LINE__, buf);
+                for (const std::string& e : cp.errors)
+                    log->log(LogLevel::Error, __FILE__, __LINE__, e.c_str());
+            } else {
+                // Per-mission/template content resolves through the same loader single missions use.
+                auto content = [&assets, log](const std::string& path) -> std::optional<std::string> {
+                    return fl::loadMissionYaml(path, &assets, *log);
+                };
+                uint64_t seed = 1469598103934665603ull; // FNV-1a of the campaign name — stable, replayable
+                for (unsigned char ch : cp.campaign.name)
+                    seed = (seed ^ ch) * 1099511628211ull;
+                std::string sanitized;
+                for (char ch : cp.campaign.name)
+                    sanitized += (std::isalnum(static_cast<unsigned char>(ch)) ? ch : '_');
+                std::error_code ec;
+                std::filesystem::create_directories("cache", ec); // the save dir must exist before writeConfigFile
+                campaignSavePath = "cache/campaign_" + sanitized + ".flsave";
+                campaignRunner = std::make_unique<fl::CampaignRunner>(std::move(cp.campaign), seed, content);
+                if (std::ifstream in{campaignSavePath, std::ios::binary}) {
+                    std::string blob((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                    if (campaignRunner->restore(blob))
+                        log->log(LogLevel::Info, __FILE__, __LINE__, "campaign: restored saved state");
+                }
+                campaignYaml = campaignRunner->nextMissionYaml(campaignMissionId);
+                if (campaignYaml) {
+                    missionToLoad = campaignMissionId.empty() ? std::string("campaign") : campaignMissionId;
+                    char buf[192];
+                    std::snprintf(buf, sizeof(buf), "campaign '%.64s': flying sortie '%.80s'",
+                                  campaignRunner->name().c_str(), campaignMissionId.c_str());
+                    log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+                } else {
+                    log->log(LogLevel::Info, __FILE__, __LINE__,
+                             "campaign: no next mission (complete or missing content) — starting empty");
+                }
+            }
+        } else {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "campaign file '%.96s' not found", flagCampaign.c_str());
+            log->log(LogLevel::Warn, __FILE__, __LINE__, buf);
+        }
+    }
+
     if (!missionToLoad.empty()) {
         // Resolution precedence (loadMissionYaml): builtin id (#868, zero-pack) -> a readable
         // .yaml/.yml file path (the authoring loop — iterate a mission without mounting a pack) ->
-        // a pack Mission asset.
+        // a pack Mission asset. In campaign mode the sortie YAML is already resolved (campaignYaml).
         std::string yaml;
         bool missionFound = false;
-        if (auto resolved = fl::loadMissionYaml(missionToLoad, &assets, *log)) {
+        if (campaignYaml) {
+            yaml = std::move(*campaignYaml);
+            missionFound = true;
+        } else if (auto resolved = fl::loadMissionYaml(missionToLoad, &assets, *log)) {
             yaml = std::move(*resolved);
             missionFound = true;
         }
@@ -1000,8 +1169,8 @@ int main(int argc, char** argv) {
                                               name.c_str(), obj.id.c_str());
                                 log->log(LogLevel::Warn, __FILE__, __LINE__, m);
                             } else {
-                                auto lc = std::make_unique<fl::LuaController>(cacheIt->second.first,
-                                                                              cacheIt->second.second, &entityManager);
+                                auto lc = std::make_unique<fl::LuaController>(
+                                    cacheIt->second.first, cacheIt->second.second, &entityManager, &worldApi);
                                 if (lc->isValid()) {
                                     ctrl = std::move(lc);
                                 } else {
@@ -1033,8 +1202,8 @@ int main(int argc, char** argv) {
                         if (def && !def->aiScriptAsset.empty()) {
                             auto cacheIt = aiScriptCache.find(def->aiScriptAsset);
                             if (cacheIt != aiScriptCache.end()) {
-                                auto lc = std::make_unique<fl::LuaController>(cacheIt->second.first,
-                                                                              cacheIt->second.second, &entityManager);
+                                auto lc = std::make_unique<fl::LuaController>(
+                                    cacheIt->second.first, cacheIt->second.second, &entityManager, &worldApi);
                                 if (lc->isValid())
                                     ctrl = std::move(lc);
                                 else {
@@ -1143,18 +1312,45 @@ int main(int argc, char** argv) {
                     objectEntities.emplace_back(ps.id, fl::EntityId{});
 
                 missionRuntime = std::make_unique<fl::MissionRuntime>(
-                    parsed.mission, std::move(objectEntities), entityManager, [log](std::string_view action) {
-                        char m[224];
-                        std::snprintf(m, sizeof(m), "mission action (seam; not yet routed): %.140s",
-                                      std::string(action).c_str());
-                        log->log(LogLevel::Info, __FILE__, __LINE__, m);
+                    parsed.mission, std::move(objectEntities), entityManager,
+                    [log, &missionActionSink](std::string_view action) {
+                        // Route non-terminal `do:` actions (set_weather / set_time / …) through the same
+                        // validated command path the admin console uses (#212). The sink is wired to
+                        // adminRegistry.dispatch after the registry is built; before that (or with no
+                        // operator surface) the action is logged and skipped.
+                        if (missionActionSink) {
+                            missionActionSink(action);
+                        } else {
+                            char m[224];
+                            std::snprintf(m, sizeof(m), "mission action (no dispatch wired): %.140s",
+                                          std::string(action).c_str());
+                            log->log(LogLevel::Info, __FILE__, __LINE__, m);
+                        }
                     });
-                missionRuntime->setOnEnd([log](const fl::MissionOutcome& o) {
-                    const char* s = o.state == fl::MissionState::Complete ? "SUCCESS" : "FAILURE";
+                missionRuntime->setOnEnd([log, &broadcaster, &campaignRunner, campaignMissionId,
+                                          campaignSavePath](const fl::MissionOutcome& o) {
+                    const bool success = o.state == fl::MissionState::Complete;
+                    const char* s = success ? "SUCCESS" : "FAILURE";
                     char m[128];
                     std::snprintf(m, sizeof(m), "mission %s after %.1f s (%u trigger(s) fired)", s, o.elapsedSeconds,
                                   o.triggersFired);
                     log->log(LogLevel::Info, __FILE__, __LINE__, m);
+                    // Tell clients the real outcome so the debrief stops hardcoding success (#584).
+                    broadcaster.broadcastMissionOutcome(
+                        static_cast<uint8_t>(success ? fl::MissionResultCode::Success : fl::MissionResultCode::Failure),
+                        static_cast<float>(o.elapsedSeconds), static_cast<uint16_t>(o.triggersFired));
+                    // Campaign mode (#584/#635): record the sortie's outcome (advancing the frontline /
+                    // arming the next story mission) and persist state so a restart flies the next sortie.
+                    if (campaignRunner) {
+                        campaignRunner->recordOutcome(campaignMissionId, success);
+                        fl::writeConfigFile(campaignSavePath, campaignRunner->save(), *log);
+                        std::string nextId;
+                        const bool more = campaignRunner->nextMissionYaml(nextId).has_value();
+                        char cm[176];
+                        std::snprintf(cm, sizeof(cm), "campaign: recorded '%.72s' (%s); %s", campaignMissionId.c_str(),
+                                      s, more ? "next sortie on restart" : "campaign complete");
+                        log->log(LogLevel::Info, __FILE__, __LINE__, cm);
+                    }
                 });
                 broadcaster.setMissionTickHook([rt = missionRuntime.get()](uint64_t t) { rt->step(t); });
                 // Bind a pilot's aircraft to its player-slot id on connect (and unbind on disconnect), so
@@ -1364,6 +1560,7 @@ int main(int argc, char** argv) {
     adminCtx.sim.entityManager = &entityManager;
     adminCtx.sim.typeRegistry = &entityRegistry;
     adminCtx.sim.weatherController = &weatherController;
+    adminCtx.sim.worldApi = &worldApi; // world.* seam for admin-spawned Lua controllers (#413)
     adminCtx.env.beacon = beacon.get();
     adminCtx.sim.gameLoop = &gameLoop;
     adminCtx.env.logger = log;
@@ -1395,6 +1592,17 @@ int main(int argc, char** argv) {
 
     broadcaster.setShutdownCallback([&]() { g_quit = 1; });
     fl::registerServerCommands(adminRegistry, adminCtx);
+
+    // Route mission `do:` actions through the validated admin command path (#212), e.g. a trigger
+    // `do: set_weather storm` runs the same set_weather command an operator would. dispatch() is const +
+    // thread-safe; mutating commands (set_weather/set_time) enqueue onto the sim callback queue, so this
+    // is safe to call from the mission evaluator on the sim thread. The result string is logged.
+    missionActionSink = [&adminRegistry, log](std::string_view action) {
+        const std::string result = adminRegistry.dispatch(std::string(action));
+        char m[288];
+        std::snprintf(m, sizeof(m), "mission action '%.120s' -> %.140s", std::string(action).c_str(), result.c_str());
+        log->log(LogLevel::Info, __FILE__, __LINE__, m);
+    };
 
     // MOTD and operator password were applied via applyConfig() above; the admin dispatcher needs
     // adminRegistry (built just above) so it is wired here.

@@ -868,6 +868,19 @@ story beat sets it. Specifically:
   says so; a frontline change alone moves control, not force levels.
 - The next generated sortie reads the new raster, so the dynamic war resumes from the new lines.
 
+### Running a campaign
+
+A dedicated server runs a campaign with `fl-server --campaign <file>`. Each run flies the **current
+sortie** the campaign engine selects — a story mission when one is armed at its trigger, otherwise a
+generated dynamic sortie (a template with its `${...}` fills resolved into a concrete mission) — and,
+on the objective outcome, records it and advances the campaign (frontline/`ground_units` state,
+theater unlocks, next-story arming). The mutable campaign state is persisted to
+`cache/campaign_<name>.flsave`, so a restart with the same `--campaign` continues the persistent war
+from where it left off. Because the outcome flows through the ordinary objective evaluator, a campaign
+sortie is also drivable headlessly with `--mission-report` for automated testing. (The campaign
+engine is deterministic — a seeded weighted draw + pure state transitions — so a replay is identical;
+the same machinery is what the campaign director epic drives.)
+
 ---
 
 ## Frontline Raster — PNG

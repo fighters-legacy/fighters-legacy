@@ -14,8 +14,9 @@ controller runs one persistent `lua_State` for the entity's lifetime. The engine
 `compute_control` function every sim tick (~60 Hz). Module-level variables persist between ticks,
 enabling state machines, counters, and timers without coroutines.
 
-See [Phase 4 planned bindings](#coming-in-phase-4-33) below for the richer `world.*` API coming
-with the AI System milestone.
+See [`world.*` — engine integration](#world--engine-integration-413) and
+[Coroutine control flow](#coroutine-control-flow-ai_main--412) below for the richer bindings and the
+sequential-state-machine model.
 
 ---
 
@@ -369,22 +370,91 @@ until then the seat's authored `skill` is used as a fixed point.
 Per-instance skill is not gunner-specific — plain mission AI can roll it too (the same
 `rollPerInstanceSkill` seed helper), so a flight of interceptors need not fly at one uniform skill.
 
-## Coming in Phase 4 (mission & campaign runtime epic, #584)
+## Coroutine control flow (`ai_main`) — #412
 
-The mission & campaign runtime epic ([#584](https://github.com/fighters-legacy/fighters-legacy/issues/584);
-`world.*` bindings [#413](https://github.com/fighters-legacy/fighters-legacy/issues/413), coroutines
-[#412](https://github.com/fighters-legacy/fighters-legacy/issues/412)) will add richer engine
-bindings in a `world.*` module. Planned APIs:
+Besides the per-tick `compute_control` model, a script may drive itself as a **coroutine** so you can
+write a sequential state machine instead of a switch on module-level variables. Define `ai_main`
+instead of `compute_control` (defining both makes `ai_main` win):
+
+```lua
+function ai_main()
+    -- run-once setup happens before the first yield
+    while true do
+        -- yield the control table for THIS tick; execution resumes here next tick,
+        -- and yield returns the next (state, tick, dt).
+        local state, tick, dt = coroutine.yield({ throttle = 1.0 })
+        if state.hp < state.max_hp * 0.5 then
+            -- ... a whole sub-behaviour can live here, yielding each tick ...
+            state = coroutine.yield({ throttle = 1.0, afterburner = true })
+        end
+    end
+end
+```
+
+- The engine resumes `ai_main` once per sim tick, passing `(state, tick, dt)`.
+- `coroutine.yield(control_table)` hands back the control table for the tick and suspends until the
+  next tick; the fields are the same as `compute_control` returns (see the return table above).
+- A yield with **no value** produces neutral control that tick.
+- When `ai_main` returns (or errors), the behaviour is finished and every subsequent tick is neutral —
+  the same fail-safe as a `compute_control` error.
+- The coroutine shares the sandbox's globals, so `guidance.*`, `nearby_entities`, `get_entity`,
+  `detected_contacts`, `world.*`, and the rumble bindings all work inside it.
+
+## `world.*` — engine integration (#413)
+
+The `world` module lets a mission/AI script touch the wider engine: spawning, faction relations,
+mission outcome, music, and its own event triggers. On a dedicated server these calls run on the sim
+thread and are routed through the host, so an unavailable capability is a safe no-op.
 
 | Function | Description |
 |----------|-------------|
-| `world.spawn(type_id, pos, heading)` | Spawn an entity from a Lua script |
-| `world.despawn(entity_id)` | Remove an entity |
-| `world.set_music_state(state_id)` | Trigger music state transition (#166) |
-| `world.set_relationship(a, b, rel)` | Change faction relationships |
-| `world.on_trigger(predicate, cb)` | Register a per-tick condition callback |
-| `world.timer(seconds, cb)` | One-shot timer callback |
+| `world.spawn(type_id, pos, heading [, side])` | Spawn an entity of `type_id` at `pos` `{x,y,z}` facing compass `heading` (deg), for coalition `side` (default neutral). Returns the new entity's index, or `-1` on failure. A spawned aircraft gets a default loiter so it flies. |
+| `world.despawn(entity_idx)` | Destroy the entity at `entity_idx`. |
+| `world.set_relationship(a, b, rel)` | Set the symmetric relationship between faction ids `a` and `b`. `rel` = `"friendly"` / `"neutral"` / `"hostile"`. |
+| `world.set_music_state(state)` | Ask connected clients to change music. `state` = `"menu"` / `"patrol"` / `"combat"` / `"success"` / `"debrief"`. |
+| `world.mission_success()` / `world.mission_failure()` | End the current mission with the given outcome (drives the objective state machine). |
+| `world.get_elapsed_time()` | Seconds since this controller started. |
+| `world.on_trigger(predicate_fn, callback_fn)` | Fire `callback_fn` **once**, the first tick `predicate_fn()` returns true, then forget it. |
+| `world.timer(seconds, callback_fn)` | Fire `callback_fn` once after `seconds` of sim time. |
 
-These require a sim-thread → main-thread dispatch queue not yet implemented. Phase 4 will also
-add first-class coroutine support so scripts can use `coroutine.yield()` between ticks for
-sequential state machines.
+```lua
+-- Ambush: when the player closes inside 5 km, spawn two bandits and go to combat music.
+function ai_main()
+    world.on_trigger(
+        function()
+            local c = detected_contacts()
+            return #c > 0
+        end,
+        function()
+            world.spawn("builtin:debug-entity", { x = 8000, y = 3000, z = 0 }, 180, "russia")
+            world.set_music_state("combat")
+        end)
+    world.timer(600, function() world.mission_failure() end) -- 10-minute fail-safe
+    while true do coroutine.yield({ throttle = 0.7 }) end
+end
+```
+
+`on_trigger`/`timer` are evaluated on the engine side each tick; a callback may itself call any
+`world.*` / `guidance.*` function. A broken predicate or callback is logged (rate-limited) and dropped
+— it never wedges the tick.
+
+## Haptics — `rumble` (#128)
+
+A script can trigger controller haptics. There is **no gamepad id** — the call always targets the
+current player's gamepad (a server-side script's request is delivered to each client, which plays it
+on its own pad). Intensities clamp to `[0, 1]` and one request is capped at **5000 ms**, so a mod
+cannot latch rumble on; `stop_rumble()` is always available.
+
+| Function | Description |
+|----------|-------------|
+| `rumble(low_freq, high_freq, duration_ms)` | Both rumble motors (low = heavy, high = buzz). |
+| `rumble_triggers(left, right, duration_ms)` | Impulse-trigger motors (Xbox One / Series pads). |
+| `stop_rumble()` | Cancel all rumble immediately. |
+
+```lua
+if state.hp < state.max_hp * 0.3 then
+    rumble(0.8, 0.4, 300) -- a knock when badly hurt
+end
+```
+
+See [`docs/haptics.md`](../haptics.md) for the full haptic design and the wire path.

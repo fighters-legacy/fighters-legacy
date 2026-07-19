@@ -41,6 +41,14 @@ bool MissionRuntime::isObjectDestroyed(const std::string& objectId) const {
     return true; // never spawned (unknown id / spawn failed) -> treat as destroyed
 }
 
+void MissionRuntime::forceOutcome(bool success) {
+    if (done())
+        return; // first terminal outcome wins; a later force is ignored
+    m_outcome.state = success ? MissionState::Complete : MissionState::Failed;
+    if (m_onEnd)
+        m_onEnd(m_outcome);
+}
+
 void MissionRuntime::registerObjectEntity(const std::string& objectId, EntityId eid) {
     // Bind (or, with an invalid eid, unbind) a mission object id to a live entity. Used when the connect
     // handshake assigns a pilot to a player slot (#884): the slot's id starts mapped to an invalid entity

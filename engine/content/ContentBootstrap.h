@@ -87,6 +87,11 @@ EntityDef builtinStaticTargetDef();
 EntityDef builtinSamSiteDef();
 EntityDef builtinAaaDef();
 
+// The parachute spawned when a pilot ejects (#672): an Effect-category entity so it rides the normal
+// snapshot path to every client and renders the builtin Effect placeholder. Registered by fl-server,
+// which points WorldBroadcaster::setParachuteType at "builtin:parachute".
+EntityDef builtinParachuteDef();
+
 // Registers all five builtin surface entities into `registry` (the "builtin:" namespace cannot
 // collide with a pack). Main thread, before GameLoop::start(). Returns the number registered.
 uint32_t registerBuiltinSurfaceEntities(EntityTypeRegistry& registry);

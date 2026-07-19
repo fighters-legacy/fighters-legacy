@@ -51,12 +51,27 @@ Suggested haptic events for flight-sim game systems. Tuning values are starting 
 - **macOS:** SDL3 uses the GameController framework transparently. MFi and DualSense controllers report rumble support correctly.
 - **Linux:** Rumble requires xpadneo + hidraw udev rules and `input` group membership. `supportsRumble` accuracy depends on whether xpadneo is active; without it the stock `hid_microsoft` driver connects the hardware but SDL3 may correctly report no rumble capability. See [linux-gamepad.md](linux-gamepad.md).
 
-## Lua scripting (future / Phase 2)
+## Lua scripting (#128)
 
-Mod authors writing custom weapons, missions, or flight behaviours would benefit from triggering haptic feedback from Lua. This requires a dedicated engine-layer binding separate from the AI runtime, because:
+Mod authors writing custom missions or AI behaviours can trigger haptic feedback from Lua. The binding
+lives in the engine's Lua runtime (`LuaController`) and is deliberately **separate from `IInput`**:
 
-- `IInput` is a platform HAL; Lua scripts must not call it directly.
-- The Lua-facing API should abstract `gamepadId` away — always targets the current player's gamepad, mediated by the engine game loop.
-- Sandbox guards are needed so untrusted mods cannot lock rumble on or call `stopRumble` at arbitrary times.
+- `IInput` is a platform HAL; Lua scripts never call it directly.
+- The Lua-facing API **abstracts `gamepadId` away** — it always targets the current player's gamepad.
+  Because a mission script runs server-side, the call is routed to clients (a reliable `MsgHaptic`),
+  and each client plays it on its own local gamepad (id 0). There is no gamepad id in the Lua API.
+- Sandbox guards live in the engine binding: intensities clamp to `[0, 1]` and a single request is
+  capped at **5000 ms**, so an untrusted mod cannot latch rumble on. `stop_rumble()` is always available.
 
-A tracking issue for the Lua binding is filed separately as a Phase 2 item.
+The bindings are plain globals (not under `world.*`):
+
+```lua
+rumble(low_freq, high_freq, duration_ms)      -- both motors; low = heavy, high = buzz
+rumble_triggers(left, right, duration_ms)     -- impulse triggers (Xbox One / Series pads)
+stop_rumble()                                 -- cancel all rumble immediately
+```
+
+Routing: `LuaController` → the host `WorldApi` seam (`engine/script/WorldApi.h`) → `fl-server`
+broadcasts `MsgHaptic` (0x17) → the client plays it via `IInput` on gamepad 0. On a headless server
+with no clients (or a null-input mock), the whole path is a clean no-op. Full API reference:
+[`docs/modding/ai.md`](modding/ai.md).

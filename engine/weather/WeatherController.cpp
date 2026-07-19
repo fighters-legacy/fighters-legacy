@@ -137,6 +137,14 @@ void WeatherController::setTimeOfDay(float hours) {
     m_timeOfDay = wrapHours(hours);
 }
 
+void WeatherController::setTimeScaleRatio(float ratio) noexcept {
+    // Ignore non-positive ratios: a zero/negative clock would freeze or reverse time-of-day, which is a
+    // content bug rather than an intent. The gust oscillator is deliberately unaffected (it runs in real
+    // time regardless of the day/night scale).
+    if (ratio > 0.f)
+        m_params.timeScaleRatio = ratio;
+}
+
 void WeatherController::setWind(float headingDeg, float speedMs) {
     m_windHeadingDeg = std::fmod(headingDeg, 360.f);
     if (m_windHeadingDeg < 0.f)

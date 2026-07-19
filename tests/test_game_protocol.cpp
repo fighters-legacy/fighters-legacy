@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "loop/GameState.h"
 #include "net/BitStream.h"
 #include "net/GameProtocol.h"
 #include "net/SnapshotCodec.h"
@@ -693,4 +694,45 @@ TEST_CASE("GameProtocol: MsgSeatRequest / MsgSeatResult round-trip (#974)", "[ga
 
     CHECK(fl::isSeatResultOrdinal(6));
     CHECK_FALSE(fl::isSeatResultOrdinal(7));
+}
+
+TEST_CASE("GameProtocol: epic #584 messages have stable sizes and round-trip", "[game_protocol]") {
+    // Music state (#413/#166)
+    CHECK(sizeof(fl::MsgMusicState) == 4u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::MusicState) == 0x16u);
+    fl::MsgMusicState ms{};
+    ms.state = static_cast<uint8_t>(fl::GameState::FlightCombat);
+    fl::MsgMusicState msOut{};
+    {
+        std::vector<uint8_t> buf(sizeof(ms));
+        std::memcpy(buf.data(), &ms, sizeof(ms));
+        REQUIRE(fl::readMsg(buf.data(), buf.size(), msOut));
+    }
+    CHECK(msOut.state == static_cast<uint8_t>(fl::GameState::FlightCombat));
+
+    // Haptic (#128)
+    CHECK(sizeof(fl::MsgHaptic) == 12u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::Haptic) == 0x17u);
+    CHECK(fl::isHapticKindOrdinal(2));
+    CHECK_FALSE(fl::isHapticKindOrdinal(3));
+    CHECK(fl::kInputButtonEject == 0x20u); // eject bit (#672) is bit 5
+
+    // Mission outcome (#584)
+    CHECK(sizeof(fl::MsgMissionOutcome) == 8u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::MissionOutcome) == 0x18u);
+    CHECK(fl::isMissionResultOrdinal(2));
+    CHECK_FALSE(fl::isMissionResultOrdinal(3));
+    fl::MsgMissionOutcome mo{};
+    mo.outcome = static_cast<uint8_t>(fl::MissionResultCode::Failure);
+    mo.elapsedSeconds = 42.5f;
+    mo.triggersFired = 3;
+    fl::MsgMissionOutcome moOut{};
+    {
+        std::vector<uint8_t> buf(sizeof(mo));
+        std::memcpy(buf.data(), &mo, sizeof(mo));
+        REQUIRE(fl::readMsg(buf.data(), buf.size(), moOut));
+    }
+    CHECK(moOut.outcome == static_cast<uint8_t>(fl::MissionResultCode::Failure));
+    CHECK(moOut.elapsedSeconds == 42.5f);
+    CHECK(moOut.triggersFired == 3);
 }

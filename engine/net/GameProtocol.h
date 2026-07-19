@@ -86,6 +86,15 @@ enum class MsgId : uint8_t {
                                // seat (#974). {entityId, seatIndex} or the leave flag. The server replies
                                // MsgSeatResult and, on a grant, re-sends MsgConnectAck + the roster delta.
     SeatResult = 0x15,         // server->client, reliable: outcome of a MsgSeatRequest (SeatResultCode).
+    MusicState = 0x16,         // server->client, reliable: request a client music-state transition (#413/
+                               // #166). Broadcast when a Lua/mission script calls world.set_music_state();
+                               // carries a GameState ordinal. Additive id, old clients discard.
+    Haptic = 0x17,             // server->client, reliable: a scripted rumble/trigger-rumble/stop request
+                               // (#128) from a Lua script's rumble()/rumble_triggers()/stop_rumble().
+                               // Each client plays it on its local (current-player) gamepad. Additive id.
+    MissionOutcome = 0x18,     // server->client, reliable: the objective evaluator ended the mission
+                               // (#584). Carries success/failure + elapsed/triggers so the debrief shows
+                               // the real outcome instead of a hardcoded success. Additive id.
     LanBeacon = 0x20,          // raw UDP broadcast - NOT sent over ENet; 0x20+ reserved for non-ENet ids.
                                // ENet message ids occupy 0x00-0x1F. The non-ENet boundary was raised
                                // from 0x10 to 0x20 in #853 to free an ENet id for ConnectRequest -- a
@@ -395,9 +404,18 @@ static_assert(offsetof(MsgWorldSnapshotHeader, uncompressedBytes) == 20u,
               "MsgWorldSnapshotHeader::uncompressedBytes offset changed");
 
 // Unreliable, client->server, sent each render frame. Padded to 48 (multiple of 8 for tickIndex).
+// MsgClientInput::buttons bit assignments.
+inline constexpr uint8_t kInputButtonGun = 0x01;         // bit 0 = gun trigger (level)
+inline constexpr uint8_t kInputButtonAfterburner = 0x02; // bit 1 = afterburner
+inline constexpr uint8_t kInputButtonFireStore = 0x04;   // bit 2 = fire selected store (edge)
+inline constexpr uint8_t kInputButtonChaffFlare = 0x08;  // bit 3 = chaff/flare dispense (edge, #529)
+inline constexpr uint8_t kInputButtonEcm = 0x10;         // bit 4 = ECM jammer (level, #529)
+inline constexpr uint8_t kInputButtonEject = 0x20;       // bit 5 = eject (edge, #672)
+
 struct MsgClientInput {
     uint8_t msgId{static_cast<uint8_t>(MsgId::ClientInput)};
-    uint8_t buttons{0}; // bit 0 = gun trigger (level), bit 1 = afterburner, bit 2 = fire selected store
+    uint8_t buttons{0}; // bit 0 gun, bit 1 afterburner, bit 2 fire store, bit 3 chaff/flare, bit 4 ECM,
+                        // bit 5 = eject (server edge-detects; a held key is one ejection, #672)
     uint16_t protocolVersion{kProtocolVersion};
     uint32_t seqNum{0};    // monotonically increasing; server discards packets not newer than last accepted
     uint64_t tickIndex{0}; // server's tickIndex from last received WorldSnapshot; server uses delta for delay estimate
@@ -462,6 +480,48 @@ struct MsgWeatherState {
 }; // 32 bytes, align 8
 static_assert(sizeof(MsgWeatherState) == 32u, "MsgWeatherState wire size changed");
 static_assert(offsetof(MsgWeatherState, turbulenceAmp) == 20u, "MsgWeatherState::turbulenceAmp offset changed");
+
+// Music-state transition request (#413/#166): the server broadcasts this when a Lua/mission script
+// calls world.set_music_state(). `state` is a GameState ordinal (Menu/FlightPatrol/FlightCombat/
+// MissionSuccess/Debrief); the client maps it back and drives MusicManager::setState. Reliable so the
+// transition is not lost. Additive id, old clients discard.
+struct MsgMusicState {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::MusicState)};
+    uint8_t state{0}; // GameState ordinal
+    uint16_t reserved{0};
+}; // 4 bytes, align 2
+static_assert(sizeof(MsgMusicState) == 4u, "MsgMusicState wire size changed");
+
+// Scripted haptic feedback (#128): a Lua script's rumble()/rumble_triggers()/stop_rumble() reaches the
+// client as this message; the client plays it on its local gamepad (id 0 = the current player). The
+// engine binding clamps a/b to [0,1] and durationMs to [0, 5000] before it is sent.
+enum class HapticKind : uint8_t { Rumble = 0, Triggers = 1, Stop = 2 };
+[[nodiscard]] inline bool isHapticKindOrdinal(uint8_t v) noexcept {
+    return v <= static_cast<uint8_t>(HapticKind::Stop);
+}
+struct MsgHaptic {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::Haptic)};
+    uint8_t kind{0};        // HapticKind
+    uint16_t durationMs{0}; // clamped to [0, 5000]
+    float a{0.f};           // Rumble: low-freq motor; Triggers: left trigger; Stop: unused
+    float b{0.f};           // Rumble: high-freq motor; Triggers: right trigger; Stop: unused
+}; // 12 bytes, align 4
+static_assert(sizeof(MsgHaptic) == 12u, "MsgHaptic wire size changed");
+
+// The mission's terminal outcome (#584): broadcast once when the objective evaluator drives the
+// mission to Complete/Failed, so the client debrief reports the real result instead of a hardcoded
+// success. `outcome` is a MissionResultCode.
+enum class MissionResultCode : uint8_t { Incomplete = 0, Success = 1, Failure = 2 };
+[[nodiscard]] inline bool isMissionResultOrdinal(uint8_t v) noexcept {
+    return v <= static_cast<uint8_t>(MissionResultCode::Failure);
+}
+struct MsgMissionOutcome {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::MissionOutcome)};
+    uint8_t outcome{0}; // MissionResultCode
+    uint16_t triggersFired{0};
+    float elapsedSeconds{0.f};
+}; // 8 bytes, align 4
+static_assert(sizeof(MsgMissionOutcome) == 8u, "MsgMissionOutcome wire size changed");
 static_assert(offsetof(MsgWeatherState, utcJulianDay) == 24u, "MsgWeatherState::utcJulianDay offset changed");
 static_assert(alignof(MsgWeatherState) == 8u, "MsgWeatherState alignment changed");
 static_assert(offsetof(MsgWeatherState, timeOfDayTenths) == 2u, "MsgWeatherState::timeOfDayTenths offset changed");
