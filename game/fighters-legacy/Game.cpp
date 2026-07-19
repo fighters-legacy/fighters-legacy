@@ -1324,6 +1324,11 @@ void Game::run() {
                         d.services.sceneRenderer->setAirportRegistry(reg);
                     }
 
+                    // A gunner (#975) occupies a NON-fly seat of an aircraft it does not fly, so it must
+                    // NOT run flight prediction — only the Fly seat predicts. It still views the airframe
+                    // (assignedEntity = the host), so it keeps the cockpit camera rather than the ghost
+                    // free-fly, but its predictor is torn down like an observer's.
+                    const bool inCrewSeat = d.session.clientHandler->inCrewSeat();
                     if (observer) {
                         // Ghost camera (#859): there is no ownship to predict, so ClientPrediction is
                         // torn down (a pilot→observer switch leaves a stale predictor otherwise). Force
@@ -1333,6 +1338,9 @@ void Game::run() {
                         d.services.prediction.reset();
                         d.services.cameraController.setMode(fl::CameraMode::Free);
                         d.services.camInput.setFlyEye(glm::dvec3{0.0, 3000.0, 0.0});
+                    } else if (inCrewSeat) {
+                        // Gunner seat: no flight prediction, but keep viewing the host airframe.
+                        d.services.prediction.reset();
                     } else {
                         // Becoming a pilot mid-session (observer→pilot switch): drop the ghost's free
                         // camera into the cockpit of the freshly assigned aircraft. Harmless on the

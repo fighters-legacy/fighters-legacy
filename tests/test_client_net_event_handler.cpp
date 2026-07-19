@@ -2365,3 +2365,157 @@ TEST_CASE("ClientNetEventHandler: a truncated MsgDatalink leaves the prior pictu
     handler.onReceive(0u, buf.data(), buf.size());
     CHECK_FALSE(handler.radarView().valid); // short packet ignored
 }
+
+TEST_CASE("ClientNetEventHandler: MsgCrewRoster stored and queryable by entity (#972)",
+          "[client_net_event_handler][crew]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    std::vector<uint8_t> buf;
+    fl::MsgCrewRosterHeader hdr{};
+    hdr.seatCount = 2;
+    hdr.turretCount = 1;
+    hdr.entityIdx = 12;
+    hdr.entityGen = 4;
+    fl::appendMsg(buf, hdr);
+    fl::CrewRosterSeat s0{};
+    s0.seatIndex = 0;
+    s0.occupancy = static_cast<uint8_t>(fl::SeatOccupancy::Human);
+    s0.capabilities = 0x03;
+    s0.occupantPeerId = 2;
+    s0.turretIndex = 255;
+    std::snprintf(s0.role, sizeof(s0.role), "pilot");
+    fl::appendMsg(buf, s0);
+    fl::CrewRosterSeat s1{};
+    s1.seatIndex = 1;
+    s1.occupancy = static_cast<uint8_t>(fl::SeatOccupancy::Bot);
+    s1.capabilities = 0x02;
+    s1.turretIndex = 0;
+    s1.knockedOut = 1; // #978
+    std::snprintf(s1.role, sizeof(s1.role), "tail-gunner");
+    fl::appendMsg(buf, s1);
+
+    handler.onReceive(0u, buf.data(), buf.size());
+
+    const fl::CrewRosterInfo* roster = handler.crewRoster(12u);
+    REQUIRE(roster != nullptr);
+    CHECK(roster->entityGen == 4u);
+    CHECK(roster->turretCount == 1);
+    REQUIRE(roster->seats.size() == 2u);
+    CHECK(roster->seats[0].occupancy == static_cast<uint8_t>(fl::SeatOccupancy::Human));
+    CHECK(roster->seats[0].occupantPeerId == 2u);
+    CHECK(roster->seats[0].role == "pilot");
+    CHECK(roster->seats[1].occupancy == static_cast<uint8_t>(fl::SeatOccupancy::Bot));
+    CHECK(roster->seats[1].turretIndex == 0);
+    CHECK(roster->seats[1].knockedOut); // #978
+    CHECK_FALSE(roster->seats[0].knockedOut);
+
+    // An unknown entity has no roster.
+    CHECK(handler.crewRoster(999u) == nullptr);
+
+    // A short packet does not replace the stored roster.
+    handler.onReceive(0u, buf.data(), sizeof(hdr) + 3u);
+    REQUIRE(handler.crewRoster(12u) != nullptr);
+    CHECK(handler.crewRoster(12u)->seats.size() == 2u);
+}
+
+TEST_CASE("ClientNetEventHandler: SnapshotCrew TLV decodes live turret pose (#972)",
+          "[client_net_event_handler][crew]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    TestRec rec;
+    rec.idx = 7;
+    rec.gen = 1;
+    rec.isFull = true;
+    auto pkt = buildSnapshotPkt(1u, {rec});
+
+    // One crewed entity (idx 7) with one turret: az = +pi/2 (looking left), el = +pi/4.
+    constexpr float kPi = 3.14159265358979323846f;
+    const auto azQ = static_cast<int16_t>(std::lround(0.5f * 32767.f)); // +pi/2 over [-pi,pi]
+    const auto elQ = static_cast<int16_t>(std::lround(0.5f * 32767.f)); // +pi/4 over [-pi/2,pi/2]
+    std::vector<uint8_t> payload;
+    auto pushBytes = [&](const void* p, std::size_t n) {
+        const auto* b = static_cast<const uint8_t*>(p);
+        payload.insert(payload.end(), b, b + n);
+    };
+    payload.push_back(1u); // entryCount
+    const uint32_t idx = 7;
+    pushBytes(&idx, 4);
+    payload.push_back(1u); // turretCount
+    pushBytes(&azQ, 2);
+    pushBytes(&elQ, 2);
+    fl::appendExtRaw(pkt, static_cast<uint16_t>(fl::ExtTag::SnapshotCrew), payload.data(),
+                     static_cast<uint16_t>(payload.size()));
+
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    const auto poses = handler.crewTurretPoses(7u);
+    REQUIRE(poses.size() == 1u);
+    CHECK(poses[0].azRad == Catch::Approx(kPi * 0.5f).margin(0.01));
+    CHECK(poses[0].elRad == Catch::Approx(kPi * 0.25f).margin(0.01));
+
+    // An entity with no crew TLV entry has no poses.
+    CHECK(handler.crewTurretPoses(999u).empty());
+}
+
+TEST_CASE("ClientNetEventHandler: seat request/result plumbing (#975)", "[client_net_event_handler][crew]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // sendSeatRequest emits a MsgSeatRequest join.
+    handler.sendSeatRequest(42u, 3u, /*seat=*/1);
+    REQUIRE(!net.sends.empty());
+    fl::MsgSeatRequest req{};
+    std::memcpy(&req, net.sends.back().data(), sizeof(req));
+    CHECK(req.msgId == static_cast<uint8_t>(fl::MsgId::SeatRequest));
+    CHECK(req.entityIdx == 42u);
+    CHECK(req.seatIndex == 1);
+    CHECK((req.flags & fl::kSeatRequestFlagLeave) == 0u);
+
+    // sendSeatLeave sets the leave flag.
+    handler.sendSeatLeave();
+    std::memcpy(&req, net.sends.back().data(), sizeof(req));
+    CHECK((req.flags & fl::kSeatRequestFlagLeave) != 0u);
+
+    // A granted JOIN result marks the client as in a (non-fly) crew seat and is surfaced once.
+    CHECK_FALSE(handler.inCrewSeat());
+    fl::MsgSeatResult res{};
+    res.code = static_cast<uint8_t>(fl::SeatResultCode::Granted);
+    res.entityIdx = 42u;
+    res.seatIndex = 1;
+    handler.onReceive(0u, &res, sizeof(res));
+    CHECK(handler.inCrewSeat());
+    auto view = handler.takeSeatResult();
+    CHECK(view.valid);
+    CHECK(view.fresh);
+    CHECK(view.code == static_cast<uint8_t>(fl::SeatResultCode::Granted));
+    CHECK(handler.takeSeatResult().fresh == false); // consumed
+
+    // A granted LEAVE (entityIdx 0) clears the crew-seat flag.
+    fl::MsgSeatResult leave{};
+    leave.code = static_cast<uint8_t>(fl::SeatResultCode::Granted);
+    leave.entityIdx = 0u;
+    handler.onReceive(0u, &leave, sizeof(leave));
+    CHECK_FALSE(handler.inCrewSeat());
+
+    // A denial does not change the crew-seat flag.
+    fl::MsgSeatResult deny{};
+    deny.code = static_cast<uint8_t>(fl::SeatResultCode::SeatOccupiedByHuman);
+    deny.entityIdx = 42u;
+    handler.onReceive(0u, &deny, sizeof(deny));
+    CHECK_FALSE(handler.inCrewSeat());
+    CHECK(handler.lastSeatResult().code == static_cast<uint8_t>(fl::SeatResultCode::SeatOccupiedByHuman));
+}

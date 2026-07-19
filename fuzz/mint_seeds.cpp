@@ -241,6 +241,19 @@ void mintServerMsgSeeds() {
     wc.flightId = fl::kOwnFlight;
     appendFrame(wing, wireBytes(wc));
     writeSeed("fuzz_server_msg", "seed-wingman.bin", wing);
+
+    // seed-seat (#974): a MsgSeatRequest join followed by a leave. The seat-join handler runs untrusted
+    // {entityIdx, seatIndex} through evaluateSeatRequest before touching any crew state, so it is fuzzed.
+    std::vector<uint8_t> seat;
+    fl::MsgSeatRequest sj{};
+    sj.seatIndex = 1;
+    sj.entityIdx = 3;
+    sj.entityGen = 1;
+    appendFrame(seat, wireBytes(sj));
+    fl::MsgSeatRequest sl{};
+    sl.flags = fl::kSeatRequestFlagLeave;
+    appendFrame(seat, wireBytes(sl));
+    writeSeed("fuzz_server_msg", "seed-seat.bin", seat);
 }
 
 void mintClientMsgSeeds() {
@@ -321,6 +334,46 @@ void mintClientMsgSeeds() {
     zpkt.insert(zpkt.end(), frame.begin(), frame.end());
     appendFrame(zc, zpkt);
     writeSeed("fuzz_client_msg", "seed-compressed.bin", zc);
+
+    // seed-crew (#972): a MsgCrewRoster (header + two seat records) followed by a snapshot carrying a
+    // SnapshotCrew TLV (one crewed entity, one turret). Exercises the roster reader and the crew-TLV
+    // decoder so mutations around the seat-count / turret-count fields stay interesting.
+    std::vector<uint8_t> cw;
+    std::vector<uint8_t> roster;
+    fl::MsgCrewRosterHeader chdr{};
+    chdr.seatCount = 2;
+    chdr.turretCount = 1;
+    chdr.entityIdx = 7;
+    chdr.entityGen = 3;
+    fl::appendMsg(roster, chdr);
+    fl::CrewRosterSeat cs0{};
+    cs0.occupancy = static_cast<uint8_t>(fl::SeatOccupancy::Human);
+    cs0.capabilities = 0x03;
+    setField(cs0.role, "pilot");
+    fl::appendMsg(roster, cs0);
+    fl::CrewRosterSeat cs1{};
+    cs1.seatIndex = 1;
+    cs1.occupancy = static_cast<uint8_t>(fl::SeatOccupancy::Bot);
+    cs1.capabilities = 0x02;
+    cs1.turretIndex = 0;
+    setField(cs1.role, "gunner");
+    fl::appendMsg(roster, cs1);
+    appendFrame(cw, roster);
+
+    std::vector<uint8_t> crewSnapPkt = buildSnapshotPkt(3, {makeFullRecord()}, origin);
+    std::vector<uint8_t> crewTlv;
+    crewTlv.push_back(1u); // entryCount
+    const uint32_t crewIdx = 7;
+    crewTlv.insert(crewTlv.end(), reinterpret_cast<const uint8_t*>(&crewIdx),
+                   reinterpret_cast<const uint8_t*>(&crewIdx) + 4);
+    crewTlv.push_back(1u); // turretCount
+    const int16_t azQ = 16000, elQ = -8000;
+    crewTlv.insert(crewTlv.end(), reinterpret_cast<const uint8_t*>(&azQ), reinterpret_cast<const uint8_t*>(&azQ) + 2);
+    crewTlv.insert(crewTlv.end(), reinterpret_cast<const uint8_t*>(&elQ), reinterpret_cast<const uint8_t*>(&elQ) + 2);
+    fl::appendExtRaw(crewSnapPkt, static_cast<uint16_t>(fl::ExtTag::SnapshotCrew), crewTlv.data(),
+                     static_cast<uint16_t>(crewTlv.size()));
+    appendFrame(cw, crewSnapPkt);
+    writeSeed("fuzz_client_msg", "seed-crew.bin", cw);
 }
 
 void mintAssetValidatorSeeds() {

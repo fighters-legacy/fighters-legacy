@@ -4,6 +4,7 @@
 #include "IScreen.h"
 #include "RenderTypes.h"
 
+#include "CrewSeatMenu.h"   // crew seat picker (#975)
 #include "EntitySelector.h" // observer entity picker (#860)
 #include "render/RenderSnapshot.h"
 
@@ -82,6 +83,17 @@ class FlightScreen : public IScreen {
     bool m_prevNextTarget{false}; // Num1 edge detector (next entity)
     bool m_prevPrevTarget{false}; // Num2 edge detector (previous entity)
     char m_pickerLabel[96]{};     // "[ F-16C | Blue ]" built each frame; empty = not shown
+
+    // Crew seat picker (#975): K cycles joinable seats across all crewed aircraft, J joins the selected
+    // seat, L leaves the current seat. Non-modal (axes stay live), like the radio menu. The overlay +
+    // last-result line render in buildElements when active.
+    CrewSeatPicker m_seatPicker;
+    bool m_seatPickerActive{false};
+    bool m_prevSeatCycle{false}; // K edge
+    bool m_prevSeatJoin{false};  // J edge
+    bool m_prevSeatLeave{false}; // L edge
+    char m_seatResultLine[80]{}; // last MsgSeatResult, surfaced to the player
+    char m_seatPickerLine[96]{}; // the picker's current selection, rebuilt each frame (HUD text is non-owning)
 
     // HUD (max 16) + rain (max 48) + slack
     // HUD (<=16) + windshield rain (<=48) + the radio menu (<=10) + slack.

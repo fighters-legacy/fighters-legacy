@@ -108,6 +108,7 @@ struct GunnerFixture {
     std::unique_ptr<EntityManager> em;
     std::unique_ptr<WorldBroadcaster> wb;
     EntityId targetId;
+    EntityId bomberId;
 
     explicit GunnerFixture(float gunnerSkill) {
         weapons.registerWeapon(makeGun());
@@ -120,16 +121,18 @@ struct GunnerFixture {
         wb->setGroundElevation(0.f);
         wb->setSensorCheckHz(60.f); // sense every tick — this is about the engagement, not cadence
         const EntityManager& emRef = *em;
-        wb->setSeatControllerFactory([&emRef](const SeatDef& sd, uint8_t i) -> std::unique_ptr<ISeatController> {
-            return fl::ai::makeSeatController(sd, i, emRef);
-        });
+        wb->setSeatControllerFactory(
+            [&emRef](const SeatDef& sd, uint8_t i,
+                     const WorldBroadcaster::SeatBotContext& ctx) -> std::unique_ptr<ISeatController> {
+                return fl::ai::makeSeatController(sd, i, emRef, ctx.skillMin, ctx.skillMax, ctx.missionSeed);
+            });
 
         // Bomber (faction 1) parked at the origin facing +X; a hostile target (faction 2) parked 150 m
         // dead ahead, inside the eyeball's forward cone and the turret's reach. Both on the ground, so
         // the gun's hitscan (a ray, not a falling projectile) resolves cleanly. At this range even a
         // low-skill gunner's biased aim still lands inside the target's hit radius (so first-hit timing
         // isolates the reaction delay), while an ace's tighter cone lands more rounds over the window.
-        spawnParked("test:gunbomber", 0.0, 0.0, /*faction=*/1, std::make_unique<NeutralController>());
+        bomberId = spawnParked("test:gunbomber", 0.0, 0.0, /*faction=*/1, std::make_unique<NeutralController>());
         targetId = spawnParked("test:target", 150.0, 0.0, /*faction=*/2, std::make_unique<NeutralController>());
     }
 
@@ -208,4 +211,28 @@ TEST_CASE("Bot gunner: higher skill fires sooner and hits harder (#971)", "[gunn
     REQUIRE(rookieFirst > 0);
     CHECK(aceFirst < rookieFirst); // the ace reacts faster (shorter reaction delay)
     CHECK(aceDmg > rookieDmg);     // and its tighter aim lands more rounds over the same window
+}
+
+TEST_CASE("Human gunner: masked-input gun fire lands on the target via the gunner-keyed path (#979)",
+          "[gunner][crew]") {
+    // Replace the bot gunner with a HUMAN in the tail seat: bind peer, feed a MsgClientInput that aims
+    // the turret at the target dead ahead (+X, where the turret rests) and holds the gun trigger. The
+    // masked-input fire path (#972) plus the gunner-keyed lag-comp rewind (#979) must land rounds.
+    GunnerFixture fx(/*skill=*/0.9f);
+    constexpr uint32_t kGunnerPeer = 3;
+    REQUIRE(fx.wb->setSeatOccupant(fx.bomberId, /*seat=*/1, kGunnerPeer));
+
+    fl::MsgClientInput inp{};
+    inp.seqNum = 1;
+    inp.viewAxis[0] = 1.f; // aim +X — straight at the target 150 m dead ahead (the turret's rest bore)
+    inp.viewAxis[1] = 0.f;
+    inp.viewAxis[2] = 0.f;
+    inp.buttons = 0x01; // gun trigger (level)
+    fx.wb->onReceive(kGunnerPeer, &inp, sizeof(inp));
+
+    uint64_t firstHit = 0;
+    float dmg = 0.f;
+    fx.run(300, firstHit, dmg);
+    CHECK(firstHit > 0); // the human gunner's masked fire reached the seat's gun
+    CHECK(dmg > 0.f);    // and lands on the bandit (the gunner-keyed rewind path is exercised)
 }

@@ -1399,6 +1399,48 @@ seat_pos     = [0.0, 0.5, -6.0]
     CHECK_THAT(t.slewRateDegS, WithinAbs(45.f, 1e-4f));
     REQUIRE(t.stations == std::vector<int>{3});
     CHECK_THAT(t.mountPos[2], WithinAbs(-6.f, 1e-4f));
+
+    // Crew-seat damage (#978) is absent here → the seats default to non-damageable (damageHp 0).
+    CHECK_THAT(pilot.damageHp, WithinAbs(0.f, 1e-6f));
+    CHECK_THAT(gunner.damageHp, WithinAbs(0.f, 1e-6f));
+}
+
+TEST_CASE("EntityDefParser: crew-seat damage_hp / hit_weight parse and validate (#978)", "[parser][crew]") {
+    const fl::EntityDef def = fl::parseEntityDef(crewEntity(R"(
+[[hardpoints]]
+slot    = 0
+allowed = ["m61"]
+default = "m61"
+[[crew]]
+role         = "pilot"
+capabilities = ["fly"]
+damage_hp    = 60.0
+[[crew]]
+role         = "gunner"
+capabilities = ["fire"]
+stations     = [0]
+damage_hp    = 40.0
+hit_weight   = 2.5
+)"));
+    REQUIRE(def.crew.size() == 2);
+    CHECK_THAT(def.crew[0].damageHp, WithinAbs(60.f, 1e-4f));
+    CHECK_THAT(def.crew[0].hitWeight, WithinAbs(1.f, 1e-4f)); // default
+    CHECK_THAT(def.crew[1].damageHp, WithinAbs(40.f, 1e-4f));
+    CHECK_THAT(def.crew[1].hitWeight, WithinAbs(2.5f, 1e-4f));
+
+    // A negative damage_hp / non-positive hit_weight is rejected.
+    CHECK_THROWS(fl::parseEntityDef(crewEntity(R"(
+[[crew]]
+role = "pilot"
+capabilities = ["fly"]
+damage_hp = -5.0
+)")));
+    CHECK_THROWS(fl::parseEntityDef(crewEntity(R"(
+[[crew]]
+role = "pilot"
+capabilities = ["fly"]
+hit_weight = 0.0
+)")));
 }
 
 TEST_CASE("EntityDefParser: an empty seat is authored with empty = true", "[parser][crew]") {

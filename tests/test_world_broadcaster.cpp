@@ -9544,3 +9544,412 @@ TEST_CASE("WorldBroadcaster: setEntityLoadout overrides a controlled entity's st
     CHECK(broadcaster.setEntityLoadout(id, {"fp:aim", "~"}, warn));
     CHECK_FALSE(warn.empty());
 }
+
+// --- Crew roster + turret pose replication (#972) --------------------------------------------------
+
+namespace {
+// A minimal crewed bomber def for the replication tests: a Fly+Fire pilot on station 0 and a Fire
+// tail-gunner aiming a turret that mounts station 1. Valid one-owner partition.
+static fl::EntityDef makeCrewBomberDef() {
+    fl::EntityDef d;
+    d.id = "test:crewbomber";
+    d.name = "CrewBomber";
+    d.category = fl::ObjectCategory::AirVehicle;
+    d.maxHp = 300.f;
+    fl::Hardpoint hp0;
+    hp0.slot = 0;
+    hp0.allowed = {"test:rkt"};
+    hp0.defaultWeapon = "test:rkt";
+    fl::Hardpoint hp1;
+    hp1.slot = 1;
+    hp1.allowed = {"test:rkt"};
+    hp1.defaultWeapon = "test:rkt";
+    d.hardpoints = {hp0, hp1};
+    fl::TurretDef t;
+    t.id = "tail";
+    t.stations = {1};
+    d.turrets = {t};
+    fl::SeatDef pilot;
+    pilot.role = "pilot";
+    pilot.capabilities = fl::withCapability(fl::withCapability(fl::CrewCapabilityMask{0}, fl::CrewCapability::Fly),
+                                            fl::CrewCapability::Fire);
+    pilot.stations = {0};
+    fl::SeatDef gunner;
+    gunner.role = "tail-gunner";
+    gunner.capabilities = fl::withCapability(fl::CrewCapabilityMask{0}, fl::CrewCapability::Fire);
+    gunner.turret = "tail";
+    d.crew = {pilot, gunner};
+    return d;
+}
+static fl::WeaponDef makeRktWeapon() {
+    fl::WeaponDef w;
+    w.id = "test:rkt";
+    w.name = "Rkt";
+    w.type = fl::WeaponType::Rocket;
+    w.category = fl::WeaponCategory::AirToGround;
+    w.performance.maxRangeM = 4000.f;
+    w.performance.maxSpeedMps = 500.f;
+    w.load.massKg = 20.f;
+    w.load.rounds = 40;
+    return w;
+}
+struct StillCtl : fl::IEntityController {
+    fl::ControlInput sample(const fl::EntityState&, uint64_t, double, const fl::AiTickContext&) override {
+        return fl::ControlInput{};
+    }
+};
+} // namespace
+
+TEST_CASE("WorldBroadcaster: crewed aircraft replicate roster on connect; single-seat do not (#972)",
+          "[world_broadcaster][crew]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef()); // a single-seat entity
+    registry.registerType(makeCrewBomberDef());
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(makeRktWeapon());
+
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    wb.setWeaponRegistry(&weapons);
+    wb.setGroundElevation(0.f);
+    wb.setSeatControllerFactory(
+        [](const fl::SeatDef&, uint8_t,
+           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> {
+            return nullptr; // no gunner bot: the turret rests at az=el=0, which still replicates
+        });
+
+    // Spawn an AI crewed bomber near the origin so an observer sees it.
+    fl::EntityTransform t{};
+    t.pos[1] = 800.0;
+    t.quat[3] = 1.f;
+    const fl::EntityId bomber = em.spawn("test:crewbomber", t);
+    wb.registerController(bomber, std::make_unique<StillCtl>(), nullptr, 0.f);
+
+    // An observer connecting must receive the bomber's MsgCrewRoster (crewed) among its ConnectAck-time
+    // reliable sends.
+    connectObserverPeer(wb, net, 1u);
+    bool sawRoster = false;
+    fl::MsgCrewRosterHeader rhdr{};
+    for (const auto& pkt : net.sends) {
+        if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::CrewRoster)) {
+            REQUIRE(fl::readMsg(pkt.data(), pkt.size(), rhdr));
+            if (rhdr.entityIdx == bomber.index) {
+                sawRoster = true;
+                CHECK(rhdr.seatCount == 2);
+                CHECK(rhdr.turretCount == 1);
+                fl::CrewRosterSeat s0{};
+                REQUIRE(fl::readRecordAt(pkt.data(), pkt.size(), sizeof(rhdr), s0));
+                s0.role[sizeof(s0.role) - 1] = '\0';
+                CHECK(std::string(s0.role) == "pilot");
+            }
+        }
+    }
+    CHECK(sawRoster);
+
+    // Tick once and confirm the observer's snapshot carries a SnapshotCrew TLV naming the bomber, and
+    // that the single-seat debug entity (if present) never appears in it.
+    clearSnapshots(net);
+    wb.onTick(1.0 / 60.0, 1u);
+    auto snaps = snapshotsFor(net, 1u);
+    REQUIRE(!snaps.empty());
+    const auto& pkt = snaps.back();
+    const auto hdr = parseSnapshotHeader(pkt);
+    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) +
+                                  static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
+    REQUIRE(pkt.size() >= extOffset);
+    const auto* ext = pkt.data() + extOffset;
+    const auto extSz = pkt.size() - extOffset;
+    uint16_t crewLen = 0;
+    const uint8_t* cp = fl::findExt(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotCrew), crewLen);
+    REQUIRE(cp != nullptr);
+    REQUIRE(crewLen >= 6u);
+    CHECK(cp[0] == 1u); // exactly one crewed entity in the TLV
+    uint32_t crewIdx = 0;
+    std::memcpy(&crewIdx, cp + 1, 4);
+    CHECK(crewIdx == bomber.index);
+    CHECK(cp[5] == 1u); // one turret
+}
+
+TEST_CASE("WorldBroadcaster: a single-seat-only world emits no SnapshotCrew TLV (#972)", "[world_broadcaster][crew]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    wb.setGroundElevation(0.f);
+
+    connectPilotPeer(wb, net, 0u); // a single-seat pilot aircraft
+    clearSnapshots(net);
+    wb.onTick(1.0 / 60.0, 1u);
+    auto snaps = snapshotsFor(net, 0u);
+    REQUIRE(!snaps.empty());
+    const auto& pkt = snaps.back();
+    const auto hdr = parseSnapshotHeader(pkt);
+    const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) +
+                                  static_cast<std::size_t>(hdr.originCount) * 3u * sizeof(double) + hdr.bitstreamBytes;
+    if (pkt.size() > extOffset) {
+        uint16_t crewLen = 0;
+        const uint8_t* cp = fl::findExt(pkt.data() + extOffset, pkt.size() - extOffset,
+                                        static_cast<uint16_t>(fl::ExtTag::SnapshotCrew), crewLen);
+        CHECK(cp == nullptr); // no crewed entity -> no crew block (single-seat snapshots unchanged)
+    }
+}
+
+// --- Seat join / handoff (#974) --------------------------------------------------------------------
+
+namespace {
+// Extract every MsgSeatResult sent to a specific peer, in order.
+static std::vector<fl::MsgSeatResult> seatResultsFor(const MockNetwork& net, uint32_t peerId) {
+    std::vector<fl::MsgSeatResult> out;
+    for (const auto& [pid, pkt] : net.perPeerSends) {
+        if (pid == peerId && pkt.size() >= sizeof(fl::MsgSeatResult) &&
+            pkt[0] == static_cast<uint8_t>(fl::MsgId::SeatResult)) {
+            fl::MsgSeatResult r{};
+            std::memcpy(&r, pkt.data(), sizeof(r));
+            out.push_back(r);
+        }
+    }
+    // perPeerSends may not include reliable sends; also scan net.sends (which records send()).
+    for (const auto& pkt : net.sends) {
+        if (pkt.size() >= sizeof(fl::MsgSeatResult) && pkt[0] == static_cast<uint8_t>(fl::MsgId::SeatResult)) {
+            fl::MsgSeatResult r{};
+            std::memcpy(&r, pkt.data(), sizeof(r));
+            out.push_back(r);
+        }
+    }
+    return out;
+}
+static fl::MsgSeatRequest joinReq(fl::EntityId host, uint8_t seat) {
+    fl::MsgSeatRequest req{};
+    req.seatIndex = seat;
+    req.entityIdx = host.index;
+    req.entityGen = host.generation;
+    return req;
+}
+} // namespace
+
+TEST_CASE("WorldBroadcaster: a human joins a gunner seat; a second human is denied (#974)",
+          "[world_broadcaster][crew]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    registry.registerType(makeCrewBomberDef());
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(makeRktWeapon());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    wb.setWeaponRegistry(&weapons);
+    wb.setGroundElevation(0.f);
+    wb.setSeatControllerFactory(
+        [](const fl::SeatDef&, uint8_t,
+           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
+
+    fl::EntityTransform t{};
+    t.pos[1] = 800.0;
+    t.quat[3] = 1.f;
+    const fl::EntityId bomber = em.spawn("test:crewbomber", t);
+    wb.registerController(bomber, std::make_unique<StillCtl>(), nullptr, 0.f);
+
+    // Peer 1 connects (spawns its own single-seat aircraft), then requests the bomber's gunner seat.
+    connectPilotPeer(wb, net, 1u);
+    net.sends.clear();
+    net.perPeerSends.clear();
+    const fl::MsgSeatRequest r1 = joinReq(bomber, 1);
+    wb.onReceive(1u, &r1, sizeof(r1));
+    auto res1 = seatResultsFor(net, 1u);
+    REQUIRE(!res1.empty());
+    CHECK(res1.back().code == static_cast<uint8_t>(fl::SeatResultCode::Granted));
+    CHECK(wb.occupantPeerFor(bomber, 1) == 1u); // peer 1 now holds the gunner seat
+
+    // Peer 2 connects and requests the SAME seat -> denied (humans never displace humans).
+    connectPilotPeer(wb, net, 2u);
+    net.sends.clear();
+    net.perPeerSends.clear();
+    const fl::MsgSeatRequest r2 = joinReq(bomber, 1);
+    wb.onReceive(2u, &r2, sizeof(r2));
+    auto res2 = seatResultsFor(net, 2u);
+    REQUIRE(!res2.empty());
+    CHECK(res2.back().code == static_cast<uint8_t>(fl::SeatResultCode::SeatOccupiedByHuman));
+    CHECK(wb.occupantPeerFor(bomber, 1) == 1u); // still peer 1
+
+    // Requesting the Fly seat is denied (it belongs to the owning pilot, not joinable).
+    net.sends.clear();
+    const fl::MsgSeatRequest rFly = joinReq(bomber, 0);
+    wb.onReceive(2u, &rFly, sizeof(rFly));
+    auto res3 = seatResultsFor(net, 2u);
+    REQUIRE(!res3.empty());
+    CHECK(res3.back().code == static_cast<uint8_t>(fl::SeatResultCode::FlySeatNotJoinable));
+}
+
+TEST_CASE("WorldBroadcaster: a peer-spawned crewed airframe persists while a human gunner remains (#974)",
+          "[world_broadcaster][crew]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    registry.registerType(makeCrewBomberDef());
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(makeRktWeapon());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    wb.setWeaponRegistry(&weapons);
+    wb.setGroundElevation(0.f);
+    wb.setSeatControllerFactory(
+        [](const fl::SeatDef&, uint8_t,
+           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
+
+    // Peer 1 spawns and OWNS a crewed bomber (requests that type).
+    connectPilotPeer(wb, net, 1u, "test:crewbomber");
+    fl::MsgConnectAck ack{};
+    // Find peer 1's assigned entity from its ConnectAck.
+    for (const auto& pkt : net.sends)
+        if (pkt.size() >= sizeof(fl::MsgConnectAck) && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectAck))
+            std::memcpy(&ack, pkt.data(), sizeof(ack));
+    const fl::EntityId bomber{ack.assignedEntityIdx, ack.assignedEntityGen};
+    REQUIRE(bomber.valid());
+
+    // Peer 2 joins the bomber's gunner seat.
+    connectPilotPeer(wb, net, 2u);
+    const fl::MsgSeatRequest r = joinReq(bomber, 1);
+    wb.onReceive(2u, &r, sizeof(r));
+    REQUIRE(wb.occupantPeerFor(bomber, 1) == 2u);
+
+    wb.onTick(1.0 / 60.0, 1u);
+    REQUIRE(em.get(bomber) != nullptr); // alive
+
+    // The owning pilot (peer 1) disconnects. The airframe must PERSIST (peer 2 still occupies a seat).
+    wb.onDisconnect(1u);
+    wb.onTick(1.0 / 60.0, 2u);
+    CHECK(em.get(bomber) != nullptr);           // NOT destroyed out from under the gunner
+    CHECK(wb.occupantPeerFor(bomber, 1) == 2u); // the gunner still holds its seat
+
+    // Now the last human (peer 2) disconnects -> the orphaned peer-spawned airframe is retired.
+    wb.onDisconnect(2u);
+    wb.onTick(1.0 / 60.0, 3u);
+    CHECK(em.get(bomber) == nullptr); // retired once the last human left
+}
+
+TEST_CASE("WorldBroadcaster: a peer-spawned single-seat aircraft despawns on pilot disconnect (#974)",
+          "[world_broadcaster][crew]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    wb.setGroundElevation(0.f);
+
+    connectPilotPeer(wb, net, 1u);
+    fl::MsgConnectAck ack{};
+    for (const auto& pkt : net.sends)
+        if (pkt.size() >= sizeof(fl::MsgConnectAck) && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectAck))
+            std::memcpy(&ack, pkt.data(), sizeof(ack));
+    const fl::EntityId ac{ack.assignedEntityIdx, ack.assignedEntityGen};
+    REQUIRE(ac.valid());
+    wb.onTick(1.0 / 60.0, 1u);
+    REQUIRE(em.get(ac) != nullptr);
+
+    wb.onDisconnect(1u);
+    wb.onTick(1.0 / 60.0, 2u);
+    CHECK(em.get(ac) == nullptr); // single-occupant aircraft despawns exactly as before
+}
+
+TEST_CASE("WorldBroadcaster: seats/set_seat operator surface reads and forces occupancy (#974)",
+          "[world_broadcaster][crew]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    registry.registerType(makeCrewBomberDef());
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(makeRktWeapon());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    wb.setWeaponRegistry(&weapons);
+    wb.setGroundElevation(0.f);
+    wb.setSeatControllerFactory(
+        [](const fl::SeatDef&, uint8_t,
+           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
+
+    fl::EntityTransform t{};
+    t.pos[1] = 800.0;
+    t.quat[3] = 1.f;
+    const fl::EntityId bomber = em.spawn("test:crewbomber", t);
+    wb.registerController(bomber, std::make_unique<StillCtl>(), nullptr, 0.f);
+
+    // crewRosterText lists both seats; the gunner defaults to bot occupancy.
+    const std::string text = wb.crewRosterText(bomber.index);
+    CHECK(text.find("seat 0") != std::string::npos);
+    CHECK(text.find("[fly]") != std::string::npos);
+    CHECK(text.find("seat 1") != std::string::npos);
+
+    // A single-seat entity has no crew roster.
+    connectPilotPeer(wb, net, 5u); // spawns a single-seat debug aircraft
+    fl::MsgConnectAck ack{};
+    for (const auto& pkt : net.sends)
+        if (pkt.size() >= sizeof(fl::MsgConnectAck) && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectAck))
+            std::memcpy(&ack, pkt.data(), sizeof(ack));
+    CHECK(wb.crewRosterText(ack.assignedEntityIdx).find("single-seat") != std::string::npos);
+
+    // set_seat: force the gunner seat empty, then back to bot.
+    CHECK(wb.adminSetSeat(bomber.index, 1, fl::SeatOccupancy::Empty, 0).empty());
+    CHECK(wb.crewRosterText(bomber.index).find("seat 1 (tail-gunner): empty") != std::string::npos);
+    CHECK(wb.adminSetSeat(bomber.index, 1, fl::SeatOccupancy::Bot, 0).empty());
+    CHECK(wb.crewRosterText(bomber.index).find("seat 1 (tail-gunner): bot") != std::string::npos);
+
+    // The Fly seat is not settable via set_seat.
+    CHECK_FALSE(wb.adminSetSeat(bomber.index, 0, fl::SeatOccupancy::Empty, 0).empty());
+    // An out-of-range seat is rejected.
+    CHECK_FALSE(wb.adminSetSeat(bomber.index, 9, fl::SeatOccupancy::Bot, 0).empty());
+}
+
+TEST_CASE("WorldBroadcaster: two humans on one crewed airframe each get an own record (#972/#980)",
+          "[world_broadcaster][crew]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    registry.registerType(makeCrewBomberDef());
+    fl::WeaponRegistry weapons;
+    weapons.registerWeapon(makeRktWeapon());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster wb(em, registry, net, logger);
+    wb.setWeaponRegistry(&weapons);
+    wb.setGroundElevation(0.f);
+    wb.setSeatControllerFactory(
+        [](const fl::SeatDef&, uint8_t,
+           const fl::WorldBroadcaster::SeatBotContext&) -> std::unique_ptr<fl::ISeatController> { return nullptr; });
+
+    // Peer 1 owns a crewed bomber; peer 2 joins its gunner seat. Both now occupy a seat in the SAME
+    // airframe, so each must receive that airframe as its OWN record (omega + loadout block) — the
+    // "isOwn generalizes to occupies-a-seat-here" property.
+    connectPilotPeer(wb, net, 1u, "test:crewbomber");
+    fl::MsgConnectAck ack{};
+    for (const auto& pkt : net.sends)
+        if (pkt.size() >= sizeof(fl::MsgConnectAck) && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectAck))
+            std::memcpy(&ack, pkt.data(), sizeof(ack));
+    const fl::EntityId bomber{ack.assignedEntityIdx, ack.assignedEntityGen};
+    REQUIRE(bomber.valid());
+
+    connectPilotPeer(wb, net, 2u);
+    const fl::MsgSeatRequest r = joinReq(bomber, 1);
+    wb.onReceive(2u, &r, sizeof(r));
+    REQUIRE(wb.occupantPeerFor(bomber, 1) == 2u);
+
+    clearSnapshots(net);
+    wb.onTick(1.0 / 60.0, 1u);
+
+    auto ownRecordFor = [&](uint32_t peerId) -> bool {
+        for (const auto& pkt : snapshotsFor(net, peerId))
+            for (const auto& e : decodeEntities(pkt))
+                if (e.entityIdx == bomber.index && e.hasLoadout)
+                    return true; // an own record (omega/loadout block present)
+        return false;
+    };
+    CHECK(ownRecordFor(1u)); // the pilot gets the bomber as its own record
+    CHECK(ownRecordFor(2u)); // the gunner ALSO gets the bomber as its own record
+}

@@ -374,6 +374,78 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             return std::string(buf);
         });
 
+    // seats <entityIdx>  -- inspect a crewed aircraft's seat roster/occupancy (#974)
+    registry.registerCommand("seats", "seats <entityIdx>  -- show a crewed aircraft's seat roster and occupancy",
+                             [ctx](std::span<std::string_view> args) -> std::string {
+                                 if (args.empty())
+                                     return "usage: seats <entityIdx>";
+                                 if (!ctx.sim.broadcaster)
+                                     return "seats: not available";
+                                 std::string idArg(args[0]);
+                                 if (!isNumeric(idArg))
+                                     return "seats: invalid entity index";
+                                 uint32_t idx = 0;
+                                 if (auto [ptr, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), idx);
+                                     ec != std::errc{})
+                                     return "seats: invalid entity index";
+                                 return ctx.sim.broadcaster->crewRosterText(idx);
+                             });
+
+    // set_seat <entityIdx> <seat> <peerId|bot|empty>  -- force a non-fly seat's occupancy (#974)
+    registry.registerCommand(
+        "set_seat", "set_seat <entityIdx> <seat> <peerId|bot|empty>  -- force a non-fly seat's occupancy",
+        [ctx](std::span<std::string_view> args) -> std::string {
+            if (args.size() < 3)
+                return "usage: set_seat <entityIdx> <seat> <peerId|bot|empty>";
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                return "set_seat: not available";
+            std::string idArg(args[0]), seatArg(args[1]);
+            if (!isNumeric(idArg) || !isNumeric(seatArg))
+                return "set_seat: entity index and seat must be integers";
+            uint32_t entityIdx = 0, seat = 0;
+            if (auto [p, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), entityIdx); ec != std::errc{})
+                return "set_seat: invalid entity index";
+            if (auto [p, ec] = std::from_chars(seatArg.data(), seatArg.data() + seatArg.size(), seat);
+                ec != std::errc{})
+                return "set_seat: invalid seat";
+            if (seat > 255u)
+                return "set_seat: seat out of range";
+            fl::SeatOccupancy occ = fl::SeatOccupancy::Bot;
+            uint32_t peerId = 0;
+            if (args[2] == "bot")
+                occ = fl::SeatOccupancy::Bot;
+            else if (args[2] == "empty")
+                occ = fl::SeatOccupancy::Empty;
+            else {
+                std::string peerArg(args[2]);
+                if (!isNumeric(peerArg))
+                    return "set_seat: third arg must be a peerId, 'bot', or 'empty'";
+                if (auto [p, ec] = std::from_chars(peerArg.data(), peerArg.data() + peerArg.size(), peerId);
+                    ec != std::errc{})
+                    return "set_seat: invalid peerId";
+                occ = fl::SeatOccupancy::Human;
+            }
+            const auto seat8 = static_cast<uint8_t>(seat);
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, entityIdx, seat8, occ, peerId]() {
+                const std::string err = ctx.sim.broadcaster->adminSetSeat(entityIdx, seat8, occ, peerId);
+                char m[128];
+                if (err.empty())
+                    std::snprintf(m, sizeof(m), "[admin] set entity %u seat %u -> %s", entityIdx, seat8,
+                                  occ == fl::SeatOccupancy::Human ? "human"
+                                  : occ == fl::SeatOccupancy::Bot ? "bot"
+                                                                  : "empty");
+                else
+                    std::snprintf(m, sizeof(m), "[admin] %s", err.c_str());
+                std::printf("%s\n", m);
+                if (ctx.rcon.shell)
+                    ctx.rcon.shell->print(m);
+                std::fflush(stdout);
+            });
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "set_seat: queued entity %u seat %u", entityIdx, seat8);
+            return std::string(buf);
+        });
+
     // ban <peerId|IP>
     registry.registerCommand("ban", "ban <peerId|IP>  -- add IP to in-memory ban list and kick matching peers",
                              [ctx](std::span<std::string_view> args) -> std::string {

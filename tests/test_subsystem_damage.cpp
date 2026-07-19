@@ -133,3 +133,32 @@ TEST_CASE("subsystemHash is deterministic and 24-bit", "[subsystem]") {
     for (uint32_t i = 0; i < 1000; ++i)
         CHECK(subsystemHash(i, i * 7u, 5u) < 0x01000000u);
 }
+
+TEST_CASE("crewSeatDamageBias: a hit favors the seat on the entry side (#978)", "[subsystem][crew]") {
+    // Rear seat (forward position −6) vs a forward seat (+3). A round travelling forward (hitDir.x > 0)
+    // entered from the REAR, so it should favor the rear seat.
+    const float rearSeat[3] = {-6.f, 0.5f, 0.f};
+    const float fwdSeat[3] = {3.f, 1.2f, 0.f};
+    const float fromRear[3] = {1.f, 0.f, 0.f}; // travelling forward = struck from behind
+
+    CHECK(fl::crewSeatDamageBias(rearSeat, fromRear) > 1.f); // rear seat favored
+    CHECK(fl::crewSeatDamageBias(fwdSeat, fromRear) < 1.f);  // forward seat less likely
+    CHECK(fl::crewSeatDamageBias(rearSeat, fromRear) > fl::crewSeatDamageBias(fwdSeat, fromRear));
+
+    // A round from the front favors the forward seat.
+    const float fromFront[3] = {-1.f, 0.f, 0.f};
+    CHECK(fl::crewSeatDamageBias(fwdSeat, fromFront) > 1.f);
+    CHECK(fl::crewSeatDamageBias(rearSeat, fromFront) < 1.f);
+
+    // No location = pure weight pick (bias 1).
+    const float noDir[3] = {0.f, 0.f, 0.f};
+    CHECK(fl::crewSeatDamageBias(rearSeat, noDir) == 1.f);
+
+    // Always bounded (0.2, 1.8) so no seat is ever un-hittable or certain.
+    for (float x = -20.f; x <= 20.f; x += 1.f) {
+        const float seat[3] = {x, 0.f, 0.f};
+        const float b = fl::crewSeatDamageBias(seat, fromRear);
+        CHECK(b > 0.19f);
+        CHECK(b < 1.81f);
+    }
+}

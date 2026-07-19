@@ -125,8 +125,49 @@ objects:
 | `ai` | string | no | — | Attach an AI controller (ignored on a player slot). See Scripted bots below. |
 | `route` | sequence | no | each entry is `[x, y, z]` | A waypoint list the object flies. Takes precedence over `ai` when both are given. |
 | `loadout` | sequence of strings | no | each store must be in that station's `allowed` list | Per-station weapon override of the entity's default payload (see Scripted bots). |
+| `crew` | mapping | no | see **Crew configuration** | Bot skill ranges and per-seat overrides for a multi-crew aircraft. Ignored on a player slot. |
 
 Object IDs must be unique — the validator will reject duplicate IDs within a single file.
+
+---
+
+## Crew configuration
+
+A multi-crew aircraft (one that declares `[[crew]]` seats — see the entity format) can have its bots
+configured per mission via a `crew:` block on the object. The engine rolls each bot seat's
+per-instance skill deterministically from the **mission name** (seeded so a replay is byte-identical and
+two missions differ), within the configured range — a flight of bombers is not uniformly deadly.
+
+    - type: fl-base:b17
+      id: bomber1
+      side: allies
+      pos: [40000, 3000, 12000]
+      heading: 270
+      ai: "waypoint 40000 3000 12000"
+      crew:
+        skill: [0.3, 0.8]        # aircraft-level range every bot seat rolls within (or a single number = fixed)
+        seats:
+          - role: tail-gunner    # name a seat by `role` OR by `seat: <index>` (exactly one)
+            skill: 0.9           # per-seat skill override (fixed or [min, max]); wins over the aircraft range
+            bot: builtin:gunner  # override the seat's bot spec
+          - seat: 2
+            empty: true          # spawn this seat empty (it contributes no fire) instead of a bot
+
+`crew:` fields:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `skill` | number or `[min, max]` | Aircraft-level skill range in `[0, 1]` all bot seats roll within. A single number is a fixed skill. |
+| `seats` | sequence | Per-seat overrides. |
+| `seats[].seat` | int | Seat index to override. **Exactly one** of `seat` / `role` must be set. |
+| `seats[].role` | string | Seat role to override (resolved to an index against the entity's `[[crew]]`). |
+| `seats[].skill` | number or `[min, max]` | Per-seat skill override (wins over the aircraft range). |
+| `seats[].bot` | string | Override the seat's bot spec (`gunner` / `builtin:gunner` / `lua:<script>`). |
+| `seats[].empty` | bool | `true` spawns the seat empty (no bot). |
+
+`validate-mission --pack <dir>` cross-checks a `crew:` block against the referenced entity type's
+declared `[[crew]]`: a `seat`/`role` the entity does not have, or a `crew:` block on a single-seat
+entity, is an error.
 
 ---
 

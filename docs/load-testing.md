@@ -158,6 +158,25 @@ count, so only throughput changes.
 [#511]: https://github.com/fighters-legacy/fighters-legacy/issues/511
 [#512]: https://github.com/fighters-legacy/fighters-legacy/issues/512
 
+### Crewed-AI load profile (Epic #966 / [#980])
+
+The multi-crew per-seat passes (sample each non-fly seat's bot → command its turret → slew it in the
+integrate pass → the serial crewed weapons pass) and the `SnapshotCrew` turret-pose replication add
+cost the single-seat baseline does not exercise. To stress them under scale, point the load AI at the
+**crewed builtin bomber** (a Fly pilot + a bot tail-gunner turret) instead of the single-seat debug
+entity:
+
+    [world]
+    test_spawn_ai_count = 128
+    test_spawn_entity_type = "builtin:bomber"   # crewed AI; empty/absent = builtin:debug-entity (baseline)
+
+Each spawned airframe then runs its gunner bot (honest acquisition off the shared contact table, lead,
+turret slew) and replicates its turret pose to interested peers. The crew work is bounded and cheap
+(one bot gunner per airframe), so the 128-client scale gate is expected to hold against the committed
+`scale-gate-baseline.json`; if a baseline moves when enabling this profile, document and justify it in
+that file. The `test_spawn_ai_mix` behaviors still apply to the airframe's flight controller. A
+seat-join churn mode (rapid human join/leave) is a follow-on load lever.
+
 ### Validating graceful overrun ([#514])
 
 The `run_loadtest.sh`/`.ps1` scale-gate config sets `overrun_governor_enabled = false` so the gate
