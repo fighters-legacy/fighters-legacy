@@ -613,6 +613,13 @@ target_link_libraries(test_mission_runtime
     PRIVATE Catch2::Catch2WithMain engine-mission validate-mission-lib)
 catch_discover_tests(test_mission_runtime)
 
+# engine-campaign (#635): the deterministic dynamic-campaign runtime — frontline raster, campaign
+# schema parser, and the theater-graph state machine (story injection, dynamic selection, save/restore).
+add_executable(test_campaign test_campaign.cpp)
+target_link_libraries(test_campaign
+    PRIVATE Catch2::Catch2WithMain engine-campaign)
+catch_discover_tests(test_campaign)
+
 add_executable(test_validate_licenses test_validate_licenses.cpp)
 target_link_libraries(test_validate_licenses
     PRIVATE Catch2::Catch2WithMain validate-licenses-lib)
