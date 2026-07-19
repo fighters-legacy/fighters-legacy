@@ -85,6 +85,9 @@ class PeerController final : public fl::IEntityController {
         // pass), bit 4 = ECM jammer on (level).
         ctrl.dispenseCm = (m_input->buttons & 0x08u) != 0;
         ctrl.ecm = (m_input->buttons & 0x10u) != 0;
+        // Wheel brakes (#700): the integrator only acts on this while the aircraft is in ground
+        // contact, so a held brake in flight is harmless. Level on the wire; no edge detection needed.
+        ctrl.wheelBrake = (m_input->buttons & fl::kInputButtonWheelBrake) != 0 ? 1.f : 0.f;
         return ctrl;
     }
 

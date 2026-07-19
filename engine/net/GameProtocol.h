@@ -411,11 +411,13 @@ inline constexpr uint8_t kInputButtonFireStore = 0x04;   // bit 2 = fire selecte
 inline constexpr uint8_t kInputButtonChaffFlare = 0x08;  // bit 3 = chaff/flare dispense (edge, #529)
 inline constexpr uint8_t kInputButtonEcm = 0x10;         // bit 4 = ECM jammer (level, #529)
 inline constexpr uint8_t kInputButtonEject = 0x20;       // bit 5 = eject (edge, #672)
+inline constexpr uint8_t kInputButtonWheelBrake = 0x40;  // bit 6 = wheel brakes (level, #700, ground only)
 
 struct MsgClientInput {
     uint8_t msgId{static_cast<uint8_t>(MsgId::ClientInput)};
     uint8_t buttons{0}; // bit 0 gun, bit 1 afterburner, bit 2 fire store, bit 3 chaff/flare, bit 4 ECM,
-                        // bit 5 = eject (server edge-detects; a held key is one ejection, #672)
+                        // bit 5 = eject (server edge-detects; a held key is one ejection, #672),
+                        // bit 6 = wheel brakes (level; the integrator only brakes in ground contact, #700)
     uint16_t protocolVersion{kProtocolVersion};
     uint32_t seqNum{0};    // monotonically increasing; server discards packets not newer than last accepted
     uint64_t tickIndex{0}; // server's tickIndex from last received WorldSnapshot; server uses delta for delay estimate

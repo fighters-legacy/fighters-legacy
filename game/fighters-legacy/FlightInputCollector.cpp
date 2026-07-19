@@ -43,6 +43,10 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
         inp.buttons = input.isKeyDown(Key::Space) ? 1u : 0u;
         if (input.isKeyDown(Key::Tab))
             inp.buttons |= 0x02u;
+        // Wheel brakes (#700): B holds the brakes. A flight control like throttle/AB, so it is not
+        // gated on uiFocused — the server ignores it unless the aircraft is on the ground anyway.
+        if (input.isKeyDown(Key::B))
+            inp.buttons |= fl::kInputButtonWheelBrake;
         // Fire the selected store (#625): mouse-right or the Enter key. Level on the wire — the
         // server's FireControl edge-detects, so holding it is one shot. Gated while an overlay owns
         // the discrete keys (the radio menu's picks are the digit keys the cycle uses, #610).

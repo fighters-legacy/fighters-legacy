@@ -85,6 +85,7 @@ Active in all camera modes. All game inputs (flight controls and camera) are sup
 | Arrow Up / Down | Elevator (pitch) |
 | Arrow Left / Right | Aileron (roll) |
 | Z / X | Rudder left / right |
+| B | Wheel brakes (bit 6, level; #700). Only bites in ground contact — hold it to stop the rollout after touchdown. Rudder also steers the nosewheel at taxi speed, fading out by ~50 m/s |
 | Space | Gun trigger (bit 0, level — hold to keep firing, rate-limited server-side) |
 | Tab | Afterburner command (bit 1) |
 | Enter / Right mouse | Fire selected store (bit 2 — edge-detected server-side; holding it is one shot) |
