@@ -19,6 +19,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         SettingsScreen.cpp
         FlightScreen.cpp
         WingmanMenu.cpp
+        CommsMenu.cpp
         PauseMenuScreen.cpp
         DebriefScreen.cpp
     )

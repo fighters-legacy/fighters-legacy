@@ -11,6 +11,9 @@ namespace fl {
 
 class EntityManager;
 struct WorldApi;
+namespace atc {
+class AtcService; // engine/atc/AtcService.h — the atc.* Lua module target (#705)
+} // namespace atc
 
 // IEntityController backed by a sandboxed Lua 5.5 script.
 //
@@ -42,6 +45,14 @@ struct WorldApi;
 //       (valid only inside compute_control; returns {} when SpatialIndex unavailable)
 //   get_entity(idx)                   → state table or nil
 //       (requires entityManager; returns nil when unavailable or entity dead)
+//
+//   atc.* module (#705; requires an AtcService, else every call is nil/false):
+//     atc.clearance()                        → clearance-state string for THIS entity ("none" if unknown)
+//     atc.request_takeoff([airport_id])      → true; queue this entity for departure (nearest field)
+//     atc.request_landing([airport_id])      → true; sequence this entity for arrival
+//     atc.inbound([airport_id])              → true; declare inbound (radio acknowledgement)
+//     atc.scramble(airport_id, type, count)  → bool; launch `count` departures from a named field
+//     atc.hold(airport_id, on)               → true; freeze/unfreeze that field's departures
 class LuaController : public IEntityController {
   public:
     // scriptSource: Lua source text (never bytecode — rejected by LuaSandbox)
@@ -50,8 +61,10 @@ class LuaController : public IEntityController {
     // worldApi: optional host seam for the world.* module (#413); null = world.* engine-integration
     //   calls (spawn/despawn/set_relationship/set_music_state/mission_*) are safe no-ops. The pointee
     //   must outlive the controller (the host owns one WorldApi for the sim's lifetime).
+    // atcService: optional; enables the atc.* module (#705). Thread-safe (the service takes its own
+    //   lock), so a script calling atc.* from the parallel AI pass is safe. Must outlive the controller.
     LuaController(std::string_view scriptSource, std::string packRootDir, const EntityManager* entityManager = nullptr,
-                  const WorldApi* worldApi = nullptr);
+                  const WorldApi* worldApi = nullptr, atc::AtcService* atcService = nullptr);
     ~LuaController();
 
     ControlInput sample(const EntityState& state, uint64_t tick, double dt, const AiTickContext& ctx = {}) override;

@@ -218,6 +218,23 @@ revised by a dated decision record instead of a full RFC, provided the change is
 with its rationale. This keeps the velocity of pre-1.0 architecture work without leaving the
 locked table silently stale.
 
+**2026-07-19 — ATC as a deterministic `engine-atc` library + a shared radio channel (Epic #673).**
+Airports build *geometry* (#486/#487); ATC adds *behaviour*: runway sequencing, clearances, and a
+player comms menu. The core decisions: **(1)** ATC is a new **`engine-atc`** static library
+(`namespace fl::atc`) sitting above `engine-entity` + `engine-ai` (like `engine-script`), a **pure
+deterministic FSM with no model involvement** anywhere — this is the CI-tested path
+(docs/ai-architecture.md); the AI-voice ATC epic (Epic O, #591) is a *voicing* layer over the same
+enumerable `AtcPhrase` vocabulary, never a re-implementation. `engine-net` PRIVATE-links it and ticks
+it at 1 Hz in the serial Maintenance phase. **(2)** A single generic **player radio channel**
+(`MsgRadioCommand`/`MsgRadioTransmission`) carries ATC now and is reused by the #610 wingman grammar
+later; it is verb-routed like the admin channel (validated grammar, never direct state mutation).
+**(3)** Facilities are built **lazily** from the `AirportRegistry`, so an 80k-airport registry costs
+nothing until traffic appears. **(4)** A `FacilityPose` provider (`std::function`) means a moving
+carrier deck (#38) plugs into the identical logic — the FA "accepts landings is a data property"
+lesson. Ground handling (#700: wheel brakes, rolling resistance, nosewheel steering) was load-bearing
+prerequisite work — the landing half of ATC is impossible without a lander that can stop on the
+runway. See #700–#706.
+
 **2026-07-18 — Multi-crew aircraft: seats unified into `ControlledEntity` (Epic #966).** Aircraft
 gain 2+ crew positions ("seats") alongside the single-pilot model — a bomber with a pilot and
 defensive gunners, spawned with every seat bot-filled, any non-human seat human-joinable. The core

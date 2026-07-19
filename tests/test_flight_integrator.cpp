@@ -694,6 +694,95 @@ TEST_CASE("FlightIntegrator: ground parking hold does not block takeoff roll", "
     CHECK(fi.state().vel_body[0] > 1.0f);
 }
 
+// ── Ground handling: wheel brakes, rolling resistance, nosewheel steering (#700) ──────────────
+
+// Build a level, on-ground FlightState at (0, groundElev, 0) with the given forward speed.
+static fl::FlightState makeRolloutState(float groundElev, float fwdSpeed) {
+    fl::FlightState s{};
+    s.pos_world[1] = groundElev; // sitting on the runway (geodeticAltitude == groundElev at the origin)
+    s.vel_body[0] = fwdSpeed;    // forward, identity attitude (level, nose along +X)
+    s.mass_kg = 14000.f;
+    s.fuel_kg = 4000.f;
+    return s;
+}
+
+TEST_CASE("FlightIntegrator: wheel brakes decelerate and shorten a rollout (#700)", "[flight_integrator][ground]") {
+    // The test model at a level attitude generates far less lift than its weight at these speeds, so it
+    // stays firmly in ground contact throughout (no liftoff to invalidate the braking).
+    auto d = makeData();
+    fl::PayloadEffect px{};
+    constexpr float kGroundElev = 100.f;
+
+    // 1) Over one second from the same 60 m/s touchdown, full brakes shed clearly more speed than an
+    // idle coast — a direct test of the ~0.35 g brake deceleration on top of the baseline rolling.
+    fl::FlightIntegrator braked1(d), coast1(d);
+    braked1.reset(makeRolloutState(kGroundElev, 60.f));
+    coast1.reset(makeRolloutState(kGroundElev, 60.f));
+    fl::ControlInput brakeCtrl{};
+    brakeCtrl.wheelBrake = 1.f;
+    fl::ControlInput coastCtrl{};
+    for (int i = 0; i < 60; ++i) {
+        braked1.step(1.f / 60.f, brakeCtrl, px, {}, kGroundElev);
+        coast1.step(1.f / 60.f, coastCtrl, px, {}, kGroundElev);
+    }
+    CHECK(braked1.state().vel_body[0] < coast1.state().vel_body[0] - 2.0f);
+
+    // 2) A braked lander stops within a bounded distance, and braking shortens the rollout vs. coasting.
+    fl::FlightIntegrator braked(d), rolling(d);
+    braked.reset(makeRolloutState(kGroundElev, 70.f));
+    rolling.reset(makeRolloutState(kGroundElev, 70.f));
+    for (int i = 0; i < 1800; ++i) { // 30 s ceiling
+        braked.step(1.f / 60.f, brakeCtrl, px, {}, kGroundElev);
+        rolling.step(1.f / 60.f, coastCtrl, px, {}, kGroundElev);
+    }
+    CHECK(std::abs(braked.state().vel_body[0]) < 1.0f);                // fully stopped
+    CHECK(braked.state().pos_world[0] < 900.0);                        // within a bounded distance
+    CHECK(braked.state().pos_world[0] < rolling.state().pos_world[0]); // brakes shorten the rollout
+}
+
+TEST_CASE("FlightIntegrator: nosewheel steering turns the aircraft at taxi speed (#700)",
+          "[flight_integrator][ground]") {
+    auto d = makeData();
+    fl::PayloadEffect px{};
+    constexpr float kGroundElev = 100.f;
+
+    fl::FlightIntegrator fi(d);
+    fi.reset(makeRolloutState(kGroundElev, 10.f)); // taxi speed
+    fl::ControlInput ctrl{};
+    ctrl.rudder = 1.f; // full right rudder
+
+    // First tick: the nosewheel commands a right-yaw rate immediately (omega[1] < 0 = nose right).
+    fi.step(1.f / 60.f, ctrl, px, {}, kGroundElev);
+    const float taxiYawRate = fi.state().omega[1];
+    CHECK(taxiYawRate < -0.1f);
+
+    for (int i = 0; i < 120; ++i) // 2 more seconds
+        fi.step(1.f / 60.f, ctrl, px, {}, kGroundElev);
+    // Right turn: the nose swings toward +Z (world right), so the aircraft tracks right of centreline.
+    CHECK(fi.state().pos_world[2] > 1.0);
+}
+
+TEST_CASE("FlightIntegrator: nosewheel authority fades out above ~50 m/s (#700)", "[flight_integrator][ground]") {
+    // Same full-rudder input, one tick, at taxi speed vs. above the fade-out speed. At 10 m/s the
+    // nosewheel snaps the yaw rate to its full value; at 60 m/s it contributes nothing, so only the
+    // (tiny, one-tick) aero rudder acts — a strictly smaller yaw rate.
+    auto d = makeData();
+    fl::PayloadEffect px{};
+    constexpr float kGroundElev = 100.f;
+    fl::ControlInput ctrl{};
+    ctrl.rudder = 1.f;
+
+    fl::FlightIntegrator slow(d);
+    slow.reset(makeRolloutState(kGroundElev, 10.f));
+    slow.step(1.f / 60.f, ctrl, px, {}, kGroundElev);
+
+    fl::FlightIntegrator fast(d);
+    fast.reset(makeRolloutState(kGroundElev, 60.f));
+    fast.step(1.f / 60.f, ctrl, px, {}, kGroundElev);
+
+    CHECK(std::abs(fast.state().omega[1]) < std::abs(slow.state().omega[1]));
+}
+
 TEST_CASE("FlightIntegrator: nonzero world wind affects forces", "[flight_integrator][weather]") {
     // Use the parsed test model (mass=10000 kg) rather than BuiltinFlightModel (fuel=10M kg)
     // so the wind drag force produces a float-distinguishable velocity difference.

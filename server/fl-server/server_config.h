@@ -219,6 +219,13 @@ struct ServerConfig {
     };
     FlightConfig flight;
 
+    // [atc]  — air-traffic control service (#706)
+    struct AtcConfig {
+        bool enabled = true;                                     // build the ATC service + facilities
+        std::string scrambleEntityType = "builtin:debug-entity"; // default type for atc_scramble / atc.scramble
+    };
+    AtcConfig atc;
+
     // [network]  — transport backend selection (#507)
     struct NetworkConfig {
         std::string transport = "gns"; // "gns" (GameNetworkingSockets, default) or "enet" (enet6)

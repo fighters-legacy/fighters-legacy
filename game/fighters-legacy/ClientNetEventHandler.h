@@ -265,6 +265,11 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // it to the local gamepad via IInput. Null = ignored. Main-thread only.
     std::function<void(uint8_t, float, float, uint16_t)> hapticCallback;
 
+    // Optional: called on a MsgRadioTransmission (#703) with (speaker, text, voiceKey, displaySeconds).
+    // #704 wires it to the subtitle overlay + voice-callout pipeline. The line is always also printed to
+    // the console. Null = console only. Main-thread only.
+    std::function<void(const char* speaker, const char* text, const char* voiceKey, uint16_t seconds)> radioCallback;
+
   private:
     // Store f into *sessionFailure if it is still None (first-writer-wins via CAS); no-op if unset.
     void signalFailure(SessionFailure f);

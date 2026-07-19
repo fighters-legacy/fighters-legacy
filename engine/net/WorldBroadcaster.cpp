@@ -10,6 +10,7 @@
 // controller is engine-ai's job and reaches this file only through the FlightOrderHandler hook.
 // Including it here rather than hardcoding ordinals keeps one source of truth for the vocabulary.
 #include "ai/WingmanCommand.h"
+#include "atc/AtcService.h" // the deterministic ATC FSM ticked at 1 Hz (#702)
 #include "entity/EntityManager.h"
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
@@ -85,6 +86,9 @@ class PeerController final : public fl::IEntityController {
         // pass), bit 4 = ECM jammer on (level).
         ctrl.dispenseCm = (m_input->buttons & 0x08u) != 0;
         ctrl.ecm = (m_input->buttons & 0x10u) != 0;
+        // Wheel brakes (#700): the integrator only acts on this while the aircraft is in ground
+        // contact, so a held brake in flight is harmless. Level on the wire; no edge detection needed.
+        ctrl.wheelBrake = (m_input->buttons & fl::kInputButtonWheelBrake) != 0 ? 1.f : 0.f;
         return ctrl;
     }
 
@@ -866,6 +870,20 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     m_overrunAiStride.store(govAiStride, std::memory_order_relaxed);
     m_overrunInterestScale.store(govInterestScale, std::memory_order_relaxed);
 
+    // Air-traffic control (#702): step the deterministic ATC FSM at 1 Hz on the serial sim thread,
+    // BEFORE the AI pass, so a departure/arrival composition samples a clearance the service already
+    // decided this tick. Drain its radio transmissions and route them through the injected sink (the
+    // wire message in #703; logged until then).
+    if (m_atcService && (tickIndex % fl::atc::AtcService::kIntervalTicks == 0)) {
+        m_atcService->tick(m_entityManager, tickIndex);
+        for (const fl::atc::RadioTransmission& tx : m_atcService->drainTransmissions()) {
+            if (m_atcTransmissionSink)
+                m_atcTransmissionSink(tx);
+            else
+                sendRadioTransmission(tx); // #703: the wire message is the default route
+        }
+    }
+
     m_tickProfiler.addPhaseSample(
         TickPhase::Maintenance, std::chrono::duration<double, std::milli>(m_clock->now() - tMaintenanceStart).count());
 
@@ -876,12 +894,22 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // timed as one wall-clock phase.
 
     // Gather the live controlled entities into a contiguous, indexable range.
+    // Reap orphaned controllers whose entity no longer exists (#702): an entity killed outside
+    // onDisconnect (combat, AI arrival despawn, a Lua despawn) used to leave its controller lingering
+    // in m_controlledEntities until its pool index was reused, so the AI/ATC passes churned a dead
+    // lifecycle. get()==nullptr means the slot was freed/recycled — erase the stale entry. A present-
+    // but-dead entity is left to EntityManager::onTick to reap; its controller is skipped this tick.
     m_stepItems.clear();
-    for (auto& [entityIdx, ce] : m_controlledEntities) {
+    for (auto it = m_controlledEntities.begin(); it != m_controlledEntities.end();) {
+        auto& ce = it->second;
         EntityState* state = m_entityManager.get(ce.id);
-        if (!state || state->dead)
+        if (!state) {
+            it = m_controlledEntities.erase(it);
             continue;
-        m_stepItems.push_back({entityIdx, &ce, state});
+        }
+        if (!state->dead)
+            m_stepItems.push_back({it->first, &ce, state});
+        ++it;
     }
     m_stepInputs.resize(m_stepItems.size());
 
@@ -3657,6 +3685,8 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         MsgSeatRequest req;
         if (readMsg(data, size, req))
             handleSeatRequest(peerId, req);
+    } else if (msgId == static_cast<uint8_t>(MsgId::RadioCommand)) {
+        handleRadioCommand(peerId, data, size);
     }
     // Unknown msgIds: silently discard (no log spam; future protocol versions may add new IDs)
 }
@@ -3671,6 +3701,109 @@ void WorldBroadcaster::sendWingmanAck(uint32_t peerId, uint8_t command, WingmanR
     ack.targetIdx = targetIdx;
     ack.flightId = flightId;
     m_net.send(peerId, &ack, sizeof(ack), /*reliable=*/true);
+}
+
+namespace {
+// Copy an ATC RadioTransmission into its wire form; snprintf force-terminates each char[] safely.
+MsgRadioTransmission buildRadioWire(const fl::atc::RadioTransmission& tx) {
+    MsgRadioTransmission w{};
+    w.displaySeconds = tx.displaySeconds;
+    std::snprintf(w.speaker, sizeof(w.speaker), "%s", tx.speaker.c_str());
+    std::snprintf(w.voiceKey, sizeof(w.voiceKey), "%s", tx.voiceKey.c_str());
+    std::snprintf(w.text, sizeof(w.text), "%s", tx.text.c_str());
+    return w;
+}
+} // namespace
+
+void WorldBroadcaster::sendRadioTransmission(const fl::atc::RadioTransmission& tx) {
+    const MsgRadioTransmission w = buildRadioWire(tx);
+    if (tx.target.valid()) {
+        for (const auto& [pid, eid] : m_peerEntities) {
+            if (eid == tx.target) {
+                m_net.send(pid, &w, sizeof(w), /*reliable=*/true); // unicast to the addressed pilot
+                return;
+            }
+        }
+    }
+    // No owning peer (an AI flight's clearance) or an undirected line: every peer hears it.
+    for (const auto& [pid, ps] : m_peerInputs) {
+        (void)ps;
+        m_net.send(pid, &w, sizeof(w), /*reliable=*/true);
+    }
+}
+
+void WorldBroadcaster::handleRadioCommand(uint32_t peerId, const void* data, std::size_t size) {
+    MsgRadioCommand msg;
+    if (!readMsg(data, size, msg))
+        return; // truncated; silently discard
+    msg.command[sizeof(msg.command) - 1] = '\0';
+
+    auto& ps = m_peerInputs[peerId];
+
+    // Per-peer rate limit (~m_flightCmdRateLimit/s). Silently drop over the limit — a radio flood must
+    // not be amplified back at the sender with a reply per rejected packet.
+    {
+        const auto now = m_clock->now();
+        if (now - ps.radioCmdWindowStart >= std::chrono::seconds(1)) {
+            ps.radioCmdWindowStart = now;
+            ps.radioCmdCount = 0;
+        }
+        ++ps.radioCmdCount;
+        if (ps.radioCmdCount > static_cast<uint32_t>(m_flightCmdRateLimit))
+            return;
+    }
+
+    // The flight the command applies to = the requesting peer's own aircraft (invalid for an observer).
+    const auto peerEnt = m_peerEntities.find(peerId);
+    const fl::EntityId flight = (peerEnt != m_peerEntities.end()) ? peerEnt->second : fl::EntityId{};
+
+    // Reply directly to the requester (facility-specific clearances come later from the ATC tick).
+    auto reply = [&](fl::atc::AtcPhrase phrase, const char* overrideText = nullptr) {
+        fl::atc::RadioTransmission tx = fl::atc::makeTransmission(phrase, "Tower", flight);
+        if (overrideText)
+            tx.text = overrideText;
+        const MsgRadioTransmission w = buildRadioWire(tx);
+        m_net.send(peerId, &w, sizeof(w), /*reliable=*/true);
+    };
+
+    if (!m_atcService) {
+        reply(fl::atc::AtcPhrase::Unable, "no ATC available");
+        return;
+    }
+
+    // Tokenize "atc <subverb> [facility]".
+    std::string_view cmd(msg.command);
+    auto nextToken = [](std::string_view& s) -> std::string_view {
+        while (!s.empty() && s.front() == ' ')
+            s.remove_prefix(1);
+        std::size_t sp = s.find(' ');
+        std::string_view tok = s.substr(0, sp);
+        s.remove_prefix(sp == std::string_view::npos ? s.size() : sp);
+        return tok;
+    };
+    const std::string_view verb = nextToken(cmd);
+    if (verb != "atc") {
+        reply(fl::atc::AtcPhrase::Unable, "say again");
+        return;
+    }
+    const std::string_view sub = nextToken(cmd);
+    const std::string facility(nextToken(cmd)); // optional; empty = nearest
+
+    if (sub == "request_takeoff") {
+        m_atcService->requestTakeoff(flight, facility);
+        reply(fl::atc::AtcPhrase::Roger);
+    } else if (sub == "request_landing") {
+        m_atcService->requestLanding(flight, facility);
+        reply(fl::atc::AtcPhrase::Roger);
+    } else if (sub == "inbound") {
+        m_atcService->declareInbound(flight, facility);
+        reply(fl::atc::AtcPhrase::Roger);
+    } else if (sub == "cancel") {
+        m_atcService->cancel(flight);
+        reply(fl::atc::AtcPhrase::Roger);
+    } else {
+        reply(fl::atc::AtcPhrase::Unable, "say again");
+    }
 }
 
 void WorldBroadcaster::handleWingmanCommand(uint32_t peerId, const void* data, std::size_t size) {

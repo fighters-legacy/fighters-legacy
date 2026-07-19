@@ -7,12 +7,16 @@
 #include <loop/TimeRate.h>
 
 #include "INetwork.h"
+#include "atc/AtcService.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
+#include "flight/Geodetic.h"
 #include "mock_network.h"
 #include "net/GameProtocol.h"
 #include "net/WorldBroadcaster.h"
+#include "world/AirportRegistry.h"
+#include "world/BuiltinAirport.h"
 #include <ILogger.h>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -985,4 +989,73 @@ TEST_CASE("Admin console: detonate validates and queues with a synchronous ack",
     const std::string ack = reg.dispatch("detonate 100 500 -200 120 200 --nuclear");
     CHECK(ack.find("detonate: queued") != std::string::npos);
     CHECK(ack.find("nuclear") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// ATC admin commands (#705): atc_status (sync read), atc_scramble / atc_hold
+// (enqueueSimCallback + synchronous ack). A real AtcService + GameLoop is used;
+// the loop is never started, so enqueued callbacks are only captured, and the
+// sync ack is what these assert.
+// ---------------------------------------------------------------------------
+
+namespace {
+struct AtcFixture {
+    NullLogger2 log;
+    NoopSim2 noop;
+    GameLoop loop{noop, log}; // do NOT start
+    fl::EntityTypeRegistry reg;
+    fl::EntityManager em{log, reg};
+    fl::AirportRegistry airports;
+    std::unique_ptr<fl::atc::AtcService> atc;
+    ServerCommandContext ctx;
+
+    AtcFixture() {
+        airports.load({fl::builtinAirfield()}, fl::kEarthRadiusM, nullptr);
+        atc = std::make_unique<fl::atc::AtcService>(em, airports, fl::kEarthRadiusM);
+        ctx.sim.gameLoop = &loop;
+        ctx.sim.atc = atc.get();
+    }
+};
+} // namespace
+
+TEST_CASE("AdminConsole: atc_status reports facilities", "[admin_console][atc]") {
+    AtcFixture f;
+    // No traffic yet -> no active facilities.
+    auto reg = makeRegistry(f.ctx);
+    CHECK(reg.dispatch("atc_status").find("no active facilities") != std::string::npos);
+
+    // A scramble creates a facility; atc_status then lists it. Run the scramble directly on the
+    // service (the admin path would enqueue it) so the facility exists for the sync read.
+    f.atc->setSpawnHandler([](const fl::atc::AtcService::DepartureSpawn&) {});
+    f.atc->scramble("builtin:airfield", "builtin:debug-entity", 1);
+    CHECK(reg.dispatch("atc_status").find("builtin:airfield") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: atc_scramble acks synchronously", "[admin_console][atc]") {
+    AtcFixture f;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("atc_scramble builtin:airfield builtin:debug-entity 3");
+    CHECK_FALSE(out.empty());
+    CHECK(out.find("queued 3") != std::string::npos);
+    CHECK(out.find("builtin:airfield") != std::string::npos);
+
+    CHECK(reg.dispatch("atc_scramble").find("usage:") != std::string::npos);
+    CHECK(reg.dispatch("atc_scramble a b 99").find("count must be") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: atc_hold acks synchronously and validates its argument", "[admin_console][atc]") {
+    AtcFixture f;
+    auto reg = makeRegistry(f.ctx);
+    CHECK(reg.dispatch("atc_hold builtin:airfield on").find("holding") != std::string::npos);
+    CHECK(reg.dispatch("atc_hold builtin:airfield off").find("releasing") != std::string::npos);
+    CHECK(reg.dispatch("atc_hold builtin:airfield maybe").find("on|off") != std::string::npos);
+    CHECK(reg.dispatch("atc_hold").find("usage:") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: atc commands report unavailable with no service", "[admin_console][atc]") {
+    ServerCommandContext ctx{}; // no atc, no gameLoop
+    auto reg = makeRegistry(ctx);
+    CHECK(reg.dispatch("atc_status").find("not available") != std::string::npos);
+    CHECK(reg.dispatch("atc_scramble a b").find("not available") != std::string::npos);
+    CHECK(reg.dispatch("atc_hold a on").find("not available") != std::string::npos);
 }

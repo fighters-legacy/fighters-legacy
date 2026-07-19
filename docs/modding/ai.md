@@ -458,3 +458,40 @@ end
 ```
 
 See [`docs/haptics.md`](../haptics.md) for the full haptic design and the wire path.
+
+## `atc.*` — air-traffic control (#705)
+
+A script can talk to the server's deterministic ATC service (#702): sequence **its own** aircraft for
+departure or arrival, or (for mission/director scripts) launch and hold traffic at a named airport.
+Every function is a safe no-op returning `nil`/`false` when the server has no ATC configured
+(`[atc] enabled = false`), so a script is never required to check first. The service is
+server-authoritative and thread-safe — a script may call these from `compute_control`.
+
+The self-service calls (`clearance`, `request_takeoff`, `request_landing`, `inbound`) act on the
+entity the script is flying. An optional airport id targets a specific field; omitted, the **nearest**
+field is used.
+
+| Function | Description |
+|----------|-------------|
+| `atc.clearance() → string` | This aircraft's clearance state: `"none"`, `"hold_short"`, `"cleared_takeoff"`, `"departed"`, `"inbound"`, `"pattern"`, `"cleared_to_land"`, `"go_around"`, `"landed"`. |
+| `atc.request_takeoff([airport_id]) → bool` | Queue this aircraft for departure. It is cleared onto the runway in turn. |
+| `atc.request_landing([airport_id]) → bool` | Sequence this aircraft for arrival by distance to the threshold. |
+| `atc.inbound([airport_id]) → bool` | Declare inbound (a radio call; the tower acknowledges). |
+| `atc.scramble(airport_id, type_id, count) → bool` | Launch `count` AI departures of `type_id` from a named field. Returns false if the airport is unknown or no launcher is wired. |
+| `atc.hold(airport_id, on) → bool` | Freeze (`true`) or release (`false`) that field's departure queue. |
+
+```lua
+-- A patrol that recovers to its home field when low on fuel.
+function compute_control(state, tick, dt)
+    if state.fuel_pct and state.fuel_pct < 15 and atc.clearance() == "none" then
+        atc.request_landing("khjo")
+    end
+    -- ... fly toward the field; the ATC arrival composition takes over once cleared ...
+    return {}
+end
+```
+
+```lua
+-- A mission/director script scrambling a CAP flight on an alert.
+if alert_raised then atc.scramble("khjo", "fl-base:f16", 2) end
+```

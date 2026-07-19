@@ -2,6 +2,7 @@
 #include "IClock.h"
 #include "ILogger.h"
 #include "INetwork.h"
+#include "atc/AtcService.h"
 #include "content/ContentBootstrap.h"
 #include "entity/DamageDef.h"
 #include "entity/EntityDef.h"
@@ -26,6 +27,8 @@
 #include "weapon/WeaponDefParser.h"
 #include "weapon/WeaponRegistry.h"
 #include "weather/WeatherController.h"
+#include "world/AirportRegistry.h"
+#include "world/BuiltinAirport.h"
 
 #include "mock_network.h"
 
@@ -560,6 +563,107 @@ TEST_CASE("WorldBroadcaster: registerController steps a non-peer entity and seri
         }
     }
     CHECK(foundAiEntity);
+}
+
+TEST_CASE("WorldBroadcaster: reaps an orphaned controller when its entity is destroyed (#702)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::EntityTransform t{};
+    t.pos[1] = 1000.0;
+    fl::EntityId id = em.spawn("builtin:debug-entity", t);
+    REQUIRE(id.valid());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.registerController(id, std::make_unique<ConstantController>());
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    CHECK(broadcaster.controlledEntityCount() == 1);
+
+    // Kill the entity outside onDisconnect (combat / AI arrival despawn / a Lua despawn). Once the
+    // EntityManager reaps the dead slot, the next gather must drop the now-orphaned controller instead
+    // of leaving it to churn until the pool index is reused.
+    em.kill(id);
+    for (uint64_t tick = 2; tick <= 4; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+    CHECK(broadcaster.controlledEntityCount() == 0);
+}
+
+// Find the most recent RadioTransmission (#703) unicast to `peerId` in the tracked per-peer sends.
+static std::optional<fl::MsgRadioTransmission> lastRadioTo(const MockNetwork& net, uint32_t peerId) {
+    std::optional<fl::MsgRadioTransmission> out;
+    for (const auto& [pid, pkt] : net.perPeerSends) {
+        if (pid != peerId || pkt.size() < sizeof(fl::MsgRadioTransmission))
+            continue;
+        if (pkt[0] != static_cast<uint8_t>(fl::MsgId::RadioTransmission))
+            continue;
+        fl::MsgRadioTransmission rt{};
+        std::memcpy(&rt, pkt.data(), sizeof(rt));
+        out = rt;
+    }
+    return out;
+}
+
+static fl::MsgRadioCommand makeRadioCmd(const char* text) {
+    fl::MsgRadioCommand cmd{};
+    std::snprintf(cmd.command, sizeof(cmd.command), "%s", text);
+    return cmd;
+}
+
+TEST_CASE("WorldBroadcaster: a radio command with no ATC answers 'no ATC available' (#703)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    connectPilotPeer(broadcaster, net, 0u);
+
+    auto cmd = makeRadioCmd("atc request_landing");
+    broadcaster.onReceive(0u, &cmd, sizeof(cmd));
+
+    auto rt = lastRadioTo(net, 0u);
+    REQUIRE(rt.has_value());
+    CHECK(std::string(rt->text) == "no ATC available");
+}
+
+TEST_CASE("WorldBroadcaster: an ATC radio command is dispatched and answered (#703)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::AirportRegistry airports;
+    airports.load({fl::builtinAirfield()}, fl::kEarthRadiusM, nullptr);
+    fl::atc::AtcService atc(em, airports, fl::kEarthRadiusM);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setAtcService(&atc);
+    connectPilotPeer(broadcaster, net, 0u);
+
+    // A recognised verb: dispatched to the service (flight sequenced) + an immediate acknowledgement.
+    auto landCmd = makeRadioCmd("atc request_landing builtin:airfield");
+    broadcaster.onReceive(0u, &landCmd, sizeof(landCmd));
+    auto ack = lastRadioTo(net, 0u);
+    REQUIRE(ack.has_value());
+    CHECK(std::string(ack->text) == "roger");
+    CHECK(std::string(ack->speaker).empty() == false);
+
+    // The runway is free, so the next ATC tick clears the flight to land — a real clearance line.
+    broadcaster.onTick(1.0 / 60.0, fl::atc::AtcService::kIntervalTicks);
+    auto cleared = lastRadioTo(net, 0u);
+    REQUIRE(cleared.has_value());
+    CHECK(std::string(cleared->text) == "cleared to land");
+
+    // An unknown verb is answered politely, not silently dropped.
+    auto bogus = makeRadioCmd("atc do_a_barrel_roll");
+    broadcaster.onReceive(0u, &bogus, sizeof(bogus));
+    auto sayAgain = lastRadioTo(net, 0u);
+    REQUIRE(sayAgain.has_value());
+    CHECK(std::string(sayAgain->text) == "say again");
 }
 
 // Run a fixed multi-entity scenario and capture final entity state. When `jobs` is non-null the
