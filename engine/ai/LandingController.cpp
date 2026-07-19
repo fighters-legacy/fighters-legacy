@@ -13,6 +13,14 @@ namespace fl::ai {
 
 namespace {
 
+// World-frame unit direction the runway points, from a compass heading at `at` on a planet of radius
+// R. 0 deg = North, 90 deg = East, measured in the local ENU tangent plane.
+[[nodiscard]] glm::dvec3 runwayWorldDir(glm::dvec3 at, float headingDeg, double R) {
+    const glm::mat3 enu = fl::enuBasis(at, R);
+    const double hdg = static_cast<double>(headingDeg) * std::numbers::pi_v<double> / 180.0;
+    return glm::normalize(glm::dvec3(enu[0]) * std::sin(hdg) + glm::dvec3(enu[1]) * std::cos(hdg));
+}
+
 [[nodiscard]] float groundSpeed(const fl::EntityState& s, double R) {
     const glm::dvec3 pos(s.transform.pos[0], s.transform.pos[1], s.transform.pos[2]);
     const glm::vec3 up = fl::radialUp(pos, R);
@@ -93,10 +101,17 @@ fl::ControlInput LandingController::sample(const fl::EntityState& state, uint64_
         break;
     }
     case Phase::Rollout: {
-        // On the ground: full brakes, nosewheel steering (rudder) holds the centreline.
+        // On the ground: full brakes, nosewheel steering (rudder) holds the centreline. Steer along the
+        // runway HEADING, not toward the threshold — the threshold is now behind the aircraft, so a
+        // threshold-relative error would command a wild turn-around during the rollout.
+        const glm::dvec3 dir = runwayWorldDir(ownPos, m_headingDeg, m_planetRadiusM);
+        const glm::dvec3 aim = ownPos + dir * 2000.0;
+        const double aimArr[3] = {aim.x, aim.y, aim.z};
+        const float rollHeadErr =
+            horizontalHeadingError(state.transform.quat, state.transform.pos, aimArr, m_planetRadiusM);
         ctrl.throttle = 0.f;
         ctrl.wheelBrake = 1.f;
-        ctrl.rudder = std::clamp(headErr * 2.f, -1.f, 1.f);
+        ctrl.rudder = std::clamp(rollHeadErr * 2.f, -1.f, 1.f);
         break;
     }
     case Phase::Done:

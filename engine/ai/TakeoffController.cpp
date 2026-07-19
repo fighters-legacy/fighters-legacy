@@ -45,9 +45,10 @@ fl::ControlInput TakeoffController::sample(const fl::EntityState& state, uint64_
     const float gs = groundSpeed(state, m_planetRadiusM);
     const float agl = static_cast<float>(fl::localAltitude(ownPos, m_planetRadiusM)) - m_runwayElevM;
 
-    // Steer to hold the runway heading: aim at a point far down the runway centreline.
+    // Steer to hold the runway centreline: aim at a point far down the runway from the threshold, so
+    // lateral drift is corrected back onto the centreline (not merely held parallel to it).
     const glm::dvec3 dir = runwayWorldDir(ownPos, m_headingDeg, m_planetRadiusM);
-    const glm::dvec3 aim = ownPos + dir * 3000.0;
+    const glm::dvec3 aim = m_threshold + dir * 3000.0;
     const double aimArr[3] = {aim.x, aim.y, aim.z};
     const float headErr = horizontalHeadingError(state.transform.quat, state.transform.pos, aimArr, m_planetRadiusM);
 
