@@ -739,6 +739,13 @@ add_executable(test_capture_frame test_capture_frame.cpp)
 target_link_libraries(test_capture_frame PRIVATE Catch2::Catch2WithMain platform-hal)
 catch_discover_tests(test_capture_frame)
 
+# Capture-boundary scheduler (#916): the pure tick-stream -> output-frame / dup-count logic behind the
+# cinematic recorder. Header-only, no HAL — just needs the game include dir for RecordScheduler.h.
+add_executable(test_record_scheduler test_record_scheduler.cpp)
+target_link_libraries(test_record_scheduler PRIVATE Catch2::Catch2WithMain)
+target_include_directories(test_record_scheduler PRIVATE "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
+catch_discover_tests(test_record_scheduler)
+
 add_executable(test_hud_align test_hud_align.cpp)
 target_link_libraries(test_hud_align PRIVATE Catch2::Catch2WithMain platform-hal)
 catch_discover_tests(test_hud_align)

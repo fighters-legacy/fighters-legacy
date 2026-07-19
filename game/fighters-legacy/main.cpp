@@ -24,6 +24,17 @@ int main(int argc, char** argv) {
                         "                              describe: Free Flight, or Join Server with --connect.\n"
                         "  --aircraft <type-id>        Request a specific aircraft type (server may clamp).\n"
                         "  --observer                  Join as a spectator with no aircraft.\n"
+                        "  --headless                  Render with no window/display (swapchain-free; pair with\n"
+                        "                              lavapipe for no-GPU rendering). See docs/demo-recording.md.\n"
+                        "  --screenshot <path>         Write one PNG a few seconds into Flight, then exit.\n"
+                        "  --record <out.mp4>          Record the mission's cinematic cameras to video (#909).\n"
+                        "  --record-fps <n>            Recording frame rate (default 30).\n"
+                        "  --record-res <WxH>          Recording resolution (default 1280x720).\n"
+                        "  --record-png-dir <dir>      Record to a PNG sequence instead of mp4 (no ffmpeg).\n"
+                        "  --shot-track <yaml>         Camera shot list (a cameras: doc); defaults to --mission.\n"
+                        "  --exit-on-mission-end       Stop recording when the mission objective ends.\n"
+                        "  --record-max-sec <n>        Wall-clock recording cap (safety stop).\n"
+                        "  --record-max-dup <n>        Fail (non-zero exit) if duplicated frames exceed this.\n"
                         "  --assets <dir>              Content root override (also FL_ASSETS_ROOT env var).\n"
                         "  --operator-password <pw>    Operator password for admin console commands on the\n"
                         "                              remote server. Also read from FL_OPERATOR_PASSWORD env\n"
@@ -38,5 +49,5 @@ int main(int argc, char** argv) {
     if (!game.init(argc, argv))
         return 1;
     game.run();
-    return 0;
+    return game.exitCode(); // non-zero when the recorder failed (dup cap / encoder error), else 0
 }

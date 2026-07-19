@@ -388,6 +388,13 @@ Pass `--connect` to join a remote `fl-server` instead of spawning a local single
 | `--screenshot <path>` | Write one PNG to `<path>` a few seconds into the Flight session, then exit — the in-engine capture (#909; no external screenshot tool needed). Pair with `--auto`/`--mission` for an unattended shot. |
 | `--screenshot-frames <N>` | Frames after Flight starts before the `--screenshot` capture fires (default 600 ≈ 10 s at 60 fps) — raise it to let terrain/airports stream in first. |
 | `--headless` | Run with **no window and no display** (#913): a swapchain-free renderer draws into owned images instead of presenting. Paired with a software Vulkan ICD (lavapipe) it renders with **no GPU** — the recorder's foundation. Combine with `--auto`/`--observer`/`--connect` and `--screenshot`/`--record`. Example: `DISPLAY= VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json fighters-legacy --headless --mission builtin:sandbox --auto --screenshot out.png`. |
+| `--record <out.mp4>` | **Cinematic recorder** (#916): drive the camera from the mission's `cameras:` shots (via `ShotDirector`) and pipe frames to an ffmpeg H.264 mp4. Connect as an `--observer` (the camera is shot-driven, not flown). See `docs/demo-recording.md`. |
+| `--record-fps <n>` / `--record-res <WxH>` | Recording frame rate (default 30) and resolution (default 1280×720; also sets the headless framebuffer size). |
+| `--record-png-dir <dir>` | Record a PNG sequence to `<dir>` instead of an mp4 — no ffmpeg needed (the fallback path). |
+| `--shot-track <yaml>` | A cameras-only (or full-mission) YAML whose `cameras:` block drives the recorder — iterate shots without editing the shared mission. Defaults to the `--mission` file. |
+| `--exit-on-mission-end` | Stop recording when the mission objective ends (consumes `MsgMissionOutcome`). |
+| `--record-max-sec <n>` | Wall-clock recording cap (safety stop). |
+| `--record-max-dup <n>` | Fail the run (non-zero exit) if duplicated frames — capture boundaries the sim didn't reach in time — exceed this. Bad video is loud, never silently shipped (default 300). Slow the server with `--time-rate quarter\|eighth` if you see dups. |
 
 To avoid exposing the password in the process listing, use the `FL_OPERATOR_PASSWORD` environment variable instead of the CLI flag. Merge precedence: `--operator-password` CLI arg > `FL_OPERATOR_PASSWORD` env var > `[client].operator_password` in user.toml.
 

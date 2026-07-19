@@ -10,6 +10,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         CameraInput.cpp
         FlightInputCollector.cpp
         HapticController.cpp
+        VideoEncoderPipe.cpp
         LocalServer.cpp
         ScreenManager.cpp
         MainMenuScreen.cpp

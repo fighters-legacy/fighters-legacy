@@ -9,6 +9,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: cinematic recorder client mode (#916). New `--record <out.mp4>` (+ `--record-fps`,
+  `--record-res`, `--record-png-dir`, `--shot-track`, `--exit-on-mission-end`, `--record-max-sec`,
+  `--record-max-dup`) drives the camera from a mission's `cameras:` shots via `ShotDirector` — resolving
+  entity-relative shots through the #914 roster — and pipes rendered frames to an external ffmpeg H.264
+  process (`VideoEncoderPipe`, never linked; PNG-sequence fallback via stb_image_write). The pure
+  `RecordScheduler` maps the 60 Hz snapshot stream to fixed-fps output boundaries and counts duplicated
+  frames; exceeding `--record-max-dup` (or any encoder error) exits non-zero so bad video is never
+  silently shipped. Pairs with `--headless` + `fl-server --time-rate` for no-display, no-GPU recording.
 - **renderer/game**: swapchain-free headless init + `--headless` client mode (#913). `VkRenderer` gains
   `initHeadless(w, h)` — a WSI-free path that renders into owned present-target images (no surface, no
   swapchain, no present) so, paired with a software Vulkan ICD (lavapipe), the client renders with **no
