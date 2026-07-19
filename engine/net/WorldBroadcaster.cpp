@@ -15,10 +15,10 @@
 #include "entity/EntityState.h"
 #include "entity/EntityTypeRegistry.h"
 #include "entity/IEntityController.h"
-#include "flight/BallisticForceModel.h"
 #include "flight/BuiltinFlightModel.h"
 #include "flight/CentralGravityField.h"
 #include "flight/FlightIntegrator.h"
+#include "flight/ForceModelSelect.h" // applyForceModelFor — the shared role → force-model seam (#349)
 #include "flight/StallBuffet.h"
 #include "job/JobSystem.h"
 #include "net/AckWindow.h"
@@ -4074,12 +4074,10 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     auto fi = std::make_unique<FlightIntegrator>(model);
     fi->setGravityField(*m_gravity);
     fi->setEarthRotationRate(m_earthRotationRate); // Coriolis/centrifugal in the Earth-fixed frame (#482)
-    // A ballistic vehicle (#354) flies the boost/coast force model and gets the wider NaN guard —
-    // an MRBM legitimately outruns the backstop built for aircraft. Same integrator core.
-    if (model->isBallistic()) {
-        fi->setForceModel(BallisticForceModel::instance());
-        fi->setSpeedGuard(8000.0);
-    }
+    // Bind the role's force model (ballistic boost/coast, multirotor thrust mixing, ...). ONE
+    // shared seam with ClientPrediction (#349) — see flight/ForceModelSelect.h for why two
+    // hand-maintained copies would be a per-tick prediction divergence.
+    applyForceModelFor(*fi, *model);
     fi->reset(fs);
     // Give the controller the world's planet radius so its local-level (tangent-plane) guidance is
     // correct far from the origin. Every controller — peer or AI — enters through this single path.

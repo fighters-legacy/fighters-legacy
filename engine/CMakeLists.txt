@@ -180,6 +180,7 @@ add_library(engine-flight STATIC
     flight/FlightIntegrator.cpp
     flight/BallisticForceModel.cpp
     flight/FixedWingForceModel.cpp
+    flight/MultirotorForceModel.cpp
     flight/Trim.cpp
 )
 target_include_directories(engine-flight PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

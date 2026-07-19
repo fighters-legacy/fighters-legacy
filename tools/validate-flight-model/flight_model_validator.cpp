@@ -892,6 +892,97 @@ static void validateHardpoints(const toml::table& tbl, FlightModelValidationResu
 
 // ── public entry point ────────────────────────────────────────────────────────
 
+// Rotorcraft core (#349/#350): mass, fuel and inertias are required; wing geometry is NOT (a rotor
+// model carries its own reference areas), so this deliberately does not reuse
+// validateFlightModelGeometry, whose wing fields are hard requirements.
+static void validateRotorcraftCore(const toml::table& tbl, FlightModelValidationResult& r) {
+    if (!tbl["aircraft"]["name"].value<std::string>()) {
+        r.errors.push_back("missing aircraft.name");
+        r.ok = false;
+    }
+    auto fm = tbl["flight_model"];
+    if (!fm) {
+        r.errors.push_back("missing [flight_model] table");
+        r.ok = false;
+        return;
+    }
+    auto checkPos = [&](const char* key) {
+        auto v = fm[key].value<double>();
+        if (!v) {
+            r.errors.push_back(std::string("missing flight_model.") + key);
+            r.ok = false;
+        } else if (*v <= 0.0) {
+            r.errors.push_back(std::string("flight_model.") + key + " must be > 0 (got " + std::to_string(*v) + ")");
+            r.ok = false;
+        }
+        return v;
+    };
+    checkPos("mass_kg");
+    checkPos("ixx_kg_m2");
+    checkPos("iyy_kg_m2");
+    checkPos("izz_kg_m2");
+    if (auto fuel = fm["fuel_kg"].value<double>(); !fuel) {
+        r.errors.push_back("missing flight_model.fuel_kg");
+        r.ok = false;
+    } else if (*fuel < 0.0) {
+        r.errors.push_back("flight_model.fuel_kg must be >= 0");
+        r.ok = false;
+    }
+}
+
+// [multirotor] (#349): required rotor fields positive, plus the check that actually matters — a
+// frame whose total max thrust cannot lift its own weight can never hover, which is a units error
+// nine times out of ten.
+static void validateMultirotor(const toml::table& tbl, FlightModelValidationResult& r) {
+    auto mr = tbl["multirotor"];
+    if (!mr) {
+        r.errors.push_back("multirotor model: missing [multirotor] table");
+        r.ok = false;
+        return;
+    }
+    const auto count = mr["rotor_count"];
+    if (!count.is_integer() || count.as_integer()->get() < 3 || count.as_integer()->get() > 16) {
+        r.errors.push_back("multirotor.rotor_count must be an integer in [3, 16]");
+        r.ok = false;
+    }
+    auto checkPos = [&](const char* key) {
+        auto v = mr[key].value<double>();
+        if (!v) {
+            r.errors.push_back(std::string("missing multirotor.") + key);
+            r.ok = false;
+        } else if (*v <= 0.0) {
+            r.errors.push_back(std::string("multirotor.") + key + " must be > 0");
+            r.ok = false;
+        }
+        return v;
+    };
+    const auto thrust = checkPos("rotor_thrust_max_n");
+    checkPos("rotor_arm_m");
+    checkPos("yaw_torque_nm");
+    if (auto ft = mr["flight_time_min"].value<double>(); ft && *ft <= 0.0) {
+        r.errors.push_back("multirotor.flight_time_min must be > 0");
+        r.ok = false;
+    }
+
+    // Hover check: N * T_max must clear the all-up weight with margin, or the vehicle cannot hover
+    // (let alone climb or hold attitude, which spends part of the same thrust budget).
+    const auto mass = tbl["flight_model"]["mass_kg"].value<double>();
+    const auto fuel = tbl["flight_model"]["fuel_kg"].value<double>();
+    if (thrust && mass && count.is_integer()) {
+        const double totalThrust = static_cast<double>(count.as_integer()->get()) * *thrust;
+        const double weight = (*mass + fuel.value_or(0.0)) * 9.80665;
+        if (totalThrust <= weight) {
+            r.errors.push_back("multirotor cannot hover: rotor_count * rotor_thrust_max_n (" +
+                               std::to_string(totalThrust) + " N) does not exceed the all-up weight (" +
+                               std::to_string(weight) + " N)");
+            r.ok = false;
+        } else if (totalThrust < 1.3 * weight) {
+            r.warnings.push_back("multirotor thrust-to-weight is under 1.3; expect sluggish climb and "
+                                 "attitude authority");
+        }
+    }
+}
+
 FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
     FlightModelValidationResult r;
 
@@ -932,6 +1023,14 @@ FlightModelValidationResult validateFlightModel(std::string_view tomlContent) {
             r.errors.push_back("engine.boost.burn_time_s must be a number > 0");
             r.ok = false;
         }
+        return r;
+    }
+
+    // Multirotors (#349) validate against the reduced rotor schema the runtime parser accepts —
+    // same rationale as ballistic: CL tables and turbine decks would be invented numbers.
+    if (const auto typeStr = tbl["aircraft"]["type"].value<std::string>(); typeStr && *typeStr == "multirotor") {
+        validateRotorcraftCore(tbl, r);
+        validateMultirotor(tbl, r);
         return r;
     }
 

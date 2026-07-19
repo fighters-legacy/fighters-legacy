@@ -6,7 +6,8 @@
 #include "flight/BuiltinFlightModel.h"
 #include "flight/FlightIntegrator.h"
 #include "flight/FlightModelData.h"
-#include "flight/Geodetic.h" // kEarthRotationRate (#482)
+#include "flight/ForceModelSelect.h" // applyForceModelFor — the shared role → force-model seam (#349)
+#include "flight/Geodetic.h"         // kEarthRotationRate (#482)
 #include "flight/StallBuffet.h"
 #include "render/SurfaceType.h" // groundFrictionFor (#487)
 #include "weather/Turbulence.h"
@@ -241,6 +242,10 @@ void ClientPrediction::reconcile(RenderSnapshot& snap, uint64_t tickIndex, uint3
         // exact weight and drag of the loadout, which is precisely the bug #812 exists to prevent.
         m_payload = m_payloadResolver ? m_payloadResolver(playerEntry->typeIndex) : PayloadEffect{};
         m_integrator = std::make_unique<FlightIntegrator>(m_model);
+        // Bind the same force model the server bound at spawn (#349). Until this line existed the
+        // client always replayed FixedWingForceModel — survivable while the only non-fixed-wing
+        // role was AI-flown; a player-predicted rotorcraft would diverge every tick without it.
+        applyForceModelFor(*m_integrator, *m_model);
         // Match the server's gravity field for non-Earth planet radii.
         if (std::abs(m_planetRadiusKm - 6371.f) > 1.f) {
             m_customGravity.emplace(m_planetRadiusKm * 1000.f);

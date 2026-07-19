@@ -657,3 +657,48 @@ TEST_CASE("#308: out-of-range relight_min_mps fails", "[flight-model-validator]"
         patch(kValidFighter, "spool_time_s        = 5.0", "spool_time_s        = 5.0\nrelight_min_mps = 900.0"));
     CHECK_FALSE(r.ok);
 }
+
+// ── multirotor (#349) ────────────────────────────────────────────────────────
+
+static constexpr const char* kValidQuad = R"toml(
+[aircraft]
+name = "Test Quad"
+type = "multirotor"
+
+[flight_model]
+mass_kg   = 12.0
+fuel_kg   = 2.0
+ixx_kg_m2 = 0.6
+iyy_kg_m2 = 0.6
+izz_kg_m2 = 1.0
+
+[multirotor]
+rotor_count        = 4
+rotor_thrust_max_n = 60.0
+rotor_arm_m        = 0.35
+yaw_torque_nm      = 8.0
+)toml";
+
+TEST_CASE("#349: a valid multirotor validates against the reduced schema", "[flight-model-validator]") {
+    auto r = validateFlightModel(kValidQuad);
+    CHECK(r.ok);
+    CHECK(r.errors.empty());
+}
+
+TEST_CASE("#349: a multirotor that cannot hover fails", "[flight-model-validator]") {
+    auto r = validateFlightModel(patch(kValidQuad, "rotor_thrust_max_n = 60.0", "rotor_thrust_max_n = 20.0"));
+    CHECK_FALSE(r.ok); // 4 x 20 N = 80 N < 137 N all-up weight
+}
+
+TEST_CASE("#349: a multirotor without [multirotor] fails", "[flight-model-validator]") {
+    std::string s(kValidQuad);
+    auto pos = s.find("[multirotor]");
+    REQUIRE(pos != std::string::npos);
+    auto r = validateFlightModel(s.substr(0, pos));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("#349: an implausible rotor_count fails", "[flight-model-validator]") {
+    auto r = validateFlightModel(patch(kValidQuad, "rotor_count        = 4", "rotor_count        = 2"));
+    CHECK_FALSE(r.ok);
+}

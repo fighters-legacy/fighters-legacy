@@ -318,6 +318,43 @@ cd0 = 0.20                  # default 0.20 — a blunt body
 Ballistic entities are full entities (spawnable via the `spawn` admin command with a guidance
 controller, #355), **not** hardpoint stores — a missile a fighter carries is a weapon TOML.
 
+### Multirotors — `type = "multirotor"`
+
+A quad/hex/octo rotor frame (#349) uses its own reduced schema — no CL tables, stability
+derivatives or turbine decks (`MultirotorForceModel` flies `[multirotor]` alone: density-scaled
+rotor thrust along body-up, rate-mode attitude mixing with the flight-control inner loop in the
+model, differential-torque yaw, flat-plate frame drag). Endurance rides the normal fuel path:
+`flight_time_min` becomes a constant drain of `fuel_kg`, and an empty battery/tank is a
+fuel-starvation flameout (#308) — the motors stop.
+
+```toml
+[aircraft]
+name = "Example Quad"
+type = "multirotor"         # engine_type not required (electric)
+
+[flight_model]              # masses + inertias required; wing fields not required
+mass_kg   = 12.0
+fuel_kg   = 2.0             # battery/fuel reserve consumed over flight_time_min
+ixx_kg_m2 = 0.6
+iyy_kg_m2 = 0.6
+izz_kg_m2 = 1.0
+
+[multirotor]                # required for multirotor models
+rotor_count        = 4      # 3–16
+rotor_thrust_max_n = 60.0   # max thrust PER ROTOR at sea level; must out-lift the all-up weight
+rotor_arm_m        = 0.35   # CG-to-rotor moment arm
+yaw_torque_nm      = 8.0    # yaw moment from differential rotor torque at full pedal
+frame_cd           = 1.1    # optional (default 1.0) — flat-plate drag coefficient
+frame_area_m2      = 0.12   # optional (default 0.1) — frame reference area
+attitude_authority = 0.3    # optional (default 0.3) — per-rotor thrust fraction for pitch/roll mixing
+rate_damping_s     = 1.0    # optional (default 1.0) — FC rate feedback; full stick ~1/this rad/s
+flight_time_min    = 25.0   # optional (default 20) — endurance; drives the fuel drain
+motor_response_s   = 0.2    # optional (default 0.2) — motor spool response
+```
+
+The in-game manual derives a **hover chart** for rotorcraft (thrust-to-weight, hover throttle,
+hover ceiling, endurance) instead of the fixed-wing trim table.
+
 ---
 
 ## Weapon Data — TOML

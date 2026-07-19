@@ -77,6 +77,10 @@ namespace {
         return AircraftRole::Trainer;
     if (s == "ballistic")
         return AircraftRole::Ballistic;
+    if (s == "multirotor")
+        return AircraftRole::Multirotor;
+    if (s == "helicopter")
+        return AircraftRole::Helicopter;
     throw std::runtime_error(std::string("unknown aircraft type: ") + std::string(s));
 }
 
@@ -123,10 +127,13 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.meta.role = parse_role(*type_str);
 
         auto et_str = ac["engine_type"].value<std::string>();
-        if (!et_str && d.meta.role != AircraftRole::Ballistic)
+        const bool turbineOptional = d.meta.role == AircraftRole::Ballistic ||  // a rocket is not a turbine
+                                     d.meta.role == AircraftRole::Multirotor || // electric motors (#349)
+                                     d.meta.role == AircraftRole::Helicopter;   // turboshaft (#350)
+        if (!et_str && !turbineOptional)
             throw std::runtime_error("missing aircraft.engine_type");
         if (et_str)
-            d.meta.engine_type = parse_engine_type(*et_str); // ballistic: a rocket is not a turbine
+            d.meta.engine_type = parse_engine_type(*et_str);
 
         d.meta.has_fbw = ac["has_fbw"].value<bool>().value_or(false);
         d.meta.cruise_alt_m = static_cast<float>(ac["cruise_alt_m"].value<double>().value_or(10000.0));
@@ -142,9 +149,21 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
             throw std::runtime_error("missing [flight_model] table");
 
         d.geometry.mass_kg = req_float(fm["mass_kg"], "flight_model.mass_kg");
-        d.geometry.wing_area_m2 = req_float(fm["wing_area_m2"], "flight_model.wing_area_m2");
-        d.geometry.wingspan_m = req_float(fm["wingspan_m"], "flight_model.wingspan_m");
-        d.geometry.mac_m = req_float(fm["mac_m"], "flight_model.mac_m");
+
+        // A rotorcraft (#349/#350) has no wing, so demanding wing geometry of it would force authors
+        // to invent numbers nothing reads (the rotor models carry their own reference areas). The
+        // fields stay accepted (a compound helicopter may legitimately declare a wing later); they
+        // default to benign 1.0 so any accidental fixed-wing lookup degrades, never divides by zero.
+        const bool rotorcraft = (d.meta.role == AircraftRole::Multirotor || d.meta.role == AircraftRole::Helicopter);
+        if (rotorcraft) {
+            d.geometry.wing_area_m2 = static_cast<float>(fm["wing_area_m2"].value<double>().value_or(1.0));
+            d.geometry.wingspan_m = static_cast<float>(fm["wingspan_m"].value<double>().value_or(1.0));
+            d.geometry.mac_m = static_cast<float>(fm["mac_m"].value<double>().value_or(1.0));
+        } else {
+            d.geometry.wing_area_m2 = req_float(fm["wing_area_m2"], "flight_model.wing_area_m2");
+            d.geometry.wingspan_m = req_float(fm["wingspan_m"], "flight_model.wingspan_m");
+            d.geometry.mac_m = req_float(fm["mac_m"], "flight_model.mac_m");
+        }
         d.geometry.fuel_kg = req_float(fm["fuel_kg"], "flight_model.fuel_kg");
         d.geometry.ixx_kg_m2 = req_float(fm["ixx_kg_m2"], "flight_model.ixx_kg_m2");
         d.geometry.iyy_kg_m2 = req_float(fm["iyy_kg_m2"], "flight_model.iyy_kg_m2");
@@ -189,6 +208,65 @@ FlightModelData parseFlightModel(std::string_view toml_src) {
         d.engine.mil_thrust.cols = {0.f, 90.f};
         d.engine.mil_thrust.values.assign(4, 0.f);
         d.limits.alpha_stall_deg = 90.f; // nothing to stall
+        d.limits.max_g_structural = 100.f;
+        d.limits.min_g_structural = -100.f;
+        return d;
+    }
+
+    // ── multirotor vehicles (#349): a reduced, rotor-shaped schema ────────────
+    // A multirotor is thrust mixing, not wings — CL tables, stability derivatives and turbine
+    // thrust decks would all be invented numbers nothing reads (MultirotorForceModel flies
+    // [multirotor] alone). Required: [multirotor] rotor_count / rotor_thrust_max_n / rotor_arm_m /
+    // yaw_torque_nm. Endurance rides the integrator's existing fuel path: optional flight_time_min
+    // (default 20) becomes a constant drain of fuel_kg — battery or gas, the tank runs dry and the
+    // #308 fuel-starvation flameout stops the motors. Placeholder aero tables keep an accidental
+    // fixed-wing step degrading to drag-only, never asserting (the ballistic-model discipline).
+    if (d.meta.role == AircraftRole::Multirotor) {
+        auto mrNode = tbl["multirotor"];
+        if (!mrNode || !mrNode.as_table())
+            throw std::runtime_error("multirotor model: missing [multirotor] table");
+        MultirotorData mr;
+        auto count = tomlInt(mrNode["rotor_count"]);
+        if (!count)
+            throw std::runtime_error("missing multirotor.rotor_count");
+        mr.rotor_count = static_cast<int>(*count);
+        if (mr.rotor_count < 3 || mr.rotor_count > 16)
+            throw std::runtime_error("multirotor.rotor_count must be in [3, 16]");
+        mr.rotor_thrust_max_n = req_float(mrNode["rotor_thrust_max_n"], "multirotor.rotor_thrust_max_n");
+        mr.rotor_arm_m = req_float(mrNode["rotor_arm_m"], "multirotor.rotor_arm_m");
+        mr.yaw_torque_nm = req_float(mrNode["yaw_torque_nm"], "multirotor.yaw_torque_nm");
+        if (mr.rotor_thrust_max_n <= 0.f || mr.rotor_arm_m <= 0.f || mr.yaw_torque_nm <= 0.f)
+            throw std::runtime_error("multirotor rotor_thrust_max_n / rotor_arm_m / yaw_torque_nm must be > 0");
+        mr.frame_cd = static_cast<float>(mrNode["frame_cd"].value<double>().value_or(1.0));
+        mr.frame_area_m2 = static_cast<float>(mrNode["frame_area_m2"].value<double>().value_or(0.1));
+        mr.attitude_authority = static_cast<float>(mrNode["attitude_authority"].value<double>().value_or(0.3));
+        mr.rate_damping_s = static_cast<float>(mrNode["rate_damping_s"].value<double>().value_or(1.0));
+        d.multirotor = mr;
+
+        // Endurance → fuel flow (constant drain; the hover throttle band is narrow enough that a
+        // throttle-shaped burn would be false precision).
+        const float flightMin = static_cast<float>(mrNode["flight_time_min"].value<double>().value_or(20.0));
+        if (flightMin <= 0.f)
+            throw std::runtime_error("multirotor.flight_time_min must be > 0");
+        const float flow = d.geometry.fuel_kg / (flightMin * 60.f);
+        d.engine.fuel_flow_idle_kg_s = flow;
+        d.engine.fuel_flow_mil_kg_s = flow;
+
+        // Electric-motor response: near-instant next to a turbine spool.
+        d.engine.spool_time_s = static_cast<float>(mrNode["motor_response_s"].value<double>().value_or(0.2));
+
+        // Benign placeholder aero so an accidental FixedWingForceModel step degrades cleanly: the
+        // frame's own flat plate as the polar, zero lift, zero turbine thrust.
+        d.geometry.wing_area_m2 = mr.frame_area_m2;
+        d.drag_polar.cd0 = mr.frame_cd;
+        d.drag_polar.k = 0.f;
+        d.cl_table.rows = {-90.f, -30.f, 30.f, 90.f};
+        d.cl_table.cols = {0.f, 30.f};
+        d.cl_table.values.assign(8, 0.f);
+        d.engine.mil_thrust.rows = {0.f, 30.f};
+        d.engine.mil_thrust.cols = {0.f, 90.f};
+        d.engine.mil_thrust.values.assign(4, 0.f);
+        d.limits.alpha_stall_deg = 90.f; // a rotor frame has no wing to stall
         d.limits.max_g_structural = 100.f;
         d.limits.min_g_structural = -100.f;
         return d;

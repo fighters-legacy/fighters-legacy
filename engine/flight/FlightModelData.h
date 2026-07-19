@@ -23,7 +23,9 @@ enum class AircraftRole {
     Tanker,
     Transport,
     Trainer,
-    Ballistic // #354: an unwinged boost/coast vehicle — flown by BallisticForceModel, not wings
+    Ballistic,  // #354: an unwinged boost/coast vehicle — flown by BallisticForceModel, not wings
+    Multirotor, // #349: a quad/hex/octo rotor frame — flown by MultirotorForceModel (thrust mixing)
+    Helicopter  // #350: a single-main-rotor helicopter — flown by HelicopterForceModel (rotor disc)
 };
 
 enum class PropRotation { CW, CCW, Contra };
@@ -243,6 +245,23 @@ struct EngineData {
     float surge_alpha_margin_deg{5.f};
 };
 
+// ── [multirotor] (#349) ──────────────────────────────────────────────────────
+// A multirotor is thrust mixing, not wings: total rotor thrust along body +Y (up), attitude control
+// from differential per-rotor thrust, yaw from differential rotor torque. The flight-control inner
+// loop (rate feedback) lives IN the force model, because a real multirotor is unflyable without its
+// FC and the model without one would be an aerobatics problem, not an aircraft. Authored in the
+// reduced `type = "multirotor"` schema — no CL tables, no stability derivatives.
+struct MultirotorData {
+    int rotor_count{4};             // number of rotors (drives per-rotor loss on an engine-out)
+    float rotor_thrust_max_n{60.f}; // max thrust PER ROTOR at sea-level density
+    float rotor_arm_m{0.35f};       // CG-to-rotor moment arm
+    float yaw_torque_nm{8.f};       // max yaw moment from differential rotor torque at full pedal
+    float frame_cd{1.0f};           // flat-plate frame drag coefficient (all axes)
+    float frame_area_m2{0.1f};      // frame reference area for the drag term
+    float attitude_authority{0.3f}; // fraction of per-rotor max thrust available for pitch/roll mixing
+    float rate_damping_s{1.0f};     // FC inner-loop rate feedback (s/rad); sets full-stick rate ≈ 1/k
+};
+
 struct CarrierData {
     float approach_m_s{69.f};
     float approach_aoa_deg{8.f};
@@ -298,6 +317,7 @@ struct FlightModelData {
     std::optional<WingSweepData> wing_sweep;
     std::optional<PropData> prop;
     EngineData engine;
+    std::optional<MultirotorData> multirotor; // #349: present iff type = "multirotor"
     std::optional<CarrierData> carrier;
     std::optional<RefuelingData> refueling;
     std::optional<TankerData> tanker;
@@ -310,6 +330,20 @@ struct FlightModelData {
 
     [[nodiscard]] bool isBallistic() const noexcept {
         return meta.role == AircraftRole::Ballistic;
+    }
+    [[nodiscard]] bool isMultirotor() const noexcept {
+        return meta.role == AircraftRole::Multirotor;
+    }
+    [[nodiscard]] bool isHelicopter() const noexcept {
+        return meta.role == AircraftRole::Helicopter;
+    }
+    // Rotorcraft (#349/#350) hover; fixed-wing performance derivation (fl::trim, the manual, fm-trim)
+    // is meaningless for them and gates on this.
+    [[nodiscard]] bool isRotorcraft() const noexcept {
+        return isMultirotor() || isHelicopter();
+    }
+    [[nodiscard]] bool isFixedWing() const noexcept {
+        return !isBallistic() && !isRotorcraft();
     }
 };
 
