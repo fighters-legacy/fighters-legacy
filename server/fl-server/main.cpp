@@ -720,6 +720,13 @@ int main(int argc, char** argv) {
     // differs by surface. surfaceTypeAt is thread-safe (shared_mutex); the client mirrors it.
     broadcaster.setGroundSurfaceQuery(
         [&terrainStreamer](glm::dvec3 pos) { return terrainStreamer.surfaceTypeAt(pos); });
+    // Base operations (#55): the crew chief services an aircraft shut down within a few km of an
+    // airport (or on a carrier deck, which WorldBroadcaster checks itself). AirportRegistry is
+    // load-once/lock-free, safe to query from the sim thread.
+    broadcaster.setBaseProximityQuery([&airportRegistry](glm::dvec3 pos) {
+        constexpr double kBaseServiceRangeM = 5000.0;
+        return airportRegistry.nearestTo(pos.x, pos.z, kBaseServiceRangeM) != nullptr;
+    });
     // Resolve EntityDef::flightModelAsset -> parsed FlightModelData on the spawn path. Loads the raw
     // TOML asset via AssetManager, parses it with engine-flight's parseFlightModel, and caches the
     // result by id (sim-thread-only access). Empty/unknown ids fall back to the builtin model in

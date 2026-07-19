@@ -496,6 +496,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // prediction stays in parity. Not set ⇒ paved default. Call before gameLoop.start().
     void setGroundSurfaceQuery(std::function<SurfaceType(glm::dvec3)> fn);
 
+    // Base-proximity query for the #55 base-operations verbs: is `worldPos` at a serviced base
+    // (fl-server wires "within a few km of an airport")? Unset = any on-ground spot counts, which
+    // keeps the zero-pack sandbox serviceable. A carrier deck always counts, query or not. Call
+    // before gameLoop.start().
+    void setBaseProximityQuery(std::function<bool(glm::dvec3)> fn) {
+        m_baseProximityQuery = std::move(fn);
+    }
+
     // Set pre-cached peer spawn positions [x, y, z] in world space.
     // y must already include the terrain height + AGL offset, computed on the main thread
     // before gameLoop.start(). Positions are assigned round-robin to connecting peers.
@@ -1211,6 +1219,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     void runDeckOperations(double simDt, uint64_t tickIndex);
     // Unicast haptic (#38 trap/catapult): the pilot who caught the wire feels it; nobody else does.
     void sendHapticTo(uint32_t peerId, uint8_t kind, float a, float b, uint16_t durationMs);
+
+    // Base operations (#55): the "base refuel|rearm|repair" radio verbs — server-authoritative
+    // ground-crew services for an aircraft shut down at a base (airfield ramp or carrier deck).
+    void handleBaseOpsCommand(uint32_t peerId, EntityId flight, std::string_view op);
+    std::function<bool(glm::dvec3)> m_baseProximityQuery; // null = any ground counts (zero-pack sandbox)
     std::vector<ControlInput> m_stepInputs;
     // Entity indices already warned about a flight-envelope departure (#891 speed_guard_clamped), so
     // the diagnostic logs once per entity instead of every tick a diverged entity stays pinned.

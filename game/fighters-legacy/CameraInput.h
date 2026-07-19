@@ -72,6 +72,16 @@ class CameraInput {
 
     // Seed the free-fly eye directly (used by the observer ghost flow, #859, where there is no
     // player entity for initFlyFromPlayer to key off).
+    // Ground-crew scene (#55): while on, the Chase camera slowly ORBITS the parked aircraft on the
+    // ramp instead of locking behind the tail — the post-landing external view. FlightScreen drives
+    // it from its landed-and-stopped detection; any camera-mode change or takeoff roll clears it.
+    void setGroundScene(bool on) noexcept {
+        m_groundScene = on;
+    }
+    [[nodiscard]] bool groundScene() const noexcept {
+        return m_groundScene;
+    }
+
     void setFlyEye(const glm::dvec3& eye) noexcept {
         m_flyEye = eye;
         m_lastEye = eye;
@@ -100,6 +110,7 @@ class CameraInput {
     // Chase follow state.
     float m_chasePitch{8.f}; // degrees above the entity; eye trails behind and slightly up
     float m_chaseDistance{25.f};
+    bool m_groundScene{false}; // #55: Chase orbits the parked aircraft instead of trailing it
 
     // Cockpit look offsets (RMB drag).
     float m_cockpitYaw{0.f};

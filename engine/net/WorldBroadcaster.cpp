@@ -3988,6 +3988,93 @@ void WorldBroadcaster::runDeckOperations(double simDt, uint64_t tickIndex) {
     }
 }
 
+void WorldBroadcaster::handleBaseOpsCommand(uint32_t peerId, EntityId flight, std::string_view op) {
+    // The crew chief answers on the radio like everyone else (#55) — routed through the same
+    // RadioTransmission wire/subtitle path as ATC, never bespoke UI text.
+    auto reply = [&](const char* text) {
+        fl::atc::RadioTransmission tx;
+        tx.target = flight;
+        tx.speaker = "Crew chief";
+        tx.text = text;
+        tx.displaySeconds = 5;
+        const MsgRadioTransmission w = buildRadioWire(tx);
+        m_net.send(peerId, &w, sizeof(w), /*reliable=*/true);
+    };
+
+    const bool knownOp = (op == "refuel" || op == "rearm" || op == "repair");
+    if (!knownOp) {
+        reply("Crew chief: say again?");
+        return;
+    }
+    EntityState* st = flight.valid() ? m_entityManager.get(flight) : nullptr;
+    const auto ceIt = m_controlledEntities.find(flight.index);
+    if (!st || st->dead || ceIt == m_controlledEntities.end()) {
+        reply("Crew chief: you don't have an aircraft.");
+        return;
+    }
+    ControlledEntity& ce = ceIt->second;
+    const FlightState& fs = ce.sim->state();
+
+    // SERVER-AUTHORITATIVE eligibility: shut down on the ground AT A BASE — an airfield ramp (the
+    // injected proximity query; unset = any ground, the zero-pack sandbox) or a carrier deck.
+    const glm::dvec3 pos{fs.pos_world[0], fs.pos_world[1], fs.pos_world[2]};
+    float floor = m_groundQuery ? m_groundQuery(pos) : m_groundElevation.load(std::memory_order_relaxed);
+    bool atBase = !m_baseProximityQuery || m_baseProximityQuery(pos);
+    for (const DeckRec& rec : m_decks) {
+        if (rec.entityIdx == flight.index)
+            continue;
+        const DeckLocalPoint lp = deckLocalPoint(fs.pos_world, rec.pos, rec.quat, *rec.deck);
+        if (deckFloorApplies(lp, *rec.deck)) {
+            floor = std::max(floor, static_cast<float>(rec.floorElevM));
+            atBase = true; // a flight deck always has a crew
+            break;
+        }
+    }
+    const double agl = m_gravity->geodeticAltitude(fs.pos_world) - static_cast<double>(floor);
+    const double spd =
+        std::sqrt(fs.vel_body[0] * fs.vel_body[0] + fs.vel_body[1] * fs.vel_body[1] + fs.vel_body[2] * fs.vel_body[2]);
+    if (agl > 2.0 || spd > 3.0) {
+        reply("Crew chief: shut down on the ramp first.");
+        return;
+    }
+    if (!atBase) {
+        reply("Crew chief: nobody out here. Get to a base.");
+        return;
+    }
+
+    const EntityDef* def = m_registry.byIndex(st->typeIndex);
+    if (op == "refuel") {
+        FlightState ns = fs;
+        ns.fuel_kg = ce.sim->flightModel().geometry.fuel_kg;
+        ns.mass_kg = ce.sim->flightModel().geometry.mass_kg + ns.fuel_kg;
+        ce.sim->reset(ns);
+        ce.fuelLeakKgS = 0.f;
+        ce.sim->setFuelLeakRate(0.f);
+        reply("Crew chief: fueled and topped off.");
+    } else if (op == "rearm") {
+        // Fresh full loadout — the same builder a spawn uses (#812), so a rearmed jet and a fresh
+        // one cannot differ. Crewed aircraft partition per seat and are out of scope here.
+        if (m_weaponRegistry && def && !def->hardpoints.empty() && def->crew.empty()) {
+            ce.fire.loadout = buildLoadout(*def, *m_weaponRegistry);
+            ce.payload = m_payloadResolver ? m_payloadResolver(*def) : PayloadEffect{};
+        }
+        if (def && (def->chaffCount > 0 || def->flareCount > 0))
+            m_countermeasures.registerDispenser(flight.index, def->chaffCount, def->flareCount); // refill
+        reply("Crew chief: rearmed, pins pulled.");
+    } else { // repair
+        st->hp = st->maxHp;
+        st->damageLevel = DamageLevel::Intact;
+        if (ce.hasSubsystems && def && def->damage && def->damage->subsystems)
+            ce.subsystems.init(*def->damage->subsystems); // fresh pools
+        ce.sim->setDamagePenalty(1.f, 1.f);
+        ce.sim->setSubsystemControlFactor(1.f);
+        ce.sim->setFuelLeakRate(0.f);
+        ce.fuelLeakKgS = 0.f;
+        ce.sim->setEngineFailFlags(0);
+        reply("Crew chief: patched up. She'll fly.");
+    }
+}
+
 void WorldBroadcaster::sendRadioTransmission(const fl::atc::RadioTransmission& tx) {
     const MsgRadioTransmission w = buildRadioWire(tx);
     if (tx.target.valid()) {
@@ -4039,12 +4126,7 @@ void WorldBroadcaster::handleRadioCommand(uint32_t peerId, const void* data, std
         m_net.send(peerId, &w, sizeof(w), /*reliable=*/true);
     };
 
-    if (!m_atcService) {
-        reply(fl::atc::AtcPhrase::Unable, "no ATC available");
-        return;
-    }
-
-    // Tokenize "atc <subverb> [facility]".
+    // Tokenize "atc <subverb> [facility]" or "base <subverb>" (#55).
     std::string_view cmd(msg.command);
     auto nextToken = [](std::string_view& s) -> std::string_view {
         while (!s.empty() && s.front() == ' ')
@@ -4055,6 +4137,19 @@ void WorldBroadcaster::handleRadioCommand(uint32_t peerId, const void* data, std
         return tok;
     };
     const std::string_view verb = nextToken(cmd);
+
+    // Base operations (#55): ground-crew services. Routed before the ATC gate — the crew chief
+    // works whether or not a tower does.
+    if (verb == "base") {
+        handleBaseOpsCommand(peerId, flight, nextToken(cmd));
+        return;
+    }
+
+    if (!m_atcService) {
+        reply(fl::atc::AtcPhrase::Unable, "no ATC available");
+        return;
+    }
+
     if (verb != "atc") {
         reply(fl::atc::AtcPhrase::Unable, "say again");
         return;

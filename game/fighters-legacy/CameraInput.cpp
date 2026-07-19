@@ -14,6 +14,7 @@
 #include <cmath>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <numbers>
 
 namespace fl {
 
@@ -199,7 +200,18 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
             const float pr = toRad(m_chasePitch);
             const double horiz = static_cast<double>(m_chaseDistance) * std::cos(pr);
             const double vert = static_cast<double>(m_chaseDistance) * std::sin(pr);
-            const glm::dvec3 eye = target + behindHorizontal(fwd) * horiz + glm::dvec3{0.0, vert, 0.0};
+            glm::dvec3 eye;
+            if (m_groundScene) {
+                // Ground-crew scene (#55): a slow orbit around the parked aircraft on the ramp.
+                // Wall-clock driven — this is presentation, nothing downstream reads it.
+                constexpr double kOrbitDegPerS = 6.0;
+                const double t =
+                    std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+                const double az = t * kOrbitDegPerS * (std::numbers::pi / 180.0);
+                eye = target + glm::dvec3{std::cos(az) * horiz, vert, std::sin(az) * horiz};
+            } else {
+                eye = target + behindHorizontal(fwd) * horiz + glm::dvec3{0.0, vert, 0.0};
+            }
             // Up = radial direction so the chase view keeps a level horizon planet-wide.
             m_lastEye = eye;
             ctrl.setPose(eye, glm::vec3(target - eye), radialUp(eye, m_planetRadiusM));

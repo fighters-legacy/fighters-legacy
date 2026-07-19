@@ -26,6 +26,7 @@
 #include "render/WindshieldRain.h"
 #include "sandbox/SandboxInspector.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <glm/glm.hpp>
@@ -250,6 +251,48 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     // and windshield lean. Earth default until the ack arrives.
     const double radiusM =
         d.clientNetHandler ? static_cast<double>(d.clientNetHandler->planetRadiusKm()) * 1000.0 : fl::kEarthRadiusM;
+
+    // Ground-crew scene + landing detection (#55), own aircraft only. The airborne→landed edge
+    // scores the touchdown from last frame's sink rate into the logbook (PilotLogbook::recordLanding
+    // finally gets a producer, #674); two seconds landed-and-stopped blends the Chase camera into a
+    // slow ramp orbit. The scene clears on the takeoff roll, a manual mode change away from Chase,
+    // or after 60 s — and everything degrades gracefully: no ownship (observer) = no scene.
+    if (m_playerEntry && d.camInput) {
+        const double ownTerrain = d.terrainStreamer->heightAt(m_playerEntry->position);
+        const double ownAlt = fl::geodeticAltitude(m_playerEntry->position.x, m_playerEntry->position.y,
+                                                   m_playerEntry->position.z, radiusM);
+        const double agl = ownAlt - ownTerrain;
+        const float spd = glm::length(m_playerEntry->velocity);
+        const bool onGround = agl < 3.0;
+
+        if (m_wasAirborne && onGround && d.userConfig) {
+            // Touchdown: score the landing from the sink rate the frame before contact. ~1 m/s is a
+            // greaser (100), 6+ m/s is an arrival (0).
+            const float sink = std::max(0.f, -m_prevVertSpeedMps);
+            const float score = std::clamp(100.f - 20.f * std::max(0.f, sink - 1.f), 0.f, 100.f);
+            PilotSettings ps = d.userConfig->pilot();
+            ps.profile.logbook.recordLanding(score);
+            d.userConfig->setPilot(ps);
+        }
+        m_wasAirborne = agl > 8.0;
+        m_prevVertSpeedMps = m_playerEntry->velocity.y;
+
+        constexpr double kSceneEnterS = 2.0, kSceneTimeoutS = 60.0;
+        if (onGround && spd < 1.5f)
+            m_landedStillS += 1.0 / 60.0;
+        else
+            m_landedStillS = 0.0;
+        const bool wantScene = m_landedStillS >= kSceneEnterS && m_landedStillS < kSceneEnterS + kSceneTimeoutS;
+        if (wantScene && !m_groundSceneOn && d.cameraController->mode() == fl::CameraMode::Chase) {
+            m_groundSceneOn = true; // the orbit engages only from the external view — never yanks Cockpit
+        }
+        if (m_groundSceneOn && (!wantScene || d.cameraController->mode() != fl::CameraMode::Chase))
+            m_groundSceneOn = false;
+        d.camInput->setGroundScene(m_groundSceneOn);
+    } else if (d.camInput) {
+        m_groundSceneOn = false;
+        d.camInput->setGroundScene(false);
+    }
 
     // Datalink track picture + RWR (#528) for the HUD radar scope — only when this peer flies its own
     // aircraft (a spectator following another entity has no datalink of its own to draw).

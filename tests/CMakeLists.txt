@@ -198,6 +198,11 @@ target_link_libraries(test_carrier_deck PRIVATE Catch2::Catch2WithMain engine-ne
                                                 engine-bootstrap)
 catch_discover_tests(test_carrier_deck)
 
+add_executable(test_base_ops test_base_ops.cpp)
+target_link_libraries(test_base_ops PRIVATE Catch2::Catch2WithMain engine-net engine-entity engine-flight
+                                            engine-weapon engine-bootstrap)
+catch_discover_tests(test_base_ops)
+
 add_executable(test_central_gravity test_central_gravity.cpp)
 target_link_libraries(test_central_gravity PRIVATE Catch2::Catch2WithMain engine-flight)
 catch_discover_tests(test_central_gravity)
