@@ -91,6 +91,28 @@ class PeerController final : public fl::IEntityController {
   private:
     const fl::PeerInputState* m_input;
 };
+
+// A frozen-input autopilot (#974): returns a fixed ControlInput every tick. When a peer-spawned
+// aircraft's owning pilot leaves but a human gunner remains, the aircraft must keep flying without a
+// dangling PeerController pointing at the departed peer's (freed) input slot. Swapping to this holds
+// the pilot's LAST attitude/throttle so the gunner keeps a stable platform until the last human leaves.
+// The fire fields are cleared so an orphaned airframe never keeps firing the pilot's guns.
+class HoldController final : public fl::IEntityController {
+  public:
+    explicit HoldController(const fl::ControlInput& held) : m_held(held) {
+        m_held.trigger = false;
+        m_held.release = false;
+        m_held.dispenseCm = false;
+        m_held.ecm = false;
+    }
+    fl::ControlInput sample(const fl::EntityState& /*state*/, uint64_t /*tick*/, double /*dt*/,
+                            const fl::AiTickContext& /*ctx*/ = {}) override {
+        return m_held;
+    }
+
+  private:
+    fl::ControlInput m_held;
+};
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -1934,32 +1956,63 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         return;
     }
 
+    // #974 join-at-connect: the client may claim a seat of an EXISTING crewed aircraft (a ConnectSeatClaim
+    // TLV in the ConnectRequest ext block) instead of spawning its own. Parsed here; applied in the Pilot
+    // branch below. Falls back to a normal spawn when the seat is unavailable, so a pilot always gets in.
+    bool seatClaim = false;
+    EntityId claimEntity{};
+    uint8_t claimSeat = 0;
+    {
+        const std::size_t extOff =
+            sizeof(MsgConnectRequest) + static_cast<std::size_t>(req.packCount) * sizeof(PackManifestEntry);
+        if (extOff <= size) {
+            uint16_t clen = 0;
+            const uint8_t* cp = findExt(static_cast<const uint8_t*>(data) + extOff, size - extOff,
+                                        static_cast<uint16_t>(ExtTag::ConnectSeatClaim), clen);
+            if (cp && clen >= 9u) {
+                uint32_t ei = 0, eg = 0;
+                std::memcpy(&ei, cp, 4);
+                std::memcpy(&eg, cp + 4, 4);
+                claimSeat = cp[8];
+                claimEntity = EntityId{ei, eg};
+                seatClaim = true;
+            }
+        }
+    }
+
     EntityId assigned{}; // invalid for an observer — it has no entity
     if (grantedRole == PeerRole::Pilot) {
-        // Mission player slots (#854): a loaded mission's `player: true` objects become joinable slots.
-        // Assign the next open one (its type/faction/spawn pins where and what the pilot flies, ignoring
-        // the client's requested type). No slots / all occupied / a slot type that won't spawn ⇒ fall
-        // back to the round-robin default so a pilot always gets an aircraft.
-        const int slotIdx = claimMissionSlot(peerId);
-        if (slotIdx >= 0) {
-            const MissionSpawnSlot& slot = m_missionSlots[static_cast<std::size_t>(slotIdx)];
-            EntityTransform t{};
-            t.pos[0] = slot.pos[0];
-            t.pos[1] = slot.pos[1];
-            t.pos[2] = slot.pos[2];
-            for (int c = 0; c < 4; ++c)
-                t.quat[c] = slot.quat[c];
-            assigned = spawnPilotEntity(peerId, slot.entityType, t, slot.factionIndex, slot.airspeed);
-            if (!assigned.valid()) {
-                releaseMissionSlot(peerId); // slot type unspawnable — free it and use the default path
-                assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
-            } else if (m_missionSlotBinder && !slot.missionObjectId.empty()) {
-                // Register the pilot's aircraft under the slot's mission object id so destroy(<id>) tracks
-                // it (#884). slot is a reference into m_missionSlots; read its id before any further work.
-                m_missionSlotBinder(slot.missionObjectId, assigned);
-            }
+        // Seat claim first (#974): occupy the requested seat of an existing crewed aircraft, viewing it
+        // as our "own" entity. Only when the seat is actually joinable; else fall through to a spawn.
+        if (seatClaim && evaluateSeatRequest(claimEntity, claimSeat, peerId) == SeatResultCode::Granted) {
+            setSeatOccupant(claimEntity, claimSeat, peerId);
+            assigned = claimEntity; // a gunner does not OWN the airframe (no m_peerEntities entry)
         } else {
-            assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
+            // Mission player slots (#854): a loaded mission's `player: true` objects become joinable slots.
+            // Assign the next open one (its type/faction/spawn pins where and what the pilot flies, ignoring
+            // the client's requested type). No slots / all occupied / a slot type that won't spawn ⇒ fall
+            // back to the round-robin default so a pilot always gets an aircraft.
+            const int slotIdx = claimMissionSlot(peerId);
+            if (slotIdx >= 0) {
+                const MissionSpawnSlot& slot = m_missionSlots[static_cast<std::size_t>(slotIdx)];
+                EntityTransform t{};
+                t.pos[0] = slot.pos[0];
+                t.pos[1] = slot.pos[1];
+                t.pos[2] = slot.pos[2];
+                for (int c = 0; c < 4; ++c)
+                    t.quat[c] = slot.quat[c];
+                assigned = spawnPilotEntity(peerId, slot.entityType, t, slot.factionIndex, slot.airspeed);
+                if (!assigned.valid()) {
+                    releaseMissionSlot(peerId); // slot type unspawnable — free it and use the default path
+                    assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
+                } else if (m_missionSlotBinder && !slot.missionObjectId.empty()) {
+                    // Register the pilot's aircraft under the slot's mission object id so destroy(<id>) tracks
+                    // it (#884). slot is a reference into m_missionSlots; read its id before any further work.
+                    m_missionSlotBinder(slot.missionObjectId, assigned);
+                }
+            } else {
+                assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
+            }
         }
     } else {
         // Observer (#857): no entity, no controller. Seed the interest center from the first spawn point
@@ -1998,8 +2051,9 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
 
     // Form this peer's flight (#610). The spawner lives in fl-server (it needs engine-ai to build
     // controllers); with no spawner installed the peer simply flies alone, which is exactly the
-    // pre-#610 behavior.
-    if (assigned.valid() && m_flightSpawner) {
+    // pre-#610 behavior. A seat-claim joiner (#974) OWNS no airframe (not in m_peerEntities), so it
+    // forms no flight — it is a gunner on someone else's aircraft.
+    if (assigned.valid() && m_flightSpawner && m_peerEntities.count(peerId) != 0u) {
         const fl::FormationId fid = m_flightSpawner(peerId, assigned);
         if (const fl::Formation* f = m_formations.get(fid)) {
             // Unsolicited check-in: this is how the client learns it HAS a flight, how big it is, and
@@ -2077,17 +2131,61 @@ void WorldBroadcaster::despawnPeerEntity(uint32_t peerId) {
     }
     // Remove the peer's own aircraft from any formation it was flying IN as a member (a human
     // wingman in someone else's flight), and drop its command role everywhere.
-    m_formations.removeEntity(it->second);
+    const EntityId ac = it->second;
+    m_formations.removeEntity(ac);
     m_formations.releasePeer(peerId);
-
-    // Tear down the controller (which points into m_peerInputs) before the caller may erase the input slot.
-    m_controlledEntities.erase(it->second.index);
-    m_sensorSystem.removeObserver(it->second.index);
-    m_countermeasures.removeDispenser(it->second.index);
-    m_entityManager.kill(it->second);
     m_peerEntities.erase(it);
-
     releaseMissionSlot(peerId); // free this peer's mission player slot for the next joiner (#854)
+
+    // #974: does another human still occupy a seat of this aircraft? If so the airframe is NEVER
+    // destroyed out from under them. Swap the Fly-seat controller off the departing peer's
+    // (about-to-be-freed) input slot to a hold autopilot, vacate the Fly seat in the roster, and track
+    // the airframe as an orphan so it is retired when its last human leaves.
+    bool otherHumans = false;
+    for (const auto& [pid, bind] : m_peerSeat) {
+        if (bind.entity == ac) {
+            otherHumans = true;
+            break;
+        }
+    }
+    if (otherHumans) {
+        if (auto cit = m_controlledEntities.find(ac.index); cit != m_controlledEntities.end()) {
+            ControlledEntity& ce = cit->second;
+            const ControlInput held = ce.lastInputValid ? ce.lastInput : ControlInput{};
+            ce.controller = std::make_unique<HoldController>(held);
+            for (CrewSeat& s : ce.crew.seats) {
+                if (s.isFlySeat) {
+                    s.occupantPeer = kNoSeatPeer;
+                    s.botOccupied = false; // no authored bot for a peer-spawned Fly seat; the autopilot holds it
+                    break;
+                }
+            }
+            m_peerSpawnedOrphans.insert(ac.index);
+            broadcastCrewRoster(ac);
+        }
+        return; // airframe kept alive for the remaining occupant(s)
+    }
+
+    // No humans remain — tear the aircraft down. The controller (a PeerController) points into
+    // m_peerInputs, so this must happen before the caller erases the input slot.
+    killControlledAircraft(ac);
+}
+
+void WorldBroadcaster::killControlledAircraft(EntityId id) {
+    m_controlledEntities.erase(id.index);
+    m_sensorSystem.removeObserver(id.index);
+    m_countermeasures.removeDispenser(id.index);
+    m_entityManager.kill(id);
+    m_peerSpawnedOrphans.erase(id.index);
+}
+
+void WorldBroadcaster::maybeRetireOrphan(EntityId id) {
+    if (m_peerSpawnedOrphans.find(id.index) == m_peerSpawnedOrphans.end())
+        return;
+    for (const auto& [pid, bind] : m_peerSeat)
+        if (bind.entity == id)
+            return;             // a human still occupies a seat — keep it flying
+    killControlledAircraft(id); // last human left an orphaned peer-spawned airframe: retire it
 }
 
 void WorldBroadcaster::onDisconnect(uint32_t peerId) {
@@ -2662,9 +2760,139 @@ void WorldBroadcaster::clearSeatOccupant(uint32_t peerId) {
         cs.lastCommandValid = false; // its bot resumes next AI pass (botOccupied/seatBot preserved)
         m_peerSeat.erase(sit);
         broadcastCrewRoster(id);
+        maybeRetireOrphan(id); // #974: if this was the last human on an orphaned airframe, retire it
     } else {
         m_peerSeat.erase(sit); // aircraft gone — just drop the dangling binding
     }
+}
+
+SeatResultCode WorldBroadcaster::evaluateSeatRequest(EntityId id, uint8_t seat, uint32_t peerId) const noexcept {
+    if (!id.valid())
+        return SeatResultCode::NoSuchEntity;
+    const auto cit = m_controlledEntities.find(id.index);
+    if (cit == m_controlledEntities.end() || cit->second.id != id)
+        return SeatResultCode::NoSuchEntity;
+    const CrewState& crew = cit->second.crew;
+    if (!crew.crewed())
+        return SeatResultCode::NotCrewed;
+    if (seat >= crew.seats.size())
+        return SeatResultCode::NoSuchSeat;
+    const CrewSeat& cs = crew.seats[seat];
+    if (cs.isFlySeat)
+        return SeatResultCode::FlySeatNotJoinable;
+    if (cs.occupantPeer != kNoSeatPeer && cs.occupantPeer != peerId)
+        return SeatResultCode::SeatOccupiedByHuman;
+    return SeatResultCode::Granted;
+}
+
+void WorldBroadcaster::handleSeatRequest(uint32_t peerId, const MsgSeatRequest& req) {
+    const auto pit = m_peerInputs.find(peerId);
+    if (pit == m_peerInputs.end() || !pit->second.handshakeComplete)
+        return; // not an admitted peer
+    PeerInputState& pin = pit->second;
+
+    auto reply = [&](SeatResultCode code, EntityId target, uint8_t seat) {
+        MsgSeatResult res{};
+        res.code = static_cast<uint8_t>(code);
+        res.seatIndex = seat;
+        res.entityIdx = target.index;
+        res.entityGen = target.generation;
+        m_net.send(peerId, &res, sizeof(res), /*reliable=*/true);
+    };
+
+    // Leave: vacate whatever non-fly seat this peer holds and become an observer. A peer that owns its
+    // aircraft (Fly-seat pilot) cannot "leave" via a seat request — use set_role / disconnect.
+    if ((req.flags & kSeatRequestFlagLeave) != 0u) {
+        const auto sit = m_peerSeat.find(peerId);
+        if (sit == m_peerSeat.end() || m_peerEntities.count(peerId) != 0u) {
+            reply(SeatResultCode::NotInSeat, EntityId{}, 0);
+            return;
+        }
+        // Seed the observer interest center from the host aircraft's last position before vacating.
+        if (const EntityState* host = m_entityManager.get(sit->second.entity))
+            pin.interestCenter = glm::dvec3(host->transform.pos[0], host->transform.pos[1], host->transform.pos[2]);
+        clearSeatOccupant(peerId);
+        pin.role = PeerRole::Observer;
+        sendConnectAck(peerId, EntityId{}, PeerRole::Observer);
+        reply(SeatResultCode::Granted, EntityId{}, 0);
+        return;
+    }
+
+    // Join a specific seat.
+    const EntityId target{req.entityIdx, req.entityGen};
+    const SeatResultCode code = evaluateSeatRequest(target, req.seatIndex, peerId);
+    if (code != SeatResultCode::Granted) {
+        reply(code, target, req.seatIndex);
+        return;
+    }
+    // Free-form policy (#974): a peer may hop aircraft mid-flight. If it currently owns an aircraft,
+    // relinquish it first (which persists it for its own remaining humans, or retires it).
+    if (m_peerEntities.count(peerId) != 0u)
+        despawnPeerEntity(peerId);
+    setSeatOccupant(target, req.seatIndex, peerId); // binds + re-broadcasts the roster
+    pin.role = PeerRole::Pilot;                     // a seat occupant is a Pilot-role peer (it has an entity to view)
+    // Re-send ConnectAck so the client centers interest/camera on the host aircraft (the proven
+    // mid-session re-setup path; sendConnectAck also re-sends the current crew rosters).
+    sendConnectAck(peerId, target, PeerRole::Pilot);
+    reply(SeatResultCode::Granted, target, req.seatIndex);
+}
+
+std::string WorldBroadcaster::crewRosterText(uint32_t entityIdx) const {
+    const auto cit = m_controlledEntities.find(entityIdx);
+    if (cit == m_controlledEntities.end())
+        return "seats: no such entity";
+    const CrewState& crew = cit->second.crew;
+    if (!crew.crewed())
+        return "seats: entity is single-seat (no crew)";
+    const EntityState* st = m_entityManager.get(cit->second.id);
+    const EntityDef* def = st ? m_registry.byIndex(st->typeIndex) : nullptr;
+    std::string out = "seats for entity " + std::to_string(entityIdx) + ":\n";
+    for (std::size_t s = 0; s < crew.seats.size(); ++s) {
+        const CrewSeat& cs = crew.seats[s];
+        const char* occ = cs.occupantPeer != kNoSeatPeer ? "human" : cs.botOccupied ? "bot" : "empty";
+        const char* role = (def && s < def->crew.size()) ? def->crew[s].role.c_str() : "?";
+        char line[160];
+        if (cs.occupantPeer != kNoSeatPeer)
+            std::snprintf(line, sizeof(line), "  seat %zu (%s): %s peer=%u%s\n", s, role, occ, cs.occupantPeer,
+                          cs.isFlySeat ? " [fly]" : "");
+        else
+            std::snprintf(line, sizeof(line), "  seat %zu (%s): %s%s\n", s, role, occ, cs.isFlySeat ? " [fly]" : "");
+        out += line;
+    }
+    return out;
+}
+
+std::string WorldBroadcaster::adminSetSeat(uint32_t entityIdx, uint8_t seat, SeatOccupancy occ, uint32_t peerId) {
+    auto cit = m_controlledEntities.find(entityIdx);
+    if (cit == m_controlledEntities.end())
+        return "set_seat: no such entity";
+    const EntityId id = cit->second.id;
+    CrewState& crew = cit->second.crew;
+    if (!crew.crewed())
+        return "set_seat: entity is single-seat";
+    if (seat >= crew.seats.size())
+        return "set_seat: seat out of range";
+    CrewSeat& cs = crew.seats[seat];
+    if (cs.isFlySeat)
+        return "set_seat: the Fly seat is not settable (use set_role / respawn)";
+
+    if (occ == SeatOccupancy::Human) {
+        if (evaluateSeatRequest(id, seat, peerId) != SeatResultCode::Granted)
+            return "set_seat: seat unavailable (occupied by another human?)";
+        setSeatOccupant(id, seat, peerId);
+        return "";
+    }
+    // Bot / Empty: vacate any human first, then set the authored-bot flag.
+    if (cs.occupantPeer != kNoSeatPeer)
+        clearSeatOccupant(cs.occupantPeer); // reverts + re-broadcasts; may retire an orphan
+    if (auto again = m_controlledEntities.find(id.index);
+        again != m_controlledEntities.end() && again->second.id == id && seat < again->second.crew.seats.size()) {
+        CrewSeat& cs2 = again->second.crew.seats[seat];
+        cs2.botOccupied = (occ == SeatOccupancy::Bot);
+        cs2.lastCommandValid = false;
+        broadcastCrewRoster(id);
+    }
+    return "";
 }
 
 bool WorldBroadcaster::buildCrewRosterPacket(EntityId id, std::vector<uint8_t>& out) const {
@@ -3222,6 +3450,10 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
 
     } else if (msgId == static_cast<uint8_t>(MsgId::WingmanCommand)) {
         handleWingmanCommand(peerId, data, size);
+    } else if (msgId == static_cast<uint8_t>(MsgId::SeatRequest)) {
+        MsgSeatRequest req;
+        if (readMsg(data, size, req))
+            handleSeatRequest(peerId, req);
     }
     // Unknown msgIds: silently discard (no log spam; future protocol versions may add new IDs)
 }

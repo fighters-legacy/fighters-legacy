@@ -87,6 +87,8 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `FactionDef` | `0x10` | server→client | reliable | n×132 bytes | Faction index→id/name table, sent once after `MsgConnectAck`. Lets the client name the faction behind each entity's snapshot `factionIndex` (observer picker; future friend/foe colouring). Additive ID. |
 | `Datalink` | `0x12` | server→client | unreliable | 40 + t×40 + s×28 bytes | The peer's **fused team track picture + RWR** (#528), sent per-peer at ~6 Hz. Fuses the peer's own sensor contacts with every same-faction teammate's, deduplicated by target; carries each track's `Identification` (the display-safe IFF fact, not the raw faction) and RWR strobes. Positions are float, relative to a header origin. Loss-tolerant — refreshed every send. Additive ID. |
 | `CrewRoster` | `0x13` | server→client | reliable | 12 + s×44 bytes | One **crewed aircraft's seat roster** (#972): per seat the role name, capability mask, turret index, per-instance skill, and occupant (`Empty` / `Bot` / `Human(peerId)`). Sent after `MsgFactionDef` for every crewed aircraft in the world, and re-broadcast on any occupancy change. A single-seat aircraft (the implicit-single-pilot fast path) sends none. Additive ID. |
+| `SeatRequest` | `0x14` | client→server | reliable | 12 bytes | Claim a non-fly crew seat, or leave the current seat (#974). A join names `{entityIdx, entityGen, seatIndex}`; the `leave` flag (bit 0) vacates whatever seat the peer holds. Free-form policy — any peer may request any non-human-held seat, including hopping aircraft mid-flight. Additive ID. |
+| `SeatResult` | `0x15` | server→client | reliable | 12 bytes | Outcome of a `MsgSeatRequest` (`SeatResultCode`: Granted / NoSuchEntity / NotCrewed / NoSuchSeat / SeatOccupiedByHuman / FlySeatNotJoinable / NotInSeat). On a grant the client also receives a fresh `MsgConnectAck` (assigned entity = host aircraft) and the roster delta. Additive ID. |
 | `LanBeacon` | `0x20` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast. The ENet id space is `0x00–0x1F`; `0x20+` is reserved for raw-UDP/non-ENet ids (the boundary was raised from `0x10` in #853 to free an ENet id for `ConnectRequest`). |
 
 ## Struct Definitions
@@ -288,6 +290,32 @@ Then `seatCount` × `CrewRosterSeat` (44 bytes each, align 4):
 | 9 | 1 | `turretIndex` | `uint8_t` | Turret this seat aims; `255` = none |
 | 10 | 2 | `reserved[2]` | `uint8_t[2]` | Pad (keeps `role` 4-aligned) |
 | 12 | 32 | `role` | `char[32]` | Null-terminated display string (roles-as-data, #944) |
+
+### MsgSeatRequest — 12 bytes
+
+Reliable, client→server (#974). Claim a non-fly crew seat or leave the current one.
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x14` |
+| 1 | 1 | `flags` | `uint8_t` | bit 0 (`kSeatRequestFlagLeave`) = vacate current seat (entity/seat ignored) |
+| 2 | 1 | `seatIndex` | `uint8_t` | Seat to claim |
+| 3 | 1 | `reserved` | `uint8_t` | Pad |
+| 4 | 4 | `entityIdx` | `uint32_t` | Target aircraft index |
+| 8 | 4 | `entityGen` | `uint32_t` | Target aircraft generation |
+
+### MsgSeatResult — 12 bytes
+
+Reliable, server→client (#974). The outcome of a `MsgSeatRequest`; echoes the target for correlation.
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x15` |
+| 1 | 1 | `code` | `uint8_t` | `SeatResultCode`: 0 Granted, 1 NoSuchEntity, 2 NotCrewed, 3 NoSuchSeat, 4 SeatOccupiedByHuman, 5 FlySeatNotJoinable, 6 NotInSeat (`isSeatResultOrdinal` guards it) |
+| 2 | 1 | `seatIndex` | `uint8_t` | Echoed requested seat |
+| 3 | 1 | `reserved` | `uint8_t` | Pad |
+| 4 | 4 | `entityIdx` | `uint32_t` | Echoed target index |
+| 8 | 4 | `entityGen` | `uint32_t` | Echoed target generation |
 
 ### MsgWorldSnapshotHeader — 24 bytes
 
@@ -819,6 +847,7 @@ Helpers: `fl::findExt`, `fl::readExtValue<T>`, `fl::appendExt<T>`, `fl::appendEx
 | `SnapshotCrew` | `0x0106` | `uint8 count` + records | `MsgWorldSnapshot` | Live **crew turret pose** (#972) for the CREWED aircraft in the receiving peer's interest set. Payload: `uint8 entryCount`, then per entry `{ uint32 entityIdx (LE), uint8 turretCount, turretCount × { int16 azQ (LE), int16 elQ (LE) } }`. Azimuth is quantized over `[-π, π]` and elevation over `[-π/2, π/2]` to `int16` (mount frame). **Single-seat aircraft never appear** — occupancy lives in the reliable `MsgCrewRoster`, so a world of only single-seat entities emits no `SnapshotCrew` TLV and its snapshot is byte-identical to pre-#972. Unreliable/interest-filtered: a dropped packet loses one tick of turret aim. Little-endian, unaligned; read per-field via memcpy. |
 
 | `WeatherWindProfile` | `0x0400` | `uint8 count` + `count × {f32 altM, f32 windX, f32 windZ}` (12 B each) | `MsgWeatherState` | Altitude wind profile (#489), appended after the 32-byte fixed struct. Knots ascending by altitude, absolute world-frame wind (m/s) at each. The client interpolates it by altitude (`WindProfile.h`) in parity with the server's per-entity wind. Omitted when no profile is set; old clients read the 32-byte struct and ignore the tail, keeping the datum-level `windX/windZ`. Little-endian, unaligned; read per-record via memcpy. |
+| `ConnectSeatClaim` | `0x0500` | `{u32 entityIdx, u32 entityGen, u8 seatIndex}` (9 B) | `MsgConnectRequest` | Join-at-connect seat claim (#974): the client asks to occupy a non-fly seat of an existing crewed aircraft instead of spawning its own. The server binds the seat when it is joinable and falls back to a normal pilot spawn otherwise (so a pilot always gets in). Appended after the pack manifest. Little-endian, unaligned. |
 
 **Reserved ranges:**
 - `0x0000`: reserved
@@ -826,6 +855,7 @@ Helpers: `fl::findExt`, `fl::readExtValue<T>`, `fl::appendExt<T>`, `fl::appendEx
 - `0x0200–0x02FF`: `MsgConnectAck` extensions (reserved for future use)
 - `0x0300–0x03FF`: `MsgClientInput` extensions (`0x0400` used by `WeatherWindProfile`)
 - `0x0400–0x04FF`: `MsgWeatherState` extensions (`0x0400` = `WeatherWindProfile`)
+- `0x0500–0x05FF`: `MsgConnectRequest` extensions (`0x0500` = `ConnectSeatClaim`)
 - All other values: reserved; must not be sent
 
 ---

@@ -241,6 +241,19 @@ void mintServerMsgSeeds() {
     wc.flightId = fl::kOwnFlight;
     appendFrame(wing, wireBytes(wc));
     writeSeed("fuzz_server_msg", "seed-wingman.bin", wing);
+
+    // seed-seat (#974): a MsgSeatRequest join followed by a leave. The seat-join handler runs untrusted
+    // {entityIdx, seatIndex} through evaluateSeatRequest before touching any crew state, so it is fuzzed.
+    std::vector<uint8_t> seat;
+    fl::MsgSeatRequest sj{};
+    sj.seatIndex = 1;
+    sj.entityIdx = 3;
+    sj.entityGen = 1;
+    appendFrame(seat, wireBytes(sj));
+    fl::MsgSeatRequest sl{};
+    sl.flags = fl::kSeatRequestFlagLeave;
+    appendFrame(seat, wireBytes(sl));
+    writeSeed("fuzz_server_msg", "seed-seat.bin", seat);
 }
 
 void mintClientMsgSeeds() {

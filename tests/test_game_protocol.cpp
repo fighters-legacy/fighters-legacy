@@ -660,3 +660,34 @@ TEST_CASE("GameProtocol: MsgCrewRoster header + seat records round-trip (#972)",
     CHECK(fl::isSeatOccupancyOrdinal(2));
     CHECK_FALSE(fl::isSeatOccupancyOrdinal(3));
 }
+
+TEST_CASE("GameProtocol: MsgSeatRequest / MsgSeatResult round-trip (#974)", "[game_protocol]") {
+    fl::MsgSeatRequest req{};
+    req.seatIndex = 1;
+    req.entityIdx = 42;
+    req.entityGen = 3;
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, req);
+    fl::MsgSeatRequest outReq;
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), outReq));
+    CHECK(outReq.msgId == static_cast<uint8_t>(fl::MsgId::SeatRequest));
+    CHECK(outReq.seatIndex == 1);
+    CHECK(outReq.entityIdx == 42u);
+    CHECK(outReq.entityGen == 3u);
+    CHECK((outReq.flags & fl::kSeatRequestFlagLeave) == 0u);
+
+    fl::MsgSeatResult res{};
+    res.code = static_cast<uint8_t>(fl::SeatResultCode::SeatOccupiedByHuman);
+    res.seatIndex = 1;
+    res.entityIdx = 42;
+    buf.clear();
+    fl::appendMsg(buf, res);
+    fl::MsgSeatResult outRes;
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), outRes));
+    CHECK(outRes.msgId == static_cast<uint8_t>(fl::MsgId::SeatResult));
+    CHECK(outRes.code == static_cast<uint8_t>(fl::SeatResultCode::SeatOccupiedByHuman));
+    CHECK(outRes.entityIdx == 42u);
+
+    CHECK(fl::isSeatResultOrdinal(6));
+    CHECK_FALSE(fl::isSeatResultOrdinal(7));
+}

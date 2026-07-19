@@ -547,10 +547,28 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // seat, or the Fly seat (that seat belongs to the aircraft's owning pilot, not a joinable seat).
     // Sim-thread only. Does NOT spawn/despawn an entity — a gunner occupies an airframe it does not own.
     bool setSeatOccupant(EntityId id, uint8_t seat, uint32_t peerId);
+    // The peer occupying seat `seat` of `id`, or kNoOwningPeer. Generalizes peerIdForEntity to a
+    // specific seat (#972); the aircraft's owner / Fly seat is peerIdForEntity. Sim-thread read.
+    [[nodiscard]] uint32_t occupantPeerFor(EntityId id, uint8_t seat) const noexcept;
     // Vacate `peerId`'s non-fly seat (if any): clear its occupant so the authored bot resumes, drop the
     // binding, and re-broadcast the roster. A no-op for a Fly-seat pilot (its aircraft's despawn owns
     // that teardown). Sim-thread only; called on a gunner's disconnect and the #974 leave path.
     void clearSeatOccupant(uint32_t peerId);
+
+    // ── Seat join / handoff protocol (#974) ──────────────────────────────────────────────────────
+    // Handle a client's MsgSeatRequest (claim a non-fly seat, or leave). Validates, binds/vacates, and
+    // replies with MsgSeatResult (+ a fresh MsgConnectAck and roster delta on a grant). Sim-thread.
+    void handleSeatRequest(uint32_t peerId, const MsgSeatRequest& req);
+    // Pure validation of a join request → the SeatResultCode the server would return (Granted = ok).
+    [[nodiscard]] SeatResultCode evaluateSeatRequest(EntityId id, uint8_t seat, uint32_t peerId) const noexcept;
+    // Operator surface (#974): a human-readable roster of a crewed aircraft's seats, or an error line
+    // for a single-seat/unknown entity. Sim-thread read (the `seats` admin command).
+    [[nodiscard]] std::string crewRosterText(uint32_t entityIdx) const;
+    // Operator surface (#974): force a non-fly seat's occupancy — Human (a peer id), Bot (resume the
+    // authored bot), or Empty (silence the seat). Returns "" on success, else a reason. Sim-thread
+    // (the `set_seat` admin command, via enqueueSimCallback). Keyed by entity index (the live gen is
+    // resolved internally).
+    std::string adminSetSeat(uint32_t entityIdx, uint8_t seat, SeatOccupancy occ, uint32_t peerId);
 
     // ---------------------------------------------------------------------------------------------
     // Sensing (#685)
@@ -854,7 +872,17 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Tear down a peer's entity: its owned formation + AI members, its controller, sensor observer, and
     // the entity itself; erase from m_peerEntities. Does NOT touch m_peerInputs (the peer keeps its
     // slot). Shared by onDisconnect (and setPeerRole once #857 lands). Sim-thread.
+    //
+    // #974: a peer-spawned aircraft with a REMAINING human occupant is NOT destroyed — its Fly-seat
+    // controller is swapped to a hold autopilot (so no dangling PeerController), the Fly seat is
+    // vacated, and the airframe is tracked as an ORPHAN, retired only when its last human leaves.
     void despawnPeerEntity(uint32_t peerId);
+    // Tear down a controlled aircraft entirely (controller, sensor observer, dispenser, entity, orphan
+    // tracking). The shared teardown for both the pilot-leaves-empty path and orphan retirement (#974).
+    void killControlledAircraft(EntityId id);
+    // If `id` is a peer-spawned orphan (its pilot left) and no human occupies any of its seats now,
+    // retire it. Called after a seat is vacated (#974).
+    void maybeRetireOrphan(EntityId id);
     void sendConnectAck(uint32_t peerId, EntityId assigned, PeerRole grantedRole);
     void sendConnectRefusal(uint32_t peerId, ConnectRefusalCode code, const char* reason);
     // Send a complete admin command result over ENet. Short results (<=kAdminResponseFastPathMax
@@ -926,6 +954,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         uint8_t seatIndex{0};
     };
     std::unordered_map<uint32_t, PeerSeatBinding> m_peerSeat;
+    // Peer-spawned aircraft whose owning pilot has left but which persist for a remaining human
+    // occupant (#974). Flown by a hold autopilot; retired when the last human vacates. Keyed by index.
+    std::unordered_set<uint32_t> m_peerSpawnedOrphans;
 
     // Formations and the wingman order path (#610). Sim-thread only, like every other roster here.
     fl::FormationRegistry m_formations;
@@ -983,9 +1014,6 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // parallel AI pass then only reads the seat's own cached command. No-op when no human occupies a
     // non-fly seat (the only case reachable until the #974 join protocol lands).
     void applyHumanCrewInput(uint64_t tick);
-    // The peer occupying seat `seat` of `id`, or kNoOwningPeer. Generalizes peerIdForEntity to a
-    // specific seat (#972); pilotPeerFor is peerIdForEntity (the aircraft's owner / Fly seat).
-    [[nodiscard]] uint32_t occupantPeerFor(EntityId id, uint8_t seat) const noexcept;
     // Build + send one crewed aircraft's seat roster (MsgCrewRoster, reliable) to a peer, or broadcast
     // it to every admitted peer. No-op for a single-seat / non-crewed entity (#972).
     void sendCrewRoster(uint32_t peerId, EntityId id);

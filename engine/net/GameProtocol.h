@@ -82,6 +82,10 @@ enum class MsgId : uint8_t {
                                // Sent after MsgConnectAck for the peer's own crewed aircraft, and on any
                                // seat occupancy change (#974). Single-seat aircraft never send one (the
                                // implicit-single-pilot fast path). See MsgCrewRosterHeader / CrewRosterSeat.
+    SeatRequest = 0x14,        // client->server, reliable: claim a non-fly crew seat, or leave the current
+                               // seat (#974). {entityId, seatIndex} or the leave flag. The server replies
+                               // MsgSeatResult and, on a grant, re-sends MsgConnectAck + the roster delta.
+    SeatResult = 0x15,         // server->client, reliable: outcome of a MsgSeatRequest (SeatResultCode).
     LanBeacon = 0x20,          // raw UDP broadcast - NOT sent over ENet; 0x20+ reserved for non-ENet ids.
                                // ENet message ids occupy 0x00-0x1F. The non-ENet boundary was raised
                                // from 0x10 to 0x20 in #853 to free an ENet id for ConnectRequest -- a
@@ -264,6 +268,55 @@ static_assert(alignof(MsgCrewRosterHeader) == 4u, "MsgCrewRosterHeader alignment
 static_assert(sizeof(MsgCrewRosterHeader) % alignof(CrewRosterSeat) == 0u, "MsgCrewRosterHeader not record-aligned");
 static_assert(offsetof(MsgCrewRosterHeader, entityIdx) == 4u, "MsgCrewRosterHeader::entityIdx offset changed");
 static_assert(offsetof(MsgCrewRosterHeader, entityGen) == 8u, "MsgCrewRosterHeader::entityGen offset changed");
+
+// Outcome of a MsgSeatRequest (#974). Granted or a specific denial reason. Validate an untrusted byte
+// with isSeatResultOrdinal before casting.
+enum class SeatResultCode : uint8_t {
+    Granted = 0,             // the seat is now this peer's (join) / vacated (leave)
+    NoSuchEntity = 1,        // the named entity does not exist / generation mismatch
+    NotCrewed = 2,           // the entity is single-seat (no joinable seats)
+    NoSuchSeat = 3,          // seatIndex out of range
+    SeatOccupiedByHuman = 4, // another human already holds the seat (humans never displace humans)
+    FlySeatNotJoinable = 5,  // the Fly seat belongs to the aircraft's owning pilot; spawn your own to fly
+    NotInSeat = 6,           // a leave request from a peer that holds no seat
+};
+
+inline bool isSeatResultOrdinal(uint8_t v) noexcept {
+    return v <= static_cast<uint8_t>(SeatResultCode::NotInSeat);
+}
+
+// Client->server request to claim a non-fly crew seat (join) or leave the current seat. `leave` (bit 0
+// of flags) ignores entity/seat and vacates whatever seat the peer holds. A join names the target
+// aircraft by {entityIdx, entityGen} and the seat by seatIndex.
+struct MsgSeatRequest {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::SeatRequest)}; // @0
+    uint8_t flags{0};                                        // @1 bit 0 = leave (vacate current seat)
+    uint8_t seatIndex{0};                                    // @2 seat to claim (ignored on leave)
+    uint8_t reserved{0};                                     // @3 pad
+    uint32_t entityIdx{0};                                   // @4 target aircraft entity index
+    uint32_t entityGen{0};                                   // @8 target aircraft generation
+}; // 12 bytes, align 4
+static_assert(sizeof(MsgSeatRequest) == 12u, "MsgSeatRequest wire size changed");
+static_assert(alignof(MsgSeatRequest) == 4u, "MsgSeatRequest alignment changed");
+static_assert(offsetof(MsgSeatRequest, entityIdx) == 4u, "MsgSeatRequest::entityIdx offset changed");
+static_assert(offsetof(MsgSeatRequest, entityGen) == 8u, "MsgSeatRequest::entityGen offset changed");
+
+inline constexpr uint8_t kSeatRequestFlagLeave = 0x01u;
+
+// Server->client reply to a MsgSeatRequest. Echoes the target so the client can correlate; on a grant
+// the client also receives a fresh MsgConnectAck (assigned entity = the host aircraft) and the roster.
+struct MsgSeatResult {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::SeatResult)}; // @0
+    uint8_t code{0};                                        // @1 SeatResultCode
+    uint8_t seatIndex{0};                                   // @2 echoed requested seat
+    uint8_t reserved{0};                                    // @3 pad
+    uint32_t entityIdx{0};                                  // @4 echoed target aircraft index
+    uint32_t entityGen{0};                                  // @8 echoed target aircraft generation
+}; // 12 bytes, align 4
+static_assert(sizeof(MsgSeatResult) == 12u, "MsgSeatResult wire size changed");
+static_assert(alignof(MsgSeatResult) == 4u, "MsgSeatResult alignment changed");
+static_assert(offsetof(MsgSeatResult, entityIdx) == 4u, "MsgSeatResult::entityIdx offset changed");
+static_assert(offsetof(MsgSeatResult, entityGen) == 8u, "MsgSeatResult::entityGen offset changed");
 
 // One mounted content pack, reported by the client in MsgConnectRequest's trailing manifest (#872 wire
 // half). The server compares it against its required-pack set (Phase 4: warn-only). contentHash is
@@ -839,7 +892,7 @@ static constexpr uint8_t kGameModeSandbox = 0x04u;
 //   0x0200–0x02FF  MsgConnectAck extensions (reserved for future use)
 //   0x0300–0x03FF  MsgClientInput extensions (reserved for future use)
 //   0x0400–0x04FF  MsgWeatherState extensions (reserved for future use)
-//   0x0500–0x05FF  MsgConnectRequest extensions (reserved: RFC #871 entitlement token block)
+//   0x0500–0x05FF  MsgConnectRequest extensions (0x0500 = ConnectSeatClaim #974; RFC #871 token reserved)
 //   Values outside defined ranges are reserved and must not be sent.
 enum class ExtTag : uint16_t {
     SnapshotPeerCount = 0x0100,   // uint16_t: active connected peer count at snapshot time
@@ -869,6 +922,11 @@ enum class ExtTag : uint16_t {
                            // entities emits no SnapshotCrew TLV and its snapshot is byte-identical to pre-#972.
                            // Unreliable/interest-filtered: a dropped packet loses one tick of turret aim.
 
+    ConnectSeatClaim = 0x0500,   // #974: join-at-connect seat claim in MsgConnectRequest's TLV block.
+                                 // Payload = { uint32 entityIdx (LE), uint32 entityGen (LE), uint8 seatIndex }
+                                 // (9 bytes, unaligned). Present = the client asks to occupy that non-fly seat
+                                 // instead of spawning its own aircraft; the server falls back to a normal
+                                 // pilot spawn if the seat is unavailable. Absent = the normal pilot spawn.
     WeatherWindProfile = 0x0400, // #489: altitude wind profile appended to MsgWeatherState. Payload =
                                  // uint8 count + count x {float altM, float windX, float windZ} (12 B each,
                                  // little-endian, unaligned). Ascending altitude. Old clients ignore it and
