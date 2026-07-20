@@ -94,6 +94,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `MissionOutcome` | `0x18` | server→client | reliable | 8 bytes | The mission's terminal outcome (#584). Broadcast once when the objective evaluator drives the mission to Complete/Failed; carries a `MissionResultCode` (`Incomplete`/`Success`/`Failure`) + `triggersFired` + `elapsedSeconds`, so the client debrief reports the real result instead of a hardcoded success. Additive ID, old clients discard. |
 | `RadioCommand` | `0x19` | client→server | reliable | 64 bytes | A player radio command (#703). Verb-routed like the admin channel — `atc request_takeoff\|request_landing\|inbound\|cancel [facility]` — never a direct state mutation; the server dispatches to the ATC service (#702) and replies with `RadioTransmission`(s), rate-limited per peer. The `wing` verb namespace is reserved for #610. **Note:** `0x0D`/`0x0E` (the ids #703 originally reserved) were already taken by the wingman channel, so the radio channel took the next free ENet ids `0x19`/`0x1A`. Additive ID, old servers discard. |
 | `RadioTransmission` | `0x1A` | server→client | reliable | 224 bytes | One spoken radio line (#703): `speaker` (28), `voiceKey` (32, a stable TTS/pack-OGG key — empty = subtitle only), `text` (160, server-rendered + localizable), `displaySeconds`. Unicast to the addressed pilot, or broadcast (an AI flight's clearance / an undirected line). The client prints `[radio] speaker: text` to the console and feeds the comms-menu subtitle/voice pipeline (#704). Additive ID, old clients discard. |
+| `MissionRoster` | `0x1B` | server→client | reliable | n×72 bytes | Entity idx/gen → mission object id table (#914). Concatenated self-describing records sent once after `MsgConnectAck` (with the current spawned mission objects + bound player slots), plus single-record deltas as a player slot binds. Lets the cinematic recorder (#909) resolve an entity-relative camera shot's `target`/`look_at` (a mission object id) to a live network entity. Additive ID, old clients discard. |
 | `LanBeacon` | `0x20` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast. The ENet id space is `0x00–0x1F`; `0x20+` is reserved for raw-UDP/non-ENet ids (the boundary was raised from `0x10` in #853 to free an ENet id for `ConnectRequest`). |
 
 ## Struct Definitions
@@ -223,6 +224,23 @@ Skipped entirely when the server has no faction registry — the client then sho
 | 2 | 2 | `factionIndex` | `uint16_t` | `FactionRegistry` index this record describes |
 | 4 | 64 | `id[64]` | `char[64]` | Null-terminated faction id, e.g. `"blue"` |
 | 68 | 64 | `name[64]` | `char[64]` | Null-terminated display name, e.g. `"Blue Coalition"`; empty = fall back to `id` |
+
+### MsgMissionRoster — 72 bytes
+
+Concatenated one-per-mapping into a single reliable packet (leading `msgId` = `MissionRoster`) sent
+once after `MsgConnectAck`, plus single-record deltas as a player slot binds its aircraft. The client
+reads `size / 72` records and builds a `missionObjectId → {entityIdx, entityGen}` table so the cinematic
+recorder (#909) can resolve an entity-relative camera shot's `target`/`look_at` to a live network
+entity. Only entries with a valid entity are sent (an unbound player slot is omitted until it binds). No
+mission ⇒ no packet.
+
+| Offset | Size | Field | Type | Notes |
+|--------|------|-------|------|-------|
+| 0 | 1 | `msgId` | `uint8_t` | `0x1B` |
+| 1 | 1 | `reserved` | `uint8_t` | Zero |
+| 2 | 2 | `entityGen` | `uint16_t` | `EntityId` generation (guards against a pool-slot reuse) |
+| 4 | 4 | `entityIdx` | `uint32_t` | `EntityId` pool index |
+| 8 | 64 | `objectId[64]` | `char[64]` | Null-terminated mission object id, e.g. `"bandit1"` |
 
 ### MsgDatalink — 40 + trackCount×40 + threatCount×28 bytes
 

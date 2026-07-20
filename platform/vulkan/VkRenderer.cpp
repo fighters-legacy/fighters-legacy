@@ -385,7 +385,29 @@ bool VkRenderer::init(IWindow* window) {
         return false;
     if (!pickPhysicalDevice())
         return false;
+    return finishInit(static_cast<uint32_t>(window->width()), static_cast<uint32_t>(window->height()));
+}
 
+bool VkRenderer::initHeadless(uint32_t width, uint32_t height) {
+    // Swapchain-free path (#913): no window, no surface, no present. Everything from finishInit() is
+    // shared with the windowed path; only instance extensions (createInstance), surface creation
+    // (skipped), and physical-device selection (pickPhysicalDevice) branch on m_headless.
+    m_headless = true;
+    m_sdlWindow = nullptr;
+    m_iWindow = nullptr;
+    m_shaderDir = resolveShaderDir();
+
+    if (!createInstance())
+        return false;
+    if (!setupDebugMessenger())
+        return false;
+    // No createSurface(): a headless renderer owns its present-target images.
+    if (!pickPhysicalDevice())
+        return false;
+    return finishInit(width, height);
+}
+
+bool VkRenderer::finishInit(uint32_t width, uint32_t height) {
     {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(m_physicalDevice, &props);
@@ -407,10 +429,15 @@ bool VkRenderer::init(IWindow* window) {
         return false;
     if (!createPipelineCache())
         return false;
-    if (!createSwapchain(window->width(), window->height()))
-        return false;
-    if (!createImageViews())
-        return false;
+    if (m_headless) {
+        if (!createPresentTargets(width, height))
+            return false;
+    } else {
+        if (!createSwapchain(static_cast<int>(width), static_cast<int>(height)))
+            return false;
+        if (!createImageViews())
+            return false;
+    }
     if (!createDepthImage())
         return false;
     if (!createHdrImage())
@@ -562,6 +589,10 @@ void VkRenderer::beginFrame() {
              static_cast<uint32_t>(h) != m_swapchainExtent.height))
             m_framebufferResized = true;
     }
+    // Headless (#913) has no swapchain to recreate and no window to size it from; a vsync-change flag
+    // from applySettings is meaningless there, so consume it without touching WSI.
+    if (m_framebufferResized && m_headless)
+        m_framebufferResized = false;
     if (m_framebufferResized) {
         if (!recreateSwapchain()) {
             m_framebufferResized = true;
@@ -582,14 +613,19 @@ void VkRenderer::beginFrame() {
     if (vkWaitForFences(m_device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, 100'000'000ULL) == VK_TIMEOUT)
         return;
 
-    VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, std::numeric_limits<uint64_t>::max(),
-                                            m_imageAvailable[m_currentFrame], VK_NULL_HANDLE, &m_currentImageIndex);
-    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        m_framebufferResized = true;
-        return;
+    if (m_headless) {
+        // No swapchain to acquire from — cycle the owned present targets (#913).
+        m_currentImageIndex = m_currentFrame;
+    } else {
+        VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, std::numeric_limits<uint64_t>::max(),
+                                                m_imageAvailable[m_currentFrame], VK_NULL_HANDLE, &m_currentImageIndex);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+            m_framebufferResized = true;
+            return;
+        }
+        if (result == VK_SUBOPTIMAL_KHR)
+            m_framebufferResized = true;
     }
-    if (result == VK_SUBOPTIMAL_KHR)
-        m_framebufferResized = true;
 
     vkResetFences(m_device, 1, &m_inFlightFences[m_currentFrame]);
 
@@ -773,26 +809,31 @@ void VkRenderer::endFrame() {
     const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    si.waitSemaphoreCount = 1;
-    si.pWaitSemaphores = &m_imageAvailable[m_currentFrame];
-    si.pWaitDstStageMask = &waitStage;
     si.commandBufferCount = 1;
     si.pCommandBuffers = &m_commandBuffers[m_currentFrame];
-    si.signalSemaphoreCount = 1;
-    si.pSignalSemaphores = &m_renderFinished[m_currentImageIndex];
+    if (!m_headless) {
+        // Windowed: wait on the acquire semaphore, signal the per-image present semaphore.
+        si.waitSemaphoreCount = 1;
+        si.pWaitSemaphores = &m_imageAvailable[m_currentFrame];
+        si.pWaitDstStageMask = &waitStage;
+        si.signalSemaphoreCount = 1;
+        si.pSignalSemaphores = &m_renderFinished[m_currentImageIndex];
+    }
+    // Headless has no acquire (nothing signals imageAvailable) and no present — submit bare (#913).
     vkQueueSubmit(m_graphicsQueue, 1, &si, m_inFlightFences[m_currentFrame]);
 
-    VkPresentInfoKHR pi{};
-    pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-    pi.waitSemaphoreCount = 1;
-    pi.pWaitSemaphores = &m_renderFinished[m_currentImageIndex];
-    pi.swapchainCount = 1;
-    pi.pSwapchains = &m_swapchain;
-    pi.pImageIndices = &m_currentImageIndex;
-    const VkResult result = vkQueuePresentKHR(m_presentQueue, &pi);
-
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
-        m_framebufferResized = true;
+    if (!m_headless) {
+        VkPresentInfoKHR pi{};
+        pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        pi.waitSemaphoreCount = 1;
+        pi.pWaitSemaphores = &m_renderFinished[m_currentImageIndex];
+        pi.swapchainCount = 1;
+        pi.pSwapchains = &m_swapchain;
+        pi.pImageIndices = &m_currentImageIndex;
+        const VkResult result = vkQueuePresentKHR(m_presentQueue, &pi);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+            m_framebufferResized = true;
+    }
 
     // Screenshot readback (#909 groundwork): the swapchain image for this frame is now presented.
     // Drain the device, copy it to a host-visible buffer, and write the PNG. Not a hot path — a stall
@@ -801,6 +842,23 @@ void VkRenderer::endFrame() {
         const std::string path = std::move(m_pendingScreenshotPath);
         m_pendingScreenshotPath.clear();
         writeSwapchainPng(path);
+    }
+
+    // Per-frame capture sink (#912): deliver this frame's RGBA pixels to the recorder. Synchronous
+    // readback — see readbackImageRgba. The presented swapchain image is in PRESENT_SRC_KHR windowed.
+    if (m_captureSink) {
+        uint32_t w = 0, h = 0;
+        const VkImageLayout layout =
+            m_headless ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        if (readbackImageRgba(m_swapchainImages[m_currentImageIndex], layout, layout, m_captureBuf, w, h)) {
+            CaptureFrame cf{};
+            cf.width = w;
+            cf.height = h;
+            cf.fmt = CapturePixelFormat::RGBA8; // readbackImageRgba always delivers RGBA8
+            cf.pixels = m_captureBuf.data();
+            cf.frameIndex = m_totalFrames;
+            m_captureSink(cf);
+        }
     }
 
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -815,13 +873,24 @@ bool VkRenderer::captureScreenshot(const char* path) {
     return true;
 }
 
-void VkRenderer::writeSwapchainPng(const std::string& path) {
+bool VkRenderer::setCaptureSink(std::function<void(const CaptureFrame&)> sink) {
+    m_captureSink = std::move(sink);
+    return true;
+}
+
+// Copy `srcImage` (in `srcLayout`) into a host-visible buffer and swizzle to tightly packed RGBA8
+// (opaque alpha) in `outRgba`, restoring the image to `restoreLayout`. This is the single readback path
+// behind both --screenshot (PNG) and the per-frame capture sink (#912), and is reused headless (#913)
+// with the owned present-target image + its layout. Synchronous (a full queue wait) — the recorder runs
+// offline at a reduced time-rate, so the per-frame stall is irrelevant and buys correctness + simplicity
+// over a zero-stall readback ring that cannot be verified without a GPU.
+bool VkRenderer::readbackImageRgba(VkImage srcImage, VkImageLayout srcLayout, VkImageLayout restoreLayout,
+                                   std::vector<uint8_t>& outRgba, uint32_t& outW, uint32_t& outH) {
     vkQueueWaitIdle(m_graphicsQueue);
 
     const uint32_t w = m_swapchainExtent.width;
     const uint32_t h = m_swapchainExtent.height;
     const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
-    VkImage srcImage = m_swapchainImages[m_currentImageIndex];
 
     // Host-visible destination buffer.
     VkBuffer buf = VK_NULL_HANDLE;
@@ -832,7 +901,7 @@ void VkRenderer::writeSwapchainPng(const std::string& path) {
     bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     if (vkCreateBuffer(m_device, &bci, nullptr, &buf) != VK_SUCCESS)
-        return;
+        return false;
     VkMemoryRequirements memReq{};
     vkGetBufferMemoryRequirements(m_device, buf, &memReq);
     VkMemoryAllocateInfo mai{};
@@ -842,11 +911,11 @@ void VkRenderer::writeSwapchainPng(const std::string& path) {
                                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     if (vkAllocateMemory(m_device, &mai, nullptr, &mem) != VK_SUCCESS) {
         vkDestroyBuffer(m_device, buf, nullptr);
-        return;
+        return false;
     }
     vkBindBufferMemory(m_device, buf, mem, 0);
 
-    // One-shot command buffer: PRESENT_SRC -> TRANSFER_SRC, copy, TRANSFER_SRC -> PRESENT_SRC.
+    // One-shot command buffer: srcLayout -> TRANSFER_SRC, copy, TRANSFER_SRC -> restoreLayout.
     VkCommandBufferAllocateInfo cbai{};
     cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     cbai.commandPool = m_commandPool;
@@ -873,12 +942,12 @@ void VkRenderer::writeSwapchainPng(const std::string& path) {
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                              nullptr, 1, &b);
     };
-    barrier(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, VK_ACCESS_TRANSFER_READ_BIT);
+    barrier(srcLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, VK_ACCESS_TRANSFER_READ_BIT);
     VkBufferImageCopy region{};
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.imageExtent = {w, h, 1};
     vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &region);
-    barrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_READ_BIT, 0);
+    barrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, restoreLayout, VK_ACCESS_TRANSFER_READ_BIT, 0);
     vkEndCommandBuffer(cmd);
 
     VkSubmitInfo si{};
@@ -889,27 +958,37 @@ void VkRenderer::writeSwapchainPng(const std::string& path) {
     vkQueueWaitIdle(m_graphicsQueue);
     vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
 
-    // Map, swizzle B8G8R8A8 -> R8G8B8A8 (opaque alpha), write PNG.
+    bool ok = false;
     void* mapped = nullptr;
     if (vkMapMemory(m_device, mem, 0, bytes, 0, &mapped) == VK_SUCCESS) {
-        std::vector<uint8_t> rgba(static_cast<std::size_t>(bytes));
+        outRgba.resize(static_cast<std::size_t>(bytes));
         const auto* src = static_cast<const uint8_t*>(mapped);
         const bool bgra =
             (m_swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB || m_swapchainFormat == VK_FORMAT_B8G8R8A8_UNORM);
-        for (std::size_t i = 0; i < rgba.size(); i += 4) {
-            rgba[i + 0] = bgra ? src[i + 2] : src[i + 0];
-            rgba[i + 1] = src[i + 1];
-            rgba[i + 2] = bgra ? src[i + 0] : src[i + 2];
-            rgba[i + 3] = 255;
-        }
+        captureSwizzleToRgba(src, w * h, bgra, outRgba.data());
         vkUnmapMemory(m_device, mem);
-        if (stbi_write_png(path.c_str(), static_cast<int>(w), static_cast<int>(h), 4, rgba.data(),
-                           static_cast<int>(w) * 4) == 0)
-            m_lastError = "screenshot: stbi_write_png failed for " + path;
+        outW = w;
+        outH = h;
+        ok = true;
     }
 
     vkDestroyBuffer(m_device, buf, nullptr);
     vkFreeMemory(m_device, mem, nullptr);
+    return ok;
+}
+
+void VkRenderer::writeSwapchainPng(const std::string& path) {
+    uint32_t w = 0, h = 0;
+    // The presented swapchain image is in PRESENT_SRC_KHR (windowed); headless owns its image (#913).
+    const VkImageLayout layout = m_headless ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    std::vector<uint8_t> rgba;
+    if (!readbackImageRgba(m_swapchainImages[m_currentImageIndex], layout, layout, rgba, w, h)) {
+        m_lastError = "screenshot: image readback failed for " + path;
+        return;
+    }
+    if (stbi_write_png(path.c_str(), static_cast<int>(w), static_cast<int>(h), 4, rgba.data(),
+                       static_cast<int>(w) * 4) == 0)
+        m_lastError = "screenshot: stbi_write_png failed for " + path;
 }
 
 // ---------------------------------------------------------------------------
@@ -1159,13 +1238,15 @@ bool VkRenderer::createInstance() {
 
     VkApplicationInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    ai.pApplicationName = SDL_GetWindowTitle(m_sdlWindow);
+    // Headless has no SDL window: use a fixed title and skip the WSI surface extensions (SDL video need
+    // not be initialized headless — SDL_Vulkan_GetInstanceExtensions would otherwise require it).
+    ai.pApplicationName = m_headless ? "fighters-legacy" : SDL_GetWindowTitle(m_sdlWindow);
     ai.applicationVersion = VK_MAKE_VERSION(0, 0, 1);
     ai.pEngineName = "fighters-legacy";
     ai.engineVersion = VK_MAKE_VERSION(0, 0, 1);
     ai.apiVersion = VK_API_VERSION_1_3;
 
-    auto exts = vk_getRequiredInstanceExtensions(m_sdlWindow);
+    auto exts = m_headless ? vk_getHeadlessInstanceExtensions() : vk_getRequiredInstanceExtensions(m_sdlWindow);
 
     VkInstanceCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -1243,7 +1324,8 @@ bool VkRenderer::pickPhysicalDevice() {
     vkEnumeratePhysicalDevices(m_instance, &count, devices.data());
 
     auto isSuitable = [&](VkPhysicalDevice dev, uint32_t& gf, uint32_t& pf) -> bool {
-        if (!checkDeviceExtension(dev, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
+        // Headless (#913) needs no swapchain extension and no present queue — just a graphics queue.
+        if (!m_headless && !checkDeviceExtension(dev, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
             return false;
 #if defined(__APPLE__)
         if (!checkDeviceExtension(dev, "VK_KHR_portability_subset"))
@@ -1268,6 +1350,12 @@ bool VkRenderer::pickPhysicalDevice() {
             if (!foundG && (qprops[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
                 gf = i;
                 foundG = true;
+            }
+            if (m_headless) {
+                // No surface: the "present" family is just the graphics family (never used to present).
+                pf = gf;
+                foundP = foundG;
+                continue;
             }
             VkBool32 present = VK_FALSE;
             vkGetPhysicalDeviceSurfaceSupportKHR(dev, i, m_surface, &present);
@@ -1337,7 +1425,9 @@ bool VkRenderer::createLogicalDevice() {
     if (!m_sameQueueFamily)
         addQueue(m_presentFamily);
 
-    std::vector<const char*> exts = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    std::vector<const char*> exts;
+    if (!m_headless) // headless (#913) never presents, so it needs no swapchain extension
+        exts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 #if defined(__APPLE__)
     exts.push_back("VK_KHR_portability_subset");
 #endif
@@ -1466,6 +1556,30 @@ bool VkRenderer::createSwapchain(int width, int height) {
     vkGetSwapchainImagesKHR(m_device, m_swapchain, &imgCount, nullptr);
     m_swapchainImages.resize(imgCount);
     vkGetSwapchainImagesKHR(m_device, m_swapchain, &imgCount, m_swapchainImages.data());
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// createPresentTargets — the headless (#913) swapchain replacement
+// ---------------------------------------------------------------------------
+bool VkRenderer::createPresentTargets(uint32_t width, uint32_t height) {
+    // R8G8B8A8_UNORM keeps the readback delivering RGBA directly (no swizzle) and drives the tonemap
+    // pipeline's colour-attachment format (built against m_swapchainFormat). The images carry
+    // COLOR_ATTACHMENT (tonemap renders into them) + TRANSFER_SRC (the capture sink reads them back).
+    m_swapchainFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    m_swapchainExtent = {width, height};
+    const uint32_t count = MAX_FRAMES_IN_FLIGHT;
+    m_swapchainImages.assign(count, VK_NULL_HANDLE);
+    m_swapchainImageViews.assign(count, VK_NULL_HANDLE);
+    m_presentTargetMemory.assign(count, VK_NULL_HANDLE);
+    for (uint32_t i = 0; i < count; ++i) {
+        if (!createAttachmentImage(
+                width, height, m_swapchainFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                VK_IMAGE_ASPECT_COLOR_BIT, m_swapchainImages[i], m_presentTargetMemory[i], m_swapchainImageViews[i])) {
+            m_lastError = "createPresentTargets: image creation failed";
+            return false;
+        }
+    }
     return true;
 }
 
@@ -4240,10 +4354,12 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             recordOverlayPass(cmd);
     }
 
-    // ── swapchain → PRESENT_SRC_KHR ───────────────────────────────────────
+    // ── present image → PRESENT_SRC_KHR (windowed) or TRANSFER_SRC (headless readback, #913) ──
     imageBarrier(cmd, m_swapchainImages[imageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                 VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0,
-                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+                 m_headless ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, m_headless ? VK_ACCESS_TRANSFER_READ_BIT : 0,
+                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                 m_headless ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
 
     // Timestamp: write "end" timestamp.
     if (m_timestampSupported && m_timestampPool != VK_NULL_HANDLE)
@@ -4264,6 +4380,18 @@ void VkRenderer::destroyImageViews() {
 
 void VkRenderer::cleanupSwapchain() {
     destroyImageViews();
+    if (m_headless) {
+        // Owned headless present targets (#913): destroy the images + their backing memory (the swapchain
+        // owns its images; we own these). Guarded so double-cleanup on shutdown is safe.
+        for (auto img : m_swapchainImages)
+            if (img != VK_NULL_HANDLE)
+                vkDestroyImage(m_device, img, nullptr);
+        for (auto mem : m_presentTargetMemory)
+            if (mem != VK_NULL_HANDLE)
+                vkFreeMemory(m_device, mem, nullptr);
+        m_swapchainImages.clear();
+        m_presentTargetMemory.clear();
+    }
     if (m_swapchain != VK_NULL_HANDLE) {
         vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
         m_swapchain = VK_NULL_HANDLE;

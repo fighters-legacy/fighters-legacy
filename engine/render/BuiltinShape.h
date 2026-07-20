@@ -21,6 +21,8 @@ enum class BuiltinShape : uint8_t {
     GroundVehicle,
     NavalVessel,
     Structure,
+    Parachute, // ejected-pilot canopy (#672): the one Effect-category entity that replicates and
+               // must render (a hanging chute), so Effect no longer maps to the Unknown beacon.
     Count,
 };
 

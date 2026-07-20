@@ -1,0 +1,31 @@
+name: "Demo: Dogfight"
+map: world
+layer: world_clear
+time: { hour: 12, minute: 0 }
+wind: { heading: 250, speed: 4 }
+sides: [blue, red]
+# A 2v2 close-in fight between builtin:fighter AI (guns + IR missile). Zero content pack — the aircraft
+# are the builtin placeholder silhouettes. Cameras are placed close to the merge so the placeholders
+# read at 720p. Timings are authored against the deterministic mission report; re-run
+# `fl-server --mission demo-dogfight.yaml --mission-report r.json` and adjust if the sim changes.
+objects:
+  - { type: builtin:debug-entity, id: blue1, side: blue, pos: [-1500, 1500, 300], heading: 90, ai: "lua builtin:fighter" }
+  - { type: builtin:debug-entity, id: blue2, side: blue, pos: [-1500, 1500, -300], heading: 90, ai: "lua builtin:fighter" }
+  - { type: builtin:debug-entity, id: red1, side: red, pos: [1500, 1700, 300], heading: 270, ai: "lua builtin:fighter" }
+  - { type: builtin:debug-entity, id: red2, side: red, pos: [1500, 1700, -300], heading: 270, ai: "lua builtin:fighter" }
+triggers:
+  - on: timer(90)
+    do: mission_failure
+cameras:
+  shots:
+    # Establishing: a wide static as the two flights close on the merge point (near the origin).
+    - { type: static, start: 0, duration: 7, pos: [0, 1650, -1400], look_at: blue1, fov: 55 }
+    # The merge: orbit the leading red bandit so both flights sweep through frame.
+    - { type: orbit, start: 7, duration: 12, target: red1, radius: 550, height: 140, period: 26 }
+    # Chase the blue lead into the fight from just behind and above.
+    - { type: chase, start: 19, duration: 14, target: blue1, offset: [-90, 25, 0], stiffness: 3.0, look_at: red1 }
+    # A move flyby sliding across the fight ball.
+    - { type: move, start: 33, duration: 8, look_at: red1, ease: smooth,
+        keyframes: [ { time: 0, pos: [1200, 1600, -900] }, { time: 8, pos: [-1200, 1600, 900] } ] }
+    # Track a survivor as the fight opens back up.
+    - { type: static, start: 41, duration: 7, pos: [0, 1900, -1600], look_at: blue2, fov: 50 }

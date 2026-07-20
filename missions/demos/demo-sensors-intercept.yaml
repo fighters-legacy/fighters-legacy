@@ -1,0 +1,26 @@
+name: "Demo: Sensors Intercept"
+map: world
+layer: world_clear
+time: { hour: 9, minute: 0 }
+wind: { heading: 180, speed: 5 }
+sides: [blue, red]
+# An honest-sensing intercept: a blue CAP on patrol detects an inbound red flight and runs the
+# intercept (builtin:fighter's patrol -> intercept -> engage chain over the shared sensor picture).
+# Cameras follow the interceptor, orbit the target at the detection range, and hold the merge. Zero pack.
+objects:
+  - { type: builtin:debug-entity, id: cap, side: blue, pos: [0, 2400, 0], heading: 90, ai: "lua builtin:fighter" }
+  - { type: builtin:debug-entity, id: bandit1, side: red, pos: [9000, 2600, 800], heading: 270, ai: "lua builtin:fighter" }
+  - { type: builtin:debug-entity, id: bandit2, side: red, pos: [9000, 2600, -800], heading: 270, ai: "lua builtin:fighter" }
+triggers:
+  - on: timer(100)
+    do: mission_failure
+cameras:
+  shots:
+    # Chase the interceptor outbound as it commits on the contact.
+    - { type: chase, start: 0, duration: 12, target: cap, offset: [-100, 26, 0], stiffness: 2.5, look_at: bandit1 }
+    # Orbit the lead bandit at the detection range as the picture builds.
+    - { type: orbit, start: 12, duration: 12, target: bandit1, radius: 600, height: 160, period: 30 }
+    # Hold a static at the merge so both flights cross frame.
+    - { type: static, start: 24, duration: 9, pos: [4500, 2900, -1800], look_at: cap, fov: 50 }
+    # Chase the winner off the merge.
+    - { type: chase, start: 33, duration: 9, target: cap, offset: [-110, 24, 30], stiffness: 3.0, look_at: bandit2 }

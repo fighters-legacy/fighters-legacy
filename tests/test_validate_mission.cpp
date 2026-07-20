@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mission_validator.h"
 
+#include "mission/MissionParser.h" // parseMission — camera shots need the parsed Mission model (#910)
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
@@ -407,4 +409,164 @@ max_hp = 100
     }
 
     fs::remove_all(pack);
+}
+
+// ── cameras: shot schema (#910) ─────────────────────────────────────────────────────────────────
+
+// A mission with one shot of every type, all cross-refs valid. Base for the happy-path + mutations.
+static const char* kCameraMission = R"yaml(
+name: "Camera Test"
+map: world
+layer: world_clear
+time: { hour: 12, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [nato, russia]
+objects:
+  - type: F22
+    id: player1
+    side: nato
+    pos: [0, 300, 0]
+    heading: 90
+  - type: Su27
+    id: bandit1
+    side: russia
+    pos: [1000, 300, 0]
+    heading: 270
+triggers:
+  - on: destroy(bandit1)
+    do: mission_success
+cameras:
+  shots:
+    - { type: static, start: 0, duration: 8, pos: [1200, 250, -300], look_at: player1, fov: 60 }
+    - { type: orbit, start: 8, duration: 12, target: bandit1, radius: 400, height: 60, period: 30 }
+    - { type: chase, start: 20, duration: 15, target: player1, offset: [-60, 15, 0], stiffness: 4.0, look_at: bandit1 }
+    - { type: move, start: 35, duration: 7, look_at: player1, ease: smooth, keyframes: [ { time: 0, pos: [800, 300, -100] }, { time: 7, pos: [-200, 280, 150] } ] }
+)yaml";
+
+TEST_CASE("cameras happy path parses all four shot types", "[mission-validator][cameras]") {
+    auto r = parseMission(kCameraMission);
+    CHECK(r.ok);
+    REQUIRE(r.errors.empty());
+    REQUIRE(r.mission.shots.size() == 4);
+    CHECK(r.mission.shots[0].type == ShotType::Static);
+    CHECK(r.mission.shots[1].type == ShotType::Orbit);
+    CHECK(r.mission.shots[2].type == ShotType::Chase);
+    CHECK(r.mission.shots[3].type == ShotType::Move);
+    // static defaults + values
+    CHECK(r.mission.shots[0].fovYDeg == 60.f);
+    CHECK(r.mission.shots[0].lookAtId == "player1");
+    CHECK(r.mission.shots[0].pos[0] == 1200.0);
+    // orbit values
+    CHECK(r.mission.shots[1].targetId == "bandit1");
+    CHECK(r.mission.shots[1].orbitRadiusM == 400.0);
+    CHECK(r.mission.shots[1].orbitPeriodSec == 30.0);
+    // chase values
+    CHECK(r.mission.shots[2].targetId == "player1");
+    CHECK(r.mission.shots[2].chaseStiffness == 4.0);
+    CHECK(r.mission.shots[2].lookAtId == "bandit1");
+    CHECK(r.mission.shots[2].chaseOffset[0] == -60.0);
+    // move keyframes
+    REQUIRE(r.mission.shots[3].keyframes.size() == 2);
+    CHECK(r.mission.shots[3].ease == ShotEase::Smooth);
+    CHECK(r.mission.shots[3].keyframes[1].pos[2] == 150.0);
+}
+
+TEST_CASE("cameras defaults applied when omitted", "[mission-validator][cameras]") {
+    // Orbit with only the required target; static look_at as a fixed point.
+    const char* yaml = R"yaml(
+name: "D"
+map: world
+layer: world_clear
+time: { hour: 12, minute: 0 }
+wind: { heading: 0, speed: 0 }
+sides: [nato]
+objects:
+  - { type: F22, id: a, side: nato, pos: [0,0,0], heading: 0 }
+triggers:
+  - { on: mission_start, do: mission_failure }
+cameras:
+  shots:
+    - { type: orbit, start: 0, duration: 5, target: a }
+    - { type: static, start: 5, duration: 5, pos: [10,20,30], look_at: [1,2,3] }
+)yaml";
+    auto r = parseMission(yaml);
+    CHECK(r.ok);
+    REQUIRE(r.mission.shots.size() == 2);
+    CHECK(r.mission.shots[0].orbitRadiusM == 300.0);  // default
+    CHECK(r.mission.shots[0].orbitHeightM == 50.0);   // default
+    CHECK(r.mission.shots[0].orbitPeriodSec == 30.0); // default
+    CHECK(r.mission.shots[0].fovYDeg == 60.f);        // default
+    CHECK(r.mission.shots[1].lookAtPointSet);
+    CHECK_FALSE(r.mission.shots[1].lookAtId.size());
+    CHECK(r.mission.shots[1].lookAtPoint[1] == 2.0);
+}
+
+TEST_CASE("cameras absent leaves shots empty and mission valid", "[mission-validator][cameras]") {
+    auto r = parseMission(kValidMission);
+    CHECK(r.ok);
+    CHECK(r.mission.shots.empty());
+}
+
+TEST_CASE("cameras unknown shot type is an error", "[mission-validator][cameras]") {
+    auto r = parseMission(replace_first(kCameraMission, "type: static", "type: dolly"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("cameras overlapping shots are an error", "[mission-validator][cameras]") {
+    // Shift the second shot to start at 4, inside the first shot's [0, 8) span.
+    auto r = parseMission(replace_first(kCameraMission, "type: orbit, start: 8", "type: orbit, start: 4"));
+    CHECK_FALSE(r.ok);
+    bool overlap = false;
+    for (const auto& e : r.errors)
+        if (e.find("overlap") != std::string::npos)
+            overlap = true;
+    CHECK(overlap);
+}
+
+TEST_CASE("cameras unknown target id is an error", "[mission-validator][cameras]") {
+    auto r = parseMission(replace_first(kCameraMission, "target: bandit1, radius", "target: ghost, radius"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("cameras unknown look_at id is an error", "[mission-validator][cameras]") {
+    auto r = parseMission(replace_first(kCameraMission, "look_at: player1, fov", "look_at: ghost, fov"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("cameras fov out of range is an error", "[mission-validator][cameras]") {
+    auto r = parseMission(replace_first(kCameraMission, "fov: 60", "fov: 200"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("cameras move with fewer than two keyframes is an error", "[mission-validator][cameras]") {
+    auto r = parseMission(replace_first(
+        kCameraMission, "keyframes: [ { time: 0, pos: [800, 300, -100] }, { time: 7, pos: [-200, 280, 150] } ]",
+        "keyframes: [ { time: 0, pos: [800, 300, -100] } ]"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("cameras static without look_at is an error", "[mission-validator][cameras]") {
+    auto r = parseMission(replace_first(
+        kCameraMission, "type: static, start: 0, duration: 8, pos: [1200, 250, -300], look_at: player1, fov: 60",
+        "type: static, start: 0, duration: 8, pos: [1200, 250, -300], fov: 60"));
+    CHECK_FALSE(r.ok);
+}
+
+TEST_CASE("cameras-only sidecar doc parses shots via the same entry point", "[mission-validator][cameras]") {
+    // A --shot-track sidecar: just a cameras: block, no objects. It is not a valid *mission* (missing
+    // name/map/objects/…), but the shots parse and its id cross-refs are not checked (no objects).
+    const char* sidecar = R"yaml(
+cameras:
+  shots:
+    - { type: orbit, start: 0, duration: 10, target: whoever, radius: 500 }
+    - { type: static, start: 10, duration: 5, pos: [0, 100, 0], look_at: [0,0,0] }
+)yaml";
+    auto r = parseMission(sidecar);
+    CHECK_FALSE(r.ok); // missing required mission fields
+    REQUIRE(r.mission.shots.size() == 2);
+    CHECK(r.mission.shots[0].targetId == "whoever");
+    CHECK(r.mission.shots[0].orbitRadiusM == 500.0);
+    // The unknown target id did NOT produce an error (sidecar has no objects to check against).
+    for (const auto& e : r.errors)
+        CHECK(e.find("whoever") == std::string::npos);
 }

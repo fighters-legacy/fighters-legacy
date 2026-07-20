@@ -14,6 +14,7 @@
 #include "FlightInputCollector.h"
 #include "FlightScreen.h"
 #include "HapticController.h"
+#include "HeadlessHal.h"
 #include "IWindowEventHandler.h"
 #include "LocalServer.h"
 #include "MainMenuScreen.h"
@@ -22,11 +23,13 @@
 #include "NetworkFactory.h"
 #include "Platform.h"
 #include "PrecipitationController.h"
+#include "RecordScheduler.h"
 #include "ScreenManager.h"
 #include "ServerNotice.h"
 #include "SessionStatus.h"
 #include "SubtitleOverlay.h"
 #include "Version.h"
+#include "VideoEncoderPipe.h"
 #include "WingmanMenu.h"
 #include "audio/MusicBuiltinTracks.h"
 #include "audio/MusicManager.h"
@@ -54,6 +57,7 @@
 #include "input/AxisConfig.h"
 #include "input/InputBindings.h"
 #include "mission/MissionParser.h"
+#include "mission/ShotDirector.h"
 #include "net/DiscoveryListener.h"
 #include "net/GameProtocol.h"
 #include "openal/OALAudio.h"
@@ -335,6 +339,41 @@ struct GameServices {
     std::string screenshotPath;
     int screenshotFrames{600}; // ~10 s at 60 fps: enough for terrain + airports to stream in
 
+    // Headless client (#913): no window, no display, swapchain-free renderer (pair with a software
+    // Vulkan ICD like lavapipe for no-GPU rendering). The camera is driven by the recorder, not input.
+    bool headless{false};
+    int headlessW{1280};
+    int headlessH{720};
+
+    // Cinematic recorder (#916): drives the camera from the mission's `cameras:` shots via ShotDirector
+    // and pipes rendered frames to ffmpeg (mp4) or a PNG sequence. Active when --record/--record-png-dir
+    // is set. The capture-boundary scheduler emits one frame per boundary and fails loud on drops.
+    struct Recorder {
+        bool active{false};
+        std::string outPath;       // --record <out.mp4>
+        std::string pngDir;        // --record-png-dir <dir> (ffmpeg-free fallback)
+        std::string shotTrackPath; // --shot-track <yaml>; empty = fall back to the --mission file
+        int fps{30};
+        bool exitOnMissionEnd{false};
+        int maxSec{0};        // wall-clock recording cap in seconds; 0 = no cap
+        uint64_t maxDup{300}; // duplicated-frame cap; exceeding it fails the run (non-zero exit)
+
+        std::unique_ptr<fl::ShotDirector> director;
+        std::optional<fl::RecordScheduler> scheduler;
+        fl::VideoEncoderPipe encoder;
+
+        std::vector<uint8_t> lastFrame;       // most recent captured RGBA frame (from the sink)
+        uint32_t lastW{0}, lastH{0};          // its dimensions
+        uint64_t lastFrameIndex{UINT64_MAX};  // renderer frameIndex of lastFrame (dup detection)
+        uint64_t lastPushedIndex{UINT64_MAX}; // frameIndex last pushed to the encoder
+        float curFovDeg{60.f};                // FOV of the active shot, fed into view()
+        uint64_t startWallNs{0};              // wall clock at first recorded frame (maxSec)
+        bool started{false};                  // has the first frame been pushed
+        bool encoderFailed{false};            // a push/open error occurred
+    };
+    Recorder recorder;
+    int exitCode{0};
+
     // HUD / overlays
     EnvironmentState env;
     fl::FlightHud flightHud;
@@ -441,10 +480,165 @@ bool Game::init(int argc, char** argv) {
         return false;
     if (!initContent())
         return false;
+    if (!initRecorder()) // #916: build the ShotDirector + open the encoder; failure aborts init
+        return false;
     initGameSystems();
     initGameConsole();
     initScreenManager();
     return true;
+}
+
+int Game::exitCode() const {
+    return m_impl->services.exitCode;
+}
+
+bool Game::initRecorder() {
+    auto& d = *m_impl;
+    auto& rec = d.services.recorder;
+    if (!rec.active)
+        return true;
+
+    // Load the camera shots: the --shot-track sidecar if given, else the --mission file (a readable
+    // path). Both parse through the single schema owner (parseMission), so a cameras-only sidecar and a
+    // full mission with a cameras: block are handled identically.
+    const std::string shotFile = !rec.shotTrackPath.empty() ? rec.shotTrackPath : d.services.autoStartMission;
+    std::vector<fl::MissionShot> shots;
+    if (!shotFile.empty()) {
+        std::ifstream f(shotFile, std::ios::binary);
+        if (f) {
+            std::string yaml((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            fl::MissionParseResult parsed = fl::parseMission(yaml);
+            shots = std::move(parsed.mission.shots);
+        } else {
+            d.services.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__,
+                                      ("recorder: cannot open shot track \"" + shotFile + "\"").c_str());
+        }
+    }
+    if (shots.empty())
+        d.services.rawLogger->log(LogLevel::Warn, __FILE__, __LINE__,
+                                  "recorder: no camera shots found — the camera will hold a default pose");
+    rec.director = std::make_unique<fl::ShotDirector>(std::move(shots));
+    rec.scheduler.emplace(rec.fps);
+
+    // Open the encoder: a PNG sequence if --record-png-dir, else ffmpeg mp4. FL_FFMPEG overrides the
+    // executable. A failure to open is fatal — a recording run must not silently produce nothing.
+    const uint32_t w = static_cast<uint32_t>(d.services.headlessW);
+    const uint32_t h = static_cast<uint32_t>(d.services.headlessH);
+    bool opened = false;
+    if (!rec.pngDir.empty()) {
+        opened = rec.encoder.openPngDir(rec.pngDir, w, h);
+    } else {
+        const char* ff = SDL_getenv("FL_FFMPEG");
+        opened = rec.encoder.openFfmpeg(rec.outPath, w, h, rec.fps, ff ? ff : "");
+    }
+    if (!opened) {
+        d.services.rawLogger->log(LogLevel::Error, __FILE__, __LINE__,
+                                  rec.encoder.lastError() ? rec.encoder.lastError() : "recorder: encoder open failed");
+        return false;
+    }
+    rec.lastFrame.assign(static_cast<std::size_t>(w) * h * 4u, 0);
+    rec.lastW = w;
+    rec.lastH = h;
+
+    // Install the capture sink: copy each rendered frame into lastFrame. The record loop pushes it to
+    // the encoder at capture boundaries (dup detection keys on the renderer frameIndex).
+    d.services.p.renderer->setCaptureSink([&rec](const fl::CaptureFrame& cf) {
+        const std::size_t bytes = static_cast<std::size_t>(cf.width) * cf.height * 4u;
+        if (cf.pixels && cf.width == rec.lastW && cf.height == rec.lastH && rec.lastFrame.size() == bytes) {
+            std::memcpy(rec.lastFrame.data(), cf.pixels, bytes);
+            rec.lastFrameIndex = cf.frameIndex;
+        }
+    });
+    d.services.rawLogger->log(LogLevel::Info, __FILE__, __LINE__, "recorder: armed");
+    return true;
+}
+
+void Game::driveRecorderCamera() {
+    auto& d = *m_impl;
+    auto& rec = d.services.recorder;
+    if (!rec.director || !d.services.renderBridge.hasSnapshot() || !d.session.clientHandler)
+        return;
+    const fl::RenderSnapshot& snap = d.services.renderBridge.current();
+    const double simTime = static_cast<double>(snap.tickIndex) / 60.0;
+    auto* handler = d.session.clientHandler.get();
+    // Resolve a mission object id -> its live world pose via the #914 roster + the render snapshot.
+    auto poseOf = [&](std::string_view id, glm::dvec3& pos, glm::dquat& orient) -> bool {
+        uint32_t idx = 0;
+        uint16_t gen = 0;
+        if (!handler->missionEntity(std::string(id), idx, gen))
+            return false;
+        for (const auto& e : snap.entries) {
+            if (e.entityIdx == idx && e.entityGen == gen) {
+                pos = e.position;
+                orient = glm::dquat(e.orientation);
+                return true;
+            }
+        }
+        return false;
+    };
+    const fl::ShotPose sp = rec.director->evaluate(simTime, poseOf);
+    d.services.cameraController.setMode(fl::CameraMode::Free); // the recorder owns the pose
+    d.services.cameraController.setPose(sp.eye, sp.fwd, sp.up);
+    rec.curFovDeg = sp.fovYDeg;
+}
+
+void Game::recorderEmit(bool& running) {
+    auto& d = *m_impl;
+    auto& rec = d.services.recorder;
+    if (!rec.scheduler || !d.services.renderBridge.hasSnapshot())
+        return;
+    const uint64_t latestTick = d.services.renderBridge.current().tickIndex;
+    const uint64_t nowNs = SDL_GetTicksNS();
+    if (!rec.started) {
+        rec.startWallNs = nowNs;
+        rec.started = true;
+    }
+    // Push one video frame per capture boundary reached since the last call. The scheduler counts how
+    // many of these are duplicates (the sim advanced past more than one boundary between renders).
+    const int frames = rec.scheduler->boundariesDue(latestTick);
+    for (int k = 0; k < frames; ++k) {
+        if (!rec.encoder.pushFrame(rec.lastFrame.data(), rec.lastW, rec.lastH)) {
+            rec.encoderFailed = true;
+            running = false;
+            return;
+        }
+        rec.lastPushedIndex = rec.lastFrameIndex;
+    }
+
+    // Stop conditions: the shot list ran out, the mission objective ended (--exit-on-mission-end), or the
+    // wall-clock safety cap tripped.
+    const double simTime = static_cast<double>(latestTick) / 60.0;
+    const bool tracksDone =
+        rec.director && rec.director->totalDurationSec() > 0.0 && simTime >= rec.director->totalDurationSec();
+    const bool missionEnded = rec.exitOnMissionEnd && d.session.clientHandler &&
+                              d.session.clientHandler->missionOutcome() != fl::MissionResultCode::Incomplete;
+    const bool timedOut =
+        rec.maxSec > 0 && (nowNs - rec.startWallNs) >= static_cast<uint64_t>(rec.maxSec) * 1'000'000'000ull;
+    if (tracksDone || missionEnded || timedOut)
+        running = false;
+}
+
+void Game::recorderFinish() {
+    auto& d = *m_impl;
+    auto& rec = d.services.recorder;
+    if (!rec.active)
+        return;
+    // Detach the sink before tearing the encoder down so no late frame reaches a closed pipe.
+    if (d.services.p.renderer)
+        d.services.p.renderer->setCaptureSink({});
+    const bool encoderOk = rec.encoder.close() && !rec.encoderFailed;
+    const uint64_t dups = rec.scheduler ? rec.scheduler->dupFrames() : 0;
+    const uint64_t total = rec.scheduler ? rec.scheduler->totalFrames() : 0;
+    const bool dupExceeded = dups > rec.maxDup;
+
+    char msg[224];
+    std::snprintf(msg, sizeof(msg), "recorder: %llu frame(s), %llu duplicate(s) (cap %llu); encoder %s",
+                  static_cast<unsigned long long>(total), static_cast<unsigned long long>(dups),
+                  static_cast<unsigned long long>(rec.maxDup), encoderOk ? "ok" : "FAILED");
+    d.services.rawLogger->log(encoderOk && !dupExceeded ? LogLevel::Info : LogLevel::Error, __FILE__, __LINE__, msg);
+
+    if (!encoderOk || dupExceeded)
+        d.services.exitCode = 1; // bad video is loud: non-zero exit fails the record_demo.py run
 }
 
 // Steps 1–7: logger, filesystem, user config, audio, input.
@@ -506,6 +700,28 @@ bool Game::initPlatform(int argc, char** argv) {
             d.services.autoStartMission = argv[i + 1];
             d.services.autoStart = true;
         }
+        // ── Cinematic recorder (#916) ─────────────────────────────────────────
+        else if (std::strcmp(argv[i], "--record") == 0) {
+            d.services.recorder.outPath = argv[i + 1];
+            d.services.recorder.active = true;
+        } else if (std::strcmp(argv[i], "--record-png-dir") == 0) {
+            d.services.recorder.pngDir = argv[i + 1];
+            d.services.recorder.active = true;
+        } else if (std::strcmp(argv[i], "--record-fps") == 0) {
+            d.services.recorder.fps = std::atoi(argv[i + 1]);
+        } else if (std::strcmp(argv[i], "--record-res") == 0) {
+            int w = 0, h = 0;
+            if (std::sscanf(argv[i + 1], "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
+                d.services.headlessW = w;
+                d.services.headlessH = h;
+            }
+        } else if (std::strcmp(argv[i], "--shot-track") == 0) {
+            d.services.recorder.shotTrackPath = argv[i + 1];
+        } else if (std::strcmp(argv[i], "--record-max-sec") == 0) {
+            d.services.recorder.maxSec = std::atoi(argv[i + 1]);
+        } else if (std::strcmp(argv[i], "--record-max-dup") == 0) {
+            d.services.recorder.maxDup = static_cast<uint64_t>(std::max(0, std::atoi(argv[i + 1])));
+        }
     }
 
     // Value-less flags (scanned separately so they work as the final argument too).
@@ -514,6 +730,10 @@ bool Game::initPlatform(int argc, char** argv) {
             d.services.requestObserver = true; // join as a spectator, no aircraft (#857)
         else if (std::strcmp(argv[i], "--auto") == 0)
             d.services.autoStart = true; // menu bypass: Free Flight, or Join Server with --connect
+        else if (std::strcmp(argv[i], "--headless") == 0)
+            d.services.headless = true; // no window/display; swapchain-free renderer (#913)
+        else if (std::strcmp(argv[i], "--exit-on-mission-end") == 0)
+            d.services.recorder.exitOnMissionEnd = true; // stop recording at the objective outcome (#916)
     }
 
     // Merge operator password: CLI arg > FL_OPERATOR_PASSWORD env var > [client].operator_password.
@@ -541,6 +761,34 @@ bool Game::initPlatform(int argc, char** argv) {
 // Steps 8–14: window, crash reporter, renderer, async filesystem, graphics settings.
 bool Game::initWindowAndRenderer() {
     auto& d = *m_impl;
+
+    if (d.services.headless) {
+        // Headless client (#913): no OS window, no input sink, no display/cursor backends. The renderer
+        // presents to owned images (initHeadless) instead of a swapchain; paired with a software Vulkan
+        // ICD (lavapipe) it renders with no display and no GPU. The camera is driven by the recorder.
+        const int hw = d.services.headlessW, hh = d.services.headlessH;
+        d.services.p.window = std::make_unique<HeadlessWindow>(hw, hh);
+        d.services.p.window->init("Fighters Legacy", hw, hh);
+        d.services.p.display = std::make_unique<HeadlessDisplay>();
+        // p.cursor stays null (never dereferenced headless — Settings is unreachable).
+
+        d.services.p.renderer = createVulkanRenderer();
+        if (!d.services.p.renderer->initHeadless(static_cast<uint32_t>(hw), static_cast<uint32_t>(hh))) {
+            d.services.rawLogger->log(LogLevel::Error, __FILE__, __LINE__, "headless renderer init failed");
+            return false;
+        }
+        d.services.crashReporter.setGpuInfo(d.services.p.renderer->gpuInfo());
+        d.services.rendererSettings = buildRendererSettings(d.services.userConfig->graphics());
+        d.services.p.renderer->applySettings(d.services.rendererSettings);
+
+        auto asyncFsH = std::make_unique<StdAsyncFilesystem>(d.services.assetsRoot, d.services.userDataDir);
+        if (!asyncFsH->init()) {
+            d.services.rawLogger->log(LogLevel::Error, __FILE__, __LINE__, asyncFsH->getLastError());
+            return false;
+        }
+        d.services.p.asyncFilesystem = std::move(asyncFsH);
+        return true;
+    }
 
     d.services.p.window = std::make_unique<SDL3Window>();
 
@@ -1542,7 +1790,14 @@ void Game::run() {
         // and the camera has no valid entity target yet, so rendering would show stale
         // state (underground camera -> blue sky) bleeding through the overlay.
         if (inSession && cur != Screen::Loading && d.session.clientHandler && d.services.renderBridge.hasSnapshot()) {
-            cam = d.services.cameraController.view(aspect);
+            // Cinematic recorder (#916): override the camera with the shot-driven pose + per-shot FOV
+            // before building the view. Only in Flight, once entities are streaming.
+            if (d.services.recorder.active && cur == Screen::Flight) {
+                driveRecorderCamera();
+                cam = d.services.cameraController.view(aspect, glm::radians(d.services.recorder.curFovDeg), 0.1f);
+            } else {
+                cam = d.services.cameraController.view(aspect);
+            }
             camOrigin = cam.worldOrigin;
 
             // Geographic sun (#481): the sun direction is PER-OBSERVER — derived from this camera's
@@ -1630,9 +1885,18 @@ void Game::run() {
         }
 
         d.services.p.renderer->endFrame();
+
+        // Cinematic recorder (#916): endFrame() has just delivered this frame to the capture sink
+        // (lastFrame). Push it to the encoder at every capture boundary reached, and stop when the shot
+        // list / mission / wall-clock cap says so.
+        if (d.services.recorder.active && cur == Screen::Flight)
+            recorderEmit(running);
+
         d.services.p.input->flush();
         d.services.p.joystick->flush();
     }
+
+    recorderFinish(); // close the encoder + set the exit code (#916)
 }
 
 } // namespace fl

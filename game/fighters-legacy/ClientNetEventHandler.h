@@ -90,6 +90,18 @@ struct ClientNetEventHandler : INetworkEventHandler {
         return it != m_factionNames.end() ? it->second : std::string{};
     }
 
+    // Resolve a mission object id (e.g. "bandit1") to its network entity idx/gen from the MsgMissionRoster
+    // table (#914). Returns false when the id is not in the roster (no mission, unbound player slot, or an
+    // unknown id). Used by the cinematic recorder to drive entity-relative camera shots.
+    bool missionEntity(const std::string& objectId, uint32_t& outIdx, uint16_t& outGen) const {
+        const auto it = m_missionRoster.find(objectId);
+        if (it == m_missionRoster.end())
+            return false;
+        outIdx = it->second.first;
+        outGen = it->second.second;
+        return true;
+    }
+
     // The seat roster of a crewed aircraft (#972), or nullptr when the entity is single-seat / unknown.
     // Keyed by entity index; the stored gen guards against a pool-slot reuse applying a stale roster.
     const CrewRosterInfo* crewRoster(uint32_t entityIdx) const {
@@ -331,6 +343,10 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // Faction index -> display name, from MsgFactionDef sent once after ConnectAck (#860). Used by the
     // observer entity picker to label an entity's faction.
     std::unordered_map<uint16_t, std::string> m_factionNames;
+
+    // Mission object id -> {entityIdx, entityGen}, from MsgMissionRoster after ConnectAck + late deltas
+    // (#914). Lets the cinematic recorder resolve an entity-relative camera shot's target to an entity.
+    std::unordered_map<std::string, std::pair<uint32_t, uint16_t>> m_missionRoster;
 
     // Entity retention cache (#516). The priority/budget scheduler omits low-priority entities from
     // some snapshots, so the rendered set must persist across packets rather than be rebuilt per

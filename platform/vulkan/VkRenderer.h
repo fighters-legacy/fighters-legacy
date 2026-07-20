@@ -148,6 +148,7 @@ static_assert(sizeof(ParticleSimPush) <= 128);
 class VkRenderer : public IRenderer {
   public:
     bool init(IWindow* window) override;
+    bool initHeadless(uint32_t width, uint32_t height) override;
     void onResize(int width, int height) override;
     void beginFrame() override;
     void endFrame() override;
@@ -180,6 +181,7 @@ class VkRenderer : public IRenderer {
     void submitOverlayElements(std::span<const HudElement> elements) override;
     void setConsoleElements(std::span<const HudElement> elements) override;
     bool captureScreenshot(const char* path) override;
+    bool setCaptureSink(std::function<void(const CaptureFrame&)> sink) override;
 
   private:
     // ── Core Vulkan objects ────────────────────────────────────────────────
@@ -189,8 +191,17 @@ class VkRenderer : public IRenderer {
     bool pickPhysicalDevice();
     bool createLogicalDevice();
 
+    // Shared init tail (props → device → swapchain/present-targets → pipelines → sync) used by both
+    // init() and initHeadless() (#913). The two front paths differ only in instance extensions, surface
+    // creation, and physical-device selection; everything from here is identical.
+    bool finishInit(uint32_t width, uint32_t height);
+
     // ── Swapchain ──────────────────────────────────────────────────────────
     bool createSwapchain(int width, int height);
+    // Headless present targets (#913): MAX_FRAMES_IN_FLIGHT owned images (R8G8B8A8_UNORM,
+    // COLOR_ATTACHMENT | TRANSFER_SRC) the tonemap pass renders into and the capture sink reads back;
+    // populates m_swapchainImages/Views/Format/Extent so the rest of the renderer is unchanged.
+    bool createPresentTargets(uint32_t width, uint32_t height);
     bool createImageViews();
     bool recreateSwapchain();
     void destroyImageViews();
@@ -299,10 +310,11 @@ class VkRenderer : public IRenderer {
     VkQueue m_graphicsQueue{VK_NULL_HANDLE};
     VkQueue m_presentQueue{VK_NULL_HANDLE};
 
-    // ── Swapchain ─────────────────────────────────────────────────────────
-    VkSwapchainKHR m_swapchain{VK_NULL_HANDLE};
-    std::vector<VkImage> m_swapchainImages;
+    // ── Swapchain (or headless present targets, #913) ─────────────────────
+    VkSwapchainKHR m_swapchain{VK_NULL_HANDLE}; // VK_NULL_HANDLE when headless
+    std::vector<VkImage> m_swapchainImages;     // swapchain images, or owned headless targets
     std::vector<VkImageView> m_swapchainImageViews;
+    std::vector<VkDeviceMemory> m_presentTargetMemory; // backing memory for owned headless targets only
     VkFormat m_swapchainFormat{VK_FORMAT_UNDEFINED};
     VkExtent2D m_swapchainExtent{};
 
@@ -512,10 +524,20 @@ class VkRenderer : public IRenderer {
 
     SDL_Window* m_sdlWindow{nullptr};
     IWindow* m_iWindow{nullptr};
+    bool m_headless{false}; // #913: swapchain-free init (no window, no present); set by initHeadless()
     std::string m_shaderDir;
     mutable std::string m_lastError;
     std::string m_pendingScreenshotPath;             // #909: capture the next presented frame to this PNG when set
     void writeSwapchainPng(const std::string& path); // reads the just-presented swapchain image → PNG
+    // Per-frame capture sink (#912): when set, every rendered frame's RGBA pixels are delivered here at
+    // the end of endFrame(). Reused headless (#913). Synchronous readback — correctness over the
+    // zero-stall ring, since the recorder runs offline at a reduced time-rate (see VkRenderer.cpp).
+    std::function<void(const CaptureFrame&)> m_captureSink;
+    std::vector<uint8_t> m_captureBuf; // reused RGBA scratch for the sink (avoids per-frame realloc)
+    // Copy `srcImage` (currently in `srcLayout`) into a host buffer and swizzle to tightly packed RGBA8
+    // (opaque alpha) in `outRgba`; restores the image to `restoreLayout`. Returns false on failure.
+    bool readbackImageRgba(VkImage srcImage, VkImageLayout srcLayout, VkImageLayout restoreLayout,
+                           std::vector<uint8_t>& outRgba, uint32_t& outW, uint32_t& outH);
     std::string m_gpuInfo;
 
     // ── Per-frame stats ───────────────────────────────────────────────────

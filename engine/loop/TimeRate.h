@@ -8,18 +8,24 @@ namespace fl {
 // At Octa (8×), 1 real second advances 8 seconds of sim time (more ticks per second).
 // At Half (½×), the sim runs at half real-time speed (fewer ticks per second).
 enum class TimeRate {
-    Paused, // multiplier = 0.0  — sim time does not advance
-    Half,   // multiplier = 0.5
-    Normal, // multiplier = 1.0
-    Double, // multiplier = 2.0
-    Quad,   // multiplier = 4.0
-    Octa,   // multiplier = 8.0
+    Paused,  // multiplier = 0.0    — sim time does not advance
+    Eighth,  // multiplier = 0.125  — sim runs at 1/8 real time (slow serving for a slow recorder)
+    Quarter, // multiplier = 0.25   — sim runs at 1/4 real time
+    Half,    // multiplier = 0.5
+    Normal,  // multiplier = 1.0
+    Double,  // multiplier = 2.0
+    Quad,    // multiplier = 4.0
+    Octa,    // multiplier = 8.0
 };
 
 constexpr double timeRateMultiplier(TimeRate r) noexcept {
     switch (r) {
     case TimeRate::Paused:
         return 0.0;
+    case TimeRate::Eighth:
+        return 0.125;
+    case TimeRate::Quarter:
+        return 0.25;
     case TimeRate::Half:
         return 0.5;
     case TimeRate::Normal:

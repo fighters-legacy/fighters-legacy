@@ -29,6 +29,10 @@ TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game
     CHECK(offsetof(fl::MsgFactionDef, factionIndex) == 2u);
     CHECK(offsetof(fl::MsgFactionDef, id) == 4u);
     CHECK(offsetof(fl::MsgFactionDef, name) == 68u);
+    CHECK(sizeof(fl::MsgMissionRoster) == 72u); // #914: 1+1+2 + 4 + 64
+    CHECK(offsetof(fl::MsgMissionRoster, entityGen) == 2u);
+    CHECK(offsetof(fl::MsgMissionRoster, entityIdx) == 4u);
+    CHECK(offsetof(fl::MsgMissionRoster, objectId) == 8u);
     CHECK(sizeof(fl::MsgWorldSnapshotHeader) == 24u); // #725: origin table + record stream follow the header
     CHECK(sizeof(fl::MsgClientInput) == 80u);         // #858: +cameraEye[3] double @56 (observer interest)
     CHECK(sizeof(fl::MsgHeartbeat) == 16u);
@@ -44,6 +48,35 @@ TEST_CASE("GameProtocol: MsgId space reserves 0x00-0x1F for ENet, 0x20+ for raw 
     CHECK(static_cast<uint8_t>(fl::MsgId::ConnectRequest) == 0x11u);
     CHECK(static_cast<uint8_t>(fl::MsgId::LanBeacon) == 0x20u);
     CHECK(static_cast<uint8_t>(fl::MsgId::CombatEvent) < 0x20u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::MissionRoster) == 0x1Bu); // #914, an ENet id below 0x20
+}
+
+TEST_CASE("GameProtocol: MsgMissionRoster round-trips as concatenated records (#914)", "[game_protocol]") {
+    std::vector<uint8_t> buf;
+    fl::MsgMissionRoster a{};
+    a.entityIdx = 7;
+    a.entityGen = 3;
+    std::snprintf(a.objectId, sizeof(a.objectId), "%s", "bandit1");
+    fl::MsgMissionRoster b{};
+    b.entityIdx = 42;
+    b.entityGen = 1;
+    std::snprintf(b.objectId, sizeof(b.objectId), "%s", "player1");
+    fl::appendMsg(buf, a);
+    fl::appendMsg(buf, b);
+
+    REQUIRE(buf.size() == 2u * sizeof(fl::MsgMissionRoster));
+    const std::size_t count = buf.size() / sizeof(fl::MsgMissionRoster);
+    REQUIRE(count == 2u);
+
+    fl::MsgMissionRoster r0{}, r1{};
+    REQUIRE(fl::readRecordAt(buf.data(), buf.size(), 0, r0));
+    REQUIRE(fl::readRecordAt(buf.data(), buf.size(), sizeof(r0), r1));
+    CHECK(r0.msgId == static_cast<uint8_t>(fl::MsgId::MissionRoster));
+    CHECK(r0.entityIdx == 7u);
+    CHECK(r0.entityGen == 3u);
+    CHECK(std::string(r0.objectId) == "bandit1");
+    CHECK(r1.entityIdx == 42u);
+    CHECK(std::string(r1.objectId) == "player1");
 }
 
 TEST_CASE("GameProtocol: MsgConnectRequest field offsets + role validation (#853)", "[game_protocol]") {

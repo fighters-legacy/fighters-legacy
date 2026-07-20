@@ -67,7 +67,8 @@ error, with the same "Recalculate Outside" hint. Run it on your exported `.glb` 
 ### Reference meshes
 
 The engine's built-in placeholder shapes (#886 — one per category: aircraft, missile, bomb,
-rocket, ground vehicle, naval vessel, structure, plus the Unknown error beacon; outward normals)
+rocket, ground vehicle, naval vessel, structure, the ejected-pilot parachute (#672), plus the
+Unknown error beacon; outward normals)
 are the canonical reference for **winding, scale and proportion**. They are engine-internal meshes
 in the **body frame (+X forward)** — they bypass the content-import rotation — so when you import
 them into Blender they will appear **90° rotated** from your own +Z-forward content. That is
@@ -78,8 +79,9 @@ that your faces are all-blue (outward) and your scale is right, not to copy the 
 python3 tools/gen_builtin_glb.py --export-dir /tmp/builtin
 # writes /tmp/builtin/builtin_aircraft.glb, builtin_missile.glb, builtin_bomb.glb,
 #        builtin_rocket.glb, builtin_ground_vehicle.glb, builtin_naval_vessel.glb,
-#        builtin_structure.glb, builtin_unknown.glb (+ *_damaged wreck variants,
-#        all-blue from outside) and builtin_floor.glb (Y-up ground quad)
+#        builtin_structure.glb, builtin_parachute.glb, builtin_unknown.glb
+#        (+ *_damaged wreck variants, all-blue from outside) and builtin_floor.glb
+#        (Y-up ground quad)
 ```
 
 ---
