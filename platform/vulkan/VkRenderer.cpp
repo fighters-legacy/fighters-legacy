@@ -822,6 +822,39 @@ void VkRenderer::endFrame() {
     // Headless has no acquire (nothing signals imageAvailable) and no present — submit bare (#913).
     vkQueueSubmit(m_graphicsQueue, 1, &si, m_inFlightFences[m_currentFrame]);
 
+    // Readback runs BEFORE present. Once vkQueuePresentKHR hands the swapchain image to the
+    // presentation engine its contents are undefined per the Vulkan spec until re-acquired — a real
+    // driver (e.g. NVIDIA) then reads back all black, even though the on-screen frame is correct.
+    // Here the app still owns the rendered image: windowed it is already in PRESENT_SRC_KHR (the
+    // render pass' final layout), headless it owns the image in TRANSFER_SRC_OPTIMAL (#913).
+    // readbackImageRgba transitions to TRANSFER_SRC, copies, and restores that same layout, so the
+    // image is still present-ready afterwards. vkQueueWaitIdle inside it drains the render first.
+    const VkImageLayout captureLayout =
+        m_headless ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    // Screenshot readback (#909 groundwork): copy the rendered image to a host-visible buffer and
+    // write the PNG. Not a hot path — a stall is fine for a dev/verification capture.
+    if (!m_pendingScreenshotPath.empty()) {
+        const std::string path = std::move(m_pendingScreenshotPath);
+        m_pendingScreenshotPath.clear();
+        writeSwapchainPng(path);
+    }
+
+    // Per-frame capture sink (#912): deliver this frame's RGBA pixels to the recorder.
+    if (m_captureSink) {
+        uint32_t w = 0, h = 0;
+        if (readbackImageRgba(m_swapchainImages[m_currentImageIndex], captureLayout, captureLayout, m_captureBuf, w,
+                              h)) {
+            CaptureFrame cf{};
+            cf.width = w;
+            cf.height = h;
+            cf.fmt = CapturePixelFormat::RGBA8; // readbackImageRgba always delivers RGBA8
+            cf.pixels = m_captureBuf.data();
+            cf.frameIndex = m_totalFrames;
+            m_captureSink(cf);
+        }
+    }
+
     if (!m_headless) {
         VkPresentInfoKHR pi{};
         pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -833,32 +866,6 @@ void VkRenderer::endFrame() {
         const VkResult result = vkQueuePresentKHR(m_presentQueue, &pi);
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
             m_framebufferResized = true;
-    }
-
-    // Screenshot readback (#909 groundwork): the swapchain image for this frame is now presented.
-    // Drain the device, copy it to a host-visible buffer, and write the PNG. Not a hot path — a stall
-    // is fine for a dev/verification capture.
-    if (!m_pendingScreenshotPath.empty()) {
-        const std::string path = std::move(m_pendingScreenshotPath);
-        m_pendingScreenshotPath.clear();
-        writeSwapchainPng(path);
-    }
-
-    // Per-frame capture sink (#912): deliver this frame's RGBA pixels to the recorder. Synchronous
-    // readback — see readbackImageRgba. The presented swapchain image is in PRESENT_SRC_KHR windowed.
-    if (m_captureSink) {
-        uint32_t w = 0, h = 0;
-        const VkImageLayout layout =
-            m_headless ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        if (readbackImageRgba(m_swapchainImages[m_currentImageIndex], layout, layout, m_captureBuf, w, h)) {
-            CaptureFrame cf{};
-            cf.width = w;
-            cf.height = h;
-            cf.fmt = CapturePixelFormat::RGBA8; // readbackImageRgba always delivers RGBA8
-            cf.pixels = m_captureBuf.data();
-            cf.frameIndex = m_totalFrames;
-            m_captureSink(cf);
-        }
     }
 
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
