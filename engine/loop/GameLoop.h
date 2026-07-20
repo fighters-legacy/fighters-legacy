@@ -76,6 +76,12 @@ class GameLoop {
     // before ISimUpdate::onTick(). Thread-safe; may be called from any thread.
     void enqueueSimCallback(std::function<void()> fn);
 
+    // Run and clear all queued sim callbacks now, on the calling thread. The sim thread calls this
+    // once at the top of each iteration; a harness that steps ISimUpdate::onTick() directly (e.g. the
+    // deterministic --mission-report loop) must call it before each onTick() so admin-dispatched
+    // trigger effects (detonate / atc_scramble / spawn) actually run instead of piling up unexecuted.
+    void drainSimCallbacks();
+
     // -----------------------------------------------------------------------
     // Time compression — main thread only.
     // -----------------------------------------------------------------------

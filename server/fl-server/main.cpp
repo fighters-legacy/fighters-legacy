@@ -1722,6 +1722,10 @@ int main(int argc, char** argv) {
         constexpr uint64_t kMaxReportTicks = 36000; // 10 sim-minutes at 60 Hz; a stuck mission stops here
         uint64_t ranTicks = 0;
         for (uint64_t tick = 1; tick <= kMaxReportTicks; ++tick) {
+            // Run admin-dispatched trigger effects (detonate / atc_scramble / spawn) that the mission's
+            // `do:` actions enqueued last tick — the sim thread would drain these at the top of each
+            // tick, but this loop steps onTick() directly, so drain them here to keep the report faithful.
+            gameLoop.drainSimCallbacks();
             broadcaster.onTick(kSimDt, tick);
             ranTicks = tick;
             if (missionRuntime->done())
