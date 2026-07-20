@@ -7,6 +7,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-07-20
+
 ### Added
 
 - **mission**: per-epic cinematic demo missions — one per engine epic landed for v0.4.0 (#909).
@@ -153,7 +155,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **renderer**: windowed frame capture read back all black on real drivers. The per-frame capture sink and the screenshot readback (#912/#909) copied the swapchain image *after* `vkQueuePresentKHR`, whose contents are undefined per the Vulkan spec until the image is re-acquired — a real driver (NVIDIA) returns black even though the on-screen frame is correct, while software/headless rendering happened to retain the content so it went unnoticed (CI records headless). Move the readback ahead of present, while the app still owns the rendered image (windowed: already in `PRESENT_SRC_KHR`; headless: its owned `TRANSFER_SRC_OPTIMAL` image); the layout is restored so the frame is still present-ready. The non-capturing render path is unchanged. Verified windowed on an RTX 5080. Part of #909
+- **renderer**: windowed frame capture read back all black on real drivers. The per-frame capture sink and the screenshot readback (#912/#909) copied the swapchain image *after* `vkQueuePresentKHR`, whose contents are undefined per the Vulkan spec until the image is re-acquired — a real driver (NVIDIA) returns black even though the on-screen frame is correct, while software/headless rendering happened to retain the content so it went unnoticed (CI records headless). Move the readback ahead of present, while the app still owns the rendered image (windowed: already in `PRESENT_SRC_KHR`; headless: its owned `TRANSFER_SRC_OPTIMAL` image); the layout is restored so the frame is still present-ready, and the non-capturing render path is unchanged. Verified windowed on an RTX 5080. Part of #909 (PR #990)
 
 ## [0.3.7] - 2026-07-17
 
