@@ -97,6 +97,16 @@ void GameLoop::enqueueSimCallback(std::function<void()> fn) {
     m_pendingCallbacks.push_back(std::move(fn));
 }
 
+void GameLoop::drainSimCallbacks() {
+    std::vector<std::function<void()>> callbacks;
+    {
+        std::lock_guard<std::mutex> lk(m_callbackMutex);
+        callbacks.swap(m_pendingCallbacks);
+    }
+    for (auto& fn : callbacks)
+        fn();
+}
+
 void GameLoop::simThreadFunc() {
     TimeController tc{1.0 / m_tickRate};
 
@@ -130,15 +140,7 @@ void GameLoop::simThreadFunc() {
             m_droppedTicks.fetch_add(droppedThisIter, std::memory_order_relaxed);
 
         // Drain one-shot callbacks queued by external threads (e.g. debug console).
-        {
-            std::vector<std::function<void()>> callbacks;
-            {
-                std::lock_guard<std::mutex> lk(m_callbackMutex);
-                callbacks.swap(m_pendingCallbacks);
-            }
-            for (auto& fn : callbacks)
-                fn();
-        }
+        drainSimCallbacks();
 
         for (int i = 0; i < ticks; ++i) {
             auto tickNow = Clock::now();

@@ -298,6 +298,29 @@ void WorldBroadcaster::broadcastMissionOutcome(uint8_t outcome, float elapsedSec
     }
 }
 
+void WorldBroadcaster::updateMissionRoster(const std::string& missionObjectId, EntityId entity) {
+    // Update the stored binding (an unknown object id is ignored — only mission-declared objects are in
+    // the roster), then broadcast the single record so every connected recorder picks up the late bind.
+    bool found = false;
+    for (auto& [id, eid] : m_missionRoster) {
+        if (id == missionObjectId) {
+            eid = entity;
+            found = true;
+            break;
+        }
+    }
+    if (!found || entity.generation == 0)
+        return; // unknown object, or the slot was freed (invalid entity) — nothing to advertise
+    MsgMissionRoster rmsg{};
+    rmsg.entityIdx = entity.index;
+    rmsg.entityGen = static_cast<uint16_t>(entity.generation);
+    std::snprintf(rmsg.objectId, sizeof(rmsg.objectId), "%s", missionObjectId.c_str());
+    for (const auto& [peerId, pin] : m_peerInputs) {
+        (void)pin;
+        m_net.send(peerId, &rmsg, sizeof(rmsg), /*reliable=*/true);
+    }
+}
+
 EjectionOutcome WorldBroadcaster::ejectPilot(EntityId eid) {
     EntityState* st = m_entityManager.get(eid);
     if (!st || st->dead)
@@ -5026,6 +5049,28 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
             if (!fbuf.empty())
                 m_net.send(peerId, fbuf.data(), fbuf.size(), /*reliable=*/true);
         }
+    }
+
+    // Mission roster (#914): one reliable packet of concatenated MsgMissionRoster records mapping each
+    // spawned mission object's entity idx/gen -> its mission object id, so the cinematic recorder (#909)
+    // can resolve an entity-relative camera shot's target/look_at (a mission object id) to a live
+    // network entity. Only entries whose entity is currently valid are sent (an unoccupied player slot
+    // has an invalid EntityId — omitted until a pilot binds it, then delivered as a delta). Empty when
+    // no mission is loaded.
+    if (!m_missionRoster.empty()) {
+        std::vector<uint8_t> rbuf;
+        rbuf.reserve(m_missionRoster.size() * sizeof(MsgMissionRoster));
+        for (const auto& [objectId, eid] : m_missionRoster) {
+            if (eid.generation == 0)
+                continue; // invalid entity (e.g. an unbound player slot)
+            MsgMissionRoster rmsg{};
+            rmsg.entityIdx = eid.index;
+            rmsg.entityGen = static_cast<uint16_t>(eid.generation);
+            std::snprintf(rmsg.objectId, sizeof(rmsg.objectId), "%s", objectId.c_str());
+            appendMsg(rbuf, rmsg);
+        }
+        if (!rbuf.empty())
+            m_net.send(peerId, rbuf.data(), rbuf.size(), /*reliable=*/true);
     }
 
     // Crew rosters (#972): after the faction table, send this peer the seat roster of EVERY crewed

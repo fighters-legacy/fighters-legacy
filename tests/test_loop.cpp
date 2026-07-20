@@ -191,11 +191,29 @@ TEST_CASE("TimeController: custom fixedStep is honoured", "[tc]") {
 
 TEST_CASE("TimeController: timeRateMultiplier returns correct values", "[tc]") {
     REQUIRE(timeRateMultiplier(TimeRate::Paused) == 0.0);
+    REQUIRE(timeRateMultiplier(TimeRate::Eighth) == 0.125);
+    REQUIRE(timeRateMultiplier(TimeRate::Quarter) == 0.25);
     REQUIRE(timeRateMultiplier(TimeRate::Half) == 0.5);
     REQUIRE(timeRateMultiplier(TimeRate::Normal) == 1.0);
     REQUIRE(timeRateMultiplier(TimeRate::Double) == 2.0);
     REQUIRE(timeRateMultiplier(TimeRate::Quad) == 4.0);
     REQUIRE(timeRateMultiplier(TimeRate::Octa) == 8.0);
+}
+
+TEST_CASE("TimeController: Quarter rate - 4 fixedSteps wall time gives 1 tick", "[tc]") {
+    TimeController tc;
+    tc.setRate(TimeRate::Quarter);
+    tc.advance(tp(0));
+    // 4 fixed steps of wall time at 0.25x = 1 sim step = 1 tick.
+    REQUIRE(tc.advance(tp(4 * kNs60)) == 1);
+}
+
+TEST_CASE("TimeController: Eighth rate - 8 fixedSteps wall time gives 1 tick", "[tc]") {
+    TimeController tc;
+    tc.setRate(TimeRate::Eighth);
+    tc.advance(tp(0));
+    // 8 fixed steps of wall time at 0.125x = 1 sim step = 1 tick.
+    REQUIRE(tc.advance(tp(8 * kNs60)) == 1);
 }
 
 // ============================================================================

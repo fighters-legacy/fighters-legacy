@@ -28,6 +28,16 @@ class IRenderer {
     // IWindow::init.
     virtual bool init(IWindow* window) = 0;
 
+    // Swapchain-free headless init (#913): render into owned present-target images at `width`×`height`
+    // with NO window, NO surface, and NO present — paired with a software Vulkan ICD (lavapipe) this
+    // renders with no display and no GPU. Frames are consumed via setCaptureSink (#912). Non-pure with a
+    // false default so backends/mocks without a headless path (and every test mock) need no change.
+    virtual bool initHeadless(uint32_t width, uint32_t height) {
+        (void)width;
+        (void)height;
+        return false;
+    }
+
     // Must be called when the window framebuffer changes size so the renderer
     // can tear down and rebuild the swapchain.
     virtual void onResize(int width, int height) = 0;
@@ -127,6 +137,17 @@ class IRenderer {
     // false default so a backend/mock without capture support (and every test mock) needs no change.
     virtual bool captureScreenshot(const char* path) {
         (void)path;
+        return false;
+    }
+
+    // ── Frame capture sink (#912) ─────────────────────────────────────────────
+    // A per-frame pixel sink for the cinematic recorder (#909). When set, the renderer delivers every
+    // rendered frame's pixels to `sink` at the end of endFrame(). The CaptureFrame::pixels buffer is
+    // owned by the renderer and valid only for the duration of the callback (copy what you keep).
+    // Returns true if capture is supported + enabled; a false default means a backend/mock without
+    // capture (and every test mock) needs no change. Pass an empty std::function to stop capturing.
+    virtual bool setCaptureSink(std::function<void(const CaptureFrame&)> sink) {
+        (void)sink;
         return false;
     }
 };

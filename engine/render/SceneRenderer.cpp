@@ -103,7 +103,7 @@ void SceneRenderer::ensureBuiltins() {
     static constexpr const char* kShapeNames[kShapeCount] = {
         "builtin:shape-unknown",      "builtin:shape-aircraft",  "builtin:shape-missile",
         "builtin:shape-bomb",         "builtin:shape-rocket",    "builtin:shape-ground-vehicle",
-        "builtin:shape-naval-vessel", "builtin:shape-structure",
+        "builtin:shape-naval-vessel", "builtin:shape-structure", "builtin:shape-parachute",
     };
     for (size_t i = 0; i < kShapeCount; ++i) {
         const auto shape = static_cast<BuiltinShape>(i);

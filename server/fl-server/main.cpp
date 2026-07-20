@@ -184,6 +184,7 @@ int main(int argc, char** argv) {
     std::string flagMission;       // non-empty if --mission <name> was given (overrides [rotation])
     std::string flagMissionReport; // non-empty: run the mission headless to completion, write JSON here (#856)
     std::string flagCampaign;      // non-empty if --campaign <file> was given: run the campaign's next sortie (#584)
+    std::string flagTimeRate;      // non-empty if --time-rate <name> was given: reduced wall-rate for recording (#915)
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
@@ -201,6 +202,8 @@ int main(int argc, char** argv) {
                 "  --flight-size <n>         AI wingmen per player; 0=none (overrides [flight])\n"
                 "  --mission <name>          Load a mission at startup (overrides [rotation])\n"
                 "  --mission-report <path>   Run the mission headless to completion, write a JSON outcome, exit\n"
+                "  --time-rate <name>        Sim wall-clock rate: paused|eighth|quarter|half|normal|double|quad|octa\n"
+                "                            (sim dt stays 1/60; slows serving for a slow recording client, #915)\n"
                 "\n"
                 "Admin console commands are available on stdin (type 'help' for a command list).\n"
                 "\n"
@@ -244,6 +247,8 @@ int main(int argc, char** argv) {
             flagMissionReport = argv[++i];
         if (std::strcmp(argv[i], "--campaign") == 0 && i + 1 < argc)
             flagCampaign = argv[++i];
+        if (std::strcmp(argv[i], "--time-rate") == 0 && i + 1 < argc)
+            flagTimeRate = argv[++i];
         if (std::strcmp(argv[i], "--sim-worker-threads") == 0 && i + 1 < argc) {
             char* end = nullptr;
             long n = std::strtol(argv[++i], &end, 10);
@@ -1326,6 +1331,11 @@ int main(int argc, char** argv) {
                 for (const fl::PlayerSlot& ps : setup.playerSlots)
                     objectEntities.emplace_back(ps.id, fl::EntityId{});
 
+                // Publish the object-id -> entity map to the broadcaster (#914): it is sent as
+                // MsgMissionRoster after ConnectAck so a cinematic recorder can resolve entity-relative
+                // camera shots. Copy before the map is moved into the MissionRuntime below.
+                broadcaster.setMissionRoster(objectEntities);
+
                 missionRuntime = std::make_unique<fl::MissionRuntime>(
                     parsed.mission, std::move(objectEntities), entityManager,
                     [log, &missionActionSink](std::string_view action) {
@@ -1371,9 +1381,12 @@ int main(int argc, char** argv) {
                 // Bind a pilot's aircraft to its player-slot id on connect (and unbind on disconnect), so
                 // destroy(<slot-id>) tracks the live aircraft instead of firing at t=0 (#884). Fired from
                 // the handshake on the sim thread — the same thread that steps the runtime.
-                broadcaster.setMissionSlotBinder([rt = missionRuntime.get()](const std::string& id, fl::EntityId eid) {
-                    rt->registerObjectEntity(id, eid);
-                });
+                broadcaster.setMissionSlotBinder(
+                    [rt = missionRuntime.get(), &broadcaster](const std::string& id, fl::EntityId eid) {
+                        rt->registerObjectEntity(id, eid);
+                        // Advertise the late slot<->aircraft bind so a recorder's mission roster stays current (#914).
+                        broadcaster.updateMissionRoster(id, eid);
+                    });
                 loadedMissionName = parsed.mission.name;
                 loadedMissionSpawned = setup.spawned.size();
 
@@ -1709,6 +1722,10 @@ int main(int argc, char** argv) {
         constexpr uint64_t kMaxReportTicks = 36000; // 10 sim-minutes at 60 Hz; a stuck mission stops here
         uint64_t ranTicks = 0;
         for (uint64_t tick = 1; tick <= kMaxReportTicks; ++tick) {
+            // Run admin-dispatched trigger effects (detonate / atc_scramble / spawn) that the mission's
+            // `do:` actions enqueued last tick — the sim thread would drain these at the top of each
+            // tick, but this loop steps onTick() directly, so drain them here to keep the report faithful.
+            gameLoop.drainSimCallbacks();
             broadcaster.onTick(kSimDt, tick);
             ranTicks = tick;
             if (missionRuntime->done())
@@ -1739,6 +1756,44 @@ int main(int argc, char** argv) {
     // the client attempts its first connection.
     log->log(LogLevel::Info, __FILE__, __LINE__, listeningMsg);
     gameLoop.start();
+
+    // ---- Reduced wall-clock rate for cinematic recording (#915) ----
+    // sim dt stays 1/60 — content is byte-identical; ticks just arrive slower, so a slow (software-
+    // rendered, lavapipe) recording client never misses a capture boundary. Applied after start()
+    // because setRate is a main-thread control (see GameLoop).
+    if (!flagTimeRate.empty()) {
+        auto parseTimeRate = [](const std::string& s, TimeRate& out) -> bool {
+            if (s == "paused")
+                out = TimeRate::Paused;
+            else if (s == "eighth")
+                out = TimeRate::Eighth;
+            else if (s == "quarter")
+                out = TimeRate::Quarter;
+            else if (s == "half")
+                out = TimeRate::Half;
+            else if (s == "normal")
+                out = TimeRate::Normal;
+            else if (s == "double")
+                out = TimeRate::Double;
+            else if (s == "quad")
+                out = TimeRate::Quad;
+            else if (s == "octa")
+                out = TimeRate::Octa;
+            else
+                return false;
+            return true;
+        };
+        TimeRate tr = TimeRate::Normal;
+        if (parseTimeRate(flagTimeRate, tr)) {
+            gameLoop.setRate(tr);
+            log->log(LogLevel::Info, __FILE__, __LINE__, ("time-rate set to " + flagTimeRate).c_str());
+        } else {
+            log->log(LogLevel::Warn, __FILE__, __LINE__,
+                     ("--time-rate: unknown rate \"" + flagTimeRate +
+                      "\" (paused|eighth|quarter|half|normal|double|quad|octa); using normal")
+                         .c_str());
+        }
+    }
 
     // ---- RCON server (optional TCP remote admin channel) ----
     if (cfg.rcon.enabled) {

@@ -1,0 +1,99 @@
+# Cinematic demo-video recording (epic #909). OPT-IN only: software rendering (lavapipe) is slow, and
+# gate videos deserve a human watch before publishing, so this is never a required PR gate. The only
+# always-on CI addition for the demo pipeline is `validate-mission missions/demos/*.yaml` in ci.yml
+# ("CI never requires a GPU" is preserved). Trigger from the Actions tab (workflow_dispatch); when a
+# release_tag is supplied the mp4s are attached to that GitHub Release.
+name: demo-videos
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (branch/tag/SHA) to record from'
+        required: false
+        default: ''
+      resolution:
+        description: 'Recording resolution WxH'
+        required: false
+        default: '1280x720'
+      fps:
+        description: 'Recording frame rate'
+        required: false
+        default: '30'
+      time_rate:
+        description: 'fl-server wall-clock rate (quarter/eighth keep lavapipe in pace)'
+        required: false
+        default: 'eighth'
+      mission:
+        description: 'Record a single demo id (blank = all)'
+        required: false
+        default: ''
+      release_tag:
+        description: 'If set, upload the recorded mp4s to this GitHub Release tag'
+        required: false
+        default: ''
+
+permissions:
+  contents: write # gh release upload
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Install build dependencies
+        uses: ./.github/actions/install-linux-deps
+        with:
+          vulkan: 'true'
+          gcc: 'true'
+          python_tools: 'true'
+          gns: 'true'
+
+      - name: Install lavapipe + ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers ffmpeg
+
+      - name: Configure (Release)
+        run: cmake --preset release
+
+      - name: Build client + server
+        run: cmake --build --preset release --target fighters-legacy fl-server
+
+      - name: Record demo set (headless, lavapipe)
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: |
+          set -e
+          GAME=$(find build/release -type f -name fighters-legacy | head -1)
+          SERVER=$(find build/release -type f -name fl-server | head -1)
+          echo "game=$GAME server=$SERVER"
+          ARGS=(--game "$GAME" --server "$SERVER" --assets "$PWD" \
+                --out-dir demo-videos --headless \
+                --res "${{ inputs.resolution }}" --fps "${{ inputs.fps }}" \
+                --time-rate "${{ inputs.time_rate }}")
+          if [ -n "${{ inputs.mission }}" ]; then
+            ARGS+=(--mission "${{ inputs.mission }}")
+          else
+            ARGS+=(--all)
+          fi
+          python3 tools/record_demo/record_demo.py "${ARGS[@]}"
+
+      - name: Upload recordings as artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-videos
+          path: |
+            demo-videos/*.mp4
+            demo-videos/*-server.log
+          if-no-files-found: warn
+
+      - name: Attach to release
+        if: ${{ inputs.release_tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release_tag }}" demo-videos/*.mp4 --clobber

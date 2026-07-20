@@ -1,0 +1,33 @@
+name: "Demo: Formation Tour"
+map: world
+layer: world_clear
+time: { hour: 6, minute: 30 }
+wind: { heading: 270, speed: 3 }
+weather: { preset: partly_cloudy }
+sides: [blue, red]
+# A 4-ship on a waypoint route at dawn under a partly-cloudy sky. Each aircraft flies the same route,
+# offset, so they hold a loose formation. A move camera slides along the formation; a wide static shows
+# it against the dawn landscape. No hostiles — a pure "look at the aircraft + world" showcase.
+objects:
+  - { type: builtin:debug-entity, id: lead, side: blue, pos: [0, 1800, 0], heading: 45, speed: 180,
+      route: [ [6000, 1800, 6000], [12000, 2200, 3000], [16000, 1800, -4000] ] }
+  - { type: builtin:debug-entity, id: two, side: blue, pos: [-350, 1780, 300], heading: 45, speed: 180,
+      route: [ [5650, 1780, 6300], [11650, 2180, 3300], [15650, 1780, -3700] ] }
+  - { type: builtin:debug-entity, id: three, side: blue, pos: [-350, 1780, -300], heading: 45, speed: 180,
+      route: [ [5650, 1780, 5700], [11650, 2180, 2700], [15650, 1780, -4300] ] }
+  - { type: builtin:debug-entity, id: four, side: blue, pos: [-700, 1760, 0], heading: 45, speed: 180,
+      route: [ [5300, 1760, 6000], [11300, 2160, 3000], [15300, 1760, -4000] ] }
+triggers:
+  - on: timer(90)
+    do: mission_success
+cameras:
+  shots:
+    # Slide along the formation from wingtip to nose.
+    - { type: move, start: 0, duration: 10, look_at: lead, ease: smooth,
+        keyframes: [ { time: 0, pos: [-500, 1850, -700] }, { time: 5, pos: [200, 1850, -500] }, { time: 10, pos: [700, 1870, 200] } ] }
+    # Chase the lead down the route.
+    - { type: chase, start: 10, duration: 14, target: lead, offset: [-120, 30, 40], stiffness: 2.0 }
+    # Wide landscape static: the flight crossing the dawn terrain.
+    - { type: static, start: 24, duration: 10, pos: [9000, 2600, 5500], look_at: lead, fov: 45 }
+    # Trailing orbit around number four.
+    - { type: orbit, start: 34, duration: 10, target: four, radius: 400, height: 90, period: 30 }

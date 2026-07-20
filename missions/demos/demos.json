@@ -1,0 +1,15 @@
+{
+  "_comment": "v0.4.0 cinematic demo set (epic #909). Each entry: id, the mission YAML (also the shot track), the output basename, and the expected video duration in seconds (the sum of the mission's camera shot durations). record_demo.py --all reads this. Zero content pack; pack variants follow once fl-base-pack aircraft record well.",
+  "demos": [
+    { "id": "demo-dogfight",          "mission_file": "demo-dogfight.yaml",          "out_name": "demo-dogfight",          "expected_duration": 48 },
+    { "id": "demo-sam-strike",        "mission_file": "demo-sam-strike.yaml",        "out_name": "demo-sam-strike",        "expected_duration": 44 },
+    { "id": "demo-formation-tour",    "mission_file": "demo-formation-tour.yaml",    "out_name": "demo-formation-tour",    "expected_duration": 44 },
+    { "id": "demo-sensors-intercept", "mission_file": "demo-sensors-intercept.yaml", "out_name": "demo-sensors-intercept", "expected_duration": 42 },
+    { "id": "demo-gallery-flyover",   "mission_file": "demo-gallery-flyover.yaml",   "out_name": "demo-gallery-flyover",   "expected_duration": 38 },
+    { "id": "demo-bomber-defense",    "mission_file": "demo-bomber-defense.yaml",    "out_name": "demo-bomber-defense",    "expected_duration": 44 },
+    { "id": "demo-carrier-swarm",     "mission_file": "demo-carrier-swarm.yaml",     "out_name": "demo-carrier-swarm",     "expected_duration": 46 },
+    { "id": "demo-atc-scramble",      "mission_file": "demo-atc-scramble.yaml",      "out_name": "demo-atc-scramble",      "expected_duration": 44 },
+    { "id": "demo-ejection",          "mission_file": "demo-ejection.yaml",          "out_name": "demo-ejection",          "expected_duration": 44 },
+    { "id": "demo-night-patrol",      "mission_file": "demo-night-patrol.yaml",      "out_name": "demo-night-patrol",      "expected_duration": 40 }
+  ]
+}

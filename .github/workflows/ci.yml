@@ -233,6 +233,17 @@ jobs:
           # connects. A nonzero exit (clients refused/dropped) fails the step under set -e.
           bash tools/bot_swarm/run_loadtest.sh build/debug 8 3 weave
 
+      - name: Validate demo missions (Linux / macOS)
+        if: matrix.os != 'windows-latest'
+        run: |
+          # The cinematic demo missions (#909/#917) carry a cameras: block; validate-mission covers the
+          # whole schema, so this always-on, no-GPU check guards the demo set on every PR (the render/
+          # record job is opt-in, #918). Clean validation prints nothing — fail on any output. Globbed so
+          # a newly added demo can never silently skip validation.
+          set -e
+          demo_out=$(./build/debug/tools/validate-mission missions/demos/*.yaml 2>&1)
+          if [ -n "$demo_out" ]; then echo "demo missions failed validation:"; echo "$demo_out"; exit 1; fi
+
       - name: Smoke test tex-compress array KTX2 (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -349,6 +360,12 @@ jobs:
       - name: Unit test mission_test/mission_test.py (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: python3 -m pytest tests/test_mission_test.py -v
+
+      # Pure helpers (manifest parse, duration bounds) + the committed demos.json integrity check. The
+      # actual headless recording is the opt-in demo-videos job (#918), never a required PR gate.
+      - name: Unit test record_demo/record_demo.py (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 -m pytest tests/test_record_demo.py -v
 
       - name: Smoke test gen_unifont_header.py --help (Ubuntu)
         if: matrix.os == 'ubuntu-latest'

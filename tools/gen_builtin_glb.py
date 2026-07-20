@@ -14,6 +14,7 @@ Default: prints a C++ snippet with static const uint8_t[] definitions:
     kGroundVehicleGlb  — boxy hull + turret + gun (~7 m, ground origin)
     kNavalVesselGlb    — hull + bow + superstructure (~64 m, waterline origin)
     kStructureGlb      — stepped bunker block (~18 m, ground origin)
+    kParachuteGlb      — ejected-pilot canopy dome + risers + pilot (~6 m, center origin, no wreck)
   k*DamagedGlb wreck variants (slumped/crushed) for the persistent categories
   (aircraft / ground vehicle / naval vessel / structure); projectiles despawn on
   death and the unknown marker is a bug state, so neither gets a wreck.
@@ -377,6 +378,38 @@ def structure_tris():
     return tris
 
 
+def parachute_tris():
+    """Ejected-pilot chute (#672, ~6 m tall, CENTER origin — the entity has no ground contact,
+    it hangs in the air): a faceted dome canopy (open octagon prism dome), four riser lines down
+    to a small pilot box. The Effect category maps here; it is the one Effect that replicates and
+    must render. Deliberately unlike any vehicle so it reads as "a pilot came down", not a target."""
+    tris = []
+    # Faceted dome: a ring of 8 rim verts at y=0 lifted to an apex at y=2.6. Built as an OPEN cone
+    # (spike) whose absent base is the underside of the canopy — never seen from below in practice,
+    # and the opaque single-sided pipeline simply shows the outer skin. Rim radius 2.4 m.
+    import math as _m
+    rim = []
+    for k in range(8):
+        a = 2.0 * _m.pi * k / 8.0
+        rim.append((2.4 * _m.cos(a), 0.0, 2.4 * _m.sin(a)))
+    apex = (0.0, 2.6, 0.0)
+    for k in range(8):
+        p0 = rim[k]
+        p1 = rim[(k + 1) % 8]
+        # CCW seen from outside (above/side): apex, then rim going clockwise in XZ.
+        tris.append((apex, p1, p0))
+    canopy = translate(tris, 0.0, 3.4, 0.0)  # rim at y=3.4, apex at y=6.0
+    out = list(canopy)
+    # Four riser lines (thin boxes) from the rim quadrants down to the pilot at y 0..0.9.
+    for sx, sz in ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)):
+        rx, rz = 1.7 * sx, 1.7 * sz
+        # slim vertical-ish box from (rx,3.4,rz) down to (0,0.9,0): approximate with a thin
+        # box centered on the midpoint, oriented along Y (visual line, not physically swept).
+        out += box((rx) * 0.5, (3.4 + 0.9) * 0.5, (rz) * 0.5, 0.05, (3.4 - 0.9) * 0.5, 0.05)
+    out += box(0.0, 0.45, 0.0, 0.35, 0.45, 0.35)  # pilot, y 0..0.9
+    return out
+
+
 def build_flat_glb(node_name: str, tris) -> bytes:
     """Single-node / single-mesh / SINGLE-PRIMITIVE flat-shaded .glb from a triangle
     list. Non-indexed, non-interleaved layout: [positions][normals], 3 verts per
@@ -453,6 +486,7 @@ SHAPES = [
     ("builtin_ground_vehicle", "kGroundVehicleGlb", ground_vehicle_tris, True),
     ("builtin_naval_vessel",   "kNavalVesselGlb",   naval_vessel_tris,   True),
     ("builtin_structure",      "kStructureGlb",     structure_tris,      True),
+    ("builtin_parachute",      "kParachuteGlb",     parachute_tris,      False),
 ]
 
 

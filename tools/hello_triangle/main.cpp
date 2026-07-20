@@ -24,8 +24,8 @@ static void onSignal(int) {
 }
 
 // One distinct color per BuiltinShape (Unknown, aircraft, missile, bomb, rocket,
-// ground vehicle, naval vessel, structure) so the shape-row smoke reads at a glance.
-static constexpr std::array<glm::vec4, 8> kShapeColors = {
+// ground vehicle, naval vessel, structure, parachute) so the shape-row smoke reads at a glance.
+static constexpr std::array<glm::vec4, 9> kShapeColors = {
     glm::vec4{1.00f, 0.15f, 0.90f, 1.0f}, // Unknown — magenta error beacon
     glm::vec4{0.15f, 0.40f, 1.00f, 1.0f}, // aircraft — blue
     glm::vec4{1.00f, 0.15f, 0.10f, 1.0f}, // missile — red
@@ -34,11 +34,12 @@ static constexpr std::array<glm::vec4, 8> kShapeColors = {
     glm::vec4{0.10f, 0.80f, 0.20f, 1.0f}, // ground vehicle — green
     glm::vec4{0.10f, 0.85f, 0.90f, 1.0f}, // naval vessel — cyan
     glm::vec4{0.60f, 0.60f, 0.65f, 1.0f}, // structure — concrete grey
+    glm::vec4{0.95f, 0.95f, 0.98f, 1.0f}, // parachute — canopy white
 };
 
 // Row placement + display scale per shape (the naval vessel is ~64 m; shrink the big
 // ones so the whole set fits one orbit view).
-static constexpr std::array<float, 8> kShapeScale = {1.0f, 0.6f, 1.0f, 1.0f, 1.0f, 0.8f, 0.12f, 0.35f};
+static constexpr std::array<float, 9> kShapeScale = {1.0f, 0.6f, 1.0f, 1.0f, 1.0f, 0.8f, 0.12f, 0.35f, 1.0f};
 
 class App : public IWindowEventHandler {
   public:

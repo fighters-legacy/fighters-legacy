@@ -1,0 +1,36 @@
+name: "Demo: Bomber Defense"
+map: world
+layer: world_clear
+time: { hour: 12, minute: 0 }
+wind: { heading: 270, speed: 5 }
+sides: [blue, red]
+# Two blue builtin:bomber hold a slow racetrack over the target area; each carries a defensive
+# tail-gunner seat that auto-crews (bot builtin:gunner, #966/#971). Two red builtin:fighter run in and
+# press into the ~1500 m turret envelope — the gunners slew, lead, and fire tracer at the closest
+# attacker. The crew skill range makes the two gunners fractionally different (#976). Zero content
+# pack; every silhouette is a builtin placeholder.
+objects:
+  # The bombers hold a slow racetrack over the target area (each tail seat auto-crews a defensive
+  # gunner regardless of the pilot's controller), so the attackers reliably detect them and bore in.
+  - { type: builtin:bomber, id: bomber1, side: blue, pos: [0, 2400, 600], heading: 90,
+      ai: "loiter 0 2400 600 700 2400 0.5", crew: { skill: 0.9 } }
+  - { type: builtin:bomber, id: bomber2, side: blue, pos: [0, 2400, -600], heading: 90,
+      ai: "loiter 0 2400 -600 700 2400 0.5 ccw", crew: { skill: 0.9 } }
+  # Two fighters run in from ahead and press into the ~1500 m tail-gun envelope, where the gunners fire.
+  - { type: builtin:debug-entity, id: red1, side: red, pos: [3400, 2400, 300], heading: 270, ai: "lua builtin:fighter" }
+  - { type: builtin:debug-entity, id: red2, side: red, pos: [3600, 2400, -400], heading: 270, ai: "lua builtin:fighter" }
+triggers:
+  - on: timer(85)
+    do: mission_success
+cameras:
+  shots:
+    # Formation establishing — the bomber pair on course before the attack develops.
+    - { type: static, start: 0, duration: 7, pos: [-1400, 2600, -1500], look_at: bomber1, fov: 52 }
+    # Aft chase from above/behind the lead bomber — frames the tail turret and the attacker closing.
+    - { type: chase, start: 7, duration: 14, target: bomber1, offset: [-150, 35, 0], stiffness: 2.5, look_at: red1 }
+    # Orbit the lead during the exchange.
+    - { type: orbit, start: 21, duration: 12, target: bomber1, radius: 320, height: 90, period: 28 }
+    # Cut to the attacker's perspective as it presses the rear quarter.
+    - { type: chase, start: 33, duration: 5, target: red1, offset: [-90, 22, 0], stiffness: 3.0, look_at: bomber1 }
+    # Wide closing frame on the formation still flying.
+    - { type: static, start: 38, duration: 6, pos: [1200, 3100, -1800], look_at: bomber1, fov: 55 }

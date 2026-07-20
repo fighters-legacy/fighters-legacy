@@ -1,0 +1,46 @@
+name: "Demo: Ejection"
+map: world
+layer: world_clear
+time: { hour: 12, minute: 0 }
+wind: { heading: 220, speed: 5 }
+sides: [blue, red]
+# A blue pair transits a red flak corridor. Scripted `detonate` bursts (the admin AoE-warhead path
+# mission triggers dispatch to, #356/#584) walk onto the lead in 14-dmg near-hits, wounding it into
+# the <=15% band -- the AI pilot then auto-ejects (#672): a replicating builtin:parachute appears (its
+# own placeholder silhouette, not the error beacon) and the airframe is lost. Each burst is centered
+# on the lead's traced position at that trigger time; the --mission-report loop is deterministic, so
+# the coords stay in sync run to run. Zero content pack.
+objects:
+  - { type: builtin:debug-entity, id: victim, side: blue, pos: [-4000, 1800, 0], heading: 90,
+      speed: 160, route: [ [8000, 1800, 0] ] }
+  - { type: builtin:debug-entity, id: wing, side: blue, pos: [-4350, 1780, 350], heading: 90,
+      speed: 160, route: [ [7650, 1780, 350] ] }
+triggers:
+  # A walking barrage of small (<15 dmg) near-center bursts on the lead's deterministic track.
+  # Each burst alone can never take HP from above the eject band (>15%) to death, so once the
+  # cumulative damage crosses 85% the pilot auto-ejects rather than being killed outright. Burst
+  # coords are the lead's traced positions at each trigger time (the report loop is deterministic).
+  - { on: timer(12), do: detonate -2930 2062 902 450 14 }
+  - { on: timer(14), do: detonate -2776 1905 755 450 14 }
+  - { on: timer(16), do: detonate -2547 1865 593 450 14 }
+  - { on: timer(18), do: detonate -2300 1864 439 450 14 }
+  - { on: timer(20), do: detonate -2047 1868 292 450 14 }
+  - { on: timer(22), do: detonate -1786 1875 154 450 14 }
+  - { on: timer(24), do: detonate -1519 1883 25 450 14 }
+  # The final burst is the seventh — it crosses the eject band, so the lead auto-ejects at ~t=24.
+  # No later burst fires, so nothing destroys the fragile (1 HP) parachute; it hangs at the ejection
+  # point (a drift model is a #672 follow-on) and the camera holds on it before the mission ends.
+  - { on: timer(44), do: mission_success }
+cameras:
+  shots:
+    # Chase the lead down the corridor as the first bursts bracket it (close, ~100 m astern).
+    - { type: chase, start: 0, duration: 13, target: victim, offset: [-95, 22, 0], stiffness: 2.5 }
+    # Side static ~300 m off the lead as the walking barrage closes.
+    - { type: static, start: 13, duration: 8, pos: [-2350, 1990, 250], look_at: victim, fov: 48 }
+    # Framed ~300 m on the ejection zone — the airframe takes the killing near-miss and the pilot
+    # punches out (the aircraft vanishes and a parachute appears at this fixed point ~t=24).
+    - { type: static, start: 21, duration: 10, pos: [-1560, 1960, -260], look_at: [-1530, 1870, 24], fov: 46 }
+    # Slow push onto the hanging parachute — ends ~70 m out so the canopy reads clearly (the chute is
+    # a non-roster runtime entity, so a fixed look_at rather than a target id).
+    - { type: move, start: 31, duration: 13, look_at: [-1530, 1882, 24], ease: smooth,
+        keyframes: [ { time: 0, pos: [-1750, 1960, 240] }, { time: 13, pos: [-1560, 1905, 80] } ] }

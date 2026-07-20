@@ -27,6 +27,19 @@ std::vector<const char*> vk_getRequiredInstanceExtensions(SDL_Window* /*window*/
     return exts;
 }
 
+std::vector<const char*> vk_getHeadlessInstanceExtensions() {
+    // No WSI surface extensions: a headless renderer (#913) presents to owned images, not a swapchain,
+    // so it never creates a VkSurfaceKHR and SDL video need not be initialized.
+    std::vector<const char*> exts;
+#if defined(FL_VK_VALIDATION)
+    exts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+#endif
+#if defined(__APPLE__)
+    exts.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
+    return exts;
+}
+
 VkSurfaceKHR vk_createSurface(VkInstance instance, SDL_Window* window) {
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface))

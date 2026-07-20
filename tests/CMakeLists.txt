@@ -636,7 +636,7 @@ catch_discover_tests(test_validate_flight_model)
 
 add_executable(test_validate_mission test_validate_mission.cpp)
 target_link_libraries(test_validate_mission
-    PRIVATE Catch2::Catch2WithMain validate-mission-lib)
+    PRIVATE Catch2::Catch2WithMain validate-mission-lib engine-mission) # engine-mission: parseMission for cameras: (#910)
 catch_discover_tests(test_validate_mission)
 
 # engine-mission runtime (#632): parser model population, parser/linter parity, and the sim-setup
@@ -646,6 +646,13 @@ add_executable(test_mission_runtime test_mission_runtime.cpp)
 target_link_libraries(test_mission_runtime
     PRIVATE Catch2::Catch2WithMain engine-mission validate-mission-lib)
 catch_discover_tests(test_mission_runtime)
+
+# ShotDirector camera-pose evaluator (#911): pure GLM+stdlib, no HAL — orbit/chase/move geometry,
+# cut/gap/before-first/after-last handling, dead-target fallback, fov clamp.
+add_executable(test_shot_director test_shot_director.cpp)
+target_link_libraries(test_shot_director
+    PRIVATE Catch2::Catch2WithMain engine-mission)
+catch_discover_tests(test_shot_director)
 
 # engine-campaign (#635): the deterministic dynamic-campaign runtime — frontline raster, campaign
 # schema parser, and the theater-graph state machine (story injection, dynamic selection, save/restore).
@@ -726,6 +733,18 @@ catch_discover_tests(test_performance_overlay)
 add_executable(test_utf8_decode test_utf8_decode.cpp)
 target_link_libraries(test_utf8_decode PRIVATE Catch2::Catch2WithMain platform-hal)
 catch_discover_tests(test_utf8_decode)
+
+# Frame-capture swizzle helper (#912): the pure GPU-independent core of the capture readback.
+add_executable(test_capture_frame test_capture_frame.cpp)
+target_link_libraries(test_capture_frame PRIVATE Catch2::Catch2WithMain platform-hal)
+catch_discover_tests(test_capture_frame)
+
+# Capture-boundary scheduler (#916): the pure tick-stream -> output-frame / dup-count logic behind the
+# cinematic recorder. Header-only, no HAL — just needs the game include dir for RecordScheduler.h.
+add_executable(test_record_scheduler test_record_scheduler.cpp)
+target_link_libraries(test_record_scheduler PRIVATE Catch2::Catch2WithMain)
+target_include_directories(test_record_scheduler PRIVATE "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
+catch_discover_tests(test_record_scheduler)
 
 add_executable(test_hud_align test_hud_align.cpp)
 target_link_libraries(test_hud_align PRIVATE Catch2::Catch2WithMain platform-hal)
