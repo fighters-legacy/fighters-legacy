@@ -313,7 +313,7 @@ void WorldBroadcaster::updateMissionRoster(const std::string& missionObjectId, E
         return; // unknown object, or the slot was freed (invalid entity) — nothing to advertise
     MsgMissionRoster rmsg{};
     rmsg.entityIdx = entity.index;
-    rmsg.entityGen = entity.generation;
+    rmsg.entityGen = static_cast<uint16_t>(entity.generation);
     std::snprintf(rmsg.objectId, sizeof(rmsg.objectId), "%s", missionObjectId.c_str());
     for (const auto& [peerId, pin] : m_peerInputs) {
         (void)pin;
@@ -5065,7 +5065,7 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
                 continue; // invalid entity (e.g. an unbound player slot)
             MsgMissionRoster rmsg{};
             rmsg.entityIdx = eid.index;
-            rmsg.entityGen = eid.generation;
+            rmsg.entityGen = static_cast<uint16_t>(eid.generation);
             std::snprintf(rmsg.objectId, sizeof(rmsg.objectId), "%s", objectId.c_str());
             appendMsg(rbuf, rmsg);
         }
