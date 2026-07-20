@@ -1,0 +1,37 @@
+name: "Demo: Carrier Swarm"
+map: world
+layer: world_clear
+time: { hour: 12, minute: 0 }
+wind: { heading: 90, speed: 6 }
+sides: [blue, red]
+# A blue carrier group steams east (builtin:carrier on its vessel force model, #585) with two static
+# escorts, while a six-ship drone swarm flocks overhead on the boids controller (#353 — separation,
+# alignment, cohesion toward a lead point ahead of the group). Shows the advanced-vehicle work:
+# surface movement plus emergent multi-agent flight. Zero content pack.
+objects:
+  - { type: builtin:carrier, id: carrier1, side: blue, pos: [0, 0, 0], heading: 90, start: ground,
+      route: [ [6000, 0, 0] ] }
+  - { type: builtin:naval-vessel, id: escort1, side: blue, pos: [1400, 0, 1200], heading: 90, start: ground }
+  - { type: builtin:naval-vessel, id: escort2, side: blue, pos: [1400, 0, -1200], heading: 90, start: ground }
+  - { type: builtin:debug-entity, id: drone1, side: blue, pos: [-1400, 880, -700], heading: 90, ai: "swarm 5000 1500 0 1600 500 0.4" }
+  - { type: builtin:debug-entity, id: drone2, side: blue, pos: [-1100, 940, 650], heading: 90, ai: "swarm 5000 1500 0 1600 500 0.4" }
+  - { type: builtin:debug-entity, id: drone3, side: blue, pos: [-700, 900, -300], heading: 90, ai: "swarm 5000 1500 0 1600 500 0.4" }
+  - { type: builtin:debug-entity, id: drone4, side: blue, pos: [-500, 960, 400], heading: 90, ai: "swarm 5000 1500 0 1600 500 0.4" }
+  - { type: builtin:debug-entity, id: drone5, side: blue, pos: [-150, 900, -650], heading: 90, ai: "swarm 5000 1500 0 1600 500 0.4" }
+  - { type: builtin:debug-entity, id: drone6, side: blue, pos: [200, 940, 250], heading: 90, ai: "swarm 5000 1500 0 1600 500 0.4" }
+triggers:
+  - on: timer(88)
+    do: mission_success
+cameras:
+  shots:
+    # Low near the bow, the carrier and escorts across the frame with the swarm above.
+    - { type: static, start: 0, duration: 8, pos: [-700, 90, 700], look_at: carrier1, fov: 55 }
+    # Orbit the carrier as the group steams and the drones close up overhead.
+    - { type: orbit, start: 8, duration: 12, target: carrier1, radius: 620, height: 200, period: -34 }
+    # Fly the camera through the flock.
+    - { type: move, start: 20, duration: 12, look_at: drone1, ease: smooth,
+        keyframes: [ { time: 0, pos: [-900, 700, -900] }, { time: 6, pos: [300, 1000, 0] }, { time: 12, pos: [1500, 950, 800] } ] }
+    # Chase one drone as the swarm holds formation over the group.
+    - { type: chase, start: 32, duration: 8, target: drone1, offset: [-70, 18, 0], stiffness: 2.0 }
+    # Wide closing frame: the swarm streamed east of the near-stationary carrier group — frame both.
+    - { type: static, start: 40, duration: 6, pos: [1300, 1750, -3000], look_at: [1400, 750, 0], fov: 60 }

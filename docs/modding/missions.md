@@ -257,6 +257,8 @@ only checks the forms listed above; unknown predicate strings are passed through
 | `set_weather <preset>` | Transitions the weather to `<preset>` (`clear`/`partly_cloudy`/`overcast`/`rain`/`storm`/`snow`/`blizzard`). Example: `do: set_weather storm` on an objective-destroy trigger. |
 | `set_time <hours>` | Sets the in-game time of day (0–24, float). Example: `do: set_time 20.5`. |
 | `spawn(<type>,<side>,<pos>)` | Spawns a new unit of `type` for coalition `side` at world position `pos` (x,y,z comma-separated, no spaces). Example: `spawn(Su27,russia,15500,0,9200)` |
+| `detonate <x> <y> <z> <radius_m> <damage>` | An AoE warhead at a world point (linear falloff; add `--nuclear` for the EMP ring). A scripted flak/explosion event. Example: `do: detonate -880 1800 0 600 30`. |
+| `atc_scramble <airport> <type> [count]` | Launches `count` AI departures of `type` from a named airport in ATC-sequenced order. Example: `do: atc_scramble builtin:airfield builtin:debug-entity 1`. |
 
 Non-terminal actions (everything except `mission_success`/`mission_failure`) are routed
 server-side through the **same validated command path the admin console uses** — a mission can do

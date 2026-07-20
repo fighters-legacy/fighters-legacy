@@ -1,0 +1,27 @@
+name: "Demo: Night Patrol"
+map: world
+layer: world_clear
+time: { hour: 22, minute: 30 }
+wind: { heading: 310, speed: 9 }
+sides: [blue]
+# A two-ship night CAP orbits the builtin airfield under a geographically-correct star field and a
+# phase-lit Moon (#468/#484). Shows the spherical-Earth night sky, the airfield with its flattened
+# runway + procedural markings, and the aircraft silhouetted against the stars. Zero content pack.
+objects:
+  - { type: builtin:debug-entity, id: night1, side: blue, pos: [4000, 1400, 0], heading: 0, ai: "loiter 4000 1400 0 2400 1400 0.6" }
+  - { type: builtin:debug-entity, id: night2, side: blue, pos: [4000, 1600, 900], heading: 180, ai: "loiter 4000 1600 0 2600 1600 0.6 ccw" }
+  - { type: builtin:static-target, id: pad, side: blue, pos: [4300, 0, 320], heading: 90, start: ground }
+triggers:
+  - on: timer(75)
+    do: mission_success
+cameras:
+  shots:
+    # Low at the field edge, pitched up at the star field + Moon; an aircraft crosses the frame.
+    - { type: static, start: 0, duration: 10, pos: [4600, 565, 900], look_at: [4200, 2100, -300], fov: 60 }
+    # Orbit one patroller silhouetted against the night sky (clockwise).
+    - { type: orbit, start: 10, duration: 12, target: night1, radius: 420, height: 110, period: -30 }
+    # Slide low along the runway centreline — the flattened surface and procedural markings.
+    - { type: move, start: 22, duration: 10, look_at: [5400, 556, 0], ease: smooth,
+        keyframes: [ { time: 0, pos: [2850, 562, 40] }, { time: 10, pos: [5200, 566, 40] } ] }
+    # Wide closing frame over the lit field under the stars.
+    - { type: static, start: 32, duration: 8, pos: [4000, 1500, -2400], look_at: night1, fov: 58 }

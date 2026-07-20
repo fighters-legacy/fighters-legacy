@@ -91,9 +91,10 @@ drifts a demo, re-run the report and adjust. Iterate a shot list without touchin
 | No Vulkan device headless | Install `mesa-vulkan-drivers` and set `VK_ICD_FILENAMES` to the lavapipe ICD; unset `DISPLAY`. |
 | Aircraft look like placeholder shapes | Expected zero-pack — the builtin silhouettes (#886). Pack-variant demos with real aircraft follow once fl-base-pack records well. |
 
-## The v0.4.0 demo set
+## The demo set
 
-`missions/demos/` (zero content pack, builtin AI + placeholder meshes):
+`missions/demos/` (zero content pack, builtin AI + placeholder meshes). The first five are the
+original set; the last five each showcase one engine epic that landed for v0.4.0.
 
 1. **demo-dogfight** — 2v2 `builtin:fighter` guns + IR; establishing static → orbit at the merge →
    chase the blue lead → move flyby → static tracking a survivor.
@@ -104,3 +105,34 @@ drifts a demo, re-run the report and adjust. Iterate a shot list without touchin
 4. **demo-sensors-intercept** — a patrol → detect → intercept honest-sensing chain.
 5. **demo-gallery-flyover** — a museum row of the builtin placeholder silhouettes (#886), a slow move
    camera touring the asset catalog.
+6. **demo-bomber-defense** (multi-crew, #966) — two `builtin:bomber` hold a slow racetrack; each tail
+   seat auto-crews a defensive gunner. Two fighters bore in and the turrets fire tracer down the rear
+   quarter as they press the envelope.
+7. **demo-carrier-swarm** (advanced vehicles, #585) — a `builtin:carrier` on its vessel force model
+   with two naval escorts, and a six-ship drone **boids swarm** (`ai: "swarm …"`) flocking over the
+   group; bow static → carrier orbit → move through the flock → drone chase → wide.
+8. **demo-atc-scramble** (ATC, #673) — timed `atc_scramble` triggers launch AI departures from the
+   builtin airfield in sequence; the cameras use fixed world points along the runway and climbout
+   (scrambled aircraft are not mission-roster objects, so they can't be a `target`/`look_at` id).
+9. **demo-ejection** (mission runtime, #584) — a walking `detonate` flak barrage wounds the lead into
+   the eject band; the AI pilot auto-ejects and a replicating parachute appears where the airframe was
+   lost. The camera pushes in on the hanging chute.
+10. **demo-night-patrol** (spherical Earth, #468) — a two-ship night CAP over the builtin airfield
+    under a geographically-correct star field + phase-lit Moon, with a low pass along the flattened,
+    procedurally-marked runway.
+
+Two authoring notes these demos exercise:
+
+- **Camera targets must be mission-roster ids.** `orbit`/`chase` `target` and `look_at`-by-id resolve
+  through the mission roster. Entities that appear at runtime — `atc_scramble` departures, an ejection
+  parachute — have no mission id, so frame them with a fixed `[x, y, z]` `look_at`.
+- **Effect-driven demos need faithful timing.** Trigger `do:` actions that mutate the world
+  (`detonate`, `atc_scramble`, `spawn`) run on the sim callback queue; `fl-server --mission-report`
+  drains that queue each tick, so a report run reproduces them deterministically — place burst/shot
+  coords against a report run and they stay in sync.
+
+### Carrier launch/recovery and rotorcraft are out of the zero-pack set
+
+`demo-carrier-swarm` shows the vessel + swarm, not catapult/arrested-recovery flight ops: there is no
+zero-pack way to author an aircraft **on** a moving deck, and no builtin helicopter/drone flight
+model. Those become demos once a content pack provides carrier-capable aircraft and rotorcraft.
