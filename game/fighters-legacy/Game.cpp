@@ -1775,6 +1775,25 @@ void Game::run() {
                 wt.overspeed =
                     maxMach > 0.f && atmos.speed_of_sound_m_s > 0.f && (spd / atmos.speed_of_sound_m_s) > maxMach;
             }
+            // RWR / missile-lock tones (#960): the worst HOSTILE threat level in this peer's legitimate
+            // RWR picture (the datalink strobes the server decided it detects — no wallhack). Friendly
+            // emitters are benign and never toned. Only meaningful for a pilot (inFlight).
+            if (wt.inFlight && d.session.clientHandler) {
+                const fl::RadarView rv = d.session.clientHandler->radarView();
+                uint8_t worst = fl::kThreatSearch;
+                bool any = false;
+                for (const fl::RwrStrobe& s : rv.strobes) {
+                    if (s.ident == fl::kIffFriend)
+                        continue; // a friendly emitter is not a threat
+                    any = true;
+                    if (s.level > worst)
+                        worst = s.level;
+                }
+                if (any)
+                    wt.rwr = worst == fl::kThreatLaunch ? fl::RwrThreat::Launch
+                             : worst == fl::kThreatLock ? fl::RwrThreat::Lock
+                                                        : fl::RwrThreat::Search;
+            }
             d.services.warningTones.update(wt, aud, 1.0f / 60.0f);
         }
 

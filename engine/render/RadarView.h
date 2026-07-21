@@ -25,9 +25,11 @@ inline constexpr uint8_t kTrackDetected = 1;
 inline constexpr uint8_t kTrackLocked = 2;
 inline constexpr uint8_t kTrackCoasting = 3;
 
-// Mirrors sensor::ThreatLevel ordinals (SensorSystem.h): a scan strobe vs a lock tone.
+// Mirrors sensor::ThreatLevel ordinals (SensorSystem.h): a scan strobe, a lock tone, and a launch
+// (a radar-guided missile guiding on you — #960).
 inline constexpr uint8_t kThreatSearch = 0;
 inline constexpr uint8_t kThreatLock = 1;
+inline constexpr uint8_t kThreatLaunch = 2;
 
 // One fused track for display. Position is ABSOLUTE world metres (double), reconstructed on the client
 // from the datalink header origin + the record's relative offset.
