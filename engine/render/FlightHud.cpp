@@ -242,8 +242,10 @@ void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrai
             ++drawn;
         }
 
-        // RWR: strobes ring the scope edge at the emitter bearing; lock tones in red, scans in amber.
+        // RWR: strobes ring the scope edge at the emitter bearing. Scans amber, lock/launch red; a
+        // launch (a guided missile inbound, #960) is the worst and wins the caption over a bare lock.
         bool anyLock = false;
+        bool anyLaunch = false;
         for (const RwrStrobe& s : radar.strobes) {
             const glm::dvec3 d = glm::dvec3(s.emitterPos[0], s.emitterPos[1], s.emitterPos[2]) -
                                  glm::dvec3(e->position.x, e->position.y, e->position.z);
@@ -253,12 +255,15 @@ void FlightHud::update(const EntityRenderEntry* e, float timeOfDay, float terrai
             const float rel = bearing - ownHdg;
             const float ex = kCx + std::sin(rel) * (kR / kAspect);
             const float ey = kCy - std::cos(rel) * kR;
-            const bool lock = (s.level == kThreatLock);
+            const bool lock = (s.level >= kThreatLock); // lock or launch
             anyLock = anyLock || lock;
-            pushLine(ex - 0.006f / kAspect, ey, ex + 0.006f / kAspect, ey, 2.f, lock ? 1.f : 1.f, lock ? 0.1f : 0.8f,
+            anyLaunch = anyLaunch || (s.level == kThreatLaunch);
+            pushLine(ex - 0.006f / kAspect, ey, ex + 0.006f / kAspect, ey, 2.f, 1.f, lock ? 0.1f : 0.8f,
                      lock ? 0.1f : 0.2f);
         }
-        if (anyLock)
+        if (anyLaunch)
+            pushText(HudAlign::Center, kCx, kCy + kR + 0.03f, 1.f, 0.1f, 0.1f, "%s", "RWR LAUNCH");
+        else if (anyLock)
             pushText(HudAlign::Center, kCx, kCy + kR + 0.03f, 1.f, 0.1f, 0.1f, "%s", "RWR LOCK");
     }
 }

@@ -7,7 +7,31 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.8] - 2026-07-20
+### Added
+
+- **audio**: RWR and missile-lock warning tones (#960, Epic #586). `WarningToneManager` gains a
+  radar-warning-receiver channel — a slow search strobe, a steady lock tone, and a fast launch warble
+  — driven by the peer's LEGITIMATE threat picture (the datalink/RWR strobes the server decided it
+  detects, so nothing leaks that the RWR did not honestly hear). One voice plays the worst hostile
+  level; escalation is instant (a launch is heard the frame it appears) and de-escalation runs through
+  a hold so a one-frame gap does not chop the tone. The RWR honors its own `AudioSettings::rwrVolume`
+  slider (previously declared but unconsumed). A new `sensor::ThreatLevel::Launch` is sourced honestly
+  from live RADAR-guided missiles guiding on the peer (via a `SensorSystem` missile-threat provider
+  seam the `WorldBroadcaster` wires to the projectile pool) — IR-seeker missiles are passive and never
+  light the RWR, and a coasting/lost seeker drops the strobe, rewarding a defeated lock. Carried on the
+  existing `MsgDatalink` threat record (no wire size change); the HUD radar scope shows a distinct
+  `RWR LAUNCH` caption. State machine unit-tested headless (priority, hysteresis, `rwrVolume`, launch
+  injection + ordering).
+- **audio**: continuous engine and aerodynamic sound layers with positional doppler (#959, Epic #586).
+  A new `engine/audio/EngineAudio` (engine-audio) holds the byte-stable builtin engine hum + airframe
+  wind-rush loops and the pure throttle/airspeed → pitch/gain mapping; the game-layer
+  `EngineAudioManager` (beside `ClientEffectRouter`) drives them off the render snapshot each frame — the
+  ownship's engine is HEAD-LOCKED (no distance falloff, no doppler on your own jet) while every other
+  air entity gets a POSITIONAL looping engine source with its world velocity set so OpenAL applies
+  doppler on a flyby, distance-attenuated and capped to the nearest eight. The engine pitch/gain track
+  throttle, airspeed and afterburner; the wind rush swells with dynamic pressure. Only air vehicles hum
+  (category predicate). A null audio device is a silent no-op, so CI opens no device. Unit-tested headless
+  via a tracking `IAudio` (mapping, byte-stable PCM, head-lock/doppler/distance wiring).
 
 ### Added
 

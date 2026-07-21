@@ -78,6 +78,7 @@ add_library(engine-audio STATIC
     audio/SfxBuiltinSounds.cpp
     audio/SfxManager.cpp
     audio/WarningToneManager.cpp
+    audio/EngineAudio.cpp
 )
 target_include_directories(engine-audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-audio
