@@ -398,6 +398,13 @@ if(TARGET platform-enet)
         "${CMAKE_CURRENT_SOURCE_DIR}")
     catch_discover_tests(test_lan_discovery)
 
+    add_executable(test_server_query test_server_query.cpp)
+    target_link_libraries(test_server_query PRIVATE Catch2::Catch2WithMain engine-net)
+    target_include_directories(test_server_query PRIVATE
+        "${CMAKE_SOURCE_DIR}/engine"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    catch_discover_tests(test_server_query)
+
     add_executable(test_admin_console test_admin_console.cpp
         "${CMAKE_SOURCE_DIR}/server/fl-server/ServerCommands.cpp")
     target_link_libraries(test_admin_console PRIVATE
@@ -497,6 +504,14 @@ catch_discover_tests(test_job_system)
 add_executable(test_faction_registry test_faction_registry.cpp)
 target_link_libraries(test_faction_registry PRIVATE Catch2::Catch2WithMain engine-world)
 catch_discover_tests(test_faction_registry)
+
+add_executable(test_game_mode test_game_mode.cpp)
+target_link_libraries(test_game_mode PRIVATE Catch2::Catch2WithMain engine-match)
+catch_discover_tests(test_game_mode)
+
+add_executable(test_match_controller test_match_controller.cpp)
+target_link_libraries(test_match_controller PRIVATE Catch2::Catch2WithMain engine-match)
+catch_discover_tests(test_match_controller)
 
 add_executable(test_airport_registry test_airport_registry.cpp)
 target_link_libraries(test_airport_registry PRIVATE Catch2::Catch2WithMain engine-world)

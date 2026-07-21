@@ -157,6 +157,10 @@ std::shared_ptr<AirportDefData> AssetManager::loadAirportDef(const char* name) {
     return loadAsset<AirportDefData>(AssetType::Airport, name, &IContentPack::loadAirportDef);
 }
 
+std::shared_ptr<GameModeData> AssetManager::loadGameMode(const char* name) {
+    return loadAsset<GameModeData>(AssetType::GameMode, name, &IContentPack::loadGameMode);
+}
+
 std::optional<LiveryDef> AssetManager::liveryForAircraft(const char* aircraftDefId) {
     if (!aircraftDefId || !*aircraftDefId)
         return std::nullopt;

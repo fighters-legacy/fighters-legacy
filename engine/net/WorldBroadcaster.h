@@ -104,6 +104,7 @@ struct PeerInputState {
     bool hasAppliedSeq{false};    // false until the first input is drained + applied (#427 TLV gate)
     bool ewmaSeeded{false};       // false until EWMA receives its first sample
     bool ejectHeld{false};        // last-tick eject bit, for rising-edge detection (#672)
+    bool respawnHeld{false};      // last-tick respawn bit, for rising-edge detection (#648)
     // Jitter buffer: initialized to depth 1; sized from estimatedDelayTicks on first input,
     // then continuously adjusted by the adaptive resize loop in WorldBroadcaster::onTick.
     JitterBuffer jitterBuffer{1};
@@ -594,6 +595,17 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         return m_shuttingDown;
     }
 
+    // Cross-thread shutdown status (#226) for the LAN beacon (which ticks on the main thread). Backed
+    // by relaxed atomics the sim thread publishes; any thread may read it.
+    struct ShutdownStatus {
+        bool active{false};
+        uint32_t secondsRemaining{0};
+    };
+    [[nodiscard]] ShutdownStatus getShutdownStatus() const noexcept {
+        return {m_shutdownActiveShared.load(std::memory_order_relaxed),
+                m_shutdownSecsShared.load(std::memory_order_relaxed)};
+    }
+
     // Sim-thread only. Returns the spatial index rebuilt at the start of the most recent
     // onTick(). Consumers: interest management (#346), AoE warhead commands (#356); AI
     // controllers receive it via the si parameter of IEntityController::sample().
@@ -763,6 +775,128 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         return m_playerFaction;
     }
 
+    // ── team assignment + balancing (#522) — sim-thread only ─────────────────
+    // Sentinel for "no specific team preference" in claimMissionSlot / assignment.
+    static constexpr uint16_t kNoFaction = 0xFFFFu;
+
+    // Assign a joining pilot to a team. Consulted in handleConnectRequest before slot claim; the
+    // returned faction is stamped onto the spawned aircraft. Returning nullopt refuses the connection
+    // with ConnectRefusalCode::MatchFull (every team full). Unset (the default) preserves the legacy
+    // behavior — the mission slot's faction, else m_playerFaction — so existing single-mode servers and
+    // every existing test are byte-identical. fl-server wires this to the mode's TeamBalancer (#522).
+    using TeamAssigner = std::function<std::optional<uint16_t>(uint32_t peerId)>;
+    void setTeamAssigner(TeamAssigner fn) {
+        m_teamAssigner = std::move(fn);
+    }
+
+    // Guard a mid-match team switch requested via MsgTeamRequest. Returns true if the switch is allowed
+    // (fl-server wires it to TeamBalancer::switchAllowed). Unset ⇒ all switches allowed. An admin `team`
+    // command bypasses this guard.
+    using TeamSwitchGuard = std::function<bool(uint32_t peerId, uint16_t targetFaction)>;
+    void setTeamSwitchGuard(TeamSwitchGuard fn) {
+        m_teamSwitchGuard = std::move(fn);
+    }
+
+    // The faction (team) a peer's aircraft currently carries, or kNoFaction when the peer has no live
+    // entity (observer / dead / unknown). Sim-thread; used by chat team routing (#646) and the balancer.
+    [[nodiscard]] uint16_t factionForPeer(uint32_t peerId) const noexcept;
+
+    // Switch a peer to a different team/faction: despawn its aircraft, update + rebroadcast its roster,
+    // and respawn it on the new team. Sim-thread only; the admin `team` command and the guarded
+    // MsgTeamRequest path both route here. A no-op if the peer has no roster entry.
+    void setPeerFaction(uint32_t peerId, uint16_t faction);
+
+    // ── match lifecycle + scoring (#523) — sim-thread only ───────────────────
+    // A POD mirror of the MatchController's public state (engine-net does not depend on engine-match).
+    // fl-server fills it from the controller and hands it here; the broadcaster stores it, broadcasts
+    // MsgMatchState to all peers, and unicasts it to a late joiner after ConnectAck.
+    struct MatchStatePod {
+        uint8_t phase{0};
+        uint16_t scoreLimit{0};
+        uint64_t phaseEndTick{0};
+        std::string modeId;
+        std::string modeName;
+        std::vector<std::pair<uint16_t, int32_t>> teamScores; // faction, score
+    };
+    void setMatchState(const MatchStatePod& state);
+
+    // Sink for scoreboard-relevant combat events (#523): (killerParticipant, victimParticipant,
+    // sameFaction). Called from the damage path (onEntityEvent) on the sim thread; fl-server forwards
+    // it to MatchController::recordKill. Unset ⇒ no match scoring (the pre-#523 behavior).
+    using MatchEventSink = std::function<void(uint32_t killer, uint32_t victim, bool sameFaction)>;
+    void setMatchEventSink(MatchEventSink fn) {
+        m_matchEventSink = std::move(fn);
+    }
+
+    // Sink for match participant join/leave (#523): (participantId, faction, isBot, joined). Called for
+    // pilots + bots (never observers — they have no scoreboard row) from admission / disconnect / team
+    // switch / bot spawn+retire. fl-server forwards it to MatchController::participantJoined/Left.
+    using MatchParticipantSink = std::function<void(uint32_t id, uint16_t faction, bool isBot, bool joined)>;
+    void setMatchParticipantSink(MatchParticipantSink fn) {
+        m_matchParticipantSink = std::move(fn);
+    }
+
+    // Freeze combat (Ending / PostMatch phases): suppresses new fire input and kill scoring. Cleared on
+    // the next Active phase. Sim-thread only.
+    void setCombatFrozen(bool frozen) noexcept {
+        m_combatFrozen = frozen;
+    }
+    [[nodiscard]] bool combatFrozen() const noexcept {
+        return m_combatFrozen;
+    }
+
+    // Reset the world for an in-process match rotation (#523): despawn every peer's aircraft and any
+    // remaining controlled entity, clear projectiles / pending combat events / mission slots / the
+    // respawn table, and zero (not erase) every score — but keep peers CONNECTED (their input slots,
+    // roster and handshake state survive). The client converges via the normal SnapshotDespawn path.
+    // fl-server calls this from the MatchController rotate hook via enqueueSimCallback, then reloads the
+    // next session and re-admits the connected pilots. Sim-thread only.
+    void resetWorld();
+
+    // Re-spawn every connected Pilot peer that currently has no aircraft (after resetWorld). Uses the
+    // team assigner for the new team, sends a fresh MsgConnectAck, and re-broadcasts the roster +
+    // participant join. Observers are untouched. Sim-thread only (the rotation path).
+    void readmitPilots();
+
+    // ── respawn + slot management (#648) — sim-thread only ───────────────────
+    struct RespawnPolicy {
+        uint32_t delayTicks{300};        // delay from death to eligible respawn (5 s at 60 Hz)
+        bool waves{false};               // round respawns up to a wave boundary
+        uint32_t waveIntervalTicks{900}; // 15 s waves
+    };
+    // Enable respawn with the given policy (from the game mode). Unset ⇒ respawn disabled (the pre-#648
+    // behavior: a dead peer stays entity-less until reconnect). Call before gameLoop.start() or via
+    // enqueueSimCallback on rotation.
+    void setRespawnPolicy(const RespawnPolicy& policy) {
+        m_respawnPolicy = policy;
+        m_respawnEnabled = true;
+    }
+    // Disable respawn (a no-match mode, e.g. free-flight): a dead peer's airframe stays in place rather
+    // than being despawned to await a respawn that a non-requesting peer never asks for. Used on rotation
+    // INTO a no-match mode so a previously-enabled policy does not persist. Sim-thread / pre-start.
+    void disableRespawn() noexcept {
+        m_respawnEnabled = false;
+    }
+    // Force an immediate respawn of a participant (the admin `respawn` command). Sim-thread.
+    void respawnParticipant(uint32_t participantId);
+
+    // ── AI bot participants (#87) — sim-thread only ──────────────────────────
+    // Register a spawned AI bot as a scoreboard participant: it gets a roster row (badged bot), a score
+    // row, and its kills/deaths credit through the combat path (participantForEntity resolves its
+    // entity via m_botEntities). fl-server's BotRoster owns the entity + AI controller; this only wires
+    // the scoreboard/roster side. participantId must be a bot id (kBotParticipantBase + n).
+    void registerBotParticipant(uint32_t participantId, EntityId entity, const std::string& callsign, uint16_t faction);
+    // Remove a bot participant (retired or killed): drops its roster row, score, and entity mapping.
+    void removeBotParticipant(uint32_t participantId);
+
+    // ── reconnection (#524) — sim-thread only ────────────────────────────────
+    // Grace window (in ticks) during which a disconnecting player's team + score are held under their
+    // client GUID and restored on reconnect. 0 = disabled (the pre-#524 behavior). Call before
+    // gameLoop.start() or via enqueueSimCallback (reload_config).
+    void setReconnectGraceTicks(uint64_t ticks) noexcept {
+        m_reconnectGraceTicks = ticks;
+    }
+
     // Called on the sim thread at the end of onConnect, after the peer's entity and controller exist.
     // The implementation spawns the peer's flight (N AI members), registers their controllers, and
     // returns the formation it created. kNoFormation (the default with no hook installed) = the peer
@@ -820,6 +954,16 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Configure the operator password for MsgAdminCommand authentication.
     // Empty string disables the network admin channel. Call before gameLoop.start().
     void setOperatorPassword(std::string password);
+
+    // Configure the join password (#998). Empty = open server. When set, a connecting client must send
+    // the matching password (MsgConnectRequest ConnectJoinPassword TLV) or it is refused with
+    // ConnectRefusalCode::BadPassword. Sim-thread; hot-reloadable via enqueueSimCallback.
+    void setJoinPassword(std::string password) {
+        m_joinPassword = std::move(password);
+    }
+    [[nodiscard]] bool hasJoinPassword() const noexcept {
+        return !m_joinPassword.empty();
+    }
 
     // Attach the admin command dispatcher for MsgAdminCommand handling.
     // Typically: [&adminRegistry](std::string_view cmd){ return adminRegistry.dispatch(cmd); }
@@ -992,15 +1136,18 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Spawn a pilot peer's entity of `entityType`, register its PeerController, stamp faction, and form
     // its flight. Returns the assigned EntityId (invalid on spawn failure). Extracted from the old
     // onConnect. Sim-thread.
-    EntityId admitPilot(uint32_t peerId, const std::string& entityType);
+    // `faction` = the team stamped onto the spawned aircraft (kNoFaction ⇒ m_playerFaction, the legacy
+    // default). The team assigner (#522) supplies it in handleConnectRequest.
+    EntityId admitPilot(uint32_t peerId, const std::string& entityType, uint16_t faction = kNoFaction);
     // Shared spawn core for a pilot peer: spawn `entityType` at `t`, record m_peerEntities, stamp
     // `faction` (0 = leave neutral), resolve the flight model, and register the PeerController. Used by
     // both admitPilot (round-robin path) and the mission-slot path. Sim-thread.
     EntityId spawnPilotEntity(uint32_t peerId, const std::string& entityType, const EntityTransform& t,
                               uint16_t faction, float initialAirspeed = kAutoSpawnAirspeed);
     // Claim the next open mission player slot for `peerId` (#854). Returns its index, or -1 when there
-    // are no slots or all are occupied. releaseMissionSlot frees it on despawn. Sim-thread.
-    int claimMissionSlot(uint32_t peerId);
+    // are no slots or all are occupied. `preferredFaction` (kNoFaction = any) prefers a slot on that
+    // team, falling back to any open slot (#522). releaseMissionSlot frees it on despawn. Sim-thread.
+    int claimMissionSlot(uint32_t peerId, uint16_t preferredFaction = kNoFaction);
     void releaseMissionSlot(uint32_t peerId);
     // Resolve the entity type to spawn for a pilot (#834): a client-requested type wins iff it is a
     // REGISTERED type (server-clamped allowlist); otherwise the [world] player_entity_type default;
@@ -1110,6 +1257,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     FlightOrderHandler m_flightOrderHandler; // null = the order channel is off; orders are discarded
     TargetDesignator m_targetDesignator;     // null = attack orders always refuse (never invent a target)
     uint16_t m_playerFaction{1};             // 0 restores the legacy neutral-player behavior
+    TeamAssigner m_teamAssigner;             // #522: null = legacy (slot/player faction); else the mode balancer
+    TeamSwitchGuard m_teamSwitchGuard;       // #522: null = all MsgTeamRequest switches allowed
     std::string m_playerEntityType{"builtin:debug-entity"}; // pilot spawn default when client requests none (#834)
     bool m_allowObservers{true};                            // #857: false = refuse observer connect requests
     std::vector<RequiredPack> m_requiredPacks;              // #872: packs a client must have (id + optional version)
@@ -1178,14 +1327,79 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         int32_t score{0};
         bool dirty{false}; // a Stats record is owed to this peer in the next serialize
     };
-    std::unordered_map<uint32_t, PeerScore> m_scores; // keyed by peerId; erased on disconnect
+    std::unordered_map<uint32_t, PeerScore> m_scores; // keyed by participantId; erased on disconnect
     std::vector<CombatEventRecord> m_pendingKillEvents;
     DamageRules m_damageRules{};
+
+    // ── match lifecycle + scoring (#523) — sim-thread only ───────────────────
+    MatchStatePod m_matchState;                  // last state set by fl-server; unicast to a late joiner
+    bool m_haveMatchState{false};                // false until fl-server pushes the first state
+    MatchEventSink m_matchEventSink;             // null = no match scoring (pre-#523 behavior)
+    MatchParticipantSink m_matchParticipantSink; // null = no participant tracking
+    bool m_combatFrozen{false};                  // true in Ending/PostMatch — gates fire input + kill scoring
+    uint64_t m_lastScoreboardTick{0};            // last tick a periodic MsgScoreboard went out
+    bool m_scoreboardDirty{false};               // a score changed since the last broadcast
+    void broadcastMatchState();                  // send m_matchState to every handshake-complete peer
+    void sendMatchStateTo(uint32_t peerId);      // unicast to one peer (late joiner)
+    void broadcastScoreboard();                  // build + send MsgScoreboard (chunked) to all peers
+    void sendScoreboardTo(uint32_t peerId);      // unicast to one peer (on admit)
+    void appendScoreboardRows(std::vector<uint8_t>& pkt, std::size_t begin, std::size_t count,
+                              const std::vector<uint32_t>& order) const;
+
+    // ── respawn (#648) ───────────────────────────────────────────────────────
+    struct RespawnRec {
+        uint64_t dueTick{0};      // earliest tick this participant may respawn
+        uint16_t factionIndex{0}; // team to respawn on
+        bool isBot{false};
+        bool requested{false}; // a human pressed respawn (queued if before dueTick); bots auto-respawn
+    };
+    std::unordered_map<uint32_t, RespawnRec> m_respawn; // participantId -> pending respawn
+    std::vector<uint32_t> m_pendingDeathCleanup;        // peers whose entity died this tick (deferred despawn)
+    RespawnPolicy m_respawnPolicy{};
+    bool m_respawnEnabled{false};
+    void processRespawns(); // drain death cleanup + fire due respawns; called from onTick
+
+    // ── reconnection (#524) ──────────────────────────────────────────────────
+    struct GraceRec {
+        std::string callsign;
+        uint16_t factionIndex{0};
+        uint32_t kills{0};
+        uint32_t losses{0};
+        int32_t score{0};
+        uint64_t expiresTick{0};
+    };
+    std::unordered_map<std::string, GraceRec> m_disconnectGrace; // guid -> held identity/score
+    std::unordered_map<uint32_t, std::string> m_peerGuids;       // peerId -> client guid (set at handshake)
+    uint64_t m_reconnectGraceTicks{0};                           // 0 = disabled
+
+    // ── match roster (#996) — sim-thread only ───────────────────────────────
+    // participantId -> display record. Humans key on peerId; bots on kBotParticipantBase + n (#87).
+    // The single name/team source the client resolves for chat, kill feed and scoreboard.
+    struct RosterRec {
+        std::string callsign;
+        uint16_t factionIndex{0};
+        PeerRole role{PeerRole::Pilot};
+        bool isBot{false};
+    };
+    std::unordered_map<uint32_t, RosterRec> m_roster;
+    // Sanitize an untrusted callsign: force-terminate, strip control chars, trim, clamp; empty falls
+    // back to "Pilot-<participantId>". Returns the cleaned string (never empty).
+    static std::string sanitizeCallsign(const char* raw, uint32_t participantId);
+    // Upsert one roster record and broadcast the one-entry change to every handshake-complete peer.
+    void upsertRoster(uint32_t participantId, const RosterRec& rec);
+    // Broadcast a leave for `participantId` (kRosterLeave) and erase it from m_roster.
+    void removeRoster(uint32_t participantId);
+    // Unicast the full current roster to one peer (chunked), used right after ConnectAck.
+    void sendFullRoster(uint32_t peerId);
 
     // The owning peer of an entity, or kNoOwningPeer. Resolved against the LIVE peer map, never
     // against EntityState::ownerId — whose "0 = server/AI" convention collides with real peer 0
     // (the #610 kNoPeer lesson).
     [[nodiscard]] uint32_t peerIdForEntity(EntityId id) const noexcept;
+    // The scoreboard participant id owning an entity: a human's peerId, or a bot's participant id
+    // (kBotParticipantBase + n) via m_botEntities (#87). kNoOwningPeer for AI/mission/environment.
+    [[nodiscard]] uint32_t participantForEntity(EntityId id) const noexcept;
+    std::unordered_map<uint32_t /*entityIdx*/, uint32_t /*participantId*/> m_botEntities; // #87 bot scoring
     void flushCombatEvents();
 
     // Datalink / shared team track picture (#528). Fuses each pilot peer's own contacts with every
@@ -1348,6 +1562,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword;                               // empty = admin channel disabled
+    std::string m_joinPassword;                                   // #998: empty = open server
     std::function<std::string(std::string_view)> m_adminDispatch; // null = admin channel disabled
     AuthTracker m_adminAuthTracker{5, 300}; // per-IP failed-auth lockout (defaults: 5 attempts, 5 min)
 
@@ -1471,6 +1686,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
 
     // Shutdown countdown state (sim-thread only).
     bool m_shuttingDown{false};
+    // Cross-thread mirror published by the sim thread for the main-thread beacon (#226).
+    std::atomic<bool> m_shutdownActiveShared{false};
+    std::atomic<uint32_t> m_shutdownSecsShared{0};
     std::chrono::steady_clock::time_point m_shutdownAt{};
     std::chrono::steady_clock::time_point m_nextNoticeAt{};
     uint32_t m_warningIntervalS{300};

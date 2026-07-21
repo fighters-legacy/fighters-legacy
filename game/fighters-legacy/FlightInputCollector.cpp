@@ -99,6 +99,11 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
         if (!uiFocused && input.isKeyDown(Key::End))
             inp.buttons |= fl::kInputButtonEject;
 
+        // Respawn (#648): Backspace requests a respawn after death. Level on the wire; the server
+        // edge-detects and only acts while the player is dead in a match with respawn enabled.
+        if (!uiFocused && input.isKeyDown(Key::Backspace))
+            inp.buttons |= fl::kInputButtonRespawn;
+
         m_weaponFired = (inp.buttons & 1u) != 0u;
 
         if (input.getGamepadCount() > 0) {

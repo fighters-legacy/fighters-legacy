@@ -289,7 +289,8 @@ Cycle order for rotation items.
 
 Ordered list of mission, campaign, or sandbox theater IDs to cycle through. IDs must
 match those defined in the corresponding content files. Empty array means no automatic
-rotation — the server stays on the current scenario.
+rotation — the server stays on the current scenario. Each item may pair a mission with a
+game mode using an `@` suffix, e.g. `"fjord@builtin:tdm"` (see the `[match]` section).
 
 ### `time_limit_min`
 
@@ -303,6 +304,49 @@ rotation item. `0` disables the limit.
 This value applies **only to sandbox sessions**. Mission and campaign sessions end when
 their win/loss conditions are met, which are defined in the mission YAML or campaign TOML
 content files — not here.
+
+---
+
+## [match] — Multiplayer match framework (Epic E, #497)
+
+Selects and tunes the game mode a multiplayer match runs. Game modes define teams,
+scoring, respawn and win conditions — see [docs/modding/game-modes.md](modding/game-modes.md).
+
+### `mode`
+
+| Type | Default |
+|---|---|
+| string | `"builtin:free-flight"` |
+
+The default game mode for rotation items that do not name their own (`mission@mode`) and
+for non-rotation servers. A `builtin:` id (`builtin:free-flight`, `builtin:tdm`) or a pack
+`modes/` asset stem. An unknown id falls back to `builtin:free-flight`.
+
+### `end_screen_s`
+
+| Type | Default | Range |
+|---|---|---|
+| integer | `10` | `0`–`120` |
+
+Seconds the end-of-match scoreboard shows (combat frozen) before the match rotates.
+
+### `reconnect_grace_s`
+
+| Type | Default | Range |
+|---|---|---|
+| integer | `120` | `0`–`3600` (`0` = disabled) |
+
+Seconds a disconnected player's team and score are held under their client identity (#524),
+so a reconnect within the window restores them. `0` disables reconnection restore.
+
+---
+
+## [server] password — Join password (#998)
+
+The existing `[server] password` gates *joins*: when non-empty, a connecting client must
+supply the matching password or it is refused (`ConnectRefusalCode::BadPassword`). The LAN
+beacon advertises a passworded flag so a browser can prompt. Sent plaintext over ENet
+(GNS encrypts; enet6 does not) — the same caveat as RCON. Empty = open server.
 
 ---
 

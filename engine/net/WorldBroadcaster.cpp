@@ -191,6 +191,10 @@ RejectInfo rejectInfoFor(fl::ConnectRefusalCode code) {
                 LogLevel::Info};
     case C::EntitlementRequired:
         return {"This server requires premium content you do not own.", "entitlement required", LogLevel::Info};
+    case C::MatchFull:
+        return {"All teams are full.", "all teams full", LogLevel::Info};
+    case C::BadPassword:
+        return {"Incorrect server password.", "wrong join password", LogLevel::Info};
     case C::Generic:
         break;
     }
@@ -717,6 +721,13 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 ++it;
         }
         m_adminAuthTracker.pruneExpired();
+        // Reconnection grace (#524): purge expired held identities.
+        for (auto it = m_disconnectGrace.begin(); it != m_disconnectGrace.end();) {
+            if (m_currentTick > it->second.expiresTick)
+                it = m_disconnectGrace.erase(it);
+            else
+                ++it;
+        }
     }
 
     // Idle timeout: disconnect peers that have sent no activity for m_idleTimeoutTicks ticks.
@@ -816,6 +827,15 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 ejectPilot(eit->second);
         }
         ps.ejectHeld = ejectNow;
+
+        // Respawn request (#648): rising edge marks the intent. Fired at dueTick by processRespawns
+        // (queued if pressed early); a repeat/held bit is one request.
+        const bool respawnNow = (ps.buttons & kInputButtonRespawn) != 0;
+        if (respawnNow && !ps.respawnHeld) {
+            if (auto rit = m_respawn.find(peerId); rit != m_respawn.end())
+                rit->second.requested = true;
+        }
+        ps.respawnHeld = respawnNow;
     }
 
     // AI auto-eject (#672): a scripted/AI pilot punches out when its airframe is critically hit rather
@@ -1861,6 +1881,17 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // despawn and its credit arrive in the same tick's traffic.
     flushCombatEvents();
 
+    // Full scoreboard (#523), unreliable — every ~2 s while dirty, so every peer sees everyone's
+    // kills/deaths/score/ping. Cheap and self-describing; a dropped one is replaced next interval.
+    if (m_scoreboardDirty && tickIndex - m_lastScoreboardTick >= 120) {
+        broadcastScoreboard();
+        m_lastScoreboardTick = tickIndex;
+        m_scoreboardDirty = false;
+    }
+
+    // Respawn (#648): deferred death teardown + fire any due respawns (humans on request, bots auto).
+    processRespawns();
+
     // Shutdown countdown: fire at each interval and at T=0.
     if (m_shuttingDown) {
         using namespace std::chrono;
@@ -1868,16 +1899,23 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         if (now >= m_shutdownAt) {
             broadcastShutdownNotice(0, makeShutdownMessage(0, m_shutdownReason).c_str());
             m_shuttingDown = false;
+            m_shutdownActiveShared.store(false, std::memory_order_relaxed); // #226
+            m_shutdownSecsShared.store(0, std::memory_order_relaxed);
             if (m_shutdownCallback)
                 m_shutdownCallback();
-        } else if (now >= m_nextNoticeAt) {
-            auto secsLeft = static_cast<uint32_t>(duration_cast<seconds>(m_shutdownAt - now).count());
-            broadcastShutdownNotice(static_cast<uint16_t>(secsLeft),
-                                    makeShutdownMessage(secsLeft, m_shutdownReason).c_str());
-            // Always squeeze in a T-60s notice: if the next interval would skip past it, clamp.
-            auto nextInterval = now + seconds(m_warningIntervalS);
-            auto oneMinBefore = m_shutdownAt - seconds(60);
-            m_nextNoticeAt = (nextInterval > oneMinBefore && oneMinBefore > now) ? oneMinBefore : nextInterval;
+        } else {
+            // Publish the live remaining seconds each tick for the LAN beacon (#226).
+            m_shutdownSecsShared.store(static_cast<uint32_t>(duration_cast<seconds>(m_shutdownAt - now).count()),
+                                       std::memory_order_relaxed);
+            if (now >= m_nextNoticeAt) {
+                auto secsLeft = static_cast<uint32_t>(duration_cast<seconds>(m_shutdownAt - now).count());
+                broadcastShutdownNotice(static_cast<uint16_t>(secsLeft),
+                                        makeShutdownMessage(secsLeft, m_shutdownReason).c_str());
+                // Always squeeze in a T-60s notice: if the next interval would skip past it, clamp.
+                auto nextInterval = now + seconds(m_warningIntervalS);
+                auto oneMinBefore = m_shutdownAt - seconds(60);
+                m_nextNoticeAt = (nextInterval > oneMinBefore && oneMinBefore > now) ? oneMinBefore : nextInterval;
+            }
         }
     }
 
@@ -2005,7 +2043,7 @@ EntityId WorldBroadcaster::spawnPilotEntity(uint32_t peerId, const std::string& 
     return id;
 }
 
-EntityId WorldBroadcaster::admitPilot(uint32_t peerId, const std::string& entityType) {
+EntityId WorldBroadcaster::admitPilot(uint32_t peerId, const std::string& entityType, uint16_t faction) {
     EntityTransform t{};
     t.quat[3] = 1.0f; // identity quaternion (w component; XYZW layout)
     if (!m_spawnPoints.empty()) {
@@ -2023,7 +2061,8 @@ EntityId WorldBroadcaster::admitPilot(uint32_t peerId, const std::string& entity
     // Sandbox / round-robin fallback path: spawn stationary. The bare no-mission player flies the
     // builtin UFO, which is controllable at zero airspeed; a mission's airborne player comes through the
     // slot path below with a real cruise speed (#883).
-    return spawnPilotEntity(peerId, entityType, t, m_playerFaction, /*initialAirspeed=*/0.f);
+    const uint16_t f = (faction == kNoFaction) ? m_playerFaction : faction;
+    return spawnPilotEntity(peerId, entityType, t, f, /*initialAirspeed=*/0.f);
 }
 
 void WorldBroadcaster::setMissionPlayerSlots(std::vector<MissionSpawnSlot> slots) {
@@ -2032,7 +2071,19 @@ void WorldBroadcaster::setMissionPlayerSlots(std::vector<MissionSpawnSlot> slots
     m_peerSlot.clear();
 }
 
-int WorldBroadcaster::claimMissionSlot(uint32_t peerId) {
+int WorldBroadcaster::claimMissionSlot(uint32_t peerId, uint16_t preferredFaction) {
+    // First pass: prefer an open slot whose faction matches the requested team (#522). Slots are
+    // authoritative about WHERE a pilot spawns; the balancer is authoritative about WHICH SIDE.
+    if (preferredFaction != kNoFaction) {
+        for (std::size_t i = 0; i < m_slotOccupant.size(); ++i) {
+            if (m_slotOccupant[i] == kSlotFree && m_missionSlots[i].factionIndex == preferredFaction) {
+                m_slotOccupant[i] = peerId;
+                m_peerSlot[peerId] = static_cast<int>(i);
+                return static_cast<int>(i);
+            }
+        }
+    }
+    // Fallback: the next open slot regardless of faction (its faction becomes the pilot's team).
     for (std::size_t i = 0; i < m_slotOccupant.size(); ++i) {
         if (m_slotOccupant[i] == kSlotFree) {
             m_slotOccupant[i] = peerId;
@@ -2094,6 +2145,38 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         // A peer sends exactly one request; ignore repeats so it can't re-spawn or churn its role.
         m_logger.log(LogLevel::Warn, __FILE__, __LINE__, "duplicate MsgConnectRequest ignored");
         return;
+    }
+
+    // Join password (#998): the cheapest decisive check, before any admission side effect. Compare the
+    // client's ConnectJoinPassword TLV against the configured password in constant time (no length or
+    // early-exit timing oracle). Missing/wrong => refuse. Applies to pilots AND observers.
+    if (!m_joinPassword.empty()) {
+        const std::size_t extOff =
+            sizeof(MsgConnectRequest) + static_cast<std::size_t>(req.packCount) * sizeof(PackManifestEntry);
+        uint8_t supplied[64] = {};
+        std::size_t suppliedLen = 0;
+        if (extOff <= size) {
+            uint16_t plen = 0;
+            const uint8_t* pp = findExt(static_cast<const uint8_t*>(data) + extOff, size - extOff,
+                                        static_cast<uint16_t>(ExtTag::ConnectJoinPassword), plen);
+            if (pp && plen > 0u && plen <= sizeof(supplied)) {
+                std::memcpy(supplied, pp, plen);
+                suppliedLen = plen;
+            }
+        }
+        const std::string& pw = m_joinPassword;
+        uint8_t diff = (suppliedLen == pw.size()) ? 0u : 1u;
+        for (std::size_t i = 0; i < sizeof(supplied); ++i) {
+            const uint8_t a = supplied[i];
+            const uint8_t b = (i < pw.size()) ? static_cast<uint8_t>(pw[i]) : 0u;
+            diff |= (a ^ b);
+        }
+        for (std::size_t i = sizeof(supplied); i < pw.size(); ++i)
+            diff |= static_cast<uint8_t>(pw[i]);
+        if (diff != 0u) {
+            rejectConnection(peerId, extractIp(m_net.getPeerAddress(peerId)), ConnectRefusalCode::BadPassword);
+            return;
+        }
     }
 
     // Required-pack policy (#872). The connect handshake carries the client's mounted-pack manifest;
@@ -2173,13 +2256,15 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
     bool seatClaim = false;
     EntityId claimEntity{};
     uint8_t claimSeat = 0;
+    std::string reconnectGuid; // #524: client identity, for team/score restore on reconnect
     {
         const std::size_t extOff =
             sizeof(MsgConnectRequest) + static_cast<std::size_t>(req.packCount) * sizeof(PackManifestEntry);
         if (extOff <= size) {
+            const uint8_t* ext = static_cast<const uint8_t*>(data) + extOff;
+            const std::size_t extSize = size - extOff;
             uint16_t clen = 0;
-            const uint8_t* cp = findExt(static_cast<const uint8_t*>(data) + extOff, size - extOff,
-                                        static_cast<uint16_t>(ExtTag::ConnectSeatClaim), clen);
+            const uint8_t* cp = findExt(ext, extSize, static_cast<uint16_t>(ExtTag::ConnectSeatClaim), clen);
             if (cp && clen >= 9u) {
                 uint32_t ei = 0, eg = 0;
                 std::memcpy(&ei, cp, 4);
@@ -2188,7 +2273,52 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
                 claimEntity = EntityId{ei, eg};
                 seatClaim = true;
             }
+            uint16_t glen = 0;
+            const uint8_t* gp = findExt(ext, extSize, static_cast<uint16_t>(ExtTag::ConnectIdentity), glen);
+            if (gp && glen > 0u && glen <= 40u)
+                reconnectGuid.assign(reinterpret_cast<const char*>(gp), glen);
         }
+    }
+
+    // Reconnection (#524): if this guid is held in the grace table and not expired, the reconnecting
+    // player keeps their team + score. A guid already held by a LIVE peer is treated as fresh. Store the
+    // guid for the disconnect snapshot regardless.
+    const GraceRec* grace = nullptr;
+    if (!reconnectGuid.empty()) {
+        bool liveDuplicate = false;
+        for (const auto& [pid, g] : m_peerGuids) {
+            (void)pid;
+            if (g == reconnectGuid) {
+                liveDuplicate = true;
+                break;
+            }
+        }
+        if (!liveDuplicate) {
+            if (auto git = m_disconnectGrace.find(reconnectGuid); git != m_disconnectGrace.end()) {
+                if (m_currentTick <= git->second.expiresTick)
+                    grace = &git->second;
+                else
+                    m_disconnectGrace.erase(git); // expired — purge lazily
+            }
+        } else {
+            m_logger.log(LogLevel::Warn, __FILE__, __LINE__, "duplicate live client guid on connect; not restoring");
+        }
+        m_peerGuids[peerId] = reconnectGuid;
+    }
+
+    // Team assignment (#522): consult the mode balancer BEFORE claiming a slot. nullopt = every team is
+    // full → refuse. Unset assigner ⇒ kNoFaction, preserving the legacy slot/player-faction behavior.
+    uint16_t assignedFaction = kNoFaction;
+    if (grantedRole == PeerRole::Pilot && m_teamAssigner) {
+        std::optional<uint16_t> team = m_teamAssigner(peerId);
+        if (!team.has_value()) {
+            rejectConnection(peerId, extractIp(m_net.getPeerAddress(peerId)), ConnectRefusalCode::MatchFull);
+            return;
+        }
+        assignedFaction = *team;
+        // A reconnecting player rejoins their old team rather than being re-balanced (#524).
+        if (grace)
+            assignedFaction = grace->factionIndex;
     }
 
     EntityId assigned{}; // invalid for an observer — it has no entity
@@ -2202,8 +2332,9 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
             // Mission player slots (#854): a loaded mission's `player: true` objects become joinable slots.
             // Assign the next open one (its type/faction/spawn pins where and what the pilot flies, ignoring
             // the client's requested type). No slots / all occupied / a slot type that won't spawn ⇒ fall
-            // back to the round-robin default so a pilot always gets an aircraft.
-            const int slotIdx = claimMissionSlot(peerId);
+            // back to the round-robin default so a pilot always gets an aircraft. When a team is assigned,
+            // prefer a slot on that side (#522).
+            const int slotIdx = claimMissionSlot(peerId, assignedFaction);
             if (slotIdx >= 0) {
                 const MissionSpawnSlot& slot = m_missionSlots[static_cast<std::size_t>(slotIdx)];
                 EntityTransform t{};
@@ -2215,14 +2346,14 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
                 assigned = spawnPilotEntity(peerId, slot.entityType, t, slot.factionIndex, slot.airspeed);
                 if (!assigned.valid()) {
                     releaseMissionSlot(peerId); // slot type unspawnable — free it and use the default path
-                    assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
+                    assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType), assignedFaction);
                 } else if (m_missionSlotBinder && !slot.missionObjectId.empty()) {
                     // Register the pilot's aircraft under the slot's mission object id so destroy(<id>) tracks
                     // it (#884). slot is a reference into m_missionSlots; read its id before any further work.
                     m_missionSlotBinder(slot.missionObjectId, assigned);
                 }
             } else {
-                assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
+                assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType), assignedFaction);
             }
         }
     } else {
@@ -2284,6 +2415,44 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
     // seat rosters stay current (the joiner already received all rosters via sendConnectAck). #972.
     if (assigned.valid())
         broadcastCrewRoster(assigned);
+
+    // Match roster (#996), last so the ordered MOTD/flight-check-in sends above keep their positions.
+    // Send the joiner the current roster (everyone already here), then insert + broadcast its own
+    // record so existing peers learn of the join and the joiner sees itself last.
+    req.callsign[sizeof(req.callsign) - 1] = '\0'; // untrusted char[]: force-terminate
+    sendFullRoster(peerId);
+    {
+        uint16_t myFaction = 0;
+        if (assigned.valid()) {
+            if (const EntityState* s = m_entityManager.get(assigned))
+                myFaction = s->factionIndex;
+        }
+        RosterRec rec;
+        rec.callsign = sanitizeCallsign(req.callsign, peerId);
+        rec.factionIndex = myFaction;
+        rec.role = grantedRole;
+        rec.isBot = false;
+        upsertRoster(peerId, rec);
+        // A pilot (not an observer) is a match participant with a scoreboard row (#523).
+        if (grantedRole == PeerRole::Pilot && m_matchParticipantSink)
+            m_matchParticipantSink(peerId, myFaction, /*isBot=*/false, /*joined=*/true);
+    }
+
+    // Reconnection (#524): restore the held score tallies, then consume the grace entry. The dirty flag
+    // owes the reconnector a fresh Stats unicast + refreshes the scoreboard.
+    if (grace) {
+        PeerScore& s = m_scores[peerId];
+        s.kills = grace->kills;
+        s.losses = grace->losses;
+        s.score = grace->score;
+        s.dirty = true;
+        m_scoreboardDirty = true;
+        m_disconnectGrace.erase(reconnectGuid);
+    }
+
+    // Match state + scoreboard for the late joiner (#523): the current phase/scores + everyone's row.
+    sendMatchStateTo(peerId);
+    sendScoreboardTo(peerId);
 }
 
 void WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
@@ -2312,6 +2481,50 @@ void WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
     // The client learns its new assigned entity + role from a fresh MsgConnectAck (its handler applies
     // both, idempotently re-registering already-known type defs). No new message type is needed.
     sendConnectAck(peerId, assigned, role);
+
+    // Keep the match roster (#996) in sync with the new role/team. An observer reverts to faction 0.
+    if (auto rit = m_roster.find(peerId); rit != m_roster.end()) {
+        RosterRec rec = rit->second;
+        rec.role = role;
+        if (role == PeerRole::Observer)
+            rec.factionIndex = 0;
+        else if (assigned.valid()) {
+            if (const EntityState* s = m_entityManager.get(assigned))
+                rec.factionIndex = s->factionIndex;
+        }
+        upsertRoster(peerId, rec);
+    }
+}
+
+uint16_t WorldBroadcaster::factionForPeer(uint32_t peerId) const noexcept {
+    const auto it = m_peerEntities.find(peerId);
+    if (it == m_peerEntities.end())
+        return kNoFaction;
+    if (const EntityState* s = m_entityManager.get(it->second))
+        return s->factionIndex;
+    return kNoFaction;
+}
+
+void WorldBroadcaster::setPeerFaction(uint32_t peerId, uint16_t faction) {
+    const auto rit = m_roster.find(peerId);
+    if (rit == m_roster.end())
+        return; // not an admitted peer
+
+    // A pilot with a live aircraft respawns on the new team. #648's respawn machinery refines the
+    // timing (delay/waves); here the switch is immediate so the mechanism is complete on its own.
+    const auto pit = m_peerInputs.find(peerId);
+    if (pit != m_peerInputs.end() && pit->second.role == PeerRole::Pilot) {
+        despawnPeerEntity(peerId);
+        const EntityId assigned = admitPilot(peerId, resolvePlayerEntityType(""), faction);
+        sendConnectAck(peerId, assigned, PeerRole::Pilot);
+    }
+
+    RosterRec rec = rit->second;
+    rec.factionIndex = faction;
+    upsertRoster(peerId, rec);
+    // Re-key the participant's team in the match (#523): participantJoined updates the faction.
+    if (m_matchParticipantSink && rec.role == PeerRole::Pilot)
+        m_matchParticipantSink(peerId, faction, /*isBot=*/false, /*joined=*/true);
 }
 
 void WorldBroadcaster::despawnPeerEntity(uint32_t peerId) {
@@ -2404,14 +2617,38 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     std::snprintf(msg, sizeof(msg), "peer %u disconnected", peerId);
     m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
 
+    if (m_matchParticipantSink)
+        m_matchParticipantSink(peerId, 0, false, /*joined=*/false); // match participant left (#523)
     clearSeatOccupant(peerId); // a gunner (#974) reverts its non-fly seat to its bot + re-broadcasts
     despawnPeerEntity(peerId); // a pilot's own aircraft is torn down (no-op for observer/gunner)
+    removeRoster(peerId);      // broadcast the leave + drop the roster record (#996; before m_peerInputs erase)
     m_peerInputs.erase(peerId);
     m_peerFloodState.erase(peerId);
     m_peerKnownGens.erase(peerId);
     m_peerPendingDespawn.erase(peerId);
     m_peerTraceWriters.erase(peerId); // close this peer's input trace (#560), if any
-    m_scores.erase(peerId);           // ENet reuses peer ids; a rejoiner must not inherit tallies (#626)
+    // Reconnection (#524): before erasing the score, snapshot this peer's identity + tallies under its
+    // client guid so a reconnect within the grace window restores them. The m_scores erase below stays
+    // (peer-id reuse remains unsafe; the guid table is the sanctioned inheritance path).
+    if (m_reconnectGraceTicks > 0) {
+        if (auto git = m_peerGuids.find(peerId); git != m_peerGuids.end()) {
+            GraceRec g;
+            if (const auto rit = m_roster.find(peerId); rit != m_roster.end()) {
+                g.callsign = rit->second.callsign;
+                g.factionIndex = rit->second.factionIndex;
+            }
+            if (const auto sit = m_scores.find(peerId); sit != m_scores.end()) {
+                g.kills = sit->second.kills;
+                g.losses = sit->second.losses;
+                g.score = sit->second.score;
+            }
+            g.expiresTick = m_currentTick + m_reconnectGraceTicks;
+            m_disconnectGrace[git->second] = std::move(g);
+        }
+    }
+    m_peerGuids.erase(peerId);
+    m_scores.erase(peerId);  // ENet reuses peer ids; a rejoiner must not inherit tallies (#626)
+    m_respawn.erase(peerId); // drop any pending respawn (#648)
     m_activePeerCount.fetch_sub(1, std::memory_order_relaxed);
 
     m_pendingAdminDrains.erase(std::remove_if(m_pendingAdminDrains.begin(), m_pendingAdminDrains.end(),
@@ -2682,42 +2919,45 @@ void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
 
     // 1. Fire intents → validated requests. Serial and cheap: FireControl is pure per-entity state.
     m_fireRequests.clear();
-    for (auto& [idx, ce] : m_controlledEntities) {
-        // A crewed aircraft (#969) evaluates fire per seat over each seat's disjoint loadout
-        // partition; the single-seat path below is untouched (byte-identical) for a plain fighter.
-        if (ce.crew.crewed()) {
-            runCrewedFire(ce, idx, tickIndex);
-            continue;
-        }
-        if (!ce.lastInputValid || ce.fire.loadout.empty())
-            continue;
-        const EntityState* st = m_entityManager.get(ce.id);
-        if (!st || st->dead)
-            continue;
-        const bool hold = m_formations.weaponsHoldFor(ce.id); // #610's order, with teeth at last
-        evaluateFire(ce.fire, *m_weaponRegistry, ce.lastInput, hold, tickIndex, idx, m_fireRequests);
-        // The live loadout is the payload truth from here on (#625): releases shrink what the
-        // integrator carries next tick.
-        ce.payload.extra_mass_kg = ce.fire.loadout.payloadMassKg;
-        ce.payload.extra_cd0 = ce.fire.loadout.payloadCd0;
-
-        // The pre-launch LOCK cue (#628), at the sensing cadence so it costs one lobe test per
-        // peer per 100 ms: would the SELECTED seeker take the designated target right now? Peers
-        // only — AI reads its contacts directly and needs no annunciator.
-        if (const uint32_t peer = peerIdForEntity(ce.id); peer != kNoOwningPeer && (tickIndex + idx) % 6 == 0) {
-            bool cue = false;
-            if (const StationState* sel = ce.fire.loadout.selectedStation();
-                sel && sel->weaponIndex != UINT32_MAX && sel->rounds > 0) {
-                const WeaponDef* w = m_weaponRegistry->byIndex(sel->weaponIndex);
-                if (w && w->seeker && w->seeker->type != SeekerType::Unguided) {
-                    const EntityId designated = designateFor(*st, peer);
-                    cue = designated.valid() &&
-                          m_projectileSystem.wouldAcquire(m_entityManager, sel->weaponIndex, *st, designated);
-                }
+    // Combat freeze (#523): during Ending/PostMatch no new fire intents are generated (the per-entity
+    // fire state is not advanced); in-flight projectiles below still resolve normally.
+    if (!m_combatFrozen)
+        for (auto& [idx, ce] : m_controlledEntities) {
+            // A crewed aircraft (#969) evaluates fire per seat over each seat's disjoint loadout
+            // partition; the single-seat path below is untouched (byte-identical) for a plain fighter.
+            if (ce.crew.crewed()) {
+                runCrewedFire(ce, idx, tickIndex);
+                continue;
             }
-            ce.fire.seekerCue = cue;
+            if (!ce.lastInputValid || ce.fire.loadout.empty())
+                continue;
+            const EntityState* st = m_entityManager.get(ce.id);
+            if (!st || st->dead)
+                continue;
+            const bool hold = m_formations.weaponsHoldFor(ce.id); // #610's order, with teeth at last
+            evaluateFire(ce.fire, *m_weaponRegistry, ce.lastInput, hold, tickIndex, idx, m_fireRequests);
+            // The live loadout is the payload truth from here on (#625): releases shrink what the
+            // integrator carries next tick.
+            ce.payload.extra_mass_kg = ce.fire.loadout.payloadMassKg;
+            ce.payload.extra_cd0 = ce.fire.loadout.payloadCd0;
+
+            // The pre-launch LOCK cue (#628), at the sensing cadence so it costs one lobe test per
+            // peer per 100 ms: would the SELECTED seeker take the designated target right now? Peers
+            // only — AI reads its contacts directly and needs no annunciator.
+            if (const uint32_t peer = peerIdForEntity(ce.id); peer != kNoOwningPeer && (tickIndex + idx) % 6 == 0) {
+                bool cue = false;
+                if (const StationState* sel = ce.fire.loadout.selectedStation();
+                    sel && sel->weaponIndex != UINT32_MAX && sel->rounds > 0) {
+                    const WeaponDef* w = m_weaponRegistry->byIndex(sel->weaponIndex);
+                    if (w && w->seeker && w->seeker->type != SeekerType::Unguided) {
+                        const EntityId designated = designateFor(*st, peer);
+                        cue = designated.valid() &&
+                              m_projectileSystem.wouldAcquire(m_entityManager, sel->weaponIndex, *st, designated);
+                    }
+                }
+                ce.fire.seekerCue = cue;
+            }
         }
-    }
     // Deterministic execution order regardless of map iteration: shooter idx, then seat (#969),
     // then station. For a single-seat entity seat is always 0, so this is identical to the old
     // (shooterIdx, station) ordering.
@@ -3025,6 +3265,20 @@ uint32_t WorldBroadcaster::peerIdForEntity(EntityId id) const noexcept {
     return kNoOwningPeer;
 }
 
+uint32_t WorldBroadcaster::participantForEntity(EntityId id) const noexcept {
+    // A human peer's aircraft resolves to its peerId; an AI bot's (#87) to its kBotParticipantBase id.
+    // Scoreboard/kill-feed/match scoring all key on the participant id.
+    const uint32_t peer = peerIdForEntity(id);
+    if (peer != kNoOwningPeer)
+        return peer;
+    if (id.valid()) {
+        const auto it = m_botEntities.find(id.index);
+        if (it != m_botEntities.end())
+            return it->second;
+    }
+    return kNoOwningPeer;
+}
+
 uint32_t WorldBroadcaster::occupantPeerFor(EntityId id, uint8_t seat) const noexcept {
     if (!id.valid())
         return kNoOwningPeer;
@@ -3267,12 +3521,42 @@ void WorldBroadcaster::broadcastCrewRoster(EntityId id) {
 void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
     switch (event.type) {
     case EntityEventType::Died: {
-        const uint32_t victimPeer = peerIdForEntity(event.subject);
-        const uint32_t killerPeer = peerIdForEntity(event.instigator);
+        const uint32_t victimPeer = participantForEntity(event.subject);
+        const uint32_t killerPeer = participantForEntity(event.instigator);
         if (victimPeer != kNoOwningPeer) {
             PeerScore& s = m_scores[victimPeer];
             ++s.losses;
             s.dirty = true;
+            m_scoreboardDirty = true;
+
+            // Enroll the dead participant for respawn (#648). Only a HUMAN peer here (bots enroll via
+            // registerBotParticipant, #87); the entity teardown is deferred to processRespawns since we
+            // are inside an entity-event callback. Store the team from the roster.
+            if (m_respawnEnabled && peerIdForEntity(event.subject) != kNoOwningPeer) {
+                RespawnRec rec;
+                uint64_t due = m_currentTick + m_respawnPolicy.delayTicks;
+                if (m_respawnPolicy.waves && m_respawnPolicy.waveIntervalTicks > 0) {
+                    const uint64_t iv = m_respawnPolicy.waveIntervalTicks;
+                    due = ((due + iv - 1) / iv) * iv; // round up to the next wave boundary
+                }
+                rec.dueTick = due;
+                if (const auto rit = m_roster.find(victimPeer); rit != m_roster.end())
+                    rec.factionIndex = rit->second.factionIndex;
+                rec.isBot = false;
+                rec.requested = false;
+                m_respawn[victimPeer] = rec;
+                m_pendingDeathCleanup.push_back(victimPeer);
+            }
+        }
+
+        // Feed the match controller (#523): killer + victim participants, and whether it was a team
+        // kill. sameFaction reads the still-live entity factions.
+        if (m_matchEventSink) {
+            bool sameFaction = false;
+            if (const EntityState* v = m_entityManager.get(event.subject))
+                if (const EntityState* k = m_entityManager.get(event.instigator))
+                    sameFaction = v->factionIndex != 0 && v->factionIndex == k->factionIndex;
+            m_matchEventSink(killerPeer, victimPeer, sameFaction);
         }
 
         CombatEventRecord rec{};
@@ -3288,12 +3572,16 @@ void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
         break;
     }
     case EntityEventType::ScoreAwarded: {
-        const uint32_t killerPeer = peerIdForEntity(event.instigator);
+        // Combat freeze (#523): no scoring accrues during the Ending/PostMatch phases.
+        if (m_combatFrozen)
+            break;
+        const uint32_t killerPeer = participantForEntity(event.instigator);
         if (killerPeer != kNoOwningPeer) {
             PeerScore& s = m_scores[killerPeer];
             ++s.kills;
             s.score += event.score;
             s.dirty = true;
+            m_scoreboardDirty = true;
         }
         break;
     }
@@ -3773,6 +4061,23 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
             handleSeatRequest(peerId, req);
     } else if (msgId == static_cast<uint8_t>(MsgId::RadioCommand)) {
         handleRadioCommand(peerId, data, size);
+    } else if (msgId == static_cast<uint8_t>(MsgId::TeamRequest)) {
+        // Mid-match team switch request (#522). Guard it against unbalancing, then despawn+respawn on
+        // the new team. An unadmitted peer or a guard denial is answered with a MsgServerNotice.
+        MsgTeamRequest req;
+        if (readMsg(data, size, req)) {
+            const auto pit = m_peerInputs.find(peerId);
+            if (pit != m_peerInputs.end() && pit->second.handshakeComplete) {
+                const bool allowed = !m_teamSwitchGuard || m_teamSwitchGuard(peerId, req.factionIndex);
+                if (allowed) {
+                    setPeerFaction(peerId, req.factionIndex);
+                } else {
+                    MsgServerNotice notice;
+                    std::snprintf(notice.text, sizeof(notice.text), "Team switch denied (would unbalance).");
+                    m_net.send(peerId, &notice, sizeof(notice), /*reliable=*/true);
+                }
+            }
+        }
     }
     // Unknown msgIds: silently discard (no log spam; future protocol versions may add new IDs)
 }
@@ -5026,6 +5331,7 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
     ack.assignedEntityGen = assigned.generation;
     ack.planetRadiusKm = m_planetRadiusKm;
     ack.grantedRole = static_cast<uint8_t>(grantedRole);
+    ack.peerId = peerId; // the client's own id, for the roster "you" highlight + chat self-echo (#996)
     appendMsg(buf, ack);
 
     for (uint32_t i = 0; i < typeCount; ++i) {
@@ -5120,11 +5426,359 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
     }
 }
 
+// ── match lifecycle + scoring (#523) ────────────────────────────────────────
+void WorldBroadcaster::setMatchState(const MatchStatePod& state) {
+    m_matchState = state;
+    m_haveMatchState = true;
+    broadcastMatchState();
+}
+
+void WorldBroadcaster::sendMatchStateTo(uint32_t peerId) {
+    if (!m_haveMatchState)
+        return;
+    MsgMatchState msg{};
+    msg.phase = m_matchState.phase;
+    msg.scoreLimit = m_matchState.scoreLimit;
+    msg.teamCount = static_cast<uint8_t>(std::min<std::size_t>(m_matchState.teamScores.size(), 255));
+    msg.phaseEndTick = m_matchState.phaseEndTick;
+    std::snprintf(msg.modeId, sizeof(msg.modeId), "%s", m_matchState.modeId.c_str());
+    std::snprintf(msg.modeName, sizeof(msg.modeName), "%s", m_matchState.modeName.c_str());
+    std::vector<uint8_t> pkt;
+    pkt.reserve(sizeof(msg) + m_matchState.teamScores.size() * sizeof(MatchTeamScore));
+    appendMsg(pkt, msg);
+    for (const auto& [fac, score] : m_matchState.teamScores) {
+        MatchTeamScore rec{};
+        rec.factionIndex = fac;
+        rec.score = score;
+        appendMsg(pkt, rec);
+    }
+    m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/true);
+}
+
+void WorldBroadcaster::broadcastMatchState() {
+    for (const auto& [pid, pin] : m_peerInputs) {
+        if (pin.handshakeComplete)
+            sendMatchStateTo(pid);
+    }
+}
+
+void WorldBroadcaster::appendScoreboardRows(std::vector<uint8_t>& pkt, std::size_t begin, std::size_t count,
+                                            const std::vector<uint32_t>& order) const {
+    for (std::size_t i = begin; i < begin + count; ++i) {
+        const uint32_t pid = order[i];
+        const auto sit = m_scores.find(pid);
+        ScoreboardRow row{};
+        row.participantId = pid;
+        if (sit != m_scores.end()) {
+            row.score = sit->second.score;
+            row.kills = static_cast<uint16_t>(std::min<uint32_t>(sit->second.kills, 0xFFFFu));
+            row.deaths = static_cast<uint16_t>(std::min<uint32_t>(sit->second.losses, 0xFFFFu));
+        }
+        // Ping: humans carry their estimatedDelayTicks; bots have none.
+        if (!isBotParticipant(pid)) {
+            const auto pit = m_peerInputs.find(pid);
+            if (pit != m_peerInputs.end()) {
+                const uint32_t ms = static_cast<uint32_t>(pit->second.estimatedDelayTicks) * 1000u / 60u;
+                row.pingMs = static_cast<uint16_t>(std::min<uint32_t>(ms, 0xFFFFu));
+            }
+        }
+        // Team from the roster (the authoritative team record) else the live entity.
+        const auto rit = m_roster.find(pid);
+        row.factionIndex = (rit != m_roster.end()) ? rit->second.factionIndex : factionForPeer(pid);
+        appendMsg(pkt, row);
+    }
+}
+
+void WorldBroadcaster::sendScoreboardTo(uint32_t peerId) {
+    if (m_scores.empty())
+        return;
+    std::vector<uint32_t> order;
+    order.reserve(m_scores.size());
+    for (const auto& [pid, sc] : m_scores) {
+        (void)sc;
+        order.push_back(pid);
+    }
+    std::sort(order.begin(), order.end()); // deterministic
+    for (std::size_t i = 0; i < order.size(); i += kMaxScoreboardRowsPerPacket) {
+        const std::size_t n = std::min(kMaxScoreboardRowsPerPacket, order.size() - i);
+        MsgScoreboardHeader hdr{};
+        hdr.count = static_cast<uint8_t>(n);
+        std::vector<uint8_t> pkt;
+        pkt.reserve(sizeof(hdr) + n * sizeof(ScoreboardRow));
+        appendMsg(pkt, hdr);
+        appendScoreboardRows(pkt, i, n, order);
+        m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/false);
+    }
+}
+
+void WorldBroadcaster::broadcastScoreboard() {
+    for (const auto& [pid, pin] : m_peerInputs) {
+        if (pin.handshakeComplete)
+            sendScoreboardTo(pid);
+    }
+}
+
+void WorldBroadcaster::resetWorld() {
+    // Despawn every peer's aircraft (and its owned AI flight) via the existing teardown primitive.
+    std::vector<uint32_t> peerIds;
+    peerIds.reserve(m_peerEntities.size());
+    for (const auto& [pid, eid] : m_peerEntities) {
+        (void)eid;
+        peerIds.push_back(pid);
+    }
+    for (uint32_t pid : peerIds)
+        despawnPeerEntity(pid);
+
+    // Kill any remaining controlled entity (AI, mission objects). Copy the keys first — killing mutates
+    // m_controlledEntities.
+    std::vector<EntityId> controlled;
+    controlled.reserve(m_controlledEntities.size());
+    for (const auto& [idx, ce] : m_controlledEntities) {
+        (void)idx;
+        controlled.push_back(ce.id);
+    }
+    for (EntityId id : controlled)
+        killControlledAircraft(id);
+
+    // Clear match-scoped state; keep peers connected (m_peerInputs / m_roster / handshake survive).
+    // In-flight projectiles are left to expire on their own TTL (a rotation is rare, and they cannot
+    // score during the Ending freeze) rather than reaching into the ProjectileSystem's mirror entities.
+    m_pendingKillEvents.clear();
+    m_respawn.clear(); // #648: clear pending respawns for the new round
+    m_pendingDeathCleanup.clear();
+    m_disconnectGrace.clear(); // #524: scores belong to a match; a new round starts clean
+    setMissionPlayerSlots({});
+    m_missionRoster.clear();
+    for (auto& [pid, sc] : m_scores) {
+        (void)pid;
+        sc = PeerScore{};
+    }
+    m_scoreboardDirty = true;
+}
+
+void WorldBroadcaster::readmitPilots() {
+    // Collect peer ids first — admitPilot / sendConnectAck mutate maps we are iterating.
+    std::vector<uint32_t> pilots;
+    for (const auto& [peerId, pin] : m_peerInputs) {
+        if (pin.handshakeComplete && pin.role == PeerRole::Pilot && m_peerEntities.count(peerId) == 0u)
+            pilots.push_back(peerId);
+    }
+    for (uint32_t peerId : pilots) {
+        uint16_t fac = kNoFaction;
+        if (m_teamAssigner) {
+            std::optional<uint16_t> t = m_teamAssigner(peerId);
+            if (!t.has_value())
+                continue; // no room — leave the pilot entity-less (a rare edge; they can retry)
+            fac = *t;
+        }
+        const EntityId assigned = admitPilot(peerId, resolvePlayerEntityType(""), fac);
+        sendConnectAck(peerId, assigned, PeerRole::Pilot);
+        // Keep the roster + match participant state consistent with the new team.
+        uint16_t myFaction = 0;
+        if (const EntityState* s = m_entityManager.get(assigned))
+            myFaction = s->factionIndex;
+        if (auto rit = m_roster.find(peerId); rit != m_roster.end()) {
+            RosterRec rec = rit->second;
+            rec.factionIndex = myFaction;
+            upsertRoster(peerId, rec);
+        }
+        if (m_matchParticipantSink)
+            m_matchParticipantSink(peerId, myFaction, /*isBot=*/false, /*joined=*/true);
+    }
+}
+
+// ── AI bot participants (#87) ─────────────────────────────────────────────────
+void WorldBroadcaster::registerBotParticipant(uint32_t participantId, EntityId entity, const std::string& callsign,
+                                              uint16_t faction) {
+    if (entity.valid())
+        m_botEntities[entity.index] = participantId;
+    RosterRec rec;
+    rec.callsign = callsign.empty() ? ("Bot-" + std::to_string(participantId)) : callsign;
+    rec.factionIndex = faction;
+    rec.role = PeerRole::Pilot;
+    rec.isBot = true;
+    upsertRoster(participantId, rec);
+    m_scores[participantId] = PeerScore{};
+    m_scoreboardDirty = true;
+    if (m_matchParticipantSink)
+        m_matchParticipantSink(participantId, faction, /*isBot=*/true, /*joined=*/true);
+}
+
+void WorldBroadcaster::removeBotParticipant(uint32_t participantId) {
+    for (auto it = m_botEntities.begin(); it != m_botEntities.end();) {
+        if (it->second == participantId)
+            it = m_botEntities.erase(it);
+        else
+            ++it;
+    }
+    removeRoster(participantId);
+    m_scores.erase(participantId);
+    m_scoreboardDirty = true;
+    if (m_matchParticipantSink)
+        m_matchParticipantSink(participantId, 0, /*isBot=*/true, /*joined=*/false);
+}
+
+// ── respawn (#648) ───────────────────────────────────────────────────────────
+void WorldBroadcaster::respawnParticipant(uint32_t participantId) {
+    // Bots (#87) respawn through their own path; here we handle human peers.
+    const auto pit = m_peerInputs.find(participantId);
+    if (pit == m_peerInputs.end() || !pit->second.handshakeComplete || pit->second.role != PeerRole::Pilot)
+        return;
+
+    uint16_t faction = kNoFaction;
+    if (const auto rit = m_respawn.find(participantId); rit != m_respawn.end())
+        faction = rit->second.factionIndex;
+    // If the team was removed (e.g. by rotation) re-balance.
+    if (faction == kNoFaction && m_teamAssigner) {
+        std::optional<uint16_t> t = m_teamAssigner(participantId);
+        if (t.has_value())
+            faction = *t;
+    }
+
+    // Clean up any dangling entity mapping first, then spawn fresh.
+    if (m_peerEntities.count(participantId) != 0u)
+        despawnPeerEntity(participantId);
+    const EntityId assigned = admitPilot(participantId, resolvePlayerEntityType(""), faction);
+    sendConnectAck(participantId, assigned, PeerRole::Pilot);
+
+    uint16_t myFaction = 0;
+    if (const EntityState* s = m_entityManager.get(assigned))
+        myFaction = s->factionIndex;
+    if (auto rit = m_roster.find(participantId); rit != m_roster.end()) {
+        RosterRec rec = rit->second;
+        rec.factionIndex = myFaction;
+        upsertRoster(participantId, rec);
+    }
+    if (m_matchParticipantSink)
+        m_matchParticipantSink(participantId, myFaction, /*isBot=*/false, /*joined=*/true);
+
+    m_respawn.erase(participantId);
+}
+
+void WorldBroadcaster::processRespawns() {
+    // Deferred death teardown (safe here, outside the entity-event callback).
+    if (!m_pendingDeathCleanup.empty()) {
+        for (uint32_t peerId : m_pendingDeathCleanup) {
+            if (m_peerEntities.count(peerId) != 0u)
+                despawnPeerEntity(peerId);
+        }
+        m_pendingDeathCleanup.clear();
+    }
+
+    if (m_respawn.empty() || m_combatFrozen)
+        return; // no pending respawns, or combat frozen (Ending/PostMatch) — hold
+
+    // Collect the ids that are due AND requested (humans) or automatic (bots); respawnParticipant
+    // erases from m_respawn, so gather first.
+    std::vector<uint32_t> ready;
+    for (const auto& [pid, rec] : m_respawn) {
+        if (m_currentTick < rec.dueTick)
+            continue;
+        if (!rec.isBot && !rec.requested)
+            continue; // a human must ask to respawn (they may want to keep spectating)
+        ready.push_back(pid);
+    }
+    for (uint32_t pid : ready)
+        respawnParticipant(pid);
+}
+
 void WorldBroadcaster::sendConnectRefusal(uint32_t peerId, ConnectRefusalCode code, const char* reason) {
     MsgConnectRefusal msg{};
     msg.code = static_cast<uint8_t>(code);
     std::snprintf(msg.reason, sizeof(msg.reason), "%s", reason);
     m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
+}
+
+// ── match roster (#996) ─────────────────────────────────────────────────────
+std::string WorldBroadcaster::sanitizeCallsign(const char* raw, uint32_t participantId) {
+    std::string out;
+    if (raw) {
+        // Copy at most 31 printable chars; drop ASCII control bytes (< 0x20, 0x7F). Leave UTF-8 lead/
+        // continuation bytes (>= 0x80) intact so a non-Latin callsign survives — the HUD font is BMP.
+        for (const char* p = raw; *p && out.size() < 31u; ++p) {
+            const unsigned char c = static_cast<unsigned char>(*p);
+            if (c < 0x20u || c == 0x7Fu)
+                continue;
+            out.push_back(static_cast<char>(c));
+        }
+    }
+    // Trim leading/trailing spaces.
+    const std::size_t b = out.find_first_not_of(' ');
+    const std::size_t e = out.find_last_not_of(' ');
+    out = (b == std::string::npos) ? std::string{} : out.substr(b, e - b + 1);
+    if (out.empty()) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "Pilot-%u", participantId);
+        out = buf;
+    }
+    return out;
+}
+
+void WorldBroadcaster::upsertRoster(uint32_t participantId, const RosterRec& rec) {
+    m_roster[participantId] = rec;
+
+    MsgPlayerRosterHeader hdr{};
+    hdr.count = 1;
+    PlayerRosterEntry e{};
+    e.participantId = participantId;
+    e.factionIndex = rec.factionIndex;
+    e.role = static_cast<uint8_t>(rec.role);
+    e.flags = rec.isBot ? kRosterBot : 0u;
+    std::snprintf(e.callsign, sizeof(e.callsign), "%s", rec.callsign.c_str());
+
+    std::vector<uint8_t> pkt;
+    pkt.reserve(sizeof(hdr) + sizeof(e));
+    appendMsg(pkt, hdr);
+    appendMsg(pkt, e);
+    // Broadcast to every peer that has completed its handshake (so the roster is consistent for all).
+    for (const auto& [pid, pin] : m_peerInputs) {
+        if (pin.handshakeComplete)
+            m_net.send(pid, pkt.data(), pkt.size(), /*reliable=*/true);
+    }
+}
+
+void WorldBroadcaster::removeRoster(uint32_t participantId) {
+    if (m_roster.erase(participantId) == 0u)
+        return;
+    MsgPlayerRosterHeader hdr{};
+    hdr.count = 1;
+    PlayerRosterEntry e{};
+    e.participantId = participantId;
+    e.flags = kRosterLeave;
+    std::vector<uint8_t> pkt;
+    pkt.reserve(sizeof(hdr) + sizeof(e));
+    appendMsg(pkt, hdr);
+    appendMsg(pkt, e);
+    for (const auto& [pid, pin] : m_peerInputs) {
+        if (pin.handshakeComplete)
+            m_net.send(pid, pkt.data(), pkt.size(), /*reliable=*/true);
+    }
+}
+
+void WorldBroadcaster::sendFullRoster(uint32_t peerId) {
+    if (m_roster.empty())
+        return;
+    // Chunk into packets of at most kMaxRosterEntriesPerPacket upsert records.
+    std::vector<std::pair<uint32_t, RosterRec>> all(m_roster.begin(), m_roster.end());
+    for (std::size_t i = 0; i < all.size(); i += kMaxRosterEntriesPerPacket) {
+        const std::size_t n = std::min(kMaxRosterEntriesPerPacket, all.size() - i);
+        MsgPlayerRosterHeader hdr{};
+        hdr.count = static_cast<uint8_t>(n);
+        std::vector<uint8_t> pkt;
+        pkt.reserve(sizeof(hdr) + n * sizeof(PlayerRosterEntry));
+        appendMsg(pkt, hdr);
+        for (std::size_t j = 0; j < n; ++j) {
+            const auto& [pid, rec] = all[i + j];
+            PlayerRosterEntry e{};
+            e.participantId = pid;
+            e.factionIndex = rec.factionIndex;
+            e.role = static_cast<uint8_t>(rec.role);
+            e.flags = rec.isBot ? kRosterBot : 0u;
+            std::snprintf(e.callsign, sizeof(e.callsign), "%s", rec.callsign.c_str());
+            appendMsg(pkt, e);
+        }
+        m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/true);
+    }
 }
 
 void WorldBroadcaster::rejectConnection(uint32_t peerId, const std::string& ip, ConnectRefusalCode code) {
@@ -5152,11 +5806,15 @@ void WorldBroadcaster::initiateShutdown(uint32_t secondsDelay, uint32_t warningI
     m_warningIntervalS = warningIntervalS;
     m_nextNoticeAt = m_clock->now(); // fire on the very next tick
     m_shutdownReason = std::move(reason);
+    m_shutdownActiveShared.store(true, std::memory_order_relaxed); // #226 beacon mirror
+    m_shutdownSecsShared.store(secondsDelay, std::memory_order_relaxed);
 }
 
 void WorldBroadcaster::cancelShutdown() {
     m_shuttingDown = false;
     m_shutdownReason.clear();
+    m_shutdownActiveShared.store(false, std::memory_order_relaxed); // #226
+    m_shutdownSecsShared.store(0, std::memory_order_relaxed);
 }
 
 bool WorldBroadcaster::extendShutdown(uint32_t additionalSeconds) {
@@ -5164,6 +5822,7 @@ bool WorldBroadcaster::extendShutdown(uint32_t additionalSeconds) {
         return false;
     m_shutdownAt += std::chrono::seconds(additionalSeconds);
     m_nextNoticeAt = m_clock->now(); // immediate update notice on next tick
+    m_shutdownSecsShared.fetch_add(additionalSeconds, std::memory_order_relaxed); // #226
     return true;
 }
 

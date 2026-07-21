@@ -34,6 +34,14 @@ class DiscoveryListener {
         std::string address;     // source IP (IPv4 preferred over IPv6 link-local)
         fl::MsgLanBeacon beacon; // full parsed wire struct
         std::chrono::steady_clock::time_point lastSeen;
+
+        // Convenience accessors over the parsed beacon (#226).
+        [[nodiscard]] bool shuttingDown() const noexcept {
+            return (beacon.gameModeFlags & fl::kGameModeShuttingDown) != 0u;
+        }
+        [[nodiscard]] uint16_t shutdownSeconds() const noexcept {
+            return beacon.shutdownSeconds;
+        }
     };
 
     // port:  UDP port to listen on (must match DiscoveryBeacon::Config::port).

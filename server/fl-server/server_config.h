@@ -21,8 +21,22 @@ struct ServerConfig {
 
     // [rotation]  — Phase 2: parsed and stored; rotation logic pending
     std::string rotationOrder = "sequential";
-    std::vector<std::string> rotationItems;
+    std::vector<std::string> rotationItems; // each "mission" or "mission@mode" (#521)
     int rotationTimeLimitMin = 0;
+
+    // [match]  — multiplayer match framework (#497). The default game mode for rotation items that do
+    // not name their own (mission@mode) and for non-rotation servers. A "builtin:" id or a pack modes/
+    // asset stem; unknown ids fall back to builtin:free-flight.
+    std::string matchMode = "builtin:free-flight";
+    int matchEndScreenS = 10;       // seconds the Ending phase (frozen combat + scoreboard) lasts; [0, 120]
+    int matchReconnectGraceS = 120; // seconds a disconnected player's team+score is held (#524); [0, 3600], 0 = off
+
+    // [bots]  — AI bot backfill (#87). Bots are server-side AI participants, not network peers.
+    int botsFill = 0;                             // desired total participants (humans + bots); 0 = disabled; [0, 128]
+    int botsMax = 16;                             // cap on live bots; [0, 127]
+    std::string botsEntityType;                   // empty = [world] player_entity_type
+    std::string botsAiScript = "builtin:fighter"; // AI script the bots fly
+    bool botsBalanceTeams = true;                 // even the bots across teams
 
     // [lobby]  — Phase 2: parsed and stored; lobby registration pending (issue #36)
     bool lobbyRegister = false;
@@ -131,6 +145,8 @@ struct ServerConfig {
     // [discovery]
     bool discoveryEnabled = true;
     int discoveryIntervalMs = 2000;
+    bool discoveryQueryEnabled = true; // #997: answer server-info queries
+    int discoveryQueryPort = 0;        // 0 = auto (game port + 1); [0, 65535]
 
     // [shutdown]
     int shutdownWarningIntervalS = 300; // seconds between countdown broadcast notices (default 5 min)

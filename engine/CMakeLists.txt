@@ -274,6 +274,9 @@ add_subdirectory(ai)
 # World-systems foundation types (faction registry, alert levels, airspace zones).
 add_subdirectory(world)
 
+# Multiplayer match framework (#497): data-driven game modes, team balancing, match lifecycle, bot fill.
+add_subdirectory(match)
+
 # Air-traffic-control service — facilities, runway sequencing, clearances (#702, ATC epic #673).
 add_subdirectory(atc)
 
@@ -376,6 +379,8 @@ add_library(engine-net STATIC
     net/WorldBroadcaster.cpp
     net/DiscoveryBeacon.cpp
     net/DiscoveryListener.cpp
+    net/ServerQueryResponder.cpp
+    net/ServerQueryClient.cpp
     net/SnapshotScheduler.cpp
     net/CongestionController.cpp
     net/TickGovernor.cpp

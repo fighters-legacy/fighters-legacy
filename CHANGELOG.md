@@ -21,6 +21,87 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: server info query protocol (#997, Epic E #497). An A2S-style request/response over raw
+  UDP on a dedicated query port (`[discovery] query_port`, default game port + 1) gives the server
+  browser a ping measurement + live details for a server. `MsgServerQuery` (0x41, padded ≥ response for
+  anti-amplification) / `MsgServerInfo` (0x42, echoes the nonce/timestamp). `ServerQueryResponder`
+  (own thread, per-IP + global rate limiting) answers on the server; `ServerQueryClient` (main-thread
+  poll, RTT from a local nonce→send-time map) queries from the browser. The LAN beacon advertises the
+  query port (`MsgLanBeacon` 76 → 78 B). fl-server starts the responder and refreshes its dynamic snapshot.
+- **server**: AI bot backfill (#87, Epic E #497). A new `[bots]` config (`fill` / `max_bots` /
+  `entity_type` / `ai_script` / `balance_teams`) fills a team match with server-side AI participants up
+  to a target count — bots are not network peers. `WorldBroadcaster::registerBotParticipant` /
+  `removeBotParticipant` give each bot a scoreboard row (badged, ping 0) and route its kills/deaths
+  through the participant model; a `BotRoster` (fl-server) spawns `builtin:fighter` bots on the smaller
+  team, retires/backfills to track the human count, reaps killed bots, and clears on rotation. Pure
+  `desiredBots` fill math in `engine-match`.
+- **docs**: game-mode authoring guide (#525, Epic E #497). New
+  `docs/modding/game-modes.md` documents the `modes/*.toml` schema, the builtin modes, mode selection
+  (`[match] mode` / `mission@mode`), the match lifecycle, and `validate-mode`. `docs/fl-server-config.md`
+  gains the `[match]` section (mode / end_screen_s / reconnect_grace_s) and documents the now-enforced
+  `[server] password`; `docs/network-protocol.md` documents the new Epic E message ids, the raw-UDP
+  boundary raise to `0x40`, and the beacon shutdown/passworded flags.
+- **server**: join password for private servers (#998, Epic E #497). The existing (previously inert)
+  `[server] password` is now enforced: a connecting client sends it as a `MsgConnectRequest` TLV
+  (`ExtTag::ConnectJoinPassword`), the server constant-time-compares it (before any admission side
+  effect, for both pilots and observers) and refuses a missing/wrong password with the new
+  `ConnectRefusalCode::BadPassword` → `SessionFailure::BadPassword`. The LAN beacon advertises a
+  `kGameModePassworded` flag so a browser can show a lock icon and prompt. The client carries a
+  per-session join password (not persisted).
+- **net**: reconnect identity with score/team restore inside a grace window (#524, Epic E #497). The
+  client sends its `PilotProfile::guid` as a `MsgConnectRequest` TLV (`ExtTag::ConnectIdentity`); on
+  disconnect the server snapshots the player's callsign, team and kills/losses/score under that GUID and
+  restores them on reconnect within `[match] reconnect_grace_s` (default 120 s) — the reconnector rejoins
+  their old team rather than being re-balanced. A GUID already held by a live peer is treated as fresh;
+  entries expire lazily + on a periodic sweep, and are cleared on match rotation. The aircraft is not
+  kept alive through the window (the player respawns per the mode policy).
+- **network**: advertise shutdown state in the LAN discovery beacon (#226, Epic E #497).
+  `MsgLanBeacon` gains a `kGameModeShuttingDown` flag + a `shutdownSeconds` field (74 → 76 B);
+  `WorldBroadcaster::getShutdownStatus()` publishes the countdown across threads (relaxed atomics) for
+  the main-thread beacon, which now sends an immediate extra beacon on a shutdown state change so a
+  server browser sees "shutting down (m:ss)" within one poll. `DiscoveryListener::ServerInfo` exposes
+  `shuttingDown()` / `shutdownSeconds()`.
+- **net**: death → respawn state machine with mode-defined delay (#648, Epic E #497). A dead pilot is
+  enrolled in a per-participant respawn table (`WorldBroadcaster::setRespawnPolicy` from the game mode:
+  delay, optional waves) and respawns on request — the new `kInputButtonRespawn` (MsgClientInput bit 7,
+  edge-detected; default key Backspace) for humans, automatically for bots (#87) — once the delay
+  elapses and combat is not frozen. `respawnParticipant` + an admin `respawn <peerId>` command force it;
+  the entity teardown is deferred out of the damage event to a per-tick `processRespawns`. Replaces the
+  old behavior where a killed peer's aircraft simply disappeared until reconnect.
+- **match**: match lifecycle, team scoring, and in-process rotation (#523, Epic E #497). A new
+  `MatchController` runs the deterministic Idle→Warmup→Active→Ending→PostMatch state machine (score /
+  time limits, warmup gated on min players, mission-driven `forceEnd`, a rotate hook). `WorldBroadcaster`
+  broadcasts the new reliable `MsgMatchState` (phase, per-team scores, limits, phase clock) on change
+  and to late joiners, and the unreliable `MsgScoreboard` (per-participant kills/deaths/score/ping)
+  every ~2 s; a combat-freeze gate suppresses fire input and scoring during Ending/PostMatch; and
+  `resetWorld` + `readmitPilots` rotate the match in-process (peers stay connected) so the server no
+  longer sits idle after a mission ends. fl-server owns the controller, feeds it kills + participant
+  join/leave through new sinks, and cycles the `[rotation]` mode on `[match] end_screen_s`.
+- **match**: team assignment, balancing, and mode-driven friendly fire (#522, Epic E #497). A pure
+  `TeamBalancer` (`pickTeam` / `switchAllowed`) drives team choice; `WorldBroadcaster` gains a
+  `setTeamAssigner` seam (consulted at admission — `nullopt` refuses with the new
+  `ConnectRefusalCode::MatchFull`), faction-preferred mission-slot claiming, `factionForPeer`, and a
+  `setPeerFaction` despawn-and-respawn path. Clients can request a mid-match switch via the new
+  reliable `MsgTeamRequest` (guarded against unbalancing); an admin `team <peer> <faction>` command
+  bypasses the guard. fl-server maps a mode's teams onto the FactionRegistry (mission sides, positional
+  aliasing, or a synthesized zero-pack registry) and applies the mode's friendly-fire override over
+  `[gameplay] friendly_fire`. Unset assigner ⇒ the legacy single-faction behavior, unchanged.
+- **match**: data-driven game-mode framework (#521, Epic E #497). A new `engine-match` library defines
+  `GameModeDef` (teams, scoring, respawn policy, win conditions, warmup, friendly-fire override) and
+  `parseGameModeToml`, the single parser both the engine and the new `validate-mode` tool call. Two
+  compiled-in modes ship — `builtin:free-flight` (the default; byte-identical to today's sandbox) and
+  `builtin:tdm` — plus a `modes/*.toml` content-pack asset type (`AssetType::GameMode`). fl-server
+  selects a mode via `[match] mode` or a rotation item's `mission@mode` suffix and resolves it at
+  startup (builtin id → pack asset → free-flight fallback); the MatchController consumes it in #523.
+- **network**: player callsigns, match roster broadcast, and ENet id-space groundwork (#996, Epic E
+  #497). `MsgConnectRequest` gains a fixed `callsign[32]` field (from `PilotProfile::callsign`, server-
+  sanitized) and `MsgConnectAck` a `peerId` tail field so a client learns its own participant id. A new
+  reliable `MsgPlayerRoster` upsert/leave stream (`0x1C`) carries participant id → callsign / faction /
+  role, broadcast on join / role change / leave and sent in full to a late joiner; the client resolves
+  it through `ClientNetEventHandler::displayName()`, the single name source for chat, kill feed and
+  scoreboard. Establishes the participant-id model (humans = peerId, bots = `kBotParticipantBase + n`).
+  The raw-UDP `MsgId` boundary is raised `0x20` → `0x40` (`MsgLanBeacon` → `0x40`), freeing `0x1C`–`0x3F`
+  for the Epic E messages (roster/match state/scoreboard/team/chat).
 - **audio**: RWR and missile-lock warning tones (#960, Epic #586). `WarningToneManager` gains a
   radar-warning-receiver channel — a slow search strobe, a steady lock tone, and a fast launch warble
   — driven by the peer's LEGITIMATE threat picture (the datalink/RWR strobes the server decided it
