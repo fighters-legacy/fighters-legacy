@@ -109,12 +109,21 @@ enum class MsgId : uint8_t {
                                // spawned mission objects + bound player slots, so the cinematic recorder
                                // (#909) can resolve entity-relative camera shots ("orbit bandit1") to
                                // network entities. Self-describing concatenated records; additive id, old
-                               // clients discard. See MsgMissionRoster below. (0x1C-0x1F remain free.)
-    LanBeacon = 0x20,          // raw UDP broadcast - NOT sent over ENet; 0x20+ reserved for non-ENet ids.
-                               // ENet message ids occupy 0x00-0x1F. The non-ENet boundary was raised
-                               // from 0x10 to 0x20 in #853 to free an ENet id for ConnectRequest -- a
-                               // deliberate, documented choice (the prior comment flagged that breaking
-                               // the "0x10+ = non-ENet" invariant should be a choice, not an accident).
+                               // clients discard. See MsgMissionRoster below.
+    // --- Epic E multiplayer gameplay framework (#497) ---
+    PlayerRoster = 0x1C, // server->client, reliable: participant id -> callsign/faction/role table (#996).
+                         // Upsert/leave stream; the single name source for chat, kill feed and scoreboard.
+    MatchState = 0x1D,   // server->client, reliable: match phase + per-team scores + limits (#523).
+    Scoreboard = 0x1E,   // server->client, unreliable: per-participant kills/deaths/score/ping (#523).
+    TeamRequest = 0x1F,  // client->server, reliable: request a mid-match team/faction switch (#522).
+    Chat = 0x20,         // client->server, reliable: a player chat line (channel + UTF-8 text) (#646).
+    ChatEvent = 0x21,    // server->client, reliable: a routed chat line (sender + channel + text) (#646).
+    // ENet message ids occupy 0x00-0x3F. The non-ENet (raw-UDP) boundary was raised from 0x20 to 0x40 in
+    // #996 to make room for the Epic E ENet messages above (it was raised from 0x10 to 0x20 in #853). A
+    // raw-UDP id lives at 0x40+ and is NEVER dispatched through the ENet onReceive path.
+    LanBeacon = 0x40,   // raw UDP broadcast - NOT sent over ENet; 0x40+ reserved for non-ENet ids.
+    ServerQuery = 0x41, // client->server raw UDP on the query port: A2S-style info request (#997).
+    ServerInfo = 0x42,  // server->client raw UDP: reply to MsgServerQuery, carries live details (#997).
 };
 
 // The role a peer joins as, chosen by the client in MsgConnectRequest and granted (possibly clamped) by
@@ -142,6 +151,8 @@ enum class ConnectRefusalCode : uint8_t {
     MissingRequiredPack = 7, // client lacks a server-required content pack (#872 refuse policy; the
                              // reason text carries the missing pack list)
     EntitlementRequired = 8, // premium content requires an entitlement token (RFC #871; reserved)
+    MatchFull = 9,           // every team in the current game mode is at capacity (#522)
+    BadPassword = 10,        // the server requires a join password and the client's was missing/wrong (#998)
 };
 
 // All structs below are deliberately UNPACKED and laid out for natural alignment (see compatibility
@@ -174,9 +185,13 @@ struct MsgConnectAck {
     uint32_t assignedEntityGen{0}; // entity generation (0 = none assigned)
     float planetRadiusKm{0.f};     // planet sphere radius (km); Earth default = 6371
     uint8_t grantedRole{0};        // PeerRole granted by the server (Pilot/Observer) (#857)
-    uint8_t reserved2[3]{};        // pad to 20 (multiple of alignof(MsgEntityTypeDef) so records stay aligned)
-}; // 20 bytes, align 4 (multiple of alignof(MsgEntityTypeDef) so trailing records stay aligned)
-static_assert(sizeof(MsgConnectAck) == 20u, "MsgConnectAck wire size changed");
+    uint8_t reserved2[3]{};        // pad so peerId stays 4-aligned
+    // --- appended at the tail (#996); additive, prior offsets unchanged ---
+    // The peer's own transport peer id. The client had no way to learn its own id, which the roster
+    // "you" highlight (#996) and chat self-echo (#646) need. Stable for the life of the connection.
+    uint32_t peerId{0}; // @20 this peer's own id (matches PlayerRosterEntry::participantId)
+}; // 24 bytes, align 4 (multiple of alignof(MsgEntityTypeDef) so trailing records stay aligned)
+static_assert(sizeof(MsgConnectAck) == 24u, "MsgConnectAck wire size changed");
 static_assert(alignof(MsgConnectAck) == 4u, "MsgConnectAck alignment changed");
 static_assert(sizeof(MsgConnectAck) % 4u == 0u, "MsgConnectAck not record-aligned (MsgEntityTypeDef is align 4)");
 static_assert(offsetof(MsgConnectAck, typeCount) == 2u, "MsgConnectAck::typeCount offset changed");
@@ -184,6 +199,7 @@ static_assert(offsetof(MsgConnectAck, assignedEntityIdx) == 4u, "MsgConnectAck::
 static_assert(offsetof(MsgConnectAck, assignedEntityGen) == 8u, "MsgConnectAck::assignedEntityGen offset changed");
 static_assert(offsetof(MsgConnectAck, planetRadiusKm) == 12u, "MsgConnectAck::planetRadiusKm offset changed");
 static_assert(offsetof(MsgConnectAck, grantedRole) == 16u, "MsgConnectAck::grantedRole offset changed");
+static_assert(offsetof(MsgConnectAck, peerId) == 20u, "MsgConnectAck::peerId offset changed");
 
 // Entity type definition record appended after MsgConnectAck.
 //
@@ -397,13 +413,20 @@ struct MsgConnectRequest {
     uint16_t packCount{0};          // number of trailing PackManifestEntry records
     uint16_t reserved{0};           // pad to 8; future join flags
     char requestedEntityType[64]{}; // null-terminated type id to fly; empty = server default (#834)
-}; // 72 bytes, align 2 (multiple of alignof(PackManifestEntry)=1 so trailing records stay aligned)
-static_assert(sizeof(MsgConnectRequest) == 72u, "MsgConnectRequest wire size changed");
+    // --- appended at the tail (#996); additive, prior offsets unchanged ---
+    // Player callsign. A FIXED field (not a TLV) because every client always has one (PilotProfile::
+    // callsign, default "Pilot") — TLVs in this message are for conditional payloads (seat claim,
+    // reconnect identity, join password). The server sanitizes it (printable, trimmed, empty ->
+    // "Pilot-<peerId>"). It is the client's contribution to the match roster (#996).
+    char callsign[32]{}; // null-terminated display callsign; empty = server assigns a default
+}; // 104 bytes, align 2 (multiple of alignof(PackManifestEntry)=1 so trailing records stay aligned)
+static_assert(sizeof(MsgConnectRequest) == 104u, "MsgConnectRequest wire size changed");
 static_assert(alignof(MsgConnectRequest) == 2u, "MsgConnectRequest alignment changed");
 static_assert(offsetof(MsgConnectRequest, protocolVersion) == 2u, "MsgConnectRequest::protocolVersion offset changed");
 static_assert(offsetof(MsgConnectRequest, packCount) == 4u, "MsgConnectRequest::packCount offset changed");
 static_assert(offsetof(MsgConnectRequest, requestedEntityType) == 8u,
               "MsgConnectRequest::requestedEntityType offset changed");
+static_assert(offsetof(MsgConnectRequest, callsign) == 72u, "MsgConnectRequest::callsign offset changed");
 
 // Unreliable, unicast per-peer every sim tick.
 // Body layout after this 24-byte header (#725 shared-origin encode-once):
@@ -455,6 +478,8 @@ inline constexpr uint8_t kInputButtonChaffFlare = 0x08;  // bit 3 = chaff/flare 
 inline constexpr uint8_t kInputButtonEcm = 0x10;         // bit 4 = ECM jammer (level, #529)
 inline constexpr uint8_t kInputButtonEject = 0x20;       // bit 5 = eject (edge, #672)
 inline constexpr uint8_t kInputButtonWheelBrake = 0x40;  // bit 6 = wheel brakes (level, #700, ground only)
+inline constexpr uint8_t kInputButtonRespawn = 0x80;     // bit 7 = respawn request (edge, #648) — LAST free
+                                                         // bit; the next button must open a uint16 field.
 
 struct MsgClientInput {
     uint8_t msgId{static_cast<uint8_t>(MsgId::ClientInput)};
@@ -742,6 +767,16 @@ static_assert(offsetof(MsgCombatEventHeader, count) == 1u, "MsgCombatEventHeader
 //   Stats: a = kills, b = losses, c = score — the RECEIVING peer's own tallies (unicast only).
 inline constexpr uint32_t kNoOwningPeer = 0xFFFFFFFFu; // peer id 0 is a real player (#610's kNoPeer rule)
 
+// A "participant" (#497) is anything that occupies a scoreboard row: a human (participantId == its
+// transport peerId) or a server-side AI bot (participantId == kBotParticipantBase + n). The two id
+// spaces never overlap because ENet/GNS peer ids are small. CombatEventRecord's a/b fields (kill
+// credit) and the server's per-participant score map both key on participantId, so a bot kill resolves
+// to a name instead of kNoOwningPeer. The client resolves participantId -> callsign via the roster.
+inline constexpr uint32_t kBotParticipantBase = 0x40000000u;
+inline bool isBotParticipant(uint32_t participantId) noexcept {
+    return participantId >= kBotParticipantBase && participantId != kNoOwningPeer;
+}
+
 struct CombatEventRecord {
     uint8_t type{0};        // CombatEventType
     uint8_t weaponClass{0}; // WeaponType ordinal of the credited weapon; 0xFF = none/unknown
@@ -762,6 +797,108 @@ static_assert(offsetof(CombatEventRecord, subjectIdx) == 4u, "CombatEventRecord:
 static_assert(offsetof(CombatEventRecord, instigatorIdx) == 12u, "CombatEventRecord::instigatorIdx offset changed");
 static_assert(offsetof(CombatEventRecord, a) == 20u, "CombatEventRecord::a offset changed");
 static_assert(offsetof(CombatEventRecord, c) == 28u, "CombatEventRecord::c offset changed");
+
+// ---------------------------------------------------------------------------------------------
+// Match roster (#996)
+// ---------------------------------------------------------------------------------------------
+// PlayerRosterEntry::flags bits.
+inline constexpr uint8_t kRosterLeave = 0x01u; // this participant left; the client removes the row
+inline constexpr uint8_t kRosterBot = 0x02u;   // this participant is an AI bot (badge it, ping 0)
+
+// Header of a PlayerRoster upsert/leave stream (#996). Followed by `count` PlayerRosterEntry records.
+// A join/change is a one-entry broadcast; a leave is one entry with kRosterLeave; the full roster sent
+// to a late joiner after ConnectAck is `count` upserts chunked <= kMaxRosterEntriesPerPacket. Dedup is
+// by participantId (no full/delta distinction). Self-describing like MsgFactionDef, with a count header.
+struct MsgPlayerRosterHeader {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::PlayerRoster)}; // @0
+    uint8_t count{0};                                         // @1 number of trailing PlayerRosterEntry records
+    uint16_t reserved{0};                                     // @2 pad (keeps records 4-aligned)
+}; // 4 bytes, align 2
+static_assert(sizeof(MsgPlayerRosterHeader) == 4u, "MsgPlayerRosterHeader wire size changed");
+static_assert(offsetof(MsgPlayerRosterHeader, count) == 1u, "MsgPlayerRosterHeader::count offset changed");
+
+struct PlayerRosterEntry {
+    uint32_t participantId{0}; // @0 peerId, or kBotParticipantBase + n for a bot
+    uint16_t factionIndex{0};  // @4 FactionRegistry index (the participant's team); 0 = neutral/none
+    uint8_t role{0};           // @6 PeerRole ordinal (bots report Pilot)
+    uint8_t flags{0};          // @7 kRosterLeave / kRosterBot
+    char callsign[32]{};       // @8 null-terminated display name
+}; // 40 bytes, align 4
+static_assert(sizeof(PlayerRosterEntry) == 40u, "PlayerRosterEntry wire size changed");
+static_assert(alignof(PlayerRosterEntry) == 4u, "PlayerRosterEntry alignment changed");
+static_assert(offsetof(PlayerRosterEntry, factionIndex) == 4u, "PlayerRosterEntry::factionIndex offset changed");
+static_assert(offsetof(PlayerRosterEntry, role) == 6u, "PlayerRosterEntry::role offset changed");
+static_assert(offsetof(PlayerRosterEntry, flags) == 7u, "PlayerRosterEntry::flags offset changed");
+static_assert(offsetof(PlayerRosterEntry, callsign) == 8u, "PlayerRosterEntry::callsign offset changed");
+inline constexpr std::size_t kMaxRosterEntriesPerPacket = 12; // 4 + 12*40 = 484 B (matches CombatEvent chunking)
+
+// Client->server, reliable: request a mid-match switch to a different team/faction (#522). The server
+// validates it against the balance guard (a switch that would stack a team is denied with a
+// MsgServerNotice) before despawning + respawning the pilot on the new team. An admin `team` command
+// bypasses the guard server-side.
+struct MsgTeamRequest {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::TeamRequest)}; // @0
+    uint8_t reserved{0};                                     // @1
+    uint16_t factionIndex{0};                                // @2 requested destination team (FactionRegistry index)
+}; // 4 bytes, align 2
+static_assert(sizeof(MsgTeamRequest) == 4u, "MsgTeamRequest wire size changed");
+static_assert(offsetof(MsgTeamRequest, factionIndex) == 2u, "MsgTeamRequest::factionIndex offset changed");
+
+// Server->client, reliable: the current match phase, limits, and per-team scores (#523). Broadcast on
+// change (phase transition or a team score) and unicast to a late joiner after ConnectAck. Followed by
+// teamCount MatchTeamScore records. The client renders the phase clock as (phaseEndTick - tickIndex);
+// phaseEndTick == 0 = the phase is untimed.
+struct MsgMatchState {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::MatchState)}; // @0
+    uint8_t phase{0};                                       // @1 MatchPhase ordinal
+    uint16_t scoreLimit{0};                                 // @2 team score that ends the match; 0 = none
+    uint8_t teamCount{0};                                   // @4 trailing MatchTeamScore records
+    uint8_t reserved[3]{};                                  // @5 pad so phaseEndTick is 8-aligned
+    uint64_t phaseEndTick{0};                               // @8 tick the current phase ends; 0 = untimed
+    char modeId[32]{};                                      // @16 game-mode id
+    char modeName[32]{};                                    // @48 game-mode display name
+}; // 80 bytes, align 8
+static_assert(sizeof(MsgMatchState) == 80u, "MsgMatchState wire size changed");
+static_assert(alignof(MsgMatchState) == 8u, "MsgMatchState alignment changed");
+static_assert(offsetof(MsgMatchState, scoreLimit) == 2u, "MsgMatchState::scoreLimit offset changed");
+static_assert(offsetof(MsgMatchState, teamCount) == 4u, "MsgMatchState::teamCount offset changed");
+static_assert(offsetof(MsgMatchState, phaseEndTick) == 8u, "MsgMatchState::phaseEndTick offset changed");
+static_assert(offsetof(MsgMatchState, modeId) == 16u, "MsgMatchState::modeId offset changed");
+static_assert(offsetof(MsgMatchState, modeName) == 48u, "MsgMatchState::modeName offset changed");
+
+struct MatchTeamScore {
+    uint16_t factionIndex{0}; // @0
+    uint16_t reserved{0};     // @2
+    int32_t score{0};         // @4
+}; // 8 bytes, align 4
+static_assert(sizeof(MatchTeamScore) == 8u, "MatchTeamScore wire size changed");
+static_assert(offsetof(MatchTeamScore, score) == 4u, "MatchTeamScore::score offset changed");
+
+// Server->client, unreliable: the full scoreboard (#523). Periodic + on admit; followed by `count`
+// ScoreboardRow records (chunked). Unreliable because it is fully self-describing and refreshed every
+// ~2 s — a lost scoreboard is replaced, not lost state.
+struct MsgScoreboardHeader {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::Scoreboard)}; // @0
+    uint8_t count{0};                                       // @1 trailing ScoreboardRow records
+    uint16_t reserved{0};                                   // @2
+    uint32_t reserved2{0};                                  // @4 pad so records stay 4-aligned
+}; // 8 bytes, align 4
+static_assert(sizeof(MsgScoreboardHeader) == 8u, "MsgScoreboardHeader wire size changed");
+static_assert(offsetof(MsgScoreboardHeader, count) == 1u, "MsgScoreboardHeader::count offset changed");
+
+struct ScoreboardRow {
+    uint32_t participantId{0}; // @0 peerId, or kBotParticipantBase + n
+    int32_t score{0};          // @4
+    uint16_t kills{0};         // @8
+    uint16_t deaths{0};        // @10
+    uint16_t pingMs{0};        // @12 estimatedDelayTicks*1000/60, capped; 0 for bots
+    uint16_t factionIndex{0};  // @14
+}; // 16 bytes, align 4
+static_assert(sizeof(ScoreboardRow) == 16u, "ScoreboardRow wire size changed");
+static_assert(offsetof(ScoreboardRow, kills) == 8u, "ScoreboardRow::kills offset changed");
+static_assert(offsetof(ScoreboardRow, pingMs) == 12u, "ScoreboardRow::pingMs offset changed");
+static_assert(offsetof(ScoreboardRow, factionIndex) == 14u, "ScoreboardRow::factionIndex offset changed");
+inline constexpr std::size_t kMaxScoreboardRowsPerPacket = 30; // 8 + 30*16 = 488 B
 
 // ---------------------------------------------------------------------------------------------
 // Datalink / shared team track picture (#528)
@@ -1004,23 +1141,74 @@ struct MsgLanBeacon {
     uint16_t gamePort{4778};
     uint8_t playerCount{0};
     uint8_t maxPlayers{0};
-    uint8_t gameModeFlags{0}; // see kGameMode* constants
-    uint8_t reserved2{0};
-    char name[64]{}; // null-terminated server name
-}; // 74 bytes, align 2
-static_assert(sizeof(MsgLanBeacon) == 74u, "MsgLanBeacon wire size changed");
+    uint8_t gameModeFlags{0};    // see kGameMode* constants
+    uint8_t reserved2{0};        // @9
+    uint16_t shutdownSeconds{0}; // @10 seconds until shutdown when kGameModeShuttingDown is set (#226); 0 = n/a
+    uint16_t queryPort{0};       // @12 the server's info-query port (#997); 0 = query disabled
+    char name[64]{};             // @14 null-terminated server name
+}; // 78 bytes, align 2
+static_assert(sizeof(MsgLanBeacon) == 78u, "MsgLanBeacon wire size changed");
 static_assert(alignof(MsgLanBeacon) == 2u, "MsgLanBeacon alignment changed");
 static_assert(offsetof(MsgLanBeacon, protocolVersion) == 2u, "MsgLanBeacon::protocolVersion offset changed");
 static_assert(offsetof(MsgLanBeacon, gamePort) == 4u, "MsgLanBeacon::gamePort offset changed");
 static_assert(offsetof(MsgLanBeacon, playerCount) == 6u, "MsgLanBeacon::playerCount offset changed");
 static_assert(offsetof(MsgLanBeacon, maxPlayers) == 7u, "MsgLanBeacon::maxPlayers offset changed");
 static_assert(offsetof(MsgLanBeacon, gameModeFlags) == 8u, "MsgLanBeacon::gameModeFlags offset changed");
-static_assert(offsetof(MsgLanBeacon, name) == 10u, "MsgLanBeacon::name offset changed");
+static_assert(offsetof(MsgLanBeacon, shutdownSeconds) == 10u, "MsgLanBeacon::shutdownSeconds offset changed");
+static_assert(offsetof(MsgLanBeacon, queryPort) == 12u, "MsgLanBeacon::queryPort offset changed");
+static_assert(offsetof(MsgLanBeacon, name) == 14u, "MsgLanBeacon::name offset changed");
 
 // Bitmask constants for MsgLanBeacon::gameModeFlags.
 static constexpr uint8_t kGameModeCampaign = 0x01u;
 static constexpr uint8_t kGameModeMission = 0x02u;
 static constexpr uint8_t kGameModeSandbox = 0x04u;
+static constexpr uint8_t kGameModeShuttingDown = 0x08u; // the server is counting down to shutdown (#226)
+static constexpr uint8_t kGameModePassworded = 0x10u;   // the server requires a join password (#998)
+
+// ---------------------------------------------------------------------------------------------
+// Server info query protocol (#997) — raw UDP on a dedicated query port
+// ---------------------------------------------------------------------------------------------
+// An A2S-style request/response the server browser (#143) uses to measure ping and read live details
+// for a server (LAN-discovered or lobby-listed). Runs on a dedicated UDP port because GNS has no
+// raw-datagram passthrough and the discovery-beacon socket is send-only.
+
+// Client -> server. Padded so the request is never smaller than the response (anti-amplification): the
+// responder DROPS any datagram shorter than sizeof(MsgServerQuery).
+struct MsgServerQuery {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::ServerQuery)}; // @0
+    uint8_t reserved{0};                                     // @1
+    uint16_t protocolVersion{kProtocolVersion};              // @2
+    uint32_t nonce{0};                                       // @4 client-chosen; echoed back
+    uint64_t clientTimeMs{0};                                // @8 client steady-clock ms; echoed verbatim
+    uint8_t pad[176]{};                                      // @16 anti-amplification padding
+}; // 192 bytes, align 8
+static_assert(sizeof(MsgServerQuery) == 192u, "MsgServerQuery wire size changed");
+static_assert(offsetof(MsgServerQuery, nonce) == 4u, "MsgServerQuery::nonce offset changed");
+static_assert(offsetof(MsgServerQuery, clientTimeMs) == 8u, "MsgServerQuery::clientTimeMs offset changed");
+
+// Server -> client reply. Echoes nonce + clientTimeMs so the client computes RTT locally.
+struct MsgServerInfo {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::ServerInfo)}; // @0
+    uint8_t gameModeFlags{0};                               // @1 kGameMode* incl. shutdown/passworded
+    uint16_t protocolVersion{kProtocolVersion};             // @2
+    uint32_t nonce{0};                                      // @4 echoed
+    uint64_t clientTimeMs{0};                               // @8 echoed
+    uint16_t gamePort{0};                                   // @16
+    uint16_t shutdownSeconds{0};                            // @18
+    uint8_t playerCount{0};                                 // @20
+    uint8_t maxPlayers{0};                                  // @21
+    uint16_t reserved{0};                                   // @22
+    char name[64]{};                                        // @24 server name
+    char modeId[32]{};                                      // @88 game-mode id (empty until set)
+    char mission[64]{};                                     // @120 current mission/map display name
+}; // 184 bytes, align 8
+static_assert(sizeof(MsgServerInfo) == 184u, "MsgServerInfo wire size changed");
+static_assert(offsetof(MsgServerInfo, nonce) == 4u, "MsgServerInfo::nonce offset changed");
+static_assert(offsetof(MsgServerInfo, clientTimeMs) == 8u, "MsgServerInfo::clientTimeMs offset changed");
+static_assert(offsetof(MsgServerInfo, gamePort) == 16u, "MsgServerInfo::gamePort offset changed");
+static_assert(offsetof(MsgServerInfo, name) == 24u, "MsgServerInfo::name offset changed");
+static_assert(offsetof(MsgServerInfo, modeId) == 88u, "MsgServerInfo::modeId offset changed");
+static_assert(offsetof(MsgServerInfo, mission) == 120u, "MsgServerInfo::mission offset changed");
 
 // Extension tag registry for TLV blocks appended after fixed message structs (see WireCodec.h).
 // Wire format per entry: [tag: uint16_t LE][len: uint16_t LE][data: len bytes].
@@ -1060,15 +1248,21 @@ enum class ExtTag : uint16_t {
                            // entities emits no SnapshotCrew TLV and its snapshot is byte-identical to pre-#972.
                            // Unreliable/interest-filtered: a dropped packet loses one tick of turret aim.
 
-    ConnectSeatClaim = 0x0500,   // #974: join-at-connect seat claim in MsgConnectRequest's TLV block.
-                                 // Payload = { uint32 entityIdx (LE), uint32 entityGen (LE), uint8 seatIndex }
-                                 // (9 bytes, unaligned). Present = the client asks to occupy that non-fly seat
-                                 // instead of spawning its own aircraft; the server falls back to a normal
-                                 // pilot spawn if the seat is unavailable. Absent = the normal pilot spawn.
-    WeatherWindProfile = 0x0400, // #489: altitude wind profile appended to MsgWeatherState. Payload =
-                                 // uint8 count + count x {float altM, float windX, float windZ} (12 B each,
-                                 // little-endian, unaligned). Ascending altitude. Old clients ignore it and
-                                 // keep the datum-level windX/windZ scalar; omitted when no profile is set.
+    ConnectSeatClaim = 0x0500,    // #974: join-at-connect seat claim in MsgConnectRequest's TLV block.
+                                  // Payload = { uint32 entityIdx (LE), uint32 entityGen (LE), uint8 seatIndex }
+                                  // (9 bytes, unaligned). Present = the client asks to occupy that non-fly seat
+                                  // instead of spawning its own aircraft; the server falls back to a normal
+                                  // pilot spawn if the seat is unavailable. Absent = the normal pilot spawn.
+    ConnectIdentity = 0x0501,     // #524: client identity for reconnect. Payload = the ASCII UUID from
+                                  // PilotProfile::guid (<= 40 bytes, unaligned). Lets the server restore a
+                                  // reconnecting player's team + score tallies inside a grace window.
+    ConnectJoinPassword = 0x0502, // #998: join password. Payload = raw UTF-8 password bytes (1..64,
+                                  // unaligned). Present when the client supplies a password for a
+                                  // passworded server; the server constant-time-compares it.
+    WeatherWindProfile = 0x0400,  // #489: altitude wind profile appended to MsgWeatherState. Payload =
+                                  // uint8 count + count x {float altM, float windX, float windZ} (12 B each,
+                                  // little-endian, unaligned). Ascending altitude. Old clients ignore it and
+                                  // keep the datum-level windX/windZ scalar; omitted when no profile is set.
 };
 
 } // namespace fl

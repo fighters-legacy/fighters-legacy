@@ -47,6 +47,9 @@ enum class InputAction : uint32_t {
     // Emergency egress — command the ejection seat (#672)
     Eject,
 
+    // Respawn after death in a multiplayer match (#648)
+    Respawn,
+
     Count
 };
 

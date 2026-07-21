@@ -18,9 +18,10 @@ enum class AssetType : uint8_t {
     EntityDef,
     SensorDef,
     Weapon,
-    Manual,  // hand-written aircraft prose (#821); the NUMBERS are generated, never authored
-    Livery,  // texture-set indirection by material slot (#845); re-skins an aircraft without a mesh
-    Airport, // airport/runway definitions (#699); placed on the sphere by AirportRegistry
+    Manual,   // hand-written aircraft prose (#821); the NUMBERS are generated, never authored
+    Livery,   // texture-set indirection by material slot (#845); re-skins an aircraft without a mesh
+    Airport,  // airport/runway definitions (#699); placed on the sphere by AirportRegistry
+    GameMode, // multiplayer game-mode definitions (#521); teams, scoring, respawn, win conditions
     Count
 };
 
@@ -45,5 +46,6 @@ struct WeaponDefData : AssetBase {};
 struct ManualProse : AssetBase {};
 struct LiveryData : AssetBase {};
 struct AirportDefData : AssetBase {};
+struct GameModeData : AssetBase {};
 
 } // namespace fl

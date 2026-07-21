@@ -29,6 +29,8 @@ enum class SessionFailure : uint8_t {
     RoleDenied,          // requested role not allowed by the server (#857)
     MissingRequiredPack, // client lacks a server-required content pack (#872)
     EntitlementRequired, // premium content requires an entitlement token (RFC #871)
+    MatchFull,           // every team in the current game mode is at capacity (#522)
+    BadPassword,         // the server requires a join password and the client's was missing/wrong (#998)
 };
 
 // English display text for a failure (empty for None). Single mapping point: wrap these in the
@@ -65,6 +67,10 @@ inline const char* sessionFailureMessage(SessionFailure f) {
         return "You are missing a content pack this server requires.";
     case SessionFailure::EntitlementRequired:
         return "This server requires premium content you do not own.";
+    case SessionFailure::MatchFull:
+        return "All teams are full.";
+    case SessionFailure::BadPassword:
+        return "Incorrect server password.";
     }
     return "";
 }

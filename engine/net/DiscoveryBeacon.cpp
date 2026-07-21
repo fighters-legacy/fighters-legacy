@@ -71,20 +71,28 @@ bool DiscoveryBeacon::isOpen() const noexcept {
 #endif
 }
 
-void DiscoveryBeacon::tick(int playerCount) {
+void DiscoveryBeacon::tick(const TickState& state) {
     if (!isOpen())
         return;
     if (m_firstTick) {
         m_firstTick = false;
+        m_lastShutdownActive = state.shuttingDown;
         m_lastSend = std::chrono::steady_clock::now();
-        send(playerCount);
+        send(state);
         return;
     }
     auto now = std::chrono::steady_clock::now();
+    // Send immediately when the shutdown state flips, so a browser sees the transition promptly (#226).
+    if (state.shuttingDown != m_lastShutdownActive) {
+        m_lastShutdownActive = state.shuttingDown;
+        m_lastSend = now;
+        send(state);
+        return;
+    }
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastSend).count();
     if (elapsed >= static_cast<long long>(m_cfg.intervalMs)) {
         m_lastSend = now;
-        send(playerCount);
+        send(state);
     }
 }
 
@@ -144,13 +152,18 @@ bool DiscoveryBeacon::openSock6() {
     return true;
 }
 
-void DiscoveryBeacon::send(int playerCount) {
+void DiscoveryBeacon::send(const TickState& state) {
     fl::MsgLanBeacon pkt;
     pkt.protocolVersion = fl::kProtocolVersion;
     pkt.gamePort = m_cfg.port;
-    pkt.playerCount = static_cast<uint8_t>(std::clamp(playerCount, 0, 255));
+    pkt.playerCount = static_cast<uint8_t>(std::clamp(state.playerCount, 0, 255));
     pkt.maxPlayers = m_cfg.maxPlayers;
     pkt.gameModeFlags = m_cfg.gameModeFlags;
+    pkt.queryPort = m_cfg.queryPort; // #997
+    if (state.shuttingDown) {
+        pkt.gameModeFlags |= fl::kGameModeShuttingDown; // #226
+        pkt.shutdownSeconds = state.shutdownSeconds;
+    }
     std::snprintf(pkt.name, sizeof(pkt.name), "%s", m_cfg.name.c_str());
 
     uint8_t buf[sizeof(fl::MsgLanBeacon)];

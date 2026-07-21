@@ -375,6 +375,68 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             return std::string(buf);
         });
 
+    // team <peerId> <factionIndex>  -- move a peer to a team (#522). Bypasses the balance guard (admin).
+    registry.registerCommand(
+        "team", "team <peerId> <factionIndex>  -- move a peer to a team (bypasses the balance guard)",
+        [ctx](std::span<std::string_view> args) -> std::string {
+            if (args.size() < 2)
+                return "usage: team <peerId> <factionIndex>";
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                return "team: not available";
+            std::string idArg(args[0]);
+            std::string facArg(args[1]);
+            if (!isNumeric(idArg) || !isNumeric(facArg))
+                return "team: peerId and factionIndex must be numeric";
+            uint32_t peerId = 0;
+            unsigned faction = 0;
+            if (auto [p, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), peerId); ec != std::errc{})
+                return "team: invalid peer ID";
+            if (auto [p, ec] = std::from_chars(facArg.data(), facArg.data() + facArg.size(), faction);
+                ec != std::errc{} || faction > 0xFFFFu)
+                return "team: invalid faction index";
+            const uint16_t f = static_cast<uint16_t>(faction);
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId, f]() {
+                ctx.sim.broadcaster->setPeerFaction(peerId, f);
+                char m[80];
+                std::snprintf(m, sizeof(m), "[admin] moved peer %u to team %u", peerId, f);
+                std::printf("%s\n", m);
+                if (ctx.rcon.shell)
+                    ctx.rcon.shell->print(m);
+                std::fflush(stdout);
+            });
+            char buf[80];
+            std::snprintf(buf, sizeof(buf), "team: queued peer %u -> team %u", peerId, f);
+            return std::string(buf);
+        });
+
+    // respawn <peerId>  -- force a dead peer to respawn immediately (#648)
+    registry.registerCommand("respawn", "respawn <peerId>  -- force a dead peer to respawn now",
+                             [ctx](std::span<std::string_view> args) -> std::string {
+                                 if (args.empty())
+                                     return "usage: respawn <peerId>";
+                                 if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                                     return "respawn: not available";
+                                 std::string idArg(args[0]);
+                                 if (!isNumeric(idArg))
+                                     return "respawn: invalid peer ID";
+                                 uint32_t peerId = 0;
+                                 if (auto [p, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), peerId);
+                                     ec != std::errc{})
+                                     return "respawn: invalid peer ID";
+                                 ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId]() {
+                                     ctx.sim.broadcaster->respawnParticipant(peerId);
+                                     char m[64];
+                                     std::snprintf(m, sizeof(m), "[admin] respawned peer %u", peerId);
+                                     std::printf("%s\n", m);
+                                     if (ctx.rcon.shell)
+                                         ctx.rcon.shell->print(m);
+                                     std::fflush(stdout);
+                                 });
+                                 char buf[64];
+                                 std::snprintf(buf, sizeof(buf), "respawn: queued peer %u", peerId);
+                                 return std::string(buf);
+                             });
+
     // seats <entityIdx>  -- inspect a crewed aircraft's seat roster/occupancy (#974)
     registry.registerCommand("seats", "seats <entityIdx>  -- show a crewed aircraft's seat roster and occupancy",
                              [ctx](std::span<std::string_view> args) -> std::string {

@@ -180,8 +180,8 @@ jobs:
           cmake --install build/debug --prefix /tmp/dist --component tools
           missing=0
           for f in fighters-legacy fl-server validate-flight-model validate-weapon validate-sensor \
-                   validate-entity validate-mission validate-mesh validate-playlist validate-licenses \
-                   validate-livery tex-compress fm-trim; do
+                   validate-entity validate-mission validate-mode validate-mesh validate-playlist \
+                   validate-licenses validate-livery tex-compress fm-trim; do
             if [ ! -f "/tmp/dist/$f" ]; then echo "MISSING from the release archive: $f"; missing=1; fi
           done
           # fl-base-pack's CI downloads its validators from a fighters-legacy release; a missing one
@@ -202,6 +202,7 @@ jobs:
         run: |
           ./build/debug/tools/validate-flight-model --version
           ./build/debug/tools/validate-mission --version
+          ./build/debug/tools/validate-mode --version
           ./build/debug/tools/validate-weapon --version
           ./build/debug/tools/validate-sensor --version
           ./build/debug/tools/validate-entity --version

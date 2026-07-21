@@ -47,8 +47,24 @@ static const char* kDefaultToml =
     "\n"
     "[rotation]\n"
     "order = \"sequential\"\n"
+    "# Each item is a mission ref, optionally with a game mode: \"mission@builtin:tdm\".\n"
     "items = []\n"
     "time_limit_min = 0\n"
+    "\n"
+    "[match]\n"
+    "# Default game mode: a \"builtin:\" id (free-flight, tdm) or a pack modes/ asset stem.\n"
+    "mode = \"builtin:free-flight\"\n"
+    "# Seconds the end-of-match scoreboard shows (combat frozen) before rotating.\n"
+    "end_screen_s = 10\n"
+    "# Seconds a disconnected player's team + score are held for reconnect (0 = disabled).\n"
+    "reconnect_grace_s = 120\n"
+    "\n"
+    "[bots]\n"
+    "# Fill the match with AI bots up to this many total participants (0 = no bots).\n"
+    "fill = 0\n"
+    "max_bots = 16\n"
+    "ai_script = \"builtin:fighter\"\n"
+    "balance_teams = true\n"
     "\n"
     "[lobby]\n"
     "register = false\n"
@@ -127,6 +143,9 @@ static const char* kDefaultToml =
     "# LAN server discovery beacon.\n"
     "enabled = true\n"
     "interval_ms = 2000\n"
+    "# Answer A2S-style server-info queries (for the browser ping column) on query_port.\n"
+    "query_enabled = true\n"
+    "query_port = 0   # 0 = auto (game port + 1)\n"
     "\n"
     "[security]\n"
     "connect_rate_limit_count = 5\n"
@@ -379,6 +398,43 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
         if (auto v = tomlInt(tbl["rotation"]["time_limit_min"]))
             cfg.rotationTimeLimitMin = static_cast<int>(*v);
+
+        // [match] (#521/#523)
+        if (auto v = tbl["match"]["mode"].value<std::string>())
+            cfg.matchMode = std::move(*v);
+        if (auto v = tomlInt(tbl["match"]["end_screen_s"])) {
+            if (*v >= 0 && *v <= 120)
+                cfg.matchEndScreenS = static_cast<int>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "match.end_screen_s out of range [0,120]; using default");
+        }
+        if (auto v = tomlInt(tbl["match"]["reconnect_grace_s"])) {
+            if (*v >= 0 && *v <= 3600)
+                cfg.matchReconnectGraceS = static_cast<int>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "match.reconnect_grace_s out of range [0,3600]; using default");
+        }
+
+        // [bots] (#87)
+        if (auto v = tomlInt(tbl["bots"]["fill"])) {
+            if (*v >= 0 && *v <= 128)
+                cfg.botsFill = static_cast<int>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "bots.fill out of range [0,128]; using default");
+        }
+        if (auto v = tomlInt(tbl["bots"]["max_bots"])) {
+            if (*v >= 0 && *v <= 127)
+                cfg.botsMax = static_cast<int>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "bots.max_bots out of range [0,127]; using default");
+        }
+        if (auto v = tbl["bots"]["entity_type"].value<std::string>())
+            cfg.botsEntityType = std::move(*v);
+        if (auto v = tbl["bots"]["ai_script"].value<std::string>())
+            cfg.botsAiScript = std::move(*v);
+        if (auto v = tbl["bots"]["balance_teams"].value<bool>())
+            cfg.botsBalanceTeams = *v;
 
         // [lobby]
         if (auto v = tbl["lobby"]["register"].value<bool>())
@@ -710,6 +766,14 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             } else {
                 cfg.discoveryIntervalMs = static_cast<int>(*v);
             }
+        }
+        if (auto v = tbl["discovery"]["query_enabled"].value<bool>())
+            cfg.discoveryQueryEnabled = *v;
+        if (auto v = tomlInt(tbl["discovery"]["query_port"])) {
+            if (*v >= 0 && *v <= 65535)
+                cfg.discoveryQueryPort = static_cast<int>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "discovery.query_port out of range [0,65535]; using auto");
         }
 
         // [security]

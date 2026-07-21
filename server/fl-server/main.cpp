@@ -15,14 +15,19 @@
 //
 // See docs/fl-server-config.md for the full operator configuration reference.
 // fl-lobby integration is tracked in issue #36.
+#include "GameModeSource.h"
 #include "IpListFile.h"
+#include "MatchTeams.h"
 #include "MissionSource.h"
 #include "NetworkFactory.h"
 #include "RconServer.h"
 #include "ServerCommands.h"
 #include "StdoutLogger.h"
 #include "TestSpawn.h"
+#include "bots.h"
+#include "match/MatchController.h"
 #include "net/DiscoveryBeacon.h"
+#include "net/ServerQueryResponder.h"
 #include "sensor/SensorDefParser.h"
 #include "server_config.h"
 #include <content/ContentBootstrap.h>
@@ -329,6 +334,15 @@ int main(int argc, char** argv) {
     std::string missionToLoad = flagMission;
     if (missionToLoad.empty() && !cfg.rotationItems.empty())
         missionToLoad = cfg.rotationItems.front();
+    // A rotation item may pair a mission with a game mode: "mission@builtin:tdm" (#521). Split the mode
+    // ref off so it never reaches the mission loader; an item without '@' uses the [match] mode default.
+    std::string modeRefToLoad = cfg.matchMode;
+    {
+        auto [missionRef, modeRef] = fl::splitRotationItem(missionToLoad);
+        missionToLoad = missionRef;
+        if (!modeRef.empty())
+            modeRefToLoad = modeRef;
+    }
     if (!cfg.rotationItems.empty() && flagMission.empty()) {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "rotation: %zu item(s), order=%s (loading first: %s)", cfg.rotationItems.size(),
@@ -386,6 +400,29 @@ int main(int argc, char** argv) {
         else if (m == "sandbox")
             discoveryGameModeFlags |= fl::kGameModeSandbox;
     }
+    if (!cfg.password.empty())
+        discoveryGameModeFlags |= fl::kGameModePassworded; // #998 — browsers show a lock icon
+    // Server info query responder (#997): a dedicated UDP port that answers A2S-style queries for the
+    // server browser's ping/details column. Auto port = game port + 1.
+    const uint16_t queryPort = cfg.discoveryQueryPort != 0 ? static_cast<uint16_t>(cfg.discoveryQueryPort)
+                                                           : static_cast<uint16_t>(cfg.port + 1);
+    std::unique_ptr<fl::ServerQueryResponder> queryResponder;
+    if (cfg.discoveryQueryEnabled) {
+        queryResponder = std::make_unique<fl::ServerQueryResponder>(queryPort, *log);
+        if (!queryResponder->start()) {
+            log->log(LogLevel::Warn, __FILE__, __LINE__, "server query responder: bind failed; queries disabled");
+            queryResponder.reset();
+        } else {
+            fl::ServerQueryResponder::StaticInfo si;
+            si.name = cfg.name;
+            si.gamePort = cfg.port;
+            si.maxPlayers = static_cast<uint8_t>(cfg.maxPeers > 255 ? 255 : cfg.maxPeers);
+            si.gameModeFlags = discoveryGameModeFlags;
+            queryResponder->setStaticInfo(std::move(si));
+            log->log(LogLevel::Info, __FILE__, __LINE__, "server query responder started");
+        }
+    }
+
     std::unique_ptr<DiscoveryBeacon> beacon;
     if (cfg.discoveryEnabled) {
         DiscoveryBeacon::Config dcfg;
@@ -393,6 +430,7 @@ int main(int argc, char** argv) {
         dcfg.port = cfg.port;
         dcfg.maxPlayers = static_cast<uint8_t>(cfg.maxPeers > 255 ? 255 : cfg.maxPeers);
         dcfg.gameModeFlags = discoveryGameModeFlags;
+        dcfg.queryPort = queryResponder ? queryPort : 0; // #997: advertise the query port to browsers
         dcfg.intervalMs = cfg.discoveryIntervalMs;
         dcfg.broadcastAddr = "255.255.255.255";
         beacon = std::make_unique<DiscoveryBeacon>(dcfg, *log);
@@ -450,6 +488,19 @@ int main(int argc, char** argv) {
 
     AssetManager assets(std::move(packs), *log);
     assets.initialize(nullptr); // headless — window is null; NeedsConfiguration packs dropped
+
+    // Resolve the active game mode (#521): a builtin id, a pack modes/ asset, or the free-flight
+    // fallback. The MatchController (#523) consumes it; landing it here proves the resolution path and
+    // surfaces a bad [match] mode / rotation @mode at startup. Serial-equivalent: pure config read.
+    const fl::GameModeDef gameMode = fl::resolveGameMode(modeRefToLoad, &assets, *log);
+    {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "game mode: %s (%s)%s", gameMode.id.c_str(),
+                      gameMode.name.empty() ? gameMode.id.c_str() : gameMode.name.c_str(),
+                      gameMode.useMissionSides ? " [mission sides]" : "");
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
+    (void)gameMode; // consumed by the MatchController in #523
 
     fl::TerrainStreamer terrainStreamer(fl::builtinWorldTerrainManifest(), assets, *p.asyncFilesystem, nullptr);
     log->log(LogLevel::Info, __FILE__, __LINE__, "terrain: headless streamer initialized");
@@ -699,6 +750,7 @@ int main(int argc, char** argv) {
         cfg.overrunMaxAiStride, cfg.overrunBudgetFloorBytes, cfg.overrunMinInterestFraction);
     wbConfig.gameplay = fl::DamageRules{cfg.friendlyFire, cfg.crashDamage};
     broadcaster.applyConfig(wbConfig);
+    broadcaster.setJoinPassword(cfg.password); // #998: [server] password gates joins (empty = open)
     // The fire path's vocabulary (#625). After applyConfig, before gameLoop.start(); the registry
     // lives in main's scope and outlives the broadcaster.
     broadcaster.setWeaponRegistry(&weaponRegistry);
@@ -975,6 +1027,12 @@ int main(int argc, char** argv) {
     // The objective/trigger evaluator (#633). Constructed below when a mission loads; declared here so
     // it outlives gameLoop (the broadcaster's tick hook captures a pointer into it).
     std::unique_ptr<fl::MissionRuntime> missionRuntime;
+    // The match-lifecycle state machine (#523). Declared in main scope so it outlives gameLoop (the
+    // composite tick hook + the phase/rotate hooks capture references to it). Configured after the team
+    // setup; a free-flight/free-for-all leaves it Idle-inert (its hooks never fire a phase change).
+    fl::MatchController matchController;
+    std::size_t rotationIndex = 0;            // current [rotation] item (#523); advanced on match rotate
+    std::unique_ptr<fl::BotRoster> botRoster; // AI bot backfill (#87); null = bots disabled
     // Mission non-terminal `do:` action sink (#212). The evaluator routes actions like `set_weather storm`
     // here; we point it at the admin command dispatch AFTER the registry is built (below), so a mission
     // can do exactly what an operator could and no more. Set on the sim thread; read on the sim thread
@@ -1352,9 +1410,12 @@ int main(int argc, char** argv) {
                             log->log(LogLevel::Info, __FILE__, __LINE__, m);
                         }
                     });
-                missionRuntime->setOnEnd([log, &broadcaster, &campaignRunner, campaignMissionId,
+                missionRuntime->setOnEnd([log, &broadcaster, &matchController, &campaignRunner, campaignMissionId,
                                           campaignSavePath](const fl::MissionOutcome& o) {
                     const bool success = o.state == fl::MissionState::Complete;
+                    // A mission-scripted victory also ends the match, so the server rotates instead of
+                    // sitting idle after the objective completes (#523/#584).
+                    matchController.forceEnd(std::nullopt);
                     const char* s = success ? "SUCCESS" : "FAILURE";
                     char m[128];
                     std::snprintf(m, sizeof(m), "mission %s after %.1f s (%u trigger(s) fired)", s, o.elapsedSeconds,
@@ -1377,7 +1438,8 @@ int main(int argc, char** argv) {
                         log->log(LogLevel::Info, __FILE__, __LINE__, cm);
                     }
                 });
-                broadcaster.setMissionTickHook([rt = missionRuntime.get()](uint64_t t) { rt->step(t); });
+                // The per-tick step is wired into the composite match/mission hook below (after the team
+                // setup), so the MatchController steps every tick alongside the mission runtime.
                 // Bind a pilot's aircraft to its player-slot id on connect (and unbind on disconnect), so
                 // destroy(<slot-id>) tracks the live aircraft instead of firing at t=0 (#884). Fired from
                 // the handshake on the sim thread — the same thread that steps the runtime.
@@ -1401,6 +1463,183 @@ int main(int argc, char** argv) {
             }
         }
     }
+
+    // Match teams (#522): map the game mode's teams onto factions, wire the balancer-driven assigner +
+    // switch guard, and apply the mode's friendly-fire override. buildMatchTeams may synthesize + load
+    // the FactionRegistry (a zero-pack TDM server with real hostile teams); publish it if so. When the
+    // mode is a free-for-all (free-flight / mission sides with no mission) no assigner is installed, so
+    // the legacy m_playerFaction behavior is byte-identical.
+    {
+        fl::MatchTeamSetup teamSetup = fl::buildMatchTeams(gameMode, missionFactions, *log);
+        if (teamSetup.synthesizedRegistry)
+            broadcaster.setFactionRegistry(&missionFactions);
+        if (teamSetup.haveTeams) {
+            const std::vector<fl::TeamState> teamTemplate = teamSetup.teams;
+            // Live per-team counts, recomputed each call from the peers' current factions.
+            auto countTeams = [&broadcaster, teamTemplate]() {
+                std::vector<fl::TeamState> teams = teamTemplate;
+                broadcaster.forEachPeer([&](const fl::PeerInfo& pi) {
+                    const uint16_t f = broadcaster.factionForPeer(pi.peerId);
+                    for (auto& t : teams)
+                        if (t.factionIndex == f)
+                            ++t.count;
+                });
+                return teams;
+            };
+            broadcaster.setPlayerFaction(teamTemplate.front().factionIndex); // round-robin fallback team
+            broadcaster.setTeamAssigner(
+                [countTeams](uint32_t) -> std::optional<uint16_t> { return fl::pickTeam(countTeams()); });
+            broadcaster.setTeamSwitchGuard([countTeams, &broadcaster](uint32_t peerId, uint16_t target) -> bool {
+                const std::vector<fl::TeamState> teams = countTeams();
+                const uint16_t cur = broadcaster.factionForPeer(peerId);
+                const fl::TeamState* from = nullptr;
+                const fl::TeamState* to = nullptr;
+                for (const auto& t : teams) {
+                    if (t.factionIndex == cur)
+                        from = &t;
+                    if (t.factionIndex == target)
+                        to = &t;
+                }
+                if (!to)
+                    return false; // target is not a team
+                if (!from)
+                    return (to->capacity == 0) || (to->count < to->capacity); // joining from no team
+                return fl::switchAllowed(*from, *to);
+            });
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "match: %zu team(s) balanced by the game mode", teamTemplate.size());
+            log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+        }
+    }
+    // Friendly fire: a mode's On/Off override wins over [gameplay] friendly_fire (#522).
+    broadcaster.setDamageRules(fl::effectiveDamageRules(gameMode, cfg.friendlyFire, cfg.crashDamage));
+
+    // ── Match lifecycle (#523) ────────────────────────────────────────────────────────────────
+    // Configure the controller for the active mode + teams. Publish state on every phase change (which
+    // also toggles the combat freeze) and, on rotation, reset + re-admit the connected pilots. The
+    // controller steps every tick from the composite hook below; scoring is fed from the combat path.
+    {
+        fl::MatchTeamSetup mts = fl::buildMatchTeams(gameMode, missionFactions, *log);
+        matchController.configure(gameMode, mts.teams);
+        matchController.setEndingSeconds(static_cast<double>(cfg.matchEndScreenS));
+        broadcaster.setReconnectGraceTicks(static_cast<uint64_t>(std::max(0, cfg.matchReconnectGraceS)) * 60u); // #524
+
+        // Respawn policy from the mode (#648): a dead pilot respawns on request after the delay. Enabled
+        // ONLY for a competitive team match — the no-match free-flight default (haveTeams == false) leaves
+        // a dead pilot's airframe in place exactly as before #648, so a peer that never requests a respawn
+        // (e.g. a load-test bot) is not silently removed from the world. Without this gate, a free-flight
+        // pilot's death despawns its entity and drops the m_peerEntities mapping; with nothing to respawn
+        // it, the server's entity set drains away under a swarm of crash-and-stay-dead clients.
+        if (mts.haveTeams) {
+            fl::WorldBroadcaster::RespawnPolicy rp;
+            rp.delayTicks = static_cast<uint32_t>(std::max(0.0, gameMode.respawnDelayS) * 60.0);
+            rp.waves = gameMode.respawnWaves;
+            rp.waveIntervalTicks = static_cast<uint32_t>(std::max(1.0, gameMode.waveIntervalS) * 60.0);
+            broadcaster.setRespawnPolicy(rp);
+        }
+
+        matchController.setOnPhase([&broadcaster, &matchController, log](fl::MatchPhase /*from*/, fl::MatchPhase to) {
+            broadcaster.setCombatFrozen(matchController.combatFrozen());
+            char m[64];
+            std::snprintf(m, sizeof(m), "match: phase -> %d", static_cast<int>(to));
+            log->log(LogLevel::Info, __FILE__, __LINE__, m);
+            // The state itself is published by the composite tick hook on the next version change.
+        });
+
+        // The rotate hook needs gameLoop.enqueueSimCallback, so it is wired after GameLoop is declared
+        // (search "matchController.setOnRotate" below).
+
+        // Feed the controller from the world: kills score, joins/leaves track participants.
+        broadcaster.setMatchEventSink([&matchController](uint32_t killer, uint32_t victim, bool sameFaction) {
+            matchController.recordKill(killer, victim, sameFaction);
+        });
+        broadcaster.setMatchParticipantSink([&matchController](uint32_t id, uint16_t faction, bool isBot, bool joined) {
+            if (joined)
+                matchController.participantJoined(id, faction, isBot);
+            else
+                matchController.participantLeft(id);
+        });
+
+        // AI bot backfill (#87): spawn server-side AI participants up to the fill target. Bots are not
+        // network peers. Requires teams (a free-for-all cannot balance bots) and fill > 0.
+        if (cfg.botsFill > 0 && mts.haveTeams) {
+            std::vector<uint16_t> botTeams;
+            for (const fl::TeamState& ts : mts.teams)
+                botTeams.push_back(ts.factionIndex);
+            const double botGroundY = terrainStreamer.heightAt(glm::dvec3{0.0, 0.0, 0.0});
+            std::string fighterSrc(
+                fl::builtinAiScript(cfg.botsAiScript.empty() ? std::string("builtin:fighter") : cfg.botsAiScript));
+            if (fighterSrc.empty())
+                fighterSrc = std::string(fl::builtinAiScript("builtin:fighter"));
+            const std::string botType = cfg.botsEntityType.empty() ? cfg.playerEntityType : cfg.botsEntityType;
+
+            auto botSpawn = [&entityManager, &broadcaster, &worldApi, botGroundY, botType, fighterSrc,
+                             spawnN = uint32_t{0}](uint16_t faction) mutable -> fl::EntityId {
+                const double ang = static_cast<double>(spawnN) * 2.399963;
+                const double rad = 800.0 + static_cast<double>(spawnN) * 40.0;
+                fl::EntityTransform t{};
+                t.quat[3] = 1.0f;
+                t.pos[0] = rad * std::cos(ang);
+                t.pos[2] = rad * std::sin(ang);
+                t.pos[1] = botGroundY + 2000.0;
+                ++spawnN;
+                const fl::EntityId id = entityManager.spawn(botType.c_str(), t);
+                if (!id.valid())
+                    return {};
+                if (fl::EntityState* s = entityManager.get(id); s && faction != 0)
+                    s->factionIndex = faction;
+                auto ctrl =
+                    std::make_unique<fl::LuaController>(fighterSrc, std::string(), &entityManager, &worldApi, nullptr);
+                if (!ctrl->isValid()) {
+                    entityManager.kill(id);
+                    return {};
+                }
+                broadcaster.registerController(id, std::move(ctrl));
+                return id;
+            };
+            auto botKill = [&entityManager](fl::EntityId id) { entityManager.kill(id); };
+            auto botAlive = [&entityManager](fl::EntityId id) {
+                const fl::EntityState* s = entityManager.get(id);
+                return s != nullptr && !s->dead;
+            };
+            fl::BotRoster::Config bcfg;
+            bcfg.fill = cfg.botsFill;
+            bcfg.maxBots = cfg.botsMax;
+            bcfg.balanceTeams = cfg.botsBalanceTeams;
+            botRoster = std::make_unique<fl::BotRoster>(broadcaster, bcfg, std::move(botTeams), std::move(botSpawn),
+                                                        std::move(botKill), std::move(botAlive));
+            log->log(LogLevel::Info, __FILE__, __LINE__, "bots: AI backfill enabled");
+        }
+    }
+
+    // Composite per-tick hook (#523): step the mission runtime (if any) AND the match controller every
+    // tick, then publish MsgMatchState whenever the controller's state version changes (a phase
+    // transition or a team score). Reading the mode fields from the controller keeps it correct across
+    // a rotation. Runs at the end of onTick on the sim thread.
+    broadcaster.setMissionTickHook([rt = missionRuntime.get(), &matchController, &broadcaster, &botRoster,
+                                    lastVer = uint64_t{0}](uint64_t t) mutable {
+        if (rt)
+            rt->step(t);
+        matchController.step(t);
+        // AI bot backfill (#87), stepped ~1 Hz. humans ~= connected peers.
+        if (botRoster && t % 60u == 0u)
+            botRoster->step(static_cast<int>(broadcaster.getPeerCount()));
+        {
+            const uint64_t ver = matchController.stateVersion();
+            if (ver != lastVer) {
+                lastVer = ver;
+                fl::WorldBroadcaster::MatchStatePod pod;
+                pod.phase = static_cast<uint8_t>(matchController.phase());
+                pod.scoreLimit = static_cast<uint16_t>(std::clamp(matchController.scoreLimit(), 0, 65535));
+                pod.phaseEndTick = matchController.phaseEndTick();
+                pod.modeId = matchController.modeId();
+                pod.modeName = matchController.modeName();
+                for (const fl::TeamScore& ts : matchController.teamScores())
+                    pod.teamScores.emplace_back(ts.factionIndex, ts.score);
+                broadcaster.setMatchState(pod);
+            }
+        }
+    });
 
     if (!cfg.trace.inputTraceDir.empty()) {
         broadcaster.setInputTraceDir(cfg.trace.inputTraceDir);
@@ -1451,6 +1690,44 @@ int main(int argc, char** argv) {
     std::unique_ptr<fl::atc::AtcService> atcService;
 
     GameLoop gameLoop(broadcaster, *log, 60.0, cfg.maxCatchupTicks);
+
+    // Match rotation (#523): on match end, reset the world, advance to the next rotation item's mode,
+    // and re-admit the connected pilots — all serial on the sim thread via enqueueSimCallback (hence
+    // wired here, after GameLoop exists). The mission itself repeats (a full mission-YAML reload across
+    // rotation is a follow-on; a team match commonly runs without a mission).
+    matchController.setOnRotate([&broadcaster, &matchController, &gameLoop, &missionFactions, &rotationIndex, &cfg,
+                                 &assets, &botRoster, log]() {
+        gameLoop.enqueueSimCallback(
+            [&broadcaster, &matchController, &missionFactions, &rotationIndex, &cfg, &assets, &botRoster, log]() {
+                if (botRoster)
+                    botRoster->clear(); // #87: retire bots before the world reset; refills next step
+                broadcaster.resetWorld();
+                std::string modeRef = cfg.matchMode;
+                if (!cfg.rotationItems.empty()) {
+                    rotationIndex = (rotationIndex + 1) % cfg.rotationItems.size();
+                    auto [mref, moderef] = fl::splitRotationItem(cfg.rotationItems[rotationIndex]);
+                    (void)mref;
+                    if (!moderef.empty())
+                        modeRef = moderef;
+                }
+                const fl::GameModeDef nextMode = fl::resolveGameMode(modeRef, &assets, *log);
+                fl::MatchTeamSetup nmts = fl::buildMatchTeams(nextMode, missionFactions, *log);
+                broadcaster.setDamageRules(fl::effectiveDamageRules(nextMode, cfg.friendlyFire, cfg.crashDamage));
+                matchController.configure(nextMode, nmts.teams);
+                if (nmts.haveTeams) { // respawn only for a competitive team match — see the setup path above
+                    fl::WorldBroadcaster::RespawnPolicy rp;
+                    rp.delayTicks = static_cast<uint32_t>(std::max(0.0, nextMode.respawnDelayS) * 60.0);
+                    rp.waves = nextMode.respawnWaves;
+                    rp.waveIntervalTicks = static_cast<uint32_t>(std::max(1.0, nextMode.waveIntervalS) * 60.0);
+                    broadcaster.setRespawnPolicy(rp);
+                } else {
+                    broadcaster.disableRespawn(); // rotating into a no-match mode must not keep respawn on
+                }
+                broadcaster.setCombatFrozen(false);
+                broadcaster.readmitPilots();
+                log->log(LogLevel::Info, __FILE__, __LINE__, "match: rotated to next round");
+            });
+    });
 
     // Data-parallel sim tick: the worker pool that parallelises the per-entity AI + integrate
     // passes. Constructed before gameLoop.start() and outlives it (declared here in main's scope).
@@ -1841,8 +2118,16 @@ int main(int argc, char** argv) {
                     std::printf("[admin] %s\n", result.c_str());
             }
         }
-        if (beacon)
-            beacon->tick(broadcaster.getPeerCount());
+        {
+            const fl::WorldBroadcaster::ShutdownStatus ss = broadcaster.getShutdownStatus(); // #226
+            if (beacon)
+                beacon->tick({broadcaster.getPeerCount(), ss.active,
+                              static_cast<uint16_t>(std::min<uint32_t>(ss.secondsRemaining, 0xFFFFu))});
+            if (queryResponder) // #997: refresh the query responder's dynamic snapshot
+                queryResponder->setDynamicInfo(
+                    {static_cast<uint8_t>(std::min(broadcaster.getPeerCount(), 255)), ss.active,
+                     static_cast<uint16_t>(std::min<uint32_t>(ss.secondsRemaining, 0xFFFFu))});
+        }
         p.asyncFilesystem->service();
         // Follow the entity so terrain chunks are loaded at its current position.
         const double entityX = broadcaster.cachedEntityX();

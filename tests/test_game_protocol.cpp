@@ -16,11 +16,25 @@
 
 TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game_protocol]") {
     CHECK(sizeof(fl::MsgHello) == 4u);
-    CHECK(sizeof(fl::MsgConnectAck) == 20u);      // #853: +grantedRole @16 (still record-aligned)
-    CHECK(sizeof(fl::MsgConnectRequest) == 72u);  // #853: role + entity type + trailing pack manifest
-    CHECK(sizeof(fl::PackManifestEntry) == 128u); // #872 wire half: id + version + reserved hash
-    CHECK(sizeof(fl::MsgEntityTypeDef) == 348u);  // #38 tail-appended deck footprint (336 -> 348)
-    CHECK(sizeof(fl::MsgFactionDef) == 132u);     // #860: 1+1+2 + 64 + 64
+    CHECK(sizeof(fl::MsgConnectAck) == 24u); // #996: +peerId @20 (still record-aligned)
+    CHECK(offsetof(fl::MsgConnectAck, peerId) == 20u);
+    CHECK(sizeof(fl::MsgConnectRequest) == 104u); // #996: +callsign[32] @72
+    CHECK(offsetof(fl::MsgConnectRequest, callsign) == 72u);
+    CHECK(sizeof(fl::PackManifestEntry) == 128u);   // #872 wire half: id + version + reserved hash
+    CHECK(sizeof(fl::MsgPlayerRosterHeader) == 4u); // #996
+    CHECK(sizeof(fl::MsgTeamRequest) == 4u);        // #522
+    CHECK(sizeof(fl::MsgMatchState) == 80u);        // #523
+    CHECK(offsetof(fl::MsgMatchState, phaseEndTick) == 8u);
+    CHECK(offsetof(fl::MsgMatchState, modeId) == 16u);
+    CHECK(sizeof(fl::MatchTeamScore) == 8u);
+    CHECK(sizeof(fl::MsgScoreboardHeader) == 8u); // #523
+    CHECK(sizeof(fl::ScoreboardRow) == 16u);
+    CHECK(offsetof(fl::ScoreboardRow, pingMs) == 12u);
+    CHECK(sizeof(fl::PlayerRosterEntry) == 40u); // #996
+    CHECK(offsetof(fl::PlayerRosterEntry, factionIndex) == 4u);
+    CHECK(offsetof(fl::PlayerRosterEntry, callsign) == 8u);
+    CHECK(sizeof(fl::MsgEntityTypeDef) == 348u); // #38 tail-appended deck footprint (336 -> 348)
+    CHECK(sizeof(fl::MsgFactionDef) == 132u);    // #860: 1+1+2 + 64 + 64
     CHECK(offsetof(fl::MsgEntityTypeDef, name) == 268u);
     CHECK(offsetof(fl::MsgEntityTypeDef, category) == 332u);
     CHECK(offsetof(fl::MsgEntityTypeDef, projectileKind) == 333u);
@@ -43,12 +57,60 @@ TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game
     CHECK(sizeof(fl::MsgConnectRefusal) == 64u);
 }
 
-TEST_CASE("GameProtocol: MsgId space reserves 0x00-0x1F for ENet, 0x20+ for raw UDP (#853)", "[game_protocol]") {
-    // The non-ENet boundary was raised from 0x10 to 0x20 to free an ENet id for ConnectRequest.
+TEST_CASE("GameProtocol: MsgId space reserves 0x00-0x3F for ENet, 0x40+ for raw UDP (#996)", "[game_protocol]") {
+    // The non-ENet boundary was raised from 0x20 to 0x40 (#996) to free ENet ids for the Epic E
+    // multiplayer gameplay messages (roster/match state/scoreboard/team/chat).
     CHECK(static_cast<uint8_t>(fl::MsgId::ConnectRequest) == 0x11u);
-    CHECK(static_cast<uint8_t>(fl::MsgId::LanBeacon) == 0x20u);
-    CHECK(static_cast<uint8_t>(fl::MsgId::CombatEvent) < 0x20u);
-    CHECK(static_cast<uint8_t>(fl::MsgId::MissionRoster) == 0x1Bu); // #914, an ENet id below 0x20
+    CHECK(static_cast<uint8_t>(fl::MsgId::PlayerRoster) == 0x1Cu);
+    CHECK(static_cast<uint8_t>(fl::MsgId::Chat) == 0x20u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::ChatEvent) == 0x21u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::LanBeacon) == 0x40u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::ServerQuery) == 0x41u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::ServerInfo) == 0x42u);
+    CHECK(static_cast<uint8_t>(fl::MsgId::Chat) < 0x40u); // every ENet id stays below the raw-UDP boundary
+    CHECK(static_cast<uint8_t>(fl::MsgId::MissionRoster) == 0x1Bu);
+}
+
+TEST_CASE("GameProtocol: participant id space separates humans from bots (#996)", "[game_protocol]") {
+    CHECK(fl::kBotParticipantBase == 0x40000000u);
+    CHECK_FALSE(fl::isBotParticipant(0u));    // peer 0 is a real player
+    CHECK_FALSE(fl::isBotParticipant(1234u)); // ordinary peer id
+    CHECK(fl::isBotParticipant(fl::kBotParticipantBase));
+    CHECK(fl::isBotParticipant(fl::kBotParticipantBase + 7u));
+    CHECK_FALSE(fl::isBotParticipant(fl::kNoOwningPeer)); // the sentinel is not a bot
+}
+
+TEST_CASE("GameProtocol: MsgPlayerRoster round-trips upsert + leave records (#996)", "[game_protocol]") {
+    fl::MsgPlayerRosterHeader hdr{};
+    hdr.count = 2;
+    fl::PlayerRosterEntry a{};
+    a.participantId = 3;
+    a.factionIndex = 1;
+    a.role = static_cast<uint8_t>(fl::PeerRole::Pilot);
+    a.flags = 0;
+    std::snprintf(a.callsign, sizeof(a.callsign), "%s", "Maverick");
+    fl::PlayerRosterEntry b{};
+    b.participantId = fl::kBotParticipantBase + 2u;
+    b.factionIndex = 2;
+    b.flags = fl::kRosterBot;
+    std::snprintf(b.callsign, sizeof(b.callsign), "%s", "Viper-2");
+
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, hdr);
+    fl::appendMsg(buf, a);
+    fl::appendMsg(buf, b);
+    REQUIRE(buf.size() == sizeof(hdr) + 2u * sizeof(fl::PlayerRosterEntry));
+
+    fl::MsgPlayerRosterHeader outHdr{};
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), outHdr));
+    CHECK(outHdr.count == 2);
+    fl::PlayerRosterEntry outA{}, outB{};
+    REQUIRE(fl::readRecordAt(buf.data(), buf.size(), sizeof(hdr), outA));
+    REQUIRE(fl::readRecordAt(buf.data(), buf.size(), sizeof(hdr) + sizeof(outA), outB));
+    CHECK(outA.participantId == 3u);
+    CHECK(std::string(outA.callsign) == "Maverick");
+    CHECK((outB.flags & fl::kRosterBot) != 0u);
+    CHECK(fl::isBotParticipant(outB.participantId));
 }
 
 TEST_CASE("GameProtocol: MsgMissionRoster round-trips as concatenated records (#914)", "[game_protocol]") {

@@ -127,6 +127,72 @@ static std::vector<uint8_t> makeMotdPacket(std::string_view text, uint16_t displ
 
 } // namespace
 
+TEST_CASE("ClientNetEventHandler: MsgPlayerRoster upserts and leaves resolve displayName (#996)",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // A two-record upsert: a human pilot and a bot.
+    fl::MsgPlayerRosterHeader hdr{};
+    hdr.count = 2;
+    fl::PlayerRosterEntry a{};
+    a.participantId = 3;
+    a.factionIndex = 1;
+    std::snprintf(a.callsign, sizeof(a.callsign), "%s", "Maverick");
+    fl::PlayerRosterEntry b{};
+    b.participantId = fl::kBotParticipantBase + 4u;
+    b.flags = fl::kRosterBot;
+    std::snprintf(b.callsign, sizeof(b.callsign), "%s", "Viper-4");
+    std::vector<uint8_t> pkt;
+    fl::appendMsg(pkt, hdr);
+    fl::appendMsg(pkt, a);
+    fl::appendMsg(pkt, b);
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(handler.roster().size() == 2u);
+    CHECK(handler.displayName(3u) == "Maverick");
+    CHECK(handler.displayName(fl::kBotParticipantBase + 4u) == "Viper-4");
+    CHECK(handler.roster().at(fl::kBotParticipantBase + 4u).isBot);
+    // Unknown participant falls back to Peer N / Bot N.
+    CHECK(handler.displayName(99u) == "Peer 99");
+    CHECK(handler.displayName(fl::kBotParticipantBase + 1u) == "Bot 1073741825");
+
+    // A leave removes the row.
+    fl::MsgPlayerRosterHeader lhdr{};
+    lhdr.count = 1;
+    fl::PlayerRosterEntry leave{};
+    leave.participantId = 3;
+    leave.flags = fl::kRosterLeave;
+    std::vector<uint8_t> lpkt;
+    fl::appendMsg(lpkt, lhdr);
+    fl::appendMsg(lpkt, leave);
+    handler.onReceive(0u, lpkt.data(), lpkt.size());
+    CHECK(handler.roster().count(3u) == 0u);
+    CHECK(handler.displayName(3u) == "Peer 3"); // gone -> fallback
+}
+
+TEST_CASE("ClientNetEventHandler: MsgConnectAck captures own peer id (#996)", "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    fl::MsgConnectAck ack{};
+    ack.typeCount = 0;
+    ack.assignedEntityIdx = 5;
+    ack.assignedEntityGen = 2;
+    ack.peerId = 7;
+    handler.onReceive(0u, &ack, sizeof(ack));
+    CHECK(handler.selfPeerId() == 7u);
+    CHECK(handler.gotConnectAck());
+}
+
 TEST_CASE("ClientNetEventHandler: MsgMotd single-line text shown in notice", "[client_net_event_handler]") {
     fl::SimRenderBridge bridge;
     fl::EntityTypeRegistry registry;
