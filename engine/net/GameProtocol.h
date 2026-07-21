@@ -1200,15 +1200,21 @@ enum class ExtTag : uint16_t {
                            // entities emits no SnapshotCrew TLV and its snapshot is byte-identical to pre-#972.
                            // Unreliable/interest-filtered: a dropped packet loses one tick of turret aim.
 
-    ConnectSeatClaim = 0x0500,   // #974: join-at-connect seat claim in MsgConnectRequest's TLV block.
-                                 // Payload = { uint32 entityIdx (LE), uint32 entityGen (LE), uint8 seatIndex }
-                                 // (9 bytes, unaligned). Present = the client asks to occupy that non-fly seat
-                                 // instead of spawning its own aircraft; the server falls back to a normal
-                                 // pilot spawn if the seat is unavailable. Absent = the normal pilot spawn.
-    WeatherWindProfile = 0x0400, // #489: altitude wind profile appended to MsgWeatherState. Payload =
-                                 // uint8 count + count x {float altM, float windX, float windZ} (12 B each,
-                                 // little-endian, unaligned). Ascending altitude. Old clients ignore it and
-                                 // keep the datum-level windX/windZ scalar; omitted when no profile is set.
+    ConnectSeatClaim = 0x0500,    // #974: join-at-connect seat claim in MsgConnectRequest's TLV block.
+                                  // Payload = { uint32 entityIdx (LE), uint32 entityGen (LE), uint8 seatIndex }
+                                  // (9 bytes, unaligned). Present = the client asks to occupy that non-fly seat
+                                  // instead of spawning its own aircraft; the server falls back to a normal
+                                  // pilot spawn if the seat is unavailable. Absent = the normal pilot spawn.
+    ConnectIdentity = 0x0501,     // #524: client identity for reconnect. Payload = the ASCII UUID from
+                                  // PilotProfile::guid (<= 40 bytes, unaligned). Lets the server restore a
+                                  // reconnecting player's team + score tallies inside a grace window.
+    ConnectJoinPassword = 0x0502, // #998: join password. Payload = raw UTF-8 password bytes (1..64,
+                                  // unaligned). Present when the client supplies a password for a
+                                  // passworded server; the server constant-time-compares it.
+    WeatherWindProfile = 0x0400,  // #489: altitude wind profile appended to MsgWeatherState. Payload =
+                                  // uint8 count + count x {float altM, float windX, float windZ} (12 B each,
+                                  // little-endian, unaligned). Ascending altitude. Old clients ignore it and
+                                  // keep the datum-level windX/windZ scalar; omitted when no profile is set.
 };
 
 } // namespace fl

@@ -9001,7 +9001,46 @@ std::optional<fl::CombatEventRecord> lastStatsFor(const MockNetwork& net, uint32
     return out;
 }
 
+// Drive the connect handshake for a pilot carrying a client GUID (#524) in the ConnectRequest TLV.
+void connectPilotWithGuid(fl::WorldBroadcaster& b, uint32_t peerId, const char* guid) {
+    b.onConnect(peerId);
+    fl::MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+    std::vector<uint8_t> buf;
+    fl::appendMsg(buf, req);
+    fl::appendExtRaw(buf, static_cast<uint16_t>(fl::ExtTag::ConnectIdentity), guid,
+                     static_cast<uint16_t>(std::strlen(guid)));
+    b.onReceive(peerId, buf.data(), buf.size());
+}
+
 } // namespace
+
+TEST_CASE("WorldBroadcaster: reconnect within the grace window restores team + score (#524)",
+          "[world_broadcaster][combat]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    em.addEventHandler(&broadcaster);
+    broadcaster.setReconnectGraceTicks(300);
+
+    connectPilotWithGuid(broadcaster, 0u, "player-guid-abc");
+    const auto ack = parseSendAck(net);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    em.applyDamage({ack.assignedEntityIdx, ack.assignedEntityGen}, 200.f, fl::EntityId::null());
+    broadcaster.onTick(1.0 / 60.0, 2u);
+
+    broadcaster.onDisconnect(0u); // snapshots {losses:1} under the guid
+
+    net.perPeerSends.clear();
+    connectPilotWithGuid(broadcaster, 1u, "player-guid-abc"); // reconnect as a new peer id, same guid
+    broadcaster.onTick(1.0 / 60.0, 3u);
+    const auto stats = lastStatsFor(net, 1u);
+    REQUIRE(stats.has_value());
+    CHECK(stats->b == 1u); // losses restored (Stats: a=kills, b=losses)
+}
 
 TEST_CASE("WorldBroadcaster: a kill broadcasts credit and unicasts the killer's stats", "[world_broadcaster][combat]") {
     MockLogger logger;

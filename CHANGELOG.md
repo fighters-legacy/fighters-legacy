@@ -21,6 +21,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **net**: reconnect identity with score/team restore inside a grace window (#524, Epic E #497). The
+  client sends its `PilotProfile::guid` as a `MsgConnectRequest` TLV (`ExtTag::ConnectIdentity`); on
+  disconnect the server snapshots the player's callsign, team and kills/losses/score under that GUID and
+  restores them on reconnect within `[match] reconnect_grace_s` (default 120 s) — the reconnector rejoins
+  their old team rather than being re-balanced. A GUID already held by a live peer is treated as fresh;
+  entries expire lazily + on a periodic sweep, and are cleared on match rotation. The aircraft is not
+  kept alive through the window (the player respawns per the mode policy).
 - **network**: advertise shutdown state in the LAN discovery beacon (#226, Epic E #497).
   `MsgLanBeacon` gains a `kGameModeShuttingDown` flag + a `shutdownSeconds` field (74 → 76 B);
   `WorldBroadcaster::getShutdownStatus()` publishes the countdown across threads (relaxed atomics) for

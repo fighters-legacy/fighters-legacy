@@ -72,6 +72,8 @@ struct ClientNetEventHandler : INetworkEventHandler {
     PeerRole requestedRole{PeerRole::Pilot};
     std::string requestedEntityType;             // empty = let the server pick its default (#834)
     std::string requestedCallsign;               // player callsign for the match roster (#996); empty = server default
+    std::string requestedGuid;                   // client identity UUID for reconnect (#524); empty = don't send
+    std::string requestedJoinPassword;           // join password for a private server (#998); empty = don't send
     std::vector<PackManifestEntry> packManifest; // client's mounted content packs (#872 wire half)
 
     // Role the server GRANTED in MsgConnectAck (#857) — may differ from requestedRole. Pilot until the

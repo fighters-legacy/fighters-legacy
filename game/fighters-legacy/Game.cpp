@@ -328,6 +328,7 @@ struct GameServices {
     std::string connectHost;
     uint16_t connectPort{4778};
     std::string operatorPassword; // merged: CLI arg > FL_OPERATOR_PASSWORD > [client].operator_password
+    std::string joinPassword;     // per-session join password for a private server (#998); not persisted
     std::string
         requestedEntityType;     // --aircraft: aircraft to request in MsgConnectRequest; empty = server default (#834)
     bool requestObserver{false}; // --observer: join as a spectator (no aircraft) (#857)
@@ -1266,6 +1267,9 @@ void Game::startGame(const std::string& mission) {
             d.services.requestObserver ? fl::PeerRole::Observer : fl::PeerRole::Pilot;
         // Player callsign for the match roster (#996), from the pilot profile.
         d.session.clientHandler->requestedCallsign = d.services.userConfig->pilot().profile.callsign;
+        // Client identity for reconnect (#524) + optional join password (#998).
+        d.session.clientHandler->requestedGuid = d.services.userConfig->pilot().profile.guid;
+        d.session.clientHandler->requestedJoinPassword = d.services.joinPassword;
         // Report the client's mounted content packs so the server can enforce its required-pack policy
         // (#872 wire half). Warn-only server-side for now; content hashing is a later addition.
         d.session.clientHandler->packManifest.clear();

@@ -28,7 +28,8 @@ struct ServerConfig {
     // not name their own (mission@mode) and for non-rotation servers. A "builtin:" id or a pack modes/
     // asset stem; unknown ids fall back to builtin:free-flight.
     std::string matchMode = "builtin:free-flight";
-    int matchEndScreenS = 10; // seconds the Ending phase (frozen combat + scoreboard) lasts; [0, 120]
+    int matchEndScreenS = 10;       // seconds the Ending phase (frozen combat + scoreboard) lasts; [0, 120]
+    int matchReconnectGraceS = 120; // seconds a disconnected player's team+score is held (#524); [0, 3600], 0 = off
 
     // [lobby]  — Phase 2: parsed and stored; lobby registration pending (issue #36)
     bool lobbyRegister = false;

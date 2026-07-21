@@ -721,6 +721,13 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 ++it;
         }
         m_adminAuthTracker.pruneExpired();
+        // Reconnection grace (#524): purge expired held identities.
+        for (auto it = m_disconnectGrace.begin(); it != m_disconnectGrace.end();) {
+            if (m_currentTick > it->second.expiresTick)
+                it = m_disconnectGrace.erase(it);
+            else
+                ++it;
+        }
     }
 
     // Idle timeout: disconnect peers that have sent no activity for m_idleTimeoutTicks ticks.
@@ -2217,13 +2224,15 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
     bool seatClaim = false;
     EntityId claimEntity{};
     uint8_t claimSeat = 0;
+    std::string reconnectGuid; // #524: client identity, for team/score restore on reconnect
     {
         const std::size_t extOff =
             sizeof(MsgConnectRequest) + static_cast<std::size_t>(req.packCount) * sizeof(PackManifestEntry);
         if (extOff <= size) {
+            const uint8_t* ext = static_cast<const uint8_t*>(data) + extOff;
+            const std::size_t extSize = size - extOff;
             uint16_t clen = 0;
-            const uint8_t* cp = findExt(static_cast<const uint8_t*>(data) + extOff, size - extOff,
-                                        static_cast<uint16_t>(ExtTag::ConnectSeatClaim), clen);
+            const uint8_t* cp = findExt(ext, extSize, static_cast<uint16_t>(ExtTag::ConnectSeatClaim), clen);
             if (cp && clen >= 9u) {
                 uint32_t ei = 0, eg = 0;
                 std::memcpy(&ei, cp, 4);
@@ -2232,7 +2241,37 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
                 claimEntity = EntityId{ei, eg};
                 seatClaim = true;
             }
+            uint16_t glen = 0;
+            const uint8_t* gp = findExt(ext, extSize, static_cast<uint16_t>(ExtTag::ConnectIdentity), glen);
+            if (gp && glen > 0u && glen <= 40u)
+                reconnectGuid.assign(reinterpret_cast<const char*>(gp), glen);
         }
+    }
+
+    // Reconnection (#524): if this guid is held in the grace table and not expired, the reconnecting
+    // player keeps their team + score. A guid already held by a LIVE peer is treated as fresh. Store the
+    // guid for the disconnect snapshot regardless.
+    const GraceRec* grace = nullptr;
+    if (!reconnectGuid.empty()) {
+        bool liveDuplicate = false;
+        for (const auto& [pid, g] : m_peerGuids) {
+            (void)pid;
+            if (g == reconnectGuid) {
+                liveDuplicate = true;
+                break;
+            }
+        }
+        if (!liveDuplicate) {
+            if (auto git = m_disconnectGrace.find(reconnectGuid); git != m_disconnectGrace.end()) {
+                if (m_currentTick <= git->second.expiresTick)
+                    grace = &git->second;
+                else
+                    m_disconnectGrace.erase(git); // expired — purge lazily
+            }
+        } else {
+            m_logger.log(LogLevel::Warn, __FILE__, __LINE__, "duplicate live client guid on connect; not restoring");
+        }
+        m_peerGuids[peerId] = reconnectGuid;
     }
 
     // Team assignment (#522): consult the mode balancer BEFORE claiming a slot. nullopt = every team is
@@ -2245,6 +2284,9 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
             return;
         }
         assignedFaction = *team;
+        // A reconnecting player rejoins their old team rather than being re-balanced (#524).
+        if (grace)
+            assignedFaction = grace->factionIndex;
     }
 
     EntityId assigned{}; // invalid for an observer — it has no entity
@@ -2362,6 +2404,18 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         // A pilot (not an observer) is a match participant with a scoreboard row (#523).
         if (grantedRole == PeerRole::Pilot && m_matchParticipantSink)
             m_matchParticipantSink(peerId, myFaction, /*isBot=*/false, /*joined=*/true);
+    }
+
+    // Reconnection (#524): restore the held score tallies, then consume the grace entry. The dirty flag
+    // owes the reconnector a fresh Stats unicast + refreshes the scoreboard.
+    if (grace) {
+        PeerScore& s = m_scores[peerId];
+        s.kills = grace->kills;
+        s.losses = grace->losses;
+        s.score = grace->score;
+        s.dirty = true;
+        m_scoreboardDirty = true;
+        m_disconnectGrace.erase(reconnectGuid);
     }
 
     // Match state + scoreboard for the late joiner (#523): the current phase/scores + everyone's row.
@@ -2541,8 +2595,28 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     m_peerKnownGens.erase(peerId);
     m_peerPendingDespawn.erase(peerId);
     m_peerTraceWriters.erase(peerId); // close this peer's input trace (#560), if any
-    m_scores.erase(peerId);           // ENet reuses peer ids; a rejoiner must not inherit tallies (#626)
-    m_respawn.erase(peerId);          // drop any pending respawn (#648)
+    // Reconnection (#524): before erasing the score, snapshot this peer's identity + tallies under its
+    // client guid so a reconnect within the grace window restores them. The m_scores erase below stays
+    // (peer-id reuse remains unsafe; the guid table is the sanctioned inheritance path).
+    if (m_reconnectGraceTicks > 0) {
+        if (auto git = m_peerGuids.find(peerId); git != m_peerGuids.end()) {
+            GraceRec g;
+            if (const auto rit = m_roster.find(peerId); rit != m_roster.end()) {
+                g.callsign = rit->second.callsign;
+                g.factionIndex = rit->second.factionIndex;
+            }
+            if (const auto sit = m_scores.find(peerId); sit != m_scores.end()) {
+                g.kills = sit->second.kills;
+                g.losses = sit->second.losses;
+                g.score = sit->second.score;
+            }
+            g.expiresTick = m_currentTick + m_reconnectGraceTicks;
+            m_disconnectGrace[git->second] = std::move(g);
+        }
+    }
+    m_peerGuids.erase(peerId);
+    m_scores.erase(peerId);  // ENet reuses peer ids; a rejoiner must not inherit tallies (#626)
+    m_respawn.erase(peerId); // drop any pending respawn (#648)
     m_activePeerCount.fetch_sub(1, std::memory_order_relaxed);
 
     m_pendingAdminDrains.erase(std::remove_if(m_pendingAdminDrains.begin(), m_pendingAdminDrains.end(),
@@ -5440,6 +5514,7 @@ void WorldBroadcaster::resetWorld() {
     m_pendingKillEvents.clear();
     m_respawn.clear(); // #648: clear pending respawns for the new round
     m_pendingDeathCleanup.clear();
+    m_disconnectGrace.clear(); // #524: scores belong to a match; a new round starts clean
     setMissionPlayerSlots({});
     m_missionRoster.clear();
     for (auto& [pid, sc] : m_scores) {

@@ -880,6 +880,14 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Force an immediate respawn of a participant (the admin `respawn` command). Sim-thread.
     void respawnParticipant(uint32_t participantId);
 
+    // ── reconnection (#524) — sim-thread only ────────────────────────────────
+    // Grace window (in ticks) during which a disconnecting player's team + score are held under their
+    // client GUID and restored on reconnect. 0 = disabled (the pre-#524 behavior). Call before
+    // gameLoop.start() or via enqueueSimCallback (reload_config).
+    void setReconnectGraceTicks(uint64_t ticks) noexcept {
+        m_reconnectGraceTicks = ticks;
+    }
+
     // Called on the sim thread at the end of onConnect, after the peer's entity and controller exist.
     // The implementation spawns the peer's flight (N AI members), registers their controllers, and
     // returns the formation it created. kNoFormation (the default with no hook installed) = the peer
@@ -1331,6 +1339,19 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     RespawnPolicy m_respawnPolicy{};
     bool m_respawnEnabled{false};
     void processRespawns(); // drain death cleanup + fire due respawns; called from onTick
+
+    // ── reconnection (#524) ──────────────────────────────────────────────────
+    struct GraceRec {
+        std::string callsign;
+        uint16_t factionIndex{0};
+        uint32_t kills{0};
+        uint32_t losses{0};
+        int32_t score{0};
+        uint64_t expiresTick{0};
+    };
+    std::unordered_map<std::string, GraceRec> m_disconnectGrace; // guid -> held identity/score
+    std::unordered_map<uint32_t, std::string> m_peerGuids;       // peerId -> client guid (set at handshake)
+    uint64_t m_reconnectGraceTicks{0};                           // 0 = disabled
 
     // ── match roster (#996) — sim-thread only ───────────────────────────────
     // participantId -> display record. Humans key on peerId; bots on kBotParticipantBase + n (#87).

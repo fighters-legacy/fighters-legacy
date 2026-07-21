@@ -1494,6 +1494,7 @@ int main(int argc, char** argv) {
         fl::MatchTeamSetup mts = fl::buildMatchTeams(gameMode, missionFactions, *log);
         matchController.configure(gameMode, mts.teams);
         matchController.setEndingSeconds(static_cast<double>(cfg.matchEndScreenS));
+        broadcaster.setReconnectGraceTicks(static_cast<uint64_t>(std::max(0, cfg.matchReconnectGraceS)) * 60u); // #524
 
         // Respawn policy from the mode (#648): a dead pilot respawns on request after the delay. Enabled
         // ONLY for a competitive team match — the no-match free-flight default (haveTeams == false) leaves

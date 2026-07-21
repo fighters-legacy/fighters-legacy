@@ -59,6 +59,18 @@ void ClientNetEventHandler::onConnect(uint32_t /*peerId*/) {
     fl::appendMsg(buf, req);
     for (uint16_t i = 0; i < req.packCount; ++i)
         fl::appendMsg(buf, packManifest[i]);
+    // Reconnect identity (#524): the client GUID, so the server can restore team + score on reconnect.
+    if (!requestedGuid.empty()) {
+        const std::string g = requestedGuid.substr(0, 40);
+        fl::appendExtRaw(buf, static_cast<uint16_t>(fl::ExtTag::ConnectIdentity), g.data(),
+                         static_cast<uint16_t>(g.size()));
+    }
+    // Join password (#998): sent only when the client supplies one for a passworded server.
+    if (!requestedJoinPassword.empty()) {
+        const std::string p = requestedJoinPassword.substr(0, 64);
+        fl::appendExtRaw(buf, static_cast<uint16_t>(fl::ExtTag::ConnectJoinPassword), p.data(),
+                         static_cast<uint16_t>(p.size()));
+    }
     net.send(0, buf.data(), buf.size(), /*reliable=*/true);
 }
 

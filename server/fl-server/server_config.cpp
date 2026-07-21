@@ -56,6 +56,8 @@ static const char* kDefaultToml =
     "mode = \"builtin:free-flight\"\n"
     "# Seconds the end-of-match scoreboard shows (combat frozen) before rotating.\n"
     "end_screen_s = 10\n"
+    "# Seconds a disconnected player's team + score are held for reconnect (0 = disabled).\n"
+    "reconnect_grace_s = 120\n"
     "\n"
     "[lobby]\n"
     "register = false\n"
@@ -395,6 +397,13 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 cfg.matchEndScreenS = static_cast<int>(*v);
             else
                 log->log(LogLevel::Warn, __FILE__, __LINE__, "match.end_screen_s out of range [0,120]; using default");
+        }
+        if (auto v = tomlInt(tbl["match"]["reconnect_grace_s"])) {
+            if (*v >= 0 && *v <= 3600)
+                cfg.matchReconnectGraceS = static_cast<int>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "match.reconnect_grace_s out of range [0,3600]; using default");
         }
 
         // [lobby]
