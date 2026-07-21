@@ -4,11 +4,28 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace fl {
+
+// floor(v) as a cell coordinate, saturated into the int64_t range. Casting an out-of-range double
+// to a fixed-width integer is undefined behavior, and a world position / interest center can be an
+// extreme-but-finite value straight off the wire (a hostile MsgClientInput::cameraEye survives the
+// onReceive isfinite() guard but overflows this cast — fuzz #993, UBSan at the floor->int64_t cast).
+// A coordinate that far out simply lands in a saturated edge cell, harmless for a conservative
+// spatial query. (double)INT64_MAX rounds up to 2^63, so the >= guard catches everything at or above
+// the representable range; INT64_MIN is exactly representable, so <= is safe there.
+inline int64_t cellCoordFloor(double v) noexcept {
+    const double f = std::floor(v);
+    if (f >= static_cast<double>(std::numeric_limits<int64_t>::max()))
+        return std::numeric_limits<int64_t>::max();
+    if (f <= static_cast<double>(std::numeric_limits<int64_t>::min()))
+        return std::numeric_limits<int64_t>::min();
+    return static_cast<int64_t>(f);
+}
 
 // 2D uniform spatial hash for entity neighbor and range queries.
 // XZ-plane bucketing; Y altitude is stored and forwarded to the callback.
@@ -54,18 +71,26 @@ class SpatialIndex {
     // Exact distance filtering is the caller's responsibility.
     // fn: void(uint32_t entityIdx, const double* pos)
     template <typename Fn> void queryRadius(const double center[3], double radiusM, Fn&& fn) const {
-        const auto x0 = static_cast<int64_t>(std::floor((center[0] - radiusM) / m_cellSize));
-        const auto x1 = static_cast<int64_t>(std::floor((center[0] + radiusM) / m_cellSize));
-        const auto z0 = static_cast<int64_t>(std::floor((center[2] - radiusM) / m_cellSize));
-        const auto z1 = static_cast<int64_t>(std::floor((center[2] + radiusM) / m_cellSize));
-        for (int64_t cx = x0; cx <= x1; ++cx) {
-            for (int64_t cz = z0; cz <= z1; ++cz) {
+        const auto x0 = cellCoordFloor((center[0] - radiusM) / m_cellSize);
+        const auto x1 = cellCoordFloor((center[0] + radiusM) / m_cellSize);
+        const auto z0 = cellCoordFloor((center[2] - radiusM) / m_cellSize);
+        const auto z1 = cellCoordFloor((center[2] + radiusM) / m_cellSize);
+        // Break at the bound rather than ++past it: when the center saturates cellCoordFloor to
+        // INT64_MAX (an off-grid query from an extreme interest center, fuzz #993), x0 == x1 ==
+        // INT64_MAX and a trailing `++cx` would overflow int64_t. x0 <= x1 and z0 <= z1 always hold
+        // (radiusM >= 0, cellCoordFloor is monotonic), so this runs at least one cell and terminates.
+        for (int64_t cx = x0;; ++cx) {
+            for (int64_t cz = z0;; ++cz) {
                 const auto it = m_grid.find({cx, cz});
                 if (it != m_grid.end()) {
                     for (const auto& e : it->second)
                         fn(e.idx, e.pos);
                 }
+                if (cz == z1)
+                    break;
             }
+            if (cx == x1)
+                break;
         }
     }
 
