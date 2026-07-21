@@ -33,6 +33,7 @@ class DiscoveryBeacon {
         uint16_t port{4778};
         uint8_t maxPlayers{32};
         uint8_t gameModeFlags{0};
+        uint16_t queryPort{0}; // #997: the server's info-query port; 0 = query disabled
         int intervalMs{2000};
         std::string broadcastAddr{"255.255.255.255"}; // configurable for loopback tests
     };

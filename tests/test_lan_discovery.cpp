@@ -179,14 +179,15 @@ static std::vector<DiscoveryListener::ServerInfo> expectNoServers(DiscoveryListe
 // ---------------------------------------------------------------------------
 
 TEST_CASE("MsgLanBeacon struct layout matches wire spec", "[lan_discovery][protocol]") {
-    CHECK(sizeof(fl::MsgLanBeacon) == 76u);
+    CHECK(sizeof(fl::MsgLanBeacon) == 78u);
     CHECK(offsetof(fl::MsgLanBeacon, protocolVersion) == 2u);
     CHECK(offsetof(fl::MsgLanBeacon, gamePort) == 4u);
     CHECK(offsetof(fl::MsgLanBeacon, playerCount) == 6u);
     CHECK(offsetof(fl::MsgLanBeacon, maxPlayers) == 7u);
     CHECK(offsetof(fl::MsgLanBeacon, gameModeFlags) == 8u);
     CHECK(offsetof(fl::MsgLanBeacon, shutdownSeconds) == 10u);
-    CHECK(offsetof(fl::MsgLanBeacon, name) == 12u);
+    CHECK(offsetof(fl::MsgLanBeacon, queryPort) == 12u);
+    CHECK(offsetof(fl::MsgLanBeacon, name) == 14u);
 
     fl::MsgLanBeacon beacon;
     CHECK(beacon.msgId == static_cast<uint8_t>(fl::MsgId::LanBeacon));

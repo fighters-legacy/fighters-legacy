@@ -145,6 +145,8 @@ struct ServerConfig {
     // [discovery]
     bool discoveryEnabled = true;
     int discoveryIntervalMs = 2000;
+    bool discoveryQueryEnabled = true; // #997: answer server-info queries
+    int discoveryQueryPort = 0;        // 0 = auto (game port + 1); [0, 65535]
 
     // [shutdown]
     int shutdownWarningIntervalS = 300; // seconds between countdown broadcast notices (default 5 min)

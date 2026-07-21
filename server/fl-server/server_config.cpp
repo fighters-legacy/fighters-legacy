@@ -143,6 +143,9 @@ static const char* kDefaultToml =
     "# LAN server discovery beacon.\n"
     "enabled = true\n"
     "interval_ms = 2000\n"
+    "# Answer A2S-style server-info queries (for the browser ping column) on query_port.\n"
+    "query_enabled = true\n"
+    "query_port = 0   # 0 = auto (game port + 1)\n"
     "\n"
     "[security]\n"
     "connect_rate_limit_count = 5\n"
@@ -763,6 +766,14 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             } else {
                 cfg.discoveryIntervalMs = static_cast<int>(*v);
             }
+        }
+        if (auto v = tbl["discovery"]["query_enabled"].value<bool>())
+            cfg.discoveryQueryEnabled = *v;
+        if (auto v = tomlInt(tbl["discovery"]["query_port"])) {
+            if (*v >= 0 && *v <= 65535)
+                cfg.discoveryQueryPort = static_cast<int>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "discovery.query_port out of range [0,65535]; using auto");
         }
 
         // [security]

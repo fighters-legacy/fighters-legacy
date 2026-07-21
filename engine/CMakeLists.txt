@@ -379,6 +379,8 @@ add_library(engine-net STATIC
     net/WorldBroadcaster.cpp
     net/DiscoveryBeacon.cpp
     net/DiscoveryListener.cpp
+    net/ServerQueryResponder.cpp
+    net/ServerQueryClient.cpp
     net/SnapshotScheduler.cpp
     net/CongestionController.cpp
     net/TickGovernor.cpp

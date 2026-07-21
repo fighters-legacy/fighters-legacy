@@ -21,6 +21,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: server info query protocol (#997, Epic E #497). An A2S-style request/response over raw
+  UDP on a dedicated query port (`[discovery] query_port`, default game port + 1) gives the server
+  browser a ping measurement + live details for a server. `MsgServerQuery` (0x41, padded ≥ response for
+  anti-amplification) / `MsgServerInfo` (0x42, echoes the nonce/timestamp). `ServerQueryResponder`
+  (own thread, per-IP + global rate limiting) answers on the server; `ServerQueryClient` (main-thread
+  poll, RTT from a local nonce→send-time map) queries from the browser. The LAN beacon advertises the
+  query port (`MsgLanBeacon` 76 → 78 B). fl-server starts the responder and refreshes its dynamic snapshot.
 - **server**: AI bot backfill (#87, Epic E #497). A new `[bots]` config (`fill` / `max_bots` /
   `entity_type` / `ai_script` / `balance_teams`) fills a team match with server-side AI participants up
   to a target count — bots are not network peers. `WorldBroadcaster::registerBotParticipant` /

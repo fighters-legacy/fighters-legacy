@@ -159,6 +159,7 @@ void DiscoveryBeacon::send(const TickState& state) {
     pkt.playerCount = static_cast<uint8_t>(std::clamp(state.playerCount, 0, 255));
     pkt.maxPlayers = m_cfg.maxPlayers;
     pkt.gameModeFlags = m_cfg.gameModeFlags;
+    pkt.queryPort = m_cfg.queryPort; // #997
     if (state.shuttingDown) {
         pkt.gameModeFlags |= fl::kGameModeShuttingDown; // #226
         pkt.shutdownSeconds = state.shutdownSeconds;

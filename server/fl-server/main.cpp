@@ -27,6 +27,7 @@
 #include "bots.h"
 #include "match/MatchController.h"
 #include "net/DiscoveryBeacon.h"
+#include "net/ServerQueryResponder.h"
 #include "sensor/SensorDefParser.h"
 #include "server_config.h"
 #include <content/ContentBootstrap.h>
@@ -401,6 +402,27 @@ int main(int argc, char** argv) {
     }
     if (!cfg.password.empty())
         discoveryGameModeFlags |= fl::kGameModePassworded; // #998 — browsers show a lock icon
+    // Server info query responder (#997): a dedicated UDP port that answers A2S-style queries for the
+    // server browser's ping/details column. Auto port = game port + 1.
+    const uint16_t queryPort = cfg.discoveryQueryPort != 0 ? static_cast<uint16_t>(cfg.discoveryQueryPort)
+                                                           : static_cast<uint16_t>(cfg.port + 1);
+    std::unique_ptr<fl::ServerQueryResponder> queryResponder;
+    if (cfg.discoveryQueryEnabled) {
+        queryResponder = std::make_unique<fl::ServerQueryResponder>(queryPort, *log);
+        if (!queryResponder->start()) {
+            log->log(LogLevel::Warn, __FILE__, __LINE__, "server query responder: bind failed; queries disabled");
+            queryResponder.reset();
+        } else {
+            fl::ServerQueryResponder::StaticInfo si;
+            si.name = cfg.name;
+            si.gamePort = cfg.port;
+            si.maxPlayers = static_cast<uint8_t>(cfg.maxPeers > 255 ? 255 : cfg.maxPeers);
+            si.gameModeFlags = discoveryGameModeFlags;
+            queryResponder->setStaticInfo(std::move(si));
+            log->log(LogLevel::Info, __FILE__, __LINE__, "server query responder started");
+        }
+    }
+
     std::unique_ptr<DiscoveryBeacon> beacon;
     if (cfg.discoveryEnabled) {
         DiscoveryBeacon::Config dcfg;
@@ -408,6 +430,7 @@ int main(int argc, char** argv) {
         dcfg.port = cfg.port;
         dcfg.maxPlayers = static_cast<uint8_t>(cfg.maxPeers > 255 ? 255 : cfg.maxPeers);
         dcfg.gameModeFlags = discoveryGameModeFlags;
+        dcfg.queryPort = queryResponder ? queryPort : 0; // #997: advertise the query port to browsers
         dcfg.intervalMs = cfg.discoveryIntervalMs;
         dcfg.broadcastAddr = "255.255.255.255";
         beacon = std::make_unique<DiscoveryBeacon>(dcfg, *log);
@@ -2095,10 +2118,15 @@ int main(int argc, char** argv) {
                     std::printf("[admin] %s\n", result.c_str());
             }
         }
-        if (beacon) {
+        {
             const fl::WorldBroadcaster::ShutdownStatus ss = broadcaster.getShutdownStatus(); // #226
-            beacon->tick({broadcaster.getPeerCount(), ss.active,
-                          static_cast<uint16_t>(std::min<uint32_t>(ss.secondsRemaining, 0xFFFFu))});
+            if (beacon)
+                beacon->tick({broadcaster.getPeerCount(), ss.active,
+                              static_cast<uint16_t>(std::min<uint32_t>(ss.secondsRemaining, 0xFFFFu))});
+            if (queryResponder) // #997: refresh the query responder's dynamic snapshot
+                queryResponder->setDynamicInfo(
+                    {static_cast<uint8_t>(std::min(broadcaster.getPeerCount(), 255)), ss.active,
+                     static_cast<uint16_t>(std::min<uint32_t>(ss.secondsRemaining, 0xFFFFu))});
         }
         p.asyncFilesystem->service();
         // Follow the entity so terrain chunks are loaded at its current position.

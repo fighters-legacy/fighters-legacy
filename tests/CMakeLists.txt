@@ -398,6 +398,13 @@ if(TARGET platform-enet)
         "${CMAKE_CURRENT_SOURCE_DIR}")
     catch_discover_tests(test_lan_discovery)
 
+    add_executable(test_server_query test_server_query.cpp)
+    target_link_libraries(test_server_query PRIVATE Catch2::Catch2WithMain engine-net)
+    target_include_directories(test_server_query PRIVATE
+        "${CMAKE_SOURCE_DIR}/engine"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    catch_discover_tests(test_server_query)
+
     add_executable(test_admin_console test_admin_console.cpp
         "${CMAKE_SOURCE_DIR}/server/fl-server/ServerCommands.cpp")
     target_link_libraries(test_admin_console PRIVATE

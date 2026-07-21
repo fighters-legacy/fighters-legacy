@@ -1144,9 +1144,10 @@ struct MsgLanBeacon {
     uint8_t gameModeFlags{0};    // see kGameMode* constants
     uint8_t reserved2{0};        // @9
     uint16_t shutdownSeconds{0}; // @10 seconds until shutdown when kGameModeShuttingDown is set (#226); 0 = n/a
-    char name[64]{};             // @12 null-terminated server name
-}; // 76 bytes, align 2
-static_assert(sizeof(MsgLanBeacon) == 76u, "MsgLanBeacon wire size changed");
+    uint16_t queryPort{0};       // @12 the server's info-query port (#997); 0 = query disabled
+    char name[64]{};             // @14 null-terminated server name
+}; // 78 bytes, align 2
+static_assert(sizeof(MsgLanBeacon) == 78u, "MsgLanBeacon wire size changed");
 static_assert(alignof(MsgLanBeacon) == 2u, "MsgLanBeacon alignment changed");
 static_assert(offsetof(MsgLanBeacon, protocolVersion) == 2u, "MsgLanBeacon::protocolVersion offset changed");
 static_assert(offsetof(MsgLanBeacon, gamePort) == 4u, "MsgLanBeacon::gamePort offset changed");
@@ -1154,7 +1155,8 @@ static_assert(offsetof(MsgLanBeacon, playerCount) == 6u, "MsgLanBeacon::playerCo
 static_assert(offsetof(MsgLanBeacon, maxPlayers) == 7u, "MsgLanBeacon::maxPlayers offset changed");
 static_assert(offsetof(MsgLanBeacon, gameModeFlags) == 8u, "MsgLanBeacon::gameModeFlags offset changed");
 static_assert(offsetof(MsgLanBeacon, shutdownSeconds) == 10u, "MsgLanBeacon::shutdownSeconds offset changed");
-static_assert(offsetof(MsgLanBeacon, name) == 12u, "MsgLanBeacon::name offset changed");
+static_assert(offsetof(MsgLanBeacon, queryPort) == 12u, "MsgLanBeacon::queryPort offset changed");
+static_assert(offsetof(MsgLanBeacon, name) == 14u, "MsgLanBeacon::name offset changed");
 
 // Bitmask constants for MsgLanBeacon::gameModeFlags.
 static constexpr uint8_t kGameModeCampaign = 0x01u;
@@ -1162,6 +1164,51 @@ static constexpr uint8_t kGameModeMission = 0x02u;
 static constexpr uint8_t kGameModeSandbox = 0x04u;
 static constexpr uint8_t kGameModeShuttingDown = 0x08u; // the server is counting down to shutdown (#226)
 static constexpr uint8_t kGameModePassworded = 0x10u;   // the server requires a join password (#998)
+
+// ---------------------------------------------------------------------------------------------
+// Server info query protocol (#997) — raw UDP on a dedicated query port
+// ---------------------------------------------------------------------------------------------
+// An A2S-style request/response the server browser (#143) uses to measure ping and read live details
+// for a server (LAN-discovered or lobby-listed). Runs on a dedicated UDP port because GNS has no
+// raw-datagram passthrough and the discovery-beacon socket is send-only.
+
+// Client -> server. Padded so the request is never smaller than the response (anti-amplification): the
+// responder DROPS any datagram shorter than sizeof(MsgServerQuery).
+struct MsgServerQuery {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::ServerQuery)}; // @0
+    uint8_t reserved{0};                                     // @1
+    uint16_t protocolVersion{kProtocolVersion};              // @2
+    uint32_t nonce{0};                                       // @4 client-chosen; echoed back
+    uint64_t clientTimeMs{0};                                // @8 client steady-clock ms; echoed verbatim
+    uint8_t pad[176]{};                                      // @16 anti-amplification padding
+}; // 192 bytes, align 8
+static_assert(sizeof(MsgServerQuery) == 192u, "MsgServerQuery wire size changed");
+static_assert(offsetof(MsgServerQuery, nonce) == 4u, "MsgServerQuery::nonce offset changed");
+static_assert(offsetof(MsgServerQuery, clientTimeMs) == 8u, "MsgServerQuery::clientTimeMs offset changed");
+
+// Server -> client reply. Echoes nonce + clientTimeMs so the client computes RTT locally.
+struct MsgServerInfo {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::ServerInfo)}; // @0
+    uint8_t gameModeFlags{0};                               // @1 kGameMode* incl. shutdown/passworded
+    uint16_t protocolVersion{kProtocolVersion};             // @2
+    uint32_t nonce{0};                                      // @4 echoed
+    uint64_t clientTimeMs{0};                               // @8 echoed
+    uint16_t gamePort{0};                                   // @16
+    uint16_t shutdownSeconds{0};                            // @18
+    uint8_t playerCount{0};                                 // @20
+    uint8_t maxPlayers{0};                                  // @21
+    uint16_t reserved{0};                                   // @22
+    char name[64]{};                                        // @24 server name
+    char modeId[32]{};                                      // @88 game-mode id (empty until set)
+    char mission[64]{};                                     // @120 current mission/map display name
+}; // 184 bytes, align 8
+static_assert(sizeof(MsgServerInfo) == 184u, "MsgServerInfo wire size changed");
+static_assert(offsetof(MsgServerInfo, nonce) == 4u, "MsgServerInfo::nonce offset changed");
+static_assert(offsetof(MsgServerInfo, clientTimeMs) == 8u, "MsgServerInfo::clientTimeMs offset changed");
+static_assert(offsetof(MsgServerInfo, gamePort) == 16u, "MsgServerInfo::gamePort offset changed");
+static_assert(offsetof(MsgServerInfo, name) == 24u, "MsgServerInfo::name offset changed");
+static_assert(offsetof(MsgServerInfo, modeId) == 88u, "MsgServerInfo::modeId offset changed");
+static_assert(offsetof(MsgServerInfo, mission) == 120u, "MsgServerInfo::mission offset changed");
 
 // Extension tag registry for TLV blocks appended after fixed message structs (see WireCodec.h).
 // Wire format per entry: [tag: uint16_t LE][len: uint16_t LE][data: len bytes].
