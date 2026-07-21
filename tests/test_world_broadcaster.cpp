@@ -3880,6 +3880,12 @@ TEST_CASE("WorldBroadcaster: initiateShutdown broadcasts first notice on next ti
 
     CHECK(broadcaster.isShuttingDown());
     CHECK(broadcaster.secondsUntilShutdown() <= 30u);
+    // Cross-thread beacon mirror (#226).
+    CHECK(broadcaster.getShutdownStatus().active);
+    CHECK(broadcaster.getShutdownStatus().secondsRemaining == 30u);
+    broadcaster.cancelShutdown();
+    CHECK_FALSE(broadcaster.getShutdownStatus().active);
+    broadcaster.initiateShutdown(30, 5); // restore for the rest of the test
 
     broadcaster.onTick(1.0 / 60.0, 0u);
 

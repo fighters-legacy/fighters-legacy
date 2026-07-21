@@ -1141,23 +1141,26 @@ struct MsgLanBeacon {
     uint16_t gamePort{4778};
     uint8_t playerCount{0};
     uint8_t maxPlayers{0};
-    uint8_t gameModeFlags{0}; // see kGameMode* constants
-    uint8_t reserved2{0};
-    char name[64]{}; // null-terminated server name
-}; // 74 bytes, align 2
-static_assert(sizeof(MsgLanBeacon) == 74u, "MsgLanBeacon wire size changed");
+    uint8_t gameModeFlags{0};    // see kGameMode* constants
+    uint8_t reserved2{0};        // @9
+    uint16_t shutdownSeconds{0}; // @10 seconds until shutdown when kGameModeShuttingDown is set (#226); 0 = n/a
+    char name[64]{};             // @12 null-terminated server name
+}; // 76 bytes, align 2
+static_assert(sizeof(MsgLanBeacon) == 76u, "MsgLanBeacon wire size changed");
 static_assert(alignof(MsgLanBeacon) == 2u, "MsgLanBeacon alignment changed");
 static_assert(offsetof(MsgLanBeacon, protocolVersion) == 2u, "MsgLanBeacon::protocolVersion offset changed");
 static_assert(offsetof(MsgLanBeacon, gamePort) == 4u, "MsgLanBeacon::gamePort offset changed");
 static_assert(offsetof(MsgLanBeacon, playerCount) == 6u, "MsgLanBeacon::playerCount offset changed");
 static_assert(offsetof(MsgLanBeacon, maxPlayers) == 7u, "MsgLanBeacon::maxPlayers offset changed");
 static_assert(offsetof(MsgLanBeacon, gameModeFlags) == 8u, "MsgLanBeacon::gameModeFlags offset changed");
-static_assert(offsetof(MsgLanBeacon, name) == 10u, "MsgLanBeacon::name offset changed");
+static_assert(offsetof(MsgLanBeacon, shutdownSeconds) == 10u, "MsgLanBeacon::shutdownSeconds offset changed");
+static_assert(offsetof(MsgLanBeacon, name) == 12u, "MsgLanBeacon::name offset changed");
 
 // Bitmask constants for MsgLanBeacon::gameModeFlags.
 static constexpr uint8_t kGameModeCampaign = 0x01u;
 static constexpr uint8_t kGameModeMission = 0x02u;
 static constexpr uint8_t kGameModeSandbox = 0x04u;
+static constexpr uint8_t kGameModeShuttingDown = 0x08u; // the server is counting down to shutdown (#226)
 
 // Extension tag registry for TLV blocks appended after fixed message structs (see WireCodec.h).
 // Wire format per entry: [tag: uint16_t LE][len: uint16_t LE][data: len bytes].

@@ -179,13 +179,14 @@ static std::vector<DiscoveryListener::ServerInfo> expectNoServers(DiscoveryListe
 // ---------------------------------------------------------------------------
 
 TEST_CASE("MsgLanBeacon struct layout matches wire spec", "[lan_discovery][protocol]") {
-    CHECK(sizeof(fl::MsgLanBeacon) == 74u);
+    CHECK(sizeof(fl::MsgLanBeacon) == 76u);
     CHECK(offsetof(fl::MsgLanBeacon, protocolVersion) == 2u);
     CHECK(offsetof(fl::MsgLanBeacon, gamePort) == 4u);
     CHECK(offsetof(fl::MsgLanBeacon, playerCount) == 6u);
     CHECK(offsetof(fl::MsgLanBeacon, maxPlayers) == 7u);
     CHECK(offsetof(fl::MsgLanBeacon, gameModeFlags) == 8u);
-    CHECK(offsetof(fl::MsgLanBeacon, name) == 10u);
+    CHECK(offsetof(fl::MsgLanBeacon, shutdownSeconds) == 10u);
+    CHECK(offsetof(fl::MsgLanBeacon, name) == 12u);
 
     fl::MsgLanBeacon beacon;
     CHECK(beacon.msgId == static_cast<uint8_t>(fl::MsgId::LanBeacon));
@@ -233,7 +234,7 @@ TEST_CASE("DiscoveryBeacon first tick fires immediately", "[lan_discovery][integ
     DiscoveryBeacon beacon(cfg, log);
     REQUIRE(beacon.isOpen());
 
-    beacon.tick(3);
+    beacon.tick({3});
     auto servers = waitForServers(listener, 1, std::chrono::milliseconds(2000));
     REQUIRE(!servers.empty());
     CHECK(servers[0].beacon.playerCount == 3u);
@@ -241,6 +242,28 @@ TEST_CASE("DiscoveryBeacon first tick fires immediately", "[lan_discovery][integ
     CHECK(servers[0].beacon.protocolVersion == fl::kProtocolVersion);
     CHECK(servers[0].beacon.gameModeFlags == fl::kGameModeSandbox);
     CHECK(std::string(servers[0].beacon.name) == "my-server");
+}
+
+TEST_CASE("DiscoveryBeacon advertises shutdown state (#226)", "[lan_discovery][integration]") {
+    [[maybe_unused]] WsaInit wsa;
+    MockLogger log;
+    const uint16_t port = freeUdpPort();
+    DiscoveryListener listener(port, log);
+    DiscoveryBeacon::Config cfg;
+    cfg.name = "closing-server";
+    cfg.port = port;
+    cfg.broadcastAddr = "127.0.0.1";
+    cfg.intervalMs = 30000;
+    cfg.gameModeFlags = fl::kGameModeSandbox;
+    DiscoveryBeacon beacon(cfg, log);
+    REQUIRE(beacon.isOpen());
+
+    beacon.tick({2, /*shuttingDown=*/true, /*shutdownSeconds=*/120});
+    auto servers = waitForServers(listener, 1, std::chrono::milliseconds(2000));
+    REQUIRE(!servers.empty());
+    CHECK(servers[0].shuttingDown());
+    CHECK(servers[0].shutdownSeconds() == 120u);
+    CHECK((servers[0].beacon.gameModeFlags & fl::kGameModeShuttingDown) != 0u);
 }
 
 TEST_CASE("DiscoveryBeacon second immediate tick does not resend", "[lan_discovery][integration]") {
@@ -260,8 +283,8 @@ TEST_CASE("DiscoveryBeacon second immediate tick does not resend", "[lan_discove
     DiscoveryBeacon beacon(cfg, log);
     REQUIRE(beacon.isOpen());
 
-    beacon.tick(1); // first tick fires immediately
-    beacon.tick(1); // second tick — interval not elapsed, must NOT send
+    beacon.tick({1}); // first tick fires immediately
+    beacon.tick({1}); // second tick — interval not elapsed, must NOT send
 
     // Wait for the first beacon, then keep draining: a suppressed second send must never show up, and
     // (now that the port is ours alone) neither can a sibling test's beacon.
@@ -357,5 +380,5 @@ TEST_CASE("DiscoveryBeacon: setName updates the server name for future broadcast
 
     // Verify: tick() with playerCount=0 fires on the first call regardless of intervalMs.
     // The beacon may fail to send (no valid port), but the name change must not crash.
-    REQUIRE_NOTHROW(beacon.tick(0));
+    REQUIRE_NOTHROW(beacon.tick({0}));
 }

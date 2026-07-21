@@ -2031,8 +2031,11 @@ int main(int argc, char** argv) {
                     std::printf("[admin] %s\n", result.c_str());
             }
         }
-        if (beacon)
-            beacon->tick(broadcaster.getPeerCount());
+        if (beacon) {
+            const fl::WorldBroadcaster::ShutdownStatus ss = broadcaster.getShutdownStatus(); // #226
+            beacon->tick({broadcaster.getPeerCount(), ss.active,
+                          static_cast<uint16_t>(std::min<uint32_t>(ss.secondsRemaining, 0xFFFFu))});
+        }
         p.asyncFilesystem->service();
         // Follow the entity so terrain chunks are loaded at its current position.
         const double entityX = broadcaster.cachedEntityX();

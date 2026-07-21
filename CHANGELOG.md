@@ -21,6 +21,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: advertise shutdown state in the LAN discovery beacon (#226, Epic E #497).
+  `MsgLanBeacon` gains a `kGameModeShuttingDown` flag + a `shutdownSeconds` field (74 → 76 B);
+  `WorldBroadcaster::getShutdownStatus()` publishes the countdown across threads (relaxed atomics) for
+  the main-thread beacon, which now sends an immediate extra beacon on a shutdown state change so a
+  server browser sees "shutting down (m:ss)" within one poll. `DiscoveryListener::ServerInfo` exposes
+  `shuttingDown()` / `shutdownSeconds()`.
 - **net**: death → respawn state machine with mode-defined delay (#648, Epic E #497). A dead pilot is
   enrolled in a per-participant respawn table (`WorldBroadcaster::setRespawnPolicy` from the game mode:
   delay, optional waves) and respawns on request — the new `kInputButtonRespawn` (MsgClientInput bit 7,

@@ -595,6 +595,17 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         return m_shuttingDown;
     }
 
+    // Cross-thread shutdown status (#226) for the LAN beacon (which ticks on the main thread). Backed
+    // by relaxed atomics the sim thread publishes; any thread may read it.
+    struct ShutdownStatus {
+        bool active{false};
+        uint32_t secondsRemaining{0};
+    };
+    [[nodiscard]] ShutdownStatus getShutdownStatus() const noexcept {
+        return {m_shutdownActiveShared.load(std::memory_order_relaxed),
+                m_shutdownSecsShared.load(std::memory_order_relaxed)};
+    }
+
     // Sim-thread only. Returns the spatial index rebuilt at the start of the most recent
     // onTick(). Consumers: interest management (#346), AoE warhead commands (#356); AI
     // controllers receive it via the si parameter of IEntityController::sample().
@@ -1634,6 +1645,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
 
     // Shutdown countdown state (sim-thread only).
     bool m_shuttingDown{false};
+    // Cross-thread mirror published by the sim thread for the main-thread beacon (#226).
+    std::atomic<bool> m_shutdownActiveShared{false};
+    std::atomic<uint32_t> m_shutdownSecsShared{0};
     std::chrono::steady_clock::time_point m_shutdownAt{};
     std::chrono::steady_clock::time_point m_nextNoticeAt{};
     uint32_t m_warningIntervalS{300};

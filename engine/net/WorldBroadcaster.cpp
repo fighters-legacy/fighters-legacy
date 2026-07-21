@@ -1892,16 +1892,23 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         if (now >= m_shutdownAt) {
             broadcastShutdownNotice(0, makeShutdownMessage(0, m_shutdownReason).c_str());
             m_shuttingDown = false;
+            m_shutdownActiveShared.store(false, std::memory_order_relaxed); // #226
+            m_shutdownSecsShared.store(0, std::memory_order_relaxed);
             if (m_shutdownCallback)
                 m_shutdownCallback();
-        } else if (now >= m_nextNoticeAt) {
-            auto secsLeft = static_cast<uint32_t>(duration_cast<seconds>(m_shutdownAt - now).count());
-            broadcastShutdownNotice(static_cast<uint16_t>(secsLeft),
-                                    makeShutdownMessage(secsLeft, m_shutdownReason).c_str());
-            // Always squeeze in a T-60s notice: if the next interval would skip past it, clamp.
-            auto nextInterval = now + seconds(m_warningIntervalS);
-            auto oneMinBefore = m_shutdownAt - seconds(60);
-            m_nextNoticeAt = (nextInterval > oneMinBefore && oneMinBefore > now) ? oneMinBefore : nextInterval;
+        } else {
+            // Publish the live remaining seconds each tick for the LAN beacon (#226).
+            m_shutdownSecsShared.store(static_cast<uint32_t>(duration_cast<seconds>(m_shutdownAt - now).count()),
+                                       std::memory_order_relaxed);
+            if (now >= m_nextNoticeAt) {
+                auto secsLeft = static_cast<uint32_t>(duration_cast<seconds>(m_shutdownAt - now).count());
+                broadcastShutdownNotice(static_cast<uint16_t>(secsLeft),
+                                        makeShutdownMessage(secsLeft, m_shutdownReason).c_str());
+                // Always squeeze in a T-60s notice: if the next interval would skip past it, clamp.
+                auto nextInterval = now + seconds(m_warningIntervalS);
+                auto oneMinBefore = m_shutdownAt - seconds(60);
+                m_nextNoticeAt = (nextInterval > oneMinBefore && oneMinBefore > now) ? oneMinBefore : nextInterval;
+            }
         }
     }
 
@@ -5661,11 +5668,15 @@ void WorldBroadcaster::initiateShutdown(uint32_t secondsDelay, uint32_t warningI
     m_warningIntervalS = warningIntervalS;
     m_nextNoticeAt = m_clock->now(); // fire on the very next tick
     m_shutdownReason = std::move(reason);
+    m_shutdownActiveShared.store(true, std::memory_order_relaxed); // #226 beacon mirror
+    m_shutdownSecsShared.store(secondsDelay, std::memory_order_relaxed);
 }
 
 void WorldBroadcaster::cancelShutdown() {
     m_shuttingDown = false;
     m_shutdownReason.clear();
+    m_shutdownActiveShared.store(false, std::memory_order_relaxed); // #226
+    m_shutdownSecsShared.store(0, std::memory_order_relaxed);
 }
 
 bool WorldBroadcaster::extendShutdown(uint32_t additionalSeconds) {
@@ -5673,6 +5684,7 @@ bool WorldBroadcaster::extendShutdown(uint32_t additionalSeconds) {
         return false;
     m_shutdownAt += std::chrono::seconds(additionalSeconds);
     m_nextNoticeAt = m_clock->now(); // immediate update notice on next tick
+    m_shutdownSecsShared.fetch_add(additionalSeconds, std::memory_order_relaxed); // #226
     return true;
 }
 

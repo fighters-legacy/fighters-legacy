@@ -45,9 +45,17 @@ class DiscoveryBeacon {
     DiscoveryBeacon(DiscoveryBeacon&&) = delete;
     DiscoveryBeacon& operator=(DiscoveryBeacon&&) = delete;
 
-    // Sends a beacon if intervalMs has elapsed; first call fires immediately.
-    // playerCount: current connected peer count (safe to read from main thread via atomic).
-    void tick(int playerCount);
+    // Live per-tick state carried in the beacon (#226): the current player count plus whether a
+    // shutdown is counting down and how many seconds remain. Passed by value each tick.
+    struct TickState {
+        int playerCount{0};
+        bool shuttingDown{false};
+        uint16_t shutdownSeconds{0};
+    };
+
+    // Sends a beacon if intervalMs has elapsed (first call fires immediately), OR immediately when the
+    // shutdown state changes so browsers see the transition within one poll rather than up to intervalMs.
+    void tick(const TickState& state);
 
     // Returns true if at least one socket (IPv4 or IPv6) opened successfully.
     bool isOpen() const noexcept;
@@ -59,7 +67,7 @@ class DiscoveryBeacon {
     }
 
   private:
-    void send(int playerCount);
+    void send(const TickState& state);
     bool openSock4();
     bool openSock6();
 
@@ -76,6 +84,7 @@ class DiscoveryBeacon {
     ILogger* m_log{nullptr}; // stored as pointer — ref is non-rebindable
     std::chrono::steady_clock::time_point m_lastSend{};
     bool m_firstTick{true};
+    bool m_lastShutdownActive{false}; // for immediate re-send on a shutdown state change (#226)
 };
 
 } // namespace fl
