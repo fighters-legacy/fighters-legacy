@@ -21,6 +21,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **docs**: game-mode authoring guide (#525, Epic E #497). New
+  `docs/modding/game-modes.md` documents the `modes/*.toml` schema, the builtin modes, mode selection
+  (`[match] mode` / `mission@mode`), the match lifecycle, and `validate-mode`. `docs/fl-server-config.md`
+  gains the `[match]` section (mode / end_screen_s / reconnect_grace_s) and documents the now-enforced
+  `[server] password`; `docs/network-protocol.md` documents the new Epic E message ids, the raw-UDP
+  boundary raise to `0x40`, and the beacon shutdown/passworded flags.
 - **server**: join password for private servers (#998, Epic E #497). The existing (previously inert)
   `[server] password` is now enforced: a connecting client sends it as a `MsgConnectRequest` TLV
   (`ExtTag::ConnectJoinPassword`), the server constant-time-compares it (before any admission side
