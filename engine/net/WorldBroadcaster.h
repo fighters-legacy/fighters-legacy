@@ -946,6 +946,16 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Empty string disables the network admin channel. Call before gameLoop.start().
     void setOperatorPassword(std::string password);
 
+    // Configure the join password (#998). Empty = open server. When set, a connecting client must send
+    // the matching password (MsgConnectRequest ConnectJoinPassword TLV) or it is refused with
+    // ConnectRefusalCode::BadPassword. Sim-thread; hot-reloadable via enqueueSimCallback.
+    void setJoinPassword(std::string password) {
+        m_joinPassword = std::move(password);
+    }
+    [[nodiscard]] bool hasJoinPassword() const noexcept {
+        return !m_joinPassword.empty();
+    }
+
     // Attach the admin command dispatcher for MsgAdminCommand handling.
     // Typically: [&adminRegistry](std::string_view cmd){ return adminRegistry.dispatch(cmd); }
     // Call before gameLoop.start(). Does not take ownership.
@@ -1543,6 +1553,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword;                               // empty = admin channel disabled
+    std::string m_joinPassword;                                   // #998: empty = open server
     std::function<std::string(std::string_view)> m_adminDispatch; // null = admin channel disabled
     AuthTracker m_adminAuthTracker{5, 300}; // per-IP failed-auth lockout (defaults: 5 attempts, 5 min)
 

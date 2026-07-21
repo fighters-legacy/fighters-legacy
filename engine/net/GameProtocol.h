@@ -1161,6 +1161,7 @@ static constexpr uint8_t kGameModeCampaign = 0x01u;
 static constexpr uint8_t kGameModeMission = 0x02u;
 static constexpr uint8_t kGameModeSandbox = 0x04u;
 static constexpr uint8_t kGameModeShuttingDown = 0x08u; // the server is counting down to shutdown (#226)
+static constexpr uint8_t kGameModePassworded = 0x10u;   // the server requires a join password (#998)
 
 // Extension tag registry for TLV blocks appended after fixed message structs (see WireCodec.h).
 // Wire format per entry: [tag: uint16_t LE][len: uint16_t LE][data: len bytes].

@@ -2147,6 +2147,38 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         return;
     }
 
+    // Join password (#998): the cheapest decisive check, before any admission side effect. Compare the
+    // client's ConnectJoinPassword TLV against the configured password in constant time (no length or
+    // early-exit timing oracle). Missing/wrong => refuse. Applies to pilots AND observers.
+    if (!m_joinPassword.empty()) {
+        const std::size_t extOff =
+            sizeof(MsgConnectRequest) + static_cast<std::size_t>(req.packCount) * sizeof(PackManifestEntry);
+        uint8_t supplied[64] = {};
+        std::size_t suppliedLen = 0;
+        if (extOff <= size) {
+            uint16_t plen = 0;
+            const uint8_t* pp = findExt(static_cast<const uint8_t*>(data) + extOff, size - extOff,
+                                        static_cast<uint16_t>(ExtTag::ConnectJoinPassword), plen);
+            if (pp && plen > 0u && plen <= sizeof(supplied)) {
+                std::memcpy(supplied, pp, plen);
+                suppliedLen = plen;
+            }
+        }
+        const std::string& pw = m_joinPassword;
+        uint8_t diff = (suppliedLen == pw.size()) ? 0u : 1u;
+        for (std::size_t i = 0; i < sizeof(supplied); ++i) {
+            const uint8_t a = supplied[i];
+            const uint8_t b = (i < pw.size()) ? static_cast<uint8_t>(pw[i]) : 0u;
+            diff |= (a ^ b);
+        }
+        for (std::size_t i = sizeof(supplied); i < pw.size(); ++i)
+            diff |= static_cast<uint8_t>(pw[i]);
+        if (diff != 0u) {
+            rejectConnection(peerId, extractIp(m_net.getPeerAddress(peerId)), ConnectRefusalCode::BadPassword);
+            return;
+        }
+    }
+
     // Required-pack policy (#872). The connect handshake carries the client's mounted-pack manifest;
     // compare it against the server's required set and apply the configured policy. `missingPackNotice`
     // is filled under the WARN policy so the client is notified (via MsgServerNotice) AFTER admission.

@@ -398,6 +398,8 @@ int main(int argc, char** argv) {
         else if (m == "sandbox")
             discoveryGameModeFlags |= fl::kGameModeSandbox;
     }
+    if (!cfg.password.empty())
+        discoveryGameModeFlags |= fl::kGameModePassworded; // #998 — browsers show a lock icon
     std::unique_ptr<DiscoveryBeacon> beacon;
     if (cfg.discoveryEnabled) {
         DiscoveryBeacon::Config dcfg;
@@ -724,6 +726,7 @@ int main(int argc, char** argv) {
         cfg.overrunMaxAiStride, cfg.overrunBudgetFloorBytes, cfg.overrunMinInterestFraction);
     wbConfig.gameplay = fl::DamageRules{cfg.friendlyFire, cfg.crashDamage};
     broadcaster.applyConfig(wbConfig);
+    broadcaster.setJoinPassword(cfg.password); // #998: [server] password gates joins (empty = open)
     // The fire path's vocabulary (#625). After applyConfig, before gameLoop.start(); the registry
     // lives in main's scope and outlives the broadcaster.
     broadcaster.setWeaponRegistry(&weaponRegistry);

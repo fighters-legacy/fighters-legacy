@@ -1556,6 +1556,57 @@ TEST_CASE("WorldBroadcaster: respawn enrolls on death and respawnParticipant res
     CHECK(em.liveCount() == 1u);
 }
 
+TEST_CASE("WorldBroadcaster: join password gates admission (#998)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJoinPassword("s3cret");
+
+    auto connectWithPassword = [&](uint32_t peerId, const char* pw) {
+        broadcaster.onConnect(peerId);
+        fl::MsgConnectRequest req{};
+        req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+        std::vector<uint8_t> buf;
+        fl::appendMsg(buf, req);
+        if (pw)
+            fl::appendExtRaw(buf, static_cast<uint16_t>(fl::ExtTag::ConnectJoinPassword), pw,
+                             static_cast<uint16_t>(std::strlen(pw)));
+        broadcaster.onReceive(peerId, buf.data(), buf.size());
+    };
+    auto refusedBadPassword = [&]() {
+        for (const auto& pkt : net.sends)
+            if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectRefusal) &&
+                pkt.size() >= sizeof(fl::MsgConnectRefusal)) {
+                fl::MsgConnectRefusal r{};
+                std::memcpy(&r, pkt.data(), sizeof(r));
+                if (r.code == static_cast<uint8_t>(fl::ConnectRefusalCode::BadPassword))
+                    return true;
+            }
+        return false;
+    };
+
+    SECTION("missing password is refused") {
+        connectWithPassword(0u, nullptr);
+        broadcaster.onTick(1.0 / 60.0, 1u);
+        CHECK(refusedBadPassword());
+        CHECK(em.liveCount() == 0u);
+    }
+    SECTION("wrong password is refused") {
+        connectWithPassword(0u, "nope");
+        broadcaster.onTick(1.0 / 60.0, 1u);
+        CHECK(refusedBadPassword());
+    }
+    SECTION("correct password admits") {
+        connectWithPassword(0u, "s3cret");
+        broadcaster.onTick(1.0 / 60.0, 1u);
+        CHECK_FALSE(refusedBadPassword());
+        CHECK(em.liveCount() == 1u);
+    }
+}
+
 TEST_CASE("WorldBroadcaster: match state + event sink + resetWorld (#523)", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;

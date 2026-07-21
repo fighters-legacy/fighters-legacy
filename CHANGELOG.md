@@ -21,6 +21,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **server**: join password for private servers (#998, Epic E #497). The existing (previously inert)
+  `[server] password` is now enforced: a connecting client sends it as a `MsgConnectRequest` TLV
+  (`ExtTag::ConnectJoinPassword`), the server constant-time-compares it (before any admission side
+  effect, for both pilots and observers) and refuses a missing/wrong password with the new
+  `ConnectRefusalCode::BadPassword` → `SessionFailure::BadPassword`. The LAN beacon advertises a
+  `kGameModePassworded` flag so a browser can show a lock icon and prompt. The client carries a
+  per-session join password (not persisted).
 - **net**: reconnect identity with score/team restore inside a grace window (#524, Epic E #497). The
   client sends its `PilotProfile::guid` as a `MsgConnectRequest` TLV (`ExtTag::ConnectIdentity`); on
   disconnect the server snapshots the player's callsign, team and kills/losses/score under that GUID and
