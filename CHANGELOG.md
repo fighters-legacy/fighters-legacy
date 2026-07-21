@@ -7,7 +7,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.8] - 2026-07-20
+### Added
+
+- **audio**: continuous engine and aerodynamic sound layers with positional doppler (#959, Epic #586).
+  A new `engine/audio/EngineAudio` (engine-audio) holds the byte-stable builtin engine hum + airframe
+  wind-rush loops and the pure throttle/airspeed → pitch/gain mapping; the game-layer
+  `EngineAudioManager` (beside `ClientEffectRouter`) drives them off the render snapshot each frame — the
+  ownship's engine is HEAD-LOCKED (no distance falloff, no doppler on your own jet) while every other
+  air entity gets a POSITIONAL looping engine source with its world velocity set so OpenAL applies
+  doppler on a flyby, distance-attenuated and capped to the nearest eight. The engine pitch/gain track
+  throttle, airspeed and afterburner; the wind rush swells with dynamic pressure. Only air vehicles hum
+  (category predicate). A null audio device is a silent no-op, so CI opens no device. Unit-tested headless
+  via a tracking `IAudio` (mapping, byte-stable PCM, head-lock/doppler/distance wiring).
 
 ### Added
 

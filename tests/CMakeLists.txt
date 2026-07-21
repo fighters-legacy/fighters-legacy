@@ -1072,6 +1072,15 @@ target_link_libraries(test_warning_tones PRIVATE Catch2::Catch2WithMain engine-a
 target_include_directories(test_warning_tones PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_warning_tones)
 
+# #959 — engine/aero doppler layers: pure mapping + byte-stable loops (engine-audio) plus the
+# game-layer EngineAudioManager source wiring, compiled in directly.
+add_executable(test_engine_audio test_engine_audio.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/EngineAudioManager.cpp")
+target_link_libraries(test_engine_audio PRIVATE Catch2::Catch2WithMain engine-audio engine-config engine-content)
+target_include_directories(test_engine_audio PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/game/fighters-legacy")
+catch_discover_tests(test_engine_audio)
+
 add_executable(test_sha256 test_sha256.cpp)
 target_link_libraries(test_sha256 PRIVATE Catch2::Catch2WithMain engine-crypto)
 catch_discover_tests(test_sha256)

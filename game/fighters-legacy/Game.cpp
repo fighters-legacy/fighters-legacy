@@ -10,6 +10,7 @@
 #include "ClientNetEventHandler.h"
 #include "CommsMenu.h"
 #include "DebriefScreen.h"
+#include "EngineAudioManager.h"
 #include "FileLogger.h"
 #include "FlightInputCollector.h"
 #include "FlightScreen.h"
@@ -319,6 +320,7 @@ struct GameServices {
     MusicManager musicManager;
     fl::SfxManager sfxManager;           // positional weapon SFX (#631)
     fl::WarningToneManager warningTones; // stall / overspeed cockpit tones (#957)
+    fl::EngineAudioManager engineAudio;  // continuous engine + aero doppler layers (#959)
     AudioSettings audioSettings{};       // a stable copy the effect router points at; refreshed on apply
 
     // Multiplayer connection target (empty = single-player, spawn LocalServer).
@@ -461,6 +463,7 @@ Game::~Game() {
     d.services.musicManager.shutdown();
     d.services.sfxManager.shutdown();
     d.services.warningTones.shutdown();
+    d.services.engineAudio.shutdown();
     d.services.p.cursor.reset();
     if (d.services.p.audio)
         d.services.p.audio->shutdown();
@@ -1098,6 +1101,13 @@ void Game::initGameSystems() {
     fl::registerBuiltinSfxPresets(d.services.sfxManager);
     // Warning tones (#957): stall / overspeed cockpit cues. Null audio device tolerated (no-op).
     d.services.warningTones.init(d.services.p.audio.get(), d.services.rawLogger);
+    // Continuous engine + aero doppler layers (#959): own-ship head-locked engine/wind + positional
+    // flyby engines. Only air vehicles hum; the predicate reads the type registry's category.
+    d.services.engineAudio.init(d.services.p.audio.get(), d.services.rawLogger);
+    d.services.engineAudio.setAirVehiclePredicate([&reg = d.services.entityRegistry](uint32_t typeIndex) {
+        const fl::EntityDef* def = reg.byIndex(typeIndex);
+        return def && (def->category == fl::ObjectCategory::AirVehicle || def->category == fl::ObjectCategory::Player);
+    });
     // Radio voice callouts (#704): the server sends resolved subtitle TEXT (not a key), so no
     // Localization/synth is wired — playText pushes the subtitle and plays a pack OGG if one exists,
     // else it degrades to a text-only subtitle. Null audio device tolerated.
@@ -1826,6 +1836,18 @@ void Game::run() {
                 d.services.sfxManager.updateListener(fwd, up);
                 d.services.effectRouter.setCameraOrigin(cam.worldOrigin);
                 d.services.effectRouter.setOwnEntity(d.session.clientHandler->assignedEntityIdx);
+            }
+
+            // Continuous engine + aero doppler layers (#959): drive them from the current snapshot
+            // AFTER the listener is at the origin (SfxManager::updateListener above). The ownship's
+            // engine is head-locked; other air entities get positional doppler sources. An observer
+            // (no own entity, assignedEntityGen == 0) still hears the flybys.
+            {
+                const uint32_t ownIdx = d.session.clientHandler->assignedEntityGen != 0
+                                            ? d.session.clientHandler->assignedEntityIdx
+                                            : fl::EngineAudioManager::kNoEntity;
+                d.services.engineAudio.update(d.services.renderBridge.current().entries, ownIdx, cam.worldOrigin,
+                                              d.services.userConfig->audio());
             }
 
             // In cockpit view the camera sits at the player entity, so render that entity
