@@ -5587,6 +5587,37 @@ void WorldBroadcaster::readmitPilots() {
     }
 }
 
+// ── AI bot participants (#87) ─────────────────────────────────────────────────
+void WorldBroadcaster::registerBotParticipant(uint32_t participantId, EntityId entity, const std::string& callsign,
+                                              uint16_t faction) {
+    if (entity.valid())
+        m_botEntities[entity.index] = participantId;
+    RosterRec rec;
+    rec.callsign = callsign.empty() ? ("Bot-" + std::to_string(participantId)) : callsign;
+    rec.factionIndex = faction;
+    rec.role = PeerRole::Pilot;
+    rec.isBot = true;
+    upsertRoster(participantId, rec);
+    m_scores[participantId] = PeerScore{};
+    m_scoreboardDirty = true;
+    if (m_matchParticipantSink)
+        m_matchParticipantSink(participantId, faction, /*isBot=*/true, /*joined=*/true);
+}
+
+void WorldBroadcaster::removeBotParticipant(uint32_t participantId) {
+    for (auto it = m_botEntities.begin(); it != m_botEntities.end();) {
+        if (it->second == participantId)
+            it = m_botEntities.erase(it);
+        else
+            ++it;
+    }
+    removeRoster(participantId);
+    m_scores.erase(participantId);
+    m_scoreboardDirty = true;
+    if (m_matchParticipantSink)
+        m_matchParticipantSink(participantId, 0, /*isBot=*/true, /*joined=*/false);
+}
+
 // ── respawn (#648) ───────────────────────────────────────────────────────────
 void WorldBroadcaster::respawnParticipant(uint32_t participantId) {
     // Bots (#87) respawn through their own path; here we handle human peers.

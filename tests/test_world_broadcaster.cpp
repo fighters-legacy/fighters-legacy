@@ -1556,6 +1556,40 @@ TEST_CASE("WorldBroadcaster: respawn enrolls on death and respawnParticipant res
     CHECK(em.liveCount() == 1u);
 }
 
+TEST_CASE("WorldBroadcaster: bot participants get a roster row and are removable (#87)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    connectPilotPeer(broadcaster, net, 0u); // a human peer to receive the roster broadcast
+    fl::EntityId botEnt = em.spawn("builtin:debug-entity", fl::EntityTransform{});
+    REQUIRE(botEnt.valid());
+    const uint32_t botPid = fl::kBotParticipantBase + 3u;
+    net.perPeerSends.clear();
+    broadcaster.registerBotParticipant(botPid, botEnt, "Viper-1", 2u);
+
+    // Peer 0 received a roster upsert for the bot, flagged as a bot.
+    std::vector<fl::PlayerRosterEntry> rows = collectRosterFor(net, 0u);
+    bool sawBot = false;
+    for (const auto& e : rows)
+        if (e.participantId == botPid && (e.flags & fl::kRosterBot) && std::string(e.callsign) == "Viper-1")
+            sawBot = true;
+    CHECK(sawBot);
+
+    // Removing the bot broadcasts a leave.
+    net.perPeerSends.clear();
+    broadcaster.removeBotParticipant(botPid);
+    rows = collectRosterFor(net, 0u);
+    bool leave = false;
+    for (const auto& e : rows)
+        if (e.participantId == botPid && (e.flags & fl::kRosterLeave))
+            leave = true;
+    CHECK(leave);
+}
+
 TEST_CASE("WorldBroadcaster: join password gates admission (#998)", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;

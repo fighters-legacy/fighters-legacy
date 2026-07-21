@@ -24,6 +24,7 @@
 #include "ServerCommands.h"
 #include "StdoutLogger.h"
 #include "TestSpawn.h"
+#include "bots.h"
 #include "match/MatchController.h"
 #include "net/DiscoveryBeacon.h"
 #include "sensor/SensorDefParser.h"
@@ -1007,7 +1008,8 @@ int main(int argc, char** argv) {
     // composite tick hook + the phase/rotate hooks capture references to it). Configured after the team
     // setup; a free-flight/free-for-all leaves it Idle-inert (its hooks never fire a phase change).
     fl::MatchController matchController;
-    std::size_t rotationIndex = 0; // current [rotation] item (#523); advanced on match rotate
+    std::size_t rotationIndex = 0;            // current [rotation] item (#523); advanced on match rotate
+    std::unique_ptr<fl::BotRoster> botRoster; // AI bot backfill (#87); null = bots disabled
     // Mission non-terminal `do:` action sink (#212). The evaluator routes actions like `set_weather storm`
     // here; we point it at the admin command dispatch AFTER the registry is built (below), so a mission
     // can do exactly what an operator could and no more. Set on the sim thread; read on the sim thread
@@ -1534,17 +1536,72 @@ int main(int argc, char** argv) {
             else
                 matchController.participantLeft(id);
         });
+
+        // AI bot backfill (#87): spawn server-side AI participants up to the fill target. Bots are not
+        // network peers. Requires teams (a free-for-all cannot balance bots) and fill > 0.
+        if (cfg.botsFill > 0 && mts.haveTeams) {
+            std::vector<uint16_t> botTeams;
+            for (const fl::TeamState& ts : mts.teams)
+                botTeams.push_back(ts.factionIndex);
+            const double botGroundY = terrainStreamer.heightAt(glm::dvec3{0.0, 0.0, 0.0});
+            std::string fighterSrc(
+                fl::builtinAiScript(cfg.botsAiScript.empty() ? std::string("builtin:fighter") : cfg.botsAiScript));
+            if (fighterSrc.empty())
+                fighterSrc = std::string(fl::builtinAiScript("builtin:fighter"));
+            const std::string botType = cfg.botsEntityType.empty() ? cfg.playerEntityType : cfg.botsEntityType;
+
+            auto botSpawn = [&entityManager, &broadcaster, &worldApi, botGroundY, botType, fighterSrc,
+                             spawnN = uint32_t{0}](uint16_t faction) mutable -> fl::EntityId {
+                const double ang = static_cast<double>(spawnN) * 2.399963;
+                const double rad = 800.0 + static_cast<double>(spawnN) * 40.0;
+                fl::EntityTransform t{};
+                t.quat[3] = 1.0f;
+                t.pos[0] = rad * std::cos(ang);
+                t.pos[2] = rad * std::sin(ang);
+                t.pos[1] = botGroundY + 2000.0;
+                ++spawnN;
+                const fl::EntityId id = entityManager.spawn(botType.c_str(), t);
+                if (!id.valid())
+                    return {};
+                if (fl::EntityState* s = entityManager.get(id); s && faction != 0)
+                    s->factionIndex = faction;
+                auto ctrl =
+                    std::make_unique<fl::LuaController>(fighterSrc, std::string(), &entityManager, &worldApi, nullptr);
+                if (!ctrl->isValid()) {
+                    entityManager.kill(id);
+                    return {};
+                }
+                broadcaster.registerController(id, std::move(ctrl));
+                return id;
+            };
+            auto botKill = [&entityManager](fl::EntityId id) { entityManager.kill(id); };
+            auto botAlive = [&entityManager](fl::EntityId id) {
+                const fl::EntityState* s = entityManager.get(id);
+                return s != nullptr && !s->dead;
+            };
+            fl::BotRoster::Config bcfg;
+            bcfg.fill = cfg.botsFill;
+            bcfg.maxBots = cfg.botsMax;
+            bcfg.balanceTeams = cfg.botsBalanceTeams;
+            botRoster = std::make_unique<fl::BotRoster>(broadcaster, bcfg, std::move(botTeams), std::move(botSpawn),
+                                                        std::move(botKill), std::move(botAlive));
+            log->log(LogLevel::Info, __FILE__, __LINE__, "bots: AI backfill enabled");
+        }
     }
 
     // Composite per-tick hook (#523): step the mission runtime (if any) AND the match controller every
     // tick, then publish MsgMatchState whenever the controller's state version changes (a phase
     // transition or a team score). Reading the mode fields from the controller keeps it correct across
     // a rotation. Runs at the end of onTick on the sim thread.
-    broadcaster.setMissionTickHook(
-        [rt = missionRuntime.get(), &matchController, &broadcaster, lastVer = uint64_t{0}](uint64_t t) mutable {
-            if (rt)
-                rt->step(t);
-            matchController.step(t);
+    broadcaster.setMissionTickHook([rt = missionRuntime.get(), &matchController, &broadcaster, &botRoster,
+                                    lastVer = uint64_t{0}](uint64_t t) mutable {
+        if (rt)
+            rt->step(t);
+        matchController.step(t);
+        // AI bot backfill (#87), stepped ~1 Hz. humans ~= connected peers.
+        if (botRoster && t % 60u == 0u)
+            botRoster->step(static_cast<int>(broadcaster.getPeerCount()));
+        {
             const uint64_t ver = matchController.stateVersion();
             if (ver != lastVer) {
                 lastVer = ver;
@@ -1558,7 +1615,8 @@ int main(int argc, char** argv) {
                     pod.teamScores.emplace_back(ts.factionIndex, ts.score);
                 broadcaster.setMatchState(pod);
             }
-        });
+        }
+    });
 
     if (!cfg.trace.inputTraceDir.empty()) {
         broadcaster.setInputTraceDir(cfg.trace.inputTraceDir);
@@ -1614,37 +1672,39 @@ int main(int argc, char** argv) {
     // and re-admit the connected pilots — all serial on the sim thread via enqueueSimCallback (hence
     // wired here, after GameLoop exists). The mission itself repeats (a full mission-YAML reload across
     // rotation is a follow-on; a team match commonly runs without a mission).
-    matchController.setOnRotate(
-        [&broadcaster, &matchController, &gameLoop, &missionFactions, &rotationIndex, &cfg, &assets, log]() {
-            gameLoop.enqueueSimCallback(
-                [&broadcaster, &matchController, &missionFactions, &rotationIndex, &cfg, &assets, log]() {
-                    broadcaster.resetWorld();
-                    std::string modeRef = cfg.matchMode;
-                    if (!cfg.rotationItems.empty()) {
-                        rotationIndex = (rotationIndex + 1) % cfg.rotationItems.size();
-                        auto [mref, moderef] = fl::splitRotationItem(cfg.rotationItems[rotationIndex]);
-                        (void)mref;
-                        if (!moderef.empty())
-                            modeRef = moderef;
-                    }
-                    const fl::GameModeDef nextMode = fl::resolveGameMode(modeRef, &assets, *log);
-                    fl::MatchTeamSetup nmts = fl::buildMatchTeams(nextMode, missionFactions, *log);
-                    broadcaster.setDamageRules(fl::effectiveDamageRules(nextMode, cfg.friendlyFire, cfg.crashDamage));
-                    matchController.configure(nextMode, nmts.teams);
-                    if (nmts.haveTeams) { // respawn only for a competitive team match — see the setup path above
-                        fl::WorldBroadcaster::RespawnPolicy rp;
-                        rp.delayTicks = static_cast<uint32_t>(std::max(0.0, nextMode.respawnDelayS) * 60.0);
-                        rp.waves = nextMode.respawnWaves;
-                        rp.waveIntervalTicks = static_cast<uint32_t>(std::max(1.0, nextMode.waveIntervalS) * 60.0);
-                        broadcaster.setRespawnPolicy(rp);
-                    } else {
-                        broadcaster.disableRespawn(); // rotating into a no-match mode must not keep respawn on
-                    }
-                    broadcaster.setCombatFrozen(false);
-                    broadcaster.readmitPilots();
-                    log->log(LogLevel::Info, __FILE__, __LINE__, "match: rotated to next round");
-                });
-        });
+    matchController.setOnRotate([&broadcaster, &matchController, &gameLoop, &missionFactions, &rotationIndex, &cfg,
+                                 &assets, &botRoster, log]() {
+        gameLoop.enqueueSimCallback(
+            [&broadcaster, &matchController, &missionFactions, &rotationIndex, &cfg, &assets, &botRoster, log]() {
+                if (botRoster)
+                    botRoster->clear(); // #87: retire bots before the world reset; refills next step
+                broadcaster.resetWorld();
+                std::string modeRef = cfg.matchMode;
+                if (!cfg.rotationItems.empty()) {
+                    rotationIndex = (rotationIndex + 1) % cfg.rotationItems.size();
+                    auto [mref, moderef] = fl::splitRotationItem(cfg.rotationItems[rotationIndex]);
+                    (void)mref;
+                    if (!moderef.empty())
+                        modeRef = moderef;
+                }
+                const fl::GameModeDef nextMode = fl::resolveGameMode(modeRef, &assets, *log);
+                fl::MatchTeamSetup nmts = fl::buildMatchTeams(nextMode, missionFactions, *log);
+                broadcaster.setDamageRules(fl::effectiveDamageRules(nextMode, cfg.friendlyFire, cfg.crashDamage));
+                matchController.configure(nextMode, nmts.teams);
+                if (nmts.haveTeams) { // respawn only for a competitive team match — see the setup path above
+                    fl::WorldBroadcaster::RespawnPolicy rp;
+                    rp.delayTicks = static_cast<uint32_t>(std::max(0.0, nextMode.respawnDelayS) * 60.0);
+                    rp.waves = nextMode.respawnWaves;
+                    rp.waveIntervalTicks = static_cast<uint32_t>(std::max(1.0, nextMode.waveIntervalS) * 60.0);
+                    broadcaster.setRespawnPolicy(rp);
+                } else {
+                    broadcaster.disableRespawn(); // rotating into a no-match mode must not keep respawn on
+                }
+                broadcaster.setCombatFrozen(false);
+                broadcaster.readmitPilots();
+                log->log(LogLevel::Info, __FILE__, __LINE__, "match: rotated to next round");
+            });
+    });
 
     // Data-parallel sim tick: the worker pool that parallelises the per-entity AI + integrate
     // passes. Constructed before gameLoop.start() and outlives it (declared here in main's scope).

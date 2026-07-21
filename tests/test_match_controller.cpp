@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <catch2/catch_test_macros.hpp>
 
-#include "match/BuiltinGameModes.h"
+#include "match/BotFillPolicy.h"
 #include "match/MatchController.h"
 #include "match/TeamBalancer.h"
 
@@ -172,4 +172,13 @@ TEST_CASE("MatchController: warmup holds below minPlayers", "[match_controller]"
     mc.step(51); // countdown starts (endTick 53)
     mc.step(53);
     CHECK(mc.phase() == MatchPhase::Active);
+}
+
+TEST_CASE("BotFillPolicy: desiredBots fills to target, capped", "[bot_fill]") {
+    CHECK(desiredBots(0, 8, 16) == 8);   // no humans -> 8 bots
+    CHECK(desiredBots(3, 8, 16) == 5);   // 3 humans -> 5 bots
+    CHECK(desiredBots(8, 8, 16) == 0);   // full of humans -> no bots
+    CHECK(desiredBots(12, 8, 16) == 0);  // more humans than target -> no bots (clamped)
+    CHECK(desiredBots(0, 20, 16) == 16); // capped at maxBots
+    CHECK(desiredBots(2, 0, 16) == 0);   // fill 0 = disabled
 }

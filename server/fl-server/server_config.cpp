@@ -59,6 +59,13 @@ static const char* kDefaultToml =
     "# Seconds a disconnected player's team + score are held for reconnect (0 = disabled).\n"
     "reconnect_grace_s = 120\n"
     "\n"
+    "[bots]\n"
+    "# Fill the match with AI bots up to this many total participants (0 = no bots).\n"
+    "fill = 0\n"
+    "max_bots = 16\n"
+    "ai_script = \"builtin:fighter\"\n"
+    "balance_teams = true\n"
+    "\n"
     "[lobby]\n"
     "register = false\n"
     "url = \"https://lobby.fighters-legacy.org\"\n"
@@ -405,6 +412,26 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                 log->log(LogLevel::Warn, __FILE__, __LINE__,
                          "match.reconnect_grace_s out of range [0,3600]; using default");
         }
+
+        // [bots] (#87)
+        if (auto v = tomlInt(tbl["bots"]["fill"])) {
+            if (*v >= 0 && *v <= 128)
+                cfg.botsFill = static_cast<int>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "bots.fill out of range [0,128]; using default");
+        }
+        if (auto v = tomlInt(tbl["bots"]["max_bots"])) {
+            if (*v >= 0 && *v <= 127)
+                cfg.botsMax = static_cast<int>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "bots.max_bots out of range [0,127]; using default");
+        }
+        if (auto v = tbl["bots"]["entity_type"].value<std::string>())
+            cfg.botsEntityType = std::move(*v);
+        if (auto v = tbl["bots"]["ai_script"].value<std::string>())
+            cfg.botsAiScript = std::move(*v);
+        if (auto v = tbl["bots"]["balance_teams"].value<bool>())
+            cfg.botsBalanceTeams = *v;
 
         // [lobby]
         if (auto v = tbl["lobby"]["register"].value<bool>())

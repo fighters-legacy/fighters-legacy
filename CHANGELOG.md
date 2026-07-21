@@ -21,6 +21,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **server**: AI bot backfill (#87, Epic E #497). A new `[bots]` config (`fill` / `max_bots` /
+  `entity_type` / `ai_script` / `balance_teams`) fills a team match with server-side AI participants up
+  to a target count — bots are not network peers. `WorldBroadcaster::registerBotParticipant` /
+  `removeBotParticipant` give each bot a scoreboard row (badged, ping 0) and route its kills/deaths
+  through the participant model; a `BotRoster` (fl-server) spawns `builtin:fighter` bots on the smaller
+  team, retires/backfills to track the human count, reaps killed bots, and clears on rotation. Pure
+  `desiredBots` fill math in `engine-match`.
 - **docs**: game-mode authoring guide (#525, Epic E #497). New
   `docs/modding/game-modes.md` documents the `modes/*.toml` schema, the builtin modes, mode selection
   (`[match] mode` / `mission@mode`), the match lifecycle, and `validate-mode`. `docs/fl-server-config.md`

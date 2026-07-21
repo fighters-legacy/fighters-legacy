@@ -880,6 +880,15 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Force an immediate respawn of a participant (the admin `respawn` command). Sim-thread.
     void respawnParticipant(uint32_t participantId);
 
+    // ── AI bot participants (#87) — sim-thread only ──────────────────────────
+    // Register a spawned AI bot as a scoreboard participant: it gets a roster row (badged bot), a score
+    // row, and its kills/deaths credit through the combat path (participantForEntity resolves its
+    // entity via m_botEntities). fl-server's BotRoster owns the entity + AI controller; this only wires
+    // the scoreboard/roster side. participantId must be a bot id (kBotParticipantBase + n).
+    void registerBotParticipant(uint32_t participantId, EntityId entity, const std::string& callsign, uint16_t faction);
+    // Remove a bot participant (retired or killed): drops its roster row, score, and entity mapping.
+    void removeBotParticipant(uint32_t participantId);
+
     // ── reconnection (#524) — sim-thread only ────────────────────────────────
     // Grace window (in ticks) during which a disconnecting player's team + score are held under their
     // client GUID and restored on reconnect. 0 = disabled (the pre-#524 behavior). Call before
