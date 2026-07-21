@@ -36,8 +36,8 @@ void SpatialIndex::setCellSize(double cellSizeM) {
 }
 
 void SpatialIndex::insert(uint32_t entityIdx, const double pos[3]) {
-    const auto cx = static_cast<int64_t>(std::floor(pos[0] / m_cellSize));
-    const auto cz = static_cast<int64_t>(std::floor(pos[2] / m_cellSize));
+    const auto cx = cellCoordFloor(pos[0] / m_cellSize);
+    const auto cz = cellCoordFloor(pos[2] / m_cellSize);
     const CellKey key{cx, cz};
     auto it = m_grid.find(key);
     if (it == m_grid.end()) {
