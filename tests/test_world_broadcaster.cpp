@@ -1525,6 +1525,37 @@ TEST_CASE("WorldBroadcaster: match roster broadcasts joins, sanitizes callsigns,
     }
 }
 
+TEST_CASE("WorldBroadcaster: respawn enrolls on death and respawnParticipant respawns (#648)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    em.addEventHandler(&broadcaster);
+
+    fl::WorldBroadcaster::RespawnPolicy policy;
+    policy.delayTicks = 5;
+    broadcaster.setRespawnPolicy(policy);
+
+    connectPilotPeer(broadcaster, net, 0u);
+    const auto ack = parseSendAck(net);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    REQUIRE(em.liveCount() == 1u);
+
+    // Kill the pilot's aircraft. The Died event enrolls a respawn; the entity teardown is deferred.
+    em.applyDamage({ack.assignedEntityIdx, ack.assignedEntityGen}, 200.f, fl::EntityId::null());
+    broadcaster.onTick(1.0 / 60.0, 2u); // Died fires; processRespawns cleans up the dead entity
+    broadcaster.onTick(1.0 / 60.0, 3u);
+    CHECK(em.liveCount() == 0u);             // dead, awaiting respawn
+    CHECK(broadcaster.getPeerCount() == 1u); // still connected
+
+    // Force respawn (the admin path) brings the pilot back with a fresh aircraft.
+    broadcaster.respawnParticipant(0u);
+    broadcaster.onTick(1.0 / 60.0, 4u);
+    CHECK(em.liveCount() == 1u);
+}
+
 TEST_CASE("WorldBroadcaster: match state + event sink + resetWorld (#523)", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;

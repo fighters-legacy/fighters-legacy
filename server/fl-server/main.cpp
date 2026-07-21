@@ -1495,6 +1495,20 @@ int main(int argc, char** argv) {
         matchController.configure(gameMode, mts.teams);
         matchController.setEndingSeconds(static_cast<double>(cfg.matchEndScreenS));
 
+        // Respawn policy from the mode (#648): a dead pilot respawns on request after the delay. Enabled
+        // ONLY for a competitive team match — the no-match free-flight default (haveTeams == false) leaves
+        // a dead pilot's airframe in place exactly as before #648, so a peer that never requests a respawn
+        // (e.g. a load-test bot) is not silently removed from the world. Without this gate, a free-flight
+        // pilot's death despawns its entity and drops the m_peerEntities mapping; with nothing to respawn
+        // it, the server's entity set drains away under a swarm of crash-and-stay-dead clients.
+        if (mts.haveTeams) {
+            fl::WorldBroadcaster::RespawnPolicy rp;
+            rp.delayTicks = static_cast<uint32_t>(std::max(0.0, gameMode.respawnDelayS) * 60.0);
+            rp.waves = gameMode.respawnWaves;
+            rp.waveIntervalTicks = static_cast<uint32_t>(std::max(1.0, gameMode.waveIntervalS) * 60.0);
+            broadcaster.setRespawnPolicy(rp);
+        }
+
         matchController.setOnPhase([&broadcaster, &matchController, log](fl::MatchPhase /*from*/, fl::MatchPhase to) {
             broadcaster.setCombatFrozen(matchController.combatFrozen());
             char m[64];
@@ -1613,6 +1627,15 @@ int main(int argc, char** argv) {
                     fl::MatchTeamSetup nmts = fl::buildMatchTeams(nextMode, missionFactions, *log);
                     broadcaster.setDamageRules(fl::effectiveDamageRules(nextMode, cfg.friendlyFire, cfg.crashDamage));
                     matchController.configure(nextMode, nmts.teams);
+                    if (nmts.haveTeams) { // respawn only for a competitive team match — see the setup path above
+                        fl::WorldBroadcaster::RespawnPolicy rp;
+                        rp.delayTicks = static_cast<uint32_t>(std::max(0.0, nextMode.respawnDelayS) * 60.0);
+                        rp.waves = nextMode.respawnWaves;
+                        rp.waveIntervalTicks = static_cast<uint32_t>(std::max(1.0, nextMode.waveIntervalS) * 60.0);
+                        broadcaster.setRespawnPolicy(rp);
+                    } else {
+                        broadcaster.disableRespawn(); // rotating into a no-match mode must not keep respawn on
+                    }
                     broadcaster.setCombatFrozen(false);
                     broadcaster.readmitPilots();
                     log->log(LogLevel::Info, __FILE__, __LINE__, "match: rotated to next round");

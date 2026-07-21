@@ -409,6 +409,34 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             return std::string(buf);
         });
 
+    // respawn <peerId>  -- force a dead peer to respawn immediately (#648)
+    registry.registerCommand("respawn", "respawn <peerId>  -- force a dead peer to respawn now",
+                             [ctx](std::span<std::string_view> args) -> std::string {
+                                 if (args.empty())
+                                     return "usage: respawn <peerId>";
+                                 if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
+                                     return "respawn: not available";
+                                 std::string idArg(args[0]);
+                                 if (!isNumeric(idArg))
+                                     return "respawn: invalid peer ID";
+                                 uint32_t peerId = 0;
+                                 if (auto [p, ec] = std::from_chars(idArg.data(), idArg.data() + idArg.size(), peerId);
+                                     ec != std::errc{})
+                                     return "respawn: invalid peer ID";
+                                 ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId]() {
+                                     ctx.sim.broadcaster->respawnParticipant(peerId);
+                                     char m[64];
+                                     std::snprintf(m, sizeof(m), "[admin] respawned peer %u", peerId);
+                                     std::printf("%s\n", m);
+                                     if (ctx.rcon.shell)
+                                         ctx.rcon.shell->print(m);
+                                     std::fflush(stdout);
+                                 });
+                                 char buf[64];
+                                 std::snprintf(buf, sizeof(buf), "respawn: queued peer %u", peerId);
+                                 return std::string(buf);
+                             });
+
     // seats <entityIdx>  -- inspect a crewed aircraft's seat roster/occupancy (#974)
     registry.registerCommand("seats", "seats <entityIdx>  -- show a crewed aircraft's seat roster and occupancy",
                              [ctx](std::span<std::string_view> args) -> std::string {

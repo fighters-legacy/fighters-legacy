@@ -478,6 +478,8 @@ inline constexpr uint8_t kInputButtonChaffFlare = 0x08;  // bit 3 = chaff/flare 
 inline constexpr uint8_t kInputButtonEcm = 0x10;         // bit 4 = ECM jammer (level, #529)
 inline constexpr uint8_t kInputButtonEject = 0x20;       // bit 5 = eject (edge, #672)
 inline constexpr uint8_t kInputButtonWheelBrake = 0x40;  // bit 6 = wheel brakes (level, #700, ground only)
+inline constexpr uint8_t kInputButtonRespawn = 0x80;     // bit 7 = respawn request (edge, #648) — LAST free
+                                                         // bit; the next button must open a uint16 field.
 
 struct MsgClientInput {
     uint8_t msgId{static_cast<uint8_t>(MsgId::ClientInput)};

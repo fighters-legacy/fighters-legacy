@@ -531,6 +531,12 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         case fl::ConnectRefusalCode::EntitlementRequired:
             f = SessionFailure::EntitlementRequired;
             break;
+        case fl::ConnectRefusalCode::MatchFull:
+            f = SessionFailure::MatchFull;
+            break;
+        case fl::ConnectRefusalCode::BadPassword:
+            f = SessionFailure::BadPassword;
+            break;
         case fl::ConnectRefusalCode::Generic:
             break; // ConnectionRefused
         }

@@ -21,6 +21,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **net**: death → respawn state machine with mode-defined delay (#648, Epic E #497). A dead pilot is
+  enrolled in a per-participant respawn table (`WorldBroadcaster::setRespawnPolicy` from the game mode:
+  delay, optional waves) and respawns on request — the new `kInputButtonRespawn` (MsgClientInput bit 7,
+  edge-detected; default key Backspace) for humans, automatically for bots (#87) — once the delay
+  elapses and combat is not frozen. `respawnParticipant` + an admin `respawn <peerId>` command force it;
+  the entity teardown is deferred out of the damage event to a per-tick `processRespawns`. Replaces the
+  old behavior where a killed peer's aircraft simply disappeared until reconnect.
 - **match**: match lifecycle, team scoring, and in-process rotation (#523, Epic E #497). A new
   `MatchController` runs the deterministic Idle→Warmup→Active→Ending→PostMatch state machine (score /
   time limits, warmup gated on min players, mission-driven `forceEnd`, a rotate hook). `WorldBroadcaster`

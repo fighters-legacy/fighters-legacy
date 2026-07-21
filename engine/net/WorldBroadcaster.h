@@ -104,6 +104,7 @@ struct PeerInputState {
     bool hasAppliedSeq{false};    // false until the first input is drained + applied (#427 TLV gate)
     bool ewmaSeeded{false};       // false until EWMA receives its first sample
     bool ejectHeld{false};        // last-tick eject bit, for rising-edge detection (#672)
+    bool respawnHeld{false};      // last-tick respawn bit, for rising-edge detection (#648)
     // Jitter buffer: initialized to depth 1; sized from estimatedDelayTicks on first input,
     // then continuously adjusted by the adaptive resize loop in WorldBroadcaster::onTick.
     JitterBuffer jitterBuffer{1};
@@ -846,6 +847,28 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // participant join. Observers are untouched. Sim-thread only (the rotation path).
     void readmitPilots();
 
+    // ── respawn + slot management (#648) — sim-thread only ───────────────────
+    struct RespawnPolicy {
+        uint32_t delayTicks{300};        // delay from death to eligible respawn (5 s at 60 Hz)
+        bool waves{false};               // round respawns up to a wave boundary
+        uint32_t waveIntervalTicks{900}; // 15 s waves
+    };
+    // Enable respawn with the given policy (from the game mode). Unset ⇒ respawn disabled (the pre-#648
+    // behavior: a dead peer stays entity-less until reconnect). Call before gameLoop.start() or via
+    // enqueueSimCallback on rotation.
+    void setRespawnPolicy(const RespawnPolicy& policy) {
+        m_respawnPolicy = policy;
+        m_respawnEnabled = true;
+    }
+    // Disable respawn (a no-match mode, e.g. free-flight): a dead peer's airframe stays in place rather
+    // than being despawned to await a respawn that a non-requesting peer never asks for. Used on rotation
+    // INTO a no-match mode so a previously-enabled policy does not persist. Sim-thread / pre-start.
+    void disableRespawn() noexcept {
+        m_respawnEnabled = false;
+    }
+    // Force an immediate respawn of a participant (the admin `respawn` command). Sim-thread.
+    void respawnParticipant(uint32_t participantId);
+
     // Called on the sim thread at the end of onConnect, after the peer's entity and controller exist.
     // The implementation spawns the peer's flight (N AI members), registers their controllers, and
     // returns the formation it created. kNoFormation (the default with no hook installed) = the peer
@@ -1284,6 +1307,19 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     void sendScoreboardTo(uint32_t peerId);      // unicast to one peer (on admit)
     void appendScoreboardRows(std::vector<uint8_t>& pkt, std::size_t begin, std::size_t count,
                               const std::vector<uint32_t>& order) const;
+
+    // ── respawn (#648) ───────────────────────────────────────────────────────
+    struct RespawnRec {
+        uint64_t dueTick{0};      // earliest tick this participant may respawn
+        uint16_t factionIndex{0}; // team to respawn on
+        bool isBot{false};
+        bool requested{false}; // a human pressed respawn (queued if before dueTick); bots auto-respawn
+    };
+    std::unordered_map<uint32_t, RespawnRec> m_respawn; // participantId -> pending respawn
+    std::vector<uint32_t> m_pendingDeathCleanup;        // peers whose entity died this tick (deferred despawn)
+    RespawnPolicy m_respawnPolicy{};
+    bool m_respawnEnabled{false};
+    void processRespawns(); // drain death cleanup + fire due respawns; called from onTick
 
     // ── match roster (#996) — sim-thread only ───────────────────────────────
     // participantId -> display record. Humans key on peerId; bots on kBotParticipantBase + n (#87).

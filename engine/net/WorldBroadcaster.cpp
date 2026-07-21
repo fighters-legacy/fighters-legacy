@@ -820,6 +820,15 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                 ejectPilot(eit->second);
         }
         ps.ejectHeld = ejectNow;
+
+        // Respawn request (#648): rising edge marks the intent. Fired at dueTick by processRespawns
+        // (queued if pressed early); a repeat/held bit is one request.
+        const bool respawnNow = (ps.buttons & kInputButtonRespawn) != 0;
+        if (respawnNow && !ps.respawnHeld) {
+            if (auto rit = m_respawn.find(peerId); rit != m_respawn.end())
+                rit->second.requested = true;
+        }
+        ps.respawnHeld = respawnNow;
     }
 
     // AI auto-eject (#672): a scripted/AI pilot punches out when its airframe is critically hit rather
@@ -1873,6 +1882,9 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         m_scoreboardDirty = false;
     }
 
+    // Respawn (#648): deferred death teardown + fire any due respawns (humans on request, bots auto).
+    processRespawns();
+
     // Shutdown countdown: fire at each interval and at T=0.
     if (m_shuttingDown) {
         using namespace std::chrono;
@@ -2523,6 +2535,7 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     m_peerPendingDespawn.erase(peerId);
     m_peerTraceWriters.erase(peerId); // close this peer's input trace (#560), if any
     m_scores.erase(peerId);           // ENet reuses peer ids; a rejoiner must not inherit tallies (#626)
+    m_respawn.erase(peerId);          // drop any pending respawn (#648)
     m_activePeerCount.fetch_sub(1, std::memory_order_relaxed);
 
     m_pendingAdminDrains.erase(std::remove_if(m_pendingAdminDrains.begin(), m_pendingAdminDrains.end(),
@@ -3402,6 +3415,25 @@ void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
             ++s.losses;
             s.dirty = true;
             m_scoreboardDirty = true;
+
+            // Enroll the dead participant for respawn (#648). Only a HUMAN peer here (bots enroll via
+            // registerBotParticipant, #87); the entity teardown is deferred to processRespawns since we
+            // are inside an entity-event callback. Store the team from the roster.
+            if (m_respawnEnabled && peerIdForEntity(event.subject) != kNoOwningPeer) {
+                RespawnRec rec;
+                uint64_t due = m_currentTick + m_respawnPolicy.delayTicks;
+                if (m_respawnPolicy.waves && m_respawnPolicy.waveIntervalTicks > 0) {
+                    const uint64_t iv = m_respawnPolicy.waveIntervalTicks;
+                    due = ((due + iv - 1) / iv) * iv; // round up to the next wave boundary
+                }
+                rec.dueTick = due;
+                if (const auto rit = m_roster.find(victimPeer); rit != m_roster.end())
+                    rec.factionIndex = rit->second.factionIndex;
+                rec.isBot = false;
+                rec.requested = false;
+                m_respawn[victimPeer] = rec;
+                m_pendingDeathCleanup.push_back(victimPeer);
+            }
         }
 
         // Feed the match controller (#523): killer + victim participants, and whether it was a team
@@ -5399,6 +5431,8 @@ void WorldBroadcaster::resetWorld() {
     // In-flight projectiles are left to expire on their own TTL (a rotation is rare, and they cannot
     // score during the Ending freeze) rather than reaching into the ProjectileSystem's mirror entities.
     m_pendingKillEvents.clear();
+    m_respawn.clear(); // #648: clear pending respawns for the new round
+    m_pendingDeathCleanup.clear();
     setMissionPlayerSlots({});
     m_missionRoster.clear();
     for (auto& [pid, sc] : m_scores) {
@@ -5437,6 +5471,70 @@ void WorldBroadcaster::readmitPilots() {
         if (m_matchParticipantSink)
             m_matchParticipantSink(peerId, myFaction, /*isBot=*/false, /*joined=*/true);
     }
+}
+
+// ── respawn (#648) ───────────────────────────────────────────────────────────
+void WorldBroadcaster::respawnParticipant(uint32_t participantId) {
+    // Bots (#87) respawn through their own path; here we handle human peers.
+    const auto pit = m_peerInputs.find(participantId);
+    if (pit == m_peerInputs.end() || !pit->second.handshakeComplete || pit->second.role != PeerRole::Pilot)
+        return;
+
+    uint16_t faction = kNoFaction;
+    if (const auto rit = m_respawn.find(participantId); rit != m_respawn.end())
+        faction = rit->second.factionIndex;
+    // If the team was removed (e.g. by rotation) re-balance.
+    if (faction == kNoFaction && m_teamAssigner) {
+        std::optional<uint16_t> t = m_teamAssigner(participantId);
+        if (t.has_value())
+            faction = *t;
+    }
+
+    // Clean up any dangling entity mapping first, then spawn fresh.
+    if (m_peerEntities.count(participantId) != 0u)
+        despawnPeerEntity(participantId);
+    const EntityId assigned = admitPilot(participantId, resolvePlayerEntityType(""), faction);
+    sendConnectAck(participantId, assigned, PeerRole::Pilot);
+
+    uint16_t myFaction = 0;
+    if (const EntityState* s = m_entityManager.get(assigned))
+        myFaction = s->factionIndex;
+    if (auto rit = m_roster.find(participantId); rit != m_roster.end()) {
+        RosterRec rec = rit->second;
+        rec.factionIndex = myFaction;
+        upsertRoster(participantId, rec);
+    }
+    if (m_matchParticipantSink)
+        m_matchParticipantSink(participantId, myFaction, /*isBot=*/false, /*joined=*/true);
+
+    m_respawn.erase(participantId);
+}
+
+void WorldBroadcaster::processRespawns() {
+    // Deferred death teardown (safe here, outside the entity-event callback).
+    if (!m_pendingDeathCleanup.empty()) {
+        for (uint32_t peerId : m_pendingDeathCleanup) {
+            if (m_peerEntities.count(peerId) != 0u)
+                despawnPeerEntity(peerId);
+        }
+        m_pendingDeathCleanup.clear();
+    }
+
+    if (m_respawn.empty() || m_combatFrozen)
+        return; // no pending respawns, or combat frozen (Ending/PostMatch) — hold
+
+    // Collect the ids that are due AND requested (humans) or automatic (bots); respawnParticipant
+    // erases from m_respawn, so gather first.
+    std::vector<uint32_t> ready;
+    for (const auto& [pid, rec] : m_respawn) {
+        if (m_currentTick < rec.dueTick)
+            continue;
+        if (!rec.isBot && !rec.requested)
+            continue; // a human must ask to respawn (they may want to keep spectating)
+        ready.push_back(pid);
+    }
+    for (uint32_t pid : ready)
+        respawnParticipant(pid);
 }
 
 void WorldBroadcaster::sendConnectRefusal(uint32_t peerId, ConnectRefusalCode code, const char* reason) {
