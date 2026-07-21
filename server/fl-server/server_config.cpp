@@ -47,8 +47,13 @@ static const char* kDefaultToml =
     "\n"
     "[rotation]\n"
     "order = \"sequential\"\n"
+    "# Each item is a mission ref, optionally with a game mode: \"mission@builtin:tdm\".\n"
     "items = []\n"
     "time_limit_min = 0\n"
+    "\n"
+    "[match]\n"
+    "# Default game mode: a \"builtin:\" id (free-flight, tdm) or a pack modes/ asset stem.\n"
+    "mode = \"builtin:free-flight\"\n"
     "\n"
     "[lobby]\n"
     "register = false\n"
@@ -379,6 +384,10 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
         if (auto v = tomlInt(tbl["rotation"]["time_limit_min"]))
             cfg.rotationTimeLimitMin = static_cast<int>(*v);
+
+        // [match] (#521)
+        if (auto v = tbl["match"]["mode"].value<std::string>())
+            cfg.matchMode = std::move(*v);
 
         // [lobby]
         if (auto v = tbl["lobby"]["register"].value<bool>())

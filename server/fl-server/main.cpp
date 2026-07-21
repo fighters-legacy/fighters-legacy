@@ -15,6 +15,7 @@
 //
 // See docs/fl-server-config.md for the full operator configuration reference.
 // fl-lobby integration is tracked in issue #36.
+#include "GameModeSource.h"
 #include "IpListFile.h"
 #include "MissionSource.h"
 #include "NetworkFactory.h"
@@ -329,6 +330,15 @@ int main(int argc, char** argv) {
     std::string missionToLoad = flagMission;
     if (missionToLoad.empty() && !cfg.rotationItems.empty())
         missionToLoad = cfg.rotationItems.front();
+    // A rotation item may pair a mission with a game mode: "mission@builtin:tdm" (#521). Split the mode
+    // ref off so it never reaches the mission loader; an item without '@' uses the [match] mode default.
+    std::string modeRefToLoad = cfg.matchMode;
+    {
+        auto [missionRef, modeRef] = fl::splitRotationItem(missionToLoad);
+        missionToLoad = missionRef;
+        if (!modeRef.empty())
+            modeRefToLoad = modeRef;
+    }
     if (!cfg.rotationItems.empty() && flagMission.empty()) {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "rotation: %zu item(s), order=%s (loading first: %s)", cfg.rotationItems.size(),
@@ -450,6 +460,19 @@ int main(int argc, char** argv) {
 
     AssetManager assets(std::move(packs), *log);
     assets.initialize(nullptr); // headless — window is null; NeedsConfiguration packs dropped
+
+    // Resolve the active game mode (#521): a builtin id, a pack modes/ asset, or the free-flight
+    // fallback. The MatchController (#523) consumes it; landing it here proves the resolution path and
+    // surfaces a bad [match] mode / rotation @mode at startup. Serial-equivalent: pure config read.
+    const fl::GameModeDef gameMode = fl::resolveGameMode(modeRefToLoad, &assets, *log);
+    {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "game mode: %s (%s)%s", gameMode.id.c_str(),
+                      gameMode.name.empty() ? gameMode.id.c_str() : gameMode.name.c_str(),
+                      gameMode.useMissionSides ? " [mission sides]" : "");
+        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+    }
+    (void)gameMode; // consumed by the MatchController in #523
 
     fl::TerrainStreamer terrainStreamer(fl::builtinWorldTerrainManifest(), assets, *p.asyncFilesystem, nullptr);
     log->log(LogLevel::Info, __FILE__, __LINE__, "terrain: headless streamer initialized");

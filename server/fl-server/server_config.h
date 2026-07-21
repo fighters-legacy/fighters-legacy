@@ -21,8 +21,13 @@ struct ServerConfig {
 
     // [rotation]  — Phase 2: parsed and stored; rotation logic pending
     std::string rotationOrder = "sequential";
-    std::vector<std::string> rotationItems;
+    std::vector<std::string> rotationItems; // each "mission" or "mission@mode" (#521)
     int rotationTimeLimitMin = 0;
+
+    // [match]  — multiplayer match framework (#497). The default game mode for rotation items that do
+    // not name their own (mission@mode) and for non-rotation servers. A "builtin:" id or a pack modes/
+    // asset stem; unknown ids fall back to builtin:free-flight.
+    std::string matchMode = "builtin:free-flight";
 
     // [lobby]  — Phase 2: parsed and stored; lobby registration pending (issue #36)
     bool lobbyRegister = false;

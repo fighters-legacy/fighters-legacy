@@ -21,6 +21,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **match**: data-driven game-mode framework (#521, Epic E #497). A new `engine-match` library defines
+  `GameModeDef` (teams, scoring, respawn policy, win conditions, warmup, friendly-fire override) and
+  `parseGameModeToml`, the single parser both the engine and the new `validate-mode` tool call. Two
+  compiled-in modes ship — `builtin:free-flight` (the default; byte-identical to today's sandbox) and
+  `builtin:tdm` — plus a `modes/*.toml` content-pack asset type (`AssetType::GameMode`). fl-server
+  selects a mode via `[match] mode` or a rotation item's `mission@mode` suffix and resolves it at
+  startup (builtin id → pack asset → free-flight fallback); the MatchController consumes it in #523.
 - **network**: player callsigns, match roster broadcast, and ENet id-space groundwork (#996, Epic E
   #497). `MsgConnectRequest` gains a fixed `callsign[32]` field (from `PilotProfile::callsign`, server-
   sanitized) and `MsgConnectAck` a `peerId` tail field so a client learns its own participant id. A new

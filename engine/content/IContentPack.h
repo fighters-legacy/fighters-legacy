@@ -87,6 +87,14 @@ class IContentPack {
         return std::nullopt;
     }
 
+    // Game-mode TOML (#521). NON-pure with a nullopt default for the same reason as loadLivery/
+    // loadAirportDef: existing IContentPack implementors keep compiling, and a pack that ships no
+    // game modes simply provides none. FolderContentPack overrides it to serve modes/<name>.toml.
+    virtual std::optional<GameModeData> loadGameMode(const char* name) {
+        (void)name;
+        return std::nullopt;
+    }
+
     virtual std::vector<std::string> listAssets(AssetType type) const = 0;
 
     // Returns the raw text of "<modDir>/data/<name>", or nullopt if not present.

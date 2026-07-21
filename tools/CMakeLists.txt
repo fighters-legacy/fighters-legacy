@@ -209,6 +209,15 @@ target_include_directories(validate-mission-lib PUBLIC
 add_executable(validate-mission validate-mission/main.cpp)
 target_link_libraries(validate-mission PRIVATE validate-mission-lib)
 
+# Game-mode validator (#521): shares the runtime parseGameModeToml so validator and engine agree.
+add_library(validate-mode-lib STATIC validate-mode/mode_validator.cpp)
+target_link_libraries(validate-mode-lib PRIVATE engine-match)
+target_include_directories(validate-mode-lib PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/validate-mode")
+
+add_executable(validate-mode validate-mode/main.cpp)
+target_link_libraries(validate-mode PRIVATE validate-mode-lib)
+
 add_library(validate-licenses-lib STATIC validate-licenses/license_validator.cpp)
 target_link_libraries(validate-licenses-lib PUBLIC tomlplusplus::tomlplusplus)
 target_include_directories(validate-licenses-lib PUBLIC
@@ -264,6 +273,7 @@ install(TARGETS
     validate-sensor
     validate-entity
     validate-mission
+    validate-mode
     validate-mesh
     validate-playlist
     validate-licenses
