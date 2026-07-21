@@ -1865,6 +1865,14 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // despawn and its credit arrive in the same tick's traffic.
     flushCombatEvents();
 
+    // Full scoreboard (#523), unreliable — every ~2 s while dirty, so every peer sees everyone's
+    // kills/deaths/score/ping. Cheap and self-describing; a dropped one is replaced next interval.
+    if (m_scoreboardDirty && tickIndex - m_lastScoreboardTick >= 120) {
+        broadcastScoreboard();
+        m_lastScoreboardTick = tickIndex;
+        m_scoreboardDirty = false;
+    }
+
     // Shutdown countdown: fire at each interval and at T=0.
     if (m_shuttingDown) {
         using namespace std::chrono;
@@ -2332,7 +2340,14 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         rec.role = grantedRole;
         rec.isBot = false;
         upsertRoster(peerId, rec);
+        // A pilot (not an observer) is a match participant with a scoreboard row (#523).
+        if (grantedRole == PeerRole::Pilot && m_matchParticipantSink)
+            m_matchParticipantSink(peerId, myFaction, /*isBot=*/false, /*joined=*/true);
     }
+
+    // Match state + scoreboard for the late joiner (#523): the current phase/scores + everyone's row.
+    sendMatchStateTo(peerId);
+    sendScoreboardTo(peerId);
 }
 
 void WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
@@ -2402,6 +2417,9 @@ void WorldBroadcaster::setPeerFaction(uint32_t peerId, uint16_t faction) {
     RosterRec rec = rit->second;
     rec.factionIndex = faction;
     upsertRoster(peerId, rec);
+    // Re-key the participant's team in the match (#523): participantJoined updates the faction.
+    if (m_matchParticipantSink && rec.role == PeerRole::Pilot)
+        m_matchParticipantSink(peerId, faction, /*isBot=*/false, /*joined=*/true);
 }
 
 void WorldBroadcaster::despawnPeerEntity(uint32_t peerId) {
@@ -2494,6 +2512,8 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     std::snprintf(msg, sizeof(msg), "peer %u disconnected", peerId);
     m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
 
+    if (m_matchParticipantSink)
+        m_matchParticipantSink(peerId, 0, false, /*joined=*/false); // match participant left (#523)
     clearSeatOccupant(peerId); // a gunner (#974) reverts its non-fly seat to its bot + re-broadcasts
     despawnPeerEntity(peerId); // a pilot's own aircraft is torn down (no-op for observer/gunner)
     removeRoster(peerId);      // broadcast the leave + drop the roster record (#996; before m_peerInputs erase)
@@ -2773,42 +2793,45 @@ void WorldBroadcaster::runWeaponsPass(double simDt, uint64_t tickIndex) {
 
     // 1. Fire intents → validated requests. Serial and cheap: FireControl is pure per-entity state.
     m_fireRequests.clear();
-    for (auto& [idx, ce] : m_controlledEntities) {
-        // A crewed aircraft (#969) evaluates fire per seat over each seat's disjoint loadout
-        // partition; the single-seat path below is untouched (byte-identical) for a plain fighter.
-        if (ce.crew.crewed()) {
-            runCrewedFire(ce, idx, tickIndex);
-            continue;
-        }
-        if (!ce.lastInputValid || ce.fire.loadout.empty())
-            continue;
-        const EntityState* st = m_entityManager.get(ce.id);
-        if (!st || st->dead)
-            continue;
-        const bool hold = m_formations.weaponsHoldFor(ce.id); // #610's order, with teeth at last
-        evaluateFire(ce.fire, *m_weaponRegistry, ce.lastInput, hold, tickIndex, idx, m_fireRequests);
-        // The live loadout is the payload truth from here on (#625): releases shrink what the
-        // integrator carries next tick.
-        ce.payload.extra_mass_kg = ce.fire.loadout.payloadMassKg;
-        ce.payload.extra_cd0 = ce.fire.loadout.payloadCd0;
-
-        // The pre-launch LOCK cue (#628), at the sensing cadence so it costs one lobe test per
-        // peer per 100 ms: would the SELECTED seeker take the designated target right now? Peers
-        // only — AI reads its contacts directly and needs no annunciator.
-        if (const uint32_t peer = peerIdForEntity(ce.id); peer != kNoOwningPeer && (tickIndex + idx) % 6 == 0) {
-            bool cue = false;
-            if (const StationState* sel = ce.fire.loadout.selectedStation();
-                sel && sel->weaponIndex != UINT32_MAX && sel->rounds > 0) {
-                const WeaponDef* w = m_weaponRegistry->byIndex(sel->weaponIndex);
-                if (w && w->seeker && w->seeker->type != SeekerType::Unguided) {
-                    const EntityId designated = designateFor(*st, peer);
-                    cue = designated.valid() &&
-                          m_projectileSystem.wouldAcquire(m_entityManager, sel->weaponIndex, *st, designated);
-                }
+    // Combat freeze (#523): during Ending/PostMatch no new fire intents are generated (the per-entity
+    // fire state is not advanced); in-flight projectiles below still resolve normally.
+    if (!m_combatFrozen)
+        for (auto& [idx, ce] : m_controlledEntities) {
+            // A crewed aircraft (#969) evaluates fire per seat over each seat's disjoint loadout
+            // partition; the single-seat path below is untouched (byte-identical) for a plain fighter.
+            if (ce.crew.crewed()) {
+                runCrewedFire(ce, idx, tickIndex);
+                continue;
             }
-            ce.fire.seekerCue = cue;
+            if (!ce.lastInputValid || ce.fire.loadout.empty())
+                continue;
+            const EntityState* st = m_entityManager.get(ce.id);
+            if (!st || st->dead)
+                continue;
+            const bool hold = m_formations.weaponsHoldFor(ce.id); // #610's order, with teeth at last
+            evaluateFire(ce.fire, *m_weaponRegistry, ce.lastInput, hold, tickIndex, idx, m_fireRequests);
+            // The live loadout is the payload truth from here on (#625): releases shrink what the
+            // integrator carries next tick.
+            ce.payload.extra_mass_kg = ce.fire.loadout.payloadMassKg;
+            ce.payload.extra_cd0 = ce.fire.loadout.payloadCd0;
+
+            // The pre-launch LOCK cue (#628), at the sensing cadence so it costs one lobe test per
+            // peer per 100 ms: would the SELECTED seeker take the designated target right now? Peers
+            // only — AI reads its contacts directly and needs no annunciator.
+            if (const uint32_t peer = peerIdForEntity(ce.id); peer != kNoOwningPeer && (tickIndex + idx) % 6 == 0) {
+                bool cue = false;
+                if (const StationState* sel = ce.fire.loadout.selectedStation();
+                    sel && sel->weaponIndex != UINT32_MAX && sel->rounds > 0) {
+                    const WeaponDef* w = m_weaponRegistry->byIndex(sel->weaponIndex);
+                    if (w && w->seeker && w->seeker->type != SeekerType::Unguided) {
+                        const EntityId designated = designateFor(*st, peer);
+                        cue = designated.valid() &&
+                              m_projectileSystem.wouldAcquire(m_entityManager, sel->weaponIndex, *st, designated);
+                    }
+                }
+                ce.fire.seekerCue = cue;
+            }
         }
-    }
     // Deterministic execution order regardless of map iteration: shooter idx, then seat (#969),
     // then station. For a single-seat entity seat is always 0, so this is identical to the old
     // (shooterIdx, station) ordering.
@@ -3116,6 +3139,20 @@ uint32_t WorldBroadcaster::peerIdForEntity(EntityId id) const noexcept {
     return kNoOwningPeer;
 }
 
+uint32_t WorldBroadcaster::participantForEntity(EntityId id) const noexcept {
+    // A human peer's aircraft resolves to its peerId; an AI bot's (#87) to its kBotParticipantBase id.
+    // Scoreboard/kill-feed/match scoring all key on the participant id.
+    const uint32_t peer = peerIdForEntity(id);
+    if (peer != kNoOwningPeer)
+        return peer;
+    if (id.valid()) {
+        const auto it = m_botEntities.find(id.index);
+        if (it != m_botEntities.end())
+            return it->second;
+    }
+    return kNoOwningPeer;
+}
+
 uint32_t WorldBroadcaster::occupantPeerFor(EntityId id, uint8_t seat) const noexcept {
     if (!id.valid())
         return kNoOwningPeer;
@@ -3358,12 +3395,23 @@ void WorldBroadcaster::broadcastCrewRoster(EntityId id) {
 void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
     switch (event.type) {
     case EntityEventType::Died: {
-        const uint32_t victimPeer = peerIdForEntity(event.subject);
-        const uint32_t killerPeer = peerIdForEntity(event.instigator);
+        const uint32_t victimPeer = participantForEntity(event.subject);
+        const uint32_t killerPeer = participantForEntity(event.instigator);
         if (victimPeer != kNoOwningPeer) {
             PeerScore& s = m_scores[victimPeer];
             ++s.losses;
             s.dirty = true;
+            m_scoreboardDirty = true;
+        }
+
+        // Feed the match controller (#523): killer + victim participants, and whether it was a team
+        // kill. sameFaction reads the still-live entity factions.
+        if (m_matchEventSink) {
+            bool sameFaction = false;
+            if (const EntityState* v = m_entityManager.get(event.subject))
+                if (const EntityState* k = m_entityManager.get(event.instigator))
+                    sameFaction = v->factionIndex != 0 && v->factionIndex == k->factionIndex;
+            m_matchEventSink(killerPeer, victimPeer, sameFaction);
         }
 
         CombatEventRecord rec{};
@@ -3379,12 +3427,16 @@ void WorldBroadcaster::onEntityEvent(const EntityEvent& event) {
         break;
     }
     case EntityEventType::ScoreAwarded: {
-        const uint32_t killerPeer = peerIdForEntity(event.instigator);
+        // Combat freeze (#523): no scoring accrues during the Ending/PostMatch phases.
+        if (m_combatFrozen)
+            break;
+        const uint32_t killerPeer = participantForEntity(event.instigator);
         if (killerPeer != kNoOwningPeer) {
             PeerScore& s = m_scores[killerPeer];
             ++s.kills;
             s.score += event.score;
             s.dirty = true;
+            m_scoreboardDirty = true;
         }
         break;
     }
@@ -5226,6 +5278,164 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
         (void)entityIdx;
         if (ce.crew.crewed())
             sendCrewRoster(peerId, ce.id);
+    }
+}
+
+// ── match lifecycle + scoring (#523) ────────────────────────────────────────
+void WorldBroadcaster::setMatchState(const MatchStatePod& state) {
+    m_matchState = state;
+    m_haveMatchState = true;
+    broadcastMatchState();
+}
+
+void WorldBroadcaster::sendMatchStateTo(uint32_t peerId) {
+    if (!m_haveMatchState)
+        return;
+    MsgMatchState msg{};
+    msg.phase = m_matchState.phase;
+    msg.scoreLimit = m_matchState.scoreLimit;
+    msg.teamCount = static_cast<uint8_t>(std::min<std::size_t>(m_matchState.teamScores.size(), 255));
+    msg.phaseEndTick = m_matchState.phaseEndTick;
+    std::snprintf(msg.modeId, sizeof(msg.modeId), "%s", m_matchState.modeId.c_str());
+    std::snprintf(msg.modeName, sizeof(msg.modeName), "%s", m_matchState.modeName.c_str());
+    std::vector<uint8_t> pkt;
+    pkt.reserve(sizeof(msg) + m_matchState.teamScores.size() * sizeof(MatchTeamScore));
+    appendMsg(pkt, msg);
+    for (const auto& [fac, score] : m_matchState.teamScores) {
+        MatchTeamScore rec{};
+        rec.factionIndex = fac;
+        rec.score = score;
+        appendMsg(pkt, rec);
+    }
+    m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/true);
+}
+
+void WorldBroadcaster::broadcastMatchState() {
+    for (const auto& [pid, pin] : m_peerInputs) {
+        if (pin.handshakeComplete)
+            sendMatchStateTo(pid);
+    }
+}
+
+void WorldBroadcaster::appendScoreboardRows(std::vector<uint8_t>& pkt, std::size_t begin, std::size_t count,
+                                            const std::vector<uint32_t>& order) const {
+    for (std::size_t i = begin; i < begin + count; ++i) {
+        const uint32_t pid = order[i];
+        const auto sit = m_scores.find(pid);
+        ScoreboardRow row{};
+        row.participantId = pid;
+        if (sit != m_scores.end()) {
+            row.score = sit->second.score;
+            row.kills = static_cast<uint16_t>(std::min<uint32_t>(sit->second.kills, 0xFFFFu));
+            row.deaths = static_cast<uint16_t>(std::min<uint32_t>(sit->second.losses, 0xFFFFu));
+        }
+        // Ping: humans carry their estimatedDelayTicks; bots have none.
+        if (!isBotParticipant(pid)) {
+            const auto pit = m_peerInputs.find(pid);
+            if (pit != m_peerInputs.end()) {
+                const uint32_t ms = static_cast<uint32_t>(pit->second.estimatedDelayTicks) * 1000u / 60u;
+                row.pingMs = static_cast<uint16_t>(std::min<uint32_t>(ms, 0xFFFFu));
+            }
+        }
+        // Team from the roster (the authoritative team record) else the live entity.
+        const auto rit = m_roster.find(pid);
+        row.factionIndex = (rit != m_roster.end()) ? rit->second.factionIndex : factionForPeer(pid);
+        appendMsg(pkt, row);
+    }
+}
+
+void WorldBroadcaster::sendScoreboardTo(uint32_t peerId) {
+    if (m_scores.empty())
+        return;
+    std::vector<uint32_t> order;
+    order.reserve(m_scores.size());
+    for (const auto& [pid, sc] : m_scores) {
+        (void)sc;
+        order.push_back(pid);
+    }
+    std::sort(order.begin(), order.end()); // deterministic
+    for (std::size_t i = 0; i < order.size(); i += kMaxScoreboardRowsPerPacket) {
+        const std::size_t n = std::min(kMaxScoreboardRowsPerPacket, order.size() - i);
+        MsgScoreboardHeader hdr{};
+        hdr.count = static_cast<uint8_t>(n);
+        std::vector<uint8_t> pkt;
+        pkt.reserve(sizeof(hdr) + n * sizeof(ScoreboardRow));
+        appendMsg(pkt, hdr);
+        appendScoreboardRows(pkt, i, n, order);
+        m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/false);
+    }
+}
+
+void WorldBroadcaster::broadcastScoreboard() {
+    for (const auto& [pid, pin] : m_peerInputs) {
+        if (pin.handshakeComplete)
+            sendScoreboardTo(pid);
+    }
+}
+
+void WorldBroadcaster::resetWorld() {
+    // Despawn every peer's aircraft (and its owned AI flight) via the existing teardown primitive.
+    std::vector<uint32_t> peerIds;
+    peerIds.reserve(m_peerEntities.size());
+    for (const auto& [pid, eid] : m_peerEntities) {
+        (void)eid;
+        peerIds.push_back(pid);
+    }
+    for (uint32_t pid : peerIds)
+        despawnPeerEntity(pid);
+
+    // Kill any remaining controlled entity (AI, mission objects). Copy the keys first — killing mutates
+    // m_controlledEntities.
+    std::vector<EntityId> controlled;
+    controlled.reserve(m_controlledEntities.size());
+    for (const auto& [idx, ce] : m_controlledEntities) {
+        (void)idx;
+        controlled.push_back(ce.id);
+    }
+    for (EntityId id : controlled)
+        killControlledAircraft(id);
+
+    // Clear match-scoped state; keep peers connected (m_peerInputs / m_roster / handshake survive).
+    // In-flight projectiles are left to expire on their own TTL (a rotation is rare, and they cannot
+    // score during the Ending freeze) rather than reaching into the ProjectileSystem's mirror entities.
+    m_pendingKillEvents.clear();
+    setMissionPlayerSlots({});
+    m_missionRoster.clear();
+    for (auto& [pid, sc] : m_scores) {
+        (void)pid;
+        sc = PeerScore{};
+    }
+    m_scoreboardDirty = true;
+}
+
+void WorldBroadcaster::readmitPilots() {
+    // Collect peer ids first — admitPilot / sendConnectAck mutate maps we are iterating.
+    std::vector<uint32_t> pilots;
+    for (const auto& [peerId, pin] : m_peerInputs) {
+        if (pin.handshakeComplete && pin.role == PeerRole::Pilot && m_peerEntities.count(peerId) == 0u)
+            pilots.push_back(peerId);
+    }
+    for (uint32_t peerId : pilots) {
+        uint16_t fac = kNoFaction;
+        if (m_teamAssigner) {
+            std::optional<uint16_t> t = m_teamAssigner(peerId);
+            if (!t.has_value())
+                continue; // no room — leave the pilot entity-less (a rare edge; they can retry)
+            fac = *t;
+        }
+        const EntityId assigned = admitPilot(peerId, resolvePlayerEntityType(""), fac);
+        sendConnectAck(peerId, assigned, PeerRole::Pilot);
+        // Keep the roster + match participant state consistent with the new team.
+        uint16_t myFaction = 0;
+        if (const EntityState* s = m_entityManager.get(assigned))
+            myFaction = s->factionIndex;
+        if (auto rit = m_roster.find(peerId); rit != m_roster.end()) {
+            RosterRec rec = rit->second;
+            rec.factionIndex = myFaction;
+            upsertRoster(peerId, rec);
+        }
+        if (m_matchParticipantSink)
+            m_matchParticipantSink(peerId, myFaction, /*isBot=*/false, /*joined=*/true);
     }
 }
 

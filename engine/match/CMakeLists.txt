@@ -4,6 +4,7 @@
 # (the engine-mission split precedent), so engine-net never links engine-match.
 add_library(engine-match STATIC
     GameModeParser.cpp
+    MatchController.cpp
 )
 
 # Expose engine/ as the public include root so consumers use #include "match/GameModeDef.h".

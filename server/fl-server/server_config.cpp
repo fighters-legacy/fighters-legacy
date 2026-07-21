@@ -54,6 +54,8 @@ static const char* kDefaultToml =
     "[match]\n"
     "# Default game mode: a \"builtin:\" id (free-flight, tdm) or a pack modes/ asset stem.\n"
     "mode = \"builtin:free-flight\"\n"
+    "# Seconds the end-of-match scoreboard shows (combat frozen) before rotating.\n"
+    "end_screen_s = 10\n"
     "\n"
     "[lobby]\n"
     "register = false\n"
@@ -385,9 +387,15 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         if (auto v = tomlInt(tbl["rotation"]["time_limit_min"]))
             cfg.rotationTimeLimitMin = static_cast<int>(*v);
 
-        // [match] (#521)
+        // [match] (#521/#523)
         if (auto v = tbl["match"]["mode"].value<std::string>())
             cfg.matchMode = std::move(*v);
+        if (auto v = tomlInt(tbl["match"]["end_screen_s"])) {
+            if (*v >= 0 && *v <= 120)
+                cfg.matchEndScreenS = static_cast<int>(*v);
+            else
+                log->log(LogLevel::Warn, __FILE__, __LINE__, "match.end_screen_s out of range [0,120]; using default");
+        }
 
         // [lobby]
         if (auto v = tbl["lobby"]["register"].value<bool>())

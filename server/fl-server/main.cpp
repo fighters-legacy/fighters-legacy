@@ -24,6 +24,7 @@
 #include "ServerCommands.h"
 #include "StdoutLogger.h"
 #include "TestSpawn.h"
+#include "match/MatchController.h"
 #include "net/DiscoveryBeacon.h"
 #include "sensor/SensorDefParser.h"
 #include "server_config.h"
@@ -999,6 +1000,11 @@ int main(int argc, char** argv) {
     // The objective/trigger evaluator (#633). Constructed below when a mission loads; declared here so
     // it outlives gameLoop (the broadcaster's tick hook captures a pointer into it).
     std::unique_ptr<fl::MissionRuntime> missionRuntime;
+    // The match-lifecycle state machine (#523). Declared in main scope so it outlives gameLoop (the
+    // composite tick hook + the phase/rotate hooks capture references to it). Configured after the team
+    // setup; a free-flight/free-for-all leaves it Idle-inert (its hooks never fire a phase change).
+    fl::MatchController matchController;
+    std::size_t rotationIndex = 0; // current [rotation] item (#523); advanced on match rotate
     // Mission non-terminal `do:` action sink (#212). The evaluator routes actions like `set_weather storm`
     // here; we point it at the admin command dispatch AFTER the registry is built (below), so a mission
     // can do exactly what an operator could and no more. Set on the sim thread; read on the sim thread
@@ -1376,9 +1382,12 @@ int main(int argc, char** argv) {
                             log->log(LogLevel::Info, __FILE__, __LINE__, m);
                         }
                     });
-                missionRuntime->setOnEnd([log, &broadcaster, &campaignRunner, campaignMissionId,
+                missionRuntime->setOnEnd([log, &broadcaster, &matchController, &campaignRunner, campaignMissionId,
                                           campaignSavePath](const fl::MissionOutcome& o) {
                     const bool success = o.state == fl::MissionState::Complete;
+                    // A mission-scripted victory also ends the match, so the server rotates instead of
+                    // sitting idle after the objective completes (#523/#584).
+                    matchController.forceEnd(std::nullopt);
                     const char* s = success ? "SUCCESS" : "FAILURE";
                     char m[128];
                     std::snprintf(m, sizeof(m), "mission %s after %.1f s (%u trigger(s) fired)", s, o.elapsedSeconds,
@@ -1401,7 +1410,8 @@ int main(int argc, char** argv) {
                         log->log(LogLevel::Info, __FILE__, __LINE__, cm);
                     }
                 });
-                broadcaster.setMissionTickHook([rt = missionRuntime.get()](uint64_t t) { rt->step(t); });
+                // The per-tick step is wired into the composite match/mission hook below (after the team
+                // setup), so the MatchController steps every tick alongside the mission runtime.
                 // Bind a pilot's aircraft to its player-slot id on connect (and unbind on disconnect), so
                 // destroy(<slot-id>) tracks the live aircraft instead of firing at t=0 (#884). Fired from
                 // the handshake on the sim thread — the same thread that steps the runtime.
@@ -1476,6 +1486,62 @@ int main(int argc, char** argv) {
     // Friendly fire: a mode's On/Off override wins over [gameplay] friendly_fire (#522).
     broadcaster.setDamageRules(fl::effectiveDamageRules(gameMode, cfg.friendlyFire, cfg.crashDamage));
 
+    // ── Match lifecycle (#523) ────────────────────────────────────────────────────────────────
+    // Configure the controller for the active mode + teams. Publish state on every phase change (which
+    // also toggles the combat freeze) and, on rotation, reset + re-admit the connected pilots. The
+    // controller steps every tick from the composite hook below; scoring is fed from the combat path.
+    {
+        fl::MatchTeamSetup mts = fl::buildMatchTeams(gameMode, missionFactions, *log);
+        matchController.configure(gameMode, mts.teams);
+        matchController.setEndingSeconds(static_cast<double>(cfg.matchEndScreenS));
+
+        matchController.setOnPhase([&broadcaster, &matchController, log](fl::MatchPhase /*from*/, fl::MatchPhase to) {
+            broadcaster.setCombatFrozen(matchController.combatFrozen());
+            char m[64];
+            std::snprintf(m, sizeof(m), "match: phase -> %d", static_cast<int>(to));
+            log->log(LogLevel::Info, __FILE__, __LINE__, m);
+            // The state itself is published by the composite tick hook on the next version change.
+        });
+
+        // The rotate hook needs gameLoop.enqueueSimCallback, so it is wired after GameLoop is declared
+        // (search "matchController.setOnRotate" below).
+
+        // Feed the controller from the world: kills score, joins/leaves track participants.
+        broadcaster.setMatchEventSink([&matchController](uint32_t killer, uint32_t victim, bool sameFaction) {
+            matchController.recordKill(killer, victim, sameFaction);
+        });
+        broadcaster.setMatchParticipantSink([&matchController](uint32_t id, uint16_t faction, bool isBot, bool joined) {
+            if (joined)
+                matchController.participantJoined(id, faction, isBot);
+            else
+                matchController.participantLeft(id);
+        });
+    }
+
+    // Composite per-tick hook (#523): step the mission runtime (if any) AND the match controller every
+    // tick, then publish MsgMatchState whenever the controller's state version changes (a phase
+    // transition or a team score). Reading the mode fields from the controller keeps it correct across
+    // a rotation. Runs at the end of onTick on the sim thread.
+    broadcaster.setMissionTickHook(
+        [rt = missionRuntime.get(), &matchController, &broadcaster, lastVer = uint64_t{0}](uint64_t t) mutable {
+            if (rt)
+                rt->step(t);
+            matchController.step(t);
+            const uint64_t ver = matchController.stateVersion();
+            if (ver != lastVer) {
+                lastVer = ver;
+                fl::WorldBroadcaster::MatchStatePod pod;
+                pod.phase = static_cast<uint8_t>(matchController.phase());
+                pod.scoreLimit = static_cast<uint16_t>(std::clamp(matchController.scoreLimit(), 0, 65535));
+                pod.phaseEndTick = matchController.phaseEndTick();
+                pod.modeId = matchController.modeId();
+                pod.modeName = matchController.modeName();
+                for (const fl::TeamScore& ts : matchController.teamScores())
+                    pod.teamScores.emplace_back(ts.factionIndex, ts.score);
+                broadcaster.setMatchState(pod);
+            }
+        });
+
     if (!cfg.trace.inputTraceDir.empty()) {
         broadcaster.setInputTraceDir(cfg.trace.inputTraceDir);
         char buf[256];
@@ -1525,6 +1591,33 @@ int main(int argc, char** argv) {
     std::unique_ptr<fl::atc::AtcService> atcService;
 
     GameLoop gameLoop(broadcaster, *log, 60.0, cfg.maxCatchupTicks);
+
+    // Match rotation (#523): on match end, reset the world, advance to the next rotation item's mode,
+    // and re-admit the connected pilots — all serial on the sim thread via enqueueSimCallback (hence
+    // wired here, after GameLoop exists). The mission itself repeats (a full mission-YAML reload across
+    // rotation is a follow-on; a team match commonly runs without a mission).
+    matchController.setOnRotate(
+        [&broadcaster, &matchController, &gameLoop, &missionFactions, &rotationIndex, &cfg, &assets, log]() {
+            gameLoop.enqueueSimCallback(
+                [&broadcaster, &matchController, &missionFactions, &rotationIndex, &cfg, &assets, log]() {
+                    broadcaster.resetWorld();
+                    std::string modeRef = cfg.matchMode;
+                    if (!cfg.rotationItems.empty()) {
+                        rotationIndex = (rotationIndex + 1) % cfg.rotationItems.size();
+                        auto [mref, moderef] = fl::splitRotationItem(cfg.rotationItems[rotationIndex]);
+                        (void)mref;
+                        if (!moderef.empty())
+                            modeRef = moderef;
+                    }
+                    const fl::GameModeDef nextMode = fl::resolveGameMode(modeRef, &assets, *log);
+                    fl::MatchTeamSetup nmts = fl::buildMatchTeams(nextMode, missionFactions, *log);
+                    broadcaster.setDamageRules(fl::effectiveDamageRules(nextMode, cfg.friendlyFire, cfg.crashDamage));
+                    matchController.configure(nextMode, nmts.teams);
+                    broadcaster.setCombatFrozen(false);
+                    broadcaster.readmitPilots();
+                    log->log(LogLevel::Info, __FILE__, __LINE__, "match: rotated to next round");
+                });
+        });
 
     // Data-parallel sim tick: the worker pool that parallelises the per-entity AI + integrate
     // passes. Constructed before gameLoop.start() and outlives it (declared here in main's scope).

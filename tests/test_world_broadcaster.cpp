@@ -1525,6 +1525,56 @@ TEST_CASE("WorldBroadcaster: match roster broadcasts joins, sanitizes callsigns,
     }
 }
 
+TEST_CASE("WorldBroadcaster: match state + event sink + resetWorld (#523)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    SECTION("setMatchState broadcasts and a late joiner is unicast the state") {
+        connectPilotPeer(broadcaster, net, 0u);
+        fl::WorldBroadcaster::MatchStatePod pod;
+        pod.phase = 2; // Active
+        pod.scoreLimit = 50;
+        pod.phaseEndTick = 900;
+        pod.modeId = "builtin:tdm";
+        pod.modeName = "Team Deathmatch";
+        pod.teamScores = {{1, 3}, {2, 5}};
+        net.perPeerSends.clear();
+        broadcaster.setMatchState(pod);
+        // Peer 0 received a MatchState packet.
+        bool got = false;
+        for (const auto& [pid, pkt] : net.perPeerSends)
+            if (pid == 0u && !pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::MatchState))
+                got = true;
+        CHECK(got);
+        // A late joiner is unicast the current state.
+        net.perPeerSends.clear();
+        connectPilotPeer(broadcaster, net, 1u);
+        bool lateGot = false;
+        for (const auto& [pid, pkt] : net.perPeerSends)
+            if (pid == 1u && !pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::MatchState))
+                lateGot = true;
+        CHECK(lateGot);
+    }
+
+    SECTION("resetWorld despawns entities but keeps peers connected") {
+        connectPilotPeer(broadcaster, net, 0u);
+        broadcaster.onTick(1.0 / 60.0, 1u);
+        REQUIRE(em.liveCount() == 1u);
+        broadcaster.resetWorld();
+        broadcaster.onTick(1.0 / 60.0, 2u);
+        CHECK(em.liveCount() == 0u);             // entity gone
+        CHECK(broadcaster.getPeerCount() == 1u); // peer still connected
+        // Re-admit spawns a fresh aircraft.
+        broadcaster.readmitPilots();
+        broadcaster.onTick(1.0 / 60.0, 3u);
+        CHECK(em.liveCount() == 1u);
+    }
+}
+
 TEST_CASE("WorldBroadcaster: team assigner stamps faction, refuses when full (#522)", "[world_broadcaster]") {
     MockLogger logger;
     MockNetwork net;

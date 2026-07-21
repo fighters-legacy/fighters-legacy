@@ -21,6 +21,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **match**: match lifecycle, team scoring, and in-process rotation (#523, Epic E #497). A new
+  `MatchController` runs the deterministic Idle→Warmup→Active→Ending→PostMatch state machine (score /
+  time limits, warmup gated on min players, mission-driven `forceEnd`, a rotate hook). `WorldBroadcaster`
+  broadcasts the new reliable `MsgMatchState` (phase, per-team scores, limits, phase clock) on change
+  and to late joiners, and the unreliable `MsgScoreboard` (per-participant kills/deaths/score/ping)
+  every ~2 s; a combat-freeze gate suppresses fire input and scoring during Ending/PostMatch; and
+  `resetWorld` + `readmitPilots` rotate the match in-process (peers stay connected) so the server no
+  longer sits idle after a mission ends. fl-server owns the controller, feeds it kills + participant
+  join/leave through new sinks, and cycles the `[rotation]` mode on `[match] end_screen_s`.
 - **match**: team assignment, balancing, and mode-driven friendly fire (#522, Epic E #497). A pure
   `TeamBalancer` (`pickTeam` / `switchAllowed`) drives team choice; `WorldBroadcaster` gains a
   `setTeamAssigner` seam (consulted at admission — `nullopt` refuses with the new

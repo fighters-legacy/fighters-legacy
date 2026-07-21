@@ -842,6 +842,62 @@ struct MsgTeamRequest {
 static_assert(sizeof(MsgTeamRequest) == 4u, "MsgTeamRequest wire size changed");
 static_assert(offsetof(MsgTeamRequest, factionIndex) == 2u, "MsgTeamRequest::factionIndex offset changed");
 
+// Server->client, reliable: the current match phase, limits, and per-team scores (#523). Broadcast on
+// change (phase transition or a team score) and unicast to a late joiner after ConnectAck. Followed by
+// teamCount MatchTeamScore records. The client renders the phase clock as (phaseEndTick - tickIndex);
+// phaseEndTick == 0 = the phase is untimed.
+struct MsgMatchState {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::MatchState)}; // @0
+    uint8_t phase{0};                                       // @1 MatchPhase ordinal
+    uint16_t scoreLimit{0};                                 // @2 team score that ends the match; 0 = none
+    uint8_t teamCount{0};                                   // @4 trailing MatchTeamScore records
+    uint8_t reserved[3]{};                                  // @5 pad so phaseEndTick is 8-aligned
+    uint64_t phaseEndTick{0};                               // @8 tick the current phase ends; 0 = untimed
+    char modeId[32]{};                                      // @16 game-mode id
+    char modeName[32]{};                                    // @48 game-mode display name
+}; // 80 bytes, align 8
+static_assert(sizeof(MsgMatchState) == 80u, "MsgMatchState wire size changed");
+static_assert(alignof(MsgMatchState) == 8u, "MsgMatchState alignment changed");
+static_assert(offsetof(MsgMatchState, scoreLimit) == 2u, "MsgMatchState::scoreLimit offset changed");
+static_assert(offsetof(MsgMatchState, teamCount) == 4u, "MsgMatchState::teamCount offset changed");
+static_assert(offsetof(MsgMatchState, phaseEndTick) == 8u, "MsgMatchState::phaseEndTick offset changed");
+static_assert(offsetof(MsgMatchState, modeId) == 16u, "MsgMatchState::modeId offset changed");
+static_assert(offsetof(MsgMatchState, modeName) == 48u, "MsgMatchState::modeName offset changed");
+
+struct MatchTeamScore {
+    uint16_t factionIndex{0}; // @0
+    uint16_t reserved{0};     // @2
+    int32_t score{0};         // @4
+}; // 8 bytes, align 4
+static_assert(sizeof(MatchTeamScore) == 8u, "MatchTeamScore wire size changed");
+static_assert(offsetof(MatchTeamScore, score) == 4u, "MatchTeamScore::score offset changed");
+
+// Server->client, unreliable: the full scoreboard (#523). Periodic + on admit; followed by `count`
+// ScoreboardRow records (chunked). Unreliable because it is fully self-describing and refreshed every
+// ~2 s — a lost scoreboard is replaced, not lost state.
+struct MsgScoreboardHeader {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::Scoreboard)}; // @0
+    uint8_t count{0};                                       // @1 trailing ScoreboardRow records
+    uint16_t reserved{0};                                   // @2
+    uint32_t reserved2{0};                                  // @4 pad so records stay 4-aligned
+}; // 8 bytes, align 4
+static_assert(sizeof(MsgScoreboardHeader) == 8u, "MsgScoreboardHeader wire size changed");
+static_assert(offsetof(MsgScoreboardHeader, count) == 1u, "MsgScoreboardHeader::count offset changed");
+
+struct ScoreboardRow {
+    uint32_t participantId{0}; // @0 peerId, or kBotParticipantBase + n
+    int32_t score{0};          // @4
+    uint16_t kills{0};         // @8
+    uint16_t deaths{0};        // @10
+    uint16_t pingMs{0};        // @12 estimatedDelayTicks*1000/60, capped; 0 for bots
+    uint16_t factionIndex{0};  // @14
+}; // 16 bytes, align 4
+static_assert(sizeof(ScoreboardRow) == 16u, "ScoreboardRow wire size changed");
+static_assert(offsetof(ScoreboardRow, kills) == 8u, "ScoreboardRow::kills offset changed");
+static_assert(offsetof(ScoreboardRow, pingMs) == 12u, "ScoreboardRow::pingMs offset changed");
+static_assert(offsetof(ScoreboardRow, factionIndex) == 14u, "ScoreboardRow::factionIndex offset changed");
+inline constexpr std::size_t kMaxScoreboardRowsPerPacket = 30; // 8 + 30*16 = 488 B
+
 // ---------------------------------------------------------------------------------------------
 // Datalink / shared team track picture (#528)
 // ---------------------------------------------------------------------------------------------

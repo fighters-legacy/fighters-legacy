@@ -22,7 +22,15 @@ TEST_CASE("GameProtocol: wire struct sizes match natural-aligned layout", "[game
     CHECK(offsetof(fl::MsgConnectRequest, callsign) == 72u);
     CHECK(sizeof(fl::PackManifestEntry) == 128u);   // #872 wire half: id + version + reserved hash
     CHECK(sizeof(fl::MsgPlayerRosterHeader) == 4u); // #996
-    CHECK(sizeof(fl::PlayerRosterEntry) == 40u);    // #996
+    CHECK(sizeof(fl::MsgTeamRequest) == 4u);        // #522
+    CHECK(sizeof(fl::MsgMatchState) == 80u);        // #523
+    CHECK(offsetof(fl::MsgMatchState, phaseEndTick) == 8u);
+    CHECK(offsetof(fl::MsgMatchState, modeId) == 16u);
+    CHECK(sizeof(fl::MatchTeamScore) == 8u);
+    CHECK(sizeof(fl::MsgScoreboardHeader) == 8u); // #523
+    CHECK(sizeof(fl::ScoreboardRow) == 16u);
+    CHECK(offsetof(fl::ScoreboardRow, pingMs) == 12u);
+    CHECK(sizeof(fl::PlayerRosterEntry) == 40u); // #996
     CHECK(offsetof(fl::PlayerRosterEntry, factionIndex) == 4u);
     CHECK(offsetof(fl::PlayerRosterEntry, callsign) == 8u);
     CHECK(sizeof(fl::MsgEntityTypeDef) == 348u); // #38 tail-appended deck footprint (336 -> 348)

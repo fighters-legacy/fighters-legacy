@@ -794,6 +794,58 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // MsgTeamRequest path both route here. A no-op if the peer has no roster entry.
     void setPeerFaction(uint32_t peerId, uint16_t faction);
 
+    // ── match lifecycle + scoring (#523) — sim-thread only ───────────────────
+    // A POD mirror of the MatchController's public state (engine-net does not depend on engine-match).
+    // fl-server fills it from the controller and hands it here; the broadcaster stores it, broadcasts
+    // MsgMatchState to all peers, and unicasts it to a late joiner after ConnectAck.
+    struct MatchStatePod {
+        uint8_t phase{0};
+        uint16_t scoreLimit{0};
+        uint64_t phaseEndTick{0};
+        std::string modeId;
+        std::string modeName;
+        std::vector<std::pair<uint16_t, int32_t>> teamScores; // faction, score
+    };
+    void setMatchState(const MatchStatePod& state);
+
+    // Sink for scoreboard-relevant combat events (#523): (killerParticipant, victimParticipant,
+    // sameFaction). Called from the damage path (onEntityEvent) on the sim thread; fl-server forwards
+    // it to MatchController::recordKill. Unset ⇒ no match scoring (the pre-#523 behavior).
+    using MatchEventSink = std::function<void(uint32_t killer, uint32_t victim, bool sameFaction)>;
+    void setMatchEventSink(MatchEventSink fn) {
+        m_matchEventSink = std::move(fn);
+    }
+
+    // Sink for match participant join/leave (#523): (participantId, faction, isBot, joined). Called for
+    // pilots + bots (never observers — they have no scoreboard row) from admission / disconnect / team
+    // switch / bot spawn+retire. fl-server forwards it to MatchController::participantJoined/Left.
+    using MatchParticipantSink = std::function<void(uint32_t id, uint16_t faction, bool isBot, bool joined)>;
+    void setMatchParticipantSink(MatchParticipantSink fn) {
+        m_matchParticipantSink = std::move(fn);
+    }
+
+    // Freeze combat (Ending / PostMatch phases): suppresses new fire input and kill scoring. Cleared on
+    // the next Active phase. Sim-thread only.
+    void setCombatFrozen(bool frozen) noexcept {
+        m_combatFrozen = frozen;
+    }
+    [[nodiscard]] bool combatFrozen() const noexcept {
+        return m_combatFrozen;
+    }
+
+    // Reset the world for an in-process match rotation (#523): despawn every peer's aircraft and any
+    // remaining controlled entity, clear projectiles / pending combat events / mission slots / the
+    // respawn table, and zero (not erase) every score — but keep peers CONNECTED (their input slots,
+    // roster and handshake state survive). The client converges via the normal SnapshotDespawn path.
+    // fl-server calls this from the MatchController rotate hook via enqueueSimCallback, then reloads the
+    // next session and re-admits the connected pilots. Sim-thread only.
+    void resetWorld();
+
+    // Re-spawn every connected Pilot peer that currently has no aircraft (after resetWorld). Uses the
+    // team assigner for the new team, sends a fresh MsgConnectAck, and re-broadcasts the roster +
+    // participant join. Observers are untouched. Sim-thread only (the rotation path).
+    void readmitPilots();
+
     // Called on the sim thread at the end of onConnect, after the peer's entity and controller exist.
     // The implementation spawns the peer's flight (N AI members), registers their controllers, and
     // returns the formation it created. kNoFormation (the default with no hook installed) = the peer
@@ -1214,9 +1266,24 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         int32_t score{0};
         bool dirty{false}; // a Stats record is owed to this peer in the next serialize
     };
-    std::unordered_map<uint32_t, PeerScore> m_scores; // keyed by peerId; erased on disconnect
+    std::unordered_map<uint32_t, PeerScore> m_scores; // keyed by participantId; erased on disconnect
     std::vector<CombatEventRecord> m_pendingKillEvents;
     DamageRules m_damageRules{};
+
+    // ── match lifecycle + scoring (#523) — sim-thread only ───────────────────
+    MatchStatePod m_matchState;                  // last state set by fl-server; unicast to a late joiner
+    bool m_haveMatchState{false};                // false until fl-server pushes the first state
+    MatchEventSink m_matchEventSink;             // null = no match scoring (pre-#523 behavior)
+    MatchParticipantSink m_matchParticipantSink; // null = no participant tracking
+    bool m_combatFrozen{false};                  // true in Ending/PostMatch — gates fire input + kill scoring
+    uint64_t m_lastScoreboardTick{0};            // last tick a periodic MsgScoreboard went out
+    bool m_scoreboardDirty{false};               // a score changed since the last broadcast
+    void broadcastMatchState();                  // send m_matchState to every handshake-complete peer
+    void sendMatchStateTo(uint32_t peerId);      // unicast to one peer (late joiner)
+    void broadcastScoreboard();                  // build + send MsgScoreboard (chunked) to all peers
+    void sendScoreboardTo(uint32_t peerId);      // unicast to one peer (on admit)
+    void appendScoreboardRows(std::vector<uint8_t>& pkt, std::size_t begin, std::size_t count,
+                              const std::vector<uint32_t>& order) const;
 
     // ── match roster (#996) — sim-thread only ───────────────────────────────
     // participantId -> display record. Humans key on peerId; bots on kBotParticipantBase + n (#87).
@@ -1242,6 +1309,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // against EntityState::ownerId — whose "0 = server/AI" convention collides with real peer 0
     // (the #610 kNoPeer lesson).
     [[nodiscard]] uint32_t peerIdForEntity(EntityId id) const noexcept;
+    // The scoreboard participant id owning an entity: a human's peerId, or a bot's participant id
+    // (kBotParticipantBase + n) via m_botEntities (#87). kNoOwningPeer for AI/mission/environment.
+    [[nodiscard]] uint32_t participantForEntity(EntityId id) const noexcept;
+    std::unordered_map<uint32_t /*entityIdx*/, uint32_t /*participantId*/> m_botEntities; // #87 bot scoring
     void flushCombatEvents();
 
     // Datalink / shared team track picture (#528). Fuses each pilot peer's own contacts with every
