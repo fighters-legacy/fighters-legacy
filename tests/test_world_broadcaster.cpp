@@ -8085,6 +8085,34 @@ TEST_CASE("WorldBroadcaster: NaN/Inf client input is sanitized, not propagated",
     REQUIRE_NOTHROW(broadcaster.onTick(1.0 / 60.0, 1u));
 }
 
+// Regression (#993, deep-fuzz fuzz_server_msg): an observer's MsgClientInput::cameraEye is finite-
+// guarded in onReceive but not bounded, so an extreme-but-finite value flows into interestCenter and
+// then into SpatialIndex::queryRadius, where floor(v)->int64_t past 2^63 is undefined behavior (UBSan
+// flagged 9.52682e+135). The spatial index now saturates the cell coordinate; the whole tick must
+// stay UB-free and still deliver a snapshot to the observer.
+TEST_CASE("WorldBroadcaster: extreme observer camera eye does not trip spatial-hash UB", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger); // observers allowed by default
+    connectObserverPeer(broadcaster, net, 0u);
+
+    // A real entity in the world so queryRadius has a populated grid to sweep past.
+    fl::EntityTransform t{};
+    em.spawn("builtin:debug-entity", t);
+
+    // cameraEye far beyond the int64 cell range on every axis — finite, so onReceive keeps it.
+    const double huge = 9.52682e+135;
+    fl::MsgClientInput inp = cameraInput(1u, huge, -huge, huge);
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    // The gather centers queryRadius on interestCenter (= cameraEye) for the entity-less observer.
+    REQUIRE_NOTHROW(broadcaster.onTick(1.0 / 60.0, 1u));
+}
+
 // ---------------------------------------------------------------------------
 // Server-side input tracing (#560)
 // ---------------------------------------------------------------------------

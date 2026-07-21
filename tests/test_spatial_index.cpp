@@ -234,6 +234,44 @@ TEST_CASE("SpatialIndex - planet scale positions work") {
     CHECK(found[0] == 0u);
 }
 
+// Regression (#993, deep-fuzz fuzz_server_msg): an extreme-but-finite coordinate reaches the grid
+// straight off the wire (a hostile MsgClientInput::cameraEye survives onReceive's isfinite() guard),
+// and floor(v)->int64_t on a value past 2^63 is undefined behavior. cellCoordFloor saturates the cell
+// coordinate into range and the queryRadius loop breaks at its bound instead of ++ past it (which
+// would overflow int64_t at INT64_MAX). Must not trip UBSan and must return no phantom entities.
+TEST_CASE("SpatialIndex - extreme finite coordinates do not trip integer-cast UB") {
+    fl::SpatialIndex idx;
+    double near[3]{100.0, 0.0, -50.0};
+    idx.insert(0u, near);
+
+    const double huge = 9.52682e+135; // the value UBSan flagged in the deep-fuzz reproducer
+
+    // The threat model: an extreme CENTER with a normal (config-bounded) radius. Both cell edges
+    // saturate to the same INT64 extreme, so the query collapses to one off-grid cell — finds nothing,
+    // stays fast, and does not cast-overflow. (radiusM is never attacker-controlled, so the pathological
+    // full-int64-span case cannot arise here.)
+    double farPos[3]{huge, 0.0, huge};
+    int count = 0;
+    idx.queryRadius(farPos, 1000.0, [&](uint32_t, const double*) { ++count; });
+    CHECK(count == 0);
+
+    double farNeg[3]{-huge, 0.0, -huge};
+    count = 0;
+    idx.queryRadius(farNeg, 1000.0, [&](uint32_t, const double*) { ++count; });
+    CHECK(count == 0);
+
+    // Inserting at an extreme coordinate must not cast-overflow either.
+    double hugePos[3]{-huge, 0.0, huge};
+    CHECK_NOTHROW(idx.insert(1u, hugePos));
+    CHECK(idx.entityCount() == 2u);
+
+    // A normal query still returns the real near-origin entity (the fix doesn't perturb the common path).
+    double origin[3]{0.0, 0.0, 0.0};
+    count = 0;
+    idx.queryRadius(origin, 1000.0, [&](uint32_t, const double*) { ++count; });
+    CHECK(count == 1);
+}
+
 // ---------------------------------------------------------------------------
 // Coverage gap tests
 // ---------------------------------------------------------------------------

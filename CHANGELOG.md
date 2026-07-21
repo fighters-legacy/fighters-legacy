@@ -7,6 +7,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **network**: harden `SpatialIndex` against an extreme-but-finite world coordinate (#993, deep-fuzz
+  `fuzz_server_msg`). A hostile `MsgClientInput::cameraEye` survives `WorldBroadcaster::onReceive`'s
+  `isfinite()` guard, flows into an observer's interest center, and reaches `SpatialIndex::queryRadius`,
+  where `floor(v) -> int64_t` on a value past 2^63 is undefined behavior (UBSan flagged 9.52682e+135).
+  A new `cellCoordFloor` saturates the cell coordinate into the `int64_t` range, and the query loop now
+  breaks at its bound instead of incrementing past `INT64_MAX` (a second overflow the saturation exposed).
+  Both `queryRadius` and `insert` route through it; the common near-origin path is byte-for-byte
+  unchanged. Minimized reproducer committed as a `regress-*` fuzz seed plus `SpatialIndex` and
+  `WorldBroadcaster` Catch2 regression tests.
+
 ### Added
 
 - **audio**: RWR and missile-lock warning tones (#960, Epic #586). `WarningToneManager` gains a
