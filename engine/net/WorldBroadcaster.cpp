@@ -2284,6 +2284,25 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
     // seat rosters stay current (the joiner already received all rosters via sendConnectAck). #972.
     if (assigned.valid())
         broadcastCrewRoster(assigned);
+
+    // Match roster (#996), last so the ordered MOTD/flight-check-in sends above keep their positions.
+    // Send the joiner the current roster (everyone already here), then insert + broadcast its own
+    // record so existing peers learn of the join and the joiner sees itself last.
+    req.callsign[sizeof(req.callsign) - 1] = '\0'; // untrusted char[]: force-terminate
+    sendFullRoster(peerId);
+    {
+        uint16_t myFaction = 0;
+        if (assigned.valid()) {
+            if (const EntityState* s = m_entityManager.get(assigned))
+                myFaction = s->factionIndex;
+        }
+        RosterRec rec;
+        rec.callsign = sanitizeCallsign(req.callsign, peerId);
+        rec.factionIndex = myFaction;
+        rec.role = grantedRole;
+        rec.isBot = false;
+        upsertRoster(peerId, rec);
+    }
 }
 
 void WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
@@ -2312,6 +2331,19 @@ void WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
     // The client learns its new assigned entity + role from a fresh MsgConnectAck (its handler applies
     // both, idempotently re-registering already-known type defs). No new message type is needed.
     sendConnectAck(peerId, assigned, role);
+
+    // Keep the match roster (#996) in sync with the new role/team. An observer reverts to faction 0.
+    if (auto rit = m_roster.find(peerId); rit != m_roster.end()) {
+        RosterRec rec = rit->second;
+        rec.role = role;
+        if (role == PeerRole::Observer)
+            rec.factionIndex = 0;
+        else if (assigned.valid()) {
+            if (const EntityState* s = m_entityManager.get(assigned))
+                rec.factionIndex = s->factionIndex;
+        }
+        upsertRoster(peerId, rec);
+    }
 }
 
 void WorldBroadcaster::despawnPeerEntity(uint32_t peerId) {
@@ -2406,6 +2438,7 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
 
     clearSeatOccupant(peerId); // a gunner (#974) reverts its non-fly seat to its bot + re-broadcasts
     despawnPeerEntity(peerId); // a pilot's own aircraft is torn down (no-op for observer/gunner)
+    removeRoster(peerId);      // broadcast the leave + drop the roster record (#996; before m_peerInputs erase)
     m_peerInputs.erase(peerId);
     m_peerFloodState.erase(peerId);
     m_peerKnownGens.erase(peerId);
@@ -5026,6 +5059,7 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned, PeerRo
     ack.assignedEntityGen = assigned.generation;
     ack.planetRadiusKm = m_planetRadiusKm;
     ack.grantedRole = static_cast<uint8_t>(grantedRole);
+    ack.peerId = peerId; // the client's own id, for the roster "you" highlight + chat self-echo (#996)
     appendMsg(buf, ack);
 
     for (uint32_t i = 0; i < typeCount; ++i) {
@@ -5125,6 +5159,98 @@ void WorldBroadcaster::sendConnectRefusal(uint32_t peerId, ConnectRefusalCode co
     msg.code = static_cast<uint8_t>(code);
     std::snprintf(msg.reason, sizeof(msg.reason), "%s", reason);
     m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
+}
+
+// ── match roster (#996) ─────────────────────────────────────────────────────
+std::string WorldBroadcaster::sanitizeCallsign(const char* raw, uint32_t participantId) {
+    std::string out;
+    if (raw) {
+        // Copy at most 31 printable chars; drop ASCII control bytes (< 0x20, 0x7F). Leave UTF-8 lead/
+        // continuation bytes (>= 0x80) intact so a non-Latin callsign survives — the HUD font is BMP.
+        for (const char* p = raw; *p && out.size() < 31u; ++p) {
+            const unsigned char c = static_cast<unsigned char>(*p);
+            if (c < 0x20u || c == 0x7Fu)
+                continue;
+            out.push_back(static_cast<char>(c));
+        }
+    }
+    // Trim leading/trailing spaces.
+    const std::size_t b = out.find_first_not_of(' ');
+    const std::size_t e = out.find_last_not_of(' ');
+    out = (b == std::string::npos) ? std::string{} : out.substr(b, e - b + 1);
+    if (out.empty()) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "Pilot-%u", participantId);
+        out = buf;
+    }
+    return out;
+}
+
+void WorldBroadcaster::upsertRoster(uint32_t participantId, const RosterRec& rec) {
+    m_roster[participantId] = rec;
+
+    MsgPlayerRosterHeader hdr{};
+    hdr.count = 1;
+    PlayerRosterEntry e{};
+    e.participantId = participantId;
+    e.factionIndex = rec.factionIndex;
+    e.role = static_cast<uint8_t>(rec.role);
+    e.flags = rec.isBot ? kRosterBot : 0u;
+    std::snprintf(e.callsign, sizeof(e.callsign), "%s", rec.callsign.c_str());
+
+    std::vector<uint8_t> pkt;
+    pkt.reserve(sizeof(hdr) + sizeof(e));
+    appendMsg(pkt, hdr);
+    appendMsg(pkt, e);
+    // Broadcast to every peer that has completed its handshake (so the roster is consistent for all).
+    for (const auto& [pid, pin] : m_peerInputs) {
+        if (pin.handshakeComplete)
+            m_net.send(pid, pkt.data(), pkt.size(), /*reliable=*/true);
+    }
+}
+
+void WorldBroadcaster::removeRoster(uint32_t participantId) {
+    if (m_roster.erase(participantId) == 0u)
+        return;
+    MsgPlayerRosterHeader hdr{};
+    hdr.count = 1;
+    PlayerRosterEntry e{};
+    e.participantId = participantId;
+    e.flags = kRosterLeave;
+    std::vector<uint8_t> pkt;
+    pkt.reserve(sizeof(hdr) + sizeof(e));
+    appendMsg(pkt, hdr);
+    appendMsg(pkt, e);
+    for (const auto& [pid, pin] : m_peerInputs) {
+        if (pin.handshakeComplete)
+            m_net.send(pid, pkt.data(), pkt.size(), /*reliable=*/true);
+    }
+}
+
+void WorldBroadcaster::sendFullRoster(uint32_t peerId) {
+    if (m_roster.empty())
+        return;
+    // Chunk into packets of at most kMaxRosterEntriesPerPacket upsert records.
+    std::vector<std::pair<uint32_t, RosterRec>> all(m_roster.begin(), m_roster.end());
+    for (std::size_t i = 0; i < all.size(); i += kMaxRosterEntriesPerPacket) {
+        const std::size_t n = std::min(kMaxRosterEntriesPerPacket, all.size() - i);
+        MsgPlayerRosterHeader hdr{};
+        hdr.count = static_cast<uint8_t>(n);
+        std::vector<uint8_t> pkt;
+        pkt.reserve(sizeof(hdr) + n * sizeof(PlayerRosterEntry));
+        appendMsg(pkt, hdr);
+        for (std::size_t j = 0; j < n; ++j) {
+            const auto& [pid, rec] = all[i + j];
+            PlayerRosterEntry e{};
+            e.participantId = pid;
+            e.factionIndex = rec.factionIndex;
+            e.role = static_cast<uint8_t>(rec.role);
+            e.flags = rec.isBot ? kRosterBot : 0u;
+            std::snprintf(e.callsign, sizeof(e.callsign), "%s", rec.callsign.c_str());
+            appendMsg(pkt, e);
+        }
+        m_net.send(peerId, pkt.data(), pkt.size(), /*reliable=*/true);
+    }
 }
 
 void WorldBroadcaster::rejectConnection(uint32_t peerId, const std::string& ip, ConnectRefusalCode code) {

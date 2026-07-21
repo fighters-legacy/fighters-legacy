@@ -1182,6 +1182,26 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     std::vector<CombatEventRecord> m_pendingKillEvents;
     DamageRules m_damageRules{};
 
+    // ── match roster (#996) — sim-thread only ───────────────────────────────
+    // participantId -> display record. Humans key on peerId; bots on kBotParticipantBase + n (#87).
+    // The single name/team source the client resolves for chat, kill feed and scoreboard.
+    struct RosterRec {
+        std::string callsign;
+        uint16_t factionIndex{0};
+        PeerRole role{PeerRole::Pilot};
+        bool isBot{false};
+    };
+    std::unordered_map<uint32_t, RosterRec> m_roster;
+    // Sanitize an untrusted callsign: force-terminate, strip control chars, trim, clamp; empty falls
+    // back to "Pilot-<participantId>". Returns the cleaned string (never empty).
+    static std::string sanitizeCallsign(const char* raw, uint32_t participantId);
+    // Upsert one roster record and broadcast the one-entry change to every handshake-complete peer.
+    void upsertRoster(uint32_t participantId, const RosterRec& rec);
+    // Broadcast a leave for `participantId` (kRosterLeave) and erase it from m_roster.
+    void removeRoster(uint32_t participantId);
+    // Unicast the full current roster to one peer (chunked), used right after ConnectAck.
+    void sendFullRoster(uint32_t peerId);
+
     // The owning peer of an entity, or kNoOwningPeer. Resolved against the LIVE peer map, never
     // against EntityState::ownerId — whose "0 = server/AI" convention collides with real peer 0
     // (the #610 kNoPeer lesson).

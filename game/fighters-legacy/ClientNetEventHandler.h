@@ -71,6 +71,7 @@ struct ClientNetEventHandler : INetworkEventHandler {
     // MsgConnectRequest from onConnect. Defaults: pilot, server-chosen aircraft, no mounted packs.
     PeerRole requestedRole{PeerRole::Pilot};
     std::string requestedEntityType;             // empty = let the server pick its default (#834)
+    std::string requestedCallsign;               // player callsign for the match roster (#996); empty = server default
     std::vector<PackManifestEntry> packManifest; // client's mounted content packs (#872 wire half)
 
     // Role the server GRANTED in MsgConnectAck (#857) — may differ from requestedRole. Pilot until the
@@ -88,6 +89,32 @@ struct ClientNetEventHandler : INetworkEventHandler {
     std::string factionName(uint16_t factionIndex) const {
         const auto it = m_factionNames.find(factionIndex);
         return it != m_factionNames.end() ? it->second : std::string{};
+    }
+
+    // ── match roster (#996) ─────────────────────────────────────────────────
+    struct RosterEntry {
+        std::string callsign;
+        uint16_t factionIndex{0};
+        uint8_t role{0}; // PeerRole ordinal
+        bool isBot{false};
+    };
+    const std::unordered_map<uint32_t, RosterEntry>& roster() const noexcept {
+        return m_roster;
+    }
+    // The single name source for chat, kill feed and scoreboard. Falls back to "Peer N" / "Bot N" when
+    // a participant is not (yet) in the roster.
+    std::string displayName(uint32_t participantId) const {
+        const auto it = m_roster.find(participantId);
+        if (it != m_roster.end() && !it->second.callsign.empty())
+            return it->second.callsign;
+        char buf[24];
+        std::snprintf(buf, sizeof(buf), fl::isBotParticipant(participantId) ? "Bot %u" : "Peer %u", participantId);
+        return buf;
+    }
+    // This client's own participant id, from MsgConnectAck (#996). 0 until the ack arrives — callers
+    // that need to distinguish "self unknown" should check gotConnectAck().
+    uint32_t selfPeerId() const noexcept {
+        return m_selfPeerId;
     }
 
     // Resolve a mission object id (e.g. "bandit1") to its network entity idx/gen from the MsgMissionRoster
@@ -287,8 +314,10 @@ struct ClientNetEventHandler : INetworkEventHandler {
     void signalFailure(SessionFailure f);
 
     bool m_connected{false};
-    PeerRole m_grantedRole{PeerRole::Pilot}; // role granted by MsgConnectAck (#857)
-    bool m_gotConnectAck{false};             // true once a MsgConnectAck arrives; "was I admitted?" (#853)
+    PeerRole m_grantedRole{PeerRole::Pilot};            // role granted by MsgConnectAck (#857)
+    bool m_gotConnectAck{false};                        // true once a MsgConnectAck arrives; "was I admitted?" (#853)
+    uint32_t m_selfPeerId{0};                           // this client's own participant id, from MsgConnectAck (#996)
+    std::unordered_map<uint32_t, RosterEntry> m_roster; // participant id -> display record (#996)
     float m_planetRadiusKm{6371.f};
     SessionCombatStats m_sessionStats{}; // #626 — fed by CombatEvent Stats records
     fl::MissionResultCode m_missionOutcome{fl::MissionResultCode::Incomplete}; // #584 — from MsgMissionOutcome

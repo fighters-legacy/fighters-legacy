@@ -1264,6 +1264,8 @@ void Game::startGame(const std::string& mission) {
         d.session.clientHandler->requestedEntityType = d.services.requestedEntityType;
         d.session.clientHandler->requestedRole =
             d.services.requestObserver ? fl::PeerRole::Observer : fl::PeerRole::Pilot;
+        // Player callsign for the match roster (#996), from the pilot profile.
+        d.session.clientHandler->requestedCallsign = d.services.userConfig->pilot().profile.callsign;
         // Report the client's mounted content packs so the server can enforce its required-pack policy
         // (#872 wire half). Warn-only server-side for now; content hashing is a later addition.
         d.session.clientHandler->packManifest.clear();

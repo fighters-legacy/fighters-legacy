@@ -21,6 +21,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: player callsigns, match roster broadcast, and ENet id-space groundwork (#996, Epic E
+  #497). `MsgConnectRequest` gains a fixed `callsign[32]` field (from `PilotProfile::callsign`, server-
+  sanitized) and `MsgConnectAck` a `peerId` tail field so a client learns its own participant id. A new
+  reliable `MsgPlayerRoster` upsert/leave stream (`0x1C`) carries participant id → callsign / faction /
+  role, broadcast on join / role change / leave and sent in full to a late joiner; the client resolves
+  it through `ClientNetEventHandler::displayName()`, the single name source for chat, kill feed and
+  scoreboard. Establishes the participant-id model (humans = peerId, bots = `kBotParticipantBase + n`).
+  The raw-UDP `MsgId` boundary is raised `0x20` → `0x40` (`MsgLanBeacon` → `0x40`), freeing `0x1C`–`0x3F`
+  for the Epic E messages (roster/match state/scoreboard/team/chat).
 - **audio**: RWR and missile-lock warning tones (#960, Epic #586). `WarningToneManager` gains a
   radar-warning-receiver channel — a slow search strobe, a steady lock tone, and a fast launch warble
   — driven by the peer's LEGITIMATE threat picture (the datalink/RWR strobes the server decided it

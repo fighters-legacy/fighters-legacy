@@ -1407,7 +1407,7 @@ TEST_CASE("WorldBroadcaster: onConnect sends ConnectAck with registered types an
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 2u);
+    REQUIRE(net.sends.size() == 3u); // +1 PlayerRoster (#996)
     CHECK(net.sendReliable);
 
     fl::MsgConnectAck ack = parseSendAck(net);
@@ -1419,6 +1419,110 @@ TEST_CASE("WorldBroadcaster: onConnect sends ConnectAck with registered types an
     // liveCount() is an atomic snapshot updated at the end of onTick() — drive one tick.
     broadcaster.onTick(1.0 / 60.0, 1u);
     CHECK(em.liveCount() == 1u);
+}
+
+// Collect every PlayerRoster upsert/leave record delivered to `peerId` across all recorded sends.
+static std::vector<fl::PlayerRosterEntry> collectRosterFor(const MockNetwork& net, uint32_t peerId) {
+    std::vector<fl::PlayerRosterEntry> out;
+    for (const auto& [pid, pkt] : net.perPeerSends) {
+        if (pid != peerId || pkt.empty() || pkt[0] != static_cast<uint8_t>(fl::MsgId::PlayerRoster))
+            continue;
+        fl::MsgPlayerRosterHeader hdr{};
+        if (!fl::readMsg(pkt.data(), pkt.size(), hdr))
+            continue;
+        std::size_t off = sizeof(hdr);
+        for (uint8_t i = 0; i < hdr.count; ++i) {
+            fl::PlayerRosterEntry e{};
+            if (!fl::readRecordAt(pkt.data(), pkt.size(), off, e))
+                break;
+            off += sizeof(e);
+            e.callsign[sizeof(e.callsign) - 1] = '\0';
+            out.push_back(e);
+        }
+    }
+    return out;
+}
+
+// Drive the connect handshake for a pilot carrying a specific callsign (#996).
+static void connectPilotWithCallsign(fl::WorldBroadcaster& b, uint32_t peerId, const char* callsign) {
+    b.onConnect(peerId);
+    fl::MsgConnectRequest req{};
+    req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+    std::snprintf(req.callsign, sizeof(req.callsign), "%s", callsign);
+    b.onReceive(peerId, &req, sizeof(req));
+}
+
+TEST_CASE("WorldBroadcaster: match roster broadcasts joins, sanitizes callsigns, sends leaves (#996)",
+          "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    SECTION("join broadcast + self roster + sanitization") {
+        connectPilotWithCallsign(broadcaster, 0u, "  Maverick  "); // padded -> trimmed
+        // The joiner sees itself (via the upsert broadcast + full-roster send).
+        std::vector<fl::PlayerRosterEntry> mine = collectRosterFor(net, 0u);
+        bool sawSelf = false;
+        for (const auto& e : mine)
+            if (e.participantId == 0u && std::string(e.callsign) == "Maverick")
+                sawSelf = true;
+        CHECK(sawSelf);
+
+        // A second pilot joins: peer 0 must learn of peer 1, and peer 1's full roster includes peer 0.
+        const std::size_t before = net.perPeerSends.size();
+        connectPilotWithCallsign(broadcaster, 1u, "Goose");
+        (void)before;
+        std::vector<fl::PlayerRosterEntry> p0 = collectRosterFor(net, 0u);
+        bool p0SawP1 = false;
+        for (const auto& e : p0)
+            if (e.participantId == 1u && std::string(e.callsign) == "Goose")
+                p0SawP1 = true;
+        CHECK(p0SawP1);
+        std::vector<fl::PlayerRosterEntry> p1 = collectRosterFor(net, 1u);
+        bool p1SawP0 = false;
+        for (const auto& e : p1)
+            if (e.participantId == 0u && std::string(e.callsign) == "Maverick")
+                p1SawP0 = true;
+        CHECK(p1SawP0);
+    }
+
+    SECTION("empty callsign falls back to Pilot-<id>") {
+        connectPilotWithCallsign(broadcaster, 5u, "");
+        std::vector<fl::PlayerRosterEntry> mine = collectRosterFor(net, 5u);
+        bool ok = false;
+        for (const auto& e : mine)
+            if (e.participantId == 5u && std::string(e.callsign) == "Pilot-5")
+                ok = true;
+        CHECK(ok);
+    }
+
+    SECTION("control characters are stripped from a callsign") {
+        connectPilotWithCallsign(broadcaster, 2u,
+                                 "Ba\x01\x02"
+                                 "d\x7f"); // split literal: \x is greedy over hex
+        std::vector<fl::PlayerRosterEntry> mine = collectRosterFor(net, 2u);
+        bool ok = false;
+        for (const auto& e : mine)
+            if (e.participantId == 2u && std::string(e.callsign) == "Bad")
+                ok = true;
+        CHECK(ok);
+    }
+
+    SECTION("disconnect broadcasts a leave to remaining peers") {
+        connectPilotWithCallsign(broadcaster, 0u, "Maverick");
+        connectPilotWithCallsign(broadcaster, 1u, "Goose");
+        net.perPeerSends.clear();
+        broadcaster.onDisconnect(1u);
+        std::vector<fl::PlayerRosterEntry> p0 = collectRosterFor(net, 0u);
+        bool leaveSeen = false;
+        for (const auto& e : p0)
+            if (e.participantId == 1u && (e.flags & fl::kRosterLeave))
+                leaveSeen = true;
+        CHECK(leaveSeen);
+    }
 }
 
 TEST_CASE("WorldBroadcaster: ConnectAck type defs carry category and projectileKind ordinals (#886)",
@@ -1610,7 +1714,7 @@ TEST_CASE("WorldBroadcaster: onConnect with empty registry sends typeCount=0 and
 
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 2u);
+    REQUIRE(net.sends.size() == 3u); // +1 PlayerRoster (#996)
     fl::MsgConnectAck ack = parseSendAck(net);
     CHECK(ack.typeCount == 0u);
     CHECK(ack.assignedEntityIdx == 0u); // spawn failed — type not registered
@@ -1921,11 +2025,22 @@ TEST_CASE("WorldBroadcaster: two peers each control independent entities", "[wor
     broadcaster.onTick(1.0 / 60.0, 0u); // tick 0: all entities new → full entries
     REQUIRE(em.liveCount() == 2u);
 
-    // Snapshot has both entities; find peer 0's and peer 1's entries by assigned idx.
-    // onConnect sends MsgHello (even index) then ConnectAck (odd index) for each peer.
-    fl::MsgConnectAck ack0, ack1;
-    std::memcpy(&ack0, net.sends[1].data(), sizeof(ack0)); // peer 0: sends[0]=Hello, sends[1]=Ack
-    std::memcpy(&ack1, net.sends[3].data(), sizeof(ack1)); // peer 1: sends[2]=Hello, sends[3]=Ack
+    // Snapshot has both entities; find peer 0's and peer 1's entries by assigned idx. The handshake
+    // interleaves several sends per peer (Hello, ConnectAck, type defs, roster, ...), so scan for the
+    // ConnectAcks by id/size in order rather than assuming fixed indices — peer 0 is admitted fully
+    // before peer 1, so the first ConnectAck is peer 0's and the second is peer 1's. (Indexing a fixed
+    // slot read past a 4-byte Hello/roster packet once #996 added the roster send — an OOB read ASan/TSan
+    // flags even though the decoded values happened to still satisfy the asserts.)
+    std::vector<fl::MsgConnectAck> acks;
+    for (const auto& pkt : net.sends)
+        if (pkt.size() >= sizeof(fl::MsgConnectAck) && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectAck)) {
+            fl::MsgConnectAck a;
+            std::memcpy(&a, pkt.data(), sizeof(a));
+            acks.push_back(a);
+        }
+    REQUIRE(acks.size() >= 2u);
+    const fl::MsgConnectAck ack0 = acks[0];
+    const fl::MsgConnectAck ack1 = acks[1];
 
     REQUIRE(!snapshotsFor(net, 0).empty());
     const auto pkt = snapshotsFor(net, 0)[0];
@@ -1961,7 +2076,7 @@ TEST_CASE("WorldBroadcaster: onConnect sends MsgHello as first reliable packet",
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 2u);
+    REQUIRE(net.sends.size() == 3u); // +1 PlayerRoster (#996)
 
     fl::MsgHello hello = parseSendHello(net);
     CHECK(hello.msgId == static_cast<uint8_t>(fl::MsgId::Hello));
@@ -4061,7 +4176,7 @@ TEST_CASE("WorldBroadcaster: no MOTD sent by default", "[world_broadcaster][motd
     connectPilotPeer(broadcaster, net, 0u);
 
     // Hello + ConnectAck; no MOTD packet
-    CHECK(net.sends.size() == 2u);
+    CHECK(net.sends.size() == 3u); // +1 PlayerRoster (#996)
     for (const auto& pkt : net.sends)
         CHECK(pkt[0] != static_cast<uint8_t>(fl::MsgId::Motd));
 }
@@ -4078,7 +4193,7 @@ TEST_CASE("WorldBroadcaster: MOTD sent as third send when non-empty", "[world_br
 
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 3u);
+    REQUIRE(net.sends.size() == 4u); // +1 PlayerRoster (#996)
     CHECK(net.sends[2][0] == static_cast<uint8_t>(fl::MsgId::Motd));
     CHECK(parseMotdText(net.sends[2]) == "Welcome!");
 }
@@ -4095,7 +4210,7 @@ TEST_CASE("WorldBroadcaster: oversized MOTD capped at kMaxMotdBytes", "[world_br
 
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 3u);
+    REQUIRE(net.sends.size() == 4u); // +1 PlayerRoster (#996)
     // sizeof(MsgMotdHeader) (4) + kMaxMotdBytes (text) + 1 (NUL)
     CHECK(net.sends[2].size() == sizeof(fl::MsgMotdHeader) + fl::kMaxMotdBytes + 1u);
     CHECK(net.sends[2].back() == 0u); // NUL terminator
@@ -4114,7 +4229,7 @@ TEST_CASE("WorldBroadcaster: setMotd with empty string suppresses MOTD send", "[
 
     connectPilotPeer(broadcaster, net, 0u);
 
-    CHECK(net.sends.size() == 2u);
+    CHECK(net.sends.size() == 3u); // +1 PlayerRoster (#996)
     for (const auto& pkt : net.sends)
         CHECK(pkt[0] != static_cast<uint8_t>(fl::MsgId::Motd));
 }
@@ -4131,7 +4246,7 @@ TEST_CASE("WorldBroadcaster: MOTD displaySeconds is 0 by default", "[world_broad
 
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 3u);
+    REQUIRE(net.sends.size() == 4u); // +1 PlayerRoster (#996)
     REQUIRE(net.sends[2].size() >= sizeof(fl::MsgMotdHeader));
     uint16_t secs = 0;
     std::memcpy(&secs, net.sends[2].data() + offsetof(fl::MsgMotdHeader, displaySeconds), sizeof(secs));
@@ -4151,7 +4266,7 @@ TEST_CASE("WorldBroadcaster: MOTD packet displaySeconds matches setMotdDisplaySe
 
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 3u);
+    REQUIRE(net.sends.size() == 4u); // +1 PlayerRoster (#996)
     REQUIRE(net.sends[2].size() >= sizeof(fl::MsgMotdHeader));
     uint16_t secs = 0;
     std::memcpy(&secs, net.sends[2].data() + offsetof(fl::MsgMotdHeader, displaySeconds), sizeof(secs));
@@ -4174,7 +4289,7 @@ TEST_CASE("WorldBroadcaster: applyConfig wires MOTD and display seconds in one c
 
     connectPilotPeer(broadcaster, net, 0u);
 
-    REQUIRE(net.sends.size() == 3u);
+    REQUIRE(net.sends.size() == 4u); // +1 PlayerRoster (#996)
     CHECK(net.sends[2][0] == static_cast<uint8_t>(fl::MsgId::Motd));
     CHECK(parseMotdText(net.sends[2]) == "Welcome via config!");
     uint16_t secs = 0;
