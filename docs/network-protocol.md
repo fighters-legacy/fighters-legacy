@@ -287,7 +287,7 @@ packet is one stale refresh. `MsgDatalinkHeader`:
 | 8 | 2 | `emitterGen` | `uint16_t` | Emitter entity generation |
 | 10 | 2 | `emitterFactionIndex` | `uint16_t` | Emitter's faction |
 | 12 | 1 | `channel` | `uint8_t` | `SensorType` (radar / laser) |
-| 13 | 1 | `level` | `uint8_t` | `ThreatLevel` — 0 search strobe, 1 lock tone |
+| 13 | 1 | `level` | `uint8_t` | `ThreatLevel` — 0 search strobe, 1 lock tone, 2 launch (a radar-guided missile guiding on you, #960) |
 | 14 | 1 | `ident` | `uint8_t` | `Identification` of the emitter (a friendly emitter reads benign) |
 | 15 | 1 | `flags` | `uint8_t` | Reserved |
 | 16 | 12 | `relPos[3]` | `float[3]` | Emitter position relative to `origin` |

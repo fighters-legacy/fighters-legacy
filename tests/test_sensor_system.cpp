@@ -344,6 +344,44 @@ TEST_CASE("SensorSystem: RWR hears an emitter that is painting you, and not one 
     CHECK(aThreats->empty());
 }
 
+TEST_CASE("SensorSystem: the missile-threat provider raises a Launch that outranks a lock (#960)", "[sensor_system]") {
+    // A guided missile in the air on B is not derivable from any contact table — the provider seam
+    // (WorldBroadcaster wires it to the projectile pool) folds it into B's RWR as a Launch, the worst
+    // level. A launch aimed at a non-observer target has no receiver to warn and is dropped.
+    Fixture f;
+    const float faceMinusX[4] = {0.f, 1.f, 0.f, 0.f};
+    const EntityId a = f.spawn(0, 0, 0);
+    const EntityId b = f.spawn(10.0 * kMPerNm, 0, 0, faceMinusX);
+
+    f.sys.addObserver(a.index, {"t:radar"}, 0.5f, 0.5f);
+    f.sys.addObserver(b.index, {"t:radar"}, 0.5f, 0.5f);
+    f.sys.setRadarMode(a.index, RadarMode::Stt); // A also holds a firing-quality lock on B
+    f.sys.setDesignatedTarget(a.index, b);
+    f.sys.setRadarMode(b.index, RadarMode::Silent);
+
+    f.sys.setMissileThreatProvider([&](const SensorSystem::ThreatSink& sink) {
+        ThreatWarning w;
+        w.emitterId = a; // stand-in for the inbound missile
+        w.emitterTypeIndex = 0;
+        w.channel = SensorType::Radar;
+        w.level = ThreatLevel::Launch;
+        sink(b.index, w);     // B carries an RWR -> warned
+        sink(0xFFFFFFFFu, w); // no such observer -> silently ignored
+    });
+    f.check(1);
+
+    const ThreatWarningSet* bThreats = f.sys.threatsFor(b.index);
+    REQUIRE(bThreats != nullptr);
+    CHECK(bThreats->anyLaunch());
+    CHECK(bThreats->anyLock()); // the STT lock is still present too
+    CHECK(bThreats->worst() == ThreatLevel::Launch);
+
+    // A is silent, so nothing paints it and no missile is on it: an empty receiver.
+    const ThreatWarningSet* aThreats = f.sys.threatsFor(a.index);
+    REQUIRE(aThreats != nullptr);
+    CHECK(aThreats->empty());
+}
+
 TEST_CASE("SensorSystem: a searching radar raises a strobe, not a lock, on the target's RWR", "[sensor_system]") {
     Fixture f;
     const float faceMinusX[4] = {0.f, 1.f, 0.f, 0.f};

@@ -254,6 +254,42 @@ WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegis
                                                      const CountermeasureSusceptibility& susc, uint64_t tick) -> bool {
         return m_countermeasures.seduces(missileIdx, targetPos, channel, susc, tick);
     });
+
+    // Missile-launch RWR warnings (#960): a live RADAR-guided missile guiding on a target is a
+    // legitimate emission its RWR hears (the ARH seeker gone active, or the SARH illuminator riding
+    // it) — so it earns a Launch-level threat, the honest counterpart to the deferred wallhack cue.
+    // IR-seeker missiles are passive and deliberately never light the RWR. Only a missile actively
+    // HOLDING the target (Detected/Locked) qualifies: a coasting/lost seeker drops the strobe, which
+    // rewards defeating the lock. The seeker's targetId names the victim honestly (never invented).
+    m_sensorSystem.setMissileThreatProvider([this](const sensor::SensorSystem::ThreatSink& sink) {
+        for (const Projectile& p : m_projectileSystem.projectiles()) {
+            if (!p.seekerDef || p.seekerDef->type != sensor::SensorType::Radar)
+                continue; // only radar seekers paint a warning receiver
+            if (!p.seeker.targetId.valid())
+                continue;
+            const sensor::ContactState st = p.seeker.track.state;
+            if (st != sensor::ContactState::Detected && st != sensor::ContactState::Locked)
+                continue; // must be actively guiding on the target right now
+            const EntityState* tgt = m_entityManager.getByIndex(p.seeker.targetId.index);
+            if (!tgt || tgt->dead || tgt->id.generation != p.seeker.targetId.generation)
+                continue;
+
+            sensor::ThreatWarning w;
+            w.emitterId = p.entityId; // the missile itself is the emitter — a closing bearing
+            const EntityState* mis = m_entityManager.getByIndex(p.entityId.index);
+            const EntityState* shooter = m_entityManager.getByIndex(p.shooter.index);
+            w.emitterTypeIndex = mis ? mis->typeIndex : 0;
+            // Faction from the shooter's side so IFF classifies the launch as a foe, not the missile's
+            // own (often neutral) faction.
+            w.emitterFactionIndex = shooter ? shooter->factionIndex : (mis ? mis->factionIndex : 0);
+            w.channel = sensor::SensorType::Radar;
+            w.level = sensor::ThreatLevel::Launch;
+            w.emitterPos[0] = p.pos[0];
+            w.emitterPos[1] = p.pos[1];
+            w.emitterPos[2] = p.pos[2];
+            sink(p.seeker.targetId.index, w);
+        }
+    });
 }
 
 WorldBroadcaster::~WorldBroadcaster() = default;
@@ -3467,7 +3503,7 @@ void WorldBroadcaster::broadcastDatalink(uint64_t tickIndex) {
             r.ident = static_cast<uint8_t>(sensor::classifyIff(
                 m_factionRegistry ? m_factionRegistry->relationship(faction, w.emitterFactionIndex)
                                   : sensor::affiliationRelation(faction, w.emitterFactionIndex),
-                static_cast<uint8_t>(1u << static_cast<int>(w.channel)), w.level == sensor::ThreatLevel::Lock));
+                static_cast<uint8_t>(1u << static_cast<int>(w.channel)), w.level != sensor::ThreatLevel::Search));
             r.relPos[0] = static_cast<float>(w.emitterPos[0] - self->transform.pos[0]);
             r.relPos[1] = static_cast<float>(w.emitterPos[1] - self->transform.pos[1]);
             r.relPos[2] = static_cast<float>(w.emitterPos[2] - self->transform.pos[2]);

@@ -252,3 +252,106 @@ TEST_CASE("builtin warning tones are byte-stable and loop-clean", "[warning]") {
         stallPeak = std::max<int16_t>(stallPeak, static_cast<int16_t>(v < 0 ? -v : v));
     CHECK(stallPeak > 1000);
 }
+
+// ── RWR / missile-lock tones (#960) ──────────────────────────────────────────────────────────────
+
+TEST_CASE("RWR tone tracks the worst threat and escalates instantly", "[warning][rwr]") {
+    TrackingAudio audio;
+    WarningToneManager wt;
+    wt.init(&audio, nullptr);
+    AudioSettings s;
+    s.masterVolume = 1.f;
+    s.rwrVolume = 1.f;
+
+    WarningToneInputs in = flying();
+    in.rwr = RwrThreat::Search;
+    wt.update(in, s, 0.016f);
+    CHECK(wt.rwrActive() == RwrThreat::Search);
+    {
+        const auto* p = audio.onlyPlaying(); // only the RWR voice sounds
+        REQUIRE(p);
+        CHECK(p->relative); // head-locked
+        CHECK(p->looping);
+    }
+
+    // A launch appearing must be heard THIS frame — escalation bypasses the hold.
+    in.rwr = RwrThreat::Launch;
+    wt.update(in, s, 0.016f);
+    CHECK(wt.rwrActive() == RwrThreat::Launch);
+}
+
+TEST_CASE("RWR de-escalation holds then clears", "[warning][rwr]") {
+    TrackingAudio audio;
+    WarningToneManager wt;
+    wt.init(&audio, nullptr);
+    AudioSettings s;
+
+    WarningToneInputs in = flying();
+    in.rwr = RwrThreat::Lock;
+    wt.update(in, s, 0.016f);
+    CHECK(wt.rwrActive() == RwrThreat::Lock);
+
+    // The threat drops for one frame — the tone must not chop: it holds.
+    in.rwr = RwrThreat::None;
+    wt.update(in, s, 0.1f);
+    CHECK(wt.rwrActive() == RwrThreat::Lock);
+
+    // Past the hold window it clears.
+    wt.update(in, s, 1.0f);
+    CHECK(wt.rwrActive() == RwrThreat::None);
+}
+
+TEST_CASE("RWR honors its own volume slider, not the SFX slider", "[warning][rwr]") {
+    TrackingAudio audio;
+    WarningToneManager wt;
+    wt.init(&audio, nullptr);
+    AudioSettings s;
+    s.masterVolume = 1.f;
+    s.sfxVolume = 0.f;  // SFX muted...
+    s.rwrVolume = 0.5f; // ...but the RWR has its own gain
+
+    WarningToneInputs in = flying();
+    in.rwr = RwrThreat::Lock;
+    wt.update(in, s, 0.016f);
+    const auto* p = audio.onlyPlaying();
+    REQUIRE(p);
+    CHECK(p->gain == 0.5f); // master*rwr, independent of the muted SFX slider
+}
+
+TEST_CASE("RWR tone is silenced out of flight", "[warning][rwr]") {
+    TrackingAudio audio;
+    WarningToneManager wt;
+    wt.init(&audio, nullptr);
+    AudioSettings s;
+
+    WarningToneInputs in = flying();
+    in.rwr = RwrThreat::Launch;
+    wt.update(in, s, 0.016f);
+    CHECK(wt.rwrActive() == RwrThreat::Launch);
+
+    in.inFlight = false; // to a menu / spectator — silence at once, bypassing the hold
+    wt.update(in, s, 0.016f);
+    CHECK(wt.rwrActive() == RwrThreat::None);
+}
+
+TEST_CASE("builtin RWR tones are byte-stable and loop-clean", "[warning][rwr]") {
+    const DecodedPcm search = generateWarningTonePcm(WarningTone::RwrSearch);
+    const DecodedPcm lock = generateWarningTonePcm(WarningTone::RwrLock);
+    const DecodedPcm launch = generateWarningTonePcm(WarningTone::RwrLaunch);
+
+    for (const DecodedPcm* p : {&search, &lock, &launch}) {
+        CHECK(p->channels == 1);
+        CHECK(p->sampleRate == kWarningToneSampleRate);
+        CHECK(!p->samples.empty());
+    }
+    // Determinism: a golden test can pin the shape.
+    CHECK(generateWarningTonePcm(WarningTone::RwrLaunch).samples == launch.samples);
+
+    // The gated tones' loop seam sits in silence; the steady lock tone sounds throughout.
+    CHECK(search.samples.back() == 0);
+    CHECK(launch.samples.back() == 0);
+    int16_t lockPeak = 0;
+    for (int16_t v : lock.samples)
+        lockPeak = std::max<int16_t>(lockPeak, static_cast<int16_t>(v < 0 ? -v : v));
+    CHECK(lockPeak > 1000);
+}

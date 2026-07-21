@@ -534,6 +534,23 @@ void SensorSystem::buildThreatWarnings(uint64_t /*tickIndex*/) {
         }
     }
 
+    // Missile-launch warnings (#960): fold in guiding radar missiles the contact tables cannot see.
+    // The provider (WorldBroadcaster) enumerates live guided projectiles and pushes a Launch-level
+    // ThreatWarning per (missile → target); we route it to the target's RWR only if the target is an
+    // observer that could carry one. These join the same cap/ordering below, where a Launch — the
+    // highest level — sorts ahead of every strobe and lock.
+    if (m_missileThreatProvider) {
+        m_missileThreatProvider([&](uint32_t targetIdx, const ThreatWarning& w) {
+            auto tIt = m_observers.find(targetIdx);
+            if (tIt == m_observers.end())
+                return; // nothing there to carry an RWR
+            const EntityState* tgtState = m_entityManager.getByIndex(targetIdx);
+            if (!tgtState || tgtState->dead)
+                return;
+            tIt->second.threats.threats.push_back(w);
+        });
+    }
+
     // Cap and order each observer's picture: locks first, then nearer emitters, ties on emitter index
     // — deterministic, like the contact cap. Then restore emitter-index order for stable iteration.
     for (auto& [idx, obs] : m_observers) {

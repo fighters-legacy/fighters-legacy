@@ -94,6 +94,9 @@ struct Contact {
 enum class ThreatLevel : uint8_t {
     Search = 0, // an emitter is sweeping/scanning you (Detected, or a soft TWS track): a strobe
     Lock = 1,   // an emitter holds a firing-quality lock on you (STT): a steady lock tone
+    Launch = 2, // a radar-guided missile is in the air GUIDING on you (#960): the launch/active tone.
+                // The worst level — an inbound weapon, not merely a look. Sourced from live guided
+                // projectiles, not the contact tables (see SensorSystem::setMissileThreatProvider).
 };
 
 // One emitter your RWR can hear. Position is the EMITTER's world position, so a display can draw the
@@ -129,12 +132,29 @@ struct ThreatWarningSet {
     [[nodiscard]] auto end() const noexcept {
         return threats.end();
     }
-    // The worst thing looking at you: true when any emitter holds a firing-quality lock.
+    // The worst thing looking at you: true when any emitter holds a firing-quality lock OR has a
+    // missile guiding on you (a launch is at least a lock in threat terms).
     [[nodiscard]] bool anyLock() const noexcept {
         for (const ThreatWarning& t : threats)
-            if (t.level == ThreatLevel::Lock)
+            if (t.level == ThreatLevel::Lock || t.level == ThreatLevel::Launch)
                 return true;
         return false;
+    }
+    // True when a radar-guided missile is in the air guiding on you (#960).
+    [[nodiscard]] bool anyLaunch() const noexcept {
+        for (const ThreatWarning& t : threats)
+            if (t.level == ThreatLevel::Launch)
+                return true;
+        return false;
+    }
+    // The highest threat level present (Search default when empty is fine for callers that also
+    // check emptiness). Launch > Lock > Search by ordinal.
+    [[nodiscard]] ThreatLevel worst() const noexcept {
+        ThreatLevel w = ThreatLevel::Search;
+        for (const ThreatWarning& t : threats)
+            if (static_cast<uint8_t>(t.level) > static_cast<uint8_t>(w))
+                w = t.level;
+        return w;
     }
 };
 
@@ -296,6 +316,21 @@ class SensorSystem {
     // already-computed data and trivially serial-equivalent. Must run on the sim thread.
     void buildThreatWarnings(uint64_t tickIndex);
 
+    // Missile-launch RWR seam (#960). A source of threats that are NOT derivable from the observer
+    // contact tables — specifically an in-flight RADAR-guided missile guiding on a target (the
+    // "launch"/active warning): the missile's active seeker (ARH pitbull) or the illuminator riding
+    // it is a legitimate emission an RWR hears. The projectile pool lives outside engine-sensor, so
+    // the owner (WorldBroadcaster) injects a provider that enumerates guiding missiles and pushes one
+    // ThreatWarning per (missile → target) through the sink. The sink routes it to the target's RWR
+    // (only if the target carries one) and it then shares the same cap/ordering as inverted contacts,
+    // so a Launch — the highest ThreatLevel — is never crowded out by mere strobes. Null = disabled
+    // (unit tests, or a build with no projectiles), leaving the pre-#960 contact-only behavior.
+    using ThreatSink = std::function<void(uint32_t targetIdx, const ThreatWarning& warning)>;
+    using MissileThreatProvider = std::function<void(const ThreatSink& sink)>;
+    void setMissileThreatProvider(MissileThreatProvider provider) {
+        m_missileThreatProvider = std::move(provider);
+    }
+
     // The largest factor by which any entity type in the registry multiplies a sensor's range
     // (sqrt for radar, linear otherwise). The spatial query must be widened by this or a very loud
     // target sitting beyond a sensor's BASELINE range would never be handed to the cone test at all.
@@ -309,7 +344,8 @@ class SensorSystem {
     const EntityManager& m_entityManager;
     const EntityTypeRegistry& m_registry;
     SensorDefResolver m_resolver;
-    IffResolver m_iffResolver; // null = affiliation-rule fallback (see setIffResolver)
+    IffResolver m_iffResolver;                     // null = affiliation-rule fallback (see setIffResolver)
+    MissileThreatProvider m_missileThreatProvider; // null = contact-only RWR (see setMissileThreatProvider)
 
     std::unordered_map<uint32_t, ObserverState> m_observers;
     std::vector<ObserverWork> m_work; // reused across ticks; no per-tick allocation
