@@ -151,6 +151,8 @@ enum class ConnectRefusalCode : uint8_t {
     MissingRequiredPack = 7, // client lacks a server-required content pack (#872 refuse policy; the
                              // reason text carries the missing pack list)
     EntitlementRequired = 8, // premium content requires an entitlement token (RFC #871; reserved)
+    MatchFull = 9,           // every team in the current game mode is at capacity (#522)
+    BadPassword = 10,        // the server requires a join password and the client's was missing/wrong (#998)
 };
 
 // All structs below are deliberately UNPACKED and laid out for natural alignment (see compatibility
@@ -827,6 +829,18 @@ static_assert(offsetof(PlayerRosterEntry, role) == 6u, "PlayerRosterEntry::role 
 static_assert(offsetof(PlayerRosterEntry, flags) == 7u, "PlayerRosterEntry::flags offset changed");
 static_assert(offsetof(PlayerRosterEntry, callsign) == 8u, "PlayerRosterEntry::callsign offset changed");
 inline constexpr std::size_t kMaxRosterEntriesPerPacket = 12; // 4 + 12*40 = 484 B (matches CombatEvent chunking)
+
+// Client->server, reliable: request a mid-match switch to a different team/faction (#522). The server
+// validates it against the balance guard (a switch that would stack a team is denied with a
+// MsgServerNotice) before despawning + respawning the pilot on the new team. An admin `team` command
+// bypasses the guard server-side.
+struct MsgTeamRequest {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::TeamRequest)}; // @0
+    uint8_t reserved{0};                                     // @1
+    uint16_t factionIndex{0};                                // @2 requested destination team (FactionRegistry index)
+}; // 4 bytes, align 2
+static_assert(sizeof(MsgTeamRequest) == 4u, "MsgTeamRequest wire size changed");
+static_assert(offsetof(MsgTeamRequest, factionIndex) == 2u, "MsgTeamRequest::factionIndex offset changed");
 
 // ---------------------------------------------------------------------------------------------
 // Datalink / shared team track picture (#528)

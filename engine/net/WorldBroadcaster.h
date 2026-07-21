@@ -763,6 +763,37 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
         return m_playerFaction;
     }
 
+    // ── team assignment + balancing (#522) — sim-thread only ─────────────────
+    // Sentinel for "no specific team preference" in claimMissionSlot / assignment.
+    static constexpr uint16_t kNoFaction = 0xFFFFu;
+
+    // Assign a joining pilot to a team. Consulted in handleConnectRequest before slot claim; the
+    // returned faction is stamped onto the spawned aircraft. Returning nullopt refuses the connection
+    // with ConnectRefusalCode::MatchFull (every team full). Unset (the default) preserves the legacy
+    // behavior — the mission slot's faction, else m_playerFaction — so existing single-mode servers and
+    // every existing test are byte-identical. fl-server wires this to the mode's TeamBalancer (#522).
+    using TeamAssigner = std::function<std::optional<uint16_t>(uint32_t peerId)>;
+    void setTeamAssigner(TeamAssigner fn) {
+        m_teamAssigner = std::move(fn);
+    }
+
+    // Guard a mid-match team switch requested via MsgTeamRequest. Returns true if the switch is allowed
+    // (fl-server wires it to TeamBalancer::switchAllowed). Unset ⇒ all switches allowed. An admin `team`
+    // command bypasses this guard.
+    using TeamSwitchGuard = std::function<bool(uint32_t peerId, uint16_t targetFaction)>;
+    void setTeamSwitchGuard(TeamSwitchGuard fn) {
+        m_teamSwitchGuard = std::move(fn);
+    }
+
+    // The faction (team) a peer's aircraft currently carries, or kNoFaction when the peer has no live
+    // entity (observer / dead / unknown). Sim-thread; used by chat team routing (#646) and the balancer.
+    [[nodiscard]] uint16_t factionForPeer(uint32_t peerId) const noexcept;
+
+    // Switch a peer to a different team/faction: despawn its aircraft, update + rebroadcast its roster,
+    // and respawn it on the new team. Sim-thread only; the admin `team` command and the guarded
+    // MsgTeamRequest path both route here. A no-op if the peer has no roster entry.
+    void setPeerFaction(uint32_t peerId, uint16_t faction);
+
     // Called on the sim thread at the end of onConnect, after the peer's entity and controller exist.
     // The implementation spawns the peer's flight (N AI members), registers their controllers, and
     // returns the formation it created. kNoFormation (the default with no hook installed) = the peer
@@ -992,15 +1023,18 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     // Spawn a pilot peer's entity of `entityType`, register its PeerController, stamp faction, and form
     // its flight. Returns the assigned EntityId (invalid on spawn failure). Extracted from the old
     // onConnect. Sim-thread.
-    EntityId admitPilot(uint32_t peerId, const std::string& entityType);
+    // `faction` = the team stamped onto the spawned aircraft (kNoFaction ⇒ m_playerFaction, the legacy
+    // default). The team assigner (#522) supplies it in handleConnectRequest.
+    EntityId admitPilot(uint32_t peerId, const std::string& entityType, uint16_t faction = kNoFaction);
     // Shared spawn core for a pilot peer: spawn `entityType` at `t`, record m_peerEntities, stamp
     // `faction` (0 = leave neutral), resolve the flight model, and register the PeerController. Used by
     // both admitPilot (round-robin path) and the mission-slot path. Sim-thread.
     EntityId spawnPilotEntity(uint32_t peerId, const std::string& entityType, const EntityTransform& t,
                               uint16_t faction, float initialAirspeed = kAutoSpawnAirspeed);
     // Claim the next open mission player slot for `peerId` (#854). Returns its index, or -1 when there
-    // are no slots or all are occupied. releaseMissionSlot frees it on despawn. Sim-thread.
-    int claimMissionSlot(uint32_t peerId);
+    // are no slots or all are occupied. `preferredFaction` (kNoFaction = any) prefers a slot on that
+    // team, falling back to any open slot (#522). releaseMissionSlot frees it on despawn. Sim-thread.
+    int claimMissionSlot(uint32_t peerId, uint16_t preferredFaction = kNoFaction);
     void releaseMissionSlot(uint32_t peerId);
     // Resolve the entity type to spawn for a pilot (#834): a client-requested type wins iff it is a
     // REGISTERED type (server-clamped allowlist); otherwise the [world] player_entity_type default;
@@ -1110,6 +1144,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler, public 
     FlightOrderHandler m_flightOrderHandler; // null = the order channel is off; orders are discarded
     TargetDesignator m_targetDesignator;     // null = attack orders always refuse (never invent a target)
     uint16_t m_playerFaction{1};             // 0 restores the legacy neutral-player behavior
+    TeamAssigner m_teamAssigner;             // #522: null = legacy (slot/player faction); else the mode balancer
+    TeamSwitchGuard m_teamSwitchGuard;       // #522: null = all MsgTeamRequest switches allowed
     std::string m_playerEntityType{"builtin:debug-entity"}; // pilot spawn default when client requests none (#834)
     bool m_allowObservers{true};                            // #857: false = refuse observer connect requests
     std::vector<RequiredPack> m_requiredPacks;              // #872: packs a client must have (id + optional version)

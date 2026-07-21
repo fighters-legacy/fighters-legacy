@@ -1525,6 +1525,80 @@ TEST_CASE("WorldBroadcaster: match roster broadcasts joins, sanitizes callsigns,
     }
 }
 
+TEST_CASE("WorldBroadcaster: team assigner stamps faction, refuses when full (#522)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    SECTION("assigner faction is stamped onto the spawned aircraft") {
+        broadcaster.setTeamAssigner([](uint32_t) -> std::optional<uint16_t> { return uint16_t{7}; });
+        connectPilotPeer(broadcaster, net, 0u);
+        broadcaster.onTick(1.0 / 60.0, 1u);
+        CHECK(broadcaster.factionForPeer(0u) == 7u);
+    }
+
+    SECTION("assigner returning nullopt refuses with MatchFull") {
+        broadcaster.setTeamAssigner([](uint32_t) -> std::optional<uint16_t> { return std::nullopt; });
+        broadcaster.onConnect(0u);
+        fl::MsgConnectRequest req{};
+        req.requestedRole = static_cast<uint8_t>(fl::PeerRole::Pilot);
+        broadcaster.onReceive(0u, &req, sizeof(req));
+        // A MsgConnectRefusal with code MatchFull was sent and the peer disconnected.
+        bool refused = false;
+        for (const auto& pkt : net.sends) {
+            if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectRefusal) &&
+                pkt.size() >= sizeof(fl::MsgConnectRefusal)) {
+                fl::MsgConnectRefusal r{};
+                std::memcpy(&r, pkt.data(), sizeof(r));
+                if (r.code == static_cast<uint8_t>(fl::ConnectRefusalCode::MatchFull))
+                    refused = true;
+            }
+        }
+        CHECK(refused);
+        CHECK(broadcaster.factionForPeer(0u) == fl::WorldBroadcaster::kNoFaction);
+    }
+}
+
+TEST_CASE("WorldBroadcaster: MsgTeamRequest honors the switch guard (#522)", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setTeamAssigner([](uint32_t) -> std::optional<uint16_t> { return uint16_t{1}; });
+    connectPilotPeer(broadcaster, net, 0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    REQUIRE(broadcaster.factionForPeer(0u) == 1u);
+
+    SECTION("a denied switch keeps the current team and sends a notice") {
+        broadcaster.setTeamSwitchGuard([](uint32_t, uint16_t) { return false; });
+        net.sends.clear();
+        fl::MsgTeamRequest req{};
+        req.factionIndex = 2;
+        broadcaster.onReceive(0u, &req, sizeof(req));
+        broadcaster.onTick(1.0 / 60.0, 2u);
+        CHECK(broadcaster.factionForPeer(0u) == 1u); // unchanged
+        bool notice = false;
+        for (const auto& pkt : net.sends)
+            if (!pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ServerNotice))
+                notice = true;
+        CHECK(notice);
+    }
+
+    SECTION("an allowed switch respawns on the new team") {
+        broadcaster.setTeamSwitchGuard([](uint32_t, uint16_t) { return true; });
+        fl::MsgTeamRequest req{};
+        req.factionIndex = 2;
+        broadcaster.onReceive(0u, &req, sizeof(req));
+        broadcaster.onTick(1.0 / 60.0, 2u);
+        CHECK(broadcaster.factionForPeer(0u) == 2u);
+    }
+}
+
 TEST_CASE("WorldBroadcaster: ConnectAck type defs carry category and projectileKind ordinals (#886)",
           "[world_broadcaster]") {
     MockLogger logger;

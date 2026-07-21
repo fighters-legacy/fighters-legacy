@@ -17,6 +17,7 @@
 // fl-lobby integration is tracked in issue #36.
 #include "GameModeSource.h"
 #include "IpListFile.h"
+#include "MatchTeams.h"
 #include "MissionSource.h"
 #include "NetworkFactory.h"
 #include "RconServer.h"
@@ -1424,6 +1425,56 @@ int main(int argc, char** argv) {
             }
         }
     }
+
+    // Match teams (#522): map the game mode's teams onto factions, wire the balancer-driven assigner +
+    // switch guard, and apply the mode's friendly-fire override. buildMatchTeams may synthesize + load
+    // the FactionRegistry (a zero-pack TDM server with real hostile teams); publish it if so. When the
+    // mode is a free-for-all (free-flight / mission sides with no mission) no assigner is installed, so
+    // the legacy m_playerFaction behavior is byte-identical.
+    {
+        fl::MatchTeamSetup teamSetup = fl::buildMatchTeams(gameMode, missionFactions, *log);
+        if (teamSetup.synthesizedRegistry)
+            broadcaster.setFactionRegistry(&missionFactions);
+        if (teamSetup.haveTeams) {
+            const std::vector<fl::TeamState> teamTemplate = teamSetup.teams;
+            // Live per-team counts, recomputed each call from the peers' current factions.
+            auto countTeams = [&broadcaster, teamTemplate]() {
+                std::vector<fl::TeamState> teams = teamTemplate;
+                broadcaster.forEachPeer([&](const fl::PeerInfo& pi) {
+                    const uint16_t f = broadcaster.factionForPeer(pi.peerId);
+                    for (auto& t : teams)
+                        if (t.factionIndex == f)
+                            ++t.count;
+                });
+                return teams;
+            };
+            broadcaster.setPlayerFaction(teamTemplate.front().factionIndex); // round-robin fallback team
+            broadcaster.setTeamAssigner(
+                [countTeams](uint32_t) -> std::optional<uint16_t> { return fl::pickTeam(countTeams()); });
+            broadcaster.setTeamSwitchGuard([countTeams, &broadcaster](uint32_t peerId, uint16_t target) -> bool {
+                const std::vector<fl::TeamState> teams = countTeams();
+                const uint16_t cur = broadcaster.factionForPeer(peerId);
+                const fl::TeamState* from = nullptr;
+                const fl::TeamState* to = nullptr;
+                for (const auto& t : teams) {
+                    if (t.factionIndex == cur)
+                        from = &t;
+                    if (t.factionIndex == target)
+                        to = &t;
+                }
+                if (!to)
+                    return false; // target is not a team
+                if (!from)
+                    return (to->capacity == 0) || (to->count < to->capacity); // joining from no team
+                return fl::switchAllowed(*from, *to);
+            });
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "match: %zu team(s) balanced by the game mode", teamTemplate.size());
+            log->log(LogLevel::Info, __FILE__, __LINE__, buf);
+        }
+    }
+    // Friendly fire: a mode's On/Off override wins over [gameplay] friendly_fire (#522).
+    broadcaster.setDamageRules(fl::effectiveDamageRules(gameMode, cfg.friendlyFire, cfg.crashDamage));
 
     if (!cfg.trace.inputTraceDir.empty()) {
         broadcaster.setInputTraceDir(cfg.trace.inputTraceDir);

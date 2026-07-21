@@ -21,6 +21,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **match**: team assignment, balancing, and mode-driven friendly fire (#522, Epic E #497). A pure
+  `TeamBalancer` (`pickTeam` / `switchAllowed`) drives team choice; `WorldBroadcaster` gains a
+  `setTeamAssigner` seam (consulted at admission — `nullopt` refuses with the new
+  `ConnectRefusalCode::MatchFull`), faction-preferred mission-slot claiming, `factionForPeer`, and a
+  `setPeerFaction` despawn-and-respawn path. Clients can request a mid-match switch via the new
+  reliable `MsgTeamRequest` (guarded against unbalancing); an admin `team <peer> <faction>` command
+  bypasses the guard. fl-server maps a mode's teams onto the FactionRegistry (mission sides, positional
+  aliasing, or a synthesized zero-pack registry) and applies the mode's friendly-fire override over
+  `[gameplay] friendly_fire`. Unset assigner ⇒ the legacy single-faction behavior, unchanged.
 - **match**: data-driven game-mode framework (#521, Epic E #497). A new `engine-match` library defines
   `GameModeDef` (teams, scoring, respawn policy, win conditions, warmup, friendly-fire override) and
   `parseGameModeToml`, the single parser both the engine and the new `validate-mode` tool call. Two

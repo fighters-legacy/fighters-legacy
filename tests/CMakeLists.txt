@@ -502,6 +502,10 @@ add_executable(test_game_mode test_game_mode.cpp)
 target_link_libraries(test_game_mode PRIVATE Catch2::Catch2WithMain engine-match)
 catch_discover_tests(test_game_mode)
 
+add_executable(test_match_controller test_match_controller.cpp)
+target_link_libraries(test_match_controller PRIVATE Catch2::Catch2WithMain engine-match)
+catch_discover_tests(test_match_controller)
+
 add_executable(test_airport_registry test_airport_registry.cpp)
 target_link_libraries(test_airport_registry PRIVATE Catch2::Catch2WithMain engine-world)
 catch_discover_tests(test_airport_registry)

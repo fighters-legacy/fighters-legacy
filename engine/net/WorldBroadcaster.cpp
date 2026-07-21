@@ -191,6 +191,10 @@ RejectInfo rejectInfoFor(fl::ConnectRefusalCode code) {
                 LogLevel::Info};
     case C::EntitlementRequired:
         return {"This server requires premium content you do not own.", "entitlement required", LogLevel::Info};
+    case C::MatchFull:
+        return {"All teams are full.", "all teams full", LogLevel::Info};
+    case C::BadPassword:
+        return {"Incorrect server password.", "wrong join password", LogLevel::Info};
     case C::Generic:
         break;
     }
@@ -2005,7 +2009,7 @@ EntityId WorldBroadcaster::spawnPilotEntity(uint32_t peerId, const std::string& 
     return id;
 }
 
-EntityId WorldBroadcaster::admitPilot(uint32_t peerId, const std::string& entityType) {
+EntityId WorldBroadcaster::admitPilot(uint32_t peerId, const std::string& entityType, uint16_t faction) {
     EntityTransform t{};
     t.quat[3] = 1.0f; // identity quaternion (w component; XYZW layout)
     if (!m_spawnPoints.empty()) {
@@ -2023,7 +2027,8 @@ EntityId WorldBroadcaster::admitPilot(uint32_t peerId, const std::string& entity
     // Sandbox / round-robin fallback path: spawn stationary. The bare no-mission player flies the
     // builtin UFO, which is controllable at zero airspeed; a mission's airborne player comes through the
     // slot path below with a real cruise speed (#883).
-    return spawnPilotEntity(peerId, entityType, t, m_playerFaction, /*initialAirspeed=*/0.f);
+    const uint16_t f = (faction == kNoFaction) ? m_playerFaction : faction;
+    return spawnPilotEntity(peerId, entityType, t, f, /*initialAirspeed=*/0.f);
 }
 
 void WorldBroadcaster::setMissionPlayerSlots(std::vector<MissionSpawnSlot> slots) {
@@ -2032,7 +2037,19 @@ void WorldBroadcaster::setMissionPlayerSlots(std::vector<MissionSpawnSlot> slots
     m_peerSlot.clear();
 }
 
-int WorldBroadcaster::claimMissionSlot(uint32_t peerId) {
+int WorldBroadcaster::claimMissionSlot(uint32_t peerId, uint16_t preferredFaction) {
+    // First pass: prefer an open slot whose faction matches the requested team (#522). Slots are
+    // authoritative about WHERE a pilot spawns; the balancer is authoritative about WHICH SIDE.
+    if (preferredFaction != kNoFaction) {
+        for (std::size_t i = 0; i < m_slotOccupant.size(); ++i) {
+            if (m_slotOccupant[i] == kSlotFree && m_missionSlots[i].factionIndex == preferredFaction) {
+                m_slotOccupant[i] = peerId;
+                m_peerSlot[peerId] = static_cast<int>(i);
+                return static_cast<int>(i);
+            }
+        }
+    }
+    // Fallback: the next open slot regardless of faction (its faction becomes the pilot's team).
     for (std::size_t i = 0; i < m_slotOccupant.size(); ++i) {
         if (m_slotOccupant[i] == kSlotFree) {
             m_slotOccupant[i] = peerId;
@@ -2191,6 +2208,18 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
         }
     }
 
+    // Team assignment (#522): consult the mode balancer BEFORE claiming a slot. nullopt = every team is
+    // full → refuse. Unset assigner ⇒ kNoFaction, preserving the legacy slot/player-faction behavior.
+    uint16_t assignedFaction = kNoFaction;
+    if (grantedRole == PeerRole::Pilot && m_teamAssigner) {
+        std::optional<uint16_t> team = m_teamAssigner(peerId);
+        if (!team.has_value()) {
+            rejectConnection(peerId, extractIp(m_net.getPeerAddress(peerId)), ConnectRefusalCode::MatchFull);
+            return;
+        }
+        assignedFaction = *team;
+    }
+
     EntityId assigned{}; // invalid for an observer — it has no entity
     if (grantedRole == PeerRole::Pilot) {
         // Seat claim first (#974): occupy the requested seat of an existing crewed aircraft, viewing it
@@ -2202,8 +2231,9 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
             // Mission player slots (#854): a loaded mission's `player: true` objects become joinable slots.
             // Assign the next open one (its type/faction/spawn pins where and what the pilot flies, ignoring
             // the client's requested type). No slots / all occupied / a slot type that won't spawn ⇒ fall
-            // back to the round-robin default so a pilot always gets an aircraft.
-            const int slotIdx = claimMissionSlot(peerId);
+            // back to the round-robin default so a pilot always gets an aircraft. When a team is assigned,
+            // prefer a slot on that side (#522).
+            const int slotIdx = claimMissionSlot(peerId, assignedFaction);
             if (slotIdx >= 0) {
                 const MissionSpawnSlot& slot = m_missionSlots[static_cast<std::size_t>(slotIdx)];
                 EntityTransform t{};
@@ -2215,14 +2245,14 @@ void WorldBroadcaster::handleConnectRequest(uint32_t peerId, const void* data, s
                 assigned = spawnPilotEntity(peerId, slot.entityType, t, slot.factionIndex, slot.airspeed);
                 if (!assigned.valid()) {
                     releaseMissionSlot(peerId); // slot type unspawnable — free it and use the default path
-                    assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
+                    assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType), assignedFaction);
                 } else if (m_missionSlotBinder && !slot.missionObjectId.empty()) {
                     // Register the pilot's aircraft under the slot's mission object id so destroy(<id>) tracks
                     // it (#884). slot is a reference into m_missionSlots; read its id before any further work.
                     m_missionSlotBinder(slot.missionObjectId, assigned);
                 }
             } else {
-                assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType));
+                assigned = admitPilot(peerId, resolvePlayerEntityType(req.requestedEntityType), assignedFaction);
             }
         }
     } else {
@@ -2344,6 +2374,34 @@ void WorldBroadcaster::setPeerRole(uint32_t peerId, PeerRole role) {
         }
         upsertRoster(peerId, rec);
     }
+}
+
+uint16_t WorldBroadcaster::factionForPeer(uint32_t peerId) const noexcept {
+    const auto it = m_peerEntities.find(peerId);
+    if (it == m_peerEntities.end())
+        return kNoFaction;
+    if (const EntityState* s = m_entityManager.get(it->second))
+        return s->factionIndex;
+    return kNoFaction;
+}
+
+void WorldBroadcaster::setPeerFaction(uint32_t peerId, uint16_t faction) {
+    const auto rit = m_roster.find(peerId);
+    if (rit == m_roster.end())
+        return; // not an admitted peer
+
+    // A pilot with a live aircraft respawns on the new team. #648's respawn machinery refines the
+    // timing (delay/waves); here the switch is immediate so the mechanism is complete on its own.
+    const auto pit = m_peerInputs.find(peerId);
+    if (pit != m_peerInputs.end() && pit->second.role == PeerRole::Pilot) {
+        despawnPeerEntity(peerId);
+        const EntityId assigned = admitPilot(peerId, resolvePlayerEntityType(""), faction);
+        sendConnectAck(peerId, assigned, PeerRole::Pilot);
+    }
+
+    RosterRec rec = rit->second;
+    rec.factionIndex = faction;
+    upsertRoster(peerId, rec);
 }
 
 void WorldBroadcaster::despawnPeerEntity(uint32_t peerId) {
@@ -3806,6 +3864,23 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
             handleSeatRequest(peerId, req);
     } else if (msgId == static_cast<uint8_t>(MsgId::RadioCommand)) {
         handleRadioCommand(peerId, data, size);
+    } else if (msgId == static_cast<uint8_t>(MsgId::TeamRequest)) {
+        // Mid-match team switch request (#522). Guard it against unbalancing, then despawn+respawn on
+        // the new team. An unadmitted peer or a guard denial is answered with a MsgServerNotice.
+        MsgTeamRequest req;
+        if (readMsg(data, size, req)) {
+            const auto pit = m_peerInputs.find(peerId);
+            if (pit != m_peerInputs.end() && pit->second.handshakeComplete) {
+                const bool allowed = !m_teamSwitchGuard || m_teamSwitchGuard(peerId, req.factionIndex);
+                if (allowed) {
+                    setPeerFaction(peerId, req.factionIndex);
+                } else {
+                    MsgServerNotice notice;
+                    std::snprintf(notice.text, sizeof(notice.text), "Team switch denied (would unbalance).");
+                    m_net.send(peerId, &notice, sizeof(notice), /*reliable=*/true);
+                }
+            }
+        }
     }
     // Unknown msgIds: silently discard (no log spam; future protocol versions may add new IDs)
 }
