@@ -89,6 +89,7 @@ fl_add_fuzzer(fuzz_client_msg)
 target_sources(fuzz_client_msg PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientNetEventHandler.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ClientEffectRouter.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/ChatOverlay.cpp" # ChatEvent -> chat overlay (#646)
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp"
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/WingmanMenu.cpp")
 target_link_libraries(fuzz_client_msg PRIVATE engine-net engine-render engine-entity engine-console engine-weather

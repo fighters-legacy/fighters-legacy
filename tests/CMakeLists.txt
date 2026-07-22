@@ -979,7 +979,7 @@ catch_discover_tests(test_main_menu_screen)
 
 add_executable(test_loading_screen test_loading_screen.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/LoadingScreen.cpp")
-target_link_libraries(test_loading_screen PRIVATE Catch2::Catch2WithMain platform-hal)
+target_link_libraries(test_loading_screen PRIVATE Catch2::Catch2WithMain platform-hal engine-i18n)
 target_include_directories(test_loading_screen PRIVATE
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy" "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_loading_screen)
